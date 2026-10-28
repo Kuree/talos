@@ -4,15 +4,15 @@
 // snapshot it carried across the wait boundary, so its per-member dirty mask
 // is only correct while the unknown plane survives the round trip. An x-to-0
 // transition changes no value bit and is the case that catches a lost plane.
-// RUN: talos -O2 --native-scheduler=aot %s -o %t.native
+// RUN: talos -O2 --native-scheduler=aot --forward-copies=off %s -o %t.native
 // RUN: %t.native > %t.native.out
 // RUN: FileCheck %s < %t.native.out
-// RUN: talos -O2 --execution-tier=bytecode %s -o %t.bytecode
+// RUN: talos -O2 --execution-tier=bytecode --forward-copies=off %s -o %t.bytecode
 // RUN: %t.bytecode | diff -u %t.native.out -
 
 // The kernel itself must be reachable, or the tier comparison above proves
 // nothing about it.
-// RUN: talos -O2 -emit-sim %s -o %t.sim.mlir
+// RUN: talos -O2 -emit-sim --forward-copies=off %s -o %t.sim.mlir
 // RUN: FileCheck %s --check-prefix=KERNEL < %t.sim.mlir
 
 module native_region_kernel_four_state;

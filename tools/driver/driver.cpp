@@ -1180,6 +1180,14 @@ static int executeCompilation(
                     staticSpecialization + "'; expected auto, off, or on");
     valid = false;
   }
+  StringRef forwardCopies =
+      args.getLastArgValue(OPT_forward_copies_EQ, "on");
+  if (forwardCopies != "on" && forwardCopies != "off" &&
+      forwardCopies != "census") {
+    emitDriverError(Twine("unsupported forward copies '") + forwardCopies +
+                    "'; expected on, off, or census");
+    valid = false;
+  }
   StringRef clockedKernels =
       args.getLastArgValue(OPT_clocked_kernels_EQ, "deferred");
   if (clockedKernels != "off" && clockedKernels != "immediate" &&
@@ -1490,7 +1498,7 @@ static int executeCompilation(
                   executionTier != "bytecode"
               ? "on"
               : staticSpecialization,
-          /*earlySymbolDCE=*/true, clockedKernels);
+          /*earlySymbolDCE=*/true, clockedKernels, forwardCopies);
     if (failed(passManager.run(*module)) || failed(verify(*module)))
       return 1;
   }

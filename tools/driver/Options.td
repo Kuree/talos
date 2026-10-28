@@ -117,6 +117,10 @@ def clocked_kernels_EQ : Joined<["--"], "clocked-kernels=">,
   Group<Compilation_Group>, MetaVarName<"<off|immediate|deferred>">,
   Values<"off,immediate,deferred">,
   HelpText<"Select clocked kernels with direct NBA stores (default: deferred)">;
+def forward_copies_EQ : Joined<["--"], "forward-copies=">,
+  Group<Compilation_Group>, MetaVarName<"<on|off|census>">,
+  Values<"on,off,census">,
+  HelpText<"Substitute single-driver continuous assignments into their readers (default: on)">;
 def coverage : Flag<["--"], "coverage">, Group<Compilation_Group>,
   HelpText<"Instrument line, toggle, functional, assertion, and FSM coverage">;
 def coverage_EQ : Joined<["--"], "coverage=">, Group<Compilation_Group>,

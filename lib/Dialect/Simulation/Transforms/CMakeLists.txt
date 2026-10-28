@@ -3,6 +3,7 @@ add_mlir_dialect_library(TalosSimulationTransforms
   AnnotateSteadyUnknown.cpp
   CompileRandomPlans.cpp
   DevirtualizeClassCalls.cpp
+  ForwardCopyProcesses.cpp
   EliminateDeadBoundaries.cpp
   EliminateDeadCaptures.cpp
   InsertGCPolls.cpp

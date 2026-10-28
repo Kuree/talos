@@ -208,6 +208,33 @@ def TalosSimAliasPortConnectionsPass
   ];
 }
 
+def TalosSimForwardCopyProcessesPass
+    : Pass<"talos-sim-forward-copy-processes", "talos::sim::SimDesignOp"> {
+  let summary = "Substitute single-driver continuous assignments into readers";
+  let description = [{
+    A pure continuous assignment (or port copy) to a net with no other
+    driver, no dynamic access and no observer of its own is evaluated by its
+    readers instead (IEEE 1800-2023 10.3.2, 4.9.1, 4.7, 4.3, 6.6.1,
+    9.2.2.2.1, 9.4.2): reads become views of the operands or clones of the
+    expression, waits watch the operands, and the assignment process and
+    its net become dead. The operands must be transient-free (each writer
+    stores each bit at most once per activation, 4.4.1), so the readers see
+    exactly the update events the net had. Requires VPI off.
+  }];
+  let dependentDialects = ["talos::sim::TalosSimulationDialect"];
+  let statistics = [
+    Statistic<"numEliminated", "eliminated", "Copy processes eliminated">
+  ];
+  let options = [
+    Option<"census", "census", "bool", "false",
+           "Only report the candidates">,
+    Option<"maximumRounds", "maximum-rounds", "unsigned", "8",
+           "Rounds of leaf elimination for chains of copies">,
+    Option<"maximumClones", "maximum-clones", "unsigned", "256",
+           "Expression operations times readers a sink may duplicate">
+  ];
+}
+
 def TalosSimDevirtualizeClassCallsPass
     : Pass<"talos-sim-devirtualize-class-calls",
            "talos::sim::SimDesignOp"> {

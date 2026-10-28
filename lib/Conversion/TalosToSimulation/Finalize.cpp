@@ -535,6 +535,11 @@ struct TalosToSimulationPipelineOptions
       *this, "clocked-kernels",
       llvm::cl::desc("clocked kernels: off, immediate, or deferred"),
       llvm::cl::init("deferred")};
+  Option<std::string> forwardCopies{
+      *this, "forward-copies",
+      llvm::cl::desc("substitute single-driver continuous assignments into "
+                     "their readers: on, off, or census"),
+      llvm::cl::init("on")};
 };
 
 /// The executable boundary is defined by the operations that may remain, not
@@ -873,7 +878,8 @@ void TalosSimFinalizePass::runOnOperation() {
 static void buildTalosToSimulationPipelineImpl(
     OpPassManager &manager, uint32_t workers, StringRef vpiMode,
     uint32_t optLevel, StringRef staticSpecialization, bool earlySymbolDCE,
-    StringRef clockedKernels, bool instrumentVPIFrames) {
+    StringRef clockedKernels, bool instrumentVPIFrames,
+    StringRef forwardCopies) {
   TalosSimPreparePassOptions prepareOptions;
   prepareOptions.pruneUnusedCoverage = earlySymbolDCE && vpiMode == "off";
   // Source inventory may outlive executable code. Only a VPI profile needs
@@ -991,6 +997,15 @@ static void buildTalosToSimulationPipelineImpl(
     designManager.addPass(
         createTalosSimAliasPortConnectionsPass(std::move(aliasOptions)));
     designManager.addPass(createSymbolDCEPass());
+    // IEEE 1800-2023 10.3.2/4.9.1/4.7/6.6.1: readers may evaluate a pure
+    // single-driver continuous assignment themselves (see the pass).
+    if (forwardCopies != "off") {
+      TalosSimForwardCopyProcessesPassOptions forwardOptions;
+      forwardOptions.census = forwardCopies == "census";
+      designManager.addPass(
+          createTalosSimForwardCopyProcessesPass(std::move(forwardOptions)));
+      designManager.addPass(createSymbolDCEPass());
+    }
   }
 
   if (optLevel > 0) {
@@ -1183,10 +1198,11 @@ void buildTalosToSimulationPipeline(OpPassManager &manager, uint32_t workers,
                                       StringRef vpiMode, uint32_t optLevel,
                                       StringRef staticSpecialization,
                                       bool earlySymbolDCE,
-                                      StringRef clockedKernels) {
+                                      StringRef clockedKernels,
+                                      StringRef forwardCopies) {
   buildTalosToSimulationPipelineImpl(manager, workers, vpiMode, optLevel,
                                        staticSpecialization, earlySymbolDCE,
-                                       clockedKernels, false);
+                                       clockedKernels, false, forwardCopies);
 }
 
 void buildTalosToSimulationPipeline(OpPassManager &manager) {
@@ -1216,7 +1232,8 @@ void registerTalosToSimulationPipeline() {
             options.staticSpecialization.getValue(),
             options.earlySymbolDCE.getValue(),
             options.clockedKernels.getValue(),
-            options.instrumentVPIFrames.getValue());
+            options.instrumentVPIFrames.getValue(),
+            options.forwardCopies.getValue());
       });
 }
 

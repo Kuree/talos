@@ -83,10 +83,13 @@ void buildTalosToSimulationPipeline(mlir::OpPassManager &manager,
 /// `staticSpecialization` is auto, off, or on. Auto enables the pass at O2/O3.
 /// `clockedKernels` is off, immediate, or deferred (see
 /// talos-sim-fuse-clocked-kernels); kernels form at O1 and above.
+/// `forwardCopies` is on, off, or census (see
+/// talos-sim-forward-copy-processes); it runs at O1 and above with VPI off.
 void buildTalosToSimulationPipeline(
     mlir::OpPassManager &manager, uint32_t workers, llvm::StringRef vpiMode,
     uint32_t optLevel, llvm::StringRef staticSpecialization,
-    bool earlySymbolDCE = true, llvm::StringRef clockedKernels = "deferred");
+    bool earlySymbolDCE = true, llvm::StringRef clockedKernels = "deferred",
+    llvm::StringRef forwardCopies = "on");
 
 /// Register the aggregate serial/parallel/serial lowering pipeline.
 void registerTalosToSimulationPipeline();
