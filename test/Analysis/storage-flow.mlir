@@ -2,6 +2,8 @@
 // RUN: talos-opt %s --mlir-disable-threading --test-talos-storage-flow -o /dev/null 2>&1 | FileCheck %s
 // LRM 6.8, 6.21, 9.4, 10.4.2: must definitions, activation boundaries and
 // one execution over the entire process lifetime are distinct certificates.
+// An activation window ends at every suspension (4.4.1), so a store repeated
+// only across waits executes once per activation.
 module {
   simulation.design @flow {
     simulation.scope.decl 0
@@ -10,6 +12,7 @@ module {
     simulation.code_unit.decl 2 in 0 function hierarchy "conditional"
     simulation.code_unit.decl 3 in 0 initial hierarchy "zero_delay"
     simulation.code_unit.decl 4 in 0 always hierarchy "repeated"
+    simulation.code_unit.decl 5 in 0 always hierarchy "unsuspended_loop"
 
     // CHECK-LABEL: function dominating
     // CHECK: definition 0 lifetime-once=1
@@ -43,7 +46,7 @@ module {
     }
     // #0 ends an activation even though it does not start a fresh NBA window.
     // CHECK-LABEL: function zero_delay
-    // CHECK: definition 0 lifetime-once=1
+    // CHECK: definition 0 lifetime-once=1 activation-once=1
     // CHECK: read 0 prefix=0 must={{$}}
     simulation.func @zero_delay(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {code_unit_id = 3 : i64, entry_kind = 1 : i32} {
       %ref = simulation.context.storage %ctx[0] : !simulation.ref<i32>
@@ -56,7 +59,7 @@ module {
       simulation.return
     }
     // CHECK-LABEL: function repeated
-    // CHECK: definition 0 lifetime-once=0
+    // CHECK: definition 0 lifetime-once=0 activation-once=1
     // CHECK: read 0 prefix=0 must=0,
     simulation.func @repeated(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {code_unit_id = 4 : i64, entry_kind = 3 : i32} {
       %ref = simulation.context.storage %ctx[0] : !simulation.ref<i32>
@@ -69,6 +72,20 @@ module {
       simulation.ref.store %one to %ref : i32, !simulation.ref<i32>
       %value = simulation.ref.load %ref : !simulation.ref<i32> -> i32
       cf.br ^wait
+    }
+    // A loop that does not suspend repeats the store on one activation.
+    // CHECK-LABEL: function unsuspended_loop
+    // CHECK: definition 0 lifetime-once=0 activation-once=0
+    simulation.func @unsuspended_loop(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %again: i1 {simulation.capture_kind = 2 : i32}) attributes {code_unit_id = 5 : i64, entry_kind = 3 : i32} {
+      %ref = simulation.context.storage %ctx[0] : !simulation.ref<i32>
+      %one = arith.constant 1 : i32
+      %delay = simulation.time.constant 1
+      cf.br ^wait
+    ^wait:
+      simulation.suspend.delay %delay to ^body
+    ^body:
+      simulation.ref.store %one to %ref : i32, !simulation.ref<i32>
+      cf.cond_br %again, ^body, ^wait
     }
   }
 }

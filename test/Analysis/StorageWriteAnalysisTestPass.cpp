@@ -125,12 +125,18 @@ public:
       talos::analysis::MustDefinitionAnalysis must(function, definitions,
                                                      isBarrier);
       talos::analysis::NoBarrierAnalysis prefix(function, isBarrier);
-      talos::analysis::WriteExecutionBounds lifetime(function, definitions,
-                                                       true, false);
+      talos::analysis::WriteExecutionBounds lifetime(
+          function, definitions, true,
+          talos::analysis::ExecutionWindow::Unbounded);
+      talos::analysis::WriteExecutionBounds activation(
+          function, definitions, true,
+          talos::analysis::ExecutionWindow::Activation);
       llvm::errs() << "function " << function.getSymName() << '\n';
       for (auto [index, definition] : llvm::enumerate(definitions))
         llvm::errs() << "definition " << index << " lifetime-once="
-                     << lifetime.executesAtMostOnce(definition) << '\n';
+                     << lifetime.executesAtMostOnce(definition)
+                     << " activation-once="
+                     << activation.executesAtMostOnce(definition) << '\n';
       unsigned read = 0;
       function.walk([&](sim::SimRefLoadOp load) {
         llvm::errs() << "read " << read++

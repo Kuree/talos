@@ -198,7 +198,8 @@ private:
     });
     analysis::MustDefinitionAnalysis initialized(
         root, definitions, [](Operation *) { return false; });
-    analysis::WriteExecutionBounds executions(root, definitions, false, false);
+    analysis::WriteExecutionBounds executions(
+        root, definitions, false, analysis::ExecutionWindow::Unbounded);
     for (Operation *definition : definitions) {
       if (!prefix.isSafeBefore(definition) ||
           !executions.executesAtMostOnce(definition) ||

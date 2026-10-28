@@ -169,10 +169,9 @@ class WriteExecutionAnalysis
 public:
   WriteExecutionAnalysis(DataFlowSolver &solver,
                          const DenseMap<Operation *, unsigned> &writes,
-                         bool unknownCallEffects, bool resetAtPositiveDelay)
+                         bool unknownCallEffects, ExecutionWindow window)
       : DenseForwardDataFlowAnalysis(solver), writes(writes),
-        unknownCallEffects(unknownCallEffects),
-        resetAtPositiveDelay(resetAtPositiveDelay) {}
+        unknownCallEffects(unknownCallEffects), window(window) {}
   LogicalResult visitOperation(Operation *op,
                                const WriteExecutionLattice &before,
                                WriteExecutionLattice *after) override {
@@ -207,8 +206,16 @@ public:
 
 private:
   bool resetsWindow(Operation *op) const {
+    // Event controls and delays always suspend (IEEE 1800-2023 9.4.1-2;
+    // #0 waits in the Inactive region). A level wait, task call, join or
+    // mailbox access may continue the same activation (9.4.3), so it keeps
+    // counting; native lowerings of these waits keep counting as well.
+    if (window == ExecutionWindow::Activation)
+      return isa<sim::SimSuspendDelayOp, sim::SimSuspendChangeOp,
+                 sim::SimSuspendEdgeOp, sim::SimSuspendEdgeIffOp,
+                 sim::SimSuspendAnyOp, sim::SimSuspendClockSetOp>(op);
     auto delay = dyn_cast<sim::SimSuspendDelayOp>(op);
-    if (!resetAtPositiveDelay || !delay)
+    if (window != ExecutionWindow::PositiveDelay || !delay)
       return false;
     auto constant = delay.getDelay().getDefiningOp<sim::SimTimeConstantOp>();
     return constant && constant.getValue() != 0;
@@ -236,7 +243,7 @@ private:
   }
   const DenseMap<Operation *, unsigned> &writes;
   bool unknownCallEffects;
-  bool resetAtPositiveDelay;
+  ExecutionWindow window;
 };
 } // namespace
 
@@ -346,7 +353,7 @@ StorageWriteAnalysis::StorageWriteAnalysis(sim::SimFuncOp function,
 WriteExecutionBounds::WriteExecutionBounds(Operation *scope,
                                            ArrayRef<Operation *> tracked,
                                            bool unknownCallEffects,
-                                           bool resetAtPositiveDelay) {
+                                           ExecutionWindow window) {
   for (Operation *op : tracked)
     indices.try_emplace(op, indices.size());
   if (indices.empty())
@@ -354,8 +361,7 @@ WriteExecutionBounds::WriteExecutionBounds(Operation *scope,
   DataFlowSolver solver(DataFlowConfig().setInterprocedural(false));
   solver.load<dataflow::DeadCodeAnalysis>();
   solver.load<dataflow::SparseConstantPropagation>();
-  solver.load<WriteExecutionAnalysis>(indices, unknownCallEffects,
-                                      resetAtPositiveDelay);
+  solver.load<WriteExecutionAnalysis>(indices, unknownCallEffects, window);
   if (failed(solver.initializeAndRun(scope)))
     return;
   bounds.resize(indices.size(), 2);

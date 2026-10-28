@@ -18,7 +18,19 @@
 // after a writer's activation. A reader moved onto an operand instead wakes
 // on each of its update events (4.4.1, 9.4.2), so the operands must be
 // transient-free: every writer stores each bit at most once per activation
-// (no `x = 0; ... x = v;`), or the readers keep the net.
+// (no `x = 0; ... x = v;`), or the readers keep the net. A reader moved onto
+// expression operands also wakes when the expression keeps its value, so it
+// must be idempotent and publish each of its own bits at most once per
+// activation (9.2.2.2.1), or its outputs would gain transients.
+//
+// The net must be a plain wire whose strong, undelayed drivers partition it
+// and are exactly the copies (6.6.1): tri0/tri1 pulls (6.6.5), trireg charge
+// (6.6.4), supply strength (6.6.6), wired and user resolution (6.6.3, 6.6.7)
+// and net delays (28.16) give the net a value other than its driver's.
+// Nothing else may observe the net: VPI, waveform dumps (21.7) and toggle
+// coverage keep it. LRM 4.5 drains the Reactive region set before returning
+// to the Active set, so a copy pending after a Reactive writer cannot run
+// before a Reactive reader: such a reader keeps the net.
 //
 // This is the substitution Verilator performs in V3Gate; here every pure
 // single-write assignment qualifies, relocations (bit taps, slices, packed
@@ -28,6 +40,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "talos/Analysis/HandleDataflowAnalysis.h"
+#include "talos/Analysis/NetConnectivityAnalysis.h"
+#include "talos/Analysis/StorageWriteAnalysis.h"
+#include "talos/Dialect/Coverage/CoverageDialect.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
@@ -40,7 +55,6 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
-#include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/Support/raw_ostream.h"
@@ -297,35 +311,54 @@ struct Sink {
   std::string blocker;
 };
 
-/// The handle a write op writes, or null for an op that writes nothing.
-/// Plain writes (one update event each) are modeled exactly; any other
-/// write of a storage or net resource is reported with an unknown shape.
-Value writtenHandle(Operation *op) {
-  if (auto store = dyn_cast<sim::SimRefStoreOp>(op))
-    return store.getReference();
-  if (auto enqueue = dyn_cast<sim::SimNBAEnqueueOp>(op))
-    return enqueue.getDestination();
-  if (auto drive = dyn_cast<sim::SimDriverDriveOp>(op))
-    return drive.getDriver();
-  if (auto copy = dyn_cast<sim::SimRefCopyOp>(op))
-    return copy.getDestination();
-  auto effects = dyn_cast<MemoryEffectOpInterface>(op);
-  if (!effects)
-    return Value();
-  SmallVector<MemoryEffects::EffectInstance> instances;
-  effects.getEffects(instances);
-  for (const MemoryEffects::EffectInstance &instance : instances)
-    if (isa<MemoryEffects::Write>(instance.getEffect()) &&
-        instance.getValue() &&
-        isa<sim::RefType, sim::NetType, sim::DriverType>(
-            instance.getValue().getType()))
-      return instance.getValue();
-  return Value();
+bool isHandle(Value value) {
+  return isa<sim::RefType, sim::NetType, sim::DriverType>(value.getType());
 }
 
-bool plainWrite(Operation *op) {
-  return isa<sim::SimRefStoreOp, sim::SimNBAEnqueueOp, sim::SimDriverDriveOp>(
-      op);
+/// Calls `write(handle, plain)` for each handle `op` may write. Plain writes
+/// (one update event each) are modeled exactly. Any other write has an
+/// unknown shape, and so has a handle passed to an operation with unknown
+/// effects: a task's ref or output formal (IEEE 1800-2023 13.5) may be
+/// stored through any number of times on one activation of the caller.
+void forEachWrite(Operation *op,
+                  llvm::function_ref<void(Value handle, bool plain)> write) {
+  if (auto store = dyn_cast<sim::SimRefStoreOp>(op))
+    return write(store.getReference(), true);
+  if (auto enqueue = dyn_cast<sim::SimNBAEnqueueOp>(op))
+    return write(enqueue.getDestination(), true);
+  if (auto drive = dyn_cast<sim::SimDriverDriveOp>(op))
+    return write(drive.getDriver(), true);
+  if (auto copy = dyn_cast<sim::SimRefCopyOp>(op))
+    return write(copy.getDestination(), false);
+  // Reads, views and captures transport handles; displays read them.
+  if (isa<sim::SimRefLoadOp, sim::SimNetReadOp, sim::SimSpawnOp,
+          sim::SimDisplayOp>(op) ||
+      isViewOp(op))
+    return;
+  // An operation that writes design storage or nets as a whole (a task call
+  // is a terminator with such effects) may write through every handle it
+  // receives. Waits write only the scheduler and process resources.
+  bool writesState = true;
+  if (auto effects = dyn_cast<MemoryEffectOpInterface>(op)) {
+    writesState = false;
+    SmallVector<MemoryEffects::EffectInstance> instances;
+    effects.getEffects(instances);
+    for (const MemoryEffects::EffectInstance &instance : instances) {
+      if (!isa<MemoryEffects::Write>(instance.getEffect()))
+        continue;
+      if (Value value = instance.getValue()) {
+        if (isHandle(value))
+          write(value, false);
+      } else {
+        writesState |= isa<sim::StorageResource, sim::NetResource>(
+            instance.getResource());
+      }
+    }
+  }
+  if (writesState)
+    for (Value operand : op->getOperands())
+      if (isHandle(operand))
+        write(operand, false);
 }
 
 Type vectorTypeLike(MLIRContext *context, Type scalar, unsigned width) {
@@ -449,37 +482,71 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
             sink.blocker = "domain";
           }
   }
-  // Declarations and operations that name a sink net by id: another driver
-  // (a second driver.decl, a specify path, a switch), a port collapse
-  // (net.connect.decl), a VPI reflection, a resolution query. The copies'
-  // own drivers must be plain strong drives (6.6.1; a strength pair or a
-  // pulled driver changes the resolved value and is observable, 28.11).
-  std::map<uint64_t, unsigned> driverDecls;
-  design.walk([&](Operation *op) {
-    if (isa<sim::SimNetDeclOp, sim::SimStorageDeclOp>(op))
-      return;
-    for (NamedAttribute attr : op->getAttrs()) {
-      StringRef name = attr.getName().getValue();
-      if (!name.ends_with("net_id"))
-        continue;
-      auto id = dyn_cast<IntegerAttr>(attr.getValue());
-      if (!id)
-        continue;
-      auto found = sinks.find(Root{true, id.getValue().getZExtValue()});
-      if (found == sinks.end())
-        continue;
-      if (auto driver = dyn_cast<sim::SimDriverDeclOp>(op)) {
-        ++driverDecls[found->first.id];
-        if (driver.getStrength0() != sim::Strength::Strong ||
-            driver.getStrength1() != sim::Strength::Strong) {
-          found->second.blocked = true;
-          found->second.blocker = "driver strength";
-        }
-        continue;
-      }
-      found->second.blocked = true;
-      found->second.blocker = "named by " + op->getName().getStringRef().str();
+  // The net's value must be its drivers' (IEEE 1800-2023 6.6.1): a plain,
+  // undelayed wire whose strong drivers partition it, with no collapsed
+  // connection, user resolution or pass switch (the shared single-driver
+  // topology). Its own observers keep it: VPI, toggle coverage, and waveform
+  // dumps, whose scope/depth selections may name any net (21.7).
+  std::shared_ptr<const analysis::IsolatedWireDriverTopology> topology =
+      analysis::getIsolatedWireDriverTopology(design);
+  bool waveforms =
+      design
+          .walk([](Operation *op) {
+            return isa<sim::SimDumpVarsOp, sim::SimDumpAllOp,
+                       sim::SimDumpControlOp, sim::SimDumpPortsOp,
+                       sim::SimDumpPortsControlOp>(op)
+                       ? WalkResult::interrupt()
+                       : WalkResult::advance();
+          })
+          .wasInterrupted();
+  for (auto decl : designBlock.getOps<sim::SimNetDeclOp>()) {
+    auto found = sinks.find(Root{true, uint64_t(decl.getId())});
+    if (found == sinks.end() || found->second.blocked)
+      continue;
+    Sink &sink = found->second;
+    std::optional<schedule::ComputeObservabilityKind> observed =
+        decl.getObservability();
+    if (!topology->partitionedDriverNets.contains(decl.getId())) {
+      sink.blocked = true;
+      sink.blocker = "not a plain single-driver wire";
+    } else if (observed &&
+               *observed != schedule::ComputeObservabilityKind::Invisible) {
+      sink.blocked = true;
+      sink.blocker = "observable net";
+    } else if (cov::has<cov::ToggleObservable>(decl)) {
+      sink.blocked = true;
+      sink.blocker = "toggle coverage";
+    } else if (waveforms) {
+      sink.blocked = true;
+      sink.blocker = "waveform dump";
     }
+  }
+  // Declarations and operations that name a sink net by id: a driver that is
+  // not one of the copies (a gate, a specify path), a port collapse
+  // (net.connect.decl), a resolution query. Port and collapsed-net
+  // reflections (port.decl, vpi_net_identity.decl) only name the net for VPI,
+  // which is off, and for waveform dumps and toggle coverage, which mark the
+  // design or the canonical declaration and were checked above.
+  std::map<uint64_t, unsigned> driverDecls;
+  auto namedBy = [&](Operation *op, uint64_t id) {
+    auto found = sinks.find(Root{true, id});
+    if (found == sinks.end())
+      return;
+    if (isa<sim::SimDriverDeclOp>(op)) {
+      ++driverDecls[id];
+      return;
+    }
+    found->second.blocked = true;
+    found->second.blocker = "named by " + op->getName().getStringRef().str();
+  };
+  design.walk([&](Operation *op) {
+    if (isa<sim::SimNetDeclOp, sim::SimStorageDeclOp, sim::SimPortDeclOp,
+            sim::SimVPINetIdentityDeclOp>(op))
+      return;
+    for (NamedAttribute attr : op->getAttrs())
+      if (attr.getName().getValue().ends_with("net_id"))
+        if (auto id = dyn_cast<IntegerAttr>(attr.getValue()))
+          namedBy(op, id.getValue().getZExtValue());
   });
   for (auto &[root, sink] : sinks)
     if (root.net && !sink.blocked &&
@@ -505,8 +572,10 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
   // source must not watch the waiter's own writes) and, per root, the sites
   // whose activation shape decides whether the root is transient-free.
   struct Written {
+    Operation *op;
     Root root;
     uint64_t low, width;
+    bool plain; // one update event; otherwise the shape is not modeled
   };
   struct Writer {
     Operation *op;
@@ -526,6 +595,8 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
     uint64_t low, width;
   };
   SmallVector<DisplaySite> displaySites;
+  // Idempotent readers that wait on an expression sink.
+  SmallVector<std::pair<Operation *, Root>> expressionWaiters;
   DenseMap<Operation *, Value> contextOf; // function -> context argument
   for (auto function : designBlock.getOps<sim::SimFuncOp>()) {
     if (function.isExternal())
@@ -573,10 +644,12 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
           return;
         }
         if (isa<sim::SimRefStoreOp, sim::SimDriverDriveOp>(op)) {
-          if (auto root = rootOfHandle(writtenHandle(op)))
-            stored.insert(*root);
-          else
-            pureComb = false;
+          forEachWrite(op, [&](Value handle, bool) {
+            if (auto root = rootOfHandle(handle))
+              stored.insert(*root);
+            else
+              pureComb = false;
+          });
           return;
         }
         if (isViewOp(op) || op->hasTrait<OpTrait::IsTerminator>() ||
@@ -636,7 +709,9 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
     };
     function.walk([&](Operation *op) {
       uint64_t low = 0, width = 0;
-      if (Value destination = writtenHandle(op)) {
+      bool writes = false;
+      forEachWrite(op, [&](Value destination, bool plain) {
+        writes = true;
         auto fact = facts.find(destination);
         if (fact != facts.end() && fact->second.descriptor &&
             (fact->second.resource == schedule::ComputeResourceKind::Net ||
@@ -648,12 +723,17 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
           uint64_t writeLow = fact->second.dynamic ? 0 : fact->second.low;
           uint64_t writeWidth = fact->second.dynamic ? fact->second.rootWidth
                                                      : fact->second.width;
-          writtenOf[function].push_back({root, writeLow, writeWidth});
+          writtenOf[function].push_back(
+              {op, root, writeLow, writeWidth, plain});
           writersOf[root].push_back({op, function, writeLow, writeWidth,
-                                     isa<sim::SimNBAEnqueueOp>(op),
-                                     !plainWrite(op)});
+                                     isa<sim::SimNBAEnqueueOp>(op), !plain});
         }
-      }
+        if (Sink *s = hit(destination, low, width))
+          if (!asCopy || !(asCopy->sink == s->root)) {
+            s->blocked = true;
+            s->blocker = "other writer";
+          }
+      });
       if (isa<sim::SimRefLoadOp, sim::SimNetReadOp>(op)) {
         if (Sink *s = hit(op->getOperand(0), low, width)) {
           ++s->readers;
@@ -664,12 +744,8 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
           }
           readSites.push_back({op, s->root, low, width});
         }
-      } else if (Value destination = writtenHandle(op)) {
-        if (Sink *s = hit(destination, low, width))
-          if (!asCopy || !(asCopy->sink == s->root)) {
-            s->blocked = true;
-            s->blocker = "other writer";
-          }
+      } else if (writes) {
+        // Recorded above.
       } else if (isa<sim::SimSuspendChangeOp, sim::SimSuspendAnyOp,
                      sim::SimSuspendEdgeOp>(op)) {
         unsigned watched = isa<sim::SimSuspendAnyOp>(op)
@@ -688,6 +764,8 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
             if (expression && !pureComb) {
               s->blocked = true;
               s->blocker = "wait on expression";
+            } else if (expression) {
+              expressionWaiters.push_back({function, s->root});
             }
             int32_t edge = int32_t(sim::EdgeKind::Change);
             if (auto wait = dyn_cast<sim::SimSuspendEdgeOp>(op))
@@ -714,7 +792,7 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
         ArrayRef<int32_t> flags = display.getItemFlags();
         unsigned operand = 2; // after context and descriptor
         for (auto [flag, bits] : llvm::enumerate(flags)) {
-          if (bits & 2)
+          if (bits & TALOS_RT_OUTPUT_ITEM_OMITTED)
             continue;
           if (!(bits & TALOS_RT_OUTPUT_ITEM_NET)) {
             ++operand;
@@ -816,11 +894,13 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
   };
   auto writesOverlap = [&](Operation *function, Root root, uint64_t low,
                            uint64_t width) {
-    for (const Written &written : writtenOf.lookup(function))
-      if (written.root == root && written.low < low + width &&
-          low < written.low + written.width)
-        return true;
-    return false;
+    auto found = writtenOf.find(function);
+    if (found == writtenOf.end())
+      return false;
+    return llvm::any_of(found->second, [&](const Written &written) {
+      return written.root == root && written.low < low + width &&
+             low < written.low + written.width;
+    });
   };
   // Readers gain captures at their spawns: a function reached otherwise
   // keeps its sinks.
@@ -872,46 +952,36 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
   // every update event of the source (IEEE 1800-2023 4.4.1, 9.4.2). Both
   // agree exactly when each activation of every writer stores each bit of
   // the source at most once: no transient (default, then override) value is
-  // ever published. A store reached twice on one activation path, in a loop,
-  // from a called function, or beside a nonblocking write of the same root
-  // may publish an intermediate value, which the copy never forwarded.
-  struct Reach {
-    DenseMap<Block *, unsigned> index;
-    SmallVector<llvm::BitVector> reachable; // per block: blocks reached
-  };
-  DenseMap<Operation *, std::unique_ptr<Reach>> reachOf;
-  auto reachabilityOf = [&](Operation *function) -> Reach & {
-    auto &reach = reachOf[function];
-    if (reach)
-      return *reach;
-    reach = std::make_unique<Reach>();
-    Region &body = cast<sim::SimFuncOp>(function).getBody();
-    for (Block &block : body)
-      reach->index[&block] = reach->index.size();
-    unsigned count = reach->index.size();
-    reach->reachable.assign(count, llvm::BitVector(count));
-    for (Block &block : body) {
-      llvm::BitVector &bits = reach->reachable[reach->index[&block]];
-      SmallVector<Block *> work;
-      auto push = [&](Block *from) {
-        // An activation ends at a suspension: its successors run later.
-        Operation *terminator = from->getTerminator();
-        if (terminator->getName().getStringRef().starts_with(
-                "simulation.suspend"))
-          return;
-        for (Block *next : from->getSuccessors()) {
-          unsigned i = reach->index[next];
-          if (!bits.test(i)) {
-            bits.set(i);
-            work.push_back(next);
-          }
-        }
-      };
-      push(&block);
-      while (!work.empty())
-        push(work.pop_back_val());
+  // ever published. A store executed twice on one activation (on one path or
+  // in a loop), from a called function, or beside a nonblocking write of the
+  // same root may publish an intermediate value, which the copy never
+  // forwarded. Execution counts come from the dense write-execution lattice,
+  // whose window ends at each event control or delay (9.4.1-2); a level
+  // wait or task call may continue the activation.
+  DenseMap<Operation *, std::unique_ptr<analysis::WriteExecutionBounds>>
+      boundsOf;
+  auto boundsFor =
+      [&](Operation *function) -> const analysis::WriteExecutionBounds & {
+    std::unique_ptr<analysis::WriteExecutionBounds> &bounds = boundsOf[function];
+    if (!bounds) {
+      SmallVector<Operation *> tracked;
+      auto written = writtenOf.find(function);
+      if (written != writtenOf.end())
+        for (const Written &write : written->second)
+          tracked.push_back(write.op);
+      bounds = std::make_unique<analysis::WriteExecutionBounds>(
+          function, tracked, /*unknownCallEffects=*/false,
+          analysis::ExecutionWindow::Activation);
     }
-    return *reach;
+    return *bounds;
+  };
+  // Two writes of one function never both store a bit on one activation.
+  auto oncePerActivation = [&](Operation *function, Operation *a,
+                               Operation *b) {
+    const analysis::WriteExecutionBounds &bounds = boundsFor(function);
+    if (a == b)
+      return bounds.executesAtMostOnce(a);
+    return bounds.mutuallyExclusive(a, b);
   };
   std::map<Root, bool> transientFreeOf;
   auto transientFree = [&](Root root) {
@@ -926,39 +996,25 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
     bool blocking = false, nonblocking = false;
     for (const Writer &writer : writers->second) {
       (writer.nonblocking ? nonblocking : blocking) = true;
-      if (writer.unknownShape || !isProcess(writer.function))
+      if (writer.unknownShape || !isProcess(writer.function) ||
+          !oncePerActivation(writer.function, writer.op, writer.op))
         result = false;
     }
     if (blocking && nonblocking)
       result = false;
     for (size_t i = 0; result && i < writers->second.size(); ++i) {
       const Writer &a = writers->second[i];
-      Reach &reach = reachabilityOf(a.function);
-      Block *blockA = a.op->getBlock();
-      if (reach.reachable[reach.index[blockA]].test(reach.index[blockA])) {
-        result = false; // a loop repeats the store
-        break;
-      }
-      for (size_t j = i + 1; j < writers->second.size(); ++j) {
+      for (size_t j = i + 1; result && j < writers->second.size(); ++j) {
         const Writer &b = writers->second[j];
-        if (a.low >= b.low + b.width || b.low >= a.low + a.width)
+        if (a.op == b.op || a.low >= b.low + b.width ||
+            b.low >= a.low + a.width)
           continue;
         // Two processes' nonblocking writes of one bit commit in the same
         // NBA region and may round-trip before any Active process runs.
-        if (b.function != a.function) {
-          if (a.nonblocking && b.nonblocking) {
-            result = false;
-            break;
-          }
-          continue;
-        }
-        Block *blockB = b.op->getBlock();
-        if (blockA == blockB ||
-            reach.reachable[reach.index[blockA]].test(reach.index[blockB]) ||
-            reach.reachable[reach.index[blockB]].test(reach.index[blockA])) {
-          result = false;
-          break;
-        }
+        if (b.function != a.function)
+          result = !(a.nonblocking && b.nonblocking);
+        else
+          result = oncePerActivation(a.function, a.op, b.op);
       }
     }
     return result;
@@ -972,6 +1028,112 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
           sink.blocked = true;
           sink.blocker = "transient source";
         }
+  }
+  // An idempotent reader moved onto expression operands re-evaluates when an
+  // operand changes but the expression does not. Its outputs keep their
+  // values only if it stores each bit at most once per activation;
+  // `o = 0; if (y) o = 1;` would publish a 1 -> 0 -> 1 transient that the
+  // net's own update events never caused (9.2.2.2.1, 9.4.2).
+  DenseMap<Operation *, bool> storesOnceOf;
+  auto storesOnce = [&](Operation *function) {
+    auto [found, inserted] = storesOnceOf.try_emplace(function, true);
+    if (!inserted)
+      return found->second;
+    bool once = true;
+    auto written = writtenOf.find(function);
+    if (written != writtenOf.end()) {
+      ArrayRef<Written> writes = written->second;
+      for (size_t i = 0; once && i < writes.size(); ++i) {
+        once = writes[i].plain &&
+               oncePerActivation(function, writes[i].op, writes[i].op);
+        for (size_t j = i + 1; once && j < writes.size(); ++j)
+          if (writes[i].op != writes[j].op &&
+              writes[i].root == writes[j].root &&
+              writes[i].low < writes[j].low + writes[j].width &&
+              writes[j].low < writes[i].low + writes[i].width)
+            once = oncePerActivation(function, writes[i].op, writes[j].op);
+      }
+    }
+    return storesOnceOf[function] = once;
+  };
+  for (auto [function, root] : expressionWaiters) {
+    Sink &sink = sinks[root];
+    if (!sink.blocked && !storesOnce(function)) {
+      sink.blocked = true;
+      sink.blocker = "wait on expression";
+    }
+  }
+  // IEEE 1800-2023 4.5: the Reactive region set (program processes, 24.3,
+  // and anything they call or spawn) drains before the Active set resumes.
+  // A copy made pending by a Reactive writer of its source therefore runs
+  // only after every Reactive reader of the net; such a reader must keep
+  // the net. Readers in the Active set and writers there are unaffected:
+  // Active events may run in any order (4.7) and the Reactive set starts
+  // only after every Active copy ran.
+  DenseSet<Operation *> nonActive;
+  {
+    llvm::StringMap<Operation *> functions;
+    for (auto function : designBlock.getOps<sim::SimFuncOp>())
+      functions[function.getSymName()] = function;
+    DenseMap<Operation *, SmallVector<Operation *>> calleesOf;
+    for (const auto &entry : usersOf) {
+      Operation *callee = functions.lookup(entry.getKey());
+      if (!callee)
+        continue;
+      for (Operation *user : entry.getValue())
+        if (auto caller = user->getParentOfType<sim::SimFuncOp>())
+          calleesOf[caller].push_back(callee);
+    }
+    SmallVector<Operation *> work;
+    for (auto function : designBlock.getOps<sim::SimFuncOp>())
+      if (!function.isExternal() &&
+          function.getHomeRegion() != sim::EventRegion::Active)
+        work.push_back(function);
+    while (!work.empty()) {
+      Operation *function = work.pop_back_val();
+      if (nonActive.insert(function).second)
+        llvm::append_range(work, calleesOf.lookup(function));
+    }
+  }
+  if (!nonActive.empty()) {
+    auto resumesOutsideActive = [](Operation *wait) {
+      std::optional<sim::EventRegion> region;
+      if (auto any = dyn_cast<sim::SimSuspendAnyOp>(wait))
+        region = any.getResumeRegion();
+      else if (auto change = dyn_cast<sim::SimSuspendChangeOp>(wait))
+        region = change.getResumeRegion();
+      else if (auto edge = dyn_cast<sim::SimSuspendEdgeOp>(wait))
+        region = edge.getResumeRegion();
+      return region && *region != sim::EventRegion::Active;
+    };
+    std::set<Root> reactiveReaders;
+    auto noteReader = [&](Operation *op, Root sink) {
+      if (nonActive.contains(op->getParentOfType<sim::SimFuncOp>()))
+        reactiveReaders.insert(sink);
+    };
+    for (const ReadSite &site : readSites)
+      noteReader(site.op, site.sink);
+    for (const DisplaySite &site : displaySites)
+      noteReader(site.op, site.sink);
+    for (const WaitSite &site : waitSites) {
+      noteReader(site.op, site.sink);
+      if (resumesOutsideActive(site.op))
+        reactiveReaders.insert(site.sink);
+    }
+    for (const Root &root : reactiveReaders) {
+      Sink &sink = sinks[root];
+      for (const Piece &piece : sink.pieces)
+        for (const SourceRead &read : piece.copy->reads) {
+          auto writers = writersOf.find(read.root);
+          if (writers != writersOf.end() &&
+              llvm::any_of(writers->second, [&](const Writer &writer) {
+                return nonActive.contains(writer.function);
+              })) {
+            sink.blocked = true;
+            sink.blocker = "reactive reader";
+          }
+        }
+    }
   }
   // Leaves first: a sink whose source is itself an eligible sink waits for
   // the next round, after that source's readers (this copy) were rewritten.
@@ -1039,10 +1201,11 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
                                          : int32_t(sim::CaptureKind::Storage))),
          attrs.getNamedAttr(sim::metadata::DescriptorId::getNameStr(),
                             attrs.getI64IntegerAttr(root.id))});
-    if (failed(func.insertArgument(entry.getNumArguments(), handleType,
-                                   captureAttrs, loc)))
-      llvm::report_fatal_error("forward-copies: cannot add a capture to " +
-                               func.getSymName());
+    // A function type always admits one more input.
+    LogicalResult inserted = func.insertArgument(
+        entry.getNumArguments(), handleType, captureAttrs, loc);
+    assert(succeeded(inserted) && "sim.func rejected a new capture");
+    (void)inserted;
     for (Operation *user : usersOf.lookup(func.getSymName())) {
       auto spawn = cast<sim::SimSpawnOp>(user);
       OpBuilder spawnBuilder(spawn);
@@ -1065,12 +1228,10 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
   // A view of `width` bits at `low` of `root`, as a vector of its domain.
   auto viewOf = [&](OpBuilder &builder, Location loc, Operation *function,
                     Root root, uint64_t low, uint64_t width) -> Value {
-    if (!types.count(root) || !contextOf[function])
-      llvm::report_fatal_error(
-          Twine("forward-copies: view of undeclared root net=") +
-          Twine(root.net) + " id=" + Twine(root.id) + " ctx=" +
-          Twine(contextOf[function] ? 1 : 0) + " in " +
-          cast<sim::SimFuncOp>(function).getSymName());
+    // Undeclared or non-packed sources and context-less readers were
+    // blocked above.
+    assert(types.count(root) && contextOf.lookup(function) &&
+           "forward-copies: view of an unchecked root");
     Value handle = handleFor(builder, loc, function, root);
     Type element = types[root];
     Type scalar = sim::getPackedScalarType(element);
@@ -1300,14 +1461,28 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
       op->setOperand(0, operands.front());
     } else {
       llvm::append_range(operands, continuation);
-      OperationState state(loc, sim::SimSuspendAnyOp::getOperationName());
-      state.addOperands(operands);
-      state.addAttribute("edges", builder.getDenseI32ArrayAttr(edges));
+      schedule::ContinuationSiteAttr site;
+      sim::EventRegionAttr resume;
+      if (auto wait = dyn_cast<sim::SimSuspendAnyOp>(op)) {
+        site = wait.getSiteAttr();
+        resume = wait.getResumeRegionAttr();
+      } else if (auto wait = dyn_cast<sim::SimSuspendChangeOp>(op)) {
+        site = wait.getSiteAttr();
+        resume = wait.getResumeRegionAttr();
+      } else {
+        auto edge = cast<sim::SimSuspendEdgeOp>(op);
+        site = edge.getSiteAttr();
+        resume = edge.getResumeRegionAttr();
+      }
+      auto any = sim::SimSuspendAnyOp::create(builder, loc, operands, edges,
+                                              site, resume,
+                                              op->getSuccessor(0));
+      // Carry the wait's discardable attributes; its inherent ones (edge,
+      // site, resume region) were rebuilt above.
+      ArrayRef<StringAttr> inherent = op->getName().getAttributeNames();
       for (NamedAttribute attr : op->getAttrs())
-        if (attr.getName() != "edges" && attr.getName() != "edge")
-          state.addAttribute(attr.getName(), attr.getValue());
-      state.addSuccessors(op->getSuccessor(0));
-      builder.create(state);
+        if (!llvm::is_contained(inherent, attr.getName()))
+          any->setAttr(attr.getName(), attr.getValue());
       op->erase();
     }
     ++rewrittenWaits;

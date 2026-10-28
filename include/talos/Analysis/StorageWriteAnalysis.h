@@ -36,15 +36,21 @@ private:
   bool valid = false;
 };
 
+/// Where a WriteExecutionBounds counting window restarts. A strictly
+/// positive delay starts a fresh NBA window; #0 and event waits do not (LRM
+/// 4.4.2.4). An event control or delay ends an activation, the window of a
+/// process's update events (4.4.1); a wait that may not block does not.
+enum class ExecutionWindow { Unbounded, PositiveDelay, Activation };
+
 /// Dense execution bounds for explicitly tracked statements. Intraprocedural
 /// counts are independent of a statement's opcode, so source planning and
 /// post-conversion verification consume the same lattice implementation.
 class WriteExecutionBounds {
 public:
-  WriteExecutionBounds(mlir::Operation *scope,
-                       mlir::ArrayRef<mlir::Operation *> tracked,
-                       bool unknownCallEffects = true,
-                       bool resetAtPositiveDelay = true);
+  WriteExecutionBounds(
+      mlir::Operation *scope, mlir::ArrayRef<mlir::Operation *> tracked,
+      bool unknownCallEffects = true,
+      ExecutionWindow window = ExecutionWindow::PositiveDelay);
   bool executesAtMostOnce(mlir::Operation *write) const;
   bool mutuallyExclusive(mlir::Operation *lhs, mlir::Operation *rhs) const;
 
