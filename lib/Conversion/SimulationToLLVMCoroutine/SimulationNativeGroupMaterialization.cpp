@@ -2056,10 +2056,9 @@ materializeNativeEvalGroupBodies(ModuleOp module, AnalysisManager manager) {
     // Do not retain a consumed operation pointer across that allocation.
     if (inlined != preInlined.end())
       preInlined.erase(inlined);
-    // Publications from inlined members to this candidate's unconditional
-    // members are redundant: those members run after their producers in the
-    // same activation. Remove them while the typed actions still name their
-    // destination word and bits.
+    // Publications to unconditional members that still execute later are
+    // redundant. Preserve backward publications inside an SCC for another
+    // sweep. The typed actions still name their destination word and bits.
     report->elidedUnconditionalPublications +=
         elideUnconditionalMemberPublications(function);
     // Member effects are now visible in one CFG. Combine semantic readiness

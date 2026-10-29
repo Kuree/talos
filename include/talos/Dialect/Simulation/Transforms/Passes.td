@@ -218,8 +218,12 @@ def TalosSimForwardCopyProcessesPass
     9.2.2.2.1, 9.4.2): reads become views of the operands or clones of the
     expression, waits watch the operands, and the assignment process and
     its net become dead. The operands must be transient-free (each writer
-    stores each bit at most once per activation, 4.4.1), so the readers see
-    exactly the update events the net had. Requires VPI off.
+    stores each bit at most once per activation), or every affected reader
+    must be a combinational reader whose extra evaluations have no visible
+    effect, including any transients observed downstream (4.3). Expression
+    waiters require the same proof, since an operand can change without an
+    event of the expression (9.4.2). Cycles of transient-producing readers
+    cannot establish that proof. Requires VPI off.
   }];
   let dependentDialects = ["talos::sim::TalosSimulationDialect"];
   let statistics = [

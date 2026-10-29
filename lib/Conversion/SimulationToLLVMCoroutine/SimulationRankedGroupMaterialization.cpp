@@ -12,8 +12,10 @@
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/bit.h"
 #include <optional>
 
 using namespace mlir;
@@ -575,6 +577,21 @@ unsigned elideUnconditionalMemberPublications(LLVM::LLVMFuncOp function) {
       return 0;
     unconditional[uint64_t(owner) / 64] |= uint64_t{1} << (owner % 64);
   }
+  // SCC condensation orders components, not every edge inside a component.
+  // A later member can change an earlier member's inputs; that publication
+  // must survive for another sweep (IEEE 1800-2023 4.3-4.5, 4.9.1). Only
+  // elide work whose destination will still execute after the publication.
+  // Use executable entries rather than owner IDs or inferred graph ranks.
+  DenseMap<uint64_t, Operation *> entries;
+  function.walk([&](Operation *operation) {
+    auto owner = schedule::get<schedule::Field::EvalActivationEntry>(operation);
+    if (!owner || !isa<schedule::NativeReadyReadOp, LLVM::LoadOp>(operation))
+      return;
+    auto [found, inserted] = entries.try_emplace(owner.getUInt(), operation);
+    if (!inserted)
+      found->second = nullptr;
+  });
+  PostDominanceInfo order(function);
   // The bits a mask can add: a constant, or a select between constants (the
   // inline publication form `select(triggered, bit, 0)`). Anything else may
   // publish to a member that still has its predicate, so it is kept.
@@ -610,6 +627,14 @@ unsigned elideUnconditionalMemberPublications(LLVM::LLVMFuncOp function) {
     if (!bits || !*bits || word == unconditional.end() ||
         (*bits & ~word->second) != 0)
       return;
+    uint64_t pending = *bits;
+    while (pending) {
+      unsigned bit = llvm::countr_zero(pending);
+      pending &= pending - 1;
+      Operation *entry = entries.lookup(update.getWord() * 64 + bit);
+      if (!entry || !order.properlyPostDominates(entry, update))
+        return;
+    }
     redundant.push_back(update);
   });
   // The publication's change/edge computation becomes dead with it; ordinary

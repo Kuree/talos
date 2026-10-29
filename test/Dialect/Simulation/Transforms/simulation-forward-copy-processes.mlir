@@ -61,15 +61,16 @@ module {
   }
 
   // `s = 0; if (sel) s = 5;` publishes a transient value on every activation
-  // that the copy never forwarded (it runs after the writer): the readers keep
-  // the net.
+  // that the copy never forwarded (it runs after the writer). A quiet reader
+  // stores its previous result when the final input is unchanged (4.3), so
+  // those extra evaluations do not prevent forwarding.
   // CHECK-LABEL: simulation.design @transient
-  // CHECK: simulation.spawn @copy
-  // CHECK: simulation.func private @copy
-  // CHECK: simulation.func private @reader({{.*}}, %[[NET:.*]]: !simulation.net<!simulation.logic<4>> {simulation.capture_kind = 4 : i32, simulation.descriptor_id = 0 : i64}, %{{.*}})
-  // CHECK: simulation.net.read %[[NET]]
-  // CENSUS: talos forward-copies: processes=4 copies=1 sinks=1 eligible=0 ready=0 ready_copies=0
-  // CENSUS: talos forward-copies blocked: count=1 reason=transient source
+  // CHECK-NOT: simulation.spawn @copy
+  // CHECK-NOT: simulation.func private @copy
+  // CHECK: simulation.func private @reader({{.*}}, %[[SRC:.*]]: !simulation.ref<!simulation.logic<4>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64})
+  // CHECK: simulation.ref.load %[[SRC]]
+  // CHECK: simulation.suspend.change %[[SRC]]
+  // CENSUS: talos forward-copies: processes=4 copies=1 sinks=1 eligible=1 ready=1 ready_copies=1
   simulation.design @transient {
     simulation.scope.decl 0
     simulation.code_unit.decl 1 in 0 root_initializer hierarchy "root"

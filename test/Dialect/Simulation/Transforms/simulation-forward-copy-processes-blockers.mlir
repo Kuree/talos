@@ -596,7 +596,10 @@ module {
       cf.br ^body
     ^body:
       %v = simulation.net.read %in : !simulation.net<!simulation.logic<4>> -> !simulation.logic<4>
-      simulation.ref.store %v to %out : !simulation.logic<4>, !simulation.ref<!simulation.logic<4>>
+      // Accumulate so an extra activation observes the source transient.
+      %old = simulation.ref.load %out : !simulation.ref<!simulation.logic<4>> -> !simulation.logic<4>
+      %next = simulation.logic.binary add %old, %v : !simulation.logic<4>
+      simulation.ref.store %next to %out : !simulation.logic<4>, !simulation.ref<!simulation.logic<4>>
       simulation.suspend.change %in to ^body : !simulation.net<!simulation.logic<4>>
     }
     simulation.func private @writer(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %out: !simulation.ref<!simulation.logic<4>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}, %sel: !simulation.ref<!simulation.logic<1>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 2 : i64}) attributes {entry_kind = 3 : i32, code_unit_id = 4 : i64} {
@@ -656,7 +659,10 @@ module {
       cf.br ^body
     ^body:
       %v = simulation.net.read %in : !simulation.net<!simulation.logic<4>> -> !simulation.logic<4>
-      simulation.ref.store %v to %out : !simulation.logic<4>, !simulation.ref<!simulation.logic<4>>
+      // Accumulate so an extra activation observes the source transient.
+      %old = simulation.ref.load %out : !simulation.ref<!simulation.logic<4>> -> !simulation.logic<4>
+      %next = simulation.logic.binary add %old, %v : !simulation.logic<4>
+      simulation.ref.store %next to %out : !simulation.logic<4>, !simulation.ref<!simulation.logic<4>>
       simulation.suspend.change %in to ^body : !simulation.net<!simulation.logic<4>>
     }
     simulation.func private @writer(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %out: !simulation.ref<!simulation.logic<4>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}, %sel: !simulation.ref<!simulation.logic<1>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 2 : i64}) attributes {entry_kind = 3 : i32, code_unit_id = 4 : i64} {
@@ -715,7 +721,10 @@ module {
       cf.br ^body
     ^body:
       %v = simulation.net.read %in : !simulation.net<!simulation.logic<4>> -> !simulation.logic<4>
-      simulation.ref.store %v to %out : !simulation.logic<4>, !simulation.ref<!simulation.logic<4>>
+      // Accumulate so an extra activation observes the source transient.
+      %old = simulation.ref.load %out : !simulation.ref<!simulation.logic<4>> -> !simulation.logic<4>
+      %next = simulation.logic.binary add %old, %v : !simulation.logic<4>
+      simulation.ref.store %next to %out : !simulation.logic<4>, !simulation.ref<!simulation.logic<4>>
       simulation.suspend.change %in to ^body : !simulation.net<!simulation.logic<4>>
     }
     simulation.func private @writer(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %out: !simulation.ref<!simulation.logic<4>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}) attributes {entry_kind = 3 : i32, code_unit_id = 4 : i64} {
@@ -773,7 +782,10 @@ module {
       cf.br ^body
     ^body:
       %v = simulation.net.read %in : !simulation.net<!simulation.logic<4>> -> !simulation.logic<4>
-      simulation.ref.store %v to %out : !simulation.logic<4>, !simulation.ref<!simulation.logic<4>>
+      // Accumulate so an extra activation observes the source transient.
+      %old = simulation.ref.load %out : !simulation.ref<!simulation.logic<4>> -> !simulation.logic<4>
+      %next = simulation.logic.binary add %old, %v : !simulation.logic<4>
+      simulation.ref.store %next to %out : !simulation.logic<4>, !simulation.ref<!simulation.logic<4>>
       simulation.suspend.change %in to ^body : !simulation.net<!simulation.logic<4>>
     }
     simulation.func private @writer(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %out: !simulation.ref<!simulation.logic<4>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}) attributes {entry_kind = 3 : i32, code_unit_id = 4 : i64} {
@@ -836,7 +848,10 @@ module {
       cf.br ^body
     ^body:
       %v = simulation.net.read %in : !simulation.net<!simulation.logic<4>> -> !simulation.logic<4>
-      simulation.ref.store %v to %out : !simulation.logic<4>, !simulation.ref<!simulation.logic<4>>
+      // Accumulate so an extra activation observes the source transient.
+      %old = simulation.ref.load %out : !simulation.ref<!simulation.logic<4>> -> !simulation.logic<4>
+      %next = simulation.logic.binary add %old, %v : !simulation.logic<4>
+      simulation.ref.store %next to %out : !simulation.logic<4>, !simulation.ref<!simulation.logic<4>>
       simulation.suspend.change %in to ^body : !simulation.net<!simulation.logic<4>>
     }
     simulation.func private @writer(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %out: !simulation.ref<!simulation.logic<4>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}) attributes {entry_kind = 3 : i32, code_unit_id = 4 : i64} {
@@ -867,6 +882,7 @@ module {
 // `assign y = a | b; always_comb begin o = 0; if (y) o = 1; end`: moved onto
 // a and b, the reader would also run when y keeps its value and publish a
 // 1 -> 0 -> 1 transient on o that y never caused (9.2.2.2.1, 9.4.2).
+// Toggle coverage observes that transient, so the reader is not quiet.
 // CENSUS-LABEL: talos forward-copies: processes=4 copies=1 sinks=1 eligible=0
 // CENSUS: blocked: count=1 reason=wait on expression
 // KEEP-LABEL: simulation.design @transient_reader
@@ -879,7 +895,7 @@ module {
     simulation.code_unit.decl 3 in 0 always_comb hierarchy "reader"
     simulation.code_unit.decl 4 in 0 initial hierarchy "writer"
     simulation.storage.decl 0 in 0 : !simulation.logic<4> design
-    simulation.storage.decl 1 in 0 : !simulation.logic<4> design
+    simulation.storage.decl 1 in 0 : !simulation.logic<4> design {coverage.toggle_observable}
     simulation.net.decl 0 in 0 : !simulation.logic<4> design
     simulation.driver.decl 0 in 0 drives 0 : !simulation.logic<4> design {driven_low = 0 : i64, driven_width = 4 : i64}
     simulation.storage.decl 2 in 0 : !simulation.logic<4> design
