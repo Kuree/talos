@@ -1,6 +1,7 @@
 add_library(TalosLLVMPassPlugin MODULE
   PassPlugin.cpp
   ../ClockedGuardLayout.cpp
+  ../ClockedKernelOutlining.cpp
   ../WideIntegerVectorization.cpp
 )
 llvm_update_compile_flags(TalosLLVMPassPlugin)

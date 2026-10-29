@@ -1064,6 +1064,16 @@ retained only when DPI is linked, for foreign objects and shared libraries.
 Runtime ABI entry points that are not otherwise needed remain eligible for LTO
 internalization and elimination.
 
+At `-O3` on AArch64, oversized clocked eval bodies are outlined after LLVM
+optimization. Each update group has at most six native scalar or pointer inputs
+and no live SSA outputs. Constant addresses are recreated inside the helper;
+sampled state is passed without loading it again. The helpers retain the
+caller's applicable storage-exclusion assumptions and are simplified separately,
+so the compiler does not repeat module optimization over the large caller.
+Bounded helpers use SelectionDAG through the native backend's fallback mechanism,
+while larger functions retain the GlobalISel pipeline. This bounds the register
+allocator's scope without sacrificing instruction selection in the helpers.
+
 `--compile-threads=<count>` controls the shared MLIR compilation pool, LLD
 threading and LTO code generation. When it is
 not specified, Talos uses LLVM's available-hardware count, clamped to at

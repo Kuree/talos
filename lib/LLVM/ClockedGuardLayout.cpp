@@ -1,6 +1,7 @@
 //===- ClockedGuardLayout.cpp - Event-guard arms of clocked kernels --------===//
 
 #include "talos/LLVM/ClockedGuardLayout.h"
+#include "talos/LLVM/ClockedKernelOutlining.h"
 #include "talos/LLVM/WideIntegerVectorization.h"
 
 #include "llvm/ADT/SmallPtrSet.h"
@@ -90,6 +91,16 @@ void registerTalosLLVMPasses(PassBuilder &builder) {
   builder.registerPipelineParsingCallback(
       [](StringRef name, ModulePassManager &passes,
          ArrayRef<PassBuilder::PipelineElement>) {
+        if (name.consume_front("talos-outline-clocked-kernels")) {
+          unsigned targetSize = kClockedKernelOutlineTargetSize;
+          if (!name.empty() &&
+              (!name.consume_front("<") || !name.consume_back(">") ||
+               name.getAsInteger(10, targetSize) || targetSize < 4 ||
+               targetSize > 65536))
+            return false;
+          passes.addPass(ClockedKernelOutliningPass(targetSize));
+          return true;
+        }
         if (name != "talos-clocked-guard-layout")
           return false;
         passes.addPass(ClockedGuardLayoutPass());

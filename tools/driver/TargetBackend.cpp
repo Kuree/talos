@@ -31,6 +31,7 @@
 #include "talos/Conversion/SimulationToLLVMCoroutine.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
 #include "talos/LLVM/ClockedGuardLayout.h"
+#include "talos/LLVM/ClockedKernelOutlining.h"
 #include "talos/LLVM/WideIntegerVectorization.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
@@ -58,12 +59,16 @@
 #include "llvm/Analysis/ProfileSummaryInfo.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/PassInfo.h"
+#include "llvm/PassRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MathExtras.h"
@@ -1029,6 +1034,11 @@ LogicalResult optimizeLLVMModule(llvm::Module &module,
   // Layout passes read the optimized shape of the kernels; see
   // talos/LLVM/ClockedGuardLayout.h.
   ClockedGuardLayoutPass().run(module, moduleAnalyses);
+  // Keep scalar sharing and vectorization across updates, then bound the
+  // native register allocator's view without introducing spilled SSA outputs.
+  if (optLevel >= 3 && targetMachine.getTargetTriple().isAArch64())
+    moduleAnalyses.invalidate(
+        module, ClockedKernelOutliningPass().run(module, moduleAnalyses));
   if (verifyModule(module, &errs())) {
     errs() << "talos: error: invalid LLVM IR after native optimization\n";
     return failure();
@@ -1329,6 +1339,59 @@ addVPIStartupLifecycle(llvm::Module &module, StringRef vpi,
   return success();
 }
 
+namespace {
+
+// Large native kernels need GlobalISel to bound selection time. The outlined
+// groups have bounded size and benefit from SelectionDAG's code quality. Use
+// the backend's existing fallback before translating these functions.
+class SelectOutlinedKernelsPass : public MachineFunctionPass {
+public:
+  static char ID;
+  SelectOutlinedKernelsPass() : MachineFunctionPass(ID) {}
+  StringRef getPassName() const override {
+    return "Select outlined clocked kernels with SelectionDAG";
+  }
+  bool runOnMachineFunction(MachineFunction &function) override {
+    const llvm::Function &ir = function.getFunction();
+    // Helper simplification and codegen preparation can grow a selected group.
+    // Keep the SelectionDAG bound even after those transformations.
+    if (!ir.hasFnAttribute(talos::kClockedUpdateGroupAttr) ||
+        ir.getInstructionCount() > talos::kClockedUpdateGroupMaxDAGSize)
+      return false;
+    function.getProperties().set(
+        MachineFunctionProperties::Property::FailedISel);
+    return true;
+  }
+};
+
+char SelectOutlinedKernelsPass::ID = 0;
+static RegisterPass<SelectOutlinedKernelsPass>
+    selectOutlinedKernels("talos-select-outlined-kernels",
+                          "Select outlined clocked kernels with SelectionDAG",
+                          false, false);
+
+class KernelCodegenPassManager : public legacy::PassManager {
+public:
+  explicit KernelCodegenPassManager(const llvm::Module &module)
+      : hasGroups(llvm::any_of(module, [](const llvm::Function &function) {
+          return function.hasFnAttribute(talos::kClockedUpdateGroupAttr);
+        })) {}
+
+private:
+  void add(llvm::Pass *pass) override {
+    if (hasGroups) {
+      const llvm::PassInfo *info =
+          llvm::PassRegistry::getPassRegistry()->getPassInfo(pass->getPassID());
+      if (info && info->getPassArgument() == "irtranslator")
+        legacy::PassManager::add(new SelectOutlinedKernelsPass());
+    }
+    legacy::PassManager::add(pass);
+  }
+  bool hasGroups;
+};
+
+} // namespace
+
 LogicalResult writeObject(llvm::Module &module, TargetMachine &targetMachine,
                           StringRef path, StringRef description) {
   std::error_code error;
@@ -1338,7 +1401,7 @@ LogicalResult writeObject(llvm::Module &module, TargetMachine &targetMachine,
            << "': " << error.message() << '\n';
     return failure();
   }
-  legacy::PassManager codegen;
+  KernelCodegenPassManager codegen(module);
   if (targetMachine.addPassesToEmitFile(codegen, output, nullptr,
                                         CodeGenFileType::ObjectFile)) {
     errs() << "talos: error: " << description

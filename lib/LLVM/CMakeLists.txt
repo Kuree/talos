@@ -4,6 +4,7 @@
 # IR directly.
 add_llvm_library(TalosLLVMPasses STATIC
   ClockedGuardLayout.cpp
+  ClockedKernelOutlining.cpp
   WideIntegerVectorization.cpp
 
   LINK_COMPONENTS
