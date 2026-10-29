@@ -12,6 +12,7 @@
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallBitVector.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/Support/Error.h"
 
@@ -169,6 +170,198 @@ struct NativeFunctionFinalizationInputs {
   bool valid = true;
 };
 
+static bool isPresplitCoroutine(LLVM::LLVMFuncOp function) {
+  if (ArrayAttr attributes = function.getPassthroughAttr())
+    return llvm::any_of(attributes, [](Attribute attribute) {
+      auto name = dyn_cast<StringAttr>(attribute);
+      return name && name.getValue() == "presplitcoroutine";
+    });
+  return false;
+}
+
+static LLVM::AllocaOp underlyingAlloca(Value address) {
+  while (Operation *operation = address.getDefiningOp()) {
+    if (auto allocation = dyn_cast<LLVM::AllocaOp>(operation))
+      return allocation;
+    if (auto gep = dyn_cast<LLVM::GEPOp>(operation))
+      address = gep.getBase();
+    else if (auto cast = dyn_cast<LLVM::BitcastOp>(operation))
+      address = cast.getArg();
+    else
+      break;
+  }
+  return {};
+}
+
+/// The direct display ABI consumes its argument/environment buffers before
+/// returning. Delimit only completely initialized, nonescaping stack objects
+/// whose consumers stay in one block. Follow pointers embedded in argument
+/// structs and stored in argument arrays, so a packed value stays alive until
+/// the display consumes it, not just until its address is put in an array.
+/// These are ABI temporaries, not SV variables or deferred $strobe/$monitor
+/// arguments (IEEE 1800-2023 4.6, 21.2.1 and 21.2.2).
+static bool scopeNativeOutputTemporaries(LLVM::LLVMFuncOp function) {
+  if (isPresplitCoroutine(function))
+    return false;
+  SmallVector<LLVM::AllocaOp> allocations(
+      function.getBody().front().getOps<LLVM::AllocaOp>());
+  if (allocations.empty())
+    return false;
+  struct Scope {
+    Value allocation;
+    Operation *first;
+    Operation *last;
+  };
+  SmallVector<Scope> scopes;
+  DenseMap<Operation *, uint64_t> positions;
+  for (Block &block : function.getBody()) {
+    uint64_t position = 0;
+    for (Operation &operation : block)
+      positions[&operation] = position++;
+  }
+  auto containsPointer = [](Type type) {
+    bool found = false;
+    type.walk([&](LLVM::LLVMPointerType) { found = true; });
+    return found;
+  };
+  for (LLVM::AllocaOp allocation : allocations) {
+    APInt count;
+    // Bound the proof's work even for generated format strings with many
+    // arguments. Leave dynamic/large objects to LLVM's ordinary policy.
+    if (!matchPattern(allocation.getArraySize(), m_ConstantInt(&count)) ||
+        count.isNegative() || count.getActiveBits() > 9 || count.isZero() ||
+        count.getZExtValue() > 256)
+      continue;
+    unsigned elements = count.getZExtValue();
+    SmallVector<Value> pending{allocation.getResult()};
+    DenseSet<Value> visited;
+    DenseSet<Operation *> uses, accesses;
+    Block *block = nullptr;
+    bool valid = true, hasDisplay = false;
+    auto access = [&](Operation *user) {
+      accesses.insert(user);
+      if (block && block != user->getBlock())
+        valid = false;
+      block = user->getBlock();
+    };
+    while (!pending.empty() && valid) {
+      Value value = pending.pop_back_val();
+      if (!visited.insert(value).second)
+        continue;
+      if (visited.size() > 256) {
+        valid = false;
+        break;
+      }
+      for (Operation *user : value.getUsers()) {
+        uses.insert(user);
+        if (uses.size() > 256) {
+          valid = false;
+          break;
+        }
+        if (isa<LLVM::GEPOp, LLVM::BitcastOp, LLVM::InsertValueOp,
+                LLVM::ExtractValueOp, LLVM::SelectOp>(user)) {
+          for (Value result : user->getResults())
+            if (containsPointer(result.getType()))
+              pending.push_back(result);
+        } else if (auto store = dyn_cast<LLVM::StoreOp>(user)) {
+          access(user);
+          if (store.getValue() == value) {
+            auto container = underlyingAlloca(store.getAddr());
+            if (!container)
+              valid = false;
+            else
+              pending.push_back(container.getResult());
+          }
+        } else if (auto load = dyn_cast<LLVM::LoadOp>(user)) {
+          access(user);
+          if (containsPointer(load.getType()))
+            pending.push_back(load.getResult());
+        } else if (auto call = dyn_cast<LLVM::CallOp>(user)) {
+          if (call.getCallee() != "talos_rt_v1_eval_display" ||
+              call.getArgOperands().size() != 7) {
+            valid = false;
+          } else {
+            // The context can retain pointers. Only the synchronous items
+            // and format-environment operands carry the borrowing contract.
+            for (auto [index, argument] : llvm::enumerate(call.getArgOperands()))
+              if (argument == value && index != 4 && index != 6)
+                valid = false;
+            access(user);
+            hasDisplay = true;
+          }
+        } else {
+          // Includes unknown calls, returns, CFG-carried values, existing
+          // lifetime markers, and pointer/integer conversions.
+          valid = false;
+        }
+        if (!valid)
+          break;
+      }
+    }
+    if (!valid || !hasDisplay || !block)
+      continue;
+
+    // A start discards previous contents, including a preceding loop
+    // iteration's contents. Require full element stores before any read or
+    // output, rather than inferring a lifetime from last use alone.
+    llvm::SmallBitVector initialized(elements);
+    Operation *first = nullptr, *last = nullptr;
+    for (Operation *user : uses)
+      if (user->getBlock() == block &&
+          (!first || positions.lookup(user) < positions.lookup(first)))
+        first = user;
+    SmallVector<Operation *> ordered(accesses.begin(), accesses.end());
+    llvm::sort(ordered, [&](Operation *left, Operation *right) {
+      return positions.lookup(left) < positions.lookup(right);
+    });
+    for (Operation *user : ordered) {
+      last = user;
+      if (auto store = dyn_cast<LLVM::StoreOp>(user)) {
+        if (underlyingAlloca(store.getAddr()) != allocation)
+          continue;
+        Value address = store.getAddr();
+        int64_t index = address == allocation.getResult() ? 0 : -1;
+        if (auto gep = address.getDefiningOp<LLVM::GEPOp>();
+            gep && gep.getBase() == allocation.getResult() &&
+            gep.getElemType() == allocation.getElemType() &&
+            gep.getRawConstantIndices().size() == 1) {
+          if (gep.getDynamicIndices().empty()) {
+            index = gep.getRawConstantIndices().front();
+          } else if (gep.getDynamicIndices().size() == 1) {
+            APInt offset;
+            if (matchPattern(gep.getDynamicIndices().front(),
+                             m_ConstantInt(&offset)) &&
+                !offset.isNegative() && offset.getActiveBits() <= 63)
+              index = offset.getZExtValue();
+          }
+        }
+        if (index < 0 || static_cast<uint64_t>(index) >= elements ||
+            store.getValue().getType() != allocation.getElemType()) {
+          valid = false;
+          break;
+        }
+        initialized.set(index);
+      } else if (initialized.count() != elements) {
+        valid = false;
+        break;
+      }
+    }
+    if (valid && first && last)
+      scopes.push_back({allocation.getResult(), first, last});
+  }
+  // Plan before editing: the markers for one object must not affect the
+  // borrowing proof for another object in the same argument array.
+  OpBuilder builder(function.getContext());
+  for (const Scope &scope : scopes) {
+    builder.setInsertionPoint(scope.first);
+    LLVM::LifetimeStartOp::create(builder, scope.first->getLoc(),
+                                  scope.allocation);
+    builder.setInsertionPointAfter(scope.last);
+    LLVM::LifetimeEndOp::create(builder, scope.last->getLoc(), scope.allocation);
+  }
+  return !scopes.empty();
+}
+
 /// Gives temporaries whose every use lies between one lifetime start and end
 /// in a single block a shared stack slot per element type and alignment, by
 /// a linear scan of each block. Runtime-call buffers otherwise each own a
@@ -176,12 +369,8 @@ struct NativeFunctionFinalizationInputs {
 /// immediate offsets, and codegen keeps frame base registers live across
 /// every call. Coroutines keep their allocations, which lay out their frames.
 static bool shareScopedTemporaries(LLVM::LLVMFuncOp function) {
-  if (ArrayAttr passthrough = function.getPassthroughAttr())
-    if (llvm::any_of(passthrough, [](Attribute attribute) {
-          auto name = dyn_cast<StringAttr>(attribute);
-          return name && name.getValue() == "presplitcoroutine";
-        }))
-      return false;
+  if (isPresplitCoroutine(function))
+    return false;
   DenseMap<Operation *, LLVM::AllocaOp> starts, ends;
   function.walk([&](LLVM::AllocaOp allocation) {
     APInt count;
@@ -244,23 +433,32 @@ static bool shareScopedTemporaries(LLVM::LLVMFuncOp function) {
                     function.getBody().front().begin());
   Location location = function.getLoc();
   Type pointer = LLVM::LLVMPointerType::get(function.getContext());
-  Value one = LLVM::ConstantOp::create(builder, location, builder.getI64Type(),
-                                       builder.getI64IntegerAttr(1));
+  Value one;
   DenseMap<std::pair<Key, unsigned>, Value> slots;
   SmallVector<LLVM::AllocaOp> merged;
   // Visit scopes in program order so slot creation is deterministic.
   for (auto [allocation, slot] : order) {
     Key key = keyOf(allocation);
     Value &shared = slots[{key, slot}];
-    if (!shared)
-      shared = LLVM::AllocaOp::create(builder, location, pointer, key.first,
-                                      one, key.second);
+    if (!shared) {
+      if (allocation->getBlock() == &function.getBody().front()) {
+        shared = allocation.getResult();
+      } else {
+        if (!one)
+          one = LLVM::ConstantOp::create(builder, location, builder.getI64Type(),
+                                          builder.getI64IntegerAttr(1));
+        shared = LLVM::AllocaOp::create(builder, location, pointer, key.first,
+                                        one, key.second);
+      }
+    }
+    if (allocation.getResult() == shared)
+      continue;
     allocation.getResult().replaceAllUsesWith(shared);
     merged.push_back(allocation);
   }
   for (LLVM::AllocaOp allocation : merged)
     allocation.erase();
-  return true;
+  return !merged.empty();
 }
 
 struct NativeFunctionFinalizationPass
@@ -291,6 +489,7 @@ struct NativeFunctionFinalizationPass
     uint64_t inlineOperationLimit = configuration.inlineOperationLimit;
     bool changed =
         lowerWideNativeBitwiseIntegers(function, configuration.dataLayout);
+    changed |= scopeNativeOutputTemporaries(function);
     changed |= shareScopedTemporaries(function);
     SmallVector<LLVM::CallOp> provenOffsets;
     function.walk([&](LLVM::CallOp call) {
@@ -411,7 +610,13 @@ struct ShareNativeScopedTemporariesPass
           ShareNativeScopedTemporariesPass> {
   void runOnOperation() override {
     LLVM::LLVMFuncOp function = getOperation();
-    if (function.isExternal() || !detail::shareScopedTemporaries(function))
+    if (function.isExternal()) {
+      markAllAnalysesPreserved();
+      return;
+    }
+    bool changed = detail::scopeNativeOutputTemporaries(function);
+    changed |= detail::shareScopedTemporaries(function);
+    if (!changed)
       markAllAnalysesPreserved();
   }
 };

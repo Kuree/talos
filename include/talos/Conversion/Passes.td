@@ -114,6 +114,9 @@ def ShareNativeScopedTemporariesPass
            "mlir::LLVM::LLVMFuncOp"> {
   let summary = "Share stack slots between lifetime-scoped temporaries";
   let description = [{
+    Delimits fully initialized stack buffers consumed synchronously by direct
+    output in one block, including values nested in argument arrays. Escaping,
+    partially initialized and CFG-carried objects retain their lifetimes.
     Gives allocas whose every use lies between one llvm.intr.lifetime.start
     and lifetime.end in a single block a shared entry-block slot per element
     type and alignment. Generated runtime-call buffers would otherwise each
