@@ -1,0 +1,7 @@
+// Generated from the project's shared VERSION file.
+#ifndef TALOS_VERSION_H
+#define TALOS_VERSION_H
+
+#define TALOS_VERSION_STRING "@TALOS_VERSION@"
+
+#endif

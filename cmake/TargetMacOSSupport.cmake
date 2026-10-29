@@ -119,6 +119,10 @@ foreach(flavor IN ITEMS native lto)
   foreach(source IN LISTS _talos_macos_runtime_sources)
     set(object "${_talos_macos_runtime_dir}/${flavor}/${source}.o")
     list(APPEND objects "${object}")
+    set(version_dependency)
+    if(source STREQUAL "VPI")
+      set(version_dependency "${CMAKE_BINARY_DIR}/include/talos/Version.h")
+    endif()
     add_custom_command(
       OUTPUT "${object}"
       COMMAND "${CMAKE_COMMAND}" -E make_directory
@@ -139,6 +143,7 @@ foreach(flavor IN ITEMS native lto)
         -c "${PROJECT_SOURCE_DIR}/runtime/lib/${source}.cpp" -o "${object}"
       DEPFILE "${object}.d"
       DEPENDS "${PROJECT_SOURCE_DIR}/runtime/lib/${source}.cpp"
+        ${version_dependency}
         ${_talos_macos_runtime_headers}
       VERBATIM)
   endforeach()

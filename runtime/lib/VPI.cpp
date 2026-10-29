@@ -14,6 +14,7 @@
 #include "talos/Reflection/DesignReflection.h"
 #include "talos/Reflection/VPIObjectModel.h"
 #include "talos/Runtime/StableHandle.h"
+#include "talos/Version.h"
 
 // Native VPI startup finds tables in libraries already linked into the image.
 // ELF provides a symbol size; Mach-O/PE use readable mapped memory bounds.
@@ -14488,7 +14489,7 @@ vpi_chk_error(p_vpi_error_info destination) {
     destination->state = vpiRun;
     destination->level = level;
     destination->message = state->errorMessage.data();
-    destination->product = const_cast<char *>("Talos");
+    destination->product = const_cast<char *>("talos");
     destination->code = state->errorCode.data();
   }
   return level;
@@ -14804,8 +14805,8 @@ vpi_register_systf(p_vpi_systf_data registration) {
 extern "C" TALOS_VPI_EXPORT PLI_INT32
 vpi_get_vlog_info(p_vpi_vlog_info info) {
   VPICallScope vpiCallScope;
-  static char product[] = "Talos";
-  static char version[] = "prototype";
+  static char product[] = "talos";
+  static char version[] = TALOS_VERSION_STRING;
   VPIState *state = requireState();
   if (!state || !info)
     return 0;

@@ -9,6 +9,7 @@
 #include "talos/Reflection/DesignReflection.h"
 #include "talos/Reflection/VPIObjectModel.h"
 #include "talos/Runtime/Runtime.h"
+#include "talos/Version.h"
 
 #include "sv_vpi_user.h"
 #include "vpi_user.h"
@@ -6612,7 +6613,7 @@ TEST(VPI, TraversesReflectionAndTracksHandleState) {
   EXPECT_EQ(vpi_get(999, value), vpiUndefined);
   s_vpi_error_info error{};
   EXPECT_EQ(vpi_chk_error(&error), vpiNotice);
-  EXPECT_STREQ(error.product, "Talos");
+  EXPECT_STREQ(error.product, "talos");
   EXPECT_STREQ(error.code, "TALOS_VPI");
   EXPECT_EQ(vpi_chk_error(&error), vpiNotice);
 
@@ -11681,8 +11682,8 @@ TEST(VPI, ConvertsValuesAndEnforcesMutationCapabilities) {
   ASSERT_EQ(info.argc, 1);
   ASSERT_NE(info.argv, nullptr);
   EXPECT_STREQ(info.argv[0], "talos");
-  EXPECT_STREQ(info.product, "Talos");
-  EXPECT_STREQ(info.version, "prototype");
+  EXPECT_STREQ(info.product, "talos");
+  EXPECT_STREQ(info.version, TALOS_VERSION_STRING);
   EXPECT_EQ(vpi_get_vlog_info(nullptr), 0);
   EXPECT_EQ(vpi_release_handle(object), 1);
   talos_rt_v1_context_destroy(context);
@@ -11850,8 +11851,8 @@ TEST(VPI, ReportsAnOwnedSnapshotOfInvocationArguments) {
   ASSERT_NE(info.argv, nullptr);
   for (size_t index = 0; index != storage.size(); ++index)
     EXPECT_STREQ(info.argv[index], storage[index].c_str());
-  EXPECT_STREQ(info.product, "Talos");
-  EXPECT_STREQ(info.version, "prototype");
+  EXPECT_STREQ(info.product, "talos");
+  EXPECT_STREQ(info.version, TALOS_VERSION_STRING);
 
   for (std::string &argument : storage)
     argument.assign("changed");

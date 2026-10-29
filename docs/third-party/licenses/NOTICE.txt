@@ -1,0 +1,38 @@
+Talos binary distributions include code from these projects:
+
+LLVM, MLIR, Clang, LLD, libc++, libc++abi, and libunwind
+Version pinned in CMakeLists.txt (22.1.6; 22.1.8 on Windows ARM64).
+https://github.com/llvm/llvm-project
+See llvm-LICENSE.TXT (installed from the LLVM SDK), Apache-2.0.txt,
+LLVM-exception.txt, and the target support tree's licenses/ directory.
+
+compiler-rt (matching the pinned LLVM SDK)
+https://github.com/llvm/llvm-project/tree/main/compiler-rt
+See compiler-rt-LICENSE.TXT and compiler-rt-CREDITS.TXT.
+
+Slang 11.0
+https://github.com/MikePopoloski/slang/tree/v11.0
+See slang-LICENSE (MIT).
+
+Z3 4.13.4 (when TALOS_ENABLE_Z3 is enabled)
+https://github.com/Z3Prover/z3/tree/z3-4.13.4
+See z3-LICENSE.txt (MIT).
+
+{fmt} 12.1.0
+https://github.com/fmtlib/fmt/tree/12.1.0
+See fmt-LICENSE (MIT with an optional binary-distribution exception).
+
+BS::thread_pool 5.1.0 (vendored by Slang)
+https://github.com/bshoshany/thread-pool/tree/v5.1.0
+See BS-thread-pool-LICENSE.txt (MIT).
+
+Boost.Unordered, Boost.ContainerHash, and expected-lite (vendored by Slang)
+https://github.com/MikePopoloski/slang/tree/v11.0/external
+See BSL-1.0.txt (Boost Software License).
+
+Zstandard (linked through LLVM; version supplied by the build host)
+https://github.com/facebook/zstd
+See zstd-LICENSE (BSD-3-Clause) and xxhash-LICENSE for its bundled hash code.
+
+The license and notice files must accompany redistributed wheels and native
+installation trees. Talos's own license is provided in LICENSE.

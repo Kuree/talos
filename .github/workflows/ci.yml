@@ -3,12 +3,14 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # A main-branch run may be publishing the rolling release. Let it finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -21,6 +23,23 @@ env:
   WASM_IMAGE: ghcr.io/kuree/obelisk-llvm-wasm32:latest@sha256:7e679d82f15d0455379891c22ee43da20224951a3d36db3204d0b4d6ad493d9c
 
 jobs:
+  version:
+    name: Choose development build timestamp
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+    outputs:
+      timestamp: ${{ steps.timestamp.outputs.value }}
+    steps:
+      # created_at belongs to the original run and is unchanged by a rerun.
+      - id: timestamp
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          timestamp=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --jq '.created_at | fromdateiso8601')
+          echo "value=$timestamp" >> "$GITHUB_OUTPUT"
+
   # Only project-owned TableGen outputs are needed to start the wasm build.
   generate-wasm-inputs:
     name: Generate wasm inputs
@@ -52,27 +71,39 @@ jobs:
   # Every host is required; a new host stays advisory until green.
   build-and-test:
     name: ${{ matrix.name }}
+    needs: version
     strategy:
       fail-fast: false
       matrix:
         # Disjoint cache prefixes retain existing caches without mixing hosts.
         include:
           - name: Build and test (x86_64-unknown-linux-gnu)
-            os: ubuntu-latest
+            # Keep the wheel's glibc baseline independent of ubuntu-latest.
+            os: ubuntu-24.04
             advisory: false
             ccache: native-Linux
+            wheel_arch: x86_64
+            wheel_platform: manylinux_2_39_x86_64
+            python_arch: x64
           - name: Build and test (aarch64-unknown-linux-gnu)
             os: ubuntu-24.04-arm
             advisory: false
             ccache: native-ARM64-Linux
+            wheel_arch: aarch64
+            wheel_platform: manylinux_2_39_aarch64
+            python_arch: arm64
           - name: Build and test (x86_64-pc-windows-msvc)
             os: windows-latest
             advisory: false
             ccache: native-Windows
+            wheel_platform: win_amd64
+            python_arch: x64
           - name: Build and test (aarch64-pc-windows-msvc)
             os: windows-11-arm
             advisory: false
             ccache: native-ARM64-Windows
+            wheel_platform: win_arm64
+            python_arch: arm64
           # The arm64 runner has 3 cores and 7 GB of memory.
           - name: Build and test (aarch64-apple-darwin)
             os: macos-15
@@ -80,6 +111,8 @@ jobs:
             ccache: native-ARM64-macOS
             parallel: 2
             lit_jobs: 3
+            wheel_platform: macosx_15_0_arm64
+            python_arch: arm64
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.advisory }}
     env:
@@ -95,6 +128,26 @@ jobs:
         run: git config --global core.autocrlf false
 
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          architecture: ${{ matrix.python_arch }}
+
+      - name: Verify release tag matches VERSION
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          version = Path('VERSION').read_text().strip()
+          if os.environ['GITHUB_REF_NAME'] != 'v' + version:
+              raise SystemExit('Release tag must equal v' + version + ' from VERSION')
+          PY
+
+      - name: Set development version
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: python utils/packaging/dev_version.py "${{ needs.version.outputs.timestamp }}"
 
       - name: Install build and test tools (Linux)
         if: runner.os == 'Linux'
@@ -120,7 +173,7 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           choco install --no-progress -y ninja ccache
-          python -m pip install lit
+          python -m pip install lit packaging
           python -c "import sysconfig; print(sysconfig.get_path('scripts'))" \
             >> "$GITHUB_PATH"
 
@@ -129,12 +182,22 @@ jobs:
         run: |
           brew install ccache zstd
           python3 -m venv "$RUNNER_TEMP/talos-venv"
-          "$RUNNER_TEMP/talos-venv/bin/python" -m pip install lit
+          "$RUNNER_TEMP/talos-venv/bin/python" -m pip install lit delocate
           # The runner's existing LLVM supplies split-file, omitted by our SDK.
           ln -s "$(brew --prefix llvm@18)/bin/split-file" \
             "$RUNNER_TEMP/talos-venv/bin/split-file"
           "$RUNNER_TEMP/talos-venv/bin/split-file" --version
           echo "$RUNNER_TEMP/talos-venv/bin" >> "$GITHUB_PATH"
+
+      # Keep the same Python for the native configure and wheel packaging.
+      - name: Install wheel build tools
+        run: |
+          python -m pip install build 'scikit-build-core>=0.11' packaging
+          if [ "$RUNNER_OS" = Linux ]; then
+            python -m pip install --break-system-packages 'auditwheel>=6.4' patchelf
+          elif [ "$RUNNER_OS" = macOS ]; then
+            python -m pip install 'delocate>=0.13'
+          fi
 
       # Reserve cache space for compiled objects. Per-commit keys allow updates
       # to immutable entries; the prefix restores the latest compatible cache.
@@ -174,12 +237,14 @@ jobs:
             # holds packages such as fmt that would shadow the bundled ones.
             host_args=(
               "-Dzstd_ROOT=$(brew --prefix zstd)"
+              -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
               -DCMAKE_OSX_ARCHITECTURES=arm64
               -DLLVM_PARALLEL_LINK_JOBS=1
               -DTALOS_HOST_LTO_CACHE_POLICY=cache_size_bytes=2147483648:prune_interval=0s)
           fi
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            "-DPython_EXECUTABLE=$(python -c 'import sys; print(sys.executable)')" \
             "${host_args[@]}" \
             -DTALOS_ENABLE_PCH=ON \
             "-DLLVM_LIT_ARGS=-sv;-j${{ matrix.lit_jobs || 4 }};--time-tests;--output=lit-results.json;--time-trace-output=lit-trace.json" \
@@ -220,8 +285,62 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Build and check wheel
+        run: |
+          # Reuse the tested native build and install only the Talos component.
+          python -m build --wheel --no-isolation --outdir dist \
+            -Cbuild-dir=build -Ccmake.define.TALOS_INCLUDE_TESTS=ON
+          if [ "$RUNNER_OS" = Linux ]; then
+            python -m auditwheel show dist/*.whl
+            python -m auditwheel repair --only-plat \
+              --plat "${{ matrix.wheel_platform }}" --wheel-dir wheelhouse dist/*.whl
+          elif [ "$RUNNER_OS" = macOS ]; then
+            MACOSX_DEPLOYMENT_TARGET=15.0 delocate-wheel --require-archs arm64 \
+              --wheel-dir wheelhouse dist/*.whl
+          else
+            mkdir -p wheelhouse
+            cp dist/*.whl wheelhouse/
+          fi
+          python -m utils.packaging.check_wheels --wheel-dir wheelhouse \
+            --require-platform "${{ matrix.wheel_platform }}"
+
+      - name: Build and test full native archive
+        run: python utils/packaging/build_archive.py --build build --output-dir native-archives
+
+      - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+        with:
+          name: talos-archive-${{ matrix.ccache }}
+          path: native-archives/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+      - name: Test installed wheel
+        run: |
+          python -m venv "$RUNNER_TEMP/talos-wheel-smoke"
+          if [ "$RUNNER_OS" = Windows ]; then
+            smoke_bin="$RUNNER_TEMP/talos-wheel-smoke/Scripts"
+            smoke_python="$smoke_bin/python.exe"
+          else
+            smoke_bin="$RUNNER_TEMP/talos-wheel-smoke/bin"
+            smoke_python="$smoke_bin/python"
+          fi
+          "$smoke_python" -m pip install \
+            --pre --no-index --find-links wheelhouse talos-sv
+          PATH="$smoke_bin:$PATH" "$smoke_python" utils/packaging/check_install.py
+
+      - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+        with:
+          name: talos-wheel-${{ matrix.wheel_platform }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
       - name: Build generated reference site
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-24.04'
         run: |
           python3 -m venv "$RUNNER_TEMP/talos-docs"
           "$RUNNER_TEMP/talos-docs/bin/python" -m pip install -r docs/requirements.txt
@@ -231,7 +350,7 @@ jobs:
           python3 utils/docs/check.py docs/_site
 
       - uses: actions/upload-artifact@v4
-        if: matrix.os == 'ubuntu-latest' && github.ref == 'refs/heads/main'
+        if: matrix.os == 'ubuntu-24.04' && github.ref == 'refs/heads/main'
         with:
           name: talos-docs-site
           path: docs/_site
@@ -262,14 +381,89 @@ jobs:
           path: build/lto.cache
           key: host-lto-${{ matrix.ccache }}-${{ github.sha }}
 
+  publish-dev-wheels:
+    name: Publish rolling development binaries
+    needs: build-and-test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    # Serialize publication without interrupting an upload and cleanup midway.
+    concurrency:
+      group: publish-dev-wheels
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: talos-wheel-*
+          path: wheelhouse
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: talos-archive-*
+          path: native-archives
+          merge-multiple: true
+
+      - name: Publish and prune dev assets
+        run: |
+          python3 -m venv "$RUNNER_TEMP/talos-release"
+          "$RUNNER_TEMP/talos-release/bin/python" -m pip install packaging
+          "$RUNNER_TEMP/talos-release/bin/python" utils/packaging/publish_dev.py \
+            --repo "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" \
+            --wheel-dir wheelhouse --archive-dir native-archives \
+            --require-platform manylinux_2_39_x86_64 \
+            --require-platform manylinux_2_39_aarch64 \
+            --require-platform win_amd64 \
+            --require-platform win_arm64 \
+            --require-platform macosx_15_0_arm64 \
+            --require-target x86_64-unknown-linux-gnu \
+            --require-target aarch64-unknown-linux-gnu \
+            --require-target x86_64-pc-windows-msvc \
+            --require-target aarch64-pc-windows-msvc \
+            --require-target aarch64-apple-macosx15.0
+
+  publish-pypi:
+    name: Publish tagged wheels to PyPI
+    needs: build-and-test
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: pypi
+      url: https://pypi.org/p/talos-sv/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: talos-wheel-*
+          path: dist
+          merge-multiple: true
+
+      # Configure PyPI's Trusted Publisher for Kuree/talos, ci.yml, environment pypi.
+      - name: Publish all platform wheels
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+
   # Test wasm on every ref; main also publishes the tested site for deployment.
   wasm-build-and-test:
     name: Build and test (wasm32-unknown-emscripten)
-    needs: generate-wasm-inputs
+    needs: [generate-wasm-inputs, version]
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set development version
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: python utils/packaging/dev_version.py "${{ needs.version.outputs.timestamp }}"
 
       - name: Download generated files
         uses: actions/download-artifact@v4

@@ -48,6 +48,10 @@ foreach(flavor IN ITEMS native lto)
     endif()
     set(object "${_talos_windows_runtime_dir}/${flavor}/${source}.obj")
     list(APPEND objects "${object}")
+    set(version_dependency)
+    if(source STREQUAL "VPI")
+      set(version_dependency "${CMAKE_BINARY_DIR}/include/talos/Version.h")
+    endif()
     add_custom_command(
       OUTPUT "${object}"
       COMMAND "${CMAKE_COMMAND}" -E make_directory
@@ -66,6 +70,7 @@ foreach(flavor IN ITEMS native lto)
         -c "${PROJECT_SOURCE_DIR}/runtime/lib/${source}.cpp" -o "${object}"
       DEPFILE "${object}.d"
       DEPENDS "${PROJECT_SOURCE_DIR}/runtime/lib/${source}.cpp"
+        ${version_dependency}
         ${_talos_windows_runtime_headers}
       VERBATIM)
   endforeach()

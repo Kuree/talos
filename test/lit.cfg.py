@@ -71,6 +71,7 @@ config.substitutions.append(
 config.substitutions.append(("%dlltool_machine", config.talos_dlltool_machine))
 config.substitutions.append(("%coff_machine", config.talos_coff_machine))
 config.substitutions.append(("%source_root", config.talos_source_root))
+config.substitutions.append(("%python", '"{}"'.format(config.python_executable)))
 config.substitutions.append(
     ("%slang_source_root", config.talos_slang_source_root)
 )

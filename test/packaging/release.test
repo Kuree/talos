@@ -1,0 +1,2 @@
+# REQUIRES: native-elf || native-macho || windows
+# RUN: cd "%source_root" && %python -m unittest discover -s "%S" -p '*_test.py'

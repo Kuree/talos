@@ -182,6 +182,10 @@ foreach(source IN LISTS _talos_target_runtime_common_sources
   set(lto_object "${_talos_target_runtime_dir}/${source}.bc")
   set(source_dependencies
       "${_talos_runtime_source_dir}/lib/${source}.cpp")
+  if(source STREQUAL "VPI")
+    list(APPEND source_dependencies
+      "${_talos_target_reflection_include_dir}/talos/Version.h")
+  endif()
   if(source STREQUAL "CoverageDatabase")
     list(APPEND source_dependencies
       "${_talos_source_dir}/lib/Coverage/CoverageFileSupport.h"

@@ -300,10 +300,24 @@ if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows" AND NOT CMAKE_TOOLCHAIN_FILE)
     CACHE FILEPATH "SDK COFF linker")
 endif()
 
+# Keep the full PEP 440 version for the driver and Python package. CMake's
+# project() accepts only its numeric release portion.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" TALOS_VERSION)
+string(STRIP "${TALOS_VERSION}" TALOS_VERSION)
+if(NOT TALOS_VERSION MATCHES "^([0-9]+\\.[0-9]+\\.[0-9]+)(\\.dev[0-9]+)?$")
+  message(FATAL_ERROR "VERSION must contain X.Y.Z or X.Y.Z.devN")
+endif()
+set(_talos_project_version "${CMAKE_MATCH_1}")
+
 project(talos
-  VERSION 0.1.0
+  VERSION "${_talos_project_version}"
   DESCRIPTION "An AOT SystemVerilog simulator targeting IEEE 1800 conformance and real UVM"
   LANGUAGES C CXX)
+
+configure_file("${PROJECT_SOURCE_DIR}/include/talos/Version.h.in"
+  "${PROJECT_BINARY_DIR}/include/talos/Version.h" @ONLY)
 
 set(MLIR_DIR "${TALOS_LLVM_DIST_DIR}/lib/cmake/mlir")
 set(LLVM_DIR "${TALOS_LLVM_DIST_DIR}/lib/cmake/llvm")
@@ -806,6 +820,8 @@ add_subdirectory(runtime)
 add_subdirectory(lib)
 add_subdirectory(tools)
 add_subdirectory(docs)
+
+include("${PROJECT_SOURCE_DIR}/cmake/Install.cmake")
 
 if(TALOS_INCLUDE_TESTS)
   add_subdirectory(test)

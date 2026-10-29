@@ -117,7 +117,6 @@ function(talos_configure_driver target)
     ${PROJECT_SOURCE_DIR}/runtime/include
   )
   target_compile_definitions(${target} PRIVATE
-    TALOS_VERSION_STRING="${PROJECT_VERSION}"
     TALOS_RESOURCE_DIR="${TALOS_RESOURCE_DIR}"
     TALOS_HAS_NATIVE_BACKEND=${TALOS_HAS_NATIVE_BACKEND}
     TALOS_HAS_HOST_C_RUNTIME=${TALOS_HAS_HOST_C_RUNTIME}

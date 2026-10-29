@@ -35,6 +35,7 @@
 #include "talos/Dialect/Slang/SlangDialect.h"
 #include "talos/Dialect/Slang/SlangOps.h"
 #include "talos/Frontend/Frontend.h"
+#include "talos/Version.h"
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/AsmState.h"
@@ -1661,7 +1662,14 @@ int talos::driver::runTalosDriver(
     return 0;
   }
   if (args.hasArg(OPT_print_resource_dir)) {
-    outs() << TALOS_RESOURCE_DIR << '\n';
+    SmallString<256> installed(driverExecutablePath);
+    sys::path::remove_filename(installed);
+    sys::path::append(installed, "..", "lib", "talos");
+    sys::path::remove_dots(installed, true);
+    if (sys::fs::is_directory(Twine(installed) + "/include"))
+      outs() << installed << '\n';
+    else
+      outs() << TALOS_RESOURCE_DIR << '\n';
     return 0;
   }
   if (args.hasArg(OPT_print_host_c_runtime)) {
