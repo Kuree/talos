@@ -19,6 +19,10 @@
 //  - the index holds X: its root's unknown summary bit is set by the store of
 //    X, the entry check fails, and reading the element at an X index yields
 //    X (7.4.5).
+// The body is already an inductively guarded variant: the caller initializes
+// its counter before calling it. The extra activation copy must remain
+// profitable after excluding that counter's already-proved accesses, and its
+// additional checks must still preserve the memory/index X fallbacks.
 // The counter increment before the tested read runs once per call, and the
 // copy stores it value-only. Tested reads are requested explicitly; the
 // native pipeline keeps the versioned body.
@@ -110,7 +114,8 @@ module attributes {
     simulation.func private @step(
         %ctx: !simulation.context {simulation.capture_kind = 0 : i32})
         -> !logic8
-        attributes {entry_kind = 8 : i32, code_unit_id = 9940002 : i64} {
+        attributes {entry_kind = 8 : i32, code_unit_id = 9940002 : i64,
+                    schedule.eval.inductive_two_state} {
       %mem = simulation.context.storage %ctx[0] : !simulation.ref<!memory>
       %a = simulation.context.storage %ctx[1] : !simulation.ref<!logic8>
       %count = simulation.context.storage %ctx[2] : !simulation.ref<!logic8>

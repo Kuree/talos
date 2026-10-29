@@ -361,3 +361,63 @@ module {
 // CHECK-NEXT: store loop-to-s: four-state
 // CHECK-NEXT: store unasked: four-state
 // CHECK-NEXT: store final: four-state
+
+// -----
+
+// A byte selected through an in-bounds dynamic index transfers eight bits,
+// independently of how large the reference's possible-address hull is.
+!c = !simulation.context
+!l8 = !simulation.logic<8>
+!r8 = !simulation.ref<!l8>
+!memory = !simulation.unpacked_array<0 : 3 x !l8>
+module {
+  simulation.design @small_access {
+    simulation.scope.decl 0
+    simulation.storage.decl 0 in 0 : !memory design
+    simulation.code_unit.decl 1 in 0 function hierarchy "top.f"
+    simulation.func @small_access(%ctx: !c {simulation.capture_kind = 0 : i32}, %selector: i2 {simulation.capture_kind = 2 : i32})
+        attributes {entry_kind = 8 : i32, code_unit_id = 1 : i64} {
+      %mem = simulation.context.storage %ctx[0] : !simulation.ref<!memory>
+      %i = arith.extui %selector : i2 to i64
+      %slot = simulation.ref.array_element %mem[%i] : (!simulation.ref<!memory>, i64) -> !r8
+      %x = simulation.ref.load %slot {test.read = "byte"} : !r8 -> !l8
+      %sum = simulation.logic.binary add %x, %x : !l8
+      simulation.ref.store %sum to %slot {test.store = "byte"} : !l8, !r8
+      simulation.return
+    }
+  }
+}
+
+// CHECK-LABEL: local-unknown @small_access benefit=7 gate: 0
+// CHECK-NEXT: read byte: gated
+// CHECK-NEXT: store byte: known
+
+// -----
+
+// A byte selected through an in-bounds dynamic index transfers eight bits,
+// independently of how large the reference's possible-address hull is.
+!c = !simulation.context
+!l8 = !simulation.logic<8>
+!r8 = !simulation.ref<!l8>
+!memory = !simulation.unpacked_array<0 : 16383 x !l8>
+module {
+  simulation.design @large_access {
+    simulation.scope.decl 0
+    simulation.storage.decl 0 in 0 : !memory design
+    simulation.code_unit.decl 1 in 0 function hierarchy "top.f"
+    simulation.func @large_access(%ctx: !c {simulation.capture_kind = 0 : i32}, %selector: i2 {simulation.capture_kind = 2 : i32})
+        attributes {entry_kind = 8 : i32, code_unit_id = 1 : i64} {
+      %mem = simulation.context.storage %ctx[0] : !simulation.ref<!memory>
+      %i = arith.extui %selector : i2 to i64
+      %slot = simulation.ref.array_element %mem[%i] : (!simulation.ref<!memory>, i64) -> !r8
+      %x = simulation.ref.load %slot {test.read = "byte"} : !r8 -> !l8
+      %sum = simulation.logic.binary add %x, %x : !l8
+      simulation.ref.store %sum to %slot {test.store = "byte"} : !l8, !r8
+      simulation.return
+    }
+  }
+}
+
+// CHECK-LABEL: local-unknown @large_access benefit=7 gate: 0
+// CHECK-NEXT: read byte: gated
+// CHECK-NEXT: store byte: known

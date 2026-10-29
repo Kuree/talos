@@ -59,6 +59,22 @@ The specialization-disable flag leaves explicit SystemVerilog two-state types
 optimizations enabled. Both flags may be combined to disable optional domain
 inference on a frontend two-state model.
 
+An already guarded two-state activation uses a static profitability estimate
+for another knownness-gated copy. Its residual unknown-plane savings must
+exceed twice the estimated check work plus the copied executable work of
+operations that earn no residual savings. Operations improved by the extra
+proof contribute their savings without also adding to this duplication
+penalty. Reads and stores already covered by the outer inductive proof earn
+no new savings. A dynamic memory access is costed by the value it transfers;
+its possible-address hull is retained for the safety proof and does not
+inflate the estimated savings. Constants, static reference views and
+representation-only casts add no executable cost. For other operations with
+no residual savings, the penalty includes remaining unknown-plane work.
+This rule keeps useful arithmetic-heavy inner copies without imposing a
+function-size cutoff or changing the segmentation default. Rejected bodies
+remain available to smaller-region versioning, and every admitted copy
+retains its original X/Z fallback.
+
 For comparison with Verilator, use `talos -O3 --two-state` and Verilator's
 `-O3 -CFLAGS -O3 --x-assign 0 --x-initial 0`, with matching timing, tracing and
 foreign-interface settings. Use initialized/reset workloads and compare

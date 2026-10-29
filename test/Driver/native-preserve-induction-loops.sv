@@ -41,7 +41,10 @@ endmodule
 // LOOP: %[[NEXT:[0-9]+]] = arith.addi %[[IV]],
 // LOOP-NEXT: cf.br ^[[HEADER]](%[[NEXT]] : i32)
 // LOOP-NEXT: ^[[EXIT]]:
-// LOOP-NEXT: simulation.suspend.change
+// The forwarded packed input is watched through its exact scalar view after
+// the rolled induction loop, preserving the loop's event-control boundary.
+// LOOP-NEXT: %[[WATCH:[0-9]+]] = simulation.ref.extract {{.*}} from 0 : !simulation.ref<!simulation.packed_array<7 : 0 x i1>> -> !simulation.ref<i8>
+// LOOP-NEXT: simulation.suspend.change %[[WATCH]]
 // CHECK: loop 0 1 2 3
 // CHECK-NEXT: loop 253 254 255 0
 // CHECK-NEXT: loop 255 0 1 2

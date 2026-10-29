@@ -24,7 +24,7 @@ module attributes {llvm.data_layout = "e-p:64:64-i64:64-i32:32-i16:16-i8:8"} {
       scope = "top", library_cell = "work.top", time_width = 0 : i32,
       time_suffix = "", time_multiplier = 1 : i64
     }
-    %status = "runtime.display"(%ctx, %fd, %newline, %args, %env)
+    %status = runtime.display %ctx, %fd, %newline, %args, %env
         {default_radix = #runtime.radix<binary>, schedule.eval.direct_output} :
         (!runtime.context, !runtime.fd, i1, !runtime.args, !runtime.format_env)
         -> !runtime.status

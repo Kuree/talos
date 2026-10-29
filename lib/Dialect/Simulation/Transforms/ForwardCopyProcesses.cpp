@@ -14,8 +14,8 @@
 // its least significant bit (9.4.2), so an edge wait moves to the operand
 // bit that drives bit 0. The copy processes and the net are then dead.
 //
-// The assignment process only ever forwards the value its operands hold
-// after a writer's activation. A reader moved onto an operand instead wakes
+// The assignment process may run only after a writer's activation or an NBA
+// drain, filtering intermediate stores. A reader moved onto an operand wakes
 // on each of its update events (4.3, 9.4.2), and a reader moved onto
 // expression operands also wakes when the expression keeps its value (9.4.2:
 // that is no event of the expression). Such an extra activation is invisible
@@ -25,10 +25,13 @@
 // already hold, which is no update event (4.3). A quiet reader that stores a
 // bit twice (`o = 0; if (y) o = 1;`) still publishes a transient, which the
 // waiters of that bit must then be quiet about in turn; a cycle of such
-// readers could wake forever, so the proof is a least fixed point. When
-// every writer of the operands stores each bit at most once per activation
-// (no `x = 0; ... x = v;`), the operands have no transients and a waiter on
-// a relocation needs no proof. Level waits, `iff` conditions and clocking
+// readers could wake forever, so the proof is a least fixed point. A waiter
+// on a relocation needs no quietness proof when every blocking writer stores
+// each operand bit at most once per activation, and every immediate NBA writer
+// at most once between proven positive delays. #0 and event waits can enqueue
+// multiple updates for one NBA drain (4.4.2.4). Nonzero or unknown enqueue
+// delays can align commits across those issue windows (4.9.4), so they have no
+// transient-free certificate. Level waits, `iff` conditions and clocking
 // events see intermediate values and keep the net.
 //
 // The net must be a plain wire whose strong, undelayed drivers partition it
@@ -40,6 +43,14 @@
 // to the Active set, so a copy pending after a Reactive writer cannot run
 // before a Reactive reader: such a reader keeps the net.
 //
+// The same substitution applies to a continuous variable assignment with
+// exclusive, complete writers. Its storage must have design lifetime and no
+// observer of its own. Static initialization reads the declaration default
+// before continuous assignments begin (6.8), so those reads keep the variable;
+// an unconditional, once-only startup spawn proves that its assignment exists
+// before scheduled readers can run. State-domain conversions remain part of
+// the cloned RHS, before any reader's extraction or packed-value adaptation.
+//
 // This is the substitution Verilator performs in V3Gate; here every pure
 // single-write assignment qualifies, relocations (bit taps, slices, packed
 // casts) become views of the source and other expressions are cloned into
@@ -47,9 +58,13 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/IR/OwningOpRef.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/Threading.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -66,6 +81,8 @@
 #include "talos/Runtime/OutputItemFlags.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/SCCIterator.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <map>
@@ -108,6 +125,18 @@ struct Copy {
   uint64_t sourceLow = 0;
   unsigned cost = 0; // pure operations cloned per reader for a non-relocation
 };
+
+Value copyDestination(Operation *write) {
+  if (auto store = dyn_cast<sim::SimRefStoreOp>(write))
+    return store.getReference();
+  return write->getOperand(0);
+}
+
+Value copyValue(Operation *write) {
+  if (auto store = dyn_cast<sim::SimRefStoreOp>(write))
+    return store.getValue();
+  return write->getOperand(1);
+}
 
 bool isViewOp(Operation *op) {
   return isa<sim::SimRefExtractOp, sim::SimRefSubelementOp,
@@ -219,8 +248,11 @@ std::optional<Copy> matchCopy(sim::SimFuncOp function,
       }
       copy.write = &op;
     } else if (isa<sim::SimRefStoreOp>(op)) {
-      why = "storage sink";
-      return std::nullopt;
+      if (copy.write) {
+        why = "writes";
+        return std::nullopt;
+      }
+      copy.write = &op;
     } else if (op.getNumResults() == 1 && op.getNumRegions() == 0 &&
                isMemoryEffectFree(&op) && op.getNumSuccessors() == 0) {
       ++pure;
@@ -233,12 +265,12 @@ std::optional<Copy> matchCopy(sim::SimFuncOp function,
     why = "no read/write";
     return std::nullopt;
   }
-  if (!rootOf(facts, copy.write->getOperand(0), copy.sinkLow, copy.width)) {
+  if (!rootOf(facts, copyDestination(copy.write), copy.sinkLow, copy.width)) {
     why = "sink facts";
     return std::nullopt;
   }
   copy.sink =
-      *rootOf(facts, copy.write->getOperand(0), copy.sinkLow, copy.width);
+      *rootOf(facts, copyDestination(copy.write), copy.sinkLow, copy.width);
   for (Operation *read : reads) {
     SourceRead source{read, {}, 0, 0};
     auto root = rootOf(facts, read->getOperand(0), source.low, source.width);
@@ -253,7 +285,7 @@ std::optional<Copy> matchCopy(sim::SimFuncOp function,
     }
     copy.reads.push_back(source);
   }
-  Value value = copy.write->getOperand(1);
+  Value value = copyValue(copy.write);
   auto width = sim::getPackedWidth(value.getType());
   if (!width || *width != copy.width) {
     why = "width";
@@ -335,8 +367,17 @@ void forEachWrite(Operation *op,
                   llvm::function_ref<void(Value handle, bool plain)> write) {
   if (auto store = dyn_cast<sim::SimRefStoreOp>(op))
     return write(store.getReference(), true);
-  if (auto enqueue = dyn_cast<sim::SimNBAEnqueueOp>(op))
-    return write(enqueue.getDestination(), true);
+  if (auto enqueue = dyn_cast<sim::SimNBAEnqueueOp>(op)) {
+    // Positive producer delays separate immediate NBA windows, but delayed
+    // enqueues can still commit together in a later slot (4.9.4). Clocking
+    // output scheduling likewise defers publication beyond the issuing code.
+    bool immediate = !enqueue.getClockingOutputAttr();
+    if (Value delay = enqueue.getDelay()) {
+      auto constant = delay.getDefiningOp<sim::SimTimeConstantOp>();
+      immediate &= constant && constant.getValue() == 0;
+    }
+    return write(enqueue.getDestination(), immediate);
+  }
   if (auto drive = dyn_cast<sim::SimDriverDriveOp>(op))
     return write(drive.getDriver(), true);
   if (auto copy = dyn_cast<sim::SimRefCopyOp>(op))
@@ -426,6 +467,18 @@ struct DisplayItem : Access {
   bool strength = false;
 };
 
+/// An unresolved handle whose producer gives no bounded design provenance.
+/// Resolve this against the design's declarations, independently each round.
+struct UnboundedAccess {
+  Operation *op = nullptr;
+  bool net = false;
+  bool write = false;
+  bool nonblocking = false;
+  /// An entry formal can instead be observed through every closed call site.
+  /// Other opaque origins always retain the design-wide fallback.
+  std::optional<unsigned> formal;
+};
+
 /// What one round needs to know about one function, derived from its body,
 /// captures and attributes alone. The summary of a function a round did not
 /// edit carries over to the next round, and so do its lazily solved facts.
@@ -439,7 +492,7 @@ struct Summary {
   /// operations.
   bool combinational = false;
   bool timing = false;  // a timing check, specify path or primitive
-  bool unknown = false; // reads or watches a handle of no known root
+  bool unknown = false; // accesses a handle of no single known root
   /// Suspends other than at change, edge or `suspend.any` waits: a delay, a
   /// level wait, a join, a task call, a return.
   bool otherSuspension = false;
@@ -452,9 +505,10 @@ struct Summary {
   /// Any other operand naming a root: a level wait, the condition of an
   /// `iff`, a clocking event, an unknown operation.
   SmallVector<Access> uses;
+  SmallVector<UnboundedAccess> unbounded;
   /// Nets named by a `*net_id` attribute of an operation in the body.
   SmallVector<std::pair<StringRef, uint64_t>> namedNets;
-  std::unique_ptr<analysis::WriteExecutionBounds> bounds;
+  std::unique_ptr<analysis::WriteExecutionBounds> bounds, nbaBounds;
   std::optional<bool> storesOnce, evaluatesOnInputs;
 };
 
@@ -513,6 +567,101 @@ summarize(sim::SimFuncOp function,
     result.width = result.dynamic ? fact->second.rootWidth : fact->second.width;
     return result;
   };
+  // A join may forget its descriptor while still selecting a live design
+  // root. Retain every possible source until that observation can be
+  // rewritten. Proven local allocations cannot alias design declarations.
+  // Unknown factories (including virtual-interface accessors) and unbound
+  // arguments conservatively observe the design roots of the handle's kind.
+  auto unresolved = [&](Operation *op, Value handle, bool write = false) {
+    summary->unknown = true;
+    DenseSet<Value> visited;
+    SmallVector<Value> work{handle};
+    std::map<Root, uint64_t> roots;
+    llvm::SetVector<unsigned> formals;
+    bool unbounded = false;
+    while (!work.empty()) {
+      Value value = work.pop_back_val();
+      if (!visited.insert(value).second)
+        continue;
+      auto fact = facts.find(value);
+      if (fact != facts.end()) {
+        const auto &target = fact->second;
+        if (target.resource == schedule::ComputeResourceKind::Local)
+          continue;
+        if (target.descriptor && target.rootWidth &&
+            (target.resource == schedule::ComputeResourceKind::Storage ||
+             target.resource == schedule::ComputeResourceKind::Net)) {
+          Root root{target.resource == schedule::ComputeResourceKind::Net,
+                    *target.descriptor};
+          roots[root] = std::max(roots[root], target.rootWidth);
+          continue;
+        }
+      }
+      if (auto argument = dyn_cast<BlockArgument>(value)) {
+        Block *block = argument.getOwner();
+        if (block == &function.getBody().front()) {
+          auto kind = function.getArgAttrOfType<IntegerAttr>(
+              argument.getArgNumber(), sim::metadata::CaptureKind::getNameStr());
+          if (kind && kind.getInt() == int32_t(sim::CaptureKind::Formal)) {
+            formals.insert(argument.getArgNumber());
+            continue;
+          }
+        }
+        bool incoming = false;
+        for (Block *predecessor : block->getPredecessors()) {
+          auto branch = dyn_cast<BranchOpInterface>(predecessor->getTerminator());
+          if (!branch) {
+            unbounded = true;
+            continue;
+          }
+          for (unsigned i = 0; i < branch->getNumSuccessors(); ++i) {
+            if (branch->getSuccessor(i) != block)
+              continue;
+            incoming = true;
+            SuccessorOperands operands = branch.getSuccessorOperands(i);
+            unsigned index = argument.getArgNumber();
+            if (index < operands.size() && operands[index])
+              work.push_back(operands[index]);
+            else
+              unbounded = true;
+          }
+        }
+        unbounded |= !incoming;
+        continue;
+      }
+      Operation *definition = value.getDefiningOp();
+      if (auto select = dyn_cast_or_null<arith::SelectOp>(definition)) {
+        work.push_back(select.getTrueValue());
+        work.push_back(select.getFalseValue());
+        continue;
+      }
+      if (definition && isViewOp(definition) &&
+          definition->getNumOperands() && isHandle(definition->getOperand(0))) {
+        work.push_back(definition->getOperand(0));
+        continue;
+      }
+      unbounded = true;
+    }
+    for (auto [root, width] : roots) {
+      Access possible{op, root, 0, width, true};
+      if (write) {
+        Write possibleWrite;
+        static_cast<Access &>(possibleWrite) = possible;
+        possibleWrite.nonblocking = isa<sim::SimNBAEnqueueOp>(op);
+        summary->writes.push_back(possibleWrite);
+      } else {
+        summary->uses.push_back(possible);
+      }
+    }
+    if (unbounded)
+      summary->unbounded.push_back(
+          {op, isa<sim::NetType, sim::DriverType>(handle.getType()), write,
+           isa<sim::SimNBAEnqueueOp>(op), std::nullopt});
+    for (unsigned formal : formals)
+      summary->unbounded.push_back(
+          {op, isa<sim::NetType, sim::DriverType>(handle.getType()), write,
+           isa<sim::SimNBAEnqueueOp>(op), formal});
+  };
   bool combinational =
       (function.getEntryKind() == sim::EntryKind::Continuous ||
        function.getEntryKind() == sim::EntryKind::AlwaysComb ||
@@ -545,6 +694,7 @@ summarize(sim::SimFuncOp function,
       std::optional<Access> target = access(op, destination);
       if (!target) {
         combinational = false;
+        unresolved(op, destination, /*write=*/true);
         return;
       }
       Write write;
@@ -557,8 +707,17 @@ summarize(sim::SimFuncOp function,
       if (std::optional<Access> source = access(op, op->getOperand(0)))
         summary->reads.push_back(*source);
       else
-        summary->unknown = true;
+        unresolved(op, op->getOperand(0));
       return;
+    }
+    // A packed reference copy reads its source without a ref.load. Keep
+    // that source materialized: substituting reads does not rewrite the
+    // handle consumed here. Its destination remains an ordinary writer.
+    if (auto copy = dyn_cast<sim::SimRefCopyOp>(op)) {
+      if (std::optional<Access> source = access(op, copy.getSource()))
+        summary->uses.push_back(*source);
+      else
+        unresolved(op, copy.getSource());
     }
     bool wait = isa<sim::SimSuspendChangeOp, sim::SimSuspendAnyOp,
                     sim::SimSuspendEdgeOp>(op);
@@ -574,7 +733,7 @@ summarize(sim::SimFuncOp function,
            i < std::min<unsigned>(watched, op->getNumOperands()); ++i) {
         std::optional<Access> target = access(op, op->getOperand(i));
         if (!target) {
-          summary->unknown = true;
+          unresolved(op, op->getOperand(i));
           continue;
         }
         Wait wait;
@@ -617,12 +776,16 @@ summarize(sim::SimFuncOp function,
           item.flag = unsigned(flag);
           item.strength = strength;
           summary->displays.push_back(item);
-        }
+        } else
+          unresolved(op, op->getOperand(handle));
       }
       for (Value value : display.getItems())
-        if (isa<sim::RefType>(value.getType()))
+        if (isa<sim::RefType>(value.getType())) {
           if (std::optional<Access> target = access(op, value))
             summary->displayReferences.push_back(*target);
+          else
+            unresolved(op, value);
+        }
       return;
     }
     // Captures and views transport handles.
@@ -634,7 +797,7 @@ summarize(sim::SimFuncOp function,
         if (std::optional<Access> target = access(op, operand.get()))
           summary->uses.push_back(*target);
         else
-          summary->unknown = true;
+          unresolved(op, operand.get());
       }
   });
   summary->combinational = combinational;
@@ -646,15 +809,17 @@ summarize(sim::SimFuncOp function,
     for (BlockArgument argument : function.getArguments())
       if (std::optional<Access> target = access(nullptr, argument))
         summary->captured.push_back(target->root);
+      else if (isHandle(argument))
+        unresolved(function.getOperation(), argument);
   return summary;
 }
 
 uint64_t keyOf(Root root) { return (root.id << 1) | uint64_t(root.net); }
 
-/// Design facts that the rounds share: declarations, connections and symbol
-/// uses never change while copies are forwarded, except that eliminated copies
-/// and their spawns disappear. Function summaries carry over unless a round
-/// edited the function.
+/// Design facts that the rounds share. Declarations and connections never
+/// change while copies are forwarded. Symbol users are reindexed after a
+/// round edits bodies; function summaries carry over unless a round edited
+/// the function.
 struct DesignState {
   std::unique_ptr<analysis::HandleDataflowAnalysis> analysis;
   std::map<Root, Type> types; // declared element types
@@ -663,6 +828,10 @@ struct DesignState {
   /// Roots whose own update events are observed outside the processes:
   /// visible to VPI, toggle coverage.
   DenseSet<uint64_t> observed;
+  /// Fixed roots whose storage exists for the entire simulation.
+  DenseSet<uint64_t> permanent;
+  /// Once-only, unconditional spawns before scheduled execution begins.
+  DenseSet<Operation *> startupSpawns;
   SmallVector<sim::SimNetDeclOp> nets;
   /// Top-level operations other than declarations that name a net by id.
   SmallVector<std::pair<StringRef, uint64_t>> namedNets;
@@ -675,6 +844,143 @@ struct DesignState {
   DenseSet<Operation *> nonActive;
   DenseMap<Operation *, std::unique_ptr<Summary>> summaries;
 };
+
+/// A symbol reference on a spawn need not name its callee: discardable
+/// attributes can refer to other functions on the same operation.
+sim::SimSpawnOp getSpawnOf(Operation *user, StringRef callee) {
+  auto spawn = dyn_cast<sim::SimSpawnOp>(user);
+  return spawn && spawn.getCallee() == callee ? spawn : sim::SimSpawnOp();
+}
+
+/// Index all symbol users once per round rather than walking the design for
+/// each copy. Cloning expressions can transport discardable symbol references,
+/// so even non-spawn users must be refreshed after their bodies change.
+void indexSymbolUsers(sim::SimDesignOp design, DesignState &state) {
+  state.usersOf.clear();
+  state.processOf.clear();
+  std::optional<SymbolTable::UseRange> allUses =
+      SymbolTable::getSymbolUses(&design.getBody());
+  state.usesKnown = allUses.has_value();
+  if (allUses) {
+    // An operation can name the same symbol in several attributes. Consumers
+    // mutate each user once, independently of its number of symbol uses.
+    DenseSet<std::pair<StringAttr, Operation *>> indexed;
+    for (const SymbolTable::SymbolUse &use : *allUses) {
+      StringAttr name = use.getSymbolRef().getRootReference();
+      if (indexed.insert({name, use.getUser()}).second)
+        state.usersOf[name.getValue()].push_back(use.getUser());
+    }
+  }
+  if (!allUses || state.usersOf.empty())
+    design.walk([&](sim::SimSpawnOp spawn) {
+      state.usersOf[spawn.getCallee()].push_back(spawn);
+    });
+}
+
+/// If-convert the pure short-circuit triangles of a small continuous
+/// expression. Its i1 branch condition already encodes the four-state
+/// controlling-value test, so selecting its original outgoing values keeps
+/// X/Z behavior. Only permanent fixed-range reads and speculatable operations
+/// can move out of an arm; calls, dynamic accesses and effects stay conditional.
+/// The existing expression-cloning budget also bounds this normalization.
+bool normalizePureExpression(sim::SimFuncOp function,
+                              const analysis::HandleFacts &facts,
+                              const DesignState &state, unsigned budget) {
+  if (!budget || function.isExternal() || !function.isPrivate() ||
+      function.getHomeRegion() != sim::EventRegion::Active ||
+      (function.getEntryKind() != sim::EntryKind::Continuous &&
+       function.getEntryKind() != sim::EntryKind::PortInput &&
+       function.getEntryKind() != sim::EntryKind::PortOutput))
+    return false;
+  bool special = false;
+  uint64_t cost = 0;
+  function.walk([&](Operation *op) {
+    ++cost;
+    special |= isSpecial(op->getName().getStringRef());
+    for (NamedAttribute attr : op->getAttrs())
+      special |= isSpecial(attr.getName().getValue());
+  });
+  if (special || cost > budget)
+    return false;
+  IRRewriter rewriter(function.getContext());
+  bool changed = false, again = true;
+  while (again) {
+    again = false;
+    for (Block &head : function.getBody()) {
+      auto conditional = dyn_cast<cf::CondBranchOp>(head.getTerminator());
+      if (!conditional)
+        continue;
+      for (bool shortOnTrue : {true, false}) {
+        Block *join = shortOnTrue ? conditional.getTrueDest()
+                                  : conditional.getFalseDest();
+        Block *arm = shortOnTrue ? conditional.getFalseDest()
+                                 : conditional.getTrueDest();
+        auto shortArgs = shortOnTrue ? conditional.getTrueDestOperands()
+                                     : conditional.getFalseDestOperands();
+        auto armArgs = shortOnTrue ? conditional.getFalseDestOperands()
+                                   : conditional.getTrueDestOperands();
+        if (arm == join || arm == &head || join == &head ||
+            !arm->hasOneUse() || arm->getNumArguments() || !armArgs.empty() ||
+            cost + join->getNumArguments() > budget)
+          continue;
+        auto toJoin = dyn_cast<cf::BranchOp>(arm->getTerminator());
+        if (!toJoin || toJoin.getDest() != join ||
+            toJoin.getDestOperands().size() != shortArgs.size())
+          continue;
+        bool safe = llvm::all_of(arm->without_terminator(), [&](Operation &op) {
+          if (op.getNumRegions() || op.getNumSuccessors())
+            return false;
+          if (isa<sim::SimRefLoadOp, sim::SimNetReadOp>(op)) {
+            uint64_t low, width;
+            auto root = rootOf(facts, op.getOperand(0), low, width);
+            if (!root || !state.permanent.contains(keyOf(*root)))
+              return false;
+            auto type = state.types.find(*root);
+            auto span = type == state.types.end()
+                            ? std::nullopt
+                            : sim::getPackedWidth(type->second);
+            return span && low <= *span && width <= *span - low;
+          }
+          return isMemoryEffectFree(&op) && isSpeculatable(&op);
+        });
+        if (!safe)
+          continue;
+        Value condition = conditional.getCondition();
+        Location loc = conditional.getLoc();
+        SmallVector<Value> armValues(toJoin.getDestOperands());
+        SmallVector<Value> shortValues(shortArgs);
+        rewriter.eraseOp(toJoin);
+        rewriter.setInsertionPoint(conditional);
+        auto branch = rewriter.replaceOpWithNewOp<cf::BranchOp>(
+            conditional, join, shortValues);
+        if (arm->empty())
+          rewriter.eraseBlock(arm);
+        else
+          rewriter.inlineBlockBefore(arm, branch);
+        rewriter.setInsertionPoint(branch);
+        SmallVector<Value> values;
+        for (auto [shortValue, armValue] : llvm::zip(shortValues, armValues))
+          values.push_back(arith::SelectOp::create(
+              rewriter, loc, condition, shortOnTrue ? shortValue : armValue,
+              shortOnTrue ? armValue : shortValue));
+        rewriter.modifyOpInPlace(branch, [&] {
+          branch.getDestOperandsMutable().assign(values);
+        });
+        cost += values.size();
+        if (join->hasOneUse()) {
+          rewriter.eraseOp(branch);
+          rewriter.setInsertionPointToEnd(&head);
+          rewriter.mergeBlocks(join, &head, values);
+        }
+        changed = again = true;
+        break;
+      }
+      if (again)
+        break;
+    }
+  }
+  return changed;
+}
 
 class TalosSimForwardCopyProcessesPass
     : public impl::TalosSimForwardCopyProcessesPassBase<
@@ -743,6 +1049,13 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
       continue;
     }
     sink.width = *width;
+    if (!copy->sink.net &&
+        !state.permanent.contains(keyOf(copy->sink)))
+      sink.block("nonpermanent storage");
+    if (!copy->sink.net && state.observed.contains(keyOf(copy->sink)))
+      sink.block("observable storage");
+    if (!copy->sink.net && state.waveforms)
+      sink.block("waveform dump");
     sink.pieces.push_back({copy->sinkLow, copy->width, copy});
     for (const SourceRead &read : copy->reads) {
       auto source = types.find(read.root);
@@ -771,11 +1084,14 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
     if (!isa<sim::LogicType>(sim::getPackedScalarType(sink.type)) &&
         sink.pieces.size() != 1)
       sink.block("two-state pieces");
-    // Each expression piece must read four-state operands of the same
-    // domain as the sink it feeds through concatenation.
+    // A relocation preserves its source domain. Storage expressions keep
+    // their explicit from_bits/to_bits conversions when cloned, so they can
+    // cross domains without reinterpreting X/Z as integer value bits. Retain
+    // the existing same-domain admission for net expressions.
     for (const Piece &piece : sink.pieces)
       for (const SourceRead &read : piece.copy->reads)
-        if (isa<sim::LogicType>(sim::getPackedScalarType(sink.type)) !=
+        if ((root.net || piece.copy->relocation) &&
+            isa<sim::LogicType>(sim::getPackedScalarType(sink.type)) !=
             isa<sim::LogicType>(sim::getPackedScalarType(types[read.root])))
           sink.block("domain");
   }
@@ -864,9 +1180,77 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
   DenseMap<uint64_t, SmallVector<Watcher, 1>> watchersOf;
   // Readers that wait on an expression sink: they must be quiet.
   SmallVector<std::pair<Summary *, Root>> expressionWaiters;
+  DenseMap<std::pair<Operation *, unsigned>, bool> coveredFormals;
+  auto coveredAtCalls = [&](sim::SimFuncOp function, unsigned formal) {
+    auto key = std::make_pair(function.getOperation(), formal);
+    auto found = coveredFormals.find(key);
+    if (found != coveredFormals.end())
+      return found->second;
+    auto users = usersOf.find(function.getSymName());
+    bool covered =
+        function.isPrivate() && state.usesKnown &&
+        (function.getEntryKind() == sim::EntryKind::Function ||
+         function.getEntryKind() == sim::EntryKind::Task) &&
+        users != usersOf.end() && !users->second.empty();
+    if (covered)
+      for (Operation *user : users->second) {
+        auto caller = user->getParentOfType<sim::SimFuncOp>();
+        if (!caller || !summaryOf.contains(caller)) {
+          covered = false;
+          break;
+        }
+        Value actual;
+        if (auto call = dyn_cast<sim::SimCallOp>(user)) {
+          if (call.getCallee() == function.getSymName() &&
+              formal < call.getNumOperands())
+            actual = call.getOperand(formal);
+        } else if (auto call = dyn_cast<sim::SimTaskCallOp>(user)) {
+          if (call.getCallee() == function.getSymName() &&
+              formal < call.getArguments().size())
+            actual = call.getArguments()[formal];
+        }
+        covered &= actual && isHandle(actual);
+        // The call must account for every reference on this operation:
+        // another attribute may expose the helper as more than a callee.
+        unsigned references = 0;
+        for (NamedAttribute named : user->getAttrs())
+          named.getValue().walk([&](SymbolRefAttr reference) {
+            if (reference.getRootReference().getValue() == function.getSymName())
+              ++references;
+          });
+        covered &= references == 1;
+      }
+    coveredFormals[key] = covered;
+    return covered;
+  };
   for (Summary *summary : all) {
     Operation *function = summary->function;
     const Copy *asCopy = summary->copy ? &*summary->copy : nullptr;
+    for (const UnboundedAccess &access : summary->unbounded) {
+      // Direct calls and task calls conservatively read and write every
+      // handle actual (forEachWrite). For a closed private helper, those
+      // caller summaries already pin all possible formal targets and mark
+      // their writers' publication shape unknown. Delegate only formal
+      // origins: an opaque factory in the same body still needs fallback.
+      if (access.formal &&
+          coveredAtCalls(summary->function, *access.formal))
+        continue;
+      for (auto [root, type] : types) {
+        if (root.net != access.net)
+          continue;
+        auto width = sim::getProvenanceSpan(type);
+        if (!width)
+          continue;
+        if (access.write)
+          writersOf[keyOf(root)].push_back(
+              {access.op, function, 0, *width, access.nonblocking, true});
+        else
+          watchersOf[keyOf(root)].push_back({function, 0, *width, false});
+        auto found = sinks.find(root);
+        if (found != sinks.end())
+          found->second.block("unknown handle origin");
+      }
+    }
     if (summary->timing)
       for (Root root : summary->captured) {
         auto found = sinks.find(root);
@@ -877,6 +1261,13 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
       auto found = sinks.find(access.root);
       if (found == sinks.end())
         return nullptr;
+      // Final procedures execute after termination (9.2.3, 20.2), when no
+      // pending Active continuous assignment can run. A Reactive write just
+      // before $finish, or a write in the final procedure itself, may leave
+      // the materialized sink at its preceding value (4.4.2, 4.9.1). Reading
+      // its RHS here would observe a value the assignment never published.
+      if (summary->function.getEntryKind() == sim::EntryKind::Final)
+        found->second.block("final observer");
       if (access.dynamic)
         found->second.block("dynamic access");
       return &found->second;
@@ -891,6 +1282,13 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
     }
     for (const Access &read : summary->reads) {
       if (Sink *s = hit(read)) {
+        // Static initialization precedes continuous assignment activations
+        // (6.8, 10.3.2); it must read the variable's original default value.
+        // Helpers called by the initializer are also pinned by the existing
+        // reader-not-spawned proof below.
+        if (!s->root.net && summary->function.getEntryKind() ==
+                                 sim::EntryKind::RootInitializer)
+          s->block("storage read during initialization");
         ++s->readers;
         if (!summary->context)
           s->block("reader without context");
@@ -945,13 +1343,17 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
         s->block("use:" + use.op->getName().getStringRef().str());
     }
   }
-  // Spawns of copies must be plain (unused result) and the only uses.
+  // Every copy must actually start. Its spawns must be plain (unused
+  // result) and the only uses; an unstarted copy never publishes its RHS.
   for (const Copy *copy : copies) {
-    bool plain = state.usesKnown;
     sim::SimFuncOp copyFunction = copy->function;
-    for (Operation *user : usersOf.lookup(copyFunction.getSymName())) {
-      auto spawn = dyn_cast<sim::SimSpawnOp>(user);
+    const auto users = usersOf.lookup(copyFunction.getSymName());
+    bool plain = state.usesKnown && !users.empty();
+    for (Operation *user : users) {
+      auto spawn = getSpawnOf(user, copyFunction.getSymName());
       plain &= spawn && spawn->getResult(0).use_empty();
+      if (!copy->sink.net && !state.startupSpawns.contains(user))
+        sinks[copy->sink].block("storage copy not started unconditionally");
     }
     if (!plain)
       sinks[copy->sink].block("spawn use");
@@ -980,7 +1382,8 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
         state.usesKnown && users != usersOf.end() && !users->second.empty();
     if (ok)
       for (Operation *user : users->second)
-        ok &= isa<sim::SimSpawnOp>(user) && user->getNumOperands() > 0 &&
+        ok &= bool(getSpawnOf(user, func.getSymName())) &&
+              user->getNumOperands() > 0 &&
               isa<sim::ContextType>(user->getOperand(0).getType());
     state.processOf[function] = ok;
     return ok;
@@ -1034,38 +1437,38 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
     if (self)
       sink.block("self-sensitive reader");
   }
-  // Execution counts per activation come from the dense write-execution
-  // lattice, whose window ends at each event control or delay (9.4.1-2); a
-  // level wait or task call may continue the activation.
+  // Blocking stores publish within each activation (9.4.1-2). Immediate
+  // NBAs issued across #0 or event waits can still commit in one NBA drain
+  // (4.4.2.4): only a proven positive delay separates their issue windows.
   auto boundsFor =
-      [&](Summary &summary) -> const analysis::WriteExecutionBounds & {
-    if (!summary.bounds) {
+      [&](Summary &summary,
+          bool nonblocking) -> const analysis::WriteExecutionBounds & {
+    auto &bounds = nonblocking ? summary.nbaBounds : summary.bounds;
+    if (!bounds) {
       SmallVector<Operation *> tracked;
       for (const Write &write : summary.writes)
         tracked.push_back(write.op);
-      summary.bounds = std::make_unique<analysis::WriteExecutionBounds>(
+      bounds = std::make_unique<analysis::WriteExecutionBounds>(
           summary.function, tracked, /*unknownCallEffects=*/false,
-          analysis::ExecutionWindow::Activation);
+          nonblocking ? analysis::ExecutionWindow::PositiveDelay
+                      : analysis::ExecutionWindow::Activation);
     }
-    return *summary.bounds;
+    return *bounds;
   };
-  // Two writes of one function never both store a bit on one activation.
-  auto oncePerActivation = [&](Summary &summary, Operation *a, Operation *b) {
-    const analysis::WriteExecutionBounds &bounds = boundsFor(summary);
+  auto onceInWindow = [&](Summary &summary, Operation *a, Operation *b,
+                          bool nonblocking) {
+    const analysis::WriteExecutionBounds &bounds =
+        boundsFor(summary, nonblocking);
     if (a == b)
       return bounds.executesAtMostOnce(a);
     return bounds.mutuallyExclusive(a, b);
   };
-  // The copy forwards the value its source holds after the writer's
-  // activation, so a waiter on the sink wakes once per activation that
-  // changes the source's final value. Moved onto the source, it wakes on
-  // every update event of the source (IEEE 1800-2023 4.3, 9.4.2). Both
-  // agree when each activation of every writer stores each bit of the
-  // source at most once: no transient (default, then override) value is
-  // ever published. A store executed twice on one activation (on one path
-  // or in a loop), from a called function, or beside a nonblocking write of
-  // the same root may publish an intermediate value, which the copy never
-  // forwarded.
+  // A copy can filter intermediate stores before its Active evaluation,
+  // whereas a waiter moved onto the source observes every update event
+  // (IEEE 1800-2023 4.3, 9.4.2). Both
+  // agree when every writer stores each bit at most once within the
+  // applicable publication window: no transient (default, then override)
+  // value is published. Delayed or opaque writes have no such certificate.
   std::map<Root, bool> transientFreeOf;
   auto transientFree = [&](Root root) {
     auto found = transientFreeOf.find(root);
@@ -1080,8 +1483,8 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
     for (const Writer &writer : writers->second) {
       (writer.nonblocking ? nonblocking : blocking) = true;
       if (writer.unknownShape || !isProcess(writer.function) ||
-          !oncePerActivation(*summaryOf.lookup(writer.function), writer.op,
-                             writer.op))
+          !onceInWindow(*summaryOf.lookup(writer.function), writer.op,
+                        writer.op, writer.nonblocking))
         result = false;
     }
     if (blocking && nonblocking)
@@ -1097,7 +1500,8 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
         if (b.function != a.function)
           result = !(a.nonblocking && b.nonblocking);
         else
-          result = oncePerActivation(*summaryOf.lookup(a.function), a.op, b.op);
+          result = onceInWindow(*summaryOf.lookup(a.function), a.op, b.op,
+                                a.nonblocking);
       }
     }
     return result;
@@ -1110,12 +1514,14 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
     bool once = true;
     for (size_t i = 0; once && i < writes.size(); ++i) {
       once = writes[i].plain &&
-             oncePerActivation(summary, writes[i].op, writes[i].op);
+             onceInWindow(summary, writes[i].op, writes[i].op,
+                          /*nonblocking=*/false);
       for (size_t j = i + 1; once && j < writes.size(); ++j)
         if (writes[i].op != writes[j].op && writes[i].root == writes[j].root &&
             overlaps(writes[i].low, writes[i].width, writes[j].low,
                      writes[j].width))
-          once = oncePerActivation(summary, writes[i].op, writes[j].op);
+          once = onceInWindow(summary, writes[i].op, writes[j].op,
+                              /*nonblocking=*/false);
     }
     summary.storesOnce = once;
     return once;
@@ -1386,7 +1792,8 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
     // nor the views that bind captures.
     edited.insert(function);
     for (Operation *user : usersOf.lookup(func.getSymName())) {
-      auto spawn = cast<sim::SimSpawnOp>(user);
+      auto spawn = getSpawnOf(user, func.getSymName());
+      assert(spawn && "rewritten reader must be used by its own spawns");
       OpBuilder spawnBuilder(spawn);
       Value ctx = spawn.getOperands().front();
       Value handle = root.net
@@ -1432,20 +1839,28 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
         view);
   };
   auto flatten = [&](OpBuilder &builder, Location loc, Value v) -> Value {
-    if (isa<sim::LogicType>(v.getType()))
+    Type scalar = sim::getPackedScalarType(v.getType());
+    assert(scalar && "copy values must be packed");
+    if (v.getType() == scalar)
       return v;
-    return sim::SimPackedFlattenOp::create(
-        builder, loc,
-        sim::LogicType::get(context, *sim::getPackedWidth(v.getType())), v);
+    return sim::SimPackedFlattenOp::create(builder, loc, scalar, v);
   };
   auto adapt = [&](OpBuilder &builder, Location loc, Value v,
                    Type target) -> Value {
     if (v.getType() == target)
       return v;
-    if (isa<sim::LogicType>(target))
-      return flatten(builder, loc, v);
-    return sim::SimPackedUnflattenOp::create(builder, loc, target,
-                                             flatten(builder, loc, v));
+    v = flatten(builder, loc, v);
+    Type scalar = sim::getPackedScalarType(target);
+    assert(scalar && "copy reader values must be packed");
+    if (v.getType() != scalar) {
+      if (isa<sim::LogicType>(scalar))
+        v = sim::SimLogicFromBitsOp::create(builder, loc, scalar, v);
+      else
+        v = sim::SimLogicToBitsOp::create(builder, loc, scalar, v);
+    }
+    if (target == scalar)
+      return v;
+    return sim::SimPackedUnflattenOp::create(builder, loc, target, v);
   };
   // The value of the piece's copy, cloned at the builder (expression) or
   // read through a view (relocation), restricted to [low, low + width) of
@@ -1496,13 +1911,25 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
           continue;
         builder.clone(op, mapping);
       }
-    Value value = mapping.lookup(copy.write->getOperand(1));
+    Value value = mapping.lookup(copyValue(copy.write));
     assert(value && "expression value must be cloned");
     if (low == piece.low && width == piece.width)
       return value;
-    return sim::SimLogicExtractOp::create(
-        builder, loc, sim::LogicType::get(context, unsigned(width)),
-        flatten(builder, loc, value), low - piece.low);
+    value = flatten(builder, loc, value);
+    if (isa<sim::LogicType>(value.getType()))
+      return sim::SimLogicExtractOp::create(
+          builder, loc, sim::LogicType::get(context, unsigned(width)), value,
+          low - piece.low);
+    Type bits = builder.getIntegerType(unsigned(width));
+    if (low != piece.low) {
+      Value shift = arith::ConstantOp::create(
+          builder, loc, value.getType(),
+          builder.getIntegerAttr(value.getType(), low - piece.low));
+      value = arith::ShRUIOp::create(builder, loc, value, shift);
+    }
+    if (value.getType() != bits)
+      value = arith::TruncIOp::create(builder, loc, bits, value);
+    return value;
   };
   auto sinkValue = [&](OpBuilder &builder, Location loc, Operation *function,
                        const Sink &sink, uint64_t low, uint64_t width,
@@ -1674,8 +2101,11 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
     if (!ready.count(copy->sink))
       continue;
     sim::SimFuncOp function = copy->function;
-    for (Operation *spawn : usersOf.lookup(function.getSymName()))
-      spawn->erase();
+    for (Operation *user : usersOf.lookup(function.getSymName())) {
+      auto spawn = getSpawnOf(user, function.getSymName());
+      assert(spawn && "eliminated copy must be used by its own spawns");
+      spawn.erase();
+    }
     usersOf.erase(function.getSymName());
     state.processOf.erase(function);
     dead.push_back(function);
@@ -1706,6 +2136,8 @@ void TalosSimForwardCopyProcessesPass::runOnOperation() {
     Root root{true, uint64_t(decl.getId())};
     state.types[root] = decl.getType();
     state.nets.push_back(decl);
+    if (decl.getLifetime() == sim::Lifetime::Design)
+      state.permanent.insert(keyOf(root));
     std::optional<schedule::ComputeObservabilityKind> observed =
         decl.getObservability();
     if ((observed &&
@@ -1716,6 +2148,8 @@ void TalosSimForwardCopyProcessesPass::runOnOperation() {
   for (auto decl : designBlock.getOps<sim::SimStorageDeclOp>()) {
     Root root{false, uint64_t(decl.getId())};
     state.types[root] = decl.getType();
+    if (decl.getLifetime() == sim::Lifetime::Design)
+      state.permanent.insert(keyOf(root));
     std::optional<schedule::ComputeObservabilityKind> observed =
         decl.getObservability();
     if ((observed &&
@@ -1758,19 +2192,72 @@ void TalosSimForwardCopyProcessesPass::runOnOperation() {
                            : WalkResult::advance();
               })
               .wasInterrupted();
-  // One symbol-use walk of the design indexes every user (a walk per copy is
-  // quadratic in the design). Rounds only erase copies and their spawns.
-  std::optional<SymbolTable::UseRange> allUses =
-      SymbolTable::getSymbolUses(&design.getBody());
-  state.usesKnown = allUses.has_value();
-  if (allUses)
-    for (const SymbolTable::SymbolUse &use : *allUses)
-      state.usersOf[use.getSymbolRef().getRootReference().getValue()].push_back(
-          use.getUser());
-  if (!allUses || state.usersOf.empty())
-    design.walk([&](sim::SimSpawnOp spawn) {
-      state.usersOf[spawn.getCallee()].push_back(spawn);
+  // Normalize before indexing symbol users: even a branch can carry a
+  // discardable symbol reference, and normalization can erase that branch.
+  // Census mode uses the same normalized shapes, then restores the bodies so
+  // it remains a read-only inventory. Function signatures and attributes
+  // remain unchanged; all inventories of body operations are local below.
+  SmallVector<std::pair<sim::SimFuncOp, OwningOpRef<Operation *>>> originals;
+  for (auto function : designBlock.getOps<sim::SimFuncOp>()) {
+    if (function.isExternal() || function.getBody().getBlocks().size() <= 2 ||
+        (function.getEntryKind() != sim::EntryKind::Continuous &&
+         function.getEntryKind() != sim::EntryKind::PortInput &&
+         function.getEntryKind() != sim::EntryKind::PortOutput))
+      continue;
+    OwningOpRef<Operation *> original;
+    if (census)
+      original = function->clone();
+    if (normalizePureExpression(function, state.analysis->derive(function),
+                                state, maximumClones) &&
+        census)
+      originals.emplace_back(function, std::move(original));
+  }
+  indexSymbolUsers(design, state);
+  // Variables retain their declaration default until their continuous
+  // assignment starts. Only a once-only unconditional startup spawn lets a
+  // substituted reader choose that assignment's first Active evaluation.
+  // Root initialization may contain loops elsewhere: a block outside every
+  // cyclic CFG component executes at most once. This structural proof avoids
+  // building a dense per-statement counting lattice for all startup spawns.
+  for (auto function : designBlock.getOps<sim::SimFuncOp>()) {
+    if (function.isExternal() ||
+        function.getEntryKind() != sim::EntryKind::RootInitializer ||
+        function
+            .walk([](Operation *op) {
+              return sim::isSuspensionOp(op) ? WalkResult::interrupt()
+                                             : WalkResult::advance();
+            })
+            .wasInterrupted())
+      continue;
+    SmallVector<Operation *> spawns, exits;
+    function.walk([&](sim::SimSpawnOp spawn) {
+      if (spawn->getParentRegion() == &function.getBody())
+        spawns.push_back(spawn);
     });
+    for (Block &block : function.getBody())
+      if (block.getNumSuccessors() == 0)
+        exits.push_back(block.getTerminator());
+    if (spawns.empty() || exits.empty())
+      continue;
+    if (llvm::any_of(state.usersOf.lookup(function.getSymName()),
+                     [](Operation *user) {
+                       return isa<sim::SimCallOp, sim::SimTaskCallOp,
+                                  sim::SimSpawnOp>(user);
+                     }))
+      continue;
+    DominanceInfo dominance(function);
+    DenseSet<Block *> cyclic;
+    for (auto component = llvm::scc_begin(&function.getBody().front());
+         !component.isAtEnd(); ++component)
+      if (component.hasCycle())
+        cyclic.insert(component->begin(), component->end());
+    for (Operation *spawn : spawns)
+      if (!cyclic.contains(spawn->getBlock()) &&
+          llvm::all_of(exits, [&](Operation *exit) {
+            return dominance.dominates(spawn, exit);
+          }))
+        state.startupSpawns.insert(spawn);
+  }
   // IEEE 1800-2023 4.5: the Reactive region set (program processes, 24.3,
   // and anything they call or spawn).
   {
@@ -1797,9 +2284,14 @@ void TalosSimForwardCopyProcessesPass::runOnOperation() {
         llvm::append_range(work, calleesOf.lookup(function));
     }
   }
-  for (unsigned r = 0; r < maximumRounds; ++r)
+  for (unsigned r = 0; r < maximumRounds; ++r) {
+    if (r)
+      indexSymbolUsers(design, state);
     if (!round(design, state, r + 1 == maximumRounds))
       break;
+  }
+  for (auto &[function, original] : originals)
+    function.getBody().takeBody(cast<sim::SimFuncOp>(*original).getBody());
 }
 
 } // namespace

@@ -92,7 +92,8 @@ struct DesignInputs {
     }
   }
   /// Whether the variant `function` proves `read` known.
-  bool provesKnown(sim::SimFuncOp function, const analysis::HandleFacts &facts,
+  bool provesKnown(sim::SimFuncOp function,
+                   const analysis::HandleDataflowResult &handles,
                    Operation *read) const {
     if (!domains ||
         !schedule::has<schedule::Field::EvalInductiveTwoState>(function))
@@ -101,10 +102,48 @@ struct DesignInputs {
         schedule::has<schedule::Field::EvalConditionallyTwoState>(function)
             ? domains->second
             : domains->first;
-    auto fact = facts.find(read->getOperand(0));
-    return fact != facts.end() && fact->second.descriptor &&
-           !fact->second.dynamic &&
-           guarded.isTwoStateWithInductiveRoots(read->getResult(0)) &&
+    Value reference = read->getOperand(0);
+    auto fact = handles.facts.find(reference);
+    if (fact == handles.facts.end() || !fact->second.descriptor ||
+        !fact->second.width)
+      return false;
+    // Match packed lowering: a bounded, unclipped dynamic read already
+    // loads only its value plane under the outer certificate. An invalid
+    // selection can still synthesize X and must retain its fallback.
+    if (fact->second.dynamic) {
+      auto proof = handles.certificates.find(reference);
+      if (proof == handles.certificates.end() || !proof->second.inBounds ||
+          proof->second.clipped)
+        return false;
+    }
+    return guarded.isTwoStateWithInductiveRoots(read->getResult(0)) &&
+           guarded.isInductivelyTwoState(fact->second.resource,
+                                         *fact->second.descriptor);
+  }
+  /// Packed lowering already omits this store's unknown-plane work under
+  /// the outer certificate. Match its valid-selection and root/value proof
+  /// rather than crediting the same saving to another activation copy.
+  bool provesKnownStore(sim::SimFuncOp function,
+                         const analysis::HandleDataflowResult &handles,
+                         sim::SimRefStoreOp store) const {
+    if (!domains ||
+        !schedule::has<schedule::Field::EvalInductiveTwoState>(function))
+      return false;
+    const StateDomainAnalysis &guarded =
+        schedule::has<schedule::Field::EvalConditionallyTwoState>(function)
+            ? domains->second
+            : domains->first;
+    auto fact = handles.facts.find(store.getReference());
+    if (fact == handles.facts.end() || !fact->second.descriptor ||
+        !fact->second.width)
+      return false;
+    if (fact->second.dynamic) {
+      auto proof = handles.certificates.find(store.getReference());
+      if (proof == handles.certificates.end() || !proof->second.inBounds ||
+          proof->second.clipped)
+        return false;
+    }
+    return guarded.isTwoStateWithInductiveRoots(store.getValue()) &&
            guarded.isInductivelyTwoState(fact->second.resource,
                                          *fact->second.descriptor);
   }
@@ -1004,36 +1043,62 @@ public:
     Segments segments = cut(function, segmentSize);
     analysis::HandleDataflowResult handles = inputs->handles.analyze(function);
     auto provenKnown = [&](Operation *read) {
-      return inputs->provesKnown(function, handles.facts, read);
+      return inputs->provesKnown(function, handles, read);
     };
     auto staysUnknown = [&](uint64_t descriptor, uint64_t low, uint64_t high) {
       return inputs->staysUnknown(descriptor, low, high);
+    };
+    auto provenKnownStore = [&](sim::SimRefStoreOp store) {
+      return inputs->provesKnownStore(function, handles, store);
     };
     LocalUnknownAnalysis analysis(
         function, handles,
         LocalUnknownAnalysis::Options{&segments.segmentation, &inputs->callees,
                                       false, provenKnown, checkedReads,
-                                      staysUnknown});
+                                      staysUnknown, provenKnownStore});
     // A copy must save clearly more than its checks cost: about three
     // instructions per tested summary word, slot or live-in and two per
     // tested read. A segment's roots are numbered together, so a word covers
     // several of them.
-    auto profitable = [&](const LocalUnknownAnalysis::Segment &segment) {
+    bool nested =
+        schedule::has<schedule::Field::EvalInductiveTwoState>(function);
+    auto checkCost = [&](const LocalUnknownAnalysis::Segment &segment) {
       uint64_t words = (segment.gate.size() + 7) / 8;
-      uint64_t check = 3 * words + 2 * segment.checks +
-                       3 * (segment.slotChecks.size() +
-                            segment.liveIns.size()) +
-                       4;
+      return 3 * words + 2 * segment.checks +
+             3 * (segment.slotChecks.size() + segment.liveIns.size()) + 4;
+    };
+    auto profitable = [&](const LocalUnknownAnalysis::Segment &segment) {
+      uint64_t cost = 2 * checkCost(segment);
+      // A guarded variant has already removed the work covered by its
+      // inductive proof. Penalize another copy for executable work that
+      // earns no residual savings under the extra proof. This is a static
+      // profitability heuristic, independent of function size or an arbitrary
+      // segmentation threshold. Weak candidates remain available to the
+      // existing smaller-region versioner.
+      if (nested)
+        cost += segment.unchangedWork;
       return !segment.untestable && (!segment.gate.empty() || segment.checks) &&
              segment.benefit >= minimumBenefit &&
-             segment.benefit > 2 * check;
+             segment.benefit > cost;
     };
     ArrayRef<LocalUnknownAnalysis::Segment> results = analysis.getSegments();
     unsigned versioned = 0;
     uint64_t benefit = 0, roots = 0;
     Versioner versioner(function, analysis, *inputs);
     for (auto [index, segment] : llvm::enumerate(results)) {
-      if (!profitable(segment))
+      bool admitted = profitable(segment);
+      if (diagnostics && nested &&
+          (!segment.gate.empty() || segment.checks)) {
+        std::string text;
+        llvm::raw_string_ostream os(text);
+        os << "talos nested activation cost: " << function.getSymName()
+           << " segment=" << index << " residual=" << segment.benefit
+           << " check=" << checkCost(segment)
+           << " unchanged=" << segment.unchangedWork
+           << " accepted=" << admitted << '\n';
+        llvm::errs() << text;
+      }
+      if (!admitted)
         continue;
       Operation *end = index + 1 < segments.begins.size()
                            ? segments.begins[index + 1]

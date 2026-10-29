@@ -124,7 +124,15 @@ public:
     /// The storage roots the check tests, by descriptor, sorted: those of
     /// the segment's gated reads and known stores.
     llvm::SmallVector<uint64_t, 0> gate;
+    /// Estimated unknown-plane instructions removed beyond facts the
+    /// original body already proves. Accesses use their transferred value
+    /// width, not the possible-address hull used to check soundness.
     uint64_t benefit = 0;
+    /// Static duplication penalty: estimated executable work of copied
+    /// operations that earn no residual benefit. Their remaining unknown
+    /// planes count; constants, static reference views and representation-only
+    /// casts emit no work. Uses the same scalar-instruction units as `benefit`.
+    uint64_t unchangedWork = 0;
     /// Reads the copy tests where they load.
     unsigned checks = 0;
     /// Private allocations whose contents the entry check tests: known reads
@@ -179,6 +187,10 @@ public:
     /// dynamic selection over them is not gated.
     llvm::function_ref<bool(uint64_t, uint64_t, uint64_t)> staysUnknown =
         nullptr;
+    /// Stores the original body already lowers value-only, such as a valid
+    /// write to an inductively two-state root in a guarded variant. Their
+    /// known-store proof needs no extra gate and earns no new savings.
+    llvm::function_ref<bool(sim::SimRefStoreOp)> provenKnownStore = nullptr;
   };
 
   /// `handles` must describe the references of `function`.

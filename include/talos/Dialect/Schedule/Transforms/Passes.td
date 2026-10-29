@@ -415,7 +415,14 @@ def VersionKnownActivationsPass
     operands may hold X/Z elsewhere takes its two-state view; every other
     read and store keeps both planes, so the copy performs the same effects
     with the same values (IEEE 1800-2023 4.3, 6.3.1, 11.4). A failed check
-    runs the original four-state body. With `segment-size`, the body is cut
+    runs the original four-state body. A copy of an already guarded variant
+    uses a static profitability estimate: residual unknown-plane savings must
+    exceed twice the estimated guard work plus copied executable work of
+    operations earning no residual savings. Facts from the outer proof earn
+    no additional savings. Memory accesses are costed by the transferred value
+    width rather than the possible-address hull used by the proof.
+    Rejected whole-body copies remain eligible for smaller-region versioning.
+    With `segment-size`, the body is cut
     into segments entered only at their first operation, each checked at its
     own entry together with the private slots and live-in values its copy
     relies on. With `checked-reads`, a read the check cannot cover is tested

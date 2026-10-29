@@ -85,11 +85,12 @@ endmodule
 // DIAG-SAME: periodic_preparations={{[1-9][0-9]*}}
 // DIAG-SAME: periodic_clocks_high_water=3
 
-// The scalar clock copy is forwarded by the calendar. Each remaining
-// outlined owner has an independent promotion latch.  The generated
-// scanner is a local masked-plane check and has no runtime edge.
-// LLVM-DAG: @__talos_eval_kernel_promotion_latched_v1 = internal {{.*}}global [6 x i8] zeroinitializer
-// LLVM-DAG: @__talos_eval_promotion_pending_mask_v1{{(\.0)?}} = internal {{.*}}global [1 x i64] [i64 63]
+// Clock-copy forwarding changes how many outlined owners remain. Each owner
+// still has an independent promotion latch. The generated scanner is a local
+// masked-plane check and has no runtime edge. Capture the complete initial
+// owner mask so invalidation below must restore the same pending owners.
+// LLVM-DAG: @__talos_eval_kernel_promotion_latched_v1 = internal {{.*}}global [{{[1-9][0-9]*}} x i8] zeroinitializer
+// LLVM-DAG: @__talos_eval_promotion_pending_mask_v1{{(\.0)?}} = internal {{.*}}global [1 x i64] [i64 [[ALL_OWNERS:[1-9][0-9]*]]]
 // LLVM-LABEL: define {{.*}}i1 @__talos_eval_kernel_promotion_scan_v1(
 // LLVM-NOT: call {{.*}}@talos_rt_
 // LLVM: store i8 1, ptr
@@ -101,11 +102,12 @@ endmodule
 
 // Promotion invalidation is a cold generated store. It contains no runtime
 // edge; the subsequent quiescent coordinator scan selects four- or two-state.
+// LLVM may fold the latch-array memset into a scalar zero store.
 // LLVM-LABEL: define void @__talos_eval_promotion_invalidate_v1
 // LLVM-NOT: call {{.*}}@talos_rt_
 // LLVM: store i8 {{.*}}, ptr @__talos_eval_promotion_latched_v1
-// LLVM: call void @llvm.memset{{.*}}@__talos_eval_kernel_promotion_latched_v1
-// LLVM: store i64 63, ptr @__talos_eval_promotion_pending_mask_v1{{(\.0)?}}
+// LLVM: {{(call void @llvm.memset.*|store i[0-9]+ 0, ptr).*}}@__talos_eval_kernel_promotion_latched_v1
+// LLVM: store i64 [[ALL_OWNERS]], ptr @__talos_eval_promotion_pending_mask_v1{{(\.0)?}}
 // LLVM: ret void
 
 // The shared dispatcher checks the ready mask against pending owners

@@ -212,20 +212,30 @@ def TalosSimForwardCopyProcessesPass
     : Pass<"talos-sim-forward-copy-processes", "talos::sim::SimDesignOp"> {
   let summary = "Substitute single-driver continuous assignments into readers";
   let description = [{
-    A pure continuous assignment (or port copy) to a net with no other
-    driver, no dynamic access and no observer of its own is evaluated by its
+    A pure continuous assignment (or port copy) to a net or design-lifetime
+    variable with no other writer, no dynamic access and no observer of its
+    own is evaluated by its
     readers instead (IEEE 1800-2023 10.3.2, 4.9.1, 4.7, 4.3, 6.6.1,
     9.2.2.2.1, 9.4.2): reads become views of the operands or clones of the
-    expression, waits watch the operands, and the assignment process and
-    its net become dead. The operands must be transient-free (each writer
-    stores each bit at most once per activation), or every affected reader
+    expression, waits watch the operands, and the assignment process becomes
+    dead. A variable's copy must start unconditionally once during root
+    initialization; reads during initialization keep its declaration default.
+    Safe, fixed-root short-circuit expression arms are normalized to selects
+    within the existing expression-cloning budget, preserving X/Z and leaving
+    effects conditional. Unknown aliases and final observers retain any
+    potentially observed root. The operands must be transient-free (each
+    blocking writer stores each bit at most once per activation; nonblocking
+    writers publish at most once per NBA window, including across zero delays
+    and event waits), or every affected reader
     must be a combinational reader whose extra evaluations have no visible
     effect, including any transients observed downstream (4.3). Expression
     waiters require the same proof, since an operand can change without an
     event of the expression (9.4.2). Cycles of transient-producing readers
     cannot establish that proof. Requires VPI off.
   }];
-  let dependentDialects = ["talos::sim::TalosSimulationDialect"];
+  let dependentDialects = ["talos::sim::TalosSimulationDialect",
+                           "mlir::arith::ArithDialect",
+                           "mlir::cf::ControlFlowDialect"];
   let statistics = [
     Statistic<"numEliminated", "eliminated", "Copy processes eliminated">
   ];

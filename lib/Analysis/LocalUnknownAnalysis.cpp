@@ -1590,6 +1590,25 @@ LocalUnknownAnalysis::LocalUnknownAnalysis(sim::SimFuncOp function,
     return observedWrites(*before, op, inputs);
   };
   SmallVector<llvm::SetVector<uint64_t>> gated(count);
+  DenseMap<Operation *, uint64_t> residualBenefit;
+  // Reference facts describe all addresses an access may select. A dynamic
+  // byte load from a large memory still transfers one byte, not its entire
+  // possible-address hull. Keep that hull for the write/knownness proofs,
+  // and estimate executable work from the value that actually moves.
+  auto accessWork = [](Type value, uint64_t hullWidth) -> uint64_t {
+    uint64_t width =
+        std::min(hullWidth, sim::getProvenanceSpan(value).value_or(hullWidth));
+    return 1 + width / 64;
+  };
+  // Record each operation's actual contribution to the residual savings.
+  // Only operations earning no such credit contribute to the static
+  // duplication penalty below. Stores already covered by an outer proof
+  // bypass this credit just as they bypass the new gate.
+  auto creditResidual = [&](Operation *op, uint64_t work) {
+    if (work)
+      residualBenefit[op] += work;
+    return work;
+  };
   for (Operation *read : reads) {
     ReadSite site = inputs.sites.lookup(read);
     ReadKind kind = site.kind;
@@ -1623,7 +1642,8 @@ LocalUnknownAnalysis::LocalUnknownAnalysis(sim::SimFuncOp function,
       continue;
     }
     unsigned segment = segmentOf(read);
-    segments[segment].benefit += 1 + (site.high - site.low) / 64;
+    segments[segment].benefit += creditResidual(
+        read, accessWork(read->getResult(0).getType(), site.high - site.low));
     // Bits every path of the segment stored before the read need no check.
     if (observed && observed->overwrites(site.root, site.low, site.high))
       continue;
@@ -1637,6 +1657,10 @@ LocalUnknownAnalysis::LocalUnknownAnalysis(sim::SimFuncOp function,
   // keeps both planes.
   if (!options.summary)
     for (sim::SimRefStoreOp store : stores) {
+      if (options.provenKnownStore && options.provenKnownStore(store)) {
+        knownStores.insert(store);
+        continue;
+      }
       Value reference = store.getReference();
       auto fact = handles.facts.find(reference);
       if (!isExecutable(solver, store->getBlock()) ||
@@ -1657,7 +1681,8 @@ LocalUnknownAnalysis::LocalUnknownAnalysis(sim::SimFuncOp function,
         continue;
       knownStores.insert(store);
       Segment &segment = segments[segmentOf(store)];
-      segment.benefit += 1 + width / 64;
+      segment.benefit +=
+          creditResidual(store, accessWork(store.getValue().getType(), width));
       gated[segmentOf(store)].insert(*fact->second.descriptor);
     }
 
@@ -1692,7 +1717,51 @@ LocalUnknownAnalysis::LocalUnknownAnalysis(sim::SimFuncOp function,
     if (!isa<sim::SimRefLoadOp>(op) &&
         (llvm::any_of(op->getResults(), improved) ||
          llvm::any_of(op->getOperands(), improved)))
-      segment.benefit += getUnknownPlaneWork(op);
+      segment.benefit += creditResidual(op, getUnknownPlaneWork(op));
+
+    // Charge copied work only when this operation earns no residual savings.
+    // This static duplication penalty uses the same instruction estimates
+    // as the benefit; operations improved by the extra proof contribute
+    // their savings without also adding a penalty for their value-plane work.
+    bool free = op->hasTrait<OpTrait::ConstantLike>() ||
+                isa<sim::SimContextStorageOp, sim::SimContextNetOp,
+                    sim::SimContextDriverOp, sim::SimRefExtractOp,
+                    sim::SimRefSubelementOp, sim::SimNetExtractOp,
+                    sim::SimDriverExtractOp, sim::SimDriverSubelementOp,
+                    sim::SimLogicFromBitsOp,
+                    sim::SimPackedFlattenOp, sim::SimPackedUnflattenOp>(op);
+    if (auto toBits = dyn_cast<sim::SimLogicToBitsOp>(op))
+      free = knownInCopy.contains(toBits.getInput());
+    if (!free && !residualBenefit.lookup(op)) {
+      uint64_t work = 1;
+      if (isa<sim::SimRefLoadOp, sim::SimNetReadOp>(op)) {
+        Value value = op->getResult(0);
+        uint64_t width = sim::getProvenanceSpan(value.getType()).value_or(1);
+        work = accessWork(value.getType(), width);
+        if (hasUnknownPlane(value.getType()) &&
+            !knownInCopy.contains(value))
+          work *= 2;
+      } else if (auto store = dyn_cast<sim::SimRefStoreOp>(op)) {
+        Type type = store.getValue().getType();
+        work = accessWork(type, sim::getProvenanceSpan(type).value_or(1));
+        if (hasUnknownPlane(type) && !knownStores.contains(op))
+          work *= 2;
+      } else if (isa<sim::SimLogicToBitsOp>(op)) {
+        // Four-to-two-state coercion computes value & ~unknown. It is a
+        // representation-only cast only after the input is proved known.
+        work = 2;
+      } else if (llvm::any_of(op->getOperands(), [&](Value value) {
+                   return hasUnknownPlane(value.getType()) &&
+                          !knownInCopy.contains(value);
+                 }) ||
+                 llvm::any_of(op->getResults(), [&](Value value) {
+                   return hasUnknownPlane(value.getType()) &&
+                          !knownInCopy.contains(value);
+                 })) {
+        work += getUnknownPlaneWork(op);
+      }
+      segment.unchangedWork += work;
+    }
     // A value from another segment comes from whichever copy ran there:
     // the entry check tests each one only the copy proves known.
     for (Value operand : op->getOperands())
