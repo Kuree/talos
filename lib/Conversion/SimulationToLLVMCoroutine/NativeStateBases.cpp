@@ -13,12 +13,16 @@
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/Threading.h"
 #include "talos/Analysis/ParallelWalk.h"
+#include "talos/Dialect/Schedule/ScheduleFields.h"
 
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/IR/DataLayout.h"
+#include "llvm/Support/Error.h"
 
 using namespace mlir;
 
@@ -27,6 +31,159 @@ namespace talos {
 #define GEN_PASS_DEF_ADDRESSNATIVESTATETHROUGHBASESPASS
 #include "talos/Conversion/Passes.h.inc"
 
+namespace {
+struct StateBase {
+  StringAttr name;
+  uint64_t bytes;
+};
+
+/// Only bounded integer accesses rooted in the physical plane qualify. In
+/// particular an arbitrary pointer or unknown offset acquires no promise.
+/// The scopes do not separate overlapping SV subviews within one plane.
+static StringAttr
+boundedStatePlane(Value address, uint64_t bytes,
+                  const DenseMap<StringAttr, StateBase> &bases,
+                  unsigned indexBits, unsigned pointerBits) {
+  auto pointer = dyn_cast<LLVM::LLVMPointerType>(address.getType());
+  if (!pointer || pointer.getAddressSpace() != 0)
+    return {};
+  uint64_t offset = 0;
+  StringAttr plane;
+  while (Operation *operation = address.getDefiningOp()) {
+    if (auto gep = dyn_cast<LLVM::GEPOp>(operation)) {
+      // Narrow GEP arithmetic can wrap only the low part of a pointer. An
+      // offset bound alone is insufficient without a base-alignment proof.
+      if (indexBits != pointerBits || !gep.getElemType().isInteger(8) ||
+          gep.getRawConstantIndices().size() != 1)
+        return {};
+      APInt index;
+      if (gep.getDynamicIndices().empty())
+        index = APInt(32, gep.getRawConstantIndices().front(), true);
+      else if (gep.getDynamicIndices().size() != 1 ||
+               !matchPattern(gep.getDynamicIndices().front(),
+                             m_ConstantInt(&index)))
+        return {};
+      if (index.isNegative() || index.getActiveBits() > 64 ||
+          index.getSignificantBits() > indexBits)
+        return {};
+      uint64_t next = index.getZExtValue();
+      if (next > UINT64_MAX - offset)
+        return {};
+      offset += next;
+      uint64_t maximum = indexBits >= 64 ? UINT64_MAX >> 1
+                                         : (uint64_t{1} << (indexBits - 1)) - 1;
+      if (offset > maximum)
+        return {};
+      address = gep.getBase();
+    } else if (auto cast = dyn_cast<LLVM::BitcastOp>(operation)) {
+      address = cast.getArg();
+    } else if (auto global = dyn_cast<LLVM::AddressOfOp>(operation)) {
+      plane = global.getGlobalNameAttr().getAttr();
+      break;
+    } else if (auto load = dyn_cast<LLVM::LoadOp>(operation)) {
+      auto slot = load.getAddr().getDefiningOp<LLVM::AddressOfOp>();
+      if (!slot)
+        return {};
+      for (const auto &[candidate, base] : bases)
+        if (base.name == slot.getGlobalNameAttr().getAttr()) {
+          plane = candidate;
+          break;
+        }
+      break;
+    } else {
+      return {};
+    }
+  }
+  auto found = bases.find(plane);
+  if (found == bases.end() || offset > found->second.bytes ||
+      bytes > found->second.bytes - offset)
+    return {};
+  return plane;
+}
+
+static void appendScopes(LLVM::AliasAnalysisOpInterface operation,
+                         ArrayRef<Attribute> scopes, bool noAlias) {
+  ArrayAttr old = noAlias ? operation.getNoAliasScopesOrNull()
+                          : operation.getAliasScopesOrNull();
+  SmallVector<Attribute> combined;
+  if (old)
+    llvm::append_range(combined, old);
+  for (Attribute scope : scopes)
+    if (!llvm::is_contained(combined, scope))
+      combined.push_back(scope);
+  auto attributes = ArrayAttr::get(operation->getContext(), combined);
+  if (noAlias)
+    operation.setNoAliasScopes(attributes);
+  else
+    operation.setAliasScopes(attributes);
+}
+
+/// Carry the existing metadata-only proof through LLVM translation and native
+/// partitioning. Publication remains an ordered, side-effecting call; only
+/// its exclusion from the physical value/X/Z planes is stated. This retains
+/// the state updates and observations required by LRM 4.6 and 6.3.1.
+static void
+annotateStateMetadataCalls(LLVM::LLVMFuncOp function,
+                           const DenseSet<StringAttr> &metadataOnly,
+                           const DenseMap<StringAttr, StateBase> &bases,
+                           unsigned indexBits, unsigned pointerBits) {
+  SmallVector<LLVM::CallOp> calls;
+  function.walk([&](LLVM::CallOp call) {
+    if (call.getCallee() && metadataOnly.contains(StringAttr::get(
+                                function.getContext(), *call.getCallee())))
+      calls.push_back(call);
+  });
+  if (calls.empty())
+    return;
+  SmallVector<std::pair<Operation *, StringAttr>> accesses;
+  function.walk([&](Operation *operation) {
+    Value address;
+    Type type;
+    if (auto load = dyn_cast<LLVM::LoadOp>(operation)) {
+      address = load.getAddr();
+      type = load.getType();
+    } else if (auto store = dyn_cast<LLVM::StoreOp>(operation)) {
+      address = store.getAddr();
+      type = store.getValue().getType();
+    }
+    auto integer = dyn_cast_or_null<IntegerType>(type);
+    if (!integer)
+      return;
+    uint64_t bytes = (uint64_t(integer.getWidth()) + 7) / 8;
+    if (StringAttr plane =
+            boundedStatePlane(address, bytes, bases, indexBits, pointerBits))
+      accesses.emplace_back(operation, plane);
+  });
+  if (accesses.empty())
+    return;
+  Builder builder(function.getContext());
+  // String identities keep this late pass deterministic and idempotent.
+  // The scopes describe global physical storage, not dynamic stack objects.
+  auto domain = LLVM::AliasScopeDomainAttr::get(
+      function.getContext(),
+      builder.getStringAttr("talos.state_metadata." +
+                            function.getSymName().str()),
+      builder.getStringAttr("native state versus proof metadata"));
+  DenseMap<StringAttr, Attribute> byPlane;
+  SmallVector<Attribute, 2> scopes;
+  for (StringRef name : {"__talos_state_value", "__talos_state_unknown"}) {
+    auto key = builder.getStringAttr(name);
+    if (!bases.contains(key))
+      continue;
+    auto scope =
+        LLVM::AliasScopeAttr::get(function.getContext(), key, domain, key);
+    byPlane[key] = scope;
+    scopes.push_back(scope);
+  }
+  for (auto [operation, plane] : accesses)
+    appendScopes(cast<LLVM::AliasAnalysisOpInterface>(operation),
+                 {byPlane.lookup(plane)}, false);
+  for (LLVM::CallOp call : calls)
+    appendScopes(cast<LLVM::AliasAnalysisOpInterface>(call.getOperation()),
+                 scopes, true);
+}
+} // namespace
+
 LogicalResult addressNativeStateThroughBases(ModuleOp module) {
   static constexpr StringLiteral planes[] = {"__talos_state_value",
                                              "__talos_state_unknown"};
@@ -34,11 +191,7 @@ LogicalResult addressNativeStateThroughBases(ModuleOp module) {
   SymbolTable symbols(module);
   OpBuilder builder(context);
   auto pointer = LLVM::LLVMPointerType::get(context);
-  struct Base {
-    StringAttr name;
-    uint64_t bytes;
-  };
-  DenseMap<StringAttr, Base> bases;
+  DenseMap<StringAttr, StateBase> bases;
   for (StringRef plane : planes) {
     auto global = symbols.lookup<LLVM::GlobalOp>(plane);
     if (!global)
@@ -90,6 +243,17 @@ LogicalResult addressNativeStateThroughBases(ModuleOp module) {
   }
   if (bases.empty())
     return success();
+  DenseSet<StringAttr> metadataOnly;
+  for (auto function : module.getOps<LLVM::LLVMFuncOp>())
+    if (schedule::has<schedule::Field::EvalStateMetadataOnly>(function))
+      metadataOnly.insert(function.getSymNameAttr());
+  auto layout = module->getAttrOfType<StringAttr>("llvm.data_layout");
+  auto parsed = llvm::DataLayout::parse(layout ? layout.getValue() : "");
+  if (!parsed)
+    return module.emitError() << "invalid native state data layout: "
+                              << llvm::toString(parsed.takeError());
+  unsigned indexBits = parsed->getIndexSizeInBits(0);
+  unsigned pointerBits = parsed->getPointerSizeInBits(0);
   // Each function rewrites only its own body.
   SmallVector<LLVM::LLVMFuncOp> functions;
   for (auto function : module.getOps<LLVM::LLVMFuncOp>())
@@ -108,7 +272,12 @@ LogicalResult addressNativeStateThroughBases(ModuleOp module) {
         if (bases.count(address.getGlobalNameAttr().getAttr()))
           uses[address.getGlobalNameAttr().getAttr()].push_back(address);
     });
-    if (coroutine || uses.empty())
+    if (coroutine)
+      return;
+    if (!metadataOnly.empty())
+      annotateStateMetadataCalls(function, metadataOnly, bases, indexBits,
+                                  pointerBits);
+    if (uses.empty())
       return;
     // Within one block, code generation already folds the smallest offset
     // into the plane address and reaches the rest with immediates.
@@ -123,7 +292,7 @@ LogicalResult addressNativeStateThroughBases(ModuleOp module) {
     SmallVector<Value, 2> loadedBases;
     SmallVector<uint64_t, 2> planeBytes;
     for (auto &[plane, addresses] : uses) {
-      Base base = bases.lookup(plane);
+      StateBase base = bases.lookup(plane);
       Location location = addresses.front().getLoc();
       Value slot =
           LLVM::AddressOfOp::create(builder, location, pointer, base.name);
