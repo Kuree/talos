@@ -1005,7 +1005,11 @@ LogicalResult optimizeLLVMModule(llvm::Module &module,
     errs() << "talos: error: invalid LLVM IR before native optimization\n";
     return failure();
   }
-  PassBuilder builder(&targetMachine);
+  // LLVM's library defaults leave SLP disabled. Match Clang's O2/O3 policy:
+  // lowered hardware contains independent scalar lanes even without loops.
+  PipelineTuningOptions tuning;
+  tuning.SLPVectorization = optLevel >= 2;
+  PassBuilder builder(&targetMachine, tuning);
   LoopAnalysisManager loopAnalyses;
   FunctionAnalysisManager functionAnalyses;
   CGSCCAnalysisManager cgsccAnalyses;
