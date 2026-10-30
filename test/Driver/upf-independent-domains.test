@@ -1,0 +1,82 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// RUN: talos --upf %t/reverse.upf --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.reverse && %t.reverse | FileCheck %s
+// IEEE 1801-2018 6.20, 9.5.3 and 9.8: each independent domain owns its
+// corruption, pending updates and isolation strategy.
+// CHECK: independent power domains passed
+
+//--- design.sv
+module upf_leaf(input logic clk, d, output logic q);
+  always @(posedge clk) q <= #3 d;
+endmodule
+module upf_test;
+  logic clk = 0, clk_b = 0, d = 1, d_b = 0;
+  logic power_en = 1, power_b = 1, iso = 0, iso_b = 0;
+  wire q, q_b;
+  upf_leaf dut(clk, d, q), dut2(clk_b, d_b, q_b);
+  initial begin
+    #1 clk = 1; clk_b = 1;
+    #4;
+    if (q !== 1'b1 || q_b !== 1'b0) $fatal(1, "initial domains failed");
+    clk = 0; clk_b = 0; d = 0; d_b = 1;
+    #1 clk = 1; clk_b = 1;
+    #1 power_en = 0; iso = 1;
+    #1;
+    if (dut.q !== 1'bx || q !== 1'b0 || q_b !== 1'b0)
+      $fatal(1, "power loss failed or domain B's NBA committed early");
+    power_en = 1; // Restore A before both delayed helpers mature at time 9.
+    #2;
+    if (dut.q !== 1'bx || q !== 1'b0 || q_b !== 1'b1)
+      $fatal(1, "domain A loss affected domain B's pending NBA");
+    power_en = 1; iso = 0;
+    #1;
+    if (q !== 1'bx || q_b !== 1'b1)
+      $fatal(1, "domain A's cancelled NBA survived restoration");
+    clk = 0; d = 1;
+    #1 clk = 1;
+    power_b = 0; iso_b = 1;
+    #4;
+    if (q !== 1'b1 || dut2.q !== 1'bx || q_b !== 1'b1)
+      $fatal(1, "domain B loss affected domain A or clamp-one isolation");
+    power_b = 1; iso_b = 0;
+    #1;
+    if (q_b !== 1'bx || q !== 1'b1)
+      $fatal(1, "domain B restoration invented an edge");
+    clk_b = 0; d_b = 0;
+    #1 clk_b = 1;
+    #4;
+    if (q_b !== 1'b0 || q !== 1'b1) $fatal(1, "independent recovery failed");
+    $display("independent power domains passed");
+    $finish;
+  end
+endmodule
+//--- design.upf
+foreach net {VDD VSS VDD_SW VDD_OTHER} {create_supply_net $net}
+set rows {
+    PD dut VDD_SW power_en iso 0
+    Other dut2 VDD_OTHER power_b iso_b 1
+}
+if {[info exists reverse_domains]} {
+    set rows {
+        Other dut VDD_SW power_en iso 0
+        PD dut2 VDD_OTHER power_b iso_b 1
+    }
+}
+foreach {domain element supply control isolation clamp} $rows {
+    create_power_domain $domain -elements $element
+    set_domain_supply_net $domain -primary_power_net $supply -primary_ground_net VSS
+    create_power_switch SW_$domain -domain $domain \
+        -input_supply_port {vin VDD} -output_supply_port [list vout $supply] \
+        -control_port [list en $control] -on_state {ON vin en}
+    set_isolation ISO_$domain -domain $domain -isolation_signal $isolation \
+        -isolation_sense high -clamp_value $clamp -applies_to outputs -location parent
+}
+
+//--- reverse.upf
+set reverse_domains 1

@@ -1,11 +1,13 @@
 # REQUIRES: upf
 # RUN: %split-file %s %t
 # RUN: not talos --upf %S/Inputs/upf/switchable.upf -O3 --native-scheduler=eval %S/upf-combinational-domain.sv -o %t/eval 2>&1 | FileCheck %s --check-prefix=AOT
-# RUN: not talos --upf %S/Inputs/upf/two-domains.upf %S/Inputs/upf/design.sv -o %t/multi 2>&1 | FileCheck %s --check-prefix=MULTI
+# RUN: not talos --upf %t/overlap.upf %S/Inputs/upf/design.sv -o %t/overlap 2>&1 | FileCheck %s --check-prefix=OVERLAP
+# RUN: not talos --upf %t/nested.upf %S/Inputs/upf/design.sv -o %t/nested 2>&1 | FileCheck %s --check-prefix=NESTED
 # RUN: not talos --upf %S/Inputs/upf/switchable.upf %t/mixed.sv -o %t/mixed 2>&1 | FileCheck %s --check-prefix=MIXED
 # IEEE 1801-2018 9.5.3: generated NBA tables do not support cancellation yet.
 # AOT: power-loss NBA cancellation requires generic ordering
-# MULTI: initial UPF implementation supports one switchable domain
+# OVERLAP: design instance is selected by multiple switchable domains: upf_test.dut
+# NESTED: nested switchable domains are not implemented
 # MIXED: mixed level/edge sensitivity in a switchable domain is not implemented
 
 #--- mixed.sv
@@ -17,3 +19,21 @@ module upf_test;
   wire q;
   leaf dut(clk, d, q);
 endmodule
+
+#--- overlap.upf
+foreach net {VDD FIRST SECOND} {create_supply_net $net}
+foreach {domain supply} {First FIRST Second SECOND} {
+    create_power_domain $domain -elements dut
+    create_power_switch SW_$domain -domain $domain \
+        -input_supply_port {vin VDD} -output_supply_port [list vout $supply] \
+        -control_port {en power_en} -on_state {ON vin en}
+}
+
+#--- nested.upf
+foreach net {VDD FIRST SECOND} {create_supply_net $net}
+foreach {domain supply element} {First FIRST cluster Second SECOND cluster/child} {
+    create_power_domain $domain -elements $element
+    create_power_switch SW_$domain -domain $domain \
+        -input_supply_port {vin VDD} -output_supply_port [list vout $supply] \
+        -control_port {en power_en} -on_state {ON vin en}
+}

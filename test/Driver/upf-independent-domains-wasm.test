@@ -1,0 +1,7 @@
+# REQUIRES: upf
+# RUN: %split-file %S/upf-independent-domains.test %t
+# RUN: talos --upf %t/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/design.sv -o %t/design.o
+# RUN: %llvm_dist/bin/llvm-readobj --file-headers %t/design.o | FileCheck %s
+# CHECK: Format: WASM
+# CHECK-NEXT: Arch: wasm32
+# CHECK-NEXT: AddressSize: 32bit

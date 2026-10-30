@@ -123,10 +123,10 @@ connections, `create_power_domain`, `set_domain_supply_net`,
 implemented subset are diagnosed. This is an initial vertical slice, not a
 complete IEEE 1801 implementation: input rails are assumed to be powered;
 general supply-network initialization, voltage/state evaluation, the HDL UPF
-package (`supply_on` / `supply_off`), retention, and multiple switchable domains
-remain to be implemented.
+package (`supply_on` / `supply_off`) and retention remain to be implemented.
 
-The simulation slice accepts one scalar logic switch control, packed integral
+The simulation slice accepts independent switchable domains, each with one
+scalar logic switch control, packed integral
 domain state, event-controlled RTL, and combinational logic. Parent-side
 isolation supports an external control and a zero/one clamp, with unknown
 isolation control producing corruption even when the data equals the clamp.
@@ -136,7 +136,10 @@ a new edge and does not recover lost register contents. Model initialization
 in `initial` blocks remains unaffected, as specified by IEEE 1801 9.2.1.
 Packed arrays are supported. Blocking timing, user subroutines, forked work,
 unpacked/struct state, inout ports, delayed drivers, and non-leaf domain
-elements are diagnosed.
+elements are diagnosed. Explicitly selecting an instance in two domains is an
+error; nested-domain extent partitioning and cascaded power switches are
+diagnosed as unsupported. Each domain has independent isolation and pending
+update cancellation.
 
 Power intent lowers after simulation unit preparation and before simulation
 optimization. Generated guards, corruption stores, and sensitivity dependencies

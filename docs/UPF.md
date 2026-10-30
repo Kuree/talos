@@ -31,8 +31,8 @@ can elaborate UPF and generate wasm32 simulations with 32-bit pointers and
 `talos --upf power.upf -emit-slang design.sv -o design.mlir` executes Tcl
 after Slang elaboration and emits resolved `upf.domain` operations. The
 initial command subset includes design scope and object queries, scoped
-`load_upf`, power domains, supply nets/ports, one control-based power switch,
-and parent-located output isolation. Unsupported commands and options produce
+`load_upf`, power domains, supply nets/ports, one control-based power switch
+per domain, and parent-located output isolation. Unsupported commands and options produce
 Tcl errors, which user procedures may handle with `catch` (IEEE 1801-2018
 clause 5.11). The resolved domain retains its UPF declaration's source location.
 

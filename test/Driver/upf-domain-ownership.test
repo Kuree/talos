@@ -1,0 +1,31 @@
+# REQUIRES: upf
+# RUN: %split-file %s %t
+# RUN: not talos --upf %t/power.upf %t/design.sv -o %t/a 2>&1 | FileCheck %s
+# RUN: not talos --upf %t/reverse.upf --upf %t/power.upf %t/design.sv -o %t/b 2>&1 | FileCheck %s
+# IEEE 1801-2018 6.20/8.4: reject a partial ownership conflict before applying
+# either domain, regardless of declaration/application order.
+# CHECK: design instance is selected by multiple switchable domains: top.a2
+
+#--- design.sv
+module leaf(input logic d, output logic q);
+  always_comb q = d;
+endmodule
+module top;
+  logic d, power_en;
+  wire q, q2;
+  leaf a(d, q), a2(d, q2);
+endmodule
+
+#--- power.upf
+foreach net {VDD FIRST SECOND} {create_supply_net $net}
+set rows {Alpha {a a2} FIRST Beta a2 SECOND}
+if {[info exists reverse_domains]} {set rows {Beta {a a2} FIRST Alpha a2 SECOND}}
+foreach {name elements supply} $rows {
+    create_power_domain $name -elements $elements
+    create_power_switch SW_$name -domain $name \
+        -input_supply_port {vin VDD} -output_supply_port [list vout $supply] \
+        -control_port {en power_en} -on_state {ON vin en}
+}
+
+#--- reverse.upf
+set reverse_domains 1

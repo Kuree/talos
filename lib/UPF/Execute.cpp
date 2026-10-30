@@ -23,7 +23,7 @@ namespace talos {
 #ifdef TALOS_ENABLE_UPF
 namespace {
 struct Domain {
-  std::string name, scope, power, switchOutput, control, isolation;
+  std::string name, scope, power, switchInput, switchOutput, control, isolation;
   std::vector<std::string> elements;
   bool onHigh = true, isolationHigh = true;
   int64_t clamp = 0;
@@ -554,10 +554,24 @@ struct Session {
       }
       if (!dom->power.empty() && dom->power != key(output[1]))
         return error("switch output does not drive the domain primary supply");
+      // IEEE 1801-2018 6.24.3: unresolved supplies cannot have multiple
+      // drivers. This slice also requires independently powered input rails;
+      // reject switch cascades in either declaration order (9.2.2-9.2.3).
+      for (auto &[name, other] : domains) {
+        if (&other == dom || other.switchOutput.empty())
+          continue;
+        if (other.switchOutput == key(output[1]))
+          return error(
+              "multiple switches drive the same unresolved supply net");
+        if (other.switchOutput == key(input[1]) ||
+            other.switchInput == key(output[1]))
+          return error("cascaded power switches are not implemented");
+      }
       if (!switches.insert(key(Tcl_GetString(objv[1]))).second)
         return error("duplicate power switch");
       dom->onHigh = onHigh;
       dom->control = resolvedControl;
+      dom->switchInput = key(input[1]);
       dom->power = dom->switchOutput = key(output[1]);
       return TCL_OK;
     }

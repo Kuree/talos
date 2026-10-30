@@ -1,0 +1,41 @@
+# REQUIRES: upf
+# RUN: %split-file %s %t
+# RUN: talos --upf %t/design.upf -emit-slang %t/design.sv -o %t/design.mlir | FileCheck %s
+# IEEE 1801-2018 6.24.3: unresolved nets have one driver. Cascaded supply
+# evaluation (9.2.2-9.2.3) is deferred; test both declaration orders explicitly.
+# CHECK: multiple-switch error cases passed
+
+#--- design.sv
+module leaf(input logic d, output logic q);
+  assign q = d;
+endmodule
+module top;
+  logic d, power_en;
+  wire q, q2, q3;
+  leaf a(d, q), b(d, q2), c(d, q3);
+endmodule
+
+#--- design.upf
+proc expect_error {script pattern} {
+    set code [catch {uplevel 1 $script} message]
+    if {$code != 1 || ![string match $pattern $message]} {
+        error "expected <$pattern>, got code $code <$message>"
+    }
+}
+foreach net {VDD FIRST SECOND THIRD FUTURE} {create_supply_net $net}
+foreach {domain element} {First a Second b Third c} {
+    create_power_domain $domain -elements $element
+}
+proc switch {name domain input output} {
+    create_power_switch $name -domain $domain \
+        -input_supply_port [list vin $input] -output_supply_port [list vout $output] \
+        -control_port {en power_en} -on_state {ON vin en}
+}
+switch First First VDD FIRST
+expect_error {switch Second Second VDD FIRST} {*same unresolved supply net*}
+expect_error {switch Second Second FIRST SECOND} {*cascaded power switches*}
+# Validation failures above must leave the domain and switch name usable.
+switch Second Second FUTURE SECOND
+expect_error {switch Third Third VDD FUTURE} {*cascaded power switches*}
+switch Third Third VDD THIRD
+puts "multiple-switch error cases passed"

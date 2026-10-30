@@ -10,6 +10,7 @@
 #include "talos/Frontend/UPF.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringMap.h"
 using namespace mlir;
 namespace talos {
@@ -630,17 +631,46 @@ struct ElaborateUPFPass
         getOperation().getOps<upf::UPFDomainOp>());
     if (domains.empty())
       return;
-    if (domains.size() != 1) {
-      domains.front().emitError(
-          "the initial UPF implementation supports one switchable domain");
+    // IEEE 1801-2018 6.20 assigns an instance to exactly one effective extent.
+    // Until nested-domain extent partitioning exists, require disjoint roots;
+    // validate the entire inventory before adding any guards or corruption.
+    for (auto [index, domain] : llvm::enumerate(domains))
+      for (auto other : ArrayRef(domains).take_front(index))
+        for (Attribute element : domain.getElements())
+          for (Attribute otherElement : other.getElements()) {
+            StringRef path = cast<StringAttr>(element).getValue();
+            StringRef otherPath = cast<StringAttr>(otherElement).getValue();
+            auto within = [](StringRef child, StringRef parent) {
+              return child == parent ||
+                     (child.starts_with(parent) &&
+                      child.drop_front(parent.size()).starts_with('.'));
+            };
+            if (within(path, otherPath) || within(otherPath, path)) {
+              auto diagnostic = domain.emitError();
+              if (path == otherPath)
+                diagnostic << "design instance is selected by multiple "
+                              "switchable domains: "
+                           << path;
+              else
+                diagnostic << "nested switchable domains are not implemented: "
+                           << domain.getSymName() << " and "
+                           << other.getSymName();
+              signalPassFailure();
+              return;
+            }
+          }
+    auto designs = getOperation().getOps<sim::SimDesignOp>();
+    if (!llvm::hasSingleElement(designs)) {
+      domains.front().emitError("UPF requires exactly one simulation design");
       signalPassFailure();
       return;
     }
-    auto designs = getOperation().getOps<sim::SimDesignOp>();
-    if (llvm::hasSingleElement(designs) &&
-        succeeded(Lowering(*designs.begin()).apply(domains.front())))
-      return;
-    signalPassFailure();
+    Lowering lowering(*designs.begin());
+    for (auto domain : domains)
+      if (failed(lowering.apply(domain))) {
+        signalPassFailure();
+        return;
+      }
   }
 };
 } // namespace
