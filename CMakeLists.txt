@@ -44,6 +44,10 @@ set(TALOS_Z3_SOURCE_DIR "" CACHE PATH
   "Extracted Z3 source tree used instead of the pinned archive")
 set(TALOS_Z3_INSTALL_DIR "" CACHE PATH
   "Existing pinned static Z3 installation for the compiler host")
+set(TALOS_TCL_SOURCE_DIR "" CACHE PATH "Extracted Tcl 9.0.4 source tree")
+set(TALOS_TCL_INSTALL_DIR "" CACHE PATH "Existing static Tcl 9.0 installation")
+set(TALOS_TCL_STATIC_LIBRARY "" CACHE FILEPATH
+  "Static Tcl 9.0.4 archive within TALOS_TCL_INSTALL_DIR (optional override)")
 
 # Op definitions generated from the SystemVerilog AST inventory dominate the
 # build's critical path when one translation unit compiles a whole dialect.
@@ -695,6 +699,14 @@ if(TALOS_ENABLE_Z3)
 endif()
 
 find_package(Python 3.8 COMPONENTS Interpreter REQUIRED)
+set(_talos_upf_default ON)
+if(EMSCRIPTEN OR (WIN32 AND NOT TALOS_TCL_INSTALL_DIR))
+  set(_talos_upf_default OFF)
+endif()
+option(TALOS_ENABLE_UPF "Embed the Tcl core for UPF elaboration" ${_talos_upf_default})
+if(TALOS_ENABLE_UPF)
+  include("${PROJECT_SOURCE_DIR}/cmake/TclCore.cmake")
+endif()
 if(TALOS_SLANG_PREBUILT_BUILD_DIR)
   include("${PROJECT_SOURCE_DIR}/cmake/PrebuiltSlang.cmake")
   talos_import_prebuilt_slang()

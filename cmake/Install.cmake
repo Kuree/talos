@@ -36,6 +36,13 @@ install(FILES "${PROJECT_SOURCE_DIR}/LICENSE"
   DESTINATION share/talos/licenses COMPONENT talos)
 install(DIRECTORY "${PROJECT_SOURCE_DIR}/docs/third-party/licenses/"
   DESTINATION share/talos/licenses COMPONENT talos)
+if(TALOS_ENABLE_UPF)
+  install(DIRECTORY "${TALOS_TCL_LIBRARY_DIR}/"
+    DESTINATION lib/talos/tcl9.0 COMPONENT talos
+    PATTERN "encoding" EXCLUDE PATTERN "*.enc" EXCLUDE
+    PATTERN "cookiejar*" EXCLUDE
+    PATTERN "install.tcl" EXCLUDE PATTERN "tclAppInit.c" EXCLUDE)
+endif()
 set(_talos_llvm_license "${TALOS_LLVM_DIST_DIR}/include/llvm/Support/LICENSE.TXT")
 if(NOT EXISTS "${_talos_llvm_license}")
   # Some conda SDKs omit this header-tree copy. The project carries the same

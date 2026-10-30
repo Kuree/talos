@@ -1,0 +1,4 @@
+# REQUIRES: upf
+# RUN: %tcl-core-test "%tcl-library"
+# IEEE 1801-2018 5.1 requires full Tcl execution; validate the reduced core's
+# script library, Unicode support and lack of GUI/legacy encoding payloads.

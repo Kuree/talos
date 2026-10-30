@@ -1,5 +1,10 @@
 Talos binary distributions include code from these projects:
 
+Tcl core 9.0.4 (when TALOS_ENABLE_UPF is enabled; no Tk)
+https://github.com/tcltk/tcl/tree/core-9-0-4
+See tcl-license.terms (permissive Tcl/Tk license).
+Tcl's bundled LibTomMath is public domain / Unlicense; see tcl-libtommath-LICENSE.
+
 LLVM, MLIR, Clang, LLD, libc++, libc++abi, and libunwind
 Version pinned in CMakeLists.txt (22.1.6; 22.1.8 on Windows ARM64).
 https://github.com/llvm/llvm-project

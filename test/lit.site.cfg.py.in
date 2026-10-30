@@ -8,6 +8,8 @@ config.talos_host_c_runtime_test_executable = "@PROJECT_BINARY_DIR@/tools/driver
 config.talos_coverage_fixture_executable = "@PROJECT_BINARY_DIR@/test/talos-coverage-fixture"
 config.talos_coverage_scaling_fixture_executable = "@PROJECT_BINARY_DIR@/test/talos-coverage-scaling-fixture"
 config.talos_source_tokens_test_executable = "@PROJECT_BINARY_DIR@/test/talos-source-tokens-test"
+config.talos_tcl_core_test_executable = "@PROJECT_BINARY_DIR@/test/talos-tcl-core-test"
+config.talos_tcl_library_dir = r"@TALOS_TCL_LIBRARY_DIR@"
 config.talos_resource_dir = "@PROJECT_BINARY_DIR@/lib/talos"
 config.talos_filecheck_dir = "@PROJECT_BINARY_DIR@/tools/filecheck"
 config.talos_opt_dir = "@PROJECT_BINARY_DIR@/tools/talos-opt"
@@ -30,6 +32,7 @@ config.python_executable = r"@Python_EXECUTABLE@"
 config.real_uvm_dir = r"@TALOS_REAL_UVM_DIR@"
 config.enable_real_uvm_tests = "@TALOS_ENABLE_REAL_UVM_TESTS@" == "ON"
 config.enable_z3 = "@TALOS_ENABLE_Z3@" == "ON"
+config.enable_upf = "@TALOS_ENABLE_UPF@" == "ON"
 
 import lit.llvm
 lit.llvm.initialize(lit_config, config)

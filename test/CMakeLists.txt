@@ -69,6 +69,14 @@ set_target_properties(talos-source-tokens-test PROPERTIES
   CXX_STANDARD_REQUIRED ON
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 
+if(TALOS_ENABLE_UPF)
+  add_executable(talos-tcl-core-test EXCLUDE_FROM_ALL Support/TclCoreTest.cpp)
+  target_link_libraries(talos-tcl-core-test PRIVATE TalosTclCore)
+  target_compile_features(talos-tcl-core-test PRIVATE cxx_std_17)
+  set_target_properties(talos-tcl-core-test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+endif()
+
 function(talos_add_generated_process_object output_var directory input_file)
   set(generated_dir "${CMAKE_CURRENT_BINARY_DIR}/${directory}")
   set(generated_mlir "${generated_dir}/process.mlir")
@@ -553,6 +561,9 @@ set(TALOS_TEST_DEPENDS
   ${_talos_driver_test_dependencies}
   ${TALOS_RUNTIME_UNIT_TARGETS}
 )
+if(TARGET talos-tcl-core-test)
+  list(APPEND TALOS_TEST_DEPENDS talos-tcl-core-test)
+endif()
 add_custom_target(talos-test-depends DEPENDS ${TALOS_TEST_DEPENDS})
 set_target_properties(talos-test-depends PROPERTIES FOLDER "Tests")
 

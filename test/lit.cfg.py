@@ -62,6 +62,8 @@ config.substitutions.append(
 config.substitutions.append(
     ("%source-tokens-test", config.talos_source_tokens_test_executable)
 )
+config.substitutions.append(("%tcl-core-test", '"{}"'.format(config.talos_tcl_core_test_executable)))
+config.substitutions.append(("%tcl-library", config.talos_tcl_library_dir))
 config.substitutions.append(
     ("%resource_dir", '"{}"'.format(config.talos_resource_dir))
 )
@@ -208,6 +210,9 @@ llvm_config.add_tool_substitutions(
 if config.enable_real_uvm_tests:
     config.available_features.add("real-uvm")
     config.substitutions.append(("%uvm", config.real_uvm_dir))
+
+if config.enable_upf:
+    config.available_features.add("upf")
 
 if config.enable_z3:
     config.available_features.add("z3")
