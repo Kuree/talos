@@ -1,0 +1,9 @@
+# REQUIRES: upf
+# RUN: %split-file %S/upf-switch-expressions.test %t/compound
+# RUN: %split-file %S/upf-switch-unknown.test %t/unknown
+# RUN: %split-file %S/upf-switch-sizing.test %t/sizing
+# RUN: talos --upf %t/compound/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/compound/design.sv -o %t/compound.o
+# RUN: talos --upf %t/unknown/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/unknown/design.sv -o %t/unknown.o
+# RUN: talos --upf %t/sizing/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/sizing/design.sv -o %t/sizing.o
+# RUN: %llvm_dist/bin/llvm-readobj --file-headers %t/compound.o %t/unknown.o %t/sizing.o | FileCheck %s
+# CHECK-COUNT-3: AddressSize: 32bit

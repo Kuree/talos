@@ -64,8 +64,8 @@ set switch_options {-domain PD -input_supply_port {vin VDD} -output_supply_port 
 expect_error {create_power_switch SW -domain PD} {*missing power-switch option*}
 expect_error {create_power_switch SW {*}$switch_options -control_port {en absent} -on_state {ON vin en}} {*object not found*}
 expect_error {create_power_switch SW {*}$switch_options -control_port {en wide} -on_state {ON vin en}} {*one-bit integral*}
-expect_error {create_power_switch SW {*}$switch_options -control_port {en power_en} -on_state {ON vin {en && other}}} {*one control port*}
-expect_error {create_power_switch SW {*}$switch_options -control_port {en power_en} -on_state {ON vin en} -off_state {OFF en}} {*complement*}
+expect_error {create_power_switch SW {*}$switch_options -control_port {en power_en} -on_state {ON vin {en && other}}} {*object not found*}
+expect_error {create_power_switch SW {*}$switch_options -control_port {en power_en} -on_state {ON vin en} -off_state {OFF}} {*name expression*}
 create_power_switch SW {*}$switch_options -control_port {en power_en} -on_state {ON vin en} -off_state {OFF {!en}}
 expect_error {create_power_switch Extra {*}$switch_options -control_port {en power_en} -on_state {ON vin en}} {*one power switch*}
 set isolation_options {-domain PD -isolation_signal iso -applies_to outputs -location parent}

@@ -125,8 +125,13 @@ complete IEEE 1801 implementation: input rails are assumed to be powered;
 general supply-network initialization, voltage/state evaluation, the HDL UPF
 package (`supply_on` / `supply_off`) and retention remain to be implemented.
 
-The simulation slice accepts independent switchable domains, each with one
-scalar logic switch control. It supports packed integral domain state,
+The simulation slice accepts independent switchable domains, each with a
+Boolean switch condition over scalar integral controls. Resolved typed postfix
+attributes retain ON/OFF expression structure, widths and signedness (IEEE
+1801-2018 5.4/6.22). The switch monitor watches all referenced controls, but
+restoration wakes level logic through the aggregate NORMAL state. Guards and
+NBA helpers evaluate controls inline to avoid stale monitor state. It supports
+packed integral domain state,
 event-controlled RTL, and combinational logic. Parent-side
 isolation supports an external control and a zero/one clamp, with unknown
 isolation control producing corruption even when the data equals the clamp.

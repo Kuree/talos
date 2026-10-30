@@ -48,6 +48,36 @@ latches reevaluate on restoration. Synchronous external helper calls are
 supported after checking their call closure; asynchronous or indirect calls
 remain diagnosed. Input expressions owned by an exterior parent remain active.
 
+Power switches accept repeated `-control_port {alias design_object}` options
+and Boolean ON/OFF expressions (clauses 5.4 and 6.22). Controls are scalar
+integral objects, including singleton packed arrays. Expressions support
+parentheses, `!`, `~`, comparisons, `&`, `^`, `|`, `&&`, and `||`, preserving
+SystemVerilog precedence, widths, signedness, and four-state intermediates.
+For example:
+
+```tcl
+create_power_switch SW -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout VDD_SW} \
+    -control_port {en power_en} -control_port {ready power_ready} \
+    -on_state {ON vin {en && ready}} -off_state {OFF {!en}}
+```
+
+Every ON expression reference must be known, even when masked by another
+operand; unused and OFF-only controls do not affect that knownness check
+(clause 6.22). Independent explicit OFF expressions are supported. Simultaneous
+true ON/OFF conditions report a simulation error and corrupt the domain.
+Changes that leave aggregate power NORMAL do not activate RTL; restoration
+reevaluates level logic, while pending updates from before power loss remain
+cancelled (clauses 9.2.2, 9.5.3, and 9.6.7).
+
+This slice supports one input supply and one ON state per switch. Sized SV
+literals of 1..4096 bits, unbased fill literals, and unsized decimal values
+0..2147483647 are accepted; other unsized literals require an explicit width.
+Wide values require an explicit comparison at Boolean boundaries, except
+literal zero/one, avoiding an implicit coercion beyond clause 5.4's Boolean
+definition. Expressions are bounded to 64 KiB, 4096 tokens, and 256 tree levels;
+unsupported syntax and limit violations are catchable Tcl errors.
+
 User Tcl libraries can be sourced or imported with standard Tcl packages
 (IEEE 1801-2018 clause 5.1):
 

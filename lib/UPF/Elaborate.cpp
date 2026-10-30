@@ -13,6 +13,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/StringMap.h"
 using namespace mlir;
 namespace talos {
@@ -111,13 +112,210 @@ Value equalsLevel(OpBuilder &b, Location loc, Value value, bool high) {
   return arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq, value,
                                arith::ConstantIntOp::create(b, loc, high, 1));
 }
-Value powerOn(OpBuilder &b, Location loc, Value context, Descriptor control,
-              bool high) {
-  // Initial 6.22 switch slice: input rails are assumed FULL_ON. General supply
-  // initialization/evaluation (9.2.1-9.2.3) remains outside this prototype.
-  return equalsLevel(b, loc, load(b, loc, handle(b, loc, context, control)),
-                     high);
-}
+using Opcode = upf::ExpressionOpcode;
+struct Expression {
+  struct Node {
+    upf::ExpressionTokenAttr token;
+    unsigned left = 0, right = 0, width = 1;
+    bool isSigned = false;
+  };
+  SmallVector<Node> nodes;
+  llvm::SetVector<StringRef> controls;
+  Expression(upf::ExpressionAttr expression) {
+    if (!expression)
+      return;
+    SmallVector<unsigned> stack;
+    for (auto attr : expression.getTokens()) {
+      auto token = cast<upf::ExpressionTokenAttr>(attr);
+      Node node{token};
+      switch (token.getOpcode()) {
+      case Opcode::Control:
+        controls.insert(token.getControl().getValue());
+        node.isSigned = token.getIsSigned();
+        break;
+      case Opcode::Constant:
+        node.width = token.getValue().getValue().getBitWidth();
+        node.isSigned = token.getIsSigned();
+        break;
+      case Opcode::Not:
+      case Opcode::BitNot:
+        node.left = stack.pop_back_val();
+        if (token.getOpcode() == Opcode::BitNot) {
+          node.width = nodes[node.left].width;
+          node.isSigned = nodes[node.left].isSigned;
+        }
+        break;
+      default:
+        node.right = stack.pop_back_val();
+        node.left = stack.pop_back_val();
+        if (token.getOpcode() == Opcode::BitAnd ||
+            token.getOpcode() == Opcode::BitXor ||
+            token.getOpcode() == Opcode::BitOr) {
+          node.width =
+              std::max(nodes[node.left].width, nodes[node.right].width);
+          node.isSigned =
+              nodes[node.left].isSigned && nodes[node.right].isSigned;
+        }
+        break;
+      }
+      stack.push_back(nodes.size());
+      nodes.push_back(node);
+    }
+  }
+  Value emit(OpBuilder &b, Location loc, Value context,
+             const llvm::StringMap<Descriptor> &descriptors, unsigned index,
+             unsigned width = 0, bool isSigned = false) const {
+    const Node &node = nodes[index];
+    if (!width) {
+      width = node.width;
+      isSigned = node.isSigned;
+    }
+    auto type = sim::LogicType::get(b.getContext(), width);
+    auto resize = [&](Value value, bool sign) -> Value {
+      if (value.getType() == type)
+        return value;
+      return sim::SimLogicResizeOp::create(b, loc, type, value, sign);
+    };
+    auto child = [&](unsigned index, unsigned width = 0, bool sign = false) {
+      return emit(b, loc, context, descriptors, index, width, sign);
+    };
+    switch (node.token.getOpcode()) {
+    case Opcode::Control: {
+      Value value = flatten(
+          b, loc,
+          load(b, loc,
+               handle(b, loc, context,
+                      descriptors.lookup(node.token.getControl().getValue()))));
+      if (isa<IntegerType>(value.getType()))
+        value = sim::SimLogicFromBitsOp::create(
+            b, loc, sim::LogicType::get(b.getContext(), 1), value);
+      return resize(value, isSigned);
+    }
+    case Opcode::Constant: {
+      APInt value = node.token.getValue().getValue();
+      APInt unknown = node.token.getUnknown().getValue();
+      auto extend = [&](APInt plane) {
+        return node.token.getFill() || isSigned ? plane.sextOrTrunc(width)
+                                                : plane.zextOrTrunc(width);
+      };
+      auto integer = b.getIntegerType(width);
+      return sim::SimLogicConstantOp::create(
+          b, loc, type, b.getIntegerAttr(integer, extend(value)),
+          b.getIntegerAttr(integer, extend(unknown)));
+    }
+    case Opcode::BitNot:
+      // IEEE 1801-2018 5.4 uses SV expression sizing: the comparison/bitwise
+      // context must reach the operand BEFORE applying ~, &, ^, or |.
+      return sim::SimLogicUnaryOp::create(b, loc, type, sim::UnaryKind::BitNot,
+                                          child(node.left, width, isSigned));
+    case Opcode::Not: {
+      auto resultType = sim::LogicType::get(b.getContext(), 1);
+      Value value = sim::SimLogicUnaryOp::create(
+          b, loc, resultType, sim::UnaryKind::LogicalNot, child(node.left));
+      return resize(value, false);
+    }
+    case Opcode::BitAnd:
+    case Opcode::BitXor:
+    case Opcode::BitOr: {
+      auto kind =
+          node.token.getOpcode() == Opcode::BitAnd   ? sim::BinaryKind::And
+          : node.token.getOpcode() == Opcode::BitXor ? sim::BinaryKind::Xor
+                                                     : sim::BinaryKind::Or;
+      return sim::SimLogicBinaryOp::create(b, loc, type, kind,
+                                           child(node.left, width, isSigned),
+                                           child(node.right, width, isSigned));
+    }
+    case Opcode::And:
+    case Opcode::Or: {
+      auto kind = node.token.getOpcode() == Opcode::And ? sim::LogicalKind::And
+                                                        : sim::LogicalKind::Or;
+      Value value = sim::SimLogicLogicalOp::create(
+          b, loc, sim::LogicType::get(b.getContext(), 1), kind,
+          child(node.left), child(node.right));
+      return resize(value, false);
+    }
+    default: {
+      unsigned operandWidth =
+          std::max(nodes[node.left].width, nodes[node.right].width);
+      bool sign = nodes[node.left].isSigned && nodes[node.right].isSigned;
+      sim::CompareKind kind;
+      switch (node.token.getOpcode()) {
+      case Opcode::Equal:
+        kind = sim::CompareKind::Eq;
+        break;
+      case Opcode::NotEqual:
+        kind = sim::CompareKind::Ne;
+        break;
+      case Opcode::Less:
+        kind = sign ? sim::CompareKind::SLT : sim::CompareKind::ULT;
+        break;
+      case Opcode::LessEqual:
+        kind = sign ? sim::CompareKind::SLE : sim::CompareKind::ULE;
+        break;
+      case Opcode::Greater:
+        kind = sign ? sim::CompareKind::SGT : sim::CompareKind::UGT;
+        break;
+      case Opcode::GreaterEqual:
+        kind = sign ? sim::CompareKind::SGE : sim::CompareKind::UGE;
+        break;
+      default:
+        llvm_unreachable("verified UPF expression opcode");
+      }
+      Value value = sim::SimLogicCompareOp::create(
+          b, loc, sim::LogicType::get(b.getContext(), 1), kind,
+          child(node.left, operandWidth, sign),
+          child(node.right, operandWidth, sign));
+      return resize(value, false);
+    }
+    }
+  }
+  Value predicate(OpBuilder &b, Location loc, Value context,
+                  const llvm::StringMap<Descriptor> &descriptors) const {
+    Value value = emit(b, loc, context, descriptors, nodes.size() - 1);
+    unsigned width = cast<sim::LogicType>(value.getType()).getWidth();
+    // IEEE 1801-2018 5.4 defines True as the known value 1, otherwise False.
+    auto integer = b.getIntegerType(width);
+    Value one = sim::SimLogicConstantOp::create(
+        b, loc, value.getType(), b.getIntegerAttr(integer, APInt(width, 1)),
+        b.getIntegerAttr(integer, APInt(width, 0)));
+    return sim::SimLogicCompareOp::create(b, loc, b.getI1Type(),
+                                          sim::CompareKind::CaseEq, value, one);
+  }
+};
+struct PowerCondition {
+  Expression on, off;
+  const llvm::StringMap<Descriptor> &descriptors;
+  PowerCondition(upf::UPFDomainOp domain,
+                 const llvm::StringMap<Descriptor> &descriptors)
+      : on(domain.getOn()), off(domain.getOffAttr()), descriptors(descriptors) {
+  }
+  Value normal(OpBuilder &b, Location loc, Value context) const {
+    // IEEE 1801-2018 6.22: FULL_ON input rails are assumed by this slice.
+    // Any X/Z object referenced by ON contributes UNDETERMINED, even when
+    // masked by a constant. Unused and OFF-only controls do not participate.
+    Value result = on.predicate(b, loc, context, descriptors);
+    for (StringRef path : on.controls) {
+      Value value =
+          load(b, loc, handle(b, loc, context, descriptors.lookup(path)));
+      Value known =
+          arith::OrIOp::create(b, loc, equalsLevel(b, loc, value, false),
+                               equalsLevel(b, loc, value, true));
+      result = arith::AndIOp::create(b, loc, result, known);
+    }
+    if (!off.nodes.empty()) {
+      Value disabled = off.predicate(b, loc, context, descriptors);
+      Value enabled = arith::XOrIOp::create(
+          b, loc, disabled, arith::ConstantIntOp::create(b, loc, 1, 1));
+      result = arith::AndIOp::create(b, loc, result, enabled);
+    }
+    return result;
+  }
+  Value conflict(OpBuilder &b, Location loc, Value context) const {
+    return arith::AndIOp::create(b, loc,
+                                 on.predicate(b, loc, context, descriptors),
+                                 off.predicate(b, loc, context, descriptors));
+  }
+};
 Value logicSelect(OpBuilder &b, Location loc, Value condition, Value yes,
                   Value no) {
   Value logic = sim::SimLogicFromBitsOp::create(
@@ -346,7 +544,8 @@ struct Lowering {
     }
     return success();
   }
-  LogicalResult gate(sim::SimFuncOp fn, Descriptor control, bool high) {
+  LogicalResult gate(sim::SimFuncOp fn, const PowerCondition &condition,
+                     Descriptor restoration) {
     SmallVector<Operation *> waits;
     fn.walk([&](Operation *op) {
       if (op->getName().getStringRef().starts_with("simulation.suspend."))
@@ -369,11 +568,11 @@ struct Lowering {
         op.erase();
       }
       builder.setInsertionPointToEnd(&entry);
-      Value watched = handle(builder, fn.getLoc(), fn.getArgument(0), control);
+      Value watched =
+          handle(builder, fn.getLoc(), fn.getArgument(0), restoration);
       cf::BranchOp::create(builder, fn.getLoc(), activation);
       builder.setInsertionPointToEnd(activation);
-      Value on =
-          powerOn(builder, fn.getLoc(), fn.getArgument(0), control, high);
+      Value on = condition.normal(builder, fn.getLoc(), fn.getArgument(0));
       cf::CondBranchOp::create(builder, fn.getLoc(), on, body, wait);
       builder.setInsertionPointToEnd(wait);
       sim::SimSuspendChangeOp::create(
@@ -411,7 +610,7 @@ struct Lowering {
                           "sensitivity loop");
     Block *body = gate->splitBlock(gate->begin());
     builder.setInsertionPointToEnd(gate);
-    Value on = powerOn(builder, fn.getLoc(), fn.getArgument(0), control, high);
+    Value on = condition.normal(builder, fn.getLoc(), fn.getArgument(0));
     cf::CondBranchOp::create(builder, fn.getLoc(), on, body, ValueRange{}, skip,
                              ValueRange{});
     // IEEE 1801-2018 9.6.7: restoration reevaluates combinational/level logic,
@@ -427,9 +626,11 @@ struct Lowering {
                             "domain is not implemented");
       edgeSensitive = edge;
     }
-    return edgeSensitive ? success() : watch(fn, control);
+    // Only aggregate power transitions wake level logic. A raw control can
+    // change while the domain remains NORMAL without activating HDL code.
+    return edgeSensitive ? success() : watch(fn, restoration);
   }
-  void nba(sim::SimNBAEnqueueOp enqueue, Descriptor control, bool high,
+  void nba(sim::SimNBAEnqueueOp enqueue, const PowerCondition &condition,
            Descriptor epoch) {
     // IEEE 1801-2018 9.5.3: events queued before CORRUPT have no effect.
     // Capturing the epoch also prevents an OFF/ON cycle from reviving an old
@@ -458,7 +659,7 @@ struct Lowering {
         load(builder, loc, handle(builder, loc, entry.getArgument(0), epoch));
     Value same = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::eq,
                                        current, entry.getArgument(3));
-    Value on = powerOn(builder, loc, entry.getArgument(0), control, high);
+    Value on = condition.normal(builder, loc, entry.getArgument(0));
     Value valid = arith::AndIOp::create(builder, loc, same, on);
     cf::CondBranchOp::create(builder, loc, valid, publish, done);
     builder.setInsertionPointToEnd(publish);
@@ -486,14 +687,25 @@ struct Lowering {
   LogicalResult apply(upf::UPFDomainOp domain) {
     if (!root)
       return domain.emitError("UPF needs an executable design root");
-    auto controlFound = descriptors.find(domain.getControl());
-    if (controlFound == descriptors.end())
-      return domain.emitError(
-          "power control is absent from the simulation design");
-    Descriptor control = controlFound->second;
-    if (contains(domain, domain.getControl()))
-      return domain.emitError(
-          "power control must be outside the switchable domain");
+    PowerCondition condition(domain, descriptors);
+    llvm::SetVector<StringRef> controls = condition.on.controls;
+    for (StringRef path : condition.off.controls)
+      controls.insert(path);
+    for (StringRef path : controls) {
+      auto found = descriptors.find(path);
+      if (found == descriptors.end())
+        return domain.emitError(
+                   "power control is absent from the simulation design: ")
+               << path;
+      if (!supportedState(found->second.type) ||
+          sim::getPackedWidth(found->second.type) != 1)
+        return domain.emitError("power control must be one-bit integral: ")
+               << path;
+      if (contains(domain, path))
+        return domain.emitError(
+                   "power control must be outside the switchable domain: ")
+               << path;
+    }
     llvm::DenseSet<uint64_t> computedInputs;
     for (auto unit : design.getOps<sim::SimCodeUnitDeclOp>())
       if (sim::has<sim::metadata::ComputedPortInput>(unit) &&
@@ -662,6 +874,8 @@ struct Lowering {
     Descriptor epoch = storage(loc, prefix + ".epoch", builder.getI64Type());
     Descriptor previous =
         storage(loc, prefix + ".previous", builder.getI1Type());
+    Descriptor restoration =
+        storage(loc, prefix + ".normal", builder.getI1Type());
     for (auto process : processes) {
       WalkResult supported = process.walk([&](Operation *op) {
         StringRef name = op->getName().getStringRef();
@@ -721,8 +935,8 @@ struct Lowering {
       SmallVector<sim::SimNBAEnqueueOp> enqueues;
       process.walk([&](sim::SimNBAEnqueueOp op) { enqueues.push_back(op); });
       for (auto enqueue : enqueues)
-        nba(enqueue, control, domain.getOnHigh(), epoch);
-      if (failed(gate(process, control, domain.getOnHigh())))
+        nba(enqueue, condition, epoch);
+      if (failed(gate(process, condition, restoration)))
         return failure();
     }
     auto monitor = function(loc, prefix + ".monitor",
@@ -737,11 +951,40 @@ struct Lowering {
     builder.setInsertionPointToEnd(&entry);
     Value context = entry.getArgument(0),
           epochRef = handle(builder, loc, context, epoch);
-    Value previousRef = handle(builder, loc, context, previous),
-          watched = handle(builder, loc, context, control);
+    Value previousRef = handle(builder, loc, context, previous);
+    Value normalRef = handle(builder, loc, context, restoration);
+    SmallVector<Value> watched;
+    for (StringRef path : controls)
+      watched.push_back(
+          handle(builder, loc, context, descriptors.lookup(path)));
     cf::BranchOp::create(builder, loc, loop);
     builder.setInsertionPointToEnd(loop);
-    Value on = powerOn(builder, loc, context, control, domain.getOnHigh());
+    Value on = condition.normal(builder, loc, context);
+    store(builder, loc, normalRef, on);
+    // IEEE 1801-2018 6.22: an explicit OFF simultaneously true with ON
+    // reports an error and contributes UNDETERMINED (CORRUPT in this slice).
+    if (!condition.off.nodes.empty()) {
+      Value conflict = condition.conflict(builder, loc, context);
+      Block *report = new Block, *evaluate = new Block;
+      monitor.getBody().push_back(report);
+      monitor.getBody().push_back(evaluate);
+      cf::CondBranchOp::create(builder, loc, conflict, report, evaluate);
+      builder.setInsertionPointToEnd(report);
+      sim::SimErrorOp::create(builder, loc, context);
+      Value descriptor =
+          arith::ConstantIntOp::create(builder, loc, 0x80000002u, 32);
+      Value message = sim::SimBytesConstantOp::create(
+          builder, loc,
+          "UPF domain " + domain.getSymName().str() +
+              ": ON and OFF conditions are simultaneously true (IEEE 1801-2018 "
+              "6.22)");
+      sim::SimDisplayOp::create(builder, loc, context, descriptor,
+                                ValueRange{message}, true, sim::Radix::Decimal,
+                                builder.getDenseI32ArrayAttr({0}), StringAttr{},
+                                StringAttr{}, IntegerAttr{}, IntegerAttr{});
+      cf::BranchOp::create(builder, loc, evaluate);
+      builder.setInsertionPointToEnd(evaluate);
+    }
     Value wasOn = load(builder, loc, previousRef);
     store(builder, loc, previousRef, on);
     Value off = arith::XOrIOp::create(
@@ -770,9 +1013,15 @@ struct Lowering {
     }
     cf::BranchOp::create(builder, loc, wait);
     builder.setInsertionPointToEnd(wait);
-    sim::SimSuspendChangeOp::create(builder, loc, watched, ValueRange{},
-                                    schedule::ContinuationSiteAttr{},
-                                    sim::EventRegionAttr{}, loop);
+    // IEEE 1801-2018 9.2.2: any referenced ON/OFF control reevaluates the
+    // switch. A constant condition needs only its initial evaluation.
+    if (watched.empty())
+      sim::SimReturnOp::create(builder, loc, ValueRange{});
+    else
+      sim::SimSuspendAnyOp::create(
+          builder, loc, watched,
+          builder.getDenseI32ArrayAttr(SmallVector<int32_t>(watched.size(), 0)),
+          schedule::ContinuationSiteAttr{}, sim::EventRegionAttr{}, loop);
     Operation *firstSpawn = nullptr;
     for (Operation &op : root.getBody().front())
       if (isa<sim::SimSpawnOp>(op)) {
@@ -786,6 +1035,11 @@ struct Lowering {
           arith::ConstantIntOp::create(builder, loc, 0, 64));
     store(builder, loc, handle(builder, loc, rootContext, previous),
           arith::ConstantIntOp::create(builder, loc, 1, 1));
+    // Seed before spawning HDL actors, avoiding a false restoration event
+    // when the domain starts NORMAL. Guards still evaluate raw controls inline
+    // so clock/NBA execution never depends on monitor scheduling order.
+    store(builder, loc, handle(builder, loc, rootContext, restoration),
+          condition.normal(builder, loc, rootContext));
     sim::SimSpawnOp::create(builder, loc, monitor.getSymNameAttr(),
                             ValueRange{rootContext}, ArrayAttr{}, ArrayAttr{});
     domain.erase();

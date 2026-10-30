@@ -1,0 +1,64 @@
+# REQUIRES: upf
+# RUN: %split-file %s %t
+# RUN: talos --upf %t/design.upf -emit-slang %t/design.sv -o %t.mlir | FileCheck %s
+# IEEE 1801-2018 5.4/5.11/6.22: malformed expressions and declarations are
+# catchable Tcl errors, and must leave the same switch/domain usable.
+# CHECK: switch expression error cases passed
+
+#--- design.sv
+module leaf(output wire q);
+  assign q = 1'b1;
+endmodule
+module top;
+  logic a, b;
+  logic [1:0] wide;
+  wire q;
+  leaf dut(q);
+endmodule
+
+#--- design.upf
+proc expect_error {script pattern} {
+    set code [catch {uplevel 1 $script} message]
+    if {$code != 1 || ![string match $pattern $message]} {
+        error "expected <$pattern>, got code $code <$message>"
+    }
+}
+create_power_domain PD -elements dut
+foreach net {VDD SW} {create_supply_net $net}
+set base {-domain PD -input_supply_port {vin VDD} -output_supply_port {vout SW}}
+set ports {-control_port {en a} -control_port {other b}}
+proc on_expression {expression} {
+    create_power_switch PS {*}$::base {*}$::ports -on_state [list ON vin $expression]
+}
+foreach expression {{} {!} {en &&} {()} {(en} {en)} {en other} {en === 1}
+                    {en + other} {en << 1} {en ? 1 : 0} {en = 1} {en(other)}
+                    {&en} {1'b2} {0'b1} {4097'h1} {1'_b1} {4'b_1}
+                    {'x_} {'?} {4's_b1} {32'h} {32'dxz}} {
+    expect_error [list on_expression $expression] {*Boolean expression*}
+}
+expect_error {on_expression absent} {*object not found*}
+expect_error {on_expression {'hff == 1}} {*explicit width*}
+expect_error {on_expression {2147483648 == 0}} {*explicit width*}
+foreach expression {{~1} {32'h2} {~1 && en} {!32'h2}} {
+    expect_error [list on_expression $expression] {*explicit comparison*}
+}
+expect_error [list on_expression [string repeat ! 257]en] {*256 levels*}
+expect_error [list on_expression "[string repeat ( 257]en[string repeat ) 257]"] {*256 levels*}
+expect_error [list on_expression [join [lrepeat 300 en] ||]] {*256 levels*}
+expect_error [list on_expression [string repeat " " 65537]] {*64 KiB*}
+# An almost balanced tree exceeds the token budget before the depth budget.
+set tree en
+for {set i 0} {$i < 12} {incr i} {set tree "($tree || $tree)"}
+expect_error [list on_expression $tree] {*4096 tokens*}
+expect_error {create_power_switch PS {*}$base {*}$ports -control_port {en b} -on_state {ON vin en}} {*duplicate power-switch port*}
+expect_error {create_power_switch PS {*}$base -control_port {vin a} -on_state {ON vin vin}} {*duplicate power-switch port*}
+expect_error {create_power_switch PS {*}$base -control_port {1bad a} -on_state {ON vin en}} {*invalid UPF identifier*}
+expect_error {create_power_switch PS {*}$base -control_port en -on_state {ON vin en}} {*alias design_object*}
+expect_error {create_power_switch PS {*}$base -control_port {en wide} -on_state {ON vin en}} {*one-bit integral*}
+expect_error {create_power_switch PS {*}$base {*}$ports -on_state {ON vin en} -on_state {OTHER vin other}} {*duplicate UPF option*}
+expect_error {create_power_switch PS {*}$base {*}$ports -on_state {ON vin en} -off_state {ON {!en}}} {*duplicate power-switch state*}
+expect_error {create_power_switch PS {*}$base {*}$ports -on_state {ON vin en} -off_state {OFF {!other}} -off_state {OFF2 en}} {*duplicate UPF option*}
+# Direct HDL paths (5.4) and repeated aliases (6.22) bind at declaration time.
+create_power_switch PS {*}$base {*}$ports \
+    -on_state {ON vin {en && (/b || !other)}} -off_state {OFF {!en}}
+puts "switch expression error cases passed"

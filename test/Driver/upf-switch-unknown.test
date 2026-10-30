@@ -1,0 +1,69 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.22: an ON reference to X/Z contributes UNDETERMINED
+// even when ordinary HDL evaluation masks it. OFF-only/unused ports differ.
+// CHECK: switch unknown reference semantics passed
+
+//--- design.sv
+package audit;
+  int calls = 0;
+  function logic sample();
+    calls++;
+    return 1'b1;
+  endfunction
+endpackage
+module leaf(output logic q);
+  always_comb q = audit::sample();
+endmodule
+module top;
+  logic en = 0, off_only = 1'bx, unused_control = 1'bx;
+  wire q;
+  int calls;
+  leaf dut(q);
+  initial begin
+    #1;
+    if (q !== 1'b1 || audit::calls != 1)
+      $fatal(1, "initial NORMAL caused extra RTL activations");
+    en = 1'bx;
+    #1;
+    if (q !== 1'bx || audit::calls != 1)
+      $fatal(1, "masked X powered the domain");
+    en = 1'bz;
+    #1;
+    if (q !== 1'bx || audit::calls != 1)
+      $fatal(1, "masked Z powered the domain");
+    en = 0;
+    #1;
+    if (q !== 1'b1) $fatal(1, "OFF-only or unused X prevented restoration");
+    calls = audit::calls;
+    off_only = 1'bz;
+    #1 en = 1;
+    #1 unused_control = 1'bz;
+    #1;
+    if (q !== 1'b1 || audit::calls != calls)
+      $fatal(1, "knownness or raw-control wakeup is wrong");
+    en = 1'bx;
+    #1;
+    if (q !== 1'bx) $fatal(1, "masked X did not corrupt");
+    en = 1;
+    #1;
+    if (q !== 1'b1) $fatal(1, "second restoration failed");
+    $display("switch unknown reference semantics passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_power_domain PD -elements dut
+foreach net {VDD VDD_SW} {create_supply_net $net}
+create_power_switch SW -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout VDD_SW} \
+    -control_port {enable en} -control_port {off_signal off_only} \
+    -control_port {unused unused_control} \
+    -on_state {ON vin {1 || enable}} -off_state {OFF {off_signal && 0}}

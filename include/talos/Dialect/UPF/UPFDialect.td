@@ -6,5 +6,6 @@ def UPFDialect : Dialect {
   let cppNamespace = "::talos::upf";
   let summary = "elaborated IEEE 1801 power intent";
   let usePropertiesForAttributes = 0;
+  let useDefaultAttributePrinterParser = 1;
 }
 #endif

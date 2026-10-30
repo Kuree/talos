@@ -1,7 +1,9 @@
 add_mlir_library(TalosUPF
   Execute.cpp
+  BooleanExpression.cpp
   Elaborate.cpp
   DEPENDS SlangOpsIncGen TalosSimulationOpsIncGen TalosUPFOpsIncGen
+    TalosUPFAttrsIncGen TalosUPFEnumsIncGen
   LINK_LIBS PUBLIC TalosUPFIR TalosSlangIR TalosSimulationIR
     MLIRArithDialect MLIRControlFlowDialect MLIRIR MLIRPass)
 if(TALOS_ENABLE_UPF)

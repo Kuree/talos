@@ -1,0 +1,53 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --native-scheduler=eval --mlir-verify-each %t/design.sv -o %t.eval
+// RUN: %t.eval | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.22/9.2.2/9.6.7: driver-only domains can use native eval.
+// Changes that preserve NORMAL must not rerun a side-effecting RHS helper.
+// CHECK: eval aggregate switch sensitivity passed
+
+//--- design.sv
+package audit;
+  int calls = 0;
+  function logic sample();
+    calls++;
+    return 1'b1;
+  endfunction
+endpackage
+module leaf(output wire q);
+  assign q = audit::sample();
+endmodule
+module top;
+  logic en = 0;
+  wire q;
+  leaf dut(q);
+  initial begin
+    #1;
+    if (q !== 1'b1 || audit::calls != 1) $fatal(1, "initial activation count");
+    en = 1;
+    #1;
+    if (q !== 1'b1 || audit::calls != 1) $fatal(1, "NORMAL change reran driver");
+    en = 0;
+    #1;
+    if (audit::calls != 1) $fatal(1, "reverse NORMAL change reran driver");
+    en = 1'bx;
+    #1;
+    if (q !== 1'bx || audit::calls != 1) $fatal(1, "masked unknown failed");
+    en = 1;
+    #1;
+    if (q !== 1'b1 || audit::calls != 2) $fatal(1, "restoration activation count");
+    $display("eval aggregate switch sensitivity passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_power_domain PD -elements dut
+foreach net {VDD SW} {create_supply_net $net}
+create_power_switch PS -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout SW} \
+    -control_port {enable en} -on_state {ON vin {1 || enable}}

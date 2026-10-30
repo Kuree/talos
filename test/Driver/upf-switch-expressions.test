@@ -1,0 +1,89 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.22/9.2.2: each expression input reevaluates the switch.
+// 9.5.3 cancels old NBAs; 9.6.7 restores level logic without inventing an edge.
+// CHECK: compound switch expressions passed
+
+//--- design.sv
+package audit;
+  int calls = 0;
+  function logic sample(logic d);
+    calls++;
+    return d;
+  endfunction
+endpackage
+module leaf(input logic clk, d, output logic q, y, output wire constant_q);
+  always @(posedge clk) q <= #3 d;
+  always_comb y = audit::sample(d);
+  assign constant_q = 1'b1;
+endmodule
+module top;
+  logic en = 0, ready = 1, override_en = 0, sleep = 0, unused_control = 1'bx;
+  logic clk = 0, d = 1;
+  wire q, y, constant_q;
+  int calls;
+  leaf dut(clk, d, q, y, constant_q);
+  initial begin
+    #1;
+    if (q !== 1'bx || y !== 1'bx || constant_q !== 1'bx || audit::calls != 0)
+      $fatal(1, "initial OFF failed");
+    en = 1;
+    #1;
+    if (y !== 1'b1 || constant_q !== 1'b1 || q !== 1'bx)
+      $fatal(1, "level restoration invented an edge or failed");
+    clk = 1;
+    #4;
+    if (q !== 1'b1) $fatal(1, "initial NBA failed");
+    calls = audit::calls;
+    override_en = 1;
+    #1 ready = 0;
+    #1 en = 0;
+    #1 sleep = 1;
+    #1;
+    if (audit::calls != calls || y !== 1'b1 || constant_q !== 1'b1)
+      $fatal(1, "control changes while NORMAL reran RTL");
+    // A loss through override cancels this delayed update even after restore.
+    clk = 0; d = 0;
+    #1 clk = 1;
+    #1 override_en = 0;
+    #1;
+    if (q !== 1'bx || y !== 1'bx || constant_q !== 1'bx)
+      $fatal(1, "compound power loss did not corrupt");
+    sleep = 0; // Both explicit ON and OFF now false: still not NORMAL.
+    #1;
+    if (constant_q !== 1'bx) $fatal(1, "independent OFF implied ON");
+    ready = 1; en = 1;
+    #1;
+    if (q !== 1'bx || y !== 1'b0 || constant_q !== 1'b1)
+      $fatal(1, "old NBA survived restoration");
+    clk = 0; d = 1;
+    #1 clk = 1;
+    #4;
+    if (q !== 1'b1 || y !== 1'b1) $fatal(1, "new NBA did not run");
+    ready = 0;
+    #1;
+    if (q !== 1'bx || y !== 1'bx) $fatal(1, "second control did not power down");
+    ready = 1;
+    #1;
+    if (q !== 1'bx || y !== 1'b1) $fatal(1, "ready restoration invented edge");
+    $display("compound switch expressions passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_power_domain PD -elements dut
+foreach net {VDD VDD_SW} {create_supply_net $net}
+create_power_switch SW -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout VDD_SW} \
+    -control_port {enable en} -control_port {rdy ready} \
+    -control_port {force_on override_en} -control_port {sleeping sleep} \
+    -control_port {unused unused_control} \
+    -on_state {ON vin {(enable && rdy) || force_on}} \
+    -off_state {OFF {sleeping && !enable && !force_on}}

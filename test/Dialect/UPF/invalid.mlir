@@ -1,20 +1,20 @@
 // RUN: talos-opt --split-input-file --verify-diagnostics %s
 module {
-  // expected-error @+1 {{requires domain elements and a power control}}
-  upf.domain @empty elements [] control "top.power" on_high = true
+  // expected-error @+1 {{requires domain elements}}
+  upf.domain @empty elements [] on #upf.expression<[#upf.token<opcode = control, control = "top.power">]>
 }
 // -----
 module {
   // expected-error @+1 {{domain element must not be empty}}
-  upf.domain @empty_element elements [""] control "top.power" on_high = true
+  upf.domain @empty_element elements [""] on #upf.expression<[#upf.token<opcode = control, control = "top.power">]>
 }
 // -----
 module {
   // expected-error @+1 {{isolation control must not be empty}}
-  upf.domain @empty_isolation elements ["top.dut"] control "top.power" on_high = true {isolation_control = ""}
+  upf.domain @empty_isolation elements ["top.dut"] on #upf.expression<[#upf.token<opcode = control, control = "top.power">]> {isolation_control = ""}
 }
 // -----
 module {
   // expected-error @+1 {{isolation clamp must be zero or one}}
-  upf.domain @clamp elements ["top.dut"] control "top.power" on_high = true {clamp = 2 : i64}
+  upf.domain @clamp elements ["top.dut"] on #upf.expression<[#upf.token<opcode = control, control = "top.power">]> {clamp = 2 : i64}
 }

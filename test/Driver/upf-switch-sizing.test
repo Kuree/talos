@@ -1,0 +1,87 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 5.4 maps Boolean operators to SV semantics, including
+// precedence and context sizing. 6.22 preserves even masked ON references.
+// CHECK: switch expression sizing and precedence passed
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1'b1;
+endmodule
+module top;
+  logic c = 0;
+  logic signed [0:0] s = 0;
+  wire [15:0] q;
+  leaf bnot(q[0]), sign_control(q[1]), unsigned_control(q[2]),
+       mixed_sign(q[3]), both_signed(q[4]), fill_wide(q[5]),
+       fill_small(q[6]), fill_mask(q[7]), logical_precedence(q[8]),
+       bitwise_precedence(q[9]), compare_precedence(q[10]), relational(q[11]),
+       unknown_literal(q[12]), wide(q[13]), logical_constant(q[14]),
+       off_constant(q[15]);
+  task check;
+    logic [15:0] expected;
+    expected = 'x;
+    if (c === 0) begin
+      expected[0] = 1; expected[2] = 1; expected[10] = 1;
+    end
+    if (c === 1) begin
+      expected[8] = 1; expected[13] = 1;
+    end
+    if (c === 0 || c === 1) begin
+      expected[1] = 1; expected[9] = 1; expected[11] = 1;
+    end
+    expected[4] = 1; expected[6] = 1; expected[7] = 1; expected[14] = 1;
+    if (q !== expected) $fatal(1, "c=%b got=%b expected=%b", c, q, expected);
+  endtask
+  initial begin
+    #1; check();
+    c = 1; s = 1;
+    #1; check();
+    c = 1'bx; s = 1'bx;
+    #1; check();
+    c = 1'bz; s = 1'bz;
+    #1; check();
+    c = 0; s = 0;
+    #1; check();
+    $display("switch expression sizing and precedence passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_net VDD
+foreach {instance expression} {
+    bnot                 {~enable == 32'hffffffff}
+    sign_control         {signed_enable < 1}
+    unsigned_control     {enable < 1}
+    mixed_sign           {8'sh80 == 32'hffffff80}
+    both_signed          {8'sh80 == 32'shffffff80}
+    fill_wide            {'1 == 1}
+    fill_small           {'1 == 1'b1}
+    fill_mask            {('1 & 32'haaaa_aaaa) == 32'haaaaaaaa}
+    logical_precedence   {enable || !enable && 0}
+    bitwise_precedence   {enable | 1'b1 ^ 1'b1 & 1'b0}
+    compare_precedence   {enable == 1'b0 & 2 < 3 ^ 4 >= 5}
+    relational           {(enable <= 0 || enable > 0) && 5 != 6 && 6 == 6}
+    unknown_literal      {4'bx == 4'bx}
+    wide                 {(65'h1_0000000000000000 | enable) == 65'h1_0000000000000001}
+    logical_constant     {!0 && 1 && (1'h2 == 1'b0) && (2'o7 == 2'b11) &&
+                          (1'hf == 1'b1) && (1'h2 == 32'b0) &&
+                          (4096'h1 == 4096'd1) &&
+                          ((8'hx & 8'h0) == 8'h0) && ((8'hz | 8'hff) == 8'hff)}
+    off_constant         {0}
+} {
+    create_power_domain $instance -elements $instance
+    create_supply_net SW_$instance
+    create_power_switch PS_$instance -domain $instance \
+        -input_supply_port {vin VDD} \
+        -output_supply_port [list vout SW_$instance] \
+        -control_port {enable c} -control_port {signed_enable s} \
+        -on_state [list ON vin $expression]
+}

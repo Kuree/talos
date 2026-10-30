@@ -1,0 +1,42 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: not %t.o0 2>&1 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: not %t.o3 2>&1 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: not %t.bc 2>&1 | FileCheck %s
+// IEEE 1801-2018 6.22: simultaneous explicit OFF and ON is an error AND
+// contributes UNDETERMINED. The OFF-only input must be in switch sensitivity.
+// CHECK: UPF domain top.PD: ON and OFF conditions are simultaneously true
+// CHECK: switch conflict corrupted and recovered
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1'b1;
+endmodule
+module top;
+  logic en = 1, shutdown = 1'bx;
+  wire q;
+  leaf dut(q);
+  initial begin
+    #1;
+    if (q !== 1'b1) $fatal(1, "OFF-only X was treated as ON-reference X");
+    shutdown = 1;
+    #1;
+    if (q !== 1'bx) $fatal(1, "conflict did not corrupt");
+    shutdown = 0;
+    #1;
+    if (q !== 1'b1) $fatal(1, "conflict recovery failed");
+    $display("switch conflict corrupted and recovered");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_power_domain PD -elements dut
+foreach net {VDD VDD_SW} {create_supply_net $net}
+create_power_switch SW -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout VDD_SW} \
+    -control_port {enable en} -control_port {disable shutdown} \
+    -on_state {ON vin enable} -off_state {OFF disable}
