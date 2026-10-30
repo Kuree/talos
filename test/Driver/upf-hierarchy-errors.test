@@ -5,15 +5,12 @@
 # RUN: not talos --upf %t/switch.upf %t/collapsed.sv -o %t/collapsed 2>&1 | FileCheck %s --check-prefix=NET
 # RUN: talos --upf %t/always-on-parent.upf --upf %t/switch.upf -emit-sim --mlir-verify-each %t/design.sv -o - | FileCheck %s --check-prefix=PARENT
 # RUN: talos --upf %t/multiple.upf --upf %t/no-isolation.upf --upf %t/switch.upf -emit-sim --mlir-verify-each %t/design.sv -o - | FileCheck %s --check-prefix=PARENT
-# RUN: not talos --upf %t/switch.upf %t/computed.sv -o %t/computed 2>&1 | FileCheck %s --check-prefix=COMPUTED
-# RUN: not talos --upf %t/switch.upf %t/computed-call.sv -o %t/computed-call 2>&1 | FileCheck %s --check-prefix=COMPUTED
 # IEEE 1801-2018 6.20: effective extent excludes explicitly assigned children.
 # IEEE 1801-2018 6.45: same-domain traffic and mixed fanout require per-path isolation.
 # CHILD: always-on subdomains inside switchable domains are not implemented
 # PATHS: isolation across multiple boundary instances requires per-path handling and is not implemented
 # NET: isolation on collapsed output nets is not implemented
 # PARENT: __upf_top.PD.monitor
-# COMPUTED: computed input connections inside a switchable domain are not implemented
 
 #--- design.sv
 module child(input logic d, output logic q);
@@ -62,36 +59,3 @@ set elements {dut/u dut/u2}
 
 #--- no-isolation.upf
 set omit_isolation 1
-
-#--- computed.sv
-module child(input logic d, output logic q);
-  always_comb q = d;
-endmodule
-module wrapper(input logic d, output logic q);
-  child u(~d, q);
-endmodule
-module top;
-  logic d, power_en, iso;
-  wire q;
-  wrapper dut(d, q);
-endmodule
-
-#--- computed-call.sv
-package counter;
-  int calls;
-  function logic inv(logic d);
-    calls++;
-    return ~d;
-  endfunction
-endpackage
-module child(input logic d, output logic q);
-  always_comb q = d;
-endmodule
-module wrapper(input logic d, output logic q);
-  child u(counter::inv(d), q);
-endmodule
-module top;
-  logic d, power_en, iso;
-  wire q;
-  wrapper dut(d, q);
-endmodule

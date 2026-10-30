@@ -1,0 +1,43 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --native-scheduler=eval --mlir-verify-each %t/design.sv -o %t.eval && %t.eval | FileCheck %s
+// IEEE 1801-2018 9.6.7 applies to constant drivers with no HDL sensitivity.
+// CHECK: constant driver power cycles passed
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1'b1;
+endmodule
+module top;
+  logic power_en = 0;
+  wire q;
+  leaf dut(q);
+  initial begin
+    #1;
+    if (q !== 1'bx) $fatal(1, "constant driver ran during initial OFF");
+    power_en = 1;
+    #1;
+    if (q !== 1'b1) $fatal(1, "constant driver did not restore");
+    power_en = 0;
+    #1;
+    if (q !== 1'bx) $fatal(1, "constant driver did not corrupt");
+    power_en = 1;
+    #1;
+    if (q !== 1'b1) $fatal(1, "constant driver did not restore repeatedly");
+    $display("constant driver power cycles passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_power_domain PD -elements dut
+foreach net {VDD VDD_SW} {create_supply_net $net}
+create_power_switch SW -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout VDD_SW} \
+    -control_port {en power_en} -on_state {ON vin en}

@@ -1,0 +1,80 @@
+# REQUIRES: upf
+# RUN: %split-file %s %t
+# RUN: not talos --upf %t/design.upf %t/nba.sv -o %t/nba 2>&1 | FileCheck %s
+# RUN: not talos --upf %t/design.upf %t/fork.sv -o %t/fork 2>&1 | FileCheck %s
+# RUN: not talos --upf %t/design.upf %t/virtual.sv -o %t/virtual 2>&1 | FileCheck %s --check-prefix=INDIRECT
+# IEEE 1801-2018 9.5.3: helper calls may not bypass pending-event invalidation.
+# CHECK: asynchronous work in a UPF helper call is not implemented
+# INDIRECT: asynchronous or indirect calls inside a switchable domain are not implemented
+
+#--- nba.sv
+package helper;
+  logic state;
+  function automatic logic work(logic d);
+    state <= d;
+    return ~d;
+  endfunction
+endpackage
+module child(input logic d, output logic q);
+  always_comb q = d;
+endmodule
+module wrapper(input logic d, output logic q);
+  child u(helper::work(d), q);
+endmodule
+module top;
+  logic d, power_en;
+  wire q;
+  wrapper dut(d, q);
+endmodule
+
+#--- fork.sv
+package helper;
+  logic state;
+  function automatic logic nested(logic d);
+    fork
+      begin state = d; end
+    join_none
+    return ~d;
+  endfunction
+  function automatic logic work(logic d);
+    return nested(d);
+  endfunction
+endpackage
+module child(input logic d, output logic q);
+  always_comb q = d;
+endmodule
+module wrapper(input logic d, output logic q);
+  child u(helper::work(d), q);
+endmodule
+module top;
+  logic d, power_en;
+  wire q;
+  wrapper dut(d, q);
+endmodule
+
+#--- design.upf
+create_power_domain PD -elements dut
+foreach net {VDD VDD_SW} {create_supply_net $net}
+create_power_switch SW -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout VDD_SW} \
+    -control_port {en power_en} -on_state {ON vin en}
+
+#--- virtual.sv
+package helper;
+  logic state;
+  class worker;
+    virtual function logic work(logic d);
+      state <= d;
+      return d;
+    endfunction
+  endclass
+  worker obj = new;
+endpackage
+module wrapper(input logic d, output logic q);
+  always_comb q = helper::obj.work(d);
+endmodule
+module top;
+  logic d, power_en;
+  wire q;
+  wrapper dut(d, q);
+endmodule

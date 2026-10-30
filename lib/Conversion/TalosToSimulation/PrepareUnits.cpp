@@ -1288,11 +1288,17 @@ FailureOr<PreparedUnits> materializeCodeUnitDeclarations(
     // Preserve the original connection computation in the immutable inventory:
     // later port projection can inline it into consumers and erase its actor.
     // IEEE 1801-2018 6.20/9.5.3 assign this inferred logic to the parent scope.
-    if (auto connection = dyn_cast<semantic::SVPortConnectionOp>(unit.source))
-      if (connection.getDirection() == semantic::SVArgumentDirection::In)
-        if (Operation *actual = getSingleRegionRoot(connection.getActual()))
-          if (!isAddressableTimingExpression(actual))
-            sim::mark<sim::metadata::ComputedPortInput>(declaration);
+    auto connection = dyn_cast<semantic::SVPortConnectionOp>(unit.source);
+    if (!connection ||
+        connection.getDirection() != semantic::SVArgumentDirection::In)
+      continue;
+    Operation *actual = getSingleRegionRoot(connection.getActual());
+    // Parameter names are syntactically addressable too, but a constant
+    // connection still represents a powered tie value and must restore.
+    if (connection.getActualIsConstant() ||
+        connection.getProvenance() == semantic::SVPortConnectionKind::Default ||
+        (actual && !isAddressableTimingExpression(actual)))
+      sim::mark<sim::metadata::ComputedPortInput>(declaration);
   }
   return result;
 }

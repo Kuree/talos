@@ -3,6 +3,8 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Interfaces/ViewLikeInterface.h"
 #include "mlir/Pass/Pass.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
@@ -122,6 +124,72 @@ Value logicSelect(OpBuilder &b, Location loc, Value condition, Value yes,
       b, loc, sim::LogicType::get(b.getContext(), 1), condition);
   return sim::SimLogicMuxOp::create(b, loc, yes.getType(), logic, yes, no);
 }
+bool levelProcess(sim::EntryKind kind) {
+  return kind == sim::EntryKind::AlwaysComb ||
+         kind == sim::EntryKind::AlwaysLatch ||
+         kind == sim::EntryKind::Continuous ||
+         kind == sim::EntryKind::PortInput ||
+         kind == sim::EntryKind::PortInitialize;
+}
+std::optional<uint64_t> storageID(Value reference, sim::SimFuncOp function) {
+  while (auto view = reference.getDefiningOp<ViewLikeOpInterface>())
+    reference = view.getViewSource();
+  if (auto storage = reference.getDefiningOp<sim::SimContextStorageOp>())
+    return storage.getId();
+  if (auto argument = dyn_cast<BlockArgument>(reference))
+    if (argument.getOwner() == &function.getBody().front())
+      if (auto id = function.getArgAttrOfType<IntegerAttr>(
+              argument.getArgNumber(),
+              sim::metadata::DescriptorId::getNameStr()))
+        return id.getUInt();
+  return std::nullopt;
+}
+LogicalResult synchronousHelper(sim::SimCallOp call) {
+  // IEEE 1801-2018 9.5.3: a guarded activation can call a synchronous helper,
+  // but work queued by that helper needs separate power-loss cancellation.
+  // Inspect the complete direct-call closure, including recursive functions.
+  SmallVector<sim::SimCallOp> pending{call};
+  llvm::DenseSet<Operation *> visited;
+  while (!pending.empty()) {
+    auto site = pending.pop_back_val();
+    auto target = SymbolTable::lookupNearestSymbolFrom<sim::SimFuncOp>(
+        site, site.getCalleeAttr());
+    if (!target || target.getEntryKind() != sim::EntryKind::Function ||
+        target.getBody().empty())
+      return site.emitError("UPF calls require a defined synchronous helper");
+    if (!visited.insert(target).second)
+      continue;
+    WalkResult result = target.walk([&](Operation *op) {
+      if (auto nested = dyn_cast<sim::SimCallOp>(op)) {
+        pending.push_back(nested);
+        return WalkResult::advance();
+      }
+      bool asynchronous =
+          sim::isSuspensionOp(op) ||
+          isa<sim::SimSpawnOp, sim::SimTaskCallOp,
+              sim::SimClassVirtualTaskCallOp, sim::SimDPICallOp,
+              sim::SimClassDirectCallOp, sim::SimClassVirtualCallOp>(op);
+      if (auto interface = dyn_cast<MemoryEffectOpInterface>(op)) {
+        SmallVector<MemoryEffects::EffectInstance> effects;
+        interface.getEffects(effects);
+        asynchronous |= llvm::any_of(effects, [](const auto &effect) {
+          return !isa<MemoryEffects::Read>(effect.getEffect()) &&
+                 isa<sim::SchedulerResource, sim::ProcessResource>(
+                     effect.getResource());
+        });
+      }
+      if (asynchronous) {
+        op->emitError(
+            "asynchronous work in a UPF helper call is not implemented");
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    if (result.wasInterrupted())
+      return failure();
+  }
+  return success();
+}
 struct Lowering {
   sim::SimDesignOp design;
   OpBuilder builder;
@@ -129,6 +197,8 @@ struct Lowering {
   llvm::StringMap<Descriptor> descriptors;
   llvm::DenseMap<uint64_t, std::string> unitPaths;
   llvm::DenseMap<uint64_t, std::string> scopePaths;
+  llvm::DenseMap<uint64_t, sim::SimCodeUnitDeclOp> units;
+  llvm::StringMap<uint64_t> unitIDs;
   sim::SimFuncOp root;
   Lowering(sim::SimDesignOp design)
       : design(design), builder(design.getContext()) {
@@ -146,6 +216,8 @@ struct Lowering {
     for (auto decl : design.getOps<sim::SimCodeUnitDeclOp>()) {
       nextUnit = std::max(nextUnit, decl.getId() + 1);
       unitPaths[decl.getId()] = decl.getHierarchicalName().str();
+      units[decl.getId()] = decl;
+      unitIDs[decl.getHierarchicalName()] = decl.getId();
     }
     for (auto fn : design.getOps<sim::SimFuncOp>())
       if (fn.getEntryKind() == sim::EntryKind::RootInitializer)
@@ -280,6 +352,35 @@ struct Lowering {
       if (op->getName().getStringRef().starts_with("simulation.suspend."))
         waits.push_back(op);
     });
+    if (waits.empty() && levelProcess(fn.getEntryKind())) {
+      // IEEE 1801-2018 9.6.7: even a constant expression must reevaluate on
+      // restoration. Keep its original body behind the guard, and replace
+      // returns with a power-control wait. Never branch into the region entry.
+      Block &entry = fn.getBody().front();
+      Block *body = entry.splitBlock(entry.begin());
+      Block *activation = new Block, *wait = new Block;
+      fn.getBody().push_back(activation);
+      fn.getBody().push_back(wait);
+      SmallVector<sim::SimReturnOp> returns;
+      fn.walk([&](sim::SimReturnOp op) { returns.push_back(op); });
+      for (auto op : returns) {
+        builder.setInsertionPoint(op);
+        cf::BranchOp::create(builder, op.getLoc(), wait);
+        op.erase();
+      }
+      builder.setInsertionPointToEnd(&entry);
+      Value watched = handle(builder, fn.getLoc(), fn.getArgument(0), control);
+      cf::BranchOp::create(builder, fn.getLoc(), activation);
+      builder.setInsertionPointToEnd(activation);
+      Value on =
+          powerOn(builder, fn.getLoc(), fn.getArgument(0), control, high);
+      cf::CondBranchOp::create(builder, fn.getLoc(), on, body, wait);
+      builder.setInsertionPointToEnd(wait);
+      sim::SimSuspendChangeOp::create(
+          builder, fn.getLoc(), watched, ValueRange{},
+          schedule::ContinuationSiteAttr{}, sim::EventRegionAttr{}, activation);
+      return success();
+    }
     if (waits.size() != 1)
       return fn.emitError("initial UPF domain requires one repeating event "
                           "control per process");
@@ -298,8 +399,7 @@ struct Lowering {
     if (leadingWait) {
       skip = wait->getBlock();
     } else {
-      if (fn.getEntryKind() != sim::EntryKind::AlwaysComb &&
-          fn.getEntryKind() != sim::EntryKind::Continuous)
+      if (!levelProcess(fn.getEntryKind()))
         return fn.emitError("UPF requires a top-level repeating event control");
       Block *last = wait->getBlock();
       skip = last->splitBlock(Block::iterator(wait));
@@ -394,11 +494,11 @@ struct Lowering {
     if (contains(domain, domain.getControl()))
       return domain.emitError(
           "power control must be outside the switchable domain");
+    llvm::DenseSet<uint64_t> computedInputs;
     for (auto unit : design.getOps<sim::SimCodeUnitDeclOp>())
       if (sim::has<sim::metadata::ComputedPortInput>(unit) &&
           contains(domain, scopePaths.lookup(unit.getScopeId())))
-        return unit.emitError("computed input connections inside a switchable "
-                              "domain are not implemented");
+        computedInputs.insert(unit.getId());
     SmallVector<StringRef> boundaries = boundaryInstances(domain);
     // IEEE 1801-2018 6.45 applies isolation per path, with -diff_supply_only
     // TRUE by default. Multiple boundary instances can exchange same-domain
@@ -426,6 +526,7 @@ struct Lowering {
       case sim::EntryKind::Always:
       case sim::EntryKind::AlwaysFF:
       case sim::EntryKind::AlwaysComb:
+      case sim::EntryKind::AlwaysLatch:
       case sim::EntryKind::Continuous:
         processes.push_back(fn);
         break;
@@ -442,6 +543,16 @@ struct Lowering {
         break;
       case sim::EntryKind::PortInput:
       case sim::EntryKind::PortInitialize:
+        if (computedInputs.contains(*fn.getCodeUnitId())) {
+          // The restored constant actor is no longer a one-time initializer.
+          // Keep executable and inventory kinds equal; steady-state analyses
+          // use this distinction independently of the actor's new CFG.
+          fn.setEntryKind(sim::EntryKind::PortInput);
+          units.lookup(*fn.getCodeUnitId())
+              .setCodeUnitKind(sim::EntryKind::PortInput);
+          processes.push_back(fn);
+        }
+        break;
       case sim::EntryKind::Observer:
         break;
       case sim::EntryKind::Initial:
@@ -458,7 +569,7 @@ struct Lowering {
             "processes; this code-unit kind is not implemented");
       }
     }
-    llvm::DenseSet<uint64_t> inputStorage;
+    llvm::DenseSet<uint64_t> inputStorage, computedStorage;
     for (auto port : design.getOps<sim::SimPortDeclOp>()) {
       if (!contains(domain, port.getHierarchicalName()))
         continue;
@@ -466,8 +577,15 @@ struct Lowering {
         return port.emitError(
             "inout ports in a switchable domain are not implemented");
       if (port.getDirection() == sim::PortDirection::Input &&
-          !port.getSourceIsNet())
+          !port.getSourceIsNet()) {
         inputStorage.insert(port.getSourceId());
+        std::string connection = scopePaths.lookup(port.getScopeId()) +
+                                 ".$port_connection_" +
+                                 std::to_string(port.getOrdinal());
+        auto found = unitIDs.find(connection);
+        if (found != unitIDs.end() && computedInputs.contains(found->second))
+          computedStorage.insert(port.getSourceId());
+      }
       if (domain.getIsolationControl() &&
           boundaryScopes.contains(port.getScopeId()) &&
           port.getDirection() == sim::PortDirection::Output &&
@@ -475,6 +593,8 @@ struct Lowering {
         return port.emitError(
             "isolation on collapsed output nets is not implemented");
     }
+    for (uint64_t id : computedStorage)
+      inputStorage.erase(id);
     SmallVector<Descriptor> targets;
     llvm::DenseSet<uint64_t> continuouslyDriven, ownedDrivers;
     for (auto process : processes) {
@@ -491,20 +611,15 @@ struct Lowering {
         ownedDrivers.insert(driver.getId());
       });
       process.walk([&](sim::SimRefStoreOp write) {
+        auto id = storageID(write.getReference(), process);
+        if (id && computedInputs.contains(*process.getCodeUnitId()) &&
+            computedStorage.contains(*id))
+          sim::mark<sim::metadata::ContinuousStore>(write);
         if (process.getEntryKind() != sim::EntryKind::Continuous &&
             !sim::has<sim::metadata::ContinuousStore>(write))
           return;
-        Value root = write.getReference();
-        while (auto slice = root.getDefiningOp<sim::SimRefExtractOp>())
-          root = slice.getInput();
-        if (auto storage = root.getDefiningOp<sim::SimContextStorageOp>())
-          continuouslyDriven.insert(storage.getId());
-        if (auto argument = dyn_cast<BlockArgument>(root))
-          if (argument.getOwner() == &process.getBody().front())
-            if (auto id = process.getArgAttrOfType<IntegerAttr>(
-                    argument.getArgNumber(),
-                    sim::metadata::DescriptorId::getNameStr()))
-              continuouslyDriven.insert(id.getInt());
+        if (id)
+          continuouslyDriven.insert(*id);
       });
     }
     for (auto decl : design.getOps<sim::SimStorageDeclOp>()) {
@@ -586,9 +701,17 @@ struct Lowering {
                             "domain is not implemented");
           return WalkResult::interrupt();
         }
-        if (isa<sim::SimCallOp>(op)) {
-          op->emitError("user subroutines inside a switchable domain are not "
-                        "implemented");
+        if (auto call = dyn_cast<sim::SimCallOp>(op))
+          if (failed(synchronousHelper(call)))
+            return WalkResult::interrupt();
+        if (isa<sim::SimClassDirectCallOp, sim::SimClassVirtualCallOp,
+                sim::SimClassVirtualTaskCallOp, sim::SimTaskCallOp,
+                sim::SimDPICallOp>(op)) {
+          // These calls do not expose the closed synchronous body audited
+          // above. In particular an indirect method can enqueue an NBA that
+          // would escape this domain's epoch and cancellation instrumentation.
+          op->emitError("asynchronous or indirect calls inside a switchable "
+                        "domain are not implemented");
           return WalkResult::interrupt();
         }
         return WalkResult::advance();

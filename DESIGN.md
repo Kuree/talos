@@ -137,7 +137,7 @@ in `initial` blocks remains unaffected, as specified by IEEE 1801 9.2.1.
 Packed arrays and module hierarchies within an extent are supported. Internal
 module connections remain transparent, and corruption follows the drivers of
 powered processes even when their nets alias input ports or outside names.
-Blocking timing, user subroutines, forked work, unpacked/struct state, inout
+Blocking timing, module-local subroutines, forked work, unpacked/struct state, inout
 ports, and delayed drivers are diagnosed. Explicitly selecting an instance in
 two domains is an error; nested-domain extent partitioning and cascaded power
 switches are diagnosed as unsupported. Each domain has independent isolation and pending
@@ -150,9 +150,18 @@ requires per-path handling to preserve same-domain traffic, and isolation of
 collapsed output nets requires keeping their boundary cuts before net merging;
 both forms are diagnosed. Explicit always-on child domains inside a switchable
 extent are also diagnosed until their ownership and lower boundaries are modeled.
-Computed input connections owned by a powered parent are diagnosed before port
-projection can erase their ownership. Computations outside the switchable
-extent remain active while its internal logic is OFF.
+Computed input connections are powered by their parent. Their driven formals
+and driver contributions corrupt while OFF, and their calculations stop until
+restoration. Literal, parameter and default input constants reevaluate after
+every restoration. The repeating constant actors become `PortInput` entries
+so steady-state analyses do not treat them as one-time initialization.
+Calculations outside the switchable extent remain active while its internal
+logic is OFF. Synchronous external helper functions can be called from guarded
+actors; their direct-call closures are checked for asynchronous work. Queued
+helper work, indirect methods and DPI/task calls are diagnosed until they have
+power-aware cancellation. `always_latch`, constant continuous assignments and
+constant `always_comb` processes also reevaluate on restoration; a closed
+latch remains corrupt until its enable allows a new assignment.
 
 Power intent lowers after simulation unit preparation and before simulation
 optimization. Generated guards, corruption stores, and sensitivity dependencies
@@ -165,8 +174,9 @@ legality checks while its dataflow and scheduling effects remain in the graph.
 Native and bytecode lowerings share the cancellation service. wasm32 uses
 32-bit pointers and 64-bit simulation handles; Tcl is absent from generated
 simulators on every target.
-Power-aware designs use the runtime scheduler until generated AOT NBA tables
-support cancellation too; explicitly requesting AOT/eval produces a diagnostic.
+Storage-corrupting domains use the runtime scheduler until generated AOT NBA
+tables support cancellation too; explicitly requesting AOT/eval then produces a
+diagnostic. Driver-only domains can use compiled evaluation when otherwise eligible.
 
 The native Unix compiler enables `TALOS_ENABLE_UPF` by default. Tcl is built
 as a static core library with size optimization; Tk, contributed binary

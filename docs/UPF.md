@@ -42,8 +42,11 @@ upper domain boundary, preserving internal connections (clauses 6.20 and 6.45).
 Per-path isolation across multiple boundary instances, collapsed output nets,
 nested domain partitions, and supply-network evaluation remain unsupported and
 produce diagnostics.
-Computed input connections inside a switchable domain are also diagnosed;
-input expressions owned by its exterior parent remain active.
+Computed input connections are simulated with their parent's power state.
+Constants, including parameters and default input values, and level-sensitive
+latches reevaluate on restoration. Synchronous external helper calls are
+supported after checking their call closure; asynchronous or indirect calls
+remain diagnosed. Input expressions owned by an exterior parent remain active.
 
 User Tcl libraries can be sourced or imported with standard Tcl packages
 (IEEE 1801-2018 clause 5.1):

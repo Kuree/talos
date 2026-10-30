@@ -1,0 +1,100 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.20 and 9.5.3/9.6.7: the parent powers computed actuals,
+// including their side effects, and constants reevaluate after every restoration.
+// CHECK: computed inputs and constant restoration passed
+
+//--- design.sv
+package audit;
+  int calls = 0;
+  function automatic logic [3:0] inv(logic [3:0] d);
+    calls++;
+    return ~d;
+  endfunction
+endpackage
+module child(input logic [3:0] d, output logic [3:0] q);
+  always_comb q = d;
+endmodule
+module bit_child(input logic d, output logic q);
+  always_comb q = d;
+endmodule
+module default_child(input logic [3:0] d = 4'h5, output logic [3:0] q);
+  always_comb q = d;
+endmodule
+module wrapper(input logic [3:0] d, input logic choose,
+               input logic [1:0] index, output logic [3:0] q);
+  localparam logic [3:0] CONSTANT = 4'he;
+  wire [3:0] inv_q, mux_q, const_q, call_q, param_q, default_q;
+  wire bit_q;
+  child u_inv(~d, inv_q), u_mux(choose ? d : 4'ha, mux_q),
+        u_const(4'hf, const_q), u_param(CONSTANT, param_q),
+        u_call(audit::inv(d), call_q);
+  default_child u_default(.q(default_q));
+  bit_child u_index(d[index], bit_q);
+  always_comb q = inv_q ^ mux_q ^ const_q ^ call_q ^ param_q ^ default_q ^ {4{bit_q}};
+endmodule
+module top;
+  logic [3:0] d = 4'h3;
+  logic choose = 0, power_en = 0, iso = 1;
+  logic [1:0] index = 1;
+  wire [3:0] q;
+  int calls_before;
+  wrapper dut(d, choose, index, q);
+  initial begin
+    #1;
+    if (dut.u_inv.d !== 'x || dut.u_mux.d !== 'x ||
+        dut.u_index.d !== 1'bx || dut.u_const.d !== 'x ||
+        dut.u_call.d !== 'x || dut.u_param.d !== 'x ||
+        dut.u_default.d !== 'x || audit::calls != 0)
+      $fatal(1, "initial OFF evaluated a computed input");
+    power_en = 1; iso = 0;
+    #1;
+    if (dut.u_inv.d !== 4'hc || dut.u_mux.d !== 4'ha ||
+        dut.u_index.d !== 1'b1 || dut.u_const.d !== 4'hf ||
+        dut.u_call.d !== 4'hc || dut.u_param.d !== 4'he ||
+        dut.u_default.d !== 4'h5 || audit::calls == 0)
+      $fatal(1, "initial restoration failed");
+    calls_before = audit::calls;
+    power_en = 0; iso = 1;
+    #1;
+    d = 4'h9; choose = 1; index = 0;
+    #1;
+    if (dut.d !== d || dut.choose !== choose || dut.index !== index)
+      $fatal(1, "exterior sources were corrupted");
+    if (dut.u_inv.d !== 'x || dut.u_mux.d !== 'x ||
+        dut.u_index.d !== 1'bx || dut.u_const.d !== 'x ||
+        dut.u_call.d !== 'x || dut.u_param.d !== 'x || dut.u_default.d !== 'x ||
+        audit::calls != calls_before || q !== '0)
+      $fatal(1, "computed input or helper executed while OFF");
+    power_en = 1; iso = 0;
+    #1;
+    if (dut.u_inv.d !== 4'h6 || dut.u_mux.d !== 4'h9 ||
+        dut.u_index.d !== 1'b1 || dut.u_const.d !== 4'hf ||
+        dut.u_call.d !== 4'h6 || dut.u_param.d !== 4'he ||
+        dut.u_default.d !== 4'h5 || audit::calls <= calls_before)
+      $fatal(1, "restoration without source changes failed");
+    power_en = 0;
+    #1 power_en = 1;
+    #1;
+    if (dut.u_const.d !== 4'hf || dut.const_q !== 4'hf ||
+        dut.u_param.d !== 4'he || dut.u_default.d !== 4'h5)
+      $fatal(1, "constant input was still treated as a one-time initializer");
+    $display("computed inputs and constant restoration passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_power_domain PD -elements dut
+foreach net {VDD VDD_SW} {create_supply_net $net}
+create_power_switch SW -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout VDD_SW} \
+    -control_port {en power_en} -on_state {ON vin en}
+set_isolation ISO -domain PD -isolation_signal iso -clamp_value 0 \
+    -applies_to outputs -location parent
