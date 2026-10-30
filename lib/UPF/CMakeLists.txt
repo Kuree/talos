@@ -1,7 +1,9 @@
 add_mlir_library(TalosUPF
   Execute.cpp
-  DEPENDS SlangOpsIncGen TalosUPFOpsIncGen
-  LINK_LIBS PUBLIC TalosUPFIR TalosSlangIR MLIRIR)
+  Elaborate.cpp
+  DEPENDS SlangOpsIncGen TalosSimulationOpsIncGen TalosUPFOpsIncGen
+  LINK_LIBS PUBLIC TalosUPFIR TalosSlangIR TalosSimulationIR
+    MLIRArithDialect MLIRControlFlowDialect MLIRIR MLIRPass)
 if(TALOS_ENABLE_UPF)
   target_compile_definitions(obj.TalosUPF PRIVATE
     TALOS_ENABLE_UPF=1 TALOS_TCL_LIBRARY_DIR="${TALOS_TCL_LIBRARY_DIR}")

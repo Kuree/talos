@@ -5616,6 +5616,16 @@ def SimDriverArrayElementOp : SimOp<"driver.array_element", [Pure, ViewLikeOpInt
   let hasCanonicalizer = 1;
 }
 
+def SimPowerCancelNBAOp : SimOp<"power.cancel_nba", [
+    MemoryEffects<[MemWrite<SimSchedulerResource>]>
+  ]> {
+  let summary = "invalidate queued writes to state corrupted by power loss";
+  let arguments = (ins SimContextType:$context, SimRefType:$target,
+                       I64Attr:$width);
+  let assemblyFormat = "$context `,` $target `width` $width attr-dict `:` qualified(type($target))";
+  let hasVerifier = 1;
+}
+
 def SimNBAEnqueueOp : SimOp<"nba.enqueue", [
     MemoryEffects<[MemWrite<SimSchedulerResource>]>
   ]> {

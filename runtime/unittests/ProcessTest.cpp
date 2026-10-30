@@ -10705,6 +10705,80 @@ TEST(Scheduler, DelayedNBAsAdvanceTimeAndPreserveQueueOrder) {
   talos_rt_v1_context_destroy(context);
 }
 
+TEST(Scheduler, PowerLossCancelsPendingNBAWithoutAffectingAdjacentState) {
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 0, 8),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 2, 8, 8),
+            TALOS_RT_OK);
+  std::array<uint8_t, 2> plane{};
+  uint8_t lower = 0x35, upper = 0xa6;
+  uint64_t first = talos_rt_v1_native_state_static_handle(1);
+  uint64_t second = talos_rt_v1_native_state_static_handle(2);
+  ASSERT_EQ(talos_rt_v1_scheduler_nba(context, plane.data(), nullptr, 16, first,
+                                      8, 0, &lower, nullptr),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_nba(context, plane.data(), nullptr, 16,
+                                      second, 8, 0, &upper, nullptr),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_power_cancel_nba(context, first, 8), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  EXPECT_EQ(plane[0], 0);
+  EXPECT_EQ(plane[1], upper);
+  // A later activation after power restoration can enqueue a fresh update.
+  ASSERT_EQ(talos_rt_v1_scheduler_nba(context, plane.data(), nullptr, 16, first,
+                                      8, 1, &lower, nullptr),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  EXPECT_EQ(plane[0], lower);
+  EXPECT_EQ(plane[1], upper);
+  talos_rt_v1_context_destroy(context);
+}
+
+TEST(Scheduler, PowerLossCancellationValidatesArgumentsAndOverlappingSlices) {
+  // IEEE 1801-2018 9.5.3: whole pending updates that overlap corrupted state
+  // are cancelled; an adjacent part-select/root remains scheduled. Exercise
+  // both descriptor-based native handles and global bytecode offsets.
+  EXPECT_EQ(talos_rt_v1_power_cancel_nba(nullptr, 0, 8),
+            TALOS_RT_INVALID_ARGUMENT);
+  for (bool descriptorHandle : {false, true}) {
+    talos_rt_context *context = nullptr;
+    ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 0, 8),
+              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 2, 8, 8),
+              TALOS_RT_OK);
+    uint64_t first =
+        descriptorHandle ? talos_rt_v1_native_state_static_handle(1) : 0;
+    uint64_t second =
+        descriptorHandle ? talos_rt_v1_native_state_static_handle(2) : 8;
+    uint64_t highSlice = talos_rt_stable_handle_offset(first, 4);
+    std::array<uint8_t, 2> plane{};
+    uint8_t low = 5, high = 10, adjacent = 0x37;
+    ASSERT_EQ(talos_rt_v1_scheduler_nba(context, plane.data(), nullptr, 16,
+                                        first, 4, 0, &low, nullptr),
+              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_scheduler_nba(context, plane.data(), nullptr, 16,
+                                        highSlice, 4, 0, &high, nullptr),
+              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_scheduler_nba(context, plane.data(), nullptr, 16,
+                                        second, 8, 0, &adjacent, nullptr),
+              TALOS_RT_OK);
+    EXPECT_EQ(talos_rt_v1_power_cancel_nba(context, first, 0),
+              TALOS_RT_INVALID_ARGUMENT);
+    EXPECT_EQ(talos_rt_v1_power_cancel_nba(context, UINT64_MAX, 1),
+              TALOS_RT_INVALID_HANDLE);
+    ASSERT_EQ(talos_rt_v1_power_cancel_nba(
+                  context, talos_rt_stable_handle_offset(first, 2), 1),
+              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+    EXPECT_EQ(plane[0], 0xa0);
+    EXPECT_EQ(plane[1], adjacent);
+    talos_rt_v1_context_destroy(context);
+  }
+}
+
 TEST(Scheduler, CanonicalNBAKeepsBoundNativeStateMirrorCoherent) {
   talos_rt_execution_descriptor_v1 execution{};
   execution.version = TALOS_RT_VERSION;

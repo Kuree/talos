@@ -204,8 +204,15 @@ struct Session {
     }
     Operation *op = objects.at(out);
     auto type = op->getAttrOfType<TypeAttr>("semantic_type");
-    auto integral = type ? dyn_cast<slangir::IntegralType>(type.getValue())
-                         : slangir::IntegralType{};
+    Type scalar = type ? type.getValue() : Type{};
+    // IEEE 1801-2018 6.22: a one-bit HDL control can also be written as a
+    // packed array with singleton dimensions (for example, logic [0:0]).
+    while (auto array = dyn_cast_or_null<slangir::PackedArrayType>(scalar)) {
+      if (array.getLeft() != array.getRight())
+        break;
+      scalar = array.getElementType();
+    }
+    auto integral = dyn_cast_or_null<slangir::IntegralType>(scalar);
     if (!integral || integral.getWidth() != 1) {
       error("UPF control requires a one-bit integral design object: " + path);
       return false;

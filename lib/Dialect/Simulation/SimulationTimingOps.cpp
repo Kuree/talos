@@ -209,6 +209,19 @@ LogicalResult SimCovergroupBlockEventFireOp::verify() {
   return success();
 }
 
+LogicalResult SimPowerCancelNBAOp::verify() {
+  // The typed ABI cancels one packed state element; widths/handles remain
+  // explicit i64 values on wasm32, independent of the target pointer width.
+  Type element = getTarget().getType().getElementType();
+  auto packed = getPackedWidth(element);
+  if (!isa_and_nonnull<LogicType, IntegerType>(getPackedScalarType(element)) ||
+      !packed || getWidth() <= 0 ||
+      static_cast<uint64_t>(getWidth()) != *packed)
+    return emitOpError(
+        "requires a positive width matching the packed integral target");
+  return success();
+}
+
 LogicalResult SimTimeConstantOp::verify() {
   if (getValueAttr().getValue().isNegative())
     return emitOpError("simulation time must be nonnegative");

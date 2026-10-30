@@ -628,6 +628,40 @@ static talos_rt_status schedulerNBA(
 }
 
 extern "C" talos_rt_status
+talos_rt_v1_power_cancel_nba(talos_rt_context *context, uint64_t target,
+                             uint64_t width) {
+  // IEEE 1801-2018 9.5.3: pending updates from before CORRUPT must not
+  // overwrite corruption, including updates already queued for this NBA slot.
+  if (!context || !width)
+    return TALOS_RT_INVALID_ARGUMENT;
+  uint32_t targetID = 0;
+  int64_t targetOffset = 0;
+  bool targetStatic = decodeNativeStatic(target, targetID, targetOffset);
+  if (!targetStatic && !decodeNativeGlobal(target, targetOffset))
+    return TALOS_RT_INVALID_HANDLE;
+  ContextTransaction transaction(context);
+  ContextMutexLock lock(context);
+  for (ScheduledNBA &update : context->scheduledNBAs) {
+    uint32_t id = 0;
+    int64_t offset = 0;
+    bool bounded = decodeNativeStatic(update.bitOffset, id, offset);
+    if (bounded != targetStatic)
+      continue;
+    if (bounded ? id != targetID
+                : !decodeNativeGlobal(update.bitOffset, offset))
+      continue;
+    // Compiler power-loss sites always name the full declared root. Keep the
+    // range check so unrelated raw-global roots and adjacent slices survive.
+    if (static_cast<__int128>(offset) <
+            static_cast<__int128>(targetOffset) + width &&
+        static_cast<__int128>(targetOffset) <
+            static_cast<__int128>(offset) + update.bitWidth)
+      update.cancelled = true;
+  }
+  return TALOS_RT_OK;
+}
+
+extern "C" talos_rt_status
 talos_rt_v1_scheduler_nba(talos_rt_context *context, uint8_t *valuePlane,
                           uint8_t *unknownPlane, uint64_t planeBitCount,
                           uint64_t bitOffset, uint64_t bitWidth, uint64_t delay,

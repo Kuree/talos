@@ -44,6 +44,35 @@ bool canDropUnreadNBA(sim::SimNBAEnqueueOp op,
          plan->unreadRoots[root->second];
 }
 
+class PowerCancelNBAConversion final
+    : public OpConversionPattern<sim::SimPowerCancelNBAOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(sim::SimPowerCancelNBAOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (adaptor.getContext().size() != 1 || adaptor.getTarget().size() != 1)
+      return failure();
+    Type i32 = rewriter.getI32Type();
+    Value status =
+        LLVM::CallOp::create(
+            rewriter, op.getLoc(), TypeRange{i32},
+            SymbolRefAttr::get(rewriter.getContext(),
+                               "talos_rt_v1_power_cancel_nba"),
+            ValueRange{adaptor.getContext().front(),
+                       adaptor.getTarget().front(),
+                       llvmConstant(rewriter, op.getLoc(),
+                                    rewriter.getI64Type(), op.getWidth())})
+            .getResult();
+    LLVM::CallOp::create(
+        rewriter, op.getLoc(), TypeRange{},
+        SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_scheduler_fail"),
+        ValueRange{adaptor.getContext().front(), status});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 class InertialDriverConversion final
     : public OpConversionPattern<sim::SimDriverDriveInertialOp> {
 public:
@@ -1773,6 +1802,7 @@ void populateNBAToLLVMConversionPatterns(
     const NativeStateLayout *stateLayout, bool staticSitesEnabled,
     bool guardedClaims, bool evalCeiling,
     const DenseSet<Operation *> &completePackedSliceNBAs) {
+  patterns.add<PowerCancelNBAConversion>(converter, patterns.getContext());
   patterns.add<InertialDriverConversion>(converter, patterns.getContext(),
                                          stateBitCount);
   patterns.add<InertialPathDriverConversion>(converter, patterns.getContext(),

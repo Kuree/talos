@@ -3,6 +3,7 @@
 #include "Detail.h"
 #include "talos/Conversion/SimulationToSchedule.h"
 #include "talos/Dialect/Schedule/Transforms/Passes.h"
+#include "talos/Frontend/UPF.h"
 
 #include "talos/Conversion/TalosToSimulation.h"
 #include "talos/Dialect/Simulation/SimulationResources.h"
@@ -912,9 +913,10 @@ static void buildTalosToSimulationPipelineImpl(
   // Freeze after DCE and dispatch preparation, before any nested function
   // worker can replace a sibling function's attribute dictionary.
   manager.addPass(createTalosSimPrepareUnitLoweringPass());
-  OpPassManager &designManager = manager.nest<sim::SimDesignOp>();
+  OpPassManager &loweredDesignManager = manager.nest<sim::SimDesignOp>();
   {
-    OpPassManager &functionManager = designManager.nest<sim::SimFuncOp>();
+    OpPassManager &functionManager =
+        loweredDesignManager.nest<sim::SimFuncOp>();
     functionManager.addPass(createTalosSimLowerUnitPass());
 #ifdef TALOS_ENABLE_Z3
     // Exact random solves sample a plan compiled from their residual program.
@@ -929,11 +931,14 @@ static void buildTalosToSimulationPipelineImpl(
     functionManager.addPass(createCSEPass());
   }
   if (vpiMode != "off") {
-    designManager.addPass(std::make_unique<MaterializeVPIClassDispatchPass>());
+    loweredDesignManager.addPass(
+        std::make_unique<MaterializeVPIClassDispatchPass>());
     if (instrumentVPIFrames && vpiMode == "full")
-      designManager.addPass(createTalosSimInstrumentVPIFramesPass());
+      loweredDesignManager.addPass(createTalosSimInstrumentVPIFramesPass());
   }
-  designManager.addPass(createTalosSimMaterializeClockedSamplesPass());
+  loweredDesignManager.addPass(createTalosSimMaterializeClockedSamplesPass());
+  manager.addPass(createElaborateUPFPass());
+  OpPassManager &designManager = manager.nest<sim::SimDesignOp>();
   if (optLevel > 0)
     designManager.addPass(createTalosSimDevirtualizeClassCallsPass());
   // Graph metadata does not participate in symbol liveness. Complete all

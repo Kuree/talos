@@ -360,6 +360,9 @@ def TalosSimulationDialect : Dialect {
 
     // Timing, specify paths, nets and UDPs (IEEE 1800-2023 28-32).
     "::mlir::UnitAttr":$continuous_store,
+    // Compiler-generated power-state transition process. Its corruption
+    // writes affect scheduling/dataflow, but are not HDL assignment drivers.
+    "::mlir::UnitAttr":$power_monitor,
     // Time scaling preparation freezes onto each code unit for unit lowering;
     // finalization removes it with the unit's bindings.
     "::mlir::IntegerAttr":$delay_quantum,

@@ -3995,6 +3995,25 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
         transitionPlanes.value.data(), transitionPlanes.unknown.data(),
         masks[0].data(), masks[1].data(), masks[2].data(), masks[3].data());
   }
+  case TALOS_RT_INTRINSIC_V1_POWER_CANCEL_NBA: {
+    auto width = scalar(1);
+    if (!width || !context)
+      return TALOS_RT_INVALID_BYTECODE;
+    Layout target = layoutAt(image, frame.function, inputRegister(0));
+    const uint8_t *address = frame.data + target.offset;
+    uint32_t kind = 0, id = 0;
+    uint64_t base = 0;
+    int64_t begin = 0, start = 0;
+    std::memcpy(&kind, address, 4);
+    std::memcpy(&base, address + 8, 8);
+    std::memcpy(&start, address + 16, 8);
+    if (kind != TALOS_RT_DESCRIPTOR_STORAGE)
+      return TALOS_RT_INVALID_HANDLE;
+    uint64_t stable = decodeStaticHandle(base, id, begin)
+                          ? encodeStaticHandle(id, start)
+                          : static_cast<uint64_t>(start);
+    return talos_rt_v1_power_cancel_nba(context, stable, *width);
+  }
   case TALOS_RT_INTRINSIC_V1_NBA:
   case TALOS_RT_INTRINSIC_V1_STATIC_NBA:
   case TALOS_RT_INTRINSIC_V1_CLOCKING_NBA: {

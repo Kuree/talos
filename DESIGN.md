@@ -107,6 +107,64 @@ documentation, Python bindings, benchmarks, and install rules. Only the
 slang-facing Talos frontend is compiled as C++20; the rest of Talos stays
 at the LLVM SDK's C++17 baseline.
 
+## UPF execution and the first power-aware simulation slice
+
+`talos --upf power.upf design.sv -o sim` executes UPF after importing the
+elaborated Slang IR. Tcl 9.0.4 supplies the language implementation, including
+procedures, control flow, substitutions, lists, `source`, and core packages.
+UPF commands are C++ callbacks against a design database indexed from the
+Slang hierarchy. The resolved switchable domain is inspectable with
+`-emit-slang` as an `upf.domain` operation.
+
+The initial command bridge supports `upf_version 3.1`, `set_design_top`,
+`set_scope`, `find_objects`, `load_upf`, basic supply net/port declarations and
+connections, `create_power_domain`, `set_domain_supply_net`,
+`create_power_switch`, and output `set_isolation`. Options outside the
+implemented subset are diagnosed. This is an initial vertical slice, not a
+complete IEEE 1801 implementation: input rails are assumed to be powered;
+general supply-network initialization, voltage/state evaluation, the HDL UPF
+package (`supply_on` / `supply_off`), retention, and multiple switchable domains
+remain to be implemented.
+
+The simulation slice accepts one scalar logic switch control, packed integral
+domain state, event-controlled RTL, and combinational logic. Parent-side
+isolation supports an external control and a zero/one clamp, with unknown
+isolation control producing corruption even when the data equals the clamp.
+Power loss corrupts domain state and drivers and gates behavioral activations.
+Restoring power reevaluates combinational logic; edge-triggered logic waits for
+a new edge and does not recover lost register contents. Model initialization
+in `initial` blocks remains unaffected, as specified by IEEE 1801 9.2.1.
+Packed arrays are supported. Blocking timing, user subroutines, forked work,
+unpacked/struct state, inout ports, delayed drivers, and non-leaf domain
+elements are diagnosed.
+
+Power intent lowers after simulation unit preparation and before simulation
+optimization. Generated guards, corruption stores, and sensitivity dependencies
+remain ordinary visible simulation IR. Delayed NBAs capture a power-loss epoch
+and only enqueue their commit if the domain is still powered and the epoch is
+unchanged. `simulation.power.cancel_nba` also cancels queued writes on power
+loss, covering a transition after the delayed helper runs but before the NBA
+barrier. The generated power monitor is excluded from HDL assignment-driver
+legality checks while its dataflow and scheduling effects remain in the graph.
+Native and bytecode lowerings share the cancellation service. wasm32 uses
+32-bit pointers and 64-bit simulation handles; Tcl is absent from generated
+simulators on every target.
+Power-aware designs use the runtime scheduler until generated AOT NBA tables
+support cancellation too; explicitly requesting AOT/eval produces a diagnostic.
+
+The native Unix compiler enables `TALOS_ENABLE_UPF` by default. Tcl is built
+as a static core library with size optimization; Tk, contributed binary
+packages, tclsh, Zipfs, and external character-encoding tables are omitted.
+Core Tcl scripts are packaged alongside the compiler, including the message
+catalog support needed by `clock`. UTF-8, UTF-16, and Latin-1 encodings remain
+built into Tcl. The permissive Tcl license and bundled LibTomMath notice are
+installed with the other third-party licenses. `TALOS_TCL_SOURCE_DIR` provides
+an offline source tree and `TALOS_TCL_INSTALL_DIR` provides a prebuilt static
+installation. Windows uses a prebuilt static prefix; compiler builds hosted in
+Emscripten default to `TALOS_ENABLE_UPF=OFF`. Native compilers can elaborate
+UPF and generate wasm32 simulations. See [the dependency and Tcl library
+instructions](docs/UPF.md) for platform options and custom package imports.
+
 ## Slang semantic boundary
 
 The `slang` dialect is intentionally textual and inspectable. Its C++ namespace

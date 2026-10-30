@@ -120,6 +120,12 @@ verifyVariableWriters(sim::SimDesignOp design,
 
   for (auto [operation, summary] : derived.effectSummaries) {
     auto function = cast<sim::SimFuncOp>(operation);
+    // IEEE 1801 corruption is an implicit power effect, rather than an
+    // additional HDL continuous/procedural assignment to the same variable.
+    // Keep its effects in the graph; only HDL driver-legality checking skips
+    // it.
+    if (sim::has<sim::metadata::PowerMonitor>(function))
+      continue;
     bool continuous = function.getEntryKind() == sim::EntryKind::Continuous;
     bool procedural = isProceduralProcess(function.getEntryKind());
     if (!continuous && !procedural)

@@ -53,6 +53,7 @@ add_mlir_library(TalosToSimulation
 
   LINK_LIBS PUBLIC
   TalosIR
+  TalosUPF
   TalosCoverage
   TalosSimulationAnalysis
   TalosSimulationIR

@@ -10,6 +10,10 @@ namespace talos::bytecode {
 
 std::optional<LogicalResult>
 Encoder::encodeStateOperation(FunctionPlan &plan, Operation *operation) {
+  if (auto op = dyn_cast<sim::SimPowerCancelNBAOp>(operation))
+    return emitIntrinsicRegisters(
+        plan, TALOS_RT_INTRINSIC_V1_POWER_CANCEL_NBA,
+        {reg(plan, op.getTarget()), emitU64Constant(plan, op.getWidth())}, {});
   if (auto op = dyn_cast<sim::SimEventCreateOp>(operation))
     return emitIntrinsic(plan, kIntrinsicEventCreate, {}, {op.getResult()});
   if (isa<sim::SimEventNullOp>(operation)) {

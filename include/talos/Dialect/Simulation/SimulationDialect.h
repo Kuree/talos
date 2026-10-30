@@ -504,6 +504,7 @@ using VacuousSequenceAlternatives =
     TalosSimulationDialect::VacuousSequenceAlternativesAttrHelper;
 using SteadyUnknown = TalosSimulationDialect::SteadyUnknownAttrHelper;
 using ContinuousStore = TalosSimulationDialect::ContinuousStoreAttrHelper;
+using PowerMonitor = TalosSimulationDialect::PowerMonitorAttrHelper;
 using DelayQuantum = TalosSimulationDialect::DelayQuantumAttrHelper;
 using DelayScale = TalosSimulationDialect::DelayScaleAttrHelper;
 using DelayedNet = TalosSimulationDialect::DelayedNetAttrHelper;

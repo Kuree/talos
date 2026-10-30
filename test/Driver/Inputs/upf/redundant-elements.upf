@@ -1,0 +1,9 @@
+# IEEE 1801-2018 6.45/8.3.3(g),(j): internal same-domain boundaries must not
+# receive parent isolation. The initial leaf-only implementation rejects this.
+create_power_domain PD -elements {dut dut/u}
+foreach net {VDD VSS VDD_SW} {create_supply_net $net}
+create_power_switch SW -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout VDD_SW} \
+    -control_port {en power_en} -on_state {ON vin en}
+set_isolation ISO -domain PD -isolation_signal iso -clamp_value 0 \
+    -applies_to outputs -location parent

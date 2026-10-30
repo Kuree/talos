@@ -465,6 +465,9 @@ bool validIntrinsic(const Image &image, const Function &function,
       return false;
     return true;
   }
+  case TALOS_RT_INTRINSIC_V1_POWER_CANCEL_NBA:
+    return signature.flags == 0 && site.inputCount == 2 &&
+           site.outputCount == 0 && handle(input(0)) && bits(input(1), 64);
   case TALOS_RT_INTRINSIC_V1_NBA:
     return signature.flags == 0 &&
            (site.inputCount == 2 || site.inputCount == 3) &&

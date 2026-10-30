@@ -1266,6 +1266,7 @@ enum {
   TALOS_RT_INTRINSIC_V1_CLOCKING_OUTPUT_CURRENT = UINT32_C(0x0001024e),
   TALOS_RT_INTRINSIC_V1_PROGRAM_OWNED = UINT32_C(0x0001024f),
   TALOS_RT_INTRINSIC_V1_CONTROL_DISABLE_SELECTED = UINT32_C(0x00010250),
+  TALOS_RT_INTRINSIC_V1_POWER_CANCEL_NBA = UINT32_C(0x00010251),
   TALOS_RT_INTRINSIC_V1_IMPORT = UINT32_C(0x00010300),
   TALOS_RT_INTRINSIC_V1_DPI_IMPORT = UINT32_C(0x00010301),
   TALOS_RT_INTRINSIC_V1_CLASS_ALLOC = UINT32_C(0x00010400),
@@ -4132,6 +4133,12 @@ uint64_t talos_rt_v1_assertion_kill_epoch(talos_rt_context *context,
 // its originating logical process.
 uint32_t talos_rt_v1_deferred_mature(talos_rt_context *context,
                                      uint64_t ticket);
+// IEEE 1801-2018 9.5.3: invalidate pending NBA writes overlapping a packed
+// storage range on power loss. The target is a static/global stable handle,
+// independent of the platform pointer width. Does not publish a state change.
+talos_rt_status talos_rt_v1_power_cancel_nba(talos_rt_context *context,
+                                             uint64_t target,
+                                             uint64_t bit_width);
 // Copy one nonblocking assignment into the current time slot. The scheduler
 // applies queued updates in call order after active work reaches quiescence.
 // A UINT64_MAX bit offset is an out-of-range dynamic selection and is ignored.

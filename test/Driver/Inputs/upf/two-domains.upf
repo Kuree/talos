@@ -1,0 +1,6 @@
+source [file join [file dirname [info script]] switchable.upf]
+create_power_domain Other -elements dut2
+create_supply_net VDD_OTHER
+create_power_switch SW_OTHER -domain Other \
+    -input_supply_port {vin VDD} -output_supply_port {vout VDD_OTHER} \
+    -control_port {en power_en} -on_state {ON vin en}

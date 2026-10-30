@@ -1,0 +1,6 @@
+create_power_domain PD -elements dut
+foreach net {VDD VSS VDD_SW} {create_supply_net $net}
+set_domain_supply_net PD -primary_power_net VDD_SW -primary_ground_net VSS
+create_power_switch SW -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout VDD_SW} \
+    -control_port {en power_en} -on_state {ON vin en}
