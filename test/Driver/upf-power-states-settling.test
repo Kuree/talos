@@ -1,0 +1,34 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// CHECK: simultaneous source changes settled
+// IEEE 1801-2018 9.2.3/9.3.2: diagnostics and RTL guards observe the same
+// settled source/control values, including computed switch output supplies.
+// Sequential zero-time writes must not invent an illegal intermediate state.
+
+//--- design.sv
+module leaf(output wire q);assign q=1;endmodule
+module top;
+ import UPF::*;
+ logic enable=1;wire q;leaf dut(q);
+ initial begin
+  #1;void'(supply_on("/top/VDD"));void'(supply_on("/top/VSS",0.0));
+  #1;if(q!==1'b1) $fatal(1,"on");
+  void'(supply_off("/top/VSS"));void'(supply_off("/top/VDD"));
+  #1;if(q!==1'bx) $fatal(1,"off");
+  $display("simultaneous source changes settled");$finish;
+ end
+endmodule
+
+//--- design.upf
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary CORE}
+create_power_switch PS -domain PD -input_supply_port {vin VDD} -output_supply_port {vout CORE.power} -control_port {en enable} -on_state {ON vin en}
+add_power_state CORE -supply -state {ON -supply_expr {power == FULL_ON && ground == FULL_ON}} -state {MIXED -supply_expr {power == FULL_ON && ground == OFF} -simstate NORMAL -illegal}

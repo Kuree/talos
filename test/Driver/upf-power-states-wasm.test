@@ -1,0 +1,11 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-power-states.test %t/states
+// RUN: %split-file %S/upf-power-states-numeric.test %t/numeric
+// RUN: %split-file %S/upf-power-states-policies.test %t/policies
+// RUN: talos --upf %t/states/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/states/design.sv -o %t/states.o
+// RUN: talos --upf %t/numeric/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/numeric/design.sv -o %t/numeric.o
+// RUN: talos --upf %t/policies/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/policies/design.sv -o %t/policies.o
+// RUN: %llvm_dist/bin/llvm-readobj --file-headers %t/states.o %t/numeric.o %t/policies.o | FileCheck %s
+// IEEE 1801-2018 6.5/11.2.2: predicates and signed32 microvolt decoding
+// lower in the native compiler with 32-bit target pointers and u64 handles.
+// CHECK-COUNT-3: AddressSize: 32bit

@@ -1,0 +1,93 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.5/9.3.2: deferred supply predicates select independent
+// power states. 4.5.4.7: a referenced well becomes required. Voltage-only
+// NORMAL handoffs preserve work; loss cancels it (9.5.3/9.6.7), including on
+// a computed switch output. Explicit OFF retains its fallback under -complete.
+// CHECK: voltage-qualified power states passed
+
+//--- design.sv
+package audit;
+  int calls = 0;
+  function logic sample(logic d);
+    calls++;
+    return d;
+  endfunction
+endpackage
+module leaf(input logic clk, d, output logic q, y);
+  always @(posedge clk) q <= #3 d;
+  always_comb y = audit::sample(d);
+endmodule
+module top;
+  import UPF::*;
+  logic enable = 1, clk = 0, d = 1;
+  wire q, y;
+  int calls;
+  leaf dut(clk, d, q, y);
+  initial begin
+    #1;
+    if (y !== 1'bx || audit::calls != 0) $fatal(1, "initial OFF");
+    if (!supply_on("/top/VDD") || !supply_on("/top/VSS", 0.0)) $fatal(1, "power ON");
+    #1;
+    if (y !== 1'bx || audit::calls != 0) $fatal(1, "required well ignored");
+    if (!supply_on("/top/BIAS")) $fatal(1, "well ON");
+    #1;
+    if (y !== 1'b1 || audit::calls != 1 || q !== 1'bx) $fatal(1, "well restore");
+    clk = 1;
+    #1;
+    calls = audit::calls;
+    if (!supply_on("/top/VDD", 0.8)) $fatal(1, "DVFS low");
+    #1;
+    if (y !== 1'b1 || audit::calls != calls) $fatal(1, "NORMAL voltage reran RTL");
+    if (!supply_on("/top/VDD", 1.2)) $fatal(1, "TURBO");
+    #2;
+    if (q !== 1'b1 || audit::calls != calls) $fatal(1, "NORMAL state handoff cancelled NBA");
+    clk = 0; d = 0;
+    #1 clk = 1;
+    #1;
+    if (!supply_on("/top/VDD", 0.9)) $fatal(1, "RET");
+    #1;
+    if (q !== 1'bx || y !== 1'bx) $fatal(1, "CORRUPT voltage did not lose state");
+    if (!supply_on("/top/VDD", 0.8)) $fatal(1, "DVFS restore");
+    #3;
+    if (q !== 1'bx || y !== 1'b0) $fatal(1, "stale NBA survived voltage loss");
+    if (!supply_on("/top/VDD", 0.7)) $fatal(1, "gap voltage");
+    #1;
+    if (y !== 1'bx) $fatal(1, "explicit OFF removed fallback");
+    if (!supply_on("/top/VDD")) $fatal(1, "nominal restore");
+    #1;
+    if (y !== 1'b0 || q !== 1'bx) $fatal(1, "fallback restoration");
+    if (!supply_off("/top/BIAS")) $fatal(1, "well OFF");
+    #1;
+    if (y !== 1'bx) $fatal(1, "required well did not wake monitor");
+    if (!supply_on("/top/CORE.nwell")) $fatal(1, "well alias restore");
+    #1;
+    if (y !== 1'b0) $fatal(1, "well restore");
+    enable = 0;
+    #1;
+    if (y !== 1'bx) $fatal(1, "switch OFF");
+    enable = 1;
+    #1;
+    if (y !== 1'b0) $fatal(1, "switch restore");
+    $display("voltage-qualified power states passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+foreach net {VDD VSS BIAS} {create_supply_net $net}
+create_supply_set CORE -function {ground VSS} -function {nwell BIAS}
+create_power_domain PD -elements dut -supply {primary CORE}
+create_power_switch PS -domain PD -input_supply_port {vin VDD} \
+    -output_supply_port {vout CORE.power} -control_port {en enable} -on_state {ON vin en}
+add_power_state CORE -supply \
+    -state {ON -supply_expr {(power == {FULL_ON 1.0} || power == {FULL_ON 0.8}) && ground == {FULL_ON 0} && nwell == FULL_ON}} \
+    -state {TURBO -supply_expr {power == '{FULL_ON, 1.2} && ground == {FULL_ON 0} && nwell == FULL_ON} -simstate NORMAL} \
+    -state {RET -supply_expr {power == {FULL_ON 0.9}} -simstate NOT_NORMAL} \
+    -state {OFF -supply_expr {power == OFF}} -complete

@@ -1,0 +1,11 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-power-states-diagnostics.test %t/diagnostics
+// RUN: %split-file %S/upf-power-states-eval.test %t/eval
+// RUN: %split-file %S/upf-power-states-settling.test %t/settling
+// RUN: talos --upf %t/diagnostics/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/diagnostics/design.sv -o %t/diagnostics.o
+// RUN: talos --upf %t/eval/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/eval/design.sv -o %t/eval.o
+// RUN: talos --upf %t/settling/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/settling/design.sv -o %t/settling.o
+// RUN: %llvm_dist/bin/llvm-readobj --file-headers %t/diagnostics.o %t/eval.o %t/settling.o | FileCheck %s
+// IEEE 1801-2018 6.5.6n/9.2.3/9.3.2: set diagnostics and supply-driven
+// restoration use the same target-independent storage and scheduling paths.
+// CHECK-COUNT-3: AddressSize: 32bit

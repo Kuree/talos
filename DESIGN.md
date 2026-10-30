@@ -120,22 +120,38 @@ The initial command bridge supports `upf_version 3.1`, `set_design_top`,
 `set_scope`, `find_objects`, `load_upf`, basic supply net/port declarations and
 connections, `create_supply_set`, `associate_supply_set`,
 `create_power_domain` with supply handles, `set_domain_supply_net`,
-`create_power_switch`, and output `set_isolation`. Options outside the
+`create_power_switch`, supply-set `add_power_state`, and output `set_isolation`. Options outside the
 implemented subset are diagnosed. Root supplies initially are OFF (IEEE
 1801-2018 9.2.1). The compiler-provided SystemVerilog package `UPF` implements
 `supply_on` / `supply_off` against absolute UPF root handles, including eligible
 net/port and implicit primary-function aliases (11.2.3). Connected unresolved
 supplies share one per-context state/voltage storage value, with signed32
-microvolts on both native and wasm32 targets. Direct domains and switched
-domains require FULL_ON primary power and ground; ground can be FULL_ON at
-zero volts (4.7.4). Supply sets preserve six function identities separately from
+microvolts on both native and wasm32 targets. Unmodified ON definitions require
+FULL_ON primary power and ground; ground can be FULL_ON at zero volts (4.7.4).
+Supply sets preserve six function identities separately from
 requiredness, with corresponding function roots shared by electrical
 associations, including later bindings (4.5.4.7/6.10/6.26). Switches connect to
 primary power through function handles, supply-set associations, or legacy
 `set_domain_supply_net` (5.3.3.5/6.22/6.43). `--upf-assume-powered-inputs` retains
 the prototype's omitted-association inference and changes initial writable roots
 to FULL_ON for compatibility. General supply resolution, switch cascades,
-explicit power-state definitions, and retention remain to be implemented.
+hierarchical power-state refinements, and retention remain to be implemented.
+
+Deferred supply-set states retain typed supply predicates and explicit
+NORMAL/CORRUPT/NOT_NORMAL policies (6.5/9.3.2). State and real-voltage
+comparisons decode the shared signed32 microvolt representation on all targets.
+Explicit ON replaces the required-function default; OFF preserves its fallback.
+Flat state overlap selects ERROR/CORRUPT and records a simulation error, while
+an illegal NORMAL state keeps its NORMAL behavior. A domain combines its own
+primary catalog with explicitly associated suppliers without inheriting another
+domain's local primary catalog (6.5.1). Association provenance, function origin,
+and owner references are retained and verified in the dialect. Tcl updates are
+staged atomically, checked for supported refinements and direct contradictions,
+then checked again after final supply resolution. Supply predicates, simstates,
+catalogs, and policy references are attributes on the existing three operations.
+Set diagnostics and RTL guards read computed switch outputs from current
+source/control values; NORMAL handoffs preserve pending work, while loss of
+NORMAL uses the same corruption and cancellation path as physical power loss.
 
 The simulation slice accepts independent direct domains and domains controlled
 by one switch. A switch has named ON/ERROR conditions and an optional named OFF

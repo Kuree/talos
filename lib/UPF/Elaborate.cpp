@@ -1,5 +1,6 @@
 // Power guards and corruption writes remain visible to subsequent analyses.
 #include "ElaborateSupply.h"
+#include "PowerState.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -17,6 +18,9 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
+#include <memory>
+#include <set>
+#include <tuple>
 using namespace mlir;
 namespace talos {
 namespace {
@@ -306,6 +310,9 @@ struct PowerCondition {
   llvm::SetVector<StringRef> controls;
   llvm::SetVector<upf::ExpressionTokenAttr> references, onReferences;
   const llvm::StringMap<Descriptor> &descriptors;
+  const llvm::StringMap<Descriptor> &supplies;
+  SmallVector<upf::UPFSupplySetOp> policies;
+  SmallVector<Descriptor> policyInputs;
   Descriptor power;
   std::optional<Descriptor> input, ground;
   SmallVector<Descriptor> required;
@@ -314,12 +321,28 @@ struct PowerCondition {
                  const llvm::StringMap<Descriptor> &supplies)
       : off(domain.getOffAttr() ? domain.getOffAttr().getCondition()
                                 : upf::ExpressionAttr{}),
-        descriptors(descriptors),
+        descriptors(descriptors), supplies(supplies),
         power(supplies.lookup(domain.getPowerAttr().getValue())) {
     if (auto attr = domain.getInputAttr())
       input = supplies.lookup(attr.getValue());
     if (auto attr = domain.getGroundAttr())
       ground = supplies.lookup(attr.getValue());
+    if (auto attrs = domain.getPoliciesAttr()) {
+      for (auto attr : attrs)
+        policies.push_back(
+            SymbolTable::lookupNearestSymbolFrom<upf::UPFSupplySetOp>(
+                domain, cast<FlatSymbolRefAttr>(attr)));
+    } else if (auto primary = domain.getPrimaryAttr())
+      policies.push_back(
+          SymbolTable::lookupNearestSymbolFrom<upf::UPFSupplySetOp>(domain,
+                                                                    primary));
+    llvm::DenseSet<uint64_t> policyIDs;
+    for (auto policy : policies)
+      for (auto ref : getSupplySetReferences(policy)) {
+        auto descriptor = supplies.lookup(ref.getValue());
+        if (policyIDs.insert(descriptor.id).second)
+          policyInputs.push_back(descriptor);
+      }
     if (auto primary = domain.getPrimaryAttr()) {
       auto set = SymbolTable::lookupNearestSymbolFrom<upf::UPFSupplySetOp>(
           domain, primary);
@@ -403,6 +426,22 @@ struct PowerCondition {
     return result;
   }
   Value normal(OpBuilder &b, Location loc, Value context) const {
+    if (!policies.empty()) {
+      Value result = arith::ConstantIntOp::create(b, loc, 1, 1);
+      for (auto policy : policies) {
+        auto value = evaluateSupplySet(
+            policy, b, loc, [&](FlatSymbolRefAttr ref) -> Value {
+              auto source = supplies.lookup(ref.getValue());
+              // Evaluate our output inline, preserving clock/NBA ordering when
+              // source voltage or controls changed in this same activation.
+              if (input && source.id == power.id)
+                return drivenSupply(b, loc, context);
+              return load(b, loc, handle(b, loc, context, source));
+            });
+        result = arith::AndIOp::create(b, loc, result, value.normal);
+      }
+      return result;
+    }
     auto full = [&](Descriptor supply) -> Value {
       Value value = load(b, loc, handle(b, loc, context, supply));
       Value state = arith::AndIOp::create(
@@ -538,6 +577,7 @@ struct Lowering {
   uint64_t nextStorage = 0, nextUnit = 0;
   llvm::StringMap<Descriptor> descriptors;
   llvm::StringMap<Descriptor> supplies;
+  llvm::DenseMap<uint64_t, std::unique_ptr<PowerCondition>> computed;
   SmallVector<SupplyTableEntry> supplyTable;
   llvm::DenseMap<uint64_t, std::string> unitPaths;
   llvm::DenseMap<uint64_t, std::string> scopePaths;
@@ -600,6 +640,94 @@ struct Lowering {
         builder.getStringAttr(name), builder.getStringAttr(name),
         schedule::ComputeObservabilityKindAttr{}, sim::VPITypeSemanticsAttr{});
     return result;
+  }
+  LogicalResult monitorStates(ArrayRef<upf::UPFSupplySetOp> sets) {
+    for (auto set : sets) {
+      if (!set.getStatesAttr() || set.getStatesAttr().empty())
+        continue;
+      Location loc = set.getLoc();
+      auto monitor = function(loc, "__upf_states." + set.getSymName().str(),
+                              {sim::ContextType::get(builder.getContext())},
+                              sim::EntryKind::Always);
+      sim::mark<sim::metadata::PowerMonitor>(monitor);
+      auto &entry = monitor.getBody().front();
+      auto *loop = new Block, *wait = new Block;
+      monitor.getBody().push_back(loop);
+      monitor.getBody().push_back(wait);
+      builder.setInsertionPointToEnd(&entry);
+      Value context = entry.getArgument(0);
+      cf::BranchOp::create(builder, loc, loop);
+      builder.setInsertionPointToEnd(loop);
+      auto state =
+          evaluateSupplySet(set, builder, loc, [&](FlatSymbolRefAttr ref) {
+            auto supply = supplies.lookup(ref.getValue());
+            if (auto condition = computed.find(supply.id);
+                condition != computed.end())
+              return condition->second->drivenSupply(builder, loc, context);
+            return load(builder, loc, handle(builder, loc, context, supply));
+          });
+      auto report = [&](Value error, StringRef reason, StringRef clause) {
+        auto *message = new Block, *next = new Block;
+        monitor.getBody().push_back(message);
+        monitor.getBody().push_back(next);
+        cf::CondBranchOp::create(builder, loc, error, message, next);
+        builder.setInsertionPointToEnd(message);
+        sim::SimErrorOp::create(builder, loc, context);
+        Value text = sim::SimBytesConstantOp::create(
+            builder, loc,
+            "UPF supply set " + set.getSymName().str() + ": " + reason.str() +
+                " (IEEE 1801-2018 " + clause.str() + ")");
+        sim::SimDisplayOp::create(
+            builder, loc, context,
+            arith::ConstantIntOp::create(builder, loc, 0x80000002u, 32),
+            ValueRange{text}, true, sim::Radix::Decimal,
+            builder.getDenseI32ArrayAttr({0}), StringAttr{}, StringAttr{},
+            IntegerAttr{}, IntegerAttr{});
+        cf::BranchOp::create(builder, loc, next);
+        builder.setInsertionPointToEnd(next);
+      };
+      // 4.7.3/6.5.6(n): diagnose overlap/illegality independently. An illegal
+      // NORMAL row still has NORMAL behavior; only current ERROR corrupts.
+      report(state.conflict, "overlapping power states", "4.7.3/9.3.2");
+      report(state.illegal, "illegal power state", "6.5.6n");
+      cf::BranchOp::create(builder, loc, wait);
+      builder.setInsertionPointToEnd(wait);
+      std::set<std::tuple<uint64_t, bool, bool>> ids;
+      SmallVector<Value> watched;
+      auto watch = [&](Descriptor supply) {
+        if (ids.emplace(supply.id, supply.net, supply.driver).second)
+          watched.push_back(handle(builder, loc, context, supply));
+      };
+      for (auto ref : getSupplySetReferences(set)) {
+        auto supply = supplies.lookup(ref.getValue());
+        if (auto condition = computed.find(supply.id);
+            condition != computed.end()) {
+          watch(*condition->second->input);
+          for (auto path : condition->second->controls)
+            watch(descriptors.lookup(path));
+        } else
+          watch(supply);
+      }
+      if (watched.empty())
+        sim::SimReturnOp::create(builder, loc, ValueRange{});
+      else
+        sim::SimSuspendAnyOp::create(
+            builder, loc, watched,
+            builder.getDenseI32ArrayAttr(
+                SmallVector<int32_t>(watched.size(), 0)),
+            schedule::ContinuationSiteAttr{}, sim::EventRegionAttr{}, loop);
+      Operation *first = root.getBody().front().getTerminator();
+      for (auto &op : root.getBody().front())
+        if (isa<sim::SimSpawnOp>(op)) {
+          first = &op;
+          break;
+        }
+      builder.setInsertionPoint(first);
+      sim::SimSpawnOp::create(builder, loc, monitor.getSymNameAttr(),
+                              ValueRange{root.getArgument(0)}, ArrayAttr{},
+                              ArrayAttr{});
+    }
+    return success();
   }
   LogicalResult prepareSupplies(ArrayRef<upf::UPFSupplyOp> roots) {
     if (roots.empty())
@@ -1149,16 +1277,20 @@ struct Lowering {
     for (StringRef path : controls)
       watched.push_back(
           handle(builder, loc, context, descriptors.lookup(path)));
-    watched.push_back(handle(builder, loc, context,
-                             condition.input.value_or(condition.power)));
-    if (condition.ground &&
-        condition.ground->id != condition.input.value_or(condition.power).id)
-      watched.push_back(handle(builder, loc, context, *condition.ground));
-    for (auto supply : condition.required)
-      if (supply.id != condition.input.value_or(condition.power).id &&
-          (!condition.ground || supply.id != condition.ground->id) &&
-          supply.id != condition.power.id)
+    llvm::DenseSet<uint64_t> supplyIDs;
+    auto watch = [&](Descriptor supply) {
+      if (supplyIDs.insert(supply.id).second)
         watched.push_back(handle(builder, loc, context, supply));
+    };
+    watch(condition.input.value_or(condition.power));
+    if (condition.ground)
+      watch(*condition.ground);
+    for (auto supply : condition.required)
+      if (!condition.input || supply.id != condition.power.id)
+        watch(supply);
+    for (auto supply : condition.policyInputs)
+      if (!condition.input || supply.id != condition.power.id)
+        watch(supply);
     cf::BranchOp::create(builder, loc, loop);
     builder.setInsertionPointToEnd(loop);
     Value on = condition.normal(builder, loc, context);
@@ -1305,11 +1437,22 @@ struct ElaborateUPFPass
       return;
     }
     for (auto domain : domains)
+      if (domain.getInputAttr()) {
+        auto condition = std::make_unique<PowerCondition>(
+            domain, lowering.descriptors, lowering.supplies);
+        lowering.computed.try_emplace(condition->power.id,
+                                      std::move(condition));
+      }
+    for (auto domain : domains)
       if (failed(lowering.apply(domain))) {
         signalPassFailure();
         return;
       }
     if (failed(lowerSupplyControls(*designs.begin(), lowering.supplyTable))) {
+      signalPassFailure();
+      return;
+    }
+    if (failed(lowering.monitorStates(sets))) {
       signalPassFailure();
       return;
     }

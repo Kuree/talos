@@ -2,6 +2,7 @@
 // lookup.
 #include "BooleanExpression.h"
 #include "ControlReference.h"
+#include "SupplyExpression.h"
 #include "SupplyNetwork.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -45,6 +46,16 @@ struct SupplySet {
   std::set<std::string> required;
   std::optional<std::string> updateScope;
   std::optional<Location> location;
+  struct State {
+    std::optional<SupplyExpression> condition;
+    std::optional<Location> location;
+    upf::Simstate simstate = upf::Simstate::Unspecified;
+    bool illegal = false;
+  };
+  std::map<std::string, State> states;
+  std::optional<std::string> stateScope;
+  bool complete = false;
+  std::string owner;
 };
 struct Session {
   ModuleOp module;
@@ -619,6 +630,7 @@ struct Session {
         SupplySet handle;
         handle.scope = scope;
         handle.handle = true;
+        handle.owner = dom.name;
         // 8.3.2: subordinate objects retain their creation execution scope.
         handle.updateScope = scope;
         handle.location = dom.location;
@@ -654,6 +666,208 @@ struct Session {
       for (auto &[a, b] : associations)
         if (a == primary || b == primary)
           markPrimaryAssociations({a, b});
+      Tcl_ResetResult(interp);
+      return TCL_OK;
+    }
+    if (command == "add_power_state") {
+      // IEEE 1801-2018 5.10/6.5: stage catalog, command scope, requirements
+      // and completion together. A caught error commits none of those fields.
+      StringRef objectName;
+      bool sawObject = false;
+      bool update = false, complete = false, supplyKind = false;
+      std::vector<Tcl_Obj *> rows;
+      for (Tcl_Size i = 1; i < objc; ++i) {
+        StringRef word = Tcl_GetString(objv[i]);
+        if (word == "-state") {
+          if (++i == objc)
+            return error("missing value for -state");
+          rows.push_back(objv[i]);
+        } else if (word == "-update") {
+          if (update)
+            return error("duplicate UPF option -update");
+          update = true;
+        } else if (word == "-complete") {
+          if (complete)
+            return error("duplicate UPF option -complete");
+          complete = true;
+        } else if (word == "-supply") {
+          if (supplyKind)
+            return error("duplicate UPF option -supply");
+          supplyKind = true;
+        } else if (word.starts_with('-'))
+          return error("unsupported add_power_state option: " + word);
+        else if (sawObject)
+          return error("add_power_state requires one object name");
+        else {
+          objectName = word;
+          sawObject = true;
+        }
+      }
+      if (objectName.empty())
+        return error("add_power_state requires a supply set or handle");
+      std::string id = supplySetKey(objectName);
+      auto found = supplySets.find(id);
+      if (found == supplySets.end())
+        return error("unknown supply set or handle: " + objectName);
+      SupplySet set = found->second;
+      if (set.stateScope && !update)
+        return error("subsequent add_power_state commands require -update");
+      if (set.stateScope && *set.stateScope != scope)
+        return error(
+            "power-state updates must use the original execution scope");
+      bool first = !set.stateScope;
+      set.stateScope = scope;
+      bool touchesPredefined = false;
+      for (auto row : rows) {
+        std::vector<std::string> fields;
+        if (!list(row, fields))
+          return TCL_ERROR;
+        if (!fields.empty() && (fields[0] == "ON" || fields[0] == "OFF"))
+          touchesPredefined = true;
+      }
+      // 6.5.4's first ON examples omit -update; informative Annex E.4.4.3
+      // requires it. Accept either first spelling for predefined states;
+      // preserve normal command-history rules for new states/later calls.
+      if (first && update && !touchesPredefined)
+        return error(
+            "a first command defining new power states must omit -update");
+      Location stateLocation = declarationLocation();
+      size_t catalogTokens = 0;
+      for (auto &[name, state] : set.states)
+        if (state.condition)
+          catalogTokens += state.condition->tokens.size();
+      for (auto row : rows) {
+        std::vector<std::string> fields;
+        if (!list(row, fields))
+          return TCL_ERROR;
+        if (fields.empty())
+          return error("power state requires a name");
+        std::string name = fields.front();
+        if (StringRef(name).contains('.'))
+          return error(
+              "hierarchical power-state refinements are not implemented");
+        if (!identifier(name))
+          return TCL_ERROR;
+        if (name == "ERROR" || name == "UNDEFINED")
+          return error("explicit edits of ERROR/UNDEFINED power states are not "
+                       "implemented");
+        bool predefined = name == "ON" || name == "OFF";
+        if (!set.states.count(name) && set.states.size() == 256)
+          return error(
+              "power-state catalog exceeds 256 states or 65536 tokens");
+        if (set.complete && !predefined && !set.states.count(name))
+          return error("cannot add a fundamental power state after -complete");
+        SupplySet::State state;
+        if (auto previous = set.states.find(name); previous != set.states.end())
+          state = previous->second;
+        else if (predefined)
+          state.simstate =
+              name == "ON" ? upf::Simstate::Normal : upf::Simstate::Corrupt;
+        size_t oldTokens = state.condition ? state.condition->tokens.size() : 0;
+        std::set<std::string> options;
+        for (size_t i = 1; i < fields.size(); ++i) {
+          StringRef option = fields[i];
+          if (!options.insert(option.str()).second)
+            return error("duplicate power-state option: " + option);
+          if (option == "-illegal" || option == "-legal") {
+            if (options.count(option == "-legal" ? "-illegal" : "-legal"))
+              return error(
+                  "power state cannot specify both -legal and -illegal");
+            if (state.illegal && option == "-legal")
+              return error("illegal power states cannot be made legal");
+            state.illegal = option == "-illegal";
+          } else if (option == "-simstate") {
+            if (++i == fields.size())
+              return error("missing value for -simstate");
+            upf::Simstate next;
+            if (fields[i] == "NORMAL")
+              next = upf::Simstate::Normal;
+            else if (fields[i] == "CORRUPT")
+              next = upf::Simstate::Corrupt;
+            else if (fields[i] == "NOT_NORMAL")
+              next = upf::Simstate::NotNormal;
+            else
+              return error("unsupported power-state simstate: " + fields[i]);
+            if (state.simstate != upf::Simstate::Unspecified &&
+                state.simstate != next &&
+                !(state.simstate == upf::Simstate::NotNormal &&
+                  next != upf::Simstate::Normal))
+              return error("power-state simstate conflicts with its previous "
+                           "definition");
+            state.simstate = next;
+          } else if (option == "-supply_expr") {
+            if (++i == fields.size())
+              return error("missing value for -supply_expr");
+            auto resolve = [&](StringRef name) -> FailureOr<SupplyReference> {
+              std::optional<SupplyObject> object;
+              if (llvm::is_contained(upf::getSupplyFunctionNames(), name))
+                object = function(id, name);
+              else {
+                name.consume_front("./");
+                object = supply(name, true);
+              }
+              if (!object) {
+                error("unknown supply expression reference: " + name);
+                return failure();
+              }
+              SupplyReference reference{*object, {}, {}};
+              if (object->kind == SupplyObject::Function) {
+                StringRef field = StringRef(object->path).rsplit('.').second;
+                if (*object != function(id, field)) {
+                  error("supply expression cannot reference another supply "
+                        "set's function (IEEE 1801-2018 6.5.6a)");
+                  return failure();
+                }
+                reference.function = field.str();
+                reference.required.insert(field.str());
+              }
+              return reference;
+            };
+            auto expression = parseSupplyExpression(
+                fields[i], resolve,
+                [&](const llvm::Twine &message) { error(message); });
+            if (failed(expression))
+              return TCL_ERROR;
+            auto contradiction = contradictsSupplyExpression(
+                *expression, [&](const SupplyObject &a, const SupplyObject &b) {
+                  return sameSupply(a, b);
+                });
+            if (!contradiction)
+              return error("supply-expression consistency check exceeds 256 "
+                           "branches or 65536 work units");
+            if (*contradiction)
+              return error("contradictory supply expression (IEEE 1801-2018 "
+                           "5.10/6.5.2)");
+            if (state.condition &&
+                !refinesSupplyExpression(
+                    *state.condition, *expression,
+                    [&](const SupplyObject &a, const SupplyObject &b) {
+                      return sameSupply(a, b);
+                    }))
+              return error(
+                  "conflicting or unsupported supply-expression refinement");
+            set.required.insert(expression->required.begin(),
+                                expression->required.end());
+            state.condition = std::move(*expression);
+            state.location = stateLocation;
+          } else
+            return error("unsupported power-state option: " + option);
+        }
+        size_t newTokens = state.condition ? state.condition->tokens.size() : 0;
+        catalogTokens = catalogTokens - oldTokens + newTokens;
+        if (catalogTokens > 65536)
+          return error(
+              "power-state catalog exceeds 256 states or 65536 tokens");
+        set.states.insert_or_assign(name, std::move(state));
+      }
+      size_t tokens = 0;
+      for (auto &[name, state] : set.states)
+        if (state.condition)
+          tokens += state.condition->tokens.size();
+      if (set.states.size() > 256 || tokens > 65536)
+        return error("power-state catalog exceeds 256 states or 65536 tokens");
+      set.complete |= complete;
+      supplySets.insert_or_assign(id, std::move(set));
       Tcl_ResetResult(interp);
       return TCL_OK;
     }
@@ -1146,7 +1360,7 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
         "load_upf", "create_power_domain", "create_supply_net",
         "create_supply_port", "connect_supply_net", "set_domain_supply_net",
         "create_power_switch", "set_isolation", "create_supply_set",
-        "associate_supply_set"})
+        "associate_supply_set", "add_power_state"})
     commands.push_back({&session, name});
   for (auto &command : commands)
     Tcl_CreateObjCommand2(interp.get(), command.name, dispatch, &command,
@@ -1173,18 +1387,6 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
     for (auto &[function, object] : set.functions)
       equivalences.emplace_back(session.function(name, function), object);
   }
-  bool changed;
-  do {
-    changed = false;
-    for (auto &[a, b] : session.setAssociations) {
-      auto &left = session.supplySets.at(a).required;
-      auto &right = session.supplySets.at(b).required;
-      for (auto function : left)
-        changed |= right.insert(function).second;
-      for (auto function : right)
-        changed |= left.insert(function).second;
-    }
-  } while (changed);
   for (auto &[a, b] : session.setAssociations)
     for (StringRef function : upf::getSupplyFunctionNames())
       equivalences.emplace_back(session.function(a, function),
@@ -1209,6 +1411,63 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
       return supplies.ports.at(object.path);
     return supplies.nets.at(object.path);
   };
+  for (auto &[name, set] : session.supplySets)
+    for (auto &[stateName, state] : set.states) {
+      if (!state.condition)
+        continue;
+      if (state.simstate == upf::Simstate::Unspecified)
+        return emitError(state.location.value_or(
+                   set.location.value_or(module.getLoc())))
+               << "active power states without a simstate require history "
+                  "semantics and are not implemented: "
+               << stateName;
+      bool powerOrGround = false;
+      // Later bindings can make previously independent references equivalent.
+      // Recheck 5.10/6.5.2 after resolving the final supply topology.
+      auto contradiction = contradictsSupplyExpression(
+          *state.condition, [&](const SupplyObject &a, const SupplyObject &b) {
+            return rootFor(a) == rootFor(b);
+          });
+      if (!contradiction || *contradiction)
+        return emitError(state.location.value_or(
+                   set.location.value_or(module.getLoc())))
+               << (!contradiction ? "supply-expression consistency check "
+                                    "exceeds 256 branches or 65536 work units"
+                                  : "contradictory supply expression (IEEE "
+                                    "1801-2018 5.10/6.5.2)");
+      for (auto &token : state.condition->tokens)
+        if (token.reference) {
+          const auto &reference = *token.reference;
+          if (!reference.function.empty()) {
+            powerOrGround |=
+                reference.function == "power" || reference.function == "ground";
+          } else {
+            for (StringRef function : upf::getSupplyFunctionNames())
+              if (rootFor(reference.object) ==
+                  supplies.functions.at(name + "." + function.str())) {
+                set.required.insert(function.str());
+                powerOrGround |= function == "power" || function == "ground";
+              }
+          }
+        }
+      if (!powerOrGround)
+        return emitError(state.location.value_or(
+                   set.location.value_or(module.getLoc())))
+               << "supply expression must reference the set's power or ground "
+                  "function (IEEE 1801-2018 6.5.6a)";
+    }
+  bool changed;
+  do {
+    changed = false;
+    for (auto &[a, b] : session.setAssociations) {
+      auto &left = session.supplySets.at(a).required;
+      auto &right = session.supplySets.at(b).required;
+      for (auto function : left)
+        changed |= right.insert(function).second;
+      for (auto function : right)
+        changed |= left.insert(function).second;
+    }
+  } while (changed);
   for (auto &[name, set] : session.supplySets)
     supplies.roots[supplies.functions.at(name + ".ground")].ground = true;
   struct DomainSupplies {
@@ -1254,6 +1513,36 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
     return FlatSymbolRefAttr::get(module.getContext(),
                                   "__upf_supply_" + std::to_string(id));
   };
+  auto expressionAttr = [&](const SupplyExpression &expression) {
+    SmallVector<Attribute> tokens;
+    for (auto &token : expression.tokens) {
+      FlatSymbolRefAttr supply;
+      StringAttr function;
+      IntegerAttr value;
+      FloatAttr real;
+      if (token.reference) {
+        supply = supplySymbol(rootFor(token.reference->object));
+        if (!token.reference->function.empty())
+          function = builder.getStringAttr(token.reference->function);
+      }
+      using O = upf::SupplyExpressionOpcode;
+      if (token.opcode == O::Boolean)
+        value = builder.getIntegerAttr(builder.getI1Type(), token.value);
+      if (token.opcode == O::StateValue)
+        value = builder.getI32IntegerAttr(token.value);
+      if (token.opcode == O::Real)
+        real = builder.getF64FloatAttr(token.real);
+      tokens.push_back(upf::SupplyExpressionTokenAttr::get(
+          module.getContext(), token.opcode, supply, function, value, real));
+    }
+    return upf::SupplyExpressionAttr::get(module.getContext(),
+                                          builder.getArrayAttr(tokens));
+  };
+  std::map<std::string, std::set<std::string>> associated;
+  for (auto &[a, b] : session.setAssociations) {
+    associated[a].insert(b);
+    associated[b].insert(a);
+  }
   for (unsigned id = 0; id < supplies.roots.size(); ++id) {
     SmallVector<Attribute> names;
     for (auto &[name, root] : supplies.handles)
@@ -1277,15 +1566,50 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
                                  name + "." + function.str())));
     for (auto &function : set.required)
       required.push_back(builder.getStringAttr(function));
-    upf::UPFSupplySetOp::create(builder, set.location.value_or(module.getLoc()),
-                                name,
-                                bindings.getDictionary(module.getContext()),
-                                builder.getArrayAttr(required));
+    SmallVector<Attribute> states, links;
+    for (auto &[stateName, state] : set.states)
+      states.push_back(upf::PowerStateAttr::get(
+          module.getContext(), builder.getStringAttr(stateName),
+          state.condition ? expressionAttr(*state.condition)
+                          : upf::SupplyExpressionAttr{},
+          state.simstate, state.illegal));
+    for (auto &other : associated[name])
+      links.push_back(FlatSymbolRefAttr::get(module.getContext(), other));
+    upf::UPFSupplySetOp::create(
+        builder, set.location.value_or(module.getLoc()), name,
+        bindings.getDictionary(module.getContext()),
+        builder.getArrayAttr(required),
+        states.empty() ? ArrayAttr{} : builder.getArrayAttr(states),
+        links.empty() ? ArrayAttr{} : builder.getArrayAttr(links),
+        set.owner.empty()
+            ? FlatSymbolRefAttr{}
+            : FlatSymbolRefAttr::get(module.getContext(), set.owner),
+        set.complete);
   }
   for (auto &[name, domain] : session.domains) {
     llvm::SmallVector<Attribute> elements;
     for (auto &element : domain.elements)
       elements.push_back(builder.getStringAttr(element));
+    // 6.20/9.5.1: retain role provenance. Global supply sets associated to
+    // this primary can constrain its elements; a sibling domain's local
+    // primary catalog does not acquire that role merely by sharing rails.
+    std::vector<std::string> work{domain.primary};
+    std::set<std::string> seen;
+    SmallVector<Attribute> policies;
+    while (!work.empty()) {
+      auto id = std::move(work.back());
+      work.pop_back();
+      if (!seen.insert(id).second)
+        continue;
+      auto &view = session.supplySets.at(id);
+      bool otherPrimary = !view.owner.empty() &&
+                          session.domains.at(view.owner).primary == id &&
+                          id != domain.primary;
+      if (!otherPrimary)
+        policies.push_back(FlatSymbolRefAttr::get(module.getContext(), id));
+      for (auto &next : associated[id])
+        work.push_back(next);
+    }
     upf::UPFDomainOp::create(
         builder, domain.location.value_or(module.getLoc()), name,
         builder.getArrayAttr(elements),
@@ -1295,7 +1619,8 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
             ? supplySymbol(*domainSupplies.at(name).input)
             : FlatSymbolRefAttr{},
         FlatSymbolRefAttr::get(module.getContext(), domain.primary),
-        builder.getArrayAttr(domain.on), domain.off,
+        builder.getArrayAttr(policies), builder.getArrayAttr(domain.on),
+        domain.off,
         domain.errors.empty() ? ArrayAttr{}
                               : builder.getArrayAttr(domain.errors),
         domain.isolation.empty() ? StringAttr{}

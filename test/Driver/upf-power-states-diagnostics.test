@@ -1,0 +1,70 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: not %t.o0 2>&1 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: not %t.o3 2>&1 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: not %t.bc 2>&1 | FileCheck %s
+// IEEE 1801-2018 4.7.3/6.5.6n/9.3.2: simultaneous fundamental states produce
+// ERROR/CORRUPT even with identical NORMAL simstates, including the default ON
+// row. An illegal NORMAL state reports an error but keeps NORMAL behavior.
+// Diagnostics do not terminate simulation, and both domains can recover.
+// CHECK-DAG: overlapping power states
+// CHECK-DAG: UPF supply set /top/Illegal: illegal power state
+// CHECK-DAG: UPF supply set /top/Switched: illegal power state
+// CHECK: power-state diagnostics and recovery passed
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1;
+endmodule
+module top;
+  import UPF::*;
+  logic enable = 1;
+  wire switch_net = enable;
+  wire overlap_q, illegal_q, switched_q;
+  leaf overlap(overlap_q), illegal_dut(illegal_q), switched_dut(switched_q);
+  initial begin
+    #1;
+    if (!supply_on("/top/Overlap.power", 0.8) ||
+        !supply_on("/top/Overlap.ground", 0.0) ||
+        !supply_on("/top/Illegal.power", 0.8) ||
+        !supply_on("/top/VDD") || !supply_on("/top/VSS", 0.0)) $fatal(1, "power ON");
+    #1;
+    if (overlap_q !== 1'bx) $fatal(1, "overlap kept RTL active");
+    if (illegal_q !== 1'b1) $fatal(1, "illegal NORMAL corrupted RTL");
+    if (switched_q !== 1'b1) $fatal(1, "switch startup");
+    enable = 1'bx;
+    #1;
+    if (switched_q !== 1'bx) $fatal(1, "unknown switch control");
+    enable = 1;
+    if (!supply_on("/top/Overlap.power") ||
+        !supply_on("/top/Illegal.power")) $fatal(1, "recovery");
+    #1;
+    if (overlap_q !== 1'b1 || illegal_q !== 1'b1 || switched_q !== 1'b1)
+      $fatal(1, "recovery failed");
+    $display("power-state diagnostics and recovery passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set Overlap
+create_power_domain OverlapDomain -elements overlap -supply {primary Overlap}
+# ON is unmodified, so the new row overlaps it when both rails are FULL_ON.
+add_power_state Overlap -state {LOW -supply_expr {power == {FULL_ON 0.8}} -simstate NORMAL}
+create_supply_set Illegal
+create_power_domain IllegalDomain -elements illegal_dut -supply {primary Illegal}
+add_power_state Illegal \
+    -state {ON -supply_expr {power == {FULL_ON 1.0}}} \
+    -state {LOW -supply_expr {power == {FULL_ON 0.8}} -simstate NORMAL -illegal}
+add_power_state IllegalDomain.primary -state {ON -supply_expr {power == FULL_ON}}
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set Switched -function {ground VSS}
+create_power_domain SwitchedDomain -elements switched_dut -supply {primary Switched}
+create_power_switch PS -domain SwitchedDomain -input_supply_port {vin VDD} \
+    -output_supply_port {vout Switched.power} -control_port {en switch_net} -on_state {ON vin en}
+# 6.22/9.3.2: roots stay fixed; a routed control change must wake diagnostics.
+add_power_state Switched -state {FAULT -supply_expr {power == UNDETERMINED} -simstate CORRUPT -illegal}

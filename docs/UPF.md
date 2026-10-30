@@ -161,7 +161,7 @@ Tcl uses names such as `CORE.power` and
 `/top/CORE.power`. Dots delimit UPF object fields, while slashes delimit HDL
 instance scopes (clause 5.3.3). Supply sets retain separate identities after
 association: electrical equivalence does not inherit power-state definitions
-(clause 6.5.1). Explicit power-state definitions remain a subsequent feature.
+(clause 6.5.1).
 
 Physical port and switch drivers remain distinct when aliases are collapsed;
 associations cannot hide an unresolved multiple-source error or bypass switch
@@ -169,11 +169,84 @@ output protection. Networks require one supported directional origin with
 reachability to their loads. Associated implicit functions do not each invent
 another driver (clauses 6.26.2 and 9.1).
 
+## Supply-set power states
+
+`add_power_state` supports deferred supply-set states with `-supply_expr`,
+`-simstate NORMAL|CORRUPT|NOT_NORMAL`, `-legal`/`-illegal`, `-update`, and
+`-complete` (clauses 6.5 and 9.3.2):
+
+```tcl
+add_power_state CORE \
+    -state {ON -supply_expr {(power == {FULL_ON 1.0} || power == {FULL_ON 0.8}) && ground == {FULL_ON 0}}} \
+    -state {RET -supply_expr {power == {FULL_ON 0.9}} -simstate CORRUPT} \
+    -state {OFF -supply_expr {power == OFF}} -complete
+```
+
+Supply predicates support state equality, state/nominal-voltage aggregates,
+explicit `.state` and `.voltage` fields, real voltage comparisons, parentheses,
+and Boolean operators with SystemVerilog precedence (clauses 5.4 and 6.5.4).
+`!=` negates the whole aggregate comparison. Stored signed32 microvolts are
+converted to binary64 volts before comparison; predicate thresholds are not
+rounded using the write conversion. Unsized numeric literals acquire real
+voltage semantics beside voltage operands. Numeric-only comparisons and
+bitwise operations on unsized numeric literals are diagnosed; explicit
+one-bit literals and Boolean predicates support bitwise operators.
+
+Bare function names refer to this set's functions; `./power` selects a local
+physical supply named `power`. Physical net/port references are supported,
+but a predicate must reference this set's power or ground. Another set's
+function is rejected even if electrically equivalent (clause 6.5.6a). Used
+functions become required, including wells. The unmodified default ON checks
+all required functions for FULL_ON; an explicit ON predicate replaces that
+test (clauses 4.5.4.7 and 4.7.4).
+
+Flat fundamental states are exclusive. Overlap, including with the default
+ON state, records a simulation error and makes the current state ERROR with
+CORRUPT behavior. A uniquely active illegal NORMAL state records an error
+while preserving NORMAL behavior (clauses 4.7.3, 6.5.6n, and 9.3.2). Explicit
+OFF retains the fallback when no other state is active. `-complete` prevents
+adding new fundamental names; gaps still select the predefined OFF state.
+
+A domain combines the policies of its primary handle and its explicitly
+associated suppliers. Association traversal is transitive, including through
+another domain's primary handle, but that other primary's local catalog stays
+local. A supplying auxiliary handle contributes its policy. Merely sharing
+physical rails does not create a policy dependency (clauses 6.5.1 and 9.3.2).
+NORMAL-to-NORMAL voltage changes preserve RTL evaluations and queued NBAs;
+loss of NORMAL corrupts and cancels work, and restoration reevaluates level
+logic (clauses 9.5.3 and 9.6.7).
+
+Definitions can be filled incrementally in the original execution scope.
+Subsequent commands require `-update`. For first edits of predefined ON/OFF,
+both spellings are accepted because clause 6.5.4 examples omit `-update` while
+informative Annex E.4.4.3 requires it. ON/OFF simstates are fixed; NOT_NORMAL
+acts as CORRUPT in this slice and may later refine to CORRUPT. Other named
+states require an explicit simstate when they have an active predicate.
+Condition-free drafts are retained but remain inactive.
+
+Each expression is bounded to 64 KiB, 4096 parser nodes, and 256 tree levels;
+each catalog to 256 states and 65536 postfix tokens. Predicate updates must
+preserve the previous predicate through supported structural refinements.
+A bounded consistency check rejects direct Boolean contradictions and
+conflicting scalar literal bounds, including aliases resolved by later
+bindings. It does not prove general satisfiability, solve transitive relations
+between different supplies, or account for every gap in the microvolt grid.
+Expansion beyond 256 Boolean branches or 65536 work units is diagnosed.
+Caught command errors commit no catalog, history, requiredness, or completion
+changes. Delayed errors retain the predicate's Tcl source location.
+
+Power-domain states, hierarchical state refinements, `-logic_expr`,
+`-power_expr`, activity-dependent simstates, and power-state control/query
+package APIs remain unsupported. In particular, `-logic_expr` requires a
+different activation/assertion model and is diagnosed explicitly; it is not
+silently combined with a supply predicate (clauses 6.5 and 9.3.2).
+
 ## Runtime supplies
 
 Supplies start OFF, as specified in clause 9.2.1. Both switched and direct
-domains require all primary power and ground functions to be FULL_ON before
-their logic runs normally (clause 4.7.4). Ground at zero volts can be FULL_ON;
+domains with unmodified ON definitions require all required primary functions,
+including power and ground, to be FULL_ON before their logic runs normally
+(clause 4.7.4). Ground at zero volts can be FULL_ON;
 voltage is not itself an ON predicate. Unassociated primary power and ground
 functions have independent roots, accessible as `/top/PD.primary.power` and
 `/top/PD.primary.ground`. Associated primary functions alias their supply nets.
@@ -228,7 +301,7 @@ simulation storage value; the representation is identical on wasm32.
 Supply changes follow ordinary HDL scheduling (clause 9.2.3). A settled OFF
 transition corrupts state and cancels prior pending updates; restoration
 reevaluates level logic without inventing clock edges. A voltage-only change
-that remains FULL_ON does neither. OFF/ON writes in one activation can coalesce
+that preserves the aggregate NORMAL policy does neither. OFF/ON writes in one activation can coalesce
 like other zero-time logic changes.
 
 `--upf-assume-powered-inputs` provides compatibility with the earlier prototype:

@@ -15,7 +15,10 @@ def UPFSupplySetOp : Op<UPFDialect, "supply_set", [Symbol,
     DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
   let summary = "supply-set identity with resolved function roots and requirements";
   let arguments = (ins SymbolNameAttr:$sym_name, DictionaryAttr:$functions,
-      StrArrayAttr:$required);
+      StrArrayAttr:$required, OptionalAttr<UPFPowerStateArrayAttr>:$states,
+      OptionalAttr<FlatSymbolRefArrayAttr>:$associated,
+      OptionalAttr<FlatSymbolRefAttr>:$owner,
+      DefaultValuedAttr<BoolAttr, "false">:$complete);
   let assemblyFormat = "$sym_name `functions` $functions `required` $required attr-dict";
   let hasVerifier = 1;
 }
@@ -26,6 +29,7 @@ def UPFDomainOp : Op<UPFDialect, "domain", [Symbol,
       FlatSymbolRefAttr:$power, OptionalAttr<FlatSymbolRefAttr>:$ground,
       OptionalAttr<FlatSymbolRefAttr>:$input,
       OptionalAttr<FlatSymbolRefAttr>:$primary,
+      OptionalAttr<FlatSymbolRefArrayAttr>:$policies,
       UPFSwitchStateArrayAttr:$on, OptionalAttr<UPFSwitchStateAttr>:$off,
       OptionalAttr<UPFSwitchStateArrayAttr>:$errors,
       OptionalAttr<StrAttr>:$isolation_control,

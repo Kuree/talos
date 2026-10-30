@@ -1,0 +1,222 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/valid.mlir | talos-opt | FileCheck %s
+// RUN: talos-opt --split-input-file --verify-diagnostics %t/invalid.mlir
+// IEEE 1801-2018 5.4/6.5/9.3.2: typed predicates and catalogs retain state
+// policy identity, explicit association provenance, and required function use.
+// Validate textual IR before lowering can consume its postfix operands.
+// CHECK: upf.supply_set @SS functions
+// CHECK-SAME: complete = true
+// CHECK-SAME: name = "ON"
+// CHECK-SAME: simstate = normal
+// CHECK: upf.domain @PD
+// CHECK-SAME: policies = [@SS, @primary]
+
+//--- valid.mlir
+#f = {power = @power, ground = @ground, nwell = @bias, pwell = @bias, deepnwell = @bias, deeppwell = @bias}
+#s = #upf.supply_token<opcode = state, supply = @power, function = "power">
+#e = #upf.supply_expression<[#s, #upf.supply_token<opcode = state_value, value = 1 : i32>, #upf.supply_token<opcode = eq>]>
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  upf.supply @ground names ["/top/VSS"] writable = true
+  upf.supply @bias names ["/top/BIAS"] writable = true
+  upf.supply_set @SS functions #f required ["power", "ground"] {
+    associated = [@primary], complete = true,
+    states = [#upf.power_state<name = "ON", condition = #e, simstate = normal>,
+              #upf.power_state<name = "DRAFT", simstate = unspecified>,
+              #upf.power_state<name = "RET", simstate = not_normal, illegal = true>]
+  }
+  upf.supply_set @primary functions #f required ["power", "ground"] {associated = [@SS], owner = @PD}
+  upf.domain @PD elements ["top.dut"] power @power on [] {ground = @ground, primary = @primary, policies = [@SS, @primary]}
+}
+
+//--- invalid.mlir
+// expected-error @+1 {{supply reference requires a root and optional standard function only}}
+#bad = #upf.supply_token<opcode = voltage>
+// -----
+// expected-error @+1 {{supply reference requires a root and optional standard function only}}
+#bad = #upf.supply_token<opcode = state, supply = @power, function = "bad">
+// -----
+// expected-error @+1 {{supply state/bool literal has an invalid type or value}}
+#bad = #upf.supply_token<opcode = state_value, value = 4 : i32>
+// -----
+// expected-error @+1 {{supply state/bool literal has an invalid type or value}}
+#bad = #upf.supply_token<opcode = bool, value = 1 : i32>
+// -----
+// expected-error @+1 {{supply real literal requires one finite f64 value}}
+#bad = #upf.supply_token<opcode = real, real = 1.0 : f32>
+// -----
+// expected-error @+1 {{supply real literal requires one finite f64 value}}
+#bad = #upf.supply_token<opcode = real, real = 0x7FF8000000000000 : f64>
+// -----
+// expected-error @+1 {{supply operator cannot carry operand fields}}
+#bad = #upf.supply_token<opcode = and, supply = @power>
+// -----
+// expected-error @+1 {{supply expression requires 1..4096 tokens}}
+#bad = #upf.supply_expression<[]>
+// -----
+// expected-error @+1 {{supply expression contains a non-token attribute}}
+#bad = #upf.supply_expression<[0 : i32]>
+// -----
+// expected-error @+1 {{supply expression postfix stack underflow}}
+#bad = #upf.supply_expression<[#upf.supply_token<opcode = eq>]>
+// -----
+// expected-error @+1 {{supply expression must produce one Boolean value}}
+#bad = #upf.supply_expression<[#upf.supply_token<opcode = real, real = 1.0 : f64>]>
+// -----
+// expected-error @+1 {{supply comparison requires compatible operand types}}
+#bad = #upf.supply_expression<[#upf.supply_token<opcode = state_value, value = 1 : i32>, #upf.supply_token<opcode = real, real = 1.0 : f64>, #upf.supply_token<opcode = eq>]>
+// -----
+// expected-error @+1 {{supply Boolean operator requires Boolean operands}}
+#bad = #upf.supply_expression<[#upf.supply_token<opcode = real, real = 1.0 : f64>, #upf.supply_token<opcode = not>]>
+// -----
+// expected-error @+1 {{predefined ON/OFF simstates are fixed NORMAL/CORRUPT}}
+#bad = #upf.power_state<name = "ON", simstate = corrupt>
+// -----
+// expected-error @+1 {{power state requires a supported simple state name}}
+#bad = #upf.power_state<name = "ON.SUB", simstate = normal>
+// -----
+// expected-error @+1 {{active power-state predicates require a supported simstate}}
+#bad = #upf.power_state<name = "LOW", condition = #upf.supply_expression<[#upf.supply_token<opcode = bool, value = true>]>, simstate = unspecified>
+// -----
+#f = {power = @power, ground = @ground, nwell = @bias, pwell = @bias, deepnwell = @bias, deeppwell = @bias}
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  upf.supply @ground names ["/top/VSS"] writable = true
+  upf.supply @bias names ["/top/BIAS"] writable = true
+  // expected-error @+1 {{duplicate power-state name}}
+  upf.supply_set @bad functions #f required [] {states = [#upf.power_state<name = "DRAFT", simstate = unspecified>, #upf.power_state<name = "DRAFT", simstate = unspecified>]}
+}
+// -----
+#f = {power = @power, ground = @ground, nwell = @bias, pwell = @bias, deepnwell = @bias, deeppwell = @bias}
+#s = #upf.supply_token<opcode = state, supply = @missing, function = "power">
+#e = #upf.supply_expression<[#s, #upf.supply_token<opcode = state_value, value = 1 : i32>, #upf.supply_token<opcode = eq>]>
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  upf.supply @ground names ["/top/VSS"] writable = true
+  upf.supply @bias names ["/top/BIAS"] writable = true
+  // expected-error @+1 {{predicate references an unknown supply root}}
+  upf.supply_set @bad functions #f required ["power"] {states = [#upf.power_state<name = "ON", condition = #e, simstate = normal>]}
+}
+// -----
+#f = {power = @power, ground = @ground, nwell = @bias, pwell = @bias, deepnwell = @bias, deeppwell = @bias}
+#s = #upf.supply_token<opcode = state, supply = @ground, function = "power">
+#e = #upf.supply_expression<[#s, #upf.supply_token<opcode = state_value, value = 1 : i32>, #upf.supply_token<opcode = eq>]>
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  upf.supply @ground names ["/top/VSS"] writable = true
+  upf.supply @bias names ["/top/BIAS"] writable = true
+  // expected-error @+1 {{predicate function origin must match this supply set}}
+  upf.supply_set @bad functions #f required ["power"] {states = [#upf.power_state<name = "ON", condition = #e, simstate = normal>]}
+}
+// -----
+#f = {power = @power, ground = @ground, nwell = @bias, pwell = @bias, deepnwell = @bias, deeppwell = @bias}
+#s = #upf.supply_token<opcode = state, supply = @power, function = "power">
+#e = #upf.supply_expression<[#s, #upf.supply_token<opcode = state_value, value = 1 : i32>, #upf.supply_token<opcode = eq>]>
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  upf.supply @ground names ["/top/VSS"] writable = true
+  upf.supply @bias names ["/top/BIAS"] writable = true
+  // expected-error @+1 {{predicate functions must be required functions}}
+  upf.supply_set @bad functions #f required [] {states = [#upf.power_state<name = "ON", condition = #e, simstate = normal>]}
+}
+// -----
+#f = {power = @power, ground = @ground, nwell = @bias, pwell = @bias, deepnwell = @bias, deeppwell = @bias}
+#s = #upf.supply_token<opcode = state, supply = @power>
+#e = #upf.supply_expression<[#s, #upf.supply_token<opcode = state_value, value = 1 : i32>, #upf.supply_token<opcode = eq>]>
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  upf.supply @ground names ["/top/VSS"] writable = true
+  upf.supply @bias names ["/top/BIAS"] writable = true
+  // expected-error @+1 {{raw predicate references must preserve required function usage}}
+  upf.supply_set @bad functions #f required [] {states = [#upf.power_state<name = "ON", condition = #e, simstate = normal>]}
+}
+// -----
+#f = {power = @power, ground = @ground, nwell = @bias, pwell = @bias, deepnwell = @bias, deeppwell = @bias}
+#s = #upf.supply_token<opcode = state, supply = @bias, function = "nwell">
+#e = #upf.supply_expression<[#s, #upf.supply_token<opcode = state_value, value = 1 : i32>, #upf.supply_token<opcode = eq>]>
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  upf.supply @ground names ["/top/VSS"] writable = true
+  upf.supply @bias names ["/top/BIAS"] writable = true
+  // expected-error @+1 {{predicate must reference this set's power or ground function}}
+  upf.supply_set @bad functions #f required ["nwell"] {states = [#upf.power_state<name = "ON", condition = #e, simstate = normal>]}
+}
+// -----
+#f = {power = @power, ground = @ground, nwell = @bias, pwell = @bias, deepnwell = @bias, deeppwell = @bias}
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  upf.supply @ground names ["/top/VSS"] writable = true
+  upf.supply @bias names ["/top/BIAS"] writable = true
+  // expected-error @+1 {{references an unknown owning domain}}
+  upf.supply_set @bad functions #f required [] {owner = @missing}
+}
+// -----
+#f = {power = @power, ground = @ground, nwell = @bias, pwell = @bias, deepnwell = @bias, deeppwell = @bias}
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  upf.supply @ground names ["/top/VSS"] writable = true
+  upf.supply @bias names ["/top/BIAS"] writable = true
+  // expected-error @+1 {{references an unknown associated supply set}}
+  upf.supply_set @bad functions #f required [] {associated = [@missing]}
+}
+// -----
+#f = {power = @power, ground = @ground, nwell = @bias, pwell = @bias, deepnwell = @bias, deeppwell = @bias}
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  upf.supply @ground names ["/top/VSS"] writable = true
+  upf.supply @bias names ["/top/BIAS"] writable = true
+  upf.supply_set @B functions #f required []
+  // expected-error @+1 {{supply-set associations must record reciprocal links}}
+  upf.supply_set @bad functions #f required [] {associated = [@B]}
+}
+// -----
+#f = {power = @power, ground = @ground, nwell = @bias, pwell = @bias, deepnwell = @bias, deeppwell = @bias}
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  upf.supply @ground names ["/top/VSS"] writable = true
+  upf.supply @bias names ["/top/BIAS"] writable = true
+  upf.supply_set @B functions #f required []
+  // expected-error @+1 {{associated required functions must propagate to both sets}}
+  upf.supply_set @bad functions #f required ["power"] {associated = [@B]}
+}
+// -----
+#f = {power = @power, ground = @ground, nwell = @bias, pwell = @bias, deepnwell = @bias, deeppwell = @bias}
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  upf.supply @ground names ["/top/VSS"] writable = true
+  upf.supply @bias names ["/top/BIAS"] writable = true
+  // expected-error @+1 {{primary policies require a primary supply-set reference}}
+  upf.domain @bad elements ["top.dut"] power @power on [] {policies = [@missing]}
+}
+// -----
+#f = {power = @power, ground = @ground, nwell = @bias, pwell = @bias, deepnwell = @bias, deeppwell = @bias}
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  upf.supply @ground names ["/top/VSS"] writable = true
+  upf.supply @bias names ["/top/BIAS"] writable = true
+  upf.supply_set @primary functions #f required ["power", "ground"]
+  // expected-error @+1 {{policies must include the primary supply set}}
+  upf.domain @bad elements ["top.dut"] power @power on [] {ground = @ground, primary = @primary, policies = []}
+}
+// -----
+#f = {power = @power, ground = @ground, nwell = @bias, pwell = @bias, deepnwell = @bias, deeppwell = @bias}
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  upf.supply @ground names ["/top/VSS"] writable = true
+  upf.supply @bias names ["/top/BIAS"] writable = true
+  upf.supply_set @primary functions #f required ["power", "ground"] {associated = [@SS]}
+  upf.supply_set @SS functions #f required ["power", "ground"] {associated = [@primary]}
+  // expected-error @+1 {{primary policies must enumerate the applicable associated sets}}
+  upf.domain @bad elements ["top.dut"] power @power on [] {ground = @ground, primary = @primary, policies = [@primary]}
+}
+// -----
+#f = {power = @power, ground = @ground, nwell = @bias, pwell = @bias, deepnwell = @bias, deeppwell = @bias}
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  upf.supply @ground names ["/top/VSS"] writable = true
+  upf.supply @bias names ["/top/BIAS"] writable = true
+  upf.supply_set @primary functions #f required ["power", "ground"] {owner = @other}
+  upf.domain @other elements ["top.other"] power @power on [] {ground = @ground, primary = @primary}
+  // expected-error @+1 {{primary supply handle must be owned by this domain}}
+  upf.domain @bad elements ["top.dut"] power @power on [] {ground = @ground, primary = @primary}
+}

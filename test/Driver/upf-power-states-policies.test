@@ -1,0 +1,81 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.5.1/9.3.2: electrical equivalence does not merge state
+// catalogs. Explicit suppliers constrain a primary; sibling primary catalogs
+// remain local. Association chains and stars select the same global policy,
+// including a chain through another domain's primary handle. An auxiliary
+// handle used as an explicit supplier contributes its policy.
+// CHECK: independent power-state policies passed
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1;
+endmodule
+module top;
+  import UPF::*;
+  wire a, b, c, d, supplier, consumer, explicit_on;
+  leaf duta(a), dutb(b), dutc(c), dutd(d), provider(supplier),
+       target(consumer), local_dut(explicit_on);
+  initial begin
+    #1;
+    if (!supply_on("/top/Shared.power") || !supply_on("/top/Shared.ground", 0.0) ||
+        !supply_on("/top/Star.power") || !supply_on("/top/Star.ground", 0.0) ||
+        !supply_on("/top/Provider.backup.power") ||
+        !supply_on("/top/Provider.backup.ground", 0.0) ||
+        !supply_on("/top/Rail")) $fatal(1, "power ON");
+    #1;
+    if (a !== 1'b1 || b !== 1'bx || c !== 1'b1 || d !== 1'b1 ||
+        consumer !== 1'b1 || explicit_on !== 1'b1)
+      $fatal(1, "nominal policies %b%b%b%b %b %b", a, b, c, d, consumer, explicit_on);
+    if (!supply_on("/top/Shared.power", 0.8) ||
+        !supply_on("/top/Provider.backup.power", 0.8)) $fatal(1, "low voltage");
+    #1;
+    if (a !== 1'bx || b !== 1'b1 || consumer !== 1'bx)
+      $fatal(1, "local catalog or auxiliary supplier policy");
+    if (!supply_on("/top/Shared.power", 1.2) ||
+        !supply_on("/top/Star.power", 1.2)) $fatal(1, "global gap");
+    #1;
+    if (a !== 1'bx || b !== 1'bx || c !== 1'bx || d !== 1'bx)
+      $fatal(1, "global policy did not cross association bridge");
+    $display("independent power-state policies passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set Shared
+create_power_domain A -elements duta
+create_power_domain B -elements dutb
+associate_supply_set {A.primary B.primary}
+associate_supply_set Shared -handle B.primary
+add_power_state Shared -state {ON -supply_expr {power == {FULL_ON 1.0} || power == {FULL_ON 0.8}}}
+add_power_state A.primary -state {ON -supply_expr {power == {FULL_ON 1.0} || power == {FULL_ON 1.2}}}
+add_power_state B.primary -state {ON -supply_expr {power == {FULL_ON 0.8}}}
+
+create_supply_set Star
+create_power_domain C -elements dutc
+create_power_domain D -elements dutd
+associate_supply_set {Star C.primary D.primary}
+add_power_state Star -state {ON -supply_expr {power == {FULL_ON 1.0}}}
+
+create_power_domain Provider -elements provider -supply {backup}
+create_power_domain Consumer -elements target
+associate_supply_set Provider.backup -handle Consumer.primary
+add_power_state Provider.backup -state {ON -supply_expr {power == {FULL_ON 1.0}}}
+
+# A separate catalog on the same electrical roots is not an association.
+# Explicit ON replaces the default FULL_ON test (4.7.4/6.5.4); leave ground OFF.
+create_supply_net Rail
+create_supply_net Ground
+create_supply_set Local -function {power Rail} -function {ground Ground}
+create_supply_set Other -function {power Rail} -function {ground Ground}
+create_power_domain LocalDomain -elements local_dut -supply {primary Local}
+add_power_state Local -state {ON -supply_expr {power == {FULL_ON 1.0}}}
+add_power_state LocalDomain.primary -state {ON -supply_expr {power == {FULL_ON 1.0}}}
+add_power_state Other -state {ON -supply_expr {power == {FULL_ON 0.8}}}

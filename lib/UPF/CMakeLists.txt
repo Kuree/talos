@@ -1,6 +1,8 @@
 add_mlir_library(TalosUPF
   Execute.cpp
   BooleanExpression.cpp
+  SupplyExpression.cpp
+  PowerState.cpp
   ControlReference.cpp
   SupplyNetwork.cpp
   Elaborate.cpp

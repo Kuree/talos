@@ -1,0 +1,32 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: not talos --upf %t/missing-simstate.upf -emit-slang %t/design.sv -o %t.missing.mlir 2>&1 | FileCheck %s --check-prefix=SIMSTATE
+// RUN: not talos --upf %t/missing-power.upf -emit-slang %t/design.sv -o %t.power.mlir 2>&1 | FileCheck %s --check-prefix=POWER
+// RUN: not talos --upf %t/late-binding.upf -emit-slang %t/design.sv -o %t.binding.mlir 2>&1 | FileCheck %s --check-prefix=BINDING
+// IEEE 1801-2018 6.5.3/6.5.6a: delayed errors retain the predicate's Tcl
+// library location. 5.10/6.5.2: later supply bindings cannot hide contradictory
+// state constraints that become equivalent only after topology resolution.
+// SIMSTATE: missing-simstate.tcl":2:1): error: active power states without a simstate
+// POWER: missing-power.tcl":2:1): error: supply expression must reference the set's power or ground
+// BINDING: late-binding.upf":3:1): error: contradictory supply expression
+
+//--- design.sv
+module top;
+endmodule
+//--- missing-simstate.upf
+create_supply_set SS
+source [file join [file dirname [info script]] missing-simstate.tcl]
+//--- missing-simstate.tcl
+# Deferred predicates without a simstate need unsupported history semantics.
+add_power_state SS -state {LOW -supply_expr {power == {FULL_ON 0.8}}}
+//--- missing-power.upf
+create_supply_set SS
+source [file join [file dirname [info script]] missing-power.tcl]
+//--- missing-power.tcl
+# A well alone does not satisfy 6.5.6a.
+add_power_state SS -state {ON -supply_expr {nwell == FULL_ON}}
+//--- late-binding.upf
+create_supply_set SS
+create_supply_net N
+add_power_state SS -state {ON -supply_expr {power.voltage == 1.0 && N.voltage == 0.8}}
+create_supply_set SS -update -function {power N}

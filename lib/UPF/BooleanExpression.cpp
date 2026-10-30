@@ -1,4 +1,5 @@
 #include "BooleanExpression.h"
+#include "ExpressionOperators.h"
 #include "mlir/IR/Builders.h"
 #include "llvm/ADT/StringExtras.h"
 #include <algorithm>
@@ -8,20 +9,8 @@ using namespace llvm;
 namespace talos {
 namespace {
 using Opcode = upf::ExpressionOpcode;
-struct Operator {
-  StringLiteral spelling;
-  Opcode opcode;
-  unsigned precedence;
-};
-// IEEE 1801-2018 5.4, Table 3. Within each precedence class use the
-// SystemVerilog operator ordering; match longer spellings first.
-constexpr Operator operators[] = {
-    {"||", Opcode::Or, 1},           {"&&", Opcode::And, 2},
-    {"|", Opcode::BitOr, 3},         {"^", Opcode::BitXor, 4},
-    {"&", Opcode::BitAnd, 5},        {"==", Opcode::Equal, 6},
-    {"!=", Opcode::NotEqual, 6},     {"<=", Opcode::LessEqual, 7},
-    {">=", Opcode::GreaterEqual, 7}, {"<", Opcode::Less, 7},
-    {">", Opcode::Greater, 7}};
+using Operator = ExpressionOperator<Opcode>;
+constexpr auto &operators = expressionOperators<Opcode>;
 
 class Parser {
   StringRef text;

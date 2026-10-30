@@ -1,6 +1,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "talos/Dialect/UPF/UPFOps.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -12,6 +13,89 @@
 #define GET_OP_CLASSES
 #include "talos/Dialect/UPF/UPFOps.cpp.inc"
 namespace talos::upf {
+mlir::LogicalResult SupplyExpressionTokenAttr::verify(
+    llvm::function_ref<mlir::InFlightDiagnostic()> error,
+    SupplyExpressionOpcode opcode, mlir::FlatSymbolRefAttr supply,
+    mlir::StringAttr function, mlir::IntegerAttr value, mlir::FloatAttr real) {
+  using O = SupplyExpressionOpcode;
+  if (opcode == O::State || opcode == O::Voltage) {
+    if (!supply || value || real ||
+        (function &&
+         !llvm::is_contained(getSupplyFunctionNames(), function.getValue())))
+      return error() << "supply reference requires a root and optional "
+                        "standard function only";
+  } else if (opcode == O::StateValue || opcode == O::Boolean) {
+    unsigned width = opcode == O::Boolean ? 1 : 32;
+    if (supply || function || real || !value ||
+        !value.getType().isSignlessInteger(width) ||
+        (opcode == O::StateValue && (value.getInt() < 0 || value.getInt() > 3)))
+      return error()
+             << "supply state/bool literal has an invalid type or value";
+  } else if (opcode == O::Real) {
+    if (supply || function || value || !real || !real.getType().isF64() ||
+        !real.getValue().isFinite())
+      return error() << "supply real literal requires one finite f64 value";
+  } else if (opcode > O::Or || supply || function || value || real)
+    return error() << "supply operator cannot carry operand fields";
+  return mlir::success();
+}
+mlir::LogicalResult SupplyExpressionAttr::verify(
+    llvm::function_ref<mlir::InFlightDiagnostic()> error,
+    mlir::ArrayAttr tokens) {
+  using O = SupplyExpressionOpcode;
+  enum Kind { Boolean, State, Real };
+  llvm::SmallVector<std::pair<Kind, unsigned>> stack;
+  if (tokens.empty() || tokens.size() > 4096)
+    return error() << "supply expression requires 1..4096 tokens";
+  for (auto attr : tokens) {
+    auto token = mlir::dyn_cast<SupplyExpressionTokenAttr>(attr);
+    if (!token)
+      return error() << "supply expression contains a non-token attribute";
+    O code = token.getOpcode();
+    if (code <= O::Boolean) {
+      stack.emplace_back(code == O::State || code == O::StateValue ? State
+                         : code == O::Voltage || code == O::Real   ? Real
+                                                                   : Boolean,
+                         1);
+      continue;
+    }
+    bool unary = code == O::Not || code == O::BitNot;
+    if (stack.size() < (unary ? 1u : 2u))
+      return error() << "supply expression postfix stack underflow";
+    auto right = stack.pop_back_val(),
+         left = unary ? right : stack.pop_back_val();
+    bool comparison = code >= O::Less && code <= O::NotEqual;
+    if (comparison) {
+      if (left.first != right.first ||
+          (code != O::Equal && code != O::NotEqual && left.first != Real))
+        return error() << "supply comparison requires compatible operand types";
+    } else if (left.first != Boolean || right.first != Boolean)
+      return error() << "supply Boolean operator requires Boolean operands";
+    unsigned height = std::max(left.second, right.second) + 1;
+    if (height > 256)
+      return error() << "supply expression tree exceeds 256 levels";
+    stack.emplace_back(Boolean, height);
+  }
+  if (stack.size() != 1 || stack.back().first != Boolean)
+    return error() << "supply expression must produce one Boolean value";
+  return mlir::success();
+}
+mlir::LogicalResult
+PowerStateAttr::verify(llvm::function_ref<mlir::InFlightDiagnostic()> error,
+                       mlir::StringAttr name, SupplyExpressionAttr condition,
+                       Simstate simstate, bool illegal) {
+  if (!name || name.getValue().empty() || name.getValue().contains('.') ||
+      name.getValue() == "ERROR" || name.getValue() == "UNDEFINED")
+    return error() << "power state requires a supported simple state name";
+  if (simstate > Simstate::NotNormal ||
+      (condition && simstate == Simstate::Unspecified))
+    return error()
+           << "active power-state predicates require a supported simstate";
+  if ((name.getValue() == "ON" && simstate != Simstate::Normal) ||
+      (name.getValue() == "OFF" && simstate != Simstate::Corrupt))
+    return error() << "predefined ON/OFF simstates are fixed NORMAL/CORRUPT";
+  return mlir::success();
+}
 mlir::LogicalResult UPFSupplyOp::verify() {
   // IEEE 1801-2018 9.2.1 and 11.2: one packed value per root, not per name.
   // Bits [1:0] are supply state; [33:2] are signed32 microvolt bits.
@@ -34,6 +118,75 @@ UPFSupplySetOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
     if (!symbols.lookupNearestSymbolFrom<UPFSupplyOp>(
             *this, mlir::cast<mlir::FlatSymbolRefAttr>(binding.getValue())))
       return emitOpError("references an unknown function supply root");
+  if (auto owner = getOwnerAttr();
+      owner && !symbols.lookupNearestSymbolFrom<UPFDomainOp>(*this, owner))
+    return emitOpError("references an unknown owning domain");
+  if (auto links = getAssociatedAttr())
+    for (auto attr : links) {
+      auto other = symbols.lookupNearestSymbolFrom<UPFSupplySetOp>(
+          *this, mlir::cast<mlir::FlatSymbolRefAttr>(attr));
+      if (!other)
+        return emitOpError("references an unknown associated supply set");
+      for (auto function : getSupplyFunctionNames())
+        if (getFunctions().get(function) != other.getFunctions().get(function))
+          return emitOpError(
+              "associated supply sets must share corresponding function roots");
+      for (auto required : other.getRequired())
+        if (!llvm::is_contained(getRequired(), required))
+          return emitOpError(
+              "associated required functions must propagate to both sets");
+      for (auto required : getRequired())
+        if (!llvm::is_contained(other.getRequired(), required))
+          return emitOpError(
+              "associated required functions must propagate to both sets");
+      auto back = other.getAssociatedAttr();
+      if (!back || !llvm::is_contained(back, mlir::FlatSymbolRefAttr::get(
+                                                 getContext(), getSymName())))
+        return emitOpError(
+            "supply-set associations must record reciprocal links");
+    }
+  if (auto states = getStatesAttr())
+    for (auto attr : states) {
+      auto state = mlir::cast<PowerStateAttr>(attr);
+      if (!state.getCondition())
+        continue;
+      bool powerOrGround = false;
+      for (auto attr : state.getCondition().getTokens()) {
+        auto token = mlir::cast<SupplyExpressionTokenAttr>(attr);
+        if (!token.getSupply())
+          continue;
+        auto root = symbols.lookupNearestSymbolFrom<UPFSupplyOp>(
+            *this, token.getSupply());
+        if (!root)
+          return emitOpError("predicate references an unknown supply root");
+        if (!root.getWritable() &&
+            token.getSupply() != getFunctions().get("power"))
+          return emitOpError("predicates on other computed switch outputs are "
+                             "not implemented");
+        if (auto function = token.getFunction()) {
+          if (getFunctions().get(function.getValue()) != token.getSupply())
+            return emitOpError(
+                "predicate function origin must match this supply set");
+          if (!llvm::is_contained(getRequired(), function))
+            return emitOpError(
+                "predicate functions must be required functions");
+          powerOrGround |=
+              function.getValue() == "power" || function.getValue() == "ground";
+        } else {
+          powerOrGround |= token.getSupply() == getFunctions().get("power") ||
+                           token.getSupply() == getFunctions().get("ground");
+          for (auto function : getSupplyFunctionNames())
+            if (getFunctions().get(function) == token.getSupply() &&
+                !llvm::is_contained(getRequired(), mlir::StringAttr::get(
+                                                       getContext(), function)))
+              return emitOpError("raw predicate references must preserve "
+                                 "required function usage");
+        }
+      }
+      if (!powerOrGround)
+        return emitOpError(
+            "predicate must reference this set's power or ground function");
+    }
   return mlir::success();
 }
 mlir::LogicalResult UPFSupplySetOp::verify() {
@@ -55,6 +208,21 @@ mlir::LogicalResult UPFSupplySetOp::verify() {
       return emitOpError(
           "required functions must be unique standard supply functions");
   }
+  if (auto states = getStatesAttr()) {
+    llvm::StringSet<> names;
+    size_t tokens = 0;
+    if (states.size() > 256)
+      return emitOpError("power-state catalog exceeds 256 states");
+    for (auto attr : states) {
+      auto state = mlir::cast<PowerStateAttr>(attr);
+      if (!names.insert(state.getName().getValue()).second)
+        return emitOpError("duplicate power-state name");
+      if (state.getCondition())
+        tokens += state.getCondition().getTokens().size();
+    }
+    if (tokens > 65536)
+      return emitOpError("power-state catalog exceeds 65536 tokens");
+  }
   return mlir::success();
 }
 mlir::LogicalResult
@@ -66,6 +234,70 @@ UPFDomainOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
     auto set = symbols.lookupNearestSymbolFrom<UPFSupplySetOp>(*this, primary);
     if (!set)
       return emitOpError("references an unknown primary supply set");
+    if (auto owner = set.getOwnerAttr();
+        owner && owner.getValue() != getSymName())
+      return emitOpError("primary supply handle must be owned by this domain");
+    llvm::StringSet<> applicable;
+    llvm::DenseSet<mlir::Operation *> visited;
+    llvm::SmallVector<UPFSupplySetOp> work{set};
+    while (!work.empty()) {
+      auto current = work.pop_back_val();
+      if (!visited.insert(current.getOperation()).second)
+        continue;
+      bool otherPrimary = false;
+      if (auto owner = current.getOwnerAttr()) {
+        auto domain =
+            symbols.lookupNearestSymbolFrom<UPFDomainOp>(*this, owner);
+        if (!domain)
+          return emitOpError("policy set references an unknown owning domain");
+        otherPrimary =
+            current != set && domain.getPrimaryAttr() &&
+            domain.getPrimaryAttr().getValue() == current.getSymName();
+      }
+      if (!otherPrimary)
+        applicable.insert(current.getSymName());
+      if (auto links = current.getAssociatedAttr())
+        for (auto attr : links) {
+          auto next = symbols.lookupNearestSymbolFrom<UPFSupplySetOp>(
+              *this, mlir::cast<mlir::FlatSymbolRefAttr>(attr));
+          if (!next)
+            return emitOpError("references an unknown associated policy set");
+          work.push_back(next);
+        }
+    }
+    if (auto policies = getPoliciesAttr()) {
+      llvm::StringSet<> names;
+      for (auto attr : policies) {
+        auto ref = mlir::cast<mlir::FlatSymbolRefAttr>(attr);
+        auto policy =
+            symbols.lookupNearestSymbolFrom<UPFSupplySetOp>(*this, ref);
+        if (!policy || !names.insert(ref.getValue()).second)
+          return emitOpError("policies require unique supply-set references");
+        if (auto owner = policy.getOwnerAttr(); owner && ref != primary) {
+          auto domain =
+              symbols.lookupNearestSymbolFrom<UPFDomainOp>(*this, owner);
+          if (!domain || domain.getPrimaryAttr() == ref)
+            return emitOpError("another domain's primary handle is not a "
+                               "policy for this domain");
+        }
+        for (auto function : getSupplyFunctionNames())
+          if (policy.getFunctions().get(function) !=
+              set.getFunctions().get(function))
+            return emitOpError("primary policies must have the same "
+                               "corresponding function roots");
+      }
+      if (!names.contains(primary.getValue()))
+        return emitOpError("policies must include the primary supply set");
+      if (names.size() != applicable.size())
+        return emitOpError(
+            "primary policies must enumerate the applicable associated sets");
+      for (auto &name : applicable)
+        if (!names.contains(name.getKey()))
+          return emitOpError(
+              "primary policies must enumerate the applicable associated sets");
+    } else if (applicable.size() > 1)
+      return emitOpError(
+          "associated primary supplies require an explicit policy list");
     if (set.getFunctions().get("power") != getPowerAttr() ||
         set.getFunctions().get("ground") != getGroundAttr())
       return emitOpError(
@@ -121,6 +353,9 @@ void UPFDialect::initialize() {
       >();
 }
 mlir::LogicalResult UPFDomainOp::verify() {
+  if (getPoliciesAttr() && !getPrimaryAttr())
+    return emitOpError(
+        "primary policies require a primary supply-set reference");
   if (getElements().empty())
     return emitOpError("requires domain elements");
   for (auto element : getElements())

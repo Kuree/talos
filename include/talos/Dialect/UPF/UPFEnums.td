@@ -21,4 +21,34 @@ def UPFExpressionOpcode : I32EnumAttr<"ExpressionOpcode", "UPF Boolean operator"
   UPFGreater, UPFGreaterEqual, UPFEqual, UPFNotEqual,
   UPFBitAnd, UPFBitXor, UPFBitOr, UPFAnd, UPFOr
 ]> { let cppNamespace = "::talos::upf"; }
+def UPFSState : I32EnumAttrCase<"State", 0, "state">;
+def UPFSVoltage : I32EnumAttrCase<"Voltage", 1, "voltage">;
+def UPFSStateValue : I32EnumAttrCase<"StateValue", 2, "state_value">;
+def UPFSReal : I32EnumAttrCase<"Real", 3, "real">;
+def UPFSBool : I32EnumAttrCase<"Boolean", 4, "bool">;
+def UPFSNot : I32EnumAttrCase<"Not", 5, "not">;
+def UPFSBitNot : I32EnumAttrCase<"BitNot", 6, "bit_not">;
+def UPFSLess : I32EnumAttrCase<"Less", 7, "lt">;
+def UPFSLessEqual : I32EnumAttrCase<"LessEqual", 8, "le">;
+def UPFSGreater : I32EnumAttrCase<"Greater", 9, "gt">;
+def UPFSGreaterEqual : I32EnumAttrCase<"GreaterEqual", 10, "ge">;
+def UPFSEqual : I32EnumAttrCase<"Equal", 11, "eq">;
+def UPFSNotEqual : I32EnumAttrCase<"NotEqual", 12, "ne">;
+def UPFSBitAnd : I32EnumAttrCase<"BitAnd", 13, "bit_and">;
+def UPFSBitXor : I32EnumAttrCase<"BitXor", 14, "bit_xor">;
+def UPFSBitOr : I32EnumAttrCase<"BitOr", 15, "bit_or">;
+def UPFSAnd : I32EnumAttrCase<"And", 16, "and">;
+def UPFSOr : I32EnumAttrCase<"Or", 17, "or">;
+def UPFSupplyExpressionOpcode : I32EnumAttr<"SupplyExpressionOpcode", "typed supply predicate operation", [
+  UPFSState, UPFSVoltage, UPFSStateValue, UPFSReal, UPFSBool, UPFSNot,
+  UPFSBitNot, UPFSLess, UPFSLessEqual, UPFSGreater, UPFSGreaterEqual,
+  UPFSEqual, UPFSNotEqual, UPFSBitAnd, UPFSBitXor, UPFSBitOr, UPFSAnd, UPFSOr
+]> { let cppNamespace = "::talos::upf"; }
+def UPFSimUnspecified : I32EnumAttrCase<"Unspecified", 0, "unspecified">;
+def UPFSimNormal : I32EnumAttrCase<"Normal", 1, "normal">;
+def UPFSimCorrupt : I32EnumAttrCase<"Corrupt", 2, "corrupt">;
+def UPFSimNotNormal : I32EnumAttrCase<"NotNormal", 3, "not_normal">;
+def UPFSimstate : I32EnumAttr<"Simstate", "supported UPF simulation policy", [
+  UPFSimUnspecified, UPFSimNormal, UPFSimCorrupt, UPFSimNotNormal
+]> { let cppNamespace = "::talos::upf"; }
 #endif

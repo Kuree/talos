@@ -1,0 +1,69 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// CHECK: numeric power states passed
+// IEEE 1801-2018 6.5.4/11.2.2: compare decoded integer microvolts in real
+// volts. Aggregate and field tests agree at signed limits, zero, and rounding
+// boundaries. Comparison thresholds are not quantized by supply_on rounding.
+
+//--- design.sv
+module leaf(output wire q); assign q = 1; endmodule
+module top; import UPF::*;
+wire [8:0] q;
+leaf positive(q[0]);
+leaf negative(q[1]);
+leaf subhalf(q[2]);
+leaf half(q[3]);
+leaf negativehalf(q[4]);
+leaf negativezero(q[5]);
+leaf max(q[6]);
+leaf min(q[7]);
+leaf roundspelling(q[8]);
+initial begin #1; if (q !== 9'bxxxxxxxxx) $fatal(1, "initial");
+if (!supply_on("/top/G", 0.0)) $fatal(1,"ground");
+if (!supply_on("/top/S0.power", 1.000001)) $fatal(1,"positive");
+if (!supply_on("/top/S1.power", -1.000001)) $fatal(1,"negative");
+if (!supply_on("/top/S2.power", 0.00000049)) $fatal(1,"subhalf");
+if (!supply_on("/top/S3.power", 0.0000005)) $fatal(1,"half");
+if (!supply_on("/top/S4.power", -0.0000005)) $fatal(1,"negativehalf");
+if (!supply_on("/top/S5.power", -0.0)) $fatal(1,"negativezero");
+if (!supply_on("/top/S6.power", 2147.483647)) $fatal(1,"max");
+if (!supply_on("/top/S7.power", -2147.483648)) $fatal(1,"min");
+if (!supply_on("/top/S8.power", 0.00000049999999999999999)) $fatal(1,"roundspelling");
+#1; if (q !== 9'b111111111) $fatal(1,"numeric mismatch %b",q);
+$display("numeric power states passed"); $finish; end endmodule
+
+//--- design.upf
+create_supply_net G
+create_supply_set S0 -function {ground G}
+create_power_domain D0 -elements positive -supply {primary S0}
+add_power_state S0 -state {ON -supply_expr {power == FULL_ON && power.voltage == 1.000_001_ && power.voltage < 1__0.0 && power == {FULL_ON 1.000001}}}
+create_supply_set S1 -function {ground G}
+create_power_domain D1 -elements negative -supply {primary S1}
+add_power_state S1 -state {ON -supply_expr {power == FULL_ON && power.voltage == -1.000001 && power == {FULL_ON -1.000001}}}
+create_supply_set S2 -function {ground G}
+create_power_domain D2 -elements subhalf -supply {primary S2}
+add_power_state S2 -state {ON -supply_expr {power == FULL_ON && power.voltage == 0 && power.voltage < 0.00000049 && power.voltage <= 0.00000049}}
+create_supply_set S3 -function {ground G}
+create_power_domain D3 -elements half -supply {primary S3}
+add_power_state S3 -state {ON -supply_expr {power == FULL_ON && power.voltage == 1e-6 && power != {FULL_ON 0.0000005} && !(power == {FULL_ON 0.0000005})}}
+create_supply_set S4 -function {ground G}
+create_power_domain D4 -elements negativehalf -supply {primary S4}
+add_power_state S4 -state {ON -supply_expr {power == FULL_ON && power.voltage == -1e-6 && power.voltage < -0.0000005}}
+create_supply_set S5 -function {ground G}
+create_power_domain D5 -elements negativezero -supply {primary S5}
+add_power_state S5 -state {ON -supply_expr {power == FULL_ON && power.voltage == -0.0 && power.voltage == 0}}
+create_supply_set S6 -function {ground G}
+create_power_domain D6 -elements max -supply {primary S6}
+add_power_state S6 -state {ON -supply_expr {power == {FULL_ON 2147.483647}}}
+create_supply_set S7 -function {ground G}
+create_power_domain D7 -elements min -supply {primary S7}
+add_power_state S7 -state {ON -supply_expr {power == {FULL_ON -2147.483648}}}
+create_supply_set S8 -function {ground G}
+create_power_domain D8 -elements roundspelling -supply {primary S8}
+add_power_state S8 -state {ON -supply_expr {power == {FULL_ON 1e-6}}}
