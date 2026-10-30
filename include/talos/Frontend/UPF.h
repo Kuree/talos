@@ -12,11 +12,10 @@ class Pass;
 namespace talos {
 /// Execute UPF against an elaborated Slang IR design. Tcl is compiler-only.
 /// Direct HDL switch expressions are an opt-in extension to 1801-2018 6.22.
-mlir::LogicalResult executeUPF(mlir::ModuleOp module,
-                               llvm::ArrayRef<std::string> paths,
-                               llvm::StringRef resourceDir,
-                               llvm::StringRef executablePath,
-                               bool allowHDLExpressions = false);
+mlir::LogicalResult
+executeUPF(mlir::ModuleOp module, llvm::ArrayRef<std::string> paths,
+           llvm::StringRef resourceDir, llvm::StringRef executablePath,
+           bool allowHDLExpressions = false, bool assumePoweredInputs = false);
 /// Apply resolved power intent after semantic units have become simulation IR.
 std::unique_ptr<mlir::Pass> createElaborateUPFPass();
 } // namespace talos

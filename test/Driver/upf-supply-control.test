@@ -1,0 +1,101 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 9.2.1: supplies initially OFF; 4.7.4: both required
+// primary functions FULL_ON. Ground at zero volts is powered. 11.2.3.3.4/.5:
+// dynamic names, default/named arguments, repeated calls and status results.
+// 9.2.2/9.5.3/9.6.7: only loss cancels queued work or reevaluates level RTL.
+// CHECK: runtime supply control passed
+
+//--- design.sv
+package audit;
+  int calls = 0;
+  function logic sample(logic d);
+    calls++;
+    return d;
+  endfunction
+endpackage
+module leaf(input logic clk, d, output logic q, y, output wire constant_q);
+  always @(posedge clk) q <= #3 d;
+  always_comb y = audit::sample(d);
+  assign constant_q = 1'b1;
+endmodule
+module top;
+  import UPF::*;
+  logic enable = 1, clk = 0, d = 1;
+  wire q, y, constant_q;
+  string rail;
+  int names = 0, volts = 0, calls;
+  leaf dut(clk, d, q, y, constant_q);
+  function string name_once();
+    names++;
+    return rail;
+  endfunction
+  function real volts_once();
+    volts++;
+    return 1.0;
+  endfunction
+  initial begin
+    #1;
+    if (q !== 1'bx || y !== 1'bx || constant_q !== 1'bx || audit::calls != 0)
+      $fatal(1, "supplies did not start OFF");
+    rail = {"/top/", "VDD"};
+    if (!supply_on(.value(volts_once()), .supply_name(name_once())))
+      $fatal(1, "dynamic supply_on failed");
+    if (names != 1 || volts != 1) $fatal(1, "argument evaluated more than once");
+    #1;
+    if (y !== 1'bx || audit::calls != 0) $fatal(1, "unpowered ground ignored");
+    if (!supply_on("/top/VSS", 0.0)) $fatal(1, "zero-volt ground failed");
+    #1;
+    if (y !== 1'b1 || constant_q !== 1'b1 || q !== 1'bx || audit::calls != 1)
+      $fatal(1, "supply restoration failed");
+    clk = 1;
+    #1;
+    calls = audit::calls;
+    if (!supply_on(rail, 0.8)) $fatal(1, "voltage change failed");
+    #1;
+    if (y !== 1'b1 || audit::calls != calls) $fatal(1, "voltage change reran RTL");
+    if (!supply_on(rail)) $fatal(1, "repeated ON failed");
+    // 9.2.3: writes in one activation can coalesce like ordinary logic.
+    if (!supply_off(rail) || !supply_on(rail)) $fatal(1, "zero-time pulse failed");
+    #2;
+    if (q !== 1'b1 || audit::calls != calls)
+      $fatal(1, "FULL_ON voltage change cancelled work or reran RTL");
+    clk = 0; d = 0;
+    #1 clk = 1;
+    #1;
+    if (!supply_off(rail) || !supply_off(rail)) $fatal(1, "repeated OFF failed");
+    #1;
+    if (q !== 1'bx || y !== 1'bx || constant_q !== 1'bx)
+      $fatal(1, "OFF did not corrupt");
+    if (!supply_on(rail, -0.2)) $fatal(1, "negative finite voltage rejected");
+    #3;
+    if (q !== 1'bx || y !== 1'b0 || constant_q !== 1'b1)
+      $fatal(1, "old NBA survived loss or negative voltage prevented FULL_ON");
+    if (!supply_off("/top/VSS")) $fatal(1, "ground OFF failed");
+    #1;
+    if (y !== 1'bx) $fatal(1, "ground loss did not corrupt");
+    if (!supply_on("/top/VSS", 0.0)) $fatal(1, "ground restore failed");
+    #1;
+    if (y !== 1'b0 || q !== 1'bx) $fatal(1, "ground restore invented an edge");
+    clk = 0;
+    #1 clk = 1;
+    #4;
+    if (q !== 1'b0) $fatal(1, "fresh NBA failed");
+    $display("runtime supply control passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_power_domain PD -elements dut
+foreach net {VDD VSS SW} {create_supply_net $net}
+set_domain_supply_net PD -primary_power_net SW -primary_ground_net VSS
+create_power_switch PS -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout SW} \
+    -control_port {en enable} -on_state {ON vin en}

@@ -1401,6 +1401,7 @@ executeCompilation(const InputArgList &args,
     return success();
   });
 
+  frontendOptions.enableUPF = args.hasArg(OPT_upf);
   auto importedModule =
       talos::frontend::importSystemVerilog(inputs, context, frontendOptions);
   if (failed(importedModule))
@@ -1420,7 +1421,8 @@ executeCompilation(const InputArgList &args,
     upfResourceDir = TALOS_RESOURCE_DIR;
   if (failed(talos::executeUPF(*module, upfPaths, upfResourceDir,
                                driverExecutablePath,
-                               args.hasArg(OPT_upf_allow_hdl_expressions))))
+                               args.hasArg(OPT_upf_allow_hdl_expressions),
+                               args.hasArg(OPT_upf_assume_powered_inputs))))
     return 1;
   if (frontendOptions.twoState)
     talos::native::mark<talos::native::TwoState>(*module);

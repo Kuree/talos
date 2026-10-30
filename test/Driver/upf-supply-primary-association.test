@@ -1,0 +1,55 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: not talos --upf %t/unassociated.upf -emit-slang %t/design.sv -o %t.mlir 2>&1 | FileCheck %s --check-prefix=ASSOCIATION
+// RUN: talos --upf-assume-powered-inputs --upf %t/unassociated.upf -DASSUME -O3 %t/design.sv -o %t.compat && %t.compat | FileCheck %s --check-prefix=POWER
+// RUN: talos --upf %t/associated.upf -O3 %t/design.sv -o %t.explicit && %t.explicit | FileCheck %s --check-prefix=POWER
+// RUN: not talos --upf %t/wrong.upf -emit-slang %t/design.sv -o %t.mlir 2>&1 | FileCheck %s --check-prefix=WRONG
+// IEEE 1801-2018 6.22: -domain is a creation scope, not an association to
+// primary power. This slice requires 6.43 set_domain_supply_net explicitly.
+// Legacy inference remains available only under explicit compatibility mode.
+// ASSOCIATION: switchable domain requires an explicit primary supply association with set_domain_supply_net (IEEE 1801-2018 6.22/6.43)
+// WRONG: switch output does not drive the domain primary supply
+// POWER: primary supply association passed
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1'b1;
+endmodule
+module top;
+  import UPF::*;
+  logic enable = 1;
+  wire q;
+  leaf dut(q);
+  initial begin
+    #1;
+`ifdef ASSUME
+    if (q !== 1'b1) $fatal(1, "legacy association failed");
+`else
+    if (q !== 1'bx) $fatal(1, "standard OFF failed");
+`endif
+    if (!supply_on("/top/VDD") || !supply_on("/top/VSS", 0.0))
+      $fatal(1, "supply_on failed");
+    #1;
+    if (q !== 1'b1) $fatal(1, "explicit association failed");
+    if (!supply_off("/top/VDD")) $fatal(1, "supply_off failed");
+    #1;
+    if (q !== 1'bx) $fatal(1, "associated supply loss failed");
+    $display("primary supply association passed");
+    $finish;
+  end
+endmodule
+
+//--- unassociated.upf
+create_power_domain PD -elements dut
+foreach net {VDD VSS SW} {create_supply_net $net}
+create_power_switch PS -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout SW} \
+    -control_port {en enable} -on_state {ON vin en}
+
+//--- associated.upf
+source [file join [file dirname [info script]] unassociated.upf]
+set_domain_supply_net PD -primary_power_net SW -primary_ground_net VSS
+
+//--- wrong.upf
+source [file join [file dirname [info script]] unassociated.upf]
+set_domain_supply_net PD -primary_power_net VDD -primary_ground_net VSS

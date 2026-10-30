@@ -2,7 +2,9 @@ add_mlir_library(TalosUPF
   Execute.cpp
   BooleanExpression.cpp
   ControlReference.cpp
+  SupplyNetwork.cpp
   Elaborate.cpp
+  ElaborateSupply.cpp
   DEPENDS SlangOpsIncGen TalosSimulationOpsIncGen TalosUPFOpsIncGen
     TalosUPFAttrsIncGen TalosUPFEnumsIncGen
   LINK_LIBS PUBLIC TalosUPFIR TalosSlangIR TalosSimulationIR

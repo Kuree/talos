@@ -2,6 +2,7 @@
 // lookup.
 #include "BooleanExpression.h"
 #include "ControlReference.h"
+#include "SupplyNetwork.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Verifier.h"
@@ -25,7 +26,8 @@ namespace talos {
 #ifdef TALOS_ENABLE_UPF
 namespace {
 struct Domain {
-  std::string name, scope, power, switchInput, switchOutput, isolation;
+  std::string name, scope, power, ground, switchInput, switchOutput, isolation;
+  std::string inputPort, outputPort;
   SmallVector<Attribute> on, errors;
   upf::SwitchStateAttr off;
   std::vector<std::string> elements;
@@ -42,6 +44,8 @@ struct Session {
   std::map<std::string, Operation *> objects;
   std::map<std::string, Domain> domains;
   std::set<std::string> nets, supplyPorts, switches;
+  SupplyPorts supplyPortInfo;
+  SupplyBindings supplyBindings;
   std::set<std::string> designPorts;
   Session(ModuleOp module, Tcl_Interp *interp, bool allowHDLExpressions)
       : module(module), interp(interp),
@@ -515,6 +519,12 @@ struct Session {
       auto &inventory = command == "create_supply_net" ? nets : supplyPorts;
       if (!inventory.insert(key(Tcl_GetString(objv[1]))).second)
         return error("duplicate supply object");
+      if (command == "create_supply_port")
+        supplyPortInfo[key(Tcl_GetString(objv[1]))] = {
+            direction == "out"     ? SupplyPort::Out
+            : direction == "inout" ? SupplyPort::InOut
+                                   : SupplyPort::In,
+            false};
       return TCL_OK;
     }
     if (command == "connect_supply_net") {
@@ -527,9 +537,19 @@ struct Session {
         return error("connect_supply_net requires -ports");
       if (!list(opts["-ports"], ports))
         return TCL_ERROR;
-      for (auto &port : ports)
+      for (auto &port : ports) {
         if (!supplyPorts.count(key(port)))
           return error("unknown supply port: " + port);
+        if (supplyPortInfo.at(key(port)).direction == SupplyPort::InOut)
+          return error("inout supply connections are not implemented: " + port);
+      }
+      auto bindings = supplyBindings;
+      for (auto &port : ports)
+        if (failed(bindSupply(
+                key(Tcl_GetString(objv[1])), key(port), bindings,
+                [&](const llvm::Twine &message) { error(message); })))
+          return TCL_ERROR;
+      supplyBindings = std::move(bindings);
       return TCL_OK;
     }
     if (command == "set_domain_supply_net") {
@@ -554,6 +574,7 @@ struct Session {
         if (!nets.count(key(Tcl_GetString(option.second))))
           return error("unknown primary supply net");
       found->second.power = key(value(opts, "-primary_power_net"));
+      found->second.ground = key(value(opts, "-primary_ground_net"));
       found->second.primaryAssociated = true;
       Tcl_SetObjResult(interp, Tcl_NewIntObj(1));
       return TCL_OK;
@@ -708,8 +729,6 @@ struct Session {
           return TCL_ERROR;
         errorStates.push_back(*parsed);
       }
-      if (!dom->power.empty() && dom->power != key(output[1]))
-        return error("switch output does not drive the domain primary supply");
       // IEEE 1801-2018 6.24.3: unresolved supplies cannot have multiple
       // drivers. This slice also requires independently powered input rails;
       // reject switch cascades in either declaration order (9.2.2-9.2.3).
@@ -723,13 +742,37 @@ struct Session {
             other.switchInput == key(output[1]))
           return error("cascaded power switches are not implemented");
       }
-      if (!switches.insert(key(Tcl_GetString(objv[1]))).second)
+      std::string switchName = key(Tcl_GetString(objv[1]));
+      std::string inputPort = switchName + "." + input[0];
+      std::string outputPort = switchName + "." + output[0];
+      if (supplyPorts.count(inputPort) || supplyPorts.count(outputPort))
+        return error("power-switch supply port already exists");
+      auto bindings = supplyBindings;
+      for (auto [net, port] : {std::make_pair(key(input[1]), inputPort),
+                               std::make_pair(key(output[1]), outputPort)})
+        if (failed(bindSupply(
+                net, port, bindings,
+                [&](const llvm::Twine &message) { error(message); })))
+          return TCL_ERROR;
+      if (!switches.insert(switchName).second)
         return error("duplicate power switch");
       dom->on = std::move(onStates);
       dom->off = offState;
       dom->errors = std::move(errorStates);
       dom->switchInput = key(input[1]);
-      dom->power = dom->switchOutput = key(output[1]);
+      dom->switchOutput = key(output[1]);
+      // Legacy inference is used only by --upf-assume-powered-inputs. In
+      // standard mode the final inventory requires an explicit association:
+      // 6.22 -domain selects scope, not the primary supply function (6.43).
+      if (dom->power.empty())
+        dom->power = dom->switchOutput;
+      dom->inputPort = inputPort;
+      dom->outputPort = outputPort;
+      supplyPorts.insert(inputPort);
+      supplyPorts.insert(outputPort);
+      supplyPortInfo[inputPort] = {SupplyPort::In, false};
+      supplyPortInfo[outputPort] = {SupplyPort::Out, true};
+      supplyBindings = std::move(bindings);
       return TCL_OK;
     }
     if (command == "set_isolation") {
@@ -784,7 +827,7 @@ int dispatch(void *data, Tcl_Interp *, Tcl_Size objc, Tcl_Obj *const objv[]) {
 #endif
 LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
                          StringRef resourceDir, StringRef executablePath,
-                         bool allowHDLExpressions) {
+                         bool allowHDLExpressions, bool assumePoweredInputs) {
   if (paths.empty())
     return success();
   module.getContext()->getOrLoadDialect<upf::UPFDialect>();
@@ -832,44 +875,100 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
              << (details ? details : Tcl_GetStringResult(interp.get()));
     }
   }
-  // IEEE 1801-2018 6.20/8.3.3: an explicitly assigned descendant is excluded
-  // from its parent's effective extent even when it has no local switch. Such
-  // domains are omitted from this runtime slice, so diagnose that unsupported
-  // partition before their ownership information could be discarded.
+  std::string supplyError;
+  auto resolved = resolveSupplies(
+      session.nets, session.supplyPortInfo, session.supplyBindings,
+      [&](const llvm::Twine &message) { supplyError = message.str(); });
+  if (failed(resolved))
+    return module.emitError() << supplyError;
+  auto &supplies = *resolved;
+  struct DomainSupplies {
+    unsigned power, ground;
+    std::optional<unsigned> input;
+  };
+  std::map<std::string, DomainSupplies> domainSupplies;
   for (auto &[name, domain] : session.domains) {
-    if (domain.switchOutput.empty())
-      continue;
-    for (auto &[otherName, other] : session.domains) {
-      if (!other.switchOutput.empty())
-        continue;
-      for (auto &element : domain.elements)
-        for (auto &child : other.elements)
-          if (child == element || StringRef(child).starts_with(element + "."))
-            return emitError(other.location.value_or(module.getLoc()))
-                   << "always-on subdomains inside switchable domains are not "
-                      "implemented: "
-                   << otherName << " inside " << name;
+    auto root = [&](const std::string &net) {
+      if (!net.empty())
+        return supplies.nets.at(net);
+      unsigned id = supplies.roots.size();
+      supplies.roots.push_back({});
+      return id;
+    };
+    unsigned power = root(domain.power), ground = root(domain.ground);
+    supplies.roots[ground].ground = true;
+    std::optional<unsigned> input;
+    if (!domain.switchOutput.empty()) {
+      if (!domain.primaryAssociated && !assumePoweredInputs)
+        return emitError(domain.location.value_or(module.getLoc()))
+               << "switchable domain requires an explicit primary supply "
+                  "association with set_domain_supply_net (IEEE 1801-2018 "
+                  "6.22/6.43)";
+      input = supplies.nets.at(domain.switchInput);
+      unsigned output = supplies.ports.at(domain.outputPort);
+      if (power != output)
+        return emitError(domain.location.value_or(module.getLoc()))
+               << "switch output does not drive the domain primary supply";
+      if (*input == output)
+        return emitError(domain.location.value_or(module.getLoc()))
+               << "power-switch input and output are electrically connected";
+      if (!supplies.roots[*input].writable)
+        return emitError(domain.location.value_or(module.getLoc()))
+               << "cascaded power switches are not implemented";
+    } else if (!supplies.roots[power].writable) {
+      return emitError(domain.location.value_or(module.getLoc()))
+             << "sharing a switched supply across power domains is not "
+                "implemented";
     }
+    if (!supplies.roots[ground].writable)
+      return emitError(domain.location.value_or(module.getLoc()))
+             << "switched primary ground is not implemented";
+    // IEEE 1801-2018 6.20/9.2.1/9.3.1: implicit primary functions have root
+    // drivers unless associated with a network. HDL handles use absolute UPF
+    // root paths, not Tcl design-relative '/' (11.2.3.1.1).
+    std::string prefix =
+        domain.scope.empty() ? "" : absoluteSupplyHandle(domain.scope);
+    std::string simple =
+        domain.scope.empty() ? name : name.substr(domain.scope.size() + 1);
+    prefix += "/" + simple + ".primary.";
+    supplies.handles[prefix + "power"] = power;
+    supplies.handles[prefix + "ground"] = ground;
+    domainSupplies.emplace(name, DomainSupplies{power, ground, input});
   }
   OpBuilder builder(module.getContext());
   builder.setInsertionPointToEnd(module.getBody());
+  auto supplySymbol = [&](unsigned id) {
+    return FlatSymbolRefAttr::get(module.getContext(),
+                                  "__upf_supply_" + std::to_string(id));
+  };
+  for (unsigned id = 0; id < supplies.roots.size(); ++id) {
+    SmallVector<Attribute> names;
+    for (auto &[name, root] : supplies.handles)
+      if (root == id)
+        names.push_back(builder.getStringAttr(name));
+    auto root = supplies.roots[id];
+    // Standard initialization is OFF, unspecified voltage (9.2.1). The old
+    // FULL_ON-input prototype requires explicit compatibility mode.
+    uint64_t initial = assumePoweredInputs && root.writable
+                           ? ((uint64_t(root.ground ? 0 : 1000000) << 2) | 1)
+                           : 0;
+    upf::UPFSupplyOp::create(
+        builder, module.getLoc(), supplySymbol(id).getValue(),
+        builder.getArrayAttr(names), root.writable, initial);
+  }
   for (auto &[name, domain] : session.domains) {
-    if (domain.switchOutput.empty()) {
-      if (!domain.isolation.empty())
-        return module.emitError(
-            "initial UPF isolation requires a switchable domain");
-      continue;
-    }
-    if (domain.power != domain.switchOutput)
-      return module.emitError(
-          "power-switch output does not match the domain primary supply");
     llvm::SmallVector<Attribute> elements;
     for (auto &element : domain.elements)
       elements.push_back(builder.getStringAttr(element));
     upf::UPFDomainOp::create(
         builder, domain.location.value_or(module.getLoc()), name,
-        builder.getArrayAttr(elements), builder.getArrayAttr(domain.on),
-        domain.off,
+        builder.getArrayAttr(elements),
+        supplySymbol(domainSupplies.at(name).power).getValue(),
+        supplySymbol(domainSupplies.at(name).ground),
+        domainSupplies.at(name).input
+            ? supplySymbol(*domainSupplies.at(name).input)
+            : FlatSymbolRefAttr{},
+        builder.getArrayAttr(domain.on), domain.off,
         domain.errors.empty() ? ArrayAttr{}
                               : builder.getArrayAttr(domain.errors),
         domain.isolation.empty() ? StringAttr{}

@@ -1,7 +1,7 @@
 # REQUIRES: upf
 # RUN: %split-file %s %t
-# RUN: not talos --upf %t/power.upf %t/design.sv -o %t/a 2>&1 | FileCheck %s
-# RUN: not talos --upf %t/reverse.upf --upf %t/power.upf %t/design.sv -o %t/b 2>&1 | FileCheck %s
+# RUN: not talos --upf-assume-powered-inputs --upf %t/power.upf %t/design.sv -o %t/a 2>&1 | FileCheck %s
+# RUN: not talos --upf-assume-powered-inputs --upf %t/reverse.upf --upf %t/power.upf %t/design.sv -o %t/b 2>&1 | FileCheck %s
 # IEEE 1801-2018 6.20/8.4: reject a partial ownership conflict before applying
 # either domain, regardless of declaration/application order.
 # CHECK: design instance is selected by multiple switchable domains: top.a2

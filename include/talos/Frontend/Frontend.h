@@ -59,6 +59,8 @@ struct FrontendOptions {
   std::vector<std::string> slangArgs;
 
   bool singleUnit = false;
+  /// Provide the compiler-owned IEEE 1801 package and supply intrinsics.
+  bool enableUPF = false;
   /// Import executable integral values in the two-state domain. Elaboration
   /// still uses the source language's types; X/Z data bits become zero when
   /// entering the executable model, whose uninitialized integral storage is

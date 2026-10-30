@@ -1,6 +1,6 @@
 # REQUIRES: upf
 # RUN: %split-file %s %t
-# RUN: talos --upf-allow-hdl-expressions --upf %t/design.upf -emit-slang %t/design.sv -o %t.mlir | FileCheck %s
+# RUN: talos --upf-allow-hdl-expressions --upf-assume-powered-inputs --upf %t/design.upf -emit-slang %t/design.sv -o %t.mlir | FileCheck %s
 # IEEE 1801-2018 5.3.3.2/5.4/5.11/6.22: unsupported selectors and invalid
 # objects are catchable Tcl errors, and failed switch declarations are atomic.
 # CHECK: control selection error cases passed

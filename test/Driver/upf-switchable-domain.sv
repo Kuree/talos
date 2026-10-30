@@ -1,9 +1,9 @@
 // REQUIRES: upf
-// RUN: talos --upf %S/Inputs/upf/switchable.upf -O0 --mlir-verify-each --native-scheduler=generic %s -o %t.o0
+// RUN: talos --upf-assume-powered-inputs --upf %S/Inputs/upf/switchable.upf -O0 --mlir-verify-each --native-scheduler=generic %s -o %t.o0
 // RUN: %t.o0 | FileCheck %s --check-prefix=CHECK
-// RUN: talos --upf %S/Inputs/upf/switchable.upf -O3 --mlir-verify-each %s -o %t.o3
+// RUN: talos --upf-assume-powered-inputs --upf %S/Inputs/upf/switchable.upf -O3 --mlir-verify-each %s -o %t.o3
 // RUN: %t.o3 | FileCheck %s --check-prefix=CHECK
-// RUN: talos --upf %S/Inputs/upf/switchable.upf -O0 --execution-tier=bytecode %s -o %t.bc
+// RUN: talos --upf-assume-powered-inputs --upf %S/Inputs/upf/switchable.upf -O0 --execution-tier=bytecode %s -o %t.bc
 // RUN: %t.bc | FileCheck %s --check-prefix=CHECK
 
 module upf_leaf(input logic clk, input logic d, output logic q);

@@ -520,6 +520,24 @@ UnitLowering::lowerSystemCall(semantic::SVCallExpressionOp op) {
     return constant(builder.getI1Type(), 0);
   };
 
+  if (name == "$talos_upf_supply_control") {
+    // A compiler-registered nonconstant system function underlies package UPF
+    // (IEEE 1801-2018 11.2.3.3.4/.5); ordinary user functions cannot match this
+    // system-call identity. Evaluate every argument exactly once.
+    if (children.size() != 3)
+      return emitError(location) << "malformed UPF supply intrinsic", failure();
+    auto supply = lowerExpression(children[0]);
+    auto voltage = lowerExpression(children[1]);
+    auto on = lowerInteger(children[2], builder.getI1Type());
+    if (failed(supply) || failed(voltage) || failed(on))
+      return failure();
+    auto real = convert(*voltage, builder.getF64Type(), true, location);
+    if (failed(real))
+      return failure();
+    return convertResult(sim::SimSupplyControlOp::create(
+        builder, location, builder.getI1Type(), context, *supply, *real, *on));
+  }
+
   if (name == "$sdf_annotate" &&
       op->hasAttr("talos.sdf_compile_time_applied")) {
     // IEEE 1800-2017 32.9 makes this task load timing data. The frontend has

@@ -1,0 +1,130 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O3 %t/units.sv -o %t.units && %t.units | FileCheck %s --check-prefix=TIME
+// RUN: talos --upf %t/design.upf -O3 %t/directive.sv -o %t.directive && %t.directive | FileCheck %s --check-prefix=TIME
+// RUN: talos --upf %t/design.upf -O3 %t/coarse.sv -o %t.coarse && %t.coarse | FileCheck %s --check-prefix=COARSE
+// RUN: talos --upf %t/design.upf -O3 %t/untimed.sv -o %t.untimed && %t.untimed | FileCheck %s --check-prefix=EFFECTS
+// RUN: talos --upf-assume-powered-inputs --upf %t/design.upf -DASSUME -O3 %t/untimed.sv -o %t.assumed && %t.assumed | FileCheck %s --check-prefix=EFFECTS
+// RUN: not talos --upf %t/design.upf -emit-slang %t/mixed.sv -o %t.mlir 2>&1 | FileCheck %s --check-prefix=MIXED
+// RUN: not talos --upf %t/design.upf -emit-slang %t/constant.sv -o %t.mlir 2>&1 | FileCheck %s --check-prefix=CONSTANT
+// IEEE 1801-2018 11.2/11.2.3.3.4/.5: compiler-provided package functions
+// preserve standard HDL timing, are nonconstant, and retain unused effects.
+// Compatibility mode changes initialization only, including direct domains.
+// TIME: timescale preserved
+// COARSE: coarse precision preserved
+// EFFECTS: package effects and intrinsic identity passed
+// MIXED: design element does not have a time scale defined but others in the design do
+// CONSTANT: '$talos_upf_supply_control' is not allowed in a constant context
+
+//--- units.sv
+module leaf(output wire q);
+  timeunit 1ns;
+  timeprecision 1ps;
+  assign q = 1'b1;
+endmodule
+module top;
+  timeunit 1ns;
+  timeprecision 1ps;
+  import UPF::*;
+  wire q;
+  leaf dut(q);
+  initial begin
+    void'(supply_on("/top/VDD"));
+    void'(supply_on("/top/VSS", 0.0));
+    #1.5;
+    if ($realtime != 1.5 || $timeprecision != -12 || q !== 1'b1)
+      $fatal(1, "compiler package changed timing");
+    $display("timescale preserved");
+    $finish;
+  end
+endmodule
+
+//--- directive.sv
+`timescale 1ns/1ps
+module leaf(output wire q);
+  assign q = 1'b1;
+endmodule
+module top;
+  import UPF::*;
+  wire q;
+  leaf dut(q);
+  initial begin
+    void'(supply_on("/top/VDD"));
+    void'(supply_on("/top/VSS", 0.0));
+    #1.5;
+    if ($realtime != 1.5 || $timeprecision != -12 || q !== 1'b1)
+      $fatal(1, "compiler package changed timescale directive");
+    $display("timescale preserved");
+    $finish;
+  end
+endmodule
+
+//--- coarse.sv
+`timescale 100s/100s
+module leaf(output wire q);
+  assign q = 1'b1;
+endmodule
+module top;
+  import UPF::*;
+  wire q;
+  leaf dut(q);
+  initial begin
+    void'(supply_on("/top/VDD"));
+    void'(supply_on("/top/VSS", 0.0));
+    #1;
+    if ($realtime != 1.0 || $timeprecision != 2 || q !== 1'b1)
+      $fatal(1, "compiler package tightened global precision");
+    $display("coarse precision preserved");
+    $finish;
+  end
+endmodule
+
+//--- untimed.sv
+module leaf(output wire q);
+  assign q = 1'b1;
+endmodule
+module top;
+  import UPF::*;
+  wire q;
+  leaf dut(q);
+  function bit \$talos_upf_supply_control (string name, real value, bit on);
+    return name == "ordinary user function" && value == 2.0 && !on;
+  endfunction
+  initial begin
+    #1;
+`ifdef ASSUME
+    if (q !== 1'b1) $fatal(1, "compatibility initialization failed");
+`else
+    if (q !== 1'bx) $fatal(1, "standard initialization failed");
+`endif
+    if (!\$talos_upf_supply_control ("ordinary user function", 2.0, 0))
+      $fatal(1, "user function mistaken for system intrinsic");
+    void'(supply_on("/top/VDD"));
+    void'(supply_on("/top/VSS", 0.0));
+    #1;
+    if (q !== 1'b1) $fatal(1, "discarded supply_on was eliminated");
+    void'(supply_off("/top/VDD"));
+    #1;
+    if (q !== 1'bx) $fatal(1, "discarded supply_off was eliminated");
+    $display("package effects and intrinsic identity passed");
+    $finish;
+  end
+endmodule
+
+//--- mixed.sv
+module leaf;
+endmodule
+module top;
+  timeunit 1ns / 1ps;
+  leaf dut();
+endmodule
+
+//--- constant.sv
+module top;
+  localparam bit state = UPF::supply_on("/top/VDD");
+endmodule
+
+//--- design.upf
+foreach net {VDD VSS} {create_supply_net $net}
+create_power_domain PD -elements dut
+set_domain_supply_net PD -primary_power_net VDD -primary_ground_net VSS

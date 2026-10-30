@@ -1,5 +1,5 @@
 # REQUIRES: upf
 # RUN: %split-file %S/upf-declared-selections.test %t
-# RUN: talos --upf-allow-hdl-expressions --upf %t/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/design.sv -o %t.o
+# RUN: talos --upf-allow-hdl-expressions --upf-assume-powered-inputs --upf %t/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/design.sv -o %t.o
 # RUN: %llvm_dist/bin/llvm-readobj --file-headers %t.o | FileCheck %s
 # CHECK: AddressSize: 32bit

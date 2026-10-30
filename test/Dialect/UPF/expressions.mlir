@@ -7,12 +7,14 @@
 #on = #upf.expression<[#a, #ones, #upf.token<opcode = eq>, #b, #upf.token<opcode = not>, #upf.token<opcode = and>]>
 #off = #upf.expression<[#b, #fill, #upf.token<opcode = ne>]>
 module {
-  // CHECK: upf.domain @PD elements ["top.dut"] on [
+  upf.supply @rail names ["/top/VDD"] writable = true
+  upf.supply @switched names ["/top/SW"] writable = false
+  // CHECK: upf.domain @PD elements ["top.dut"] power @switched on [
   // CHECK-SAME: control = "top.a", isSigned = true
   // CHECK-SAME: value = -1 : i8, unknown = 0 : i8, isSigned = true
   // CHECK-SAME: #upf.token<opcode = eq>
   // CHECK-SAME: #upf.token<opcode = and>
   // CHECK-SAME: off = #upf.state<name = "OFF", condition = <
   // CHECK-SAME: fill = true
-  upf.domain @PD elements ["top.dut"] on [#upf.state<name = "ON", condition = #on>] {off = #upf.state<name = "OFF", condition = #off>}
+  upf.domain @PD elements ["top.dut"] power @switched on [#upf.state<name = "ON", condition = #on>] {input = @rail, off = #upf.state<name = "OFF", condition = #off>}
 }

@@ -1,13 +1,13 @@
 # REQUIRES: upf
 # RUN: %split-file %s %t
-# RUN: not talos --upf %t/switch.upf --upf %t/always-on-child.upf %t/design.sv -o %t/child 2>&1 | FileCheck %s --check-prefix=CHILD
-# RUN: not talos --upf %t/multiple.upf --upf %t/switch.upf %t/design.sv -o %t/multiple 2>&1 | FileCheck %s --check-prefix=PATHS
-# RUN: not talos --upf %t/switch.upf %t/collapsed.sv -o %t/collapsed 2>&1 | FileCheck %s --check-prefix=NET
-# RUN: talos --upf %t/always-on-parent.upf --upf %t/switch.upf -emit-sim --mlir-verify-each %t/design.sv -o - | FileCheck %s --check-prefix=PARENT
-# RUN: talos --upf %t/multiple.upf --upf %t/no-isolation.upf --upf %t/switch.upf -emit-sim --mlir-verify-each %t/design.sv -o - | FileCheck %s --check-prefix=PARENT
+# RUN: not talos --upf-assume-powered-inputs --upf %t/switch.upf --upf %t/always-on-child.upf %t/design.sv -o %t/child 2>&1 | FileCheck %s --check-prefix=CHILD
+# RUN: not talos --upf-assume-powered-inputs --upf %t/multiple.upf --upf %t/switch.upf %t/design.sv -o %t/multiple 2>&1 | FileCheck %s --check-prefix=PATHS
+# RUN: not talos --upf-assume-powered-inputs --upf %t/switch.upf %t/collapsed.sv -o %t/collapsed 2>&1 | FileCheck %s --check-prefix=NET
+# RUN: not talos --upf-assume-powered-inputs --upf %t/always-on-parent.upf --upf %t/switch.upf -emit-sim --mlir-verify-each %t/design.sv -o - 2>&1 | FileCheck %s --check-prefix=CHILD
+# RUN: talos --upf-assume-powered-inputs --upf %t/multiple.upf --upf %t/no-isolation.upf --upf %t/switch.upf -emit-sim --mlir-verify-each %t/design.sv -o - | FileCheck %s --check-prefix=PARENT
 # IEEE 1801-2018 6.20: effective extent excludes explicitly assigned children.
 # IEEE 1801-2018 6.45: same-domain traffic and mixed fanout require per-path isolation.
-# CHILD: always-on subdomains inside switchable domains are not implemented
+# CHILD: nested switchable domains are not implemented
 # PATHS: isolation across multiple boundary instances requires per-path handling and is not implemented
 # NET: isolation on collapsed output nets is not implemented
 # PARENT: __upf_top.PD.monitor

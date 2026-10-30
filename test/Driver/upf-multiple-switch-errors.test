@@ -1,6 +1,6 @@
 # REQUIRES: upf
 # RUN: %split-file %s %t
-# RUN: talos --upf %t/design.upf -emit-slang %t/design.sv -o %t/design.mlir | FileCheck %s
+# RUN: talos --upf-assume-powered-inputs --upf %t/design.upf -emit-slang %t/design.sv -o %t/design.mlir | FileCheck %s
 # IEEE 1801-2018 6.24.3: unresolved nets have one driver. Cascaded supply
 # evaluation (9.2.2-9.2.3) is deferred; test both declaration orders explicitly.
 # CHECK: multiple-switch error cases passed

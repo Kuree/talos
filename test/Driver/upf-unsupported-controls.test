@@ -1,9 +1,9 @@
 # REQUIRES: upf
 # RUN: %split-file %s %t
-# RUN: not talos --upf %S/Inputs/upf/switchable.upf -O3 --native-scheduler=eval %S/upf-combinational-domain.sv -o %t/eval 2>&1 | FileCheck %s --check-prefix=AOT
-# RUN: not talos --upf %t/overlap.upf %S/Inputs/upf/design.sv -o %t/overlap 2>&1 | FileCheck %s --check-prefix=OVERLAP
-# RUN: not talos --upf %t/nested.upf %S/Inputs/upf/design.sv -o %t/nested 2>&1 | FileCheck %s --check-prefix=NESTED
-# RUN: not talos --upf %S/Inputs/upf/switchable.upf %t/mixed.sv -o %t/mixed 2>&1 | FileCheck %s --check-prefix=MIXED
+# RUN: not talos --upf-assume-powered-inputs --upf %S/Inputs/upf/switchable.upf -O3 --native-scheduler=eval %S/upf-combinational-domain.sv -o %t/eval 2>&1 | FileCheck %s --check-prefix=AOT
+# RUN: not talos --upf-assume-powered-inputs --upf %t/overlap.upf %S/Inputs/upf/design.sv -o %t/overlap 2>&1 | FileCheck %s --check-prefix=OVERLAP
+# RUN: not talos --upf-assume-powered-inputs --upf %t/nested.upf %S/Inputs/upf/design.sv -o %t/nested 2>&1 | FileCheck %s --check-prefix=NESTED
+# RUN: not talos --upf-assume-powered-inputs --upf %S/Inputs/upf/switchable.upf %t/mixed.sv -o %t/mixed 2>&1 | FileCheck %s --check-prefix=MIXED
 # IEEE 1801-2018 9.5.3: generated NBA tables do not support cancellation yet.
 # AOT: power-loss NBA cancellation requires generic ordering
 # OVERLAP: design instance is selected by multiple switchable domains: upf_test.dut

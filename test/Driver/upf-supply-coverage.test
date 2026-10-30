@@ -1,0 +1,44 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf --coverage=line -O0 -emit-sim --mlir-verify-each %t/design.sv -o - | FileCheck %s --check-prefix=IR --implicit-check-not='<talos-UPF>'
+// RUN: talos --upf %t/design.upf --coverage=line -O3 %t/design.sv -o %t.native
+// RUN: %t.native --coverage-output=%t.native.obcov
+// RUN: talos-cov report --format=lcov %t.native.obcov | FileCheck %s --check-prefix=REPORT --implicit-check-not='<talos-UPF>'
+// RUN: talos --upf %t/design.upf --coverage=line -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc --coverage-output=%t.bc.obcov
+// RUN: talos-cov report --format=lcov %t.bc.obcov | FileCheck %s --check-prefix=REPORT --implicit-check-not='<talos-UPF>'
+// Compiler-owned package bodies add no source-authored coverage obligations.
+// User supply callsites still contribute ordinary covered lines.
+// IR: coverage.source_files = ["{{[^"]*}}design.sv"]
+// IR: coverage.point_hit
+// REPORT: SF:{{.*}}design.sv
+// REPORT: DA:9,1
+// REPORT: DA:10,1
+// REPORT: DA:12,1
+// REPORT: DA:13,1
+// REPORT: end_of_record
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1'b1;
+endmodule
+module top;
+  import UPF::*;
+  wire q;
+  leaf dut(q);
+  initial begin
+    void'(supply_on("/top/VDD"));
+    void'(supply_on("/top/VSS", 0.0));
+    #1;
+    if (q !== 1'b1) $fatal(1, "ON failed");
+    void'(supply_off("/top/VDD"));
+    #1;
+    if (q !== 1'bx) $fatal(1, "OFF failed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+foreach net {VDD VSS} {create_supply_net $net}
+create_power_domain PD -elements dut
+set_domain_supply_net PD -primary_power_net VDD -primary_ground_net VSS

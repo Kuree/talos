@@ -12,6 +12,51 @@
 #define GET_OP_CLASSES
 #include "talos/Dialect/UPF/UPFOps.cpp.inc"
 namespace talos::upf {
+mlir::LogicalResult UPFSupplyOp::verify() {
+  // IEEE 1801-2018 9.2.1 and 11.2: one packed value per root, not per name.
+  // Bits [1:0] are supply state; [33:2] are signed32 microvolt bits.
+  if (getNames().empty())
+    return emitOpError("requires at least one absolute supply handle name");
+  llvm::StringSet<> names;
+  for (auto attr : getNames()) {
+    auto name = mlir::cast<mlir::StringAttr>(attr).getValue();
+    if (!name.starts_with('/') || name.size() < 2 || !names.insert(name).second)
+      return emitOpError("supply names must be unique absolute handle IDs");
+  }
+  if ((uint64_t(getInitialValue()) >> 34) != 0)
+    return emitOpError(
+        "initial supply value exceeds the packed state/voltage layout");
+  return mlir::success();
+}
+mlir::LogicalResult
+UPFDomainOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
+  for (auto ref : {getPowerAttr(), getGroundAttr(), getInputAttr()})
+    if (ref && !symbols.lookupNearestSymbolFrom<UPFSupplyOp>(*this, ref))
+      return emitOpError("references an unknown supply root: ") << ref;
+  // This runtime slice supports independent root drivers and one abstract
+  // switch per domain (IEEE 1801-2018 9.1/9.2.2). Preserve that contract for
+  // textual IR as well as Tcl: an HDL supply call must never write a computed
+  // switch output, and a computed output cannot act as another root input.
+  auto writable = [&](mlir::FlatSymbolRefAttr ref) {
+    return symbols.lookupNearestSymbolFrom<UPFSupplyOp>(*this, ref)
+        .getWritable();
+  };
+  if (auto input = getInputAttr()) {
+    if (writable(getPowerAttr()))
+      return emitOpError("switch output supply root must not be writable");
+    if (!writable(input))
+      return emitOpError("switch input supply root must be writable");
+    for (auto other : (*this)->getBlock()->getOps<UPFDomainOp>())
+      if (other != *this && other.getInputAttr() &&
+          other.getPowerAttr() == getPowerAttr())
+        return emitOpError("multiple switches drive the same supply root");
+  } else if (!writable(getPowerAttr())) {
+    return emitOpError("direct domain power supply root must be writable");
+  }
+  if (getGroundAttr() && !writable(getGroundAttr()))
+    return emitOpError("primary ground supply root must be writable");
+  return mlir::success();
+}
 void UPFDialect::initialize() {
   addAttributes<
 #define GET_ATTRDEF_LIST
@@ -32,6 +77,11 @@ mlir::LogicalResult UPFDomainOp::verify() {
     return emitOpError("isolation control must not be empty");
   if (getClamp() != 0 && getClamp() != 1)
     return emitOpError("isolation clamp must be zero or one");
+  if (!getInputAttr() && (!getOn().empty() || getOffAttr() ||
+                          (getErrorsAttr() && !getErrorsAttr().empty())))
+    return emitOpError("switch conditions require an input supply root");
+  if (getInputAttr() == getPowerAttr())
+    return emitOpError("switch input and output supply roots must differ");
   // IEEE 1801-2018 6.22: state names share one namespace for this switch.
   // Bound the combined inventory, not only each individual expression.
   llvm::SmallVector<SwitchStateAttr> states;

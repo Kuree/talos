@@ -1,9 +1,9 @@
 // REQUIRES: upf
-// RUN: talos --upf %S/Inputs/upf/active-low.upf -O0 --mlir-verify-each %s -o %t.o0
+// RUN: talos --upf-assume-powered-inputs --upf %S/Inputs/upf/active-low.upf -O0 --mlir-verify-each %s -o %t.o0
 // RUN: %t.o0 | FileCheck %s
-// RUN: talos --upf %S/Inputs/upf/active-low.upf -O3 --mlir-verify-each %s -o %t.o3
+// RUN: talos --upf-assume-powered-inputs --upf %S/Inputs/upf/active-low.upf -O3 --mlir-verify-each %s -o %t.o3
 // RUN: %t.o3 | FileCheck %s
-// RUN: talos --upf %S/Inputs/upf/active-low.upf -O0 --execution-tier=bytecode %s -o %t.bc
+// RUN: talos --upf-assume-powered-inputs --upf %S/Inputs/upf/active-low.upf -O0 --execution-tier=bytecode %s -o %t.bc
 // RUN: %t.bc | FileCheck %s
 module upf_leaf(input logic d, output logic q);
   always_comb q = d;

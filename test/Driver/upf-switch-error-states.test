@@ -1,10 +1,10 @@
 // REQUIRES: upf
 // RUN: %split-file %s %t
-// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: talos --upf-assume-powered-inputs --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
 // RUN: %t.o0 | FileCheck %s
-// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: talos --upf-assume-powered-inputs --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
 // RUN: %t.o3 | FileCheck %s
-// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: talos --upf-assume-powered-inputs --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
 // RUN: %t.bc | FileCheck %s
 // IEEE 1801-2018 6.22(a)(1): ERROR contributes UNDETERMINED. ERROR-only
 // unknowns use expression truth, not ON knownness. This is recoverable and

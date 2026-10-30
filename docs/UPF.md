@@ -29,7 +29,9 @@ can elaborate UPF and generate wasm32 simulations with 32-bit pointers and
 ## Executing UPF and Tcl libraries
 
 `talos --upf power.upf -emit-slang design.sv -o design.mlir` executes Tcl
-after Slang elaboration and emits resolved `upf.domain` operations. The
+after Slang elaboration and emits resolved `upf.domain` and `upf.supply`
+operations. Supply operations describe shared roots, their absolute handle
+aliases, driver permissions, and initial state/voltage values. The
 initial command subset includes design scope and object queries, scoped
 `load_upf`, power domains, supply nets/ports, one control-based power switch
 per domain, and parent-located output isolation. Unsupported commands and
@@ -37,11 +39,16 @@ options produce Tcl errors, which user procedures may handle with `catch`
 (IEEE 1801-2018 clause 5.11). The resolved domain retains its UPF declaration's
 source location.
 
+Switched domains require an explicit `set_domain_supply_net` association
+between their primary power and the switch output. The `-domain` switch option
+selects its creation scope; it does not create that association (clauses 6.22
+and 6.43). Unassociated abstract switches are outside this runtime slice.
+
 Independent domains can contain module hierarchies. Isolation applies at the
 upper domain boundary, preserving internal connections (clauses 6.20 and 6.45).
 Per-path isolation across multiple boundary instances, collapsed output nets,
-nested domain partitions, and supply-network evaluation remain unsupported and
-produce diagnostics.
+nested domain partitions, resolved supply networks, and switch cascades remain
+unsupported and produce diagnostics.
 Computed input connections are simulated with their parent's power state.
 Constants, including parameters and default input values, and level-sensitive
 latches reevaluate on restoration. Synchronous external helper calls are
@@ -81,7 +88,7 @@ clause 6.22 specifies the ERROR contribution without requiring a diagnostic.
 State names are unique across ON, OFF, and ERROR groups. An omitted OFF
 condition complements the other state conditions; a switch with no ON states
 never supplies NORMAL power. This slice supports one input supply per switch;
-partial-on states and general supply-network evaluation remain unsupported.
+partial-on control and general supply-network resolution remain unsupported.
 Sized SV
 literals of 1..4096 bits, unbased fill literals, and unsized decimal values
 0..2147483647 are accepted; other unsized literals require an explicit width.
@@ -115,6 +122,75 @@ ignores X/Z elsewhere in the vector, while `controls & 4'b0001` references the
 whole vector and therefore detects X/Z in any bit (clause 6.22). The monitor
 watches the base object but activates RTL only when aggregate power changes.
 Isolation controls currently remain scalar objects.
+
+## Runtime supplies
+
+Supplies start OFF, as specified in clause 9.2.1. Both switched and direct
+domains require all primary power and ground functions to be FULL_ON before
+their logic runs normally (clause 4.7.4). Ground at zero volts can be FULL_ON;
+voltage is not itself an ON predicate. Unassociated primary power and ground
+functions have independent roots, accessible as `/top/PD.primary.power` and
+`/top/PD.primary.ground`. Associated primary functions alias their supply nets.
+
+When `--upf` is enabled, the compiler provides the SystemVerilog package `UPF`
+with `supply_on` and `supply_off` (clauses 11.2.3.3.4 and 11.2.3.3.5), plus
+the `upfBooleanT`, `upfStringT`, and `upfRealT` aliases used in their signatures:
+
+```systemverilog
+import UPF::*;
+initial begin
+  if (!supply_on("/top/VDD", 1.0) || !supply_on("/top/VSS", 0.0))
+    $fatal(1, "failed to power supplies");
+  #10;
+  void'(supply_off("/top/VDD"));
+end
+```
+
+The functions accept runtime strings, return a success bit, and preserve normal
+SV argument evaluation, named arguments, and the default 1.0 V for `supply_on`.
+Calling them in a constant expression is an error. Calls whose return value
+is ignored retain their effects. They lower to simulation storage and scheduler
+operations, so generated native, bytecode, and wasm32 simulators need no Tcl,
+DPI library, or runtime name registry.
+
+This slice supports absolute UPF-created net/port handles. These start at the
+UPF root, such as `/top/VDD`; they are distinct from Tcl's design-relative `/`
+(clauses 10.3.2.2.1 and 11.2.3.1.1). A same-name port takes precedence over a
+net; use `/top/VDD@upfSupplyNetT` to select the net explicitly, or
+`@upfSupplyPortT` for the port (clause 10.3.2.2.3). Eligible connected aliases
+update the same root. HDL objects of `upfSupplyTypeT`/`upfSupplyObjT`, relative
+HDL supply names, and the remaining package query/control functions are not
+implemented.
+
+Unresolved directional networks support one connection per port side:
+same-scope LowConn and descendant-port HighConn (clauses 4.5.4.3 and 6.14).
+Multiple sources, directional cycles, connected `inout` ports, switch cascades,
+shared switch outputs across domains, and switched primary ground produce
+diagnostics. A switch output and all its connected aliases are protected from
+HDL supply writes (clauses 4.5.1, 9.1, and 11.2.3.3.4/.5).
+
+Unknown/protected names and invalid voltages return zero and record a
+nonterminating simulation error without changing a supply. Unexecuted calls
+produce no runtime error. Voltages use signed 32-bit integer microvolts with
+SV rounding to the nearest integer; finite zero and negative voltages are
+accepted, while NaN, infinities, and unrepresentable results are rejected
+(clauses 11.2.2 and 11.2.3.5.4). `supply_off` writes OFF and zero volts, following
+the specific function definition in clause 11.2.3.3.5 rather than the differing
+general description in clause 9.3.1. State and voltage share one atomic
+simulation storage value; the representation is identical on wasm32.
+
+Supply changes follow ordinary HDL scheduling (clause 9.2.3). A settled OFF
+transition corrupts state and cancels prior pending updates; restoration
+reevaluates level logic without inventing clock edges. A voltage-only change
+that remains FULL_ON does neither. OFF/ON writes in one activation can coalesce
+like other zero-time logic changes.
+
+`--upf-assume-powered-inputs` provides compatibility with the earlier prototype:
+writable roots initialize FULL_ON at 1.0 V, or 0 V for primary ground, rather
+than OFF. It also retains the prototype's inference of an omitted primary
+association from the switch output. Later supply calls still work. It does not
+enable nested domain partitions. New designs should explicitly power their
+supplies with the standard package functions.
 
 User Tcl libraries can be sourced or imported with standard Tcl packages
 (IEEE 1801-2018 clause 5.1):

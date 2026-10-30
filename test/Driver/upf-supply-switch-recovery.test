@@ -1,0 +1,52 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --native-scheduler=eval --mlir-verify-each %t/design.sv -o %t.eval
+// RUN: %t.eval | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.22/9.2.2: OFF inputs cannot restore a domain when
+// controls change; X/Z ON references prevent restoration of a FULL_ON input.
+// CHECK: OFF input with X and ERROR recovery passed
+
+//--- design.sv
+package audit;
+ int calls=0;
+ function logic sample();calls++;return 1;endfunction
+endpackage
+module leaf(output wire q);assign q=audit::sample();endmodule
+module top;
+ import UPF::*;
+ logic en=1'bx, bad=0;
+ wire q;
+ leaf dut(q);
+ initial begin
+  #1; if(!supply_on("/top/VSS",0.0)) $fatal(1,"ground on");
+  #1; if(q!==1'bx || audit::calls!=0) $fatal(1,"OFF with X was active");
+  if(!supply_on("/top/VDD")) $fatal(1,"source on");
+  #1; if(q!==1'bx || audit::calls!=0) $fatal(1,"X source restoration activated");
+  en=1;
+  #1; if(q!==1'b1 || audit::calls!=1) $fatal(1,"known ON restore");
+  bad=1;
+  #1; if(q!==1'bx || audit::calls!=1) $fatal(1,"ERROR loss");
+  if(!supply_off("/top/VDD")) $fatal(1,"source off");
+  #1; bad=0;
+  #1; if(q!==1'bx || audit::calls!=1) $fatal(1,"ERROR clearing restored OFF source");
+  if(!supply_on("/top/VDD")) $fatal(1,"source restore");
+  #1; if(q!==1'b1 || audit::calls!=2) $fatal(1,"source restore after ERROR clear");
+  if(!supply_off("/top/VDD")) $fatal(1,"off again");
+  #1; en=1'bz;
+  #1; if(!supply_on("/top/VDD")) $fatal(1,"source on while Z");
+  #1; if(q!==1'bx || audit::calls!=2) $fatal(1,"Z source restore activated");
+  en=1; bad=1'bx;
+  #1; if(q!==1'b1 || audit::calls!=3) $fatal(1,"unknown ERROR prevented restore");
+  $display("OFF input with X and ERROR recovery passed");$finish;
+ end
+endmodule
+
+//--- design.upf
+create_power_domain PD -elements dut
+foreach net {VDD VSS SW} {create_supply_net $net}
+set_domain_supply_net PD -primary_power_net SW -primary_ground_net VSS
+create_power_switch PS -domain PD -input_supply_port {vin VDD} -output_supply_port {vout SW} -control_port {en en} -control_port {bad bad} -on_state {ON vin en} -error_state {ERROR bad}

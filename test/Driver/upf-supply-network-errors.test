@@ -1,0 +1,104 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/catch.upf -emit-slang %t/design.sv -o %t.mlir | FileCheck %s --check-prefix=CATCH
+// RUN: not talos --upf %t/multiple.upf -emit-slang %t/design.sv -o %t.mlir 2>&1 | FileCheck %s --check-prefix=MULTIPLE
+// RUN: not talos --upf %t/cycle.upf -emit-slang %t/design.sv -o %t.mlir 2>&1 | FileCheck %s --check-prefix=CYCLE
+// RUN: not talos --upf %t/short.upf -emit-slang %t/design.sv -o %t.mlir 2>&1 | FileCheck %s --check-prefix=SHORT
+// RUN: not talos --upf %t/cascade.upf -emit-slang %t/design.sv -o %t.mlir 2>&1 | FileCheck %s --check-prefix=CASCADE
+// RUN: not talos --upf %t/shared.upf -emit-slang %t/design.sv -o %t.mlir 2>&1 | FileCheck %s --check-prefix=SHARED
+// RUN: not talos --upf %t/ground.upf -emit-slang %t/design.sv -o %t.mlir 2>&1 | FileCheck %s --check-prefix=GROUND
+// IEEE 1801-2018 4.5.4.3/6.14: legal connection scopes and one net per side.
+// 4.5.5.2/9.1: unresolved multiple sources and electrical shorts are errors.
+// Unsupported networks produce diagnostics, with no partial Tcl mutation.
+// CATCH: supply network catch and rollback passed
+// MULTIPLE: multiple sources drive one unresolved supply group
+// CYCLE: cyclic directional supply network has no supported root driver
+// SHORT: a switch must have distinct input and output supplies
+// CASCADE: cascaded power switches are not implemented
+// SHARED: sharing a switched supply across power domains is not implemented
+// GROUND: switched primary ground is not implemented
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1'b1;
+endmodule
+module top;
+  logic enable = 1;
+  wire a, b;
+  leaf duta(a), dutb(b);
+endmodule
+
+//--- catch.upf
+proc expect_error {script pattern} {
+    set code [catch {uplevel 1 $script} message]
+    if {$code != 1 || ![string match $pattern $message]} {
+        error "expected <$pattern>, got code $code <$message>"
+    }
+}
+foreach net {A B} {create_supply_net $net}
+create_supply_port P -direction in
+create_supply_port Q -direction inout
+expect_error {connect_supply_net A -ports {P Q}} {*inout supply connections*}
+connect_supply_net B -ports P
+expect_error {connect_supply_net A -ports P} {*side is already connected*}
+expect_error {connect_supply_net A -ports absent} {*unknown supply port*}
+set_scope dutb
+create_supply_port PIN
+set_scope /duta
+create_supply_net LOCAL
+create_supply_net OTHER
+create_supply_port PIN
+connect_supply_net LOCAL -ports PIN
+expect_error {connect_supply_net OTHER -ports PIN} {*side is already connected*}
+expect_error {connect_supply_net LOCAL -ports /dutb/PIN} {*scope or a descendant*}
+expect_error {connect_supply_net LOCAL -ports /P} {*scope or a descendant*}
+set_scope /
+connect_supply_net A -ports duta/PIN
+puts {supply network catch and rollback passed}
+
+//--- multiple.upf
+create_supply_net N
+foreach port {P Q} {
+    create_supply_port $port -direction in
+    connect_supply_net N -ports $port
+}
+
+//--- cycle.upf
+create_supply_net N
+set_scope duta
+create_supply_net LOCAL
+create_supply_port P -direction in
+create_supply_port Q -direction out
+connect_supply_net LOCAL -ports {P Q}
+set_scope /
+connect_supply_net N -ports {duta/P duta/Q}
+
+//--- base.upf
+foreach net {VDD VSS SW SW2} {create_supply_net $net}
+create_power_domain A -elements duta
+create_power_domain B -elements dutb
+
+//--- switch.upf
+source [file join [file dirname [info script]] base.upf]
+set_domain_supply_net A -primary_power_net SW -primary_ground_net VSS
+create_power_switch PS -domain A \
+    -input_supply_port {vin VDD} -output_supply_port {vout SW} \
+    -control_port {en enable} -on_state {ON vin en}
+
+//--- short.upf
+source [file join [file dirname [info script]] base.upf]
+create_power_switch PS -domain A \
+    -input_supply_port {vin VDD} -output_supply_port {vout VDD}
+
+//--- cascade.upf
+source [file join [file dirname [info script]] switch.upf]
+create_power_switch PS2 -domain B \
+    -input_supply_port {vin SW} -output_supply_port {vout SW2}
+
+//--- shared.upf
+source [file join [file dirname [info script]] switch.upf]
+set_domain_supply_net B -primary_power_net SW -primary_ground_net VSS
+
+//--- ground.upf
+source [file join [file dirname [info script]] switch.upf]
+set_domain_supply_net B -primary_power_net VDD -primary_ground_net SW

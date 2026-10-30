@@ -1,0 +1,51 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 9.2.3/9.5.3/9.6.7: supply events obey HDL scheduling.
+// OFF at an NBA deadline cancels updates regardless of timer creation order,
+// and one source can drive multiple independent, unswitched domains.
+// CHECK: shared roots and same-deadline OFF passed
+
+//--- design.sv
+module leaf(input logic clk,d, output logic q,y);
+  always @(posedge clk) q <= #3 d;
+  always_comb y=d;
+endmodule
+module top;
+ import UPF::*;
+ logic clk=0,d=1;
+ wire qa,ya,qb,yb;
+ leaf a(clk,d,qa,ya),b(clk,d,qb,yb);
+ initial begin
+   #1;
+   if(!supply_on("/top/VDD") || !supply_on("/top/VSS",0.0)) $fatal(1,"on");
+   #1; clk=1;
+   #2; if(ya!==1 || yb!==1) $fatal(1,"shared restoration");
+   #2; if(qa!==1'bx || qb!==1'bx || ya!==1'bx || yb!==1'bx) $fatal(1,"early-created same-deadline OFF");
+   if(!supply_on("/top/VDD")) $fatal(1,"restore");
+   clk=0; d=0;
+   #1; clk=1;
+   #2;
+   #1; if(!supply_off("/top/VDD")) $fatal(1,"off late");
+   #1; if(qa!==1'bx || qb!==1'bx) $fatal(1,"late-created same-deadline OFF");
+   if(!supply_on("/top/VDD")) $fatal(1,"restore late");
+   #1; if(qa!==1'bx || qb!==1'bx || ya!==0 || yb!==0) $fatal(1,"shared old NBA revived");
+   clk=0;
+   #1; clk=1;
+   #4; if(qa!==0 || qb!==0) $fatal(1,"fresh NBA");
+   $display("shared roots and same-deadline OFF passed");$finish;
+ end
+ initial begin #5; if(!supply_off("/top/VDD")) $fatal(1,"off early"); end
+endmodule
+
+//--- design.upf
+foreach net {VDD VSS} {create_supply_net $net}
+create_power_domain Z_D -elements a
+create_power_domain A_D -elements b
+set_domain_supply_net Z_D -primary_power_net VDD -primary_ground_net VSS
+set_domain_supply_net A_D -primary_power_net VDD -primary_ground_net VSS

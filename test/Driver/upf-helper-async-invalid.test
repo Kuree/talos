@@ -1,8 +1,8 @@
 # REQUIRES: upf
 # RUN: %split-file %s %t
-# RUN: not talos --upf %t/design.upf %t/nba.sv -o %t/nba 2>&1 | FileCheck %s
-# RUN: not talos --upf %t/design.upf %t/fork.sv -o %t/fork 2>&1 | FileCheck %s
-# RUN: not talos --upf %t/design.upf %t/virtual.sv -o %t/virtual 2>&1 | FileCheck %s --check-prefix=INDIRECT
+# RUN: not talos --upf-assume-powered-inputs --upf %t/design.upf %t/nba.sv -o %t/nba 2>&1 | FileCheck %s
+# RUN: not talos --upf-assume-powered-inputs --upf %t/design.upf %t/fork.sv -o %t/fork 2>&1 | FileCheck %s
+# RUN: not talos --upf-assume-powered-inputs --upf %t/design.upf %t/virtual.sv -o %t/virtual 2>&1 | FileCheck %s --check-prefix=INDIRECT
 # IEEE 1801-2018 9.5.3: helper calls may not bypass pending-event invalidation.
 # CHECK: asynchronous work in a UPF helper call is not implemented
 # INDIRECT: asynchronous or indirect calls inside a switchable domain are not implemented

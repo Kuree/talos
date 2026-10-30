@@ -2,8 +2,8 @@
 # RUN: %split-file %S/upf-computed-input.test %t/computed
 # RUN: %split-file %S/upf-level-state.test %t/level
 # RUN: %split-file %S/upf-constant-driver.test %t/constant
-# RUN: talos --upf %t/computed/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/computed/design.sv -o %t/computed.o
-# RUN: talos --upf %t/level/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/level/design.sv -o %t/level.o
-# RUN: talos --upf %t/constant/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/constant/design.sv -o %t/constant.o
+# RUN: talos --upf-assume-powered-inputs --upf %t/computed/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/computed/design.sv -o %t/computed.o
+# RUN: talos --upf-assume-powered-inputs --upf %t/level/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/level/design.sv -o %t/level.o
+# RUN: talos --upf-assume-powered-inputs --upf %t/constant/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/constant/design.sv -o %t/constant.o
 # RUN: %llvm_dist/bin/llvm-readobj --file-headers %t/computed.o %t/level.o %t/constant.o | FileCheck %s
 # CHECK-COUNT-3: AddressSize: 32bit

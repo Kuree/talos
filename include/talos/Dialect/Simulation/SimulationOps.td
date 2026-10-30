@@ -3880,6 +3880,23 @@ def SimFatalOp : SimOp<"fatal", [
   let assemblyFormat = "$context `,` $verbosity attr-dict";
 }
 
+def SimSupplyControlOp : SimOp<"supply.control", [
+  MemoryEffects<[MemRead<SimStorageResource>, MemWrite<SimStorageResource>,
+                 MemRead<SimHeapResource>, MemWrite<SimIOResource>,
+                 MemWrite<SimSchedulerResource>]>
+]> {
+  let summary = "control an elaborated UPF root supply by dynamic handle name";
+  let description = [{
+    IEEE 1801-2018 11.2.3.3.4/.5: changes the root supply immediately and returns
+    success. UPF elaboration replaces this operation with effectful simulation
+    storage accesses and validated name dispatch before target lowering.
+  }];
+  let arguments = (ins SimContextType:$context, SimStringType:$name,
+                       F64:$voltage, I1:$on);
+  let results = (outs I1:$success);
+  let assemblyFormat = "$context $name `voltage` $voltage `on` $on attr-dict";
+}
+
 def SimErrorOp : SimOp<"error", [
   MemoryEffects<[MemWrite<SimSchedulerResource>]>
 ]> {

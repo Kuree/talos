@@ -1,0 +1,11 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-supply-control.test %t/control
+// RUN: %split-file %S/upf-supply-control-errors.test %t/errors
+// RUN: %split-file %S/upf-supply-switch-recovery.test %t/recovery
+// RUN: talos --upf %t/control/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/control/design.sv -o %t/control.o
+// RUN: talos --upf %t/errors/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/errors/design.sv -o %t/errors.o
+// RUN: talos --upf %t/recovery/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/recovery/design.sv -o %t/recovery.o
+// RUN: %llvm_dist/bin/llvm-readobj --file-headers %t/control.o %t/errors.o %t/recovery.o | FileCheck %s
+// IEEE 1801-2018 11.2: signed32 microvolts have the same representation
+// on wasm32 and native. Simulation handles remain explicitly 64 bits.
+// CHECK-COUNT-3: AddressSize: 32bit

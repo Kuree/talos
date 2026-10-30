@@ -1,0 +1,75 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: not %t.o0 2>&1 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: not %t.o3 2>&1 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: not %t.bc 2>&1 | FileCheck %s
+// IEEE 1801-2018 11.2.3.1.1/11.2.3.3.4/.5: runtime absolute handles,
+// protected switch outputs, failed status and errors only on executed paths.
+// 11.2.2/11.2.3.5.4: finite representable signed32 microvolt conversion.
+// CHECK-COUNT-14: UPF supply control failed for
+// CHECK: rejected 14 invalid supply calls without mutation
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1'b1;
+endmodule
+module top;
+  import UPF::*;
+  logic enable = 1;
+  wire q;
+  int failures = 0;
+  string nul_name;
+  leaf dut(q);
+  task expect_failure(input bit status);
+    if (status) $fatal(1, "invalid supply call succeeded");
+    failures++;
+  endtask
+  initial begin
+    if (0) expect_failure(supply_on("/unreachable"));
+    if (!supply_on("/top/VDD") || !supply_on("/top/VSS", 0.0))
+      $fatal(1, "valid call failed");
+    #1;
+    if (q !== 1'b1) $fatal(1, "failed to start domain");
+    expect_failure(supply_on("/top/MISSING"));
+    expect_failure(supply_on("VDD"));
+    expect_failure(supply_on("/VDD"));
+    expect_failure(supply_on("/top/VDD@bogus"));
+    expect_failure(supply_on("/top/SW"));
+    expect_failure(supply_on("/top/PS/vout"));
+    // putc ignores a zero byte in SV. Formatting %c preserves it in the
+    // managed string, so prefix-based C-string lookup would select VDD.
+    nul_name = $sformatf("%s%c", "/top/VDD", 0);
+    if (nul_name.len() != 9 || nul_name.getc(8) != 0)
+      $fatal(1, "embedded NUL fixture lost length");
+    expect_failure(supply_on(nul_name));
+    expect_failure(supply_on("/top/VDD", $bitstoreal(64'h7ff0000000000000)));
+    expect_failure(supply_on("/top/VDD", $bitstoreal(64'hfff0000000000000)));
+    expect_failure(supply_on("/top/VDD", $bitstoreal(64'h7ff8000000000000)));
+    expect_failure(supply_on("/top/VDD", 2147.484));
+    expect_failure(supply_on("/top/VDD", -2147.484));
+    expect_failure(supply_off("/top/MISSING"));
+    expect_failure(supply_off("/top/PS/vout@upfSupplyPortT"));
+    #1;
+    if (q !== 1'b1 || failures != 14) $fatal(1, "failed calls changed supply");
+    if (!supply_on("/top/VDD", 2147.483647) ||
+        !supply_on("/top/VDD", -2147.483648) ||
+        !supply_on("/top/VDD", 0.0000005) ||
+        !supply_on("/top/VDD", -0.0000005))
+      $fatal(1, "representable microvolt conversion failed");
+    #1;
+    if (q !== 1'b1) $fatal(1, "valid signed microvolts lost FULL_ON");
+    $display("rejected %0d invalid supply calls without mutation", failures);
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_power_domain PD -elements dut
+foreach net {VDD VSS SW} {create_supply_net $net}
+set_domain_supply_net PD -primary_power_net SW -primary_ground_net VSS
+create_power_switch PS -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout SW} \
+    -control_port {en enable} -on_state {ON vin en}

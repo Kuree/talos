@@ -1,9 +1,9 @@
 // REQUIRES: upf
-// RUN: talos --upf %S/Inputs/upf/switchable.upf -O0 --mlir-verify-each %s -o %t.o0
+// RUN: talos --upf-assume-powered-inputs --upf %S/Inputs/upf/switchable.upf -O0 --mlir-verify-each %s -o %t.o0
 // RUN: %t.o0 | FileCheck %s
-// RUN: talos --upf %S/Inputs/upf/switchable.upf -O3 --mlir-verify-each %s -o %t.o3
+// RUN: talos --upf-assume-powered-inputs --upf %S/Inputs/upf/switchable.upf -O3 --mlir-verify-each %s -o %t.o3
 // RUN: %t.o3 | FileCheck %s
-// RUN: talos --upf %S/Inputs/upf/switchable.upf -O0 --execution-tier=bytecode %s -o %t.bc
+// RUN: talos --upf-assume-powered-inputs --upf %S/Inputs/upf/switchable.upf -O0 --execution-tier=bytecode %s -o %t.bc
 // RUN: %t.bc | FileCheck %s
 // IEEE 1801-2018 9.5.3/9.6.2/9.8: corruption, queued-update cancellation and
 // isolation apply to every packed bit, including values spanning machine words.

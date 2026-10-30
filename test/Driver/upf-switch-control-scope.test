@@ -1,8 +1,8 @@
 # REQUIRES: upf
 # RUN: %split-file %s %t
-# RUN: talos --upf %t/strict.upf -emit-slang %t/design.sv -o %t.strict.mlir | FileCheck %s --check-prefix=STRICT
-# RUN: not talos --upf %t/extension.upf -emit-slang %t/design.sv -o %t.failed.mlir 2>&1 | FileCheck %s --check-prefix=REJECT
-# RUN: talos --upf-allow-hdl-expressions --upf %t/extension.upf -O3 --mlir-verify-each %t/design.sv -o %t.ext
+# RUN: talos --upf-assume-powered-inputs --upf %t/strict.upf -emit-slang %t/design.sv -o %t.strict.mlir | FileCheck %s --check-prefix=STRICT
+# RUN: not talos --upf-assume-powered-inputs --upf %t/extension.upf -emit-slang %t/design.sv -o %t.failed.mlir 2>&1 | FileCheck %s --check-prefix=REJECT
+# RUN: talos --upf-allow-hdl-expressions --upf-assume-powered-inputs --upf %t/extension.upf -O3 --mlir-verify-each %t/design.sv -o %t.ext
 # RUN: %t.ext | FileCheck %s --check-prefix=EXTENSION
 # IEEE 1801-2018 6.22 specifically restricts switch expression names to the
 # switch's control ports, overriding 5.4's general HDL expression grammar.

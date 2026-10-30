@@ -1,0 +1,68 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 4.5.4.3/4.5.5.2: LowConn/HighConn aliases share a root.
+// 10.3.2.2.3: same-name port preference and explicit net/port selectors.
+// 6.20/9.2.1/9.3.1: implicit primary functions also have initially OFF roots.
+// CHECK: supply aliases and direct domains passed
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1'b1;
+endmodule
+module top;
+  import UPF::*;
+  wire a, b, c;
+  leaf duta(a), dutb(b), dutc(c);
+  initial begin
+    #1;
+    if ({a,b,c} !== 3'bxxx) $fatal(1, "direct supplies did not start OFF");
+    if (!supply_on("/top/VSS", 0.0) || !supply_on("/top/VDD"))
+      $fatal(1, "initial supply control failed");
+    #1;
+    if ({a,b,c} !== 3'bx1x) $fatal(1, "same-name port did not take precedence");
+    if (!supply_on("/top/VDD@upfSupplyNetT")) $fatal(1, "explicit net failed");
+    #1;
+    if ({a,b,c} !== 3'b11x) $fatal(1, "explicit net selected the port");
+    if (!supply_off("/top/duta/PIN@upfSupplyPortT")) $fatal(1, "port alias failed");
+    #1;
+    if ({a,b,c} !== 3'bx1x) $fatal(1, "HighConn did not reach root");
+    if (!supply_on("/top/duta/LOCAL")) $fatal(1, "net alias failed");
+    if (!supply_off("/top/VDD@upfSupplyPortT")) $fatal(1, "explicit port failed");
+    #1;
+    if ({a,b,c} !== 3'b1xx) $fatal(1, "LowConn did not reach root");
+    if (!supply_on("/top/PORT_RAIL")) $fatal(1, "port net alias failed");
+    if (!supply_on("/top/C.primary.power")) $fatal(1, "implicit power failed");
+    #1;
+    if ({a,b,c} !== 3'b11x) $fatal(1, "implicit ground ignored");
+    if (!supply_on("/top/C.primary.ground", 0.0)) $fatal(1, "implicit ground failed");
+    #1;
+    if ({a,b,c} !== 3'b111) $fatal(1, "implicit domain did not restore");
+    if (!supply_off("/top/A.primary.power")) $fatal(1, "associated function failed");
+    #1;
+    if ({a,b,c} !== 3'bx11) $fatal(1, "associated function did not alias net");
+    $display("supply aliases and direct domains passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+foreach net {VDD VSS PORT_RAIL} {create_supply_net $net}
+create_supply_port VDD -direction in
+connect_supply_net PORT_RAIL -ports VDD
+set_scope duta
+create_supply_port PIN -direction in
+create_supply_net LOCAL
+connect_supply_net LOCAL -ports PIN
+set_scope /
+connect_supply_net VDD -ports duta/PIN
+create_power_domain A -elements duta
+create_power_domain B -elements dutb
+create_power_domain C -elements dutc
+set_domain_supply_net A -primary_power_net duta/LOCAL -primary_ground_net VSS
+set_domain_supply_net B -primary_power_net PORT_RAIL -primary_ground_net VSS

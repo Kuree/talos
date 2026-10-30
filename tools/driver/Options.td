@@ -91,6 +91,9 @@ def upf : JoinedOrSeparate<["--"], "upf">, Group<Compilation_Group>,
 def upf_allow_hdl_expressions : Flag<["--"], "upf-allow-hdl-expressions">,
   Group<Compilation_Group>,
   HelpText<"Allow direct HDL references in switch expressions (extension to IEEE 1801 6.22)">;
+def upf_assume_powered_inputs : Flag<["--"], "upf-assume-powered-inputs">,
+  Group<Compilation_Group>,
+  HelpText<"Initialize UPF root inputs FULL_ON instead of standard OFF (compatibility mode)">;
 def no_two_state_specialization : Flag<["--"], "no-two-state-specialization">,
   Group<Compilation_Group>,
   HelpText<"Disable inferred two-state analysis, narrowing, and guarded specialization">;

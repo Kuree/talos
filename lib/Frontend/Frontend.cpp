@@ -31,6 +31,7 @@
 #include "slang/ast/EvalContext.h"
 #include "slang/ast/Lookup.h"
 #include "slang/ast/SemanticFacts.h"
+#include "slang/ast/SystemSubroutine.h"
 #include "slang/ast/TypeProvider.h"
 #include "slang/ast/expressions/Operator.h"
 #include "slang/ast/symbols/PortSymbols.h"
@@ -1120,10 +1121,12 @@ public:
   SlangASTImporter(ModuleOp module, const slang::SourceManager &sourceManager,
                    const slang::ast::Compilation &compilation,
                    const slang::analysis::AnalysisManager &analysisManager,
-                   const SDFAnnotationDatabase &sdfAnnotations, bool twoState)
+                   const SDFAnnotationDatabase &sdfAnnotations, bool twoState,
+                   ArrayRef<slang::BufferID> compilerBuffers)
       : builder(module.getContext()), sourceManager(sourceManager),
         compilation(compilation), analysisManager(analysisManager),
         sdfAnnotations(sdfAnnotations), twoState(twoState),
+        compilerBuffers(compilerBuffers),
         typeConverter(
             module.getContext(),
             [this](const slang::ast::Symbol &symbol) {
@@ -1476,13 +1479,21 @@ private:
     currentSymbolPath = std::move(savedPath);
   }
 
+  bool isCompilerOwned(slang::SourceLocation location) const {
+    if (!location.valid())
+      return false;
+    return llvm::is_contained(
+        compilerBuffers, sourceManager.getFullyExpandedLoc(location).buffer());
+  }
+
   Location fileLocation(slang::SourceLocation location) const {
     if (!location.valid())
       return UnknownLoc::get(builder.getContext());
     slang::SourceLocation fileLoc = sourceManager.getFullyExpandedLoc(location);
     if (!sourceManager.isFileLoc(fileLoc))
       fileLoc = sourceManager.getFullyOriginalLoc(location);
-    if (!fileLoc.valid() || !sourceManager.isFileLoc(fileLoc))
+    if (!fileLoc.valid() || !sourceManager.isFileLoc(fileLoc) ||
+        isCompilerOwned(fileLoc))
       return UnknownLoc::get(builder.getContext());
     return FileLineColLoc::get(builder.getContext(),
                                sourceManager.getFileName(fileLoc),
@@ -1511,7 +1522,8 @@ private:
       end = sourceManager.getFullyExpandedLoc(end);
     }
     if (!start.valid() || !end.valid() || !sourceManager.isFileLoc(start) ||
-        !sourceManager.isFileLoc(end))
+        !sourceManager.isFileLoc(end) || isCompilerOwned(start) ||
+        isCompilerOwned(end))
       return std::nullopt;
 
     auto type = slangir::SourceRangeType::get(
@@ -5741,7 +5753,7 @@ private:
   NamedAttrList originalSourceAttributes(slang::SourceRange range) {
     NamedAttrList attrs;
     attrs.set("node_id", builder.getI64IntegerAttr(nextNodeId++));
-    if (range.start().valid()) {
+    if (range.start().valid() && !isCompilerOwned(range.start())) {
       if (auto source = sourceRangeAttr(range))
         attrs.set("source_range", *source);
       if (auto original = sourceRangeAttr(range, true))
@@ -6835,7 +6847,7 @@ private:
 
     slang::SourceRange range = getSourceRange(node);
     Location location = sourceLocation(range.start());
-    if (range.start().valid()) {
+    if (range.start().valid() && !isCompilerOwned(range.start())) {
       if (std::optional<TypeAttr> expandedRange = sourceRangeAttr(range))
         SET_OP_ATTR(SourceRange, *expandedRange);
       if (std::optional<TypeAttr> originalRange =
@@ -7604,6 +7616,9 @@ private:
   const slang::analysis::AnalysisManager &analysisManager;
   const SDFAnnotationDatabase &sdfAnnotations;
   bool twoState;
+  // Synthesized packages have no user-authored coverage obligations. Track
+  // actual source buffers so a user's file name can never trigger exclusion.
+  ArrayRef<slang::BufferID> compilerBuffers;
   SlangTypeConverter typeConverter;
   // Type conversion caches source type pointers; keep projected types alive
   // throughout import, including repeated references to one declared type.
@@ -7842,6 +7857,54 @@ importSystemVerilog(ArrayRef<std::string> inputFilenames, MLIRContext &context,
 
   std::unique_ptr<slang::ast::Compilation> compilation =
       driver.createCompilation();
+  SmallVector<slang::BufferID, 1> compilerBuffers;
+  if (options.enableUPF) {
+    // IEEE 1801-2018 11.2.3.3.4/.5: the public functions retain normal SV
+    // argument binding/defaults. The private intrinsic is nonconstant and is
+    // lowered as an effectful simulation operation, never as DPI or Tcl.
+    // Adding a timed package to an untimed design (or the reverse) triggers
+    // Slang's MissingTimeScale diagnostic. Reuse an existing design element's
+    // complete scale, if any, before bodies/imports are bound. This neither
+    // introduces a time scale in an untimed design nor tightens its precision.
+    std::optional<slang::TimeScale> scale;
+    for (const auto *symbol : compilation->getDefinitions())
+      if (const auto *definition =
+              symbol->as_if<slang::ast::DefinitionSymbol>();
+          definition && definition->timeScale)
+        scale = definition->timeScale;
+    for (const auto *package : compilation->getPackages())
+      if (package->timeScale)
+        scale = package->timeScale;
+    std::string package = "package UPF;\n";
+    if (scale)
+      package += "timeunit " + scale->base.toString() + "; timeprecision " +
+                 scale->precision.toString() + ";\n";
+    package += R"sv(
+  typedef bit upfBooleanT;
+  typedef string upfStringT;
+  typedef real upfRealT;
+  function automatic upfBooleanT supply_on(upfStringT supply_name, upfRealT value = 1.0);
+    return $talos_upf_supply_control(supply_name, value, 1'b1);
+  endfunction
+  function automatic upfBooleanT supply_off(upfStringT supply_name);
+    return $talos_upf_supply_control(supply_name, 0.0, 1'b0);
+  endfunction
+endpackage
+)sv";
+    auto tree = slang::syntax::SyntaxTree::fromText(
+        package, driver.sourceManager, "<talos-UPF>");
+    for (auto buffer : tree->getSourceBufferIds())
+      compilerBuffers.push_back(buffer);
+    compilation->addSyntaxTree(tree);
+  }
+
+  if (options.enableUPF)
+    compilation->addSystemSubroutine(
+        std::make_shared<slang::ast::NonConstantFunction>(
+            "$talos_upf_supply_control", compilation->getBitType(), 3,
+            std::vector<const slang::ast::Type *>{&compilation->getStringType(),
+                                                  &compilation->getRealType(),
+                                                  &compilation->getBitType()}));
   driver.reportCompilation(*compilation, /*quiet=*/true);
 
   // Slang's value-driver checks are part of semantic analysis rather than
@@ -7871,6 +7934,8 @@ importSystemVerilog(ArrayRef<std::string> inputFilenames, MLIRContext &context,
     llvm::StringSet<> uniquePaths;
     SmallVector<std::string> paths;
     for (auto buffer : driver.sourceManager.getAllBuffers()) {
+      if (llvm::is_contained(compilerBuffers, buffer))
+        continue;
       slang::SourceManager::BufferKind kind =
           driver.sourceManager.getBufferKind(buffer);
       if (kind == slang::SourceManager::BufferKind::Macro ||
@@ -7891,8 +7956,8 @@ importSystemVerilog(ArrayRef<std::string> inputFilenames, MLIRContext &context,
     cov::set<cov::SourceFiles>((*module), ArrayAttr::get(&context, attributes));
   }
   SlangASTImporter importer(*module, driver.sourceManager, *compilation,
-                            *analysisManager, *sdfAnnotations,
-                            options.twoState);
+                            *analysisManager, *sdfAnnotations, options.twoState,
+                            compilerBuffers);
   // Definitions are kept in Compilation's deterministic definition map and
   // are not children of RootSymbol. Import them explicitly so modules,
   // interfaces, programs, and primitives remain represented even when they

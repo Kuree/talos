@@ -113,20 +113,29 @@ at the LLVM SDK's C++17 baseline.
 elaborated Slang IR. Tcl 9.0.4 supplies the language implementation, including
 procedures, control flow, substitutions, lists, `source`, and core packages.
 UPF commands are C++ callbacks against a design database indexed from the
-Slang hierarchy. The resolved switchable domain is inspectable with
-`-emit-slang` as an `upf.domain` operation.
+Slang hierarchy. Resolved domains and supply roots are inspectable with
+`-emit-slang` as `upf.domain` and `upf.supply` operations.
 
 The initial command bridge supports `upf_version 3.1`, `set_design_top`,
 `set_scope`, `find_objects`, `load_upf`, basic supply net/port declarations and
 connections, `create_power_domain`, `set_domain_supply_net`,
 `create_power_switch`, and output `set_isolation`. Options outside the
-implemented subset are diagnosed. This is an initial vertical slice, not a
-complete IEEE 1801 implementation: input rails are assumed to be powered;
-general supply-network initialization, voltage/state evaluation, the HDL UPF
-package (`supply_on` / `supply_off`) and retention remain to be implemented.
+implemented subset are diagnosed. Root supplies initially are OFF (IEEE
+1801-2018 9.2.1). The compiler-provided SystemVerilog package `UPF` implements
+`supply_on` / `supply_off` against absolute UPF root handles, including eligible
+net/port and implicit primary-function aliases (11.2.3). Connected unresolved
+supplies share one per-context state/voltage storage value, with signed32
+microvolts on both native and wasm32 targets. Direct domains and switched
+domains require FULL_ON primary power and ground; ground can be FULL_ON at
+zero volts (4.7.4). Switches require an explicit primary supply association
+with `set_domain_supply_net` (6.22/6.43). `--upf-assume-powered-inputs` retains
+the prototype's omitted-association inference and changes initial writable roots
+to FULL_ON for compatibility. General supply resolution, switch cascades,
+supply sets/power-state definitions, and retention remain to be implemented.
 
-The simulation slice accepts independent switchable domains, each with
-named ON/ERROR conditions and an optional named OFF condition. Typed state
+The simulation slice accepts independent direct domains and domains controlled
+by one switch. A switch has named ON/ERROR conditions and an optional named OFF
+condition. Typed state
 attributes preserve names and expression structure (IEEE 1801-2018 6.22);
 typed postfix expressions retain widths and signedness (5.4). Switch expressions
 use control-port names by default; direct HDL names require the explicit
@@ -135,7 +144,7 @@ width, selected width and flattened offset, with source ranges resolved before e
 checks cover every ON state's selected references; monitor sensitivity covers
 all ON/OFF/ERROR base objects. True ERROR conditions corrupt and permit recovery,
 while explicit OFF/ON conflicts also record an unsuccessful simulation status.
-The switch monitor watches all referenced controls, but
+The switch monitor watches referenced controls and supply state/voltage, but
 restoration wakes level logic through the aggregate NORMAL state. Guards and
 NBA helpers evaluate controls inline to avoid stale monitor state. It supports
 packed integral domain state,

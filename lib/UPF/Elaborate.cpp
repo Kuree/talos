@@ -1,4 +1,5 @@
 // Power guards and corruption writes remain visible to subsequent analyses.
+#include "ElaborateSupply.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -15,6 +16,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringSet.h"
 using namespace mlir;
 namespace talos {
 namespace {
@@ -304,11 +306,19 @@ struct PowerCondition {
   llvm::SetVector<StringRef> controls;
   llvm::SetVector<upf::ExpressionTokenAttr> references, onReferences;
   const llvm::StringMap<Descriptor> &descriptors;
+  Descriptor power;
+  std::optional<Descriptor> input, ground;
   PowerCondition(upf::UPFDomainOp domain,
-                 const llvm::StringMap<Descriptor> &descriptors)
+                 const llvm::StringMap<Descriptor> &descriptors,
+                 const llvm::StringMap<Descriptor> &supplies)
       : off(domain.getOffAttr() ? domain.getOffAttr().getCondition()
                                 : upf::ExpressionAttr{}),
-        descriptors(descriptors) {
+        descriptors(descriptors),
+        power(supplies.lookup(domain.getPowerAttr().getValue())) {
+    if (auto attr = domain.getInputAttr())
+      input = supplies.lookup(attr.getValue());
+    if (auto attr = domain.getGroundAttr())
+      ground = supplies.lookup(attr.getValue());
     auto collect = [&](const Expression &expression, bool onState) {
       for (auto path : expression.controls)
         controls.insert(path);
@@ -337,12 +347,12 @@ struct PowerCondition {
           b, loc, result, expression.predicate(b, loc, context, descriptors));
     return result;
   }
-  Value normal(OpBuilder &b, Location loc, Value context) const {
-    // IEEE 1801-2018 6.22: FULL_ON input rails are assumed by this slice.
+  Value knownOn(OpBuilder &b, Location loc, Value context) const {
+    // IEEE 1801-2018 6.22: use the references before expression folding.
     // Any X/Z object referenced by ON contributes UNDETERMINED, even when
     // masked by a constant or in an inactive ON state. Unused, OFF-only and
     // ERROR-only controls do not participate in this knownness check.
-    Value result = any(b, loc, context, on);
+    Value result = arith::ConstantIntOp::create(b, loc, 1, 1);
     for (auto token : onReferences) {
       Value value = Expression::reference(b, loc, context, descriptors, token);
       auto logic = sim::LogicType::get(b.getContext(), 1);
@@ -355,6 +365,11 @@ struct PowerCondition {
                                 arith::ConstantIntOp::create(b, loc, 0, 32));
       result = arith::AndIOp::create(b, loc, result, known);
     }
+    return result;
+  }
+  Value controlNormal(OpBuilder &b, Location loc, Value context) const {
+    Value result = arith::AndIOp::create(b, loc, any(b, loc, context, on),
+                                         knownOn(b, loc, context));
     if (!off.nodes.empty()) {
       Value disabled = off.predicate(b, loc, context, descriptors);
       Value enabled = arith::XOrIOp::create(
@@ -371,6 +386,56 @@ struct PowerCondition {
       result = arith::AndIOp::create(b, loc, result, valid);
     }
     return result;
+  }
+  Value normal(OpBuilder &b, Location loc, Value context) const {
+    auto full = [&](Descriptor supply) -> Value {
+      Value value = load(b, loc, handle(b, loc, context, supply));
+      Value state = arith::AndIOp::create(
+          b, loc, value, arith::ConstantIntOp::create(b, loc, 3, 64));
+      return arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq, state,
+                                   arith::ConstantIntOp::create(b, loc, 1, 64));
+    };
+    Value result = input ? arith::AndIOp::create(b, loc, full(*input),
+                                                 controlNormal(b, loc, context))
+                               .getResult()
+                         : full(power);
+    // IEEE 1801-2018 4.7.4: every required primary function must be FULL_ON.
+    // Ground at zero volts is powered; voltage itself is not an ON predicate.
+    if (ground)
+      result = arith::AndIOp::create(b, loc, result, full(*ground));
+    return result;
+  }
+  Value drivenSupply(OpBuilder &b, Location loc, Value context) const {
+    auto integer = [&](int64_t v) -> Value {
+      return arith::ConstantIntOp::create(b, loc, v, 64);
+    };
+    Value value = load(b, loc, handle(b, loc, context, *input));
+    Value state = arith::AndIOp::create(b, loc, value, integer(3));
+    Value output = arith::SelectOp::create(b, loc, any(b, loc, context, on),
+                                           state, integer(0));
+    Value notOff = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::ne,
+                                         state, integer(0));
+    Value unknown =
+        arith::XOrIOp::create(b, loc, knownOn(b, loc, context),
+                              arith::ConstantIntOp::create(b, loc, 1, 1));
+    unknown = arith::AndIOp::create(b, loc, unknown, notOff);
+    // IEEE 1801-2018 6.22: unknown ON controls contribute UNDETERMINED only
+    // when the input is not OFF. ERROR and explicit OFF/ON conflicts take
+    // precedence regardless of the input state.
+    Value invalid = any(b, loc, context, errors);
+    if (!off.nodes.empty())
+      invalid =
+          arith::OrIOp::create(b, loc, invalid, conflict(b, loc, context));
+    invalid = arith::OrIOp::create(b, loc, invalid, unknown);
+    output = arith::SelectOp::create(b, loc, invalid, integer(3), output);
+    Value powered = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq,
+                                          output, integer(1));
+    Value partial = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq,
+                                          output, integer(2));
+    powered = arith::OrIOp::create(b, loc, powered, partial);
+    Value volts = arith::AndIOp::create(b, loc, value, integer(0x3fffffffcULL));
+    volts = arith::SelectOp::create(b, loc, powered, volts, integer(0));
+    return arith::OrIOp::create(b, loc, output, volts);
   }
   Value conflict(OpBuilder &b, Location loc, Value context) const {
     return arith::AndIOp::create(b, loc, any(b, loc, context, on),
@@ -454,6 +519,8 @@ struct Lowering {
   OpBuilder builder;
   uint64_t nextStorage = 0, nextUnit = 0;
   llvm::StringMap<Descriptor> descriptors;
+  llvm::StringMap<Descriptor> supplies;
+  SmallVector<SupplyTableEntry> supplyTable;
   llvm::DenseMap<uint64_t, std::string> unitPaths;
   llvm::DenseMap<uint64_t, std::string> scopePaths;
   llvm::DenseMap<uint64_t, sim::SimCodeUnitDeclOp> units;
@@ -515,6 +582,37 @@ struct Lowering {
         builder.getStringAttr(name), builder.getStringAttr(name),
         schedule::ComputeObservabilityKindAttr{}, sim::VPITypeSemanticsAttr{});
     return result;
+  }
+  LogicalResult prepareSupplies(ArrayRef<upf::UPFSupplyOp> roots) {
+    if (roots.empty())
+      return success();
+    if (!root)
+      return design.emitError("UPF needs an executable design root");
+    llvm::StringSet<> names;
+    for (auto supply : roots)
+      for (auto name : supply.getNames())
+        if (!names.insert(cast<StringAttr>(name).getValue()).second)
+          return supply.emitError("ambiguous supply handle name: ") << name;
+    for (auto supply : roots) {
+      auto d =
+          storage(supply.getLoc(), supply.getSymName(), builder.getI64Type());
+      supplies[supply.getSymName()] = d;
+      for (auto name : supply.getNames())
+        supplyTable.push_back(
+            {cast<StringAttr>(name), d.id, supply.getWritable()});
+      Operation *first = root.getBody().front().getTerminator();
+      for (auto &op : root.getBody().front())
+        if (isa<sim::SimSpawnOp>(op)) {
+          first = &op;
+          break;
+        }
+      builder.setInsertionPoint(first);
+      Value ref = handle(builder, supply.getLoc(), root.getArgument(0), d);
+      store(builder, supply.getLoc(), ref,
+            arith::ConstantIntOp::create(builder, supply.getLoc(),
+                                         supply.getInitialValue(), 64));
+    }
+    return success();
   }
   LogicalResult watch(sim::SimFuncOp fn, Descriptor descriptor) {
     builder.setInsertionPointToStart(&fn.getBody().front());
@@ -759,7 +857,7 @@ struct Lowering {
   LogicalResult apply(upf::UPFDomainOp domain) {
     if (!root)
       return domain.emitError("UPF needs an executable design root");
-    PowerCondition condition(domain, descriptors);
+    PowerCondition condition(domain, descriptors, supplies);
     const auto &controls = condition.controls;
     for (StringRef path : controls) {
       auto found = descriptors.find(path);
@@ -1033,9 +1131,17 @@ struct Lowering {
     for (StringRef path : controls)
       watched.push_back(
           handle(builder, loc, context, descriptors.lookup(path)));
+    watched.push_back(handle(builder, loc, context,
+                             condition.input.value_or(condition.power)));
+    if (condition.ground &&
+        condition.ground->id != condition.input.value_or(condition.power).id)
+      watched.push_back(handle(builder, loc, context, *condition.ground));
     cf::BranchOp::create(builder, loc, loop);
     builder.setInsertionPointToEnd(loop);
     Value on = condition.normal(builder, loc, context);
+    if (condition.input)
+      store(builder, loc, handle(builder, loc, context, condition.power),
+            condition.drivenSupply(builder, loc, context));
     store(builder, loc, normalRef, on);
     // IEEE 1801-2018 6.22: an explicit OFF simultaneously true with ON
     // reports an error and contributes UNDETERMINED (CORRUPT in this slice).
@@ -1089,8 +1195,8 @@ struct Lowering {
     }
     cf::BranchOp::create(builder, loc, wait);
     builder.setInsertionPointToEnd(wait);
-    // IEEE 1801-2018 9.2.2: any referenced ON/OFF/ERROR control reevaluates the
-    // switch. A constant condition needs only its initial evaluation.
+    // IEEE 1801-2018 9.2.2: referenced ON/OFF/ERROR controls and input
+    // supplies reevaluate the switch, including voltage-only changes.
     if (watched.empty())
       sim::SimReturnOp::create(builder, loc, ValueRange{});
     else
@@ -1133,7 +1239,11 @@ struct ElaborateUPFPass
   void runOnOperation() override {
     SmallVector<upf::UPFDomainOp> domains(
         getOperation().getOps<upf::UPFDomainOp>());
-    if (domains.empty())
+    SmallVector<upf::UPFSupplyOp> supplies(
+        getOperation().getOps<upf::UPFSupplyOp>());
+    bool controls = false;
+    getOperation().walk([&](sim::SimSupplyControlOp) { controls = true; });
+    if (domains.empty() && supplies.empty() && !controls)
       return;
     // IEEE 1801-2018 6.20 assigns an instance to exactly one effective extent.
     // Until nested-domain extent partitioning exists, require disjoint roots;
@@ -1160,16 +1270,26 @@ struct ElaborateUPFPass
           }
     auto designs = getOperation().getOps<sim::SimDesignOp>();
     if (!llvm::hasSingleElement(designs)) {
-      domains.front().emitError("UPF requires exactly one simulation design");
+      getOperation().emitError("UPF requires exactly one simulation design");
       signalPassFailure();
       return;
     }
     Lowering lowering(*designs.begin());
+    if (failed(lowering.prepareSupplies(supplies))) {
+      signalPassFailure();
+      return;
+    }
     for (auto domain : domains)
       if (failed(lowering.apply(domain))) {
         signalPassFailure();
         return;
       }
+    if (failed(lowerSupplyControls(*designs.begin(), lowering.supplyTable))) {
+      signalPassFailure();
+      return;
+    }
+    for (auto supply : supplies)
+      supply.erase();
   }
 };
 } // namespace

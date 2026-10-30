@@ -1,0 +1,113 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/valid.mlir | talos-opt | FileCheck %s
+// RUN: talos-opt --split-input-file --verify-diagnostics %t/invalid.mlir
+// IEEE 1801-2018 9.1/9.2.1/11.2: resolved root aliases, roles and packed
+// signed32 microvolt values must survive roundtripping and verify at the IR
+// boundary. OFF is state0, FULL_ON1; voltage bits occupy [33:2].
+// CHECK: upf.supply @power names ["/top/VDD", "/top/VDD@upfSupplyNetT"] writable = true {initial_value = 4000001 : i64}
+// CHECK: upf.supply @ground names ["/top/VSS"] writable = true {initial_value = 1 : i64}
+// CHECK: upf.supply @negative names ["/top/NEG"] writable = true {initial_value = 17179869181 : i64}
+// CHECK: upf.supply @switched names ["/top/SW"] writable = false
+// CHECK: upf.domain @PD elements ["top.dut"] power @switched on [] {ground = @ground, input = @power}
+// CHECK: upf.domain @DIRECT elements ["top.direct"] power @power on [] {ground = @ground}
+
+//--- valid.mlir
+module {
+  upf.supply @power names ["/top/VDD", "/top/VDD@upfSupplyNetT"] writable = true {initial_value = 4000001 : i64}
+  upf.supply @ground names ["/top/VSS"] writable = true {initial_value = 1 : i64}
+  upf.supply @negative names ["/top/NEG"] writable = true {initial_value = 17179869181 : i64}
+  upf.supply @switched names ["/top/SW"] writable = false
+  upf.domain @PD elements ["top.dut"] power @switched on [] {ground = @ground, input = @power}
+  upf.domain @DIRECT elements ["top.direct"] power @power on [] {ground = @ground}
+}
+
+//--- invalid.mlir
+module {
+  // expected-error @+1 {{requires at least one absolute supply handle name}}
+  upf.supply @empty names [] writable = true
+}
+// -----
+module {
+  // expected-error @+1 {{supply names must be unique absolute handle IDs}}
+  upf.supply @relative names ["VDD"] writable = true
+}
+// -----
+module {
+  // expected-error @+1 {{supply names must be unique absolute handle IDs}}
+  upf.supply @root names ["/"] writable = true
+}
+// -----
+module {
+  // expected-error @+1 {{supply names must be unique absolute handle IDs}}
+  upf.supply @duplicate names ["/top/VDD", "/top/VDD"] writable = true
+}
+// -----
+module {
+  // expected-error @+1 {{initial supply value exceeds the packed state/voltage layout}}
+  upf.supply @overflow names ["/top/VDD"] writable = true {initial_value = 17179869184 : i64}
+}
+// -----
+module {
+  // expected-error @+1 {{references an unknown supply root}}
+  upf.domain @unknown elements ["top.dut"] power @missing on []
+}
+// -----
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  // expected-error @+1 {{references an unknown supply root}}
+  upf.domain @unknown elements ["top.dut"] power @power on [] {ground = @missing}
+}
+// -----
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  // expected-error @+1 {{references an unknown supply root}}
+  upf.domain @unknown elements ["top.dut"] power @power on [] {input = @missing}
+}
+// -----
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  // expected-error @+1 {{switch input and output supply roots must differ}}
+  upf.domain @short elements ["top.dut"] power @power on [] {input = @power}
+}
+// -----
+#true = #upf.expression<[#upf.token<opcode = constant, value = true, unknown = false>]>
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  // expected-error @+1 {{switch conditions require an input supply root}}
+  upf.domain @no_input elements ["top.dut"] power @power on [#upf.state<name = "ON", condition = #true>]
+}
+// -----
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  upf.supply @output names ["/top/SW"] writable = true
+  // expected-error @+1 {{switch output supply root must not be writable}}
+  upf.domain @writable_output elements ["top.dut"] power @output on [] {input = @power}
+}
+// -----
+module {
+  upf.supply @power names ["/top/VDD"] writable = false
+  upf.supply @output names ["/top/SW"] writable = false
+  // expected-error @+1 {{switch input supply root must be writable}}
+  upf.domain @cascade elements ["top.dut"] power @output on [] {input = @power}
+}
+// -----
+module {
+  upf.supply @power names ["/top/VDD"] writable = false
+  // expected-error @+1 {{direct domain power supply root must be writable}}
+  upf.domain @shared elements ["top.dut"] power @power on []
+}
+// -----
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  upf.supply @ground names ["/top/VSS"] writable = false
+  // expected-error @+1 {{primary ground supply root must be writable}}
+  upf.domain @bad_ground elements ["top.dut"] power @power on [] {ground = @ground}
+}
+// -----
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  upf.supply @output names ["/top/SW"] writable = false
+  // expected-error @+1 {{multiple switches drive the same supply root}}
+  upf.domain @first elements ["top.a"] power @output on [] {input = @power}
+  upf.domain @second elements ["top.b"] power @output on [] {input = @power}
+}
