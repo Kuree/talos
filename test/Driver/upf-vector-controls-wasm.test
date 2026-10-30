@@ -2,8 +2,8 @@
 # RUN: %split-file %S/upf-vector-controls.test %t/vector
 # RUN: %split-file %S/upf-packed-selects.test %t/selects
 # RUN: %split-file %S/upf-vector-off-conflict.test %t/conflict
-# RUN: talos --upf %t/vector/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/vector/design.sv -o %t/vector.o
-# RUN: talos --upf %t/selects/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/selects/design.sv -o %t/selects.o
-# RUN: talos --upf %t/conflict/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/conflict/design.sv -o %t/conflict.o
+# RUN: talos --upf-allow-hdl-expressions --upf %t/vector/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/vector/design.sv -o %t/vector.o
+# RUN: talos --upf-allow-hdl-expressions --upf %t/selects/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/selects/design.sv -o %t/selects.o
+# RUN: talos --upf-allow-hdl-expressions --upf %t/conflict/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/conflict/design.sv -o %t/conflict.o
 # RUN: %llvm_dist/bin/llvm-readobj --file-headers %t/vector.o %t/selects.o %t/conflict.o | FileCheck %s
 # CHECK-COUNT-3: AddressSize: 32bit

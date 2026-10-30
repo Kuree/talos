@@ -88,6 +88,9 @@ def two_state : Flag<["--"], "two-state">, Group<Compilation_Group>,
 def upf : JoinedOrSeparate<["--"], "upf">, Group<Compilation_Group>,
   MetaVarName<"<file.upf>">,
   HelpText<"Execute UPF power intent after elaborated Slang IR import">;
+def upf_allow_hdl_expressions : Flag<["--"], "upf-allow-hdl-expressions">,
+  Group<Compilation_Group>,
+  HelpText<"Allow direct HDL references in switch expressions (extension to IEEE 1801 6.22)">;
 def no_two_state_specialization : Flag<["--"], "no-two-state-specialization">,
   Group<Compilation_Group>,
   HelpText<"Disable inferred two-state analysis, narrowing, and guarded specialization">;

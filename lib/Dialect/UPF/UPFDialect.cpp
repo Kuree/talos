@@ -2,6 +2,7 @@
 #include "mlir/IR/DialectImplementation.h"
 #include "talos/Dialect/UPF/UPFOps.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 #include "talos/Dialect/UPF/UPFDialect.cpp.inc"
@@ -31,6 +32,38 @@ mlir::LogicalResult UPFDomainOp::verify() {
     return emitOpError("isolation control must not be empty");
   if (getClamp() != 0 && getClamp() != 1)
     return emitOpError("isolation clamp must be zero or one");
+  // IEEE 1801-2018 6.22: state names share one namespace for this switch.
+  // Bound the combined inventory, not only each individual expression.
+  llvm::SmallVector<SwitchStateAttr> states;
+  for (auto attr : getOn())
+    states.push_back(mlir::cast<SwitchStateAttr>(attr));
+  if (auto off = getOffAttr())
+    states.push_back(off);
+  if (auto errors = getErrorsAttr())
+    for (auto attr : errors)
+      states.push_back(mlir::cast<SwitchStateAttr>(attr));
+  if (states.size() > 256)
+    return emitOpError("power switch exceeds 256 states");
+  llvm::StringSet<> names;
+  size_t tokens = 0;
+  for (auto state : states) {
+    if (!names.insert(state.getName().getValue()).second)
+      return emitOpError("duplicate power-switch state name: ")
+             << state.getName();
+    tokens += state.getCondition().getTokens().size();
+    if (tokens > 65536)
+      return emitOpError("power switch exceeds 65536 expression tokens");
+  }
+  return mlir::success();
+}
+
+mlir::LogicalResult SwitchStateAttr::verify(
+    llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
+    mlir::StringAttr name, ExpressionAttr condition) {
+  if (!name || name.getValue().empty())
+    return emitError() << "switch state requires a nonempty name";
+  if (!condition)
+    return emitError() << "switch state requires a Boolean expression";
   return mlir::success();
 }
 

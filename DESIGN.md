@@ -125,12 +125,16 @@ complete IEEE 1801 implementation: input rails are assumed to be powered;
 general supply-network initialization, voltage/state evaluation, the HDL UPF
 package (`supply_on` / `supply_off`) and retention remain to be implemented.
 
-The simulation slice accepts independent switchable domains, each with a
-Boolean switch condition over packed integral HDL controls. Resolved typed postfix
-attributes retain ON/OFF expression structure, widths and signedness (IEEE
-1801-2018 5.4/6.22). Reference tokens preserve the source width, selected width
-and flattened offset, with source ranges resolved before emission. Knownness
-checks use selected references; monitor sensitivity uses their base objects.
+The simulation slice accepts independent switchable domains, each with
+named ON/ERROR conditions and an optional named OFF condition. Typed state
+attributes preserve names and expression structure (IEEE 1801-2018 6.22);
+typed postfix expressions retain widths and signedness (5.4). Switch expressions
+use control-port names by default; direct HDL names require the explicit
+`--upf-allow-hdl-expressions` extension. Reference tokens preserve the source
+width, selected width and flattened offset, with source ranges resolved before emission. Knownness
+checks cover every ON state's selected references; monitor sensitivity covers
+all ON/OFF/ERROR base objects. True ERROR conditions corrupt and permit recovery,
+while explicit OFF/ON conflicts also record an unsuccessful simulation status.
 The switch monitor watches all referenced controls, but
 restoration wakes level logic through the aggregate NORMAL state. Guards and
 NBA helpers evaluate controls inline to avoid stale monitor state. It supports

@@ -1,0 +1,71 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.22(a)(1): ERROR contributes UNDETERMINED. ERROR-only
+// unknowns use expression truth, not ON knownness. This is recoverable and
+// does not carry the mandatory error diagnostic of an explicit OFF/ON conflict.
+// CHECK: named switch ERROR states passed
+
+//--- design.sv
+module leaf(input logic clk, d, output logic q, y);
+  always @(posedge clk) q <= #3 d;
+  always_comb y = d;
+endmodule
+module top;
+  logic en = 1, fault_a = 1'bx, fault_b = 1'bz, force_fault = 0;
+  logic clk = 0, d = 1;
+  wire q, y;
+  leaf dut(clk, d, q, y);
+  initial begin
+    #1;
+    if (y !== 1'b1) $fatal(1, "ERROR-only X/Z poisoned known ON");
+    clk = 1;
+    #4;
+    if (q !== 1'b1) $fatal(1, "initial power failed");
+    clk = 0; d = 0;
+    #1 clk = 1;
+    #1 fault_a = 1;
+    #1;
+    if (q !== 1'bx || y !== 1'bx) $fatal(1, "first ERROR state did not corrupt");
+    fault_a = 0;
+    #3;
+    if (q !== 1'bx || y !== 1'b0) $fatal(1, "ERROR recovery revived old NBA");
+    clk = 0;
+    #1 clk = 1;
+    #4;
+    if (q !== 1'b0) $fatal(1, "fresh NBA after ERROR failed");
+    fault_b = 1;
+    #1;
+    if (q !== 1'bx || y !== 1'bx) $fatal(1, "second ERROR state did not corrupt");
+    fault_b = 1'bx;
+    #1;
+    if (y !== 1'b0 || q !== 1'bx) $fatal(1, "unknown ERROR did not recover");
+    force_fault = 1; // ERROR is true despite masking an unknown.
+    #1;
+    if (y !== 1'bx) $fatal(1, "masked ERROR true did not corrupt");
+    en = 0; force_fault = 0;
+    #1;
+    if (y !== 1'bx) $fatal(1, "ERROR clear implied ON");
+    en = 1;
+    #1;
+    if (y !== 1'b0 || q !== 1'bx) $fatal(1, "restoration invented an edge");
+    $display("named switch ERROR states passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_power_domain PD -elements dut
+foreach net {VDD SW} {create_supply_net $net}
+create_power_switch PS -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout SW} \
+    -control_port {enable en} -control_port {bad_a fault_a} \
+    -control_port {bad_b fault_b} -control_port {force_bad force_fault} \
+    -on_state {ON vin enable} \
+    -error_state {FAULT_A bad_a} -error_state {FAULT_B bad_b} \
+    -error_state {MASKED {bad_b || force_bad}}

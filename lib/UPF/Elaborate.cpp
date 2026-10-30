@@ -299,18 +299,51 @@ struct Expression {
   }
 };
 struct PowerCondition {
-  Expression on, off;
+  SmallVector<Expression> on, errors;
+  Expression off;
+  llvm::SetVector<StringRef> controls;
+  llvm::SetVector<upf::ExpressionTokenAttr> references, onReferences;
   const llvm::StringMap<Descriptor> &descriptors;
   PowerCondition(upf::UPFDomainOp domain,
                  const llvm::StringMap<Descriptor> &descriptors)
-      : on(domain.getOn()), off(domain.getOffAttr()), descriptors(descriptors) {
+      : off(domain.getOffAttr() ? domain.getOffAttr().getCondition()
+                                : upf::ExpressionAttr{}),
+        descriptors(descriptors) {
+    auto collect = [&](const Expression &expression, bool onState) {
+      for (auto path : expression.controls)
+        controls.insert(path);
+      for (auto token : expression.references) {
+        references.insert(token);
+        if (onState)
+          onReferences.insert(token);
+      }
+    };
+    for (auto attr : domain.getOn()) {
+      on.emplace_back(cast<upf::SwitchStateAttr>(attr).getCondition());
+      collect(on.back(), true);
+    }
+    collect(off, false);
+    if (auto states = domain.getErrorsAttr())
+      for (auto attr : states) {
+        errors.emplace_back(cast<upf::SwitchStateAttr>(attr).getCondition());
+        collect(errors.back(), false);
+      }
+  }
+  Value any(OpBuilder &b, Location loc, Value context,
+            ArrayRef<Expression> expressions) const {
+    Value result = arith::ConstantIntOp::create(b, loc, 0, 1);
+    for (const auto &expression : expressions)
+      result = arith::OrIOp::create(
+          b, loc, result, expression.predicate(b, loc, context, descriptors));
+    return result;
   }
   Value normal(OpBuilder &b, Location loc, Value context) const {
     // IEEE 1801-2018 6.22: FULL_ON input rails are assumed by this slice.
     // Any X/Z object referenced by ON contributes UNDETERMINED, even when
-    // masked by a constant. Unused and OFF-only controls do not participate.
-    Value result = on.predicate(b, loc, context, descriptors);
-    for (auto token : on.references) {
+    // masked by a constant or in an inactive ON state. Unused, OFF-only and
+    // ERROR-only controls do not participate in this knownness check.
+    Value result = any(b, loc, context, on);
+    for (auto token : onReferences) {
       Value value = Expression::reference(b, loc, context, descriptors, token);
       auto logic = sim::LogicType::get(b.getContext(), 1);
       Value x = logicConstant(b, loc, logic, false, true);
@@ -328,11 +361,19 @@ struct PowerCondition {
           b, loc, disabled, arith::ConstantIntOp::create(b, loc, 1, 1));
       result = arith::AndIOp::create(b, loc, result, enabled);
     }
+    if (!errors.empty()) {
+      // IEEE 1801-2018 6.22(a)(1): a true ERROR condition contributes
+      // UNDETERMINED, allowing recovery when it deasserts. This is distinct
+      // from the explicitly required error diagnostic for OFF/ON conflicts.
+      Value error = any(b, loc, context, errors);
+      Value valid = arith::XOrIOp::create(
+          b, loc, error, arith::ConstantIntOp::create(b, loc, 1, 1));
+      result = arith::AndIOp::create(b, loc, result, valid);
+    }
     return result;
   }
   Value conflict(OpBuilder &b, Location loc, Value context) const {
-    return arith::AndIOp::create(b, loc,
-                                 on.predicate(b, loc, context, descriptors),
+    return arith::AndIOp::create(b, loc, any(b, loc, context, on),
                                  off.predicate(b, loc, context, descriptors));
   }
 };
@@ -719,9 +760,7 @@ struct Lowering {
     if (!root)
       return domain.emitError("UPF needs an executable design root");
     PowerCondition condition(domain, descriptors);
-    llvm::SetVector<StringRef> controls = condition.on.controls;
-    for (StringRef path : condition.off.controls)
-      controls.insert(path);
+    const auto &controls = condition.controls;
     for (StringRef path : controls) {
       auto found = descriptors.find(path);
       if (found == descriptors.end())
@@ -736,14 +775,13 @@ struct Lowering {
                    "power control must be outside the switchable domain: ")
                << path;
     }
-    for (const Expression *expression : {&condition.on, &condition.off})
-      for (auto token : expression->references)
-        if (sim::getPackedWidth(
-                descriptors.lookup(token.getControl().getValue()).type) !=
-            token.getSourceWidth())
-          return domain.emitError("power control source width disagrees with "
-                                  "simulation storage: ")
-                 << token.getControl().getValue();
+    for (auto token : condition.references)
+      if (sim::getPackedWidth(
+              descriptors.lookup(token.getControl().getValue()).type) !=
+          token.getSourceWidth())
+        return domain.emitError("power control source width disagrees with "
+                                "simulation storage: ")
+               << token.getControl().getValue();
     llvm::DenseSet<uint64_t> computedInputs;
     for (auto unit : design.getOps<sim::SimCodeUnitDeclOp>())
       if (sim::has<sim::metadata::ComputedPortInput>(unit) &&
@@ -1051,7 +1089,7 @@ struct Lowering {
     }
     cf::BranchOp::create(builder, loc, wait);
     builder.setInsertionPointToEnd(wait);
-    // IEEE 1801-2018 9.2.2: any referenced ON/OFF control reevaluates the
+    // IEEE 1801-2018 9.2.2: any referenced ON/OFF/ERROR control reevaluates the
     // switch. A constant condition needs only its initial evaluation.
     if (watched.empty())
       sim::SimReturnOp::create(builder, loc, ValueRange{});

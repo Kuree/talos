@@ -48,10 +48,12 @@ latches reevaluate on restoration. Synchronous external helper calls are
 supported after checking their call closure; asynchronous or indirect calls
 remain diagnosed. Input expressions owned by an exterior parent remain active.
 
-Power switches accept repeated `-control_port {alias design_object}` options
-and Boolean ON/OFF expressions (clauses 5.4 and 6.22). Switch control-port
-bindings are scalar integral objects or selected bits. Expressions can also
-reference HDL packed vectors and enums directly. Expressions support
+Power switches accept repeated `-control_port {alias design_object}`,
+`-on_state {name input expression}`, and `-error_state {name expression}`
+options, plus one optional `-off_state` (clause 6.22). Switch control-port
+bindings are scalar integral objects or selected bits. State expressions name
+these declared control ports: the specific restriction in clause 6.22 overrides
+clause 5.4's general permission to reference HDL objects. Expressions support
 parentheses, `!`, `~`, comparisons, `&`, `^`, `|`, `&&`, and `||`, preserving
 SystemVerilog precedence, widths, signedness, and four-state intermediates.
 For example:
@@ -64,22 +66,37 @@ create_power_switch SW -domain PD \
 ```
 
 Every ON expression reference must be known, even when masked by another
-operand; unused and OFF-only controls do not affect that knownness check
-(clause 6.22). Independent explicit OFF expressions are supported. Simultaneous
+operand or in an inactive ON state; unused, OFF-only, and ERROR-only controls
+do not affect that knownness check (clause 6.22). Multiple true ON states can
+contribute the same input without losing power or activating RTL again.
+Independent explicit OFF expressions are supported. Simultaneous
 true ON/OFF conditions report a simulation error and corrupt the domain.
 Changes that leave aggregate power NORMAL do not activate RTL; restoration
 reevaluates level logic, while pending updates from before power loss remain
-cancelled (clauses 9.2.2, 9.5.3, and 9.6.7).
+cancelled (clauses 9.2.2, 9.5.3, and 9.6.7). A true ERROR condition contributes
+UNDETERMINED and corrupts the domain; deasserting it permits restoration.
+This does not automatically fail the simulation: unlike an OFF/ON conflict,
+clause 6.22 specifies the ERROR contribution without requiring a diagnostic.
 
-This slice supports one input supply and one ON state per switch. Sized SV
+State names are unique across ON, OFF, and ERROR groups. An omitted OFF
+condition complements the other state conditions; a switch with no ON states
+never supplies NORMAL power. This slice supports one input supply per switch;
+partial-on states and general supply-network evaluation remain unsupported.
+Sized SV
 literals of 1..4096 bits, unbased fill literals, and unsized decimal values
 0..2147483647 are accepted; other unsized literals require an explicit width.
 Wide values require an explicit comparison at Boolean boundaries, except
 literal zero/one, avoiding an implicit coercion beyond clause 5.4's Boolean
-definition. Expressions are bounded to 64 KiB, 4096 tokens, and 256 tree levels;
+definition. Expressions are bounded to 64 KiB, 4096 tokens, and 256 tree levels.
+A switch is bounded to 256 states and 65536 total expression tokens;
 unsupported syntax and limit violations are catchable Tcl errors.
 
-HDL object references support static packed bit selections, part selections,
+`--upf-allow-hdl-expressions` enables a Talos extension allowing direct HDL
+vector, enum, and selected-object references in switch state expressions.
+This preserves the broader expression support while keeping the default
+switch name-resolution rules consistent with clause 6.22.
+
+These extended HDL references support static packed bit selections, part selections,
 and indexed part selections, including multiple dimensions, ascending and
 negative ranges (clauses 5.3.3.2 and 5.4). For example, an ON expression can use
 `mode == 2'b10 && controls[7]` or `matrix[1][0:3] == 4'b1010`. Source objects

@@ -1,0 +1,9 @@
+# REQUIRES: upf
+# RUN: %split-file %S/upf-switch-states.test %t/states
+# RUN: %split-file %S/upf-switch-error-states.test %t/errors
+# RUN: %split-file %S/upf-switch-states-eval.test %t/eval
+# RUN: talos --upf %t/states/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/states/design.sv -o %t/states.o
+# RUN: talos --upf %t/errors/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/errors/design.sv -o %t/errors.o
+# RUN: talos --upf %t/eval/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/eval/design.sv -o %t/eval.o
+# RUN: %llvm_dist/bin/llvm-readobj --file-headers %t/states.o %t/errors.o %t/eval.o | FileCheck %s
+# CHECK-COUNT-3: AddressSize: 32bit

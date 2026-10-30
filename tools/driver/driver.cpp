@@ -1419,7 +1419,8 @@ executeCompilation(const InputArgList &args,
   if (!sys::fs::is_directory(Twine(upfResourceDir) + "/tcl9.0"))
     upfResourceDir = TALOS_RESOURCE_DIR;
   if (failed(talos::executeUPF(*module, upfPaths, upfResourceDir,
-                               driverExecutablePath)))
+                               driverExecutablePath,
+                               args.hasArg(OPT_upf_allow_hdl_expressions))))
     return 1;
   if (frontendOptions.twoState)
     talos::native::mark<talos::native::TwoState>(*module);

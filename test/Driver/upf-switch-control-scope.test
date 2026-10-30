@@ -1,0 +1,55 @@
+# REQUIRES: upf
+# RUN: %split-file %s %t
+# RUN: talos --upf %t/strict.upf -emit-slang %t/design.sv -o %t.strict.mlir | FileCheck %s --check-prefix=STRICT
+# RUN: not talos --upf %t/extension.upf -emit-slang %t/design.sv -o %t.failed.mlir 2>&1 | FileCheck %s --check-prefix=REJECT
+# RUN: talos --upf-allow-hdl-expressions --upf %t/extension.upf -O3 --mlir-verify-each %t/design.sv -o %t.ext
+# RUN: %t.ext | FileCheck %s --check-prefix=EXTENSION
+# IEEE 1801-2018 6.22 specifically restricts switch expression names to the
+# switch's control ports, overriding 5.4's general HDL expression grammar.
+# STRICT: strict switch control scope passed
+# REJECT: unknown power-switch control port 'bus[1:0]'
+# REJECT: --upf-allow-hdl-expressions
+# EXTENSION: explicit HDL expression extension passed
+
+#--- design.sv
+module leaf(output wire q);
+  assign q = 1'b1;
+endmodule
+module top;
+  logic [3:0] bus = 4'bxx01;
+  logic raw = 1;
+  wire q;
+  leaf dut(q);
+  initial begin
+    #1;
+    if (q !== 1'b1) $fatal(1, "explicit HDL extension failed");
+    $display("explicit HDL expression extension passed");
+    $finish;
+  end
+endmodule
+
+#--- strict.upf
+proc expect_error {script} {
+    set code [catch {uplevel 1 $script} message]
+    if {$code != 1 || ![string match {*unknown power-switch control port*} $message]} {
+        error "expected control-port name error, got <$code $message>"
+    }
+}
+create_power_domain PD -elements dut
+foreach net {VDD SW} {create_supply_net $net}
+set base {-domain PD -input_supply_port {vin VDD} -output_supply_port {vout SW} -control_port {a bus[0]}}
+expect_error {create_power_switch PS {*}$base -on_state {ON vin raw}}
+expect_error {create_power_switch PS {*}$base -on_state {ON vin /raw}}
+expect_error {create_power_switch PS {*}$base -on_state {ON vin {bus[0]}}}
+expect_error {create_power_switch PS {*}$base -on_state {ON vin {a[0]}}}
+expect_error {create_power_switch PS {*}$base -on_state {ON vin a} -off_state {OFF raw}}
+expect_error {create_power_switch PS {*}$base -on_state {ON vin a} -error_state {FAULT raw}}
+create_power_switch PS {*}$base -on_state {ON vin a}
+puts "strict switch control scope passed"
+
+#--- extension.upf
+create_power_domain PD -elements dut
+foreach net {VDD SW} {create_supply_net $net}
+create_power_switch PS -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout SW} \
+    -on_state {ON vin {bus[1:0] == 2'b01}}

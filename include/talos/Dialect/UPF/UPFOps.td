@@ -7,7 +7,8 @@ include "mlir/IR/SymbolInterfaces.td"
 def UPFDomainOp : Op<UPFDialect, "domain", [Symbol]> {
   let summary = "resolved switchable domain with Boolean supply conditions";
   let arguments = (ins SymbolNameAttr:$sym_name, StrArrayAttr:$elements,
-      UPFExpressionAttr:$on, OptionalAttr<UPFExpressionAttr>:$off,
+      UPFSwitchStateArrayAttr:$on, OptionalAttr<UPFSwitchStateAttr>:$off,
+      OptionalAttr<UPFSwitchStateArrayAttr>:$errors,
       OptionalAttr<StrAttr>:$isolation_control,
       DefaultValuedAttr<BoolAttr, "true">:$isolation_high,
       DefaultValuedAttr<I64Attr, "0">:$clamp);

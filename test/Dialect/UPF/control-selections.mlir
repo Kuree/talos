@@ -10,7 +10,7 @@ module {
   // CHECK: upf.domain @PD elements ["top.dut"] on
   // CHECK-SAME: width = 8, sourceWidth = 8
   // CHECK-SAME: width = 3, sourceWidth = 66, offset = 63
-  // CHECK-SAME: off = #upf.expression<
+  // CHECK-SAME: off = #upf.state<name = "OFF", condition = <
   // CHECK-SAME: sourceWidth = 66, offset = 65
-  upf.domain @PD elements ["top.dut"] on #on {off = #upf.expression<[#bit]>}
+  upf.domain @PD elements ["top.dut"] on [#upf.state<name = "ON", condition = #on>] {off = #upf.state<name = "OFF", condition = #upf.expression<[#bit]>>}
 }

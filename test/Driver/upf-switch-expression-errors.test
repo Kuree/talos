@@ -1,6 +1,6 @@
 # REQUIRES: upf
 # RUN: %split-file %s %t
-# RUN: talos --upf %t/design.upf -emit-slang %t/design.sv -o %t.mlir | FileCheck %s
+# RUN: talos --upf-allow-hdl-expressions --upf %t/design.upf -emit-slang %t/design.sv -o %t.mlir | FileCheck %s
 # IEEE 1801-2018 5.4/5.11/6.22: malformed expressions and declarations are
 # catchable Tcl errors, and must leave the same switch/domain usable.
 # CHECK: switch expression error cases passed
@@ -55,7 +55,7 @@ expect_error {create_power_switch PS {*}$base -control_port {vin a} -on_state {O
 expect_error {create_power_switch PS {*}$base -control_port {1bad a} -on_state {ON vin en}} {*invalid UPF identifier*}
 expect_error {create_power_switch PS {*}$base -control_port en -on_state {ON vin en}} {*alias design_object*}
 expect_error {create_power_switch PS {*}$base -control_port {en wide} -on_state {ON vin en}} {*one-bit integral*}
-expect_error {create_power_switch PS {*}$base {*}$ports -on_state {ON vin en} -on_state {OTHER vin other}} {*duplicate UPF option*}
+expect_error {create_power_switch PS {*}$base {*}$ports -on_state {ON vin en} -on_state {ON vin other}} {*duplicate power-switch state*}
 expect_error {create_power_switch PS {*}$base {*}$ports -on_state {ON vin en} -off_state {ON {!en}}} {*duplicate power-switch state*}
 expect_error {create_power_switch PS {*}$base {*}$ports -on_state {ON vin en} -off_state {OFF {!other}} -off_state {OFF2 en}} {*duplicate UPF option*}
 # Direct HDL paths (5.4) and repeated aliases (6.22) bind at declaration time.

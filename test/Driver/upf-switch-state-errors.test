@@ -1,0 +1,57 @@
+# REQUIRES: upf
+# RUN: %split-file %s %t
+# RUN: talos --upf %t/design.upf -emit-slang %t/design.sv -o %t.mlir | FileCheck %s
+# IEEE 1801-2018 5.11/6.22: names are unique across all state kinds.
+# Every caught declaration failure leaves the switch and domain usable.
+# CHECK: named switch state error cases passed
+
+#--- design.sv
+module leaf(output wire q);
+  assign q = 1'b1;
+endmodule
+module top;
+  logic a, b;
+  wire q;
+  leaf dut(q);
+endmodule
+
+#--- design.upf
+proc expect_error {script pattern} {
+    set code [catch {uplevel 1 $script} message]
+    if {$code != 1 || ![string match $pattern $message]} {
+        error "expected <$pattern>, got code $code <$message>"
+    }
+}
+create_power_domain PD -elements dut
+foreach net {VDD SW} {create_supply_net $net}
+set base {-domain PD -input_supply_port {vin VDD} -output_supply_port {vout SW} -control_port {en a} -control_port {other b}}
+expect_error {create_power_switch PS {*}$base -on_state {ON vin}} {*on state requires*}
+expect_error {create_power_switch PS {*}$base -error_state {BAD en extra}} {*name expression*}
+expect_error {create_power_switch PS {*}$base -on_state {1bad vin en}} {*invalid UPF identifier*}
+expect_error {create_power_switch PS {*}$base -error_state {1bad en}} {*invalid UPF identifier*}
+expect_error {create_power_switch PS {*}$base -on_state {A absent en}} {*unknown input supply port*}
+expect_error {create_power_switch PS {*}$base -on_state {A vin en} -on_state {A vin other}} {*duplicate power-switch state name*}
+expect_error {create_power_switch PS {*}$base -on_state {A vin en} -off_state {A {!en}}} {*duplicate power-switch state name*}
+expect_error {create_power_switch PS {*}$base -on_state {A vin en} -error_state {A other}} {*duplicate power-switch state name*}
+expect_error {create_power_switch PS {*}$base -off_state {A {!en}} -error_state {A other}} {*duplicate power-switch state name*}
+expect_error {create_power_switch PS {*}$base -error_state {A en} -error_state {A other}} {*duplicate power-switch state name*}
+expect_error {create_power_switch PS {*}$base -on_state {A vin en} -on_state {B vin {other &&}}} {*Boolean expression*}
+expect_error {create_power_switch PS {*}$base -on_state {A vin en} -error_state {B {other &&}}} {*Boolean expression*}
+# Explicit OFF remains a singleton; other state options are repeatable.
+expect_error {create_power_switch PS {*}$base -off_state {A en} -off_state {B other}} {*duplicate UPF option*}
+set args {}
+for {set i 0} {$i < 257} {incr i} {
+    lappend args -on_state [list S$i vin en]
+}
+expect_error {create_power_switch PS {*}$base {*}$args} {*256 states*}
+set expression en
+for {set i 0} {$i < 10} {incr i} {set expression "($expression || $expression)"}
+set args {}
+for {set i 0} {$i < 33} {incr i} {
+    lappend args -on_state [list S$i vin $expression]
+}
+expect_error {create_power_switch PS {*}$base {*}$args} {*65536 expression tokens*}
+create_power_switch PS {*}$base \
+    -on_state {A vin en} -on_state {B vin other} \
+    -off_state {OFF {!en && !other}} -error_state {FAULT {en && other}}
+puts "named switch state error cases passed"

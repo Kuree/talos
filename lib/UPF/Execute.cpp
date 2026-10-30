@@ -26,7 +26,8 @@ namespace talos {
 namespace {
 struct Domain {
   std::string name, scope, power, switchInput, switchOutput, isolation;
-  upf::ExpressionAttr on, off;
+  SmallVector<Attribute> on, errors;
+  upf::SwitchStateAttr off;
   std::vector<std::string> elements;
   bool isolationHigh = true;
   int64_t clamp = 0;
@@ -36,13 +37,15 @@ struct Domain {
 struct Session {
   ModuleOp module;
   Tcl_Interp *interp;
+  bool allowHDLExpressions;
   std::string top, scope, file, designModule;
   std::map<std::string, Operation *> objects;
   std::map<std::string, Domain> domains;
   std::set<std::string> nets, supplyPorts, switches;
   std::set<std::string> designPorts;
-  Session(ModuleOp module, Tcl_Interp *interp)
-      : module(module), interp(interp) {
+  Session(ModuleOp module, Tcl_Interp *interp, bool allowHDLExpressions)
+      : module(module), interp(interp),
+        allowHDLExpressions(allowHDLExpressions) {
     std::set<std::string> tops;
     module.walk([&](Operation *op) {
       auto path = op->getAttrOfType<StringAttr>("hierarchical_name");
@@ -166,9 +169,10 @@ struct Session {
     return true;
   }
   using Options = std::map<std::string, Tcl_Obj *>;
+  using RepeatedOptions = std::map<std::string, std::vector<Tcl_Obj *>>;
   bool options(Tcl_Size objc, Tcl_Obj *const objv[], Tcl_Size first,
                std::initializer_list<StringRef> allowed, Options &out,
-               std::vector<Tcl_Obj *> *controlPorts = nullptr) {
+               RepeatedOptions *repeated = nullptr) {
     for (Tcl_Size i = first; i < objc; ++i) {
       StringRef option = Tcl_GetString(objv[i]);
       if (!llvm::is_contained(allowed, option)) {
@@ -180,10 +184,12 @@ struct Session {
         error("missing value for " + option);
         return false;
       }
-      if (option == "-control_port" && controlPorts) {
-        controlPorts->push_back(objv[i]);
-        continue;
-      }
+      if (repeated)
+        if (auto found = repeated->find(option.str());
+            found != repeated->end()) {
+          found->second.push_back(objv[i]);
+          continue;
+        }
       if (!out.emplace(option.str(), objv[i]).second) {
         error("duplicate UPF option " + option);
         return false;
@@ -555,12 +561,13 @@ struct Session {
     if (command == "create_power_switch") {
       // IEEE 1801-2018 6.22: -domain uses the owning domain's scope, and
       // control expressions reference the switch's declared control-port names.
-      std::vector<Tcl_Obj *> controlPorts;
+      RepeatedOptions repeated{
+          {"-control_port", {}}, {"-on_state", {}}, {"-error_state", {}}};
       if (objc < 2 ||
           !options(objc, objv, 2,
                    {"-domain", "-input_supply_port", "-output_supply_port",
-                    "-control_port", "-on_state", "-off_state"},
-                   opts, &controlPorts))
+                    "-control_port", "-on_state", "-off_state", "-error_state"},
+                   opts, &repeated))
         return TCL_ERROR;
       Domain *dom = domain(opts);
       if (!dom)
@@ -570,21 +577,18 @@ struct Session {
       std::string previousScope = scope;
       auto restoreScope = llvm::scope_exit([&] { scope = previousScope; });
       scope = dom->scope;
-      if (dom->on)
+      if (!dom->switchOutput.empty())
         return error("one power switch per domain is supported");
-      std::vector<std::string> input, output, on, off;
-      for (StringRef required :
-           {"-input_supply_port", "-output_supply_port", "-on_state"})
+      std::vector<std::string> input, output;
+      for (StringRef required : {"-input_supply_port", "-output_supply_port"})
         if (!opts.count(required.str()))
           return error("missing power-switch option " + required);
       if (!list(opts["-input_supply_port"], input) ||
-          !list(opts["-output_supply_port"], output) ||
-          !list(opts["-on_state"], on))
+          !list(opts["-output_supply_port"], output))
         return TCL_ERROR;
-      if (input.size() != 2 || output.size() != 2 || on.size() != 3)
-        return error("expected single input/output supply and "
-                     "on-state expression");
-      if (!identifier(input[0]) || !identifier(output[0]) || !identifier(on[0]))
+      if (input.size() != 2 || output.size() != 2)
+        return error("expected single input/output supply");
+      if (!identifier(input[0]) || !identifier(output[0]))
         return TCL_ERROR;
       if (input[0] == output[0])
         return error("duplicate power-switch port name");
@@ -592,10 +596,8 @@ struct Session {
         return error("power switch references an unknown supply net");
       if (key(input[1]) == key(output[1]))
         return error("a switch must have distinct input and output supplies");
-      if (on[1] != input[0])
-        return error("on-state references an unknown input supply port");
       std::map<std::string, ControlReference> aliases;
-      for (auto port : controlPorts) {
+      for (auto port : repeated["-control_port"]) {
         std::vector<std::string> pair;
         if (!list(port, pair))
           return TCL_ERROR;
@@ -610,8 +612,8 @@ struct Session {
         if (failed(resolved))
           return TCL_ERROR;
         // IEEE 1801-2018 6.22/10.6.1.11 model a switch control as a logic
-        // port. Keep scalar bindings; 5.4 permits direct HDL vector references
-        // without assuming that a UPF port inherits the bound net's ranges.
+        // port. Keep scalar bindings; direct vector references require the
+        // explicit HDL-expression extension rather than inheriting net ranges.
         if (resolved->width != 1)
           return error("power-switch control port requires a one-bit integral "
                        "design object; reference vectors directly: " +
@@ -629,33 +631,82 @@ struct Session {
       }
       auto resolveControl =
           [&](StringRef name) -> FailureOr<upf::ExpressionTokenAttr> {
-        // IEEE 1801-2018 5.4 also permits direct HDL object references,
-        // interpreted in the defining command's scope.
+        auto found = aliases.find(name.str());
+        if (found != aliases.end())
+          return found->second.token(module.getContext());
+        // IEEE 1801-2018 6.22 restricts switch expressions to control ports.
+        // Direct HDL names use the broader 5.4 grammar only as an opt-in
+        // extension; do not silently treat it as the command's standard form.
+        if (!allowHDLExpressions) {
+          error("unknown power-switch control port '" + name +
+                "'; bind it with -control_port (direct HDL references require "
+                "--upf-allow-hdl-expressions)");
+          return failure();
+        }
         auto resolved = reference(name, &aliases);
         if (failed(resolved))
           return failure();
         return resolved->token(module.getContext());
       };
       auto report = [&](const llvm::Twine &message) { error(message); };
-      auto onExpression = parseUPFBooleanExpression(on[2], module.getContext(),
-                                                    resolveControl, report);
-      if (failed(onExpression))
-        return TCL_ERROR;
-      upf::ExpressionAttr offExpression;
-      if (opts.count("-off_state")) {
-        if (!list(opts["-off_state"], off))
-          return TCL_ERROR;
-        if (off.size() != 2)
-          return error("off state requires {name expression}");
-        if (!identifier(off[0]))
-          return TCL_ERROR;
-        if (off[0] == on[0])
-          return error("duplicate power-switch state name");
-        auto parsed = parseUPFBooleanExpression(off[1], module.getContext(),
-                                                resolveControl, report);
+      size_t count = repeated["-on_state"].size() +
+                     repeated["-error_state"].size() + opts.count("-off_state");
+      if (count > 256)
+        return error("power switch exceeds 256 states");
+      std::set<std::string> stateNames;
+      size_t tokens = 0;
+      auto state = [&](Tcl_Obj *obj,
+                       bool on) -> FailureOr<upf::SwitchStateAttr> {
+        std::vector<std::string> fields;
+        if (!list(obj, fields))
+          return failure();
+        if (fields.size() != (on ? 3u : 2u)) {
+          error(on ? "on state requires {name input_supply_port expression}"
+                   : "off/error state requires {name expression}");
+          return failure();
+        }
+        if (!identifier(fields[0]))
+          return failure();
+        if (!stateNames.insert(fields[0]).second) {
+          error("duplicate power-switch state name: " + fields[0]);
+          return failure();
+        }
+        if (on && fields[1] != input[0]) {
+          error("on-state references an unknown input supply port");
+          return failure();
+        }
+        auto expression = parseUPFBooleanExpression(
+            fields.back(), module.getContext(), resolveControl, report);
+        if (failed(expression))
+          return failure();
+        tokens += expression->getTokens().size();
+        if (tokens > 65536) {
+          error("power switch exceeds 65536 expression tokens");
+          return failure();
+        }
+        return upf::SwitchStateAttr::get(
+            module.getContext(),
+            StringAttr::get(module.getContext(), fields[0]), *expression);
+      };
+      SmallVector<Attribute> onStates, errorStates;
+      for (auto obj : repeated["-on_state"]) {
+        auto parsed = state(obj, true);
         if (failed(parsed))
           return TCL_ERROR;
-        offExpression = *parsed;
+        onStates.push_back(*parsed);
+      }
+      upf::SwitchStateAttr offState;
+      if (auto found = opts.find("-off_state"); found != opts.end()) {
+        auto parsed = state(found->second, false);
+        if (failed(parsed))
+          return TCL_ERROR;
+        offState = *parsed;
+      }
+      for (auto obj : repeated["-error_state"]) {
+        auto parsed = state(obj, false);
+        if (failed(parsed))
+          return TCL_ERROR;
+        errorStates.push_back(*parsed);
       }
       if (!dom->power.empty() && dom->power != key(output[1]))
         return error("switch output does not drive the domain primary supply");
@@ -674,8 +725,9 @@ struct Session {
       }
       if (!switches.insert(key(Tcl_GetString(objv[1]))).second)
         return error("duplicate power switch");
-      dom->on = *onExpression;
-      dom->off = offExpression;
+      dom->on = std::move(onStates);
+      dom->off = offState;
+      dom->errors = std::move(errorStates);
       dom->switchInput = key(input[1]);
       dom->power = dom->switchOutput = key(output[1]);
       return TCL_OK;
@@ -731,7 +783,8 @@ int dispatch(void *data, Tcl_Interp *, Tcl_Size objc, Tcl_Obj *const objv[]) {
 } // namespace
 #endif
 LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
-                         StringRef resourceDir, StringRef executablePath) {
+                         StringRef resourceDir, StringRef executablePath,
+                         bool allowHDLExpressions) {
   if (paths.empty())
     return success();
   module.getContext()->getOrLoadDialect<upf::UPFDialect>();
@@ -754,7 +807,7 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
   if (Tcl_Init(interp.get()) != TCL_OK)
     return module.emitError() << "could not initialize Tcl core: "
                               << Tcl_GetStringResult(interp.get());
-  Session session(module, interp.get());
+  Session session(module, interp.get(), allowHDLExpressions);
   std::vector<Command> commands;
   for (const char *name :
        {"upf_version", "set_design_top", "set_scope", "find_objects",
@@ -784,10 +837,10 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
   // domains are omitted from this runtime slice, so diagnose that unsupported
   // partition before their ownership information could be discarded.
   for (auto &[name, domain] : session.domains) {
-    if (!domain.on)
+    if (domain.switchOutput.empty())
       continue;
     for (auto &[otherName, other] : session.domains) {
-      if (other.on)
+      if (!other.switchOutput.empty())
         continue;
       for (auto &element : domain.elements)
         for (auto &child : other.elements)
@@ -801,7 +854,7 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
   OpBuilder builder(module.getContext());
   builder.setInsertionPointToEnd(module.getBody());
   for (auto &[name, domain] : session.domains) {
-    if (!domain.on) {
+    if (domain.switchOutput.empty()) {
       if (!domain.isolation.empty())
         return module.emitError(
             "initial UPF isolation requires a switchable domain");
@@ -815,7 +868,10 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
       elements.push_back(builder.getStringAttr(element));
     upf::UPFDomainOp::create(
         builder, domain.location.value_or(module.getLoc()), name,
-        builder.getArrayAttr(elements), domain.on, domain.off,
+        builder.getArrayAttr(elements), builder.getArrayAttr(domain.on),
+        domain.off,
+        domain.errors.empty() ? ArrayAttr{}
+                              : builder.getArrayAttr(domain.errors),
         domain.isolation.empty() ? StringAttr{}
                                  : builder.getStringAttr(domain.isolation),
         domain.isolationHigh, domain.clamp);

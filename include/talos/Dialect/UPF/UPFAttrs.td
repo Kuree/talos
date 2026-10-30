@@ -29,4 +29,14 @@ def UPFExpressionAttr : UPFAttr<"Expression", "expression"> {
   let assemblyFormat = "`<` $tokens `>`";
   let genVerifyDecl = 1;
 }
+def UPFSwitchStateAttr : UPFAttr<"SwitchState", "state"> {
+  let summary = "named abstract power-switch condition (1801-2018 6.22)";
+  let parameters = (ins "::mlir::StringAttr":$name, UPFExpressionAttr:$condition);
+  let assemblyFormat = "`<` struct(params) `>`";
+  let genVerifyDecl = 1;
+}
+def UPFSwitchStateArrayAttr
+    : TypedArrayAttrBase<UPFSwitchStateAttr, "UPF switch-state array"> {
+  let constBuilderCall = "$_builder.getArrayAttr($0)";
+}
 #endif

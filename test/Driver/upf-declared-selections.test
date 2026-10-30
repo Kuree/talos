@@ -1,12 +1,12 @@
 // REQUIRES: upf
 // RUN: %split-file %s %t
-// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: talos --upf-allow-hdl-expressions --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
 // RUN: %t.o0 | FileCheck %s
-// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: talos --upf-allow-hdl-expressions --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
 // RUN: %t.o3 | FileCheck %s
-// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: talos --upf-allow-hdl-expressions --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
 // RUN: %t.bc | FileCheck %s
-// IEEE 1801-2018 5.4 uses declared HDL types, including nominal element
+// The direct-HDL extension uses 1801-2018 5.4 types, including nominal element
 // boundaries erased by canonical storage types. 6.19/6.22 logic ports are scalar.
 // CHECK: declared control selection types passed
 

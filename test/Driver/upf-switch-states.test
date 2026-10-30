@@ -1,0 +1,82 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.22: multiple ON states can contribute the same input.
+// Unknown references in ANY ON state poison even masked/inactive states.
+// 9.5.3/9.6.7 preserve queued work across ON handoff and cancel it on loss.
+// CHECK: multiple switch ON states passed
+
+//--- design.sv
+package audit;
+  int calls = 0;
+  function logic sample(logic d);
+    calls++;
+    return d;
+  endfunction
+endpackage
+module leaf(input logic clk, d, output logic q, y, output wire constant_q);
+  always @(posedge clk) q <= #3 d;
+  always_comb y = audit::sample(d);
+  assign constant_q = 1'b1;
+endmodule
+module top;
+  logic a = 1, b = 0, spare = 0, clk = 0, d = 1;
+  wire q, y, constant_q;
+  int calls;
+  leaf dut(clk, d, q, y, constant_q);
+  initial begin
+    #1;
+    if (q !== 1'bx || y !== 1'b1 || constant_q !== 1'b1 || audit::calls != 1)
+      $fatal(1, "initial NORMAL failed");
+    clk = 1;
+    #4;
+    if (q !== 1'b1) $fatal(1, "first ON state failed");
+    clk = 0; d = 0;
+    #1;
+    calls = audit::calls;
+    clk = 1; b = 1; // Both ON states true: no conflict on one input.
+    #1 a = 0;
+    #3;
+    if (q !== 1'b0 || y !== 1'b0 || audit::calls != calls)
+      $fatal(1, "ON handoff cancelled NBA or reran combinational logic");
+    clk = 0; d = 1;
+    #1 clk = 1;
+    #1 spare = 1'bx; // This state evaluates false, but references X.
+    #1;
+    if (q !== 1'bx || y !== 1'bx || constant_q !== 1'bx)
+      $fatal(1, "masked inactive ON reference did not corrupt");
+    spare = 0;
+    #3;
+    if (q !== 1'bx || y !== 1'b1 || constant_q !== 1'b1)
+      $fatal(1, "old NBA survived masked-state loss");
+    a = 1'bz;
+    #1;
+    if (y !== 1'bx) $fatal(1, "inactive ON Z reference did not corrupt");
+    a = 0;
+    #1;
+    if (y !== 1'b1 || q !== 1'bx) $fatal(1, "ON recovery invented an edge");
+    b = 0;
+    #1;
+    if (y !== 1'bx) $fatal(1, "implicit OFF did not apply");
+    a = 1; clk = 0;
+    #1 clk = 1;
+    #4;
+    if (q !== 1'b1 || y !== 1'b1) $fatal(1, "fresh update did not run");
+    $display("multiple switch ON states passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_power_domain PD -elements dut
+foreach net {VDD SW} {create_supply_net $net}
+create_power_switch PS -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout SW} \
+    -control_port {enable_a a} -control_port {enable_b b} -control_port {unused_on spare} \
+    -on_state {FIRST vin enable_a} -on_state {SECOND vin enable_b} \
+    -on_state {MASKED vin {unused_on && 0}}

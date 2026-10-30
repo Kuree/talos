@@ -7,12 +7,12 @@
 #on = #upf.expression<[#a, #ones, #upf.token<opcode = eq>, #b, #upf.token<opcode = not>, #upf.token<opcode = and>]>
 #off = #upf.expression<[#b, #fill, #upf.token<opcode = ne>]>
 module {
-  // CHECK: upf.domain @PD elements ["top.dut"] on <[
+  // CHECK: upf.domain @PD elements ["top.dut"] on [
   // CHECK-SAME: control = "top.a", isSigned = true
   // CHECK-SAME: value = -1 : i8, unknown = 0 : i8, isSigned = true
   // CHECK-SAME: #upf.token<opcode = eq>
   // CHECK-SAME: #upf.token<opcode = and>
-  // CHECK-SAME: off = #upf.expression<
+  // CHECK-SAME: off = #upf.state<name = "OFF", condition = <
   // CHECK-SAME: fill = true
-  upf.domain @PD elements ["top.dut"] on #on {off = #off}
+  upf.domain @PD elements ["top.dut"] on [#upf.state<name = "ON", condition = #on>] {off = #upf.state<name = "OFF", condition = #off>}
 }

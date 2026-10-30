@@ -1,0 +1,69 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --native-scheduler=eval --mlir-verify-each %t/design.sv -o %t.eval
+// RUN: %t.eval | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.22/9.2.2/9.6.7: aggregate NORMAL controls restoration,
+// including ERROR transitions. A switch with no ON states stays OFF.
+// CHECK: switch state eval sensitivity passed
+
+//--- design.sv
+package audit;
+  int calls = 0;
+  function logic sample();
+    calls++;
+    return 1'b1;
+  endfunction
+endpackage
+module leaf(output wire q);
+  assign q = audit::sample();
+endmodule
+module top;
+  logic a = 1, b = 0, fault = 1'bx, second_fault = 0;
+  wire q, off_q;
+  leaf dut(q), never_on(off_q);
+  initial begin
+    #1;
+    if (q !== 1'b1 || off_q !== 1'bx || audit::calls != 1)
+      $fatal(1, "initial state evaluation failed");
+    b = 1;
+    #1 a = 0;
+    #1;
+    if (q !== 1'b1 || audit::calls != 1) $fatal(1, "handoff reran driver");
+    fault = 1;
+    #1;
+    if (q !== 1'bx || audit::calls != 1) $fatal(1, "ERROR ran driver");
+    second_fault = 1;
+    #1 fault = 0;
+    #1;
+    if (q !== 1'bx || audit::calls != 1) $fatal(1, "ERROR handoff restored early");
+    second_fault = 0;
+    #1;
+    if (q !== 1'b1 || audit::calls != 2) $fatal(1, "ERROR restore count");
+    b = 0;
+    #1;
+    if (q !== 1'bx) $fatal(1, "implicit OFF failed");
+    a = 1;
+    #1;
+    if (q !== 1'b1 || audit::calls != 3 || off_q !== 1'bx)
+      $fatal(1, "restoration or empty ON state failed");
+    $display("switch state eval sensitivity passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+foreach net {VDD SW OFF_SUPPLY} {create_supply_net $net}
+create_power_domain PD -elements dut
+create_power_switch PS -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout SW} \
+    -control_port {enable_a a} -control_port {enable_b b} -control_port {bad fault} \
+    -control_port {bad_second second_fault} \
+    -on_state {A vin enable_a} -on_state {B vin enable_b} \
+    -error_state {FAULT bad} -error_state {SECOND_FAULT bad_second}
+create_power_domain OFF_PD -elements never_on
+create_power_switch OFF_PS -domain OFF_PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout OFF_SUPPLY}
