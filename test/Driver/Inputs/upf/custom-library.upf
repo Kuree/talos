@@ -1,0 +1,9 @@
+source [file join [file dirname [info script]] assertions.tcl]
+# Standard Tcl package discovery, including library paths containing spaces.
+set auto_path [list [info library] [file join [file dirname [info script]] {custom library}]]
+assert_equal [package require PowerHelpers 1.2] 1.2
+expect_error {package require MissingUPFPackage} {*can't find package*}
+expect_error {package require -exact PowerHelpers 9.9} {*version conflict*}
+expect_error {::power_helpers::broken} {*not a design instance*}
+::power_helpers::declare_switchable Imported dut power_en
+puts "custom Tcl package imported and executed"

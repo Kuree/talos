@@ -85,6 +85,9 @@ def threads_EQ : Joined<["--"], "threads=">, Group<Compilation_Group>,
   HelpText<"Set generated simulator worker-lane count">;
 def two_state : Flag<["--"], "two-state">, Group<Compilation_Group>,
   HelpText<"Use two-state integral computation and storage (X/Z and initial values become zero)">;
+def upf : JoinedOrSeparate<["--"], "upf">, Group<Compilation_Group>,
+  MetaVarName<"<file.upf>">,
+  HelpText<"Execute UPF power intent after elaborated Slang IR import">;
 def no_two_state_specialization : Flag<["--"], "no-two-state-specialization">,
   Group<Compilation_Group>,
   HelpText<"Disable inferred two-state analysis, narrowing, and guarded specialization">;

@@ -1,0 +1,77 @@
+source [file join [file dirname [info script]] assertions.tcl]
+
+# IEEE 1801-2018 5.1/5.11: both Tcl and UPF command errors use TCL_ERROR.
+expect_error {eval "set broken \{"} {*missing close-brace*}
+expect_error {upf_version 2.0} {*upf_version 3.1*}
+expect_error {set_scope} {*missing argument*}
+expect_error {set_scope absent} {*scope not found*}
+expect_error {set_scope ..} {*cannot leave the design top*}
+expect_error {set_scope / dut} {*usage:*}
+expect_error {load_upf missing-upf-file} {*no such file*}
+expect_error {load_upf ignored -scope /dut} {*rooted in current scope*}
+expect_error {load_upf ignored -scope absent} {*scope not found*}
+expect_error {load_upf ignored -scope "\{"} {*unmatched open brace*}
+assert_equal [set_scope .] /
+
+# IEEE 1801-2018 6.31: malformed and deferred query forms are diagnosed.
+expect_error {find_objects .} {*requires -pattern*}
+expect_error {find_objects absent -pattern *} {*scope not found*}
+expect_error {find_objects d -pattern *} {*scope not found*}
+expect_error {find_objects /dut -pattern *} {*relative to current scope*}
+expect_error {find_objects .. -pattern *} {*relative to current scope*}
+expect_error {find_objects . -pattern} {*missing value*}
+expect_error {find_objects . -pattern * -pattern *} {*duplicate UPF option*}
+expect_error {find_objects . -pattern * -transitive maybe} {*expected boolean*}
+expect_error {find_objects . -pattern * -transitive -transitive} {*duplicate UPF option*}
+expect_error {find_objects . -pattern {a{b,c}}} {*brace alternatives*}
+expect_error {find_objects . -pattern * -object_type reg} {*unsupported*}
+expect_error {find_objects . -pattern * -unknown x} {*unsupported*}
+
+# IEEE 1801-2018 5.3.2, 6.20, 6.24: identifiers, options and design binding.
+expect_error {create_power_domain 1bad -elements dut} {*invalid UPF identifier*}
+expect_error {create_power_domain Bad} {*require explicit -elements*}
+expect_error {create_power_domain Empty -elements {}} {*no elements*}
+expect_error {create_power_domain Bad -elements missing} {*not a design instance*}
+expect_error {create_power_domain Bad -elements "\{"} {*unmatched open brace*}
+expect_error {create_power_domain Bad -elements dut -unknown x} {*unsupported UPF option*}
+expect_error {create_power_domain Bad -elements dut -elements dut} {*duplicate UPF option*}
+expect_error {create_power_domain Bad -elements} {*missing value*}
+create_power_domain PD -elements dut
+expect_error {create_power_domain PD -elements dut} {*duplicate power domain*}
+expect_error {create_supply_net X -domain missing} {*unknown power domain*}
+expect_error {create_supply_net X -resolve parallel} {*supports unresolved*}
+expect_error {create_supply_port X -direction invalid} {*direction must be*}
+foreach net {VDD VSS VDD_SW} {create_supply_net $net}
+expect_error {create_supply_net VDD} {*duplicate supply object*}
+create_supply_port P -direction in
+expect_error {connect_supply_net missing -ports P} {*unknown supply net*}
+expect_error {connect_supply_net VDD} {*requires -ports*}
+expect_error {connect_supply_net VDD -ports missing} {*unknown supply port*}
+expect_error {connect_supply_net VDD -ports "\{"} {*unmatched open brace*}
+connect_supply_net VDD -ports P
+
+# IEEE 1801-2018 6.43 primary association, plus our stronger guarantee that a
+# caught validation failure does not partially associate either supply.
+expect_error {set_domain_supply_net PD -primary_power_net VDD_SW} {*both primary*}
+expect_error {set_domain_supply_net missing -primary_power_net VDD_SW -primary_ground_net VSS} {*unknown power domain*}
+expect_error {set_domain_supply_net PD -primary_power_net absent -primary_ground_net VSS} {*unknown primary supply net*}
+assert_equal [set_domain_supply_net PD -primary_power_net VDD_SW -primary_ground_net VSS] 1
+expect_error {set_domain_supply_net PD -primary_power_net VDD_SW -primary_ground_net VSS} {*already associated*}
+
+# IEEE 1801-2018 6.22/6.45: bad switch/isolation declarations caught by Tcl
+# must not poison a subsequent valid declaration of the same object.
+set switch_options {-domain PD -input_supply_port {vin VDD} -output_supply_port {vout VDD_SW}}
+expect_error {create_power_switch SW -domain PD} {*missing power-switch option*}
+expect_error {create_power_switch SW {*}$switch_options -control_port {en absent} -on_state {ON vin en}} {*object not found*}
+expect_error {create_power_switch SW {*}$switch_options -control_port {en wide} -on_state {ON vin en}} {*one-bit integral*}
+expect_error {create_power_switch SW {*}$switch_options -control_port {en power_en} -on_state {ON vin {en && other}}} {*one control port*}
+expect_error {create_power_switch SW {*}$switch_options -control_port {en power_en} -on_state {ON vin en} -off_state {OFF en}} {*complement*}
+create_power_switch SW {*}$switch_options -control_port {en power_en} -on_state {ON vin en} -off_state {OFF {!en}}
+expect_error {create_power_switch Extra {*}$switch_options -control_port {en power_en} -on_state {ON vin en}} {*one power switch*}
+set isolation_options {-domain PD -isolation_signal iso -applies_to outputs -location parent}
+expect_error {set_isolation ISO -domain PD -location self} {*requires -applies_to outputs*}
+expect_error {set_isolation ISO {*}$isolation_options -clamp_value 0 -isolation_sense invalid} {*sense must be*}
+expect_error {set_isolation ISO {*}$isolation_options -clamp_value X} {*clamp must be*}
+set_isolation ISO {*}$isolation_options -clamp_value 0
+expect_error {set_isolation Extra {*}$isolation_options -clamp_value 0} {*one isolation strategy*}
+puts "UPF error cases passed"

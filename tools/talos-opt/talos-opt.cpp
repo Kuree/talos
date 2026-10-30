@@ -15,6 +15,7 @@
 #include "talos/Dialect/Simulation/Transforms/Passes.h"
 #include "talos/Dialect/Slang/SlangDialect.h"
 #include "talos/Dialect/Talos/TalosDialect.h"
+#include "talos/Dialect/UPF/UPFDialect.h"
 
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/IR/DialectRegistry.h"
@@ -70,12 +71,12 @@ int main(int argc, char **argv) {
 
   mlir::DialectRegistry registry;
   mlir::registerAllDialects(registry);
-  registry
-      .insert<talos::slangir::SlangDialect, talos::ir::TalosDialect,
-              talos::cov::CoverageDialect, talos::dpi::DPIDialect,
-              talos::native::NativeDialect, talos::runtime::TalosRuntimeDialect,
-              talos::sdf::TalosSDFDialect, talos::schedule::ScheduleDialect,
-              talos::sim::TalosSimulationDialect>();
+  registry.insert<talos::slangir::SlangDialect, talos::ir::TalosDialect,
+                  talos::upf::UPFDialect, talos::cov::CoverageDialect,
+                  talos::dpi::DPIDialect, talos::native::NativeDialect,
+                  talos::runtime::TalosRuntimeDialect,
+                  talos::sdf::TalosSDFDialect, talos::schedule::ScheduleDialect,
+                  talos::sim::TalosSimulationDialect>();
 
   return mlir::asMainReturnCode(
       mlir::MlirOptMain(argc, argv, "Talos IR optimizer\n", registry));

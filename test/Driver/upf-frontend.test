@@ -1,0 +1,10 @@
+# REQUIRES: upf
+# RUN: talos --upf %S/Inputs/upf/switchable.upf -emit-slang %S/Inputs/upf/design.sv -o - | FileCheck %s --check-prefix=UPF
+# RUN: not talos --upf %S/Inputs/upf/missing-scope.upf -emit-slang %S/Inputs/upf/design.sv -o - 2>&1 | FileCheck %s --check-prefix=SCOPE
+# RUN: not talos --upf %S/Inputs/upf/unsupported.upf -emit-slang %S/Inputs/upf/design.sv -o - 2>&1 | FileCheck %s --check-prefix=BADCOMMAND
+# RUN: not talos --two-state --upf %S/Inputs/upf/switchable.upf -emit-slang %S/Inputs/upf/design.sv -o - 2>&1 | FileCheck %s --check-prefix=TWO
+# UPF: upf.domain @upf_test.PD elements ["upf_test.dut"] control "upf_test.power_en" on_high = true
+# UPF-SAME: isolation_control = "upf_test.iso"
+# SCOPE: UPF execution failed: design scope not found: missing
+# BADCOMMAND: invalid command name "set_retention"
+# TWO: initial UPF implementation requires four-state simulation

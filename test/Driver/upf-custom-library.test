@@ -1,0 +1,9 @@
+# REQUIRES: upf
+# RUN: talos --upf %S/Inputs/upf/custom-library.upf -emit-slang --mlir-print-debuginfo %S/Inputs/upf/design.sv -o - | FileCheck %s --check-prefix=IMPORT
+# RUN: not talos --upf %S/Inputs/upf/custom-library-error.upf -emit-slang %S/Inputs/upf/design.sv -o - 2>&1 | FileCheck %s --check-prefix=ERROR
+# IEEE 1801-2018 5.1/5.11: custom packages, version errors and procedure stacks.
+# IMPORT: custom Tcl package imported and executed
+# IMPORT: upf.domain @upf_test.Imported elements ["upf_test.dut"] control "upf_test.power_en"
+# IMPORT: loc("{{.*}}custom library/power_helpers.tcl":4:1)
+# ERROR: power-domain element is not a design instance: nonexistent_instance
+# ERROR: (procedure "::power_helpers::broken" line 2)

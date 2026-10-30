@@ -1,0 +1,8 @@
+set(LLVM_TARGET_DEFINITIONS UPFDialect.td)
+mlir_tablegen(UPFDialect.h.inc -gen-dialect-decls -dialect=upf)
+mlir_tablegen(UPFDialect.cpp.inc -gen-dialect-defs -dialect=upf)
+add_public_tablegen_target(TalosUPFDialectIncGen)
+set(LLVM_TARGET_DEFINITIONS UPFOps.td)
+mlir_tablegen(UPFOps.h.inc -gen-op-decls)
+mlir_tablegen(UPFOps.cpp.inc -gen-op-defs)
+add_public_tablegen_target(TalosUPFOpsIncGen)

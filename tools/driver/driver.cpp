@@ -34,7 +34,9 @@
 #include "talos/Dialect/Slang/SlangOps.h"
 #include "talos/Dialect/Talos/TalosDialect.h"
 #include "talos/Dialect/Talos/TalosOps.h"
+#include "talos/Dialect/UPF/UPFDialect.h"
 #include "talos/Frontend/Frontend.h"
+#include "talos/Frontend/UPF.h"
 #include "talos/Version.h"
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -1346,8 +1348,9 @@ executeCompilation(const InputArgList &args,
   DialectRegistry registry;
   registry
       .insert<talos::slangir::SlangDialect, talos::ir::TalosDialect,
-              talos::cov::CoverageDialect, talos::dpi::DPIDialect,
-              talos::native::NativeDialect, talos::runtime::TalosRuntimeDialect,
+              talos::upf::UPFDialect, talos::cov::CoverageDialect,
+              talos::dpi::DPIDialect, talos::native::NativeDialect,
+              talos::runtime::TalosRuntimeDialect,
               talos::sim::TalosSimulationDialect, mlir::LLVM::LLVMDialect>();
   // One explicitly sized pool is shared by all MLIR parallel pass adaptors.
   // Its lifetime encloses the context as required by MLIRContext.
@@ -1403,6 +1406,21 @@ executeCompilation(const InputArgList &args,
   if (failed(importedModule))
     return 1;
   OwningOpRef<ModuleOp> module = std::move(*importedModule);
+  auto upfPaths = args.getAllArgValues(OPT_upf);
+  if (!upfPaths.empty() && frontendOptions.twoState) {
+    emitDriverError(
+        "the initial UPF implementation requires four-state simulation");
+    return 1;
+  }
+  SmallString<256> upfResourceDir(driverExecutablePath);
+  sys::path::remove_filename(upfResourceDir);
+  sys::path::append(upfResourceDir, "..", "lib", "talos");
+  sys::path::remove_dots(upfResourceDir, true);
+  if (!sys::fs::is_directory(Twine(upfResourceDir) + "/tcl9.0"))
+    upfResourceDir = TALOS_RESOURCE_DIR;
+  if (failed(talos::executeUPF(*module, upfPaths, upfResourceDir,
+                               driverExecutablePath)))
+    return 1;
   if (frontendOptions.twoState)
     talos::native::mark<talos::native::TwoState>(*module);
   if (args.hasArg(OPT_no_two_state_specialization))

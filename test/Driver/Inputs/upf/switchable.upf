@@ -1,0 +1,12 @@
+# UTF-8 is handled by the Tcl core without external encoding tables: 電源 / питание.
+upf_version 3.1
+set_design_top upf_test
+source [file join [file dirname [info script]] helpers.tcl]
+declare_domain PD dut
+foreach net {VDD VSS VDD_SW} { create_supply_net $net }
+set_domain_supply_net PD -primary_power_net VDD_SW -primary_ground_net VSS
+create_power_switch SW -domain PD \
+  -input_supply_port {vin VDD} -output_supply_port {vout VDD_SW} \
+  -control_port {en power_en} -on_state {ON vin {en}} -off_state {OFF {!en}}
+set_isolation ISO -domain PD -isolation_signal iso -isolation_sense high \
+  -clamp_value 0 -applies_to outputs -location parent

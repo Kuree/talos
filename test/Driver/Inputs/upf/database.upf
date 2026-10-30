@@ -1,0 +1,51 @@
+source [file join [file dirname [info script]] assertions.tcl]
+set fixture_dir [file dirname [info script]]
+assert_equal [upf_version] 3.1
+assert_equal [set_design_top written_for_module] {}
+assert_equal [set_scope .] /
+if {[info nameofexecutable] eq {}} {error "missing Tcl executable identity"}
+
+# IEEE 1801-2018 6.31.1-6.31.2: non-transitive by default; wildcards do
+# not cross hierarchy separators; explicit paths work without -transitive.
+assert_equal [find_objects . -pattern * -object_type inst] {cluster dut dut2}
+assert_equal [find_objects . -pattern * -object_type inst -transitive] {cluster cluster/child dut dut2}
+assert_equal [find_objects . -pattern * -object_type inst -transitive false] {cluster dut dut2}
+assert_equal [find_objects . -pattern cluster/* -object_type inst] cluster/child
+assert_equal [find_objects cluster -pattern * -object_type inst] cluster/child
+assert_equal [find_objects . -pattern {} -object_type inst -transitive] {}
+assert_equal [find_objects dut -pattern d -object_type port] dut/d
+
+# IEEE 1801-2018 6.42/4.3.7 and 6.52: module name changes do not move
+# scope; set_scope returns the previous scope relative to design top.
+assert_equal [set_scope cluster] /
+assert_equal [set_design_top another_module] {}
+assert_equal [set_scope child] /cluster
+assert_equal [set_scope ..] /cluster/child
+assert_equal [set_scope /] /cluster
+
+# Scoped loads operate on each instance and restore context on success/error.
+set scoped_loads 0
+assert_equal [load_upf [file join $fixture_dir scoped-child.upf] -scope {dut dut2}] {}
+assert_equal $scoped_loads 2
+assert_equal [set_scope .] /
+assert_equal [load_upf [file join $fixture_dir scoped-child.upf] -scope {}] {}
+expect_error {load_upf [file join $fixture_dir scoped-error.upf] -scope dut} {*deliberate scoped load error*}
+assert_equal [set_scope .] /
+assert_equal [load_upf [file join $fixture_dir unscoped-child.upf]] {}
+assert_equal [set_scope /] /dut
+
+# IEEE 1801-2018 6.22/6.24.1/6.25: explicit -domain declarations use
+# the owning domain's scope without changing the caller's scope.
+set_scope dut
+create_power_domain Local -elements .
+set_scope /
+create_supply_net VDD -domain dut/Local
+create_supply_net VSS -domain dut/Local
+create_supply_port P -domain dut/Local -direction in
+assert_equal [set_scope .] /
+connect_supply_net dut/VDD -ports dut/P
+set_scope dut
+# IEEE 1801-2018 6.43: return integer 1 and associate both supplies once.
+assert_equal [set_domain_supply_net Local -primary_power_net VDD -primary_ground_net VSS] 1
+set_scope /
+puts "UPF database semantics passed"

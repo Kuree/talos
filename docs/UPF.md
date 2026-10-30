@@ -25,3 +25,27 @@ Browser-hosted Emscripten compiler builds default to `TALOS_ENABLE_UPF=OFF`;
 they require a compatible prebuilt Tcl prefix to enable it. A native compiler
 can elaborate UPF and generate wasm32 simulations with 32-bit pointers and
 64-bit simulation handles. Tcl does not cross that target boundary.
+
+## Executing UPF and Tcl libraries
+
+`talos --upf power.upf -emit-slang design.sv -o design.mlir` executes Tcl
+after Slang elaboration and emits resolved `upf.domain` operations. The
+initial command subset includes design scope and object queries, scoped
+`load_upf`, power domains, supply nets/ports, one control-based power switch,
+and parent-located output isolation. Unsupported commands and options produce
+Tcl errors, which user procedures may handle with `catch` (IEEE 1801-2018
+clause 5.11). The resolved domain retains its UPF declaration's source location.
+
+User Tcl libraries can be sourced or imported with standard Tcl packages
+(IEEE 1801-2018 clause 5.1):
+
+```tcl
+lappend auto_path [file join [file dirname [info script]] my_libraries]
+package require MyPowerHelpers 1.0
+::my_power_helpers::declare_domains
+```
+
+Provide the package's usual `pkgIndex.tcl` and Tcl scripts in that directory.
+These libraries execute in the same interpreter and can call the registered
+UPF commands. Binary Tcl extensions are not bundled with Talos; any supplied
+extension must match Tcl 9.0 and the compiler host's architecture.

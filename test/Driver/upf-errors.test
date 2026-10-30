@@ -1,0 +1,4 @@
+# REQUIRES: upf
+# RUN: talos --upf %S/Inputs/upf/errors.upf -emit-slang %S/Inputs/upf/design.sv -o %t.mlir | FileCheck %s
+# IEEE 1801-2018 5.11: Tcl catch exercises every supported UPF command's errors.
+# CHECK: UPF error cases passed
