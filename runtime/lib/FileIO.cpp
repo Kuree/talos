@@ -137,9 +137,93 @@ public:
 #endif
   }
 
+  // Complete an octet beginning at the character just returned by get().
+  // Linux glibc exposes the same get area used by getc_unlocked. Inspect only
+  // buffered bytes, under the stream lock, and advance only if all eight are
+  // hexadecimal digits. Other libcs and buffer boundaries use scalar get().
+  bool hexOctet(uint32_t &value) {
+#if defined(__GLIBC__) && defined(__linux__)
+    char *position = stream->_IO_read_ptr;
+    if (position <= stream->_IO_read_base ||
+        stream->_IO_read_end - position < 7)
+      return false;
+    uint64_t bytes;
+    std::memcpy(&bytes, position - 1, sizeof(bytes));
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    bytes = __builtin_bswap64(bytes);
+#endif
+    // Set each byte's high bit before subtraction so no borrow crosses a
+    // byte boundary. Reject non-ASCII bytes separately, then recognize 0-9
+    // and case-folded a-f in all eight lanes together.
+    constexpr uint64_t highBits = UINT64_C(0x8080808080808080);
+    uint64_t ascii = bytes | highBits;
+    uint64_t letters = ascii | UINT64_C(0x2020202020202020);
+    uint64_t decimal = (ascii - UINT64_C(0x3030303030303030)) &
+                       ~(ascii - UINT64_C(0x3a3a3a3a3a3a3a3a));
+    uint64_t alphabetic = (letters - UINT64_C(0x6161616161616161)) &
+                          ~(letters - UINT64_C(0x6767676767676767));
+    if ((bytes & highBits) || ((decimal | alphabetic) & highBits) != highBits)
+      return false;
+    // ASCII letters have bit 6 set; their low nibbles need an extra nine.
+    uint64_t digits = (bytes & UINT64_C(0x0f0f0f0f0f0f0f0f)) +
+                      ((bytes >> 6) & UINT64_C(0x0101010101010101)) * 9;
+    digits = ((digits << 4) | (digits >> 8)) & UINT64_C(0x00ff00ff00ff00ff);
+    digits = ((digits << 8) | (digits >> 16)) & UINT64_C(0x0000ffff0000ffff);
+    value = static_cast<uint32_t>((digits << 16) | (digits >> 32));
+    stream->_IO_read_ptr += 7;
+    return true;
+#else
+    (void)value;
+    return false;
+#endif
+  }
+
 private:
   FILE *stream;
 };
+
+struct ReadMemHexPrefix {
+  uint64_t low;
+  uint64_t high;
+  int next;
+  bool haveDigit;
+};
+
+// Keep the two accumulators local to a small function. In the full tokenizer,
+// register pressure and the stream refill call can otherwise spill them on
+// every digit. Return the first non-hex character to the general X/Z parser;
+// oversized words still retain their least significant 128 bits (LRM 21.4).
+[[gnu::noinline]] ReadMemHexPrefix readMemHexPrefix(ReadMemStream &input,
+                                                    int character) {
+  uint64_t low = 0, high = 0;
+  bool haveDigit = false;
+  bool octets = true;
+  for (;;) {
+    if (octets) {
+      uint32_t digits;
+      if (input.hexOctet(digits)) {
+        high = (high << 32) | (low >> 32);
+        low = (low << 32) | digits;
+        haveDigit = true;
+        character = input.get();
+        continue;
+      }
+      octets = false;
+    }
+    unsigned digit = static_cast<unsigned>(character - '0');
+    if (digit >= 10) {
+      unsigned letter = static_cast<unsigned>((character | 32) - 'a');
+      if (letter >= 6)
+        break;
+      digit = letter + 10;
+    }
+    high = (high << 4) | (low >> 60);
+    low = (low << 4) | digit;
+    haveDigit = true;
+    character = input.get();
+  }
+  return {low, high, character, haveDigit};
+}
 
 // Keep ordinary formatted file input on a direct libc path while allowing the
 // one byte held by $ungetc for a non-readable descriptor to use the same scan
@@ -827,19 +911,11 @@ extern "C" talos_rt_status talos_rt_v1_file_readmem_token(
       // unknown-plane shifts. The general loop resumes at the first X/Z or
       // underscore, preserving arbitrary-length words and low-bit truncation
       // (LRM 21.4), including a known prefix followed by unknown digits.
-      for (;;) {
-        unsigned digit = static_cast<unsigned>(character - '0');
-        if (digit >= 10) {
-          unsigned letter = static_cast<unsigned>((character | 32) - 'a');
-          if (letter >= 6)
-            break;
-          digit = letter + 10;
-        }
-        highValue = (highValue << 4) | (scalarValue >> 60);
-        scalarValue = (scalarValue << 4) | digit;
-        haveCharacter = true;
-        character = next();
-      }
+      ReadMemHexPrefix prefix = readMemHexPrefix(input, character);
+      scalarValue = prefix.low;
+      highValue = prefix.high;
+      haveCharacter = prefix.haveDigit;
+      character = prefix.next;
     }
     std::array<char, 64> shortDigits;
     size_t shortSize = 0;

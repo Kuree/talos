@@ -2727,12 +2727,14 @@ TEST_F(RuntimeTest, ReadMemTokenizerTruncatesLongWordsAndMasksPartialBytes) {
   {
     std::ofstream output(path);
     std::string word = std::string(80, 'f') + "x_Z";
-    output << word << '\n' << word << '\n' << word << "\n10xz_1";
+    for (unsigned index = 0; index != 6; ++index)
+      output << word << '\n';
+    output << "10xz_1";
   }
   uint32_t descriptor = open(path, "r");
   uint32_t kind = 0;
   uint64_t address = 0;
-  for (uint64_t width : {5u, 64u, 65u}) {
+  for (uint64_t width : {5u, 64u, 65u, 127u, 128u, 129u}) {
     std::vector<uint8_t> value((width + 7) / 8, 0xff);
     std::vector<uint8_t> unknown(value.size(), 0xff);
     ASSERT_EQ(talos_rt_v1_file_readmem_token(
@@ -2743,13 +2745,16 @@ TEST_F(RuntimeTest, ReadMemTokenizerTruncatesLongWordsAndMasksPartialBytes) {
     EXPECT_EQ(value[0], 0x0f);
     EXPECT_EQ(unknown[0], width == 5 ? 0x1f : 0xff);
     for (size_t byte = 1; byte != value.size(); ++byte) {
-      EXPECT_EQ(value[byte], byte == 8 ? 0x01 : 0xff);
+      uint8_t expected = 0xff;
+      if (byte + 1 == value.size() && width % 8)
+        expected = (1u << (width % 8)) - 1;
+      EXPECT_EQ(value[byte], expected);
       EXPECT_EQ(unknown[byte], 0x00);
     }
   }
   uint8_t value = 0xff, unknown = 0xff;
-  ASSERT_EQ(talos_rt_v1_file_readmem_token(context, descriptor, 2, 3, &value,
-                                             1, &unknown, 1, &kind, &address),
+  ASSERT_EQ(talos_rt_v1_file_readmem_token(context, descriptor, 2, 3, &value, 1,
+                                           &unknown, 1, &kind, &address),
             TALOS_RT_OK);
   EXPECT_EQ(kind, TALOS_RT_READMEM_DATA);
   EXPECT_EQ(value, 0x03);
@@ -2757,10 +2762,141 @@ TEST_F(RuntimeTest, ReadMemTokenizerTruncatesLongWordsAndMasksPartialBytes) {
   EXPECT_EQ(talos_rt_v1_file_close(context, descriptor), TALOS_RT_OK);
 }
 
+TEST_F(RuntimeTest, ReadMemHexPrefixSurvivesRefillsAndMixedCaseDigits) {
+  TempDirectory temporary;
+  auto path = temporary.file("hex-prefix.hex");
+  {
+    std::ofstream output(path);
+    // Cross the host stdio buffer while retaining only the last 128 bits.
+    output << std::string(16384, 'f')
+           << "0123456789abcdeFFEDCBA9876543210 /* next */ @2 z_X";
+  }
+  uint32_t descriptor = open(path, "r");
+  std::array<uint8_t, 16> value{}, unknown{};
+  uint32_t kind = 0;
+  uint64_t address = 0;
+  ASSERT_EQ(talos_rt_v1_file_readmem_token(
+                context, descriptor, 16, 128, value.data(), value.size(),
+                unknown.data(), unknown.size(), &kind, &address),
+            TALOS_RT_OK);
+  EXPECT_EQ(kind, TALOS_RT_READMEM_DATA);
+  EXPECT_EQ(value, (std::array<uint8_t, 16>{0x10, 0x32, 0x54, 0x76, 0x98, 0xba,
+                                            0xdc, 0xfe, 0xef, 0xcd, 0xab, 0x89,
+                                            0x67, 0x45, 0x23, 0x01}));
+  EXPECT_EQ(unknown, (std::array<uint8_t, 16>{}));
+  ASSERT_EQ(talos_rt_v1_file_readmem_token(
+                context, descriptor, 16, 128, value.data(), value.size(),
+                unknown.data(), unknown.size(), &kind, &address),
+            TALOS_RT_OK);
+  EXPECT_EQ(kind, TALOS_RT_READMEM_ADDRESS);
+  EXPECT_EQ(address, 2u);
+  // No known prefix: the general parser still consumes underscores and X/Z.
+  ASSERT_EQ(talos_rt_v1_file_readmem_token(
+                context, descriptor, 16, 128, value.data(), value.size(),
+                unknown.data(), unknown.size(), &kind, &address),
+            TALOS_RT_OK);
+  EXPECT_EQ(kind, TALOS_RT_READMEM_DATA);
+  EXPECT_EQ(value[0], 0xf0);
+  EXPECT_EQ(unknown[0], 0xff);
+  for (size_t byte = 1; byte != value.size(); ++byte) {
+    EXPECT_EQ(value[byte], 0u);
+    EXPECT_EQ(unknown[byte], 0u);
+  }
+  EXPECT_EQ(talos_rt_v1_file_close(context, descriptor), TALOS_RT_OK);
+}
+
+TEST_F(RuntimeTest, ReadMemHexPrefixStopsBeforeEveryNonDigitByte) {
+  TempDirectory temporary;
+  auto path = temporary.file("hex-delimiters.hex");
+  auto digit = [](unsigned byte) {
+    return (byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'f') ||
+           (byte >= 'A' && byte <= 'F') || byte == 'x' || byte == 'X' ||
+           byte == 'z' || byte == 'Z' || byte == '_';
+  };
+  {
+    std::ofstream output(path, std::ios::binary);
+    for (unsigned position = 1; position != 8; ++position)
+      for (unsigned byte = 0; byte != 256; ++byte)
+        if (!digit(byte))
+          output << std::string(position, '1') << static_cast<char>(byte)
+                 << std::string(8 - position, '2') << '\n';
+  }
+  uint32_t descriptor = open(path, "rb");
+  for (unsigned position = 1; position != 8; ++position) {
+    uint32_t expected = 0;
+    for (unsigned index = 0; index != position; ++index)
+      expected = expected * 16 + 1;
+    for (unsigned byte = 0; byte != 256; ++byte) {
+      if (digit(byte))
+        continue;
+      std::array<uint8_t, 16> value{}, unknown{};
+      uint32_t kind = 0;
+      uint64_t address = 0;
+      ASSERT_EQ(talos_rt_v1_file_readmem_token(
+                    context, descriptor, 16, 128, value.data(), value.size(),
+                    unknown.data(), unknown.size(), &kind, &address),
+                TALOS_RT_OK);
+      ASSERT_EQ(kind, TALOS_RT_READMEM_DATA);
+      for (size_t index = 0; index != value.size(); ++index) {
+        EXPECT_EQ(value[index],
+                  index < 4 ? (expected >> (index * 8)) & 255 : 0);
+        EXPECT_EQ(unknown[index], 0u);
+      }
+      // Failed batched decoding must leave the delimiter and all following
+      // bytes available to the ordinary file APIs, including high-bit bytes.
+      std::array<uint8_t, 9> tail{};
+      uint64_t count = 0;
+      ASSERT_EQ(talos_rt_v1_file_read(context, descriptor, tail.data(),
+                                      10 - position, &count),
+                TALOS_RT_OK);
+      ASSERT_EQ(count, 10 - position);
+      EXPECT_EQ(tail[0], byte);
+      for (unsigned index = 1; index < 9 - position; ++index)
+        EXPECT_EQ(tail[index], '2');
+      EXPECT_EQ(tail[9 - position], '\n');
+    }
+  }
+  EXPECT_EQ(talos_rt_v1_file_close(context, descriptor), TALOS_RT_OK);
+}
+
+TEST_F(RuntimeTest, ReadMemHexPrefixHandlesEOFAtEveryBufferBoundary) {
+  TempDirectory temporary;
+  auto path = temporary.file("hex-eof.hex");
+  {
+    std::ofstream(path) << "DeAdBeeF";
+  }
+  for (size_t size : {0u, 1u, 7u, 8u, 9u, 16u}) {
+    SCOPED_TRACE(size);
+    uint32_t descriptor = open(path, "rb");
+    FILE *stream = context->files[descriptor & 0x7fffffff].stream;
+    std::array<char, 16> buffer{};
+    ASSERT_EQ(std::setvbuf(stream, buffer.data(), size ? _IOFBF : _IONBF, size),
+              0);
+    std::array<uint8_t, 9> value{}, unknown{};
+    uint32_t kind = 0;
+    uint64_t address = 0;
+    ASSERT_EQ(talos_rt_v1_file_readmem_token(
+                  context, descriptor, 16, 65, value.data(), value.size(),
+                  unknown.data(), unknown.size(), &kind, &address),
+              TALOS_RT_OK);
+    EXPECT_EQ(kind, TALOS_RT_READMEM_DATA);
+    EXPECT_EQ(value, (std::array<uint8_t, 9>{0xef, 0xbe, 0xad, 0xde}));
+    EXPECT_EQ(unknown, (std::array<uint8_t, 9>{}));
+    ASSERT_EQ(talos_rt_v1_file_readmem_token(
+                  context, descriptor, 16, 65, value.data(), value.size(),
+                  unknown.data(), unknown.size(), &kind, &address),
+              TALOS_RT_OK);
+    EXPECT_EQ(kind, TALOS_RT_READMEM_EOF);
+    EXPECT_EQ(talos_rt_v1_file_close(context, descriptor), TALOS_RT_OK);
+  }
+}
+
 TEST_F(RuntimeTest, ReadMemTokenizerRejectsMalformedInput) {
   TempDirectory temporary;
   std::filesystem::path path = temporary.file("bad.hex");
-  { std::ofstream(path) << "@"; }
+  {
+    std::ofstream(path) << "@";
+  }
   uint32_t descriptor = open(path, "r");
   uint8_t value = 0, unknown = 0;
   uint32_t kind = 0;
