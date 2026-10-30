@@ -121,6 +121,7 @@ struct Expression {
   };
   SmallVector<Node> nodes;
   llvm::SetVector<StringRef> controls;
+  llvm::SetVector<upf::ExpressionTokenAttr> references;
   Expression(upf::ExpressionAttr expression) {
     if (!expression)
       return;
@@ -131,6 +132,8 @@ struct Expression {
       switch (token.getOpcode()) {
       case Opcode::Control:
         controls.insert(token.getControl().getValue());
+        references.insert(token);
+        node.width = token.getWidth();
         node.isSigned = token.getIsSigned();
         break;
       case Opcode::Constant:
@@ -162,6 +165,26 @@ struct Expression {
       nodes.push_back(node);
     }
   }
+  static Value reference(OpBuilder &b, Location loc, Value context,
+                         const llvm::StringMap<Descriptor> &descriptors,
+                         upf::ExpressionTokenAttr token) {
+    Value value = flatten(
+        b, loc,
+        load(b, loc,
+             handle(b, loc, context,
+                    descriptors.lookup(token.getControl().getValue()))));
+    if (isa<IntegerType>(value.getType()))
+      value = sim::SimLogicFromBitsOp::create(
+          b, loc, sim::LogicType::get(b.getContext(), token.getSourceWidth()),
+          value);
+    // IEEE 1801-2018 5.4: select the named HDL object before propagating its
+    // expression context. 6.22 knownness likewise observes only this selection.
+    if (token.getWidth() != token.getSourceWidth() || token.getOffset())
+      value = sim::SimLogicExtractOp::create(
+          b, loc, sim::LogicType::get(b.getContext(), token.getWidth()), value,
+          token.getOffset());
+    return value;
+  }
   Value emit(OpBuilder &b, Location loc, Value context,
              const llvm::StringMap<Descriptor> &descriptors, unsigned index,
              unsigned width = 0, bool isSigned = false) const {
@@ -181,14 +204,7 @@ struct Expression {
     };
     switch (node.token.getOpcode()) {
     case Opcode::Control: {
-      Value value = flatten(
-          b, loc,
-          load(b, loc,
-               handle(b, loc, context,
-                      descriptors.lookup(node.token.getControl().getValue()))));
-      if (isa<IntegerType>(value.getType()))
-        value = sim::SimLogicFromBitsOp::create(
-            b, loc, sim::LogicType::get(b.getContext(), 1), value);
+      Value value = reference(b, loc, context, descriptors, node.token);
       return resize(value, isSigned);
     }
     case Opcode::Constant: {
@@ -294,12 +310,16 @@ struct PowerCondition {
     // Any X/Z object referenced by ON contributes UNDETERMINED, even when
     // masked by a constant. Unused and OFF-only controls do not participate.
     Value result = on.predicate(b, loc, context, descriptors);
-    for (StringRef path : on.controls) {
-      Value value =
-          load(b, loc, handle(b, loc, context, descriptors.lookup(path)));
+    for (auto token : on.references) {
+      Value value = Expression::reference(b, loc, context, descriptors, token);
+      auto logic = sim::LogicType::get(b.getContext(), 1);
+      Value x = logicConstant(b, loc, logic, false, true);
+      Value z = logicConstant(b, loc, logic, true, true);
+      Value count = sim::SimLogicCountBitsOp::create(b, loc, b.getI32Type(),
+                                                     value, ValueRange{x, z});
       Value known =
-          arith::OrIOp::create(b, loc, equalsLevel(b, loc, value, false),
-                               equalsLevel(b, loc, value, true));
+          arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq, count,
+                                arith::ConstantIntOp::create(b, loc, 0, 32));
       result = arith::AndIOp::create(b, loc, result, known);
     }
     if (!off.nodes.empty()) {
@@ -573,6 +593,8 @@ struct Lowering {
       cf::BranchOp::create(builder, fn.getLoc(), activation);
       builder.setInsertionPointToEnd(activation);
       Value on = condition.normal(builder, fn.getLoc(), fn.getArgument(0));
+      on = arith::AndIOp::create(builder, fn.getLoc(), on,
+                                 load(builder, fn.getLoc(), watched));
       cf::CondBranchOp::create(builder, fn.getLoc(), on, body, wait);
       builder.setInsertionPointToEnd(wait);
       sim::SimSuspendChangeOp::create(
@@ -608,11 +630,6 @@ struct Lowering {
     if (skip->getNumArguments() != 0 || gate == &fn.getBody().front())
       return fn.emitError("initial UPF process requires an explicit repeating "
                           "sensitivity loop");
-    Block *body = gate->splitBlock(gate->begin());
-    builder.setInsertionPointToEnd(gate);
-    Value on = condition.normal(builder, fn.getLoc(), fn.getArgument(0));
-    cf::CondBranchOp::create(builder, fn.getLoc(), on, body, ValueRange{}, skip,
-                             ValueRange{});
     // IEEE 1801-2018 9.6.7: restoration reevaluates combinational/level logic,
     // but must not invent an edge activation for edge-sensitive state.
     bool edgeSensitive =
@@ -626,6 +643,20 @@ struct Lowering {
                             "domain is not implemented");
       edgeSensitive = edge;
     }
+    Block *body = gate->splitBlock(gate->begin());
+    builder.setInsertionPointToEnd(gate);
+    Value on = condition.normal(builder, fn.getLoc(), fn.getArgument(0));
+    if (!edgeSensitive) {
+      // IEEE 1801-2018 9.2.1/9.6.7: control-net routing can settle after the
+      // root's initial aggregate snapshot. Wait for publication before the
+      // first level activation, avoiding a second startup "restoration" run.
+      Value published =
+          load(builder, fn.getLoc(),
+               handle(builder, fn.getLoc(), fn.getArgument(0), restoration));
+      on = arith::AndIOp::create(builder, fn.getLoc(), on, published);
+    }
+    cf::CondBranchOp::create(builder, fn.getLoc(), on, body, ValueRange{}, skip,
+                             ValueRange{});
     // Only aggregate power transitions wake level logic. A raw control can
     // change while the domain remains NORMAL without activating HDL code.
     return edgeSensitive ? success() : watch(fn, restoration);
@@ -697,15 +728,22 @@ struct Lowering {
         return domain.emitError(
                    "power control is absent from the simulation design: ")
                << path;
-      if (!supportedState(found->second.type) ||
-          sim::getPackedWidth(found->second.type) != 1)
-        return domain.emitError("power control must be one-bit integral: ")
+      if (!supportedState(found->second.type))
+        return domain.emitError("power control must be packed integral: ")
                << path;
       if (contains(domain, path))
         return domain.emitError(
                    "power control must be outside the switchable domain: ")
                << path;
     }
+    for (const Expression *expression : {&condition.on, &condition.off})
+      for (auto token : expression->references)
+        if (sim::getPackedWidth(
+                descriptors.lookup(token.getControl().getValue()).type) !=
+            token.getSourceWidth())
+          return domain.emitError("power control source width disagrees with "
+                                  "simulation storage: ")
+                 << token.getControl().getValue();
     llvm::DenseSet<uint64_t> computedInputs;
     for (auto unit : design.getOps<sim::SimCodeUnitDeclOp>())
       if (sim::has<sim::metadata::ComputedPortInput>(unit) &&

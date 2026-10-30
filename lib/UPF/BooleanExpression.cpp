@@ -58,7 +58,7 @@ class Parser {
   }
   bool operation(Opcode opcode, unsigned arity) {
     return append(upf::ExpressionTokenAttr::get(context, opcode, {}, {}, {},
-                                                false, false),
+                                                false, false, 1, 1, 0),
                   arity);
   }
   bool constant(StringRef spelling) {
@@ -166,7 +166,7 @@ class Parser {
     auto type = IntegerType::get(context, width);
     return append(upf::ExpressionTokenAttr::get(
         context, Opcode::Constant, {}, IntegerAttr::get(type, value),
-        IntegerAttr::get(type, unknown), isSigned, fill));
+        IntegerAttr::get(type, unknown), isSigned, fill, 1, 1, 0));
   }
   bool primary(unsigned depth) {
     if (depth > 256)
@@ -198,9 +198,28 @@ class Parser {
         ++cursor;
       return constant(text.slice(begin, cursor));
     }
-    while (cursor < text.size() && !isSpace(text[cursor]) &&
-           !StringRef("!~<>=&^|()+*%?:,;{}").contains(text[cursor]))
+    while (cursor < text.size()) {
+      // Selectors are part of the HDL object name, including their internal
+      // whitespace and ':'/'+'/'-' syntax. Semantic resolution checks them.
+      if (text[cursor] == '[') {
+        size_t close = text.find(']', cursor + 1);
+        cursor = close == StringRef::npos ? text.size() : close + 1;
+        continue;
+      }
+      if (isSpace(text[cursor])) {
+        size_t next = cursor;
+        while (next < text.size() && isSpace(text[next]))
+          ++next;
+        if (next < text.size() && text[next] == '[') {
+          cursor = next;
+          continue;
+        }
+        break;
+      }
+      if (StringRef("!~<>=&^|()+*%?:,;{}").contains(text[cursor]))
+        break;
       ++cursor;
+    }
     if (begin == cursor)
       return error("expected a control or literal; unsupported operator");
     auto token = resolve(text.slice(begin, cursor));

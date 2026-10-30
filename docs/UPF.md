@@ -49,8 +49,9 @@ supported after checking their call closure; asynchronous or indirect calls
 remain diagnosed. Input expressions owned by an exterior parent remain active.
 
 Power switches accept repeated `-control_port {alias design_object}` options
-and Boolean ON/OFF expressions (clauses 5.4 and 6.22). Controls are scalar
-integral objects, including singleton packed arrays. Expressions support
+and Boolean ON/OFF expressions (clauses 5.4 and 6.22). Switch control-port
+bindings are scalar integral objects or selected bits. Expressions can also
+reference HDL packed vectors and enums directly. Expressions support
 parentheses, `!`, `~`, comparisons, `&`, `^`, `|`, `&&`, and `||`, preserving
 SystemVerilog precedence, widths, signedness, and four-state intermediates.
 For example:
@@ -77,6 +78,26 @@ Wide values require an explicit comparison at Boolean boundaries, except
 literal zero/one, avoiding an implicit coercion beyond clause 5.4's Boolean
 definition. Expressions are bounded to 64 KiB, 4096 tokens, and 256 tree levels;
 unsupported syntax and limit violations are catchable Tcl errors.
+
+HDL object references support static packed bit selections, part selections,
+and indexed part selections, including multiple dimensions, ascending and
+negative ranges (clauses 5.3.3.2 and 5.4). For example, an ON expression can use
+`mode == 2'b10 && controls[7]` or `matrix[1][0:3] == 4'b1010`. Source objects
+are limited to 4096 bits; selector indices and widths are constant decimal
+integers, with up to 256 element-selection stages. Declared selection types
+retain nominal typedef and enum boundaries before storage canonicalization.
+Bit-vector bit/part selections are unsigned; selecting a named packed element
+retains that element's declared type. A part-select must be the final selector.
+Dynamic, out-of-range, reversed, and unpacked
+selections produce diagnostics. A switch alias may bind a selected bit;
+vector aliases remain unsupported because clause 6.22 does not define vector
+range inheritance for the abstract switch's logic ports (10.6.1.11).
+
+The ON knownness check observes only the selected object. `controls[0]`
+ignores X/Z elsewhere in the vector, while `controls & 4'b0001` references the
+whole vector and therefore detects X/Z in any bit (clause 6.22). The monitor
+watches the base object but activates RTL only when aggregate power changes.
+Isolation controls currently remain scalar objects.
 
 User Tcl libraries can be sourced or imported with standard Tcl packages
 (IEEE 1801-2018 clause 5.1):

@@ -9,12 +9,17 @@ class UPFAttr<string name, string attrMnemonic> : AttrDef<UPFDialect, name> {
 }
 def UPFExpressionTokenAttr : UPFAttr<"ExpressionToken", "token"> {
   let summary = "resolved operand or operator in a UPF Boolean expression";
+  // IEEE 1801-2018 5.4: sourceWidth identifies the whole HDL object; width
+  // and offset describe the selected packed part before context sizing.
   let parameters = (ins EnumParameter<UPFExpressionOpcode>:$opcode,
       OptionalParameter<"::mlir::StringAttr">:$control,
       OptionalParameter<"::mlir::IntegerAttr">:$value,
       OptionalParameter<"::mlir::IntegerAttr">:$unknown,
       DefaultValuedParameter<"bool", "false">:$isSigned,
-      DefaultValuedParameter<"bool", "false">:$fill);
+      DefaultValuedParameter<"bool", "false">:$fill,
+      DefaultValuedParameter<"unsigned", "1">:$width,
+      DefaultValuedParameter<"unsigned", "1">:$sourceWidth,
+      DefaultValuedParameter<"unsigned", "0">:$offset);
   let assemblyFormat = "`<` struct(params) `>`";
   let genVerifyDecl = 1;
 }

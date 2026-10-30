@@ -1,0 +1,41 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: not %t.o0 2>&1 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: not %t.o3 2>&1 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: not %t.bc 2>&1 | FileCheck %s
+// IEEE 1801-2018 6.22: OFF-only references do not have the ON knownness rule.
+// An OFF vector can mask X/Z and evaluate true, producing a conflict/error.
+// CHECK: UPF domain top.PD: ON and OFF conditions are simultaneously true
+// CHECK: vector OFF condition conflict passed
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1'b1;
+endmodule
+module top;
+  logic [3:0] shutdown = 4'bxzx0;
+  wire q;
+  leaf dut(q);
+  initial begin
+    #1;
+    if (q !== 1'b1) $fatal(1, "OFF-only unknowns poisoned ON");
+    shutdown[0] = 1;
+    #1;
+    if (q !== 1'bx) $fatal(1, "masked vector OFF did not conflict");
+    shutdown[0] = 0;
+    #1;
+    if (q !== 1'b1) $fatal(1, "vector conflict restoration failed");
+    $display("vector OFF condition conflict passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_power_domain PD -elements dut
+foreach net {VDD SW} {create_supply_net $net}
+create_power_switch PS -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout SW} \
+    -on_state {ON vin 1} -off_state {OFF {(shutdown & 4'b0001) == 4'b0001}}

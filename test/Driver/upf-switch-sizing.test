@@ -58,7 +58,7 @@ endmodule
 create_supply_net VDD
 foreach {instance expression} {
     bnot                 {~enable == 32'hffffffff}
-    sign_control         {signed_enable < 1}
+    sign_control         {/s < 1}
     unsigned_control     {enable < 1}
     mixed_sign           {8'sh80 == 32'hffffff80}
     both_signed          {8'sh80 == 32'shffffff80}

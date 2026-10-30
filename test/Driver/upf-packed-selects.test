@@ -1,0 +1,107 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --native-scheduler=eval --mlir-verify-each %t/design.sv -o %t.eval
+// RUN: %t.eval | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 5.3.3.2/5.4: indexed elements are distinct HDL objects.
+// 6.22 checks only selected bits; 9.2.2 watches every referenced base signal.
+// CHECK: packed power control selections passed
+
+//--- design.sv
+package audit;
+  int calls = 0;
+  function logic sample();
+    calls++;
+    return 1'b1;
+  endfunction
+endpackage
+module leaf(output wire q);
+  assign q = audit::sample();
+endmodule
+module bank;
+  logic [3:0] value = 4'b1xxx;
+endmodule
+module top;
+  logic [7:4] down = 4'bz10x;
+  logic [-2:1] up = 4'bz10x;
+  logic signed [3:0] signed_bus = -1;
+  logic [1:0][0:3] matrix = 8'bz110_10xz;
+  logic [65:0] wide = {3'b101, 63'bx};
+  bank banks[1:0]();
+  wire [17:0] q;
+  logic [17:0] expected;
+  leaf down_bit(q[0]), down_part(q[1]), down_plus(q[2]), down_minus(q[3]),
+       up_bit(q[4]), up_part(q[5]), up_plus(q[6]), matrix_bit(q[7]),
+       matrix_part(q[8]), wide_part(q[9]), hierarchy(q[10]), whole_mask(q[11]),
+       whole_signed(q[12]), full_part(q[13]), logical_bit(q[14]),
+       singleton_part(q[15]), paired_aliases(q[16]), wide_bit(q[17]);
+  task check;
+    if (q !== expected) $fatal(1, "got=%b expected=%b", q, expected);
+  endtask
+  initial begin
+    expected = '1;
+    expected[11] = 1'bx; expected[13] = 1'bx; expected[14] = 1'bx;
+    #1; check();
+    if (audit::calls != 15) $fatal(1, "initial activation count %0d", audit::calls);
+    down[7] = 1'bx; up[-2] = 1'bx; matrix[1][0] = 1'bx;
+    wide[0] = 1'bz; banks[0].value[3] = 0;
+    #1; check();
+    if (audit::calls != 15) $fatal(1, "unselected changes activated RTL");
+    down[5] = 1'bx;
+    expected[1] = 1'bx; expected[2] = 1'bx; expected[3] = 1'bx;
+    #1; check();
+    if (audit::calls != 15) $fatal(1, "unknown selection activated RTL");
+    down[5] = 0;
+    expected[1] = 1; expected[2] = 1; expected[3] = 1;
+    #1; check();
+    if (audit::calls != 18) $fatal(1, "part-select restoration count");
+    down[6] = 1'bz;
+    expected[0] = 1'bx; expected[1] = 1'bx; expected[2] = 1'bx;
+    expected[3] = 1'bx; expected[15] = 1'bx; expected[16] = 1'bx;
+    #1; check();
+    down[6] = 1;
+    expected[0] = 1; expected[1] = 1; expected[2] = 1;
+    expected[3] = 1; expected[15] = 1; expected[16] = 1;
+    #1; check();
+    if (audit::calls != 24) $fatal(1, "shared-base selection restoration count");
+    signed_bus[0] = 0;
+    expected[14] = 1;
+    #1; check();
+    if (audit::calls != 25) $fatal(1, "signed NORMAL change reran RTL");
+    $display("packed power control selections passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_net VDD
+foreach {instance expression} {
+    down_bit        {down [ 6 ]}
+    down_part       {down[6:5] == 2'b10}
+    down_plus       {down[5 +: 2] == 2'b10}
+    down_minus      {down[6 -: 2] == 2'b10}
+    up_bit          {up[-1]}
+    up_part         {up[-1:0] == 2'b10}
+    up_plus         {up[-1 +: 2] == 2'b10}
+    matrix_bit      {matrix[1][2]}
+    matrix_part     {matrix[0][0:1] == 2'b10}
+    wide_part       {wide[65:63] == 3'b101}
+    hierarchy       {banks[1]/value[3]}
+    whole_mask      {(down & 4'b0100) == 4'b0100}
+    whole_signed    {signed_bus < 0}
+    full_part       {signed_bus[3:0] < 0}
+    logical_bit     {!signed_bus[0]}
+    singleton_part  {down[6:6] == 1'b1}
+    paired_aliases  {a && b}
+    wide_bit        {wide[64] == 1'b0}
+} {
+    create_power_domain $instance -elements $instance
+    create_supply_net SW_$instance
+    create_power_switch PS_$instance -domain $instance \
+        -input_supply_port {vin VDD} -output_supply_port [list vout SW_$instance] \
+        -control_port {a down[6]} -control_port {b up[-1]} \
+        -on_state [list ON vin $expression]
+}

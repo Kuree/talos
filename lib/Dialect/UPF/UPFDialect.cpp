@@ -37,12 +37,19 @@ mlir::LogicalResult UPFDomainOp::verify() {
 mlir::LogicalResult ExpressionTokenAttr::verify(
     llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
     ExpressionOpcode opcode, mlir::StringAttr control, mlir::IntegerAttr value,
-    mlir::IntegerAttr unknown, bool isSigned, bool fill) {
+    mlir::IntegerAttr unknown, bool isSigned, bool fill, unsigned width,
+    unsigned sourceWidth, unsigned offset) {
   if (opcode == ExpressionOpcode::Control) {
     if (!control || control.getValue().empty() || value || unknown || fill)
       return emitError() << "control token requires a nonempty path only";
+    if (!width || sourceWidth > 4096 || width > sourceWidth ||
+        offset > sourceWidth - width)
+      return emitError()
+             << "control selection must fit a source of 1..4096 bits";
     return mlir::success();
   }
+  if (width != 1 || sourceWidth != 1 || offset != 0)
+    return emitError() << "only control tokens carry selection dimensions";
   if (opcode == ExpressionOpcode::Constant) {
     if (control || !value || !unknown || value.getType() != unknown.getType())
       return emitError()
@@ -83,9 +90,10 @@ ExpressionAttr::verify(llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
     if (opcode == ExpressionOpcode::Control ||
         opcode == ExpressionOpcode::Constant) {
       unsigned width = opcode == ExpressionOpcode::Control
-                           ? 1
+                           ? token.getWidth()
                            : token.getValue().getValue().getBitWidth();
-      bool boolean = width == 1 || (token.getUnknown().getValue().isZero() &&
+      bool boolean = width == 1 || (opcode == ExpressionOpcode::Constant &&
+                                    token.getUnknown().getValue().isZero() &&
                                     token.getValue().getValue().ule(1));
       stack.push_back({1, width, boolean});
       continue;

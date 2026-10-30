@@ -1,0 +1,76 @@
+# REQUIRES: upf
+# RUN: %split-file %s %t
+# RUN: talos --upf %t/design.upf -emit-slang %t/design.sv -o %t.mlir | FileCheck %s
+# IEEE 1801-2018 5.3.3.2/5.4/5.11/6.22: unsupported selectors and invalid
+# objects are catchable Tcl errors, and failed switch declarations are atomic.
+# CHECK: control selection error cases passed
+
+#--- design.sv
+module leaf(output wire q);
+  assign q = 1'b1;
+endmodule
+module top;
+  logic [3:0] mode;
+  logic scalar;
+  logic [0:3] ascending;
+  logic [1:0][3:0] matrix;
+  logic unpacked_array [3:0];
+  logic [4096:0] too_wide;
+  real r;
+  typedef enum logic [1:0] {ZERO = 0, ONE = 1} state_t;
+  state_t state;
+  typedef enum logic [7:4] {VALUE = 10} ranged_t;
+  ranged_t ranged;
+  wire q;
+  leaf dut(q);
+endmodule
+
+#--- design.upf
+proc expect_error {script pattern} {
+    set code [catch {uplevel 1 $script} message]
+    if {$code != 1 || ![string match $pattern $message]} {
+        error "expected <$pattern>, got code $code <$message>"
+    }
+}
+create_power_domain PD -elements dut
+foreach net {VDD SW} {create_supply_net $net}
+set base {-domain PD -input_supply_port {vin VDD} -output_supply_port {vout SW}}
+proc on_expression {expression} {
+    create_power_switch PS {*}$::base -on_state [list ON vin $expression]
+}
+foreach expression {{mode[4]} {mode[-1]} {mode[3:-1]} {ascending[4]}
+                    {mode[0 +: 5]} {mode[0 -: 2]} {ranged[7]}} {
+    expect_error [list on_expression $expression] {*outside the HDL range*}
+}
+foreach expression {{mode[3:2][1]} {mode[1 +: 2][0]} {mode[3 -: 2][0:0]}
+                    {matrix[1:0][0]} {matrix[1][3:2][2]}} {
+    expect_error [list on_expression $expression] {*part-select must be the final selector*}
+}
+expect_error {on_expression {state[0][0]}} {*scalar control*}
+foreach expression {{mode[0:3]} {mode[3:4]} {ascending[3:0]}} {
+    expect_error [list on_expression $expression] {*direction disagrees*}
+}
+foreach expression {{mode[]} {mode[scalar]} {mode[1+1]} {mode[1'b0]}
+                    {mode[+-1]} {mode[9223372036854775808]}} {
+    expect_error [list on_expression $expression] {*constant decimal indices*}
+}
+foreach expression {{mode[0 +: 0]} {mode[0 -: -1]} {mode[0 +: 4097]}} {
+    expect_error [list on_expression $expression] {*width must be 1..4096*}
+}
+foreach expression {{mode[9223372036854775807 +: 2]}
+                    {mode[-9223372036854775808 -: 2]}} {
+    expect_error [list on_expression $expression] {*overflows its index*}
+}
+expect_error {on_expression {mode[1}} {*missing closing bracket*}
+expect_error {on_expression {scalar[0]}} {*scalar control*}
+expect_error {on_expression {mode}} {*explicit comparison*}
+expect_error {on_expression {unpacked_array[0]}} {*packed integral design object*}
+expect_error {on_expression {r == 0}} {*packed integral design object*}
+expect_error {on_expression {too_wide[0]}} {*1..4096 bits*}
+expect_error {create_power_switch PS {*}$base -control_port {a mode} -on_state {ON vin a}} {*one-bit integral*}
+expect_error {create_power_switch PS {*}$base -control_port {a mode[0]} -on_state {ON vin {a[0]}}} {*scalar control*}
+# Packed multidimensional elements can be referenced directly, and scalar
+# switch ports can bind selected bits without making the entire vector known.
+create_power_switch PS {*}$base -control_port {a mode[0]} \
+    -on_state {ON vin {a && matrix[1][3:2] == 2'b10}}
+puts "control selection error cases passed"

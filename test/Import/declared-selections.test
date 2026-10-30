@@ -1,0 +1,17 @@
+// RUN: %split-file %S/../Driver/upf-declared-selections.test %t
+// RUN: talos -emit-slang %t/design.sv -o %t.mlir
+// RUN: talos-opt %t.mlir | talos-opt | FileCheck %s
+// IEEE 1801-2018 5.4 needs nominal selection types after the Slang AST is gone.
+// The storage types of named_words/direct_words are identical, but selection
+// signs and row ranges differ. These builtin attributes must roundtrip.
+// CHECK: slang.symbol.variable @{{.*}}named_words attributes {declared_selection_signedness = array<i1: false, true, false>
+// CHECK-SAME: >>, !slang.packed_array<7 : 4 x !slang.integral<1, true, true
+// CHECK: slang.symbol.variable @{{.*}}direct_words attributes {declared_selection_signedness = array<i1: true, false, false>
+// CHECK-SAME: >>, !slang.packed_array<3 : 0 x !slang.integral<1, false, true
+// CHECK: slang.symbol.variable @{{.*}}aliased_words attributes {declared_selection_signedness = array<i1: true, false, false>
+// CHECK-SAME: >>, !slang.packed_array<3 : 0 x !slang.integral<1, false, true
+// CHECK: slang.symbol.variable @{{.*}}one attributes {declared_selection_signedness = array<i1: true, false, false>
+// CHECK-SAME: >>, !slang.packed_array<0 : 0 x !slang.integral<1, false, true
+// CHECK: slang.symbol.variable @{{.*}}states attributes {declared_selection_signedness = array<i1: false, true, false>
+// CHECK-SAME: >>, !slang.enum<"top.state_t"
+// CHECK: slang.symbol.variable @{{.*}}ranged attributes {declared_selection_signedness = array<i1: false, false>

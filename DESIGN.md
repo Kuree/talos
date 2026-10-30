@@ -126,9 +126,12 @@ general supply-network initialization, voltage/state evaluation, the HDL UPF
 package (`supply_on` / `supply_off`) and retention remain to be implemented.
 
 The simulation slice accepts independent switchable domains, each with a
-Boolean switch condition over scalar integral controls. Resolved typed postfix
+Boolean switch condition over packed integral HDL controls. Resolved typed postfix
 attributes retain ON/OFF expression structure, widths and signedness (IEEE
-1801-2018 5.4/6.22). The switch monitor watches all referenced controls, but
+1801-2018 5.4/6.22). Reference tokens preserve the source width, selected width
+and flattened offset, with source ranges resolved before emission. Knownness
+checks use selected references; monitor sensitivity uses their base objects.
+The switch monitor watches all referenced controls, but
 restoration wakes level logic through the aggregate NORMAL state. Guards and
 NBA helpers evaluate controls inline to avoid stale monitor state. It supports
 packed integral domain state,

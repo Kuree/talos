@@ -31,6 +31,7 @@
 #include "slang/ast/EvalContext.h"
 #include "slang/ast/Lookup.h"
 #include "slang/ast/SemanticFacts.h"
+#include "slang/ast/TypeProvider.h"
 #include "slang/ast/expressions/Operator.h"
 #include "slang/ast/symbols/PortSymbols.h"
 #include "slang/ast/symbols/SubroutineSymbols.h"
@@ -1858,6 +1859,52 @@ private:
         return &declaredType->getType();
     }
     return nullptr;
+  }
+
+  void appendDeclaredSelections(const slang::ast::Type &source,
+                                NamedAttrList &attrs) {
+    if (!source.isIntegral() || source.getBitWidth() > 4096)
+      return;
+    if (auto found = declaredSelectionsCache.find(&source);
+        found != declaredSelectionsCache.end()) {
+      attrs.set("declared_selection_types", found->second.first);
+      attrs.set("declared_selection_signedness", found->second.second);
+      return;
+    }
+    // IEEE 1801-2018 5.4 evaluates HDL selections with the HDL's types.
+    // Canonical storage types erase typedef boundaries that affect both row
+    // signedness and the bounds of subsequent packed selections. Freeze each
+    // legal element-selection stage while Slang's declared types still exist.
+    SmallVector<Attribute> types;
+    SmallVector<bool> signs;
+    slang::ast::TypeProvider provider(selectionTypeAllocator);
+    const slang::ast::Type *current = &source;
+    bool sign = isWholeTypeSigned(source);
+    for (unsigned depth = 0; depth <= 256; ++depth) {
+      types.push_back(TypeAttr::get(typeConverter.convert(*current)));
+      signs.push_back(sign);
+      const auto &type = unwrapTypeAliases(*current);
+      if (type.kind == slang::ast::SymbolKind::PackedArrayType) {
+        const auto &element =
+            type.as<slang::ast::PackedArrayType>().elementType;
+        bool named = element.kind == slang::ast::SymbolKind::TypeAlias;
+        current = !named && isWholeTypeSigned(type)
+                      ? &element.makeUnsigned(provider)
+                      : &element;
+        sign = named && isWholeTypeSigned(element);
+      } else if (type.isIntegral() && !type.isScalar()) {
+        current = type.isFourState() ? &compilation.getLogicType()
+                                     : &compilation.getBitType();
+        sign = false;
+      } else {
+        break;
+      }
+    }
+    auto typeArray = builder.getArrayAttr(types);
+    auto signArray = builder.getDenseBoolArrayAttr(signs);
+    declaredSelectionsCache.try_emplace(&source, typeArray, signArray);
+    attrs.set("declared_selection_types", typeArray);
+    attrs.set("declared_selection_signedness", signArray);
   }
 
   template <typename Node>
@@ -6837,6 +6884,12 @@ private:
       if (const slang::ast::Type *source = getUncanonicalizedSemanticType(node))
         if (ArrayAttr layers = getVPITypedefLayers(*source))
           attrs.set("vpi_typedef_layers", layers);
+      if constexpr (std::derived_from<Node, slang::ast::Symbol>)
+        if (node.kind == slang::ast::SymbolKind::Variable ||
+            node.kind == slang::ast::SymbolKind::Net ||
+            node.kind == slang::ast::SymbolKind::Port)
+          if (const auto *source = getUncanonicalizedSemanticType(node))
+            appendDeclaredSelections(*source, attrs);
       // A display name is not an enum identity: separate compilation units may
       // each legally declare `$unit::state_t`. Freeze Slang's exact matching
       // type identity on aliases, constants, and enum-bearing values that must
@@ -7552,6 +7605,12 @@ private:
   const SDFAnnotationDatabase &sdfAnnotations;
   bool twoState;
   SlangTypeConverter typeConverter;
+  // Type conversion caches source type pointers; keep projected types alive
+  // throughout import, including repeated references to one declared type.
+  slang::BumpAllocator selectionTypeAllocator;
+  llvm::DenseMap<const slang::ast::Type *,
+                 std::pair<ArrayAttr, DenseBoolArrayAttr>>
+      declaredSelectionsCache;
   llvm::DenseMap<const slang::ast::SystemSubroutine *, bool> builtinMethodCache;
   llvm::DenseMap<const slang::ast::Type *, ArrayAttr> arrayQueryDimensionCache;
   llvm::DenseMap<const slang::ast::Type *, ArrayAttr> vpiTypedefLayerCache;

@@ -23,6 +23,7 @@ module leaf(output wire q);
 endmodule
 module top;
   logic en = 0;
+  wire [3:0] control_net = {3'bxxx, en};
   wire q;
   leaf dut(q);
   initial begin
@@ -50,4 +51,4 @@ create_power_domain PD -elements dut
 foreach net {VDD SW} {create_supply_net $net}
 create_power_switch PS -domain PD \
     -input_supply_port {vin VDD} -output_supply_port {vout SW} \
-    -control_port {enable en} -on_state {ON vin {1 || enable}}
+    -control_port {enable control_net[0]} -on_state {ON vin {1 || enable}}

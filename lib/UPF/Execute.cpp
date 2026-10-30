@@ -1,6 +1,7 @@
 // Tcl executes the language; this file implements UPF commands and design
 // lookup.
 #include "BooleanExpression.h"
+#include "ControlReference.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Verifier.h"
@@ -227,6 +228,52 @@ struct Session {
     if (isSigned)
       *isSigned = integral.getIsSigned();
     return true;
+  }
+  FailureOr<ControlReference>
+  reference(StringRef name,
+            const std::map<std::string, ControlReference> *aliases = nullptr) {
+    // Match the longest real object first: brackets can belong to an instance
+    // array/generate name, rather than to the final HDL signal selection.
+    size_t cut = name.size();
+    while (true) {
+      StringRef prefix = name.take_front(cut).rtrim();
+      std::optional<ControlReference> resolved;
+      if (aliases) {
+        auto found = aliases->find(prefix.str());
+        if (found != aliases->end())
+          resolved = found->second;
+      }
+      auto report = [&](const llvm::Twine &message) { error(message); };
+      if (!resolved) {
+        std::string path = object(prefix);
+        if (!path.empty()) {
+          auto type =
+              objects.at(path)->getAttrOfType<TypeAttr>("semantic_type");
+          auto result = ControlReference::create(
+              path, type ? type.getValue() : Type{},
+              objects.at(path)->getAttrOfType<ArrayAttr>(
+                  "declared_selection_types"),
+              objects.at(path)->getAttrOfType<DenseBoolArrayAttr>(
+                  "declared_selection_signedness"),
+              report);
+          if (failed(result))
+            return failure();
+          resolved = *result;
+        }
+      }
+      if (resolved) {
+        if (failed(resolved->select(name.drop_front(cut), report)))
+          return failure();
+        return *resolved;
+      }
+      if (!cut)
+        break;
+      cut = name.rfind('[', cut - 1);
+      if (cut == StringRef::npos)
+        break;
+    }
+    error("design object not found: " + name);
+    return failure();
   }
   int run(StringRef command, Tcl_Size objc, Tcl_Obj *const objv[]) {
     Options opts;
@@ -547,7 +594,7 @@ struct Session {
         return error("a switch must have distinct input and output supplies");
       if (on[1] != input[0])
         return error("on-state references an unknown input supply port");
-      std::map<std::string, upf::ExpressionTokenAttr> aliases;
+      std::map<std::string, ControlReference> aliases;
       for (auto port : controlPorts) {
         std::vector<std::string> pair;
         if (!list(port, pair))
@@ -559,31 +606,35 @@ struct Session {
         if (pair[0] == input[0] || pair[0] == output[0] ||
             aliases.count(pair[0]))
           return error("duplicate power-switch port name: " + pair[0]);
-        std::string resolved;
-        bool isSigned;
-        if (!control(pair[1], resolved, &isSigned))
+        auto resolved = reference(pair[1]);
+        if (failed(resolved))
           return TCL_ERROR;
-        aliases.emplace(pair[0],
-                        upf::ExpressionTokenAttr::get(
-                            module.getContext(), upf::ExpressionOpcode::Control,
-                            StringAttr::get(module.getContext(), resolved), {},
-                            {}, isSigned, false));
+        // IEEE 1801-2018 6.22/10.6.1.11 model a switch control as a logic
+        // port. Keep scalar bindings; 5.4 permits direct HDL vector references
+        // without assuming that a UPF port inherits the bound net's ranges.
+        if (resolved->width != 1)
+          return error("power-switch control port requires a one-bit integral "
+                       "design object; reference vectors directly: " +
+                       pair[1]);
+        // A created UPF logic port is scalar unsigned logic (6.19/6.22).
+        auto scalar =
+            slangir::IntegralType::get(module.getContext(), 1, false, true, 0,
+                                       0, slangir::IntegralFlavor::Logic);
+        resolved->types =
+            ArrayAttr::get(module.getContext(), {TypeAttr::get(scalar)});
+        resolved->signs = DenseBoolArrayAttr::get(module.getContext(), {false});
+        resolved->stage = 0;
+        resolved->isSigned = false;
+        aliases.emplace(pair[0], *resolved);
       }
       auto resolveControl =
           [&](StringRef name) -> FailureOr<upf::ExpressionTokenAttr> {
-        auto found = aliases.find(name.str());
-        if (found != aliases.end())
-          return found->second;
         // IEEE 1801-2018 5.4 also permits direct HDL object references,
         // interpreted in the defining command's scope.
-        std::string resolved;
-        bool isSigned;
-        if (!control(name, resolved, &isSigned))
+        auto resolved = reference(name, &aliases);
+        if (failed(resolved))
           return failure();
-        return upf::ExpressionTokenAttr::get(
-            module.getContext(), upf::ExpressionOpcode::Control,
-            StringAttr::get(module.getContext(), resolved), {}, {}, isSigned,
-            false);
+        return resolved->token(module.getContext());
       };
       auto report = [&](const llvm::Twine &message) { error(message); };
       auto onExpression = parseUPFBooleanExpression(on[2], module.getContext(),

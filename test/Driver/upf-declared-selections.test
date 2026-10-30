@@ -1,0 +1,87 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 5.4 uses declared HDL types, including nominal element
+// boundaries erased by canonical storage types. 6.19/6.22 logic ports are scalar.
+// CHECK: declared control selection types passed
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1'b1;
+endmodule
+module top;
+  typedef logic signed [7:4] word_t;
+  word_t [1:0] named_words = '1;
+  logic signed [1:0][7:4] direct_words = '1;
+  typedef logic signed [1:0][7:4] matrix_t;
+  matrix_t aliased_words = '1;
+  logic signed [1:0][7:7] one = '1;
+  logic signed [1:0][7:4][-2:1] three = '1;
+  typedef enum logic signed [1:0] {NEG = -1, ZERO = 0} state_t;
+  state_t [1:0] states = {NEG, NEG};
+  typedef enum logic [7:4] {VALUE = 4'b1010} ranged_t;
+  ranged_t ranged = VALUE;
+  typedef enum logic {OFF, ON} bit_enum_t;
+  bit_enum_t bit_enum = ON;
+  logic signed [0:0] scalar = 1;
+  wire [17:0] q;
+  logic [17:0] expected;
+  leaf direct_bit(q[0]), named_bit(q[1]), direct_row(q[2]), named_row(q[3]),
+       named_whole(q[4]), aliased_bit(q[5]), singleton(q[6]), three_bit(q[7]),
+       enum_row(q[8]), enum_ranged_bit(q[9]), enum_scalar_bit(q[10]),
+       signed_scalar(q[11]), scalar_alias(q[12]), full_part(q[13]),
+       enum_part(q[14]), named_outer_part(q[15]), named_single_part(q[16]),
+       enum_outer_part(q[17]);
+  task check;
+    if (q !== expected) $fatal(1, "got=%b expected=%b", q, expected);
+  endtask
+  initial begin
+    expected = '1;
+    expected[2] = 1'bx; expected[4] = 1'bx;
+    expected[12] = 1'bx; expected[13] = 1'bx;
+    expected[15] = 1'bx; expected[16] = 1'bx; expected[17] = 1'bx;
+    #1; check();
+    one = '0;
+    expected[6] = 1'bx;
+    #1; check();
+    one = '1;
+    expected[6] = 1;
+    #1; check();
+    $display("declared control selection types passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_net VDD
+foreach {instance expression} {
+    direct_bit       {direct_words[0][0]}
+    named_bit        {named_words[0][4]}
+    direct_row       {direct_words[0] < 0}
+    named_row        {named_words[0] < 0}
+    named_whole      {named_words < 0}
+    aliased_bit      {aliased_words[0][0]}
+    singleton        {one[0][0]}
+    three_bit        {three[0][7][-2]}
+    enum_row         {states[0] < 0}
+    enum_ranged_bit  {ranged[3]}
+    enum_scalar_bit  {bit_enum[0]}
+    signed_scalar    {scalar < 1}
+    scalar_alias     {a < 1}
+    full_part        {direct_words[0][3:0] < 0}
+    enum_part        {ranged[1:0] == 2'b10}
+    named_outer_part {named_words[1:0] < 0}
+    named_single_part {named_words[0:0] < 0}
+    enum_outer_part  {states[1:0] < 0}
+} {
+    create_power_domain $instance -elements $instance
+    create_supply_net SW_$instance
+    create_power_switch PS_$instance -domain $instance \
+        -input_supply_port {vin VDD} -output_supply_port [list vout SW_$instance] \
+        -control_port {a scalar} -on_state [list ON vin $expression]
+}

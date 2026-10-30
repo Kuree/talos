@@ -1,0 +1,86 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 5.4 permits HDL vector expressions; 6.22 checks all their
+// referenced bits for X/Z. 9.5.3/9.6.7 preserve NBA cancellation and restoration.
+// CHECK: vector power controls passed
+
+//--- design.sv
+module leaf(input logic clk, d, output logic q, y);
+  always @(posedge clk) q <= #3 d;
+  always_comb y = d;
+endmodule
+module top;
+  logic [7:4] mode = 0;
+  logic signed [3:0] signed_mode = -1;
+  bit [2:0] ready_mode = 5;
+  logic [3:0] enables = 4'bxxx1;
+  wire [3:0] control_net = enables;
+  typedef enum logic [1:0] {DISABLED = 0, READY = 2} state_t;
+  state_t state = READY;
+  logic clk = 0, d = 1;
+  wire q, y;
+  leaf dut(clk, d, q, y);
+  initial begin
+    #1;
+    if (q !== 1'bx || y !== 1'bx) $fatal(1, "initial vector OFF failed");
+    mode = 4'b1010;
+    #1;
+    if (q !== 1'bx || y !== 1'b1) $fatal(1, "mixed known vector did not restore");
+    clk = 1;
+    #4;
+    if (q !== 1'b1) $fatal(1, "initial NBA failed");
+    clk = 0; d = 0;
+    #1 clk = 1;
+    #1 ready_mode = 0;
+    #1;
+    if (q !== 1'bx || y !== 1'bx) $fatal(1, "two-state vector loss failed");
+    ready_mode = 5;
+    #3;
+    if (q !== 1'bx || y !== 1'b0) $fatal(1, "old NBA survived vector restore");
+    signed_mode = 1;
+    #1;
+    if (y !== 1'bx) $fatal(1, "signed comparison ignored sign");
+    signed_mode = -1;
+    #1;
+    if (y !== 1'b0) $fatal(1, "signed vector restoration failed");
+    state = DISABLED;
+    #1;
+    if (y !== 1'bx) $fatal(1, "enum vector loss failed");
+    state = READY;
+    #1;
+    if (y !== 1'b0) $fatal(1, "enum vector restoration failed");
+    mode = 4'b1x10;
+    #1;
+    if (y !== 1'bx) $fatal(1, "referenced X did not corrupt");
+    mode = 4'b1z10;
+    #1;
+    if (y !== 1'bx) $fatal(1, "referenced Z did not corrupt");
+    mode = 4'b1010;
+    #1;
+    if (y !== 1'b0) $fatal(1, "vector recovery failed");
+    enables[0] = 0;
+    #1;
+    if (y !== 1'bx) $fatal(1, "selected port control did not power down");
+    enables[0] = 1;
+    clk = 0; d = 1;
+    #1 clk = 1;
+    #4;
+    if (q !== 1'b1 || y !== 1'b1) $fatal(1, "fresh NBA failed");
+    $display("vector power controls passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_power_domain PD -elements dut
+foreach net {VDD SW} {create_supply_net $net}
+create_power_switch PS -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout SW} \
+    -control_port {allow control_net[0]} \
+    -on_state {ON vin {mode == 4'b1010 && signed_mode < 0 && ready_mode == 3'd5 && state == 2 && allow}}

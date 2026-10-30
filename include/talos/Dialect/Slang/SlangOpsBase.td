@@ -107,7 +107,9 @@ class SlangSymbolASTNodeOp<string mnemonic, list<Trait> traits = [],
           SymbolNameAttr:$sym_name,
           OptionalAttr<StrAttr>:$name,
           OptionalAttr<StrAttr>:$hierarchical_name,
-          OptionalAttr<TypeAttr>:$semantic_type
+          OptionalAttr<TypeAttr>:$semantic_type,
+          OptionalAttr<TypeArrayAttr>:$declared_selection_types,
+          OptionalAttr<DenseBoolArrayAttr>:$declared_selection_signedness
         ), symbolArgs)> {
   let assemblyFormat = "$sym_name attr-dict-with-keyword $body";
 }
