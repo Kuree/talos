@@ -545,6 +545,11 @@ LogicalResult synchronousHelper(sim::SimCallOp call) {
         pending.push_back(nested);
         return WalkResult::advance();
       }
+      // IEEE 1801-2018 11.2.3.2.6 samples synchronously. Its conditional
+      // diagnostic records failure but queues no work needing cancellation.
+      // Keep the op's scheduler/IO effects for optimization and error handling.
+      if (isa<sim::SimSupplyReadOp>(op))
+        return WalkResult::advance();
       bool asynchronous =
           sim::isSuspensionOp(op) ||
           isa<sim::SimSpawnOp, sim::SimTaskCallOp,
@@ -746,13 +751,11 @@ struct Lowering {
       for (auto name : supply.getNames())
         supplyTable.push_back(
             {cast<StringAttr>(name), d.id, supply.getWritable()});
-      Operation *first = root.getBody().front().getTerminator();
-      for (auto &op : root.getBody().front())
-        if (isa<sim::SimSpawnOp>(op)) {
-          first = &op;
-          break;
-        }
-      builder.setInsertionPoint(first);
+      // IEEE 1801-2018 9.2.1 initializes supplies before HDL model
+      // initialization. Declaration initializers can already read or write a
+      // supply (11.2.3.2.6/11.2.3.3.4); initializing only before the first
+      // process spawn would sample the wrong value or overwrite such a write.
+      builder.setInsertionPointToStart(&root.getBody().front());
       Value ref = handle(builder, supply.getLoc(), root.getArgument(0), d);
       store(builder, supply.getLoc(), ref,
             arith::ConstantIntOp::create(builder, supply.getLoc(),
@@ -1398,9 +1401,11 @@ struct ElaborateUPFPass
         getOperation().getOps<upf::UPFSupplyOp>());
     SmallVector<upf::UPFSupplySetOp> sets(
         getOperation().getOps<upf::UPFSupplySetOp>());
-    bool controls = false;
-    getOperation().walk([&](sim::SimSupplyControlOp) { controls = true; });
-    if (domains.empty() && supplies.empty() && sets.empty() && !controls)
+    bool accesses = false;
+    getOperation().walk([&](Operation *op) {
+      accesses |= isa<sim::SimSupplyControlOp, sim::SimSupplyReadOp>(op);
+    });
+    if (domains.empty() && supplies.empty() && sets.empty() && !accesses)
       return;
     // IEEE 1801-2018 6.20 assigns an instance to exactly one effective extent.
     // Until nested-domain extent partitioning exists, require disjoint roots;
@@ -1448,7 +1453,7 @@ struct ElaborateUPFPass
         signalPassFailure();
         return;
       }
-    if (failed(lowerSupplyControls(*designs.begin(), lowering.supplyTable))) {
+    if (failed(lowerSupplyAccesses(*designs.begin(), lowering.supplyTable))) {
       signalPassFailure();
       return;
     }

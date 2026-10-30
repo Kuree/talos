@@ -1,0 +1,26 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/read.mlir --canonicalize --cse | talos-opt | FileCheck %s
+// IEEE 1801-2018 11.2.3.2.6: lookups read storage and can report an error.
+// Preserve duplicate/discarded queries and ordering across a supply write;
+// neither CSE nor dead-result removal may discard an executed error path.
+// CHECK-LABEL: simulation.func @read
+// CHECK: simulation.supply.read
+// CHECK: simulation.supply.read
+// CHECK: simulation.supply.control
+// CHECK: simulation.supply.read
+
+//--- read.mlir
+module {
+  simulation.func @read(
+      %ctx: !simulation.context {simulation.capture_kind = 0 : i32},
+      %name: !simulation.string {simulation.capture_kind = 1 : i32},
+      %voltage: f64 {simulation.capture_kind = 1 : i32}) -> i64
+      attributes {entry_kind = 8 : i32} {
+    %on = arith.constant true
+    %first = simulation.supply.read %ctx %name
+    %duplicate = simulation.supply.read %ctx %name
+    %status = simulation.supply.control %ctx %name voltage %voltage on %on
+    %last = simulation.supply.read %ctx %name
+    simulation.return %last : i64
+  }
+}

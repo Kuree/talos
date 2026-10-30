@@ -1351,7 +1351,18 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
     // real-reactive continuation without losing the runtime publication. Keep
     // the complete containing actor in Tier 3 until real transition records
     // are part of the native schedule ABI.
-    if (hasRealValue) {
+    // Pure arithmetic in the one-shot root initializer is not a reactive
+    // publication or a value carried through a wait. For example, the initial
+    // UPF NORMAL predicate can decode voltages after HDL declaration calls
+    // (IEEE 1801-2018 9.2.1) without depending on store forwarding to fold it.
+    // Keep real storage accesses/publications and all reactive actors under
+    // the existing restriction; their transition ABI remains unchanged.
+    auto function = operation->getParentOfType<sim::SimFuncOp>();
+    bool pureRootArithmetic =
+        function &&
+        function.getEntryKind() == sim::EntryKind::RootInitializer &&
+        isMemoryEffectFree(operation);
+    if (hasRealValue && !pureRootArithmetic) {
       requireBytecodeFragment(operation,
                               "real-valued reactive state requires bytecode");
       excludeBytecodeActor(operation);

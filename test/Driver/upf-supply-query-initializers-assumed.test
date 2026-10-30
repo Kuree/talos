@@ -1,0 +1,11 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-supply-query-initializers.test %t
+// RUN: talos --upf-assume-powered-inputs --upf %t/design.upf -DASSUME -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf-assume-powered-inputs --upf %t/design.upf -DASSUME -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf-assume-powered-inputs --upf %t/design.upf -DASSUME -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// Configured compatibility values also precede every HDL declaration query;
+// IEEE 1801-2018 9.2.1/11.2.3.2.6 initialization/read ordering is unchanged.
+// CHECK: declaration-time supply queries and writes passed

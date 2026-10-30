@@ -9,7 +9,7 @@ struct SupplyTableEntry {
   bool writable;
 };
 mlir::LogicalResult
-lowerSupplyControls(sim::SimDesignOp design,
+lowerSupplyAccesses(sim::SimDesignOp design,
                     llvm::ArrayRef<SupplyTableEntry> entries);
 } // namespace talos
 #endif

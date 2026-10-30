@@ -1,0 +1,64 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/pure.mlir -o %t/pure.out.mlir --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph,talos-sim-verify-compute-graph),test-talos-native-aot-analysis)' 2>&1 | FileCheck %s --check-prefix=PURE
+// RUN: talos-opt %t/write.mlir -o %t/write.out.mlir --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph,talos-sim-verify-compute-graph),test-talos-native-aot-analysis)' 2>&1 | FileCheck %s --check-prefix=STATE
+// RUN: talos-opt %t/read.mlir -o %t/read.out.mlir --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph,talos-sim-verify-compute-graph),test-talos-native-aot-analysis)' 2>&1 | FileCheck %s --check-prefix=STATE
+// Pure root arithmetic executes once without a reactive publication or wait.
+// It includes initial UPF voltage-policy evaluation (IEEE 1801-2018 9.2.1).
+// Shared real storage reads/writes retain their conservative runtime admission.
+// PURE: native-aot eligible=true fully=true
+// PURE-NEXT: actor 0 @root
+// PURE-NOT: requires bytecode
+// STATE: native-aot eligible=false fully=false
+// STATE: reason real-valued reactive state requires bytecode
+
+//--- pure.mlir
+module {
+  simulation.design @pure {
+    simulation.scope.decl 0
+    simulation.storage.decl 0 in 0 : i32 design
+    simulation.storage.decl 1 in 0 : i1 design
+    simulation.code_unit.decl 1 in 0 root_initializer hierarchy "root"
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32})
+        attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
+      %src = simulation.context.storage %ctx[0] : !simulation.ref<i32>
+      %dst = simulation.context.storage %ctx[1] : !simulation.ref<i1>
+      %integer = simulation.ref.load %src : !simulation.ref<i32> -> i32
+      %real = simulation.real.from_integer %integer signed = true : i32 -> f64
+      %scale = arith.constant 1.0e6 : f64
+      %zero = arith.constant 0.0 : f64
+      %volts = arith.divf %real, %scale : f64
+      %on = arith.cmpf ogt, %volts, %zero : f64
+      simulation.ref.store %on to %dst : i1, !simulation.ref<i1>
+      simulation.return
+    }
+  }
+}
+//--- write.mlir
+module {
+  simulation.design @write {
+    simulation.scope.decl 0
+    simulation.storage.decl 0 in 0 : f64 design
+    simulation.code_unit.decl 1 in 0 root_initializer hierarchy "root"
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32})
+        attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
+      %dst = simulation.context.storage %ctx[0] : !simulation.ref<f64>
+      %real = arith.constant 1.0 : f64
+      simulation.ref.store %real to %dst : f64, !simulation.ref<f64>
+      simulation.return
+    }
+  }
+}
+//--- read.mlir
+module {
+  simulation.design @read {
+    simulation.scope.decl 0
+    simulation.storage.decl 0 in 0 : f64 design
+    simulation.code_unit.decl 1 in 0 root_initializer hierarchy "root"
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32})
+        attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
+      %src = simulation.context.storage %ctx[0] : !simulation.ref<f64>
+      %real = simulation.ref.load %src : !simulation.ref<f64> -> f64
+      simulation.return
+    }
+  }
+}

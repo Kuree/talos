@@ -124,7 +124,14 @@ connections, `create_supply_set`, `associate_supply_set`,
 implemented subset are diagnosed. Root supplies initially are OFF (IEEE
 1801-2018 9.2.1). The compiler-provided SystemVerilog package `UPF` implements
 `supply_on` / `supply_off` against absolute UPF root handles, including eligible
-net/port and implicit primary-function aliases (11.2.3). Connected unresolved
+net/port and implicit primary-function aliases (11.2.3). `get_supply_value`
+samples those roots, including protected outputs, through an effectful
+`simulation.supply.read` operation expanded to exact dynamic-name dispatch and
+storage reads before target lowering (11.2.3.2.6). Queries preserve ordinary
+propagation timing without introducing deferred mirror sensitivity. The public
+enum/int packed64 snapshot is explicitly repacked from private root storage;
+state, voltage, and on-state accessors and voltage-conversion helpers remain
+constant-capable SV functions (11.2.2/11.2.4). Connected unresolved
 supplies share one per-context state/voltage storage value, with signed32
 microvolts on both native and wasm32 targets. Unmodified ON definitions require
 FULL_ON primary power and ground; ground can be FULL_ON at zero volts (4.7.4).

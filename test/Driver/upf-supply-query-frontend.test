@@ -1,0 +1,30 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: not talos --upf %t/empty.upf -emit-slang %t/constant.sv -o %t.mlir 2>&1 | FileCheck %s --check-prefix=CONSTANT
+// RUN: talos --upf %t/empty.upf -O0 --mlir-verify-each %t/no-roots.sv -o %t.o0
+// RUN: not %t.o0 2>&1 | FileCheck %s --check-prefix=EMPTY
+// RUN: talos --upf %t/empty.upf -O3 --mlir-verify-each %t/no-roots.sv -o %t.o3
+// RUN: not %t.o3 2>&1 | FileCheck %s --check-prefix=EMPTY
+// RUN: talos --upf %t/empty.upf -O0 --execution-tier=bytecode %t/no-roots.sv -o %t.bc
+// RUN: not %t.bc 2>&1 | FileCheck %s --check-prefix=EMPTY
+// IEEE 1801-2018 11.2.3.2.6: runtime queries are nonconstant and executed
+// errors remain observable even when there are no UPF declarations at all.
+// CONSTANT: '$talos_upf_supply_read' is not allowed in a constant context
+// EMPTY-COUNT-1: UPF supply query failed for
+// EMPTY: empty UPF query diagnosed
+
+//--- constant.sv
+module top;
+  localparam UPF::upfSupplyTypeT value = UPF::get_supply_value("/top/N");
+endmodule
+//--- no-roots.sv
+module top;
+  initial begin
+    if (0) void'(UPF::get_supply_value("/unreachable"));
+    void'(UPF::get_supply_value("/top/missing"));
+    $display("empty UPF query diagnosed");
+    $finish;
+  end
+endmodule
+//--- empty.upf
+upf_version 3.1

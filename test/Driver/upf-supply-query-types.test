@@ -1,0 +1,84 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 11.2.2/11.2.4: public enum/int widths and packed field order.
+// 11.2.3.2.7-.9/11.2.3.5.4-.5: pure accessors and SV voltage conversion,
+// preserving signed microvolts, half-away rounding and constant evaluation.
+// 6.47: absent a translation command, PARTIAL_ON is not reported as FULL_ON.
+// CHECK: supply query types and voltage conversions passed
+
+//--- design.sv
+module top;
+  import UPF::*;
+  localparam upfSupplyTypeT CONST_VALUE = '{FULL_ON, -1000001};
+  localparam real CONST_VOLTS = get_supply_voltage(CONST_VALUE);
+  localparam state CONST_STATE = get_supply_state(CONST_VALUE);
+  localparam bit CONST_ON = get_supply_on_state(CONST_VALUE);
+  localparam int POS_HALF = upf_convert_real_volts_to_int_uvolts(0.0000005);
+  localparam int NEG_HALF = upf_convert_real_volts_to_int_uvolts(-0.0000005);
+  localparam real NEG_UNIT = upf_convert_int_uvolts_to_real_volts(-1);
+  localparam int NAN_INT = upf_convert_real_volts_to_int_uvolts($bitstoreal(64'h7ff8000000000000));
+  localparam int INF_INT = upf_convert_real_volts_to_int_uvolts($bitstoreal(64'h7ff0000000000000));
+  localparam int OVERFLOW_INT = upf_convert_real_volts_to_int_uvolts(2147.483648);
+  upfSupplyTypeT sample;
+  supply_net_type legacy;
+  real exceptional;
+  logic [31:0] unknown_state = 'x;
+  task check_voltage(real volts, int microvolts);
+    if (!supply_on("/top/N", volts)) $fatal(1, "valid voltage rejected");
+    sample = get_supply_value("/top/N");
+    if (sample.state != FULL_ON || sample.voltage != microvolts ||
+        sample[63:32] != 1 || $signed(sample[31:0]) != microvolts ||
+        get_supply_voltage(sample) != upf_convert_int_uvolts_to_real_volts(microvolts) ||
+        upf_convert_real_volts_to_int_uvolts(volts) != microvolts ||
+        !get_supply_on_state(sample)) $fatal(1, "signed packing or conversion");
+  endtask
+  initial begin
+    if ($bits(upfIntegerT) != 32 || $bits(upfSupplyStateE) != 32 ||
+        $bits(upfSupplyTypeT) != 64 || $bits(supply_net_type) != 64 ||
+        $bits(state) != 32 || OFF != 0 || FULL_ON != 1 || PARTIAL_ON != 2 || UNDETERMINED != 3)
+      $fatal(1, "public UPF ABI");
+    if (CONST_VOLTS != -1.000001 || CONST_STATE != FULL_ON || !CONST_ON ||
+        POS_HALF != 1 || NEG_HALF != -1 || NEG_UNIT != -0.000001)
+      $fatal(1, "constant pure accessors");
+    #1;
+    check_voltage(0.0, 0);
+    check_voltage(-0.0, 0);
+    check_voltage(1.000001, 1000001);
+    check_voltage(-1.000001, -1000001);
+    check_voltage(0.00000049, 0);
+    check_voltage(0.0000005, 1);
+    check_voltage(-0.0000005, -1);
+    check_voltage(2147.483647, 2147483647);
+    check_voltage(-2147.483648, -2147483648);
+    legacy = sample;
+    if (legacy !== sample || legacy.voltage >= 0) $fatal(1, "legacy or signed field");
+    sample = '{PARTIAL_ON, 250000};
+    if (get_supply_state(sample) != PARTIAL_ON || get_supply_on_state(sample) ||
+        get_supply_voltage(sample) != 0.25) $fatal(1, "PARTIAL_ON accessor");
+    sample.state = UNDETERMINED;
+    if (get_supply_state(sample) != UNDETERMINED || get_supply_on_state(sample))
+      $fatal(1, "UNDETERMINED accessor");
+    sample.state = upfSupplyStateE'(unknown_state);
+    if (get_supply_on_state(sample)) $fatal(1, "unknown coerced to ON");
+    sample.state = upfSupplyStateE'(4);
+    if (get_supply_state(sample) != 4 || get_supply_on_state(sample))
+      $fatal(1, "pure accessor invented a state");
+    exceptional = $bitstoreal(64'h7ff8000000000000);
+    if (upf_convert_real_volts_to_int_uvolts(exceptional) !== NAN_INT) $fatal(1, "NaN parity");
+    exceptional = $bitstoreal(64'h7ff0000000000000);
+    if (upf_convert_real_volts_to_int_uvolts(exceptional) !== INF_INT) $fatal(1, "Inf parity");
+    exceptional = 2147.483648;
+    if (upf_convert_real_volts_to_int_uvolts(exceptional) !== OVERFLOW_INT) $fatal(1, "overflow parity");
+    $display("supply query types and voltage conversions passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_net N

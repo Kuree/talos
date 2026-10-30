@@ -1,0 +1,110 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 11.2.3.2.1/.6-.9: a query returns an immediate snapshot.
+// Direct writes are visible at once; computed outputs propagate like ordinary
+// logic (9.2.2/9.2.3). Queries report electrical state, independently of the
+// voltage-qualified NORMAL policy, and can read protected output aliases.
+// 10.3.2.2.3: same-name port preference and class-qualified net/port selectors.
+// CHECK: immediate supply queries and aliases passed
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1;
+endmodule
+module top;
+  import UPF::*;
+  logic enable = 1;
+  wire q;
+  int names = 0;
+  upfSupplyTypeT sample, snapshot;
+  leaf dut(q);
+  function automatic string next_name();
+    names++;
+    return {"/top/", "VDD"};
+  endfunction
+  // An ordinary escaped user function cannot impersonate the system intrinsic.
+  function automatic bit [63:0] \$talos_upf_supply_read (string name);
+    return name == "ordinary" ? 64'h123456789abcdef0 : 0;
+  endfunction
+  initial begin
+    #1;
+    sample = get_supply_value("/top/VDD");
+    if (sample.state != OFF || sample.voltage != 0) $fatal(1, "initial OFF");
+    if (\$talos_upf_supply_read ("ordinary") != 64'h123456789abcdef0)
+      $fatal(1, "ordinary user function misidentified");
+    if (!supply_on("/top/VDD") || !supply_on("/top/VSS", 0.0)) $fatal(1, "ON");
+    sample = get_supply_value(.name(next_name()));
+    if (names != 1 || sample.state != FULL_ON || sample.voltage != 1000000 ||
+        get_supply_voltage(sample) != 1.0 || !get_supply_on_state(sample))
+      $fatal(1, "root query, packing, or argument evaluation");
+    snapshot = sample;
+    sample = get_supply_value("/top/PS/vout");
+    if (sample.state != OFF) $fatal(1, "query synchronously propagated switch");
+    #1;
+    sample = get_supply_value("/top/CORE.power");
+    if (sample.state != FULL_ON || sample.voltage != 1000000 || q !== 1'b1)
+      $fatal(1, "computed output alias");
+    if (get_supply_value("/top/PD.primary.power") !== sample ||
+        get_supply_value("/top/PS/vout@upfSupplyPortT") !== sample)
+      $fatal(1, "protected aliases disagree");
+    if (!supply_on("/top/VDD", 0.7)) $fatal(1, "voltage write");
+    sample = get_supply_value("/top/VDD");
+    if (sample.voltage != 700000 || snapshot.voltage != 1000000)
+      $fatal(1, "read hoisted or old snapshot mutated");
+    sample = get_supply_value("/top/CORE.power");
+    if (sample.voltage != 1000000) $fatal(1, "pending propagation was forced");
+    #1;
+    sample = get_supply_value("/top/CORE.power");
+    if (sample.state != FULL_ON || sample.voltage != 700000 ||
+        !get_supply_on_state(sample) || q !== 1'bx)
+      $fatal(1, "query confused electrical state with NORMAL policy");
+    enable = 1'bx;
+    #1;
+    sample = get_supply_value("/top/PS/vout");
+    if (get_supply_state(sample) != UNDETERMINED || sample.voltage != 0 ||
+        get_supply_on_state(sample)) $fatal(1, "UNDETERMINED query");
+    enable = 1;
+    if (!supply_on("/top/VDD")) $fatal(1, "restore");
+    #1;
+    sample = get_supply_value("/top/CORE.power");
+    if (sample.state != FULL_ON || q !== 1'b1) $fatal(1, "restoration");
+    if (!supply_off("/top/VDD")) $fatal(1, "OFF");
+    sample = get_supply_value("/top/VDD");
+    if (sample.state != OFF || sample.voltage != 0) $fatal(1, "immediate OFF");
+    #1;
+    sample = get_supply_value("/top/CORE.power");
+    if (sample.state != OFF || sample.voltage != 0) $fatal(1, "computed OFF");
+
+    if (!supply_on("/top/PAD", 0.8)) $fatal(1, "port write");
+    sample = get_supply_value("/top/PAD@upfSupplyNetT");
+    if (sample.state != OFF) $fatal(1, "net selected shadowing port");
+    sample = get_supply_value("/top/PAD@upfSupplyPortT");
+    if (sample.state != FULL_ON || sample.voltage != 800000 ||
+        get_supply_value("/top/PAD") !== sample) $fatal(1, "port preference");
+    if (!supply_on("/top/PAD@upfSupplyNetT", -0.5)) $fatal(1, "net write");
+    sample = get_supply_value("/top/PAD@upfSupplyNetT");
+    if (sample.voltage != -500000 || get_supply_voltage(sample) != -0.5)
+      $fatal(1, "signed voltage");
+    if (!supply_on("/top/電源", 0.9)) $fatal(1, "Unicode supply write");
+    sample = get_supply_value({"/top/", "電源"});
+    if (sample.state != FULL_ON || sample.voltage != 900000)
+      $fatal(1, "Unicode query name");
+    $display("immediate supply queries and aliases passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+foreach net {VDD VSS PAD 電源} {create_supply_net $net}
+create_supply_port PAD -direction in
+create_supply_set CORE -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary CORE}
+create_power_switch PS -domain PD -input_supply_port {vin VDD} \
+    -output_supply_port {vout CORE.power} -control_port {en enable} -on_state {ON vin en}
+add_power_state CORE -state {ON -supply_expr {power == {FULL_ON 1.0} && ground == {FULL_ON 0}}}

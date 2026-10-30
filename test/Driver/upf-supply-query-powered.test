@@ -1,0 +1,60 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 9.5.3/11.2.3.2.6: a supply getter is a synchronous helper.
+// Conditional diagnostics do not enqueue asynchronous work. Guards suppress
+// the whole powered activation, including queries with bad names while OFF.
+// CHECK: powered RTL supply queries passed
+
+//--- design.sv
+package helpers;
+  import UPF::*;
+  function automatic bit powered(bit bad_name);
+    return get_supply_on_state(get_supply_value(bad_name ? "/invalid" : "/top/AUX"));
+  endfunction
+endpackage
+module leaf(input logic clk, bad_name, output logic q);
+  always @(posedge clk) q <= helpers::powered(bad_name);
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, bad_name = 1;
+  wire q;
+  leaf dut(clk, bad_name, q);
+  initial begin
+    #1 clk = 1;
+    #1;
+    if (q !== 1'bx) $fatal(1, "initial OFF activated query");
+    clk = 0;
+    bad_name = 0;
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground", 0.0) ||
+        !supply_on("/top/AUX")) $fatal(1, "ON");
+    #1 clk = 1;
+    #1;
+    if (q !== 1'b1) $fatal(1, "synchronous getter");
+    clk = 0;
+    if (!supply_off("/top/AUX")) $fatal(1, "AUX OFF");
+    #1 clk = 1;
+    #1;
+    if (q !== 1'b0) $fatal(1, "later getter was hoisted");
+    if (!supply_off("/top/CORE.power")) $fatal(1, "domain OFF");
+    #1;
+    clk = 0;
+    bad_name = 1;
+    #1 clk = 1;
+    #1;
+    if (q !== 1'bx) $fatal(1, "OFF behavior");
+    $display("powered RTL supply queries passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set CORE
+create_supply_net AUX
+create_power_domain PD -elements dut -supply {primary CORE}

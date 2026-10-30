@@ -1,0 +1,63 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --native-scheduler=eval --mlir-verify-each %t/design.sv -o %t.eval
+// RUN: %t.eval | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 11.2.3.2 vs 11.2.3.4: an immediate query is not a deferred
+// object mirror. Supply writes alone create no implicit HDL sensitivity.
+// Actual HDL name/condition variables retain normal SV sensitivity, and a
+// forced eval scheduler must observe the same query times as generic/bytecode.
+// CHECK: immediate queries preserve HDL sensitivity
+
+//--- design.sv
+module top;
+  import UPF::*;
+  string selected = "/top/A";
+  logic tick = 0;
+  int calls = 0;
+  upfSupplyTypeT observed;
+  wire [63:0] frozen = get_supply_value("/top/A");
+  wire [63:0] by_name = get_supply_value(selected);
+  always_comb begin
+    calls++;
+    observed = get_supply_value(selected);
+    if (tick) observed = get_supply_value(selected);
+  end
+  initial begin
+    #1;
+    if (calls != 1 || observed.state != OFF || frozen != 0 || by_name != 0)
+      $fatal(1, "initial snapshot");
+    if (!supply_on("/top/A", 0.8)) $fatal(1, "A ON");
+    #1;
+    if (calls != 1 || observed.state != OFF || frozen != 0 || by_name != 0)
+      $fatal(1, "immediate query invented supply subscription");
+    selected = "/top/B";
+    #1;
+    if (calls != 2 || observed.state != OFF) $fatal(1, "name sensitivity");
+    if (!supply_on("/top/B")) $fatal(1, "B ON");
+    #1;
+    if (calls != 2 || observed.state != OFF || by_name != 0) $fatal(1, "dynamic root subscription");
+    tick = 1;
+    #1;
+    if (calls != 3 || observed.state != FULL_ON || observed.voltage != 1000000)
+      $fatal(1, "explicit HDL wake did not resample");
+    selected = "/top/A";
+    #1;
+    if (calls != 4 || observed.voltage != 800000 || by_name !== observed)
+      $fatal(1, "dynamic selected root");
+    if (!supply_off("/top/A")) $fatal(1, "A OFF");
+    #1;
+    if (calls != 4 || observed.state != FULL_ON || by_name !== observed || frozen != 0 ||
+        get_supply_state(get_supply_value("/top/A")) != OFF)
+      $fatal(1, "snapshot stability");
+    $display("immediate queries preserve HDL sensitivity");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_net A
+create_supply_net B

@@ -538,6 +538,19 @@ UnitLowering::lowerSystemCall(semantic::SVCallExpressionOp op) {
         builder, location, builder.getI1Type(), context, *supply, *real, *on));
   }
 
+  if (name == "$talos_upf_supply_read") {
+    // IEEE 1801-2018 11.2.3.2.6: the registered nonconstant intrinsic samples
+    // exactly once. Retain diagnostics even when the public result is unused.
+    if (children.size() != 1)
+      return emitError(location) << "malformed UPF supply read intrinsic",
+             failure();
+    auto supply = lowerExpression(children[0]);
+    if (failed(supply))
+      return failure();
+    return convertResult(sim::SimSupplyReadOp::create(
+        builder, location, builder.getI64Type(), context, *supply));
+  }
+
   if (name == "$sdf_annotate" &&
       op->hasAttr("talos.sdf_compile_time_applied")) {
     // IEEE 1800-2017 32.9 makes this task load timing data. The frontend has

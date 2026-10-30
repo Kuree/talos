@@ -50,13 +50,14 @@ module attributes {
 // CHECK: llvm.mlir.constant(0 : i64)
 // CHECK: llvm.mlir.global internal constant @parent.__talos_coro_ramp.__talos_spawn_batch_0_captures(dense<[17, 29]> : tensor<2xi64>) {{.*}} : !llvm.array<2 x i64>
 // CHECK-LABEL: llvm.func @parent.__talos_coro_ramp
-// CHECK: %[[TABLE:.*]] = llvm.mlir.addressof @parent.__talos_coro_ramp.__talos_spawn_batch_0 :
-// CHECK: %[[CAPTURES:.*]] = llvm.mlir.addressof @parent.__talos_coro_ramp.__talos_spawn_batch_0_captures
-// CHECK: llvm.call @talos_rt_v1_process_spawn_batch(%{{.*}}, %[[TABLE]], %[[CAPTURES]], %{{.*}})
+// CHECK: llvm.call @talos_rt_v1_process_spawn_batch(%{{.*}}, %[[TABLE:[0-9a-zA-Z_]+]], %[[CAPTURES:[0-9a-zA-Z_]+]], %{{.*}})
 // CHECK-NOT: llvm.icmp
 // CHECK-NOT: llvm.call @child.__talos_spawn
 // CHECK: llvm.call @talos_rt_v1_dump_flush
 // CHECK-COUNT-4: llvm.call @child.__talos_spawn
+// Hoisted addresses are in the common execute block, printed after the body.
+// CHECK-DAG: %[[TABLE]] = llvm.mlir.addressof @parent.__talos_coro_ramp.__talos_spawn_batch_0 :
+// CHECK-DAG: %[[CAPTURES]] = llvm.mlir.addressof @parent.__talos_coro_ramp.__talos_spawn_batch_0_captures
 // CHECK-LABEL: llvm.func @child.__talos_spawn(
 // CHECK: llvm.alloca
 // CHECK: llvm.intr.memset

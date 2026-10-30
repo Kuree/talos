@@ -1,0 +1,45 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 9.2.1: supply initialization precedes HDL model initialization,
+// including source declaration expressions. 11.2.3.2.6/11.2.3.3.4: declaration
+// queries see configured roots and successful declaration-time supply writes
+// survive into ordinary HDL processes rather than being overwritten later.
+// CHECK: declaration-time supply queries and writes passed
+
+//--- design.sv
+module top;
+  import UPF::*;
+  upfSupplyTypeT original = get_supply_value("/top/N");
+  bit status = supply_on("/top/N", 0.8);
+  upfSupplyTypeT at_decl = get_supply_value("/top/N");
+  wire [63:0] via_wire = get_supply_value("/top/N");
+  upfSupplyTypeT current;
+  initial begin
+`ifdef ASSUME
+    if (original.state != FULL_ON || original.voltage != 1000000)
+      $fatal(1, "declaration ran before configured supply initialization");
+`else
+    if (original.state != OFF || original.voltage != 0) $fatal(1, "initial OFF");
+`endif
+    current = get_supply_value("/top/N");
+    if (!status || at_decl.state != FULL_ON || at_decl.voltage != 800000 ||
+        current !== at_decl) $fatal(1, "declaration-time write overwritten");
+    #1;
+    if (via_wire !== at_decl) $fatal(1, "declaration/process sampling differs");
+    if (!supply_off("/top/N")) $fatal(1, "OFF");
+    current = get_supply_value("/top/N");
+    if (current.state != OFF || current.voltage != 0 || at_decl.voltage != 800000)
+      $fatal(1, "snapshot or later write");
+    $display("declaration-time supply queries and writes passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_net N

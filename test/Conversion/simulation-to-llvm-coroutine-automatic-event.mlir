@@ -45,9 +45,11 @@ module attributes {
 }
 
 // CHECK-LABEL: llvm.func @waiter.__talos_coro_ramp
-// CHECK: %[[LOAD_BITS:.*]] = llvm.mlir.constant(64 : i64) : i64
-// CHECK: llvm.call @talos_rt_v1_native_state_load_plane({{.*}}, %[[LOAD_BITS]], {{.*}}, %[[SLOT:[0-9a-zA-Z_]+]])
-// CHECK: llvm.load %[[SLOT]] {{.*}} : !llvm.ptr -> i64
+// Entry constants may be hoisted into the common execute block, which is
+// printed after the source body. Check operand identity without textual order.
+// CHECK-DAG: %[[LOAD_BITS:.*]] = llvm.mlir.constant(64 : i64) : i64
+// CHECK-DAG: llvm.call @talos_rt_v1_native_state_load_plane({{.*}}, %[[LOAD_BITS]], {{.*}}, %[[SLOT:[0-9a-zA-Z_]+]])
+// CHECK-DAG: llvm.load %[[SLOT]] {{.*}} : !llvm.ptr -> i64
 
 // CHECK-LABEL: llvm.func @spawner
 // CHECK: %[[ALLOC_BITS:.*]] = llvm.mlir.constant(64 : i64) : i64

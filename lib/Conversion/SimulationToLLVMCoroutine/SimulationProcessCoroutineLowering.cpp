@@ -835,20 +835,23 @@ lowerPreparedSuspendableProcess(PreparedSuspendableProcess &process) {
   }
 
   // Fixed ABI temporaries and managed-root records were deliberately hoisted
-  // to the source function entry. The coroutine ramp adds a new dispatch
-  // entry which can resume directly at a continuation shim, bypassing that
-  // source block. Move the allocas to the ramp's execute block so they
-  // dominate initial execution and every resume and become stable coroutine
-  // frame storage instead of per-iteration stack growth.
+  // to the source function entry. Late capture specialization can also put
+  // constants there after continuation operands were threaded through the CFG.
+  // The ramp's new dispatch entry can resume directly at a continuation shim,
+  // bypassing the source block. Move allocas to the ramp's execute block so
+  // they dominate initial execution and every resume and become stable
+  // coroutine frame storage instead of per-iteration stack growth. Hoist
+  // operand-free ConstantLike ops too: an NBA's known-zero unknown plane, for
+  // example, must dominate a resumed commit even when it bypasses the source
+  // entry.
   SmallVector<LLVM::AllocaOp> activationAllocas;
   SmallVector<LLVM::GEPOp> activationAddresses;
-  llvm::SetVector<Operation *> allocaConstants;
-  for (LLVM::AllocaOp alloca : oldEntry->getOps<LLVM::AllocaOp>()) {
+  SmallVector<Operation *> activationConstants;
+  for (Operation &op : *oldEntry)
+    if (op.hasTrait<OpTrait::ConstantLike>())
+      activationConstants.push_back(&op);
+  for (LLVM::AllocaOp alloca : oldEntry->getOps<LLVM::AllocaOp>())
     activationAllocas.push_back(alloca);
-    Operation *count = alloca.getArraySize().getDefiningOp();
-    if (count && count->getBlock() == oldEntry && isa<LLVM::ConstantOp>(count))
-      allocaConstants.insert(count);
-  }
   // Only addresses used beyond the source entry need to dominate resumes. An
   // invocation-local element address there may use a runtime index computed
   // in that block, which must stay in place.
@@ -861,7 +864,7 @@ lowerPreparedSuspendableProcess(PreparedSuspendableProcess &process) {
       activationAddresses.push_back(address);
   for (LLVM::AllocaOp alloca : activationAllocas)
     alloca->moveBefore(execute, execute->begin());
-  for (Operation *constant : allocaConstants)
+  for (Operation *constant : activationConstants)
     constant->moveBefore(execute, execute->begin());
   for (LLVM::GEPOp address : activationAddresses)
     address->moveBefore(execute, execute->end());

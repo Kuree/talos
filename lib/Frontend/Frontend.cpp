@@ -7883,6 +7883,44 @@ importSystemVerilog(ArrayRef<std::string> inputFilenames, MLIRContext &context,
   typedef bit upfBooleanT;
   typedef string upfStringT;
   typedef real upfRealT;
+  // IEEE 1801-2018 11.2.2/11.2.4: public state and voltage are signed32
+  // fields. This packed64 layout differs from the simulator's private root.
+  typedef int upfIntegerT;
+  typedef enum {OFF, FULL_ON, PARTIAL_ON, UNDETERMINED} upfSupplyStateE;
+  typedef struct packed {
+    upfSupplyStateE state;
+    upfIntegerT voltage;
+  } upfSupplyTypeT;
+  typedef upfSupplyStateE state;
+  typedef upfSupplyTypeT supply_net_type;
+
+  // 11.2.3.5.4/.5: ordinary SV conversions, including integer rounding.
+  function automatic upfIntegerT upf_convert_real_volts_to_int_uvolts(upfRealT volt);
+    return volt * 1.0E6;
+  endfunction
+  function automatic upfRealT upf_convert_int_uvolts_to_real_volts(upfIntegerT uvolt);
+    return uvolt / 1.0E6;
+  endfunction
+  // 11.2.3.2.6-.9: query once, then expose the sampled value through pure
+  // accessors. No PARTIAL_ON translation is enabled by default (6.47).
+  function automatic upfSupplyTypeT get_supply_value(string name);
+    bit [63:0] raw;
+    upfSupplyTypeT result;
+    raw = $talos_upf_supply_read(name);
+    result.state = upfSupplyStateE'(raw[1:0]);
+    result.voltage = raw[33:2];
+    return result;
+  endfunction
+  function automatic upfRealT get_supply_voltage(upfSupplyTypeT arg);
+    return upf_convert_int_uvolts_to_real_volts(arg.voltage);
+  endfunction
+  function automatic upfSupplyStateE get_supply_state(upfSupplyTypeT arg);
+    return arg.state;
+  endfunction
+  function automatic upfBooleanT get_supply_on_state(upfSupplyTypeT arg);
+    return arg.state === FULL_ON;
+  endfunction
+
   function automatic upfBooleanT supply_on(upfStringT supply_name, upfRealT value = 1.0);
     return $talos_upf_supply_control(supply_name, value, 1'b1);
   endfunction
@@ -7898,13 +7936,19 @@ endpackage
     compilation->addSyntaxTree(tree);
   }
 
-  if (options.enableUPF)
+  if (options.enableUPF) {
     compilation->addSystemSubroutine(
         std::make_shared<slang::ast::NonConstantFunction>(
             "$talos_upf_supply_control", compilation->getBitType(), 3,
             std::vector<const slang::ast::Type *>{&compilation->getStringType(),
                                                   &compilation->getRealType(),
                                                   &compilation->getBitType()}));
+    compilation->addSystemSubroutine(
+        std::make_shared<slang::ast::NonConstantFunction>(
+            "$talos_upf_supply_read", compilation->getType(64, {}), 1,
+            std::vector<const slang::ast::Type *>{
+                &compilation->getStringType()}));
+  }
   driver.reportCompilation(*compilation, /*quiet=*/true);
 
   // Slang's value-driver checks are part of semantic analysis rather than

@@ -3897,6 +3897,26 @@ def SimSupplyControlOp : SimOp<"supply.control", [
   let assemblyFormat = "$context $name `voltage` $voltage `on` $on attr-dict";
 }
 
+def SimSupplyReadOp : SimOp<"supply.read", [
+  MemoryEffects<[MemRead<SimStorageResource>, MemRead<SimHeapResource>,
+                 MemWrite<SimIOResource>, MemWrite<SimSchedulerResource>]>
+]> {
+  let summary = "read an elaborated UPF supply by dynamic handle name";
+  let description = [{
+    IEEE 1801-2018 11.2.3.2.6: sample the current state/voltage pair, including
+    computed roots protected from HDL writes. The result uses the private root
+    layout: state in bits [1:0], signed32 microvolt bits in [33:2], other bits
+    zero. Package UPF converts it to the public upfSupplyTypeT layout (11.2.4).
+    An invalid name records a runtime error and returns UNDETERMINED,0.
+    UPF elaboration expands dispatch and reads before target lowering. Error
+    effects keep discarded invalid queries observable and reads ordered with
+    supply control writes.
+  }];
+  let arguments = (ins SimContextType:$context, SimStringType:$name);
+  let results = (outs I64:$value);
+  let assemblyFormat = "$context $name attr-dict";
+}
+
 def SimErrorOp : SimOp<"error", [
   MemoryEffects<[MemWrite<SimSchedulerResource>]>
 ]> {

@@ -1,0 +1,51 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: not %t.o0 2>&1 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: not %t.o3 2>&1 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: not %t.bc 2>&1 | FileCheck %s
+// IEEE 1801-2018 11.2.3.2.6: executed invalid names are errors, including
+// discarded results; unexecuted bad names remain silent. Talos returns a
+// documented UNDETERMINED,0 fallback and continues with no supply mutation.
+// CHECK-COUNT-8: UPF supply query failed for
+// CHECK: supply query errors retained without mutation
+
+//--- design.sv
+module top;
+  import UPF::*;
+  string nul_name;
+  upfSupplyTypeT sample;
+  int failures = 0;
+  task expect_failure(string name);
+    sample = get_supply_value(name);
+    if (sample.state != UNDETERMINED || sample.voltage != 0)
+      $fatal(1, "invalid query fallback");
+    failures++;
+  endtask
+  initial begin
+    if (0) void'(get_supply_value("/unreachable"));
+    if (!supply_on("/top/N", -1.0)) $fatal(1, "power ON");
+    expect_failure("/top/missing");
+    expect_failure("N");
+    expect_failure("/N");
+    expect_failure("/top/N@bogus");
+    expect_failure("/top/SS/power");
+    expect_failure("/top");
+    nul_name = $sformatf("%s%c", "/top/N", 0);
+    if (nul_name.len() != 7) $fatal(1, "NUL fixture lost length");
+    expect_failure(nul_name);
+    void'(get_supply_value("/discarded-invalid"));
+    #1;
+    sample = get_supply_value("/top/N");
+    if (sample.state != FULL_ON || sample.voltage != -1000000 || failures != 7)
+      $fatal(1, "failed queries mutated supply");
+    $display("supply query errors retained without mutation");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_net N
+create_supply_set SS -function {power N}

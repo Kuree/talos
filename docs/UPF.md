@@ -250,6 +250,9 @@ including power and ground, to be FULL_ON before their logic runs normally
 voltage is not itself an ON predicate. Unassociated primary power and ground
 functions have independent roots, accessible as `/top/PD.primary.power` and
 `/top/PD.primary.ground`. Associated primary functions alias their supply nets.
+Supply initialization precedes HDL declaration initializers: their queries see
+the configured initial value, and their successful writes persist into later
+processes (clauses 9.2.1 and 11.2.3).
 
 When `--upf` is enabled, the compiler provides the SystemVerilog package `UPF`
 with `supply_on` and `supply_off` (clauses 11.2.3.3.4 and 11.2.3.3.5), plus
@@ -265,8 +268,8 @@ initial begin
 end
 ```
 
-The functions accept runtime strings, return a success bit, and preserve normal
-SV argument evaluation, named arguments, and the default 1.0 V for `supply_on`.
+The write functions accept runtime strings, return a success bit, and preserve
+normal SV argument evaluation, named arguments, and the default 1.0 V for `supply_on`.
 Calling them in a constant expression is an error. Calls whose return value
 is ignored retain their effects. They lower to simulation storage and scheduler
 operations, so generated native, bytecode, and wasm32 simulators need no Tcl,
@@ -277,9 +280,9 @@ UPF root, such as `/top/VDD`; they are distinct from Tcl's design-relative `/`
 (clauses 10.3.2.2.1 and 11.2.3.1.1). A same-name port takes precedence over a
 net; use `/top/VDD@upfSupplyNetT` to select the net explicitly, or
 `@upfSupplyPortT` for the port (clause 10.3.2.2.3). Eligible connected aliases
-update the same root. HDL objects of `upfSupplyTypeT`/`upfSupplyObjT`, relative
-HDL supply names, and the remaining package query/control functions are not
-implemented.
+update the same root. Resolving names of HDL objects of
+`upfSupplyTypeT`/`upfSupplyObjT`, relative HDL supply names, and the remaining
+basic property/handle access and control functions are not implemented.
 
 Unresolved directional networks support one connection per port side:
 same-scope LowConn and descendant-port HighConn (clauses 4.5.4.3 and 6.14).
@@ -310,6 +313,55 @@ than OFF. It also retains the prototype's inference of an omitted primary
 association from the switch output. Later supply calls still work. It does not
 enable nested domain partitions. New designs should explicitly power their
 supplies with the standard package functions.
+
+## Reading supply values from SystemVerilog
+
+The standard `get_supply_value(name)` function samples the current state and
+voltage of a supply net, port, or function alias (clause 11.2.3.2.6). It accepts
+the same absolute UPF handles and class selectors as the write functions,
+including protected switch outputs. The return type `upfSupplyTypeT` is the
+standard packed struct with a 32-bit `upfSupplyStateE state` field followed by
+a signed 32-bit `upfIntegerT voltage` field in microvolts (clauses 11.2.2 and
+11.2.4). `state` and `supply_net_type` are the legacy type aliases.
+
+```systemverilog
+import UPF::*;
+initial begin
+  upfSupplyTypeT sample;
+  #10;
+  sample = get_supply_value("/top/CORE.power");
+  if (get_supply_state(sample) != FULL_ON)
+    $error("CORE power is not FULL_ON");
+  $display("CORE voltage = %f V", get_supply_voltage(sample));
+end
+```
+
+`get_supply_state`, `get_supply_voltage`, and `get_supply_on_state` operate on
+the passed snapshot (clauses 11.2.3.2.7–.9). The voltage accessor returns real
+volts. The on-state accessor reports FULL_ON, including FULL_ON at zero volts;
+it does not report a domain's effective NORMAL policy. Without PARTIAL_ON
+translation, PARTIAL_ON and UNDETERMINED return false. The
+`set_partial_on_translation` command remains unsupported, so no translation is
+implicitly enabled (clause 6.47).
+
+Queries observe root writes immediately, while a computed switch output
+retains its published value until ordinary supply propagation runs (clauses
+9.2.2–9.2.3 and 11.2.3.2.1). Sampling does not synchronously settle switches.
+An earlier snapshot remains unchanged by later writes. Immediate queries do
+not create implicit supply subscriptions in HDL processes; actual HDL name and
+condition variables retain normal sensitivity. Deferred object mirrors and
+their continuous monitoring APIs (clause 11.2.3.4) remain unsupported.
+
+Invalid queries record a nonterminating simulation error. Talos returns
+UNDETERMINED with zero microvolts as its recovery value; the standard does not
+specify that value. Discarding a result preserves the error, and an unexecuted
+query causes no error. The name lookup is nonconstant. Snapshot accessors and
+the standard `upf_convert_real_volts_to_int_uvolts` /
+`upf_convert_int_uvolts_to_real_volts` helpers are ordinary SV functions that
+can be used in constant expressions. The latter helpers follow normal SV
+conversions, including nearest-integer rounding with half ties away from zero
+(clauses 11.2.3.5.4–.5); they are separate from the checked supply-write API.
+Native, bytecode, and wasm32 simulators use the same public types and values.
 
 User Tcl libraries can be sourced or imported with standard Tcl packages
 (IEEE 1801-2018 clause 5.1):

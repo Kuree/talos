@@ -1,0 +1,11 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-supply-query-sensitivity.test %t/sensitivity
+// RUN: %split-file %S/upf-supply-query-powered.test %t/powered
+// RUN: %split-file %S/upf-supply-query-frontend.test %t/empty
+// RUN: talos --upf %t/sensitivity/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/sensitivity/design.sv -o %t/sensitivity.o
+// RUN: talos --upf %t/powered/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/powered/design.sv -o %t/powered.o
+// RUN: talos --upf %t/empty/empty.upf --target=wasm32 -O3 --mlir-verify-each -c %t/empty/no-roots.sv -o %t/empty.o
+// RUN: %llvm_dist/bin/llvm-readobj --file-headers %t/sensitivity.o %t/powered.o %t/empty.o | FileCheck %s
+// IEEE 1801-2018 11.2.2/11.2.3.2.6/11.2.4: immediate snapshots use
+// standard signed32 fields and a packed64 public value on wasm32 too.
+// CHECK-COUNT-3: AddressSize: 32bit
