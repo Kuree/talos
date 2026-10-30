@@ -11,12 +11,21 @@ def UPFSupplyOp : Op<UPFDialect, "supply", [Symbol]> {
   let assemblyFormat = "$sym_name `names` $names `writable` `=` $writable attr-dict";
   let hasVerifier = 1;
 }
+def UPFSupplySetOp : Op<UPFDialect, "supply_set", [Symbol,
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "supply-set identity with resolved function roots and requirements";
+  let arguments = (ins SymbolNameAttr:$sym_name, DictionaryAttr:$functions,
+      StrArrayAttr:$required);
+  let assemblyFormat = "$sym_name `functions` $functions `required` $required attr-dict";
+  let hasVerifier = 1;
+}
 def UPFDomainOp : Op<UPFDialect, "domain", [Symbol,
     DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
   let summary = "resolved power domain with supply roots and optional switch";
   let arguments = (ins SymbolNameAttr:$sym_name, StrArrayAttr:$elements,
       FlatSymbolRefAttr:$power, OptionalAttr<FlatSymbolRefAttr>:$ground,
       OptionalAttr<FlatSymbolRefAttr>:$input,
+      OptionalAttr<FlatSymbolRefAttr>:$primary,
       UPFSwitchStateArrayAttr:$on, OptionalAttr<UPFSwitchStateAttr>:$off,
       OptionalAttr<UPFSwitchStateArrayAttr>:$errors,
       OptionalAttr<StrAttr>:$isolation_control,

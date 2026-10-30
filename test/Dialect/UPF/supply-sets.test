@@ -1,0 +1,91 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/valid.mlir | talos-opt | FileCheck %s
+// RUN: talos-opt --split-input-file --verify-diagnostics %t/invalid.mlir
+// IEEE 1801-2018 6.26/4.5.4.7: six function identities, electrical root
+// references and usage-derived requirements are distinct pieces of the IR.
+// CHECK: upf.supply_set @SS functions
+// CHECK-SAME: power = @power
+// CHECK-SAME: required []
+// CHECK: upf.supply_set @primary functions
+// CHECK-SAME: required ["ground", "power"]
+// CHECK: upf.domain @PD elements ["top.dut"] power @power on [] {ground = @ground, primary = @primary}
+
+//--- valid.mlir
+#functions = {power = @power, ground = @ground, nwell = @bias, pwell = @bias, deepnwell = @bias, deeppwell = @bias}
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  upf.supply @ground names ["/top/VSS"] writable = true
+  upf.supply @bias names ["/top/BIAS"] writable = true
+  upf.supply_set @SS functions #functions required []
+  upf.supply_set @primary functions #functions required ["ground", "power"]
+  upf.domain @PD elements ["top.dut"] power @power on [] {ground = @ground, primary = @primary}
+}
+
+//--- invalid.mlir
+module {
+  // expected-error @+1 {{requires exactly the six standard supply functions}}
+  upf.supply_set @bad functions {power = @missing} required []
+}
+// -----
+module {
+  // expected-error @+1 {{function bindings must map standard functions to flat supply root references}}
+  upf.supply_set @bad functions {power = "root", ground = @root, nwell = @root, pwell = @root, deepnwell = @root, deeppwell = @root} required []
+}
+// -----
+module {
+  // expected-error @+1 {{function bindings must map standard functions to flat supply root references}}
+  upf.supply_set @bad functions {power = @root, ground = @root, unknown = @root, pwell = @root, deepnwell = @root, deeppwell = @root} required []
+}
+// -----
+#functions = {power = @root, ground = @root, nwell = @root, pwell = @root, deepnwell = @root, deeppwell = @root}
+module {
+  // expected-error @+1 {{required functions must be unique standard supply functions}}
+  upf.supply_set @bad functions #functions required ["power", "power"]
+}
+// -----
+#functions = {power = @root, ground = @root, nwell = @root, pwell = @root, deepnwell = @root, deeppwell = @root}
+module {
+  // expected-error @+1 {{required functions must be unique standard supply functions}}
+  upf.supply_set @bad functions #functions required ["invalid"]
+}
+// -----
+#functions = {power = @root, ground = @root, nwell = @root, pwell = @root, deepnwell = @root, deeppwell = @root}
+module {
+  // expected-error @+1 {{references an unknown function supply root}}
+  upf.supply_set @bad functions #functions required []
+}
+// -----
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  // expected-error @+1 {{references an unknown primary supply set}}
+  upf.domain @PD elements ["top.dut"] power @power on [] {primary = @missing}
+}
+// -----
+#functions = {power = @power, ground = @ground, nwell = @power, pwell = @power, deepnwell = @power, deeppwell = @power}
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  upf.supply @other names ["/top/OTHER"] writable = true
+  upf.supply @ground names ["/top/VSS"] writable = true
+  upf.supply_set @primary functions #functions required ["power", "ground"]
+  // expected-error @+1 {{primary power and ground must match the supply-set functions}}
+  upf.domain @PD elements ["top.dut"] power @other on [] {ground = @ground, primary = @primary}
+}
+// -----
+#functions = {power = @power, ground = @ground, nwell = @power, pwell = @power, deepnwell = @power, deeppwell = @power}
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  upf.supply @ground names ["/top/VSS"] writable = true
+  upf.supply_set @primary functions #functions required ["power"]
+  // expected-error @+1 {{primary supply set requires power and ground functions}}
+  upf.domain @PD elements ["top.dut"] power @power on [] {ground = @ground, primary = @primary}
+}
+// -----
+#functions = {power = @power, ground = @ground, nwell = @computed, pwell = @computed, deepnwell = @computed, deeppwell = @computed}
+module {
+  upf.supply @power names ["/top/VDD"] writable = true
+  upf.supply @ground names ["/top/VSS"] writable = true
+  upf.supply @computed names ["/top/OTHER_SW"] writable = false
+  upf.supply_set @primary functions #functions required ["power", "ground", "nwell"]
+  // expected-error @+1 {{required auxiliary functions must have independent writable roots}}
+  upf.domain @PD elements ["top.dut"] power @power on [] {ground = @ground, primary = @primary}
+}

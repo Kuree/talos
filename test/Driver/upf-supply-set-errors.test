@@ -1,0 +1,97 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.mlir | FileCheck %s
+// IEEE 1801-2018 6.26/5.10: update/refinement and function-reference rules.
+// 5.5: supply sets share the current object namespace. 6.10/6.43: modern
+// associations and legacy primary binding observe the same connections.
+// Failed commands leave declarations usable (a Talos atomicity guarantee).
+// CHECK: supply set error handling passed
+
+//--- design.sv
+module leaf;
+endmodule
+module top;
+  logic enable;
+  parameter int K = 1;
+  typedef logic T;
+  function automatic bit f(); return 1; endfunction
+  leaf dut(), child();
+endmodule
+
+//--- design.upf
+proc expect_error {script pattern} {
+    set code [catch {uplevel 1 $script} message]
+    if {$code != 1 || ![string match $pattern $message]} {
+        error "expected <$pattern>, got code $code <$message>"
+    }
+}
+foreach net {N G OTHER} {create_supply_net $net}
+expect_error {create_supply_set} {*missing argument*}
+expect_error {associate_supply_set} {*missing argument*}
+expect_error {create_supply_set Missing -update} {*unknown supply set*}
+expect_error {create_supply_set Missing.primary} {*unknown supply set handle*}
+expect_error {create_supply_set Bad -function {power}} {*requires*}
+expect_error {create_supply_set Bad -function {invalid N}} {*unknown supply set function*}
+expect_error {create_supply_set Bad -function {power N} -function {ground missing}} {*unknown supply net*}
+create_supply_set Bad -function {power N} -function {ground G}
+expect_error {create_supply_set Bad} {*requires -update*}
+expect_error {create_supply_set Bad -update -update} {*duplicate UPF option*}
+expect_error {create_supply_set Bad -update -function} {*missing value*}
+expect_error {create_supply_set Bad -update -bogus value} {*unsupported create_supply_set option*}
+expect_error {create_supply_set Bad -update -function {power OTHER}} {*different supply*}
+create_supply_set Bad -update -function {power N} -function {power N}
+create_supply_set Alias -function {power Bad.power}
+create_supply_set Alias -update -function {power N}
+create_supply_port P
+connect_supply_net Alias.power -ports P
+connect_supply_net N -ports P
+expect_error {connect_supply_net OTHER -ports P} {*side is already connected*}
+expect_error {associate_supply_set Bad} {*at least two*}
+expect_error {associate_supply_set {Bad missing}} {*unknown supply set*}
+expect_error {associate_supply_set Alias -handle Bad} {*requires a supply set handle*}
+expect_error {create_power_domain Atomic -elements dut -supply {primary missing}} {*unknown supply set*}
+create_power_domain Atomic -elements dut -supply {primary Bad}
+expect_error {create_supply_set Atomic.primary} {*requires -update*}
+expect_error {set_domain_supply_net Atomic -primary_power_net N -primary_ground_net G} {*already associated*}
+create_power_domain Ground -elements dut
+create_power_domain Fresh -elements dut
+create_supply_set Ground.primary -update -function {ground G}
+expect_error {set_domain_supply_net Ground -primary_power_net N -primary_ground_net G} {*already associated*}
+# Function-reference cycles are aliases, not directional driver cycles.
+create_supply_set CycleA
+create_supply_set CycleB
+create_supply_set CycleA -update -function {power CycleB.power}
+create_supply_set CycleB -update -function {power CycleA.power}
+# Namespace collisions are rejected in both declaration orders.
+expect_error {create_supply_set N} {*conflicts with an existing object*}
+expect_error {create_supply_set Atomic} {*conflicts with an existing object*}
+expect_error {create_supply_set enable} {*conflicts with an existing object*}
+expect_error {create_supply_set dut} {*conflicts with an existing object*}
+expect_error {create_supply_set K} {*conflicts with an existing object*}
+expect_error {create_supply_set T} {*conflicts with an existing object*}
+expect_error {create_supply_set f} {*conflicts with an existing object*}
+expect_error {create_supply_net Bad} {*conflicts with a supply set*}
+expect_error {create_supply_port Bad} {*conflicts with a supply set*}
+expect_error {create_power_domain Bad -elements dut} {*conflicts with a supply set*}
+expect_error {create_power_switch Bad -domain Ground -input_supply_port {i N} -output_supply_port {o OTHER}} {*conflicts with a supply set*}
+set_scope child
+expect_error {create_supply_set /Bad -update} {*original execution scope*}
+create_supply_net LOCAL
+expect_error {create_supply_set /Ground.primary -update -function {power LOCAL}} {*original execution scope*}
+expect_error {create_supply_set /Fresh.primary -update -function {power LOCAL}} {*original execution scope*}
+# This slice supports current/descendant function declaration scopes (6.26.1).
+expect_error {create_supply_set Wrong -function {power /Bad.power}} {*descendants are not implemented*}
+create_supply_set Child -function {power LOCAL}
+set_scope /dut
+expect_error {create_supply_set Wrong -function {power /child/Child.power}} {*descendants are not implemented*}
+set_scope /
+create_supply_set Ground.primary -update -function {power N}
+create_supply_set Fresh.primary -update -function {power N} -function {ground G}
+expect_error {create_supply_set Wrong -function {power child/LOCAL}} {*defined in the current scope*}
+create_supply_set Descendant -function {power child/Child.power}
+create_power_domain BiasUser -elements dut
+create_power_domain BiasOwner -elements dut
+set_domain_supply_net BiasUser -primary_power_net BiasOwner.primary.nwell -primary_ground_net G
+# Referencing a well does not associate BiasOwner's primary power/ground.
+set_domain_supply_net BiasOwner -primary_power_net N -primary_ground_net G
+puts {supply set error handling passed}

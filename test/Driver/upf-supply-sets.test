@@ -1,0 +1,75 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.10/6.20/6.26: transitive associations persist through
+// late bindings and expose the same supply roots. 4.5.4.7: unused well/bias
+// functions exist but do not gate NORMAL. 9.5.3/9.6.7: alias-driven loss
+// cancels old NBAs and restores level logic without inventing clock edges.
+// CHECK: supply set association and late binding passed
+
+//--- design.sv
+package audit;
+  int calls = 0;
+  function logic sample(logic d);
+    calls++;
+    return d;
+  endfunction
+endpackage
+module leaf(input logic clk, d, output logic q, y);
+  always @(posedge clk) q <= #3 d;
+  always_comb y = audit::sample(d);
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, d = 1;
+  wire qa, ya, qb, yb;
+  leaf a(clk, d, qa, ya), b(clk, d, qb, yb);
+  initial begin
+    #1;
+    if ({qa,ya,qb,yb} !== 4'bxxxx || audit::calls != 0) $fatal(1, "initial OFF");
+    if (!supply_on("/top/SS.power") || !supply_on("/top/B.primary.ground", 0.0))
+      $fatal(1, "set function drive failed");
+    #1;
+    if ({qa,ya,qb,yb} !== 4'bx1x1 || audit::calls != 2)
+      $fatal(1, "association did not propagate late bindings");
+    if (!supply_on("/top/SS.nwell", 1.1)) $fatal(1, "unused nwell not exposed");
+    #1;
+    if (!supply_off("/top/Mirror.nwell")) $fatal(1, "unused well alias failed");
+    #1;
+    if ({ya,yb} !== 2'b11 || audit::calls != 2) $fatal(1, "unused well gated NORMAL");
+    clk = 1;
+    #1;
+    if (!supply_off("/top/Mirror.power")) $fatal(1, "alias OFF failed");
+    #1;
+    if ({qa,ya,qb,yb} !== 4'bxxxx) $fatal(1, "alias OFF did not corrupt");
+    if (!supply_on("/top/A.primary.power")) $fatal(1, "primary alias restore");
+    #3;
+    if ({qa,ya,qb,yb} !== 4'bx1x1 || audit::calls != 4)
+      $fatal(1, "stale NBA survived or restoration failed");
+    clk = 0; d = 0;
+    #1 clk = 1;
+    #4;
+    if ({qa,ya,qb,yb} !== 4'b0000) $fatal(1, "fresh edge failed");
+    $display("supply set association and late binding passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+foreach net {VDD VSS BIAS} {create_supply_net $net}
+create_supply_set SS
+create_supply_set Mirror
+create_power_domain A -elements a -supply {primary SS} -supply {backup}
+create_power_domain B -elements b
+associate_supply_set {SS Mirror}
+associate_supply_set Mirror -handle B.primary
+associate_supply_set {B.primary A.primary SS}
+create_supply_set SS -update -function {power VDD} -function {ground VSS} -function {nwell BIAS}
+# A function handle and its underlying net identify the same reference.
+create_supply_set Mirror -update -function {power SS.power}
+create_supply_set Mirror -update -function {power VDD}

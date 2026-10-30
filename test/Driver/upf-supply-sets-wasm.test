@@ -1,0 +1,11 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-supply-sets.test %t/sets
+// RUN: %split-file %S/upf-supply-set-switch.test %t/switch
+// RUN: %split-file %S/upf-supply-set-protected.test %t/protected
+// RUN: talos --upf %t/sets/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/sets/design.sv -o %t/sets.o
+// RUN: talos --upf %t/switch/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/switch/design.sv -o %t/switch.o
+// RUN: talos --upf %t/protected/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/protected/design.sv -o %t/protected.o
+// RUN: %llvm_dist/bin/llvm-readobj --file-headers %t/sets.o %t/switch.o %t/protected.o | FileCheck %s
+// IEEE 1801-2018 6.10/6.26: connectivity elaborates entirely in the native
+// compiler; function aliases and mutable roots also work with wasm32 pointers.
+// CHECK-COUNT-3: AddressSize: 32bit

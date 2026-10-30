@@ -308,6 +308,7 @@ struct PowerCondition {
   const llvm::StringMap<Descriptor> &descriptors;
   Descriptor power;
   std::optional<Descriptor> input, ground;
+  SmallVector<Descriptor> required;
   PowerCondition(upf::UPFDomainOp domain,
                  const llvm::StringMap<Descriptor> &descriptors,
                  const llvm::StringMap<Descriptor> &supplies)
@@ -319,6 +320,20 @@ struct PowerCondition {
       input = supplies.lookup(attr.getValue());
     if (auto attr = domain.getGroundAttr())
       ground = supplies.lookup(attr.getValue());
+    if (auto primary = domain.getPrimaryAttr()) {
+      auto set = SymbolTable::lookupNearestSymbolFrom<upf::UPFSupplySetOp>(
+          domain, primary);
+      llvm::DenseSet<uint64_t> seen;
+      for (auto attr : set.getRequired()) {
+        auto name = cast<StringAttr>(attr).getValue();
+        if (name != "power" && name != "ground") {
+          auto supply = supplies.lookup(
+              cast<FlatSymbolRefAttr>(set.getFunctions().get(name)).getValue());
+          if (seen.insert(supply.id).second)
+            required.push_back(supply);
+        }
+      }
+    }
     auto collect = [&](const Expression &expression, bool onState) {
       for (auto path : expression.controls)
         controls.insert(path);
@@ -403,6 +418,9 @@ struct PowerCondition {
     // Ground at zero volts is powered; voltage itself is not an ON predicate.
     if (ground)
       result = arith::AndIOp::create(b, loc, result, full(*ground));
+    for (auto supply : required)
+      if (supply.id != power.id && (!ground || supply.id != ground->id))
+        result = arith::AndIOp::create(b, loc, result, full(supply));
     return result;
   }
   Value drivenSupply(OpBuilder &b, Location loc, Value context) const {
@@ -1136,6 +1154,11 @@ struct Lowering {
     if (condition.ground &&
         condition.ground->id != condition.input.value_or(condition.power).id)
       watched.push_back(handle(builder, loc, context, *condition.ground));
+    for (auto supply : condition.required)
+      if (supply.id != condition.input.value_or(condition.power).id &&
+          (!condition.ground || supply.id != condition.ground->id) &&
+          supply.id != condition.power.id)
+        watched.push_back(handle(builder, loc, context, supply));
     cf::BranchOp::create(builder, loc, loop);
     builder.setInsertionPointToEnd(loop);
     Value on = condition.normal(builder, loc, context);
@@ -1241,9 +1264,11 @@ struct ElaborateUPFPass
         getOperation().getOps<upf::UPFDomainOp>());
     SmallVector<upf::UPFSupplyOp> supplies(
         getOperation().getOps<upf::UPFSupplyOp>());
+    SmallVector<upf::UPFSupplySetOp> sets(
+        getOperation().getOps<upf::UPFSupplySetOp>());
     bool controls = false;
     getOperation().walk([&](sim::SimSupplyControlOp) { controls = true; });
-    if (domains.empty() && supplies.empty() && !controls)
+    if (domains.empty() && supplies.empty() && sets.empty() && !controls)
       return;
     // IEEE 1801-2018 6.20 assigns an instance to exactly one effective extent.
     // Until nested-domain extent partitioning exists, require disjoint roots;
@@ -1288,6 +1313,8 @@ struct ElaborateUPFPass
       signalPassFailure();
       return;
     }
+    for (auto set : sets)
+      set.erase();
     for (auto supply : supplies)
       supply.erase();
   }

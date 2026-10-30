@@ -1,0 +1,45 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: not talos --upf %t/ports.upf -emit-slang %t/design.sv -o %t.mlir 2>&1 | FileCheck %s --check-prefix=SOURCES
+// RUN: not talos --upf %t/nets.upf -emit-slang %t/design.sv -o %t.mlir 2>&1 | FileCheck %s --check-prefix=SOURCES
+// RUN: not talos --upf %t/short.upf -emit-slang %t/design.sv -o %t.mlir 2>&1 | FileCheck %s --check-prefix=SHORT
+// IEEE 1801-2018 4.5.5.2/6.10/9.1: function aliases must preserve distinct
+// physical sources, unsupported directional roots, and switch shorts.
+// SOURCES: multiple sources drive one unresolved supply group
+// SHORT: power-switch input and output are electrically connected
+
+//--- design.sv
+module leaf;
+endmodule
+module top;
+  logic enable = 1;
+  leaf dut();
+endmodule
+
+//--- ports.upf
+create_supply_port P
+create_supply_port Q
+create_supply_set A -function {power P}
+create_supply_set B -function {power Q}
+associate_supply_set {A B}
+
+//--- nets.upf
+create_supply_net A
+create_supply_net B
+set_scope dut
+create_supply_net LOCAL
+create_supply_port P
+create_supply_port Q
+connect_supply_net LOCAL -ports {P Q}
+set_scope /
+connect_supply_net A -ports dut/P
+connect_supply_net B -ports dut/Q
+
+//--- short.upf
+create_supply_set AON
+create_supply_set SWITCHED
+create_power_domain PD -elements dut -supply {primary SWITCHED}
+create_power_switch PS -domain PD \
+    -input_supply_port {vin AON.power} -output_supply_port {vout SWITCHED.power} \
+    -control_port {en enable} -on_state {ON vin en}
+associate_supply_set {AON SWITCHED}

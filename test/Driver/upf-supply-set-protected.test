@@ -1,0 +1,44 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: not %t.o0 2>&1 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: not %t.o3 2>&1 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: not %t.bc 2>&1 | FileCheck %s
+// IEEE 1801-2018 4.5.5.3/6.10/11.2.3.3.4/.5: all aliases of a computed
+// switch-output root remain protected. Function dots are not scope slashes.
+// CHECK-COUNT-3: UPF supply control failed for
+// CHECK: supply set output protection passed
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1;
+endmodule
+module top;
+  import UPF::*;
+  logic enable = 1;
+  wire q;
+  leaf dut(q);
+  initial begin
+    if (!supply_on("/top/AON.power") || !supply_on("/top/AON.ground", 0.0))
+      $fatal(1, "source ON failed");
+    #1;
+    if (q !== 1'b1) $fatal(1, "switch ON failed");
+    if (supply_off("/top/SW.power") || supply_on("/top/PD.primary.power") ||
+        supply_on("/top/SW/power")) $fatal(1, "protected or malformed name accepted");
+    if (!supply_on("/top/SW.nwell")) $fatal(1, "unbound bias function not exposed");
+    #1;
+    if (q !== 1'b1) $fatal(1, "failed write changed supply");
+    $display("supply set output protection passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set AON
+create_supply_set SW -function {ground AON.ground}
+create_power_domain PD -elements dut -supply {primary SW}
+create_power_switch PS -domain PD \
+    -input_supply_port {vin AON.power} -output_supply_port {vout SW.power} \
+    -control_port {en enable} -on_state {ON vin en}

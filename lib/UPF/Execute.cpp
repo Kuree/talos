@@ -26,14 +26,24 @@ namespace talos {
 #ifdef TALOS_ENABLE_UPF
 namespace {
 struct Domain {
-  std::string name, scope, power, ground, switchInput, switchOutput, isolation;
+  std::string name, scope, switchInput, switchOutput, isolation;
   std::string inputPort, outputPort;
+  std::optional<SupplyObject> inputSupply, outputSupply;
+  std::string primary;
   SmallVector<Attribute> on, errors;
   upf::SwitchStateAttr off;
   std::vector<std::string> elements;
   bool isolationHigh = true;
   int64_t clamp = 0;
   bool primaryAssociated = false;
+  std::optional<Location> location;
+};
+struct SupplySet {
+  std::string scope;
+  bool handle = false;
+  std::map<std::string, SupplyObject> functions;
+  std::set<std::string> required;
+  std::optional<std::string> updateScope;
   std::optional<Location> location;
 };
 struct Session {
@@ -46,13 +56,18 @@ struct Session {
   std::set<std::string> nets, supplyPorts, switches;
   SupplyPorts supplyPortInfo;
   SupplyBindings supplyBindings;
+  std::map<std::string, SupplySet> supplySets;
+  std::vector<std::pair<std::string, std::string>> setAssociations;
   std::set<std::string> designPorts;
+  std::set<std::string> declaredHDLNames;
   Session(ModuleOp module, Tcl_Interp *interp, bool allowHDLExpressions)
       : module(module), interp(interp),
         allowHDLExpressions(allowHDLExpressions) {
     std::set<std::string> tops;
     module.walk([&](Operation *op) {
       auto path = op->getAttrOfType<StringAttr>("hierarchical_name");
+      if (path)
+        declaredHDLNames.insert(path.str());
       StringRef kind = op->getName().getStringRef();
       if (!path ||
           (kind != "slang.symbol.instance" && kind != "slang.symbol.variable" &&
@@ -163,6 +178,110 @@ struct Session {
     return {};
   }
   std::string key(StringRef name) const { return resolve(name); }
+  std::string supplySetKey(StringRef name) const {
+    // 5.3.3.3/.5: '/' separates HDL scopes; dots select UPF object fields.
+    // Keeping those separators distinct also avoids a collision between
+    // SS.power in this scope and the net power in an HDL instance named SS.
+    size_t slash = name.rfind('/');
+    StringRef local =
+        slash == StringRef::npos ? name : name.drop_front(slash + 1);
+    std::string owner =
+        slash == StringRef::npos
+            ? scope
+            : resolve(slash == 0 ? StringRef("/") : name.take_front(slash));
+    return (owner.empty() ? std::string{} : absoluteSupplyHandle(owner)) + "/" +
+           local.str();
+  }
+  std::optional<SupplyObject> supply(StringRef name,
+                                     bool allowPort = false) const {
+    std::string path = key(name);
+    size_t slash = name.rfind('/');
+    StringRef local = name.drop_front(slash == StringRef::npos ? 0 : slash + 1);
+    if (allowPort && !local.contains('.') && supplyPorts.count(path))
+      return SupplyObject{SupplyObject::Port, path,
+                          StringRef(path).rsplit('.').first.str()};
+    if (nets.count(path) && !local.contains('.'))
+      return SupplyObject{SupplyObject::Net, path,
+                          StringRef(path).rsplit('.').first.str()};
+    auto parts = name.rsplit('.');
+    if (parts.first != name &&
+        llvm::is_contained(upf::getSupplyFunctionNames(), parts.second)) {
+      auto found = supplySets.find(supplySetKey(parts.first));
+      if (found != supplySets.end())
+        return SupplyObject{SupplyObject::Function,
+                            found->first + "." + parts.second.str(),
+                            found->second.scope};
+    }
+    return std::nullopt;
+  }
+  SupplyObject function(StringRef set, StringRef name) const {
+    return {SupplyObject::Function, (set + "." + name).str(),
+            supplySets.at(set.str()).scope};
+  }
+  bool sameSupply(const SupplyObject &a, const SupplyObject &b,
+                  StringRef pendingName = {},
+                  const SupplySet *pending = nullptr,
+                  const SupplyBindings *pendingBindings = nullptr) const {
+    if (a == b)
+      return true;
+    using Identity = std::pair<int, std::string>;
+    auto identity = [](const SupplyObject &object) -> Identity {
+      return {object.kind, object.path};
+    };
+    std::map<Identity, std::vector<SupplyObject>> graph;
+    auto link = [&](SupplyObject x, SupplyObject y) {
+      graph[identity(x)].push_back(y);
+      graph[identity(y)].push_back(x);
+    };
+    auto add = [&](StringRef name, const SupplySet &set) {
+      for (auto &[field, object] : set.functions)
+        link({SupplyObject::Function, (name + "." + field).str(), set.scope},
+             object);
+    };
+    for (auto &[name, set] : supplySets)
+      add(name, pending && name == pendingName ? *pending : set);
+    if (pending && !supplySets.count(pendingName.str()))
+      add(pendingName, *pending);
+    for (auto &[x, y] : setAssociations)
+      for (StringRef field : upf::getSupplyFunctionNames())
+        link(function(x, field), function(y, field));
+    for (auto &[side, net] :
+         pendingBindings ? *pendingBindings : supplyBindings)
+      link({SupplyObject::Port, side.first,
+            StringRef(side.first).rsplit('.').first.str()},
+           net);
+    std::vector<SupplyObject> work{a};
+    std::set<Identity> seen;
+    while (!work.empty()) {
+      auto current = std::move(work.back());
+      work.pop_back();
+      if (current == b)
+        return true;
+      if (!seen.insert(identity(current)).second)
+        continue;
+      for (auto &next : graph[identity(current)])
+        work.push_back(next);
+    }
+    return false;
+  }
+  bool hasNamedSet(StringRef name) const {
+    return supplySets.count(supplySetKey(name));
+  }
+  void markPrimaryAssociations(std::set<std::string> sets) {
+    // Whole-set associations propagate to functions connected later (6.10).
+    bool changed;
+    do {
+      changed = false;
+      for (auto &[a, b] : setAssociations)
+        if (sets.count(a) || sets.count(b)) {
+          changed |= sets.insert(a).second;
+          changed |= sets.insert(b).second;
+        }
+    } while (changed);
+    for (auto &[name, domain] : domains)
+      if (sets.count(domain.primary))
+        domain.primaryAssociated = true;
+  }
   bool list(Tcl_Obj *obj, std::vector<std::string> &out) {
     Tcl_Size count;
     Tcl_Obj **items;
@@ -462,14 +581,20 @@ struct Session {
       return TCL_OK;
     }
     if (command == "create_power_domain") {
-      if (objc < 2 || !options(objc, objv, 2, {"-elements"}, opts))
+      RepeatedOptions repeated{{"-supply", {}}};
+      if (objc < 2 ||
+          !options(objc, objv, 2, {"-elements", "-supply"}, opts, &repeated))
         return TCL_ERROR;
       Domain dom;
       if (!identifier(Tcl_GetString(objv[1])))
         return TCL_ERROR;
       dom.location = declarationLocation();
       dom.name = key(Tcl_GetString(objv[1]));
+      if (hasNamedSet(Tcl_GetString(objv[1])))
+        return error("power domain name conflicts with a supply set");
       dom.scope = scope;
+      dom.primary =
+          supplySetKey(std::string(Tcl_GetString(objv[1])) + ".primary");
       std::vector<std::string> names;
       // IEEE 1801-2018 6.20: omitted -elements creates an empty extent,
       // not an implicit '.'. Empty/updateable domains are a deferred feature.
@@ -487,8 +612,157 @@ struct Session {
       }
       if (dom.elements.empty())
         return error("power domain has no elements");
+      if (domains.count(dom.name))
+        return error("duplicate power domain");
+      std::map<std::string, SupplySet> handles;
+      auto makeHandle = [&](const std::string &id) {
+        SupplySet handle;
+        handle.scope = scope;
+        handle.handle = true;
+        // 8.3.2: subordinate objects retain their creation execution scope.
+        handle.updateScope = scope;
+        handle.location = dom.location;
+        if (id == dom.primary)
+          handle.required = {"power", "ground"};
+        handles.emplace(id, std::move(handle));
+      };
+      makeHandle(dom.primary);
+      std::vector<std::pair<std::string, std::string>> associations;
+      for (auto option : repeated["-supply"]) {
+        std::vector<std::string> fields;
+        if (!list(option, fields))
+          return TCL_ERROR;
+        if (fields.empty() || fields.size() > 2)
+          return error("domain supply requires {handle [supply_set]}");
+        if (!identifier(fields[0]))
+          return TCL_ERROR;
+        std::string id =
+            supplySetKey(std::string(Tcl_GetString(objv[1])) + "." + fields[0]);
+        makeHandle(id);
+        if (fields.size() == 2)
+          associations.emplace_back(id, supplySetKey(fields[1]));
+      }
+      for (auto &[a, b] : associations)
+        if (!supplySets.count(b) && !handles.count(b))
+          return error("unknown supply set: " + b);
+      std::string primary = dom.primary;
       if (!domains.emplace(dom.name, std::move(dom)).second)
         return error("duplicate power domain");
+      supplySets.insert(handles.begin(), handles.end());
+      setAssociations.insert(setAssociations.end(), associations.begin(),
+                             associations.end());
+      for (auto &[a, b] : associations)
+        if (a == primary || b == primary)
+          markPrimaryAssociations({a, b});
+      Tcl_ResetResult(interp);
+      return TCL_OK;
+    }
+    if (command == "create_supply_set") {
+      // IEEE 1801-2018 6.26/5.10: handles already exist, updates refine
+      // rather than replace bindings, and repeated identical bindings are OK.
+      bool update = false;
+      std::vector<Tcl_Obj *> bindings;
+      for (Tcl_Size i = 2; i < objc; ++i) {
+        StringRef option = Tcl_GetString(objv[i]);
+        if (option == "-update") {
+          if (update)
+            return error("duplicate UPF option -update");
+          update = true;
+        } else if (option == "-function") {
+          if (++i == objc)
+            return error("missing value for -function");
+          bindings.push_back(objv[i]);
+        } else
+          return error("unsupported create_supply_set option: " + option);
+      }
+      StringRef local = Tcl_GetString(objv[1]);
+      std::string id = supplySetKey(local);
+      auto found = supplySets.find(id);
+      if (found != supplySets.end() && !update)
+        return error("existing supply set or handle requires -update");
+      if (found == supplySets.end()) {
+        if (update)
+          return error("cannot update unknown supply set or handle");
+        if (local.contains('.'))
+          return error("unknown supply set handle");
+        if (!identifier(local))
+          return TCL_ERROR;
+        if (nets.count(key(local)) || supplyPorts.count(key(local)) ||
+            domains.count(key(local)) || switches.count(key(local)) ||
+            declaredHDLNames.count(key(local)))
+          return error("supply set name conflicts with an existing object");
+      }
+      SupplySet set = found == supplySets.end() ? SupplySet{} : found->second;
+      if (set.updateScope && *set.updateScope != scope)
+        return error(
+            "supply set updates must use the original execution scope");
+      set.updateScope = scope;
+      if (found == supplySets.end()) {
+        set.scope = scope;
+        set.location = declarationLocation();
+      }
+      std::set<std::string> associated;
+      for (auto binding : bindings) {
+        std::vector<std::string> fields;
+        if (!list(binding, fields))
+          return TCL_ERROR;
+        if (fields.size() != 2)
+          return error(
+              "supply function requires {function supply_net_or_port}");
+        if (!llvm::is_contained(upf::getSupplyFunctionNames(), fields[0]))
+          return error("unknown supply set function: " + fields[0]);
+        auto object = supply(fields[1], true);
+        if (!object)
+          return error("unknown supply net, port, or function: " + fields[1]);
+        // 6.26.1: concrete supplies must be local; descendant references
+        // are permitted through supply-net handles, not concrete net names.
+        bool descendant = StringRef(object->scope).starts_with(scope + ".");
+        if (object->scope != scope && object->kind != SupplyObject::Function)
+          return error("supply function requires a net or port defined in the "
+                       "current scope (IEEE 1801-2018 6.26)");
+        if (object->scope != scope && !descendant)
+          return error("function handles declared outside the current scope or "
+                       "its descendants are not implemented");
+        auto [previous, inserted] = set.functions.emplace(fields[0], *object);
+        if (!inserted && !sameSupply(previous->second, *object, id, &set))
+          return error("supply function is already associated with a different "
+                       "supply: " +
+                       fields[0]);
+        if (fields[0] == "power" || fields[0] == "ground")
+          associated.insert(id);
+        if (object->kind == SupplyObject::Function &&
+            (StringRef(object->path).ends_with(".power") ||
+             StringRef(object->path).ends_with(".ground")))
+          associated.insert(StringRef(object->path).rsplit('.').first.str());
+      }
+      supplySets.insert_or_assign(id, std::move(set));
+      markPrimaryAssociations(std::move(associated));
+      Tcl_ResetResult(interp);
+      return TCL_OK;
+    }
+    if (command == "associate_supply_set") {
+      // 6.10: electrical links persist independently of per-set state tables.
+      if (!options(objc, objv, 2, {"-handle"}, opts))
+        return TCL_ERROR;
+      std::vector<std::string> names;
+      if (!list(objv[1], names))
+        return TCL_ERROR;
+      if (opts.count("-handle"))
+        names.push_back(value(opts, "-handle").str());
+      if (names.size() < 2)
+        return error("supply association requires at least two supply sets");
+      for (auto &name : names) {
+        name = supplySetKey(name);
+        if (!supplySets.count(name))
+          return error("unknown supply set or handle: " + name);
+      }
+      if (opts.count("-handle") && !supplySets.at(names.back()).handle)
+        return error("-handle requires a supply set handle");
+      for (auto &name : ArrayRef(names).drop_front())
+        setAssociations.emplace_back(names.front(), name);
+      markPrimaryAssociations(
+          std::set<std::string>(names.begin(), names.end()));
+      Tcl_ResetResult(interp);
       return TCL_OK;
     }
     if (command == "create_supply_net" || command == "create_supply_port") {
@@ -517,6 +791,8 @@ struct Session {
       if (opts.count("-resolve") && value(opts, "-resolve") != "unresolved")
         return error("the first UPF slice supports unresolved supply nets");
       auto &inventory = command == "create_supply_net" ? nets : supplyPorts;
+      if (hasNamedSet(Tcl_GetString(objv[1])))
+        return error("supply object name conflicts with a supply set");
       if (!inventory.insert(key(Tcl_GetString(objv[1]))).second)
         return error("duplicate supply object");
       if (command == "create_supply_port")
@@ -530,7 +806,8 @@ struct Session {
     if (command == "connect_supply_net") {
       if (objc < 2 || !options(objc, objv, 2, {"-ports"}, opts))
         return TCL_ERROR;
-      if (!nets.count(key(Tcl_GetString(objv[1]))))
+      auto net = supply(Tcl_GetString(objv[1]));
+      if (!net)
         return error("unknown supply net");
       std::vector<std::string> ports;
       if (!opts.count("-ports"))
@@ -546,8 +823,11 @@ struct Session {
       auto bindings = supplyBindings;
       for (auto &port : ports)
         if (failed(bindSupply(
-                key(Tcl_GetString(objv[1])), key(port), bindings,
-                [&](const llvm::Twine &message) { error(message); })))
+                *net, key(port), bindings,
+                [&](const llvm::Twine &message) { error(message); },
+                [&](const SupplyObject &a, const SupplyObject &b) {
+                  return sameSupply(a, b, {}, nullptr, &bindings);
+                })))
           return TCL_ERROR;
       supplyBindings = std::move(bindings);
       return TCL_OK;
@@ -570,12 +850,21 @@ struct Session {
       std::string previousScope = scope;
       auto restoreScope = llvm::scope_exit([&] { scope = previousScope; });
       scope = found->second.scope;
-      for (auto &option : opts)
-        if (!nets.count(key(Tcl_GetString(option.second))))
-          return error("unknown primary supply net");
-      found->second.power = key(value(opts, "-primary_power_net"));
-      found->second.ground = key(value(opts, "-primary_ground_net"));
+      auto power = supply(value(opts, "-primary_power_net"));
+      auto ground = supply(value(opts, "-primary_ground_net"));
+      if (!power || !ground)
+        return error("unknown primary supply net");
+      auto &primary = supplySets.at(found->second.primary);
+      primary.functions.emplace("power", *power);
+      primary.functions.emplace("ground", *ground);
       found->second.primaryAssociated = true;
+      std::set<std::string> associated{found->second.primary};
+      for (auto object : {*power, *ground})
+        if (object.kind == SupplyObject::Function &&
+            (StringRef(object.path).ends_with(".power") ||
+             StringRef(object.path).ends_with(".ground")))
+          associated.insert(StringRef(object.path).rsplit('.').first.str());
+      markPrimaryAssociations(std::move(associated));
       Tcl_SetObjResult(interp, Tcl_NewIntObj(1));
       return TCL_OK;
     }
@@ -598,6 +887,8 @@ struct Session {
       std::string previousScope = scope;
       auto restoreScope = llvm::scope_exit([&] { scope = previousScope; });
       scope = dom->scope;
+      if (hasNamedSet(Tcl_GetString(objv[1])))
+        return error("power switch name conflicts with a supply set");
       if (!dom->switchOutput.empty())
         return error("one power switch per domain is supported");
       std::vector<std::string> input, output;
@@ -613,9 +904,10 @@ struct Session {
         return TCL_ERROR;
       if (input[0] == output[0])
         return error("duplicate power-switch port name");
-      if (!nets.count(key(input[1])) || !nets.count(key(output[1])))
+      auto inputSupply = supply(input[1]), outputSupply = supply(output[1]);
+      if (!inputSupply || !outputSupply)
         return error("power switch references an unknown supply net");
-      if (key(input[1]) == key(output[1]))
+      if (*inputSupply == *outputSupply)
         return error("a switch must have distinct input and output supplies");
       std::map<std::string, ControlReference> aliases;
       for (auto port : repeated["-control_port"]) {
@@ -735,11 +1027,11 @@ struct Session {
       for (auto &[name, other] : domains) {
         if (&other == dom || other.switchOutput.empty())
           continue;
-        if (other.switchOutput == key(output[1]))
+        if (other.outputSupply == outputSupply)
           return error(
               "multiple switches drive the same unresolved supply net");
-        if (other.switchOutput == key(input[1]) ||
-            other.switchInput == key(output[1]))
+        if (other.outputSupply == inputSupply ||
+            other.inputSupply == outputSupply)
           return error("cascaded power switches are not implemented");
       }
       std::string switchName = key(Tcl_GetString(objv[1]));
@@ -748,8 +1040,8 @@ struct Session {
       if (supplyPorts.count(inputPort) || supplyPorts.count(outputPort))
         return error("power-switch supply port already exists");
       auto bindings = supplyBindings;
-      for (auto [net, port] : {std::make_pair(key(input[1]), inputPort),
-                               std::make_pair(key(output[1]), outputPort)})
+      for (auto [net, port] : {std::make_pair(*inputSupply, inputPort),
+                               std::make_pair(*outputSupply, outputPort)})
         if (failed(bindSupply(
                 net, port, bindings,
                 [&](const llvm::Twine &message) { error(message); })))
@@ -759,13 +1051,10 @@ struct Session {
       dom->on = std::move(onStates);
       dom->off = offState;
       dom->errors = std::move(errorStates);
-      dom->switchInput = key(input[1]);
-      dom->switchOutput = key(output[1]);
-      // Legacy inference is used only by --upf-assume-powered-inputs. In
-      // standard mode the final inventory requires an explicit association:
-      // 6.22 -domain selects scope, not the primary supply function (6.43).
-      if (dom->power.empty())
-        dom->power = dom->switchOutput;
+      dom->switchInput = inputSupply->path;
+      dom->switchOutput = outputSupply->path;
+      dom->inputSupply = *inputSupply;
+      dom->outputSupply = *outputSupply;
       dom->inputPort = inputPort;
       dom->outputPort = outputPort;
       supplyPorts.insert(inputPort);
@@ -856,7 +1145,8 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
        {"upf_version", "set_design_top", "set_scope", "find_objects",
         "load_upf", "create_power_domain", "create_supply_net",
         "create_supply_port", "connect_supply_net", "set_domain_supply_net",
-        "create_power_switch", "set_isolation"})
+        "create_power_switch", "set_isolation", "create_supply_set",
+        "associate_supply_set"})
     commands.push_back({&session, name});
   for (auto &command : commands)
     Tcl_CreateObjCommand2(interp.get(), command.name, dispatch, &command,
@@ -875,40 +1165,73 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
              << (details ? details : Tcl_GetStringResult(interp.get()));
     }
   }
+  SupplyFunctions functions;
+  SupplyEquivalences equivalences;
+  for (auto &[name, set] : session.supplySets) {
+    for (StringRef function : upf::getSupplyFunctionNames())
+      functions[name + "." + function.str()] = set.scope;
+    for (auto &[function, object] : set.functions)
+      equivalences.emplace_back(session.function(name, function), object);
+  }
+  bool changed;
+  do {
+    changed = false;
+    for (auto &[a, b] : session.setAssociations) {
+      auto &left = session.supplySets.at(a).required;
+      auto &right = session.supplySets.at(b).required;
+      for (auto function : left)
+        changed |= right.insert(function).second;
+      for (auto function : right)
+        changed |= left.insert(function).second;
+    }
+  } while (changed);
+  for (auto &[a, b] : session.setAssociations)
+    for (StringRef function : upf::getSupplyFunctionNames())
+      equivalences.emplace_back(session.function(a, function),
+                                session.function(b, function));
+  for (auto &[name, domain] : session.domains)
+    if (assumePoweredInputs && domain.outputSupply && !domain.primaryAssociated)
+      // Preserve the old primary-output inference only in compatibility mode.
+      equivalences.emplace_back(session.function(domain.primary, "power"),
+                                *domain.outputSupply);
   std::string supplyError;
   auto resolved = resolveSupplies(
-      session.nets, session.supplyPortInfo, session.supplyBindings,
+      session.nets, session.supplyPortInfo, functions, session.supplyBindings,
+      equivalences,
       [&](const llvm::Twine &message) { supplyError = message.str(); });
   if (failed(resolved))
     return module.emitError() << supplyError;
   auto &supplies = *resolved;
+  auto rootFor = [&](const SupplyObject &object) {
+    if (object.kind == SupplyObject::Function)
+      return supplies.functions.at(object.path);
+    if (object.kind == SupplyObject::Port)
+      return supplies.ports.at(object.path);
+    return supplies.nets.at(object.path);
+  };
+  for (auto &[name, set] : session.supplySets)
+    supplies.roots[supplies.functions.at(name + ".ground")].ground = true;
   struct DomainSupplies {
     unsigned power, ground;
     std::optional<unsigned> input;
   };
   std::map<std::string, DomainSupplies> domainSupplies;
   for (auto &[name, domain] : session.domains) {
-    auto root = [&](const std::string &net) {
-      if (!net.empty())
-        return supplies.nets.at(net);
-      unsigned id = supplies.roots.size();
-      supplies.roots.push_back({});
-      return id;
-    };
-    unsigned power = root(domain.power), ground = root(domain.ground);
-    supplies.roots[ground].ground = true;
+    unsigned power = supplies.functions.at(domain.primary + ".power");
+    unsigned ground = supplies.functions.at(domain.primary + ".ground");
     std::optional<unsigned> input;
     if (!domain.switchOutput.empty()) {
-      if (!domain.primaryAssociated && !assumePoweredInputs)
-        return emitError(domain.location.value_or(module.getLoc()))
-               << "switchable domain requires an explicit primary supply "
-                  "association with set_domain_supply_net (IEEE 1801-2018 "
-                  "6.22/6.43)";
-      input = supplies.nets.at(domain.switchInput);
+      input = rootFor(*domain.inputSupply);
       unsigned output = supplies.ports.at(domain.outputPort);
-      if (power != output)
+      if (power != output) {
+        if (!domain.primaryAssociated)
+          return emitError(domain.location.value_or(module.getLoc()))
+                 << "switchable domain requires an explicit primary supply "
+                    "association with set_domain_supply_net (IEEE 1801-2018 "
+                    "6.22/6.43)";
         return emitError(domain.location.value_or(module.getLoc()))
                << "switch output does not drive the domain primary supply";
+      }
       if (*input == output)
         return emitError(domain.location.value_or(module.getLoc()))
                << "power-switch input and output are electrically connected";
@@ -923,16 +1246,6 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
     if (!supplies.roots[ground].writable)
       return emitError(domain.location.value_or(module.getLoc()))
              << "switched primary ground is not implemented";
-    // IEEE 1801-2018 6.20/9.2.1/9.3.1: implicit primary functions have root
-    // drivers unless associated with a network. HDL handles use absolute UPF
-    // root paths, not Tcl design-relative '/' (11.2.3.1.1).
-    std::string prefix =
-        domain.scope.empty() ? "" : absoluteSupplyHandle(domain.scope);
-    std::string simple =
-        domain.scope.empty() ? name : name.substr(domain.scope.size() + 1);
-    prefix += "/" + simple + ".primary.";
-    supplies.handles[prefix + "power"] = power;
-    supplies.handles[prefix + "ground"] = ground;
     domainSupplies.emplace(name, DomainSupplies{power, ground, input});
   }
   OpBuilder builder(module.getContext());
@@ -956,6 +1269,19 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
         builder, module.getLoc(), supplySymbol(id).getValue(),
         builder.getArrayAttr(names), root.writable, initial);
   }
+  for (auto &[name, set] : session.supplySets) {
+    NamedAttrList bindings;
+    SmallVector<Attribute> required;
+    for (StringRef function : upf::getSupplyFunctionNames())
+      bindings.set(function, supplySymbol(supplies.functions.at(
+                                 name + "." + function.str())));
+    for (auto &function : set.required)
+      required.push_back(builder.getStringAttr(function));
+    upf::UPFSupplySetOp::create(builder, set.location.value_or(module.getLoc()),
+                                name,
+                                bindings.getDictionary(module.getContext()),
+                                builder.getArrayAttr(required));
+  }
   for (auto &[name, domain] : session.domains) {
     llvm::SmallVector<Attribute> elements;
     for (auto &element : domain.elements)
@@ -968,6 +1294,7 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
         domainSupplies.at(name).input
             ? supplySymbol(*domainSupplies.at(name).input)
             : FlatSymbolRefAttr{},
+        FlatSymbolRefAttr::get(module.getContext(), domain.primary),
         builder.getArrayAttr(domain.on), domain.off,
         domain.errors.empty() ? ArrayAttr{}
                               : builder.getArrayAttr(domain.errors),

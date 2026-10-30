@@ -1,0 +1,61 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --native-scheduler=eval --mlir-verify-each %t/design.sv -o %t.eval
+// RUN: %t.eval | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 5.3.3.5/6.22: function handles work as switch input/output
+// nets. The explicit output-to-primary-function connection needs no legacy
+// association inference. Ground can be supplied through another set's handle.
+// CHECK: switched supply set handles passed
+
+//--- design.sv
+package audit;
+  int calls = 0;
+  function logic sample();
+    calls++;
+    return 1;
+  endfunction
+endpackage
+module leaf(output wire q);
+  assign q = audit::sample();
+endmodule
+module top;
+  import UPF::*;
+  logic enable = 1;
+  wire q;
+  leaf dut(q);
+  initial begin
+    #1;
+    if (q !== 1'bx || audit::calls != 0) $fatal(1, "initial OFF");
+    if (!supply_on("/top/AON.power") || !supply_on("/top/AON.ground", 0.0))
+      $fatal(1, "AON function control failed");
+    #1;
+    if (q !== 1'b1 || audit::calls != 1) $fatal(1, "switch output alias failed");
+    enable = 0;
+    #1;
+    if (q !== 1'bx || audit::calls != 1) $fatal(1, "switch loss failed");
+    enable = 1;
+    #1;
+    if (q !== 1'b1 || audit::calls != 2) $fatal(1, "switch restore failed");
+    if (!supply_off("/top/VDD")) $fatal(1, "source net alias failed");
+    #1;
+    if (q !== 1'bx) $fatal(1, "source OFF failed");
+    if (!supply_on("/top/AON.power", 0.8)) $fatal(1, "source restore failed");
+    #1;
+    if (q !== 1'b1 || audit::calls != 3) $fatal(1, "source restore count failed");
+    $display("switched supply set handles passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_net VDD
+create_supply_set AON -function {power VDD}
+create_supply_set SW -function {ground AON.ground}
+create_power_domain PD -elements dut -supply {primary SW}
+create_power_switch PS -domain PD \
+    -input_supply_port {vin AON.power} -output_supply_port {vout PD.primary.power} \
+    -control_port {en enable} -on_state {ON vin en}

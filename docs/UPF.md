@@ -29,20 +29,22 @@ can elaborate UPF and generate wasm32 simulations with 32-bit pointers and
 ## Executing UPF and Tcl libraries
 
 `talos --upf power.upf -emit-slang design.sv -o design.mlir` executes Tcl
-after Slang elaboration and emits resolved `upf.domain` and `upf.supply`
-operations. Supply operations describe shared roots, their absolute handle
-aliases, driver permissions, and initial state/voltage values. The
+after Slang elaboration and emits resolved `upf.domain`, `upf.supply`, and
+`upf.supply_set` operations. Supply operations describe shared roots, their
+absolute handle aliases, driver permissions, and initial state/voltage values. The
 initial command subset includes design scope and object queries, scoped
-`load_upf`, power domains, supply nets/ports, one control-based power switch
-per domain, and parent-located output isolation. Unsupported commands and
+`load_upf`, power domains, supply nets/ports/sets, set associations, one
+control-based power switch per domain, and parent-located output isolation. Unsupported commands and
 options produce Tcl errors, which user procedures may handle with `catch`
 (IEEE 1801-2018 clause 5.11). The resolved domain retains its UPF declaration's
 source location.
 
-Switched domains require an explicit `set_domain_supply_net` association
-between their primary power and the switch output. The `-domain` switch option
-selects its creation scope; it does not create that association (clauses 6.22
-and 6.43). Unassociated abstract switches are outside this runtime slice.
+Switched domains require an explicit connection between their primary power
+function and the switch output. This can use a function handle directly, a
+supply-set association, or legacy `set_domain_supply_net`. The `-domain` switch
+option selects its creation scope; it does not create that connection (clauses
+5.3.3.5, 6.10, 6.22, and 6.43). Unconnected abstract switches are outside this
+runtime slice.
 
 Independent domains can contain module hierarchies. Isolation applies at the
 upper domain boundary, preserving internal connections (clauses 6.20 and 6.45).
@@ -122,6 +124,50 @@ ignores X/Z elsewhere in the vector, while `controls & 4'b0001` references the
 whole vector and therefore detects X/Z in any bit (clause 6.22). The monitor
 watches the base object but activates RTL only when aggregate power changes.
 Isolation controls currently remain scalar objects.
+
+## Supply sets and associations
+
+`create_supply_set`, `associate_supply_set`, and `create_power_domain -supply`
+provide the supply-set connectivity described in clauses 6.26, 6.10, and 6.20:
+
+```tcl
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary CORE}
+```
+
+The equivalent separate association is `associate_supply_set CORE -handle
+PD.primary`. A domain always has a primary handle; additional handles can be
+declared with `-supply {backup}`. Existing sets and handles require `-update`
+when adding function bindings. Updates retain the original execution scope
+(clause 8.3.2). An identical or equivalent reference is idempotent; conflicting
+bindings produce a Tcl error. Failed declarations leave no partial object.
+
+Associations electrically join corresponding functions and remain effective
+when functions are bound later. Lists, transitive links, repeated associations,
+and alias cycles are supported. The six standard functions are `power`,
+`ground`, `nwell`, `pwell`, `deepnwell`, and `deeppwell`. Unbound functions have
+implicit supply roots, initialized OFF. Requiredness is separate from function
+existence: primary power and ground are required, but merely binding an unused
+well does not make it required for NORMAL operation (clause 4.5.4.7).
+
+Function handles work in supply declarations, connections, switch endpoints,
+and legacy primary bindings. For `-function`, concrete nets/ports must be local;
+function handles declared in the current scope or descendants are supported.
+Other function-handle declaration scopes are diagnosed as unsupported.
+Tcl uses names such as `CORE.power` and
+`PD.primary.power`; HDL supply functions use absolute names such as
+`/top/CORE.power`. Dots delimit UPF object fields, while slashes delimit HDL
+instance scopes (clause 5.3.3). Supply sets retain separate identities after
+association: electrical equivalence does not inherit power-state definitions
+(clause 6.5.1). Explicit power-state definitions remain a subsequent feature.
+
+Physical port and switch drivers remain distinct when aliases are collapsed;
+associations cannot hide an unresolved multiple-source error or bypass switch
+output protection. Networks require one supported directional origin with
+reachability to their loads. Associated implicit functions do not each invent
+another driver (clauses 6.26.2 and 9.1).
 
 ## Runtime supplies
 

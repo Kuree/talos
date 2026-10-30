@@ -1,0 +1,64 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 5.3.3.3/.5/6.26: dotted UPF function fields are distinct
+// from '/' HDL scopes. General port/net references prefer same-name ports;
+// legacy net-only arguments select the net. Implicit functions remain usable.
+// CHECK: scoped supply sets and same-name supplies passed
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1;
+endmodule
+module wrapper(output wire q);
+  leaf dut(q);
+endmodule
+module top;
+  import UPF::*;
+  wire a, b, c;
+  leaf duta(a), dutb(b);
+  wrapper child(c);
+  initial begin
+    #1;
+    if ({a,b,c} !== 3'bxxx) $fatal(1, "initial OFF");
+    if (!supply_on("/top/VSS", 0.0) || !supply_on("/top/child/Local.ground", 0.0))
+      $fatal(1, "ground control failed");
+    if (!supply_on("/top/child/power")) $fatal(1, "scoped net failed");
+    #1;
+    if ({a,b,c} !== 3'bxx1) $fatal(1, "scoped net selected an unrelated set");
+    if (!supply_on("/top/SS.power")) $fatal(1, "set function failed");
+    #1;
+    if ({a,b,c} !== 3'b1x1) $fatal(1, "function binding did not select port");
+    if (!supply_on("/top/VDD@upfSupplyNetT")) $fatal(1, "explicit net failed");
+    #1;
+    if ({a,b,c} !== 3'b111) $fatal(1, "legacy net context selected port");
+    if (!supply_off("/top/VDD")) $fatal(1, "port OFF failed");
+    if (!supply_off("/top/child/Local.power")) $fatal(1, "scoped set OFF failed");
+    #1;
+    if ({a,b,c} !== 3'bx1x) $fatal(1, "scoped/type distinctions lost");
+    if (!supply_on("/top/Descendant.power")) $fatal(1, "descendant function handle failed");
+    #1;
+    if ({a,b,c} !== 3'bx11) $fatal(1, "scoped primary did not alias physical net");
+    $display("scoped supply sets and same-name supplies passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+foreach net {VDD VSS} {create_supply_net $net}
+create_supply_port VDD
+create_supply_set SS -function {power VDD} -function {ground VSS}
+create_power_domain A -elements duta -supply {primary SS}
+create_power_domain B -elements dutb
+set_domain_supply_net B -primary_power_net VDD -primary_ground_net VSS
+set_scope child
+create_supply_net power
+create_supply_set Local -function {power power}
+create_power_domain C -elements dut -supply {primary Local}
+set_scope /
+create_supply_set Descendant -function {power child/Local.power}

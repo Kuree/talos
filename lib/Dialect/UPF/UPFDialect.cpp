@@ -29,10 +29,63 @@ mlir::LogicalResult UPFSupplyOp::verify() {
   return mlir::success();
 }
 mlir::LogicalResult
+UPFSupplySetOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
+  for (auto binding : getFunctions())
+    if (!symbols.lookupNearestSymbolFrom<UPFSupplyOp>(
+            *this, mlir::cast<mlir::FlatSymbolRefAttr>(binding.getValue())))
+      return emitOpError("references an unknown function supply root");
+  return mlir::success();
+}
+mlir::LogicalResult UPFSupplySetOp::verify() {
+  // IEEE 1801-2018 6.26: all six functions exist; requiredness is separate
+  // and usage-derived (4.5.4.7). Set identity survives electrical association.
+  if (getFunctions().size() != getSupplyFunctionNames().size())
+    return emitOpError("requires exactly the six standard supply functions");
+  for (auto binding : getFunctions())
+    if (!llvm::is_contained(getSupplyFunctionNames(),
+                            binding.getName().strref()) ||
+        !mlir::isa<mlir::FlatSymbolRefAttr>(binding.getValue()))
+      return emitOpError("function bindings must map standard functions to "
+                         "flat supply root references");
+  llvm::StringSet<> required;
+  for (auto attr : getRequired()) {
+    auto name = mlir::cast<mlir::StringAttr>(attr).getValue();
+    if (!llvm::is_contained(getSupplyFunctionNames(), name) ||
+        !required.insert(name).second)
+      return emitOpError(
+          "required functions must be unique standard supply functions");
+  }
+  return mlir::success();
+}
+mlir::LogicalResult
 UPFDomainOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
   for (auto ref : {getPowerAttr(), getGroundAttr(), getInputAttr()})
     if (ref && !symbols.lookupNearestSymbolFrom<UPFSupplyOp>(*this, ref))
       return emitOpError("references an unknown supply root: ") << ref;
+  if (auto primary = getPrimaryAttr()) {
+    auto set = symbols.lookupNearestSymbolFrom<UPFSupplySetOp>(*this, primary);
+    if (!set)
+      return emitOpError("references an unknown primary supply set");
+    if (set.getFunctions().get("power") != getPowerAttr() ||
+        set.getFunctions().get("ground") != getGroundAttr())
+      return emitOpError(
+          "primary power and ground must match the supply-set functions");
+    llvm::StringSet<> required;
+    for (auto function : set.getRequired())
+      required.insert(mlir::cast<mlir::StringAttr>(function).getValue());
+    if (!required.contains("power") || !required.contains("ground"))
+      return emitOpError(
+          "primary supply set requires power and ground functions");
+    for (auto &function : required) {
+      auto ref = mlir::dyn_cast<mlir::FlatSymbolRefAttr>(
+          set.getFunctions().get(function.getKey()));
+      auto root = ref ? symbols.lookupNearestSymbolFrom<UPFSupplyOp>(*this, ref)
+                      : UPFSupplyOp{};
+      if (root && ref != getPowerAttr() && !root.getWritable())
+        return emitOpError("required auxiliary functions must have independent "
+                           "writable roots");
+    }
+  }
   // This runtime slice supports independent root drivers and one abstract
   // switch per domain (IEEE 1801-2018 9.1/9.2.2). Preserve that contract for
   // textual IR as well as Tcl: an HDL supply call must never write a computed

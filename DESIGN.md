@@ -114,11 +114,12 @@ elaborated Slang IR. Tcl 9.0.4 supplies the language implementation, including
 procedures, control flow, substitutions, lists, `source`, and core packages.
 UPF commands are C++ callbacks against a design database indexed from the
 Slang hierarchy. Resolved domains and supply roots are inspectable with
-`-emit-slang` as `upf.domain` and `upf.supply` operations.
+`-emit-slang` as `upf.domain`, `upf.supply`, and `upf.supply_set` operations.
 
 The initial command bridge supports `upf_version 3.1`, `set_design_top`,
 `set_scope`, `find_objects`, `load_upf`, basic supply net/port declarations and
-connections, `create_power_domain`, `set_domain_supply_net`,
+connections, `create_supply_set`, `associate_supply_set`,
+`create_power_domain` with supply handles, `set_domain_supply_net`,
 `create_power_switch`, and output `set_isolation`. Options outside the
 implemented subset are diagnosed. Root supplies initially are OFF (IEEE
 1801-2018 9.2.1). The compiler-provided SystemVerilog package `UPF` implements
@@ -127,11 +128,14 @@ net/port and implicit primary-function aliases (11.2.3). Connected unresolved
 supplies share one per-context state/voltage storage value, with signed32
 microvolts on both native and wasm32 targets. Direct domains and switched
 domains require FULL_ON primary power and ground; ground can be FULL_ON at
-zero volts (4.7.4). Switches require an explicit primary supply association
-with `set_domain_supply_net` (6.22/6.43). `--upf-assume-powered-inputs` retains
+zero volts (4.7.4). Supply sets preserve six function identities separately from
+requiredness, with corresponding function roots shared by electrical
+associations, including later bindings (4.5.4.7/6.10/6.26). Switches connect to
+primary power through function handles, supply-set associations, or legacy
+`set_domain_supply_net` (5.3.3.5/6.22/6.43). `--upf-assume-powered-inputs` retains
 the prototype's omitted-association inference and changes initial writable roots
 to FULL_ON for compatibility. General supply resolution, switch cascades,
-supply sets/power-state definitions, and retention remain to be implemented.
+explicit power-state definitions, and retention remain to be implemented.
 
 The simulation slice accepts independent direct domains and domains controlled
 by one switch. A switch has named ON/ERROR conditions and an optional named OFF
