@@ -674,6 +674,25 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
              << (details ? details : Tcl_GetStringResult(interp.get()));
     }
   }
+  // IEEE 1801-2018 6.20/8.3.3: an explicitly assigned descendant is excluded
+  // from its parent's effective extent even when it has no local switch. Such
+  // domains are omitted from this runtime slice, so diagnose that unsupported
+  // partition before their ownership information could be discarded.
+  for (auto &[name, domain] : session.domains) {
+    if (domain.control.empty())
+      continue;
+    for (auto &[otherName, other] : session.domains) {
+      if (!other.control.empty())
+        continue;
+      for (auto &element : domain.elements)
+        for (auto &child : other.elements)
+          if (child == element || StringRef(child).starts_with(element + "."))
+            return emitError(other.location.value_or(module.getLoc()))
+                   << "always-on subdomains inside switchable domains are not "
+                      "implemented: "
+                   << otherName << " inside " << name;
+    }
+  }
   OpBuilder builder(module.getContext());
   builder.setInsertionPointToEnd(module.getBody());
   for (auto &[name, domain] : session.domains) {

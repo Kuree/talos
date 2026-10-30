@@ -1,0 +1,48 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.20: the parent owns the computation of a port actual.
+// An exterior input expression remains powered when the child domain is OFF.
+// CHECK: exterior input expression remained active
+
+//--- design.sv
+module child(input logic d, output logic q);
+  always_comb q = d;
+endmodule
+module wrapper(input logic d, output logic q);
+  child u(d, q);
+endmodule
+module top;
+  logic d = 0, power_en = 1, iso = 0;
+  wire q;
+  wrapper dut(~d, q);
+  initial begin
+    #1;
+    if (q !== 1'b1) $fatal(1, "exterior input expression failed");
+    power_en = 0; iso = 1;
+    #1;
+    d = 1;
+    #1;
+    if (dut.d !== 1'b0 || dut.u.q !== 1'bx || q !== 1'b0)
+      $fatal(1, "exterior expression was gated with the child domain");
+    power_en = 1; iso = 0;
+    #1;
+    if (q !== 1'b0) $fatal(1, "exterior expression failed after restoration");
+    $display("exterior input expression remained active");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_power_domain PD -elements dut
+foreach net {VDD VDD_SW} {create_supply_net $net}
+create_power_switch SW -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout VDD_SW} \
+    -control_port {en power_en} -on_state {ON vin en}
+set_isolation ISO -domain PD -isolation_signal iso -clamp_value 0 \
+    -applies_to outputs -location parent

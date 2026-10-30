@@ -554,6 +554,11 @@ LogicalResult SimCodeUnitDeclOp::verify() {
     return emitOpError("code-unit ID must be nonzero");
   if (getHierarchicalName().empty())
     return emitOpError("requires a nonempty hierarchical name");
+  if (sim::has<sim::metadata::ComputedPortInput>(*this) &&
+      getCodeUnitKind() != EntryKind::PortInput &&
+      getCodeUnitKind() != EntryKind::PortInitialize)
+    return emitOpError(
+        "computed input metadata requires an input connection code unit");
   return verifyFixedReflection(*this, effectiveCodeUnitVPIKind(*this),
                                reflectionProperties(*this),
                                reflectionDefinitionLoc(*this));

@@ -1,7 +1,5 @@
 # REQUIRES: upf
 # RUN: %split-file %s %t
-# RUN: not talos --upf %S/Inputs/upf/switchable.upf %t/nested.sv -o %t/nested 2>&1 | FileCheck %s --check-prefix=NESTED
-# RUN: not talos --upf %S/Inputs/upf/redundant-elements.upf %t/nested.sv -o %t/redundant 2>&1 | FileCheck %s --check-prefix=NESTED
 # RUN: not talos --upf %S/Inputs/upf/switchable-no-isolation.upf %t/delayed.sv -o %t/delayed 2>&1 | FileCheck %s --check-prefix=DELAYED
 # RUN: not talos --upf %S/Inputs/upf/switchable-no-isolation.upf %t/blocking.sv -o %t/blocking 2>&1 | FileCheck %s --check-prefix=TIMED
 # RUN: not talos --upf %S/Inputs/upf/switchable-no-isolation.upf %t/aggregate.sv -o %t/aggregate 2>&1 | FileCheck %s --check-prefix=AGGREGATE
@@ -9,25 +7,11 @@
 # RUN: not talos --upf %S/Inputs/upf/switchable-no-isolation.upf %t/clocking.sv -o %t/clocking 2>&1 | FileCheck %s --check-prefix=CLOCKING
 # IEEE 1801-2018 9.5.3/9.6/9.8: diagnose unimplemented power effects before
 # simulation rather than accepting RTL whose queued writes would escape them.
-# NESTED: initial UPF domain elements must be leaf module instances
 # DELAYED: delayed drivers and force/release inside a switchable domain are not implemented
 # TIMED: initial UPF domain requires one repeating event control per process
 # AGGREGATE: initial UPF corruption supports packed integral state
 # INOUT: inout ports in a switchable domain are not implemented
 # CLOCKING: clocking-output NBAs in a switchable domain are not implemented
-
-#--- nested.sv
-module child(input logic d, output logic q);
-  always_comb q = d;
-endmodule
-module leaf(input logic d, output logic q);
-  child u(d, q);
-endmodule
-module upf_test;
-  logic d, power_en, iso;
-  wire q;
-  leaf dut(d, q);
-endmodule
 
 #--- delayed.sv
 module leaf(input logic d, output wire q);

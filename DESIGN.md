@@ -126,20 +126,33 @@ general supply-network initialization, voltage/state evaluation, the HDL UPF
 package (`supply_on` / `supply_off`) and retention remain to be implemented.
 
 The simulation slice accepts independent switchable domains, each with one
-scalar logic switch control, packed integral
-domain state, event-controlled RTL, and combinational logic. Parent-side
+scalar logic switch control. It supports packed integral domain state,
+event-controlled RTL, and combinational logic. Parent-side
 isolation supports an external control and a zero/one clamp, with unknown
 isolation control producing corruption even when the data equals the clamp.
 Power loss corrupts domain state and drivers and gates behavioral activations.
 Restoring power reevaluates combinational logic; edge-triggered logic waits for
 a new edge and does not recover lost register contents. Model initialization
 in `initial` blocks remains unaffected, as specified by IEEE 1801 9.2.1.
-Packed arrays are supported. Blocking timing, user subroutines, forked work,
-unpacked/struct state, inout ports, delayed drivers, and non-leaf domain
-elements are diagnosed. Explicitly selecting an instance in two domains is an
-error; nested-domain extent partitioning and cascaded power switches are
-diagnosed as unsupported. Each domain has independent isolation and pending
+Packed arrays and module hierarchies within an extent are supported. Internal
+module connections remain transparent, and corruption follows the drivers of
+powered processes even when their nets alias input ports or outside names.
+Blocking timing, user subroutines, forked work, unpacked/struct state, inout
+ports, and delayed drivers are diagnosed. Explicitly selecting an instance in
+two domains is an error; nested-domain extent partitioning and cascaded power
+switches are diagnosed as unsupported. Each domain has independent isolation and pending
 update cancellation.
+
+Parent-located output isolation currently requires one upper-boundary instance
+with explicit variable-output connections. Redundant descendant entries in
+`-elements` do not add boundaries. Isolation across multiple boundary instances
+requires per-path handling to preserve same-domain traffic, and isolation of
+collapsed output nets requires keeping their boundary cuts before net merging;
+both forms are diagnosed. Explicit always-on child domains inside a switchable
+extent are also diagnosed until their ownership and lower boundaries are modeled.
+Computed input connections owned by a powered parent are diagnosed before port
+projection can erase their ownership. Computations outside the switchable
+extent remain active while its internal logic is OFF.
 
 Power intent lowers after simulation unit preparation and before simulation
 optimization. Generated guards, corruption stores, and sensitivity dependencies

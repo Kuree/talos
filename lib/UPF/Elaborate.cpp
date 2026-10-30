@@ -20,14 +20,30 @@ struct Descriptor {
   Type type;
   bool net = false, driver = false;
 };
+bool within(StringRef path, StringRef prefix) {
+  return path == prefix || (path.starts_with(prefix) &&
+                            path.drop_front(prefix.size()).starts_with('.'));
+}
 bool contains(upf::UPFDomainOp domain, StringRef path) {
   for (Attribute element : domain.getElements()) {
     StringRef prefix = cast<StringAttr>(element).getValue();
-    if (path == prefix || (path.starts_with(prefix) &&
-                           path.drop_front(prefix.size()).starts_with('.')))
+    if (within(path, prefix))
       return true;
   }
   return false;
+}
+SmallVector<StringRef> boundaryInstances(upf::UPFDomainOp domain) {
+  // IEEE 1801-2018 6.20: a boundary instance has a parent outside the extent.
+  // Listing a descendant redundantly does not create an additional boundary.
+  SmallVector<StringRef> roots;
+  for (Attribute element : domain.getElements()) {
+    StringRef path = cast<StringAttr>(element).getValue();
+    if (llvm::any_of(roots, [&](StringRef root) { return within(path, root); }))
+      continue;
+    llvm::erase_if(roots, [&](StringRef root) { return within(root, path); });
+    roots.push_back(path);
+  }
+  return roots;
 }
 Value handle(OpBuilder &b, Location loc, Value context, Descriptor d) {
   if (d.driver)
@@ -112,9 +128,13 @@ struct Lowering {
   uint64_t nextStorage = 0, nextUnit = 0;
   llvm::StringMap<Descriptor> descriptors;
   llvm::DenseMap<uint64_t, std::string> unitPaths;
+  llvm::DenseMap<uint64_t, std::string> scopePaths;
   sim::SimFuncOp root;
   Lowering(sim::SimDesignOp design)
       : design(design), builder(design.getContext()) {
+    for (auto scope : design.getOps<sim::SimScopeDeclOp>())
+      if (auto name = scope.getHierarchicalName())
+        scopePaths[scope.getId()] = name->str();
     for (auto decl : design.getOps<sim::SimStorageDeclOp>()) {
       nextStorage = std::max(nextStorage, decl.getId() + 1);
       if (auto name = decl.getHierarchicalName())
@@ -374,22 +394,29 @@ struct Lowering {
     if (contains(domain, domain.getControl()))
       return domain.emitError(
           "power control must be outside the switchable domain");
-    // IEEE 1801-2018 6.45 and 8.3.3(g),(j) select power-domain boundaries,
-    // not every nested module boundary. Until full boundary selection exists,
-    // accept only leaf module elements rather than clamping internal wires.
+    for (auto unit : design.getOps<sim::SimCodeUnitDeclOp>())
+      if (sim::has<sim::metadata::ComputedPortInput>(unit) &&
+          contains(domain, scopePaths.lookup(unit.getScopeId())))
+        return unit.emitError("computed input connections inside a switchable "
+                              "domain are not implemented");
+    SmallVector<StringRef> boundaries = boundaryInstances(domain);
+    // IEEE 1801-2018 6.45 applies isolation per path, with -diff_supply_only
+    // TRUE by default. Multiple boundary instances can exchange same-domain
+    // traffic, so a whole-output mux cannot yet represent their path filters.
+    if (domain.getIsolationControl() && boundaries.size() != 1)
+      return domain.emitError(
+          "isolation across multiple boundary instances "
+          "requires per-path handling and is not implemented");
+    llvm::DenseSet<uint64_t> boundaryScopes;
     for (auto scope : design.getOps<sim::SimScopeDeclOp>()) {
       auto path = scope.getHierarchicalName();
-      if (!path || !scope.getDefinitionName() || !contains(domain, *path))
-        continue;
-      bool descendant = llvm::any_of(domain.getElements(), [&](Attribute attr) {
-        StringRef element = cast<StringAttr>(attr).getValue();
-        return path->starts_with(element) &&
-               path->drop_front(element.size()).starts_with('.');
-      });
-      if (descendant)
-        return domain.emitError(
-            "initial UPF domain elements must be leaf module instances");
+      if (path && scope.getDefinitionName() &&
+          llvm::is_contained(boundaries, *path))
+        boundaryScopes.insert(scope.getId());
     }
+    if (boundaryScopes.size() != boundaries.size())
+      return domain.emitError(
+          "power-domain element has no simulation instance scope");
     SmallVector<sim::SimFuncOp> processes, outputs;
     for (auto fn : design.getOps<sim::SimFuncOp>()) {
       if (!fn.getCodeUnitId() ||
@@ -403,7 +430,15 @@ struct Lowering {
         processes.push_back(fn);
         break;
       case sim::EntryKind::PortOutput:
-        outputs.push_back(fn);
+        // The immutable connection identity names its CHILD instance. Its
+        // code-unit scope ID is the parent and cannot select this boundary.
+        // IEEE 1801-2018 6.20/6.45 and 8.3.3(g),(j): leave internal
+        // same-domain module connections transparent.
+        if (llvm::is_contained(boundaries,
+                               StringRef(unitPaths.lookup(*fn.getCodeUnitId()))
+                                   .rsplit('.')
+                                   .first))
+          outputs.push_back(fn);
         break;
       case sim::EntryKind::PortInput:
       case sim::EntryKind::PortInitialize:
@@ -423,20 +458,38 @@ struct Lowering {
             "processes; this code-unit kind is not implemented");
       }
     }
-    llvm::DenseSet<uint64_t> inputStorage, inputNets;
+    llvm::DenseSet<uint64_t> inputStorage;
     for (auto port : design.getOps<sim::SimPortDeclOp>()) {
       if (!contains(domain, port.getHierarchicalName()))
         continue;
       if (port.getDirection() == sim::PortDirection::InOut)
         return port.emitError(
             "inout ports in a switchable domain are not implemented");
-      if (port.getDirection() == sim::PortDirection::Input)
-        (port.getSourceIsNet() ? inputNets : inputStorage)
-            .insert(port.getSourceId());
+      if (port.getDirection() == sim::PortDirection::Input &&
+          !port.getSourceIsNet())
+        inputStorage.insert(port.getSourceId());
+      if (domain.getIsolationControl() &&
+          boundaryScopes.contains(port.getScopeId()) &&
+          port.getDirection() == sim::PortDirection::Output &&
+          port.getSourceIsNet())
+        return port.emitError(
+            "isolation on collapsed output nets is not implemented");
     }
     SmallVector<Descriptor> targets;
-    llvm::DenseSet<uint64_t> continuouslyDriven;
+    llvm::DenseSet<uint64_t> continuouslyDriven, ownedDrivers;
     for (auto process : processes) {
+      // IEEE 1801-2018 9.5.3/9.6.2 corrupt contributions of powered logic,
+      // not every driver of an aliased net. Descendant input ports can name
+      // nets driven inside this domain; their port status must not exempt
+      // those contributions. Port routing processes stay transparent.
+      for (auto [index, argument] : llvm::enumerate(process.getArguments()))
+        if (isa<sim::DriverType>(argument.getType()))
+          if (auto id = process.getArgAttrOfType<IntegerAttr>(
+                  index, sim::metadata::DescriptorId::getNameStr()))
+            ownedDrivers.insert(id.getUInt());
+      process.walk([&](sim::SimContextDriverOp driver) {
+        ownedDrivers.insert(driver.getId());
+      });
       process.walk([&](sim::SimRefStoreOp write) {
         if (process.getEntryKind() != sim::EntryKind::Continuous &&
             !sim::has<sim::metadata::ContinuousStore>(write))
@@ -465,9 +518,7 @@ struct Lowering {
       targets.push_back({decl.getId(), decl.getType()});
     }
     for (auto decl : design.getOps<sim::SimDriverDeclOp>()) {
-      if (!decl.getHierarchicalName() ||
-          !contains(domain, *decl.getHierarchicalName()) ||
-          inputNets.contains(decl.getNetId()))
+      if (!ownedDrivers.contains(decl.getId()))
         continue;
       if (!supportedState(decl.getType()) ||
           !isa_and_nonnull<sim::LogicType>(
@@ -640,11 +691,6 @@ struct ElaborateUPFPass
           for (Attribute otherElement : other.getElements()) {
             StringRef path = cast<StringAttr>(element).getValue();
             StringRef otherPath = cast<StringAttr>(otherElement).getValue();
-            auto within = [](StringRef child, StringRef parent) {
-              return child == parent ||
-                     (child.starts_with(parent) &&
-                      child.drop_front(parent.size()).starts_with('.'));
-            };
             if (within(path, otherPath) || within(otherPath, path)) {
               auto diagnostic = domain.emitError();
               if (path == otherPath)

@@ -1,0 +1,73 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// RUN: talos --upf %t/redundant.upf --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.redundant && %t.redundant | FileCheck %s
+// IEEE 1801-2018 6.20/6.45/8.3.3(g),(j): isolation belongs at the domain
+// boundary. IEEE 1801-2018 9.5.3/9.6.7 cover descendant corruption/restoration.
+// CHECK: hierarchical power domain passed
+
+//--- design.sv
+module child(input wire d, output logic q);
+  always_comb q = d;
+endmodule
+module wrapper(input logic d, output logic q);
+  wire w, internal_wire;
+  assign w = d;
+  child u(w, internal_wire);
+  always_comb q = ~internal_wire;
+endmodule
+module top;
+  logic d = 1, power_en = 1, iso = 0;
+  wire q;
+  wrapper dut(d, q);
+  initial begin
+    #1;
+    if (dut.w !== 1'b1 || dut.internal_wire !== 1'b1 || q !== 1'b0)
+      $fatal(1, "initial hierarchical logic failed");
+    iso = 1;
+    #1;
+    if (dut.internal_wire !== 1'b1 || dut.q !== 1'b0 || q !== 1'b0)
+      $fatal(1, "isolation clamped an internal same-domain connection");
+    d = 0;
+    #1;
+    if (dut.internal_wire !== 1'b0 || dut.q !== 1'b1 || q !== 1'b0)
+      $fatal(1, "parent isolation disturbed internal computation");
+    power_en = 0;
+    #1;
+    if (dut.w !== 1'bx || dut.u.d !== 1'bx || dut.u.q !== 1'bx ||
+        dut.internal_wire !== 1'bx || dut.q !== 1'bx || q !== 1'b0)
+      $fatal(1, "nested input alias escaped driver/state corruption");
+    d = 1;
+    #1;
+    if (dut.d !== 1'b1 || dut.w !== 1'bx || dut.q !== 1'bx)
+      $fatal(1, "external inputs or OFF descendant activation failed");
+    power_en = 1;
+    #1;
+    if (dut.w !== 1'b1 || dut.internal_wire !== 1'b1 || dut.q !== 1'b0)
+      $fatal(1, "descendant combinational restoration failed");
+    iso = 0; d = 0;
+    #1;
+    if (q !== 1'b1) $fatal(1, "restored hierarchy did not propagate data");
+    $display("hierarchical power domain passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+if {![info exists elements]} {set elements dut}
+create_power_domain PD -elements $elements
+foreach net {VDD VSS VDD_SW} {create_supply_net $net}
+set_domain_supply_net PD -primary_power_net VDD_SW -primary_ground_net VSS
+create_power_switch SW -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout VDD_SW} \
+    -control_port {en power_en} -on_state {ON vin en}
+set_isolation ISO -domain PD -isolation_signal iso -isolation_sense high \
+    -clamp_value 0 -applies_to outputs -location parent
+
+//--- redundant.upf
+set elements {dut/u dut dut/u}

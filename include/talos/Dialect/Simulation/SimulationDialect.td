@@ -363,6 +363,11 @@ def TalosSimulationDialect : Dialect {
     // Compiler-generated power-state transition process. Its corruption
     // writes affect scheduling/dataflow, but are not HDL assignment drivers.
     "::mlir::UnitAttr":$power_monitor,
+    // Immutable code-unit provenance: an input connection computes an actual
+    // expression rather than routing an addressable object. UPF needs its
+    // parent scope even after port projection/inlining removes the function
+    // (IEEE 1801-2018 6.20 and 9.5.3).
+    "::mlir::UnitAttr":$computed_port_input,
     // Time scaling preparation freezes onto each code unit for unit lowering;
     // finalization removes it with the unit's bindings.
     "::mlir::IntegerAttr":$delay_quantum,

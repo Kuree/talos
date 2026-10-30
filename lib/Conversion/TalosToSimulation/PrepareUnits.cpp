@@ -1,6 +1,7 @@
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 //===- PrepareUnits.cpp - Simulation code-unit planning -------------------===//
 
+#include "PrepareTopology.h"
 #include "PrepareUnits.h"
 
 #include "mlir/IR/SymbolTable.h"
@@ -1284,6 +1285,14 @@ FailureOr<PreparedUnits> materializeCodeUnitDeclarations(
             ? builder.getUnitAttr()
             : UnitAttr{});
     result.declarations[unit.source] = declaration;
+    // Preserve the original connection computation in the immutable inventory:
+    // later port projection can inline it into consumers and erase its actor.
+    // IEEE 1801-2018 6.20/9.5.3 assign this inferred logic to the parent scope.
+    if (auto connection = dyn_cast<semantic::SVPortConnectionOp>(unit.source))
+      if (connection.getDirection() == semantic::SVArgumentDirection::In)
+        if (Operation *actual = getSingleRegionRoot(connection.getActual()))
+          if (!isAddressableTimingExpression(actual))
+            sim::mark<sim::metadata::ComputedPortInput>(declaration);
   }
   return result;
 }

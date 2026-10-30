@@ -32,9 +32,18 @@ can elaborate UPF and generate wasm32 simulations with 32-bit pointers and
 after Slang elaboration and emits resolved `upf.domain` operations. The
 initial command subset includes design scope and object queries, scoped
 `load_upf`, power domains, supply nets/ports, one control-based power switch
-per domain, and parent-located output isolation. Unsupported commands and options produce
-Tcl errors, which user procedures may handle with `catch` (IEEE 1801-2018
-clause 5.11). The resolved domain retains its UPF declaration's source location.
+per domain, and parent-located output isolation. Unsupported commands and
+options produce Tcl errors, which user procedures may handle with `catch`
+(IEEE 1801-2018 clause 5.11). The resolved domain retains its UPF declaration's
+source location.
+
+Independent domains can contain module hierarchies. Isolation applies at the
+upper domain boundary, preserving internal connections (clauses 6.20 and 6.45).
+Per-path isolation across multiple boundary instances, collapsed output nets,
+nested domain partitions, and supply-network evaluation remain unsupported and
+produce diagnostics.
+Computed input connections inside a switchable domain are also diagnosed;
+input expressions owned by its exterior parent remain active.
 
 User Tcl libraries can be sourced or imported with standard Tcl packages
 (IEEE 1801-2018 clause 5.1):
