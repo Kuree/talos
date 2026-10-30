@@ -11,6 +11,8 @@
 #include "talos/Dialect/Schedule/Transforms/Passes.h"
 #include "llvm/ADT/IntEqClasses.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/SparseBitVector.h"
+#include <map>
 
 using namespace mlir;
 namespace talos {
@@ -27,6 +29,7 @@ enum class ComponentRejection {
   DataDependenceCycle,
   SliceConstruction,
   ReorderObserver,
+  Nonconvex,
 };
 
 std::string
@@ -49,6 +52,8 @@ stringifyComponentRejection(ComponentRejection reason,
     return "slice construction failed";
   case ComponentRejection::ReorderObserver:
     return "statement order required: " + observerFailure.getMessage();
+  case ComponentRejection::Nonconvex:
+    return "dependency path leaves and reenters fusion";
   }
   llvm_unreachable("unknown statement component rejection");
 }
@@ -89,6 +94,26 @@ public:
         design, handles,
         analysis::ActivationMemoryAnalysis::DependencyMode::ReachingValues);
     SymbolTable symbols(design);
+    using Range = analysis::ActivationMemoryAnalysis::Range;
+    using Bit = std::pair<uint64_t, uint64_t>;
+    DenseSet<Bit> scalarClockBits;
+    if (componentSections)
+      for (Attribute raw : graph.getNodes())
+        if (auto fragment = dyn_cast<schedule::ComputeFragmentAttr>(raw))
+          for (auto effect : fragment.getEffects()
+                                 .getAsRange<schedule::ComputeEffectAttr>()) {
+            auto trigger = effect.getTrigger();
+            if (effect.getEffect() != schedule::ComputeEffectKind::Watch ||
+                (trigger != schedule::ComputeTriggerKind::Posedge &&
+                 trigger != schedule::ComputeTriggerKind::Negedge &&
+                 trigger != schedule::ComputeTriggerKind::Both) ||
+                effect.getTarget() != schedule::ComputeTargetKind::Descriptor ||
+                effect.getWidth() != 1)
+              continue;
+            if (auto root = analysis::ActivationMemoryAnalysis::getRoot(
+                    effect.getResource(), effect.getDescriptor()))
+              scalarClockBits.insert({*root, effect.getLow()});
+          }
     SmallVector<sim::SimFuncOp> candidates;
     SmallVector<int64_t> fragments;
     DenseMap<Operation *, unsigned> indices;
@@ -130,12 +155,104 @@ public:
       candidates.push_back(function);
       fragments.push_back(fragment.getId());
     }
+    if (componentSections && !scalarClockBits.empty()) {
+      // Keep scalar clock producers available to periodic/copy inference.
+      // Contracting a transport clock with its neighbours can erase the
+      // exclusive copy shape and force otherwise static NBAs onto a queue.
+      // Follow scalar inputs conservatively, including complements: this
+      // selects a cost boundary without claiming copied values are equal.
+      DenseMap<Bit, SmallVector<Bit>> upstream;
+      for (const auto *activation : activations)
+        for (const auto &[operation, publications] :
+             activation->getMemory().getPublications())
+          for (const auto &publication : publications)
+            if (publication.output.width == 1)
+              for (const auto &input : publication.inputs)
+                if (input.width == 1)
+                  upstream[{publication.output.root, publication.output.low}]
+                      .push_back({input.root, input.low});
+      // A transport may retain an arbitrary always executor, so it need not
+      // be a source-fusion candidate. Preserve the corridor through such a
+      // boundary when the whole effect inventory has one scalar input and
+      // one scalar output. Larger actors keep their existing boundaries
+      // without making all of their unrelated inputs clock producers.
+      DenseMap<StringAttr, SmallVector<Bit>> inputs, outputs;
+      DenseSet<StringAttr> nonscalar;
+      for (Attribute raw : graph.getNodes())
+        if (auto fragment = dyn_cast<schedule::ComputeFragmentAttr>(raw)) {
+          StringAttr name = fragment.getFunction().getAttr();
+          for (auto effect : fragment.getEffects()
+                                 .getAsRange<schedule::ComputeEffectAttr>()) {
+            auto kind = effect.getEffect();
+            if (kind != schedule::ComputeEffectKind::Read &&
+                kind != schedule::ComputeEffectKind::Write &&
+                kind != schedule::ComputeEffectKind::Drive)
+              continue;
+            auto root = analysis::ActivationMemoryAnalysis::getRoot(
+                effect.getResource(), effect.getDescriptor());
+            if (!root || effect.getWidth() != 1 || effect.getDynamic() ||
+                effect.getTarget() != schedule::ComputeTargetKind::Descriptor) {
+              nonscalar.insert(name);
+              continue;
+            }
+            (kind == schedule::ComputeEffectKind::Read ? inputs : outputs)[name]
+                .push_back({*root, effect.getLow()});
+          }
+        }
+      for (auto &[name, reads] : inputs) {
+        auto &writes = outputs[name];
+        llvm::sort(reads);
+        reads.erase(std::unique(reads.begin(), reads.end()), reads.end());
+        llvm::sort(writes);
+        writes.erase(std::unique(writes.begin(), writes.end()), writes.end());
+        if (!nonscalar.contains(name) && reads.size() == 1 &&
+            writes.size() == 1)
+          upstream[writes.front()].push_back(reads.front());
+      }
+      SmallVector<Bit> pending(scalarClockBits.begin(), scalarClockBits.end());
+      while (!pending.empty()) {
+        Bit bit = pending.pop_back_val();
+        for (Bit source : upstream.lookup(bit))
+          if (scalarClockBits.insert(source).second)
+            pending.push_back(source);
+      }
+      unsigned kept = 0;
+      indices.clear();
+      for (unsigned owner = 0; owner < candidates.size(); ++owner) {
+        bool clockProducer =
+            llvm::any_of(activations[owner]->getMemory().getMayWrites(),
+                         [&](const Range &write) {
+                           return llvm::any_of(scalarClockBits, [&](Bit bit) {
+                             return bit.first == write.root &&
+                                    bit.second >= write.low &&
+                                    bit.second - write.low < write.width;
+                           });
+                         });
+        if (clockProducer)
+          continue;
+        candidates[kept] = candidates[owner];
+        fragments[kept] = fragments[owner];
+        activations[kept] = activations[owner];
+        indices[candidates[kept]] = kept;
+        ++kept;
+      }
+      // Clock readers and their descendants remain candidates. Only the
+      // producers are boundaries, present in the complete contraction graph.
+      candidates.resize(kept);
+      fragments.resize(kept);
+      activations.resize(kept);
+    }
     if (candidates.size() < 2)
       return;
+    ConvexActivationGraph contractions(design, graph);
+    DenseSet<unsigned> atomicMembers;
+    if (componentSections)
+      for (unsigned owner = 0; owner < candidates.size(); ++owner)
+        if (!eligibility.canReorder({candidates[owner]}))
+          atomicMembers.insert(owner);
 
     SmallVector<unsigned> owners;
     DenseMap<unsigned, SmallVector<unsigned>> adjacency;
-    using Range = analysis::ActivationMemoryAnalysis::Range;
     DenseMap<uint64_t, SmallVector<std::pair<unsigned, Range>>> readers;
     for (unsigned owner = 0; owner < candidates.size(); ++owner) {
       owners.push_back(owner);
@@ -332,24 +449,28 @@ public:
                   {*root, effect.getLow(), effect.getWidth()});
           }
       llvm::BitVector blocked(candidates.size());
-      for (const auto &[root, ranges] : edgeWatched) {
-        auto found = watchers.find(root);
-        if (found == watchers.end())
-          continue;
-        for (const auto &entry : found->second) {
-          const Range &watch = entry.second;
-          if (llvm::any_of(ranges, [&](const Range &edge) {
-                return !edge.width || (watch.low < edge.low + edge.width &&
-                                       edge.low < watch.low + watch.width);
-              }))
-            blocked.set(entry.first);
+      if (!componentSections)
+        for (const auto &[root, ranges] : edgeWatched) {
+          auto found = watchers.find(root);
+          if (found == watchers.end())
+            continue;
+          for (const auto &entry : found->second) {
+            const Range &watch = entry.second;
+            if (llvm::any_of(ranges, [&](const Range &edge) {
+                  return !edge.width || (watch.low < edge.low + edge.width &&
+                                         edge.low < watch.low + watch.width);
+                }))
+              blocked.set(entry.first);
+          }
         }
-      }
       blocked.reset(seeded);
       unsigned clockWakes = blocked.count();
       for (unsigned owner : owners)
         if (!blocked.test(owner) && !seeded.test(owner) &&
-            !eligibility.canReorder({candidates[owner]}))
+            (componentSections
+                 ? requiresReordering.contains(candidates[owner]) &&
+                       atomicMembers.contains(owner)
+                 : !eligibility.canReorder({candidates[owner]})))
           blocked.set(owner);
       DenseMap<unsigned, SmallVector<unsigned>> predecessors;
       for (const auto &[owner, targets] : adjacency)
@@ -379,10 +500,12 @@ public:
         }
         return start;
       };
-      llvm::BitVector excluded = reach(blocked, adjacency, false);
+      llvm::BitVector excluded =
+          componentSections ? blocked : reach(blocked, adjacency, false);
       llvm::BitVector feedsSeed = reach(seeded, predecessors, true);
       feedsSeed &= blocked;
-      excluded |= reach(feedsSeed, predecessors, false);
+      if (!componentSections)
+        excluded |= reach(feedsSeed, predecessors, false);
       excluded.reset(seeded);
       if (trace)
         llvm::errs() << "talos statement cohort growth: clock-wakes="
@@ -453,7 +576,8 @@ public:
       for (auto &[leader, island] : grown)
         if (llvm::any_of(island,
                          [&](unsigned owner) { return seeded.test(owner); }) ||
-            (island.size() > 1 && clocked.contains(leader)))
+            (island.size() > 1 &&
+             (componentSections || clocked.contains(leader))))
           seeds.push_back(std::move(island));
       grownComponents = closeCohorts(seeds);
     }
@@ -465,16 +589,27 @@ public:
     uint64_t statementBudget =
         statementLimit ? statementLimit.getUInt() : 262144;
     SmallVector<Attribute> fusions;
+    DenseSet<unsigned> planned;
     unsigned dataflowCount = 0;
     auto plan = [&](ArrayRef<unsigned> component) {
       SmallVector<sim::SimFuncOp> members;
       SmallVector<int64_t> memberFragments;
+      SmallVector<int64_t> atomicFragments;
+      SmallVector<StringAttr> names;
+      SmallVector<sim::SimFuncOp> reordered;
+      DenseSet<const analysis::ActivationRegionAnalysis *> atomic;
       SmallVector<const analysis::ActivationRegionAnalysis *> memberActivations;
       uint64_t cost = 0;
       for (unsigned member : component) {
         members.push_back(candidates[member]);
         memberActivations.push_back(activations[member]);
         memberFragments.push_back(fragments[member]);
+        names.push_back(candidates[member].getSymNameAttr());
+        if (atomicMembers.contains(member)) {
+          atomic.insert(activations[member]);
+          atomicFragments.push_back(fragments[member]);
+        } else
+          reordered.push_back(candidates[member]);
         cost += analysis::getSimulationOperationCost(candidates[member]);
       }
       CombinationalFusionFailure observerReason;
@@ -482,7 +617,13 @@ public:
       SmallVector<analysis::ActivationRegionStep> cycle;
       SmallVector<analysis::ActivationRegionStep> dataCycle;
       bool dataflow = false;
-      if (maxMembers && component.size() > maxMembers)
+      if (component.size() < 2 || llvm::any_of(component, [&](unsigned owner) {
+            return planned.contains(owner);
+          }))
+        return false;
+      if (!contractions.isConvex(names))
+        reason = ComponentRejection::Nonconvex;
+      else if (maxMembers && component.size() > maxMembers)
         reason = ComponentRejection::MemberBudget;
       else if (!eligibility.canInterleave(members, &observerReason))
         reason = ComponentRejection::Observer;
@@ -496,10 +637,10 @@ public:
         // (4.6(a)), a data-dependence order is valid under 4.3 only when no
         // outside observer sees the transitions it removes.
         auto slices = analysis::getActivationSliceOrder(
-            memberActivations, explain ? &dataCycle : nullptr);
+            memberActivations, explain ? &dataCycle : nullptr, {&atomic});
         if (!slices)
           reason = ComponentRejection::DataDependenceCycle;
-        else if (!eligibility.canReorder(members, &observerReason))
+        else if (!eligibility.canReorder(reordered, &observerReason))
           reason = ComponentRejection::ReorderObserver;
         else {
           dataflow = true;
@@ -610,8 +751,127 @@ public:
       fusions.push_back(schedule::ComputeFusionAttr::get(
           design.getContext(), fusions.size(),
           DenseI64ArrayAttr::get(design.getContext(), memberFragments), true,
-          dataflow));
+          dataflow,
+          dataflow && !atomicFragments.empty()
+              ? DenseI64ArrayAttr::get(design.getContext(), atomicFragments)
+              : DenseI64ArrayAttr{}));
+      contractions.contract(names);
+      planned.insert(component.begin(), component.end());
       return true;
+    };
+
+    auto recoverSections = [&](ArrayRef<unsigned> component) {
+      SmallVector<const analysis::ActivationRegionAnalysis *> selected;
+      DenseSet<const analysis::ActivationRegionAnalysis *> atomic;
+      for (unsigned owner : component)
+        if (!planned.contains(owner)) {
+          selected.push_back(activations[owner]);
+          if (atomicMembers.contains(owner))
+            atomic.insert(activations[owner]);
+        }
+      // Unsupported analysis stays local. Supported feedback is retained in
+      // the component schedule and remains on the original pending-event
+      // executors; only complete original owners outside it may be replaced.
+      SmallVector<const analysis::ActivationRegionAnalysis *> cyclic;
+      auto schedule =
+          analysis::getActivationSliceSchedule(selected, {&atomic, &cyclic});
+      if (!schedule)
+        return;
+      SmallVector<StringAttr> remaining;
+      for (unsigned owner : component)
+        if (!planned.contains(owner) &&
+            !llvm::is_contained(cyclic, activations[owner]) &&
+            eligibility.canInterleave({candidates[owner]}))
+          remaining.push_back(candidates[owner].getSymNameAttr());
+      // A convex DAG can still span computations with different external
+      // activations. A union wait would replay every member on either input
+      // and couple their knownness proofs. Recover sections only within the
+      // same conservative activity domain. This is a cost restriction; every
+      // section still needs the ordinary DAG and observation certificates,
+      // and its original language sensitivities are unchanged.
+      SmallVector<unsigned> retained;
+      DenseMap<uint64_t, SmallVector<std::pair<unsigned, Range>>> producers;
+      for (StringAttr name : remaining) {
+        unsigned owner = indices.lookup(symbols.lookup<sim::SimFuncOp>(name));
+        retained.push_back(owner);
+        for (Range write : activations[owner]->getMemory().getMayWrites())
+          producers[write.root].emplace_back(owner, write);
+      }
+      auto rangeLess = [](const Range &a, const Range &b) {
+        return std::tie(a.root, a.low, a.width) <
+               std::tie(b.root, b.low, b.width);
+      };
+      std::map<Range, unsigned, decltype(rangeLess)> events(rangeLess);
+      SmallVector<llvm::SparseBitVector<>> activity(candidates.size());
+      DenseMap<unsigned, SmallVector<unsigned>> forward;
+      DenseSet<unsigned> retainedSet(retained.begin(), retained.end());
+      SmallVector<analysis::Ranges> inputs(candidates.size());
+      for (unsigned owner : retained) {
+        const auto &memory = activations[owner]->getMemory();
+        llvm::append_range(inputs[owner], memory.hasInputDependencies()
+                                              ? memory.getValueInputs()
+                                              : memory.getLiveIns());
+      }
+      for (const auto &[root, watches] : watchers)
+        for (const auto &[owner, watch] : watches)
+          if (retainedSet.contains(owner))
+            inputs[owner].push_back(watch);
+      for (unsigned owner : retained) {
+        analysis::normalize(inputs[owner]);
+        for (Range input : inputs[owner]) {
+          analysis::Ranges internal;
+          for (const auto &[producer, write] : producers.lookup(input.root)) {
+            if (producer == owner || write.low >= input.low + input.width ||
+                input.low >= write.low + write.width)
+              continue;
+            internal.push_back(write);
+            forward[producer].push_back(owner);
+          }
+          analysis::normalize(internal);
+          for (Range external : analysis::subtract({input}, internal)) {
+            auto [event, inserted] =
+                events.try_emplace(external, events.size());
+            activity[owner].set(event->second);
+          }
+        }
+      }
+      for (auto &[owner, targets] : forward) {
+        llvm::sort(targets);
+        targets.erase(std::unique(targets.begin(), targets.end()),
+                      targets.end());
+      }
+      // Coarse owner cycles may be false lane cycles. Unioning their domains
+      // is conservative and never cuts source-order/SSA/snapshot obligations.
+      auto components = analysis::computeStronglyConnectedComponents<unsigned>(
+          retained, forward);
+      for (const auto &component : llvm::reverse(components)) {
+        llvm::SparseBitVector<> combined;
+        for (unsigned owner : component)
+          combined |= activity[owner];
+        for (unsigned owner : component) {
+          activity[owner] |= combined;
+          for (unsigned target : forward.lookup(owner))
+            activity[target] |= combined;
+        }
+      }
+      std::map<std::vector<unsigned>, unsigned> domains;
+      SmallVector<unsigned> activityDomains;
+      for (unsigned owner : retained) {
+        std::vector<unsigned> key;
+        for (unsigned event : activity[owner])
+          key.push_back(event);
+        auto [domain, inserted] =
+            domains.try_emplace(std::move(key), domains.size());
+        activityDomains.push_back(domain->second);
+      }
+      for (const auto &section :
+           contractions.getSections(remaining, activityDomains)) {
+        SmallVector<unsigned> members;
+        for (StringAttr name : section)
+          members.push_back(
+              indices.lookup(symbols.lookup<sim::SimFuncOp>(name)));
+        plan(members);
+      }
     };
     for (const auto &[leader, component] : grownComponents) {
       size_t closed = 0;
@@ -621,7 +881,11 @@ public:
       if (closed != component.size() && trace)
         llvm::errs() << "talos statement cohort grown: members="
                      << component.size() << " from=" << closed << '\n';
-      if (plan(component) || closed == component.size())
+      if (plan(component))
+        continue;
+      if (componentSections)
+        recoverSections(component);
+      if (closed == component.size())
         continue;
       // Growth is only a cost choice. Keep the cohorts it would replace.
       for (const auto &[original, members] : closedComponents)

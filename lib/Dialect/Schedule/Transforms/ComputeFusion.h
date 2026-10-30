@@ -11,6 +11,26 @@
 
 namespace talos {
 
+/// Frozen complete activation graph, including ineligible executors. Records
+/// accepted contractions by symbol identity, never by an erased operation.
+/// Adding a later contraction must also be convex through earlier ones.
+class ConvexActivationGraph {
+public:
+  ConvexActivationGraph(sim::SimDesignOp design,
+                        schedule::ComputeGraphAttr graph);
+  bool isConvex(llvm::ArrayRef<mlir::StringAttr> members) const;
+  void contract(llvm::ArrayRef<mlir::StringAttr> members);
+  llvm::SmallVector<llvm::SmallVector<mlir::StringAttr>>
+  getSections(llvm::ArrayRef<mlir::StringAttr> members,
+              llvm::ArrayRef<unsigned> activityDomains = {}) const;
+
+private:
+  llvm::DenseMap<mlir::StringAttr, unsigned> indices;
+  llvm::SmallVector<llvm::SmallVector<unsigned>> successors;
+  llvm::SmallVector<unsigned> parents;
+  unsigned leader(unsigned node) const;
+};
+
 /// A finite combinational activation with complete, exclusive outputs. Live-in
 /// reads are watched; structured activations may also read their own definite
 /// assignments. The explicit reordering/observer contracts additionally permit
@@ -109,6 +129,21 @@ private:
   sim::SimDesignOp design;
   const analysis::HandleDataflowAnalysis *provenance = nullptr;
   mutable std::optional<llvm::DenseSet<uint64_t>> glitchInsensitive;
+  /// Design-wide facts canInterleave needs: toggle-observable roots, watch
+  /// resolvability and the change watchers per root. Built once; the planner
+  /// asks per owner for thousands of growth candidates.
+  struct InterleaveIndex {
+    llvm::DenseSet<uint64_t> toggleRoots;
+    bool unknownWatch = false;
+    bool unresolvedWatch = false;
+    llvm::DenseMap<
+        uint64_t,
+        llvm::SmallVector<std::pair<mlir::StringAttr,
+                                    analysis::ActivationMemoryAnalysis::Range>>>
+        watchers;
+  };
+  mutable std::optional<InterleaveIndex> interleaveIndex;
+  const InterleaveIndex &getInterleaveIndex() const;
   /// For a sensitive root: the observer outside the closure that exposes it.
   mutable llvm::DenseMap<uint64_t, mlir::StringAttr> glitchObservers;
   analysis::ActivationMemoryAnalysis::DependencyMode dependencyMode;

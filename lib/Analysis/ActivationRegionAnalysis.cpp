@@ -14,12 +14,15 @@
 #include "mlir/Transforms/RegionUtils.h"
 #include "talos/Analysis/ActivationControlFlow.h"
 #include "talos/Analysis/BoundedLoopAnalysis.h"
+#include "talos/Analysis/GraphAlgorithms.h"
 #include "talos/Analysis/LocalStorageAnalysis.h"
 #include "talos/Analysis/SSAValueAnalysis.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
+#include "talos/Runtime/ActivationOrder.h"
 #include "llvm/ADT/SCCIterator.h"
 #include "llvm/ADT/SetVector.h"
+#include <numeric>
 #include <queue>
 #include <set>
 
@@ -334,6 +337,24 @@ void unionRanges(Ranges &into, ArrayRef<ActivationMemoryAnalysis::Range> from) {
   }
   into = std::move(merged);
 }
+/// The bits present in both range sets; both are sound over-approximations of
+/// one dependence, so their intersection is one too.
+Ranges intersectRanges(ArrayRef<ActivationMemoryAnalysis::Range> a,
+                       ArrayRef<ActivationMemoryAnalysis::Range> b) {
+  Ranges result;
+  for (const auto &x : a)
+    for (const auto &y : b) {
+      if (x.root != y.root)
+        continue;
+      uint64_t low = std::max(x.low, y.low);
+      uint64_t high = std::min(x.low + x.width, y.low + y.width);
+      if (low < high)
+        result.push_back({x.root, low, high - low});
+    }
+  Ranges normalized;
+  unionRanges(normalized, result);
+  return normalized;
+}
 
 bool equivalentActivations(sim::SimFuncOp lhs, sim::SimFuncOp rhs) {
   // CFG block order is not dominance order. Register corresponding SSA
@@ -570,6 +591,33 @@ ActivationRegionAnalysis::getDefiningNode(Value value) const {
 }
 
 namespace {
+bool buildComponents(ActivationSchedule &schedule) {
+  llvm::sort(schedule.dependencies, [](const auto &a, const auto &b) {
+    return std::tie(a.source, a.target, a.kind) <
+           std::tie(b.source, b.target, b.kind);
+  });
+  schedule.dependencies.erase(
+      std::unique(schedule.dependencies.begin(), schedule.dependencies.end(),
+                  [](const auto &a, const auto &b) {
+                    return a.source == b.source && a.target == b.target &&
+                           a.kind == b.kind;
+                  }),
+      schedule.dependencies.end());
+  std::vector<std::pair<uint32_t, uint32_t>> edges;
+  for (auto dependency : schedule.dependencies)
+    edges.emplace_back(dependency.source, dependency.target);
+  runtime::ActivationOrder order;
+  if (!runtime::ActivationOrder::build(schedule.nodes.size(), std::move(edges),
+                                       order))
+    return false;
+  llvm::append_range(schedule.order, order.nodes);
+  llvm::append_range(schedule.componentOffsets, order.componentOffsets);
+  llvm::append_range(schedule.componentOf, order.componentOf);
+  for (bool cyclic : order.cyclic)
+    schedule.cyclic.push_back(cyclic);
+  return true;
+}
+
 std::optional<SmallVector<ActivationRegionStep>>
 orderSteps(ArrayRef<ActivationRegionStep> steps,
            SmallVector<std::pair<unsigned, unsigned>> edges,
@@ -1038,23 +1086,25 @@ std::optional<SmallVector<ActivationRegionStep>> getActivationPublicationOrder(
   return orderSteps(steps, std::move(edges), cycle);
 }
 
-std::optional<SmallVector<ActivationRegionStep>>
-getActivationRegionOrder(ArrayRef<const ActivationRegionAnalysis *> activations,
-                         SmallVectorImpl<ActivationRegionStep> *cycle) {
-  if (cycle)
-    cycle->clear();
+std::optional<ActivationSchedule> getActivationRegionSchedule(
+    ArrayRef<const ActivationRegionAnalysis *> activations) {
   using Range = ActivationMemoryAnalysis::Range;
   struct Access {
     unsigned step;
     Range range;
     schedule::SourceOwnerAttr owner;
   };
-  SmallVector<ActivationRegionStep> steps;
-  SmallVector<std::pair<unsigned, unsigned>> edges;
+  ActivationSchedule result;
+  auto &steps = result.nodes;
+  auto edge = [&](unsigned source, unsigned target,
+                  ActivationSchedule::DependencyKind kind) {
+    result.dependencies.push_back({source, target, kind});
+  };
   DenseMap<uint64_t, SmallVector<Access>> readers, writers;
   for (const auto *activation : activations) {
     if (!activation->isValid())
       return std::nullopt;
+    result.sensitivityEvents.push_back(activation->getSuspension());
     const auto &memory = activation->getMemory();
     bool hasOwners = true;
     activation->getActivationFunction().walk([&](Operation *op) {
@@ -1091,7 +1141,8 @@ getActivationRegionOrder(ArrayRef<const ActivationRegionAnalysis *> activations,
       for (auto owner : owners) {
         auto found = previous.find(owner);
         if (found != previous.end())
-          edges.emplace_back(found->second, id);
+          edge(found->second, id,
+               ActivationSchedule::DependencyKind::SourceOrder);
         previous[owner] = id;
       }
     }
@@ -1107,7 +1158,8 @@ getActivationRegionOrder(ArrayRef<const ActivationRegionAnalysis *> activations,
         for (Value operand : op->getOperands())
           if (const auto *producer = activation->getDefiningNode(operand);
               producer && producer != &node)
-            edges.emplace_back(nodeIndex(producer), consumer);
+            edge(nodeIndex(producer), consumer,
+                 ActivationSchedule::DependencyKind::SSA);
       });
     }
   }
@@ -1121,26 +1173,69 @@ getActivationRegionOrder(ArrayRef<const ActivationRegionAnalysis *> activations,
             (steps[write.step].activation != steps[read.step].activation ||
              write.owner != read.owner) &&
             overlaps(write.range, read.range))
-          edges.emplace_back(write.step, read.step);
+          edge(write.step, read.step,
+               ActivationSchedule::DependencyKind::Value);
+        else if (write.step != read.step &&
+                 steps[write.step].activation == steps[read.step].activation &&
+                 write.owner == read.owner && overlaps(write.range, read.range))
+          edge(std::min(write.step, read.step), std::max(write.step, read.step),
+               ActivationSchedule::DependencyKind::Snapshot);
       // If distinct original owners publish overlapping ranges, provenance
       // alone cannot justify changing their order within an existing kernel.
       for (const auto &later : writes)
         if (write.step < later.step && write.owner != later.owner &&
             steps[write.step].activation == steps[later.step].activation &&
             overlaps(write.range, later.range))
-          edges.emplace_back(write.step, later.step);
+          edge(write.step, later.step,
+               ActivationSchedule::DependencyKind::Publication);
     }
-  return orderSteps(steps, std::move(edges), cycle);
+  if (!buildComponents(result))
+    return std::nullopt;
+  return result;
 }
-std::optional<SmallVector<ActivationSlice>>
-getActivationSliceOrder(ArrayRef<const ActivationRegionAnalysis *> activations,
-                        SmallVectorImpl<ActivationRegionStep> *cycle) {
+
+std::optional<SmallVector<ActivationRegionStep>>
+getActivationRegionOrder(ArrayRef<const ActivationRegionAnalysis *> activations,
+                         SmallVectorImpl<ActivationRegionStep> *cycle) {
   if (cycle)
     cycle->clear();
+  auto schedule = getActivationRegionSchedule(activations);
+  if (!schedule)
+    return std::nullopt;
+  SmallVector<std::pair<unsigned, unsigned>> edges;
+  for (auto dependency : schedule->dependencies)
+    edges.emplace_back(dependency.source, dependency.target);
+  return orderSteps(schedule->nodes, std::move(edges), cycle);
+}
+
+namespace {
+std::optional<ActivationSchedule>
+buildSliceSchedule(ArrayRef<const ActivationRegionAnalysis *> activations,
+                   SmallVectorImpl<ActivationRegionStep> *cycle,
+                   const ActivationSliceOptions &options) {
+  if (cycle)
+    cycle->clear();
+  if (options.cyclic)
+    options.cyclic->clear();
   struct StoreNode {
     const ActivationRegionAnalysis *activation;
     SmallVector<Operation *> stores;
+    /// Dependence inputs. Initially the physical ranges of the loads the
+    /// stores depend on; a node on a cycle is refined to the simplified
+    /// slice's loads intersected with its lane publication inputs, which are
+    /// exact through extracts and copies.
     Ranges reads, writes;
+    /// Physical load ranges following reconstructed temporaries. They decide
+    /// which source-local stores must share one slice (IEEE 1800-2023 4.6).
+    Ranges localReads;
+    /// Lane publication inputs of the stores, when the activation has them.
+    Ranges laneReads;
+    /// A lane-copy store kept only over this root-relative window.
+    std::optional<Range> window;
+    /// Corresponding source lanes of a whole publication; on a cycle the
+    /// node is split at lanes other nodes read or write. Emission retains the
+    /// original computation, without assuming source and result values equal.
+    std::optional<Range> identity;
   };
   auto overlaps = [](const Ranges &a, const Ranges &b) {
     for (const auto &x : a)
@@ -1150,7 +1245,7 @@ getActivationSliceOrder(ArrayRef<const ActivationRegionAnalysis *> activations,
           return true;
     return false;
   };
-  SmallVector<StoreNode> nodes;
+  SmallVector<StoreNode, 0> nodes;
   for (const auto *activation : activations) {
     if (!activation->isValid())
       return std::nullopt;
@@ -1161,6 +1256,8 @@ getActivationSliceOrder(ArrayRef<const ActivationRegionAnalysis *> activations,
     // whole activation instead of dropping the private update in another slice.
     if (memory.hasMixedPrivateWrites())
       return std::nullopt;
+    bool lanes = memory.hasValueDependencies();
+    bool atomic = options.atomic && options.atomic->contains(activation);
     ActivationLoadSlice slice(activation->getActivationFunction(), memory);
     auto temporaries = getActivationTemporaryRoots(
         activation->getActivationFunction(), memory);
@@ -1183,12 +1280,12 @@ getActivationSliceOrder(ArrayRef<const ActivationRegionAnalysis *> activations,
             found != temporaryWriters.end())
           found->second.push_back(store);
     });
-    SmallVector<StoreNode> local;
+    SmallVector<StoreNode, 0> local;
     activation->getActivationFunction().walk([&](Operation *store) {
       auto writes = memory.getWrites().find(store);
       if (writes == memory.getWrites().end())
         return;
-      StoreNode node{activation, {store}, {}, writes->second};
+      StoreNode node{activation, {store}, {}, writes->second, {}, {}, {}, {}};
       // Follow reconstructed temporary definitions in the immutable summary.
       // Only cycle witnesses need executable clones and CFG simplification;
       // cloning every publication would make planning quadratic in body size.
@@ -1199,7 +1296,7 @@ getActivationSliceOrder(ArrayRef<const ActivationRegionAnalysis *> activations,
         for (auto read : sourceReads.lookup(definition)) {
           auto temporary = temporaryWriters.find(read.root);
           if (temporary == temporaryWriters.end()) {
-            unionRanges(node.reads, {read});
+            unionRanges(node.localReads, {read});
             continue;
           }
           for (Operation *writer : temporary->second)
@@ -1208,23 +1305,40 @@ getActivationSliceOrder(ArrayRef<const ActivationRegionAnalysis *> activations,
               pending.push_back(writer);
         }
       }
+      node.reads = node.localReads;
+      if (lanes) {
+        const auto &publications = memory.getPublications().lookup(store);
+        for (const auto &publication : publications)
+          unionRanges(node.laneReads, publication.inputs);
+        if (auto refStore = dyn_cast<sim::SimRefStoreOp>(store);
+            !atomic && refStore && publications.size() == 1 &&
+            publications.front().identity && writes->second.size() == 1 &&
+            publications.front().output == writes->second.front() &&
+            isa_and_nonnull<sim::LogicType>(sim::getPackedScalarType(
+                refStore.getReference().getType().getElementType())))
+          node.identity = publications.front().identity;
+      }
       // Keep all remaining source-local memory dependence in one slice.
       // Reconstructed private versions have no canonical read dependency;
       // all other snapshots still need their source stores in the same slice.
       // Restart after merging, since a newly included range can connect a
-      // previously disjoint group.
+      // previously disjoint group. An atomic activation keeps every store in
+      // one slice, in source order.
       for (bool changed = true; changed;) {
         changed = false;
         for (auto it = local.begin(); it != local.end();) {
-          if (!overlaps(it->writes, node.writes) &&
-              !overlaps(it->writes, node.reads) &&
-              !overlaps(it->reads, node.writes)) {
+          if (!atomic && !overlaps(it->writes, node.writes) &&
+              !overlaps(it->writes, node.localReads) &&
+              !overlaps(it->localReads, node.writes)) {
             ++it;
             continue;
           }
           llvm::append_range(node.stores, it->stores);
           unionRanges(node.reads, it->reads);
+          unionRanges(node.localReads, it->localReads);
+          unionRanges(node.laneReads, it->laneReads);
           unionRanges(node.writes, it->writes);
+          node.identity.reset();
           it = local.erase(it);
           changed = true;
         }
@@ -1234,46 +1348,63 @@ getActivationSliceOrder(ArrayRef<const ActivationRegionAnalysis *> activations,
     for (auto &node : local)
       nodes.push_back(std::move(node));
   }
+  // Split a lane-copy node where other nodes read its destination or write
+  // its source, so a reader of some lanes no longer waits for the writer of
+  // other lanes (and the reverse). Each part is a partial store of the same
+  // operation; emission narrows it to the window. Empty when nothing cuts.
+  constexpr size_t maximumParts = 64;
+  auto splitLaneCopy = [&](size_t index) {
+    SmallVector<StoreNode, 0> parts;
+    const StoreNode &node = nodes[index];
+    Range output = node.writes.front();
+    Range source = *node.identity;
+    uint64_t end = output.low + output.width;
+    SmallVector<uint64_t> cuts{output.low, end};
+    auto cut = [&](uint64_t low, uint64_t high) {
+      if (low > output.low && low < end)
+        cuts.push_back(low);
+      if (high > output.low && high < end)
+        cuts.push_back(high);
+    };
+    for (size_t other = 0; other < nodes.size(); ++other) {
+      if (other == index)
+        continue;
+      for (const auto &read : nodes[other].reads)
+        if (read.root == output.root)
+          cut(read.low, read.low + read.width);
+      for (const auto &write : nodes[other].writes)
+        if (write.root == source.root && write.low + write.width > source.low &&
+            write.low < source.low + source.width) {
+          uint64_t low = std::max(write.low, source.low) - source.low;
+          uint64_t high =
+              std::min(write.low + write.width, source.low + source.width) -
+              source.low;
+          cut(output.low + low, output.low + high);
+        }
+    }
+    llvm::sort(cuts);
+    cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
+    if (cuts.size() <= 2 || cuts.size() - 1 > maximumParts)
+      return parts;
+    for (size_t i = 1; i < cuts.size(); ++i) {
+      StoreNode part = node;
+      part.identity.reset();
+      part.window = Range{output.root, cuts[i - 1], cuts[i] - cuts[i - 1]};
+      part.writes = {*part.window};
+      part.reads = {Range{source.root, source.low + (cuts[i - 1] - output.low),
+                          cuts[i] - cuts[i - 1]}};
+      part.laneReads = part.reads;
+      parts.push_back(std::move(part));
+    }
+    return parts;
+  };
   SmallVector<ActivationRegionStep> steps;
-  for (const auto &node : nodes)
-    steps.push_back({node.activation, node.stores.front()});
   SmallVector<std::pair<unsigned, unsigned>> edges;
   DenseMap<uint64_t, SmallVector<unsigned>> readers;
-  for (auto [id, node] : llvm::enumerate(nodes))
-    for (const auto &read : node.reads)
-      readers[read.root].push_back(id);
-  for (auto [id, node] : llvm::enumerate(nodes))
-    for (const auto &write : node.writes)
-      for (unsigned reader : readers.lookup(write.root))
-        if (reader != id && overlaps({write}, nodes[reader].reads))
-          edges.emplace_back(id, reader);
-  DenseSet<unsigned> refined;
-  while (true) {
-    SmallVector<ActivationRegionStep> witness;
-    if (orderSteps(steps, edges, &witness))
-      break;
-    bool changed = false;
-    for (const auto &step : witness) {
-      auto found = llvm::find_if(nodes, [&](const StoreNode &node) {
-        return node.activation == step.activation &&
-               node.stores.front() == step.operation;
-      });
-      unsigned index = found - nodes.begin();
-      if (!refined.insert(index).second)
-        continue;
-      auto reads = getSliceReads({found->activation, found->stores});
-      if (!reads)
-        continue;
-      found->reads = std::move(*reads);
-      changed = true;
-    }
-    if (!changed) {
-      if (cycle)
-        llvm::append_range(*cycle, witness);
-      return std::nullopt;
-    }
-    // Rebuild only dependencies. Store grouping protects source-local
-    // snapshots and is never weakened by control-flow simplification.
+  auto rebuild = [&] {
+    steps.clear();
+    for (const auto &node : nodes)
+      steps.push_back({node.activation, node.stores.front()});
     edges.clear();
     readers.clear();
     for (auto [id, node] : llvm::enumerate(nodes))
@@ -1284,7 +1415,104 @@ getActivationSliceOrder(ArrayRef<const ActivationRegionAnalysis *> activations,
         for (unsigned reader : readers.lookup(write.root))
           if (reader != id && overlaps({write}, nodes[reader].reads))
             edges.emplace_back(id, reader);
+  };
+  rebuild();
+  DenseSet<std::pair<const ActivationRegionAnalysis *, Operation *>> refined;
+  while (true) {
+    SmallVector<ActivationRegionStep> witness;
+    if (orderSteps(steps, edges, &witness))
+      break;
+    SmallVector<unsigned> ids(nodes.size());
+    std::iota(ids.begin(), ids.end(), 0u);
+    DenseMap<unsigned, SmallVector<unsigned>> adjacency;
+    for (auto [from, to] : edges)
+      adjacency[from].push_back(to);
+    auto components =
+        computeStronglyConnectedComponents<unsigned>(ids, adjacency);
+    SmallVector<bool> cyclicNodes(nodes.size(), false);
+    for (const auto &component : components)
+      if (component.size() > 1)
+        for (unsigned id : component)
+          cyclicNodes[id] = true;
+    // Refine every cyclic component: an irreducible witness in one component
+    // must not prevent precision from breaking a false cycle elsewhere, or
+    // elsewhere in the same component. Only cyclic nodes pay for precision:
+    // a lane copy is split into its windows; other physical reads are replaced
+    // by the simplified slice's loads intersected with its exact lane inputs.
+    // This removes loads in control paths that only other stores need.
+    bool changed = false;
+    auto refineNode = [&](size_t index) {
+      StoreNode &node = nodes[index];
+      if (!refined.insert({node.activation, node.stores.front()}).second)
+        return false;
+      auto reads = getSliceReads({node.activation, node.stores, {}});
+      if (!reads)
+        return false;
+      Ranges precise = node.laneReads.empty()
+                           ? std::move(*reads)
+                           : intersectRanges(*reads, node.laneReads);
+      if (precise == node.reads)
+        return false;
+      node.reads = std::move(precise);
+      return true;
+    };
+    SmallVector<size_t> splits, refinements;
+    for (auto [index, node] : llvm::enumerate(nodes)) {
+      if (!cyclicNodes[index] || node.window)
+        continue;
+      (node.identity ? splits : refinements).push_back(index);
+    }
+    for (size_t index : refinements)
+      changed |= refineNode(index);
+    // Descending, so earlier indices stay valid while parts are inserted.
+    llvm::sort(splits, std::greater<size_t>());
+    for (size_t index : splits) {
+      SmallVector<StoreNode, 0> parts = splitLaneCopy(index);
+      nodes[index].identity.reset();
+      if (parts.empty()) {
+        changed |= refineNode(index);
+        continue;
+      }
+      nodes.erase(nodes.begin() + index);
+      nodes.insert(nodes.begin() + index,
+                   std::make_move_iterator(parts.begin()),
+                   std::make_move_iterator(parts.end()));
+      changed = true;
+    }
+    if (!changed) {
+      if (cycle)
+        llvm::append_range(*cycle, witness);
+      if (options.cyclic) {
+        llvm::SmallSetVector<const ActivationRegionAnalysis *, 8> cyclic;
+        for (const auto &component : components)
+          if (component.size() > 1)
+            for (unsigned id : component)
+              cyclic.insert(nodes[id].activation);
+        llvm::append_range(*options.cyclic, cyclic);
+      }
+      break;
+    }
+    // Rebuild only dependencies. Store grouping protects source-local
+    // snapshots and is never weakened by control-flow simplification.
+    rebuild();
   }
+  ActivationSchedule result;
+  result.nodes = steps;
+  for (const auto *activation : activations)
+    result.sensitivityEvents.push_back(activation->getSuspension());
+  for (auto [from, to] : edges)
+    result.dependencies.push_back(
+        {from, to, ActivationSchedule::DependencyKind::Value});
+  for (const auto &node : nodes) {
+    ActivationSlice slice{node.activation, node.stores, {}};
+    if (node.window)
+      slice.windows.emplace_back(node.stores.front(), *node.window);
+    result.slices.push_back(std::move(slice));
+  }
+  if (!buildComponents(result))
+    return std::nullopt;
+  if (!result.isAcyclic())
+    return result;
   // Topological order that continues with the previous activation whenever
   // possible, so each process is split into as few slices as possible.
   llvm::sort(edges);
@@ -1299,23 +1527,54 @@ getActivationSliceOrder(ArrayRef<const ActivationRegionAnalysis *> activations,
   for (unsigned id = 0; id < nodes.size(); ++id)
     if (!incoming[id])
       ready.insert(id);
-  SmallVector<ActivationSlice> slices;
+  result.order.clear();
+  const ActivationRegionAnalysis *previous = nullptr;
   while (!ready.empty()) {
     auto next = ready.begin();
-    if (!slices.empty())
+    if (previous)
       for (auto it = ready.begin(); it != ready.end(); ++it)
-        if (nodes[*it].activation == slices.back().activation) {
+        if (nodes[*it].activation == previous) {
           next = it;
           break;
         }
     unsigned id = *next;
     ready.erase(next);
-    if (slices.empty() || slices.back().activation != nodes[id].activation)
-      slices.push_back({nodes[id].activation, {}});
-    llvm::append_range(slices.back().stores, nodes[id].stores);
+    result.order.push_back(id);
+    previous = nodes[id].activation;
     for (unsigned successor : successors[id])
       if (!--incoming[successor])
         ready.insert(successor);
+  }
+  // Rebuild component identities for the chosen DAG order. Every component
+  // is a singleton; identities must agree with offsets into this order.
+  for (auto [rank, id] : llvm::enumerate(result.order))
+    result.componentOf[id] = rank;
+  return result;
+}
+} // namespace
+
+std::optional<ActivationSchedule> getActivationSliceSchedule(
+    ArrayRef<const ActivationRegionAnalysis *> activations,
+    const ActivationSliceOptions &options) {
+  return buildSliceSchedule(activations, nullptr, options);
+}
+
+std::optional<SmallVector<ActivationSlice>>
+getActivationSliceOrder(ArrayRef<const ActivationRegionAnalysis *> activations,
+                        SmallVectorImpl<ActivationRegionStep> *cycle,
+                        const ActivationSliceOptions &options) {
+  auto schedule = buildSliceSchedule(activations, cycle, options);
+  if (!schedule || !schedule->isAcyclic())
+    return std::nullopt;
+  SmallVector<ActivationSlice> slices;
+  for (unsigned id : schedule->order) {
+    const auto &node = schedule->slices[id];
+    if (slices.empty() || slices.back().activation != node.activation)
+      slices.push_back({node.activation, {}, {}});
+    for (Operation *store : node.stores)
+      if (!llvm::is_contained(slices.back().stores, store))
+        slices.back().stores.push_back(store);
+    llvm::append_range(slices.back().windows, node.windows);
   }
   return slices;
 }
@@ -1418,6 +1677,48 @@ cloneSliceWithTemporaries(const ActivationSlice &slice,
     else
       cloned->erase();
   });
+  // A lane-copy store listed with windows publishes only those lanes here:
+  // narrow it to one partial store per window. The whole value is still
+  // computed from the same loads; other windows belong to other slices.
+  for (size_t index = 0; index < slice.windows.size(); ++index) {
+    Operation *store = slice.windows[index].first;
+    if (llvm::any_of(ArrayRef(slice.windows).take_front(index),
+                     [&](const auto &entry) { return entry.first == store; }))
+      continue;
+    auto cloned = cast<sim::SimRefStoreOp>(mapping->lookup(store));
+    auto found = writes.find(cloned);
+    if (found == writes.end() || found->second.size() != 1)
+      return {};
+    Range whole = found->second.front();
+    OpBuilder builder(cloned);
+    Location loc = cloned.getLoc();
+    Value value = cloned.getValue();
+    Type scalar = sim::getPackedScalarType(value.getType());
+    if (!isa_and_nonnull<sim::LogicType>(scalar))
+      return {};
+    if (value.getType() != scalar)
+      value = sim::SimPackedFlattenOp::create(builder, loc, scalar, value);
+    for (const auto &[other, window] : slice.windows) {
+      if (other != store)
+        continue;
+      if (window.low < whole.low ||
+          window.low + window.width > whole.low + whole.width)
+        return {};
+      uint64_t low = window.low - whole.low;
+      auto partType = sim::LogicType::get(builder.getContext(), window.width);
+      Value part =
+          sim::SimLogicExtractOp::create(builder, loc, partType, value, low);
+      Value reference = sim::SimRefExtractOp::create(
+          builder, loc, sim::RefType::get(builder.getContext(), partType),
+          cloned.getReference(), low);
+      auto narrowed = sim::SimRefStoreOp::create(builder, loc, part, reference);
+      if (auto owner = schedule::get<schedule::Field::EvalSourceOwner>(cloned))
+        schedule::set<schedule::Field::EvalSourceOwner>(narrowed, owner);
+      writes[narrowed] = {window};
+    }
+    writes.erase(cloned);
+    cloned->erase();
+  }
   auto removeDeadStores = [&] {
     ActivationLoadSlice dependencies(*copy, reads, writes, &privateReads);
     DenseSet<Operation *> required;

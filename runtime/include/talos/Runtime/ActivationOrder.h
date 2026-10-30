@@ -26,6 +26,12 @@ struct ActivationOrder {
   std::vector<uint32_t> nodes;
   std::vector<uint32_t> componentOffsets;
   std::vector<uint32_t> componentOf;
+  // Condensation adjacency, indexed by revision-local component identity.
+  std::vector<uint32_t> successorOffsets;
+  std::vector<uint32_t> successors;
+  std::vector<uint8_t> cyclic;
+  // Possible publications to an already visited node, including self edges.
+  std::vector<std::pair<uint32_t, uint32_t>> feedback;
 
   /// Dense node IDs, sorted CSR forward/reverse adjacency, iterative SCC
   /// condensation. Stable node identity breaks otherwise unconstrained ties.
@@ -149,6 +155,30 @@ struct ActivationOrder {
       for (uint32_t target : successors[id])
         if (!--indegree[target])
           ready.emplace(componentKeys[target], target);
+    }
+    const uint32_t components = ordered.componentOffsets.size() - 1;
+    ordered.cyclic.assign(components, 0);
+    std::vector<uint32_t> position(count);
+    for (uint32_t i = 0; i < count; ++i)
+      position[ordered.nodes[i]] = i;
+    std::vector<std::vector<uint32_t>> outgoing(components);
+    for (auto [from, to] : edges) {
+      uint32_t source = ordered.componentOf[from];
+      uint32_t target = ordered.componentOf[to];
+      if (source != target)
+        outgoing[source].push_back(target);
+      else if (position[to] <= position[from]) {
+        ordered.cyclic[source] = 1;
+        ordered.feedback.emplace_back(from, to);
+      }
+    }
+    ordered.successorOffsets.push_back(0);
+    for (auto &targets : outgoing) {
+      std::sort(targets.begin(), targets.end());
+      targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+      ordered.successors.insert(ordered.successors.end(), targets.begin(),
+                                targets.end());
+      ordered.successorOffsets.push_back(ordered.successors.size());
     }
     result = std::move(ordered);
     return true;

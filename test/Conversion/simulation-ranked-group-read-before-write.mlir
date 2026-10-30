@@ -6,10 +6,10 @@
 // must not become an algebraic fixpoint or forward the replacement backward.
 // Only the two downstream actors form a ranked helper; step3 retains its
 // ordinary executor. The output lags one activation at both O0 and O3.
-// PLAN-LABEL: llvm.func @__talos_eval_ranked_group_1(
+// PLAN-LABEL: llvm.func @__talos_eval_ranked_group_2(
 // PLAN-SAME: schedule.eval.ranked_members = array<i32: 3, 4>
 // PLAN-LABEL: llvm.func @__talos_eval_dispatch_v1(
-// PLAN: llvm.call @__talos_eval_ranked_group_1
+// PLAN: llvm.call @__talos_eval_ranked_group_2
 !ref = !simulation.ref<i1>
 !vref = !simulation.ref<i8>
 module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", schedule.native_scheduler = 3 : i32} {

@@ -5,20 +5,25 @@
 // which direction carries data, so the active graph is acyclic in both
 // configurations. Backward publications must survive a ranked sweep.
 // No sampled-value observation is used to delete either possible edge.
+// The source, feedback component, and forward-only suffix have independent
+// entries. Backward work cannot replay the source or the suffix.
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_0(
-// PLAN-SAME: schedule.eval.materialized_group_calls = 5 : i64
+// PLAN-SAME: schedule.eval.ranked_members = array<i32: 0>
+// PLAN-LABEL: llvm.func @__talos_eval_ranked_group_1(
+// PLAN-SAME: schedule.eval.materialized_group_calls = 2 : i64
 // PLAN-SAME: schedule.eval.predicated_dataflow
-// PLAN-SAME: schedule.eval.ranked_members = array<i32: 0, 1, 2, 3, 4>
+// PLAN-SAME: schedule.eval.ranked_members = array<i32: 1, 2>
 // PLAN-NOT: llvm.switch
 // PLAN-NOT: llvm.call %
-// PLAN: llvm.add
-// PLAN-NOT: llvm.switch
-// PLAN-NOT: llvm.call %
-// PLAN-LABEL: llvm.func @__talos_eval_ranked_group_0.fallback(
+// PLAN-LABEL: llvm.func @__talos_eval_ranked_group_1.fallback(
 // PLAN-SAME: schedule.eval.ssa_ready_words = 1 : i64
-// PLAN-SAME: schedule.eval.ssa_value_ranges = 4 : i64
+// PLAN-SAME: schedule.eval.ssa_value_ranges = 2 : i64
+// PLAN-LABEL: llvm.func @__talos_eval_ranked_group_2(
+// PLAN-SAME: schedule.eval.ranked_members = array<i32: 3, 4>
 // PLAN-LABEL: llvm.func @__talos_eval_dispatch_v1(
 // PLAN: llvm.call @__talos_eval_ranked_group_0
+// PLAN: llvm.call @__talos_eval_ranked_group_1
+// PLAN: llvm.call @__talos_eval_ranked_group_2
 !ref = !simulation.ref<i1>
 !vref = !simulation.ref<i8>
 module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", schedule.native_scheduler = 3 : i32} {
@@ -129,20 +134,23 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     }
     simulation.func @check(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 1 : i32, code_unit_id = 8 : i64} {
       %output = simulation.context.storage %ctx[5] : !vref
+      %settled = simulation.context.storage %ctx[2] : !vref
       %delay = simulation.time.constant 3
       simulation.suspend.delay %delay to ^first
     ^first:
       %a = simulation.ref.load %output : !vref -> i8
-      %fmt = simulation.bytes.constant "chain %0d"
+      %feedbackA = simulation.ref.load %settled : !vref -> i8
+      %fmt = simulation.bytes.constant "chain %0d feedback %0d"
       %channel = arith.constant 1 : i32
-      simulation.display %ctx to %channel(%fmt, %a) newline = true radix = <decimal> flags = [0, 0] : !simulation.bytes, i8
+      simulation.display %ctx to %channel(%fmt, %a, %feedbackA) newline = true radix = <decimal> flags = [0, 0, 0] : !simulation.bytes, i8, i8
       %again = simulation.time.constant 2
       simulation.suspend.delay %again to ^done
     ^done:
       %b = simulation.ref.load %output : !vref -> i8
-      %fmt2 = simulation.bytes.constant "chain %0d"
+      %feedbackB = simulation.ref.load %settled : !vref -> i8
+      %fmt2 = simulation.bytes.constant "chain %0d feedback %0d"
       %channel2 = arith.constant 1 : i32
-      simulation.display %ctx to %channel2(%fmt2, %b) newline = true radix = <decimal> flags = [0, 0] : !simulation.bytes, i8
+      simulation.display %ctx to %channel2(%fmt2, %b, %feedbackB) newline = true radix = <decimal> flags = [0, 0, 0] : !simulation.bytes, i8, i8
       %zero = arith.constant 0 : i32
       simulation.finish %ctx, %zero
       simulation.return

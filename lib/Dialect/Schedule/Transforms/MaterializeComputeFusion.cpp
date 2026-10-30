@@ -14,6 +14,7 @@
 #include "talos/Analysis/SSAValueAnalysis.h"
 #include "talos/Analysis/SourceMemoryAnalysis.h"
 #include "talos/Analysis/StorageWriteAnalysis.h"
+#include "talos/Conversion/SimulationToSchedule/ComputeGraph.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
@@ -2263,6 +2264,7 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
     schedule::ComputeGraphAttr graph,
     const analysis::HandleDataflowAnalysis &provenance,
     const CombinationalFusionAnalysis &combinational,
+    const ConvexActivationGraph &contractions,
     const DenseMap<int64_t, int64_t> &resumeTargets,
     const DenseMap<StringAttr, SmallVector<sim::SimSpawnOp>> &spawnsByCallee,
     llvm::function_ref<LogicalResult(sim::SimFuncOp)> simplifyKernel,
@@ -2300,7 +2302,9 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
             function);
     auto combinationalBody =
         combinational.analyze(function, provenance, fusion.getInterleaved());
-    if (!combinationalBody && fusion.getDataflow())
+    bool atomic = fusion.getAtomic() &&
+                  llvm::is_contained(fusion.getAtomic().asArrayRef(), member);
+    if (!combinationalBody && fusion.getDataflow() && !atomic)
       combinationalBody =
           combinational.analyzeForReordering(function, provenance);
     if (!function || (fusion.getInterleaved() && !combinationalBody) ||
@@ -2386,6 +2390,11 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
       (!fusion.getInterleaved() && candidates.size() > 64))
     return reject("region: unsupported cohort size");
   bool rankedCombinational = candidates.front().combinationalBody.has_value();
+  SmallVector<StringAttr> memberNames;
+  for (auto &candidate : candidates)
+    memberNames.push_back(candidate.function.getSymNameAttr());
+  if (rankedCombinational && !contractions.isConvex(memberNames))
+    return reject("region: nonconvex activation boundary");
   if (llvm::any_of(candidates, [&](const Candidate &candidate) {
         return candidate.combinationalBody.has_value() != rankedCombinational;
       }))
@@ -2613,21 +2622,47 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
     std::optional<SmallVector<analysis::ActivationSlice>> slices;
     if (fusion.getInterleaved()) {
       SmallVector<sim::SimFuncOp> members;
+      SmallVector<sim::SimFuncOp> reordered;
+      DenseSet<const analysis::ActivationRegionAnalysis *> atomic;
       SmallVector<const analysis::ActivationRegionAnalysis *> activations;
       for (Candidate &candidate : candidates) {
         members.push_back(candidate.function);
         activations.push_back(candidate.combinationalBody->structured);
+        if (fusion.getAtomic() &&
+            llvm::is_contained(fusion.getAtomic().asArrayRef(),
+                               candidate.fragment))
+          atomic.insert(candidate.combinationalBody->structured);
+        else
+          reordered.push_back(candidate.function);
       }
       if (!combinational.canInterleave(members))
         return bail("region: interleaving certificate");
       if (fusion.getDataflow()) {
         // IEEE 1800-2023 4.3: only a cohort whose transitions no outside
         // observer can see may drop each process's statement order.
-        if (!combinational.canReorder(members))
+        if (!combinational.canReorder(reordered))
           return bail("region: reordering certificate");
-        slices = analysis::getActivationSliceOrder(activations);
+        slices =
+            analysis::getActivationSliceOrder(activations, nullptr, {&atomic});
         if (!slices)
           return bail("region: slice ordering");
+        // Re-derive atomicity from this revision's executable slices. Metadata
+        // cannot authorize splitting a process whose statement order matters.
+        for (const auto *activation : atomic) {
+          const analysis::ActivationSlice *whole = nullptr;
+          for (const auto &slice : *slices)
+            if (slice.activation == activation) {
+              if (whole || !slice.windows.empty())
+                return bail("region: split atomic member");
+              whole = &slice;
+            }
+          if (!whole || llvm::any_of(activation->getMemory().getWrites(),
+                                     [&](const auto &entry) {
+                                       return !llvm::is_contained(whole->stores,
+                                                                  entry.first);
+                                     }))
+            return bail("region: incomplete atomic member");
+        }
       } else {
         interleaving = analysis::getActivationRegionOrder(activations);
         if (!interleaving)
@@ -4351,6 +4386,32 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
   ArrayAttr fusions =
       ::talos::schedule::get<schedule::metadata::staticBodyFusion>(design);
   schedule::ComputeGraphAttr graph = design.getComputeGraphAttr();
+  if (fusions && graph) {
+    // A plan is not a revision token. An intervening edit to an outside wait
+    // or writer can invalidate every member-local certificate while leaving
+    // the requested fragment IDs unchanged. Re-derive the complete inventory
+    // before any executable mutation, using the graph's recorded options.
+    auto current = simlowering::deriveComputeGraph(
+        design, {graph.getWorkers(), graph.getVpi()});
+    if (failed(current))
+      return signalPassFailure();
+    if (current->graph != graph) {
+      schedule::remove<schedule::metadata::staticBodyFusion>(design);
+      design.removeComputeGraphAttr();
+      // Drop stale source proofs too. The pipeline rebuilds the graph before
+      // native ownership; the original actors remain the execution fallback.
+      for (auto function : design.getOps<sim::SimFuncOp>()) {
+        function.removeEffectSummaryAttr();
+        function.removeFragmentAbiAttr();
+      }
+      schedule::remove<schedule::metadata::nbaTransientObservable>(design);
+      schedule::remove<schedule::metadata::nbaChangeWatched>(design);
+      schedule::remove<schedule::Field::NbaPrivateInfluence>(design);
+      schedule::remove<schedule::Field::NbaGuardedPrivateInfluence>(design);
+      schedule::remove<schedule::Field::NbaImmediateWriters>(design);
+      return;
+    }
+  }
   bool evalScheduler = useEvalBodyFusion(design);
   bool cloneEvaluators = evalScheduler && materializeEvalBodies;
   // Inventory NBA transient observers while every process still has its
@@ -4546,6 +4607,7 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
       design, provenance,
       analysis::ActivationMemoryAnalysis::DependencyMode::ReachingValues);
   FusionInputIndex inputIndex(design, graph);
+  ConvexActivationGraph contractions(design, graph);
   for (Attribute attribute : fusions) {
     auto fusion = dyn_cast<schedule::ComputeFusionAttr>(attribute);
     if (!fusion)
@@ -4570,7 +4632,7 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
         (!evalScheduler || primitiveContinuous || fusion.getInterleaved())) {
       fused = materializeStraightLineKernel(
           design, symbols, codeUnits, inputIndex, fusion, graph, provenance,
-          combinational, firstResumeTargets, spawnsByCallee,
+          combinational, contractions, firstResumeTargets, spawnsByCallee,
           [&](sim::SimFuncOp kernel) {
             return runPipeline(kernelSimplification, kernel);
           },
@@ -4584,9 +4646,16 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
       }
     }
     changed |= succeeded(fused);
-    if (succeeded(fused))
+    if (succeeded(fused)) {
+      SmallVector<StringAttr> members;
+      for (int64_t member : fusion.getFragments().asArrayRef())
+        members.push_back(
+            cast<schedule::ComputeFragmentAttr>(graph.getNodes()[member])
+                .getFunction()
+                .getAttr());
+      contractions.contract(members);
       ++materializedFusions;
-    else
+    } else
       ++rejectedFusions;
   }
   // Kernel load forwarding and removal of the original actors can establish

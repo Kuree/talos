@@ -1,6 +1,7 @@
 // RUN: talos-opt %s --split-input-file --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph,schedule-plan-combinational-statements,talos-sim-materialize-compute-fusion,talos-sim-build-compute-graph,talos-sim-verify-compute-graph))' | FileCheck %s
 // RUN: talos-opt %s --split-input-file --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph,schedule-plan-combinational-statements{max-members=3},talos-sim-materialize-compute-fusion,talos-sim-build-compute-graph,talos-sim-verify-compute-graph))' | FileCheck %s --check-prefix=CAP
 // RUN: talos-opt %s --split-input-file --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph,schedule-plan-combinational-statements{grow-acyclic=false},talos-sim-materialize-compute-fusion,talos-sim-build-compute-graph,talos-sim-verify-compute-graph))' | FileCheck %s --check-prefix=NOGROW
+// RUN: talos-opt %s --split-input-file --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph,schedule-plan-combinational-statements{component-sections=true},talos-sim-materialize-compute-fusion,talos-sim-build-compute-graph,talos-sim-verify-compute-graph))' | FileCheck %s --check-prefix=COMPONENT
 
 // Every design has an `initial` sink that reads the roots only written by
 // the processes under test; a write-only root would lose its stores and then
@@ -187,6 +188,17 @@ module {
 // one fed by the cohort would close the cycle cohort -> @gate -> cohort, so
 // @pre stays out too. @after joins.
 // CHECK-LABEL: simulation.design @blocked
+// Component planning admits clock readers and their descendants, preserving
+// the original change sensitivity. The effectful watcher keeps its executor.
+// COMPONENT-LABEL: simulation.design @blocked
+// COMPONENT: simulation.func @root
+// COMPONENT: simulation.spawn @flop
+// COMPONENT-NEXT: {{.*}}simulation.spawn @watcher
+// COMPONENT-NEXT: {{.*}}simulation.spawn @__talos_region_kernel_0_0
+// COMPONENT-NEXT: simulation.return
+// COMPONENT-LABEL: simulation.func private @__talos_region_kernel_0_0
+// COMPONENT: %[[CLOCK:.*]] = simulation.context.storage %arg0[5]
+// COMPONENT: simulation.suspend.any {{.*}}%[[CLOCK]]
 // CAP-LABEL: simulation.design @blocked
 // CHECK-DAG: simulation.spawn @flop
 // CHECK-DAG: simulation.spawn @clocked

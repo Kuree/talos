@@ -4,6 +4,7 @@
 
 #include "mlir/IR/OwningOpRef.h"
 #include "talos/Analysis/ActivationMemoryAnalysis.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 
 namespace talos::analysis {
@@ -130,7 +131,49 @@ std::optional<llvm::SmallVector<ActivationRegionStep>> getActivationRegionOrder(
 struct ActivationSlice {
   const ActivationRegionAnalysis *activation;
   llvm::SmallVector<mlir::Operation *> stores;
+  /// Lane-copy stores kept only over these root-relative windows; one store
+  /// may have several. Emission narrows each such store to its windows.
+  llvm::SmallVector<
+      std::pair<mlir::Operation *, ActivationMemoryAnalysis::Range>>
+      windows;
 };
+struct ActivationSliceOptions {
+  /// Activations whose stores all stay in one slice, in source order
+  /// (IEEE 1800-2023 4.6(a)); their statements are never reordered.
+  const llvm::DenseSet<const ActivationRegionAnalysis *> *atomic = nullptr;
+  /// On failure, every activation with a store inside a dependence cycle.
+  llvm::SmallVectorImpl<const ActivationRegionAnalysis *> *cyclic = nullptr;
+};
+
+/// Immutable schedule for the input analyses' IR revision. A successful query
+/// may contain cycles; failure means unsupported analysis, never feedback.
+/// Node identity retains its original activation and source operation. Source
+/// order, SSA and snapshot obligations are never cut to break a component.
+struct ActivationSchedule {
+  enum class DependencyKind { SourceOrder, SSA, Value, Snapshot, Publication };
+  struct Dependency {
+    unsigned source, target;
+    DependencyKind kind;
+  };
+  llvm::SmallVector<ActivationRegionStep> nodes;
+  llvm::SmallVector<Dependency> dependencies;
+  llvm::SmallVector<unsigned> order, componentOffsets, componentOf;
+  llvm::SmallVector<bool> cyclic;
+  /// Original suspension events, separate from value dependencies. Narrowing
+  /// a value lane never narrows IEEE 1800-2023 9.2.2.2.1 sensitivity.
+  llvm::SmallVector<mlir::Operation *> sensitivityEvents;
+  /// Populated only by the slice query, one entry per schedule node.
+  llvm::SmallVector<ActivationSlice> slices;
+  bool isAcyclic() const {
+    return llvm::none_of(cyclic, [](bool value) { return value; });
+  }
+};
+
+std::optional<ActivationSchedule> getActivationRegionSchedule(
+    llvm::ArrayRef<const ActivationRegionAnalysis *> activations);
+std::optional<ActivationSchedule> getActivationSliceSchedule(
+    llvm::ArrayRef<const ActivationRegionAnalysis *> activations,
+    const ActivationSliceOptions &options = {});
 /// Clone a slice and simplify the now-unneeded control flow. Private stores
 /// unrelated to its publications are removed too. The mapping, when supplied,
 /// describes the clone before simplification; surviving memory reads retain
@@ -151,8 +194,13 @@ cloneActivationSlice(const ActivationSlice &slice,
 /// not a reference-algorithm execution (IEEE 1800-2023 4.6(a)); it is valid
 /// only under 4.3 when nothing outside the cohort can observe the transitions
 /// it removes. On failure, optionally return one directed cycle of stores.
+/// Dependences follow lane publications where the activation has value
+/// dependencies, so a store depends only on the bits its lanes use; a whole
+/// lane-copy store is split into partial stores at the lanes other nodes
+/// read or write.
 std::optional<llvm::SmallVector<ActivationSlice>> getActivationSliceOrder(
     llvm::ArrayRef<const ActivationRegionAnalysis *> activations,
-    llvm::SmallVectorImpl<ActivationRegionStep> *cycle = nullptr);
+    llvm::SmallVectorImpl<ActivationRegionStep> *cycle = nullptr,
+    const ActivationSliceOptions &options = {});
 } // namespace talos::analysis
 #endif

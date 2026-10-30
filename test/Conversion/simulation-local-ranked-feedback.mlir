@@ -2,11 +2,13 @@
 // RUN: FileCheck %s --check-prefix=GROUP < %t.group.mlir
 
 // A static sensitivity SCC is not a reason to exclude all of its actors.
-// Forward segments remain native groups and the shared loop handles their
-// backward publication. The OR gate breaks the value-level loop at runtime.
-// GROUP: simulation.spawn @__talos_region_kernel_
-// GROUP: simulation.func private @__talos_region_kernel_
-// GROUP-SAME: schedule.native.region_body
+// The original actors retain their activation granularity until native
+// ownership lowering can guard each member and retain backward publication. The OR gate breaks the value-level loop at runtime.
+// GROUP: simulation.spawn @a
+// GROUP: simulation.spawn @b
+// GROUP: simulation.spawn @c
+// GROUP: simulation.spawn @d
+// GROUP-NOT: simulation.spawn @__talos_region_kernel_
 
 !bit = !simulation.logic<1>
 !ref = !simulation.ref<!bit>

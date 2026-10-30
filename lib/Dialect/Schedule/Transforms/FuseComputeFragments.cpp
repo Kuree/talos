@@ -346,7 +346,7 @@ void TalosSimFuseComputeFragmentsPass::runOnOperation() {
         fusions.push_back(schedule::ComputeFusionAttr::get(
             design.getContext(), id++,
             DenseI64ArrayAttr::get(design.getContext(), fragments), false,
-            false));
+            false, {}));
         ++plannedFusions;
       }
       fragments.clear();
@@ -501,7 +501,8 @@ void TalosSimFuseComputeFragmentsPass::runOnOperation() {
           continue;
         fusions.push_back(schedule::ComputeFusionAttr::get(
             design.getContext(), id++,
-            DenseI64ArrayAttr::get(design.getContext(), chunk), false, false));
+            DenseI64ArrayAttr::get(design.getContext(), chunk), false, false,
+            {}));
         ++plannedFusions;
       }
     }

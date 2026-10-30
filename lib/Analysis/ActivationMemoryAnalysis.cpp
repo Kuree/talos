@@ -817,8 +817,13 @@ public:
         bounds.erase(std::unique(bounds.begin(), bounds.end()), bounds.end());
         for (size_t i = 1; i < bounds.size(); ++i) {
           Range lane{output.root, bounds[i - 1], bounds[i] - bounds[i - 1]};
-          lanes.push_back(
-              {lane, sources(project(influences, lane.low, lane.width))});
+          Influences projected = project(influences, lane.low, lane.width);
+          std::optional<Range> identity;
+          if (projected.size() == 1 && projected.front().identity &&
+              projected.front().width == lane.width &&
+              projected.front().source.width == lane.width)
+            identity = projected.front().source;
+          lanes.push_back({lane, sources(projected), identity});
         }
       }
     }

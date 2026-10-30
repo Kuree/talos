@@ -3,6 +3,7 @@
 #include "../SimulationToLLVMCoroutine/SimulationAOTPlanning.h"
 #include "../SimulationToLLVMCoroutine/SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Analysis/ActivationRegionAnalysis.h"
+#include "talos/Analysis/SimulationScheduleAnalysis.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
@@ -14,9 +15,11 @@
 
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SparseBitVector.h"
 #include "llvm/ADT/StringMap.h"
 
 #include <algorithm>
+#include <map>
 #include <numeric>
 
 using namespace mlir;
@@ -73,9 +76,13 @@ void reorderOwners(ResolvedNativeEvalPlan &plan, ArrayRef<uint32_t> order) {
     llvm::sort(*records);
   }
   for (auto &node : plan.rankedNodes) {
-    node.owner = remap[node.owner];
+    if (node.owner != UINT32_MAX)
+      node.owner = remap[node.owner];
     for (uint32_t &successor : node.successors)
       successor = remap[successor];
+    for (uint32_t &successor : node.feedbackSuccessors)
+      if (successor != UINT32_MAX)
+        successor = remap[successor];
     llvm::sort(node.successors);
   }
 }
@@ -210,7 +217,10 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
         !::talos::schedule::has<
             schedule::metadata::evalPathGuardedKnownPreserving>(variant))
       twoStateBody = {};
-    Node node{{record.bit, direct.body, twoStateBody.str(), {}}, {}, {}};
+    Node node;
+    node.plan.owner = record.bit;
+    node.plan.body = direct.body;
+    node.plan.twoStateBody = twoStateBody.str();
     bool clocked = llvm::any_of(direct.fragmentIDs, [&](uint32_t id) {
       auto fragment = fragments.lookup(id);
       return fragment && llvm::any_of(fragment.getEffects(), [](Attribute raw) {
@@ -247,7 +257,6 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
                   : kind != sim::EntryKind::Continuous &&
                         kind != sim::EntryKind::Always &&
                         kind != sim::EntryKind::AlwaysComb &&
-                        kind != sim::EntryKind::AlwaysLatch &&
                         kind != sim::EntryKind::PortInput &&
                         kind != sim::EntryKind::PortOutput)
         return false;
@@ -547,7 +556,14 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
     if (node.opaqueMemory)
       opaqueOwners.push_back(node.plan.owner);
   SmallVector<NativeRankedEvalNode> result;
+  DenseSet<StringAttr> internalSources;
   for (auto &node : nodes) {
+    if (!node.plan.boundary) {
+      const auto *direct =
+          directByWrapper.lookup(plan.mergedExecutors[node.plan.owner]);
+      for (uint32_t id : direct->fragmentIDs)
+        internalSources.insert(fragments.lookup(id).getFunction().getAttr());
+    }
     if (node.opaqueMemory) {
       for (const auto &other : nodes)
         if (node.plan.owner != other.plan.owner)
@@ -580,6 +596,158 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
   for (auto [id, node] : llvm::enumerate(result))
     for (uint32_t target : node.successors)
       edges.emplace_back(id, dense.lookup(target));
+  const unsigned realNodeCount = result.size();
+  // Runtime-owned actors have no bit in the generated ready set. They must
+  // nevertheless constrain SCCs and segment boundaries: A -> runtime B -> C
+  // is not a closed A/C graph. These virtual nodes are analysis-only and never
+  // enter an ABI table, an owner permutation, or executable group membership.
+  DenseMap<uint32_t, SmallVector<uint32_t>> byFragment;
+  DenseMap<StringAttr, SmallVector<uint32_t>> byFunction;
+  for (auto [id, node] : llvm::enumerate(result)) {
+    const auto *direct =
+        directByWrapper.lookup(plan.mergedExecutors[node.owner]);
+    for (uint32_t fragmentID : direct->fragmentIDs) {
+      byFragment[fragmentID].push_back(id);
+      byFunction[fragments.lookup(fragmentID).getFunction().getAttr()]
+          .push_back(id);
+    }
+  }
+  for (auto &[name, owners] : byFunction) {
+    llvm::sort(owners);
+    owners.erase(std::unique(owners.begin(), owners.end()), owners.end());
+  }
+  DenseMap<StringAttr, unsigned> eventWaits;
+  DenseSet<StringAttr> otherBoundaries;
+  DenseMap<StringAttr, uint32_t> entries;
+  DenseMap<uint32_t, SmallVector<uint32_t>> sourceOrder;
+  for (Attribute raw : graph.getNodes()) {
+    auto fragment = dyn_cast<schedule::ComputeFragmentAttr>(raw);
+    if (!fragment)
+      continue;
+    auto name = fragment.getFunction().getAttr();
+    if (fragment.getBlock() == 0)
+      entries[name] = fragment.getId();
+    switch (fragment.getAction()) {
+    case schedule::ComputeActionKind::Continue:
+    case schedule::ComputeActionKind::Terminate:
+      break;
+    case schedule::ComputeActionKind::SuspendChange:
+    case schedule::ComputeActionKind::SuspendAny:
+    case schedule::ComputeActionKind::SuspendEdge:
+      ++eventWaits[name];
+      break;
+    default:
+      otherBoundaries.insert(name);
+      break;
+    }
+  }
+  for (Attribute raw : graph.getEdges()) {
+    auto edge = cast<schedule::ComputeEdgeAttr>(raw);
+    if (edge.getKind() == schedule::ComputeEdgeKind::ProcessOrder)
+      sourceOrder[edge.getSource()].push_back(edge.getTarget());
+  }
+  DenseMap<StringAttr, bool> repeatingActivations;
+  DenseMap<StringAttr, uint32_t> virtualActivations;
+  for (Attribute raw : graph.getNodes()) {
+    auto fragment = dyn_cast<schedule::ComputeFragmentAttr>(raw);
+    if (!fragment || fragment.getRegion() != schedule::ComputeRegionKind::Active)
+      continue;
+    auto function = functions.lookup(fragment.getFunction().getValue());
+    if (!function || function.getEntryKind() == sim::EntryKind::RootInitializer)
+      continue;
+    StringAttr name = function.getSymNameAttr();
+    auto [shape, inserted] = repeatingActivations.try_emplace(name, false);
+    if (inserted) {
+      auto kind = function.getEntryKind();
+      bool settling = analysis::isSettlingEntryKind(kind);
+      bool repeating = kind == sim::EntryKind::Always ||
+                       kind == sim::EntryKind::AlwaysFF;
+      shape->second = (settling || repeating) && eventWaits.lookup(name) == 1 &&
+                      !otherBoundaries.contains(name);
+      if (shape->second && !settling) {
+        // An arbitrary initial/task is never a repeating activation. Even an
+        // always procedure may publish a distinct prefix before its first
+        // event wait. Collapse only a setup prefix with no design effects;
+        // resumed bodies then share the authoritative existing ready owner.
+        SmallVector<uint32_t> pending;
+        DenseSet<uint32_t> seen;
+        if (auto entry = entries.find(name); entry != entries.end())
+          pending.push_back(entry->second);
+        else
+          shape->second = false;
+        while (shape->second && !pending.empty()) {
+          uint32_t id = pending.pop_back_val();
+          if (!seen.insert(id).second)
+            continue;
+          auto prefix = fragments.lookup(id);
+          if (!prefix || prefix.getFunction().getAttr() != name) {
+            shape->second = false;
+            break;
+          }
+          auto action = prefix.getAction();
+          if (action == schedule::ComputeActionKind::SuspendChange ||
+              action == schedule::ComputeActionKind::SuspendAny ||
+              action == schedule::ComputeActionKind::SuspendEdge)
+            continue;
+          if (!prefix.getEffects().empty()) {
+            shape->second = false;
+            break;
+          }
+          llvm::append_range(pending, sourceOrder.lookup(id));
+        }
+      }
+    }
+    bool single = shape->second;
+    if (single && byFunction.lookup(name).size() == 1) {
+      byFragment[fragment.getId()] = byFunction.lookup(name);
+      continue;
+    }
+    if (byFragment.contains(fragment.getId()))
+      continue;
+    auto found = virtualActivations.find(name);
+    uint32_t id = found != virtualActivations.end() && single
+                      ? found->second
+                      : result.size();
+    if (id == result.size()) {
+      NativeRankedEvalNode boundary;
+      boundary.owner = UINT32_MAX;
+      boundary.body = (Twine("<runtime:") + function.getSymName() + ":" +
+                       Twine(fragment.getBlock()) + ">")
+                          .str();
+      boundary.boundary = true;
+      result.push_back(std::move(boundary));
+      if (single)
+        virtualActivations[name] = id;
+    }
+    byFragment[fragment.getId()] = {id};
+  }
+  DenseMap<uint32_t, SmallVector<uint32_t>> resumes;
+  for (Attribute raw : graph.getEdges()) {
+    auto edge = cast<schedule::ComputeEdgeAttr>(raw);
+    if (edge.getKind() == schedule::ComputeEdgeKind::Resume)
+      resumes[edge.getSource()].push_back(edge.getTarget());
+  }
+  auto project = [&](uint32_t source, uint32_t target, bool sensitivity) {
+    for (uint32_t from : byFragment.lookup(source))
+      for (uint32_t to : byFragment.lookup(target))
+        // Existing real owners already have refined read/watch dependencies.
+        // A coarse source summary must not erase that precision. Add missing
+        // boundary paths, retaining the original fanout for every watch.
+        if (from != to &&
+            (!sensitivity || from >= realNodeCount || to >= realNodeCount))
+          edges.emplace_back(from, to);
+  };
+  for (Attribute raw : graph.getEdges()) {
+    auto edge = cast<schedule::ComputeEdgeAttr>(raw);
+    if (edge.getKind() != schedule::ComputeEdgeKind::ProcessOrder &&
+        edge.getKind() != schedule::ComputeEdgeKind::Sensitivity)
+      continue;
+    bool sensitivity = edge.getKind() == schedule::ComputeEdgeKind::Sensitivity;
+    project(edge.getSource(), edge.getTarget(), sensitivity);
+    if (edge.getKind() == schedule::ComputeEdgeKind::Sensitivity)
+      for (uint32_t target : resumes[edge.getTarget()])
+        project(edge.getSource(), target, true);
+  }
   // Keep independent cones in separate helper bodies. Interleaving their
   // equally legal topological ranks would sweep unrelated predicates whenever
   // only one cone receives an activation.
@@ -597,12 +765,158 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
     islands[std::max(a, b)] = std::min(a, b);
   }
   for (uint32_t id = 0; id < result.size(); ++id)
-    result[id].island = root(id);
+    result[id].island = root(id) < realNodeCount
+                            ? root(id)
+                            : realNodeCount + clockedNodes.size() + root(id);
   runtime::ActivationOrder order;
-  if (!runtime::ActivationOrder::build(result.size(), std::move(edges), order))
+  if (!runtime::ActivationOrder::build(result.size(), edges, order))
     return {};
+  // Events from executors outside the pure graph are independent activity
+  // seeds. Do not seed internal lane publications: that would split a closed
+  // forward chain at every wire. Startup remains the original pending work.
+  DenseMap<uint32_t, SmallVector<Range>> externalWrites;
+  bool unknownExternal = false;
+  for (Attribute raw : graph.getNodes()) {
+    auto fragment = dyn_cast<schedule::ComputeFragmentAttr>(raw);
+    if (!fragment || internalSources.contains(fragment.getFunction().getAttr()))
+      continue;
+    auto function = functions.lookup(fragment.getFunction().getValue());
+    if (function && function.getEntryKind() == sim::EntryKind::RootInitializer)
+      continue;
+    for (auto effect :
+         fragment.getEffects().getAsRange<schedule::ComputeEffectAttr>()) {
+      if (effect.getEffect() != schedule::ComputeEffectKind::Write &&
+          effect.getEffect() != schedule::ComputeEffectKind::Drive &&
+          effect.getEffect() != schedule::ComputeEffectKind::NBA)
+        continue;
+      bool net = effect.getResource() == schedule::ComputeResourceKind::Net;
+      if ((!net &&
+           effect.getResource() != schedule::ComputeResourceKind::Storage) ||
+          effect.getTarget() != schedule::ComputeTargetKind::Descriptor ||
+          !effect.getWidth() ||
+          effect.getLow() > UINT64_MAX - effect.getWidth()) {
+        unknownExternal = true;
+        continue;
+      }
+      const auto &handles = net ? stateLayout.nets : stateLayout.storage;
+      auto handle = handles.find(effect.getDescriptor());
+      talos_rt_stable_handle_v1 decoded{};
+      if (handle == handles.end() ||
+          !talos_rt_stable_handle_decode(handle->second, &decoded) ||
+          decoded.kind != TALOS_RT_STABLE_HANDLE_STATIC || decoded.offset) {
+        unknownExternal = true;
+        continue;
+      }
+      externalWrites[decoded.id].push_back(
+          {decoded.id, effect.getLow(), effect.getLow() + effect.getWidth()});
+    }
+  }
+  const unsigned componentCount = order.componentOffsets.size() - 1;
+  SmallVector<llvm::SparseBitVector<>> activities(result.size());
+  std::map<ClockKey, unsigned> events;
+  for (const auto &entry : plan.fanoutEntries) {
+    if ((entry.reserved & TALOS_RT_FANOUT_ROUTE_MASK) != TALOS_RT_FANOUT_DIRECT)
+      continue;
+    auto node = dense.find(entry.merged_bit);
+    if (node == dense.end())
+      continue;
+    bool external = unknownExternal ||
+                    fanout.runtimeTransitionStates.contains(entry.static_state);
+    if (auto found = externalWrites.find(entry.static_state);
+        found != externalWrites.end())
+      external |= llvm::any_of(found->second, [&](const Range &write) {
+        return !entry.bit_width ||
+               (write.low < entry.low_bit + entry.bit_width &&
+                entry.low_bit < write.high);
+      });
+    if (!external)
+      continue;
+    auto [event, inserted] =
+        events.try_emplace(ClockKey{entry.static_state, entry.edge,
+                                    entry.low_bit, entry.bit_width},
+                           events.size());
+    activities[node->second].set(event->second);
+  }
+  // A residual feedback event starts a new affected-component sweep. Its
+  // domain flows only forward through the condensation DAG; unrelated cones
+  // sharing an external clock do not join the retry. Identities are rebuilt
+  // here after all source graph rewriting, before native IR is emitted.
+  const unsigned externalEvents = events.size();
+  unsigned nextEvent = externalEvents;
+  for (auto [from, to] : order.feedback)
+    activities[to].set(nextEvent++);
+  SmallVector<unsigned> position(result.size());
+  for (auto [rank, node] : llvm::enumerate(order.nodes))
+    position[node] = rank;
+  SmallVector<SmallVector<unsigned>> forward(result.size());
+  for (auto [from, to] : edges)
+    if (position[from] < position[to])
+      forward[from].push_back(to);
+  // Propagate through forward edges INSIDE an SCC as well. Unioning all of
+  // an SCC's seeds first would replay unrelated portions of a large component
+  // on every backward event. Each backedge instead seeds its own destination.
+  for (unsigned node : order.nodes)
+    for (unsigned target : forward[node])
+      activities[target] |= activities[node];
+  std::map<std::vector<unsigned>, unsigned> domains;
+  std::map<std::vector<unsigned>, unsigned> feedbackDomains;
+  for (unsigned id = 0; id < result.size(); ++id) {
+    std::vector<unsigned> key, feedback;
+    for (unsigned event : activities[id]) {
+      key.push_back(event);
+      if (event >= externalEvents)
+        feedback.push_back(event);
+    }
+    result[id].activityDomain =
+        domains.try_emplace(std::move(key), domains.size()).first->second;
+    result[id].feedbackDomain =
+        feedbackDomains.try_emplace(std::move(feedback), feedbackDomains.size())
+            .first->second;
+  }
+  for (unsigned id = 0; id < result.size(); ++id) {
+    auto &node = result[id];
+    node.component = order.componentOf[id];
+    node.cyclic = order.cyclic[node.component];
+  }
+  for (auto [from, to] : edges)
+    if (order.componentOf[from] != order.componentOf[to])
+      result[from].successorComponents.push_back(order.componentOf[to]);
+  for (auto &node : result) {
+    llvm::sort(node.successorComponents);
+    node.successorComponents.erase(std::unique(node.successorComponents.begin(),
+                                               node.successorComponents.end()),
+                                   node.successorComponents.end());
+  }
+  for (auto [from, to] : order.feedback)
+    result[from].feedbackSuccessors.push_back(result[to].owner);
+  // Independent runtime sources need not interrupt a closed forward sweep.
+  // Move components with no native ancestor before it, and terminal runtime
+  // observers after it. A boundary on A -> B -> C has both a native ancestor
+  // and descendant, so remains between the computations. This is only a
+  // topological tie-break; actual runtime execution stays at its handoff.
+  SmallVector<bool> nativeBefore(componentCount), nativeAfter(componentCount);
+  for (unsigned id = 0; id < realNodeCount; ++id) {
+    nativeBefore[order.componentOf[id]] = true;
+    nativeAfter[order.componentOf[id]] = true;
+  }
+  for (unsigned component = 0; component < componentCount; ++component)
+    for (unsigned i = order.successorOffsets[component];
+         i < order.successorOffsets[component + 1]; ++i)
+      nativeBefore[order.successors[i]] =
+          nativeBefore[order.successors[i]] || nativeBefore[component];
+  for (unsigned component = componentCount; component-- > 0;)
+    for (unsigned i = order.successorOffsets[component];
+         i < order.successorOffsets[component + 1]; ++i)
+      nativeAfter[component] =
+          nativeAfter[component] || nativeAfter[order.successors[i]];
+  auto boundaryPhase = [&](unsigned node) {
+    unsigned component = order.componentOf[node];
+    return !nativeBefore[component] ? 0 : !nativeAfter[component] ? 2 : 1;
+  };
   llvm::stable_sort(order.nodes, [&](uint32_t a, uint32_t b) {
-    return result[a].island < result[b].island;
+    if (result[a].island != result[b].island)
+      return result[a].island < result[b].island;
+    return boundaryPhase(a) < boundaryPhase(b);
   });
   SmallVector<NativeRankedEvalNode> ranked;
   for (uint32_t id : order.nodes)
@@ -612,11 +926,14 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
   // resets stay separate. A checkpoint can enqueue a subset, so emission still
   // checks every member's ready bit instead of inventing co-activations.
   DenseMap<ClockKey, uint32_t> cohorts;
-  uint32_t nextIsland = result.size();
+  uint32_t nextIsland = realNodeCount;
   for (auto &[node, clock] : clockedNodes) {
     auto [cohort, inserted] = cohorts.try_emplace(clock, nextIsland);
     nextIsland += inserted;
     node.island = cohort->second;
+    node.component = componentCount + cohort->second;
+    node.activityDomain = domains.size() + cohort->second;
+    node.feedbackDomain = feedbackDomains.size() + cohort->second;
     ranked.push_back(std::move(node));
   }
   return ranked;
@@ -1127,7 +1444,7 @@ resolveNativeEvalPlan(ModuleOp module,
   // live and can republish earlier bits; this is not an execute-once promise.
   SmallVector<uint32_t> slots, ranked;
   for (const auto &node : result.rankedNodes)
-    if (!node.clocked) {
+    if (!node.clocked && node.owner != UINT32_MAX) {
       slots.push_back(node.owner);
       ranked.push_back(node.owner);
     }

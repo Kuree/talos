@@ -3,6 +3,7 @@
 #include "ComputeFusion.h"
 #include "talos/Analysis/ActivationIdempotenceAnalysis.h"
 #include "talos/Analysis/DPIEffectAnalysis.h"
+#include "talos/Analysis/GraphAlgorithms.h"
 #include "talos/Analysis/SimulationEffectAnalysis.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -17,6 +18,8 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/IntEqClasses.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringMap.h"
@@ -28,6 +31,184 @@
 using namespace mlir;
 
 namespace talos {
+ConvexActivationGraph::ConvexActivationGraph(sim::SimDesignOp design,
+                                             schedule::ComputeGraphAttr graph) {
+  SymbolTable symbols(design);
+  SmallVector<unsigned> owners(graph.getNodes().size(), UINT_MAX);
+  for (auto [id, raw] : llvm::enumerate(graph.getNodes())) {
+    auto fragment = dyn_cast<schedule::ComputeFragmentAttr>(raw);
+    if (!fragment)
+      continue;
+    auto [found, inserted] =
+        indices.try_emplace(fragment.getFunction().getAttr(), indices.size());
+    auto function =
+        symbols.lookup<sim::SimFuncOp>(fragment.getFunction().getValue());
+    bool finite =
+        function && (function.getEntryKind() == sim::EntryKind::AlwaysComb ||
+                     function.getEntryKind() == sim::EntryKind::Continuous ||
+                     function.getEntryKind() == sim::EntryKind::AlwaysLatch ||
+                     function.getEntryKind() == sim::EntryKind::PortInput ||
+                     function.getEntryKind() == sim::EntryKind::PortOutput);
+    if (inserted)
+      found->second = successors.size();
+    unsigned owner = finite && !inserted ? found->second : successors.size();
+    if (owner == successors.size()) {
+      parents.push_back(owner);
+      successors.emplace_back();
+    }
+    owners[id] = owner;
+  }
+  DenseMap<unsigned, SmallVector<unsigned>> resumes;
+  for (Attribute raw : graph.getEdges()) {
+    auto edge = cast<schedule::ComputeEdgeAttr>(raw);
+    if (edge.getKind() == schedule::ComputeEdgeKind::Resume)
+      resumes[edge.getSource()].push_back(edge.getTarget());
+  }
+  for (Attribute raw : graph.getEdges()) {
+    auto edge = cast<schedule::ComputeEdgeAttr>(raw);
+    // Conflicts are exclusion constraints, not update/evaluation events.
+    // NBA/deferred stages, spawns and suspensions are event-region boundaries.
+    // Keeping boundary fragments separate prevents a later timed activation
+    // from becoming an immediate path through an entire initial process.
+    if (edge.getKind() != schedule::ComputeEdgeKind::Sensitivity &&
+        edge.getKind() != schedule::ComputeEdgeKind::ProcessOrder)
+      continue;
+    unsigned from = owners[edge.getSource()], to = owners[edge.getTarget()];
+    if (from != UINT_MAX && to != UINT_MAX && from != to)
+      successors[from].push_back(to);
+    if (edge.getKind() == schedule::ComputeEdgeKind::Sensitivity)
+      for (unsigned continuation : resumes[edge.getTarget()])
+        if (from != UINT_MAX && owners[continuation] != UINT_MAX &&
+            from != owners[continuation])
+          successors[from].push_back(owners[continuation]);
+  }
+  for (auto &targets : successors) {
+    llvm::sort(targets);
+    targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+  }
+}
+
+unsigned ConvexActivationGraph::leader(unsigned node) const {
+  while (parents[node] != node)
+    node = parents[node];
+  return node;
+}
+
+bool ConvexActivationGraph::isConvex(ArrayRef<StringAttr> members) const {
+  DenseSet<unsigned> included, visited;
+  SmallVector<unsigned> pending;
+  for (StringAttr member : members) {
+    auto found = indices.find(member);
+    if (found == indices.end())
+      return false;
+    included.insert(leader(found->second));
+  }
+  for (unsigned node : included)
+    for (unsigned target : successors[node]) {
+      target = leader(target);
+      if (!included.contains(target) && visited.insert(target).second)
+        pending.push_back(target);
+    }
+  while (!pending.empty()) {
+    unsigned node = pending.pop_back_val();
+    for (unsigned target : successors[node]) {
+      target = leader(target);
+      if (included.contains(target))
+        return false;
+      if (visited.insert(target).second)
+        pending.push_back(target);
+    }
+  }
+  return true;
+}
+
+void ConvexActivationGraph::contract(ArrayRef<StringAttr> members) {
+  SmallVector<unsigned> nodes;
+  for (StringAttr member : members)
+    nodes.push_back(leader(indices.lookup(member)));
+  llvm::sort(nodes);
+  nodes.erase(std::unique(nodes.begin(), nodes.end()), nodes.end());
+  if (nodes.empty())
+    return;
+  unsigned root = nodes.front();
+  for (unsigned node : ArrayRef(nodes).drop_front()) {
+    parents[node] = root;
+    llvm::append_range(successors[root], successors[node]);
+    successors[node].clear();
+  }
+  llvm::sort(successors[root]);
+  successors[root].erase(
+      std::unique(successors[root].begin(), successors[root].end()),
+      successors[root].end());
+}
+
+SmallVector<SmallVector<StringAttr>>
+ConvexActivationGraph::getSections(ArrayRef<StringAttr> members,
+                                   ArrayRef<unsigned> activityDomains) const {
+  if (!activityDomains.empty() && activityDomains.size() != members.size())
+    return {};
+  DenseMap<unsigned, SmallVector<StringAttr>> selected;
+  DenseMap<unsigned, unsigned> domains;
+  DenseSet<unsigned> conflicts;
+  for (auto [index, member] : llvm::enumerate(members))
+    if (auto found = indices.find(member); found != indices.end()) {
+      unsigned node = leader(found->second);
+      unsigned domain = activityDomains.empty() ? 0 : activityDomains[index];
+      selected[node].push_back(member);
+      auto [existing, inserted] = domains.try_emplace(node, domain);
+      if (!inserted && existing->second != domain)
+        conflicts.insert(node);
+    }
+  SmallVector<unsigned> nodes;
+  DenseMap<unsigned, SmallVector<unsigned>> edges;
+  for (unsigned node = 0; node < successors.size(); ++node) {
+    if (leader(node) != node)
+      continue;
+    nodes.push_back(node);
+    for (unsigned target : successors[node])
+      if (leader(target) != node)
+        edges[node].push_back(leader(target));
+  }
+  auto components =
+      analysis::computeStronglyConnectedComponents<unsigned>(nodes, edges);
+  // Independent selected cones can be adjacent in a topological order. They
+  // must not become one source owner merely because no boundary happens to
+  // lie between them: that would couple activation and knownness fallbacks.
+  llvm::IntEqClasses islands(successors.size());
+  for (const auto &[source, targets] : edges)
+    if (selected.contains(source))
+      for (unsigned target : targets)
+        if (selected.contains(target) &&
+            domains.lookup(source) == domains.lookup(target))
+          islands.join(source, target);
+  SmallVector<SmallVector<StringAttr>> sections;
+  llvm::MapVector<unsigned, SmallVector<StringAttr>> open;
+  std::optional<unsigned> currentDomain;
+  auto flush = [&] {
+    for (auto &[island, section] : open)
+      sections.push_back(std::move(section));
+    open.clear();
+  };
+  for (const auto &component : llvm::reverse(components)) {
+    unsigned domain = domains.lookup(component.front());
+    if (llvm::any_of(component, [&](unsigned node) {
+          return !selected.contains(node) || conflicts.contains(node) ||
+                 domains.lookup(node) != domain;
+        })) {
+      flush();
+      currentDomain.reset();
+      continue;
+    }
+    if (currentDomain && *currentDomain != domain)
+      flush();
+    currentDomain = domain;
+    for (unsigned node : component)
+      llvm::append_range(open[islands.findLeader(node)], selected.lookup(node));
+  }
+  flush();
+  return sections;
+}
+
 namespace {
 
 bool isStaticDigitalType(Type type) {
@@ -889,13 +1070,63 @@ CombinationalFusionAnalysis::analyzeForReordering(
   return body;
 }
 
+const CombinationalFusionAnalysis::InterleaveIndex &
+CombinationalFusionAnalysis::getInterleaveIndex() const {
+  if (interleaveIndex)
+    return *interleaveIndex;
+  InterleaveIndex &index = interleaveIndex.emplace();
+  auto design = this->design;
+  for (auto storage : design.getOps<sim::SimStorageDeclOp>())
+    if (cov::has<cov::ToggleObservable>(storage))
+      index.toggleRoots.insert(static_cast<uint64_t>(storage.getId()));
+  for (auto net : design.getOps<sim::SimNetDeclOp>())
+    if (cov::has<cov::ToggleObservable>(net))
+      if (auto root = analysis::ActivationMemoryAnalysis::getRoot(
+              schedule::ComputeResourceKind::Net, net.getId()))
+        index.toggleRoots.insert(*root);
+  auto graph = design.getComputeGraphAttr();
+  if (!graph)
+    return index;
+  for (Attribute raw : graph.getNodes()) {
+    auto fragment = dyn_cast<schedule::ComputeFragmentAttr>(raw);
+    if (!fragment)
+      continue;
+    for (auto effect :
+         fragment.getEffects().getAsRange<schedule::ComputeEffectAttr>()) {
+      if (effect.getEffect() != schedule::ComputeEffectKind::Watch)
+        continue;
+      if (effect.getResource() != schedule::ComputeResourceKind::Storage &&
+          effect.getResource() != schedule::ComputeResourceKind::Net) {
+        if (effect.getResource() == schedule::ComputeResourceKind::Unknown)
+          index.unknownWatch = true;
+        continue;
+      }
+      if (effect.getTarget() != schedule::ComputeTargetKind::Descriptor ||
+          !effect.getWidth() ||
+          effect.getLow() > UINT64_MAX - effect.getWidth()) {
+        index.unresolvedWatch = true;
+        continue;
+      }
+      auto root = analysis::ActivationMemoryAnalysis::getRoot(
+          effect.getResource(), effect.getDescriptor());
+      if (!root) {
+        index.unresolvedWatch = true;
+        continue;
+      }
+      index.watchers[*root].push_back(
+          {fragment.getFunction().getAttr(),
+           ActivationRange{*root, effect.getLow(), effect.getWidth()}});
+    }
+  }
+  return index;
+}
+
 bool CombinationalFusionAnalysis::canInterleave(
     ArrayRef<sim::SimFuncOp> functions,
     CombinationalFusionFailure *failureReason) const {
   using Reason = CombinationalFusionFailure::Reason;
   if (failureReason)
     *failureReason = {};
-  auto design = this->design;
   auto reject = [&](CombinationalFusionFailure reason) {
     if (failureReason)
       *failureReason = reason;
@@ -913,65 +1144,30 @@ bool CombinationalFusionAnalysis::canInterleave(
     llvm::append_range(repeated,
                        found->second->getMemory().getRepeatedWrites());
   }
-  for (auto storage : design.getOps<sim::SimStorageDeclOp>())
-    if (cov::has<cov::ToggleObservable>(storage) &&
-        llvm::any_of(repeated, [&](const auto &r) {
-          return r.root == static_cast<uint64_t>(storage.getId());
-        }))
-      return reject(
-          {Reason::ToggleCoverage, {}, static_cast<uint64_t>(storage.getId())});
-  for (auto net : design.getOps<sim::SimNetDeclOp>())
-    if (cov::has<cov::ToggleObservable>(net))
-      if (auto root = analysis::ActivationMemoryAnalysis::getRoot(
-              schedule::ComputeResourceKind::Net, net.getId());
-          root && llvm::any_of(repeated,
-                               [&](const auto &r) { return r.root == *root; }))
-        return reject({Reason::ToggleCoverage, {}, *root});
-  auto graph = design.getComputeGraphAttr();
-  for (Attribute raw : graph.getNodes()) {
-    auto fragment = dyn_cast<schedule::ComputeFragmentAttr>(raw);
-    if (!fragment)
+  const InterleaveIndex &index = getInterleaveIndex();
+  for (const auto &range : repeated)
+    if (index.toggleRoots.contains(range.root))
+      return reject({Reason::ToggleCoverage, {}, range.root});
+  if (!repeated.empty() && index.unknownWatch)
+    return reject({Reason::UnknownWatchedResource});
+  if (index.unresolvedWatch)
+    return reject({Reason::UnresolvedWatchedStorage});
+  // IEEE 1800-2023 4.5-4.7 permits a nonpreempted source-ordered
+  // activation. Its final values are idempotent, but repeated stores can
+  // still produce transitions on an unchanged-input execution. No outside
+  // wait may observe those extra transitions. Inside the cohort all
+  // consumers execute after their producers' complete regions and fully
+  // internal watches are removed. The materializer subtracts the cohort's
+  // definite writes and builds exact reference views for the remaining
+  // external sensitivity, so a mixed internal/external aggregate never
+  // retains a self-watch.
+  for (const auto &range : repeated) {
+    auto found = index.watchers.find(range.root);
+    if (found == index.watchers.end())
       continue;
-    for (auto effect :
-         fragment.getEffects().getAsRange<schedule::ComputeEffectAttr>()) {
-      if (effect.getEffect() != schedule::ComputeEffectKind::Watch)
-        continue;
-      if (effect.getResource() != schedule::ComputeResourceKind::Storage &&
-          effect.getResource() != schedule::ComputeResourceKind::Net) {
-        if (!repeated.empty() &&
-            effect.getResource() == schedule::ComputeResourceKind::Unknown)
-          return reject({Reason::UnknownWatchedResource});
-        continue;
-      }
-      if (effect.getTarget() != schedule::ComputeTargetKind::Descriptor ||
-          !effect.getWidth() ||
-          effect.getLow() > UINT64_MAX - effect.getWidth())
-        return reject({Reason::UnresolvedWatchedStorage});
-      auto root = analysis::ActivationMemoryAnalysis::getRoot(
-          effect.getResource(), effect.getDescriptor());
-      if (!root)
-        return reject({Reason::UnresolvedWatchedStorage});
-      ActivationRange watch{*root, effect.getLow(), effect.getWidth()};
-      if (owners.contains(fragment.getFunction().getAttr())) {
-        // The materializer subtracts the cohort's definite writes and builds
-        // exact reference views for the remaining external sensitivity. A
-        // mixed internal/external aggregate must not retain a self-watch.
-        continue;
-      } else if (llvm::any_of(repeated, [&](const auto &r) {
-                   return activationRangesOverlap(r, watch);
-                 })) {
-        // IEEE 1800-2023 4.5-4.7 permits a nonpreempted source-ordered
-        // activation. Its final values are idempotent, but repeated stores
-        // can still produce transitions on an unchanged-input execution.
-        // No outside wait may observe those extra transitions. Inside the
-        // cohort all consumers execute after their producers' complete
-        // regions and fully internal watches are removed.
-        return reject({Reason::OutsideWatch,
-                       {},
-                       watch.root,
-                       fragment.getFunction().getAttr()});
-      }
-    }
+    for (const auto &[owner, watch] : found->second)
+      if (!owners.contains(owner) && activationRangesOverlap(range, watch))
+        return reject({Reason::OutsideWatch, {}, watch.root, owner});
   }
   return true;
 }

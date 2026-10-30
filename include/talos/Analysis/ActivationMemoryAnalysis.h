@@ -6,6 +6,7 @@
 #include "talos/Analysis/RangeSet.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "llvm/ADT/DenseSet.h"
+#include <optional>
 
 namespace talos::analysis {
 
@@ -50,6 +51,10 @@ public:
   struct Publication {
     Range output;
     Ranges inputs;
+    /// Each output bit depends only on the corresponding source bit, and
+    /// `inputs` is exactly that range. The computation may transform values;
+    /// this is a lane-dependence fact, not a value-equality certificate.
+    std::optional<Range> identity;
   };
   ActivationMemoryAnalysis() = default;
   /// `symbols` resolves callees when `function` is a detached activation

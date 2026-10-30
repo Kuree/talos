@@ -91,10 +91,52 @@ public:
   Option<std::string> main{
       *this, "main",
       llvm::cl::desc("new name for the generated main function")};
+  Option<bool> countRanked{
+      *this, "count-ranked", llvm::cl::init(false),
+      llvm::cl::desc("count generated computation block entries")};
 
   void runOnOperation() final {
     ModuleOp module = getOperation();
     SymbolTable table(module);
+    if (countRanked) {
+      SmallVector<std::pair<unsigned, LLVM::LLVMFuncOp>> groups;
+      unsigned count = 0;
+      for (auto function : module.getOps<LLVM::LLVMFuncOp>()) {
+        StringRef name = function.getSymName();
+        unsigned id;
+        if (!name.consume_front("__talos_eval_ranked_group_") ||
+            name.getAsInteger(10, id) || function.isExternal())
+          continue;
+        count = std::max(count, id + 1);
+        groups.emplace_back(id, function);
+      }
+      OpBuilder builder(module.getContext());
+      builder.setInsertionPointToStart(module.getBody());
+      auto i64 = builder.getI64Type();
+      auto pointer = LLVM::LLVMPointerType::get(module.getContext());
+      auto array = LLVM::LLVMArrayType::get(i64, count);
+      auto values = DenseIntElementsAttr::get(
+          RankedTensorType::get({count}, i64), uint64_t(0));
+      auto global = LLVM::GlobalOp::create(
+          builder, module.getLoc(), array, false, LLVM::Linkage::External,
+          "__talos_test_ranked_executions", values);
+      for (auto [id, function] : groups) {
+        builder.setInsertionPointToStart(&function.getBody().front());
+        auto loc = function.getLoc();
+        Value base = LLVM::AddressOfOp::create(builder, loc, global);
+        Value slot =
+            LLVM::GEPOp::create(builder, loc, pointer, array, base,
+                                ArrayRef<LLVM::GEPArg>{0, int32_t(id)});
+        Value old = LLVM::LoadOp::create(builder, loc, i64, slot);
+        Value one = LLVM::ConstantOp::create(builder, loc, i64,
+                                             builder.getI64IntegerAttr(1));
+        Value next = LLVM::AddOp::create(builder, loc, old, one);
+        LLVM::StoreOp::create(builder, loc, next, slot);
+        llvm::errs() << "count ranked block " << id << " members="
+                     << function->getAttr("schedule.eval.ranked_members")
+                     << '\n';
+      }
+    }
     for (const std::string &name : globals) {
       auto global = table.lookup<LLVM::GlobalOp>(name);
       if (!global || global.getLinkage() != LLVM::Linkage::Internal) {

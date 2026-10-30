@@ -1,0 +1,11 @@
+// RUN: talos-opt %S/../Conversion/simulation-component-plan-cycle.mlir --pass-pipeline='builtin.module(test-talos-replicate,test-talos-simulation-to-native{component-sections=true})' | talos-translate --mlir-to-llvmir -o %t.ll
+// RUN: opt %t.ll -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O0>' -S -o %t.o0.ll && %target_cxx -O0 %t.o0.ll %runtime_link_flags -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: opt %t.ll -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' -S -o %t.o3.ll && %target_cxx -O3 %t.o3.ll %runtime_link_flags -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// The second clock edge leaves the input unchanged. Only the clock reader's
+// original sensitivity can update the 32 outputs from 4 to 3 on that edge.
+// CHECK: chain 4
+// CHECK-COUNT-32: cone 4
+// CHECK-COUNT-32: after 3
+// CHECK: chain 4

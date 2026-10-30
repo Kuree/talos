@@ -53,6 +53,38 @@ struct NativeBackendTestPipelineOptions
       llvm::cl::init("")};
 };
 
+struct SimulationNativeTestPipelineOptions
+    : public PassPipelineOptions<SimulationNativeTestPipelineOptions> {
+  Option<bool> components{*this, "component-sections", llvm::cl::init(false)};
+  Option<unsigned> maxInlineOps{*this, "max-inline-ops", llvm::cl::init(0)};
+};
+
+void buildSimulationNativeTestPipeline(
+    OpPassManager &manager, const SimulationNativeTestPipelineOptions &options) {
+  std::string pipeline;
+  if (options.maxInlineOps)
+    pipeline = "test-talos-set-module-attributes{attrs=\"{"
+               "schedule.native.max_inline_ops = " +
+               std::to_string(options.maxInlineOps) + " : i64}\"},";
+  pipeline += "simulation.design(";
+  if (options.components)
+    pipeline += "talos-sim-build-compute-graph,"
+                "schedule-plan-combinational-statements{component-sections=true},"
+                "talos-sim-materialize-compute-fusion,";
+  pipeline +=
+      "simulation.func(talos-sim-thread-process-cfg),"
+      "talos-sim-build-compute-graph,talos-sim-verify-compute-graph,"
+      "talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,"
+      "talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),"
+      "encode-talos-sim-to-bytecode{vpi=off},"
+      "convert-talos-sim-processes-to-llvm-coroutines,"
+      "materialize-runtime-byte-globals";
+  std::string error;
+  llvm::raw_string_ostream errorStream(error);
+  if (failed(parsePassPipeline(pipeline, manager, errorStream)))
+    llvm::report_fatal_error("test-talos-simulation-to-native: " + Twine(error));
+}
+
 void buildNativeBackendTestPipeline(
     OpPassManager &manager, const NativeBackendTestPipelineOptions &options) {
   std::optional<int> mode =
@@ -149,5 +181,9 @@ void registerNativeBackendTestPipeline() {
       "test-talos-native-backend",
       "Lower Slang dialect input to native LLVM as an executable build does",
       buildNativeBackendTestPipeline);
+  PassPipelineRegistration<SimulationNativeTestPipelineOptions>(
+      "test-talos-simulation-to-native",
+      "Build and lower a simulation-level native runtime fixture",
+      buildSimulationNativeTestPipeline);
 }
 } // namespace talos

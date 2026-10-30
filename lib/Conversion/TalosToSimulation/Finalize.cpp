@@ -1133,7 +1133,10 @@ static void buildTalosToSimulationPipelineImpl(
           std::move(clockedGraphOptions)));
     }
     if (optLevel >= 3) {
-      designManager.addPass(createPlanCombinationalStatementsPass());
+      PlanCombinationalStatementsPassOptions statementOptions;
+      statementOptions.componentSections = true;
+      designManager.addPass(createPlanCombinationalStatementsPass(
+          std::move(statementOptions)));
       TalosSimMaterializeComputeFusionPassOptions materializeOptions;
       materializeOptions.materializeEvalBodies = false;
       designManager.addPass(createTalosSimMaterializeComputeFusionPass(

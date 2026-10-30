@@ -33,6 +33,15 @@ TEST(ActivationOrder, PotentialRoutingCycleStaysLocal) {
   EXPECT_NE(possible.componentOf[0], possible.componentOf[1]);
   EXPECT_NE(possible.componentOf[3], possible.componentOf[1]);
   EXPECT_NE(possible.componentOf[4], possible.componentOf[1]);
+  EXPECT_EQ(possible.cyclic[possible.componentOf[1]], 1);
+  EXPECT_EQ(possible.cyclic[possible.componentOf[4]], 0);
+  EXPECT_EQ(possible.feedback, (std::vector<Edge>{{2, 1}}));
+  uint32_t component = possible.componentOf[1];
+  ASSERT_EQ(possible.successorOffsets[component + 1] -
+                possible.successorOffsets[component],
+            1u);
+  EXPECT_EQ(possible.successors[possible.successorOffsets[component]],
+            possible.componentOf[3]);
   // An external proof of the selector, not a last-value observation, permits
   // removing the disabled route. Changing that selector restores its edge.
   edges.erase(edges.begin() + 2);
@@ -42,6 +51,18 @@ TEST(ActivationOrder, PotentialRoutingCycleStaysLocal) {
   ASSERT_TRUE(ActivationOrder::build(6, edges, changed));
   EXPECT_EQ(changed.nodes, possible.nodes);
   EXPECT_EQ(changed.componentOf, possible.componentOf);
+}
+
+TEST(ActivationOrder, SelfEventRemainsFeedbackAndInvalidBuildIsTransactional) {
+  ActivationOrder order;
+  ASSERT_TRUE(ActivationOrder::build(3, {{0, 0}, {0, 1}}, order));
+  EXPECT_EQ(order.feedback, (std::vector<Edge>{{0, 0}}));
+  EXPECT_EQ(order.cyclic, (std::vector<uint8_t>{1, 0, 0}));
+  auto original = order;
+  EXPECT_FALSE(ActivationOrder::build(3, {{3, 0}}, order));
+  EXPECT_EQ(order.nodes, original.nodes);
+  EXPECT_EQ(order.feedback, original.feedback);
+  EXPECT_EQ(order.successors, original.successors);
 }
 
 TEST(ActivationOrder, LargeGraphUsesNoRecursiveTraversalOrOwnerWordLimit) {
@@ -119,5 +140,22 @@ TEST(ActivationOrder, RandomGraphsAgreeWithScalarReachability) {
     ASSERT_TRUE(ActivationOrder::build(count, edges, shuffled));
     EXPECT_EQ(order.nodes, shuffled.nodes);
     EXPECT_EQ(order.componentOf, shuffled.componentOf);
+    EXPECT_EQ(order.feedback, shuffled.feedback);
+    EXPECT_EQ(order.successors, shuffled.successors);
+    std::vector<uint32_t> rank(count);
+    for (uint32_t i = 0; i < count; ++i)
+      rank[order.nodes[i]] = i;
+    for (auto edge : edges) {
+      const auto [from, to] = edge;
+      EXPECT_EQ(std::find(order.feedback.begin(), order.feedback.end(), edge) !=
+                    order.feedback.end(),
+                rank[to] <= rank[from]);
+      uint32_t source = order.componentOf[from], target = order.componentOf[to];
+      if (source == target)
+        continue;
+      auto begin = order.successors.begin() + order.successorOffsets[source];
+      auto end = order.successors.begin() + order.successorOffsets[source + 1];
+      EXPECT_NE(std::find(begin, end, target), end);
+    }
   }
 }

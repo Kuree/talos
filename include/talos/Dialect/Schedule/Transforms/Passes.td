@@ -164,7 +164,9 @@ def PlanCombinationalStatementsPass
                  Option<"explain", "explain", "bool", "false",
                         "Report rejected activation and component proofs">,
                  Option<"growAcyclic", "grow-acyclic", "bool", "true",
-                        "Grow each cohort over its connected acyclic activations">];
+                        "Grow each cohort over its connected acyclic activations">,
+                 Option<"componentSections", "component-sections", "bool", "false",
+                        "Recover convex compilable sections around feedback and execution boundaries">];
 }
 
 def TalosSimMaterializeComputeFusionPass

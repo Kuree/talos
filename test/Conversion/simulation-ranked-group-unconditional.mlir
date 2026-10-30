@@ -4,7 +4,7 @@
 // RUN: talos-opt %s --mlir-disable-threading --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' | diff %t.mlir -
 
 // Eight repeatable continuous members (complete sensitivity, exclusive complete
-// outputs, one publication each) share a certified group with one member that
+// outputs, one publication each) share a certified block. A separate guarded member
 // stores its output twice. A repeatable member writes the values its outputs
 // already hold when no input changed, which is no update event, so it may run
 // whenever the group runs, in its proved rank order (IEEE 1800-2023 4.3,
@@ -20,7 +20,7 @@
 // TRACE: talos unconditional member publications elided: 7
 // GROUP-LABEL: llvm.func @__talos_eval_ranked_group_0(
 // GROUP-SAME: schedule.eval.control_flow_dataflow
-// GROUP-SAME: schedule.eval.ranked_members = array<i32: 1, 2, 3, 4, 5, 6, 7, 8, 9>
+// GROUP-SAME: schedule.eval.ranked_members = array<i32: 1, 2, 3, 4, 5, 6, 7, 8>
 // GROUP-SAME: schedule.eval.unconditional_members = array<i32: 1, 2, 3, 4, 5, 6, 7, 8>
 // GROUP-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i64) : i64
 // GROUP-DAG: %[[TWICE:.*]] = llvm.mlir.constant(512 : i64) : i64
@@ -34,15 +34,18 @@
 // GROUP-NOT: schedule.eval.activation_entry
 // GROUP: llvm.select %{{.*}}, %[[TAP]], %[[ZERO]] : i1, i64
 // GROUP-NOT: llvm.select %{{.*}} : i1, i64
-// The predicated member is the only one that still reads its pending bit.
-// GROUP: schedule.eval.activation_entry = 9 : i32
-// GROUP-NOT: schedule.eval.activation_entry
 // GROUP: llvm.call @__talos_eval_ranked_group_0.fallback
 // GROUP-LABEL: llvm.func @__talos_eval_ranked_group_0.fallback(
 // GROUP-SAME: schedule.eval.ssa_ready_words = 1 : i64
 // GROUP-DAG: %[[FZERO:.*]] = llvm.mlir.constant(0 : i64) : i64
 // GROUP-DAG: %[[LINK1:.*]] = llvm.mlir.constant(4 : i64) : i64
 // GROUP: llvm.select %{{.*}}, %[[LINK1]], %[[FZERO]] : i1, i64
+// The repeated-publication owner retains its own guarded computation block.
+// GROUP-LABEL: llvm.func @__talos_eval_ranked_group_1(
+// GROUP-SAME: schedule.eval.ranked_members = array<i32: 9>
+// GROUP: %[[PREDICATED:.*]] = llvm.mlir.constant(512 : i64)
+// GROUP: llvm.and %{{.*}}, %[[PREDICATED]]
+// GROUP: llvm.cond_br
 
 !ref = !simulation.ref<i1>
 !word = !simulation.logic<8>

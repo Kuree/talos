@@ -136,19 +136,36 @@ planNativeRankedGroups(ModuleOp module, const NativeEvalCoordinatorPlan &plan,
   // Keep connected islands in their proven topological order. Readiness is
   // still checked at each member, so this never invents an activation.
   DenseMap<uint32_t, unsigned> islandSizes;
+  DenseSet<uint32_t> mixedIslands;
   uint32_t nextIsland = 0;
   for (const auto &node : plan.rankedNodes) {
     ++islandSizes[node.island];
+    if (node.cyclic || (node.boundary && node.owner != UINT32_MAX))
+      mixedIslands.insert(node.island);
     nextIsland = std::max(nextIsland, node.island + 1);
   }
   SmallVector<NativeRankedEvalNode> ordered(plan.rankedNodes);
   for (auto &node : ordered)
-    if (!node.clocked && islandSizes.lookup(node.island) == 1)
+    if (!node.boundary && !node.clocked &&
+        islandSizes.lookup(node.island) == 1)
       node.island = nextIsland + node.owner / 64;
   llvm::stable_sort(ordered, [](const auto &a, const auto &b) {
     return a.island < b.island;
   });
   std::optional<uint32_t> currentIsland;
+  struct ActivityKey {
+    uint32_t eventDomain;
+    uint32_t cyclicComponent;
+    bool repeatable;
+    bool twoState;
+
+    bool operator!=(const ActivityKey &other) const {
+      return eventDomain != other.eventDomain ||
+             cyclicComponent != other.cyclicComponent ||
+             repeatable != other.repeatable || twoState != other.twoState;
+    }
+  };
+  std::optional<ActivityKey> currentActivity;
   for (const auto &node : ordered) {
     if (currentIsland && node.island != *currentIsland) {
       emit();
@@ -158,8 +175,29 @@ planNativeRankedGroups(ModuleOp module, const NativeEvalCoordinatorPlan &plan,
     if (node.boundary) {
       emit();
       finishSegment();
+      currentActivity.reset();
       continue;
     }
+    // Activity partitions are scheduling predicates, independent of the
+    // value-domain proof. In particular, an X-bearing component must not
+    // disable an unrelated component's two-state computation. SCCs keep
+    // their feedback; a size split within one component stays in the segment.
+    bool selective = mixedIslands.contains(node.island);
+    // Only the explicit repeatability certificate permits coarsening external
+    // activity to a union mask. Feedback remains selective even for these
+    // pure blocks; ordinary members retain their full event domains.
+    ActivityKey activity{
+        selective ? (node.repeatable ? node.feedbackDomain : node.activityDomain)
+                  : 0,
+        node.cyclic ? node.component : UINT32_MAX,
+        selective && node.repeatable,
+        selective && !node.twoStateBody.empty() &&
+            !plan.twoStateExecutors[node.owner].empty()};
+    if (!node.clocked && currentActivity && *currentActivity != activity) {
+      emit();
+      finishSegment();
+    }
+    currentActivity = activity;
     uint64_t four = bodyCost(node.body);
     uint64_t two = node.twoStateBody.empty() ? 0 : bodyCost(node.twoStateBody);
     if (!four || (!node.twoStateBody.empty() && !two)) {
@@ -430,7 +468,8 @@ materializeNativeRankedGroups(ModuleOp module,
     // This is only a candidate. After lowering, dense memory/control-flow
     // analysis must prove that its computation can be predicated without
     // speculative effects. Until then the ordinary ranked helper owns entry.
-    if (members.size() > 1 && llvm::all_of(members, [&](const auto *node) {
+    if ((members.size() > 1 || members.front()->repeatable) &&
+        llvm::all_of(members, [&](const auto *node) {
           return !node->clocked && !node->twoStateBody.empty() &&
                  !plan.twoStateExecutors[node->owner].empty();
         })) {
@@ -546,11 +585,27 @@ materializeNativeRankedGroups(ModuleOp module,
                    << (record.bit >= plan.firstDeferredBit ? " deferred" : "")
                    << '\n';
     for (const auto &node : plan.rankedNodes) {
+      if (node.owner == UINT32_MAX)
+        continue;
       llvm::errs() << (node.boundary ? "talos eval boundary: owner="
                                      : "talos eval dependency: owner=")
                    << node.owner << " island=" << node.island
                    << " body=" << node.body << " successors=";
       llvm::interleaveComma(node.successors, llvm::errs());
+      llvm::errs() << '\n';
+    }
+    for (const auto &node : plan.rankedNodes) {
+      if (node.owner == UINT32_MAX)
+        llvm::errs() << "talos eval runtime boundary: component="
+                     << node.component << " body=" << node.body << '\n';
+      llvm::errs() << "talos eval component: owner=" << node.owner
+                   << " component=" << node.component
+                   << " activity=" << node.activityDomain
+                   << " feedback_activity=" << node.feedbackDomain
+                   << " cyclic=" << node.cyclic << " successors=";
+      llvm::interleaveComma(node.successorComponents, llvm::errs());
+      llvm::errs() << " feedback=";
+      llvm::interleaveComma(node.feedbackSuccessors, llvm::errs());
       llvm::errs() << '\n';
     }
     llvm::errs() << "talos eval repeatable owners:";

@@ -143,7 +143,8 @@ ComputeGroupAttr::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
 LogicalResult
 ComputeFusionAttr::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
                           uint32_t id, DenseI64ArrayAttr fragments,
-                          bool interleaved, bool dataflow) {
+                          bool interleaved, bool dataflow,
+                          DenseI64ArrayAttr atomic) {
   (void)id;
   if (dataflow && !interleaved)
     return emitError() << "dataflow compute fusion must be interleaved";
@@ -154,6 +155,13 @@ ComputeFusionAttr::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
     if (fragment < 0 || !unique.insert(fragment).second)
       return emitError()
              << "compute fusion has an invalid or duplicate fragment";
+  llvm::SmallDenseSet<int64_t> atomicMembers;
+  if (atomic)
+    for (int64_t fragment : atomic.asArrayRef())
+      if (!dataflow || !unique.contains(fragment) ||
+          !atomicMembers.insert(fragment).second)
+        return emitError()
+               << "atomic members must be unique dataflow fusion fragments";
   return success();
 }
 

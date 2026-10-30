@@ -105,7 +105,8 @@ def SimComputeFusionAttr : ScheduleAttr<"ComputeFusion", "fusion"> {
   // and the complete activation/observation certificate before rewriting.
   let parameters = (ins "uint32_t":$id, "::mlir::DenseI64ArrayAttr":$fragments,
       DefaultValuedParameter<"bool", "false">:$interleaved,
-      DefaultValuedParameter<"bool", "false">:$dataflow);
+      DefaultValuedParameter<"bool", "false">:$dataflow,
+      DefaultValuedParameter<"::mlir::DenseI64ArrayAttr", "::mlir::DenseI64ArrayAttr()">:$atomic);
   let assemblyFormat = "`<` struct(params) `>`";
   let genVerifyDecl = 1;
 }

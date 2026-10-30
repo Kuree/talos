@@ -403,6 +403,45 @@ neither state nor events (IEEE 1800-2023 4.3, 4.9.1, 9.2.2.2, 9.4.2).
 The lowered body must also pass the existing nontrapping, finite-effect proof.
 Incomplete assignments, incoming output state, intermediate transitions,
 foreign mutation and unproved source revisions retain their predicates.
+
+Activation scheduling queries retain strongly connected components instead of
+using a failed topological sort to discard the graph. Value dependencies keep
+lane-copy correspondence through extracts; sensitivity events remain separate.
+Every residual SCC gets its own refinement opportunity, so a genuine cycle
+cannot prevent resolving false lane cycles elsewhere in the graph.
+Source-order, SSA and old-value snapshot obligations are never feedback cuts.
+The O3 pipeline enables the statement planner's `component-sections` mode to
+recover convex sections and admit source-ordered atomic members. Explicit pass
+pipelines retain the option's default of `false`. Fusion metadata is a request:
+materialization rechecks the current activation, observer, atomicity and
+complete activation-boundary graph before replacing actors. Unsupported or
+cyclic sections retain their original actors and watches.
+Recovery keeps disconnected cones and different external activity domains in
+separate source owners, preserving their independent activation and knownness
+fallbacks. These are cost restrictions; they do not replace the fusion proofs.
+
+Native ownership planning retains SCC identities, forward components and
+backward event dependencies. External sensitivity events and residual feedback
+seed activity domains that propagate forward. Mixed regions use separate
+finite sweeps for different domains and cyclic components. Closed acyclic
+regions retain the existing grouping policy. Each original ready bit remains
+authoritative; only the independent repeatability and lowered effect proofs
+permit redundant computation. Latches keep their original executors, and
+NBA/report/foreign-call handoffs keep their existing event-region protocol.
+Scalar clock producers and their transport paths keep their original executor
+shape for periodic inference; reading a clock does not exclude an owner.
+Size limits outline direct helpers within a sweep, and the dispatcher polls
+termination after it returns. Knownness proofs remain independent of activity.
+The generated calls run in dependency order within each sweep. Different
+activity domains and executor boundaries still return to the global ready-set
+dispatcher; the implementation retains per-member readiness checks unless a
+separate repeatability and lowered-effect certificate permits eliding them.
+The measured speedup is therefore not a limit on a future compiled DAG
+schedule that carries guarded forward work directly between these groups.
+The clause-by-clause obligations and covering tests are recorded in
+`docs/activation-component-lrm-audit.json`.
+The validated workload measurements and their collection conditions are in
+`docs/activation-component-performance.json`.
 This lets ordinary SSA forwarding remove intermediate copies without inventing
 source activations with observable effects.
 

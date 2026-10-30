@@ -230,6 +230,7 @@ public:
   Option<bool> publications{*this, "publications", llvm::cl::init(false)};
   Option<bool> regionOrder{*this, "order", llvm::cl::init(false)};
   Option<bool> sliceOrder{*this, "slice-order", llvm::cl::init(false)};
+  Option<bool> components{*this, "components", llvm::cl::init(false)};
   Option<bool> reachingValues{*this, "reaching-values", llvm::cl::init(false)};
   Option<bool> inputDependencies{*this, "input-dependencies",
                                  llvm::cl::init(false)};
@@ -354,7 +355,7 @@ public:
         if (dump && analysis.isValid())
           analysis.getActivationFunction().print(llvm::errs());
         if (sliceRoot >= 0 && analysis.isValid()) {
-          talos::analysis::ActivationSlice slice{&analysis, {}};
+          talos::analysis::ActivationSlice slice{&analysis, {}, {}};
           analysis.getActivationFunction().walk([&](Operation *op) {
             auto found = analysis.getMemory().getWrites().find(op);
             if (found != analysis.getMemory().getWrites().end() &&
@@ -387,14 +388,40 @@ public:
               llvm::errs() << '\n';
             }
         }
-        if (publications || regionOrder || sliceOrder)
+        if (publications || regionOrder || sliceOrder || components)
           owned.push_back(std::move(proof));
       }
-      if (publications || regionOrder || sliceOrder) {
+      if (publications || regionOrder || sliceOrder || components) {
         SmallVector<const talos::analysis::ActivationRegionAnalysis *> views;
         for (const auto &view : owned)
           views.push_back(view.get());
         SmallVector<talos::analysis::ActivationRegionStep> cycle;
+        if (components) {
+          auto print = [&](StringRef kind, const auto &schedule) {
+            llvm::errs() << kind << " components: ";
+            if (!schedule) {
+              llvm::errs() << "unsupported\n";
+              return;
+            }
+            llvm::errs() << "valid nodes=" << schedule->nodes.size()
+                         << " components=" << schedule->cyclic.size()
+                         << " cyclic=" << llvm::count(schedule->cyclic, true)
+                         << " events=" << schedule->sensitivityEvents.size()
+                         << '\n';
+            using Kind = talos::analysis::ActivationSchedule::DependencyKind;
+            for (auto [name, kind] : {std::pair{"source", Kind::SourceOrder},
+                                      {"ssa", Kind::SSA},
+                                      {"snapshot", Kind::Snapshot}})
+              llvm::errs() << "  " << name << '='
+                           << llvm::count_if(schedule->dependencies,
+                                             [kind = kind](const auto &edge) {
+                                               return edge.kind == kind;
+                                             })
+                           << '\n';
+          };
+          print("region", talos::analysis::getActivationRegionSchedule(views));
+          print("slice", talos::analysis::getActivationSliceSchedule(views));
+        }
         if (sliceOrder) {
           auto order = talos::analysis::getActivationSliceOrder(views, &cycle);
           llvm::errs() << "slice graph: "
