@@ -38,6 +38,12 @@ path.
 
 ## Executing UPF and Tcl libraries
 
+IEEE 1801-2018 specifies 68 named Tcl commands: 57 core commands in clauses
+6.3–6.59, six cell-definition commands in clauses 7.2–7.7, and five information
+model queries in clause 11.1. This count includes legacy/deprecated commands,
+and excludes ordinary Tcl commands and the HDL API. The frontend currently
+registers 17 core commands, with the option and simulation limits below.
+
 `talos --upf power.upf -emit-slang design.sv -o design.mlir` executes Tcl
 after Slang elaboration and emits resolved `upf.domain`, `upf.supply`, and
 `upf.supply_set` operations. Supply operations describe shared roots, their
@@ -277,6 +283,15 @@ the compiler diagnoses such strategies before simulation lowering. A
 value. Save/restore declarations must not be taken as working retention until
 the separate register, retained, and output values described in clause 9.7 are
 lowered together with write/NBA priority.
+
+The simulation IR/runtime now provide a guarded NBA primitive for a whole
+static retained register (clause 9.7.3). It checks its pure observer and both
+captured epochs at actual commit, shares that decision between backing and
+output, and suppresses rejected publications before edge observers run. Native
+and bytecode execution use the same fixed64 guard ABI, including on wasm32.
+Installed native AOT plans reject guarded updates; the compiler keeps these
+designs on the shared runtime scheduler. This prerequisite does not yet enable
+active `set_retention` strategies.
 
 The frontend accepts whole-signal and instance `-elements` and
 `-exclude_elements`, `-retention_supply`, `-save_signal`, `-restore_signal`,

@@ -706,7 +706,7 @@ std::pair<Value, Value> modeledWrite(Operation *op) {
 /// themselves, and containers through the operations they hold.
 bool isWrite(Operation *op) {
   if (isa<sim::SimRefStoreOp, sim::SimRefAllocOp, sim::SimNBAEnqueueOp,
-          sim::SimRefStoreInertialPathOp>(op))
+          sim::SimPowerNBAOp, sim::SimRefStoreInertialPathOp>(op))
     return true;
   if (isa<sim::SimCallOp, sim::SimTaskCallOp>(op) || op->getNumRegions())
     return false;
@@ -1198,16 +1198,24 @@ public:
                 elementwise && placement.kind == Placement::Kind::Elements));
       }
     };
-    auto [reference, value] = modeledWrite(op);
-    if (reference) {
+    auto writeValue = [&](Value reference, Value value) {
       std::optional<unsigned> width = maskWidth(value.getType());
       if (!width || *width == 0 || *width > maximumTrackedBits)
-        return write(reference, std::nullopt), success();
+        return write(reference, std::nullopt);
       const auto *lattice = getOrCreateFor<MayKnownLattice>(point, value);
       write(reference,
             lattice->getValue().isBottom() ? APInt(*width, 0)
                                            : lattice->getValue().get(*width),
             isElementwise(value.getType()));
+    };
+    if (auto pair = dyn_cast<sim::SimPowerNBAOp>(op)) {
+      writeValue(pair.getBacking(), pair.getValue());
+      writeValue(pair.getVisible(), pair.getValue());
+      return success();
+    }
+    auto [reference, value] = modeledWrite(op);
+    if (reference) {
+      writeValue(reference, value);
       return success();
     }
     // Copies, overrides and any other storage writer: every bit of each
@@ -1336,7 +1344,10 @@ SteadyUnknownAnalysis::compute(sim::SimDesignOp design) {
       return;
     bool roots = !runsOnce(function);
     SmallVector<Value, 2> references;
-    if (Value reference = modeledWrite(op).first)
+    if (auto pair = dyn_cast<sim::SimPowerNBAOp>(op)) {
+      references.push_back(pair.getBacking());
+      references.push_back(pair.getVisible());
+    } else if (Value reference = modeledWrite(op).first)
       references.push_back(reference);
     else
       for (Value operand : op->getOperands())

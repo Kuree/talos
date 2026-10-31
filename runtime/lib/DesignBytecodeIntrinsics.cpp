@@ -4014,6 +4014,62 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
                           : static_cast<uint64_t>(start);
     return talos_rt_v1_power_cancel_nba(context, stable, *width);
   }
+  case TALOS_RT_INTRINSIC_V1_POWER_NBA: {
+    if (!context || !context->execution)
+      return TALOS_RT_INVALID_ARGUMENT;
+    auto storageHandle = [&](unsigned index,
+                             uint64_t &result) -> talos_rt_status {
+      Layout layout = layoutAt(image, frame.function, inputRegister(index));
+      const uint8_t *address = frame.data + layout.offset;
+      uint32_t kind = 0, id = 0;
+      uint64_t base = 0;
+      int64_t start = kInvalidHandleStart, begin = 0;
+      std::memcpy(&kind, address, 4);
+      std::memcpy(&base, address + 8, 8);
+      std::memcpy(&start, address + 16, 8);
+      if (kind != TALOS_RT_DESCRIPTOR_STORAGE)
+        return TALOS_RT_INVALID_HANDLE;
+      if (start == kInvalidHandleStart) {
+        result = UINT64_MAX;
+        return TALOS_RT_OK;
+      }
+      result = decodeStaticHandle(base, id, begin)
+                   ? encodeStaticHandle(id, start)
+                   : static_cast<uint64_t>(start);
+      return TALOS_RT_OK;
+    };
+    uint64_t backing, visible, domain, strategy;
+    for (auto pair : {std::pair{1u, &backing}, std::pair{2u, &visible},
+                      std::pair{3u, &domain}, std::pair{5u, &strategy}}) {
+      auto status = storageHandle(pair.first, *pair.second);
+      if (status != TALOS_RT_OK)
+        return status;
+    }
+    auto domainEpoch = scalar(4), strategyEpoch = scalar(6),
+         evaluator = scalar(7);
+    if (!domainEpoch || !strategyEpoch || !evaluator)
+      return TALOS_RT_INVALID_BYTECODE;
+    Logic value = readLogic(frame.data,
+                            layoutAt(image, frame.function, inputRegister(0)));
+    std::vector<uint8_t> bits((uint64_t{value.width} + 7) / 8),
+        unknown(bits.size());
+    for (uint64_t index = 0; index != value.width; ++index) {
+      uint8_t mask = static_cast<uint8_t>(1u << (index % 8));
+      if (bit(value.value, index))
+        bits[index / 8] |= mask;
+      if (value.fourState && bit(value.unknown, index))
+        unknown[index / 8] |= mask;
+    }
+    talos_rt_power_nba_guard_v1 guard{*evaluator, domain, *domainEpoch,
+                                      strategy, *strategyEpoch};
+    return talos_rt_v1_power_nba(
+        context, reinterpret_cast<uint8_t *>(context->stateValue.data()),
+        value.fourState
+            ? reinterpret_cast<uint8_t *>(context->stateUnknown.data())
+            : nullptr,
+        context->execution->state_bit_count, backing, visible, value.width,
+        bits.data(), value.fourState ? unknown.data() : nullptr, &guard);
+  }
   case TALOS_RT_INTRINSIC_V1_NBA:
   case TALOS_RT_INTRINSIC_V1_STATIC_NBA:
   case TALOS_RT_INTRINSIC_V1_CLOCKING_NBA: {

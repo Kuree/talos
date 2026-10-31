@@ -5663,6 +5663,30 @@ def SimPowerCancelNBAOp : SimOp<"power.cancel_nba", [
   let hasVerifier = 1;
 }
 
+def SimPowerNBAOp : SimOp<"power.nba.enqueue", [
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>,
+    MemoryEffects<[MemRead<SimStorageResource>, MemWrite<SimStorageResource>,
+                   MemWrite<SimSchedulerResource>]>
+  ]> {
+  let summary = "enqueue one retained register update with a commit-time guard";
+  let description = [{
+    IEEE 1801-2018 9.7.3: the capture-free i1 observer and both captured
+    epochs qualify this atomic backing/output update at actual NBA commit.
+    Suppression publishes no transition, including to edge/iff observers.
+    Targets and epochs are whole design/static storage references. Projected
+    views and automatic storage require separate bounds and lifetime handling.
+  }];
+  let arguments = (ins SimContextType:$context, AnyType:$value,
+      SimRefType:$backing, SimRefType:$visible, SimObserverType:$guard,
+      SimRefType:$domain_epoch_ref, I64:$domain_epoch,
+      SimRefType:$strategy_epoch_ref, I64:$strategy_epoch);
+  let assemblyFormat = [{$context `,` $value `to` $backing `,` $visible
+      `guard` $guard `epochs` `(` $domain_epoch_ref `,` $domain_epoch `,`
+      $strategy_epoch_ref `,` $strategy_epoch `)` attr-dict `:`
+      functional-type(operands, results)}];
+  let hasVerifier = 1;
+}
+
 def SimNBAEnqueueOp : SimOp<"nba.enqueue", [
     MemoryEffects<[MemWrite<SimSchedulerResource>]>
   ]> {

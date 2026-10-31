@@ -7130,6 +7130,28 @@ LogicalResult SimDesignOp::verifyRegions() {
                     "descriptor";
       }
     WalkResult result = function.walk([&](Operation *op) {
+      if (auto update = dyn_cast<SimPowerNBAOp>(op)) {
+        // IEEE 1801-2018 9.7.3: every guarded destination and epoch must
+        // survive until NBA commit. Use the design-wide descriptor index,
+        // rather than scanning all declarations for every guarded register.
+        SmallVector<SimContextStorageOp> roots;
+        for (Value reference :
+             {update.getBacking(), update.getVisible(),
+              update.getDomainEpochRef(), update.getStrategyEpochRef()})
+          if (!collectWholeStorageRoots(reference, roots)) {
+            update.emitOpError(
+                "requires whole design/static storage references");
+            return WalkResult::interrupt();
+          }
+        for (auto root : roots) {
+          auto storage = storagesById.lookup(root.getId());
+          if (!storage || storage.getLifetime() == Lifetime::Automatic) {
+            update.emitOpError(
+                "requires whole design/static storage references");
+            return WalkResult::interrupt();
+          }
+        }
+      }
       auto verifyDescriptor = [&](uint64_t id, Type elementType,
                                   const llvm::DenseMap<uint64_t, Type> &table,
                                   StringRef kind) {

@@ -920,6 +920,15 @@ struct PublicationBatch {
   }
 };
 
+// Reuse the existing conditional-commit discriminator: ordinary NBAs take
+// the original None fast path without a separate power-feature check.
+enum class NBACommitGuard : uint8_t {
+  None,
+  InertialPath,
+  PowerFirst,
+  PowerSecond
+};
+
 struct ScheduledNBA {
   uint64_t sequence = 0;
   uint64_t dueTime = 0;
@@ -948,7 +957,7 @@ struct ScheduledNBA {
   InertialDriverSite inertialSite{UINT64_MAX, 0, false};
   bool inertialDriverVector = false;
   bool inertialDriverInitialProjection = false;
-  bool inertialPathDriver = false;
+  NBACommitGuard commitGuard = NBACommitGuard::None;
   bool inertialPathStrengthPair = false;
   bool inertialPathStrengthFinal = false;
   uint64_t inertialPathBit = UINT64_MAX;
@@ -959,6 +968,26 @@ struct ScheduledNBA {
   bool inertialNetInitialProjection = false;
   bool inertialNetChargeDecay = false;
   bool cancelled = false;
+
+  uint8_t powerGuardHalf() const {
+    return commitGuard >= NBACommitGuard::PowerFirst
+               ? static_cast<uint8_t>(commitGuard) - 1
+               : 0;
+  }
+};
+
+// IEEE 1801-2018 9.7.3: qualify a retained update at its actual NBA commit,
+// before either backing or visible data can publish a transition. The two
+// adjacent entries share one decision, making one register update atomic.
+struct PowerNBACondition {
+  const uint8_t *globalValue = nullptr;
+  uint64_t globalBitCount = 0;
+  talos_rt_power_nba_guard_v1 guard{};
+  bool checked = false, allowed = false;
+  uint8_t pending = 3;
+};
+struct PowerNBAFeatureState {
+  std::unordered_map<uint64_t, PowerNBACondition> conditions;
 };
 
 struct StaticNBAAccumulator {
@@ -2951,6 +2980,10 @@ struct talos_rt_context {
   // Tail placement retains all existing context offsets for off/read models.
   std::unique_ptr<NativeScopedWriteState> nativeScopedWrite;
   std::unique_ptr<InitializationRandomScopes> initializationRandomScopes;
+
+  // IEEE 1801-2018 9.7.3 commit guards are opt-in. Preserve every ordinary
+  // context field offset and allocate the condition map only on first use.
+  std::unique_ptr<PowerNBAFeatureState> powerNBAs;
 
   talos_rt_context();
   ~talos_rt_context();

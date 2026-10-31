@@ -256,20 +256,10 @@ FailureOr<LLVM::LLVMFuncOp> makeProcessSpawnHelper(
   bool prioritySignalResume =
       ::talos::schedule::has<::talos::schedule::Field::PrioritySignalResume>(
           function);
-  bool concurrentSignalObserver =
-      ::talos::schedule::has<::talos::schedule::Field::ConcurrentCancel>(
-          function) ||
-      ::talos::schedule::has<::talos::schedule::Field::ConcurrentAbort>(
-          function);
-  if (prioritySignalResume &&
-      (!function->hasAttr("internal") || !concurrentSignalObserver ||
-       !::talos::schedule::has<::talos::schedule::Field::DetachedControls>(
-           function) ||
-       entryKind != sim::EntryKind::Fork ||
-       function.getHomeRegion() != sim::EventRegion::Reactive))
+  if (prioritySignalResume && !sim::isPrioritySignalResumeActor(function))
     return function.emitError(
                "priority signal resume is reserved for internal concurrent "
-               "cancellation or abort observers"),
+               "cancellation or abort observers, or Active power observers"),
            failure();
   uint32_t scheduleFlags =
       TALOS_RT_SCHEDULE_HOME(homeRegion) |

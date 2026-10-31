@@ -1323,7 +1323,8 @@ unsigned downstreamWork(Value value, unsigned budget = 256) {
     for (Operation *user : next.getUsers()) {
       if (!seen.insert(user).second || ++visited > budget)
         continue;
-      if (isa<sim::SimRefStoreOp, sim::SimNBAEnqueueOp, CallOpInterface>(user))
+      if (isa<sim::SimRefStoreOp, sim::SimNBAEnqueueOp, sim::SimPowerNBAOp,
+              CallOpInterface>(user))
         continue;
       work += getUnknownPlaneWork(user);
       if (auto branch = dyn_cast<BranchOpInterface>(user)) {

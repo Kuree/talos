@@ -1647,6 +1647,11 @@ StateDomainAnalysis::computeInductiveOnly(const ValueFactProgram &program) {
         writes.push_back({pair.getHighDriver(), pair.getHighValue()});
         return;
       }
+      if (auto pair = dyn_cast<sim::SimPowerNBAOp>(operation)) {
+        writes.push_back({pair.getBacking(), pair.getValue()});
+        writes.push_back({pair.getVisible(), pair.getValue()});
+        return;
+      }
       Value destination, value;
       if (auto store = dyn_cast<sim::SimRefStoreOp>(operation)) {
         destination = store.getReference();

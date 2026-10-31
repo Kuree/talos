@@ -2188,6 +2188,93 @@ LogicalResult SimDynamicOverrideOp::verify() {
   return success();
 }
 
+bool collectWholeStorageRoots(Value reference,
+                              SmallVectorImpl<SimContextStorageOp> &roots) {
+  SmallVector<Value> pending{reference};
+  DenseSet<Value> seen;
+  size_t start = roots.size();
+  while (!pending.empty()) {
+    Value value = pending.pop_back_val();
+    if (!seen.insert(value).second)
+      continue;
+    if (auto root = value.getDefiningOp<SimContextStorageOp>()) {
+      roots.push_back(root);
+      continue;
+    }
+    auto argument = dyn_cast<BlockArgument>(value);
+    if (!argument || argument.getOwner()->hasNoPredecessors())
+      return false;
+    for (Block *predecessor : argument.getOwner()->getPredecessors()) {
+      auto branch = dyn_cast<BranchOpInterface>(predecessor->getTerminator());
+      if (!branch)
+        return false;
+      for (unsigned index = 0; index != branch->getNumSuccessors(); ++index) {
+        if (branch->getSuccessor(index) != argument.getOwner())
+          continue;
+        SuccessorOperands operands = branch.getSuccessorOperands(index);
+        unsigned lane = argument.getArgNumber();
+        if (lane >= operands.size() || operands.isOperandProduced(lane))
+          return false;
+        pending.push_back(operands[lane]);
+      }
+    }
+  }
+  return roots.size() != start;
+}
+
+LogicalResult SimPowerNBAOp::verify() {
+  if (!getPackedWidth(getValue().getType()) ||
+      getBacking().getType().getElementType() != getValue().getType() ||
+      getVisible().getType() != getBacking().getType())
+    return emitOpError(
+        "requires matching packed value, backing, and output types");
+  if (!getDomainEpochRef().getType().getElementType().isInteger(64) ||
+      !getStrategyEpochRef().getType().getElementType().isInteger(64))
+    return emitOpError("requires i64 epoch references");
+  if (!getOperation()->getParentOfType<SimDesignOp>())
+    return emitOpError("requires whole design/static storage references");
+  // Fixed64 handles preserve a complete declaration's bounds. Check shape
+  // locally; the enclosing design checks lifetimes with its shared ID index.
+  SmallVector<SimContextStorageOp> roots;
+  for (Value reference :
+       {getBacking(), getVisible(), getDomainEpochRef(), getStrategyEpochRef()})
+    if (!collectWholeStorageRoots(reference, roots))
+      return emitOpError("requires whole design/static storage references");
+  auto binding = getGuard().getDefiningOp<SimObserverBindOp>();
+  if (!binding || !binding.getCaptures().empty() ||
+      !getGuard().getType().getResultType().isInteger(1))
+    return emitOpError("guard must be a capture-free i1 observer binding");
+  return success();
+}
+
+LogicalResult SimPowerNBAOp::verifySymbolUses(SymbolTableCollection &symbols) {
+  auto binding = getGuard().getDefiningOp<SimObserverBindOp>();
+  if (!binding)
+    return success(); // The local verifier diagnoses this first.
+  auto evaluator = symbols.lookupNearestSymbolFrom<SimFuncOp>(
+      binding, binding.getEvaluatorAttr());
+  if (!evaluator || evaluator.getEntryKind() != EntryKind::Observer ||
+      evaluator.isExternal())
+    return emitOpError(
+        "guard evaluator must name a defined simulation observer");
+  WalkResult readonly = evaluator.walk([&](Operation *op) {
+    if (op == evaluator.getOperation() || isMemoryEffectFree(op))
+      return WalkResult::advance();
+    auto effects = dyn_cast<MemoryEffectOpInterface>(op);
+    SmallVector<MemoryEffects::EffectInstance> list;
+    if (effects)
+      effects.getEffects(list);
+    if (effects && llvm::all_of(list, [](const auto &effect) {
+          return isa<MemoryEffects::Read>(effect.getEffect());
+        }))
+      return WalkResult::advance();
+    return WalkResult::interrupt();
+  });
+  if (readonly.wasInterrupted())
+    return emitOpError("guard evaluator must be read-only");
+  return success();
+}
+
 LogicalResult SimNBAEnqueueOp::verify() {
   Type elementType;
   if (auto reference = dyn_cast<RefType>(getDestination().getType()))

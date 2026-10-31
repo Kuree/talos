@@ -120,6 +120,9 @@ bool isColdRuntimeCheckpoint(::mlir::Operation *operation);
 /// suspension or termination before ordinary initial actors begin.
 bool isStartupEntryKind(EntryKind kind);
 
+/// Reserved priority wakeups: detached internal assertion or power observers.
+bool isPrioritySignalResumeActor(SimFuncOp function);
+
 /// Whether a source-visible code unit has a corresponding VPI object. Other
 /// entry kinds are compiler/runtime infrastructure and are intrinsically
 /// internal even when they do not carry the optional `internal` marker.

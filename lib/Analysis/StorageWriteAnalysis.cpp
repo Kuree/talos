@@ -344,7 +344,7 @@ StorageWriteAnalysis::StorageWriteAnalysis(sim::SimFuncOp function,
     return;
   SmallVector<Operation *> writes;
   function.walk([&](Operation *op) {
-    if (isa<sim::SimRefStoreOp, sim::SimNBAEnqueueOp>(op))
+    if (isa<sim::SimRefStoreOp, sim::SimNBAEnqueueOp, sim::SimPowerNBAOp>(op))
       writes.push_back(op);
   });
   execution = std::make_unique<WriteExecutionBounds>(function, writes);

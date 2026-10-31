@@ -47,6 +47,66 @@ static talos_rt_status nextSchedulerCohortUnlocked(talos_rt_context *context,
 
 namespace {
 
+// Keep the ordinary NBA check tiny. Conditional services may call the
+// runtime and allocate a stack frame; keep that work behind the existing tag.
+#if defined(_MSC_VER)
+__declspec(noinline)
+#else
+TALOS_RT_FEATURE_TEXT
+#endif
+bool currentConditionalNBAUpdateUnlocked(talos_rt_context *context,
+                                         const ScheduledNBA &update) {
+  if (update.commitGuard != NBACommitGuard::InertialPath)
+    return powerNBAAllowedUnlocked(context, update.sequence,
+                                   update.powerGuardHalf());
+  if (update.inertialPathStrengthPair) {
+    auto pending =
+        context->inertialStrengthPathPending.find(update.inertialSite);
+    if (pending == context->inertialStrengthPathPending.end() ||
+        update.inertialPathBit >= pending->second.width ||
+        update.inertialPathGeneration !=
+            pending->second
+                .generation[static_cast<size_t>(update.inertialPathBit)])
+      return false;
+    size_t index = static_cast<size_t>(update.inertialPathBit);
+    if (pending->second.pulseControlled) {
+      const auto &live = pending->second.liveSequences[index];
+      return std::find(live.begin(), live.end(), update.sequence) != live.end();
+    }
+    return (update.inertialPathStrengthFinal
+                ? pending->second.highSequence[index]
+                : pending->second.lowSequence[index]) == update.sequence;
+  }
+  auto pending = context->inertialPathPending.find(update.inertialSite);
+  if (pending == context->inertialPathPending.end() ||
+      update.inertialPathBit >= pending->second.width ||
+      update.inertialPathGeneration !=
+          pending->second
+              .generation[static_cast<size_t>(update.inertialPathBit)])
+    return false;
+  size_t index = static_cast<size_t>(update.inertialPathBit);
+  if (!pending->second.pulseControlled)
+    return pending->second.scheduledSequence[index] == update.sequence;
+  const auto &live = pending->second.liveSequences[index];
+  return std::find(live.begin(), live.end(), update.sequence) != live.end();
+}
+
+#if defined(_MSC_VER)
+__forceinline
+#elif defined(__clang__) || defined(__GNUC__)
+__attribute__((always_inline)) inline
+#else
+inline
+#endif
+    bool currentNativeNBAUpdateUnlocked(talos_rt_context *context,
+                                        const ScheduledNBA &update) {
+  if (update.cancelled)
+    return false;
+  if (update.commitGuard == NBACommitGuard::None)
+    return true;
+  return currentConditionalNBAUpdateUnlocked(context, update);
+}
+
 // Each vector tail is indexed once during a mixed barrier. Indexed leaves are
 // stable while callbacks append work; consumed slots are removed in one pass.
 // This also handles native updates transferred from a delayed path calendar,
@@ -5719,45 +5779,6 @@ talos_rt_status runScheduler(talos_rt_context *context,
             }
           }
         };
-        auto currentPathUpdate = [&](const ScheduledNBA &update) {
-          if (update.cancelled)
-            return false;
-          if (!update.inertialPathDriver)
-            return true;
-          if (update.inertialPathStrengthPair) {
-            auto pending =
-                context->inertialStrengthPathPending.find(update.inertialSite);
-            if (pending == context->inertialStrengthPathPending.end() ||
-                update.inertialPathBit >= pending->second.width ||
-                update.inertialPathGeneration !=
-                    pending->second.generation[static_cast<size_t>(
-                        update.inertialPathBit)])
-              return false;
-            size_t index = static_cast<size_t>(update.inertialPathBit);
-            if (pending->second.pulseControlled) {
-              const auto &live = pending->second.liveSequences[index];
-              return std::find(live.begin(), live.end(), update.sequence) !=
-                     live.end();
-            }
-            return (update.inertialPathStrengthFinal
-                        ? pending->second.highSequence[index]
-                        : pending->second.lowSequence[index]) ==
-                   update.sequence;
-          }
-          auto pending = context->inertialPathPending.find(update.inertialSite);
-          if (pending == context->inertialPathPending.end() ||
-              update.inertialPathBit >= pending->second.width ||
-              update.inertialPathGeneration !=
-                  pending->second
-                      .generation[static_cast<size_t>(update.inertialPathBit)])
-            return false;
-          size_t index = static_cast<size_t>(update.inertialPathBit);
-          if (!pending->second.pulseControlled)
-            return pending->second.scheduledSequence[index] == update.sequence;
-          const auto &live = pending->second.liveSequences[index];
-          return std::find(live.begin(), live.end(), update.sequence) !=
-                 live.end();
-        };
         auto completeInertial = [&](const ScheduledNBA &update) {
           if (update.inertialNetBit != UINT64_MAX) {
             auto pending =
@@ -5770,7 +5791,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
           }
           if (update.inertialSite.codeUnit == UINT64_MAX)
             return;
-          if (update.inertialPathDriver) {
+          if (update.commitGuard == NBACommitGuard::InertialPath) {
             if (update.inertialPathStrengthPair) {
               auto pending = context->inertialStrengthPathPending.find(
                   update.inertialSite);
@@ -5989,7 +6010,8 @@ talos_rt_status runScheduler(talos_rt_context *context,
               if (!prepareDelayedNetBatch(update))
                 return context->schedulerStatus;
               ScheduledNBA &current = context->scheduledNBAs[index];
-              bool pathCurrent = currentPathUpdate(current);
+              bool pathCurrent =
+                  currentNativeNBAUpdateUnlocked(context, current);
               if (pathCurrent)
                 completeInertial(current);
               context->schedulerApplyingNativeUpdate = pathCurrent;
@@ -6105,8 +6127,8 @@ talos_rt_status runScheduler(talos_rt_context *context,
             if (sequence == nativeSequence) {
               uint32_t retainedAutomaticID =
                   context->scheduledNBAs[nativeIndex].retainedAutomaticID;
-              bool pathCurrent =
-                  currentPathUpdate(context->scheduledNBAs[nativeIndex]);
+              bool pathCurrent = currentNativeNBAUpdateUnlocked(
+                  context, context->scheduledNBAs[nativeIndex]);
               if (pathCurrent)
                 completeInertial(context->scheduledNBAs[nativeIndex]);
               context->schedulerApplyingNativeUpdate = pathCurrent;
@@ -6135,7 +6157,8 @@ talos_rt_status runScheduler(talos_rt_context *context,
                 context->scheduledNBAs.push_back(std::move(update));
                 continue;
               }
-              bool pathCurrent = currentPathUpdate(update);
+              bool pathCurrent =
+                  currentNativeNBAUpdateUnlocked(context, update);
               if (pathCurrent)
                 completeInertial(update);
               context->schedulerApplyingNativeUpdate = pathCurrent;

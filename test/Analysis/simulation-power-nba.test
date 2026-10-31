@@ -1,0 +1,79 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/domain.mlir --test-talos-sim-state-domain -o /dev/null 2>&1 | FileCheck %s --check-prefix=DOMAIN
+// RUN: talos-opt %t/domain.mlir --test-talos-local-unknown -o /dev/null 2>&1 | FileCheck %s --check-prefix=LOCAL
+// RUN: talos-opt %t/domain.mlir --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph,talos-sim-verify-compute-graph),test-talos-native-aot-analysis)' -o %t.graph.mlir 2>&1 | FileCheck %s --check-prefix=AOT
+// RUN: FileCheck %s --check-prefix=GRAPH < %t.graph.mlir
+// RUN: talos-opt %t/steady.mlir --test-talos-steady-unknown -o /dev/null 2>&1 | FileCheck %s --check-prefix=STEADY
+// IEEE 1801-2018 9.7.3: a qualified NBA may write X/Z to both retained and
+// visible state. Every analysis must account for both destinations.
+// DOMAIN: state-domain @guarded_unknown
+// DOMAIN-NOT: root storage
+// DOMAIN: func @drive
+// LOCAL: local-unknown @drive
+// LOCAL: read after_guarded_write: written
+// AOT: native-aot eligible=false fully=false
+// AOT: reason retention NBA guards require runtime commit ordering
+// GRAPH: effect_summary =
+// GRAPH-SAME: effect = nba, resource = storage, target = descriptor, descriptor = 0
+// GRAPH-SAME: effect = nba, resource = storage, target = descriptor, descriptor = 1
+// STEADY: steady-unknown @guarded_partial
+// STEADY-NEXT: root 0: [0,4)
+// STEADY-NEXT: root 1: [0,4)
+
+//--- domain.mlir
+module {
+  simulation.design @guarded_unknown {
+    simulation.scope.decl 0
+    simulation.storage.decl 0 in 0 : !simulation.logic<8> design
+    simulation.storage.decl 1 in 0 : !simulation.logic<8> design
+    simulation.storage.decl 2 in 0 : i64 design
+    simulation.code_unit.decl 1 in 0 initial hierarchy "top.drive"
+    simulation.code_unit.decl 2 in 0 observer hierarchy "top.guard"
+    simulation.func @drive(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 1 : i32, code_unit_id = 1 : i64} {
+      %b = simulation.context.storage %ctx[0] : !simulation.ref<!simulation.logic<8>>
+      %q = simulation.context.storage %ctx[1] : !simulation.ref<!simulation.logic<8>>
+      %epoch = simulation.context.storage %ctx[2] : !simulation.ref<i64>
+      %zero = simulation.logic.constant 0 : i8, 0 : i8 : !simulation.logic<8>
+      simulation.ref.store %zero to %b : !simulation.logic<8>, !simulation.ref<!simulation.logic<8>>
+      simulation.ref.store %zero to %q : !simulation.logic<8>, !simulation.ref<!simulation.logic<8>>
+      %x = simulation.logic.constant 0 : i8, -1 : i8 : !simulation.logic<8>
+      %z64 = arith.constant 0 : i64
+      %guard = simulation.observer.bind @guard values (%b : !simulation.ref<!simulation.logic<8>>) captures 0 : !simulation.observer<i1>
+      simulation.power.nba.enqueue %ctx, %x to %b, %q guard %guard epochs (%epoch, %z64, %epoch, %z64) : (!simulation.context, !simulation.logic<8>, !simulation.ref<!simulation.logic<8>>, !simulation.ref<!simulation.logic<8>>, !simulation.observer<i1>, !simulation.ref<i64>, i64, !simulation.ref<i64>, i64) -> ()
+      %read = simulation.ref.load %q {test.read = "after_guarded_write"} : !simulation.ref<!simulation.logic<8>> -> !simulation.logic<8>
+      simulation.return
+    }
+    simulation.func private @guard(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) -> i1 attributes {entry_kind = 14 : i32, code_unit_id = 2 : i64} {
+      %true = arith.constant true
+      simulation.return %true : i1
+    }
+  }
+}
+
+//--- steady.mlir
+module {
+  simulation.design @guarded_partial {
+    simulation.scope.decl 0
+    simulation.storage.decl 0 in 0 : !simulation.logic<8> design
+    simulation.storage.decl 1 in 0 : !simulation.logic<8> design
+    simulation.storage.decl 2 in 0 : i64 design
+    simulation.code_unit.decl 1 in 0 initial hierarchy "top.drive"
+    simulation.code_unit.decl 2 in 0 observer hierarchy "top.guard"
+    simulation.func @drive(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 1 : i32, code_unit_id = 1 : i64} {
+      %b = simulation.context.storage %ctx[0] : !simulation.ref<!simulation.logic<8>>
+      %q = simulation.context.storage %ctx[1] : !simulation.ref<!simulation.logic<8>>
+      %epoch = simulation.context.storage %ctx[2] : !simulation.ref<i64>
+      %zero = simulation.logic.constant 0 : i8, 0 : i8 : !simulation.logic<8>
+      %x = simulation.logic.constant 0 : i8, 15 : i8 : !simulation.logic<8>
+      %z64 = arith.constant 0 : i64
+      %guard = simulation.observer.bind @guard values (%b : !simulation.ref<!simulation.logic<8>>) captures 0 : !simulation.observer<i1>
+      simulation.power.nba.enqueue %ctx, %x to %b, %q guard %guard epochs (%epoch, %z64, %epoch, %z64) : (!simulation.context, !simulation.logic<8>, !simulation.ref<!simulation.logic<8>>, !simulation.ref<!simulation.logic<8>>, !simulation.observer<i1>, !simulation.ref<i64>, i64, !simulation.ref<i64>, i64) -> ()
+      %read = simulation.ref.load %q {test.read = "after_guarded_write"} : !simulation.ref<!simulation.logic<8>> -> !simulation.logic<8>
+      simulation.return
+    }
+    simulation.func private @guard(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) -> i1 attributes {entry_kind = 14 : i32, code_unit_id = 2 : i64} {
+      %true = arith.constant true
+      simulation.return %true : i1
+    }
+  }
+}

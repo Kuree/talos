@@ -1,0 +1,9 @@
+// RUN: %split-file %S/simulation-power-nba-wide.test %t
+// RUN: talos-opt %t/design.mlir --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-suspension),talos-sim-build-compute-graph,talos-sim-verify-compute-graph),encode-talos-sim-to-bytecode{vpi=off require-bytecode=true},convert-talos-sim-processes-to-llvm-coroutines)' --verify-each -o %t.lowered.mlir
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.o
+// RUN: %target_cxx %t.o %runtime_link_flags -o %t.exe
+// RUN: %t.exe | FileCheck %S/simulation-power-nba-wide.test
+// RUN: %llvm_dist/bin/llvm-nm --undefined-only %t.o | FileCheck %s --check-prefix=SYMBOLS --implicit-check-not=talos_rt_v1_power_nba
+// IEEE 1801-2018 9.7.3: require interpreter execution in the descriptor;
+// native guard/update code must not substitute for the bytecode intrinsic.
+// SYMBOLS: talos_rt_v1_

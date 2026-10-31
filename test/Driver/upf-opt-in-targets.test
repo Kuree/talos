@@ -1,9 +1,9 @@
 // RUN: %split-file %S/upf-opt-in.test %t
 // RUN: talos --two-state -O3 --vpi=off --native-scheduler=eval --mlir-verify-each -c %t/design.sv -o %t.native.o
-// RUN: %llvm_dist/bin/llvm-nm --undefined-only %t.native.o | FileCheck %s --check-prefix=SYMBOLS --implicit-check-not=talos_rt_v1_power_cancel_nba --implicit-check-not=talos_rt_v1_scheduler_cohort --implicit-check-not=Tcl_ --implicit-check-not=__upf
+// RUN: %llvm_dist/bin/llvm-nm --undefined-only %t.native.o | FileCheck %s --check-prefix=SYMBOLS --implicit-check-not=talos_rt_v1_power_cancel_nba --implicit-check-not=talos_rt_v1_power_nba --implicit-check-not=talos_rt_v1_scheduler_cohort --implicit-check-not=Tcl_ --implicit-check-not=__upf
 // RUN: talos --target=wasm32 --two-state -O3 --vpi=off --native-scheduler=eval --mlir-verify-each -c %t/design.sv -o %t.wasm.o
 // RUN: %llvm_dist/bin/llvm-readobj --file-headers %t.wasm.o | FileCheck %s --check-prefix=WASM
-// RUN: %llvm_dist/bin/llvm-nm --undefined-only %t.wasm.o | FileCheck %s --check-prefix=SYMBOLS --implicit-check-not=talos_rt_v1_power_cancel_nba --implicit-check-not=talos_rt_v1_scheduler_cohort --implicit-check-not=Tcl_ --implicit-check-not=__upf
+// RUN: %llvm_dist/bin/llvm-nm --undefined-only %t.wasm.o | FileCheck %s --check-prefix=SYMBOLS --implicit-check-not=talos_rt_v1_power_cancel_nba --implicit-check-not=talos_rt_v1_power_nba --implicit-check-not=talos_rt_v1_scheduler_cohort --implicit-check-not=Tcl_ --implicit-check-not=__upf
 // No UPF runtime references enter either target's compiled design; ordinary
 // two-state specialization and the native scheduling path remain available.
 // SYMBOLS: talos_rt_v1_

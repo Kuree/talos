@@ -254,6 +254,8 @@ talos_rt_status runPreponedHooks(talos_rt_context *context);
 // Initialize the current slot once, regardless of which executor entered it.
 // Reentry in the same slot preserves its sampled state and progress cursor.
 talos_rt_status enterSchedulerTimeSlotUnlocked(talos_rt_context *context);
+bool powerNBAAllowedUnlocked(talos_rt_context *context, uint64_t sequence,
+                             uint8_t half);
 // Freeze a ready Inactive/Re-Inactive batch before restarting arbitration.
 talos_rt_status promoteInactiveResumptionsUnlocked(talos_rt_context *context,
                                                    uint32_t region);

@@ -1268,6 +1268,7 @@ enum {
   TALOS_RT_INTRINSIC_V1_CONTROL_DISABLE_SELECTED = UINT32_C(0x00010250),
   TALOS_RT_INTRINSIC_V1_POWER_CANCEL_NBA = UINT32_C(0x00010251),
   TALOS_RT_INTRINSIC_V1_SCHEDULER_COHORT = UINT32_C(0x00010252),
+  TALOS_RT_INTRINSIC_V1_POWER_NBA = UINT32_C(0x00010253),
   TALOS_RT_INTRINSIC_V1_IMPORT = UINT32_C(0x00010300),
   TALOS_RT_INTRINSIC_V1_DPI_IMPORT = UINT32_C(0x00010301),
   TALOS_RT_INTRINSIC_V1_CLASS_ALLOC = UINT32_C(0x00010400),
@@ -4147,6 +4148,23 @@ talos_rt_status talos_rt_v1_scheduler_nba(
     talos_rt_context *context, uint8_t *value_plane, uint8_t *unknown_plane,
     uint64_t plane_bit_count, uint64_t bit_offset, uint64_t bit_width,
     uint64_t delay, const uint8_t *value, const uint8_t *unknown);
+
+// IEEE 1801-2018 9.7.3: one atomic backing/output update qualified at actual
+// NBA commit. The pure, capture-free observer returns known i1 true to admit
+// the update. Epochs also invalidate events captured before a power/RTC change.
+// Every reference and epoch is fixed64, including on wasm32.
+// References name whole static declarations or global ranges that remain
+// alive until commit. Automatic handles and projected static ranges fail.
+typedef struct talos_rt_power_nba_guard_v1 {
+  uint64_t evaluator;
+  uint64_t domain_epoch_handle, domain_epoch;
+  uint64_t strategy_epoch_handle, strategy_epoch;
+} talos_rt_power_nba_guard_v1;
+talos_rt_status talos_rt_v1_power_nba(
+    talos_rt_context *context, uint8_t *value_plane, uint8_t *unknown_plane,
+    uint64_t plane_bit_count, uint64_t backing_offset, uint64_t visible_offset,
+    uint64_t bit_width, const uint8_t *value, const uint8_t *unknown,
+    const talos_rt_power_nba_guard_v1 *guard);
 // Queue a packed-view NBA while retaining the exact boundary of the input
 // reference. The signed low bit is relative to that view. Unknown,
 // unrepresentable, or nonoverlapping selections are ignored; partial overlaps

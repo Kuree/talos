@@ -93,6 +93,18 @@ bool isColdRuntimeCheckpoint(Operation *operation) {
       operation);
 }
 
+bool isPrioritySignalResumeActor(SimFuncOp function) {
+  if (!function->hasAttr("internal") ||
+      !schedule::has<schedule::Field::DetachedControls>(function) ||
+      function.getEntryKind() != EntryKind::Fork)
+    return false;
+  bool assertion = schedule::has<schedule::Field::ConcurrentCancel>(function) ||
+                   schedule::has<schedule::Field::ConcurrentAbort>(function);
+  if (has<metadata::PowerMonitor>(function))
+    return !assertion && function.getHomeRegion() == EventRegion::Active;
+  return assertion && function.getHomeRegion() == EventRegion::Reactive;
+}
+
 bool isStartupEntryKind(EntryKind kind) {
   switch (kind) {
   case EntryKind::Always:

@@ -396,6 +396,20 @@ SmallVector<ComputeEffect> collectDirectEffects(const FunctionInfo &info,
                        schedule::ComputeTriggerKind::None,
                        static_cast<bool>(op.getDelay()));
         })
+        .Case<sim::SimPowerNBAOp>([&](auto op) {
+          appendEffect(info, schedule::ComputeEffectKind::NBA, op.getBacking(),
+                       effects);
+          appendEffect(info, schedule::ComputeEffectKind::NBA, op.getVisible(),
+                       effects);
+          appendEffect(info, schedule::ComputeEffectKind::Read,
+                       op.getDomainEpochRef(), effects);
+          appendEffect(info, schedule::ComputeEffectKind::Read,
+                       op.getStrategyEpochRef(), effects);
+          // The guard may read any design root. Its observer body is also
+          // inventoried below; keep a conservative barrier for fragment-local
+          // effects, including a binding hoisted to a predecessor block.
+          effects.push_back({schedule::ComputeEffectKind::Read});
+        })
         .Case<sim::SimSuspendChangeOp>([&](auto op) {
           appendEffect(info, schedule::ComputeEffectKind::Watch,
                        op.getWatched(), effects,
@@ -675,6 +689,11 @@ ProgramAnalysis analyzeProgram(sim::SimDesignOp design) {
       for (Value condition : clocks.getConditions())
         if (auto binding = condition.getDefiningOp<sim::SimObserverBindOp>())
           info.observerBindings.push_back(binding);
+    });
+    function.walk([&](sim::SimPowerNBAOp update) {
+      if (auto binding =
+              update.getGuard().getDefiningOp<sim::SimObserverBindOp>())
+        info.observerBindings.push_back(binding);
     });
   }
 
@@ -1340,8 +1359,11 @@ LogicalResult ComputeGraphBuilder::buildFragments() {
     info.getFunction().walk([&](Operation *operation) {
       if (auto nba = dyn_cast<sim::SimNBAEnqueueOp>(operation))
         addRoot(nbaRoots, info.provenance.lookup(nba.getDestination()));
-      else if (auto trigger = dyn_cast<sim::SimEventTriggerOp>(operation);
-               trigger && trigger.getNonblocking())
+      else if (auto nba = dyn_cast<sim::SimPowerNBAOp>(operation)) {
+        addRoot(nbaRoots, info.provenance.lookup(nba.getBacking()));
+        addRoot(nbaRoots, info.provenance.lookup(nba.getVisible()));
+      } else if (auto trigger = dyn_cast<sim::SimEventTriggerOp>(operation);
+                 trigger && trigger.getNonblocking())
         addRoot(eventRoots, info.provenance.lookup(trigger.getEvent()));
     });
   for (SmallVectorImpl<HandleFact> *roots : {&nbaRoots, &eventRoots}) {
@@ -1861,6 +1883,18 @@ LogicalResult ComputeGraphBuilder::buildSites(ComputeGraphResult &result) {
             result.nbaSites[operation] = schedule::NBASiteAttr::get(
                 design.getContext(), site, nbaCommitIds[*commit], storage,
                 delayedTiming);
+          }
+          if (auto nba = dyn_cast<sim::SimPowerNBAOp>(operation)) {
+            // IEEE 1801-2018 9.7.3: these two destinations commit through
+            // the runtime's atomic guard. They are never accumulator sites;
+            // give each root a dynamic frontier in the scheduling graph.
+            for (Value target : {nba.getBacking(), nba.getVisible()}) {
+              auto commit = findCommit(
+                  nbaRoots, getRootProvenance(info.provenance.lookup(target)));
+              if (!commit)
+                return nba.emitOpError("has no generated commit node");
+              nbaFrontierSites[*commit].push_back(nbaSite++);
+            }
           }
           if (auto trigger = dyn_cast<sim::SimEventTriggerOp>(operation);
               trigger && trigger.getNonblocking()) {

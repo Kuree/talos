@@ -22,6 +22,7 @@
 #include "talos/Runtime/StableHash.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -33,6 +34,7 @@
 #include <new>
 #include <optional>
 #include <tuple>
+#include <type_traits>
 
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
@@ -655,9 +657,31 @@ talos_rt_v1_power_cancel_nba(talos_rt_context *context, uint64_t target,
     if (static_cast<__int128>(offset) <
             static_cast<__int128>(targetOffset) + width &&
         static_cast<__int128>(targetOffset) <
-            static_cast<__int128>(offset) + update.bitWidth)
+            static_cast<__int128>(offset) + update.bitWidth) {
       update.cancelled = true;
+      if (uint8_t half = update.powerGuardHalf(); half && context->powerNBAs) {
+        auto found =
+            context->powerNBAs->conditions.find(update.sequence - (half == 2));
+        if (found != context->powerNBAs->conditions.end()) {
+          // Cancelling either half cancels the atomic register transaction.
+          found->second.checked = true;
+          found->second.allowed = false;
+          found->second.pending &= ~half;
+          if (!found->second.pending)
+            context->powerNBAs->conditions.erase(found);
+        }
+      }
+    }
   }
+  // A cancelled-only queue never creates an NBA barrier. Retire its tail
+  // now, so repeated power/RTC pulses do not accumulate dead payloads. Keep
+  // vector positions stable during a barrier or synchronous observer callback.
+  if (!context->schedulerDrainingNBAQueues &&
+      !context->schedulerApplyingNativeUpdate && !context->observerDepth)
+    while (!context->scheduledNBAs.empty() &&
+           context->scheduledNBAs.back().cancelled &&
+           context->scheduledNBAs.back().retainedAutomaticID == 0)
+      context->scheduledNBAs.pop_back();
   return TALOS_RT_OK;
 }
 
@@ -668,6 +692,216 @@ talos_rt_v1_scheduler_nba(talos_rt_context *context, uint8_t *valuePlane,
                           const uint8_t *value, const uint8_t *unknown) {
   return schedulerNBA(context, valuePlane, unknownPlane, planeBitCount,
                       bitOffset, bitWidth, delay, value, unknown, false);
+}
+
+bool powerNBAAllowedUnlocked(talos_rt_context *context, uint64_t sequence,
+                             uint8_t half) {
+  if (!context->powerNBAs) {
+    context->schedulerStatus = TALOS_RT_INVALID_LIFECYCLE;
+    return false;
+  }
+  auto found = context->powerNBAs->conditions.find(sequence - (half == 2));
+  if (found == context->powerNBAs->conditions.end()) {
+    context->schedulerStatus = TALOS_RT_INVALID_LIFECYCLE;
+    return false;
+  }
+  auto &condition = found->second;
+  auto finish = [&]() {
+    bool allowed = condition.allowed;
+    condition.pending &= ~half;
+    if (!condition.pending)
+      context->powerNBAs->conditions.erase(found);
+    return allowed;
+  };
+  if (condition.checked)
+    return finish();
+  condition.checked = true;
+  auto &guard = condition.guard;
+  for (auto epoch :
+       {std::pair{guard.domain_epoch_handle, guard.domain_epoch},
+        std::pair{guard.strategy_epoch_handle, guard.strategy_epoch}}) {
+    uint64_t current = 0;
+    talos_rt_status status = talos_rt_v1_native_state_load_plane(
+        context, condition.globalValue, condition.globalBitCount, epoch.first,
+        64, 0, 0, reinterpret_cast<uint8_t *>(&current));
+    if (status != TALOS_RT_OK) {
+      context->schedulerStatus = status;
+      return finish();
+    }
+    if (current != epoch.second)
+      return finish();
+  }
+  const auto *descriptor =
+      findObserverDescriptor(context->execution, guard.evaluator);
+  if (!descriptor || descriptor->capture_count ||
+      descriptor->result_width != 1 || descriptor->flags) {
+    context->schedulerStatus = TALOS_RT_INVALID_DESIGN;
+    return finish();
+  }
+  if (context->observerDepth >= 256) {
+    context->schedulerStatus = TALOS_RT_OUT_OF_RESOURCES;
+    return finish();
+  }
+  uint64_t value = 0, unknown = 0;
+  talos_rt_status status = TALOS_RT_TIER_UNAVAILABLE;
+  bool previousCanonicalPlane = context->observerForcesCanonicalPlane;
+  context->observerForcesCanonicalPlane = true;
+  ++context->observerDepth;
+  if (context->nativeStateSpecializationFast)
+    *context->nativeStateSpecializationFast = 0;
+  {
+    ContextCallbackUnlock unlock(context);
+    TALOS_RT_TRY {
+      if ((context->execution->flags & TALOS_RT_EXECUTION_REQUIRE_BYTECODE) ||
+          !descriptor->native_evaluator) {
+        if (descriptor->bytecode_function != TALOS_RT_OBSERVER_NO_BYTECODE)
+          status = talos_rt_execute_design_observer(
+              *context->execution, context, descriptor->bytecode_function,
+              nullptr, 0, &value, &unknown, 1);
+      } else {
+        status = descriptor->native_evaluator(context, nullptr, 0, &value,
+                                              &unknown, 1);
+      }
+    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { status = TALOS_RT_OUT_OF_MEMORY; }
+    TALOS_RT_CATCH_ALL { status = TALOS_RT_INVALID_ARGUMENT; }
+  }
+  --context->observerDepth;
+  context->observerForcesCanonicalPlane = previousCanonicalPlane;
+  if (context->nativeStateSpecializationFast)
+    refreshNativeStaticSpecializationFastUnlocked(context);
+  if (status != TALOS_RT_OK)
+    context->schedulerStatus = status;
+  condition.allowed = status == TALOS_RT_OK && (value & 1) && !(unknown & 1);
+  return finish();
+}
+
+extern "C" talos_rt_status
+talos_rt_v1_power_nba(talos_rt_context *context, uint8_t *valuePlane,
+                      uint8_t *unknownPlane, uint64_t planeBitCount,
+                      uint64_t backing, uint64_t visible, uint64_t width,
+                      const uint8_t *value, const uint8_t *unknown,
+                      const talos_rt_power_nba_guard_v1 *guard) {
+  if (!context || !guard || !valuePlane || !value || !width ||
+      width > UINT64_MAX - 7 || (unknownPlane && !unknown))
+    return TALOS_RT_INVALID_ARGUMENT;
+  ContextTransaction transaction(context);
+  TALOS_RT_TRY {
+    ContextMutexLock lock(context);
+    if (!context->execution)
+      return TALOS_RT_INVALID_LIFECYCLE;
+    if (planeBitCount != context->execution->state_bit_count)
+      return TALOS_RT_LAYOUT_MISMATCH;
+    // The compiler rejects this feature before constructing an AOT plan.
+    // Public callers must not bypass that ownership boundary either.
+    if (context->nativeSchedulePlan)
+      return TALOS_RT_TIER_UNAVAILABLE;
+    const auto *descriptor =
+        findObserverDescriptor(context->execution, guard->evaluator);
+    if (!descriptor || descriptor->capture_count ||
+        descriptor->result_width != 1 || descriptor->flags)
+      return TALOS_RT_INVALID_DESIGN;
+    if (((context->execution->flags & TALOS_RT_EXECUTION_REQUIRE_BYTECODE) ||
+         !descriptor->native_evaluator) &&
+        descriptor->bytecode_function == TALOS_RT_OBSERVER_NO_BYTECODE)
+      return TALOS_RT_TIER_UNAVAILABLE;
+    if (context->nextSchedulerSequence == 0 ||
+        context->nextSchedulerSequence >= UINT64_MAX - 1)
+      return TALOS_RT_OUT_OF_RESOURCES;
+    for (auto range : {std::pair{backing, width}, std::pair{visible, width},
+                       std::pair{guard->domain_epoch_handle, uint64_t{64}},
+                       std::pair{guard->strategy_epoch_handle, uint64_t{64}}}) {
+      uint32_t id = 0;
+      int64_t offset = 0;
+      bool bounded = decodeNativeStatic(range.first, id, offset);
+      if (!bounded && !decodeNativeGlobal(range.first, offset))
+        return TALOS_RT_INVALID_HANDLE;
+      if (bounded) {
+        auto *state = findNativeStaticState(context, id);
+        if (!state || offset != 0 || state->bitWidth != range.second)
+          return TALOS_RT_INVALID_HANDLE;
+      }
+      auto status =
+          talos_rt_vpi_state_validate(context, range.first, range.second);
+      if (status != TALOS_RT_OK)
+        return status;
+    }
+    uint32_t region = talos_rt_commit_region(
+        context->activeHomeRegion == UINT32_MAX
+            ? static_cast<uint32_t>(TALOS_RT_REGION_ACTIVE)
+            : context->activeHomeRegion);
+    if (region == UINT32_MAX)
+      return TALOS_RT_INVALID_LIFECYCLE;
+    uint64_t byteCount = (width + 7) / 8;
+    if (byteCount > SIZE_MAX)
+      return TALOS_RT_INVALID_ARGUMENT;
+    // Keep ordinary NBA staging unchanged. This whole-register path needs
+    // neither dynamic-view clipping nor automatic-state lifetime tracking.
+    // Allocate both payloads before publishing either half of the pair.
+    std::array<ScheduledNBA, 2> updates;
+    std::array<uint64_t, 2> offsets{backing, visible};
+    for (size_t index = 0; index != updates.size(); ++index) {
+      auto &update = updates[index];
+      update.valuePlane = valuePlane;
+      update.unknownPlane = unknownPlane;
+      update.planeBitCount = planeBitCount;
+      update.bitOffset = offsets[index];
+      update.bitWidth = width;
+      update.execRegion = region;
+      update.dueTime = context->schedulerTime;
+      update.commitGuard =
+          index == 0 ? NBACommitGuard::PowerFirst : NBACommitGuard::PowerSecond;
+      update.inlinePacked = width <= 64;
+      if (update.inlinePacked) {
+        update.inlineValue = loadPackedBytes(value, 0, width);
+        if (unknownPlane)
+          update.inlineUnknown = loadPackedBytes(unknown, 0, width);
+      } else {
+        update.value.assign(value, value + static_cast<size_t>(byteCount));
+        if (unknownPlane)
+          update.unknown.assign(unknown,
+                                unknown + static_cast<size_t>(byteCount));
+      }
+    }
+    auto &queue = context->scheduledNBAs;
+    if (queue.max_size() - queue.size() < updates.size())
+      return TALOS_RT_OUT_OF_RESOURCES;
+    size_t required = queue.size() + updates.size();
+    if (queue.capacity() < required) {
+      // Preserve geometric growth; exact reservation for every pair is
+      // quadratic when a clock activation updates many retained registers.
+      size_t grown = queue.capacity() <= queue.max_size() / 2
+                         ? queue.capacity() * 2
+                         : queue.max_size();
+      queue.reserve(std::max(required, grown));
+    }
+    if (!context->powerNBAs)
+      context->powerNBAs = std::make_unique<PowerNBAFeatureState>();
+    uint64_t first = context->nextSchedulerSequence;
+    auto &conditions = context->powerNBAs->conditions;
+    auto [entry, inserted] = conditions.try_emplace(first);
+    if (!inserted)
+      return TALOS_RT_INVALID_LIFECYCLE;
+    auto &condition = entry->second;
+    condition.globalValue = valuePlane;
+    condition.globalBitCount = planeBitCount;
+    condition.guard = *guard;
+    static_assert(std::is_nothrow_move_constructible_v<ScheduledNBA>);
+    for (size_t index = 0; index != updates.size(); ++index) {
+      updates[index].sequence = first + index;
+      queue.push_back(std::move(updates[index]));
+    }
+    context->nextSchedulerSequence = first + updates.size();
+    return TALOS_RT_OK;
+  }
+  TALOS_RT_CATCH(const std::bad_alloc &) {
+    context->schedulerStatus = TALOS_RT_OUT_OF_MEMORY;
+    return TALOS_RT_OUT_OF_MEMORY;
+  }
+  TALOS_RT_CATCH_ALL {
+    context->schedulerStatus = TALOS_RT_INVALID_ARGUMENT;
+    return TALOS_RT_INVALID_ARGUMENT;
+  }
 }
 
 extern "C" talos_rt_status talos_rt_v1_scheduler_packed_slice_nba(
@@ -1215,7 +1449,7 @@ static talos_rt_status schedulerInertialPath(
       update.sequence = context->nextSchedulerSequence++;
       update.dueTime = dueTime;
       update.inertialSite = site;
-      update.inertialPathDriver = true;
+      update.commitGuard = NBACommitGuard::InertialPath;
       update.inertialPathBit = bit;
       update.inertialPathGeneration =
           pending.generation[static_cast<size_t>(bit)];
@@ -1984,7 +2218,7 @@ static talos_rt_status schedulerInertialPathStrengthPair(
         update.sequence = context->nextSchedulerSequence++;
         update.dueTime = due;
         update.inertialSite = site;
-        update.inertialPathDriver = true;
+        update.commitGuard = NBACommitGuard::InertialPath;
         update.inertialPathStrengthPair = true;
         update.inertialPathStrengthFinal = final;
         update.inertialPathBit = bit;

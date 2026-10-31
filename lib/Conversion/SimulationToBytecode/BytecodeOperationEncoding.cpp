@@ -289,20 +289,11 @@ LogicalResult Encoder::encodeOperation(FunctionPlan &plan,
     bool prioritySignalResume =
         ::talos::schedule::has<::talos::schedule::Field::PrioritySignalResume>(
             callee.function);
-    bool concurrentSignalObserver =
-        ::talos::schedule::has<::talos::schedule::Field::ConcurrentCancel>(
-            callee.function) ||
-        ::talos::schedule::has<::talos::schedule::Field::ConcurrentAbort>(
-            callee.function);
     if (prioritySignalResume &&
-        (!callee.function->hasAttr("internal") || !concurrentSignalObserver ||
-         !::talos::schedule::has<::talos::schedule::Field::DetachedControls>(
-             callee.function) ||
-         entryKind != sim::EntryKind::Fork ||
-         callee.function.getHomeRegion() != sim::EventRegion::Reactive))
+        !sim::isPrioritySignalResumeActor(callee.function))
       return op.emitOpError(
           "priority signal resume is reserved for internal concurrent "
-          "cancellation or abort observers");
+          "cancellation or abort observers, or Active power observers");
     auto programOwner =
         ::talos::schedule::get<::talos::schedule::Field::ProgramOwnerId>(
             callee.function);
@@ -327,6 +318,25 @@ LogicalResult Encoder::encodeOperation(FunctionPlan &plan,
     }
     return emitIntrinsicRegisters(plan, kIntrinsicSpawn, inputs,
                                   {reg(plan, op.getProcess())}, flags);
+  }
+  if (auto op = dyn_cast<sim::SimPowerNBAOp>(operation)) {
+    auto binding = op.getGuard().getDefiningOp<sim::SimObserverBindOp>();
+    auto found = indices.find(binding.getEvaluator());
+    if (found == indices.end())
+      return op.emitError("guard has no bytecode body");
+    SmallVector<uint32_t> inputs;
+    SmallVector<Value> values{op.getValue(),        op.getBacking(),
+                              op.getVisible(),      op.getDomainEpochRef(),
+                              op.getDomainEpoch(),  op.getStrategyEpochRef(),
+                              op.getStrategyEpoch()};
+    for (Value value : values)
+      inputs.push_back(reg(plan, value));
+    uint32_t identity = emitU64Constant(plan, plans[found->second].stableID);
+    if (identity == kInvalidRegister)
+      return op.emitError("cannot encode guard identity");
+    inputs.push_back(identity);
+    return emitIntrinsicRegisters(plan, TALOS_RT_INTRINSIC_V1_POWER_NBA, inputs,
+                                  {});
   }
   if (auto op = dyn_cast<sim::SimNBAEnqueueOp>(operation)) {
     SmallVector<Value> inputs{op.getValue(), op.getDestination()};

@@ -21,6 +21,12 @@ mlir::LogicalResult verifyVPIInterfaceDispatch(SimDesignOp design);
 /// Verifies that a postponed-region function reads state without writing it.
 mlir::LogicalResult verifyPostponedReadOnly(SimFuncOp root);
 
+/// Collect every whole declaration root through CFG argument forwarding.
+/// Reject projected views, local allocations, opaque formals and rootless
+/// cycles. Declaration lifetimes are checked by the design's bulk verifier.
+bool collectWholeStorageRoots(
+    mlir::Value reference, llvm::SmallVectorImpl<SimContextStorageOp> &roots);
+
 /// Verifies an optional typed source-call identity on an executable call.
 mlir::LogicalResult verifyVPICallSite(mlir::Operation *operation,
                                       mlir::SymbolTableCollection &symbols,

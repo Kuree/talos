@@ -1,0 +1,9 @@
+// RUN: %split-file %S/simulation-power-nba.test %t
+// RUN: talos-opt %t/design.mlir --pass-pipeline='builtin.module(simulation.design(symbol-dce,talos-sim-sccp{vpi=off},simulation.func(canonicalize,cse),talos-sim-inline{opt-level=3},simulation.func(canonicalize,mem2reg,cse),talos-sim-alias-port-connections{vpi=off},talos-sim-forward-copy-processes,talos-sim-propagate-initialized-storage{vpi=off},talos-sim-simplify-bodies{vpi=off},simulation.func(canonicalize,mem2reg,cse,talos-sim-thread-suspension),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-compute-fusion{materialize-eval-bodies=true},talos-sim-build-compute-graph,talos-sim-materialize-graph-regions,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},simulation.design(talos-sim-optimize-native-regions),convert-talos-sim-processes-to-llvm-coroutines)' --verify-each -o %t.lowered.mlir
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O0>' | %llc -filetype=obj -relocation-model=pic -o %t.o
+// RUN: %target_cxx %t.o %runtime_link_flags -o %t.exe
+// RUN: %t.exe | FileCheck %S/simulation-power-nba.test
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.opt.o
+// RUN: %target_cxx %t.opt.o %runtime_link_flags -o %t.opt.exe && %t.opt.exe | FileCheck %S/simulation-power-nba.test
+// IEEE 1801-2018 9.7.3: optimization preserves both guarded writes, their
+// read dependencies, cancellation and NBA-time qualification.

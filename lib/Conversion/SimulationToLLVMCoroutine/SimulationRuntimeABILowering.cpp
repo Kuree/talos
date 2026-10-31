@@ -149,6 +149,14 @@ void declareNativeRuntimeABI(ModuleOp module) {
       {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
        IntegerType::get(context, 64)});
   getOrDeclareLLVMFunction(
+      module, "talos_rt_v1_power_nba", IntegerType::get(context, 32),
+      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
+       LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
+       IntegerType::get(context, 64), IntegerType::get(context, 64),
+       IntegerType::get(context, 64), LLVM::LLVMPointerType::get(context),
+       LLVM::LLVMPointerType::get(context),
+       LLVM::LLVMPointerType::get(context)});
+  getOrDeclareLLVMFunction(
       module, "talos_rt_v1_scheduler_nba", IntegerType::get(context, 32),
       {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
        LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),

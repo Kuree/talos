@@ -1,0 +1,7 @@
+// RUN: %split-file %S/simulation-power-nba-wide.test %t
+// RUN: talos-opt %t/design.mlir '--test-talos-set-module-attributes=attrs="{llvm.data_layout = \"e-p:32:32-i64:64-i32:32-i16:16-i8:8\", llvm.target_triple = \"wasm32-unknown-emscripten\"}"' -o %t.wasm.mlir
+// RUN: talos-opt %t.wasm.mlir --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-suspension),talos-sim-build-compute-graph,talos-sim-verify-compute-graph),encode-talos-sim-to-bytecode{vpi=off require-bytecode=true},convert-talos-sim-processes-to-llvm-coroutines)' --verify-each -o %t.lowered.mlir
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' | %llvm_dist/bin/llc -mtriple=wasm32-unknown-emscripten -mattr=+atomics,+bulk-memory -filetype=obj -o %t.o
+// RUN: %llvm_dist/bin/llvm-readobj --file-headers %t.o | FileCheck %s
+// IEEE 1801-2018 9.7.3: guard IDs, epochs and handles stay fixed64 on wasm32.
+// CHECK: AddressSize: 32bit
