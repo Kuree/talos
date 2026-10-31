@@ -1,0 +1,56 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.50/9.7.1: adding consumers to an anonymous always-on
+// supply does not add an external source. Direct primary associations and
+// switch input ports preserve initialization and protected source identity.
+// Required ground/well aliases are sources too, rather than switched outputs.
+// CHECK: anonymous retention supply consumers passed
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1;
+endmodule
+module top;
+  import UPF::*;
+  logic en = 1;
+  wire owner_q, direct_q, switched_q;
+  leaf owner(owner_q), direct(direct_q), switched(switched_q);
+  upfSupplyTypeT value;
+  initial begin
+    value = get_supply_value("/top/PD.R.retention_supply.power");
+    if (value.state != FULL_ON || value.voltage != 1000000) $fatal(1, "consumer changed source");
+    value = get_supply_value("/top/PD.DIRECT_RET.retention_supply.power");
+    if (value.state != FULL_ON || value.voltage != 1000000) $fatal(1, "direct anonymous supplier");
+    value = get_supply_value("/top/PD.BOUND_RET.retention_supply.power");
+    if (value.state != FULL_ON || value.voltage != 1000000) $fatal(1, "late anonymous supplier");
+    #1;
+    if (owner_q !== 1'bx || direct_q !== 1'b1 || switched_q !== 1'b1)
+      $fatal(1, "AON source, ground, or well aliases rejected");
+    en = 0;
+    #1;
+    if (direct_q !== 1'b1 || switched_q !== 1'bx) $fatal(1, "switch behavior");
+    value = get_supply_value("/top/PD.R.retention_supply.power");
+    if (value.state != FULL_ON) $fatal(1, "load change corrupted anonymous source");
+    $display("anonymous retention supply consumers passed");
+    $finish;
+  end
+endmodule
+//--- design.upf
+create_power_domain PD -elements owner
+set_retention R -domain PD -no_retention
+set_retention DIRECT_RET -domain PD -no_retention -retention_supply PD.R.retention_supply
+set_retention BOUND_RET -domain PD -no_retention
+associate_supply_set PD.R.retention_supply -handle PD.BOUND_RET.retention_supply
+create_power_domain DIRECT -elements direct -supply {primary PD.R.retention_supply}
+add_power_state DIRECT.primary -state {ON -supply_expr {power == FULL_ON && ground == FULL_ON && nwell == FULL_ON}}
+create_supply_set SWITCHED -function {ground PD.R.retention_supply.ground}
+create_power_domain SWITCH -elements switched -supply {primary SWITCHED}
+create_power_switch PS -domain SWITCH \
+    -input_supply_port {vin PD.R.retention_supply.power} -output_supply_port {vout SWITCHED.power} \
+    -control_port {e en} -on_state {ON vin e}

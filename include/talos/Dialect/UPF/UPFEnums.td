@@ -59,4 +59,19 @@ def UPFPartialOnTranslation : I32EnumAttr<"PartialOnTranslation",
   let cppNamespace = "::talos::upf";
   let genSpecializedAttr = 0;
 }
+def UPFRetSignal : I32EnumAttrCase<"Signal", 0, "signal">;
+def UPFRetInstance : I32EnumAttrCase<"Instance", 1, "instance">;
+def UPFRetentionElementKind : I32EnumAttr<"RetentionElementKind",
+    "IEEE 1801-2018 5.7.3 retention selection kind", [UPFRetSignal, UPFRetInstance]> {
+  let cppNamespace = "::talos::upf";
+}
+def UPFRetHigh : I32EnumAttrCase<"High", 0, "high">;
+def UPFRetLow : I32EnumAttrCase<"Low", 1, "low">;
+def UPFRetPosedge : I32EnumAttrCase<"Posedge", 2, "posedge">;
+def UPFRetNegedge : I32EnumAttrCase<"Negedge", 3, "negedge">;
+def UPFRetentionTriggerKind : I32EnumAttr<"RetentionTriggerKind",
+    "IEEE 1801-2018 6.50 retention event sense",
+    [UPFRetHigh, UPFRetLow, UPFRetPosedge, UPFRetNegedge]> {
+  let cppNamespace = "::talos::upf";
+}
 #endif

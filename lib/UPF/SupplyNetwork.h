@@ -29,6 +29,9 @@ using SupplyFunctions = std::map<std::string, std::string>;
 using SupplyEquivalences = std::vector<std::pair<SupplyObject, SupplyObject>>;
 struct SupplyRoot {
   bool writable = true, ground = false;
+  // Distinguish a physical source from an unbound abstract function's fallback
+  // source. A downstream port is a load, not evidence of an external driver.
+  bool explicitSource = false;
 };
 struct ResolvedSupplies {
   std::vector<SupplyRoot> roots;

@@ -180,7 +180,11 @@ resolveSupplies(const std::set<std::string> &nets, const SupplyPorts &ports,
     members[connected.find(i)].push_back(aliases.find(i));
   }
   std::vector<unsigned> reached(count, 0);
+  std::set<unsigned> concreteRoots;
+  for (auto &[name, id] : netIDs)
+    concreteRoots.insert(aliases.find(id));
   for (auto &[group, roots] : sources) {
+    bool explicitSource = !roots.empty();
     if (roots.empty())
       roots = fallback[group];
     if (roots.size() > 1) {
@@ -213,6 +217,9 @@ resolveSupplies(const std::set<std::string> &nets, const SupplyPorts &ports,
     unsigned id = result.roots.size();
     rootIDs[group] = id;
     result.roots.push_back({});
+    result.roots.back().explicitSource =
+        explicitSource ||
+        (!roots.empty() && concreteRoots.count(aliases.find(roots.front())));
     if (!roots.empty() && switchSources.count(roots.front()))
       result.roots.back().writable = false;
   }

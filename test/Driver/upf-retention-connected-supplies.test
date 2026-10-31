@@ -1,0 +1,52 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.10/6.50: a strategy's retention supply may be associated
+// later, or bound through its predefined function handle. Such a real supply
+// keeps ordinary OFF initialization and write permissions instead of becoming
+// the anonymous always-on default. Electrical identity preserves aliases.
+// CHECK: connected retention supplies passed
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1;
+endmodule
+module top;
+  import UPF::*;
+  wire q;
+  leaf dut(q);
+  upfSupplyTypeT value;
+  initial begin
+    value = get_supply_value("/top/PD.LATE.retention_supply.power");
+    if (value.state != OFF) $fatal(1, "associated supply assumed on");
+    value = get_supply_value("/top/PD.LIST.retention_supply.power");
+    if (value.state != OFF) $fatal(1, "list association differs from handle binding");
+    value = get_supply_value("/top/PD.BOUND.retention_supply.power");
+    if (value.state != OFF) $fatal(1, "connected supply assumed on");
+    if (!supply_on("/top/AON.power", 0.8) || !supply_on("/top/VRET", 0.9))
+      $fatal(1, "real supply became protected");
+    value = get_supply_value("/top/PD.LATE.retention_supply.power");
+    if (value.state != FULL_ON || value.voltage != 800000) $fatal(1, "associated alias");
+    value = get_supply_value("/top/PD.LIST.retention_supply.power");
+    if (value.state != FULL_ON || value.voltage != 800000) $fatal(1, "list alias");
+    value = get_supply_value("/top/PD.BOUND.retention_supply.power");
+    if (value.state != FULL_ON || value.voltage != 900000) $fatal(1, "bound alias");
+    $display("connected retention supplies passed");
+    $finish;
+  end
+endmodule
+//--- design.upf
+create_power_domain PD -elements dut
+set_retention LATE -domain PD -no_retention
+create_supply_set AON
+associate_supply_set AON -handle PD.LATE.retention_supply
+set_retention LIST -domain PD -no_retention
+associate_supply_set {AON PD.LIST.retention_supply}
+set_retention BOUND -domain PD -no_retention
+create_supply_net VRET
+create_supply_set PD.BOUND.retention_supply -update -function {power VRET}

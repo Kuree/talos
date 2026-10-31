@@ -1,0 +1,56 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.50: no_retention does not infer a retention cell. Its
+// private catalogs must not constrain unretained domain logic. Required supply
+// functions still propagate through associations (4.5.4.7(c)/4.5.5.3).
+// An unspecified verification retention supply is anonymous and always on;
+// its raw query and aliases must agree with its power-state interpretation.
+// CHECK: retention ownership and anonymous supplies passed
+
+//--- design.sv
+module leaf(input logic clk, d, output logic q);
+  always @(posedge clk) q <= d;
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, d = 1;
+  wire q;
+  leaf dut(clk, d, q);
+  upfSupplyTypeT value;
+  initial begin
+    value = get_supply_value("/top/PD.NONE.retention_supply.power");
+    if (value.state != FULL_ON || value.voltage != 1000000) $fatal(1, "anonymous power");
+    value = get_supply_value("/top/PD.NONE.retention_supply.ground");
+    if (value.state != FULL_ON || value.voltage != 0) $fatal(1, "anonymous ground");
+    #1;
+    if (!supply_on("/top/PD.primary.power") || !supply_on("/top/PD.primary.ground", 0.0))
+      $fatal(1, "primary ON");
+    #1 clk = 1;
+    #1;
+    if (q !== 1'bx) $fatal(1, "associated required function was ignored");
+    if (!supply_on("/top/PD.primary.nwell")) $fatal(1, "required nwell ON");
+    clk = 0;
+    #1 clk = 1;
+    #1;
+    if (q !== 1'b1) $fatal(1, "strategy catalog leaked to domain");
+    if (!supply_off("/top/PD.primary.power")) $fatal(1, "primary OFF");
+    #1;
+    if (q !== 1'bx) $fatal(1, "no_retention prevented corruption");
+    if (!supply_on("/top/PD.primary.power")) $fatal(1, "restore primary");
+    #1;
+    if (q !== 1'bx) $fatal(1, "no_retention restored old state");
+    $display("retention ownership and anonymous supplies passed");
+    $finish;
+  end
+endmodule
+//--- design.upf
+create_power_domain PD -elements dut
+set_retention NONE -domain PD -no_retention
+add_power_state PD.NONE.primary_supply -state {ON -supply_expr {power == {FULL_ON 0.8} && nwell == FULL_ON}}
+add_power_state PD.NONE.retention_supply -state {ON -supply_expr {power == FULL_ON && ground == FULL_ON && nwell == FULL_ON}}

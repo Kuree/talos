@@ -7,5 +7,5 @@
 # UPF-SAME: #upf.token<opcode = control, control = "upf_test.power_en">
 # UPF-SAME: isolation_control = "upf_test.iso"
 # SCOPE: UPF execution failed: design scope not found: missing
-# BADCOMMAND: invalid command name "set_retention"
+# BADCOMMAND: invalid command name "set_level_shifter"
 # TWO: initial UPF implementation requires four-state simulation

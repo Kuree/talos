@@ -1402,6 +1402,22 @@ struct ElaborateUPFPass
         getOperation().getOps<upf::UPFSupplyOp>());
     SmallVector<upf::UPFSupplySetOp> sets(
         getOperation().getOps<upf::UPFSupplySetOp>());
+    // Retention's separate backing/output state and NBA priorities (9.7) must
+    // be lowered together. Until that path exists, never silently simulate a
+    // saved register as an ordinary corrupt-on-power-loss register.
+    for (auto domain : domains)
+      if (auto retentions = domain.getRetentionsAttr())
+        for (auto attribute : retentions) {
+          auto retention = cast<upf::RetentionAttr>(attribute);
+          if (!retention.getNoRetention()) {
+            emitError(retention.getDeclaration()
+                          ? Location(retention.getDeclaration())
+                          : domain.getLoc())
+                << "retention simulation lowering is not implemented";
+            signalPassFailure();
+            return;
+          }
+        }
     bool accesses = false;
     getOperation().walk([&](Operation *op) {
       accesses |= isa<sim::SimSupplyControlOp, sim::SimSupplyReadOp>(op);

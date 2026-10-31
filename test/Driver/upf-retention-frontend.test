@@ -1,0 +1,118 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf --upf %t/finish.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.mlir | FileCheck %s --check-prefix=TCL
+// RUN: talos-opt %t.mlir | talos-opt | FileCheck %s --check-prefix=IR
+// RUN: not talos --upf %t/incomplete.upf -emit-slang %t/design.sv -o %t.bad.mlir 2>&1 | FileCheck %s --check-prefix=INCOMPLETE
+// RUN: not talos --upf %t/design.upf --upf %t/finish.upf -O0 %t/design.sv -o %t.sim 2>&1 | FileCheck %s --check-prefix=LOWERING
+// IEEE 1801-2018 5.7.3/5.9/6.50/8.3.2: preserve selection provenance and
+// explicit empty selection; merge updates before applying defaults. Conditions
+// and signals use the command scope, independent of switch expression flags.
+// 6.10: implicit strategy handles own local catalogs and one association each.
+// TCL: retention frontend and rollback passed
+// IR: upf.supply_set @"/top/PD.R.primary_supply"
+// IR-SAME: required ["ground", "nwell", "power"]
+// IR-SAME: strategy = "R"
+// IR: upf.supply_set @"/top/PD.R.retention_supply"
+// IR-SAME: strategy = "R"
+// IR: upf.supply_set @"/top/PD.primary"
+// IR-SAME: required ["ground", "nwell", "power"]
+// IR: upf.domain @top.PD
+// IR-SAME: name = "CHILD", scope = "top.other"
+// IR-SAME: name = "EMPTY"
+// IR-SAME: elements = []
+// IR-SAME: name = "MASTER"
+// IR-SAME: domainDefault = true
+// IR-SAME: name = "R"
+// IR-SAME: path = "top.dut", kind = instance
+// IR-SAME: path = "top.dut.q", kind = signal
+// IR-SAME: path = "top.other.q", kind = signal
+// IR-SAME: excluded = [#upf.retention_element<path = "top.dut.comb", kind = signal>]
+// IR-SAME: kind = high
+// IR-SAME: kind = negedge
+// IR-SAME: saveCondition = <
+// IR-SAME: declaration = #loc
+// INCOMPLETE: incomplete.upf":2:1
+// INCOMPLETE: retention requires a save/restore signal or retention condition
+// LOWERING: retention simulation lowering is not implemented
+
+//--- design.sv
+module leaf;
+  logic clk, enable;
+  logic [64:0] q;
+  wire comb = enable;
+  always @(posedge clk) q <= q + 1;
+endmodule
+module top;
+  logic save, restore, ret;
+  logic [1:0] controls, mode;
+  leaf dut(), other();
+endmodule
+//--- design.upf
+proc expect_error {script pattern} {
+    set code [catch {uplevel 1 $script} message]
+    if {$code != 1 || ![string match $pattern $message]} {
+        error "expected <$pattern>, got code $code <$message>"
+    }
+}
+create_power_domain PD -elements dut -supply {TAKEN}
+expect_error {set_retention primary -domain PD -no_retention} {*name conflicts*}
+expect_error {set_retention TAKEN -domain PD -no_retention} {*name conflicts*}
+create_supply_set AON
+create_supply_set SECOND
+expect_error {set_retention R -domain PD -retention_supply missing} {*unknown retention supply*}
+expect_error {set_retention R -domain PD -save_signal {save}} {*retention signal requires*}
+expect_error {set_retention R -domain PD -save_signal {save TRUE}} {*sense must be*}
+expect_error {set_retention R -domain PD -save_signal {controls high}} {*scalar HDL*}
+expect_error {set_retention R -domain PD -save_signal {absent high}} {*not found*}
+expect_error {set_retention R -domain PD -save_condition {save &&}} {*Boolean expression*}
+expect_error {set_retention R -domain PD -elements {dut/q[0]}} {*unsupported retention selector*}
+expect_error {set_retention R -domain PD -use_retention_as_primary} {*unsupported set_retention option*}
+expect_error {set_retention R -domain PD -parameters {RET_SUP_COR NO_RET_SUP_COR}} {*conflicting retention corruption*}
+expect_error {set_retention R -domain PD -parameters {NO_SAV_RES_COR}} {*unsupported retention corruption*}
+expect_error {set_retention R -domain PD -update} {*unknown retention strategy*}
+# Deferred completeness and defaults: this base call deliberately has no style.
+if {[set_retention R -domain PD -elements {dut/q dut/q other/q} -exclude_elements {dut/comb}] ne ""} {error "return"}
+expect_error {set_retention R -domain PD} {*already exists*}
+expect_error {set_retention R -domain PD -update -retention_supply AON -save_signal {save high} -restore_signal {missing low}} {*not found*}
+# The failed update above must not have committed either its supply or trigger.
+set_retention R -domain PD -update -retention_supply SECOND -save_signal {controls[1] high}
+expect_error {set_retention R -domain PD -update -retention_supply AON} {*more than one supply set*}
+expect_error {set_retention R -domain PD -update -save_signal {save low}} {*conflicting or unsupported retention trigger*}
+expect_error {associate_supply_set {AON SECOND} -handle PD.R.retention_supply} {*more than one supply set*}
+associate_supply_set SECOND -handle PD.R.retention_supply
+associate_supply_set PD.R.primary_supply -handle PD.R.primary_supply
+associate_supply_set PD.R.primary_supply -handle PD.R.primary_supply
+set_retention R -domain PD -update -elements {dut} -exclude_elements {dut/comb} \
+    -save_condition {mode == 2'b10 && save} -parameters {RET_SUP_COR SAV_RES_COR}
+expect_error {set_retention R -domain PD -update -save_condition {!save}} {*conflicting or unsupported retention condition*}
+set_retention EMPTY -domain PD -elements {} -restore_signal {restore low}
+set_retention MASTER -domain PD -retention_condition ret
+associate_supply_set PD.MASTER.retention_supply -handle PD.MASTER.retention_supply
+set_scope other
+expect_error {create_supply_set /PD.R.retention_supply -update -function {nwell AON.nwell}} {*original*scope*}
+set_retention CHILD -domain /PD -elements q -save_signal {enable posedge}
+set_retention CHILD -domain /PD -update -restore_condition {enable || 1'bx}
+create_supply_net LOCAL_RET
+create_supply_set /PD.CHILD.retention_supply -update -function {power LOCAL_RET}
+set_scope /
+expect_error {set_retention CHILD -domain PD -update -elements {dut}} {*original*scope*}
+expect_error {create_supply_set PD.CHILD.retention_supply -update -function {ground AON.ground}} {*original*scope*}
+create_supply_set PD.R.retention_supply -update -function {nwell SECOND.nwell}
+set_retention NONE -domain PD -elements dut/comb -no_retention
+set isolation {-domain PD -isolation_signal save -isolation_sense high -clamp_value 0 -applies_to outputs -location parent}
+expect_error {set_isolation R {*}$isolation} {*name conflicts*}
+expect_error {set_isolation TAKEN {*}$isolation} {*name conflicts*}
+set_isolation ISO {*}$isolation
+expect_error {set_retention ISO -domain PD -no_retention} {*name conflicts*}
+# This catalog belongs to selected retention cells, never the whole domain.
+add_power_state PD.R.primary_supply -state {ON -supply_expr {power == FULL_ON && nwell == FULL_ON}}
+# List-form equivalence can associate several catalogs; -handle still has
+# one explicit supplier binding. Duplicate/self equivalences are idempotent.
+associate_supply_set {PD.R.retention_supply SECOND SECOND AON}
+associate_supply_set {PD.MASTER.retention_supply PD.MASTER.retention_supply}
+puts "retention frontend and rollback passed"
+//--- finish.upf
+set_retention R -domain PD -update -restore_signal {restore negedge}
+//--- incomplete.upf
+create_power_domain PD -elements dut -supply {TAKEN}
+set_retention incomplete -domain PD -elements dut/q

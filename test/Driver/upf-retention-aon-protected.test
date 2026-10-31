@@ -1,0 +1,37 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: not %t.o0 2>&1 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: not %t.o3 2>&1 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: not %t.bc 2>&1 | FileCheck %s
+// IEEE 1801-2018 6.50/9.7.1: the verification AON assumption stays protected
+// through function aliases, including direct-domain primary aliases.
+// CHECK: UPF supply control failed for
+// CHECK: anonymous retention supply protected through aliases
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1;
+endmodule
+module top;
+  import UPF::*;
+  wire qa, qb;
+  leaf a(qa), b(qb);
+  upfSupplyTypeT value;
+  initial begin
+    if (supply_off("/top/COPY.power")) $fatal(1, "anonymous supply became writable");
+    value = get_supply_value("/top/PD.R.retention_supply.power");
+    if (value.state != FULL_ON || value.voltage != 1000000) $fatal(1, "write changed assumed supply");
+    #1;
+    if (qb !== 1'b1) $fatal(1, "alias domain lost power");
+    $display("anonymous retention supply protected through aliases");
+    $finish;
+  end
+endmodule
+//--- design.upf
+create_power_domain PD -elements a
+set_retention R -domain PD -no_retention
+create_supply_set COPY -function {power PD.R.retention_supply.power} -function {ground PD.R.retention_supply.ground}
+create_power_domain ALIAS -elements b -supply {primary COPY}

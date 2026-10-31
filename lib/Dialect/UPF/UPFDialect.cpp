@@ -127,6 +127,11 @@ PowerStateAttr::verify(llvm::function_ref<mlir::InFlightDiagnostic()> error,
   return mlir::success();
 }
 mlir::LogicalResult UPFSupplyOp::verify() {
+  // 6.50/9.7.1: anonymous verification retention supplies are sources with
+  // fixed FULL_ON values, distinct from a switch's computed output root.
+  if (getAlwaysOn() && (getWritable() || (getInitialValue() & 3) != 1))
+    return emitOpError(
+        "always-on supply must be protected and initially FULL_ON");
   // IEEE 1801-2018 9.2.1 and 11.2: one packed value per root, not per name.
   // Bits [1:0] are supply state; [33:2] are signed32 microvolt bits.
   if (getNames().empty())
@@ -151,6 +156,29 @@ UPFSupplySetOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
   if (auto owner = getOwnerAttr();
       owner && !symbols.lookupNearestSymbolFrom<UPFDomainOp>(*this, owner))
     return emitOpError("references an unknown owning domain");
+  if (auto strategy = getStrategyAttr()) {
+    auto owner =
+        symbols.lookupNearestSymbolFrom<UPFDomainOp>(*this, getOwnerAttr());
+    bool found = false;
+    if (auto retentions = owner.getRetentionsAttr())
+      for (auto attribute : retentions) {
+        auto retention = mlir::cast<RetentionAttr>(attribute);
+        found |= retention.getName() == strategy &&
+                 (retention.getRetentionSupply().getValue() == getSymName() ||
+                  retention.getPrimarySupply().getValue() == getSymName());
+      }
+    if (!found)
+      return emitOpError("references an unknown owning retention strategy");
+  }
+  if (auto binding = getBindingAttr()) {
+    auto links = getAssociatedAttr();
+    if (!getStrategyAttr() ||
+        !symbols.lookupNearestSymbolFrom<UPFSupplySetOp>(*this, binding) ||
+        binding.getValue() == getSymName() || !links ||
+        !llvm::is_contained(links, binding))
+      return emitOpError(
+          "strategy binding must reference an associated supplier");
+  }
   if (auto links = getAssociatedAttr())
     for (auto attr : links) {
       auto other = symbols.lookupNearestSymbolFrom<UPFSupplySetOp>(
@@ -189,7 +217,7 @@ UPFSupplySetOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
             *this, token.getSupply());
         if (!root)
           return emitOpError("predicate references an unknown supply root");
-        if (!root.getWritable() &&
+        if (!root.getWritable() && !root.getAlwaysOn() &&
             token.getSupply() != getFunctions().get("power"))
           return emitOpError("predicates on other computed switch outputs are "
                              "not implemented");
@@ -220,6 +248,10 @@ UPFSupplySetOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
   return mlir::success();
 }
 mlir::LogicalResult UPFSupplySetOp::verify() {
+  if (auto strategy = getStrategyAttr();
+      strategy && (strategy.getValue().empty() || !getOwnerAttr()))
+    return emitOpError(
+        "strategy supply handle requires a name and owning domain");
   // IEEE 1801-2018 6.26: all six functions exist; requiredness is separate
   // and usage-derived (4.5.4.7). Set identity survives electrical association.
   if (getFunctions().size() != getSupplyFunctionNames().size())
@@ -260,10 +292,52 @@ UPFDomainOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
   for (auto ref : {getPowerAttr(), getGroundAttr(), getInputAttr()})
     if (ref && !symbols.lookupNearestSymbolFrom<UPFSupplyOp>(*this, ref))
       return emitOpError("references an unknown supply root: ") << ref;
+  // IEEE 1801-2018 5.3.3.2/6.10: strategy supply handles have a role distinct
+  // from domain-wide auxiliary suppliers, even when their roots are shared.
+  if (auto retentions = getRetentionsAttr()) {
+    for (auto attribute : retentions) {
+      auto retention = mlir::cast<RetentionAttr>(attribute);
+      if (auto primary = getPrimaryAttr();
+          primary && primary.getValue().ends_with(".primary")) {
+        std::string stem = primary.getValue().drop_back(8).str() + "." +
+                           retention.getName().str();
+        if (symbols.lookupNearestSymbolFrom<UPFSupplySetOp>(
+                *this, mlir::FlatSymbolRefAttr::get(getContext(), stem)))
+          return emitOpError(
+              "retention strategy name conflicts with a domain supply handle");
+      }
+      for (auto ref :
+           {retention.getRetentionSupply(), retention.getPrimarySupply()}) {
+        auto set = symbols.lookupNearestSymbolFrom<UPFSupplySetOp>(*this, ref);
+        if (!set)
+          return emitOpError(
+                     "retention references an unknown supply-set handle: ")
+                 << ref;
+        if (!set.getOwnerAttr() ||
+            set.getOwnerAttr().getValue() != getSymName() ||
+            set.getStrategyAttr() != retention.getName())
+          return emitOpError("retention supply handles require matching domain "
+                             "and strategy ownership");
+      }
+    }
+  }
   if (auto primary = getPrimaryAttr()) {
     auto set = symbols.lookupNearestSymbolFrom<UPFSupplySetOp>(*this, primary);
     if (!set)
       return emitOpError("references an unknown primary supply set");
+    if (set.getStrategyAttr())
+      return emitOpError("domain primary cannot be a strategy-local handle");
+    if (auto retentions = getRetentionsAttr())
+      for (auto attribute : retentions) {
+        auto retention = mlir::cast<RetentionAttr>(attribute);
+        auto strategyPrimary = symbols.lookupNearestSymbolFrom<UPFSupplySetOp>(
+            *this, retention.getPrimarySupply());
+        for (auto function : getSupplyFunctionNames())
+          if (strategyPrimary.getFunctions().get(function) !=
+              set.getFunctions().get(function))
+            return emitOpError(
+                "retention primary handle must share the domain primary roots");
+      }
     if (auto owner = set.getOwnerAttr();
         owner && owner.getValue() != getSymName())
       return emitOpError("primary supply handle must be owned by this domain");
@@ -284,7 +358,7 @@ UPFDomainOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
             current != set && domain.getPrimaryAttr() &&
             domain.getPrimaryAttr().getValue() == current.getSymName();
       }
-      if (!otherPrimary)
+      if (!otherPrimary && !current.getStrategyAttr())
         applicable.insert(current.getSymName());
       if (auto links = current.getAssociatedAttr())
         for (auto attr : links) {
@@ -303,6 +377,9 @@ UPFDomainOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
             symbols.lookupNearestSymbolFrom<UPFSupplySetOp>(*this, ref);
         if (!policy || !names.insert(ref.getValue()).second)
           return emitOpError("policies require unique supply-set references");
+        if (policy.getStrategyAttr())
+          return emitOpError(
+              "strategy-local supply catalogs are not domain-wide policies");
         if (auto owner = policy.getOwnerAttr(); owner && ref != primary) {
           auto domain =
               symbols.lookupNearestSymbolFrom<UPFDomainOp>(*this, owner);
@@ -343,7 +420,8 @@ UPFDomainOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
           set.getFunctions().get(function.getKey()));
       auto root = ref ? symbols.lookupNearestSymbolFrom<UPFSupplyOp>(*this, ref)
                       : UPFSupplyOp{};
-      if (root && ref != getPowerAttr() && !root.getWritable())
+      if (root && ref != getPowerAttr() && !root.getWritable() &&
+          !root.getAlwaysOn())
         return emitOpError("required auxiliary functions must have independent "
                            "writable roots");
     }
@@ -356,19 +434,24 @@ UPFDomainOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
     return symbols.lookupNearestSymbolFrom<UPFSupplyOp>(*this, ref)
         .getWritable();
   };
+  auto source = [&](mlir::FlatSymbolRefAttr ref) {
+    return writable(ref) ||
+           symbols.lookupNearestSymbolFrom<UPFSupplyOp>(*this, ref)
+               .getAlwaysOn();
+  };
   if (auto input = getInputAttr()) {
-    if (writable(getPowerAttr()))
+    if (source(getPowerAttr()))
       return emitOpError("switch output supply root must not be writable");
-    if (!writable(input))
+    if (!source(input))
       return emitOpError("switch input supply root must be writable");
     for (auto other : (*this)->getBlock()->getOps<UPFDomainOp>())
       if (other != *this && other.getInputAttr() &&
           other.getPowerAttr() == getPowerAttr())
         return emitOpError("multiple switches drive the same supply root");
-  } else if (!writable(getPowerAttr())) {
+  } else if (!source(getPowerAttr())) {
     return emitOpError("direct domain power supply root must be writable");
   }
-  if (getGroundAttr() && !writable(getGroundAttr()))
+  if (getGroundAttr() && !source(getGroundAttr()))
     return emitOpError("primary ground supply root must be writable");
   return mlir::success();
 }
@@ -386,6 +469,9 @@ mlir::LogicalResult UPFDomainOp::verify() {
   if (getPoliciesAttr() && !getPrimaryAttr())
     return emitOpError(
         "primary policies require a primary supply-set reference");
+  if (getRetentionsAttr() && !getRetentionsAttr().empty() && !getPrimaryAttr())
+    return emitOpError(
+        "retention strategies require a primary supply-set reference");
   if (getElements().empty())
     return emitOpError("requires domain elements");
   for (auto element : getElements())
@@ -393,6 +479,9 @@ mlir::LogicalResult UPFDomainOp::verify() {
       return emitOpError("domain element must not be empty");
   if (auto isolation = getIsolationControl(); isolation && isolation->empty())
     return emitOpError("isolation control must not be empty");
+  if (auto name = getIsolationName();
+      name && (name->empty() || !getIsolationControl()))
+    return emitOpError("isolation strategy name requires an isolation control");
   if (getClamp() != 0 && getClamp() != 1)
     return emitOpError("isolation clamp must be zero or one");
   if (!getInputAttr() &&
@@ -426,6 +515,82 @@ mlir::LogicalResult UPFDomainOp::verify() {
     if (tokens > 65536)
       return emitOpError("power switch exceeds 65536 expression tokens");
   }
+  if (auto retentions = getRetentionsAttr()) {
+    if (retentions.size() > 256)
+      return emitOpError("power domain exceeds 256 retention strategies");
+    llvm::StringSet<> strategies;
+    size_t tokens = 0;
+    for (auto attribute : retentions) {
+      auto retention = mlir::cast<RetentionAttr>(attribute);
+      if (retention.getName().getValue() == "primary" ||
+          getIsolationNameAttr() == retention.getName())
+        return emitOpError("retention strategy name conflicts with another "
+                           "object in the domain");
+      if (!strategies.insert(retention.getName().getValue()).second)
+        return emitOpError("duplicate retention strategy name");
+      for (auto expression :
+           {retention.getSaveCondition(), retention.getRestoreCondition(),
+            retention.getCondition()})
+        if (expression)
+          tokens += expression.getTokens().size();
+    }
+    if (tokens > 65536)
+      return emitOpError(
+          "power domain exceeds 65536 retention expression tokens");
+  }
+  return mlir::success();
+}
+
+mlir::LogicalResult RetentionElementAttr::verify(
+    llvm::function_ref<mlir::InFlightDiagnostic()> error, mlir::StringAttr path,
+    RetentionElementKind kind) {
+  if (!path || path.getValue().empty())
+    return error() << "retention selector requires a nonempty HDL path";
+  if (kind != RetentionElementKind::Signal &&
+      kind != RetentionElementKind::Instance)
+    return error() << "unsupported retention selector kind";
+  return mlir::success();
+}
+mlir::LogicalResult RetentionTriggerAttr::verify(
+    llvm::function_ref<mlir::InFlightDiagnostic()> error,
+    ExpressionTokenAttr control, RetentionTriggerKind kind) {
+  if (!control || control.getOpcode() != ExpressionOpcode::Control ||
+      control.getWidth() != 1)
+    return error()
+           << "retention trigger requires a scalar HDL control reference";
+  if (static_cast<unsigned>(kind) >
+      static_cast<unsigned>(RetentionTriggerKind::Negedge))
+    return error() << "unsupported retention trigger kind";
+  return mlir::success();
+}
+mlir::LogicalResult RetentionAttr::verify(
+    llvm::function_ref<mlir::InFlightDiagnostic()> error, mlir::StringAttr name,
+    mlir::StringAttr scope, mlir::ArrayAttr elements, mlir::ArrayAttr excluded,
+    mlir::FlatSymbolRefAttr retentionSupply,
+    mlir::FlatSymbolRefAttr primarySupply, bool domainDefault, bool noRetention,
+    RetentionTriggerAttr save, RetentionTriggerAttr restore,
+    ExpressionAttr saveCondition, ExpressionAttr restoreCondition,
+    ExpressionAttr condition, mlir::LocationAttr declaration) {
+  if (!name || name.getValue().empty() || !scope || scope.getValue().empty())
+    return error() << "retention strategy requires a name and execution scope";
+  for (auto selectors : {elements, excluded}) {
+    if (!selectors || selectors.size() > 4096)
+      return error() << "retention selection exceeds 4096 elements";
+    for (auto selector : selectors)
+      if (!mlir::isa<RetentionElementAttr>(selector))
+        return error() << "retention selection requires typed HDL selectors";
+  }
+  if (domainDefault && !elements.empty())
+    return error()
+           << "default domain retention cannot also have explicit selectors";
+  if (!retentionSupply || !primarySupply || retentionSupply == primarySupply)
+    return error() << "retention strategy requires distinct primary and "
+                      "retention handles";
+  // 6.50/9.7.3: one or both event controls selects balloon style; otherwise
+  // RTC is required for master/slave-alive retention. no_retention exempts it.
+  if (!noRetention && !save && !restore && !condition)
+    return error()
+           << "retention requires a save/restore signal or retention condition";
   return mlir::success();
 }
 

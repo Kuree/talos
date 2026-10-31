@@ -7,7 +7,8 @@ include "mlir/IR/SymbolInterfaces.td"
 def UPFSupplyOp : Op<UPFDialect, "supply", [Symbol]> {
   let summary = "one shared root supply value and its absolute handle aliases";
   let arguments = (ins SymbolNameAttr:$sym_name, StrArrayAttr:$names,
-      BoolAttr:$writable, DefaultValuedAttr<I64Attr, "0">:$initial_value);
+      BoolAttr:$writable, DefaultValuedAttr<I64Attr, "0">:$initial_value,
+      DefaultValuedAttr<BoolAttr, "false">:$always_on);
   let assemblyFormat = "$sym_name `names` $names `writable` `=` $writable attr-dict";
   let hasVerifier = 1;
 }
@@ -18,7 +19,9 @@ def UPFSupplySetOp : Op<UPFDialect, "supply_set", [Symbol,
       StrArrayAttr:$required, OptionalAttr<UPFPowerStateArrayAttr>:$states,
       OptionalAttr<FlatSymbolRefArrayAttr>:$associated,
       OptionalAttr<FlatSymbolRefAttr>:$owner,
-      DefaultValuedAttr<BoolAttr, "false">:$complete);
+      DefaultValuedAttr<BoolAttr, "false">:$complete,
+      OptionalAttr<StrAttr>:$strategy,
+      OptionalAttr<FlatSymbolRefAttr>:$binding);
   let assemblyFormat = "$sym_name `functions` $functions `required` $required attr-dict";
   let hasVerifier = 1;
 }
@@ -35,7 +38,9 @@ def UPFDomainOp : Op<UPFDialect, "domain", [Symbol,
       OptionalAttr<UPFSwitchStateArrayAttr>:$errors,
       OptionalAttr<StrAttr>:$isolation_control,
       DefaultValuedAttr<BoolAttr, "true">:$isolation_high,
-      DefaultValuedAttr<I64Attr, "0">:$clamp);
+      DefaultValuedAttr<I64Attr, "0">:$clamp,
+      OptionalAttr<UPFRetentionArrayAttr>:$retentions,
+      OptionalAttr<StrAttr>:$isolation_name);
   let assemblyFormat = "$sym_name `elements` $elements `power` $power `on` $on attr-dict";
   let hasVerifier = 1;
 }

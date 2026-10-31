@@ -1,0 +1,46 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.mlir | FileCheck %s
+// IEEE 1801-2018 5.11/6.50/8.3.2: exact implementation resource limits are
+// accepted; overflow errors are catchable and leave the previous edit intact.
+// Duplicates are legal selectors (5.9) and do not consume new selection slots.
+// CHECK: retention resource bounds and rollback passed
+
+//--- design.sv
+module leaf;
+  for (genvar i = 0; i < 4097; ++i) begin:g
+    logic q;
+  end
+endmodule
+module top;
+  logic ctrl;
+  leaf dut();
+endmodule
+//--- design.upf
+proc expect_error {script pattern} {
+    set code [catch {uplevel 1 $script} message]
+    if {$code != 1 || ![string match $pattern $message]} {
+        error "expected <$pattern>, got code $code <$message>"
+    }
+}
+create_power_domain STRATEGIES -elements dut
+for {set i 0} {$i < 256} {incr i} {set_retention R$i -domain STRATEGIES -no_retention}
+expect_error {set_retention overflow -domain STRATEGIES -no_retention} {*256 retention strategies*}
+set_retention R255 -domain STRATEGIES -update -elements {}
+create_power_domain SELECTORS -elements dut
+set names {}
+for {set i 0} {$i < 4096} {incr i} {lappend names [format {dut/g[%d]/q} $i]}
+set_retention R -domain SELECTORS -no_retention -elements $names
+expect_error {set_retention R -domain SELECTORS -update -elements {dut/g[4096]/q}} {*4096 elements*}
+set_retention R -domain SELECTORS -update -elements {dut/g[0]/q}
+create_power_domain TOKENS -elements dut
+set expression ctrl
+for {set i 0} {$i < 9} {incr i} {set expression "($expression || $expression)"}
+set expression "!($expression)"
+# 512 references + 511 binary operators + one unary operator = 1024 tokens.
+for {set i 0} {$i < 64} {incr i} {
+    set_retention R$i -domain TOKENS -retention_condition $expression
+}
+expect_error {set_retention overflow -domain TOKENS -retention_condition ctrl} {*65536 retention expression tokens*}
+set_retention overflow -domain TOKENS -no_retention
+puts "retention resource bounds and rollback passed"

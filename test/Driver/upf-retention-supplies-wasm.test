@@ -1,0 +1,11 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-retention-aon-consumers.test %t/consumers
+// RUN: %split-file %S/upf-retention-connected-supplies.test %t/connected
+// RUN: %split-file %S/upf-retention-aon-protected.test %t/protected
+// RUN: talos --upf %t/consumers/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/consumers/design.sv -o %t.consumers.o
+// RUN: talos --upf %t/connected/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/connected/design.sv -o %t.connected.o
+// RUN: talos --upf %t/protected/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/protected/design.sv -o %t.protected.o
+// RUN: %llvm_dist/bin/llvm-readobj --file-headers %t.consumers.o %t.connected.o %t.protected.o | FileCheck %s
+// IEEE 1801-2018 6.50/9.7.1: source identity and protection preserve the
+// shared packed64 values independently of wasm32's 32-bit target pointers.
+// CHECK-COUNT-3: AddressSize: 32bit

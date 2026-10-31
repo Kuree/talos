@@ -1,0 +1,88 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/valid.mlir | talos-opt | FileCheck %s
+// RUN: talos-opt --split-input-file --verify-diagnostics %t/invalid.mlir
+// IEEE 1801-2018 5.7.3/6.10/6.50: retain selectors, typed control senses,
+// local supply ownership and predicate trees, and reject malformed metadata.
+// CHECK: upf.domain
+// CHECK-SAME: retentions = [#upf.retention<name = "R"
+// CHECK-SAME: domainDefault = true
+// CHECK-SAME: condition = <
+
+//--- valid.mlir
+#one = #upf.expression<[#upf.token<opcode = constant, value = true, unknown = false>]>
+module {
+  upf.supply @p names ["/top/P"] writable = true
+  upf.supply @g names ["/top/G"] writable = true
+  upf.supply @b names ["/top/B"] writable = true
+  upf.supply_set @primary functions {power = @p, ground = @g, nwell = @b, pwell = @b, deepnwell = @b, deeppwell = @b} required ["power", "ground", "nwell"] {owner = @PD, associated = [@local]}
+  upf.supply_set @local functions {power = @p, ground = @g, nwell = @b, pwell = @b, deepnwell = @b, deeppwell = @b} required ["power", "ground", "nwell"] {owner = @PD, strategy = "R", associated = [@primary]}
+  upf.supply_set @ret functions {power = @p, ground = @g, nwell = @b, pwell = @b, deepnwell = @b, deeppwell = @b} required ["power", "ground"] {owner = @PD, strategy = "R"}
+  upf.domain @PD elements ["top.dut"] power @p on [] {ground = @g, primary = @primary, policies = [@primary], retentions = [#upf.retention<name = "R", scope = "top", elements = [], excluded = [], retentionSupply = @ret, primarySupply = @local, domainDefault = true, condition = #one>]}
+}
+module {
+  upf.supply @source names ["/top/AON"] writable = false {always_on = true, initial_value = 4000001 : i64}
+  upf.supply @ground names ["/top/GND"] writable = false {always_on = true, initial_value = 1 : i64}
+  upf.supply @out names ["/top/OUT"] writable = false
+  upf.domain @direct elements ["top.direct"] power @source on [] {ground = @ground}
+  upf.domain @switch elements ["top.switch"] power @out on [#upf.state<name = "ON", condition = #one>] {input = @source, ground = @ground}
+}
+//--- invalid.mlir
+// expected-error @+1 {{retention selector requires a nonempty HDL path}}
+#bad = #upf.retention_element<path = "", kind = signal>
+// -----
+// expected-error @+1 {{retention trigger requires a scalar HDL control reference}}
+#bad = #upf.retention_trigger<control = #upf.token<opcode = constant, value = true, unknown = false>, kind = high>
+// -----
+// expected-error @+1 {{retention trigger requires a scalar HDL control reference}}
+#bad = #upf.retention_trigger<control = #upf.token<opcode = control, control = "top.wide", width = 2, sourceWidth = 2>, kind = posedge>
+// -----
+// expected-error @+1 {{retention requires a save/restore signal or retention condition}}
+#bad = #upf.retention<name = "R", scope = "top", elements = [], excluded = [], retentionSupply = @ret, primarySupply = @local>
+// -----
+// expected-error @+1 {{retention selection requires typed HDL selectors}}
+#bad = #upf.retention<name = "R", scope = "top", elements = ["top.dut"], excluded = [], retentionSupply = @ret, primarySupply = @local>
+// -----
+// expected-error @+1 {{retention strategy requires distinct primary and retention handles}}
+#bad = #upf.retention<name = "R", scope = "top", elements = [], excluded = [], retentionSupply = @ret, primarySupply = @ret>
+// -----
+// expected-error @+1 {{default domain retention cannot also have explicit selectors}}
+#bad = #upf.retention<name = "R", scope = "top", elements = [#upf.retention_element<path = "top.dut", kind = instance>], excluded = [], retentionSupply = @ret, primarySupply = @local, domainDefault = true>
+// -----
+#one = #upf.expression<[#upf.token<opcode = constant, value = true, unknown = false>]>
+module {
+  upf.supply @p names ["/top/P"] writable = true
+  upf.supply @g names ["/top/G"] writable = true
+  upf.supply @b names ["/top/B"] writable = true
+  upf.supply_set @primary functions {power = @p, ground = @g, nwell = @b, pwell = @b, deepnwell = @b, deeppwell = @b} required ["power", "ground", "nwell"] {owner = @PD, associated = [@local]}
+  upf.supply_set @local functions {power = @p, ground = @g, nwell = @b, pwell = @b, deepnwell = @b, deeppwell = @b} required ["power", "ground", "nwell"] {owner = @PD, strategy = "R", associated = [@primary]}
+  // expected-error @+1 {{retention references an unknown supply-set handle}}
+  upf.domain @PD elements ["top.dut"] power @p on [] {ground = @g, primary = @primary, policies = [@primary], retentions = [#upf.retention<name = "R", scope = "top", elements = [], excluded = [], retentionSupply = @missing, primarySupply = @local, domainDefault = true, condition = #one>]}
+}
+// -----
+#one = #upf.expression<[#upf.token<opcode = constant, value = true, unknown = false>]>
+module {
+  upf.supply @p names ["/top/P"] writable = true
+  upf.supply @g names ["/top/G"] writable = true
+  upf.supply @b names ["/top/B"] writable = true
+  upf.supply_set @primary functions {power = @p, ground = @g, nwell = @b, pwell = @b, deepnwell = @b, deeppwell = @b} required ["power", "ground", "nwell"] {owner = @PD, associated = [@local]}
+  upf.supply_set @local functions {power = @p, ground = @g, nwell = @b, pwell = @b, deepnwell = @b, deeppwell = @b} required ["power", "ground", "nwell"] {owner = @PD, strategy = "R", associated = [@primary]}
+  upf.supply_set @ret functions {power = @p, ground = @g, nwell = @b, pwell = @b, deepnwell = @b, deeppwell = @b} required ["power", "ground"] {owner = @PD, strategy = "R"}
+  // expected-error @+1 {{strategy-local supply catalogs are not domain-wide policies}}
+  upf.domain @PD elements ["top.dut"] power @p on [] {ground = @g, primary = @primary, policies = [@primary, @local], retentions = [#upf.retention<name = "R", scope = "top", elements = [], excluded = [], retentionSupply = @ret, primarySupply = @local, domainDefault = true, condition = #one>]}
+}
+// -----
+module {
+  upf.supply @p names ["/top/P"] writable = true
+  // expected-error @+1 {{strategy supply handle requires a name and owning domain}}
+  upf.supply_set @local functions {power = @p, ground = @p, nwell = @p, pwell = @p, deepnwell = @p, deeppwell = @p} required [] {strategy = "R"}
+}
+// -----
+module {
+  // expected-error @+1 {{always-on supply must be protected and initially FULL_ON}}
+  upf.supply @bad names ["/top/BAD"] writable = true {always_on = true, initial_value = 1 : i64}
+}
+// -----
+module {
+  // expected-error @+1 {{always-on supply must be protected and initially FULL_ON}}
+  upf.supply @bad names ["/top/BAD"] writable = false {always_on = true}
+}

@@ -35,6 +35,45 @@ def UPFExpressionAttr : UPFAttr<"Expression", "expression"> {
   let assemblyFormat = "`<` $tokens `>`";
   let genVerifyDecl = 1;
 }
+def UPFRetentionElementAttr : UPFAttr<"RetentionElement", "retention_element"> {
+  let summary = "resolved retention selector with precedence provenance (1801-2018 5.7.3)";
+  let parameters = (ins "::mlir::StringAttr":$path,
+      EnumParameter<UPFRetentionElementKind>:$kind);
+  let assemblyFormat = "`<` struct(params) `>`";
+  let genVerifyDecl = 1;
+}
+def UPFRetentionTriggerAttr : UPFAttr<"RetentionTrigger", "retention_trigger"> {
+  // 6.50: high/low describe an asserted level, with the event at its trailing
+  // edge. Preserve that distinction for write priority and event lowering.
+  let parameters = (ins UPFExpressionTokenAttr:$control,
+      EnumParameter<UPFRetentionTriggerKind>:$kind);
+  let assemblyFormat = "`<` struct(params) `>`";
+  let genVerifyDecl = 1;
+}
+def UPFRetentionAttr : UPFAttr<"Retention", "retention"> {
+  let summary = "resolved retention strategy (1801-2018 6.50/9.7)";
+  // 8.3.2: combine explicit updates before supplying defaults. domainDefault
+  // means no -elements was supplied, including during any -update call.
+  let parameters = (ins "::mlir::StringAttr":$name,
+      "::mlir::StringAttr":$scope, "::mlir::ArrayAttr":$elements,
+      "::mlir::ArrayAttr":$excluded,
+      "::mlir::FlatSymbolRefAttr":$retentionSupply,
+      "::mlir::FlatSymbolRefAttr":$primarySupply,
+      DefaultValuedParameter<"bool", "false">:$domainDefault,
+      DefaultValuedParameter<"bool", "false">:$noRetention,
+      OptionalParameter<"::talos::upf::RetentionTriggerAttr">:$save,
+      OptionalParameter<"::talos::upf::RetentionTriggerAttr">:$restore,
+      OptionalParameter<"::talos::upf::ExpressionAttr">:$saveCondition,
+      OptionalParameter<"::talos::upf::ExpressionAttr">:$restoreCondition,
+      OptionalParameter<"::talos::upf::ExpressionAttr">:$condition,
+      OptionalParameter<"::mlir::LocationAttr">:$declaration);
+  let assemblyFormat = "`<` struct(params) `>`";
+  let genVerifyDecl = 1;
+}
+def UPFRetentionArrayAttr
+    : TypedArrayAttrBase<UPFRetentionAttr, "UPF retention strategy array"> {
+  let constBuilderCall = "$_builder.getArrayAttr($0)";
+}
 def UPFSwitchStateAttr : UPFAttr<"SwitchState", "state"> {
   let summary = "named abstract power-switch condition (1801-2018 6.22)";
   let parameters = (ins "::mlir::StringAttr":$name, UPFExpressionAttr:$condition);

@@ -258,6 +258,53 @@ package APIs remain unsupported. In particular, `-logic_expr` requires a
 different activation/assertion model and is diagnosed explicitly; it is not
 silently combined with a supply predicate (clauses 6.5 and 9.3.2).
 
+## Retention strategy declarations
+
+`set_retention` is available in the Tcl frontend and `-emit-slang` output
+(IEEE 1801-2018 clauses 6.50 and 8.3.2). Active retention simulation is pending:
+the compiler diagnoses such strategies before simulation lowering. A
+`-no_retention` strategy simulates with ordinary domain corruption and no saved
+value. Save/restore declarations must not be taken as working retention until
+the separate register, retained, and output values described in clause 9.7 are
+lowered together with write/NBA priority.
+
+The frontend accepts whole-signal and instance `-elements` and
+`-exclude_elements`, `-retention_supply`, `-save_signal`, `-restore_signal`,
+`-save_condition`, `-restore_condition`, `-retention_condition`, `-no_retention`,
+and `-update`. Signal senses are `high`, `low`, `posedge`, and `negedge`.
+Conditions use the ordinary Boolean expression support and command execution
+scope. Level controls retain their distinction from edge controls, including
+the trailing-edge event required by clause 6.50. One or both save/restore
+signals select balloon style; otherwise a retention condition is required for
+master/slave style (clause 9.7.3).
+
+Updates combine explicit include/exclude lists and can complete an earlier
+declaration across UPF files. Omitted selection differs from explicit `{}`;
+defaults apply after all updates. Failed commands leave declarations,
+predefined handles, and associations intact. A strategy and its implicit
+handles retain their original execution scope. Required supply functions
+propagate across associations (clause 4.5.4.7), while strategy-local state
+catalogs remain separate from domain-wide policies.
+Updates can fill unspecified fields or repeat an identical definition;
+changing an existing trigger or Boolean condition is currently diagnosed as
+an unsupported refinement.
+
+Each strategy owns `PD.strategy.primary_supply` and
+`PD.strategy.retention_supply` handles. Explicit `-handle`/`-retention_supply`
+bindings retain their supplier identity and reject a conflicting second
+supplier (clause 6.10); general list-form electrical equivalence is also
+supported. Without a supplied retention source, verification uses protected,
+anonymous FULL_ON supplies, including ground at zero volts (clauses 6.50 and
+9.7.1). Adding downstream consumers preserves these source values; associated
+named supplies and concrete bindings retain ordinary supply initialization.
+
+Partial-signal and named-process selectors, legacy retention net options,
+`-instance`, `-use_retention_as_primary`, and nondefault corruption parameters
+produce diagnostics. Explicit `RET_SUP_COR` and `SAV_RES_COR` are accepted;
+conflicting parameter pairs are errors. A domain is bounded to 256 strategies
+and 65536 condition tokens, and each include/exclude selection to 4096 unique
+objects. These implementation limits are catchable Tcl errors.
+
 ## Runtime supplies
 
 Supplies start OFF, as specified in clause 9.2.1. Both switched and direct

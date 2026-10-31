@@ -147,6 +147,21 @@ the prototype's omitted-association inference and changes initial writable roots
 to FULL_ON for compatibility. General supply resolution, switch cascades,
 hierarchical power-state refinements, and retention remain to be implemented.
 
+Retention declarations now retain typed strategy/selector/trigger attributes on
+`upf.domain` (6.50/9.7). Explicit updates are merged before defaults; original
+execution scope, declaration location, and omitted-versus-empty selection are
+preserved (5.7.3/8.3.2). Strategy supply handles retain their owner, local role,
+and explicit supplier binding. Their state catalogs do not become domain-wide
+policies; required functions still propagate through associations (4.5.4.7).
+Anonymous verification retention supplies have protected FULL_ON values and an
+`always_on` source marker, distinct from computed switch outputs. Supply
+resolution preserves whether the root has a physical source, so additional
+load ports cannot erase the default source assumption (6.50/9.7.1).
+Only `-no_retention` strategies currently simulate; active strategies produce a
+diagnostic until normal backing, retained storage, visible output, and
+write/NBA priority are lowered together. The intended runtime uses existing
+simulation storage and scheduling primitives on native, bytecode, and wasm32.
+
 Deferred supply-set states retain typed supply predicates and explicit
 NORMAL/CORRUPT/NOT_NORMAL policies (6.5/9.3.2). State and real-voltage
 comparisons decode the shared signed32 microvolt representation on all targets.

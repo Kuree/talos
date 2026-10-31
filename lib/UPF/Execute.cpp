@@ -26,11 +26,20 @@ using llvm::StringRef;
 namespace talos {
 #ifdef TALOS_ENABLE_UPF
 namespace {
+struct Retention {
+  std::string name, scope, retentionSupply, primarySupply;
+  std::map<std::string, Attribute> elements, excluded;
+  bool hasElements = false, noRetention = false;
+  upf::RetentionTriggerAttr save, restore;
+  upf::ExpressionAttr saveCondition, restoreCondition, condition;
+  std::optional<Location> location;
+};
 struct Domain {
   std::string name, scope, switchInput, switchOutput, isolation;
   std::string inputPort, outputPort;
   std::optional<SupplyObject> inputSupply, outputSupply;
   std::string primary;
+  std::string isolationName;
   SmallVector<Attribute> on, partial, errors;
   upf::SwitchStateAttr off;
   std::vector<std::string> elements;
@@ -38,6 +47,7 @@ struct Domain {
   int64_t clamp = 0;
   bool primaryAssociated = false;
   std::optional<Location> location;
+  std::map<std::string, Retention> retentions;
 };
 struct SupplySet {
   std::string scope;
@@ -56,6 +66,9 @@ struct SupplySet {
   std::optional<std::string> stateScope;
   bool complete = false;
   std::string owner;
+  std::string strategy;
+  std::string binding;
+  bool explicitStrategySupply = false;
 };
 struct Session {
   ModuleOp module;
@@ -416,12 +429,251 @@ struct Session {
     error("design object not found: " + name);
     return failure();
   }
+  bool strategyBinding(StringRef handle, StringRef supplier) {
+    // IEEE 1801-2018 6.10 limits a strategy's explicit -handle binding to
+    // one supply set. General list-form electrical associations remain valid.
+    auto found = supplySets.find(handle.str());
+    if (found != supplySets.end() && !found->second.strategy.empty() &&
+        !found->second.binding.empty() && found->second.binding != supplier) {
+      error(
+          "strategy supply handle cannot associate more than one supply set: " +
+          handle);
+      return false;
+    }
+    return true;
+  }
+  int setRetention(Tcl_Size objc, Tcl_Obj *const objv[]) {
+    // IEEE 1801-2018 6.50/8.3.2: merge explicit updates before applying any
+    // defaults. Keep selectors and their provenance until register inference.
+    Options opts;
+    std::set<std::string> flags;
+    for (Tcl_Size i = 2; i < objc; ++i) {
+      StringRef option = Tcl_GetString(objv[i]);
+      if (option == "-update" || option == "-no_retention") {
+        if (!flags.insert(option.str()).second)
+          return error("duplicate UPF option " + option);
+        continue;
+      }
+      if (!llvm::is_contained(
+              ArrayRef<StringRef>{"-domain", "-elements", "-exclude_elements",
+                                  "-retention_supply", "-save_signal",
+                                  "-restore_signal", "-save_condition",
+                                  "-restore_condition", "-retention_condition",
+                                  "-parameters"},
+              option))
+        return error("unsupported set_retention option: " + option);
+      if (++i == objc)
+        return error("missing value for " + option);
+      if (!opts.emplace(option.str(), objv[i]).second)
+        return error("duplicate UPF option " + option);
+    }
+    Domain *dom = domain(opts);
+    if (!dom)
+      return TCL_ERROR;
+    StringRef name = Tcl_GetString(objv[1]);
+    if (!identifier(name))
+      return TCL_ERROR;
+    auto found = dom->retentions.find(name.str());
+    bool update = flags.count("-update");
+    if (found != dom->retentions.end() && !update)
+      return error("retention strategy already exists; use -update");
+    if (found == dom->retentions.end() && update)
+      return error("cannot update an unknown retention strategy");
+    Retention next;
+    if (found != dom->retentions.end()) {
+      next = found->second;
+      if (next.scope != scope)
+        return error("retention update must execute in the original scope");
+    } else {
+      if (dom->retentions.size() >= 256)
+        return error("power domain exceeds 256 retention strategies");
+      next.name = name.str();
+      next.scope = scope;
+      next.location = declarationLocation();
+      std::string stem = StringRef(dom->primary)
+                             .drop_back(StringRef(".primary").size())
+                             .str() +
+                         "." + name.str();
+      if (supplySets.count(stem) || dom->isolationName == name)
+        return error("retention strategy name conflicts with another object in "
+                     "the domain");
+      next.retentionSupply = stem + ".retention_supply";
+      next.primarySupply = stem + ".primary_supply";
+      if (supplySets.count(next.retentionSupply) ||
+          supplySets.count(next.primarySupply))
+        return error("retention strategy supply handle already exists");
+    }
+    auto selectors = [&](StringRef option, auto &target) {
+      auto it = opts.find(option.str());
+      if (it == opts.end())
+        return true;
+      std::vector<std::string> names;
+      if (!list(it->second, names))
+        return false;
+      for (auto &name : names) {
+        std::string path = object(name);
+        if (path.empty()) {
+          error("unknown or unsupported retention selector (whole signals and "
+                "instances are supported): " +
+                name);
+          return false;
+        }
+        bool instance = objects.at(path)->getName().getStringRef() ==
+                        "slang.symbol.instance";
+        target.emplace(path, upf::RetentionElementAttr::get(
+                                 module.getContext(),
+                                 StringAttr::get(module.getContext(), path),
+                                 instance ? upf::RetentionElementKind::Instance
+                                          : upf::RetentionElementKind::Signal));
+      }
+      if (target.size() > 4096) {
+        error("retention selection exceeds 4096 elements");
+        return false;
+      }
+      return true;
+    };
+    if (!selectors("-elements", next.elements) ||
+        !selectors("-exclude_elements", next.excluded))
+      return TCL_ERROR;
+    next.hasElements |= opts.count("-elements");
+    next.noRetention |= flags.count("-no_retention");
+    auto trigger = [&](StringRef option, upf::RetentionTriggerAttr &target) {
+      auto it = opts.find(option.str());
+      if (it == opts.end())
+        return true;
+      std::vector<std::string> fields;
+      if (!list(it->second, fields))
+        return false;
+      if (fields.size() != 2) {
+        error("retention signal requires {logic_net high|low|posedge|negedge}");
+        return false;
+      }
+      auto kind = upf::symbolizeRetentionTriggerKind(fields[1]);
+      if (!kind) {
+        error("retention signal sense must be high, low, posedge, or negedge");
+        return false;
+      }
+      auto ref = reference(fields[0]);
+      if (failed(ref))
+        return false;
+      if (ref->width != 1) {
+        error("retention signal requires a scalar HDL reference");
+        return false;
+      }
+      auto proposed = upf::RetentionTriggerAttr::get(
+          module.getContext(), ref->token(module.getContext()), *kind);
+      if (target && target != proposed) {
+        error("conflicting or unsupported retention trigger refinement");
+        return false;
+      }
+      target = proposed;
+      return true;
+    };
+    auto condition = [&](StringRef option, upf::ExpressionAttr &target) {
+      auto it = opts.find(option.str());
+      if (it == opts.end())
+        return true;
+      // 6.50/5.4: names use the current command scope. Switch control aliases
+      // and the special all-references-known rule of 6.22 do not apply.
+      auto parsed = parseUPFBooleanExpression(
+          Tcl_GetString(it->second), module.getContext(),
+          [&](StringRef path) -> FailureOr<upf::ExpressionTokenAttr> {
+            auto ref = reference(path);
+            if (failed(ref))
+              return failure();
+            return ref->token(module.getContext());
+          },
+          [&](const llvm::Twine &message) { error(message); });
+      if (failed(parsed))
+        return false;
+      if (target && target != *parsed) {
+        error("conflicting or unsupported retention condition refinement");
+        return false;
+      }
+      target = *parsed;
+      return true;
+    };
+    if (!trigger("-save_signal", next.save) ||
+        !trigger("-restore_signal", next.restore) ||
+        !condition("-save_condition", next.saveCondition) ||
+        !condition("-restore_condition", next.restoreCondition) ||
+        !condition("-retention_condition", next.condition))
+      return TCL_ERROR;
+    if (auto it = opts.find("-parameters"); it != opts.end()) {
+      std::vector<std::string> values;
+      if (!list(it->second, values))
+        return TCL_ERROR;
+      std::set<std::string> parameters(values.begin(), values.end());
+      for (StringRef flag : {"RET_SUP_COR", "SAV_RES_COR"})
+        if (parameters.count(flag.str()) &&
+            parameters.count(("NO_" + flag).str()))
+          return error("conflicting retention corruption parameters");
+      for (auto &value : values)
+        if (value != "RET_SUP_COR" && value != "SAV_RES_COR")
+          return error("unsupported retention corruption parameter: " + value);
+    }
+    size_t tokens = 0;
+    auto count = [&](const Retention &retention) {
+      for (auto expression : {retention.saveCondition,
+                              retention.restoreCondition, retention.condition})
+        if (expression)
+          tokens += expression.getTokens().size();
+    };
+    for (auto &[otherName, retention] : dom->retentions)
+      if (otherName != name)
+        count(retention);
+    count(next);
+    if (tokens > 65536)
+      return error("power domain exceeds 65536 retention expression tokens");
+    SmallVector<std::pair<std::string, std::string>> links;
+    std::map<std::string, SupplySet> handles;
+    if (found == dom->retentions.end()) {
+      for (auto &id : {next.retentionSupply, next.primarySupply}) {
+        SupplySet handle;
+        handle.scope = next.scope;
+        handle.updateScope = next.scope;
+        handle.handle = true;
+        handle.location = next.location;
+        handle.owner = dom->name;
+        handle.strategy = name.str();
+        handle.required = {"power", "ground"};
+        handles.emplace(id, std::move(handle));
+      }
+      handles.at(next.primarySupply).binding = dom->primary;
+      links.emplace_back(next.primarySupply, dom->primary);
+    }
+    if (opts.count("-retention_supply")) {
+      std::string id = supplySetKey(value(opts, "-retention_supply"));
+      if (!supplySets.count(id) && !handles.count(id))
+        return error("unknown retention supply set: " + id);
+      if (id == next.retentionSupply)
+        return error(
+            "retention supply cannot refer to its own predefined handle");
+      if (!strategyBinding(next.retentionSupply, id))
+        return TCL_ERROR;
+      links.emplace_back(next.retentionSupply, id);
+    }
+    // Commit strategy and its implicit handles together; no caught error may
+    // leave half a declaration or alter earlier associations (5.11/8.3.2).
+    supplySets.insert(handles.begin(), handles.end());
+    if (opts.count("-retention_supply")) {
+      auto &handle = supplySets.at(next.retentionSupply);
+      handle.binding = supplySetKey(value(opts, "-retention_supply"));
+      handle.explicitStrategySupply = true;
+    }
+    setAssociations.insert(setAssociations.end(), links.begin(), links.end());
+    dom->retentions.insert_or_assign(name.str(), std::move(next));
+    Tcl_ResetResult(interp);
+    return TCL_OK;
+  }
   int run(StringRef command, Tcl_Size objc, Tcl_Obj *const objv[]) {
     Options opts;
     // IEEE 1801-2018 5.11: command failures are Tcl errors, so catch/proc
     // libraries observe the same error path as direct command invocations.
     if (objc < 2 && command != "upf_version")
       return error("missing argument for " + command);
+    if (command == "set_retention")
+      return setRetention(objc, objv);
     if (command == "upf_version") {
       if (objc > 2 || (objc == 2 && StringRef(Tcl_GetString(objv[1])) != "3.1"))
         return error(
@@ -994,8 +1246,31 @@ struct Session {
       }
       if (opts.count("-handle") && !supplySets.at(names.back()).handle)
         return error("-handle requires a supply set handle");
+      std::optional<std::pair<std::string, std::string>> binding;
+      if (opts.count("-handle") &&
+          !supplySets.at(names.back()).strategy.empty()) {
+        std::set<std::string> suppliers(names.begin(), names.end() - 1);
+        suppliers.erase(names.back());
+        if (suppliers.size() > 1)
+          return error("strategy supply handle cannot associate more than one "
+                       "supply set: " +
+                       names.back());
+        if (!suppliers.empty()) {
+          binding = std::make_pair(names.back(), *suppliers.begin());
+          if (!strategyBinding(binding->first, binding->second))
+            return TCL_ERROR;
+        }
+      }
+      SmallVector<std::pair<std::string, std::string>> links;
       for (auto &name : ArrayRef(names).drop_front())
-        setAssociations.emplace_back(names.front(), name);
+        if (name != names.front())
+          links.emplace_back(names.front(), name);
+      setAssociations.insert(setAssociations.end(), links.begin(), links.end());
+      if (binding) {
+        auto &target = supplySets.at(binding->first);
+        target.binding = binding->second;
+        target.explicitStrategySupply = true;
+      }
       markPrimaryAssociations(
           std::set<std::string>(names.begin(), names.end()));
       Tcl_ResetResult(interp);
@@ -1325,6 +1600,15 @@ struct Session {
         return TCL_ERROR;
       if (!identifier(Tcl_GetString(objv[1])))
         return TCL_ERROR;
+      StringRef isolationName = Tcl_GetString(objv[1]);
+      std::string isolationPath = StringRef(dom->primary)
+                                      .drop_back(StringRef(".primary").size())
+                                      .str() +
+                                  "." + isolationName.str();
+      if (dom->retentions.count(isolationName.str()) ||
+          supplySets.count(isolationPath))
+        return error("isolation strategy name conflicts with another object in "
+                     "the domain");
       if (!dom->isolation.empty())
         return error("one isolation strategy per domain is supported");
       if (value(opts, "-applies_to") != "outputs" ||
@@ -1344,6 +1628,7 @@ struct Session {
       if (clamp != "0" && clamp != "1")
         return error("initial isolation clamp must be 0 or 1");
       dom->isolation = isolation;
+      dom->isolationName = isolationName.str();
       dom->isolationHigh = sense != "low";
       dom->clamp = clamp == "1";
       return TCL_OK;
@@ -1393,8 +1678,8 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
         "load_upf", "create_power_domain", "create_supply_net",
         "create_supply_port", "connect_supply_net", "set_domain_supply_net",
         "create_power_switch", "set_isolation", "create_supply_set",
-        "associate_supply_set", "add_power_state",
-        "set_partial_on_translation"})
+        "associate_supply_set", "add_power_state", "set_partial_on_translation",
+        "set_retention"})
     commands.push_back({&session, name});
   for (auto &command : commands)
     Tcl_CreateObjCommand2(interp.get(), command.name, dispatch, &command,
@@ -1417,6 +1702,15 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
     module->setAttr(upf::partialOnTranslationName,
                     upf::PartialOnTranslationAttr::get(
                         module.getContext(), *session.partialOnTranslation));
+  // 8.3.2: a base strategy may be completed by later -update calls, including
+  // in another UPF file. Diagnose incompleteness only after all Tcl executes.
+  for (auto &[domainName, domain] : session.domains)
+    for (auto &[name, retention] : domain.retentions)
+      if (!retention.noRetention && !retention.save && !retention.restore &&
+          !retention.condition)
+        return emitError(retention.location.value_or(module.getLoc()))
+               << "retention requires a save/restore signal or retention "
+                  "condition (IEEE 1801-2018 6.50)";
   SupplyFunctions functions;
   SupplyEquivalences equivalences;
   for (auto &[name, set] : session.supplySets) {
@@ -1578,9 +1872,49 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
   };
   std::map<std::string, std::set<std::string>> associated;
   for (auto &[a, b] : session.setAssociations) {
+    if (a == b)
+      continue;
     associated[a].insert(b);
     associated[b].insert(a);
   }
+  std::set<unsigned> anonymousRoots;
+  for (auto &[domainName, domain] : session.domains)
+    for (auto &[name, retention] : domain.retentions) {
+      auto &handle = session.supplySets.at(retention.retentionSupply);
+      if (!handle.functions.empty() || handle.explicitStrategySupply)
+        continue;
+      // 6.10: list-form association to a named supplying set is equivalent
+      // electrically to -handle binding. A domain primary or another strategy
+      // handle can instead be a downstream consumer of this assumed source.
+      std::vector<std::string> work{retention.retentionSupply};
+      std::set<std::string> seen;
+      bool namedSupplier = false;
+      while (!work.empty()) {
+        std::string current = std::move(work.back());
+        work.pop_back();
+        if (!seen.insert(current).second)
+          continue;
+        namedSupplier |= !session.supplySets.at(current).handle;
+        for (auto &next : associated[current])
+          work.push_back(next);
+      }
+      if (namedSupplier)
+        continue;
+      std::set<unsigned> roots;
+      for (StringRef function : upf::getSupplyFunctionNames())
+        roots.insert(supplies.functions.at(retention.retentionSupply + "." +
+                                           function.str()));
+      if (llvm::any_of(roots, [&](unsigned root) {
+            return supplies.roots[root].explicitSource;
+          }))
+        continue;
+      // 6.50/9.7.1: an unspecified verification retention supply is anonymous
+      // and always on. It has real shared values, so queries and policy
+      // evaluation agree; HDL cannot turn this assumed supply off.
+      anonymousRoots.insert(roots.begin(), roots.end());
+      for (unsigned root : roots)
+        supplies.roots[root].writable = false;
+    }
   for (unsigned id = 0; id < supplies.roots.size(); ++id) {
     SmallVector<Attribute> names;
     for (auto &[name, root] : supplies.handles)
@@ -1589,12 +1923,14 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
     auto root = supplies.roots[id];
     // Standard initialization is OFF, unspecified voltage (9.2.1). The old
     // FULL_ON-input prototype requires explicit compatibility mode.
-    uint64_t initial = assumePoweredInputs && root.writable
-                           ? ((uint64_t(root.ground ? 0 : 1000000) << 2) | 1)
-                           : 0;
-    upf::UPFSupplyOp::create(
-        builder, module.getLoc(), supplySymbol(id).getValue(),
-        builder.getArrayAttr(names), root.writable, initial);
+    uint64_t initial =
+        anonymousRoots.count(id) || (assumePoweredInputs && root.writable)
+            ? ((uint64_t(root.ground ? 0 : 1000000) << 2) | 1)
+            : 0;
+    upf::UPFSupplyOp::create(builder, module.getLoc(),
+                             supplySymbol(id).getValue(),
+                             builder.getArrayAttr(names), root.writable,
+                             initial, anonymousRoots.count(id));
   }
   for (auto &[name, set] : session.supplySets) {
     NamedAttrList bindings;
@@ -1622,7 +1958,12 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
         set.owner.empty()
             ? FlatSymbolRefAttr{}
             : FlatSymbolRefAttr::get(module.getContext(), set.owner),
-        set.complete);
+        set.complete,
+        set.strategy.empty() ? StringAttr{}
+                             : builder.getStringAttr(set.strategy),
+        set.binding.empty()
+            ? FlatSymbolRefAttr{}
+            : FlatSymbolRefAttr::get(module.getContext(), set.binding));
   }
   for (auto &[name, domain] : session.domains) {
     llvm::SmallVector<Attribute> elements;
@@ -1643,10 +1984,31 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
       bool otherPrimary = !view.owner.empty() &&
                           session.domains.at(view.owner).primary == id &&
                           id != domain.primary;
-      if (!otherPrimary)
+      if (!otherPrimary && view.strategy.empty())
         policies.push_back(FlatSymbolRefAttr::get(module.getContext(), id));
       for (auto &next : associated[id])
         work.push_back(next);
+    }
+    SmallVector<Attribute> retentions;
+    for (auto &[strategyName, retention] : domain.retentions) {
+      auto selectors = [&](const auto &entries) {
+        SmallVector<Attribute> result;
+        for (auto &[path, attr] : entries)
+          result.push_back(attr);
+        return builder.getArrayAttr(result);
+      };
+      retentions.push_back(upf::RetentionAttr::get(
+          module.getContext(), builder.getStringAttr(strategyName),
+          builder.getStringAttr(retention.scope), selectors(retention.elements),
+          selectors(retention.excluded),
+          FlatSymbolRefAttr::get(module.getContext(),
+                                 retention.retentionSupply),
+          FlatSymbolRefAttr::get(module.getContext(), retention.primarySupply),
+          !retention.hasElements, retention.noRetention, retention.save,
+          retention.restore, retention.saveCondition,
+          retention.restoreCondition, retention.condition,
+          retention.location ? mlir::LocationAttr(*retention.location)
+                             : mlir::LocationAttr{}));
     }
     upf::UPFDomainOp::create(
         builder, domain.location.value_or(module.getLoc()), name,
@@ -1665,7 +2027,11 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
                               : builder.getArrayAttr(domain.errors),
         domain.isolation.empty() ? StringAttr{}
                                  : builder.getStringAttr(domain.isolation),
-        domain.isolationHigh, domain.clamp);
+        domain.isolationHigh, domain.clamp,
+        retentions.empty() ? ArrayAttr{} : builder.getArrayAttr(retentions),
+        domain.isolationName.empty()
+            ? StringAttr{}
+            : builder.getStringAttr(domain.isolationName));
   }
   return verify(module);
 #endif

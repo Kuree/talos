@@ -1,2 +1,2 @@
 set_design_top upf_test
-set_retention RET -domain PD
+set_level_shifter LS -domain PD
