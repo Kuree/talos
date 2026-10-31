@@ -1,0 +1,145 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.24.1: -reuse preserves a single net/value for both
+// domains. 4.3.8/6.14/6.26/10.6.1.6: named Port/function associations keep
+// their identity when an owned local net meets a global rail at a boundary.
+// The global rail remains available to another domain; a shared physical root
+// does not inherit local ownership. Check both connection/association orders,
+// 65-bit values, supply alias writes, OFF cancellation and fresh-clock recovery
+// (9.2.2/9.5.3/9.6.7). The late wrapper changes only Tcl declaration order.
+// CHECK: domain net reuse and global boundary aliases passed
+
+//--- design.sv
+module leaf(input logic clk, input logic [0:64] d,
+            output logic [0:64] q, y);
+  always @(posedge clk) q <= #3 d;
+  always_comb y = d;
+endmodule
+module empty(output wire live);
+  assign live = 1;
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0;
+  logic [0:64] d = 65'h1_0123456789abcdef;
+  wire [0:64] q, y, otherq, othery;
+  leaf dut(clk, d, q, y), other(clk, d, otherq, othery);
+  wire sparelive;
+  empty spare(sparelive);
+  upfSupplyTypeT sample;
+  function automatic void check_aliases();
+    upfSupplyTypeT root_value;
+    root_value = get_supply_value("/top/VDD");
+    if (get_supply_value("/top/ROOT.power") !== root_value ||
+        get_supply_value("/top/EXT.primary.power") !== root_value ||
+        get_supply_value("/top/dut/LOCAL.primary.power") !== root_value ||
+        get_supply_value("/top/dut/LD") !== root_value ||
+        get_supply_value("/top/dut/P") !== root_value ||
+        get_supply_value("/top/dut/REF.power") !== root_value ||
+        get_supply_value("/top/other/P") !== root_value)
+      $fatal(1, "global rail and local net alias diverged");
+    root_value = get_supply_value("/top/AUX");
+    if (get_supply_value("/top/other/AUXPIN") !== root_value ||
+        get_supply_value("/top/spare/AUXPIN") !== root_value)
+      $fatal(1, "reuse created independent supply objects");
+  endfunction
+  initial begin
+    #1;
+    check_aliases();
+    if (q !== 'x || y !== 'x || otherq !== 'x || othery !== 'x || sparelive !== 1'bx)
+      $fatal(1, "initial OFF");
+    if (!supply_on("/top/VDD") || !supply_on("/top/VSS", 0.0) ||
+        !supply_on("/top/AUX", 0.9)) $fatal(1, "power-up");
+    #1;
+    check_aliases();
+    if (y !== d || othery !== d || q !== 'x || otherq !== 'x || sparelive !== 1)
+      $fatal(1, "global supply failed to restore both extents");
+    if (!supply_on("/top/dut/LD", 0.8) ||
+        !supply_on("/top/other/AUXPIN", 0.7)) $fatal(1, "alias writes");
+    sample = get_supply_value("/top/VDD");
+    if (sample.voltage != 800000) $fatal(1, "local alias did not update global rail");
+    sample = get_supply_value("/top/AUX");
+    if (sample.voltage != 700000) $fatal(1, "reuse lost root identity");
+    check_aliases();
+    clk = 1;
+    #1;
+    if (!supply_off("/top/dut/LD")) $fatal(1, "local alias OFF");
+    #1;
+    if (q !== 'x || y !== 'x || otherq !== 'x || othery !== 'x)
+      $fatal(1, "local alias OFF did not corrupt both extents");
+    check_aliases();
+    if (!supply_on("/top/VDD")) $fatal(1, "global restore");
+    #4;
+    if (q !== 'x || otherq !== 'x || y !== d || othery !== d)
+      $fatal(1, "stale NBA survived or level restoration failed");
+    clk = 0;
+    d = 65'h0_fedcba9876543210;
+    #1 clk = 1;
+    #4;
+    if (q !== d || otherq !== d || y !== d || othery !== d)
+      $fatal(1, "fresh wide NBA failed");
+    if (!supply_off("/top/other/P")) $fatal(1, "exterior alias OFF");
+    #1;
+    if (q !== 'x || y !== 'x || otherq !== 'x || othery !== 'x)
+      $fatal(1, "outside-domain alias did not propagate");
+    if (!supply_on("/top/dut/REF.power")) $fatal(1, "port function restore");
+    #1;
+    if (q !== 'x || otherq !== 'x || y !== d || othery !== d)
+      $fatal(1, "port function restore invented a clock");
+    if (!supply_off("/top/AUX")) $fatal(1, "reused auxiliary OFF");
+    #1;
+    if (y !== d || othery !== d || sparelive !== 1)
+      $fatal(1, "reuse merged unrelated rails");
+    check_aliases();
+    $display("domain net reuse and global boundary aliases passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+if {![info exists late_aliases]} {set late_aliases 0}
+if {![info exists plain_nets]} {set plain_nets 0}
+foreach net {VDD VSS} {create_supply_net $net}
+create_supply_set ROOT
+if {!$late_aliases} {
+    create_supply_set ROOT -update -function {power VDD} -function {ground VSS}
+}
+create_power_domain EXT -elements other -supply {primary ROOT}
+create_power_domain AUX_DOMAIN -elements spare -supply {primary ROOT}
+if {$plain_nets} {
+    create_supply_net AUX
+} else {
+    create_supply_net AUX -domain EXT
+    create_supply_net AUX -domain AUX_DOMAIN -reuse
+    create_supply_net AUX -reuse -domain AUX_DOMAIN -resolve unresolved
+}
+set_scope dut
+create_power_domain LOCAL -elements . -supply {primary /ROOT}
+create_supply_port P
+if {$plain_nets} {create_supply_net LD} else {create_supply_net LD -domain LOCAL}
+if {!$late_aliases} {create_supply_set REF -function {power P}}
+connect_supply_net LD -ports P
+if {$late_aliases} {create_supply_set REF -function {power P}}
+set_scope /other
+create_supply_port P
+create_supply_port AUXPIN
+set_scope /spare
+create_supply_port AUXPIN
+set_scope /
+connect_supply_net VDD -ports {dut/P other/P}
+connect_supply_net AUX -ports {other/AUXPIN spare/AUXPIN}
+if {$late_aliases} {
+    create_supply_set ROOT -update -function {power VDD} -function {ground VSS}
+}
+
+//--- late.upf
+set late_aliases 1
+
+//--- plain.upf
+set plain_nets 1

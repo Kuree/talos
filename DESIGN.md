@@ -115,6 +115,10 @@ procedures, control flow, substitutions, lists, `source`, and core packages.
 UPF commands are C++ callbacks against a design database indexed from the
 Slang hierarchy. Resolved domains and supply roots are inspectable with
 `-emit-slang` as `upf.domain`, `upf.supply`, and `upf.supply_set` operations.
+Declared-net ownership and `-reuse` availability stay in the compiler database
+(IEEE 1801-2018 6.24.1). Function bindings check the original named object
+before electrical equivalence is resolved; one physical root may contain both
+global and domain-local aliases without acquiring a single common owner.
 
 The initial command bridge supports `upf_version 3.1`, `set_design_top`,
 `set_scope`, `find_objects`, `load_upf`, basic supply net/port declarations and

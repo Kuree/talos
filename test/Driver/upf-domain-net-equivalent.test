@@ -1,0 +1,8 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-domain-net-aliases.test %t
+// RUN: talos --upf %t/design.upf -O3 --vpi=off -emit-sim --mlir-verify-each %t/design.sv -o %t.owned.mlir
+// RUN: talos --upf %t/plain.upf --upf %t/design.upf -O3 --vpi=off -emit-sim --mlir-verify-each %t/design.sv -o %t.plain.mlir
+// RUN: diff %t.owned.mlir %t.plain.mlir
+// IEEE 1801-2018 6.24.1: declared-net availability is compiler metadata.
+// Reuse infers no extra net, driver, value, monitor, guard, or runtime lookup.
+// Identical electrical networks produce identical optimized simulation IR.

@@ -1,0 +1,10 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-domain-net-aliases.test %t
+// RUN: talos --upf %t/late.upf --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %S/upf-domain-net-aliases.test
+// RUN: talos --upf %t/late.upf --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %S/upf-domain-net-aliases.test
+// RUN: talos --upf %t/late.upf --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %S/upf-domain-net-aliases.test
+// IEEE 1801-2018 6.14/6.24.1/6.26: late Port and global-function bindings
+// keep their named identity despite an earlier owned-net LowConn connection.

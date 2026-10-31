@@ -71,6 +71,10 @@ struct SupplySet {
   std::string binding;
   bool explicitStrategySupply = false;
 };
+struct DomainNet {
+  std::string scope, owner, resolution;
+  std::set<std::string> domains;
+};
 struct Session {
   ModuleOp module;
   Tcl_Interp *interp;
@@ -80,6 +84,9 @@ struct Session {
   std::map<std::string, Operation *> objects;
   std::map<std::string, Domain> domains;
   std::set<std::string> nets, supplyPorts, switches;
+  // IEEE 1801-2018 6.24.1: ownership and -reuse availability belong to a
+  // declared net, not the resolved electrical root shared with other objects.
+  std::map<std::string, DomainNet> domainNets;
   SupplyPorts supplyPortInfo;
   SupplyBindings supplyBindings;
   std::map<std::string, SupplySet> supplySets;
@@ -305,6 +312,20 @@ struct Session {
            domains.count(path) || switches.count(path) ||
            (!allowSupplyPair && (nets.count(path) || supplyPorts.count(path)));
   }
+  bool functionSupply(const SupplyObject &object) {
+    // IEEE 1801-2018 6.24.1/6.26/6.43: a net created with -domain cannot
+    // be associated with any supply-set function, including legacy primary
+    // associations. Check the ORIGINAL operand before an equivalent existing
+    // binding can make the update idempotent. Ports and functions keep their
+    // own identities (4.3.8/6.14/10.6.1.6); electrical equivalence does not
+    // transfer a distinct net declaration's ownership restriction to them.
+    if (object.kind != SupplyObject::Net || !domainNets.count(object.path))
+      return true;
+    error("a supply net created with -domain cannot be associated with a "
+          "supply-set function (IEEE 1801-2018 6.24.1): " +
+          object.path);
+    return false;
+  }
   void markPrimaryAssociations(std::set<std::string> sets) {
     // Whole-set associations propagate to functions connected later (6.10).
     bool changed;
@@ -333,13 +354,21 @@ struct Session {
   using RepeatedOptions = std::map<std::string, std::vector<Tcl_Obj *>>;
   bool options(Tcl_Size objc, Tcl_Obj *const objv[], Tcl_Size first,
                std::initializer_list<StringRef> allowed, Options &out,
-               RepeatedOptions *repeated = nullptr) {
+               RepeatedOptions *repeated = nullptr,
+               std::initializer_list<StringRef> flags = {}) {
     for (Tcl_Size i = first; i < objc; ++i) {
       StringRef option = Tcl_GetString(objv[i]);
       if (!llvm::is_contained(allowed, option)) {
         error("unsupported UPF option '" + option + "' in " +
               Tcl_GetString(objv[0]));
         return false;
+      }
+      if (llvm::is_contained(flags, option)) {
+        if (!out.emplace(option.str(), objv[i]).second) {
+          error("duplicate UPF option " + option);
+          return false;
+        }
+        continue;
       }
       if (++i == objc) {
         error("missing value for " + option);
@@ -1219,6 +1248,8 @@ struct Session {
         auto object = supply(fields[1], true);
         if (!object)
           return error("unknown supply net, port, or function: " + fields[1]);
+        if (!functionSupply(*object))
+          return TCL_ERROR;
         // 6.26.1: concrete supplies must be local; descendant references
         // are permitted through supply-net handles, not concrete net names.
         bool descendant = StringRef(object->scope).starts_with(scope + ".");
@@ -1295,10 +1326,13 @@ struct Session {
     }
     if (command == "create_supply_net" || command == "create_supply_port") {
       // IEEE 1801-2018 6.24.1/6.25: -domain selects the declaration scope.
+      // For nets it also records domain availability, which -reuse extends
+      // without creating a second net or changing its electrical identity.
       if (objc < 2)
         return error("supply declaration requires a name");
       if (command == "create_supply_net") {
-        if (!options(objc, objv, 2, {"-domain", "-resolve"}, opts))
+        if (!options(objc, objv, 2, {"-domain", "-resolve", "-reuse"}, opts,
+                     nullptr, {"-reuse"}))
           return TCL_ERROR;
       } else if (!options(objc, objv, 2, {"-domain", "-direction"}, opts))
         return TCL_ERROR;
@@ -1308,13 +1342,37 @@ struct Session {
         return error("supply-port direction must be in, out, or inout");
       if (!identifier(Tcl_GetString(objv[1])))
         return TCL_ERROR;
+      bool reuse = opts.count("-reuse");
+      if (reuse && !opts.count("-domain"))
+        return error("supply-net -reuse requires -domain");
       std::string previousScope = scope;
       auto restoreScope = llvm::scope_exit([&] { scope = previousScope; });
+      Domain *owner = nullptr;
       if (opts.count("-domain")) {
-        Domain *owner = domain(opts);
+        owner = domain(opts);
         if (!owner)
           return TCL_ERROR;
         scope = owner->scope;
+      }
+      std::string name = key(Tcl_GetString(objv[1]));
+      if (reuse) {
+        auto found = domainNets.find(name);
+        if (found == domainNets.end())
+          return error("supply-net -reuse requires an existing net created "
+                       "with -domain in the same creation scope");
+        const auto &original = found->second;
+        if (original.scope != scope || original.owner == owner->name)
+          return error("supply-net -reuse requires another power domain in "
+                       "the same creation scope");
+        if (opts.count("-resolve") &&
+            value(opts, "-resolve") != original.resolution)
+          return error("supply-net -reuse resolution conflicts with the "
+                       "original net");
+        // Repeated reuse by an already admitted domain is idempotent. The
+        // original domain, scope and resolution are never replaced (6.24.1).
+        found->second.domains.insert(owner->name);
+        Tcl_ResetResult(interp);
+        return TCL_OK;
       }
       if (opts.count("-resolve") && value(opts, "-resolve") != "unresolved")
         return error("the first UPF slice supports unresolved supply nets");
@@ -1332,6 +1390,9 @@ struct Session {
       if (hasNamedObject(Tcl_GetString(objv[1]), true))
         return error("supply object name conflicts with an existing object");
       inventory.insert(key(Tcl_GetString(objv[1])));
+      if (command == "create_supply_net" && owner)
+        domainNets.emplace(
+            name, DomainNet{scope, owner->name, "unresolved", {owner->name}});
       if (command == "create_supply_port")
         supplyPortInfo[key(Tcl_GetString(objv[1]))] = {
             direction == "out"     ? SupplyPort::Out
@@ -1391,6 +1452,8 @@ struct Session {
       auto ground = supply(value(opts, "-primary_ground_net"));
       if (!power || !ground)
         return error("unknown primary supply net");
+      if (!functionSupply(*power) || !functionSupply(*ground))
+        return TCL_ERROR;
       auto &primary = supplySets.at(found->second.primary);
       primary.functions.emplace("power", *power);
       primary.functions.emplace("ground", *ground);

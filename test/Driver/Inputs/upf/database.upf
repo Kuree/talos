@@ -39,12 +39,15 @@ assert_equal [set_scope /] /dut
 set_scope dut
 create_power_domain Local -elements .
 set_scope /
-create_supply_net VDD -domain dut/Local
-create_supply_net VSS -domain dut/Local
+create_supply_net PG -domain dut/Local
 create_supply_port P -domain dut/Local -direction in
 assert_equal [set_scope .] /
-connect_supply_net dut/VDD -ports dut/P
+connect_supply_net dut/PG -ports dut/P
 set_scope dut
+# 6.24.1 forbids associating a domain-created net with a supply-set function.
+# Keep the explicit domain-local rail distinct from the legacy primary rails.
+create_supply_net VDD
+create_supply_net VSS
 # IEEE 1801-2018 6.43: return integer 1 and associate both supplies once.
 assert_equal [set_domain_supply_net Local -primary_power_net VDD -primary_ground_net VSS] 1
 set_scope /

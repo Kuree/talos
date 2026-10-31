@@ -1,0 +1,99 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.mlir | FileCheck %s --check-prefix=TCL
+// RUN: talos-opt %t.mlir | talos-opt | FileCheck %s --check-prefix=IR
+// RUN: not talos --upf %t/bad.upf -emit-slang %t/design.sv -o %t.bad.mlir 2>&1 | FileCheck %s --check-prefix=ERROR
+// IEEE 1801-2018 6.24.1: -reuse extends one declared net's availability to
+// another domain in the same creation scope. Domain-created nets cannot be
+// associated with supply-set functions, including 6.43's legacy equivalent.
+// Validate the named Net before 6.26's equivalent-binding shortcut. Preserve
+// distinct Port/function references and 6.14's electrical equivalence without
+// transferring ownership. Catch/retry cases prove failed commands are atomic.
+// TCL: domain net provenance, reuse and rollback passed
+// IR-DAG: upf.supply {{.*}}"/top/OWN@upfSupplyNetT"
+// IR-DAG: upf.supply_set @"/top/Alias"
+// IR-DAG: upf.supply_set @"/top/Late"
+// IR-DAG: upf.supply_set @"/top/Repair"
+// ERROR: bad.upf":3:1
+// ERROR: a supply net created with -domain cannot be associated with a supply-set function
+// ERROR-SAME: IEEE 1801-2018 6.24.1
+
+//--- design.sv
+module inner; endmodule
+module leaf; inner nested(); endmodule
+module top; leaf a(), b(), c(); endmodule
+
+//--- design.upf
+proc expect_error {script pattern} {
+    set code [catch {uplevel 1 $script} message]
+    if {$code != 1 || ![string match $pattern $message]} {
+        error "expected <$pattern>, got code $code <$message>"
+    }
+}
+foreach {name element} {A a B b C c} {
+    create_power_domain $name -elements $element
+}
+foreach net {FREE G} {create_supply_net $net}
+create_supply_net OWN -domain A -resolve unresolved
+create_supply_net OWN_G -domain A
+expect_error {create_supply_set New -function {power FREE} -function {ground OWN_G}} {*created with -domain*}
+expect_error {associate_supply_set New -handle B.primary} {*unknown supply set*}
+create_supply_set New -function {power FREE} -function {ground G}
+expect_error {create_supply_set New -update -function {ground OWN_G}} {*created with -domain*}
+expect_error {create_supply_set A.primary -update -function {power OWN}} {*created with -domain*}
+# Ground failures must not install the earlier primary power association.
+expect_error {set_domain_supply_net A -primary_power_net FREE -primary_ground_net OWN_G} {*created with -domain*}
+expect_error {set_domain_supply_net A -primary_power_net OWN -primary_ground_net G} {*created with -domain*}
+if {[set_domain_supply_net A -primary_power_net FREE -primary_ground_net G] != 1} {
+    error "failed legacy binding changed primary association"
+}
+# A Port is its own reference, even when electrically equivalent to OWN.
+create_supply_port P
+create_supply_set Alias -function {power P}
+connect_supply_net OWN -ports P
+expect_error {create_supply_set Alias -update -function {power OWN}} {*created with -domain*}
+create_supply_set Chain -function {power Alias.power}
+associate_supply_set {Alias Chain}
+create_supply_net REVERSE -domain B
+create_supply_port Q
+connect_supply_net REVERSE -ports Q
+create_supply_set Late -function {power Q}
+create_supply_set Late -update -function {ground Chain.ground}
+# The same-name lookup still prefers the Port (10.3.2.2.3).
+create_supply_net Paired -domain A
+create_supply_port Paired -direction out
+connect_supply_net Paired -ports Paired
+create_supply_set PairedRef -function {power Paired}
+expect_error {create_supply_net OWN -reuse} {*-reuse requires -domain*}
+expect_error {create_supply_net OWN -domain missing -reuse} {*unknown power domain*}
+expect_error {create_supply_net missing -domain B -reuse} {*existing net created with -domain*}
+create_supply_port PortOnly
+expect_error {create_supply_net PortOnly -domain B -reuse} {*existing net created with -domain*}
+expect_error {create_supply_net FREE -domain B -reuse} {*existing net created with -domain*}
+expect_error {create_supply_net OWN -domain A -reuse} {*another power domain*}
+expect_error {create_supply_net OWN -domain B -reuse -resolve parallel} {*resolution conflicts*}
+expect_error {create_supply_net OWN -domain B -reuse -reuse} {*duplicate UPF option*}
+expect_error {create_supply_net OWN -domain B -reuse true} {*unsupported UPF option*}
+expect_error {create_supply_port PortOnly -domain B -reuse} {*unsupported UPF option*}
+expect_error {create_supply_net OWN -domain B} {*duplicate supply object*}
+expect_error {create_supply_net RepairNet -domain B -resolve parallel} {*supports unresolved*}
+create_supply_net RepairNet
+create_supply_set Repair -function {power RepairNet}
+create_supply_net OWN -reuse -domain B -resolve unresolved
+create_supply_net OWN -domain B -reuse
+create_supply_net OWN -domain C -reuse
+expect_error {create_supply_net OWN -domain A -reuse} {*another power domain*}
+expect_error {create_supply_set AfterReuse -function {power OWN}} {*created with -domain*}
+set_scope a
+create_power_domain CHILD -elements nested
+expect_error {create_supply_net OWN -domain CHILD -reuse} {*same creation scope*}
+expect_error {create_supply_net OWN -domain /A -reuse} {*another power domain*}
+if {[create_supply_net OWN -domain /B -reuse] ne {}} {error "reuse return value"}
+if {[set_scope .] ne "/a"} {error "reuse changed caller scope"}
+set_scope /
+puts {domain net provenance, reuse and rollback passed}
+
+//--- bad.upf
+create_power_domain A -elements a
+create_supply_net OWN -domain A
+create_supply_set Bad -function {power OWN}

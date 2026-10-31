@@ -193,6 +193,24 @@ when adding function bindings. Updates retain the original execution scope
 (clause 8.3.2). An identical or equivalent reference is idempotent; conflicting
 bindings produce a Tcl error. Failed declarations leave no partial object.
 
+`create_supply_net N -domain PD` records a net's declaring domain separately
+from its creation scope. `create_supply_net N -domain OTHER -reuse` extends
+that declaration's availability to another domain in the same creation scope
+(clause 6.24.1). Both declarations require `-domain`; repeated reuse by an
+admitted domain is idempotent. The supported resolution remains `unresolved`,
+and a conflicting reuse resolution produces a Tcl error. Reuse creates no
+additional net, supply source, value, or runtime bookkeeping.
+
+A net created with `-domain` cannot be named directly in a supply-set function
+association, including legacy `set_domain_supply_net` (clauses 6.24.1/6.43).
+This restriction applies to the declared net even if an existing function
+already names an electrically equivalent object. Port and function references
+keep their own identities: a global rail can power another domain while
+meeting a domain-local net at a boundary's HighConn/LowConn (clauses
+4.3.8/6.14/10.6.1.6). Generic UPF supply ports model routing connection points;
+terminal cell PG-pin availability/extent enforcement is not implemented by
+this slice. A shared electrical root alone does not identify those consumers.
+
 Associations electrically join corresponding functions and remain effective
 when functions are bound later. Lists, transitive links, repeated associations,
 and alias cycles are supported. The six standard functions are `power`,
