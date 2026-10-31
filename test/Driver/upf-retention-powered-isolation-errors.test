@@ -8,8 +8,8 @@
 // RUN: talos --upf %t/base.upf --upf %t/nonseq.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.nonseq
 // RUN: %t.nonseq | FileCheck %s
 // IEEE 1801-2018 6.50 Note 2 / 6.45: output-driver supply changes affect
-// diff_supply_only filtering. The current whole-boundary isolation mux must
-// diagnose an effective RET-powered register until per-path filtering exists.
+// diff_supply_only TRUE/default filtering. The whole-boundary isolation mux
+// diagnoses an effective RET-powered register unless the filter is FALSE.
 // Excluded, no_retention, and nonsequential selections infer no such driver.
 // ERROR: isolation of retention-powered outputs requires per-path supply filtering
 // CHECK: inactive output option with isolation passed

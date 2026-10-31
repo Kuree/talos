@@ -1,0 +1,28 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/valid.mlir | talos-opt | FileCheck %s
+// RUN: talos-opt %t/invalid.mlir --split-input-file --verify-diagnostics
+// IEEE 1801-2018 6.45: default-true legacy IR stays valid and false roundtrips
+// on an actual isolation strategy. Malformed or unattached filters diagnose.
+// CHECK: upf.domain @legacy
+// CHECK-NOT: isolation_diff_supply_only
+// CHECK: upf.domain @unconditional
+// CHECK-SAME: isolation_diff_supply_only = false
+
+//--- valid.mlir
+module {
+  upf.supply @p names ["/top/VDD"] writable = true
+  upf.domain @legacy elements ["top.a"] power @p on [] {isolation_control = "top.iso"}
+  upf.domain @unconditional elements ["top.b"] power @p on [] {isolation_control = "top.iso", isolation_diff_supply_only = false}
+}
+//--- invalid.mlir
+module {
+  upf.supply @p names ["/top/VDD"] writable = true
+  // expected-error @+1 {{isolation supply filter requires an isolation control}}
+  upf.domain @unattached elements ["top.a"] power @p on [] {isolation_diff_supply_only = false}
+}
+// -----
+module {
+  upf.supply @p names ["/top/VDD"] writable = true
+  // expected-error @+1 {{attribute 'isolation_diff_supply_only' failed to satisfy constraint: bool attribute}}
+  upf.domain @malformed elements ["top.a"] power @p on [] {isolation_control = "top.iso", isolation_diff_supply_only = "FALSE"}
+}

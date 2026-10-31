@@ -778,9 +778,10 @@ struct Lowering {
           contains(domain, scopePaths.lookup(unit.getScopeId())))
         computedInputs.insert(unit.getId());
     SmallVector<StringRef> boundaries = boundaryInstances(domain);
-    // IEEE 1801-2018 6.45 applies isolation per path, with -diff_supply_only
-    // TRUE by default. Multiple boundary instances can exchange same-domain
-    // traffic, so a whole-output mux cannot yet represent their path filters.
+    // IEEE 1801-2018 6.45 applies isolation only on the domain interface.
+    // Multiple boundary instances can exchange internal same-domain traffic;
+    // even diff_supply_only FALSE needs that interface/path classification.
+    // A whole-output mux cannot yet represent these multiple-boundary paths.
     if (domain.getIsolationControl() && boundaries.size() != 1)
       return domain.emitError(
           "isolation across multiple boundary instances "

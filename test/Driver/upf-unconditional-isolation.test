@@ -1,0 +1,146 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.45/6.50 Note 2/9.8: explicit diff_supply_only FALSE
+// isolates every selected output regardless of RET vs primary driving supply.
+// Isolation masks only boundary publications: delayed NBAs still update the
+// retained internal value. X/Z control corrupts even DATA==clamp. Separately,
+// primary/RET loss still cancels stale writes hidden behind a stable clamp.
+// Include ascending65bit values, bit formal -> logic actual, and internal
+// primary-powered combinational logic. The low wrapper selects clamp1/low.
+// CHECK: unconditional isolation passed
+
+//--- design.sv
+module leaf(input logic clk, rst_n, input logic [0:64] d,
+            output logic [0:64] live = 0, output bit [0:64] liveb = 0,
+            output logic [0:64] plain = 0, output logic [0:64] derived);
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin live <= #2 0; liveb <= #2 0; plain <= #2 0; end
+    else begin live <= #2 d; liveb <= #2 d; plain <= #2 d; end
+  end
+  always_comb derived = live + 65'd1;
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, rst_n = 1, enable = 1, rtc = 0, iso = 0;
+  logic [0:64] d = 65'h10000000000000013, clamp;
+  bit active;
+  wire [0:64] live, liveb, plain, derived;
+  int known_edges = 0, before_loss;
+  leaf dut(clk,rst_n,d,live,liveb,plain,derived);
+  always @(posedge live[64]) if (live[64] === 1) known_edges++;
+  task tick;
+    clk=0;
+    #1 clk=1;
+    #3;
+  endtask
+  task check_clamp;
+    if (live !== clamp || liveb !== clamp || plain !== clamp || derived !== clamp)
+      $fatal(1,"boundary clamp %h %h %h %h expected %h",live,liveb,plain,derived,clamp);
+  endtask
+  initial begin
+    active = !$test$plusargs("low");
+    clamp = active ? '0 : '1;
+    iso = !active;
+    if (!supply_on("/top/AON.power") || !supply_on("/top/AON.ground",0.0) ||
+        !supply_on("/top/RET.power")) $fatal(1,"initial supplies");
+    tick();
+    if (live !== d || liveb !== d || plain !== d || derived !== d+65'd1)
+      $fatal(1,"normal pass-through");
+    iso=active;
+    #1 check_clamp();
+    d=65'h10000000000000024;
+    tick();
+    check_clamp();
+    if (dut.live !== d || dut.liveb !== d || dut.plain !== d)
+      $fatal(1,"isolation froze internal NBA");
+    d=clamp;
+    tick();
+    iso=1'bx;
+    #1;
+    if (live !== 'x || liveb !== 'x || plain !== 'x || derived !== 'x || dut.live !== clamp)
+      $fatal(1,"unknown control merged equal DATA/clamp");
+    iso=1'bz;
+    #1;
+    if (live !== 'x || liveb !== 'x || plain !== 'x || derived !== 'x)
+      $fatal(1,"Z control did not corrupt boundary");
+    iso=!active;
+    #1;
+    if (live !== clamp || liveb !== clamp) $fatal(1,"isolation release lost backing");
+    clk=0;
+    rtc=1;
+    #1 enable=0;
+    #1;
+    if (live !== clamp || liveb !== clamp || dut.live !== clamp || dut.liveb !== clamp ||
+        plain !== 'x || derived !== 'x) $fatal(1,"RET-powered OFF pass-through");
+    iso=active;
+    #1 check_clamp();
+    if (dut.live !== clamp || dut.liveb !== clamp || dut.plain !== 'x)
+      $fatal(1,"OFF clamp changed internal state");
+    iso=!active;
+    #1;
+    if (live !== clamp || liveb !== clamp || plain !== 'x)
+      $fatal(1,"OFF release invented a clock or lost retained data");
+    enable=1;
+    #0 rtc=0;
+    #1;
+    iso=active;
+    #1;
+    before_loss=known_edges;
+    d=~clamp;
+    clk=0;
+    #1 clk=1;
+    #0 rtc=1;
+    enable=0;
+    #1 enable=1;
+    #0 rtc=0;
+    #3;
+    check_clamp();
+    if (dut.live !== clamp || dut.liveb !== clamp || dut.plain !== 'x || known_edges !== before_loss)
+      $fatal(1,"primary loss revived a hidden delayed NBA");
+    clk=0;
+    #1 clk=1;
+    #0;
+    if (!supply_off("/top/RET.power")) $fatal(1,"RET OFF");
+    #0;
+    if (!supply_on("/top/RET.power")) $fatal(1,"RET ON");
+    #3;
+    check_clamp();
+    if (dut.live !== 'x || dut.liveb !== 0 || dut.plain !== ~clamp || known_edges !== before_loss)
+      $fatal(1,"RET loss or boundary isolation changed cancellation");
+    iso=!active;
+    #1;
+    if (live !== 'x || liveb !== 0 || plain !== ~clamp)
+      $fatal(1,"release failed to expose actual internal values");
+    rst_n=0;
+    #3;
+    if (live !== 0 || liveb !== 0 || plain !== 0 || derived !== 1)
+      $fatal(1,"fresh reset after loss");
+    $display("unconditional isolation passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+if {![info exists isolation_sense]} {set isolation_sense high}
+if {![info exists isolation_clamp]} {set isolation_clamp 0}
+create_supply_net VDD
+create_supply_set AON -function {power VDD}
+create_supply_set SW -function {ground AON.ground}
+create_supply_set RET -function {ground AON.ground}
+create_power_domain PD -elements dut -supply {primary SW}
+create_power_switch PS -domain PD \
+    -input_supply_port {vin AON.power} -output_supply_port {vout PD.primary.power} \
+    -control_port {en enable} -on_state {ON vin en}
+set_retention KEEP -domain PD -elements {dut/live dut/liveb} -retention_supply RET \
+    -retention_condition rtc -use_retention_as_primary
+set_isolation ISO -domain PD -isolation_signal iso -isolation_sense $isolation_sense \
+    -clamp_value $isolation_clamp -applies_to outputs -location parent -diff_supply_only FALSE
+//--- low.upf
+set isolation_sense low
+set isolation_clamp 1

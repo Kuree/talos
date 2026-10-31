@@ -40,7 +40,10 @@ def UPFDomainOp : Op<UPFDialect, "domain", [Symbol,
       DefaultValuedAttr<BoolAttr, "true">:$isolation_high,
       DefaultValuedAttr<I64Attr, "0">:$clamp,
       OptionalAttr<UPFRetentionArrayAttr>:$retentions,
-      OptionalAttr<StrAttr>:$isolation_name);
+      OptionalAttr<StrAttr>:$isolation_name,
+      // IEEE 1801-2018 6.45: omitted/bare is TRUE; FALSE removes only the
+      // driver/receiver supply comparison from isolation's port filters.
+      DefaultValuedAttr<BoolAttr, "true">:$isolation_diff_supply_only);
   let assemblyFormat = "$sym_name `elements` $elements `power` $power `on` $on attr-dict";
   let hasVerifier = 1;
 }

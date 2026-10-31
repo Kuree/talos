@@ -163,8 +163,11 @@ writer, using typed backing storage and separate visible output (9.7.3,
 Tables 11/12). RTC True holds backing; primary loss masks primary-powered
 outputs. The `-use_retention_as_primary` option instead keeps the output driver
 on the retention supply, while data inputs and functional writes still require
-primary power (6.50/9.7.3 Table 12). This option with effective domain isolation
-needs per-path supply filtering and is diagnosed until that exists (6.50 Note 2).
+primary power (6.50/9.7.3 Table 12). Explicit `-diff_supply_only FALSE` isolation
+admits all otherwise selected outputs and uses the existing boundary mux.
+TRUE/default with effective RET-powered outputs still needs per-path supply
+filtering and is diagnosed (6.45/6.50 Note 2). Omitted/bare options remain TRUE;
+caught failed Tcl declarations preserve the previous filter and strategy.
 Loss of retention power, or primary loss without RTC True, corrupts backing.
 Recovery restores surviving retained data without a clock. Guarded NBAs check
 pending occurrences and captured domain/strategy epochs at commit, preserving source

@@ -44,6 +44,7 @@ struct Domain {
   upf::SwitchStateAttr off;
   std::vector<std::string> elements;
   bool isolationHigh = true;
+  bool isolationDiffSupplyOnly = true;
   int64_t clamp = 0;
   bool primaryAssociated = false;
   std::optional<Location> location;
@@ -1593,12 +1594,36 @@ struct Session {
     if (command == "set_isolation") {
       // IEEE 1801-2018 6.45: this first slice handles parent-located output
       // isolation; other strategy forms must fail rather than be ignored.
-      if (objc < 2 ||
-          !options(objc, objv, 2,
-                   {"-domain", "-isolation_signal", "-isolation_sense",
-                    "-clamp_value", "-applies_to", "-location"},
-                   opts))
-        return TCL_ERROR;
+      bool diffSupplyOnly = true, sawDiffSupplyOnly = false;
+      for (Tcl_Size i = 2; i < objc; ++i) {
+        StringRef option = Tcl_GetString(objv[i]);
+        if (option == "-diff_supply_only") {
+          // 6.45 makes both omission and a bare option TRUE. Preserve the
+          // next option, and stage the result until all validation succeeds.
+          if (sawDiffSupplyOnly)
+            return error("duplicate UPF option -diff_supply_only");
+          sawDiffSupplyOnly = true;
+          if (i + 1 < objc &&
+              !StringRef(Tcl_GetString(objv[i + 1])).starts_with('-')) {
+            int flag;
+            if (Tcl_GetBooleanFromObj(interp, objv[++i], &flag) != TCL_OK)
+              return TCL_ERROR;
+            diffSupplyOnly = flag;
+          }
+          continue;
+        }
+        if (!llvm::is_contained(
+                ArrayRef<StringRef>{"-domain", "-isolation_signal",
+                                    "-isolation_sense", "-clamp_value",
+                                    "-applies_to", "-location"},
+                option))
+          return error("unsupported UPF option '" + option +
+                       "' in set_isolation");
+        if (++i == objc)
+          return error("missing value for " + option);
+        if (!opts.emplace(option.str(), objv[i]).second)
+          return error("duplicate UPF option " + option);
+      }
       Domain *dom = domain(opts);
       if (!dom)
         return TCL_ERROR;
@@ -1635,6 +1660,7 @@ struct Session {
       dom->isolationName = isolationName.str();
       dom->isolationHigh = sense != "low";
       dom->clamp = clamp == "1";
+      dom->isolationDiffSupplyOnly = diffSupplyOnly;
       return TCL_OK;
     }
     return error("unsupported UPF command: " + command);
@@ -2036,7 +2062,8 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
         retentions.empty() ? ArrayAttr{} : builder.getArrayAttr(retentions),
         domain.isolationName.empty()
             ? StringAttr{}
-            : builder.getStringAttr(domain.isolationName));
+            : builder.getStringAttr(domain.isolationName),
+        domain.isolationDiffSupplyOnly);
   }
   return verify(module);
 #endif

@@ -1,0 +1,10 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-unconditional-isolation.test %t
+// RUN: talos --upf %t/low.upf --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 +low | FileCheck %S/upf-unconditional-isolation.test
+// RUN: talos --upf %t/low.upf --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 +low | FileCheck %S/upf-unconditional-isolation.test
+// RUN: talos --upf %t/low.upf --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc
+// RUN: %t.bc +low | FileCheck %S/upf-unconditional-isolation.test
+// IEEE 1801-2018 6.45/9.8: low-active isolation and clamp1 preserve the same
+// RET/primary output behavior, internal NBA admission and unknown-control rule.

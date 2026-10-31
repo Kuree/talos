@@ -1,0 +1,58 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/defaults.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.default.mlir | FileCheck %s --check-prefix=TCL
+// RUN: talos-opt %t.default.mlir | talos-opt | FileCheck %s --check-prefix=DEFAULT --implicit-check-not=isolation_diff_supply_only
+// RUN: talos --upf %t/defaults.upf --upf %t/false.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.false.mlir
+// RUN: talos-opt %t.false.mlir | talos-opt | FileCheck %s --check-prefix=FALSE
+// IEEE 1801-2018 6.45: omitted/bare defaults to TRUE; FALSE admits any port.
+// Optional Boolean parsing must preserve following options and caught failures
+// must not install a strategy or leak a staged FALSE into a valid retry.
+// TCL: isolation optional Boolean and rollback passed
+// DEFAULT-DAG: upf.domain @top.BARE_FIRST
+// DEFAULT-DAG: upf.domain @top.BARE_LAST
+// DEFAULT-DAG: upf.domain @top.OMITTED
+// DEFAULT-DAG: upf.domain @top.ROLLBACK
+// DEFAULT-DAG: upf.domain @top.TRUE
+// FALSE: upf.domain @top.FALSE
+// FALSE-SAME: isolation_diff_supply_only = false
+
+//--- design.sv
+module leaf(input logic clk, d, output logic q);
+  always_ff @(posedge clk) q <= d;
+endmodule
+module top;
+  logic clk = 0, d = 1, iso = 0;
+  wire qa,qb,qc,qd,qe,qf;
+  leaf a(clk,d,qa), b(clk,d,qb), c(clk,d,qc), e(clk,d,qe), f(clk,d,qf);
+  leaf r(clk,d,qd);
+  initial begin #1 clk=1; #1 $display("%b%b%b%b%b%b",qa,qb,qc,qd,qe,qf); end
+endmodule
+//--- defaults.upf
+proc expect_error {script pattern} {
+    if {[catch {uplevel 1 $script} message] != 1 || ![string match $pattern $message]} {
+        error "expected <$pattern>, got <$message>"
+    }
+}
+proc iso_options {domain} {
+    return [list -domain $domain -isolation_signal iso -applies_to outputs -location parent]
+}
+foreach {domain instance} {OMITTED a TRUE b BARE_FIRST c BARE_LAST e ROLLBACK r} {
+    create_power_domain $domain -elements $instance
+}
+set_isolation ISO {*}[iso_options OMITTED] -clamp_value 0
+set_isolation ISO {*}[iso_options TRUE] -clamp_value 0 -diff_supply_only TRUE
+set_isolation ISO -diff_supply_only {*}[iso_options BARE_FIRST] -clamp_value 0
+set_isolation ISO {*}[iso_options BARE_LAST] -clamp_value 0 -diff_supply_only
+set options [iso_options ROLLBACK]
+expect_error {set_isolation ISO {*}$options -clamp_value 0 -diff_supply_only maybe} {*expected boolean*}
+expect_error {set_isolation ISO {*}$options -clamp_value 0 -diff_supply_only {}} {*expected boolean*}
+expect_error {set_isolation ISO {*}$options -clamp_value 0 -diff_supply_only -diff_supply_only FALSE} {*duplicate UPF option -diff_supply_only*}
+expect_error {set_isolation ISO {*}$options -clamp_value 0 -diff_supply_only FALSE -diff_supply_only FALSE} {*duplicate UPF option -diff_supply_only*}
+expect_error {set_isolation ISO {*}$options -clamp_value 0 -diff_supply_only FALSE -isolation_sense invalid} {*sense must be high or low*}
+expect_error {set_isolation ISO {*}$options -clamp_value 0 -diff_supply_only FALSE -source CORE} {*unsupported UPF option*}
+expect_error {set_isolation ISO {*}$options -diff_supply_only FALSE -clamp_value} {*missing value for -clamp_value*}
+set_isolation ISO {*}$options -clamp_value 0
+puts "isolation optional Boolean and rollback passed"
+//--- false.upf
+create_power_domain FALSE -elements f
+set_isolation ISO {*}[iso_options FALSE] -diff_supply_only FALSE -clamp_value 1

@@ -482,6 +482,8 @@ mlir::LogicalResult UPFDomainOp::verify() {
   if (auto name = getIsolationName();
       name && (name->empty() || !getIsolationControl()))
     return emitOpError("isolation strategy name requires an isolation control");
+  if (!getIsolationDiffSupplyOnly() && !getIsolationControl())
+    return emitOpError("isolation supply filter requires an isolation control");
   if (getClamp() != 0 && getClamp() != 1)
     return emitOpError("isolation clamp must be zero or one");
   if (!getInputAttr() &&

@@ -1,0 +1,14 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-unconditional-isolation.test %t
+// RUN: talos --upf %t/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/design.sv -o %t.high.o
+// RUN: talos --upf %t/low.upf --upf %t/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/design.sv -o %t.low.o
+// RUN: talos --upf %t/design.upf --target=wasm32 -O0 --execution-tier=bytecode --mlir-verify-each -c %t/design.sv -o %t.bc-high.o
+// RUN: talos --upf %t/low.upf --upf %t/design.upf --target=wasm32 -O0 --execution-tier=bytecode --mlir-verify-each -c %t/design.sv -o %t.bc-low.o
+// RUN: %llvm_dist/bin/llvm-readobj --file-headers %t.high.o %t.low.o %t.bc-high.o %t.bc-low.o | FileCheck %s --check-prefix=HEADERS
+// RUN: %llvm_dist/bin/llvm-nm --undefined-only %t.high.o %t.low.o %t.bc-high.o %t.bc-low.o | FileCheck %s --check-prefix=SYMBOLS --implicit-check-not=Tcl_
+// RUN: %llvm_dist/bin/llvm-nm --undefined-only %t.bc-high.o %t.bc-low.o | FileCheck %s --check-prefix=BYTECODE --implicit-check-not=talos_rt_v1_power_nba
+// IEEE 1801-2018 6.45/9.8: unconditional boundary muxes use the existing
+// target IR and fixed64 handles on wasm32; generated simulators remain Tcl-free.
+// HEADERS-COUNT-4: AddressSize: 32bit
+// SYMBOLS: talos_rt_v1_
+// BYTECODE: talos_rt_v1_

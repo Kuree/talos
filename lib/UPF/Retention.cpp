@@ -437,10 +437,12 @@ struct Lowering {
         return decl.emitError(
             "retention requires one sequential writer per register");
       if (reg.strategy.getUseRetentionAsPrimary() &&
-          o.domain.getIsolationControl())
+          o.domain.getIsolationControl() &&
+          o.domain.getIsolationDiffSupplyOnly())
         // IEEE 1801-2018 6.50 Note 2 changes the driver supply used by
         // 6.45's default diff_supply_only filter. The current whole-boundary
         // mux cannot prove that selection for mixed RET/primary outputs.
+        // Explicit diff_supply_only FALSE satisfies this filter for any port.
         return emitError(location(reg.strategy))
                << "isolation of retention-powered outputs requires per-path "
                   "supply filtering and is not implemented";

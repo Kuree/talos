@@ -1,0 +1,27 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: %split-file %S/upf-retention-powered-isolation-errors.test %t/ret
+// RUN: %split-file %S/upf-hierarchy-errors.test %t/hierarchy
+// RUN: not talos --upf %t/common.upf --upf %t/true.upf --upf %t/ret/live.upf -O0 -c %t/ret/design.sv -o %t.true.o 2>&1 | FileCheck %s --check-prefix=RET
+// RUN: not talos --upf %t/common.upf --upf %t/bare-first.upf --upf %t/ret/live.upf -O0 -c %t/ret/design.sv -o %t.bare-first.o 2>&1 | FileCheck %s --check-prefix=RET
+// RUN: not talos --upf %t/common.upf --upf %t/bare-last.upf --upf %t/ret/live.upf -O0 -c %t/ret/design.sv -o %t.bare-last.o 2>&1 | FileCheck %s --check-prefix=RET
+// RUN: not talos --upf %t/multiple.upf -O0 -c %t/hierarchy/design.sv -o %t.multiple.o 2>&1 | FileCheck %s --check-prefix=PATHS
+// IEEE 1801-2018 6.45/6.50 Note 2: TRUE/default still requires supply
+// matching for RET-powered outputs. FALSE removes only that filter; it does
+// not prove which multiple-instance paths cross the power-domain interface.
+// RET: isolation of retention-powered outputs requires per-path supply filtering
+// PATHS: isolation across multiple boundary instances requires per-path handling
+
+//--- common.upf
+create_power_domain PD -elements dut
+set options {-domain PD -isolation_signal iso -isolation_sense high -clamp_value 0 -applies_to outputs -location parent}
+//--- true.upf
+set_isolation ISO {*}$options -diff_supply_only TRUE
+//--- bare-first.upf
+set_isolation ISO -diff_supply_only {*}$options
+//--- bare-last.upf
+set_isolation ISO {*}$options -diff_supply_only
+//--- multiple.upf
+create_power_domain PD -elements {dut/u dut/u2}
+set_isolation ISO -domain PD -isolation_signal iso -clamp_value 0 \
+    -applies_to outputs -location parent -diff_supply_only FALSE

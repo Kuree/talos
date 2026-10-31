@@ -73,6 +73,15 @@ latches reevaluate on restoration. Synchronous external helper calls are
 supported after checking their call closure; asynchronous or indirect calls
 remain diagnosed. Input expressions owned by an exterior parent remain active.
 
+`set_isolation` accepts `-diff_supply_only` with an optional Tcl Boolean value.
+Omitted and bare options mean TRUE. Explicit FALSE removes the driving/receiving
+supply-comparison filter, admitting every otherwise selected output (clause 6.45).
+It enables unconditional isolation of RET-powered outputs. The existing
+output-only, parent-location and single-boundary restrictions still apply.
+Clamping changes only the boundary value; internal state and delayed assignments
+remain active according to their own supplies. An X/Z isolation control corrupts
+the boundary even when data equals the clamp (clause 9.8).
+
 Power switches accept repeated `-control_port {alias design_object}`,
 `-on_state {name input expression}`, `-on_partial_state {name input expression}`,
 and `-error_state {name expression}`
@@ -300,10 +309,11 @@ supplies. The data-input receiving supply and functional write guards still
 require primary power; unrelated logic in the domain remains inactive while
 OFF. Retention supply policies and required ground still apply. Caught failed
 Tcl updates leave the flag unchanged; successful updates can add it and
-preserve it when omitted. The current isolation mux cannot apply per-output supply filters
-for this combination, so effective RET-powered registers with domain isolation
-are diagnosed (clause 6.50 Note 2 and clause 6.45). Excluded, nonsequential and
-`-no_retention` selections infer no RET-powered driver.
+preserve it when omitted. For isolation, `-diff_supply_only FALSE` explicitly
+admits every selected output and composes with RET-powered drivers. With TRUE
+or its default, effective RET-powered registers still require per-output supply
+filtering and are diagnosed (clause 6.50 Note 2 and clause 6.45). Excluded,
+nonsequential and `-no_retention` selections infer no RET-powered driver.
 
 Declaration and untimed initialization stores update backing. Sequential
 blocking stores preserve visible program order, including feedback reads.
