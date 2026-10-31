@@ -1701,7 +1701,11 @@ LogicalResult NativePipelineAnalysis::prepareFragments(
   module.walk([&](sim::SimFuncOp function) {
     native::remove<native::NoTransitionRoots>(function);
   });
-  if (stateLayout->transitionHandlesExact && staticFanoutPlan.exact) {
+  bool hasEventSnapshots = false;
+  module.walk(
+      [&](sim::SimEventSnapshotRegisterOp) { hasEventSnapshots = true; });
+  if (!hasEventSnapshots && stateLayout->transitionHandlesExact &&
+      staticFanoutPlan.exact) {
     DenseSet<uint32_t> observedRoots = staticFanoutPlan.runtimeTransitionStates;
     module.walk([&](sim::SimStorageDeclOp storage) {
       if (!cov::has<cov::ToggleObservable>(storage))

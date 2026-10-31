@@ -4046,6 +4046,7 @@ LogicalResult SimDesignOp::verifyRegions() {
   llvm::DenseMap<uint64_t, SimStatementDeclOp> statements;
   llvm::DenseMap<uint64_t, SimVPIObjectAnchorOp> vpiAnchorsById;
   llvm::DenseMap<uint64_t, SimStorageDeclOp> storagesById;
+  llvm::DenseMap<uint64_t, SimNetDeclOp> snapshotNetsById;
   SmallVector<SimStatementDeclOp> statementInventory;
   SmallVector<SimStatementSiteDeclOp> statementSites;
   SmallVector<SimVPIThreadOriginBindingOp> threadOrigins;
@@ -4229,6 +4230,7 @@ LogicalResult SimDesignOp::verifyRegions() {
         return failure();
       nets[net.getId()] = net;
       netTypes[net.getId()] = net.getType();
+      snapshotNetsById[net.getId()] = net;
       netResolutions[net.getId()] = net.getResolutionKind();
     } else if (auto driver = dyn_cast<SimDriverDeclOp>(op)) {
       if (failed(addId(driver.getIdAttr(), driverIds, "driver")))
@@ -7130,6 +7132,41 @@ LogicalResult SimDesignOp::verifyRegions() {
                     "descriptor";
       }
     WalkResult result = function.walk([&](Operation *op) {
+      if (auto snapshot = dyn_cast<SimEventSnapshotRegisterOp>(op)) {
+        // IEEE 1801-2018 6.50: captures and destinations outlive the
+        // installing activation. Reuse the design's declaration inventory.
+        SmallVector<Value> references(snapshot.getTargets());
+        SmallVector<Value> callbacks(snapshot.getPrimaries());
+        llvm::append_range(callbacks, snapshot.getConditions());
+        callbacks.push_back(snapshot.getSampler());
+        for (Value value : callbacks)
+          if (auto binding = value.getDefiningOp<SimObserverBindOp>())
+            llvm::append_range(references, binding.getValues());
+        for (Value reference : references) {
+          SmallVector<Operation *> roots;
+          if (!collectSnapshotRoots(reference, roots)) {
+            op->emitOpError("requires whole persistent snapshot references");
+            return WalkResult::interrupt();
+          }
+          for (Operation *root : roots) {
+            bool persistent = false;
+            if (auto storage = dyn_cast<SimContextStorageOp>(root)) {
+              auto declaration = storagesById.lookup(storage.getId());
+              persistent = declaration &&
+                           declaration.getLifetime() != Lifetime::Automatic;
+            } else if (auto net = dyn_cast<SimContextNetOp>(root)) {
+              auto declaration = snapshotNetsById.lookup(net.getId());
+              persistent = declaration &&
+                           declaration.getLifetime() != Lifetime::Automatic;
+            }
+            if (!persistent) {
+              op->emitOpError(
+                  "snapshot roots must have persistent declaration lifetime");
+              return WalkResult::interrupt();
+            }
+          }
+        }
+      }
       if (isa<SimPowerNBAOp, SimPowerNBAViewOp>(op)) {
         // IEEE 1801-2018 9.7.3: every guarded destination and epoch must
         // survive until NBA commit. Use the design-wide descriptor index,

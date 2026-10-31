@@ -1,0 +1,53 @@
+// RUN: %split-file %S/../Runtime/simulation-event-snapshot.test %t/common
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/common/design.mlir --test-talos-sim-state-domain -o /dev/null 2>&1 | FileCheck %s --check-prefix=DOMAIN
+// RUN: talos-opt %t/common/design.mlir --test-talos-steady-unknown -o /dev/null 2>&1 | FileCheck %s --check-prefix=STEADY
+// RUN: talos-opt %t/common/design.mlir --test-talos-local-unknown -o /dev/null 2>&1 | FileCheck %s --check-prefix=LOCAL
+// RUN: talos-opt %t/common/design.mlir --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph,talos-sim-verify-compute-graph),test-talos-native-aot-analysis)' -o %t.graph.mlir 2>&1 | FileCheck %s --check-prefix=AOT
+// RUN: FileCheck %s --check-prefix=GRAPH < %t.graph.mlir
+// RUN: talos-opt %t/barrier.mlir --cse | FileCheck %s --check-prefix=CSE
+// IEEE 1801-2018 6.50: a once-installed observer repeatedly writes its
+// targets. An initially known target can receive X; an initially X target
+// can become known. Neither global proof may freeze their initial domains.
+// The explicit commit invalidates loads even with no visible target operand.
+// DOMAIN: state-domain @snapshots
+// DOMAIN-NOT: root storage
+// DOMAIN: func @main
+// DOMAIN: may-four-state (ref-load)
+// STEADY: steady-unknown @snapshots
+// STEADY-NOT: root
+// LOCAL: local-unknown @main
+// LOCAL: read saved_known_after_flush: written
+// LOCAL: read saved_x_after_flush: written
+// AOT: native-aot eligible=false fully=false
+// AOT: reason event snapshots require runtime publication boundaries
+// GRAPH-LABEL: simulation.func private @owner
+// GRAPH-SAME: effect = read, resource = storage, target = descriptor, descriptor = 0
+// GRAPH-SAME: effect = read, resource = storage, target = descriptor, descriptor = 5
+// GRAPH-SAME: effect = write, resource = storage, target = descriptor, descriptor = 1
+// GRAPH-SAME: effect = write, resource = storage, target = descriptor, descriptor = 2
+// GRAPH-SAME: effect = write, resource = storage, target = descriptor, descriptor = 4
+// GRAPH-SAME: effect = watch, resource = storage, target = descriptor, descriptor = 3
+// GRAPH-SAME: trigger = change
+// CSE-LABEL: simulation.func @probe
+// CSE: %[[A:.*]] = simulation.ref.load
+// CSE-NEXT: simulation.event.snapshot.flush
+// CSE-NEXT: %[[B:.*]] = simulation.ref.load
+// CSE-NEXT: simulation.return %[[A]], %[[B]]
+
+//--- barrier.mlir
+module {
+  simulation.design @barrier {
+    simulation.scope.decl 0
+    simulation.storage.decl 0 in 0 : i8 design
+    simulation.code_unit.decl 1 in 0 function hierarchy "top.probe"
+    simulation.func @probe(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) -> (i8, i8)
+        attributes {entry_kind = 8 : i32, code_unit_id = 1 : i64} {
+      %ref = simulation.context.storage %ctx[0] : !simulation.ref<i8>
+      %a = simulation.ref.load %ref : !simulation.ref<i8> -> i8
+      simulation.event.snapshot.flush %ctx
+      %b = simulation.ref.load %ref : !simulation.ref<i8> -> i8
+      simulation.return %a, %b : i8, i8
+    }
+  }
+}

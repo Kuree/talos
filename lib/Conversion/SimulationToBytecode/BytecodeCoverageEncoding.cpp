@@ -2,6 +2,7 @@
 
 #include "BytecodeEncoder.h"
 #include "BytecodeSerialization.h"
+#include <type_traits>
 
 using namespace mlir;
 
@@ -163,8 +164,11 @@ Encoder::encodeCoverageOperation(FunctionPlan &plan, Operation *operation) {
   if (auto op = dyn_cast<sim::SimCovergroupSampleEnabledOp>(operation))
     return emitIntrinsic(plan, kIntrinsicCovergroupSampleEnabled,
                          {op.getHandle()}, {op.getResult()});
-  if (auto op = dyn_cast<sim::SimCovergroupClockEventRegisterOp>(operation)) {
-    auto sampler = op.getSampler().getDefiningOp<sim::SimObserverBindOp>();
+  auto encodeExactEvent = [&](auto op) -> LogicalResult {
+    constexpr bool snapshot =
+        std::is_same_v<decltype(op), sim::SimEventSnapshotRegisterOp>;
+    auto sampler =
+        op.getSampler().template getDefiningOp<sim::SimObserverBindOp>();
     auto evaluator =
         sampler ? indices.find(sampler.getEvaluator()) : indices.end();
     if (!sampler || evaluator == indices.end() ||
@@ -184,10 +188,16 @@ Encoder::encodeCoverageOperation(FunctionPlan &plan, Operation *operation) {
         return op.emitOpError("condition is not produced by observer.bind");
       bindings.push_back(binding);
     }
+    uint64_t policy = 0;
+    if constexpr (snapshot) {
+      requiresEventSnapshotFeature = true;
+      policy = op.getTargets().size();
+    } else
+      policy = op.getStrobe() ? 1 : 0;
     SmallVector<uint32_t> inputs{
         emitU64Constant(plan, op.getPrimaries().size()),
         emitU64Constant(plan, op.getConditions().size()),
-        emitU64Constant(plan, op.getStrobe() ? 1 : 0),
+        emitU64Constant(plan, policy),
         emitU64Constant(plan, plans[evaluator->second].stableID),
         emitU64Constant(plan, sampler.getCaptures().size())};
     auto stableHandle = [&](Value handle) -> FailureOr<uint32_t> {
@@ -279,9 +289,30 @@ Encoder::encodeCoverageOperation(FunctionPlan &plan, Operation *operation) {
       inputs.push_back(reg(plan, initial));
     for (Value capture : sampler.getCaptures())
       inputs.push_back(reg(plan, capture));
-    return emitIntrinsicRegisters(plan, kIntrinsicCovergroupClockEventRegister,
-                                  inputs, {});
-  }
+    if constexpr (snapshot) {
+      for (Value target : op.getTargets()) {
+        FailureOr<uint32_t> handle = stableHandle(target);
+        Type type = cast<sim::RefType>(target.getType()).getElementType();
+        auto width = simulationWidth(type);
+        if (failed(handle) || !width)
+          return op.emitOpError("snapshot target has no fixed handle/width");
+        inputs.append(
+            {*handle, emitU64Constant(plan, *width),
+             emitU64Constant(plan, sim::containsFourStateLeaf(type)
+                                       ? TALOS_RT_EVENT_SNAPSHOT_FOUR_STATE
+                                       : 0)});
+      }
+    }
+    return emitIntrinsicRegisters(
+        plan,
+        snapshot ? TALOS_RT_INTRINSIC_V1_EVENT_SNAPSHOT_REGISTER
+                 : kIntrinsicCovergroupClockEventRegister,
+        inputs, {});
+  };
+  if (auto op = dyn_cast<sim::SimCovergroupClockEventRegisterOp>(operation))
+    return encodeExactEvent(op);
+  if (auto op = dyn_cast<sim::SimEventSnapshotRegisterOp>(operation))
+    return encodeExactEvent(op);
   if (auto op = dyn_cast<sim::SimCovergroupBlockEventRegisterOp>(operation)) {
     auto sampler = op.getSampler().getDefiningOp<sim::SimObserverBindOp>();
     auto evaluator =

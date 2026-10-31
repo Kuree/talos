@@ -26,6 +26,12 @@ mlir::LogicalResult verifyPostponedReadOnly(SimFuncOp root);
 /// cycles. Declaration lifetimes are checked by the design's bulk verifier.
 bool collectWholeStorageRoots(
     mlir::Value reference, llvm::SmallVectorImpl<SimContextStorageOp> &roots);
+/// Whole context storage/net handles through CFG forwarding, for persistent
+/// snapshot captures. Declaration lifetime is checked by the design verifier.
+bool collectSnapshotRoots(mlir::Value reference,
+                          llvm::SmallVectorImpl<mlir::Operation *> &roots);
+std::optional<bool> integralStorageDomain(mlir::Type root);
+bool hasSnapshotMask(SimFuncOp function);
 
 /// Verifies an optional typed source-call identity on an executable call.
 mlir::LogicalResult verifyVPICallSite(mlir::Operation *operation,

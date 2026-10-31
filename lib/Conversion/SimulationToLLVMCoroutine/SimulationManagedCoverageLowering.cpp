@@ -756,32 +756,42 @@ serializeCovergroupSamplerCaptures(Operation *operation,
   return records;
 }
 
-class CovergroupClockEventRegisterConversion final
-    : public OpConversionPattern<sim::SimCovergroupClockEventRegisterOp> {
+template <typename Op>
+class ExactEventRegisterConversion final : public OpConversionPattern<Op> {
 public:
-  using OpConversionPattern::OpConversionPattern;
+  using Base = OpConversionPattern<Op>;
+  using Base::Base;
+  using OneToNOpAdaptor = typename Base::OneToNOpAdaptor;
 
   LogicalResult
-  matchAndRewrite(sim::SimCovergroupClockEventRegisterOp op,
-                  OneToNOpAdaptor adaptor,
+  matchAndRewrite(Op op, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    constexpr bool snapshot =
+        std::is_same_v<Op, sim::SimEventSnapshotRegisterOp>;
+    ArrayRef<ValueRange> eventValues;
+    if constexpr (snapshot)
+      eventValues = adaptor.getArguments().take_front(op.getValues().size());
+    else
+      eventValues = adaptor.getValues();
     const uint64_t primaryCount = op.getPrimaries().size();
-    if (adaptor.getValues().size() != op.getValues().size() ||
-        adaptor.getHandle().size() != 1)
+    if (eventValues.size() != op.getValues().size())
       return failure();
-    for (uint64_t index = 0; index != primaryCount; ++index) {
-      if (adaptor.getValues()[index].size() != 1)
+    if constexpr (!snapshot)
+      if (adaptor.getHandle().size() != 1)
         return failure();
-      ValueRange initial = adaptor.getValues()[primaryCount + index];
+    for (uint64_t index = 0; index != primaryCount; ++index) {
+      if (eventValues[index].size() != 1)
+        return failure();
+      ValueRange initial = eventValues[primaryCount + index];
       if (initial.empty() || initial.size() > 2)
         return failure();
     }
-    for (uint64_t index = primaryCount * 2; index != adaptor.getValues().size();
+    for (uint64_t index = primaryCount * 2; index != eventValues.size();
          ++index)
-      if (adaptor.getValues()[index].size() != 1)
+      if (eventValues[index].size() != 1)
         return failure();
 
-    Value convertedSampler = adaptor.getValues().back().front();
+    Value convertedSampler = eventValues.back().front();
     Operation *binding = getConvertedObserverBinding(convertedSampler);
     auto observerID =
         binding ? ::talos::schedule::get<
@@ -809,16 +819,16 @@ public:
     initialPlanes.reserve(primaryCount);
     for (uint64_t index = 0; index != primaryCount; ++index) {
       Operation *primary =
-          getConvertedObserverBinding(adaptor.getValues()[index].front());
+          getConvertedObserverBinding(eventValues[index].front());
       if (!primary)
         return op.emitOpError(
             "primary token has malformed converted observer metadata");
       eventBindings.push_back(primary);
-      initialPlanes.push_back(adaptor.getValues()[primaryCount + index]);
+      initialPlanes.push_back(eventValues[primaryCount + index]);
     }
     for (uint64_t index = 0; index != op.getConditions().size(); ++index) {
       Operation *condition = getConvertedObserverBinding(
-          adaptor.getValues()[primaryCount * 2 + index].front());
+          eventValues[primaryCount * 2 + index].front());
       if (!condition)
         return op.emitOpError(
             "condition token has malformed converted observer metadata");
@@ -882,20 +892,59 @@ public:
 
     auto [context, lane] = managedContextAndLane(rewriter, location);
     (void)lane;
+    SmallVector<Value> arguments{
+        context, record, llvmConstant(rewriter, location, i64, recordSize)};
+    if constexpr (snapshot) {
+      if (op.getTargets().size() >
+          UINT32_MAX / sizeof(talos_rt_event_snapshot_target_v1))
+        return op.emitOpError(
+            "snapshot target record span exceeds v1 addressable limits");
+      Value targets = entryAlloca(rewriter, location, i8,
+                                  op.getTargets().size() *
+                                      sizeof(talos_rt_event_snapshot_target_v1),
+                                  8);
+      for (auto [index, target] : llvm::enumerate(op.getTargets())) {
+        ValueRange lowered =
+            adaptor.getArguments()[op.getValues().size() + index];
+        Type type = cast<sim::RefType>(target.getType()).getElementType();
+        auto width = sim::getPackedWidth(type);
+        if (lowered.size() != 1 || !width || *width > UINT32_MAX)
+          return failure();
+        Value address = byteGEP(rewriter, location, targets, index * 16);
+        LLVM::StoreOp::create(rewriter, location, lowered.front(), address, 8);
+        LLVM::StoreOp::create(rewriter, location,
+                              llvmConstant(rewriter, location, i32, *width),
+                              byteGEP(rewriter, location, address, 8), 4);
+        LLVM::StoreOp::create(
+            rewriter, location,
+            llvmConstant(rewriter, location, i32,
+                         sim::containsFourStateLeaf(type)
+                             ? TALOS_RT_EVENT_SNAPSHOT_FOUR_STATE
+                             : 0),
+            byteGEP(rewriter, location, address, 12), 4);
+      }
+      arguments.append(
+          {llvmConstant(rewriter, location, i64,
+                        observerID.getValue().getZExtValue()),
+           *captureRecords,
+           llvmConstant(rewriter, location, i32, captures.size()), targets,
+           llvmConstant(rewriter, location, i32, op.getTargets().size())});
+    } else {
+      arguments.append(
+          {llvmConstant(rewriter, location, i32, op.getStrobe() ? 1 : 0),
+           llvmConstant(rewriter, location, i64,
+                        observerID.getValue().getZExtValue()),
+           *captureRecords,
+           llvmConstant(rewriter, location, i32, captures.size())});
+    }
     Value status =
         LLVM::CallOp::create(
             rewriter, location, TypeRange{i32},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_covergroup_clock_event_register"),
-            ValueRange{
-                context, record,
-                llvmConstant(rewriter, location, i64, recordSize),
-                llvmConstant(rewriter, location, i32, op.getStrobe() ? 1 : 0),
-                llvmConstant(rewriter, location, i64,
-                             observerID.getValue().getZExtValue()),
-                *captureRecords,
-                llvmConstant(rewriter, location, i32,
-                             static_cast<uint32_t>(captures.size()))})
+            SymbolRefAttr::get(
+                rewriter.getContext(),
+                snapshot ? "talos_rt_v1_event_snapshot_register"
+                         : "talos_rt_v1_covergroup_clock_event_register"),
+            arguments)
             .getResult();
     reportManagedStatus(rewriter, location, context, status);
     rewriter.eraseOp(op);
@@ -904,6 +953,55 @@ public:
         rewriter.eraseOp(eventBinding);
     if (binding->use_empty())
       rewriter.eraseOp(binding);
+    return success();
+  }
+};
+
+class EventSnapshotMaskConversion final
+    : public OpConversionPattern<sim::SimEventSnapshotMaskOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(sim::SimEventSnapshotMaskOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (adaptor.getContext().size() != 1)
+      return failure();
+    Type i64 = rewriter.getI64Type();
+    Value output = entryAlloca(rewriter, op.getLoc(), i64, 1, 8);
+    LLVM::StoreOp::create(rewriter, op.getLoc(),
+                          llvmConstant(rewriter, op.getLoc(), i64, 0), output,
+                          8);
+    Value status = LLVM::CallOp::create(
+                       rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
+                       SymbolRefAttr::get(rewriter.getContext(),
+                                          "talos_rt_v1_event_snapshot_mask"),
+                       ValueRange{adaptor.getContext().front(), output})
+                       .getResult();
+    reportManagedStatus(rewriter, op.getLoc(), adaptor.getContext().front(),
+                        status);
+    rewriter.replaceOpWithNewOp<LLVM::LoadOp>(op, i64, output, 8);
+    return success();
+  }
+};
+
+class EventSnapshotFlushConversion final
+    : public OpConversionPattern<sim::SimEventSnapshotFlushOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(sim::SimEventSnapshotFlushOp op, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (adaptor.getContext().size() != 1)
+      return failure();
+    Value status = LLVM::CallOp::create(
+                       rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
+                       SymbolRefAttr::get(rewriter.getContext(),
+                                          "talos_rt_v1_event_snapshot_flush"),
+                       ValueRange{adaptor.getContext().front()})
+                       .getResult();
+    reportManagedStatus(rewriter, op.getLoc(), adaptor.getContext().front(),
+                        status);
+    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -1484,7 +1582,10 @@ void populateManagedCoverageToLLVMConversionPatterns(
       FunctionalCoverageDatabaseConversion<
           sim::SimFunctionalCoverageSetDbNameOp>,
       FunctionalCoverageDatabaseConversion<sim::SimFunctionalCoverageLoadDbOp>,
-      CovergroupEnabledConversion, CovergroupClockEventRegisterConversion,
+      CovergroupEnabledConversion,
+      ExactEventRegisterConversion<sim::SimCovergroupClockEventRegisterOp>,
+      ExactEventRegisterConversion<sim::SimEventSnapshotRegisterOp>,
+      EventSnapshotMaskConversion, EventSnapshotFlushConversion,
       CovergroupBlockEventRegisterConversion,
       CovergroupBlockEventFireConversion, CovergroupSetNameConversion,
       CovergroupSetIntegerOptionConversion,

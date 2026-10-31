@@ -320,6 +320,17 @@ LogicalResult Encoder::encodeOperation(FunctionPlan &plan,
     return emitIntrinsicRegisters(plan, kIntrinsicSpawn, inputs,
                                   {reg(plan, op.getProcess())}, flags);
   }
+  if (auto op = dyn_cast<sim::SimEventSnapshotMaskOp>(operation)) {
+    requiresEventSnapshotFeature = true;
+    return emitIntrinsicRegisters(plan,
+                                  TALOS_RT_INTRINSIC_V1_EVENT_SNAPSHOT_MASK, {},
+                                  {reg(plan, op.getMask())});
+  }
+  if (isa<sim::SimEventSnapshotFlushOp>(operation)) {
+    requiresEventSnapshotFeature = true;
+    return emitIntrinsicRegisters(
+        plan, TALOS_RT_INTRINSIC_V1_EVENT_SNAPSHOT_FLUSH, {}, {});
+  }
   if (auto op = dyn_cast<sim::SimPowerNBAOp>(operation)) {
     auto binding = op.getGuard().getDefiningOp<sim::SimObserverBindOp>();
     auto found = indices.find(binding.getEvaluator());

@@ -47,6 +47,9 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
 TALOS_RT_FEATURE_SERVICE talos_rt_status invokeDynamicScanIntrinsic(
     const Image &image, Frame &frame, talos_rt_context *context,
     IntrinsicSite site, uint32_t intrinsicId);
+TALOS_RT_FEATURE_SERVICE talos_rt_status invokeEventSnapshotIntrinsic(
+    const Image &image, Frame &frame, talos_rt_context *context,
+    IntrinsicSite site, uint32_t intrinsicId);
 
 TALOS_RT_FEATURE_SERVICE talos_rt_status invokeContainerBitstreamIntrinsic(
     const Image &image, Frame &frame, talos_rt_context *context,
@@ -57,6 +60,11 @@ TALOS_RT_FEATURE_SERVICE talos_rt_status invokeContainerBitstreamIntrinsic(
 // A design that encodes these intrinsics references the feature's link
 // anchor, which extracts the strong definition that replaces each fallback.
 #if defined(__APPLE__) && defined(TALOS_RT_BYTECODE_DISPATCHER)
+talos_rt_status invokeEventSnapshotIntrinsic(const Image &, Frame &,
+                                             talos_rt_context *, IntrinsicSite,
+                                             uint32_t) {
+  return TALOS_RT_INVALID_BYTECODE;
+}
 talos_rt_status invokeDynamicScanIntrinsic(const Image &, Frame &,
                                            talos_rt_context *, IntrinsicSite,
                                            uint32_t) {

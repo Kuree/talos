@@ -222,6 +222,7 @@ LogicalResult makeSchedulerMain(ModuleOp module,
     return runtime::bitEnumContainsAll(features, feature);
   };
   bool requiresDynamicScanFeature = needs(runtime::Features::DynamicScan);
+  bool requiresEventSnapshotFeature = needs(runtime::Features::EventSnapshots);
   bool requiresContainerBitstreamFeature =
       needs(runtime::Features::ContainerBitstream);
   bool requiresRecursiveBitstreamFeature =
@@ -233,6 +234,11 @@ LogicalResult makeSchedulerMain(ModuleOp module,
       needs(runtime::Features::DPIExportBytecode);
   bool requiresDPIImportBytecodeFeature =
       needs(runtime::Features::DPIImportBytecode);
+  if (requiresEventSnapshotFeature)
+    LLVM::CallOp::create(
+        builder, location, TypeRange{},
+        SymbolRefAttr::get(context, "talos_rt_v1_event_snapshot_link_anchor"),
+        ValueRange{});
   if (requiresDynamicScanFeature)
     LLVM::CallOp::create(
         builder, location, TypeRange{},
@@ -994,6 +1000,9 @@ LogicalResult makeSchedulerMain(ModuleOp module,
                            {pointer, pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_run_aot", i32,
                            {pointer});
+  if (requiresEventSnapshotFeature)
+    getOrDeclareLLVMFunction(module, "talos_rt_v1_event_snapshot_link_anchor",
+                             voidType, {});
   if (requiresDynamicScanFeature)
     getOrDeclareLLVMFunction(module, "talos_rt_v1_dynamic_scan_link_anchor",
                              voidType, {});

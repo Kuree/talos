@@ -69,56 +69,117 @@ Value SimCovergroupClockEventRegisterOp::getSampler() {
   return index < getValues().size() ? getValues()[index] : Value{};
 }
 
-LogicalResult SimCovergroupClockEventRegisterOp::verify() {
-  if (getConditionCountAttr().getValue().isNegative())
-    return emitOpError("condition count must be nonnegative");
-  if (getPrimaries().empty() || getPrimaries().size() > 64)
-    return emitOpError("requires between one and 64 event primaries");
-  if (getInitialValues().size() != getPrimaries().size() ||
-      getConditions().size() != static_cast<uint64_t>(getConditionCount()) ||
-      getValues().size() != getPrimaries().size() + getInitialValues().size() +
-                                getConditions().size() + 1)
-    return emitOpError(
-        "operand inventory must end with exactly one sampler observer");
-  if (getEdges().size() != getPrimaries().size() ||
-      getConditionIndices().size() != getPrimaries().size())
-    return emitOpError("requires one edge and condition index per primary");
+Operation::operand_range SimEventSnapshotRegisterOp::getValues() {
+  return getArguments().drop_back(getTargets().size());
+}
 
-  SmallVector<bool> usedConditions(getConditions().size(), false);
+Operation::operand_range SimEventSnapshotRegisterOp::getTargets() {
+  size_t count =
+      getTargetCountAttr().getValue().isNegative()
+          ? 0
+          : std::min<uint64_t>(getTargetCount(), getArguments().size());
+  return getArguments().take_back(count);
+}
+
+void SimEventSnapshotRegisterOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), StorageResource::get());
+  effects.emplace_back(MemoryEffects::Read::get(), NetResource::get());
+  effects.emplace_back(MemoryEffects::Write::get(), SchedulerResource::get());
+  effects.emplace_back(MemoryEffects::Write::get(), ProcessResource::get());
+  unsigned begin = getNumOperands() - getTargets().size();
+  for (unsigned index = begin; index < getNumOperands(); ++index)
+    effects.emplace_back(MemoryEffects::Write::get(),
+                         &getOperation()->getOpOperand(index),
+                         StorageResource::get());
+}
+
+Operation::operand_range SimEventSnapshotRegisterOp::getPrimaries() {
+  return getValues().take_front(
+      std::min<size_t>(getEdges().size(), getValues().size()));
+}
+
+Operation::operand_range SimEventSnapshotRegisterOp::getConditions() {
+  size_t primaryCount = std::min<size_t>(getEdges().size(), getValues().size());
+  size_t begin = std::min<size_t>(getValues().size(), primaryCount * 2);
+  size_t available = getValues().size() - begin;
+  size_t conditionCount =
+      getConditionCountAttr().getValue().isNegative()
+          ? 0
+          : std::min<uint64_t>(getConditionCount(), available);
+  return getValues().slice(begin, conditionCount);
+}
+
+Operation::operand_range SimEventSnapshotRegisterOp::getInitialValues() {
+  size_t primaryCount = std::min<size_t>(getEdges().size(), getValues().size());
+  size_t available = getValues().size() - primaryCount;
+  return getValues().slice(primaryCount, std::min(primaryCount, available));
+}
+
+Value SimEventSnapshotRegisterOp::getSampler() {
+  size_t index = getPrimaries().size() + getInitialValues().size() +
+                 getConditions().size();
+  return index < getValues().size() ? getValues()[index] : Value{};
+}
+
+template <typename Op> static LogicalResult verifyExactEventInventory(Op op) {
+  if (op.getConditionCountAttr().getValue().isNegative())
+    return op.emitOpError("condition count must be nonnegative");
+  if (op.getPrimaries().empty() || op.getPrimaries().size() > 64)
+    return op.emitOpError("requires between one and 64 event primaries");
+  if (op.getInitialValues().size() != op.getPrimaries().size() ||
+      op.getConditions().size() !=
+          static_cast<uint64_t>(op.getConditionCount()) ||
+      op.getValues().size() != op.getPrimaries().size() +
+                                   op.getInitialValues().size() +
+                                   op.getConditions().size() + 1)
+    return op.emitOpError(
+        "operand inventory must end with exactly one sampler observer");
+  if (op.getEdges().size() != op.getPrimaries().size() ||
+      op.getConditionIndices().size() != op.getPrimaries().size())
+    return op.emitOpError("requires one edge and condition index per primary");
+
+  SmallVector<bool> usedConditions(op.getConditions().size(), false);
   int32_t nextCondition = 0;
   for (auto [index, primary, initial, edge, conditionIndex] :
-       llvm::enumerate(getPrimaries(), getInitialValues(), getEdges(),
-                       getConditionIndices())) {
+       llvm::enumerate(op.getPrimaries(), op.getInitialValues(), op.getEdges(),
+                       op.getConditionIndices())) {
     auto observer = dyn_cast<ObserverType>(primary.getType());
     if (!observer)
-      return emitOpError("event primaries must be observer handles");
+      return op.emitOpError("event primaries must be observer handles");
     if (initial.getType() != observer.getResultType())
-      return emitOpError() << "initial value #" << index
-                           << " does not match its primary observer result";
+      return op.emitOpError() << "initial value #" << index
+                              << " does not match its primary observer result";
     if (edge < static_cast<int32_t>(EdgeKind::Change) ||
         edge > static_cast<int32_t>(EdgeKind::Both))
-      return emitOpError("contains an invalid event edge");
+      return op.emitOpError("contains an invalid event edge");
     if (conditionIndex < -1 ||
         (conditionIndex >= 0 &&
-         static_cast<uint64_t>(conditionIndex) >= getConditions().size()))
-      return emitOpError("contains an invalid condition index");
+         static_cast<uint64_t>(conditionIndex) >= op.getConditions().size()))
+      return op.emitOpError("contains an invalid condition index");
     if (conditionIndex >= 0) {
       if (conditionIndex != nextCondition++)
-        return emitOpError(
+        return op.emitOpError(
             "condition indices must be in canonical ascending order");
       if (usedConditions[conditionIndex])
-        return emitOpError("a condition may belong to only one event");
+        return op.emitOpError("a condition may belong to only one event");
       usedConditions[conditionIndex] = true;
     }
   }
-  if (llvm::any_of(getConditions(), [&](Value condition) {
+  if (llvm::any_of(op.getConditions(), [&](Value condition) {
         auto observer = dyn_cast<ObserverType>(condition.getType());
         return !observer || !observer.getResultType().isSignlessInteger(1);
       }))
-    return emitOpError("event conditions must be i1 observer handles");
+    return op.emitOpError("event conditions must be i1 observer handles");
   if (llvm::is_contained(usedConditions, false))
-    return emitOpError("contains an unreferenced condition handle");
+    return op.emitOpError("contains an unreferenced condition handle");
 
+  return success();
+}
+
+LogicalResult SimCovergroupClockEventRegisterOp::verify() {
+  if (failed(verifyExactEventInventory(*this)))
+    return failure();
   Value sampler = getSampler();
   auto observer =
       sampler ? dyn_cast<ObserverType>(sampler.getType()) : ObserverType{};
@@ -167,6 +228,223 @@ LogicalResult SimCovergroupClockEventRegisterOp::verify() {
   if (registrations != 1)
     return emitOpError(
         "owner must contain exactly one clock-event registration");
+  return success();
+}
+
+bool collectSnapshotRoots(Value reference,
+                          SmallVectorImpl<Operation *> &roots) {
+  SmallVector<Value> pending{reference};
+  DenseSet<Value> seen;
+  size_t start = roots.size();
+  while (!pending.empty()) {
+    Value value = pending.pop_back_val();
+    if (!seen.insert(value).second)
+      continue;
+    if (isa_and_nonnull<SimContextStorageOp, SimContextNetOp>(
+            value.getDefiningOp())) {
+      roots.push_back(value.getDefiningOp());
+      continue;
+    }
+    auto argument = dyn_cast<BlockArgument>(value);
+    if (!argument || argument.getOwner()->hasNoPredecessors())
+      return false;
+    for (Block *predecessor : argument.getOwner()->getPredecessors()) {
+      auto branch = dyn_cast<BranchOpInterface>(predecessor->getTerminator());
+      if (!branch)
+        return false;
+      for (unsigned index = 0; index != branch->getNumSuccessors(); ++index) {
+        if (branch->getSuccessor(index) != argument.getOwner())
+          continue;
+        SuccessorOperands operands = branch.getSuccessorOperands(index);
+        unsigned lane = argument.getArgNumber();
+        if (lane >= operands.size() || operands.isOperandProduced(lane))
+          return false;
+        pending.push_back(operands[lane]);
+      }
+    }
+  }
+  return roots.size() != start;
+}
+
+bool hasSnapshotMask(SimFuncOp function) {
+  bool found = false;
+  function.walk([&](SimEventSnapshotMaskOp) { found = true; });
+  return found;
+}
+
+LogicalResult SimEventSnapshotMaskOp::verify() {
+  auto function = (*this)->getParentOfType<SimFuncOp>();
+  if (!function || function.getEntryKind() != EntryKind::Observer ||
+      SymbolTable::getSymbolVisibility(function) !=
+          SymbolTable::Visibility::Private)
+    return emitOpError("requires a private snapshot sampler observer");
+  return success();
+}
+
+LogicalResult SimEventSnapshotFlushOp::verify() {
+  auto function = (*this)->getParentOfType<SimFuncOp>();
+  if (!function || function.getEntryKind() == EntryKind::Observer)
+    return emitOpError(
+        "requires a process or ordinary function outside observers");
+  return success();
+}
+
+LogicalResult SimEventSnapshotRegisterOp::verify() {
+  if (getTargetCountAttr().getValue().isNegative() ||
+      static_cast<uint64_t>(getTargetCount()) > getArguments().size())
+    return emitOpError("target count must name a valid trailing operand span");
+  if (failed(verifyExactEventInventory(*this)))
+    return failure();
+  if (getTargets().empty() || getTargets().size() > UINT32_MAX)
+    return emitOpError("requires between one and UINT32_MAX targets");
+  uint64_t width = 0;
+  DenseSet<uint64_t> occupied;
+  for (Value target : getTargets()) {
+    auto reference = dyn_cast<RefType>(target.getType());
+    if (!reference)
+      return emitOpError("targets must be storage references");
+    Type type = reference.getElementType();
+    auto bits = getPackedWidth(type);
+    if (!bits || !*bits || !integralStorageDomain(type) ||
+        *bits > UINT32_MAX - width)
+      return emitOpError("targets require nonzero packed integral widths "
+                         "totaling at most UINT32_MAX");
+    width += *bits;
+    SmallVector<SimContextStorageOp> roots;
+    if (!collectWholeStorageRoots(target, roots))
+      return emitOpError("targets must be whole persistent storage roots");
+    DenseSet<uint64_t> targetRoots;
+    for (auto root : roots)
+      targetRoots.insert(root.getId());
+    for (uint64_t id : targetRoots)
+      if (!occupied.insert(id).second)
+        return emitOpError("targets may overlap through a storage alias");
+  }
+  Value sampler = getSampler();
+  auto binding = sampler.getDefiningOp<SimObserverBindOp>();
+  auto samplerType = dyn_cast<ObserverType>(sampler.getType());
+  if (!samplerType)
+    return emitOpError("sampler must be an observer handle");
+  Type payload = samplerType.getResultType();
+  if (!binding || !binding.getDependencies().empty() ||
+      !isa<IntegerType, LogicType>(payload) || getPackedWidth(payload) != width)
+    return emitOpError("sampler must be a dependency-free packed observer "
+                       "matching the target payload width");
+  SmallVector<Value> callbacks(getPrimaries());
+  llvm::append_range(callbacks, getConditions());
+  callbacks.push_back(sampler);
+  for (Value callback : callbacks) {
+    auto binding = callback.getDefiningOp<SimObserverBindOp>();
+    Type result = cast<ObserverType>(callback.getType()).getResultType();
+    if (!binding || !isa<IntegerType, LogicType>(result))
+      return emitOpError("callbacks must be directly bound packed observers");
+    for (Value reference : binding.getValues()) {
+      Type type;
+      if (auto ref = dyn_cast<RefType>(reference.getType()))
+        type = ref.getElementType();
+      else if (auto net = dyn_cast<NetType>(reference.getType()))
+        type = net.getElementType();
+      SmallVector<Operation *> roots;
+      if (!type || !getPackedWidth(type) || !integralStorageDomain(type) ||
+          !collectSnapshotRoots(reference, roots))
+        return emitOpError("callback captures and dependencies must be whole "
+                           "persistent packed storage or nets");
+    }
+  }
+  auto owner = (*this)->getParentOfType<SimFuncOp>();
+  if (!owner || owner.getEntryKind() != EntryKind::Fork ||
+      SymbolTable::getSymbolVisibility(owner) !=
+          SymbolTable::Visibility::Private ||
+      !owner->hasAttr("internal") ||
+      !::talos::schedule::has<::talos::schedule::Field::DetachedControls>(
+          owner) ||
+      !::talos::schedule::has<::talos::schedule::Field::PrimeOnSpawn>(owner) ||
+      owner.getBody().getBlocks().size() != 2 ||
+      (*this)->getBlock() != &owner.getBody().front() ||
+      !owner.getBody().front().hasNoPredecessors())
+    return emitOpError("requires one entry registration in a private detached "
+                       "primed persistent fork");
+  auto parked =
+      dyn_cast<SimSuspendForeverOp>(owner.getBody().front().getTerminator());
+  Block &tail = owner.getBody().back();
+  if (!parked || (*this)->getNextNode() != parked.getOperation() ||
+      parked.getContinuation() != &tail || tail.getNumArguments() ||
+      tail.getOperations().size() != 1 ||
+      !isa<SimReturnOp>(tail.getTerminator()))
+    return emitOpError(
+        "owner must park forever immediately after registration");
+  unsigned registrations = 0;
+  owner.walk([&](Operation *op) {
+    registrations +=
+        isa<SimEventSnapshotRegisterOp, SimCovergroupClockEventRegisterOp>(op);
+  });
+  if (registrations != 1)
+    return emitOpError("owner must install exactly one event registration");
+  return success();
+}
+
+LogicalResult
+SimEventSnapshotRegisterOp::verifySymbolUses(SymbolTableCollection &symbols) {
+  SmallVector<Value> bindings(getPrimaries());
+  llvm::append_range(bindings, getConditions());
+  bindings.push_back(getSampler());
+  for (auto [index, value] : llvm::enumerate(bindings)) {
+    if (!value)
+      return success();
+    auto binding = value.getDefiningOp<SimObserverBindOp>();
+    if (!binding)
+      return success(); // The local verifier diagnoses malformed bindings.
+    auto evaluator = symbols.lookupNearestSymbolFrom<SimFuncOp>(
+        binding, binding.getEvaluatorAttr());
+    if (!evaluator || evaluator.isExternal() ||
+        evaluator.getEntryKind() != EntryKind::Observer ||
+        SymbolTable::getSymbolVisibility(evaluator) !=
+            SymbolTable::Visibility::Private)
+      return emitOpError("callbacks must name defined private observers");
+    bool sampler = index + 1 == bindings.size();
+    SmallVector<SimFuncOp> pending{evaluator};
+    DenseSet<Operation *> seen;
+    while (!pending.empty()) {
+      auto function = pending.pop_back_val();
+      if (!seen.insert(function).second)
+        continue;
+      auto result = function.walk([&](Operation *op) {
+        if (op == function.getOperation())
+          return WalkResult::advance();
+        if (auto call = dyn_cast<SimCallOp>(op)) {
+          auto callee = symbols.lookupNearestSymbolFrom<SimFuncOp>(
+              call, call.getCalleeAttr());
+          if (!callee || callee.isExternal() ||
+              callee.getEntryKind() != EntryKind::Function)
+            return WalkResult::interrupt();
+          pending.push_back(callee);
+          return WalkResult::advance();
+        }
+        // State is explicit in the registration inventory. Unbound context
+        // lookups could name automatic or otherwise unretained declarations.
+        if (isa<SimContextStorageOp, SimContextNetOp, SimContextDriverOp>(op))
+          return WalkResult::interrupt();
+        if (isa<SimEventSnapshotMaskOp>(op))
+          return sampler ? WalkResult::advance() : WalkResult::interrupt();
+        if (isMemoryEffectFree(op))
+          return WalkResult::advance();
+        auto effects = dyn_cast<MemoryEffectOpInterface>(op);
+        SmallVector<MemoryEffects::EffectInstance> list;
+        if (effects)
+          effects.getEffects(list);
+        if (effects && llvm::all_of(list, [](const auto &effect) {
+              return isa<MemoryEffects::Read>(effect.getEffect()) &&
+                     (effect.getResource() == StorageResource::get() ||
+                      effect.getResource() == NetResource::get());
+            }))
+          return WalkResult::advance();
+        return WalkResult::interrupt();
+      });
+      if (result.wasInterrupted())
+        return emitOpError("callback closure must only read bound state; mask "
+                           "queries are sampler-only");
+    }
+  }
   return success();
 }
 

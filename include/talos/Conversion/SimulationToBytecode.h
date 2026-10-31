@@ -55,6 +55,7 @@ struct EncodedSimulationDesign {
   uint64_t stateBitCount = 0;
   uint32_t executionFlags = 0;
   bool requiresDynamicScanFeature = false;
+  bool requiresEventSnapshotFeature = false;
   bool requiresContainerBitstreamFeature = false;
   bool requiresRecursiveBitstreamFeature = false;
 };

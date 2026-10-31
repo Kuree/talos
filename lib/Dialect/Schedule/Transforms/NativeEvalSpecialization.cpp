@@ -468,16 +468,17 @@ LogicalResult materializeEvalTwoStateVariants(
           runtimeFree = false;
           return;
         }
-        if (isa<sim::SimFileOpenMCDOp, sim::SimFileOpenOp, sim::SimFileCloseOp,
-                sim::SimFileFlushOp, sim::SimFileGetcOp, sim::SimFileUngetcOp,
-                sim::SimFileGetlineOp, sim::SimFileReadPackedOp,
-                sim::SimFileEofOp, sim::SimFileSeekOp, sim::SimFileTellOp,
-                sim::SimFileRewindOp, sim::SimPublicationBatchBeginOp,
-                sim::SimPublicationBatchEndOp, sim::SimDumpOpenOp,
-                sim::SimDumpOpenStringOp, sim::SimDumpTimescaleOp,
-                sim::SimDumpVarsOp, sim::SimDumpAllOp, sim::SimDumpControlOp,
-                sim::SimDumpLimitOp, sim::SimDumpFlushOp, sim::SimDumpPortsOp,
-                sim::SimDumpPortsControlOp>(operation)) {
+        if (isa<sim::SimEventSnapshotRegisterOp, sim::SimEventSnapshotMaskOp,
+                sim::SimEventSnapshotFlushOp, sim::SimFileOpenMCDOp,
+                sim::SimFileOpenOp, sim::SimFileCloseOp, sim::SimFileFlushOp,
+                sim::SimFileGetcOp, sim::SimFileUngetcOp, sim::SimFileGetlineOp,
+                sim::SimFileReadPackedOp, sim::SimFileEofOp, sim::SimFileSeekOp,
+                sim::SimFileTellOp, sim::SimFileRewindOp,
+                sim::SimPublicationBatchBeginOp, sim::SimPublicationBatchEndOp,
+                sim::SimDumpOpenOp, sim::SimDumpOpenStringOp,
+                sim::SimDumpTimescaleOp, sim::SimDumpVarsOp, sim::SimDumpAllOp,
+                sim::SimDumpControlOp, sim::SimDumpLimitOp, sim::SimDumpFlushOp,
+                sim::SimDumpPortsOp, sim::SimDumpPortsControlOp>(operation)) {
           preserving = false;
           runtimeFree = false;
           checkpointSafe = false;

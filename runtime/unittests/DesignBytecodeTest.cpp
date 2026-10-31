@@ -14880,6 +14880,113 @@ TEST(DesignBytecode, RejectsTruncatedCoverageClockEventOperandsAtExecution) {
             TALOS_RT_INVALID_BYTECODE);
 }
 
+TEST(DesignBytecode, RejectsMalformedEventSnapshotOperands) {
+  using namespace talos::designbytecode;
+  // IEEE 1801-2018 6.50: a complete event inventory ends with exactly the
+  // advertised target triples. Malformed bytecode must fail before retaining
+  // any state. The valid control reaches the process-owner lifecycle check.
+  constexpr uint32_t registerCount = 17;
+  constexpr size_t intrinsicOffset = registerCount * 40;
+  constexpr size_t siteOffset = intrinsicOffset + 16;
+  constexpr size_t operandOffset = siteOffset + 16;
+  std::vector<uint8_t> bytes(operandOffset + registerCount * 8, 0);
+  for (uint32_t index = 0; index != registerCount; ++index) {
+    size_t layout = uint64_t{index} * 40;
+    bytes[layout] = TALOS_RT_DBREG_BITS;
+    put32(bytes, layout + 4, index == 12 ? 1 : 64);
+    put64(bytes, layout + 8, uint64_t{index} * 8);
+    put64(bytes, layout + 16, 8);
+    put32(bytes, operandOffset + uint64_t{index} * 8 + 4, index);
+  }
+  put32(bytes, intrinsicOffset, TALOS_RT_INTRINSIC_V1_EVENT_SNAPSHOT_REGISTER);
+  auto arity = [&](uint32_t inputs, uint32_t outputs = 0) {
+    put32(bytes, intrinsicOffset + 4, inputs);
+    put32(bytes, intrinsicOffset + 8, outputs);
+    put32(bytes, siteOffset + 8, inputs);
+    put32(bytes, siteOffset + 12, outputs);
+  };
+  arity(16);
+  Image image{};
+  image.data = bytes.data();
+  image.size = bytes.size();
+  image.layouts = 0;
+  image.layoutCount = registerCount;
+  image.intrinsics = intrinsicOffset;
+  image.intrinsicCount = 1;
+  image.sites = siteOffset;
+  image.siteCount = 1;
+  image.operands = operandOffset;
+  image.operandCount = registerCount;
+  Function function{};
+  function.layoutCount = registerCount;
+  std::array<uint64_t, registerCount> data{
+      {1, 0, 1, 2, 0, // clauses, iff, targets, sampler, captures
+       1, 0, 0, 1, 0, // primary metadata
+       TALOS_RT_WAIT_EDGE_POSEDGE, UINT32_MAX, 0, // edge, iff index, initial
+       0, 1, 0, 0}}; // target handle, width, flags, extra
+  Frame frame{function, 0, reinterpret_cast<uint8_t *>(data.data()), 0};
+  std::array<talos_rt_observer_descriptor_v1, 2> observers{};
+  observers[0].code_unit_id = 1;
+  observers[1].code_unit_id = 2;
+  observers[0].result_width = observers[1].result_width = 1;
+  talos_rt_execution_descriptor_v1 execution{};
+  execution.observers = observers.data();
+  execution.observer_count = observers.size();
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  context->execution = &execution;
+  EXPECT_EQ(invokeIntrinsic(image, frame, context, 0),
+            TALOS_RT_INVALID_LIFECYCLE);
+  for (uint64_t count :
+       {UINT64_C(0), uint64_t{UINT32_MAX}, uint64_t{UINT32_MAX} + 1}) {
+    data[2] = count;
+    EXPECT_EQ(invokeIntrinsic(image, frame, context, 0),
+              TALOS_RT_INVALID_BYTECODE)
+        << count;
+  }
+  data[2] = 1;
+  for (uint32_t inputs : {15u, 17u}) {
+    arity(inputs);
+    EXPECT_EQ(invokeIntrinsic(image, frame, context, 0),
+              TALOS_RT_INVALID_BYTECODE)
+        << inputs;
+  }
+  arity(16);
+  for (uint64_t width : {UINT64_C(0), uint64_t{UINT32_MAX} + 1}) {
+    data[14] = width;
+    EXPECT_EQ(invokeIntrinsic(image, frame, context, 0),
+              TALOS_RT_INVALID_BYTECODE)
+        << width;
+  }
+  data[14] = 1;
+  data[15] = uint64_t{UINT32_MAX} + 1;
+  EXPECT_EQ(invokeIntrinsic(image, frame, context, 0),
+            TALOS_RT_INVALID_BYTECODE);
+
+  put32(bytes, intrinsicOffset, TALOS_RT_INTRINSIC_V1_EVENT_SNAPSHOT_MASK);
+  arity(0, 1);
+  EXPECT_TRUE(validIntrinsic(image, function, 0));
+  uint64_t mask = 0;
+  EXPECT_EQ(talos_rt_v1_event_snapshot_mask(context, &mask),
+            TALOS_RT_INVALID_LIFECYCLE);
+  EXPECT_EQ(invokeIntrinsic(image, frame, context, 0),
+            TALOS_RT_INVALID_LIFECYCLE);
+  put32(bytes, 4, 32);
+  EXPECT_FALSE(validIntrinsic(image, function, 0));
+  put32(bytes, 4, 64);
+  arity(1, 1);
+  EXPECT_FALSE(validIntrinsic(image, function, 0));
+
+  put32(bytes, intrinsicOffset, TALOS_RT_INTRINSIC_V1_EVENT_SNAPSHOT_FLUSH);
+  arity(0);
+  EXPECT_EQ(invokeIntrinsic(image, frame, context, 0), TALOS_RT_OK);
+  arity(0, 1);
+  EXPECT_FALSE(validIntrinsic(image, function, 0));
+  arity(1);
+  EXPECT_FALSE(validIntrinsic(image, function, 0));
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(DesignBytecode, ValidatesContainerCreatePatternSignature) {
   constexpr uint64_t layoutOffset = 0;
   constexpr uint64_t intrinsicOffset = 12 * 40;

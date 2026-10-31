@@ -225,6 +225,7 @@ private:
   llvm::SmallVector<IntrinsicSite> intrinsicSites;
   llvm::SmallVector<CaptureRecord> captureRecords;
   bool requiresDynamicScanFeature = false;
+  bool requiresEventSnapshotFeature = false;
   bool requiresContainerBitstreamFeature = false;
   bool requiresRecursiveBitstreamFeature = false;
 };

@@ -425,11 +425,30 @@ SmallVector<ComputeEffect> collectDirectEffects(const FunctionInfo &info,
                        op.getStrategyEpochRef(), effects);
           effects.push_back({schedule::ComputeEffectKind::Read});
         })
-        .Case<sim::SimProcessEventPendingOp>([&](auto) {
-          // Signal stores can synchronously latch an occurrence, even before
-          // the waiting process can run in its home region (1801-2018 9.7.3).
+        .Case<sim::SimEventSnapshotRegisterOp>([&](auto op) {
+          for (Value target : op.getTargets())
+            appendEffect(info, schedule::ComputeEffectKind::Write, target,
+                         effects);
+          for (Value primary : op.getPrimaries())
+            if (auto binding = primary.getDefiningOp<sim::SimObserverBindOp>())
+              for (Value dependency : binding.getDependencies())
+                appendEffect(info, schedule::ComputeEffectKind::Watch,
+                             dependency, effects,
+                             schedule::ComputeTriggerKind::Change);
+          // Iff and payload bodies enter the retained observer inventory.
           effects.push_back({schedule::ComputeEffectKind::Read});
         })
+        .Case<sim::SimEventSnapshotFlushOp>([&](auto) {
+          effects.push_back({schedule::ComputeEffectKind::Read});
+          effects.push_back({schedule::ComputeEffectKind::Write});
+        })
+        .Case<sim::SimEventSnapshotMaskOp, sim::SimProcessEventPendingOp>(
+            [&](auto) {
+              // Signal stores can synchronously latch an occurrence, even
+              // before the waiting process can run in its home region
+              // (1801-2018 9.7.3).
+              effects.push_back({schedule::ComputeEffectKind::Read});
+            })
         .Case<sim::SimSuspendChangeOp>([&](auto op) {
           appendEffect(info, schedule::ComputeEffectKind::Watch,
                        op.getWatched(), effects,
@@ -713,6 +732,17 @@ ProgramAnalysis analyzeProgram(sim::SimDesignOp design) {
     function.walk([&](sim::SimPowerNBAOp update) {
       if (auto binding =
               update.getGuard().getDefiningOp<sim::SimObserverBindOp>())
+        info.observerBindings.push_back(binding);
+    });
+    function.walk([&](sim::SimEventSnapshotRegisterOp registration) {
+      for (Value observer : registration.getPrimaries())
+        if (auto binding = observer.getDefiningOp<sim::SimObserverBindOp>())
+          info.observerBindings.push_back(binding);
+      for (Value observer : registration.getConditions())
+        if (auto binding = observer.getDefiningOp<sim::SimObserverBindOp>())
+          info.observerBindings.push_back(binding);
+      if (auto binding =
+              registration.getSampler().getDefiningOp<sim::SimObserverBindOp>())
         info.observerBindings.push_back(binding);
     });
     function.walk([&](sim::SimPowerNBAViewOp update) {

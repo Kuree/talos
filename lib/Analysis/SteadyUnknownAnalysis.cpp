@@ -1167,8 +1167,9 @@ public:
       return success();
     // An allocation's initializer, like a root's initial value, starts only
     // the bits the slot's own writes do not replace.
-    bool runOnce = runsOnce(op->getParentOfType<sim::SimFuncOp>()) ||
-                   isa<sim::SimRefAllocOp>(op);
+    bool runOnce = !isa<sim::SimEventSnapshotRegisterOp>(op) &&
+                   (runsOnce(op->getParentOfType<sim::SimFuncOp>()) ||
+                    isa<sim::SimRefAllocOp>(op));
     auto write = [&](Value reference, std::optional<APInt> mayKnown,
                      bool elementwise = false) {
       SmallVector<Footprint, 2> footprints;
@@ -1209,6 +1210,13 @@ public:
                                            : lattice->getValue().get(*width),
             isElementwise(value.getType()));
     };
+    if (auto registration = dyn_cast<sim::SimEventSnapshotRegisterOp>(op)) {
+      for (Value target : registration.getTargets())
+        write(target, std::nullopt);
+      return success();
+    }
+    if (isa<sim::SimEventSnapshotFlushOp>(op))
+      return success(); // Registrations enumerate all possible destinations.
     if (auto pair = dyn_cast<sim::SimPowerNBAOp>(op)) {
       writeValue(pair.getBacking(), pair.getValue());
       writeValue(pair.getVisible(), pair.getValue());
@@ -1353,7 +1361,8 @@ SteadyUnknownAnalysis::compute(sim::SimDesignOp design) {
     // A guarded window is not a definite whole-root overwrite. Keeping its
     // initializer while conservatively recording possible known bits above
     // is safe until range-specific coverage is inferred.
-    if (isa<sim::SimPowerNBAViewOp>(op))
+    if (isa<sim::SimPowerNBAViewOp, sim::SimEventSnapshotRegisterOp,
+            sim::SimEventSnapshotFlushOp>(op))
       return;
     bool roots = !runsOnce(function);
     SmallVector<Value, 2> references;

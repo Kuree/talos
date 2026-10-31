@@ -1,0 +1,6 @@
+// RUN: %split-file %S/upf-opt-in.test %t
+// RUN: talos -O3 --vpi=off --native-scheduler=eval %t/design.sv -o %t.exe
+// RUN: %llvm_dist/bin/llvm-nm --defined-only -C %t.exe | FileCheck %s --implicit-check-not=talos_rt_v1_event_snapshot_mask --implicit-check-not=talos_rt_v1_event_snapshot_flush --implicit-check-not=talos_rt_v1_event_snapshot_link_anchor --implicit-check-not=invokeEventSnapshotIntrinsic
+// IEEE 1801-2018 6.50 is opt-in. Ordinary static links do not extract the
+// snapshot commit service through the shared bytecode interpreter's weak hook.
+// CHECK: main

@@ -1627,6 +1627,15 @@ StateDomainAnalysis::computeInductiveOnly(const ValueFactProgram &program) {
     }
     sim::SimFuncOp function = summary.function;
     function.walk([&](Operation *operation) {
+      if (auto registration =
+              dyn_cast<sim::SimEventSnapshotRegisterOp>(operation)) {
+        // A once-installed sampler remains a repeating writer (1801 6.50).
+        for (Value target : registration.getTargets())
+          writes.push_back({target, {}});
+        return;
+      }
+      if (isa<sim::SimEventSnapshotFlushOp>(operation))
+        return; // Its complete write inventory is retained by registrations.
       if (auto copy = dyn_cast<sim::SimRefCopyOp>(operation)) {
         writes.push_back(
             {copy.getDestination(),

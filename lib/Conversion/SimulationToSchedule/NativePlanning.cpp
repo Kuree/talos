@@ -865,7 +865,8 @@ FailureOr<NativeStaticFanoutPlan> buildNativeStaticFanoutPlan(
           if (isa<sim::SimSuspendEdgeIffOp, sim::SimSuspendLevelOp,
                   sim::SimSuspendClockSetOp, sim::SimSuspendObserveOp,
                   sim::SimSuspendEventOp, sim::SimSuspendEventOrderOp,
-                  sim::SimCovergroupClockEventRegisterOp>(operation))
+                  sim::SimCovergroupClockEventRegisterOp,
+                  sim::SimEventSnapshotRegisterOp>(operation))
             hasConditionalWait = true;
         });
       if (hasConditionalWait) {

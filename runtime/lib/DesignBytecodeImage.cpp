@@ -784,6 +784,12 @@ bool validIntrinsic(const Image &image, const Function &function,
     return signature.flags == 0 && site.inputCount == 1 &&
            site.outputCount == 1 && twoStateBits(input(0), 64) &&
            twoStateBits(output(0), 32);
+  case TALOS_RT_INTRINSIC_V1_EVENT_SNAPSHOT_MASK:
+    return signature.flags == 0 && site.inputCount == 0 &&
+           site.outputCount == 1 && twoStateBits(output(0), 64);
+  case TALOS_RT_INTRINSIC_V1_EVENT_SNAPSHOT_FLUSH:
+    return signature.flags == 0 && site.inputCount == 0 &&
+           site.outputCount == 0;
   case TALOS_RT_INTRINSIC_V1_PROCESS_EVENT_PENDING:
     return signature.flags == 0 && site.inputCount == 1 &&
            site.outputCount == 1 && twoStateBits(input(0), 64) &&
@@ -1253,6 +1259,7 @@ bool validIntrinsic(const Image &image, const Function &function,
         return false;
     return true;
   case TALOS_RT_INTRINSIC_V1_COVERGROUP_CLOCK_EVENT_REGISTER:
+  case TALOS_RT_INTRINSIC_V1_EVENT_SNAPSHOT_REGISTER:
     if (signature.flags != 0 || site.inputCount < 5 || site.outputCount != 0)
       return false;
     for (uint32_t index = 0; index != 5; ++index)

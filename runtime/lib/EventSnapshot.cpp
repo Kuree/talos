@@ -1,5 +1,6 @@
 //===- EventSnapshot.cpp - Explicit event-time state transactions --------===//
 
+#include "DesignBytecodeExecution.h"
 #include "ProcessContext.h"
 #include "ProcessPacking.h"
 #include "ProcessShared.h"
@@ -8,6 +9,38 @@
 #include <new>
 #include <stdexcept>
 #include <vector>
+
+// Encoded snapshot intrinsics extract this feature object explicitly. The
+// ordinary interpreter keeps only a weak reference, preserving small links
+// for designs with no snapshots (IEEE 1801-2018 6.50 is opt-in).
+extern "C" void talos_rt_v1_event_snapshot_link_anchor() {}
+
+namespace talos::designbytecode {
+TALOS_RT_FEATURE_TEXT talos_rt_status invokeEventSnapshotIntrinsic(
+    const Image &image, Frame &frame, talos_rt_context *context,
+    IntrinsicSite site, uint32_t intrinsicId) {
+  if (site.inputCount)
+    return TALOS_RT_INVALID_BYTECODE;
+  if (intrinsicId == TALOS_RT_INTRINSIC_V1_EVENT_SNAPSHOT_FLUSH)
+    return site.outputCount ? TALOS_RT_INVALID_BYTECODE
+                            : talos_rt_v1_event_snapshot_flush(context);
+  if (intrinsicId != TALOS_RT_INTRINSIC_V1_EVENT_SNAPSHOT_MASK ||
+      site.outputCount != 1)
+    return TALOS_RT_INVALID_BYTECODE;
+  uint32_t output = operandAt(image, site.firstOperand).first;
+  if (!validRegister(frame.function, output))
+    return TALOS_RT_INVALID_BYTECODE;
+  Layout layout = layoutAt(image, frame.function, output);
+  if (layout.kind != TALOS_RT_DBREG_BITS || layout.width != 64 ||
+      layout.size != 8)
+    return TALOS_RT_INVALID_BYTECODE;
+  uint64_t mask = 0;
+  auto status = talos_rt_v1_event_snapshot_mask(context, &mask);
+  if (status == TALOS_RT_OK)
+    std::memcpy(frame.data + layout.offset, &mask, sizeof(mask));
+  return status;
+}
+} // namespace talos::designbytecode
 
 extern "C" talos_rt_status
 talos_rt_v1_event_snapshot_mask(talos_rt_context *context, uint64_t *outMask) {

@@ -83,8 +83,14 @@ public:
       function.walk([&](Operation *op) {
         if (op == function || !handleResult.isExecutable(op->getBlock()) ||
             isa<sim::SimReturnOp, cf::BranchOp, cf::CondBranchOp,
-                sim::SimTerminationRequestedOp>(op))
+                sim::SimTerminationRequestedOp, sim::SimEventSnapshotMaskOp>(
+                op))
           return;
+        if (isa<sim::SimEventSnapshotRegisterOp, sim::SimEventSnapshotFlushOp>(
+                op)) {
+          summary.effects |= Write | Terminate;
+          return;
+        }
         if (auto call = dyn_cast<sim::SimCallOp>(op)) {
           auto callee = symbols.lookupNearestSymbolFrom<sim::SimFuncOp>(
               call, call.getCalleeAttr());

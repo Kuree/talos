@@ -727,6 +727,22 @@ void declareNativeRuntimeABI(ModuleOp module) {
       module, "talos_rt_v1_covergroup_clock_event_register", managedI32,
       {managedPointer, managedPointer, managedI64, managedI32, managedI64,
        managedPointer, managedI32});
+  bool eventSnapshots = false;
+  module.walk([&](Operation *op) {
+    eventSnapshots |=
+        isa<sim::SimEventSnapshotRegisterOp, sim::SimEventSnapshotMaskOp,
+            sim::SimEventSnapshotFlushOp>(op);
+  });
+  if (eventSnapshots) {
+    getOrDeclareLLVMFunction(
+        module, "talos_rt_v1_event_snapshot_register", managedI32,
+        {managedPointer, managedPointer, managedI64, managedI64, managedPointer,
+         managedI32, managedPointer, managedI32});
+    getOrDeclareLLVMFunction(module, "talos_rt_v1_event_snapshot_mask",
+                             managedI32, {managedPointer, managedPointer});
+    getOrDeclareLLVMFunction(module, "talos_rt_v1_event_snapshot_flush",
+                             managedI32, {managedPointer});
+  }
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_covergroup_block_event_register", managedI32,
       {managedPointer, managedI64, managedPointer, managedI64, managedPointer,

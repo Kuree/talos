@@ -1625,7 +1625,16 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
         expressions.size(), &handle);
     return status == TALOS_RT_OK ? sentinel(0, handle) : status;
   }
-  case TALOS_RT_INTRINSIC_V1_COVERGROUP_CLOCK_EVENT_REGISTER: {
+  case TALOS_RT_INTRINSIC_V1_EVENT_SNAPSHOT_MASK:
+  case TALOS_RT_INTRINSIC_V1_EVENT_SNAPSHOT_FLUSH:
+    if (!invokeEventSnapshotIntrinsic)
+      return TALOS_RT_INVALID_BYTECODE;
+    return invokeEventSnapshotIntrinsic(image, frame, context, site,
+                                        signature.id);
+  case TALOS_RT_INTRINSIC_V1_COVERGROUP_CLOCK_EVENT_REGISTER:
+  case TALOS_RT_INTRINSIC_V1_EVENT_SNAPSHOT_REGISTER: {
+    bool snapshot =
+        signature.id == TALOS_RT_INTRINSIC_V1_EVENT_SNAPSHOT_REGISTER;
     if (site.inputCount < 5)
       return TALOS_RT_INVALID_BYTECODE;
     auto clauseCountValue = scalar(0), conditionCountValue = scalar(1),
@@ -1634,7 +1643,10 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     if (!clauseCountValue || !conditionCountValue || !strobeValue ||
         !observerCodeUnit || !captureCountValue || *clauseCountValue == 0 ||
         *clauseCountValue > 64 || *conditionCountValue > *clauseCountValue ||
-        *strobeValue > 1 || *captureCountValue > UINT32_MAX)
+        (snapshot ? (*strobeValue == 0 || *strobeValue > UINT32_MAX ||
+                     *strobeValue * 3 > site.inputCount)
+                  : *strobeValue > 1) ||
+        *captureCountValue > UINT32_MAX)
       return TALOS_RT_INVALID_BYTECODE;
     uint32_t clauseCount = static_cast<uint32_t>(*clauseCountValue);
     uint32_t conditionCount = static_cast<uint32_t>(*conditionCountValue);
@@ -1652,6 +1664,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     std::vector<uint32_t> edges;
     std::vector<int32_t> conditionIndices;
     std::vector<talos_rt_computed_capture_v1> samplerCaptures;
+    std::vector<talos_rt_event_snapshot_target_v1> targets;
     static_assert(alignof(talos_rt_computed_wait_record_v1) <=
                   alignof(uint64_t));
     std::vector<uint64_t> record;
@@ -1874,6 +1887,22 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
                                  samplerCaptures[index]))
           return TALOS_RT_INVALID_BYTECODE;
       }
+      if (snapshot) {
+        uint64_t count = *strobeValue;
+        if (cursor > site.inputCount || count * 3 != site.inputCount - cursor ||
+            count > SIZE_MAX / sizeof(talos_rt_event_snapshot_target_v1))
+          return TALOS_RT_INVALID_BYTECODE;
+        targets.reserve(static_cast<size_t>(count));
+        for (uint64_t index = 0; index < count; ++index) {
+          auto handle = scalar(cursor++), width = scalar(cursor++),
+               flags = scalar(cursor++);
+          if (!handle || !width || !flags || !*width || *width > UINT32_MAX ||
+              *flags > UINT32_MAX)
+            return TALOS_RT_INVALID_BYTECODE;
+          targets.push_back({*handle, static_cast<uint32_t>(*width),
+                             static_cast<uint32_t>(*flags)});
+        }
+      }
       if (cursor != site.inputCount)
         return TALOS_RT_INVALID_BYTECODE;
     }
@@ -1883,6 +1912,11 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     }
     auto *eventPlan =
         reinterpret_cast<talos_rt_computed_wait_record_v1 *>(record.data());
+    if (snapshot)
+      return talos_rt_v1_event_snapshot_register(
+          context, eventPlan, recordSize, *observerCodeUnit,
+          samplerCaptures.data(), captureCount, targets.data(),
+          static_cast<uint32_t>(targets.size()));
     return talos_rt_v1_covergroup_clock_event_register(
         context, eventPlan, recordSize, static_cast<uint32_t>(*strobeValue),
         *observerCodeUnit, samplerCaptures.data(), captureCount);

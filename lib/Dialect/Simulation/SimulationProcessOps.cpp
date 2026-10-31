@@ -789,6 +789,9 @@ LogicalResult SimCallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   if (getOperandTypes() != callee.getFunctionType().getInputs() ||
       getResultTypes() != callee.getFunctionType().getResults())
     return emitOpError("operand and result types must match callee signature");
+  if (callee.getEntryKind() == EntryKind::Observer && hasSnapshotMask(callee))
+    return emitOpError(
+        "snapshot mask evaluators may only run as snapshot samplers");
   return success();
 }
 
@@ -876,6 +879,16 @@ SimObserverBindOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   if (type.getNumResults() != 1 ||
       type.getResult(0) != getResult().getType().getResultType())
     return emitOpError("result type must match the evaluator result");
+  if (hasSnapshotMask(evaluator))
+    for (OpOperand &use : getResult().getUses()) {
+      auto registration = dyn_cast<SimEventSnapshotRegisterOp>(use.getOwner());
+      // The same token may occupy several roles. Only the sampler operand
+      // (after context and the event inventory) runs with a qualified mask.
+      if (!registration ||
+          use.getOperandNumber() != registration.getValues().size())
+        return emitOpError(
+            "snapshot mask evaluator must bind only a snapshot sampler");
+    }
   return success();
 }
 
@@ -2287,7 +2300,7 @@ LogicalResult SimPowerNBAOp::verifySymbolUses(SymbolTableCollection &symbols) {
 // IEEE 1800-2023 11.5.1/7.4.5: a raw bounded write may reach integral
 // leaves, never ownership-bearing or opaque runtime handles. Inspect interned
 // element types once, including fixed arrays and repeated record members.
-static std::optional<bool> integralStorageDomain(Type root) {
+std::optional<bool> integralStorageDomain(Type root) {
   SmallVector<Type> pending{root};
   DenseSet<Type> seen;
   bool fourState = false;

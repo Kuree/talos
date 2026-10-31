@@ -383,6 +383,17 @@ diagnosed. Ordinary projected captures require one provable persistent root;
 references selecting different roots need specialization and are rejected.
 A `-no_retention` strategy uses ordinary domain corruption with no backing storage.
 
+Compiler infrastructure for balloon retention now includes
+`simulation.event.snapshot.register`, `.mask`, and `.flush` operations. They
+capture event-time data and qualified conditions (clause 6.50), then commit all
+destinations before publishing their changes. Registrations retain pure
+callbacks and whole persistent packed targets; their writes remain possible
+throughout simulation. Native and required-bytecode execution support wide
+four-state payloads and fixed64 handles on wasm32. Ordinary links omit the
+snapshot commit service. These operations currently require explicit flushes
+in compiler IR; UPF save/restore elaboration and automatic publication barriers
+are not implemented yet, so balloon strategies still produce a diagnostic.
+
 The frontend accepts whole-signal and instance `-elements` and
 `-exclude_elements`, `-retention_supply`, `-save_signal`, `-restore_signal`,
 `-save_condition`, `-restore_condition`, `-retention_condition`, `-no_retention`,

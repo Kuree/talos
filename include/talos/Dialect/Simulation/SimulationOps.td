@@ -6363,6 +6363,74 @@ def SimObserverBindOp : SimOp<"observer.bind", [
   let hasVerifier = 1;
 }
 
+def SimEventSnapshotRegisterOp : SimOp<"event.snapshot.register", [
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>,
+    DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+  ]> {
+  let summary = "retain a pure event-time state snapshot sampler";
+  let description = [{
+    IEEE 1801-2018 6.50 requires retention data and conditions at the control
+    event. Values contain primaries, encounter-time initial results, optional
+    iff observers and one pure sampler, in that order. The sampler returns
+    the concatenated target payload, with the first target in the low bits.
+    Targets are disjoint whole persistent packed integral declarations.
+    Registration retains repeating asynchronous writes; it does not perform
+    an immediate or definite overwrite. The private primed owner parks after
+    registration and remains alive until simulation teardown.
+
+    Capture callbacks read persistent bound roots. The sampler may query the
+    complete qualified clause mask. An explicit snapshot.flush after each
+    complete source publication commits the captured state transaction.
+  }];
+  let arguments = (ins SimContextType:$context, Variadic<AnyType>:$arguments,
+      I32Attr:$target_count,
+      I32Attr:$condition_count, DenseI32ArrayAttr:$edges,
+      DenseI32ArrayAttr:$condition_indices);
+  let assemblyFormat = [{
+    $context `values` `[` $arguments `]` `targets` $target_count
+    `conditions` $condition_count `edges` $edges `indices` $condition_indices
+    attr-dict `:` type($arguments)
+  }];
+  let extraClassDeclaration = [{
+    ::mlir::Operation::operand_range getValues();
+    ::mlir::Operation::operand_range getTargets();
+    ::mlir::Operation::operand_range getPrimaries();
+    ::mlir::Operation::operand_range getInitialValues();
+    ::mlir::Operation::operand_range getConditions();
+    ::mlir::Value getSampler();
+  }];
+  let hasVerifier = 1;
+}
+
+def SimEventSnapshotMaskOp : SimOp<"event.snapshot.mask", [
+    MemoryEffects<[MemRead<SimSchedulerResource>]>
+  ]> {
+  let summary = "read the current snapshot sampler's qualified clause mask";
+  let arguments = (ins SimContextType:$context);
+  let results = (outs I64:$mask);
+  let assemblyFormat = "$context attr-dict";
+  let hasVerifier = 1;
+}
+
+def SimEventSnapshotFlushOp : SimOp<"event.snapshot.flush", [
+    MemoryEffects<[MemRead<SimStorageResource>, MemWrite<SimStorageResource>,
+                   MemRead<SimNetResource>, MemWrite<SimNetResource>,
+                   MemRead<SimSchedulerResource>, MemWrite<SimSchedulerResource>,
+                   MemRead<SimProcessResource>, MemWrite<SimProcessResource>]>
+  ]> {
+  let summary = "commit pending event snapshots after a complete publication";
+  let description = [{
+    A memory and scheduling barrier for IEEE 1801-2018 6.50 event-time state
+    transfers. It may read and write any retained destination, including a
+    registration installed by another activation. Keep the broad effects
+    through optimization and lower to the explicit runtime flush service.
+    It is not callable from an observer or notification callback.
+  }];
+  let arguments = (ins SimContextType:$context);
+  let assemblyFormat = "$context attr-dict";
+  let hasVerifier = 1;
+}
+
 class SimSuspendOp<string mnemonic, dag extraArgs = (ins),
                    list<Trait> extraTraits = []>
     : SimOp<mnemonic,

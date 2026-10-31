@@ -219,6 +219,7 @@ FailureOr<EncodedSimulationDesign> Encoder::encode() {
   result.stateBitCount = state.bits;
   result.sampledRanges = std::move(*sampledRanges);
   result.requiresDynamicScanFeature = requiresDynamicScanFeature;
+  result.requiresEventSnapshotFeature = requiresEventSnapshotFeature;
   result.requiresContainerBitstreamFeature = requiresContainerBitstreamFeature;
   result.requiresRecursiveBitstreamFeature = requiresRecursiveBitstreamFeature;
   result.executionFlags = kExecutionHasBytecode;
@@ -907,6 +908,8 @@ public:
     runtime::set<runtime::StateBits>(
         module, builder.getI64IntegerAttr(encoded->stateBitCount));
     bool classBitstream = runtime::has<runtime::ClassBitstreamBlob>(module);
+    runtime::setFeatures(module, runtime::Features::EventSnapshots,
+                         encoded->requiresEventSnapshotFeature);
     runtime::setFeatures(module, runtime::Features::DynamicScan,
                          encoded->requiresDynamicScanFeature);
     runtime::setFeatures(module, runtime::Features::ContainerBitstream,
