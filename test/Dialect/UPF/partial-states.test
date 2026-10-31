@@ -1,0 +1,57 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/valid.mlir | talos-opt | FileCheck %s
+// RUN: talos-opt --split-input-file --verify-diagnostics %t/invalid.mlir
+// RUN: talos-opt --elaborate-upf %t/empty.mlir | FileCheck %s --check-prefix=EMPTY
+// IEEE 1801-2018 6.22/6.47: preserve partial conditions and a typed global
+// policy through assembly; verify placement, state kinds, input and names.
+// CHECK: module attributes {upf.partial_on_translation = #upf.partial_on_translation<off>}
+// CHECK: upf.domain
+// CHECK-SAME: partial = [#upf.state<name = "PARTIAL"
+// CHECK: module attributes {upf.partial_on_translation = #upf.partial_on_translation<full_on>}
+// EMPTY-NOT: upf.
+// EMPTY: module {
+
+//--- valid.mlir
+#one = #upf.expression<[#upf.token<opcode = constant, value = true, unknown = false>]>
+module attributes {upf.partial_on_translation = #upf.partial_on_translation<off>} {
+  upf.supply @rail names ["/top/VDD"] writable = true
+  upf.supply @switched names ["/top/SW"] writable = false
+  upf.domain @PD elements ["top.dut"] power @switched on [] {
+    input = @rail, partial = [#upf.state<name = "PARTIAL", condition = #one>]
+  }
+}
+module attributes {upf.partial_on_translation = #upf.partial_on_translation<full_on>} {}
+//--- empty.mlir
+module attributes {upf.partial_on_translation = #upf.partial_on_translation<full_on>} {}
+//--- invalid.mlir
+// expected-error @+1 {{upf.partial_on_translation requires a typed module-level policy}}
+module attributes {upf.partial_on_translation = "FULL_ON"} {}
+// -----
+module {
+  // expected-error @+1 {{upf.partial_on_translation requires a typed module-level policy}}
+  upf.supply @rail names ["/top/VDD"] writable = true {upf.partial_on_translation = #upf.partial_on_translation<off>}
+}
+// -----
+#one = #upf.expression<[#upf.token<opcode = constant, value = true, unknown = false>]>
+module {
+  upf.supply @rail names ["/top/VDD"] writable = true
+  // expected-error @+1 {{switch conditions require an input supply root}}
+  upf.domain @PD elements ["top.dut"] power @rail on [] {partial = [#upf.state<name = "P", condition = #one>]}
+}
+// -----
+#one = #upf.expression<[#upf.token<opcode = constant, value = true, unknown = false>]>
+#state = #upf.state<name = "S", condition = #one>
+module {
+  upf.supply @rail names ["/top/VDD"] writable = true
+  upf.supply @switched names ["/top/SW"] writable = false
+  // expected-error @+1 {{duplicate power-switch state name}}
+  upf.domain @PD elements ["top.dut"] power @switched on [#state] {input = @rail, partial = [#state]}
+}
+// -----
+#one = #upf.expression<[#upf.token<opcode = constant, value = true, unknown = false>]>
+module {
+  upf.supply @rail names ["/top/VDD"] writable = true
+  upf.supply @switched names ["/top/SW"] writable = false
+  // expected-error @+1 {{attribute 'partial' failed to satisfy constraint}}
+  upf.domain @PD elements ["top.dut"] power @switched on [] {input = @rail, partial = [#one]}
+}

@@ -1,0 +1,81 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --native-scheduler=eval --mlir-verify-each %t/design.sv -o %t.eval
+// RUN: %t.eval | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.22/6.47/9.6.7: partial controls are dependencies even when
+// no HDL process reads them. Only changes to effective NORMAL activate RTL.
+// Full/partial handoffs under FULL_ON translation preserve driver activations.
+// CHECK: partial switch driver sensitivity passed
+
+//--- design.sv
+package audit;
+  int calls = 0;
+  function logic sample();
+    calls++;
+    return 1;
+  endfunction
+endpackage
+module leaf(output wire q);
+  assign q = audit::sample();
+endmodule
+module top;
+  import UPF::*;
+`ifdef FULL_TRANSLATION
+  localparam bit FULL_MODE = 1;
+`else
+  localparam bit FULL_MODE = 0;
+`endif
+  logic en = 1, trickle = 1;
+  wire q;
+  int calls;
+  leaf dut(q);
+  initial begin
+    #1;
+    if (!supply_on("/top/VDD") || !supply_on("/top/VSS", 0.0)) $fatal(1, "ON");
+    #1;
+    if (q !== 1 || audit::calls != 1) $fatal(1, "startup count");
+    en = 0;
+    #1;
+    if (q !== (FULL_MODE ? 1'b1 : 1'bx) || audit::calls != 1)
+      $fatal(1, "partial loss or NORMAL preservation");
+    en = 1;
+    #1;
+    if (q !== 1 || audit::calls != (FULL_MODE ? 1 : 2)) $fatal(1, "restore count");
+    calls = audit::calls;
+    trickle = 0;
+    #1 trickle = 1;
+    #1;
+    if (q !== 1 || audit::calls != calls) $fatal(1, "NORMAL control change ran driver");
+    en = 0;
+    #1 trickle = 0;
+    #1;
+    if (q !== 1'bx || audit::calls != calls) $fatal(1, "OFF driver count");
+    trickle = 1;
+    #1;
+    if (q !== (FULL_MODE ? 1'b1 : 1'bx) || audit::calls != calls + FULL_MODE)
+      $fatal(1, "partial-only sensitivity");
+    en = 1;
+    #1;
+    if (q !== 1 || audit::calls != calls + 1) $fatal(1, "full restore duplicated");
+    $display("partial switch driver sensitivity passed");
+    $finish;
+  end
+endmodule
+//--- design.upf
+foreach net {VDD VSS SW} {create_supply_net $net}
+create_power_domain PD -elements dut
+set_domain_supply_net PD -primary_power_net SW -primary_ground_net VSS
+create_power_switch PS -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout SW} \
+    -control_port {e en} -control_port {t trickle} \
+    -on_state {MAIN vin e} -on_partial_state {PARTIAL vin t}
+//--- full.upf
+set_partial_on_translation FULL_ON
+source [file join [file dirname [info script]] design.upf]
+//--- off.upf
+set_partial_on_translation OFF
+source [file join [file dirname [info script]] design.upf]

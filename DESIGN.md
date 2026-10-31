@@ -120,7 +120,8 @@ The initial command bridge supports `upf_version 3.1`, `set_design_top`,
 `set_scope`, `find_objects`, `load_upf`, basic supply net/port declarations and
 connections, `create_supply_set`, `associate_supply_set`,
 `create_power_domain` with supply handles, `set_domain_supply_net`,
-`create_power_switch`, supply-set `add_power_state`, and output `set_isolation`. Options outside the
+`create_power_switch`, supply-set `add_power_state`, `set_partial_on_translation`,
+and output `set_isolation`. Options outside the
 implemented subset are diagnosed. Root supplies initially are OFF (IEEE
 1801-2018 9.2.1). The compiler-provided SystemVerilog package `UPF` implements
 `supply_on` / `supply_off` against absolute UPF root handles, including eligible
@@ -130,8 +131,10 @@ samples those roots, including protected outputs, through an effectful
 storage reads before target lowering (11.2.3.2.6). Queries preserve ordinary
 propagation timing without introducing deferred mirror sensitivity. The public
 enum/int packed64 snapshot is explicitly repacked from private root storage;
-state, voltage, and on-state accessors and voltage-conversion helpers remain
-constant-capable SV functions (11.2.2/11.2.4). Connected unresolved
+state/voltage accessors and voltage-conversion helpers remain
+constant-capable SV functions (11.2.2/11.2.4). The on-state accessor resolves
+PARTIAL_ON translation through a nonconstant intrinsic after Tcl execution;
+its other state branches remain constant-capable (6.47/11.2.3.2.8). Connected unresolved
 supplies share one per-context state/voltage storage value, with signed32
 microvolts on both native and wasm32 targets. Unmodified ON definitions require
 FULL_ON primary power and ground; ground can be FULL_ON at zero volts (4.7.4).
@@ -161,16 +164,22 @@ source/control values; NORMAL handoffs preserve pending work, while loss of
 NORMAL uses the same corruption and cancellation path as physical power loss.
 
 The simulation slice accepts independent direct domains and domains controlled
-by one switch. A switch has named ON/ERROR conditions and an optional named OFF
+by one switch. A switch has named ON/partial/ERROR conditions and an optional named OFF
 condition. Typed state
 attributes preserve names and expression structure (IEEE 1801-2018 6.22);
 typed postfix expressions retain widths and signedness (5.4). Switch expressions
 use control-port names by default; direct HDL names require the explicit
 `--upf-allow-hdl-expressions` extension. Reference tokens preserve the source
 width, selected width and flattened offset, with source ranges resolved before emission. Knownness
-checks cover every ON state's selected references; monitor sensitivity covers
-all ON/OFF/ERROR base objects. True ERROR conditions corrupt and permit recovery,
-while explicit OFF/ON conflicts also record an unsuccessful simulation status.
+checks cover every ON/partial state's selected references; monitor sensitivity covers
+all state conditions' base objects. A partial contribution degrades FULL_ON to
+PARTIAL_ON while preserving voltage and all other input states; an ON contribution
+takes priority for the same source (6.22). The typed module attribute
+`upf.partial_on_translation` optionally interprets PARTIAL_ON as OFF or FULL_ON
+in power-state predicates/default ON, leaving physical storage and queries
+unchanged (6.47). It is removed after UPF elaboration. True ERROR conditions
+corrupt and permit recovery, while explicit OFF/ON or OFF/partial conflicts also
+record an unsuccessful simulation status.
 The switch monitor watches referenced controls and supply state/voltage, but
 restoration wakes level logic through the aggregate NORMAL state. Guards and
 NBA helpers evaluate controls inline to avoid stale monitor state. It supports

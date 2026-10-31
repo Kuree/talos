@@ -58,7 +58,8 @@ supported after checking their call closure; asynchronous or indirect calls
 remain diagnosed. Input expressions owned by an exterior parent remain active.
 
 Power switches accept repeated `-control_port {alias design_object}`,
-`-on_state {name input expression}`, and `-error_state {name expression}`
+`-on_state {name input expression}`, `-on_partial_state {name input expression}`,
+and `-error_state {name expression}`
 options, plus one optional `-off_state` (clause 6.22). Switch control-port
 bindings are scalar integral objects or selected bits. State expressions name
 these declared control ports: the specific restriction in clause 6.22 overrides
@@ -74,12 +75,12 @@ create_power_switch SW -domain PD \
     -on_state {ON vin {en && ready}} -off_state {OFF {!en}}
 ```
 
-Every ON expression reference must be known, even when masked by another
-operand or in an inactive ON state; unused, OFF-only, and ERROR-only controls
+Every ON or partial expression reference must be known, even when masked by another
+operand or in an inactive state; unused, OFF-only, and ERROR-only controls
 do not affect that knownness check (clause 6.22). Multiple true ON states can
 contribute the same input without losing power or activating RTL again.
 Independent explicit OFF expressions are supported. Simultaneous
-true ON/OFF conditions report a simulation error and corrupt the domain.
+true ON/OFF or partial/OFF conditions report a simulation error and corrupt the domain.
 Changes that leave aggregate power NORMAL do not activate RTL; restoration
 reevaluates level logic, while pending updates from before power loss remain
 cancelled (clauses 9.2.2, 9.5.3, and 9.6.7). A true ERROR condition contributes
@@ -87,10 +88,26 @@ UNDETERMINED and corrupts the domain; deasserting it permits restoration.
 This does not automatically fail the simulation: unlike an OFF/ON conflict,
 clause 6.22 specifies the ERROR contribution without requiring a diagnostic.
 
-State names are unique across ON, OFF, and ERROR groups. An omitted OFF
-condition complements the other state conditions; a switch with no ON states
-never supplies NORMAL power. This slice supports one input supply per switch;
-partial-on control and general supply-network resolution remain unsupported.
+Partial conditions model current-limited turn-on (clause 6.22, Example 2).
+They pass the input state and voltage, degrading FULL_ON to PARTIAL_ON;
+other input states keep their state. A full contribution takes priority over a
+partial contribution from the same input. ERROR, explicit OFF conflicts, and
+unknown ON/partial references take priority over both. An OFF input suppresses
+unknown-reference contributions, while ERROR and explicit conflicts still apply.
+
+`set_partial_on_translation FULL_ON` or `set_partial_on_translation OFF`
+selects a global interpretation of PARTIAL_ON for supply-set and domain power
+state evaluation (clause 6.47). With no command, PARTIAL_ON stays PARTIAL_ON.
+Translation affects state references and default ON requirements, preserving
+predicate literals, voltage values, physical switch calculations, and raw queries.
+Repeated identical settings return the setting; conflicting settings produce a
+catchable Tcl error across scopes, loaded files, and repeated `--upf` inputs.
+
+State names are unique across ON, partial, OFF, and ERROR groups. An omitted OFF
+condition complements the other state conditions. A partial-only switch can
+supply NORMAL power under FULL_ON translation or an explicit partial-state policy.
+This slice supports one input supply per switch; general supply-network
+resolution remains unsupported.
 Sized SV
 literals of 1..4096 bits, unbased fill literals, and unsized decimal values
 0..2147483647 are accepted; other unsized literals require an explicit width.
@@ -339,10 +356,9 @@ end
 `get_supply_state`, `get_supply_voltage`, and `get_supply_on_state` operate on
 the passed snapshot (clauses 11.2.3.2.7–.9). The voltage accessor returns real
 volts. The on-state accessor reports FULL_ON, including FULL_ON at zero volts;
-it does not report a domain's effective NORMAL policy. Without PARTIAL_ON
-translation, PARTIAL_ON and UNDETERMINED return false. The
-`set_partial_on_translation` command remains unsupported, so no translation is
-implicitly enabled (clause 6.47).
+it does not report a domain's effective NORMAL policy. PARTIAL_ON returns true
+only with explicit FULL_ON translation; UNDETERMINED returns false (clause 6.47).
+The state and voltage accessors preserve the raw snapshot under either setting.
 
 Queries observe root writes immediately, while a computed switch output
 retains its published value until ordinary supply propagation runs (clauses
@@ -355,10 +371,14 @@ their continuous monitoring APIs (clause 11.2.3.4) remain unsupported.
 Invalid queries record a nonterminating simulation error. Talos returns
 UNDETERMINED with zero microvolts as its recovery value; the standard does not
 specify that value. Discarding a result preserves the error, and an unexecuted
-query causes no error. The name lookup is nonconstant. Snapshot accessors and
+query causes no error. The name lookup is nonconstant. State/voltage accessors and
 the standard `upf_convert_real_volts_to_int_uvolts` /
 `upf_convert_int_uvolts_to_real_volts` helpers are ordinary SV functions that
-can be used in constant expressions. The latter helpers follow normal SV
+can be used in constant expressions. `get_supply_on_state` also supports constant
+FULL_ON, OFF, and UNDETERMINED snapshots. Its PARTIAL_ON branch requires a runtime
+call because Tcl executes after SV constant evaluation; a constant PARTIAL_ON
+call produces a diagnostic instead of guessing the later policy.
+The conversion helpers follow normal SV
 conversions, including nearest-integer rounding with half ties away from zero
 (clauses 11.2.3.5.4–.5); they are separate from the checked supply-write API.
 Native, bytecode, and wasm32 simulators use the same public types and values.

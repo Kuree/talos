@@ -31,7 +31,7 @@ struct Domain {
   std::string inputPort, outputPort;
   std::optional<SupplyObject> inputSupply, outputSupply;
   std::string primary;
-  SmallVector<Attribute> on, errors;
+  SmallVector<Attribute> on, partial, errors;
   upf::SwitchStateAttr off;
   std::vector<std::string> elements;
   bool isolationHigh = true;
@@ -61,6 +61,7 @@ struct Session {
   ModuleOp module;
   Tcl_Interp *interp;
   bool allowHDLExpressions;
+  std::optional<upf::PartialOnTranslation> partialOnTranslation;
   std::string top, scope, file, designModule;
   std::map<std::string, Operation *> objects;
   std::map<std::string, Domain> domains;
@@ -426,6 +427,27 @@ struct Session {
         return error(
             "this UPF frontend targets IEEE 1801-2018 (upf_version 3.1)");
       Tcl_SetObjResult(interp, Tcl_NewStringObj("3.1", -1));
+      return TCL_OK;
+    }
+    if (command == "set_partial_on_translation") {
+      // IEEE 1801-2018 6.47: one global setting across all files/scopes.
+      // Repeating the setting is idempotent; a caught conflict preserves it.
+      if (objc != 2)
+        return error("usage: set_partial_on_translation OFF|FULL_ON");
+      StringRef spelling = Tcl_GetString(objv[1]);
+      upf::PartialOnTranslation next;
+      if (spelling == "OFF")
+        next = upf::PartialOnTranslation::Off;
+      else if (spelling == "FULL_ON")
+        next = upf::PartialOnTranslation::FullOn;
+      else
+        return error("PARTIAL_ON translation must be OFF or FULL_ON");
+      if (partialOnTranslation && *partialOnTranslation != next)
+        return error(
+            "conflicting global PARTIAL_ON translation (IEEE 1801-2018 6.47)");
+      partialOnTranslation = next;
+      Tcl_SetObjResult(interp,
+                       Tcl_NewStringObj(spelling.data(), spelling.size()));
       return TCL_OK;
     }
     if (command == "set_design_top") {
@@ -1085,12 +1107,15 @@ struct Session {
     if (command == "create_power_switch") {
       // IEEE 1801-2018 6.22: -domain uses the owning domain's scope, and
       // control expressions reference the switch's declared control-port names.
-      RepeatedOptions repeated{
-          {"-control_port", {}}, {"-on_state", {}}, {"-error_state", {}}};
+      RepeatedOptions repeated{{"-control_port", {}},
+                               {"-on_state", {}},
+                               {"-on_partial_state", {}},
+                               {"-error_state", {}}};
       if (objc < 2 ||
           !options(objc, objv, 2,
                    {"-domain", "-input_supply_port", "-output_supply_port",
-                    "-control_port", "-on_state", "-off_state", "-error_state"},
+                    "-control_port", "-on_state", "-on_partial_state",
+                    "-off_state", "-error_state"},
                    opts, &repeated))
         return TCL_ERROR;
       Domain *dom = domain(opts);
@@ -1177,6 +1202,7 @@ struct Session {
       };
       auto report = [&](const llvm::Twine &message) { error(message); };
       size_t count = repeated["-on_state"].size() +
+                     repeated["-on_partial_state"].size() +
                      repeated["-error_state"].size() + opts.count("-off_state");
       if (count > 256)
         return error("power switch exceeds 256 states");
@@ -1215,12 +1241,18 @@ struct Session {
             module.getContext(),
             StringAttr::get(module.getContext(), fields[0]), *expression);
       };
-      SmallVector<Attribute> onStates, errorStates;
+      SmallVector<Attribute> onStates, partialStates, errorStates;
       for (auto obj : repeated["-on_state"]) {
         auto parsed = state(obj, true);
         if (failed(parsed))
           return TCL_ERROR;
         onStates.push_back(*parsed);
+      }
+      for (auto obj : repeated["-on_partial_state"]) {
+        auto parsed = state(obj, true);
+        if (failed(parsed))
+          return TCL_ERROR;
+        partialStates.push_back(*parsed);
       }
       upf::SwitchStateAttr offState;
       if (auto found = opts.find("-off_state"); found != opts.end()) {
@@ -1263,6 +1295,7 @@ struct Session {
       if (!switches.insert(switchName).second)
         return error("duplicate power switch");
       dom->on = std::move(onStates);
+      dom->partial = std::move(partialStates);
       dom->off = offState;
       dom->errors = std::move(errorStates);
       dom->switchInput = inputSupply->path;
@@ -1360,7 +1393,8 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
         "load_upf", "create_power_domain", "create_supply_net",
         "create_supply_port", "connect_supply_net", "set_domain_supply_net",
         "create_power_switch", "set_isolation", "create_supply_set",
-        "associate_supply_set", "add_power_state"})
+        "associate_supply_set", "add_power_state",
+        "set_partial_on_translation"})
     commands.push_back({&session, name});
   for (auto &command : commands)
     Tcl_CreateObjCommand2(interp.get(), command.name, dispatch, &command,
@@ -1379,6 +1413,10 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
              << (details ? details : Tcl_GetStringResult(interp.get()));
     }
   }
+  if (session.partialOnTranslation)
+    module->setAttr(upf::partialOnTranslationName,
+                    upf::PartialOnTranslationAttr::get(
+                        module.getContext(), *session.partialOnTranslation));
   SupplyFunctions functions;
   SupplyEquivalences equivalences;
   for (auto &[name, set] : session.supplySets) {
@@ -1620,6 +1658,8 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
             : FlatSymbolRefAttr{},
         FlatSymbolRefAttr::get(module.getContext(), domain.primary),
         builder.getArrayAttr(policies), builder.getArrayAttr(domain.on),
+        domain.partial.empty() ? ArrayAttr{}
+                               : builder.getArrayAttr(domain.partial),
         domain.off,
         domain.errors.empty() ? ArrayAttr{}
                               : builder.getArrayAttr(domain.errors),

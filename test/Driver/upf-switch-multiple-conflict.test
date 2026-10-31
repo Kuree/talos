@@ -7,7 +7,7 @@
 // RUN: talos --upf-assume-powered-inputs --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
 // RUN: not %t.bc 2>&1 | FileCheck %s
 // IEEE 1801-2018 6.22: explicit OFF conflicts with ANY true ON state.
-// CHECK: ON and OFF conditions are simultaneously true
+// CHECK: ON/PARTIAL and OFF conditions are simultaneously true
 // CHECK: multiple ON explicit OFF conflict passed
 
 //--- design.sv

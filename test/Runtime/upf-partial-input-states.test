@@ -1,0 +1,127 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/design.mlir --pass-pipeline='builtin.module(elaborate-upf,simulation.design(simulation.func(talos-sim-thread-suspension),talos-sim-build-compute-graph,talos-sim-verify-compute-graph),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' --verify-each -o %t.lowered.mlir
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O0>' | %llc -filetype=obj -relocation-model=pic -o %t.o
+// RUN: %target_cxx %t.o %runtime_link_flags -o %t.exe
+// RUN: %t.exe --execution-tier=native | FileCheck %s
+// RUN: %t.exe --execution-tier=bytecode | FileCheck %s
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.opt.o
+// RUN: %target_cxx %t.opt.o %runtime_link_flags -o %t.opt.exe && %t.opt.exe --execution-tier=native | FileCheck %s
+// IEEE 1801-2018 6.22: neither full nor partial conditions upgrade an input
+// that is already PARTIAL_ON or UNDETERMINED. Seed those input states in IR
+// because supply_on/off only produce FULL_ON/OFF and cascades are unsupported.
+// 6.47: raw outputs preserve PARTIAL_ON/800000uV under FULL_ON translation.
+// Legacy domains without primary supply-set attributes must still evaluate
+// translated output states for NORMAL, including partial-only switches.
+// CHECK: input states 3200002 3200002 3 3 normal 1 1 0 0
+
+//--- design.mlir
+#one = #upf.expression<[#upf.token<opcode = constant, value = true, unknown = false>]>
+#main = #upf.state<name = "MAIN", condition = #one>
+#partial = #upf.state<name = "PARTIAL", condition = #one>
+module attributes {
+  llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128",
+  llvm.target_triple = "x86_64-unknown-linux-gnu",
+  upf.partial_on_translation = #upf.partial_on_translation<full_on>
+} {
+  upf.supply @partial_input names ["/top/PARTIAL"] writable = true {initial_value = 3200002 : i64}
+  upf.supply @undetermined_input names ["/top/UNDET"] writable = true {initial_value = 3 : i64}
+  upf.supply @out0 names ["/top/OUT0"] writable = false
+  upf.domain @D0 elements ["top.d0"] power @out0 on [#main] {input = @partial_input, partial = [#partial]}
+  upf.supply @out1 names ["/top/OUT1"] writable = false
+  upf.domain @D1 elements ["top.d1"] power @out1 on [] {input = @partial_input, partial = [#partial]}
+  upf.supply @out2 names ["/top/OUT2"] writable = false
+  upf.domain @D2 elements ["top.d2"] power @out2 on [#main] {input = @undetermined_input, partial = [#partial]}
+  upf.supply @out3 names ["/top/OUT3"] writable = false
+  upf.domain @D3 elements ["top.d3"] power @out3 on [] {input = @undetermined_input, partial = [#partial]}
+  simulation.design @input_states {
+    simulation.scope.decl 0 hierarchy "top"
+    simulation.code_unit.decl 9 in 0 root_initializer hierarchy "top.root"
+    simulation.scope.decl 1 parent 0 hierarchy "top.d0" source_definition "leaf"
+    simulation.code_unit.decl 1 in 1 continuous hierarchy "top.d0.driver"
+    simulation.storage.decl 0 in 1 : i1 design hierarchy "top.d0.q"
+    simulation.scope.decl 2 parent 0 hierarchy "top.d1" source_definition "leaf"
+    simulation.code_unit.decl 2 in 2 continuous hierarchy "top.d1.driver"
+    simulation.storage.decl 1 in 2 : i1 design hierarchy "top.d1.q"
+    simulation.scope.decl 3 parent 0 hierarchy "top.d2" source_definition "leaf"
+    simulation.code_unit.decl 3 in 3 continuous hierarchy "top.d2.driver"
+    simulation.storage.decl 2 in 3 : i1 design hierarchy "top.d2.q"
+    simulation.scope.decl 4 parent 0 hierarchy "top.d3" source_definition "leaf"
+    simulation.code_unit.decl 4 in 4 continuous hierarchy "top.d3.driver"
+    simulation.storage.decl 3 in 4 : i1 design hierarchy "top.d3.q"
+    simulation.storage.decl 4 in 0 : i1 design hierarchy "top.never_changes"
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 9 : i64} {
+      %zero = arith.constant false
+      %q0 = simulation.context.storage %ctx[0] : !simulation.ref<i1>
+      simulation.ref.store %zero to %q0 : i1, !simulation.ref<i1>
+      %q1 = simulation.context.storage %ctx[1] : !simulation.ref<i1>
+      simulation.ref.store %zero to %q1 : i1, !simulation.ref<i1>
+      %q2 = simulation.context.storage %ctx[2] : !simulation.ref<i1>
+      simulation.ref.store %zero to %q2 : i1, !simulation.ref<i1>
+      %q3 = simulation.context.storage %ctx[3] : !simulation.ref<i1>
+      simulation.ref.store %zero to %q3 : i1, !simulation.ref<i1>
+      %q4 = simulation.context.storage %ctx[4] : !simulation.ref<i1>
+      simulation.ref.store %zero to %q4 : i1, !simulation.ref<i1>
+      %p0 = simulation.spawn @driver0(%ctx) : !simulation.context -> !simulation.process
+      %p1 = simulation.spawn @driver1(%ctx) : !simulation.context -> !simulation.process
+      %p2 = simulation.spawn @driver2(%ctx) : !simulation.context -> !simulation.process
+      %p3 = simulation.spawn @driver3(%ctx) : !simulation.context -> !simulation.process
+      %delay = simulation.time.constant 1
+      simulation.suspend.delay %delay to ^print
+    ^print:
+      %name0 = simulation.string.literal "/top/OUT0"
+      %value0 = simulation.supply.read %ctx %name0
+      %normal0 = simulation.ref.load %q0 : !simulation.ref<i1> -> i1
+      %name1 = simulation.string.literal "/top/OUT1"
+      %value1 = simulation.supply.read %ctx %name1
+      %normal1 = simulation.ref.load %q1 : !simulation.ref<i1> -> i1
+      %name2 = simulation.string.literal "/top/OUT2"
+      %value2 = simulation.supply.read %ctx %name2
+      %normal2 = simulation.ref.load %q2 : !simulation.ref<i1> -> i1
+      %name3 = simulation.string.literal "/top/OUT3"
+      %value3 = simulation.supply.read %ctx %name3
+      %normal3 = simulation.ref.load %q3 : !simulation.ref<i1> -> i1
+      %fmt = simulation.bytes.constant "input states %0d %0d %0d %0d normal %0d %0d %0d %0d"
+      %stdout = arith.constant 1 : i32
+      simulation.display %ctx to %stdout(%fmt, %value0, %value1, %value2, %value3, %normal0, %normal1, %normal2, %normal3) newline = true radix = <decimal> flags = [0,0,0,0,0,0,0,0,0] : !simulation.bytes, i64, i64, i64, i64, i1, i1, i1, i1
+      %verbosity = arith.constant 0 : i32
+      simulation.finish %ctx, %verbosity
+      simulation.return
+    }
+    simulation.func @driver0(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 7 : i32, code_unit_id = 1 : i64} {
+      %q = simulation.context.storage %ctx[0] : !simulation.ref<i1>
+      %wait = simulation.context.storage %ctx[4] : !simulation.ref<i1>
+      cf.br ^loop
+    ^loop:
+      %one = arith.constant true
+      simulation.ref.store %one to %q : i1, !simulation.ref<i1>
+      simulation.suspend.change %wait to ^loop : !simulation.ref<i1>
+    }
+    simulation.func @driver1(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 7 : i32, code_unit_id = 2 : i64} {
+      %q = simulation.context.storage %ctx[1] : !simulation.ref<i1>
+      %wait = simulation.context.storage %ctx[4] : !simulation.ref<i1>
+      cf.br ^loop
+    ^loop:
+      %one = arith.constant true
+      simulation.ref.store %one to %q : i1, !simulation.ref<i1>
+      simulation.suspend.change %wait to ^loop : !simulation.ref<i1>
+    }
+    simulation.func @driver2(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 7 : i32, code_unit_id = 3 : i64} {
+      %q = simulation.context.storage %ctx[2] : !simulation.ref<i1>
+      %wait = simulation.context.storage %ctx[4] : !simulation.ref<i1>
+      cf.br ^loop
+    ^loop:
+      %one = arith.constant true
+      simulation.ref.store %one to %q : i1, !simulation.ref<i1>
+      simulation.suspend.change %wait to ^loop : !simulation.ref<i1>
+    }
+    simulation.func @driver3(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 7 : i32, code_unit_id = 4 : i64} {
+      %q = simulation.context.storage %ctx[3] : !simulation.ref<i1>
+      %wait = simulation.context.storage %ctx[4] : !simulation.ref<i1>
+      cf.br ^loop
+    ^loop:
+      %one = arith.constant true
+      simulation.ref.store %one to %q : i1, !simulation.ref<i1>
+      simulation.suspend.change %wait to ^loop : !simulation.ref<i1>
+    }
+  }
+}

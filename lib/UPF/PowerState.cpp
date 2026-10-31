@@ -9,8 +9,8 @@ Value integer(OpBuilder &b, Location loc, int64_t value, unsigned width) {
   return arith::ConstantIntOp::create(b, loc, value, width);
 }
 Value predicate(upf::SupplyExpressionAttr expression, OpBuilder &b,
-                Location loc,
-                llvm::function_ref<Value(FlatSymbolRefAttr)> read) {
+                Location loc, llvm::function_ref<Value(FlatSymbolRefAttr)> read,
+                std::optional<upf::PartialOnTranslation> translation) {
   using O = upf::SupplyExpressionOpcode;
   SmallVector<Value> stack;
   for (auto attr : expression.getTokens()) {
@@ -19,8 +19,7 @@ Value predicate(upf::SupplyExpressionAttr expression, OpBuilder &b,
     if (code == O::State || code == O::Voltage) {
       Value value = read(token.getSupply());
       if (code == O::State) {
-        value = arith::AndIOp::create(b, loc, value, integer(b, loc, 3, 64));
-        stack.push_back(arith::TruncIOp::create(b, loc, b.getI32Type(), value));
+        stack.push_back(interpretedSupplyState(b, loc, value, translation));
       } else {
         // 4.7.2/6.5.4: compare real volts, not a rounded write request.
         // Decode signed32 first (also on wasm32), then divide by exact 1e6.
@@ -91,6 +90,22 @@ Value predicate(upf::SupplyExpressionAttr expression, OpBuilder &b,
   return stack.back();
 }
 } // namespace
+Value interpretedSupplyState(
+    OpBuilder &b, Location loc, Value packed,
+    std::optional<upf::PartialOnTranslation> translation) {
+  // IEEE 1801-2018 6.47: translate observed state for policy evaluation only.
+  // Predicate literals, voltage bits, and the underlying supply stay unchanged.
+  Value state = arith::AndIOp::create(b, loc, packed, integer(b, loc, 3, 64));
+  state = arith::TruncIOp::create(b, loc, b.getI32Type(), state);
+  if (translation) {
+    Value partial = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq,
+                                          state, integer(b, loc, 2, 32));
+    Value replacement =
+        integer(b, loc, *translation == upf::PartialOnTranslation::FullOn, 32);
+    state = arith::SelectOp::create(b, loc, partial, replacement, state);
+  }
+  return state;
+}
 SmallVector<FlatSymbolRefAttr> getSupplySetReferences(upf::UPFSupplySetOp set) {
   llvm::SetVector<Attribute> refs;
   bool defaultOn = true;
@@ -118,13 +133,14 @@ SmallVector<FlatSymbolRefAttr> getSupplySetReferences(upf::UPFSupplySetOp set) {
 SupplyStateEvaluation
 evaluateSupplySet(upf::UPFSupplySetOp set, OpBuilder &b, Location loc,
                   llvm::function_ref<Value(FlatSymbolRefAttr)> read) {
+  auto translation = upf::getPartialOnTranslation(set);
   auto bit = [&](bool value) { return integer(b, loc, value, 1); };
   auto negate = [&](Value value) -> Value {
     return arith::XOrIOp::create(b, loc, value, bit(true));
   };
   auto condition = [&](upf::PowerStateAttr state) -> Value {
     return state && state.getCondition()
-               ? predicate(state.getCondition(), b, loc, read)
+               ? predicate(state.getCondition(), b, loc, read, translation)
                : bit(false);
   };
   upf::PowerStateAttr onState, offState;
@@ -145,10 +161,9 @@ evaluateSupplySet(upf::UPFSupplySetOp set, OpBuilder &b, Location loc,
     for (auto function : set.getRequired()) {
       auto root = cast<FlatSymbolRefAttr>(
           set.getFunctions().get(cast<StringAttr>(function).getValue()));
-      Value state =
-          arith::AndIOp::create(b, loc, read(root), integer(b, loc, 3, 64));
+      Value state = interpretedSupplyState(b, loc, read(root), translation);
       Value full = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq,
-                                         state, integer(b, loc, 1, 64));
+                                         state, integer(b, loc, 1, 32));
       on = arith::AndIOp::create(b, loc, on, full);
     }
   }

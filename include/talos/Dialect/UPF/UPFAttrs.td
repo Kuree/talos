@@ -7,6 +7,12 @@ include "mlir/IR/BuiltinAttributes.td"
 class UPFAttr<string name, string attrMnemonic> : AttrDef<UPFDialect, name> {
   let mnemonic = attrMnemonic;
 }
+def UPFPartialOnTranslationAttr : UPFAttr<"PartialOnTranslation", "partial_on_translation"> {
+  let summary = "global PARTIAL_ON interpretation (IEEE 1801-2018 6.47)";
+  let parameters = (ins EnumParameter<UPFPartialOnTranslation>:$value);
+  let assemblyFormat = "`<` $value `>`";
+  let genVerifyDecl = 1;
+}
 def UPFExpressionTokenAttr : UPFAttr<"ExpressionToken", "token"> {
   let summary = "resolved operand or operator in a UPF Boolean expression";
   // IEEE 1801-2018 5.4: sourceWidth identifies the whole HDL object; width

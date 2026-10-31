@@ -305,7 +305,7 @@ struct Expression {
   }
 };
 struct PowerCondition {
-  SmallVector<Expression> on, errors;
+  SmallVector<Expression> on, partial, errors;
   Expression off;
   llvm::SetVector<StringRef> controls;
   llvm::SetVector<upf::ExpressionTokenAttr> references, onReferences;
@@ -316,13 +316,15 @@ struct PowerCondition {
   Descriptor power;
   std::optional<Descriptor> input, ground;
   SmallVector<Descriptor> required;
+  std::optional<upf::PartialOnTranslation> translation;
   PowerCondition(upf::UPFDomainOp domain,
                  const llvm::StringMap<Descriptor> &descriptors,
                  const llvm::StringMap<Descriptor> &supplies)
       : off(domain.getOffAttr() ? domain.getOffAttr().getCondition()
                                 : upf::ExpressionAttr{}),
         descriptors(descriptors), supplies(supplies),
-        power(supplies.lookup(domain.getPowerAttr().getValue())) {
+        power(supplies.lookup(domain.getPowerAttr().getValue())),
+        translation(upf::getPartialOnTranslation(domain)) {
     if (auto attr = domain.getInputAttr())
       input = supplies.lookup(attr.getValue());
     if (auto attr = domain.getGroundAttr())
@@ -370,6 +372,11 @@ struct PowerCondition {
       on.emplace_back(cast<upf::SwitchStateAttr>(attr).getCondition());
       collect(on.back(), true);
     }
+    if (auto states = domain.getPartialAttr())
+      for (auto attr : states) {
+        partial.emplace_back(cast<upf::SwitchStateAttr>(attr).getCondition());
+        collect(partial.back(), true);
+      }
     collect(off, false);
     if (auto states = domain.getErrorsAttr())
       for (auto attr : states) {
@@ -387,9 +394,10 @@ struct PowerCondition {
   }
   Value knownOn(OpBuilder &b, Location loc, Value context) const {
     // IEEE 1801-2018 6.22: use the references before expression folding.
-    // Any X/Z object referenced by ON contributes UNDETERMINED, even when
-    // masked by a constant or in an inactive ON state. Unused, OFF-only and
-    // ERROR-only controls do not participate in this knownness check.
+    // Any X/Z object referenced by ON/PARTIAL contributes UNDETERMINED, even
+    // when masked by a constant or in an inactive ON/PARTIAL state. Unused,
+    // OFF-only and ERROR-only controls do not participate in this knownness
+    // check.
     Value result = arith::ConstantIntOp::create(b, loc, 1, 1);
     for (auto token : onReferences) {
       Value value = Expression::reference(b, loc, context, descriptors, token);
@@ -402,26 +410,6 @@ struct PowerCondition {
           arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq, count,
                                 arith::ConstantIntOp::create(b, loc, 0, 32));
       result = arith::AndIOp::create(b, loc, result, known);
-    }
-    return result;
-  }
-  Value controlNormal(OpBuilder &b, Location loc, Value context) const {
-    Value result = arith::AndIOp::create(b, loc, any(b, loc, context, on),
-                                         knownOn(b, loc, context));
-    if (!off.nodes.empty()) {
-      Value disabled = off.predicate(b, loc, context, descriptors);
-      Value enabled = arith::XOrIOp::create(
-          b, loc, disabled, arith::ConstantIntOp::create(b, loc, 1, 1));
-      result = arith::AndIOp::create(b, loc, result, enabled);
-    }
-    if (!errors.empty()) {
-      // IEEE 1801-2018 6.22(a)(1): a true ERROR condition contributes
-      // UNDETERMINED, allowing recovery when it deasserts. This is distinct
-      // from the explicitly required error diagnostic for OFF/ON conflicts.
-      Value error = any(b, loc, context, errors);
-      Value valid = arith::XOrIOp::create(
-          b, loc, error, arith::ConstantIntOp::create(b, loc, 1, 1));
-      result = arith::AndIOp::create(b, loc, result, valid);
     }
     return result;
   }
@@ -442,17 +430,18 @@ struct PowerCondition {
       }
       return result;
     }
-    auto full = [&](Descriptor supply) -> Value {
-      Value value = load(b, loc, handle(b, loc, context, supply));
-      Value state = arith::AndIOp::create(
-          b, loc, value, arith::ConstantIntOp::create(b, loc, 3, 64));
+    auto fullValue = [&](Value value) -> Value {
+      Value state = interpretedSupplyState(b, loc, value, translation);
       return arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq, state,
-                                   arith::ConstantIntOp::create(b, loc, 1, 64));
+                                   arith::ConstantIntOp::create(b, loc, 1, 32));
     };
-    Value result = input ? arith::AndIOp::create(b, loc, full(*input),
-                                                 controlNormal(b, loc, context))
-                               .getResult()
-                         : full(power);
+    auto full = [&](Descriptor supply) -> Value {
+      return fullValue(load(b, loc, handle(b, loc, context, supply)));
+    };
+    // Legacy textual IR without supply sets still interprets the computed
+    // output state, including current-limited contributions (6.22/6.47).
+    Value result =
+        input ? fullValue(drivenSupply(b, loc, context)) : full(power);
     // IEEE 1801-2018 4.7.4: every required primary function must be FULL_ON.
     // Ground at zero volts is powered; voltage itself is not an ON predicate.
     if (ground)
@@ -468,16 +457,25 @@ struct PowerCondition {
     };
     Value value = load(b, loc, handle(b, loc, context, *input));
     Value state = arith::AndIOp::create(b, loc, value, integer(3));
-    Value output = arith::SelectOp::create(b, loc, any(b, loc, context, on),
-                                           state, integer(0));
+    // 6.22: ON passes the input; PARTIAL degrades only FULL_ON. A full
+    // contribution wins over a partial one from this same input supply.
+    Value degraded = arith::SelectOp::create(
+        b, loc,
+        arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq, state,
+                              integer(1)),
+        integer(2), state);
+    Value output = arith::SelectOp::create(
+        b, loc, any(b, loc, context, partial), degraded, integer(0));
+    output = arith::SelectOp::create(b, loc, any(b, loc, context, on), state,
+                                     output);
     Value notOff = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::ne,
                                          state, integer(0));
     Value unknown =
         arith::XOrIOp::create(b, loc, knownOn(b, loc, context),
                               arith::ConstantIntOp::create(b, loc, 1, 1));
     unknown = arith::AndIOp::create(b, loc, unknown, notOff);
-    // IEEE 1801-2018 6.22: unknown ON controls contribute UNDETERMINED only
-    // when the input is not OFF. ERROR and explicit OFF/ON conflicts take
+    // IEEE 1801-2018 6.22: unknown ON/PARTIAL controls contribute UNDETERMINED
+    // only when the input is not OFF. ERROR and explicit OFF conflicts take
     // precedence regardless of the input state.
     Value invalid = any(b, loc, context, errors);
     if (!off.nodes.empty())
@@ -495,7 +493,9 @@ struct PowerCondition {
     return arith::OrIOp::create(b, loc, output, volts);
   }
   Value conflict(OpBuilder &b, Location loc, Value context) const {
-    return arith::AndIOp::create(b, loc, any(b, loc, context, on),
+    Value active = arith::OrIOp::create(b, loc, any(b, loc, context, on),
+                                        any(b, loc, context, partial));
+    return arith::AndIOp::create(b, loc, active,
                                  off.predicate(b, loc, context, descriptors));
   }
 };
@@ -1316,7 +1316,8 @@ struct Lowering {
       Value message = sim::SimBytesConstantOp::create(
           builder, loc,
           "UPF domain " + domain.getSymName().str() +
-              ": ON and OFF conditions are simultaneously true (IEEE 1801-2018 "
+              ": ON/PARTIAL and OFF conditions are simultaneously true (IEEE "
+              "1801-2018 "
               "6.22)");
       sim::SimDisplayOp::create(builder, loc, context, descriptor,
                                 ValueRange{message}, true, sim::Radix::Decimal,
@@ -1353,7 +1354,7 @@ struct Lowering {
     }
     cf::BranchOp::create(builder, loc, wait);
     builder.setInsertionPointToEnd(wait);
-    // IEEE 1801-2018 9.2.2: referenced ON/OFF/ERROR controls and input
+    // IEEE 1801-2018 9.2.2: referenced ON/PARTIAL/OFF/ERROR controls and input
     // supplies reevaluate the switch, including voltage-only changes.
     if (watched.empty())
       sim::SimReturnOp::create(builder, loc, ValueRange{});
@@ -1405,8 +1406,10 @@ struct ElaborateUPFPass
     getOperation().walk([&](Operation *op) {
       accesses |= isa<sim::SimSupplyControlOp, sim::SimSupplyReadOp>(op);
     });
-    if (domains.empty() && supplies.empty() && sets.empty() && !accesses)
+    if (domains.empty() && supplies.empty() && sets.empty() && !accesses) {
+      getOperation()->removeAttr(upf::partialOnTranslationName);
       return;
+    }
     // IEEE 1801-2018 6.20 assigns an instance to exactly one effective extent.
     // Until nested-domain extent partitioning exists, require disjoint roots;
     // validate the entire inventory before adding any guards or corruption.
@@ -1465,6 +1468,7 @@ struct ElaborateUPFPass
       set.erase();
     for (auto supply : supplies)
       supply.erase();
+    getOperation()->removeAttr(upf::partialOnTranslationName);
   }
 };
 } // namespace

@@ -1,0 +1,57 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: not %t.o0 2>&1 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: not %t.o3 2>&1 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: not %t.bc 2>&1 | FileCheck %s
+// IEEE 1801-2018 6.47/6.5.6/9.3.2: independent state diagnostics interpret
+// PARTIAL_ON just as domain guards do. Overlap with the translated default ON
+// corrupts, while an illegal NORMAL state reports an error and stays NORMAL.
+// Physical state/voltage stay unchanged; voltage-only input changes recover.
+// CHECK-DAG: UPF supply set /top/Overlap: overlapping power states
+// CHECK-DAG: UPF supply set /top/Illegal: illegal power state
+// CHECK: partial policy monitors and recovery passed
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1;
+endmodule
+module top;
+  import UPF::*;
+  logic trickle = 1;
+  wire overlap_q, illegal_q;
+  leaf a(overlap_q), b(illegal_q);
+  upfSupplyTypeT sample;
+  initial begin
+    #1;
+    if (!supply_on("/top/VDD", 0.8) || !supply_on("/top/VSS", 0.0)) $fatal(1, "ON");
+    #1;
+    sample = get_supply_value("/top/Overlap.power");
+    if (overlap_q !== 1'bx || illegal_q !== 1'b1 || sample.state != PARTIAL_ON ||
+        sample.voltage != 800000 || !get_supply_on_state(sample))
+      $fatal(1, "translated diagnostics or raw query");
+    if (!supply_on("/top/VDD", 1.0)) $fatal(1, "voltage recovery");
+    #1;
+    sample = get_supply_value("/top/Overlap.power");
+    if (overlap_q !== 1'b1 || illegal_q !== 1'b1 || sample.state != PARTIAL_ON ||
+        sample.voltage != 1000000) $fatal(1, "recovery");
+    $display("partial policy monitors and recovery passed");
+    $finish;
+  end
+endmodule
+//--- design.upf
+set_partial_on_translation FULL_ON
+foreach net {VDD VSS} {create_supply_net $net}
+foreach {name element} {Overlap a Illegal b} {
+    create_supply_set $name -function {ground VSS}
+    create_power_domain D$name -elements $element -supply [list primary $name]
+    create_power_switch PS$name -domain D$name -input_supply_port {vin VDD} \
+        -output_supply_port [list vout $name.power] -control_port {t trickle} \
+        -on_partial_state {TRICKLE vin t}
+}
+add_power_state Overlap -state {LOW -supply_expr {power == {FULL_ON 0.8}} -simstate NORMAL}
+add_power_state Illegal \
+    -state {ON -supply_expr {power == {FULL_ON 1.0}}} \
+    -state {LOW -supply_expr {power == {FULL_ON 0.8}} -simstate NORMAL -illegal}

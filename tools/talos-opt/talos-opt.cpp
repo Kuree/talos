@@ -23,6 +23,7 @@
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 #include "mlir/Transforms/Passes.h"
 #include "talos/Dialect/Schedule/ScheduleDialect.h"
+#include "talos/Frontend/UPF.h"
 
 #ifdef TALOS_INCLUDE_TESTS
 #include "AnalysisTestPasses.h"
@@ -33,6 +34,7 @@ int main(int argc, char **argv) {
   // be able to run them directly on simulation IR.
   mlir::registerTransformsPasses();
   mlir::registerPass([] { return mlir::createSCFToControlFlowPass(); });
+  mlir::registerPass([] { return talos::createElaborateUPFPass(); });
   talos::registerTalosConversionPasses();
   talos::registerRuntimeToLLVMPipeline();
   talos::registerSimulationToLLVMCoroutinePipeline();

@@ -8,7 +8,7 @@
 // RUN: not %t.bc 2>&1 | FileCheck %s
 // IEEE 1801-2018 6.22: OFF-only references do not have the ON knownness rule.
 // An OFF vector can mask X/Z and evaluate true, producing a conflict/error.
-// CHECK: UPF domain top.PD: ON and OFF conditions are simultaneously true
+// CHECK: UPF domain top.PD: ON/PARTIAL and OFF conditions are simultaneously true
 // CHECK: vector OFF condition conflict passed
 
 //--- design.sv

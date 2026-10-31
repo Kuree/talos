@@ -51,4 +51,12 @@ def UPFSimNotNormal : I32EnumAttrCase<"NotNormal", 3, "not_normal">;
 def UPFSimstate : I32EnumAttr<"Simstate", "supported UPF simulation policy", [
   UPFSimUnspecified, UPFSimNormal, UPFSimCorrupt, UPFSimNotNormal
 ]> { let cppNamespace = "::talos::upf"; }
+def UPFPartialAsOff : I32EnumAttrCase<"Off", 0, "off">;
+def UPFPartialAsFull : I32EnumAttrCase<"FullOn", 1, "full_on">;
+def UPFPartialOnTranslation : I32EnumAttr<"PartialOnTranslation",
+    "IEEE 1801-2018 6.47 partial supply interpretation",
+    [UPFPartialAsOff, UPFPartialAsFull]> {
+  let cppNamespace = "::talos::upf";
+  let genSpecializedAttr = 0;
+}
 #endif

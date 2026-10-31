@@ -1,4 +1,5 @@
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "talos/Dialect/UPF/UPFOps.h"
 #include "llvm/ADT/DenseSet.h"
@@ -13,6 +14,35 @@
 #define GET_OP_CLASSES
 #include "talos/Dialect/UPF/UPFOps.cpp.inc"
 namespace talos::upf {
+std::optional<PartialOnTranslation>
+getPartialOnTranslation(mlir::Operation *operation) {
+  auto module = mlir::dyn_cast<mlir::ModuleOp>(operation);
+  if (!module)
+    module = operation->getParentOfType<mlir::ModuleOp>();
+  if (module)
+    if (auto value = module->getAttrOfType<PartialOnTranslationAttr>(
+            partialOnTranslationName))
+      return value.getValue();
+  return std::nullopt;
+}
+mlir::LogicalResult PartialOnTranslationAttr::verify(
+    llvm::function_ref<mlir::InFlightDiagnostic()> error,
+    PartialOnTranslation value) {
+  if (value != PartialOnTranslation::Off &&
+      value != PartialOnTranslation::FullOn)
+    return error() << "PARTIAL_ON translation must be OFF or FULL_ON";
+  return mlir::success();
+}
+mlir::LogicalResult
+UPFDialect::verifyOperationAttribute(mlir::Operation *operation,
+                                     mlir::NamedAttribute attribute) {
+  if (attribute.getName().strref() == partialOnTranslationName &&
+      (!mlir::isa<mlir::ModuleOp>(operation) ||
+       !mlir::isa<PartialOnTranslationAttr>(attribute.getValue())))
+    return operation->emitOpError(
+        "upf.partial_on_translation requires a typed module-level policy");
+  return mlir::success();
+}
 mlir::LogicalResult SupplyExpressionTokenAttr::verify(
     llvm::function_ref<mlir::InFlightDiagnostic()> error,
     SupplyExpressionOpcode opcode, mlir::FlatSymbolRefAttr supply,
@@ -365,8 +395,9 @@ mlir::LogicalResult UPFDomainOp::verify() {
     return emitOpError("isolation control must not be empty");
   if (getClamp() != 0 && getClamp() != 1)
     return emitOpError("isolation clamp must be zero or one");
-  if (!getInputAttr() && (!getOn().empty() || getOffAttr() ||
-                          (getErrorsAttr() && !getErrorsAttr().empty())))
+  if (!getInputAttr() &&
+      (!getOn().empty() || (getPartialAttr() && !getPartialAttr().empty()) ||
+       getOffAttr() || (getErrorsAttr() && !getErrorsAttr().empty())))
     return emitOpError("switch conditions require an input supply root");
   if (getInputAttr() == getPowerAttr())
     return emitOpError("switch input and output supply roots must differ");
@@ -375,6 +406,9 @@ mlir::LogicalResult UPFDomainOp::verify() {
   llvm::SmallVector<SwitchStateAttr> states;
   for (auto attr : getOn())
     states.push_back(mlir::cast<SwitchStateAttr>(attr));
+  if (auto partial = getPartialAttr())
+    for (auto attr : partial)
+      states.push_back(mlir::cast<SwitchStateAttr>(attr));
   if (auto off = getOffAttr())
     states.push_back(off);
   if (auto errors = getErrorsAttr())

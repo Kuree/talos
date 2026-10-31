@@ -1,0 +1,9 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-partial-switch-eval.test %t
+// RUN: talos --upf %t/design.upf --target=wasm32 -O3 --native-scheduler=eval --mlir-verify-each -c %t/design.sv -o %t.design.o
+// RUN: talos --upf %t/full.upf -DFULL_TRANSLATION --target=wasm32 -O3 --native-scheduler=eval --mlir-verify-each -c %t/design.sv -o %t.full.o
+// RUN: talos --upf %t/off.upf --target=wasm32 -O3 --native-scheduler=eval --mlir-verify-each -c %t/design.sv -o %t.off.o
+// RUN: %llvm_dist/bin/llvm-readobj --file-headers %t.design.o %t.full.o %t.off.o | FileCheck %s
+// IEEE 1801-2018 6.22/6.47: partial state, translation, and scheduling
+// use 64-bit supply values with 32-bit target pointers.
+// CHECK-COUNT-3: AddressSize: 32bit

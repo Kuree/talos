@@ -1,0 +1,67 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: not %t.o0 2>&1 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: not %t.o3 2>&1 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: not %t.bc 2>&1 | FileCheck %s
+// IEEE 1801-2018 6.22(a): masked/inactive partial references still contribute
+// UNDETERMINED, even with a full contribution. OFF input suppresses unknowns,
+// but never ERROR or an explicit OFF/PARTIAL conflict. Conflicts are errors.
+// CHECK: UPF domain top.PD: ON/PARTIAL and OFF conditions are simultaneously true
+// CHECK: partial switch priorities and recovery passed
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1;
+endmodule
+module top;
+  import UPF::*;
+  logic en = 1, trickle = 0, masked = 0, shutdown = 0, fault = 0;
+  wire q;
+  leaf dut(q);
+  task expect_state(upfSupplyStateE expected);
+    upfSupplyTypeT value;
+    value = get_supply_value("/top/SW");
+    if (value.state != expected || q !== (expected == FULL_ON ? 1'b1 : 1'bx))
+      $fatal(1, "partial priority state or power behavior");
+  endtask
+  initial begin
+    #1;
+    if (!supply_on("/top/VDD") || !supply_on("/top/VSS", 0.0)) $fatal(1, "ON");
+    #1; expect_state(FULL_ON);
+    masked = 1'bx;
+    #1; expect_state(UNDETERMINED);
+    masked = 1'bz;
+    #1; expect_state(UNDETERMINED);
+    if (!supply_off("/top/VDD")) $fatal(1, "OFF");
+    #1; expect_state(OFF);
+    fault = 1;
+    #1; expect_state(UNDETERMINED);
+    fault = 0; masked = 0; en = 0; trickle = 1; shutdown = 1;
+    #1; expect_state(UNDETERMINED);
+    shutdown = 0;
+    #1; expect_state(OFF);
+    if (!supply_on("/top/VDD")) $fatal(1, "restore");
+    #1; expect_state(PARTIAL_ON);
+    en = 1;
+    #1; expect_state(FULL_ON);
+    fault = 1;
+    #1; expect_state(UNDETERMINED);
+    fault = 0;
+    #1; expect_state(FULL_ON);
+    $display("partial switch priorities and recovery passed");
+    $finish;
+  end
+endmodule
+//--- design.upf
+foreach net {VDD VSS SW} {create_supply_net $net}
+create_power_domain PD -elements dut
+set_domain_supply_net PD -primary_power_net SW -primary_ground_net VSS
+create_power_switch PS -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout SW} \
+    -control_port {e en} -control_port {t trickle} -control_port {x masked} \
+    -control_port {s shutdown} -control_port {f fault} \
+    -on_state {MAIN vin e} -on_partial_state {PARTIAL vin t} \
+    -on_partial_state {MASKED vin {0 && x}} -off_state {OFF s} -error_state {BAD f}

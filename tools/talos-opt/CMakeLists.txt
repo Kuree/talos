@@ -21,6 +21,7 @@ target_link_libraries(talos-opt
     TalosRuntimeIR
     TalosSDFIR
     TalosUPFIR
+    TalosUPF
     TalosRuntimeToLLVM
     TalosSimulationIR
     TalosSimulationTransforms

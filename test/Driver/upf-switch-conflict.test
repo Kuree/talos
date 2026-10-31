@@ -8,7 +8,7 @@
 // RUN: not %t.bc 2>&1 | FileCheck %s
 // IEEE 1801-2018 6.22: simultaneous explicit OFF and ON is an error AND
 // contributes UNDETERMINED. The OFF-only input must be in switch sensitivity.
-// CHECK: UPF domain top.PD: ON and OFF conditions are simultaneously true
+// CHECK: UPF domain top.PD: ON/PARTIAL and OFF conditions are simultaneously true
 // CHECK: switch conflict corrupted and recovered
 
 //--- design.sv

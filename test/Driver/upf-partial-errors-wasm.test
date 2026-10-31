@@ -1,0 +1,11 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-partial-switch-errors.test %t/errors
+// RUN: %split-file %S/upf-partial-getter.test %t/getter
+// RUN: %split-file %S/upf-partial-policy-monitors.test %t/monitors
+// RUN: talos --upf %t/errors/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/errors/design.sv -o %t.errors.o
+// RUN: talos --upf %t/getter/full.upf -DFULL_TRANSLATION --target=wasm32 -O3 --mlir-verify-each -c %t/getter/design.sv -o %t.getter.o
+// RUN: talos --upf %t/monitors/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/monitors/design.sv -o %t.monitors.o
+// RUN: %llvm_dist/bin/llvm-readobj --file-headers %t.errors.o %t.getter.o %t.monitors.o | FileCheck %s
+// IEEE 1801-2018 6.22/6.47: errors, late policy without supply objects, and
+// supply-set diagnostics all lower with 32-bit pointers and 64-bit values.
+// CHECK-COUNT-3: AddressSize: 32bit

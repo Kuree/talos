@@ -3,6 +3,7 @@
 #include "LowerUnit.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
+#include "talos/Dialect/UPF/UPFAttrs.h"
 
 #include "talos/Runtime/Runtime.h"
 
@@ -549,6 +550,17 @@ UnitLowering::lowerSystemCall(semantic::SVCallExpressionOp op) {
       return failure();
     return convertResult(sim::SimSupplyReadOp::create(
         builder, location, builder.getI64Type(), context, *supply));
+  }
+  if (name == "$talos_upf_partial_on_is_on") {
+    // IEEE 1801-2018 6.47/11.2.3.2.8: Tcl executes after Slang elaboration.
+    // Resolve this static policy now, never guess it during SV constant
+    // folding.
+    if (!children.empty())
+      return emitError(location) << "malformed UPF partial-on policy intrinsic",
+             failure();
+    return convertResult(
+        constant(builder.getI1Type(), upf::getPartialOnTranslation(function) ==
+                                          upf::PartialOnTranslation::FullOn));
   }
 
   if (name == "$sdf_annotate" &&

@@ -7901,8 +7901,9 @@ importSystemVerilog(ArrayRef<std::string> inputFilenames, MLIRContext &context,
   function automatic upfRealT upf_convert_int_uvolts_to_real_volts(upfIntegerT uvolt);
     return uvolt / 1.0E6;
   endfunction
-  // 11.2.3.2.6-.9: query once, then expose the sampled value through pure
-  // accessors. No PARTIAL_ON translation is enabled by default (6.47).
+  // 11.2.3.2.6-.9: query once, then expose the sampled value through value
+  // accessors. PARTIAL_ON interpretation is known only after UPF execution
+  // (6.47), so that branch consults a nonconstant compiler intrinsic.
   function automatic upfSupplyTypeT get_supply_value(string name);
     bit [63:0] raw;
     upfSupplyTypeT result;
@@ -7918,7 +7919,9 @@ importSystemVerilog(ArrayRef<std::string> inputFilenames, MLIRContext &context,
     return arg.state;
   endfunction
   function automatic upfBooleanT get_supply_on_state(upfSupplyTypeT arg);
-    return arg.state === FULL_ON;
+    if (arg.state === FULL_ON) return 1'b1;
+    if (arg.state === PARTIAL_ON) return $talos_upf_partial_on_is_on();
+    return 1'b0;
   endfunction
 
   function automatic upfBooleanT supply_on(upfStringT supply_name, upfRealT value = 1.0);
@@ -7948,6 +7951,10 @@ endpackage
             "$talos_upf_supply_read", compilation->getType(64, {}), 1,
             std::vector<const slang::ast::Type *>{
                 &compilation->getStringType()}));
+    compilation->addSystemSubroutine(
+        std::make_shared<slang::ast::NonConstantFunction>(
+            "$talos_upf_partial_on_is_on", compilation->getBitType(), 0,
+            std::vector<const slang::ast::Type *>{}));
   }
   driver.reportCompilation(*compilation, /*quiet=*/true);
 

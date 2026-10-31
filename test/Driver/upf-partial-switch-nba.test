@@ -1,0 +1,65 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.47/9.5.3/9.6.7: delayed NBA survives full/partial
+// handoff only if effective power stays NORMAL. Corruption cancels old work;
+// restoration invents no clock edge and must not revive a queued update.
+// CHECK: partial switch NBA cancellation passed
+
+//--- design.sv
+module leaf(input logic clk, d, output logic q);
+  always @(posedge clk) q <= #4 d;
+endmodule
+module top;
+  import UPF::*;
+`ifdef FULL_TRANSLATION
+  localparam bit FULL_MODE = 1;
+`else
+  localparam bit FULL_MODE = 0;
+`endif
+  logic en = 1, trickle = 1, clk = 0, d = 1;
+  wire q;
+  leaf dut(clk, d, q);
+  initial begin
+    #1;
+    if (!supply_on("/top/VDD") || !supply_on("/top/VSS", 0.0)) $fatal(1, "ON");
+    #1 clk = 1;
+    #1 en = 0;
+    #1 en = 1;
+    #3;
+    if (q !== (FULL_MODE ? 1'b1 : 1'bx)) $fatal(1, "old NBA revived or NORMAL NBA lost");
+    clk = 0; d = 0;
+    #1 clk = 1;
+    #1 en = 0;
+    #4;
+    if (q !== (FULL_MODE ? 1'b0 : 1'bx)) $fatal(1, "partial commit guard");
+    en = 1;
+    #1;
+    if (q !== (FULL_MODE ? 1'b0 : 1'bx)) $fatal(1, "restoration invented edge");
+    clk = 0;
+    #1 clk = 1;
+    #5;
+    if (q !== 0) $fatal(1, "new NBA failed");
+    $display("partial switch NBA cancellation passed");
+    $finish;
+  end
+endmodule
+//--- design.upf
+foreach net {VDD VSS SW} {create_supply_net $net}
+create_power_domain PD -elements dut
+set_domain_supply_net PD -primary_power_net SW -primary_ground_net VSS
+create_power_switch PS -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout SW} \
+    -control_port {e en} -control_port {t trickle} \
+    -on_state {MAIN vin e} -on_partial_state {PARTIAL vin t}
+//--- full.upf
+set_partial_on_translation FULL_ON
+source [file join [file dirname [info script]] design.upf]
+//--- off.upf
+set_partial_on_translation OFF
+source [file join [file dirname [info script]] design.upf]

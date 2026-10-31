@@ -1,0 +1,11 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-partial-switch.test %t
+// RUN: talos --upf %t/off.upf -DOFF_TRANSLATION -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/off.upf -DOFF_TRANSLATION -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/off.upf -DOFF_TRANSLATION -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.47: explicit OFF translation differs from no translation,
+// including predicates that mention PARTIAL_ON or an OFF state/voltage pair.
+// CHECK: partial switch states and translation passed

@@ -7,5 +7,6 @@ def UPFDialect : Dialect {
   let summary = "elaborated IEEE 1801 power intent";
   let usePropertiesForAttributes = 0;
   let useDefaultAttributePrinterParser = 1;
+  let hasOperationAttrVerify = 1;
 }
 #endif

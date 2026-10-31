@@ -1,0 +1,125 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.22 Example 2: current-limited turn-on followed by full ON.
+// Full and partial contributions can overlap; FULL_ON wins without an error.
+// 6.47: translate state references/default ON, but neither literals nor voltage
+// nor physical supply values. OFF translation must keep the raw partial volts.
+// 11.2.3.2.6-.9: raw snapshots stay PARTIAL_ON, on-state consults the policy.
+// CHECK: partial switch states and translation passed
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1;
+endmodule
+module top;
+  import UPF::*;
+`ifdef FULL_TRANSLATION
+  localparam bit FULL_MODE = 1, OFF_MODE = 0;
+`elsif OFF_TRANSLATION
+  localparam bit FULL_MODE = 0, OFF_MODE = 1;
+`else
+  localparam bit FULL_MODE = 0, OFF_MODE = 0;
+`endif
+  logic full_on = 0, ready = 0;
+  logic [1:0] trickle = 0;
+  wire default_q, full_q, partial_q, off_q, only_q;
+  leaf d0(default_q), d1(full_q), d2(partial_q), d3(off_q), d4(only_q);
+  upfSupplyTypeT sample;
+  task expect_partial(string name, int microvolts);
+    sample = get_supply_value(name);
+    if (sample.state != PARTIAL_ON || sample.voltage != microvolts ||
+        get_supply_on_state(sample) != FULL_MODE)
+      $fatal(1, "raw partial query or getter translation");
+  endtask
+  initial begin
+    #1;
+    if ({default_q,full_q,partial_q,off_q,only_q} !== 5'bxxxxx) $fatal(1, "initial OFF");
+    if (!supply_on("/top/VDD", 0.8) || !supply_on("/top/VSS", 0.0)) $fatal(1, "ON");
+    #1;
+    if ({default_q,full_q,partial_q,off_q,only_q} !== 5'bxxxxx) $fatal(1, "inactive switch");
+    trickle[0] = 1;
+    // An unreferenced X bit is outside the selected partial control port.
+    trickle[1] = 1'bx;
+    #1;
+    expect_partial("/top/S0.power", 800000);
+    expect_partial("/top/PS4/vout", 800000);
+    if (default_q !== (FULL_MODE ? 1'b1 : 1'bx) ||
+        full_q !== (FULL_MODE ? 1'b1 : 1'bx) ||
+        partial_q !== ((!FULL_MODE && !OFF_MODE) ? 1'b1 : 1'bx) ||
+        off_q !== (OFF_MODE ? 1'b1 : 1'bx) ||
+        only_q !== (FULL_MODE ? 1'b1 : 1'bx))
+      $fatal(1, "default, field, aggregate or literal translation");
+    ready = 1;
+    #1;
+    expect_partial("/top/S0.power", 800000);
+    full_on = 1;
+    #1;
+    sample = get_supply_value("/top/S0.power");
+    if (sample.state != FULL_ON || sample.voltage != 800000 || !get_supply_on_state(sample) ||
+        default_q !== 1'b1 || full_q !== 1'b1 || partial_q !== 1'bx || off_q !== 1'bx)
+      $fatal(1, "full contribution did not win");
+    // The partial-only switch does not depend on the other switch's ON control.
+    expect_partial("/top/S4.power", 800000);
+    trickle[0] = 0;
+    #1;
+    if (only_q !== 1'bx || default_q !== 1'b1) $fatal(1, "partial-only OFF");
+    full_on = 0;
+    #1;
+    sample = get_supply_value("/top/S0.power");
+    if (sample.state != OFF || {default_q,full_q,partial_q,off_q,only_q} !== 5'bxxxxx)
+      $fatal(1, "default OFF complement");
+    if (!supply_off("/top/VDD")) $fatal(1, "input OFF");
+    trickle[0] = 1'bx;
+    #1;
+    sample = get_supply_value("/top/S0.power");
+    if (sample.state != OFF) $fatal(1, "OFF input did not suppress unknown reference");
+    if (!supply_on("/top/VDD", -0.8)) $fatal(1, "negative input");
+    #1;
+    sample = get_supply_value("/top/S0.power");
+    if (sample.state != UNDETERMINED || get_supply_on_state(sample))
+      $fatal(1, "unknown partial control ignored");
+    trickle[0] = 1;
+    #1;
+    expect_partial("/top/S0.power", -800000);
+    if (get_supply_voltage(sample) != -0.8 || default_q !== (FULL_MODE ? 1'b1 : 1'bx) ||
+        full_q !== 1'bx || partial_q !== 1'bx || off_q !== 1'bx)
+      $fatal(1, "voltage bits changed under translation");
+    $display("partial switch states and translation passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+foreach net {VDD VSS} {create_supply_net $net}
+for {set i 0} {$i < 5} {incr i} {
+    create_supply_set S$i -function {ground VSS}
+    create_power_domain D$i -elements d$i -supply [list primary S$i]
+    set args [list create_power_switch PS$i -domain D$i \
+        -input_supply_port {vin VDD} -output_supply_port [list vout S$i.power] \
+        -control_port {t trickle[0]} -on_partial_state {TRICKLE vin t}]
+    if {$i != 4} {
+        lappend args -control_port {m full_on} -control_port {r ready} \
+            -on_state {MAIN vin m} -on_partial_state {SECOND vin {t && r}}
+    }
+    {*}$args
+}
+# Explicit predicates and each primary handle retain separate catalogs.
+foreach {id state} {1 FULL_ON 2 PARTIAL_ON 3 OFF} {
+    foreach set [list S$id D$id.primary] {
+        add_power_state $set -state [list ON -supply_expr \
+            "power == {$state 0.8} && power.state == $state && ground == FULL_ON"]
+    }
+}
+
+//--- full.upf
+set_partial_on_translation FULL_ON
+source [file join [file dirname [info script]] design.upf]
+//--- off.upf
+set_partial_on_translation OFF
+source [file join [file dirname [info script]] design.upf]

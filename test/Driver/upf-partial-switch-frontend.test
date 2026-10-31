@@ -1,0 +1,66 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf-assume-powered-inputs --upf %t/design.upf --upf %t/second.upf -emit-slang %t/design.sv -o %t.mlir | FileCheck %s --check-prefix=TCL
+// RUN: FileCheck %s --check-prefix=IR < %t.mlir
+// IEEE 1801-2018 5.11/6.22: partial state declarations are repeatable, named,
+// bounded along with the other state groups, and transactional on errors.
+// 6.47: policy is global across scopes/load_upf/files; conflicts preserve it.
+// TCL: partial switch frontend errors passed
+// TCL-NEXT: translation across files passed
+// IR: upf.partial_on_translation = #upf.partial_on_translation<full_on>
+// IR: upf.domain
+// IR-SAME: partial = [#upf.state<name = "PARTIAL"
+// IR-SAME: #upf.state<name = "SECOND"
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1;
+endmodule
+module top;
+  logic en, trickle;
+  wire q;
+  leaf dut(q);
+endmodule
+//--- design.upf
+proc expect_error {script pattern} {
+    set code [catch {uplevel 1 $script} message]
+    if {$code != 1 || ![string match $pattern $message]} {
+        error "expected <$pattern>, got code $code <$message>"
+    }
+}
+expect_error {set_partial_on_translation} {*missing argument*}
+expect_error {set_partial_on_translation OFF extra} {*usage*}
+expect_error {set_partial_on_translation PARTIAL_ON} {*OFF or FULL_ON*}
+expect_error {set_partial_on_translation full_on} {*OFF or FULL_ON*}
+if {[set_partial_on_translation FULL_ON] ne "FULL_ON"} {error "wrong return"}
+load_upf [file join [file dirname [info script]] scoped.upf] -scope dut
+expect_error {set_partial_on_translation OFF} {*conflicting global PARTIAL_ON*}
+create_power_domain PD -elements dut
+foreach net {VDD SW} {create_supply_net $net}
+set base {-domain PD -input_supply_port {vin VDD} -output_supply_port {vout SW} -control_port {e en} -control_port {t trickle}}
+expect_error {create_power_switch PS {*}$base -on_partial_state {A vin}} {*on state requires*}
+expect_error {create_power_switch PS {*}$base -on_partial_state {A bad t}} {*unknown input supply port*}
+expect_error {create_power_switch PS {*}$base -on_partial_state {A vin absent}} {*control*}
+expect_error {create_power_switch PS {*}$base -on_partial_state {A vin {t &&}}} {*Boolean expression*}
+expect_error {create_power_switch PS {*}$base -on_partial_state {A vin t} -on_partial_state {A vin e}} {*duplicate power-switch state name*}
+expect_error {create_power_switch PS {*}$base -on_state {A vin e} -on_partial_state {A vin t}} {*duplicate power-switch state name*}
+expect_error {create_power_switch PS {*}$base -off_state {A e} -on_partial_state {A vin t}} {*duplicate power-switch state name*}
+expect_error {create_power_switch PS {*}$base -error_state {A e} -on_partial_state {A vin t}} {*duplicate power-switch state name*}
+set args {-on_state {MAIN vin e}}
+for {set i 0} {$i < 256} {incr i} {lappend args -on_partial_state [list P$i vin t]}
+expect_error {create_power_switch PS {*}$base {*}$args} {*256 states*}
+set expression t
+for {set i 0} {$i < 10} {incr i} {set expression "($expression || $expression)"}
+set args [list -on_state [list MAIN vin $expression]]
+for {set i 0} {$i < 32} {incr i} {lappend args -on_partial_state [list P$i vin $expression]}
+expect_error {create_power_switch PS {*}$base {*}$args} {*65536 expression tokens*}
+create_power_switch PS {*}$base -on_state {MAIN vin e} \
+    -on_partial_state {PARTIAL vin t} -on_partial_state {SECOND vin {e && t}}
+puts "partial switch frontend errors passed"
+//--- scoped.upf
+if {[set_partial_on_translation FULL_ON] ne "FULL_ON"} {error "scoped setting"}
+expect_error {set_partial_on_translation OFF} {*conflicting global PARTIAL_ON*}
+//--- second.upf
+if {[set_partial_on_translation FULL_ON] ne "FULL_ON"} {error "setting lost across files"}
+expect_error {set_partial_on_translation OFF} {*conflicting global PARTIAL_ON*}
+puts "translation across files passed"

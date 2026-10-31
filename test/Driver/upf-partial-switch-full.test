@@ -1,0 +1,11 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-partial-switch.test %t
+// RUN: talos --upf %t/full.upf -DFULL_TRANSLATION -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/full.upf -DFULL_TRANSLATION -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/full.upf -DFULL_TRANSLATION -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.47: PARTIAL_ON is interpreted as FULL_ON only in policies;
+// raw supply queries retain PARTIAL_ON while get_supply_on_state returns true.
+// CHECK: partial switch states and translation passed

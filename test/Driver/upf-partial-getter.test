@@ -1,0 +1,47 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: not talos --upf %t/full.upf -emit-slang %t/constant.sv -o %t.mlir 2>&1 | FileCheck %s --check-prefix=CONSTANT
+// RUN: talos --upf %t/full.upf -DFULL_TRANSLATION -O0 --mlir-verify-each %t/design.sv -o %t.full
+// RUN: %t.full | FileCheck %s
+// RUN: talos --upf %t/off.upf -O3 --mlir-verify-each %t/design.sv -o %t.off
+// RUN: %t.off | FileCheck %s
+// RUN: talos --upf %t/full.upf -DFULL_TRANSLATION -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.47/11.2.3.2.8: Tcl policy is known after SV elaboration.
+// Reject constant PARTIAL_ON getter calls instead of folding a stale answer.
+// Other states remain constant-capable; the runtime getter also works without
+// any UPF objects. An escaped ordinary function must not become an intrinsic.
+// CONSTANT: '$talos_upf_partial_on_is_on' is not allowed in a constant context
+// CHECK: partial getter after Tcl execution passed
+
+//--- constant.sv
+module top;
+  localparam bit P = UPF::get_supply_on_state('{UPF::PARTIAL_ON, 800000});
+endmodule
+//--- design.sv
+module top;
+  import UPF::*;
+`ifdef FULL_TRANSLATION
+  localparam bit FULL_MODE = 1;
+`else
+  localparam bit FULL_MODE = 0;
+`endif
+  localparam bit F = get_supply_on_state('{FULL_ON, 0});
+  localparam bit O = get_supply_on_state('{OFF, 1000000});
+  localparam bit U = get_supply_on_state('{UNDETERMINED, 1000000});
+  localparam upfSupplyStateE P = get_supply_state('{PARTIAL_ON, 800000});
+  function automatic bit \$talos_upf_partial_on_is_on ();
+    return 1;
+  endfunction
+  initial begin
+    if (!F || O || U || P != PARTIAL_ON ||
+        get_supply_on_state('{PARTIAL_ON, 800000}) != FULL_MODE ||
+        !\$talos_upf_partial_on_is_on ()) $fatal(1, "late policy or intrinsic identity");
+    $display("partial getter after Tcl execution passed");
+    $finish;
+  end
+endmodule
+//--- full.upf
+set_partial_on_translation FULL_ON
+//--- off.upf
+set_partial_on_translation OFF
