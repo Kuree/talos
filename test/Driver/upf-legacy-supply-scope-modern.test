@@ -1,0 +1,9 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-legacy-supply-scope.test %t
+// RUN: talos --upf %t/modern.upf --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %S/upf-legacy-supply-scope.test
+// RUN: talos --upf %t/modern.upf --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %S/upf-legacy-supply-scope.test
+// RUN: talos --upf %t/modern.upf --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %S/upf-legacy-supply-scope.test
+// IEEE 1801-2018 6.43's explicit modern reference for caller-scope bindings.

@@ -8,7 +8,8 @@
 // RUN: %t.bc | FileCheck %s
 // IEEE 1801-2018 5.3.3.3/.5/6.26: dotted UPF function fields are distinct
 // from '/' HDL scopes. General port/net references prefer same-name ports;
-// legacy net-only arguments select the net. Implicit functions remain usable.
+// earlier Net bindings keep their identity after a Port is declared.
+// Legacy lookup follows the same caller-scope rules. Implicit functions remain usable.
 // CHECK: scoped supply sets and same-name supplies passed
 
 //--- design.sv
@@ -36,7 +37,7 @@ module top;
     if ({a,b,c} !== 3'b1x1) $fatal(1, "function binding did not select port");
     if (!supply_on("/top/VDD@upfSupplyNetT")) $fatal(1, "explicit net failed");
     #1;
-    if ({a,b,c} !== 3'b111) $fatal(1, "legacy net context selected port");
+    if ({a,b,c} !== 3'b111) $fatal(1, "earlier Net binding selected later Port");
     if (!supply_off("/top/VDD")) $fatal(1, "port OFF failed");
     if (!supply_off("/top/child/Local.power")) $fatal(1, "scoped set OFF failed");
     #1;
@@ -51,11 +52,11 @@ endmodule
 
 //--- design.upf
 foreach net {VDD VSS} {create_supply_net $net}
+create_power_domain B -elements dutb
+set_domain_supply_net B -primary_power_net VDD -primary_ground_net VSS
 create_supply_port VDD
 create_supply_set SS -function {power VDD} -function {ground VSS}
 create_power_domain A -elements duta -supply {primary SS}
-create_power_domain B -elements dutb
-set_domain_supply_net B -primary_power_net VDD -primary_ground_net VSS
 set_scope child
 create_supply_net power
 create_supply_set Local -function {power power}

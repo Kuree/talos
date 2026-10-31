@@ -1,0 +1,12 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-legacy-supply-policy.test %t
+// RUN: talos --upf %t/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/design.sv -o %t.o
+// RUN: talos --upf %t/translate.upf --upf %t/design.upf --target=wasm32 -O0 --execution-tier=bytecode --mlir-verify-each -c %t/design.sv -o %t.bc.o
+// RUN: %llvm_dist/bin/llvm-readobj --file-headers %t.o %t.bc.o | FileCheck %s --check-prefix=HEADERS
+// RUN: %llvm_dist/bin/llvm-nm --undefined-only %t.o %t.bc.o | FileCheck %s --check-prefix=SYMBOLS --implicit-check-not=Tcl_
+// RUN: %llvm_dist/bin/llvm-nm --undefined-only %t.bc.o | FileCheck %s --check-prefix=BYTECODE --implicit-check-not=talos_rt_v1_power_nba
+// IEEE 1801-2018 6.43/6.47/4.7.4: private supplier policies use existing
+// fixed64 supply handles on wasm32 and require no Tcl in target simulators.
+// HEADERS-COUNT-2: AddressSize: 32bit
+// SYMBOLS: talos_rt_v1_
+// BYTECODE: talos_rt_v1_

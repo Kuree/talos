@@ -1,0 +1,40 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/legacy.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.legacy.mlir
+// RUN: talos --upf %t/modern.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.modern.mlir
+// RUN: FileCheck %s --check-prefix=ROOTS < %t.legacy.mlir
+// RUN: FileCheck %s --check-prefix=ROOTS < %t.modern.mlir
+// RUN: FileCheck %s --check-prefix=ALIASES < %t.legacy.mlir
+// RUN: talos --upf %t/legacy.upf -O3 --vpi=off -emit-sim --mlir-verify-each %t/design.sv -o %t.sim.mlir
+// RUN: FileCheck %s --check-prefix=SIM < %t.sim.mlir
+// IEEE 1801-2018 6.43/6.10/4.7.4: a fresh policy supplier shares all six
+// existing primary function roots. It adds no root, public HDL lookup name,
+// or dedicated state-catalog monitor in the common FULL_ON case.
+// ROOTS-COUNT-6: upf.supply @
+// ROOTS-NOT: upf.supply @
+// ALIASES: module
+// ALIASES-NOT: upf.supply {{.*}}$legacy_primary
+// SIM: simulation.design
+// SIM-NOT: __upf_states.
+
+//--- design.sv
+module leaf(output wire q); assign q = 1; endmodule
+module top;
+  wire q;
+  leaf dut(q);
+  initial #1 $finish;
+endmodule
+
+//--- base.upf
+create_supply_net P
+create_supply_net G
+create_power_domain PD -elements dut
+
+//--- legacy.upf
+source [file join [file dirname [info script]] base.upf]
+set_domain_supply_net PD -primary_power_net P -primary_ground_net G
+
+//--- modern.upf
+source [file join [file dirname [info script]] base.upf]
+create_supply_set SUPPLIER -function {power P} -function {ground G}
+associate_supply_set SUPPLIER -handle PD.primary

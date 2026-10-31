@@ -1,0 +1,102 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 5.5/6.26/6.43: legacy primary bindings resolve supplies
+// in the caller's scope, including Port preference and function handles.
+// Both directions use shadowed supply names. Root->child uses a same-name
+// Net/Port plus a Port-only ground; child->root uses caller-local functions.
+// 9.5.3/9.6.7: those independent supplies cancel the correct delayed NBAs
+// and restore level logic without inventing clocks. The modern wrapper uses
+// the exact fresh-set/association form specified by 6.43.
+// CHECK: legacy caller scope, ports and independent supplies passed
+
+//--- design.sv
+module leaf(input logic clk, input logic [7:0] d,
+            output logic [7:0] q, y);
+  always @(posedge clk) q <= #3 d;
+  always_comb y = d;
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0;
+  logic [7:0] d = 8'h3c;
+  wire [7:0] q, y, otherq, othery;
+  leaf dut(clk, d, q, y), other(clk, d, otherq, othery);
+  upfSupplyTypeT value;
+  initial begin
+    #1;
+    if (q !== 'x || y !== 'x || otherq !== 'x || othery !== 'x)
+      $fatal(1, "initial OFF");
+    if (!supply_on("/top/VDD") || !supply_on("/top/VSS", 0.0))
+      $fatal(1, "root supply ports");
+    #1;
+    if (y !== d || othery !== 'x || q !== 'x || otherq !== 'x)
+      $fatal(1, "root caller selected the child's shadowed supplies");
+    if (get_supply_value("/top/dut/CHILD.primary.power") !==
+        get_supply_value("/top/VDD")) $fatal(1, "root power binding");
+    value = get_supply_value("/top/VDD@upfSupplyNetT");
+    if (value.state != OFF) $fatal(1, "legacy ignored same-name Port preference");
+    if (!supply_on("/top/dut/VDD") ||
+        !supply_on("/top/PARENT.primary.ground", 0.0))
+      $fatal(1, "child caller supply functions");
+    #1;
+    if (y !== d || othery !== d) $fatal(1, "child caller selected root supplies");
+    if (get_supply_value("/top/PARENT.primary.power") !==
+        get_supply_value("/top/dut/SRC.power")) $fatal(1, "function handle binding");
+    clk = 1;
+    #1;
+    if (!supply_off("/top/VDD")) $fatal(1, "root OFF");
+    #4;
+    if (q !== 'x || y !== 'x || otherq !== d || othery !== d)
+      $fatal(1, "wrong scope NBA cancellation or domain corruption");
+    if (!supply_on("/top/dut/CHILD.primary.power")) $fatal(1, "restore alias");
+    #1;
+    if (q !== 'x || y !== d || otherq !== d || othery !== d)
+      $fatal(1, "scope restore invented clock");
+    clk = 0;
+    d = 8'ha5;
+    #1 clk = 1;
+    #4;
+    if (q !== d || y !== d || otherq !== d || othery !== d)
+      $fatal(1, "fresh independent-supply NBAs");
+    $display("legacy caller scope, ports and independent supplies passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+if {![info exists modern_legacy]} {set modern_legacy 0}
+set equivalent_index 0
+proc primary {domain power ground} {
+    if {$::modern_legacy} {
+        set name Equivalent[incr ::equivalent_index]
+        create_supply_set $name -function [list power $power] -function [list ground $ground]
+        associate_supply_set $name -handle $domain.primary
+        return 1
+    }
+    return [set_domain_supply_net $domain -primary_power_net $power -primary_ground_net $ground]
+}
+create_supply_net VDD
+create_supply_port VDD
+create_supply_port VSS
+create_power_domain PARENT -elements other
+set_scope dut
+create_power_domain CHILD -elements .
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set SRC -function {power VDD} -function {ground VSS}
+set_scope /
+if {[primary dut/CHILD VDD VSS] != 1} {error "legacy return value"}
+if {[set_scope .] ne "/"} {error "legacy changed root caller scope"}
+set_scope dut
+if {[primary /PARENT SRC.power SRC.ground] != 1} {error "legacy return value"}
+if {[set_scope .] ne "/dut"} {error "legacy changed child caller scope"}
+set_scope /
+
+//--- modern.upf
+set modern_legacy 1

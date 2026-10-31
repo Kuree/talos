@@ -6,6 +6,7 @@
 #include "SupplyNetwork.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/Verifier.h"
 #include "talos/Dialect/Slang/SlangOps.h"
 #include "talos/Dialect/UPF/UPFOps.h"
@@ -70,6 +71,7 @@ struct SupplySet {
   std::string strategy;
   std::string binding;
   bool explicitStrategySupply = false;
+  bool privateSupplier = false;
 };
 struct DomainNet {
   std::string scope, owner, resolution;
@@ -319,12 +321,27 @@ struct Session {
     // binding can make the update idempotent. Ports and functions keep their
     // own identities (4.3.8/6.14/10.6.1.6); electrical equivalence does not
     // transfer a distinct net declaration's ownership restriction to them.
-    if (object.kind != SupplyObject::Net || !domainNets.count(object.path))
-      return true;
-    error("a supply net created with -domain cannot be associated with a "
-          "supply-set function (IEEE 1801-2018 6.24.1): " +
-          object.path);
-    return false;
+    if (object.kind == SupplyObject::Net && domainNets.count(object.path)) {
+      error("a supply net created with -domain cannot be associated with a "
+            "supply-set function (IEEE 1801-2018 6.24.1): " +
+            object.path);
+      return false;
+    }
+    // 6.26.1: concrete supplies must be local; descendant references are
+    // permitted through supply-net handles, not concrete net names. 6.43's
+    // equivalent caller-scoped supply-set declaration obeys the same rules.
+    bool descendant = StringRef(object.scope).starts_with(scope + ".");
+    if (object.scope != scope && object.kind != SupplyObject::Function) {
+      error("supply function requires a net or port defined in the current "
+            "scope (IEEE 1801-2018 6.26)");
+      return false;
+    }
+    if (object.scope != scope && !descendant) {
+      error("function handles declared outside the current scope or its "
+            "descendants are not implemented");
+      return false;
+    }
+    return true;
   }
   void markPrimaryAssociations(std::set<std::string> sets) {
     // Whole-set associations propagate to functions connected later (6.10).
@@ -1250,15 +1267,6 @@ struct Session {
           return error("unknown supply net, port, or function: " + fields[1]);
         if (!functionSupply(*object))
           return TCL_ERROR;
-        // 6.26.1: concrete supplies must be local; descendant references
-        // are permitted through supply-net handles, not concrete net names.
-        bool descendant = StringRef(object->scope).starts_with(scope + ".");
-        if (object->scope != scope && object->kind != SupplyObject::Function)
-          return error("supply function requires a net or port defined in the "
-                       "current scope (IEEE 1801-2018 6.26)");
-        if (object->scope != scope && !descendant)
-          return error("function handles declared outside the current scope or "
-                       "its descendants are not implemented");
         auto [previous, inserted] = set.functions.emplace(fields[0], *object);
         if (!inserted && !sameSupply(previous->second, *object, id, &set))
           return error("supply function is already associated with a different "
@@ -1445,20 +1453,41 @@ struct Session {
         return error("both primary power and ground nets are required");
       if (found->second.primaryAssociated)
         return error("domain primary supply is already associated");
-      std::string previousScope = scope;
-      auto restoreScope = llvm::scope_exit([&] { scope = previousScope; });
-      scope = found->second.scope;
-      auto power = supply(value(opts, "-primary_power_net"));
-      auto ground = supply(value(opts, "-primary_ground_net"));
+      // IEEE 1801-2018 5.5/6.43: this is equivalent to declaring a supply
+      // set in the CALLER's scope and associating it with the domain handle.
+      // Unlike create_supply_net/port/switch -domain, it never relocates the
+      // source-name lookup to the domain's creation scope.
+      auto power = supply(value(opts, "-primary_power_net"), true);
+      auto ground = supply(value(opts, "-primary_ground_net"), true);
       if (!power || !ground)
         return error("unknown primary supply net");
       if (!functionSupply(*power) || !functionSupply(*ground))
         return TCL_ERROR;
-      auto &primary = supplySets.at(found->second.primary);
-      primary.functions.emplace("power", *power);
-      primary.functions.emplace("ground", *ground);
+      // 6.43 creates a fresh supplying set, not just two direct bindings on
+      // PD.primary. Its unmodified 4.7.4 ON policy still requires FULL_ON
+      // when PD.primary overrides ON to admit PARTIAL_ON or ignore ground.
+      // Preserve the primary's catalog/scope and propagate all six functions
+      // and their requiredness through the ordinary association path (6.10).
+      std::string stem = "$legacy_primary:" + found->first;
+      std::string local = stem;
+      uint64_t suffix = 0;
+      // The private spelling is not a UPF identifier, but can still coincide
+      // with an escaped HDL declaration. Keep the caller namespace unique.
+      while (hasNamedObject(local) ||
+             declaredHDLNames.count(scope + ".\\" + local + " "))
+        local = stem + "_" + std::to_string(++suffix);
+      std::string supplierName = supplySetKey(local);
+      SupplySet supplier;
+      supplier.scope = scope;
+      supplier.updateScope = scope;
+      supplier.location = declarationLocation();
+      supplier.functions = {{"power", *power}, {"ground", *ground}};
+      supplier.privateSupplier = true;
+      if (!supplySets.emplace(supplierName, std::move(supplier)).second)
+        return error("implicit legacy primary supplier already exists");
+      setAssociations.emplace_back(supplierName, found->second.primary);
       found->second.primaryAssociated = true;
-      std::set<std::string> associated{found->second.primary};
+      std::set<std::string> associated{found->second.primary, supplierName};
       for (auto object : {*power, *ground})
         if (object.kind == SupplyObject::Function &&
             (StringRef(object.path).ends_with(".power") ||
@@ -2033,10 +2062,21 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
       for (unsigned root : roots)
         supplies.roots[root].writable = false;
     }
+  // Internal 6.43 suppliers contribute policy, but no additional public HDL
+  // supply names or runtime lookups. Every function is associated with the
+  // existing primary function, so it also introduces no physical supply root.
+  std::set<std::string> privateSupplyNames;
+  for (auto &[name, set] : session.supplySets)
+    if (set.privateSupplier)
+      for (StringRef function : upf::getSupplyFunctionNames()) {
+        std::string handle = name + "." + function.str();
+        privateSupplyNames.insert(handle);
+        privateSupplyNames.insert(handle + "@upfSupplyNetT");
+      }
   for (unsigned id = 0; id < supplies.roots.size(); ++id) {
     SmallVector<Attribute> names;
     for (auto &[name, root] : supplies.handles)
-      if (root == id)
+      if (root == id && !privateSupplyNames.count(name))
         names.push_back(builder.getStringAttr(name));
     auto root = supplies.roots[id];
     // Standard initialization is OFF, unspecified voltage (9.2.1). The old
@@ -2067,7 +2107,7 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
           state.simstate, state.illegal));
     for (auto &other : associated[name])
       links.push_back(FlatSymbolRefAttr::get(module.getContext(), other));
-    upf::UPFSupplySetOp::create(
+    auto declaration = upf::UPFSupplySetOp::create(
         builder, set.location.value_or(module.getLoc()), name,
         bindings.getDictionary(module.getContext()),
         builder.getArrayAttr(required),
@@ -2082,6 +2122,9 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
         set.binding.empty()
             ? FlatSymbolRefAttr{}
             : FlatSymbolRefAttr::get(module.getContext(), set.binding));
+    if (set.privateSupplier)
+      SymbolTable::setSymbolVisibility(declaration,
+                                       SymbolTable::Visibility::Private);
   }
   for (auto &[name, domain] : session.domains) {
     llvm::SmallVector<Attribute> elements;

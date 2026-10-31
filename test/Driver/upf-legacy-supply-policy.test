@@ -1,0 +1,98 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.43/4.7.4: the equivalent supplying set has its own
+// default FULL_ON policy, even if PD.primary overrides ON to admit PARTIAL_ON
+// or ignore ground. Whole-set requiredness propagates nwell (6.10/4.5.4.7).
+// A source set's CORRUPT/OFF catalog is not inherited through function
+// references; an explicit association does impose it (6.5.1/6.26).
+// The modern wrapper is the standard's equivalent procedure. Translation
+// wrappers also exercise global PARTIAL_ON->FULL_ON semantics (6.47).
+// CHECK: legacy supplier policy and catalog independence passed
+
+//--- design.sv
+module leaf(input logic d, output logic y);
+  always_comb y = d;
+endmodule
+module top;
+  import UPF::*;
+  logic d = 1, phase = 0;
+  wire partial_y, bias_y, source_y, associated_y;
+  leaf partial_dut(d, partial_y), bias_dut(d, bias_y),
+       source_dut(d, source_y), associated_dut(d, associated_y);
+  bit translated;
+  initial begin
+    translated = $test$plusargs("translate");
+    if (!supply_on("/top/INPUT") || !supply_on("/top/GROUND", 0.0) ||
+        !supply_on("/top/BPOWER") || !supply_on("/top/SPOWER") ||
+        !supply_on("/top/SGROUND", 0.0)) $fatal(1, "supply setup");
+    #1;
+    if (get_supply_state(get_supply_value("/top/OUTPUT")) != PARTIAL_ON)
+      $fatal(1, "partial switch state");
+    if (partial_y !== (translated ? 1'b1 : 1'bx))
+      $fatal(1, "missing implicit supplier default FULL_ON policy");
+    if (bias_y !== 1'bx) $fatal(1, "implicit supplier ignored required ground");
+    if (source_y !== 1'b1 || associated_y !== 1'bx)
+      $fatal(1, "function reference inherited source catalog or association lost it");
+    if (!supply_on("/top/BGROUND", 0.0)) $fatal(1, "bias ground");
+    #1;
+    if (bias_y !== 1'bx) $fatal(1, "implicit supplier ignored required nwell");
+    if (!supply_on("/top/NWELL")) $fatal(1, "required well");
+    phase = 1;
+    #1;
+    if (bias_y !== 1'b1 || partial_y !== 1'b1) $fatal(1, "full NORMAL recovery");
+    if (!supply_off("/top/NWELL")) $fatal(1, "well OFF");
+    phase = 0;
+    #1;
+    if (bias_y !== 1'bx || partial_y !== (translated ? 1'b1 : 1'bx))
+      $fatal(1, "implicit supplying policy lost requiredness");
+    if (!supply_on("/top/SPOWER", 1.5)) $fatal(1, "source voltage");
+    #1;
+    if (source_y !== 1'b1 || associated_y !== 1'b1)
+      $fatal(1, "explicit source policy restoration");
+    $display("legacy supplier policy and catalog independence passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+if {![info exists modern_legacy]} {set modern_legacy 0}
+set equivalent_index 0
+proc primary {domain power ground} {
+    if {$::modern_legacy} {
+        set name Equivalent[incr ::equivalent_index]
+        create_supply_set $name -function [list power $power] -function [list ground $ground]
+        associate_supply_set $name -handle $domain.primary
+        return 1
+    }
+    return [set_domain_supply_net $domain -primary_power_net $power -primary_ground_net $ground]
+}
+foreach net {INPUT OUTPUT GROUND BPOWER BGROUND NWELL SPOWER SGROUND} {
+    create_supply_net $net
+}
+create_power_domain PART -elements partial_dut
+create_power_switch PS -domain PART -input_supply_port {vin INPUT} -output_supply_port {vout OUTPUT} -control_port {p phase} -on_state {FULL vin p} -on_partial_state {PART vin {!p}}
+primary PART OUTPUT GROUND
+add_power_state PART.primary -state {ON -supply_expr {(power == PARTIAL_ON || power == FULL_ON) && ground == FULL_ON}}
+create_power_domain BIAS -elements bias_dut
+primary BIAS BPOWER BGROUND
+create_supply_set BIAS.primary -update -function {nwell NWELL}
+add_power_state BIAS.primary -state {ON -supply_expr {power == FULL_ON}}
+add_power_state BIAS.primary -update -state {UNUSED -supply_expr {power == OFF && nwell == FULL_ON} -simstate CORRUPT}
+create_supply_set SOURCE -function {power SPOWER} -function {ground SGROUND}
+add_power_state SOURCE -state {ON -supply_expr {power == {FULL_ON 1.5} && ground == FULL_ON}}
+add_power_state SOURCE -update -state {LOW -supply_expr {power == {FULL_ON 1.0} && ground == FULL_ON} -simstate CORRUPT}
+create_power_domain REF -elements source_dut
+primary REF SOURCE.power SOURCE.ground
+create_power_domain ASSOCIATED -elements associated_dut -supply {primary SOURCE}
+
+//--- modern.upf
+set modern_legacy 1
+
+//--- translate.upf
+set_partial_on_translation FULL_ON

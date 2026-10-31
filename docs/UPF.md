@@ -211,6 +211,18 @@ meeting a domain-local net at a boundary's HighConn/LowConn (clauses
 terminal cell PG-pin availability/extent enforcement is not implemented by
 this slice. A shared electrical root alone does not identify those consumers.
 
+Legacy `set_domain_supply_net` resolves its power/ground operands in the
+caller's scope, with the same Port preference and source-scope rules as
+`create_supply_set` (clauses 5.5/6.26/6.43). The destination primary handle
+keeps its original declaration scope and state catalog. A private supplying
+set preserves the command's specified modern equivalent: its default ON
+policy requires all required functions to be FULL_ON, independently of any
+custom ON predicate on the primary. Whole-set association propagates required
+bias functions too. Referencing `SS.power` shares that function's electrical
+value without importing `SS`'s state catalog. The private supplier shares the
+existing roots, has no public HDL lookup names, and needs no separate
+state-catalog monitor when its custom catalog is empty.
+
 Associations electrically join corresponding functions and remain effective
 when functions are bound later. Lists, transitive links, repeated associations,
 and alias cycles are supported. The six standard functions are `power`,

@@ -1,0 +1,76 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.mlir | FileCheck %s --check-prefix=TCL
+// RUN: talos-opt %t.mlir --symbol-dce | talos-opt | FileCheck %s --check-prefix=IR
+// IEEE 1801-2018 5.5/6.26/6.43/8.3.2: legacy source objects use caller
+// scope; the destination's declaration/catalog scope remains unchanged.
+// Validate both operands before creating a supplier or primary association.
+// The private fresh supplier survives DCE as a policy dependency, without
+// introducing public HDL aliases. Scoped loads preserve the same rules.
+// TCL: legacy source validation, private suppliers and rollback passed
+// IR-NOT: upf.supply {{.*}}$legacy_primary
+// IR-DAG: upf.supply_set @"/top/$legacy_primary:top.dut.FAIL_1"{{.*}}sym_visibility = "private"
+// IR-DAG: upf.supply_set @"/top/dut/$legacy_primary:top.ROOT"{{.*}}sym_visibility = "private"
+// IR-DAG: upf.supply_set @"/top/$legacy_primary:top.dut.SCOPED"{{.*}}sym_visibility = "private"
+// IR-DAG: upf.domain @top.dut.FAIL
+// IR-DAG: upf.domain @top.ROOT
+
+//--- design.sv
+module inner; endmodule
+module leaf; inner nested(); endmodule
+module top;
+  logic \$legacy_primary:top.dut.FAIL ;
+  leaf dut(), other();
+endmodule
+
+//--- design.upf
+proc expect_error {script pattern} {
+    set code [catch {uplevel 1 $script} message]
+    if {$code != 1 || ![string match $pattern $message]} {
+        error "expected <$pattern>, got code $code <$message>"
+    }
+}
+foreach net {P G} {create_supply_net $net}
+create_supply_set ROOT_SET -function {power P} -function {ground G}
+create_power_domain ROOT -elements other
+create_supply_set UNBOUND
+create_power_domain ASSOCIATED -elements other -supply {primary UNBOUND}
+expect_error {set_domain_supply_net ASSOCIATED -primary_power_net P -primary_ground_net G} {*already associated*}
+set_scope dut
+create_power_domain FAIL -elements .
+create_power_domain DESC -elements .
+create_power_domain PORT -elements .
+create_power_domain OWN_CHECK -elements .
+foreach net {LOCAL_P LOCAL_G} {create_supply_net $net}
+create_supply_net OWN -domain FAIL
+create_supply_net PAIR -domain FAIL
+create_supply_port PAIR
+set_scope nested
+foreach net {P G} {create_supply_net $net}
+create_supply_set SOURCE -function {power P} -function {ground G}
+set_scope /
+# A good power with an invalid ground leaves FAIL's entire primary untouched.
+expect_error {set_domain_supply_net dut/FAIL -primary_power_net P -primary_ground_net missing} {*unknown primary supply net*}
+expect_error {set_domain_supply_net dut/FAIL -primary_power_net P -primary_ground_net dut/LOCAL_G} {*defined in the current scope*}
+expect_error {create_supply_set BAD -function {power P} -function {ground dut/LOCAL_G}} {*defined in the current scope*}
+if {[set_domain_supply_net dut/FAIL -primary_power_net P -primary_ground_net G] != 1} {error "legacy return"}
+expect_error {create_supply_set dut/FAIL.primary -update} {*original execution scope*}
+set_scope dut
+create_supply_set FAIL.primary -update
+expect_error {set_domain_supply_net DESC -primary_power_net /ROOT_SET.power -primary_ground_net LOCAL_G} {*outside the current scope*}
+expect_error {create_supply_set BAD -function {power /ROOT_SET.power}} {*outside the current scope*}
+set_domain_supply_net DESC -primary_power_net nested/SOURCE.power -primary_ground_net LOCAL_G
+set_domain_supply_net /ROOT -primary_power_net LOCAL_P -primary_ground_net LOCAL_G
+# The paired Port is a separate named object from the restricted OWN net.
+set_domain_supply_net PORT -primary_power_net PAIR -primary_ground_net LOCAL_G
+expect_error {set_domain_supply_net OWN_CHECK -primary_power_net LOCAL_P -primary_ground_net OWN} {*created with -domain*}
+set_domain_supply_net OWN_CHECK -primary_power_net LOCAL_P -primary_ground_net LOCAL_G
+if {[set_scope .] ne "/dut"} {error "legacy source checks changed scope"}
+set_scope /
+load_upf [file join [file dirname [info script]] child.upf] -scope dut
+set_domain_supply_net dut/SCOPED -primary_power_net P -primary_ground_net G
+if {[set_scope .] ne "/"} {error "scoped load or legacy changed caller"}
+puts {legacy source validation, private suppliers and rollback passed}
+
+//--- child.upf
+create_power_domain SCOPED -elements .

@@ -59,10 +59,12 @@ set_scope duta
 create_supply_port PIN -direction in
 create_supply_net LOCAL
 connect_supply_net LOCAL -ports PIN
+create_supply_set LOCAL_SET -function {power LOCAL}
 set_scope /
 connect_supply_net VDD -ports duta/PIN
 create_power_domain A -elements duta
 create_power_domain B -elements dutb
 create_power_domain C -elements dutc
-set_domain_supply_net A -primary_power_net duta/LOCAL -primary_ground_net VSS
+# 6.26/6.43: descendant supplies are referenced via function handles.
+set_domain_supply_net A -primary_power_net duta/LOCAL_SET.power -primary_ground_net VSS
 set_domain_supply_net B -primary_power_net PORT_RAIL -primary_ground_net VSS
