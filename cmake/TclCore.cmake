@@ -1,7 +1,11 @@
 # IEEE 1801-2018 5.1 requires full Tcl >= 8.4 for processing UPF.
 # Compiler-only Tcl core. Do not configure Tk, tclsh, contributed packages,
-# documentation, or an independent zlib. LLVM already requires host zlib.
+# documentation, or a separate zlib build. Reuse the host zlib package.
 set(TALOS_TCL_VERSION "9.0.4")
+# Tcl needs these independently of optional Z3, Slang threading, and LLVM's
+# optional zlib support. Do not rely on another component to create targets.
+find_package(Threads REQUIRED)
+find_package(ZLIB REQUIRED)
 if(TALOS_TCL_INSTALL_DIR)
   set(_talos_tcl_install "${TALOS_TCL_INSTALL_DIR}")
   foreach(artifact include/tcl.h lib/tcl9.0/init.tcl)
