@@ -1339,10 +1339,9 @@ struct ClockConditionPublicationView {
   uint64_t planeBitOffset = 0;
   const uint8_t *newValue = nullptr;
   const uint8_t *newUnknown = nullptr;
-  // Synchronous sampler evaluation may itself publish another signal before
-  // the outer publication commits canonical storage. Retain the enclosing
-  // views so nested evaluators observe every post-transition value at their
-  // exact event instant; the newest overlapping publication wins.
+  // Synchronous sampler evaluation may itself publish another signal. Retain
+  // the enclosing views so nested evaluators observe every post-transition
+  // value at its exact event instant; the newest overlapping publication wins.
   const ClockConditionPublicationView *previous = nullptr;
 };
 

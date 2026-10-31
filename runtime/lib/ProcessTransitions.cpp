@@ -582,8 +582,8 @@ bool evaluateCovergroupClockEventsNowUnlocked(
       continue;
     if (clause.condition_observer != TALOS_RT_OBSERVER_CONDITION_NONE) {
       // IEEE 1800-2023 9.4.2.3 evaluates iff only at the primary event
-      // instant. The publication overlay makes the just-published value
-      // visible even before its canonical storage commit.
+      // instant. The publication overlay retains the just-published value
+      // even when generated native storage already contains later stores.
       if (!evaluateObserver(current, clause.condition_observer, value, unknown,
                             resultWidth))
         return false;
@@ -2015,11 +2015,6 @@ bool publishNativeSignalTransitionUnlocked(
     }
   }
 
-  uint64_t sequence = 0;
-  if (!talos_rt_publish_signal_transition_batch_unlocked(
-          context, bitOffset, bitWidth, changed, posedge, negedge, 0, &sequence,
-          oldValue, oldUnknown, newValue, newUnknown))
-    return false;
   uint64_t firstCanonicalBit = 0;
   uint64_t lastCanonicalBit = 0;
   bool packedCanonical = bitWidth != 0 && canonicalBit(0, firstCanonicalBit) &&
@@ -2064,6 +2059,17 @@ bool publishNativeSignalTransitionUnlocked(
                         ? unknownLimb | mask
                         : unknownLimb & ~mask;
     }
+  // IEEE 1800-2023 4.6(a), 4.9.3: commit the complete publication image
+  // before enabling its synchronous observers. A nested publication from a
+  // sampler must not be overwritten by replaying this older update afterward.
+  // This ordering also supplies the event-time state required by IEEE
+  // 1801-2018 6.50 for retention save/restore sampling. Keep the original
+  // old/new payloads and edge masks for observers of this particular event.
+  uint64_t sequence = 0;
+  if (!talos_rt_publish_signal_transition_batch_unlocked(
+          context, bitOffset, bitWidth, changed, posedge, negedge, 0, &sequence,
+          oldValue, oldUnknown, newValue, newUnknown))
+    return false;
   talos_rt_invalidate_signal_snapshots_unlocked(context, bitOffset, bitWidth);
   if (talos_rt_has_conditional_signal_waiters(context)) {
     for (uint64_t bit = 0; bit != bitWidth; ++bit) {

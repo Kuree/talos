@@ -14691,6 +14691,7 @@ uint64_t covergroupClockEventCompletionTarget = 0;
 bool covergroupClockEventReentrantTransition = false;
 uint32_t covergroupClockEventSamplerReentrantKind = 0;
 uint32_t covergroupClockEventRegion = UINT32_MAX;
+std::vector<std::array<uint64_t, 4>> covergroupClockEventCanonicalSamples;
 
 constexpr uint64_t covergroupClockEventPrimaryObserverID = 979;
 constexpr uint64_t covergroupClockEventOrObserverID = 980;
@@ -14869,6 +14870,43 @@ talos_rt_status covergroupClockEventEvaluator(
   return TALOS_RT_OK;
 }
 
+talos_rt_status covergroupClockEventCanonicalEvaluator(
+    talos_rt_context *context, const uint64_t *captures, uint32_t captureCount,
+    uint64_t *value, uint64_t *unknown, uint32_t limbCount) {
+  if (!context || !captures || captureCount != 1 || captures[0] != 42 ||
+      !value || !unknown || limbCount != 1 || !context->execution ||
+      context->execution->state_bit_count > 65)
+    return TALOS_RT_INVALID_ARGUMENT;
+  std::array<uint64_t, 4> sample{};
+  uint64_t width = context->execution->state_bit_count;
+  for (uint64_t bit = 0; bit != width; ++bit) {
+    bool bitValue = false;
+    bool bitUnknown = false;
+    if (!talos_rt_read_signal_bit_unlocked(context, 0, bit, bitValue,
+                                           bitUnknown, /*useSnapshot=*/false))
+      return TALOS_RT_INVALID_HANDLE;
+    sample[bit / 64] |= uint64_t{bitValue} << (bit % 64);
+    sample[2 + bit / 64] |= uint64_t{bitUnknown} << (bit % 64);
+  }
+  covergroupClockEventCanonicalSamples.push_back(sample);
+  if (covergroupClockEventReentrantTransition) {
+    covergroupClockEventReentrantTransition = false;
+    std::array<uint8_t, 9> oldValue{};
+    std::array<uint8_t, 9> newValue{};
+    std::array<uint8_t, 9> newUnknown{};
+    oldValue[0] = 1;
+    if (width == 65)
+      oldValue[8] = 1;
+    newUnknown.fill(UINT8_MAX);
+    talos_rt_v1_scheduler_signal_transition(context, 0, width, oldValue.data(),
+                                            nullptr, newValue.data(),
+                                            newUnknown.data());
+  }
+  value[0] = 1;
+  unknown[0] = 0;
+  return TALOS_RT_OK;
+}
+
 talos_rt_status preponedObserverEvaluator(talos_rt_context *context,
                                           const uint64_t *,
                                           uint32_t captureCount,
@@ -15044,7 +15082,7 @@ TEST(RuntimeInternals,
   talos_rt_v1_scheduler_signal_transition(context, 0, 2, &bothOld, nullptr,
                                           &bothNew, nullptr);
   // Both clauses matched one atomic publication, and the evaluator's direct
-  // load observed that publication's new bit before canonical commit.
+  // load observed that publication's new bit at its sampling instant.
   ASSERT_EQ(covergroupClockEventSamples, std::vector<uint32_t>({1}));
 
   const uint8_t oneOld = 1;
@@ -15318,14 +15356,100 @@ TEST(RuntimeInternals, CovergroupClockEventComposesNestedPublicationSnapshots) {
   talos_rt_v1_scheduler_signal_transition(context, 0, 1, &zero, nullptr, &one,
                                           nullptr);
   EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);
-  // The outer A publication has not committed canonical storage when its
-  // sampler publishes B. B's synchronous sampler must nevertheless retain
-  // the enclosing A snapshot and observe A's post-transition value.
+  // The outer A sampler publishes B. B's synchronous sampler must retain the
+  // enclosing A snapshot and observe A's post-transition value.
   EXPECT_EQ(covergroupClockEventSamples, std::vector<uint32_t>({1, 1}));
 
   context->scheduledProcesses.clear();
   context->scheduledProcessIndices.clear();
   talos_rt_v1_context_destroy(context);
+}
+
+TEST(RuntimeInternals, CovergroupClockEventSeesCommittedCanonicalPublication) {
+  // IEEE 1800-2023 4.6(a), 4.9.3: commit a blocking update before the
+  // events it enables. IEEE 1801-2018 6.50 likewise requires retention
+  // save/restore to sample at the control event, not a later actor wakeup.
+  for (uint64_t width : {uint64_t{1}, uint64_t{65}}) {
+    SCOPED_TRACE(width);
+    constexpr uint64_t observerID = 987;
+    const talos_rt_observer_capture_abi_v1 primaryABI{
+        TALOS_RT_OBSERVER_CAPTURE_STORAGE, 1};
+    const talos_rt_observer_capture_abi_v1 captureABI{
+        TALOS_RT_OBSERVER_CAPTURE_COVERGROUP, 64};
+    const std::array<talos_rt_observer_descriptor_v1, 2> observers{{
+        {covergroupClockEventPrimaryObserverID, &primaryABI, 1, 1,
+         TALOS_RT_OBSERVER_FOUR_STATE, TALOS_RT_OBSERVER_NO_BYTECODE,
+         covergroupClockEventPrimaryEvaluator, 0},
+        {observerID, &captureABI, 1, 1, 0, TALOS_RT_OBSERVER_NO_BYTECODE,
+         covergroupClockEventCanonicalEvaluator, 0},
+    }};
+    talos_rt_execution_descriptor_v1 execution{};
+    execution.version = TALOS_RT_VERSION;
+    execution.state_bit_count = width;
+    execution.observers = observers.data();
+    execution.observer_count = observers.size();
+    talos_rt_context *context = nullptr;
+    ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+              TALOS_RT_OK);
+    context->coverage = std::make_unique<CoverageState>();
+    context->coverage->instances.emplace(42, FunctionalCoverageInstanceState{});
+    talos_rt_process_descriptor_v1 descriptor{};
+    descriptor.execution = &execution;
+    talos_rt_process_instance_v1 instance{};
+    instance.descriptor = &descriptor;
+    instance.context = context;
+    instance.tier = TALOS_RT_TIER_NATIVE;
+    context->scheduledProcesses.emplace_back();
+    context->scheduledProcesses.back().instance = &instance;
+    context->scheduledProcesses.back().token = 1;
+    context->scheduledProcesses.back().started = true;
+    context->scheduledProcessIndices.emplace(1, 0);
+    context->activeNativeProcess = &instance;
+    context->activeLogicalProcessToken =
+        TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | uint64_t{1};
+    std::vector<uint64_t> eventPlan = makeCovergroupClockEventPlan(
+        {0}, {UINT64_MAX}, {TALOS_RT_WAIT_EDGE_BOTH});
+    const talos_rt_computed_capture_v1 capture{42, 0, 0, 0};
+    ASSERT_EQ(talos_rt_v1_covergroup_clock_event_register(
+                  context,
+                  reinterpret_cast<talos_rt_computed_wait_record_v1 *>(
+                      eventPlan.data()),
+                  eventPlan.size() * sizeof(uint64_t), 0, observerID, &capture,
+                  1),
+              TALOS_RT_OK);
+    context->activeNativeProcess = nullptr;
+    context->activeLogicalProcessToken = 0;
+
+    covergroupClockEventCanonicalSamples.clear();
+    covergroupClockEventReentrantTransition = true;
+    std::array<uint8_t, 9> oldValue{};
+    std::array<uint8_t, 9> oldUnknown{};
+    std::array<uint8_t, 9> newValue{};
+    oldUnknown.fill(UINT8_MAX);
+    newValue[0] = 1;
+    if (width == 65)
+      newValue[8] = 1;
+    talos_rt_v1_scheduler_signal_transition(context, 0, width, oldValue.data(),
+                                            oldUnknown.data(), newValue.data(),
+                                            nullptr);
+    EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);
+    uint64_t lowMask = width == 1 ? 1 : UINT64_MAX;
+    uint64_t highMask = width == 65 ? 1 : 0;
+    std::vector<std::array<uint64_t, 4>> expected{{{1, highMask, 0, 0}},
+                                                  {{0, 0, lowMask, highMask}}};
+    EXPECT_EQ(covergroupClockEventCanonicalSamples, expected);
+    // The nested write makes the whole root X. Completing the enclosing
+    // publication must preserve it, including the partially filled last limb.
+    EXPECT_EQ(uint64_t(context->stateValue[0]) & lowMask, 0u);
+    EXPECT_EQ(uint64_t(context->stateUnknown[0]) & lowMask, lowMask);
+    if (width == 65) {
+      EXPECT_EQ(uint64_t(context->stateValue[1]) & highMask, 0u);
+      EXPECT_EQ(uint64_t(context->stateUnknown[1]) & highMask, highMask);
+    }
+    context->scheduledProcesses.clear();
+    context->scheduledProcessIndices.clear();
+    talos_rt_v1_context_destroy(context);
+  }
 }
 
 TEST(RuntimeInternals, CovergroupClockEventRejectsFalseSamplerSentinel) {
@@ -15394,6 +15518,9 @@ TEST(RuntimeInternals, CovergroupClockEventRejectsFalseSamplerSentinel) {
                                           &newValue, nullptr);
   EXPECT_EQ(context->schedulerStatus, TALOS_RT_INVALID_DESIGN);
   EXPECT_EQ(covergroupClockEventSamples, std::vector<uint32_t>({1}));
+  // Failing an observer does not undo the update that enabled its event.
+  EXPECT_EQ(uint64_t(context->stateValue[0]) & 1, 1u);
+  EXPECT_EQ(uint64_t(context->stateUnknown[0]) & 1, 0u);
   covergroupClockEventSentinel = 1;
   context->scheduledProcesses.clear();
   context->scheduledProcessIndices.clear();
