@@ -25,6 +25,7 @@ module attributes {
     simulation.code_unit.decl 4 in 0 always hierarchy "top.active"
     simulation.code_unit.decl 5 in 0 always hierarchy "top.post"
     simulation.code_unit.decl 6 in 0 initial hierarchy "top.drive"
+    simulation.code_unit.decl 7 in 0 fork hierarchy "top.grandchild"
     simulation.storage.decl 0 in 0 : i1 design hierarchy "top.trigger"
     simulation.storage.decl 1 in 0 : i1 design hierarchy "top.never"
     simulation.storage.decl 2 in 0 : i64 design hierarchy "top.primed_cohort"
@@ -59,6 +60,15 @@ module attributes {
     }
     simulation.func private @prime(%ctx: !simulation.context {simulation.capture_kind = 0 : i32})
         attributes {entry_kind = 13 : i32, code_unit_id = 2 : i64, internal,
+                    schedule.detached_controls, schedule.prime_on_spawn} {
+      %never = simulation.context.storage %ctx[1] : !simulation.ref<i1>
+      %child = simulation.spawn @grandchild(%ctx) : !simulation.context -> !simulation.process
+      simulation.suspend.change %never to ^done : !simulation.ref<i1>
+    ^done:
+      simulation.return
+    }
+    simulation.func private @grandchild(%ctx: !simulation.context {simulation.capture_kind = 0 : i32})
+        attributes {entry_kind = 13 : i32, code_unit_id = 7 : i64, internal,
                     schedule.detached_controls, schedule.prime_on_spawn} {
       %primed = simulation.context.storage %ctx[2] : !simulation.ref<i64>
       %never = simulation.context.storage %ctx[1] : !simulation.ref<i1>

@@ -964,10 +964,12 @@ talos_rt_status executeAOTNode(talos_rt_context *context, uint32_t actorSlot,
     scheduled.signalTriggered = false;
     scheduled.started = true;
     scheduled.observedEpoch = context->schedulerEpoch;
-    talos_rt_status cohort = observeSchedulerExecutionCohortUnlocked(
-        context, scheduled.queuedRegion);
-    if (cohort != TALOS_RT_OK)
-      return cohort;
+    if (context->schedulerCohortEnabled) {
+      talos_rt_status cohort = observeSchedulerExecutionCohortUnlocked(
+          context, scheduled.queuedRegion);
+      if (cohort != TALOS_RT_OK)
+        return cohort;
+    }
     context->activeNativeProcess = selected;
     context->activeHomeRegion = scheduled.homeRegion;
     context->activeExecRegion = scheduled.queuedRegion;

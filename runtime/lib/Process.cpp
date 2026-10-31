@@ -2592,10 +2592,12 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_direct_fragment_enter(
   // entering the wrapper. Keep the runtime occurrence bit clear while the
   // body runs so a transition published by the body can represent a distinct
   // activation of the same wait.
-  talos_rt_status cohort =
-      observeSchedulerExecutionCohortUnlocked(context, scheduled.queuedRegion);
-  if (cohort != TALOS_RT_OK)
-    return cohort;
+  if (context->schedulerCohortEnabled) {
+    talos_rt_status cohort = observeSchedulerExecutionCohortUnlocked(
+        context, scheduled.queuedRegion);
+    if (cohort != TALOS_RT_OK)
+      return cohort;
+  }
   actor->context = context;
   actor->lifecycle = TALOS_RT_PROCESS_EXECUTING;
   context->nativeScheduleDirectActorSlot = actorSlot;
@@ -3314,7 +3316,14 @@ extern "C" uint64_t talos_rt_v1_scheduler_cohort(talos_rt_context *context) {
     // Lazy observational bookkeeping keeps unrelated simulations out of the
     // protocol. An unused query can be eliminated: no observable identity
     // exists before the first query whose result is retained by its caller.
-    context->schedulerCohortEnabled = true;
+    if (!context->schedulerCohortEnabled) {
+      uint32_t region = context->schedulerCohortSeedRegion != UINT32_MAX
+                            ? context->schedulerCohortSeedRegion
+                            : context->activeExecRegion;
+      if (region <= TALOS_RT_REGION_POSTPONED)
+        context->schedulerCohortRegion = schedulerCohortRegion(region);
+      context->schedulerCohortEnabled = true;
+    }
     return context->schedulerCohort;
   }
   TALOS_RT_CATCH_ALL { return 0; }
@@ -3323,7 +3332,6 @@ extern "C" uint64_t talos_rt_v1_scheduler_cohort(talos_rt_context *context) {
 static talos_rt_status nextSchedulerCohortUnlocked(talos_rt_context *context,
                                                    uint32_t region) {
   if (!context->schedulerCohortEnabled) {
-    context->schedulerCohortRegion = region;
     return TALOS_RT_OK;
   }
   if (context->schedulerCohort == UINT64_MAX) {
@@ -3338,7 +3346,6 @@ static talos_rt_status nextSchedulerCohortUnlocked(talos_rt_context *context,
 talos_rt_status enterSchedulerExecutionCohortUnlocked(talos_rt_context *context,
                                                       uint32_t region) {
   if (!context->schedulerCohortEnabled) {
-    context->schedulerCohortRegion = schedulerCohortRegion(region);
     return TALOS_RT_OK;
   }
   // IEEE 1800-2023 4.4/4.5 and IEEE 1801-2018 6.50/9.7: keep every Active
@@ -6375,10 +6382,12 @@ talos_rt_status runScheduler(talos_rt_context *context,
       ContextMutexLock lock(context);
       if (context->activeNativeProcess)
         return TALOS_RT_INVALID_LIFECYCLE;
-      talos_rt_status cohort = observeSchedulerExecutionCohortUnlocked(
-          context, context->scheduledProcesses[selectedIndex].queuedRegion);
-      if (cohort != TALOS_RT_OK)
-        return cohort;
+      if (context->schedulerCohortEnabled) {
+        talos_rt_status cohort = observeSchedulerExecutionCohortUnlocked(
+            context, context->scheduledProcesses[selectedIndex].queuedRegion);
+        if (cohort != TALOS_RT_OK)
+          return cohort;
+      }
       context->activeNativeProcess = selected;
       context->activeHomeRegion =
           context->scheduledProcesses[selectedIndex].homeRegion;
@@ -6720,6 +6729,7 @@ talos_rt_v1_scheduler_prime(talos_rt_context *context,
     uint32_t phase = context->activeDesignTaskPhase;
     uint32_t home = context->activeHomeRegion;
     uint32_t region = context->activeExecRegion;
+    uint32_t cohortSeedRegion = context->schedulerCohortSeedRegion;
     bool waitOrderFailed = context->activeWaitOrderFailed;
     bool designExecuting = context->designTaskExecuting;
     bool escapePending = context->controlEscapePending;
@@ -6738,6 +6748,7 @@ talos_rt_v1_scheduler_prime(talos_rt_context *context,
       context->activeDesignTaskPhase = phase;
       context->activeHomeRegion = home;
       context->activeExecRegion = region;
+      context->schedulerCohortSeedRegion = cohortSeedRegion;
       context->activeWaitOrderFailed = waitOrderFailed;
       context->designTaskExecuting = designExecuting;
       context->controlEscapePending = escapePending;
@@ -6747,6 +6758,12 @@ talos_rt_v1_scheduler_prime(talos_rt_context *context,
     }
   } activeState{context};
   TALOS_RT_TRY {
+    if (!context->schedulerCohortEnabled &&
+        context->schedulerCohortSeedRegion == UINT32_MAX)
+      context->schedulerCohortSeedRegion =
+          context->activeExecRegion <= TALOS_RT_REGION_POSTPONED
+              ? context->activeExecRegion
+              : static_cast<uint32_t>(TALOS_RT_REGION_ACTIVE);
     uint64_t token = 0;
     {
       ContextMutexLock lock(context);
@@ -6908,6 +6925,7 @@ talos_rt_run_dpi_export_task_logical(talos_rt_context *context,
     uint32_t home = context->activeHomeRegion;
     uint32_t region = context->activeExecRegion;
     bool waitOrderFailed = context->activeWaitOrderFailed;
+    uint32_t cohortSeedRegion = context->schedulerCohortSeedRegion;
     bool designExecuting = context->designTaskExecuting;
     bool escapePending = context->controlEscapePending;
     talos_rt_random_state_v1 *random = context->activeRandom;
@@ -6929,6 +6947,7 @@ talos_rt_run_dpi_export_task_logical(talos_rt_context *context,
       context->activeHomeRegion = home;
       context->activeExecRegion = region;
       context->activeWaitOrderFailed = waitOrderFailed;
+      context->schedulerCohortSeedRegion = cohortSeedRegion;
       context->designTaskExecuting = designExecuting;
       context->controlEscapePending = escapePending;
       context->activeRandom = random;
@@ -6961,6 +6980,8 @@ talos_rt_run_dpi_export_task_logical(talos_rt_context *context,
     context->activeDesignTaskPhase = 0;
     context->activeHomeRegion = UINT32_MAX;
     context->activeExecRegion = UINT32_MAX;
+    // This is a real scheduler reentry, not the caller's inline primer.
+    context->schedulerCohortSeedRegion = UINT32_MAX;
     context->activeWaitOrderFailed = false;
     context->designTaskExecuting = false;
     context->controlEscapePending = false;

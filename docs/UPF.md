@@ -26,6 +26,16 @@ they require a compatible prebuilt Tcl prefix to enable it. A native compiler
 can elaborate UPF and generate wasm32 simulations with 32-bit pointers and
 64-bit simulation handles. Tcl does not cross that target boundary.
 
+UPF compilation is enabled only by `--upf`. Without it, the compiler skips
+UPF type projections, Tcl resource discovery, and power-intent elaboration.
+Generated designs have no power monitors, guards, supply accesses, retention
+copies, or cohort queries, and retain ordinary native scheduling and two-state
+specialization. Ordinary dispatch in shared runtime executors tests one dormant
+cohort flag, without region or counter bookkeeping until a query is used.
+Primed waiters temporarily preserve their caller's region during inline
+initialization. Closed generated native loops retain their ordinary scheduling
+path.
+
 ## Executing UPF and Tcl libraries
 
 `talos --upf power.upf -emit-slang design.sv -o design.mlir` executes Tcl

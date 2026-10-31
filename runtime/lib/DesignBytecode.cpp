@@ -6581,7 +6581,7 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
         if (status != TALOS_RT_OK)
           return status;
       }
-      if (!preserveCohort) {
+      if (!preserveCohort && context->schedulerCohortEnabled) {
         talos_rt_status cohort = observeSchedulerExecutionCohortUnlocked(
             context, context->scheduledDesignTasks[selectedIndex].queuedRegion);
         if (cohort != TALOS_RT_OK)
@@ -7206,6 +7206,7 @@ talos_rt_status talos_rt_prime_design_task(talos_rt_context *context,
     uint32_t phase = context->activeDesignTaskPhase;
     uint32_t home = context->activeHomeRegion;
     uint32_t region = context->activeExecRegion;
+    uint32_t cohortSeedRegion = context->schedulerCohortSeedRegion;
     bool waitOrderFailed = context->activeWaitOrderFailed;
     bool designExecuting = context->designTaskExecuting;
     bool escapePending = context->controlEscapePending;
@@ -7225,6 +7226,7 @@ talos_rt_status talos_rt_prime_design_task(talos_rt_context *context,
       context->activeDesignTaskPhase = phase;
       context->activeHomeRegion = home;
       context->activeExecRegion = region;
+      context->schedulerCohortSeedRegion = cohortSeedRegion;
       context->activeWaitOrderFailed = waitOrderFailed;
       context->designTaskExecuting = designExecuting;
       context->controlEscapePending = escapePending;
@@ -7234,6 +7236,12 @@ talos_rt_status talos_rt_prime_design_task(talos_rt_context *context,
     }
   } activeState{context};
   TALOS_RT_TRY {
+    if (!context->schedulerCohortEnabled &&
+        context->schedulerCohortSeedRegion == UINT32_MAX)
+      context->schedulerCohortSeedRegion =
+          context->activeExecRegion <= TALOS_RT_REGION_POSTPONED
+              ? context->activeExecRegion
+              : static_cast<uint32_t>(TALOS_RT_REGION_ACTIVE);
     // A primed child executes inside its parent's SPAWN intrinsic. Temporarily
     // lend the active-context fields to the child, force scheduler selection
     // to that one task, and restore the parent before returning from the

@@ -1348,10 +1348,11 @@ executeCompilation(const InputArgList &args,
   DialectRegistry registry;
   registry
       .insert<talos::slangir::SlangDialect, talos::ir::TalosDialect,
-              talos::upf::UPFDialect, talos::cov::CoverageDialect,
-              talos::dpi::DPIDialect, talos::native::NativeDialect,
-              talos::runtime::TalosRuntimeDialect,
+              talos::cov::CoverageDialect, talos::dpi::DPIDialect,
+              talos::native::NativeDialect, talos::runtime::TalosRuntimeDialect,
               talos::sim::TalosSimulationDialect, mlir::LLVM::LLVMDialect>();
+  if (args.hasArg(OPT_upf))
+    registry.insert<talos::upf::UPFDialect>();
   // One explicitly sized pool is shared by all MLIR parallel pass adaptors.
   // Its lifetime encloses the context as required by MLIRContext.
   std::unique_ptr<llvm::DefaultThreadPool> compilerPool;
@@ -1408,22 +1409,24 @@ executeCompilation(const InputArgList &args,
     return 1;
   OwningOpRef<ModuleOp> module = std::move(*importedModule);
   auto upfPaths = args.getAllArgValues(OPT_upf);
-  if (!upfPaths.empty() && frontendOptions.twoState) {
-    emitDriverError(
-        "the initial UPF implementation requires four-state simulation");
-    return 1;
+  if (!upfPaths.empty()) {
+    if (frontendOptions.twoState) {
+      emitDriverError(
+          "the initial UPF implementation requires four-state simulation");
+      return 1;
+    }
+    SmallString<256> upfResourceDir(driverExecutablePath);
+    sys::path::remove_filename(upfResourceDir);
+    sys::path::append(upfResourceDir, "..", "lib", "talos");
+    sys::path::remove_dots(upfResourceDir, true);
+    if (!sys::fs::is_directory(Twine(upfResourceDir) + "/tcl9.0"))
+      upfResourceDir = TALOS_RESOURCE_DIR;
+    if (failed(talos::executeUPF(*module, upfPaths, upfResourceDir,
+                                 driverExecutablePath,
+                                 args.hasArg(OPT_upf_allow_hdl_expressions),
+                                 args.hasArg(OPT_upf_assume_powered_inputs))))
+      return 1;
   }
-  SmallString<256> upfResourceDir(driverExecutablePath);
-  sys::path::remove_filename(upfResourceDir);
-  sys::path::append(upfResourceDir, "..", "lib", "talos");
-  sys::path::remove_dots(upfResourceDir, true);
-  if (!sys::fs::is_directory(Twine(upfResourceDir) + "/tcl9.0"))
-    upfResourceDir = TALOS_RESOURCE_DIR;
-  if (failed(talos::executeUPF(*module, upfPaths, upfResourceDir,
-                               driverExecutablePath,
-                               args.hasArg(OPT_upf_allow_hdl_expressions),
-                               args.hasArg(OPT_upf_assume_powered_inputs))))
-    return 1;
   if (frontendOptions.twoState)
     talos::native::mark<talos::native::TwoState>(*module);
   if (args.hasArg(OPT_no_two_state_specialization))
@@ -1516,7 +1519,8 @@ executeCompilation(const InputArgList &args,
                   executionTier != "bytecode"
               ? "on"
               : staticSpecialization,
-          /*earlySymbolDCE=*/true, clockedKernels, forwardCopies);
+          /*earlySymbolDCE=*/true, clockedKernels, forwardCopies,
+          /*enableUPF=*/!upfPaths.empty());
     if (failed(passManager.run(*module)) || failed(verify(*module)))
       return 1;
   }

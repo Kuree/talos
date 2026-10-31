@@ -1,0 +1,29 @@
+// RUN: %split-file %s %t
+// RUN: talos --upf-allow-hdl-expressions --upf-assume-powered-inputs -emit-slang %t/design.sv | FileCheck %s --check-prefix=IMPORT --implicit-check-not=declared_selection_types --implicit-check-not=declared_selection_signedness --implicit-check-not=talos-UPF
+// RUN: talos -O3 --vpi=off -emit-sim --mlir-verify-each %t/design.sv -o %t.mlir
+// RUN: talos-opt %t.mlir --test-talos-native-aot-analysis -o %t.checked.mlir 2>&1 | FileCheck %s --check-prefix=AOT
+// RUN: FileCheck %s --check-prefix=SIM --implicit-check-not=__upf --implicit-check-not=simulation.power --implicit-check-not=simulation.supply --implicit-check-not=simulation.scheduler.cohort < %t.mlir
+// RUN: talos -O3 --vpi=off --native-scheduler=eval -emit-llvm --mlir-verify-each %t/design.sv -o %t.ll
+// RUN: FileCheck %s --check-prefix=LLVM --implicit-check-not=talos_rt_v1_power_cancel_nba --implicit-check-not=talos_rt_v1_scheduler_cohort --implicit-check-not=Tcl_ --implicit-check-not=__upf < %t.ll
+// RUN: talos -O3 --vpi=off --native-scheduler=eval %t/design.sv -o %t.exe && %t.exe --execution-tier=native | FileCheck %s --check-prefix=EXEC
+// UPF is opt-in. Ordinary compilation retains native AOT admission and adds
+// no power state, monitor, guards, supply operations, or cohort queries.
+// IMPORT: slang.symbol.variable
+// AOT: native-aot eligible=true fully=true
+// SIM: simulation.design
+// LLVM: define {{.*}}@__talos_eval_dispatch_v1
+// EXEC: ordinary passed q=8
+
+//--- design.sv
+module top;
+  bit clk = 0;
+  int q = 7;
+  always @(posedge clk) q <= q + 1;
+  initial begin
+    #1 clk = 1;
+    #1;
+    if (q != 8) $fatal(1, "ordinary simulation changed");
+    $display("ordinary passed q=%0d", q);
+    $finish;
+  end
+endmodule

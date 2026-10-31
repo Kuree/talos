@@ -271,18 +271,13 @@ inline uint32_t schedulerCohortRegion(uint32_t region) {
 inline talos_rt_status
 observeSchedulerExecutionCohortUnlocked(talos_rt_context *context,
                                         uint32_t region) {
-  // Keep the physical executor's region even before the first query. A primed
-  // child borrows its own actor fields but inherits its caller's cohort.
+  if (!context->schedulerCohortEnabled)
+    return TALOS_RT_OK;
   uint32_t normalized = schedulerCohortRegion(region);
   bool inactive = region == TALOS_RT_REGION_INACTIVE ||
                   region == TALOS_RT_REGION_RE_INACTIVE;
-  if (context->schedulerCohortRegion == normalized &&
-      (!context->schedulerCohortEnabled || !inactive))
+  if (context->schedulerCohortRegion == normalized && !inactive)
     return TALOS_RT_OK;
-  if (!context->schedulerCohortEnabled) {
-    context->schedulerCohortRegion = normalized;
-    return TALOS_RT_OK;
-  }
   return enterSchedulerExecutionCohortUnlocked(context, region);
 }
 bool hasSameDirectSignalWait(const ScheduledProcess &scheduled,

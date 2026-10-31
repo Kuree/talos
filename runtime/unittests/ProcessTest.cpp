@@ -9766,6 +9766,31 @@ TEST(Scheduler, CohortQueriesAndIdleBarrierBoundaries) {
   talos_rt_v1_context_destroy(context);
 }
 
+TEST(Scheduler, CohortTrackingStaysDormantWithoutQueries) {
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  // The unused cursor need not describe actor traffic. A sentinel makes an
+  // accidental disabled-path cursor store visible without enabling queries.
+  context->schedulerCohortRegion = TALOS_RT_REGION_POSTPONED;
+  SchedulerFixture fixture(200);
+  fixture.descriptor.native_execute = +[](talos_rt_process_instance_v1 *actor) {
+    *actor->action = {
+        TALOS_RT_FRAGMENT_TERMINATE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
+    return TALOS_RT_OK;
+  };
+  for (uint32_t region : {TALOS_RT_REGION_ACTIVE, TALOS_RT_REGION_OBSERVED,
+                          TALOS_RT_REGION_REACTIVE})
+    ASSERT_EQ(talos_rt_v1_scheduler_add(context, makeSchedulerInstance(fixture),
+                                        TALOS_RT_SCHEDULE_HOME(region)),
+              TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  EXPECT_FALSE(context->schedulerCohortEnabled);
+  EXPECT_EQ(context->schedulerCohort, 1u);
+  EXPECT_EQ(context->schedulerCohortRegion, TALOS_RT_REGION_POSTPONED);
+  EXPECT_EQ(context->schedulerCohortSeedRegion, UINT32_MAX);
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(Scheduler, CohortFinalEntryIsIdempotent) {
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);

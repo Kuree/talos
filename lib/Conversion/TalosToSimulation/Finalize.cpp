@@ -510,6 +510,8 @@ struct PruneUnusedInitializationBindingsPass
 
 struct TalosToSimulationPipelineOptions
     : PassPipelineOptions<TalosToSimulationPipelineOptions> {
+  Option<bool> upf{*this, "upf", llvm::cl::desc("elaborate UPF power intent"),
+                   llvm::cl::init(true)};
   Option<unsigned> workers{*this, "workers",
                            llvm::cl::desc("number of generated worker lanes"),
                            llvm::cl::init(1)};
@@ -880,8 +882,8 @@ void TalosSimFinalizePass::runOnOperation() {
 static void buildTalosToSimulationPipelineImpl(
     OpPassManager &manager, uint32_t workers, StringRef vpiMode,
     uint32_t optLevel, StringRef staticSpecialization, bool earlySymbolDCE,
-    StringRef clockedKernels, bool instrumentVPIFrames,
-    StringRef forwardCopies) {
+    StringRef clockedKernels, bool instrumentVPIFrames, StringRef forwardCopies,
+    bool enableUPF) {
   TalosSimPreparePassOptions prepareOptions;
   prepareOptions.pruneUnusedCoverage = earlySymbolDCE && vpiMode == "off";
   // Source inventory may outlive executable code. Only a VPI profile needs
@@ -937,7 +939,8 @@ static void buildTalosToSimulationPipelineImpl(
       loweredDesignManager.addPass(createTalosSimInstrumentVPIFramesPass());
   }
   loweredDesignManager.addPass(createTalosSimMaterializeClockedSamplesPass());
-  manager.addPass(createElaborateUPFPass());
+  if (enableUPF)
+    manager.addPass(createElaborateUPFPass());
   OpPassManager &designManager = manager.nest<sim::SimDesignOp>();
   if (optLevel > 0)
     designManager.addPass(createTalosSimDevirtualizeClassCallsPass());
@@ -1208,10 +1211,10 @@ void buildTalosToSimulationPipeline(OpPassManager &manager, uint32_t workers,
                                     StringRef staticSpecialization,
                                     bool earlySymbolDCE,
                                     StringRef clockedKernels,
-                                    StringRef forwardCopies) {
-  buildTalosToSimulationPipelineImpl(manager, workers, vpiMode, optLevel,
-                                     staticSpecialization, earlySymbolDCE,
-                                     clockedKernels, false, forwardCopies);
+                                    StringRef forwardCopies, bool enableUPF) {
+  buildTalosToSimulationPipelineImpl(
+      manager, workers, vpiMode, optLevel, staticSpecialization, earlySymbolDCE,
+      clockedKernels, false, forwardCopies, enableUPF);
 }
 
 void buildTalosToSimulationPipeline(OpPassManager &manager) {
@@ -1242,7 +1245,7 @@ void registerTalosToSimulationPipeline() {
             options.earlySymbolDCE.getValue(),
             options.clockedKernels.getValue(),
             options.instrumentVPIFrames.getValue(),
-            options.forwardCopies.getValue());
+            options.forwardCopies.getValue(), options.upf.getValue());
       });
 }
 

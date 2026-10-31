@@ -2755,6 +2755,10 @@ struct talos_rt_context {
   uint64_t schedulerCohort = 1;
   uint32_t schedulerCohortRegion = TALOS_RT_REGION_ACTIVE;
   bool schedulerCohortEnabled = false;
+  // Primed children borrow actor fields, but the first query belongs to the
+  // physical caller's region. Set only while priming; ordinary actors do no
+  // cohort region bookkeeping before the first query.
+  uint32_t schedulerCohortSeedRegion = UINT32_MAX;
   uint64_t schedulerTime = 0;
   uint64_t schedulerPreponedTime = UINT64_MAX;
   // Set once a computed observer registers the compiler-reserved Preponed

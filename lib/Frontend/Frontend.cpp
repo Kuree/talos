@@ -1122,11 +1122,11 @@ public:
                    const slang::ast::Compilation &compilation,
                    const slang::analysis::AnalysisManager &analysisManager,
                    const SDFAnnotationDatabase &sdfAnnotations, bool twoState,
-                   ArrayRef<slang::BufferID> compilerBuffers)
+                   ArrayRef<slang::BufferID> compilerBuffers, bool enableUPF)
       : builder(module.getContext()), sourceManager(sourceManager),
         compilation(compilation), analysisManager(analysisManager),
         sdfAnnotations(sdfAnnotations), twoState(twoState),
-        compilerBuffers(compilerBuffers),
+        compilerBuffers(compilerBuffers), enableUPF(enableUPF),
         typeConverter(
             module.getContext(),
             [this](const slang::ast::Symbol &symbol) {
@@ -1875,7 +1875,7 @@ private:
 
   void appendDeclaredSelections(const slang::ast::Type &source,
                                 NamedAttrList &attrs) {
-    if (!source.isIntegral() || source.getBitWidth() > 4096)
+    if (!enableUPF || !source.isIntegral() || source.getBitWidth() > 4096)
       return;
     if (auto found = declaredSelectionsCache.find(&source);
         found != declaredSelectionsCache.end()) {
@@ -7619,6 +7619,7 @@ private:
   // Synthesized packages have no user-authored coverage obligations. Track
   // actual source buffers so a user's file name can never trigger exclusion.
   ArrayRef<slang::BufferID> compilerBuffers;
+  bool enableUPF;
   SlangTypeConverter typeConverter;
   // Type conversion caches source type pointers; keep projected types alive
   // throughout import, including repeated references to one declared type.
@@ -8008,7 +8009,7 @@ endpackage
   }
   SlangASTImporter importer(*module, driver.sourceManager, *compilation,
                             *analysisManager, *sdfAnnotations, options.twoState,
-                            compilerBuffers);
+                            compilerBuffers, options.enableUPF);
   // Definitions are kept in Compilation's deterministic definition map and
   // are not children of RootSymbol. Import them explicitly so modules,
   // interfaces, programs, and primitives remain represented even when they

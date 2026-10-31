@@ -1,6 +1,9 @@
-// RUN: %split-file %S/../Driver/upf-declared-selections.test %t
-// RUN: talos -emit-slang %t/design.sv -o %t.mlir
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: %split-file %S/../Driver/upf-declared-selections.test %t/design
+// RUN: talos --upf %t/empty.upf -emit-slang %t/design/design.sv -o %t.mlir
 // RUN: talos-opt %t.mlir | talos-opt | FileCheck %s
+// RUN: talos -emit-slang %t/design/design.sv | FileCheck %s --check-prefix=DISABLED --implicit-check-not=declared_selection_types --implicit-check-not=declared_selection_signedness
 // IEEE 1801-2018 5.4 needs nominal selection types after the Slang AST is gone.
 // The storage types of named_words/direct_words are identical, but selection
 // signs and row ranges differ. These builtin attributes must roundtrip.
@@ -15,3 +18,7 @@
 // CHECK: slang.symbol.variable @{{.*}}states attributes {declared_selection_signedness = array<i1: false, true, false>
 // CHECK-SAME: >>, !slang.enum<"top.state_t"
 // CHECK: slang.symbol.variable @{{.*}}ranged attributes {declared_selection_signedness = array<i1: false, false>
+// DISABLED: slang.symbol.variable
+
+//--- empty.upf
+# Enabling UPF preserves the declared type projections required by clause 5.4.
