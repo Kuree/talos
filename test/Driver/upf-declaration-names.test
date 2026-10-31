@@ -1,0 +1,106 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.mlir | FileCheck %s --check-prefix=TCL
+// RUN: talos-opt %t.mlir | talos-opt | FileCheck %s --check-prefix=IR
+// IEEE 1801-2018 5.3.3.2/5.5: constructors share their creation scope's
+// namespace with HDL objects. 8.3.4 requires appropriate types and linkage
+// when reusing implemented HDL supplies; that reuse is not implemented here.
+// Preserve the supply port/net exception (10.3.2.2.3) and distinct domain
+// strategy namespace (10.6.1.1). Rejected declarations reserve no names,
+// create no switch/implicit handles, and restore the command's execution scope.
+// TCL: declaration namespace and rollback passed
+// IR-DAG: upf.supply {{.*}}names ["/top/Pair", "/top/Pair@upfSupplyPortT"]
+// IR-DAG: upf.supply {{.*}}names ["/top/Pair@upfSupplyNetT"]
+// IR-DAG: upf.supply {{.*}}"/top/SwitchFirst/vout"
+// IR-DAG: upf.domain @top.SwitchOwner
+// IR-DAG: upf.domain @top.child.ScopedDomain
+
+//--- design.sv
+module leaf;
+  logic enable;
+endmodule
+module top(input logic pin);
+  logic clk;
+  parameter int K = 1;
+  typedef logic T;
+  UPF::supply_net_type hdl_supply;
+  function automatic bit f(); return 1; endfunction
+  leaf dut(), child();
+endmodule
+
+//--- design.upf
+proc expect_error {script pattern} {
+    set code [catch {uplevel 1 $script} message]
+    if {$code != 1 || ![string match $pattern $message]} {
+        error "expected <$pattern>, got code $code <$message>"
+    }
+}
+create_power_domain SwitchOwner -elements dut
+create_power_domain OtherOwner -elements dut
+create_power_domain ScopeOwner -elements dut
+foreach net {N G OUT OTHER_OUT} {create_supply_net $net}
+set switch_options {-domain SwitchOwner -input_supply_port {vin N} -output_supply_port {vout OUT} -control_port {en clk} -on_state {ON vin en}}
+# Include non-signal HDL declarations, input ports and implemented supply types.
+foreach name {clk pin dut K T f hdl_supply} {
+    expect_error [list create_supply_net $name] {*name conflicts*}
+    expect_error [list create_supply_port $name] {*name conflicts*}
+    expect_error [list create_power_domain $name -elements dut] {*name conflicts*}
+    expect_error [list create_power_switch $name {*}$switch_options] {*name conflicts*}
+}
+create_supply_net NetFirst
+create_supply_port PortFirst
+create_power_domain DomainFirst -elements dut
+foreach name {NetFirst PortFirst} {
+    expect_error [list create_power_domain $name -elements dut] {*name conflicts*}
+    expect_error [list create_power_switch $name {*}$switch_options] {*name conflicts*}
+}
+expect_error {create_supply_net DomainFirst} {*name conflicts*}
+expect_error {create_supply_port DomainFirst} {*name conflicts*}
+expect_error [list create_power_switch DomainFirst {*}$switch_options] {*name conflicts*}
+# An unsuccessful declaration must not reserve the name or mutate its domain.
+expect_error {create_power_domain Retry -elements missing} {*not a design instance*}
+create_supply_net Retry
+expect_error {create_supply_port RetryPort -direction invalid} {*direction must be*}
+create_power_domain RetryPort -elements dut
+expect_error {create_power_switch RetrySwitch -domain SwitchOwner} {*missing power-switch option*}
+create_supply_net RetrySwitch
+expect_error {create_supply_net RetrySwitch} {*duplicate supply object*}
+# A strategy name is local to its domain, rather than to the HDL scope.
+foreach name {NetStrategy PortStrategy SetStrategy DomainStrategy SwitchFirst} {
+    set_retention $name -domain DomainFirst -no_retention
+}
+create_supply_net NetStrategy
+create_supply_port PortStrategy
+create_supply_set SetStrategy
+create_power_domain DomainStrategy -elements dut
+create_power_switch SwitchFirst {*}$switch_options
+set_domain_supply_net SwitchOwner -primary_power_net OUT -primary_ground_net G
+foreach command {create_supply_net create_supply_port create_supply_set} {
+    expect_error [list $command SwitchFirst] {*name conflicts*}
+}
+expect_error {create_power_domain SwitchFirst -elements dut} {*name conflicts*}
+expect_error {create_power_switch SwitchFirst -domain OtherOwner} {*duplicate power switch*}
+create_power_switch Other -domain OtherOwner -input_supply_port {vin N} -output_supply_port {vout OTHER_OUT} -control_port {en clk} -on_state {ON vin en}
+set_domain_supply_net OtherOwner -primary_power_net OTHER_OUT -primary_ground_net G
+# A supply net/port pair remains valid in either declaration order.
+create_supply_port Pair
+create_supply_net Pair
+create_supply_net ReversePair
+create_supply_port ReversePair
+create_supply_net ScopedNet
+create_supply_port ScopedPort
+create_supply_set ScopedSet
+create_power_domain ScopedDomain -elements dut
+set_scope child
+# -domain selects the owner's creation scope, even when invoked in a child.
+expect_error {create_supply_net clk -domain /SwitchOwner} {*name conflicts*}
+expect_error {create_supply_port DomainFirst -domain /SwitchOwner} {*name conflicts*}
+expect_error {create_power_switch clk -domain /ScopeOwner} {*name conflicts*}
+if {[set_scope .] ne "/child"} {error "failed declaration changed scope"}
+# Equal simple names in a different HDL scope are independent and legal.
+create_supply_net ScopedNet
+create_supply_port ScopedPort
+create_supply_set ScopedSet
+create_power_domain ScopedDomain -elements .
+set_scope /
+puts {declaration namespace and rollback passed}

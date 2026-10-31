@@ -31,11 +31,11 @@ proc switch {name domain input output} {
         -input_supply_port [list vin $input] -output_supply_port [list vout $output] \
         -control_port {en power_en} -on_state {ON vin en}
 }
-switch First First VDD FIRST
-expect_error {switch Second Second VDD FIRST} {*same unresolved supply net*}
-expect_error {switch Second Second FIRST SECOND} {*cascaded power switches*}
+switch SW_First First VDD FIRST
+expect_error {switch SW_Second Second VDD FIRST} {*same unresolved supply net*}
+expect_error {switch SW_Second Second FIRST SECOND} {*cascaded power switches*}
 # Validation failures above must leave the domain and switch name usable.
-switch Second Second FUTURE SECOND
-expect_error {switch Third Third VDD FUTURE} {*cascaded power switches*}
-switch Third Third VDD THIRD
+switch SW_Second Second FUTURE SECOND
+expect_error {switch SW_Third Third VDD FUTURE} {*cascaded power switches*}
+switch SW_Third Third VDD THIRD
 puts "multiple-switch error cases passed"

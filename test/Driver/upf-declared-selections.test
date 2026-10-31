@@ -79,9 +79,9 @@ foreach {instance expression} {
     named_single_part {named_words[0:0] < 0}
     enum_outer_part  {states[1:0] < 0}
 } {
-    create_power_domain $instance -elements $instance
+    create_power_domain PD_$instance -elements $instance
     create_supply_net SW_$instance
-    create_power_switch PS_$instance -domain $instance \
+    create_power_switch PS_$instance -domain PD_$instance \
         -input_supply_port {vin VDD} -output_supply_port [list vout SW_$instance] \
         -control_port {a scalar} -on_state [list ON vin $expression]
 }

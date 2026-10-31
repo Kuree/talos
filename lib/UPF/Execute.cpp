@@ -293,6 +293,18 @@ struct Session {
   bool hasNamedSet(StringRef name) const {
     return supplySets.count(supplySetKey(name));
   }
+  bool hasNamedObject(StringRef name, bool allowSupplyPair = false) const {
+    // IEEE 1801-2018 5.3.3.2/5.5: HDL declarations and UPF domains,
+    // switches and supply objects share their creation scope's namespace.
+    // 10.3.2.2.3 permits a supply port/net pair with the same simple name;
+    // the caller still rejects a second declaration of its own class.
+    // Strategies live inside a domain instead (10.6.1.1), so they are not
+    // peers of objects in the surrounding HDL scope.
+    std::string path = key(name);
+    return hasNamedSet(name) || declaredHDLNames.count(path) ||
+           domains.count(path) || switches.count(path) ||
+           (!allowSupplyPair && (nets.count(path) || supplyPorts.count(path)));
+  }
   void markPrimaryAssociations(std::set<std::string> sets) {
     // Whole-set associations propagate to functions connected later (6.10).
     bool changed;
@@ -904,6 +916,8 @@ struct Session {
         return error("power domain has no elements");
       if (domains.count(dom.name))
         return error("duplicate power domain");
+      if (hasNamedObject(Tcl_GetString(objv[1])))
+        return error("power domain name conflicts with an existing object");
       std::map<std::string, SupplySet> handles;
       auto makeHandle = [&](const std::string &id) {
         SupplySet handle;
@@ -1180,9 +1194,7 @@ struct Session {
           return error("unknown supply set handle");
         if (!identifier(local))
           return TCL_ERROR;
-        if (nets.count(key(local)) || supplyPorts.count(key(local)) ||
-            domains.count(key(local)) || switches.count(key(local)) ||
-            declaredHDLNames.count(key(local)))
+        if (hasNamedObject(local))
           return error("supply set name conflicts with an existing object");
       }
       SupplySet set = found == supplySets.end() ? SupplySet{} : found->second;
@@ -1309,8 +1321,17 @@ struct Session {
       auto &inventory = command == "create_supply_net" ? nets : supplyPorts;
       if (hasNamedSet(Tcl_GetString(objv[1])))
         return error("supply object name conflicts with a supply set");
-      if (!inventory.insert(key(Tcl_GetString(objv[1]))).second)
+      if (inventory.count(key(Tcl_GetString(objv[1]))))
         return error("duplicate supply object");
+      if (declaredHDLNames.count(key(Tcl_GetString(objv[1]))))
+        // 8.3.4 permits reuse only of an appropriate HDL supply_net_type
+        // object. This frontend has no implemented-object linkage yet;
+        // silently creating a separate UPF root would lose HDL connectivity.
+        return error("supply object name conflicts with an HDL object; "
+                     "HDL supply-object reuse is not implemented");
+      if (hasNamedObject(Tcl_GetString(objv[1]), true))
+        return error("supply object name conflicts with an existing object");
+      inventory.insert(key(Tcl_GetString(objv[1])));
       if (command == "create_supply_port")
         supplyPortInfo[key(Tcl_GetString(objv[1]))] = {
             direction == "out"     ? SupplyPort::Out
@@ -1410,6 +1431,10 @@ struct Session {
         return error("power switch name conflicts with a supply set");
       if (!dom->switchOutput.empty())
         return error("one power switch per domain is supported");
+      if (switches.count(key(Tcl_GetString(objv[1]))))
+        return error("duplicate power switch");
+      if (hasNamedObject(Tcl_GetString(objv[1])))
+        return error("power switch name conflicts with an existing object");
       std::vector<std::string> input, output;
       for (StringRef required : {"-input_supply_port", "-output_supply_port"})
         if (!opts.count(required.str()))

@@ -55,6 +55,13 @@ options produce Tcl errors, which user procedures may handle with `catch`
 (IEEE 1801-2018 clause 5.11). The resolved domain retains its UPF declaration's
 source location.
 
+Declarations share their HDL creation scope's namespace with existing HDL
+objects and other UPF objects (clauses 5.3.3.2/5.5). A supply port/net pair may
+use the same name (clause 10.3.2.2.3); strategies have a separate domain-local
+namespace (clause 10.6.1.1). Reusing an already implemented HDL supply object
+requires the type and connectivity checks in clause 8.3.4 and is diagnosed as
+unsupported by this frontend.
+
 Switched domains require an explicit connection between their primary power
 function and the switch output. This can use a function handle directly, a
 supply-set association, or legacy `set_domain_supply_net`. The `-domain` switch

@@ -77,9 +77,9 @@ foreach {instance expression} {
                           ((8'hx & 8'h0) == 8'h0) && ((8'hz | 8'hff) == 8'hff)}
     off_constant         {0}
 } {
-    create_power_domain $instance -elements $instance
+    create_power_domain PD_$instance -elements $instance
     create_supply_net SW_$instance
-    create_power_switch PS_$instance -domain $instance \
+    create_power_switch PS_$instance -domain PD_$instance \
         -input_supply_port {vin VDD} \
         -output_supply_port [list vout SW_$instance] \
         -control_port {enable c} -control_port {signed_enable s} \
