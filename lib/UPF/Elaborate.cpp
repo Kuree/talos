@@ -2,6 +2,8 @@
 #include "ControlValue.h"
 #include "ElaborateSupply.h"
 #include "PowerState.h"
+#include "ReferenceWindow.h"
+#include "Retention.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -9,6 +11,7 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Interfaces/ViewLikeInterface.h"
 #include "mlir/Pass/Pass.h"
+#include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Dialect/UPF/UPFOps.h"
@@ -135,7 +138,8 @@ struct PowerCondition {
     }
     return result;
   }
-  Value normal(OpBuilder &b, Location loc, Value context) const {
+  Value normal(OpBuilder &b, Location loc, Value context,
+               bool inlineOutput = true) const {
     if (!policies.empty()) {
       Value result = arith::ConstantIntOp::create(b, loc, 1, 1);
       for (auto policy : policies) {
@@ -144,7 +148,7 @@ struct PowerCondition {
               auto source = supplies.lookup(ref.getValue());
               // Evaluate our output inline, preserving clock/NBA ordering when
               // source voltage or controls changed in this same activation.
-              if (input && source.id == power.id)
+              if (inlineOutput && input && source.id == power.id)
                 return drivenSupply(b, loc, context);
               return load(b, loc, handle(b, loc, context, source));
             });
@@ -162,8 +166,9 @@ struct PowerCondition {
     };
     // Legacy textual IR without supply sets still interprets the computed
     // output state, including current-limited contributions (6.22/6.47).
-    Value result =
-        input ? fullValue(drivenSupply(b, loc, context)) : full(power);
+    Value result = input && inlineOutput
+                       ? fullValue(drivenSupply(b, loc, context))
+                       : full(power);
     // IEEE 1801-2018 4.7.4: every required primary function must be FULL_ON.
     // Ground at zero volts is powered; voltage itself is not an ON predicate.
     if (ground)
@@ -298,6 +303,7 @@ struct Lowering {
   llvm::DenseMap<uint64_t, sim::SimCodeUnitDeclOp> units;
   llvm::StringMap<uint64_t> unitIDs;
   sim::SimFuncOp root;
+  std::unique_ptr<ReferenceWindows> nbaWindows;
   Lowering(sim::SimDesignOp design)
       : design(design), builder(design.getContext()) {
     for (auto scope : design.getOps<sim::SimScopeDeclOp>())
@@ -353,6 +359,37 @@ struct Lowering {
         builder, loc, result.id, uint64_t{0}, type, sim::Lifetime::Design,
         builder.getStringAttr(name), builder.getStringAttr(name),
         schedule::ComputeObservabilityKindAttr{}, sim::VPITypeSemanticsAttr{});
+    return result;
+  }
+  SmallVector<Descriptor> supplyInputs(Descriptor source) {
+    SmallVector<Descriptor> result;
+    std::set<std::tuple<uint64_t, bool, bool>> seen;
+    SmallVector<Descriptor> pending{source};
+    while (!pending.empty()) {
+      Descriptor value = pending.pop_back_val();
+      if (!seen.emplace(value.id, value.net, value.driver).second)
+        continue;
+      auto found = computed.find(value.id);
+      if (value.net || value.driver || found == computed.end()) {
+        result.push_back(value);
+        continue;
+      }
+      // IEEE 1801-2018 9.2.2: computed state is observed at the source
+      // publication, independently of the switch-monitor's dispatch order.
+      const PowerCondition &condition = *found->second;
+      for (auto path : condition.controls)
+        pending.push_back(descriptors.lookup(path));
+      if (condition.input)
+        pending.push_back(*condition.input);
+      if (condition.ground)
+        pending.push_back(*condition.ground);
+      for (Descriptor input : condition.required)
+        if (input.id != condition.power.id)
+          pending.push_back(input);
+      for (Descriptor input : condition.policyInputs)
+        if (input.id != condition.power.id)
+          pending.push_back(input);
+    }
     return result;
   }
   LogicalResult monitorStates(ArrayRef<upf::UPFSupplySetOp> sets) {
@@ -658,59 +695,56 @@ struct Lowering {
     // change while the domain remains NORMAL without activating HDL code.
     return edgeSensitive ? success() : watch(fn, restoration);
   }
-  void nba(sim::SimNBAEnqueueOp enqueue, const PowerCondition &condition,
-           Descriptor epoch) {
+  LogicalResult nba(sim::SimNBAEnqueueOp enqueue, sim::SimFuncOp predicate,
+                    ArrayRef<Descriptor> dependencies, Descriptor epoch) {
     // IEEE 1801-2018 9.5.3: events queued before CORRUPT have no effect.
     // Capturing the epoch also prevents an OFF/ON cycle from reviving an old
     // delayed event merely because the domain is NORMAL again at commit time.
     sim::SimFuncOp caller = enqueue->getParentOfType<sim::SimFuncOp>();
     Location loc = enqueue.getLoc();
-    Type contextType = sim::ContextType::get(builder.getContext()),
-         delayType = sim::TimeType::get(builder.getContext());
-    auto commit = function(loc, (Twine("__upf_nba_") + Twine(nextUnit)).str(),
-                           {contextType, enqueue.getDestination().getType(),
-                            enqueue.getValue().getType(), builder.getI64Type(),
-                            delayType},
-                           sim::EntryKind::Fork);
-    Block &entry = commit.getBody().front();
-    Block *check = new Block, *publish = new Block, *done = new Block;
-    commit.getBody().push_back(check);
-    commit.getBody().push_back(publish);
-    commit.getBody().push_back(done);
-    builder.setInsertionPointToEnd(&entry);
-    sim::SimSuspendDelayOp::create(builder, loc, entry.getArgument(4),
-                                   schedule::TimingSiteAttr{}, ValueRange{},
-                                   schedule::ContinuationSiteAttr{},
-                                   sim::EventRegionAttr{}, check);
-    builder.setInsertionPointToEnd(check);
-    Value current =
-        load(builder, loc, handle(builder, loc, entry.getArgument(0), epoch));
-    Value same = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::eq,
-                                       current, entry.getArgument(3));
-    Value on = condition.normal(builder, loc, entry.getArgument(0));
-    Value valid = arith::AndIOp::create(builder, loc, same, on);
-    cf::CondBranchOp::create(builder, loc, valid, publish, done);
-    builder.setInsertionPointToEnd(publish);
-    Value zeroDelay =
-        sim::SimTimeConstantOp::create(builder, loc, delayType, uint64_t{0});
-    sim::SimNBAEnqueueOp::create(builder, loc, entry.getArgument(2),
-                                 entry.getArgument(1), zeroDelay,
-                                 schedule::NBASiteAttr{}, IntegerAttr{});
-    cf::BranchOp::create(builder, loc, done);
-    builder.setInsertionPointToEnd(done);
-    sim::SimReturnOp::create(builder, loc, ValueRange{});
+    if (!isa<sim::RefType>(enqueue.getDestination().getType()))
+      return enqueue.emitError("guarded UPF NBA requires a storage reference");
+    auto window = nbaWindows->get(enqueue.getDestination());
+    if (failed(window))
+      return failure();
+    Type rootScalar = sim::getPackedScalarType(window->root.type);
+    if (!rootScalar)
+      return enqueue.emitError(
+          "guarded UPF NBA requires a packed integral root");
     builder.setInsertionPoint(enqueue);
     Value context = caller.getArgument(0);
-    Value snapshot = load(builder, loc, handle(builder, loc, context, epoch));
-    Value delay = enqueue.getDelay();
-    if (!delay)
-      delay =
-          sim::SimTimeConstantOp::create(builder, loc, delayType, uint64_t{0});
-    sim::SimSpawnOp::create(builder, loc, commit.getSymNameAttr(),
-                            ValueRange{context, enqueue.getDestination(),
-                                       enqueue.getValue(), snapshot, delay},
-                            ArrayAttr{}, ArrayAttr{});
+    Value data = flatten(builder, loc, enqueue.getValue());
+    // The view primitive writes the root's state planes. In mixed packed
+    // aggregates a two-state selected field still clears its old unknown bits.
+    if (isa<sim::LogicType>(rootScalar) && isa<IntegerType>(data.getType()))
+      data = sim::SimLogicFromBitsOp::create(
+          builder, loc,
+          sim::LogicType::get(builder.getContext(),
+                              *sim::getPackedWidth(data.getType())),
+          data);
+    else if (isa<IntegerType>(rootScalar) &&
+             isa<sim::LogicType>(data.getType()))
+      data = sim::SimLogicToBitsOp::create(
+          builder, loc,
+          builder.getIntegerType(*sim::getPackedWidth(data.getType())), data);
+    SmallVector<Value> watched;
+    for (auto dependency : dependencies)
+      watched.push_back(handle(builder, loc, context, dependency));
+    Value guard = sim::SimObserverBindOp::create(
+        builder, loc,
+        sim::ObserverType::get(builder.getContext(), builder.getI1Type()),
+        predicate.getSymNameAttr(), watched, uint32_t{0});
+    Value reference = handle(builder, loc, context, epoch);
+    Value snapshot = load(builder, loc, reference);
+    // IEEE 1800-2023 4.6(b)/10.4.2: enqueue at the original statement,
+    // preserving order with retained writes, including dynamic zero delays.
+    sim::SimPowerNBAViewOp::create(builder, loc, context, data,
+                                   handle(builder, loc, context, window->root),
+                                   window->start, window->lower, window->upper,
+                                   window->valid, guard, reference, snapshot,
+                                   reference, snapshot, enqueue.getDelay());
     enqueue.erase();
+    return success();
   }
   LogicalResult apply(upf::UPFDomainOp domain) {
     if (!root)
@@ -964,10 +998,95 @@ struct Lowering {
       });
       if (supported.wasInterrupted())
         return failure();
-      SmallVector<sim::SimNBAEnqueueOp> enqueues;
+    }
+    SmallVector<Descriptor> dependencies;
+    {
+      std::set<std::tuple<uint64_t, bool, bool>> seen;
+      auto watch = [&](Descriptor descriptor) {
+        for (auto source : supplyInputs(descriptor))
+          if (seen.emplace(source.id, source.net, source.driver).second)
+            dependencies.push_back(source);
+      };
+      for (auto path : controls)
+        watch(descriptors.lookup(path));
+      watch(condition.input.value_or(condition.power));
+      if (condition.ground)
+        watch(*condition.ground);
+      for (auto source : condition.required)
+        watch(source);
+      for (auto source : condition.policyInputs)
+        watch(source);
+    }
+    RetentionLoweringResult retention;
+    if (domain.getRetentionsAttr() && !domain.getRetentionsAttr().empty()) {
+      // IEEE 1801-2018 9.2.2/9.2.3: retention observes evaluated supply
+      // publications. Raw switch-input writes may coalesce before evaluation;
+      // an inline prediction must not latch a loss that never propagated.
+      SmallVector<Descriptor> retentionDependencies{condition.power};
+      if (condition.ground)
+        retentionDependencies.push_back(*condition.ground);
+      retentionDependencies.append(condition.required);
+      retentionDependencies.append(condition.policyInputs);
+      RetentionLoweringOptions options{
+          design,
+          domain,
+          root,
+          descriptors,
+          supplies,
+          epoch,
+          retentionDependencies,
+          [&](Location loc, StringRef name, Type type) {
+            return storage(loc, name, type);
+          },
+          [&](Location loc, StringRef name, ArrayRef<Type> inputs,
+              sim::EntryKind kind) {
+            return function(loc, name, inputs, kind);
+          },
+          [&](OpBuilder &b, Location loc, Value ctx) {
+            return condition.normal(b, loc, ctx, false);
+          },
+          [&](OpBuilder &b, Location loc, Value ctx, FlatSymbolRefAttr ref) {
+            return load(b, loc,
+                        handle(b, loc, ctx, supplies.lookup(ref.getValue())));
+          },
+          [&](FlatSymbolRefAttr ref) {
+            return SmallVector<Descriptor>{supplies.lookup(ref.getValue())};
+          }};
+      if (failed(lowerRetentions(options, retention)))
+        return failure();
+    }
+    // Validate original actors before adding feature-local helpers; only
+    // ordinary remaining NBAs use the domain-only epoch path below.
+    SmallVector<sim::SimNBAEnqueueOp> enqueues;
+    for (auto process : processes)
       process.walk([&](sim::SimNBAEnqueueOp op) { enqueues.push_back(op); });
+    if (!enqueues.empty()) {
+      if (!nbaWindows)
+        nbaWindows = std::make_unique<ReferenceWindows>(design);
+      SmallVector<Value> references;
       for (auto enqueue : enqueues)
-        nba(enqueue, condition, epoch);
+        references.push_back(enqueue.getDestination());
+      if (failed(nbaWindows->prepare(references)))
+        return failure();
+      auto predicate = function(loc, prefix + ".nba_allowed",
+                                {sim::ContextType::get(builder.getContext())},
+                                sim::EntryKind::Observer);
+      predicate.setFunctionType(
+          builder.getFunctionType({sim::ContextType::get(builder.getContext())},
+                                  {builder.getI1Type()}));
+      schedule::set<schedule::Field::ObserverWidth>(
+          predicate, builder.getI32IntegerAttr(1));
+      schedule::set<schedule::Field::ObserverFourState>(
+          predicate, builder.getBoolAttr(false));
+      builder.setInsertionPointToEnd(&predicate.getBody().front());
+      sim::SimReturnOp::create(
+          builder, loc,
+          condition.normal(builder, loc, predicate.getArgument(0)));
+      for (auto enqueue : enqueues)
+        if (failed(nba(enqueue, predicate, dependencies, epoch)))
+          return failure();
+    }
+    for (auto process : processes) {
       if (failed(gate(process, condition, restoration)))
         return failure();
     }
@@ -1009,6 +1128,11 @@ struct Lowering {
     if (condition.input)
       store(builder, loc, handle(builder, loc, context, condition.power),
             condition.drivenSupply(builder, loc, context));
+    // IEEE 1801-2018 9.7.3: publish restored retained values before NORMAL
+    // can reactivate level-sensitive consumers of this domain.
+    for (auto update : retention.updates)
+      sim::SimCallOp::create(builder, loc, TypeRange{}, update,
+                             ValueRange{context}, ArrayAttr{}, ArrayAttr{});
     store(builder, loc, normalRef, on);
     // IEEE 1801-2018 6.22: an explicit OFF simultaneously true with ON
     // reports an error and contributes UNDETERMINED (CORRUPT in this slice).
@@ -1048,6 +1172,8 @@ struct Lowering {
         arith::ConstantIntOp::create(builder, loc, 1, 64));
     store(builder, loc, epochRef, nextEpoch);
     for (Descriptor target : targets) {
+      if (!target.driver && retention.storage.contains(target.id))
+        continue;
       // IEEE 1801-2018 9.5.1/9.6.2: corruption uses the HDL type's default
       // initial value, independently of explicit declaration initializers.
       Value reference = handle(builder, loc, context, target);
@@ -1111,22 +1237,6 @@ struct ElaborateUPFPass
         getOperation().getOps<upf::UPFSupplyOp>());
     SmallVector<upf::UPFSupplySetOp> sets(
         getOperation().getOps<upf::UPFSupplySetOp>());
-    // Retention's separate backing/output state and NBA priorities (9.7) must
-    // be lowered together. Until that path exists, never silently simulate a
-    // saved register as an ordinary corrupt-on-power-loss register.
-    for (auto domain : domains)
-      if (auto retentions = domain.getRetentionsAttr())
-        for (auto attribute : retentions) {
-          auto retention = cast<upf::RetentionAttr>(attribute);
-          if (!retention.getNoRetention()) {
-            emitError(retention.getDeclaration()
-                          ? Location(retention.getDeclaration())
-                          : domain.getLoc())
-                << "retention simulation lowering is not implemented";
-            signalPassFailure();
-            return;
-          }
-        }
     bool accesses = false;
     getOperation().walk([&](Operation *op) {
       accesses |= isa<sim::SimSupplyControlOp, sim::SimSupplyReadOp>(op);

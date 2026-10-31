@@ -1,0 +1,198 @@
+// RUN: %split-file %s %t
+// RUN: not talos-opt %t/cfg.mlir --elaborate-upf --verify-each 2>&1 | FileCheck %s
+// RUN: not talos-opt %t/formal.mlir --elaborate-upf --verify-each 2>&1 | FileCheck %s
+// RUN: not talos-opt %t/observer.mlir --elaborate-upf --verify-each 2>&1 | FileCheck %s --check-prefix=OBSERVER
+// RUN: not talos-opt %t/root-nba.mlir --elaborate-upf --verify-each 2>&1 | FileCheck %s --check-prefix=ROOTNBA
+// IEEE 1801-2018 6.50/9.7.3: a sequential writer forwarded through a CFG
+// argument or an unannotated actual capture must not silently evade an
+// active retention strategy. These reference escapes need specialization.
+// OBSERVER: retained storage has an unsupported captured writer
+// ROOTNBA: nonblocking retention initialization is not implemented
+// CHECK: retained storage escapes through an unsupported reference consumer
+
+//--- cfg.mlir
+#one = #upf.expression<[#upf.token<opcode = constant, value = true, unknown = false>]>
+module {
+  upf.supply @p names ["/top/P"] writable = false {always_on = true, initial_value = 4000001 : i64}
+  upf.supply @g names ["/top/G"] writable = false {always_on = true, initial_value = 1 : i64}
+  upf.supply_set @primary functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @PD, associated = [@local]}
+  upf.supply_set @local functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @PD, strategy = "R", associated = [@primary]}
+  upf.supply_set @ret functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @PD, strategy = "R"}
+  upf.domain @PD elements ["top.dut"] power @p on [] {ground = @g, primary = @primary, policies = [@primary], retentions = [#upf.retention<name = "R", scope = "top", elements = [], excluded = [], retentionSupply = @ret, primarySupply = @local, domainDefault = true, condition = #one>]}
+  simulation.design @probe {
+    simulation.scope.decl 0 hierarchy "top"
+    simulation.scope.decl 1 parent 0 hierarchy "top.dut" source_definition "leaf"
+    simulation.storage.decl 0 in 1 : i8 design hierarchy "top.dut.q"
+    simulation.storage.decl 1 in 0 : i1 design hierarchy "top.clk"
+    simulation.code_unit.decl 2 in 0 root_initializer hierarchy "top.root"
+    simulation.code_unit.decl 1 in 1 always hierarchy "top.dut.writer"
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 2 : i64} {
+      %q = simulation.context.storage %ctx[0] : !simulation.ref<i8>
+      %clk = simulation.context.storage %ctx[1] : !simulation.ref<i1>
+      %zero = arith.constant 0 : i8
+      %false = arith.constant false
+      simulation.ref.store %zero to %q : i8, !simulation.ref<i8>
+      simulation.ref.store %false to %clk : i1, !simulation.ref<i1>
+      %p = simulation.spawn @writer(%ctx) : !simulation.context -> !simulation.process
+      simulation.return
+    }
+    simulation.func private @writer(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 3 : i32, code_unit_id = 1 : i64} {
+      %q_base = simulation.context.storage %ctx[0] : !simulation.ref<i8>
+      %clk = simulation.context.storage %ctx[1] : !simulation.ref<i1>
+      cf.br ^wait
+    ^wait:
+      simulation.suspend.edge posedge %clk to ^pre {schedule.repeating_always_wait} : !simulation.ref<i1>
+    ^pre:
+      cf.br ^body(%q_base : !simulation.ref<i8>)
+    ^body(%forward: !simulation.ref<i8>):
+      %value = arith.constant 1 : i8
+      simulation.nba.enqueue %value to %forward : (i8, !simulation.ref<i8>) -> ()
+      cf.br ^wait
+    }
+  }
+}
+
+//--- formal.mlir
+#one = #upf.expression<[#upf.token<opcode = constant, value = true, unknown = false>]>
+module {
+  upf.supply @p names ["/top/P"] writable = false {always_on = true, initial_value = 4000001 : i64}
+  upf.supply @g names ["/top/G"] writable = false {always_on = true, initial_value = 1 : i64}
+  upf.supply_set @primary functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @PD, associated = [@local]}
+  upf.supply_set @local functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @PD, strategy = "R", associated = [@primary]}
+  upf.supply_set @ret functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @PD, strategy = "R"}
+  upf.domain @PD elements ["top.dut"] power @p on [] {ground = @g, primary = @primary, policies = [@primary], retentions = [#upf.retention<name = "R", scope = "top", elements = [], excluded = [], retentionSupply = @ret, primarySupply = @local, domainDefault = true, condition = #one>]}
+  simulation.design @probe {
+    simulation.scope.decl 0 hierarchy "top"
+    simulation.scope.decl 1 parent 0 hierarchy "top.dut" source_definition "leaf"
+    simulation.storage.decl 0 in 1 : i8 design hierarchy "top.dut.q"
+    simulation.storage.decl 1 in 0 : i1 design hierarchy "top.clk"
+    simulation.code_unit.decl 2 in 0 root_initializer hierarchy "top.root"
+    simulation.code_unit.decl 1 in 1 always hierarchy "top.dut.writer"
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 2 : i64} {
+      %q = simulation.context.storage %ctx[0] : !simulation.ref<i8>
+      %clk = simulation.context.storage %ctx[1] : !simulation.ref<i1>
+      %zero = arith.constant 0 : i8
+      %false = arith.constant false
+      simulation.ref.store %zero to %q : i8, !simulation.ref<i8>
+      simulation.ref.store %false to %clk : i1, !simulation.ref<i1>
+      %p = simulation.spawn @writer(%ctx, %q) : !simulation.context, !simulation.ref<i8> -> !simulation.process
+      simulation.return
+    }
+    simulation.func private @writer(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %captured: !simulation.ref<i8> {simulation.capture_kind = 1 : i32}) attributes {entry_kind = 3 : i32, code_unit_id = 1 : i64} {
+      %q_base = simulation.context.storage %ctx[0] : !simulation.ref<i8>
+      %clk = simulation.context.storage %ctx[1] : !simulation.ref<i1>
+      cf.br ^wait
+    ^wait:
+      simulation.suspend.edge posedge %clk to ^pre {schedule.repeating_always_wait} : !simulation.ref<i1>
+    ^pre:
+      cf.br ^body
+    ^body():
+      %value = arith.constant 1 : i8
+      simulation.nba.enqueue %value to %captured : (i8, !simulation.ref<i8>) -> ()
+      cf.br ^wait
+    }
+  }
+}
+
+//--- observer.mlir
+#one = #upf.expression<[#upf.token<opcode = constant, value = true, unknown = false>]>
+module {
+  upf.supply @p names ["/top/P"] writable = false {always_on = true, initial_value = 4000001 : i64}
+  upf.supply @g names ["/top/G"] writable = false {always_on = true, initial_value = 1 : i64}
+  upf.supply_set @primary functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @PD, associated = [@local]}
+  upf.supply_set @local functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @PD, strategy = "R", associated = [@primary]}
+  upf.supply_set @ret functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @PD, strategy = "R"}
+  upf.domain @PD elements ["top.dut"] power @p on [] {ground = @g, primary = @primary, policies = [@primary], retentions = [#upf.retention<name = "R", scope = "top", elements = [], excluded = [], retentionSupply = @ret, primarySupply = @local, domainDefault = true, condition = #one>]}
+  simulation.design @probe {
+    simulation.scope.decl 0 hierarchy "top"
+    simulation.scope.decl 1 parent 0 hierarchy "top.dut" source_definition "leaf"
+    simulation.storage.decl 0 in 1 : i8 design hierarchy "top.dut.q"
+    simulation.storage.decl 1 in 0 : i1 design hierarchy "top.clk"
+    simulation.code_unit.decl 3 in 0 observer hierarchy "top.escape_eval"
+    simulation.code_unit.decl 4 in 0 initial hierarchy "top.outside"
+    simulation.code_unit.decl 2 in 0 root_initializer hierarchy "top.root"
+    simulation.code_unit.decl 1 in 1 always hierarchy "top.dut.writer"
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 2 : i64} {
+      %q = simulation.context.storage %ctx[0] : !simulation.ref<i8>
+      %clk = simulation.context.storage %ctx[1] : !simulation.ref<i1>
+      %zero = arith.constant 0 : i8
+      %false = arith.constant false
+      simulation.ref.store %zero to %q : i8, !simulation.ref<i8>
+      simulation.ref.store %false to %clk : i1, !simulation.ref<i1>
+      %outside = simulation.spawn @outside(%ctx) : !simulation.context -> !simulation.process
+      %p = simulation.spawn @writer(%ctx) : !simulation.context -> !simulation.process
+      simulation.return
+    }
+    simulation.func @outside(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 1 : i32, code_unit_id = 4 : i64} {
+      %q = simulation.context.storage %ctx[0] : !simulation.ref<i8>
+      %clk = simulation.context.storage %ctx[1] : !simulation.ref<i1>
+      %observer = simulation.observer.bind @escape values (%q, %clk : !simulation.ref<i8>, !simulation.ref<i1>) captures 1 : !simulation.observer<i1>
+      %initial = arith.constant false
+      simulation.suspend.observe %observer, %initial conditions 0 edges [1] indices [-1] to ^done : !simulation.observer<i1>, i1
+    ^done:
+      simulation.return
+    }
+    simulation.func @escape(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %hidden: !simulation.ref<i8> {simulation.capture_kind = 1 : i32}) -> i1 attributes {entry_kind = 14 : i32, code_unit_id = 3 : i64, schedule.observer_width = 1 : i32, schedule.observer_four_state = false} {
+      %data = arith.constant 42 : i8
+      simulation.ref.store %data to %hidden : i8, !simulation.ref<i8>
+      %true = arith.constant true
+      simulation.return %true : i1
+    }
+    simulation.func private @writer(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 3 : i32, code_unit_id = 1 : i64} {
+      %q_base = simulation.context.storage %ctx[0] : !simulation.ref<i8>
+      %clk = simulation.context.storage %ctx[1] : !simulation.ref<i1>
+      cf.br ^wait
+    ^wait:
+      simulation.suspend.edge posedge %clk to ^pre {schedule.repeating_always_wait} : !simulation.ref<i1>
+    ^pre:
+      cf.br ^body
+    ^body:
+      %value = arith.constant 1 : i8
+      simulation.nba.enqueue %value to %q_base : (i8, !simulation.ref<i8>) -> ()
+      cf.br ^wait
+    }
+  }
+}
+
+
+//--- root-nba.mlir
+#one = #upf.expression<[#upf.token<opcode = constant, value = true, unknown = false>]>
+module {
+  upf.supply @p names ["/top/P"] writable = false {always_on = true, initial_value = 4000001 : i64}
+  upf.supply @g names ["/top/G"] writable = false {always_on = true, initial_value = 1 : i64}
+  upf.supply_set @primary functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @PD, associated = [@local]}
+  upf.supply_set @local functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @PD, strategy = "R", associated = [@primary]}
+  upf.supply_set @ret functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @PD, strategy = "R"}
+  upf.domain @PD elements ["top.dut"] power @p on [] {ground = @g, primary = @primary, policies = [@primary], retentions = [#upf.retention<name = "R", scope = "top", elements = [], excluded = [], retentionSupply = @ret, primarySupply = @local, domainDefault = true, condition = #one>]}
+  simulation.design @probe {
+    simulation.scope.decl 0 hierarchy "top"
+    simulation.scope.decl 1 parent 0 hierarchy "top.dut" source_definition "leaf"
+    simulation.storage.decl 0 in 1 : i8 design hierarchy "top.dut.q"
+    simulation.storage.decl 1 in 0 : i1 design hierarchy "top.clk"
+    simulation.code_unit.decl 2 in 0 root_initializer hierarchy "top.root"
+    simulation.code_unit.decl 1 in 1 always hierarchy "top.dut.writer"
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 2 : i64} {
+      %q = simulation.context.storage %ctx[0] : !simulation.ref<i8>
+      %clk = simulation.context.storage %ctx[1] : !simulation.ref<i1>
+      %zero = arith.constant 0 : i8
+      %false = arith.constant false
+      simulation.nba.enqueue %zero to %q : (i8, !simulation.ref<i8>) -> ()
+      simulation.ref.store %false to %clk : i1, !simulation.ref<i1>
+      %p = simulation.spawn @writer(%ctx) : !simulation.context -> !simulation.process
+      simulation.return
+    }
+    simulation.func private @writer(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 3 : i32, code_unit_id = 1 : i64} {
+      %q_base = simulation.context.storage %ctx[0] : !simulation.ref<i8>
+      %clk = simulation.context.storage %ctx[1] : !simulation.ref<i1>
+      cf.br ^wait
+    ^wait:
+      simulation.suspend.edge posedge %clk to ^pre {schedule.repeating_always_wait} : !simulation.ref<i1>
+    ^pre:
+      cf.br ^body
+    ^body:
+      %value = arith.constant 1 : i8
+      simulation.nba.enqueue %value to %q_base : (i8, !simulation.ref<i8>) -> ()
+      cf.br ^wait
+    }
+  }
+}

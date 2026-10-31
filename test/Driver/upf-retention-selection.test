@@ -1,0 +1,62 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/base.upf --upf %t/excluded.upf -O0 --mlir-verify-each %t/design.sv -o %t.excluded
+// RUN: %t.excluded | FileCheck %s
+// RUN: talos --upf %t/base.upf --upf %t/island.upf -O3 --mlir-verify-each %t/design.sv -o %t.island
+// RUN: %t.island +retain | FileCheck %s
+// RUN: talos --upf %t/base.upf --upf %t/exact.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.exact
+// RUN: %t.exact | FileCheck %s
+// IEEE 1801-2018 5.7.3/5.9.3/6.50: a strategy's membership concerns
+// physical state, including a non-ANSI output alias. An exact variable
+// exclusion must survive its port alias. Explicit descendant inclusions
+// survive excluded ancestors; an exact exclusion wins an explicit tie.
+// CHECK: retention selection passed
+
+//--- design.sv
+module leaf(clk, d, .out(q));
+  input logic clk;
+  input logic [7:0] d;
+  output logic [7:0] q = 8'h13;
+  always @(posedge clk) q <= d;
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, enable = 1, rtc = 0;
+  logic [7:0] d = 8'h21;
+  wire [7:0] out;
+  leaf dut(clk, d, out);
+  initial begin
+    if (!supply_on("/top/AON.power") || !supply_on("/top/AON.ground", 0.0))
+      $fatal(1, "initial supplies");
+    #1 clk = 1;
+    #1;
+    if (out !== 8'h21) $fatal(1, "initial capture");
+    rtc = 1;
+    clk = 0;
+    d = 8'h42;
+    #1 clk = 1;
+    #1;
+    if ($test$plusargs("retain")) begin
+      if (out !== 8'h21) $fatal(1, "explicit inclusion island");
+    end else if (out !== 8'h42) $fatal(1, "variable exclusion bypassed by alias");
+    $display("retention selection passed");
+    $finish;
+  end
+endmodule
+
+//--- base.upf
+create_supply_net VDD
+create_supply_set AON -function {power VDD}
+create_supply_set SW -function {ground AON.ground}
+create_power_domain PD -elements dut -supply {primary SW}
+create_power_switch PS -domain PD \
+    -input_supply_port {vin AON.power} -output_supply_port {vout PD.primary.power} \
+    -control_port {en enable} -on_state {ON vin en}
+//--- excluded.upf
+set_retention KEEP -domain PD -exclude_elements dut/q -retention_condition rtc
+//--- island.upf
+set_retention KEEP -domain PD -elements {dut dut/q} -exclude_elements dut \
+    -retention_condition rtc
+//--- exact.upf
+set_retention KEEP -domain PD -elements {dut dut/out} -exclude_elements dut/q \
+    -retention_condition rtc

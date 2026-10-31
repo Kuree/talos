@@ -1,0 +1,101 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.50 and 9.7.3 Tables 11/12: RTC holds the retained
+// register while an unretained sibling keeps clocking. Primary OFF masks the
+// output, primary ON restores backing without a clock, and retention-supply
+// loss destroys backing even while the primary supply remains ON.
+// CHECK: master retention passed
+
+//--- design.sv
+module leaf(input logic clk, input logic [7:0] d,
+            output logic [7:0] q = 8'h13, output logic [7:0] plain = 8'h19);
+  always @(posedge clk) begin
+    q <= d;
+    plain <= d + 8'd1;
+  end
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, enable = 1, rtc = 0;
+  logic [7:0] d = 8'h2a;
+  wire [7:0] q, plain;
+  leaf dut(clk, d, q, plain);
+  initial begin
+    if (!supply_on("/top/AON.power") || !supply_on("/top/AON.ground", 0.0) ||
+        !supply_on("/top/RET.power")) $fatal(1, "initial supplies");
+    #1 clk = 1;
+    #1;
+    if (q !== 8'h2a || plain !== 8'h2b) $fatal(1, "normal data");
+    clk = 0;
+    rtc = 1;
+    d = 8'h41;
+    #1 clk = 1;
+    #1;
+    if (q !== 8'h2a || plain !== 8'h42) $fatal(1, "RTC or sibling");
+    enable = 0;
+    #1;
+    if (q !== 8'hxx || plain !== 8'hxx) $fatal(1, "primary output mask");
+    clk = 0;
+    #1 clk = 1;
+    #1 enable = 1;
+    #1;
+    if (q !== 8'h2a || plain !== 8'hxx) $fatal(1, "restore without clock");
+    rtc = 0;
+    clk = 0;
+    d = 8'h55;
+    #1 clk = 1;
+    #1;
+    if (q !== 8'h55 || plain !== 8'h56) $fatal(1, "resume data");
+    if (!supply_off("/top/RET.power")) $fatal(1, "retention OFF");
+    #1;
+    if (q !== 8'hxx || plain !== 8'h56) $fatal(1, "retention loss");
+    if (!supply_on("/top/RET.power")) $fatal(1, "retention ON");
+    #1;
+    if (q !== 8'hxx) $fatal(1, "lost backing revived");
+    clk = 0;
+    d = 8'h67;
+    #1 clk = 1;
+    #1;
+    if (q !== 8'h67 || plain !== 8'h68) $fatal(1, "new data after loss");
+    // Table 11: primary loss without RTC destroys the retained value.
+    enable = 0;
+    #1 enable = 1;
+    #1;
+    if (q !== 8'hxx) $fatal(1, "primary loss without RTC");
+    clk = 0;
+    d = 8'h78;
+    #1 clk = 1;
+    #1;
+    if (q !== 8'h78) $fatal(1, "new data after primary loss");
+    rtc = 1;
+    enable = 0;
+    #1;
+    if (!supply_off("/top/RET.power")) $fatal(1, "retention OFF while primary OFF");
+    #1;
+    if (!supply_on("/top/RET.power")) $fatal(1, "retention recovery");
+    enable = 1;
+    #1;
+    if (q !== 8'hxx) $fatal(1, "retention loss while primary OFF revived");
+    $display("master retention passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_net VDD
+create_supply_set AON -function {power VDD}
+create_supply_set SW -function {ground AON.ground}
+create_supply_net VRET
+create_supply_set RET -function {power VRET} -function {ground AON.ground}
+create_power_domain PD -elements dut -supply {primary SW}
+create_power_switch PS -domain PD \
+    -input_supply_port {vin AON.power} -output_supply_port {vout PD.primary.power} \
+    -control_port {en enable} -on_state {ON vin en}
+set_retention KEEP -domain PD -elements dut/q -retention_supply RET \
+    -retention_condition rtc

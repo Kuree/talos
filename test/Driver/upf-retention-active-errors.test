@@ -1,0 +1,74 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: not talos --upf %t/master.upf -O0 -c %t/partial.sv -o %t.partial.o 2>&1 | FileCheck %s --check-prefix=PARTIAL
+// RUN: not talos --upf %t/master.upf -O0 -c %t/async.sv -o %t.async.o 2>&1 | FileCheck %s --check-prefix=ASYNC
+// RUN: not talos --upf %t/master.upf -O0 -c %t/mixed.sv -o %t.mixed.o 2>&1 | FileCheck %s --check-prefix=MIXED
+// RUN: not talos --upf %t/master.upf -O0 -c %t/multi.sv -o %t.multi.o 2>&1 | FileCheck %s --check-prefix=MULTI
+// RUN: not talos --upf %t/master.upf -O0 -c %t/latch.sv -o %t.latch.o 2>&1 | FileCheck %s --check-prefix=LATCH
+// RUN: not talos --upf %t/ambiguous.upf -O0 -c %t/multi.sv -o %t.ambiguous.o 2>&1 | FileCheck %s --check-prefix=AMBIGUOUS
+// RUN: not talos --upf %t/balloon.upf -O0 -c %t/multi.sv -o %t.balloon.o 2>&1 | FileCheck %s --check-prefix=BALLOON
+// IEEE 1801-2018 5.7.3/5.7.9/6.50/9.7.3: fail explicitly before emitting
+// a simulator for unsupported writer forms or ambiguous effective strategies.
+// PARTIAL: partial retention writes are not implemented
+// ASYNC: retention requires one top-level clock edge
+// MIXED: mixed blocking/nonblocking retention writers are not implemented
+// MULTI: retention requires one sequential writer per register
+// LATCH: retention requires one top-level clock edge
+// AMBIGUOUS: ambiguous retention strategies for top.dut.q
+// AMBIGUOUS: other strategy is declared here
+// BALLOON: retention simulation lowering is not implemented for balloon-style strategies
+
+//--- master.upf
+create_supply_set CORE
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention KEEP -domain PD -retention_condition rtc
+//--- ambiguous.upf
+create_supply_set CORE
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention A -domain PD -retention_condition rtc
+set_retention B -domain PD -retention_condition rtc
+//--- balloon.upf
+create_supply_set CORE
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention KEEP -domain PD -save_signal {rtc high}
+//--- partial.sv
+module leaf(input logic clk, output logic [7:0] q = 0);
+  always @(posedge clk) q[3:0] <= 4'hf;
+endmodule
+module top;
+  logic clk = 0, rtc = 0; wire [7:0] q;
+  leaf dut(clk,q); initial begin #1 clk=1; #1 $display("%h",q); end
+endmodule
+//--- async.sv
+module leaf(input logic clk, rst, output logic q = 0);
+  always @(posedge clk or posedge rst) if (rst) q <= 0; else q <= 1;
+endmodule
+module top;
+  logic clk = 0, rst = 0, rtc = 0; wire q;
+  leaf dut(clk,rst,q); initial begin #1 clk=1; #1 $display("%b",q); end
+endmodule
+//--- mixed.sv
+module leaf(input logic clk, output logic q = 0);
+  always @(posedge clk) begin q = 0; q <= 1; end
+endmodule
+module top;
+  logic clk = 0, rtc = 0; wire q;
+  leaf dut(clk,q); initial begin #1 clk=1; #1 $display("%b",q); end
+endmodule
+//--- multi.sv
+module leaf(input logic clk, output logic q = 0);
+  always @(posedge clk) q <= 1;
+  always @(negedge clk) q <= 0;
+endmodule
+module top;
+  logic clk = 0, rtc = 0; wire q;
+  leaf dut(clk,q); initial begin #1 clk=1; #1 $display("%b",q); end
+endmodule
+//--- latch.sv
+module leaf(input logic clk, output logic q = 0);
+  always_latch if (clk) q <= 1;
+endmodule
+module top;
+  logic clk = 0, rtc = 0; wire q;
+  leaf dut(clk,q); initial begin #1 clk=1; #1 $display("%b",q); end
+endmodule

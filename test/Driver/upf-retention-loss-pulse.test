@@ -1,0 +1,74 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 9.2.3/9.5.3/9.6.7/9.7.3: evaluated loss invalidates
+// delayed NBAs. RTC preserves backing through primary loss, while ordinary
+// state corrupts and constant logic reevaluates once. Raw supply/control
+// writes may coalesce before network evaluation; yield so OFF is observed.
+// CHECK: retention loss pulses passed
+
+//--- design.sv
+module leaf(input logic clk, d, output logic q = 0, plain = 0,
+            output logic constant_one);
+  always @(posedge clk) begin
+    plain <= #2 d;
+    q <= #2 d;
+  end
+  always_comb constant_one = 1;
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, d = 1, enable = 1, rtc = 0;
+  wire q, plain, constant_one;
+  leaf dut(clk, d, q, plain, constant_one);
+  int restores = 0;
+  always @(posedge dut.constant_one) restores++;
+  initial begin
+    if (!supply_on("/top/AON.power") || !supply_on("/top/AON.ground", 0.0))
+      $fatal(1, "initial supplies");
+    #1 clk = 1;
+    #3;
+    if (q !== 1 || plain !== 1 || constant_one !== 1)
+      $fatal(1, "initial capture");
+    rtc = 1;
+    enable = 0;
+    #0;
+    enable = 1;
+    #1;
+    if (q !== 1 || plain !== 1'bx || constant_one !== 1 || restores !== 2)
+      $fatal(1, "active pulse %b %b %b %0d", q, plain, constant_one, restores);
+    rtc = 0;
+    clk = 0;
+    d = 0;
+    #1 clk = 1;
+    #1;
+    rtc = 1;
+    enable <= 0;
+    #1 enable = 1;
+    #2;
+    if (q !== 1 || plain !== 1'bx || constant_one !== 1 || restores !== 3)
+      $fatal(1, "NBA pulse or delayed revival %b %b %b %0d", q, plain, constant_one, restores);
+    rtc = 0;
+    clk = 0;
+    #1 clk = 1;
+    #3;
+    if (q !== 0 || plain !== 0) $fatal(1, "fresh clock rejected");
+    $display("retention loss pulses passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_net VDD
+create_supply_set AON -function {power VDD}
+create_supply_set SW -function {ground AON.ground}
+create_power_domain PD -elements dut -supply {primary SW}
+create_power_switch PS -domain PD \
+    -input_supply_port {vin AON.power} -output_supply_port {vout PD.primary.power} \
+    -control_port {en enable} -on_state {ON vin en}
+set_retention KEEP -domain PD -elements dut/q -retention_condition rtc

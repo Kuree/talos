@@ -274,24 +274,47 @@ package APIs remain unsupported. In particular, `-logic_expr` requires a
 different activation/assertion model and is diagnosed explicitly; it is not
 silently combined with a supply predicate (clauses 6.5 and 9.3.2).
 
-## Retention strategy declarations
+## Retention
 
-`set_retention` is available in the Tcl frontend and `-emit-slang` output
-(IEEE 1801-2018 clauses 6.50 and 8.3.2). Active retention simulation is pending:
-the compiler diagnoses such strategies before simulation lowering. A
-`-no_retention` strategy simulates with ordinary domain corruption and no saved
-value. Save/restore declarations must not be taken as working retention until
-the separate register, retained, and output values described in clause 9.7 are
-lowered together with write/NBA priority.
+`set_retention` supports master/slave retention for whole packed integral
+registers with one static clock-edge writer (IEEE 1801-2018 clauses 6.50,
+8.3.2 and 9.7.3, Tables 11/12). The compiler creates typed backing storage
+separate from the visible output. RTC True holds the value while unretained
+siblings continue clocking. Primary power loss masks the output; recovery
+restores retained data without inventing a clock. Loss of retention power,
+or primary loss without RTC True, destroys the backing value. RTC X/Z is
+not True. Two-state state corrupts to zero and four-state state to X.
 
-The simulation IR/runtime now provide a guarded NBA primitive for a whole
-static retained register (clause 9.7.3). It checks its pure observer and both
-captured epochs at actual commit, shares that decision between backing and
-output, and suppresses rejected publications before edge observers run. Native
-and bytecode execution use the same fixed64 guard ABI, including on wasm32.
-Installed native AOT plans reject guarded updates; the compiler keeps these
-designs on the shared runtime scheduler. This prerequisite does not yet enable
-active `set_retention` strategies.
+Declaration and untimed initialization stores update backing. Sequential
+blocking stores preserve visible program order, including feedback reads.
+Nonblocking stores capture their RHS and delay at the original statement,
+preserving source order with unretained writes. At actual commit, a pure
+observer and captured domain/strategy epochs decide both backing and output
+publications together. Pending RTC/loss occurrences reject stale writes
+before edge observers see a false known output. A fresh later clock can write
+again. Power history follows published supplies; raw switch-control changes
+can coalesce before supply-network evaluation (clauses 9.2.2/9.2.3).
+
+Ordinary guarded NBAs use explicit root-relative windows. Selector values and
+all ancestor bounds survive captures, CFG forwarding and suspension; partial
+and invalid selections retain normal HDL behavior beside retained registers
+(IEEE 1800-2023 clauses 7.4.5 and 11.5.1). Their guard is shared per domain,
+and assignments enqueue directly without a spawned helper per NBA. The UPF
+dialect still has only three operations; storage, guards and scheduling use
+the existing simulation dialect.
+
+Native and bytecode execution share the fixed64 guard ABI, including on
+wasm32. Installed native AOT plans reject guarded updates; these designs use
+the runtime scheduler. Designs without UPF retain the ordinary simulation
+path and allocate no power feature state.
+
+Balloon save/restore, latch/asynchronous-reset writers, partial retained
+writes, mixed blocking/nonblocking writers of one retained register, and
+multiple sequential writers are diagnosed. Retained references escaping
+through unsupported helper/CFG/capture forms are also diagnosed. Ordinary
+projected captures require one provable persistent root; references selecting
+different roots need specialization and are rejected. A `-no_retention`
+strategy uses ordinary domain corruption with no backing storage.
 
 The frontend accepts whole-signal and instance `-elements` and
 `-exclude_elements`, `-retention_supply`, `-save_signal`, `-restore_signal`,

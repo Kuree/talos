@@ -1,0 +1,73 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 9.5.2/9.7.3 and IEEE 1800-2023 7.4.5/11.5.1:
+// ordinary partial NBAs beside retained state keep ancestor bounds, declared
+// ascending/descending array orientation, and captured selector/RHS values.
+// An invalid or X/Z outer index cannot be revived by an inner selection.
+// CHECK: partial retention sibling passed
+
+//--- design.sv
+module leaf(input logic clk, input integer row, start, input logic [3:0] d,
+            output logic [1:0][7:0] q = 16'h1000,
+            output logic [4:5][7:0] asc = 16'h1000, output logic keep = 0);
+  always @(posedge clk) begin
+    q[row][start +: 4] <= #1 d;
+    asc[row + 4][start +: 4] <= #1 d;
+    keep <= #1 1'b1;
+  end
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, enable = 1, rtc = 0;
+  integer row = 0, start = 0;
+  logic [3:0] d = 0;
+  wire [1:0][7:0] q;
+  wire [4:5][7:0] asc;
+  wire keep;
+  leaf dut(clk, row, start, d, q, asc, keep);
+  task pulse(integer r, integer s, logic [3:0] value);
+    clk = 0; row = r; start = s; d = value;
+    #1 clk = 1;
+    #0; // NBA destination and RHS have already been captured.
+    row = 99; start = 99; d = 0;
+    #2;
+  endtask
+  initial begin
+    if (!supply_on("/top/AON.power") || !supply_on("/top/AON.ground", 0.0))
+      $fatal(1, "initial supplies");
+    #1;
+    // Ordinary unretained state starts corrupt; initialize it while powered.
+    dut.q = 16'h1000;
+    dut.asc = 16'h1000;
+    pulse(0, 6, 4'ha);
+    if (q !== 16'h1080 || asc !== 16'h9000 || keep !== 1)
+      $fatal(1, "high clipping %h %h", q, asc);
+    pulse(1, -2, 4'hd);
+    if (q !== 16'h1380 || asc !== 16'h9003)
+      $fatal(1, "low clipping %h %h", q, asc);
+    pulse(2, -8, 4'hf);
+    pulse(-1, 8, 4'hf);
+    pulse(32'hxxxxxxxx, 0, 4'hf);
+    pulse(32'hzzzzzzzz, 0, 4'hf);
+    if (q !== 16'h1380 || asc !== 16'h9003)
+      $fatal(1, "invalid ancestor revived %h %h", q, asc);
+    $display("partial retention sibling passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_net VDD
+create_supply_set AON -function {power VDD}
+create_supply_set SW -function {ground AON.ground}
+create_power_domain PD -elements dut -supply {primary SW}
+create_power_switch PS -domain PD \
+    -input_supply_port {vin AON.power} -output_supply_port {vout PD.primary.power} \
+    -control_port {en enable} -on_state {ON vin en}
+set_retention KEEP -domain PD -elements dut/keep -retention_condition rtc

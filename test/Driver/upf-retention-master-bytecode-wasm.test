@@ -1,0 +1,11 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-retention-master.test %t/master
+// RUN: %split-file %S/upf-retention-wide-feedback.test %t/wide
+// RUN: %split-file %S/upf-retention-loss-pulse.test %t/pulse
+// RUN: talos --upf %t/master/design.upf --target=wasm32 -O0 --execution-tier=bytecode --mlir-verify-each -c %t/master/design.sv -o %t.master.o
+// RUN: talos --upf %t/wide/design.upf --target=wasm32 -O0 --execution-tier=bytecode --mlir-verify-each -c %t/wide/design.sv -o %t.wide.o
+// RUN: talos --upf %t/pulse/design.upf --target=wasm32 -O0 --execution-tier=bytecode --mlir-verify-each -c %t/pulse/design.sv -o %t.pulse.o
+// RUN: %llvm_dist/bin/llvm-readobj --file-headers %t.master.o %t.wide.o %t.pulse.o | FileCheck %s
+// IEEE 1801-2018 9.7.3: backing, event handles and epochs retain their
+// declared widths with wasm32 pointers, including a 65-bit retained value.
+// CHECK-COUNT-3: AddressSize: 32bit

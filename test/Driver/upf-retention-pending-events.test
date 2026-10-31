@@ -1,0 +1,61 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 9.7.3 gives RTC priority over clocked writes. A latched
+// RTC occurrence invalidates immediate/delayed NBAs before any false known
+// output edge, even when RTC has recovered before its Active handler runs.
+// A later fresh clock is admitted after that occurrence has been handled.
+// CHECK: pending retention events passed
+
+//--- design.sv
+module leaf(input logic clk, d, output logic q = 0, delayed = 0);
+  always @(posedge clk) begin
+    q <= d;
+    delayed <= #2 d;
+  end
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, d = 0, enable = 1, rtc = 0;
+  wire q, delayed;
+  int hits = 0;
+  leaf dut(clk, d, q, delayed);
+  always @(posedge dut.q) if (dut.q === 1) hits++;
+  initial begin
+    if (!supply_on("/top/AON.power") || !supply_on("/top/AON.ground", 0.0))
+      $fatal(1, "initial supplies");
+    #1 clk = 1;
+    #3;
+    if (q !== 0 || delayed !== 0) $fatal(1, "initial capture");
+    clk = 0;
+    d = 1;
+    #1 clk = 1;
+    rtc <= 1;
+    rtc <= 0;
+    #3;
+    if (q !== 0 || delayed !== 0 || hits !== 0)
+      $fatal(1, "RTC event revived a write %b %b %0d", q, delayed, hits);
+    clk = 0;
+    #1 clk = 1;
+    #3;
+    if (q !== 1 || delayed !== 1 || hits !== 1)
+      $fatal(1, "fresh clock after RTC event");
+    $display("pending retention events passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_net VDD
+create_supply_set AON -function {power VDD}
+create_supply_set SW -function {ground AON.ground}
+create_power_domain PD -elements dut -supply {primary SW}
+create_power_switch PS -domain PD \
+    -input_supply_port {vin AON.power} -output_supply_port {vout PD.primary.power} \
+    -control_port {en enable} -on_state {ON vin en}
+set_retention KEEP -domain PD -retention_condition rtc

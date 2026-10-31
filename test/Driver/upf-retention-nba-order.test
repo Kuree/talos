@@ -1,0 +1,68 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 9.5.2/9.7.3: instrumentation must preserve IEEE
+// 1800-2023 4.6/10.4.2 NBA source order between retained and ordinary state,
+// including delayed assignments. An edge-iff observer sees the sibling's
+// value at the actual publication, detecting any extra Active helper hop.
+// CHECK: retention NBA ordering passed
+
+//--- design.sv
+module leaf #(parameter DELAY = 0, REVERSE = 0)
+    (input logic clk, d, output logic q = 0, plain = 0);
+  if (REVERSE) begin
+    always @(posedge clk) begin
+      q <= #DELAY d;
+      plain <= #DELAY d;
+    end
+  end else begin
+    always @(posedge clk) begin
+      plain <= #DELAY d;
+      q <= #DELAY d;
+    end
+  end
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, d = 0, enable = 1, rtc = 0;
+  wire q0, p0, q1, p1, q2, p2, q3, p3;
+  leaf a(clk, d, q0, p0);
+  leaf #(0, 1) b(clk, d, q1, p1);
+  leaf #(1, 0) c(clk, d, q2, p2);
+  leaf #(1, 1) e(clk, d, q3, p3);
+  int h0 = 0, h1 = 0, h2 = 0, h3 = 0;
+  always @(posedge a.q iff a.plain) h0++;
+  always @(posedge b.q iff b.plain) h1++;
+  always @(posedge c.q iff c.plain) h2++;
+  always @(posedge e.q iff e.plain) h3++;
+  initial begin
+    if (!supply_on("/top/AON.power") || !supply_on("/top/AON.ground", 0.0))
+      $fatal(1, "initial supplies");
+    #1 clk = 1;
+    #2 clk = 0;
+    d = 1;
+    #1 clk = 1;
+    #2;
+    if ({q0,p0,q1,p1,q2,p2,q3,p3} !== 8'hff)
+      $fatal(1, "normal publication");
+    if (h0 !== 1 || h1 !== 0 || h2 !== 1 || h3 !== 0)
+      $fatal(1, "NBA source order %0d %0d %0d %0d", h0,h1,h2,h3);
+    $display("retention NBA ordering passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_net VDD
+create_supply_set AON -function {power VDD}
+create_supply_set SW -function {ground AON.ground}
+create_power_domain PD -elements {a b c e} -supply {primary SW}
+create_power_switch PS -domain PD \
+    -input_supply_port {vin AON.power} -output_supply_port {vout PD.primary.power} \
+    -control_port {en enable} -on_state {ON vin en}
+set_retention KEEP -domain PD -elements {a/q b/q c/q e/q} -retention_condition rtc

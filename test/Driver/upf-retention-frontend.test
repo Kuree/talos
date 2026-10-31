@@ -33,7 +33,10 @@
 // IR-SAME: declaration = #loc
 // INCOMPLETE: incomplete.upf":2:1
 // INCOMPLETE: retention requires a save/restore signal or retention condition
-// LOWERING: retention simulation lowering is not implemented
+// Unobserved state may disappear before power elaboration. Strategies without
+// an effective retained register require no runtime actors or style lowering.
+// This frontend fixture instead reaches its isolation-without-output error.
+// LOWERING: isolation has no explicit output boundary to apply to
 
 //--- design.sv
 module leaf;

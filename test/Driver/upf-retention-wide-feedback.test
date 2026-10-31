@@ -1,0 +1,75 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 9.2.1/9.7.3 Tables 11/12: typed backing preserves wide
+// ascending packed layouts, two-state defaults and startup assignments. A
+// blocking feedback writer must read its new visible value in program order.
+// RTC X is not True and cannot preserve state while primary power is OFF.
+// CHECK: wide feedback retention passed
+
+//--- design.sv
+module leaf(input logic clk, output logic [0:64] wide = 65'h10000000000000001,
+            output bit [0:64] bits = 65'h10000000000000001,
+            output logic [7:0] count = 8'h11,
+            output logic [7:0] after_count = 0);
+  initial count = 8'h22;
+  always @(posedge clk) begin
+    wide <= wide + 65'd1;
+    bits <= bits + 65'd1;
+    count = count + 8'd1;
+    after_count = count;
+  end
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, enable = 1, rtc = 1;
+  wire [0:64] wide, bits;
+  wire [7:0] count, after_count;
+  leaf dut(clk, wide, bits, count, after_count);
+  initial begin
+    if (!supply_on("/top/AON.power") || !supply_on("/top/AON.ground", 0.0))
+      $fatal(1, "initial supplies");
+    #1;
+    if (wide !== 65'h10000000000000001 || bits !== 65'h10000000000000001 || count !== 8'h22)
+      $fatal(1, "startup backing");
+    clk = 1;
+    #1;
+    if (count !== 8'h22) $fatal(1, "RTC priority");
+    clk = 0;
+    rtc = 0;
+    #1 clk = 1;
+    #1;
+    if (wide !== 65'h10000000000000002 || bits !== 65'h10000000000000002 || count !== 8'h23 || after_count !== 8'h23)
+      $fatal(1, "feedback order");
+    rtc = 1;
+    enable = 0;
+    #1;
+    if (wide !== 'x || bits !== '0 || count !== 'x) $fatal(1, "typed mask");
+    enable = 1;
+    #1;
+    if (wide !== 65'h10000000000000002 || bits !== 65'h10000000000000002 || count !== 8'h23)
+      $fatal(1, "typed restore");
+    rtc = 1'bx;
+    enable = 0;
+    #1 enable = 1;
+    #1;
+    if (wide !== 'x || bits !== '0 || count !== 'x) $fatal(1, "RTC X retained state");
+    $display("wide feedback retention passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_net VDD
+create_supply_set AON -function {power VDD}
+create_supply_set SW -function {ground AON.ground}
+create_power_domain PD -elements dut -supply {primary SW}
+create_power_switch PS -domain PD \
+    -input_supply_port {vin AON.power} -output_supply_port {vout PD.primary.power} \
+    -control_port {en enable} -on_state {ON vin en}
+set_retention KEEP -domain PD -retention_condition rtc

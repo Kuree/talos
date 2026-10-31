@@ -1,0 +1,8 @@
+// RUN: %split-file %S/upf-retention-root-initializer.test %t
+// RUN: talos-opt %t/design.mlir --pass-pipeline='builtin.module(elaborate-upf,simulation.design(simulation.func(talos-sim-thread-suspension),talos-sim-build-compute-graph,talos-sim-verify-compute-graph),encode-talos-sim-to-bytecode{vpi=off require-bytecode=true},convert-talos-sim-processes-to-llvm-coroutines)' --verify-each -o %t.lowered.mlir
+// RUN: FileCheck %s --check-prefix=TIER < %t.lowered.mlir
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.o
+// RUN: %target_cxx %t.o %runtime_link_flags -o %t.exe && %t.exe | FileCheck %S/upf-retention-root-initializer.test
+// IEEE 1801-2018 9.2.1/9.7.3: require interpreter execution when later
+// root initialization stores mirror the retained backing value.
+// TIER: runtime.execution_flags = #runtime.execution_flags<has_bytecode|require_bytecode>

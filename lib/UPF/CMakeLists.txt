@@ -6,6 +6,8 @@ add_mlir_library(TalosUPF
   ControlReference.cpp
   SupplyNetwork.cpp
   Elaborate.cpp
+  Retention.cpp
+  ReferenceWindow.cpp
   ElaborateSupply.cpp
   DEPENDS SlangOpsIncGen TalosSimulationOpsIncGen TalosUPFOpsIncGen
     TalosUPFAttrsIncGen TalosUPFEnumsIncGen

@@ -1,0 +1,50 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 9.2.1/9.7.3: initialization precedes corruption. With
+// RTC True and a protected retention supply, primary OFF masks outputs but
+// preserves distinct two-/four-state declaration values for clockless restore.
+// CHECK: startup retention passed
+
+//--- design.sv
+module leaf(input logic clk, input logic [7:0] d,
+            output logic [7:0] q = 8'h13, output bit [7:0] qb = 8'h85);
+  always @(posedge clk) begin q <= d; qb <= d; end
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, enable = 0, rtc = 1;
+  logic [7:0] d = 8'ha5;
+  wire [7:0] q, qb;
+  leaf dut(clk, d, q, qb);
+  initial begin
+    #1;
+    if (q !== 8'hxx || qb !== 0) $fatal(1, "startup mask");
+    if (!supply_on("/top/AON.power") || !supply_on("/top/AON.ground", 0.0))
+      $fatal(1, "initial supplies");
+    #1 enable = 1;
+    #1;
+    if (q !== 8'h13 || qb !== 8'h85) $fatal(1, "startup backing lost");
+    rtc = 0;
+    #1 clk = 1;
+    #1;
+    if (q !== 8'ha5 || qb !== 8'ha5) $fatal(1, "new capture");
+    $display("startup retention passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_net VDD
+create_supply_set AON -function {power VDD}
+create_supply_set SW -function {ground AON.ground}
+create_power_domain PD -elements dut -supply {primary SW}
+create_power_switch PS -domain PD \
+    -input_supply_port {vin AON.power} -output_supply_port {vout PD.primary.power} \
+    -control_port {en enable} -on_state {ON vin en}
+set_retention KEEP -domain PD -elements {dut/q dut/qb} -retention_condition rtc
