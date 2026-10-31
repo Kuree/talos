@@ -28,6 +28,14 @@ module {
 
 module {
   %null = simulation.process.null
+  // expected-error @below {{'simulation.process.event_pending' op must be nested in simulation.func}}
+  %pending = simulation.process.event_pending %null
+}
+
+// -----
+
+module {
+  %null = simulation.process.null
   // expected-error @below {{'simulation.process.random_state' op must be nested in simulation.func}}
   %state, %increment = simulation.process.random_state %null
 }

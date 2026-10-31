@@ -1,0 +1,9 @@
+// RUN: %split-file %S/simulation-process-event-pending-invalid.test %t
+// RUN: talos-opt %t/design.mlir --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph,talos-sim-verify-compute-graph),encode-talos-sim-to-bytecode{vpi=off require-bytecode=true},convert-talos-sim-processes-to-llvm-coroutines)' --verify-each -o %t.lowered.mlir
+// RUN: FileCheck %s --check-prefix=TIER < %t.lowered.mlir
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.o
+// RUN: %target_cxx %t.o %runtime_link_flags -o %t.exe
+// RUN: not %t.exe | FileCheck %S/simulation-process-event-pending-invalid.test
+// IEEE 1801-2018 9.7.3: malformed guard input must propagate interpreter
+// failure. This execution cannot fall back to the native query implementation.
+// TIER: runtime.execution_flags = #runtime.execution_flags<has_bytecode|require_bytecode>

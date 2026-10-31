@@ -4688,6 +4688,15 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
         talos_rt_v1_process_status(context, *logicalProcess, &state);
     return status == TALOS_RT_OK ? sentinel(0, state) : status;
   }
+  case TALOS_RT_INTRINSIC_V1_PROCESS_EVENT_PENDING: {
+    auto logicalProcess = scalar(0);
+    uint32_t pending = 0;
+    if (!logicalProcess)
+      return TALOS_RT_INVALID_BYTECODE;
+    talos_rt_status status =
+        talos_rt_v1_process_event_pending(context, *logicalProcess, &pending);
+    return status == TALOS_RT_OK ? sentinel(0, pending) : status;
+  }
   case TALOS_RT_INTRINSIC_V1_PROCESS_RANDOM_GET: {
     auto logicalProcess = scalar(0);
     talos_rt_random_state_v1 state{};

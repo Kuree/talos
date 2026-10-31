@@ -1,0 +1,37 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/design.mlir --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph,talos-sim-verify-compute-graph),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' --verify-each -o %t.lowered.mlir
+// RUN: FileCheck %s --check-prefix=NATIVE < %t.lowered.mlir
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.o
+// RUN: %target_cxx %t.o %runtime_link_flags -o %t.exe
+// RUN: not %t.exe | FileCheck %s
+// The internal query's operand has an existing-identity precondition. Keep
+// this malformed query live to exercise defensive runtime failure handling.
+// IEEE 1801-2018 9.7.3: an evaluator failure must never admit an NBA update.
+// CHECK: entered malformed query
+// NATIVE: llvm.call @talos_rt_v1_process_event_pending
+// NATIVE: llvm.call @talos_rt_v1_scheduler_fail
+
+//--- design.mlir
+module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu"} {
+  simulation.design @invalid_pending {
+    simulation.scope.decl 0
+    simulation.code_unit.decl 1 in 0 root_initializer hierarchy "top.root"
+    simulation.code_unit.decl 2 in 0 initial hierarchy "top.probe"
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32})
+        attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
+      %p = simulation.spawn @probe(%ctx) : !simulation.context -> !simulation.process
+      simulation.return
+    }
+    simulation.func @probe(%ctx: !simulation.context {simulation.capture_kind = 0 : i32})
+        attributes {entry_kind = 1 : i32, code_unit_id = 2 : i64} {
+      %stdout = arith.constant 1 : i32
+      %entered = simulation.bytes.constant "entered malformed query"
+      simulation.display %ctx to %stdout(%entered) newline = true radix = <decimal> flags = [0] : !simulation.bytes
+      %null = simulation.process.null
+      %pending = simulation.process.event_pending %null
+      %fmt = simulation.bytes.constant "pending %0d"
+      simulation.display %ctx to %stdout(%fmt, %pending) newline = true radix = <decimal> flags = [0,0] : !simulation.bytes, i1
+      simulation.return
+    }
+  }
+}

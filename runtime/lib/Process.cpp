@@ -2918,6 +2918,63 @@ talos_rt_v1_process_status(talos_rt_context *context, uint64_t logicalProcess,
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_ARGUMENT; }
 }
 
+extern "C" talos_rt_status talos_rt_v1_process_event_pending(
+    talos_rt_context *context, uint64_t logicalProcess, uint32_t *outPending) {
+  if (outPending)
+    *outPending = 0;
+  if (!context || !logicalProcess || !outPending)
+    return TALOS_RT_INVALID_ARGUMENT;
+  TALOS_RT_TRY {
+    ContextMutexLock lock(context);
+    // Read the latch directly: readiness also tests the current region and
+    // can run sensitivity evaluators, neither of which is appropriate while
+    // qualifying an IEEE 1801-2018 9.7.3 NBA transaction.
+    auto pending = [](const auto &process) {
+      return process.signalTriggered ||
+             (process.signalLatch && process.signalLatch->triggered);
+    };
+    if (logicalProcess & TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG) {
+      uint64_t token = logicalProcess & ~TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG;
+      if (context->killedNativeProcesses.count(token) ||
+          context->terminatedNativeProcesses.count(token))
+        return TALOS_RT_OK;
+      auto index = context->scheduledProcessIndices.find(token);
+      if (index == context->scheduledProcessIndices.end() ||
+          index->second >= context->scheduledProcesses.size())
+        return TALOS_RT_INVALID_HANDLE;
+      const auto &process = context->scheduledProcesses[index->second];
+      if (process.token != token || !process.instance)
+        return TALOS_RT_INVALID_HANDLE;
+      *outPending = pending(process);
+      return TALOS_RT_OK;
+    }
+    if (context->killedDesignTasks.count(logicalProcess) ||
+        context->terminatedDesignTasks.count(logicalProcess))
+      return TALOS_RT_OK;
+    // An executing bytecode task is removed from the calendar vector. Read
+    // its live record, including a new occurrence latched during its handler.
+    // A synchronous observer may temporarily borrow the logical identity;
+    // the live task pointer still identifies the dequeued producer.
+    const ScheduledDesignTask *process = nullptr;
+    if (context->activeDesignTask &&
+        context->activeDesignTask->id == logicalProcess) {
+      process = context->activeDesignTask;
+    } else {
+      auto index = context->scheduledDesignTaskIndices.find(logicalProcess);
+      if (index != context->scheduledDesignTaskIndices.end() &&
+          index->second < context->scheduledDesignTasks.size())
+        process = &context->scheduledDesignTasks[index->second];
+    }
+    if (!process || process->id != logicalProcess)
+      return TALOS_RT_INVALID_HANDLE;
+    if (!process->terminated)
+      *outPending = pending(*process);
+    return TALOS_RT_OK;
+  }
+  TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
+  TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_ARGUMENT; }
+}
+
 talos_rt_status
 talos_rt_process_object_identity(talos_rt_context *context,
                                  uint64_t logicalProcess,

@@ -1,0 +1,79 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/design.mlir --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-suspension),talos-sim-build-compute-graph,talos-sim-verify-compute-graph),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' --verify-each -o %t.lowered.mlir
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O0>' | %llc -filetype=obj -relocation-model=pic -o %t.o
+// RUN: %target_cxx %t.o %runtime_link_flags -o %t.exe && %t.exe | FileCheck %s
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.opt.o
+// RUN: %target_cxx %t.opt.o %runtime_link_flags -o %t.opt.exe && %t.opt.exe | FileCheck %s
+// IEEE 1801-2018 9.7.3 requires retention priority over normal operation.
+// This internal query preserves a latched occurrence after source recovery,
+// without consuming it or imposing scheduler-region eligibility. A handler
+// can query itself and see a subsequent occurrence while it executes.
+// CHECK: queued 0 1 1 1
+// CHECK-NEXT: self 0 1 1
+// CHECK-NEXT: finished 0
+
+//--- design.mlir
+module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu"} {
+  simulation.design @pending_event {
+    simulation.scope.decl 0 hierarchy "top"
+    simulation.code_unit.decl 1 in 0 root_initializer hierarchy "top.root"
+    simulation.code_unit.decl 2 in 0 fork hierarchy "top.watch"
+    simulation.code_unit.decl 3 in 0 initial hierarchy "top.drive"
+    simulation.storage.decl 0 in 0 : i1 design hierarchy "top.signal"
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32})
+        attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
+      %ref = simulation.context.storage %ctx[0] : !simulation.ref<i1>
+      %zero = arith.constant false
+      simulation.ref.store %zero to %ref : i1, !simulation.ref<i1>
+      %watch = simulation.spawn @watch(%ctx) : !simulation.context -> !simulation.process
+      %drive = simulation.spawn @drive(%ctx, %watch) : !simulation.context, !simulation.process -> !simulation.process
+      simulation.return
+    }
+    simulation.func private @watch(%ctx: !simulation.context {simulation.capture_kind = 0 : i32})
+        attributes {entry_kind = 13 : i32, code_unit_id = 2 : i64, internal, schedule.detached_controls, schedule.prime_on_spawn} {
+      %ref = simulation.context.storage %ctx[0] : !simulation.ref<i1>
+      simulation.suspend.change %ref to ^body : !simulation.ref<i1>
+    ^body:
+      %self = simulation.process.current
+      %before = simulation.process.event_pending %self
+      %ref_again = simulation.context.storage %ctx[0] : !simulation.ref<i1>
+      %one = arith.constant true
+      simulation.ref.store %one to %ref_again : i1, !simulation.ref<i1>
+      %first = simulation.process.event_pending %self
+      %second = simulation.process.event_pending %self
+      %fmt = simulation.bytes.constant "self %0d %0d %0d"
+      %stdout = arith.constant 1 : i32
+      simulation.display %ctx to %stdout(%fmt, %before, %first, %second) newline = true radix = <decimal> flags = [0,0,0,0] : !simulation.bytes, i1, i1, i1
+      simulation.return
+    }
+    simulation.func @drive(%ctx: !simulation.context {simulation.capture_kind = 0 : i32},
+        %watch: !simulation.process {simulation.capture_kind = 1 : i32})
+        attributes {entry_kind = 1 : i32, code_unit_id = 3 : i64} {
+      %one_time = simulation.time.constant 1
+      simulation.suspend.delay %one_time to ^body
+    ^body:
+      %ref = simulation.context.storage %ctx[0] : !simulation.ref<i1>
+      %before = simulation.process.event_pending %watch
+      %one = arith.constant true
+      %zero = arith.constant false
+      simulation.ref.store %one to %ref : i1, !simulation.ref<i1>
+      %first = simulation.process.event_pending %watch
+      %second = simulation.process.event_pending %watch
+      simulation.ref.store %zero to %ref : i1, !simulation.ref<i1>
+      %recovered = simulation.process.event_pending %watch
+      %fmt = simulation.bytes.constant "queued %0d %0d %0d %0d"
+      %stdout = arith.constant 1 : i32
+      simulation.display %ctx to %stdout(%fmt, %before, %first, %second, %recovered) newline = true radix = <decimal> flags = [0,0,0,0,0] : !simulation.bytes, i1, i1, i1, i1
+      %next = simulation.time.constant 1
+      simulation.suspend.delay %next to ^done
+    ^done:
+      %finished = simulation.process.event_pending %watch
+      %fmt_done = simulation.bytes.constant "finished %0d"
+      %out = arith.constant 1 : i32
+      simulation.display %ctx to %out(%fmt_done, %finished) newline = true radix = <decimal> flags = [0,0] : !simulation.bytes, i1
+      %success = arith.constant 0 : i32
+      simulation.finish %ctx, %success
+      simulation.return
+    }
+  }
+}

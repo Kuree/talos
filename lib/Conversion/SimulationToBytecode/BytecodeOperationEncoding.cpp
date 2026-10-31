@@ -672,6 +672,9 @@ LogicalResult Encoder::encodeOperation(FunctionPlan &plan,
   if (auto op = dyn_cast<sim::SimProcessStatusOp>(operation))
     return emitIntrinsic(plan, kIntrinsicProcessStatus, {op.getProcess()},
                          {op.getStatus()});
+  if (auto op = dyn_cast<sim::SimProcessEventPendingOp>(operation))
+    return emitIntrinsic(plan, TALOS_RT_INTRINSIC_V1_PROCESS_EVENT_PENDING,
+                         {op.getProcess()}, {op.getPending()});
   if (auto op = dyn_cast<sim::SimProcessRandomStateOp>(operation))
     return emitIntrinsic(plan, kIntrinsicProcessRandomGet, {op.getProcess()},
                          {op.getState(), op.getIncrement()});

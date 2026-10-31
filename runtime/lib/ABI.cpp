@@ -1656,6 +1656,8 @@ ABI_FUNCTION(talos_rt_v1_process_current, uint64_t (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_process_status,
              talos_rt_status (*)(talos_rt_context *, uint64_t,
                                  talos_rt_process_state *));
+ABI_FUNCTION(talos_rt_v1_process_event_pending,
+             talos_rt_status (*)(talos_rt_context *, uint64_t, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_process_random_get,
              talos_rt_status (*)(talos_rt_context *, uint64_t,
                                  talos_rt_random_state_v1 *));

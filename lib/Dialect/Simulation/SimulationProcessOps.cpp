@@ -1254,6 +1254,10 @@ LogicalResult SimProcessStatusOp::verify() {
   return verifyProcessContext(getOperation());
 }
 
+LogicalResult SimProcessEventPendingOp::verify() {
+  return verifyProcessContext(getOperation());
+}
+
 LogicalResult SimProcessRandomStateOp::verify() {
   return verifyProcessContext(getOperation());
 }

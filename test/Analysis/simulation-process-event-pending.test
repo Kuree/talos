@@ -1,0 +1,41 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/design.mlir --cse | FileCheck %s --check-prefix=CSE
+// RUN: talos-opt %t/design.mlir --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph,talos-sim-verify-compute-graph),test-talos-native-aot-analysis)' 2>&1 | FileCheck %s --check-prefix=AOT
+// IEEE 1801-2018 9.7.3: the internal query may change after a storage or
+// net publication. Adjacent queries may share a result; writes must separate
+// them. A closed native clock plan does not implement signal-latch ordering.
+// CSE-LABEL: simulation.func @probe
+// CSE: %[[A:.*]] = simulation.process.event_pending
+// CSE-NOT: simulation.process.event_pending
+// CSE: simulation.ref.store
+// CSE: %[[B:.*]] = simulation.process.event_pending
+// CSE: simulation.driver.drive
+// CSE: %[[C:.*]] = simulation.process.event_pending
+// CSE: simulation.return %[[A]], %[[A]], %[[B]], %[[C]]
+// AOT: native-aot eligible=false fully=false
+// AOT: reason pending signal events require runtime calendar ordering
+
+//--- design.mlir
+module {
+  simulation.design @pending_effects {
+    simulation.scope.decl 0
+    simulation.code_unit.decl 1 in 0 function hierarchy "top.probe"
+    simulation.storage.decl 0 in 0 : i1 design
+    simulation.net.decl 0 in 0 : i1 design
+    simulation.driver.decl 0 in 0 drives 0 : i1 design
+    simulation.func @probe(%ctx: !simulation.context {simulation.capture_kind = 0 : i32},
+        %process: !simulation.process {simulation.capture_kind = 1 : i32}) -> (i1, i1, i1, i1)
+        attributes {entry_kind = 8 : i32, code_unit_id = 1 : i64} {
+      %ref = simulation.context.storage %ctx[0] : !simulation.ref<i1>
+      %driver = simulation.context.driver %ctx[0] : !simulation.driver<i1>
+      %one = arith.constant true
+      %a = simulation.process.event_pending %process
+      %a_again = simulation.process.event_pending %process
+      simulation.ref.store %one to %ref : i1, !simulation.ref<i1>
+      %b = simulation.process.event_pending %process
+      simulation.driver.drive %driver = %one : !simulation.driver<i1>, i1
+      %c = simulation.process.event_pending %process
+      simulation.return %a, %a_again, %b, %c : i1, i1, i1, i1
+    }
+  }
+}

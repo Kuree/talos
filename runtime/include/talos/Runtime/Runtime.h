@@ -1269,6 +1269,7 @@ enum {
   TALOS_RT_INTRINSIC_V1_POWER_CANCEL_NBA = UINT32_C(0x00010251),
   TALOS_RT_INTRINSIC_V1_SCHEDULER_COHORT = UINT32_C(0x00010252),
   TALOS_RT_INTRINSIC_V1_POWER_NBA = UINT32_C(0x00010253),
+  TALOS_RT_INTRINSIC_V1_PROCESS_EVENT_PENDING = UINT32_C(0x00010254),
   TALOS_RT_INTRINSIC_V1_IMPORT = UINT32_C(0x00010300),
   TALOS_RT_INTRINSIC_V1_DPI_IMPORT = UINT32_C(0x00010301),
   TALOS_RT_INTRINSIC_V1_CLASS_ALLOC = UINT32_C(0x00010400),
@@ -4034,6 +4035,13 @@ uint64_t talos_rt_v1_process_current(talos_rt_context *context);
 talos_rt_status talos_rt_v1_process_status(talos_rt_context *context,
                                            uint64_t logical_process,
                                            talos_rt_process_state *out_state);
+// IEEE 1801-2018 9.7.3: inspect a latched signal occurrence before its
+// handler executes. This does not consume it, evaluate an observer, or apply
+// scheduler region eligibility. Handles stay 64 bits on wasm32. A nonnull
+// finished/killed process returns false; invalid identities return an error.
+talos_rt_status talos_rt_v1_process_event_pending(talos_rt_context *context,
+                                                  uint64_t logical_process,
+                                                  uint32_t *out_pending);
 // Read or restore a process's independent random stream. Context-owned
 // tombstones retain the two state words after FINISHED or KILLED.
 talos_rt_status

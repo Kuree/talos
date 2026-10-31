@@ -772,7 +772,9 @@ bool powerNBAAllowedUnlocked(talos_rt_context *context, uint64_t sequence,
     refreshNativeStaticSpecializationFastUnlocked(context);
   if (status != TALOS_RT_OK)
     context->schedulerStatus = status;
-  condition.allowed = status == TALOS_RT_OK && (value & 1) && !(unknown & 1);
+  condition.allowed = status == TALOS_RT_OK &&
+                      context->schedulerStatus == TALOS_RT_OK && (value & 1) &&
+                      !(unknown & 1);
   return finish();
 }
 

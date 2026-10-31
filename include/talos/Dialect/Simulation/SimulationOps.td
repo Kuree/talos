@@ -4412,6 +4412,28 @@ def SimProcessStatusOp : SimOp<"process.status", [
   let hasVerifier = 1;
 }
 
+def SimProcessEventPendingOp : SimOp<"process.event_pending", [
+    MemoryEffects<[MemRead<SimSchedulerResource>, MemRead<SimProcessResource>,
+                   MemRead<SimStorageResource>, MemRead<SimNetResource>]>
+  ]> {
+  let summary = "inspect a latched signal event without consuming it";
+  let description = [{
+    IEEE 1801-2018 9.7.3: a retained update must observe a power/RTC event
+    already latched during NBA processing, even before its Active handler
+    executes and even if the source recovered. This query only reads the
+    existing event flag. It never evaluates sensitivity or tests scheduler
+    region eligibility. Finished/killed processes have no pending event.
+    The operand must be an existing logical process identity; this internal
+    read-only query is removable when its result is unused.
+    Storage and net reads prevent CSE across signal writes that can latch an
+    event.
+  }];
+  let arguments = (ins SimProcessType:$process);
+  let results = (outs I1:$pending);
+  let assemblyFormat = "$process attr-dict";
+  let hasVerifier = 1;
+}
+
 def SimProcessRandomStateOp : SimOp<"process.random_state", [
     MemoryEffects<[MemRead<SimSchedulerResource>, MemRead<SimProcessResource>]>
   ]> {

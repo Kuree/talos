@@ -772,6 +772,10 @@ bool validIntrinsic(const Image &image, const Function &function,
     return signature.flags == 0 && site.inputCount == 1 &&
            site.outputCount == 1 && twoStateBits(input(0), 64) &&
            twoStateBits(output(0), 32);
+  case TALOS_RT_INTRINSIC_V1_PROCESS_EVENT_PENDING:
+    return signature.flags == 0 && site.inputCount == 1 &&
+           site.outputCount == 1 && twoStateBits(input(0), 64) &&
+           twoStateBits(output(0), 1);
   case TALOS_RT_INTRINSIC_V1_PROCESS_RANDOM_GET:
     return signature.flags == 0 && site.inputCount == 1 &&
            site.outputCount == 2 && twoStateBits(input(0), 64) &&

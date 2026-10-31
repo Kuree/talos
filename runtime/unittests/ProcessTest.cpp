@@ -8011,6 +8011,142 @@ TEST(Scheduler, ProcessAssociativeKeysUseStableTombstoneIdentity) {
   talos_rt_v1_context_destroy(context);
 }
 
+TEST(Scheduler, ProcessPendingEventQueryValidatesWithoutChangingState) {
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  uint32_t pending = 1;
+  EXPECT_EQ(talos_rt_v1_process_event_pending(nullptr, 1, &pending),
+            TALOS_RT_INVALID_ARGUMENT);
+  EXPECT_EQ(pending, 0u);
+  pending = 1;
+  EXPECT_EQ(talos_rt_v1_process_event_pending(context, 0, &pending),
+            TALOS_RT_INVALID_ARGUMENT);
+  EXPECT_EQ(pending, 0u);
+  EXPECT_EQ(talos_rt_v1_process_event_pending(context, 1, nullptr),
+            TALOS_RT_INVALID_ARGUMENT);
+  for (uint64_t handle :
+       {uint64_t{99}, TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | 99}) {
+    pending = 1;
+    EXPECT_EQ(talos_rt_v1_process_event_pending(context, handle, &pending),
+              TALOS_RT_INVALID_HANDLE);
+    EXPECT_EQ(pending, 0u);
+  }
+  EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);
+  EXPECT_TRUE(context->scheduledProcesses.empty());
+  EXPECT_TRUE(context->scheduledDesignTasks.empty());
+  talos_rt_v1_context_destroy(context);
+}
+
+TEST(Scheduler, ProcessPendingEventQueryReadsBothLatchesWithoutConsuming) {
+  // IEEE 1801-2018 9.7.3: a recovered source does not clear the occurrence.
+  // Pending events remain visible even when their process is not eligible in
+  // the current region. The query neither polls nor clears either latch.
+  for (bool native : {true, false}) {
+    talos_rt_context *context = nullptr;
+    ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+    context->schedulerTime = 13;
+    context->activeHomeRegion = TALOS_RT_REGION_NBA;
+    SchedulerFixture fixture(100);
+    auto exercise = [&](auto &process, uint64_t handle) {
+      uint32_t pending = 1;
+      EXPECT_EQ(talos_rt_v1_process_event_pending(context, handle, &pending),
+                TALOS_RT_OK);
+      EXPECT_EQ(pending, 0u);
+      process.signalTriggered = true;
+      for (unsigned sample = 0; sample != 2; ++sample) {
+        EXPECT_EQ(talos_rt_v1_process_event_pending(context, handle, &pending),
+                  TALOS_RT_OK);
+        EXPECT_EQ(pending, 1u);
+        EXPECT_TRUE(process.signalTriggered);
+      }
+      process.signalTriggered = false;
+      process.signalLatch = std::make_unique<SignalWaitLatch>();
+      process.signalLatch->triggered = true;
+      process.explicitlySuspended = true;
+      EXPECT_EQ(talos_rt_v1_process_event_pending(context, handle, &pending),
+                TALOS_RT_OK);
+      EXPECT_EQ(pending, 1u);
+      EXPECT_TRUE(process.signalLatch->triggered);
+      process.signalLatch->triggered = false;
+      EXPECT_EQ(talos_rt_v1_process_event_pending(context, handle, &pending),
+                TALOS_RT_OK);
+      EXPECT_EQ(pending, 0u);
+    };
+    uint64_t handle = 0;
+    if (native) {
+      auto *instance = makeSchedulerInstance(fixture);
+      ASSERT_EQ(talos_rt_v1_scheduler_add(context, instance, 0), TALOS_RT_OK);
+      handle = talos_rt_v1_scheduler_process_token(context, instance);
+      exercise(context->scheduledProcesses.front(), handle);
+      context->terminatedNativeProcesses.insert(
+          handle & ~TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG);
+    } else {
+      handle = 9;
+      auto &task = context->scheduledDesignTasks.emplace_back();
+      task.id = handle;
+      context->scheduledDesignTaskIndices.emplace(handle, 0);
+      exercise(task, handle);
+      task.terminated = true;
+    }
+    uint32_t pending = 1;
+    EXPECT_EQ(talos_rt_v1_process_event_pending(context, handle, &pending),
+              TALOS_RT_OK);
+    EXPECT_EQ(pending, 0u);
+    EXPECT_EQ(context->schedulerTime, 13u);
+    EXPECT_EQ(context->activeHomeRegion, TALOS_RT_REGION_NBA);
+    EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);
+    talos_rt_v1_context_destroy(context);
+  }
+}
+
+TEST(Scheduler, ProcessPendingEventQueryReadsExecutingBytecodeTask) {
+  // The interpreter dequeues the active task before entering its handler.
+  // A write inside that handler can latch its next occurrence (1801-2018
+  // 9.7.3); neither an absent index entry nor active status implies false.
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  ScheduledDesignTask task;
+  task.id = 7;
+  context->activeLogicalProcessToken = task.id;
+  context->activeDesignTask = &task;
+  uint32_t pending = 1;
+  ASSERT_EQ(talos_rt_v1_process_event_pending(context, task.id, &pending),
+            TALOS_RT_OK);
+  EXPECT_EQ(pending, 0u);
+  task.signalTriggered = true;
+  ASSERT_EQ(talos_rt_v1_process_event_pending(context, task.id, &pending),
+            TALOS_RT_OK);
+  EXPECT_EQ(pending, 1u);
+  EXPECT_TRUE(task.signalTriggered);
+  task.signalTriggered = false;
+  task.signalLatch = std::make_unique<SignalWaitLatch>();
+  task.signalLatch->triggered = true;
+  ASSERT_EQ(talos_rt_v1_process_event_pending(context, task.id, &pending),
+            TALOS_RT_OK);
+  EXPECT_EQ(pending, 1u);
+  EXPECT_TRUE(task.signalLatch->triggered);
+  // A synchronous native observer borrows the logical token while the
+  // bytecode producer is still dequeued. Query the producer's identity.
+  context->activeLogicalProcessToken = task.id + 1;
+  EXPECT_EQ(talos_rt_v1_process_event_pending(context, task.id, &pending),
+            TALOS_RT_OK);
+  EXPECT_EQ(pending, 1u);
+  EXPECT_TRUE(task.signalLatch->triggered);
+  EXPECT_EQ(talos_rt_v1_process_event_pending(context, task.id + 1, &pending),
+            TALOS_RT_INVALID_HANDLE);
+  EXPECT_EQ(pending, 0u);
+  context->activeLogicalProcessToken = task.id;
+  context->killedDesignTasks.insert(task.id);
+  EXPECT_EQ(talos_rt_v1_process_event_pending(context, task.id, &pending),
+            TALOS_RT_OK);
+  EXPECT_EQ(pending, 0u);
+  EXPECT_TRUE(context->scheduledDesignTasks.empty());
+  EXPECT_TRUE(context->scheduledDesignTaskIndices.empty());
+  EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);
+  context->activeDesignTask = nullptr;
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(Scheduler, ProcessObjectIdentitySharesManagedNamespaceAndSurvivesExit) {
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
@@ -11026,13 +11162,15 @@ TEST(Scheduler, GuardedNBARejectsUnknownAndPropagatesEvaluatorFailures) {
     uint64_t mode = context->stateValue[3];
     *value = mode == 1 ? 0 : 1;
     *unknown = mode == 2 ? 1 : 0;
+    if (mode == 5)
+      talos_rt_v1_scheduler_fail(context, TALOS_RT_INVALID_HANDLE);
 #if defined(__cpp_exceptions) || defined(_CPPUNWIND)
     if (mode == 4)
       throw std::bad_alloc();
 #endif
     return mode == 3 ? TALOS_RT_INVALID_ARGUMENT : TALOS_RT_OK;
   };
-  for (uint64_t mode = 0; mode != 5; ++mode) {
+  for (uint64_t mode = 0; mode != 6; ++mode) {
 #if !defined(__cpp_exceptions) && !defined(_CPPUNWIND)
     if (mode == 4)
       continue;
@@ -11058,6 +11196,7 @@ TEST(Scheduler, GuardedNBARejectsUnknownAndPropagatesEvaluatorFailures) {
     EXPECT_EQ(talos_rt_v1_scheduler_run(context),
               mode == 3   ? TALOS_RT_INVALID_ARGUMENT
               : mode == 4 ? TALOS_RT_OUT_OF_MEMORY
+              : mode == 5 ? TALOS_RT_INVALID_HANDLE
                           : TALOS_RT_OK);
     EXPECT_EQ(plane[0], mode == 0 ? value : 0);
     EXPECT_EQ(plane[1], mode == 0 ? value : 0);

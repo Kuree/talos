@@ -55,11 +55,12 @@ module attributes {
 // NATIVE-DAG: llvm.func @talos_rt_v1_process_status(!llvm.ptr, i64, !llvm.ptr) -> i32
 // NATIVE-LABEL: llvm.func @parent
 // NATIVE: llvm.call @child.__talos_spawn
-// NATIVE: llvm.mlir.constant(0 : i64)
-// NATIVE: llvm.call @talos_rt_v1_process_current
-// NATIVE: llvm.icmp "eq"
-// NATIVE: llvm.call @talos_rt_v1_process_status
-// NATIVE: llvm.call @talos_rt_v1_scheduler_fail
+// Conversion may place the dominating null constant in a later printed block.
+// NATIVE-DAG: llvm.mlir.constant(0 : i64)
+// NATIVE-DAG: llvm.call @talos_rt_v1_process_current
+// NATIVE-DAG: llvm.icmp "eq"
+// NATIVE-DAG: llvm.call @talos_rt_v1_process_status
+// NATIVE-DAG: llvm.call @talos_rt_v1_scheduler_fail
 // NATIVE-LABEL: llvm.func @child.__talos_spawn
 // NATIVE: llvm.call @talos_rt_v1_process_spawn
 

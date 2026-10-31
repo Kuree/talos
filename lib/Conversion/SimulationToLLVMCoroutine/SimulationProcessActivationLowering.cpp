@@ -434,6 +434,8 @@ void declareProcessSpawnRuntimeABI(ModuleOp module) {
                            {pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_process_status", i32,
                            {pointer, i64, pointer});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_process_event_pending", i32,
+                           {pointer, i64, pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_process_random_get", i32,
                            {pointer, i64, pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_process_random_set", i32,

@@ -410,6 +410,11 @@ SmallVector<ComputeEffect> collectDirectEffects(const FunctionInfo &info,
           // effects, including a binding hoisted to a predecessor block.
           effects.push_back({schedule::ComputeEffectKind::Read});
         })
+        .Case<sim::SimProcessEventPendingOp>([&](auto) {
+          // Signal stores can synchronously latch an occurrence, even before
+          // the waiting process can run in its home region (1801-2018 9.7.3).
+          effects.push_back({schedule::ComputeEffectKind::Read});
+        })
         .Case<sim::SimSuspendChangeOp>([&](auto op) {
           appendEffect(info, schedule::ComputeEffectKind::Watch,
                        op.getWatched(), effects,

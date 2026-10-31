@@ -214,6 +214,43 @@ public:
   }
 };
 
+class ProcessEventPendingConversion final
+    : public OpConversionPattern<sim::SimProcessEventPendingOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(sim::SimProcessEventPendingOp operation,
+                  OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (adaptor.getProcess().size() != 1)
+      return failure();
+    Location location = operation.getLoc();
+    Value context = loadCurrentRuntimeContext(rewriter, location);
+    Type i32 = rewriter.getI32Type();
+    Value output = entryAlloca(rewriter, location, i32, 1, 4);
+    LLVM::StoreOp::create(rewriter, location,
+                          llvmConstant(rewriter, location, i32, 0), output, 4);
+    Value status =
+        LLVM::CallOp::create(
+            rewriter, location, TypeRange{i32},
+            SymbolRefAttr::get(rewriter.getContext(),
+                               "talos_rt_v1_process_event_pending"),
+            ValueRange{context, adaptor.getProcess().front(), output})
+            .getResult();
+    reportRuntimeControlStatus(rewriter, location, context, status);
+    Value pending = LLVM::LoadOp::create(rewriter, location, i32, output, 4);
+    Value failed =
+        arith::CmpIOp::create(rewriter, location, arith::CmpIPredicate::ne,
+                              status, llvmConstant(rewriter, location, i32, 0));
+    Value bit = LLVM::TruncOp::create(rewriter, location, rewriter.getI1Type(),
+                                      pending);
+    // Fail closed if a malformed hidden handle reaches a retention guard.
+    // The shared failure latch is checked when the activation returns.
+    rewriter.replaceOpWithNewOp<arith::OrIOp>(operation, bit, failed);
+    return success();
+  }
+};
+
 class ProcessRandomStateConversion final
     : public OpConversionPattern<sim::SimProcessRandomStateOp> {
 public:
@@ -839,26 +876,28 @@ public:
 void populateControlToLLVMConversionPatterns(RewritePatternSet &patterns,
                                              TypeConverter &converter) {
   MLIRContext *context = patterns.getContext();
-  patterns.add<
-      VPIFrameObservationEndConversion,
-      VPIFrameConversion<sim::SimVPICallPrepareOp>,
-      VPIFrameConversion<sim::SimVPIResolutionPrepareOp>,
-      VPIFrameConversion<sim::SimVPIFrameEnterPreparedOp>,
-      VPIFrameConversion<sim::SimVPIFrameEnterForeignOp>,
-      VPIFrameConversion<sim::SimVPIFrameEnterOp>,
-      VPIFrameConversion<sim::SimVPIFrameCheckpointOp>,
-      VPIFrameConversion<sim::SimVPIFrameLeaveOp>,
-      VPIFrameConversion<sim::SimVPICallFinishOp>, DisableChildrenConversion,
-      ControlEnterConversion, ControlLeaveConversion, ControlDisableConversion,
-      ControlDisableSelectedConversion, ControlMatchConversion,
-      ControlEscapePendingConversion, VirtualInterfaceNullConversion,
-      ChandleNullConversion, ChandleEqualConversion,
-      VirtualInterfaceBindConversion, VirtualInterfaceCastConversion,
-      VirtualInterfaceScopeConversion, VirtualInterfaceEqualConversion,
-      ProcessNullConversion, ProcessCurrentConversion, ProcessEqualConversion,
-      ProcessStatusConversion, ProcessRandomStateConversion,
-      ProcessSetRandomStateConversion, MonitorRegisterConversion,
-      MonitorControlConversion, MonitorCurrentConversion>(converter, context);
+  patterns.add<VPIFrameObservationEndConversion,
+               VPIFrameConversion<sim::SimVPICallPrepareOp>,
+               VPIFrameConversion<sim::SimVPIResolutionPrepareOp>,
+               VPIFrameConversion<sim::SimVPIFrameEnterPreparedOp>,
+               VPIFrameConversion<sim::SimVPIFrameEnterForeignOp>,
+               VPIFrameConversion<sim::SimVPIFrameEnterOp>,
+               VPIFrameConversion<sim::SimVPIFrameCheckpointOp>,
+               VPIFrameConversion<sim::SimVPIFrameLeaveOp>,
+               VPIFrameConversion<sim::SimVPICallFinishOp>,
+               DisableChildrenConversion, ControlEnterConversion,
+               ControlLeaveConversion, ControlDisableConversion,
+               ControlDisableSelectedConversion, ControlMatchConversion,
+               ControlEscapePendingConversion, VirtualInterfaceNullConversion,
+               ChandleNullConversion, ChandleEqualConversion,
+               VirtualInterfaceBindConversion, VirtualInterfaceCastConversion,
+               VirtualInterfaceScopeConversion, VirtualInterfaceEqualConversion,
+               ProcessNullConversion, ProcessCurrentConversion,
+               ProcessEqualConversion, ProcessStatusConversion,
+               ProcessEventPendingConversion, ProcessRandomStateConversion,
+               ProcessSetRandomStateConversion, MonitorRegisterConversion,
+               MonitorControlConversion, MonitorCurrentConversion>(converter,
+                                                                   context);
   patterns.add<OnceConversion<sim::SimStaticOnceOp>>(converter, context,
                                                      "talos_rt_v1_static_once");
   patterns.add<OnceConversion<sim::SimDeferredOnceOp>>(
