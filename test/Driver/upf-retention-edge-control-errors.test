@@ -1,0 +1,58 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: not talos --upf %t/design.upf -O0 -c %t/change.sv -o %t.change.o 2>&1 | FileCheck %s
+// RUN: not talos --upf %t/design.upf -O0 -c %t/iff-change.sv -o %t.iff-change.o 2>&1 | FileCheck %s
+// RUN: not talos --upf %t/design.upf -O0 -c %t/mixed.sv -o %t.mixed.o 2>&1 | FileCheck %s
+// RUN: not talos --upf %t/design.upf -O0 -c %t/computed.sv -o %t.computed.o 2>&1 | FileCheck %s
+// RUN: not talos --upf %t/design.upf -O0 -c %t/multi-iff.sv -o %t.multi-iff.o 2>&1 | FileCheck %s
+// IEEE 1801-2018 6.50/9.7.3: admitting direct edge lists must not silently
+// turn level/change-sensitive state, computed events or qualified event lists
+// into supported retained edge writers. These need additional lowering.
+// CHECK: retention requires one top-level edge-sensitive event control
+
+//--- design.upf
+create_supply_set CORE
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention KEEP -domain PD -retention_condition rtc
+//--- change.sv
+module leaf(input logic clk, d, output logic q = 0);
+  always @(clk) if (clk) q <= d;
+endmodule
+module top;
+  logic clk = 0, d = 1, rtc = 0; wire q;
+  leaf dut(clk,d,q); initial begin #1 clk=1; #1 $display("%b",q); end
+endmodule
+//--- iff-change.sv
+module leaf(input logic clk, d, output logic q = 0);
+  always @(clk iff d) if (clk) q <= d;
+endmodule
+module top;
+  logic clk = 0, d = 1, rtc = 0; wire q;
+  leaf dut(clk,d,q); initial begin #1 clk=1; #1 $display("%b",q); end
+endmodule
+//--- mixed.sv
+module leaf(input logic clk, d, output logic q = 0);
+  always @(posedge clk or d) q <= d;
+endmodule
+module top;
+  logic clk = 0, d = 1, rtc = 0; wire q;
+  leaf dut(clk,d,q); initial begin #1 clk=1; #1 $display("%b",q); end
+endmodule
+//--- computed.sv
+module leaf(input logic clk, rst_n, d, output logic q = 0);
+  always @(posedge (clk && d) or negedge rst_n)
+    if (!rst_n) q <= 0; else q <= d;
+endmodule
+module top;
+  logic clk = 0, rst_n = 1, d = 1, rtc = 0; wire q;
+  leaf dut(clk,rst_n,d,q); initial begin #1 clk=1; #1 $display("%b",q); end
+endmodule
+//--- multi-iff.sv
+module leaf(input logic clk, rst_n, d, output logic q = 0);
+  always @(posedge clk iff d or negedge rst_n)
+    if (!rst_n) q <= 0; else q <= d;
+endmodule
+module top;
+  logic clk = 0, rst_n = 1, d = 1, rtc = 0; wire q;
+  leaf dut(clk,rst_n,d,q); initial begin #1 clk=1; #1 $display("%b",q); end
+endmodule

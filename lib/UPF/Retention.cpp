@@ -201,10 +201,23 @@ struct Lowering {
       if (op->getName().getStringRef().starts_with("simulation.suspend."))
         waits.push_back(op);
     });
-    return waits.size() == 1 &&
-           isa<sim::SimSuspendEdgeOp, sim::SimSuspendEdgeIffOp>(
-               waits.front()) &&
-           waits.front()->hasAttr("schedule.repeating_always_wait");
+    if (waits.size() != 1 ||
+        !waits.front()->hasAttr("schedule.repeating_always_wait"))
+      return false;
+    // IEEE 1801-2018 9.7.3 gives RTC priority over asynchronous set/reset
+    // as well as clocks. A direct edge list remains one sequential writer;
+    // change-sensitive terms would instead admit unsupported level behavior.
+    if (auto edge = dyn_cast<sim::SimSuspendEdgeOp>(waits.front()))
+      return edge.getEdge() != sim::EdgeKind::Change;
+    if (auto edge = dyn_cast<sim::SimSuspendEdgeIffOp>(waits.front()))
+      return edge.getEdge() != sim::EdgeKind::Change;
+    if (auto any = dyn_cast<sim::SimSuspendAnyOp>(waits.front()))
+      return !any.getEdges().empty() &&
+             llvm::all_of(any.getEdges(), [](int32_t edge) {
+               return edge >= static_cast<int32_t>(sim::EdgeKind::Posedge) &&
+                      edge <= static_cast<int32_t>(sim::EdgeKind::Both);
+             });
+    return false;
   }
   bool completeLevelWriter(sim::SimFuncOp fn, uint64_t id) {
     auto key = std::pair{fn.getOperation(), id};
@@ -403,8 +416,9 @@ struct Lowering {
         }
         if (!edgeWriter(fn))
           return op->emitError(
-              "retention requires one top-level clock edge; latch, "
-              "asynchronous reset, timed and helper writers are not "
+              "retention requires one top-level edge-sensitive event control; "
+              "latch, mixed level/edge, computed, timed and helper writers are "
+              "not "
               "implemented (IEEE 1801-2018 6.50/9.7.3)");
         Value destination =
             isa<sim::SimRefStoreOp>(op)

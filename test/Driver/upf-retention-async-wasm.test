@@ -1,0 +1,12 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-retention-async-controls.test %t/controls
+// RUN: %split-file %S/upf-retention-async-delay.test %t/delay
+// RUN: %split-file %S/upf-retention-async-nba-order.test %t/order
+// RUN: talos --upf %t/controls/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/controls/design.sv -o %t.controls.o
+// RUN: talos --upf %t/delay/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/delay/design.sv -o %t.delay.o
+// RUN: talos --upf %t/order/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/order/design.sv -o %t.order.o
+// RUN: %llvm_dist/bin/llvm-readobj --file-headers %t.controls.o %t.delay.o %t.order.o | FileCheck %s
+// IEEE 1801-2018 9.7.3: asynchronous reset/set admission uses the existing
+// fixed64 guard/epoch/process-handle ABI with wasm32 pointers, including wide
+// reset values, RTC priority and ordinary/retained NBA source ordering.
+// CHECK-COUNT-3: AddressSize: 32bit

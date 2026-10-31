@@ -277,13 +277,21 @@ silently combined with a supply predicate (clauses 6.5 and 9.3.2).
 ## Retention
 
 `set_retention` supports master/slave retention for whole packed integral
-registers with one static clock-edge writer (IEEE 1801-2018 clauses 6.50,
+registers with one static edge-sensitive writer (IEEE 1801-2018 clauses 6.50,
 8.3.2 and 9.7.3, Tables 11/12). The compiler creates typed backing storage
 separate from the visible output. RTC True holds the value while unretained
 siblings continue clocking. Primary power loss masks the output; recovery
 restores retained data without inventing a clock. Loss of retention power,
 or primary loss without RTC True, destroys the backing value. RTC X/Z is
 not True. Two-state state corrupts to zero and four-state state to X.
+
+Direct edge-event lists support clocks and asynchronous reset/set in `always`
+and `always_ff`. RTC True suppresses every retained write from those events,
+while unretained siblings preserve their ordinary RTL behavior. The original
+event list remains unchanged: a reset held asserted across RTC release or
+primary restoration does not manufacture another reset/clock activation
+(clauses 9.6.7/9.7.3). A fresh admitted reset edge can recover corrupt state
+without a clock.
 
 Declaration and untimed initialization stores update backing. Sequential
 blocking stores preserve visible program order, including feedback reads.
@@ -308,9 +316,9 @@ wasm32. Installed native AOT plans reject guarded updates; these designs use
 the runtime scheduler. Designs without UPF retain the ordinary simulation
 path and allocate no power feature state.
 
-Balloon save/restore, latch/asynchronous-reset writers, partial retained
-writes, mixed blocking/nonblocking writers of one retained register, and
-multiple sequential writers are diagnosed. Retained references escaping
+Balloon save/restore, latch writers, computed event expressions, multi-event
+`iff` lists, partial retained writes, mixed blocking/nonblocking writers of one
+retained register, and multiple sequential writers are diagnosed. Retained references escaping
 through unsupported helper/CFG/capture forms are also diagnosed. Ordinary
 projected captures require one provable persistent root; references selecting
 different roots need specialization and are rejected. A `-no_retention`

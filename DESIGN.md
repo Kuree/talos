@@ -158,7 +158,7 @@ Anonymous verification retention supplies have protected FULL_ON values and an
 `always_on` source marker, distinct from computed switch outputs. Supply
 resolution preserves whether the root has a physical source, so additional
 load ports cannot erase the default source assumption (6.50/9.7.1).
-Master/slave retention simulates whole packed registers with one clock-edge
+Master/slave retention simulates whole packed registers with one edge-sensitive
 writer, using typed backing storage and separate visible output (9.7.3,
 Tables 11/12). RTC True holds backing; primary loss masks output. Loss of
 retention power, or primary loss without RTC True, corrupts backing. Recovery
@@ -167,9 +167,12 @@ occurrences and captured domain/strategy epochs at commit, preserving source
 order with ordinary assignments. Retention observes published supplies, so
 unevaluated switch-input glitches can coalesce
 (9.2.2/9.2.3). Native, bytecode and wasm32 use existing simulation primitives
-with fixed64 handles. Unsupported balloon retention, latch/asynchronous-reset
-writers, partial retained writes, mixed blocking/nonblocking writers, and
-multiple sequential writers are diagnosed. `-no_retention` strategies use
+with fixed64 handles. Direct clock/reset/set edge lists in always/always_ff
+retain the original RTL sensitivity; RTC overrides asynchronous writes without
+inventing events on restoration or RTC release (9.6.7/9.7.3). Unsupported balloon
+retention, latch writers, computed or qualified multi-event lists, partial
+retained writes, mixed blocking/nonblocking writers, and multiple sequential
+writers are diagnosed. `-no_retention` strategies use
 ordinary domain corruption. See [UPF.md](docs/UPF.md) for the supported subset.
 
 Deferred supply-set states retain typed supply predicates and explicit

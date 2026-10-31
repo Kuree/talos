@@ -1,0 +1,79 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 9.7.3 / IEEE 1800-2023 4.6/10.4.2: RTC publications
+// preceding a reset's NBA invalidate it before any known output edge. An RTC
+// publication after commit freezes the new value. Preserve source order
+// between retained and ordinary reset NBAs in both statement orders.
+// CHECK: asynchronous retention NBA ordering passed
+
+//--- design.sv
+module leaf #(parameter bit REVERSE = 0)
+    (input logic clk, rst_n, d, reset_value, output logic q = 0, plain = 0);
+  if (REVERSE) begin
+    always_ff @(posedge clk or negedge rst_n) begin
+      if (!rst_n) begin q <= reset_value; plain <= reset_value; end
+      else begin q <= d; plain <= d; end
+    end
+  end else begin
+    always_ff @(posedge clk or negedge rst_n) begin
+      if (!rst_n) begin plain <= reset_value; q <= reset_value; end
+      else begin plain <= d; q <= d; end
+    end
+  end
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, rst_n = 1, d = 0, reset_value = 1, enable = 1, rtc = 0;
+  wire q, plain, rq, rplain;
+  leaf dut(clk,rst_n,d,reset_value,q,plain);
+  leaf #(1) reversed(clk,rst_n,d,reset_value,rq,rplain);
+  int hits = 0, rhits = 0, qualified = 0, rqualified = 0;
+  always @(posedge dut.q) if (dut.q === 1) hits++;
+  always @(posedge reversed.q) if (reversed.q === 1) rhits++;
+  always @(posedge dut.q iff dut.plain) qualified++;
+  always @(posedge reversed.q iff reversed.plain) rqualified++;
+  initial begin
+    if (!supply_on("/top/AON.power") || !supply_on("/top/AON.ground", 0.0))
+      $fatal(1, "initial supplies");
+    #1 clk = 1;
+    #1 clk = 0;
+    #1 rst_n = 0;
+    rtc <= 1;
+    rtc <= 0;
+    #1;
+    if (q !== 0 || rq !== 0 || plain !== 1 || rplain !== 1 || hits !== 0 || rhits !== 0)
+      $fatal(1, "RTC pulse preceding reset NBA produced an edge");
+    rst_n = 1;
+    reset_value = 0;
+    #1 rst_n = 0;
+    #1;
+    if (q !== 0 || rq !== 0 || plain !== 0 || rplain !== 0) $fatal(1, "zero reset");
+    rst_n = 1;
+    reset_value = 1;
+    #1 rst_n = 0;
+    #0; // Reset actors already enqueued; this RTC NBA follows those writes.
+    rtc <= 1;
+    #1;
+    if (q !== 1 || rq !== 1 || plain !== 1 || rplain !== 1 || hits !== 1 || rhits !== 1 ||
+        qualified !== 1 || rqualified !== 0)
+      $fatal(1, "RTC after commit or reset NBA source order");
+    $display("asynchronous retention NBA ordering passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_net VDD
+create_supply_set AON -function {power VDD}
+create_supply_set SW -function {ground AON.ground}
+create_power_domain PD -elements {dut reversed} -supply {primary SW}
+create_power_switch PS -domain PD \
+    -input_supply_port {vin AON.power} -output_supply_port {vout PD.primary.power} \
+    -control_port {en enable} -on_state {ON vin en}
+set_retention KEEP -domain PD -elements {dut/q reversed/q} -retention_condition rtc
