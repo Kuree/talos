@@ -121,7 +121,7 @@ The initial command bridge supports `upf_version 3.1`, `set_design_top`,
 connections, `create_supply_set`, `associate_supply_set`,
 `create_power_domain` with supply handles, `set_domain_supply_net`,
 `create_power_switch`, supply-set `add_power_state`, `set_partial_on_translation`,
-and output `set_isolation`. Options outside the
+`set_retention`, and output `set_isolation`. Options outside the
 implemented subset are diagnosed. Root supplies initially are OFF (IEEE
 1801-2018 9.2.1). The compiler-provided SystemVerilog package `UPF` implements
 `supply_on` / `supply_off` against absolute UPF root handles, including eligible
@@ -145,7 +145,8 @@ primary power through function handles, supply-set associations, or legacy
 `set_domain_supply_net` (5.3.3.5/6.22/6.43). `--upf-assume-powered-inputs` retains
 the prototype's omitted-association inference and changes initial writable roots
 to FULL_ON for compatibility. General supply resolution, switch cascades,
-hierarchical power-state refinements, and retention remain to be implemented.
+hierarchical power-state refinements, and balloon retention remain to be
+implemented.
 
 Retention declarations now retain typed strategy/selector/trigger attributes on
 `upf.domain` (6.50/9.7). Explicit updates are merged before defaults; original
@@ -157,10 +158,19 @@ Anonymous verification retention supplies have protected FULL_ON values and an
 `always_on` source marker, distinct from computed switch outputs. Supply
 resolution preserves whether the root has a physical source, so additional
 load ports cannot erase the default source assumption (6.50/9.7.1).
-Only `-no_retention` strategies currently simulate; active strategies produce a
-diagnostic until normal backing, retained storage, visible output, and
-write/NBA priority are lowered together. The intended runtime uses existing
-simulation storage and scheduling primitives on native, bytecode, and wasm32.
+Master/slave retention simulates whole packed registers with one clock-edge
+writer, using typed backing storage and separate visible output (9.7.3,
+Tables 11/12). RTC True holds backing; primary loss masks output. Loss of
+retention power, or primary loss without RTC True, corrupts backing. Recovery
+restores surviving retained data without a clock. Guarded NBAs check pending
+occurrences and captured domain/strategy epochs at commit, preserving source
+order with ordinary assignments. Retention observes published supplies, so
+unevaluated switch-input glitches can coalesce
+(9.2.2/9.2.3). Native, bytecode and wasm32 use existing simulation primitives
+with fixed64 handles. Unsupported balloon retention, latch/asynchronous-reset
+writers, partial retained writes, mixed blocking/nonblocking writers, and
+multiple sequential writers are diagnosed. `-no_retention` strategies use
+ordinary domain corruption. See [UPF.md](docs/UPF.md) for the supported subset.
 
 Deferred supply-set states retain typed supply predicates and explicit
 NORMAL/CORRUPT/NOT_NORMAL policies (6.5/9.3.2). State and real-voltage
