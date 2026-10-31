@@ -1,0 +1,10 @@
+// RUN: %split-file %S/upf-partial-input-states.test %t
+// RUN: talos-opt %t/design.mlir --pass-pipeline='builtin.module(elaborate-upf,simulation.design(simulation.func(talos-sim-thread-suspension),talos-sim-build-compute-graph,talos-sim-verify-compute-graph),encode-talos-sim-to-bytecode{vpi=off require-bytecode=true},convert-talos-sim-processes-to-llvm-coroutines)' --verify-each -o %t.lowered.mlir
+// RUN: FileCheck %s --check-prefix=TIER < %t.lowered.mlir
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.o
+// RUN: %target_cxx %t.o %runtime_link_flags -o %t.exe
+// RUN: %t.exe | FileCheck %S/upf-partial-input-states.test
+// IEEE 1801-2018 6.22/6.47: require
+// interpreter scheduling in the descriptor; executable tier arguments do not
+// select an execution tier. Power evaluation must execute through bytecode.
+// TIER: runtime.execution_flags = #runtime.execution_flags<has_bytecode|require_bytecode>

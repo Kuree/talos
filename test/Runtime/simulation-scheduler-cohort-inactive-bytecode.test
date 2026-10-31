@@ -1,0 +1,12 @@
+// RUN: %split-file %S/simulation-scheduler-cohort-inactive.test %t
+// RUN: talos-opt %t/design.mlir --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-suspension),talos-sim-build-compute-graph,talos-sim-verify-compute-graph),encode-talos-sim-to-bytecode{vpi=off require-bytecode=true},convert-talos-sim-processes-to-llvm-coroutines)' --verify-each -o %t.lowered.mlir
+// RUN: FileCheck %s --check-prefix=TIER < %t.lowered.mlir
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.o
+// RUN: %target_cxx %t.o %runtime_link_flags -o %t.exe
+// RUN: %t.exe | FileCheck %S/simulation-scheduler-cohort-inactive.test
+// RUN: %llvm_dist/bin/llvm-nm --undefined-only %t.o | FileCheck %s --check-prefix=SYMBOLS --implicit-check-not=talos_rt_v1_scheduler_cohort
+// IEEE 1801-2018 6.50/9.7 and IEEE 1800-2023 4.4/4.5: require
+// interpreter scheduling in the descriptor; executable tier arguments do not
+// select an execution tier. Cohort queries must use the bytecode intrinsic.
+// SYMBOLS: talos_rt_v1_
+// TIER: runtime.execution_flags = #runtime.execution_flags<has_bytecode|require_bytecode>

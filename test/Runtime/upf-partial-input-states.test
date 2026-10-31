@@ -2,10 +2,9 @@
 // RUN: talos-opt %t/design.mlir --pass-pipeline='builtin.module(elaborate-upf,simulation.design(simulation.func(talos-sim-thread-suspension),talos-sim-build-compute-graph,talos-sim-verify-compute-graph),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' --verify-each -o %t.lowered.mlir
 // RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O0>' | %llc -filetype=obj -relocation-model=pic -o %t.o
 // RUN: %target_cxx %t.o %runtime_link_flags -o %t.exe
-// RUN: %t.exe --execution-tier=native | FileCheck %s
-// RUN: %t.exe --execution-tier=bytecode | FileCheck %s
+// RUN: %t.exe | FileCheck %s
 // RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.opt.o
-// RUN: %target_cxx %t.opt.o %runtime_link_flags -o %t.opt.exe && %t.opt.exe --execution-tier=native | FileCheck %s
+// RUN: %target_cxx %t.opt.o %runtime_link_flags -o %t.opt.exe && %t.opt.exe | FileCheck %s
 // IEEE 1801-2018 6.22: neither full nor partial conditions upgrade an input
 // that is already PARTIAL_ON or UNDETERMINED. Seed those input states in IR
 // because supply_on/off only produce FULL_ON/OFF and cascades are unsupported.
