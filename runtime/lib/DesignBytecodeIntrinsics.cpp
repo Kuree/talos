@@ -4062,13 +4062,17 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     }
     talos_rt_power_nba_guard_v1 guard{*evaluator, domain, *domainEpoch,
                                       strategy, *strategyEpoch};
-    return talos_rt_v1_power_nba(
+    auto delay = site.inputCount == 9 ? scalar(8) : std::optional<uint64_t>{0};
+    if (!delay)
+      return TALOS_RT_INVALID_BYTECODE;
+    return talos_rt_v1_power_nba_after(
         context, reinterpret_cast<uint8_t *>(context->stateValue.data()),
         value.fourState
             ? reinterpret_cast<uint8_t *>(context->stateUnknown.data())
             : nullptr,
         context->execution->state_bit_count, backing, visible, value.width,
-        bits.data(), value.fourState ? unknown.data() : nullptr, &guard);
+        *delay, bits.data(), value.fourState ? unknown.data() : nullptr,
+        &guard);
   }
   case TALOS_RT_INTRINSIC_V1_NBA:
   case TALOS_RT_INTRINSIC_V1_STATIC_NBA:

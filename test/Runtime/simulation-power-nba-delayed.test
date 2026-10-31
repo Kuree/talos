@@ -1,0 +1,156 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/design.mlir --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-suspension),talos-sim-build-compute-graph,talos-sim-verify-compute-graph),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' --verify-each -o %t.lowered.mlir
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O0>' | %llc -filetype=obj -relocation-model=pic -o %t.o
+// RUN: %target_cxx %t.o %runtime_link_flags -o %t.exe && %t.exe | FileCheck %s
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.opt.o
+// RUN: %target_cxx %t.opt.o %runtime_link_flags -o %t.opt.exe && %t.opt.exe | FileCheck %s
+// IEEE 1801-2018 9.7.3 and IEEE 1800-2023 4.6(b)/10.4.2: delayed
+// retained NBAs capture values, epochs and statement order now, while the
+// guard is evaluated at actual commit. Zero delay must not defer enqueue to
+// Inactive; equal nonzero delays preserve enqueue order. No early write is
+// allowed; a false guard or changed epoch suppresses both register roots.
+// CHECK: zero 34 34
+// CHECK-NEXT: ordinary first 51 51
+// CHECK-NEXT: ordinary last 17 34
+// CHECK-NEXT: not due 34 34
+// CHECK-NEXT: delayed 68 68
+// CHECK-NEXT: guard 68 68
+// CHECK-NEXT: recovered 85 85
+// CHECK-NEXT: epoch 85 85
+
+//--- design.mlir
+!c = !simulation.context
+!v = !simulation.logic<8>
+!r = !simulation.ref<!v>
+!e = !simulation.ref<i64>
+!o = !simulation.observer<i1>
+module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu"} {
+  simulation.design @delayed_retained_nba {
+    simulation.scope.decl 0 hierarchy "top"
+    simulation.code_unit.decl 1 in 0 root_initializer hierarchy "top.root"
+    simulation.code_unit.decl 2 in 0 initial hierarchy "top.drive"
+    simulation.code_unit.decl 3 in 0 observer hierarchy "top.allow"
+    simulation.storage.decl 0 in 0 : !v design
+    simulation.storage.decl 1 in 0 : !v design
+    simulation.storage.decl 2 in 0 : i64 design
+    simulation.storage.decl 3 in 0 : i1 design
+    simulation.storage.decl 4 in 0 : f64 design
+    simulation.func @root(%ctx: !c {simulation.capture_kind = 0 : i32})
+        attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
+      %epoch = simulation.context.storage %ctx[2] : !e
+      %rtc = simulation.context.storage %ctx[3] : !simulation.ref<i1>
+      %zero = arith.constant 0 : i64
+      %false = arith.constant false
+      %delay_ref = simulation.context.storage %ctx[4] : !simulation.ref<f64>
+      %zero_real = arith.constant 0.0 : f64
+      simulation.ref.store %zero_real to %delay_ref : f64, !simulation.ref<f64>
+      simulation.ref.store %zero to %epoch : i64, !e
+      simulation.ref.store %false to %rtc : i1, !simulation.ref<i1>
+      %p = simulation.spawn @drive(%ctx) : !c -> !simulation.process
+      simulation.return
+    }
+    simulation.func private @allow(%ctx: !c {simulation.capture_kind = 0 : i32}) -> i1
+        attributes {entry_kind = 14 : i32, code_unit_id = 3 : i64, schedule.observer_width = 1 : i32, schedule.observer_four_state = false} {
+      %rtc = simulation.context.storage %ctx[3] : !simulation.ref<i1>
+      %held = simulation.ref.load %rtc : !simulation.ref<i1> -> i1
+      %one = arith.constant true
+      %allow = arith.xori %held, %one : i1
+      simulation.return %allow : i1
+    }
+    simulation.func @drive(%ctx: !c {simulation.capture_kind = 0 : i32})
+        attributes {entry_kind = 1 : i32, code_unit_id = 2 : i64} {
+      %b = simulation.context.storage %ctx[0] : !r
+      %q = simulation.context.storage %ctx[1] : !r
+      %epoch = simulation.context.storage %ctx[2] : !e
+      %rtc = simulation.context.storage %ctx[3] : !simulation.ref<i1>
+      %guard = simulation.observer.bind @allow values (%rtc : !simulation.ref<i1>) captures 0 : !o
+      %zero = arith.constant 0 : i64
+      %one = arith.constant 1 : i64
+      %true = arith.constant true
+      %false = arith.constant false
+      %delay_ref = simulation.context.storage %ctx[4] : !simulation.ref<f64>
+      %runtime_delay = simulation.ref.load %delay_ref : !simulation.ref<f64> -> f64
+      %d0 = simulation.time.from_real %runtime_delay by 1 quantum 1
+      %d1 = simulation.time.constant 1
+      %d2 = simulation.time.constant 2
+      %d3 = simulation.time.constant 3
+      %v11 = simulation.logic.constant 17 : i8, 0 : i8 : !v
+      %v22 = simulation.logic.constant 34 : i8, 0 : i8 : !v
+      %v33 = simulation.logic.constant 51 : i8, 0 : i8 : !v
+      %v44 = simulation.logic.constant 68 : i8, 0 : i8 : !v
+      %v55 = simulation.logic.constant 85 : i8, 0 : i8 : !v
+      %out = arith.constant 1 : i32
+      simulation.power.nba.enqueue %ctx, %v11 to %b, %q guard %guard epochs (%epoch, %zero, %epoch, %zero) after %d0 : (!c, !v, !r, !r, !o, !e, i64, !e, i64, !simulation.time) -> ()
+      simulation.power.nba.enqueue %ctx, %v22 to %b, %q guard %guard epochs (%epoch, %zero, %epoch, %zero) : (!c, !v, !r, !r, !o, !e, i64, !e, i64) -> ()
+      simulation.suspend.delay %d1 to ^zero
+    ^zero:
+      %b0 = simulation.ref.load %b : !r -> !v
+      %q0 = simulation.ref.load %q : !r -> !v
+      %f0 = simulation.bytes.constant "zero %0d %0d"
+      simulation.display %ctx to %out(%f0, %b0, %q0) newline = true radix = <decimal> flags = [0,0,0] : !simulation.bytes, !v, !v
+      simulation.nba.enqueue %v11 to %q after %d2 : (!v, !r, !simulation.time) -> ()
+      simulation.power.nba.enqueue %ctx, %v33 to %b, %q guard %guard epochs (%epoch, %zero, %epoch, %zero) after %d2 : (!c, !v, !r, !r, !o, !e, i64, !e, i64, !simulation.time) -> ()
+      simulation.suspend.delay %d3 to ^ordinary_first
+    ^ordinary_first:
+      %bf = simulation.ref.load %b : !r -> !v
+      %qf = simulation.ref.load %q : !r -> !v
+      %ff = simulation.bytes.constant "ordinary first %0d %0d"
+      simulation.display %ctx to %out(%ff, %bf, %qf) newline = true radix = <decimal> flags = [0,0,0] : !simulation.bytes, !v, !v
+      simulation.power.nba.enqueue %ctx, %v11 to %b, %q guard %guard epochs (%epoch, %zero, %epoch, %zero) after %d2 : (!c, !v, !r, !r, !o, !e, i64, !e, i64, !simulation.time) -> ()
+      simulation.nba.enqueue %v22 to %q after %d2 : (!v, !r, !simulation.time) -> ()
+      simulation.suspend.delay %d3 to ^ordinary_last
+    ^ordinary_last:
+      %bl = simulation.ref.load %b : !r -> !v
+      %ql = simulation.ref.load %q : !r -> !v
+      %fl = simulation.bytes.constant "ordinary last %0d %0d"
+      simulation.display %ctx to %out(%fl, %bl, %ql) newline = true radix = <decimal> flags = [0,0,0] : !simulation.bytes, !v, !v
+      simulation.power.nba.enqueue %ctx, %v33 to %b, %q guard %guard epochs (%epoch, %zero, %epoch, %zero) after %d2 : (!c, !v, !r, !r, !o, !e, i64, !e, i64, !simulation.time) -> ()
+      simulation.power.nba.enqueue %ctx, %v44 to %b, %q guard %guard epochs (%epoch, %zero, %epoch, %zero) after %d2 : (!c, !v, !r, !r, !o, !e, i64, !e, i64, !simulation.time) -> ()
+      // Future pairs precede immediate pairs in the vector: compaction must
+      // preserve their guard identities. Reverse immediate/dynamic-zero order.
+      simulation.power.nba.enqueue %ctx, %v11 to %b, %q guard %guard epochs (%epoch, %zero, %epoch, %zero) : (!c, !v, !r, !r, !o, !e, i64, !e, i64) -> ()
+      simulation.power.nba.enqueue %ctx, %v22 to %b, %q guard %guard epochs (%epoch, %zero, %epoch, %zero) after %d0 : (!c, !v, !r, !r, !o, !e, i64, !e, i64, !simulation.time) -> ()
+      simulation.suspend.delay %d1 to ^early
+    ^early:
+      %be = simulation.ref.load %b : !r -> !v
+      %qe = simulation.ref.load %q : !r -> !v
+      %fe = simulation.bytes.constant "not due %0d %0d"
+      simulation.display %ctx to %out(%fe, %be, %qe) newline = true radix = <decimal> flags = [0,0,0] : !simulation.bytes, !v, !v
+      simulation.suspend.delay %d2 to ^delayed
+    ^delayed:
+      %bd = simulation.ref.load %b : !r -> !v
+      %qd = simulation.ref.load %q : !r -> !v
+      %fd = simulation.bytes.constant "delayed %0d %0d"
+      simulation.display %ctx to %out(%fd, %bd, %qd) newline = true radix = <decimal> flags = [0,0,0] : !simulation.bytes, !v, !v
+      simulation.power.nba.enqueue %ctx, %v55 to %b, %q guard %guard epochs (%epoch, %zero, %epoch, %zero) after %d2 : (!c, !v, !r, !r, !o, !e, i64, !e, i64, !simulation.time) -> ()
+      simulation.nba.enqueue %true to %rtc after %d1 : (i1, !simulation.ref<i1>, !simulation.time) -> ()
+      simulation.suspend.delay %d3 to ^blocked
+    ^blocked:
+      %bg = simulation.ref.load %b : !r -> !v
+      %qg = simulation.ref.load %q : !r -> !v
+      %fg = simulation.bytes.constant "guard %0d %0d"
+      simulation.display %ctx to %out(%fg, %bg, %qg) newline = true radix = <decimal> flags = [0,0,0] : !simulation.bytes, !v, !v
+      // This primitive qualifies at commit; frontend issue-time gating is a
+      // separate operation. A guard that recovers before due time may pass.
+      simulation.power.nba.enqueue %ctx, %v55 to %b, %q guard %guard epochs (%epoch, %zero, %epoch, %zero) after %d2 : (!c, !v, !r, !r, !o, !e, i64, !e, i64, !simulation.time) -> ()
+      simulation.nba.enqueue %false to %rtc after %d1 : (i1, !simulation.ref<i1>, !simulation.time) -> ()
+      simulation.suspend.delay %d3 to ^recovered
+    ^recovered:
+      %br = simulation.ref.load %b : !r -> !v
+      %qr = simulation.ref.load %q : !r -> !v
+      %fr = simulation.bytes.constant "recovered %0d %0d"
+      simulation.display %ctx to %out(%fr, %br, %qr) newline = true radix = <decimal> flags = [0,0,0] : !simulation.bytes, !v, !v
+      simulation.power.nba.enqueue %ctx, %v11 to %b, %q guard %guard epochs (%epoch, %zero, %epoch, %zero) after %d2 : (!c, !v, !r, !r, !o, !e, i64, !e, i64, !simulation.time) -> ()
+      simulation.nba.enqueue %one to %epoch after %d1 : (i64, !e, !simulation.time) -> ()
+      simulation.suspend.delay %d3 to ^invalidated
+    ^invalidated:
+      %bi = simulation.ref.load %b : !r -> !v
+      %qi = simulation.ref.load %q : !r -> !v
+      %fi = simulation.bytes.constant "epoch %0d %0d"
+      simulation.display %ctx to %out(%fi, %bi, %qi) newline = true radix = <decimal> flags = [0,0,0] : !simulation.bytes, !v, !v
+      %success = arith.constant 0 : i32
+      simulation.finish %ctx, %success
+      simulation.return
+    }
+  }
+}

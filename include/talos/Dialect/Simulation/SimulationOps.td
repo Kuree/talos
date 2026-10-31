@@ -5697,14 +5697,18 @@ def SimPowerNBAOp : SimOp<"power.nba.enqueue", [
     Suppression publishes no transition, including to edge/iff observers.
     Targets and epochs are whole design/static storage references. Projected
     views and automatic storage require separate bounds and lifetime handling.
+    An optional delay schedules the transaction directly at this statement,
+    preserving NBA source order even when a dynamic delay evaluates to zero
+    (IEEE 1800-2023 4.6(b), 10.4.2).
   }];
   let arguments = (ins SimContextType:$context, AnyType:$value,
       SimRefType:$backing, SimRefType:$visible, SimObserverType:$guard,
       SimRefType:$domain_epoch_ref, I64:$domain_epoch,
-      SimRefType:$strategy_epoch_ref, I64:$strategy_epoch);
+      SimRefType:$strategy_epoch_ref, I64:$strategy_epoch,
+      Optional<SimTimeType>:$delay);
   let assemblyFormat = [{$context `,` $value `to` $backing `,` $visible
       `guard` $guard `epochs` `(` $domain_epoch_ref `,` $domain_epoch `,`
-      $strategy_epoch_ref `,` $strategy_epoch `)` attr-dict `:`
+      $strategy_epoch_ref `,` $strategy_epoch `)` (`after` $delay^)? attr-dict `:`
       functional-type(operands, results)}];
   let hasVerifier = 1;
 }

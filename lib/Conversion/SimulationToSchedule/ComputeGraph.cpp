@@ -398,9 +398,11 @@ SmallVector<ComputeEffect> collectDirectEffects(const FunctionInfo &info,
         })
         .Case<sim::SimPowerNBAOp>([&](auto op) {
           appendEffect(info, schedule::ComputeEffectKind::NBA, op.getBacking(),
-                       effects);
+                       effects, schedule::ComputeTriggerKind::None,
+                       static_cast<bool>(op.getDelay()));
           appendEffect(info, schedule::ComputeEffectKind::NBA, op.getVisible(),
-                       effects);
+                       effects, schedule::ComputeTriggerKind::None,
+                       static_cast<bool>(op.getDelay()));
           appendEffect(info, schedule::ComputeEffectKind::Read,
                        op.getDomainEpochRef(), effects);
           appendEffect(info, schedule::ComputeEffectKind::Read,

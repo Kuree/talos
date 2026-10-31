@@ -11109,6 +11109,74 @@ TEST(Scheduler, GuardedNBAValidatesPersistentWholeRegistersBeforeEnqueue) {
   talos_rt_v1_context_destroy(context);
 }
 
+TEST(Scheduler, DelayedGuardedNBACapturesValuesOrderAndHomeRegion) {
+  // IEEE 1801-2018 9.7.3 and IEEE 1800-2023 4.6(b)/10.4.2: preserve
+  // issue order and copy the RHS now, even for zero delay. The ordinary
+  // scheduler's saturating clock arithmetic and NBA/Re-NBA mapping apply.
+  talos_rt_observer_descriptor_v1 observer{
+      1,
+      nullptr,
+      0,
+      1,
+      0,
+      TALOS_RT_OBSERVER_NO_BYTECODE,
+      +[](talos_rt_context *, const uint64_t *, uint32_t, uint64_t *value,
+          uint64_t *unknown, uint32_t) {
+        *value = 1;
+        *unknown = 0;
+        return TALOS_RT_OK;
+      },
+      0};
+  talos_rt_execution_descriptor_v1 execution{};
+  execution.version = TALOS_RT_VERSION;
+  execution.state_bit_count = 192;
+  execution.observers = &observer;
+  execution.observer_count = 1;
+  for (uint32_t home : {TALOS_RT_REGION_ACTIVE, TALOS_RT_REGION_REACTIVE})
+    for (uint64_t delay : {uint64_t{0}, uint64_t{5}, UINT64_MAX}) {
+      SCOPED_TRACE(home);
+      SCOPED_TRACE(delay);
+      talos_rt_context *context = nullptr;
+      ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+                TALOS_RT_OK);
+      context->schedulerTime = 13;
+      context->activeHomeRegion = home;
+      std::array<uint8_t, 24> plane{};
+      talos_rt_power_nba_guard_v1 guard{1, 64, 0, 128, 0};
+      uint8_t value = 0xa5;
+      ASSERT_EQ(talos_rt_v1_power_nba_after(context, plane.data(), nullptr, 192,
+                                            0, 8, 8, delay, &value, nullptr,
+                                            &guard),
+                TALOS_RT_OK);
+      value = 0x5a;
+      ASSERT_EQ(talos_rt_v1_power_nba_after(context, plane.data(), nullptr, 192,
+                                            0, 8, 8, delay, &value, nullptr,
+                                            &guard),
+                TALOS_RT_OK);
+      value = 0;
+      ASSERT_EQ(context->scheduledNBAs.size(), 4u);
+      const auto &updates = context->scheduledNBAs;
+      uint64_t due = delay == UINT64_MAX ? UINT64_MAX : 13 + delay;
+      for (unsigned index = 0; index != updates.size(); ++index) {
+        EXPECT_EQ(updates[index].dueTime, due);
+        EXPECT_EQ(updates[index].execRegion, home == TALOS_RT_REGION_REACTIVE
+                                                 ? TALOS_RT_REGION_RE_NBA
+                                                 : TALOS_RT_REGION_NBA);
+        EXPECT_EQ(updates[index].inlineValue, index < 2 ? 0xa5u : 0x5au);
+        if (index)
+          EXPECT_EQ(updates[index].sequence, updates[index - 1].sequence + 1);
+      }
+      if (due != UINT64_MAX) {
+        ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+        EXPECT_EQ(context->schedulerTime, due);
+        EXPECT_EQ(plane[0], 0x5a);
+        EXPECT_EQ(plane[1], 0x5a);
+        EXPECT_TRUE(context->powerNBAs->conditions.empty());
+      }
+      talos_rt_v1_context_destroy(context);
+    }
+}
+
 TEST(Scheduler, GuardedNBACancellationRetiresBothHalvesWithoutAnotherBarrier) {
   // IEEE 1801-2018 9.7.3: cancelling a retained register's two storage roots
   // must release its pending payloads even when no NBA remains to drain.
@@ -11138,14 +11206,16 @@ TEST(Scheduler, GuardedNBACancellationRetiresBothHalvesWithoutAnotherBarrier) {
   uint8_t one = 1;
   talos_rt_power_nba_guard_v1 guard{1, 0, 0, 64, 0};
   for (unsigned iteration = 0; iteration != 1000; ++iteration) {
-    ASSERT_EQ(talos_rt_v1_power_nba(context, plane.data(), nullptr, 192, 128,
-                                    129, 1, &one, nullptr, &guard),
+    ASSERT_EQ(talos_rt_v1_power_nba_after(context, plane.data(), nullptr, 192,
+                                          128, 129, 1, 7, &one, nullptr,
+                                          &guard),
               TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_power_cancel_nba(context, 128, 1), TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_power_cancel_nba(context, 129, 1), TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
     ASSERT_TRUE(context->scheduledNBAs.empty());
     ASSERT_TRUE(context->powerNBAs->conditions.empty());
+    EXPECT_EQ(context->schedulerTime, 0u);
   }
   EXPECT_EQ(plane[16], 0);
   talos_rt_v1_context_destroy(context);

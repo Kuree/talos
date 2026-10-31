@@ -778,12 +778,11 @@ bool powerNBAAllowedUnlocked(talos_rt_context *context, uint64_t sequence,
   return finish();
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_power_nba(talos_rt_context *context, uint8_t *valuePlane,
-                      uint8_t *unknownPlane, uint64_t planeBitCount,
-                      uint64_t backing, uint64_t visible, uint64_t width,
-                      const uint8_t *value, const uint8_t *unknown,
-                      const talos_rt_power_nba_guard_v1 *guard) {
+extern "C" talos_rt_status talos_rt_v1_power_nba_after(
+    talos_rt_context *context, uint8_t *valuePlane, uint8_t *unknownPlane,
+    uint64_t planeBitCount, uint64_t backing, uint64_t visible, uint64_t width,
+    uint64_t delay, const uint8_t *value, const uint8_t *unknown,
+    const talos_rt_power_nba_guard_v1 *guard) {
   if (!context || !guard || !valuePlane || !value || !width ||
       width > UINT64_MAX - 7 || (unknownPlane && !unknown))
     return TALOS_RT_INVALID_ARGUMENT;
@@ -850,7 +849,9 @@ talos_rt_v1_power_nba(talos_rt_context *context, uint8_t *valuePlane,
       update.bitOffset = offsets[index];
       update.bitWidth = width;
       update.execRegion = region;
-      update.dueTime = context->schedulerTime;
+      update.dueTime = delay > UINT64_MAX - context->schedulerTime
+                           ? UINT64_MAX
+                           : context->schedulerTime + delay;
       update.commitGuard =
           index == 0 ? NBACommitGuard::PowerFirst : NBACommitGuard::PowerSecond;
       update.inlinePacked = width <= 64;
@@ -904,6 +905,17 @@ talos_rt_v1_power_nba(talos_rt_context *context, uint8_t *valuePlane,
     context->schedulerStatus = TALOS_RT_INVALID_ARGUMENT;
     return TALOS_RT_INVALID_ARGUMENT;
   }
+}
+
+extern "C" talos_rt_status
+talos_rt_v1_power_nba(talos_rt_context *context, uint8_t *valuePlane,
+                      uint8_t *unknownPlane, uint64_t planeBitCount,
+                      uint64_t backing, uint64_t visible, uint64_t width,
+                      const uint8_t *value, const uint8_t *unknown,
+                      const talos_rt_power_nba_guard_v1 *guard) {
+  return talos_rt_v1_power_nba_after(context, valuePlane, unknownPlane,
+                                     planeBitCount, backing, visible, width, 0,
+                                     value, unknown, guard);
 }
 
 extern "C" talos_rt_status talos_rt_v1_scheduler_packed_slice_nba(

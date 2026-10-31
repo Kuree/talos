@@ -335,6 +335,8 @@ LogicalResult Encoder::encodeOperation(FunctionPlan &plan,
     if (identity == kInvalidRegister)
       return op.emitError("cannot encode guard identity");
     inputs.push_back(identity);
+    if (op.getDelay())
+      inputs.push_back(reg(plan, op.getDelay()));
     return emitIntrinsicRegisters(plan, TALOS_RT_INTRINSIC_V1_POWER_NBA, inputs,
                                   {});
   }

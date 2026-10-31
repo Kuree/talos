@@ -1680,6 +1680,11 @@ ABI_FUNCTION(talos_rt_v1_power_nba,
                                  uint64_t, uint64_t, uint64_t, uint64_t,
                                  const uint8_t *, const uint8_t *,
                                  const talos_rt_power_nba_guard_v1 *));
+ABI_FUNCTION(talos_rt_v1_power_nba_after,
+             talos_rt_status (*)(talos_rt_context *, uint8_t *, uint8_t *,
+                                 uint64_t, uint64_t, uint64_t, uint64_t,
+                                 uint64_t, const uint8_t *, const uint8_t *,
+                                 const talos_rt_power_nba_guard_v1 *));
 static_assert(sizeof(talos_rt_power_nba_guard_v1) == 40);
 static_assert(offsetof(talos_rt_power_nba_guard_v1, strategy_epoch) == 32);
 ABI_FUNCTION(talos_rt_v1_scheduler_driver_nba,

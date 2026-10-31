@@ -54,7 +54,7 @@ public:
                                 ConversionPatternRewriter &r) const override {
     if (adaptor.getContext().size() != 1 || adaptor.getValue().empty() ||
         adaptor.getBacking().size() != 1 || adaptor.getVisible().size() != 1 ||
-        adaptor.getGuard().size() != 1)
+        adaptor.getGuard().size() != 1 || adaptor.getDelay().size() > 1)
       return failure();
     Operation *binding =
         getConvertedObserverBinding(adaptor.getGuard().front());
@@ -87,20 +87,26 @@ public:
                                    r, loc, pointer, "__talos_state_unknown")
                                    .getResult()
                              : null;
-    Value status =
-        LLVM::CallOp::create(
-            r, loc, TypeRange{r.getI32Type()},
-            SymbolRefAttr::get(r.getContext(), "talos_rt_v1_power_nba"),
-            ValueRange{
-                adaptor.getContext().front(),
-                LLVM::AddressOfOp::create(r, loc, pointer,
-                                          "__talos_state_value"),
-                unknownPlane, llvmConstant(r, loc, i64, stateBitCount),
-                adaptor.getBacking().front(), adaptor.getVisible().front(),
-                llvmConstant(r, loc, i64,
-                             *sim::getPackedWidth(op.getValue().getType())),
-                spill(adaptor.getValue().front()), unknown, spec})
-            .getResult();
+    SmallVector<Value> arguments{
+        adaptor.getContext().front(),
+        LLVM::AddressOfOp::create(r, loc, pointer, "__talos_state_value"),
+        unknownPlane,
+        llvmConstant(r, loc, i64, stateBitCount),
+        adaptor.getBacking().front(),
+        adaptor.getVisible().front(),
+        llvmConstant(r, loc, i64,
+                     *sim::getPackedWidth(op.getValue().getType()))};
+    if (!adaptor.getDelay().empty())
+      arguments.push_back(adaptor.getDelay().front());
+    arguments.append({spill(adaptor.getValue().front()), unknown, spec});
+    Value status = LLVM::CallOp::create(
+                       r, loc, TypeRange{r.getI32Type()},
+                       SymbolRefAttr::get(r.getContext(),
+                                          adaptor.getDelay().empty()
+                                              ? "talos_rt_v1_power_nba"
+                                              : "talos_rt_v1_power_nba_after"),
+                       arguments)
+                       .getResult();
     LLVM::CallOp::create(
         r, loc, TypeRange{},
         SymbolRefAttr::get(r.getContext(), "talos_rt_v1_scheduler_fail"),

@@ -1,0 +1,10 @@
+// RUN: %split-file %S/simulation-power-nba-delayed.test %t
+// RUN: talos-opt %t/design.mlir --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-suspension),talos-sim-build-compute-graph,talos-sim-verify-compute-graph),encode-talos-sim-to-bytecode{vpi=off require-bytecode=true},convert-talos-sim-processes-to-llvm-coroutines)' --verify-each -o %t.lowered.mlir
+// RUN: FileCheck %s --check-prefix=TIER < %t.lowered.mlir
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.o
+// RUN: %target_cxx %t.o %runtime_link_flags -o %t.exe && %t.exe | FileCheck %S/simulation-power-nba-delayed.test
+// RUN: %llvm_dist/bin/llvm-nm --undefined-only %t.o | FileCheck %s --check-prefix=SYMBOLS --implicit-check-not=talos_rt_v1_power_nba
+// IEEE 1801-2018 9.7.3 / IEEE 1800-2023 10.4.2: execute both the original
+// 8-input and delayed 9-input intrinsic forms, including zero delay.
+// TIER: runtime.execution_flags = #runtime.execution_flags<has_bytecode|require_bytecode>
+// SYMBOLS: talos_rt_v1_

@@ -4173,6 +4173,16 @@ talos_rt_status talos_rt_v1_power_nba(
     uint64_t plane_bit_count, uint64_t backing_offset, uint64_t visible_offset,
     uint64_t bit_width, const uint8_t *value, const uint8_t *unknown,
     const talos_rt_power_nba_guard_v1 *guard);
+// Preserve the issuing statement's order for delayed retained NBAs, including
+// a dynamic zero delay (IEEE 1800-2023 4.6(b), 10.4.2). The transaction
+// captures its value, targets and epoch snapshots now; the observer runs at
+// due-time NBA commit. References have the same whole persistent-storage
+// requirement.
+talos_rt_status talos_rt_v1_power_nba_after(
+    talos_rt_context *context, uint8_t *value_plane, uint8_t *unknown_plane,
+    uint64_t plane_bit_count, uint64_t backing_offset, uint64_t visible_offset,
+    uint64_t bit_width, uint64_t delay, const uint8_t *value,
+    const uint8_t *unknown, const talos_rt_power_nba_guard_v1 *guard);
 // Queue a packed-view NBA while retaining the exact boundary of the input
 // reference. The signed low bit is relative to that view. Unknown,
 // unrepresentable, or nonoverlapping selections are ignored; partial overlaps
