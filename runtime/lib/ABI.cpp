@@ -528,6 +528,10 @@ ABI_OFFSET(talos_rt_computed_wait_record_v1, total_size, 80);
 ABI_OFFSET(talos_rt_computed_wait_record_v1, reserved, 88);
 ABI_SIZE_ALIGN(talos_rt_computed_observer_v1, 32, 8);
 ABI_SIZE_ALIGN(talos_rt_computed_capture_v1, 32, 8);
+ABI_SIZE_ALIGN(talos_rt_event_snapshot_target_v1, 16, 8);
+ABI_OFFSET(talos_rt_event_snapshot_target_v1, stable_id, 0);
+ABI_OFFSET(talos_rt_event_snapshot_target_v1, width, 8);
+ABI_OFFSET(talos_rt_event_snapshot_target_v1, flags, 12);
 ABI_SIZE_ALIGN(talos_rt_computed_dependency_v1, 16, 8);
 ABI_SIZE_ALIGN(talos_rt_computed_clause_v1, 16, 4);
 ABI_SIZE_ALIGN(talos_rt_process_descriptor_v1, ABI_PTR(88, 64), 8);
@@ -1693,6 +1697,17 @@ ABI_FUNCTION(talos_rt_v1_power_nba_view,
                                  const talos_rt_power_nba_guard_v1 *));
 static_assert(sizeof(talos_rt_power_nba_guard_v1) == 40);
 static_assert(offsetof(talos_rt_power_nba_guard_v1, strategy_epoch) == 32);
+ABI_FUNCTION(talos_rt_v1_event_snapshot_register,
+             talos_rt_status (*)(talos_rt_context *,
+                                 const talos_rt_computed_wait_record_v1 *,
+                                 uint64_t, uint64_t,
+                                 const talos_rt_computed_capture_v1 *, uint32_t,
+                                 const talos_rt_event_snapshot_target_v1 *,
+                                 uint32_t));
+ABI_FUNCTION(talos_rt_v1_event_snapshot_mask,
+             talos_rt_status (*)(talos_rt_context *, uint64_t *));
+ABI_FUNCTION(talos_rt_v1_event_snapshot_flush,
+             talos_rt_status (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_scheduler_driver_nba,
              talos_rt_status (*)(talos_rt_context *, uint8_t *, uint8_t *,
                                  uint64_t, uint64_t, uint64_t, uint64_t,

@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <limits>
 #include <map>
 #include <memory>
@@ -1345,16 +1346,35 @@ struct ClockConditionPublicationView {
   const ClockConditionPublicationView *previous = nullptr;
 };
 
-struct CovergroupClockEventRegistration;
+struct ExactEventRegistration;
 
-struct CovergroupClockEventClause {
-  CovergroupClockEventRegistration *registration = nullptr;
+struct EventSnapshotIdentity {};
+struct EventSnapshotOccurrence {
+  uint64_t ownerLogicalToken = 0;
+  uint64_t mask = 0;
+  std::shared_ptr<EventSnapshotIdentity> identity;
+};
+struct EventSnapshotTarget {
+  talos_rt_event_snapshot_target_v1 abi;
+  uint64_t bitOffset = 0;
+  uint64_t publicationHandle = UINT64_MAX;
+};
+struct EventSnapshotWork {
+  uint64_t ownerLogicalToken = 0;
+  std::shared_ptr<EventSnapshotIdentity> identity;
+  std::vector<EventSnapshotTarget> targets;
+  std::vector<uint64_t> value, unknown;
+};
+using EventSnapshotBatch = std::vector<EventSnapshotWork>;
+
+struct ExactEventClause {
+  ExactEventRegistration *registration = nullptr;
   uint32_t clauseIndex = 0;
   uint64_t lastExaminedSequence = 0;
   std::vector<SignalSubscriptionBucketSlot> bucketSlots;
 };
 
-struct CovergroupClockEventRegistration {
+struct ExactEventRegistration {
   uint64_t ownerLogicalToken = 0;
   uint64_t observerCodeUnitID = 0;
   uint64_t covergroupHandle = 0;
@@ -1369,29 +1389,36 @@ struct CovergroupClockEventRegistration {
   // views remain well-defined on hosts with strict alignment requirements.
   std::vector<uint64_t> eventPlan;
   std::vector<talos_rt_computed_capture_v1> captures;
-  std::vector<std::unique_ptr<CovergroupClockEventClause>> clauses;
+  std::vector<std::unique_ptr<ExactEventClause>> clauses;
+  std::shared_ptr<EventSnapshotIdentity> snapshotIdentity;
+  std::vector<EventSnapshotTarget> snapshotTargets;
 };
 
-struct CovergroupClockEventBucketEntry {
-  CovergroupClockEventClause *clause = nullptr;
+struct ExactEventBucketEntry {
+  ExactEventClause *clause = nullptr;
   size_t slotIndex = 0;
 };
 
-// Cold, process-owned subscriptions for IEEE 1800 covergroup clock-event
-// sampling. A separate index keeps ordinary signal waits and assertion clock
-// cohorts unchanged; signal publication pays only one null pointer check when
-// no clocked covergroup exists. Non-strobe registrations sample at publication
-// time. Strobe registrations retain one pending bit until the scheduler enters
-// the Postponed region.
-struct CovergroupClockEventFeatureState {
-  std::unordered_map<uint64_t,
-                     std::unique_ptr<CovergroupClockEventRegistration>>
+// Cold, process-owned subscriptions for exact event sampling. The same lazy
+// index serves covergroups and explicit state snapshots without another gate
+// in ordinary publication. Covergroups sample synchronously or retain one
+// strobe bit until Postponed. Pure snapshots retain owned payloads until an
+// explicit complete-publication flush commits their state transaction.
+struct ExactEventFeatureState {
+  std::unordered_map<uint64_t, std::unique_ptr<ExactEventRegistration>>
       registrations;
   std::unordered_map<SignalSubscriptionBucketKey,
-                     std::vector<CovergroupClockEventBucketEntry>,
+                     std::vector<ExactEventBucketEntry>,
                      SignalSubscriptionBucketKeyHash>
       subscriptionBuckets;
   uint64_t pendingStrobeCount = 0;
+  std::deque<EventSnapshotBatch> snapshots;
+  uint64_t snapshotMask = 0;
+  bool samplingSnapshot = false;
+  bool flushingSnapshots = false;
+  uint32_t dispatchDepth = 0;
+  bool collectingSnapshotNotifications = false;
+  std::vector<EventSnapshotOccurrence> snapshotOccurrences;
 };
 
 using ReplaceableEventCalendar =
@@ -2945,11 +2972,11 @@ struct talos_rt_context {
   // the tail so every preexisting context field retains its offset, and leave
   // it null for designs that never execute a clock-cohort wait.
   std::unique_ptr<ClockOccurrenceFeatureState> clockOccurrences;
-  std::unique_ptr<CovergroupClockEventFeatureState> covergroupClockEvents;
+  std::unique_ptr<ExactEventFeatureState> exactEvents;
   // Compiler-generated primary and iff observers are read-only. This guard
   // rejects malformed descriptors that publish while event-instant history is
   // being committed; it is cleared before user sample evaluators run.
-  uint32_t covergroupClockEventEvaluationDepth = 0;
+  uint32_t exactEventEvaluationDepth = 0;
   // Scoped to synchronous computed-condition and covergroup sampler
   // evaluation. Keeping the publication view on the context allows the two
   // independent lazy features to share exact post-transition loads.

@@ -4198,6 +4198,51 @@ talos_rt_status talos_rt_v1_power_nba_view(
     int64_t start, int64_t lower, int64_t upper, uint32_t valid,
     uint64_t source_bit_width, uint64_t delay, const uint8_t *value,
     const uint8_t *unknown, const talos_rt_power_nba_guard_v1 *guard);
+// An explicit compiler-owned event snapshot. Each target consumes the next
+// `width` bits of the pure sampler result, low bits first. Two-state targets
+// convert X/Z to zero; four-state targets preserve both planes. Handles and
+// this record have identical layout on native hosts and wasm32.
+#define TALOS_RT_EVENT_SNAPSHOT_FOUR_STATE UINT32_C(1)
+typedef struct talos_rt_event_snapshot_target_v1 {
+  uint64_t stable_id;
+  uint32_t width;
+  uint32_t flags;
+} talos_rt_event_snapshot_target_v1;
+// IEEE 1801-2018 6.50 requires data and qualification at the control event.
+// Register a pure packed-state sampler with the active persistent coordinator
+// process. It survives until that process completes. Captures/dependencies and
+// destinations must name persistent packed state; targets must be whole static
+// declarations or bounded global ranges, disjoint across all registrations,
+// with each range contained in one packed object's notification identity,
+// and free of force/assign overrides. AOT schedules are not admitted. The
+// caller proves packed integral types; runtime validation checks handle bounds
+// and lifetime rather than optional HDL reflection metadata. Target notices
+// and event dependencies use the canonical native/bytecode signal identity.
+// All samplers qualified by one publication capture before any destination
+// write or user covergroup callback. Failure discards that publication's
+// snapshots. Each source publication must be followed immediately by
+// snapshot_flush before the next state-changing statement/runtime commit.
+// Source and target notification callbacks must be read-only while a snapshot
+// is pending; recursive publications fail rather than silently reorder data.
+talos_rt_status talos_rt_v1_event_snapshot_register(
+    talos_rt_context *context,
+    const talos_rt_computed_wait_record_v1 *event_plan,
+    uint64_t event_plan_size, uint64_t observer_code_unit,
+    const talos_rt_computed_capture_v1 *captures, uint32_t capture_count,
+    const talos_rt_event_snapshot_target_v1 *targets, uint32_t target_count);
+// Return the complete iff-qualified clause mask only inside a snapshot sampler.
+talos_rt_status talos_rt_v1_event_snapshot_mask(talos_rt_context *context,
+                                                uint64_t *out_mask);
+// Call after the complete source publication, before the next statement or
+// runtime commit. Stage and commit all destinations of one source publication
+// before notifying any target. Nested target events are drained iteratively;
+// a finite work budget diagnoses cycles. Calls from observers or a flush fail.
+// Notification callbacks must be read-only; recursive publications from them
+// fail. Multiple qualifying publications before a flush are unsupported.
+// Sampler/validation failures leave destinations unchanged; notification
+// failures retain the committed destinations. This explicit boundary costs
+// nothing in designs which do not emit it.
+talos_rt_status talos_rt_v1_event_snapshot_flush(talos_rt_context *context);
 // Queue a packed-view NBA while retaining the exact boundary of the input
 // reference. The signed low bit is relative to that view. Unknown,
 // unrepresentable, or nonoverlapping selections are ignored; partial overlaps

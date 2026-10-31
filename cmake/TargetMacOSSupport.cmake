@@ -96,7 +96,7 @@ set(_talos_macos_runtime_sources
   ProcessNativeState ProcessNBA ProcessObservers ProcessSignals ProcessState
   ProcessTable ProcessTransitions ProcessValidation Random RandSolve RandSamplePlan
   RandReal RandSolveWide Runtime Sampled StochasticQueue System VCD VPI VPIValueLayout
-  ScanFormat DynamicScanBytecode ContainerBitstream RecursiveBitstream
+  EventSnapshot ScanFormat DynamicScanBytecode ContainerBitstream RecursiveBitstream
   ContainerBitstreamBytecode ClassBitstream ClassBitstreamBytecode DPIExport
   DPIExportBytecode DPIOpenArray DPIAggregate)
 set(_talos_macos_runtime_headers

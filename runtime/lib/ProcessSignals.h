@@ -23,8 +23,8 @@ bool talos_rt_notify_managed_waiters_unlocked(talos_rt_context *context,
 bool talos_rt_same_clock_occurrence_wait_unlocked(
     const talos_rt_context *context, const talos_rt_wait_record_v1 *wait,
     uint64_t waiterToken, bool designWaiter);
-void talos_rt_unregister_covergroup_clock_events_unlocked(
-    talos_rt_context *context, uint64_t logicalToken);
+void talos_rt_unregister_exact_events_unlocked(talos_rt_context *context,
+                                               uint64_t logicalToken);
 bool talos_rt_covergroup_strobes_pending_unlocked(
     const talos_rt_context *context);
 talos_rt_status

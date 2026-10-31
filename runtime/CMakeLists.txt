@@ -51,6 +51,7 @@ set(_talos_runtime_cold_tail_sources
   # additionally group their functions in .talos.feature.text; wasm uses
   # the portable cold attribute in its single code section.
   lib/ScanFormat.cpp
+  lib/EventSnapshot.cpp
   lib/DynamicScanBytecode.cpp
   lib/ContainerBitstream.cpp
   lib/RecursiveBitstream.cpp

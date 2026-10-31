@@ -571,6 +571,24 @@ bool isStaticCoverageSignal(talos_rt_context *context, uint64_t stableID,
          width <= state->second.bitWidth - offset;
 }
 
+bool isPersistentSnapshotSignal(talos_rt_context *context, uint64_t handle,
+                                uint64_t width) {
+  talos_rt_stable_handle_v1 decoded{};
+  return talos_rt_stable_handle_decode(handle, &decoded) &&
+         (decoded.kind == TALOS_RT_STABLE_HANDLE_STATIC ||
+          decoded.kind == TALOS_RT_STABLE_HANDLE_GLOBAL) &&
+         isStaticCoverageSignal(context, handle, width);
+}
+
+bool isPersistentSnapshotCapture(talos_rt_context *context,
+                                 const talos_rt_observer_capture_abi_v1 &abi,
+                                 const talos_rt_computed_capture_v1 &capture) {
+  return (abi.kind == TALOS_RT_OBSERVER_CAPTURE_STORAGE ||
+          abi.kind == TALOS_RT_OBSERVER_CAPTURE_NET) &&
+         !capture.payload0 && !capture.payload1 && !capture.payload2 &&
+         isPersistentSnapshotSignal(context, capture.stable_id, abi.width);
+}
+
 bool isValidArgumentRefCapture(talos_rt_context *context,
                                const talos_rt_observer_capture_abi_v1 &abi,
                                const talos_rt_computed_capture_v1 &capture) {
@@ -712,11 +730,11 @@ bool resolveArgumentRefDependenciesUnlocked(
   return true;
 }
 
-void eraseCovergroupClockEventRegistrationUnlocked(talos_rt_context *context,
-                                                   uint64_t logicalToken) {
-  if (!context || !context->covergroupClockEvents || logicalToken == 0)
+void eraseExactEventRegistrationUnlocked(talos_rt_context *context,
+                                         uint64_t logicalToken) {
+  if (!context || !context->exactEvents || logicalToken == 0)
     return;
-  CovergroupClockEventFeatureState &feature = *context->covergroupClockEvents;
+  ExactEventFeatureState &feature = *context->exactEvents;
   auto owned = feature.registrations.find(logicalToken);
   if (owned == feature.registrations.end())
     return;
@@ -726,16 +744,16 @@ void eraseCovergroupClockEventRegistrationUnlocked(talos_rt_context *context,
   for (const auto &pointer : owned->second->clauses) {
     if (!pointer)
       continue;
-    CovergroupClockEventClause &clause = *pointer;
+    ExactEventClause &clause = *pointer;
     for (const SignalSubscriptionBucketSlot &slot : clause.bucketSlots) {
       auto bucket = feature.subscriptionBuckets.find(slot.key);
       if (bucket == feature.subscriptionBuckets.end() ||
           slot.bucketIndex >= bucket->second.size())
         continue;
-      CovergroupClockEventBucketEntry &entry = bucket->second[slot.bucketIndex];
+      ExactEventBucketEntry &entry = bucket->second[slot.bucketIndex];
       if (entry.clause != &clause)
         continue;
-      CovergroupClockEventBucketEntry moved = bucket->second.back();
+      ExactEventBucketEntry moved = bucket->second.back();
       size_t movedFrom = bucket->second.size() - 1;
       entry = moved;
       bucket->second.pop_back();
@@ -758,26 +776,100 @@ void eraseCovergroupClockEventRegistrationUnlocked(talos_rt_context *context,
     else
       ++bucket;
   }
-  if (feature.registrations.empty() && feature.subscriptionBuckets.empty())
-    context->covergroupClockEvents.reset();
+  if (feature.registrations.empty() && feature.subscriptionBuckets.empty() &&
+      feature.snapshots.empty() && !feature.dispatchDepth &&
+      !feature.flushingSnapshots)
+    context->exactEvents.reset();
 }
 
 } // namespace
 
-void talos_rt_unregister_covergroup_clock_events_unlocked(
-    talos_rt_context *context, uint64_t logicalToken) {
-  eraseCovergroupClockEventRegistrationUnlocked(context, logicalToken);
+void talos_rt_unregister_exact_events_unlocked(talos_rt_context *context,
+                                               uint64_t logicalToken) {
+  eraseExactEventRegistrationUnlocked(context, logicalToken);
 }
 
-extern "C" talos_rt_status talos_rt_v1_covergroup_clock_event_register(
+talos_rt_status validateEventSnapshotTargetUnlocked(
+    talos_rt_context *context, const talos_rt_event_snapshot_target_v1 &target,
+    EventSnapshotTarget &resolved) {
+  if (!context || !context->execution || !target.width ||
+      (target.flags & ~TALOS_RT_EVENT_SNAPSHOT_FOUR_STATE) ||
+      (context->twoState() && target.flags))
+    return TALOS_RT_INVALID_DESIGN;
+  talos_rt_stable_handle_v1 decoded{};
+  if (!talos_rt_stable_handle_decode(target.stable_id, &decoded) ||
+      decoded.offset < 0)
+    return TALOS_RT_INVALID_HANDLE;
+  uint64_t offset = static_cast<uint64_t>(decoded.offset);
+  if (decoded.kind == TALOS_RT_STABLE_HANDLE_STATIC) {
+    const auto *state = findNativeStaticState(context, decoded.id);
+    if (!state || offset || state->bitWidth != target.width)
+      return TALOS_RT_INVALID_HANDLE;
+    offset = state->bitOffset;
+  } else if (decoded.kind != TALOS_RT_STABLE_HANDLE_GLOBAL) {
+    return TALOS_RT_INVALID_HANDLE;
+  }
+  uint64_t limit = context->execution->state_bit_count;
+  if (offset > limit || target.width > limit - offset)
+    return TALOS_RT_INVALID_HANDLE;
+  for (uint64_t bit = offset; bit < offset + target.width;) {
+    uint64_t width =
+        std::min<uint64_t>(64 - bit % 64, offset + target.width - bit);
+    uint64_t mask = (UINT64_MAX >> (64 - width)) << (bit % 64);
+    uint64_t limb = bit / 64;
+    if ((limb < context->forceMask.size() &&
+         (context->forceMask[limb] & mask)) ||
+        (limb < context->assignMask.size() &&
+         (context->assignMask[limb] & mask)))
+      return TALOS_RT_INVALID_DESIGN;
+    bit += width;
+  }
+  uint64_t publication =
+      talos_rt_canonical_state_handle_unlocked(context, offset, target.width);
+  if (publication == UINT64_MAX)
+    return TALOS_RT_INVALID_HANDLE;
+  talos_rt_stable_handle_v1 published{};
+  talos_rt_stable_handle_decode(publication, &published);
+  if (published.kind == TALOS_RT_STABLE_HANDLE_GLOBAL) {
+    // One destination is one packed object's notification identity. Reject a
+    // global range that crosses registered objects instead of silently losing
+    // their static subscribers. Disjoint objects use distinct target records.
+    if (context->nativeStaticStateRangesValid) {
+      const auto &ranges = context->nativeStaticStateRanges;
+      auto after =
+          std::lower_bound(ranges.begin(), ranges.end(), offset + target.width,
+                           [](const auto &range, uint64_t end) {
+                             return range.bitOffset < end;
+                           });
+      if (after != ranges.begin() && (after - 1)->prefixEnd > offset)
+        return TALOS_RT_INVALID_HANDLE;
+    } else {
+      for (const auto &[id, state] : context->nativeStaticStates) {
+        (void)id;
+        if (offset < state.bitOffset + state.bitWidth &&
+            state.bitOffset < offset + target.width)
+          return TALOS_RT_INVALID_HANDLE;
+      }
+    }
+  }
+  resolved = {target, offset, publication};
+  return TALOS_RT_OK;
+}
+
+static talos_rt_status registerExactEvent(
     talos_rt_context *context,
     const talos_rt_computed_wait_record_v1 *eventPlan, uint64_t eventPlanSize,
     uint32_t expectedStrobe, uint64_t observerCodeUnit,
-    const talos_rt_computed_capture_v1 *captures, uint32_t captureCount) {
+    const talos_rt_computed_capture_v1 *captures, uint32_t captureCount,
+    const talos_rt_event_snapshot_target_v1 *targets, uint32_t targetCount) {
+  bool snapshot = targetCount != 0;
   if (!context || !eventPlan ||
       eventPlanSize < sizeof(talos_rt_computed_wait_record_v1) ||
       expectedStrobe > 1 || observerCodeUnit == 0 ||
-      (captureCount != 0 && !captures))
+      (captureCount != 0 && !captures) || (snapshot && !targets) ||
+      eventPlanSize > SIZE_MAX || eventPlanSize > UINT64_MAX - 7 ||
+      uint64_t{captureCount} * sizeof(*captures) > SIZE_MAX ||
+      uint64_t{targetCount} * sizeof(*targets) > SIZE_MAX)
     return TALOS_RT_INVALID_ARGUMENT;
   ContextTransaction transaction(context);
   uint64_t insertedLogicalToken = 0;
@@ -808,10 +900,34 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_clock_event_register(
     const talos_rt_observer_descriptor_v1 *descriptor =
         findObserverDescriptor(execution, observerCodeUnit);
     if (!descriptor || descriptor->capture_count != captureCount ||
-        descriptor->result_width != 1 || descriptor->flags != 0 ||
-        captureCount == 0 ||
-        descriptor->capture_abi[0].kind != TALOS_RT_OBSERVER_CAPTURE_COVERGROUP)
+        (captureCount && !descriptor->capture_abi) ||
+        (snapshot ? (descriptor->flags & ~TALOS_RT_OBSERVER_FOUR_STATE) != 0
+                  : (descriptor->result_width != 1 || descriptor->flags != 0 ||
+                     captureCount == 0 ||
+                     descriptor->capture_abi[0].kind !=
+                         TALOS_RT_OBSERVER_CAPTURE_COVERGROUP)))
       return TALOS_RT_INVALID_DESIGN;
+    if (snapshot && (context->nativeSchedulePlan || expectedStrobe))
+      return TALOS_RT_TIER_UNAVAILABLE;
+    if (snapshot && native &&
+        (execution->flags & TALOS_RT_EXECUTION_REQUIRE_BYTECODE) &&
+        context->activeNativeProcess->tier != TALOS_RT_TIER_BYTECODE)
+      return TALOS_RT_TIER_UNAVAILABLE;
+    if (snapshot && context->publicationBatch.depth)
+      return TALOS_RT_INVALID_LIFECYCLE;
+    auto availableSampler = [&](const talos_rt_observer_descriptor_v1 *value) {
+      bool bytecode =
+          !native ||
+          context->activeNativeProcess->tier == TALOS_RT_TIER_BYTECODE ||
+          (execution->flags & TALOS_RT_EXECUTION_REQUIRE_BYTECODE);
+      return value && (bytecode ? value->bytecode_function !=
+                                      TALOS_RT_OBSERVER_NO_BYTECODE
+                                : (value->native_evaluator ||
+                                   value->bytecode_function !=
+                                       TALOS_RT_OBSERVER_NO_BYTECODE));
+    };
+    if (snapshot && !availableSampler(descriptor))
+      return TALOS_RT_TIER_UNAVAILABLE;
     if (!talos_rt_validate_computed_wait_record(execution, eventPlan,
                                                 eventPlanSize) ||
         eventPlan->clause_count > 64 || eventPlan->total_size != eventPlanSize)
@@ -822,6 +938,11 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_clock_event_register(
       const talos_rt_observer_capture_abi_v1 &abi =
           descriptor->capture_abi[index];
       const talos_rt_computed_capture_v1 &capture = captures[index];
+      if (snapshot) {
+        if (!isPersistentSnapshotCapture(context, abi, capture))
+          return TALOS_RT_INVALID_DESIGN;
+        continue;
+      }
       if (abi.kind == TALOS_RT_OBSERVER_CAPTURE_ARGUMENT_REF) {
         if (!isValidArgumentRefCapture(context, abi, capture))
           return TALOS_RT_INVALID_DESIGN;
@@ -849,15 +970,58 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_clock_event_register(
       if (!talos_rt_stable_handle_decode(capture.stable_id, &decoded))
         return TALOS_RT_INVALID_DESIGN;
     }
-    if (covergroupHandle == 0)
-      return TALOS_RT_INVALID_DESIGN;
     bool strobe = false;
-    talos_rt_status status =
-        talos_rt_covergroup_strobe_unlocked(context, covergroupHandle, strobe);
-    if (status != TALOS_RT_OK)
-      return status;
-    if (strobe != (expectedStrobe != 0))
+    if (!snapshot) {
+      if (covergroupHandle == 0)
+        return TALOS_RT_INVALID_DESIGN;
+      talos_rt_status status = talos_rt_covergroup_strobe_unlocked(
+          context, covergroupHandle, strobe);
+      if (status != TALOS_RT_OK)
+        return status;
+      if (strobe != (expectedStrobe != 0))
+        return TALOS_RT_INVALID_DESIGN;
+    }
+    std::vector<EventSnapshotTarget> snapshotTargets;
+    uint64_t snapshotWidth = 0;
+    for (uint32_t index = 0; index != targetCount; ++index) {
+      EventSnapshotTarget target{};
+      auto status =
+          validateEventSnapshotTargetUnlocked(context, targets[index], target);
+      if (status != TALOS_RT_OK)
+        return status;
+      snapshotWidth += target.abi.width;
+      if (snapshotWidth > UINT32_MAX)
+        return TALOS_RT_INVALID_DESIGN;
+      snapshotTargets.push_back(target);
+    }
+    if (snapshot && descriptor->result_width != snapshotWidth)
       return TALOS_RT_INVALID_DESIGN;
+    if (snapshot) {
+      std::vector<std::pair<uint64_t, uint64_t>> occupied;
+      auto append = [&](const auto &values) {
+        for (const auto &target : values)
+          occupied.emplace_back(target.bitOffset,
+                                target.bitOffset + target.abi.width);
+      };
+      append(snapshotTargets);
+      if (context->exactEvents)
+        for (const auto &[owner, registration] :
+             context->exactEvents->registrations) {
+          (void)owner;
+          append(registration->snapshotTargets);
+        }
+      std::sort(occupied.begin(), occupied.end());
+      for (size_t index = 1; index < occupied.size(); ++index)
+        if (occupied[index - 1].second > occupied[index].first)
+          return TALOS_RT_INVALID_DESIGN;
+      const auto *clauses = computedWaitSpan<talos_rt_computed_clause_v1>(
+          eventPlan, eventPlan->clauses_offset, eventPlan->clause_count);
+      if (!clauses)
+        return TALOS_RT_INVALID_DESIGN;
+      for (uint32_t index = 0; index < eventPlan->clause_count; ++index)
+        if (clauses[index].flags)
+          return TALOS_RT_INVALID_DESIGN;
+    }
 
     const auto *eventObservers =
         computedWaitSpan<talos_rt_computed_observer_v1>(
@@ -877,11 +1041,18 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_clock_event_register(
           findObserverDescriptor(execution, observer.code_unit_id);
       if (!eventDescriptor)
         return TALOS_RT_INVALID_DESIGN;
+      if (snapshot && !availableSampler(eventDescriptor))
+        return TALOS_RT_TIER_UNAVAILABLE;
       for (uint32_t captureIndex = 0; captureIndex != observer.capture_count;
            ++captureIndex) {
         const auto &abi = eventDescriptor->capture_abi[captureIndex];
         const auto &capture =
             eventCaptures[observer.capture_begin + captureIndex];
+        if (snapshot) {
+          if (!isPersistentSnapshotCapture(context, abi, capture))
+            return TALOS_RT_INVALID_DESIGN;
+          continue;
+        }
         if (abi.kind == TALOS_RT_OBSERVER_CAPTURE_ARGUMENT_REF) {
           if (!isValidArgumentRefCapture(context, abi, capture))
             return TALOS_RT_INVALID_DESIGN;
@@ -908,6 +1079,11 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_clock_event_register(
              dependencyIndex != observer.dependency_count; ++dependencyIndex) {
           const auto &dependency =
               eventDependencies[observer.dependency_begin + dependencyIndex];
+          if (snapshot &&
+              (dependency.kind != TALOS_RT_OBSERVER_DEPENDENCY_SIGNAL ||
+               !isPersistentSnapshotSignal(context, dependency.stable_id,
+                                           dependency.width)))
+            return TALOS_RT_INVALID_DESIGN;
           if (dependency.kind == TALOS_RT_OBSERVER_DEPENDENCY_ARGUMENT_REF)
             continue;
           if (dependency.kind == TALOS_RT_OBSERVER_DEPENDENCY_MANAGED) {
@@ -921,33 +1097,65 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_clock_event_register(
             return TALOS_RT_INVALID_DESIGN;
         }
     }
-    if (!context->covergroupClockEvents)
-      context->covergroupClockEvents =
-          std::make_unique<CovergroupClockEventFeatureState>();
-    CovergroupClockEventFeatureState &feature = *context->covergroupClockEvents;
-    if (feature.registrations.count(logicalToken) != 0)
+    if (context->exactEvents &&
+        context->exactEvents->registrations.count(logicalToken) != 0)
       return TALOS_RT_INVALID_LIFECYCLE;
 
-    auto registration = std::make_unique<CovergroupClockEventRegistration>();
+    auto registration = std::make_unique<ExactEventRegistration>();
     registration->ownerLogicalToken = logicalToken;
     registration->observerCodeUnitID = observerCodeUnit;
     registration->covergroupHandle = covergroupHandle;
     registration->native = native;
     registration->strobe = strobe;
+    if (snapshot) {
+      registration->snapshotIdentity =
+          std::make_shared<EventSnapshotIdentity>();
+      registration->snapshotTargets = std::move(snapshotTargets);
+    }
     registration->eventPlan.resize((eventPlanSize + 7) / 8);
     std::memcpy(registration->eventPlan.data(), eventPlan, eventPlanSize);
-    registration->captures.assign(captures, captures + captureCount);
+    if (captureCount)
+      registration->captures.assign(captures, captures + captureCount);
     registration->clauses.reserve(eventPlan->clause_count);
     auto *resolvedPlan = reinterpret_cast<talos_rt_computed_wait_record_v1 *>(
         registration->eventPlan.data());
     if (!resolveArgumentRefDependenciesUnlocked(
             context, execution, resolvedPlan, resolvedPlan->clause_count))
       return TALOS_RT_INVALID_DESIGN;
-    CovergroupClockEventRegistration *stored = registration.get();
+    if (snapshot) {
+      auto *dependencies = computedWaitSpan<talos_rt_computed_dependency_v1>(
+          resolvedPlan, resolvedPlan->dependencies_offset,
+          resolvedPlan->dependency_count);
+      for (uint32_t index = 0; index < resolvedPlan->dependency_count;
+           ++index) {
+        auto &dependency = dependencies[index];
+        talos_rt_stable_handle_v1 decoded{};
+        if (dependency.kind != TALOS_RT_OBSERVER_DEPENDENCY_SIGNAL ||
+            !isPersistentSnapshotSignal(context, dependency.stable_id,
+                                        dependency.width) ||
+            !talos_rt_stable_handle_decode(dependency.stable_id, &decoded))
+          return TALOS_RT_INVALID_DESIGN;
+        uint64_t offset = static_cast<uint64_t>(decoded.offset);
+        if (decoded.kind == TALOS_RT_STABLE_HANDLE_STATIC) {
+          const auto *state = findNativeStaticState(context, decoded.id);
+          if (!state)
+            return TALOS_RT_INVALID_HANDLE;
+          offset += state->bitOffset;
+        }
+        dependency.stable_id = talos_rt_canonical_state_handle_unlocked(
+            context, offset, dependency.width);
+        if (dependency.stable_id == UINT64_MAX)
+          return TALOS_RT_INVALID_HANDLE;
+      }
+    }
+    if (!context->exactEvents)
+      context->exactEvents = std::make_unique<ExactEventFeatureState>();
+    ExactEventFeatureState &feature = *context->exactEvents;
+    ExactEventRegistration *stored = registration.get();
     feature.registrations.emplace(logicalToken, std::move(registration));
     insertedLogicalToken = logicalToken;
     auto rollback = [&] {
-      eraseCovergroupClockEventRegistrationUnlocked(context, logicalToken);
+      eraseExactEventRegistrationUnlocked(context, logicalToken);
     };
     auto *storedPlan = reinterpret_cast<talos_rt_computed_wait_record_v1 *>(
         stored->eventPlan.data());
@@ -958,13 +1166,16 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_clock_event_register(
             storedPlan, storedPlan->dependencies_offset,
             storedPlan->dependency_count);
     for (uint32_t index = 0; index != storedPlan->clause_count; ++index) {
-      auto clause = std::make_unique<CovergroupClockEventClause>();
+      auto clause = std::make_unique<ExactEventClause>();
       clause->registration = stored;
       clause->clauseIndex = index;
       const auto &primary = storedObservers[index];
       clause->bucketSlots.reserve(primary.dependency_count);
-      CovergroupClockEventClause *storedClause = clause.get();
+      ExactEventClause *storedClause = clause.get();
       stored->clauses.push_back(std::move(clause));
+      std::unordered_set<SignalSubscriptionBucketKey,
+                         SignalSubscriptionBucketKeyHash>
+          indexedAliases;
       for (uint32_t dependencyIndex = 0;
            dependencyIndex != primary.dependency_count; ++dependencyIndex) {
         const auto &dependency =
@@ -975,44 +1186,87 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_clock_event_register(
           rollback();
           return TALOS_RT_INVALID_DESIGN;
         }
-        uint32_t kind = 0;
-        uint32_t id = 0;
-        int64_t firstPage = 0;
-        int64_t lastPage = 0;
-        if (!signalSubscriptionBucketRange(dependency.stable_id,
-                                           dependency.width, kind, id,
-                                           firstPage, lastPage)) {
-          rollback();
-          return TALOS_RT_INVALID_DESIGN;
-        }
-        __int128 pageCount = static_cast<__int128>(lastPage) - firstPage + 1;
-        if (pageCount <= 0) {
-          rollback();
-          return TALOS_RT_OUT_OF_RESOURCES;
-        }
-        bool wide = pageCount > kMaximumIndexedSignalPages;
-        int64_t indexedFirst = wide ? kWideSignalSubscriptionPage : firstPage;
-        int64_t indexedLast = wide ? kWideSignalSubscriptionPage : lastPage;
-        for (int64_t page = indexedFirst;; ++page) {
-          SignalSubscriptionBucketKey key{kind, id, page};
-          bool alreadyIndexed =
-              std::any_of(storedClause->bucketSlots.begin(),
-                          storedClause->bucketSlots.end(),
-                          [&](const auto &slot) { return slot.key == key; });
-          if (!alreadyIndexed) {
-            auto &bucket = feature.subscriptionBuckets[key];
-            size_t slot = storedClause->bucketSlots.size();
-            // Record the reverse edge first. If growing the forward bucket
-            // then fails, registration rollback sees the provisional
-            // out-of-range index and safely discards this clause without
-            // leaving a dangling bucket pointer.
-            storedClause->bucketSlots.push_back(
-                {key, std::numeric_limits<size_t>::max()});
-            bucket.push_back({storedClause, slot});
-            storedClause->bucketSlots.back().bucketIndex = bucket.size() - 1;
+        std::vector<std::pair<uint64_t, uint64_t>> aliases{
+            {dependency.stable_id, dependency.width}};
+        if (snapshot) {
+          talos_rt_stable_handle_v1 decoded{};
+          talos_rt_stable_handle_decode(dependency.stable_id, &decoded);
+          uint64_t begin = static_cast<uint64_t>(decoded.offset);
+          if (decoded.kind == TALOS_RT_STABLE_HANDLE_STATIC)
+            begin += findNativeStaticState(context, decoded.id)->bitOffset;
+          uint64_t end = begin + dependency.width;
+          aliases.emplace_back(
+              talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_GLOBAL, 0,
+                                            static_cast<int64_t>(begin)),
+              dependency.width);
+          auto appendAlias = [&](uint32_t id, uint64_t low, uint64_t high) {
+            uint64_t first = std::max(begin, low), last = std::min(end, high);
+            if (first < last)
+              aliases.emplace_back(talos_rt_stable_handle_encode(
+                                       TALOS_RT_STABLE_HANDLE_STATIC, id,
+                                       static_cast<int64_t>(first - low)),
+                                   last - first);
+          };
+          // Canonicalization primed the sorted range cache. Prefix maxima
+          // skip declarations that cannot overlap this physical dependency;
+          // retain the allocation-free fallback under memory pressure.
+          if (context->nativeStaticStateRangesValid) {
+            const auto &ranges = context->nativeStaticStateRanges;
+            auto first = std::upper_bound(ranges.begin(), ranges.end(), begin,
+                                          [](uint64_t low, const auto &range) {
+                                            return low < range.prefixEnd;
+                                          });
+            for (auto current = first;
+                 current != ranges.end() && current->bitOffset < end; ++current)
+              appendAlias(current->id, current->bitOffset, current->bitEnd);
+          } else {
+            for (const auto &[id, state] : context->nativeStaticStates)
+              appendAlias(id, state.bitOffset,
+                          state.bitOffset + state.bitWidth);
           }
-          if (page == indexedLast)
-            break;
+        }
+        for (const auto &alias : aliases) {
+          uint32_t kind = 0;
+          uint32_t id = 0;
+          int64_t firstPage = 0;
+          int64_t lastPage = 0;
+          if (!signalSubscriptionBucketRange(alias.first, alias.second, kind,
+                                             id, firstPage, lastPage)) {
+            rollback();
+            return TALOS_RT_INVALID_DESIGN;
+          }
+          __int128 pageCount = static_cast<__int128>(lastPage) - firstPage + 1;
+          if (pageCount <= 0) {
+            rollback();
+            return TALOS_RT_OUT_OF_RESOURCES;
+          }
+          bool wide = pageCount > kMaximumIndexedSignalPages;
+          int64_t indexedFirst = wide ? kWideSignalSubscriptionPage : firstPage;
+          int64_t indexedLast = wide ? kWideSignalSubscriptionPage : lastPage;
+          for (int64_t page = indexedFirst;; ++page) {
+            SignalSubscriptionBucketKey key{kind, id, page};
+            bool alreadyIndexed =
+                snapshot ? !indexedAliases.insert(key).second
+                         : std::any_of(storedClause->bucketSlots.begin(),
+                                       storedClause->bucketSlots.end(),
+                                       [&](const auto &slot) {
+                                         return slot.key == key;
+                                       });
+            if (!alreadyIndexed) {
+              auto &bucket = feature.subscriptionBuckets[key];
+              size_t slot = storedClause->bucketSlots.size();
+              // Record the reverse edge first. If growing the forward bucket
+              // then fails, registration rollback sees the provisional
+              // out-of-range index and safely discards this clause without
+              // leaving a dangling bucket pointer.
+              storedClause->bucketSlots.push_back(
+                  {key, std::numeric_limits<size_t>::max()});
+              bucket.push_back({storedClause, slot});
+              storedClause->bucketSlots.back().bucketIndex = bucket.size() - 1;
+            }
+            if (page == indexedLast)
+              break;
+          }
         }
       }
       if (!storedClause->bucketSlots.empty() &&
@@ -1029,27 +1283,47 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_clock_event_register(
   TALOS_RT_CATCH(const std::bad_alloc &) {
     if (insertedLogicalToken != 0) {
       ContextMutexLock lock(context);
-      eraseCovergroupClockEventRegistrationUnlocked(context,
-                                                    insertedLogicalToken);
+      eraseExactEventRegistrationUnlocked(context, insertedLogicalToken);
     }
     return TALOS_RT_OUT_OF_MEMORY;
   }
   TALOS_RT_CATCH(const std::length_error &) {
     if (insertedLogicalToken != 0) {
       ContextMutexLock lock(context);
-      eraseCovergroupClockEventRegistrationUnlocked(context,
-                                                    insertedLogicalToken);
+      eraseExactEventRegistrationUnlocked(context, insertedLogicalToken);
     }
     return TALOS_RT_OUT_OF_RESOURCES;
   }
   TALOS_RT_CATCH_ALL {
     if (insertedLogicalToken != 0) {
       ContextMutexLock lock(context);
-      eraseCovergroupClockEventRegistrationUnlocked(context,
-                                                    insertedLogicalToken);
+      eraseExactEventRegistrationUnlocked(context, insertedLogicalToken);
     }
     return TALOS_RT_INVALID_DESIGN;
   }
+}
+
+extern "C" talos_rt_status talos_rt_v1_covergroup_clock_event_register(
+    talos_rt_context *context,
+    const talos_rt_computed_wait_record_v1 *eventPlan, uint64_t eventPlanSize,
+    uint32_t expectedStrobe, uint64_t observerCodeUnit,
+    const talos_rt_computed_capture_v1 *captures, uint32_t captureCount) {
+  return registerExactEvent(context, eventPlan, eventPlanSize, expectedStrobe,
+                            observerCodeUnit, captures, captureCount, nullptr,
+                            0);
+}
+
+extern "C" talos_rt_status talos_rt_v1_event_snapshot_register(
+    talos_rt_context *context,
+    const talos_rt_computed_wait_record_v1 *eventPlan, uint64_t eventPlanSize,
+    uint64_t observerCodeUnit, const talos_rt_computed_capture_v1 *captures,
+    uint32_t captureCount, const talos_rt_event_snapshot_target_v1 *targets,
+    uint32_t targetCount) {
+  if (!targetCount)
+    return TALOS_RT_INVALID_ARGUMENT;
+  return registerExactEvent(context, eventPlan, eventPlanSize, 0,
+                            observerCodeUnit, captures, captureCount, targets,
+                            targetCount);
 }
 
 void talos_rt_unregister_signal_wait_unlocked(
@@ -1100,7 +1374,7 @@ void talos_rt_unregister_signal_wait_unlocked(
             : context->terminatedNativeProcesses.count(waiterToken) != 0 ||
                   context->killedNativeProcesses.count(waiterToken) != 0;
     if (terminated)
-      eraseCovergroupClockEventRegistrationUnlocked(context, logicalToken);
+      eraseExactEventRegistrationUnlocked(context, logicalToken);
     if (context->noChangeChecks) {
       auto &checks = context->noChangeChecks->checks;
       for (auto current = checks.begin(); current != checks.end();) {

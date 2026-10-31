@@ -1,5 +1,7 @@
 //===- ProcessTest.cpp - Shared process instance ABI tests ---------------===//
 
+#include "Inputs/EventSnapshotBytecode.h"
+#include "Inputs/EventSnapshotSmoke.h"
 #include "TestEnvironment.h"
 #include "talos/Runtime/ClockKernelReadySet.h"
 #include "talos/Runtime/Runtime.h"
@@ -13,6 +15,7 @@
 #include "../lib/ProcessSchedulerScope.h"
 #include "../lib/ProcessShared.h"
 #include "../lib/ProcessSignals.h"
+#include "../lib/ProcessValidation.h"
 #include "../lib/RuntimeInternal.h"
 
 #include "gtest/gtest.h"
@@ -15066,10 +15069,9 @@ TEST(RuntimeInternals,
                 context, eventRecord, eventPlan.size() * sizeof(uint64_t), 0,
                 observerID, &capture, 1),
             TALOS_RT_OK);
-  ASSERT_NE(context->covergroupClockEvents, nullptr);
-  ASSERT_EQ(context->covergroupClockEvents->subscriptionBuckets.size(), 1u);
-  EXPECT_EQ(context->covergroupClockEvents->subscriptionBuckets.begin()
-                ->second.size(),
+  ASSERT_NE(context->exactEvents, nullptr);
+  ASSERT_EQ(context->exactEvents->subscriptionBuckets.size(), 1u);
+  EXPECT_EQ(context->exactEvents->subscriptionBuckets.begin()->second.size(),
             2u);
   context->activeNativeProcess = nullptr;
   context->activeLogicalProcessToken = 0;
@@ -15112,7 +15114,7 @@ TEST(RuntimeInternals,
 
   talos_rt_program_complete_unlocked(
       context, TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | uint64_t{1}, 0);
-  EXPECT_EQ(context->covergroupClockEvents, nullptr);
+  EXPECT_EQ(context->exactEvents, nullptr);
   context->schedulerStatus = TALOS_RT_INVALID_DESIGN;
   EXPECT_EQ(talos_rt_v1_scheduler_handoff_pending(context), 1u);
   context->schedulerStatus = TALOS_RT_OK;
@@ -15452,6 +15454,610 @@ TEST(RuntimeInternals, CovergroupClockEventSeesCommittedCanonicalPublication) {
   }
 }
 
+std::vector<uint64_t> eventSnapshotMasks;
+std::vector<uint32_t> eventSnapshotAtomicSamples;
+bool eventSnapshotInvert = false;
+bool eventSnapshotFail = false;
+uint64_t eventSnapshotFailSource = UINT64_MAX;
+bool eventSnapshotNotificationFailure = false;
+bool eventSnapshotFlushFromObserver = false;
+bool eventSnapshotPublishFromObserver = false;
+bool eventSnapshotRemoveOwners = false;
+talos_rt_status eventSnapshotObserverFlushStatus = TALOS_RT_OK;
+
+talos_rt_status eventSnapshotEvaluator(talos_rt_context *context,
+                                       const uint64_t *captures,
+                                       uint32_t captureCount, uint64_t *value,
+                                       uint64_t *unknown, uint32_t limbCount) {
+  if (!context || !captures || captureCount != 1 || !value || !unknown)
+    return TALOS_RT_INVALID_ARGUMENT;
+  uint64_t mask = 0;
+  auto status = talos_rt_v1_event_snapshot_mask(context, &mask);
+  if (status != TALOS_RT_OK)
+    return status;
+  eventSnapshotMasks.push_back(mask);
+  if (eventSnapshotFail || captures[0] == eventSnapshotFailSource)
+    return TALOS_RT_INVALID_DESIGN;
+  const auto *descriptor =
+      talos::process::findObserverDescriptor(context->execution, 991);
+  if (!descriptor || limbCount != (descriptor->result_width + 63) / 64)
+    return TALOS_RT_INVALID_ARGUMENT;
+  for (uint64_t bit = 0; bit != descriptor->result_width; ++bit) {
+    bool v = false, u = false;
+    if (!talos_rt_read_clock_condition_publication_bit_unlocked(
+            context, captures[0], bit, v, u) &&
+        !talos_rt_read_signal_bit_unlocked(context, captures[0], bit, v, u,
+                                           false))
+      return TALOS_RT_INVALID_HANDLE;
+    value[bit / 64] |= uint64_t{eventSnapshotInvert ? !v : v} << (bit % 64);
+    unknown[bit / 64] |= uint64_t{u} << (bit % 64);
+  }
+  return TALOS_RT_OK;
+}
+
+talos_rt_status eventSnapshotAtomicEvaluator(talos_rt_context *context,
+                                             const uint64_t *,
+                                             uint32_t captureCount,
+                                             uint64_t *value, uint64_t *unknown,
+                                             uint32_t limbCount) {
+  if (captureCount != 1 || limbCount != 1)
+    return TALOS_RT_INVALID_ARGUMENT;
+  bool a = false, b = false, u = false;
+  if (!talos_rt_read_signal_bit_unlocked(context, 1, 0, a, u, false) ||
+      !talos_rt_read_signal_bit_unlocked(context, 2, 0, b, u, false))
+    return TALOS_RT_INVALID_HANDLE;
+  eventSnapshotAtomicSamples.push_back(uint32_t{a} | (uint32_t{b} << 1));
+  if (eventSnapshotFlushFromObserver)
+    eventSnapshotObserverFlushStatus =
+        talos_rt_v1_event_snapshot_flush(context);
+  if (eventSnapshotPublishFromObserver) {
+    const uint8_t zero = 0, one = 1;
+    talos_rt_v1_scheduler_signal_transition(context, 48, 1, &zero, nullptr,
+                                            &one, nullptr);
+  }
+  if (eventSnapshotRemoveOwners)
+    for (uint64_t owner : {1, 2, 3, 4})
+      talos_rt_unregister_exact_events_unlocked(
+          context, TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | owner);
+  if (eventSnapshotNotificationFailure)
+    return TALOS_RT_INVALID_DESIGN;
+  value[0] = 1;
+  unknown[0] = 0;
+  return TALOS_RT_OK;
+}
+
+class EventSnapshotRuntime : public testing::Test {
+protected:
+  talos_rt_context *context = nullptr;
+  talos_rt_observer_capture_abi_v1 primaryABI{TALOS_RT_OBSERVER_CAPTURE_STORAGE,
+                                              1};
+  talos_rt_observer_capture_abi_v1 samplerABI{TALOS_RT_OBSERVER_CAPTURE_STORAGE,
+                                              1};
+  talos_rt_observer_capture_abi_v1 coverageABI{
+      TALOS_RT_OBSERVER_CAPTURE_COVERGROUP, 64};
+  std::array<talos_rt_observer_descriptor_v1, 3> observers{{
+      {covergroupClockEventPrimaryObserverID, &primaryABI, 1, 1,
+       TALOS_RT_OBSERVER_FOUR_STATE, TALOS_RT_OBSERVER_NO_BYTECODE,
+       covergroupClockEventPrimaryEvaluator, 0},
+      {991, &samplerABI, 1, 1, TALOS_RT_OBSERVER_FOUR_STATE,
+       TALOS_RT_OBSERVER_NO_BYTECODE, eventSnapshotEvaluator, 0},
+      {992, &coverageABI, 1, 1, 0, TALOS_RT_OBSERVER_NO_BYTECODE,
+       eventSnapshotAtomicEvaluator, 0},
+  }};
+  talos_rt_execution_descriptor_v1 execution{};
+  talos_rt_process_descriptor_v1 descriptor{};
+  std::array<talos_rt_process_instance_v1, 4> instances{};
+  std::array<uint64_t, 4> nativeValue{}, nativeUnknown{};
+  std::vector<uint8_t> snapshotBytecode;
+
+  void SetUp() override {
+    execution.version = TALOS_RT_VERSION;
+    execution.state_bit_count = 256;
+    execution.observers = observers.data();
+    execution.observer_count = observers.size();
+    ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+              TALOS_RT_OK);
+    std::fill(context->stateUnknown.begin(), context->stateUnknown.end(), 0);
+    context->nativeStateValue = reinterpret_cast<uint8_t *>(nativeValue.data());
+    context->nativeStateUnknown =
+        reinterpret_cast<uint8_t *>(nativeUnknown.data());
+    context->nativeStateBitCount = execution.state_bit_count;
+    descriptor.execution = &execution;
+    for (size_t index = 0; index != instances.size(); ++index) {
+      instances[index].descriptor = &descriptor;
+      instances[index].context = context;
+      instances[index].tier = TALOS_RT_TIER_NATIVE;
+      context->scheduledProcesses.emplace_back();
+      auto &process = context->scheduledProcesses.back();
+      process.instance = &instances[index];
+      process.token = index + 1;
+      process.started = true;
+      context->scheduledProcessIndices.emplace(index + 1, index);
+    }
+    eventSnapshotMasks.clear();
+    eventSnapshotAtomicSamples.clear();
+    eventSnapshotInvert = false;
+    eventSnapshotFail = false;
+    eventSnapshotFailSource = UINT64_MAX;
+    eventSnapshotNotificationFailure = false;
+    eventSnapshotFlushFromObserver = false;
+    eventSnapshotPublishFromObserver = false;
+    eventSnapshotRemoveOwners = false;
+    eventSnapshotObserverFlushStatus = TALOS_RT_OK;
+  }
+  void TearDown() override {
+    context->nativeSchedulePlan = nullptr;
+    context->scheduledProcesses.clear();
+    context->scheduledProcessIndices.clear();
+    talos_rt_v1_context_destroy(context);
+  }
+  void activate(uint64_t owner) {
+    context->activeNativeProcess = &instances[owner - 1];
+    context->activeLogicalProcessToken =
+        TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | owner;
+  }
+  void deactivate() {
+    context->activeNativeProcess = nullptr;
+    context->activeLogicalProcessToken = 0;
+  }
+  void set(uint64_t bit, uint64_t width, uint64_t value, uint64_t unknown = 0) {
+    storePackedBits(context->stateValue, bit, width, value);
+    storePackedBits(context->stateUnknown, bit, width, unknown);
+    storePackedBits(nativeValue, bit, width, value);
+    storePackedBits(nativeUnknown, bit, width, unknown);
+  }
+  void publish(uint64_t bit, uint8_t oldValue, uint8_t newValue,
+               uint8_t newUnknown = 0) {
+    setByteBit(reinterpret_cast<uint8_t *>(nativeValue.data()), bit, newValue);
+    setByteBit(reinterpret_cast<uint8_t *>(nativeUnknown.data()), bit,
+               newUnknown);
+    talos_rt_v1_scheduler_signal_transition(context, bit, 1, &oldValue, nullptr,
+                                            &newValue, &newUnknown);
+  }
+  talos_rt_status
+  install(uint64_t owner, uint64_t source,
+          std::vector<talos_rt_event_snapshot_target_v1> targets,
+          std::vector<uint64_t> primaries = {0},
+          std::vector<uint64_t> conditions = {UINT64_MAX},
+          std::vector<uint32_t> edges = {TALOS_RT_WAIT_EDGE_POSEDGE}) {
+    auto plan = makeCovergroupClockEventPlan(primaries, conditions, edges);
+    talos_rt_computed_capture_v1 capture{source, 0, 0, 0};
+    activate(owner);
+    auto status = talos_rt_v1_event_snapshot_register(
+        context,
+        reinterpret_cast<talos_rt_computed_wait_record_v1 *>(plan.data()),
+        plan.size() * sizeof(uint64_t), 991, &capture, 1, targets.data(),
+        targets.size());
+    deactivate();
+    return status;
+  }
+  talos_rt_status probe(uint64_t primary, uint64_t owner = 4) {
+    context->coverage = std::make_unique<CoverageState>();
+    context->coverage->instances.emplace(42, FunctionalCoverageInstanceState{});
+    auto plan = makeCovergroupClockEventPlan({primary}, {UINT64_MAX},
+                                             {TALOS_RT_WAIT_EDGE_CHANGE});
+    talos_rt_computed_capture_v1 capture{42, 0, 0, 0};
+    activate(owner);
+    auto status = talos_rt_v1_covergroup_clock_event_register(
+        context,
+        reinterpret_cast<talos_rt_computed_wait_record_v1 *>(plan.data()),
+        plan.size() * sizeof(uint64_t), 0, 992, &capture, 1);
+    deactivate();
+    return status;
+  }
+};
+
+TEST_F(EventSnapshotRuntime, SamePublicationSwapsBeforeAtomicNotifications) {
+  // IEEE 1801-2018 6.50: all saves capture the event-time state. They must
+  // not read each other's newly written destinations in registration order.
+  for (bool reverse : {false, true}) {
+    SCOPED_TRACE(reverse);
+    set(1, 1, 1);
+    set(2, 1, 0);
+    ASSERT_EQ(install(reverse ? 2 : 1, 1, {{2, 1, 1}}), TALOS_RT_OK);
+    ASSERT_EQ(install(reverse ? 1 : 2, 2, {{1, 1, 1}}), TALOS_RT_OK);
+    context->coverage = std::make_unique<CoverageState>();
+    context->coverage->instances.emplace(42, FunctionalCoverageInstanceState{});
+    auto plan = makeCovergroupClockEventPlan(
+        {1, 2}, {UINT64_MAX, UINT64_MAX},
+        {TALOS_RT_WAIT_EDGE_CHANGE, TALOS_RT_WAIT_EDGE_CHANGE});
+    talos_rt_computed_capture_v1 capture{42, 0, 0, 0};
+    activate(3);
+    ASSERT_EQ(
+        talos_rt_v1_covergroup_clock_event_register(
+            context,
+            reinterpret_cast<talos_rt_computed_wait_record_v1 *>(plan.data()),
+            plan.size() * sizeof(uint64_t), 0, 992, &capture, 1),
+        TALOS_RT_OK);
+    deactivate();
+    publish(0, 0, 1);
+    ASSERT_EQ(context->schedulerStatus, TALOS_RT_OK);
+    EXPECT_EQ(uint64_t(context->stateValue[0]) & 6, 2u);
+    ASSERT_EQ(talos_rt_v1_event_snapshot_flush(context), TALOS_RT_OK);
+    EXPECT_EQ(uint64_t(context->stateValue[0]) & 6, 4u);
+    EXPECT_EQ(nativeValue[0] & 6, 4u);
+    ASSERT_FALSE(eventSnapshotAtomicSamples.empty());
+    for (uint32_t sample : eventSnapshotAtomicSamples)
+      EXPECT_EQ(sample, 2u);
+    for (uint64_t owner : {1, 2, 3})
+      talos_rt_unregister_exact_events_unlocked(
+          context, TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | owner);
+    publish(0, 1, 0);
+    eventSnapshotAtomicSamples.clear();
+  }
+}
+
+TEST_F(EventSnapshotRuntime, WidePayloadPreservesXZAndConvertsTwoState) {
+  observers[1].result_width = 66;
+  samplerABI.width = 66;
+  set(16, 64, UINT64_C(0x123456789abcdef0), UINT64_C(0x8000000000000001));
+  set(80, 2, 3, 3);
+  ASSERT_EQ(install(1, 16, {{96, 65, 1}, {200, 1, 0}}), TALOS_RT_OK);
+  publish(0, 0, 1);
+  ASSERT_EQ(talos_rt_v1_event_snapshot_flush(context), TALOS_RT_OK);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 96, 64),
+            UINT64_C(0x123456789abcdef0));
+  EXPECT_EQ(loadPackedBits(context->stateUnknown, 96, 64),
+            UINT64_C(0x8000000000000001));
+  EXPECT_EQ(loadPackedBits(context->stateValue, 160, 1), 1u);
+  EXPECT_EQ(loadPackedBits(context->stateUnknown, 160, 1), 1u);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 200, 1), 0u);
+  EXPECT_EQ(loadPackedBits(context->stateUnknown, 200, 1), 0u);
+  for (size_t limb = 0; limb != nativeValue.size(); ++limb) {
+    EXPECT_EQ(nativeValue[limb], uint64_t(context->stateValue[limb]));
+    EXPECT_EQ(nativeUnknown[limb], uint64_t(context->stateUnknown[limb]));
+  }
+}
+
+TEST_F(EventSnapshotRuntime, FullClauseMaskAndIffHistory) {
+  set(1, 1, 1);
+  std::vector<uint64_t> primaries(64, 0), conditions(64, UINT64_MAX);
+  std::vector<uint32_t> edges(64, TALOS_RT_WAIT_EDGE_POSEDGE);
+  conditions[1] = 3;
+  ASSERT_EQ(install(1, 1, {{2, 1, 1}}, primaries, conditions, edges),
+            TALOS_RT_OK);
+  publish(0, 0, 1);
+  ASSERT_EQ(eventSnapshotMasks,
+            std::vector<uint64_t>({UINT64_MAX & ~UINT64_C(2)}));
+  ASSERT_EQ(talos_rt_v1_event_snapshot_flush(context), TALOS_RT_OK);
+  publish(3, 0, 1);
+  EXPECT_EQ(eventSnapshotMasks.size(), 1u);
+  publish(0, 1, 0);
+  ASSERT_EQ(talos_rt_v1_event_snapshot_flush(context), TALOS_RT_OK);
+  publish(0, 0, 1);
+  ASSERT_EQ(eventSnapshotMasks.size(), 2u);
+  EXPECT_EQ(eventSnapshotMasks.back(), UINT64_MAX);
+  ASSERT_EQ(talos_rt_v1_event_snapshot_flush(context), TALOS_RT_OK);
+  uint64_t mask = 0;
+  EXPECT_EQ(talos_rt_v1_event_snapshot_mask(context, &mask),
+            TALOS_RT_INVALID_LIFECYCLE);
+}
+
+TEST_F(EventSnapshotRuntime, InvalidTargetsAndMissingBoundaryFail) {
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 32, 1),
+            TALOS_RT_OK);
+  ASSERT_EQ(install(1, 1, {{32, 1, 1}}), TALOS_RT_OK);
+  auto alias = talos_rt_v1_native_state_static_handle(1);
+  EXPECT_EQ(install(2, 1, {{alias, 1, 1}}), TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(install(2, 1, {{48, 0, 0}}), TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(install(2, 1, {{48, 1, 2}}), TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(install(2, 1, {{256, 1, 1}}), TALOS_RT_INVALID_HANDLE);
+  auto automatic =
+      talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_AUTOMATIC, 1, 0);
+  EXPECT_EQ(install(2, 1, {{automatic, 1, 1}}), TALOS_RT_INVALID_HANDLE);
+  EXPECT_EQ(install(2, automatic, {{48, 1, 1}}), TALOS_RT_INVALID_DESIGN);
+  publish(0, 0, 1);
+  publish(0, 1, 0);
+  publish(0, 0, 1);
+  EXPECT_EQ(context->schedulerStatus, TALOS_RT_INVALID_LIFECYCLE);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 32, 1), 0u);
+}
+
+TEST_F(EventSnapshotRuntime, FailedSamplerOrProtectedLaterTargetIsAtomic) {
+  observers[1].result_width = 2;
+  samplerABI.width = 2;
+  set(16, 2, 3);
+  ASSERT_EQ(install(1, 16, {{32, 1, 1}, {48, 1, 1}}), TALOS_RT_OK);
+  eventSnapshotFail = true;
+  publish(0, 0, 1);
+  ASSERT_EQ(context->schedulerStatus, TALOS_RT_INVALID_DESIGN);
+  EXPECT_TRUE(context->exactEvents->snapshots.empty());
+  EXPECT_EQ(loadPackedBits(context->stateValue, 32, 1), 0u);
+  eventSnapshotFail = false;
+  context->schedulerStatus = TALOS_RT_OK;
+  publish(0, 1, 0);
+  publish(0, 0, 1);
+  context->forceMask.assign(4, 0);
+  context->forceMask[0] |= UINT64_C(1) << 48;
+  EXPECT_EQ(talos_rt_v1_event_snapshot_flush(context), TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 32, 1), 0u);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 48, 1), 0u);
+}
+
+TEST_F(EventSnapshotRuntime, CompletedOwnerAndReplacementDiscardOldPayload) {
+  set(1, 1, 1);
+  ASSERT_EQ(install(1, 1, {{32, 1, 1}}), TALOS_RT_OK);
+  publish(0, 0, 1);
+  talos_rt_unregister_exact_events_unlocked(
+      context, TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | UINT64_C(1));
+  // Same owner and same destination, but a new identity: discard its old save.
+  set(1, 1, 0);
+  ASSERT_EQ(install(1, 1, {{32, 1, 1}}), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_event_snapshot_flush(context), TALOS_RT_OK);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 32, 1), 0u);
+  talos_rt_unregister_exact_events_unlocked(
+      context, TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | UINT64_C(1));
+  EXPECT_EQ(context->exactEvents, nullptr);
+}
+
+TEST_F(EventSnapshotRuntime, CyclesExhaustIterativeBudget) {
+  eventSnapshotInvert = true;
+  ASSERT_EQ(install(1, 0, {{0, 1, 1}}, {0}, {UINT64_MAX},
+                    {TALOS_RT_WAIT_EDGE_CHANGE}),
+            TALOS_RT_OK);
+  publish(0, 0, 1);
+  EXPECT_EQ(talos_rt_v1_event_snapshot_flush(context),
+            TALOS_RT_OUT_OF_RESOURCES);
+  EXPECT_GT(eventSnapshotMasks.size(), 100u);
+}
+
+TEST_F(EventSnapshotRuntime, TargetFanoutAndOrClausesFormOneCaptureGroup) {
+  observers[1].result_width = 2;
+  samplerABI.width = 2;
+  set(16, 2, 3);
+  ASSERT_EQ(install(1, 16, {{1, 1, 1}, {2, 1, 1}}), TALOS_RT_OK);
+  ASSERT_EQ(install(2, 16, {{32, 2, 1}}, {1}), TALOS_RT_OK);
+  ASSERT_EQ(install(3, 16, {{48, 2, 1}}, {2}), TALOS_RT_OK);
+  ASSERT_EQ(install(4, 16, {{64, 2, 1}}, {1, 2}, {UINT64_MAX, UINT64_MAX},
+                    {TALOS_RT_WAIT_EDGE_POSEDGE, TALOS_RT_WAIT_EDGE_POSEDGE}),
+            TALOS_RT_OK);
+  publish(0, 0, 1);
+  ASSERT_EQ(talos_rt_v1_event_snapshot_flush(context), TALOS_RT_OK);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 32, 2), 3u);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 48, 2), 3u);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 64, 2), 3u);
+  ASSERT_EQ(eventSnapshotMasks.size(), 4u);
+  EXPECT_EQ(
+      std::count(eventSnapshotMasks.begin(), eventSnapshotMasks.end(), 3u), 1);
+}
+
+TEST_F(EventSnapshotRuntime, GlobalAndStaticAliasesShareNotifications) {
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 32, 1),
+            TALOS_RT_OK);
+  uint64_t alias = talos_rt_v1_native_state_static_handle(1);
+  for (bool globalTarget : {true, false}) {
+    SCOPED_TRACE(globalTarget);
+    set(0, 1, 0);
+    set(1, 1, 1);
+    set(32, 1, 0);
+    set(48, 1, 0);
+    ASSERT_EQ(install(1, 1, {{globalTarget ? 32 : alias, 1, 1}}), TALOS_RT_OK);
+    ASSERT_EQ(install(2, 1, {{48, 1, 1}}, {globalTarget ? alias : 32}),
+              TALOS_RT_OK);
+    publish(0, 0, 1);
+    ASSERT_EQ(talos_rt_v1_event_snapshot_flush(context), TALOS_RT_OK);
+    EXPECT_EQ(loadPackedBits(context->stateValue, 48, 1), 1u);
+    EXPECT_EQ(loadPackedBits(nativeValue, 48, 1), 1u);
+    for (uint64_t owner : {1, 2})
+      talos_rt_unregister_exact_events_unlocked(
+          context, TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | owner);
+  }
+}
+
+TEST_F(EventSnapshotRuntime, IncomingGlobalAndStaticAliasesShareEventIndex) {
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 32, 1),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 2, 32, 1),
+            TALOS_RT_OK);
+  auto firstAlias = talos_rt_v1_native_state_static_handle(1);
+  auto secondAlias = talos_rt_v1_native_state_static_handle(2);
+  for (uint64_t primary : {UINT64_C(32), firstAlias}) {
+    for (uint64_t source : {UINT64_C(32), firstAlias, secondAlias}) {
+      SCOPED_TRACE(primary);
+      SCOPED_TRACE(source);
+      set(1, 1, 1);
+      set(32, 1, 0);
+      set(48, 1, 0);
+      ASSERT_EQ(install(1, 1, {{48, 1, 1}}, {primary}), TALOS_RT_OK);
+      setByteBit(reinterpret_cast<uint8_t *>(nativeValue.data()), 32, true);
+      const uint8_t zero = 0, one = 1;
+      talos_rt_v1_scheduler_signal_transition(context, source, 1, &zero,
+                                              nullptr, &one, nullptr);
+      ASSERT_EQ(context->schedulerStatus, TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_event_snapshot_flush(context), TALOS_RT_OK);
+      EXPECT_EQ(loadPackedBits(context->stateValue, 48, 1), 1u);
+      talos_rt_unregister_exact_events_unlocked(
+          context, TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | UINT64_C(1));
+    }
+  }
+}
+
+TEST_F(EventSnapshotRuntime, CrossObjectGlobalTargetsRequireSeparateRecords) {
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 32, 1),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 2, 33, 1),
+            TALOS_RT_OK);
+  observers[1].result_width = 2;
+  samplerABI.width = 2;
+  set(16, 2, 3);
+  EXPECT_EQ(install(1, 16, {{32, 2, 1}}), TALOS_RT_INVALID_HANDLE);
+  EXPECT_EQ(context->exactEvents, nullptr);
+  ASSERT_EQ(install(1, 16, {{32, 1, 1}, {33, 1, 1}}), TALOS_RT_OK);
+  publish(0, 0, 1);
+  ASSERT_EQ(talos_rt_v1_event_snapshot_flush(context), TALOS_RT_OK);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 32, 2), 3u);
+}
+
+TEST_F(EventSnapshotRuntime, LaterSamplerFailureDiscardsEarlierResults) {
+  set(16, 2, 3);
+  ASSERT_EQ(install(1, 16, {{32, 1, 1}}), TALOS_RT_OK);
+  ASSERT_EQ(install(2, 17, {{48, 1, 1}}), TALOS_RT_OK);
+  eventSnapshotFailSource = 17;
+  publish(0, 0, 1);
+  EXPECT_EQ(context->schedulerStatus, TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(eventSnapshotMasks.size(), 2u);
+  EXPECT_TRUE(context->exactEvents->snapshots.empty());
+  EXPECT_EQ(loadPackedBits(context->stateValue, 32, 1), 0u);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 48, 1), 0u);
+}
+
+TEST_F(EventSnapshotRuntime, NotificationFailureKeepsAllCommittedTargets) {
+  observers[1].result_width = 2;
+  samplerABI.width = 2;
+  set(16, 2, 3);
+  ASSERT_EQ(install(1, 16, {{1, 1, 1}, {2, 1, 1}}), TALOS_RT_OK);
+  ASSERT_EQ(probe(1), TALOS_RT_OK);
+  eventSnapshotNotificationFailure = true;
+  publish(0, 0, 1);
+  EXPECT_EQ(talos_rt_v1_event_snapshot_flush(context), TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 1, 2), 3u);
+  EXPECT_EQ(loadPackedBits(nativeValue, 1, 2), 3u);
+}
+
+TEST_F(EventSnapshotRuntime, CallbackFlushAndRecursivePublicationFailClosed) {
+  set(1, 1, 1);
+  ASSERT_EQ(install(1, 1, {{32, 1, 1}}), TALOS_RT_OK);
+  ASSERT_EQ(probe(0), TALOS_RT_OK);
+  eventSnapshotFlushFromObserver = true;
+  publish(0, 0, 1);
+  EXPECT_EQ(eventSnapshotObserverFlushStatus, TALOS_RT_INVALID_LIFECYCLE);
+  EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_event_snapshot_flush(context), TALOS_RT_OK);
+  publish(0, 1, 0);
+  eventSnapshotPublishFromObserver = true;
+  publish(0, 0, 1);
+  // The callback's unrelated write does not qualify another snapshot, but
+  // it still violates the pending transaction's read-only callback contract.
+  EXPECT_EQ(context->schedulerStatus, TALOS_RT_INVALID_LIFECYCLE);
+}
+
+TEST_F(EventSnapshotRuntime, LastOwnerRemovalDuringNotificationIsSafe) {
+  observers[1].result_width = 2;
+  samplerABI.width = 2;
+  set(16, 2, 3);
+  ASSERT_EQ(install(1, 16, {{1, 1, 1}, {2, 1, 1}}), TALOS_RT_OK);
+  ASSERT_EQ(probe(1), TALOS_RT_OK);
+  eventSnapshotRemoveOwners = true;
+  publish(0, 0, 1);
+  EXPECT_EQ(talos_rt_v1_event_snapshot_flush(context), TALOS_RT_OK);
+  EXPECT_EQ(context->exactEvents, nullptr);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 1, 2), 3u);
+}
+
+TEST_F(EventSnapshotRuntime, RejectsUnsupportedPlansAndUnavailableTiers) {
+  auto plan = makeCovergroupClockEventPlan({0}, {UINT64_MAX},
+                                           {TALOS_RT_WAIT_EDGE_POSEDGE});
+  auto *record =
+      reinterpret_cast<talos_rt_computed_wait_record_v1 *>(plan.data());
+  auto *clause = reinterpret_cast<talos_rt_computed_clause_v1 *>(
+      reinterpret_cast<uint8_t *>(plan.data()) + record->clauses_offset);
+  clause->flags = TALOS_RT_COMPUTED_CLAUSE_LEVEL_TRUE;
+  talos_rt_computed_capture_v1 capture{1, 0, 0, 0};
+  talos_rt_event_snapshot_target_v1 target{32, 1, 1};
+  activate(1);
+  EXPECT_EQ(talos_rt_v1_event_snapshot_register(context, record,
+                                                record->total_size, 991,
+                                                &capture, 1, &target, 1),
+            TALOS_RT_INVALID_DESIGN);
+  deactivate();
+  execution.flags |= TALOS_RT_EXECUTION_REQUIRE_BYTECODE;
+  EXPECT_EQ(install(1, 1, {{32, 1, 1}}), TALOS_RT_TIER_UNAVAILABLE);
+  execution.flags &= ~TALOS_RT_EXECUTION_REQUIRE_BYTECODE;
+  talos_rt_native_schedule_plan fake{};
+  context->nativeSchedulePlan = &fake;
+  EXPECT_EQ(install(1, 1, {{32, 1, 1}}), TALOS_RT_TIER_UNAVAILABLE);
+  context->nativeSchedulePlan = nullptr;
+  ASSERT_EQ(install(1, 1, {{32, 1, 1}}), TALOS_RT_OK);
+  AOTTestState aot;
+  auto aotPlan = makeAOTPlan(aot);
+  EXPECT_EQ(talos_rt_v1_scheduler_install_aot(context, &aotPlan),
+            TALOS_RT_TIER_UNAVAILABLE);
+}
+
+TEST_F(EventSnapshotRuntime,
+       RealBytecodeObserversWorkForActiveAndParkedOwners) {
+  snapshotBytecode = talos::test::snapshotObserverBytecode();
+  auto &bytecode = snapshotBytecode;
+  execution.flags =
+      TALOS_RT_EXECUTION_HAS_BYTECODE | TALOS_RT_EXECUTION_REQUIRE_BYTECODE;
+  execution.bytecode = bytecode.data();
+  execution.bytecode_size = bytecode.size();
+  execution.checksum = talos::test::snapshotImageChecksum(bytecode);
+  execution.observer_count = 2;
+  observers[0].bytecode_function = 0;
+  observers[0].native_evaluator = nullptr;
+  observers[1].bytecode_function = 1;
+  observers[1].native_evaluator = nullptr;
+  observers[1].result_width = 65;
+  samplerABI.width = 65;
+  talos_rt_context *validated = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &validated),
+            TALOS_RT_OK);
+  talos_rt_v1_context_destroy(validated);
+  for (uint32_t mode : {0, 1, 2}) {
+    SCOPED_TRACE(mode);
+    set(0, 1, 0);
+    set(16, 64, UINT64_C(0xfedcba9876543210), UINT64_C(0x80000000000000f0));
+    set(80, 1, 1, 1);
+    auto plan = makeCovergroupClockEventPlan({0}, {UINT64_MAX},
+                                             {TALOS_RT_WAIT_EDGE_POSEDGE});
+    talos_rt_computed_capture_v1 capture{16, 0, 0, 0};
+    talos_rt_event_snapshot_target_v1 target{96, 65, 1};
+    ScheduledDesignTask task;
+    task.id = 17;
+    task.started = true;
+    uint64_t owner = TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | UINT64_C(1);
+    if (mode == 0) {
+      instances[0].tier = TALOS_RT_TIER_BYTECODE;
+      activate(1);
+    } else {
+      owner = task.id;
+      context->activeDesignTask = &task;
+      context->activeDesignTaskID = task.id;
+      context->activeLogicalProcessToken = task.id;
+      context->designTaskExecuting = true;
+    }
+    ASSERT_EQ(
+        talos_rt_v1_event_snapshot_register(
+            context,
+            reinterpret_cast<talos_rt_computed_wait_record_v1 *>(plan.data()),
+            plan.size() * sizeof(uint64_t), 991, &capture, 1, &target, 1),
+        TALOS_RT_OK);
+    if (mode == 1) {
+      context->scheduledDesignTasks.push_back(std::move(task));
+      context->scheduledDesignTaskIndices.emplace(17, 0);
+      context->activeDesignTask = nullptr;
+      context->activeDesignTaskID = 0;
+      context->designTaskExecuting = false;
+      deactivate();
+    }
+    publish(0, 0, 1);
+    ASSERT_EQ(context->schedulerStatus, TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_event_snapshot_flush(context), TALOS_RT_OK);
+    EXPECT_EQ(loadPackedBits(context->stateValue, 96, 64),
+              UINT64_C(0xfedcba9876543210));
+    EXPECT_EQ(loadPackedBits(context->stateUnknown, 96, 64),
+              UINT64_C(0x80000000000000f0));
+    EXPECT_EQ(loadPackedBits(context->stateValue, 160, 1), 1u);
+    EXPECT_EQ(loadPackedBits(context->stateUnknown, 160, 1), 1u);
+    talos_rt_unregister_exact_events_unlocked(context, owner);
+    context->activeDesignTask = nullptr;
+    context->activeDesignTaskID = 0;
+    context->designTaskExecuting = false;
+    deactivate();
+    context->scheduledDesignTasks.clear();
+    context->scheduledDesignTaskIndices.clear();
+  }
+}
+
+TEST(RuntimeInternals, EventSnapshotStandaloneNativeProbe) {
+  EXPECT_EQ(talos::test::runEventSnapshotSmoke(false), 0);
+}
+
+TEST(RuntimeInternals, EventSnapshotStandaloneRequiredBytecodeProbe) {
+  EXPECT_EQ(talos::test::runEventSnapshotSmoke(true), 0);
+}
+
 TEST(RuntimeInternals, CovergroupClockEventRejectsFalseSamplerSentinel) {
   constexpr uint64_t observerID = 982;
   const talos_rt_observer_capture_abi_v1 captureABI{
@@ -15508,11 +16114,11 @@ TEST(RuntimeInternals, CovergroupClockEventRejectsFalseSamplerSentinel) {
   covergroupClockEventSentinel = 0;
   const uint8_t oldValue = 0;
   const uint8_t newValue = 1;
-  context->covergroupClockEventEvaluationDepth = 1;
+  context->exactEventEvaluationDepth = 1;
   talos_rt_v1_scheduler_signal_transition(context, 3, 1, &oldValue, nullptr,
                                           &newValue, nullptr);
   EXPECT_EQ(context->schedulerStatus, TALOS_RT_INVALID_DESIGN);
-  context->covergroupClockEventEvaluationDepth = 0;
+  context->exactEventEvaluationDepth = 0;
   context->schedulerStatus = TALOS_RT_OK;
   talos_rt_v1_scheduler_signal_transition(context, 0, 1, &oldValue, nullptr,
                                           &newValue, nullptr);
@@ -15598,12 +16204,12 @@ TEST(RuntimeInternals,
                                           &newValue, nullptr);
   EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);
   EXPECT_EQ(covergroupClockEventSamples, std::vector<uint32_t>({1}));
-  ASSERT_NE(context->covergroupClockEvents, nullptr);
-  EXPECT_EQ(context->covergroupClockEvents->registrations.size(), 1u);
+  ASSERT_NE(context->exactEvents, nullptr);
+  EXPECT_EQ(context->exactEvents->registrations.size(), 1u);
 
   talos_rt_program_complete_unlocked(
       context, TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | uint64_t{1}, 0);
-  EXPECT_EQ(context->covergroupClockEvents, nullptr);
+  EXPECT_EQ(context->exactEvents, nullptr);
   context->scheduledProcesses.clear();
   context->scheduledProcessIndices.clear();
   talos_rt_v1_context_destroy(context);
@@ -15728,7 +16334,7 @@ TEST(RuntimeInternals, CovergroupStrobeDefersAndCoalescesUntilPostponedDrain) {
   EXPECT_TRUE(talos_rt_covergroup_strobes_pending_unlocked(context));
   talos_rt_program_complete_unlocked(
       context, TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | uint64_t{1}, 0);
-  EXPECT_EQ(context->covergroupClockEvents, nullptr);
+  EXPECT_EQ(context->exactEvents, nullptr);
   context->scheduledProcesses.clear();
   context->scheduledProcessIndices.clear();
   talos_rt_v1_context_destroy(context);

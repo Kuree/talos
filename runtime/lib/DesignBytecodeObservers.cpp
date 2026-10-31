@@ -19,6 +19,8 @@ using namespace talos::process;
 constexpr uint32_t kMaximumObserverDepth = 256;
 
 ScheduledDesignTask *findDesignTask(talos_rt_context *context, uint64_t id) {
+  if (context->activeDesignTask && context->activeDesignTask->id == id)
+    return context->activeDesignTask;
   if (auto indexed = context->scheduledDesignTaskIndices.find(id);
       indexed != context->scheduledDesignTaskIndices.end() &&
       indexed->second < context->scheduledDesignTasks.size()) {

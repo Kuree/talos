@@ -309,6 +309,19 @@ bool publishNativeSignalTransitionUnlocked(
     const uint8_t *changed, const uint8_t *posedge, const uint8_t *negedge,
     const uint8_t *oldValue, const uint8_t *oldUnknown, const uint8_t *newValue,
     const uint8_t *newUnknown, bool establishesOverride = false);
+// Notify an already committed packed update without replaying its state.
+bool publishCommittedSignalTransitionUnlocked(
+    talos_rt_context *context, uint64_t bitOffset, uint64_t bitWidth,
+    const uint8_t *changed, const uint8_t *posedge, const uint8_t *negedge,
+    const uint8_t *oldValue, const uint8_t *oldUnknown, const uint8_t *newValue,
+    const uint8_t *newUnknown);
+talos_rt_status validateEventSnapshotTargetUnlocked(
+    talos_rt_context *context, const talos_rt_event_snapshot_target_v1 &target,
+    EventSnapshotTarget &resolved);
+bool captureEventSnapshotsUnlocked(
+    talos_rt_context *context,
+    const std::vector<EventSnapshotOccurrence> &occurrences,
+    const ClockConditionPublicationView *sample);
 void publishOverrideTransition(talos_rt_context *context, uint64_t bitOffset,
                                uint64_t bitWidth, const uint8_t *oldValue,
                                const uint8_t *oldUnknown,

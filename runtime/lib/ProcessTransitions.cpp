@@ -354,13 +354,12 @@ bool readClockOccurrenceCondition(talos_rt_context *context,
   }
 }
 
-bool evaluateCovergroupClockEventsNowUnlocked(
+bool evaluateExactEventsNowUnlocked(
     talos_rt_context *context, uint64_t sequence, uint32_t dependencyKind,
     uint32_t kind, uint32_t objectID, int64_t firstPage, int64_t lastPage,
     uint64_t stableID, uint64_t bitWidth,
     const ClockConditionPublicationView *sample) {
-  CovergroupClockEventFeatureState *feature =
-      context->covergroupClockEvents.get();
+  ExactEventFeatureState *feature = context->exactEvents.get();
   if (!feature)
     return true;
   struct Candidate {
@@ -369,7 +368,25 @@ bool evaluateCovergroupClockEventsNowUnlocked(
   };
   std::vector<Candidate> candidates;
   std::vector<uint64_t> sampleOwners;
-  auto considerClause = [&](CovergroupClockEventClause *clause) {
+  std::vector<EventSnapshotOccurrence> snapshotOwners;
+  auto physicalRange = [&](uint64_t handle, uint64_t width, __int128 &begin,
+                           __int128 &end) {
+    talos_rt_stable_handle_v1 decoded{};
+    if (!talos_rt_stable_handle_decode(handle, &decoded))
+      return false;
+    begin = decoded.offset;
+    if (decoded.kind == TALOS_RT_STABLE_HANDLE_STATIC) {
+      const auto *state = findNativeStaticState(context, decoded.id);
+      if (!state)
+        return false;
+      begin += state->bitOffset;
+    } else if (decoded.kind != TALOS_RT_STABLE_HANDLE_GLOBAL) {
+      return false;
+    }
+    end = begin + width;
+    return true;
+  };
+  auto considerClause = [&](ExactEventClause *clause) {
     if (!clause || clause->lastExaminedSequence == sequence)
       return;
     clause->lastExaminedSequence = sequence;
@@ -394,10 +411,19 @@ bool evaluateCovergroupClockEventsNowUnlocked(
           dependencies[primary.dependency_begin + dependencyIndex];
       if (dependency.kind != dependencyKind)
         continue;
-      affected |= dependencyKind == TALOS_RT_OBSERVER_DEPENDENCY_SIGNAL
-                      ? rangesOverlap(dependency.stable_id, dependency.width,
-                                      stableID, bitWidth)
-                      : dependency.stable_id == stableID;
+      if (dependencyKind != TALOS_RT_OBSERVER_DEPENDENCY_SIGNAL) {
+        affected |= dependency.stable_id == stableID;
+        continue;
+      }
+      affected |= rangesOverlap(dependency.stable_id, dependency.width,
+                                stableID, bitWidth);
+      if (!affected && clause->registration->snapshotIdentity) {
+        __int128 begin = 0, end = 0, publishedBegin = 0, publishedEnd = 0;
+        affected =
+            physicalRange(dependency.stable_id, dependency.width, begin, end) &&
+            physicalRange(stableID, bitWidth, publishedBegin, publishedEnd) &&
+            begin < publishedEnd && publishedBegin < end;
+      }
     }
     if (affected)
       candidates.push_back(
@@ -408,7 +434,7 @@ bool evaluateCovergroupClockEventsNowUnlocked(
     auto bucket = feature->subscriptionBuckets.find(key);
     if (bucket == feature->subscriptionBuckets.end())
       return true;
-    for (const CovergroupClockEventBucketEntry &entry : bucket->second) {
+    for (const ExactEventBucketEntry &entry : bucket->second) {
       considerClause(entry.clause);
     }
     return true;
@@ -452,9 +478,9 @@ bool evaluateCovergroupClockEventsNowUnlocked(
   }
 
   auto evaluateObserver =
-      [&](CovergroupClockEventRegistration &registration,
-          uint32_t observerIndex, std::vector<uint64_t> &value,
-          std::vector<uint64_t> &unknown, uint32_t &resultWidth) -> bool {
+      [&](ExactEventRegistration &registration, uint32_t observerIndex,
+          std::vector<uint64_t> &value, std::vector<uint64_t> &unknown,
+          uint32_t &resultWidth) -> bool {
     auto *plan = reinterpret_cast<talos_rt_computed_wait_record_v1 *>(
         registration.eventPlan.data());
     auto *observers = computedWaitSpan<talos_rt_computed_observer_v1>(
@@ -514,16 +540,14 @@ bool evaluateCovergroupClockEventsNowUnlocked(
     // temporarily releases the context mutex. Reentrant code may terminate an
     // owner and erase its registration, so re-resolve by stable owner token
     // and copy every field needed by the evaluator before calling it.
-    CovergroupClockEventFeatureState *currentFeature =
-        context->covergroupClockEvents.get();
+    ExactEventFeatureState *currentFeature = context->exactEvents.get();
     if (!currentFeature)
       break;
     auto found =
         currentFeature->registrations.find(candidate.ownerLogicalToken);
     if (found == currentFeature->registrations.end() || !found->second)
       continue;
-    CovergroupClockEventRegistration &registrationBeforeEvaluation =
-        *found->second;
+    ExactEventRegistration &registrationBeforeEvaluation = *found->second;
     auto *plan = reinterpret_cast<talos_rt_computed_wait_record_v1 *>(
         registrationBeforeEvaluation.eventPlan.data());
     auto *clauses = computedWaitSpan<talos_rt_computed_clause_v1>(
@@ -543,13 +567,13 @@ bool evaluateCovergroupClockEventsNowUnlocked(
 
     // Observer evaluation can release the context lock. Re-resolve the
     // registration before reading or updating its retained previous result.
-    currentFeature = context->covergroupClockEvents.get();
+    currentFeature = context->exactEvents.get();
     if (!currentFeature)
       break;
     found = currentFeature->registrations.find(candidate.ownerLogicalToken);
     if (found == currentFeature->registrations.end() || !found->second)
       continue;
-    CovergroupClockEventRegistration &current = *found->second;
+    ExactEventRegistration &current = *found->second;
     plan = reinterpret_cast<talos_rt_computed_wait_record_v1 *>(
         current.eventPlan.data());
     clauses = computedWaitSpan<talos_rt_computed_clause_v1>(
@@ -587,7 +611,7 @@ bool evaluateCovergroupClockEventsNowUnlocked(
       if (!evaluateObserver(current, clause.condition_observer, value, unknown,
                             resultWidth))
         return false;
-      currentFeature = context->covergroupClockEvents.get();
+      currentFeature = context->exactEvents.get();
       if (!currentFeature)
         break;
       found = currentFeature->registrations.find(candidate.ownerLogicalToken);
@@ -597,7 +621,29 @@ bool evaluateCovergroupClockEventsNowUnlocked(
           (value[0] & 1) == 0)
         continue;
     }
-    CovergroupClockEventRegistration &registration = *found->second;
+    ExactEventRegistration &registration = *found->second;
+    if (registration.snapshotIdentity) {
+      auto owner = std::find_if(
+          snapshotOwners.begin(), snapshotOwners.end(), [&](const auto &entry) {
+            return entry.ownerLogicalToken == candidate.ownerLogicalToken &&
+                   entry.identity == registration.snapshotIdentity;
+          });
+      if (owner != snapshotOwners.end())
+        owner->mask |= uint64_t{1} << candidate.clauseIndex;
+      else {
+        TALOS_RT_TRY {
+          snapshotOwners.push_back({candidate.ownerLogicalToken,
+                                    uint64_t{1} << candidate.clauseIndex,
+                                    registration.snapshotIdentity});
+        }
+        TALOS_RT_CATCH(const std::bad_alloc &) {
+          context->schedulerStatus = TALOS_RT_OUT_OF_MEMORY;
+          return false;
+        }
+      }
+      registration.lastSampledSequence = sequence;
+      continue;
+    }
     if (registration.lastSampledSequence == sequence)
       continue;
     registration.lastSampledSequence = sequence;
@@ -630,21 +676,51 @@ bool evaluateCovergroupClockEventsNowUnlocked(
     }
   }
 
+  // IEEE 1801-2018 6.50: snapshot all qualifying data at the event instant,
+  // before a destination write or a user coverage callback can change it.
+  // These pure callbacks return only packed data; explicit writes occur at
+  // the caller's complete-publication flush boundary, outside every overlay.
+  if (!snapshotOwners.empty()) {
+    if (context->exactEvents->collectingSnapshotNotifications) {
+      TALOS_RT_TRY {
+        auto &pending = context->exactEvents->snapshotOccurrences;
+        for (auto &occurrence : snapshotOwners) {
+          auto found = std::find_if(
+              pending.begin(), pending.end(), [&](const auto &entry) {
+                return entry.ownerLogicalToken ==
+                           occurrence.ownerLogicalToken &&
+                       entry.identity == occurrence.identity;
+              });
+          if (found == pending.end())
+            pending.push_back(std::move(occurrence));
+          else
+            found->mask |= occurrence.mask;
+        }
+      }
+      TALOS_RT_CATCH(const std::bad_alloc &) {
+        context->schedulerStatus = TALOS_RT_OUT_OF_MEMORY;
+        return false;
+      }
+    } else if (!captureEventSnapshotsUnlocked(context, snapshotOwners,
+                                              sample)) {
+      return false;
+    }
+  }
+
   // Complete the event-instant phase for every affected clause before any
   // user sample evaluator runs. This ensures an `or` event commits every
   // primary's retained result even when the first matching clause coalesces
   // the registration's sample. Sampler-triggered publications may now execute
   // recursively because all history for this publication is stable.
-  context->covergroupClockEventEvaluationDepth = 0;
+  context->exactEventEvaluationDepth = 0;
   for (uint64_t ownerLogicalToken : sampleOwners) {
-    CovergroupClockEventFeatureState *currentFeature =
-        context->covergroupClockEvents.get();
+    ExactEventFeatureState *currentFeature = context->exactEvents.get();
     if (!currentFeature)
       break;
     auto found = currentFeature->registrations.find(ownerLogicalToken);
     if (found == currentFeature->registrations.end() || !found->second)
       continue;
-    CovergroupClockEventRegistration &registration = *found->second;
+    ExactEventRegistration &registration = *found->second;
     uint32_t enabled = 0;
     talos_rt_status status = talos_rt_v1_covergroup_sample_enabled(
         context, registration.covergroupHandle, &enabled);
@@ -689,14 +765,26 @@ bool evaluateCovergroupClockEventsNowUnlocked(
   return true;
 }
 
-bool evaluateCovergroupClockEventsUnlocked(
-    talos_rt_context *context, uint64_t sequence, uint32_t dependencyKind,
-    uint32_t kind, uint32_t objectID, int64_t firstPage, int64_t lastPage,
-    uint64_t stableID, uint64_t bitWidth,
-    const ClockConditionPublicationView *sample) {
+bool evaluateExactEventsUnlocked(talos_rt_context *context, uint64_t sequence,
+                                 uint32_t dependencyKind, uint32_t kind,
+                                 uint32_t objectID, int64_t firstPage,
+                                 int64_t lastPage, uint64_t stableID,
+                                 uint64_t bitWidth,
+                                 const ClockConditionPublicationView *sample) {
   if (!context)
     return false;
-  if (context->covergroupClockEventEvaluationDepth != 0) {
+  ExactEventFeatureState *feature = context->exactEvents.get();
+  if (!feature)
+    return true;
+  if ((feature->flushingSnapshots || !feature->snapshots.empty()) &&
+      context->observerDepth != 0) {
+    // Explicit snapshot transactions admit read-only notification callbacks.
+    // A foreign callback that publishes recursively cannot interleave a new
+    // event ahead of the remaining atomic target notifications.
+    context->schedulerStatus = TALOS_RT_INVALID_LIFECYCLE;
+    return false;
+  }
+  if (context->exactEventEvaluationDepth != 0) {
     // Compiler-generated primary and iff observers are required to be
     // read-only, so they cannot publish recursively. Reject a malformed or
     // foreign descriptor that violates that contract instead of deferring its
@@ -707,12 +795,21 @@ bool evaluateCovergroupClockEventsUnlocked(
 
   struct EvaluationGuard {
     talos_rt_context *context;
-    ~EvaluationGuard() { context->covergroupClockEventEvaluationDepth = 0; }
+    ~EvaluationGuard() {
+      context->exactEventEvaluationDepth = 0;
+      auto *feature = context->exactEvents.get();
+      if (feature && feature->dispatchDepth)
+        --feature->dispatchDepth;
+      if (feature && !feature->dispatchDepth && !feature->flushingSnapshots &&
+          feature->registrations.empty() && feature->snapshots.empty())
+        context->exactEvents.reset();
+    }
   } guard{context};
-  context->covergroupClockEventEvaluationDepth = 1;
-  return evaluateCovergroupClockEventsNowUnlocked(
-      context, sequence, dependencyKind, kind, objectID, firstPage, lastPage,
-      stableID, bitWidth, sample);
+  ++feature->dispatchDepth;
+  context->exactEventEvaluationDepth = 1;
+  return evaluateExactEventsNowUnlocked(context, sequence, dependencyKind, kind,
+                                        objectID, firstPage, lastPage, stableID,
+                                        bitWidth, sample);
 }
 
 bool recordClockOccurrenceUnlocked(
@@ -798,9 +895,95 @@ bool recordClockOccurrenceUnlocked(
 
 } // namespace
 
+bool captureEventSnapshotsUnlocked(
+    talos_rt_context *context,
+    const std::vector<EventSnapshotOccurrence> &occurrences,
+    const ClockConditionPublicationView *sample) {
+  struct PurePhaseGuard {
+    talos_rt_context *context;
+    uint32_t previous;
+    ~PurePhaseGuard() { context->exactEventEvaluationDepth = previous; }
+  } pure{context, context->exactEventEvaluationDepth};
+  context->exactEventEvaluationDepth = 1;
+  TALOS_RT_TRY {
+    ExactEventFeatureState &current = *context->exactEvents;
+    // The C API requires a flush between qualifying source publications.
+    // Fail closed rather than sample a later restore from an uncommitted
+    // earlier save. Nested callbacks cannot supply that boundary.
+    if (!current.snapshots.empty()) {
+      context->schedulerStatus = TALOS_RT_INVALID_LIFECYCLE;
+      return false;
+    }
+    EventSnapshotBatch batch;
+    batch.reserve(occurrences.size());
+    for (const auto &occurrence : occurrences) {
+      uint64_t owner = occurrence.ownerLogicalToken;
+      auto found = current.registrations.find(owner);
+      if (found == current.registrations.end() ||
+          found->second->snapshotIdentity != occurrence.identity)
+        continue;
+      EventSnapshotWork work;
+      work.ownerLogicalToken = owner;
+      work.identity = found->second->snapshotIdentity;
+      work.targets = found->second->snapshotTargets;
+      auto captures = found->second->captures;
+      uint64_t codeUnit = found->second->observerCodeUnitID;
+      bool native = found->second->native;
+      uint64_t token = native ? owner & ~kNativeLogicalProcessTag : owner;
+      uint64_t width = 0;
+      for (const auto &target : work.targets)
+        width += target.abi.width;
+      uint32_t limbs = static_cast<uint32_t>((width + 63) / 64);
+      work.value.assign(limbs, 0);
+      work.unknown.assign(limbs, 0);
+      bool evaluated = false;
+      {
+        struct SamplingGuard {
+          ExactEventFeatureState &feature;
+          ~SamplingGuard() {
+            feature.samplingSnapshot = false;
+            feature.snapshotMask = 0;
+          }
+        } guard{current};
+        current.samplingSnapshot = true;
+        current.snapshotMask = occurrence.mask;
+        ClockConditionPublicationOverlay overlay(context, sample);
+        evaluated = native ? talos_rt_evaluate_native_bound_observer_unlocked(
+                                 context, token, codeUnit, captures.data(),
+                                 captures.size(), work.value.data(),
+                                 work.unknown.data(), limbs)
+                           : talos_rt_evaluate_design_bound_observer_unlocked(
+                                 context, token, codeUnit, captures.data(),
+                                 captures.size(), work.value.data(),
+                                 work.unknown.data(), limbs);
+      }
+      if (!evaluated) {
+        if (context->schedulerStatus == TALOS_RT_OK)
+          context->schedulerStatus = TALOS_RT_INVALID_DESIGN;
+        return false;
+      }
+      found = current.registrations.find(owner);
+      if (found != current.registrations.end() &&
+          found->second->snapshotIdentity == work.identity)
+        batch.push_back(std::move(work));
+    }
+    if (!batch.empty())
+      current.snapshots.push_back(std::move(batch));
+  }
+  TALOS_RT_CATCH(const std::bad_alloc &) {
+    context->schedulerStatus = TALOS_RT_OUT_OF_MEMORY;
+    return false;
+  }
+  TALOS_RT_CATCH(const std::length_error &) {
+    context->schedulerStatus = TALOS_RT_OUT_OF_RESOURCES;
+    return false;
+  }
+  return true;
+}
+
 bool talos_rt_evaluate_covergroup_managed_clock_events_unlocked(
     talos_rt_context *context, uint64_t token) {
-  if (!context || !context->covergroupClockEvents)
+  if (!context || !context->exactEvents)
     return context != nullptr;
   if (token == 0 || context->nextSchedulerSequence == 0) {
     context->schedulerStatus =
@@ -810,28 +993,28 @@ bool talos_rt_evaluate_covergroup_managed_clock_events_unlocked(
   uint64_t sequence = context->nextSchedulerSequence++;
   if (context->signalDiagnosticsEnabled)
     ++context->signalDiagnostics.publications;
-  return evaluateCovergroupClockEventsUnlocked(
-      context, sequence, TALOS_RT_OBSERVER_DEPENDENCY_MANAGED, 0, 0, 0, 0,
-      token, 1, nullptr);
+  return evaluateExactEventsUnlocked(context, sequence,
+                                     TALOS_RT_OBSERVER_DEPENDENCY_MANAGED, 0, 0,
+                                     0, 0, token, 1, nullptr);
 }
 
 bool talos_rt_covergroup_strobes_pending_unlocked(
     const talos_rt_context *context) {
-  if (!context || !context->covergroupClockEvents)
+  if (!context || !context->exactEvents)
     return false;
-  return context->covergroupClockEvents->pendingStrobeCount != 0;
+  return context->exactEvents->pendingStrobeCount != 0;
 }
 
 talos_rt_status
 talos_rt_drain_covergroup_strobes_unlocked(talos_rt_context *context) {
-  if (!context || !context->covergroupClockEvents)
+  if (!context || !context->exactEvents)
     return context ? TALOS_RT_OK : TALOS_RT_INVALID_ARGUMENT;
 
   std::vector<uint64_t> owners;
   TALOS_RT_TRY {
-    owners.reserve(context->covergroupClockEvents->registrations.size());
+    owners.reserve(context->exactEvents->registrations.size());
     for (const auto &[owner, registration] :
-         context->covergroupClockEvents->registrations)
+         context->exactEvents->registrations)
       if (registration && registration->strobePending)
         owners.push_back(owner);
   }
@@ -866,15 +1049,14 @@ talos_rt_drain_covergroup_strobes_unlocked(talos_rt_context *context) {
     // native callback. Re-resolve every candidate by stable owner token and
     // copy its evaluator state before crossing that boundary, just as the
     // event-instant path does.
-    CovergroupClockEventFeatureState *feature =
-        context->covergroupClockEvents.get();
+    ExactEventFeatureState *feature = context->exactEvents.get();
     if (!feature)
       break;
     auto found = feature->registrations.find(owner);
     if (found == feature->registrations.end() || !found->second ||
         !found->second->strobePending)
       continue;
-    CovergroupClockEventRegistration &registration = *found->second;
+    ExactEventRegistration &registration = *found->second;
     registration.strobePending = false;
     if (feature->pendingStrobeCount == 0) {
       context->schedulerStatus = TALOS_RT_INVALID_DESIGN;
@@ -1208,7 +1390,7 @@ publishSignalOccurrenceUnlocked(talos_rt_context *context, uint64_t stableID,
   // Exact multi-clock coordination owns a separate lazy subscription index.
   // Ordinary publication performs only this cold null-pointer gate and keeps
   // its long-standing subscription representation and matching path intact.
-  if (!evaluateCovergroupClockEventsUnlocked(
+  if (!evaluateExactEventsUnlocked(
           context, sequence, TALOS_RT_OBSERVER_DEPENDENCY_SIGNAL, kind,
           objectID, firstPage, lastPage, stableID, bitWidth, sample))
     return false;
@@ -1414,7 +1596,7 @@ static bool publishCovergroupClockTransitionUnlocked(
   (void)changed;
   (void)posedge;
   (void)negedge;
-  if (!context->covergroupClockEvents)
+  if (!context->exactEvents)
     return true;
   if (context->nextSchedulerSequence == 0) {
     context->schedulerStatus = TALOS_RT_OUT_OF_RESOURCES;
@@ -1434,7 +1616,7 @@ static bool publishCovergroupClockTransitionUnlocked(
     ++context->signalDiagnostics.publications;
   ClockConditionPublicationView sample{stableID, bitWidth, 0, newValue,
                                        newUnknown};
-  return evaluateCovergroupClockEventsUnlocked(
+  return evaluateExactEventsUnlocked(
       context, sequence, TALOS_RT_OBSERVER_DEPENDENCY_SIGNAL, kind, objectID,
       firstPage, lastPage, stableID, bitWidth, &sample);
 }
@@ -1579,7 +1761,7 @@ static bool publishStaticAOTSignalTransitionUnlockedImpl(
   // can require a new handoff notification to the calendar.
   bool coalescePending =
       UseClockIngress && context->nativeScheduleClockIngressPending &&
-      !context->clockOccurrences && !context->covergroupClockEvents &&
+      !context->clockOccurrences && !context->exactEvents &&
       !context->vpiObservationDemand &&
       !talos_rt_has_conditional_signal_waiters(context) &&
       context->signalSubscriptionObjectFilter
@@ -1803,8 +1985,7 @@ bool talos_rt_publish_signal_transition_batch_unlocked(
       if (((context->nativeSchedulePlan->flags &
             TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL) != 0 &&
            runtimeWatched) ||
-          (feature && !feature->waits.empty()) ||
-          context->covergroupClockEvents)
+          (feature && !feature->waits.empty()) || context->exactEvents)
         return publishSignalTransitionBatchImpl(
             context, stableID, bitWidth, changed, posedge, negedge,
             edgeBitOffset, outSequence, oldValue, oldUnknown, newValue,
@@ -1929,7 +2110,7 @@ bool publishNativeSignalTransitionUnlocked(
       context->stateUnknown.shared() && !establishesOverride &&
       context->forceMask.empty() && context->assignMask.empty() &&
       !context->coverage && !context->clockOccurrences &&
-      !context->covergroupClockEvents && !context->vpiObservationDemand &&
+      !context->exactEvents && !context->vpiObservationDemand &&
       !context->observerDepth && !context->observerForcesCanonicalPlane &&
       context->signalValueSnapshots.empty() &&
       context->pendingNativeComputedWaiters.empty() &&
@@ -2065,6 +2246,16 @@ bool publishNativeSignalTransitionUnlocked(
   // This ordering also supplies the event-time state required by IEEE
   // 1801-2018 6.50 for retention save/restore sampling. Keep the original
   // old/new payloads and edge masks for observers of this particular event.
+  return publishCommittedSignalTransitionUnlocked(
+      context, bitOffset, bitWidth, changed, posedge, negedge, oldValue,
+      oldUnknown, newValue, newUnknown);
+}
+
+bool publishCommittedSignalTransitionUnlocked(
+    talos_rt_context *context, uint64_t bitOffset, uint64_t bitWidth,
+    const uint8_t *changed, const uint8_t *posedge, const uint8_t *negedge,
+    const uint8_t *oldValue, const uint8_t *oldUnknown, const uint8_t *newValue,
+    const uint8_t *newUnknown) {
   uint64_t sequence = 0;
   if (!talos_rt_publish_signal_transition_batch_unlocked(
           context, bitOffset, bitWidth, changed, posedge, negedge, 0, &sequence,
@@ -2286,7 +2477,7 @@ bool publicationBatchCanMerge(const talos_rt_context *context) {
   return context->schedulerStatus == TALOS_RT_OK &&
          context->forceMask.empty() && context->assignMask.empty() &&
          !context->coverage && !context->clockOccurrences &&
-         !context->covergroupClockEvents && !context->vpiObservationDemand &&
+         !context->exactEvents && !context->vpiObservationDemand &&
          !context->observerDepth && !context->observerForcesCanonicalPlane &&
          context->signalValueSnapshots.empty() &&
          context->pendingNativeComputedWaiters.empty() &&
@@ -2671,18 +2862,18 @@ extern "C" void talos_rt_v1_scheduler_static_transition(
                          (uint8_t{1} << TALOS_RT_WAIT_EDGE_BOTH);
   uint64_t posedge = 0;
   uint64_t negedge = 0;
-  if (context->covergroupClockEvents ||
+  if (context->exactEvents ||
       (edgeKinds & (posedgeKinds | negedgeKinds)) != 0) {
     uint64_t oldZero = ~oldUnknown & ~oldValue & widthMask;
     uint64_t oldOne = ~oldUnknown & oldValue & widthMask;
     uint64_t newZero = ~newUnknown & ~newValue & widthMask;
     uint64_t newOne = ~newUnknown & newValue & widthMask;
-    if (context->covergroupClockEvents || (edgeKinds & posedgeKinds) != 0)
+    if (context->exactEvents || (edgeKinds & posedgeKinds) != 0)
       posedge = ((oldZero & ~newZero) | (oldUnknown & newOne)) & widthMask;
-    if (context->covergroupClockEvents || (edgeKinds & negedgeKinds) != 0)
+    if (context->exactEvents || (edgeKinds & negedgeKinds) != 0)
       negedge = ((oldOne & ~newOne) | (oldUnknown & newZero)) & widthMask;
   }
-  if (context->covergroupClockEvents &&
+  if (context->exactEvents &&
       !publishCovergroupClockTransitionUnlocked(
           context, handle, bitWidth,
           reinterpret_cast<const uint8_t *>(&changed),

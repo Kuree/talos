@@ -1658,7 +1658,7 @@ void talos_rt_program_complete_unlocked(talos_rt_context *context,
                                         uint64_t programOwner) {
   if (!context || !logicalProcess)
     return;
-  talos_rt_unregister_covergroup_clock_events_unlocked(context, logicalProcess);
+  talos_rt_unregister_exact_events_unlocked(context, logicalProcess);
   if (!programOwner)
     return;
   auto owner = context->programProcesses.find(programOwner);
@@ -2244,6 +2244,13 @@ talos_rt_v1_scheduler_install_aot(talos_rt_context *context,
   ContextTransaction transaction(context);
   TALOS_RT_TRY {
     ContextMutexLock lock(context);
+    if (context->exactEvents)
+      for (const auto &[owner, registration] :
+           context->exactEvents->registrations) {
+        (void)owner;
+        if (registration->snapshotIdentity)
+          return TALOS_RT_TIER_UNAVAILABLE;
+      }
     if (context->nativeSchedulePlan || !context->scheduledProcesses.empty() ||
         !context->scheduledDesignTasks.empty() ||
         context->activeNativeProcess || context->designTaskExecuting) {
