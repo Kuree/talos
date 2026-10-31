@@ -570,7 +570,8 @@ mlir::LogicalResult RetentionAttr::verify(
     mlir::FlatSymbolRefAttr primarySupply, bool domainDefault, bool noRetention,
     RetentionTriggerAttr save, RetentionTriggerAttr restore,
     ExpressionAttr saveCondition, ExpressionAttr restoreCondition,
-    ExpressionAttr condition, mlir::LocationAttr declaration) {
+    ExpressionAttr condition, mlir::LocationAttr declaration,
+    bool useRetentionAsPrimary) {
   if (!name || name.getValue().empty() || !scope || scope.getValue().empty())
     return error() << "retention strategy requires a name and execution scope";
   for (auto selectors : {elements, excluded}) {

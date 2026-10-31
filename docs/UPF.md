@@ -280,9 +280,9 @@ silently combined with a supply predicate (clauses 6.5 and 9.3.2).
 registers with one static edge-sensitive writer (IEEE 1801-2018 clauses 6.50,
 8.3.2 and 9.7.3, Tables 11/12). The compiler creates typed backing storage
 separate from the visible output. RTC True holds the value while unretained
-siblings continue clocking. Primary power loss masks the output; recovery
-restores retained data without inventing a clock. Loss of retention power,
-or primary loss without RTC True, destroys the backing value. RTC X/Z is
+siblings continue clocking. By default primary power loss masks the output;
+recovery restores retained data without inventing a clock. Loss of retention
+power, or primary loss without RTC True, destroys the backing value. RTC X/Z is
 not True. Two-state state corrupts to zero and four-state state to X.
 
 Direct edge-event lists support clocks and asynchronous reset/set in `always`
@@ -292,6 +292,18 @@ event list remains unchanged: a reset held asserted across RTC release or
 primary restoration does not manufacture another reset/clock activation
 (clauses 9.6.7/9.7.3). A fresh admitted reset edge can recover corrupt state
 without a clock.
+
+`-use_retention_as_primary` powers the output driver from the retention supply
+(clause 6.50 and Table 12). Such outputs can remain known while primary power
+is OFF and RTC is True, including at startup with anonymous always-on retention
+supplies. The data-input receiving supply and functional write guards still
+require primary power; unrelated logic in the domain remains inactive while
+OFF. Retention supply policies and required ground still apply. Caught failed
+Tcl updates leave the flag unchanged; successful updates can add it and
+preserve it when omitted. The current isolation mux cannot apply per-output supply filters
+for this combination, so effective RET-powered registers with domain isolation
+are diagnosed (clause 6.50 Note 2 and clause 6.45). Excluded, nonsequential and
+`-no_retention` selections infer no RET-powered driver.
 
 Declaration and untimed initialization stores update backing. Sequential
 blocking stores preserve visible program order, including feedback reads.
@@ -318,16 +330,17 @@ path and allocate no power feature state.
 
 Balloon save/restore, latch writers, computed event expressions, multi-event
 `iff` lists, partial retained writes, mixed blocking/nonblocking writers of one
-retained register, and multiple sequential writers are diagnosed. Retained references escaping
-through unsupported helper/CFG/capture forms are also diagnosed. Ordinary
-projected captures require one provable persistent root; references selecting
-different roots need specialization and are rejected. A `-no_retention`
-strategy uses ordinary domain corruption with no backing storage.
+retained register, and multiple sequential writers are diagnosed. Retained
+references escaping through unsupported helper/CFG/capture forms are also
+diagnosed. Ordinary projected captures require one provable persistent root;
+references selecting different roots need specialization and are rejected.
+A `-no_retention` strategy uses ordinary domain corruption with no backing storage.
 
 The frontend accepts whole-signal and instance `-elements` and
 `-exclude_elements`, `-retention_supply`, `-save_signal`, `-restore_signal`,
 `-save_condition`, `-restore_condition`, `-retention_condition`, `-no_retention`,
-and `-update`. Signal senses are `high`, `low`, `posedge`, and `negedge`.
+`-use_retention_as_primary`, and `-update`. Signal senses are `high`, `low`,
+`posedge`, and `negedge`.
 Conditions use the ordinary Boolean expression support and command execution
 scope. Level controls retain their distinction from edge controls, including
 the trailing-edge event required by clause 6.50. One or both save/restore
@@ -355,7 +368,7 @@ anonymous FULL_ON supplies, including ground at zero volts (clauses 6.50 and
 named supplies and concrete bindings retain ordinary supply initialization.
 
 Partial-signal and named-process selectors, legacy retention net options,
-`-instance`, `-use_retention_as_primary`, and nondefault corruption parameters
+`-instance`, and nondefault corruption parameters
 produce diagnostics. Explicit `RET_SUP_COR` and `SAV_RES_COR` are accepted;
 conflicting parameter pairs are errors. A domain is bounded to 256 strategies
 and 65536 condition tokens, and each include/exclude selection to 4096 unique

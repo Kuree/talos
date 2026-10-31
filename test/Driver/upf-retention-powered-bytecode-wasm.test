@@ -1,0 +1,10 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-retention-powered-outputs.test %t/outputs
+// RUN: %split-file %S/upf-retention-powered-delay-policy.test %t/policy
+// RUN: talos --upf %t/outputs/design.upf --target=wasm32 -O0 --execution-tier=bytecode --mlir-verify-each -c %t/outputs/design.sv -o %t.outputs.o
+// RUN: talos --upf %t/policy/design.upf --target=wasm32 -O0 --execution-tier=bytecode --mlir-verify-each -c %t/policy/design.sv -o %t.policy.o
+// RUN: %llvm_dist/bin/llvm-readobj --file-headers %t.outputs.o %t.policy.o | FileCheck %s
+// IEEE 1801-2018 6.50/9.7.3 Table 12: output-driver choice changes only
+// generated predicates. Wide values and fixed64 handles/epochs retain their
+// existing layout with wasm32 pointers in native and bytecode execution.
+// CHECK-COUNT-2: AddressSize: 32bit

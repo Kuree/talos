@@ -66,7 +66,10 @@ def UPFRetentionAttr : UPFAttr<"Retention", "retention"> {
       OptionalParameter<"::talos::upf::ExpressionAttr">:$saveCondition,
       OptionalParameter<"::talos::upf::ExpressionAttr">:$restoreCondition,
       OptionalParameter<"::talos::upf::ExpressionAttr">:$condition,
-      OptionalParameter<"::mlir::LocationAttr">:$declaration);
+      OptionalParameter<"::mlir::LocationAttr">:$declaration,
+      // 6.50: only the output driver moves to the retention supply. The
+      // normal-mode storage input remains powered by the primary supply.
+      DefaultValuedParameter<"bool", "false">:$useRetentionAsPrimary);
   let assemblyFormat = "`<` struct(params) `>`";
   let genVerifyDecl = 1;
 }

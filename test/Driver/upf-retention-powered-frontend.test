@@ -1,0 +1,44 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/base.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.base.mlir | FileCheck %s --check-prefix=TCL
+// RUN: talos-opt %t.base.mlir | talos-opt | FileCheck %s --check-prefix=BASE --implicit-check-not=useRetentionAsPrimary
+// RUN: talos --upf %t/base.upf --upf %t/update.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.update.mlir
+// RUN: talos-opt %t.update.mlir | talos-opt | FileCheck %s --check-prefix=UPDATED
+// RUN: not talos --upf %t/incomplete.upf -emit-slang %t/design.sv -o %t.bad.mlir 2>&1 | FileCheck %s --check-prefix=INCOMPLETE
+// IEEE 1801-2018 6.50/8.3.2: the output-driver choice is an additive bare
+// flag. A caught failed update must not commit it. Omitted/default-false
+// metadata remains compatible, and late/idempotent updates preserve True.
+// TCL: retention-powered option rollback passed
+// BASE: #upf.retention<name = "LIVE"
+// UPDATED: #upf.retention<name = "LIVE"
+// UPDATED-SAME: useRetentionAsPrimary = true
+// INCOMPLETE: retention requires a save/restore signal or retention condition
+
+//--- design.sv
+module leaf(input logic clk, d, output logic q = 0);
+  always_ff @(posedge clk) q <= d;
+endmodule
+module top;
+  logic clk = 0, d = 1, rtc = 0; wire q;
+  leaf dut(clk,d,q);
+  initial begin #1 clk=1; #1 $display("%b",q); end
+endmodule
+//--- base.upf
+proc expect_error {script pattern} {
+    if {[catch {uplevel 1 $script} message] != 1 || ![string match $pattern $message]} {
+        error "expected <$pattern>, got <$message>"
+    }
+}
+create_supply_set CORE
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention LIVE -domain PD -retention_condition rtc
+expect_error {set_retention LIVE -domain PD -update -use_retention_as_primary -retention_supply absent} {*unknown retention supply set*}
+expect_error {set_retention LIVE -domain PD -update -use_retention_as_primary -use_retention_as_primary} {*duplicate UPF option*}
+puts "retention-powered option rollback passed"
+//--- update.upf
+set_retention LIVE -domain PD -update -use_retention_as_primary
+set_retention LIVE -domain PD -update
+set_retention LIVE -domain PD -update -use_retention_as_primary
+//--- incomplete.upf
+create_power_domain PD -elements dut
+set_retention LIVE -domain PD -use_retention_as_primary

@@ -1,0 +1,103 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.50/9.7.2/9.7.3 Table 12: output power does not admit
+// stale delayed NBAs even when shutdown leaves the live output continuously
+// known. RET simstate and required ground apply independently of PRIMARY.
+// Recovery does not revive corrupt backing; a fresh admitted reset can.
+// CHECK: retention-powered delay and policy passed
+
+//--- design.sv
+module leaf(input logic clk, rst_n, d, output logic live = 0, masked = 0, plain = 0);
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin live <= #3 0; masked <= #3 0; plain <= #3 0; end
+    else begin live <= #3 d; masked <= #3 d; plain <= #3 d; end
+  end
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, rst_n = 1, d = 0, enable = 1, rtc = 0;
+  wire live, masked, plain;
+  int hits = 0;
+  leaf dut(clk,rst_n,d,live,masked,plain);
+  always @(posedge dut.live) if (dut.live === 1) hits++;
+  initial begin
+    if (!supply_on("/top/AON.power") || !supply_on("/top/AON.ground",0.0) ||
+        !supply_on("/top/RET.power") || !supply_on("/top/RET.ground",0.0))
+      $fatal(1,"initial supplies");
+    #1 clk=1;
+    #4;
+    if (live !== 0 || masked !== 0 || plain !== 0) $fatal(1,"initial capture");
+    clk=0; d=1;
+    #1 clk=1;
+    #0 rtc=1;
+    enable=0;
+    #1;
+    if (live !== 0 || masked !== 1'bx || plain !== 1'bx || hits !== 0)
+      $fatal(1,"live output during primary loss");
+    enable=1;
+    #0; // Publish primary restoration before releasing RTC (9.2.2/9.7.3).
+    rtc=0;
+    #4;
+    if (live !== 0 || masked !== 0 || plain !== 1'bx || hits !== 0)
+      $fatal(1,"stale delayed publication revived");
+    clk=0;
+    #1 clk=1;
+    #4;
+    if (live !== 1 || masked !== 1 || plain !== 1 || hits !== 1)
+      $fatal(1,"fresh clock");
+    if (!supply_on("/top/RET.power",0.9)) $fatal(1,"retention voltage");
+    #1;
+    if (live !== 1'bx || masked !== 1'bx || plain !== 1 || hits !== 1 ||
+        get_supply_state(get_supply_value("/top/RET.power")) != FULL_ON)
+      $fatal(1,"retention simstate ignored or leaked into primary");
+    if (!supply_on("/top/RET.power")) $fatal(1,"retention voltage recovery");
+    #1;
+    if (live !== 1'bx || masked !== 1'bx) $fatal(1,"policy recovery revived data");
+    rst_n=0;
+    #4;
+    if (live !== 0 || masked !== 0 || plain !== 0) $fatal(1,"reset after policy loss");
+    if (!supply_off("/top/RET.ground")) $fatal(1,"retention ground OFF");
+    #1;
+    if (live !== 1'bx || masked !== 1'bx || plain !== 0)
+      $fatal(1,"required retention ground ignored");
+    if (!supply_on("/top/RET.ground",0.0)) $fatal(1,"retention ground ON");
+    #1;
+    if (live !== 1'bx) $fatal(1,"ground recovery revived data");
+    rst_n=1;
+    #1 rst_n=0;
+    #4;
+    if (live !== 0 || masked !== 0 || plain !== 0 || hits !== 1)
+      $fatal(1,"fresh reset after ground loss");
+    rtc=1;
+    enable=0;
+    #1;
+    enable=1;
+    rtc=0; // Raw enable changed, but primary is still published OFF here.
+    #1;
+    if (live !== 1'bx || masked !== 1'bx || hits !== 1)
+      $fatal(1,"early RTC release ignored published primary loss");
+    $display("retention-powered delay and policy passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_net VDD
+create_supply_set AON -function {power VDD}
+create_supply_set SW -function {ground AON.ground}
+create_supply_set RET
+create_power_domain PD -elements dut -supply {primary SW}
+create_power_switch PS -domain PD \
+    -input_supply_port {vin AON.power} -output_supply_port {vout PD.primary.power} \
+    -control_port {en enable} -on_state {ON vin en}
+add_power_state RET -supply -state {ON -supply_expr {power == {FULL_ON 1.0} && ground == FULL_ON}}
+set_retention LIVE -domain PD -elements dut/live -retention_supply RET \
+    -retention_condition rtc -use_retention_as_primary
+set_retention MASKED -domain PD -elements dut/masked -retention_supply RET \
+    -retention_condition rtc

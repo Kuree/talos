@@ -1,0 +1,50 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: not talos --upf %t/base.upf --upf %t/live.upf -O0 -c %t/design.sv -o %t.live.o 2>&1 | FileCheck %s --check-prefix=ERROR
+// RUN: talos --upf %t/base.upf --upf %t/none.upf -O0 %t/design.sv -o %t.none
+// RUN: %t.none | FileCheck %s
+// RUN: talos --upf %t/base.upf --upf %t/excluded.upf -O3 %t/design.sv -o %t.excluded
+// RUN: %t.excluded | FileCheck %s
+// RUN: talos --upf %t/base.upf --upf %t/nonseq.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.nonseq
+// RUN: %t.nonseq | FileCheck %s
+// IEEE 1801-2018 6.50 Note 2 / 6.45: output-driver supply changes affect
+// diff_supply_only filtering. The current whole-boundary isolation mux must
+// diagnose an effective RET-powered register until per-path filtering exists.
+// Excluded, no_retention, and nonsequential selections infer no such driver.
+// ERROR: isolation of retention-powered outputs requires per-path supply filtering
+// CHECK: inactive output option with isolation passed
+
+//--- design.sv
+module leaf(input logic clk, d, output logic q = 0, output logic comb);
+  always_ff @(posedge clk) q <= d;
+  always_comb comb = d;
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, d = 1, rtc = 0, iso = 0;
+  wire q, comb;
+  leaf dut(clk,d,q,comb);
+  initial begin
+    if (!supply_on("/top/PD.primary.power") || !supply_on("/top/PD.primary.ground",0.0))
+      $fatal(1,"supplies");
+    #1 clk=1;
+    #1;
+    if (q !== 1 || comb !== 1) $fatal(1,"unretained behavior");
+    $display("inactive output option with isolation passed");
+    $finish;
+  end
+endmodule
+//--- base.upf
+create_power_domain PD -elements dut
+set_isolation ISO -domain PD -isolation_signal iso -isolation_sense high \
+    -clamp_value 0 -applies_to outputs -location parent
+//--- live.upf
+set_retention KEEP -domain PD -retention_condition rtc -use_retention_as_primary
+//--- none.upf
+set_retention KEEP -domain PD -no_retention -use_retention_as_primary
+//--- excluded.upf
+set_retention KEEP -domain PD -exclude_elements dut/q -retention_condition rtc \
+    -use_retention_as_primary
+//--- nonseq.upf
+set_retention KEEP -domain PD -elements dut/comb -retention_condition rtc \
+    -use_retention_as_primary

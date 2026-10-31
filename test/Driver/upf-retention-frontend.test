@@ -69,7 +69,7 @@ expect_error {set_retention R -domain PD -save_signal {controls high}} {*scalar 
 expect_error {set_retention R -domain PD -save_signal {absent high}} {*not found*}
 expect_error {set_retention R -domain PD -save_condition {save &&}} {*Boolean expression*}
 expect_error {set_retention R -domain PD -elements {dut/q[0]}} {*unsupported retention selector*}
-expect_error {set_retention R -domain PD -use_retention_as_primary} {*unsupported set_retention option*}
+expect_error {set_retention R -domain PD -use_retention_as_primary -use_retention_as_primary} {*duplicate UPF option*}
 expect_error {set_retention R -domain PD -parameters {RET_SUP_COR NO_RET_SUP_COR}} {*conflicting retention corruption*}
 expect_error {set_retention R -domain PD -parameters {NO_SAV_RES_COR}} {*unsupported retention corruption*}
 expect_error {set_retention R -domain PD -update} {*unknown retention strategy*}

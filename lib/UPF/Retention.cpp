@@ -436,6 +436,14 @@ struct Lowering {
       if (functions.size() != 1)
         return decl.emitError(
             "retention requires one sequential writer per register");
+      if (reg.strategy.getUseRetentionAsPrimary() &&
+          o.domain.getIsolationControl())
+        // IEEE 1801-2018 6.50 Note 2 changes the driver supply used by
+        // 6.45's default diff_supply_only filter. The current whole-boundary
+        // mux cannot prove that selection for mixed RET/primary outputs.
+        return emitError(location(reg.strategy))
+               << "isolation of retention-powered outputs requires per-path "
+                  "supply filtering and is not implemented";
       registers.push_back(std::move(reg));
     }
     // A reference passed to a helper can hide a writer outside the local
@@ -670,8 +678,12 @@ struct Lowering {
     Value destructive = arith::OrIOp::create(b, loc, bad(s, loc, ctx),
                                              pending(loc, ctx, s.badProcess));
     conditional(loc, destructive, [&] { corruptBacking(s, loc, ctx, false); });
-    Value visible = arith::AndIOp::create(b, loc, primary(s, loc, ctx),
-                                          normal(loc, ctx, s.retention));
+    // IEEE 1801-2018 6.50/9.7.3 Table 12: RET can power the output during
+    // primary shutdown. Functional writes still require primary power in
+    // canWrite(); neither the data input nor its supply handle is rebound.
+    Value visible = normal(loc, ctx, s.retention);
+    if (!s.attribute.getUseRetentionAsPrimary())
+      visible = arith::AndIOp::create(b, loc, primary(s, loc, ctx), visible);
     Value previous = handle(b, loc, ctx, s.visible);
     Value changed = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::ne,
                                           visible, load(b, loc, previous));

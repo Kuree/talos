@@ -1,0 +1,99 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.50/9.7.2/9.7.3 Table 12: RET-powered outputs can
+// remain valid while primary is OFF. Data-input receiving supply and ordinary
+// logic stay primary-powered. Test anonymous AON startup, mixed strategies,
+// ascending65bit two-/four-state values, ignored clocks/resets while OFF,
+// physical supply identity, RTC loss, and fresh asynchronous reset recovery.
+// CHECK: retention-powered outputs passed
+
+//--- design.sv
+module leaf(input logic clk, rst_n, input logic [0:64] d,
+            output logic [0:64] live = 65'h10000000000000013,
+            output bit [0:64] liveb = 65'h10000000000000017,
+            output logic [0:64] masked = 65'h10000000000000031,
+            output bit [0:64] maskedb = 65'h10000000000000037,
+            output logic [0:64] derived);
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin live <= 0; liveb <= 0; masked <= 0; maskedb <= 0; end
+    else begin live <= d; liveb <= d; masked <= d; maskedb <= d; end
+  end
+  always_comb derived = live + 65'd1;
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, rst_n = 1, enable = 0, rtc = 1;
+  logic [0:64] d = 65'h10000000000000025;
+  wire [0:64] live, liveb, masked, maskedb, derived;
+  wire [0:64] mirror = live;
+  leaf dut(clk,rst_n,d,live,liveb,masked,maskedb,derived);
+  initial begin
+    #1;
+    if (live !== 65'h10000000000000013 || liveb !== 65'h10000000000000017 ||
+        masked !== 'x || maskedb !== 0 || derived !== 'x || mirror !== live)
+      $fatal(1, "primary-OFF startup");
+    if (get_supply_state(get_supply_value("/top/PD.primary.power")) != OFF ||
+        get_supply_state(get_supply_value("/top/PD.LIVE.primary_supply.power")) != OFF ||
+        get_supply_state(get_supply_value("/top/PD.LIVE.retention_supply.power")) != FULL_ON)
+      $fatal(1, "output option rebound receiving supply");
+    if (!supply_on("/top/AON.power") || !supply_on("/top/AON.ground", 0.0))
+      $fatal(1, "initial primary supplies");
+    enable = 1;
+    #1;
+    if (masked !== 65'h10000000000000031 || maskedb !== 65'h10000000000000037 ||
+        derived !== live + 65'd1) $fatal(1, "startup restore");
+    rtc = 0;
+    #1 clk = 1;
+    #1;
+    if (live !== d || liveb !== d || masked !== d || maskedb !== d)
+      $fatal(1, "normal capture");
+    clk = 0;
+    rtc = 1;
+    #1 enable = 0;
+    #1;
+    if (live !== d || liveb !== d || mirror !== d || masked !== 'x || maskedb !== 0 || derived !== 'x)
+      $fatal(1, "RET-powered output or unrelated primary logic");
+    rst_n = 0;
+    clk = 1;
+    #1;
+    if (live !== d || liveb !== d) $fatal(1, "OFF clock/reset changed live output");
+    rst_n = 1;
+    clk = 0;
+    enable = 1;
+    #1;
+    if (live !== d || liveb !== d || masked !== d || maskedb !== d || derived !== d + 65'd1)
+      $fatal(1, "restore without a clock");
+    enable = 0;
+    #1 rtc = 0;
+    #1;
+    if (live !== 'x || liveb !== 0 || masked !== 'x || maskedb !== 0)
+      $fatal(1, "RTC loss kept backing alive");
+    enable = 1;
+    #1;
+    if (live !== 'x || liveb !== 0) $fatal(1, "corrupt value revived");
+    rst_n = 0;
+    #1;
+    if (live !== 0 || liveb !== 0 || masked !== 0 || maskedb !== 0 || derived !== 1)
+      $fatal(1, "fresh reset recovery");
+    $display("retention-powered outputs passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_net VDD
+create_supply_set AON -function {power VDD}
+create_supply_set SW -function {ground AON.ground}
+create_power_domain PD -elements dut -supply {primary SW}
+create_power_switch PS -domain PD \
+    -input_supply_port {vin AON.power} -output_supply_port {vout PD.primary.power} \
+    -control_port {en enable} -on_state {ON vin en}
+set_retention LIVE -domain PD -elements {dut/live dut/liveb} \
+    -retention_condition rtc -use_retention_as_primary
+set_retention MASKED -domain PD -elements {dut/masked dut/maskedb} -retention_condition rtc

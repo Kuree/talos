@@ -29,7 +29,7 @@ namespace {
 struct Retention {
   std::string name, scope, retentionSupply, primarySupply;
   std::map<std::string, Attribute> elements, excluded;
-  bool hasElements = false, noRetention = false;
+  bool hasElements = false, noRetention = false, useRetentionAsPrimary = false;
   upf::RetentionTriggerAttr save, restore;
   upf::ExpressionAttr saveCondition, restoreCondition, condition;
   std::optional<Location> location;
@@ -449,7 +449,8 @@ struct Session {
     std::set<std::string> flags;
     for (Tcl_Size i = 2; i < objc; ++i) {
       StringRef option = Tcl_GetString(objv[i]);
-      if (option == "-update" || option == "-no_retention") {
+      if (option == "-update" || option == "-no_retention" ||
+          option == "-use_retention_as_primary") {
         if (!flags.insert(option.str()).second)
           return error("duplicate UPF option " + option);
         continue;
@@ -537,6 +538,9 @@ struct Session {
       return TCL_ERROR;
     next.hasElements |= opts.count("-elements");
     next.noRetention |= flags.count("-no_retention");
+    // IEEE 1801-2018 6.50/8.3.2: add the output-driver choice to the staged
+    // strategy, preserving it across updates and rolling back caught errors.
+    next.useRetentionAsPrimary |= flags.count("-use_retention_as_primary");
     auto trigger = [&](StringRef option, upf::RetentionTriggerAttr &target) {
       auto it = opts.find(option.str());
       if (it == opts.end())
@@ -2008,7 +2012,8 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
           retention.restore, retention.saveCondition,
           retention.restoreCondition, retention.condition,
           retention.location ? mlir::LocationAttr(*retention.location)
-                             : mlir::LocationAttr{}));
+                             : mlir::LocationAttr{},
+          retention.useRetentionAsPrimary));
     }
     upf::UPFDomainOp::create(
         builder, domain.location.value_or(module.getLoc()), name,
