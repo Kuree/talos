@@ -303,6 +303,12 @@ def RTSchedulerTimeOp : RTOp<"scheduler.time", [
   let arguments = (ins RTContextType:$context);
   let results = (outs I64:$result);
 }
+def RTSchedulerCohortOp : RTOp<"scheduler.cohort", [
+  MemoryEffects<[MemRead<RTRuntimeResource>]>
+]> {
+  let arguments = (ins RTContextType:$context);
+  let results = (outs I64:$result);
+}
 
 // Formatting and display.
 def RTFormatOp : RTOp<"format", [

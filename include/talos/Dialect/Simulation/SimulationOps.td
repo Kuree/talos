@@ -6053,6 +6053,25 @@ def SimTimeNowOp : SimOp<"time.now", [
   let results = (outs I64:$result);
   let assemblyFormat = "$context attr-dict";
 }
+def SimSchedulerCohortOp : SimOp<"scheduler.cohort", [
+  MemoryEffects<[MemRead<SimSchedulerResource>]>
+]> {
+  let summary = "identify the current ordered scheduler evaluation cohort";
+  let description = [{
+    Returns a context-local, nonzero 64-bit token. Active actors and their
+    signal-routing consequences share a token. A promoted Inactive/Re-Inactive
+    batch, NBA barrier, later region, or time advance begins another cohort.
+    Merely reentering the scheduler or priming a child does not change it.
+    Tokens are opaque: only equality/inequality is meaningful, and numeric
+    identities may differ across optimizations and execution tiers.
+    IEEE 1801-2018 6.50/9.7 uses this distinction to give a level-restore
+    event priority over concurrent register operations without suppressing
+    an explicitly later zero-delay clock at the same numeric timestamp.
+  }];
+  let arguments = (ins SimContextType:$context);
+  let results = (outs I64:$result);
+  let assemblyFormat = "$context attr-dict";
+}
 
 def SimTimeToRealOp : SimOp<"time.to_real", [Pure]> {
   let summary = "convert design-precision ticks to a realtime value";

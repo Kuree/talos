@@ -5844,6 +5844,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
   }
   case TALOS_RT_INTRINSIC_V1_TIME_NOW:
     return sentinel(0, talos_rt_v1_scheduler_time(context));
+  case TALOS_RT_INTRINSIC_V1_SCHEDULER_COHORT:
+    return sentinel(0, talos_rt_v1_scheduler_cohort(context));
   case TALOS_RT_INTRINSIC_V1_SAMPLED_READ: {
     Layout source = layoutAt(image, frame.function, inputRegister(0));
     Layout output = layoutAt(image, frame.function, outputRegister(0));

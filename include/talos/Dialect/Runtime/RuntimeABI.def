@@ -32,6 +32,8 @@ TALOS_RUNTIME_CALL(ProgramOwned, RTProgramOwnedOp,
                      TerminationRequested)
 TALOS_RUNTIME_CALL(SchedulerTime, RTSchedulerTimeOp,
                      talos_rt_v1_scheduler_time, SchedulerTime)
+TALOS_RUNTIME_CALL(SchedulerCohort, RTSchedulerCohortOp,
+                     talos_rt_v1_scheduler_cohort, SchedulerTime)
 TALOS_RUNTIME_CALL(Format, RTFormatOp, talos_rt_v1_format, Format)
 TALOS_RUNTIME_CALL(StringOutputFormat, RTStringOutputFormatOp,
                      talos_rt_v1_string_output_format, StringOutputFormat)

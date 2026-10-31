@@ -1,0 +1,52 @@
+// RUN: %split-file %s %t
+// RUN: talos -O0 --native-scheduler=generic --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 --execution-tier=native | FileCheck %s
+// RUN: %t.o0 --execution-tier=bytecode | FileCheck %s
+// RUN: talos -O3 --native-scheduler=auto --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 --execution-tier=native | FileCheck %s
+// RUN: %t.o3 --execution-tier=bytecode | FileCheck %s
+// IEEE 1800-2023 4.4/4.5 and IEEE 1801-2018 6.50/9.7: batch promotion
+// also applies without cohort queries or power monitors. Put the serial
+// waiter first so its source/rank cannot let it overtake pending siblings.
+// CHECK: query-disabled Active and Reactive batches passed
+
+//--- design.sv
+module no_query_batch;
+  int completed = 0;
+  int reactive_completed = 0;
+  batch_program p();
+  initial begin
+    #1; #0; #0;
+    if (completed != 24)
+      $fatal(1, "serial #0 overtook Active siblings");
+  end
+  for (genvar i = 0; i < 24; ++i) begin
+    initial begin
+      #1; #0;
+      completed++;
+    end
+  end
+  initial begin
+    #3;
+    if (completed != 24 || reactive_completed != 24)
+      $fatal(1, "missing sibling");
+    $display("query-disabled Active and Reactive batches passed");
+    $finish;
+  end
+endmodule
+
+program batch_program;
+  initial begin
+    #1; #0; #0;
+    if (no_query_batch.reactive_completed != 24)
+      $fatal(1, "serial #0 overtook Reactive siblings");
+    // Keep the program alive until the module has checked and reported success.
+    #3;
+  end
+  for (genvar i = 0; i < 24; ++i) begin
+    initial begin
+      #1; #0;
+      no_query_batch.reactive_completed++;
+    end
+  end
+endprogram

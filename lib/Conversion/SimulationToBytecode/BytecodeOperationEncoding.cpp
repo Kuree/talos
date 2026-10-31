@@ -170,6 +170,8 @@ LogicalResult Encoder::encodeOperation(FunctionPlan &plan,
   }
   if (auto op = dyn_cast<sim::SimTimeNowOp>(operation))
     return emitIntrinsic(plan, kIntrinsicTimeNow, {}, {op.getResult()});
+  if (auto op = dyn_cast<sim::SimSchedulerCohortOp>(operation))
+    return emitIntrinsic(plan, kIntrinsicSchedulerCohort, {}, {op.getResult()});
   if (auto op = dyn_cast<sim::SimStringOutputFormatOp>(operation))
     return encodeStringOutputFormat(plan, op);
   if (auto op = dyn_cast<sim::SimDisplayOp>(operation))

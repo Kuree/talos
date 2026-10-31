@@ -1201,6 +1201,12 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
       // NBA accumulators do not yet expose cancellation, so retain the shared
       // runtime calendar for this design before assigning any NBA ownership.
       rejectPlan("power-loss NBA cancellation requires generic ordering");
+    } else if (isa<sim::SimSchedulerCohortOp>(operation)) {
+      // IEEE 1801-2018 6.50/9.7 needs actual region boundaries. The closed
+      // generated clock loop can advance time and commit NBAs without
+      // entering that runtime protocol. Keep native coroutines until a
+      // cohort-aware shared-calendar proof admits such a plan.
+      rejectPlan("scheduler cohort requires runtime calendar ordering");
     } else if (auto call = dyn_cast<sim::SimDPICallOp>(operation)) {
       // An import whose exports cannot reach design state (IEEE 1800-2023
       // 35.5.1.3, 35.5.3; see DPIEffectAnalysis) neither suspends (35.5.1.5)

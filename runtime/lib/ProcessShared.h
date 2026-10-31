@@ -254,6 +254,37 @@ talos_rt_status runPreponedHooks(talos_rt_context *context);
 // Initialize the current slot once, regardless of which executor entered it.
 // Reentry in the same slot preserves its sampled state and progress cursor.
 talos_rt_status enterSchedulerTimeSlotUnlocked(talos_rt_context *context);
+// Freeze a ready Inactive/Re-Inactive batch before restarting arbitration.
+talos_rt_status promoteInactiveResumptionsUnlocked(talos_rt_context *context,
+                                                   uint32_t region);
+// Admit one actual executor activation. Primed children stay in their parent's
+// cohort; promoted Inactive batches and later regions begin an ordered new one.
+talos_rt_status enterSchedulerExecutionCohortUnlocked(talos_rt_context *context,
+                                                      uint32_t region);
+inline uint32_t schedulerCohortRegion(uint32_t region) {
+  if (region == TALOS_RT_REGION_INACTIVE)
+    return TALOS_RT_REGION_ACTIVE;
+  if (region == TALOS_RT_REGION_RE_INACTIVE)
+    return TALOS_RT_REGION_REACTIVE;
+  return region;
+}
+inline talos_rt_status
+observeSchedulerExecutionCohortUnlocked(talos_rt_context *context,
+                                        uint32_t region) {
+  // Keep the physical executor's region even before the first query. A primed
+  // child borrows its own actor fields but inherits its caller's cohort.
+  uint32_t normalized = schedulerCohortRegion(region);
+  bool inactive = region == TALOS_RT_REGION_INACTIVE ||
+                  region == TALOS_RT_REGION_RE_INACTIVE;
+  if (context->schedulerCohortRegion == normalized &&
+      (!context->schedulerCohortEnabled || !inactive))
+    return TALOS_RT_OK;
+  if (!context->schedulerCohortEnabled) {
+    context->schedulerCohortRegion = normalized;
+    return TALOS_RT_OK;
+  }
+  return enterSchedulerExecutionCohortUnlocked(context, region);
+}
 bool hasSameDirectSignalWait(const ScheduledProcess &scheduled,
                              const talos_rt_wait_record_v1 *wait);
 uint32_t nextDueNBABarrierRegionUnlocked(const talos_rt_context *context,

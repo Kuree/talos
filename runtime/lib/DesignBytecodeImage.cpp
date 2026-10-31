@@ -1518,6 +1518,7 @@ bool validIntrinsic(const Image &image, const Function &function,
     return signature.flags == 0 && site.inputCount == 0 &&
            site.outputCount == 1 && bits(output(0), 1);
   case TALOS_RT_INTRINSIC_V1_TIME_NOW:
+  case TALOS_RT_INTRINSIC_V1_SCHEDULER_COHORT:
     return signature.flags == 0 && site.inputCount == 0 &&
            site.outputCount == 1 && twoStateBits(output(0), 64);
   case TALOS_RT_INTRINSIC_V1_TIME_TO_REAL:

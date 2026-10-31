@@ -1,0 +1,120 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/design.mlir --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-suspension),talos-sim-build-compute-graph,talos-sim-verify-compute-graph),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' --verify-each -o %t.lowered.mlir
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O0>' | %llc -filetype=obj -relocation-model=pic -o %t.o
+// RUN: %target_cxx %t.o %runtime_link_flags -o %t.exe
+// RUN: %t.exe --execution-tier=native | FileCheck %s
+// RUN: %t.exe --execution-tier=bytecode | FileCheck %s
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.opt.o
+// RUN: %target_cxx %t.opt.o %runtime_link_flags -o %t.opt.exe && %t.opt.exe --execution-tier=native | FileCheck %s
+// IEEE 1800-2023 4.4/4.5 and IEEE 1801-2018 6.50/9.7: the first query
+// in a primed child inherits the caller's physical region, and Post-Observed
+// promotion starts a new Active cycle even without intervening NBA work.
+// CHECK: primed region 1 1
+// CHECK: post-observed region 1
+
+//--- design.mlir
+module attributes {
+  llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128",
+  llvm.target_triple = "x86_64-unknown-linux-gnu"
+} {
+  simulation.design @cohort_regions {
+    simulation.scope.decl 0 hierarchy "top"
+    simulation.code_unit.decl 1 in 0 root_initializer hierarchy "top.root"
+    simulation.code_unit.decl 2 in 0 fork hierarchy "top.prime"
+    simulation.code_unit.decl 3 in 0 always hierarchy "top.observed"
+    simulation.code_unit.decl 4 in 0 always hierarchy "top.active"
+    simulation.code_unit.decl 5 in 0 always hierarchy "top.post"
+    simulation.code_unit.decl 6 in 0 initial hierarchy "top.drive"
+    simulation.storage.decl 0 in 0 : i1 design hierarchy "top.trigger"
+    simulation.storage.decl 1 in 0 : i1 design hierarchy "top.never"
+    simulation.storage.decl 2 in 0 : i64 design hierarchy "top.primed_cohort"
+    simulation.storage.decl 3 in 0 : i64 design hierarchy "top.parent_cohort"
+    simulation.storage.decl 4 in 0 : i1 design hierarchy "top.post_trigger"
+    simulation.storage.decl 5 in 0 : i64 design hierarchy "top.before_post"
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32})
+        attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
+      %trigger = simulation.context.storage %ctx[0] : !simulation.ref<i1>
+      %never = simulation.context.storage %ctx[1] : !simulation.ref<i1>
+      %post = simulation.context.storage %ctx[4] : !simulation.ref<i1>
+      %zero = arith.constant false
+      simulation.ref.store %zero to %trigger : i1, !simulation.ref<i1>
+      simulation.ref.store %zero to %never : i1, !simulation.ref<i1>
+      simulation.ref.store %zero to %post : i1, !simulation.ref<i1>
+      %a = simulation.spawn @active(%ctx) : !simulation.context -> !simulation.process
+      %p = simulation.spawn @post(%ctx) : !simulation.context -> !simulation.process
+      %d = simulation.spawn @drive(%ctx) : !simulation.context -> !simulation.process
+      %o = simulation.spawn @observed(%ctx) : !simulation.context -> !simulation.process
+      simulation.return
+    }
+    simulation.func private @observed(%ctx: !simulation.context {simulation.capture_kind = 0 : i32})
+        attributes {entry_kind = 3 : i32, code_unit_id = 3 : i64, home_region = 8 : i32} {
+      %trigger = simulation.context.storage %ctx[0] : !simulation.ref<i1>
+      %parent = simulation.context.storage %ctx[3] : !simulation.ref<i64>
+      %child = simulation.spawn @prime(%ctx) : !simulation.context -> !simulation.process
+      %cohort = simulation.scheduler.cohort %ctx
+      simulation.ref.store %cohort to %parent : i64, !simulation.ref<i64>
+      %one = arith.constant true
+      simulation.ref.store %one to %trigger : i1, !simulation.ref<i1>
+      simulation.return
+    }
+    simulation.func private @prime(%ctx: !simulation.context {simulation.capture_kind = 0 : i32})
+        attributes {entry_kind = 13 : i32, code_unit_id = 2 : i64, internal,
+                    schedule.detached_controls, schedule.prime_on_spawn} {
+      %primed = simulation.context.storage %ctx[2] : !simulation.ref<i64>
+      %never = simulation.context.storage %ctx[1] : !simulation.ref<i1>
+      %first = simulation.scheduler.cohort %ctx
+      simulation.ref.store %first to %primed : i64, !simulation.ref<i64>
+      simulation.suspend.change %never to ^done : !simulation.ref<i1>
+    ^done:
+      simulation.return
+    }
+    simulation.func private @active(%ctx: !simulation.context {simulation.capture_kind = 0 : i32})
+        attributes {entry_kind = 3 : i32, code_unit_id = 4 : i64} {
+      %trigger = simulation.context.storage %ctx[0] : !simulation.ref<i1>
+      simulation.suspend.change %trigger to ^show : !simulation.ref<i1>
+    ^show:
+      %primed = simulation.context.storage %ctx[2] : !simulation.ref<i64>
+      %parent = simulation.context.storage %ctx[3] : !simulation.ref<i64>
+      %child = simulation.ref.load %primed : !simulation.ref<i64> -> i64
+      %before = simulation.ref.load %parent : !simulation.ref<i64> -> i64
+      %now = simulation.scheduler.cohort %ctx
+      %same = arith.cmpi eq, %child, %before : i64
+      %new = arith.cmpi ne, %before, %now : i64
+      %fmt = simulation.bytes.constant "primed region %0d %0d"
+      %stdout = arith.constant 1 : i32
+      simulation.display %ctx to %stdout(%fmt, %same, %new)
+          newline = true radix = <decimal> flags = [0,0,0] : !simulation.bytes, i1, i1
+      simulation.return
+    }
+    simulation.func private @drive(%ctx: !simulation.context {simulation.capture_kind = 0 : i32})
+        attributes {entry_kind = 1 : i32, code_unit_id = 6 : i64} {
+      %delay = simulation.time.constant 1
+      simulation.suspend.delay %delay to ^fire
+    ^fire:
+      %trigger = simulation.context.storage %ctx[4] : !simulation.ref<i1>
+      %before = simulation.context.storage %ctx[5] : !simulation.ref<i64>
+      %cohort = simulation.scheduler.cohort %ctx
+      simulation.ref.store %cohort to %before : i64, !simulation.ref<i64>
+      %one = arith.constant true
+      simulation.ref.store %one to %trigger : i1, !simulation.ref<i1>
+      simulation.return
+    }
+    simulation.func private @post(%ctx: !simulation.context {simulation.capture_kind = 0 : i32})
+        attributes {entry_kind = 3 : i32, code_unit_id = 5 : i64} {
+      %trigger = simulation.context.storage %ctx[4] : !simulation.ref<i1>
+      simulation.suspend.change %trigger to ^show {resume_region = 9 : i32} : !simulation.ref<i1>
+    ^show:
+      %before = simulation.context.storage %ctx[5] : !simulation.ref<i64>
+      %old = simulation.ref.load %before : !simulation.ref<i64> -> i64
+      %now = simulation.scheduler.cohort %ctx
+      %new = arith.cmpi ne, %old, %now : i64
+      %fmt = simulation.bytes.constant "post-observed region %0d"
+      %stdout = arith.constant 1 : i32
+      simulation.display %ctx to %stdout(%fmt, %new)
+          newline = true radix = <decimal> flags = [0,0] : !simulation.bytes, i1
+      %zero = arith.constant 0 : i32
+      simulation.finish %ctx, %zero
+      simulation.return
+    }
+  }
+}

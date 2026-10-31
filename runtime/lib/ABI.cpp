@@ -1368,6 +1368,7 @@ ABI_FUNCTION(talos_rt_v1_scheduler_termination_requested,
 ABI_FUNCTION(talos_rt_v1_scheduler_program_owned,
              uint32_t (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_scheduler_time, uint64_t (*)(talos_rt_context *));
+ABI_FUNCTION(talos_rt_v1_scheduler_cohort, uint64_t (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_dump_open_string,
              talos_rt_status (*)(talos_rt_context *, talos_rt_string_v1));
 ABI_FUNCTION(talos_rt_v1_dump_ports,

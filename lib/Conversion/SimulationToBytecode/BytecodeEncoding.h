@@ -26,6 +26,8 @@ constexpr uint32_t kIntrinsicTerminationRequested =
     TALOS_RT_INTRINSIC_V1_TERMINATION_REQUESTED;
 constexpr uint32_t kIntrinsicProgramOwned = TALOS_RT_INTRINSIC_V1_PROGRAM_OWNED;
 constexpr uint32_t kIntrinsicTimeNow = TALOS_RT_INTRINSIC_V1_TIME_NOW;
+constexpr uint32_t kIntrinsicSchedulerCohort =
+    TALOS_RT_INTRINSIC_V1_SCHEDULER_COHORT;
 constexpr uint32_t kIntrinsicSampledRead = TALOS_RT_INTRINSIC_V1_SAMPLED_READ;
 constexpr uint32_t kIntrinsicSampledHistory =
     TALOS_RT_INTRINSIC_V1_SAMPLED_HISTORY;

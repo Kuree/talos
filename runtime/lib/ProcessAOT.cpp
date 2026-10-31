@@ -964,6 +964,10 @@ talos_rt_status executeAOTNode(talos_rt_context *context, uint32_t actorSlot,
     scheduled.signalTriggered = false;
     scheduled.started = true;
     scheduled.observedEpoch = context->schedulerEpoch;
+    talos_rt_status cohort = observeSchedulerExecutionCohortUnlocked(
+        context, scheduled.queuedRegion);
+    if (cohort != TALOS_RT_OK)
+      return cohort;
     context->activeNativeProcess = selected;
     context->activeHomeRegion = scheduled.homeRegion;
     context->activeExecRegion = scheduled.queuedRegion;
@@ -1095,8 +1099,11 @@ talos_rt_status executeAOTNode(talos_rt_context *context, uint32_t actorSlot,
     context->activeWaitOrderFailed = false;
     terminationRequested =
         context->schedulerFinishRequested.load(std::memory_order_relaxed);
-    if (terminationRequested)
-      enterFinalPhaseUnlocked(context);
+    if (terminationRequested) {
+      talos_rt_status cohort = enterFinalPhaseUnlocked(context);
+      if (cohort != TALOS_RT_OK)
+        return cohort;
+    }
     if (!terminationRequested && status == TALOS_RT_OK && generatedActions &&
         action.kind == TALOS_RT_FRAGMENT_SUSPEND &&
         (action.suspend_kind == TALOS_RT_SUSPEND_DELAY ||

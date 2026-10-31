@@ -42,6 +42,9 @@ std::unordered_set<const void *> installedNativeScheduleStates;
 thread_local talos_rt_context *activeNativeAOTContext = nullptr;
 thread_local talos_rt_context *lockedNativeAOTContext = nullptr;
 
+static talos_rt_status nextSchedulerCohortUnlocked(talos_rt_context *context,
+                                                   uint32_t region);
+
 namespace {
 
 // Each vector tail is indexed once during a mixed barrier. Indexed leaves are
@@ -812,6 +815,55 @@ bool nativeProcessReady(talos_rt_context &context,
   return nativeProcessReadyImpl<true>(context, process);
 }
 
+talos_rt_status promoteInactiveResumptionsUnlocked(talos_rt_context *context,
+                                                   uint32_t region) {
+  // IEEE 1800-2023 4.4/4.5 and IEEE 1801-2018 6.50/9.7: promote the
+  // currently pending queue as a batch. A second #0 issued by one of these
+  // actors must follow its already-pending siblings and their Active routing.
+  uint32_t target = schedulerCohortRegion(region);
+  uint32_t phase = context->schedulerRunningFinals ? 1u : 0u;
+  bool promoted = false;
+  for (ScheduledProcess &process : context->scheduledProcesses) {
+    if (!process.instance || !process.started || process.phase != phase ||
+        process.queuedRegion != region ||
+        !nativeProcessReadyImpl<false>(*context, process))
+      continue;
+    process.queuedRegion = target;
+    context->nativePollCandidates.insert(process.token);
+    promoted = true;
+  }
+  talos_rt_status status = talos_rt_promote_inactive_design_tasks_unlocked(
+      context, region, promoted);
+  if (status != TALOS_RT_OK)
+    return status;
+  auto promoteUpdates = [&](auto &entries) {
+    for (auto &entry : entries)
+      if (entry.dueTime <= context->schedulerTime &&
+          entry.execRegion == region) {
+        entry.execRegion = target;
+        promoted = true;
+      }
+  };
+  promoteUpdates(context->scheduledNBAs);
+  promoteUpdates(context->scheduledDesignNBAs);
+  promoteUpdates(context->scheduledDesignEvents);
+  if (auto *replaceable = talos_rt_replaceable_events(context))
+    for (auto &entry : replaceable->calendar)
+      if (entry.first.first <= context->schedulerTime &&
+          entry.second.execRegion == region) {
+        entry.second.execRegion = target;
+        promoted = true;
+      }
+  if (promoted) {
+    status = nextSchedulerCohortUnlocked(context, target);
+    if (status != TALOS_RT_OK)
+      return status;
+    if (++context->schedulerSelectionGeneration == 0)
+      context->schedulerSelectionGeneration = 1;
+  }
+  return TALOS_RT_OK;
+}
+
 static PostObservedPromotion
 promotePostObservedProcess(talos_rt_context &context, uint64_t token) {
   ScheduledProcess *process = findScheduledProcess(&context, token);
@@ -826,8 +878,8 @@ promotePostObservedProcess(talos_rt_context &context, uint64_t token) {
   return PostObservedPromotion::Promoted;
 }
 
-void talos_rt_promote_post_observed_resumptions_unlocked(
-    talos_rt_context *context) {
+talos_rt_status
+talos_rt_promote_post_observed_resumptions_unlocked(talos_rt_context *context) {
   std::vector<uint64_t> &pending = context->postObservedResumptions;
   size_t kept = 0;
   bool promoted = false;
@@ -843,8 +895,17 @@ void talos_rt_promote_post_observed_resumptions_unlocked(
     promoted |= result == PostObservedPromotion::Promoted;
   }
   pending.resize(kept);
-  if (promoted && ++context->schedulerSelectionGeneration == 0)
-    context->schedulerSelectionGeneration = 1;
+  if (promoted) {
+    // IEEE 1800-2023 4.4/4.5: Post-Observed returns to a new Active
+    // evaluation cycle even when no Observed actor or NBA ran in between.
+    talos_rt_status cohort =
+        nextSchedulerCohortUnlocked(context, TALOS_RT_REGION_ACTIVE);
+    if (cohort != TALOS_RT_OK)
+      return cohort;
+    if (++context->schedulerSelectionGeneration == 0)
+      context->schedulerSelectionGeneration = 1;
+  }
+  return TALOS_RT_OK;
 }
 
 /// Whether an exact index publishes the process's readiness, so the poll
@@ -2531,6 +2592,10 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_direct_fragment_enter(
   // entering the wrapper. Keep the runtime occurrence bit clear while the
   // body runs so a transition published by the body can represent a distinct
   // activation of the same wait.
+  talos_rt_status cohort =
+      observeSchedulerExecutionCohortUnlocked(context, scheduled.queuedRegion);
+  if (cohort != TALOS_RT_OK)
+    return cohort;
   actor->context = context;
   actor->lifecycle = TALOS_RT_PROCESS_EXECUTING;
   context->nativeScheduleDirectActorSlot = actorSlot;
@@ -3080,11 +3145,18 @@ midSimulationStatusUnlocked(const talos_rt_context *context) noexcept {
              : TALOS_RT_OK;
 }
 
-void enterFinalPhaseUnlocked(talos_rt_context *context) noexcept {
+talos_rt_status enterFinalPhaseUnlocked(talos_rt_context *context) noexcept {
+  if (!context->schedulerRunningFinals) {
+    talos_rt_status cohort =
+        nextSchedulerCohortUnlocked(context, TALOS_RT_REGION_ACTIVE);
+    if (cohort != TALOS_RT_OK)
+      return cohort;
+  }
   context->schedulerRunningFinals = true;
   uint32_t pending = 1;
   context->schedulerFinishRequested.compare_exchange_strong(
       pending, kSchedulerFinishConsumedByFinals, std::memory_order_relaxed);
+  return TALOS_RT_OK;
 }
 
 static void requestExplicitFinishUnlocked(talos_rt_context *context,
@@ -3233,6 +3305,54 @@ extern "C" uint64_t talos_rt_v1_scheduler_time(talos_rt_context *context) {
   TALOS_RT_CATCH_ALL { return 0; }
 }
 
+extern "C" uint64_t talos_rt_v1_scheduler_cohort(talos_rt_context *context) {
+  if (!context)
+    return 0;
+  ContextTransaction transaction(context);
+  TALOS_RT_TRY {
+    ContextMutexLock lock(context);
+    // Lazy observational bookkeeping keeps unrelated simulations out of the
+    // protocol. An unused query can be eliminated: no observable identity
+    // exists before the first query whose result is retained by its caller.
+    context->schedulerCohortEnabled = true;
+    return context->schedulerCohort;
+  }
+  TALOS_RT_CATCH_ALL { return 0; }
+}
+
+static talos_rt_status nextSchedulerCohortUnlocked(talos_rt_context *context,
+                                                   uint32_t region) {
+  if (!context->schedulerCohortEnabled) {
+    context->schedulerCohortRegion = region;
+    return TALOS_RT_OK;
+  }
+  if (context->schedulerCohort == UINT64_MAX) {
+    context->schedulerStatus = TALOS_RT_OUT_OF_RESOURCES;
+    return context->schedulerStatus;
+  }
+  ++context->schedulerCohort;
+  context->schedulerCohortRegion = region;
+  return TALOS_RT_OK;
+}
+
+talos_rt_status enterSchedulerExecutionCohortUnlocked(talos_rt_context *context,
+                                                      uint32_t region) {
+  if (!context->schedulerCohortEnabled) {
+    context->schedulerCohortRegion = schedulerCohortRegion(region);
+    return TALOS_RT_OK;
+  }
+  // IEEE 1800-2023 4.4/4.5 and IEEE 1801-2018 6.50/9.7: keep every Active
+  // routing consequence in one cohort. Normal arbitration promotes the whole
+  // Inactive queue before dispatch; direct executor admission retains a
+  // boundary for an explicit Inactive continuation too.
+  bool inactive = region == TALOS_RT_REGION_INACTIVE ||
+                  region == TALOS_RT_REGION_RE_INACTIVE;
+  uint32_t cohortRegion = schedulerCohortRegion(region);
+  if (inactive || context->schedulerCohortRegion != cohortRegion)
+    return nextSchedulerCohortUnlocked(context, cohortRegion);
+  return TALOS_RT_OK;
+}
+
 // Capture the canonical sampled plane before any executable region, then
 // publish one private event to sampled computed observers. The event is
 // enabled lazily by observer registration, so designs without asynchronous
@@ -3263,6 +3383,10 @@ talos_rt_status runPreponedHooks(talos_rt_context *context) {
 talos_rt_status enterSchedulerTimeSlotUnlocked(talos_rt_context *context) {
   if (context->schedulerPreponedTime == context->schedulerTime)
     return TALOS_RT_OK;
+  talos_rt_status cohort =
+      nextSchedulerCohortUnlocked(context, TALOS_RT_REGION_ACTIVE);
+  if (cohort != TALOS_RT_OK)
+    return cohort;
   // IEEE 1800-2023 4.4-4.5, 16.5.1: sample before executable regions and
   // retain that sample through all Active/NBA iterations and tier changes.
   talos_rt_status status = runPreponedHooks(context);
@@ -3745,6 +3869,12 @@ idleCurrentSlotResult(talos_rt_context *context,
     ++context->signalDiagnostics.schedulerIterations;
   if (complete) {
     // The empty barrier still accounts for the generated prefix's update.
+    talos_rt_status cohort = nextSchedulerCohortUnlocked(
+        context, options.completeNBABarrier == TALOS_RT_REGION_RE_NBA
+                     ? TALOS_RT_REGION_REACTIVE
+                     : TALOS_RT_REGION_ACTIVE);
+    if (cohort != TALOS_RT_OK)
+      return cohort;
     if (options.generatedNBAChanged && ++context->schedulerEpoch == 0)
       context->schedulerEpoch = 1;
     ++context->schedulerSlotProgress;
@@ -4092,7 +4222,9 @@ talos_rt_status runScheduler(talos_rt_context *context,
             context->schedulerDeadProcessCount != 0;
       }
       if (context->schedulerFinishRequested.load(std::memory_order_relaxed)) {
-        enterFinalPhaseUnlocked(context);
+        talos_rt_status status = enterFinalPhaseUnlocked(context);
+        if (status != TALOS_RT_OK)
+          return status;
         setSchedulerDrainingReactive(context, false);
         if (context->schedulerFinalsAborted)
           return context->schedulerFinishStatus;
@@ -4810,6 +4942,15 @@ talos_rt_status runScheduler(talos_rt_context *context,
       if (selected) {
         ScheduledProcess &candidate =
             context->scheduledProcesses[selectedIndex];
+        if (candidate.queuedRegion == TALOS_RT_REGION_INACTIVE ||
+            candidate.queuedRegion == TALOS_RT_REGION_RE_INACTIVE) {
+          talos_rt_status status = promoteInactiveResumptionsUnlocked(
+              context, candidate.queuedRegion);
+          if (status != TALOS_RT_OK)
+            return status;
+          clearCachedNativeReady();
+          continue;
+        }
         if (options.stopBeforeUnscopedActors &&
             options.localPendingNBARegion != UINT32_MAX) {
           const auto *scope = context->nativeScopedWrite.get();
@@ -4867,7 +5008,10 @@ talos_rt_status runScheduler(talos_rt_context *context,
           clearCachedNativeReady();
         if (candidate.postObserved &&
             candidate.queuedRegion == TALOS_RT_REGION_OBSERVED) {
-          talos_rt_promote_post_observed_resumptions_unlocked(context);
+          talos_rt_status status =
+              talos_rt_promote_post_observed_resumptions_unlocked(context);
+          if (status != TALOS_RT_OK)
+            return status;
           clearCachedNativeReady();
         }
         if (!context->schedulerRunningFinals &&
@@ -4938,6 +5082,25 @@ talos_rt_status runScheduler(talos_rt_context *context,
         clearCachedNativeReady();
       if (!selected && !context->schedulerRunningFinals &&
           barrierRegion != UINT32_MAX) {
+        if (barrierRegion == TALOS_RT_REGION_INACTIVE ||
+            barrierRegion == TALOS_RT_REGION_RE_INACTIVE) {
+          talos_rt_status status =
+              promoteInactiveResumptionsUnlocked(context, barrierRegion);
+          if (status != TALOS_RT_OK)
+            return status;
+          clearCachedNativeReady();
+          continue;
+        }
+        talos_rt_status cohort =
+            barrierRegion == TALOS_RT_REGION_NBA ||
+                    barrierRegion == TALOS_RT_REGION_RE_NBA
+                ? nextSchedulerCohortUnlocked(
+                      context, barrierRegion == TALOS_RT_REGION_RE_NBA
+                                   ? TALOS_RT_REGION_REACTIVE
+                                   : TALOS_RT_REGION_ACTIVE)
+                : enterSchedulerExecutionCohortUnlocked(context, barrierRegion);
+        if (cohort != TALOS_RT_OK)
+          return cohort;
         if (isReactiveSchedulerRegion(barrierRegion))
           setSchedulerDrainingReactive(context, true);
         bool changed = options.generatedNBAChanged;
@@ -6192,7 +6355,9 @@ talos_rt_status runScheduler(talos_rt_context *context,
              context->scheduledDesignTasks)
           hasFinal |= !candidate.terminated && candidate.phase == 1;
         if (hasFinal) {
-          enterFinalPhaseUnlocked(context);
+          talos_rt_status status = enterFinalPhaseUnlocked(context);
+          if (status != TALOS_RT_OK)
+            return status;
           if (context->nativeScheduleSingleStep)
             return TALOS_RT_OK;
           continue;
@@ -6210,6 +6375,10 @@ talos_rt_status runScheduler(talos_rt_context *context,
       ContextMutexLock lock(context);
       if (context->activeNativeProcess)
         return TALOS_RT_INVALID_LIFECYCLE;
+      talos_rt_status cohort = observeSchedulerExecutionCohortUnlocked(
+          context, context->scheduledProcesses[selectedIndex].queuedRegion);
+      if (cohort != TALOS_RT_OK)
+        return cohort;
       context->activeNativeProcess = selected;
       context->activeHomeRegion =
           context->scheduledProcesses[selectedIndex].homeRegion;

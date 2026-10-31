@@ -7201,9 +7201,11 @@ TEST(Scheduler, AOTZeroDelayUsesInactiveBeforeNBAWithoutWholePlanFallback) {
   cachedCohortNBAVisible = false;
   fixture.descriptor.native_execute = [](talos_rt_process_instance_v1 *actor) {
     if (actor->continuation == 1)
+      // IEEE 1800-2023 4.5: the Inactive queue is promoted to Active
+      // before its bodies execute, still before the pending NBA barrier.
       cachedCohortNBAVisible =
           *cachedCohortNBAPlane == 0 &&
-          actor->context->activeExecRegion == TALOS_RT_REGION_INACTIVE;
+          actor->context->activeExecRegion == TALOS_RT_REGION_ACTIVE;
     return schedulerExecute(actor);
   };
   schedulerOrder.clear();
@@ -9716,6 +9718,80 @@ TEST(Scheduler, EvalNBACutRetainsCanonicalNBAs) {
               TALOS_RT_OK);
     EXPECT_EQ(context->events.count(1), 1u);
   }
+  talos_rt_v1_context_destroy(context);
+}
+
+TEST(Scheduler, CohortQueriesAndIdleBarrierBoundaries) {
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_scheduler_cohort(nullptr), 0u);
+  uint64_t initial = talos_rt_v1_scheduler_cohort(context);
+  EXPECT_NE(initial, 0u);
+  EXPECT_EQ(talos_rt_v1_scheduler_cohort(context), initial);
+  talos_rt_native_schedule_plan plan{};
+  plan.flags = TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL;
+  context->nativeSchedulePlan = &plan;
+  {
+    ContextMutexLock lock(context);
+    NativeAOTContextScope aot(context);
+    NativeAOTMutexScope mutex(context);
+    uint32_t region = UINT32_MAX;
+    ASSERT_EQ(talos_rt_v1_scheduler_prepare_eval_nba(context, &region),
+              TALOS_RT_OK);
+    EXPECT_EQ(region, UINT32_MAX);
+    uint64_t entered = talos_rt_v1_scheduler_cohort(context);
+    // Reentry/probing a quiescent current slot is not a new evaluation cycle.
+    ASSERT_EQ(talos_rt_v1_scheduler_prepare_eval_nba(context, &region),
+              TALOS_RT_OK);
+    EXPECT_EQ(talos_rt_v1_scheduler_cohort(context), entered);
+    // The generated prefix can leave no runtime payload and can write the
+    // same value. Completing that real barrier must still begin a new cohort.
+    ASSERT_EQ(talos_rt_v1_scheduler_complete_eval_nba(context,
+                                                      TALOS_RT_REGION_NBA, 0),
+              TALOS_RT_OK);
+    uint64_t unchanged = talos_rt_v1_scheduler_cohort(context);
+    EXPECT_NE(unchanged, entered);
+    EXPECT_EQ(talos_rt_v1_scheduler_cohort(context), unchanged);
+    ASSERT_EQ(talos_rt_v1_scheduler_complete_eval_nba(context,
+                                                      TALOS_RT_REGION_NBA, 1),
+              TALOS_RT_OK);
+    EXPECT_NE(talos_rt_v1_scheduler_cohort(context), unchanged);
+    // Tokens must not wrap and accidentally admit a stale restore marker.
+    context->schedulerCohort = UINT64_MAX;
+    EXPECT_EQ(talos_rt_v1_scheduler_complete_eval_nba(context,
+                                                      TALOS_RT_REGION_NBA, 0),
+              TALOS_RT_OUT_OF_RESOURCES);
+    EXPECT_EQ(talos_rt_v1_scheduler_cohort(context), UINT64_MAX);
+  }
+  talos_rt_v1_context_destroy(context);
+}
+
+TEST(Scheduler, CohortFinalEntryIsIdempotent) {
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  // Enter the initial slot before requesting finish so its first Preponed
+  // sampling cannot masquerade as the Final-phase boundary under test.
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  uint64_t before = talos_rt_v1_scheduler_cohort(context);
+  ASSERT_EQ(talos_rt_v1_scheduler_finish(context, 0), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  uint64_t final = talos_rt_v1_scheduler_cohort(context);
+  EXPECT_NE(final, before);
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_scheduler_cohort(context), final);
+  talos_rt_v1_context_destroy(context);
+}
+
+TEST(Scheduler, CohortFinalEntryReportsExhaustion) {
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  EXPECT_NE(talos_rt_v1_scheduler_cohort(context), 0u);
+  context->schedulerCohort = UINT64_MAX;
+  ASSERT_EQ(talos_rt_v1_scheduler_finish(context, 0), TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OUT_OF_RESOURCES);
+  EXPECT_FALSE(context->schedulerRunningFinals);
+  EXPECT_EQ(talos_rt_v1_scheduler_cohort(context), UINT64_MAX);
   talos_rt_v1_context_destroy(context);
 }
 

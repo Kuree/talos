@@ -1267,6 +1267,7 @@ enum {
   TALOS_RT_INTRINSIC_V1_PROGRAM_OWNED = UINT32_C(0x0001024f),
   TALOS_RT_INTRINSIC_V1_CONTROL_DISABLE_SELECTED = UINT32_C(0x00010250),
   TALOS_RT_INTRINSIC_V1_POWER_CANCEL_NBA = UINT32_C(0x00010251),
+  TALOS_RT_INTRINSIC_V1_SCHEDULER_COHORT = UINT32_C(0x00010252),
   TALOS_RT_INTRINSIC_V1_IMPORT = UINT32_C(0x00010300),
   TALOS_RT_INTRINSIC_V1_DPI_IMPORT = UINT32_C(0x00010301),
   TALOS_RT_INTRINSIC_V1_CLASS_ALLOC = UINT32_C(0x00010400),
@@ -4690,6 +4691,12 @@ uint32_t talos_rt_v1_scheduler_termination_requested(talos_rt_context *context);
 // procedure of a program block, so that `$exit` terminates that program.
 uint32_t talos_rt_v1_scheduler_program_owned(talos_rt_context *context);
 uint64_t talos_rt_v1_scheduler_time(talos_rt_context *context);
+// Ordered scheduling cohort, stable across Active actors/routing and scheduler
+// reentry. Real region/time boundaries advance it; zero denotes no context.
+// Tokens support equality/inequality only; numeric identities are unspecified
+// across optimizations and execution tiers.
+// IEEE 1801-2018 6.50/9.7 uses this for concurrent restore/write priority.
+uint64_t talos_rt_v1_scheduler_cohort(talos_rt_context *context);
 
 // Read one packed value from the once-per-time-slot Preponed snapshot. The
 // stable handle and width are compiler-resolved; automatic storage is rejected

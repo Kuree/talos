@@ -1072,6 +1072,7 @@ public:
       return success();
     }
     case runtime::RuntimeCall::SchedulerTime:
+    case runtime::RuntimeCall::SchedulerCohort:
       rewriter.replaceOp(operation, emitCall(operands).getResult());
       return success();
     case runtime::RuntimeCall::Format: {
