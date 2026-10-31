@@ -1652,6 +1652,13 @@ StateDomainAnalysis::computeInductiveOnly(const ValueFactProgram &program) {
         writes.push_back({pair.getVisible(), pair.getValue()});
         return;
       }
+      if (auto view = dyn_cast<sim::SimPowerNBAViewOp>(operation)) {
+        // The clipped update may introduce X/Z anywhere in this root. A
+        // known payload preserves an already-known root, but does not prove
+        // that a previously unknown root is fully initialized.
+        writes.push_back({view.getRoot(), view.getValue()});
+        return;
+      }
       Value destination, value;
       if (auto store = dyn_cast<sim::SimRefStoreOp>(operation)) {
         destination = store.getReference();

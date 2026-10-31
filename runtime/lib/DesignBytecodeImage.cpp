@@ -476,6 +476,16 @@ bool validIntrinsic(const Image &image, const Function &function,
            handle(input(5)) && twoStateBits(input(6), 64) &&
            twoStateBits(input(7), 64) &&
            (site.inputCount == 8 || twoStateBits(input(8), 64));
+  case TALOS_RT_INTRINSIC_V1_POWER_NBA_VIEW:
+    return signature.flags == 0 &&
+           (site.inputCount == 12 || site.inputCount == 13) &&
+           site.outputCount == 0 && numeric(input(0)) && handle(input(1)) &&
+           twoStateBits(input(2), 64) && twoStateBits(input(3), 64) &&
+           twoStateBits(input(4), 64) && twoStateBits(input(5), 1) &&
+           handle(input(6)) && twoStateBits(input(7), 64) && handle(input(8)) &&
+           twoStateBits(input(9), 64) && twoStateBits(input(10), 64) &&
+           twoStateBits(input(11), 64) &&
+           (site.inputCount == 12 || twoStateBits(input(12), 64));
   case TALOS_RT_INTRINSIC_V1_NBA:
     return signature.flags == 0 &&
            (site.inputCount == 2 || site.inputCount == 3) &&

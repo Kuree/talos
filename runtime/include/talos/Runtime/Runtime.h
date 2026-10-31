@@ -1270,6 +1270,7 @@ enum {
   TALOS_RT_INTRINSIC_V1_SCHEDULER_COHORT = UINT32_C(0x00010252),
   TALOS_RT_INTRINSIC_V1_POWER_NBA = UINT32_C(0x00010253),
   TALOS_RT_INTRINSIC_V1_PROCESS_EVENT_PENDING = UINT32_C(0x00010254),
+  TALOS_RT_INTRINSIC_V1_POWER_NBA_VIEW = UINT32_C(0x00010255),
   TALOS_RT_INTRINSIC_V1_IMPORT = UINT32_C(0x00010300),
   TALOS_RT_INTRINSIC_V1_DPI_IMPORT = UINT32_C(0x00010301),
   TALOS_RT_INTRINSIC_V1_CLASS_ALLOC = UINT32_C(0x00010400),
@@ -4182,6 +4183,20 @@ talos_rt_status talos_rt_v1_power_nba_after(
     talos_rt_context *context, uint8_t *value_plane, uint8_t *unknown_plane,
     uint64_t plane_bit_count, uint64_t backing_offset, uint64_t visible_offset,
     uint64_t bit_width, uint64_t delay, const uint8_t *value,
+    const uint8_t *unknown, const talos_rt_power_nba_guard_v1 *guard);
+// IEEE 1801-2018 9.5.3 and IEEE 1800-2023 11.5.1/10.4.2: enqueue one
+// guarded write within a frozen, root-relative half-open window [lower,upper).
+// RHS bit zero is at start. Intersect that window and the RHS range with
+// [0,root_bit_width), copying only overlapping value and unknown bits. Invalid
+// or empty selections enqueue nothing. The root and epochs are whole static
+// declarations/global ranges; all bounds and the RHS are captured at issue.
+// Roots contain only integral leaves; managed, opaque and real storage need
+// their typed write services instead of this raw packed-bit operation.
+talos_rt_status talos_rt_v1_power_nba_view(
+    talos_rt_context *context, uint8_t *value_plane, uint8_t *unknown_plane,
+    uint64_t plane_bit_count, uint64_t root_handle, uint64_t root_bit_width,
+    int64_t start, int64_t lower, int64_t upper, uint32_t valid,
+    uint64_t source_bit_width, uint64_t delay, const uint8_t *value,
     const uint8_t *unknown, const talos_rt_power_nba_guard_v1 *guard);
 // Queue a packed-view NBA while retaining the exact boundary of the input
 // reference. The signed low bit is relative to that view. Unknown,

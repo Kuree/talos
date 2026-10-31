@@ -5713,6 +5713,38 @@ def SimPowerNBAOp : SimOp<"power.nba.enqueue", [
   let hasVerifier = 1;
 }
 
+def SimPowerNBAViewOp : SimOp<"power.nba.enqueue_view", [
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>,
+    MemoryEffects<[MemRead<SimStorageResource>, MemWrite<SimStorageResource>,
+                   MemWrite<SimSchedulerResource>]>
+  ]> {
+  let summary = "enqueue one bounded storage write with a commit-time power guard";
+  let description = [{
+    IEEE 1801-2018 9.5.3 and IEEE 1800-2023 11.5.1/7.4.5: the whole
+    persistent root and signed half-open window [lower, upper) preserve every
+    enclosing view boundary. RHS bit zero is at start, relative to the root.
+    Intersect the RHS range, window and root bounds before enqueueing. Invalid
+    or empty selections enqueue nothing. Value and root use the same two- or
+    four-state domain; narrower known values must be normalized explicitly.
+    Window values, payload and epoch snapshots are captured at this statement
+    and survive CFG forwarding and suspension as ordinary SSA values. The
+    capture-free i1 observer and epochs qualify the one publication at actual
+    due-time NBA commit, preserving source order (1800-2023 4.6(b)/10.4.2).
+    Epochs and root must be whole design/static storage references.
+  }];
+  let arguments = (ins SimContextType:$context, AnyType:$value,
+      SimRefType:$root, I64:$start, I64:$lower, I64:$upper, I1:$valid,
+      SimObserverType:$guard, SimRefType:$domain_epoch_ref, I64:$domain_epoch,
+      SimRefType:$strategy_epoch_ref, I64:$strategy_epoch,
+      Optional<SimTimeType>:$delay);
+  let assemblyFormat = [{$context `,` $value `in` $root
+      `window` `(` $lower `,` $upper `)` `at` $start `when` $valid
+      `guard` $guard `epochs` `(` $domain_epoch_ref `,` $domain_epoch `,`
+      $strategy_epoch_ref `,` $strategy_epoch `)` (`after` $delay^)? attr-dict `:`
+      functional-type(operands, results)}];
+  let hasVerifier = 1;
+}
+
 def SimNBAEnqueueOp : SimOp<"nba.enqueue", [
     MemoryEffects<[MemWrite<SimSchedulerResource>]>
   ]> {

@@ -102,8 +102,9 @@ LogicalResult threadProcessStateThroughCFG(sim::SimFuncOp function) {
 
   // Fragment extraction/CSE can move this planning-only binding after the
   // first threading pass. Keep the IEEE 1801-2018 9.7.3 commit guard local.
-  function.walk([&](sim::SimPowerNBAOp update) {
-    auto binding = update.getGuard().getDefiningOp<sim::SimObserverBindOp>();
+  auto rematerializePowerGuard = [&](auto update) {
+    auto binding =
+        update.getGuard().template getDefiningOp<sim::SimObserverBindOp>();
     if (!binding || binding->getBlock() == update->getBlock())
       return;
     IRRewriter rewriter(function.getContext());
@@ -112,7 +113,11 @@ LogicalResult threadProcessStateThroughCFG(sim::SimFuncOp function) {
     update.getGuardMutable().assign(clone.getResult());
     if (binding.getResult().use_empty())
       rewriter.eraseOp(binding);
-  });
+  };
+  function.walk(
+      [&](sim::SimPowerNBAOp update) { rematerializePowerGuard(update); });
+  function.walk(
+      [&](sim::SimPowerNBAViewOp update) { rematerializePowerGuard(update); });
 
   // IEEE 1800-2017 31.7 condition observers are static descriptors consumed
   // by their clock suspension. Native/AOT fragment extraction can hoist a

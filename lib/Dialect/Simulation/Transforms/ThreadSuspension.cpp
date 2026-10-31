@@ -179,8 +179,9 @@ public:
 
     // IEEE 1801-2018 9.7.3: the NBA guard is a static evaluator descriptor,
     // not live process state. Only its reference dependencies cross a wait.
-    function.walk([&](sim::SimPowerNBAOp update) {
-      auto binding = update.getGuard().getDefiningOp<sim::SimObserverBindOp>();
+    auto rematerializePowerGuard = [&](auto update) {
+      auto binding =
+          update.getGuard().template getDefiningOp<sim::SimObserverBindOp>();
       if (!binding || binding->getBlock() == update->getBlock())
         return;
       IRRewriter rewriter(function.getContext());
@@ -189,6 +190,11 @@ public:
       update.getGuardMutable().assign(clone.getResult());
       if (binding.getResult().use_empty())
         rewriter.eraseOp(binding);
+    };
+    function.walk(
+        [&](sim::SimPowerNBAOp update) { rematerializePowerGuard(update); });
+    function.walk([&](sim::SimPowerNBAViewOp update) {
+      rematerializePowerGuard(update);
     });
 
     SmallVector<Operation *> suspensions;

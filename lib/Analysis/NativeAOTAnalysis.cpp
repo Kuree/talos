@@ -1201,7 +1201,7 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
       // NBA accumulators do not yet expose cancellation, so retain the shared
       // runtime calendar for this design before assigning any NBA ownership.
       rejectPlan("power-loss NBA cancellation requires generic ordering");
-    } else if (isa<sim::SimPowerNBAOp>(operation)) {
+    } else if (isa<sim::SimPowerNBAOp, sim::SimPowerNBAViewOp>(operation)) {
       rejectPlan("retention NBA guards require runtime commit ordering");
     } else if (isa<sim::SimProcessEventPendingOp>(operation)) {
       rejectPlan("pending signal events require runtime calendar ordering");

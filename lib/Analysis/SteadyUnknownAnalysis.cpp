@@ -706,7 +706,8 @@ std::pair<Value, Value> modeledWrite(Operation *op) {
 /// themselves, and containers through the operations they hold.
 bool isWrite(Operation *op) {
   if (isa<sim::SimRefStoreOp, sim::SimRefAllocOp, sim::SimNBAEnqueueOp,
-          sim::SimPowerNBAOp, sim::SimRefStoreInertialPathOp>(op))
+          sim::SimPowerNBAOp, sim::SimPowerNBAViewOp,
+          sim::SimRefStoreInertialPathOp>(op))
     return true;
   if (isa<sim::SimCallOp, sim::SimTaskCallOp>(op) || op->getNumRegions())
     return false;
@@ -1213,6 +1214,13 @@ public:
       writeValue(pair.getVisible(), pair.getValue());
       return success();
     }
+    if (auto view = dyn_cast<sim::SimPowerNBAViewOp>(op)) {
+      // Dynamic windows can make any reached bit known. Do not reinterpret
+      // the narrower RHS mask as a whole-root write or include read-only
+      // epoch operands in the storage inventory.
+      write(view.getRoot(), std::nullopt);
+      return success();
+    }
     auto [reference, value] = modeledWrite(op);
     if (reference) {
       writeValue(reference, value);
@@ -1341,6 +1349,11 @@ SteadyUnknownAnalysis::compute(sim::SimDesignOp design) {
   design.walk([&](Operation *op) {
     auto function = op->getParentOfType<sim::SimFuncOp>();
     if (!function || !isWrite(op) || isa<sim::SimRefAllocOp>(op))
+      return;
+    // A guarded window is not a definite whole-root overwrite. Keeping its
+    // initializer while conservatively recording possible known bits above
+    // is safe until range-specific coverage is inferred.
+    if (isa<sim::SimPowerNBAViewOp>(op))
       return;
     bool roots = !runsOnce(function);
     SmallVector<Value, 2> references;

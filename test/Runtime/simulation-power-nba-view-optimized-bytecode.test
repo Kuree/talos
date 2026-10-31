@@ -1,0 +1,10 @@
+// RUN: %split-file %S/simulation-power-nba-view.test %t
+// RUN: talos-opt %t/design.mlir --pass-pipeline='builtin.module(simulation.design(symbol-dce,talos-sim-sccp{vpi=off},simulation.func(canonicalize,cse),talos-sim-inline{opt-level=3},simulation.func(canonicalize,mem2reg,cse),talos-sim-alias-port-connections{vpi=off},talos-sim-forward-copy-processes,talos-sim-propagate-initialized-storage{vpi=off},talos-sim-simplify-bodies{vpi=off},simulation.func(canonicalize,mem2reg,cse,talos-sim-thread-suspension),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-compute-fusion{materialize-eval-bodies=true},talos-sim-build-compute-graph,talos-sim-materialize-graph-regions,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off require-bytecode=true},simulation.design(talos-sim-optimize-native-regions),convert-talos-sim-processes-to-llvm-coroutines)' --verify-each -o %t.lowered.mlir
+// RUN: FileCheck %s --check-prefix=TIER < %t.lowered.mlir
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.o
+// RUN: %target_cxx %t.o %runtime_link_flags -o %t.exe
+// RUN: %t.exe | FileCheck %S/simulation-power-nba-view.test
+// IEEE 1801-2018 9.5.3 / IEEE 1800-2023 11.5.1/10.4.2:
+// full simulation optimization must preserve a partial guarded write, its
+// frozen bounds and unknown plane, and its relative NBA order.
+// TIER: runtime.execution_flags = #runtime.execution_flags<has_bytecode|require_bytecode>

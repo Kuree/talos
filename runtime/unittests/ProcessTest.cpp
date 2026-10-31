@@ -11177,6 +11177,231 @@ TEST(Scheduler, DelayedGuardedNBACapturesValuesOrderAndHomeRegion) {
     }
 }
 
+TEST(Scheduler, GuardedViewClipsAndCapturesBothPlanes) {
+  // IEEE 1800-2023 11.5.1/7.4.5: test bit membership against the frozen
+  // ancestor window, independently of the runtime's clipping calculation.
+  // The first case shifts a non-byte-aligned payload wider than one word.
+  talos_rt_observer_descriptor_v1 observer{
+      1,
+      nullptr,
+      0,
+      1,
+      0,
+      TALOS_RT_OBSERVER_NO_BYTECODE,
+      +[](talos_rt_context *, const uint64_t *, uint32_t, uint64_t *value,
+          uint64_t *unknown, uint32_t) {
+        *value = 1;
+        *unknown = 0;
+        return TALOS_RT_OK;
+      },
+      0};
+  talos_rt_execution_descriptor_v1 execution{};
+  execution.version = TALOS_RT_VERSION;
+  execution.state_bit_count = 320;
+  execution.observers = &observer;
+  execution.observer_count = 1;
+  for (bool descriptor : {false, true})
+    for (auto window : {std::array<int64_t, 3>{-3, 0, 70},
+                        {65, 16, 80},
+                        {10, 18, 29},
+                        {INT64_MIN, 0, 96},
+                        {INT64_MAX, 0, 96},
+                        {0, 50, 49},
+                        {-3, INT64_MIN, INT64_MAX}}) {
+      SCOPED_TRACE(descriptor);
+      SCOPED_TRACE(window[0]);
+      talos_rt_context *context = nullptr;
+      ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+                TALOS_RT_OK);
+      for (auto root :
+           {std::array<uint64_t, 3>{1, 0, 96}, {2, 128, 64}, {3, 192, 64}})
+        ASSERT_EQ(talos_rt_v1_native_state_register_static(context, root[0],
+                                                           root[1], root[2]),
+                  TALOS_RT_OK);
+      uint64_t root =
+          descriptor ? talos_rt_v1_native_state_static_handle(1) : 0;
+      talos_rt_power_nba_guard_v1 guard{
+          1, descriptor ? talos_rt_v1_native_state_static_handle(2) : 128, 0,
+          descriptor ? talos_rt_v1_native_state_static_handle(3) : 192, 0};
+      std::array<uint8_t, 40> value{}, unknown{};
+      std::fill_n(value.begin(), 12, 0xa5);
+      std::fill_n(unknown.begin(), 12, 0x5a);
+      auto expectedValue = value, expectedUnknown = unknown;
+      std::array<uint8_t, 10> sourceValue{0x6d, 0x91, 0x27, 0xe3, 0x49,
+                                          0x08, 0xfe, 0x57, 0x81, 0x03};
+      std::array<uint8_t, 10> sourceUnknown{0xb2, 0x05, 0xf8, 0x14, 0x90,
+                                            0x63, 0x28, 0xd6, 0x0a, 0x07};
+      bool writes = false;
+      for (int64_t bit = 0; bit != 96; ++bit) {
+        __int128 source = static_cast<__int128>(bit) - window[0];
+        if (bit < window[1] || bit >= window[2] || source < 0 || source >= 75)
+          continue;
+        writes = true;
+        auto copyBit = [&](auto &target, const auto &input) {
+          uint8_t mask = uint8_t(1u << (bit % 8));
+          if (input[uint64_t(source) / 8] & (1u << (uint64_t(source) % 8)))
+            target[bit / 8] |= mask;
+          else
+            target[bit / 8] &= uint8_t(~mask);
+        };
+        copyBit(expectedValue, sourceValue);
+        copyBit(expectedUnknown, sourceUnknown);
+      }
+      ASSERT_EQ(talos_rt_v1_power_nba_view(
+                    context, value.data(), unknown.data(), 320, root, 96,
+                    window[0], window[1], window[2], 1, 75, 5,
+                    sourceValue.data(), sourceUnknown.data(), &guard),
+                TALOS_RT_OK);
+      EXPECT_EQ(context->scheduledNBAs.size(), writes ? 1u : 0u);
+      // Neither later RHS mutation nor a caller-owned guard can retarget the
+      // already issued update (1800-2023 10.4.2, 1801-2018 9.5.3).
+      sourceValue.fill(0);
+      sourceUnknown.fill(0);
+      guard.domain_epoch = 99;
+      ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+      EXPECT_EQ(context->schedulerTime, writes ? 5u : 0u);
+      EXPECT_EQ(value, expectedValue);
+      EXPECT_EQ(unknown, expectedUnknown);
+      if (context->powerNBAs)
+        EXPECT_TRUE(context->powerNBAs->conditions.empty());
+      talos_rt_v1_context_destroy(context);
+    }
+}
+
+TEST(Scheduler, GuardedViewIgnoredSelectionsDoNotEvaluateOrAdvanceTime) {
+  // IEEE 1800-2023 11.5.1: an empty/invalid window has no event. In
+  // particular it must not evaluate an erroring power guard at a future time.
+  static unsigned evaluations = 0;
+  evaluations = 0;
+  talos_rt_observer_descriptor_v1 observer{
+      1,
+      nullptr,
+      0,
+      1,
+      0,
+      TALOS_RT_OBSERVER_NO_BYTECODE,
+      +[](talos_rt_context *, const uint64_t *, uint32_t, uint64_t *,
+          uint64_t *, uint32_t) {
+        ++evaluations;
+        return TALOS_RT_INVALID_ARGUMENT;
+      },
+      0};
+  talos_rt_execution_descriptor_v1 execution{};
+  execution.version = TALOS_RT_VERSION;
+  execution.state_bit_count = 192;
+  execution.observers = &observer;
+  execution.observer_count = 1;
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+            TALOS_RT_OK);
+  std::array<uint8_t, 24> plane{};
+  uint8_t source = 0xff;
+  talos_rt_power_nba_guard_v1 guard{1, 64, 0, 128, 0};
+  uint64_t sequence = context->nextSchedulerSequence;
+  for (auto selection : {std::array<int64_t, 4>{0, 0, 8, 0},
+                         {0, 4, 4, 1},
+                         {0, 8, 0, 1},
+                         {INT64_MIN, 0, 8, 1},
+                         {INT64_MAX, 0, 8, 1},
+                         {8, 0, 8, 1},
+                         {-8, 0, 8, 1}})
+    ASSERT_EQ(talos_rt_v1_power_nba_view(context, plane.data(), nullptr, 192, 0,
+                                         8, selection[0], selection[1],
+                                         selection[2], uint32_t(selection[3]),
+                                         8, 1000, &source, nullptr, &guard),
+              TALOS_RT_OK);
+  EXPECT_EQ(context->nextSchedulerSequence, sequence);
+  EXPECT_TRUE(context->scheduledNBAs.empty());
+  EXPECT_FALSE(context->powerNBAs);
+  EXPECT_EQ(evaluations, 0u);
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  EXPECT_EQ(context->schedulerTime, 0u);
+  EXPECT_EQ(evaluations, 0u);
+  talos_rt_v1_context_destroy(context);
+}
+
+TEST(Scheduler, GuardedViewValidatesLifetimeSequenceAndCancellation) {
+  // IEEE 1801-2018 9.5.3: the exact clipped range determines cancellation.
+  // Persistent roots/epochs and sequence capacity are validated before any
+  // publication. Cancelling the one entry also retires its guard state.
+  talos_rt_observer_descriptor_v1 observer{
+      1,
+      nullptr,
+      0,
+      1,
+      0,
+      TALOS_RT_OBSERVER_NO_BYTECODE,
+      +[](talos_rt_context *, const uint64_t *, uint32_t, uint64_t *value,
+          uint64_t *unknown, uint32_t) {
+        *value = 1;
+        *unknown = 0;
+        return TALOS_RT_OK;
+      },
+      0};
+  talos_rt_execution_descriptor_v1 execution{};
+  execution.version = TALOS_RT_VERSION;
+  execution.state_bit_count = 192;
+  execution.observers = &observer;
+  execution.observer_count = 1;
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+            TALOS_RT_OK);
+  for (auto state :
+       {std::array<uint64_t, 3>{1, 0, 32}, {2, 64, 64}, {3, 128, 64}})
+    ASSERT_EQ(talos_rt_v1_native_state_register_static(context, state[0],
+                                                       state[1], state[2]),
+              TALOS_RT_OK);
+  uint64_t root = talos_rt_v1_native_state_static_handle(1);
+  talos_rt_power_nba_guard_v1 guard{
+      1, talos_rt_v1_native_state_static_handle(2), 0,
+      talos_rt_v1_native_state_static_handle(3), 0};
+  std::array<uint8_t, 24> plane{};
+  uint8_t source = 0x5;
+  auto enqueue = [&](uint64_t handle, const talos_rt_power_nba_guard_v1 *spec) {
+    return talos_rt_v1_power_nba_view(context, plane.data(), nullptr, 192,
+                                      handle, 32, 9, 8, 16, 1, 4, 25, &source,
+                                      nullptr, spec);
+  };
+  EXPECT_EQ(enqueue(root, nullptr), TALOS_RT_INVALID_ARGUMENT);
+  EXPECT_EQ(enqueue(UINT64_MAX, &guard), TALOS_RT_INVALID_HANDLE);
+  EXPECT_EQ(enqueue(talos_rt_stable_handle_offset(root, 1), &guard),
+            TALOS_RT_INVALID_HANDLE);
+  auto projectedEpoch = guard;
+  projectedEpoch.domain_epoch_handle =
+      talos_rt_stable_handle_offset(guard.domain_epoch_handle, 1);
+  EXPECT_EQ(enqueue(root, &projectedEpoch), TALOS_RT_INVALID_HANDLE);
+  uint64_t automatic = UINT64_MAX, zero = 0;
+  ASSERT_EQ(talos_rt_v1_native_state_alloc(context, 64,
+                                           reinterpret_cast<uint8_t *>(&zero),
+                                           nullptr, &automatic),
+            TALOS_RT_OK);
+  EXPECT_EQ(enqueue(automatic, &guard), TALOS_RT_INVALID_HANDLE);
+  ASSERT_EQ(talos_rt_v1_native_state_release(context, automatic, 0),
+            TALOS_RT_OK);
+  EXPECT_TRUE(context->scheduledNBAs.empty());
+  EXPECT_FALSE(context->powerNBAs);
+  for (unsigned iteration = 0; iteration != 1000; ++iteration) {
+    ASSERT_EQ(enqueue(root, &guard), TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_power_cancel_nba(context, root, 8), TALOS_RT_OK);
+    ASSERT_EQ(context->scheduledNBAs.size(), 1u);
+    ASSERT_EQ(talos_rt_v1_power_cancel_nba(
+                  context, talos_rt_stable_handle_offset(root, 12), 1),
+              TALOS_RT_OK);
+    ASSERT_TRUE(context->scheduledNBAs.empty());
+    ASSERT_TRUE(context->powerNBAs->conditions.empty());
+  }
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  EXPECT_EQ(context->schedulerTime, 0u);
+  context->nextSchedulerSequence = UINT64_MAX - 1;
+  ASSERT_EQ(enqueue(root, &guard), TALOS_RT_OK);
+  EXPECT_EQ(context->nextSchedulerSequence, UINT64_MAX);
+  EXPECT_EQ(enqueue(root, &guard), TALOS_RT_OUT_OF_RESOURCES);
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  EXPECT_EQ(plane[1], uint8_t(source << 1));
+  EXPECT_TRUE(context->powerNBAs->conditions.empty());
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(Scheduler, GuardedNBACancellationRetiresBothHalvesWithoutAnotherBarrier) {
   // IEEE 1801-2018 9.7.3: cancelling a retained register's two storage roots
   // must release its pending payloads even when no NBA remains to drain.

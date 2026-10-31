@@ -7130,24 +7130,30 @@ LogicalResult SimDesignOp::verifyRegions() {
                     "descriptor";
       }
     WalkResult result = function.walk([&](Operation *op) {
-      if (auto update = dyn_cast<SimPowerNBAOp>(op)) {
+      if (isa<SimPowerNBAOp, SimPowerNBAViewOp>(op)) {
         // IEEE 1801-2018 9.7.3: every guarded destination and epoch must
         // survive until NBA commit. Use the design-wide descriptor index,
         // rather than scanning all declarations for every guarded register.
         SmallVector<SimContextStorageOp> roots;
-        for (Value reference :
-             {update.getBacking(), update.getVisible(),
-              update.getDomainEpochRef(), update.getStrategyEpochRef()})
+        SmallVector<Value> references;
+        if (auto update = dyn_cast<SimPowerNBAOp>(op))
+          references.append({update.getBacking(), update.getVisible(),
+                             update.getDomainEpochRef(),
+                             update.getStrategyEpochRef()});
+        else {
+          auto view = cast<SimPowerNBAViewOp>(op);
+          references.append({view.getRoot(), view.getDomainEpochRef(),
+                             view.getStrategyEpochRef()});
+        }
+        for (Value reference : references)
           if (!collectWholeStorageRoots(reference, roots)) {
-            update.emitOpError(
-                "requires whole design/static storage references");
+            op->emitOpError("requires whole design/static storage references");
             return WalkResult::interrupt();
           }
         for (auto root : roots) {
           auto storage = storagesById.lookup(root.getId());
           if (!storage || storage.getLifetime() == Lifetime::Automatic) {
-            update.emitOpError(
-                "requires whole design/static storage references");
+            op->emitOpError("requires whole design/static storage references");
             return WalkResult::interrupt();
           }
         }

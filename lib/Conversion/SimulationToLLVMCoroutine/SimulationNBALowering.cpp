@@ -44,6 +44,72 @@ bool canDropUnreadNBA(sim::SimNBAEnqueueOp op,
          plan->unreadRoots[root->second];
 }
 
+struct PowerNBAArguments {
+  SmallVector<Value> prefix;
+  Value value, unknown, guard;
+};
+
+template <typename Op, typename Adaptor>
+static FailureOr<PowerNBAArguments>
+preparePowerNBAArguments(Op op, Adaptor &adaptor, ConversionPatternRewriter &r,
+                         uint64_t stateBitCount) {
+  if (adaptor.getContext().size() != 1 || adaptor.getValue().empty() ||
+      adaptor.getGuard().size() != 1 || adaptor.getDelay().size() > 1)
+    return failure();
+  Operation *binding = getConvertedObserverBinding(adaptor.getGuard().front());
+  if (!binding)
+    return failure();
+  auto identity = schedule::get<schedule::Field::NativeObserverId>(binding);
+  if (!identity) {
+    op.emitError("guard has no native observer identity");
+    return failure();
+  }
+  Location loc = op.getLoc();
+  Type pointer = LLVM::LLVMPointerType::get(r.getContext());
+  Type i64 = r.getI64Type();
+  Value spec = entryAlloca(r, loc, i64, 5, 8);
+  SmallVector<Value> fields{
+      llvmConstant(r, loc, i64, identity.getValue().getZExtValue()),
+      adaptor.getDomainEpochRef().front(), adaptor.getDomainEpoch().front(),
+      adaptor.getStrategyEpochRef().front(),
+      adaptor.getStrategyEpoch().front()};
+  for (auto [index, value] : llvm::enumerate(fields))
+    LLVM::StoreOp::create(r, loc, value, byteGEP(r, loc, spec, index * 8), 8);
+  auto spill = [&](Value value) {
+    Value address = entryAlloca(r, loc, value.getType(), 1, 1);
+    LLVM::StoreOp::create(r, loc, value, address, 1);
+    return address;
+  };
+  Value null = LLVM::ZeroOp::create(r, loc, pointer);
+  Value unknown =
+      adaptor.getValue().size() == 2 ? spill(adaptor.getValue()[1]) : null;
+  Value unknownPlane =
+      adaptor.getValue().size() == 2
+          ? LLVM::AddressOfOp::create(r, loc, pointer, "__talos_state_unknown")
+                .getResult()
+          : null;
+  SmallVector<Value> prefix{
+      adaptor.getContext().front(),
+      LLVM::AddressOfOp::create(r, loc, pointer, "__talos_state_value"),
+      unknownPlane, llvmConstant(r, loc, i64, stateBitCount)};
+  return PowerNBAArguments{std::move(prefix), spill(adaptor.getValue().front()),
+                           unknown, spec};
+}
+
+static void finishPowerNBAConversion(Operation *op, Value context,
+                                     StringRef function, ValueRange arguments,
+                                     ConversionPatternRewriter &r) {
+  Value status = LLVM::CallOp::create(
+                     r, op->getLoc(), TypeRange{r.getI32Type()},
+                     SymbolRefAttr::get(r.getContext(), function), arguments)
+                     .getResult();
+  LLVM::CallOp::create(
+      r, op->getLoc(), TypeRange{},
+      SymbolRefAttr::get(r.getContext(), "talos_rt_v1_scheduler_fail"),
+      ValueRange{context, status});
+  r.eraseOp(op);
+}
+
 class PowerNBAConversion final
     : public OpConversionPattern<sim::SimPowerNBAOp> {
 public:
@@ -52,66 +118,66 @@ public:
       : OpConversionPattern(converter, context), stateBitCount(stateBitCount) {}
   LogicalResult matchAndRewrite(sim::SimPowerNBAOp op, OneToNOpAdaptor adaptor,
                                 ConversionPatternRewriter &r) const override {
-    if (adaptor.getContext().size() != 1 || adaptor.getValue().empty() ||
-        adaptor.getBacking().size() != 1 || adaptor.getVisible().size() != 1 ||
-        adaptor.getGuard().size() != 1 || adaptor.getDelay().size() > 1)
+    if (adaptor.getBacking().size() != 1 || adaptor.getVisible().size() != 1)
       return failure();
-    Operation *binding =
-        getConvertedObserverBinding(adaptor.getGuard().front());
-    if (!binding)
+    auto prepared = preparePowerNBAArguments(op, adaptor, r, stateBitCount);
+    if (failed(prepared))
       return failure();
-    auto identity = schedule::get<schedule::Field::NativeObserverId>(binding);
-    if (!identity)
-      return op.emitError("guard has no native observer identity");
-    Location loc = op.getLoc();
-    Type pointer = LLVM::LLVMPointerType::get(r.getContext());
-    Type i64 = r.getI64Type();
-    Value spec = entryAlloca(r, loc, i64, 5, 8);
-    SmallVector<Value> fields{
-        llvmConstant(r, loc, i64, identity.getValue().getZExtValue()),
-        adaptor.getDomainEpochRef().front(), adaptor.getDomainEpoch().front(),
-        adaptor.getStrategyEpochRef().front(),
-        adaptor.getStrategyEpoch().front()};
-    for (auto [index, value] : llvm::enumerate(fields))
-      LLVM::StoreOp::create(r, loc, value, byteGEP(r, loc, spec, index * 8), 8);
-    auto spill = [&](Value value) {
-      Value address = entryAlloca(r, loc, value.getType(), 1, 1);
-      LLVM::StoreOp::create(r, loc, value, address, 1);
-      return address;
-    };
-    Value null = LLVM::ZeroOp::create(r, loc, pointer);
-    Value unknown =
-        adaptor.getValue().size() == 2 ? spill(adaptor.getValue()[1]) : null;
-    Value unknownPlane = adaptor.getValue().size() == 2
-                             ? LLVM::AddressOfOp::create(
-                                   r, loc, pointer, "__talos_state_unknown")
-                                   .getResult()
-                             : null;
-    SmallVector<Value> arguments{
-        adaptor.getContext().front(),
-        LLVM::AddressOfOp::create(r, loc, pointer, "__talos_state_value"),
-        unknownPlane,
-        llvmConstant(r, loc, i64, stateBitCount),
-        adaptor.getBacking().front(),
-        adaptor.getVisible().front(),
-        llvmConstant(r, loc, i64,
-                     *sim::getPackedWidth(op.getValue().getType()))};
+    auto &arguments = prepared->prefix;
+    arguments.append(
+        {adaptor.getBacking().front(), adaptor.getVisible().front(),
+         llvmConstant(r, op.getLoc(), r.getI64Type(),
+                      *sim::getPackedWidth(op.getValue().getType()))});
     if (!adaptor.getDelay().empty())
       arguments.push_back(adaptor.getDelay().front());
-    arguments.append({spill(adaptor.getValue().front()), unknown, spec});
-    Value status = LLVM::CallOp::create(
-                       r, loc, TypeRange{r.getI32Type()},
-                       SymbolRefAttr::get(r.getContext(),
-                                          adaptor.getDelay().empty()
-                                              ? "talos_rt_v1_power_nba"
-                                              : "talos_rt_v1_power_nba_after"),
-                       arguments)
-                       .getResult();
-    LLVM::CallOp::create(
-        r, loc, TypeRange{},
-        SymbolRefAttr::get(r.getContext(), "talos_rt_v1_scheduler_fail"),
-        ValueRange{adaptor.getContext().front(), status});
-    r.eraseOp(op);
+    arguments.append({prepared->value, prepared->unknown, prepared->guard});
+    finishPowerNBAConversion(op, adaptor.getContext().front(),
+                             adaptor.getDelay().empty()
+                                 ? "talos_rt_v1_power_nba"
+                                 : "talos_rt_v1_power_nba_after",
+                             arguments, r);
+    return success();
+  }
+
+private:
+  uint64_t stateBitCount;
+};
+
+class PowerNBAViewConversion final
+    : public OpConversionPattern<sim::SimPowerNBAViewOp> {
+public:
+  PowerNBAViewConversion(const TypeConverter &converter, MLIRContext *context,
+                         uint64_t stateBitCount)
+      : OpConversionPattern(converter, context), stateBitCount(stateBitCount) {}
+  LogicalResult matchAndRewrite(sim::SimPowerNBAViewOp op,
+                                OneToNOpAdaptor adaptor,
+                                ConversionPatternRewriter &r) const override {
+    if (adaptor.getRoot().size() != 1 || adaptor.getStart().size() != 1 ||
+        adaptor.getLower().size() != 1 || adaptor.getUpper().size() != 1 ||
+        adaptor.getValid().size() != 1)
+      return failure();
+    auto prepared = preparePowerNBAArguments(op, adaptor, r, stateBitCount);
+    if (failed(prepared))
+      return failure();
+    auto &arguments = prepared->prefix;
+    Location loc = op.getLoc();
+    Type i64 = r.getI64Type();
+    arguments.append(
+        {adaptor.getRoot().front(),
+         llvmConstant(
+             r, loc, i64,
+             *nativeStateWidth(op.getRoot().getType().getElementType())),
+         adaptor.getStart().front(), adaptor.getLower().front(),
+         adaptor.getUpper().front(),
+         LLVM::ZExtOp::create(r, loc, r.getI32Type(),
+                              adaptor.getValid().front()),
+         llvmConstant(r, loc, i64,
+                      *sim::getPackedWidth(op.getValue().getType())),
+         adaptor.getDelay().empty() ? llvmConstant(r, loc, i64, 0)
+                                    : adaptor.getDelay().front(),
+         prepared->value, prepared->unknown, prepared->guard});
+    finishPowerNBAConversion(op, adaptor.getContext().front(),
+                             "talos_rt_v1_power_nba_view", arguments, r);
     return success();
   }
 
@@ -1880,6 +1946,8 @@ void populateNBAToLLVMConversionPatterns(
   patterns.add<PowerCancelNBAConversion>(converter, patterns.getContext());
   patterns.add<PowerNBAConversion>(converter, patterns.getContext(),
                                    stateBitCount);
+  patterns.add<PowerNBAViewConversion>(converter, patterns.getContext(),
+                                       stateBitCount);
   patterns.add<InertialDriverConversion>(converter, patterns.getContext(),
                                          stateBitCount);
   patterns.add<InertialPathDriverConversion>(converter, patterns.getContext(),

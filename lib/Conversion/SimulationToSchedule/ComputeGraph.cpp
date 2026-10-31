@@ -412,6 +412,19 @@ SmallVector<ComputeEffect> collectDirectEffects(const FunctionInfo &info,
           // effects, including a binding hoisted to a predecessor block.
           effects.push_back({schedule::ComputeEffectKind::Read});
         })
+        .Case<sim::SimPowerNBAViewOp>([&](auto op) {
+          // IEEE 1801-2018 9.5.3: one possibly partial destination, with
+          // bounds captured separately from the whole-root reference.
+          auto target = widenDynamic(info.provenance.lookup(op.getRoot()));
+          effects.push_back({schedule::ComputeEffectKind::NBA, target,
+                             schedule::ComputeTriggerKind::None,
+                             static_cast<bool>(op.getDelay())});
+          appendEffect(info, schedule::ComputeEffectKind::Read,
+                       op.getDomainEpochRef(), effects);
+          appendEffect(info, schedule::ComputeEffectKind::Read,
+                       op.getStrategyEpochRef(), effects);
+          effects.push_back({schedule::ComputeEffectKind::Read});
+        })
         .Case<sim::SimProcessEventPendingOp>([&](auto) {
           // Signal stores can synchronously latch an occurrence, even before
           // the waiting process can run in its home region (1801-2018 9.7.3).
@@ -698,6 +711,11 @@ ProgramAnalysis analyzeProgram(sim::SimDesignOp design) {
           info.observerBindings.push_back(binding);
     });
     function.walk([&](sim::SimPowerNBAOp update) {
+      if (auto binding =
+              update.getGuard().getDefiningOp<sim::SimObserverBindOp>())
+        info.observerBindings.push_back(binding);
+    });
+    function.walk([&](sim::SimPowerNBAViewOp update) {
       if (auto binding =
               update.getGuard().getDefiningOp<sim::SimObserverBindOp>())
         info.observerBindings.push_back(binding);
@@ -1369,6 +1387,8 @@ LogicalResult ComputeGraphBuilder::buildFragments() {
       else if (auto nba = dyn_cast<sim::SimPowerNBAOp>(operation)) {
         addRoot(nbaRoots, info.provenance.lookup(nba.getBacking()));
         addRoot(nbaRoots, info.provenance.lookup(nba.getVisible()));
+      } else if (auto nba = dyn_cast<sim::SimPowerNBAViewOp>(operation)) {
+        addRoot(nbaRoots, info.provenance.lookup(nba.getRoot()));
       } else if (auto trigger = dyn_cast<sim::SimEventTriggerOp>(operation);
                  trigger && trigger.getNonblocking())
         addRoot(eventRoots, info.provenance.lookup(trigger.getEvent()));
@@ -1836,94 +1856,98 @@ LogicalResult ComputeGraphBuilder::buildSites(ComputeGraphResult &result) {
   // needs a site even though the function is not itself a graph node.
   for (const FunctionInfo &info : analysis.functions) {
     std::optional<analysis::ConstantTimeAnalysis> constantTimes;
-    auto walkResult =
-        info.getFunction().walk([&](Operation *operation) -> WalkResult {
-          if (isSuspensionTerminator(operation)) {
-            if (info.getFunction().getEntryKind() == sim::EntryKind::Function &&
-                isa<sim::SimProcessControlOp>(operation))
-              return WalkResult::advance();
-            Block *continuation =
-                skipObserverCaptureBridges(operation->getSuccessor(0));
-            auto found = fragmentForBlock.find(continuation);
-            if (found == fragmentForBlock.end())
-              return operation->emitOpError(
-                  "resumes into a block with no fragment");
-            result.continuations[operation] =
-                schedule::ContinuationSiteAttr::get(design.getContext(),
-                                                    found->second);
-          }
-          if (auto delay = dyn_cast<sim::SimSuspendDelayOp>(operation)) {
-            if (!constantTimes)
-              constantTimes.emplace(info.getFunction());
-            result.timings[operation] = schedule::TimingSiteAttr::get(
-                design.getContext(), timingSite++,
-                constantTimes->isConstant(delay.getDelay())
-                    ? schedule::ComputeTimingKind::Calendar
-                    : schedule::ComputeTimingKind::DeadlineSlot);
-          }
-          if (auto nba = dyn_cast<sim::SimNBAEnqueueOp>(operation)) {
-            HandleFact destination =
-                info.provenance.lookup(nba.getDestination());
-            std::optional<uint32_t> commit =
-                findCommit(nbaRoots, getRootProvenance(destination));
-            if (!commit)
-              return nba.emitOpError("has no generated commit node");
-            uint64_t site = nbaSite++;
-            schedule::ComputeNBAStorageKind storage = getNBAStorageKind(
-                nba, info.getFunction(), multiplicity, destination);
-            switch (storage) {
-            case schedule::ComputeNBAStorageKind::FixedSlot:
-              nbaSlots[*commit].push_back(site);
-              break;
-            case schedule::ComputeNBAStorageKind::RootAccumulator:
-              nbaAccumulatorSites[*commit].push_back(site);
-              break;
-            case schedule::ComputeNBAStorageKind::DynamicFrontier:
-              nbaFrontierSites[*commit].push_back(site);
-              break;
-            }
-            schedule::TimingSiteAttr delayedTiming;
-            if (nba.getDelay())
-              delayedTiming = schedule::TimingSiteAttr::get(
-                  design.getContext(), timingSite++,
-                  schedule::ComputeTimingKind::DelayedNBA);
-            result.nbaSites[operation] = schedule::NBASiteAttr::get(
-                design.getContext(), site, nbaCommitIds[*commit], storage,
-                delayedTiming);
-          }
-          if (auto nba = dyn_cast<sim::SimPowerNBAOp>(operation)) {
-            // IEEE 1801-2018 9.7.3: these two destinations commit through
-            // the runtime's atomic guard. They are never accumulator sites;
-            // give each root a dynamic frontier in the scheduling graph.
-            for (Value target : {nba.getBacking(), nba.getVisible()}) {
-              auto commit = findCommit(
-                  nbaRoots, getRootProvenance(info.provenance.lookup(target)));
-              if (!commit)
-                return nba.emitOpError("has no generated commit node");
-              nbaFrontierSites[*commit].push_back(nbaSite++);
-            }
-          }
-          if (auto trigger = dyn_cast<sim::SimEventTriggerOp>(operation);
-              trigger && trigger.getNonblocking()) {
-            HandleFact destination = info.provenance.lookup(trigger.getEvent());
-            std::optional<uint32_t> commit =
-                findCommit(eventRoots, getRootProvenance(destination));
-            if (!commit)
-              return trigger.emitOpError(
-                  "has no generated deferred-event commit node");
-            uint64_t site = eventSite++;
-            eventSites[*commit].push_back(site);
-            schedule::TimingSiteAttr delayedTiming;
-            if (trigger.getDelay())
-              delayedTiming = schedule::TimingSiteAttr::get(
-                  design.getContext(), timingSite++,
-                  schedule::ComputeTimingKind::DelayedEvent);
-            result.eventSites[operation] = schedule::EventSiteAttr::get(
-                design.getContext(), site, eventCommitIds[*commit],
-                delayedTiming);
-          }
+    auto walkResult = info.getFunction().walk([&](Operation *operation)
+                                                  -> WalkResult {
+      if (isSuspensionTerminator(operation)) {
+        if (info.getFunction().getEntryKind() == sim::EntryKind::Function &&
+            isa<sim::SimProcessControlOp>(operation))
           return WalkResult::advance();
-        });
+        Block *continuation =
+            skipObserverCaptureBridges(operation->getSuccessor(0));
+        auto found = fragmentForBlock.find(continuation);
+        if (found == fragmentForBlock.end())
+          return operation->emitOpError(
+              "resumes into a block with no fragment");
+        result.continuations[operation] = schedule::ContinuationSiteAttr::get(
+            design.getContext(), found->second);
+      }
+      if (auto delay = dyn_cast<sim::SimSuspendDelayOp>(operation)) {
+        if (!constantTimes)
+          constantTimes.emplace(info.getFunction());
+        result.timings[operation] = schedule::TimingSiteAttr::get(
+            design.getContext(), timingSite++,
+            constantTimes->isConstant(delay.getDelay())
+                ? schedule::ComputeTimingKind::Calendar
+                : schedule::ComputeTimingKind::DeadlineSlot);
+      }
+      if (auto nba = dyn_cast<sim::SimNBAEnqueueOp>(operation)) {
+        HandleFact destination = info.provenance.lookup(nba.getDestination());
+        std::optional<uint32_t> commit =
+            findCommit(nbaRoots, getRootProvenance(destination));
+        if (!commit)
+          return nba.emitOpError("has no generated commit node");
+        uint64_t site = nbaSite++;
+        schedule::ComputeNBAStorageKind storage = getNBAStorageKind(
+            nba, info.getFunction(), multiplicity, destination);
+        switch (storage) {
+        case schedule::ComputeNBAStorageKind::FixedSlot:
+          nbaSlots[*commit].push_back(site);
+          break;
+        case schedule::ComputeNBAStorageKind::RootAccumulator:
+          nbaAccumulatorSites[*commit].push_back(site);
+          break;
+        case schedule::ComputeNBAStorageKind::DynamicFrontier:
+          nbaFrontierSites[*commit].push_back(site);
+          break;
+        }
+        schedule::TimingSiteAttr delayedTiming;
+        if (nba.getDelay())
+          delayedTiming = schedule::TimingSiteAttr::get(
+              design.getContext(), timingSite++,
+              schedule::ComputeTimingKind::DelayedNBA);
+        result.nbaSites[operation] = schedule::NBASiteAttr::get(
+            design.getContext(), site, nbaCommitIds[*commit], storage,
+            delayedTiming);
+      }
+      if (auto nba = dyn_cast<sim::SimPowerNBAOp>(operation)) {
+        // IEEE 1801-2018 9.7.3: these two destinations commit through
+        // the runtime's atomic guard. They are never accumulator sites;
+        // give each root a dynamic frontier in the scheduling graph.
+        for (Value target : {nba.getBacking(), nba.getVisible()}) {
+          auto commit = findCommit(
+              nbaRoots, getRootProvenance(info.provenance.lookup(target)));
+          if (!commit)
+            return nba.emitOpError("has no generated commit node");
+          nbaFrontierSites[*commit].push_back(nbaSite++);
+        }
+      }
+      if (auto nba = dyn_cast<sim::SimPowerNBAViewOp>(operation)) {
+        auto commit = findCommit(
+            nbaRoots, getRootProvenance(info.provenance.lookup(nba.getRoot())));
+        if (!commit)
+          return nba.emitOpError("has no generated commit node");
+        nbaFrontierSites[*commit].push_back(nbaSite++);
+      }
+      if (auto trigger = dyn_cast<sim::SimEventTriggerOp>(operation);
+          trigger && trigger.getNonblocking()) {
+        HandleFact destination = info.provenance.lookup(trigger.getEvent());
+        std::optional<uint32_t> commit =
+            findCommit(eventRoots, getRootProvenance(destination));
+        if (!commit)
+          return trigger.emitOpError(
+              "has no generated deferred-event commit node");
+        uint64_t site = eventSite++;
+        eventSites[*commit].push_back(site);
+        schedule::TimingSiteAttr delayedTiming;
+        if (trigger.getDelay())
+          delayedTiming = schedule::TimingSiteAttr::get(
+              design.getContext(), timingSite++,
+              schedule::ComputeTimingKind::DelayedEvent);
+        result.eventSites[operation] = schedule::EventSiteAttr::get(
+            design.getContext(), site, eventCommitIds[*commit], delayedTiming);
+      }
+      return WalkResult::advance();
+    });
     if (walkResult.wasInterrupted())
       return failure();
   }

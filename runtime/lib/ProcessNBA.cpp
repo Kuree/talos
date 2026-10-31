@@ -778,13 +778,20 @@ bool powerNBAAllowedUnlocked(talos_rt_context *context, uint64_t sequence,
   return finish();
 }
 
-extern "C" talos_rt_status talos_rt_v1_power_nba_after(
-    talos_rt_context *context, uint8_t *valuePlane, uint8_t *unknownPlane,
-    uint64_t planeBitCount, uint64_t backing, uint64_t visible, uint64_t width,
-    uint64_t delay, const uint8_t *value, const uint8_t *unknown,
-    const talos_rt_power_nba_guard_v1 *guard) {
+// Power-only staging leaves the ordinary NBA queue's hot path unchanged.
+// A view publishes one entry; a retained pair shares one decision across two.
+static talos_rt_status
+enqueuePowerNBA(talos_rt_context *context, uint8_t *valuePlane,
+                uint8_t *unknownPlane, uint64_t planeBitCount, uint64_t backing,
+                uint64_t visible, uint64_t width, uint64_t delay,
+                const uint8_t *value, const uint8_t *unknown,
+                const talos_rt_power_nba_guard_v1 *guard, uint64_t viewRoot = 0,
+                uint64_t viewRootWidth = 0, uint64_t sourceOffset = 0) {
+  const size_t count = viewRootWidth ? 1 : 2;
+  std::array<uint64_t, 2> offsets{backing, visible};
   if (!context || !guard || !valuePlane || !value || !width ||
-      width > UINT64_MAX - 7 || (unknownPlane && !unknown))
+      width > UINT64_MAX - 7 || sourceOffset > UINT64_MAX - width ||
+      (unknownPlane && !unknown))
     return TALOS_RT_INVALID_ARGUMENT;
   ContextTransaction transaction(context);
   TALOS_RT_TRY {
@@ -807,23 +814,37 @@ extern "C" talos_rt_status talos_rt_v1_power_nba_after(
         descriptor->bytecode_function == TALOS_RT_OBSERVER_NO_BYTECODE)
       return TALOS_RT_TIER_UNAVAILABLE;
     if (context->nextSchedulerSequence == 0 ||
-        context->nextSchedulerSequence >= UINT64_MAX - 1)
+        count > UINT64_MAX - context->nextSchedulerSequence)
       return TALOS_RT_OUT_OF_RESOURCES;
-    for (auto range : {std::pair{backing, width}, std::pair{visible, width},
-                       std::pair{guard->domain_epoch_handle, uint64_t{64}},
-                       std::pair{guard->strategy_epoch_handle, uint64_t{64}}}) {
+    auto validate = [&](uint64_t handle, uint64_t bits,
+                        bool whole) -> talos_rt_status {
       uint32_t id = 0;
       int64_t offset = 0;
-      bool bounded = decodeNativeStatic(range.first, id, offset);
-      if (!bounded && !decodeNativeGlobal(range.first, offset))
+      bool bounded = decodeNativeStatic(handle, id, offset);
+      if (!bounded && !decodeNativeGlobal(handle, offset))
         return TALOS_RT_INVALID_HANDLE;
       if (bounded) {
         auto *state = findNativeStaticState(context, id);
-        if (!state || offset != 0 || state->bitWidth != range.second)
+        if (!state || offset < 0 || uint64_t(offset) > state->bitWidth ||
+            bits > state->bitWidth - uint64_t(offset) ||
+            (whole && (offset != 0 || state->bitWidth != bits)))
           return TALOS_RT_INVALID_HANDLE;
       }
-      auto status =
-          talos_rt_vpi_state_validate(context, range.first, range.second);
+      return talos_rt_vpi_state_validate(context, handle, bits);
+    };
+    if (viewRootWidth) {
+      auto status = validate(viewRoot, viewRootWidth, true);
+      if (status != TALOS_RT_OK)
+        return status;
+    }
+    for (size_t index = 0; index != count; ++index) {
+      auto status = validate(offsets[index], width, !viewRootWidth);
+      if (status != TALOS_RT_OK)
+        return status;
+    }
+    for (uint64_t epoch :
+         {guard->domain_epoch_handle, guard->strategy_epoch_handle}) {
+      auto status = validate(epoch, 64, true);
       if (status != TALOS_RT_OK)
         return status;
     }
@@ -836,12 +857,10 @@ extern "C" talos_rt_status talos_rt_v1_power_nba_after(
     uint64_t byteCount = (width + 7) / 8;
     if (byteCount > SIZE_MAX)
       return TALOS_RT_INVALID_ARGUMENT;
-    // Keep ordinary NBA staging unchanged. This whole-register path needs
-    // neither dynamic-view clipping nor automatic-state lifetime tracking.
-    // Allocate both payloads before publishing either half of the pair.
+    // Prepare every payload before publishing any entry. Persistent roots
+    // need no automatic-state lifetime bookkeeping.
     std::array<ScheduledNBA, 2> updates;
-    std::array<uint64_t, 2> offsets{backing, visible};
-    for (size_t index = 0; index != updates.size(); ++index) {
+    for (size_t index = 0; index != count; ++index) {
       auto &update = updates[index];
       update.valuePlane = valuePlane;
       update.unknownPlane = unknownPlane;
@@ -856,20 +875,31 @@ extern "C" talos_rt_status talos_rt_v1_power_nba_after(
           index == 0 ? NBACommitGuard::PowerFirst : NBACommitGuard::PowerSecond;
       update.inlinePacked = width <= 64;
       if (update.inlinePacked) {
-        update.inlineValue = loadPackedBytes(value, 0, width);
+        update.inlineValue = loadPackedBytes(value, sourceOffset, width);
         if (unknownPlane)
-          update.inlineUnknown = loadPackedBytes(unknown, 0, width);
-      } else {
+          update.inlineUnknown = loadPackedBytes(unknown, sourceOffset, width);
+      } else if (sourceOffset == 0) {
         update.value.assign(value, value + static_cast<size_t>(byteCount));
         if (unknownPlane)
           update.unknown.assign(unknown,
                                 unknown + static_cast<size_t>(byteCount));
+      } else {
+        update.value.assign(static_cast<size_t>(byteCount), 0);
+        if (unknownPlane)
+          update.unknown.assign(static_cast<size_t>(byteCount), 0);
+        for (uint64_t bit = 0; bit != width; ++bit) {
+          setByteBit(update.value.data(), bit,
+                     byteBit(value, sourceOffset + bit));
+          if (unknownPlane)
+            setByteBit(update.unknown.data(), bit,
+                       byteBit(unknown, sourceOffset + bit));
+        }
       }
     }
     auto &queue = context->scheduledNBAs;
-    if (queue.max_size() - queue.size() < updates.size())
+    if (queue.max_size() - queue.size() < count)
       return TALOS_RT_OUT_OF_RESOURCES;
-    size_t required = queue.size() + updates.size();
+    size_t required = queue.size() + count;
     if (queue.capacity() < required) {
       // Preserve geometric growth; exact reservation for every pair is
       // quadratic when a clock activation updates many retained registers.
@@ -889,12 +919,13 @@ extern "C" talos_rt_status talos_rt_v1_power_nba_after(
     condition.globalValue = valuePlane;
     condition.globalBitCount = planeBitCount;
     condition.guard = *guard;
+    condition.pending = count == 1 ? 1 : 3;
     static_assert(std::is_nothrow_move_constructible_v<ScheduledNBA>);
-    for (size_t index = 0; index != updates.size(); ++index) {
+    for (size_t index = 0; index != count; ++index) {
       updates[index].sequence = first + index;
       queue.push_back(std::move(updates[index]));
     }
-    context->nextSchedulerSequence = first + updates.size();
+    context->nextSchedulerSequence = first + count;
     return TALOS_RT_OK;
   }
   TALOS_RT_CATCH(const std::bad_alloc &) {
@@ -905,6 +936,46 @@ extern "C" talos_rt_status talos_rt_v1_power_nba_after(
     context->schedulerStatus = TALOS_RT_INVALID_ARGUMENT;
     return TALOS_RT_INVALID_ARGUMENT;
   }
+}
+
+extern "C" talos_rt_status talos_rt_v1_power_nba_after(
+    talos_rt_context *context, uint8_t *valuePlane, uint8_t *unknownPlane,
+    uint64_t planeBitCount, uint64_t backing, uint64_t visible, uint64_t width,
+    uint64_t delay, const uint8_t *value, const uint8_t *unknown,
+    const talos_rt_power_nba_guard_v1 *guard) {
+  return enqueuePowerNBA(context, valuePlane, unknownPlane, planeBitCount,
+                         backing, visible, width, delay, value, unknown, guard);
+}
+
+extern "C" talos_rt_status talos_rt_v1_power_nba_view(
+    talos_rt_context *context, uint8_t *valuePlane, uint8_t *unknownPlane,
+    uint64_t planeBitCount, uint64_t root, uint64_t rootWidth, int64_t start,
+    int64_t lower, int64_t upper, uint32_t valid, uint64_t sourceWidth,
+    uint64_t delay, const uint8_t *value, const uint8_t *unknown,
+    const talos_rt_power_nba_guard_v1 *guard) {
+  if (!context)
+    return TALOS_RT_INVALID_ARGUMENT;
+  if (!valid)
+    return TALOS_RT_OK;
+  if (!rootWidth || rootWidth > INT64_MAX || !sourceWidth ||
+      sourceWidth > UINT64_MAX - 7 || (sourceWidth + 7) / 8 > SIZE_MAX)
+    return TALOS_RT_INVALID_ARGUMENT;
+  // IEEE 1800-2023 11.5.1/7.4.5: keep the full ancestor intersection and
+  // widened arithmetic. An invalid parent window cannot be revived by a
+  // later selection, and negative/huge starts cannot wrap to a valid write.
+  __int128 begin = std::max<__int128>({0, lower, start});
+  __int128 end = std::min<__int128>(
+      {rootWidth, upper, static_cast<__int128>(start) + sourceWidth});
+  if (begin >= end)
+    return TALOS_RT_OK;
+  uint64_t offset = static_cast<uint64_t>(begin - start);
+  uint64_t width = static_cast<uint64_t>(end - begin);
+  uint64_t target = talos_rt_stable_handle_offset(root, int64_t(begin));
+  if (target == UINT64_MAX)
+    return TALOS_RT_INVALID_HANDLE;
+  return enqueuePowerNBA(context, valuePlane, unknownPlane, planeBitCount,
+                         target, target, width, delay, value, unknown, guard,
+                         root, rootWidth, offset);
 }
 
 extern "C" talos_rt_status

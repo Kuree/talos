@@ -4014,7 +4014,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
                           : static_cast<uint64_t>(start);
     return talos_rt_v1_power_cancel_nba(context, stable, *width);
   }
-  case TALOS_RT_INTRINSIC_V1_POWER_NBA: {
+  case TALOS_RT_INTRINSIC_V1_POWER_NBA:
+  case TALOS_RT_INTRINSIC_V1_POWER_NBA_VIEW: {
     if (!context || !context->execution)
       return TALOS_RT_INVALID_ARGUMENT;
     auto storageHandle = [&](unsigned index,
@@ -4038,15 +4039,24 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
                    : static_cast<uint64_t>(start);
       return TALOS_RT_OK;
     };
-    uint64_t backing, visible, domain, strategy;
-    for (auto pair : {std::pair{1u, &backing}, std::pair{2u, &visible},
-                      std::pair{3u, &domain}, std::pair{5u, &strategy}}) {
+    bool view = signature.id == TALOS_RT_INTRINSIC_V1_POWER_NBA_VIEW;
+    uint64_t backing = 0, visible = 0, domain = 0, strategy = 0;
+    std::array<std::pair<unsigned, uint64_t *>, 4> handles;
+    size_t handleCount = 0;
+    handles[handleCount++] = {1u, &backing};
+    if (!view)
+      handles[handleCount++] = {2u, &visible};
+    handles[handleCount++] = {view ? 6u : 3u, &domain};
+    handles[handleCount++] = {view ? 8u : 5u, &strategy};
+    for (size_t index = 0; index != handleCount; ++index) {
+      auto pair = handles[index];
       auto status = storageHandle(pair.first, *pair.second);
       if (status != TALOS_RT_OK)
         return status;
     }
-    auto domainEpoch = scalar(4), strategyEpoch = scalar(6),
-         evaluator = scalar(7);
+    auto domainEpoch = scalar(view ? 7 : 4),
+         strategyEpoch = scalar(view ? 9 : 6),
+         evaluator = scalar(view ? 11 : 7);
     if (!domainEpoch || !strategyEpoch || !evaluator)
       return TALOS_RT_INVALID_BYTECODE;
     Logic value = readLogic(frame.data,
@@ -4062,9 +4072,27 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     }
     talos_rt_power_nba_guard_v1 guard{*evaluator, domain, *domainEpoch,
                                       strategy, *strategyEpoch};
-    auto delay = site.inputCount == 9 ? scalar(8) : std::optional<uint64_t>{0};
+    unsigned delayIndex = view ? 12 : 8;
+    auto delay = site.inputCount == delayIndex + 1 ? scalar(delayIndex)
+                                                   : std::optional<uint64_t>{0};
     if (!delay)
       return TALOS_RT_INVALID_BYTECODE;
+    if (view) {
+      auto start = scalar(2), lower = scalar(3), upper = scalar(4),
+           valid = scalar(5), rootWidth = scalar(10);
+      if (!start || !lower || !upper || !valid || !rootWidth)
+        return TALOS_RT_INVALID_BYTECODE;
+      return talos_rt_v1_power_nba_view(
+          context, reinterpret_cast<uint8_t *>(context->stateValue.data()),
+          value.fourState
+              ? reinterpret_cast<uint8_t *>(context->stateUnknown.data())
+              : nullptr,
+          context->execution->state_bit_count, backing, *rootWidth,
+          static_cast<int64_t>(*start), static_cast<int64_t>(*lower),
+          static_cast<int64_t>(*upper), static_cast<uint32_t>(*valid),
+          value.width, *delay, bits.data(),
+          value.fourState ? unknown.data() : nullptr, &guard);
+    }
     return talos_rt_v1_power_nba_after(
         context, reinterpret_cast<uint8_t *>(context->stateValue.data()),
         value.fourState

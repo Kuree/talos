@@ -4,6 +4,7 @@
 #include "BytecodeEncoder.h"
 #include "BytecodeSerialization.h"
 #include "talos/Analysis/NativeStorageLayout.h"
+#include "talos/Analysis/SimulationAnalysis.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -339,6 +340,31 @@ LogicalResult Encoder::encodeOperation(FunctionPlan &plan,
       inputs.push_back(reg(plan, op.getDelay()));
     return emitIntrinsicRegisters(plan, TALOS_RT_INTRINSIC_V1_POWER_NBA, inputs,
                                   {});
+  }
+  if (auto op = dyn_cast<sim::SimPowerNBAViewOp>(operation)) {
+    auto binding = op.getGuard().getDefiningOp<sim::SimObserverBindOp>();
+    auto found = indices.find(binding.getEvaluator());
+    if (found == indices.end())
+      return op.emitError("guard has no bytecode body");
+    SmallVector<uint32_t> inputs;
+    SmallVector<Value> values{
+        op.getValue(),          op.getRoot(),        op.getStart(),
+        op.getLower(),          op.getUpper(),       op.getValid(),
+        op.getDomainEpochRef(), op.getDomainEpoch(), op.getStrategyEpochRef(),
+        op.getStrategyEpoch()};
+    for (Value value : values)
+      inputs.push_back(reg(plan, value));
+    uint32_t width =
+        emitU64Constant(plan, *analysis::getSimulationStorageBitWidth(
+                                  op.getRoot().getType().getElementType()));
+    uint32_t identity = emitU64Constant(plan, plans[found->second].stableID);
+    if (width == kInvalidRegister || identity == kInvalidRegister)
+      return op.emitError("cannot encode view root width or guard identity");
+    inputs.append({width, identity});
+    if (op.getDelay())
+      inputs.push_back(reg(plan, op.getDelay()));
+    return emitIntrinsicRegisters(plan, TALOS_RT_INTRINSIC_V1_POWER_NBA_VIEW,
+                                  inputs, {});
   }
   if (auto op = dyn_cast<sim::SimNBAEnqueueOp>(operation)) {
     SmallVector<Value> inputs{op.getValue(), op.getDestination()};

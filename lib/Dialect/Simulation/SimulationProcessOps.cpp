@@ -2251,15 +2251,16 @@ LogicalResult SimPowerNBAOp::verify() {
   return success();
 }
 
-LogicalResult SimPowerNBAOp::verifySymbolUses(SymbolTableCollection &symbols) {
-  auto binding = getGuard().getDefiningOp<SimObserverBindOp>();
+static LogicalResult verifyPowerNBAGuard(Operation *operation, Value guard,
+                                         SymbolTableCollection &symbols) {
+  auto binding = guard.getDefiningOp<SimObserverBindOp>();
   if (!binding)
     return success(); // The local verifier diagnoses this first.
   auto evaluator = symbols.lookupNearestSymbolFrom<SimFuncOp>(
       binding, binding.getEvaluatorAttr());
   if (!evaluator || evaluator.getEntryKind() != EntryKind::Observer ||
       evaluator.isExternal())
-    return emitOpError(
+    return operation->emitOpError(
         "guard evaluator must name a defined simulation observer");
   WalkResult readonly = evaluator.walk([&](Operation *op) {
     if (op == evaluator.getOperation() || isMemoryEffectFree(op))
@@ -2275,8 +2276,78 @@ LogicalResult SimPowerNBAOp::verifySymbolUses(SymbolTableCollection &symbols) {
     return WalkResult::interrupt();
   });
   if (readonly.wasInterrupted())
-    return emitOpError("guard evaluator must be read-only");
+    return operation->emitOpError("guard evaluator must be read-only");
   return success();
+}
+
+LogicalResult SimPowerNBAOp::verifySymbolUses(SymbolTableCollection &symbols) {
+  return verifyPowerNBAGuard(getOperation(), getGuard(), symbols);
+}
+
+// IEEE 1800-2023 11.5.1/7.4.5: a raw bounded write may reach integral
+// leaves, never ownership-bearing or opaque runtime handles. Inspect interned
+// element types once, including fixed arrays and repeated record members.
+static std::optional<bool> integralStorageDomain(Type root) {
+  SmallVector<Type> pending{root};
+  DenseSet<Type> seen;
+  bool fourState = false;
+  while (!pending.empty()) {
+    Type type = pending.pop_back_val();
+    if (!seen.insert(type).second)
+      continue;
+    if (isa<IntegerType>(type))
+      continue;
+    if (isa<LogicType>(type)) {
+      fourState = true;
+      continue;
+    }
+    if (auto array = dyn_cast<PackedArrayType>(type)) {
+      pending.push_back(array.getElementType());
+      continue;
+    }
+    if (auto array = dyn_cast<UnpackedArrayType>(type)) {
+      pending.push_back(array.getElementType());
+      continue;
+    }
+    if (!isAggregateType(type))
+      return std::nullopt;
+    for (unsigned index = 0, size = getAggregateNumElements(type);
+         index != size; ++index)
+      pending.push_back(getAggregateElementType(type, index));
+  }
+  return fourState;
+}
+
+LogicalResult SimPowerNBAViewOp::verify() {
+  auto valueDomain = integralStorageDomain(getValue().getType());
+  auto rootDomain = integralStorageDomain(getRoot().getType().getElementType());
+  if (!getPackedWidth(getValue().getType()) ||
+      !getOverrideBitWidth(getRoot().getType().getElementType()) ||
+      !valueDomain || !rootDomain)
+    return emitOpError(
+        "requires a packed value and fixed-width integral storage root");
+  if (*valueDomain != *rootDomain)
+    return emitOpError("value and root must use the same state domain");
+  if (!getDomainEpochRef().getType().getElementType().isInteger(64) ||
+      !getStrategyEpochRef().getType().getElementType().isInteger(64))
+    return emitOpError("requires i64 epoch references");
+  SmallVector<SimContextStorageOp> roots;
+  if (!getOperation()->getParentOfType<SimDesignOp>())
+    return emitOpError("requires whole design/static storage references");
+  for (Value reference :
+       {getRoot(), getDomainEpochRef(), getStrategyEpochRef()})
+    if (!collectWholeStorageRoots(reference, roots))
+      return emitOpError("requires whole design/static storage references");
+  auto binding = getGuard().getDefiningOp<SimObserverBindOp>();
+  if (!binding || !binding.getCaptures().empty() ||
+      !getGuard().getType().getResultType().isInteger(1))
+    return emitOpError("guard must be a capture-free i1 observer binding");
+  return success();
+}
+
+LogicalResult
+SimPowerNBAViewOp::verifySymbolUses(SymbolTableCollection &symbols) {
+  return verifyPowerNBAGuard(getOperation(), getGuard(), symbols);
 }
 
 LogicalResult SimNBAEnqueueOp::verify() {

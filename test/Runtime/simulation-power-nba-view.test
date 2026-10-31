@@ -1,0 +1,176 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/design.mlir --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-suspension),talos-sim-build-compute-graph,talos-sim-verify-compute-graph),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' --verify-each -o %t.lowered.mlir
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O0>' | %llc -filetype=obj -relocation-model=pic -o %t.o
+// RUN: %target_cxx %t.o %runtime_link_flags -o %t.exe && %t.exe | FileCheck %s
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.opt.o
+// RUN: %target_cxx %t.opt.o %runtime_link_flags -o %t.opt.exe && %t.opt.exe | FileCheck %s
+// IEEE 1800-2023 11.5.1/7.4.5/10.4.2 and IEEE 1801-2018 9.5.3:
+// frozen ancestor windows clip both payload planes, preserve neighboring bits,
+// and survive suspension/index mutation. A known partial write clears X only
+// in its selected bits; an empty ancestor window cannot be revived. Commit
+// guards and source order apply to the one publication at its actual due time.
+// CHECK: wide low 1
+// CHECK-NEXT: wide high 1
+// CHECK-NEXT: empty ancestor 1
+// CHECK-NEXT: clear selected X 1
+// CHECK-NEXT: captured window 1
+// CHECK-NEXT: due guard 1
+// CHECK-NEXT: ordinary first 1
+// CHECK-NEXT: ordinary last 1
+
+//--- design.mlir
+!c = !simulation.context
+!w = !simulation.logic<96>
+!v = !simulation.logic<75>
+!r = !simulation.ref<!w>
+!s = !simulation.logic<16>
+!sr = !simulation.ref<!s>
+!b = !simulation.logic<8>
+!e = !simulation.ref<i64>
+!o = !simulation.observer<i1>
+!vw = (!c, !v, !r, i64, i64, i64, i1, !o, !e, i64, !e, i64) -> ()
+!vb = (!c, !b, !sr, i64, i64, i64, i1, !o, !e, i64, !e, i64) -> ()
+!vbd = (!c, !b, !sr, i64, i64, i64, i1, !o, !e, i64, !e, i64, !simulation.time) -> ()
+module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu"} {
+  simulation.design @guarded_view {
+    simulation.scope.decl 0 hierarchy "top"
+    simulation.code_unit.decl 1 in 0 root_initializer hierarchy "top.root"
+    simulation.code_unit.decl 2 in 0 initial hierarchy "top.drive"
+    simulation.code_unit.decl 3 in 0 observer hierarchy "top.allow"
+    simulation.storage.decl 0 in 0 : !w design
+    simulation.storage.decl 1 in 0 : !s design
+    simulation.storage.decl 2 in 0 : i64 design
+    simulation.storage.decl 3 in 0 : i1 design
+    simulation.storage.decl 4 in 0 : i64 design
+    simulation.storage.decl 5 in 0 : !b design
+    simulation.func @root(%ctx: !c {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
+      %epoch = simulation.context.storage %ctx[2] : !e
+      %rtc = simulation.context.storage %ctx[3] : !simulation.ref<i1>
+      %zero = arith.constant 0 : i64
+      %false = arith.constant false
+      simulation.ref.store %zero to %epoch : i64, !e
+      simulation.ref.store %false to %rtc : i1, !simulation.ref<i1>
+      %p = simulation.spawn @drive(%ctx) : !c -> !simulation.process
+      simulation.return
+    }
+    simulation.func private @allow(%ctx: !c {simulation.capture_kind = 0 : i32}) -> i1 attributes {entry_kind = 14 : i32, code_unit_id = 3 : i64, schedule.observer_width = 1 : i32, schedule.observer_four_state = false} {
+      %rtc = simulation.context.storage %ctx[3] : !simulation.ref<i1>
+      %held = simulation.ref.load %rtc : !simulation.ref<i1> -> i1
+      %one = arith.constant true
+      %allowed = arith.xori %held, %one : i1
+      simulation.return %allowed : i1
+    }
+    simulation.func @drive(%ctx: !c {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 1 : i32, code_unit_id = 2 : i64} {
+      %wide = simulation.context.storage %ctx[0] : !r
+      %small = simulation.context.storage %ctx[1] : !sr
+      %epoch = simulation.context.storage %ctx[2] : !e
+      %rtc = simulation.context.storage %ctx[3] : !simulation.ref<i1>
+      %index = simulation.context.storage %ctx[4] : !e
+      %rhs = simulation.context.storage %ctx[5] : !simulation.ref<!b>
+      %guard = simulation.observer.bind @allow values (%rtc : !simulation.ref<i1>) captures 0 : !o
+      %zero = arith.constant 0 : i64
+      %minus3 = arith.constant -3 : i64
+      %eight = arith.constant 8 : i64
+      %twelve = arith.constant 12 : i64
+      %sixteen = arith.constant 16 : i64
+      %sixtyfive = arith.constant 65 : i64
+      %seventy = arith.constant 70 : i64
+      %eighty = arith.constant 80 : i64
+      %true = arith.constant true
+      %false = arith.constant false
+      %d1 = simulation.time.constant 1
+      %d2 = simulation.time.constant 2
+      %d3 = simulation.time.constant 3
+      %initial = simulation.logic.constant 51265281626876924325234320805 : i96, 27962880887387413268309629530 : i96 : !w
+      %data = simulation.logic.constant 16553069948556288692589 : i75, 33256464514418275255730 : i75 : !v
+      %low_expected = simulation.logic.constant 51265281820953387931823043117 : i96, 27962881016544653946484883638 : i96 : !w
+      %high_expected = simulation.logic.constant 51264663992991848382027113893 : i96, 27962508004902707303433263706 : i96 : !w
+      %out = arith.constant 1 : i32
+      simulation.ref.store %initial to %wide : !w, !r
+      simulation.power.nba.enqueue_view %ctx, %data in %wide window (%zero, %seventy) at %minus3 when %true guard %guard epochs (%epoch, %zero, %epoch, %zero) : !vw
+      simulation.suspend.delay %d1 to ^low
+    ^low:
+      %low_value = simulation.ref.load %wide : !r -> !w
+      %low_ok = simulation.logic.compare case_eq %low_value, %low_expected : (!w, !w) -> i1
+      %f_low = simulation.bytes.constant "wide low %0d"
+      simulation.display %ctx to %out(%f_low, %low_ok) newline = true radix = <decimal> flags = [0,0] : !simulation.bytes, i1
+      simulation.ref.store %initial to %wide : !w, !r
+      simulation.power.nba.enqueue_view %ctx, %data in %wide window (%sixteen, %eighty) at %sixtyfive when %true guard %guard epochs (%epoch, %zero, %epoch, %zero) : !vw
+      simulation.suspend.delay %d1 to ^high
+    ^high:
+      %high_value = simulation.ref.load %wide : !r -> !w
+      %high_ok = simulation.logic.compare case_eq %high_value, %high_expected : (!w, !w) -> i1
+      %f_high = simulation.bytes.constant "wide high %0d"
+      simulation.display %ctx to %out(%f_high, %high_ok) newline = true radix = <decimal> flags = [0,0] : !simulation.bytes, i1
+      simulation.power.nba.enqueue_view %ctx, %data in %wide window (%eight, %eight) at %eight when %true guard %guard epochs (%epoch, %zero, %epoch, %zero) : !vw
+      simulation.suspend.delay %d1 to ^empty
+    ^empty:
+      %empty_value = simulation.ref.load %wide : !r -> !w
+      %empty_ok = simulation.logic.compare case_eq %empty_value, %high_expected : (!w, !w) -> i1
+      %f_empty = simulation.bytes.constant "empty ancestor %0d"
+      simulation.display %ctx to %out(%f_empty, %empty_ok) newline = true radix = <decimal> flags = [0,0] : !simulation.bytes, i1
+      %all_x = simulation.logic.constant 0 : i16, -1 : i16 : !s
+      %known = simulation.logic.constant 60 : i8, 0 : i8 : !b
+      simulation.ref.store %all_x to %small : !s, !sr
+      simulation.power.nba.enqueue_view %ctx, %known in %small window (%zero, %sixteen) at %zero when %true guard %guard epochs (%epoch, %zero, %epoch, %zero) : !vb
+      simulation.suspend.delay %d1 to ^clear
+    ^clear:
+      %clear_value = simulation.ref.load %small : !sr -> !s
+      %clear_expected = simulation.logic.constant 60 : i16, 65280 : i16 : !s
+      %clear_ok = simulation.logic.compare case_eq %clear_value, %clear_expected : (!s, !s) -> i1
+      %f_clear = simulation.bytes.constant "clear selected X %0d"
+      simulation.display %ctx to %out(%f_clear, %clear_ok) newline = true radix = <decimal> flags = [0,0] : !simulation.bytes, i1
+      %small_zero = simulation.logic.constant 0 : i16, 0 : i16 : !s
+      %captured_data = simulation.logic.constant 108 : i8, 82 : i8 : !b
+      simulation.ref.store %small_zero to %small : !s, !sr
+      simulation.ref.store %twelve to %index : i64, !e
+      simulation.ref.store %captured_data to %rhs : !b, !simulation.ref<!b>
+      %old_index = simulation.ref.load %index : !e -> i64
+      %old_rhs = simulation.ref.load %rhs : !simulation.ref<!b> -> !b
+      simulation.ref.store %zero to %index : i64, !e
+      simulation.ref.store %known to %rhs : !b, !simulation.ref<!b>
+      simulation.suspend.delay %d1 to ^issue
+    ^issue:
+      simulation.power.nba.enqueue_view %ctx, %old_rhs in %small window (%eight, %sixteen) at %old_index when %true guard %guard epochs (%epoch, %zero, %epoch, %zero) after %d1 : !vbd
+      simulation.ref.store %zero to %index : i64, !e
+      simulation.ref.store %known to %rhs : !b, !simulation.ref<!b>
+      simulation.suspend.delay %d2 to ^captured
+    ^captured:
+      %captured_value = simulation.ref.load %small : !sr -> !s
+      %captured_expected = simulation.logic.constant 49152 : i16, 8192 : i16 : !s
+      %captured_ok = simulation.logic.compare case_eq %captured_value, %captured_expected : (!s, !s) -> i1
+      %f_captured = simulation.bytes.constant "captured window %0d"
+      simulation.display %ctx to %out(%f_captured, %captured_ok) newline = true radix = <decimal> flags = [0,0] : !simulation.bytes, i1
+      simulation.power.nba.enqueue_view %ctx, %known in %small window (%zero, %eight) at %zero when %true guard %guard epochs (%epoch, %zero, %epoch, %zero) after %d2 : !vbd
+      simulation.nba.enqueue %true to %rtc after %d1 : (i1, !simulation.ref<i1>, !simulation.time) -> ()
+      simulation.suspend.delay %d3 to ^blocked
+    ^blocked:
+      %blocked_value = simulation.ref.load %small : !sr -> !s
+      %blocked_ok = simulation.logic.compare case_eq %blocked_value, %captured_expected : (!s, !s) -> i1
+      %f_blocked = simulation.bytes.constant "due guard %0d"
+      simulation.display %ctx to %out(%f_blocked, %blocked_ok) newline = true radix = <decimal> flags = [0,0] : !simulation.bytes, i1
+      simulation.ref.store %false to %rtc : i1, !simulation.ref<i1>
+      %whole = simulation.logic.constant 2560 : i16, 0 : i16 : !s
+      %both = simulation.logic.constant 2620 : i16, 0 : i16 : !s
+      simulation.nba.enqueue %whole to %small after %d1 : (!s, !sr, !simulation.time) -> ()
+      simulation.power.nba.enqueue_view %ctx, %known in %small window (%zero, %eight) at %zero when %true guard %guard epochs (%epoch, %zero, %epoch, %zero) after %d1 : !vbd
+      simulation.suspend.delay %d2 to ^ordinary_first
+    ^ordinary_first:
+      %first_value = simulation.ref.load %small : !sr -> !s
+      %first_ok = simulation.logic.compare case_eq %first_value, %both : (!s, !s) -> i1
+      %f_first = simulation.bytes.constant "ordinary first %0d"
+      simulation.display %ctx to %out(%f_first, %first_ok) newline = true radix = <decimal> flags = [0,0] : !simulation.bytes, i1
+      simulation.power.nba.enqueue_view %ctx, %known in %small window (%zero, %eight) at %zero when %true guard %guard epochs (%epoch, %zero, %epoch, %zero) after %d1 : !vbd
+      simulation.nba.enqueue %whole to %small after %d1 : (!s, !sr, !simulation.time) -> ()
+      simulation.suspend.delay %d2 to ^ordinary_last
+    ^ordinary_last:
+      %last_value = simulation.ref.load %small : !sr -> !s
+      %last_ok = simulation.logic.compare case_eq %last_value, %whole : (!s, !s) -> i1
+      %f_last = simulation.bytes.constant "ordinary last %0d"
+      simulation.display %ctx to %out(%f_last, %last_ok) newline = true radix = <decimal> flags = [0,0] : !simulation.bytes, i1
+      %success = arith.constant 0 : i32
+      simulation.finish %ctx, %success
+      simulation.return
+    }
+  }
+}
