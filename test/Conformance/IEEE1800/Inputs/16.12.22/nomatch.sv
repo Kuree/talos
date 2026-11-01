@@ -1,4 +1,4 @@
 module top;
   bit clk, a;
-  assert property (@(posedge clk) (a and 1'b0) |=> a);
+  assert property (@(posedge clk) ((1'b1) intersect (1'b1 ##1 1'b1)) |=> a);
 endmodule

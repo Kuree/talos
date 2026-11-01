@@ -5908,21 +5908,32 @@ private:
       if (node.range)
         addSequenceRange<Op>(attrs, *node.range);
     } else if constexpr (std::same_as<T, slang::ast::BinaryAssertionExpr>) {
-      // IEEE 1800-2023 16.12.22 c): a sequence used as the antecedent of |=>
-      // shall admit at least one match (an only-empty match is allowed). Slang
-      // reports a never-matching sequence as a warning wherever it appears, so
-      // the antecedent-only rule is enforced here.
-      if (node.op ==
-              slang::ast::BinaryAssertionOperator::NonOverlappedImplication &&
-          node.left.checkNondegeneracy().status.has(
-              slang::ast::NondegeneracyStatus::AdmitsNoMatch)) {
-        slang::SourceLocation where = node.left.syntax
-                                          ? node.left.syntax->sourceRange().start()
-                                          : node.opRange.start();
-        emitError(sourceLocation(where))
-            << "IEEE 1800-2023 16.12.22: the antecedent of a nonoverlapping "
-               "implication must admit at least one match";
-        sawInvalidNode = true;
+      // IEEE 1800-2023 16.12.22 b), c): the antecedent of |-> shall be
+      // nondegenerate and the antecedent of |=> shall admit at least one match.
+      // A match is any word over the F.5 alphabet, whose letter T satisfies
+      // every Boolean expression, so an always-false Boolean such as a disabled
+      // parameter still admits one (F.5.2). Only a sequence no word satisfies,
+      // such as an intersect of different lengths, breaks these rules. Slang
+      // warns about both kinds, so the error is raised here.
+      bool overlapped =
+          node.op == slang::ast::BinaryAssertionOperator::OverlappedImplication;
+      if (overlapped ||
+          node.op ==
+              slang::ast::BinaryAssertionOperator::NonOverlappedImplication) {
+        auto nondegeneracy = node.left.checkNondegeneracy();
+        if (nondegeneracy.status.has(
+                slang::ast::NondegeneracyStatus::AdmitsNoMatch) &&
+            !nondegeneracy.isAlwaysFalse) {
+          slang::SourceLocation where =
+              node.left.syntax ? node.left.syntax->sourceRange().start()
+                               : node.opRange.start();
+          emitError(sourceLocation(where))
+              << "IEEE 1800-2023 16.12.22: the antecedent of "
+              << (overlapped ? "an overlapping implication must be nondegenerate"
+                             : "a nonoverlapping implication must admit at "
+                               "least one match");
+          sawInvalidNode = true;
+        }
       }
       SET_OP_ATTR(OperatorKind,
                   slangir::AssertionBinaryOperatorAttr::get(
