@@ -300,7 +300,10 @@ bool isNegativeTimingDelayMonitorSpawn(sim::SimSpawnOp spawn,
 }
 
 bool isNegativeTimingDelayMonitor(sim::SimFuncOp function) {
-  if (!function || function.getBody().getBlocks().size() != 3)
+  // The marker comes first: an uncached symbol lookup below scans the design.
+  if (!function ||
+      !sim::has<sim::metadata::NegativeTimingDelayMonitor>(function) ||
+      function.getBody().getBlocks().size() != 3)
     return false;
   Block &changed = function.getBody().back();
   if (std::distance(changed.begin(), changed.end()) != 3)

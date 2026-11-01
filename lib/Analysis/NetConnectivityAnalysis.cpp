@@ -16,16 +16,17 @@ using namespace mlir;
 namespace talos::analysis {
 
 namespace {
-/// Content digest of the declarations the topology depends on. Attribute
-/// dictionaries are uniqued, so their identity covers ids, offsets, widths,
+/// Content digest of the declarations the topology depends on. Attributes are
+/// uniqued, so the hash of their identities covers ids, offsets, widths,
 /// strengths, delays and types.
 uint64_t inventoryDigest(sim::SimDesignOp design) {
   llvm::hash_code digest = llvm::hash_value(size_t{0});
   for (Operation &op : design.getBody().front())
     if (isa<sim::SimNetDeclOp, sim::SimDriverDeclOp, sim::SimNetConnectDeclOp,
             sim::SimPassSwitchDeclOp>(op))
-      digest = llvm::hash_combine(digest, op.getName().getAsOpaquePointer(),
-                                  op.getAttrDictionary().getAsOpaquePointer());
+      digest = llvm::hash_combine(
+          digest, op.getName().getAsOpaquePointer(), op.hashProperties(),
+          op.getDiscardableAttrDictionary().getAsOpaquePointer());
   return digest;
 }
 struct TopologyCache {
@@ -45,6 +46,22 @@ computeIsolatedWireDriverTopology(sim::SimDesignOp design);
 
 std::shared_ptr<const IsolatedWireDriverTopology>
 getIsolatedWireDriverTopology(sim::SimDesignOp design) {
+  auto finish = [](IsolatedWireDriverTopology topology) {
+    SmallVector<std::pair<uint64_t, uint64_t>> pairs(
+        topology.driverNets.begin(), topology.driverNets.end());
+    llvm::sort(pairs);
+    topology.driverDigest =
+        llvm::hash_combine_range(pairs.begin(), pairs.end());
+    return std::make_shared<const IsolatedWireDriverTopology>(
+        std::move(topology));
+  };
+  if (!design) {
+    static const auto empty = [&] {
+      IsolatedWireDriverTopology none;
+      return finish(std::move(none));
+    }();
+    return empty;
+  }
   uint64_t digest = inventoryDigest(design);
   TopologyCache &cache = getTopologyCache();
   {
@@ -53,8 +70,11 @@ getIsolatedWireDriverTopology(sim::SimDesignOp design) {
     if (found != cache.entries.end() && found->second.first == digest)
       return found->second.second;
   }
-  auto result = std::make_shared<const IsolatedWireDriverTopology>(
-      computeIsolatedWireDriverTopology(design));
+  IsolatedWireDriverTopology topology =
+      computeIsolatedWireDriverTopology(design);
+  for (auto driver : design.getOps<sim::SimDriverDeclOp>())
+    topology.driverNets[driver.getId()] = driver.getNetId();
+  auto result = finish(std::move(topology));
   std::lock_guard<std::mutex> lock(cache.mutex);
   cache.entries[design.getOperation()] = {digest, result};
   return result;

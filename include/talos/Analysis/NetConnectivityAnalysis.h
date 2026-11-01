@@ -49,11 +49,15 @@ struct IsolatedWireDriverTopology {
   SparseRanges connectedExclusiveRanges;
   llvm::DenseMap<uint64_t, mlir::SmallVector<AliasRun>>
       connectedExclusiveAliases;
+  /// The net of each driver, and an order-independent digest of that map.
+  llvm::DenseMap<uint64_t, uint64_t> driverNets;
+  uint64_t driverDigest = 0;
 };
 
 /// Memoized per design: the result is recomputed only when a net, driver,
 /// connection or pass-switch declaration of the design changed. Analyses
-/// constructed per function share one immutable snapshot.
+/// constructed per function share one immutable snapshot. A null design has an
+/// empty topology.
 std::shared_ptr<const IsolatedWireDriverTopology>
 getIsolatedWireDriverTopology(sim::SimDesignOp design);
 

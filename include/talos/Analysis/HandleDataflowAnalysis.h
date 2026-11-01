@@ -140,12 +140,9 @@ public:
   getExclusiveDriveAliases(uint64_t net, uint64_t low, uint64_t width) const;
 
 private:
-  llvm::DenseMap<uint64_t, uint64_t> driverNets;
-  /// Never null: a design-less analysis shares an empty topology.
+  /// Never null: a design-less analysis shares an empty topology. Its driver
+  /// digest is part of each memoized function revision.
   std::shared_ptr<const IsolatedWireDriverTopology> drivers;
-  /// Order-independent digest of `driverNets`, part of each memoized
-  /// function revision.
-  uint64_t driverDigest = 0;
 };
 HandleFacts deriveHandleFacts(sim::SimFuncOp function);
 } // namespace talos::analysis

@@ -2,7 +2,6 @@
 
 #include "talos/Analysis/ClassDispatchAnalysis.h"
 #include "talos/Analysis/DescriptorOrdering.h"
-#include "talos/Analysis/ParallelWalk.h"
 
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
@@ -169,7 +168,8 @@ struct ClassDispatchAnalysis::Index {
 };
 
 ClassDispatchAnalysis::ClassDispatchAnalysis(sim::SimDesignOp design) {
-  classes = collectInWalkOrder<sim::SimClassDeclOp>(design);
+  // Class and method declarations are direct symbols of the design.
+  llvm::append_range(classes, design.getOps<sim::SimClassDeclOp>());
   orderClasses(classes);
   for (auto [ordinal, declaration] : llvm::enumerate(classes))
     classIndices.try_emplace(declaration.getSymName(), ordinal);
@@ -203,7 +203,7 @@ ClassDispatchAnalysis::ClassDispatchAnalysis(sim::SimDesignOp design) {
         if (auto reference = dyn_cast<FlatSymbolRefAttr>(attribute))
           inherit(ordinal, reference.getValue(), false);
   }
-  for (auto method : collectInWalkOrder<sim::SimClassMethodDeclOp>(design))
+  for (auto method : design.getOps<sim::SimClassMethodDeclOp>())
     if (auto found = classIndices.find(method.getOwner());
         found != classIndices.end())
       methods[found->second].push_back(method);

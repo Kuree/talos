@@ -416,6 +416,7 @@ LogicalResult verifyVPIExpressionInventory(SimDesignOp design) {
   if (failed(verifyDefinitionDefaults(design)))
     return failure();
   SymbolTableCollection referenceSymbols;
+  std::optional<DenseSet<Attribute>> caseItems;
   for (auto relation : design.getOps<SimVPIRelationDeclOp>()) {
     if (relation.getTarget().getKind() != VPIObjectRefKind::DefinitionMember ||
         relation.getMode() == VPIRelationMode::Handle)
@@ -426,13 +427,17 @@ LogicalResult verifyVPIExpressionInventory(SimDesignOp design) {
             ? referenceSymbols.lookupNearestSymbolFrom<SimVPIExpressionDeclOp>(
                   relation, source.getSymbol())
             : SimVPIExpressionDeclOp{};
-    bool caseLabel =
-        source.getKind() == VPIObjectRefKind::Statement &&
-        relation.getSelector() == uint32_t(Relation::ExprRel) &&
-        llvm::any_of(design.getOps<SimStatementDeclOp>(), [&](auto statement) {
-          return statement.getIdAttr() == source.getId() &&
-                 statement.getVpiKind() == uint32_t(Kind::CaseItem);
-        });
+    bool caseLabel = source.getKind() == VPIObjectRefKind::Statement &&
+                     relation.getSelector() == uint32_t(Relation::ExprRel);
+    if (caseLabel) {
+      if (!caseItems) {
+        caseItems.emplace();
+        for (auto statement : design.getOps<SimStatementDeclOp>())
+          if (statement.getVpiKind() == uint32_t(Kind::CaseItem))
+            caseItems->insert(statement.getIdAttr());
+      }
+      caseLabel = caseItems->contains(source.getId());
+    }
     auto call =
         source.getKind() == VPIObjectRefKind::Symbol
             ? referenceSymbols.lookupNearestSymbolFrom<SimVPICallDeclOp>(
@@ -538,6 +543,10 @@ LogicalResult verifyVPIExpressionInventory(SimDesignOp design) {
   // specialization. Never substitute the source default for the effective
   // parameter value or allocate a duplicate per-instance declaration.
   SymbolTableCollection symbols;
+  // By specialization and member; the first in design order applies.
+  std::optional<DenseMap<std::pair<Attribute, Attribute>,
+                         SimVPIDefinitionMemberSpecializationOp>>
+      specializations;
   for (auto relation : design.getOps<SimVPIRelationDeclOp>()) {
     for (auto reference : {relation.getSource(), relation.getTarget()}) {
       if (reference.getKind() != VPIObjectRefKind::DefinitionMember ||
@@ -549,12 +558,16 @@ LogicalResult verifyVPIExpressionInventory(SimDesignOp design) {
       auto member = symbols.lookupSymbolIn<SimVPIDefinitionMemberDeclOp>(
           design, reference.getSymbol());
       auto scope = scopes.lookup(reference.getId().getValue().getZExtValue());
-      for (auto specialization :
-           design.getOps<SimVPIDefinitionMemberSpecializationOp>()) {
-        if (specialization.getSpecializationAttr() !=
-                scope.getVpiSpecializationAttr() ||
-            specialization.getMemberAttr() != reference.getSymbol())
-          continue;
+      if (!specializations) {
+        specializations.emplace();
+        for (auto specialization :
+             design.getOps<SimVPIDefinitionMemberSpecializationOp>())
+          specializations->try_emplace({specialization.getSpecializationAttr(),
+                                        specialization.getMemberAttr()},
+                                       specialization);
+      }
+      if (auto specialization = specializations->lookup(
+              {scope.getVpiSpecializationAttr(), reference.getSymbol()}))
         endpoints[reference] = {
             member,
             member.getVpiKind(),
@@ -563,8 +576,6 @@ LogicalResult verifyVPIExpressionInventory(SimDesignOp design) {
             specialization.getEffectiveType(),
             specialization->getAttrOfType<FrozenConstantAttr>(
                 "immutable_value")};
-        break;
-      }
       if (!endpoints.contains(reference))
         return relation.emitOpError(
             "expression member requires its exact effective specialization");

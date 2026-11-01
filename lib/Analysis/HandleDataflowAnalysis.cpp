@@ -499,22 +499,9 @@ HandleResultCache &getHandleResultCache() {
 }
 } // namespace
 
-HandleDataflowAnalysis::HandleDataflowAnalysis(sim::SimDesignOp design) {
-  // Build the immutable normalization snapshot before parallel consumers run.
-  if (design) {
-    drivers = getIsolatedWireDriverTopology(design);
-    for (auto driver : design.getOps<sim::SimDriverDeclOp>())
-      driverNets[driver.getId()] = driver.getNetId();
-  } else {
-    static const auto empty =
-        std::make_shared<const IsolatedWireDriverTopology>();
-    drivers = empty;
-  }
-  SmallVector<std::pair<uint64_t, uint64_t>> pairs(driverNets.begin(),
-                                                   driverNets.end());
-  llvm::sort(pairs);
-  driverDigest = llvm::hash_combine_range(pairs.begin(), pairs.end());
-}
+HandleDataflowAnalysis::HandleDataflowAnalysis(sim::SimDesignOp design)
+    // The immutable normalization snapshot, before parallel consumers run.
+    : drivers(getIsolatedWireDriverTopology(design)) {}
 HandleDataflowAnalysis::HandleDataflowAnalysis(sim::SimFuncOp function)
     : HandleDataflowAnalysis(getDriverDesign(function)) {}
 SmallVector<HandleDataflowAnalysis::DriveAlias>
@@ -623,14 +610,15 @@ HandleDataflowAnalysis::analyze(sim::SimFuncOp function) const {
   // A function without driver handles never reads the driver map. Key it as
   // the function constructor does, so every design index shares its result.
   static const uint64_t noDriverDigest =
-      HandleDataflowAnalysis(sim::SimDesignOp()).driverDigest;
+      HandleDataflowAnalysis(sim::SimDesignOp()).drivers->driverDigest;
   HandleRevision revision{OperationFingerPrint(function), shape,
-                          driverHandles ? driverDigest : noDriverDigest};
+                          driverHandles ? drivers->driverDigest
+                                        : noDriverDigest};
   HandleResultCache &cache = getHandleResultCache();
   if (auto cached = cache.lookup(function, revision))
     return *cached;
   auto solved = std::make_shared<const HandleDataflowResult>(
-      solveHandles(function, driverNets, dynamicSelectors));
+      solveHandles(function, drivers->driverNets, dynamicSelectors));
   cache.insert(function, revision, solved);
   return *solved;
 }
