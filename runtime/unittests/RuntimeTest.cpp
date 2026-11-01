@@ -2770,7 +2770,13 @@ TEST_F(RuntimeTest, ReadMemHexPrefixHandlesEOFAtEveryBufferBoundary) {
   {
     std::ofstream(path) << "DeAdBeeF";
   }
-  for (size_t size : {0u, 1u, 7u, 8u, 9u, 16u}) {
+  std::vector<size_t> sizes{0, 7, 8, 9, 16};
+#ifndef _WIN32
+  // The UCRT setvbuf treats a full-buffering size below 2 as an invalid
+  // parameter, which terminates the process.
+  sizes.push_back(1);
+#endif
+  for (size_t size : sizes) {
     SCOPED_TRACE(size);
     uint32_t descriptor = open(path, "rb");
     FILE *stream = context->files[descriptor & 0x7fffffff].stream;

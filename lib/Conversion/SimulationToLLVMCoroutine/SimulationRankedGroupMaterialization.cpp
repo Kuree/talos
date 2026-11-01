@@ -328,9 +328,11 @@ materializeNativeRankedGroups(ModuleOp module,
           ++end;
       Block *after = nullptr;
       if (end - index > 1) {
+        // Not nested: argument evaluation order would make the emitted IR
+        // differ between ABIs (the MSVC ABI evaluates right to left).
+        Value bits = loadOwnerWord(builder, loc, ready, word);
         Value active =
-            arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ne,
-                                  loadOwnerWord(builder, loc, ready, word),
+            arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ne, bits,
                                   llvmConstant(builder, loc, i64, 0));
         Block *body = new Block;
         after = new Block;
