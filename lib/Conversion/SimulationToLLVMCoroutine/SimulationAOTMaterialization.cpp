@@ -4,6 +4,7 @@
 #include "SimulationEvalNBAQueue.h"
 #include "SimulationEvalReadySet.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
+#include "talos/Analysis/ParallelWalk.h"
 #include "talos/Analysis/StorageWriteAnalysis.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
@@ -894,37 +895,68 @@ FailureOr<bool> makeNativeEvalPlan(
     }
     DenseMap<Operation *, std::unique_ptr<analysis::WriteExecutionBounds>>
         executionBounds;
+    auto solveBounds = [&](sim::SimFuncOp function,
+                           SymbolTableCollection &symbols) {
+      auto design = function->getParentOfType<sim::SimDesignOp>();
+      SmallVector<Operation *> calls;
+      function.walk([&](Operation *op) {
+        StringRef calleeName;
+        if (auto call = dyn_cast<sim::SimCallOp>(op))
+          calleeName = call.getCallee();
+        else if (auto call = dyn_cast<LLVM::CallOp>(op)) {
+          if (!call.getCallee())
+            return;
+          calleeName = *call.getCallee();
+        } else
+          return;
+        auto callee = design
+                          ? symbols.lookupSymbolIn<sim::SimFuncOp>(
+                                design, StringAttr::get(context, calleeName))
+                          : sim::SimFuncOp{};
+        if (calleeName == "talos_rt_v1_scheduler_static_nba" ||
+            (callee && evalClosureSet.contains(callee)))
+          calls.push_back(op);
+      });
+      // The call closure below checks re-entry and multiplicity. This local
+      // lattice counts the explicit call instructions after conversion.
+      return std::make_unique<analysis::WriteExecutionBounds>(function, calls,
+                                                              false);
+    };
     auto boundsFor =
         [&](sim::SimFuncOp function) -> analysis::WriteExecutionBounds & {
       auto &bounds = executionBounds[function.getOperation()];
-      if (!bounds) {
-        auto design = function->getParentOfType<sim::SimDesignOp>();
-        SmallVector<Operation *> calls;
-        function.walk([&](Operation *op) {
-          StringRef calleeName;
-          if (auto call = dyn_cast<sim::SimCallOp>(op))
-            calleeName = call.getCallee();
-          else if (auto call = dyn_cast<LLVM::CallOp>(op)) {
-            if (!call.getCallee())
-              return;
-            calleeName = *call.getCallee();
-          } else
-            return;
-          auto callee = design
-                            ? callSymbols.lookupSymbolIn<sim::SimFuncOp>(
-                                  design, StringAttr::get(context, calleeName))
-                            : sim::SimFuncOp{};
-          if (calleeName == "talos_rt_v1_scheduler_static_nba" ||
-              (callee && evalClosureSet.contains(callee)))
-            calls.push_back(op);
-        });
-        // The call closure below checks re-entry and multiplicity. This local
-        // lattice counts the explicit call instructions after conversion.
-        bounds = std::make_unique<analysis::WriteExecutionBounds>(function,
-                                                                  calls, false);
-      }
+      if (!bounds)
+        bounds = solveBounds(function, callSymbols);
       return *bounds;
     };
+    // The proofs below ask for the bounds of every direct body with a dynamic
+    // NBA. A worker's constant propagation folds only within its own function.
+    if (analysis::walksConcurrently(module, evalClosure.size())) {
+      std::vector<std::unique_ptr<analysis::WriteExecutionBounds>> solved(
+          evalClosure.size());
+      LockedSymbolTableCollection symbols(callSymbols);
+      analysis::parallelForChunked(context, evalClosure.size(), [&](size_t i) {
+        sim::SimFuncOp function = evalClosure[i];
+        if (!::talos::schedule::has<
+                ::talos::schedule::Field::EvalDirectFragment>(function))
+          return;
+        bool hasDynamicNBA = function
+                                 .walk([](LLVM::CallOp call) {
+                                   return call.getCallee() &&
+                                                  *call.getCallee() ==
+                                                      "talos_rt_v1_scheduler_"
+                                                      "static_nba"
+                                              ? WalkResult::interrupt()
+                                              : WalkResult::advance();
+                                 })
+                                 .wasInterrupted();
+        if (hasDynamicNBA)
+          solved[i] = solveBounds(function, symbols);
+      });
+      for (auto [function, bounds] : llvm::zip_equal(evalClosure, solved))
+        if (bounds)
+          executionBounds[function.getOperation()] = std::move(bounds);
+    }
     DenseMap<Operation *, bool> closureOnceMemo;
     llvm::SmallPtrSet<Operation *, 16> closureOnceVisiting;
     std::function<bool(sim::SimFuncOp)> closureExecutesAtMostOnce =

@@ -1260,6 +1260,8 @@ struct Fragment {
   uint64_t cost;
   bool twoState;
   uint32_t lane = 0;
+  /// `function`'s home region: edge filters ask once per candidate pair.
+  sim::EventRegion homeRegion = sim::EventRegion::Active;
 };
 
 /// Balance fragments across lanes by descending static cost. This is a
@@ -1390,6 +1392,7 @@ LogicalResult ComputeGraphBuilder::buildFragments() {
       fragments.push_back({id, info.getFunction(), &block, ordinal++,
                            collectFragmentEffects(analysis, info, block), cost,
                            fragmentIsTwoState(stateDomains, block)});
+      fragments.back().homeRegion = info.getFunction().getHomeRegion();
     }
   }
   assignLanes(fragments, options.workers);
@@ -1723,8 +1726,8 @@ void ComputeGraphBuilder::buildDataEdges() {
   SmallVector<schedule::ComputeEdgeAttr> processEdges;
   for (schedule::ComputeEdgeAttr edge : edges) {
     if (edge.getKind() == schedule::ComputeEdgeKind::ProcessOrder &&
-        fragments[edge.getSource()].function.getHomeRegion() ==
-            fragments[edge.getTarget()].function.getHomeRegion())
+        fragments[edge.getSource()].homeRegion ==
+            fragments[edge.getTarget()].homeRegion)
       processEdges.push_back(edge);
   }
   SmallVector<uint32_t> fragmentIds;
@@ -1750,8 +1753,8 @@ void ComputeGraphBuilder::buildDataEdges() {
   SmallVector<schedule::ComputeEdgeAttr> activationEdges =
       buildSchedulingEdges();
   llvm::erase_if(activationEdges, [&](schedule::ComputeEdgeAttr edge) {
-    return fragments[edge.getSource()].function.getHomeRegion() !=
-           fragments[edge.getTarget()].function.getHomeRegion();
+    return fragments[edge.getSource()].homeRegion !=
+           fragments[edge.getTarget()].homeRegion;
   });
   SmallVector<unsigned> activationRank(fragments.size(), 0);
   for (auto [rank, members] : llvm::enumerate(computeSCCSchedule(
@@ -1802,8 +1805,7 @@ void ComputeGraphBuilder::buildDataEdges() {
       activeEffects.forEachAlias(left.target, [&](IndexedEffect right) {
         if (right.owner <= lhs ||
             fragments[right.owner].function == fragments[lhs].function ||
-            fragments[right.owner].function.getHomeRegion() !=
-                fragments[lhs].function.getHomeRegion() ||
+            fragments[right.owner].homeRegion != fragments[lhs].homeRegion ||
             !activeEffectsConflict(left, *right.effect))
           return;
         unsigned leftGroup = controlGroupForFragment[lhs];
