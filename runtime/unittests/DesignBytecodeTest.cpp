@@ -5330,6 +5330,15 @@ TEST(DesignBytecode, RetainsDefaultTriregChargeIndefinitely) {
   setState(195, true, true);
   resolve();
   EXPECT_EQ(state(0), std::pair(true, false));
+  // IEEE 1800-2023 28.15.2: the charge drives at the declared strength, which
+  // defaults to medium.
+  auto strengthOfNet = [&] {
+    uint16_t strengths = 0;
+    EXPECT_EQ(talos_rt_design_net_strength(context, 0, &strengths, false),
+              TALOS_RT_OK);
+    return strengths;
+  };
+  EXPECT_EQ(strengthOfNet(), uint16_t{1} << (7 + 2));
 
   setState(195, false, false);
   resolve();
@@ -5337,6 +5346,7 @@ TEST(DesignBytecode, RetainsDefaultTriregChargeIndefinitely) {
   setState(195, true, true);
   resolve();
   EXPECT_EQ(state(0), std::pair(false, false));
+  EXPECT_EQ(strengthOfNet(), uint16_t{1} << (7 - 2));
 
   setState(195, false, true);
   resolve();

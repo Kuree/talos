@@ -755,6 +755,20 @@ static uint16_t driverStrengths(bool value, bool unknown, uint8_t strength0,
   return runtime::driverBitStrengths(value, unknown, strength0, strength1);
 }
 
+// The strengths of a value stored at a trireg's declared charge magnitude.
+static uint16_t storedChargeStrengths(bool value, bool unknown,
+                                      uint8_t magnitude) {
+  if (!unknown)
+    return strengthBit(value ? magnitude : -static_cast<int>(magnitude));
+  if (value)
+    return strengthBit(0);
+  uint16_t stored = 0;
+  for (int point = -static_cast<int>(magnitude);
+       point <= static_cast<int>(magnitude); ++point)
+    stored |= strengthBit(point);
+  return stored;
+}
+
 static bool computeResolvedStrengths(const NetAliasCache &cache,
                                      talos_rt_context *context, uint64_t root,
                                      bool useNativeState, bool useSchedulePlan,
@@ -1031,19 +1045,9 @@ bool resolveNetRoots(const NetAliasCache &cache, talos_rt_context *context,
           auto strength = cache.chargeStrengthByBit.find(member);
           if (strength == cache.chargeStrengthByBit.end())
             continue;
-          bool value = bit(context->stateValue, member);
-          bool unknown = bit(context->stateUnknown, member);
-          uint16_t stored = 0;
-          if (!unknown) {
-            stored = strengthBit(value ? strength->second
-                                       : -static_cast<int>(strength->second));
-          } else if (value) {
-            stored = strengthBit(0);
-          } else {
-            for (int point = -static_cast<int>(strength->second);
-                 point <= static_cast<int>(strength->second); ++point)
-              stored |= strengthBit(point);
-          }
+          uint16_t stored = storedChargeStrengths(
+              bit(context->stateValue, member),
+              bit(context->stateUnknown, member), strength->second);
           if (sourceRoot != root)
             stored = propagateFromRemote(stored, resistiveEdges,
                                          possibleResistiveEdges);
@@ -1311,6 +1315,16 @@ talos_rt_status talos_rt_design_net_strength(talos_rt_context *context,
                                   /*useSchedulePlan=*/useNativeState,
                                   *outStrengths))
       return TALOS_RT_INVALID_HANDLE;
+    // IEEE 1800-2023 28.15.2: a trireg in the charge storage state drives its
+    // stored value at the declared small, medium or large strength.
+    if (*outStrengths == strengthBit(0))
+      if (auto charge = cache->chargeStrengthByBit.find(absolute);
+          charge != cache->chargeStrengthByBit.end()) {
+        DriverStateReader stateBit(context, useNativeState, useNativeState);
+        *outStrengths = storedChargeStrengths(stateBit(false, absolute),
+                                              stateBit(true, absolute),
+                                              charge->second);
+      }
     return TALOS_RT_OK;
   }
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
