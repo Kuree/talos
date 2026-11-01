@@ -1203,6 +1203,7 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
                    sim::SimDriverDriveInertialPathOp,
                    sim::SimDriverDriveInertialStrengthPairOp,
                    sim::SimDriverDriveInertialPathStrengthPairOp,
+                   sim::SimPassSwitchControlOp,
                    sim::SimPassSwitchControlDelayedOp, sim::SimMosDriveDelayedOp,
                    sim::SimOverrideOp, sim::SimReleaseOverrideOp,
                    sim::SimManagedNBAEnqueueOp, sim::SimManagedNBAEnqueueMaskedOp,
@@ -1283,6 +1284,12 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
       // in the compact generic scheduler until the AOT graph has an explicit
       // bootstrap edge for the post-evaluation wait continuation.
       rejectPlan("delayed continuous assignment requires generic ordering");
+    } else if (isa<sim::SimPassSwitchControlOp>(operation)) {
+      // IEEE 1800-2023 4.9.5: a control change re-resolves the channel's
+      // connected nets. The runtime applies that topology change and advances
+      // the scheduler epoch; a generated hot closure can neither make that
+      // call nor observe the epoch, so the generic scheduler owns it.
+      rejectPlan("switch control requires generic ordering");
     } else if (isa<sim::SimPassSwitchControlDelayedOp,
                    sim::SimMosDriveDelayedOp>(operation)) {
       // A delayed control publication changes frozen connectivity from a
