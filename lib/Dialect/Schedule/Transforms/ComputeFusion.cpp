@@ -4,6 +4,7 @@
 #include "talos/Analysis/ActivationIdempotenceAnalysis.h"
 #include "talos/Analysis/DPIEffectAnalysis.h"
 #include "talos/Analysis/GraphAlgorithms.h"
+#include "talos/Analysis/ParallelWalk.h"
 #include "talos/Analysis/SimulationEffectAnalysis.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -27,6 +28,8 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <functional>
+#include <memory>
+#include <vector>
 
 using namespace mlir;
 
@@ -680,6 +683,44 @@ std::string CombinationalFusionFailure::getMessage() const {
   llvm_unreachable("unknown combinational fusion failure");
 }
 
+static bool isInterleavableKind(sim::SimFuncOp function) {
+  auto kind = function.getEntryKind();
+  return kind == sim::EntryKind::AlwaysComb ||
+         kind == sim::EntryKind::Continuous ||
+         kind == sim::EntryKind::PortInput ||
+         kind == sim::EntryKind::PortOutput;
+}
+
+void CombinationalFusionAnalysis::prepareActivations() const {
+  auto design = this->design;
+  if (unsupported || design.getBody().empty())
+    return;
+  SmallVector<sim::SimFuncOp> functions;
+  for (auto function : design.getBody().front().getOps<sim::SimFuncOp>())
+    if (!function.isExternal() && isInterleavableKind(function) &&
+        function.getHomeRegion() == sim::EventRegion::Active &&
+        !nonNativeOwners.contains(function.getSymNameAttr()) &&
+        !activations.contains(function))
+      functions.push_back(function);
+  if (!analysis::walksConcurrently(design, functions.size()))
+    return;
+  // With every design function in the handle cache, a worker reads the
+  // callees it visits and solves only its own private activation clones.
+  provenance->prepare(design);
+  std::vector<std::unique_ptr<analysis::ActivationRegionAnalysis>> built(
+      functions.size());
+  analysis::parallelForChunked(
+      design.getContext(), functions.size(), [&](size_t index) {
+        if (isComputeBodyFusionEligible(functions[index], *provenance))
+          built[index] = std::make_unique<analysis::ActivationRegionAnalysis>(
+              functions[index], *provenance,
+              analysis::ActivationRegionAnalysis::Trace{}, dependencyMode);
+      });
+  for (auto [function, activation] : llvm::zip_equal(functions, built))
+    if (activation)
+      activations[function] = std::move(activation);
+}
+
 std::optional<CombinationalFusionBody> CombinationalFusionAnalysis::analyze(
     sim::SimFuncOp function, const analysis::HandleDataflowAnalysis &analysis,
     bool interleaved, CombinationalFusionFailure *failureReason,
@@ -695,10 +736,7 @@ std::optional<CombinationalFusionBody> CombinationalFusionAnalysis::analyze(
   };
   bool kind =
       function && (function.getEntryKind() == sim::EntryKind::AlwaysComb ||
-                   (interleaved &&
-                    (function.getEntryKind() == sim::EntryKind::Continuous ||
-                     function.getEntryKind() == sim::EntryKind::PortInput ||
-                     function.getEntryKind() == sim::EntryKind::PortOutput)));
+                   (interleaved && isInterleavableKind(function)));
   if (unsupported || !function || function.isExternal() || !kind ||
       function.getHomeRegion() != sim::EventRegion::Active ||
       nonNativeOwners.contains(function.getSymNameAttr()) ||
@@ -974,6 +1012,7 @@ llvm::DenseSet<StringAttr> schedule::collectRepeatableCombinationalActivations(
   design.walk([&](sim::SimSpawnOp spawn) {
     spawns[spawn.getCalleeAttr().getAttr()].push_back(spawn);
   });
+  combinational.prepareActivations();
   // Only the distribution is reported: a remark per process would serialize
   // the design once per rejected process.
   bool report =
@@ -1267,6 +1306,7 @@ CombinationalFusionAnalysis::getGlitchInsensitiveStorage() const {
       watchers[*root].push_back(fragment.getFunction().getAttr());
     }
   }
+  prepareActivations();
   // A transparent watcher reaches an idempotent state on watched inputs.
   // Its intermediate publications may depend on overwritten old output lanes,
   // but every output must remain inside this same transition-insensitive

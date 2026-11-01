@@ -118,6 +118,10 @@ public:
   /// fixpoint, computed on first use. Net roots carry the activation-memory
   /// net tag.
   const llvm::DenseSet<uint64_t> &getGlitchInsensitiveStorage() const;
+  /// Builds the activation of every process analyze() can interleave, one
+  /// worker per process, so that a serial visit afterwards finds each built.
+  /// A no-op off the main thread.
+  void prepareActivations() const;
   /// The opaque observer that keeps `root` out of the glitch-insensitive
   /// storage, when one was recorded; diagnostics only.
   mlir::StringAttr getGlitchObserver(uint64_t root) const {

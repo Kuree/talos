@@ -94,6 +94,7 @@ public:
     CombinationalFusionAnalysis eligibility(
         design, handles,
         analysis::ActivationMemoryAnalysis::DependencyMode::ReachingValues);
+    eligibility.prepareActivations();
     SymbolTable symbols(design);
     using Range = analysis::ActivationMemoryAnalysis::Range;
     using Bit = std::pair<uint64_t, uint64_t>;
