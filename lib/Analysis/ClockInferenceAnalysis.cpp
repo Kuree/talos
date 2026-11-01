@@ -2,6 +2,7 @@
 
 #include "talos/Analysis/ClockInferenceAnalysis.h"
 #include "talos/Analysis/ClassDispatchAnalysis.h"
+#include "talos/Analysis/OrderedDenseAnalysis.h"
 #include "talos/Analysis/SimulationAnalysis.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
@@ -79,13 +80,14 @@ public:
 };
 
 class ActivationWriteAnalysis
-    : public dataflow::DenseForwardDataFlowAnalysis<WriteCountLattice> {
+    : public OrderedDenseForwardDataFlowAnalysis<WriteCountLattice> {
 public:
   ActivationWriteAnalysis(
       DataFlowSolver &solver,
       const DenseMap<Operation *, SmallVector<unsigned>> &writes,
       unsigned count)
-      : DenseForwardDataFlowAnalysis(solver), writes(writes), count(count) {}
+      : OrderedDenseForwardDataFlowAnalysis(solver), writes(writes),
+        count(count) {}
 
   LogicalResult visitOperation(Operation *op, const WriteCountLattice &before,
                                WriteCountLattice *after) override {

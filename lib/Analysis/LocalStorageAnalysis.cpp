@@ -7,6 +7,7 @@
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Interfaces/ViewLikeInterface.h"
+#include "talos/Analysis/OrderedDenseAnalysis.h"
 #include "talos/Analysis/SSAValueAnalysis.h"
 #include "talos/Dialect/Schedule/ScheduleOps.h"
 #include "llvm/ADT/BitVector.h"
@@ -215,11 +216,11 @@ public:
   void print(raw_ostream &os) const override { os << initialized.size(); }
 };
 class InitializationDataflow final
-    : public dataflow::DenseForwardDataFlowAnalysis<InitializationLattice> {
+    : public OrderedDenseForwardDataFlowAnalysis<InitializationLattice> {
 public:
   InitializationDataflow(DataFlowSolver &solver, const Definitions &recreated,
                          const SemanticValueRootAnalysis &roots)
-      : DenseForwardDataFlowAnalysis(solver), recreated(recreated),
+      : OrderedDenseForwardDataFlowAnalysis(solver), recreated(recreated),
         roots(roots) {}
   LogicalResult visitOperation(Operation *operation,
                                const InitializationLattice &before,
@@ -284,11 +285,11 @@ public:
   void print(raw_ostream &os) const override { os << available.count(); }
 };
 class SnapshotDataflow final
-    : public dataflow::DenseForwardDataFlowAnalysis<SnapshotLattice> {
+    : public OrderedDenseForwardDataFlowAnalysis<SnapshotLattice> {
 public:
   SnapshotDataflow(DataFlowSolver &solver, ArrayRef<sim::SimRefLoadOp> loads,
                    const LocalStorageAnalysis &locals)
-      : DenseForwardDataFlowAnalysis(solver), locals(locals) {
+      : OrderedDenseForwardDataFlowAnalysis(solver), locals(locals) {
     for (auto [index, operation] : llvm::enumerate(loads)) {
       auto load = operation;
       definitions.try_emplace(load, index);

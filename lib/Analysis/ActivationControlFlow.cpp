@@ -10,6 +10,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/OwningOpRef.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "talos/Analysis/OrderedDenseAnalysis.h"
 
 using namespace mlir;
 namespace talos::analysis {
@@ -58,9 +59,10 @@ public:
   void print(raw_ostream &os) const override { os << predicates.size(); }
 };
 class PredicateDataflow final
-    : public dataflow::DenseForwardDataFlowAnalysis<PredicateLattice> {
+    : public OrderedDenseForwardDataFlowAnalysis<PredicateLattice> {
 public:
-  using DenseForwardDataFlowAnalysis::DenseForwardDataFlowAnalysis;
+  using OrderedDenseForwardDataFlowAnalysis::
+      OrderedDenseForwardDataFlowAnalysis;
   LogicalResult visitOperation(Operation *op, const PredicateLattice &before,
                                PredicateLattice *after) override {
     if (!before.reachable)

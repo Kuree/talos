@@ -455,6 +455,7 @@ set_target_properties(TalosNativePartitionTests PROPERTIES
 add_llvm_executable(TalosAnalysisOracleTests EXCLUDE_FROM_ALL
   Support/ActivationOracleTest.cpp
   Support/BoundedLoopOracleTest.cpp
+  Support/OrderedDenseAnalysisTest.cpp
 )
 llvm_update_compile_flags(TalosAnalysisOracleTests)
 target_link_libraries(TalosAnalysisOracleTests PRIVATE

@@ -1,5 +1,6 @@
 //===- AccessFootprintAnalysis.cpp - Reference footprints --------===//
 #include "talos/Analysis/AccessFootprintAnalysis.h"
+#include "talos/Analysis/OrderedDenseAnalysis.h"
 
 #include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
@@ -138,12 +139,12 @@ private:
 };
 
 class FootprintDataflow final
-    : public dataflow::DenseForwardDataFlowAnalysis<FootprintLattice> {
+    : public OrderedDenseForwardDataFlowAnalysis<FootprintLattice> {
 public:
   FootprintDataflow(DataFlowSolver &solver, sim::SimFuncOp function,
                     const HandleDataflowResult &handles,
                     ArrayRef<std::pair<Operation *, Value>> accesses)
-      : DenseForwardDataFlowAnalysis(solver), handles(handles),
+      : OrderedDenseForwardDataFlowAnalysis(solver), handles(handles),
         liveness(function) {
     // Build backward SSA slices only. The MLIR solver handles cycles and
     // predecessor propagation; this walk never evaluates a predecessor. It

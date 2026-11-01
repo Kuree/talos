@@ -3,6 +3,7 @@
 #include "talos/Analysis/LocalUnknownAnalysis.h"
 #include "talos/Analysis/KnownVersioningAnalysis.h"
 #include "talos/Analysis/LocalStorageAnalysis.h"
+#include "talos/Analysis/OrderedDenseAnalysis.h"
 #include "talos/Analysis/RangeSet.h"
 #include "talos/Analysis/ScopedIntegerRangeAnalysis.h"
 #include "talos/Analysis/StateDomainAnalysis.h"
@@ -1164,10 +1165,10 @@ public:
 
 /// The bits X/Z writes of the activation may have stored so far.
 class WrittenAnalysis final
-    : public dataflow::DenseForwardDataFlowAnalysis<WrittenLattice> {
+    : public OrderedDenseForwardDataFlowAnalysis<WrittenLattice> {
 public:
   WrittenAnalysis(DataFlowSolver &solver, Inputs &inputs)
-      : DenseForwardDataFlowAnalysis(solver), inputs(inputs) {}
+      : OrderedDenseForwardDataFlowAnalysis(solver), inputs(inputs) {}
 
   LogicalResult visitOperation(Operation *op, const WrittenLattice &before,
                                WrittenLattice *after) override {

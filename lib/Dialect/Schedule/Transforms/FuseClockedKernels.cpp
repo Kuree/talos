@@ -81,6 +81,7 @@
 #include "talos/Analysis/DPIEffectAnalysis.h"
 #include "talos/Analysis/HandleDataflowAnalysis.h"
 #include "talos/Analysis/NativeStateLayoutAnalysis.h"
+#include "talos/Analysis/OrderedDenseAnalysis.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ClockedKernelName.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
@@ -371,13 +372,13 @@ public:
 };
 
 class PendingNBAAnalysis final
-    : public dataflow::DenseForwardDataFlowAnalysis<PendingLattice> {
+    : public analysis::OrderedDenseForwardDataFlowAnalysis<PendingLattice> {
 public:
   PendingNBAAnalysis(DataFlowSolver &solver,
                      const DenseMap<Operation *, unsigned> &enqueues,
                      unsigned roots)
-      : DenseForwardDataFlowAnalysis(solver), enqueues(enqueues), roots(roots) {
-  }
+      : OrderedDenseForwardDataFlowAnalysis(solver), enqueues(enqueues),
+        roots(roots) {}
   LogicalResult visitOperation(Operation *op, const PendingLattice &before,
                                PendingLattice *after) override {
     llvm::BitVector state = before.roots;
@@ -833,6 +834,7 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
 
   SymbolTable symbols(design);
   analysis::HandleDataflowAnalysis provenance(design);
+  provenance.prepare(design);
   ArrayAttr nodes = graph.getNodes();
 
   sim::SimFuncOp rootInitializer;

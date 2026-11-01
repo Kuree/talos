@@ -75,7 +75,7 @@ void ScopedRangeLattice::print(raw_ostream &os) const {
 ScopedIntegerRangeAnalysis::ScopedIntegerRangeAnalysis(DataFlowSolver &solver,
                                                        Operation *function,
                                                        bool allScalarValues)
-    : DenseForwardDataFlowAnalysis(solver) {
+    : OrderedDenseForwardDataFlowAnalysis(solver) {
   SmallVector<Value> pending;
   function->walk([&](Operation *op) {
     if (allScalarValues) {

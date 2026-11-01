@@ -5,6 +5,7 @@
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Analysis/DataFlow/DenseAnalysis.h"
 #include "mlir/Interfaces/CallInterfaces.h"
+#include "talos/Analysis/OrderedDenseAnalysis.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 
@@ -51,13 +52,13 @@ public:
   }
 };
 class MustDefinitionDataflow
-    : public dataflow::DenseForwardDataFlowAnalysis<MustDefinitionLattice> {
+    : public OrderedDenseForwardDataFlowAnalysis<MustDefinitionLattice> {
 public:
   MustDefinitionDataflow(DataFlowSolver &solver,
                          const DenseMap<Operation *, unsigned> &indices,
                          const DenseSet<Operation *> &barriers,
                          bool initiallyDefined = false)
-      : DenseForwardDataFlowAnalysis(solver), indices(indices),
+      : OrderedDenseForwardDataFlowAnalysis(solver), indices(indices),
         barriers(barriers), initiallyDefined(initiallyDefined) {}
   LogicalResult visitOperation(Operation *op,
                                const MustDefinitionLattice &before,
@@ -103,10 +104,10 @@ public:
   void print(raw_ostream &os) const override { os << reachable; }
 };
 class HotPathAnalysis
-    : public dataflow::DenseForwardDataFlowAnalysis<HotPathLattice> {
+    : public OrderedDenseForwardDataFlowAnalysis<HotPathLattice> {
 public:
   HotPathAnalysis(DataFlowSolver &solver, const DenseSet<Block *> &cold)
-      : DenseForwardDataFlowAnalysis(solver), cold(cold) {}
+      : OrderedDenseForwardDataFlowAnalysis(solver), cold(cold) {}
   LogicalResult visitOperation(Operation *op, const HotPathLattice &before,
                                HotPathLattice *after) override {
     if (!cold.contains(op->getBlock()))
@@ -165,12 +166,12 @@ public:
 };
 
 class WriteExecutionAnalysis
-    : public dataflow::DenseForwardDataFlowAnalysis<WriteExecutionLattice> {
+    : public OrderedDenseForwardDataFlowAnalysis<WriteExecutionLattice> {
 public:
   WriteExecutionAnalysis(DataFlowSolver &solver,
                          const DenseMap<Operation *, unsigned> &writes,
                          bool unknownCallEffects, ExecutionWindow window)
-      : DenseForwardDataFlowAnalysis(solver), writes(writes),
+      : OrderedDenseForwardDataFlowAnalysis(solver), writes(writes),
         unknownCallEffects(unknownCallEffects), window(window) {}
   LogicalResult visitOperation(Operation *op,
                                const WriteExecutionLattice &before,

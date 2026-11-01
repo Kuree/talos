@@ -7,6 +7,7 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "talos/Analysis/HandleDataflowAnalysis.h"
+#include "talos/Analysis/OrderedDenseAnalysis.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 
 using namespace mlir;
@@ -42,11 +43,11 @@ public:
   void print(raw_ostream &os) const override { os << values.size(); }
 };
 class MemoryDataflow final
-    : public dataflow::DenseForwardDataFlowAnalysis<MemoryLattice> {
+    : public OrderedDenseForwardDataFlowAnalysis<MemoryLattice> {
 public:
   MemoryDataflow(DataFlowSolver &solver, const DenseMap<Value, Range> &ranges,
                  bool canonicalWrites, DominanceInfo &dominance)
-      : DenseForwardDataFlowAnalysis(solver), ranges(ranges),
+      : OrderedDenseForwardDataFlowAnalysis(solver), ranges(ranges),
         canonicalWrites(canonicalWrites), dominance(dominance) {}
   LogicalResult visitOperation(Operation *op, const MemoryLattice &before,
                                MemoryLattice *after) override {

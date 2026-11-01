@@ -2,6 +2,7 @@
 //-*-===//
 #ifndef TALOS_ANALYSIS_SCOPEDINTEGERRANGEANALYSIS_H
 #define TALOS_ANALYSIS_SCOPEDINTEGERRANGEANALYSIS_H
+#include "talos/Analysis/OrderedDenseAnalysis.h"
 #include "talos/Analysis/PersistentIntMap.h"
 
 #include "mlir/Analysis/DataFlow/DenseAnalysis.h"
@@ -48,7 +49,7 @@ private:
 /// tracked. Consumers can request all scalar values for general folding.
 /// Ranges widen at joins to converge for unbounded loop-carried values.
 class ScopedIntegerRangeAnalysis final
-    : public mlir::dataflow::DenseForwardDataFlowAnalysis<ScopedRangeLattice> {
+    : public OrderedDenseForwardDataFlowAnalysis<ScopedRangeLattice> {
 public:
   ScopedIntegerRangeAnalysis(mlir::DataFlowSolver &solver,
                              mlir::Operation *function,
