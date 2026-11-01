@@ -198,9 +198,11 @@ LogicalResult linkELFExecutable(
     owned.push_back((Twine("--lto-O") + Twine(optLevel)).str());
     owned.push_back((Twine("--lto-CGO") + Twine(optLevel)).str());
     owned.push_back("--lto-whole-program-visibility");
-    // Full LTO serves small, unsplit designs. Preserve its codegen boundaries
-    // across worker budgets; large designs use the size-based ThinLTO plan.
-    owned.push_back("--lto-partitions=1");
+    // Full LTO serves small, unsplit designs, yet codegen of the runtime it
+    // links in dominates. Split codegen after IPO, a fixed number of times so
+    // its boundaries do not depend on the worker budget; large designs use the
+    // size-based ThinLTO plan.
+    owned.push_back("--lto-partitions=8");
   } else if (thinLTO) {
     owned.push_back("--lto=thin");
     owned.push_back((Twine("--lto-O") + Twine(optLevel)).str());
