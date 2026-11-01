@@ -7931,6 +7931,10 @@ buildSlangArguments(ArrayRef<std::string> inputs,
   for (llvm::StringRef warning :
        {"index-oob", "range-oob", "range-width-oob", "format-too-many-args"})
     result.emplace_back(("-Wno-error=" + warning).str());
+  // IEEE 1800-2023 11.4.12 forbids unsized constants in concatenations, so
+  // the width slang guesses for one is a user error. Like the downgrades
+  // above, the user's own -W options come later and still win.
+  result.emplace_back("-Werror=unsized-concat");
   appendValues(result, "-W", options.warningOptions);
   // Clause 34 decryption is outside the frontend's supported surface. Use
   // Slang's ordinary diagnostic policy instead of silently skipping source,

@@ -1,12 +1,11 @@
 // CLAUSE: Concatenation value, width and lvalue use; a select of a concatenation is not an lvalue
-// XFAIL: *
-// 11.4.12 says unsized constants shall not be allowed in concatenations; {1, 2'b00} only warns (-Wunsized-concat) and compiles.
+// SINCE: 0.1.0
 // RUN: %not %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %S/Inputs/11.4.12/select.sv -o %t.bad.exe
 // RUN: %not %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %S/Inputs/11.4.12/unsized.sv -o %t.bad.exe
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe
 // DIAG: expression is not assignable
-// DIAG: XX-UNSIZED
+// DIAG: unsized integer in concat
 // CHECK: 110100101 9{{$}}
 // CHECK-NEXT: 1 0 1{{$}}
 // CHECK-NEXT: 0 1 0{{$}}
