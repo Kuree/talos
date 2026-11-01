@@ -38,7 +38,11 @@ module {
   // CHECK-NEXT: %[[TRUE:.*]] = llvm.mlir.constant(true) : i1
   // CHECK-NEXT: %[[VBYTES:.*]] = llvm.mlir.constant(64 : i64) : i64
   // CHECK-NEXT: %[[XBYTES:.*]] = llvm.mlir.constant(64 : i64) : i64
-  // CHECK-NEXT: llvm.intr.assume %[[TRUE]] ["separate_storage"(%[[VALUE]], %[[UNKNOWN]] : !llvm.ptr, !llvm.ptr), "dereferenceable"(%[[VALUE]], %[[VBYTES]] : !llvm.ptr, i64), "dereferenceable"(%[[UNKNOWN]], %[[XBYTES]] : !llvm.ptr, i64)] : i1
+  // Each assumption holds one bundle: LLVM 22.1.6 DropUnnecessaryAssumesPass
+  // reads a freed AssumptionCache buffer when it keeps only some of several.
+  // CHECK-NEXT: llvm.intr.assume %[[TRUE]] ["separate_storage"(%[[VALUE]], %[[UNKNOWN]] : !llvm.ptr, !llvm.ptr)] : i1
+  // CHECK-NEXT: llvm.intr.assume %[[TRUE]] ["dereferenceable"(%[[VALUE]], %[[VBYTES]] : !llvm.ptr, i64)] : i1
+  // CHECK-NEXT: llvm.intr.assume %[[TRUE]] ["dereferenceable"(%[[UNKNOWN]], %[[XBYTES]] : !llvm.ptr, i64)] : i1
   // CHECK-NOT: llvm.mlir.addressof @__talos_state_
   // CHECK: llvm.getelementptr inbounds %[[VALUE]][40]
   // CHECK: llvm.getelementptr inbounds %[[UNKNOWN]][40]

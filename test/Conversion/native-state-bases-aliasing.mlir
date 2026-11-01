@@ -16,7 +16,9 @@
 // IR-NEXT: %[[V:.*]] = llvm.load %[[VSLOT]] invariant dereferenceable<bytes = 64>
 // IR-NEXT: %[[XSLOT:.*]] = llvm.mlir.addressof @__talos_state_unknown_base
 // IR-NEXT: %[[X:.*]] = llvm.load %[[XSLOT]] invariant dereferenceable<bytes = 64>
-// IR: llvm.intr.assume {{.*}} ["separate_storage"(%[[V]], %[[X]] : !llvm.ptr, !llvm.ptr), "dereferenceable"(%[[V]], {{.*}} : !llvm.ptr, i64), "dereferenceable"(%[[X]], {{.*}} : !llvm.ptr, i64)] : i1
+// IR: llvm.intr.assume {{.*}} ["separate_storage"(%[[V]], %[[X]] : !llvm.ptr, !llvm.ptr)] : i1
+// IR-NEXT: llvm.intr.assume {{.*}} ["dereferenceable"(%[[V]], {{.*}} : !llvm.ptr, i64)] : i1
+// IR-NEXT: llvm.intr.assume {{.*}} ["dereferenceable"(%[[X]], {{.*}} : !llvm.ptr, i64)] : i1
 // IR-NOT: alias_scopes
 // IR-NOT: noalias_scopes
 // IR-NOT: tbaa

@@ -15,12 +15,16 @@
 // INDEX32: %[[X:.*]] = llvm.load {{.*}} invariant dereferenceable<bytes = 32>
 // INDEX32: %[[VSIZE:.*]] = llvm.mlir.constant(64 : i64) : i64
 // INDEX32: %[[XSIZE:.*]] = llvm.mlir.constant(32 : i64) : i64
-// INDEX32: llvm.intr.assume {{.*}} ["separate_storage"(%[[V]], %[[X]] : !llvm.ptr, !llvm.ptr), "dereferenceable"(%[[V]], %[[VSIZE]] : !llvm.ptr, i64), "dereferenceable"(%[[X]], %[[XSIZE]] : !llvm.ptr, i64)] : i1
+// INDEX32: llvm.intr.assume {{.*}} ["separate_storage"(%[[V]], %[[X]] : !llvm.ptr, !llvm.ptr)] : i1
+// INDEX32-NEXT: llvm.intr.assume {{.*}} ["dereferenceable"(%[[V]], %[[VSIZE]] : !llvm.ptr, i64)] : i1
+// INDEX32-NEXT: llvm.intr.assume {{.*}} ["dereferenceable"(%[[X]], %[[XSIZE]] : !llvm.ptr, i64)] : i1
 // LLVM32: @__talos_state_value_base = internal externally_initialized constant ptr @__talos_state_value, align 8
 // LLVM32-LABEL: define i8 @eval(
 // LLVM32: %[[V:.*]] = load ptr, ptr @__talos_state_value_base
 // LLVM32: %[[X:.*]] = load ptr, ptr @__talos_state_unknown_base
-// LLVM32: call void @llvm.assume(i1 true) [ "separate_storage"(ptr %[[V]], ptr %[[X]]), "dereferenceable"(ptr %[[V]], i64 64), "dereferenceable"(ptr %[[X]], i64 32) ]
+// LLVM32: call void @llvm.assume(i1 true) [ "separate_storage"(ptr %[[V]], ptr %[[X]]) ]
+// LLVM32-NEXT: call void @llvm.assume(i1 true) [ "dereferenceable"(ptr %[[V]], i64 64) ]
+// LLVM32-NEXT: call void @llvm.assume(i1 true) [ "dereferenceable"(ptr %[[X]], i64 32) ]
 
 // Empty planes add no positive byte-count or explicit nonnull promise.
 // EMPTY-LABEL: llvm.func @empty(
@@ -28,9 +32,12 @@
 // EMPTY: llvm.load {{.*}} invariant dereferenceable<bytes = 0>
 // EMPTY: %[[VSIZE:.*]] = llvm.mlir.constant(0 : i64) : i64
 // EMPTY: %[[XSIZE:.*]] = llvm.mlir.constant(0 : i64) : i64
-// EMPTY: llvm.intr.assume {{.*}} "dereferenceable"({{.*}}, %[[VSIZE]] : !llvm.ptr, i64), "dereferenceable"({{.*}}, %[[XSIZE]] : !llvm.ptr, i64)] : i1
+// EMPTY: llvm.intr.assume {{.*}} ["dereferenceable"({{.*}}, %[[VSIZE]] : !llvm.ptr, i64)] : i1
+// EMPTY-NEXT: llvm.intr.assume {{.*}} ["dereferenceable"({{.*}}, %[[XSIZE]] : !llvm.ptr, i64)] : i1
 // LLVMEMPTY-LABEL: define ptr @empty(
-// LLVMEMPTY: call void @llvm.assume(i1 true) [ "separate_storage"(ptr {{.*}}, ptr {{.*}}), "dereferenceable"(ptr {{.*}}, i64 0), "dereferenceable"(ptr {{.*}}, i64 0) ]
+// LLVMEMPTY: call void @llvm.assume(i1 true) [ "separate_storage"(ptr {{.*}}, ptr {{.*}}) ]
+// LLVMEMPTY-NEXT: call void @llvm.assume(i1 true) [ "dereferenceable"(ptr {{.*}}, i64 0) ]
+// LLVMEMPTY-NEXT: call void @llvm.assume(i1 true) [ "dereferenceable"(ptr {{.*}}, i64 0) ]
 
 //--- 32.mlir
 module attributes {llvm.data_layout = "e-p:32:32"} {

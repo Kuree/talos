@@ -313,9 +313,11 @@ LogicalResult addressNativeStateThroughBases(ModuleOp module) {
       // restores that fact without restricting unknown pointer arguments or
       // overlapping accesses in one plane. Addresses and ordered value/X/Z
       // effects remain identical (IEEE 1800-2023 4.3, 4.6, 6.3.1).
-      // Repeat the existing dereferenceable facts in the same assumption:
-      // otherwise LLVM 22 InstCombine can sink a base load and drop the
-      // separate_storage bundle before redundant-load elimination sees it.
+      // Repeat the existing dereferenceable facts: otherwise LLVM 22 InstCombine
+      // can sink a base load and drop the separate_storage bundle before
+      // redundant-load elimination sees it. Each fact is its own assumption
+      // because DropUnnecessaryAssumesPass grows the AssumptionCache while
+      // iterating it when it rewrites an assumption that keeps some bundles.
       Location location = function.getLoc();
       Value condition = LLVM::ConstantOp::create(
           builder, location, builder.getI1Type(), builder.getBoolAttr(true));
@@ -327,11 +329,14 @@ LogicalResult addressNativeStateThroughBases(ModuleOp module) {
                                   LLVM::ConstantOp::create(builder, location,
                                                            builder.getI64Type(),
                                                            planeBytes[1])};
-      SmallVector<ValueRange, 3> bundles{loadedBases, left, right};
-      LLVM::AssumeOp::create(
-          builder, location, condition, bundles,
-          builder.getStrArrayAttr(
-              {"separate_storage", "dereferenceable", "dereferenceable"}));
+      auto assume = [&](StringRef tag, ValueRange arguments) {
+        LLVM::AssumeOp::create(builder, location, condition,
+                               ArrayRef<ValueRange>{arguments},
+                               builder.getStrArrayAttr({tag}));
+      };
+      assume("separate_storage", loadedBases);
+      assume("dereferenceable", left);
+      assume("dereferenceable", right);
     }
     for (auto &[plane, addresses] : uses)
       for (LLVM::AddressOfOp address : addresses)
