@@ -250,9 +250,8 @@ FailureOr<LLVM::LLVMFuncOp> makeProcessSpawnHelper(
     return function.emitError(
                "prime-on-spawn is reserved for internal detached waiters"),
            failure();
-  bool startup = sim::isStartupEntryKind(entryKind) ||
-                 (entryKind == sim::EntryKind::Initial &&
-                  function.getHomeRegion() == sim::EventRegion::Active);
+  bool startup =
+      sim::isUrgentStartupActor(entryKind, function.getHomeRegion());
   bool prioritySignalResume =
       ::talos::schedule::has<::talos::schedule::Field::PrioritySignalResume>(
           function);

@@ -284,9 +284,7 @@ LogicalResult Encoder::encodeOperation(FunctionPlan &plan,
       return op.emitOpError(
           "prime-on-spawn is reserved for internal detached waiters");
     bool startup =
-        sim::isStartupEntryKind(entryKind) ||
-        (entryKind == sim::EntryKind::Initial &&
-         callee.function.getHomeRegion() == sim::EventRegion::Active);
+        sim::isUrgentStartupActor(entryKind, callee.function.getHomeRegion());
     bool prioritySignalResume =
         ::talos::schedule::has<::talos::schedule::Field::PrioritySignalResume>(
             callee.function);

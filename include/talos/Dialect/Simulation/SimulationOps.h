@@ -120,6 +120,10 @@ bool isColdRuntimeCheckpoint(::mlir::Operation *operation);
 /// suspension or termination before ordinary initial actors begin.
 bool isStartupEntryKind(EntryKind kind);
 
+/// Whether a spawned actor of this kind and home runs ahead of the other queued
+/// actors at startup.
+bool isUrgentStartupActor(EntryKind kind, EventRegion homeRegion);
+
 /// Reserved priority wakeups: detached internal assertion or power observers.
 bool isPrioritySignalResumeActor(SimFuncOp function);
 

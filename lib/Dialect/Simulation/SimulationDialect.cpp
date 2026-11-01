@@ -119,6 +119,17 @@ bool isStartupEntryKind(EntryKind kind) {
   }
 }
 
+bool isUrgentStartupActor(EntryKind kind, EventRegion homeRegion) {
+  // IEEE 1800-2023 4.4.2.1, 4.5: only the Active region set may run ahead of
+  // the other queued work, because Reactive set work starts once the Active
+  // set is quiescent. A Reactive home keeps its region's ordering, where it
+  // already precedes the initial procedures spawned after it.
+  if (homeRegion == EventRegion::Reactive)
+    return false;
+  return isStartupEntryKind(kind) ||
+         (kind == EntryKind::Initial && homeRegion == EventRegion::Active);
+}
+
 bool isVPIVisibleEntryKind(EntryKind kind) {
   switch (kind) {
   case EntryKind::Initial:
