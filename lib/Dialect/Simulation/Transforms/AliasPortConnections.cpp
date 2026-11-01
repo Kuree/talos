@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "talos/Analysis/HandleDataflowAnalysis.h"
+#include "talos/Analysis/ParallelWalk.h"
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
@@ -241,7 +242,7 @@ void TalosSimAliasPortConnectionsPass::runOnOperation() {
   // Count every symbol use, so a copy body is removable once its spawn is.
   DenseMap<Operation *, unsigned> uses;
   std::optional<SymbolTable::UseRange> all =
-      SymbolTable::getSymbolUses(&design.getBody());
+      analysis::getSymbolUsesConcurrently(&design.getBody());
   if (!all)
     return;
   for (const SymbolTable::SymbolUse &use : *all)

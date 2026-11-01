@@ -70,6 +70,7 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "talos/Analysis/HandleDataflowAnalysis.h"
 #include "talos/Analysis/NetConnectivityAnalysis.h"
+#include "talos/Analysis/ParallelWalk.h"
 #include "talos/Analysis/StorageWriteAnalysis.h"
 #include "talos/Dialect/Coverage/CoverageDialect.h"
 #include "talos/Dialect/Native/NativeDialect.h"
@@ -861,7 +862,7 @@ void indexSymbolUsers(sim::SimDesignOp design, DesignState &state) {
   state.usersOf.clear();
   state.processOf.clear();
   std::optional<SymbolTable::UseRange> allUses =
-      SymbolTable::getSymbolUses(&design.getBody());
+      analysis::getSymbolUsesConcurrently(&design.getBody());
   state.usesKnown = allUses.has_value();
   if (allUses) {
     // An operation can name the same symbol in several attributes. Consumers

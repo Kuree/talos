@@ -82,6 +82,7 @@
 #include "talos/Analysis/HandleDataflowAnalysis.h"
 #include "talos/Analysis/NativeStateLayoutAnalysis.h"
 #include "talos/Analysis/OrderedDenseAnalysis.h"
+#include "talos/Analysis/ParallelWalk.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ClockedKernelName.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
@@ -861,7 +862,7 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
   };
   // Every symbol reference other than the root spawn keeps a function alive.
   DenseMap<StringAttr, unsigned> symbolUseCounts;
-  if (auto uses = SymbolTable::getSymbolUses(&design.getBody()))
+  if (auto uses = analysis::getSymbolUsesConcurrently(&design.getBody()))
     for (const SymbolTable::SymbolUse &use : *uses)
       ++symbolUseCounts[use.getSymbolRef().getRootReference()];
 

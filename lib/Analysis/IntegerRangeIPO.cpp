@@ -5,6 +5,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/Threading.h"
+#include "talos/Analysis/ParallelWalk.h"
 #include "talos/Analysis/ScopedIntegerRangeAnalysis.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "llvm/ADT/DenseMap.h"
@@ -298,7 +299,7 @@ void prepareIntegerRangeIPO(Operation *scope) {
     // The operation overload skips a symbol table's body. Walk its regions
     // explicitly to include both calls and non-call escapes in that scope.
     for (Region &region : parent->getRegions()) {
-      auto regionUses = SymbolTable::getSymbolUses(&region);
+      auto regionUses = getSymbolUsesConcurrently(&region);
       complete &= static_cast<bool>(regionUses);
       if (regionUses)
         llvm::append_range(allUses, *regionUses);

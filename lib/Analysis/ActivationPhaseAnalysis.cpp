@@ -2,6 +2,7 @@
 
 #include "talos/Analysis/ActivationPhaseAnalysis.h"
 #include "talos/Analysis/ActivationMemoryAnalysis.h"
+#include "talos/Analysis/ParallelWalk.h"
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -621,7 +622,7 @@ ActivationPhaseAnalysis::ActivationPhaseAnalysis(
   // carry, so a start inside one (a `fork ... join_none` in a function) is
   // not modeled either.
   DenseMap<StringAttr, bool> starts;
-  if (auto uses = SymbolTable::getSymbolUses(&design.getBody()))
+  if (auto uses = getSymbolUsesConcurrently(&design.getBody()))
     for (const SymbolTable::SymbolUse &use : *uses) {
       StringAttr name = use.getSymbolRef().getRootReference();
       Operation *user = use.getUser();

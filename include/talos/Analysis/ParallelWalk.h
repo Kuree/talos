@@ -11,7 +11,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <optional>
 #include <thread>
+#include <vector>
 
 namespace talos::analysis {
 
@@ -121,6 +123,41 @@ bool anyNested(mlir::Operation *root, Select &&select) {
       found = true;
   });
   return found;
+}
+
+/// mlir::SymbolTable::getSymbolUses(region), in the same order, with the
+/// subtrees of a module's or design's children scanned concurrently: first what
+/// the children's own attributes name, in order, and then their nested uses,
+/// the last child first. An attribute walk per operation makes these scans
+/// costly.
+inline std::optional<mlir::SymbolTable::UseRange>
+getSymbolUsesConcurrently(mlir::Region *region) {
+  llvm::SmallVector<mlir::Operation *> children;
+  for (mlir::Operation &child : region->getOps())
+    children.push_back(&child);
+  if (!walksConcurrently(region->getParentOp(), children.size()))
+    return mlir::SymbolTable::getSymbolUses(region);
+  llvm::SmallVector<std::optional<mlir::SymbolTable::UseRange>> found(
+      children.size());
+  parallelForChunked(region->getContext(), children.size(), [&](size_t index) {
+    found[index] = mlir::SymbolTable::getSymbolUses(children[index]);
+  });
+  std::vector<mlir::SymbolTable::SymbolUse> uses;
+  for (auto [child, childUses] : llvm::zip_equal(children, found)) {
+    if (!childUses)
+      return std::nullopt;
+    for (const mlir::SymbolTable::SymbolUse &use : *childUses) {
+      if (use.getUser() != child)
+        break;
+      uses.push_back(use);
+    }
+  }
+  for (auto [child, childUses] :
+       llvm::reverse(llvm::zip_equal(children, found)))
+    for (const mlir::SymbolTable::SymbolUse &use : *childUses)
+      if (use.getUser() != child)
+        uses.push_back(use);
+  return mlir::SymbolTable::UseRange(std::move(uses));
 }
 
 /// The children of `root`, in order, with an operation in their subtree,

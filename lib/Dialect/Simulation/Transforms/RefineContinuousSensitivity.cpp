@@ -14,6 +14,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "talos/Analysis/HandleDataflowAnalysis.h"
+#include "talos/Analysis/ParallelWalk.h"
 #include "talos/Analysis/StorageWriteAnalysis.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
@@ -137,7 +138,7 @@ struct TalosSimRefineContinuousSensitivityPass
     SymbolTable symbols(design);
     DenseMap<Operation *, unsigned> uses;
     DenseSet<Operation *> openBindings;
-    auto allUses = SymbolTable::getSymbolUses(&design.getBody());
+    auto allUses = analysis::getSymbolUsesConcurrently(&design.getBody());
     if (!allUses)
       return;
     for (const auto &use : *allUses)

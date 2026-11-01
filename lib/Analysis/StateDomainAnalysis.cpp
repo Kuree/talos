@@ -23,6 +23,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <limits>
@@ -1156,28 +1157,26 @@ ValueFactProgram::ValueFactProgram(sim::SimDesignOp design)
   // from the enclosing design performs a complete design walk per symbol,
   // while asking from the design itself deliberately stops at nested symbol
   // boundaries and misses references attached to or nested in SimFuncOp.
-  // The per-body scans remain linear in the total IR size.
-  for (const FunctionSummary &summary : summaries) {
-    sim::SimFuncOp scope = summary.function;
+  // The per-body scans remain linear in the total IR size, and only read it.
+  // Functions in a simulation design are direct symbols of that design. Resolve
+  // against the owning symbol table: lookup-nearest from an attribute attached
+  // to the symbol operation itself can skip that operation's sibling symbols
+  // and incorrectly classify opaque uses as absent.
+  SymbolTable &designSymbols = symbolTables.getSymbolTable(design);
+  SmallVector<SmallVector<unsigned, 0>> nonCallUses(summaries.size());
+  std::atomic<bool> unknownUses = false;
+  parallelFor(design.getContext(), 0, summaries.size(), [&](size_t position) {
     std::optional<SymbolTable::UseRange> uses =
-        SymbolTable::getSymbolUses(scope);
+        SymbolTable::getSymbolUses(summaries[position].function);
     if (!uses) {
-      llvm::fill(hasNonCallUse, true);
-      break;
+      unknownUses = true;
+      return;
     }
     for (const SymbolTable::SymbolUse &use : *uses) {
       Operation *user = use.getUser();
       SymbolRefAttr reference = use.getSymbolRef();
-      // Functions in a simulation design are direct symbols of that design.
-      // Resolve against the owning symbol table: lookup-nearest from an
-      // attribute attached to the symbol operation itself can skip that
-      // operation's sibling symbols and incorrectly classify opaque uses as
-      // absent.
-      // Resolve through the cached table. A bare lookupSymbol rebuilds nothing
-      // but scans the design's symbols linearly on every use, which turns this
-      // otherwise linear scan quadratic in the number of code units.
-      auto function = symbolTables.lookupSymbolIn<sim::SimFuncOp>(
-          design, reference.getRootReference());
+      auto function =
+          designSymbols.lookup<sim::SimFuncOp>(reference.getRootReference());
       if (!function)
         continue;
       auto found = functionIndex.find(function.getOperation());
@@ -1191,13 +1190,19 @@ ValueFactProgram::ValueFactProgram(sim::SimDesignOp design)
         direct = task.getCalleeAttr() == reference;
       else if (auto spawn = dyn_cast<sim::SimSpawnOp>(user))
         direct = spawn.getCalleeAttr() == reference;
-      if (direct && calleeIndex.contains(user) &&
-          calleeIndex.lookup(user) == index &&
+      auto indexed = calleeIndex.find(user);
+      if (direct && indexed != calleeIndex.end() && indexed->second == index &&
           countSymbolReferences(user, reference) == 1)
         continue;
-      hasNonCallUse[index] = true;
+      nonCallUses[position].push_back(index);
     }
-  }
+  });
+  if (unknownUses)
+    llvm::fill(hasNonCallUse, true);
+  else
+    for (const auto &indices : nonCallUses)
+      for (unsigned index : indices)
+        hasNonCallUse[index] = true;
 
   for (auto [function, boundaries] : llvm::enumerate(formalBoundaries))
     for (auto [index, type] :
@@ -1225,9 +1230,11 @@ public:
   void solve() {
     const auto &summaries = program.summaries;
     locals.clear();
-    locals.reserve(summaries.size());
-    for (const FunctionSummary &summary : summaries)
-      locals.push_back(initializeLocalFacts(summary));
+    locals.resize(summaries.size());
+    parallelFor(sim::SimDesignOp(program.design).getContext(), 0,
+                summaries.size(), [&](size_t index) {
+                  locals[index] = initializeLocalFacts(summaries[index]);
+                });
     finalLocals.clear();
     finalLocals.resize(summaries.size());
     queued.assign(summaries.size(), false);
@@ -1307,47 +1314,63 @@ private:
     worklist.push_back(function);
   }
 
+  /// Boundary facts only rise through a finite lattice, so rounds reach the
+  /// same fixed point in any order: each round propagates its functions
+  /// concurrently from the boundaries as they stood, then publishes what
+  /// changed in worklist order.
   void runWorklist(DenseSet<unsigned> *visited) {
     const auto &summaries = program.summaries;
+    SmallVector<unsigned> round;
     while (!worklist.empty()) {
-      unsigned function = worklist.front();
-      worklist.pop_front();
-      queued[function] = false;
-      if (visited)
-        visited->insert(function);
-
-      propagateFunction(summaries[function], formalBoundaries[function],
-                        resultBoundaries, program.calleeIndex,
-                        assumedKnownRoots, locals[function]);
-
-      for (auto [result, fact] : llvm::enumerate(locals[function].results)) {
-        sim::SimFuncOp current = program.functions[function];
-        if (!hasUnknownPlane(current.getFunctionType().getResult(result)) ||
-            !updateBoundary(resultBoundaries[function][result], fact,
-                            fact.reason))
-          continue;
-        for (unsigned caller : program.callers[function])
-          enqueue(caller);
+      round.assign(worklist.begin(), worklist.end());
+      worklist.clear();
+      for (unsigned function : round) {
+        queued[function] = false;
+        if (visited)
+          visited->insert(function);
       }
+      parallelFor(sim::SimDesignOp(program.design).getContext(), 0,
+                  round.size(), [&](size_t position) {
+                    unsigned function = round[position];
+                    propagateFunction(summaries[function],
+                                      formalBoundaries[function],
+                                      resultBoundaries, program.calleeIndex,
+                                      assumedKnownRoots, locals[function]);
+                  });
+      for (unsigned function : round)
+        publishBoundaries(function);
+    }
+  }
 
-      for (const InvocationSummary &invocation :
-           summaries[function].invocations) {
-        if (!invocation.callee)
+  void publishBoundaries(unsigned function) {
+    const auto &summaries = program.summaries;
+    for (auto [result, fact] : llvm::enumerate(locals[function].results)) {
+      sim::SimFuncOp current = program.functions[function];
+      if (!hasUnknownPlane(current.getFunctionType().getResult(result)) ||
+          !updateBoundary(resultBoundaries[function][result], fact,
+                          fact.reason))
+        continue;
+      for (unsigned caller : program.callers[function])
+        enqueue(caller);
+    }
+
+    for (const InvocationSummary &invocation :
+         summaries[function].invocations) {
+      if (!invocation.callee)
+        continue;
+      StateDomainReason reason = invocation.spawn
+                                     ? StateDomainReason::SpawnActual
+                                     : StateDomainReason::CallActual;
+      for (auto [index, operand] :
+           llvm::enumerate(getInvocationOperands(invocation.operation))) {
+        if (index >= formalBoundaries[*invocation.callee].size() ||
+            !hasUnknownPlane(operand.getType()))
           continue;
-        StateDomainReason reason = invocation.spawn
-                                       ? StateDomainReason::SpawnActual
-                                       : StateDomainReason::CallActual;
-        for (auto [index, operand] :
-             llvm::enumerate(getInvocationOperands(invocation.operation))) {
-          if (index >= formalBoundaries[*invocation.callee].size() ||
-              !hasUnknownPlane(operand.getType()))
-            continue;
-          StateDomainFact actual =
-              lookupLocalFact(locals[function].values, operand);
-          if (updateBoundary(formalBoundaries[*invocation.callee][index],
-                             actual, reason))
-            enqueue(*invocation.callee);
-        }
+        StateDomainFact actual =
+            lookupLocalFact(locals[function].values, operand);
+        if (updateBoundary(formalBoundaries[*invocation.callee][index], actual,
+                           reason))
+          enqueue(*invocation.callee);
       }
     }
   }

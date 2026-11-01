@@ -1,6 +1,7 @@
 //===- EliminateDeadBoundaries.cpp - Prune simulation boundaries --------===//
 
 #include "EliminateDeadBoundaries.h"
+#include "talos/Analysis/ParallelWalk.h"
 #include "talos/Conversion/SimulationToSchedule/Utils.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 
@@ -525,7 +526,7 @@ LogicalResult BoundaryEliminator::run() {
   };
   SmallVector<SmallVector<SymbolUseRecord>> functionUses(functions.size());
   std::optional<SymbolTable::UseRange> allUses =
-      SymbolTable::getSymbolUses(&design.getBody());
+      analysis::getSymbolUsesConcurrently(&design.getBody());
   if (!allUses) {
     for (unsigned index = 0; index != functions.size(); ++index)
       pin(index, "unresolved symbol uses");
