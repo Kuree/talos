@@ -768,6 +768,25 @@ validateSemanticDesign(ModuleOp module, bool pruneUnusedCoverage) {
       invalid = true;
       return;
     }
+    if (auto assertion = dyn_cast<semantic::SVConcurrentAssertionStatementOp>(op)) {
+      // IEEE 1800-2023 16.5.1: an input variable of a clocking block is sampled
+      // with #1step sampling in a concurrent assertion, and any other sampling
+      // of it is an error. Action blocks read current values, not samples.
+      SmallVector<Operation *> children = getChildren(assertion);
+      size_t actions = static_cast<size_t>(assertion.getHasPassAction()) +
+                       static_cast<size_t>(assertion.getHasFailAction());
+      for (Operation *child : ArrayRef<Operation *>(children).drop_back(
+               std::min(actions, children.size())))
+        child->walk([&](Operation *nested) {
+          if (!nested->hasAttr(clockingInputSkewEdgeAttrName) ||
+              nested->hasAttr(clockingInputSkewOneStepAttrName))
+            return;
+          emitError(getSemanticLocation(nested))
+              << "IEEE 1800-2023 16.5.1 requires a clocking block input used "
+                 "in a concurrent assertion to have #1step sampling";
+          invalid = true;
+        });
+    }
     if (auto variable = dyn_cast<semantic::SVVariableSymbolOp>(op);
         variable && variable.getIsCheckerFreeVariable()) {
       emitError(getSemanticLocation(op))
