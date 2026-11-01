@@ -921,6 +921,13 @@ struct Lowering {
             "initial UPF corruption supports packed logic drivers");
       targets.push_back({decl.getId(), decl.getType(), false, true});
     }
+    // A domain's elements (IEEE 1801-2018 6.20) may hold nothing a power state
+    // can corrupt, such as an empty leaf, so there is nothing to lower.
+    if (targets.empty() && processes.empty() &&
+        !domain.getIsolationControl()) {
+      domain.erase();
+      return success();
+    }
     if (targets.empty())
       return domain.emitError(
           "switchable domain has no supported state or drivers");
