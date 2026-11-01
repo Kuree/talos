@@ -5,6 +5,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "talos/Analysis/ParallelWalk.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -128,21 +129,45 @@ unsigned removeEffectFreeProcesses(sim::SimDesignOp design) {
   // only the compute graph, which the caller rebuilds after a change.
   DenseMap<StringAttr, SmallVector<Operation *>> spawns;
   DenseSet<StringAttr> otherwiseUsed;
-  design.walk([&](Operation *op) {
-    if (op == design.getOperation())
-      return;
-    if (auto spawn = dyn_cast<sim::SimSpawnOp>(op);
-        spawn && spawn.getResult().use_empty()) {
-      spawns[spawn.getCalleeAttr().getAttr()].push_back(op);
-      return;
-    }
-    for (NamedAttribute attr : op->getAttrs())
-      attr.getValue().walk([&](SymbolRefAttr ref) {
-        otherwiseUsed.insert(ref.getRootReference());
-        for (FlatSymbolRefAttr nested : ref.getNestedReferences())
-          otherwiseUsed.insert(nested.getAttr());
-      });
-  });
+  struct Uses {
+    SmallVector<sim::SimSpawnOp, 0> spawns;
+    SmallVector<StringAttr, 0> used;
+  };
+  SmallVector<Operation *> children;
+  for (Operation &child : design.getBody().front())
+    children.push_back(&child);
+  SmallVector<Uses> found(children.size());
+  auto scan = [&](size_t index) {
+    children[index]->walk([&](Operation *op) {
+      if (auto spawn = dyn_cast<sim::SimSpawnOp>(op);
+          spawn && spawn.getResult().use_empty()) {
+        found[index].spawns.push_back(spawn);
+        return;
+      }
+      for (NamedAttribute attr : op->getAttrs()) {
+        // Attributes with no elements cannot refer to a symbol. Walking one
+        // takes an allocation, and nearly every attribute is one of these.
+        if (isa<IntegerAttr, StringAttr, UnitAttr, BoolAttr, FloatAttr,
+                DenseArrayAttr>(attr.getValue()))
+          continue;
+        attr.getValue().walk([&](SymbolRefAttr ref) {
+          found[index].used.push_back(ref.getRootReference());
+          for (FlatSymbolRefAttr nested : ref.getNestedReferences())
+            found[index].used.push_back(nested.getAttr());
+        });
+      }
+    });
+  };
+  if (analysis::walksConcurrently(design, children.size()))
+    analysis::parallelForChunked(design.getContext(), children.size(), scan);
+  else
+    for (size_t index = 0; index != children.size(); ++index)
+      scan(index);
+  for (const Uses &uses : found) {
+    for (sim::SimSpawnOp spawn : uses.spawns)
+      spawns[spawn.getCalleeAttr().getAttr()].push_back(spawn);
+    otherwiseUsed.insert(uses.used.begin(), uses.used.end());
+  }
   SmallVector<sim::SimFuncOp> dead;
   unsigned pinned = 0;
   for (auto function : design.getBody().front().getOps<sim::SimFuncOp>()) {

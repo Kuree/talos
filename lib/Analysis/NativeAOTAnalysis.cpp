@@ -1035,8 +1035,10 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
   if (root)
     root.walk(
         [&](sim::SimSpawnOp spawn) { ++rootSpawnCounts[spawn.getCallee()]; });
-  module.walk(
-      [&](sim::SimSpawnOp spawn) { ++totalSpawnCounts[spawn.getCallee()]; });
+  SmallVector<sim::SimSpawnOp> allSpawns =
+      collectInWalkOrder<sim::SimSpawnOp>(module);
+  for (sim::SimSpawnOp spawn : allSpawns)
+    ++totalSpawnCounts[spawn.getCallee()];
   SmallVector<sim::SimFuncOp> staticNestedActors;
   // Evaluators of epoch-guarded deferred reports (IEEE 1800-2023 16.4.1,
   // 12.4.2.1). They run only when a report is queued, as runtime processes
@@ -1057,7 +1059,7 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
         dyn_cast<sim::SimMonitorRegisterOp>(*spawn.getResult().user_begin());
     return registration && registration.getProcess() == spawn.getResult();
   };
-  module.walk([&](sim::SimSpawnOp spawn) {
+  llvm::for_each(allSpawns, [&](sim::SimSpawnOp spawn) {
     sim::SimFuncOp owner = spawn->getParentOfType<sim::SimFuncOp>();
     if (!owner || owner != root) {
       sim::SimFuncOp target = lookupFunction(spawn.getCallee());
@@ -1181,12 +1183,35 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
     // therefore need no generic-only exclusion merely because they are not
     // Active.
   }
-  module.walk([&](Operation *operation) {
-    bool hasRealValue =
-        llvm::any_of(operation->getOperandTypes(),
-                     [](Type type) { return isa<FloatType>(type); }) ||
-        llvm::any_of(operation->getResultTypes(),
-                     [](Type type) { return isa<FloatType>(type); });
+  auto usesReal = [](Operation *operation) {
+    return llvm::any_of(operation->getOperandTypes(),
+                        [](Type type) { return isa<FloatType>(type); }) ||
+           llvm::any_of(operation->getResultTypes(),
+                        [](Type type) { return isa<FloatType>(type); });
+  };
+  // Only these operations reach a check below.
+  SmallVector<Operation *> restricted = collectInWalkOrder<Operation *>(
+      module, [&](Operation *operation) {
+        return usesReal(operation) || sim::isSuspensionOp(operation) ||
+               isa<sim::SimProcessControlOp, sim::SimProgramExitOp,
+                   sim::SimPowerCancelNBAOp, sim::SimEventSnapshotRegisterOp,
+                   sim::SimEventSnapshotMaskOp, sim::SimEventSnapshotFlushOp,
+                   sim::SimPowerNBAOp, sim::SimPowerNBAViewOp,
+                   sim::SimProcessEventPendingOp, sim::SimSchedulerCohortOp,
+                   sim::SimDPICallOp, sim::SimDynamicOverrideOp,
+                   sim::SimRefStoreInertialPathOp, sim::SimDriverDriveInertialOp,
+                   sim::SimDriverDriveInertialPathOp,
+                   sim::SimDriverDriveInertialStrengthPairOp,
+                   sim::SimDriverDriveInertialPathStrengthPairOp,
+                   sim::SimPassSwitchControlDelayedOp, sim::SimMosDriveDelayedOp,
+                   sim::SimOverrideOp, sim::SimReleaseOverrideOp,
+                   sim::SimManagedNBAEnqueueOp, sim::SimManagedNBAEnqueueMaskedOp,
+                   sim::SimReferencePathNBAEnqueueOp, sim::SimTaskCallOp,
+                   sim::SimClassVirtualTaskCallOp, sim::SimNBAEnqueueOp>(
+                   operation);
+      });
+  for (Operation *operation : restricted) {
+    bool hasRealValue = usesReal(operation);
     // IEEE 1800-2023 20.10 makes $fatal an implicit $finish. Both native
     // coordinators honor the shared finish request, including final actors;
     // generated eval routes the taken termination leaf through its existing
@@ -1393,7 +1418,7 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
       requireBytecodeFragment(operation, "suspension retains managed state");
       excludeBytecodeActor(operation);
     }
-  });
+  }
 
   llvm::sort(result.reasons);
   result.reasons.erase(

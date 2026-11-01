@@ -2,7 +2,8 @@
 //
 // The concurrent scan of a large region reports the uses mlir::SymbolTable does,
 // in the same order, including attributes of direct children and nested
-// operations.
+// operations. A concurrent inventory from a module visits a nested symbol table
+// as Operation::walk does.
 //
 //===----------------------------------------------------------------------===//
 
@@ -14,7 +15,10 @@
 
 #include "gtest/gtest.h"
 
+#include <atomic>
 #include <string>
+#include <type_traits>
+#include <vector>
 
 using namespace mlir;
 
@@ -53,6 +57,51 @@ TEST(ParallelWalkTest, SymbolUsesMatchUpstreamOrder) {
   }
   EXPECT_TRUE(left == expected->end() && right == actual->end());
   EXPECT_GT(uses, count);
+}
+
+TEST(ParallelWalkTest, InventoryFansOutThroughLoneSymbolTableInWalkOrder) {
+  MLIRContext context;
+  context.loadDialect<func::FuncDialect>();
+  std::string body = "module {\n  module @design {\n";
+  unsigned count = 2 * talos::analysis::kParallelWalkMinChildren;
+  for (unsigned index = 0; index != count; ++index) {
+    std::string id = std::to_string(index);
+    body += "    func.func private @f" + id +
+            "() {\n      func.call @f" + id +
+            "() : () -> ()\n      return\n    }\n";
+  }
+  body += "  }\n  func.func private @outer() {\n    return\n  }\n}\n";
+  OwningOpRef<ModuleOp> module = parseSourceString<ModuleOp>(body, &context);
+  ASSERT_TRUE(module);
+  Operation *root = module->getOperation();
+
+  auto expectOrder = [&](auto order) {
+    constexpr WalkOrder Order = decltype(order)::value;
+    auto items = talos::analysis::planConcurrentWalk<Order>(root);
+    // The design's children, the design itself and @outer.
+    EXPECT_EQ(items.size(), count + 2);
+    EXPECT_TRUE(talos::analysis::walksConcurrently(root, items.size()));
+    std::vector<Operation *> expected;
+    root->walk<Order>([&](Operation *op) { expected.push_back(op); });
+    std::atomic<unsigned> visits = 0;
+    auto actual = talos::analysis::collectInWalkOrder<Operation *, Order>(
+        root, [&](Operation *) {
+          ++visits;
+          return true;
+        });
+    EXPECT_EQ(visits, expected.size());
+    EXPECT_EQ(std::vector<Operation *>(actual.begin(), actual.end()), expected);
+  };
+  expectOrder(std::integral_constant<WalkOrder, WalkOrder::PreOrder>{});
+  expectOrder(std::integral_constant<WalkOrder, WalkOrder::PostOrder>{});
+
+  // The design itself is a unit of its own, not only its subtree.
+  auto isDesign = [](ModuleOp nested) {
+    return nested.getSymName() == "design";
+  };
+  EXPECT_TRUE(talos::analysis::anyNested<ModuleOp>(root, isDesign));
+  EXPECT_FALSE(talos::analysis::anyNested<func::CallOp>(
+      root, [](func::CallOp call) { return call.getCallee() == "missing"; }));
 }
 
 } // namespace

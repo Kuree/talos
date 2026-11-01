@@ -48,6 +48,42 @@ inline bool walksConcurrently(mlir::Operation *root, size_t children) {
          root->hasTrait<mlir::OpTrait::SymbolTable>();
 }
 
+/// One unit of a concurrent walk: an operation's subtree, or just itself.
+struct WalkItem {
+  mlir::Operation *operation;
+  bool selfOnly;
+};
+
+/// The units of a walk of `root`, in its visiting order. A large symbol table
+/// among the children, such as the single design of a module, contributes its
+/// own children, so that a walk from the module fans out over the design.
+template <mlir::WalkOrder Order>
+llvm::SmallVector<WalkItem> planConcurrentWalk(mlir::Operation *root) {
+  llvm::SmallVector<WalkItem> items;
+  for (mlir::Region &region : root->getRegions())
+    for (mlir::Block &block : region)
+      for (mlir::Operation &child : block) {
+        bool expand = child.hasTrait<mlir::OpTrait::SymbolTable>() &&
+                      child.getNumRegions() == 1 &&
+                      child.getRegion(0).hasOneBlock();
+        if (expand) {
+          mlir::Block &body = child.getRegion(0).front();
+          expand = llvm::hasNItemsOrMore(body, kParallelWalkMinChildren);
+        }
+        if (!expand) {
+          items.push_back({&child, false});
+          continue;
+        }
+        if (Order == mlir::WalkOrder::PreOrder)
+          items.push_back({&child, true});
+        for (mlir::Operation &nested : child.getRegion(0).front())
+          items.push_back({&nested, false});
+        if (Order == mlir::WalkOrder::PostOrder)
+          items.push_back({&child, true});
+      }
+  return items;
+}
+
 /// Returns the `OpT` operations under `root`, `root` included, for which
 /// `select` holds, in the order `root->walk<Order>` visits them. The subtrees
 /// of a module's or design's children are walked concurrently, so `select`
@@ -58,12 +94,8 @@ template <typename OpT, mlir::WalkOrder Order = mlir::WalkOrder::PostOrder,
 llvm::SmallVector<OpT> collectInWalkOrder(mlir::Operation *root,
                                           Select &&select) {
   llvm::SmallVector<OpT> result;
-  llvm::SmallVector<mlir::Operation *> children;
-  for (mlir::Region &region : root->getRegions())
-    for (mlir::Block &block : region)
-      for (mlir::Operation &child : block)
-        children.push_back(&child);
-  if (!walksConcurrently(root, children.size())) {
+  llvm::SmallVector<WalkItem> items = planConcurrentWalk<Order>(root);
+  if (!walksConcurrently(root, items.size())) {
     root->walk<Order>([&](OpT op) {
       if (select(op))
         result.push_back(op);
@@ -73,9 +105,15 @@ llvm::SmallVector<OpT> collectInWalkOrder(mlir::Operation *root,
   auto self = llvm::dyn_cast<OpT>(root);
   if (Order == mlir::WalkOrder::PreOrder && self && select(self))
     result.push_back(self);
-  llvm::SmallVector<llvm::SmallVector<OpT, 0>> found(children.size());
-  parallelForChunked(root->getContext(), children.size(), [&](size_t index) {
-    children[index]->walk<Order>([&](OpT op) {
+  llvm::SmallVector<llvm::SmallVector<OpT, 0>> found(items.size());
+  parallelForChunked(root->getContext(), items.size(), [&](size_t index) {
+    const WalkItem &item = items[index];
+    if (item.selfOnly) {
+      if (auto op = llvm::dyn_cast<OpT>(item.operation); op && select(op))
+        found[index].push_back(op);
+      return;
+    }
+    item.operation->walk<Order>([&](OpT op) {
       if (select(op))
         found[index].push_back(op);
     });
@@ -98,12 +136,9 @@ template <typename OpT, typename Select>
 bool anyNested(mlir::Operation *root, Select &&select) {
   if (auto self = llvm::dyn_cast<OpT>(root); self && select(self))
     return true;
-  llvm::SmallVector<mlir::Operation *> children;
-  for (mlir::Region &region : root->getRegions())
-    for (mlir::Block &block : region)
-      for (mlir::Operation &child : block)
-        children.push_back(&child);
-  if (!walksConcurrently(root, children.size()))
+  llvm::SmallVector<WalkItem> items =
+      planConcurrentWalk<mlir::WalkOrder::PostOrder>(root);
+  if (!walksConcurrently(root, items.size()))
     return root
         ->walk([&](OpT op) {
           return select(op) ? mlir::WalkResult::interrupt()
@@ -111,10 +146,16 @@ bool anyNested(mlir::Operation *root, Select &&select) {
         })
         .wasInterrupted();
   std::atomic<bool> found = false;
-  parallelForChunked(root->getContext(), children.size(), [&](size_t index) {
+  parallelForChunked(root->getContext(), items.size(), [&](size_t index) {
     if (found)
       return;
-    if (children[index]
+    const WalkItem &item = items[index];
+    if (item.selfOnly) {
+      if (auto op = llvm::dyn_cast<OpT>(item.operation); op && select(op))
+        found = true;
+      return;
+    }
+    if (item.operation
             ->walk([&](OpT op) {
               return select(op) ? mlir::WalkResult::interrupt()
                                 : mlir::WalkResult::advance();
