@@ -1,6 +1,5 @@
 // CLAUSE: Derived sequential property finite witness
-// XFAIL: *
-// A pending attempt of assert property (R) runs no pass action at the end of the run, while assert property (weak(R)) does: the two forms differ though R is defined as weak(R).
+// SINCE: 0.1.0
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe
 // R means strong(R) in cover and weak(R) in assert. On the same trace each pair reports alike, including the

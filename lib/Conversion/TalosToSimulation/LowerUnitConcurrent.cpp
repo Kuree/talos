@@ -5074,6 +5074,41 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
            failure();
   if (deterministicImplicationNeedsEOS && !endStrengthSource)
     endStrengthSource = implication.getOperation();
+  // A bare bounded property whose attempt is still pending when the run ends
+  // completes with its strength (IEEE 1800-2023 16.12.2): weak for the
+  // property of assert/assume (a sequence there is weak(sequence), F.3.4.3.1),
+  // strong for cover and restrict, and the operator's own strength for
+  // s_nexttime, s_always, s_eventually and their weak forms (16.12.11).
+  std::optional<bool> plainEndStrong;
+  if (!implication && !expectMonitor && !endStrengthSource &&
+      !multiClockAttempt && !hasPersistentDelay && !hasPersistentUnary &&
+      !hasPersistentUntil && !hasPersistentRepetition) {
+    bool pendingAges = branchingSequence
+                           ? llvm::any_of(sequenceAlternatives,
+                                          [](const FixedSequence &alternative) {
+                                            return alternative.ages.size() > 1;
+                                          })
+                           : sequence.ages.size() > 1;
+    bool uniform = true;
+    std::optional<bool> strength;
+    auto note = [&](const FixedSequence &alternative) {
+      if (alternative.intrinsicEndStrong.has_value()) {
+        if (strength && *strength != *alternative.intrinsicEndStrong)
+          uniform = false;
+        strength = alternative.intrinsicEndStrong;
+      } else if (alternative.hasIntrinsicEndStrength) {
+        uniform = false;
+      }
+    };
+    if (branchingSequence)
+      llvm::for_each(sequenceAlternatives, note);
+    else
+      note(sequence);
+    if (pendingAges && uniform) {
+      endStrengthSource = property;
+      plainEndStrong = strength;
+    }
+  }
   if (combinedBoundedBranching)
     // The branching-antecedent monitor owns the exact consequent truth and
     // per-antecedent match channels. Keep an ordinary placeholder state shape
@@ -7602,6 +7637,8 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
   else if (deterministicImplicationNeedsEOS &&
            sequence.intrinsicEndStrong.has_value())
     intrinsicOperandStrengthOverride = sequence.intrinsicEndStrong;
+  else if (plainEndStrong)
+    intrinsicOperandStrengthOverride = plainEndStrong;
   // Aggregate monitors own their live state and final dispatcher. Still run
   // the shared setup to record switched strength metadata, but make its
   // bounded-state age range empty so it cannot capture their placeholder
@@ -10929,7 +10966,7 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
             branchingStateStorages, horizon,
             branchingConsequent && nonoverlapped ? 0 : 1,
             branchingConsequent ? consequentUniformIntrinsicEndStrong
-                                : std::nullopt)))
+                                : plainEndStrong)))
       return failure();
 
     Block *wait = addBlock();

@@ -1,6 +1,5 @@
 // CLAUSE: strong sequence
-// XFAIL: *
-// A strong bounded temporal operator that is the whole property (s_nexttime, s_always[m:n], s_eventually[m:n]) reports nothing at the end of the run; under an implication it does.
+// SINCE: 0.1.0
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe
 // One clock tick, so every obligation is unmet at the end: strong operators require the clock to tick enough and
