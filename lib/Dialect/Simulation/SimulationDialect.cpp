@@ -559,11 +559,11 @@ static const llvm::StringMap<discardable::PayloadCheck> &declarations() {
   return discardable::declarations<
       metadata::IntegerRange, metadata::ResultRanges, metadata::ResultExprs,
       metadata::KnownLogicResult, metadata::GCPolled,
-      metadata::InlineLegalityCache, metadata::PulseRejectPercent,
-      metadata::PulseErrorPercent, metadata::PulseOnDetect,
-      metadata::PulseShowCancelled, metadata::ConstraintMode,
-      metadata::ConstraintModeBlock, metadata::ConstraintModeField,
-      metadata::ConstraintModeStaticStorage,
+      metadata::SnapshotPublications, metadata::InlineLegalityCache,
+      metadata::PulseRejectPercent, metadata::PulseErrorPercent,
+      metadata::PulseOnDetect, metadata::PulseShowCancelled,
+      metadata::ConstraintMode, metadata::ConstraintModeBlock,
+      metadata::ConstraintModeField, metadata::ConstraintModeStaticStorage,
       metadata::ConstraintModeStaticStorages,
       metadata::ObjectRandomDispatchClasses, metadata::RandMode,
       metadata::RandModeAncestorMask, metadata::RandModeArrayField,
@@ -925,6 +925,7 @@ static LogicalResult verifyDeclaredAttribute(Operation *operation,
       return error() << "must hold (offset, width) pairs";
   }
   if ((name == GCPolled::getNameStr() ||
+       name == SnapshotPublications::getNameStr() ||
        name == PulseRejectPercent::getNameStr() ||
        name == PulseErrorPercent::getNameStr() ||
        name == PulseOnDetect::getNameStr() ||

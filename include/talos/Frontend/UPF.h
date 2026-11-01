@@ -19,5 +19,8 @@ executeUPF(mlir::ModuleOp module, llvm::ArrayRef<std::string> paths,
            bool allowHDLExpressions = false, bool assumePoweredInputs = false);
 /// Apply resolved power intent after semantic units have become simulation IR.
 std::unique_ptr<mlir::Pass> createElaborateUPFPass();
+/// Preserve synchronous event-time publications before optimizer cleanup.
+/// Run after unit lowering and again after UPF creates executable writers.
+std::unique_ptr<mlir::Pass> createPrepareUPFSnapshotPublicationsPass();
 } // namespace talos
 #endif

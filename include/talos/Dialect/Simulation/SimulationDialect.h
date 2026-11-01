@@ -22,6 +22,8 @@ using ResultRanges = TalosSimulationDialect::ResultRangesAttrHelper;
 using ResultExprs = TalosSimulationDialect::ResultExprsAttrHelper;
 using KnownLogicResult = TalosSimulationDialect::KnownLogicResultAttrHelper;
 using GCPolled = TalosSimulationDialect::GcPolledAttrHelper;
+using SnapshotPublications =
+    TalosSimulationDialect::SnapshotPublicationsAttrHelper;
 using InlineLegalityCache = TalosSimulationDialect::InlineLegalityAttrHelper;
 using PulseRejectPercent = TalosSimulationDialect::PulseRejectPercentAttrHelper;
 using PulseErrorPercent = TalosSimulationDialect::PulseErrorPercentAttrHelper;

@@ -51,6 +51,9 @@ def TalosSimulationDialect : Dialect {
     // Module: compiled code roots managed values only at GC polls and at
     // calls that may reach one.
     "::mlir::UnitAttr":$gc_polled,
+    // Module: event-time state snapshots require publication barriers before
+    // optimization (IEEE 1801-2018 6.50). Retain after UPF intent is erased.
+    "::mlir::UnitAttr":$snapshot_publications,
     // Function: the inliner's cached callee-invariant `InlineLegality`.
     "::mlir::IntegerAttr":$inline_legality,
     // Module: driver pulse controls for path delays (IEEE 1800-2023 30.7).

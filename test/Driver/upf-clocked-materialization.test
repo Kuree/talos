@@ -1,0 +1,42 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf --vpi=full --coverage=functional -O3 %t/design.sv -o %t.native
+// RUN: %t.native --coverage-output=%t.native.obcov | FileCheck %s
+// RUN: talos --upf %t/design.upf --vpi=full --coverage=functional --execution-tier=bytecode -O3 %t/design.sv -o %t.bc
+// RUN: %t.bc --coverage-output=%t.bc.obcov | FileCheck %s
+// IEEE 1801-2018 6.50/9.7.3: master/slave compilation must retain deferred
+// clocked sample materialization and VPI instrumentation across preparation.
+// CHECK: clocked UPF 100.0 q=9
+
+//--- design.upf
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention KEEP -domain PD -retention_condition rtc
+//--- design.sv
+module leaf(input bit clk, input int d, output int q = 0);
+  always @(posedge clk) q <= d;
+endmodule
+module top;
+  import UPF::*;
+  bit clk = 0, rtc = 0;
+  int d = 9;
+  wire [31:0] q;
+  leaf dut(clk, d, q);
+  covergroup clocked @(posedge clk);
+    point: coverpoint d { bins nine = {9}; }
+  endgroup
+  clocked coverage;
+  initial begin
+    if (!supply_on("/top/VDD", 1.0) || !supply_on("/top/VSS", 0.0))
+      $fatal(1, "power setup failed");
+    coverage = new;
+    #1 clk = 1;
+    #1;
+    if (q != 9 || coverage.get_inst_coverage() != 100.0)
+      $fatal(1, "clocked materialization changed");
+    $display("clocked UPF %.1f q=%0d", coverage.get_inst_coverage(), q);
+    $finish;
+  end
+endmodule

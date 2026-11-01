@@ -915,15 +915,7 @@ static void buildTalosToSimulationPipelineImpl(
   // Freeze after DCE and dispatch preparation, before any nested function
   // worker can replace a sibling function's attribute dictionary.
   manager.addPass(createTalosSimPrepareUnitLoweringPass());
-  OpPassManager &loweredDesignManager = manager.nest<sim::SimDesignOp>();
-  {
-    OpPassManager &functionManager =
-        loweredDesignManager.nest<sim::SimFuncOp>();
-    functionManager.addPass(createTalosSimLowerUnitPass());
-#ifdef TALOS_ENABLE_Z3
-    // Exact random solves sample a plan compiled from their residual program.
-    functionManager.addPass(createTalosSimCompileRandomPlansPass());
-#endif
+  auto addEarlyCleanup = [](OpPassManager &functionManager) {
     functionManager.addPass(createCanonicalizerPass());
     functionManager.addPass(createCSEPass());
     // Promote direct local cells. Keep aggregate field accesses addressable;
@@ -931,16 +923,49 @@ static void buildTalosToSimulationPipelineImpl(
     functionManager.addPass(createMem2Reg());
     functionManager.addPass(createCanonicalizerPass());
     functionManager.addPass(createCSEPass());
+  };
+  auto addDesignMaterialization = [&](OpPassManager &designManager) {
+    if (vpiMode != "off") {
+      designManager.addPass(
+          std::make_unique<MaterializeVPIClassDispatchPass>());
+      if (instrumentVPIFrames && vpiMode == "full")
+        designManager.addPass(createTalosSimInstrumentVPIFramesPass());
+    }
+    designManager.addPass(createTalosSimMaterializeClockedSamplesPass());
+  };
+  OpPassManager *loweredDesignManager = &manager.nest<sim::SimDesignOp>();
+  {
+    OpPassManager &functionManager =
+        loweredDesignManager->nest<sim::SimFuncOp>();
+    functionManager.addPass(createTalosSimLowerUnitPass());
+#ifdef TALOS_ENABLE_Z3
+    // Exact random solves sample a plan compiled from their residual program.
+    functionManager.addPass(createTalosSimCompileRandomPlansPass());
+#endif
+    if (!enableUPF)
+      addEarlyCleanup(functionManager);
   }
-  if (vpiMode != "off") {
-    loweredDesignManager.addPass(
-        std::make_unique<MaterializeVPIClassDispatchPass>());
-    if (instrumentVPIFrames && vpiMode == "full")
-      loweredDesignManager.addPass(createTalosSimInstrumentVPIFramesPass());
+  if (enableUPF) {
+    // These materializers consume the frozen parent UnitLoweringInputs. Run
+    // them before a modifying module pass invalidates that analysis, and
+    // include their generated bodies in the first publication scan.
+    addDesignMaterialization(*loweredDesignManager);
+    // IEEE 1801-2018 6.50: preserve q=A;save=1;q=B before the first
+    // canonicalization/CSE/mem2reg. A module anchor sees fully lowered sibling
+    // bodies without racing parallel function workers. Ordinary compilation
+    // keeps its original fused function pipeline above.
+    manager.addPass(createPrepareUPFSnapshotPublicationsPass());
+    loweredDesignManager = &manager.nest<sim::SimDesignOp>();
+    addEarlyCleanup(loweredDesignManager->nest<sim::SimFuncOp>());
+  } else {
+    addDesignMaterialization(*loweredDesignManager);
   }
-  loweredDesignManager.addPass(createTalosSimMaterializeClockedSamplesPass());
-  if (enableUPF)
+  if (enableUPF) {
     manager.addPass(createElaborateUPFPass());
+    // Elaboration creates supply monitors and other executable writers. The
+    // persistent marker requests a rescan even after UPF declarations vanish.
+    manager.addPass(createPrepareUPFSnapshotPublicationsPass());
+  }
   OpPassManager &designManager = manager.nest<sim::SimDesignOp>();
   if (optLevel > 0)
     designManager.addPass(createTalosSimDevirtualizeClassCallsPass());

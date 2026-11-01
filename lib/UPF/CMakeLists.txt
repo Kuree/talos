@@ -7,6 +7,7 @@ add_mlir_library(TalosUPF
   SupplyNetwork.cpp
   Elaborate.cpp
   Retention.cpp
+  PublicationBarriers.cpp
   ReferenceWindow.cpp
   ElaborateSupply.cpp
   DEPENDS SlangOpsIncGen TalosSimulationOpsIncGen TalosUPFOpsIncGen

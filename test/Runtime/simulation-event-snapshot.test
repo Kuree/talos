@@ -156,3 +156,169 @@ module attributes {llvm.data_layout = "e-p:64:64-i64:64-i32:32-i16:16-i8:8-n8:16
     }
   }
 }
+
+//--- auto.mlir
+module attributes {llvm.data_layout = "e-p:64:64-i64:64-i32:32-i16:16-i8:8-n8:16:32:64-S128"} {
+  simulation.design @snapshots {
+    simulation.scope.decl 0 hierarchy "top"
+    simulation.code_unit.decl 1 in 0 root_initializer hierarchy "top.root"
+    simulation.code_unit.decl 2 in 0 initial hierarchy "top.main"
+    simulation.code_unit.decl 3 in 0 fork hierarchy "top.owner"
+    simulation.code_unit.decl 4 in 0 observer hierarchy "top.primary"
+    simulation.code_unit.decl 5 in 0 observer hierarchy "top.sample"
+    simulation.code_unit.decl 6 in 0 function hierarchy "top.pack"
+    simulation.code_unit.decl 7 in 0 function hierarchy "top.drive"
+    simulation.code_unit.decl 8 in 0 function hierarchy "top.outer"
+    simulation.storage.decl 0 in 0 : !simulation.logic<65> design hierarchy "top.data"
+    simulation.storage.decl 1 in 0 : !simulation.logic<65> design hierarchy "top.saved"
+    simulation.storage.decl 2 in 0 : i64 design hierarchy "top.mask"
+    simulation.storage.decl 3 in 0 : i1 design hierarchy "top.save"
+    simulation.storage.decl 4 in 0 : !simulation.logic<65> design hierarchy "top.saved_x"
+    simulation.storage.decl 5 in 0 : i1 design hierarchy "top.enable"
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32})
+        attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
+      %data = simulation.context.storage %ctx[0] : !simulation.ref<!simulation.logic<65>>
+      %saved = simulation.context.storage %ctx[1] : !simulation.ref<!simulation.logic<65>>
+      %mask = simulation.context.storage %ctx[2] : !simulation.ref<i64>
+      %save = simulation.context.storage %ctx[3] : !simulation.ref<i1>
+      %saved_x = simulation.context.storage %ctx[4] : !simulation.ref<!simulation.logic<65>>
+      %enable = simulation.context.storage %ctx[5] : !simulation.ref<i1>
+      %x = simulation.logic.constant 0 : i65, -1 : i65 : !simulation.logic<65>
+      %z64 = arith.constant 0 : i64
+      %false = arith.constant false
+      simulation.ref.store %x to %data : !simulation.logic<65>, !simulation.ref<!simulation.logic<65>>
+      %z65 = simulation.logic.constant 0 : i65, 0 : i65 : !simulation.logic<65>
+      simulation.ref.store %z65 to %saved : !simulation.logic<65>, !simulation.ref<!simulation.logic<65>>
+      simulation.ref.store %x to %saved_x : !simulation.logic<65>, !simulation.ref<!simulation.logic<65>>
+      simulation.ref.store %z64 to %mask : i64, !simulation.ref<i64>
+      simulation.ref.store %false to %save : i1, !simulation.ref<i1>
+      simulation.ref.store %false to %enable : i1, !simulation.ref<i1>
+      %owner = simulation.spawn @owner(%ctx) : !simulation.context -> !simulation.process
+      %main = simulation.spawn @main(%ctx) : !simulation.context -> !simulation.process
+      simulation.return
+    }
+    simulation.func private @owner(%ctx: !simulation.context {simulation.capture_kind = 0 : i32})
+        attributes {entry_kind = 13 : i32, code_unit_id = 3 : i64, internal, schedule.detached_controls, schedule.prime_on_spawn} {
+      %data = simulation.context.storage %ctx[0] : !simulation.ref<!simulation.logic<65>>
+      %saved = simulation.context.storage %ctx[1] : !simulation.ref<!simulation.logic<65>>
+      %mask = simulation.context.storage %ctx[2] : !simulation.ref<i64>
+      %save = simulation.context.storage %ctx[3] : !simulation.ref<i1>
+      %saved_x = simulation.context.storage %ctx[4] : !simulation.ref<!simulation.logic<65>>
+      %enable = simulation.context.storage %ctx[5] : !simulation.ref<i1>
+      %initial = simulation.ref.load %save : !simulation.ref<i1> -> i1
+      %primary = simulation.observer.bind @primary values (%save, %save : !simulation.ref<i1>, !simulation.ref<i1>) captures 1 : !simulation.observer<i1>
+      %sample = simulation.observer.bind @sample values (%data : !simulation.ref<!simulation.logic<65>>) captures 1 : !simulation.observer<!simulation.logic<194>>
+      %condition = simulation.observer.bind @primary values (%enable : !simulation.ref<i1>) captures 1 : !simulation.observer<i1>
+      simulation.event.snapshot.register %ctx values [%primary, %primary, %initial, %initial, %condition, %sample, %saved, %saved_x, %mask] targets 3 conditions 1 edges [1, 1] indices [-1, 0] : !simulation.observer<i1>, !simulation.observer<i1>, i1, i1, !simulation.observer<i1>, !simulation.observer<!simulation.logic<194>>, !simulation.ref<!simulation.logic<65>>, !simulation.ref<!simulation.logic<65>>, !simulation.ref<i64>
+      simulation.suspend.forever to ^parked
+    ^parked:
+      simulation.return
+    }
+    simulation.func private @primary(%ctx: !simulation.context {simulation.capture_kind = 0 : i32},
+        %source: !simulation.ref<i1> {simulation.capture_kind = 2 : i32}) -> i1
+        attributes {entry_kind = 14 : i32, code_unit_id = 4 : i64, schedule.observer_width = 1 : i32, schedule.observer_four_state = false} {
+      %value = simulation.ref.load %source : !simulation.ref<i1> -> i1
+      simulation.return %value : i1
+    }
+    simulation.func private @sample(%ctx: !simulation.context {simulation.capture_kind = 0 : i32},
+        %source: !simulation.ref<!simulation.logic<65>> {simulation.capture_kind = 2 : i32}) -> !simulation.logic<194>
+        attributes {entry_kind = 14 : i32, code_unit_id = 5 : i64, schedule.observer_width = 194 : i32, schedule.observer_four_state = true} {
+      %value = simulation.ref.load %source : !simulation.ref<!simulation.logic<65>> -> !simulation.logic<65>
+      %mask = simulation.event.snapshot.mask %ctx
+      %payload = simulation.call @pack(%ctx, %value, %mask) : (!simulation.context, !simulation.logic<65>, i64) -> !simulation.logic<194>
+      simulation.return %payload : !simulation.logic<194>
+    }
+    simulation.func private @pack(%ctx: !simulation.context {simulation.capture_kind = 0 : i32},
+        %value: !simulation.logic<65> {simulation.capture_kind = 1 : i32},
+        %mask: i64 {simulation.capture_kind = 1 : i32}) -> !simulation.logic<194>
+        attributes {entry_kind = 8 : i32, code_unit_id = 6 : i64} {
+      %high = simulation.logic.from_bits %mask : i64 -> !simulation.logic<64>
+      %pair = simulation.logic.concat %value, %value : (!simulation.logic<65>, !simulation.logic<65>) -> !simulation.logic<130>
+      %payload = simulation.logic.concat %high, %pair : (!simulation.logic<64>, !simulation.logic<130>) -> !simulation.logic<194>
+      simulation.return %payload : !simulation.logic<194>
+    }
+    simulation.func private @drive(%ctx: !simulation.context {simulation.capture_kind = 0 : i32},
+        %data: !simulation.ref<!simulation.logic<65>> {simulation.capture_kind = 1 : i32},
+        %save: !simulation.ref<i1> {simulation.capture_kind = 1 : i32},
+        %saved: !simulation.ref<!simulation.logic<65>> {simulation.capture_kind = 1 : i32},
+        %a: !simulation.logic<65> {simulation.capture_kind = 1 : i32},
+        %b: !simulation.logic<65> {simulation.capture_kind = 1 : i32}) -> i1
+        attributes {entry_kind = 8 : i32, code_unit_id = 7 : i64} {
+      %true = arith.constant true
+      simulation.publication.batch_begin %ctx
+      simulation.ref.store %a to %data : !simulation.logic<65>, !simulation.ref<!simulation.logic<65>>
+      simulation.publication.batch_begin %ctx
+      simulation.ref.store %true to %save : i1, !simulation.ref<i1>
+      simulation.publication.batch_end %ctx
+      %captured = simulation.ref.load %saved : !simulation.ref<!simulation.logic<65>> -> !simulation.logic<65>
+      %ok = simulation.logic.compare case_eq %captured, %a : (!simulation.logic<65>, !simulation.logic<65>) -> i1
+      simulation.ref.store %b to %data : !simulation.logic<65>, !simulation.ref<!simulation.logic<65>>
+      simulation.publication.batch_end %ctx
+      simulation.return %ok : i1
+    }
+    simulation.func private @outer(%ctx: !simulation.context {simulation.capture_kind = 0 : i32},
+        %data: !simulation.ref<!simulation.logic<65>> {simulation.capture_kind = 1 : i32},
+        %save: !simulation.ref<i1> {simulation.capture_kind = 1 : i32},
+        %saved: !simulation.ref<!simulation.logic<65>> {simulation.capture_kind = 1 : i32},
+        %a: !simulation.logic<65> {simulation.capture_kind = 1 : i32},
+        %b: !simulation.logic<65> {simulation.capture_kind = 1 : i32}) -> i1
+        attributes {entry_kind = 8 : i32, code_unit_id = 8 : i64} {
+      %ok = simulation.call @drive(%ctx, %data, %save, %saved, %a, %b) : (!simulation.context, !simulation.ref<!simulation.logic<65>>, !simulation.ref<i1>, !simulation.ref<!simulation.logic<65>>, !simulation.logic<65>, !simulation.logic<65>) -> i1
+      simulation.return %ok : i1
+    }
+    simulation.func @main(%ctx: !simulation.context {simulation.capture_kind = 0 : i32})
+        attributes {entry_kind = 1 : i32, code_unit_id = 2 : i64} {
+      %delay = simulation.time.constant 1
+      simulation.suspend.delay %delay to ^active
+    ^active:
+      %data = simulation.context.storage %ctx[0] : !simulation.ref<!simulation.logic<65>>
+      %saved = simulation.context.storage %ctx[1] : !simulation.ref<!simulation.logic<65>>
+      %mask = simulation.context.storage %ctx[2] : !simulation.ref<i64>
+      %save = simulation.context.storage %ctx[3] : !simulation.ref<i1>
+      %saved_x = simulation.context.storage %ctx[4] : !simulation.ref<!simulation.logic<65>>
+      %enable = simulation.context.storage %ctx[5] : !simulation.ref<i1>
+      %a = simulation.logic.constant 18446744073709551633 : i65, 0 : i65 : !simulation.logic<65>
+      %b = simulation.logic.constant 34 : i65, 0 : i65 : !simulation.logic<65>
+      %x = simulation.logic.constant 0 : i65, -1 : i65 : !simulation.logic<65>
+      %true = arith.constant true
+      %false = arith.constant false
+      %one = arith.constant 1 : i64
+      %three = arith.constant 3 : i64
+      %z65 = simulation.logic.constant 0 : i65, 0 : i65 : !simulation.logic<65>
+      %helper_ok = simulation.call @outer(%ctx, %data, %save, %saved, %a, %b) : (!simulation.context, !simulation.ref<!simulation.logic<65>>, !simulation.ref<i1>, !simulation.ref<!simulation.logic<65>>, !simulation.logic<65>, !simulation.logic<65>) -> i1
+      %before = simulation.ref.load %saved : !simulation.ref<!simulation.logic<65>> -> !simulation.logic<65>
+      %after = simulation.ref.load %saved {test.read = "saved_known_after_flush"} : !simulation.ref<!simulation.logic<65>> -> !simulation.logic<65>
+      %after_x = simulation.ref.load %saved_x {test.read = "saved_x_after_flush"} : !simulation.ref<!simulation.logic<65>> -> !simulation.logic<65>
+      simulation.ref.store %true to %enable : i1, !simulation.ref<i1>
+      simulation.ref.store %b to %data : !simulation.logic<65>, !simulation.ref<!simulation.logic<65>>
+      %stable = simulation.ref.load %saved : !simulation.ref<!simulation.logic<65>> -> !simulation.logic<65>
+      %got_mask = simulation.ref.load %mask : !simulation.ref<i64> -> i64
+      %ok0 = simulation.logic.compare case_eq %before, %a : (!simulation.logic<65>, !simulation.logic<65>) -> i1
+      %ok1 = simulation.logic.compare case_eq %after, %a : (!simulation.logic<65>, !simulation.logic<65>) -> i1
+      %ok2 = simulation.logic.compare case_eq %stable, %a : (!simulation.logic<65>, !simulation.logic<65>) -> i1
+      %ok3 = arith.cmpi eq, %got_mask, %one : i64
+      simulation.ref.store %false to %save : i1, !simulation.ref<i1>
+      simulation.ref.store %x to %data : !simulation.logic<65>, !simulation.ref<!simulation.logic<65>>
+      simulation.ref.store %true to %save : i1, !simulation.ref<i1>
+      %got_x = simulation.ref.load %saved : !simulation.ref<!simulation.logic<65>> -> !simulation.logic<65>
+      %ok4 = simulation.logic.compare case_eq %got_x, %x : (!simulation.logic<65>, !simulation.logic<65>) -> i1
+      simulation.ref.store %false to %save : i1, !simulation.ref<i1>
+      simulation.ref.store %b to %data : !simulation.logic<65>, !simulation.ref<!simulation.logic<65>>
+      simulation.ref.store %true to %save : i1, !simulation.ref<i1>
+      %got_b = simulation.ref.load %saved : !simulation.ref<!simulation.logic<65>> -> !simulation.logic<65>
+      %ok5 = simulation.logic.compare case_eq %got_b, %b : (!simulation.logic<65>, !simulation.logic<65>) -> i1
+      %last_x = simulation.ref.load %saved_x : !simulation.ref<!simulation.logic<65>> -> !simulation.logic<65>
+      %last_mask = simulation.ref.load %mask : !simulation.ref<i64> -> i64
+      %ok6 = simulation.logic.compare case_eq %after_x, %a : (!simulation.logic<65>, !simulation.logic<65>) -> i1
+      %ok7 = simulation.logic.compare case_eq %last_x, %b : (!simulation.logic<65>, !simulation.logic<65>) -> i1
+      %ok8 = arith.cmpi eq, %last_mask, %three : i64
+      %fmt = simulation.bytes.constant "automatic snapshots %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d"
+      %stdout = arith.constant 1 : i32
+      simulation.display %ctx to %stdout(%fmt, %ok0, %ok1, %ok2, %ok3, %ok4, %ok5, %ok6, %ok7, %ok8, %helper_ok)
+          newline = true radix = <decimal> flags = [0,0,0,0,0,0,0,0,0,0,0] : !simulation.bytes, i1, i1, i1, i1, i1, i1, i1, i1, i1, i1
+      %zero = arith.constant 0 : i32
+      simulation.finish %ctx, %zero
+      simulation.return
+    }
+  }
+}

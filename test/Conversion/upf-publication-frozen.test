@@ -1,0 +1,6 @@
+// RUN: %split-file %S/../Runtime/simulation-event-snapshot.test %t
+// RUN: talos-opt %t/auto.mlir --talos-sim-build-compute-graph -o %t.graph.mlir
+// RUN: not talos-opt %t.graph.mlir --prepare-upf-snapshot-publications -o %t.invalid.mlir 2>&1 | FileCheck %s
+// IEEE 1801-2018 6.50: changing publications after scheduling invalidates the
+// graph. Diagnose before mutation rather than silently adding stale effects.
+// CHECK: snapshot publications must be prepared before scheduling and encoding

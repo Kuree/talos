@@ -390,9 +390,23 @@ destinations before publishing their changes. Registrations retain pure
 callbacks and whole persistent packed targets; their writes remain possible
 throughout simulation. Native and required-bytecode execution support wide
 four-state payloads and fixed64 handles on wasm32. Ordinary links omit the
-snapshot commit service. These operations currently require explicit flushes
-in compiler IR; UPF save/restore elaboration and automatic publication barriers
-are not implemented yet, so balloon strategies still produce a diagnostic.
+snapshot commit service. The compiler now inserts flushes after synchronous
+publications before its first canonicalization, CSE or mem2reg, including in
+helper bodies and initializers. This preserves a sequence such as
+`q=A; save=1; q=B` and allows the following statement to read the saved value.
+Either save or restore intent enables preparation; master/slave retention and
+`-no_retention` alone add no snapshot barriers. A module marker retains the
+request after UPF intent is erased, and a second scan covers elaborated writers.
+Only proven automatic references omit a boundary; unknown formals and mixed
+CFG aliases keep it. Optional publication batches are removed in this mode.
+Publishing observer closures, context DPI imports, unsupported state writes
+and preparation after scheduling or encoding are diagnosed. Native and required
+bytecode tests exercise automatic boundaries on native targets and wasm32.
+
+Runtime-owned NBA, delayed-net and VPI publication completion still need
+integration with the snapshot service. A compiler boundary after a potentially
+immediate operation does not cover its later runtime commit. UPF save/restore
+elaboration is also pending, so balloon strategies still produce a diagnostic.
 When an NBA commits, observers see the value after force and procedural
 assign overrides. Frozen publication views preserve that value across aliases
 and later callback writes; FSM coverage records the same applied state.
