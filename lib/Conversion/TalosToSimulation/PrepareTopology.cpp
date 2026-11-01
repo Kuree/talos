@@ -2718,6 +2718,12 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
         auto sourceAlias = sourceReference
                                ? resolveAlias(owner, sourceReference)
                                : semantic::SVTypeAliasTypeOp{};
+        // IEEE 1800-2023 19.6.1.3: a cross's CrossValType and CrossQueueType
+        // have no VPI object (ownerAnchorFor stops at the covergroup), so a
+        // local of those types records no typespec.
+        if (sourceAlias &&
+            sourceAlias->getParentOfType<semantic::SVCovergroupTypeOp>())
+          continue;
         auto mapped =
             sourceAlias ? aliasSymbols.find(sourceAlias) : aliasSymbols.end();
         if (mapped == aliasSymbols.end()) {
@@ -2727,6 +2733,8 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
         }
         remappedAliases.push_back(mapped->second);
       }
+      if (remappedAliases.empty())
+        continue;
       remappedLayers.push_back(builder.getDictionaryAttr(
           {builder.getNamedAttr("path", path),
            builder.getNamedAttr("aliases",
