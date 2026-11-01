@@ -8270,13 +8270,15 @@ void TalosSimPreparePass::runOnOperation() {
             constraintRoots, semanticSymbols, builder, randomIndices,
             [&](semantic::SVCallExpressionOp expression) {
               // A reduction left unexpanded is over state the randomize call
-              // does not write, which the plan captures as a value.
+              // does not write, which the plan captures as a value, along with
+              // its with clause's item.index.
               return isRandomContainerSizeCall(expression) ||
                      (expression.getIsSystemCall() &&
                       (isRandomConstraintSystemFunction(
                            expression.getCalleeName()) ||
                        isRandomArrayReductionMethod(
-                           expression.getCalleeName())));
+                           expression.getCalleeName()) ||
+                       expression.getCalleeName() == "index"));
             },
             resolveConstraintFunction))) {
       invalid = true;
@@ -8352,7 +8354,8 @@ void TalosSimPreparePass::runOnOperation() {
             !isSupportedRandomConstraintExpression(nested) &&
             !(call && isRandomContainerSizeCall(call)) &&
             !(call && call.getIsSystemCall() &&
-              isRandomArrayReductionMethod(call.getCalleeName()))) {
+              (isRandomArrayReductionMethod(call.getCalleeName()) ||
+               call.getCalleeName() == "index"))) {
           emitError(getSemanticLocation(nested))
               << "constraint expression is outside the total side-effect-free "
                  "executable boundary: "

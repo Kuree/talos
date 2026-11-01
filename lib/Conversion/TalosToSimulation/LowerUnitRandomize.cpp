@@ -4930,6 +4930,14 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
                   *width, isSignedNode(nested.front()));
       return success();
     }
+    if (auto call = dyn_cast<semantic::SVCallExpressionOp>(expression);
+        call && call.getHasIteratorExpression() &&
+        dependsOnCandidate(expression)) {
+      emitError(getSemanticLocation(expression))
+          << "array reduction over a container this randomize call does not "
+             "write cannot read a random variable in its with clause yet";
+      return failure();
+    }
     // Compiler arithmetic nodes remain structural even when their operands
     // are constant or state-only. Only the original state leaves and raw
     // unknown-plane projections become parameters of the Z3 plan.
@@ -5923,6 +5931,18 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
     if (failed(resultType))
       return failure();
     SmallVector<Operation *> operands = arithmetic.operands(expression);
+    // An array method's with clause reads its iterator, which only lowering the
+    // whole call binds, so state it captures is one value.
+    if (auto call = dyn_cast<semantic::SVCallExpressionOp>(expression);
+        call && call.getHasIteratorExpression()) {
+      if (candidate) {
+        emitError(getSemanticLocation(expression))
+            << "array reduction over a container this randomize call does not "
+               "write cannot read a random variable in its with clause yet";
+        return failure();
+      }
+      operands.clear();
+    }
     if (auto plane =
             sim::get<sim::metadata::RandomArithmeticPlane>(expression)) {
       if (operands.size() != 1 || plane.getInt() < 0 ||
