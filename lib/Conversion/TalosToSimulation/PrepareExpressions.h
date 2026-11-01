@@ -92,6 +92,14 @@ synthesizeExplicitDelayedDrivers(semantic::SVRootSymbolOp root,
                                  mlir::Builder &builder,
                                  llvm::StringSet<> &delayedSources);
 
+/// IEEE 1800-2023 16.13.5, F.6.1: `@(c)(T.matched)` is true at the first tick of
+/// c after an end point of T. For each use add a process recording the end
+/// points of T and one recording the ticks of c, numbered by `trackers`, and drop
+/// the operand so that the use only reads those records.
+mlir::LogicalResult synthesizeMatchedTrackers(semantic::SVRootSymbolOp root,
+                                              mlir::Builder &builder,
+                                              unsigned &trackers);
+
 /// IEEE 1800-2023 16.14.7: replace each $inferred_clock and $inferred_disable
 /// reached through a concurrent assertion's property with the event from clock
 /// flow to that point, or the scope's default disable condition or 1'b0.

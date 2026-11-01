@@ -2645,6 +2645,71 @@ UnitLowering::lowerSystemCall(semantic::SVCallExpressionOp op) {
     return convertResult(*rounded);
   }
 
+  // IEEE 1800-2023 16.13.5: see synthesizeMatchedTrackers. Each record holds
+  // time plus one, so zero means none yet.
+  if (name == "matched" || name == "$talos_matched_source" ||
+      name == "$talos_matched_tick") {
+    auto storage = op->getAttrOfType<IntegerAttr>("talos.matched_storage");
+    if (!storage) {
+      emitError(location) << "sequence method matched has no records";
+      return failure();
+    }
+    IntegerType i64 = builder.getI64Type();
+    Value context = function.getBody().front().getArgument(0);
+    auto record = [&](unsigned word) -> Value {
+      return sim::SimContextStorageOp::create(
+          builder, location, sim::RefType::get(function.getContext(), i64),
+          context, builder.getI64IntegerAttr(storage.getInt() + word));
+    };
+    Value now = arith::AddIOp::create(
+        builder, location,
+        sim::SimTimeNowOp::create(builder, location, i64, context),
+        constant(i64, 1));
+    auto load = [&](Value reference) -> Value {
+      return sim::SimRefLoadOp::create(builder, location, i64, reference);
+    };
+    Value lastEnd = record(0), priorEnd = record(1);
+    Value lastTick = record(2), priorTick = record(3);
+    if (name == "$talos_matched_source") {
+      // Keep one end point before the current time: an end point now only counts
+      // for a later tick.
+      Value last = load(lastEnd);
+      Value isNew = arith::CmpIOp::create(
+          builder, location, arith::CmpIPredicate::ne, last, now);
+      sim::SimRefStoreOp::create(
+          builder, location,
+          arith::SelectOp::create(builder, location, isNew, last, load(priorEnd)),
+          priorEnd);
+      sim::SimRefStoreOp::create(builder, location, now, lastEnd);
+      return dummyTaskResult();
+    }
+    if (name == "$talos_matched_tick") {
+      Value last = load(lastTick);
+      Value isNew = arith::CmpIOp::create(
+          builder, location, arith::CmpIPredicate::ne, last, now);
+      sim::SimRefStoreOp::create(
+          builder, location,
+          arith::SelectOp::create(builder, location, isNew, last, load(priorTick)),
+          priorTick);
+      sim::SimRefStoreOp::create(builder, location, now, lastTick);
+      return dummyTaskResult();
+    }
+    // F.6.1: some end point at or after the previous tick and before this one.
+    Value last = load(lastEnd);
+    Value endedNow = arith::CmpIOp::create(
+        builder, location, arith::CmpIPredicate::eq, last, now);
+    Value candidate = arith::SelectOp::create(builder, location, endedNow,
+                                              load(priorEnd), last);
+    Value some = arith::CmpIOp::create(builder, location,
+                                       arith::CmpIPredicate::ne, candidate,
+                                       constant(i64, 0));
+    Value inWindow = arith::CmpIOp::create(builder, location,
+                                           arith::CmpIPredicate::uge, candidate,
+                                           load(priorTick));
+    return convertResult(
+        arith::AndIOp::create(builder, location, some, inWindow).getResult());
+  }
+
   if (name == "triggered") {
     if (children.size() != 1) {
       emitError(location) << "event .triggered requires one event operand";

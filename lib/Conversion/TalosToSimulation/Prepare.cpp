@@ -404,6 +404,7 @@ static bool isStatefulResolutionSystemCall(StringRef name) {
       .Cases({"$q_initialize", "$q_add", "$q_remove", "$q_full", "$q_exam"},
              true)
       .Cases({"$timeformat", "$system", "$stop", "$finish"}, true)
+      .Cases({"$talos_matched_source", "$talos_matched_tick"}, true)
       .Cases({"$log", "$nolog", "$reset", "$reset_count", "$reset_value",
               "$input", "$scope", "$showscopes", "$showvars", "$list"},
              true)
@@ -757,6 +758,12 @@ void TalosSimPreparePass::runOnOperation() {
   if (failed(resolveInferredAssertionQueries(semanticRoot, coveragePlanBuilder)) ||
       failed(rebindVirtualInterfaceCallDefaults(semanticRoot, semanticSymbols,
                                                 coveragePlanBuilder))) {
+    signalPassFailure();
+    return;
+  }
+  unsigned matchedTrackers = 0;
+  if (failed(synthesizeMatchedTrackers(semanticRoot, coveragePlanBuilder,
+                                       matchedTrackers))) {
     signalPassFailure();
     return;
   }
@@ -4090,6 +4097,28 @@ void TalosSimPreparePass::runOnOperation() {
                                           static_cast<int64_t>(check.data)}));
       }
     }
+  }
+
+  // IEEE 1800-2023 16.13.5: the records behind each use of the sequence method
+  // matched. Four words of time plus one, zero meaning none: the latest two end
+  // points of the source, and the latest two ticks of the destination clock.
+  if (matchedTrackers != 0) {
+    uint64_t firstMatchedStorage = nextStorageId;
+    Type wordType = builder.getI64Type();
+    for (unsigned word = 0; word != 4 * matchedTrackers; ++word) {
+      uint64_t id = nextStorageId++;
+      sim::SimStorageDeclOp::create(
+          builder, module.getLoc(), id, 0, wordType, sim::Lifetime::Design,
+          builder.getStringAttr((Twine("__talos_matched_record_") + Twine(id)).str()),
+          builder.getStringAttr("sequence method matched record"),
+          schedule::ComputeObservabilityKindAttr{}, sim::VPITypeSemanticsAttr{});
+    }
+    semanticRoot->walk([&](semantic::SVCallExpressionOp call) {
+      if (auto index = call->getAttrOfType<IntegerAttr>("talos.matched_index"))
+        call->setAttr("talos.matched_storage",
+                      builder.getI64IntegerAttr(firstMatchedStorage +
+                                                4 * index.getInt()));
+    });
   }
 
   if (!negativeChecks.empty() && !invalid) {

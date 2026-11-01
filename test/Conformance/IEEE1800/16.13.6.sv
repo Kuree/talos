@@ -1,6 +1,5 @@
 // CLAUSE: sequence triggered
-// XFAIL: *
-// The sequence method matched is not lowered: "unsupported system call matched".
+// SINCE: 0.1.0
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe
 // e1 ends at clk ticks 1 and 4. triggered is true from Observed to the end of that time step only, so a wait wakes

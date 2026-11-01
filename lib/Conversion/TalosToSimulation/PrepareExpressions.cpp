@@ -993,6 +993,145 @@ synthesizeExplicitDelayedDrivers(semantic::SVRootSymbolOp root, Builder &builder
   return success();
 }
 
+/// The event control of the clock in force at `operation` inside `assertion`:
+/// an enclosing clocking of the property, then the procedural context, then the
+/// default clocking (IEEE 1800-2023 16.13.3).
+static Operation *
+findAssertionClockFlow(Operation *operation,
+                       semantic::SVConcurrentAssertionStatementOp assertion) {
+  for (Operation *cursor = operation; cursor && cursor != assertion.getOperation();
+       cursor = cursor->getParentOp())
+    if (isa<semantic::SVClockingAssertionExprOp>(cursor))
+      return getChildren(cursor).front();
+  SmallVector<Operation *> children = getChildren(assertion);
+  size_t prefix = 0;
+  if (assertion.getHasDefaultDisable() && prefix < children.size())
+    ++prefix;
+  if (assertion.getHasContextualClock().value_or(false) &&
+      prefix < children.size())
+    return children[prefix];
+  if (assertion.getDefaultClockingSymbolAttr() && prefix < children.size())
+    return children[prefix];
+  return nullptr;
+}
+
+LogicalResult synthesizeMatchedTrackers(semantic::SVRootSymbolOp root,
+                                        Builder &builder, unsigned &trackers) {
+  SmallVector<semantic::SVCallExpressionOp> calls;
+  int64_t nextNodeId = 0;
+  root->walk([&](Operation *op) {
+    if (auto id = op->getAttrOfType<IntegerAttr>("node_id"))
+      nextNodeId = std::max(nextNodeId, id.getInt() + 1);
+    if (auto call = dyn_cast<semantic::SVCallExpressionOp>(op);
+        call && call.getIsSystemCall() && call.getCalleeName() == "matched")
+      calls.push_back(call);
+  });
+  auto cloneWithFreshNodes = [&](Operation *source) {
+    Operation *copy = source->clone();
+    copy->walk([&](Operation *nested) {
+      if (nested->hasAttr("node_id"))
+        nested->setAttr("node_id", builder.getI64IntegerAttr(nextNodeId++));
+    });
+    return copy;
+  };
+  for (semantic::SVCallExpressionOp call : calls) {
+    auto assertion =
+        call->getParentOfType<semantic::SVConcurrentAssertionStatementOp>();
+    Operation *clock =
+        assertion ? findAssertionClockFlow(call, assertion) : nullptr;
+    if (!clock)
+      return emitError(getSemanticLocation(call))
+             << "IEEE 1800-2023 16.13.6 the sequence method matched can only be "
+                "used in a clocked sequence expression";
+    SmallVector<Operation *> children = getChildren(call);
+    auto instance = children.size() == 1
+                        ? dyn_cast<semantic::SVAssertionInstanceExpressionOp>(
+                              children.front())
+                        : semantic::SVAssertionInstanceExpressionOp{};
+    if (!instance)
+      return emitError(getSemanticLocation(call))
+             << "IEEE 1800-2023 16.13.6 the operand of matched must be a "
+                "sequence instance";
+    // The process goes next to the module item holding the assertion.
+    Operation *anchor = call;
+    while (anchor->getParentOp() &&
+           !isa<semantic::SVInstanceBodySymbolOp>(anchor->getParentOp()))
+      anchor = anchor->getParentOp();
+    Attribute index = builder.getI64IntegerAttr(trackers);
+    auto makeProcess = [&](Operation *event, StringRef task) {
+      // Each is `always @(event) task;`, which the call itself is the model of.
+      Location location = call.getLoc();
+      Operation *record = cloneWithFreshNodes(call);
+      for (Operation *child : getChildren(record))
+        child->erase();
+      record->setAttr("callee_name", builder.getStringAttr(task));
+      record->setAttr("argument_count", builder.getI64IntegerAttr(0));
+      record->setAttr("defaulted_arguments", builder.getDenseI64ArrayAttr({}));
+      record->setAttr("talos.matched_index", index);
+      SmallVector<NamedAttribute> common;
+      for (NamedAttribute attribute : call->getAttrs()) {
+        StringRef name = attribute.getName().getValue();
+        if (name == "original_source_range" || name.starts_with("source_"))
+          common.push_back(attribute);
+      }
+      auto makeOp = [&](StringRef name, ArrayRef<NamedAttribute> extra,
+                        ArrayRef<Operation *> nested) {
+        OperationState state(location, name);
+        state.addAttributes(common);
+        state.addAttribute("node_id", builder.getI64IntegerAttr(nextNodeId++));
+        state.addAttributes(extra);
+        Block *body = new Block();
+        state.addRegion()->push_back(body);
+        for (Operation *child : nested)
+          body->push_back(child);
+        return Operation::create(state);
+      };
+      Operation *statement = makeOp(
+          semantic::SVExpressionStatementOp::getOperationName(), {}, {record});
+      Operation *timed = makeOp(semantic::SVTimedStatementOp::getOperationName(),
+                                {}, {event, statement});
+      SmallVector<NamedAttribute> blockAttributes{
+          builder.getNamedAttr(
+              SymbolTable::getSymbolAttrName(),
+              builder.getStringAttr((Twine("__talos_matched_") + task.drop_front() +
+                                     "_" + Twine(trackers))
+                                        .str())),
+          builder.getNamedAttr("procedure_kind",
+                               builder.getI32IntegerAttr(static_cast<int32_t>(
+                                   semantic::SVProceduralBlockKind::Always)))};
+      if (Attribute name = anchor->getAttr("hierarchical_name"))
+        blockAttributes.push_back(builder.getNamedAttr("hierarchical_name", name));
+      Operation *block =
+          makeOp(semantic::SVProceduralBlockSymbolOp::getOperationName(),
+                 blockAttributes, {timed});
+      anchor->getBlock()->getOperations().insertAfter(anchor->getIterator(),
+                                                      block);
+    };
+    // The source's end points, as `always @(sequence_instance)` (9.4.2.4).
+    Operation *sourceEvent = cloneWithFreshNodes(clock);
+    SmallVector<Operation *> sourceChildren = getChildren(sourceEvent);
+    sourceEvent->removeAttr("has_iff");
+    sourceEvent->setAttr("has_iff", builder.getBoolAttr(false));
+    sourceEvent->setAttr("edge_kind", builder.getI32IntegerAttr(0));
+    if (!isa<semantic::SVSignalEventControlOp>(sourceEvent))
+      return emitError(getSemanticLocation(call))
+             << "the sequence method matched needs a single signal event as its "
+                "clock";
+    for (Operation *child : sourceChildren)
+      child->erase();
+    sourceEvent->getRegion(0).front().push_back(cloneWithFreshNodes(instance));
+    makeProcess(sourceEvent, "$talos_matched_source");
+    makeProcess(cloneWithFreshNodes(clock), "$talos_matched_tick");
+    // The value only reads what those two record.
+    children.front()->erase();
+    call->setAttr("argument_count", builder.getI64IntegerAttr(0));
+    call->setAttr("defaulted_arguments", builder.getDenseI64ArrayAttr({}));
+    call->setAttr("talos.matched_index", index);
+    ++trackers;
+  }
+  return success();
+}
+
 LogicalResult resolveInferredAssertionQueries(semantic::SVRootSymbolOp root,
                                               Builder &builder) {
   bool invalid = false;
