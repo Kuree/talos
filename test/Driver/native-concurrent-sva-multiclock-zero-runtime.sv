@@ -42,13 +42,15 @@ module native_concurrent_sva_multiclock_zero_runtime;
     #1 begin b = 1; a = 1; end
 
     // This b edge is same simulation time but a later #0 producer boundary:
-    // it is a legal strictly-later ##1 occurrence, never a ##0 coincidence.
+    // it is not a coincident tick, so ##0 behaves as ##1 and waits for it
+    // (IEEE 1800-2023 16.13.1) instead of failing.
     #1 begin a = 0; b = 0; end
     #1 a = 1;
     #0 b = 1;
 
     // A,A,B in one producer wave yields ordinal cohorts {A|B}, then {A}; the
-    // repeated same-time source occurrence is not coalesced.
+    // repeated same-time source occurrence is not coalesced. The second one
+    // finds no coincident b and waits for the next b edge, as ##1 would.
     #1 begin a = 0; b = 0; end
     #1 begin a = 1; a = 0; a = 1; b = 1; end
 
@@ -69,4 +71,4 @@ module native_concurrent_sva_multiclock_zero_runtime;
   end
 endmodule
 
-// CHECK: multiclock zero pass=3 fail=2 one_pass=5 one_fail=0 iff_pass=1 iff_fail=0
+// CHECK: multiclock zero pass=5 fail=0 one_pass=5 one_fail=0 iff_pass=1 iff_fail=0

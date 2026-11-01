@@ -1580,6 +1580,12 @@ compileMultiClockSequence(Operation *operation, Operation *inheritedClock) {
         llvm::append_range(result.stages.back().predicates, stage.predicates);
         continue;
       }
+      // IEEE 1800-2023 16.13.1: ##0 into a different clock moves to the
+      // nearest possibly overlapping tick of that clock, so it does not move
+      // when the clocks tick together and otherwise behaves as ##1. That is
+      // the same handoff an overlapped implication makes.
+      if (!result.stages.empty() && stage.delay == 0)
+        stage.delay = MultiClockSequenceStage::kAtOrAfterTick;
       result.stages.push_back(std::move(stage));
     }
   }

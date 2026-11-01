@@ -1,6 +1,5 @@
 // CLAUSE: Rewrite rules for sequences finite witness
-// XFAIL: *
-// ##0 to a clock that does not tick at the same time never matches here, though 16.13.1 says it then behaves as ##1: Z reads 000001000000.
+// SINCE: 0.1.0
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe
 // One entry per time step. ##1 moves to the strictly later c2 tick (step 7 for the attempt at step 5, b false there),
