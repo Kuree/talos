@@ -1411,6 +1411,20 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
     sim::SimSpawnOp insertionSpawn;
   };
   std::vector<Plan> plans;
+  // Deferral takes a whole-design analysis per kernel, and only a large kernel
+  // repays it with more direct stores. A design with a clock class per instance
+  // would otherwise make this pass quadratic.
+  constexpr size_t maximumDeferralAnalyses = 16;
+  SmallVector<const std::vector<Member> *> largestGroups;
+  for (auto &[key, members] : groups)
+    largestGroups.push_back(&members);
+  llvm::stable_sort(largestGroups, [](const auto *lhs, const auto *rhs) {
+    return lhs->size() > rhs->size();
+  });
+  if (largestGroups.size() > maximumDeferralAnalyses)
+    largestGroups.truncate(maximumDeferralAnalyses);
+  DenseSet<const std::vector<Member> *> deferrable(largestGroups.begin(),
+                                                   largestGroups.end());
   for (auto &[key, members] : groups) {
     uint64_t classRoot = key.first;
     // A member that accesses any root of its clock class could observe a
@@ -1797,9 +1811,10 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
     std::optional<DenseSet<uint64_t>> immediate, deferred;
     if (singleClockSource)
       immediate = planRoots(Mode::Immediate, immediateReasons);
-    if (defer && (!immediate ||
-                  immediateReasons.count("root accessed by event activation") ||
-                  immediateReasons.count("root writers"))) {
+    if (defer && deferrable.contains(&members) &&
+        (!immediate ||
+         immediateReasons.count("root accessed by event activation") ||
+         immediateReasons.count("root writers"))) {
       if (StringRef blocker = analyzeDeferral(); !blocker.empty())
         reject(("deferral: " + blocker).str());
       else

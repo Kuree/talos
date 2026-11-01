@@ -802,12 +802,14 @@ void TalosSimSCCPPass::runOnOperation() {
             }))
           return;
         if (auto call = dyn_cast<sim::SimCallOp>(operation)) {
-          auto callee = design.lookupSymbol<sim::SimFuncOp>(call.getCallee());
+          auto callee = symbolTables.lookupSymbolIn<sim::SimFuncOp>(
+              design, call.getCalleeAttr().getAttr());
           hasUnmodeledNetWrite |= !callee || callee.isExternal();
           return;
         }
         if (auto call = dyn_cast<sim::SimTaskCallOp>(operation)) {
-          auto callee = design.lookupSymbol<sim::SimFuncOp>(call.getCallee());
+          auto callee = symbolTables.lookupSymbolIn<sim::SimFuncOp>(
+              design, call.getCalleeAttr().getAttr());
           hasUnmodeledNetWrite |= !callee || callee.isExternal();
           return;
         }
