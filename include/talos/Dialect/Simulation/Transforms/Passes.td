@@ -272,6 +272,17 @@ def TalosSimDevirtualizeClassCallsPass
   ];
 }
 
+def TalosSimPruneVPIInventoryPass
+    : Pass<"talos-sim-prune-vpi-inventory", "talos::sim::SimDesignOp"> {
+  let summary = "Remove VPI inventory when no design database can read it";
+  let description = [{
+    Erases the relation and definition records of the VPI object model, and the
+    expression and definition-member declarations that only they name.
+    Only the serialized design database reads them. Run this only without a VPI
+    profile; a waveform dump in the design keeps the inventory.
+  }];
+}
+
 def TalosSimEliminateDeadCapturesPass
     : Pass<"talos-sim-eliminate-dead-captures",
            "talos::sim::SimDesignOp"> {

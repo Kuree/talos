@@ -390,6 +390,7 @@ def TalosSimulationDialect : Dialect {
     "::mlir::UnitAttr":$negative_timing_adjusted,
     "::mlir::UnitAttr":$negative_timing_delay_commit,
     "::mlir::UnitAttr":$negative_timing_delay_monitor,
+    "::mlir::UnitAttr":$vpi_inventory_pruned,
     "::mlir::UnitAttr":$negative_timing_transport_activation,
     "::mlir::DenseI64ArrayAttr":$pass_switch_ids,
     "::mlir::DenseI64ArrayAttr":$propagation_delays,

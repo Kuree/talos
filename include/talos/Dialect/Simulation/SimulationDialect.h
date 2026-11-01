@@ -526,6 +526,7 @@ using NegativeTimingDelayCommit =
     TalosSimulationDialect::NegativeTimingDelayCommitAttrHelper;
 using NegativeTimingDelayMonitor =
     TalosSimulationDialect::NegativeTimingDelayMonitorAttrHelper;
+using VpiInventoryPruned = TalosSimulationDialect::VpiInventoryPrunedAttrHelper;
 using NegativeTimingTransportActivation =
     TalosSimulationDialect::NegativeTimingTransportActivationAttrHelper;
 using PassSwitchIds = TalosSimulationDialect::PassSwitchIdsAttrHelper;

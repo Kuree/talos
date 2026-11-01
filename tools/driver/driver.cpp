@@ -1520,7 +1520,7 @@ executeCompilation(const InputArgList &args,
               ? "on"
               : staticSpecialization,
           /*earlySymbolDCE=*/true, clockedKernels, forwardCopies,
-          /*enableUPF=*/!upfPaths.empty());
+          /*enableUPF=*/!upfPaths.empty(), /*pruneVPIInventory=*/native);
     if (failed(passManager.run(*module)) || failed(verify(*module)))
       return 1;
   }

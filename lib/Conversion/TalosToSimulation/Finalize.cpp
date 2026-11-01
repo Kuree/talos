@@ -883,7 +883,7 @@ static void buildTalosToSimulationPipelineImpl(
     OpPassManager &manager, uint32_t workers, StringRef vpiMode,
     uint32_t optLevel, StringRef staticSpecialization, bool earlySymbolDCE,
     StringRef clockedKernels, bool instrumentVPIFrames, StringRef forwardCopies,
-    bool enableUPF) {
+    bool enableUPF, bool pruneVPIInventory) {
   TalosSimPreparePassOptions prepareOptions;
   prepareOptions.pruneUnusedCoverage = earlySymbolDCE && vpiMode == "off";
   // Source inventory may outlive executable code. Only a VPI profile needs
@@ -960,6 +960,9 @@ static void buildTalosToSimulationPipelineImpl(
   } else {
     addDesignMaterialization(*loweredDesignManager);
   }
+  // Unit lowering has made any waveform dump visible to the pruning pass.
+  if (pruneVPIInventory && vpiMode == "off")
+    loweredDesignManager->addPass(createTalosSimPruneVPIInventoryPass());
   if (enableUPF) {
     manager.addPass(createElaborateUPFPass());
     // Elaboration creates supply monitors and other executable writers. The
@@ -1236,10 +1239,11 @@ void buildTalosToSimulationPipeline(OpPassManager &manager, uint32_t workers,
                                     StringRef staticSpecialization,
                                     bool earlySymbolDCE,
                                     StringRef clockedKernels,
-                                    StringRef forwardCopies, bool enableUPF) {
+                                    StringRef forwardCopies, bool enableUPF,
+                                    bool pruneVPIInventory) {
   buildTalosToSimulationPipelineImpl(
       manager, workers, vpiMode, optLevel, staticSpecialization, earlySymbolDCE,
-      clockedKernels, false, forwardCopies, enableUPF);
+      clockedKernels, false, forwardCopies, enableUPF, pruneVPIInventory);
 }
 
 void buildTalosToSimulationPipeline(OpPassManager &manager) {
@@ -1270,7 +1274,8 @@ void registerTalosToSimulationPipeline() {
             options.earlySymbolDCE.getValue(),
             options.clockedKernels.getValue(),
             options.instrumentVPIFrames.getValue(),
-            options.forwardCopies.getValue(), options.upf.getValue());
+            options.forwardCopies.getValue(), options.upf.getValue(),
+            /*pruneVPIInventory=*/false);
       });
 }
 

@@ -85,12 +85,14 @@ void buildTalosToSimulationPipeline(mlir::OpPassManager &manager,
 /// `forwardCopies` is on, off, or census (see
 /// talos-sim-forward-copy-processes); it runs at O1 and above with VPI off.
 /// `enableUPF` includes power-intent elaboration, which the driver requests
-/// when given UPF.
+/// when given UPF. `pruneVPIInventory` erases, with VPI off, the inventory only
+/// a design database reads (see talos-sim-prune-vpi-inventory).
 void buildTalosToSimulationPipeline(
     mlir::OpPassManager &manager, uint32_t workers, llvm::StringRef vpiMode,
     uint32_t optLevel, llvm::StringRef staticSpecialization,
     bool earlySymbolDCE = true, llvm::StringRef clockedKernels = "deferred",
-    llvm::StringRef forwardCopies = "on", bool enableUPF = false);
+    llvm::StringRef forwardCopies = "on", bool enableUPF = false,
+    bool pruneVPIInventory = false);
 
 /// Register the aggregate serial/parallel/serial lowering pipeline.
 void registerTalosToSimulationPipeline();

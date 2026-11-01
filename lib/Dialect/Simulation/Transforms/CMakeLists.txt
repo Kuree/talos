@@ -7,6 +7,7 @@ add_mlir_dialect_library(TalosSimulationTransforms
   EliminateDeadBoundaries.cpp
   EliminateDeadCaptures.cpp
   InsertGCPolls.cpp
+  PruneVPIInventory.cpp
   Inline.cpp
   PropagateInitializedStorage.cpp
   RefineContinuousSensitivity.cpp

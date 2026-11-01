@@ -6259,11 +6259,13 @@ LogicalResult SimDesignOp::verifyRegions() {
     }
     return nullptr;
   };
+  // No design database will read a pruned inventory's expression trees.
   for (SimVPIObjectAnchorOp anchor : vpiAnchors) {
     using Kind = reflection::VPIObjectKind;
     Kind kind = static_cast<Kind>(anchor.getVpiKind());
     bool expression = kind == Kind::Constant || kind == Kind::Operation;
-    if (!expression && kind != Kind::Parameter)
+    if ((!expression && kind != Kind::Parameter) ||
+        has<metadata::VpiInventoryPruned>(*this))
       continue;
     uint64_t identity = declarationIds.lookup(anchor);
     Operation *root = expressionRoot(anchor);
