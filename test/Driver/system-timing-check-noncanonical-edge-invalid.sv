@@ -2,9 +2,9 @@
 
 module system_timing_check_noncanonical_edge_invalid(input wire clock);
   specify
-    // The current static $width actor derives one canonical opposite edge.
-    // A Clause 31.5 subset needs a separate inverse-descriptor audit.
-    $width(edge [01, 0x] clock, 1);
+    // IEEE 1800-2023 31.4.4 derives the data event from the opposite edge. This
+    // Clause 31.5 set holds both a transition and its opposite, so it has none.
+    $width(edge [01, 10] clock, 1);
   endspecify
 endmodule
 
