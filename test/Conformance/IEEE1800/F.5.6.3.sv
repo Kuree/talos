@@ -1,6 +1,5 @@
 // CLAUSE: Vacuity finite witness
-// XFAIL: *
-// $assertvacuousoff is rejected on an assertion with a local variable: "concurrent assertion action control currently requires a fixed bounded single-clock directive without ... locals".
+// SINCE: 0.1.0
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe
 // R |-> P is nonvacuous only when R matches. With vacuous passes switched off ($assertvacuousoff, 20.11) the pass

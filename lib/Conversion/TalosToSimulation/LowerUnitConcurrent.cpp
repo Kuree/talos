@@ -4966,7 +4966,12 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
                "exceeds the 63-cycle bounded monitor horizon"),
            failure();
   if (actionControlled &&
-      (expectMonitor || abort || localMonitor || temporalNegation ||
+      (expectMonitor || abort || temporalNegation ||
+       // IEEE 1800-2023 20.12: a local-variable monitor applies the action
+       // state only to an attempt that finishes on the tick it starts.
+       (localMonitor &&
+        (consequentHorizon != 1 || branchingSequence || branchingAntecedent ||
+         branchingConsequent)) ||
        hasPersistentDelay || hasPersistentUnary || hasPersistentUntil ||
        hasPersistentRepetition || nonoverlapped ||
        (implication && antecedentHorizon != 1) ||
@@ -4976,7 +4981,7 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
     return emitError(location)
                << "concurrent assertion action control currently requires a "
                   "fixed bounded single-clock directive without expect, "
-                  "abort, locals, persistent state, nonoverlapped handoff, "
+                  "abort, multicycle locals, persistent state, nonoverlapped handoff, "
                   "multicycle branching, or a vacuous branching-antecedent "
                   "consequent",
            failure();
@@ -11871,6 +11876,10 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
         return failure();
       return localValues;
     };
+    // The action state ($assertvacuousoff, $assertpassoff, $assertfailoff of
+    // IEEE 1800-2023 20.11) read at the sampling tick; it gates each report by
+    // class.
+    Value localActionState;
     auto reportFailure = [&](Value enabled, Value matches) -> LogicalResult {
       Value fails = arith::AndIOp::create(
           builder, location, enabled,
@@ -11878,6 +11887,8 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
               builder, location, matches,
               arith::ConstantOp::create(builder, location, builder.getI1Type(),
                                         builder.getBoolAttr(true))));
+      fails = gateActionResult(fails, localActionState, /*reportedPassed=*/false,
+                               /*vacuous=*/false);
       if (!observable)
         return success();
       Block *report = addBlock();
@@ -11890,7 +11901,25 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
       setCurrent(continuation);
       return success();
     };
-    auto reportSuccess = [&] { scheduleResult(true); };
+    auto reportSuccess = [&] {
+      if (!localActionState) {
+        scheduleResult(true);
+        return;
+      }
+      // A match of the attempt's sequence is a nonvacuous pass (16.14.8).
+      Value permitted = gateActionResult(
+          arith::ConstantOp::create(builder, location, builder.getI1Type(),
+                                    builder.getBoolAttr(true)),
+          localActionState, /*reportedPassed=*/true, /*vacuous=*/false);
+      Block *report = addBlock();
+      Block *continuation = addBlock();
+      cf::CondBranchOp::create(builder, location, permitted, report,
+                               ValueRange{}, continuation, ValueRange{});
+      setCurrent(report);
+      scheduleResult(true);
+      emitBranch(continuation);
+      setCurrent(continuation);
+    };
     auto reportAntecedentFailure = [&](Value enabled,
                                        Value matches) -> LogicalResult {
       if (!shouldScheduleResult(!followedBy))
@@ -11903,6 +11932,9 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
                                         builder.getBoolAttr(true))));
       sim::mark<sim::metadata::ImplicationAntecedentFailure>(
           fails.getDefiningOp());
+      fails = gateActionResult(fails, localActionState,
+                               /*reportedPassed=*/!followedBy,
+                               /*vacuous=*/!followedBy);
       if (!observable)
         return success();
       Block *report = addBlock();
@@ -11928,6 +11960,7 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
     setCurrent(sample);
     Value attemptEnabled = queryAttemptEnabledForCoverage();
     emitEvaluationCoverageHit(attemptEnabled);
+    localActionState = queryActionState();
     Value state;
     if (!killEpochStorage)
       state = stateStorage ? sim::SimRefLoadOp::create(builder, location,

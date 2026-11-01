@@ -135,4 +135,4 @@ module {
 // KILL: simulation.concurrent_report_kill_epoch
 // KILL: simulation.concurrent_kill_epoch_storage
 // KILL: simulation.concurrent_kill_epoch_check
-// ACTION: concurrent assertion action control currently requires a fixed bounded single-clock directive without expect, abort, locals, persistent state, nonoverlapped handoff, multicycle branching, or a vacuous branching-antecedent consequent
+// ACTION: concurrent assertion action control currently requires a fixed bounded single-clock directive without expect, abort, multicycle locals, persistent state, nonoverlapped handoff, multicycle branching, or a vacuous branching-antecedent consequent
