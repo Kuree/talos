@@ -1,6 +1,5 @@
 // CLAUSE: Checker variables hold static state updated by always_ff; nets in a checker are rejected
-// XFAIL: native
-// native tier aborts with "partial eval ownership failed after static NBA lowering"; bytecode prints the expected lines
+// SINCE: 0.1.0
 // RUN: %not %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %S/Inputs/17.7/illegal.sv -o %t.bad.exe
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe

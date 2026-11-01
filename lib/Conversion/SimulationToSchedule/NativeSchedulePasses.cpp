@@ -1082,8 +1082,33 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
       // IEEE 1800-2023 4.5: Reactive actors may remain runtime owners.
       if (actor.getHomeRegion() != sim::EventRegion::Reactive)
         executorDemand = true;
-      auto bytecode = aotBytecodeContinuations.find(actor.getOperation());
       IntegerAttr codeUnit = actor.getCodeUnitIdAttr();
+      // An admitted actor reaches the generated coordinator only through a
+      // direct body: a cloned eval body, a fusion member, a generated region
+      // or an exact runtime checkpoint. Eval bodies are cloned only for
+      // designs the early pipeline certified as cost-effective, so a partial
+      // island can hold an actor, such as a concurrent assertion that spawns
+      // its report, with no body. Its fanout then has no executor, and the
+      // late owner check cannot fall back once static NBA staging exists.
+      bool checkpoint =
+          codeUnit &&
+          runtimeCheckpointContinuations.contains(
+              {codeUnit.getUInt(), entry.continuation});
+      if (!checkpoint && actor.getHomeRegion() != sim::EventRegion::Reactive &&
+          !::talos::schedule::has<::talos::schedule::Field::EvalBody>(actor) &&
+          !::talos::schedule::has<::talos::schedule::Field::EvalFusionGroup>(
+              actor) &&
+          !::talos::schedule::has<schedule::metadata::nativeRegionBody>(
+              actor)) {
+        bytecodeFanoutOwner = true;
+        if (detailedTiming)
+          llvm::errs() << "partial eval disabled: fanout owner without a "
+                          "direct body actor="
+                       << entry.actor_slot
+                       << " continuation=" << entry.continuation << '\n';
+        break;
+      }
+      auto bytecode = aotBytecodeContinuations.find(actor.getOperation());
       if (bytecode == aotBytecodeContinuations.end() ||
           !llvm::is_contained(bytecode->second, entry.continuation) ||
           (codeUnit && runtimeCheckpointContinuations.contains(
