@@ -5984,8 +5984,12 @@ private:
         continue;
       const auto &instance = member.as<slang::ast::InstanceSymbol>();
       const auto *syntax = instance.getSyntax();
+      // IEEE 1800-2023 23.11: a bound instance is not part of the target's
+      // definition, and an instance-targeted bind reaches only some of its
+      // instances, so its assignments are not shared definition syntax.
       if (!instance.arrayPath.empty() ||
           instance.body.flags.has(slang::ast::InstanceFlags::Uninstantiated) ||
+          instance.body.flags.has(slang::ast::InstanceFlags::FromBind) ||
           !syntax ||
           syntax->kind != slang::syntax::SyntaxKind::HierarchicalInstance ||
           !syntax->parent)
