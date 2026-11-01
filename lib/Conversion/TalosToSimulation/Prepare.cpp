@@ -3936,7 +3936,9 @@ void TalosSimPreparePass::runOnOperation() {
     }
     bool sawProceduralWriter = false;
     bool sawContinuousStorageWriter = false;
-    if (hasEdgeSensitive) {
+    // IEEE 1800-2023 30.4.1 allows a variable as the destination of any module
+    // path. With no continuous driver, its procedural writers are the drivers.
+    if (hasEdgeSensitive || spans.empty()) {
       auto descriptor = descriptors.find(output);
       bool directStorage =
           descriptor != descriptors.end() &&
@@ -3997,16 +3999,6 @@ void TalosSimPreparePass::runOnOperation() {
       invalid = true;
       continue;
     }
-    if (proceduralSpans && llvm::any_of(paths, [](const SimpleTimingPath &p) {
-          return !p.edgeSensitive;
-        })) {
-      emitError(getSemanticLocation(path.declaration))
-          << "simple specify paths on direct procedural destinations are not "
-             "executable yet";
-      invalid = true;
-      continue;
-    }
-
     // Every bit named by every path must have one logical owner.  Advance by
     // span endpoints instead of visiting individual bits, so wide packed
     // destinations remain compile-time constant work per driver span.
@@ -4258,13 +4250,13 @@ void TalosSimPreparePass::runOnOperation() {
                                       const SimpleTimingPath &candidate) {
       ProceduralWakeClassification result;
       auto procedure = cast<semantic::SVProceduralBlockSymbolOp>(span.unit);
-      if (procedure.getProcedureKind() ==
-              semantic::SVProceduralBlockKind::AlwaysComb ||
-          procedure.getProcedureKind() ==
-              semantic::SVProceduralBlockKind::AlwaysLatch) {
-        // An implicit-sensitive process is sampled only when every path source
-        // is an actual dependency of the process. Otherwise a later,
-        // unrelated wake could compare against a stale source snapshot.
+      // An implicit-sensitive process is sampled only when every path source
+      // is an actual dependency of the process. Otherwise a later, unrelated
+      // wake could compare against a stale source snapshot. IEEE 1800-2023
+      // 9.4.2.2 gives always @* the sensitivity always_comb has (9.2.2.2.1):
+      // every variable it reads.
+      auto implicitWake = [&]() {
+        ProceduralWakeClassification wake;
         llvm::StringSet<> dependencies;
         span.unit->walk([&](Operation *nested) {
           if (auto referenced =
@@ -4276,9 +4268,14 @@ void TalosSimPreparePass::runOnOperation() {
             llvm::all_of(candidate.inputs, [&](const TimingTerminal &input) {
               return dependencies.contains(input.path);
             });
-        result.kind = observesEverySource ? 2 : 0;
-        return result;
-      }
+        wake.kind = observesEverySource ? 2 : 0;
+        return wake;
+      };
+      if (procedure.getProcedureKind() ==
+              semantic::SVProceduralBlockKind::AlwaysComb ||
+          procedure.getProcedureKind() ==
+              semantic::SVProceduralBlockKind::AlwaysLatch)
+        return implicitWake();
 
       std::function<Operation *(Operation *)> leadingStatement =
           [&](Operation *statement) -> Operation * {
@@ -4295,6 +4292,8 @@ void TalosSimPreparePass::runOnOperation() {
           leading ? getChildren(leading) : SmallVector<Operation *>{};
       if (timedChildren.empty())
         return result;
+      if (isa<semantic::SVImplicitEventControlOp>(timedChildren.front()))
+        return implicitWake();
       // IEEE 1800-2017 9.4.2 and 30.4.3: a procedural control may wake
       // more often than the declared module-path edge, but it must cover
       // every transition that can activate that path. Keep this lattice
@@ -4409,8 +4408,6 @@ void TalosSimPreparePass::runOnOperation() {
     // writers of the same storage are retained as explicit cancellation-only
     // sites so an unqualified procedural write can override a pending path.
     for (const SimpleTimingPath &candidate : paths) {
-      if (!candidate.edgeSensitive)
-        continue;
       bool hasProceduralSpan = false;
       bool hasQualifyingWake = false;
       for (const TimingDriverSpan &span : spans) {
@@ -4434,7 +4431,8 @@ void TalosSimPreparePass::runOnOperation() {
         break;
       if (hasProceduralSpan && !hasQualifyingWake) {
         emitError(getSemanticLocation(candidate.declaration))
-            << "edge-sensitive procedural specify path source is not "
+            << (candidate.edgeSensitive ? "edge-sensitive " : "simple ")
+            << "procedural specify path source is not "
                "observed by a direct event control or implicit sensitivity";
         invalid = true;
         break;

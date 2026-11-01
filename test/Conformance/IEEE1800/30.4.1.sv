@@ -1,6 +1,5 @@
 // CLAUSE: Module paths delay outputs from input ports; internal path sources are rejected
-// XFAIL: *
-// compiler rejects a module path to a variable driven by always @*, which 30.4.1 allows (net or variable output port)
+// SINCE: 0.1.0
 // RUN: %not %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %S/Inputs/30.4.1/source.sv -o %t.bad.exe
 // RUN: %not %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %S/Inputs/30.4.1/destination.sv -o %t.bad.exe
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %s -o %t.exe
