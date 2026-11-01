@@ -1415,19 +1415,18 @@ bool resolveEVCDConflict(const std::vector<TraceVariable::BoundaryDriver> &drive
     return false;
   auto strong = [](int level) { return level >= 5; };
   int level;
-  if (input.value == output.value) {
-    // Same value with the same strength range: a conflict resolved to 0/1 at
-    // the stronger of the two strengths.
-    if (strong(input.level) != strong(output.level))
-      return false;
-    state = input.value ? '1' : '0';
-    level = std::max(input.level, output.level);
-  } else if (strong(input.level) && !strong(output.level)) {
+  if (strong(input.level) && !strong(output.level)) {
+    // Different strength ranges pick the state whatever the two values are.
     state = input.value ? 'u' : 'd';
     level = input.level;
   } else if (!strong(input.level) && strong(output.level)) {
     state = output.value ? 'h' : 'l';
     level = output.level;
+  } else if (input.value == output.value) {
+    // Same value with the same strength range: a conflict resolved to 0/1 at
+    // the stronger of the two strengths.
+    state = input.value ? '1' : '0';
+    level = std::max(input.level, output.level);
   } else {
     return false;
   }
