@@ -65,6 +65,7 @@ struct StateLayout {
     bool fourState;
     sim::NetResolutionKind resolution;
     std::optional<sim::Strength> chargeStrength;
+    std::optional<uint32_t> chargeCapacity;
     llvm::SmallVector<std::optional<std::array<uint64_t, 3>>> propagationDelays;
   };
   struct Driver {

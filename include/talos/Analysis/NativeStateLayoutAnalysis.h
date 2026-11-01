@@ -45,6 +45,8 @@ struct NativeStateLayoutAnalysis {
     bool fourState;
     sim::NetResolutionKind resolution;
     std::optional<sim::Strength> chargeStrength;
+    // The `default_trireg_strength integer, which orders nets of one strength.
+    std::optional<uint32_t> chargeCapacity;
     mlir::SmallVector<std::optional<std::array<uint64_t, 3>>> propagationDelays;
   };
   struct Driver {

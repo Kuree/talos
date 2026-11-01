@@ -53,6 +53,26 @@ static int32_t vpiDriveStrength(semantic::SVDriveStrength strength) {
   llvm_unreachable("unknown SystemVerilog drive strength");
 }
 
+/// IEEE 1800-2023 E.3: `default_trireg_strength gives the relative strength of
+/// the capacitance of a trireg net declared without a charge strength.
+static IntegerAttr getDefaultTriregStrength(semantic::SVNetSymbolOp net) {
+  auto body = net->getParentOfType<semantic::SVInstanceBodySymbolOp>();
+  return net.getChargeStrength() || !body
+             ? IntegerAttr{}
+             : sim::get<sim::metadata::DefaultTriregStrength>(body);
+}
+
+/// The charge strength of a trireg net. The directive's integer places it among
+/// the small, medium and large strength levels 1, 2 and 4 of Table 28-7.
+static semantic::SVChargeStrength
+getEffectiveChargeStrength(semantic::SVNetSymbolOp net) {
+  if (IntegerAttr strength = getDefaultTriregStrength(net))
+    return strength.getInt() >= 4   ? semantic::SVChargeStrength::Large
+           : strength.getInt() >= 2 ? semantic::SVChargeStrength::Medium
+                                    : semantic::SVChargeStrength::Small;
+  return net.getChargeStrength().value_or(semantic::SVChargeStrength::Medium);
+}
+
 static sim::Strength lowerChargeStrength(semantic::SVChargeStrength strength) {
   switch (strength) {
   case semantic::SVChargeStrength::Small:
@@ -1864,8 +1884,7 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
 
     int32_t chargeStrength = 0;
     if (net.getNetKind() == semantic::SVNetKind::TriReg) {
-      switch (net.getChargeStrength().value_or(
-          semantic::SVChargeStrength::Medium)) {
+      switch (getEffectiveChargeStrength(net)) {
       case semantic::SVChargeStrength::Small:
         chargeStrength = 0x02;
         break;
@@ -4985,11 +5004,12 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
         resolution == sim::NetResolutionKind::TriReg
             ? sim::StrengthAttr::get(
                   builder.getContext(),
-                  net.getChargeStrength()
-                      ? lowerChargeStrength(*net.getChargeStrength())
-                      : sim::Strength::Medium)
+                  lowerChargeStrength(getEffectiveChargeStrength(net)))
             : sim::StrengthAttr{},
         UnitAttr{}, retainedVPIType, sourceNettype);
+    if (resolution == sim::NetResolutionKind::TriReg)
+      if (IntegerAttr strength = getDefaultTriregStrength(net))
+        sim::set<sim::metadata::DefaultTriregStrength>(declaration, strength);
     cov::mark<cov::SourceAuthored>(declaration);
     if (retainCoverageSourceTypes)
       cov::set<cov::SourceType>(declaration,

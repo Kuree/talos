@@ -201,7 +201,9 @@ SmallVector<uint8_t> serializeBytecodeImage(
                          encodeResolution(net.resolution, false) |
                          (delayed ? uint32_t{1} << 3 : 0) |
                          (netDelayBitwise[index] ? uint32_t{1} << 4 : 0) |
-                         (encodeChargeStrength(net.chargeStrength) << 7));
+                         (encodeChargeStrength(net.chargeStrength) << 7) |
+                         (net.chargeCapacity ? (*net.chargeCapacity + 1) << 16
+                                             : 0));
     append64(output, net.offset);
     append64(output, netDelayOffsets[index]);
     append64(output, net.width);

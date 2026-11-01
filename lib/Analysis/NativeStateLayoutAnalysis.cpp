@@ -172,6 +172,12 @@ NativeStateLayoutAnalysis::compute(ModuleOp module) {
                      declaration.getChargeStrength().value_or(
                          sim::Strength::Medium))
                : std::nullopt,
+           sim::get<sim::metadata::DefaultTriregStrength>(declaration.getOperation())
+               ? std::optional<uint32_t>(
+                     sim::get<sim::metadata::DefaultTriregStrength>(
+                         declaration.getOperation())
+                         .getInt())
+               : std::nullopt,
            propagationDelays});
     } else if (auto declaration = dyn_cast<sim::SimDriverDeclOp>(operation)) {
       auto found = layout.nets.find(declaration.getNetId());

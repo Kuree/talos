@@ -1464,11 +1464,33 @@ public:
         Value chargeUnknown;
         if (resolution == sim::NetResolutionKind::TriReg) {
           Value chargeStrengths = strengthConstant(strengthIndexBit(7));
+          // IEEE 1800-2023 E.3: within one charge strength, the larger relative
+          // strength of the capacitance decides. A net with no integer has the
+          // strength level itself.
+          auto capacityOf = [](const NativeStateLayout::Net &net) {
+            return net.chargeCapacity
+                       ? *net.chargeCapacity
+                       : static_cast<uint32_t>(*net.chargeStrength);
+          };
+          llvm::SmallDenseMap<unsigned, uint32_t> largestCapacity;
           for (const analysis::NetBit &member : component) {
             const NativeStateLayout::Net *memberNet =
                 lookup.netByID.lookup(member.net);
             if (!memberNet || member.offset >= memberNet->width ||
                 !memberNet->chargeStrength)
+              continue;
+            uint32_t &largest =
+                largestCapacity[static_cast<unsigned>(*memberNet->chargeStrength)];
+            largest = std::max(largest, capacityOf(*memberNet));
+          }
+          for (const analysis::NetBit &member : component) {
+            const NativeStateLayout::Net *memberNet =
+                lookup.netByID.lookup(member.net);
+            if (!memberNet || member.offset >= memberNet->width ||
+                !memberNet->chargeStrength)
+              continue;
+            if (capacityOf(*memberNet) <
+                largestCapacity[static_cast<unsigned>(*memberNet->chargeStrength)])
               continue;
             Value memberHandle = arith::ConstantOp::create(
                 rewriter, op.getLoc(), rewriter.getI64Type(),

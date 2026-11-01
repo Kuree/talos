@@ -180,7 +180,7 @@ FailureOr<StateLayout> buildStateLayout(sim::SimDesignOp design) {
     netLayoutIndices.try_emplace(net.id, result.netLayouts.size());
     result.netLayouts.push_back({net.id, net.offset, net.width, net.fourState,
                                  net.resolution, net.chargeStrength,
-                                 net.propagationDelays});
+                                 net.chargeCapacity, net.propagationDelays});
   }
   for (const auto &driver : analyzed->driverLayouts) {
     auto net = netLayoutIndices.find(driver.netId);

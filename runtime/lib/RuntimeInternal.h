@@ -1768,6 +1768,9 @@ struct NetAliasCache {
   std::unordered_map<uint64_t, std::vector<uint64_t>> uniformDelayedRootsByRoot;
   std::unordered_map<uint64_t, uint8_t> resolutionByRoot;
   std::unordered_map<uint64_t, uint8_t> chargeStrengthByBit;
+  // The `default_trireg_strength of each trireg bit that has one (IEEE 1800-2023
+  // E.3).
+  std::unordered_map<uint64_t, uint8_t> chargeCapacityByBit;
   std::vector<NetAliasRange> nets;
   std::vector<NetAliasRange> drivers;
   std::vector<NetStrengthDriverPairRange> strengthDriverPairs;

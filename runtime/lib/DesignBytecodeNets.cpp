@@ -195,9 +195,13 @@ NetAliasCache *getNetAliasCache(const Image &image, talos_rt_context *context) {
         resolution = 0; // tri and wire have identical resolution.
       for (uint64_t bit = 0; bit != record.planeSize; ++bit) {
         resolutionByBit.emplace(record.valueOffset + bit, resolution);
-        if (resolution == 9)
+        if (resolution == 9) {
           cache.chargeStrengthByBit.emplace(
               record.valueOffset + bit, decodeChargeStrength(record.argument));
+          if (uint32_t capacity = (record.argument >> 16) & 0x1ff)
+            cache.chargeCapacityByBit.emplace(
+                record.valueOffset + bit, static_cast<uint8_t>(capacity - 1));
+        }
       }
     } else if (record.function == kDriverStateDescriptor) {
       if ((record.argument & (uint32_t{1} << 11)) != 0 && !drivers.empty()) {
@@ -1034,6 +1038,30 @@ bool resolveNetRoots(const NetAliasCache &cache, talos_rt_context *context,
       // 6.6.4.1: the charge spreads over the capacitive network, the trireg
       // nets that conducting pass switches connect to this one.
       uint16_t chargeStrengths = strengthBit(0);
+      // IEEE 1800-2023 E.3: within one charge strength, the larger relative
+      // strength of the capacitance decides. A net with no integer has the
+      // strength level itself.
+      std::array<unsigned, 8> largestCapacity{};
+      auto capacityOf = [&](uint64_t member, uint8_t strength) -> unsigned {
+        auto capacity = cache.chargeCapacityByBit.find(member);
+        return capacity == cache.chargeCapacityByBit.end() ? strength
+                                                           : capacity->second;
+      };
+      bool comparingCapacity = !cache.chargeCapacityByBit.empty();
+      auto noteCapacities = [&](uint64_t sourceRoot, uint8_t,
+                                uint8_t possibleResistiveEdges) {
+        auto sourceMembers = cache.members.find(sourceRoot);
+        if (possibleResistiveEdges == 5 || sourceMembers == cache.members.end())
+          return true;
+        for (uint64_t member : sourceMembers->second) {
+          auto strength = cache.chargeStrengthByBit.find(member);
+          if (strength != cache.chargeStrengthByBit.end())
+            largestCapacity[strength->second] =
+                std::max(largestCapacity[strength->second],
+                         capacityOf(member, strength->second));
+        }
+        return true;
+      };
       auto accumulateCharges = [&](uint64_t sourceRoot, uint8_t resistiveEdges,
                                    uint8_t possibleResistiveEdges) {
         if (possibleResistiveEdges == 5)
@@ -1044,6 +1072,9 @@ bool resolveNetRoots(const NetAliasCache &cache, talos_rt_context *context,
         for (uint64_t member : sourceMembers->second) {
           auto strength = cache.chargeStrengthByBit.find(member);
           if (strength == cache.chargeStrengthByBit.end())
+            continue;
+          if (comparingCapacity && capacityOf(member, strength->second) <
+                                       largestCapacity[strength->second])
             continue;
           uint16_t stored = storedChargeStrengths(
               bit(context->stateValue, member),
@@ -1064,14 +1095,23 @@ bool resolveNetRoots(const NetAliasCache &cache, talos_rt_context *context,
         if (target == roots.end() || *target != root ||
             passComponent.reachableSources.size() != roots.size())
           return false;
-        for (const NetPassComponent::ReachableSource &source :
-             passComponent.reachableSources[target - roots.begin()])
+        const auto &sources =
+            passComponent.reachableSources[target - roots.begin()];
+        if (comparingCapacity)
+          for (const NetPassComponent::ReachableSource &source : sources)
+            if (source.index < roots.size())
+              noteCapacities(roots[source.index], source.definiteReduction,
+                             source.possibleReduction);
+        for (const NetPassComponent::ReachableSource &source : sources)
           if (source.index >= roots.size() ||
               !accumulateCharges(roots[source.index], source.definiteReduction,
                                  source.possibleReduction))
             return false;
-      } else if (!accumulateCharges(root, 0, 0)) {
-        return false;
+      } else {
+        if (comparingCapacity)
+          noteCapacities(root, 0, 0);
+        if (!accumulateCharges(root, 0, 0))
+          return false;
       }
       // Only a known 0 or 1 charge survives; anything else, including no
       // charge at all, is x.

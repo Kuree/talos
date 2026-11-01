@@ -2225,7 +2225,10 @@ bool validateImage(const Image &image) {
     if (bitwiseDelay && (net.planeSize > UINT64_MAX / 24 ||
                          (delayBytes = net.planeSize * 24) == 0))
       return reject(__LINE__, "invalid bitwise net-delay size");
-    if ((net.argument & ~uint32_t{511}) != 0 ||
+    // Bits 16 to 24 hold a `default_trireg_strength plus one, on a trireg.
+    uint32_t capacity = (net.argument >> 16) & 0x1ff;
+    if ((net.argument & ~(uint32_t{511} | (uint32_t{0x1ff} << 16))) != 0 ||
+        capacity > 251 || (capacity != 0 && decodeNetResolution(net.argument) != 9) ||
         decodeNetResolution(net.argument) > 9 || net.planeSize == 0 ||
         (decodeNetResolution(net.argument) == 9 && (net.argument & 1) == 0) ||
         (decodeNetResolution(net.argument) != 9 && chargeStrength != 0) ||
