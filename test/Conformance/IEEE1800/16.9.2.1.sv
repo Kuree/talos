@@ -1,6 +1,5 @@
 // CLAUSE: empty repeat concat
-// XFAIL: *
-// The rule that (empty ##0 seq) never matches is rejected as "##0 empty fusion", not executed.
+// SINCE: 0.1.0
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe
 // (empty ##1 y) is (##0 y), so E1 hits at each y while E2, with x[*1], needs x a tick before.

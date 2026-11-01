@@ -1658,6 +1658,19 @@ static LogicalResult appendFixedSequence(FixedSequence &result,
   return success();
 }
 
+/// IEEE 1800-2023 16.9.2.1: `(empty ##0 seq)` and `(seq ##0 empty)` do not
+/// result in a match. Appending `nested` to `result` at `offset` is such a
+/// fusion when exactly one of them is the empty match and the delay is zero.
+static bool isNeverMatchingEmptyFusion(const FixedSequence &result,
+                                       const FixedSequence &nested,
+                                       uint64_t offset) {
+  if (offset != 0)
+    return false;
+  if (nested.emptyMatch)
+    return !result.emptyMatch && !result.ages.empty();
+  return result.emptyMatch && !nested.ages.empty();
+}
+
 /// Give every first_match scope in `sequence` a deterministic identity for
 /// one Cartesian activation. Alternatives belonging to the same activation
 /// receive the same component, while a ranged prefix or placement receives a
@@ -2009,6 +2022,9 @@ compileFixedSequenceAlternatives(Operation *operation,
             qualifyFirstMatchGroups(qualifiedSuffix, concat.getOperation(),
                                     activation);
             FixedSequence combined = prefix;
+            if (isNeverMatchingEmptyFusion(combined, qualifiedSuffix,
+                                           static_cast<uint64_t>(offset)))
+              continue;
             if (failed(appendFixedSequence(combined, qualifiedSuffix,
                                            static_cast<uint64_t>(offset))))
               return failure();
@@ -2270,6 +2286,10 @@ compileFixedSequenceAlternatives(Operation *operation,
       compileFixedSequenceAlternatives(operands.front(), resolvedClock);
   FailureOr<FixedSequenceAlternatives> rhs =
       compileFixedSequenceAlternatives(operands.back(), resolvedClock);
+  // A side that never matches (16.9.2.1) contributes no alternative to an or.
+  if (succeeded(lhs) && succeeded(rhs) && (lhs->empty() || rhs->empty()) &&
+      binary.getOperatorKind() == semantic::SVAssertionBinaryOperator::Or)
+    return lhs->empty() ? std::move(*rhs) : std::move(*lhs);
   if (failed(lhs) || failed(rhs) || lhs->empty() || rhs->empty())
     return failure();
 
