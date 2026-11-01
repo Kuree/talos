@@ -757,6 +757,13 @@ void TalosSimPreparePass::runOnOperation() {
     signalPassFailure();
     return;
   }
+  llvm::StringSet<> explicitDelayedSources;
+  if (!sim::has<sim::metadata::NoNegativeTimingChecks>(module) &&
+      failed(synthesizeExplicitDelayedDrivers(semanticRoot, coveragePlanBuilder,
+                                              explicitDelayedSources))) {
+    signalPassFailure();
+    return;
+  }
   bool invalid = false;
 
   // IEEE 1800-2023 8.19: an instance constant takes its value once, in the
@@ -3285,10 +3292,9 @@ void TalosSimPreparePass::runOnOperation() {
           property, builder.getArrayAttr(updated));
     }
 
-  // IEEE 1800-2023 31.9.4: without negative timing checks, and whenever the
-  // solved delay is zero, the delayed reference and data signals are copies of
-  // the originals. A negative check with a nonzero delay needs a delayed
-  // driver for the declared net, which is not executable yet.
+  // IEEE 1800-2023 31.9.4: without negative timing checks, and for a check with
+  // no negative limit, the delayed reference and data signals are copies of the
+  // originals. Those of a negative check already have drivers (31.9.1).
   SmallVector<semantic::SVSystemTimingCheckSymbolOp> delayedSignalCopies;
   bool negativeChecksEnabled =
       !sim::has<sim::metadata::NoNegativeTimingChecks>(module);
@@ -3307,17 +3313,8 @@ void TalosSimPreparePass::runOnOperation() {
       check->removeAttr("talos.negative_timing_check");
       negative = false;
     }
-    if (!check->hasAttr("talos.delayed_signal_args"))
-      return;
-    if (negative) {
-      emitError(getSemanticLocation(check))
-          << "IEEE 1800-2023 31.9.1 explicit delayed_reference/delayed_data "
-             "of a negative timing check need a delayed driver, which is not "
-             "executable yet; use --no-negative-timing-checks (31.9.4)";
-      invalid = true;
-      return;
-    }
-    delayedSignalCopies.push_back(check);
+    if (check->hasAttr("talos.delayed_signal_args"))
+      delayedSignalCopies.push_back(check);
   });
   if (invalid)
     return abort();
@@ -4125,6 +4122,19 @@ void TalosSimPreparePass::runOnOperation() {
               "implicit negative timing-check delayed signal"),
           schedule::ComputeObservabilityKindAttr{},
           sim::VPITypeSemanticsAttr{});
+    }
+    // IEEE 1800-2023 31.9.1: an explicit delayed signal carries the one delayed
+    // copy of its source, which a zero solved delay leaves as the source itself.
+    for (const auto &terminal : negativeTimingTerminals) {
+      if (!explicitDelayedSources.contains(terminal.sourcePath))
+        continue;
+      auto copy = terminal.delayTicks == 0
+                      ? descriptors.end()
+                      : descriptors.find((Twine("__talos_negative_timing_delay_") +
+                                          Twine(terminal.delayedStorage))
+                                             .str());
+      descriptors[getExplicitDelayedSignalPath(terminal.sourcePath)] =
+          copy == descriptors.end() ? terminal.source : copy->second;
     }
     for (NegativeTimingCheckPlan &check : negativeChecks) {
       auto indices =

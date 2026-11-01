@@ -904,6 +904,95 @@ LogicalResult materializeProceduralExpressionRelations(
   }
   return failure(invalid);
 }
+std::string getExplicitDelayedSignalPath(StringRef sourcePath) {
+  return (Twine("__talos_negative_timing_explicit|") + sourcePath).str();
+}
+
+LogicalResult
+synthesizeExplicitDelayedDrivers(semantic::SVRootSymbolOp root, Builder &builder,
+                                 llvm::StringSet<> &delayedSources) {
+  SmallVector<semantic::SVSystemTimingCheckSymbolOp> checks;
+  int64_t nextNodeId = 0;
+  root->walk([&](Operation *op) {
+    if (auto id = op->getAttrOfType<IntegerAttr>("node_id"))
+      nextNodeId = std::max(nextNodeId, id.getInt() + 1);
+    if (auto check = dyn_cast<semantic::SVSystemTimingCheckSymbolOp>(op);
+        check && check->hasAttr("talos.negative_timing_check") &&
+        check->hasAttr("talos.delayed_signal_args"))
+      checks.push_back(check);
+  });
+  auto cloneWithFreshNodes = [&](Operation *source) {
+    Operation *copy = source->clone();
+    copy->walk([&](Operation *nested) {
+      if (nested->hasAttr("node_id"))
+        nested->setAttr("node_id", builder.getI64IntegerAttr(nextNodeId++));
+    });
+    return copy;
+  };
+  unsigned nextDriver = 0;
+  for (semantic::SVSystemTimingCheckSymbolOp check : checks) {
+    auto children = check->getAttrOfType<DenseI64ArrayAttr>(
+        "timing_check_arg_expression_children");
+    SmallVector<Operation *> roots = getChildren(check);
+    for (auto [original, delayed] : {std::pair{0u, 7u}, std::pair{1u, 8u}}) {
+      if (!children || delayed >= children.size() || children[delayed] < 0)
+        continue;
+      Operation *source = roots[children[original]];
+      while (isa<semantic::SVConversionExpressionOp>(source))
+        source = getChildren(source).front();
+      auto assignment =
+          dyn_cast<semantic::SVAssignmentExpressionOp>(roots[children[delayed]]);
+      SmallVector<Operation *> sides =
+          assignment ? getChildren(assignment) : SmallVector<Operation *>{};
+      auto path = source->getAttrOfType<StringAttr>("referenced_path");
+      auto sourceType = source->getAttrOfType<TypeAttr>("semantic_type");
+      auto targetType = sides.size() == 2 ? sides.front()->getAttrOfType<TypeAttr>(
+                                                "semantic_type")
+                                          : TypeAttr{};
+      if (!path || !sourceType || !targetType ||
+          getSemanticPackedWidth(sourceType.getValue()) !=
+              getSemanticPackedWidth(targetType.getValue()) ||
+          !getSemanticPackedWidth(sourceType.getValue()))
+        return emitError(getSemanticLocation(check))
+               << "IEEE 1800-2023 31.9.1 delayed signal must have the width of "
+                  "the signal it delays, which must be named directly";
+      delayedSources.insert(path.getValue());
+      // The driver reads a descriptor that preparation binds to the delayed
+      // copy of the source once the delays are solved.
+      Operation *driven = cloneWithFreshNodes(assignment);
+      SmallVector<Operation *> drivenSides = getChildren(driven);
+      Operation *read = cloneWithFreshNodes(source);
+      read->setAttr("referenced_path", builder.getStringAttr(
+                                           getExplicitDelayedSignalPath(
+                                               path.getValue())));
+      drivenSides[1]->getBlock()->getOperations().insert(
+          drivenSides[1]->getIterator(), read);
+      drivenSides[1]->erase();
+      OperationState state(check.getLoc(),
+                           semantic::SVContinuousAssignSymbolOp::getOperationName());
+      for (NamedAttribute attribute : check->getAttrs()) {
+        StringRef name = attribute.getName().getValue();
+        if (name == "hierarchical_name" || name == "original_source_range" ||
+            name.starts_with("source_"))
+          state.addAttribute(attribute.getName(), attribute.getValue());
+      }
+      state.addAttribute(
+          SymbolTable::getSymbolAttrName(),
+          builder.getStringAttr((Twine("__talos_delayed_signal_driver_") +
+                                 Twine(nextDriver++))
+                                    .str()));
+      state.addAttribute("node_id", builder.getI64IntegerAttr(nextNodeId++));
+      Block *body = new Block();
+      state.addRegion()->push_back(body);
+      body->push_back(driven);
+      check->getBlock()->getOperations().insertAfter(check->getIterator(),
+                                                     Operation::create(state));
+    }
+    check->removeAttr("talos.delayed_signal_args");
+  }
+  return success();
+}
+
 LogicalResult resolveInferredAssertionQueries(semantic::SVRootSymbolOp root,
                                               Builder &builder) {
   bool invalid = false;

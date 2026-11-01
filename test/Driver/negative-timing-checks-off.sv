@@ -1,5 +1,5 @@
 // RUN: talos --no-negative-timing-checks -O0 -emit-sim %s 2>&1 | FileCheck %s
-// RUN: not talos -O0 -emit-sim %s 2>&1 | FileCheck %s --check-prefix=ON
+// RUN: talos -O0 -emit-sim %s 2>&1 | FileCheck %s --check-prefix=ON
 
 module neg_cell(input wire c, d, output reg q = 0);
   timeunit 1ns; timeprecision 1ps;
@@ -23,5 +23,6 @@ endmodule
 // CHECK: simulation.net.connect.decl 0 in {{[0-9]+}} 1[0] to 3[0] width 1 reversed = false provenance "alias"
 // CHECK: simulation.net.connect.decl 1 in {{[0-9]+}} 2[0] to 4[0] width 1 reversed = false provenance "alias"
 // CHECK: simulation.timing_check_arg_ticks = array<i64: 0, 0, 0, 5000,
-// With negative checks on, explicit delayed signals need a delayed driver.
-// ON: error: IEEE 1800-2023 31.9.1 explicit delayed_reference/delayed_data of a negative timing check need a delayed driver
+// With negative checks on, the delayed signals have drivers of the delayed copies.
+// ON-DAG: simulation.driver.decl {{.*}}hierarchy "top.dut.dc"
+// ON-DAG: simulation.driver.decl {{.*}}hierarchy "top.dut.dd"

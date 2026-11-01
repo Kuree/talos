@@ -79,6 +79,19 @@ mlir::LogicalResult materializeProceduralExpressionRelations(
     sim::SimDesignOp design, const PreparedUnits &units,
     const llvm::StringMap<DescriptorInfo> &descriptors,
     mlir::OpBuilder &builder);
+/// The descriptor path that names the delayed copy of the timing-check signal at
+/// `sourcePath`.
+std::string getExplicitDelayedSignalPath(llvm::StringRef sourcePath);
+
+/// IEEE 1800-2023 31.9.1: an explicit delayed_reference or delayed_data of a
+/// negative timing check carries the delayed copy of its signal. Add a
+/// continuous assignment of that copy to each one, and report the signals whose
+/// delayed copies need a name.
+mlir::LogicalResult
+synthesizeExplicitDelayedDrivers(semantic::SVRootSymbolOp root,
+                                 mlir::Builder &builder,
+                                 llvm::StringSet<> &delayedSources);
+
 /// IEEE 1800-2023 16.14.7: replace each $inferred_clock and $inferred_disable
 /// reached through a concurrent assertion's property with the event from clock
 /// flow to that point, or the scope's default disable condition or 1'b0.
