@@ -2508,6 +2508,38 @@ UnitLowering::lowerSystemCall(semantic::SVCallExpressionOp op) {
     return convertResult(*value);
   }
 
+  // IEEE 1800-2023 D.3: $getpattern yields the stored memory-element pattern;
+  // the continuous assignment it feeds re-evaluates whenever the element or
+  // its index changes, like any other operand.
+  if (name == "$getpattern") {
+    if (children.size() != 1) {
+      emitError(location) << name << " requires exactly one argument";
+      return failure();
+    }
+    // D.3: it may only be used in a continuous assignment whose left-hand
+    // side is a concatenation, with a memory element reference as argument.
+    Operation *use = op->getParentOp();
+    while (isa_and_nonnull<semantic::SVConversionExpressionOp>(use))
+      use = use->getParentOp();
+    auto assignment = dyn_cast_or_null<semantic::SVAssignmentExpressionOp>(use);
+    bool placed =
+        assignment && function.getEntryKind() == sim::EntryKind::Continuous &&
+        isa<semantic::SVConcatenationExpressionOp>(
+            getChildren(assignment).front()) &&
+        isa<semantic::SVElementSelectExpressionOp>(children.front());
+    if (!placed) {
+      emitError(location)
+          << name
+          << " may only be used in a continuous assignment to a concatenation "
+             "with a memory element as its argument";
+      return failure();
+    }
+    FailureOr<Value> value = lowerExpression(children.front());
+    if (failed(value))
+      return failure();
+    return convertResult(*value);
+  }
+
   auto lowerBitstream = [&](Operation *child) -> FailureOr<Value> {
     FailureOr<Value> value = lowerExpression(child);
     if (failed(value))
