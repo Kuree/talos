@@ -271,16 +271,26 @@ UnitLowering::lowerSystemTimingCheck(ArrayRef<Operation *> roots) {
 
   if (width || noChange) {
     int32_t edge = eventEdges.front();
-    if (edge != static_cast<int32_t>(sim::EdgeKind::Posedge) &&
+    bool descriptors = width && (edge & ~0x3f) == 0x100;
+    if (!descriptors && edge != static_cast<int32_t>(sim::EdgeKind::Posedge) &&
         edge != static_cast<int32_t>(sim::EdgeKind::Negedge))
       return function.emitError(
-          width ? "$width requires a canonical posedge or negedge event"
+          width ? "$width requires a posedge, negedge or edge descriptor event"
                 : "$nochange requires a canonical posedge or negedge "
                   "reference event");
     handles.push_back(handles.front());
-    eventEdges.push_back(edge == static_cast<int32_t>(sim::EdgeKind::Posedge)
-                             ? static_cast<int32_t>(sim::EdgeKind::Negedge)
-                             : static_cast<int32_t>(sim::EdgeKind::Posedge));
+    // IEEE 1800-2023 31.4.4: the data event is the signal's opposite edge. The
+    // descriptor classes 01/0x/10/1x/x0/x1 oppose pairwise in that order.
+    int32_t opposite =
+        edge == static_cast<int32_t>(sim::EdgeKind::Posedge)
+            ? static_cast<int32_t>(sim::EdgeKind::Negedge)
+            : static_cast<int32_t>(sim::EdgeKind::Posedge);
+    if (descriptors) {
+      int32_t mask = edge & 0x3f;
+      opposite = 0x100 | (mask & 0x3) << 2 | (mask & 0xc) >> 2 |
+                 (mask & 0x10) << 1 | (mask & 0x20) >> 1;
+    }
+    eventEdges.push_back(opposite);
     conditionIndices.push_back(-1);
     if (eventConditions.front()) {
       // Each derived $width/$nochange event samples the same Clause 31.7

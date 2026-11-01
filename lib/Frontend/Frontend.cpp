@@ -3217,12 +3217,23 @@ private:
       bool customControlledEdge = hasRequiredArguments &&
                                   (effectiveEdges[0] & ~0x3f) == 0x100 &&
                                   (effectiveEdges[0] & 0x3f) != 0;
+      // IEEE 1800-2023 31.4.4: the $width data event is the reference signal
+      // with the opposite edge, which a descriptor set defines only when none
+      // of its transitions is also the opposite of another.
+      bool oppositeEdgeDefined = false;
+      if (width && customControlledEdge) {
+        uint32_t mask = effectiveEdges[0] & 0x3f;
+        uint32_t opposite = (mask & 0x3) << 2 | (mask & 0xc) >> 2 |
+                            (mask & 0x10) << 1 | (mask & 0x20) >> 1;
+        oppositeEdgeDefined = (mask & opposite) == 0;
+      }
       bool controlledEdge =
           hasRequiredArguments &&
           (effectiveEdges[0] ==
                static_cast<int32_t>(slangir::EdgeKind::PosEdge) ||
            effectiveEdges[0] ==
                static_cast<int32_t>(slangir::EdgeKind::NegEdge) ||
+           oppositeEdgeDefined ||
            (period && (effectiveEdges[0] ==
                            static_cast<int32_t>(slangir::EdgeKind::BothEdges) ||
                        customControlledEdge)));

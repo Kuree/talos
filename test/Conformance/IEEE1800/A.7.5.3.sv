@@ -1,6 +1,5 @@
 // CLAUSE: Explicit edge list and timing-check condition
-// XFAIL: *
-// Explicit timing-check edge lists are not executable yet.
+// SINCE: 0.1.0
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier  %s -o %t.exe
 // RUN: %t.exe
 // CHECK: {{^PASS$}}
