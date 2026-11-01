@@ -777,6 +777,57 @@ void TalosSimPreparePass::runOnOperation() {
       });
   }
 
+  // IEEE 1800-2023 D.3: $getpattern "may only be used in a continuous
+  // assignment statement where the left-hand side is a concatenation of scalar
+  // nets and the argument to the system function is a memory element
+  // reference."
+  semanticRoot->walk([&](semantic::SVCallExpressionOp call) {
+    if (!call.getIsSystemCall() || call.getCalleeName() != "$getpattern")
+      return;
+    Operation *use = call->getParentOp();
+    while (isa_and_nonnull<semantic::SVConversionExpressionOp>(use))
+      use = use->getParentOp();
+    auto assignment = dyn_cast_or_null<semantic::SVAssignmentExpressionOp>(use);
+    SmallVector<Operation *> operands =
+        assignment ? getChildren(assignment) : SmallVector<Operation *>{};
+    auto target =
+        operands.empty()
+            ? semantic::SVConcatenationExpressionOp{}
+            : dyn_cast<semantic::SVConcatenationExpressionOp>(operands.front());
+    bool placed = target && isa_and_nonnull<semantic::SVContinuousAssignSymbolOp>(
+                                assignment->getParentOp());
+    auto isScalarNet = [&](Operation *operand) {
+      auto reference = operand->getAttrOfType<SymbolRefAttr>("referenced_symbol");
+      auto type = operand->getAttrOfType<TypeAttr>("semantic_type");
+      auto symbol = reference
+                        ? semanticSymbols.find(reference.getLeafReference())
+                        : semanticSymbols.end();
+      return symbol != semanticSymbols.end() &&
+             isa<semantic::SVNetSymbolOp>(symbol->second) && type &&
+             getSemanticPackedWidth(type.getValue()) == 1;
+    };
+    placed = placed && llvm::all_of(getChildren(target), isScalarNet);
+    SmallVector<Operation *> arguments = getChildren(call);
+    auto element =
+        arguments.size() == 1
+            ? dyn_cast<semantic::SVElementSelectExpressionOp>(arguments.front())
+            : semantic::SVElementSelectExpressionOp{};
+    SmallVector<Operation *> selected =
+        element ? getChildren(element) : SmallVector<Operation *>{};
+    auto arrayType = selected.empty()
+                         ? TypeAttr{}
+                         : selected.front()->getAttrOfType<TypeAttr>(
+                               "semantic_type");
+    // A select of a packed vector names a bit, not a memory element.
+    if (!placed || !arrayType || getSemanticPackedWidth(arrayType.getValue())) {
+      emitError(getSemanticLocation(call))
+          << "$getpattern may only be used in a continuous assignment to a "
+             "concatenation of scalar nets with a memory element as its "
+             "argument";
+      invalid = true;
+    }
+  });
+
   // IEEE 1800-2023 20.17.2: $stacktrace reports the call stack from its
   // caller up to the top-level process. Generated code keeps no activation
   // records, so record the frames only where one chain of call sites is known
