@@ -1,0 +1,27 @@
+(DELAYFILE
+  (SDFVERSION "4.0")
+  (TIMESCALE 1ns)
+  (CELL
+    (CELLTYPE "sdf_match_cell")
+    (INSTANCE dut)
+    (DELAY (ABSOLUTE
+      (COND s (IOPATH a y (5)))
+      (COND !s (IOPATH a y (7)))
+      (CONDELSE (IOPATH a z (9)))
+      (DEVICE w (6))
+      (PATHPULSEPERCENT b v (20) (50))))
+    (TIMINGCHECK
+      (SETUPHOLD d (COND mode (posedge c)) (2) (3))
+      (SETUPHOLD d (COND !mode (posedge c)) (40) (41))
+      (SETUP d (01 c) (4))
+      (HOLD d (10 c) (5))
+      (RECOVERY (0z r) (posedge c) (6))
+      (RECREM r (posedge c) (7) (8) (SCOND s) (CCOND !m2)))
+    (LABEL (ABSOLUTE (T 8))))
+  (CELL
+    (CELLTYPE "sdf_match_top")
+    (INSTANCE)
+    (DELAY (ABSOLUTE
+      (NETDELAY dut.net_load (3))
+      (PORT dut.port_load (4))
+      (PORT dut.inout_load (5))))))

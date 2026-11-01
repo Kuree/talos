@@ -3584,15 +3584,22 @@ void TalosSimPreparePass::runOnOperation() {
     SmallVector<int64_t, 12> normalizedDelays(delays.asArrayRef());
     auto globalReject = sim::get<sim::metadata::PulseRejectPercent>(module);
     auto globalError = sim::get<sim::metadata::PulseErrorPercent>(module);
+    // A percentage of a delay need not be a whole time step, so it rounds to
+    // the design precision like any other time value (IEEE 1800-2023 3.14.1).
+    auto roundToPrecision = [&](int64_t femtoseconds) {
+      uint64_t value = static_cast<uint64_t>(femtoseconds);
+      return static_cast<int64_t>((value + designPrecisionFs / 2) /
+                                  designPrecisionFs * designPrecisionFs);
+    };
     auto percentLimits = [&](IntegerAttr percent) {
       SmallVector<int64_t, 12> result;
       result.reserve(normalizedDelays.size());
       uint64_t value = percent ? percent.getUInt() : 100;
       for (int64_t delay : normalizedDelays) {
         uint64_t unsignedDelay = static_cast<uint64_t>(delay);
-        result.push_back(
+        result.push_back(roundToPrecision(
             static_cast<int64_t>((unsignedDelay / 100) * value +
-                                 ((unsignedDelay % 100) * value) / 100));
+                                 ((unsignedDelay % 100) * value) / 100)));
       }
       return result;
     };
@@ -3623,7 +3630,23 @@ void TalosSimPreparePass::runOnOperation() {
       rejectLimits.assign(normalizedDelays.size(), sdfReject.getInt());
     if (sdfError)
       errorLimits.assign(normalizedDelays.size(), sdfError.getInt());
-    if (sdfReject || sdfError) {
+    // PATHPULSEPERCENT (IEEE 1800-2023 Table 32-1) scales each transition delay
+    // as the global percentages above do.
+    auto scaledLimits = [&](IntegerAttr millipercent,
+                            SmallVectorImpl<int64_t> &limits) {
+      for (auto [limit, delay] : llvm::zip_equal(limits, normalizedDelays))
+        limit = roundToPrecision(static_cast<int64_t>(
+            static_cast<__int128>(delay) * millipercent.getInt() / 100000));
+    };
+    auto sdfRejectPercent =
+        path->getAttrOfType<IntegerAttr>("sdf_pulse_reject_millipercent");
+    auto sdfErrorPercent =
+        path->getAttrOfType<IntegerAttr>("sdf_pulse_error_millipercent");
+    if (sdfRejectPercent)
+      scaledLimits(sdfRejectPercent, rejectLimits);
+    if (sdfErrorPercent)
+      scaledLimits(sdfErrorPercent, errorLimits);
+    if (sdfReject || sdfError || sdfRejectPercent || sdfErrorPercent) {
       for (auto [reject, error] : llvm::zip_equal(rejectLimits, errorLimits)) {
         if (reject < 0 || error < reject) {
           emitError(getSemanticLocation(path))

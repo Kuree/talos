@@ -2672,13 +2672,104 @@ private:
         integer.isSigned()));
   }
 
-  /// IEEE 1800-2023 32.4.3 reevaluates expressions containing an annotated
-  /// specparam. Delays frozen with slang's evaluator cannot be, so refuse
-  /// them instead of freezing the preannotation value.
-  bool refuseAnnotatedSpecparam(const slang::ast::Expression *expression,
-                                const slang::ast::Symbol &context) {
-    if (!expression || !sdfAnnotations.hasSpecparamAnnotations())
-      return false;
+  /// IEEE 1800-2023 32.4.3: "Any expression containing one or more specparams
+  /// is reevaluated when annotated to from an SDF file." Slang's evaluator
+  /// reads a specparam's source value, so walk the arithmetic around one here.
+  /// Null for a form this does not reevaluate.
+  slang::ConstantValue
+  reevaluateAnnotated(const slang::ast::Expression &expression,
+                      slang::ast::EvalContext &context) {
+    using slang::ast::BinaryOperator;
+    using slang::ast::ExpressionKind;
+    switch (expression.kind) {
+    case ExpressionKind::NamedValue:
+    case ExpressionKind::HierarchicalValue: {
+      const slang::ast::Symbol *symbol = expression.getSymbolReference();
+      if (symbol && symbol->kind == slang::ast::SymbolKind::Specparam)
+        if (std::optional<slang::ConstantValue> annotated =
+                annotatedSpecparamValue(
+                    symbol->as<slang::ast::SpecparamSymbol>()))
+          return std::move(*annotated);
+      return expression.eval(context);
+    }
+    case ExpressionKind::Conversion:
+      return reevaluateAnnotated(
+          expression.as<slang::ast::ConversionExpression>().operand(), context);
+    case ExpressionKind::MinTypMax:
+      return reevaluateAnnotated(
+          expression.as<slang::ast::MinTypMaxExpression>().selected(), context);
+    case ExpressionKind::UnaryOp: {
+      const auto &unary = expression.as<slang::ast::UnaryExpression>();
+      slang::ConstantValue value = reevaluateAnnotated(unary.operand(), context);
+      if (!value)
+        return {};
+      if (unary.op == slang::ast::UnaryOperator::Plus)
+        return value;
+      if (unary.op != slang::ast::UnaryOperator::Minus)
+        return {};
+      if (value.isInteger())
+        return slang::ConstantValue(-value.integer());
+      if (value.isReal())
+        return slang::ConstantValue(slang::real_t(-double(value.real())));
+      return {};
+    }
+    case ExpressionKind::BinaryOp: {
+      const auto &binary = expression.as<slang::ast::BinaryExpression>();
+      slang::ConstantValue left = reevaluateAnnotated(binary.left(), context);
+      slang::ConstantValue right = reevaluateAnnotated(binary.right(), context);
+      if (!left || !right)
+        return {};
+      if (left.isInteger() && right.isInteger()) {
+        const slang::SVInt &a = left.integer();
+        const slang::SVInt &b = right.integer();
+        switch (binary.op) {
+        case BinaryOperator::Add:
+          return slang::ConstantValue(a + b);
+        case BinaryOperator::Subtract:
+          return slang::ConstantValue(a - b);
+        case BinaryOperator::Multiply:
+          return slang::ConstantValue(a * b);
+        case BinaryOperator::Divide:
+          return slang::ConstantValue(a / b);
+        default:
+          return {};
+        }
+      }
+      auto real = [](const slang::ConstantValue &value) -> std::optional<double> {
+        if (value.isReal())
+          return double(value.real());
+        if (value.isInteger() && !value.integer().hasUnknown())
+          return value.integer().toDouble();
+        return std::nullopt;
+      };
+      std::optional<double> a = real(left), b = real(right);
+      if (!a || !b)
+        return {};
+      switch (binary.op) {
+      case BinaryOperator::Add:
+        return slang::ConstantValue(slang::real_t(*a + *b));
+      case BinaryOperator::Subtract:
+        return slang::ConstantValue(slang::real_t(*a - *b));
+      case BinaryOperator::Multiply:
+        return slang::ConstantValue(slang::real_t(*a * *b));
+      case BinaryOperator::Divide:
+        return slang::ConstantValue(slang::real_t(*a / *b));
+      default:
+        return {};
+      }
+    }
+    default:
+      return expression.eval(context);
+    }
+  }
+
+  /// A statically frozen delay or limit, with any annotated specparam in it at
+  /// its annotated value.
+  slang::ConstantValue evalFrozenDelay(const slang::ast::Expression &expression,
+                                       slang::ast::EvalContext &context,
+                                       const slang::ast::Symbol &owner) {
+    if (!sdfAnnotations.hasSpecparamAnnotations())
+      return expression.eval(context);
     struct Finder : slang::ast::ASTVisitor<Finder, slang::ast::VisitFlags::AllGood> {
       const SDFAnnotationDatabase &database;
       bool found = false;
@@ -2691,15 +2782,17 @@ private:
           found = true;
       }
     } finder(sdfAnnotations);
-    expression->visit(finder);
-    if (finder.found) {
-      emitError(sourceLocation(context.location))
-          << "IEEE 1800-2023 32.4.3: SDF LABEL annotation of a specparam used "
-             "in a statically frozen delay or timing-check limit is not "
-             "supported";
+    expression.visit(finder);
+    if (!finder.found)
+      return expression.eval(context);
+    slang::ConstantValue value = reevaluateAnnotated(expression, context);
+    if (!value) {
+      emitError(sourceLocation(owner.location))
+          << "IEEE 1800-2023 32.4.3: this delay or timing-check limit uses an "
+             "SDF annotated specparam in a form other than +, - , * and /";
       sawInvalidNode = true;
     }
-    return finder.found;
+    return value;
   }
 
   /// IEEE 1800-2023 32.4.4: an interconnect delay delays the signal that the
@@ -2787,9 +2880,8 @@ private:
         contextSymbol, slang::ast::EvalFlags::SpecparamsAllowed);
     SmallVector<int64_t, 3> delays;
     for (const slang::ast::Expression *expression : expressions) {
-      if (refuseAnnotatedSpecparam(expression, contextSymbol))
-        return false;
-      slang::ConstantValue value = expression->eval(evalContext);
+      slang::ConstantValue value =
+          evalFrozenDelay(*expression, evalContext, contextSymbol);
       if (!value)
         return false;
       long double amount = 0;
@@ -3041,8 +3133,8 @@ private:
                           unitFs >= precisionFs && unitFs % precisionFs == 0;
       slang::ast::EvalContext evalContext(node);
       for (const slang::ast::Expression *expression : node.getDelays()) {
-        refuseAnnotatedSpecparam(expression, node);
-        slang::ConstantValue value = expression->eval(evalContext);
+        slang::ConstantValue value =
+            evalFrozenDelay(*expression, evalContext, node);
         long double amount = 0;
         if (value.isInteger()) {
           const slang::SVInt &integer = value.integer();
@@ -3196,16 +3288,25 @@ private:
         // the specparam and default limits; an empty SDF field keeps the
         // value from earlier annotations.
         std::optional<int64_t> reject, error;
+        bool rejectPercent = false, errorPercent = false;
         for (const auto &pulse : *pulses) {
-          if (pulse.delays[0])
+          if (pulse.delays[0]) {
             reject = pulse.delays[0];
-          if (pulse.delays[1])
+            rejectPercent = pulse.percent;
+          }
+          if (pulse.delays[1]) {
             error = pulse.delays[1];
+            errorPercent = pulse.percent;
+          }
         }
         if (reject)
-          attrs.set("sdf_pulse_reject_fs", builder.getI64IntegerAttr(*reject));
+          attrs.set(rejectPercent ? "sdf_pulse_reject_millipercent"
+                                  : "sdf_pulse_reject_fs",
+                    builder.getI64IntegerAttr(*reject));
         if (error)
-          attrs.set("sdf_pulse_error_fs", builder.getI64IntegerAttr(*error));
+          attrs.set(errorPercent ? "sdf_pulse_error_millipercent"
+                                 : "sdf_pulse_error_fs",
+                    builder.getI64IntegerAttr(*error));
       }
 
       bool shapeSupported = false;
@@ -3298,8 +3399,8 @@ private:
           -> std::optional<int64_t> {
         if (!expression || !staticTimes)
           return std::nullopt;
-        refuseAnnotatedSpecparam(expression, node);
-        slang::ConstantValue value = expression->eval(evalContext);
+        slang::ConstantValue value =
+            evalFrozenDelay(*expression, evalContext, node);
         long double amount = 0;
         if (value.isInteger()) {
           const slang::SVInt &integer = value.integer();

@@ -475,9 +475,24 @@ struct ParsedIOPath {
     std::string name;
     std::optional<int32_t> index;
   };
+  /// One operand or operator of a postfix SDF condition. The list is empty when
+  /// the construct has no condition.
+  struct ConditionToken {
+    sdf::ConditionOpcode opcode = sdf::ConditionOpcode::Port;
+    Port port;
+    int64_t constant = 0;
+  };
+  using Condition = SmallVector<ConditionToken, 4>;
 
   Port input;
   Port output;
+  // (COND condition (IOPATH ...)) and (CONDELSE (IOPATH ...)), IEEE 1800-2023
+  // Table 32-1.
+  Condition condition;
+  bool condElse = false;
+  // (DEVICE [output] ...) annotates every path to the module outputs, or to
+  // the named one, whatever its input (Table 32-1).
+  bool device = false;
   SDFAnnotationDatabase::DelayAnnotation::Kind kind =
       SDFAnnotationDatabase::DelayAnnotation::Kind::Absolute;
   std::optional<slang::ast::EdgeKind> edge;
@@ -497,6 +512,9 @@ struct ParsedTimingCheck {
   sdf::TimingCheckKind kind = sdf::TimingCheckKind::Setup;
   SmallVector<ParsedIOPath::Port, 2> events;
   SmallVector<sdf::Edge, 2> edges;
+  SmallVector<ParsedIOPath::Condition, 2> conditions;
+  ParsedIOPath::Condition timestampCondition;
+  ParsedIOPath::Condition timecheckCondition;
   SmallVector<ParsedIOPath::DelayValue, 2> limits;
   unsigned line = 1;
   unsigned column = 1;
@@ -516,6 +534,8 @@ struct ParsedLabel {
 struct ParsedPulse {
   std::optional<ParsedIOPath::Port> input;
   std::optional<ParsedIOPath::Port> output;
+  // PATHPULSEPERCENT gives percentages of each transition delay.
+  bool percent = false;
   ParsedIOPath::DelayValue reject;
   ParsedIOPath::DelayValue error;
   unsigned line = 1;
@@ -955,10 +975,86 @@ static bool terminalMatches(const slang::ast::Symbol &path,
   return value && *value == *annotation.index;
 }
 
+/// IEEE 1800-2023 32.4.1, 32.4.2: an SDF condition matches a SystemVerilog
+/// condition with the same operators and operands. Walk the postfix tokens from
+/// the end, so the operator of `source` comes first and its right operand next.
+static bool conditionTokensMatch(const slang::ast::Symbol &scope,
+                                 const slang::ast::Expression &source,
+                                 ArrayRef<ParsedIOPath::ConditionToken> tokens,
+                                 size_t &cursor) {
+  if (cursor == 0)
+    return false;
+  const ParsedIOPath::ConditionToken &token = tokens[--cursor];
+  const slang::ast::Expression *expression = &source;
+  while (const auto *conversion =
+             expression->as_if<slang::ast::ConversionExpression>()) {
+    if (!conversion->isImplicit())
+      break;
+    expression = &conversion->operand();
+  }
+  using Binary = slang::ast::BinaryOperator;
+  auto binaryMatches = [&](std::initializer_list<Binary> operators) {
+    const auto *binary = expression->as_if<slang::ast::BinaryExpression>();
+    return binary && llvm::is_contained(operators, binary->op) &&
+           conditionTokensMatch(scope, binary->right(), tokens, cursor) &&
+           conditionTokensMatch(scope, binary->left(), tokens, cursor);
+  };
+  switch (token.opcode) {
+  case sdf::ConditionOpcode::Port:
+    return terminalMatches(scope, expression, token.port);
+  case sdf::ConditionOpcode::Constant: {
+    slang::ast::EvalContext context(scope);
+    slang::ConstantValue value = expression->eval(context);
+    if (!value || !value.isInteger() || value.integer().hasUnknown())
+      return false;
+    std::optional<int64_t> constant = value.integer().as<int64_t>();
+    return constant && *constant == token.constant;
+  }
+  case sdf::ConditionOpcode::Not: {
+    const auto *unary = expression->as_if<slang::ast::UnaryExpression>();
+    return unary &&
+           (unary->op == slang::ast::UnaryOperator::LogicalNot ||
+            unary->op == slang::ast::UnaryOperator::BitwiseNot) &&
+           conditionTokensMatch(scope, unary->operand(), tokens, cursor);
+  }
+  case sdf::ConditionOpcode::And:
+    return binaryMatches({Binary::BinaryAnd, Binary::LogicalAnd});
+  case sdf::ConditionOpcode::Or:
+    return binaryMatches({Binary::BinaryOr, Binary::LogicalOr});
+  case sdf::ConditionOpcode::Xor:
+    return binaryMatches({Binary::BinaryXor});
+  case sdf::ConditionOpcode::Eq:
+    return binaryMatches({Binary::Equality});
+  case sdf::ConditionOpcode::Ne:
+    return binaryMatches({Binary::Inequality});
+  case sdf::ConditionOpcode::CaseEq:
+    return binaryMatches({Binary::CaseEquality});
+  case sdf::ConditionOpcode::CaseNe:
+    return binaryMatches({Binary::CaseInequality});
+  }
+  return false;
+}
+
+/// An SDF construct with no condition places no requirement (32.4.2), but one
+/// with a condition needs the same condition on the SystemVerilog side.
+static bool conditionMatches(const slang::ast::Symbol &scope,
+                             const slang::ast::Expression *source,
+                             const ParsedIOPath::Condition &condition) {
+  if (condition.empty())
+    return true;
+  size_t cursor = condition.size();
+  return source && conditionTokensMatch(scope, *source, condition, cursor) &&
+         cursor == 0;
+}
+
 static bool pathMatches(const slang::ast::TimingPathSymbol &path,
                         const ParsedIOPath &annotation) {
   auto inputs = path.getInputs();
   auto outputs = path.getOutputs();
+  if (annotation.device)
+    return annotation.output.name.empty() ||
+           (outputs.size() == 1 &&
+            terminalMatches(path, outputs.front(), annotation.output));
   // IEEE 1800-2017 32.4.1 identifies IOPATH by its input and output port
   // specifications. A full-connection `(a,b *> y)` is one shared path, so
   // annotating only `a -> y` would also mutate b's delay. This first tranche
@@ -970,7 +1066,13 @@ static bool pathMatches(const slang::ast::TimingPathSymbol &path,
   // IEEE 1800-2017 32.4.1: an edge-qualified SDF IOPATH annotates only a
   // path with the same edge. An unqualified IOPATH can annotate conditional
   // and nonconditional declarations between the named terminals.
-  return !annotation.edge || path.edgeIdentifier == *annotation.edge;
+  if (annotation.edge && path.edgeIdentifier != *annotation.edge)
+    return false;
+  // IEEE 1800-2023 Table 32-1: COND annotates the conditional path with that
+  // condition and CONDELSE the ifnone path.
+  if (annotation.condElse)
+    return path.isStateDependent && !path.getConditionExpr();
+  return conditionMatches(path, path.getConditionExpr(), annotation.condition);
 }
 
 /// Select the MTM member and round it to the target precision. An empty SDF
@@ -1038,26 +1140,74 @@ timingCheckTargets(sdf::TimingCheckKind kind) {
   return {};
 }
 
-/// IEEE 1800-2023 32.4.2: an SDF event with no edge matches any edge; one with
-/// an edge matches only the same unqualified SystemVerilog edge.
+/// The transition classes 01/0x/10/1x/x0/x1 of a SystemVerilog timing event,
+/// with z as x (IEEE 1800-2023 31.5), or 0 when it names no edge.
+static unsigned timingEventEdgeClasses(
+    const slang::ast::SystemTimingCheckSymbol::Arg &arg) {
+  if (arg.edgeDescriptors.empty()) {
+    switch (arg.edge) {
+    case slang::ast::EdgeKind::PosEdge:
+      return 0x23;
+    case slang::ast::EdgeKind::NegEdge:
+      return 0x1c;
+    case slang::ast::EdgeKind::BothEdges:
+      return 0x3f;
+    default:
+      return 0;
+    }
+  }
+  unsigned classes = 0;
+  for (const auto &descriptor : arg.edgeDescriptors) {
+    auto unknown = [](char value) {
+      return value == 'x' || value == 'X' || value == 'z' || value == 'Z';
+    };
+    char from = descriptor[0], to = descriptor[1];
+    if (from == '0')
+      classes |= to == '1' ? 0x01 : unknown(to) ? 0x02 : 0;
+    else if (from == '1')
+      classes |= to == '0' ? 0x04 : unknown(to) ? 0x08 : 0;
+    else if (unknown(from))
+      classes |= to == '0' ? 0x10 : to == '1' ? 0x20 : 0;
+  }
+  return classes;
+}
+
+static unsigned sdfEdgeClasses(sdf::Edge edge) {
+  switch (edge) {
+  case sdf::Edge::Posedge:
+    return 0x23;
+  case sdf::Edge::Negedge:
+    return 0x1c;
+  case sdf::Edge::ZeroOne:
+    return 0x01;
+  case sdf::Edge::ZeroZ:
+    return 0x02;
+  case sdf::Edge::OneZero:
+    return 0x04;
+  case sdf::Edge::OneZ:
+    return 0x08;
+  case sdf::Edge::ZZero:
+    return 0x10;
+  case sdf::Edge::ZOne:
+    return 0x20;
+  case sdf::Edge::None:
+    return 0;
+  }
+  return 0;
+}
+
+/// IEEE 1800-2023 32.4.2: an SDF event with no edge or condition places no
+/// requirement on that terminal; one with an edge or a condition matches only
+/// the same edge or condition on the SystemVerilog event.
 static bool timingEventMatches(const slang::ast::SystemTimingCheckSymbol &check,
                                const slang::ast::SystemTimingCheckSymbol::Arg &arg,
-                               const ParsedIOPath::Port &port,
-                               sdf::Edge edge) {
-  if (!terminalMatches(check, arg.expr, port))
+                               const ParsedIOPath::Port &port, sdf::Edge edge,
+                               const ParsedIOPath::Condition &condition) {
+  if (!terminalMatches(check, arg.expr, port) ||
+      !conditionMatches(check, arg.condition, condition))
     return false;
-  switch (edge) {
-  case sdf::Edge::None:
-    return true;
-  case sdf::Edge::Posedge:
-    return arg.edge == slang::ast::EdgeKind::PosEdge &&
-           arg.edgeDescriptors.empty();
-  case sdf::Edge::Negedge:
-    return arg.edge == slang::ast::EdgeKind::NegEdge &&
-           arg.edgeDescriptors.empty();
-  default:
-    return false;
-  }
+  return edge == sdf::Edge::None ||
+         sdfEdgeClasses(edge) == timingEventEdgeClasses(arg);
 }
 
 /// IEEE 1800-2023 32.4.4: a port named by an INTERCONNECT is an instance path
@@ -1682,16 +1832,15 @@ private:
     sdf::ConditionAttr condition;
     const SDFNode *portNode = &node;
     if (node.kind == SDFNode::Kind::List && !node.children.empty() &&
-        (keyword(node.children.front(), "COND") ||
-         keyword(node.children.front(), "SCOND") ||
-         keyword(node.children.front(), "CCOND"))) {
+        keyword(node.children.front(), "COND")) {
+      // IEEE 1800-2023 32.4.2 writes (COND !mode (posedge clk)).
       if (node.children.size() != 3) {
-        error(node, "conditional timing event requires exactly one port and "
-                    "expression");
+        error(node, "conditional timing event requires exactly one expression "
+                    "and port");
         return {};
       }
-      portNode = &node.children[1];
-      condition = parseCondition(node.children[2]);
+      condition = parseCondition(node.children[1]);
+      portNode = &node.children[2];
     }
     auto port = parsePort(*portNode);
     return port ? checked<sdf::TimingEventAttr>(node, port, condition)
@@ -1900,7 +2049,25 @@ private:
                            *kind == sdf::TimingCheckKind::NoChange)
                               ? 2
                               : 1;
-      if (record.children.size() != 1 + eventCount + limitCount) {
+      size_t required = 1 + eventCount + limitCount;
+      bool wrongArity = record.children.size() < required;
+      // SDF gives a combined check optional (SCOND condition) and
+      // (CCOND condition) records, for the timestamp and timecheck conditions.
+      sdf::ConditionAttr timestamp, timecheck;
+      bool combined = *kind == sdf::TimingCheckKind::SetupHold ||
+                      *kind == sdf::TimingCheckKind::Recrem;
+      if (!wrongArity)
+        for (const SDFNode &extra :
+             ArrayRef(record.children).drop_front(required)) {
+          const SDFNode *stamp = formHead(extra, "SCOND");
+          const SDFNode *check = formHead(extra, "CCOND");
+          if (!combined || (!stamp && !check) || extra.children.size() != 2) {
+            wrongArity = true;
+            break;
+          }
+          (stamp ? timestamp : timecheck) = parseCondition(extra.children[1]);
+        }
+      if (wrongArity) {
         error(record, "timing-check record has the wrong arity");
         continue;
       }
@@ -1911,11 +2078,16 @@ private:
       for (size_t i = 0; i < limitCount; ++i)
         if (auto limit = parseDelayValue(record.children[1 + eventCount + i]))
           limits.push_back(limit);
-      createOp<sdf::SDFTimingCheckOp>(
-          record, {named("kind", builder.getI32IntegerAttr(
-                                     static_cast<int32_t>(*kind))),
-                   named("events", builder.getArrayAttr(events)),
-                   named("limits", builder.getArrayAttr(limits))});
+      SmallVector<mlir::NamedAttribute> attrs{
+          named("kind",
+                builder.getI32IntegerAttr(static_cast<int32_t>(*kind))),
+          named("events", builder.getArrayAttr(events)),
+          named("limits", builder.getArrayAttr(limits))};
+      if (timestamp)
+        attrs.push_back(named("timestamp_condition", timestamp));
+      if (timecheck)
+        attrs.push_back(named("timecheck_condition", timecheck));
+      createOp<sdf::SDFTimingCheckOp>(record, attrs);
     }
   }
 
@@ -2081,19 +2253,36 @@ static std::optional<ParsedSDF> consumeSDFIR(mlir::ModuleOp module) {
           result.index = static_cast<int32_t>(port.getIndex());
         return result;
       };
+      auto copyCondition = [&](sdf::ConditionAttr condition) {
+        ParsedIOPath::Condition result;
+        if (!condition)
+          return result;
+        for (mlir::Attribute attribute : condition.getTokens()) {
+          auto token = cast<sdf::ConditionTokenAttr>(attribute);
+          ParsedIOPath::ConditionToken copy;
+          copy.opcode = token.getOpcode();
+          if (token.getPort())
+            copy.port = copyPortAttr(token.getPort());
+          if (token.getConstant())
+            copy.constant = token.getConstant().getInt();
+          result.push_back(std::move(copy));
+        }
+        return result;
+      };
       if (auto check = dyn_cast<sdf::SDFTimingCheckOp>(operation)) {
         ParsedTimingCheck parsed;
         std::tie(parsed.line, parsed.column) = sourcePosition(check);
         parsed.kind = check.getKind();
-        bool supported = true;
         for (mlir::Attribute attribute : check.getEvents()) {
           auto event = cast<sdf::TimingEventAttr>(attribute);
-          // IEEE 1800-2023 32.4.2 matches an SDF event condition against the
-          // SystemVerilog `&&&` condition; that comparison is not folded here.
-          supported &= !event.getCondition();
           parsed.events.push_back(copyPortAttr(event.getPort()));
           parsed.edges.push_back(event.getPort().getEdge());
+          parsed.conditions.push_back(copyCondition(event.getCondition()));
         }
+        parsed.timestampCondition =
+            copyCondition(check.getTimestampConditionAttr());
+        parsed.timecheckCondition =
+            copyCondition(check.getTimecheckConditionAttr());
         for (mlir::Attribute attribute : check.getLimits()) {
           std::optional<ParsedIOPath::DelayValue> value =
               convertValue(check, cast<sdf::DelayValueAttr>(attribute),
@@ -2102,12 +2291,7 @@ static std::optional<ParsedSDF> consumeSDFIR(mlir::ModuleOp module) {
             return std::nullopt;
           parsed.limits.push_back(std::move(*value));
         }
-        if (supported) {
-          cell.timingChecks.push_back(std::move(parsed));
-        } else {
-          cell.unsupportedTimingData.push_back(
-              {"TIMINGCHECK with a condition", parsed.line, parsed.column});
-        }
+        cell.timingChecks.push_back(std::move(parsed));
         continue;
       }
       if (auto label = dyn_cast<sdf::SDFLabelOp>(operation)) {
@@ -2128,10 +2312,10 @@ static std::optional<ParsedSDF> consumeSDFIR(mlir::ModuleOp module) {
         cell.labels.push_back(std::move(parsed));
         continue;
       }
-      if (auto pulse = dyn_cast<sdf::SDFPulseOp>(operation);
-          pulse && pulse.getKind() == sdf::PulseKind::Absolute) {
+      if (auto pulse = dyn_cast<sdf::SDFPulseOp>(operation)) {
         ParsedPulse parsed;
         std::tie(parsed.line, parsed.column) = sourcePosition(pulse);
+        parsed.percent = pulse.getKind() == sdf::PulseKind::Percent;
         if (pulse.getInput())
           parsed.input = copyPortAttr(*pulse.getInput());
         if (pulse.getOutput())
@@ -2150,7 +2334,10 @@ static std::optional<ParsedSDF> consumeSDFIR(mlir::ModuleOp module) {
       auto interconnect = dyn_cast<sdf::SDFInterconnectDelayOp>(operation);
       auto terminal = dyn_cast<sdf::SDFTerminalDelayOp>(operation);
       if (interconnect ||
-          (terminal && terminal.getKind() == sdf::TerminalDelayKind::Port &&
+          // IEEE 1800-2023 Table 32-3 annotates PORT and NETDELAY alike.
+          (terminal &&
+           (terminal.getKind() == sdf::TerminalDelayKind::Port ||
+            terminal.getKind() == sdf::TerminalDelayKind::NetDelay) &&
            terminal.getTerminal())) {
         ParsedInterconnect parsed;
         std::tie(parsed.line, parsed.column) = sourcePosition(&operation);
@@ -2190,7 +2377,9 @@ static std::optional<ParsedSDF> consumeSDFIR(mlir::ModuleOp module) {
         continue;
       }
       auto pathOp = dyn_cast<sdf::SDFPathDelayOp>(operation);
-      if (!pathOp || pathOp.getKind() != sdf::PathKind::IOPath) {
+      bool device =
+          terminal && terminal.getKind() == sdf::TerminalDelayKind::Device;
+      if (!pathOp && !device) {
         auto [line, column] = sourcePosition(&operation);
         StringRef description = isa<sdf::SDFTimingCheckOp>(operation)
                                     ? "TIMINGCHECK"
@@ -2199,24 +2388,27 @@ static std::optional<ParsedSDF> consumeSDFIR(mlir::ModuleOp module) {
         continue;
       }
       ParsedIOPath path;
-      std::tie(path.line, path.column) = sourcePosition(pathOp);
-      path.kind = pathOp.getMode() == sdf::DelayMode::Increment
+      std::tie(path.line, path.column) = sourcePosition(&operation);
+      sdf::DelayMode pathMode = pathOp ? pathOp.getMode() : terminal.getMode();
+      path.kind = pathMode == sdf::DelayMode::Increment
                       ? SDFAnnotationDatabase::DelayAnnotation::Kind::Increment
                       : SDFAnnotationDatabase::DelayAnnotation::Kind::Absolute;
-      auto copyPort = [](sdf::PortAttr port) {
-        ParsedIOPath::Port result{port.getName().getValue().str(),
-                                  std::nullopt};
-        if (port.getHasIndex())
-          result.index = static_cast<int32_t>(port.getIndex());
-        return result;
-      };
-      path.input = copyPort(pathOp.getInput());
-      path.output = copyPort(pathOp.getOutput());
-      if (pathOp.getInput().getEdge() == sdf::Edge::Posedge)
-        path.edge = slang::ast::EdgeKind::PosEdge;
-      else if (pathOp.getInput().getEdge() == sdf::Edge::Negedge)
-        path.edge = slang::ast::EdgeKind::NegEdge;
-      for (mlir::Attribute attribute : pathOp.getDelays()) {
+      if (pathOp) {
+        path.condition = copyCondition(pathOp.getConditionAttr());
+        path.condElse = pathOp.getKind() == sdf::PathKind::CondElse;
+        path.input = copyPortAttr(pathOp.getInput());
+        path.output = copyPortAttr(pathOp.getOutput());
+        if (pathOp.getInput().getEdge() == sdf::Edge::Posedge)
+          path.edge = slang::ast::EdgeKind::PosEdge;
+        else if (pathOp.getInput().getEdge() == sdf::Edge::Negedge)
+          path.edge = slang::ast::EdgeKind::NegEdge;
+      } else {
+        path.device = true;
+        if (terminal.getTerminal())
+          path.output = copyPortAttr(*terminal.getTerminal());
+      }
+      for (mlir::Attribute attribute :
+           pathOp ? pathOp.getDelays() : terminal.getDelays()) {
         auto value = cast<sdf::DelayValueAttr>(attribute);
         ParsedIOPath::DelayValue parsedValue;
         parsedValue.form = value.getForm();
@@ -2226,7 +2418,7 @@ static std::optional<ParsedSDF> consumeSDFIR(mlir::ModuleOp module) {
             return true;
           destination = parseDecimal(member.getSpelling().getValue());
           if (!destination) {
-            sdfIRDiagnostic(file, pathOp, "invalid SDF delay value");
+            sdfIRDiagnostic(file, &operation, "invalid SDF delay value");
             return false;
           }
           if (path.kind ==
@@ -2234,7 +2426,7 @@ static std::optional<ParsedSDF> consumeSDFIR(mlir::ModuleOp module) {
               destination->negative) {
             // IEEE 1800-2017 32.5/.6: only INCREMENT is signed. Check every
             // preserved MTM member while precise transient-IR location remains.
-            sdfIRDiagnostic(file, pathOp,
+            sdfIRDiagnostic(file, &operation,
                             "invalid nonnegative SDF delay value");
             return false;
           }
@@ -2714,8 +2906,16 @@ buildSDFAnnotationDatabase(slang::ast::Compilation &compilation,
             for (size_t index = 0; index != annotation.events.size(); ++index)
               eventsMatch &= timingEventMatches(
                   *check, arguments[swap ? 1 - index : index],
-                  annotation.events[index], annotation.edges[index]);
-            if (!eventsMatch)
+                  annotation.events[index], annotation.edges[index],
+                  annotation.conditions[index]);
+            auto slotExpression = [&](size_t slot) {
+              return slot < arguments.size() ? arguments[slot].expr : nullptr;
+            };
+            if (!eventsMatch ||
+                !conditionMatches(*check, slotExpression(5),
+                                  annotation.timestampCondition) ||
+                !conditionMatches(*check, slotExpression(6),
+                                  annotation.timecheckCondition))
               continue;
             SDFAnnotationDatabase::DelayAnnotation update;
             update.kind = SDFAnnotationDatabase::DelayAnnotation::Kind::Absolute;
@@ -2815,6 +3015,15 @@ buildSDFAnnotationDatabase(slang::ast::Compilation &compilation,
                       "input or inout module port\n";
             continue;
           }
+          // An inout's net carries signals both ways, so one direction's delay
+          // cannot be a delayed driver of the load's net.
+          if (load->direction == ArgumentDirection::InOut) {
+            errs() << *filename << ':' << annotation.line << ':'
+                   << annotation.column
+                   << ": warning: SDF interconnect delay to an inout module "
+                      "port is not applied\n";
+            continue;
+          }
           if (annotation.source) {
             const slang::ast::PortSymbol *source =
                 annotation.source->index
@@ -2887,12 +3096,19 @@ buildSDFAnnotationDatabase(slang::ast::Compilation &compilation,
             update.line = annotation.line;
             update.column = annotation.column;
             std::optional<int64_t> reject, error;
-            if (!roundValue(annotation.reject, annotation.line,
-                            annotation.column, reject) ||
-                !roundValue(annotation.error, annotation.line,
-                            annotation.column, error))
+            // A percentage is not a time: keep three decimal places of it,
+            // in thousandths of a percent.
+            auto roundLimit = [&](const ParsedIOPath::DelayValue &value,
+                                  std::optional<int64_t> &out) {
+              if (annotation.percent)
+                return selectDelayValue(value, *mtm, 1000, 1, out);
+              return roundValue(value, annotation.line, annotation.column, out);
+            };
+            if (!roundLimit(annotation.reject, reject) ||
+                !roundLimit(annotation.error, error))
               break;
             update.delays = {reject, error};
+            update.percent = annotation.percent;
             ++matchedDelayUpdates;
             matched = true;
             result->pathPulseAnnotations[path].push_back(std::move(update));

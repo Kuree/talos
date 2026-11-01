@@ -7,6 +7,6 @@
     (CELLTYPE "dut")
     (INSTANCE)
     (TIMINGCHECK
-      (HOLD (COND data data==1 ignored) clk (1)))))
+      (HOLD (COND data==1 data ignored) clk (1)))))
 
-// CHECK: error: conditional timing event requires exactly one port and expression
+// CHECK: error: conditional timing event requires exactly one expression and port

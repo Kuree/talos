@@ -5,4 +5,4 @@
   (CELL
     (CELLTYPE "sdf_unsupported_cell")
     (INSTANCE dut)
-    (TIMINGCHECK (SETUP (COND source source!==1'b0) (posedge destination) (1)))))
+    (DELAY (ABSOLUTE (INTERCONNECT source destination (1) (2) (3) (4) (5) (6))))))

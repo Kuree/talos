@@ -53,8 +53,14 @@ def SDFPathDelayOp : SDFOp<"path_delay", [HasParent<"SDFCellOp">]> {
 
 def SDFTimingCheckOp : SDFOp<"timing_check", [HasParent<"SDFCellOp">]> {
   let arguments = (ins SDFTimingCheckKind:$kind,
-      SDFTimingEventArrayAttr:$events, SDFDelayValueArrayAttr:$limits);
-  let assemblyFormat = "$kind $events `limits` $limits attr-dict";
+      SDFTimingEventArrayAttr:$events, SDFDelayValueArrayAttr:$limits,
+      OptionalAttr<SDFConditionAttr>:$timestamp_condition,
+      OptionalAttr<SDFConditionAttr>:$timecheck_condition);
+  let assemblyFormat = [{
+    $kind $events `limits` $limits
+    (`scond` qualified($timestamp_condition)^)?
+    (`ccond` qualified($timecheck_condition)^)? attr-dict
+  }];
   let hasVerifier = 1;
 }
 

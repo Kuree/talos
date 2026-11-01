@@ -39,6 +39,9 @@ public:
 
   struct DelayAnnotation {
     enum class Kind { Absolute, Increment } kind = Kind::Absolute;
+    /// PATHPULSEPERCENT: `delays` holds thousandths of a percent of each
+    /// transition delay rather than femtoseconds.
+    bool percent = false;
     DelayVector delays;
     std::shared_ptr<const std::string> filename;
     unsigned line = 1;

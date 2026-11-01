@@ -9,5 +9,5 @@ module sdf_unsupported_matched;
   initial $sdf_annotate("Inputs/sdf-unsupported-matched.sdf");
 endmodule
 
-// CHECK: Inputs/sdf-unsupported-matched.sdf:8:18: warning: unsupported SDF timing data in matching CELL: TIMINGCHECK with a condition
+// CHECK: Inputs/sdf-unsupported-matched.sdf:8:22: warning: unsupported SDF timing data in matching CELL: interconnect delay with more than three values
 // CHECK-NOT: TIMINGENV

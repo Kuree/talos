@@ -33,7 +33,7 @@
         (IOPATH a z (-0.25:0.5:1.25))))
     (TIMINGCHECK
       (SETUP data (posedge clk) (1))
-      (HOLD (COND data (data == 1'b1)) clk (2))
+      (HOLD (COND (data == 1'b1) data) clk (2))
       (SETUPHOLD data clk (1) (2))
       (PERIOD (posedge clk) (3))
       (WIDTH (negedge clk) (4))
