@@ -2690,13 +2690,13 @@ buildSDFAnnotationDatabase(slang::ast::Compilation &compilation,
           bool matched = false;
           SmallVector<TimingCheckTarget, 4> targetsForKind =
               timingCheckTargets(annotation.kind);
-          // The SDF data event comes first for the setup-like checks, while
+          // SDF SETUP, HOLD and SETUPHOLD name the data event first, as in the
+          // 32.4.2 examples. Every other SDF check names its reference event
+          // first (RECOVERY control then clock, NOCHANGE clock then data), and
           // the SystemVerilog reference event comes first except for $setup.
-          bool sdfDataFirst =
-              annotation.kind != sdf::TimingCheckKind::Skew &&
-              annotation.kind != sdf::TimingCheckKind::BidirectSkew &&
-              annotation.kind != sdf::TimingCheckKind::Width &&
-              annotation.kind != sdf::TimingCheckKind::Period;
+          bool sdfDataFirst = annotation.kind == sdf::TimingCheckKind::Setup ||
+                              annotation.kind == sdf::TimingCheckKind::Hold ||
+                              annotation.kind == sdf::TimingCheckKind::SetupHold;
           for (const slang::ast::SystemTimingCheckSymbol *check :
                specify.checks) {
             if (!chargeWork(annotation.line, annotation.column))

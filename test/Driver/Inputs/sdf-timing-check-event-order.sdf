@@ -1,0 +1,13 @@
+(DELAYFILE
+  (SDFVERSION "4.0")
+  (TIMESCALE 1ns)
+  (CELL
+    (CELLTYPE "sdf_order_cell")
+    (INSTANCE dut)
+    (TIMINGCHECK
+      (RECOVERY (posedge r) (posedge c) (2))
+      (REMOVAL (posedge r) (posedge c) (3))
+      (RECREM (posedge s) (posedge c) (4) (5))
+      (NOCHANGE (posedge c) d (6) (7))
+      (HOLD d (posedge c) (8))
+      (SETUP d (posedge c) (9)))))
