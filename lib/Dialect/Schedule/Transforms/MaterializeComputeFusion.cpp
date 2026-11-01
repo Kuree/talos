@@ -1122,8 +1122,8 @@ struct PrivateStaticAccessIndex {
         design
             .walk([](Operation *op) {
               return isa<sim::SimDumpVarsOp, sim::SimDumpAllOp,
-                         sim::SimDumpControlOp, sim::SimDumpPortsOp,
-                         sim::SimDumpPortsControlOp>(op)
+                         sim::SimDumpControlOp, sim::SimDumpFlushOp,
+                         sim::SimDumpPortsOp, sim::SimDumpPortsControlOp>(op)
                          ? WalkResult::interrupt()
                          : WalkResult::advance();
             })

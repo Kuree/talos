@@ -336,6 +336,20 @@ void removeDeadPrivateStores(sim::SimDesignOp design) {
       store.erase();
 }
 void promotePrivateReductions(sim::SimDesignOp design) {
+  // A dump reads settled canonical state with no load in the IR, so no root is
+  // write-only or private when one exists.
+  bool dumpsState =
+      design
+          .walk([](Operation *op) {
+            return isa<sim::SimDumpVarsOp, sim::SimDumpAllOp,
+                       sim::SimDumpControlOp, sim::SimDumpFlushOp,
+                       sim::SimDumpPortsOp, sim::SimDumpPortsControlOp>(op)
+                       ? WalkResult::interrupt()
+                       : WalkResult::advance();
+          })
+          .wasInterrupted();
+  if (dumpsState)
+    return;
   analysis::PrivateStorageAnalysis storage(design);
   // Immutable access inventories and dense must-definition facts precede all
   // rewrites. Generic mem2reg subsequently constructs the necessary phis.

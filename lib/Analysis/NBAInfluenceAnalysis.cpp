@@ -79,7 +79,8 @@ NBAInfluenceAnalysis::NBAInfluenceAnalysis(sim::SimDesignOp design,
   bool dumpsState = design
                         .walk([](Operation *op) {
                           return isa<sim::SimDumpVarsOp, sim::SimDumpAllOp,
-                                     sim::SimDumpControlOp, sim::SimDumpPortsOp,
+                                     sim::SimDumpControlOp, sim::SimDumpFlushOp,
+                                     sim::SimDumpPortsOp,
                                      sim::SimDumpPortsControlOp>(op)
                                      ? WalkResult::interrupt()
                                      : WalkResult::advance();

@@ -2165,7 +2165,8 @@ void TalosSimForwardCopyProcessesPass::runOnOperation() {
     if (isa<sim::SimFuncOp>(op))
       return WalkResult::skip();
     if (isa<sim::SimDumpVarsOp, sim::SimDumpAllOp, sim::SimDumpControlOp,
-            sim::SimDumpPortsOp, sim::SimDumpPortsControlOp>(op))
+            sim::SimDumpFlushOp, sim::SimDumpPortsOp,
+            sim::SimDumpPortsControlOp>(op))
       state.waveforms = true;
     if (isa<sim::SimNetDeclOp, sim::SimStorageDeclOp, sim::SimPortDeclOp,
             sim::SimVPINetIdentityDeclOp>(op))
@@ -2187,8 +2188,8 @@ void TalosSimForwardCopyProcessesPass::runOnOperation() {
           function
               .walk([](Operation *op) {
                 return isa<sim::SimDumpVarsOp, sim::SimDumpAllOp,
-                           sim::SimDumpControlOp, sim::SimDumpPortsOp,
-                           sim::SimDumpPortsControlOp>(op)
+                           sim::SimDumpControlOp, sim::SimDumpFlushOp,
+                           sim::SimDumpPortsOp, sim::SimDumpPortsControlOp>(op)
                            ? WalkResult::interrupt()
                            : WalkResult::advance();
               })
