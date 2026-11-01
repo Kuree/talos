@@ -1,0 +1,10 @@
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary CORE}
+proc sv {text} {return "\"$text\""}
+set extent [upf_query_object_properties /top/PD -property upf_effective_extents]
+set kind [upf_query_object_type $extent]
+set element [upf_query_object_properties $extent -property upf_hdl_element]
+set designClass [upf_query_object_type #UPFDESIGN#]
+bind_checker show -module show -parameters [list [list extent [sv $extent]] [list kind [sv $kind]] [list element [sv $element]] [list designClass [sv $designClass]]]

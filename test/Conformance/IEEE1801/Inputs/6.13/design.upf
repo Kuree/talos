@@ -1,2 +1,10 @@
-if {![llength [info commands connect_logic_net]]} {error "unsupported command: connect_logic_net"}
-puts "COMMAND_PRESENT:connect_logic_net"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_power_domain PD -elements dut -supply {primary CORE}
+
+create_logic_net iso_n
+connect_logic_net iso_n -ports spare
+connect_logic_net iso_n -ports ctl -reconnect
+set_isolation ISO -domain PD -isolation_signal iso_n -clamp_value 0 -applies_to outputs -location parent

@@ -1,2 +1,7 @@
-if {![llength [info commands upf_query_object_properties]]} {error "unsupported command: upf_query_object_properties"}
-puts "COMMAND_PRESENT:upf_query_object_properties"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_power_domain PD -elements dut -supply {primary CORE}
+set primary [upf_query_object_properties PD.primary -property upf_supply_set]
+create_supply_net found_[file tail $primary]

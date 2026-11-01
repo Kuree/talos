@@ -1,2 +1,6 @@
-if {![llength [info commands load_simstate_behavior]]} {error "unsupported command: load_simstate_behavior"}
-puts "COMMAND_PRESENT:load_simstate_behavior"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_power_domain PD -elements {dut sib} -supply {primary CORE}
+load_simstate_behavior work -file [file join [file dirname [info script]] behavior.upf]

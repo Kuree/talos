@@ -1,2 +1,11 @@
-if {![llength [info commands set_port_attributes]]} {error "unsupported command: set_port_attributes"}
-puts "COMMAND_PRESENT:set_port_attributes"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_supply_net VAON
+create_supply_set AON -function {power VAON} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary CORE}
+
+set_port_attributes -elements dut -applies_to outputs -receiver_supply AON
+set_port_attributes -ports dut/a -receiver_supply PD.primary
+set_isolation ISO -domain PD -isolation_signal iso -clamp_value 0 -applies_to outputs -location parent -diff_supply_only TRUE

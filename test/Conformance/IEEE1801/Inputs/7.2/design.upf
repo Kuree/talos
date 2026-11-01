@@ -1,2 +1,8 @@
-if {![llength [info commands define_always_on_cell]]} {error "unsupported command: define_always_on_cell"}
-puts "COMMAND_PRESENT:define_always_on_cell"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_supply_net VAON
+create_power_domain PD -elements dut -supply {primary CORE}
+define_always_on_cell -cells aon -power VDDA -ground VSSA -power_switchable VSW -ground_switchable VSSA
+connect_supply_net VAON -ports dut/u/VDDA

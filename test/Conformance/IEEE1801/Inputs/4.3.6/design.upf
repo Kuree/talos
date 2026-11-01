@@ -1,4 +1,9 @@
-set found [find_objects . -pattern * -object_type inst -transitive]
-if {[llength $found] != 1} {error "generate scope treated as an instance"}
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+set found [find_objects . -pattern u -object_type inst -transitive]
+if {[llength $found] != 1} {error "generate scope treated as an instance: $found"}
+create_power_domain PD -elements $found -supply {primary CORE}
 set_scope [lindex $found 0]
-puts PASS
+create_supply_net rail

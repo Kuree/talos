@@ -25,7 +25,18 @@ from compiler_resources import fingerprint_resources
 
 DIRECTIVE = re.compile(r"^[ \t]*//[ \t]*(CLAUSE|RUN|XFAIL|REFERENCE|SKIP|REQUIRES|SINCE)[ \t]*:[ \t]*(.*?)[ \t]*$", re.M)
 CHECK = re.compile(r"^[ \t]*//[ \t]*CHECK(?:-[A-Z0-9-]+)?[ \t]*:", re.M)
+DIAGNOSTIC = re.compile(r"^[ \t]*//[ \t]*DIAG(?:-[A-Z0-9-]+)?[ \t]*:", re.M)
+SIMULATION = re.compile(r"^\s*(?:%not\s+)?%t[^\s]*\.exe(?:\s|$)")
+SIMULATOR_RESULT_FILE = re.compile(r"^\s*%FileCheck\s.*--check-prefix", re.M)
 SOURCE_CHANGED = "Probe source or helpers changed; rerun conformance"
+NOT_SIMULATED = ("A probe must run a simulation with %t.exe and compare its results "
+                 "using CHECK on its output or a --check-prefix check of a file it wrote")
+# Scratch that is not a result of the simulation.
+NOT_A_RESULT = re.compile(r"(?:\.exe|\.o|\.d)$|^(?:run-\d+|check|diag|output)\.log$")
+# Only the file's creation time may differ between two runs of one design.
+DUMP_DATE = re.compile(rb"\$date\b.*?\$end", re.S)
+# A coverage database also records its run's identity, so compare its report.
+COVERAGE_DATABASE = b"OBCOV\r\n\x1a"
 
 
 def digest(path):
@@ -57,6 +68,7 @@ def read_probe(path):
             "valid_clause": len(fields.get("CLAUSE", [])) == 1 and
                             fields["CLAUSE"][0].lower() not in ("", "reference notes"),
             "runs": fields.get("RUN", []), "checks": bool(CHECK.search(source)),
+            "diagnostics": bool(DIAGNOSTIC.search(source)),
             "xfail": tokens("XFAIL"), "requires": tokens("REQUIRES"),
             "since": " ".join(fields.get("SINCE", [])),
             "reference": " ".join(fields.get("REFERENCE", [])),
@@ -119,6 +131,44 @@ def execute(argv, cwd, timeout, log):
             "duration": round(time.monotonic() - started, 3)}
 
 
+def simulates_and_compares(probe):
+    """IEEE clauses are claimed from execution: elaboration alone proves nothing."""
+    return (any(SIMULATION.match(command) for command in probe["runs"]) and
+            (probe["checks"] or any(SIMULATOR_RESULT_FILE.match(command)
+                                    for command in probe["runs"])))
+
+
+def execution_results(work, inputs, simulator_output, statuses, coverage_tool):
+    """The observable results of one tier, for comparison with the other tier."""
+    results = {"stdout": simulator_output.replace(str(work), "<work>"), "status": statuses, "files": {}}
+    for path in sorted(work.rglob("*")):
+        relative = path.relative_to(work).as_posix()
+        if not path.is_file() or NOT_A_RESULT.search(path.name):
+            continue
+        contents = path.read_bytes()
+        if contents.startswith(COVERAGE_DATABASE):
+            contents = subprocess.run([str(coverage_tool), "report", str(path)], stdout=subprocess.PIPE,
+                                      stderr=subprocess.STDOUT, cwd=work, timeout=30).stdout
+        contents = DUMP_DATE.sub(b"", contents.replace(str(work).encode(), b"<work>"))
+        fingerprint = hashlib.sha256(contents).hexdigest()
+        if inputs.get(relative) != digest(path):
+            results["files"][relative] = fingerprint
+    return results
+
+
+def execution_difference(native, bytecode):
+    if native["status"] != bytecode["status"]:
+        return "exit status"
+    if native["stdout"] != bytecode["stdout"]:
+        return "standard output"
+    if native["files"] != bytecode["files"]:
+        names = set(native["files"]) ^ set(bytecode["files"])
+        names |= {name for name in set(native["files"]) & set(bytecode["files"])
+                  if native["files"][name] != bytecode["files"][name]}
+        return "written files " + ", ".join(sorted(names))
+    return None
+
+
 def run_probe(probe, tier, args, features, resources):
     path = probe["path"]
     try:
@@ -143,6 +193,8 @@ def run_probe(probe, tier, args, features, resources):
     for key, status in (("reference", "reference"), ("skip", "skip")):
         if probe[key]:
             return {**result, "status": status, "reason": probe[key]}
+    if probe["runs"] and not simulates_and_compares(probe):
+        return {**result, "status": "error", "reason": NOT_SIMULATED}
     missing = probe["requires"] - features
     if missing:
         return {**result, "status": "skip", "reason": "Requires " + ", ".join(sorted(missing))}
@@ -153,14 +205,19 @@ def run_probe(probe, tier, args, features, resources):
 def run_commands(probe, tier, args, resources, result, work):
     path = probe["path"]
     helper = path.parent / "Inputs" / path.stem
+    inputs = {}
     if helper.is_dir():
         shutil.copytree(helper, work, dirs_exist_ok=True)
+        inputs = {item.relative_to(helper).as_posix(): digest(item)
+                  for item in helper.rglob("*") if item.is_file()}
     substitutions = {"%talos": str(args.compiler), "%clang": str(args.clang),
                      "%FileCheck": str(args.filecheck),
                      "%resource_dir": resources, "%tier": tier, "%S": str(path.parent),
                      "%s": str(path), "%t": str(work / "probe")}
     pattern = re.compile("|".join(re.escape(key) for key in sorted(substitutions, key=len, reverse=True)))
-    output = []
+    simulator_output = []
+    tool_output = []
+    simulator_statuses = []
     reason = ""
     setup_error = False
     for index, command in enumerate(probe["runs"], 1):
@@ -179,7 +236,11 @@ def run_commands(probe, tier, args, resources, result, work):
         record = execute(argv, work, timeout, work / f"run-{index:02}.log")
         record.update(command=("%not " if negative else "") + expanded, negated=bool(negative))
         result["commands"].append(record)
-        output.append(record["stdout"])
+        if SIMULATION.match(command):
+            simulator_output.append(record["stdout"])
+            simulator_statuses.append(record["rc"])
+        else:
+            tool_output.append(record["stdout"])
         is_filecheck = argv[0] == str(args.filecheck)
         setup_error = (filecheck_setup_error(record, argv, work) if is_filecheck
                        else bool(record.get("launch_error")))
@@ -190,15 +251,24 @@ def run_commands(probe, tier, args, resources, result, work):
         if record["timeout"] or not success:
             reason = f"RUN {index} timed out" if record["timeout"] else f"RUN {index} exited with status {record['rc']}"
             break
-    if not reason and probe["checks"]:
-        combined = work / "output.log"
-        combined.write_text("".join(output))
-        checked = execute([str(args.filecheck), str(path), "--allow-empty",
+    # CHECK compares what the simulator printed. A diagnostic is not a result of
+    # the simulation, so DIAG alone sees the compiler's output.
+    for present, prefix, text, log in ((probe["checks"], "CHECK", simulator_output, "output.log"),
+                                       (probe["diagnostics"], "DIAG", tool_output, "diag.log")):
+        if reason or not present:
+            continue
+        combined = work / log
+        combined.write_text("".join(text))
+        checked = execute([str(args.filecheck), str(path), "--allow-empty", "--check-prefix=" + prefix,
                            "--input-file=" + str(combined)], work, 15, work / "check.log")
         result["commands"].append(checked)
         if checked["rc"] or checked["timeout"]:
             setup_error = filecheck_setup_error(checked, checked["argv"], work)
-            reason = "Output check timed out" if checked["timeout"] else "Output did not match CHECK directives"
+            reason = ("Output check timed out" if checked["timeout"]
+                      else f"Output did not match {prefix} directives")
+    if not reason and not setup_error:
+        result["execution"] = execution_results(work, inputs, "".join(simulator_output), simulator_statuses,
+                                                args.coverage)
     expected = bool(probe["xfail"] & {"*", tier})
     result["status"] = "error" if setup_error else (("xfail" if expected else "fail") if reason else ("xpass" if expected else "pass"))
     result["reason"] = reason or ("Expected failure now passes" if expected else "")
@@ -208,7 +278,7 @@ def run_commands(probe, tier, args, resources, result, work):
 def main():
     started = time.monotonic()
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("compiler", "clang", "filecheck", "output"):
+    for name in ("compiler", "clang", "filecheck", "coverage", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--tests", type=Path, default=ROOT / "test/Conformance")
     parser.add_argument("--jobs", type=int, default=4)
@@ -218,9 +288,9 @@ def main():
     args = parser.parse_args()
     if args.jobs < 1:
         parser.error("--jobs must be positive")
-    for key in ("compiler", "clang", "filecheck", "tests", "output"):
+    for key in ("compiler", "clang", "filecheck", "coverage", "tests", "output"):
         setattr(args, key, getattr(args, key).resolve())
-    for key in ("compiler", "clang", "filecheck"):
+    for key in ("compiler", "clang", "filecheck", "coverage"):
         path = getattr(args, key)
         if not path.is_file() or not os.access(path, os.X_OK):
             parser.error(f"{key} is not executable: {path}")
@@ -263,6 +333,18 @@ def main():
         if (record["standard"], record["clause"]) in changed and record["reason"] != SOURCE_CHANGED:
             record.update(status="error", reason=SOURCE_CHANGED)
             print("ERROR", record["standard"], record["clause"], SOURCE_CHANGED, flush=True)
+    tiers = {}
+    for record in results:
+        tiers.setdefault((record["standard"], record["clause"]), {})[record["tier"]] = record
+    for pair in tiers.values():
+        native, bytecode = pair.get("native"), pair.get("bytecode")
+        if not native or not bytecode or "execution" not in native or "execution" not in bytecode:
+            continue
+        difference = execution_difference(native["execution"], bytecode["execution"])
+        if difference:
+            for record in (native, bytecode):
+                record.update(status="fail", reason="Native and bytecode execution results differ: " + difference)
+                print("FAIL", record["standard"], record["clause"], record["tier"], record["reason"], flush=True)
     if digest(args.compiler) != compiler_sha256:
         raise RuntimeError("The compiler changed during the run")
     if fingerprint_resources(resources) != resource_sha256:

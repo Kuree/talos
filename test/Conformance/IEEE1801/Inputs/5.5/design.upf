@@ -1,3 +1,2 @@
 create_supply_net rail
-if {![catch {create_supply_set rail}]} {error "namespace collision accepted"}
-puts PASS
+if {[catch {create_supply_set rail}]} {create_supply_net collided}

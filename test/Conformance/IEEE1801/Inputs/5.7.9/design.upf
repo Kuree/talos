@@ -1,3 +1,9 @@
-create_power_domain P -elements dut
-set_isolation A -domain P -clamp_value 0 -isolation_signal iso -applies_to outputs -location parent
-set_isolation B -domain P -no_isolation
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_supply_net VRET
+create_supply_set RET -function {power VRET} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention A -domain PD -elements dut/q -retention_supply RET -retention_condition keep
+set_retention B -domain PD -elements dut -retention_supply RET -retention_condition never

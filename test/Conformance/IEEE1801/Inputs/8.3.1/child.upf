@@ -1,1 +1,2 @@
-if {[set_scope .] ne "/"} {error "child context not reset"}
+load_upf [file join [file dirname [info script]] grand.upf] -scope sub
+create_supply_net mid

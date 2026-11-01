@@ -1,2 +1,7 @@
-if {![llength [info commands use_interface_cell]]} {error "unsupported command: use_interface_cell"}
-puts "COMMAND_PRESENT:use_interface_cell"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_power_domain PD -elements dut -supply {primary CORE}
+set_isolation ISO -domain PD -isolation_signal iso -clamp_value 1 -applies_to outputs -location parent
+use_interface_cell IFC -strategy {PD.ISO} -domain PD -lib_cells iso_or -port_map {{d UPF_GENERIC_DATA} {en UPF_GENERIC_ENABLE} {y UPF_GENERIC_OUTPUT}}

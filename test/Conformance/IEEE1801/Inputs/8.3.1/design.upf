@@ -1,3 +1,2 @@
 load_upf [file join [file dirname [info script]] child.upf] -scope dut
-if {[set_scope .] ne "/"} {error "parent context not restored"}
-puts PASS
+if {[set_scope .] eq "/"} {create_supply_net outer}

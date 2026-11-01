@@ -1,3 +1,2 @@
 #include "svdpi.h"
-svBitVec32 word;
-_Static_assert(SV_CANONICAL_SIZE(33)==2,"legacy size");
+int words(void) { svBitVec32 w[SV_CANONICAL_SIZE(33)]; return (int)(sizeof(w) / sizeof(w[0])); }

@@ -1,3 +1,3 @@
 #include "svdpi.h"
-_Static_assert(sizeof(svBitVecVal)==4,"canonical word");
-_Static_assert(sizeof(svLogicVecVal)==8,"four-state word");
+int enc(svLogic b) { return b; }
+int bits(const svBitVecVal *v, int word) { return word ? (int)(v[1] & 0xff) : (int)v[0]; }

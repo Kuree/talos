@@ -1,1 +1,3 @@
-create_hdl2upf_vct CUSTOM -hdl_type sv -table {{0 OFF} {1 FULL_ON} {X UNDETERMINED} {Z UNDETERMINED}}
+create_hdl2upf_vct CUSTOM -hdl_type {sv reg} -table {{0 FULL_ON} {1 OFF} {X OFF} {Z OFF}}
+create_supply_net N
+connect_supply_net N -ports dut/p -vct CUSTOM

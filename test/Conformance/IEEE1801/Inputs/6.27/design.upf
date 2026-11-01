@@ -1,2 +1,8 @@
-if {![llength [info commands create_upf2hdl_vct]]} {error "unsupported command: create_upf2hdl_vct"}
-puts "COMMAND_PRESENT:create_upf2hdl_vct"
+create_upf2hdl_vct CUSTOM -hdl_type {sv reg} -table {{OFF 1} {FULL_ON 0} {PARTIAL_ON 1} {UNDETERMINED 0}}
+create_supply_net VDD
+create_supply_net VSS
+create_supply_net VSW
+create_supply_set SW -function {power VSW} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary SW}
+create_power_switch PS -domain PD -input_supply_port {vin VDD} -output_supply_port {vout VSW} -control_port {en en} -control_port {part part} -on_state {ON vin en} -on_partial_state {P vin part}
+connect_supply_net VSW -ports load/vdd -vct CUSTOM

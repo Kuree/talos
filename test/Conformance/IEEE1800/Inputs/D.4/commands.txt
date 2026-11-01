@@ -1,1 +1,1 @@
-
+$display("FROM_CMD");

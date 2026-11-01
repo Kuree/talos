@@ -1,1 +1,4 @@
-puts PASS
+foreach n {VDD VSS} {create_supply_net $n}
+if {![catch {create_supply_net VDD}]} {error "duplicate net accepted"}
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_power_domain PD -elements [lindex [find_objects . -pattern d* -object_type inst] 0] -supply {primary CORE}

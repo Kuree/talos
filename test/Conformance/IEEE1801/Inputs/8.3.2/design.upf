@@ -1,2 +1,8 @@
-if {![catch {create_supply_net VDD -unsupported true}]} {error "missing Tcl error"}
-puts PASS
+create_supply_net VDD
+set_scope dut
+create_supply_net VDD
+create_supply_set S
+set_scope /
+if {[catch {create_supply_set dut/S -update -function {power VDD}}]} {create_supply_net refused}
+set_scope dut
+create_supply_set S -update -function {power VDD}

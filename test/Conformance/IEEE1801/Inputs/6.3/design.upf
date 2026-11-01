@@ -1,2 +1,1 @@
-if {![llength [info commands add_parameter]]} {error "unsupported command: add_parameter"}
-puts "COMMAND_PRESENT:add_parameter"
+load_upf [file join [file dirname [info script]] child.upf] -parameters {{ELEMENT dut}}

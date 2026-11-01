@@ -1,3 +1,2 @@
 create_supply_set S
 create_supply_set T -function {power S.power}
-puts PASS

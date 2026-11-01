@@ -1,2 +1,6 @@
-if {![llength [info commands create_power_state_group]]} {error "unsupported command: create_power_state_group"}
-puts "COMMAND_PRESENT:create_power_state_group"
+create_supply_set A
+create_supply_set B
+create_power_domain P -elements dut -supply {primary A}
+create_power_domain Q -elements other -supply {primary B}
+create_power_state_group G
+add_power_state G -group -state {BOTH -logic_expr {A == ON && B == ON} -illegal}

@@ -1,2 +1,2 @@
-#include "svdpi.h"
-int f(const svOpenArrayHandle a){int*p=svGetArrayPtr(a);return !p || (svSizeOfArray(a)==2*sizeof(int) && p[0]==4 && p[1]==5);}
+int f(const int *a) { return a[0] * 10 + a[1]; }
+void g(int *a) { a[0] = 7; a[1] = 8; }

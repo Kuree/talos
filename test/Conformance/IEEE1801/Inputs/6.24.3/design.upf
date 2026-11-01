@@ -1,1 +1,4 @@
 create_supply_net N -resolve parallel
+create_supply_port A -direction in
+create_supply_port B -direction in
+connect_supply_net N -ports {A B}

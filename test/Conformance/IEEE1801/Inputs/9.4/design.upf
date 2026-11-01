@@ -1,2 +1,7 @@
-if {![llength [info commands add_state_transition]]} {error "unsupported command: add_state_transition"}
-puts "COMMAND_PRESENT:add_state_transition"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_power_domain PD -elements dut -supply {primary CORE}
+add_power_state CORE -state {HI -supply_expr {power == {FULL_ON 1.0}} -simstate NORMAL} -state {LO -supply_expr {power == {FULL_ON 0.8}} -simstate NORMAL}
+add_state_transition CORE -supply -transition {DOWN -paired {{HI LO}} -illegal}

@@ -1,2 +1,2 @@
-define_always_on_cell -cells aon -power VDD -ground VSS -power_switchable SW
-define_always_on_cell -cells aon -power VDD2 -ground VSS -power_switchable SW
+define_always_on_cell -cells aon -power VDDA -ground VSSA -power_switchable VSW
+define_always_on_cell -cells aon -power VDDB -ground VSSA -power_switchable VSW

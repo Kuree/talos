@@ -1,1 +1,6 @@
-puts PASS
+proc rails {args} {foreach r $args {create_supply_net $r};return [llength $args]}
+if {[rails VDD VSS] != 2} {error "rails"}
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+set elements {}
+for {set i 0} {$i < 4} {incr i 2} {lappend elements u$i}
+create_power_domain PD -elements $elements -supply {primary CORE}

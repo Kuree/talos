@@ -1,2 +1,12 @@
-if {![llength [info commands upf_object_in_class]]} {error "unsupported command: upf_object_in_class"}
-puts "COMMAND_PRESENT:upf_object_in_class"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary CORE}
+set_isolation ISO -domain PD -isolation_signal iso -clamp_value 0 -applies_to outputs -location parent
+proc sv {text} {return "\"$text\""}
+set strategy [upf_object_in_class /top/PD.ISO -class upfStrategyT]
+set boundary [upf_object_in_class /top/PD.ISO -class upfBoundaryStrategyT]
+set domainStrategy [upf_object_in_class /top/PD -class upfStrategyT]
+set domainExtent [upf_object_in_class /top/PD -class upfExtentClassT]
+set netExtent [upf_object_in_class /top/VDD -class upfExtentClassT]
+bind_checker show -module show -parameters [list [list strategy [sv $strategy]] [list boundary [sv $boundary]] [list domainStrategy [sv $domainStrategy]] [list domainExtent [sv $domainExtent]] [list netExtent [sv $netExtent]]]

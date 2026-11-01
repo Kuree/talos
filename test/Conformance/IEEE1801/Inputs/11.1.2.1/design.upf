@@ -1,2 +1,17 @@
-if {![llength [info commands upf_query_object_properties]]} {error "unsupported command: upf_query_object_properties"}
-puts "COMMAND_PRESENT:upf_query_object_properties"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary CORE}
+set_isolation ISO -domain PD -isolation_signal iso -clamp_value 0 -applies_to outputs -location parent
+proc sv {text} {return "\"$text\""}
+set name [upf_query_object_properties /top/PD.ISO -property upf_name]
+set line [upf_query_object_properties /top/PD -property upf_line]
+set functions [llength [upf_query_object_properties /top/CORE -property upf_functions]]
+set parent {}
+foreach pair [upf_query_object_properties /top/PD] {
+  if {[lindex $pair 0] eq "upf_parent"} {set parent [lindex $pair 1]}
+}
+set badProperty [catch {upf_query_object_properties /top/PD -property upf_nonsense}]
+set wrongClass [catch {upf_query_object_properties /top/PD -property upf_msb}]
+set badHandle [catch {upf_query_object_properties /top/missing -property upf_name}]
+bind_checker show -module show -parameters [list [list name [sv $name]] [list line [sv $line]] [list functions [sv $functions]] [list parent [sv $parent]] [list badProperty [sv $badProperty]] [list wrongClass [sv $wrongClass]] [list badHandle [sv $badHandle]]]

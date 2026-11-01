@@ -1,19 +1,21 @@
-// CLAUSE: protect digest_block parser availability
+// CLAUSE: The digests are compared, and a mismatch means the data or digest was altered
 // XFAIL: *
-// Protected payload processing is unavailable; no decryption key-registration interface is assumed.
-// RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %s -o %t.exe
+// Protected envelopes are rejected by design (docs/lrm-support-roadmap.md Clause 34), and the key-file option --protect-key-file does not exist.
+// RUN: %not %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier --protect-key-file=%S/Inputs/34.5.22.2/keys.json %S/Inputs/34.5.22.2/illegal.sv -o %t.bad.exe
+// RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier --protect-key-file=%S/Inputs/34.5.22.2/keys.json %s -o %t.exe
 // RUN: %t.exe
-// CHECK-DAG: {{^PASS$}}
+// CHECK: decrypted x=42
+// 34.5.22.2: "If the two digests do not match, then either the digest_block or the encrypted data has been altered".
 
 `pragma protect begin_protected
 `pragma protect data_keyowner="lrm-audit"
 `pragma protect data_keyname="test-key"
 `pragma protect data_method="des-cbc"
-`pragma protect digest_method="md5"
 `pragma protect digest_key_method="des-cbc"
-`pragma protect encoding=(enctype="base64",line_length=76,bytes=56)
-`pragma protect data_block
-EjRWeJCrze9/6icnxeWP25OLQhsO6GdiMuh4T3IeBmaUSxH/quPr0NWIniXcRWrCnDnGlpp7HcE=
-`pragma protect encoding=(enctype="base64",line_length=76,bytes=24),digest_block
-/ty6CYdlQyEb10evN7wbsgkHYnzYX1lJ
+`pragma protect digest_method="md5"
+`pragma protect encoding=(enctype="base64",line_length=76,bytes=96),data_block
+16xOf2gocWbrgrPf7yNN2+cdXmutqKjv67k7IXbtyJPhRj9jwSRu/40Lj8VRVRViKr5bIq9lPYIn
+cwk0z3dhttNcw6NLcTXLUfeI5iRdiAB1TC9trvRPO4ktyE00Xu84
+`pragma protect encoding=(enctype="base64",line_length=76,bytes=32),digest_block
+xWYU19yV9Vr+qIXn7wr2k7CiZthph4dvG0eAGKDR5i8=
 `pragma protect end_protected

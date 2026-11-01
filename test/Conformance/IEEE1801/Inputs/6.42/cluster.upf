@@ -1,0 +1,8 @@
+if {[set_design_top cluster] eq {} && [set_scope .] eq "/"} {create_supply_net named}
+if {[catch {set_design_top {}}]} {create_supply_net rejected}
+
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_power_domain PD -elements u -supply {primary CORE}

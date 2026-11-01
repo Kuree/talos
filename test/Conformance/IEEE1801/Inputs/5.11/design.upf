@@ -1,2 +1,1 @@
-if {![catch {create_supply_net VDD -unsupported true}]} {error "missing Tcl error"}
-puts PASS
+if {[catch {create_supply_net VDD -unsupported true} message] && [string match *-unsupported* $message]} {create_supply_net caught}

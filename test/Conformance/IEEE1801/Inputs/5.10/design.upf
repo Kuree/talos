@@ -1,4 +1,8 @@
-create_supply_set S
 create_supply_net VDD
-create_supply_set S -function {power VDD} -update
-puts PASS
+create_supply_net VSS
+create_supply_net OTHER
+create_supply_set S -function {ground VSS}
+if {[catch {create_supply_set S -function {power VDD}}]} {create_supply_net refused}
+create_supply_set S -update -function {power VDD}
+if {![catch {create_supply_set S -update -function {power OTHER}}]} {error "conflict accepted"}
+create_power_domain PD -elements dut -supply {primary S}

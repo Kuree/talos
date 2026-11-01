@@ -1,0 +1,6 @@
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary CORE}
+create_power_state_group CPU_cluster
+add_power_state -group CPU_cluster -state {RUN1 -logic_expr {PD.primary == ON}}

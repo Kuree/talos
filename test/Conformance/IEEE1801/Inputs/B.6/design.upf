@@ -1,1 +1,2 @@
-set_port_attributes -ports p -hdl_to_upf_vct SV_LOGIC2UPF
+create_supply_net N
+connect_supply_net N -ports dut/p -vct SV_LOGIC2UPF

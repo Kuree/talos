@@ -1,5 +1,9 @@
-create_power_domain P -elements dut
-create_power_domain Q -elements other
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_power_domain P -elements dut -supply {primary CORE}
+create_power_domain Q -elements other -supply {primary CORE}
 create_supply_net V -domain P
+if {[catch {create_supply_net V -domain Q}]} {create_supply_net needs_reuse}
 create_supply_net V -domain Q -reuse
-puts PASS

@@ -1,0 +1,6 @@
+create_supply_port vdd -direction in
+create_supply_port vdd1 -direction in
+add_supply_state vdd -state {on1V 1.0}
+add_supply_state vdd1 -state {off off}
+create_pst chip_pst -supplies {vdd vdd1}
+add_pst_state chip_on -pst chip_pst -state {on1V off}

@@ -1,0 +1,6 @@
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+if {[info exists SECRET]} {error "global visible"}
+create_power_domain PD -elements u -supply {primary CORE}

@@ -1,1 +1,3 @@
-if {[set_scope .] ne "/"} {error "wrong child scope"}
+create_supply_net rail
+create_supply_net VSS
+create_supply_set LOCAL -function {power rail} -function {ground VSS}

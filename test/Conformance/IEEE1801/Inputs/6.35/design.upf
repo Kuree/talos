@@ -1,2 +1,8 @@
-if {![llength [info commands map_power_switch]]} {error "unsupported command: map_power_switch"}
-puts "COMMAND_PRESENT:map_power_switch"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set AON -function {power VDD} -function {ground VSS}
+create_supply_set SW -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary SW}
+create_power_switch PS -domain PD -input_supply_port {vin AON.power} -output_supply_port {vout SW.power} -control_port {en en} -on_state {ON vin en}
+
+map_power_switch PS -domain PD -lib_cells sw_model -port_map {{ctl en}}

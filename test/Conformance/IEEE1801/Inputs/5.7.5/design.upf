@@ -1,2 +1,8 @@
-create_power_domain P -elements dut
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+name_format -isolation_prefix FMT_
+create_power_domain P -elements dut -supply {primary CORE}
 set_isolation A -domain P -clamp_value 0 -isolation_signal iso -applies_to outputs -location parent -name_prefix ISO_
+use_interface_cell IFC -strategy {P.A} -domain P -lib_cells iso_mark

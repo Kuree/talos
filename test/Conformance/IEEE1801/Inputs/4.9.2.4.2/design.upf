@@ -1,2 +1,12 @@
-if {![llength [info commands apply_power_model]]} {error "unsupported command: apply_power_model"}
-puts "COMMAND_PRESENT:apply_power_model"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_supply_net VMAC
+create_supply_set MACS -function {power VMAC} -function {ground VSS}
+set_design_attributes -elements dut/mac -is_soft_macro TRUE
+define_power_model MACRO -for leaf {
+  create_supply_set S
+  create_power_domain INNER -elements . -supply {primary S}
+}
+create_power_domain PD -elements dut -supply {primary CORE}
+apply_power_model MACRO -elements dut/mac -supply_map {{INNER.primary MACS}}

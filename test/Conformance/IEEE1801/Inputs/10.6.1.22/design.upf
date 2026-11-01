@@ -1,0 +1,4 @@
+define_power_model upf_model -for leaf {
+  create_power_domain PD1 -elements {.} -supply {ssh1} -supply {ssh2}
+}
+apply_power_model upf_model -elements {dut}

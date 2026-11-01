@@ -1,2 +1,9 @@
-create_power_domain P -elements dut
-create_power_domain Q -elements dut/child
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_supply_net VQ
+create_supply_net VQS
+create_supply_set QS -function {power VQ} -function {ground VQS}
+create_power_domain P -elements dut -supply {primary CORE}
+create_power_domain Q -elements dut/child -supply {primary QS}

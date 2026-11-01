@@ -1,2 +1,5 @@
-if {![llength [info commands query_upf]]} {error "unsupported command: query_upf"}
-puts "COMMAND_PRESENT:query_upf"
+create_supply_net VDD
+proc sv {text} {return "\"$text\""}
+set tclClass [upf_query_object_type /top/VDD]
+set tclName [upf_query_object_properties /top/VDD -property upf_name]
+bind_checker show -module show -parameters [list [list tclClass [sv $tclClass]] [list tclName [sv $tclName]]]

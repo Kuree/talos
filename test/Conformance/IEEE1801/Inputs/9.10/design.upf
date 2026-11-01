@@ -1,2 +1,9 @@
-create_power_domain PD -elements dut
-set_repeater R -domain PD -elements dut/q
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_supply_net VRP
+create_supply_set RP -function {power VRP} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary CORE}
+
+set_repeater BUF -domain PD -elements dut/q -applies_to outputs -repeater_supply RP

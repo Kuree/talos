@@ -1,5 +1,4 @@
 create_power_domain PD -elements dut
 create_supply_net VDD
 create_supply_net VSS
-if {[set_domain_supply_net PD -primary_power_net VDD -primary_ground_net VSS]!=1} {error "legacy binding"}
-puts PASS
+if {[set_domain_supply_net PD -primary_power_net VDD -primary_ground_net VSS] != 1} {error "legacy binding"}

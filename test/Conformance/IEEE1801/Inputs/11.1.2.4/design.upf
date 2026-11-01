@@ -1,2 +1,15 @@
-if {![llength [info commands upf_query_object_pathname]]} {error "unsupported command: upf_query_object_pathname"}
-puts "COMMAND_PRESENT:upf_query_object_pathname"
+set_scope dut
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_power_domain PD -elements mid -supply {primary CORE}
+set_isolation ISO -domain PD -isolation_signal iso -clamp_value 0 -applies_to outputs -location parent
+proc sv {text} {return "\"$text\""}
+set_scope ..
+set absolute [upf_query_object_pathname /top/dut/PD.ISO]
+set relative [upf_query_object_pathname /top/dut/PD.ISO -relative_to /top]
+set notAncestor [upf_query_object_pathname /top/dut/PD.ISO -relative_to /top/dut/mid]
+set extent [upf_query_object_properties /top/dut/PD -property upf_effective_extents]
+set relationship [upf_query_object_pathname $extent]
+set rtl [upf_query_object_pathname /top/dut/mid/q@1]
+bind_checker show -module show -parameters [list [list absolute [sv $absolute]] [list relative [sv $relative]] [list notAncestor [sv $notAncestor]] [list relationship [sv $relationship]] [list rtl [sv $rtl]]]

@@ -1,3 +1,5 @@
 set nets [list VDD VSS]
 foreach n $nets {create_supply_net $n}
-puts PASS
+create_supply_set CORE -function [list power [lindex $nets 0]] -function "ground [lindex $nets 1]"
+set first u0
+create_power_domain PD -elements "$first u1" -supply {primary CORE}

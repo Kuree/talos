@@ -1,3 +1,4 @@
 create_supply_net VDD
 create_supply_net VSS
 create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary CORE}

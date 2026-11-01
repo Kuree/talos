@@ -1,0 +1,2 @@
+library la "a.sv";
+library lb "b.sv";

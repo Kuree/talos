@@ -1,2 +1,9 @@
-create_supply_set S
-add_power_state S -state {A -supply_expr {power == {FULL_ON 0.7}} -simstate CORRUPT_ON_ACTIVITY}
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_supply_net VRET
+create_supply_set RET -function {power VRET} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention NARROW -domain PD -elements dut/q -retention_supply RET -retention_condition keep
+set_retention WIDE -domain PD -elements dut -retention_supply RET -retention_condition never

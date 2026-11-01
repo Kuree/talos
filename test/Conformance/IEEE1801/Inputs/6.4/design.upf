@@ -1,2 +1,11 @@
-if {![llength [info commands add_port_state]]} {error "unsupported command: add_port_state"}
-puts "COMMAND_PRESENT:add_port_state"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_power_domain PD -elements dut -supply {primary CORE}
+
+create_supply_port P -direction in
+add_port_state P -state {HV 1.0} -state {DOWN off}
+create_pst T -supplies P
+add_pst_state RUN -pst T -state HV
+if {[catch {add_pst_state BAD -pst T -state NOPE}]} {create_supply_net checked}

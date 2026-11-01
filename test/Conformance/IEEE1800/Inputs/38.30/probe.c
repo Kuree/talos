@@ -1,3 +1,2 @@
 #include "sv_vpi_user.h"
-static void (* volatile target)(void)=(void(*)(void))vpi_printf;
-int probe(void){return target!=0;}
+int probe(void) { return vpi_printf("n=%d s=%s x=%x f=%5.2f\n", 7, "abc", 255, 1.5); }

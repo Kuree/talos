@@ -1,2 +1,9 @@
-if {![llength [info commands end_power_model]]} {error "unsupported command: end_power_model"}
-puts "COMMAND_PRESENT:end_power_model"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+begin_power_model MACRO -for leaf
+  create_supply_set S
+  create_power_domain INNER -elements . -supply {primary S}
+end_power_model
+create_supply_net after
+apply_power_model MACRO -elements dut -supply_map {{INNER.primary CORE}}

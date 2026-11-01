@@ -1,1 +1,7 @@
-set_port_attributes -ports p -upf_to_hdl_vct UPF_GNDZERO2SV_LOGIC
+create_supply_net VDD
+create_supply_net VSS
+create_supply_net VSW
+create_supply_set SW -function {power VSW} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary SW}
+create_power_switch PS -domain PD -input_supply_port {vin VDD} -output_supply_port {vout VSW} -control_port {en en} -control_port {part part} -on_state {ON vin en} -on_partial_state {P vin part}
+connect_supply_net VSW -ports load/vdd -vct UPF_GNDZERO2SV_LOGIC

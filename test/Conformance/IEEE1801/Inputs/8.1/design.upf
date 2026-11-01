@@ -1,3 +1,10 @@
+create_supply_net rail
 set_scope dut
-if {[set_scope .] ne "/dut"} {error "scope change was deferred"}
-puts PASS
+create_supply_net rail
+set_scope /
+create_supply_set CORE
+create_power_domain PD -elements dut
+associate_supply_set CORE -handle PD.primary
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -update -function {power VDD} -function {ground VSS}

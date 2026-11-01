@@ -1,0 +1,9 @@
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary CORE}
+proc sv {text} {return "\"$text\""}
+set domain [upf_query_object_type /top/PD]
+set scope [upf_query_object_type /top/dut]
+set net [upf_query_object_type /top/VDD]
+bind_checker show -module show -parameters [list [list domain [sv $domain]] [list scope [sv $scope]] [list net [sv $net]]]

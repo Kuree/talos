@@ -1,0 +1,5 @@
+{
+  "key_keyowner": "lrm-audit",
+  "key_keyname": "exchange-key",
+  "DES_key_hex": "0123456789abcdef"
+}

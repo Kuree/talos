@@ -1,0 +1,3 @@
+create_supply_set A
+create_supply_set B
+add_power_state A -state {X -supply_expr {B.power == FULL_ON} -simstate NORMAL}

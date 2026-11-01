@@ -1,2 +1,10 @@
-if {![llength [info commands define_power_switch_cell]]} {error "unsupported command: define_power_switch_cell"}
-puts "COMMAND_PRESENT:define_power_switch_cell"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_supply_net VSW
+create_supply_set SW -function {power VSW} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary SW}
+define_power_switch_cell -cells header -type header -power_switchable VOUTP -power VINP -ground VSSP -stage_1_enable en
+connect_supply_net VDD -ports sw/VINP
+connect_supply_net VSW -ports sw/VOUTP

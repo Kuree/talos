@@ -1,3 +1,11 @@
+set_scope dut
 create_supply_net VDD
 create_supply_net VSS
 create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_power_domain PD -elements mid -supply {primary CORE}
+proc sv {text} {return "\"$text\""}
+set relative [upf_query_object_pathname PD]
+set dot [upf_query_object_pathname .]
+set extent [upf_query_object_properties PD -property upf_effective_extents]
+set tool [upf_query_object_type $extent]
+bind_checker show -module show -parameters [list [list relative [sv $relative]] [list dot [sv $dot]] [list tool [sv $tool]]]

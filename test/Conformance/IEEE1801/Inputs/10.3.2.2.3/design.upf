@@ -1,3 +1,2 @@
+create_supply_port VDD -direction in
 create_supply_net VDD
-create_supply_port PAD -direction in
-connect_supply_net VDD -ports PAD

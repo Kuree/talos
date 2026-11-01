@@ -1,0 +1,14 @@
+[
+  {
+    "keyowner": "other-owner",
+    "keyname": "test-key",
+    "method": "des-cbc",
+    "key_hex": "fedcba9876543210"
+  },
+  {
+    "keyowner": "lrm-audit",
+    "keyname": "test-key",
+    "method": "des-cbc",
+    "key_hex": "0123456789abcdef"
+  }
+]

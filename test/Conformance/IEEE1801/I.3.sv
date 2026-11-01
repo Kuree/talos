@@ -1,7 +1,20 @@
 // CLAUSE: Backward SAIF structure
 // REQUIRES: upf
 // XFAIL: *
-// capability-unavailable
-// Prerequisite: SAIF is an external exchange format; the compiler advertises no SAIF import/export entry point, so this production cannot be exercised.
-// RUN: %talos --help-hidden
-// CHECK-DAG: {{[Ss][Aa][Ii][Ff]}}
+// Talos has no SAIF writer or reader; --saif is the option this probe expects.
+// RUN: %talos --std=1800-2023 --compile-threads=1 --top=top --saif=probe.saif -O3 --execution-tier=%tier %s -o %t.exe
+// RUN: %t.exe
+// RUN: %FileCheck %s --check-prefix=FILE0 --input-file=probe.saif
+// CHECK: {{^PASS$}}
+// FILE0: (SAIFILE
+// FILE0: (DIRECTION "backward")
+// FILE0: (INSTANCE
+
+module top;
+  logic q = 0;
+  initial begin
+    repeat (3) #5 q = ~q;
+    #5 $display("PASS");
+    $finish;
+  end
+endmodule

@@ -1,3 +1,5 @@
 #include "svdpi.h"
-#include <limits.h>
-_Static_assert(CHAR_BIT==8 && sizeof(int)==4 && sizeof(double)==8,"native ABI");
+int en(int x) { return x * 10; }
+void ti(const svLogicVecVal *i, const svLogicVecVal *t, int *ia, int *ib, int *t0, int *t1, int *tb1) {
+  *ia = i->aval; *ib = i->bval; *t0 = t[0].aval; *t1 = t[1].aval; *tb1 = t[1].bval;
+}

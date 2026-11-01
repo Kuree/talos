@@ -1,2 +1,8 @@
-if {![llength [info commands define_retention_cell]]} {error "unsupported command: define_retention_cell"}
-puts "COMMAND_PRESENT:define_retention_cell"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_supply_net VRET
+create_power_domain PD -elements dut -supply {primary CORE}
+define_retention_cell -cells retflop -power VRETP -ground VSSP -power_switchable VDDP -save_function {save high} -restore_function {save low}
+connect_supply_net VRET -ports dut/u/VRETP

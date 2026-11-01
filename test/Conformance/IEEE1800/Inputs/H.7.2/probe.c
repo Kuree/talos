@@ -1,3 +1,7 @@
-#include "svdpi.h"
-#include <limits.h>
-_Static_assert(CHAR_BIT==8 && sizeof(int)==4 && sizeof(double)==8,"native ABI");
+#include <string.h>
+signed char b(signed char x) { return x + 1; }
+short s(short x) { return x * 2; }
+long long l(long long x) { return x + 1; }
+double r(double x) { return x * 2; }
+float sr(float x) { return x + 0.5f; }
+int slen(const char *x) { return (int)strlen(x); }

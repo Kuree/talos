@@ -1,0 +1,7 @@
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary CORE}
+create_supply_net VRET
+create_supply_set RET -function {power VRET} -function {ground VSS}
+set_retention KEEP -domain PD -elements dut/state -retention_supply RET -retention_condition rtc

@@ -1,2 +1,20 @@
-if {![llength [info commands query_upf]]} {error "unsupported command: query_upf"}
-puts "COMMAND_PRESENT:query_upf"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_power_domain PD -elements m1 -supply {primary CORE}
+proc sv {text} {return "\"$text\""}
+proc query_objects_by_property {scope property pattern class} {
+  set result {}
+  foreach child [upf_query_object_properties $scope -property $property] {
+    if {[upf_object_in_class $child -class $class]} {
+      set name [upf_query_object_properties $child -property upf_name]
+      if {[string match $pattern $name]} {
+        lappend result [upf_query_object_pathname $child -relative_to .]
+      }
+    }
+  }
+  return $result
+}
+set basic [lsort [query_objects_by_property /top upf_items V* upfSupplyNetT]]
+set native [lsort [query_upf . -pattern V* -object_type supply_net]]
+bind_checker show -module show -parameters [list [list basic [sv $basic]] [list native [sv $native]]]

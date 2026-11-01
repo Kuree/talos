@@ -1,3 +1,3 @@
-#include "svdpi.h"
-#include <limits.h>
-_Static_assert(CHAR_BIT==8 && sizeof(int)==4 && sizeof(double)==8,"native ABI");
+int add3(int a, int b, int c) { return a + b + c; }
+double half(double x) { return x / 2; }
+int bval(signed char x) { return x; }

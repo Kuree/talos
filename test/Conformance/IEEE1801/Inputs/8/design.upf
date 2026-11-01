@@ -1,1 +1,6 @@
-puts PASS
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_power_domain PD -elements [find_objects . -pattern u -object_type inst -transitive] -supply {primary CORE}
+if {[find_objects . -pattern u -object_type inst -transitive] ne "many/u"} {error "elaborated branch"}

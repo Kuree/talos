@@ -1,2 +1,12 @@
-if {![llength [info commands upf_query_object_type]]} {error "unsupported command: upf_query_object_type"}
-puts "COMMAND_PRESENT:upf_query_object_type"
+set_scope dut
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_power_domain PD -elements mid -supply {primary CORE}
+set_scope ..
+proc sv {text} {return "\"$text\""}
+set scope [upf_query_object_properties dut/PD -property upf_creation_scope]
+set rtl [upf_query_object_pathname $scope]
+set relative [upf_query_object_pathname $scope -relative_to .]
+set nets [lsort [find_objects $relative -pattern n* -object_type net]]
+bind_checker show -module show -parameters [list [list rtl [sv $rtl]] [list relative [sv $relative]] [list nets [sv $nets]]]

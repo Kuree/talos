@@ -1,2 +1,10 @@
-if {![llength [info commands map_repeater_cell]]} {error "unsupported command: map_repeater_cell"}
-puts "COMMAND_PRESENT:map_repeater_cell"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_supply_net VRP
+create_supply_set RP -function {power VRP} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary CORE}
+
+set_repeater BUF -domain PD -elements dut/a -applies_to outputs -repeater_supply RP
+map_repeater_cell BUF -domain PD -lib_cells buf_model

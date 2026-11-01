@@ -1,2 +1,16 @@
-if {![llength [info commands define_power_model]]} {error "unsupported command: define_power_model"}
-puts "COMMAND_PRESENT:define_power_model"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+define_power_model MACRO -for leaf {
+  create_supply_port VP -direction in
+  create_supply_port VG -direction in
+  create_supply_net N
+  create_supply_net G
+  connect_supply_net N -ports VP
+  connect_supply_net G -ports VG
+  create_supply_set S -function {power N} -function {ground G}
+  create_power_domain INNER -elements . -supply {primary S}
+}
+apply_power_model MACRO -elements dut
+connect_supply_net VDD -ports dut/VP
+connect_supply_net VSS -ports dut/VG

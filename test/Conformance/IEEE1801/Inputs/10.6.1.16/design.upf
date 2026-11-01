@@ -1,0 +1,2 @@
+create_supply_port vdd -direction in
+add_supply_state vdd -state {on1V 1.0}

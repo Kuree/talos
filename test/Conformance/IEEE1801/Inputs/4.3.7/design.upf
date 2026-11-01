@@ -1,3 +1,4 @@
-if {[set_scope dut] ne "/"} {error "previous root scope"}
-if {[set_scope /] ne "/dut"} {error "previous child scope"}
-puts PASS
+if {[set_scope dut/child] eq "/"} {create_supply_net deep}
+if {[set_scope ..] eq "/dut/child"} {create_supply_net mid}
+set_scope ..
+if {[catch {set_scope ..}]} {create_supply_net stop}

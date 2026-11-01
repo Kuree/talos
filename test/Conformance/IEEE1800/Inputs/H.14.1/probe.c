@@ -1,3 +1,4 @@
+#include <string.h>
 #include "svdpi.h"
-static void (* volatile target)(void)=(void(*)(void))svDpiVersion;
-int probe(void){return target!=0;}
+int known(void) { return !strcmp(svDpiVersion(), "1800-2005") || !strcmp(svDpiVersion(), "SV3.1a"); }
+int vlen(void) { return (int)strlen(svDpiVersion()); }

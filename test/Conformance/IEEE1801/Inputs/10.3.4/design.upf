@@ -1,0 +1,13 @@
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary CORE}
+proc sv {text} {return "\"$text\""}
+set keys {}
+foreach pair [upf_query_object_properties /top/PD] {lappend keys [lindex $pair 0]}
+set malformed [lsearch -all -inline -not -regexp $keys {^upf(_[a-z]+)+$}]
+set hasName [expr {"upf_name" in $keys}]
+set hasParent [expr {"upf_parent" in $keys}]
+set name [upf_query_object_properties /top/PD -property upf_name]
+set parent [upf_query_object_properties /top/PD -property upf_parent]
+bind_checker show -module show -parameters [list [list malformed [sv $malformed]] [list hasName [sv $hasName]] [list hasParent [sv $hasParent]] [list name [sv $name]] [list parent [sv $parent]]]

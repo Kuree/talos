@@ -1,2 +1,7 @@
-if {![llength [info commands create_composite_domain]]} {error "unsupported command: create_composite_domain"}
-puts "COMMAND_PRESENT:create_composite_domain"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_power_domain P -elements u0
+create_power_domain Q -elements u1
+create_composite_domain C -subdomains {P Q} -supply {primary CORE}

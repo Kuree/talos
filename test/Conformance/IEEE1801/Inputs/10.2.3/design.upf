@@ -1,2 +1,7 @@
-if {![llength [info commands upf_query_object_properties]]} {error "unsupported command: upf_query_object_properties"}
-puts "COMMAND_PRESENT:upf_query_object_properties"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_supply_port PAD -direction in
+add_supply_state VDD -state {on1V 1.0}
+create_power_domain PD -elements dut -supply {primary CORE}
+add_power_state CORE -state {BAD -supply_expr {power == UNDETERMINED} -simstate CORRUPT -illegal}

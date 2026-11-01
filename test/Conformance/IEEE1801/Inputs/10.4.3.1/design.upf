@@ -1,14 +1,6 @@
 set_scope dut
-create_supply_net rail
-set_scope /
-proc object {name type} {
-  if {![llength [info commands upf_query_object_type]]} {error "required query upf_query_object_type is unavailable"}
-  foreach candidate [list /$name /top/$name] {
-    if {![catch {upf_query_object_type $candidate} actual] && $actual eq $type} {return $candidate}
-  }
-  error "information-model handle unavailable: $name"
-}
-set h [object dut/rail upfSupplyNetT]
-set scope [upf_query_object_properties $h -property upf_creation_scope]
-if {[upf_query_object_type $scope] ne "upfHdlScopeT"} {error "creation-scope relationship"}
-puts PASS
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_power_domain PD -elements mid -supply {primary CORE}
+set_isolation ISO -domain PD -isolation_signal iso -clamp_value 0 -applies_to outputs -location parent

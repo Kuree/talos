@@ -1,2 +1,4 @@
 create_supply_net RAIL
-puts PASS
+create_supply_set S -function {power RAIL}
+set_scope dut
+create_supply_net INNER

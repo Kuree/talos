@@ -1,2 +1,6 @@
-if {![llength [info commands set_simstate_behavior]]} {error "unsupported command: set_simstate_behavior"}
-puts "COMMAND_PRESENT:set_simstate_behavior"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_power_domain PD -elements {dut sib} -supply {primary CORE}
+set_simstate_behavior DISABLE -models leaf

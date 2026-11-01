@@ -1,2 +1,11 @@
-if {![llength [info commands query_upf]]} {error "unsupported command: query_upf"}
-puts "COMMAND_PRESENT:query_upf"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_power_domain PD -elements m1 -supply {primary CORE}
+proc sv {text} {return "\"$text\""}
+set hierarchy [lsort [query_upf m1 -pattern * -object_type inst]]
+set domain [lsort [query_upf PD -pattern * -object_type inst]]
+set domainTransitive [lsort [query_upf PD -pattern * -object_type inst -transitive]]
+set_scope m1
+set relative [lsort [query_upf . -pattern b* -object_type inst]]
+bind_checker show -module show -parameters [list [list hierarchy [sv $hierarchy]] [list domain [sv $domain]] [list domainTransitive [sv $domainTransitive]] [list relative [sv $relative]]]

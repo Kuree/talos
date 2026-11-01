@@ -1,2 +1,9 @@
-if {![llength [info commands set_equivalent]]} {error "unsupported command: set_equivalent"}
-puts "COMMAND_PRESENT:set_equivalent"
+create_supply_net VA
+create_supply_net VB
+create_supply_net VSS
+create_supply_set A -function {power VA} -function {ground VSS}
+create_supply_set B -function {power VB} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary A}
+set_port_attributes -ports dut/q -receiver_supply B
+set_equivalent -sets {A B}
+set_isolation ISO -domain PD -isolation_signal iso -clamp_value 0 -applies_to outputs -location parent -diff_supply_only TRUE

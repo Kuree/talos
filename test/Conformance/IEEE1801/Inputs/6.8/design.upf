@@ -1,2 +1,8 @@
-if {![llength [info commands add_supply_state]]} {error "unsupported command: add_supply_state"}
-puts "COMMAND_PRESENT:add_supply_state"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_power_domain PD -elements dut -supply {primary CORE}
+
+add_supply_state CORE.power -state {HI 1.0} -state {DOWN off}
+if {[catch {add_supply_state CORE.power -state {BAD not_a_voltage}}]} {create_supply_net checked}

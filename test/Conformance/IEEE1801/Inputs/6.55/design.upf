@@ -1,2 +1,6 @@
-if {![llength [info commands sim_assertion_control]]} {error "unsupported command: sim_assertion_control"}
-puts "COMMAND_PRESENT:sim_assertion_control"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_power_domain PD -elements dut -supply {primary CORE}
+sim_assertion_control -elements dut -control_expr {off} -type suspend

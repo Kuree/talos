@@ -1,0 +1,5 @@
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary CORE} -supply {SSH1}
+set_level_shifter LS -domain PD -applies_to inputs -source PD.SSH1 -threshold 0.02 -rule both

@@ -1,2 +1,11 @@
-if {![llength [info commands query_upf]]} {error "unsupported command: query_upf"}
-puts "COMMAND_PRESENT:query_upf"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_power_domain PD -elements m1 -supply {primary CORE}
+proc sv {text} {return "\"$text\""}
+set glob [lsort [query_upf m1 -pattern b* -object_type inst]]
+set regexp [query_upf m1 -pattern {^b2$} -object_type inst -regexp]
+set exact [query_upf m1 -pattern b1 -object_type inst -exact]
+set exactStar [query_upf m1 -pattern b* -object_type inst -exact]
+set ignoreCase [query_upf m1 -pattern B1 -object_type inst -ignore_case]
+bind_checker show -module show -parameters [list [list glob [sv $glob]] [list regexp [sv $regexp]] [list exact [sv $exact]] [list exactStar [sv $exactStar]] [list ignoreCase [sv $ignoreCase]]]

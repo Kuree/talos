@@ -1,2 +1,6 @@
-create_supply_set S
-add_power_state S -state {A -supply_expr {power == {FULL_ON 0.7}} -simstate CORRUPT_STATE_ON_ACTIVITY}
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_power_domain PD -elements dut -supply {primary CORE}
+add_power_state CORE -state {ON -supply_expr {power == {FULL_ON 1.0} && ground == {FULL_ON 0}}} -state {LOW -supply_expr {power == {FULL_ON 0.7}} -simstate CORRUPT_STATE_ON_ACTIVITY}

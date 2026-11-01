@@ -1,0 +1,13 @@
+[
+  {
+    "keyowner": "lrm-audit",
+    "method": "des-cbc",
+    "key_hex": "0123456789abcdef"
+  },
+  {
+    "keyowner": "lrm-audit",
+    "keyname": "stale",
+    "method": "des-cbc",
+    "key_hex": "fedcba9876543210"
+  }
+]

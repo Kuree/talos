@@ -1,2 +1,8 @@
-if {![llength [info commands define_isolation_cell]]} {error "unsupported command: define_isolation_cell"}
-puts "COMMAND_PRESENT:define_isolation_cell"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_supply_net VAON
+create_power_domain PD -elements dut -supply {primary CORE}
+define_isolation_cell -cells iso_cell -enable en -power VAON_PIN -ground VSS_PIN -power_switchable VDD_PIN -valid_location any
+connect_supply_net VAON -ports dut/u/VAON_PIN

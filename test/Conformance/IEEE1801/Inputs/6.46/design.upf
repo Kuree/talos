@@ -1,2 +1,9 @@
-if {![llength [info commands set_level_shifter]]} {error "unsupported command: set_level_shifter"}
-puts "COMMAND_PRESENT:set_level_shifter"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_supply_net VLS
+create_supply_set LS -function {power VLS} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary CORE}
+
+set_level_shifter SHIFT -domain PD -applies_to outputs -rule low_to_high -location parent -input_supply_set CORE -output_supply_set LS

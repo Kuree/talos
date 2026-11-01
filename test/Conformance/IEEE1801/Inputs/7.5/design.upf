@@ -1,2 +1,10 @@
-if {![llength [info commands define_level_shifter_cell]]} {error "unsupported command: define_level_shifter_cell"}
-puts "COMMAND_PRESENT:define_level_shifter_cell"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_supply_net VIN
+create_supply_net VOUT
+create_power_domain PD -elements dut -supply {primary CORE}
+define_level_shifter_cell -cells shifter -input_voltage_range {{0.7 0.9}} -output_voltage_range {{0.9 1.1}} -direction low_to_high -input_power_pin VINP -output_power_pin VOUTP -ground VSSP
+connect_supply_net VIN -ports dut/u/VINP
+connect_supply_net VOUT -ports dut/u/VOUTP

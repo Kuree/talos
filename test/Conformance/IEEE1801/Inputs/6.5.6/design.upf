@@ -1,4 +1,4 @@
 create_supply_set A
 create_supply_set B
+create_power_domain PD -elements dut -supply {primary A}
 if {![catch {add_power_state A -state {X -supply_expr {B.power == FULL_ON} -simstate NORMAL}}]} {error "foreign function accepted"}
-puts PASS

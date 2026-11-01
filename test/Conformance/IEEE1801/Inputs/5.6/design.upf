@@ -1,1 +1,7 @@
-set_port_attributes -ports p -clamp_value 0
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_power_domain PD -elements dut -supply {primary CORE}
+set_port_attributes -ports dut/b -clamp_value 1
+set_isolation ISO -domain PD -isolation_signal iso -applies_to outputs -location parent

@@ -1,4 +1,8 @@
 create_supply_net VDD
 create_supply_net VSS
 create_supply_set CORE -function {power VDD} -function {ground VSS}
-add_power_state CORE -state {RET -simstate NORMAL}
+
+create_power_domain PD -elements dut -supply {primary CORE}
+add_power_state CORE -state {RET -simstate CORRUPT}
+
+add_power_state PD -domain -state {RUN -logic_expr {primary == ON}} -state {DOWN -logic_expr {primary == RET}}

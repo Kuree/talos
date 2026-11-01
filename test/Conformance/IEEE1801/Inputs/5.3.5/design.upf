@@ -1,3 +1,6 @@
 set_scope {dut[0]}
 create_supply_net VDD
-puts PASS
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+set_scope /
+create_power_domain PD -elements {dut[0]} -supply {primary dut[0]/CORE}

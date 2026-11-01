@@ -1,2 +1,6 @@
-if {![llength [info commands save_upf]]} {error "unsupported command: save_upf"}
-puts "COMMAND_PRESENT:save_upf"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_power_domain PD -elements dut -supply {primary CORE}
+save_upf saved.upf

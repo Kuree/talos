@@ -1,0 +1,8 @@
+[
+  {
+    "keyowner": "lrm-audit",
+    "keyname": "test-key",
+    "method": "aes128-cbc",
+    "key_hex": "00112233445566778899aabbccddeeff"
+  }
+]

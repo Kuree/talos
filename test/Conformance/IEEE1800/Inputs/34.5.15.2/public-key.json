@@ -1,0 +1,5 @@
+{
+  "data_keyowner": "lrm-audit",
+  "data_keyname": "test-key",
+  "DES_key_hex": "0123456789abcdef"
+}

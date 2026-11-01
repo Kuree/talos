@@ -1,3 +1,2 @@
 load_upf [file join [file dirname [info script]] child.upf] -scope dut
-if {[set_scope .] ne "/"} {error "load changed parent scope"}
-puts PASS
+create_supply_net after

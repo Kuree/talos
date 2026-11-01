@@ -1,1 +1,4 @@
 create_supply_net rail
+create_supply_net VSS
+create_supply_set CORE -function {power rail} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary CORE}

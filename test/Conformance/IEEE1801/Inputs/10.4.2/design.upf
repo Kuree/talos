@@ -1,0 +1,5 @@
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+add_power_state CORE -state {ON -supply_expr {power == FULL_ON && ground == FULL_ON}}
+create_power_domain PD -elements dut -supply {primary CORE}

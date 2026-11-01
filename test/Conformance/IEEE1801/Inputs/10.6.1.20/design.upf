@@ -1,0 +1,6 @@
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_power_domain PD1 -elements u1 -supply {primary CORE}
+create_power_domain PD2 -elements u2 -supply {primary CORE}
+create_composite_domain CD -subdomains {PD1 PD2} -supply {primary CORE}

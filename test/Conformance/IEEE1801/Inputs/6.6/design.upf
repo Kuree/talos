@@ -1,2 +1,11 @@
-if {![llength [info commands add_pst_state]]} {error "unsupported command: add_pst_state"}
-puts "COMMAND_PRESENT:add_pst_state"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_power_domain PD -elements dut -supply {primary CORE}
+
+add_supply_state VDD -state {HI 1.0} -state {DOWN off}
+add_supply_state VSS -state {GND 0.0}
+create_pst T -supplies {VDD VSS}
+add_pst_state RUN -pst T -state {HI GND}
+if {[catch {add_pst_state SHORT -pst T -state {HI}}]} {create_supply_net checked}

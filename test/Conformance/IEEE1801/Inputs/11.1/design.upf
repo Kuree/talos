@@ -1,2 +1,12 @@
-if {![llength [info commands query_upf]]} {error "unsupported command: query_upf"}
-puts "COMMAND_PRESENT:query_upf"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary CORE}
+set_isolation ISO -domain PD -isolation_signal iso -clamp_value 0 -applies_to outputs -location parent
+proc sv {text} {return "\"$text\""}
+set name [upf_query_object_properties /top/PD.ISO -property upf_name]
+set kind [upf_query_object_type /top/PD.ISO]
+set member [upf_object_in_class /top/PD.ISO -class upfStrategyT]
+set path [upf_query_object_pathname /top/PD.ISO -relative_to /top]
+set nets [lsort [query_upf . -pattern V* -object_type supply_net]]
+bind_checker show -module show -parameters [list [list name [sv $name]] [list kind [sv $kind]] [list member [sv $member]] [list path [sv $path]] [list nets [sv $nets]]]

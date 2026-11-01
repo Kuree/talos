@@ -1,3 +1,9 @@
-create_power_domain P -elements dut
-set_isolation A -domain P -elements dut/q -clamp_value 0 -isolation_signal iso -applies_to outputs -location parent
-set_isolation B -domain P -clamp_value 1 -isolation_signal iso -applies_to outputs -location parent
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+
+create_power_domain P -elements dut -supply {primary CORE}
+
+set_isolation DOMAIN -domain P -clamp_value 1 -isolation_signal iso -applies_to outputs -location parent
+set_isolation INSTANCE -domain P -elements dut -clamp_value 0 -isolation_signal iso -applies_to outputs -location parent
+set_isolation PORT -domain P -elements dut/a -clamp_value 1 -isolation_signal iso -applies_to outputs -location parent

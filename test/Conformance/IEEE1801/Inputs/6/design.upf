@@ -1,2 +1,8 @@
-if {![llength [info commands save_upf]]} {error "unsupported command: save_upf"}
-puts "COMMAND_PRESENT:save_upf"
+create_supply_net VDD
+create_supply_net VSS
+create_supply_net VSW
+create_supply_set AON -function {power VDD} -function {ground VSS}
+create_supply_set SW -function {power VSW} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary SW}
+create_power_switch PS -domain PD -input_supply_port {vin VDD} -output_supply_port {vout VSW} -control_port {en en} -on_state {ON vin en}
+add_power_state SW -state {ON -supply_expr {power == {FULL_ON 1.0} && ground == {FULL_ON 0}}}

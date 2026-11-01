@@ -1,2 +1,4 @@
 create_supply_net RAIL
-puts PASS
+set_scope dut
+create_supply_net RAIL
+create_supply_set S -function {power RAIL}

@@ -1,3 +1,3 @@
+create_power_domain PD -elements dut/u
 load_upf [file join [file dirname [info script]] child.upf] -scope dut
-if {[set_scope .] ne "/"} {error "load changed parent scope"}
-puts PASS
+associate_supply_set dut/LOCAL -handle PD.primary
