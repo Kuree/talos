@@ -144,6 +144,8 @@ FailureOr<ContinuousDriverMap>
 materializeNetTopology(SmallVectorImpl<Operation *> &sourceUnits,
                        ArrayRef<semantic::SVPortConnectionOp> portConnections,
                        ArrayRef<semantic::SVNetAliasSymbolOp> netAliases,
+                       ArrayRef<semantic::SVSystemTimingCheckSymbolOp>
+                           delayedSignalCopies,
                        const llvm::StringMap<Operation *> &semanticSymbols,
                        llvm::StringMap<DescriptorInfo> &descriptors,
                        const PreparedScopeDeclarations &scopes,
@@ -785,6 +787,38 @@ materializeNetTopology(SmallVectorImpl<Operation *> &sourceUnits,
       }
       if (!appendStaticConnections(alias, "alias", /*allowPartial=*/false,
                                    first, runs))
+        break;
+    }
+  }
+
+  // IEEE 1800-2023 31.9.4: a delayed reference or data signal that carries no
+  // delay is a copy of the original, so it shares that signal's net.
+  for (semantic::SVSystemTimingCheckSymbolOp check : delayedSignalCopies) {
+    auto children = check->getAttrOfType<DenseI64ArrayAttr>(
+        "timing_check_arg_expression_children");
+    SmallVector<Operation *> roots = getChildren(check);
+    for (auto [original, delayed] : {std::pair{0u, 7u}, std::pair{1u, 8u}}) {
+      if (!children || delayed >= children.size() ||
+          children[original] < 0 || children[delayed] < 0)
+        continue;
+      SmallVector<NetRun> first, copy;
+      // Slang binds a delayed signal as the output of the check, so it arrives
+      // as the left side of an assignment.
+      Operation *delayedRoot = roots[children[delayed]];
+      if (isa<semantic::SVAssignmentExpressionOp>(delayedRoot))
+        delayedRoot = getChildren(delayedRoot).front();
+      bool a = flattenNetExpr(roots[children[original]], first);
+      bool b = flattenNetExpr(delayedRoot, copy);
+      if (!a || !b ||
+          totalWidth(first) != totalWidth(copy)) {
+        emitError(getSemanticLocation(check))
+            << "IEEE 1800-2023 31.9.4 delayed signal must be a net of the "
+               "same width as its original";
+        invalid = true;
+        break;
+      }
+      if (!appendStaticConnections(check, "alias", /*allowPartial=*/false,
+                                   first, copy))
         break;
     }
   }

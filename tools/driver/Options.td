@@ -154,6 +154,9 @@ def pulse_style_EQ : Joined<["--"], "pulse-style=">,
 def cancelled_pulses_EQ : Joined<["--"], "cancelled-pulses=">,
   Group<Compilation_Group>, MetaVarName<"<hide|show>">, Values<"hide,show">,
   HelpText<"Override specify negative-pulse display globally">;
+def no_negative_timing_checks : Flag<["--"], "no-negative-timing-checks">,
+  Group<Compilation_Group>,
+  HelpText<"Disable negative timing-check handling (IEEE 1800-2023 31.9.4)">;
 def fno_lto : Flag<["-"], "fno-lto">, Group<Compilation_Group>,
   HelpText<"Disable LTO and link the object runtime archive (default)">;
 def flto : Flag<["-"], "flto">, Group<Compilation_Group>,

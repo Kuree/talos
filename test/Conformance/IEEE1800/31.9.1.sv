@@ -1,6 +1,6 @@
 // CLAUSE: negative setup delayed reference
 // XFAIL: *
-// Explicit delayed_reference/delayed_data in negative timing checks are not executable.
+// Explicit delayed_reference/delayed_data of a negative check carry a nonzero solved delay; the declared net has no delayed driver yet (only the zero-delay copy of 31.9.4 is executable).
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe
 // CHECK-DAG: {{^PASS$}}

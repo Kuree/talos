@@ -573,7 +573,7 @@ static const llvm::StringMap<discardable::PayloadCheck> &declarations() {
       metadata::SnapshotPublications, metadata::InlineLegalityCache,
       metadata::PulseRejectPercent, metadata::PulseErrorPercent,
       metadata::PulseOnDetect, metadata::PulseShowCancelled,
-      metadata::ConstraintMode, metadata::ConstraintModeBlock,
+      metadata::NoNegativeTimingChecks, metadata::ConstraintMode, metadata::ConstraintModeBlock,
       metadata::ConstraintModeField, metadata::ConstraintModeStaticStorage,
       metadata::ConstraintModeStaticStorages,
       metadata::ObjectRandomDispatchClasses, metadata::RandMode,
@@ -941,7 +941,8 @@ static LogicalResult verifyDeclaredAttribute(Operation *operation,
        name == PulseRejectPercent::getNameStr() ||
        name == PulseErrorPercent::getNameStr() ||
        name == PulseOnDetect::getNameStr() ||
-       name == PulseShowCancelled::getNameStr()) &&
+       name == PulseShowCancelled::getNameStr() ||
+       name == NoNegativeTimingChecks::getNameStr()) &&
       !isa<ModuleOp>(operation))
     return error() << "belongs on a module";
   return success();

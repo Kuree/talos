@@ -61,6 +61,9 @@ def TalosSimulationDialect : Dialect {
     "::mlir::IntegerAttr":$pulse_error_percent,
     "::mlir::BoolAttr":$pulse_on_detect,
     "::mlir::BoolAttr":$pulse_show_cancelled,
+    // Module: driver option turning negative timing checks off (IEEE 1800-2023
+    // 31.9.4).
+    "::mlir::UnitAttr":$no_negative_timing_checks,
     // Constrained randomization (IEEE 1800-2023 18): class metadata and the
     // randomize(), rand_mode() and constraint_mode() protocols between
     // preparation and unit lowering, and constraint-tree annotations.

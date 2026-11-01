@@ -3365,6 +3365,24 @@ private:
                 timeFs[slot] = *value;
         }
       }
+      if (arguments.size() > 5 && timeFs.size() > 3 &&
+          (timeFs[2] < 0) != (timeFs[3] < 0) && !arguments[0].condition &&
+          !arguments[1].condition &&
+          node.timingCheckKind == slang::ast::SystemTimingCheckKind::SetupHold) {
+        // IEEE 1800-2023 31.9.2: a negative setup limit makes the data signal
+        // transition second, a negative hold limit the reference signal. The
+        // timestamp condition (slot 5) guards the first and the timecheck
+        // condition (slot 6) the second, as an event `&&&` condition would.
+        bool dataSecond = timeFs[2] < 0;
+        for (size_t slot : {size_t{5}, size_t{6}}) {
+          if (slot >= arguments.size() || !arguments[slot].expr)
+            continue;
+          size_t event = ((slot == 6) == dataSecond) ? 1 : 0;
+          hasCondition[event] = 1;
+          conditionChildren[event] = expressionChildren[slot];
+          conditionPredicates[event] = 0;
+        }
+      }
       // IEEE 1800-2017 31.2 gives every check an ordered formal argument
       // ABI, including explicit optional holes, event-local conditions, and
       // transition descriptors. Preserve dense aligned metadata so later
@@ -3419,9 +3437,27 @@ private:
         // conditions and delayed signals. Keep the positive, unconditioned
         // actor pay-for-play: retain those forms semantically for the later
         // Clause 31.9 tranche instead of silently ignoring them here.
-        for (size_t index = 5; index < arguments.size(); ++index)
+        for (size_t index = 5; index < arguments.size(); ++index) {
+          // IEEE 1800-2023 31.3.3/.6, 31.9.1: slots 7 and 8 name the delayed
+          // reference and data signals. Their executable form is decided in
+          // simulation preparation, once the delayed-signal delays are known.
+          if (index >= 7 && index <= 8 && arguments[index].expr &&
+              !arguments[index].condition) {
+            attrs.set("talos.delayed_signal_args", builder.getUnitAttr());
+            continue;
+          }
+          // IEEE 1800-2023 31.9.2: with a negative $setuphold limit the
+          // timestamp and timecheck conditions follow the delayed signal that
+          // transitions first and second. Handled below.
+          if (index >= 5 && index <= 6 && arguments[index].expr &&
+              !arguments[index].condition &&
+              node.timingCheckKind == slang::ast::SystemTimingCheckKind::SetupHold &&
+              timeFs.size() > 3 && (timeFs[2] < 0) != (timeFs[3] < 0) &&
+              !arguments[0].condition && !arguments[1].condition)
+            continue;
           unsupportedCombinedOption |= arguments[index].expr != nullptr ||
                                        arguments[index].condition != nullptr;
+        }
       }
       bool hasRequiredArguments = arguments.size() >= requiredArguments;
       bool representableConditions = hasRequiredArguments;

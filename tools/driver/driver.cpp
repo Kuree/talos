@@ -1441,6 +1441,8 @@ executeCompilation(const InputArgList &args,
         (*module),
         IntegerAttr::get(IntegerType::get(&context, 32), effectivePulseError));
   }
+  if (args.hasArg(OPT_no_negative_timing_checks))
+    talos::sim::mark<talos::sim::metadata::NoNegativeTimingChecks>(*module);
   if (!globalPulseStyle.empty())
     talos::sim::set<talos::sim::metadata::PulseOnDetect>(
         (*module), BoolAttr::get(&context, globalPulseStyle == "ondetect"));

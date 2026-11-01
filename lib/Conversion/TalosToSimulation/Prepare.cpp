@@ -3232,9 +3232,46 @@ void TalosSimPreparePass::runOnOperation() {
           property, builder.getArrayAttr(updated));
     }
 
+  // IEEE 1800-2023 31.9.4: without negative timing checks, and whenever the
+  // solved delay is zero, the delayed reference and data signals are copies of
+  // the originals. A negative check with a nonzero delay needs a delayed
+  // driver for the declared net, which is not executable yet.
+  SmallVector<semantic::SVSystemTimingCheckSymbolOp> delayedSignalCopies;
+  bool negativeChecksEnabled =
+      !sim::has<sim::metadata::NoNegativeTimingChecks>(module);
+  semanticRoot->walk([&](semantic::SVSystemTimingCheckSymbolOp check) {
+    bool negative = check->hasAttr("talos.negative_timing_check");
+    if (negative && !negativeChecksEnabled) {
+      // The checks are off: a negative limit then bounds nothing (31.9.4).
+      if (auto times = check->getAttrOfType<DenseI64ArrayAttr>(
+              "timing_check_arg_time_fs")) {
+        SmallVector<int64_t> clamped(times.asArrayRef());
+        for (int64_t &time : clamped)
+          time = std::max<int64_t>(time, 0);
+        check->setAttr("timing_check_arg_time_fs",
+                       builder.getDenseI64ArrayAttr(clamped));
+      }
+      check->removeAttr("talos.negative_timing_check");
+      negative = false;
+    }
+    if (!check->hasAttr("talos.delayed_signal_args"))
+      return;
+    if (negative) {
+      emitError(getSemanticLocation(check))
+          << "IEEE 1800-2023 31.9.1 explicit delayed_reference/delayed_data "
+             "of a negative timing check need a delayed driver, which is not "
+             "executable yet; use --no-negative-timing-checks (31.9.4)";
+      invalid = true;
+      return;
+    }
+    delayedSignalCopies.push_back(check);
+  });
+  if (invalid)
+    return abort();
+
   FailureOr<ContinuousDriverMap> preparedNetTopology = materializeNetTopology(
       sourceUnits, portConnections, portAliases->partialNetAliases,
-      semanticSymbols, descriptors, *scopes, builder);
+      delayedSignalCopies, semanticSymbols, descriptors, *scopes, builder);
   if (failed(preparedNetTopology))
     return abort();
   ContinuousDriverMap &continuousDrivers = *preparedNetTopology;

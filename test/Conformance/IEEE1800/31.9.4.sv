@@ -1,6 +1,5 @@
 // CLAUSE: Without the negative timing check option, delayed signals copy the originals
-// XFAIL: *
-// No invocation option turns negative timing checks off, and explicit delayed signals are not executable; --no-negative-timing-checks is the spelling this probe expects.
+// SINCE: 0.1.0
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top --no-negative-timing-checks -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe
 // CHECK: dc=1 dd=0 q=0{{$}}

@@ -25,6 +25,8 @@ using GCPolled = TalosSimulationDialect::GcPolledAttrHelper;
 using SnapshotPublications =
     TalosSimulationDialect::SnapshotPublicationsAttrHelper;
 using InlineLegalityCache = TalosSimulationDialect::InlineLegalityAttrHelper;
+using NoNegativeTimingChecks =
+    TalosSimulationDialect::NoNegativeTimingChecksAttrHelper;
 using PulseRejectPercent = TalosSimulationDialect::PulseRejectPercentAttrHelper;
 using PulseErrorPercent = TalosSimulationDialect::PulseErrorPercentAttrHelper;
 using PulseOnDetect = TalosSimulationDialect::PulseOnDetectAttrHelper;
