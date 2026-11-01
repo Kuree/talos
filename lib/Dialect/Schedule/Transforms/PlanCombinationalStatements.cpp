@@ -90,6 +90,7 @@ public:
     if (schedule::has<schedule::metadata::staticBodyFusion>(design))
       return;
     analysis::HandleDataflowAnalysis handles(design);
+    handles.prepare(design);
     CombinationalFusionAnalysis eligibility(
         design, handles,
         analysis::ActivationMemoryAnalysis::DependencyMode::ReachingValues);

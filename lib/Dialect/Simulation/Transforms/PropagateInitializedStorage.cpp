@@ -232,6 +232,7 @@ private:
     }
 
     analysis::HandleDataflowAnalysis provenanceAnalysis(design);
+    provenanceAnalysis.prepare(design);
     bool unknownWrite = false;
     for (sim::SimFuncOp function :
          design.getBody().front().getOps<sim::SimFuncOp>()) {

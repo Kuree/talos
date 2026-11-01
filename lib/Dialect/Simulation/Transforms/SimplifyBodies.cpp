@@ -7,6 +7,7 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/IR/Threading.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/RegionUtils.h"
@@ -14,6 +15,7 @@
 #include "talos/Analysis/DemandedBitAnalysis.h"
 #include "talos/Analysis/HandleDataflowAnalysis.h"
 #include "talos/Analysis/LogicBitAnalysis.h"
+#include "talos/Analysis/OrderedDenseAnalysis.h"
 #include "talos/Analysis/PrivateStorageAnalysis.h"
 #include "talos/Analysis/SimulationEffectAnalysis.h"
 #include "talos/Analysis/SourceMemoryAnalysis.h"
@@ -74,12 +76,12 @@ bool startsWithClearTermination(sim::SimFuncOp function) {
   }
 }
 class TerminationDataflow final
-    : public dataflow::DenseForwardDataFlowAnalysis<TerminationLattice> {
+    : public analysis::OrderedDenseForwardDataFlowAnalysis<TerminationLattice> {
 public:
   TerminationDataflow(DataFlowSolver &solver,
                       const analysis::SimulationEffectAnalysis &effects,
                       const analysis::HandleFacts &handles, bool clearEntry)
-      : DenseForwardDataFlowAnalysis(solver), effects(effects),
+      : OrderedDenseForwardDataFlowAnalysis(solver), effects(effects),
         handles(handles), clearEntry(clearEntry) {}
   LogicalResult visitOperation(Operation *op, const TerminationLattice &before,
                                TerminationLattice *after) override {
@@ -693,6 +695,7 @@ struct TalosSimSimplifyBodiesPass
     }
     analysis::SimulationEffectAnalysis effects(design);
     analysis::HandleDataflowAnalysis provenance(design);
+    provenance.prepare(design);
     auto clearEntries =
         getClearTerminationEntries(design, effects, provenance, vpi == "off");
     for (auto function : design.getBody().front().getOps<sim::SimFuncOp>())
@@ -712,9 +715,15 @@ struct TalosSimSimplifyBodiesPass
     }
     // Promotion and forwarding rewrite storage and function bodies, never
     // drivers or nets, so the driver index above still serves every function.
-    // They add or remove no symbols, so call resolution shares one table.
-    SymbolTableCollection symbols;
-    for (auto function : design.getBody().front().getOps<sim::SimFuncOp>()) {
+    // They add or remove no symbols, so call resolution shares one table. Each
+    // worker solves and rewrites only its own function, and call operations
+    // resolve their callee's symbol without reading its body.
+    SymbolTableCollection symbolTables;
+    LockedSymbolTableCollection symbols(symbolTables);
+    SmallVector<sim::SimFuncOp> functions(
+        design.getBody().front().getOps<sim::SimFuncOp>());
+    parallelFor(design.getContext(), 0, functions.size(), [&](size_t index) {
+      sim::SimFuncOp function = functions[index];
       analysis::forwardSourceMemoryLoads(function, canonicalWrites,
                                          /*canForward=*/{}, &provenance);
       LogicBitAnalysis bits(function);
@@ -744,7 +753,7 @@ struct TalosSimSimplifyBodiesPass
         op->getResult(0).replaceAllUsesWith(replacement);
         op->erase();
       }
-    }
+    });
     if (canonicalWrites)
       removeDeadPrivateStores(design);
   }

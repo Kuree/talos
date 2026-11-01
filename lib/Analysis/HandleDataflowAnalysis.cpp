@@ -7,6 +7,7 @@
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "talos/Analysis/LogicBitAnalysis.h"
 #include "talos/Analysis/NetConnectivityAnalysis.h"
+#include "talos/Analysis/ParallelWalk.h"
 #include "talos/Analysis/ScopedIntegerRangeAnalysis.h"
 #include "talos/Dialect/Schedule/ScheduleOps.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
@@ -632,6 +633,17 @@ HandleDataflowAnalysis::analyze(sim::SimFuncOp function) const {
       solveHandles(function, driverNets, dynamicSelectors));
   cache.insert(function, revision, solved);
   return *solved;
+}
+void HandleDataflowAnalysis::prepare(sim::SimDesignOp design) const {
+  if (design.getBody().empty())
+    return;
+  SmallVector<sim::SimFuncOp> functions(
+      design.getBody().front().getOps<sim::SimFuncOp>());
+  if (!walksConcurrently(design, functions.size()))
+    return;
+  // Each worker solves only its own function; see analyze.
+  mlir::parallelFor(design.getContext(), 0, functions.size(),
+                    [&](size_t index) { (void)analyze(functions[index]); });
 }
 HandleFacts HandleDataflowAnalysis::derive(sim::SimFuncOp function) const {
   return analyze(function).facts;

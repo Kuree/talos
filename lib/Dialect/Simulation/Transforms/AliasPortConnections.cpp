@@ -427,6 +427,7 @@ void TalosSimAliasPortConnectionsPass::runOnOperation() {
   // 2. Whole-design access inventory, per function. Unknown writes abandon
   // the transformation: they may target any eliminated sink.
   analysis::HandleDataflowAnalysis provenanceAnalysis(design);
+  provenanceAnalysis.prepare(design);
   DenseMap<Operation *, SmallVector<Access>> accesses;
   DenseMap<Operation *, DenseSet<uint64_t>> readRoots, writtenRoots;
   bool unknownWrite = false;

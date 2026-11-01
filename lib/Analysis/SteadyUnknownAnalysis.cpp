@@ -1304,6 +1304,7 @@ SteadyUnknownAnalysis::compute(sim::SimDesignOp design) {
   if (design.getBody().empty())
     return result;
   Inputs inputs(design);
+  inputs.handles.prepare(design);
   DataFlowSolver solver(DataFlowConfig().setInterprocedural(false));
   inputs.solver = &solver;
   solver.load<dataflow::DeadCodeAnalysis>();

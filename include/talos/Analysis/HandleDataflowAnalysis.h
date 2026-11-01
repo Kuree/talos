@@ -92,6 +92,10 @@ public:
   /// Avoid indexing the design for a single function without driver handles.
   explicit HandleDataflowAnalysis(sim::SimFuncOp function);
   HandleDataflowResult analyze(sim::SimFuncOp function) const;
+  /// Solves the design's functions concurrently, so that a serial visit of
+  /// them afterwards finds each result in the cache. A no-op off the main
+  /// thread, where a nested task group would block its worker.
+  void prepare(sim::SimDesignOp design) const;
   HandleFacts derive(sim::SimFuncOp function) const;
   bool hasIsolatedSingleDriver(uint64_t net) const {
     return drivers->singleDriverNets.contains(net);

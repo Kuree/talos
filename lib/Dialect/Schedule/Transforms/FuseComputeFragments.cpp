@@ -132,6 +132,7 @@ void TalosSimFuseComputeFragmentsPass::runOnOperation() {
   DenseMap<Operation *, bool> bodyEligibility;
   DenseMap<Operation *, bool> primitiveBodyEligibility;
   analysis::HandleDataflowAnalysis provenance(design);
+  provenance.prepare(design);
   auto isBodyEligible = [&](sim::SimFuncOp function, bool primitive) {
     if (!function)
       return false;

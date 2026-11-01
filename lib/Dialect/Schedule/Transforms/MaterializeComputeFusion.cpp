@@ -1344,8 +1344,7 @@ uint64_t localizeActivationStorage(
       [&](Operation *op) { suspensions += sim::isSuspensionOp(op); });
   if (suspensions != 1)
     return 0;
-  analysis::HandleDataflowAnalysis canonicalHandles(canonical);
-  analysis::ActivationMemoryAnalysis initial(canonical, canonicalHandles);
+  analysis::ActivationMemoryAnalysis initial(canonical, designHandles);
   if (!initial.isValid())
     return 0;
   DenseSet<uint64_t> liveIns;
@@ -1532,6 +1531,7 @@ uint64_t localizePrivateEvalStorage(sim::SimDesignOp design) {
   // Localization rewrites function bodies only, so one driver index serves
   // every eval body.
   analysis::HandleDataflowAnalysis designHandles(design);
+  designHandles.prepare(design);
   uint64_t localized = 0;
   for (sim::SimFuncOp canonical :
        design.getBody().front().getOps<sim::SimFuncOp>())
@@ -2814,7 +2814,8 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
       if (failed(simplifyKernel(kernel)))
         return bail("region: kernel simplification");
       if (graph.getVpi() == schedule::ComputeVPIMode::Off) {
-        analysis::forwardSourceMemoryLoads(kernel, /*canonicalWrites=*/true);
+        analysis::forwardSourceMemoryLoads(kernel, /*canonicalWrites=*/true,
+                                           /*canForward=*/{}, &provenance);
         if (failed(simplifyKernel(kernel)))
           return bail("region: kernel forwarding simplification");
       }
@@ -4350,6 +4351,7 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
   // Fusion changes function bodies but never driver declarations. Reuse the
   // immutable driver-to-net index while deriving fresh per-body value facts.
   analysis::HandleDataflowAnalysis provenance(design);
+  provenance.prepare(design);
   DenseSet<uint64_t> controlTargets;
   // Foreign code can reach a named block only through a context export
   // (IEEE 1800-2023 35.5.3); a transparent export closure disables nothing.

@@ -16,6 +16,7 @@ PrivateStorageAnalysis::PrivateStorageAnalysis(sim::SimDesignOp design) {
         !cov::has<cov::ToggleObservable>(decl))
       roots.try_emplace(decl.getId(), Accesses{decl, {}, {}, {}, {}});
   HandleDataflowAnalysis handles(design);
+  handles.prepare(design);
   DenseMap<Operation *, HandleDataflowResult> snapshots;
   for (auto function : design.getOps<sim::SimFuncOp>())
     if (!function.isExternal())

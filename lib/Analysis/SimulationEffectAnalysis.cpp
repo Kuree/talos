@@ -76,8 +76,10 @@ public:
         summary.effects = allEffects;
       auto design = function->getParentOfType<sim::SimDesignOp>();
       auto &index = designs[design];
-      if (!index)
+      if (!index) {
         index = std::make_unique<HandleDataflowAnalysis>(design);
+        index->prepare(design);
+      }
       auto handleResult = index->analyze(function);
       const auto &handles = handleResult.facts;
       function.walk([&](Operation *op) {
