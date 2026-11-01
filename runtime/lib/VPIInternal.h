@@ -21,8 +21,10 @@
 // <sys/types.h>, which on Darwin lacks the unsigned ones.
 #include <cstdint>
 
-#include "sv_vpi_user.h"
 #include "talos/vpi_user_compat.h"
+
+// After the MLIR headers: vpi_user.h defines macros such as vpiType.
+#include "sv_vpi_user.h"
 #include "vpi_user.h"
 
 #include "talos/Reflection/VPIObjectModel.h"

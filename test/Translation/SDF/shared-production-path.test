@@ -3,7 +3,6 @@
 # The production annotation database must consume the exact public importer
 # used by talos-translate. Keep this source invariant next to the direct
 # importer tests and the production Driver annotation tests.
-# SOURCE: auto sdfModule =
-# SOURCE-NEXT: importSDF(*filename, (*buffer)->getBuffer(), sdfContext, true,
-# SOURCE-NEXT: maxStaticSDFFileBytes);
+# SOURCE: auto sdfModule = importSDF(*filename, (*buffer)->getBuffer(), sdfContext,
+# SOURCE-NEXT: true, maxStaticSDFFileBytes);
 # SOURCE-NOT: parseSDFFile
