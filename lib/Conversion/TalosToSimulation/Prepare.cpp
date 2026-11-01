@@ -916,6 +916,38 @@ void TalosSimPreparePass::runOnOperation() {
     }
     sim::set<sim::metadata::AssertionLocalTypes>(
         instance, ArrayAttr::get(context, types));
+    // IEEE 1800-2023 16.8.2: an assignment to an input local formal does not
+    // reach its actual, and the bounded monitor gives a nested instance's
+    // formal the cell of its actual.
+    if (!instance->getParentOfType<semantic::SVAssertionInstanceExpressionOp>())
+      return;
+    for (auto [formal, path] :
+         llvm::zip_equal(instance.getArgumentFormalSymbols(),
+                         instance.getArgumentFormalPaths())) {
+      auto symbol = semanticSymbols.find(
+          cast<SymbolRefAttr>(formal).getLeafReference());
+      auto port = symbol == semanticSymbols.end()
+                      ? semantic::SVAssertionPortSymbolOp{}
+                      : dyn_cast<semantic::SVAssertionPortSymbolOp>(
+                            symbol->second);
+      if (!port || !port.getIsLocalVariable() ||
+          port.getDirection().value_or(semantic::SVArgumentDirection::In) !=
+              semantic::SVArgumentDirection::In)
+        continue;
+      instance->walk([&](semantic::SVAssignmentExpressionOp assignment) {
+        SmallVector<Operation *> operands = getChildren(assignment);
+        auto target = operands.empty()
+                          ? StringAttr{}
+                          : operands.front()->getAttrOfType<StringAttr>(
+                                "referenced_path");
+        if (target != path)
+          return;
+        emitError(getSemanticLocation(assignment))
+            << "assigning to an input local formal of a nested assertion "
+               "instance is not executable by the bounded monitor";
+        invalid = true;
+      });
+    }
   });
 
   // IEEE 1800-2017 23.2.2.4 allows a default value only on an input port, so an

@@ -3068,6 +3068,17 @@ compileGlobalFutureProperty(Operation *property, Operation *clock) {
   return result;
 }
 
+/// The ordinal of the argument bound to the local formal at `path` of `instance`.
+static std::optional<uint64_t>
+getLocalFormalArgument(semantic::SVAssertionInstanceExpressionOp instance,
+                       StringRef path) {
+  for (auto [ordinal, formal] :
+       llvm::enumerate(instance.getArgumentFormalPaths()))
+    if (cast<StringAttr>(formal).getValue() == path)
+      return ordinal;
+  return std::nullopt;
+}
+
 LogicalResult UnitLowering::lowerGlobalFutureAssertionResolver(
     semantic::SVConcurrentAssertionStatementOp op) {
   Location location = getSemanticLocation(op);
@@ -3827,22 +3838,19 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
   if (children.size() != expected)
     return op.emitError("malformed concurrent assertion inventory"), failure();
 
+  // The outermost instance owns the monitor's locals. A nested instance's local
+  // formals alias the locals of the outer instance that are their actuals.
   semantic::SVAssertionInstanceExpressionOp localInstance;
-  bool multipleLocalInstances = false;
-  children[prefix]->walk(
+  SmallVector<semantic::SVAssertionInstanceExpressionOp> nestedLocalInstances;
+  children[prefix]->walk<WalkOrder::PreOrder>(
       [&](semantic::SVAssertionInstanceExpressionOp instance) {
         if (instance.getLocalVariableCount() == 0)
           return;
-        if (localInstance && localInstance != instance)
-          multipleLocalInstances = true;
-        else
+        if (!localInstance)
           localInstance = instance;
+        else
+          nestedLocalInstances.push_back(instance);
       });
-  if (multipleLocalInstances)
-    return emitError(getSemanticLocation(children[prefix]))
-               << "bounded concurrent monitors support one local-variable "
-                  "assertion instance",
-           failure();
   // IEEE 1800-2023 16.11: subroutine calls attached to a sequence match run
   // once per matching attempt, which the per-attempt monitor of assertion
   // locals provides even when the property declares no local.
@@ -3926,7 +3934,7 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
                  << "global-future sampled values are not lowered through "
                     "expect or coverage monitors",
              failure();
-    if (localMonitor || multipleLocalInstances)
+    if (localMonitor)
       return emitError(getSemanticLocation(property))
                  << "global-future sampled values cannot be combined with "
                     "assertion locals or match items",
@@ -11311,6 +11319,7 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
     };
     SmallVector<LocalState> locals;
     llvm::StringMap<unsigned> localIndices;
+    SmallVector<std::pair<std::string, unsigned>> localAliases;
     if (localInstance) {
       ArrayAttr typeAttrs =
           sim::get<sim::metadata::AssertionLocalTypes>(localInstance);
@@ -11340,6 +11349,11 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
                        "missing assertion local initializer"),
                    failure();
           initializer = instanceChildren[initializerIndex++];
+        } else if (std::optional<uint64_t> actual =
+                       getLocalFormalArgument(localInstance, path.getValue())) {
+          // IEEE 1800-2023 16.8.2, 16.12.19: an input local formal starts each
+          // attempt with the value of its actual argument.
+          initializer = instanceChildren[1 + *actual];
         }
         localIndices[path.getValue()] = locals.size();
         locals.push_back(
@@ -11349,6 +11363,41 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
         return localInstance.emitError(
                    "unexpected assertion instance operands after locals"),
                failure();
+      // IEEE 1800-2023 16.8.2: an output or inout local formal of a nested
+      // instance is copied to its actual, a local of the enclosing instance,
+      // when the nested sequence matches. Nothing else can read or write that
+      // actual while the single thread of this monitor is inside the nested
+      // body, so the two can share one cell.
+      for (semantic::SVAssertionInstanceExpressionOp nested :
+           nestedLocalInstances) {
+        SmallVector<Operation *> nestedChildren = getChildren(nested);
+        for (Attribute pathAttr : nested.getLocalVariablePaths()) {
+          StringRef path = cast<StringAttr>(pathAttr).getValue();
+          std::optional<uint64_t> actual = getLocalFormalArgument(nested, path);
+          auto reference =
+              actual ? nestedChildren[1 + *actual]
+                           ->getAttrOfType<StringAttr>("referenced_path")
+                     : StringAttr{};
+          auto target = reference ? localIndices.find(reference.getValue())
+                                  : localIndices.end();
+          if (target == localIndices.end())
+            return emitError(getSemanticLocation(nested))
+                   << "bounded concurrent monitors require a nested assertion "
+                      "instance's locals to be formals whose actuals are locals "
+                      "of the enclosing instance",
+                   failure();
+          unsigned targetIndex = target->second;
+          auto [existing, inserted] =
+              localIndices.try_emplace(path, targetIndex);
+          if (!inserted && existing->second != targetIndex)
+            return emitError(getSemanticLocation(nested))
+                   << "bounded concurrent monitors require one actual local "
+                      "for each local formal of a repeated assertion instance",
+                   failure();
+          if (inserted)
+            localAliases.emplace_back(path.str(), targetIndex);
+        }
+      }
     }
 
     // A deterministic fixed sequence has at most one live attempt at each
@@ -11386,6 +11435,10 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
       for (auto [local, value] : llvm::zip_equal(locals, localValues)) {
         values[local.path] = value;
         lvalues.erase(local.path);
+      }
+      for (const auto &[path, index] : localAliases) {
+        values[path] = localValues[index];
+        lvalues.erase(path);
       }
     };
     auto initializeLocals = [&]() -> FailureOr<SmallVector<Value>> {
