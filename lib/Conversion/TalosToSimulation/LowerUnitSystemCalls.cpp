@@ -2785,7 +2785,8 @@ UnitLowering::lowerSystemCall(semantic::SVCallExpressionOp op) {
           .Cases({"$fopen", "$fclose", "$fflush", "$fgetc", "$ungetc", "$fgets",
                   "$fread", "$feof", "$ferror", "$fseek", "$ftell", "$rewind",
                   "$timeformat", "$readmemb", "$readmemh", "$sreadmemb",
-                  "$sreadmemh", "$writememb", "$writememh", "$system"},
+                  "$sreadmemh", "$writememb", "$writememh", "$system",
+                  "$key", "$nokey"},
                  true)
           .Default(false);
   if (fileCall)

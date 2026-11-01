@@ -1338,6 +1338,43 @@ UnitLowering::lowerFileSystemCall(semantic::SVCallExpressionOp op) {
     }
     return lowerInteger(children.front(), i32);
   };
+  // IEEE 1800-2023 D.5: a key file records the text typed in interactive
+  // mode, which a compiled simulation never enters, so it only ever stays
+  // empty. $key(file) "causes the old key file to be closed, a new file to be
+  // created"; $nokey and $key without a name only disable or reenable output
+  // to a file that nothing writes to.
+  if (name == "$nokey" || name == "$key") {
+    if (children.empty())
+      return dummyTaskResult();
+    Type stringType = sim::StringType::get(function.getContext());
+    FailureOr<Value> value = lowerExpression(children.front());
+    FailureOr<Value> path =
+        succeeded(value) ? convert(*value, stringType,
+                                   isSignedNode(children.front()), location)
+                         : FailureOr<Value>(failure());
+    if (failed(path))
+      return failure();
+    Value modeBits = arith::ConstantOp::create(
+        builder, location, builder.getI8Type(), builder.getI8IntegerAttr('w'));
+    Value mode = sim::SimStringFromPackedOp::create(builder, location,
+                                                    stringType, modeBits);
+    Value descriptor = sim::SimFileOpenStringOp::create(
+                           builder, location, i32, context, *path, mode)
+                           .getDescriptor();
+    Value opened =
+        arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ne,
+                              descriptor, constant(i32, 0));
+    Block *closeBlock = addBlock();
+    Block *done = addBlock();
+    cf::CondBranchOp::create(builder, location, opened, closeBlock,
+                             ValueRange{}, done, ValueRange{});
+    setCurrent(closeBlock);
+    sim::SimFileCloseOp::create(builder, location, context, descriptor);
+    cf::BranchOp::create(builder, location, done);
+    setCurrent(done);
+    return dummyTaskResult();
+  }
+
   if (name == "$fclose" || name == "$feof" || name == "$ftell" ||
       name == "$rewind" || name == "$fgetc") {
     FailureOr<Value> descriptor = oneDescriptor();
