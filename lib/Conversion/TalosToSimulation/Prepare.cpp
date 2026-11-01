@@ -11021,6 +11021,7 @@ void TalosSimPreparePass::runOnOperation() {
         continue;
       for (StringRef name : std::initializer_list<StringRef>{
                "timing_check_arg_condition_predicates",
+               "timing_check_role_conditions",
                "timing_check_event_based", "timing_check_remain_active",
                sim::metadata::TimingDelayedStorageIds::getNameStr(),
                sim::metadata::TimingDelayedSourceDelays::getNameStr(),

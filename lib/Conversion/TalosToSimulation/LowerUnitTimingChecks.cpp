@@ -129,6 +129,102 @@ UnitLowering::lowerSystemTimingCheck(ArrayRef<Operation *> roots) {
   SmallVector<Value, 2> eventConditions(sourceEventCount);
   std::array<Operation *, 2> events{event0, event1};
   ArrayRef<Operation *> sourceEvents(events.data(), sourceEventCount);
+  // The condition of argument `index`, with its frozen predicate.
+  auto lowerCondition =
+      [&](size_t index) -> FailureOr<std::pair<Value, int32_t>> {
+    auto fail =
+        [&](const Twine &message) -> FailureOr<std::pair<Value, int32_t>> {
+      function.emitError(message);
+      return failure();
+    };
+    int64_t conditionChild = conditionChildren[index];
+    if (static_cast<size_t>(conditionChild) >= roots.size())
+      return fail(
+          "basic timing-check condition has an invalid child");
+    int32_t predicate =
+        frozenConditionPredicates ? frozenConditionPredicates[index] : 0;
+    Operation *conditionRoot = roots[conditionChild];
+    Operation *conditionOperand =
+        getTimingConditionOperand(conditionRoot, predicate);
+    if (!conditionOperand)
+      return fail(
+          "basic timing-check condition has no normalized operand");
+    FailureOr<Value> condition = failure();
+    if (sim::has<sim::metadata::Observer>(conditionOperand))
+      condition = bindObserver(conditionOperand);
+    else
+      condition = lowerExpression(conditionOperand, true);
+    if (failed(condition))
+      return failure();
+
+    if (isa<sim::ObserverType>((*condition).getType())) {
+      auto observed = cast<sim::ObserverType>((*condition).getType());
+      std::optional<unsigned> width =
+          sim::getPackedWidth(observed.getResultType());
+      if (!width || *width != 1)
+        return fail(
+            "computed timing-check condition must return one packed bit");
+      // IEEE 1800-2017 31.7 samples the condition only after its primary
+      // event matches. The observer token carries compiled code and frozen
+      // handles into that existing clock wait; its dependencies never become
+      // independent wakeups.
+      return std::make_pair(*condition, predicate);
+    }
+    if (!isa<sim::RefType, sim::NetType, sim::DriverType>(
+            (*condition).getType()))
+      return fail(
+          "basic timing-check condition is neither a direct handle nor a "
+          "compiled observer");
+
+    Type elementType;
+    if (auto ref = dyn_cast<sim::RefType>((*condition).getType()))
+      elementType = ref.getElementType();
+    else if (auto net = dyn_cast<sim::NetType>((*condition).getType()))
+      elementType = net.getElementType();
+    else
+      elementType =
+          cast<sim::DriverType>((*condition).getType()).getElementType();
+    std::optional<unsigned> conditionWidth = sim::getPackedWidth(elementType);
+    if (!conditionWidth || *conditionWidth == 0)
+      return fail(
+          "basic timing-check condition has no packed LSB");
+    if ((predicate == 0 || predicate == 1) && *conditionWidth != 1) {
+      Type scalar = sim::getPackedScalarType(elementType);
+      Type bitType = isa<sim::LogicType>(scalar)
+                         ? Type(sim::LogicType::get(function.getContext(), 1))
+                         : Type(builder.getI1Type());
+      if (isa<sim::RefType>((*condition).getType())) {
+        Type type = sim::RefType::get(function.getContext(), bitType);
+        condition =
+            sim::SimRefExtractOp::create(builder, location, type, *condition,
+                                         builder.getI64IntegerAttr(0))
+                .getResult();
+      } else if (isa<sim::NetType>((*condition).getType())) {
+        Type type = sim::NetType::get(function.getContext(), bitType);
+        condition =
+            sim::SimNetExtractOp::create(builder, location, type, *condition,
+                                         builder.getI64IntegerAttr(0))
+                .getResult();
+      } else {
+        Type type = sim::DriverType::get(function.getContext(), bitType);
+        condition =
+            sim::SimDriverExtractOp::create(builder, location, type, *condition,
+                                            builder.getI64IntegerAttr(0))
+                .getResult();
+      }
+    }
+    // IEEE 1800-2017 31.7 samples the operand's LSB before applying the
+    // frozen predicate. Direct equality forms retain the packed handle; the
+    // runtime reads precisely bit zero rather than constructing an SSA compare.
+    return std::make_pair(*condition, predicate);
+  };
+  // IEEE 1800-2023 31.9.2 associates the timestamp condition with the event that
+  // transitions first and the timecheck condition with the one that transitions
+  // second. With both limits nonnegative either event can come first, so one
+  // occurrence has both roles. The primary slots take the timecheck condition
+  // and a shadow of each event takes the timestamp condition.
+  bool roleConditions =
+      combined && function->hasAttr("timing_check_role_conditions");
   for (auto [index, event] : llvm::enumerate(sourceEvents)) {
     FailureOr<Value> handle = lowerExpression(event, true);
     if (failed(handle) || !isa<sim::RefType, sim::NetType, sim::DriverType>(
@@ -162,95 +258,41 @@ UnitLowering::lowerSystemTimingCheck(ArrayRef<Operation *> roots) {
     handles.push_back(*handle);
     eventEdges.push_back(edge);
 
-    int64_t conditionChild = conditionChildren[index];
-    if (conditionChild < 0)
+    if (roleConditions || conditionChildren[index] < 0)
       continue;
-    if (static_cast<size_t>(conditionChild) >= roots.size())
-      return function.emitError(
-          "basic timing-check condition has an invalid child");
-    int32_t predicate =
-        frozenConditionPredicates ? frozenConditionPredicates[index] : 0;
-    Operation *conditionRoot = roots[conditionChild];
-    Operation *conditionOperand =
-        getTimingConditionOperand(conditionRoot, predicate);
-    if (!conditionOperand)
-      return function.emitError(
-          "basic timing-check condition has no normalized operand");
-    FailureOr<Value> condition = failure();
-    if (sim::has<sim::metadata::Observer>(conditionOperand))
-      condition = bindObserver(conditionOperand);
-    else
-      condition = lowerExpression(conditionOperand, true);
-    if (failed(condition))
+    FailureOr<std::pair<Value, int32_t>> bound = lowerCondition(index);
+    if (failed(bound))
       return failure();
-
-    if (isa<sim::ObserverType>((*condition).getType())) {
-      auto observed = cast<sim::ObserverType>((*condition).getType());
-      std::optional<unsigned> width =
-          sim::getPackedWidth(observed.getResultType());
-      if (!width || *width != 1)
-        return function.emitError(
-            "computed timing-check condition must return one packed bit");
-      // IEEE 1800-2017 31.7 samples the condition only after its primary
-      // event matches. The observer token carries compiled code and frozen
-      // handles into that existing clock wait; its dependencies never become
-      // independent wakeups.
-      conditionIndices[index] = static_cast<int32_t>(conditions.size());
-      conditions.push_back(*condition);
-      conditionPredicates.push_back(predicate);
-      eventConditions[index] = *condition;
-      continue;
-    }
-    if (!isa<sim::RefType, sim::NetType, sim::DriverType>(
-            (*condition).getType()))
-      return function.emitError(
-          "basic timing-check condition is neither a direct handle nor a "
-          "compiled observer");
-
-    Type elementType;
-    if (auto ref = dyn_cast<sim::RefType>((*condition).getType()))
-      elementType = ref.getElementType();
-    else if (auto net = dyn_cast<sim::NetType>((*condition).getType()))
-      elementType = net.getElementType();
-    else
-      elementType =
-          cast<sim::DriverType>((*condition).getType()).getElementType();
-    std::optional<unsigned> conditionWidth = sim::getPackedWidth(elementType);
-    if (!conditionWidth || *conditionWidth == 0)
-      return function.emitError(
-          "basic timing-check condition has no packed LSB");
-    if ((predicate == 0 || predicate == 1) && *conditionWidth != 1) {
-      Type scalar = sim::getPackedScalarType(elementType);
-      Type bitType = isa<sim::LogicType>(scalar)
-                         ? Type(sim::LogicType::get(function.getContext(), 1))
-                         : Type(builder.getI1Type());
-      if (isa<sim::RefType>((*condition).getType())) {
-        Type type = sim::RefType::get(function.getContext(), bitType);
-        condition =
-            sim::SimRefExtractOp::create(builder, location, type, *condition,
-                                         builder.getI64IntegerAttr(0))
-                .getResult();
-      } else if (isa<sim::NetType>((*condition).getType())) {
-        Type type = sim::NetType::get(function.getContext(), bitType);
-        condition =
-            sim::SimNetExtractOp::create(builder, location, type, *condition,
-                                         builder.getI64IntegerAttr(0))
-                .getResult();
-      } else {
-        Type type = sim::DriverType::get(function.getContext(), bitType);
-        condition =
-            sim::SimDriverExtractOp::create(builder, location, type, *condition,
-                                            builder.getI64IntegerAttr(0))
-                .getResult();
-      }
-    }
-    // IEEE 1800-2017 31.7 samples the operand's LSB before applying the
-    // frozen predicate. Direct equality forms retain the packed handle; the
-    // runtime reads precisely bit zero rather than constructing an SSA compare.
     conditionIndices[index] = static_cast<int32_t>(conditions.size());
-    conditions.push_back(*condition);
-    conditionPredicates.push_back(predicate);
-    eventConditions[index] = *condition;
+    conditions.push_back(bound->first);
+    conditionPredicates.push_back(bound->second);
+    eventConditions[index] = bound->first;
+  }
+
+  std::array<unsigned, 2> stampBits{0, 1};
+  if (roleConditions) {
+    auto gate = [&](unsigned slot, size_t argument) -> LogicalResult {
+      if (conditionChildren[argument] < 0)
+        return success();
+      FailureOr<std::pair<Value, int32_t>> bound = lowerCondition(argument);
+      if (failed(bound))
+        return failure();
+      conditionIndices[slot] = static_cast<int32_t>(conditions.size());
+      conditions.push_back(bound->first);
+      conditionPredicates.push_back(bound->second);
+      return success();
+    };
+    for (unsigned event : {0u, 1u})
+      if (failed(gate(event, 6)))
+        return failure();
+    for (unsigned event : {0u, 1u}) {
+      stampBits[event] = handles.size();
+      handles.push_back(handles[event]);
+      eventEdges.push_back(eventEdges[event]);
+      conditionIndices.push_back(-1);
+      if (failed(gate(stampBits[event], 5)))
+        return failure();
+    }
   }
 
   std::array<unsigned, 2> rawEventBits{0, 1};
@@ -354,6 +396,8 @@ UnitLowering::lowerSystemTimingCheck(ArrayRef<Operation *> roots) {
   Value slotEvent0Count;
   Value slotEvent1Count;
   Value slotEventViolationCount;
+  Value slotStamp0;
+  Value slotStamp1;
   Value slotTimerRestart;
   Value slotTimerCancel;
   if (slotFinal && !noChange) {
@@ -363,6 +407,14 @@ UnitLowering::lowerSystemTimingCheck(ArrayRef<Operation *> roots) {
     slotEvent1Count = sim::SimRefAllocOp::create(
         builder, location, sim::RefType::get(function.getContext(), i64),
         zero64);
+    if (roleConditions) {
+      slotStamp0 = sim::SimRefAllocOp::create(
+          builder, location, sim::RefType::get(function.getContext(), i1),
+          falseValue);
+      slotStamp1 = sim::SimRefAllocOp::create(
+          builder, location, sim::RefType::get(function.getContext(), i1),
+          falseValue);
+    }
     if (emitEventMode)
       slotEventViolationCount = sim::SimRefAllocOp::create(
           builder, location, sim::RefType::get(function.getContext(), i64),
@@ -501,6 +553,10 @@ UnitLowering::lowerSystemTimingCheck(ArrayRef<Operation *> roots) {
         builder, location, i64,
         builder.getI64IntegerAttr(static_cast<int64_t>(uint64_t{1} << bit))));
   };
+  Value stamp0Occurred =
+      roleConditions ? occurred(occurrenceMask(stampBits[0])) : event0Occurred;
+  Value stamp1Occurred =
+      roleConditions ? occurred(occurrenceMask(stampBits[1])) : event1Occurred;
   Value rawEvent0Occurred =
       skewWithMode ? occurred(occurrenceMask(rawEventBits[0])) : event0Occurred;
   Value rawEvent1Occurred =
@@ -897,6 +953,16 @@ UnitLowering::lowerSystemTimingCheck(ArrayRef<Operation *> roots) {
                                slotEvent0Count);
     sim::SimRefStoreOp::create(builder, location, accumulated1,
                                slotEvent1Count);
+    if (roleConditions) {
+      auto accumulate = [&](Value slot, Value occurrence) {
+        Value prior = sim::SimRefLoadOp::create(builder, location, i1, slot);
+        sim::SimRefStoreOp::create(
+            builder, location,
+            arith::OrIOp::create(builder, location, prior, occurrence), slot);
+      };
+      accumulate(slotStamp0, stamp0Occurred);
+      accumulate(slotStamp1, stamp1Occurred);
+    }
     cf::BranchOp::create(builder, location, drain, ValueRange{});
 
     setCurrent(slotFinalize);
@@ -908,6 +974,14 @@ UnitLowering::lowerSystemTimingCheck(ArrayRef<Operation *> roots) {
         builder, location, arith::CmpIPredicate::ne, event0Count, zero64);
     event1Occurred = arith::CmpIOp::create(
         builder, location, arith::CmpIPredicate::ne, event1Count, zero64);
+    stamp0Occurred =
+        roleConditions
+            ? Value(sim::SimRefLoadOp::create(builder, location, i1, slotStamp0))
+            : event0Occurred;
+    stamp1Occurred =
+        roleConditions
+            ? Value(sim::SimRefLoadOp::create(builder, location, i1, slotStamp1))
+            : event1Occurred;
   }
   if (noChange)
     setCurrent(slotFinalize);
@@ -975,9 +1049,9 @@ UnitLowering::lowerSystemTimingCheck(ArrayRef<Operation *> roots) {
     // simultaneous cohort can toggle the Clause 31.6 notifier at most once.
     int64_t event1Limit = kind == 3 ? ticks[3] : ticks[2];
     int64_t event0Limit = kind == 3 ? ticks[2] : ticks[3];
-    Value event1Violation = checkOpposite(event1Occurred, event0Occurred,
+    Value event1Violation = checkOpposite(event1Occurred, stamp0Occurred,
                                           previous, valid, event1Limit);
-    Value event0Violation = checkOpposite(event0Occurred, event1Occurred,
+    Value event0Violation = checkOpposite(event0Occurred, stamp1Occurred,
                                           previous1, valid1, event0Limit);
     qualified = arith::OrIOp::create(builder, location, event1Violation,
                                      event0Violation);
@@ -995,13 +1069,13 @@ UnitLowering::lowerSystemTimingCheck(ArrayRef<Operation *> roots) {
     baseReportCount = arith::SelectOp::create(builder, location, event1HasMore,
                                               event1Reports, event0Reports);
     Value nextTimestamp0 = arith::SelectOp::create(
-        builder, location, event0Occurred, now, previous);
+        builder, location, stamp0Occurred, now, previous);
     Value nextValid0 =
-        arith::OrIOp::create(builder, location, valid, event0Occurred);
+        arith::OrIOp::create(builder, location, valid, stamp0Occurred);
     Value nextTimestamp1 = arith::SelectOp::create(
-        builder, location, event1Occurred, now, previous1);
+        builder, location, stamp1Occurred, now, previous1);
     Value nextValid1 =
-        arith::OrIOp::create(builder, location, valid1, event1Occurred);
+        arith::OrIOp::create(builder, location, valid1, stamp1Occurred);
     sim::SimRefStoreOp::create(builder, location, nextTimestamp0, timestamp);
     sim::SimRefStoreOp::create(builder, location, nextValid0, timestampValid);
     sim::SimRefStoreOp::create(builder, location, nextTimestamp1,
@@ -1291,6 +1365,10 @@ UnitLowering::lowerSystemTimingCheck(ArrayRef<Operation *> roots) {
     if (!noChange) {
       sim::SimRefStoreOp::create(builder, location, zero64, slotEvent0Count);
       sim::SimRefStoreOp::create(builder, location, zero64, slotEvent1Count);
+    }
+    if (roleConditions) {
+      sim::SimRefStoreOp::create(builder, location, falseValue, slotStamp0);
+      sim::SimRefStoreOp::create(builder, location, falseValue, slotStamp1);
     }
     if (emitEventMode) {
       sim::SimRefStoreOp::create(builder, location, zero64,

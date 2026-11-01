@@ -3453,22 +3453,42 @@ private:
                 timeFs[slot] = *value;
         }
       }
-      if (arguments.size() > 5 && timeFs.size() > 3 &&
-          (timeFs[2] < 0) != (timeFs[3] < 0) && !arguments[0].condition &&
-          !arguments[1].condition &&
-          node.timingCheckKind == slang::ast::SystemTimingCheckKind::SetupHold) {
-        // IEEE 1800-2023 31.9.2: a negative setup limit makes the data signal
-        // transition second, a negative hold limit the reference signal. The
-        // timestamp condition (slot 5) guards the first and the timecheck
-        // condition (slot 6) the second, as an event `&&&` condition would.
-        bool dataSecond = timeFs[2] < 0;
+      // IEEE 1800-2023 31.9.2: slots 5 and 6 of $setuphold and $recrem are the
+      // timestamp and timecheck conditions, for the event that transitions first
+      // and second. `&&&` on the events has no defined combination with them.
+      bool combinedCheck =
+          node.timingCheckKind == slang::ast::SystemTimingCheckKind::SetupHold ||
+          node.timingCheckKind == slang::ast::SystemTimingCheckKind::RecRem;
+      bool roleConditionsRepresentable =
+          combinedCheck && timeFs.size() > 3 && !arguments[0].condition &&
+          !arguments[1].condition && (timeFs[2] >= 0 || timeFs[3] >= 0);
+      bool hasRoleConditions = false;
+      if (roleConditionsRepresentable)
+        for (size_t slot : {size_t{5}, size_t{6}})
+          hasRoleConditions |= slot < arguments.size() && arguments[slot].expr;
+      if (hasRoleConditions && timeFs[2] >= 0 && timeFs[3] >= 0) {
+        // Either event can come first, so lowering keeps both roles.
+        attrs.set("timing_check_role_conditions", builder.getUnitAttr());
+        for (size_t slot : {size_t{5}, size_t{6}}) {
+          if (slot >= arguments.size() || !arguments[slot].expr)
+            continue;
+          conditionChildren[slot] = expressionChildren[slot];
+          conditionPredicates[slot] = classifyCondition(arguments[slot].expr);
+        }
+      } else if (hasRoleConditions) {
+        // One negative limit fixes the order. The event whose limit is negative
+        // in Table 31-3 or 31-6 is only a timestamp event: the reference event
+        // for a negative setup or removal limit, the data event otherwise.
+        bool setupHold = node.timingCheckKind ==
+                         slang::ast::SystemTimingCheckKind::SetupHold;
+        bool dataSecond = setupHold ? timeFs[2] < 0 : timeFs[3] < 0;
         for (size_t slot : {size_t{5}, size_t{6}}) {
           if (slot >= arguments.size() || !arguments[slot].expr)
             continue;
           size_t event = ((slot == 6) == dataSecond) ? 1 : 0;
           hasCondition[event] = 1;
           conditionChildren[event] = expressionChildren[slot];
-          conditionPredicates[event] = 0;
+          conditionPredicates[event] = classifyCondition(arguments[slot].expr);
         }
       }
       // IEEE 1800-2017 31.2 gives every check an ordered formal argument
@@ -3534,14 +3554,10 @@ private:
             attrs.set("talos.delayed_signal_args", builder.getUnitAttr());
             continue;
           }
-          // IEEE 1800-2023 31.9.2: with a negative $setuphold limit the
-          // timestamp and timecheck conditions follow the delayed signal that
-          // transitions first and second. Handled below.
+          // IEEE 1800-2023 31.9.2: the timestamp and timecheck conditions were
+          // assigned to their events or roles above.
           if (index >= 5 && index <= 6 && arguments[index].expr &&
-              !arguments[index].condition &&
-              node.timingCheckKind == slang::ast::SystemTimingCheckKind::SetupHold &&
-              timeFs.size() > 3 && (timeFs[2] < 0) != (timeFs[3] < 0) &&
-              !arguments[0].condition && !arguments[1].condition)
+              !arguments[index].condition && roleConditionsRepresentable)
             continue;
           unsupportedCombinedOption |= arguments[index].expr != nullptr ||
                                        arguments[index].condition != nullptr;
