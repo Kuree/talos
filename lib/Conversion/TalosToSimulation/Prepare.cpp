@@ -873,6 +873,12 @@ void TalosSimPreparePass::runOnOperation() {
         staleFoldExpressions.insert(widened);
     }
 
+    // IEEE 1800-2023 32.4.3: an SDF-annotated specparam changes the value of
+    // every expression that contains it, so its frontend fold and those of its
+    // ancestors are stale.
+    if (operation->hasAttr("sdf_annotated_specparam"))
+      staleFold = true;
+
     auto call = dyn_cast<semantic::SVCallExpressionOp>(operation);
 
     // IEEE 1800-2017 13.4.2 gives locals in an ordinary static function
@@ -3518,6 +3524,25 @@ void TalosSimPreparePass::runOnOperation() {
     if (selectedPulse) {
       rejectLimits.assign(normalizedDelays.size(), selectedPulse->reject);
       errorLimits.assign(normalizedDelays.size(), selectedPulse->error);
+    }
+    // IEEE 1800-2023 30.7.3: SDF PATHPULSE annotation overrides both the
+    // PATHPULSE$ specparams and the default limits.
+    auto sdfReject = path->getAttrOfType<IntegerAttr>("sdf_pulse_reject_fs");
+    auto sdfError = path->getAttrOfType<IntegerAttr>("sdf_pulse_error_fs");
+    if (sdfReject)
+      rejectLimits.assign(normalizedDelays.size(), sdfReject.getInt());
+    if (sdfError)
+      errorLimits.assign(normalizedDelays.size(), sdfError.getInt());
+    if (sdfReject || sdfError) {
+      for (auto [reject, error] : llvm::zip_equal(rejectLimits, errorLimits)) {
+        if (reject < 0 || error < reject) {
+          emitError(getSemanticLocation(path))
+              << "SDF PATHPULSE reject and error limits must be nonnegative "
+                 "and ordered";
+          invalid = true;
+          return;
+        }
+      }
     }
     SmallVector<uint64_t, 6> pulseBoundaries{
         outputTerminal->low, outputTerminal->low + outputTerminal->width};

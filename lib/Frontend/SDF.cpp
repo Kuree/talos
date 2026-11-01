@@ -492,6 +492,48 @@ struct ParsedIOPath {
   unsigned column = 1;
 };
 
+/// One SDF TIMINGCHECK record (IEEE 1800-2023 32.4.2).
+struct ParsedTimingCheck {
+  sdf::TimingCheckKind kind = sdf::TimingCheckKind::Setup;
+  SmallVector<ParsedIOPath::Port, 2> events;
+  SmallVector<sdf::Edge, 2> edges;
+  SmallVector<ParsedIOPath::DelayValue, 2> limits;
+  unsigned line = 1;
+  unsigned column = 1;
+};
+
+/// One SDF LABEL entry (IEEE 1800-2023 32.4.3).
+struct ParsedLabel {
+  std::string name;
+  SDFAnnotationDatabase::DelayAnnotation::Kind kind =
+      SDFAnnotationDatabase::DelayAnnotation::Kind::Absolute;
+  ParsedIOPath::DelayValue value;
+  unsigned line = 1;
+  unsigned column = 1;
+};
+
+/// One SDF PATHPULSE record (IEEE 1800-2023 30.7.3, 32.4.1).
+struct ParsedPulse {
+  std::optional<ParsedIOPath::Port> input;
+  std::optional<ParsedIOPath::Port> output;
+  ParsedIOPath::DelayValue reject;
+  ParsedIOPath::DelayValue error;
+  unsigned line = 1;
+  unsigned column = 1;
+};
+
+/// One SDF INTERCONNECT, or PORT when `source` is empty (IEEE 1800-2023
+/// 32.4.4). The delays are the rise, fall, and turn-off values.
+struct ParsedInterconnect {
+  std::optional<ParsedIOPath::Port> source;
+  ParsedIOPath::Port load;
+  SDFAnnotationDatabase::DelayAnnotation::Kind kind =
+      SDFAnnotationDatabase::DelayAnnotation::Kind::Absolute;
+  SmallVector<ParsedIOPath::DelayValue, 3> delays;
+  unsigned line = 1;
+  unsigned column = 1;
+};
+
 struct ParsedCell {
   struct UnsupportedTimingData {
     std::string description;
@@ -503,6 +545,10 @@ struct ParsedCell {
   std::string instance;
   bool wildcard = false;
   SmallVector<ParsedIOPath, 4> paths;
+  SmallVector<ParsedTimingCheck, 2> timingChecks;
+  SmallVector<ParsedLabel, 2> labels;
+  SmallVector<ParsedPulse, 2> pulses;
+  SmallVector<ParsedInterconnect, 2> interconnects;
   SmallVector<UnsupportedTimingData, 2> unsupportedTimingData;
   unsigned line = 1;
   unsigned column = 1;
@@ -523,7 +569,9 @@ static std::optional<size_t> countParsedSDFEntries(const ParsedSDF &sdf) {
     return true;
   };
   for (const ParsedCell &cell : sdf.cells) {
-    if (!add(1) || !add(cell.paths.size()) ||
+    if (!add(1) || !add(cell.paths.size()) || !add(cell.timingChecks.size()) ||
+        !add(cell.labels.size()) || !add(cell.pulses.size()) ||
+        !add(cell.interconnects.size()) ||
         !add(cell.unsupportedTimingData.size()))
       return std::nullopt;
     for (const ParsedIOPath &path : cell.paths)
@@ -715,6 +763,21 @@ struct TimingPathInventory
   void handle(const slang::ast::InstanceSymbol &) {}
 };
 
+struct SpecifyInventory
+    : slang::ast::ASTVisitor<SpecifyInventory, slang::ast::VisitFlags::AllGood> {
+  SmallVector<const slang::ast::SystemTimingCheckSymbol *, 4> checks;
+  SmallVector<const slang::ast::SpecparamSymbol *, 4> specparams;
+
+  void handle(const slang::ast::SystemTimingCheckSymbol &check) {
+    checks.push_back(&check);
+  }
+  void handle(const slang::ast::SpecparamSymbol &specparam) {
+    if (!specparam.name.starts_with("PATHPULSE$"))
+      specparams.push_back(&specparam);
+  }
+  void handle(const slang::ast::InstanceSymbol &) {}
+};
+
 static const slang::ast::InstanceSymbol *
 owningInstance(const slang::ast::Scope &scope,
                const DesignInventory &inventory) {
@@ -870,7 +933,7 @@ static std::string normalizeInstance(StringRef value, char divider) {
   return result;
 }
 
-static bool terminalMatches(const slang::ast::TimingPathSymbol &path,
+static bool terminalMatches(const slang::ast::Symbol &path,
                             const slang::ast::Expression *expression,
                             const ParsedIOPath::Port &annotation) {
   const slang::ast::Symbol *symbol =
@@ -908,6 +971,115 @@ static bool pathMatches(const slang::ast::TimingPathSymbol &path,
   // path with the same edge. An unqualified IOPATH can annotate conditional
   // and nonconditional declarations between the named terminals.
   return !annotation.edge || path.edgeIdentifier == *annotation.edge;
+}
+
+/// Select the MTM member and round it to the target precision. An empty SDF
+/// field leaves `out` empty (IEEE 1800-2023 32.3). False on a rounding failure.
+static bool selectDelayValue(const ParsedIOPath::DelayValue &value,
+                             SDFMTMSelection mtm, uint64_t sdfScaleFs,
+                             uint64_t precisionFs,
+                             std::optional<int64_t> &out) {
+  const std::optional<ExactDecimal> *selected = &value.typ;
+  if (value.form == sdf::DelayValueForm::Triple) {
+    if (mtm == SDFMTMSelection::Minimum)
+      selected = &value.min;
+    else if (mtm == SDFMTMSelection::Maximum)
+      selected = &value.max;
+  }
+  out.reset();
+  if (!*selected)
+    return true;
+  out = roundDelay(**selected, sdfScaleFs, precisionFs);
+  return out.has_value();
+}
+
+/// IEEE 1800-2023 Table 32-2: the SystemVerilog check kind, the argument slot
+/// of its limit, and the SDF limit that feeds it.
+struct TimingCheckTarget {
+  slang::ast::SystemTimingCheckKind kind;
+  unsigned slot;
+  unsigned limit;
+};
+
+static SmallVector<TimingCheckTarget, 4>
+timingCheckTargets(sdf::TimingCheckKind kind) {
+  using SV = slang::ast::SystemTimingCheckKind;
+  using SDF = sdf::TimingCheckKind;
+  switch (kind) {
+  case SDF::Setup:
+    return {{SV::Setup, 2, 0}, {SV::SetupHold, 2, 0}};
+  case SDF::Hold:
+    return {{SV::Hold, 2, 0}, {SV::SetupHold, 3, 0}};
+  case SDF::SetupHold:
+    return {{SV::Setup, 2, 0},
+            {SV::Hold, 2, 1},
+            {SV::SetupHold, 2, 0},
+            {SV::SetupHold, 3, 1}};
+  case SDF::Recovery:
+    return {{SV::Recovery, 2, 0}, {SV::RecRem, 2, 0}};
+  case SDF::Removal:
+    return {{SV::Removal, 2, 0}, {SV::RecRem, 3, 0}};
+  case SDF::Recrem:
+    return {{SV::Recovery, 2, 0},
+            {SV::Removal, 2, 1},
+            {SV::RecRem, 2, 0},
+            {SV::RecRem, 3, 1}};
+  case SDF::Skew:
+    return {{SV::Skew, 2, 0}, {SV::TimeSkew, 2, 0}};
+  case SDF::BidirectSkew:
+    return {{SV::FullSkew, 2, 0}, {SV::FullSkew, 3, 1}};
+  case SDF::Width:
+    return {{SV::Width, 1, 0}};
+  case SDF::Period:
+    return {{SV::Period, 1, 0}};
+  case SDF::NoChange:
+    return {{SV::NoChange, 2, 0}, {SV::NoChange, 3, 1}};
+  }
+  return {};
+}
+
+/// IEEE 1800-2023 32.4.2: an SDF event with no edge matches any edge; one with
+/// an edge matches only the same unqualified SystemVerilog edge.
+static bool timingEventMatches(const slang::ast::SystemTimingCheckSymbol &check,
+                               const slang::ast::SystemTimingCheckSymbol::Arg &arg,
+                               const ParsedIOPath::Port &port,
+                               sdf::Edge edge) {
+  if (!terminalMatches(check, arg.expr, port))
+    return false;
+  switch (edge) {
+  case sdf::Edge::None:
+    return true;
+  case sdf::Edge::Posedge:
+    return arg.edge == slang::ast::EdgeKind::PosEdge &&
+           arg.edgeDescriptors.empty();
+  case sdf::Edge::Negedge:
+    return arg.edge == slang::ast::EdgeKind::NegEdge &&
+           arg.edgeDescriptors.empty();
+  default:
+    return false;
+  }
+}
+
+/// IEEE 1800-2023 32.4.4: a port named by an INTERCONNECT is an instance path
+/// relative to the annotation scope, ending in a port of the last instance.
+static const slang::ast::PortSymbol *
+resolveModulePort(const slang::ast::InstanceSymbol &scope, StringRef path,
+                  char divider) {
+  std::string normalized = normalizeInstance(path, divider);
+  StringRef rest = normalized;
+  const slang::ast::InstanceSymbol *instance = &scope;
+  while (true) {
+    auto [head, tail] = rest.split('.');
+    if (tail.empty()) {
+      const slang::ast::Symbol *port = instance->body.findPort(head);
+      return port ? port->as_if<slang::ast::PortSymbol>() : nullptr;
+    }
+    const slang::ast::Symbol *child = instance->body.find(head);
+    instance = child ? child->as_if<slang::ast::InstanceSymbol>() : nullptr;
+    if (!instance)
+      return nullptr;
+    rest = tail;
+  }
 }
 
 static void callDiagnostic(const slang::SourceManager &sourceManager,
@@ -1880,6 +2052,143 @@ static std::optional<ParsedSDF> consumeSDFIR(mlir::ModuleOp module) {
       cell.instance = instance.getValue().str();
     cell.wildcard = static_cast<bool>(cellOp.getWildcardAttr());
     for (mlir::Operation &operation : cellOp.getBody().front()) {
+      auto convertValue = [&](mlir::Operation *at, sdf::DelayValueAttr value,
+                              bool allowNegative)
+          -> std::optional<ParsedIOPath::DelayValue> {
+        ParsedIOPath::DelayValue parsed;
+        parsed.form = value.getForm();
+        auto member = [&](sdf::DecimalAttr attr,
+                          std::optional<ExactDecimal> &destination) {
+          if (!attr)
+            return true;
+          destination = parseDecimal(attr.getSpelling().getValue());
+          if (!destination || (!allowNegative && destination->negative)) {
+            sdfIRDiagnostic(file, at, "invalid SDF delay value");
+            return false;
+          }
+          return true;
+        };
+        if (!member(value.getMin(), parsed.min) ||
+            !member(value.getTyp(), parsed.typ) ||
+            !member(value.getMax(), parsed.max))
+          return std::nullopt;
+        return parsed;
+      };
+      auto copyPortAttr = [](sdf::PortAttr port) {
+        ParsedIOPath::Port result{port.getName().getValue().str(),
+                                  std::nullopt};
+        if (port.getHasIndex())
+          result.index = static_cast<int32_t>(port.getIndex());
+        return result;
+      };
+      if (auto check = dyn_cast<sdf::SDFTimingCheckOp>(operation)) {
+        ParsedTimingCheck parsed;
+        std::tie(parsed.line, parsed.column) = sourcePosition(check);
+        parsed.kind = check.getKind();
+        bool supported = true;
+        for (mlir::Attribute attribute : check.getEvents()) {
+          auto event = cast<sdf::TimingEventAttr>(attribute);
+          // IEEE 1800-2023 32.4.2 matches an SDF event condition against the
+          // SystemVerilog `&&&` condition; that comparison is not folded here.
+          supported &= !event.getCondition();
+          parsed.events.push_back(copyPortAttr(event.getPort()));
+          parsed.edges.push_back(event.getPort().getEdge());
+        }
+        for (mlir::Attribute attribute : check.getLimits()) {
+          std::optional<ParsedIOPath::DelayValue> value =
+              convertValue(check, cast<sdf::DelayValueAttr>(attribute),
+                           /*allowNegative=*/true);
+          if (!value)
+            return std::nullopt;
+          parsed.limits.push_back(std::move(*value));
+        }
+        if (supported) {
+          cell.timingChecks.push_back(std::move(parsed));
+        } else {
+          cell.unsupportedTimingData.push_back(
+              {"TIMINGCHECK with a condition", parsed.line, parsed.column});
+        }
+        continue;
+      }
+      if (auto label = dyn_cast<sdf::SDFLabelOp>(operation)) {
+        ParsedLabel parsed;
+        std::tie(parsed.line, parsed.column) = sourcePosition(label);
+        parsed.name = label.getName().str();
+        parsed.kind =
+            label.getMode() == sdf::DelayMode::Increment
+                ? SDFAnnotationDatabase::DelayAnnotation::Kind::Increment
+                : SDFAnnotationDatabase::DelayAnnotation::Kind::Absolute;
+        std::optional<ParsedIOPath::DelayValue> value = convertValue(
+            label, label.getValue(),
+            parsed.kind ==
+                SDFAnnotationDatabase::DelayAnnotation::Kind::Increment);
+        if (!value)
+          return std::nullopt;
+        parsed.value = std::move(*value);
+        cell.labels.push_back(std::move(parsed));
+        continue;
+      }
+      if (auto pulse = dyn_cast<sdf::SDFPulseOp>(operation);
+          pulse && pulse.getKind() == sdf::PulseKind::Absolute) {
+        ParsedPulse parsed;
+        std::tie(parsed.line, parsed.column) = sourcePosition(pulse);
+        if (pulse.getInput())
+          parsed.input = copyPortAttr(*pulse.getInput());
+        if (pulse.getOutput())
+          parsed.output = copyPortAttr(*pulse.getOutput());
+        std::optional<ParsedIOPath::DelayValue> reject =
+            convertValue(pulse, pulse.getReject(), false);
+        std::optional<ParsedIOPath::DelayValue> error =
+            convertValue(pulse, pulse.getError(), false);
+        if (!reject || !error)
+          return std::nullopt;
+        parsed.reject = std::move(*reject);
+        parsed.error = std::move(*error);
+        cell.pulses.push_back(std::move(parsed));
+        continue;
+      }
+      auto interconnect = dyn_cast<sdf::SDFInterconnectDelayOp>(operation);
+      auto terminal = dyn_cast<sdf::SDFTerminalDelayOp>(operation);
+      if (interconnect ||
+          (terminal && terminal.getKind() == sdf::TerminalDelayKind::Port &&
+           terminal.getTerminal())) {
+        ParsedInterconnect parsed;
+        std::tie(parsed.line, parsed.column) = sourcePosition(&operation);
+        sdf::DelayMode mode =
+            interconnect ? interconnect.getMode() : terminal.getMode();
+        parsed.kind = mode == sdf::DelayMode::Increment
+                          ? SDFAnnotationDatabase::DelayAnnotation::Kind::
+                                Increment
+                          : SDFAnnotationDatabase::DelayAnnotation::Kind::
+                                Absolute;
+        if (interconnect) {
+          parsed.source = copyPortAttr(interconnect.getSourcePort());
+          parsed.load = copyPortAttr(interconnect.getDestinationPort());
+        } else {
+          parsed.load = copyPortAttr(*terminal.getTerminal());
+        }
+        mlir::ArrayAttr delays =
+            interconnect ? interconnect.getDelays() : terminal.getDelays();
+        // IEEE 1800-2023 32.4.4 gives an interconnect twelve transition
+        // delays; the net-delay form carries rise, fall, and turn-off.
+        bool supported = delays.size() <= 3;
+        for (mlir::Attribute attribute : delays) {
+          std::optional<ParsedIOPath::DelayValue> value =
+              convertValue(&operation, cast<sdf::DelayValueAttr>(attribute),
+                           parsed.kind == SDFAnnotationDatabase::
+                                              DelayAnnotation::Kind::Increment);
+          if (!value)
+            return std::nullopt;
+          parsed.delays.push_back(std::move(*value));
+        }
+        if (supported)
+          cell.interconnects.push_back(std::move(parsed));
+        else
+          cell.unsupportedTimingData.push_back(
+              {"interconnect delay with more than three values", parsed.line,
+               parsed.column});
+        continue;
+      }
       auto pathOp = dyn_cast<sdf::SDFPathDelayOp>(operation);
       if (!pathOp || pathOp.getKind() != sdf::PathKind::IOPath) {
         auto [line, column] = sourcePosition(&operation);
@@ -1951,6 +2260,34 @@ SDFAnnotationDatabase::getTimingPathAnnotations(
     const slang::ast::TimingPathSymbol &path) const {
   auto found = timingPathAnnotations.find(&path);
   return found == timingPathAnnotations.end() ? nullptr : &found->second;
+}
+
+const SDFAnnotationDatabase::DelayAnnotations *
+SDFAnnotationDatabase::getTimingCheckAnnotations(
+    const slang::ast::SystemTimingCheckSymbol &check) const {
+  auto found = timingCheckAnnotations.find(&check);
+  return found == timingCheckAnnotations.end() ? nullptr : &found->second;
+}
+
+const SDFAnnotationDatabase::DelayAnnotations *
+SDFAnnotationDatabase::getSpecparamAnnotations(
+    const slang::ast::SpecparamSymbol &specparam) const {
+  auto found = specparamAnnotations.find(&specparam);
+  return found == specparamAnnotations.end() ? nullptr : &found->second;
+}
+
+const SDFAnnotationDatabase::DelayAnnotations *
+SDFAnnotationDatabase::getPathPulseAnnotations(
+    const slang::ast::TimingPathSymbol &path) const {
+  auto found = pathPulseAnnotations.find(&path);
+  return found == pathPulseAnnotations.end() ? nullptr : &found->second;
+}
+
+const SDFAnnotationDatabase::DelayAnnotations *
+SDFAnnotationDatabase::getInterconnectAnnotations(
+    const slang::ast::Symbol &portNet) const {
+  auto found = interconnectAnnotations.find(&portNet);
+  return found == interconnectAnnotations.end() ? nullptr : &found->second;
 }
 
 bool SDFAnnotationDatabase::isAppliedCall(
@@ -2025,6 +2362,7 @@ buildSDFAnnotationDatabase(slang::ast::Compilation &compilation,
   DenseMap<const slang::ast::InstanceSymbol *,
            SmallVector<const slang::ast::TimingPathSymbol *, 4>>
       pathCache;
+  DenseMap<const slang::ast::InstanceSymbol *, SpecifyInventory> specifyCache;
   struct CachedSDF {
     std::shared_ptr<const std::string> filename;
     std::shared_ptr<const ParsedSDF> contents;
@@ -2312,6 +2650,258 @@ buildSDFAnnotationDatabase(slang::ast::Compilation &compilation,
             errs() << *filename << ':' << annotation.line << ':'
                    << annotation.column
                    << ": warning: SDF IOPATH did not match a specify path\n";
+        }
+
+        if (cell.timingChecks.empty() && cell.labels.empty() &&
+            cell.pulses.empty() && cell.interconnects.empty())
+          continue;
+        auto [specified, specifyInserted] = specifyCache.try_emplace(target);
+        if (specifyInserted) {
+          SpecifyInventory specify;
+          target->body.visit(specify);
+          specified->second = std::move(specify);
+        }
+        const SpecifyInventory &specify = specified->second;
+        auto roundValue = [&](const ParsedIOPath::DelayValue &value,
+                              unsigned line, unsigned column,
+                              std::optional<int64_t> &out) {
+          if (selectDelayValue(value, *mtm, sdf->timeScaleFs, precisionFs, out))
+            return true;
+          errs() << *filename << ':' << line << ':' << column
+                 << ": error: SDF delay is incompatible with target "
+                    "precision\n";
+          invalid = true;
+          return false;
+        };
+        auto chargeWork = [&](unsigned line, unsigned column) {
+          if (annotationApplicationWork == maxAnnotationApplicationWork) {
+            errs() << *filename << ':' << line << ':' << column
+                   << ": error: static SDF annotation application-work "
+                      "resource limit exceeded\n";
+            return false;
+          }
+          ++annotationApplicationWork;
+          return true;
+        };
+
+        // IEEE 1800-2023 32.4.2: map each SDF timing check onto the matching
+        // SystemVerilog checks and replace the limit in that argument slot.
+        for (const ParsedTimingCheck &annotation : cell.timingChecks) {
+          bool matched = false;
+          SmallVector<TimingCheckTarget, 4> targetsForKind =
+              timingCheckTargets(annotation.kind);
+          // The SDF data event comes first for the setup-like checks, while
+          // the SystemVerilog reference event comes first except for $setup.
+          bool sdfDataFirst =
+              annotation.kind != sdf::TimingCheckKind::Skew &&
+              annotation.kind != sdf::TimingCheckKind::BidirectSkew &&
+              annotation.kind != sdf::TimingCheckKind::Width &&
+              annotation.kind != sdf::TimingCheckKind::Period;
+          for (const slang::ast::SystemTimingCheckSymbol *check :
+               specify.checks) {
+            if (!chargeWork(annotation.line, annotation.column))
+              return nullptr;
+            auto arguments = check->getArguments();
+            bool singleEvent = annotation.events.size() == 1;
+            if (arguments.size() < (singleEvent ? 1u : 2u))
+              continue;
+            bool swap =
+                !singleEvent &&
+                sdfDataFirst !=
+                    (check->timingCheckKind ==
+                     slang::ast::SystemTimingCheckKind::Setup);
+            bool eventsMatch = true;
+            for (size_t index = 0; index != annotation.events.size(); ++index)
+              eventsMatch &= timingEventMatches(
+                  *check, arguments[swap ? 1 - index : index],
+                  annotation.events[index], annotation.edges[index]);
+            if (!eventsMatch)
+              continue;
+            SDFAnnotationDatabase::DelayAnnotation update;
+            update.kind = SDFAnnotationDatabase::DelayAnnotation::Kind::Absolute;
+            update.filename = annotationFilename;
+            update.line = annotation.line;
+            update.column = annotation.column;
+            update.delays.assign(4, std::nullopt);
+            bool any = false;
+            for (const TimingCheckTarget &entry : targetsForKind) {
+              if (entry.kind != check->timingCheckKind ||
+                  entry.limit >= annotation.limits.size())
+                continue;
+              std::optional<int64_t> rounded;
+              if (!roundValue(annotation.limits[entry.limit], annotation.line,
+                              annotation.column, rounded))
+                break;
+              if (!rounded)
+                continue;
+              update.delays[entry.slot] = rounded;
+              any = true;
+            }
+            if (!any)
+              continue;
+            if (matchedDelayUpdates == maxMatchedDelayUpdates) {
+              errs() << *filename << ':' << annotation.line << ':'
+                     << annotation.column
+                     << ": error: static SDF annotation-update resource "
+                        "limit exceeded\n";
+              return nullptr;
+            }
+            ++matchedDelayUpdates;
+            matched = true;
+            result->timingCheckAnnotations[check].push_back(std::move(update));
+          }
+          if (!matched)
+            errs() << *filename << ':' << annotation.line << ':'
+                   << annotation.column
+                   << ": warning: SDF TIMINGCHECK did not match a timing "
+                      "check\n";
+        }
+
+        // IEEE 1800-2023 32.4.3: LABEL annotates the specparam of that name.
+        for (const ParsedLabel &annotation : cell.labels) {
+          bool matched = false;
+          for (const slang::ast::SpecparamSymbol *specparam :
+               specify.specparams) {
+            if (!chargeWork(annotation.line, annotation.column))
+              return nullptr;
+            if (specparam->name != annotation.name)
+              continue;
+            SDFAnnotationDatabase::DelayAnnotation update;
+            update.kind = annotation.kind;
+            update.filename = annotationFilename;
+            update.line = annotation.line;
+            update.column = annotation.column;
+            std::optional<int64_t> rounded;
+            if (!roundValue(annotation.value, annotation.line,
+                            annotation.column, rounded))
+              break;
+            if (!rounded)
+              continue;
+            if (matchedDelayUpdates == maxMatchedDelayUpdates) {
+              errs() << *filename << ':' << annotation.line << ':'
+                     << annotation.column
+                     << ": error: static SDF annotation-update resource "
+                        "limit exceeded\n";
+              return nullptr;
+            }
+            ++matchedDelayUpdates;
+            matched = true;
+            update.delays.push_back(rounded);
+            result->specparamAnnotations[specparam].push_back(
+                std::move(update));
+          }
+          if (!matched)
+            errs() << *filename << ':' << annotation.line << ':'
+                   << annotation.column
+                   << ": warning: SDF LABEL did not match a specparam\n";
+        }
+
+        // IEEE 1800-2023 32.4.4: annotate the internal net of the load port.
+        for (const ParsedInterconnect &annotation : cell.interconnects) {
+          if (!chargeWork(annotation.line, annotation.column))
+            return nullptr;
+          const slang::ast::PortSymbol *load =
+              annotation.load.index
+                  ? nullptr
+                  : resolveModulePort(*target, annotation.load.name,
+                                      sdf->divider);
+          using slang::ast::ArgumentDirection;
+          if (!load || !load->internalSymbol ||
+              load->direction == ArgumentDirection::Out ||
+              load->direction == ArgumentDirection::Ref) {
+            errs() << *filename << ':' << annotation.line << ':'
+                   << annotation.column
+                   << ": warning: SDF interconnect load did not match an "
+                      "input or inout module port\n";
+            continue;
+          }
+          if (annotation.source) {
+            const slang::ast::PortSymbol *source =
+                annotation.source->index
+                    ? nullptr
+                    : resolveModulePort(*target, annotation.source->name,
+                                        sdf->divider);
+            if (!source || source->direction == ArgumentDirection::In)
+              errs() << *filename << ':' << annotation.line << ':'
+                     << annotation.column
+                     << ": warning: SDF interconnect source did not match an "
+                        "output or inout module port\n";
+          }
+          SDFAnnotationDatabase::DelayAnnotation update;
+          update.kind = annotation.kind;
+          update.filename = annotationFilename;
+          update.line = annotation.line;
+          update.column = annotation.column;
+          SmallVector<std::optional<int64_t>, 3> values;
+          bool roundedAll = true;
+          for (const ParsedIOPath::DelayValue &value : annotation.delays) {
+            std::optional<int64_t> rounded;
+            roundedAll &=
+                roundValue(value, annotation.line, annotation.column, rounded);
+            values.push_back(rounded);
+          }
+          if (!roundedAll || values.empty())
+            continue;
+          // IEEE 1800-2023 28.16 expands one, two, or three delays to the
+          // rise, fall, and turn-off delays.
+          if (values.size() == 1)
+            update.delays = {values[0], values[0], values[0]};
+          else if (values.size() == 2)
+            update.delays = {values[0], values[1],
+                             values[0] && values[1]
+                                 ? std::optional<int64_t>(
+                                       std::min(*values[0], *values[1]))
+                                 : std::nullopt};
+          else
+            update.delays.assign(values.begin(), values.end());
+          if (matchedDelayUpdates == maxMatchedDelayUpdates) {
+            errs() << *filename << ':' << annotation.line << ':'
+                   << annotation.column
+                   << ": error: static SDF annotation-update resource limit "
+                      "exceeded\n";
+            return nullptr;
+          }
+          ++matchedDelayUpdates;
+          result->interconnectAnnotations[load->internalSymbol].push_back(
+              std::move(update));
+        }
+
+        // IEEE 1800-2023 30.7.3: PATHPULSE sets the reject and error limits
+        // of the matching path, or of every path when no ports are given.
+        for (const ParsedPulse &annotation : cell.pulses) {
+          bool matched = false;
+          for (const slang::ast::TimingPathSymbol *path : cached->second) {
+            if (!chargeWork(annotation.line, annotation.column))
+              return nullptr;
+            if (annotation.input) {
+              auto inputs = path->getInputs();
+              auto outputs = path->getOutputs();
+              if (inputs.size() != 1 || outputs.size() != 1 ||
+                  !terminalMatches(*path, inputs.front(), *annotation.input) ||
+                  !terminalMatches(*path, outputs.front(), *annotation.output))
+                continue;
+            }
+            SDFAnnotationDatabase::DelayAnnotation update;
+            update.kind = SDFAnnotationDatabase::DelayAnnotation::Kind::Absolute;
+            update.filename = annotationFilename;
+            update.line = annotation.line;
+            update.column = annotation.column;
+            std::optional<int64_t> reject, error;
+            if (!roundValue(annotation.reject, annotation.line,
+                            annotation.column, reject) ||
+                !roundValue(annotation.error, annotation.line,
+                            annotation.column, error))
+              break;
+            update.delays = {reject, error};
+            ++matchedDelayUpdates;
+            matched = true;
+            result->pathPulseAnnotations[path].push_back(std::move(update));
+          }
+          if (!matched)
+            errs() << *filename << ':' << annotation.line << ':'
+                   << annotation.column
+                   << ": warning: SDF PATHPULSE did not match a specify "
+                      "path\n";
         }
       }
     }

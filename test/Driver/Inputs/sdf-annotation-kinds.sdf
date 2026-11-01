@@ -1,0 +1,13 @@
+(DELAYFILE
+  (SDFVERSION "4.0")
+  (TIMESCALE 1ns)
+  (CELL
+    (CELLTYPE "sdf_kinds_cell")
+    (INSTANCE dut)
+    (DELAY (ABSOLUTE (PATHPULSE a y (0.5) (1))))
+    (TIMINGCHECK (SETUPHOLD d (posedge c) (4) (-2)))
+    (LABEL (ABSOLUTE (T 5))))
+  (CELL
+    (CELLTYPE "sdf_kinds_top")
+    (INSTANCE)
+    (DELAY (ABSOLUTE (INTERCONNECT dut.y sink.i (3))))))

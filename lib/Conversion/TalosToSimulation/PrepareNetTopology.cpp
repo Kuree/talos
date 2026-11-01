@@ -728,7 +728,10 @@ materializeNetTopology(SmallVectorImpl<Operation *> &sourceUnits,
          internalDescriptor->second.kind == DescriptorInfo::Kind::Net &&
          internalDescriptor->second.netKind == sim::NetResolutionKind::UWire) ||
         referencesUWireNet(actual);
-    if (internalNet && actualNet) {
+    // IEEE 1800-2023 32.4.4: an SDF-annotated interconnect delay separates the
+    // load port's net from the net that drives it, so the connection is a
+    // delayed driver and not a collapse (23.3.3.7).
+    if (internalNet && actualNet && !connection->hasAttr("sdf_interconnect")) {
       if (totalWidth(lhs) != totalWidth(rhs)) {
         splitUnpackedArrayRuns(lhs);
         splitUnpackedArrayRuns(rhs);

@@ -2535,6 +2535,134 @@ private:
                 builder.getI64IntegerAttr(*repetition->range.max));
   }
 
+  /// IEEE 1800-2023 32.4.3: the value of a specparam after SDF LABEL
+  /// annotation, or nullopt when the specparam is not annotated. The SDF value
+  /// is in femtoseconds and is converted to the declaring scope's time unit.
+  std::optional<slang::ConstantValue>
+  annotatedSpecparamValue(const slang::ast::SpecparamSymbol &node) {
+    using DelayAnnotation = SDFAnnotationDatabase::DelayAnnotation;
+    const auto *annotations = sdfAnnotations.getSpecparamAnnotations(node);
+    if (!annotations)
+      return std::nullopt;
+    slang::TimeScale scale;
+    if (const slang::ast::Scope *scope = node.getParentScope())
+      scale = scope->getTimeScale().value_or(slang::TimeScale{});
+    uint64_t unitFs = getFemtoseconds(scale.base);
+    const slang::ConstantValue &base = node.getValue();
+    if (unitFs == 0 || !base)
+      return std::nullopt;
+    bool isReal = base.isReal();
+    long double current = 0;
+    if (base.isInteger()) {
+      if (base.integer().hasUnknown())
+        return std::nullopt;
+      std::optional<int64_t> converted = base.integer().as<int64_t>();
+      if (!converted)
+        return std::nullopt;
+      current = static_cast<long double>(*converted);
+    } else if (isReal) {
+      current = static_cast<long double>(base.real());
+    } else {
+      return std::nullopt;
+    }
+    current *= static_cast<long double>(unitFs);
+    for (const DelayAnnotation &annotation : *annotations) {
+      if (annotation.delays.empty() || !annotation.delays.front())
+        continue;
+      long double value = static_cast<long double>(*annotation.delays.front());
+      current = annotation.kind == DelayAnnotation::Kind::Absolute
+                    ? value
+                    : current + value;
+    }
+    long double inUnits = current / static_cast<long double>(unitFs);
+    if (isReal)
+      return slang::ConstantValue(static_cast<slang::real_t>(inUnits));
+    const slang::SVInt &integer = base.integer();
+    return slang::ConstantValue(slang::SVInt(
+        integer.getBitWidth(),
+        static_cast<uint64_t>(static_cast<int64_t>(std::llround(inUnits))),
+        integer.isSigned()));
+  }
+
+  /// IEEE 1800-2023 32.4.3 reevaluates expressions containing an annotated
+  /// specparam. Delays frozen with slang's evaluator cannot be, so refuse
+  /// them instead of freezing the preannotation value.
+  bool refuseAnnotatedSpecparam(const slang::ast::Expression *expression,
+                                const slang::ast::Symbol &context) {
+    if (!expression || !sdfAnnotations.hasSpecparamAnnotations())
+      return false;
+    struct Finder : slang::ast::ASTVisitor<Finder, slang::ast::VisitFlags::AllGood> {
+      const SDFAnnotationDatabase &database;
+      bool found = false;
+      explicit Finder(const SDFAnnotationDatabase &database)
+          : database(database) {}
+      void handle(const slang::ast::NamedValueExpression &value) {
+        if (value.symbol.kind == slang::ast::SymbolKind::Specparam &&
+            database.getSpecparamAnnotations(
+                value.symbol.as<slang::ast::SpecparamSymbol>()))
+          found = true;
+      }
+    } finder(sdfAnnotations);
+    expression->visit(finder);
+    if (finder.found) {
+      emitError(sourceLocation(context.location))
+          << "IEEE 1800-2023 32.4.3: SDF LABEL annotation of a specparam used "
+             "in a statically frozen delay or timing-check limit is not "
+             "supported";
+      sawInvalidNode = true;
+    }
+    return finder.found;
+  }
+
+  /// IEEE 1800-2023 32.4.4: an interconnect delay delays the signal that the
+  /// load port's internal net receives. Fold the ordered annotations into the
+  /// net's own propagation delay (rise, fall, turn-off).
+  void addInterconnectDelay(
+      NamedAttrList &attrs,
+      const SDFAnnotationDatabase::DelayAnnotations &annotations,
+      const slang::ast::NetSymbol &node) {
+    using DelayAnnotation = SDFAnnotationDatabase::DelayAnnotation;
+    if (attrs.get("unsupported_delay")) {
+      emitError(sourceLocation(node.location))
+          << "IEEE 1800-2023 32.4.4: SDF interconnect annotation of a net "
+             "with a non-constant delay is not supported";
+      sawInvalidNode = true;
+      return;
+    }
+    std::array<int64_t, 3> current{0, 0, 0};
+    if (auto existing =
+            llvm::dyn_cast_if_present<DenseI64ArrayAttr>(attrs.get("delay_fs"))) {
+      ArrayRef<int64_t> values = existing.asArrayRef();
+      if (values.size() == 1)
+        current = {values[0], values[0], values[0]};
+      else if (values.size() == 2)
+        current = {values[0], values[1], std::min(values[0], values[1])};
+      else if (values.size() == 3)
+        current = {values[0], values[1], values[2]};
+    }
+    for (const DelayAnnotation &annotation : annotations) {
+      for (auto [index, update] : llvm::enumerate(annotation.delays)) {
+        if (!update || index >= current.size())
+          continue;
+        if (annotation.kind == DelayAnnotation::Kind::Absolute) {
+          current[index] = *update;
+          continue;
+        }
+        int64_t sum;
+        if (__builtin_add_overflow(current[index], *update, &sum) || sum < 0) {
+          llvm::errs() << *annotation.filename << ':' << annotation.line << ':'
+                       << annotation.column
+                       << ": error: SDF INCREMENT produces a negative or "
+                          "overflowing interconnect delay\n";
+          sawInvalidNode = true;
+          return;
+        }
+        current[index] = sum;
+      }
+    }
+    attrs.set("delay_fs", builder.getDenseI64ArrayAttr(current));
+  }
+
   bool addStaticPropagationDelay(NamedAttrList &attrs,
                                  const slang::ast::TimingControl *control,
                                  const slang::ast::Symbol &contextSymbol) {
@@ -2571,6 +2699,8 @@ private:
         contextSymbol, slang::ast::EvalFlags::SpecparamsAllowed);
     SmallVector<int64_t, 3> delays;
     for (const slang::ast::Expression *expression : expressions) {
+      if (refuseAnnotatedSpecparam(expression, contextSymbol))
+        return false;
       slang::ConstantValue value = expression->eval(evalContext);
       if (!value)
         return false;
@@ -2823,6 +2953,7 @@ private:
                           unitFs >= precisionFs && unitFs % precisionFs == 0;
       slang::ast::EvalContext evalContext(node);
       for (const slang::ast::Expression *expression : node.getDelays()) {
+        refuseAnnotatedSpecparam(expression, node);
         slang::ConstantValue value = expression->eval(evalContext);
         long double amount = 0;
         if (value.isInteger()) {
@@ -2972,6 +3103,23 @@ private:
       if (staticDelays)
         attrs.set("timing_delay_fs", builder.getDenseI64ArrayAttr(delays));
 
+      if (const auto *pulses = sdfAnnotations.getPathPulseAnnotations(node)) {
+        // IEEE 1800-2023 30.7.3 gives SDF PATHPULSE the final precedence over
+        // the specparam and default limits; an empty SDF field keeps the
+        // value from earlier annotations.
+        std::optional<int64_t> reject, error;
+        for (const auto &pulse : *pulses) {
+          if (pulse.delays[0])
+            reject = pulse.delays[0];
+          if (pulse.delays[1])
+            error = pulse.delays[1];
+        }
+        if (reject)
+          attrs.set("sdf_pulse_reject_fs", builder.getI64IntegerAttr(*reject));
+        if (error)
+          attrs.set("sdf_pulse_error_fs", builder.getI64IntegerAttr(*error));
+      }
+
       bool shapeSupported = false;
       if (inputTerminals.size() == inputs.size() && output) {
         if (node.connectionKind == TimingPath::ConnectionKind::Parallel)
@@ -3062,6 +3210,7 @@ private:
           -> std::optional<int64_t> {
         if (!expression || !staticTimes)
           return std::nullopt;
+        refuseAnnotatedSpecparam(expression, node);
         slang::ConstantValue value = expression->eval(evalContext);
         long double amount = 0;
         if (value.isInteger()) {
@@ -3200,6 +3349,21 @@ private:
         if (!frozen)
           staticTimes = false;
         timeFs.push_back(frozen.value_or(0));
+      }
+      if (const auto *annotations =
+              sdfAnnotations.getTimingCheckAnnotations(node)) {
+        // IEEE 1800-2023 32.4.2 replaces the matching limit with the SDF
+        // value; a limit the SDF check does not carry keeps its source value.
+        if (!staticTimes) {
+          emitError(sourceLocation(node.location))
+              << "SDF annotation of a timing check requires constant limits";
+          sawInvalidNode = true;
+        } else {
+          for (const auto &annotation : *annotations)
+            for (auto [slot, value] : llvm::enumerate(annotation.delays))
+              if (value && slot < timeFs.size())
+                timeFs[slot] = *value;
+        }
       }
       // IEEE 1800-2017 31.2 gives every check an ordered formal argument
       // ABI, including explicit optional holes, event-local conditions, and
@@ -3724,6 +3888,14 @@ private:
             typeReferenceIdentityAttrName,
             builder.getI64IntegerAttr(matchingTypeIdentity(node.targetType)));
 
+    // IEEE 1800-2023 32.4.3 reevaluates every expression containing an SDF
+    // annotated specparam; the frontend folds of such expressions are stale.
+    if constexpr (std::same_as<T, slang::ast::NamedValueExpression>)
+      if (node.symbol.kind == slang::ast::SymbolKind::Specparam &&
+          sdfAnnotations.getSpecparamAnnotations(
+              node.symbol.template as<slang::ast::SpecparamSymbol>()))
+        attrs.set("sdf_annotated_specparam", builder.getUnitAttr());
+
     constexpr bool carriesOwnLiteralValue =
         std::same_as<T, slang::ast::IntegerLiteral> ||
         std::same_as<T, slang::ast::UnbasedUnsizedIntegerLiteral>;
@@ -3793,14 +3965,21 @@ private:
                   std::same_as<T, slang::ast::ParameterSymbol> ||
                   std::same_as<T, slang::ast::EnumValueSymbol> ||
                   std::same_as<T, slang::ast::SpecparamSymbol>) {
-      SET_OP_ATTR(ConstantValue, builder.getStringAttr(formatDataConstant(
-                                     node.getValue(), twoState)));
+      std::optional<slang::ConstantValue> annotated;
+      if constexpr (std::same_as<T, slang::ast::SpecparamSymbol>)
+        annotated = annotatedSpecparamValue(node);
+      SET_OP_ATTR(ConstantValue,
+                  builder.getStringAttr(
+                      annotated ? formatDataConstant(*annotated, twoState)
+                                : formatDataConstant(node.getValue(),
+                                                     twoState)));
       if (twoState) {
         // Wildcard comparisons consume a pattern, not a runtime X/Z value.
         // Preserve the source spelling of literals and of the constant
         // symbols that references resolve to while projecting executable
         // data.
-        slang::ConstantValue source = node.getValue();
+        slang::ConstantValue source =
+            annotated ? *annotated : slang::ConstantValue(node.getValue());
         if (source.isInteger() && source.integer().hasUnknown())
           attrs.set("two_state_pattern",
                     builder.getStringAttr(formatConstant(source)));
@@ -4500,6 +4679,9 @@ private:
                                               begin, end - begin + 1)));
         }
       }
+      if (const auto *annotations =
+              sdfAnnotations.getInterconnectAnnotations(node))
+        addInterconnectDelay(attrs, *annotations, node);
     }
 
     if constexpr (std::same_as<T, slang::ast::UnaryExpression>) {
@@ -7585,6 +7767,11 @@ private:
         const auto &port = formal.as<slang::ast::PortSymbol>();
         if (ArrayAttr layers = getVPITypedefLayers(port.getType()))
           attrs.set("vpi_typedef_layers", layers);
+        // IEEE 1800-2023 32.4.4: an annotated load port keeps its own net, so
+        // the connection must stay a delayed driver instead of collapsing.
+        if (port.internalSymbol &&
+            sdfAnnotations.getInterconnectAnnotations(*port.internalSymbol))
+          attrs.set("sdf_interconnect", builder.getUnitAttr());
       }
       attrs.set("is_net", builder.getBoolAttr(isNet));
       attrs.set("is_ansi", builder.getBoolAttr(isAnsi));

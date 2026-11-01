@@ -1,6 +1,6 @@
 // CLAUSE: SDF annotations
 // XFAIL: *
-// Only unconditional static SDF annotation is implemented.
+// The filename comes from a run-time plusarg inside an if; static SDF annotation cannot fold it and no run-time SDF parser exists.
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe +sdf=%S/Inputs/32/fixtures/delay.sdf
 // CHECK-DAG: {{^PASS$}}

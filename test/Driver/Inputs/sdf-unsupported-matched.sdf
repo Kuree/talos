@@ -5,4 +5,4 @@
   (CELL
     (CELLTYPE "sdf_unsupported_cell")
     (INSTANCE dut)
-    (TIMINGCHECK (SETUP source (posedge destination) (1)))))
+    (TIMINGCHECK (SETUP (COND source source!==1'b0) (posedge destination) (1)))))

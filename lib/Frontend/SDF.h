@@ -24,6 +24,9 @@ class SourceManager;
 namespace ast {
 class CallExpression;
 class Compilation;
+class SpecparamSymbol;
+class Symbol;
+class SystemTimingCheckSymbol;
 class TimingPathSymbol;
 } // namespace ast
 } // namespace slang
@@ -45,6 +48,21 @@ public:
 
   const DelayAnnotations *
   getTimingPathAnnotations(const slang::ast::TimingPathSymbol &path) const;
+  /// IEEE 1800-2023 32.4.2: `delays` is indexed by timing-check argument
+  /// position; an empty entry leaves that limit unchanged.
+  const DelayAnnotations *getTimingCheckAnnotations(
+      const slang::ast::SystemTimingCheckSymbol &check) const;
+  /// IEEE 1800-2023 32.4.3: one value, in femtoseconds, per LABEL entry.
+  const DelayAnnotations *
+  getSpecparamAnnotations(const slang::ast::SpecparamSymbol &specparam) const;
+  bool hasSpecparamAnnotations() const { return !specparamAnnotations.empty(); }
+  /// IEEE 1800-2023 30.7.3: `delays` holds the reject and error limits.
+  const DelayAnnotations *
+  getPathPulseAnnotations(const slang::ast::TimingPathSymbol &path) const;
+  /// IEEE 1800-2023 32.4.4: `delays` holds rise, fall, and turn-off delays
+  /// of the signal at an annotated input or inout port's internal net.
+  const DelayAnnotations *
+  getInterconnectAnnotations(const slang::ast::Symbol &portNet) const;
   bool isAppliedCall(const slang::ast::CallExpression &call) const;
 
 private:
@@ -55,6 +73,14 @@ private:
 
   llvm::DenseMap<const slang::ast::TimingPathSymbol *, DelayAnnotations>
       timingPathAnnotations;
+  llvm::DenseMap<const slang::ast::SystemTimingCheckSymbol *, DelayAnnotations>
+      timingCheckAnnotations;
+  llvm::DenseMap<const slang::ast::SpecparamSymbol *, DelayAnnotations>
+      specparamAnnotations;
+  llvm::DenseMap<const slang::ast::TimingPathSymbol *, DelayAnnotations>
+      pathPulseAnnotations;
+  llvm::DenseMap<const slang::ast::Symbol *, DelayAnnotations>
+      interconnectAnnotations;
   llvm::DenseSet<const slang::ast::CallExpression *> appliedCalls;
 };
 
