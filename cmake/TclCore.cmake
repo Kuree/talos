@@ -53,7 +53,11 @@ elseif(UNIX AND NOT EMSCRIPTEN AND NOT CMAKE_CROSSCOMPILING)
       DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
   endif()
   set(_talos_tcl_cflags "${CMAKE_C_FLAGS} -Os -fPIC -ffunction-sections -fdata-sections")
+  set(_talos_tcl_configure_options)
   if(APPLE)
+    # Batch UPF execution needs no run-loop notifier. Use Tcl's POSIX notifier
+    # rather than linking the compiler against CoreFoundation.
+    list(APPEND _talos_tcl_configure_options --disable-corefoundation)
     if(CMAKE_OSX_SYSROOT)
       string(APPEND _talos_tcl_cflags " -isysroot ${CMAKE_OSX_SYSROOT}")
     endif()
@@ -71,7 +75,7 @@ elseif(UNIX AND NOT EMSCRIPTEN AND NOT CMAKE_CROSSCOMPILING)
     CONFIGURE_COMMAND "${CMAKE_COMMAND}" -E env
       "CC=${CMAKE_C_COMPILER}" "CFLAGS=${_talos_tcl_cflags}"
       <SOURCE_DIR>/unix/configure --prefix=${_talos_tcl_install}
-      --disable-shared --disable-zipfs
+      --disable-shared --disable-zipfs ${_talos_tcl_configure_options}
     BUILD_COMMAND "${_talos_tcl_make}" -j4 libtcl9.0.a
     INSTALL_COMMAND "${CMAKE_COMMAND}"
       -DSOURCE=<SOURCE_DIR> -DBINARY=<BINARY_DIR> -DDEST=${_talos_tcl_install}

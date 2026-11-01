@@ -768,7 +768,7 @@ struct Lowering {
     Value initial =
         destructive ? bad(s, loc, ctx) : negate(loc, canWrite(s, loc, ctx));
     sim::SimSuspendObserveOp::create(
-        b, loc, ValueRange{observer, initial}, uint32_t{0},
+        b, loc, ValueRange{observer, initial}, b.getI32IntegerAttr(0),
         b.getDenseI32ArrayAttr({1}), b.getDenseI32ArrayAttr({-1}),
         schedule::ContinuationSiteAttr{}, sim::EventRegionAttr{}, event);
     b.setInsertionPointToEnd(event);
