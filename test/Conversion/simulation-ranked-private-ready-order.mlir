@@ -6,8 +6,8 @@
 // TRACE: talos ranked activation: step2 valid=1 complete=1
 // TRACE: talos eval boundary: owner=0 island=0 body=step1.__talos_eval_body_0 successors=1{{$}}
 // TRACE-NEXT: talos eval boundary: owner=1 island=0 body=step2.__talos_eval_body_0 successors=2{{$}}
-// TRACE-NEXT: talos eval boundary: owner=2 island=0 body=step3.__talos_eval_body_0 successors=3{{$}}
-// TRACE-NEXT: talos eval boundary: owner=3 island=0 body=step4.__talos_eval_body_0 successors=4{{$}}
+// TRACE-NEXT: talos eval dependency: owner=2 island=0 body=step3.__talos_eval_body_0 successors=3{{$}}
+// TRACE-NEXT: talos eval dependency: owner=3 island=0 body=step4.__talos_eval_body_0 successors=4{{$}}
 // TRACE-NEXT: talos eval dependency: owner=4 island=0 body=step5.__talos_eval_body_0 successors={{$}}
 
 // Bounded reads use only the low half of storage 1. The final consumer writes

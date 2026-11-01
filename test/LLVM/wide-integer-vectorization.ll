@@ -2,6 +2,8 @@
 ; RUN: %llvm_dist/bin/opt -load-pass-plugin=%pass_plugin -passes='function(talos-limit-wide-integer-vectorization)' -S %s | FileCheck %s
 ; RUN: %llvm_dist/bin/opt -load-pass-plugin=%pass_plugin -passes='function(talos-limit-wide-integer-vectorization,talos-limit-wide-integer-vectorization)' -S %s | FileCheck %s
 ; RUN: %llvm_dist/bin/opt -load-pass-plugin=%pass_plugin -mtriple=%target_triple -passes='default<O3>' -S %s | FileCheck %s --check-prefix=OPT
+; RUN: %llvm_dist/bin/opt -load-pass-plugin=%pass_plugin -mtriple=%target_triple -passes='function(talos-limit-wide-integer-vectorization,slp-vectorizer)' -S %s | FileCheck %s --check-prefix=SLP
+; RUN: %llvm_dist/bin/opt -load-pass-plugin=%pass_plugin -mtriple=%target_triple -passes='function(talos-limit-wide-integer-vectorization,slp-vectorizer,talos-restore-wide-integer-codegen)' -S %s | FileCheck %s --check-prefix=RESTORE
 
 ; Packed selections can become loops of shifts on multi-kilobit integers.
 ; The x86 vectorizer otherwise creates <32 x i8350>, whose legalization and
@@ -96,3 +98,46 @@ exit:
 ; CHECK: ![[WIDE]] = distinct !{![[WIDE]], ![[UNROLL:[0-9]+]], ![[DISABLE:[0-9]+]]}
 ; CHECK: ![[UNROLL]] = !{!"llvm.loop.unroll.disable"}
 ; CHECK: ![[DISABLE]] = !{!"llvm.loop.vectorize.enable", i32 0}
+
+; SLP forms up to <32 x iN> from a reduction chain, whatever N is. A function
+; with such a chain of integers wider than 128 bits turns SLP off until the
+; vectorizers have run. Narrower reductions and other functions keep it.
+; SLP-LABEL: define i1040 @wide_reduction(
+; SLP-SAME: #[[WIDE:[0-9]+]]
+; SLP-NOT: x i1040>
+; SLP: ret i1040
+; RESTORE-LABEL: define i1040 @wide_reduction(
+; RESTORE-NOT: #
+; RESTORE-SAME: {
+define i1040 @wide_reduction(ptr %input) {
+  %a = load i1040, ptr %input
+  %p1 = getelementptr i8, ptr %input, i64 130
+  %b = load i1040, ptr %p1
+  %p2 = getelementptr i8, ptr %input, i64 260
+  %c = load i1040, ptr %p2
+  %p3 = getelementptr i8, ptr %input, i64 390
+  %d = load i1040, ptr %p3
+  %x0 = or i1040 %a, %b
+  %x1 = or i1040 %x0, %c
+  %x2 = or i1040 %x1, %d
+  ret i1040 %x2
+}
+
+; SLP-LABEL: define i32 @narrow_reduction(
+; SLP-NOT: #
+; SLP: llvm.vector.reduce.or.v4i32
+define i32 @narrow_reduction(ptr %input) {
+  %a = load i32, ptr %input
+  %p1 = getelementptr i8, ptr %input, i64 4
+  %b = load i32, ptr %p1
+  %p2 = getelementptr i8, ptr %input, i64 8
+  %c = load i32, ptr %p2
+  %p3 = getelementptr i8, ptr %input, i64 12
+  %d = load i32, ptr %p3
+  %x0 = or i32 %a, %b
+  %x1 = or i32 %x0, %c
+  %x2 = or i32 %x1, %d
+  ret i32 %x2
+}
+
+; SLP: attributes #[[WIDE]] = { noimplicitfloat "talos-wide-integer-reduction" }

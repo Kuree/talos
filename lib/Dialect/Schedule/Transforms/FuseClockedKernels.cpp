@@ -82,6 +82,7 @@
 #include "talos/Analysis/HandleDataflowAnalysis.h"
 #include "talos/Analysis/NativeStateLayoutAnalysis.h"
 #include "talos/Dialect/Native/NativeDialect.h"
+#include "talos/Dialect/Schedule/ClockedKernelName.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
@@ -1959,7 +1960,8 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
       attributes.emplace_back(first.function.getCodeUnitIdAttrName(), codeUnit);
     unsigned symbolCounter = 0;
     SmallString<48> base;
-    ("__talos_clocked_" + Twine(classRoot) + "_" + Twine(plan.key.second))
+    (schedule::clockedKernelPrefix + Twine(classRoot) + "_" +
+     Twine(plan.key.second))
         .toVector(base);
     SmallString<48> name = SymbolTable::generateSymbolName<48>(
         base,

@@ -3510,6 +3510,10 @@ FailureOr<bool> makeNativeEvalPlan(
   LLVM::ReturnOp::create(builder, location,
                          llvmConstant(builder, location, i32, TALOS_RT_OK));
 
+  materializeClockedKernelReadiness(module, resolved->rankedNodes);
+  DenseSet<uint32_t> clockedKernelOwners =
+      collectClockedKernelOwners(resolved->rankedNodes);
+
   builder.setInsertionPointToEnd(module.getBody());
   auto run = LLVM::LLVMFuncOp::create(
       builder, location, runName,
@@ -4584,11 +4588,8 @@ FailureOr<bool> makeNativeEvalPlan(
         run.getBody().push_back(executeTwoState);
         run.getBody().push_back(nextOwner);
         Value kernelReady =
-            LLVM::CallOp::create(
-                builder, location, TypeRange{builder.getI1Type()},
-                SymbolRefAttr::get(context, kernelPromotionReadyName),
-                ValueRange{llvmConstant(builder, location, i64, recordIndex)})
-                .getResult();
+            emitOwnerKernelReady(builder, location, recordIndex,
+                                 clockedKernelOwners.contains(recordIndex));
         cf::CondBranchOp::create(builder, location, kernelReady,
                                  executeTwoState, ValueRange{},
                                  executeFourState, ValueRange{});
@@ -4698,11 +4699,8 @@ FailureOr<bool> makeNativeEvalPlan(
                                    ValueRange{});
           builder.setInsertionPointToStart(selectTransientVariant);
           Value kernelReady =
-              LLVM::CallOp::create(
-                  builder, location, TypeRange{builder.getI1Type()},
-                  SymbolRefAttr::get(context, kernelPromotionReadyName),
-                  ValueRange{llvmConstant(builder, location, i64, recordIndex)})
-                  .getResult();
+              emitOwnerKernelReady(builder, location, recordIndex,
+                                   clockedKernelOwners.contains(recordIndex));
           cf::CondBranchOp::create(builder, location, kernelReady,
                                    executeTwoState, ValueRange{},
                                    executeFourState, ValueRange{});

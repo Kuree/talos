@@ -5,25 +5,25 @@
 // which direction carries data, so the active graph is acyclic in both
 // configurations. Backward publications must survive a ranked sweep.
 // No sampled-value observation is used to delete either possible edge.
-// The source, feedback component, and forward-only suffix have independent
-// entries. Backward work cannot replay the source or the suffix.
+// The source has its own entry. The repeatable actors take one place each in a
+// single DAG: the edge the cycle sends backward is cut, its publication survives
+// for another sweep, and repeating the suffix in that sweep only rewrites the
+// values it holds (IEEE 1800-2023 4.3--4.7).
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_0(
 // PLAN-SAME: schedule.eval.ranked_members = array<i32: 0>
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_1(
-// PLAN-SAME: schedule.eval.materialized_group_calls = 2 : i64
+// PLAN-SAME: schedule.eval.materialized_group_calls = 4 : i64
 // PLAN-SAME: schedule.eval.predicated_dataflow
-// PLAN-SAME: schedule.eval.ranked_members = array<i32: 1, 2>
+// PLAN-SAME: schedule.eval.ranked_members = array<i32: 1, 2, 3, 4>
 // PLAN-NOT: llvm.switch
 // PLAN-NOT: llvm.call %
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_1.fallback(
 // PLAN-SAME: schedule.eval.ssa_ready_words = 1 : i64
-// PLAN-SAME: schedule.eval.ssa_value_ranges = 2 : i64
-// PLAN-LABEL: llvm.func @__talos_eval_ranked_group_2(
-// PLAN-SAME: schedule.eval.ranked_members = array<i32: 3, 4>
+// PLAN-SAME: schedule.eval.ssa_value_ranges = 3 : i64
 // PLAN-LABEL: llvm.func @__talos_eval_dispatch_v1(
 // PLAN: llvm.call @__talos_eval_ranked_group_0
 // PLAN: llvm.call @__talos_eval_ranked_group_1
-// PLAN: llvm.call @__talos_eval_ranked_group_2
+// PLAN-NOT: @__talos_eval_ranked_group_2
 !ref = !simulation.ref<i1>
 !vref = !simulation.ref<i8>
 module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", schedule.native_scheduler = 3 : i32} {

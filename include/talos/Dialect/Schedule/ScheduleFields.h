@@ -37,5 +37,12 @@ template <Field field> mlir::Attribute remove(mlir::Operation *operation) {
 template <typename Attr> Attr get(mlir::Operation *operation, Field field) {
   return mlir::dyn_cast_or_null<Attr>(getAttribute(operation, field));
 }
+/// The operation budget of one native inline decision: the module's configured
+/// limit, 5000 by default. Zero removes the limit.
+inline uint64_t getMaxInlineOperations(mlir::Operation *module) {
+  auto limit = get<Field::MaxInlineOps>(module);
+  uint64_t budget = limit ? limit.getUInt() : 5000;
+  return budget ? budget : UINT64_MAX;
+}
 } // namespace talos::schedule
 #endif

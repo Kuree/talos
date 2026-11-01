@@ -5,6 +5,7 @@
 #include "SimulationEvalReadySet.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
+#include "talos/Dialect/Schedule/ClockedKernelName.h"
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
@@ -55,12 +56,7 @@ planNativeRankedGroups(ModuleOp module, const NativeEvalCoordinatorPlan &plan,
     });
     return safe ? cost : 0;
   };
-  auto limit =
-      ::talos::schedule::get<::talos::schedule::Field::MaxInlineOps>(
-          module);
-  uint64_t budget = limit ? limit.getUInt() : 5000;
-  if (!budget)
-    budget = UINT64_MAX;
+  uint64_t budget = schedule::getMaxInlineOperations(module);
   SmallVector<NativeRankedEvalNode> members;
   uint64_t cost = 0;
   bool invalidRange = false;
@@ -180,16 +176,16 @@ planNativeRankedGroups(ModuleOp module, const NativeEvalCoordinatorPlan &plan,
     }
     // Activity partitions are scheduling predicates, independent of the
     // value-domain proof. In particular, an X-bearing component must not
-    // disable an unrelated component's two-state computation. SCCs keep
-    // their feedback; a size split within one component stays in the segment.
+    // disable an unrelated component's two-state computation. A repeatable
+    // member takes a place in one DAG: the ordering edges that a cycle sends
+    // backward are cut, and their publications survive for another sweep
+    // (IEEE 1800-2023 4.3--4.7). Only its certificate permits coarsening
+    // external activity; ordinary members retain their full event domains and
+    // the feedback of their component.
     bool selective = mixedIslands.contains(node.island);
-    // Only the explicit repeatability certificate permits coarsening external
-    // activity to a union mask. Feedback remains selective even for these
-    // pure blocks; ordinary members retain their full event domains.
     ActivityKey activity{
-        selective ? (node.repeatable ? node.feedbackDomain : node.activityDomain)
-                  : 0,
-        node.cyclic ? node.component : UINT32_MAX,
+        selective && !node.repeatable ? node.activityDomain : 0,
+        !node.repeatable && node.cyclic ? node.component : UINT32_MAX,
         selective && node.repeatable,
         selective && !node.twoStateBody.empty() &&
             !plan.twoStateExecutors[node.owner].empty()};
@@ -294,7 +290,7 @@ materializeNativeRankedGroups(ModuleOp module,
     builder.setInsertionPointToStart(entry);
     Value ready =
         LLVM::AddressOfOp::create(builder, loc, pointer, evalModelIngressName);
-    for (const Chunk &chunk : chunks) {
+    auto emitChunk = [&](const Chunk &chunk) {
       Value dirty;
       for (auto [word, mask] : chunk.words) {
         Value bits = loadOwnerWord(builder, loc, ready, word);
@@ -318,6 +314,39 @@ materializeNativeRankedGroups(ModuleOp module,
       builder.setInsertionPointToStart(next);
       for (uint32_t owner : chunk.owners)
         executors[owner] = name;
+    };
+    // Owners follow rank order, so a sweep skips the chunks of an idle ready
+    // word with one test, and never fetches their branches. A chunk's own test
+    // still reads the word after earlier chunks have published into it.
+    for (size_t index = 0; index < chunks.size();) {
+      size_t end = index + 1;
+      auto word = chunks[index].words.front().first;
+      auto inWord = [&](const Chunk &chunk) {
+        return chunk.words.size() == 1 && chunk.words.front().first == word;
+      };
+      if (inWord(chunks[index]))
+        while (end < chunks.size() && inWord(chunks[end]))
+          ++end;
+      Block *after = nullptr;
+      if (end - index > 1) {
+        Value active =
+            arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ne,
+                                  loadOwnerWord(builder, loc, ready, word),
+                                  llvmConstant(builder, loc, i64, 0));
+        Block *body = new Block;
+        after = new Block;
+        segment.getBody().push_back(body);
+        cf::CondBranchOp::create(builder, loc, active, body, ValueRange{},
+                                 after, ValueRange{});
+        builder.setInsertionPointToStart(body);
+      }
+      for (; index < end; ++index)
+        emitChunk(chunks[index]);
+      if (after) {
+        cf::BranchOp::create(builder, loc, after);
+        segment.getBody().push_back(after);
+        builder.setInsertionPointToStart(after);
+      }
     }
     LLVM::ReturnOp::create(builder, loc, ValueRange{});
     ++segmentCount;
@@ -431,12 +460,8 @@ materializeNativeRankedGroups(ModuleOp module,
         cf::CondBranchOp::create(builder, loc, needsProof, check, ValueRange{},
                                  two, ValueRange{});
         builder.setInsertionPointToStart(check);
-        Value known = LLVM::CallOp::create(
-                          builder, loc, TypeRange{builder.getI1Type()},
-                          SymbolRefAttr::get(module.getContext(),
-                                             kernelPromotionReadyName),
-                          ValueRange{llvmConstant(builder, loc, i64, owner)})
-                          .getResult();
+        Value known = emitOwnerKernelReady(
+            builder, loc, owner, schedule::isClockedKernelSymbol(node->body));
         cf::CondBranchOp::create(builder, loc, known, two, ValueRange{}, four,
                                  ValueRange{});
         builder.setInsertionPointToStart(two);
@@ -516,10 +541,12 @@ materializeNativeRankedGroups(ModuleOp module,
         // outputs, and absence of repeated publications. Repeating this pure
         // computation when inactive is observationally inert: it writes the
         // values its outputs already hold, which is no update event (IEEE
-        // 1800-2023 4.3, 4.4.1, 4.9.1, 9.2.2.2, 9.4.2). This candidate still
-        // needs the lowered nontrapping/effect proof. An independent group
-        // certificate proves knownness, not activation, so it does not
-        // change this decision. Such a member runs whenever the group runs,
+        // 1800-2023 4.3, 4.4.1, 4.9.1, 9.2.2.2, 9.4.2). A body with a source
+        // call or a runtime boundary never joins a group (bodyCost), so a call
+        // the lowering adds only publishes proof metadata or computes a pure
+        // value, and repeats just as inertly. An independent group certificate
+        // proves knownness, not activation, so it does not change this
+        // decision. Such a member runs whenever the group runs,
         // in its proved rank order; publications from earlier members to it
         // are therefore redundant and are removed after inlining (see
         // elideUnconditionalMemberPublications). Its pending bit is still
@@ -601,7 +628,6 @@ materializeNativeRankedGroups(ModuleOp module,
       llvm::errs() << "talos eval component: owner=" << node.owner
                    << " component=" << node.component
                    << " activity=" << node.activityDomain
-                   << " feedback_activity=" << node.feedbackDomain
                    << " cyclic=" << node.cyclic << " successors=";
       llvm::interleaveComma(node.successorComponents, llvm::errs());
       llvm::errs() << " feedback=";

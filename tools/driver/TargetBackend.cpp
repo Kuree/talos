@@ -1030,6 +1030,8 @@ LogicalResult optimizeLLVMModule(llvm::Module &module,
   ModulePassManager passes = optLevel == 0
                                  ? builder.buildO0DefaultPipeline(level)
                                  : builder.buildPerModuleDefaultPipeline(level);
+  passes.addPass(
+      createModuleToFunctionPassAdaptor(RestoreWideIntegerCodegenPass()));
   passes.run(module, moduleAnalyses);
   // Layout passes read the optimized shape of the kernels; see
   // talos/LLVM/ClockedGuardLayout.h.

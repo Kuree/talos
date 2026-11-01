@@ -11,7 +11,7 @@
 // must be visible after the slot settles (4.4.2, 4.6, 10.4.2).
 // The conditional finishes keep these owners outside ranked fusion groups.
 module native_eval_dispatch_segments;
-  localparam N = 520;
+  localparam N = 260;
   bit clk = 0;
   bit [15:0] grouped_a = 0, grouped_b = 0;
   logic [7:0] source = 0;

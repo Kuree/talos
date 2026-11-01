@@ -17,20 +17,17 @@
 // CHECK-DAG: llvm.mlir.global internal constant @__talos_eval_proof_bucket_records_v1(dense<[16192, 1, 65538,
 // CHECK-DAG: llvm.mlir.global internal constant @__talos_eval_proof_dependencies_v1
 // CHECK-LABEL: llvm.func @__talos_eval_promotion_recheck_range_v1(
-// CHECK: llvm.call @talos_rt_v1_native_promotion_recheck_ranges
 // CHECK: llvm.mlir.addressof @__talos_eval_proof_aggregate_recheck_v1
 // CHECK: llvm.call @talos_rt_v1_native_promotion_recheck_buckets
+// CHECK-NEXT: llvm.return
 // CHECK-LABEL: llvm.func @__talos_eval_promotion_invalidate_range_v1(
-// CHECK: llvm.mlir.constant(64 : i64)
-// CHECK: llvm.icmp "ule" %arg1,
-// CHECK: llvm.cond_br
-// CHECK: llvm.call @talos_rt_v1_native_promotion_invalidate_ranges
 // CHECK: llvm.mlir.addressof @__talos_eval_proof_bucket_starts_v1
 // CHECK: llvm.mlir.addressof @__talos_eval_proof_bucket_records_v1
 // CHECK: llvm.mlir.constant(16 : i64)
 // CHECK: llvm.mlir.addressof @__talos_eval_proof_certificates_v1
 // CHECK: llvm.mlir.addressof @__talos_eval_proof_aggregate_invalidate_v1
 // CHECK: llvm.call @talos_rt_v1_native_promotion_invalidate_buckets
+// CHECK-NEXT: llvm.return
 // FALLBACK-LABEL: llvm.func @__talos_eval_promotion_recheck_range_v1(
 // FALLBACK: llvm.call @talos_rt_v1_native_promotion_recheck_ranges
 // FALLBACK-LABEL: llvm.func @__talos_eval_promotion_invalidate_range_v1(

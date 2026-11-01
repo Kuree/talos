@@ -3,6 +3,7 @@
 #include "SimulationAOTPlanning.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Conversion/Passes.h"
+#include "talos/Dialect/Schedule/ClockedKernelName.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -438,6 +439,103 @@ static LogicalResult materializePromotionReadiness(ModuleOp module,
                      .getResult();
   LLVM::ReturnOp::create(builder, loc, result);
   return success();
+}
+
+static std::string clockedKernelRetryName(uint64_t owner) {
+  return ("__talos_eval_kernel_retry_" + Twine(owner) + "_v1").str();
+}
+
+DenseSet<uint32_t>
+collectClockedKernelOwners(ArrayRef<NativeRankedEvalNode> nodes) {
+  DenseSet<uint32_t> owners;
+  // A runtime-owned actor's analysis-only node has no ready bit and no owner.
+  for (const NativeRankedEvalNode &node : nodes)
+    if (node.owner != UINT32_MAX && schedule::isClockedKernelSymbol(node.body))
+      owners.insert(node.owner);
+  return owners;
+}
+
+/// Both bodies of a kernel are correct on known state, so this is only a choice
+/// of code to keep hot. A clocked kernel whose certificate failed stays on its
+/// four-state source for a while: runs of its members choose their own value
+/// domain there, so an X/Z that keeps toggling does not also keep the
+/// whole-body copy in the caches (IEEE 1800-2023 6.3.1). The source is correct
+/// on any state, and a kernel that holds no X/Z never fails.
+void materializeClockedKernelReadiness(ModuleOp module,
+                                       ArrayRef<NativeRankedEvalNode> nodes) {
+  constexpr uint64_t retryInterval = 63;
+  MLIRContext *context = module.getContext();
+  Location loc = module.getLoc();
+  OpBuilder top(context);
+  top.setInsertionPointToStart(module.getBody());
+  Type pointer = LLVM::LLVMPointerType::get(context);
+  Type i1 = top.getI1Type(), i8 = top.getI8Type(), i64 = top.getI64Type();
+  DenseSet<uint32_t> owners = collectClockedKernelOwners(nodes);
+  if (owners.empty() || !module.lookupSymbol(kernelPromotionReadyName))
+    return;
+  for (const NativeRankedEvalNode &node : nodes)
+    if (node.owner != UINT32_MAX && owners.erase(node.owner))
+      LLVM::GlobalOp::create(
+          top, loc, i8, /*isConstant=*/false, LLVM::Linkage::Internal,
+          clockedKernelRetryName(node.owner), top.getI8IntegerAttr(0));
+  auto helper = LLVM::LLVMFuncOp::create(
+      top, loc, clockedKernelReadyName,
+      LLVM::LLVMFunctionType::get(i1, {i64, pointer}, false),
+      LLVM::Linkage::Internal);
+  Block *entry = helper.addEntryBlock(top);
+  auto *wait = new Block, *probe = new Block, *failed = new Block,
+       *ready = new Block;
+  helper.getBody().push_back(wait);
+  helper.getBody().push_back(probe);
+  helper.getBody().push_back(failed);
+  helper.getBody().push_back(ready);
+  OpBuilder body(context);
+  body.setInsertionPointToStart(entry);
+  Value retry = entry->getArgument(1);
+  Value left = LLVM::LoadOp::create(body, loc, i8, retry);
+  Value waiting = LLVM::ICmpOp::create(body, loc, LLVM::ICmpPredicate::ne, left,
+                                       llvmConstant(body, loc, i8, 0));
+  LLVM::CondBrOp::create(body, loc, waiting, wait, probe);
+  body.setInsertionPointToStart(wait);
+  LLVM::StoreOp::create(
+      body, loc,
+      LLVM::SubOp::create(body, loc, left, llvmConstant(body, loc, i8, 1)),
+      retry);
+  LLVM::ReturnOp::create(body, loc, ValueRange{llvmConstant(body, loc, i1, 0)});
+  body.setInsertionPointToStart(probe);
+  Value known = LLVM::CallOp::create(
+                    body, loc, TypeRange{i1},
+                    SymbolRefAttr::get(context, kernelPromotionReadyName),
+                    ValueRange{entry->getArgument(0)})
+                    .getResult();
+  LLVM::CondBrOp::create(body, loc, known, ready, failed);
+  body.setInsertionPointToStart(failed);
+  LLVM::StoreOp::create(body, loc, llvmConstant(body, loc, i8, retryInterval),
+                        retry);
+  LLVM::ReturnOp::create(body, loc, ValueRange{llvmConstant(body, loc, i1, 0)});
+  body.setInsertionPointToStart(ready);
+  LLVM::ReturnOp::create(body, loc, ValueRange{llvmConstant(body, loc, i1, 1)});
+}
+
+Value emitOwnerKernelReady(OpBuilder &builder, Location loc, uint64_t owner,
+                           bool clockedKernel) {
+  MLIRContext *context = builder.getContext();
+  Type i1 = builder.getI1Type(), i64 = builder.getI64Type();
+  Value index = llvmConstant(builder, loc, i64, owner);
+  if (!clockedKernel)
+    return LLVM::CallOp::create(
+               builder, loc, TypeRange{i1},
+               SymbolRefAttr::get(context, kernelPromotionReadyName),
+               ValueRange{index})
+        .getResult();
+  return LLVM::CallOp::create(
+             builder, loc, TypeRange{i1},
+             SymbolRefAttr::get(context, clockedKernelReadyName),
+             ValueRange{index,
+                        LLVM::AddressOfOp::create(
+                            builder, loc, LLVM::LLVMPointerType::get(context),
+                            clockedKernelRetryName(owner))})
+      .getResult();
 }
 
 LogicalResult materializeNativeKernelPromotionReadiness(

@@ -2682,11 +2682,8 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
         llvm::sort(writes);
     }
     SmallVector<Value> watched;
-    auto watchLimit = schedule::get<schedule::Field::MaxInlineOps>(
-        design->getParentOfType<ModuleOp>());
-    uint64_t watchBudget = watchLimit ? watchLimit.getUInt() : 5000;
-    if (!watchBudget)
-      watchBudget = UINT64_MAX;
+    uint64_t watchBudget =
+        schedule::getMaxInlineOperations(design->getParentOfType<ModuleOp>());
     for (auto [candidate, mapping] : llvm::zip_equal(candidates, mappings)) {
       auto facts = ordered ? provenance.derive(candidate.function)
                            : analysis::HandleFacts{};

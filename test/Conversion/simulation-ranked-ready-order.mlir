@@ -11,8 +11,10 @@
 // TRACE-NEXT: talos eval owner: bit=1 actor={{[0-9]+}} continuation={{[0-9]+}} compute_node=1 group=__talos_eval_ranked_group_0
 // TRACE: talos eval boundary: owner=0 island=0 body=step1.__talos_eval_body_0 successors=1
 // TRACE-NEXT: talos eval dependency: owner=1 island=0 body=step2.__talos_eval_body_0 successors=2
-// TRACE-NEXT: talos eval boundary: owner=2 island=0 body=step3.__talos_eval_body_0 successors=3
-// TRACE-NEXT: talos eval boundary: owner=3 island=0 body=step4.__talos_eval_body_0 successors=4
+// The lone driver of the connected nets is a plain write of each member
+// (IEEE 1800-2023 23.3.3.7, 6.6.1), so those two owners join the ranked chain.
+// TRACE-NEXT: talos eval dependency: owner=2 island=0 body=step3.__talos_eval_body_0 successors=3
+// TRACE-NEXT: talos eval dependency: owner=3 island=0 body=step4.__talos_eval_body_0 successors=4
 // TRACE-NEXT: talos eval dependency: owner=4 island=0 body=step5.__talos_eval_body_0 successors={{$}}
 
 // Bounded reads use only the low half of storage 1. The final consumer writes

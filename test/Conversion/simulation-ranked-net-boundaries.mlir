@@ -1,16 +1,19 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o /dev/null 2>&1 | FileCheck %s
 // RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-edit-attributes{op=simulation.net.connect.decl set={rhs_offset = 7 : i64, rhs_reversed = true}},simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o /dev/null 2>&1 | FileCheck %s
 // RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-edit-attributes{op=simulation.net.connect.decl erase=true},simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o /dev/null 2>&1 | FileCheck %s --check-prefix=DISCONNECTED
+// RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-edit-attributes{op=simulation.driver.decl set={strength0 = 3 : i32, strength1 = 3 : i32}},simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o /dev/null 2>&1 | FileCheck %s --check-prefix=WEAK
 
-// Net publication effects already include connected aliases, so both boundary
-// nodes participate in the directed chain without universal alias edges.
-// A storage -> driver -> collapsed net -> storage DAG. The net and storage
-// descriptor namespaces intentionally overlap. Boundary executors remain intact.
+// IEEE 1800-2023 23.3.3.7, 6.6.1: connected nets merge into one simulated net,
+// and a bit with one strong contribution reads back its driver in every member.
+// Net publication effects already include connected aliases, so the driver and
+// the reader of a storage -> driver -> collapsed net -> storage DAG join the
+// directed chain without universal alias edges. The net and storage descriptor
+// namespaces intentionally overlap.
 
 // CHECK-LABEL: talos eval dependency: owner=0 island=0 body=step1.__talos_eval_body_0 successors=1
 // CHECK-NEXT: talos eval dependency: owner=1 island=0 body=step2.__talos_eval_body_0 successors=2
-// CHECK-NEXT: talos eval boundary: owner=2 island=0 body=step3.__talos_eval_body_0 successors=3
-// CHECK-NEXT: talos eval boundary: owner=3 island=0 body=step4.__talos_eval_body_0 successors=4
+// CHECK-NEXT: talos eval dependency: owner=2 island=0 body=step3.__talos_eval_body_0 successors=3
+// CHECK-NEXT: talos eval dependency: owner=3 island=0 body=step4.__talos_eval_body_0 successors=4
 // CHECK-NEXT: talos eval dependency: owner=4 island=0 body=step5.__talos_eval_body_0 successors={{$}}
 
 // A reversed pass connection (second RUN) publishes the same aliases.
@@ -19,6 +22,13 @@
 // (IEEE 1800-2023 4.9.1, 6.6.1); this must not invent a route to step4.
 // DISCONNECTED-LABEL: talos eval dependency: owner=2 island=0 body=step3.__talos_eval_body_0 successors={{$}}
 // DISCONNECTED-NEXT: talos eval boundary: owner=3 island=3 body=step4.__talos_eval_body_0 successors=4{{$}}
+
+// A weaker driver needs Table 28-7 resolution (6.6.1, 28.11), so the merged net
+// has no exclusive range. Its driver and reader stay boundaries, in order.
+// WEAK-LABEL: talos eval dependency: owner=0 island=0 body=step1.__talos_eval_body_0 successors=1
+// WEAK-NEXT: talos eval dependency: owner=1 island=0 body=step2.__talos_eval_body_0 successors=2
+// WEAK-NEXT: talos eval boundary: owner=2 island=0 body=step3.__talos_eval_body_0 successors=3
+// WEAK-NEXT: talos eval boundary: owner=3 island=0 body=step4.__talos_eval_body_0 successors=4
 
 !ref = !simulation.ref<i1>
 !vref = !simulation.ref<i8>

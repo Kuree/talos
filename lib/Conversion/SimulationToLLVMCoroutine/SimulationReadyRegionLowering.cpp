@@ -19,9 +19,10 @@ bool isReadinessTransparentCallee(StringRef callee) {
   // storage that no ready set shares (the same leaves stay transparent to
   // pending NBA captures).
   // Generated promotion queries: they read canonical X/Z state, proof tables
-  // and hints and update only proof latches, hints and the promotion-pending
-  // mask. They activate no process and select only a value domain (IEEE
-  // 1800-2023 4.3, 4.5, 6.3.1), so they cannot observe an activation.
+  // and hints and update only proof latches, hints, the promotion-pending mask
+  // and a kernel's private retry count. They activate no process and select
+  // only a value domain (IEEE 1800-2023 4.3, 4.5, 6.3.1), so they cannot
+  // observe an activation.
   return callee == "talos_rt_v1_eval_display" ||
          callee == "talos_rt_v1_scheduler_fail" ||
          callee == "talos_rt_v1_eval_nba_reserve" ||
@@ -35,7 +36,7 @@ bool isReadinessTransparentCallee(StringRef callee) {
          callee == "talos_rt_v1_native_state_mark_unknown" ||
          callee == "talos_rt_v1_native_state_refresh_unknown_summary" ||
          callee == kernelPromotionReadyName ||
-         callee == groupPromotionReadyName;
+         callee == clockedKernelReadyName || callee == groupPromotionReadyName;
 }
 
 namespace {

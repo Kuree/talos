@@ -1885,12 +1885,7 @@ materializeNativeEvalGroupBodies(ModuleOp module, AnalysisManager manager) {
     }
   }
 
-  auto limit =
-      ::talos::schedule::get<::talos::schedule::Field::MaxInlineOps>(
-          module);
-  uint64_t operationLimit = limit ? limit.getValue().getZExtValue() : 5000;
-  if (!operationLimit)
-    operationLimit = UINT64_MAX;
+  uint64_t operationLimit = schedule::getMaxInlineOperations(module);
 
   // Measure each needed definition once. Charging its own operations bounds
   // both cloning and subsequent optimization; following shared callees here

@@ -35,6 +35,7 @@
 #include "talos/Analysis/LocalUnknownAnalysis.h"
 #include "talos/Analysis/StateDomainAnalysis.h"
 #include "talos/Dialect/Native/NativeDialect.h"
+#include "talos/Dialect/Schedule/ClockedKernelName.h"
 #include "talos/Dialect/Schedule/ScheduleDialect.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
@@ -62,6 +63,46 @@ namespace talos {
 
 namespace {
 using analysis::LocalUnknownAnalysis;
+
+/// Operations per segment of a large clocked kernel. The segment's
+/// profitability test still rejects a run whose savings do not pay for its
+/// check.
+constexpr uint64_t largeSegmentOperations = 128;
+
+/// Whether a fused clocked kernel exceeds the inline budget.
+bool isLargeClockedKernel(sim::SimFuncOp function) {
+  if (!schedule::isClockedKernelSymbol(function.getSymName()) ||
+      schedule::has<schedule::Field::EvalInductiveTwoState>(function))
+    return false;
+  uint64_t budget =
+      schedule::getMaxInlineOperations(function->getParentOfType<ModuleOp>());
+  uint64_t operations = 0;
+  return function
+      .walk([&](Operation *) {
+        return ++operations < budget ? WalkResult::advance()
+                                     : WalkResult::interrupt();
+      })
+      .wasInterrupted();
+}
+
+/// A large kernel already has its whole-body two-state variant, so bound what
+/// its segment copies add: at most half of its segments, largest savings first.
+/// Each dropped segment still runs correctly in the four-state source.
+void limitLargeKernelCopies(ArrayRef<LocalUnknownAnalysis::Segment> segments,
+                            SmallVectorImpl<bool> &admitted) {
+  uint64_t allowed = segments.size() / 2;
+  SmallVector<unsigned> candidates;
+  for (unsigned index = 0; index != segments.size(); ++index)
+    if (admitted[index])
+      candidates.push_back(index);
+  if (candidates.size() <= allowed)
+    return;
+  llvm::stable_sort(candidates, [&](unsigned lhs, unsigned rhs) {
+    return segments[lhs].benefit > segments[rhs].benefit;
+  });
+  for (unsigned index : ArrayRef(candidates).drop_front(allowed))
+    admitted[index] = false;
+}
 
 // The copy is the expected path once reset has cleared X/Z.
 constexpr int32_t likelyWeight = (1 << 20) - 1;
@@ -1020,11 +1061,16 @@ public:
     sim::SimFuncOp function = getOperation();
     // Repeating nonsuspending bodies only, as for region versioning. A source
     // with a two-state variant runs only while its inputs hold X/Z, and a
-    // path predicate only classifies an activation.
+    // path predicate only classifies an activation. A large clocked kernel
+    // fuses many independent processes, so one X/Z among all their inputs
+    // would otherwise send every member to its four-state body. Runs of its
+    // members choose for themselves instead (IEEE 1800-2023 6.3.1).
+    bool large = !function.isExternal() && isLargeClockedKernel(function);
     if (function.isExternal() ||
         function.getEntryKind() != sim::EntryKind::Function ||
         schedule::has<schedule::Field::EvalPathKnownPredicate>(function) ||
-        schedule::has<schedule::metadata::evalTwoStateVariant>(function) ||
+        (schedule::has<schedule::metadata::evalTwoStateVariant>(function) &&
+         !large) ||
         schedule::has<schedule::Field::NativeKnownActivation>(function) ||
         (!variants &&
          schedule::has<schedule::Field::EvalInductiveTwoState>(function)))
@@ -1040,7 +1086,8 @@ public:
             })
             .wasInterrupted())
       return markAllAnalysesPreserved();
-    Segments segments = cut(function, segmentSize);
+    Segments segments =
+        cut(function, large ? largeSegmentOperations : segmentSize);
     analysis::HandleDataflowResult handles = inputs->handles.analyze(function);
     auto provenKnown = [&](Operation *read) {
       return inputs->provesKnown(function, handles, read);
@@ -1078,15 +1125,19 @@ public:
       if (nested)
         cost += segment.unchangedWork;
       return !segment.untestable && (!segment.gate.empty() || segment.checks) &&
-             segment.benefit >= minimumBenefit &&
-             segment.benefit > cost;
+             segment.benefit >= minimumBenefit && segment.benefit > cost;
     };
     ArrayRef<LocalUnknownAnalysis::Segment> results = analysis.getSegments();
+    SmallVector<bool> admissions;
+    for (const auto &segment : results)
+      admissions.push_back(profitable(segment));
+    if (large)
+      limitLargeKernelCopies(results, admissions);
     unsigned versioned = 0;
     uint64_t benefit = 0, roots = 0;
     Versioner versioner(function, analysis, *inputs);
     for (auto [index, segment] : llvm::enumerate(results)) {
-      bool admitted = profitable(segment);
+      bool admitted = admissions[index];
       if (diagnostics && nested &&
           (!segment.gate.empty() || segment.checks)) {
         std::string text;

@@ -1,6 +1,7 @@
 //===- ClockedGuardLayout.cpp - Event-guard arms of clocked kernels --------===//
 
 #include "talos/LLVM/ClockedGuardLayout.h"
+#include "talos/Dialect/Schedule/ClockedKernelName.h"
 #include "talos/LLVM/ClockedKernelOutlining.h"
 #include "talos/LLVM/WideIntegerVectorization.h"
 
@@ -44,7 +45,7 @@ static bool isGuardArm(BasicBlock &guard, BasicBlock *entry, BasicBlock *join) {
 }
 
 bool ClockedGuardLayoutPass::runOnFunction(Function &function) {
-  if (!function.getName().contains("__talos_clocked_"))
+  if (!function.getName().contains(schedule::clockedKernelPrefix))
     return false;
   MDBuilder metadata(function.getContext());
   bool changed = false;
@@ -78,15 +79,25 @@ PreservedAnalyses ClockedGuardLayoutPass::run(Module &module,
 void registerTalosLLVMPasses(PassBuilder &builder) {
   builder.registerVectorizerStartEPCallback(
       [](FunctionPassManager &passes, OptimizationLevel) {
+        passes.addPass(AssembleWideIntegerWordsPass());
         passes.addPass(LimitWideIntegerVectorizationPass());
       });
   builder.registerPipelineParsingCallback(
       [](StringRef name, FunctionPassManager &passes,
          ArrayRef<PassBuilder::PipelineElement>) {
-        if (name != "talos-limit-wide-integer-vectorization")
-          return false;
-        passes.addPass(LimitWideIntegerVectorizationPass());
-        return true;
+        if (name == "talos-limit-wide-integer-vectorization") {
+          passes.addPass(LimitWideIntegerVectorizationPass());
+          return true;
+        }
+        if (name == "talos-assemble-wide-integer-words") {
+          passes.addPass(AssembleWideIntegerWordsPass());
+          return true;
+        }
+        if (name == "talos-restore-wide-integer-codegen") {
+          passes.addPass(RestoreWideIntegerCodegenPass());
+          return true;
+        }
+        return false;
       });
   builder.registerPipelineParsingCallback(
       [](StringRef name, ModulePassManager &passes,

@@ -3,6 +3,7 @@
 #include "../SimulationToLLVMCoroutine/SimulationAOTPlanning.h"
 #include "../SimulationToLLVMCoroutine/SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Analysis/ActivationRegionAnalysis.h"
+#include "talos/Analysis/ParallelWalk.h"
 #include "talos/Analysis/SimulationScheduleAnalysis.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
@@ -169,7 +170,9 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
   struct Node {
     NativeRankedEvalNode plan;
     SmallVector<Range> reads, writes;
-    bool opaqueMemory = false;
+    // Effects outside the state inventory. An unknown read needs every writer
+    // ordered first; only an unknown write precedes every other actor.
+    bool opaqueReads = false, opaqueWrites = false;
   };
   SmallVector<Node, 0> nodes;
   using ClockKey = std::tuple<uint32_t, uint32_t, uint64_t, uint64_t>;
@@ -189,7 +192,7 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
       multipleClocks.insert(entry.merged_bit);
     clock = key;
   }
-  SmallVector<std::pair<NativeRankedEvalNode, ClockKey>> clockedNodes;
+  SmallVector<std::pair<NativeRankedEvalNode, ClockKey>, 0> clockedNodes;
   DenseMap<uint32_t, uint64_t> widths;
   for (const auto &bound : stateLayout.bounds)
     widths.try_emplace(bound.handleID, bound.width);
@@ -230,9 +233,9 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
     });
     if (clocked && (!clocks[record.bit] || multipleClocks.contains(record.bit)))
       continue;
-    // An owner that resumes in the Inactive region must not join a sweep:
-    // it runs only after every Active owner of its pass. It still orders its
-    // producers and consumers as a boundary.
+    // An owner that resumes in the Inactive region must not join a sweep: it
+    // runs only after every Active owner of its pass. It stays a boundary, but
+    // orders no Active owner (see where its reads and writes are cleared).
     bool deferred =
         owner < plan.deferredOwners.size() && plan.deferredOwners[owner];
     clocked &= !deferred;
@@ -265,13 +268,18 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
       // those internal edges from feedback through the activation boundary.
       // Reuse the finite initial/resume proof and dense must-definition facts
       // before dropping such edges or admitting bounded dynamic accesses.
-      // Sensitivity remains independent: every watch stays an ordering edge.
+      // Sensitivity remains independent: a watch stays an ordering edge, unless
+      // the activation is repeatable and is woken only by its live inputs.
       auto effects = fragment->second.getEffects();
       auto inputs = activationInputs.liveIns.find(function.getSymNameAttr());
       auto outputs = activationInputs.mayWrites.find(function.getSymNameAttr());
       bool activation = !clocked && activationInputs.sourceGraph == graph &&
                         inputs != activationInputs.liveIns.end() &&
                         outputs != activationInputs.mayWrites.end();
+      // A repeatable activation is woken only by its live inputs (see
+      // buildNativeStaticFanoutPlan); its source sensitivity orders nothing.
+      bool liveWakes = activation && activationInputs.repeatable.contains(
+                                         function.getSymNameAttr());
       bool effectsSafe = llvm::all_of(effects, [&, &record =
                                                        record](Attribute raw) {
         auto effect = cast<schedule::ComputeEffectAttr>(raw);
@@ -294,6 +302,22 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
                    effect.getLow() < range.second &&
                    effect.getWidth() <= range.second - effect.getLow();
           });
+        // IEEE 1800-2023 23.3.3.7, 6.6.1: port-connected nets merge into one
+        // simulated net, and a bit with one strong contribution reads back
+        // its driver in every member. Such a slice is a plain write of each
+        // member, with the same per-member publications as an isolated wire.
+        if ((effect.getEffect() == schedule::ComputeEffectKind::Read ||
+             effect.getEffect() == schedule::ComputeEffectKind::Watch ||
+             effect.getEffect() == schedule::ComputeEffectKind::Drive) &&
+            effect.getWidth())
+          if (auto connected = stateLayout.connectedExclusiveDriverRanges.find(
+                  effect.getDescriptor());
+              connected != stateLayout.connectedExclusiveDriverRanges.end())
+            sparseEffect |= llvm::any_of(connected->second, [&](auto range) {
+              return effect.getLow() >= range.first &&
+                     effect.getLow() < range.second &&
+                     effect.getWidth() <= range.second - effect.getLow();
+            });
         // LRM 6.6/6.7 leave undriven bits at Z. Preserve read/watch ranges,
         // including holes; a drive must fit one exclusive contributor range.
         // The original ready predicates and ordered publications still apply
@@ -372,8 +396,10 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
             node.writes.push_back(range);
         } else if (!clocked &&
                    (!activation ||
-                    effect.getEffect() == schedule::ComputeEffectKind::Watch))
+                    (effect.getEffect() == schedule::ComputeEffectKind::Watch &&
+                     !liveWakes))) {
           node.reads.push_back(range);
+        }
         return true;
       });
       if (!effectsSafe)
@@ -432,7 +458,7 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
       for (uint32_t id : direct.fragmentIDs) {
         auto fragment = fragments.lookup(id);
         if (!fragment) {
-          node.opaqueMemory = true;
+          node.opaqueReads = node.opaqueWrites = true;
           continue;
         }
         auto owner = fragment.getFunction().getAttr();
@@ -442,7 +468,8 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
                           inputs != activationInputs.liveIns.end() &&
                           outputs != activationInputs.mayWrites.end();
         if (activation && summarizedOwners.insert(owner).second) {
-          auto appendRanges = [&](auto ranges, SmallVectorImpl<Range> &dest) {
+          auto appendRanges = [&](auto ranges, SmallVectorImpl<Range> &dest,
+                                  bool &opaque) {
             for (auto range : ranges) {
               constexpr uint64_t netTag =
                   analysis::ActivationMemoryAnalysis::netRootTag;
@@ -454,20 +481,20 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
                   !talos_rt_stable_handle_decode(handle->second, &decoded) ||
                   decoded.kind != TALOS_RT_STABLE_HANDLE_STATIC ||
                   decoded.offset) {
-                node.opaqueMemory = true;
+                opaque = true;
                 continue;
               }
               auto width = widths.find(decoded.id);
               if (width == widths.end() || range.low >= width->second ||
                   range.width > width->second - range.low) {
-                node.opaqueMemory = true;
+                opaque = true;
                 continue;
               }
               dest.push_back({decoded.id, range.low, range.low + range.width});
             }
           };
-          appendRanges(inputs->second, node.reads);
-          appendRanges(outputs->second, node.writes);
+          appendRanges(inputs->second, node.reads, node.opaqueReads);
+          appendRanges(outputs->second, node.writes, node.opaqueWrites);
         }
         for (auto effect :
              fragment.getEffects().getAsRange<schedule::ComputeEffectAttr>()) {
@@ -481,15 +508,23 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
           // excludes its private scratch storage. Keep that precision even
           // when net publication or another emission restriction requires an
           // executor boundary. Unknown local effects must not invent edges to
-          // every other actor. Sensitivity remains an independent constraint.
+          // every other actor. Sensitivity remains an independent constraint,
+          // unless the activation is repeatable and is woken only by its live
+          // inputs, which its summary already reads.
           if (activation && kind != schedule::ComputeEffectKind::Watch)
             continue;
+          if (activation && activationInputs.repeatable.contains(owner))
+            continue;
+          bool &opaque = kind == schedule::ComputeEffectKind::Write ||
+                                 kind == schedule::ComputeEffectKind::Drive
+                             ? node.opaqueWrites
+                             : node.opaqueReads;
           auto resource = effect.getResource();
           if ((resource != schedule::ComputeResourceKind::Storage &&
                resource != schedule::ComputeResourceKind::Net) ||
               effect.getTarget() != schedule::ComputeTargetKind::Descriptor ||
               !effect.getWidth()) {
-            node.opaqueMemory = true;
+            opaque = true;
             continue;
           }
           // The whole-program effect solver already maps driver publications
@@ -506,13 +541,13 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
               !talos_rt_stable_handle_decode(handle->second, &decoded) ||
               decoded.kind != TALOS_RT_STABLE_HANDLE_STATIC ||
               decoded.offset) {
-            node.opaqueMemory = true;
+            opaque = true;
             continue;
           }
           auto width = widths.find(decoded.id);
           if (width == widths.end() || effect.getLow() >= width->second ||
               effect.getWidth() > width->second - effect.getLow()) {
-            node.opaqueMemory = true;
+            opaque = true;
             continue;
           }
           Range range{decoded.id, effect.getLow(),
@@ -523,6 +558,15 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
                : node.reads)
               .push_back(range);
         }
+      }
+      // IEEE 1800-2023 4.4.2.3: an owner resuming in the Inactive region runs
+      // only when no Active owner is pending, and takes the highest bits below.
+      // It cannot interleave with an Active sweep, so its reads and writes
+      // order nothing there; its publications start the next pass.
+      if (deferred) {
+        node.reads.clear();
+        node.writes.clear();
+        node.opaqueReads = node.opaqueWrites = false;
       }
       normalizeRanges(node.reads);
       normalizeRanges(node.writes);
@@ -551,10 +595,10 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
     for (auto &range : ranges)
       range.prefixHigh = high = std::max(high, range.high);
   }
-  SmallVector<uint32_t> opaqueOwners;
+  SmallVector<uint32_t> opaqueReaders;
   for (const auto &node : nodes)
-    if (node.opaqueMemory)
-      opaqueOwners.push_back(node.plan.owner);
+    if (node.opaqueReads)
+      opaqueReaders.push_back(node.plan.owner);
   SmallVector<NativeRankedEvalNode> result;
   DenseSet<StringAttr> internalSources;
   for (auto &node : nodes) {
@@ -564,12 +608,15 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
       for (uint32_t id : direct->fragmentIDs)
         internalSources.insert(fragments.lookup(id).getFunction().getAttr());
     }
-    if (node.opaqueMemory) {
+    if (node.opaqueWrites) {
       for (const auto &other : nodes)
         if (node.plan.owner != other.plan.owner)
           node.plan.successors.push_back(other.plan.owner);
-    } else
-      llvm::append_range(node.plan.successors, opaqueOwners);
+    } else if (!node.writes.empty()) {
+      for (uint32_t reader : opaqueReaders)
+        if (node.plan.owner != reader)
+          node.plan.successors.push_back(reader);
+    }
     for (const auto &write : node.writes) {
       auto &ranges = readers[write.state];
       auto next = llvm::lower_bound(
@@ -859,19 +906,12 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
     for (unsigned target : forward[node])
       activities[target] |= activities[node];
   std::map<std::vector<unsigned>, unsigned> domains;
-  std::map<std::vector<unsigned>, unsigned> feedbackDomains;
   for (unsigned id = 0; id < result.size(); ++id) {
-    std::vector<unsigned> key, feedback;
-    for (unsigned event : activities[id]) {
+    std::vector<unsigned> key;
+    for (unsigned event : activities[id])
       key.push_back(event);
-      if (event >= externalEvents)
-        feedback.push_back(event);
-    }
     result[id].activityDomain =
         domains.try_emplace(std::move(key), domains.size()).first->second;
-    result[id].feedbackDomain =
-        feedbackDomains.try_emplace(std::move(feedback), feedbackDomains.size())
-            .first->second;
   }
   for (unsigned id = 0; id < result.size(); ++id) {
     auto &node = result[id];
@@ -933,7 +973,6 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
     node.island = cohort->second;
     node.component = componentCount + cohort->second;
     node.activityDomain = domains.size() + cohort->second;
-    node.feedbackDomain = feedbackDomains.size() + cohort->second;
     ranked.push_back(std::move(node));
   }
   return ranked;
@@ -980,46 +1019,98 @@ NativeActivationInputs collectNativeActivationInputs(sim::SimDesignOp design,
         effectsByOwner[owner],
         fragment.getEffects().getAsRange<schedule::ComputeEffectAttr>());
   }
+  const uint64_t laneBudget =
+      schedule::getMaxInlineOperations(design->getParentOfType<ModuleOp>());
+  struct Request {
+    sim::SimFuncOp function;
+    bool lanes;
+  };
+  SmallVector<Request, 0> requests;
   for (const auto &[owner, effects] : effectsByOwner) {
     if (!changeOwners.contains(owner))
-      continue;
-    bool needsProof = llvm::any_of(effects, [&,
-                                             &effects = effects](auto effect) {
-      if (effect.getDynamic())
-        return true;
-      if (effect.getEffect() != schedule::ComputeEffectKind::Read)
-        return false;
-      return llvm::any_of(effects, [&](auto write) {
-        return write.getEffect() == schedule::ComputeEffectKind::Write &&
-               rangesOverlap(effect, write);
-      });
-    });
-    if (!needsProof)
       continue;
     auto function = symbols.lookup<sim::SimFuncOp>(owner.getValue());
     if (!function)
       continue;
+    uint64_t cost = 0;
+    bool needsLanes = result.repeatable.contains(owner) &&
+                      !function
+                           .walk([&](Operation *) {
+                             return ++cost > laneBudget
+                                        ? WalkResult::interrupt()
+                                        : WalkResult::advance();
+                           })
+                           .wasInterrupted();
+    bool needsProof =
+        needsLanes ||
+        llvm::any_of(effects, [&, &effects = effects](auto effect) {
+          if (effect.getDynamic())
+            return true;
+          if (effect.getEffect() != schedule::ComputeEffectKind::Read)
+            return false;
+          return llvm::any_of(effects, [&](auto write) {
+            return write.getEffect() == schedule::ComputeEffectKind::Write &&
+                   rangesOverlap(effect, write);
+          });
+        });
+    if (needsProof)
+      requests.push_back({function, needsLanes});
+  }
+  struct Facts {
+    analysis::ActivationMemoryAnalysis::Ranges liveIns, mayWrites;
+    bool usable = false;
+    std::string trace;
+  };
+  SmallVector<Facts, 0> facts(requests.size());
+  auto solve = [&](size_t index) {
+    sim::SimFuncOp function = requests[index].function;
     analysis::ActivationRegionAnalysis activation(
         function, handles, {},
-        analysis::ActivationMemoryAnalysis::DependencyMode::Inputs);
-    if (explain)
-      llvm::errs()
-          << "talos ranked activation: " << function.getSymName()
-          << " valid=" << activation.isValid()
-          << " complete=" << activation.getMemory().hasCompleteWrites()
-          << " inputs=" << activation.getMemory().hasInputDependencies()
-          << " input_reason=" << activation.getMemory().getDependencyFailure()
-          << " reason="
-          << analysis::stringifyActivationFailure(activation.getFailureReason())
-          << '\n';
-    if (activation.isValid() && activation.getMemory().hasCompleteWrites()) {
-      llvm::append_range(result.liveIns[function.getSymNameAttr()],
-                         activation.getMemory().hasInputDependencies()
-                             ? activation.getMemory().getValueInputs()
-                             : activation.getMemory().getLiveIns());
-      llvm::append_range(result.mayWrites[function.getSymNameAttr()],
-                         activation.getMemory().getMayWrites());
+        requests[index].lanes
+            ? analysis::ActivationMemoryAnalysis::DependencyMode::ReachingValues
+            : analysis::ActivationMemoryAnalysis::DependencyMode::Inputs);
+    const auto &memory = activation.getMemory();
+    Facts &fact = facts[index];
+    if (explain) {
+      llvm::raw_string_ostream os(fact.trace);
+      os << "talos ranked activation: " << function.getSymName()
+         << " valid=" << activation.isValid()
+         << " complete=" << memory.hasCompleteWrites()
+         << " inputs=" << memory.hasInputDependencies()
+         << " input_reason=" << memory.getDependencyFailure() << " reason="
+         << analysis::stringifyActivationFailure(activation.getFailureReason())
+         << '\n';
     }
+    if (activation.isValid() && memory.hasCompleteWrites()) {
+      fact.usable = true;
+      llvm::append_range(fact.liveIns, memory.hasInputDependencies()
+                                           ? memory.getValueInputs()
+                                           : memory.getLiveIns());
+      llvm::append_range(fact.mayWrites, memory.getMayWrites());
+    }
+  };
+  // A worker solves only a private clone of its own function. Call summaries
+  // read shared callees, whose solves fold in place, so those owners stay on
+  // this thread.
+  SmallVector<size_t, 0> callFree, withCalls;
+  for (auto [index, request] : llvm::enumerate(requests))
+    (request.function
+             .walk([](sim::SimCallOp) { return WalkResult::interrupt(); })
+             .wasInterrupted()
+         ? withCalls
+         : callFree)
+        .push_back(index);
+  analysis::parallelForChunked(design.getContext(), callFree.size(),
+                               [&](size_t index) { solve(callFree[index]); });
+  for (size_t index : withCalls)
+    solve(index);
+  for (auto [request, fact] : llvm::zip_equal(requests, facts)) {
+    llvm::errs() << fact.trace;
+    if (!fact.usable)
+      continue;
+    StringAttr name = request.function.getSymNameAttr();
+    result.liveIns[name] = std::move(fact.liveIns);
+    result.mayWrites[name] = std::move(fact.mayWrites);
   }
   return result;
 }

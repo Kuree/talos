@@ -1,15 +1,16 @@
 // RUN: talos-opt %s --talos-materialize-native-eval-groups -o %t.mlir
-// RUN: FileCheck %s --implicit-check-not=dataflow_executor --implicit-check-not=dataflow_candidate --implicit-check-not=predicated_dataflow --implicit-check-not=control_flow_dataflow < %t.mlir
+// RUN: FileCheck %s --implicit-check-not=dataflow_executor --implicit-check-not=dataflow_candidate --implicit-check-not=predicated_dataflow < %t.mlir
 // RUN: talos-opt %s '--test-talos-edit-attributes=has=schedule.eval.ranked_members set="{schedule.eval.group_proof_domain = #schedule.group_proof_dependency<domain = 0 : i64, members = [0, 1], ranges = [0, 512]>}"' --talos-materialize-native-eval-groups | FileCheck %s --check-prefix=PROOF --implicit-check-not=dataflow_executor --implicit-check-not=dataflow_candidate --implicit-check-not=predicated_dataflow --implicit-check-not=cyclic_group.fallback --implicit-check-not=volatile_group.fallback --implicit-check-not='@loop' --implicit-check-not='@volatile_read'
-// CHECK: llvm.func @group()
+// CHECK: llvm.func @group() attributes {schedule.eval.control_flow_dataflow
 // CHECK: llvm.return
 // CHECK: llvm.func @called_candidate()
 // CHECK: llvm.call @called_candidate()
 // A dense predicated candidate must prove all effects and all physical ranges.
-// These rejected bodies are removed without installing a speculative entry.
-// With an independent group certificate the candidate keeps its CFG and
-// speculates nothing, so the escaping temporary and its call are accepted
-// as the certified entry; a cyclic CFG and a volatile access still are not.
+// The first candidate here cannot, so its group keeps the CFG, which speculates
+// nothing; simulation-native-group-dataflow-nondense.mlir covers each reason.
+// The other rejected bodies are removed without installing a speculative entry.
+// With an independent group certificate, the same applies without a refresh.
+// A cyclic CFG and a volatile access are rejected either way.
 // PROOF-DAG: llvm.func @group() attributes {schedule.eval.control_flow_dataflow
 // PROOF-DAG: llvm.call @escape(
 // PROOF-DAG: llvm.call @group.fallback()

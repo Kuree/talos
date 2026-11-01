@@ -45,6 +45,8 @@ materializeNativeEvalDispatch(ModuleOp module,
                               const NativeEvalCoordinatorPlan &plan) {
   StringRef functionName = evalDispatchName;
   ArrayRef<std::string> executors = plan.fourStateExecutors;
+  DenseSet<uint32_t> clockedKernelOwners =
+      collectClockedKernelOwners(plan.rankedNodes);
   ArrayRef<NativeEvalClockKernel> clockKernels = plan.clockKernels;
   ArrayRef<talos_rt_native_merged_fragment> mergedFragments = plan.fragments;
   ArrayRef<std::string> mergedTwoStateExecutors = plan.twoStateExecutors;
@@ -655,11 +657,8 @@ materializeNativeEvalDispatch(ModuleOp module,
                                ValueRange{});
       builder.setInsertionPointToStart(checkPromotion);
       Value kernelReady =
-          LLVM::CallOp::create(
-              builder, location, TypeRange{builder.getI1Type()},
-              SymbolRefAttr::get(context, kernelPromotionReadyName),
-              ValueRange{llvmConstant(builder, location, i64, recordIndex)})
-              .getResult();
+          emitOwnerKernelReady(builder, location, recordIndex,
+                               clockedKernelOwners.contains(recordIndex));
       cf::CondBranchOp::create(builder, location, kernelReady, executeTwoState,
                                ValueRange{}, executeFourState, ValueRange{});
       builder.setInsertionPointToStart(executeFourState);

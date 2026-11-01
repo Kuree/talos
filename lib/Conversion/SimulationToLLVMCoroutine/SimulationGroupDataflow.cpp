@@ -80,6 +80,10 @@ bool materializeNativeGroupDataflow(LLVM::LLVMFuncOp function,
   // operation speculatable and every access an exact slot.
   const bool preserveReadyCFG =
       schedule::has<schedule::Field::EvalGroupProofDomain>(function);
+  // An access or effect the slot model cannot name only rules out the dense
+  // form. The CFG form executes it exactly where the member body does, under
+  // the member certificates, and keeps the four-state bodies out of line.
+  bool denseCandidate = !preserveReadyCFG;
   struct Slot {
     std::string global;
     uint64_t offset;
@@ -154,9 +158,8 @@ bool materializeNativeGroupDataflow(LLVM::LLVMFuncOp function,
         auto slot =
             identify(load.getAddr(), dyn_cast<IntegerType>(load.getType()));
         if (!slot) {
-          if (preserveReadyCFG)
-            continue;
-          return reject("unproved load range", load);
+          denseCandidate = false;
+          continue;
         }
         accesses[load] = *slot;
       } else if (auto store = dyn_cast<LLVM::StoreOp>(operation)) {
@@ -166,9 +169,8 @@ bool materializeNativeGroupDataflow(LLVM::LLVMFuncOp function,
         auto slot = identify(store.getAddr(),
                              dyn_cast<IntegerType>(store.getValue().getType()));
         if (!slot) {
-          if (preserveReadyCFG)
-            continue;
-          return reject("unproved store range", store);
+          denseCandidate = false;
+          continue;
         }
         accesses[store] = *slot;
         slots[*slot].written = true;
@@ -179,20 +181,18 @@ bool materializeNativeGroupDataflow(LLVM::LLVMFuncOp function,
         if (isa<LLVM::InvokeOp, LLVM::InlineAsmOp>(operation) ||
             operation.hasTrait<OpTrait::IsTerminator>())
           return reject("effect or unsafe speculation", &operation);
-        if (preserveReadyCFG)
-          continue;
         // Pure is insufficient: e.g. division by zero has immediate UB.
         // Speculatability also excludes potentially trapping instructions.
         if (isa<LLVM::CallOp, LLVM::UDivOp, LLVM::SDivOp, LLVM::URemOp,
                 LLVM::SRemOp>(operation) ||
             !isMemoryEffectFree(&operation) || !isSpeculatable(&operation))
-          return reject("effect or unsafe speculation", &operation);
+          denseCandidate = false;
       }
     }
     for (Block *next : block.getSuccessors())
       ++indegree[next];
   }
-  if ((slots.empty() && !preserveReadyCFG) || originalOperations > budget)
+  if ((slots.empty() && denseCandidate) || originalOperations > budget)
     return reject("empty memory or operation budget");
   if (indegree[&function.getBody().front()] != 0)
     return false;
@@ -219,8 +219,9 @@ bool materializeNativeGroupDataflow(LLVM::LLVMFuncOp function,
     return true;
   }
   // A transitive alias window can be much wider than any individual access.
-  // Keep the proved CFG for these groups instead of expanding narrow stores
-  // into wide read/modify/write operations. Every original memory operation,
+  // Keep the proved CFG for these groups, and for those with an access the
+  // slot model cannot name, instead of expanding narrow stores into wide
+  // read/modify/write operations. Every original memory operation,
   // branch and publication remains at its original point (IEEE 1800-2023 4.3
   // and 4.6), including the untouched X/Z bits in neighboring bytes (6.3.1).
   // The caller installs the same complete two-state certificate guard and
@@ -240,7 +241,7 @@ bool materializeNativeGroupDataflow(LLVM::LLVMFuncOp function,
       windowEnd = end;
     }
   }
-  if (wideAliases) {
+  if (wideAliases || !denseCandidate) {
     Builder builder(function.getContext());
     schedule::set<schedule::Field::EvalControlFlowDataflow>(
         function, builder.getUnitAttr());

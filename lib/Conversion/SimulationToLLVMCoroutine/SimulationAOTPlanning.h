@@ -16,6 +16,7 @@
 
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 
@@ -67,6 +68,8 @@ mlir::LogicalResult materializeNativeRoutePromotionScan(
 
 inline constexpr llvm::StringLiteral kernelPromotionReadyName =
     "__talos_eval_kernel_promotion_ready_v1";
+inline constexpr llvm::StringLiteral clockedKernelReadyName =
+    "__talos_eval_clocked_kernel_ready_v1";
 inline constexpr llvm::StringLiteral groupPromotionReadyName =
     "__talos_eval_group_promotion_ready_v1";
 inline constexpr llvm::StringLiteral groupPromotionLatchName =
@@ -175,7 +178,6 @@ struct NativeRankedEvalNode {
   uint32_t island = 0;
   uint32_t component = 0;
   uint32_t activityDomain = 0;
-  uint32_t feedbackDomain = 0;
   llvm::SmallVector<uint32_t, 0> successorComponents;
   llvm::SmallVector<uint32_t, 0> feedbackSuccessors;
   bool cyclic = false;
@@ -189,6 +191,18 @@ struct NativeRankedEvalNode {
   /// no watched input changed. Only the closed two-state dataflow consumes it.
   bool repeatable = false;
 };
+
+/// The owners among `nodes` that are fused clocked kernels.
+llvm::DenseSet<uint32_t>
+collectClockedKernelOwners(llvm::ArrayRef<NativeRankedEvalNode> nodes);
+/// Defines the retry state of each fused clocked kernel among `nodes` and the
+/// query they share. Runs once, before any owner selects its value domain.
+void materializeClockedKernelReadiness(
+    mlir::ModuleOp module, llvm::ArrayRef<NativeRankedEvalNode> nodes);
+/// Whether an owner's two-state body may run. Every entry path of an owner
+/// selects its body through this query.
+mlir::Value emitOwnerKernelReady(mlir::OpBuilder &builder, mlir::Location loc,
+                                 uint64_t owner, bool clockedKernel);
 
 /// Immutable code-size chunks, computed after native body rewriting using the
 /// existing ranked cost/order policy. A proof domain belongs to this exact
@@ -360,7 +374,8 @@ mlir::FailureOr<NativeStaticFanoutPlan> buildNativeStaticFanoutPlan(
     const llvm::DenseMap<mlir::Operation *, mlir::SmallVector<mlir::Block *>>
         &bytecodeFragments,
     const llvm::DenseSet<mlir::Operation *> &runtimeOwnedFanoutActors,
-    bool enabled, bool certifiedStaticIsland);
+    bool enabled, bool certifiedStaticIsland,
+    const NativeActivationInputs &activationInputs);
 mlir::FailureOr<NativeThreeTierPlan>
 buildNativeThreeTierPlan(mlir::ModuleOp module,
                          const NativeStateLayout &stateLayout);

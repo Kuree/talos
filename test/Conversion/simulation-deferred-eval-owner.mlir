@@ -16,6 +16,11 @@
 
 // PLAN: talos eval owner: bit=0 {{.*}}executor={{[^ ]*}}{{$}}
 // PLAN-NEXT: talos eval owner: bit=1 {{.*}} deferred{{$}}
+// The finisher reads what the deferred kernel writes. An owner that runs only
+// after every Active owner of its pass cannot interleave with an Active sweep,
+// so it orders nothing there; its publications start the next pass.
+// PLAN: talos eval boundary: owner=0 {{.*}}body=finisher.__talos_eval_body_0 successors=0{{$}}
+// PLAN-NEXT: talos eval boundary: owner=1 {{.*}}body=kernel.__talos_eval_body_0 successors={{$}}
 
 // LOWER-LABEL: llvm.func @__talos_eval_dispatch_v1(
 // LOWER-NOT: prepare_eval_nba
@@ -90,7 +95,10 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
       %old = simulation.ref.load %n : !int -> i32
       %one = arith.constant 1 : i32
       %new = arith.addi %old, %one : i32
-      simulation.ref.store %new to %n : i32, !int
+      %q = simulation.context.storage %ctx[1] : !int
+      %seen = simulation.ref.load %q : !int -> i32
+      %mixed = arith.xori %new, %seen : i32
+      simulation.ref.store %mixed to %n : i32, !int
       %three = arith.constant 3 : i32
       %done = arith.cmpi eq, %new, %three : i32
       cf.cond_br %done, ^finish, ^wait

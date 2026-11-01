@@ -2,14 +2,15 @@
 // RUN: FileCheck %s < %t.llvm.mlir
 // RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-replicate,simulation.design(talos-sim-build-compute-graph,schedule-plan-combinational-statements{component-sections=true},talos-sim-materialize-compute-fusion))' | FileCheck %s --check-prefix=SOURCE
 // The 32 unrelated cone members share the upstream source with a genuine convergent
-// cycle. Retrying the cycle must not execute that cone again.
+// cycle. These owners are not repeatable, so retrying the cycle must not execute
+// that cone again. simulation-ranked-repeatable-dag.mlir covers repeatable owners.
 // CHECK: schedule.eval.ranked_members = array<i32: 0>
 // CHECK: schedule.eval.ranked_members = array<i32: 1, 2>
 // Recovery retains the separate cone activations. Combining disconnected
 // source owners would couple their runtime activity and knownness fallbacks.
 // SOURCE-LABEL: simulation.func @root
-// SOURCE-COUNT-32: simulation.spawn @cone{{[0-9]+}}
 // SOURCE: simulation.spawn @__talos_region_kernel_0_0
+// SOURCE-COUNT-32: simulation.spawn @cone{{[0-9]+}}
 // SOURCE: simulation.func @step2
 // SOURCE: simulation.func @step3
 !ref = !simulation.ref<i1>
@@ -45,6 +46,10 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
       %clock = simulation.spawn @clock(%ctx, %clk) : !simulation.context, !ref -> !simulation.process
       %p5 = simulation.spawn @step5(%ctx, %s4, %s5) : !simulation.context, !vref, !vref -> !simulation.process
       %p4 = simulation.spawn @step4(%ctx, %s3, %s4) : !simulation.context, !vref, !vref -> !simulation.process
+      // A spawn outside the initializer's entry block is no certified unique
+      // actor, so these owners are not repeatable and keep their event domains.
+      cf.br ^spawns
+    ^spawns:
       %p3 = simulation.spawn @step3(%ctx, %s2, %s3, %s1, %clk) : !simulation.context, !vref, !vref, !vref, !ref -> !simulation.process
       %p2 = simulation.spawn @step2(%ctx, %s1, %s2, %s3, %clk) : !simulation.context, !vref, !vref, !vref, !ref -> !simulation.process
       %cone = simulation.spawn @"cone#"(%ctx) {test.replicate = 32 : i64} : !simulation.context -> !simulation.process

@@ -25,6 +25,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringMap.h"
 
+#include <map>
 #include <memory>
 
 using namespace mlir;
@@ -769,7 +770,8 @@ FailureOr<NativeStaticFanoutPlan> buildNativeStaticFanoutPlan(
     const DenseMap<Operation *, uint32_t> &actorSlots,
     const DenseMap<Operation *, SmallVector<Block *>> &bytecodeFragments,
     const DenseSet<Operation *> &runtimeOwnedFanoutActors, bool enabled,
-    bool certifiedStaticIsland) {
+    bool certifiedStaticIsland,
+    const NativeActivationInputs &activationInputs) {
   NativeStaticFanoutPlan plan;
   plan.exact = enabled;
   if (!enabled)
@@ -1033,6 +1035,34 @@ FailureOr<NativeStaticFanoutPlan> buildNativeStaticFanoutPlan(
     llvm::sort(fragments);
     fragments.erase(std::unique(fragments.begin(), fragments.end()),
                     fragments.end());
+    // IEEE 1800-2023 4.3, 9.2.2.2.1, 10.3.2: the complete, exclusive outputs of
+    // a repeatable activation already hold the values its live input lanes
+    // compute, so running it after a change outside those lanes is not
+    // observable. Generated wakes cover only the live lanes. The source wait
+    // keeps its sensitivity for the generic scheduler after deoptimization.
+    const analysis::ActivationMemoryAnalysis::Ranges *liveLanes = nullptr;
+    if (activationInputs.sourceGraph == graph &&
+        activationInputs.repeatable.contains(function.getSymNameAttr()))
+      if (auto found = activationInputs.liveIns.find(function.getSymNameAttr());
+          found != activationInputs.liveIns.end())
+        liveLanes = &found->second;
+    auto laneOverlap = [](const analysis::Range &lane,
+                          schedule::ComputeEffectAttr effect) {
+      return lane.low < effect.getLow() + effect.getWidth() &&
+             effect.getLow() < lane.low + lane.width;
+    };
+    // An activation with no live watched lane keeps its source wait: it needs
+    // an owner even though no generated wake could change its outputs.
+    if (liveLanes && llvm::none_of(watches, [&](auto effect) {
+          auto root = analysis::ActivationMemoryAnalysis::getRoot(
+              effect.getResource(), effect.getDescriptor());
+          return root && llvm::any_of(*liveLanes, [&](const auto &lane) {
+                   return lane.root == *root && laneOverlap(lane, effect);
+                 });
+        }))
+      liveLanes = nullptr;
+    std::map<std::pair<uint32_t, uint64_t>, uint64_t> narrowed;
+    uint32_t narrowedFlags = 0;
     for (schedule::ComputeEffectAttr effect : watches) {
       if (effect.getTarget() != schedule::ComputeTargetKind::Descriptor ||
           effect.getDynamic() || effect.getDeferred() ||
@@ -1102,9 +1132,47 @@ FailureOr<NativeStaticFanoutPlan> buildNativeStaticFanoutPlan(
       // single LSB so every static publication path shares that semantic.
       uint64_t fanoutWidth =
           edge == TALOS_RT_WAIT_EDGE_CHANGE ? effect.getWidth() : 1;
+      if (liveLanes && edge == TALOS_RT_WAIT_EDGE_CHANGE) {
+        auto root = analysis::ActivationMemoryAnalysis::getRoot(
+            effect.getResource(), effect.getDescriptor());
+        // One wake per source watch: the hull of its live lanes. An indexed
+        // store tests every wake on its root, so a wake per lane multiplies
+        // publication code; a hull bit only re-runs the activation
+        // unobservably.
+        uint64_t low = UINT64_MAX, high = 0;
+        for (const auto &lane : *liveLanes)
+          if (root && lane.root == *root && laneOverlap(lane, effect)) {
+            low = std::min(low, std::max(lane.low, effect.getLow()));
+            high =
+                std::max(high, std::min(lane.low + lane.width,
+                                        effect.getLow() + effect.getWidth()));
+          }
+        if (low < high) {
+          auto [slot, inserted] = narrowed.try_emplace({decoded.id, low}, high);
+          if (!inserted)
+            slot->second = std::max(slot->second, high);
+        }
+        narrowedFlags = flags;
+        continue;
+      }
       plan.entries.push_back({decoded.id, actor->second, site.getId(), edge,
                               UINT32_MAX, flags, effect.getLow(), fanoutWidth,
                               0, 0});
+    }
+    // One wake per maximal live range: watches can overlap and lanes can abut.
+    for (auto current = narrowed.begin(); current != narrowed.end();) {
+      auto [state, low] = current->first;
+      uint64_t high = current->second;
+      auto next = std::next(current);
+      while (next != narrowed.end() && next->first.first == state &&
+             next->first.second <= high) {
+        high = std::max(high, next->second);
+        ++next;
+      }
+      plan.entries.push_back({state, actor->second, site.getId(),
+                              TALOS_RT_WAIT_EDGE_CHANGE, UINT32_MAX,
+                              narrowedFlags, low, high - low, 0, 0});
+      current = next;
     }
   }
   llvm::sort(plan.entries, [](const auto &lhs, const auto &rhs) {

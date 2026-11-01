@@ -328,7 +328,8 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
     FailureOr<NativeStaticFanoutPlan> fanout = buildNativeStaticFanoutPlan(
         module, *stateLayout, aotEligibility.getActorSlots(),
         aotEligibility.getBytecodeFragments(),
-        aotEligibility.getRuntimeOwnedFanoutActors(), true, staticEvalIsland);
+        aotEligibility.getRuntimeOwnedFanoutActors(), true, staticEvalIsland,
+        activationInputs);
     if (failed(fanout))
       return failure();
     staticFanoutPlan = std::move(*fanout);

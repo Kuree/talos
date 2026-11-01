@@ -5,9 +5,10 @@
 
 // Runtime behavior is checked in ../Runtime/simulation-native-group-hierarchy.test.
 
-// A boundary in the middle refines only its child. Pure siblings collapse to
-// SSA and select their own domain. Source owner identities and backward work
-// survive the two-level hierarchy; an inactive child holds deposited state.
+// A boundary in the middle refines only its child. Its volatile access fits
+// neither the dense form nor the CFG form. Pure siblings collapse to SSA and
+// select their own domain. Source owner identities and backward work survive
+// the two-level hierarchy; an inactive child holds deposited state.
 // The slow counters distinguish the selected paths, independently of values.
 //
 // CHECK-LABEL: llvm.func @group()
@@ -139,6 +140,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
   ^execute1:
     %remaining1 = llvm.and %pending1, %clear1 : i64
     llvm.store %remaining1, %ready : i64, !llvm.ptr
+    %ordered1 = llvm.load volatile %ready : !llvm.ptr -> i64
     llvm.call @boundary() : () -> ()
     llvm.br ^check2
   ^check2:
@@ -202,6 +204,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
   ^execute1:
     %remaining1 = llvm.and %pending1, %clear1 : i64
     llvm.store %remaining1, %ready : i64, !llvm.ptr
+    %ordered1 = llvm.load volatile %ready : !llvm.ptr -> i64
     llvm.call @boundary() : () -> ()
     llvm.br ^check2
   ^check2:

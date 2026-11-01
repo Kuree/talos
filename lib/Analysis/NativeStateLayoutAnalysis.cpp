@@ -321,6 +321,7 @@ NativeStateLayoutAnalysis::compute(ModuleOp module) {
     layout.isolatedSingleDriverNets = drivers->singleDriverNets;
     layout.isolatedPartitionedDriverNets = drivers->partitionedDriverNets;
     layout.isolatedSparseDriverRanges = drivers->sparseDriverRanges;
+    layout.connectedExclusiveDriverRanges = drivers->connectedExclusiveRanges;
     NetConnectivityAnalysis connectivity(designs.front());
     DenseMap<uint64_t, SmallVector<std::optional<std::array<uint64_t, 3>>>>
         declaredDelays;

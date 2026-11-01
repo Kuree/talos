@@ -3,6 +3,7 @@
 #include "SimulationAOTPlanning.h"
 #include "SimulationPackedLowering.h"
 #include "talos/Conversion/SimulationToLLVMCoroutine.h"
+#include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 
@@ -179,21 +180,52 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
     return success();
   }
 
+  // Narrow X/Z changes (IEEE 1800-2023 6.3.1, 6.11.2, 38.34) should find their
+  // proofs without a logarithmic tree walk. A bucket record per word suits a
+  // narrow dependency but not a whole-memory one, so only those stay in the
+  // interval tree. Both tables apply the same idempotent proof actions, and
+  // every query consults both. Keep small trees compact, and cap the buckets
+  // at twice the interval table they replace.
+  constexpr uint64_t maxBucketedBits = 4096;
+  std::vector<talos_rt_native_promotion_dependency> narrow, tree;
+  for (const auto &dependency : entries)
+    (dependency.end - dependency.begin <= maxBucketedBits ? narrow : tree)
+        .push_back(dependency);
+  runtime::PromotionBucketIndex buckets;
+  bool bucketed =
+      narrow.size() >= bucketMinEntries && narrow.size() <= UINT64_MAX / 64 &&
+      runtime::buildPromotionBucketIndex(narrow, narrow.size() * 64, buckets);
+  if (native::has<native::DebugTiming>(module))
+    llvm::errs() << "talos proof index: certificates=" << certificates.size()
+                 << " dependencies=" << entries.size()
+                 << " wide=" << tree.size() << " bucketed=" << bucketed
+                 << " records=" << buckets.records.size() << " buckets="
+                 << (buckets.starts.size() ? buckets.starts.size() - 1 : 0)
+                 << '\n';
+  if (!bucketed)
+    tree = entries;
+  else if (!runtime::buildPromotionRangeIndex(tree, stateBits.getUInt(),
+                                              certificates.size()))
+    return hook.emitError("could not verify canonical proof dependency index");
+
   // The runtime record is four consecutive uint64_t fields. A nested i64
   // array has the same layout on every supported target. Use a dense constant
   // instead of repeatedly inserting into an N-record LLVM constant array:
   // translation would rebuild and unique that entire array for every record.
+  // An empty tree keeps a placeholder record to carry the coverage below.
   SmallVector<uint64_t> dependencyWords;
-  dependencyWords.reserve(entries.size() * 4);
-  for (const auto &dependency : entries)
+  dependencyWords.reserve(std::max<size_t>(tree.size(), 1) * 4);
+  for (const auto &dependency : tree)
     llvm::append_range(dependencyWords,
                        ArrayRef<uint64_t>{dependency.begin, dependency.end,
                                           dependency.subtree_end,
                                           dependency.certificate});
+  if (tree.empty())
+    dependencyWords.append(4, 0);
+  int64_t dependencyRows = dependencyWords.size() / 4;
   auto dependencyArray = LLVM::LLVMArrayType::get(
-      LLVM::LLVMArrayType::get(i64, 4), entries.size());
-  auto denseType =
-      RankedTensorType::get({static_cast<int64_t>(entries.size()), 4}, i64);
+      LLVM::LLVMArrayType::get(i64, 4), dependencyRows);
+  auto denseType = RankedTensorType::get({dependencyRows, 4}, i64);
   builder.setInsertionPointToStart(module.getBody());
   auto dependencies = LLVM::GlobalOp::create(
       builder, location, dependencyArray, true, LLVM::Linkage::Internal,
@@ -310,47 +342,32 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
           llvmConstant(builder, location, builder.getI8Type(), 1),
           LLVM::AddressOfOp::create(builder, location, pointer, name));
   LLVM::ReturnOp::create(builder, location, ValueRange{});
+  auto treeLookup = [&](Block *block, LLVM::LLVMFuncOp aggregate,
+                        StringRef name) {
+    if (tree.empty())
+      return;
+    auto lookup = getOrDeclareLLVMFunction(
+        module, name, voidType, {pointer, i64, pointer, pointer, i64, i64});
+    LLVM::CallOp::create(
+        builder, location, lookup,
+        ValueRange{LLVM::AddressOfOp::create(builder, location, pointer,
+                                             dependencies.getSymName()),
+                   llvmConstant(builder, location, i64, tree.size()),
+                   LLVM::AddressOfOp::create(builder, location, pointer,
+                                             actions.getSymName()),
+                   LLVM::AddressOfOp::create(builder, location, pointer,
+                                             aggregate.getSymName()),
+                   block->getArgument(0), block->getArgument(1)});
+  };
   builder.setInsertionPointToStart(recheckEntry);
-  auto recheckLookup = getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_native_promotion_recheck_ranges", voidType,
-      {pointer, i64, pointer, pointer, i64, i64});
-  LLVM::CallOp::create(
-      builder, location, recheckLookup,
-      ValueRange{LLVM::AddressOfOp::create(builder, location, pointer,
-                                           dependencies.getSymName()),
-                 llvmConstant(builder, location, i64, entries.size()),
-                 LLVM::AddressOfOp::create(builder, location, pointer,
-                                           actions.getSymName()),
-                 LLVM::AddressOfOp::create(builder, location, pointer,
-                                           request.getSymName()),
-                 recheckEntry->getArgument(0), recheckEntry->getArgument(1)});
+  treeLookup(recheckEntry, request,
+             "talos_rt_v1_native_promotion_recheck_ranges");
   LLVM::ReturnOp::create(builder, location, ValueRange{});
-
-  auto lookup = getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_native_promotion_invalidate_ranges", voidType,
-      {pointer, i64, pointer, pointer, i64, i64});
   builder.setInsertionPointToStart(entry);
-  LLVM::CallOp::create(
-      builder, location, lookup,
-      ValueRange{LLVM::AddressOfOp::create(builder, location, pointer,
-                                           dependencies.getSymName()),
-                 llvmConstant(builder, location, i64, entries.size()),
-                 LLVM::AddressOfOp::create(builder, location, pointer,
-                                           actions.getSymName()),
-                 LLVM::AddressOfOp::create(builder, location, pointer,
-                                           reset.getSymName()),
-                 entry->getArgument(0), entry->getArgument(1)});
+  treeLookup(entry, reset, "talos_rt_v1_native_promotion_invalidate_ranges");
   LLVM::ReturnOp::create(builder, location, ValueRange{});
 
-  // Keep small trees compact and cap additional immutable storage at twice
-  // the interval table. Narrow generated mask runs then avoid a logarithmic
-  // tree walk; wide deposits retain the interval index. Both paths apply the
-  // same proof actions before dependent evaluation (IEEE 1800-2023 4.3,
-  // 6.3.1, 6.11.2, 38.34), with no new state copies or scheduler boundary.
-  runtime::PromotionBucketIndex buckets;
-  uint64_t entryCount = entries.size();
-  if (entryCount >= bucketMinEntries && entryCount <= UINT64_MAX / 64 &&
-      runtime::buildPromotionBucketIndex(entries, entryCount * 64, buckets)) {
+  if (bucketed) {
     builder.setInsertionPointToStart(module.getBody());
     auto i32 = builder.getI32Type();
     auto starts = LLVM::GlobalOp::create(
@@ -368,17 +385,9 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
             RankedTensorType::get({int64_t(buckets.records.size())}, i64),
             ArrayRef<uint64_t>(buckets.records)),
         8);
-    auto specialize = [&](LLVM::LLVMFuncOp function, Block *head,
-                          LLVM::LLVMFuncOp aggregate, StringRef helperName) {
-      Block *wide = head->splitBlock(head->begin());
-      Block *narrow = new Block;
-      function.getBody().push_back(narrow);
-      builder.setInsertionPointToEnd(head);
-      Value small = LLVM::ICmpOp::create(
-          builder, location, LLVM::ICmpPredicate::ule, head->getArgument(1),
-          llvmConstant(builder, location, i64, 64));
-      LLVM::CondBrOp::create(builder, location, small, narrow, wide);
-      builder.setInsertionPointToStart(narrow);
+    auto specialize = [&](Block *head, LLVM::LLVMFuncOp aggregate,
+                          StringRef helperName) {
+      builder.setInsertionPointToStart(head);
       auto helper = getOrDeclareLLVMFunction(
           module, helperName, voidType,
           {pointer, pointer, i64, pointer, pointer, i64, i64});
@@ -395,11 +404,9 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
               LLVM::AddressOfOp::create(builder, location, pointer,
                                         aggregate.getSymName()),
               head->getArgument(0), head->getArgument(1)});
-      LLVM::ReturnOp::create(builder, location, ValueRange{});
     };
-    specialize(hook, entry, reset,
-               "talos_rt_v1_native_promotion_invalidate_buckets");
-    specialize(recheck, recheckEntry, request,
+    specialize(entry, reset, "talos_rt_v1_native_promotion_invalidate_buckets");
+    specialize(recheckEntry, request,
                "talos_rt_v1_native_promotion_recheck_buckets");
   }
   return success();
