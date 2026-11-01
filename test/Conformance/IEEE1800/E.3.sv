@@ -1,6 +1,6 @@
 // CLAUSE: `default_trireg_strength sets relative trireg charge strength and rejects values above 250
 // XFAIL: *
-// The directive is accepted and ignored: 251 is not rejected, and the strengths never reach the trireg nets.
+// 251 is now rejected, but the strengths never reach charge sharing: trireg charge uses only small/medium/large on the signal-strength scale, with no 0..250 capacitance scale.
 // RUN: %not %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %S/Inputs/E.3/illegal.sv -o %t.bad.exe
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe

@@ -26,6 +26,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringSet.h"
 
+#include <cmath>
 #include <algorithm>
 #include <functional>
 #include <limits>
@@ -1714,7 +1715,21 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
     if (sourceKind == VPIKind::Module) {
       addBoolean(7, top);                     // vpiTopModule
       addBoolean(8, cell && cell.getValue()); // vpiCellInstance
+      // vpiDefDecayTime is an int; `infinite has no integer value, so it and
+      // an absent directive leave the property unavailable.
+      if (auto decay = sim::get<sim::metadata::DefaultDecayTime>(source))
+        if (std::isfinite(decay.getValueAsDouble()))
+          properties.push_back(sim::VPIPropertyAttr::get(
+              builder.getContext(), builder.getI32IntegerAttr(48),
+              builder.getI32IntegerAttr(static_cast<int32_t>(
+                  std::llround(decay.getValueAsDouble())))));
     }
+    // IEEE 1800-2023 E.4 to E.7: the delay mode in force at the instance.
+    if (sourceKind == VPIKind::Module || sourceKind == VPIKind::Interface ||
+        sourceKind == VPIKind::Program)
+      if (auto mode = sim::get<sim::metadata::VpiDefDelayMode>(source))
+        properties.push_back(sim::VPIPropertyAttr::get(
+            builder.getContext(), builder.getI32IntegerAttr(47), mode));
     StringAttr definitionName =
         sim::get<sim::metadata::VpiDefinitionName>(source);
     if (!definitionName)
@@ -4907,6 +4922,35 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
         turnoffOrDecay = ticks[2];
       propagationDelays =
           builder.getDenseI64ArrayAttr({rise, fall, turnoffOrDecay});
+    }
+    // IEEE 1800-2023 E.2: `default_decay_time sets the decay time of the
+    // trireg nets "that do not have any decay time specified in the
+    // declaration", in the module's time units; `infinite keeps the charge.
+    if (resolution == sim::NetResolutionKind::TriReg &&
+        getNetInitializerExpressions(op).empty() &&
+        !(net.getDelayFs() && net.getDelayFs()->size() == 3)) {
+      auto body = op->getParentOfType<semantic::SVInstanceBodySymbolOp>();
+      auto decay = body ? sim::get<sim::metadata::DefaultDecayTime>(body)
+                        : mlir::FloatAttr{};
+      auto unit = body ? body->getAttrOfType<IntegerAttr>("time_unit_fs")
+                       : IntegerAttr{};
+      auto precision = body ? body->getAttrOfType<IntegerAttr>(
+                                  "time_precision_fs")
+                            : IntegerAttr{};
+      double value = decay ? decay.getValueAsDouble() : 0;
+      if (decay && unit && precision && std::isfinite(value)) {
+        // Round to the module's time precision, as for any delay (3.14.3).
+        double precisionTicks =
+            value * static_cast<double>(unit.getInt()) /
+            static_cast<double>(precision.getInt());
+        int64_t moduleTicks = std::llround(precisionTicks);
+        int64_t femtoseconds = moduleTicks * precision.getInt();
+        int64_t rise = propagationDelays ? propagationDelays.asArrayRef()[0] : 0;
+        int64_t fall = propagationDelays ? propagationDelays.asArrayRef()[1] : 0;
+        propagationDelays = builder.getDenseI64ArrayAttr(
+            {rise, fall,
+             femtoseconds / static_cast<int64_t>(designPrecisionFs)});
+      }
     }
     uint64_t id = nextNetId++;
     descriptors[path] = {DescriptorInfo::Kind::Net, id, scopeId, *type,

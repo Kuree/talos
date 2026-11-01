@@ -1139,6 +1139,104 @@ public:
 
   [[nodiscard]] bool succeeded() const { return !sawInvalidNode; }
 
+  /// IEEE 1800-2023 Annex E: slang keeps the optional directives only as
+  /// trivia of the token that follows them. Replay them over every syntax
+  /// tree in compilation order, since a directive stays in force "for all
+  /// modules that follow it in the source description" until `resetall, and
+  /// record the state in force at each module, interface or program.
+  void collectOptionalDirectives() {
+    using slang::parsing::TokenKind;
+    using slang::parsing::TriviaKind;
+    using slang::syntax::SyntaxKind;
+    struct Collector : slang::syntax::SyntaxVisitor<Collector> {
+      explicit Collector(SlangASTImporter &importer) : importer(importer) {}
+      SlangASTImporter &importer;
+      OptionalDirectiveState state;
+      slang::parsing::Token replayed;
+
+      void replay(slang::parsing::Token token) {
+        for (const slang::parsing::Trivia &trivia : token.trivia()) {
+          if (trivia.kind != TriviaKind::Directive || !trivia.syntax())
+            continue;
+          const slang::syntax::SyntaxNode &directive = *trivia.syntax();
+          switch (directive.kind) {
+          case SyntaxKind::ResetAllDirective:
+            state = {};
+            break;
+          // E.4 to E.7: each names the delay mode for the modules after it.
+          case SyntaxKind::DelayModeDistributedDirective:
+            state.delayMode = 3; // vpiDelayModeDistrib
+            break;
+          case SyntaxKind::DelayModePathDirective:
+            state.delayMode = 2; // vpiDelayModePath
+            break;
+          case SyntaxKind::DelayModeUnitDirective:
+            state.delayMode = 4; // vpiDelayModeUnit
+            break;
+          case SyntaxKind::DelayModeZeroDirective:
+            state.delayMode = 5; // vpiDelayModeZero
+            break;
+          case SyntaxKind::DefaultDecayTimeDirective: {
+            slang::parsing::Token time =
+                directive.as<slang::syntax::DefaultDecayTimeDirectiveSyntax>()
+                    .time;
+            if (time.isMissing())
+              break;
+            if (time.kind == TokenKind::RealLiteral)
+              state.decayTime = time.realValue();
+            else if (time.kind == TokenKind::IntegerLiteral)
+              state.decayTime = static_cast<double>(
+                  time.intValue().as<uint64_t>().value_or(0));
+            else
+              state.decayTime = std::numeric_limits<double>::infinity();
+            break;
+          }
+          case SyntaxKind::DefaultTriregStrengthDirective: {
+            slang::parsing::Token strength =
+                directive
+                    .as<slang::syntax::DefaultTriregStrengthDirectiveSyntax>()
+                    .strength;
+            if (strength.isMissing())
+              break;
+            // E.3: "The integer constant shall be between 0 and 250."
+            std::optional<uint64_t> value =
+                strength.intValue().as<uint64_t>();
+            if (!value || *value > 250) {
+              mlir::emitError(importer.sourceLocation(strength.location()))
+                  << "`default_trireg_strength must be between 0 and 250";
+              importer.sawInvalidNode = true;
+              break;
+            }
+            state.triregStrength = static_cast<int32_t>(*value);
+            break;
+          }
+          default:
+            break;
+          }
+        }
+      }
+
+      void visitToken(slang::parsing::Token token) {
+        if (token.valid() && token.location() == replayed.location() &&
+            token.rawText().data() == replayed.rawText().data())
+          return;
+        replay(token);
+      }
+
+      void handle(const slang::syntax::ModuleDeclarationSyntax &node) {
+        // The declaration's first token carries the directives just before it.
+        slang::parsing::Token first = node.getFirstToken();
+        replay(first);
+        replayed = first;
+        importer.optionalDirectives[&node] = state;
+        visitDefault(node);
+      }
+    } collector(*this);
+    for (const std::shared_ptr<slang::syntax::SyntaxTree> &tree :
+         compilation.getSyntaxTrees())
+      tree->root().visit(collector);
+  }
+
   ArrayAttr getEnumDomains() const { return typeConverter.getEnumDomains(); }
 
   void markDPIExport(const slang::ast::SubroutineSymbol &subroutine,
@@ -3691,6 +3789,21 @@ private:
                                       slang::ast::VariableLifetime::Automatic));
         attrs.set(sim::metadata::VpiCellInstance::getNameStr(),
                   builder.getBoolAttr(definition.cellDefine));
+        if (const slang::syntax::SyntaxNode *declaration =
+                definition.getSyntax()) {
+          auto directives = optionalDirectives.find(declaration);
+          if (directives != optionalDirectives.end()) {
+            const OptionalDirectiveState &state = directives->second;
+            attrs.set(sim::metadata::VpiDefDelayMode::getNameStr(),
+                      builder.getI32IntegerAttr(state.delayMode));
+            if (state.decayTime)
+              attrs.set(sim::metadata::DefaultDecayTime::getNameStr(),
+                        builder.getF64FloatAttr(*state.decayTime));
+            if (state.triregStrength)
+              attrs.set(sim::metadata::DefaultTriregStrength::getNameStr(),
+                        builder.getI32IntegerAttr(*state.triregStrength));
+          }
+        }
         using VPIKind = reflection::VPIObjectKind;
         VPIKind scopeKind = VPIKind::Module;
         switch (node.parentInstance->getDefinition().definitionKind) {
@@ -8027,6 +8140,14 @@ private:
     StringAttr attributeName;
   };
 
+  struct OptionalDirectiveState {
+    int32_t delayMode = 1; // vpiDelayModeNone
+    std::optional<double> decayTime;
+    std::optional<int32_t> triregStrength;
+  };
+  llvm::DenseMap<const slang::syntax::SyntaxNode *, OptionalDirectiveState>
+      optionalDirectives;
+
   OpBuilder builder;
   const slang::SourceManager &sourceManager;
   const slang::ast::Compilation &compilation;
@@ -8463,6 +8584,7 @@ endpackage
   // are not children of RootSymbol. Import them explicitly so modules,
   // interfaces, programs, and primitives remain represented even when they
   // have no elaborated instance.
+  importer.collectOptionalDirectives();
   for (const slang::ast::Symbol *definition : compilation->getDefinitions())
     definition->visit(importer);
   compilation->getRoot().visit(importer);

@@ -79,7 +79,7 @@ TEST(VPIObjectModel, RefObjectTypespecRequiresNetVariableOrPartSelectActual) {
 constexpr size_t kExpectedTraversalCount = 1914;
 static_assert(sizeof(vpiTraversals) / sizeof(vpiTraversals[0]) ==
               kExpectedTraversalCount);
-constexpr size_t kExpectedPropertyCount = 2337;
+constexpr size_t kExpectedPropertyCount = 2336;
 static_assert(sizeof(vpiProperties) / sizeof(vpiProperties[0]) ==
               kExpectedPropertyCount);
 constexpr size_t kExpectedValuePolicyCount = 57;
@@ -547,8 +547,9 @@ std::map<uint32_t, KindSet> buildReadPropertyApplicabilityOracle() {
   add({vpiPackage, vpiModule, vpiInterface, vpiProgram, vpiUdpDefn,
        vpiGenScope},
       {vpiProtected});
-  add(instances, {vpiDefNetType, vpiUnconnDrive, vpiDefDelayMode, vpiCell,
-                  vpiConfig, vpiLibrary, vpiTop, vpiUnit});
+  add(instances, {vpiDefNetType, vpiUnconnDrive, vpiCell, vpiConfig,
+                  vpiLibrary, vpiTop, vpiUnit});
+  add({vpiModule, vpiInterface, vpiProgram}, {vpiDefDelayMode});
   add({vpiPackage, vpiModule, vpiInterface, vpiProgram, vpiAttribute},
       {vpiDefFile, vpiDefLineNo});
   add({vpiPort, vpiPortBit, vpiParamAssign}, {vpiConnByName});
@@ -2348,6 +2349,14 @@ TEST(VPIObjectModel, PropertyRealizationIsCompleteAndImageEquivalent) {
     if ((descriptor.property == vpiTopModule ||
          descriptor.property == vpiCellInstance) &&
         descriptor.sourceType == vpiModule)
+      expected = PropertyRealization::FixedImage;
+    // IEEE 1800-2023 E.2, E.4 to E.7: directive state frozen per definition.
+    if ((descriptor.property == vpiDefDecayTime &&
+         descriptor.sourceType == vpiModule) ||
+        (descriptor.property == vpiDefDelayMode &&
+         (descriptor.sourceType == vpiModule ||
+          descriptor.sourceType == vpiInterface ||
+          descriptor.sourceType == vpiProgram)))
       expected = PropertyRealization::FixedImage;
     if ((descriptor.sourceType == vpiTask ||
          descriptor.sourceType == vpiFunction) &&

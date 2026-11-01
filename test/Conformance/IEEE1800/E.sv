@@ -1,6 +1,6 @@
 // CLAUSE: Optional directives
 // XFAIL: *
-// The delay-mode directives are accepted but do not change which delay is used.
+// The delay-mode directives now set vpiDefDelayMode, but Annex E names the modes without defining their delay semantics, so which delay is used is unchanged.
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe
 // Pins Annex E: `delay_mode_path uses the specify path delay (2) and `delay_mode_distributed the assign delay (5) for otherwise identical modules.

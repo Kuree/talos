@@ -1080,9 +1080,13 @@ def ScheduledProperty : VPIProperty<"vpiScheduled", 46, BooleanProperty,
   ScheduledEventObjects, "38.34", DynamicProperty, DeniedWhenProtected, 0,
   NoPropertyObjects, NoPropertyObjects, RuntimeProperty>;
 def DefDelayModeProperty : VPIProperty<"vpiDefDelayMode", 47,
-  IntegerProperty, InstanceObjects, "37.10">;
+  IntegerProperty, DefinitionInstanceObjects, "37.10", StaticProperty,
+  DeniedWhenProtected, 0, NoPropertyObjects, NoPropertyObjects,
+  FixedImageProperty>;
 def DefDecayTimeProperty : VPIProperty<"vpiDefDecayTime", 48,
-  IntegerProperty, ModuleSource, "37.5">;
+  IntegerProperty, ModuleSource, "37.5", StaticProperty,
+  DeniedWhenProtected, 0, NoPropertyObjects, NoPropertyObjects,
+  FixedImageProperty>;
 def ActiveProperty : VPIProperty<"vpiActive", 49, BooleanProperty,
   ActivePropertyObjects, "37.43; 37.44", DynamicProperty,
   DeniedWhenProtected, 0, NoPropertyObjects, NoPropertyObjects,

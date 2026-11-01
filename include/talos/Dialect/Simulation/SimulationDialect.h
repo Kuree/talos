@@ -693,6 +693,10 @@ using VpiFrameInstrumentation =
     TalosSimulationDialect::VpiFrameInstrumentationAttrHelper;
 using VpiAutomatic = TalosSimulationDialect::VpiAutomaticAttrHelper;
 using VpiCellInstance = TalosSimulationDialect::VpiCellInstanceAttrHelper;
+using VpiDefDelayMode = TalosSimulationDialect::VpiDefDelayModeAttrHelper;
+using DefaultDecayTime = TalosSimulationDialect::DefaultDecayTimeAttrHelper;
+using DefaultTriregStrength =
+    TalosSimulationDialect::DefaultTriregStrengthAttrHelper;
 using VpiDefinitionName = TalosSimulationDialect::VpiDefinitionNameAttrHelper;
 using VpiIdentityDelegated =
     TalosSimulationDialect::VpiIdentityDelegatedAttrHelper;

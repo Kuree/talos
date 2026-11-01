@@ -578,6 +578,13 @@ def TalosSimulationDialect : Dialect {
     "::mlir::UnitAttr":$vpi_frame_instrumentation,
     "::mlir::BoolAttr":$vpi_automatic,
     "::mlir::BoolAttr":$vpi_cell_instance,
+    // Annex E directive state in force at the module declaration: the VPI
+    // delay mode constant (vpiDelayModeNone when no directive applies), the
+    // `default_decay_time operand in module time units (infinity for
+    // `infinite), and the `default_trireg_strength operand.
+    "::mlir::IntegerAttr":$vpi_def_delay_mode,
+    "::mlir::FloatAttr":$default_decay_time,
+    "::mlir::IntegerAttr":$default_trireg_strength,
     "::mlir::StringAttr":$vpi_definition_name,
     // FlatSymbolRefAttr naming the immutable relation-backed anchor that owns
     // the public VPI identity of executable named-event-array storage. The
