@@ -137,22 +137,27 @@ void normalize(Influences &influences) {
   }
   influences = std::move(merged);
 }
+/// Appends the part of `influence` within [low, low + width), if any, moved to
+/// start at `destination`.
+void projectInto(Influences &result, Influence influence, uint64_t low,
+                 uint64_t width, uint64_t destination) {
+  uint64_t first = std::max(low, influence.low);
+  uint64_t end = std::min(low + width, influence.low + influence.width);
+  if (first >= end)
+    return;
+  if (influence.identity) {
+    influence.source.low += first - influence.low;
+    influence.source.width = end - first;
+  }
+  influence.low = destination + first - low;
+  influence.width = end - first;
+  result.push_back(influence);
+}
 Influences project(ArrayRef<Influence> input, uint64_t low, uint64_t width,
                    uint64_t destination = 0) {
   Influences result;
-  for (auto influence : input) {
-    uint64_t first = std::max(low, influence.low);
-    uint64_t end = std::min(low + width, influence.low + influence.width);
-    if (first >= end)
-      continue;
-    if (influence.identity) {
-      influence.source.low += first - influence.low;
-      influence.source.width = end - first;
-    }
-    influence.low = destination + first - low;
-    influence.width = end - first;
-    result.push_back(influence);
-  }
+  for (const Influence &influence : input)
+    projectInto(result, influence, low, width, destination);
   return result;
 }
 
@@ -371,10 +376,18 @@ public:
     if (nextWidened)
       next = spread(sources(next), width);
     if (!logical.empty()) {
+      // The lanes ascend without overlap. Hand each relation to those it
+      // touches, rather than projecting all of them onto every lane.
       Influences filtered;
-      for (auto lane : logical)
-        llvm::append_range(filtered,
-                           project(next, lane.low, lane.width, lane.low));
+      for (const Influence &influence : next) {
+        const Range *lane = llvm::partition_point(logical, [&](const Range &r) {
+          return r.low + r.width <= influence.low;
+        });
+        for (; lane != logical.end() &&
+               lane->low < influence.low + influence.width;
+             ++lane)
+          projectInto(filtered, influence, lane->low, lane->width, lane->low);
+      }
       next = std::move(filtered);
       normalize(next);
     }
@@ -815,9 +828,22 @@ public:
         }
         llvm::sort(bounds);
         bounds.erase(std::unique(bounds.begin(), bounds.end()), bounds.end());
+        // Hand each influence to the lanes it covers. Projecting all of them
+        // onto each lane would be quadratic in the root's lanes.
+        SmallVector<Influences> laneInfluences(bounds.size() - 1);
+        for (const auto &influence : influences) {
+          size_t first =
+              llvm::upper_bound(bounds, influence.low) - bounds.begin();
+          for (size_t i = first ? first - 1 : 0;
+               i + 1 < bounds.size() &&
+               bounds[i] < influence.low + influence.width;
+               ++i)
+            projectInto(laneInfluences[i], influence, bounds[i],
+                        bounds[i + 1] - bounds[i], 0);
+        }
         for (size_t i = 1; i < bounds.size(); ++i) {
           Range lane{output.root, bounds[i - 1], bounds[i] - bounds[i - 1]};
-          Influences projected = project(influences, lane.low, lane.width);
+          const Influences &projected = laneInfluences[i - 1];
           std::optional<Range> identity;
           if (projected.size() == 1 && projected.front().identity &&
               projected.front().width == lane.width &&
