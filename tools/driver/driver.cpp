@@ -1404,7 +1404,8 @@ executeCompilation(const InputArgList &args,
 
   frontendOptions.enableUPF = args.hasArg(OPT_upf);
   auto importedModule =
-      talos::frontend::importSystemVerilog(inputs, context, frontendOptions);
+      talos::frontend::importSystemVerilog(inputs, context, frontendOptions,
+                                           args.hasArg(OPT_mlir_verify_each));
   if (failed(importedModule))
     return 1;
   OwningOpRef<ModuleOp> module = std::move(*importedModule);

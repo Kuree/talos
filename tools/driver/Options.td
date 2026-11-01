@@ -60,7 +60,7 @@ def mlir_timing : Flag<["--"], "mlir-timing">, Group<Output_Group>,
   HelpText<"Report per-pass execution times for the MLIR pipeline">;
 def mlir_verify_each : Flag<["--"], "mlir-verify-each">,
   Group<Diagnostic_Group>, Flags<[HelpHidden]>,
-  HelpText<"Verify the MLIR after every internal pass instead of at pipeline boundaries">;
+  HelpText<"Verify the imported MLIR, and the MLIR after every internal pass instead of at pipeline boundaries">;
 def dump_ir_before_EQ : Joined<["--"], "dump-ir-before=">,
   Group<Diagnostic_Group>, Flags<[HelpHidden]>, MetaVarName<"<pass>">,
   HelpText<"Write the module to --dump-ir-path before the first run of <pass> and exit">;
