@@ -98,8 +98,7 @@ template <typename Update> class TimedUpdateQueue {
   std::array<std::unique_ptr<Heap>, 2> heaps;
 
   static size_t regionIndex(uint32_t region) {
-    assert(region == TALOS_RT_REGION_NBA ||
-           region == TALOS_RT_REGION_RE_NBA);
+    assert(region == TALOS_RT_REGION_NBA || region == TALOS_RT_REGION_RE_NBA);
     return region == TALOS_RT_REGION_NBA ? 0 : 1;
   }
 

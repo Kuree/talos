@@ -1237,9 +1237,8 @@ public:
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(
-                rewriter.getContext(),
-                "talos_rt_v1_covergroup_set_type_string_option"),
+            SymbolRefAttr::get(rewriter.getContext(),
+                               "talos_rt_v1_covergroup_set_type_string_option"),
             ValueRange{context,
                        llvmConstant(rewriter, op.getLoc(),
                                     rewriter.getI64Type(), op.getTypeId()),
@@ -1361,8 +1360,7 @@ public:
         : covergroup       ? TALOS_RT_FUNCTIONAL_VALUE_COVERGROUP
         : string           ? TALOS_RT_FUNCTIONAL_VALUE_STRING
         : container        ? TALOS_RT_FUNCTIONAL_VALUE_MANAGED_CONTAINER
-        : op.getResult().getType().isF32()
-            ? TALOS_RT_FUNCTIONAL_VALUE_SHORTREAL
+        : op.getResult().getType().isF32() ? TALOS_RT_FUNCTIONAL_VALUE_SHORTREAL
         : op.getResult().getType().isF64() ? TALOS_RT_FUNCTIONAL_VALUE_REAL
         : convertedTypes.size() == 2 ? TALOS_RT_FUNCTIONAL_VALUE_FOUR_STATE
                                      : TALOS_RT_FUNCTIONAL_VALUE_INTEGRAL;

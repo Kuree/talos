@@ -212,10 +212,8 @@ ABI_OFFSET(talos_rt_observer_descriptor_v1, capture_abi, 8);
 ABI_OFFSET(talos_rt_observer_descriptor_v1, capture_count, ABI_PTR(16, 12));
 ABI_OFFSET(talos_rt_observer_descriptor_v1, result_width, ABI_PTR(20, 16));
 ABI_OFFSET(talos_rt_observer_descriptor_v1, flags, ABI_PTR(24, 20));
-ABI_OFFSET(talos_rt_observer_descriptor_v1, bytecode_function,
-           ABI_PTR(28, 24));
-ABI_OFFSET(talos_rt_observer_descriptor_v1, native_evaluator,
-           ABI_PTR(32, 28));
+ABI_OFFSET(talos_rt_observer_descriptor_v1, bytecode_function, ABI_PTR(28, 24));
+ABI_OFFSET(talos_rt_observer_descriptor_v1, native_evaluator, ABI_PTR(32, 28));
 ABI_OFFSET(talos_rt_observer_descriptor_v1, reserved, ABI_PTR(40, 32));
 ABI_SIZE_ALIGN(talos_rt_sampled_range_v1, 24, 8);
 ABI_OFFSET(talos_rt_sampled_range_v1, source_bit_offset, 0);
@@ -557,8 +555,7 @@ ABI_OFFSET(talos_rt_process_spawn_plan_v1, program_owner, ABI_PTR(40, 32));
 ABI_OFFSET(talos_rt_process_spawn_plan_v1, schedule_flags, ABI_PTR(48, 40));
 ABI_OFFSET(talos_rt_process_spawn_plan_v1, actor_slot, ABI_PTR(52, 44));
 ABI_OFFSET(talos_rt_process_spawn_plan_v1, initial_rank, ABI_PTR(56, 48));
-ABI_OFFSET(talos_rt_process_spawn_plan_v1, continuation_count,
-           ABI_PTR(60, 52));
+ABI_OFFSET(talos_rt_process_spawn_plan_v1, continuation_count, ABI_PTR(60, 52));
 ABI_OFFSET(talos_rt_process_spawn_plan_v1, bytecode_continuation_count,
            ABI_PTR(64, 56));
 ABI_OFFSET(talos_rt_process_spawn_plan_v1, options, ABI_PTR(68, 60));
@@ -671,8 +668,7 @@ ABI_OFFSET(talos_rt_native_clock_kernel, ingress_mask, 24);
 ABI_OFFSET(talos_rt_native_clock_kernel, ingress_word_count, ABI_PTR(32, 28));
 ABI_OFFSET(talos_rt_native_clock_kernel, reserved, ABI_PTR(36, 32));
 ABI_OFFSET(talos_rt_native_clock_kernel, active_mask, ABI_PTR(40, 36));
-ABI_SIZE_ALIGN(talos_rt_native_merged_fragment, ABI_PTR(32, 28),
-               ABI_PTR(8, 4));
+ABI_SIZE_ALIGN(talos_rt_native_merged_fragment, ABI_PTR(32, 28), ABI_PTR(8, 4));
 ABI_OFFSET(talos_rt_native_merged_fragment, actor_slot, 0);
 ABI_OFFSET(talos_rt_native_merged_fragment, continuation, 4);
 ABI_OFFSET(talos_rt_native_merged_fragment, kernel, 8);
@@ -694,8 +690,7 @@ ABI_SIZE_ALIGN(talos_rt_native_promotion_certificate, ABI_PTR(40, 24), 8);
 ABI_OFFSET(talos_rt_native_promotion_certificate, latch, 0);
 ABI_OFFSET(talos_rt_native_promotion_certificate, word, ABI_PTR(8, 4));
 ABI_OFFSET(talos_rt_native_promotion_certificate, mask, ABI_PTR(16, 8));
-ABI_OFFSET(talos_rt_native_promotion_certificate, route_slot,
-           ABI_PTR(24, 16));
+ABI_OFFSET(talos_rt_native_promotion_certificate, route_slot, ABI_PTR(24, 16));
 ABI_OFFSET(talos_rt_native_promotion_certificate, fallback, ABI_PTR(32, 20));
 ABI_SIZE_ALIGN(talos_rt_native_ordered_nba_bridge, ABI_PTR(16, 8),
                ABI_PTR(8, 4));
@@ -723,8 +718,7 @@ ABI_OFFSET(talos_rt_native_schedule_plan, fanout_entries, ABI_PTR(120, 96));
 ABI_OFFSET(talos_rt_native_schedule_plan, fanout_entry_count,
            ABI_PTR(128, 104));
 ABI_OFFSET(talos_rt_native_schedule_plan, actor_roots, ABI_PTR(136, 112));
-ABI_OFFSET(talos_rt_native_schedule_plan, actor_root_count,
-           ABI_PTR(144, 120));
+ABI_OFFSET(talos_rt_native_schedule_plan, actor_root_count, ABI_PTR(144, 120));
 ABI_OFFSET(talos_rt_native_schedule_plan, nba_commit, ABI_PTR(152, 128));
 ABI_OFFSET(talos_rt_native_schedule_plan, specialization_fast,
            ABI_PTR(160, 132));
@@ -733,8 +727,7 @@ ABI_OFFSET(talos_rt_native_schedule_plan, nba_dirty_word_count,
            ABI_PTR(176, 140));
 ABI_OFFSET(talos_rt_native_schedule_plan, nba_dirty_reserved,
            ABI_PTR(180, 144));
-ABI_OFFSET(talos_rt_native_schedule_plan, nba_dirty_summary,
-           ABI_PTR(184, 148));
+ABI_OFFSET(talos_rt_native_schedule_plan, nba_dirty_summary, ABI_PTR(184, 148));
 ABI_OFFSET(talos_rt_native_schedule_plan, nba_dirty_summary_word_count,
            ABI_PTR(192, 152));
 ABI_OFFSET(talos_rt_native_schedule_plan, nba_dirty_summary_reserved,
@@ -744,8 +737,7 @@ ABI_OFFSET(talos_rt_native_schedule_plan, clock_kernel_count,
            ABI_PTR(208, 164));
 ABI_OFFSET(talos_rt_native_schedule_plan, clock_kernel_reserved,
            ABI_PTR(212, 168));
-ABI_OFFSET(talos_rt_native_schedule_plan, merged_fragments,
-           ABI_PTR(216, 172));
+ABI_OFFSET(talos_rt_native_schedule_plan, merged_fragments, ABI_PTR(216, 172));
 ABI_OFFSET(talos_rt_native_schedule_plan, merged_fragment_count,
            ABI_PTR(224, 176));
 ABI_OFFSET(talos_rt_native_schedule_plan, timeslot_coordinator,
@@ -757,8 +749,7 @@ ABI_OFFSET(talos_rt_native_schedule_plan, promotion_invalidate_range,
            ABI_PTR(256, 196));
 ABI_OFFSET(talos_rt_native_schedule_plan, promotion_recheck_range,
            ABI_PTR(264, 200));
-ABI_OFFSET(talos_rt_native_schedule_plan, nba_ordered_count,
-           ABI_PTR(272, 204));
+ABI_OFFSET(talos_rt_native_schedule_plan, nba_ordered_count, ABI_PTR(272, 204));
 ABI_OFFSET(talos_rt_native_schedule_plan, nba_ordered_bridge,
            ABI_PTR(280, 208));
 
@@ -956,9 +947,9 @@ static_assert(TALOS_RT_SEEK_SET == 0);
 static_assert(TALOS_RT_SEEK_CUR == 1);
 static_assert(TALOS_RT_SEEK_END == 2);
 
-using NativeFragment = talos_rt_status (*)(talos_rt_context *, void *,
-                                             uint64_t, uint32_t,
-                                             talos_rt_fragment_action_v1 *);
+using NativeFragment = talos_rt_status (*)(talos_rt_context *, void *, uint64_t,
+                                           uint32_t,
+                                           talos_rt_fragment_action_v1 *);
 static_assert(std::is_same_v<talos_rt_native_fragment_v1, NativeFragment>);
 
 #define ABI_FUNCTION(Name, Type)                                               \
@@ -972,9 +963,9 @@ ABI_OFFSET(talos_rt_native_state_fill_v1, value, 16);
 ABI_OFFSET(talos_rt_native_state_fill_v1, unknown, 24);
 ABI_FUNCTION(talos_rt_v1_native_state_initialize,
              talos_rt_status (*)(talos_rt_context *, uint8_t *, uint8_t *,
-                                   uint64_t,
-                                   const talos_rt_native_state_fill_v1 *,
-                                   uint64_t));
+                                 uint64_t,
+                                 const talos_rt_native_state_fill_v1 *,
+                                 uint64_t));
 ABI_SIZE_ALIGN(talos_rt_native_unknown_root_v1, 24, 8);
 ABI_OFFSET(talos_rt_native_unknown_root_v1, bit_offset, 0);
 ABI_OFFSET(talos_rt_native_unknown_root_v1, bit_width, 8);
@@ -982,9 +973,9 @@ ABI_OFFSET(talos_rt_native_unknown_root_v1, first_pattern, 16);
 ABI_OFFSET(talos_rt_native_unknown_root_v1, pattern_count, 20);
 ABI_FUNCTION(talos_rt_v1_native_state_bind_unknown_summary,
              talos_rt_status (*)(talos_rt_context *, uint8_t *, uint64_t,
-                                   uint64_t *,
-                                   const talos_rt_native_unknown_root_v1 *,
-                                   uint64_t, const uint64_t *, uint64_t));
+                                 uint64_t *,
+                                 const talos_rt_native_unknown_root_v1 *,
+                                 uint64_t, const uint64_t *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_native_state_refresh_unknown_summary,
              uint32_t (*)(talos_rt_context *, const uint64_t *, uint64_t,
                           uint64_t *));
@@ -994,56 +985,54 @@ ABI_FUNCTION(talos_rt_v1_native_state_mark_unknown,
 ABI_FUNCTION(talos_rt_v1_context_create,
              talos_rt_status (*)(talos_rt_context **));
 ABI_FUNCTION(talos_rt_v1_context_configure_argv,
-             talos_rt_status (*)(talos_rt_context *, int,
-                                   const char *const *));
+             talos_rt_status (*)(talos_rt_context *, int, const char *const *));
 ABI_FUNCTION(talos_rt_v1_coverage_finalize,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint64_t,
-                                   const uint8_t *, const uint8_t *, uint32_t));
+                                 const uint8_t *, const uint8_t *, uint32_t));
 ABI_FUNCTION(talos_rt_v1_coverage_point_hit,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint32_t));
 ABI_FUNCTION(talos_rt_v1_coverage_toggle_transition,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint64_t,
-                                   const uint8_t *, const uint8_t *));
+                                 const uint8_t *, const uint8_t *));
 ABI_FUNCTION(talos_rt_v1_coverage_fsm_bind,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint64_t,
-                                   uint64_t, uint64_t));
+                                 uint64_t, uint64_t));
 ABI_FUNCTION(talos_rt_v1_coverage_toggle_bind,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint64_t,
-                                   uint64_t));
+                                 uint64_t));
 ABI_FUNCTION(talos_rt_v1_coverage_toggle_seal,
              talos_rt_status (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_coverage_reset,
              talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_coverage_metric_v1,
-                                   const uint8_t *, const uint8_t *));
+                                 talos_rt_coverage_metric_v1, const uint8_t *,
+                                 const uint8_t *));
 ABI_FUNCTION(talos_rt_v1_coverage_query,
              talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_coverage_metric_v1, uint64_t *,
-                                   uint64_t *, double *));
+                                 talos_rt_coverage_metric_v1, uint64_t *,
+                                 uint64_t *, double *));
 ABI_FUNCTION(talos_rt_v1_coverage_control_definition,
-             talos_rt_status (*)(talos_rt_context *, int32_t, int32_t,
-                                   int32_t, talos_rt_string_v1, int32_t *));
+             talos_rt_status (*)(talos_rt_context *, int32_t, int32_t, int32_t,
+                                 talos_rt_string_v1, int32_t *));
 ABI_FUNCTION(talos_rt_v1_coverage_control_instance,
-             talos_rt_status (*)(talos_rt_context *, int32_t, int32_t,
-                                   int32_t, uint64_t, int32_t *));
+             talos_rt_status (*)(talos_rt_context *, int32_t, int32_t, int32_t,
+                                 uint64_t, int32_t *));
 ABI_FUNCTION(talos_rt_v1_coverage_query_definition,
              talos_rt_status (*)(talos_rt_context *, int32_t, int32_t,
-                                   talos_rt_string_v1, uint32_t, int32_t *));
+                                 talos_rt_string_v1, uint32_t, int32_t *));
 ABI_FUNCTION(talos_rt_v1_coverage_query_instance,
-             talos_rt_status (*)(talos_rt_context *, int32_t, int32_t,
-                                   uint64_t, uint32_t, int32_t *));
+             talos_rt_status (*)(talos_rt_context *, int32_t, int32_t, uint64_t,
+                                 uint32_t, int32_t *));
 ABI_FUNCTION(talos_rt_v1_coverage_database_save,
              talos_rt_status (*)(talos_rt_context *, int32_t,
-                                   talos_rt_string_v1, int32_t *));
+                                 talos_rt_string_v1, int32_t *));
 ABI_FUNCTION(talos_rt_v1_coverage_database_merge,
              talos_rt_status (*)(talos_rt_context *, int32_t,
-                                   talos_rt_string_v1, int32_t *));
+                                 talos_rt_string_v1, int32_t *));
 ABI_FUNCTION(talos_rt_v1_coverage_load,
-             talos_rt_status (*)(talos_rt_context *, const char *,
-                                   uint64_t));
+             talos_rt_status (*)(talos_rt_context *, const char *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_coverage_save,
              talos_rt_status (*)(talos_rt_context *, const char *, uint64_t,
-                                   uint32_t, uint64_t));
+                                 uint32_t, uint64_t));
 ABI_FUNCTION(talos_rt_v1_coverage_snapshot,
              talos_rt_status (*)(talos_rt_context *, uint32_t, uint64_t));
 ABI_SIZE_ALIGN(talos_rt_functional_value_v1, ABI_PTR(64, 56), 8);
@@ -1062,67 +1051,64 @@ ABI_OFFSET(talos_rt_functional_value_v1, argument_ref_kind, ABI_PTR(60, 52));
 #undef ABI_SIZE_ALIGN
 ABI_FUNCTION(talos_rt_v1_covergroup_prepare,
              talos_rt_status (*)(talos_rt_context *, uint64_t,
-                                   const talos_rt_functional_value_v1 *,
-                                   uint64_t, uint64_t *));
+                                 const talos_rt_functional_value_v1 *, uint64_t,
+                                 uint64_t *));
 ABI_FUNCTION(talos_rt_v1_covergroup_candidates,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint64_t,
-                                   talos_rt_object_v1 *, uint32_t));
+                                 talos_rt_object_v1 *, uint32_t));
 ABI_FUNCTION(talos_rt_v1_covergroup_bind_with,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint64_t,
-                                   talos_rt_object_v1 *));
+                                 talos_rt_object_v1 *));
 ABI_FUNCTION(talos_rt_v1_covergroup_release_preparation,
              talos_rt_status (*)(talos_rt_context *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_covergroup_create,
              talos_rt_status (*)(talos_rt_context *, uint64_t,
-                                   const talos_rt_functional_value_v1 *,
-                                   uint64_t,
-                                   const talos_rt_functional_value_v1 *,
-                                   uint64_t, talos_rt_covergroup_v1 *));
+                                 const talos_rt_functional_value_v1 *, uint64_t,
+                                 const talos_rt_functional_value_v1 *, uint64_t,
+                                 talos_rt_covergroup_v1 *));
 ABI_FUNCTION(talos_rt_v1_covergroup_set_enabled,
-             talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_covergroup_v1, uint64_t,
-                                   uint32_t));
+             talos_rt_status (*)(talos_rt_context *, talos_rt_covergroup_v1,
+                                 uint64_t, uint32_t));
 ABI_FUNCTION(talos_rt_v1_covergroup_set_name,
-             talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_covergroup_v1,
-                                   talos_rt_string_v1));
+             talos_rt_status (*)(talos_rt_context *, talos_rt_covergroup_v1,
+                                 talos_rt_string_v1));
 ABI_FUNCTION(talos_rt_v1_covergroup_set_integer_option,
-             talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_covergroup_v1, uint64_t,
-                                   talos_rt_covergroup_instance_option_v1,
-                                   int64_t));
+             talos_rt_status (*)(talos_rt_context *, talos_rt_covergroup_v1,
+                                 uint64_t,
+                                 talos_rt_covergroup_instance_option_v1,
+                                 int64_t));
 ABI_FUNCTION(talos_rt_v1_covergroup_get_integer_option,
-             talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_covergroup_v1, uint64_t,
-                                   talos_rt_covergroup_instance_option_v1,
-                                   int64_t *));
+             talos_rt_status (*)(talos_rt_context *, talos_rt_covergroup_v1,
+                                 uint64_t,
+                                 talos_rt_covergroup_instance_option_v1,
+                                 int64_t *));
 ABI_FUNCTION(talos_rt_v1_covergroup_set_string_option,
-             talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_covergroup_v1, uint64_t,
-                                   talos_rt_covergroup_instance_option_v1,
-                                   talos_rt_string_v1));
+             talos_rt_status (*)(talos_rt_context *, talos_rt_covergroup_v1,
+                                 uint64_t,
+                                 talos_rt_covergroup_instance_option_v1,
+                                 talos_rt_string_v1));
 ABI_FUNCTION(talos_rt_v1_covergroup_get_string_option,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                    talos_rt_covergroup_v1, uint64_t,
-                                    talos_rt_covergroup_instance_option_v1,
-                                    talos_rt_string_v1 *));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_covergroup_v1,
+                                 uint64_t,
+                                 talos_rt_covergroup_instance_option_v1,
+                                 talos_rt_string_v1 *));
 ABI_FUNCTION(talos_rt_v1_covergroup_set_type_integer_option,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint64_t,
-                                   talos_rt_covergroup_instance_option_v1,
-                                   int64_t));
+                                 talos_rt_covergroup_instance_option_v1,
+                                 int64_t));
 ABI_FUNCTION(talos_rt_v1_covergroup_set_type_string_option,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint64_t,
-                                   talos_rt_covergroup_instance_option_v1,
-                                   talos_rt_string_v1));
+                                 talos_rt_covergroup_instance_option_v1,
+                                 talos_rt_string_v1));
 ABI_FUNCTION(talos_rt_v1_covergroup_sample_enabled,
-             talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_covergroup_v1, uint32_t *));
+             talos_rt_status (*)(talos_rt_context *, talos_rt_covergroup_v1,
+                                 uint32_t *));
 ABI_FUNCTION(talos_rt_v1_covergroup_clock_event_register,
              talos_rt_status (*)(talos_rt_context *,
-                                   const talos_rt_computed_wait_record_v1 *,
-                                   uint64_t, uint32_t, uint64_t,
-                                   const talos_rt_computed_capture_v1 *,
-                                   uint32_t));
+                                 const talos_rt_computed_wait_record_v1 *,
+                                 uint64_t, uint32_t, uint64_t,
+                                 const talos_rt_computed_capture_v1 *,
+                                 uint32_t));
 ABI_FUNCTION(talos_rt_v1_covergroup_block_event_register,
              talos_rt_status (*)(
                  talos_rt_context *, talos_rt_covergroup_v1,
@@ -1132,26 +1118,23 @@ ABI_FUNCTION(talos_rt_v1_covergroup_block_event_register,
                  const talos_rt_covergroup_block_event_kind_v1 *, uint32_t));
 ABI_FUNCTION(talos_rt_v1_covergroup_block_event_fire,
              talos_rt_status (*)(talos_rt_context *, uint64_t,
-                                   talos_rt_covergroup_block_event_kind_v1,
-                                   talos_rt_object_v1 *));
+                                 talos_rt_covergroup_block_event_kind_v1,
+                                 talos_rt_object_v1 *));
 ABI_FUNCTION(talos_rt_v1_covergroup_sample,
-             talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_covergroup_v1,
-                                   const talos_rt_functional_value_v1 *,
-                                   uint64_t));
+             talos_rt_status (*)(talos_rt_context *, talos_rt_covergroup_v1,
+                                 const talos_rt_functional_value_v1 *,
+                                 uint64_t));
 ABI_FUNCTION(talos_rt_v1_covergroup_formal_read,
-             talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_covergroup_v1, uint64_t,
-                                   talos_rt_functional_value_kind_v1,
-                                   uint64_t, uint64_t, const uint8_t *,
-                                   const uint8_t *, uint64_t, void *, void *));
+             talos_rt_status (*)(talos_rt_context *, talos_rt_covergroup_v1,
+                                 uint64_t, talos_rt_functional_value_kind_v1,
+                                 uint64_t, uint64_t, const uint8_t *,
+                                 const uint8_t *, uint64_t, void *, void *));
 ABI_FUNCTION(talos_rt_v1_covergroup_instance_query,
-             talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_covergroup_v1, uint64_t, double *,
-                                   int32_t *, int32_t *));
+             talos_rt_status (*)(talos_rt_context *, talos_rt_covergroup_v1,
+                                 uint64_t, double *, int32_t *, int32_t *));
 ABI_FUNCTION(talos_rt_v1_covergroup_type_query,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint64_t,
-                                   double *, int32_t *, int32_t *));
+                                 double *, int32_t *, int32_t *));
 ABI_FUNCTION(talos_rt_v1_context_seed,
              talos_rt_status (*)(talos_rt_context *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_random_next,
@@ -1167,47 +1150,44 @@ ABI_FUNCTION(talos_rt_v1_random_seed,
 ABI_FUNCTION(talos_rt_v1_random_bounded,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint64_t *));
 ABI_FUNCTION(talos_rt_v1_random_solve,
-             talos_rt_status (*)(talos_rt_context *, const uint8_t *,
-                                   uint64_t, uint64_t, uint64_t,
-                                   const uint64_t *, uint64_t, uint64_t *,
-                                   uint32_t *));
+             talos_rt_status (*)(talos_rt_context *, const uint8_t *, uint64_t,
+                                 uint64_t, uint64_t, const uint64_t *, uint64_t,
+                                 uint64_t *, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_random_solve_masked,
-             talos_rt_status (*)(talos_rt_context *, const uint8_t *,
-                                   uint64_t, uint64_t, uint64_t, uint64_t,
-                                   const uint64_t *, uint64_t, uint64_t *,
-                                   uint32_t *));
+             talos_rt_status (*)(talos_rt_context *, const uint8_t *, uint64_t,
+                                 uint64_t, uint64_t, uint64_t, const uint64_t *,
+                                 uint64_t, uint64_t *, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_random_solve_modes,
-             talos_rt_status (*)(talos_rt_context *, const uint8_t *,
-                                   uint64_t, uint64_t, uint64_t, uint64_t,
-                                   uint64_t, const uint64_t *, uint64_t,
-                                   uint64_t *, uint32_t *));
+             talos_rt_status (*)(talos_rt_context *, const uint8_t *, uint64_t,
+                                 uint64_t, uint64_t, uint64_t, uint64_t,
+                                 const uint64_t *, uint64_t, uint64_t *,
+                                 uint32_t *));
 ABI_FUNCTION(talos_rt_v1_random_solve_modes_state,
-             talos_rt_status (*)(talos_rt_context *, const uint8_t *,
-                                   uint64_t, uint64_t, uint64_t, uint64_t,
-                                   uint64_t, uint64_t, uint64_t,
-                                   const uint64_t *, uint64_t, uint64_t *,
-                                   uint32_t *, uint64_t *));
+             talos_rt_status (*)(talos_rt_context *, const uint8_t *, uint64_t,
+                                 uint64_t, uint64_t, uint64_t, uint64_t,
+                                 uint64_t, uint64_t, const uint64_t *, uint64_t,
+                                 uint64_t *, uint32_t *, uint64_t *));
 ABI_FUNCTION(talos_rt_v1_random_solve_wide_modes_state,
-             talos_rt_status (*)(talos_rt_context *, const uint8_t *,
-                                   uint64_t, const uint64_t *, const uint64_t *,
-                                   uint64_t, uint64_t, uint64_t, uint64_t,
-                                   uint64_t, const uint64_t *, uint64_t,
-                                   const uint32_t *, uint64_t, uint64_t *,
-                                   uint32_t *, uint64_t *));
+             talos_rt_status (*)(talos_rt_context *, const uint8_t *, uint64_t,
+                                 const uint64_t *, const uint64_t *, uint64_t,
+                                 uint64_t, uint64_t, uint64_t, uint64_t,
+                                 const uint64_t *, uint64_t, const uint32_t *,
+                                 uint64_t, uint64_t *, uint32_t *, uint64_t *));
 ABI_FUNCTION(talos_rt_v1_random_cycle_sample,
-             talos_rt_status (*)(
-                 talos_rt_context *, const uint8_t *, uint64_t,
-                 const uint64_t *, const uint64_t *, uint64_t, uint64_t,
-                 uint64_t, uint64_t, uint64_t, uint64_t, talos_rt_string_v1,
-                 uint32_t, uint32_t, const uint64_t *, uint64_t,
-                 const uint32_t *, uint64_t, uint64_t *, uint32_t *, uint64_t *,
-                 uint64_t *, uint64_t *, talos_rt_string_v1 *));
+             talos_rt_status (*)(talos_rt_context *, const uint8_t *, uint64_t,
+                                 const uint64_t *, const uint64_t *, uint64_t,
+                                 uint64_t, uint64_t, uint64_t, uint64_t,
+                                 uint64_t, talos_rt_string_v1, uint32_t,
+                                 uint32_t, const uint64_t *, uint64_t,
+                                 const uint32_t *, uint64_t, uint64_t *,
+                                 uint32_t *, uint64_t *, uint64_t *, uint64_t *,
+                                 talos_rt_string_v1 *));
 ABI_FUNCTION(talos_rt_v1_random_get_state,
              talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_random_state_v1 *));
+                                 talos_rt_random_state_v1 *));
 ABI_FUNCTION(talos_rt_v1_random_set_state,
              talos_rt_status (*)(talos_rt_context *,
-                                   const talos_rt_random_state_v1 *));
+                                 const talos_rt_random_state_v1 *));
 ABI_FUNCTION(talos_rt_v1_random_state_seed,
              void (*)(talos_rt_random_state_v1 *, uint64_t, uint64_t));
 ABI_FUNCTION(talos_rt_v1_random_state_next32,
@@ -1216,7 +1196,7 @@ ABI_FUNCTION(talos_rt_v1_random_state_next64,
              uint64_t (*)(talos_rt_random_state_v1 *));
 ABI_FUNCTION(talos_rt_v1_random_state_bounded,
              talos_rt_status (*)(talos_rt_random_state_v1 *, uint64_t,
-                                   uint64_t *));
+                                 uint64_t *));
 ABI_FUNCTION(talos_rt_v1_random_real64_to_rank,
              talos_rt_status (*)(double, uint64_t *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_random_real32_to_rank,
@@ -1227,26 +1207,25 @@ ABI_FUNCTION(talos_rt_v1_random_real32_from_rank,
              talos_rt_status (*)(const uint64_t *, uint64_t, float *));
 ABI_FUNCTION(talos_rt_v1_random_real64_interval,
              talos_rt_status (*)(talos_rt_random_state_v1 *, double, double,
-                                   uint32_t, double *, uint32_t *));
+                                 uint32_t, double *, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_random_real32_interval,
              talos_rt_status (*)(talos_rt_random_state_v1 *, float, float,
-                                   uint32_t, float *, uint32_t *));
+                                 uint32_t, float *, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_sampled_read,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint64_t,
-                                   uint8_t *, uint8_t *));
+                                 uint8_t *, uint8_t *));
 ABI_FUNCTION(talos_rt_v1_sampled_history,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint64_t,
-                                   uint64_t, uint32_t, uint32_t,
-                                   const uint8_t *, const uint8_t *, uint8_t *,
-                                   uint8_t *));
+                                 uint64_t, uint32_t, uint32_t, const uint8_t *,
+                                 const uint8_t *, uint8_t *, uint8_t *));
 ABI_FUNCTION(talos_rt_v1_clocked_sample_update,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint64_t,
-                                   uint64_t, uint32_t, uint32_t,
-                                   const uint8_t *, const uint8_t *));
+                                 uint64_t, uint32_t, uint32_t, const uint8_t *,
+                                 const uint8_t *));
 ABI_FUNCTION(talos_rt_v1_clocked_sample_read,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint64_t,
-                                   uint64_t, uint64_t, uint32_t, uint8_t *,
-                                   uint8_t *));
+                                 uint64_t, uint64_t, uint32_t, uint8_t *,
+                                 uint8_t *));
 ABI_FUNCTION(talos_rt_v1_assertion_control,
              talos_rt_status (*)(talos_rt_context *, uint32_t, uint64_t));
 ABI_FUNCTION(talos_rt_v1_assertion_enabled,
@@ -1257,42 +1236,42 @@ ABI_FUNCTION(talos_rt_v1_assertion_kill_epoch,
              uint64_t (*)(talos_rt_context *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_context_create_for_design,
              talos_rt_status (*)(const talos_rt_execution_descriptor_v1 *,
-                                   talos_rt_context **));
+                                 talos_rt_context **));
 ABI_FUNCTION(talos_rt_v1_import_id, uint32_t (*)(const uint8_t *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_context_register_import,
              talos_rt_status (*)(talos_rt_context *, uint32_t,
-                                   talos_rt_import_callback_v1, void *));
+                                 talos_rt_import_callback_v1, void *));
 ABI_FUNCTION(talos_rt_v1_context_register_import_signature,
              talos_rt_status (*)(talos_rt_context *, uint32_t, uint64_t,
-                                   talos_rt_import_callback_v1, void *));
+                                 talos_rt_import_callback_v1, void *));
 ABI_FUNCTION(talos_rt_v1_import_call,
              talos_rt_status (*)(talos_rt_context *,
-                                   const talos_rt_import_site_v1 *,
-                                   const talos_rt_import_input_v1 *, uint32_t,
-                                   talos_rt_import_output_v1 *, uint32_t));
+                                 const talos_rt_import_site_v1 *,
+                                 const talos_rt_import_input_v1 *, uint32_t,
+                                 talos_rt_import_output_v1 *, uint32_t));
 ABI_FUNCTION(talos_rt_v1_import_call_noncontext,
              talos_rt_status (*)(talos_rt_context *,
-                                   const talos_rt_import_site_v1 *,
-                                   const talos_rt_import_input_v1 *, uint32_t,
-                                   talos_rt_import_output_v1 *, uint32_t));
+                                 const talos_rt_import_site_v1 *,
+                                 const talos_rt_import_input_v1 *, uint32_t,
+                                 talos_rt_import_output_v1 *, uint32_t));
 ABI_FUNCTION(talos_rt_v1_import_call_guarded,
              talos_rt_status (*)(talos_rt_status, talos_rt_context *,
-                                   const talos_rt_import_site_v1 *,
-                                   const talos_rt_import_input_v1 *, uint32_t,
-                                   talos_rt_import_output_v1 *, uint32_t));
+                                 const talos_rt_import_site_v1 *,
+                                 const talos_rt_import_input_v1 *, uint32_t,
+                                 talos_rt_import_output_v1 *, uint32_t));
 ABI_FUNCTION(talos_rt_v1_import_call_noncontext_guarded,
              talos_rt_status (*)(talos_rt_status, talos_rt_context *,
-                                   const talos_rt_import_site_v1 *,
-                                   const talos_rt_import_input_v1 *, uint32_t,
-                                   talos_rt_import_output_v1 *, uint32_t));
+                                 const talos_rt_import_site_v1 *,
+                                 const talos_rt_import_input_v1 *, uint32_t,
+                                 talos_rt_import_output_v1 *, uint32_t));
 ABI_FUNCTION(talos_rt_v1_export_call,
              talos_rt_status (*)(uint32_t, uint64_t,
-                                   const talos_rt_import_input_v1 *, uint32_t,
-                                   talos_rt_import_output_v1 *, uint32_t));
+                                 const talos_rt_import_input_v1 *, uint32_t,
+                                 talos_rt_import_output_v1 *, uint32_t));
 ABI_FUNCTION(talos_rt_v1_export_call_guarded,
              talos_rt_status (*)(talos_rt_status, uint32_t, uint64_t,
-                                   const talos_rt_import_input_v1 *, uint32_t,
-                                   talos_rt_import_output_v1 *, uint32_t));
+                                 const talos_rt_import_input_v1 *, uint32_t,
+                                 talos_rt_import_output_v1 *, uint32_t));
 ABI_FUNCTION(talos_rt_v1_dpi_export_status,
              talos_rt_status (*)(talos_rt_status));
 ABI_FUNCTION(talos_rt_v1_export_string, const char *(*)(uint32_t));
@@ -1302,27 +1281,26 @@ ABI_FUNCTION(talos_rt_v1_dpi_export_pack_vector,
              void (*)(void *, const void *, const void *, uint32_t, uint32_t));
 ABI_FUNCTION(talos_rt_v1_dpi_string_copy,
              talos_rt_status (*)(talos_rt_context *, const char *,
-                                   talos_rt_string_v1 *));
+                                 talos_rt_string_v1 *));
 ABI_FUNCTION(talos_rt_v1_context_destroy, void (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_status_string, const char *(*)(talos_rt_status));
 ABI_FUNCTION(talos_rt_v1_buffer_release, void (*)(talos_rt_buffer_v1 *));
 ABI_FUNCTION(talos_rt_v1_last_error,
-             talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_buffer_v1 *));
+             talos_rt_status (*)(talos_rt_context *, talos_rt_buffer_v1 *));
 ABI_FUNCTION(talos_rt_v1_format,
              talos_rt_status (*)(talos_rt_context *, const char *, uint64_t,
-                                   const talos_rt_arg_v1 *, uint64_t,
-                                   const talos_rt_format_env_v1 *,
-                                   talos_rt_buffer_v1 *));
+                                 const talos_rt_arg_v1 *, uint64_t,
+                                 const talos_rt_format_env_v1 *,
+                                 talos_rt_buffer_v1 *));
 ABI_FUNCTION(talos_rt_v1_string_output_format,
              talos_rt_status (*)(talos_rt_context *, talos_rt_radix,
-                                   const talos_rt_arg_v1 *, uint64_t,
-                                   const talos_rt_format_env_v1 *,
-                                   talos_rt_string_v1 *));
+                                 const talos_rt_arg_v1 *, uint64_t,
+                                 const talos_rt_format_env_v1 *,
+                                 talos_rt_string_v1 *));
 ABI_FUNCTION(talos_rt_v1_display,
              talos_rt_status (*)(talos_rt_context *, uint32_t, uint32_t,
-                                   talos_rt_radix, const talos_rt_arg_v1 *,
-                                   uint64_t, const talos_rt_format_env_v1 *));
+                                 talos_rt_radix, const talos_rt_arg_v1 *,
+                                 uint64_t, const talos_rt_format_env_v1 *));
 ABI_FUNCTION(talos_rt_v1_time_scan_scale,
              double (*)(talos_rt_context *, double, uint64_t, int32_t));
 ABI_FUNCTION(talos_rt_v1_monitor_register,
@@ -1350,7 +1328,7 @@ ABI_FUNCTION(talos_rt_v1_vpi_object_model,
              const talos_rt_vpi_object_model_v1 *(*)(void));
 ABI_FUNCTION(talos_rt_v1_vpi_startup,
              talos_rt_status (*)(talos_rt_context *, const char *const *,
-                                   uint64_t));
+                                 uint64_t));
 ABI_FUNCTION(talos_rt_v1_vpi_end_compile,
              talos_rt_status (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_vpi_start_simulation,
@@ -1360,7 +1338,7 @@ ABI_FUNCTION(talos_rt_v1_vpi_end_simulation,
 ABI_FUNCTION(talos_rt_v1_vpi_shutdown, void (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_vpi_frame_enter,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint32_t,
-                                   uint64_t, uint64_t *));
+                                 uint64_t, uint64_t *));
 ABI_FUNCTION(talos_rt_v1_vpi_call_prepare,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint64_t *));
 ABI_FUNCTION(talos_rt_v1_vpi_resolution_prepare,
@@ -1369,14 +1347,14 @@ ABI_FUNCTION(talos_rt_v1_vpi_export_prepare,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint64_t *));
 ABI_FUNCTION(talos_rt_v1_vpi_frame_enter_prepared,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint32_t,
-                                   uint64_t *));
+                                 uint64_t *));
 ABI_FUNCTION(talos_rt_v1_vpi_call_finish,
              talos_rt_status (*)(talos_rt_context *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_vpi_frame_bind,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint64_t));
 ABI_FUNCTION(talos_rt_v1_vpi_frame_bind_alias,
              talos_rt_status (*)(talos_rt_context *, uint64_t,
-                                   talos_rt_object_v1 *, uint64_t, uint32_t));
+                                 talos_rt_object_v1 *, uint64_t, uint32_t));
 ABI_FUNCTION(talos_rt_v1_vpi_frame_checkpoint,
              talos_rt_status (*)(talos_rt_context *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_vpi_frame_leave,
@@ -1394,225 +1372,214 @@ ABI_FUNCTION(talos_rt_v1_dump_open_string,
              talos_rt_status (*)(talos_rt_context *, talos_rt_string_v1));
 ABI_FUNCTION(talos_rt_v1_dump_ports,
              talos_rt_status (*)(talos_rt_context *, talos_rt_string_v1,
-                                   talos_rt_string_v1, int32_t));
+                                 talos_rt_string_v1, int32_t));
 ABI_FUNCTION(talos_rt_v1_dump_ports_control,
              talos_rt_status (*)(talos_rt_context *, talos_rt_string_v1,
-                                   uint32_t, uint64_t));
+                                 uint32_t, uint64_t));
 ABI_FUNCTION(talos_rt_v1_file_open_mcd,
              talos_rt_status (*)(talos_rt_context *, const char *, uint64_t,
-                                   uint32_t *));
+                                 uint32_t *));
 ABI_FUNCTION(talos_rt_v1_file_open,
              talos_rt_status (*)(talos_rt_context *, const char *, uint64_t,
-                                   const char *, uint64_t, uint32_t *));
+                                 const char *, uint64_t, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_file_open_string_mcd,
              talos_rt_status (*)(talos_rt_context *, talos_rt_string_v1,
-                                   uint32_t *));
+                                 uint32_t *));
 ABI_FUNCTION(talos_rt_v1_file_open_string,
              talos_rt_status (*)(talos_rt_context *, talos_rt_string_v1,
-                                   talos_rt_string_v1, uint32_t *));
+                                 talos_rt_string_v1, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_file_close,
              talos_rt_status (*)(talos_rt_context *, uint32_t));
 ABI_FUNCTION(talos_rt_v1_file_flush,
              talos_rt_status (*)(talos_rt_context *, uint32_t));
 ABI_FUNCTION(talos_rt_v1_file_write,
              talos_rt_status (*)(talos_rt_context *, uint32_t, const void *,
-                                   uint64_t, uint64_t *));
+                                 uint64_t, uint64_t *));
 ABI_FUNCTION(talos_rt_v1_file_read,
-             talos_rt_status (*)(talos_rt_context *, uint32_t, void *,
-                                   uint64_t, uint64_t *));
+             talos_rt_status (*)(talos_rt_context *, uint32_t, void *, uint64_t,
+                                 uint64_t *));
 ABI_FUNCTION(talos_rt_v1_file_readmem_token,
              talos_rt_status (*)(talos_rt_context *, uint32_t, uint32_t,
-                                   uint64_t, void *, uint64_t, void *, uint64_t,
-                                   uint32_t *, uint64_t *));
+                                 uint64_t, void *, uint64_t, void *, uint64_t,
+                                 uint32_t *, uint64_t *));
 ABI_FUNCTION(talos_rt_v1_file_getc,
              talos_rt_status (*)(talos_rt_context *, uint32_t, uint8_t *));
 ABI_FUNCTION(talos_rt_v1_file_ungetc,
              talos_rt_status (*)(talos_rt_context *, uint32_t, uint8_t));
 ABI_FUNCTION(talos_rt_v1_file_getline,
              talos_rt_status (*)(talos_rt_context *, uint32_t, uint64_t,
-                                   talos_rt_buffer_v1 *));
+                                 talos_rt_buffer_v1 *));
 ABI_FUNCTION(talos_rt_v1_file_getline_string,
-             talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_gc_lane_v1 *, uint32_t,
-                                   talos_rt_string_v1 *, uint32_t *));
+             talos_rt_status (*)(talos_rt_context *, talos_rt_gc_lane_v1 *,
+                                 uint32_t, talos_rt_string_v1 *, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_file_scan_field,
-             talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_gc_lane_v1 *, uint32_t, uint32_t,
-                                   const char *, uint64_t, uint32_t, uint64_t,
-                                   talos_rt_string_v1 *, uint32_t *,
-                                   uint32_t *));
+             talos_rt_status (*)(talos_rt_context *, talos_rt_gc_lane_v1 *,
+                                 uint32_t, uint32_t, const char *, uint64_t,
+                                 uint32_t, uint64_t, talos_rt_string_v1 *,
+                                 uint32_t *, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_file_scan_dynamic,
-             talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_gc_lane_v1 *, uint32_t,
-                                   talos_rt_string_v1, uint32_t, uint32_t,
-                                   uint32_t, uint64_t, uint64_t, uint64_t,
-                                   talos_rt_string_v1 *, uint32_t *,
-                                   uint32_t *, uint32_t *, uint32_t *));
+             talos_rt_status (*)(talos_rt_context *, talos_rt_gc_lane_v1 *,
+                                 uint32_t, talos_rt_string_v1, uint32_t,
+                                 uint32_t, uint32_t, uint64_t, uint64_t,
+                                 uint64_t, talos_rt_string_v1 *, uint32_t *,
+                                 uint32_t *, uint32_t *, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_file_scan_raw,
              talos_rt_status (*)(talos_rt_context *, uint32_t, uint32_t,
-                                   const char *, uint64_t, uint64_t, uint64_t,
-                                   uint32_t, uint64_t, void *, uint64_t, void *,
-                                   uint64_t, uint32_t *, uint32_t *));
+                                 const char *, uint64_t, uint64_t, uint64_t,
+                                 uint32_t, uint64_t, void *, uint64_t, void *,
+                                 uint64_t, uint32_t *, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_file_eof,
              talos_rt_status (*)(talos_rt_context *, uint32_t, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_file_error,
              talos_rt_status (*)(talos_rt_context *, uint32_t, int32_t *,
-                                   talos_rt_buffer_v1 *));
+                                 talos_rt_buffer_v1 *));
 ABI_FUNCTION(talos_rt_v1_file_seek,
              talos_rt_status (*)(talos_rt_context *, uint32_t, int64_t,
-                                   talos_rt_seek_origin));
+                                 talos_rt_seek_origin));
 ABI_FUNCTION(talos_rt_v1_file_tell,
              talos_rt_status (*)(talos_rt_context *, uint32_t, int64_t *));
 ABI_FUNCTION(talos_rt_v1_file_rewind,
              talos_rt_status (*)(talos_rt_context *, uint32_t));
 ABI_FUNCTION(talos_rt_v1_fragment_execute,
              talos_rt_status (*)(const talos_rt_fragment_descriptor_v1 *,
-                                   talos_rt_context *, void *, uint64_t,
-                                   uint32_t, talos_rt_fragment_action_v1 *));
+                                 talos_rt_context *, void *, uint64_t, uint32_t,
+                                 talos_rt_fragment_action_v1 *));
 ABI_FUNCTION(talos_rt_v1_bytecode_execute_bounded,
              talos_rt_status (*)(const talos_rt_fragment_descriptor_v1 *,
-                                   talos_rt_context *, void *, uint64_t,
-                                   uint32_t, uint64_t,
-                                   talos_rt_fragment_action_v1 *));
+                                 talos_rt_context *, void *, uint64_t, uint32_t,
+                                 uint64_t, talos_rt_fragment_action_v1 *));
 ABI_FUNCTION(talos_rt_v1_process_instance_create,
              talos_rt_status (*)(const talos_rt_process_descriptor_v1 *,
-                                   talos_rt_process_instance_v1 **));
+                                 talos_rt_process_instance_v1 **));
 ABI_FUNCTION(talos_rt_v1_process_spawn,
              uint64_t (*)(talos_rt_context *,
                           const talos_rt_process_spawn_plan_v1 *,
                           const void *));
 ABI_FUNCTION(talos_rt_v1_process_spawn_batch,
              talos_rt_status (*)(talos_rt_context *,
-                                   const talos_rt_process_spawn_entry_v1 *,
-                                   const void *, uint32_t));
+                                 const talos_rt_process_spawn_entry_v1 *,
+                                 const void *, uint32_t));
 ABI_FUNCTION(talos_rt_v1_process_instance_frame,
              talos_rt_status (*)(talos_rt_process_instance_v1 *, void **,
-                                   uint64_t *));
+                                 uint64_t *));
 ABI_FUNCTION(talos_rt_v1_process_instance_execute,
              talos_rt_status (*)(talos_rt_process_instance_v1 *,
-                                   talos_rt_context *,
-                                   talos_rt_execution_tier,
-                                   talos_rt_fragment_action_v1 *));
+                                 talos_rt_context *, talos_rt_execution_tier,
+                                 talos_rt_fragment_action_v1 *));
 ABI_FUNCTION(talos_rt_v1_process_instance_destroy,
              talos_rt_status (*)(talos_rt_process_instance_v1 *));
 ABI_FUNCTION(talos_rt_v1_dpi_export_task_run,
              talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_process_instance_v1 *));
+                                 talos_rt_process_instance_v1 *));
 ABI_FUNCTION(talos_rt_v1_dpi_export_task_bytecode_run,
              talos_rt_status (*)(talos_rt_context *, uint32_t,
-                                   const talos_rt_import_input_v1 *, uint32_t,
-                                   talos_rt_import_output_v1 *, uint32_t,
-                                   const uint8_t *, const int64_t *const *,
-                                   const uint64_t *));
+                                 const talos_rt_import_input_v1 *, uint32_t,
+                                 talos_rt_import_output_v1 *, uint32_t,
+                                 const uint8_t *, const int64_t *const *,
+                                 const uint64_t *));
 ABI_FUNCTION(talos_rt_v1_dpi_open_array_pack,
-             talos_rt_status (*)(const void *, const void *, uint64_t,
-                                   uint64_t, uint32_t, uint32_t, uint32_t,
-                                   uint64_t, uint32_t, void *, uint64_t));
+             talos_rt_status (*)(const void *, const void *, uint64_t, uint64_t,
+                                 uint32_t, uint32_t, uint32_t, uint64_t,
+                                 uint32_t, void *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_dpi_open_array_unpack,
              talos_rt_status (*)(const void *, uint64_t, uint32_t, uint32_t,
-                                   uint64_t, void *, void *, uint64_t, uint64_t,
-                                   uint32_t, uint32_t));
+                                 uint64_t, void *, void *, uint64_t, uint64_t,
+                                 uint32_t, uint32_t));
 ABI_FUNCTION(talos_rt_v1_dpi_open_array_aggregate_pack,
-             talos_rt_status (*)(const void *, const void *, uint64_t,
-                                   uint64_t, uint32_t, uint32_t, uint64_t,
-                                   uint32_t, const int64_t *, uint32_t, void *,
-                                   uint64_t, uint64_t, uint64_t, uint64_t,
-                                   const int64_t *, uint64_t));
+             talos_rt_status (*)(const void *, const void *, uint64_t, uint64_t,
+                                 uint32_t, uint32_t, uint64_t, uint32_t,
+                                 const int64_t *, uint32_t, void *, uint64_t,
+                                 uint64_t, uint64_t, uint64_t, const int64_t *,
+                                 uint64_t));
 ABI_FUNCTION(talos_rt_v1_dpi_open_array_aggregate_unpack,
              talos_rt_status (*)(talos_rt_context *, const void *, uint64_t,
-                                   uint64_t, const int64_t *, uint64_t,
-                                   uint64_t, uint32_t, const int64_t *,
-                                   uint32_t, void *, void *, uint64_t, uint64_t,
-                                   uint32_t, uint32_t));
+                                 uint64_t, const int64_t *, uint64_t, uint64_t,
+                                 uint32_t, const int64_t *, uint32_t, void *,
+                                 void *, uint64_t, uint64_t, uint32_t,
+                                 uint32_t));
 ABI_FUNCTION(talos_rt_v1_dpi_open_array_prepare_recursive,
-             talos_rt_status (*)(const void *, const void *, uint64_t,
-                                   uint64_t, uint32_t, uint32_t, uint32_t,
-                                   uint32_t, uint32_t, int32_t, int32_t,
-                                   uint64_t, uint32_t, uint64_t,
-                                   const int64_t *, uint64_t, const int64_t *,
-                                   uint32_t,
-                                   talos_rt_dpi_open_array_storage_v1 *));
+             talos_rt_status (*)(const void *, const void *, uint64_t, uint64_t,
+                                 uint32_t, uint32_t, uint32_t, uint32_t,
+                                 uint32_t, int32_t, int32_t, uint64_t, uint32_t,
+                                 uint64_t, const int64_t *, uint64_t,
+                                 const int64_t *, uint32_t,
+                                 talos_rt_dpi_open_array_storage_v1 *));
 ABI_FUNCTION(talos_rt_v1_dpi_open_array_finish_recursive,
              talos_rt_status (*)(talos_rt_status, talos_rt_context *,
-                                   const talos_rt_dpi_open_array_storage_v1 *,
-                                   void *, void *, uint64_t, uint64_t, uint32_t,
-                                   uint32_t, uint32_t, uint64_t,
-                                   const int64_t *, uint64_t, const int64_t *,
-                                   uint32_t));
+                                 const talos_rt_dpi_open_array_storage_v1 *,
+                                 void *, void *, uint64_t, uint64_t, uint32_t,
+                                 uint32_t, uint32_t, uint64_t, const int64_t *,
+                                 uint64_t, const int64_t *, uint32_t));
 ABI_FUNCTION(talos_rt_v1_dpi_open_array_release_recursive,
              void (*)(talos_rt_dpi_open_array_storage_v1 *));
 ABI_FUNCTION(talos_rt_v1_dpi_aggregate_pack,
-             talos_rt_status (*)(const void *, const void *, uint64_t,
-                                   uint64_t, uint32_t, void *, uint64_t,
-                                   uint64_t, const int64_t *, uint64_t));
+             talos_rt_status (*)(const void *, const void *, uint64_t, uint64_t,
+                                 uint32_t, void *, uint64_t, uint64_t,
+                                 const int64_t *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_dpi_aggregate_unpack,
              talos_rt_status (*)(talos_rt_context *, const void *, uint64_t,
-                                   const int64_t *, uint64_t, void *, void *,
-                                   uint64_t, uint64_t, uint32_t));
+                                 const int64_t *, uint64_t, void *, void *,
+                                 uint64_t, uint64_t, uint32_t));
 ABI_FUNCTION(talos_rt_v1_dpi_aggregate_roots_push,
-             talos_rt_status (*)(talos_rt_context *, void *, uint64_t,
-                                   uint64_t, const int64_t *, uint64_t,
-                                   void **));
+             talos_rt_status (*)(talos_rt_context *, void *, uint64_t, uint64_t,
+                                 const int64_t *, uint64_t, void **));
 ABI_FUNCTION(talos_rt_v1_dpi_aggregate_roots_pop,
              talos_rt_status (*)(talos_rt_context *, void *));
 ABI_FUNCTION(talos_rt_v1_dpi_aggregate_export_pack,
-             talos_rt_status (*)(const void *, const void *, uint64_t,
-                                   uint64_t, uint32_t, void *, uint64_t,
-                                   const int64_t *, uint64_t, uint32_t));
+             talos_rt_status (*)(const void *, const void *, uint64_t, uint64_t,
+                                 uint32_t, void *, uint64_t, const int64_t *,
+                                 uint64_t, uint32_t));
 ABI_FUNCTION(talos_rt_v1_dpi_aggregate_state_alloc,
-             talos_rt_status (*)(talos_rt_context *, uint64_t,
-                                   const uint8_t *, const uint8_t *,
-                                   const int64_t *, uint64_t, uint64_t *));
+             talos_rt_status (*)(talos_rt_context *, uint64_t, const uint8_t *,
+                                 const uint8_t *, const int64_t *, uint64_t,
+                                 uint64_t *));
 ABI_FUNCTION(talos_rt_v1_dpi_current_context, talos_rt_context *(*)(void));
 ABI_FUNCTION(talos_rt_v1_design_validate,
              talos_rt_status (*)(const talos_rt_execution_descriptor_v1 *));
 ABI_FUNCTION(talos_rt_v1_design_root,
              talos_rt_status (*)(const talos_rt_execution_descriptor_v1 *,
-                                   talos_rt_design_cursor_v1 *));
+                                 talos_rt_design_cursor_v1 *));
 ABI_FUNCTION(talos_rt_v1_design_child,
              talos_rt_status (*)(const talos_rt_execution_descriptor_v1 *,
-                                   talos_rt_design_cursor_v1,
-                                   talos_rt_design_cursor_v1 *));
+                                 talos_rt_design_cursor_v1,
+                                 talos_rt_design_cursor_v1 *));
 ABI_FUNCTION(talos_rt_v1_design_sibling,
              talos_rt_status (*)(const talos_rt_execution_descriptor_v1 *,
-                                   talos_rt_design_cursor_v1,
-                                   talos_rt_design_cursor_v1 *));
+                                 talos_rt_design_cursor_v1,
+                                 talos_rt_design_cursor_v1 *));
 ABI_FUNCTION(talos_rt_v1_design_lookup,
              talos_rt_status (*)(const talos_rt_execution_descriptor_v1 *,
-                                   const uint8_t *, uint64_t,
-                                   talos_rt_design_cursor_v1 *));
+                                 const uint8_t *, uint64_t,
+                                 talos_rt_design_cursor_v1 *));
 ABI_FUNCTION(talos_rt_v1_design_info,
              talos_rt_status (*)(const talos_rt_execution_descriptor_v1 *,
-                                   talos_rt_design_cursor_v1,
-                                   talos_rt_design_info_v1 *));
+                                 talos_rt_design_cursor_v1,
+                                 talos_rt_design_info_v1 *));
 ABI_FUNCTION(talos_rt_v1_design_name,
              talos_rt_status (*)(const talos_rt_execution_descriptor_v1 *,
-                                   talos_rt_design_cursor_v1,
-                                   const uint8_t **, uint64_t *));
+                                 talos_rt_design_cursor_v1, const uint8_t **,
+                                 uint64_t *));
 ABI_FUNCTION(talos_rt_v1_design_read,
-             talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_design_cursor_v1, uint64_t *,
-                                   uint64_t *, uint64_t));
+             talos_rt_status (*)(talos_rt_context *, talos_rt_design_cursor_v1,
+                                 uint64_t *, uint64_t *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_design_write,
-             talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_design_cursor_v1,
-                                   const uint64_t *, const uint64_t *,
-                                   uint64_t));
+             talos_rt_status (*)(talos_rt_context *, talos_rt_design_cursor_v1,
+                                 const uint64_t *, const uint64_t *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_scheduler_add,
              talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_process_instance_v1 *, uint32_t));
+                                 talos_rt_process_instance_v1 *, uint32_t));
 ABI_FUNCTION(talos_rt_v1_scheduler_add_ranked,
              talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_process_instance_v1 *, uint32_t,
-                                   uint32_t));
+                                 talos_rt_process_instance_v1 *, uint32_t,
+                                 uint32_t));
 ABI_FUNCTION(talos_rt_v1_scheduler_add_planned,
              talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_process_instance_v1 *, uint32_t,
-                                   uint32_t, const uint32_t *, const uint32_t *,
-                                   uint32_t));
+                                 talos_rt_process_instance_v1 *, uint32_t,
+                                 uint32_t, const uint32_t *, const uint32_t *,
+                                 uint32_t));
 ABI_FUNCTION(talos_rt_v1_scheduler_prime,
              talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_process_instance_v1 *));
+                                 talos_rt_process_instance_v1 *));
 ABI_FUNCTION(talos_rt_v1_native_promotion_invalidate_ranges,
              void (*)(const talos_rt_native_promotion_dependency *, uint64_t,
                       const talos_rt_native_promotion_certificate *,
@@ -1635,14 +1602,14 @@ ABI_FUNCTION(talos_rt_v1_native_promotion_recheck_buckets,
                       uint64_t));
 ABI_FUNCTION(talos_rt_v1_scheduler_install_aot,
              talos_rt_status (*)(talos_rt_context *,
-                                   const talos_rt_native_schedule_plan *));
+                                 const talos_rt_native_schedule_plan *));
 ABI_FUNCTION(talos_rt_v1_scheduler_activate_clock_kernel,
              talos_rt_status (*)(talos_rt_context *, uint32_t, uint32_t));
 ABI_FUNCTION(talos_rt_v1_scheduler_run_clock_coordinator,
              talos_rt_status (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_scheduler_direct_fragment_enter,
              talos_rt_status (*)(talos_rt_context *, uint32_t, uint32_t,
-                                   talos_rt_process_instance_v1 **));
+                                 talos_rt_process_instance_v1 **));
 ABI_FUNCTION(talos_rt_v1_scheduler_direct_fragment_leave,
              talos_rt_status (*)(talos_rt_context *, uint32_t));
 ABI_FUNCTION(talos_rt_v1_scheduler_execute_aot_actor,
@@ -1653,100 +1620,99 @@ ABI_FUNCTION(talos_rt_v1_scheduler_handoff_pending,
              uint32_t (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_scheduler_queue_aot_checkpoint,
              talos_rt_status (*)(talos_rt_context *, uint32_t, uint32_t,
-                                   talos_rt_native_checkpoint_callback));
+                                 talos_rt_native_checkpoint_callback));
 ABI_FUNCTION(talos_rt_v1_scheduler_add_aot,
              talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_process_instance_v1 *, uint32_t,
-                                   uint32_t, uint32_t, const uint32_t *,
-                                   const uint32_t *, uint32_t, const uint32_t *,
-                                   uint32_t));
+                                 talos_rt_process_instance_v1 *, uint32_t,
+                                 uint32_t, uint32_t, const uint32_t *,
+                                 const uint32_t *, uint32_t, const uint32_t *,
+                                 uint32_t));
 ABI_FUNCTION(talos_rt_v1_scheduler_run_aot_nodes,
              talos_rt_status (*)(talos_rt_context *,
-                                   const talos_rt_native_schedule_node *,
-                                   uint32_t));
-ABI_FUNCTION(
-    talos_rt_v1_scheduler_prepare_periodic_aot,
-    talos_rt_status (*)(talos_rt_context *,
-                          const talos_rt_native_schedule_node *, uint32_t,
-                          const talos_rt_native_periodic_clock_v1 *, uint32_t,
-                          const talos_rt_native_periodic_alias_v1 *, uint32_t,
-                          uint64_t *, talos_rt_native_periodic_control_v1 *));
+                                 const talos_rt_native_schedule_node *,
+                                 uint32_t));
+ABI_FUNCTION(talos_rt_v1_scheduler_prepare_periodic_aot,
+             talos_rt_status (*)(
+                 talos_rt_context *, const talos_rt_native_schedule_node *,
+                 uint32_t, const talos_rt_native_periodic_clock_v1 *, uint32_t,
+                 const talos_rt_native_periodic_alias_v1 *, uint32_t,
+                 uint64_t *, talos_rt_native_periodic_control_v1 *));
 ABI_FUNCTION(talos_rt_v1_scheduler_handoff_periodic_aot,
              talos_rt_status (*)(talos_rt_context *,
-                                   const talos_rt_native_periodic_clock_v1 *,
-                                   uint32_t, const uint64_t *));
+                                 const talos_rt_native_periodic_clock_v1 *,
+                                 uint32_t, const uint64_t *));
 ABI_FUNCTION(talos_rt_v1_scheduler_drain_periodic_aot,
              talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_native_periodic_control_v1 *));
+                                 talos_rt_native_periodic_control_v1 *));
 ABI_FUNCTION(talos_rt_v1_scheduler_enter_periodic_aot,
              talos_rt_status (*)(talos_rt_context *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_scheduler_snapshot_aot,
              talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_aot_deopt_snapshot *));
+                                 talos_rt_aot_deopt_snapshot *));
 ABI_FUNCTION(talos_rt_v1_scheduler_process_token,
-             uint64_t (*)(talos_rt_context *,
-                          talos_rt_process_instance_v1 *));
+             uint64_t (*)(talos_rt_context *, talos_rt_process_instance_v1 *));
 ABI_FUNCTION(talos_rt_v1_process_current, uint64_t (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_process_status,
              talos_rt_status (*)(talos_rt_context *, uint64_t,
-                                   talos_rt_process_state *));
+                                 talos_rt_process_state *));
 ABI_FUNCTION(talos_rt_v1_process_random_get,
              talos_rt_status (*)(talos_rt_context *, uint64_t,
-                                   talos_rt_random_state_v1 *));
+                                 talos_rt_random_state_v1 *));
 ABI_FUNCTION(talos_rt_v1_process_random_set,
              talos_rt_status (*)(talos_rt_context *, uint64_t,
-                                   const talos_rt_random_state_v1 *));
+                                 const talos_rt_random_state_v1 *));
 ABI_FUNCTION(talos_rt_v1_control_disable_selected,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint64_t,
-                                   uint32_t, uint64_t *));
+                                 uint32_t, uint64_t *));
 ABI_FUNCTION(talos_rt_v1_process_control,
              talos_rt_status (*)(talos_rt_context *, uint64_t,
-                                   talos_rt_process_control_kind,
-                                   talos_rt_process_control_disposition *));
+                                 talos_rt_process_control_kind,
+                                 talos_rt_process_control_disposition *));
 ABI_FUNCTION(talos_rt_v1_scheduler_nba,
              talos_rt_status (*)(talos_rt_context *, uint8_t *, uint8_t *,
-                                   uint64_t, uint64_t, uint64_t, uint64_t,
-                                   const uint8_t *, const uint8_t *));
+                                 uint64_t, uint64_t, uint64_t, uint64_t,
+                                 const uint8_t *, const uint8_t *));
 ABI_FUNCTION(talos_rt_v1_scheduler_driver_nba,
              talos_rt_status (*)(talos_rt_context *, uint8_t *, uint8_t *,
-                                   uint64_t, uint64_t, uint64_t, uint64_t,
-                                   const uint8_t *, const uint8_t *));
+                                 uint64_t, uint64_t, uint64_t, uint64_t,
+                                 const uint8_t *, const uint8_t *));
 ABI_FUNCTION(talos_rt_v1_scheduler_inertial_driver,
              talos_rt_status (*)(talos_rt_context *, uint8_t *, uint8_t *,
-                                   uint64_t, uint64_t, uint64_t, uint64_t,
-                                   uint32_t, uint32_t, uint64_t, uint64_t,
-                                   uint64_t, const uint8_t *, const uint8_t *));
+                                 uint64_t, uint64_t, uint64_t, uint64_t,
+                                 uint32_t, uint32_t, uint64_t, uint64_t,
+                                 uint64_t, const uint8_t *, const uint8_t *));
 ABI_FUNCTION(talos_rt_v1_scheduler_inertial_path_driver,
              talos_rt_status (*)(talos_rt_context *, uint8_t *, uint8_t *,
-                                   uint64_t, uint64_t, uint64_t, uint64_t,
-                                   uint32_t, uint32_t, uint32_t, uint32_t,
-                                   uint64_t, uint64_t, uint64_t,
-                                   const uint8_t *, const uint8_t *,
-                                   const uint8_t *, const uint8_t *,
-                                   const uint8_t *, const uint8_t *));
+                                 uint64_t, uint64_t, uint64_t, uint64_t,
+                                 uint32_t, uint32_t, uint32_t, uint32_t,
+                                 uint64_t, uint64_t, uint64_t, const uint8_t *,
+                                 const uint8_t *, const uint8_t *,
+                                 const uint8_t *, const uint8_t *,
+                                 const uint8_t *));
 ABI_FUNCTION(talos_rt_v1_scheduler_inertial_path_driver_pulse,
              talos_rt_status (*)(talos_rt_context *, uint8_t *, uint8_t *,
-                                   uint64_t, uint64_t, uint64_t, uint64_t,
-                                   uint32_t, uint32_t, uint32_t, uint32_t,
-                                   uint64_t, uint64_t, uint64_t, uint64_t,
-                                   uint64_t, const uint8_t *, const uint8_t *,
-                                   const uint8_t *, const uint8_t *,
-                                   const uint8_t *, const uint8_t *,
-                                   const uint8_t *));
+                                 uint64_t, uint64_t, uint64_t, uint64_t,
+                                 uint32_t, uint32_t, uint32_t, uint32_t,
+                                 uint64_t, uint64_t, uint64_t, uint64_t,
+                                 uint64_t, const uint8_t *, const uint8_t *,
+                                 const uint8_t *, const uint8_t *,
+                                 const uint8_t *, const uint8_t *,
+                                 const uint8_t *));
 ABI_FUNCTION(talos_rt_v1_scheduler_inertial_path_storage,
-             talos_rt_status (*)(
-                 talos_rt_context *, uint8_t *, uint8_t *, uint64_t, uint64_t,
-                 uint64_t, uint64_t, uint32_t, uint32_t, uint32_t, uint32_t,
-                 uint64_t, uint64_t, uint64_t, const uint8_t *, const uint8_t *,
-                 const uint8_t *, const uint8_t *, const uint8_t *,
-                 const uint8_t *, const uint8_t *));
+             talos_rt_status (*)(talos_rt_context *, uint8_t *, uint8_t *,
+                                 uint64_t, uint64_t, uint64_t, uint64_t,
+                                 uint32_t, uint32_t, uint32_t, uint32_t,
+                                 uint64_t, uint64_t, uint64_t, const uint8_t *,
+                                 const uint8_t *, const uint8_t *,
+                                 const uint8_t *, const uint8_t *,
+                                 const uint8_t *, const uint8_t *));
 ABI_FUNCTION(talos_rt_v1_scheduler_inertial_driver_strength_pair,
              talos_rt_status (*)(talos_rt_context *, uint8_t *, uint8_t *,
-                                   uint64_t, uint64_t, uint64_t, uint64_t,
-                                   uint64_t, uint32_t, uint64_t, uint64_t,
-                                   uint64_t, const uint8_t *, const uint8_t *,
-                                   const uint8_t *, const uint8_t *,
-                                   const uint8_t *, const uint8_t *));
+                                 uint64_t, uint64_t, uint64_t, uint64_t,
+                                 uint64_t, uint32_t, uint64_t, uint64_t,
+                                 uint64_t, const uint8_t *, const uint8_t *,
+                                 const uint8_t *, const uint8_t *,
+                                 const uint8_t *, const uint8_t *));
 ABI_FUNCTION(talos_rt_v1_scheduler_inertial_path_strength_pair,
              talos_rt_status (*)(
                  talos_rt_context *, uint8_t *, uint8_t *, uint64_t, uint64_t,
@@ -1770,45 +1736,45 @@ ABI_FUNCTION(talos_rt_v1_scheduler_resolve_initial_drivers,
              talos_rt_status (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_pass_switch_control,
              talos_rt_status (*)(talos_rt_context *, uint32_t, uint32_t,
-                                   uint32_t));
+                                 uint32_t));
 ABI_FUNCTION(talos_rt_v1_pass_switch_control_delayed,
              talos_rt_status (*)(talos_rt_context *, uint32_t, uint32_t,
-                                   uint32_t, uint64_t, uint64_t, uint64_t));
+                                 uint32_t, uint64_t, uint64_t, uint64_t));
 ABI_FUNCTION(talos_rt_v1_mos_drive_delayed,
              talos_rt_status (*)(talos_rt_context *, uint32_t, uint32_t,
-                                   uint32_t, uint64_t, uint64_t, uint64_t));
+                                 uint32_t, uint64_t, uint64_t, uint64_t));
 ABI_FUNCTION(talos_rt_v1_scheduler_clocking_nba,
              talos_rt_status (*)(talos_rt_context *, uint8_t *, uint8_t *,
-                                   uint64_t, uint64_t, uint64_t, uint64_t,
-                                   const uint8_t *, const uint8_t *, uint64_t));
+                                 uint64_t, uint64_t, uint64_t, uint64_t,
+                                 const uint8_t *, const uint8_t *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_scheduler_clocking_driver_nba,
              talos_rt_status (*)(talos_rt_context *, uint8_t *, uint8_t *,
-                                   uint64_t, uint64_t, uint64_t, uint64_t,
-                                   const uint8_t *, const uint8_t *, uint64_t));
+                                 uint64_t, uint64_t, uint64_t, uint64_t,
+                                 const uint8_t *, const uint8_t *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_scheduler_static_nba,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint8_t *,
-                                   uint8_t *, uint64_t, uint64_t, uint64_t,
-                                   const uint8_t *, const uint8_t *));
+                                 uint8_t *, uint64_t, uint64_t, uint64_t,
+                                 const uint8_t *, const uint8_t *));
 ABI_FUNCTION(talos_rt_v1_scheduler_static_nba_packed,
              talos_rt_status (*)(talos_rt_context *, uint32_t, uint8_t *,
-                                   uint8_t *, uint64_t, uint64_t, uint64_t,
-                                   uint64_t, uint64_t));
+                                 uint8_t *, uint64_t, uint64_t, uint64_t,
+                                 uint64_t, uint64_t));
 ABI_FUNCTION(talos_rt_v1_static_nba_stage_wide,
              void (*)(talos_rt_context *, uint32_t, uint64_t, uint64_t,
                       uint64_t, uint64_t, uint32_t));
 ABI_FUNCTION(talos_rt_v1_static_nba_claim,
              talos_rt_status (*)(talos_rt_context *, uint32_t, uint8_t *,
-                                   uint8_t *, uint64_t, uint64_t, uint64_t,
-                                   uint64_t, uint64_t));
+                                 uint8_t *, uint64_t, uint64_t, uint64_t,
+                                 uint64_t, uint64_t));
 ABI_FUNCTION(talos_rt_v1_static_nba_commit_root,
              talos_rt_status (*)(talos_rt_context *, uint32_t, uint32_t,
-                                   uint32_t *));
+                                 uint32_t *));
 ABI_FUNCTION(talos_rt_v1_static_nba_commit_roots,
              talos_rt_status (*)(talos_rt_context *, uint32_t, uint32_t,
-                                   uint32_t *));
+                                 uint32_t *));
 ABI_FUNCTION(talos_rt_v1_static_nba_commit_batch,
-             talos_rt_status (*)(talos_rt_context *, const uint32_t *,
-                                   uint32_t, uint32_t, uint32_t *));
+             talos_rt_status (*)(talos_rt_context *, const uint32_t *, uint32_t,
+                                 uint32_t, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_static_nba_batch_guard,
              uint32_t (*)(talos_rt_context *,
                           const talos_rt_native_schedule_plan *, uint32_t));
@@ -1819,18 +1785,18 @@ ABI_FUNCTION(talos_rt_v1_static_nba_batch_finish,
              void (*)(talos_rt_context *, uint64_t, uint64_t, uint32_t));
 ABI_FUNCTION(talos_rt_v1_static_nba_commit_ordered,
              talos_rt_status (*)(talos_rt_context *, uint32_t, int64_t,
-                                   uint64_t, uint64_t, uint64_t));
+                                 uint64_t, uint64_t, uint64_t));
 ABI_FUNCTION(talos_rt_v1_scheduler_string_nba,
              talos_rt_status (*)(talos_rt_context *, uint8_t *, uint64_t,
-                                   uint64_t, uint64_t, talos_rt_string_v1));
+                                 uint64_t, uint64_t, talos_rt_string_v1));
 ABI_FUNCTION(talos_rt_v1_scheduler_managed_nba,
              talos_rt_status (*)(talos_rt_context *, talos_rt_object_v1 *,
-                                   uint64_t, const void *, const void *,
-                                   uint64_t, uint64_t));
+                                 uint64_t, const void *, const void *, uint64_t,
+                                 uint64_t));
 ABI_FUNCTION(talos_rt_v1_scheduler_managed_nba_masked,
              talos_rt_status (*)(talos_rt_context *, talos_rt_object_v1 *,
-                                   uint64_t, const void *, const void *,
-                                   const void *, uint64_t, uint64_t));
+                                 uint64_t, const void *, const void *,
+                                 const void *, uint64_t, uint64_t));
 ABI_FUNCTION(talos_rt_v1_scheduler_signal,
              void (*)(talos_rt_context *, uint64_t, uint64_t, uint32_t));
 ABI_FUNCTION(talos_rt_v1_scheduler_signal_transition,
@@ -1871,7 +1837,7 @@ ABI_FUNCTION(talos_rt_v1_scheduler_event_triggered,
              uint32_t (*)(talos_rt_context *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_clocking_output_track,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint64_t,
-                                   uint32_t));
+                                 uint32_t));
 ABI_FUNCTION(talos_rt_v1_clocking_output_current,
              uint32_t (*)(talos_rt_context *, uint64_t, uint64_t, uint32_t));
 ABI_FUNCTION(talos_rt_v1_scheduler_wait_order_failed,
@@ -1885,53 +1851,50 @@ ABI_FUNCTION(talos_rt_v1_scheduler_fail,
              void (*)(talos_rt_context *, talos_rt_status));
 ABI_FUNCTION(talos_rt_v1_native_state_register_static,
              talos_rt_status (*)(talos_rt_context *, uint32_t, uint64_t,
-                                   uint64_t));
+                                 uint64_t));
 ABI_FUNCTION(talos_rt_v1_native_state_static_handle, uint64_t (*)(uint32_t));
-ABI_FUNCTION(talos_rt_v1_native_handle_offset,
-             uint64_t (*)(uint64_t, int64_t));
+ABI_FUNCTION(talos_rt_v1_native_handle_offset, uint64_t (*)(uint64_t, int64_t));
 ABI_FUNCTION(talos_rt_v1_strength_resolve, uint16_t (*)(uint16_t, uint16_t));
 ABI_FUNCTION(talos_rt_v1_strength_resolve_kind,
              uint16_t (*)(uint16_t, uint16_t, uint32_t));
 ABI_FUNCTION(talos_rt_v1_native_state_alloc,
-             talos_rt_status (*)(talos_rt_context *, uint64_t,
-                                   const uint8_t *, const uint8_t *,
-                                   uint64_t *));
+             talos_rt_status (*)(talos_rt_context *, uint64_t, const uint8_t *,
+                                 const uint8_t *, uint64_t *));
 ABI_FUNCTION(talos_rt_v1_native_state_alloc_with_roots,
-             talos_rt_status (*)(talos_rt_context *, uint64_t,
-                                   const uint8_t *, const uint8_t *,
-                                   const uint64_t *, uint64_t, uint64_t *));
+             talos_rt_status (*)(talos_rt_context *, uint64_t, const uint8_t *,
+                                 const uint8_t *, const uint64_t *, uint64_t,
+                                 uint64_t *));
 ABI_FUNCTION(talos_rt_v1_native_state_alloc_with_typed_roots,
-             talos_rt_status (*)(talos_rt_context *, uint64_t,
-                                   const uint8_t *, const uint8_t *,
-                                   const talos_rt_managed_root_slot_v1 *,
-                                   uint64_t, uint64_t *));
+             talos_rt_status (*)(talos_rt_context *, uint64_t, const uint8_t *,
+                                 const uint8_t *,
+                                 const talos_rt_managed_root_slot_v1 *,
+                                 uint64_t, uint64_t *));
 ABI_FUNCTION(talos_rt_v1_native_state_retain,
              talos_rt_status (*)(talos_rt_context *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_native_state_register_managed_roots,
-             talos_rt_status (*)(talos_rt_context *, uint64_t,
-                                   const uint64_t *, uint64_t));
+             talos_rt_status (*)(talos_rt_context *, uint64_t, const uint64_t *,
+                                 uint64_t));
 ABI_FUNCTION(talos_rt_v1_native_state_release,
              talos_rt_status (*)(talos_rt_context *, uint64_t, uint32_t));
 ABI_FUNCTION(talos_rt_v1_native_state_load_plane,
-             talos_rt_status (*)(talos_rt_context *, const uint8_t *,
-                                   uint64_t, uint64_t, uint64_t, uint32_t,
-                                   uint32_t, uint8_t *));
+             talos_rt_status (*)(talos_rt_context *, const uint8_t *, uint64_t,
+                                 uint64_t, uint64_t, uint32_t, uint32_t,
+                                 uint8_t *));
 ABI_FUNCTION(talos_rt_v1_native_state_store_plane,
              talos_rt_status (*)(talos_rt_context *, uint8_t *, uint64_t,
-                                   uint64_t, uint64_t, uint32_t,
-                                   const uint8_t *, uint8_t *));
+                                 uint64_t, uint64_t, uint32_t, const uint8_t *,
+                                 uint8_t *));
 ABI_FUNCTION(talos_rt_v1_native_state_store_continuous_plane,
              talos_rt_status (*)(talos_rt_context *, uint8_t *, uint64_t,
-                                   uint64_t, uint64_t, uint32_t,
-                                   const uint8_t *, uint8_t *));
+                                 uint64_t, uint64_t, uint32_t, const uint8_t *,
+                                 uint8_t *));
 ABI_FUNCTION(talos_rt_v1_scheduler_notify, void (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_scheduler_run,
              talos_rt_status (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_scheduler_run_aot,
              talos_rt_status (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_gc_lane_create,
-             talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_gc_lane_v1 **));
+             talos_rt_status (*)(talos_rt_context *, talos_rt_gc_lane_v1 **));
 ABI_FUNCTION(talos_rt_v1_gc_lane_destroy,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *));
 ABI_FUNCTION(talos_rt_v1_gc_lane_enter,
@@ -1943,91 +1906,82 @@ ABI_FUNCTION(talos_rt_v1_gc_safepoint,
 ABI_FUNCTION(talos_rt_v1_gc_current_lane,
              talos_rt_gc_lane_v1 *(*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_gc_root_push,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_gc_root_v1 *,
-                                   talos_rt_object_v1 **));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_gc_root_v1 *,
+                                 talos_rt_object_v1 **));
 ABI_FUNCTION(talos_rt_v1_gc_root_pop,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_gc_root_v1 *));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_gc_root_v1 *));
 ABI_FUNCTION(talos_rt_v1_gc_root_range_push,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_gc_root_range_v1 *,
-                                   talos_rt_object_v1 **, uint64_t));
+                                 talos_rt_gc_root_range_v1 *,
+                                 talos_rt_object_v1 **, uint64_t));
 ABI_FUNCTION(talos_rt_v1_gc_root_range_pop,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_gc_root_range_v1 *));
+                                 talos_rt_gc_root_range_v1 *));
 ABI_FUNCTION(talos_rt_v1_gc_managed_root_push,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_gc_managed_root_v1 *,
-                                   talos_rt_managed_word_v1 *));
+                                 talos_rt_gc_managed_root_v1 *,
+                                 talos_rt_managed_word_v1 *));
 ABI_FUNCTION(talos_rt_v1_gc_managed_root_pop,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_gc_managed_root_v1 *));
+                                 talos_rt_gc_managed_root_v1 *));
 ABI_FUNCTION(talos_rt_v1_gc_managed_root_range_push,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_gc_managed_root_range_v1 *,
-                                   talos_rt_managed_word_v1 *, uint64_t));
+                                 talos_rt_gc_managed_root_range_v1 *,
+                                 talos_rt_managed_word_v1 *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_gc_managed_root_range_pop,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_gc_managed_root_range_v1 *));
+                                 talos_rt_gc_managed_root_range_v1 *));
 ABI_FUNCTION(talos_rt_v1_gc_candidate_root,
-             talos_rt_managed_word_v1 (*)(
-                 talos_rt_context *, talos_rt_managed_word_v1,
-                 talos_rt_managed_root_kind_mask_v1));
+             talos_rt_managed_word_v1 (*)(talos_rt_context *,
+                                          talos_rt_managed_word_v1,
+                                          talos_rt_managed_root_kind_mask_v1));
 ABI_FUNCTION(talos_rt_v1_argument_ref_load,
              talos_rt_status (*)(talos_rt_context *, const uint8_t *,
-                                   const uint8_t *, uint64_t,
-                                   talos_rt_object_v1 *, uint64_t, uint32_t,
-                                   uint64_t, uint64_t, uint32_t, uint32_t,
-                                   void *, void *));
+                                 const uint8_t *, uint64_t,
+                                 talos_rt_object_v1 *, uint64_t, uint32_t,
+                                 uint64_t, uint64_t, uint32_t, uint32_t, void *,
+                                 void *));
 ABI_FUNCTION(talos_rt_v1_argument_ref_store,
              talos_rt_status (*)(talos_rt_context *, uint8_t *, uint8_t *,
-                                   uint64_t, talos_rt_object_v1 *, uint64_t,
-                                   uint32_t, uint64_t, uint64_t, uint32_t,
-                                   uint32_t, const void *, const void *));
+                                 uint64_t, talos_rt_object_v1 *, uint64_t,
+                                 uint32_t, uint64_t, uint64_t, uint32_t,
+                                 uint32_t, const void *, const void *));
 ABI_FUNCTION(talos_rt_v1_gc_static_root_register,
-             talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_object_v1 **));
+             talos_rt_status (*)(talos_rt_context *, talos_rt_object_v1 **));
 ABI_FUNCTION(talos_rt_v1_gc_candidate_static_root_register,
-             talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_managed_word_v1 *,
-                                   talos_rt_managed_root_kind_mask_v1));
+             talos_rt_status (*)(talos_rt_context *, talos_rt_managed_word_v1 *,
+                                 talos_rt_managed_root_kind_mask_v1));
 ABI_FUNCTION(talos_rt_v1_gc_static_root_unregister,
-             talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_object_v1 **));
+             talos_rt_status (*)(talos_rt_context *, talos_rt_object_v1 **));
 ABI_FUNCTION(talos_rt_v1_gc_pin,
-             talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_object_v1 *));
+             talos_rt_status (*)(talos_rt_context *, talos_rt_object_v1 *));
 ABI_FUNCTION(talos_rt_v1_gc_unpin,
-             talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_object_v1 *));
+             talos_rt_status (*)(talos_rt_context *, talos_rt_object_v1 *));
 ABI_FUNCTION(talos_rt_v1_gc_collect,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *));
 ABI_FUNCTION(talos_rt_v1_gc_collect_pending,
              talos_rt_status (*)(talos_rt_context *));
-ABI_FUNCTION(talos_rt_v1_gc_designate,
-             talos_rt_status (*)(talos_rt_context *));
+ABI_FUNCTION(talos_rt_v1_gc_designate, talos_rt_status (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_gc_set_threshold,
              talos_rt_status (*)(talos_rt_context *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_gc_statistics,
              talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_gc_statistics_v1 *));
+                                 talos_rt_gc_statistics_v1 *));
 ABI_FUNCTION(talos_rt_v1_class_validate,
              talos_rt_status (*)(const talos_rt_class_descriptor_v1 *));
 ABI_FUNCTION(talos_rt_v1_class_register,
              talos_rt_status (*)(talos_rt_context *,
-                                   const talos_rt_class_descriptor_v1 *));
+                                 const talos_rt_class_descriptor_v1 *));
 ABI_FUNCTION(talos_rt_v1_random_graph_discover,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *,
-                                   talos_rt_random_graph_v1 **));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 talos_rt_random_graph_v1 **));
 ABI_FUNCTION(talos_rt_v1_random_graph_destroy,
              void (*)(talos_rt_random_graph_v1 *));
 ABI_FUNCTION(talos_rt_v1_random_graph_size,
              uint64_t (*)(const talos_rt_random_graph_v1 *));
 ABI_FUNCTION(talos_rt_v1_random_graph_object,
              talos_rt_object_v1 *(*)(const talos_rt_random_graph_v1 *,
-                                       uint64_t));
+                                     uint64_t));
 ABI_FUNCTION(talos_rt_v1_random_graph_object_descriptor,
              const talos_rt_class_descriptor_v1
                  *(*)(const talos_rt_random_graph_v1 *, uint64_t));
@@ -2035,454 +1989,410 @@ ABI_FUNCTION(talos_rt_v1_random_graph_variable_count,
              uint64_t (*)(const talos_rt_random_graph_v1 *));
 ABI_FUNCTION(talos_rt_v1_random_graph_variable,
              talos_rt_status (*)(const talos_rt_random_graph_v1 *, uint64_t,
-                                   talos_rt_object_v1 **,
-                                   const talos_rt_random_variable_v1 **));
-ABI_FUNCTION(
-    talos_rt_v1_random_graph_resolve_variable,
-    talos_rt_status (*)(const talos_rt_random_graph_v1 *, uint64_t,
-                          const talos_rt_random_variable_reference_v1 *,
-                          talos_rt_object_v1 **,
-                          const talos_rt_random_variable_v1 **, uint64_t *));
+                                 talos_rt_object_v1 **,
+                                 const talos_rt_random_variable_v1 **));
+ABI_FUNCTION(talos_rt_v1_random_graph_resolve_variable,
+             talos_rt_status (*)(const talos_rt_random_graph_v1 *, uint64_t,
+                                 const talos_rt_random_variable_reference_v1 *,
+                                 talos_rt_object_v1 **,
+                                 const talos_rt_random_variable_v1 **,
+                                 uint64_t *));
 ABI_FUNCTION(talos_rt_v1_element_type_validate,
              talos_rt_status (*)(const talos_rt_element_type_v1 *));
 ABI_FUNCTION(talos_rt_v1_element_type_register,
              talos_rt_status (*)(talos_rt_context *,
-                                   const talos_rt_element_type_v1 *));
+                                 const talos_rt_element_type_v1 *));
 ABI_FUNCTION(talos_rt_v1_element_type_define_default,
-             talos_rt_status (*)(talos_rt_context *, uint64_t,
-                                   const uint8_t *, uint64_t));
+             talos_rt_status (*)(talos_rt_context *, uint64_t, const uint8_t *,
+                                 uint64_t));
 ABI_FUNCTION(talos_rt_v1_gc_design_root_register,
              talos_rt_status (*)(talos_rt_context *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_object_allocate,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   const talos_rt_class_descriptor_v1 *,
-                                   talos_rt_object_v1 **));
+                                 const talos_rt_class_descriptor_v1 *,
+                                 talos_rt_object_v1 **));
 ABI_FUNCTION(talos_rt_v1_object_shallow_copy,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   const talos_rt_class_descriptor_v1 *,
-                                   talos_rt_object_v1 *,
-                                   talos_rt_object_v1 **));
+                                 const talos_rt_class_descriptor_v1 *,
+                                 talos_rt_object_v1 *, talos_rt_object_v1 **));
 ABI_FUNCTION(talos_rt_v1_object_read,
              talos_rt_status (*)(talos_rt_object_v1 *, uint64_t, void *,
-                                   uint64_t));
+                                 uint64_t));
 ABI_FUNCTION(talos_rt_v1_gc_design_candidate_root_register,
              talos_rt_status (*)(talos_rt_context *, uint64_t,
-                                   talos_rt_managed_root_kind_mask_v1));
+                                 talos_rt_managed_root_kind_mask_v1));
 ABI_FUNCTION(talos_rt_v1_object_write,
-             talos_rt_status (*)(talos_rt_object_v1 *, uint64_t,
-                                   const void *, uint64_t));
+             talos_rt_status (*)(talos_rt_object_v1 *, uint64_t, const void *,
+                                 uint64_t));
 ABI_FUNCTION(talos_rt_v1_object_bits_insert,
              talos_rt_status (*)(talos_rt_object_v1 *, uint64_t, uint64_t,
-                                   int64_t, uint32_t, uint64_t, uint32_t));
+                                 int64_t, uint32_t, uint64_t, uint32_t));
 ABI_FUNCTION(talos_rt_v1_object_read_planes,
-             talos_rt_status (*)(talos_rt_object_v1 *, uint64_t, void *,
-                                   void *, uint64_t));
+             talos_rt_status (*)(talos_rt_object_v1 *, uint64_t, void *, void *,
+                                 uint64_t));
 ABI_FUNCTION(talos_rt_v1_object_write_planes,
-             talos_rt_status (*)(talos_rt_object_v1 *, uint64_t,
-                                   const void *, const void *, uint64_t));
+             talos_rt_status (*)(talos_rt_object_v1 *, uint64_t, const void *,
+                                 const void *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_object_field_load,
              talos_rt_status (*)(talos_rt_object_v1 *, uint64_t,
-                                   talos_rt_object_v1 **));
+                                 talos_rt_object_v1 **));
 ABI_FUNCTION(talos_rt_v1_object_field_store,
              talos_rt_status (*)(talos_rt_object_v1 *, uint64_t,
-                                   talos_rt_object_v1 *));
+                                 talos_rt_object_v1 *));
 ABI_FUNCTION(talos_rt_v1_object_override,
              talos_rt_status (*)(talos_rt_object_v1 *, uint64_t, uint64_t,
-                                   uint32_t, uint32_t, uint32_t, uint64_t,
-                                   uint32_t, const void *, const void *));
+                                 uint32_t, uint32_t, uint32_t, uint64_t,
+                                 uint32_t, const void *, const void *));
 ABI_FUNCTION(talos_rt_v1_object_release_override,
              talos_rt_status (*)(talos_rt_object_v1 *, uint64_t, uint64_t,
-                                   uint32_t, uint32_t));
+                                 uint32_t, uint32_t));
 ABI_FUNCTION(talos_rt_v1_object_is_instance,
              uint32_t (*)(const talos_rt_object_v1 *,
                           const talos_rt_class_descriptor_v1 *));
 ABI_FUNCTION(talos_rt_v1_object_cast,
              talos_rt_status (*)(talos_rt_object_v1 *,
-                                   const talos_rt_class_descriptor_v1 *,
-                                   talos_rt_object_v1 **));
-ABI_FUNCTION(talos_rt_v1_object_id,
-             uint64_t (*)(const talos_rt_object_v1 *));
+                                 const talos_rt_class_descriptor_v1 *,
+                                 talos_rt_object_v1 **));
+ABI_FUNCTION(talos_rt_v1_object_id, uint64_t (*)(const talos_rt_object_v1 *));
 ABI_FUNCTION(talos_rt_v1_managed_watch,
              uint64_t (*)(talos_rt_object_v1 *, talos_rt_managed_watch_kind,
                           uint64_t));
 ABI_FUNCTION(talos_rt_v1_string_create,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *, const char *,
-                                   uint64_t, talos_rt_string_v1 *));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, const char *, uint64_t,
+                                 talos_rt_string_v1 *));
 ABI_FUNCTION(talos_rt_v1_string_concat,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_string_v1, talos_rt_string_v1,
-                                   talos_rt_string_v1 *));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_string_v1,
+                                 talos_rt_string_v1, talos_rt_string_v1 *));
 ABI_FUNCTION(talos_rt_v1_string_concat_many,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   const talos_rt_string_span_v1 *, uint64_t,
-                                   talos_rt_string_v1 *));
+                                 const talos_rt_string_span_v1 *, uint64_t,
+                                 talos_rt_string_v1 *));
 ABI_FUNCTION(talos_rt_v1_string_repeat,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_string_v1, uint64_t,
-                                   talos_rt_string_v1 *));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_string_v1,
+                                 uint64_t, talos_rt_string_v1 *));
 ABI_FUNCTION(talos_rt_v1_string_from_packed,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *, const void *,
-                                   const void *, uint64_t,
-                                   talos_rt_string_v1 *));
+                                 const void *, uint64_t, talos_rt_string_v1 *));
 ABI_FUNCTION(talos_rt_v1_string_to_packed,
-             talos_rt_status (*)(talos_rt_string_v1, void *, void *,
-                                   uint64_t));
+             talos_rt_status (*)(talos_rt_string_v1, void *, void *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_string_view,
              talos_rt_status (*)(talos_rt_string_v1, char *, const char **,
-                                   uint64_t *));
+                                 uint64_t *));
 ABI_FUNCTION(talos_rt_v1_string_length, uint64_t (*)(talos_rt_string_v1));
 ABI_FUNCTION(talos_rt_v1_string_hash, uint64_t (*)(talos_rt_string_v1));
 ABI_FUNCTION(talos_rt_v1_string_getc,
              uint32_t (*)(talos_rt_string_v1, int64_t));
 ABI_FUNCTION(talos_rt_v1_string_putc,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_string_v1, int64_t, uint32_t,
-                                   talos_rt_string_v1 *));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_string_v1,
+                                 int64_t, uint32_t, talos_rt_string_v1 *));
 ABI_FUNCTION(talos_rt_v1_string_substr,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_string_v1, int64_t, int64_t,
-                                   talos_rt_string_v1 *));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_string_v1,
+                                 int64_t, int64_t, talos_rt_string_v1 *));
 ABI_FUNCTION(talos_rt_v1_string_compare,
              int32_t (*)(talos_rt_string_v1, talos_rt_string_v1));
 ABI_FUNCTION(talos_rt_v1_string_compare_insensitive,
              int32_t (*)(talos_rt_string_v1, talos_rt_string_v1));
 ABI_FUNCTION(talos_rt_v1_string_case_convert,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_string_v1, uint32_t,
-                                   talos_rt_string_v1 *));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_string_v1,
+                                 uint32_t, talos_rt_string_v1 *));
 ABI_FUNCTION(talos_rt_v1_scan_dynamic_validate,
              talos_rt_status (*)(talos_rt_context *, talos_rt_string_v1,
-                                   uint32_t, uint32_t, uint32_t, uint64_t,
-                                   uint32_t *));
+                                 uint32_t, uint32_t, uint32_t, uint64_t,
+                                 uint32_t *));
 ABI_FUNCTION(talos_rt_v1_string_scan_dynamic,
-             talos_rt_status (*)(talos_rt_context *,
-                                   talos_rt_gc_lane_v1 *,
-                                   talos_rt_string_v1, uint32_t,
-                                   talos_rt_string_v1, uint32_t, uint32_t,
-                                   uint32_t, uint64_t, uint64_t, uint64_t,
-                                   talos_rt_string_v1 *, uint32_t *,
-                                   uint32_t *, uint32_t *, uint32_t *));
+             talos_rt_status (*)(talos_rt_context *, talos_rt_gc_lane_v1 *,
+                                 talos_rt_string_v1, uint32_t,
+                                 talos_rt_string_v1, uint32_t, uint32_t,
+                                 uint32_t, uint64_t, uint64_t, uint64_t,
+                                 talos_rt_string_v1 *, uint32_t *, uint32_t *,
+                                 uint32_t *, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_string_scan_raw,
              talos_rt_status (*)(talos_rt_string_v1, uint32_t, const char *,
-                                   uint64_t, uint64_t, uint64_t, uint32_t,
-                                   uint64_t, void *, uint64_t, void *, uint64_t,
-                                   uint32_t *, uint32_t *));
+                                 uint64_t, uint64_t, uint64_t, uint32_t,
+                                 uint64_t, void *, uint64_t, void *, uint64_t,
+                                 uint32_t *, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_string_parse_integer,
              talos_rt_status (*)(talos_rt_string_v1, uint32_t, uint64_t *));
 ABI_FUNCTION(talos_rt_v1_string_parse_logic,
              talos_rt_status (*)(talos_rt_string_v1, uint32_t, uint64_t *,
-                                   uint64_t *));
+                                 uint64_t *));
 ABI_FUNCTION(talos_rt_v1_string_parse_real,
              talos_rt_status (*)(talos_rt_string_v1, double *));
 ABI_FUNCTION(talos_rt_v1_string_parse_real_constant,
              talos_rt_status (*)(talos_rt_string_v1, double *));
 ABI_FUNCTION(talos_rt_v1_plusarg_parse_logic,
-             talos_rt_status (*)(talos_rt_string_v1, uint32_t, uint64_t,
-                                   void *, uint64_t, void *, uint64_t));
+             talos_rt_status (*)(talos_rt_string_v1, uint32_t, uint64_t, void *,
+                                 uint64_t, void *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_plusarg_parse_real,
              talos_rt_status (*)(talos_rt_string_v1, double *));
 ABI_FUNCTION(talos_rt_v1_string_format_integer,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *, uint64_t, uint32_t,
-                                   uint32_t, talos_rt_string_v1 *));
+                                 uint32_t, talos_rt_string_v1 *));
 ABI_FUNCTION(talos_rt_v1_string_format_real,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *, double,
-                                   talos_rt_string_v1 *));
+                                 talos_rt_string_v1 *));
 ABI_FUNCTION(talos_rt_v1_dynamic_array_create,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   const talos_rt_element_type_v1 *, uint64_t,
-                                   talos_rt_object_v1 **));
+                                 const talos_rt_element_type_v1 *, uint64_t,
+                                 talos_rt_object_v1 **));
 ABI_FUNCTION(talos_rt_v1_dynamic_array_resize,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *, uint64_t));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 uint64_t));
 ABI_FUNCTION(talos_rt_v1_queue_create,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   const talos_rt_element_type_v1 *, uint64_t,
-                                   talos_rt_object_v1 **));
+                                 const talos_rt_element_type_v1 *, uint64_t,
+                                 talos_rt_object_v1 **));
 ABI_FUNCTION(talos_rt_v1_container_create_like,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *,
-                                   talos_rt_object_v1 *, uint64_t,
-                                   talos_rt_object_v1 **));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 talos_rt_object_v1 *, uint64_t,
+                                 talos_rt_object_v1 **));
 ABI_FUNCTION(talos_rt_v1_container_create_typed,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *, uint32_t, uint64_t,
-                                   uint32_t, uint32_t, uint64_t, uint64_t,
-                                   uint64_t,
-                                   const talos_rt_element_trace_slot_v1 *,
-                                   uint64_t, uint64_t, uint64_t,
-                                   talos_rt_object_v1 **));
+                                 uint32_t, uint32_t, uint64_t, uint64_t,
+                                 uint64_t,
+                                 const talos_rt_element_trace_slot_v1 *,
+                                 uint64_t, uint64_t, uint64_t,
+                                 talos_rt_object_v1 **));
 ABI_FUNCTION(talos_rt_v1_container_create_typed_pattern,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *, uint32_t, uint64_t,
-                                   uint32_t, uint32_t, uint64_t, uint64_t,
-                                   uint64_t,
-                                   const talos_rt_element_trace_slot_v1 *,
-                                   uint64_t, const uint8_t *, uint64_t,
-                                   uint64_t, uint64_t,
-                                   talos_rt_object_v1 **));
+                                 uint32_t, uint32_t, uint64_t, uint64_t,
+                                 uint64_t,
+                                 const talos_rt_element_trace_slot_v1 *,
+                                 uint64_t, const uint8_t *, uint64_t, uint64_t,
+                                 uint64_t, talos_rt_object_v1 **));
 ABI_FUNCTION(talos_rt_v1_mailbox_create_typed,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *, uint64_t, uint32_t,
-                                   uint32_t, uint64_t, uint64_t, uint64_t,
-                                   const talos_rt_element_trace_slot_v1 *,
-                                   uint64_t, int64_t, talos_rt_object_v1 **));
+                                 uint32_t, uint64_t, uint64_t, uint64_t,
+                                 const talos_rt_element_trace_slot_v1 *,
+                                 uint64_t, int64_t, talos_rt_object_v1 **));
 ABI_FUNCTION(talos_rt_v1_semaphore_create,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *, int32_t,
-                                   talos_rt_object_v1 **));
+                                 talos_rt_object_v1 **));
 ABI_FUNCTION(talos_rt_v1_semaphore_put,
              talos_rt_status (*)(talos_rt_object_v1 *, int32_t));
 ABI_FUNCTION(talos_rt_v1_semaphore_try_get,
-             talos_rt_status (*)(talos_rt_object_v1 *, int32_t,
-                                   uint32_t *));
-ABI_FUNCTION(talos_rt_v1_container_size,
-             uint64_t (*)(talos_rt_object_v1 *));
+             talos_rt_status (*)(talos_rt_object_v1 *, int32_t, uint32_t *));
+ABI_FUNCTION(talos_rt_v1_container_size, uint64_t (*)(talos_rt_object_v1 *));
 ABI_FUNCTION(talos_rt_v1_box_bind_type,
              talos_rt_status (*)(talos_rt_context *, talos_rt_object_v1 *,
-                                   uint64_t));
+                                 uint64_t));
 ABI_FUNCTION(talos_rt_v1_box_is_type,
              uint32_t (*)(talos_rt_object_v1 *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_container_read,
              talos_rt_status (*)(talos_rt_object_v1 *, int64_t, void *,
-                                   void *));
+                                 void *));
 ABI_FUNCTION(talos_rt_v1_container_read_checked,
              talos_rt_status (*)(talos_rt_object_v1 *, int64_t, void *,
-                                   uint64_t, void *, uint64_t));
+                                 uint64_t, void *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_container_write,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *, int64_t,
-                                   const void *, const void *));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 int64_t, const void *, const void *));
 ABI_FUNCTION(talos_rt_v1_container_write_checked,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *, int64_t,
-                                   const void *, uint64_t, const void *,
-                                   uint64_t));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 int64_t, const void *, uint64_t, const void *,
+                                 uint64_t));
 ABI_FUNCTION(talos_rt_v1_container_clone,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *,
-                                   talos_rt_object_v1 **));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 talos_rt_object_v1 **));
 ABI_FUNCTION(talos_rt_v1_container_swap,
              talos_rt_status (*)(talos_rt_object_v1 *, int64_t, int64_t));
 ABI_FUNCTION(talos_rt_v1_container_import_fixed,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *, const void *,
-                                   const void *, uint64_t, uint64_t, uint32_t,
-                                   uint64_t, uint64_t));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 const void *, const void *, uint64_t, uint64_t,
+                                 uint32_t, uint64_t, uint64_t));
 ABI_FUNCTION(talos_rt_v1_container_export_fixed,
-             talos_rt_status (*)(talos_rt_object_v1 *, void *, void *,
-                                   uint64_t, uint64_t, uint32_t, uint64_t,
-                                   uint64_t));
+             talos_rt_status (*)(talos_rt_object_v1 *, void *, void *, uint64_t,
+                                 uint64_t, uint32_t, uint64_t, uint64_t));
 ABI_FUNCTION(talos_rt_v1_container_export_bitstream,
-             talos_rt_status (*)(talos_rt_object_v1 *, void *, void *,
-                                   uint64_t, uint64_t, uint32_t, uint64_t,
-                                   uint64_t, uint64_t, uint32_t));
+             talos_rt_status (*)(talos_rt_object_v1 *, void *, void *, uint64_t,
+                                 uint64_t, uint32_t, uint64_t, uint64_t,
+                                 uint64_t, uint32_t));
 ABI_FUNCTION(talos_rt_v1_aggregate_export_bitstream,
-             talos_rt_status (*)(const void *, const void *, uint64_t,
-                                   uint64_t, uint32_t, void *, void *, uint64_t,
-                                   uint64_t, uint32_t, const void *, uint64_t));
+             talos_rt_status (*)(const void *, const void *, uint64_t, uint64_t,
+                                 uint32_t, void *, void *, uint64_t, uint64_t,
+                                 uint32_t, const void *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_aggregate_import_bitstream,
-             talos_rt_status (*)(const void *, const void *, uint64_t,
-                                   uint64_t, uint32_t, void *, void *, uint64_t,
-                                   uint64_t, uint32_t, const void *, uint64_t));
+             talos_rt_status (*)(const void *, const void *, uint64_t, uint64_t,
+                                 uint32_t, void *, void *, uint64_t, uint64_t,
+                                 uint32_t, const void *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_recursive_export_bitstream,
-             talos_rt_status (*)(talos_rt_context *, const void *,
-                                   const void *, uint64_t, uint64_t, uint32_t,
-                                   void *, void *, uint64_t, uint64_t, uint32_t,
-                                   const void *, uint64_t, uint32_t, uint32_t *,
-                                   uint64_t *));
+             talos_rt_status (*)(talos_rt_context *, const void *, const void *,
+                                 uint64_t, uint64_t, uint32_t, void *, void *,
+                                 uint64_t, uint64_t, uint32_t, const void *,
+                                 uint64_t, uint32_t, uint32_t *, uint64_t *));
 ABI_FUNCTION(talos_rt_v1_class_bitstream_finalize,
              talos_rt_status (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v2_recursive_export_bitstream,
              talos_rt_status (*)(talos_rt_context *, uint64_t, const void *,
-                                   const void *, uint64_t, uint64_t, uint32_t,
-                                   void *, void *, uint64_t, uint64_t, uint32_t,
-                                   uint32_t, uint32_t *, uint64_t *));
+                                 const void *, uint64_t, uint64_t, uint32_t,
+                                 void *, void *, uint64_t, uint64_t, uint32_t,
+                                 uint32_t, uint32_t *, uint64_t *));
 ABI_FUNCTION(talos_rt_v1_container_delete,
              talos_rt_status (*)(talos_rt_object_v1 *));
 ABI_FUNCTION(talos_rt_v1_queue_push,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *, uint32_t,
-                                   const void *, const void *));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 uint32_t, const void *, const void *));
 ABI_FUNCTION(talos_rt_v1_queue_pop,
-             talos_rt_status (*)(talos_rt_object_v1 *, uint32_t, void *,
-                                   void *, uint32_t *));
+             talos_rt_status (*)(talos_rt_object_v1 *, uint32_t, void *, void *,
+                                 uint32_t *));
 ABI_FUNCTION(talos_rt_v1_mailbox_try_put,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *, const void *,
-                                   const void *, uint32_t *));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 const void *, const void *, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_mailbox_try_put_checked,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *, const void *,
-                                   uint64_t, const void *, uint64_t,
-                                   uint32_t *));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 const void *, uint64_t, const void *, uint64_t,
+                                 uint32_t *));
 ABI_FUNCTION(talos_rt_v1_mailbox_num,
              talos_rt_status (*)(talos_rt_object_v1 *, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_mailbox_try_peek,
              talos_rt_status (*)(talos_rt_object_v1 *, void *, void *,
-                                   uint32_t *));
+                                 uint32_t *));
 ABI_FUNCTION(talos_rt_v1_mailbox_try_peek_checked,
-             talos_rt_status (*)(talos_rt_object_v1 *, void *, uint64_t,
-                                   void *, uint64_t, uint32_t *));
+             talos_rt_status (*)(talos_rt_object_v1 *, void *, uint64_t, void *,
+                                 uint64_t, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_mailbox_try_get,
              talos_rt_status (*)(talos_rt_object_v1 *, void *, void *,
-                                   uint32_t *));
+                                 uint32_t *));
 ABI_FUNCTION(talos_rt_v1_mailbox_try_get_checked,
-             talos_rt_status (*)(talos_rt_object_v1 *, void *, uint64_t,
-                                   void *, uint64_t, uint32_t *));
+             talos_rt_status (*)(talos_rt_object_v1 *, void *, uint64_t, void *,
+                                 uint64_t, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_queue_insert,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *, int64_t,
-                                   const void *, const void *));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 int64_t, const void *, const void *));
 ABI_FUNCTION(talos_rt_v1_queue_delete_index,
              talos_rt_status (*)(talos_rt_object_v1 *, int64_t));
 ABI_FUNCTION(talos_rt_v1_assoc_create,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   const talos_rt_element_type_v1 *,
-                                   talos_rt_assoc_key_kind_v1, uint64_t,
-                                   talos_rt_object_v1 **));
+                                 const talos_rt_element_type_v1 *,
+                                 talos_rt_assoc_key_kind_v1, uint64_t,
+                                 talos_rt_object_v1 **));
 ABI_FUNCTION(talos_rt_v1_assoc_create_typed,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *, uint64_t, uint32_t,
-                                   uint32_t, uint64_t, uint64_t, uint64_t,
-                                   const talos_rt_element_trace_slot_v1 *,
-                                   uint64_t, talos_rt_assoc_key_kind_v1,
-                                   uint64_t, talos_rt_object_v1 **));
+                                 uint32_t, uint64_t, uint64_t, uint64_t,
+                                 const talos_rt_element_trace_slot_v1 *,
+                                 uint64_t, talos_rt_assoc_key_kind_v1, uint64_t,
+                                 talos_rt_object_v1 **));
 ABI_FUNCTION(talos_rt_v1_assoc_create_element_keyed,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *, uint64_t, uint32_t,
-                                   uint32_t, uint64_t, uint64_t, uint64_t,
-                                   const talos_rt_element_trace_slot_v1 *,
-                                   uint64_t, uint64_t, uint32_t, uint32_t,
-                                   uint64_t, uint64_t, uint64_t,
-                                   const talos_rt_element_trace_slot_v1 *,
-                                   uint64_t, const uint8_t *, uint64_t,
-                                   talos_rt_object_v1 **));
+             talos_rt_status (*)(
+                 talos_rt_gc_lane_v1 *, uint64_t, uint32_t, uint32_t, uint64_t,
+                 uint64_t, uint64_t, const talos_rt_element_trace_slot_v1 *,
+                 uint64_t, uint64_t, uint32_t, uint32_t, uint64_t, uint64_t,
+                 uint64_t, const talos_rt_element_trace_slot_v1 *, uint64_t,
+                 const uint8_t *, uint64_t, talos_rt_object_v1 **));
 ABI_FUNCTION(talos_rt_v1_assoc_exists,
              talos_rt_status (*)(talos_rt_object_v1 *,
-                                   const talos_rt_assoc_key_v1 *,
-                                   uint32_t *));
+                                 const talos_rt_assoc_key_v1 *, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_assoc_key_info,
              talos_rt_status (*)(talos_rt_object_v1 *,
-                                   talos_rt_assoc_key_kind_v1 *, uint64_t *));
+                                 talos_rt_assoc_key_kind_v1 *, uint64_t *));
 ABI_FUNCTION(talos_rt_v1_assoc_read,
              talos_rt_status (*)(talos_rt_object_v1 *,
-                                   const talos_rt_assoc_key_v1 *, void *,
-                                   void *, uint32_t *));
+                                 const talos_rt_assoc_key_v1 *, void *, void *,
+                                 uint32_t *));
 ABI_FUNCTION(talos_rt_v1_assoc_read_checked,
              talos_rt_status (*)(talos_rt_object_v1 *,
-                                   const talos_rt_assoc_key_v1 *, void *,
-                                   uint64_t, void *, uint64_t, uint32_t *));
+                                 const talos_rt_assoc_key_v1 *, void *,
+                                 uint64_t, void *, uint64_t, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_assoc_write,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *,
-                                   const talos_rt_assoc_key_v1 *,
-                                   const void *, const void *));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 const talos_rt_assoc_key_v1 *, const void *,
+                                 const void *));
 ABI_FUNCTION(talos_rt_v1_assoc_write_checked,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *,
-                                   const talos_rt_assoc_key_v1 *,
-                                   const void *, uint64_t, const void *,
-                                   uint64_t));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 const talos_rt_assoc_key_v1 *, const void *,
+                                 uint64_t, const void *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_assoc_set_default,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *, const void *,
-                                   const void *));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 const void *, const void *));
 ABI_FUNCTION(talos_rt_v1_assoc_set_default_checked,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *, const void *,
-                                   uint64_t, const void *, uint64_t));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 const void *, uint64_t, const void *,
+                                 uint64_t));
 ABI_FUNCTION(talos_rt_v1_assoc_delete,
              talos_rt_status (*)(talos_rt_object_v1 *,
-                                   const talos_rt_assoc_key_v1 *));
+                                 const talos_rt_assoc_key_v1 *));
 ABI_FUNCTION(talos_rt_v1_assoc_first,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *,
-                                   talos_rt_assoc_key_v1 *, uint32_t *));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 talos_rt_assoc_key_v1 *, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_assoc_last,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *,
-                                   talos_rt_assoc_key_v1 *, uint32_t *));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 talos_rt_assoc_key_v1 *, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_assoc_next,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *,
-                                   talos_rt_assoc_key_v1 *, uint32_t *));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 talos_rt_assoc_key_v1 *, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_assoc_prev,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *,
-                                   talos_rt_assoc_key_v1 *, uint32_t *));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 talos_rt_assoc_key_v1 *, uint32_t *));
 ABI_FUNCTION(talos_rt_v1_reference_path_index_create,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *, int64_t,
-                                   talos_rt_object_v1 *, uint64_t, uint32_t,
-                                   uint8_t *, uint8_t *, uint64_t,
-                                   talos_rt_object_v1 **));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 int64_t, talos_rt_object_v1 *, uint64_t,
+                                 uint32_t, uint8_t *, uint8_t *, uint64_t,
+                                 talos_rt_object_v1 **));
 ABI_FUNCTION(talos_rt_v1_reference_path_assoc_create,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *,
-                                   const talos_rt_assoc_key_v1 *,
-                                   talos_rt_object_v1 *, uint64_t, uint32_t,
-                                   uint8_t *, uint8_t *, uint64_t,
-                                   talos_rt_object_v1 **));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 const talos_rt_assoc_key_v1 *,
+                                 talos_rt_object_v1 *, uint64_t, uint32_t,
+                                 uint8_t *, uint8_t *, uint64_t,
+                                 talos_rt_object_v1 **));
 ABI_FUNCTION(talos_rt_v1_reference_path_covergroup_option_create,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *, uint64_t, uint64_t,
-                                   uint64_t, uint32_t, uint64_t, int64_t,
-                                   uint32_t, talos_rt_object_v1 *, uint64_t,
-                                   uint32_t, uint8_t *, uint8_t *, uint64_t,
-                                   talos_rt_object_v1 **));
+                                 uint64_t, uint32_t, uint64_t, int64_t,
+                                 uint32_t, talos_rt_object_v1 *, uint64_t,
+                                 uint32_t, uint8_t *, uint8_t *, uint64_t,
+                                 talos_rt_object_v1 **));
 ABI_FUNCTION(talos_rt_v1_reference_path_string_character_create,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_string_v1, int64_t,
-                                   talos_rt_object_v1 *, uint64_t, uint32_t,
-                                   uint8_t *, uint8_t *, uint64_t,
-                                   talos_rt_object_v1 **));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_string_v1,
+                                 int64_t, talos_rt_object_v1 *, uint64_t,
+                                 uint32_t, uint8_t *, uint8_t *, uint64_t,
+                                 talos_rt_object_v1 **));
 ABI_FUNCTION(talos_rt_v1_reference_path_aggregate_element_create,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *, uint64_t, uint32_t,
-                                   uint8_t *, uint8_t *, uint64_t, int64_t,
-                                   int64_t, int64_t, uint64_t, uint64_t,
-                                   uint64_t, uint32_t, uint64_t, uint32_t,
-                                   uint32_t, uint64_t, uint64_t, uint64_t,
-                                   const talos_rt_element_trace_slot_v1 *,
-                                   uint64_t, talos_rt_object_v1 **));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 uint64_t, uint32_t, uint8_t *, uint8_t *,
+                                 uint64_t, int64_t, int64_t, int64_t, uint64_t,
+                                 uint64_t, uint64_t, uint32_t, uint64_t,
+                                 uint32_t, uint32_t, uint64_t, uint64_t,
+                                 uint64_t,
+                                 const talos_rt_element_trace_slot_v1 *,
+                                 uint64_t, talos_rt_object_v1 **));
 ABI_FUNCTION(talos_rt_v1_reference_path_load,
              talos_rt_status (*)(talos_rt_object_v1 *, void *, void *,
-                                   uint32_t *));
+                                 uint32_t *));
 ABI_FUNCTION(talos_rt_v1_reference_path_store,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *, const void *,
-                                   const void *));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 const void *, const void *));
 ABI_FUNCTION(talos_rt_v1_method_resolve,
              talos_rt_status (*)(talos_rt_object_v1 *, uint64_t, uint64_t,
-                                   const talos_rt_method_descriptor_v1 **));
+                                 const talos_rt_method_descriptor_v1 **));
 ABI_FUNCTION(talos_rt_v1_interface_method_resolve,
              talos_rt_status (*)(talos_rt_object_v1 *, uint64_t, uint64_t,
-                                   uint64_t,
-                                   const talos_rt_method_descriptor_v1 **));
+                                 uint64_t,
+                                 const talos_rt_method_descriptor_v1 **));
 ABI_FUNCTION(talos_rt_v1_method_invoke,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *, uint64_t, uint64_t,
-                                   const talos_rt_method_argument_v1 *,
-                                   uint32_t, void *, uint64_t));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 uint64_t, uint64_t,
+                                 const talos_rt_method_argument_v1 *, uint32_t,
+                                 void *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_interface_method_invoke,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *, uint64_t, uint64_t,
-                                   uint64_t,
-                                   const talos_rt_method_argument_v1 *,
-                                   uint32_t, void *, uint64_t));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 uint64_t, uint64_t, uint64_t,
+                                 const talos_rt_method_argument_v1 *, uint32_t,
+                                 void *, uint64_t));
 ABI_FUNCTION(talos_rt_v1_method_task_activate,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *, uint64_t, uint64_t,
-                                   const talos_rt_method_argument_v1 *,
-                                   uint32_t, uint64_t *));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 uint64_t, uint64_t,
+                                 const talos_rt_method_argument_v1 *, uint32_t,
+                                 uint64_t *));
 ABI_FUNCTION(talos_rt_v1_interface_method_task_activate,
-             talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   talos_rt_object_v1 *, uint64_t, uint64_t,
-                                   uint64_t,
-                                   const talos_rt_method_argument_v1 *,
-                                   uint32_t, uint64_t *));
+             talos_rt_status (*)(talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+                                 uint64_t, uint64_t, uint64_t,
+                                 const talos_rt_method_argument_v1 *, uint32_t,
+                                 uint64_t *));
 ABI_FUNCTION(talos_rt_v1_weak_create,
              talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                   const talos_rt_class_descriptor_v1 *,
-                                   talos_rt_object_v1 *,
-                                   talos_rt_object_v1 **));
+                                 const talos_rt_class_descriptor_v1 *,
+                                 talos_rt_object_v1 *, talos_rt_object_v1 **));
 ABI_FUNCTION(talos_rt_v1_weak_get,
-             talos_rt_status (*)(talos_rt_object_v1 *,
-                                   talos_rt_object_v1 **));
-ABI_FUNCTION(talos_rt_v1_weak_clear,
-             talos_rt_status (*)(talos_rt_object_v1 *));
+             talos_rt_status (*)(talos_rt_object_v1 *, talos_rt_object_v1 **));
+ABI_FUNCTION(talos_rt_v1_weak_clear, talos_rt_status (*)(talos_rt_object_v1 *));
 
 #undef ABI_FUNCTION

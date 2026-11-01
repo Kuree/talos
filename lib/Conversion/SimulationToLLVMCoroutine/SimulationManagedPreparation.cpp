@@ -336,8 +336,7 @@ prepareManagedClassInventory(ModuleOp module,
 
   // Validate concrete implementations without rescanning inherited contracts.
   // Interface requirements share Patricia subtrees just like runtime indexes.
-  using Requirements =
-      talos::runtime::DescriptorMap<sim::SimClassMethodDeclOp>;
+  using Requirements = talos::runtime::DescriptorMap<sim::SimClassMethodDeclOp>;
   Requirements::MergeCache requirementMerges;
   llvm::StringMap<Requirements> interfaceRequirements;
   llvm::StringMap<uint8_t> interfaceState;
@@ -514,12 +513,12 @@ prepareManagedClassInventory(ModuleOp module,
                     llvmConstant(builder, location, i64, signatures.size()), 2);
     const auto &bases = interfaceBases[declaration.getSymName()];
     if (!bases.empty())
-      record = insertValue(
-          builder, location, record,
-          LLVM::AddressOfOp::create(builder, location, pointer,
-                                    declaration.getSymName().str() +
-                                        ".__talos_interface_bases"),
-          3);
+      record =
+          insertValue(builder, location, record,
+                      LLVM::AddressOfOp::create(builder, location, pointer,
+                                                declaration.getSymName().str() +
+                                                    ".__talos_interface_bases"),
+                      3);
     return insertValue(builder, location, record,
                        llvmConstant(builder, location, i64, bases.size()), 4);
   };
@@ -598,12 +597,12 @@ prepareManagedClassInventory(ModuleOp module,
                                         llvmConstant(builder, location, i32,
                                                      TALOS_RT_TRACE_EMBEDDED),
                                         3);
-                    entry = insertValue(
-                        builder, location, entry,
-                        LLVM::AddressOfOp::create(
-                            builder, location, pointer,
-                            base->str() + ".__talos_trace_layout"),
-                        5);
+                    entry =
+                        insertValue(builder, location, entry,
+                                    LLVM::AddressOfOp::create(
+                                        builder, location, pointer,
+                                        base->str() + ".__talos_trace_layout"),
+                                    5);
                     array = LLVM::InsertValueOp::create(
                         builder, location, array, entry, ArrayRef<int64_t>{0});
                   }
@@ -641,8 +640,7 @@ prepareManagedClassInventory(ModuleOp module,
                     LLVM::ZeroOp::create(builder, location, traceLayoutType);
                 trace = insertValue(
                     builder, location, trace,
-                    llvmConstant(builder, location, i32, TALOS_RT_VERSION),
-                    0);
+                    llvmConstant(builder, location, i32, TALOS_RT_VERSION), 0);
                 trace = insertValue(
                     builder, location, trace,
                     llvmConstant(builder, location, i64, layout.size), 2);
@@ -885,8 +883,7 @@ prepareManagedClassInventory(ModuleOp module,
                     LLVM::ZeroOp::create(builder, location, classType);
                 descriptor = insertValue(
                     builder, location, descriptor,
-                    llvmConstant(builder, location, i32, TALOS_RT_VERSION),
-                    0);
+                    llvmConstant(builder, location, i32, TALOS_RT_VERSION), 0);
                 uint32_t flags =
                     declaration.getIsAbstract() ? TALOS_RT_CLASS_ABSTRACT : 0;
                 if (declaration.getIsInterface())
@@ -963,11 +960,10 @@ prepareManagedClassInventory(ModuleOp module,
                       LLVM::AddressOfOp::create(builder, location, pointer,
                                                 copyResetsName),
                       14);
-                descriptor = insertValue(
-                    builder, location, descriptor,
-                    llvmConstant(builder, location, i64,
-                                 layout.copyResets.size()),
-                    15);
+                descriptor = insertValue(builder, location, descriptor,
+                                         llvmConstant(builder, location, i64,
+                                                      layout.copyResets.size()),
+                                         15);
                 descriptor = insertValue(builder, location, descriptor,
                                          llvmConstant(builder, location, i32,
                                                       layout.builtinBaseKind),

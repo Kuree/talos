@@ -87,10 +87,11 @@ uint64_t getSimulationRegionCost(Region &region) {
 }
 
 NBAMergeSafety::NBAMergeSafety(sim::SimDesignOp design) {
-  auto observed = design
-                      ? ::talos::schedule::get<
-                            schedule::metadata::nbaTransientObservable>(design)
-                      : DenseI64ArrayAttr{};
+  auto observed =
+      design
+          ? ::talos::schedule::get<schedule::metadata::nbaTransientObservable>(
+                design)
+          : DenseI64ArrayAttr{};
   schedule::ComputeGraphAttr graph =
       design ? design.getComputeGraphAttr() : schedule::ComputeGraphAttr{};
   if (!observed || !graph)
@@ -102,8 +103,7 @@ NBAMergeSafety::NBAMergeSafety(sim::SimDesignOp design) {
   for (int64_t descriptor : observed.asArrayRef())
     observable.insert(static_cast<uint64_t>(descriptor));
   if (auto watched =
-          ::talos::schedule::get<schedule::metadata::nbaChangeWatched>(
-              design))
+          ::talos::schedule::get<schedule::metadata::nbaChangeWatched>(design))
     for (int64_t descriptor : watched.asArrayRef())
       changeWatched.insert(static_cast<uint64_t>(descriptor));
   for (Attribute node : graph.getNodes()) {

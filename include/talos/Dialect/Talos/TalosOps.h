@@ -3,9 +3,9 @@
 #ifndef TALOS_DIALECT_TALOS_TALOSOPS_H
 #define TALOS_DIALECT_TALOS_TALOSOPS_H
 
+#include "talos/Dialect/SemanticTraits.h"
 #include "talos/Dialect/Talos/TalosDialect.h"
 #include "talos/Dialect/Talos/TalosTypes.h"
-#include "talos/Dialect/SemanticTraits.h"
 
 #include "mlir/Bytecode/BytecodeOpInterface.h"
 #include "mlir/IR/Builders.h"

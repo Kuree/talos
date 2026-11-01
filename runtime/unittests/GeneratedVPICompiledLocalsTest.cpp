@@ -5,11 +5,11 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/DPI/DPIDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <algorithm>
@@ -28,13 +28,13 @@ void inspectBinding(talos_rt_context *context, BindProbe &probe,
                     unsigned phase) {
   probe.phases.push_back(phase);
   if (!phase) {
-    ASSERT_EQ(
-        talos_rt_v1_vpi_frame_enter(
-            context, 44, TALOS_RT_VPI_FRAME_CODE_UNIT_SCOPE, 44, &probe.root),
-        TALOS_RT_OK);
-    ASSERT_EQ(talos_rt_v1_vpi_frame_enter(
-                  context, 44, TALOS_RT_VPI_FRAME_STATEMENT_SCOPE, 11,
-                  &probe.block),
+    ASSERT_EQ(talos_rt_v1_vpi_frame_enter(context, 44,
+                                          TALOS_RT_VPI_FRAME_CODE_UNIT_SCOPE,
+                                          44, &probe.root),
+              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_vpi_frame_enter(context, 44,
+                                          TALOS_RT_VPI_FRAME_STATEMENT_SCOPE,
+                                          11, &probe.block),
               TALOS_RT_OK);
     probe.frame = vpi_handle(vpiFrame, nullptr);
     ASSERT_NE(probe.frame, nullptr);
@@ -74,11 +74,11 @@ void inspectBinding(talos_rt_context *context, BindProbe &probe,
   EXPECT_EQ(vpi_get(vpiType, probe.variable), vpiUndefined);
   EXPECT_NE(vpi_chk_error(nullptr), 0);
 }
-talos_rt_status
-inspectCompiledBinding(talos_rt_context *context, uint32_t id,
-                       const talos_rt_import_input_v1 *inputs, uint32_t count,
-                       talos_rt_import_output_v1 *, uint32_t outputs,
-                       void *data) {
+talos_rt_status inspectCompiledBinding(talos_rt_context *context, uint32_t id,
+                                       const talos_rt_import_input_v1 *inputs,
+                                       uint32_t count,
+                                       talos_rt_import_output_v1 *,
+                                       uint32_t outputs, void *data) {
   if (id != 123 || count != 1 || !inputs || !inputs[0].value || outputs)
     return TALOS_RT_INVALID_ARGUMENT;
   inspectBinding(context, *static_cast<BindProbe *>(data), inputs[0].value[0]);
@@ -89,10 +89,9 @@ TEST(GeneratedDesignDatabase, CompiledFrameLocalBinding) {
   const char *input = std::getenv("TALOS_TEST_INPUT");
   ASSERT_NE(input, nullptr);
   mlir::DialectRegistry registry;
-  registry
-      .insert<mlir::arith::ArithDialect, mlir::cf::ControlFlowDialect,
-              talos::dpi::DPIDialect, talos::runtime::TalosRuntimeDialect,
-              talos::sim::TalosSimulationDialect>();
+  registry.insert<mlir::arith::ArithDialect, mlir::cf::ControlFlowDialect,
+                  talos::dpi::DPIDialect, talos::runtime::TalosRuntimeDialect,
+                  talos::sim::TalosSimulationDialect>();
   mlir::MLIRContext context(registry);
   auto module = mlir::parseSourceFile<mlir::ModuleOp>(input, &context);
   ASSERT_TRUE(module);
@@ -123,8 +122,8 @@ TEST(GeneratedDesignDatabase, CompiledFrameLocalBinding) {
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &runtime),
             TALOS_RT_OK);
   BindProbe probe;
-  ASSERT_EQ(talos_rt_v1_context_register_import(
-                runtime, 123, inspectCompiledBinding, &probe),
+  ASSERT_EQ(talos_rt_v1_context_register_import(runtime, 123,
+                                                inspectCompiledBinding, &probe),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_startup(runtime, nullptr, 0), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_end_compile(runtime), TALOS_RT_OK);
@@ -136,14 +135,14 @@ TEST(GeneratedDesignDatabase, CompiledFrameLocalBinding) {
   talos_rt_design_bytecode_entry_v1 entry{&execution, startup->index, 0};
   uint64_t scratchSize = 0, scratchAlignment = 0;
   ASSERT_EQ(talos_rt_validate_design_bytecode(entry, runtime, &scratchSize,
-                                                &scratchAlignment),
+                                              &scratchAlignment),
             TALOS_RT_OK);
   ASSERT_LE(scratchAlignment, alignof(uint64_t));
   std::vector<uint64_t> frame((scratchSize + 7) / 8);
   talos_rt_fragment_action_v1 action{};
   ASSERT_EQ(talos_rt_execute_design_bytecode(entry, runtime, frame.data(),
-                                               frame.size() * 8, 0, scratchSize,
-                                               0, 0, &action),
+                                             frame.size() * 8, 0, scratchSize,
+                                             0, 0, &action),
             TALOS_RT_OK);
   ASSERT_EQ(action.kind, TALOS_RT_FRAGMENT_TERMINATE);
   ASSERT_EQ(talos_rt_v1_scheduler_run(runtime), TALOS_RT_OK);

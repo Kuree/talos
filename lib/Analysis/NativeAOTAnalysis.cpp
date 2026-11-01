@@ -405,46 +405,44 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
                  function) &&
              ::talos::schedule::has<
                  ::talos::schedule::Field::ConcurrentEosCounted>(function) &&
-             ::talos::schedule::has<
-                 ::talos::schedule::Field::DetachedControls>(function) &&
+             ::talos::schedule::has<::talos::schedule::Field::DetachedControls>(
+                 function) &&
              function.getEntryKind() == sim::EntryKind::Final &&
              function.getHomeRegion() == sim::EventRegion::Active &&
              function.getDomain() == sim::ExecutionDomain::Design;
     if (!function->hasAttr("internal"))
       return false;
-    return (::talos::schedule::has<
-                ::talos::schedule::Field::ConcurrentReport>(function) &&
-            ::talos::schedule::has<
-                ::talos::schedule::Field::DetachedControls>(function) &&
+    return (::talos::schedule::has<::talos::schedule::Field::ConcurrentReport>(
+                function) &&
+            ::talos::schedule::has<::talos::schedule::Field::DetachedControls>(
+                function) &&
             function.getEntryKind() == sim::EntryKind::Fork &&
             function.getHomeRegion() == sim::EventRegion::Reactive) ||
-           (::talos::schedule::has<
-                ::talos::schedule::Field::ConcurrentCancel>(function) &&
-            ::talos::schedule::has<
-                ::talos::schedule::Field::DetachedControls>(function) &&
-            ::talos::schedule::has<
-                ::talos::schedule::Field::PrioritySignalResume>(function) &&
-            function.getEntryKind() == sim::EntryKind::Fork &&
-            function.getHomeRegion() == sim::EventRegion::Reactive) ||
-           (::talos::schedule::has<
-                ::talos::schedule::Field::ConcurrentAbort>(function) &&
-            ::talos::schedule::has<
-                ::talos::schedule::Field::DetachedControls>(function) &&
-            ::talos::schedule::has<
-                ::talos::schedule::Field::PrioritySignalResume>(function) &&
-            function.getEntryKind() == sim::EntryKind::Fork &&
-            function.getHomeRegion() == sim::EventRegion::Reactive) ||
-           (::talos::schedule::has<
-                ::talos::schedule::Field::ConcurrentCancelObserver>(
+           (::talos::schedule::has<::talos::schedule::Field::ConcurrentCancel>(
+                function) &&
+            ::talos::schedule::has<::talos::schedule::Field::DetachedControls>(
                 function) &&
             ::talos::schedule::has<
-                ::talos::schedule::Field::DetachedControls>(function) &&
+                ::talos::schedule::Field::PrioritySignalResume>(function) &&
+            function.getEntryKind() == sim::EntryKind::Fork &&
+            function.getHomeRegion() == sim::EventRegion::Reactive) ||
+           (::talos::schedule::has<::talos::schedule::Field::ConcurrentAbort>(
+                function) &&
+            ::talos::schedule::has<::talos::schedule::Field::DetachedControls>(
+                function) &&
+            ::talos::schedule::has<
+                ::talos::schedule::Field::PrioritySignalResume>(function) &&
+            function.getEntryKind() == sim::EntryKind::Fork &&
+            function.getHomeRegion() == sim::EventRegion::Reactive) ||
+           (::talos::schedule::has<
+                ::talos::schedule::Field::ConcurrentCancelObserver>(function) &&
+            ::talos::schedule::has<::talos::schedule::Field::DetachedControls>(
+                function) &&
             function.getEntryKind() == sim::EntryKind::Observer) ||
            (::talos::schedule::has<
-                ::talos::schedule::Field::ConcurrentAbortObserver>(
+                ::talos::schedule::Field::ConcurrentAbortObserver>(function) &&
+            ::talos::schedule::has<::talos::schedule::Field::DetachedControls>(
                 function) &&
-            ::talos::schedule::has<
-                ::talos::schedule::Field::DetachedControls>(function) &&
             function.getEntryKind() == sim::EntryKind::Observer);
   };
   auto rejectPlan = [&](StringRef reason) {
@@ -759,8 +757,7 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
     // observers in the publication cohort. Keep every non-root overlapping
     // writer activation behind a generic checkpoint; otherwise a generated
     // island could publish and advance time without waking the observer.
-    if (!result.runtimeCheckpointActors.insert(function.getOperation())
-             .second)
+    if (!result.runtimeCheckpointActors.insert(function.getOperation()).second)
       continue;
     for (Block &owned : function.getBody())
       requireBytecodeFragment(owned.getTerminator(),
@@ -860,16 +857,16 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
   // The hazard is a loop that re-reaches its own work without suspending, which
   // IEEE 1800-2023 12.7.6 describes as hanging the event scheduler. A fragment
   // merely reachable *after* such a loop is not that hazard: it runs once the
-  // loop finishes. So condense this group's process-order subgraph and keep only
-  // nontrivial components and self-loops, rather than every fragment a
+  // loop finishes. So condense this group's process-order subgraph and keep
+  // only nontrivial components and self-loops, rather than every fragment a
   // topological sweep fails to order. A fragment outside every process-order
   // cycle cannot be re-entered without suspending, which is exactly the
   // requirement the Convergence arm below already admits natively. IEEE
   // 1800-2023 4.7 lets a simulator run a process to completion as one event
-  // instead of interleaving, and 4.6's source-order and NBA-order guarantees are
-  // preserved by doing so.
-  // Index the process-order edges once: a per-group rescan of the whole edge
-  // list is quadratic on a design with many control-loop groups.
+  // instead of interleaving, and 4.6's source-order and NBA-order guarantees
+  // are preserved by doing so. Index the process-order edges once: a per-group
+  // rescan of the whole edge list is quadratic on a design with many
+  // control-loop groups.
   //
   // A latch whose loop is proven to leave after finitely many iterations is
   // not that hazard either: its for-loop test fails after a bounded number of
@@ -1143,7 +1140,8 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
             plain = !dpiCallMayReenter(call);
           } else if (auto call = dyn_cast<sim::SimTaskCallOp>(operation)) {
             sim::SimFuncOp callee = lookupFunction(call.getCallee());
-            plain = callee && nonSuspendingTasks.contains(callee.getOperation());
+            plain =
+                callee && nonSuspendingTasks.contains(callee.getOperation());
           }
           return plain ? WalkResult::advance() : WalkResult::interrupt();
         });
@@ -1418,8 +1416,9 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
         bytecodeActors.insert(function.getOperation());
         result.reasons.emplace_back(
             "initial signal waiter requires Active ordering");
-        noteReason(actorReasons[function.getOperation()],
-                   internReason("initial signal waiter requires Active ordering"));
+        noteReason(
+            actorReasons[function.getOperation()],
+            internReason("initial signal waiter requires Active ordering"));
         onlyConcurrentColdBoundaries = false;
       }
     });
@@ -1590,13 +1589,12 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
       if (entry.second.empty()) {
         SmallVector<unsigned> indices =
             actorReasons.lookup(function.getOperation());
-        for (unsigned index :
-             actorBlockReasons.lookup(function.getOperation()))
+        for (unsigned index : actorBlockReasons.lookup(function.getOperation()))
           noteReason(indices, index);
         llvm::sort(indices);
         for (unsigned index : indices)
-          entry.second += (entry.second.empty() ? "" : "; ") +
-                          reasonNames[index];
+          entry.second +=
+              (entry.second.empty() ? "" : "; ") + reasonNames[index];
       }
     }
     ordered.clear();
@@ -1615,10 +1613,9 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
                                     const NativeAOTBoundaryCost &rhs) {
     return lhs.cost > rhs.cost;
   });
-  llvm::copy_if(attribution, std::back_inserter(result.boundaryCosts),
-                [](const NativeAOTBoundaryCost &entry) {
-                  return entry.cost != 0;
-                });
+  llvm::copy_if(
+      attribution, std::back_inserter(result.boundaryCosts),
+      [](const NativeAOTBoundaryCost &entry) { return entry.cost != 0; });
   // A partially admitted island can use generated eval when its exact fanout
   // and direct-owner proofs succeed during lowering. A periodic clock makes
   // even a small island useful; a large clockless island can instead use the

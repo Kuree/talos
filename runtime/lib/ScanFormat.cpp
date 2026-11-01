@@ -83,8 +83,8 @@ TALOS_RT_FEATURE_TEXT talos_rt_status talos_rt_dynamic_scan_plan(
     uint64_t identity = 0;
     talos_rt_string_v1 inlineValue = 0;
     if ((format & UINT64_C(3)) == 0 && format != 0)
-      identity = talos_rt_v1_object_id(
-          reinterpret_cast<const talos_rt_object_v1 *>(
+      identity =
+          talos_rt_v1_object_id(reinterpret_cast<const talos_rt_object_v1 *>(
               static_cast<uintptr_t>(format)));
     else
       inlineValue = format;
@@ -96,9 +96,9 @@ TALOS_RT_FEATURE_TEXT talos_rt_status talos_rt_dynamic_scan_plan(
         context->dynamicScanState = new (std::nothrow) DynamicScanState();
         if (!context->dynamicScanState)
           return TALOS_RT_OUT_OF_MEMORY;
-        context->dynamicScanState->destroy =
-            [](DynamicScanState *state)
-                { delete state; };
+        context->dynamicScanState->destroy = [](DynamicScanState *state) {
+          delete state;
+        };
       }
       state = context->dynamicScanState;
     }
@@ -169,23 +169,21 @@ TALOS_RT_FEATURE_TEXT talos_rt_status talos_rt_dynamic_scan_plan(
 
 extern "C" TALOS_RT_FEATURE_TEXT talos_rt_status
 talos_rt_v1_scan_dynamic_validate(talos_rt_context *context,
-                                    talos_rt_string_v1 format,
-                                    uint32_t planCursor, uint32_t file,
-                                    uint32_t finalize,
-                                    uint64_t allowedSpecifiers,
-                                    uint32_t *outPlanCursor) {
+                                  talos_rt_string_v1 format,
+                                  uint32_t planCursor, uint32_t file,
+                                  uint32_t finalize, uint64_t allowedSpecifiers,
+                                  uint32_t *outPlanCursor) {
   if (!context || !outPlanCursor || file > 1 || finalize > 1)
     return TALOS_RT_INVALID_ARGUMENT;
   *outPlanCursor = planCursor;
   std::shared_ptr<const DynamicScanPlan> plan;
-  talos_rt_status status =
-      talos_rt_dynamic_scan_plan(context, format, plan);
+  talos_rt_status status = talos_rt_dynamic_scan_plan(context, format, plan);
   if (status != TALOS_RT_OK)
     return status;
   const char *task = file ? "$fscanf" : "$sscanf";
   if (!plan->error.empty()) {
-    std::fprintf(stderr, "talos: malformed dynamic %s conversion '%s'\n",
-                 task, plan->error.c_str());
+    std::fprintf(stderr, "talos: malformed dynamic %s conversion '%s'\n", task,
+                 plan->error.c_str());
     return TALOS_RT_INVALID_ARGUMENT;
   }
   if (planCursor > plan->conversions.size()) {

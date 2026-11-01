@@ -49,9 +49,9 @@ constexpr uint64_t kDeferredCollectionFactor = 4;
 constexpr uint64_t kMaximumSmallSlot = 32 * 1024;
 constexpr unsigned kSizeClassCount = 11; // 32 bytes through 32 KiB.
 constexpr size_t kEmptyChunkCache = 2;
-constexpr uint32_t kRandomVariableFlags =
-    TALOS_RT_RANDOM_VARIABLE_FOUR_STATE | TALOS_RT_RANDOM_VARIABLE_SIGNED |
-    TALOS_RT_RANDOM_VARIABLE_RANDC;
+constexpr uint32_t kRandomVariableFlags = TALOS_RT_RANDOM_VARIABLE_FOUR_STATE |
+                                          TALOS_RT_RANDOM_VARIABLE_SIGNED |
+                                          TALOS_RT_RANDOM_VARIABLE_RANDC;
 
 static_assert(kSpansPerChunk == 32);
 
@@ -193,8 +193,7 @@ ObjectMetadata *metadataFor(const talos_rt_object_v1 *object) {
   return metadata;
 }
 
-talos_rt_object_v1 *
-managedWordObject(talos_rt_managed_word_v1 word) noexcept {
+talos_rt_object_v1 *managedWordObject(talos_rt_managed_word_v1 word) noexcept {
   return talos_rt_object_from_managed_word(word);
 }
 
@@ -439,10 +438,10 @@ private:
   std::vector<const talos_rt_trace_layout_v1 *> additions;
 };
 
-bool layoutHasStrongHandleAt(const talos_rt_trace_layout_v1 *layout,
-                             uint64_t baseOffset, uint64_t wantedOffset,
-                             talos_rt_managed_slot_kind_v1 wantedKind =
-                                 TALOS_RT_MANAGED_SLOT_INVALID) {
+bool layoutHasStrongHandleAt(
+    const talos_rt_trace_layout_v1 *layout, uint64_t baseOffset,
+    uint64_t wantedOffset,
+    talos_rt_managed_slot_kind_v1 wantedKind = TALOS_RT_MANAGED_SLOT_INVALID) {
   if (!layout)
     return false;
   for (uint64_t index = 0; index != layout->entry_count; ++index) {
@@ -569,8 +568,7 @@ public:
       auto insert = [&](TraceHandle handle) {
         if (!valid)
           return;
-        if (result.overlaps(handle.offset,
-                            sizeof(talos_rt_managed_word_v1))) {
+        if (result.overlaps(handle.offset, sizeof(talos_rt_managed_word_v1))) {
           valid = false;
           return;
         }
@@ -628,8 +626,8 @@ private:
 class InterfaceValidation {
 public:
   using Requirements = talos::runtime::DescriptorMap<uint64_t>;
-  using Bindings = talos::runtime::DescriptorMap<
-      const talos_rt_interface_descriptor_v1 *>;
+  using Bindings =
+      talos::runtime::DescriptorMap<const talos_rt_interface_descriptor_v1 *>;
   struct Inventory {
     talos_rt_interface_descriptor_v1 descriptor{};
     Requirements requirements;
@@ -763,8 +761,7 @@ public:
       result = *base;
     }
     result.ancestors = result.ancestors.set(descriptor->class_id, descriptor);
-    constexpr uint32_t validFlags =
-        TALOS_RT_METHOD_TASK | TALOS_RT_METHOD_PURE;
+    constexpr uint32_t validFlags = TALOS_RT_METHOD_TASK | TALOS_RT_METHOD_PURE;
     for (uint64_t index = 0; index != descriptor->method_count; ++index) {
       const auto &method = descriptor->methods[index];
       if (!method.signature_id || method.slot >= UINT32_MAX ||
@@ -1239,9 +1236,8 @@ public:
     return TALOS_RT_OK;
   }
 
-  talos_rt_status pushRoot(talos_rt_gc_lane_v1 *lane,
-                             talos_rt_gc_root_v1 *root,
-                             talos_rt_object_v1 **slot) {
+  talos_rt_status pushRoot(talos_rt_gc_lane_v1 *lane, talos_rt_gc_root_v1 *root,
+                           talos_rt_object_v1 **slot) {
     if (!activeOwner(lane) || !root || !slot || root->cookie != 0)
       return TALOS_RT_INVALID_ARGUMENT;
     root->slot = slot;
@@ -1252,7 +1248,7 @@ public:
   }
 
   talos_rt_status popRoot(talos_rt_gc_lane_v1 *lane,
-                            talos_rt_gc_root_v1 *root) {
+                          talos_rt_gc_root_v1 *root) {
     if (!activeOwner(lane) || !root ||
         root->cookie != (kRootCookie ^ reinterpret_cast<uintptr_t>(lane)) ||
         lane->roots.load(std::memory_order_acquire) != root)
@@ -1265,9 +1261,8 @@ public:
   }
 
   talos_rt_status pushRootRange(talos_rt_gc_lane_v1 *lane,
-                                  talos_rt_gc_root_range_v1 *range,
-                                  talos_rt_object_v1 **slots,
-                                  uint64_t count) {
+                                talos_rt_gc_root_range_v1 *range,
+                                talos_rt_object_v1 **slots, uint64_t count) {
     if (!activeOwner(lane) || !range || (!slots && count != 0) ||
         range->cookie != 0)
       return TALOS_RT_INVALID_ARGUMENT;
@@ -1281,7 +1276,7 @@ public:
   }
 
   talos_rt_status popRootRange(talos_rt_gc_lane_v1 *lane,
-                                 talos_rt_gc_root_range_v1 *range) {
+                               talos_rt_gc_root_range_v1 *range) {
     if (!activeOwner(lane) || !range ||
         range->cookie != (kRootCookie ^ reinterpret_cast<uintptr_t>(lane) ^
                           reinterpret_cast<uintptr_t>(range)) ||
@@ -1304,8 +1299,8 @@ public:
   }
 
   talos_rt_status pushManagedRoot(talos_rt_gc_lane_v1 *lane,
-                                    talos_rt_gc_managed_root_v1 *root,
-                                    talos_rt_managed_word_v1 *slot) {
+                                  talos_rt_gc_managed_root_v1 *root,
+                                  talos_rt_managed_word_v1 *slot) {
     if (!activeOwner(lane) || !root || !slot || root->cookie != 0)
       return TALOS_RT_INVALID_ARGUMENT;
     if (!validManagedRootWord(*slot))
@@ -1319,7 +1314,7 @@ public:
   }
 
   talos_rt_status popManagedRoot(talos_rt_gc_lane_v1 *lane,
-                                   talos_rt_gc_managed_root_v1 *root) {
+                                 talos_rt_gc_managed_root_v1 *root) {
     if (!activeOwner(lane) || !root ||
         root->cookie != (kRootCookie ^ reinterpret_cast<uintptr_t>(lane) ^
                          UINT64_C(0x4d414e41474544)) ||
@@ -1332,10 +1327,10 @@ public:
     return TALOS_RT_OK;
   }
 
-  talos_rt_status
-  pushManagedRootRange(talos_rt_gc_lane_v1 *lane,
-                       talos_rt_gc_managed_root_range_v1 *range,
-                       talos_rt_managed_word_v1 *slots, uint64_t count) {
+  talos_rt_status pushManagedRootRange(talos_rt_gc_lane_v1 *lane,
+                                       talos_rt_gc_managed_root_range_v1 *range,
+                                       talos_rt_managed_word_v1 *slots,
+                                       uint64_t count) {
     if (!activeOwner(lane) || !range || (!slots && count != 0) ||
         range->cookie != 0)
       return TALOS_RT_INVALID_ARGUMENT;
@@ -1370,9 +1365,9 @@ public:
   }
 
   talos_rt_status pushProvider(talos_rt_gc_lane_v1 *lane,
-                                 ManagedRootProvider *provider,
-                                 ManagedRootEnumerate enumerate,
-                                 void *environment) {
+                               ManagedRootProvider *provider,
+                               ManagedRootEnumerate enumerate,
+                               void *environment) {
     if (!activeOwner(lane) || !provider || !enumerate || provider->previous ||
         provider->cookie != 0)
       return TALOS_RT_INVALID_ARGUMENT;
@@ -1385,7 +1380,7 @@ public:
   }
 
   talos_rt_status popProvider(talos_rt_gc_lane_v1 *lane,
-                                ManagedRootProvider *provider) {
+                              ManagedRootProvider *provider) {
     if (!activeOwner(lane) || !provider ||
         provider->cookie !=
             (kProviderCookie ^ reinterpret_cast<uintptr_t>(lane)) ||
@@ -1399,8 +1394,7 @@ public:
     return TALOS_RT_OK;
   }
 
-  talos_rt_status registerStatic(talos_rt_object_v1 **slot,
-                                   bool activeCaller) {
+  talos_rt_status registerStatic(talos_rt_object_v1 **slot, bool activeCaller) {
     if (!slot)
       return TALOS_RT_INVALID_ARGUMENT;
     std::unique_lock<std::mutex> worldLock(worldMutex, std::defer_lock);
@@ -1415,8 +1409,8 @@ public:
   }
 
   talos_rt_status registerCandidateStatic(talos_rt_managed_word_v1 *slot,
-                                            uint32_t allowedKinds,
-                                            bool activeCaller) {
+                                          uint32_t allowedKinds,
+                                          bool activeCaller) {
     if (!slot || allowedKinds == 0 ||
         (allowedKinds & ~TALOS_RT_MANAGED_ROOT_KIND_ALL) != 0)
       return TALOS_RT_INVALID_ARGUMENT;
@@ -1433,7 +1427,7 @@ public:
   }
 
   talos_rt_status unregisterStatic(talos_rt_object_v1 **slot,
-                                     bool activeCaller) {
+                                   bool activeCaller) {
     if (!slot)
       return TALOS_RT_INVALID_ARGUMENT;
     std::unique_lock<std::mutex> worldLock(worldMutex, std::defer_lock);
@@ -1485,8 +1479,8 @@ public:
   }
 
   talos_rt_status allocate(talos_rt_gc_lane_v1 *lane,
-                             const talos_rt_class_descriptor_v1 *descriptor,
-                             talos_rt_object_v1 **outObject) noexcept {
+                           const talos_rt_class_descriptor_v1 *descriptor,
+                           talos_rt_object_v1 **outObject) noexcept {
     return guarded(context, [&] {
       if (!descriptor)
         return TALOS_RT_INVALID_ARGUMENT;
@@ -1508,9 +1502,8 @@ public:
         if (!registered) {
           talos_rt_status status = talos_rt_v1_class_validate(descriptor);
           if (status != TALOS_RT_OK)
-            return status == TALOS_RT_INVALID_DESIGN
-                       ? TALOS_RT_INVALID_ARGUMENT
-                       : status;
+            return status == TALOS_RT_INVALID_DESIGN ? TALOS_RT_INVALID_ARGUMENT
+                                                     : status;
         }
         validationCache
             .validatedDescriptors[validationCache.nextValidatedDescriptor] =
@@ -1529,10 +1522,10 @@ public:
   }
 
   talos_rt_status allocateManaged(talos_rt_gc_lane_v1 *lane,
-                                    talos_rt_managed_kind_v1 kind,
-                                    uint64_t extent, uint64_t alignment,
-                                    const void *runtimeDescriptor,
-                                    talos_rt_object_v1 **outObject) noexcept {
+                                  talos_rt_managed_kind_v1 kind,
+                                  uint64_t extent, uint64_t alignment,
+                                  const void *runtimeDescriptor,
+                                  talos_rt_object_v1 **outObject) noexcept {
     return guarded(context, [&] {
       if (kind <= TALOS_RT_MANAGED_CLASS ||
           kind > TALOS_RT_MANAGED_REFERENCE_PATH || !runtimeDescriptor ||
@@ -1545,8 +1538,8 @@ public:
   }
 
   TALOS_RT_FEATURE_TEXT talos_rt_status allocateManagedWithoutSafepoint(
-      talos_rt_gc_lane_v1 *lane, talos_rt_managed_kind_v1 kind,
-      uint64_t extent, uint64_t alignment, const void *runtimeDescriptor,
+      talos_rt_gc_lane_v1 *lane, talos_rt_managed_kind_v1 kind, uint64_t extent,
+      uint64_t alignment, const void *runtimeDescriptor,
       talos_rt_object_v1 **outObject) noexcept;
 
 private:
@@ -1558,10 +1551,10 @@ private:
   }
 
   talos_rt_status allocateImpl(talos_rt_gc_lane_v1 *lane,
-                                 talos_rt_managed_kind_v1 kind,
-                                 uint64_t extent, uint64_t alignment,
-                                 const void *runtimeDescriptor,
-                                 talos_rt_object_v1 **outObject) {
+                               talos_rt_managed_kind_v1 kind, uint64_t extent,
+                               uint64_t alignment,
+                               const void *runtimeDescriptor,
+                               talos_rt_object_v1 **outObject) {
     if (!outObject)
       return TALOS_RT_INVALID_ARGUMENT;
     *outObject = nullptr;
@@ -1578,8 +1571,7 @@ private:
     // only at polls, so allocation neither parks nor collects: it records
     // pressure for the next poll or point between activations.
     bool polledCollection = polled.load(std::memory_order_acquire);
-    talos_rt_status status =
-        polledCollection ? TALOS_RT_OK : safepoint(lane);
+    talos_rt_status status = polledCollection ? TALOS_RT_OK : safepoint(lane);
     if (status != TALOS_RT_OK)
       return status;
     uint64_t allocated =
@@ -1831,7 +1823,7 @@ public:
   }
 
   talos_rt_status retainScheduled(talos_rt_gc_lane_v1 *lane,
-                                    talos_rt_object_v1 *object) {
+                                  talos_rt_object_v1 *object) {
     // The active lane keeps the object alive until this increment is
     // published: a collector cannot pass that lane before its next safepoint.
     // This avoids taking worldMutex while the scheduler transaction lock is
@@ -2027,8 +2019,7 @@ private:
       ManagedHeap *heap;
       std::vector<ObjectMetadata *> *pending;
     } providerVisitor{this, &pending};
-    auto visitProviderRoot = [](void *environment,
-                                talos_rt_object_v1 **slot) {
+    auto visitProviderRoot = [](void *environment, talos_rt_object_v1 **slot) {
       auto *visitor = static_cast<ProviderVisitor *>(environment);
       visitor->heap->markObject(slot ? *slot : nullptr, *visitor->pending);
     };
@@ -2075,7 +2066,7 @@ private:
       }
     }
     talos_rt_enumerate_design_managed_roots(context, visitProviderRoot,
-                                              &providerVisitor);
+                                            &providerVisitor);
     enumerateAllocated([&](ObjectMetadata *metadata) {
       if (metadata->pins.load(std::memory_order_acquire) != 0)
         mark(metadata, pending);
@@ -2261,8 +2252,8 @@ private:
 
 TALOS_RT_FEATURE_TEXT talos_rt_status
 ManagedHeap::allocateManagedWithoutSafepoint(
-    talos_rt_gc_lane_v1 *lane, talos_rt_managed_kind_v1 kind,
-    uint64_t extent, uint64_t alignment, const void *runtimeDescriptor,
+    talos_rt_gc_lane_v1 *lane, talos_rt_managed_kind_v1 kind, uint64_t extent,
+    uint64_t alignment, const void *runtimeDescriptor,
     talos_rt_object_v1 **outObject) noexcept {
   // Keep this implementation in the named feature section without a closure.
   // GCC emits inline members and closure call operators as COMDAT functions
@@ -2378,9 +2369,7 @@ ManagedHeap *talos_rt_managed_heap_create(talos_rt_context *context) {
   return new ManagedHeap(context);
 }
 
-void talos_rt_managed_heap_destroy(ManagedHeap *heap) noexcept {
-  delete heap;
-}
+void talos_rt_managed_heap_destroy(ManagedHeap *heap) noexcept { delete heap; }
 
 namespace {
 
@@ -2397,7 +2386,7 @@ ManagedHeap *heapFor(talos_rt_context *context) {
 }
 
 talos_rt_status threadExecutionLane(ManagedHeap *heap,
-                                      talos_rt_gc_lane_v1 **outLane) {
+                                    talos_rt_gc_lane_v1 **outLane) {
   if (!heap || !outLane)
     return TALOS_RT_INVALID_ARGUMENT;
   *outLane = nullptr;
@@ -2433,8 +2422,9 @@ descriptorFor(const talos_rt_object_v1 *object) {
 
 } // namespace
 
-talos_rt_status talos_rt_managed_identity_reserve(
-    talos_rt_context *context, uint64_t *outIdentity) noexcept {
+talos_rt_status
+talos_rt_managed_identity_reserve(talos_rt_context *context,
+                                  uint64_t *outIdentity) noexcept {
   if (!outIdentity)
     return TALOS_RT_INVALID_ARGUMENT;
   *outIdentity = 0;
@@ -2448,10 +2438,9 @@ talos_rt_status talos_rt_managed_identity_reserve(
   return TALOS_RT_OK;
 }
 
-talos_rt_status
-talos_rt_managed_execution_enter(talos_rt_context *context,
-                                   talos_rt_gc_lane_v1 **outLane,
-                                   bool *outEntered) {
+talos_rt_status talos_rt_managed_execution_enter(talos_rt_context *context,
+                                                 talos_rt_gc_lane_v1 **outLane,
+                                                 bool *outEntered) {
   if (!outLane || !outEntered)
     return TALOS_RT_INVALID_ARGUMENT;
   *outLane = nullptr;
@@ -2477,23 +2466,22 @@ talos_rt_managed_execution_enter(talos_rt_context *context,
   });
 }
 
-void talos_rt_managed_execution_leave(talos_rt_gc_lane_v1 *lane,
-                                        bool entered) {
+void talos_rt_managed_execution_leave(talos_rt_gc_lane_v1 *lane, bool entered) {
   if (entered && lane && lane->heap)
     (void)lane->heap->leave(lane);
 }
 
 talos_rt_status talos_rt_managed_roots_push(talos_rt_gc_lane_v1 *lane,
-                                                ManagedRootProvider *provider,
-                                                ManagedRootEnumerate enumerate,
-                                                void *environment) {
+                                            ManagedRootProvider *provider,
+                                            ManagedRootEnumerate enumerate,
+                                            void *environment) {
   return lane && lane->heap
              ? lane->heap->pushProvider(lane, provider, enumerate, environment)
              : TALOS_RT_INVALID_ARGUMENT;
 }
 
 talos_rt_status talos_rt_managed_roots_pop(talos_rt_gc_lane_v1 *lane,
-                                               ManagedRootProvider *provider) {
+                                           ManagedRootProvider *provider) {
   return lane && lane->heap ? lane->heap->popProvider(lane, provider)
                             : TALOS_RT_INVALID_ARGUMENT;
 }
@@ -2507,8 +2495,8 @@ talos_rt_managed_class_lookup(talos_rt_context *context, uint64_t classID) {
   return found == context->managedClasses.end() ? nullptr : found->second;
 }
 
-bool talos_rt_managed_object_belongs_to(
-    talos_rt_context *context, talos_rt_object_v1 *object) noexcept {
+bool talos_rt_managed_object_belongs_to(talos_rt_context *context,
+                                        talos_rt_object_v1 *object) noexcept {
   if (!object)
     return true;
   ManagedHeap *heap = heapFor(context);
@@ -2523,7 +2511,7 @@ talos_rt_managed_lane_context(const talos_rt_gc_lane_v1 *lane) noexcept {
 
 const talos_rt_element_type_v1 *
 talos_rt_managed_element_type_lookup(talos_rt_context *context,
-                                       uint64_t typeID) {
+                                     uint64_t typeID) {
   if (!context || typeID == 0)
     return nullptr;
   std::lock_guard<std::recursive_mutex> lock(context->mutex);
@@ -2531,11 +2519,11 @@ talos_rt_managed_element_type_lookup(talos_rt_context *context,
   return found == context->managedElementTypes.end() ? nullptr : found->second;
 }
 
-talos_rt_status
-talos_rt_managed_allocate(talos_rt_gc_lane_v1 *lane,
-                            talos_rt_managed_kind_v1 kind, uint64_t extent,
-                            uint64_t alignment, const void *runtimeDescriptor,
-                            talos_rt_object_v1 **outObject) {
+talos_rt_status talos_rt_managed_allocate(talos_rt_gc_lane_v1 *lane,
+                                          talos_rt_managed_kind_v1 kind,
+                                          uint64_t extent, uint64_t alignment,
+                                          const void *runtimeDescriptor,
+                                          talos_rt_object_v1 **outObject) {
   return lane && lane->heap
              ? lane->heap->allocateManaged(lane, kind, extent, alignment,
                                            runtimeDescriptor, outObject)
@@ -2543,19 +2531,21 @@ talos_rt_managed_allocate(talos_rt_gc_lane_v1 *lane,
 }
 
 TALOS_RT_FEATURE_HELPER talos_rt_status
-talos_rt_managed_allocate_without_safepoint(
-    talos_rt_gc_lane_v1 *lane, talos_rt_managed_kind_v1 kind,
-    uint64_t extent, uint64_t alignment, const void *runtimeDescriptor,
-    talos_rt_object_v1 **outObject) {
+talos_rt_managed_allocate_without_safepoint(talos_rt_gc_lane_v1 *lane,
+                                            talos_rt_managed_kind_v1 kind,
+                                            uint64_t extent, uint64_t alignment,
+                                            const void *runtimeDescriptor,
+                                            talos_rt_object_v1 **outObject) {
   return lane && lane->heap
              ? lane->heap->allocateManagedWithoutSafepoint(
                    lane, kind, extent, alignment, runtimeDescriptor, outObject)
              : TALOS_RT_INVALID_ARGUMENT;
 }
 
-talos_rt_status talos_rt_managed_object_access(
-    talos_rt_object_v1 *object, talos_rt_managed_kind_v1 expectedKind,
-    ManagedObjectAccess access, void *environment) {
+talos_rt_status
+talos_rt_managed_object_access(talos_rt_object_v1 *object,
+                               talos_rt_managed_kind_v1 expectedKind,
+                               ManagedObjectAccess access, void *environment) {
   if (!access)
     return TALOS_RT_INVALID_ARGUMENT;
   ObjectMetadata *metadata = metadataFor(object);
@@ -2622,9 +2612,9 @@ talos_rt_managed_object_release(ManagedObjectLease *lease) noexcept {
 talos_rt_managed_kind_v1
 talos_rt_managed_object_kind(const talos_rt_object_v1 *object) noexcept {
   ObjectMetadata *metadata = metadataFor(object);
-  return metadata ? metadata->kind
-                  : static_cast<talos_rt_managed_kind_v1>(
-                        TALOS_RT_MANAGED_INVALID);
+  return metadata
+             ? metadata->kind
+             : static_cast<talos_rt_managed_kind_v1>(TALOS_RT_MANAGED_INVALID);
 }
 
 uint64_t
@@ -2639,8 +2629,7 @@ talos_rt_managed_object_context(const talos_rt_object_v1 *object) noexcept {
   return metadata && metadata->heap ? metadata->heap->ownerContext() : nullptr;
 }
 
-const talos_rt_class_descriptor_v1 *
-talos_rt_managed_object_class_descriptor(
+const talos_rt_class_descriptor_v1 *talos_rt_managed_object_class_descriptor(
     const talos_rt_object_v1 *object) noexcept {
   ObjectMetadata *metadata = metadataFor(object);
   return metadata && metadata->kind == TALOS_RT_MANAGED_CLASS
@@ -2811,7 +2800,7 @@ talos_rt_v1_class_validate(const talos_rt_class_descriptor_v1 *descriptor) {
 
 extern "C" talos_rt_status
 talos_rt_v1_gc_lane_create(talos_rt_context *context,
-                             talos_rt_gc_lane_v1 **outLane) {
+                           talos_rt_gc_lane_v1 **outLane) {
   ManagedHeap *heap = heapFor(context);
   if (!heap)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -2836,8 +2825,7 @@ talos_rt_v1_gc_lane_leave(talos_rt_gc_lane_v1 *lane) {
                             : TALOS_RT_INVALID_ARGUMENT;
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_gc_safepoint(talos_rt_gc_lane_v1 *lane) {
+extern "C" talos_rt_status talos_rt_v1_gc_safepoint(talos_rt_gc_lane_v1 *lane) {
   return lane && lane->heap ? lane->heap->poll(lane)
                             : TALOS_RT_INVALID_ARGUMENT;
 }
@@ -2855,25 +2843,23 @@ talos_rt_v1_gc_current_lane(talos_rt_context *context) {
   return nullptr;
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_gc_root_push(talos_rt_gc_lane_v1 *lane,
-                           talos_rt_gc_root_v1 *root,
-                           talos_rt_object_v1 **slot) {
+extern "C" talos_rt_status talos_rt_v1_gc_root_push(talos_rt_gc_lane_v1 *lane,
+                                                    talos_rt_gc_root_v1 *root,
+                                                    talos_rt_object_v1 **slot) {
   return lane && lane->heap ? lane->heap->pushRoot(lane, root, slot)
                             : TALOS_RT_INVALID_ARGUMENT;
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_gc_root_pop(talos_rt_gc_lane_v1 *lane,
-                          talos_rt_gc_root_v1 *root) {
+extern "C" talos_rt_status talos_rt_v1_gc_root_pop(talos_rt_gc_lane_v1 *lane,
+                                                   talos_rt_gc_root_v1 *root) {
   return lane && lane->heap ? lane->heap->popRoot(lane, root)
                             : TALOS_RT_INVALID_ARGUMENT;
 }
 
 extern "C" talos_rt_status
 talos_rt_v1_gc_root_range_push(talos_rt_gc_lane_v1 *lane,
-                                 talos_rt_gc_root_range_v1 *range,
-                                 talos_rt_object_v1 **slots, uint64_t count) {
+                               talos_rt_gc_root_range_v1 *range,
+                               talos_rt_object_v1 **slots, uint64_t count) {
   return lane && lane->heap
              ? lane->heap->pushRootRange(lane, range, slots, count)
              : TALOS_RT_INVALID_ARGUMENT;
@@ -2881,22 +2867,22 @@ talos_rt_v1_gc_root_range_push(talos_rt_gc_lane_v1 *lane,
 
 extern "C" talos_rt_status
 talos_rt_v1_gc_root_range_pop(talos_rt_gc_lane_v1 *lane,
-                                talos_rt_gc_root_range_v1 *range) {
+                              talos_rt_gc_root_range_v1 *range) {
   return lane && lane->heap ? lane->heap->popRootRange(lane, range)
                             : TALOS_RT_INVALID_ARGUMENT;
 }
 
 extern "C" talos_rt_status
 talos_rt_v1_gc_managed_root_push(talos_rt_gc_lane_v1 *lane,
-                                   talos_rt_gc_managed_root_v1 *root,
-                                   talos_rt_managed_word_v1 *slot) {
+                                 talos_rt_gc_managed_root_v1 *root,
+                                 talos_rt_managed_word_v1 *slot) {
   return lane && lane->heap ? lane->heap->pushManagedRoot(lane, root, slot)
                             : TALOS_RT_INVALID_ARGUMENT;
 }
 
 extern "C" talos_rt_status
 talos_rt_v1_gc_managed_root_pop(talos_rt_gc_lane_v1 *lane,
-                                  talos_rt_gc_managed_root_v1 *root) {
+                                talos_rt_gc_managed_root_v1 *root) {
   return lane && lane->heap ? lane->heap->popManagedRoot(lane, root)
                             : TALOS_RT_INVALID_ARGUMENT;
 }
@@ -2915,9 +2901,10 @@ extern "C" talos_rt_status talos_rt_v1_gc_managed_root_range_pop(
                             : TALOS_RT_INVALID_ARGUMENT;
 }
 
-extern "C" talos_rt_managed_word_v1 talos_rt_v1_gc_candidate_root(
-    talos_rt_context *context, talos_rt_managed_word_v1 word,
-    talos_rt_managed_root_kind_mask_v1 allowedKinds) {
+extern "C" talos_rt_managed_word_v1
+talos_rt_v1_gc_candidate_root(talos_rt_context *context,
+                              talos_rt_managed_word_v1 word,
+                              talos_rt_managed_root_kind_mask_v1 allowedKinds) {
   if ((allowedKinds & TALOS_RT_MANAGED_ROOT_KIND_STRING) != 0 &&
       validImmediateManagedWord(word))
     return word;
@@ -2927,7 +2914,7 @@ extern "C" talos_rt_managed_word_v1 talos_rt_v1_gc_candidate_root(
 
 extern "C" talos_rt_status
 talos_rt_v1_gc_static_root_register(talos_rt_context *context,
-                                      talos_rt_object_v1 **slot) {
+                                    talos_rt_object_v1 **slot) {
   ManagedHeap *heap = heapFor(context);
   bool activeCaller = heap && heap->hasActiveCaller();
   return heap
@@ -2951,31 +2938,28 @@ extern "C" talos_rt_status talos_rt_v1_gc_candidate_static_root_register(
 
 extern "C" talos_rt_status
 talos_rt_v1_gc_static_root_unregister(talos_rt_context *context,
-                                        talos_rt_object_v1 **slot) {
+                                      talos_rt_object_v1 **slot) {
   ManagedHeap *heap = heapFor(context);
   bool activeCaller = heap && heap->hasActiveCaller();
   return heap ? heap->unregisterStatic(slot, activeCaller)
               : TALOS_RT_INVALID_ARGUMENT;
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_gc_pin(talos_rt_context *context,
-                     talos_rt_object_v1 *object) {
+extern "C" talos_rt_status talos_rt_v1_gc_pin(talos_rt_context *context,
+                                              talos_rt_object_v1 *object) {
   ManagedHeap *heap = heapFor(context);
   bool activeCaller = heap && heap->hasActiveCaller();
   return heap ? heap->pin(object, activeCaller) : TALOS_RT_INVALID_ARGUMENT;
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_gc_unpin(talos_rt_context *context,
-                       talos_rt_object_v1 *object) {
+extern "C" talos_rt_status talos_rt_v1_gc_unpin(talos_rt_context *context,
+                                                talos_rt_object_v1 *object) {
   ManagedHeap *heap = heapFor(context);
   bool activeCaller = heap && heap->hasActiveCaller();
   return heap ? heap->unpin(object, activeCaller) : TALOS_RT_INVALID_ARGUMENT;
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_gc_collect(talos_rt_gc_lane_v1 *lane) {
+extern "C" talos_rt_status talos_rt_v1_gc_collect(talos_rt_gc_lane_v1 *lane) {
   return lane && lane->heap ? lane->heap->collect(lane)
                             : TALOS_RT_INVALID_ARGUMENT;
 }
@@ -2987,8 +2971,8 @@ namespace {
 /// activation leaves the work to the next collection point. A point the
 /// schedule did not designate reclaims only pressure that is due there.
 talos_rt_status collectPendingAtQuiescentPoint(talos_rt_context *context,
-                                                 ManagedHeap *heap,
-                                                 bool designatedPoint) {
+                                               ManagedHeap *heap,
+                                               bool designatedPoint) {
   if (designatedPoint ? !heap->collectionIsPending()
                       : !heap->undesignatedCollectionDue())
     return TALOS_RT_OK;
@@ -3016,7 +3000,7 @@ extern "C" talos_rt_status
 talos_rt_v1_gc_collect_pending(talos_rt_context *context) {
   ManagedHeap *heap = heapFor(context);
   return heap ? collectPendingAtQuiescentPoint(context, heap,
-                                              /*designatedPoint=*/true)
+                                               /*designatedPoint=*/true)
               : TALOS_RT_OK;
 }
 
@@ -3042,8 +3026,7 @@ bool talos_rt_managed_heap_collections_polled(ManagedHeap *heap) {
   return heap && heap->collectionsPolled();
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_gc_designate(talos_rt_context *context) {
+extern "C" talos_rt_status talos_rt_v1_gc_designate(talos_rt_context *context) {
   if (ManagedHeap *heap = heapFor(context))
     heap->designateCollections();
   return TALOS_RT_OK;
@@ -3055,15 +3038,14 @@ bool talos_rt_managed_heap_collections_designated(ManagedHeap *heap) {
 
 extern "C" talos_rt_status
 talos_rt_v1_gc_set_threshold(talos_rt_context *context,
-                               uint64_t allocationBytes) {
+                             uint64_t allocationBytes) {
   ManagedHeap *heap = heapFor(context);
-  return heap ? heap->setThreshold(allocationBytes)
-              : TALOS_RT_INVALID_ARGUMENT;
+  return heap ? heap->setThreshold(allocationBytes) : TALOS_RT_INVALID_ARGUMENT;
 }
 
 extern "C" talos_rt_status
 talos_rt_v1_gc_statistics(talos_rt_context *context,
-                            talos_rt_gc_statistics_v1 *outStatistics) {
+                          talos_rt_gc_statistics_v1 *outStatistics) {
   ManagedHeap *heap = heapFor(context);
   if (!heap || !outStatistics)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -3073,7 +3055,7 @@ talos_rt_v1_gc_statistics(talos_rt_context *context,
 
 extern "C" talos_rt_status
 talos_rt_v1_class_register(talos_rt_context *context,
-                             const talos_rt_class_descriptor_v1 *descriptor) {
+                           const talos_rt_class_descriptor_v1 *descriptor) {
   if (!context || !descriptor)
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
@@ -3107,7 +3089,7 @@ talos_rt_v1_class_register(talos_rt_context *context,
                                 &cache->layouts, &cache->methods);
     if (status != TALOS_RT_OK)
       return status == TALOS_RT_INVALID_DESIGN ? TALOS_RT_INVALID_ARGUMENT
-                                                 : status;
+                                               : status;
     // Stage allocations before publishing the registration. A failed call
     // must not retain pointers to descriptors the caller is free to discard.
     ValidatedClasses additions;
@@ -3130,8 +3112,8 @@ talos_rt_v1_class_register(talos_rt_context *context,
 
 extern "C" talos_rt_status
 talos_rt_v1_random_graph_discover(talos_rt_gc_lane_v1 *lane,
-                                    talos_rt_object_v1 *root,
-                                    talos_rt_random_graph_v1 **outGraph) {
+                                  talos_rt_object_v1 *root,
+                                  talos_rt_random_graph_v1 **outGraph) {
   if (!outGraph)
     return TALOS_RT_INVALID_ARGUMENT;
   *outGraph = nullptr;
@@ -3153,9 +3135,9 @@ talos_rt_v1_random_graph_discover(talos_rt_gc_lane_v1 *lane,
       (void)lane->heap->unpin(binding.object, /*activeCaller=*/true);
     graph->objects.clear();
   };
-  auto append = [&](talos_rt_object_v1 *object,
-                    const talos_rt_class_descriptor_v1 *descriptor)
-      -> talos_rt_status {
+  auto append =
+      [&](talos_rt_object_v1 *object,
+          const talos_rt_class_descriptor_v1 *descriptor) -> talos_rt_status {
     talos_rt_status status = lane->heap->pin(object, /*activeCaller=*/true);
     if (status != TALOS_RT_OK)
       return status;
@@ -3268,7 +3250,7 @@ talos_rt_v1_random_graph_size(const talos_rt_random_graph_v1 *graph) {
 
 extern "C" talos_rt_object_v1 *
 talos_rt_v1_random_graph_object(const talos_rt_random_graph_v1 *graph,
-                                  uint64_t index) {
+                                uint64_t index) {
   return graph && index < graph->objects.size() ? graph->objects[index].object
                                                 : nullptr;
 }
@@ -3281,8 +3263,8 @@ talos_rt_v1_random_graph_object_descriptor(
              : nullptr;
 }
 
-extern "C" uint64_t talos_rt_v1_random_graph_variable_count(
-    const talos_rt_random_graph_v1 *graph) {
+extern "C" uint64_t
+talos_rt_v1_random_graph_variable_count(const talos_rt_random_graph_v1 *graph) {
   return graph ? graph->variables.size() : 0;
 }
 
@@ -3307,8 +3289,7 @@ extern "C" talos_rt_status talos_rt_v1_random_graph_resolve_variable(
     const talos_rt_random_graph_v1 *graph, uint64_t originIndex,
     const talos_rt_random_variable_reference_v1 *reference,
     talos_rt_object_v1 **outObject,
-    const talos_rt_random_variable_v1 **outVariable,
-    uint64_t *outGraphIndex) {
+    const talos_rt_random_variable_v1 **outVariable, uint64_t *outGraphIndex) {
   if (!outObject || !outVariable || !outGraphIndex)
     return TALOS_RT_INVALID_ARGUMENT;
   *outObject = nullptr;
@@ -3456,9 +3437,8 @@ validateElementTypeDescriptor(const talos_rt_element_type_v1 *descriptor) {
     return TALOS_RT_INVALID_DESIGN;
   // All managed element kinds occupy the fixed-width managed-word ABI. Heap
   // objects use tag zero; strings may use an immediate tagged encoding.
-  bool objectHandleKind =
-      descriptor->kind == TALOS_RT_ELEMENT_CLASS_HANDLE ||
-      descriptor->kind == TALOS_RT_ELEMENT_CONTAINER_HANDLE;
+  bool objectHandleKind = descriptor->kind == TALOS_RT_ELEMENT_CLASS_HANDLE ||
+                          descriptor->kind == TALOS_RT_ELEMENT_CONTAINER_HANDLE;
   bool stringKind = descriptor->kind == TALOS_RT_ELEMENT_STRING;
   uint64_t handleSize = sizeof(talos_rt_managed_word_v1);
   if ((objectHandleKind || stringKind) &&
@@ -3489,20 +3469,21 @@ validateElementTypeDescriptor(const talos_rt_element_type_v1 *descriptor) {
 
 } // namespace
 
-extern "C" talos_rt_status talos_rt_v1_element_type_validate(
-    const talos_rt_element_type_v1 *descriptor) {
+extern "C" talos_rt_status
+talos_rt_v1_element_type_validate(const talos_rt_element_type_v1 *descriptor) {
   return guarded(nullptr,
                  [&] { return validateElementTypeDescriptor(descriptor); });
 }
 
-extern "C" talos_rt_status talos_rt_v1_element_type_register(
-    talos_rt_context *context, const talos_rt_element_type_v1 *descriptor) {
+extern "C" talos_rt_status
+talos_rt_v1_element_type_register(talos_rt_context *context,
+                                  const talos_rt_element_type_v1 *descriptor) {
   if (!context || !descriptor)
     return TALOS_RT_INVALID_ARGUMENT;
   talos_rt_status status = talos_rt_v1_element_type_validate(descriptor);
   if (status != TALOS_RT_OK)
     return status == TALOS_RT_INVALID_DESIGN ? TALOS_RT_INVALID_ARGUMENT
-                                               : status;
+                                             : status;
   return guarded(context, [&] {
     std::lock_guard<std::recursive_mutex> lock(context->mutex);
     auto [found, inserted] = context->managedElementTypes.try_emplace(
@@ -3515,7 +3496,7 @@ extern "C" talos_rt_status talos_rt_v1_element_type_register(
 
 extern "C" talos_rt_status
 talos_rt_v1_gc_design_root_register(talos_rt_context *context,
-                                      uint64_t bitOffset) {
+                                    uint64_t bitOffset) {
   ManagedHeap *heap = heapFor(context);
   if (!heap || bitOffset % 64 != 0)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -3526,8 +3507,8 @@ talos_rt_v1_gc_design_root_register(talos_rt_context *context,
     auto *slot = reinterpret_cast<talos_rt_managed_word_v1 *>(
         context->stateValue.data() + word);
     bool activeCaller = heap->hasActiveCaller();
-    return heap->registerCandidateStatic(
-        slot, TALOS_RT_MANAGED_ROOT_KIND_CLASS, activeCaller);
+    return heap->registerCandidateStatic(slot, TALOS_RT_MANAGED_ROOT_KIND_CLASS,
+                                         activeCaller);
   });
 }
 
@@ -3550,8 +3531,8 @@ extern "C" talos_rt_status talos_rt_v1_gc_design_candidate_root_register(
 
 extern "C" talos_rt_status
 talos_rt_v1_object_allocate(talos_rt_gc_lane_v1 *lane,
-                              const talos_rt_class_descriptor_v1 *descriptor,
-                              talos_rt_object_v1 **outObject) {
+                            const talos_rt_class_descriptor_v1 *descriptor,
+                            talos_rt_object_v1 **outObject) {
   return lane && lane->heap ? lane->heap->allocate(lane, descriptor, outObject)
                             : TALOS_RT_INVALID_ARGUMENT;
 }
@@ -3701,9 +3682,9 @@ bool talos_rt_managed_value_mutation_masked(
   return false;
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_object_read(talos_rt_object_v1 *object, uint64_t offset,
-                          void *data, uint64_t size) {
+extern "C" talos_rt_status talos_rt_v1_object_read(talos_rt_object_v1 *object,
+                                                   uint64_t offset, void *data,
+                                                   uint64_t size) {
   ObjectMetadata *metadata = metadataFor(object);
   if (!metadata || metadata->kind != TALOS_RT_MANAGED_CLASS ||
       (!data && size != 0) ||
@@ -3714,9 +3695,10 @@ talos_rt_v1_object_read(talos_rt_object_v1 *object, uint64_t offset,
   return TALOS_RT_OK;
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_object_write(talos_rt_object_v1 *object, uint64_t offset,
-                           const void *data, uint64_t size) {
+extern "C" talos_rt_status talos_rt_v1_object_write(talos_rt_object_v1 *object,
+                                                    uint64_t offset,
+                                                    const void *data,
+                                                    uint64_t size) {
   ObjectMetadata *metadata = metadataFor(object);
   if (!metadata || metadata->kind != TALOS_RT_MANAGED_CLASS ||
       (!data && size != 0) || offset < sizeof(void *) ||
@@ -3735,16 +3717,16 @@ talos_rt_v1_object_write(talos_rt_object_v1 *object, uint64_t offset,
     std::memcpy(destination, data, size);
   }
   if (changed)
-    talos_rt_notify_managed_watch(object, TALOS_RT_MANAGED_WATCH_FIELD,
-                                    offset, size);
+    talos_rt_notify_managed_watch(object, TALOS_RT_MANAGED_WATCH_FIELD, offset,
+                                  size);
   return TALOS_RT_OK;
 }
 
 extern "C" talos_rt_status
 talos_rt_v1_object_bits_insert(talos_rt_object_v1 *object, uint64_t offset,
-                                 uint64_t fieldBitWidth, int64_t lowBit,
-                                 uint32_t valid, uint64_t replacement,
-                                 uint32_t replacementWidth) {
+                               uint64_t fieldBitWidth, int64_t lowBit,
+                               uint32_t valid, uint64_t replacement,
+                               uint32_t replacementWidth) {
   ObjectMetadata *metadata = metadataFor(object);
   if (!metadata || metadata->kind != TALOS_RT_MANAGED_CLASS ||
       offset < sizeof(void *) || fieldBitWidth == 0 ||
@@ -3779,15 +3761,14 @@ talos_rt_v1_object_bits_insert(talos_rt_object_v1 *object, uint64_t offset,
     }
   }
   if (changed)
-    talos_rt_notify_managed_watch(object, TALOS_RT_MANAGED_WATCH_FIELD,
-                                    offset, (fieldBitWidth + 7) / 8);
+    talos_rt_notify_managed_watch(object, TALOS_RT_MANAGED_WATCH_FIELD, offset,
+                                  (fieldBitWidth + 7) / 8);
   return TALOS_RT_OK;
 }
 
 extern "C" talos_rt_status
 talos_rt_v1_object_read_planes(talos_rt_object_v1 *object, uint64_t offset,
-                                 void *value, void *unknown,
-                                 uint64_t planeSize) {
+                               void *value, void *unknown, uint64_t planeSize) {
   ObjectMetadata *metadata = metadataFor(object);
   if (!metadata || metadata->kind != TALOS_RT_MANAGED_CLASS || !value ||
       !unknown || planeSize == 0 || planeSize > UINT64_MAX / 2 ||
@@ -3802,8 +3783,8 @@ talos_rt_v1_object_read_planes(talos_rt_object_v1 *object, uint64_t offset,
 
 extern "C" talos_rt_status
 talos_rt_v1_object_write_planes(talos_rt_object_v1 *object, uint64_t offset,
-                                  const void *value, const void *unknown,
-                                  uint64_t planeSize) {
+                                const void *value, const void *unknown,
+                                uint64_t planeSize) {
   ObjectMetadata *metadata = metadataFor(object);
   if (!metadata || metadata->kind != TALOS_RT_MANAGED_CLASS || !value ||
       !unknown || planeSize == 0 || offset < sizeof(void *) ||
@@ -3829,14 +3810,14 @@ talos_rt_v1_object_write_planes(talos_rt_object_v1 *object, uint64_t offset,
     std::memcpy(destination + planeSize, unknown, planeSize);
   }
   if (changed)
-    talos_rt_notify_managed_watch(object, TALOS_RT_MANAGED_WATCH_FIELD,
-                                    offset, planeSize * 2);
+    talos_rt_notify_managed_watch(object, TALOS_RT_MANAGED_WATCH_FIELD, offset,
+                                  planeSize * 2);
   return TALOS_RT_OK;
 }
 
 extern "C" talos_rt_status
 talos_rt_v1_object_field_load(talos_rt_object_v1 *object, uint64_t offset,
-                                talos_rt_object_v1 **outValue) {
+                              talos_rt_object_v1 **outValue) {
   if (!outValue)
     return TALOS_RT_INVALID_ARGUMENT;
   *outValue = nullptr;
@@ -3859,7 +3840,7 @@ talos_rt_v1_object_field_load(talos_rt_object_v1 *object, uint64_t offset,
 
 extern "C" talos_rt_status
 talos_rt_v1_object_field_store(talos_rt_object_v1 *object, uint64_t offset,
-                                 talos_rt_object_v1 *value) {
+                               talos_rt_object_v1 *value) {
   ObjectMetadata *metadata = metadataFor(object);
   if (!metadata || metadata->kind != TALOS_RT_MANAGED_CLASS ||
       !checkedRange(offset, sizeof(talos_rt_managed_word_v1),
@@ -3873,8 +3854,7 @@ talos_rt_v1_object_field_store(talos_rt_object_v1 *object, uint64_t offset,
         valueMetadata->kind != TALOS_RT_MANAGED_CLASS)
       return TALOS_RT_INVALID_HANDLE;
   }
-  if (managedOverrideActive(metadata, offset,
-                            sizeof(talos_rt_managed_word_v1)))
+  if (managedOverrideActive(metadata, offset, sizeof(talos_rt_managed_word_v1)))
     return TALOS_RT_OK;
   talos_rt_managed_word_v1 word = talos_rt_managed_word_from_object(value);
   bool changed = false;
@@ -3885,17 +3865,17 @@ talos_rt_v1_object_field_store(talos_rt_object_v1 *object, uint64_t offset,
     std::memcpy(destination, &word, sizeof(word));
   }
   if (changed)
-    talos_rt_notify_managed_watch(object, TALOS_RT_MANAGED_WATCH_FIELD,
-                                    offset, sizeof(talos_rt_managed_word_v1));
+    talos_rt_notify_managed_watch(object, TALOS_RT_MANAGED_WATCH_FIELD, offset,
+                                  sizeof(talos_rt_managed_word_v1));
   return TALOS_RT_OK;
 }
 
 extern "C" talos_rt_status
 talos_rt_v1_object_override(talos_rt_object_v1 *object, uint64_t offset,
-                              uint64_t planeSize, uint32_t fourState,
-                              uint32_t assign, uint32_t dynamic,
-                              uint64_t ownerProcess, uint32_t claim,
-                              const void *value, const void *unknown) {
+                            uint64_t planeSize, uint32_t fourState,
+                            uint32_t assign, uint32_t dynamic,
+                            uint64_t ownerProcess, uint32_t claim,
+                            const void *value, const void *unknown) {
   ObjectMetadata *metadata = metadataFor(object);
   std::vector<talos_rt_object_v1 *> referents;
   if (!metadata || metadata->kind != TALOS_RT_MANAGED_CLASS ||
@@ -3979,9 +3959,9 @@ talos_rt_v1_object_override(talos_rt_object_v1 *object, uint64_t offset,
 }
 
 extern "C" talos_rt_status
-talos_rt_v1_object_release_override(talos_rt_object_v1 *object,
-                                      uint64_t offset, uint64_t planeSize,
-                                      uint32_t fourState, uint32_t assign) {
+talos_rt_v1_object_release_override(talos_rt_object_v1 *object, uint64_t offset,
+                                    uint64_t planeSize, uint32_t fourState,
+                                    uint32_t assign) {
   ObjectMetadata *metadata = metadataFor(object);
   if (!metadata || metadata->kind != TALOS_RT_MANAGED_CLASS ||
       !metadata->heap || metadata->identity == 0 || planeSize == 0 ||
@@ -4044,11 +4024,11 @@ talos_rt_v1_object_release_override(talos_rt_object_v1 *object,
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_DESIGN; }
 }
 
-static talos_rt_status
-scheduleManagedNBA(talos_rt_context *context,
-                   talos_rt_object_v1 *destination, uint64_t offset,
-                   const void *value, const void *unknown, const void *mask,
-                   uint64_t planeSize, uint64_t delay) {
+static talos_rt_status scheduleManagedNBA(talos_rt_context *context,
+                                          talos_rt_object_v1 *destination,
+                                          uint64_t offset, const void *value,
+                                          const void *unknown, const void *mask,
+                                          uint64_t planeSize, uint64_t delay) {
   ManagedHeap *heap = heapFor(context);
   ObjectMetadata *destinationMetadata = metadataFor(destination);
   bool referencePath =
@@ -4056,8 +4036,7 @@ scheduleManagedNBA(talos_rt_context *context,
       destinationMetadata->kind == TALOS_RT_MANAGED_REFERENCE_PATH &&
       offset == UINT64_MAX;
   if (!heap || !destinationMetadata ||
-      (!referencePath &&
-       destinationMetadata->kind != TALOS_RT_MANAGED_CLASS) ||
+      (!referencePath && destinationMetadata->kind != TALOS_RT_MANAGED_CLASS) ||
       destinationMetadata->heap != heap || !value || planeSize == 0 ||
       planeSize > std::numeric_limits<size_t>::max())
     return TALOS_RT_INVALID_ARGUMENT;
@@ -4071,17 +4050,15 @@ scheduleManagedNBA(talos_rt_context *context,
         talos_rt_reference_path_element(destination, &referenceElement);
     if (elementStatus != TALOS_RT_OK)
       return elementStatus;
-    bool managed =
-        referenceElement->kind == TALOS_RT_ELEMENT_STRING ||
-        referenceElement->kind == TALOS_RT_ELEMENT_CLASS_HANDLE ||
-        referenceElement->kind == TALOS_RT_ELEMENT_CONTAINER_HANDLE;
+    bool managed = referenceElement->kind == TALOS_RT_ELEMENT_STRING ||
+                   referenceElement->kind == TALOS_RT_ELEMENT_CLASS_HANDLE ||
+                   referenceElement->kind == TALOS_RT_ELEMENT_CONTAINER_HANDLE;
     // The NBA carries whole planes; a packed element's exact width occupies
     // the low bits of its value size.
-    uint64_t bitWidth =
-        referenceElement->kind == TALOS_RT_ELEMENT_BITS ||
-                referenceElement->kind == TALOS_RT_ELEMENT_LOGIC
-            ? referenceElement->bit_width
-            : planeSize * 8;
+    uint64_t bitWidth = referenceElement->kind == TALOS_RT_ELEMENT_BITS ||
+                                referenceElement->kind == TALOS_RT_ELEMENT_LOGIC
+                            ? referenceElement->bit_width
+                            : planeSize * 8;
     if (mask && managed)
       return TALOS_RT_INVALID_ARGUMENT;
     talos_rt_status shape = talos_rt_reference_path_shape(
@@ -4199,16 +4176,16 @@ scheduleManagedNBA(talos_rt_context *context,
 }
 
 extern "C" talos_rt_status talos_rt_v1_scheduler_managed_nba(
-    talos_rt_context *context, talos_rt_object_v1 *destination,
-    uint64_t offset, const void *value, const void *unknown, uint64_t planeSize,
+    talos_rt_context *context, talos_rt_object_v1 *destination, uint64_t offset,
+    const void *value, const void *unknown, uint64_t planeSize,
     uint64_t delay) {
   return scheduleManagedNBA(context, destination, offset, value, unknown,
                             nullptr, planeSize, delay);
 }
 
 extern "C" talos_rt_status talos_rt_v1_scheduler_managed_nba_masked(
-    talos_rt_context *context, talos_rt_object_v1 *destination,
-    uint64_t offset, const void *value, const void *unknown, const void *mask,
+    talos_rt_context *context, talos_rt_object_v1 *destination, uint64_t offset,
+    const void *value, const void *unknown, const void *mask,
     uint64_t planeSize, uint64_t delay) {
   if (!mask)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -4216,9 +4193,8 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_managed_nba_masked(
                             planeSize, delay);
 }
 
-talos_rt_status
-talos_rt_apply_managed_nba(talos_rt_context *context,
-                             const ScheduledManagedNBA &update) {
+talos_rt_status talos_rt_apply_managed_nba(talos_rt_context *context,
+                                           const ScheduledManagedNBA &update) {
   ManagedExecutionScope managedExecution(context);
   if (managedExecution.getStatus() != TALOS_RT_OK)
     return managedExecution.getStatus();
@@ -4268,8 +4244,8 @@ talos_rt_apply_managed_nba(talos_rt_context *context,
       }
     }
     if (status == TALOS_RT_OK)
-      status = lane ? talos_rt_v1_reference_path_store(
-                          lane, update.destination, value, unknown)
+      status = lane ? talos_rt_v1_reference_path_store(lane, update.destination,
+                                                       value, unknown)
                     : TALOS_RT_INVALID_LIFECYCLE;
   } else {
     bool changed = false;
@@ -4364,10 +4340,11 @@ talos_rt_status
 resolveMethodUncached(talos_rt_object_v1 *receiver, uint64_t slot,
                       uint64_t signatureID,
                       const talos_rt_method_descriptor_v1 **outMethod);
-talos_rt_status resolveInterfaceMethodUncached(
-    talos_rt_object_v1 *receiver, uint64_t interfaceID,
-    uint64_t interfaceOrdinal, uint64_t signatureID,
-    const talos_rt_method_descriptor_v1 **outMethod);
+talos_rt_status
+resolveInterfaceMethodUncached(talos_rt_object_v1 *receiver,
+                               uint64_t interfaceID, uint64_t interfaceOrdinal,
+                               uint64_t signatureID,
+                               const talos_rt_method_descriptor_v1 **outMethod);
 
 } // namespace
 
@@ -4377,7 +4354,7 @@ void talos_rt_retire_dispatch_memos() noexcept {
 
 extern "C" uint32_t
 talos_rt_v1_object_is_instance(const talos_rt_object_v1 *object,
-                                 const talos_rt_class_descriptor_v1 *target) {
+                               const talos_rt_class_descriptor_v1 *target) {
   if (!object || !target)
     return 0;
   const talos_rt_class_descriptor_v1 *descriptor = descriptorFor(object);
@@ -4394,9 +4371,8 @@ talos_rt_v1_object_is_instance(const talos_rt_object_v1 *object,
 }
 
 namespace {
-uint32_t
-objectIsInstanceUncached(const talos_rt_object_v1 *object,
-                         const talos_rt_class_descriptor_v1 *target) {
+uint32_t objectIsInstanceUncached(const talos_rt_object_v1 *object,
+                                  const talos_rt_class_descriptor_v1 *target) {
   const talos_rt_class_descriptor_v1 *descriptor = descriptorFor(object);
   if (!descriptor)
     return 0;
@@ -4444,8 +4420,8 @@ objectIsInstanceUncached(const talos_rt_object_v1 *object,
 
 extern "C" talos_rt_status
 talos_rt_v1_object_cast(talos_rt_object_v1 *object,
-                          const talos_rt_class_descriptor_v1 *target,
-                          talos_rt_object_v1 **outObject) {
+                        const talos_rt_class_descriptor_v1 *target,
+                        talos_rt_object_v1 **outObject) {
   if (!target || !outObject)
     return TALOS_RT_INVALID_ARGUMENT;
   if (!object) {
@@ -4464,8 +4440,7 @@ talos_rt_v1_object_cast(talos_rt_object_v1 *object,
   return TALOS_RT_OK;
 }
 
-extern "C" uint64_t
-talos_rt_v1_object_id(const talos_rt_object_v1 *object) {
+extern "C" uint64_t talos_rt_v1_object_id(const talos_rt_object_v1 *object) {
   ObjectMetadata *metadata = metadataFor(object);
   return metadata ? metadata->identity : 0;
 }
@@ -4483,10 +4458,9 @@ std::optional<uint64_t> managedWatchSelector(talos_rt_managed_watch_kind kind,
 
 } // namespace
 
-extern "C" uint64_t
-talos_rt_v1_managed_watch(talos_rt_object_v1 *object,
-                            talos_rt_managed_watch_kind kind,
-                            uint64_t selector) {
+extern "C" uint64_t talos_rt_v1_managed_watch(talos_rt_object_v1 *object,
+                                              talos_rt_managed_watch_kind kind,
+                                              uint64_t selector) {
   ObjectMetadata *metadata = metadataFor(object);
   std::optional<uint64_t> key = managedWatchSelector(kind, selector);
   if (!metadata || !metadata->heap || !key)
@@ -4506,8 +4480,8 @@ talos_rt_v1_managed_watch(talos_rt_object_v1 *object,
 }
 
 void talos_rt_notify_managed_watch(talos_rt_object_v1 *object,
-                                     talos_rt_managed_watch_kind kind,
-                                     uint64_t selector, uint64_t size) {
+                                   talos_rt_managed_watch_kind kind,
+                                   uint64_t selector, uint64_t size) {
   ObjectMetadata *metadata = metadataFor(object);
   std::optional<uint64_t> key = managedWatchSelector(kind, selector);
   if (!metadata || !metadata->heap || !key || metadata->identity == 0)
@@ -4529,15 +4503,15 @@ void talos_rt_notify_managed_watch(talos_rt_object_v1 *object,
   if (watched == objectWatch->second.end() || watched->second == 0)
     return;
   if ((!talos_rt_notify_managed_waiters_unlocked(context, watched->second) ||
-       !talos_rt_notify_observer_managed_unlocked(context,
-                                                    watched->second)) &&
+       !talos_rt_notify_observer_managed_unlocked(context, watched->second)) &&
       context->schedulerStatus == TALOS_RT_OK)
     context->schedulerStatus = TALOS_RT_INVALID_ARGUMENT;
 }
 
-extern "C" talos_rt_status talos_rt_v1_method_resolve(
-    talos_rt_object_v1 *receiver, uint64_t slot, uint64_t signatureID,
-    const talos_rt_method_descriptor_v1 **outMethod) {
+extern "C" talos_rt_status
+talos_rt_v1_method_resolve(talos_rt_object_v1 *receiver, uint64_t slot,
+                           uint64_t signatureID,
+                           const talos_rt_method_descriptor_v1 **outMethod) {
   const talos_rt_class_descriptor_v1 *descriptor = descriptorFor(receiver);
   if (!descriptor || !outMethod || !talos_rt_managed_object_context(receiver))
     return resolveMethodUncached(receiver, slot, signatureID, outMethod);
@@ -4681,11 +4655,12 @@ static talos_rt_status validateMethodInvocation(
                                                   : TALOS_RT_INVALID_HANDLE;
 }
 
-static talos_rt_status invokeResolvedMethod(
-    talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *receiver,
-    const talos_rt_method_descriptor_v1 *method,
-    const talos_rt_method_argument_v1 *arguments, uint32_t argumentCount,
-    void *result, uint64_t resultSize) {
+static talos_rt_status
+invokeResolvedMethod(talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *receiver,
+                     const talos_rt_method_descriptor_v1 *method,
+                     const talos_rt_method_argument_v1 *arguments,
+                     uint32_t argumentCount, void *result,
+                     uint64_t resultSize) {
   if ((method->flags & TALOS_RT_METHOD_TASK) != 0)
     return TALOS_RT_INVALID_ARGUMENT;
   if (!method->native_entry)
@@ -4693,8 +4668,7 @@ static talos_rt_status invokeResolvedMethod(
   // A foreign caller is not required to have placed the receiver in its own
   // root set. Keep it alive across allocations made by the method body.
   talos_rt_gc_root_v1 receiverRoot{};
-  talos_rt_status status =
-      lane->heap->pushRoot(lane, &receiverRoot, &receiver);
+  talos_rt_status status = lane->heap->pushRoot(lane, &receiverRoot, &receiver);
   if (status != TALOS_RT_OK)
     return status;
   talos_rt_status callStatus = TALOS_RT_OK;
@@ -4745,8 +4719,7 @@ extern "C" talos_rt_status talos_rt_v1_interface_method_invoke(
 }
 
 static talos_rt_status
-activateResolvedMethod(talos_rt_gc_lane_v1 *lane,
-                       talos_rt_object_v1 *receiver,
+activateResolvedMethod(talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *receiver,
                        const talos_rt_method_descriptor_v1 *method,
                        const talos_rt_method_argument_v1 *arguments,
                        uint32_t argumentCount, uint64_t *outActivation) {
@@ -4755,8 +4728,7 @@ activateResolvedMethod(talos_rt_gc_lane_v1 *lane,
   if ((method->flags & TALOS_RT_METHOD_PURE) != 0 || !method->native_entry)
     return TALOS_RT_TIER_UNAVAILABLE;
   talos_rt_gc_root_v1 receiverRoot{};
-  talos_rt_status status =
-      lane->heap->pushRoot(lane, &receiverRoot, &receiver);
+  talos_rt_status status = lane->heap->pushRoot(lane, &receiverRoot, &receiver);
   if (status != TALOS_RT_OK)
     return status;
   talos_rt_status callStatus = TALOS_RT_OK;
@@ -4825,11 +4797,9 @@ extern "C" talos_rt_status talos_rt_v1_interface_method_task_activate(
                                 argumentCount, outActivation);
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_weak_create(talos_rt_gc_lane_v1 *lane,
-                          const talos_rt_class_descriptor_v1 *descriptor,
-                          talos_rt_object_v1 *referent,
-                          talos_rt_object_v1 **outWeak) {
+extern "C" talos_rt_status talos_rt_v1_weak_create(
+    talos_rt_gc_lane_v1 *lane, const talos_rt_class_descriptor_v1 *descriptor,
+    talos_rt_object_v1 *referent, talos_rt_object_v1 **outWeak) {
   if (!outWeak)
     return TALOS_RT_INVALID_ARGUMENT;
   *outWeak = nullptr;
@@ -4842,8 +4812,7 @@ talos_rt_v1_weak_create(talos_rt_gc_lane_v1 *lane,
       return TALOS_RT_INVALID_HANDLE;
   }
   talos_rt_gc_root_v1 referentRoot{};
-  talos_rt_status status =
-      lane->heap->pushRoot(lane, &referentRoot, &referent);
+  talos_rt_status status = lane->heap->pushRoot(lane, &referentRoot, &referent);
   if (status != TALOS_RT_OK)
     return status;
   status = lane->heap->allocate(lane, descriptor, outWeak);
@@ -4853,16 +4822,15 @@ talos_rt_v1_weak_create(talos_rt_gc_lane_v1 *lane,
   }
   talos_rt_managed_word_v1 referentWord =
       talos_rt_managed_word_from_object(referent);
-  status =
-      talos_rt_v1_object_write(*outWeak, sizeof(talos_rt_managed_word_v1),
-                                 &referentWord, sizeof(referentWord));
+  status = talos_rt_v1_object_write(*outWeak, sizeof(talos_rt_managed_word_v1),
+                                    &referentWord, sizeof(referentWord));
   talos_rt_status popStatus = lane->heap->popRoot(lane, &referentRoot);
   return status == TALOS_RT_OK ? popStatus : status;
 }
 
 extern "C" talos_rt_status
 talos_rt_v1_weak_get(talos_rt_object_v1 *weak,
-                       talos_rt_object_v1 **outReferent) {
+                     talos_rt_object_v1 **outReferent) {
   if (!outReferent)
     return TALOS_RT_INVALID_ARGUMENT;
   *outReferent = nullptr;
@@ -4880,12 +4848,11 @@ talos_rt_v1_weak_get(talos_rt_object_v1 *weak,
              : TALOS_RT_INVALID_HANDLE;
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_weak_clear(talos_rt_object_v1 *weak) {
+extern "C" talos_rt_status talos_rt_v1_weak_clear(talos_rt_object_v1 *weak) {
   const talos_rt_class_descriptor_v1 *descriptor = descriptorFor(weak);
   if (!descriptor || (descriptor->flags & TALOS_RT_CLASS_WEAK_WRAPPER) == 0)
     return TALOS_RT_INVALID_HANDLE;
   talos_rt_managed_word_v1 word = 0;
-  return talos_rt_v1_object_write(weak, sizeof(talos_rt_managed_word_v1),
-                                    &word, sizeof(word));
+  return talos_rt_v1_object_write(weak, sizeof(talos_rt_managed_word_v1), &word,
+                                  sizeof(word));
 }

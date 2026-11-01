@@ -161,9 +161,9 @@ public:
             llvmConstant(rewriter, location, i32, root.kindMask), 1);
         encoded = insertValue(
             rewriter, location, encoded,
-            llvmConstant(
-                rewriter, location, i32,
-                root.conditional ? TALOS_RT_MANAGED_ROOT_SLOT_CANDIDATE : 0),
+            llvmConstant(rewriter, location, i32,
+                         root.conditional ? TALOS_RT_MANAGED_ROOT_SLOT_CANDIDATE
+                                          : 0),
             2);
         LLVM::StoreOp::create(
             rewriter, location, encoded,
@@ -322,9 +322,8 @@ LogicalResult insertAutomaticOwnerReleases(sim::SimFuncOp function) {
       // owner can be released only on those edges.
       bool terminatorUses =
           terminator->getNumSuccessors() != 0 &&
-          llvm::any_of(terminator->getOperands(), [&](Value operand) {
-            return family.contains(operand);
-          });
+          llvm::any_of(terminator->getOperands(),
+                       [&](Value operand) { return family.contains(operand); });
       if (!anyLive && !terminatorUses) {
         auto [found, inserted] = blockReleases.try_emplace(terminator);
         if (inserted)

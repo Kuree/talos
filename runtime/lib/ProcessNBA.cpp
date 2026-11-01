@@ -73,8 +73,8 @@ bool hasGeneratedNBASlots(const talos_rt_static_nba_root &root) {
 // shifting, including INT64_MIN, so an invalid selection never touches state.
 template <typename Consume>
 static talos_rt_status
-consumeGeneratedNBASlots(const talos_rt_static_nba_root &root,
-                         Consume consume, bool clearValidity = true) {
+consumeGeneratedNBASlots(const talos_rt_static_nba_root &root, Consume consume,
+                         bool clearValidity = true) {
   for (uint64_t index = 0; index != root.generated_slot_count; ++index) {
     const auto &slot = root.generated_slots[index];
     if (!*slot.valid)
@@ -111,9 +111,8 @@ static void recordStaticNBATransient(StaticNBAAccumulator &accumulator,
                                   (accumulator.unknown[word] ^ unknown));
 }
 
-uint32_t
-nextDueNativeNBABarrierRegionUnlocked(const talos_rt_context *context,
-                                      bool includeGenerated) {
+uint32_t nextDueNativeNBABarrierRegionUnlocked(const talos_rt_context *context,
+                                               bool includeGenerated) {
   uint32_t region = UINT32_MAX;
   // IEEE 1800-2023 4.4.2.4, 4.4.2.8, 4.5: static accumulators commit
   // only in NBA or Re-NBA. Once the earliest eligible region is found,
@@ -298,8 +297,7 @@ static talos_rt_status schedulerNBA(
   talos_rt_string_v1 queuedString = 0;
   if (stringValue) {
     std::memcpy(&queuedString, value, sizeof(queuedString));
-    talos_rt_status status =
-        talos_rt_validate_string(context, queuedString);
+    talos_rt_status status = talos_rt_validate_string(context, queuedString);
     if (status != TALOS_RT_OK)
       return fail(status);
   }
@@ -414,8 +412,7 @@ static talos_rt_status schedulerNBA(
       if (staticSite < context->nativeScheduleNBASiteIndex.size()) {
         staticRoot = context->nativeScheduleNBASiteIndex[staticSite];
       } else {
-        const talos_rt_static_nba_site *begin =
-            context->nativeScheduleNBASites;
+        const talos_rt_static_nba_site *begin = context->nativeScheduleNBASites;
         const talos_rt_static_nba_site *end =
             begin + context->nativeScheduleNBASiteCount;
         const talos_rt_static_nba_site *found = std::lower_bound(
@@ -437,9 +434,8 @@ static talos_rt_status schedulerNBA(
         // A source-ordered generic site may follow generated direct stages for
         // the same root. Materialize first so the generic write remains the
         // last write at the barrier.
-        if (talos_rt_status status =
-                materializeGeneratedNBAAccumulatorUnlocked(context, staticRoot,
-                                                           update.execRegion);
+        if (talos_rt_status status = materializeGeneratedNBAAccumulatorUnlocked(
+                context, staticRoot, update.execRegion);
             status != TALOS_RT_OK)
           return fail(status);
       }
@@ -533,7 +529,8 @@ static talos_rt_status schedulerNBA(
             uint64_t width = std::min<uint64_t>(last - source, 64 - shift);
             uint64_t mask = packedWidthMask(width) << shift;
             uint64_t nextValue =
-                loadPackedBytes(value, sourceBitOffset + source, width) << shift;
+                loadPackedBytes(value, sourceBitOffset + source, width)
+                << shift;
             uint64_t nextUnknown =
                 unknownPlane
                     ? loadPackedBytes(unknown, sourceBitOffset + source, width)
@@ -559,9 +556,8 @@ static talos_rt_status schedulerNBA(
       auto markSlowRoot = [&](uint32_t root) -> talos_rt_status {
         if (root >= context->staticNBASlowRoots.size())
           return fail(TALOS_RT_INVALID_DESIGN);
-        if (talos_rt_status status =
-                materializeGeneratedNBAAccumulatorUnlocked(context, root,
-                                                           update.execRegion);
+        if (talos_rt_status status = materializeGeneratedNBAAccumulatorUnlocked(
+                context, root, update.execRegion);
             status != TALOS_RT_OK)
           return fail(status);
         context->staticNBASlowRoots[root] = 1;
@@ -576,8 +572,7 @@ static talos_rt_status schedulerNBA(
                           ? context->nativeScheduleNBARootIndex[staticID]
                           : UINT32_MAX;
       if (root != UINT32_MAX) {
-        if (talos_rt_status status = markSlowRoot(root);
-            status != TALOS_RT_OK)
+        if (talos_rt_status status = markSlowRoot(root); status != TALOS_RT_OK)
           return status;
       } else if (context->nativeScheduleNBARootIndex.empty()) {
         for (root = 0; root != context->nativeScheduleNBARootCount; ++root)
@@ -632,10 +627,11 @@ static talos_rt_status schedulerNBA(
   }
 }
 
-extern "C" talos_rt_status talos_rt_v1_scheduler_nba(
-    talos_rt_context *context, uint8_t *valuePlane, uint8_t *unknownPlane,
-    uint64_t planeBitCount, uint64_t bitOffset, uint64_t bitWidth,
-    uint64_t delay, const uint8_t *value, const uint8_t *unknown) {
+extern "C" talos_rt_status
+talos_rt_v1_scheduler_nba(talos_rt_context *context, uint8_t *valuePlane,
+                          uint8_t *unknownPlane, uint64_t planeBitCount,
+                          uint64_t bitOffset, uint64_t bitWidth, uint64_t delay,
+                          const uint8_t *value, const uint8_t *unknown) {
   return schedulerNBA(context, valuePlane, unknownPlane, planeBitCount,
                       bitOffset, bitWidth, delay, value, unknown, false);
 }
@@ -699,10 +695,9 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_inertial_driver(
                  TALOS_RT_INERTIAL_DRIVER_REAL64)) != 0 ||
       ((flags & TALOS_RT_INERTIAL_DRIVER_REAL32) != 0 && bitWidth != 32) ||
       ((flags & TALOS_RT_INERTIAL_DRIVER_REAL64) != 0 && bitWidth != 64) ||
-      (flags & (TALOS_RT_INERTIAL_DRIVER_REAL32 |
-                TALOS_RT_INERTIAL_DRIVER_REAL64)) ==
-          (TALOS_RT_INERTIAL_DRIVER_REAL32 |
-           TALOS_RT_INERTIAL_DRIVER_REAL64) ||
+      (flags &
+       (TALOS_RT_INERTIAL_DRIVER_REAL32 | TALOS_RT_INERTIAL_DRIVER_REAL64)) ==
+          (TALOS_RT_INERTIAL_DRIVER_REAL32 | TALOS_RT_INERTIAL_DRIVER_REAL64) ||
       ((flags & (TALOS_RT_INERTIAL_DRIVER_REAL32 |
                  TALOS_RT_INERTIAL_DRIVER_REAL64)) != 0 &&
        ((flags & TALOS_RT_INERTIAL_DRIVER_VECTOR_DELAY) == 0 ||
@@ -861,7 +856,7 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_inertial_driver(
           (flags & TALOS_RT_INERTIAL_DRIVER_PUBLISH_RAW) != 0;
       update.realWidth = (flags & TALOS_RT_INERTIAL_DRIVER_REAL32) != 0   ? 32
                          : (flags & TALOS_RT_INERTIAL_DRIVER_REAL64) != 0 ? 64
-                                                                            : 0;
+                                                                          : 0;
       update.execRegion = TALOS_RT_REGION_ACTIVE;
       update.sequence = context->nextSchedulerSequence++;
       update.dueTime = delay > UINT64_MAX - context->schedulerTime
@@ -1154,8 +1149,8 @@ static talos_rt_status schedulerInertialPath(
       uint8_t finalUnknown = currentBit(true, bit) ? 1 : 0;
       if (oldValue != finalValue || oldUnknown != finalUnknown)
         talos_rt_v1_scheduler_signal_transition(context, handle, 1, &oldValue,
-                                                  &oldUnknown, &finalValue,
-                                                  &finalUnknown);
+                                                &oldUnknown, &finalValue,
+                                                &finalUnknown);
       return context->schedulerStatus;
     };
     auto enqueueAt = [&](uint64_t bit, uint64_t dueTime, bool targetValue,
@@ -1181,8 +1176,8 @@ static talos_rt_status schedulerInertialPath(
           (flags & TALOS_RT_INERTIAL_DRIVER_DEFER_RESOLUTION) != 0;
       update.publishDriverTransition =
           (flags & TALOS_RT_INERTIAL_DRIVER_PUBLISH_RAW) != 0;
-      update.execRegion = Storage && nonblocking ? TALOS_RT_REGION_NBA
-                                                 : TALOS_RT_REGION_ACTIVE;
+      update.execRegion =
+          Storage && nonblocking ? TALOS_RT_REGION_NBA : TALOS_RT_REGION_ACTIVE;
       update.sequence = context->nextSchedulerSequence++;
       update.dueTime = dueTime;
       update.inertialSite = site;
@@ -1388,8 +1383,7 @@ static talos_rt_status schedulerInertialPath(
               negative ? leadingDue - dueTime : dueTime - leadingDue;
           bool showCancelled =
               (pulseFlags & TALOS_RT_INERTIAL_PATH_SHOW_CANCELLED) != 0;
-          bool onDetect =
-              (pulseFlags & TALOS_RT_INERTIAL_PATH_ON_DETECT) != 0;
+          bool onDetect = (pulseFlags & TALOS_RT_INERTIAL_PATH_ON_DETECT) != 0;
 
           // IEEE 1800-2017 30.7: the trailing edge's limits classify the
           // pulse. Width >= error passes; reject <= width < error produces X;
@@ -1468,8 +1462,7 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_inertial_path_driver(
       riseMask, fallMask, turnoffMask, nullptr);
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_scheduler_inertial_path_storage_pulse(
+extern "C" talos_rt_status talos_rt_v1_scheduler_inertial_path_storage_pulse(
     talos_rt_context *context, uint8_t *valuePlane, uint8_t *unknownPlane,
     uint64_t planeBitCount, uint64_t bitOffset, uint64_t bitWidth,
     uint64_t siteID, uint32_t component, uint32_t group, uint32_t groupCount,
@@ -1508,8 +1501,7 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_inertial_path_storage(
       writeMask, activeMask, riseMask, fallMask, turnoffMask, nullptr);
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_scheduler_inertial_driver_strength_pair(
+extern "C" talos_rt_status talos_rt_v1_scheduler_inertial_driver_strength_pair(
     talos_rt_context *context, uint8_t *valuePlane, uint8_t *unknownPlane,
     uint64_t planeBitCount, uint64_t lowBitOffset, uint64_t highBitOffset,
     uint64_t bitWidth, uint64_t codeUnit, uint32_t component,
@@ -2271,8 +2263,7 @@ talos_rt_v1_scheduler_inertial_path_strength_pair_pulse(
       pulseTransitionMasks);
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_scheduler_inertial_path_strength_pair(
+extern "C" talos_rt_status talos_rt_v1_scheduler_inertial_path_strength_pair(
     talos_rt_context *context, uint8_t *valuePlane, uint8_t *unknownPlane,
     uint64_t planeBitCount, uint64_t lowBitOffset, uint64_t highBitOffset,
     uint64_t bitWidth, uint64_t codeUnit, uint32_t component, uint32_t group,
@@ -2316,7 +2307,7 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_clocking_driver_nba(
 
 extern "C" talos_rt_status
 talos_rt_v1_eval_nba_reserve(talos_rt_context *context,
-                               talos::runtime::EvalNBAQueue *queue) {
+                             talos::runtime::EvalNBAQueue *queue) {
   using talos::runtime::EvalNBARecord;
   if (!context || !queue || queue->size > queue->capacity ||
       (queue->data == nullptr) != (queue->capacity == 0))
@@ -2438,10 +2429,10 @@ static talos_rt_status stageStaticNBAPacked(
           false);
     }
   }
-  uint32_t execRegion = talos_rt_commit_region(
-      context->activeHomeRegion == UINT32_MAX
-          ? static_cast<uint32_t>(TALOS_RT_REGION_ACTIVE)
-          : context->activeHomeRegion);
+  uint32_t execRegion =
+      talos_rt_commit_region(context->activeHomeRegion == UINT32_MAX
+                                 ? static_cast<uint32_t>(TALOS_RT_REGION_ACTIVE)
+                                 : context->activeHomeRegion);
   if (execRegion == UINT32_MAX || context->nextSchedulerSequence == 0) {
     context->schedulerStatus = execRegion == UINT32_MAX
                                    ? TALOS_RT_INVALID_LIFECYCLE
@@ -2626,10 +2617,10 @@ extern "C" void talos_rt_v1_static_nba_stage_wide(
     talos_rt_v1_scheduler_fail(context, TALOS_RT_LAYOUT_MISMATCH);
     return;
   }
-  uint32_t execRegion = talos_rt_commit_region(
-      context->activeHomeRegion == UINT32_MAX
-          ? static_cast<uint32_t>(TALOS_RT_REGION_ACTIVE)
-          : context->activeHomeRegion);
+  uint32_t execRegion =
+      talos_rt_commit_region(context->activeHomeRegion == UINT32_MAX
+                                 ? static_cast<uint32_t>(TALOS_RT_REGION_ACTIVE)
+                                 : context->activeHomeRegion);
   if (execRegion == UINT32_MAX) {
     context->schedulerStatus = TALOS_RT_INVALID_LIFECYCLE;
     return;
@@ -2689,9 +2680,10 @@ extern "C" talos_rt_status talos_rt_v1_static_nba_claim(
                               unknown, true);
 }
 
-extern "C" talos_rt_status talos_rt_v1_scheduler_string_nba(
-    talos_rt_context *context, uint8_t *valuePlane, uint64_t planeBitCount,
-    uint64_t bitOffset, uint64_t delay, talos_rt_string_v1 value) {
+extern "C" talos_rt_status
+talos_rt_v1_scheduler_string_nba(talos_rt_context *context, uint8_t *valuePlane,
+                                 uint64_t planeBitCount, uint64_t bitOffset,
+                                 uint64_t delay, talos_rt_string_v1 value) {
   return schedulerNBA(context, valuePlane, nullptr, planeBitCount, bitOffset,
                       64, delay, reinterpret_cast<const uint8_t *>(&value),
                       nullptr, true);
@@ -2913,9 +2905,9 @@ markGeneratedNBA256UnknownUnlocked(const talos_rt_context *context,
                                   generated.write_mask[word]);
 }
 
-static bool
-validBoundNativeStateRangeUnlocked(const talos_rt_context *context,
-                                   uint64_t bitOffset, uint64_t bitWidth) {
+static bool validBoundNativeStateRangeUnlocked(const talos_rt_context *context,
+                                               uint64_t bitOffset,
+                                               uint64_t bitWidth) {
   if (!context->nativeStateValue && !context->nativeStateUnknown &&
       context->nativeStateBitCount == 0)
     return true;
@@ -2952,10 +2944,9 @@ static talos_rt_status syncBoundNativeStateFromScheduleUnlocked(
 #endif
 
 talos_rt_status tryCommitGeneratedNBA256Unlocked(talos_rt_context *context,
-                                                   uint32_t rootIndex,
-                                                   uint32_t barrierRegion,
-                                                   bool &changed,
-                                                   bool &handled) {
+                                                 uint32_t rootIndex,
+                                                 uint32_t barrierRegion,
+                                                 bool &changed, bool &handled) {
   handled = false;
 #if defined(__x86_64__) || defined(_M_X64)
   if (!context->nativeScheduleAVX2 ||
@@ -3103,8 +3094,8 @@ talos_rt_status tryCommitGeneratedNBAScalarUnlocked(
   handled = true;
   if (rootChanged)
     talos_rt_v1_scheduler_static_transition(context, root.static_state, 0,
-                                              root.bit_width, oldValue,
-                                              oldUnknown, newValue, newUnknown);
+                                            root.bit_width, oldValue,
+                                            oldUnknown, newValue, newUnknown);
   return context->schedulerStatus;
 }
 
@@ -3213,10 +3204,10 @@ commitGeneratedNBASlotsUnlocked(talos_rt_context *context, uint32_t rootIndex,
 }
 
 talos_rt_status commitStaticNBARootUnlocked(talos_rt_context *context,
-                                              uint32_t rootIndex,
-                                              uint32_t barrierRegion,
-                                              bool &changed,
-                                              bool allowGeneratedFast = true) {
+                                            uint32_t rootIndex,
+                                            uint32_t barrierRegion,
+                                            bool &changed,
+                                            bool allowGeneratedFast = true) {
   if (!context->nativeSchedulePlan)
     return TALOS_RT_OK;
   if (rootIndex >= context->staticNBAAccumulators.size() ||
@@ -3400,7 +3391,7 @@ talos_rt_status commitStaticNBARootUnlocked(talos_rt_context *context,
               reinterpret_cast<const uint8_t *>(accumulator.unknown.data())))
         return context->schedulerStatus;
       talos_rt_invalidate_signal_snapshots_unlocked(context, rootHandle,
-                                                      root.bit_width);
+                                                    root.bit_width);
       if (talos_rt_has_conditional_signal_waiters(context)) {
         for (uint64_t bit = 0; bit != root.bit_width; ++bit) {
           uint64_t mask = uint64_t{1} << (bit % 64);
@@ -3422,7 +3413,7 @@ talos_rt_status commitStaticNBARootUnlocked(talos_rt_context *context,
         }
       }
       if (!talos_rt_notify_observer_signal_unlocked(context, rootHandle,
-                                                      root.bit_width))
+                                                    root.bit_width))
         return context->schedulerStatus;
       changed = true;
     }
@@ -3440,9 +3431,11 @@ talos_rt_status commitStaticNBARootUnlocked(talos_rt_context *context,
 }
 
 #if defined(__x86_64__) || defined(_M_X64)
-talos_rt_status tryCommitGeneratedNBA256BatchUnlocked(
-    talos_rt_context *context, uint32_t rootCount, uint32_t barrierRegion,
-    bool &changed, bool &handled) {
+talos_rt_status tryCommitGeneratedNBA256BatchUnlocked(talos_rt_context *context,
+                                                      uint32_t rootCount,
+                                                      uint32_t barrierRegion,
+                                                      bool &changed,
+                                                      bool &handled) {
   handled = false;
   const talos_rt_native_schedule_plan *plan = context->nativeSchedulePlan;
   if (!plan || activeNativeAOTContext != context ||
@@ -3522,9 +3515,9 @@ talos_rt_status tryCommitGeneratedNBA256BatchUnlocked(
 #endif
 
 talos_rt_status commitStaticNBARootRangeUnlocked(talos_rt_context *context,
-                                                   uint32_t rootCount,
-                                                   uint32_t barrierRegion,
-                                                   bool &changed) {
+                                                 uint32_t rootCount,
+                                                 uint32_t barrierRegion,
+                                                 bool &changed) {
   const talos_rt_native_schedule_plan *plan = context->nativeSchedulePlan;
   bool indexed = plan && plan->nba_dirty_roots && plan->nba_dirty_summary &&
                  rootCount <= plan->nba_root_count;
@@ -3599,8 +3592,7 @@ talos_rt_status commitStaticNBARootRangeUnlocked(talos_rt_context *context,
         uint32_t root = leafIndex * 64 + rootBit;
         if (root >= rootCount)
           break;
-        if (talos_rt_status status = commitRoot(root);
-            status != TALOS_RT_OK)
+        if (talos_rt_status status = commitRoot(root); status != TALOS_RT_OK)
           return status;
         const talos_rt_static_nba_root &rootPlan =
             context->nativeScheduleNBARoots[root];
@@ -3626,9 +3618,9 @@ talos_rt_status commitStaticNBARootRangeUnlocked(talos_rt_context *context,
   return TALOS_RT_OK;
 }
 
-talos_rt_status
-commitStaticNBAAccumulatorsUnlocked(talos_rt_context *context,
-                                    uint32_t barrierRegion, bool &changed) {
+talos_rt_status commitStaticNBAAccumulatorsUnlocked(talos_rt_context *context,
+                                                    uint32_t barrierRegion,
+                                                    bool &changed) {
   if (!context->nativeSchedulePlan)
     return TALOS_RT_OK;
   talos_rt_status status = TALOS_RT_OK;
@@ -3714,15 +3706,15 @@ extern "C" talos_rt_status talos_rt_v1_static_nba_commit_ordered(
   ++context->signalDiagnostics.aotNBACommits;
   if (((oldValue ^ newValue) | (oldUnknown ^ newUnknown)) != 0)
     talos_rt_v1_scheduler_static_transition(context, root.static_state,
-                                              destination, width, oldValue,
-                                              oldUnknown, newValue, newUnknown);
+                                            destination, width, oldValue,
+                                            oldUnknown, newValue, newUnknown);
   return context->schedulerStatus;
 }
 
 extern "C" talos_rt_status
 talos_rt_v1_static_nba_commit_root(talos_rt_context *context,
-                                     uint32_t rootIndex, uint32_t barrierRegion,
-                                     uint32_t *outChanged) {
+                                   uint32_t rootIndex, uint32_t barrierRegion,
+                                   uint32_t *outChanged) {
   if (!context || !outChanged || !context->nativeSchedulePlan)
     return TALOS_RT_INVALID_ARGUMENT;
   bool changed = *outChanged != 0;
@@ -3732,9 +3724,10 @@ talos_rt_v1_static_nba_commit_root(talos_rt_context *context,
   return status;
 }
 
-extern "C" talos_rt_status talos_rt_v1_static_nba_commit_roots(
-    talos_rt_context *context, uint32_t rootCount, uint32_t barrierRegion,
-    uint32_t *outChanged) {
+extern "C" talos_rt_status
+talos_rt_v1_static_nba_commit_roots(talos_rt_context *context,
+                                    uint32_t rootCount, uint32_t barrierRegion,
+                                    uint32_t *outChanged) {
   if (!context || !outChanged ||
       rootCount > context->staticNBAAccumulators.size() ||
       rootCount > context->nativeScheduleNBARootCount)
@@ -3873,9 +3866,10 @@ extern "C" talos_rt_status talos_rt_v1_static_nba_commit_batch(
   return context->schedulerStatus;
 }
 
-extern "C" uint32_t talos_rt_v1_static_nba_batch_guard(
-    talos_rt_context *context, const talos_rt_native_schedule_plan *plan,
-    uint32_t barrierRegion) {
+extern "C" uint32_t
+talos_rt_v1_static_nba_batch_guard(talos_rt_context *context,
+                                   const talos_rt_native_schedule_plan *plan,
+                                   uint32_t barrierRegion) {
   if (!context || !plan || plan != context->nativeSchedulePlan ||
       barrierRegion != TALOS_RT_REGION_NBA ||
       activeNativeAOTContext != context || lockedNativeAOTContext != context ||
@@ -3907,10 +3901,10 @@ extern "C" void talos_rt_v1_static_nba_batch_knownness(
                                        width, oldUnknown, newUnknown);
 }
 
-extern "C" void
-talos_rt_v1_static_nba_batch_finish(talos_rt_context *context,
-                                      uint64_t stages, uint64_t commits,
-                                      uint32_t ingressPending) {
+extern "C" void talos_rt_v1_static_nba_batch_finish(talos_rt_context *context,
+                                                    uint64_t stages,
+                                                    uint64_t commits,
+                                                    uint32_t ingressPending) {
   ++context->signalDiagnostics.aotNBABatches;
   context->signalDiagnostics.aotNBAStages += stages;
   context->signalDiagnostics.aotNBACommits += commits;
@@ -3935,16 +3929,15 @@ talos_rt_v1_static_nba_direct_commit_guard(talos_rt_context *context) {
 
 extern "C" void
 talos_rt_v1_static_nba_account_generated_commits(talos_rt_context *context,
-                                                   uint32_t count) {
+                                                 uint32_t count) {
   if (!context || count == 0)
     return;
   context->signalDiagnostics.aotNBAStages += count;
   context->signalDiagnostics.aotNBACommits += count;
 }
 
-talos_rt_status
-resolveClockingDriveConflictsUnlocked(talos_rt_context *context,
-                                      uint32_t barrierRegion) {
+talos_rt_status resolveClockingDriveConflictsUnlocked(talos_rt_context *context,
+                                                      uint32_t barrierRegion) {
   struct RootPosition {
     uint32_t kind;
     uint32_t id;

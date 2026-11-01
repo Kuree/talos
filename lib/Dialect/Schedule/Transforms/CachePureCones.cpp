@@ -204,8 +204,8 @@ void cacheFunction(ModuleOp module, LLVM::LLVMFuncOp function,
   builder.setInsertionPointToStart(module.getBody());
   auto global = LLVM::GlobalOp::create(
       builder, loc, cacheType, false, LLVM::Linkage::Internal,
-      ("__talos_pure_cache." + function.getSymName()).str(), Attribute{}, 8,
-      0, false, /*thread_local_=*/true);
+      ("__talos_pure_cache." + function.getSymName()).str(), Attribute{}, 8, 0,
+      false, /*thread_local_=*/true);
   symbols.insert(global);
   if (StringAttr partition = native::get<native::Partition>(function))
     native::set<native::Partition>(global, partition);

@@ -42,14 +42,13 @@
 // different section naming rules, while WebAssembly has a single code section.
 #if defined(__ELF__) && (defined(__clang__) || defined(__GNUC__)) &&           \
     !defined(__wasm__)
-#define TALOS_RT_FEATURE_TEXT                                                \
+#define TALOS_RT_FEATURE_TEXT                                                  \
   __attribute__((noinline, cold, section(".talos.feature.text")))
-#define TALOS_RT_FEATURE_HELPER                                              \
-  __attribute__((section(".talos.feature.text")))
-#define TALOS_RT_RECURSIVE_BITSTREAM_TEXT                                    \
+#define TALOS_RT_FEATURE_HELPER __attribute__((section(".talos.feature.text")))
+#define TALOS_RT_RECURSIVE_BITSTREAM_TEXT                                      \
   __attribute__((noinline, cold,                                               \
                  section(".talos.feature.recursive_bitstream.text")))
-#define TALOS_RT_RECURSIVE_BITSTREAM_HELPER                                  \
+#define TALOS_RT_RECURSIVE_BITSTREAM_HELPER                                    \
   __attribute__((section(".talos.feature.recursive_bitstream.text")))
 
 // Do not apply the explicit section attributes to closure call operators.
@@ -84,8 +83,8 @@ talos_rt_object_from_managed_word(talos_rt_managed_word_v1 word) noexcept {
   return reinterpret_cast<talos_rt_object_v1 *>(static_cast<uintptr_t>(word));
 }
 
-inline talos_rt_managed_word_v1 talos_rt_managed_word_from_object(
-    const talos_rt_object_v1 *object) noexcept {
+inline talos_rt_managed_word_v1
+talos_rt_managed_word_from_object(const talos_rt_object_v1 *object) noexcept {
   return static_cast<talos_rt_managed_word_v1>(
       reinterpret_cast<uintptr_t>(object));
 }
@@ -95,7 +94,7 @@ inline talos_rt_managed_word_v1 talos_rt_managed_word_from_object(
 // explicitly detected unrepresentable allocations follow the same fatal path
 // as allocator failures there.
 [[noreturn]] inline void talos_rt_out_of_memory() {
-#if !defined(TALOS_RT_IGNORE_EXCEPTIONS) &&                                  \
+#if !defined(TALOS_RT_IGNORE_EXCEPTIONS) &&                                    \
     (defined(__cpp_exceptions) || defined(_CPPUNWIND))
   throw std::bad_alloc();
 #else
@@ -104,8 +103,8 @@ inline talos_rt_managed_word_v1 talos_rt_managed_word_from_object(
 #endif
 }
 
-inline std::optional<uint64_t>
-talos_rt_scan_raw_size(uint64_t bitWidth, bool fourState) noexcept {
+inline std::optional<uint64_t> talos_rt_scan_raw_size(uint64_t bitWidth,
+                                                      bool fourState) noexcept {
   if (bitWidth == 0 || bitWidth > UINT64_MAX - 31)
     return std::nullopt;
   uint64_t words = (bitWidth + 31) / 32;
@@ -116,10 +115,10 @@ talos_rt_scan_raw_size(uint64_t bitWidth, bool fourState) noexcept {
 }
 
 inline bool talos_rt_decode_scan_raw(const char *input, uint64_t inputSize,
-                                       uint64_t bitWidth, bool fourState,
-                                       void *value, uint64_t valueSize,
-                                       void *unknown,
-                                       uint64_t unknownSize) noexcept {
+                                     uint64_t bitWidth, bool fourState,
+                                     void *value, uint64_t valueSize,
+                                     void *unknown,
+                                     uint64_t unknownSize) noexcept {
   auto rawSize = talos_rt_scan_raw_size(bitWidth, fourState);
   if (!rawSize || inputSize != *rawSize || bitWidth > UINT64_MAX - 7)
     return false;
@@ -177,16 +176,14 @@ struct FileEntry {
   std::string name{};
 };
 
-bool talos_rt_file_name_unlocked(talos_rt_context *context,
-                                   uint32_t descriptor,
-                                   std::string_view &name) noexcept;
+bool talos_rt_file_name_unlocked(talos_rt_context *context, uint32_t descriptor,
+                                 std::string_view &name) noexcept;
 
 // std::from_chars(first, last, value, std::chars_format::general) for double.
 // libc++ provides that overload only from macOS 26, so the runtime matches its
 // subject sequence itself and converts it in the "C" locale.
-std::from_chars_result talos_rt_from_chars_real(const char *first,
-                                                  const char *last,
-                                                  double &value);
+std::from_chars_result
+talos_rt_from_chars_real(const char *first, const char *last, double &value);
 
 // Parsed dynamic $sscanf/$fscanf formats are feature-local and immutable.
 // Prefix strings are owned by the plan, so scanners may use their bytes after
@@ -238,15 +235,13 @@ struct OwnedElementTypeDescriptor {
 // managed sequential container. This is shared by display formatting while
 // keeping the container storage layout private to Containers.cpp.
 talos_rt_status talos_rt_container_pattern(talos_rt_object_v1 *container,
-                                               std::string &output,
-                                               unsigned depth);
+                                           std::string &output, unsigned depth);
 
 // Append the characters of a managed dynamic array or queue of 8-bit
 // integral elements, as %s formats an unpacked array of byte (IEEE 1800-2023
 // 21.2.1.7). Any other container is an argument mismatch.
-talos_rt_status
-talos_rt_container_byte_text(talos_rt_object_v1 *container,
-                               std::string &output);
+talos_rt_status talos_rt_container_byte_text(talos_rt_object_v1 *container,
+                                             std::string &output);
 
 struct CoverageTupleQueueSnapshot {
   uint64_t count = 0;
@@ -285,19 +280,20 @@ talos_rt_status talos_rt_coverage_prepare_construction(
 talos_rt_status talos_rt_coverage_prepared_candidates(
     talos_rt_context *context, uint64_t token, uint64_t selector,
     uint32_t maximumCandidates, CoverageTupleQueueSnapshot &output);
-talos_rt_status
-talos_rt_coverage_release_preparation(talos_rt_context *context,
-                                        uint64_t token);
+talos_rt_status talos_rt_coverage_release_preparation(talos_rt_context *context,
+                                                      uint64_t token);
 
 // Validate and copy one transient state-bin set expression before functional
 // coverage resolution. Both dynamic arrays and queues are accepted and queue
 // storage is linearized in logical index order. Coverage.cpp receives only
 // canonical planes and never retains the managed owner.
-talos_rt_status talos_rt_coverage_set_snapshot(
-    talos_rt_context *context, talos_rt_object_v1 *container,
-    uint64_t expectedBitWidth, uint32_t expectedElementKind,
-    bool expectedFourState, uint64_t maximumElements,
-    CoverageSetSnapshot &output);
+talos_rt_status talos_rt_coverage_set_snapshot(talos_rt_context *context,
+                                               talos_rt_object_v1 *container,
+                                               uint64_t expectedBitWidth,
+                                               uint32_t expectedElementKind,
+                                               bool expectedFourState,
+                                               uint64_t maximumElements,
+                                               CoverageSetSnapshot &output);
 
 // Exact membership set optimized for monotonically allocated process tokens.
 // Completed tokens normally form long contiguous runs, so retaining their
@@ -535,8 +531,7 @@ inline bool talos_rt_is_process_home_region(uint32_t region) {
 }
 
 inline bool talos_rt_is_mutable_home_region(uint32_t region) {
-  return region == TALOS_RT_REGION_ACTIVE ||
-         region == TALOS_RT_REGION_REACTIVE;
+  return region == TALOS_RT_REGION_ACTIVE || region == TALOS_RT_REGION_REACTIVE;
 }
 
 /// A region a suspension may resume in: a home region, or the Inactive
@@ -550,8 +545,7 @@ inline bool talos_rt_is_process_resume_region(uint32_t region) {
 
 /// The action flag bits that describe where a suspension resumes.
 inline constexpr uint32_t kResumeActionFlags =
-    TALOS_RT_ACTION_RESUME_REGION_VALID |
-    TALOS_RT_ACTION_RESUME_REGION_MASK |
+    TALOS_RT_ACTION_RESUME_REGION_VALID | TALOS_RT_ACTION_RESUME_REGION_MASK |
     TALOS_RT_ACTION_RESUME_POST_OBSERVED;
 
 /// Whether the resume bits of `flags` are well formed: no override, one
@@ -566,12 +560,12 @@ inline bool talos_rt_valid_resume_action_flags(uint32_t flags) {
 }
 
 inline bool talos_rt_decode_schedule_flags(uint32_t flags, uint32_t &phase,
-                                             uint32_t &homeRegion) {
+                                           uint32_t &homeRegion) {
   constexpr uint32_t known =
       TALOS_RT_SCHEDULE_FINAL | TALOS_RT_SCHEDULE_HOME_MASK |
       TALOS_RT_SCHEDULE_INITIAL | TALOS_RT_SCHEDULE_STARTUP |
-      TALOS_RT_SCHEDULE_DETACHED_CONTROLS |
-      TALOS_RT_SCHEDULE_PRIORITY_SIGNAL | TALOS_RT_SCHEDULE_ROOT;
+      TALOS_RT_SCHEDULE_DETACHED_CONTROLS | TALOS_RT_SCHEDULE_PRIORITY_SIGNAL |
+      TALOS_RT_SCHEDULE_ROOT;
   if ((flags & ~known) != 0)
     return false;
   phase = (flags & TALOS_RT_SCHEDULE_FINAL) != 0 ? 1u : 0u;
@@ -586,8 +580,8 @@ inline bool talos_rt_decode_schedule_flags(uint32_t flags, uint32_t &phase,
 /// `postObserved`, which orders it after all other work there.
 inline bool
 talos_rt_next_queued_region(uint32_t homeRegion, uint32_t suspendKind,
-                              uint64_t delayPayload, uint32_t actionFlags,
-                              uint32_t &queuedRegion, bool &postObserved) {
+                            uint64_t delayPayload, uint32_t actionFlags,
+                            uint32_t &queuedRegion, bool &postObserved) {
   if ((actionFlags &
        ~(TALOS_RT_ACTION_FRAME_WAIT_RECORD | kResumeActionFlags)) != 0 ||
       !talos_rt_valid_resume_action_flags(actionFlags))
@@ -624,7 +618,7 @@ talos_rt_next_queued_region(uint32_t homeRegion, uint32_t suspendKind,
 
 inline uint32_t talos_rt_commit_region(uint32_t homeRegion) {
   return talos_rt_is_mutable_home_region(homeRegion) ? homeRegion + 2
-                                                       : UINT32_MAX;
+                                                     : UINT32_MAX;
 }
 
 // A live descriptor-loop ready cache may accept ordinary direct signal wakes
@@ -700,21 +694,20 @@ struct ScheduledProcess {
 };
 
 talos_rt_status talos_rt_mailbox_wait_ready(talos_rt_object_v1 *mailbox,
-                                                uint32_t predicate,
-                                                bool &ready);
-talos_rt_status
-talos_rt_semaphore_keys_ready(talos_rt_object_v1 *semaphore, int32_t keys,
-                                bool &ready);
-talos_rt_status
-talos_rt_semaphore_try_get_raw(talos_rt_object_v1 *semaphore, int32_t keys,
-                                 uint32_t *outSuccess);
-talos_rt_status
-talos_rt_semaphore_wait_ready(talos_rt_context *context,
-                                talos_rt_object_v1 *semaphore, int32_t keys,
-                                uint64_t waitSequence, bool &ready);
+                                            uint32_t predicate, bool &ready);
+talos_rt_status talos_rt_semaphore_keys_ready(talos_rt_object_v1 *semaphore,
+                                              int32_t keys, bool &ready);
+talos_rt_status talos_rt_semaphore_try_get_raw(talos_rt_object_v1 *semaphore,
+                                               int32_t keys,
+                                               uint32_t *outSuccess);
+talos_rt_status talos_rt_semaphore_wait_ready(talos_rt_context *context,
+                                              talos_rt_object_v1 *semaphore,
+                                              int32_t keys,
+                                              uint64_t waitSequence,
+                                              bool &ready);
 talos_rt_status
 talos_rt_semaphore_wait_acquire(const talos_rt_wait_record_v1 *wait,
-                                  bool &acquired);
+                                bool &acquired);
 
 struct SignalValueSnapshot {
   uint64_t sequence = 0;
@@ -728,22 +721,22 @@ struct SignalValueSnapshot {
 // fallback bits. The caller keeps an active GC lane while consuming managed
 // words copied from a successful read.
 talos_rt_status talos_rt_vpi_automatic_validate(talos_rt_context *context,
-                                                    uint64_t reference,
-                                                    uint64_t bitWidth) noexcept;
+                                                uint64_t reference,
+                                                uint64_t bitWidth) noexcept;
 talos_rt_status
 talos_rt_vpi_automatic_read(talos_rt_context *context, uint64_t reference,
-                              uint64_t bitOffset, uint64_t bitWidth,
-                              uint8_t *outValue, uint8_t *outUnknown) noexcept;
+                            uint64_t bitOffset, uint64_t bitWidth,
+                            uint8_t *outValue, uint8_t *outUnknown) noexcept;
 
 // Query-only access to a complete stable state reference, including design
 // and static roots. Invalid extents never use executable fallback bits.
 talos_rt_status talos_rt_vpi_state_validate(talos_rt_context *context,
-                                                uint64_t reference,
-                                                uint64_t bitWidth) noexcept;
-talos_rt_status
-talos_rt_vpi_state_read(talos_rt_context *context, uint64_t reference,
-                          uint64_t bitOffset, uint64_t bitWidth,
-                          uint8_t *outValue, uint8_t *outUnknown) noexcept;
+                                            uint64_t reference,
+                                            uint64_t bitWidth) noexcept;
+talos_rt_status talos_rt_vpi_state_read(talos_rt_context *context,
+                                        uint64_t reference, uint64_t bitOffset,
+                                        uint64_t bitWidth, uint8_t *outValue,
+                                        uint8_t *outUnknown) noexcept;
 
 struct NativeAutomaticState {
   struct CandidateRoot {
@@ -1615,8 +1608,7 @@ extern decltype(&talos_rt_v1_dpi_open_array_aggregate_pack)
     designBytecodeDpiOpenAggregatePack;
 extern decltype(&talos_rt_v1_dpi_open_array_aggregate_unpack)
     designBytecodeDpiOpenAggregateUnpack;
-extern decltype(&talos_rt_v1_dpi_aggregate_pack)
-    designBytecodeDpiAggregatePack;
+extern decltype(&talos_rt_v1_dpi_aggregate_pack) designBytecodeDpiAggregatePack;
 extern decltype(&talos_rt_v1_dpi_aggregate_unpack)
     designBytecodeDpiAggregateUnpack;
 extern decltype(&talos_rt_v1_dpi_open_array_aggregate_roots_push)
@@ -1931,10 +1923,9 @@ struct VPITypeDefaultInfo {
   uint64_t fileSize = 0;
   uint32_t line = 0;
 };
-talos_rt_status
-talos_rt_cached_vpi_type_default(const talos_rt_context *,
-                                   talos_rt_design_cursor_v1,
-                                   VPITypeDefaultInfo *) noexcept;
+talos_rt_status talos_rt_cached_vpi_type_default(const talos_rt_context *,
+                                                 talos_rt_design_cursor_v1,
+                                                 VPITypeDefaultInfo *) noexcept;
 
 struct VPIExpressionInfo {
   uint32_t kind = 0, code = 0, operandCount = 0;
@@ -1943,10 +1934,9 @@ struct VPIExpressionInfo {
   bool constantSelect = false;
   bool sourceOnly = false;
 };
-talos_rt_status
-talos_rt_cached_vpi_expression(const talos_rt_context *,
-                                 talos_rt_design_cursor_v1,
-                                 VPIExpressionInfo *) noexcept;
+talos_rt_status talos_rt_cached_vpi_expression(const talos_rt_context *,
+                                               talos_rt_design_cursor_v1,
+                                               VPIExpressionInfo *) noexcept;
 talos_rt_status talos_rt_cached_vpi_expression_operand(
     const talos_rt_context *, talos_rt_design_cursor_v1, uint32_t,
     talos_rt_design_cursor_v1 *, uint32_t *) noexcept;
@@ -1966,8 +1956,8 @@ struct VPISelectedUseCandidate {
   talos_rt_design_cursor_v1 selection;
 };
 talos_rt_status talos_rt_cached_vpi_selected_use_candidates(
-    const talos_rt_context *, talos_rt_design_cursor_v1,
-    uint32_t selectedKind, std::vector<VPISelectedUseCandidate> &) noexcept;
+    const talos_rt_context *, talos_rt_design_cursor_v1, uint32_t selectedKind,
+    std::vector<VPISelectedUseCandidate> &) noexcept;
 
 // Existing source connections, enumerated only for cold Driver/Load queries.
 // The role expression may be a shared recipe or an ordinary declaration. Peer
@@ -2060,7 +2050,7 @@ struct FunctionalCoverageCrossTupleState {
 
 using FunctionalCoverageCrossTupleCounters =
     talos::coverage::detail::IndexMap<std::vector<uint64_t>,
-                                        FunctionalCoverageCrossTupleState>;
+                                      FunctionalCoverageCrossTupleState>;
 
 struct FunctionalCoverageQueryMetadata;
 
@@ -2082,8 +2072,7 @@ struct FunctionalCoverageTypeState {
   bool distributeFirst = false;
   uint64_t groupCrossNumPrintMissing = 0;
   talos::coverage::detail::IndexMap<uint64_t, uint64_t> crossNumPrintMissing;
-  talos::coverage::detail::IndexSet<uint64_t>
-      explicitCrossNumPrintMissingItems;
+  talos::coverage::detail::IndexSet<uint64_t> explicitCrossNumPrintMissingItems;
   std::vector<uint64_t> items;
   std::vector<uint8_t> itemAggregating;
   std::vector<uint32_t> itemGoals;
@@ -2188,13 +2177,11 @@ struct FunctionalCoverageInstanceState {
   /// Cross print limits use template IDs because procedural selectors and
   /// persisted instance-option owners are stable across resolved schemas.
   talos::coverage::detail::IndexMap<uint64_t, uint64_t> crossNumPrintMissing;
-  talos::coverage::detail::IndexSet<uint64_t>
-      explicitCrossNumPrintMissingItems;
+  talos::coverage::detail::IndexSet<uint64_t> explicitCrossNumPrintMissingItems;
   /// Mutable comments keyed by zero for the group or by template item ID.
   talos::coverage::detail::IndexMap<uint64_t, std::string> comments;
   std::unordered_set<uint64_t> disabledItems;
-  talos::coverage::detail::IndexMap<uint64_t, FunctionalCoverageValue>
-      formals;
+  talos::coverage::detail::IndexMap<uint64_t, FunctionalCoverageValue> formals;
   std::vector<FunctionalCoverageBinState> bins;
   /// Live overlapping matches in frozen per-type alternative slots. A
   /// zero repeat count means the step has not matched yet. For a successor or
@@ -2206,7 +2193,7 @@ struct FunctionalCoverageInstanceState {
   std::vector<std::shared_ptr<const TransitionStates>> transitionActive;
   std::unordered_set<uint64_t> transitionSampledItems;
   talos::coverage::detail::IndexMap<uint64_t,
-                                      FunctionalCoverageCrossTupleCounters>
+                                    FunctionalCoverageCrossTupleCounters>
       crossTuples;
 };
 
@@ -2276,7 +2263,7 @@ struct CoverageState {
   mutable std::shared_ptr<const FunctionalCoverageLoadedData> loadedData;
   std::shared_ptr<FunctionalCoverageDiagnosticIndex> diagnosticIndex;
   talos::coverage::detail::IndexMap<uint64_t,
-                                      std::vector<talos::coverage::Digest>>
+                                    std::vector<talos::coverage::Digest>>
       configurationsByType;
   const talos::coverage::Database *configurationIndexSchema = nullptr;
   talos::coverage::detail::IndexSet<FunctionalCoverageTypeKey>
@@ -2286,11 +2273,11 @@ struct CoverageState {
   /// states: no override, false, or true. Cache their exact configuration keys
   /// rather than resolving bins or scanning prior configurations at every new.
   talos::coverage::detail::IndexMap<std::pair<uint64_t, uint32_t>,
-                                      talos::coverage::Digest>
+                                    talos::coverage::Digest>
       payloadlessConfigurations;
   uint64_t nextInstance = 1;
   talos::coverage::detail::IndexMap<FunctionalCoverageTypeKey,
-                                      FunctionalCoverageTypeState>
+                                    FunctionalCoverageTypeState>
       types;
   talos::coverage::detail::IndexMap<uint64_t, FunctionalCoverageTypeOptions>
       typeOptions;
@@ -2341,21 +2328,22 @@ struct CoverageState {
 };
 
 // The Clause 40 coverage scope of the elaborated instance named `path`.
-talos_rt_status
-talos_rt_coverage_scope_for_path(talos_rt_context *context,
-                                   std::string_view path, uint64_t &scopeID);
+talos_rt_status talos_rt_coverage_scope_for_path(talos_rt_context *context,
+                                                 std::string_view path,
+                                                 uint64_t &scopeID);
 
 // Query immutable resolved covergroup type policy while the context mutex is
 // held. This is internal runtime state, not a second public ABI surface.
-talos_rt_status
-talos_rt_covergroup_strobe_unlocked(talos_rt_context *context,
-                                      uint64_t handle, bool &strobe);
+talos_rt_status talos_rt_covergroup_strobe_unlocked(talos_rt_context *context,
+                                                    uint64_t handle,
+                                                    bool &strobe);
 
 // Validate immutable ownership and the procedural mutability of an option
 // before capturing a deferred write. Exactly one of handle/typeID is nonzero.
-talos_rt_status talos_rt_covergroup_validate_option_reference(
-    talos_rt_context *context, uint64_t handle, uint64_t typeID,
-    uint64_t itemID, uint32_t option);
+talos_rt_status
+talos_rt_covergroup_validate_option_reference(talos_rt_context *context,
+                                              uint64_t handle, uint64_t typeID,
+                                              uint64_t itemID, uint32_t option);
 
 /// Record a committed canonical state transition. The caller owns the context
 /// mutex. Covered aliases are intentionally represented by separate bindings.
@@ -2968,11 +2956,10 @@ enum : uint32_t {
   TALOS_RT_VPI_SYNC_READ_ONLY = 1,
 };
 /// Whether a synchronization callback of `stage` is due in this time slot.
-bool talos_rt_vpi_sync_due_unlocked(talos_rt_context *context,
-                                      uint32_t stage);
+bool talos_rt_vpi_sync_due_unlocked(talos_rt_context *context, uint32_t stage);
 talos_rt_status
 talos_rt_vpi_dispatch_sync_callbacks_unlocked(talos_rt_context *context,
-                                                uint32_t stage);
+                                              uint32_t stage);
 
 inline ReplaceableEventFeatureState *
 talos_rt_replaceable_events(talos_rt_context *context) {
@@ -2988,8 +2975,7 @@ talos_rt_replaceable_events(const talos_rt_context *context) {
              : nullptr;
 }
 
-inline void
-talos_rt_invalidate_design_ready_cohort(talos_rt_context *context) {
+inline void talos_rt_invalidate_design_ready_cohort(talos_rt_context *context) {
   if (!context)
     return;
   context->designReadyCohortExactScan = false;
@@ -3021,9 +3007,9 @@ inline void talos_rt_record_native_ready_publication_unlocked(
   batch->generation = context->schedulerSelectionGeneration;
 }
 
-inline void
-talos_rt_set_design_task_filter_unlocked(talos_rt_context *context,
-                                           bool active, uint64_t forcedTask) {
+inline void talos_rt_set_design_task_filter_unlocked(talos_rt_context *context,
+                                                     bool active,
+                                                     uint64_t forcedTask) {
   if (!context)
     return;
   if (context->nativeScheduleDesignTaskFilterActive != active ||
@@ -3034,11 +3020,9 @@ talos_rt_set_design_task_filter_unlocked(talos_rt_context *context,
 }
 
 void talos_rt_sync_native_state_range_unlocked(talos_rt_context *context,
-                                                 uint64_t begin,
-                                                 uint64_t width);
+                                               uint64_t begin, uint64_t width);
 
-talos_rt_status
-talos_rt_capture_preponed_unlocked(talos_rt_context *context);
+talos_rt_status talos_rt_capture_preponed_unlocked(talos_rt_context *context);
 /// Retakes the time-zero Preponed snapshot once the root initializer has run.
 /// Declaration initializers precede every time-zero event (IEEE 1800-2023
 /// 6.8, 16.5.1), so the values they establish are what time zero samples.
@@ -3070,20 +3054,19 @@ talos_rt_unstarted_actors(talos_rt_context *context, uint32_t phase) {
 }
 
 inline void talos_rt_register_unstarted_actor(talos_rt_context *context,
-                                                uint32_t phase,
-                                                uint64_t logicalToken) {
+                                              uint32_t phase,
+                                              uint64_t logicalToken) {
   talos_rt_unstarted_actors(context, phase).insert(logicalToken);
 }
 
 inline void talos_rt_unregister_unstarted_actor(talos_rt_context *context,
-                                                  uint32_t phase,
-                                                  uint64_t logicalToken) {
+                                                uint32_t phase,
+                                                uint64_t logicalToken) {
   talos_rt_unstarted_actors(context, phase).erase(logicalToken);
 }
 
-inline bool
-talos_rt_logical_process_terminated(const talos_rt_context *context,
-                                      uint64_t logicalToken) {
+inline bool talos_rt_logical_process_terminated(const talos_rt_context *context,
+                                                uint64_t logicalToken) {
   if (!context || logicalToken == 0)
     return false;
   if ((logicalToken & TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG) != 0)
@@ -3100,7 +3083,7 @@ talos_rt_logical_process_terminated(const talos_rt_context *context,
 // Postponed region would then be reached twice in one time slot
 // (IEEE 1800-2017 4.4.2.9).
 inline uint32_t talos_rt_unstarted_actor_region(talos_rt_context *context,
-                                                  uint32_t phase) {
+                                                uint32_t phase) {
   auto &actors = talos_rt_unstarted_actors(context, phase);
   uint32_t earliest = UINT32_MAX;
   for (auto actor = actors.begin(); actor != actors.end();) {
@@ -3156,7 +3139,7 @@ inline uint32_t talos_rt_unstarted_actor_region(talos_rt_context *context,
 // this never compacts stale inventory entries.
 inline uint32_t
 talos_rt_peek_unstarted_actor_region(const talos_rt_context *context,
-                                       uint32_t phase) {
+                                     uint32_t phase) {
   const auto &actors = phase == 0 ? context->unstartedActiveActors
                                   : context->unstartedFinalActors;
   uint32_t earliest = UINT32_MAX;
@@ -3198,7 +3181,7 @@ talos_rt_peek_unstarted_actor_region(const talos_rt_context *context,
 }
 
 inline bool talos_rt_unstarted_actor_pending(talos_rt_context *context,
-                                               uint32_t phase) {
+                                             uint32_t phase) {
   // Keep the steady-state empty inventory check inline. Region selection also
   // compacts stale startup entries and is intentionally a much larger helper.
   return !talos_rt_unstarted_actors(context, phase).empty() &&
@@ -3219,8 +3202,7 @@ inline bool talos_rt_is_clock_occurrence_wait_flags(uint32_t flags) {
          TALOS_RT_WAIT_CLOCK_OCCURRENCE;
 }
 
-inline bool
-talos_rt_is_slot_final_clock_occurrence_wait_flags(uint32_t flags) {
+inline bool talos_rt_is_slot_final_clock_occurrence_wait_flags(uint32_t flags) {
   return talos_rt_is_clock_occurrence_wait_flags(flags) &&
          (flags & TALOS_RT_WAIT_CLOCK_OCCURRENCE_SLOT_FINAL) != 0;
 }
@@ -3256,14 +3238,16 @@ ManagedHeap *talos_rt_managed_heap_create(talos_rt_context *context);
 void talos_rt_managed_heap_destroy(ManagedHeap *heap) noexcept;
 // Reserve a nonzero identity in the same context-local namespace as managed
 // objects. This does not allocate or root an object and needs no active lane.
-talos_rt_status talos_rt_managed_identity_reserve(
-    talos_rt_context *context, uint64_t *outIdentity) noexcept;
+talos_rt_status
+talos_rt_managed_identity_reserve(talos_rt_context *context,
+                                  uint64_t *outIdentity) noexcept;
 // IEEE 1800-2023 9.7 and 37.33: map an existing process class object to a
 // stable identity shared with the managed-object namespace. Finished/killed
 // process objects remain valid through the scheduler's existing tombstones.
-talos_rt_status talos_rt_process_object_identity(
-    talos_rt_context *context, uint64_t logicalProcess,
-    uint64_t *outIdentity) noexcept;
+talos_rt_status
+talos_rt_process_object_identity(talos_rt_context *context,
+                                 uint64_t logicalProcess,
+                                 uint64_t *outIdentity) noexcept;
 /// Collections the heap made at designated collection points.
 uint64_t talos_rt_managed_heap_designated_collections(ManagedHeap *heap);
 /// Whether a schedule has designated the heap's collection points.
@@ -3276,14 +3260,12 @@ bool talos_rt_managed_heap_collections_polled(ManagedHeap *heap);
 bool talos_rt_managed_heap_collection_requested(ManagedHeap *heap);
 /// Reclaim pressure that is due between two activations. Does nothing while
 /// this thread runs a managed activation.
-talos_rt_status talos_rt_managed_heap_collect_between_activations(
-    talos_rt_context *context);
 talos_rt_status
-talos_rt_managed_execution_enter(talos_rt_context *context,
-                                   talos_rt_gc_lane_v1 **outLane,
-                                   bool *outEntered);
-void talos_rt_managed_execution_leave(talos_rt_gc_lane_v1 *lane,
-                                        bool entered);
+talos_rt_managed_heap_collect_between_activations(talos_rt_context *context);
+talos_rt_status talos_rt_managed_execution_enter(talos_rt_context *context,
+                                                 talos_rt_gc_lane_v1 **outLane,
+                                                 bool *outEntered);
+void talos_rt_managed_execution_leave(talos_rt_gc_lane_v1 *lane, bool entered);
 using ManagedRootVisit = void (*)(void *, talos_rt_object_v1 **);
 using ManagedRootEnumerate = void (*)(void *, ManagedRootVisit, void *);
 
@@ -3298,31 +3280,30 @@ struct ManagedRootProvider {
 };
 
 talos_rt_status talos_rt_managed_roots_push(talos_rt_gc_lane_v1 *lane,
-                                                ManagedRootProvider *provider,
-                                                ManagedRootEnumerate enumerate,
-                                                void *environment);
+                                            ManagedRootProvider *provider,
+                                            ManagedRootEnumerate enumerate,
+                                            void *environment);
 talos_rt_status talos_rt_managed_roots_pop(talos_rt_gc_lane_v1 *lane,
-                                               ManagedRootProvider *provider);
+                                           ManagedRootProvider *provider);
 const talos_rt_class_descriptor_v1 *
 talos_rt_managed_class_lookup(talos_rt_context *context, uint64_t classID);
 talos_rt_random_state_v1 *
 talos_rt_random_active_state_unlocked(talos_rt_context *context);
 void talos_rt_random_split_unlocked(talos_rt_context *context,
-                                      talos_rt_random_state_v1 &child);
+                                    talos_rt_random_state_v1 &child);
 uint64_t
 talos_rt_random_initialization_scope_unlocked(talos_rt_context *context);
 void talos_rt_random_split_initialization_unlocked(
-    talos_rt_context *context, uint64_t scope,
-    talos_rt_random_state_v1 &child);
+    talos_rt_context *context, uint64_t scope, talos_rt_random_state_v1 &child);
 void talos_rt_random_seed_context_unlocked(talos_rt_context *context,
-                                             uint64_t seed);
-bool talos_rt_managed_object_belongs_to(
-    talos_rt_context *context, talos_rt_object_v1 *object) noexcept;
+                                           uint64_t seed);
+bool talos_rt_managed_object_belongs_to(talos_rt_context *context,
+                                        talos_rt_object_v1 *object) noexcept;
 talos_rt_context *
 talos_rt_managed_lane_context(const talos_rt_gc_lane_v1 *lane) noexcept;
 const talos_rt_element_type_v1 *
 talos_rt_managed_element_type_lookup(talos_rt_context *context,
-                                       uint64_t typeID);
+                                     uint64_t typeID);
 
 using ManagedObjectAccess = talos_rt_status (*)(void *, uint8_t *, uint64_t);
 using ManagedTraceVisit = void (*)(void *, talos_rt_object_v1 *);
@@ -3369,53 +3350,50 @@ talos_rt_builtin_class_kind(const ManagedObjectLease &lease) noexcept;
 BuiltinClassKind
 talos_rt_builtin_class_kind_unlocked(talos_rt_object_v1 *object) noexcept;
 BuiltinClassKind talos_rt_builtin_container_kind(const uint8_t *object,
-                                                   uint64_t extent) noexcept;
+                                                 uint64_t extent) noexcept;
 // Resolve a direct builtin or a user class's private direct builtin payload.
 // The returned payload borrows the caller's active GC lifetime; no root is
 // added.
-talos_rt_status
-talos_rt_builtin_class_payload(talos_rt_object_v1 *object,
-                                 BuiltinClassKind expected,
-                                 talos_rt_object_v1 **outPayload);
+talos_rt_status talos_rt_builtin_class_payload(talos_rt_object_v1 *object,
+                                               BuiltinClassKind expected,
+                                               talos_rt_object_v1 **outPayload);
 
 // Copies mailbox messages in FIFO order, with each value plane followed by
 // its unknown plane when the element is four-state. The caller must keep its
 // GC lane active and root traced copied values before reaching a safepoint.
 // No lease for mailbox may be held while calling this helper.
-talos_rt_status talos_rt_mailbox_snapshot(
-    talos_rt_object_v1 *mailbox,
-    const talos_rt_element_type_v1 **outElement,
-    std::vector<uint8_t> &outValues);
+talos_rt_status
+talos_rt_mailbox_snapshot(talos_rt_object_v1 *mailbox,
+                          const talos_rt_element_type_v1 **outElement,
+                          std::vector<uint8_t> &outValues);
 
 // Snapshot exact live threads still blocked on a named event. Event IDs are
 // executable event identities; UINT64_MAX is the language null event.
 talos_rt_status
 talos_rt_named_event_waiters(talos_rt_context *context, uint64_t eventID,
-                               std::vector<uint64_t> &outProcesses);
+                             std::vector<uint64_t> &outProcesses);
 
 // The outermost activation defines a thread's source origin, independently
 // of the currently executing task/function or its lexical containment.
-talos_rt_status
-talos_rt_logical_process_origin(talos_rt_context *context,
-                                  uint64_t logicalProcess,
-                                  uint64_t *outCodeUnit) noexcept;
+talos_rt_status talos_rt_logical_process_origin(talos_rt_context *context,
+                                                uint64_t logicalProcess,
+                                                uint64_t *outCodeUnit) noexcept;
 
 // Copies a sequential value container without changing its contents. Mailbox
 // identities are excluded; callers preserve class references instead. The
 // active lane must remain entered until copied managed words are inspected.
 talos_rt_status
-talos_rt_container_snapshot(talos_rt_object_v1 *container,
-                              uint32_t *outKind,
-                              const talos_rt_element_type_v1 **outElement,
-                              std::vector<uint8_t> &outValues);
+talos_rt_container_snapshot(talos_rt_object_v1 *container, uint32_t *outKind,
+                            const talos_rt_element_type_v1 **outElement,
+                            std::vector<uint8_t> &outValues);
 
 // Copy the complete value/unknown planes of a one-element boxed array. The
 // caller holds an active lane until conversion of any copied managed words.
 // Type ID zero denotes an unbound legacy box, not an inferred source type.
 talos_rt_status
 talos_rt_box_snapshot(talos_rt_object_v1 *box, uint64_t *outTypeID,
-                        const talos_rt_element_type_v1 **outElement,
-                        std::vector<uint8_t> &outPlanes);
+                      const talos_rt_element_type_v1 **outElement,
+                      std::vector<uint8_t> &outPlanes);
 // Copies one sequential-container element under the same owner/buffer access
 // as its size and descriptor. A missing index requests metadata only; an index
 // outside the current size returns EOF. Mailboxes and associative arrays are
@@ -3428,8 +3406,8 @@ struct VPIContainerElementSnapshot {
 };
 talos_rt_status
 talos_rt_container_element_snapshot(talos_rt_object_v1 *container,
-                                      std::optional<uint64_t> index,
-                                      VPIContainerElementSnapshot *outSnapshot);
+                                    std::optional<uint64_t> index,
+                                    VPIContainerElementSnapshot *outSnapshot);
 
 // Sparse associative snapshots preserve exact stored keys and value planes.
 // Managed key words remain weak; callers keep their lane active until copying
@@ -3451,21 +3429,21 @@ struct VPIAssocSnapshot {
   std::vector<VPIAssocSnapshotEntry> entries;
 };
 talos_rt_status talos_rt_assoc_snapshot(talos_rt_object_v1 *array,
-                                            VPIAssocSnapshot *outSnapshot);
+                                        VPIAssocSnapshot *outSnapshot);
 
 // Returns logical process tokens, including the native-process tag. The
 // caller holds an active lane and no lease for object; the helper does not
 // change wait readiness or scheduler state and promises no iteration order.
-talos_rt_status talos_rt_builtin_class_waiters(
-    talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *object,
-    std::vector<uint64_t> &outProcesses);
+talos_rt_status
+talos_rt_builtin_class_waiters(talos_rt_gc_lane_v1 *lane,
+                               talos_rt_object_v1 *object,
+                               std::vector<uint64_t> &outProcesses);
 
 talos_rt_status talos_rt_managed_allocate(talos_rt_gc_lane_v1 *lane,
-                                              talos_rt_managed_kind_v1 kind,
-                                              uint64_t extent,
-                                              uint64_t alignment,
-                                              const void *runtimeDescriptor,
-                                              talos_rt_object_v1 **outObject);
+                                          talos_rt_managed_kind_v1 kind,
+                                          uint64_t extent, uint64_t alignment,
+                                          const void *runtimeDescriptor,
+                                          talos_rt_object_v1 **outObject);
 // Allocate while the calling lane remains active without entering a
 // safepoint. This is reserved for publishing allocation-backed caches from
 // operations whose inputs are not compiler-visible GC roots. The allocation
@@ -3473,15 +3451,14 @@ talos_rt_status talos_rt_managed_allocate(talos_rt_gc_lane_v1 *lane,
 // ordinary allocation observes the collection threshold.
 TALOS_RT_FEATURE_HELPER talos_rt_status
 talos_rt_managed_allocate_without_safepoint(talos_rt_gc_lane_v1 *lane,
-                                              talos_rt_managed_kind_v1 kind,
-                                              uint64_t extent,
-                                              uint64_t alignment,
-                                              const void *runtimeDescriptor,
-                                              talos_rt_object_v1 **outObject);
+                                            talos_rt_managed_kind_v1 kind,
+                                            uint64_t extent, uint64_t alignment,
+                                            const void *runtimeDescriptor,
+                                            talos_rt_object_v1 **outObject);
 talos_rt_status
 talos_rt_managed_object_access(talos_rt_object_v1 *object,
-                                 talos_rt_managed_kind_v1 expectedKind,
-                                 ManagedObjectAccess access, void *environment);
+                               talos_rt_managed_kind_v1 expectedKind,
+                               ManagedObjectAccess access, void *environment);
 // Feature-local zero-copy traversal can retain a managed object's ticket lock
 // across an explicit continuation frame. Every successful acquire must be
 // paired with exactly one release; acquiring a second lease for the same
@@ -3498,40 +3475,38 @@ talos_rt_managed_object_context(const talos_rt_object_v1 *object) noexcept;
 /// Invalidates every thread's class dispatch memo. A destroyed context's
 /// descriptors may be freed and their addresses reused.
 void talos_rt_retire_dispatch_memos() noexcept;
-const talos_rt_class_descriptor_v1 *
-talos_rt_managed_object_class_descriptor(
+const talos_rt_class_descriptor_v1 *talos_rt_managed_object_class_descriptor(
     const talos_rt_object_v1 *object) noexcept;
 uint64_t talos_rt_managed_watch_range(talos_rt_object_v1 *object,
-                                        uint64_t offset,
-                                        uint64_t size) noexcept;
+                                      uint64_t offset, uint64_t size) noexcept;
 void talos_rt_managed_trace_runtime_object(talos_rt_managed_kind_v1 kind,
-                                             uint8_t *object, uint64_t extent,
-                                             ManagedTraceVisit visit,
-                                             void *environment) noexcept;
+                                           uint8_t *object, uint64_t extent,
+                                           ManagedTraceVisit visit,
+                                           void *environment) noexcept;
 // Replaces each container a strong slot of a traced value image holds with its
 // value copy, as assignment does (IEEE 1800-2023 7.6). Mailbox and semaphore
 // objects are class identities and stay shared. The caller roots the image.
 talos_rt_status
 talos_rt_clone_traced_containers(talos_rt_gc_lane_v1 *lane, uint8_t *image,
-                                   const talos_rt_trace_layout_v1 *layout);
+                                 const talos_rt_trace_layout_v1 *layout);
 // A whole dynamic aggregate selected by force / procedural assign is a value,
 // not a mutable reference. Suppress mutations through that selected value
 // while its owning override layer is active.
 bool talos_rt_managed_value_mutation_masked(
     talos_rt_object_v1 *object) noexcept;
 talos_rt_status talos_rt_reference_path_shape(talos_rt_object_v1 *path,
-                                                  uint64_t valueSize,
-                                                  uint64_t bitWidth,
-                                                  uint32_t fourState,
-                                                  uint32_t managedValue);
-talos_rt_status talos_rt_reference_path_element(
-    talos_rt_object_v1 *path, const talos_rt_element_type_v1 **outElement);
-void talos_rt_enumerate_design_managed_roots(
-    talos_rt_context *context, ManagedRootVisit visit,
-    void *visitorEnvironment) noexcept;
+                                              uint64_t valueSize,
+                                              uint64_t bitWidth,
+                                              uint32_t fourState,
+                                              uint32_t managedValue);
 talos_rt_status
-talos_rt_validate_string(talos_rt_context *context,
-                           talos_rt_string_v1 string) noexcept;
+talos_rt_reference_path_element(talos_rt_object_v1 *path,
+                                const talos_rt_element_type_v1 **outElement);
+void talos_rt_enumerate_design_managed_roots(talos_rt_context *context,
+                                             ManagedRootVisit visit,
+                                             void *visitorEnvironment) noexcept;
+talos_rt_status talos_rt_validate_string(talos_rt_context *context,
+                                         talos_rt_string_v1 string) noexcept;
 talos_rt_status talos_rt_class_bitstream_export_bytecode(
     talos_rt_context *context, uint32_t function, uint32_t site,
     const void *input_value, const void *input_unknown,
@@ -3544,14 +3519,12 @@ talos_rt_status talos_rt_class_bitstream_export_bytecode(
 class ManagedExecutionScope {
 public:
   explicit ManagedExecutionScope(talos_rt_context *context)
-      : status(context ? talos_rt_managed_execution_enter(context, &lane,
-                                                            &entered)
-                       : TALOS_RT_OK) {}
+      : status(context
+                   ? talos_rt_managed_execution_enter(context, &lane, &entered)
+                   : TALOS_RT_OK) {}
   ManagedExecutionScope(const ManagedExecutionScope &) = delete;
   ManagedExecutionScope &operator=(const ManagedExecutionScope &) = delete;
-  ~ManagedExecutionScope() {
-    talos_rt_managed_execution_leave(lane, entered);
-  }
+  ~ManagedExecutionScope() { talos_rt_managed_execution_leave(lane, entered); }
 
   talos_rt_status getStatus() const { return status; }
   talos_rt_gc_lane_v1 *getLane() const { return lane; }
@@ -3582,8 +3555,7 @@ private:
 
 class ContextCallbackUnlock {
 public:
-  explicit ContextCallbackUnlock(talos_rt_context *context)
-      : context(context) {
+  explicit ContextCallbackUnlock(talos_rt_context *context) : context(context) {
     context->mutex.unlock();
   }
   ContextCallbackUnlock(const ContextCallbackUnlock &) = delete;
@@ -3604,42 +3576,40 @@ void latchSchedulerErrorUnlocked(talos_rt_context *context) noexcept;
 void enterFinalPhaseUnlocked(talos_rt_context *context) noexcept;
 void setLastError(talos_rt_context *context, std::string message);
 void talos_rt_report_signal_diagnostics_unlocked(talos_rt_context *context);
-void talos_rt_release_native_schedule_plan(
-    talos_rt_context *context) noexcept;
+void talos_rt_release_native_schedule_plan(talos_rt_context *context) noexcept;
 void talos_rt_release_eval_nba_queues(talos_rt_context *context) noexcept;
 void talos_rt_aot_external_write_unlocked(talos_rt_context *context);
-void talos_rt_aot_observation_demand_changed_unlocked(
-    talos_rt_context *context, bool active);
+void talos_rt_aot_observation_demand_changed_unlocked(talos_rt_context *context,
+                                                      bool active);
 void talos_rt_aot_external_write_range_unlocked(talos_rt_context *context,
-                                                  uint64_t bitOffset,
-                                                  uint64_t bitWidth,
-                                                  bool persistent);
+                                                uint64_t bitOffset,
+                                                uint64_t bitWidth,
+                                                bool persistent);
 void talos_rt_aot_external_write_handle_unlocked(talos_rt_context *context,
-                                                   uint64_t stableID,
-                                                   uint64_t bitOffset,
-                                                   uint64_t bitWidth,
-                                                   bool persistent);
+                                                 uint64_t stableID,
+                                                 uint64_t bitOffset,
+                                                 uint64_t bitWidth,
+                                                 bool persistent);
 bool talos_rt_aot_external_deposit_unlocked(talos_rt_context *context,
-                                              uint64_t stableID,
-                                              uint64_t bitOffset,
-                                              uint64_t bitWidth);
+                                            uint64_t stableID,
+                                            uint64_t bitOffset,
+                                            uint64_t bitWidth);
 void talos_rt_aot_release_range_unlocked(talos_rt_context *context,
-                                           uint64_t bitOffset,
-                                           uint64_t bitWidth);
+                                         uint64_t bitOffset, uint64_t bitWidth);
 
 void talos_rt_retain_controls_unlocked(talos_rt_context *context,
-                                         const std::vector<uint64_t> &controls);
+                                       const std::vector<uint64_t> &controls);
 void talos_rt_release_control_unlocked(talos_rt_context *context,
-                                         uint64_t control);
-void talos_rt_release_controls_unlocked(
-    talos_rt_context *context, const std::vector<uint64_t> &controls);
+                                       uint64_t control);
+void talos_rt_release_controls_unlocked(talos_rt_context *context,
+                                        const std::vector<uint64_t> &controls);
 
 void talos_rt_program_register_unlocked(talos_rt_context *context,
-                                          uint64_t logicalProcess,
-                                          uint64_t programOwner);
+                                        uint64_t logicalProcess,
+                                        uint64_t programOwner);
 void talos_rt_program_complete_unlocked(talos_rt_context *context,
-                                          uint64_t logicalProcess,
-                                          uint64_t programOwner);
+                                        uint64_t logicalProcess,
+                                        uint64_t programOwner);
 void talos_rt_program_seal_unlocked(talos_rt_context *context);
 
 /// Whether every-bit-known truth holds for any watched bit of a level wait
@@ -3650,9 +3620,9 @@ bool talos_rt_level_wait_entry_true_unlocked(
 /// that occurred while it was suspended are forgotten, while a level wait is
 /// satisfied by its current value and a delay keeps its deadline.
 void talos_rt_resensitize_process_unlocked(talos_rt_context *context,
-                                             ScheduledProcess &process);
+                                           ScheduledProcess &process);
 void talos_rt_resensitize_design_task_unlocked(talos_rt_context *context,
-                                                 ScheduledDesignTask &task);
+                                               ScheduledDesignTask &task);
 
 /// Drops finished-process links from which no live process descends.
 void talos_rt_prune_finished_process_parents_unlocked(
@@ -3682,9 +3652,9 @@ inline void talos_rt_record_terminated_parent_unlocked(
 }
 
 /// Records the parent of a naturally finishing process that spawned children.
-inline void
-talos_rt_retire_process_parent_unlocked(talos_rt_context *context,
-                                          uint64_t finished, uint64_t parent) {
+inline void talos_rt_retire_process_parent_unlocked(talos_rt_context *context,
+                                                    uint64_t finished,
+                                                    uint64_t parent) {
   if (context->logicalProcessParentsWithChildren.erase(finished))
     talos_rt_record_terminated_parent_unlocked(context, finished, parent);
 }
@@ -3697,14 +3667,13 @@ talos_rt_retire_process_parent_unlocked(talos_rt_context *context,
 /// tree's size or depth.
 std::unordered_set<uint64_t>
 talos_rt_collect_process_tree_unlocked(const talos_rt_context *context,
-                                         uint64_t root, bool &rootLive);
+                                       uint64_t root, bool &rootLive);
 
 talos_rt_status talos_rt_initialize_design_bytecode_image(
     const talos_rt_execution_descriptor_v1 &execution,
     talos::designbytecode::Image &image) noexcept;
 
-DpiScopeHandle *talos_rt_find_dpi_scope(talos_rt_context *context,
-                                          uint64_t id);
+DpiScopeHandle *talos_rt_find_dpi_scope(talos_rt_context *context, uint64_t id);
 talos_rt_status talos_rt_initialize_dpi_scopes(
     talos_rt_context *context,
     const talos_rt_execution_descriptor_v1 *execution);
@@ -3712,16 +3681,16 @@ talos_rt_status talos_rt_initialize_dpi_scopes(
 // Cold VPI query support. The caller holds the recursive context lock. This
 // snapshots only canonical future scheduler calendars, never their heaps,
 // mirrors, or deoptimization scratch state.
-talos_rt_status talos_rt_snapshot_future_time_queues_unlocked(
-    const talos_rt_context *context, std::vector<uint64_t> &times);
-bool talos_rt_current_time_queue_pending_unlocked(
-    talos_rt_context *context);
+talos_rt_status
+talos_rt_snapshot_future_time_queues_unlocked(const talos_rt_context *context,
+                                              std::vector<uint64_t> &times);
+bool talos_rt_current_time_queue_pending_unlocked(talos_rt_context *context);
 bool talos_rt_design_task_pending_before_read_only_unlocked(
     talos_rt_context *context);
 
 template <typename Callable>
 talos_rt_status guarded(talos_rt_context *context,
-                          Callable &&callable) noexcept {
+                        Callable &&callable) noexcept {
   TALOS_RT_TRY { return callable(); }
   TALOS_RT_CATCH(const std::bad_alloc &) {
     setLastError(context, "runtime allocation failed");
@@ -3754,11 +3723,10 @@ TALOS_RT_FEATURE_HELPER talos_rt_status talos_rt_feature_guarded(
 // an assignment pattern: the default decimal format of $display (21.2.1),
 // unpadded. Shared so a container element reads the same as a struct member.
 std::string talos_rt_pattern_integer_text(uint64_t width, bool isSigned,
-                                            const uint64_t *value,
-                                            const uint64_t *unknown);
+                                          const uint64_t *value,
+                                          const uint64_t *unknown);
 
-talos_rt_status makeBuffer(std::string_view source,
-                             talos_rt_buffer_v1 *output);
+talos_rt_status makeBuffer(std::string_view source, talos_rt_buffer_v1 *output);
 bool validBytes(const void *data, uint64_t size);
 std::string hostErrorMessage(int error);
 
@@ -3787,19 +3755,18 @@ talos_rt_generated_deferred_reports_pending(const talos_rt_context *context) {
   return context->generatedDeferredReports != 0;
 }
 bool talos_rt_cancel_deferred_immediate_assertion_unlocked(
-    talos_rt_context *context, uint64_t assertion,
-    uint64_t logicalProcess = 0);
+    talos_rt_context *context, uint64_t assertion, uint64_t logicalProcess = 0);
 
-talos_rt_status writeUnlocked(talos_rt_context *context,
-                                uint32_t descriptor, const void *data,
-                                uint64_t size, uint64_t *outWritten);
+talos_rt_status writeUnlocked(talos_rt_context *context, uint32_t descriptor,
+                              const void *data, uint64_t size,
+                              uint64_t *outWritten);
 
 // Fully validate immutable bytecode metadata without executing or mutating a
 // process frame. Missing continuations are tier-unavailable; malformed
 // programs are invalid bytecode.
 talos_rt_status
 talos_rt_validate_bytecode_program(const talos_rt_bytecode_v1 &program,
-                                     uint32_t continuation) noexcept;
+                                   uint32_t continuation) noexcept;
 bool talos_rt_validate_computed_wait_record(
     const talos_rt_execution_descriptor_v1 *execution,
     const talos_rt_computed_wait_record_v1 *wait, uint64_t available);
@@ -3808,14 +3775,12 @@ bool talos_rt_validate_computed_wait_record(
 // Standalone descriptors receive full validation; context-bound dispatch
 // reuses the image validated when that context was created.
 talos_rt_status talos_rt_validate_design_bytecode(
-    const talos_rt_design_bytecode_entry_v1 &entry,
-    talos_rt_context *context, uint64_t *outScratchSize,
-    uint64_t *outScratchAlignment) noexcept;
+    const talos_rt_design_bytecode_entry_v1 &entry, talos_rt_context *context,
+    uint64_t *outScratchSize, uint64_t *outScratchAlignment) noexcept;
 talos_rt_status talos_rt_execute_design_bytecode(
-    const talos_rt_design_bytecode_entry_v1 &entry,
-    talos_rt_context *context, void *frame, uint64_t frameSize,
-    uint64_t scratchOffset, uint64_t scratchSize, uint32_t continuation,
-    uint64_t instructionLimit,
+    const talos_rt_design_bytecode_entry_v1 &entry, talos_rt_context *context,
+    void *frame, uint64_t frameSize, uint64_t scratchOffset,
+    uint64_t scratchSize, uint32_t continuation, uint64_t instructionLimit,
     talos_rt_fragment_action_v1 *outAction) noexcept;
 talos_rt_status talos_rt_execute_design_observer(
     const talos_rt_execution_descriptor_v1 &execution,
@@ -3824,21 +3789,18 @@ talos_rt_status talos_rt_execute_design_observer(
     uint64_t *value, uint64_t *unknown, uint32_t limbCount) noexcept;
 talos_rt_status talos_rt_execute_design_export(
     const talos_rt_execution_descriptor_v1 &execution,
-    const talos_rt_export_descriptor_v1 &descriptor,
-    talos_rt_context *context, const talos_rt_import_input_v1 *inputs,
-    uint32_t inputCount, talos_rt_import_output_v1 *outputs,
-    uint32_t outputCount) noexcept;
+    const talos_rt_export_descriptor_v1 &descriptor, talos_rt_context *context,
+    const talos_rt_import_input_v1 *inputs, uint32_t inputCount,
+    talos_rt_import_output_v1 *outputs, uint32_t outputCount) noexcept;
 talos_rt_status talos_rt_execute_design_export_task(
     const talos_rt_execution_descriptor_v1 &execution,
-    const talos_rt_export_descriptor_v1 &descriptor,
-    talos_rt_context *context, const talos_rt_import_input_v1 *inputs,
-    uint32_t inputCount, talos_rt_import_output_v1 *outputs,
-    uint32_t outputCount, const uint8_t *directions,
-    const int64_t *const *aggregatePlans,
+    const talos_rt_export_descriptor_v1 &descriptor, talos_rt_context *context,
+    const talos_rt_import_input_v1 *inputs, uint32_t inputCount,
+    talos_rt_import_output_v1 *outputs, uint32_t outputCount,
+    const uint8_t *directions, const int64_t *const *aggregatePlans,
     const uint64_t *aggregatePlanWords) noexcept;
-talos_rt_status
-talos_rt_run_dpi_export_task_logical(talos_rt_context *context,
-                                       uint64_t logical) noexcept;
+talos_rt_status talos_rt_run_dpi_export_task_logical(talos_rt_context *context,
+                                                     uint64_t logical) noexcept;
 talos_rt_status
 talos_rt_initialize_design_state(talos_rt_context *context) noexcept;
 
@@ -3846,15 +3808,14 @@ talos_rt_initialize_design_state(talos_rt_context *context) noexcept;
 // its immutable design-bytecode image while retaining the public standalone
 // creation entry point for descriptors without a context.
 extern "C" talos_rt_status talos_rt_v1_process_instance_create_for_context(
-    talos_rt_context *context,
-    const talos_rt_process_descriptor_v1 *descriptor,
+    talos_rt_context *context, const talos_rt_process_descriptor_v1 *descriptor,
     talos_rt_process_instance_v1 **outInstance);
 talos_rt_status talos_rt_resolve_design_drivers(talos_rt_context *context,
-                                                    uint64_t begin,
-                                                    uint64_t end) noexcept;
-talos_rt_status
-talos_rt_design_net_is_connected(talos_rt_context *context, uint64_t begin,
-                                   uint64_t end, bool *outConnected) noexcept;
+                                                uint64_t begin,
+                                                uint64_t end) noexcept;
+talos_rt_status talos_rt_design_net_is_connected(talos_rt_context *context,
+                                                 uint64_t begin, uint64_t end,
+                                                 bool *outConnected) noexcept;
 talos_rt_status talos_rt_run_one_design_task(
     talos_rt_context *context, uint32_t maximumRegion, uint32_t maximumRank,
     uint64_t maximumInsertionSequence, bool *outProgress,
@@ -3867,33 +3828,33 @@ talos_rt_status talos_rt_run_one_design_task(
 void talos_rt_promote_post_observed_resumptions_unlocked(
     talos_rt_context *context);
 enum class PostObservedPromotion { Stale, Waiting, Promoted };
-PostObservedPromotion talos_rt_promote_post_observed_design_task_unlocked(
-    talos_rt_context *context, uint64_t taskID);
+PostObservedPromotion
+talos_rt_promote_post_observed_design_task_unlocked(talos_rt_context *context,
+                                                    uint64_t taskID);
 talos_rt_status talos_rt_prime_design_task(talos_rt_context *context,
-                                               uint64_t taskID) noexcept;
-talos_rt_status
-talos_rt_apply_managed_nba(talos_rt_context *context,
-                             const ScheduledManagedNBA &update);
+                                           uint64_t taskID) noexcept;
+talos_rt_status talos_rt_apply_managed_nba(talos_rt_context *context,
+                                           const ScheduledManagedNBA &update);
 
 // Append one already-committed scalar transition while the context mutex is
 // held, and latch level/iff observers against the state at this exact
 // occurrence. Both native stores and design bytecode use this path.
 bool talos_rt_append_signal_event_unlocked(talos_rt_context *context,
-                                             uint64_t bitOffset, bool oldValue,
-                                             bool oldUnknown, bool newValue,
-                                             bool newUnknown);
+                                           uint64_t bitOffset, bool oldValue,
+                                           bool oldUnknown, bool newValue,
+                                           bool newUnknown);
 bool talos_rt_append_signal_event_unlocked(talos_rt_context *context,
-                                             uint64_t bitOffset, bool oldValue,
-                                             bool oldUnknown, bool newValue,
-                                             bool newUnknown,
-                                             bool evaluateComputedObservers);
+                                           uint64_t bitOffset, bool oldValue,
+                                           bool oldUnknown, bool newValue,
+                                           bool newUnknown,
+                                           bool evaluateComputedObservers);
 bool talos_rt_publish_signal_occurrence_unlocked(
     talos_rt_context *context, uint64_t stableID, uint64_t bitWidth,
     uint32_t edges, uint64_t *outSequence = nullptr);
 bool talos_rt_read_signal_bit_unlocked(talos_rt_context *context,
-                                         uint64_t stableID, uint64_t bit,
-                                         bool &value, bool &unknown,
-                                         bool useSnapshot = true);
+                                       uint64_t stableID, uint64_t bit,
+                                       bool &value, bool &unknown,
+                                       bool useSnapshot = true);
 // Publish one packed transition mask for a committed signal range. The three
 // planes retain per-bit edge identity so a batched NBA cannot spuriously wake
 // a posedge waiter because another bit in the range had a posedge.
@@ -3914,9 +3875,10 @@ bool talos_rt_read_clock_condition_publication_bit_unlocked(
     bool &value, bool &unknown);
 bool talos_rt_latch_conditional_signal_waiters_unlocked(
     talos_rt_context *context, uint64_t stableID, uint32_t edges);
-bool talos_rt_latch_conditional_signal_range_unlocked(
-    talos_rt_context *context, uint64_t stableID, uint64_t bitWidth,
-    uint32_t edges);
+bool talos_rt_latch_conditional_signal_range_unlocked(talos_rt_context *context,
+                                                      uint64_t stableID,
+                                                      uint64_t bitWidth,
+                                                      uint32_t edges);
 bool talos_rt_register_signal_wait_unlocked(
     talos_rt_context *context, const talos_rt_wait_record_v1 *wait,
     std::vector<std::unique_ptr<SignalSubscription>> &subscriptions,
@@ -3932,28 +3894,28 @@ void talos_rt_unregister_signal_wait_unlocked(
     std::vector<std::unique_ptr<SignalSubscription>> &subscriptions,
     uint64_t waiterToken = 0, bool designWaiter = false);
 bool talos_rt_notify_managed_waiters_unlocked(talos_rt_context *context,
-                                                uint64_t token);
+                                              uint64_t token);
 bool talos_rt_notify_observer_event_unlocked(talos_rt_context *context,
-                                               uint64_t stableID);
+                                             uint64_t stableID);
 bool talos_rt_initialize_event_order_wait_unlocked(
     talos_rt_context *context, const talos_rt_wait_record_v1 *wait,
     uint32_t &index, bool &ready, bool &failed);
 bool talos_rt_notify_event_order_waiters_unlocked(talos_rt_context *context,
-                                                    uint64_t stableID);
+                                                  uint64_t stableID);
 bool talos_rt_notify_observer_signal_unlocked(talos_rt_context *context,
-                                                uint64_t stableID,
-                                                uint64_t width);
+                                              uint64_t stableID,
+                                              uint64_t width);
 bool talos_rt_notify_observer_managed_unlocked(talos_rt_context *context,
-                                                 uint64_t token);
+                                               uint64_t token);
 bool talos_rt_evaluate_covergroup_managed_clock_events_unlocked(
     talos_rt_context *context, uint64_t token);
 void talos_rt_notify_managed_watch(talos_rt_object_v1 *object,
-                                     talos_rt_managed_watch_kind kind,
-                                     uint64_t selector, uint64_t size = 0);
+                                   talos_rt_managed_watch_kind kind,
+                                   uint64_t selector, uint64_t size = 0);
 bool talos_rt_evaluate_design_observers_unlocked(talos_rt_context *context,
-                                                   uint32_t dependencyKind,
-                                                   uint64_t publishedHandle,
-                                                   uint64_t publishedWidth);
+                                                 uint32_t dependencyKind,
+                                                 uint64_t publishedHandle,
+                                                 uint64_t publishedWidth);
 bool talos_rt_evaluate_design_clock_condition_unlocked(
     talos_rt_context *context, uint64_t taskID, uint64_t codeUnitID,
     const talos_rt_computed_capture_v1 *captures, uint32_t captureCount,
@@ -3962,47 +3924,46 @@ bool talos_rt_evaluate_design_bound_observer_unlocked(
     talos_rt_context *context, uint64_t taskID, uint64_t codeUnitID,
     const talos_rt_computed_capture_v1 *captures, uint32_t captureCount,
     uint64_t *value, uint64_t *unknown, uint32_t limbCapacity);
-void talos_rt_erase_automatic_bookkeeping_unlocked(
-    talos_rt_context *context, uint32_t automaticID);
+void talos_rt_erase_automatic_bookkeeping_unlocked(talos_rt_context *context,
+                                                   uint32_t automaticID);
 talos_rt_status talos_rt_native_state_alloc_with_root_offsets(
     talos_rt_context *context, uint64_t bitWidth, const uint8_t *value,
     const uint8_t *unknown, std::vector<uint64_t> bitOffsets,
     uint64_t *outHandle);
-talos_rt_status
-talos_rt_native_state_alloc_managed(talos_rt_context *context,
-                                      talos_rt_object_v1 *value,
-                                      uint64_t *outHandle);
+talos_rt_status talos_rt_native_state_alloc_managed(talos_rt_context *context,
+                                                    talos_rt_object_v1 *value,
+                                                    uint64_t *outHandle);
 // Normalize a flat design-plane range to the stable identity used by native
 // waits and publications. The caller holds context->mutex.
 uint64_t
 talos_rt_canonical_state_handle_unlocked(const talos_rt_context *context,
-                                           uint64_t bitOffset,
-                                           uint64_t bitWidth) noexcept;
-void talos_rt_invalidate_signal_snapshots_unlocked(
-    talos_rt_context *context, uint64_t bitOffset, uint64_t bitWidth);
+                                         uint64_t bitOffset,
+                                         uint64_t bitWidth) noexcept;
+void talos_rt_invalidate_signal_snapshots_unlocked(talos_rt_context *context,
+                                                   uint64_t bitOffset,
+                                                   uint64_t bitWidth);
 
 talos_rt_status talos_rt_force_design_nets(talos_rt_context *context,
-                                               uint64_t begin, uint64_t width,
-                                               const uint8_t *value,
-                                               const uint8_t *unknown) noexcept;
+                                           uint64_t begin, uint64_t width,
+                                           const uint8_t *value,
+                                           const uint8_t *unknown) noexcept;
 talos_rt_status talos_rt_release_design_nets(talos_rt_context *context,
-                                                 uint64_t begin,
-                                                 uint64_t width) noexcept;
-uint64_t
-talos_rt_canonical_net_bit_unlocked(const talos_rt_context *context,
-                                      uint64_t bit) noexcept;
+                                             uint64_t begin,
+                                             uint64_t width) noexcept;
+uint64_t talos_rt_canonical_net_bit_unlocked(const talos_rt_context *context,
+                                             uint64_t bit) noexcept;
 void talos_rt_claim_override_range_unlocked(
     talos_rt_context *context, uint64_t begin, uint64_t width, bool assign,
     uint64_t owner, std::vector<uint64_t> &retiredOwners);
 void talos_rt_release_override_range_unlocked(
     talos_rt_context *context, uint64_t begin, uint64_t width, bool assign,
     std::vector<uint64_t> &retiredOwners);
-bool talos_rt_override_owner_matches_unlocked(
-    const talos_rt_context *context, uint64_t bit, bool assign,
-    uint64_t owner);
+bool talos_rt_override_owner_matches_unlocked(const talos_rt_context *context,
+                                              uint64_t bit, bool assign,
+                                              uint64_t owner);
 talos_rt_status
 talos_rt_retire_override_owners(talos_rt_context *context,
-                                  std::vector<uint64_t> retiredOwners);
+                                std::vector<uint64_t> retiredOwners);
 
 bool talos_rt_checked_design_record(
     const talos_rt_execution_descriptor_v1 *execution, uint64_t offset,
@@ -4018,27 +3979,30 @@ void talos_rt_unregister_design_database(
     const talos_rt_execution_descriptor_v1 *execution) noexcept;
 talos_rt_status
 talos_rt_cached_design_root(const talos_rt_context *context,
+                            talos_rt_design_cursor_v1 *outCursor) noexcept;
+talos_rt_status
+talos_rt_cached_design_parent(const talos_rt_context *context,
+                              talos_rt_design_cursor_v1 cursor,
                               talos_rt_design_cursor_v1 *outCursor) noexcept;
-talos_rt_status talos_rt_cached_design_parent(
-    const talos_rt_context *context, talos_rt_design_cursor_v1 cursor,
-    talos_rt_design_cursor_v1 *outCursor) noexcept;
 talos_rt_status
 talos_rt_cached_design_child(const talos_rt_context *context,
-                               talos_rt_design_cursor_v1 cursor,
-                               talos_rt_design_cursor_v1 *outCursor) noexcept;
+                             talos_rt_design_cursor_v1 cursor,
+                             talos_rt_design_cursor_v1 *outCursor) noexcept;
 talos_rt_status talos_rt_cached_design_child_at(
     const talos_rt_context *context, talos_rt_design_cursor_v1 cursor,
     uint64_t index, talos_rt_design_cursor_v1 *outCursor) noexcept;
-talos_rt_status talos_rt_cached_design_sibling(
-    const talos_rt_context *context, talos_rt_design_cursor_v1 cursor,
-    talos_rt_design_cursor_v1 *outCursor) noexcept;
-talos_rt_status talos_rt_cached_design_lookup(
-    const talos_rt_context *context, const uint8_t *name, uint64_t nameSize,
-    talos_rt_design_cursor_v1 *outCursor) noexcept;
+talos_rt_status
+talos_rt_cached_design_sibling(const talos_rt_context *context,
+                               talos_rt_design_cursor_v1 cursor,
+                               talos_rt_design_cursor_v1 *outCursor) noexcept;
+talos_rt_status
+talos_rt_cached_design_lookup(const talos_rt_context *context,
+                              const uint8_t *name, uint64_t nameSize,
+                              talos_rt_design_cursor_v1 *outCursor) noexcept;
 talos_rt_status
 talos_rt_cached_design_info(const talos_rt_context *context,
-                              talos_rt_design_cursor_v1 cursor,
-                              talos_rt_design_info_v1 *outInfo) noexcept;
+                            talos_rt_design_cursor_v1 cursor,
+                            talos_rt_design_info_v1 *outInfo) noexcept;
 talos_rt_status talos_rt_cached_design_type_info(
     const talos_rt_context *context, talos_rt_design_cursor_v1 cursor,
     talos_rt_design_type_info_v1 *outInfo) noexcept;
@@ -4055,16 +4019,17 @@ talos_rt_status talos_rt_cached_vpi_class_typespec(
 // A virtual-interface value is its physical scope ID; zero denotes null.
 talos_rt_status
 talos_rt_cached_vpi_scope(const talos_rt_context *context, uint64_t scopeID,
-                            talos_rt_design_cursor_v1 *outCursor) noexcept;
+                          talos_rt_design_cursor_v1 *outCursor) noexcept;
 // A named-event array leaf selects a private storage cell without creating
 // another public VPI identity. The offset is in bits relative to storage.
 struct VPIEventCellBinding {
   talos_rt_design_cursor_v1 storage{};
   uint64_t bitOffset = 0;
 };
-talos_rt_status talos_rt_cached_vpi_event_array_cell(
-    const talos_rt_context *context, talos_rt_design_cursor_v1 event,
-    VPIEventCellBinding *outBinding) noexcept;
+talos_rt_status
+talos_rt_cached_vpi_event_array_cell(const talos_rt_context *context,
+                                     talos_rt_design_cursor_v1 event,
+                                     VPIEventCellBinding *outBinding) noexcept;
 
 // Stable source identities used by explicit frame events. Cursor provenance is
 // returned separately because call-as-statement aliases share a public kind
@@ -4080,43 +4045,43 @@ struct VPIFrameLocalBinding {
   uint32_t ordinal = 0;
 };
 talos_rt_status
-talos_rt_cached_vpi_frame_local(const talos_rt_context *context,
-                                  uint64_t id,
-                                  VPIFrameLocalBinding *outBinding) noexcept;
+talos_rt_cached_vpi_frame_local(const talos_rt_context *context, uint64_t id,
+                                VPIFrameLocalBinding *outBinding) noexcept;
 talos_rt_status talos_rt_cached_vpi_frame_locals(
     const talos_rt_context *context, uint64_t lexicalCodeUnitID,
     talos_rt_design_cursor_v1 scope,
     std::vector<VPIFrameLocalBinding> &outBindings) noexcept;
 
-talos_rt_status talos_rt_cached_vpi_initializer(
-    const talos_rt_context *context, uint64_t codeUnitID,
-    talos_rt_design_cursor_v1 *outSource) noexcept;
-
 talos_rt_status
-talos_rt_cached_vpi_call(const talos_rt_context *context, uint64_t callID,
-                           talos_rt_design_cursor_v1 *outCursor,
-                           uint64_t *outOwnerCodeUnitID,
-                           bool *outIsStatement) noexcept;
+talos_rt_cached_vpi_initializer(const talos_rt_context *context,
+                                uint64_t codeUnitID,
+                                talos_rt_design_cursor_v1 *outSource) noexcept;
+
+talos_rt_status talos_rt_cached_vpi_call(const talos_rt_context *context,
+                                         uint64_t callID,
+                                         talos_rt_design_cursor_v1 *outCursor,
+                                         uint64_t *outOwnerCodeUnitID,
+                                         bool *outIsStatement) noexcept;
 talos_rt_status
 talos_rt_cached_vpi_statement(const talos_rt_context *context,
-                                uint64_t statementID,
-                                talos_rt_design_cursor_v1 *outCursor,
-                                uint64_t *outOwnerCodeUnitID) noexcept;
+                              uint64_t statementID,
+                              talos_rt_design_cursor_v1 *outCursor,
+                              uint64_t *outOwnerCodeUnitID) noexcept;
 // Resolve the executable call transport independently of the public source
 // callable kind. A mapped DPI task has a Function transport and Task scope.
 talos_rt_status
 talos_rt_cached_vpi_code_unit_transport(const talos_rt_context *context,
-                                          uint64_t codeUnitID,
-                                          bool *outIsTask) noexcept;
+                                        uint64_t codeUnitID,
+                                        bool *outIsTask) noexcept;
 talos_rt_status
 talos_rt_cached_vpi_code_unit_scope(const talos_rt_context *context,
-                                      uint64_t codeUnitID,
-                                      talos_rt_design_cursor_v1 *outCursor,
-                                      uint64_t *outLexicalCodeUnitID) noexcept;
+                                    uint64_t codeUnitID,
+                                    talos_rt_design_cursor_v1 *outCursor,
+                                    uint64_t *outLexicalCodeUnitID) noexcept;
 talos_rt_status
 talos_rt_cached_vpi_call_target(const talos_rt_context *context,
-                                  uint64_t callID,
-                                  uint64_t calleeCodeUnitID) noexcept;
+                                uint64_t callID,
+                                uint64_t calleeCodeUnitID) noexcept;
 // Resolve the exact net and its retained nettype resolution function.
 talos_rt_status talos_rt_cached_vpi_net_resolution(
     const talos_rt_context *context, uint64_t netID,
@@ -4124,8 +4089,8 @@ talos_rt_status talos_rt_cached_vpi_net_resolution(
     talos_rt_design_cursor_v1 *outFunction) noexcept;
 talos_rt_status
 talos_rt_cached_vpi_resolution_target(const talos_rt_context *context,
-                                        uint64_t netID,
-                                        uint64_t calleeCodeUnitID) noexcept;
+                                      uint64_t netID,
+                                      uint64_t calleeCodeUnitID) noexcept;
 // OriginKind: 0 code-unit scope, 1 call, 2 scoped statement, 3 resolution net.
 talos_rt_status talos_rt_cached_vpi_frame_origin(
     const talos_rt_context *context, uint32_t originKind, uint64_t originID,
@@ -4138,31 +4103,30 @@ talos_rt_status talos_rt_cached_vpi_frame_origin(
 // boundaries do not themselves create an observable activation.
 talos_rt_status
 talos_rt_vpi_export_begin(talos_rt_context *context,
-                            const talos_rt_export_descriptor_v1 *descriptor,
-                            uint64_t *outToken);
+                          const talos_rt_export_descriptor_v1 *descriptor,
+                          uint64_t *outToken);
 talos_rt_status talos_rt_vpi_export_task_enter(talos_rt_context *context,
-                                                   uint64_t executor);
+                                               uint64_t executor);
 talos_rt_status talos_rt_vpi_export_end(talos_rt_context *context,
-                                            uint64_t token);
+                                        uint64_t token);
 talos_rt_status
 talos_rt_cached_vpi_export_target(const talos_rt_context *context,
-                                    uint64_t codeUnitID, uint64_t scopeID,
-                                    bool isTask) noexcept;
-talos_rt_status
-talos_rt_vpi_frame_unwind_process(talos_rt_context *context,
-                                    uint64_t logicalProcess, uint64_t depth);
+                                  uint64_t codeUnitID, uint64_t scopeID,
+                                  bool isTask) noexcept;
+talos_rt_status talos_rt_vpi_frame_unwind_process(talos_rt_context *context,
+                                                  uint64_t logicalProcess,
+                                                  uint64_t depth);
 talos_rt_status talos_rt_vpi_pending_call(talos_rt_context *context,
-                                              uint64_t *outCallID);
+                                          uint64_t *outCallID);
 talos_rt_status
 talos_rt_vpi_bind_native_callsite(talos_rt_context *context,
-                                    talos_rt_process_instance_v1 *callee,
-                                    uint64_t callID, uint64_t preparedCallID);
-talos_rt_status
-talos_rt_vpi_activation_callsite(talos_rt_context *context,
-                                   uint64_t *outCallID);
-talos_rt_status
-talos_rt_vpi_frame_depth_process(talos_rt_context *context,
-                                   uint64_t logicalProcess, uint64_t *outDepth);
+                                  talos_rt_process_instance_v1 *callee,
+                                  uint64_t callID, uint64_t preparedCallID);
+talos_rt_status talos_rt_vpi_activation_callsite(talos_rt_context *context,
+                                                 uint64_t *outCallID);
+talos_rt_status talos_rt_vpi_frame_depth_process(talos_rt_context *context,
+                                                 uint64_t logicalProcess,
+                                                 uint64_t *outDepth);
 
 // Returns the immutable source statement for an exact executable code unit,
 // or EOF when this image has no retained thread-origin binding.
@@ -4173,18 +4137,18 @@ talos_rt_status talos_rt_cached_vpi_thread_origin(
 // binding in this image. A successful lookup may return event identity zero.
 talos_rt_status
 talos_rt_cached_vpi_event_binding(const talos_rt_context *context,
-                                    talos_rt_design_cursor_v1 event,
-                                    uint64_t *outEventID) noexcept;
+                                  talos_rt_design_cursor_v1 event,
+                                  uint64_t *outEventID) noexcept;
 
 talos_rt_status
 talos_rt_cached_vpi_modport_binding(const talos_rt_context *context,
-                                      talos_rt_design_cursor_v1 modport,
-                                      VPIModportBinding *outBinding) noexcept;
+                                    talos_rt_design_cursor_v1 modport,
+                                    VPIModportBinding *outBinding) noexcept;
 talos_rt_status
 talos_rt_cached_vpi_modport(const talos_rt_context *context,
-                              talos_rt_design_cursor_v1 scope,
-                              const uint8_t *name, uint64_t nameSize,
-                              talos_rt_design_cursor_v1 *outCursor) noexcept;
+                            talos_rt_design_cursor_v1 scope,
+                            const uint8_t *name, uint64_t nameSize,
+                            talos_rt_design_cursor_v1 *outCursor) noexcept;
 // Return the immutable normalized storage type for a node in a canonical
 // mailbox's effective element DAG. Legacy images without bindings return EOF.
 // Exact layout ownership stays separate from source object identity. Box
@@ -4199,9 +4163,10 @@ struct VPIBoxTypeBinding {
   talos_rt_design_cursor_v1 semantic{};
   talos_rt_design_cursor_v1 physical{};
 };
-talos_rt_status talos_rt_cached_vpi_value_layout_owner(
-    const talos_rt_context *context, talos_rt_design_cursor_v1 owner,
-    VPIValueLayoutOwner *outOwner) noexcept;
+talos_rt_status
+talos_rt_cached_vpi_value_layout_owner(const talos_rt_context *context,
+                                       talos_rt_design_cursor_v1 owner,
+                                       VPIValueLayoutOwner *outOwner) noexcept;
 talos_rt_status talos_rt_cached_vpi_value_element_type(
     const talos_rt_context *context, VPIValueLayoutOwner owner,
     talos_rt_design_cursor_v1 semantic,
@@ -4214,21 +4179,22 @@ talos_rt_status talos_rt_cached_vpi_value_element_type(
 // Source signedness and descriptor IDs are independent of physical shape.
 talos_rt_status
 talos_rt_vpi_element_matches(const talos_rt_context *context,
-                               VPIValueLayoutOwner owner,
-                               talos_rt_design_cursor_v1 semantic,
-                               const talos_rt_element_type_v1 *element);
+                             VPIValueLayoutOwner owner,
+                             talos_rt_design_cursor_v1 semantic,
+                             const talos_rt_element_type_v1 *element);
 
 talos_rt_status
 talos_rt_cached_vpi_box_type(const talos_rt_context *context, uint64_t id,
-                               VPIBoxTypeBinding *outType) noexcept;
+                             VPIBoxTypeBinding *outType) noexcept;
 
 talos_rt_status talos_rt_cached_vpi_mailbox_element_type(
     const talos_rt_context *context, talos_rt_design_cursor_v1 typespec,
     talos_rt_design_cursor_v1 semantic,
     talos_rt_design_cursor_v1 *outType) noexcept;
-talos_rt_status talos_rt_cached_vpi_class_member(
-    const talos_rt_context *context, talos_rt_design_cursor_v1 member,
-    VPIClassMemberBinding *outBinding) noexcept;
+talos_rt_status
+talos_rt_cached_vpi_class_member(const talos_rt_context *context,
+                                 talos_rt_design_cursor_v1 member,
+                                 VPIClassMemberBinding *outBinding) noexcept;
 talos_rt_status talos_rt_cached_vpi_semantic_class_typespec(
     const talos_rt_context *context, talos_rt_design_cursor_v1 semantic,
     talos_rt_design_cursor_v1 *outCursor) noexcept;
@@ -4239,39 +4205,43 @@ talos_rt_status talos_rt_cached_design_semantic_type_info(
 // and enum bases. EOF denotes a semantic kind without a fixed packed width.
 talos_rt_status
 talos_rt_cached_design_semantic_bit_width(const talos_rt_context *context,
-                                            talos_rt_design_cursor_v1 cursor,
-                                            uint64_t *outWidth) noexcept;
+                                          talos_rt_design_cursor_v1 cursor,
+                                          uint64_t *outWidth) noexcept;
 talos_rt_status talos_rt_cached_design_semantic_type_edge(
     const talos_rt_context *context, talos_rt_design_cursor_v1 cursor,
     uint64_t index, talos_rt_design_semantic_type_edge_v1 *outEdge) noexcept;
-talos_rt_status talos_rt_cached_design_source(
-    const talos_rt_context *context, talos_rt_design_cursor_v1 cursor,
-    const uint8_t **outFile, uint64_t *outFileSize, uint32_t *outLine,
-    uint32_t *outColumn) noexcept;
+talos_rt_status talos_rt_cached_design_source(const talos_rt_context *context,
+                                              talos_rt_design_cursor_v1 cursor,
+                                              const uint8_t **outFile,
+                                              uint64_t *outFileSize,
+                                              uint32_t *outLine,
+                                              uint32_t *outColumn) noexcept;
 
-talos_rt_status talos_rt_cached_design_name(
-    const talos_rt_context *context, talos_rt_design_cursor_v1 cursor,
-    const uint8_t **outData, uint64_t *outSize) noexcept;
+talos_rt_status talos_rt_cached_design_name(const talos_rt_context *context,
+                                            talos_rt_design_cursor_v1 cursor,
+                                            const uint8_t **outData,
+                                            uint64_t *outSize) noexcept;
 
 // Read a narrow bit window from one reflected storage object. This is the
 // cold VPI/debugger path and deliberately preserves direct native state
 // access without allocating buffers proportional to the containing object.
-talos_rt_status
-talos_rt_read_design_slice(talos_rt_context *context,
-                             talos_rt_design_cursor_v1 cursor,
-                             uint64_t bitOffset, uint64_t bitWidth,
-                             uint64_t *value, uint64_t *unknown) noexcept;
+talos_rt_status talos_rt_read_design_slice(talos_rt_context *context,
+                                           talos_rt_design_cursor_v1 cursor,
+                                           uint64_t bitOffset,
+                                           uint64_t bitWidth, uint64_t *value,
+                                           uint64_t *unknown) noexcept;
 
 // Resolve one reflected storage/net bit to its canonical global-state
 // coordinate. Query-only consumers use this instead of confusing a source
 // object ID with its independently allocated state offset.
-talos_rt_status talos_rt_design_state_offset(
-    const talos_rt_context *context, talos_rt_design_cursor_v1 cursor,
-    uint64_t bitOffset, uint64_t *outStateOffset) noexcept;
+talos_rt_status talos_rt_design_state_offset(const talos_rt_context *context,
+                                             talos_rt_design_cursor_v1 cursor,
+                                             uint64_t bitOffset,
+                                             uint64_t *outStateOffset) noexcept;
 
 talos_rt_status talos_rt_cached_vpi_type(const talos_rt_context *context,
-                                             talos_rt_design_cursor_v1 cursor,
-                                             uint32_t *outType) noexcept;
+                                         talos_rt_design_cursor_v1 cursor,
+                                         uint32_t *outType) noexcept;
 talos_rt_status talos_rt_cached_vpi_fixed_property(
     const talos_rt_context *context, talos_rt_design_cursor_v1 cursor,
     uint32_t selector, VPIFixedPropertyValue *outValue) noexcept;
@@ -4282,8 +4252,8 @@ talos_rt_status talos_rt_cached_vpi_definition_member_scope(
 
 talos_rt_status
 talos_rt_cached_vpi_frozen_value(const talos_rt_context *context,
-                                   talos_rt_design_cursor_v1 cursor,
-                                   VPIFrozenValue *outValue) noexcept;
+                                 talos_rt_design_cursor_v1 cursor,
+                                 VPIFrozenValue *outValue) noexcept;
 talos_rt_status talos_rt_cached_vpi_resolved_net_type(
     const talos_rt_context *context, talos_rt_design_cursor_v1 cursor,
     uint64_t bitOffset, uint64_t bitWidth, uint32_t *outType) noexcept;
@@ -4299,8 +4269,8 @@ talos_rt_status talos_rt_cached_vpi_relation_target(
     bool *outStatement) noexcept;
 talos_rt_status
 talos_rt_cached_vpi_relation_index(const talos_rt_context *context,
-                                     talos_rt_design_cursor_v1 source,
-                                     VPIRelationIndexInfo *outInfo) noexcept;
+                                   talos_rt_design_cursor_v1 source,
+                                   VPIRelationIndexInfo *outInfo) noexcept;
 talos_rt_status talos_rt_cached_vpi_relation_index_dimension(
     const talos_rt_context *context, const VPIRelationIndexInfo &info,
     uint32_t dimension, int64_t *outLeft, int64_t *outRight) noexcept;
@@ -4312,8 +4282,8 @@ talos_rt_status talos_rt_cached_vpi_relation_index_ordinal_key(
     uint32_t ordinal, int64_t *outIndex) noexcept;
 talos_rt_status
 talos_rt_cached_vpi_array_member(const talos_rt_context *context,
-                                   talos_rt_design_cursor_v1 member,
-                                   VPIArrayMemberInfo *outInfo) noexcept;
+                                 talos_rt_design_cursor_v1 member,
+                                 VPIArrayMemberInfo *outInfo) noexcept;
 talos_rt_status talos_rt_cached_vpi_statement_scope(
     const talos_rt_context *context, talos_rt_design_cursor_v1 statement,
     talos_rt_design_cursor_v1 *outScope) noexcept;
@@ -4328,11 +4298,12 @@ talos_rt_status talos_rt_cached_vpi_statement_owner(
     talos_rt_design_cursor_v1 *outOwner) noexcept;
 talos_rt_status
 talos_rt_cached_vpi_statement_is_scope(const talos_rt_context *context,
-                                         talos_rt_design_cursor_v1 statement,
-                                         bool *outIsScope) noexcept;
-talos_rt_status talos_rt_cached_vpi_statement_is_protected(
-    const talos_rt_context *context, talos_rt_design_cursor_v1 statement,
-    bool *outIsProtected) noexcept;
+                                       talos_rt_design_cursor_v1 statement,
+                                       bool *outIsScope) noexcept;
+talos_rt_status
+talos_rt_cached_vpi_statement_is_protected(const talos_rt_context *context,
+                                           talos_rt_design_cursor_v1 statement,
+                                           bool *outIsProtected) noexcept;
 
 // Exact output contribution. Missing binding returns EOF. Selected bit offsets
 // are checked against the physical Driver span; UINT64_MAX means no high bank.
@@ -4342,7 +4313,7 @@ struct VPITerminalDriverBinding {
 };
 talos_rt_status
 talos_rt_cached_vpi_terminal_driver(const talos_rt_context *,
-                                      talos_rt_design_cursor_v1 terminal,
-                                      VPITerminalDriverBinding *) noexcept;
+                                    talos_rt_design_cursor_v1 terminal,
+                                    VPITerminalDriverBinding *) noexcept;
 
 #endif // TALOS_RUNTIME_LIB_RUNTIMEINTERNAL_H

@@ -267,10 +267,9 @@ public:
       return relevant.contains(value);
     });
     for (const Path &path : after->unseen(before)) {
-      if (!binds && llvm::none_of(op->getResults(),
-                                  [&](Value value) {
-                                    return path->contains(value);
-                                  }) &&
+      if (!binds &&
+          llvm::none_of(op->getResults(),
+                        [&](Value value) { return path->contains(value); }) &&
           llvm::none_of(dying,
                         [&](Value value) { return path->contains(value); })) {
         propagateIfChanged(after, after->merge(path));

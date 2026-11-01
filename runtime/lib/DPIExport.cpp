@@ -11,13 +11,11 @@
 #if defined(__clang__) || defined(__GNUC__)
 __attribute__((weak))
 #endif
-talos_rt_status
-talos_rt_execute_dpi_export_bytecode(
+talos_rt_status talos_rt_execute_dpi_export_bytecode(
     const talos_rt_execution_descriptor_v1 &execution,
-    const talos_rt_export_descriptor_v1 &descriptor,
-    talos_rt_context *context, const talos_rt_import_input_v1 *inputs,
-    uint32_t inputCount, talos_rt_import_output_v1 *outputs,
-    uint32_t outputCount) noexcept;
+    const talos_rt_export_descriptor_v1 &descriptor, talos_rt_context *context,
+    const talos_rt_import_input_v1 *inputs, uint32_t inputCount,
+    talos_rt_import_output_v1 *outputs, uint32_t outputCount) noexcept;
 
 #if defined(__APPLE__)
 // Mach-O extracts archive members even for weak references. Define the
@@ -73,7 +71,7 @@ bool validInput(const talos_rt_import_input_v1 &input) {
   if (input.kind == TALOS_RT_DBREG_AGGREGATE)
     return true;
   return input.kind == TALOS_RT_DBREG_LOGIC ? input.unknown != nullptr
-                                              : input.unknown == nullptr;
+                                            : input.unknown == nullptr;
 }
 
 bool validOutput(const talos_rt_import_output_v1 &output) {
@@ -81,8 +79,7 @@ bool validOutput(const talos_rt_import_output_v1 &output) {
       (output.flags & ~uint8_t{TALOS_RT_DBREG_SIGNED}) != 0 ||
       output.reserved != 0 || !output.value)
     return false;
-  uint32_t width =
-      output.kind == TALOS_RT_DBREG_STATUS ? 32 : output.bit_width;
+  uint32_t width = output.kind == TALOS_RT_DBREG_STATUS ? 32 : output.bit_width;
   if (width == 0 || output.bit_width != width ||
       output.limb_count != limbCount(width))
     return false;
@@ -96,7 +93,7 @@ bool validOutput(const talos_rt_import_output_v1 &output) {
   if (output.kind == TALOS_RT_DBREG_AGGREGATE)
     return true;
   return output.kind == TALOS_RT_DBREG_LOGIC ? output.unknown != nullptr
-                                               : output.unknown == nullptr;
+                                             : output.unknown == nullptr;
 }
 
 void zeroOutput(talos_rt_import_output_v1 &output) {
@@ -143,13 +140,12 @@ exportExtension(const talos_rt_execution_descriptor_v1 &execution) {
 }
 
 const talos_rt_export_descriptor_v1 *
-findExport(const talos_rt_execution_extension_v1 &extension,
-           uint32_t exportID, uint64_t scopeID) {
+findExport(const talos_rt_execution_extension_v1 &extension, uint32_t exportID,
+           uint64_t scopeID) {
   uint64_t low = 0, high = extension.export_count;
   while (low < high) {
     uint64_t middle = low + (high - low) / 2;
-    const talos_rt_export_descriptor_v1 &candidate =
-        extension.exports[middle];
+    const talos_rt_export_descriptor_v1 &candidate = extension.exports[middle];
     if (candidate.export_id < exportID ||
         (candidate.export_id == exportID && candidate.scope_id < scopeID))
       low = middle + 1;
@@ -207,8 +203,8 @@ public:
 
 extern "C" TALOS_RT_FEATURE_TEXT void
 talos_rt_v1_dpi_export_unpack_vector(const void *source, void *value,
-                                       void *unknown, uint32_t width,
-                                       uint32_t fourState) {
+                                     void *unknown, uint32_t width,
+                                     uint32_t fourState) {
   if (!source || !value || width == 0)
     return;
   const auto *sourceBytes = static_cast<const uint8_t *>(source);
@@ -237,8 +233,8 @@ talos_rt_v1_dpi_export_unpack_vector(const void *source, void *value,
 
 extern "C" TALOS_RT_FEATURE_TEXT void
 talos_rt_v1_dpi_export_pack_vector(void *destination, const void *value,
-                                     const void *unknown, uint32_t width,
-                                     uint32_t fourState) {
+                                   const void *unknown, uint32_t width,
+                                   uint32_t fourState) {
   if (!destination || !value || width == 0)
     return;
   auto *destinationBytes = static_cast<uint8_t *>(destination);
@@ -272,8 +268,7 @@ TALOS_RT_FEATURE_TEXT bool talos_rt_validate_dpi_exports(
   uint32_t previousExportID = 0;
   uint64_t previousScopeID = 0;
   for (uint64_t index = 0; index != extension.export_count; ++index) {
-    const talos_rt_export_descriptor_v1 &descriptor =
-        extension.exports[index];
+    const talos_rt_export_descriptor_v1 &descriptor = extension.exports[index];
     if (descriptor.export_id == 0 || descriptor.code_unit_id == 0 ||
         descriptor.abi_signature == 0 || descriptor.flags == 0 ||
         (descriptor.flags & ~validFlags) != 0 || descriptor.reserved != 0 ||
@@ -349,136 +344,134 @@ extern "C" TALOS_RT_FEATURE_TEXT talos_rt_status talos_rt_v1_export_call(
     return fail(TALOS_RT_ARGUMENT_MISMATCH);
 
   ContextTransaction transaction(context);
-  talos_rt_status result =
-      talos_rt_feature_guarded(context, [&]() {
-        if (exportDepth == std::numeric_limits<size_t>::max())
-          return fail(TALOS_RT_OUT_OF_RESOURCES);
-        size_t frameIndex = exportDepth;
-        if (exportStringFrames.size() <= frameIndex)
-          exportStringFrames.resize(frameIndex + 1);
-        // A caller may pass a pointer returned by export_string straight back
-        // into the next same-depth export. Preserve the prior frame until all
-        // raw C string inputs have been copied into managed storage.
-        std::vector<std::string> priorStrings;
-        priorStrings.swap(exportStringFrames[frameIndex]);
+  talos_rt_status result = talos_rt_feature_guarded(context, [&]() {
+    if (exportDepth == std::numeric_limits<size_t>::max())
+      return fail(TALOS_RT_OUT_OF_RESOURCES);
+    size_t frameIndex = exportDepth;
+    if (exportStringFrames.size() <= frameIndex)
+      exportStringFrames.resize(frameIndex + 1);
+    // A caller may pass a pointer returned by export_string straight back
+    // into the next same-depth export. Preserve the prior frame until all
+    // raw C string inputs have been copied into managed storage.
+    std::vector<std::string> priorStrings;
+    priorStrings.swap(exportStringFrames[frameIndex]);
 
-        uint64_t stringCount = 0;
-        for (uint32_t index = 0; index != inputCount; ++index)
-          stringCount += inputs[index].kind == TALOS_RT_DBREG_STRING;
-        for (uint32_t index = 0; index != outputCount; ++index)
-          stringCount += outputs[index].kind == TALOS_RT_DBREG_STRING;
-        if (stringCount > std::numeric_limits<size_t>::max())
-          return fail(TALOS_RT_OUT_OF_RESOURCES);
-        std::vector<talos_rt_managed_word_v1> roots(
-            static_cast<size_t>(stringCount), 0);
-        ScopedManagedRoots rooted(context, roots);
-        if (rooted.getStatus() != TALOS_RT_OK)
-          return fail(rooted.getStatus());
+    uint64_t stringCount = 0;
+    for (uint32_t index = 0; index != inputCount; ++index)
+      stringCount += inputs[index].kind == TALOS_RT_DBREG_STRING;
+    for (uint32_t index = 0; index != outputCount; ++index)
+      stringCount += outputs[index].kind == TALOS_RT_DBREG_STRING;
+    if (stringCount > std::numeric_limits<size_t>::max())
+      return fail(TALOS_RT_OUT_OF_RESOURCES);
+    std::vector<talos_rt_managed_word_v1> roots(
+        static_cast<size_t>(stringCount), 0);
+    ScopedManagedRoots rooted(context, roots);
+    if (rooted.getStatus() != TALOS_RT_OK)
+      return fail(rooted.getStatus());
 
-        std::vector<talos_rt_import_input_v1> convertedInputs;
-        std::vector<talos_rt_import_output_v1> convertedOutputs;
-        if (inputCount != 0)
-          convertedInputs.assign(inputs, inputs + inputCount);
-        if (outputCount != 0)
-          convertedOutputs.assign(outputs, outputs + outputCount);
-        size_t root = 0;
-        talos_rt_gc_lane_v1 *lane = rooted.getLane();
-        for (uint32_t index = 0; index != inputCount; ++index) {
-          if (inputs[index].kind != TALOS_RT_DBREG_STRING)
-            continue;
-          convertedInputs[index].value = &roots[root];
-          uint64_t pointerWord = *inputs[index].value;
-          // Generated wrappers use a null raw pointer only for output formals,
-          // whose incoming value is intentionally absent. Input and inout
-          // strings always carry their initialized C address.
-          if (pointerWord != 0) {
-            if (pointerWord > std::numeric_limits<uintptr_t>::max())
-              return fail(TALOS_RT_INVALID_ARGUMENT);
-            const char *text = reinterpret_cast<const char *>(
-                static_cast<uintptr_t>(pointerWord));
-            talos_rt_status status = talos_rt_v1_string_create(
-                lane, text, std::strlen(text), &roots[root]);
-            if (status != TALOS_RT_OK)
-              return fail(status);
-          }
-          ++root;
-        }
-        for (uint32_t index = 0; index != outputCount; ++index) {
-          if (outputs[index].kind != TALOS_RT_DBREG_STRING)
-            continue;
-          convertedOutputs[index].value = &roots[root++];
-        }
-
-        ScopedExportDepth depth;
-        talos_rt_status status;
-        bool requireBytecode =
-            (execution->flags & TALOS_RT_EXECUTION_REQUIRE_BYTECODE) != 0;
-        bool task = (descriptor->flags & TALOS_RT_EXPORT_TASK) != 0;
-        if (task && (call->importFlags &
-                     (TALOS_RT_IMPORT_CONTEXT | TALOS_RT_IMPORT_TASK)) !=
-                        (TALOS_RT_IMPORT_CONTEXT | TALOS_RT_IMPORT_TASK))
-          return fail(TALOS_RT_FATAL);
-        uint64_t vpiExport = 0;
-        status = talos_rt_vpi_export_begin(context, descriptor, &vpiExport);
+    std::vector<talos_rt_import_input_v1> convertedInputs;
+    std::vector<talos_rt_import_output_v1> convertedOutputs;
+    if (inputCount != 0)
+      convertedInputs.assign(inputs, inputs + inputCount);
+    if (outputCount != 0)
+      convertedOutputs.assign(outputs, outputs + outputCount);
+    size_t root = 0;
+    talos_rt_gc_lane_v1 *lane = rooted.getLane();
+    for (uint32_t index = 0; index != inputCount; ++index) {
+      if (inputs[index].kind != TALOS_RT_DBREG_STRING)
+        continue;
+      convertedInputs[index].value = &roots[root];
+      uint64_t pointerWord = *inputs[index].value;
+      // Generated wrappers use a null raw pointer only for output formals,
+      // whose incoming value is intentionally absent. Input and inout
+      // strings always carry their initialized C address.
+      if (pointerWord != 0) {
+        if (pointerWord > std::numeric_limits<uintptr_t>::max())
+          return fail(TALOS_RT_INVALID_ARGUMENT);
+        const char *text =
+            reinterpret_cast<const char *>(static_cast<uintptr_t>(pointerWord));
+        talos_rt_status status = talos_rt_v1_string_create(
+            lane, text, std::strlen(text), &roots[root]);
         if (status != TALOS_RT_OK)
           return fail(status);
-        struct ExportFrameGuard {
-          talos_rt_context *context;
-          uint64_t token;
-          bool active = true;
-          ~ExportFrameGuard() {
-            if (active)
-              (void)talos_rt_vpi_export_end(context, token);
-          }
-        } exportFrame{context, vpiExport};
-        if (task || (!requireBytecode && descriptor->native_entry)) {
-          status = descriptor->native_entry(context, convertedInputs.data(),
-                                            inputCount, convertedOutputs.data(),
-                                            outputCount);
-        } else if (talos_rt_execute_dpi_export_bytecode) {
-          status = talos_rt_execute_dpi_export_bytecode(
-              *execution, *descriptor, context, convertedInputs.data(),
-              inputCount, convertedOutputs.data(), outputCount);
-        } else {
-          status = TALOS_RT_TIER_UNAVAILABLE;
-        }
-        auto frameStatus = talos_rt_vpi_export_end(context, vpiExport);
-        exportFrame.active = false;
-        if (status == TALOS_RT_OK)
-          status = frameStatus;
-        if (status == TALOS_RT_DPI_DISABLE_UNSUPPORTED) {
-          call->disabledState = true;
-          return status;
-        }
-        if (status != TALOS_RT_OK)
-          return fail(status);
+      }
+      ++root;
+    }
+    for (uint32_t index = 0; index != outputCount; ++index) {
+      if (outputs[index].kind != TALOS_RT_DBREG_STRING)
+        continue;
+      convertedOutputs[index].value = &roots[root++];
+    }
 
-        // Nested dispatch may grow and relocate exportStringFrames. Reacquire
-        // this depth's frame after it returns instead of retaining a dangling
-        // reference across the callback.
-        std::vector<std::string> &exportStrings =
-            exportStringFrames[frameIndex];
-        exportStrings.resize(outputCount);
-        char scratch[8];
-        for (uint32_t index = 0; index != outputCount; ++index) {
-          normalize(convertedOutputs[index]);
-          if (outputs[index].kind != TALOS_RT_DBREG_STRING)
-            continue;
-          const char *bytes = nullptr;
-          uint64_t size = 0;
-          status = talos_rt_v1_string_view(*convertedOutputs[index].value,
-                                             scratch, &bytes, &size);
-          if (status != TALOS_RT_OK)
-            return fail(status);
-          if (size > std::numeric_limits<size_t>::max())
-            return fail(TALOS_RT_OUT_OF_RESOURCES);
-          if (size == 0)
-            exportStrings[index].clear();
-          else
-            exportStrings[index].assign(bytes, static_cast<size_t>(size));
-        }
-        return TALOS_RT_OK;
-      });
+    ScopedExportDepth depth;
+    talos_rt_status status;
+    bool requireBytecode =
+        (execution->flags & TALOS_RT_EXECUTION_REQUIRE_BYTECODE) != 0;
+    bool task = (descriptor->flags & TALOS_RT_EXPORT_TASK) != 0;
+    if (task && (call->importFlags &
+                 (TALOS_RT_IMPORT_CONTEXT | TALOS_RT_IMPORT_TASK)) !=
+                    (TALOS_RT_IMPORT_CONTEXT | TALOS_RT_IMPORT_TASK))
+      return fail(TALOS_RT_FATAL);
+    uint64_t vpiExport = 0;
+    status = talos_rt_vpi_export_begin(context, descriptor, &vpiExport);
+    if (status != TALOS_RT_OK)
+      return fail(status);
+    struct ExportFrameGuard {
+      talos_rt_context *context;
+      uint64_t token;
+      bool active = true;
+      ~ExportFrameGuard() {
+        if (active)
+          (void)talos_rt_vpi_export_end(context, token);
+      }
+    } exportFrame{context, vpiExport};
+    if (task || (!requireBytecode && descriptor->native_entry)) {
+      status =
+          descriptor->native_entry(context, convertedInputs.data(), inputCount,
+                                   convertedOutputs.data(), outputCount);
+    } else if (talos_rt_execute_dpi_export_bytecode) {
+      status = talos_rt_execute_dpi_export_bytecode(
+          *execution, *descriptor, context, convertedInputs.data(), inputCount,
+          convertedOutputs.data(), outputCount);
+    } else {
+      status = TALOS_RT_TIER_UNAVAILABLE;
+    }
+    auto frameStatus = talos_rt_vpi_export_end(context, vpiExport);
+    exportFrame.active = false;
+    if (status == TALOS_RT_OK)
+      status = frameStatus;
+    if (status == TALOS_RT_DPI_DISABLE_UNSUPPORTED) {
+      call->disabledState = true;
+      return status;
+    }
+    if (status != TALOS_RT_OK)
+      return fail(status);
+
+    // Nested dispatch may grow and relocate exportStringFrames. Reacquire
+    // this depth's frame after it returns instead of retaining a dangling
+    // reference across the callback.
+    std::vector<std::string> &exportStrings = exportStringFrames[frameIndex];
+    exportStrings.resize(outputCount);
+    char scratch[8];
+    for (uint32_t index = 0; index != outputCount; ++index) {
+      normalize(convertedOutputs[index]);
+      if (outputs[index].kind != TALOS_RT_DBREG_STRING)
+        continue;
+      const char *bytes = nullptr;
+      uint64_t size = 0;
+      status = talos_rt_v1_string_view(*convertedOutputs[index].value, scratch,
+                                       &bytes, &size);
+      if (status != TALOS_RT_OK)
+        return fail(status);
+      if (size > std::numeric_limits<size_t>::max())
+        return fail(TALOS_RT_OUT_OF_RESOURCES);
+      if (size == 0)
+        exportStrings[index].clear();
+      else
+        exportStrings[index].assign(bytes, static_cast<size_t>(size));
+    }
+    return TALOS_RT_OK;
+  });
   if (result != TALOS_RT_OK && result != TALOS_RT_DPI_DISABLE_UNSUPPORTED)
     latchFailure(*call, result);
   return result;
@@ -498,7 +491,7 @@ extern "C" talos_rt_status talos_rt_v1_export_call_guarded(
   if (priorStatus != TALOS_RT_OK)
     return talos_rt_v1_dpi_export_status(priorStatus);
   return talos_rt_v1_export_call(exportID, abiSignature, inputs, inputCount,
-                                   outputs, outputCount);
+                                 outputs, outputCount);
 }
 
 extern "C" TALOS_RT_FEATURE_TEXT const char *

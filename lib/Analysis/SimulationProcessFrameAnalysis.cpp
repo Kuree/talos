@@ -84,8 +84,7 @@ FailureOr<uint64_t> getComputedWaitSize(sim::SimSuspendObserveOp operation) {
     return true;
   };
   uint64_t size = sizeof(talos_rt_computed_wait_record_v1);
-  if (!addProduct(size, observerCount,
-                  sizeof(talos_rt_computed_observer_v1)) ||
+  if (!addProduct(size, observerCount, sizeof(talos_rt_computed_observer_v1)) ||
       !addProduct(size, captureCount, sizeof(talos_rt_computed_capture_v1)) ||
       !addProduct(size, dependencyCount,
                   sizeof(talos_rt_computed_dependency_v1)) ||

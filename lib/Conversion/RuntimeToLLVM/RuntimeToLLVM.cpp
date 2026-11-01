@@ -295,7 +295,6 @@ public:
 
 } // namespace
 
-
 LogicalResult
 validateRuntimeToLLVMPreconditions(ModuleOp module,
                                    const llvm::DataLayout &dataLayout) {

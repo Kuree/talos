@@ -117,14 +117,12 @@ constexpr uint64_t kRelationIndexMemberSize =
     talos::reflection::RelationIndexMemberLayout.size;
 constexpr uint64_t kFixedPropertySize =
     talos::reflection::FixedPropertyLayout.size;
-constexpr uint64_t kFrozenValueSize =
-    talos::reflection::FrozenValueLayout.size;
+constexpr uint64_t kFrozenValueSize = talos::reflection::FrozenValueLayout.size;
 constexpr uint64_t kFrozenValueBindingSize =
     talos::reflection::FrozenValueBindingLayout.size;
 constexpr uint64_t kResolvedNetRunSize =
     talos::reflection::ResolvedNetRunLayout.size;
-constexpr uint64_t kNetDelayRunSize =
-    talos::reflection::NetDelayRunLayout.size;
+constexpr uint64_t kNetDelayRunSize = talos::reflection::NetDelayRunLayout.size;
 constexpr uint64_t kDefinitionSize = talos::reflection::DefinitionLayout.size;
 constexpr uint64_t kDefinitionBindingSize =
     talos::reflection::DefinitionBindingLayout.size;
@@ -214,8 +212,8 @@ bool recordKindSupportsVPI(uint32_t physicalKind, uint32_t vpiKind) {
       descriptor->role != talos::reflection::VPIObjectRole::Concrete)
     return false;
   auto hasFamily = [&](talos::reflection::VPIObjectFamily family) {
-    return (descriptor->families &
-            talos::reflection::vpiFamilyMask(family)) != 0;
+    return (descriptor->families & talos::reflection::vpiFamilyMask(family)) !=
+           0;
   };
   using VPIKind = talos::reflection::VPIObjectKind;
   switch (physicalKind) {
@@ -238,7 +236,8 @@ bool recordKindSupportsVPI(uint32_t physicalKind, uint32_t vpiKind) {
     return vpiKind == static_cast<uint16_t>(VPIKind::Port);
   case TALOS_RT_DESIGN_RECORD_STATIC_OBJECT:
     return talos::reflection::vpiObjectSetContains(
-               talos::reflection::VPIObjectSetID::StaticImageObjects, vpiKind) ||
+               talos::reflection::VPIObjectSetID::StaticImageObjects,
+               vpiKind) ||
            talos::reflection::vpiObjectSetContains(
                talos::reflection::VPIObjectSetID::DataVariableObjects, vpiKind);
   default:
@@ -782,8 +781,7 @@ bool parseHeader(const talos_rt_execution_descriptor_v1 *execution,
        (database.profile & TALOS_RT_DESIGN_PROFILE_READ) == 0) ||
       ((database.profile & TALOS_RT_DESIGN_PROFILE_READ) != 0) !=
           ((execution->flags & (TALOS_RT_EXECUTION_VPI_READ |
-                                TALOS_RT_EXECUTION_WAVEFORM_METADATA)) !=
-           0) ||
+                                TALOS_RT_EXECUTION_WAVEFORM_METADATA)) != 0) ||
       ((database.profile & TALOS_RT_DESIGN_PROFILE_WRITE) != 0) !=
           ((execution->flags & TALOS_RT_EXECUTION_VPI_WRITE) != 0) ||
       ((execution->flags & TALOS_RT_EXECUTION_VPI_READ) == 0 &&
@@ -1630,8 +1628,8 @@ bool findDefinitionBinding(const Database &database, uint32_t scopeIndex,
                            uint32_t &definition, uint32_t &specialization,
                            uint32_t *bindingIndex = nullptr) {
   uint32_t packedSource = 0;
-  if (!talos::reflection::tryPackTableIndex(
-          talos::reflection::TableKind::Scope, scopeIndex, packedSource))
+  if (!talos::reflection::tryPackTableIndex(talos::reflection::TableKind::Scope,
+                                            scopeIndex, packedSource))
     return false;
   uint64_t low = 0;
   uint64_t high = database.definitionBindingCount;
@@ -1797,12 +1795,11 @@ bool semanticBitWidth(const Database &database, uint32_t semanticType,
   bitWidth = read64(semantic + 48);
   uint32_t encoded = read32(semantic);
   uint32_t kind = encoded & UINT32_C(0xff);
-  if (bitWidth == 0 &&
-      (kind == TALOS_RT_DESIGN_SEMANTIC_GENERIC_INTEGRAL ||
-       kind == TALOS_RT_DESIGN_SEMANTIC_BIT ||
-       kind == TALOS_RT_DESIGN_SEMANTIC_LOGIC ||
-       kind == TALOS_RT_DESIGN_SEMANTIC_REG ||
-       (encoded & TALOS_RT_DESIGN_SEMANTIC_HAS_RANGE) != 0)) {
+  if (bitWidth == 0 && (kind == TALOS_RT_DESIGN_SEMANTIC_GENERIC_INTEGRAL ||
+                        kind == TALOS_RT_DESIGN_SEMANTIC_BIT ||
+                        kind == TALOS_RT_DESIGN_SEMANTIC_LOGIC ||
+                        kind == TALOS_RT_DESIGN_SEMANTIC_REG ||
+                        (encoded & TALOS_RT_DESIGN_SEMANTIC_HAS_RANGE) != 0)) {
     int64_t left = readI64(semantic + 32);
     int64_t right = readI64(semantic + 40);
     uint64_t distance =
@@ -1837,8 +1834,8 @@ bool semanticBitWidth(const Database &database, uint32_t semanticType,
   return true;
 }
 
-talos_rt_status semanticPackedBitWidth(const Database &database,
-                                         uint32_t index, uint64_t *outWidth) {
+talos_rt_status semanticPackedBitWidth(const Database &database, uint32_t index,
+                                       uint64_t *outWidth) {
   uint64_t multiplier = 1;
   // The image validator has already established an acyclic semantic graph.
   // Packed dimensions and enum bases have one child, so no traversal stack or
@@ -2021,9 +2018,9 @@ bool findFrozenValue(const Database &database, uint32_t packedObject,
 }
 
 talos::reflection::RelationView relationAt(const Database &database,
-                                             uint64_t index) {
+                                           uint64_t index) {
   return talos::reflection::RelationView(database.data + database.relations +
-                                           index * kRelationSize);
+                                         index * kRelationSize);
 }
 
 bool relationKeyLess(const talos::reflection::RelationView &relation,
@@ -2042,8 +2039,8 @@ bool relationKeyLess(const talos::reflection::RelationView &relation,
 }
 
 bool relationKeyAtMost(const talos::reflection::RelationView &relation,
-                       talos::reflection::TableKind table,
-                       uint32_t sourceIndex, uint16_t selector, bool iterate) {
+                       talos::reflection::TableKind table, uint32_t sourceIndex,
+                       uint16_t selector, bool iterate) {
   auto relationTable = talos::reflection::unpackRelationSourceTable(
       relation.getSourceKindAndTable());
   if (relationTable != table)
@@ -2105,8 +2102,8 @@ bool relationMatches(const talos::reflection::RelationView &relation,
 // object itself. Only collapsed aliases pay one relation-table binary search
 // on this cold VPI/debugger path.
 talos_rt_status simulatedNetObjectIndex(const Database &database,
-                                          uint32_t sourceIndex,
-                                          uint32_t &targetIndex) {
+                                        uint32_t sourceIndex,
+                                        uint32_t &targetIndex) {
   if (sourceIndex >= database.objectCount)
     return TALOS_RT_INVALID_HANDLE;
   targetIndex = sourceIndex;
@@ -2631,8 +2628,7 @@ bool validateInitializers(const Database &database) {
       if (!packedObjectReferenceOffset(database, canonical->second, offset))
         return false;
     if (isStaticObjectOffset(database, offset) ||
-        recordKind(database.data + offset) !=
-            TALOS_RT_DESIGN_RECORD_STORAGE ||
+        recordKind(database.data + offset) != TALOS_RT_DESIGN_RECORD_STORAGE ||
         read64(database.data + offset + 16) != read64(unit + 16))
       return false;
     previous = row.getCodeUnitID();
@@ -3701,8 +3697,7 @@ bool expressionKnownInteger(const Database &database, const uint8_t *root,
                 ? read32(node + 12) < (code == 34 ? 2u : 1u)
                 : (!descriptor || read32(node + 12) != descriptor->arity ||
                    talos::reflection::integralOperatorRule(code) ==
-                       talos::reflection::VPIIntegralOperatorRule::
-                           Unsupported))
+                       talos::reflection::VPIIntegralOperatorRule::Unsupported))
           return false;
       } else
         return false;
@@ -3719,8 +3714,8 @@ bool expressionKnownInteger(const Database &database, const uint8_t *root,
       if (frozen.bitWidth != width || frozen.payloadSize != bytes * 2 ||
           bool(frozen.kindAndFlags & talos::reflection::frozenValueSigned) !=
               shape.isSigned ||
-          bool(frozen.kindAndFlags &
-               talos::reflection::frozenValueFourState) != shape.fourState)
+          bool(frozen.kindAndFlags & talos::reflection::frozenValueFourState) !=
+              shape.fourState)
         return false;
       Logic value{static_cast<uint32_t>(width), shape.fourState, {}, {}};
       value.value.assign(talos::designbytecode::limbCount(width), 0);
@@ -3781,8 +3776,8 @@ bool expressionKnownInteger(const Database &database, const uint8_t *root,
       inputs[child] = found->second.value;
       shapes[child] = found->second.shape;
     }
-    if (!talos::reflection::validVPIIntegralOperator(code, shape,
-                                                       shapes.data(), count))
+    if (!talos::reflection::validVPIIntegralOperator(code, shape, shapes.data(),
+                                                     count))
       return false;
     values.emplace(current, Constant{talos::vpiexpression::evaluate(
                                          code, shape, inputs, shapes),
@@ -4110,8 +4105,8 @@ bool validateExpressions(const Database &database,
         const auto *edge = talos::reflection::findVPITraversal(
             uint32_t(kind), selector,
             kind == Kind::Operation ? Mode::Iterate : Mode::Handle);
-        if (!edge || !talos::reflection::vpiObjectSetContains(edge->targets,
-                                                                childKind))
+        if (!edge ||
+            !talos::reflection::vpiObjectSetContains(edge->targets, childKind))
           return false;
       }
     }
@@ -4212,8 +4207,7 @@ bool validateExpressions(const Database &database,
                                    kDefinitionMemberSize) !=
               uint32_t(Kind::TypeParameter) ||
           !originalBuiltinTypeDefault(database, read32(root + 4), publicKind) ||
-          !talos::reflection::vpiObjectSetContains(edge->targets,
-                                                     publicKind) ||
+          !talos::reflection::vpiObjectSetContains(edge->targets, publicKind) ||
           (file == UINT32_MAX
                ? line != 0
                : !line || line > INT32_MAX ||
@@ -4300,7 +4294,7 @@ bool validateExpressions(const Database &database,
         if (leaf.semantic != read32(shape) || leaf.kind != read16(shape + 4))
           return false;
       } else if (!talos::reflection::vpiObjectSetContains(edge->targets,
-                                                            leaf.kind))
+                                                          leaf.kind))
         return false;
     }
     if (!recipe)
@@ -4342,8 +4336,7 @@ bool validateExpressions(const Database &database,
       if (kind == Kind::Operation) {
         uint32_t code = read16(node + 2);
         if (code != 33 && code != 34) {
-          std::array<talos::reflection::VPIIntegralExpressionShape, 3>
-              shapes{};
+          std::array<talos::reflection::VPIIntegralExpressionShape, 3> shapes{};
           uint32_t count = read32(node + 12);
           if (count > shapes.size())
             return false;
@@ -4601,9 +4594,8 @@ bool validateDatabaseImpl(const Database &database) {
         kind == TALOS_RT_DESIGN_RECORD_STATIC_OBJECT &&
         (intrinsicKind == static_cast<uint32_t>(VPIKind::Extends) ||
          (intrinsicKind == static_cast<uint32_t>(VPIKind::ParamAssign) &&
-          (caps &
-           (TALOS_RT_DESIGN_CAP_DEFAULT_CLASS_PARAMETER_ASSIGNMENT |
-            TALOS_RT_DESIGN_CAP_EXPLICIT_CLASS_PARAMETER_ASSIGNMENT))));
+          (caps & (TALOS_RT_DESIGN_CAP_DEFAULT_CLASS_PARAMETER_ASSIGNMENT |
+                   TALOS_RT_DESIGN_CAP_EXPLICIT_CLASS_PARAMETER_ASSIGNMENT))));
     bool primitiveTerminal =
         kind == TALOS_RT_DESIGN_RECORD_STATIC_OBJECT &&
         intrinsicKind == static_cast<uint32_t>(VPIKind::PrimTerm);
@@ -4662,10 +4654,9 @@ bool validateDatabaseImpl(const Database &database) {
             read64(record + 80) != 0 ||
             (typeOffset == 0
                  ? relationIndexed
-                       ? intrinsicKind !=
-                                 static_cast<uint32_t>(
-                                     talos::reflection::VPIObjectKind::
-                                         GenScopeArray) &&
+                       ? intrinsicKind != static_cast<uint32_t>(
+                                              talos::reflection::VPIObjectKind::
+                                                  GenScopeArray) &&
                              read64(record + 56) == 0
                    : scalarPrimitive
                        ? read64(record + 56) > INT64_MAX ||
@@ -4874,8 +4865,8 @@ bool validateDatabaseImpl(const Database &database) {
     }
     if (selector == 33)
       primitiveTypes.emplace(packedSource, static_cast<uint32_t>(payload));
-    if (exactKind == static_cast<uint32_t>(
-                         talos::reflection::VPIObjectKind::PrimTerm) &&
+    if (exactKind ==
+            static_cast<uint32_t>(talos::reflection::VPIObjectKind::PrimTerm) &&
         selector == 20) {
       if (payload < 1 || payload > 3)
         return false;
@@ -4958,8 +4949,7 @@ bool validateDatabaseImpl(const Database &database) {
         database.data + database.objects + uint64_t{objectIndex} * kObjectSize;
     uint64_t width = read64(object + 56);
     uint32_t exactKind = recordVPIKind(object);
-    const auto *descriptor =
-        talos::reflection::findVPIProperty(exactKind, 61);
+    const auto *descriptor = talos::reflection::findVPIProperty(exactKind, 61);
     if (recordKind(object) != TALOS_RT_DESIGN_RECORD_NET || !descriptor ||
         descriptor->realization !=
             talos::reflection::VPIPropertyRealization::IndexedImage ||
@@ -5003,8 +4993,8 @@ bool validateDatabaseImpl(const Database &database) {
     const uint8_t *object =
         database.data + database.objects + uint64_t{objectIndex} * kObjectSize;
     uint64_t width = read64(object + 56);
-    if (recordKind(object) != TALOS_RT_DESIGN_RECORD_NET ||
-        firstBit > width || bitCount > width - firstBit)
+    if (recordKind(object) != TALOS_RT_DESIGN_RECORD_NET || firstBit > width ||
+        bitCount > width - firstBit)
       return false;
     if (havePreviousDelayRun &&
         (objectIndex < previousDelayObject ||
@@ -5033,8 +5023,7 @@ bool validateDatabaseImpl(const Database &database) {
         typeKind > TALOS_RT_DESIGN_TYPE_FIELD ||
         (flags &
          ~(TALOS_RT_DESIGN_TYPE_FOUR_STATE | TALOS_RT_DESIGN_TYPE_SIGNED |
-           TALOS_RT_DESIGN_TYPE_PACKED | TALOS_RT_DESIGN_TYPE_TAGGED)) !=
-            0 ||
+           TALOS_RT_DESIGN_TYPE_PACKED | TALOS_RT_DESIGN_TYPE_TAGGED)) != 0 ||
         width == 0)
       return false;
     bool hasElement = element != 0;
@@ -5058,8 +5047,8 @@ bool validateDatabaseImpl(const Database &database) {
     case TALOS_RT_DESIGN_TYPE_ARRAY:
       if (!hasElement || hasChildren || read64(record + 56) != 0 ||
           read64(record + 64) != 0 ||
-          (flags & (TALOS_RT_DESIGN_TYPE_SIGNED |
-                    TALOS_RT_DESIGN_TYPE_TAGGED)) != 0 ||
+          (flags &
+           (TALOS_RT_DESIGN_TYPE_SIGNED | TALOS_RT_DESIGN_TYPE_TAGGED)) != 0 ||
           !rangeExtent(record, extent))
         return false;
       {
@@ -5080,8 +5069,8 @@ bool validateDatabaseImpl(const Database &database) {
     case TALOS_RT_DESIGN_TYPE_STRUCT:
       if (hasElement || !hasChildren || read64(record + 56) != 0 ||
           read64(record + 64) != 0 ||
-          (flags & (TALOS_RT_DESIGN_TYPE_SIGNED |
-                    TALOS_RT_DESIGN_TYPE_TAGGED)) != 0 ||
+          (flags &
+           (TALOS_RT_DESIGN_TYPE_SIGNED | TALOS_RT_DESIGN_TYPE_TAGGED)) != 0 ||
           !rangeExtent(record, extent) || extent != width)
         return false;
       break;
@@ -5095,9 +5084,8 @@ bool validateDatabaseImpl(const Database &database) {
       break;
     case TALOS_RT_DESIGN_TYPE_FIELD:
       if (!hasElement || hasChildren ||
-          (flags &
-           (TALOS_RT_DESIGN_TYPE_SIGNED | TALOS_RT_DESIGN_TYPE_PACKED |
-            TALOS_RT_DESIGN_TYPE_TAGGED)) != 0 ||
+          (flags & (TALOS_RT_DESIGN_TYPE_SIGNED | TALOS_RT_DESIGN_TYPE_PACKED |
+                    TALOS_RT_DESIGN_TYPE_TAGGED)) != 0 ||
           !rangeExtent(record, extent) || extent != width)
         return false;
       {
@@ -5312,13 +5300,11 @@ bool validateDatabaseImpl(const Database &database) {
       staticObjectSemanticRoots[sourceIndex] = true;
   }
 
-  const uint32_t semanticFlagMask = TALOS_RT_DESIGN_SEMANTIC_SIGNED |
-                                    TALOS_RT_DESIGN_SEMANTIC_FOUR_STATE |
-                                    TALOS_RT_DESIGN_SEMANTIC_HAS_RANGE |
-                                    TALOS_RT_DESIGN_SEMANTIC_TAGGED |
-                                    TALOS_RT_DESIGN_SEMANTIC_SOFT |
-                                    TALOS_RT_DESIGN_SEMANTIC_WILDCARD_INDEX |
-                                    TALOS_RT_DESIGN_SEMANTIC_PROJECTED;
+  const uint32_t semanticFlagMask =
+      TALOS_RT_DESIGN_SEMANTIC_SIGNED | TALOS_RT_DESIGN_SEMANTIC_FOUR_STATE |
+      TALOS_RT_DESIGN_SEMANTIC_HAS_RANGE | TALOS_RT_DESIGN_SEMANTIC_TAGGED |
+      TALOS_RT_DESIGN_SEMANTIC_SOFT | TALOS_RT_DESIGN_SEMANTIC_WILDCARD_INDEX |
+      TALOS_RT_DESIGN_SEMANTIC_PROJECTED;
   std::vector<uint8_t> semanticState(database.semanticTypeCount, 0);
   for (uint32_t index = 0; index != database.semanticTypeCount; ++index) {
     const uint8_t *type = database.data + database.semanticTypes +
@@ -5352,10 +5338,9 @@ bool validateDatabaseImpl(const Database &database) {
     const auto *publicKind =
         talos::reflection::findVPIObjectKind(publicVPIKind);
     bool internalUntypedShape =
-        publicVPIKind == 0 &&
-        (kind == TALOS_RT_DESIGN_SEMANTIC_UNTYPED ||
-         kind == TALOS_RT_DESIGN_SEMANTIC_PACKED_ARRAY ||
-         kind == TALOS_RT_DESIGN_SEMANTIC_UNPACKED_ARRAY);
+        publicVPIKind == 0 && (kind == TALOS_RT_DESIGN_SEMANTIC_UNTYPED ||
+                               kind == TALOS_RT_DESIGN_SEMANTIC_PACKED_ARRAY ||
+                               kind == TALOS_RT_DESIGN_SEMANTIC_UNPACKED_ARRAY);
     if (kind > TALOS_RT_DESIGN_SEMANTIC_PROPERTY ||
         (!internalUntypedShape &&
          (!publicKind ||
@@ -5407,8 +5392,7 @@ bool validateDatabaseImpl(const Database &database) {
                kind == TALOS_RT_DESIGN_SEMANTIC_VIRTUAL_INTERFACE) {
       return false;
     }
-    if ((modport != 0) !=
-        (kind == TALOS_RT_DESIGN_SEMANTIC_VIRTUAL_INTERFACE))
+    if ((modport != 0) != (kind == TALOS_RT_DESIGN_SEMANTIC_VIRTUAL_INTERFACE))
       return false;
     bool tagged = (flags & TALOS_RT_DESIGN_SEMANTIC_TAGGED) != 0;
     bool soft = (flags & TALOS_RT_DESIGN_SEMANTIC_SOFT) != 0;
@@ -5421,8 +5405,7 @@ bool validateDatabaseImpl(const Database &database) {
     bool unionType = kind == TALOS_RT_DESIGN_SEMANTIC_PACKED_UNION ||
                      kind == TALOS_RT_DESIGN_SEMANTIC_UNPACKED_UNION;
     if ((tagged && !unionType) ||
-        (soft &&
-         (kind != TALOS_RT_DESIGN_SEMANTIC_PACKED_UNION || !tagged)) ||
+        (soft && (kind != TALOS_RT_DESIGN_SEMANTIC_PACKED_UNION || !tagged)) ||
         (!tagged && tagBits != 0) || (packedAggregate && bitWidth == 0) ||
         (aggregate && !packedAggregate &&
          (bitWidth != 0 || isSigned || soft)) ||
@@ -5443,8 +5426,8 @@ bool validateDatabaseImpl(const Database &database) {
           isStaticObjectOffset(database, aliasOffset)
               ? read32(alias + 16) != 0
               : recordKind(alias) == TALOS_RT_DESIGN_RECORD_STATIC_OBJECT &&
-                    (read32(alias + 4) &
-                     TALOS_RT_DESIGN_CAP_NAMED_TYPESPEC) != 0;
+                    (read32(alias + 4) & TALOS_RT_DESIGN_CAP_NAMED_TYPESPEC) !=
+                        0;
       if (!namedTypespec ||
           objectReferenceVPIKind(database, aliasOffset) != publicVPIKind ||
           !aliasKind ||
@@ -5515,8 +5498,7 @@ bool validateDatabaseImpl(const Database &database) {
       uint32_t childFlags = read32(database.data + database.semanticTypes +
                                    uint64_t{child} * kSemanticTypeSize) &
                             semanticFlagMask;
-      childFourState |=
-          (childFlags & TALOS_RT_DESIGN_SEMANTIC_FOUR_STATE) != 0;
+      childFourState |= (childFlags & TALOS_RT_DESIGN_SEMANTIC_FOUR_STATE) != 0;
       if (kind == TALOS_RT_DESIGN_SEMANTIC_ASSOC_ARRAY && ordinal == 0 &&
           (((flags & TALOS_RT_DESIGN_SEMANTIC_WILDCARD_INDEX) != 0) !=
            (childKind == TALOS_RT_DESIGN_SEMANTIC_UNTYPED)))
@@ -5527,11 +5509,9 @@ bool validateDatabaseImpl(const Database &database) {
         return false;
       if ((kind == TALOS_RT_DESIGN_SEMANTIC_PACKED_ARRAY ||
            kind == TALOS_RT_DESIGN_SEMANTIC_UNPACKED_ARRAY) &&
-          (((flags ^ childFlags) & TALOS_RT_DESIGN_SEMANTIC_FOUR_STATE) !=
-               0 ||
+          (((flags ^ childFlags) & TALOS_RT_DESIGN_SEMANTIC_FOUR_STATE) != 0 ||
            (kind == TALOS_RT_DESIGN_SEMANTIC_PACKED_ARRAY
-                ? ((flags ^ childFlags) & TALOS_RT_DESIGN_SEMANTIC_SIGNED) !=
-                      0
+                ? ((flags ^ childFlags) & TALOS_RT_DESIGN_SEMANTIC_SIGNED) != 0
                 : isSigned)))
         return false;
     }
@@ -5626,7 +5606,7 @@ bool validateDatabaseImpl(const Database &database) {
           !objectSemanticRoots[index] ||
           !isTypeOffset(database, read64(object + 48)) || !automatics ||
           !talos::reflection::vpiObjectSetContains(automatics->targets,
-                                                     recordVPIKind(object)))
+                                                   recordVPIKind(object)))
         return false;
       if (talos::reflection::findVPIProperty(recordVPIKind(object), 50) &&
           !automaticFrameLocals.count(packed))
@@ -5642,8 +5622,8 @@ bool validateDatabaseImpl(const Database &database) {
     }
     if (recordVPIKind(object) ==
         static_cast<uint32_t>(talos::reflection::VPIObjectKind::PrimTerm)) {
-      if (recordKind(object) != TALOS_RT_DESIGN_RECORD_STATIC_OBJECT ||
-          caps || objectSemanticRoots[index] || read64(object + 48) ||
+      if (recordKind(object) != TALOS_RT_DESIGN_RECORD_STATIC_OBJECT || caps ||
+          objectSemanticRoots[index] || read64(object + 48) ||
           read64(object + 56) || read64(object + 64) || read64(object + 72) ||
           read64(object + 80) || !terminalDirections.count(packed))
         return false;
@@ -5678,10 +5658,10 @@ bool validateDatabaseImpl(const Database &database) {
     uint32_t caps = read16(object + 30);
     bool unresolved =
         (caps & TALOS_RT_DESIGN_CAP_UNRESOLVED_TYPE_PARAMETER) != 0;
-    if ((caps &
-         (TALOS_RT_DESIGN_CAP_SOURCE_CLASS_PROPERTY |
-          TALOS_RT_DESIGN_CAP_UNRESOLVED_TYPE_ALIAS |
-          TALOS_RT_DESIGN_CAP_FRAME_LOCAL | lexicalInheritanceFlags)) != 0 ||
+    if ((caps & (TALOS_RT_DESIGN_CAP_SOURCE_CLASS_PROPERTY |
+                 TALOS_RT_DESIGN_CAP_UNRESOLVED_TYPE_ALIAS |
+                 TALOS_RT_DESIGN_CAP_FRAME_LOCAL | lexicalInheritanceFlags)) !=
+            0 ||
         !validParameterSourceFlags(read16(object + 28), caps) ||
         (typespec && (unresolved ? staticObjectSemanticRoots[index]
                                  : !staticObjectSemanticRoots[index])))
@@ -5865,21 +5845,20 @@ bool validateDatabaseImpl(const Database &database) {
   // packed-array semantic root whose endpoints answer vpiLeftRange and
   // vpiRightRange. Validate the compact and promoted full-record forms here,
   // after the root-binding and semantic graphs are known to be well formed.
-  auto hasValidExplicitParameterRange =
-      [&](talos::reflection::TableKind table, uint32_t index) {
-        uint32_t packedSource = 0;
-        uint32_t semanticRoot = 0;
-        if (!talos::reflection::tryPackTableIndex(table, index,
-                                                    packedSource) ||
-            !findSemanticRootBinding(database, packedSource, semanticRoot))
-          return false;
-        const uint8_t *semantic = database.data + database.semanticTypes +
-                                  uint64_t{semanticRoot} * kSemanticTypeSize;
-        uint32_t encoded = read32(semantic);
-        return (encoded & UINT32_C(0xff)) ==
-                   TALOS_RT_DESIGN_SEMANTIC_PACKED_ARRAY &&
-               (encoded & TALOS_RT_DESIGN_SEMANTIC_HAS_RANGE) != 0;
-      };
+  auto hasValidExplicitParameterRange = [&](talos::reflection::TableKind table,
+                                            uint32_t index) {
+    uint32_t packedSource = 0;
+    uint32_t semanticRoot = 0;
+    if (!talos::reflection::tryPackTableIndex(table, index, packedSource) ||
+        !findSemanticRootBinding(database, packedSource, semanticRoot))
+      return false;
+    const uint8_t *semantic = database.data + database.semanticTypes +
+                              uint64_t{semanticRoot} * kSemanticTypeSize;
+    uint32_t encoded = read32(semantic);
+    return (encoded & UINT32_C(0xff)) ==
+               TALOS_RT_DESIGN_SEMANTIC_PACKED_ARRAY &&
+           (encoded & TALOS_RT_DESIGN_SEMANTIC_HAS_RANGE) != 0;
+  };
   for (uint32_t index = 0; index != database.objectCount; ++index) {
     const uint8_t *object =
         database.data + database.objects + uint64_t{index} * kObjectSize;
@@ -5896,8 +5875,8 @@ bool validateDatabaseImpl(const Database &database) {
   for (uint32_t index = 0; index != database.staticObjectCount; ++index) {
     const uint8_t *object = database.data + database.staticObjects +
                             uint64_t{index} * kStaticObjectSize;
-    if ((read16(object + 30) &
-         TALOS_RT_DESIGN_CAP_PARAMETER_EXPLICIT_RANGE) != 0 &&
+    if ((read16(object + 30) & TALOS_RT_DESIGN_CAP_PARAMETER_EXPLICIT_RANGE) !=
+            0 &&
         !hasValidExplicitParameterRange(
             talos::reflection::TableKind::StaticObject, index))
       return false;
@@ -5917,9 +5896,9 @@ bool validateDatabaseImpl(const Database &database) {
       // declaration kinds, including an unpacked event-array declaration.
       const uint8_t *semantic = database.data + database.semanticTypes +
                                 uint64_t{root} * kSemanticTypeSize;
-      uint32_t rootKind = (read32(semantic) &
-                           TALOS_RT_DESIGN_SEMANTIC_PUBLIC_VPI_KIND_MASK) >>
-                          TALOS_RT_DESIGN_SEMANTIC_PUBLIC_VPI_KIND_SHIFT;
+      uint32_t rootKind =
+          (read32(semantic) & TALOS_RT_DESIGN_SEMANTIC_PUBLIC_VPI_KIND_MASK) >>
+          TALOS_RT_DESIGN_SEMANTIC_PUBLIC_VPI_KIND_SHIFT;
       uint32_t expected = 0;
       if (const auto *mapping = talos::reflection::findVPIIndexedTypeResult(
               talos::reflection::VPIIndexedAccessKind::VariableElement,
@@ -5935,8 +5914,7 @@ bool validateDatabaseImpl(const Database &database) {
         semantic = database.data + database.semanticTypes +
                    uint64_t{read32(edge)} * kSemanticTypeSize;
       }
-      if ((read32(semantic) & UINT32_C(0xff)) ==
-          TALOS_RT_DESIGN_SEMANTIC_EVENT)
+      if ((read32(semantic) & UINT32_C(0xff)) == TALOS_RT_DESIGN_SEMANTIC_EVENT)
         expected = static_cast<uint32_t>(
             eventArray ? talos::reflection::VPIObjectKind::NamedEventArray
                        : talos::reflection::VPIObjectKind::NamedEvent);
@@ -6271,8 +6249,7 @@ bool validateDatabaseImpl(const Database &database) {
     if (canonical == canonicalClassRoots.end())
       return false;
     const uint8_t *mailbox = semanticRecord(canonical->second);
-    if ((read32(mailbox) & UINT32_C(0xff)) !=
-        TALOS_RT_DESIGN_SEMANTIC_MAILBOX)
+    if ((read32(mailbox) & UINT32_C(0xff)) != TALOS_RT_DESIGN_SEMANTIC_MAILBOX)
       return false;
     root = read32(database.data + database.semanticTypeEdges +
                   uint64_t{read32(mailbox + 4)} * kSemanticTypeEdgeSize);
@@ -6531,10 +6508,9 @@ bool validateDatabaseImpl(const Database &database) {
       case TALOS_RT_DESIGN_SEMANTIC_SHORT_REAL:
       case TALOS_RT_DESIGN_SEMANTIC_REAL:
       case TALOS_RT_DESIGN_SEMANTIC_REALTIME: {
-        const bool real =
-            semanticKind == TALOS_RT_DESIGN_SEMANTIC_SHORT_REAL ||
-            semanticKind == TALOS_RT_DESIGN_SEMANTIC_REAL ||
-            semanticKind == TALOS_RT_DESIGN_SEMANTIC_REALTIME;
+        const bool real = semanticKind == TALOS_RT_DESIGN_SEMANTIC_SHORT_REAL ||
+                          semanticKind == TALOS_RT_DESIGN_SEMANTIC_REAL ||
+                          semanticKind == TALOS_RT_DESIGN_SEMANTIC_REALTIME;
         uint64_t width = 0;
         if (physicalKind != TALOS_RT_DESIGN_TYPE_SCALAR ||
             physicalPacked == real || physicalFourState != fourState ||
@@ -6590,8 +6566,7 @@ bool validateDatabaseImpl(const Database &database) {
         binding.getEventID() > INT64_MAX ||
         !packedObjectReferenceOffset(database, event, offset) ||
         objectReferenceVPIKind(database, offset) !=
-            static_cast<uint32_t>(
-                talos::reflection::VPIObjectKind::NamedEvent))
+            static_cast<uint32_t>(talos::reflection::VPIObjectKind::NamedEvent))
       return false;
     // Static anchors have no state storage, class receiver, or mutable cell.
     if (!isStaticObjectOffset(database, offset) &&
@@ -6619,8 +6594,7 @@ bool validateDatabaseImpl(const Database &database) {
         scope >= database.scopeCount ||
         !packedObjectReferenceOffset(database, modport, offset) ||
         objectReferenceVPIKind(database, offset) !=
-            static_cast<uint32_t>(
-                talos::reflection::VPIObjectKind::Modport) ||
+            static_cast<uint32_t>(talos::reflection::VPIObjectKind::Modport) ||
         !getRelativeString(binding.getName(), name) || name.empty() ||
         database.data[database.strings + binding.getName() - 1] != 0 ||
         !modportNames[scope].insert(name).second)
@@ -6693,8 +6667,7 @@ bool validateDatabaseImpl(const Database &database) {
     // public declaration above carries the named-event-array identity.
     if (recordKind(storage) != TALOS_RT_DESIGN_RECORD_STORAGE ||
         recordVPIKind(storage) !=
-            static_cast<uint32_t>(
-                talos::reflection::VPIObjectKind::ArrayVar) ||
+            static_cast<uint32_t>(talos::reflection::VPIObjectKind::ArrayVar) ||
         read64(storage + 16) != read64(database.data + arrayOffset + 16) ||
         !isTypeOffset(database, read64(storage + 48)) ||
         !eventBackingStorage.insert(storageOffset).second)
@@ -6727,24 +6700,27 @@ bool validateDatabaseImpl(const Database &database) {
     previousMember = member;
     uint32_t canonicalRoot = canonicalClassRoots.at(canonical->second);
     const uint8_t *classType = database.data + database.semanticTypes +
-                              uint64_t{canonicalRoot} * kSemanticTypeSize;
+                               uint64_t{canonicalRoot} * kSemanticTypeSize;
     if (owner != canonical->second && owner != read32(classType + 16))
       return false;
     uint32_t kind = objectReferenceVPIKind(database, memberOffset);
     const auto *scopeEdge = talos::reflection::findVPITraversal(
-        kind, static_cast<uint32_t>(talos::reflection::VPIRelationKind::ScopeRel),
+        kind,
+        static_cast<uint32_t>(talos::reflection::VPIRelationKind::ScopeRel),
         talos::reflection::VPITraversalMode::Handle);
-    if (scopeEdge && talos::reflection::vpiObjectSetContains(
-                         scopeEdge->targets,
-                         objectReferenceVPIKind(database, ownerOffset)))
+    if (scopeEdge &&
+        talos::reflection::vpiObjectSetContains(
+            scopeEdge->targets, objectReferenceVPIKind(database, ownerOffset)))
       classMemberParents.insert((uint64_t{owner} << 32) | member);
     bool isStatic = (binding.getFlags() & 1) != 0;
     bool isMethod = (binding.getFlags() & 2) != 0;
     bool hasStorage = binding.getStorageIndexAndTable() != UINT32_MAX;
     bool hasEvent = binding.getEventID() != UINT64_MAX;
     if (isMethod) {
-      if ((kind != static_cast<uint32_t>(talos::reflection::VPIObjectKind::Task) &&
-           kind != static_cast<uint32_t>(talos::reflection::VPIObjectKind::Function)) ||
+      if ((kind !=
+               static_cast<uint32_t>(talos::reflection::VPIObjectKind::Task) &&
+           kind != static_cast<uint32_t>(
+                       talos::reflection::VPIObjectKind::Function)) ||
           hasStorage || hasEvent || binding.getByteOffset() != UINT64_MAX)
         return false;
       continue;
@@ -6753,25 +6729,30 @@ bool validateDatabaseImpl(const Database &database) {
     bool dataVariable = talos::reflection::vpiObjectSetContains(
         talos::reflection::VPIObjectSetID::DataVariableObjects, kind);
     bool namedEvent = kind == static_cast<uint32_t>(
-                                 talos::reflection::VPIObjectKind::NamedEvent);
-    bool namedEventArray = kind == static_cast<uint32_t>(
-                                      talos::reflection::VPIObjectKind::NamedEventArray);
+                                  talos::reflection::VPIObjectKind::NamedEvent);
+    bool namedEventArray =
+        kind == static_cast<uint32_t>(
+                    talos::reflection::VPIObjectKind::NamedEventArray);
     if ((!dataVariable && !namedEvent && !namedEventArray) ||
         !isObjectOffset(database, memberOffset) ||
-        recordKind(database.data + memberOffset) != TALOS_RT_DESIGN_RECORD_STATIC_OBJECT ||
+        recordKind(database.data + memberOffset) !=
+            TALOS_RT_DESIGN_RECORD_STATIC_OBJECT ||
         read64(database.data + memberOffset + 48) == 0 ||
         !findSemanticRootBinding(database, member, semanticRoot) ||
-        (isStatic ? binding.getByteOffset() != UINT64_MAX || hasStorage == hasEvent
-                  : binding.getByteOffset() < sizeof(void *) ||
-                        binding.getByteOffset() == UINT64_MAX || hasStorage || hasEvent) ||
+        (isStatic
+             ? binding.getByteOffset() != UINT64_MAX || hasStorage == hasEvent
+             : binding.getByteOffset() < sizeof(void *) ||
+                   binding.getByteOffset() == UINT64_MAX || hasStorage ||
+                   hasEvent) ||
         (hasEvent && !namedEvent))
       return false;
     if (hasStorage) {
       uint64_t storageOffset = 0;
-      if (!packedObjectReferenceOffset(database, binding.getStorageIndexAndTable(),
-                                       storageOffset) ||
+      if (!packedObjectReferenceOffset(
+              database, binding.getStorageIndexAndTable(), storageOffset) ||
           !isObjectOffset(database, storageOffset) ||
-          recordKind(database.data + storageOffset) != TALOS_RT_DESIGN_RECORD_STORAGE ||
+          recordKind(database.data + storageOffset) !=
+              TALOS_RT_DESIGN_RECORD_STORAGE ||
           read64(database.data + storageOffset + 48) !=
               read64(database.data + memberOffset + 48))
         return false;
@@ -6815,8 +6796,8 @@ bool validateDatabaseImpl(const Database &database) {
   // kinds (including named events and their arrays) retain their lexical
   // inventory representation without requiring a class-member binding.
   for (uint32_t index = 0; index != database.objectCount; ++index) {
-    const uint8_t *object = database.data + database.objects +
-                            uint64_t{index} * kObjectSize;
+    const uint8_t *object =
+        database.data + database.objects + uint64_t{index} * kObjectSize;
     if (recordKind(object) != TALOS_RT_DESIGN_RECORD_STATIC_OBJECT ||
         !talos::reflection::vpiObjectSetContains(
             talos::reflection::VPIObjectSetID::DataVariableObjects,
@@ -6848,8 +6829,7 @@ bool validateDatabaseImpl(const Database &database) {
     uint64_t payloadSize = read64(record + 24);
     if (reserved != 0 ||
         (kindAndFlags & talos::reflection::frozenValueKindMask) !=
-            static_cast<uint32_t>(
-                talos::reflection::FrozenValueKind::Packed) ||
+            static_cast<uint32_t>(talos::reflection::FrozenValueKind::Packed) ||
         (kindAndFlags & ~(talos::reflection::frozenValueKindMask |
                           talos::reflection::frozenValueSigned |
                           talos::reflection::frozenValueFourState)) != 0 ||
@@ -6969,8 +6949,7 @@ bool validateDatabaseImpl(const Database &database) {
     const uint8_t *object = database.data + database.staticObjects +
                             uint64_t{index} * kStaticObjectSize;
     if (read16(object + 28) ==
-            static_cast<uint32_t>(
-                talos::reflection::VPIObjectKind::PrimTerm) ||
+            static_cast<uint32_t>(talos::reflection::VPIObjectKind::PrimTerm) ||
         read16(object + 28) ==
             static_cast<uint32_t>(
                 talos::reflection::VPIObjectKind::Operation) ||
@@ -6981,8 +6960,7 @@ bool validateDatabaseImpl(const Database &database) {
     uint32_t packedSource = 0;
     VPIFrozenValue value{};
     if (!talos::reflection::tryPackTableIndex(
-            talos::reflection::TableKind::StaticObject, index,
-            packedSource) ||
+            talos::reflection::TableKind::StaticObject, index, packedSource) ||
         !findFrozenValue(database, packedSource, value))
       return false;
   }
@@ -6993,8 +6971,8 @@ bool validateDatabaseImpl(const Database &database) {
         recordVPIKind(object) !=
             static_cast<uint32_t>(
                 talos::reflection::VPIObjectKind::Parameter) ||
-        (read32(object + 4) &
-         TALOS_RT_DESIGN_CAP_UNRESOLVED_VALUE_PARAMETER) != 0)
+        (read32(object + 4) & TALOS_RT_DESIGN_CAP_UNRESOLVED_VALUE_PARAMETER) !=
+            0)
       continue;
     uint32_t packed = 0;
     VPIFrozenValue value{};
@@ -7033,9 +7011,9 @@ bool validateDatabaseImpl(const Database &database) {
     previousStatementID = id;
     const auto *kind = talos::reflection::findVPIObjectKind(vpiKind);
     if (!kind || kind->role != talos::reflection::VPIObjectRole::Concrete ||
-        (kind->families &
-         talos::reflection::vpiFamilyMask(
-             talos::reflection::VPIObjectFamily::Statement)) == 0)
+        (kind->families & talos::reflection::vpiFamilyMask(
+                              talos::reflection::VPIObjectFamily::Statement)) ==
+            0)
       return false;
     bool scopeOwned =
         (kind->families &
@@ -7043,9 +7021,9 @@ bool validateDatabaseImpl(const Database &database) {
              talos::reflection::VPIObjectFamily::ScopeOwnedStatement)) != 0;
     if (scopeOwned != (ownerIndex == UINT32_MAX))
       return false;
-    bool scopeCapable = (kind->families &
-                         talos::reflection::vpiFamilyMask(
-                             talos::reflection::VPIObjectFamily::Scope)) != 0;
+    bool scopeCapable =
+        (kind->families & talos::reflection::vpiFamilyMask(
+                              talos::reflection::VPIObjectFamily::Scope)) != 0;
     bool isScope = (flags & TALOS_RT_DESIGN_STATEMENT_SCOPE) != 0;
     std::string_view kindName(kind->apiName);
     bool namedScope = kindName == "vpiNamedBegin" || kindName == "vpiNamedFork";
@@ -7135,7 +7113,7 @@ bool validateDatabaseImpl(const Database &database) {
            !(read32(record + 4) & TALOS_RT_DESIGN_CAP_INTERNAL)) ||
           !originEdge ||
           !talos::reflection::vpiObjectSetContains(originEdge->targets,
-                                                     read16(statement + 36)))
+                                                   read16(statement + 36)))
         return false;
       previous = codeUnitID;
     }
@@ -7327,8 +7305,7 @@ bool validateDatabaseImpl(const Database &database) {
     bool primitive = kind == static_cast<uint16_t>(Kind::Gate) ||
                      kind == static_cast<uint16_t>(Kind::Switch);
     const auto *primitiveType =
-        primitive ? talos::reflection::findVPIBuiltinPrimitive(flags)
-                  : nullptr;
+        primitive ? talos::reflection::findVPIBuiltinPrimitive(flags) : nullptr;
     if ((primitive ? !primitiveType || primitiveType->objectKind != kind ||
                          file != 0 || line != 0 || memberCount != 0 ||
                          relationCount != 0
@@ -7361,8 +7338,7 @@ bool validateDatabaseImpl(const Database &database) {
       uint32_t memberColumn = read32(member + 12);
       uint16_t memberKind = read16(member + 16);
       uint16_t memberFlags = read16(member + 18);
-      const auto *descriptor =
-          talos::reflection::findVPIObjectKind(memberKind);
+      const auto *descriptor = talos::reflection::findVPIObjectKind(memberKind);
       if (!descriptor ||
           descriptor->role != talos::reflection::VPIObjectRole::Concrete ||
           (memberKind == uint32_t(Kind::ParamAssign) ? memberName != 0
@@ -7450,7 +7426,7 @@ bool validateDatabaseImpl(const Database &database) {
         const uint8_t *member = database.data + database.definitionMembers +
                                 uint64_t{memberIndex} * kDefinitionMemberSize;
         if (!talos::reflection::vpiObjectSetContains(edge->targets,
-                                                       read16(member + 16)))
+                                                     read16(member + 16)))
           return false;
         previousTarget = memberIndex;
       }
@@ -7709,8 +7685,7 @@ bool validateDatabaseImpl(const Database &database) {
       }
       if (packedTarget == UINT32_MAX)
         continue;
-      auto targetTable =
-          talos::reflection::unpackTableIndexKind(packedTarget);
+      auto targetTable = talos::reflection::unpackTableIndexKind(packedTarget);
       uint64_t targetOffset = 0;
       if (!exprEdge || targetTable != talos::reflection::TableKind::Object ||
           !packedObjectReferenceOffset(database, packedTarget, targetOffset))
@@ -7732,7 +7707,7 @@ bool validateDatabaseImpl(const Database &database) {
                 static_cast<uint32_t>(
                     talos::reflection::VPIObjectKind::RefObj)) ||
             !talos::reflection::vpiObjectSetContains(refActualEdge->targets,
-                                                       targetType) ||
+                                                     targetType) ||
             !findDefinitionMemberSemanticRoot(database, specializationIndex,
                                               read32(definition + 16) + ordinal,
                                               memberSemanticType) ||
@@ -7740,7 +7715,7 @@ bool validateDatabaseImpl(const Database &database) {
             (memberBitWidth != 0 && read64(target + 56) != memberBitWidth))
           return false;
       } else if (!talos::reflection::vpiObjectSetContains(exprEdge->targets,
-                                                            targetType)) {
+                                                          targetType)) {
         return false;
       }
       if (direction != kVPIIODirectionRef &&
@@ -7880,7 +7855,7 @@ bool validateDatabaseImpl(const Database &database) {
           recordVPIKind(object) !=
               static_cast<uint32_t>(talos::reflection::VPIObjectKind::Port) ||
           !talos::reflection::vpiObjectSetContains(edge->targets,
-                                                     recordVPIKind(object)))
+                                                   recordVPIKind(object)))
         return false;
       uint64_t targetScopeOffset = read64(object + 16);
       if (selector ==
@@ -7979,8 +7954,7 @@ bool validateDatabaseImpl(const Database &database) {
         forwardSelector > UINT16_MAX || !forwardEdge ||
         !talos::reflection::vpiObjectSetContains(
             forwardEdge->targets,
-            static_cast<uint32_t>(
-                talos::reflection::VPIObjectKind::RefObj)) ||
+            static_cast<uint32_t>(talos::reflection::VPIObjectKind::RefObj)) ||
         !inverseConnectionKeys.insert(connectionKey).second)
       return false;
     inverseTargets[targetIndex] = 1;
@@ -8004,8 +7978,7 @@ bool validateDatabaseImpl(const Database &database) {
     uint16_t kind = read16(statement + 36);
     auto callbackPhase =
         static_cast<talos::reflection::VPIStatementCallbackPhase>(phase);
-    if (!talos::reflection::isVPIStatementCallbackPhase(kind,
-                                                          callbackPhase) ||
+    if (!talos::reflection::isVPIStatementCallbackPhase(kind, callbackPhase) ||
         phase >= 8 || (siteMasks[statementIndex] & (uint8_t{1} << phase)) != 0)
       return false;
     siteMasks[statementIndex] |= uint8_t{1} << phase;
@@ -8128,7 +8101,7 @@ bool validateDatabaseImpl(const Database &database) {
           (read32(record + 4) & TALOS_RT_DESIGN_CAP_LEXICAL_ANCHOR) != 0)
         continue;
       if (talos::reflection::vpiObjectSetContains(automaticEdge->targets,
-                                                    recordVPIKind(record)))
+                                                  recordVPIKind(record)))
         return current;
     }
     return uint64_t{0};
@@ -8188,8 +8161,8 @@ bool validateDatabaseImpl(const Database &database) {
         talos::reflection::findVPIObjectKind(sourceKind);
     bool rootSource = sourceKind == 0;
     if (!rootSource &&
-        (!sourceDescriptor || sourceDescriptor->role !=
-                                  talos::reflection::VPIObjectRole::Concrete))
+        (!sourceDescriptor ||
+         sourceDescriptor->role != talos::reflection::VPIObjectRole::Concrete))
       return false;
     switch (sourceTable) {
     case talos::reflection::TableKind::Scope:
@@ -8285,7 +8258,7 @@ bool validateDatabaseImpl(const Database &database) {
           static_cast<uint64_t>(target - database.data);
       uint32_t packedOwner = 0;
       if (!talos::reflection::tryPackTableIndex(sourceTable, sourceIndex,
-                                                  packedOwner))
+                                                packedOwner))
         return false;
       auto [owner, inserted] = typedefOwners.emplace(targetOffset, packedOwner);
       if (!inserted && owner->second != packedOwner)
@@ -8305,13 +8278,13 @@ bool validateDatabaseImpl(const Database &database) {
       }
       uint32_t packedTarget = 0;
       if (talos::reflection::tryPackTableIndex(targetTable, targetIndex,
-                                                 packedTarget) &&
+                                               packedTarget) &&
           canonicalBuiltinObjects.count(packedTarget))
         return false;
     }
     uint32_t sourceReference = 0;
     if (!talos::reflection::tryPackTableIndex(sourceTable, sourceIndex,
-                                                sourceReference))
+                                              sourceReference))
       return false;
     if (!iterate &&
         sourceKind == static_cast<uint32_t>(
@@ -8360,8 +8333,8 @@ bool validateDatabaseImpl(const Database &database) {
         iterate &&
         sourceKind == static_cast<uint32_t>(
                           talos::reflection::VPIObjectKind::ClassTypespec) &&
-        selector == static_cast<uint32_t>(
-                        talos::reflection::VPIObjectKind::Parameter);
+        selector ==
+            static_cast<uint32_t>(talos::reflection::VPIObjectKind::Parameter);
     bool lexicalParameterReference =
         classParameterInventory &&
         sourceTable == talos::reflection::TableKind::Object &&
@@ -8388,7 +8361,7 @@ bool validateDatabaseImpl(const Database &database) {
                    parentEdge.automaticRelation ==
                        talos::reflection::VPIAutomaticRelation::ParentScope &&
                    talos::reflection::vpiObjectSetContains(parentEdge.targets,
-                                                             sourceKind);
+                                                           sourceKind);
           });
       if (hasMatchingParent)
         staticLexicalChildren.insert(lexicalPair(
@@ -8546,9 +8519,8 @@ bool validateDatabaseImpl(const Database &database) {
     if (iterate &&
         (lexicalForward || foreachIndex ||
          (!foreachOwner &&
-          selector ==
-              static_cast<uint32_t>(
-                  talos::reflection::VPIRelationKind::VariablesRel))) &&
+          selector == static_cast<uint32_t>(
+                          talos::reflection::VPIRelationKind::VariablesRel))) &&
         frameLocals.count(packedTarget)) {
       if (frameLocalOwners.at(packedTarget) != sourceEndpoint)
         return false;
@@ -8605,10 +8577,9 @@ bool validateDatabaseImpl(const Database &database) {
             if (findCallableSource(database, callOwner->second, source,
                                    sourceOffset) ||
                 read64(owner + 16) != uint64_t(target - database.data) ||
-                (ownerKind &&
-                 (ownerKind->families &
-                  talos::reflection::vpiFamilyMask(
-                      talos::reflection::VPIObjectFamily::Scope))))
+                (ownerKind && (ownerKind->families &
+                               talos::reflection::vpiFamilyMask(
+                                   talos::reflection::VPIObjectFamily::Scope))))
               return false;
             break;
           }
@@ -8638,8 +8609,8 @@ bool validateDatabaseImpl(const Database &database) {
              kind == static_cast<uint32_t>(K::Udp);
     };
     if (iterate && primitiveKind(sourceKind) &&
-        selector == static_cast<uint32_t>(
-                        talos::reflection::VPIObjectKind::PrimTerm)) {
+        selector ==
+            static_cast<uint32_t>(talos::reflection::VPIObjectKind::PrimTerm)) {
       if (!primitiveTerminals.count(packedTarget) ||
           sourceTable != talos::reflection::TableKind::Object ||
           recordKind(sourceRecord) != TALOS_RT_DESIGN_RECORD_STATIC_OBJECT ||
@@ -8682,8 +8653,7 @@ bool validateDatabaseImpl(const Database &database) {
     if (!iterate && selector == static_cast<uint32_t>(Relation::ScopeRel) &&
         sourceKind == static_cast<uint32_t>(Kind::ClassTypespec) &&
         sourceTable == talos::reflection::TableKind::Object &&
-        (read32(sourceRecord + 4) &
-         TALOS_RT_DESIGN_CAP_LEXICAL_CLASS_TYPESPEC))
+        (read32(sourceRecord + 4) & TALOS_RT_DESIGN_CAP_LEXICAL_CLASS_TYPESPEC))
       lexicalClassScopes.emplace(sourceEndpoint, packedTarget);
     bool sharedClassDefault =
         !iterate && selector == static_cast<uint32_t>(Relation::RhsRel) &&
@@ -8736,10 +8706,10 @@ bool validateDatabaseImpl(const Database &database) {
           (unresolvedValueParameters.count(sourceEndpoint) != 0 ||
            packedTarget != sourceEndpoint))
         return false;
-      if (selector == static_cast<uint32_t>(
-                          talos::reflection::VPIRelationKind::ScopeRel)) {
-        if (targetKind != static_cast<uint32_t>(
-                              talos::reflection::VPIObjectKind::ClassDefn))
+      if (selector ==
+          static_cast<uint32_t>(talos::reflection::VPIRelationKind::ScopeRel)) {
+        if (targetKind !=
+            static_cast<uint32_t>(talos::reflection::VPIObjectKind::ClassDefn))
           return false;
         unresolvedParameterParents.emplace(
             sourceEndpoint, lexicalPair(packedTarget, sourceEndpoint));
@@ -8829,8 +8799,8 @@ bool validateDatabaseImpl(const Database &database) {
         // Canonical methods share their display name with the lexical
         // declaration. The validated specialization owner keeps this
         // executable view reachable without a second name-index entry.
-        if ((read32(sourceRecord + 4) &
-             TALOS_RT_DESIGN_CAP_LEXICAL_ANCHOR) != 0 &&
+        if ((read32(sourceRecord + 4) & TALOS_RT_DESIGN_CAP_LEXICAL_ANCHOR) !=
+                0 &&
             (sourceKind == static_cast<uint32_t>(
                                talos::reflection::VPIObjectKind::Task) ||
              sourceKind == static_cast<uint32_t>(
@@ -9317,10 +9287,10 @@ bool validateDatabaseImpl(const Database &database) {
     if ((elementCount == 0 && hasRelation) ||
         (elementCount != 0 &&
          (!hasRelation ||
-          upperBoundRelation(
-              database, firstRelation, talos::reflection::TableKind::Object,
-              objectIndex, static_cast<uint16_t>(access->relationSelector),
-              true) -
+          upperBoundRelation(database, firstRelation,
+                             talos::reflection::TableKind::Object, objectIndex,
+                             static_cast<uint16_t>(access->relationSelector),
+                             true) -
                   firstRelation !=
               elementCount)))
       return false;
@@ -9458,11 +9428,11 @@ bool validateDatabaseImpl(const Database &database) {
     // receiver binding. Lexical event arrays instead own relation-index
     // members; the two representations cannot describe the same object.
     bool classEventArray =
-        recordVPIKind(object) == static_cast<uint32_t>(
-                                    talos::reflection::VPIObjectKind::
-                                        NamedEventArray) &&
-        boundClassFields.count(relationEndpoint(
-            talos::reflection::TableKind::Object, index)) != 0;
+        recordVPIKind(object) ==
+            static_cast<uint32_t>(
+                talos::reflection::VPIObjectKind::NamedEventArray) &&
+        boundClassFields.count(
+            relationEndpoint(talos::reflection::TableKind::Object, index)) != 0;
     bool requiresIndex =
         recordKind(object) == TALOS_RT_DESIGN_RECORD_STATIC_OBJECT &&
         !classEventArray &&
@@ -9648,8 +9618,7 @@ bool validateDatabaseImpl(const Database &database) {
   if (std::find(reachableStatic.begin(), reachableStatic.end(), false) !=
       reachableStatic.end())
     return false;
-  const talos::reflection::VPITraversalDescriptor *portConnectionEdge =
-      nullptr;
+  const talos::reflection::VPITraversalDescriptor *portConnectionEdge = nullptr;
   for (const auto &edge : talos::reflection::vpiTraversals) {
     if (edge.sourceType !=
             static_cast<uint32_t>(talos::reflection::VPIObjectKind::Port) ||
@@ -9677,8 +9646,8 @@ bool validateDatabaseImpl(const Database &database) {
             relation.getTargetIndexAndTable()) !=
             talos::reflection::TableKind::Object)
       return false;
-    targetIndex = talos::reflection::unpackTableIndex(
-        relation.getTargetIndexAndTable());
+    targetIndex =
+        talos::reflection::unpackTableIndex(relation.getTargetIndexAndTable());
     return true;
   };
   for (uint64_t target : statementTypedefObjects)
@@ -10028,7 +9997,7 @@ loadValidatedDatabase(const talos_rt_execution_descriptor_v1 *execution,
 }
 
 talos_rt_status mapInvalidDatabase(talos_rt_status status,
-                                     talos_rt_status invalidStatus) noexcept {
+                                   talos_rt_status invalidStatus) noexcept {
   return status == TALOS_RT_INVALID_DESIGN ? invalidStatus : status;
 }
 
@@ -10040,14 +10009,14 @@ const Database *cachedDatabase(const talos_rt_context *context) {
 }
 
 talos_rt_status designRoot(const Database &database,
-                             talos_rt_design_cursor_v1 *outCursor) {
+                           talos_rt_design_cursor_v1 *outCursor) {
   outCursor->offset = database.root;
   return TALOS_RT_OK;
 }
 
 talos_rt_status designParent(const Database &database,
-                               talos_rt_design_cursor_v1 cursor,
-                               talos_rt_design_cursor_v1 *outCursor) {
+                             talos_rt_design_cursor_v1 cursor,
+                             talos_rt_design_cursor_v1 *outCursor) {
   uint32_t expressionRootIndex = 0, expressionOrdinal = 0,
            defaultBinding = UINT32_MAX;
   const uint8_t *root = nullptr, *recipe = nullptr, *node = nullptr;
@@ -10095,8 +10064,8 @@ talos_rt_status designParent(const Database &database,
 }
 
 talos_rt_status designChild(const Database &database,
-                              talos_rt_design_cursor_v1 cursor,
-                              talos_rt_design_cursor_v1 *outCursor) {
+                            talos_rt_design_cursor_v1 cursor,
+                            talos_rt_design_cursor_v1 *outCursor) {
   const uint8_t *record;
   uint32_t kind;
   if (!getRecord(database, cursor.offset, record, kind) ||
@@ -10107,9 +10076,8 @@ talos_rt_status designChild(const Database &database,
 }
 
 talos_rt_status designChildAt(const Database &database,
-                                talos_rt_design_cursor_v1 cursor,
-                                uint64_t index,
-                                talos_rt_design_cursor_v1 *outCursor) {
+                              talos_rt_design_cursor_v1 cursor, uint64_t index,
+                              talos_rt_design_cursor_v1 *outCursor) {
   const uint8_t *record;
   uint32_t kind;
   if (!getRecord(database, cursor.offset, record, kind) ||
@@ -10129,8 +10097,8 @@ talos_rt_status designChildAt(const Database &database,
 }
 
 talos_rt_status designSibling(const Database &database,
-                                talos_rt_design_cursor_v1 cursor,
-                                talos_rt_design_cursor_v1 *outCursor) {
+                              talos_rt_design_cursor_v1 cursor,
+                              talos_rt_design_cursor_v1 *outCursor) {
   const uint8_t *record;
   uint32_t kind;
   if (!getRecord(database, cursor.offset, record, kind) ||
@@ -10141,8 +10109,8 @@ talos_rt_status designSibling(const Database &database,
 }
 
 talos_rt_status designLookup(const Database &database, const uint8_t *name,
-                               uint64_t nameSize,
-                               talos_rt_design_cursor_v1 *outCursor) {
+                             uint64_t nameSize,
+                             talos_rt_design_cursor_v1 *outCursor) {
   uint64_t wantedHash = nameHash(name, nameSize);
   uint64_t low = 0, high = database.indexCount;
   while (low != high) {
@@ -10210,8 +10178,8 @@ talos_rt_status designLookup(const Database &database, const uint8_t *name,
 }
 
 talos_rt_status designInfo(const Database &database,
-                             talos_rt_design_cursor_v1 cursor,
-                             talos_rt_design_info_v1 *outInfo) {
+                           talos_rt_design_cursor_v1 cursor,
+                           talos_rt_design_info_v1 *outInfo) {
   uint32_t expressionRootIndex = 0, expressionOrdinal = 0;
   const uint8_t *root = nullptr, *recipe = nullptr, *node = nullptr;
   if (expressionForCursor(database, cursor.offset, expressionRootIndex,
@@ -10256,8 +10224,8 @@ talos_rt_status designInfo(const Database &database,
         outInfo->capabilities |= TALOS_RT_DESIGN_CAP_PORT_OUTPUT;
         break;
       case 3:
-        outInfo->capabilities |= TALOS_RT_DESIGN_CAP_PORT_INPUT |
-                                 TALOS_RT_DESIGN_CAP_PORT_OUTPUT;
+        outInfo->capabilities |=
+            TALOS_RT_DESIGN_CAP_PORT_INPUT | TALOS_RT_DESIGN_CAP_PORT_OUTPUT;
         break;
       default:
         break;
@@ -10378,8 +10346,8 @@ talos_rt_status designInfo(const Database &database,
 }
 
 talos_rt_status designTypeInfo(const Database &database,
-                                 talos_rt_design_cursor_v1 cursor,
-                                 talos_rt_design_type_info_v1 *outInfo) {
+                               talos_rt_design_cursor_v1 cursor,
+                               talos_rt_design_type_info_v1 *outInfo) {
   const uint8_t *record;
   uint32_t recordKind;
   if (!getRecord(database, cursor.offset, record, recordKind) ||
@@ -10404,9 +10372,9 @@ talos_rt_status designTypeInfo(const Database &database,
 }
 
 talos_rt_status designTypeChild(const Database &database,
-                                  talos_rt_design_cursor_v1 cursor,
-                                  uint64_t index,
-                                  talos_rt_design_cursor_v1 *outCursor) {
+                                talos_rt_design_cursor_v1 cursor,
+                                uint64_t index,
+                                talos_rt_design_cursor_v1 *outCursor) {
   const uint8_t *record;
   uint32_t recordKind;
   if (!getRecord(database, cursor.offset, record, recordKind) ||
@@ -10427,8 +10395,8 @@ talos_rt_status designTypeChild(const Database &database,
 }
 
 talos_rt_status designSemanticRoot(const Database &database,
-                                     talos_rt_design_cursor_v1 object,
-                                     talos_rt_design_cursor_v1 *outCursor) {
+                                   talos_rt_design_cursor_v1 object,
+                                   talos_rt_design_cursor_v1 *outCursor) {
   uint32_t expressionRootIndex = 0, expressionOrdinal = 0;
   const uint8_t *expressionRootRecord = nullptr, *recipe = nullptr,
                 *node = nullptr;
@@ -10483,13 +10451,12 @@ designSemanticTypeInfo(const Database &database,
   uint32_t encoded = read32(record);
   *outInfo = {};
   outInfo->kind = encoded & UINT32_C(0xff);
-  outInfo->flags = encoded & (TALOS_RT_DESIGN_SEMANTIC_SIGNED |
-                              TALOS_RT_DESIGN_SEMANTIC_FOUR_STATE |
-                              TALOS_RT_DESIGN_SEMANTIC_HAS_RANGE |
-                              TALOS_RT_DESIGN_SEMANTIC_TAGGED |
-                              TALOS_RT_DESIGN_SEMANTIC_SOFT |
-                              TALOS_RT_DESIGN_SEMANTIC_WILDCARD_INDEX |
-                              TALOS_RT_DESIGN_SEMANTIC_PROJECTED);
+  outInfo->flags =
+      encoded &
+      (TALOS_RT_DESIGN_SEMANTIC_SIGNED | TALOS_RT_DESIGN_SEMANTIC_FOUR_STATE |
+       TALOS_RT_DESIGN_SEMANTIC_HAS_RANGE | TALOS_RT_DESIGN_SEMANTIC_TAGGED |
+       TALOS_RT_DESIGN_SEMANTIC_SOFT | TALOS_RT_DESIGN_SEMANTIC_WILDCARD_INDEX |
+       TALOS_RT_DESIGN_SEMANTIC_PROJECTED);
   outInfo->public_vpi_kind =
       (encoded & TALOS_RT_DESIGN_SEMANTIC_PUBLIC_VPI_KIND_MASK) >>
       TALOS_RT_DESIGN_SEMANTIC_PUBLIC_VPI_KIND_SHIFT;
@@ -10567,8 +10534,8 @@ designSemanticTypeEdge(const Database &database,
 }
 
 talos_rt_status designName(const Database &database,
-                             talos_rt_design_cursor_v1 cursor,
-                             const uint8_t **outData, uint64_t *outSize) {
+                           talos_rt_design_cursor_v1 cursor,
+                           const uint8_t **outData, uint64_t *outSize) {
   uint32_t scopeIndex = 0;
   uint32_t memberIndex = 0;
   const uint8_t *member = nullptr;
@@ -10626,8 +10593,8 @@ talos_rt_status designName(const Database &database,
 }
 
 talos_rt_status designVPIType(const Database &database,
-                                talos_rt_design_cursor_v1 cursor,
-                                uint32_t *outType) {
+                              talos_rt_design_cursor_v1 cursor,
+                              uint32_t *outType) {
   uint32_t expressionRootIndex = 0, expressionOrdinal = 0;
   const uint8_t *root = nullptr, *recipe = nullptr, *node = nullptr;
   if (expressionForCursor(database, cursor.offset, expressionRootIndex,
@@ -10664,9 +10631,9 @@ talos_rt_status designVPIType(const Database &database,
 }
 
 talos_rt_status designVPIFixedProperty(const Database &database,
-                                         talos_rt_design_cursor_v1 cursor,
-                                         uint32_t selector,
-                                         VPIFixedPropertyValue *outValue) {
+                                       talos_rt_design_cursor_v1 cursor,
+                                       uint32_t selector,
+                                       VPIFixedPropertyValue *outValue) {
   *outValue = {};
   if (selector > UINT16_MAX)
     return TALOS_RT_EOF;
@@ -10700,8 +10667,7 @@ talos_rt_status designVPIFixedProperty(const Database &database,
       std::string_view value;
       if (!getString(database, database.strings + read32(node + 16), value))
         return TALOS_RT_INVALID_DESIGN;
-      outValue->kind =
-          uint8_t(talos::reflection::VPIPropertyValueKind::String);
+      outValue->kind = uint8_t(talos::reflection::VPIPropertyValueKind::String);
       outValue->stringData = reinterpret_cast<const uint8_t *>(value.data());
       outValue->stringSize = value.size();
       outValue->payload = database.strings + read32(node + 16);
@@ -10731,8 +10697,8 @@ talos_rt_status designVPIFixedProperty(const Database &database,
       std::string_view name;
       if (!getString(database, database.strings + read32(member), name))
         return TALOS_RT_INVALID_DESIGN;
-      outValue->kind = static_cast<uint8_t>(
-          talos::reflection::VPIPropertyValueKind::String);
+      outValue->kind =
+          static_cast<uint8_t>(talos::reflection::VPIPropertyValueKind::String);
       outValue->payload = database.strings + read32(member);
       outValue->stringData = reinterpret_cast<const uint8_t *>(name.data());
       outValue->stringSize = name.size();
@@ -10881,10 +10847,9 @@ talos_rt_status designVPIFixedProperty(const Database &database,
 }
 
 talos_rt_status designVPIResolvedNetType(const Database &database,
-                                           talos_rt_design_cursor_v1 cursor,
-                                           uint64_t bitOffset,
-                                           uint64_t bitWidth,
-                                           uint32_t *outType) {
+                                         talos_rt_design_cursor_v1 cursor,
+                                         uint64_t bitOffset, uint64_t bitWidth,
+                                         uint32_t *outType) {
   if (!isObjectOffset(database, cursor.offset) || bitWidth == 0)
     return TALOS_RT_INVALID_HANDLE;
   uint32_t objectIndex =
@@ -10946,9 +10911,9 @@ talos_rt_status designVPIResolvedNetType(const Database &database,
 }
 
 talos_rt_status designVPINetDelay(const Database &database,
-                                    talos_rt_design_cursor_v1 cursor,
-                                    uint64_t bitOffset, uint64_t bitWidth,
-                                    VPINetDelayValue *outDelay) {
+                                  talos_rt_design_cursor_v1 cursor,
+                                  uint64_t bitOffset, uint64_t bitWidth,
+                                  VPINetDelayValue *outDelay) {
   if (!isObjectOffset(database, cursor.offset) || bitWidth == 0)
     return TALOS_RT_INVALID_HANDLE;
   uint32_t objectIndex =
@@ -11032,8 +10997,8 @@ talos_rt_status designVPINetDelay(const Database &database,
 }
 
 talos_rt_status designVPIRelationIndex(const Database &database,
-                                         talos_rt_design_cursor_v1 source,
-                                         VPIRelationIndexInfo *outInfo) {
+                                       talos_rt_design_cursor_v1 source,
+                                       VPIRelationIndexInfo *outInfo) {
   *outInfo = {};
   if (!isObjectOffset(database, source.offset))
     return TALOS_RT_INVALID_HANDLE;
@@ -11083,9 +11048,8 @@ talos_rt_status designVPIRelationIndexDimension(
 }
 
 talos_rt_status designVPIRelationIndexKey(const Database &database,
-                                            const VPIRelationIndexInfo &info,
-                                            int64_t index,
-                                            uint32_t *outOrdinal) {
+                                          const VPIRelationIndexInfo &info,
+                                          int64_t index, uint32_t *outOrdinal) {
   if (!info.sparse || info.firstKey > database.relationIndexKeyCount ||
       info.elementCount > database.relationIndexKeyCount - info.firstKey)
     return TALOS_RT_INVALID_HANDLE;
@@ -11129,8 +11093,8 @@ designVPIRelationIndexOrdinalKey(const Database &database,
 }
 
 talos_rt_status designVPIArrayMember(const Database &database,
-                                       talos_rt_design_cursor_v1 member,
-                                       VPIArrayMemberInfo *outInfo) {
+                                     talos_rt_design_cursor_v1 member,
+                                     VPIArrayMemberInfo *outInfo) {
   *outInfo = {};
   talos::reflection::TableKind targetTable;
   uint32_t targetIndex = 0;
@@ -11140,7 +11104,7 @@ talos_rt_status designVPIArrayMember(const Database &database,
     return TALOS_RT_INVALID_HANDLE;
   uint32_t packedTarget = 0;
   if (!talos::reflection::tryPackTableIndex(targetTable, targetIndex,
-                                              packedTarget))
+                                            packedTarget))
     return TALOS_RT_INVALID_HANDLE;
   uint32_t low = 0;
   uint32_t high = static_cast<uint32_t>(database.relationIndexMemberCount);
@@ -11238,9 +11202,9 @@ bool findDefinitionMemberInstanceInverse(const Database &database,
 }
 
 talos_rt_status designVPIRelationRange(const Database &database,
-                                         talos_rt_design_cursor_v1 source,
-                                         uint32_t selector, bool iterate,
-                                         VPIRelationRange *outRange) {
+                                       talos_rt_design_cursor_v1 source,
+                                       uint32_t selector, bool iterate,
+                                       VPIRelationRange *outRange) {
   *outRange = {};
   if (selector > UINT16_MAX)
     return TALOS_RT_EOF;
@@ -11347,8 +11311,8 @@ talos_rt_status designVPIRelationRange(const Database &database,
              uint32_t(talos::reflection::VPIObjectKind::ParamAssign)) &&
         (selector == static_cast<uint32_t>(
                          talos::reflection::VPIRelationKind::ScopeRel) ||
-         selector == static_cast<uint32_t>(
-                         talos::reflection::VPIObjectKind::Module) ||
+         selector ==
+             static_cast<uint32_t>(talos::reflection::VPIObjectKind::Module) ||
          selector == static_cast<uint32_t>(
                          talos::reflection::VPIRelationKind::InstanceRel))) {
       if (selector == uint32_t(talos::reflection::VPIObjectKind::Module)) {
@@ -11371,8 +11335,7 @@ talos_rt_status designVPIRelationRange(const Database &database,
       return TALOS_RT_OK;
     }
     if (!virtualRefObject && !iterate &&
-        (sourceType ==
-             uint32_t(talos::reflection::VPIObjectKind::Parameter) ||
+        (sourceType == uint32_t(talos::reflection::VPIObjectKind::Parameter) ||
          sourceType ==
              uint32_t(talos::reflection::VPIObjectKind::TypeParameter) ||
          sourceType ==
@@ -11510,9 +11473,8 @@ talos_rt_status designVPIRelationRange(const Database &database,
   uint16_t compactSelector = static_cast<uint16_t>(selector);
 
   if (!iterate && table == talos::reflection::TableKind::Object &&
-      (compactSelector ==
-           static_cast<uint16_t>(
-               talos::reflection::VPIRelationKind::LowConnRel) ||
+      (compactSelector == static_cast<uint16_t>(
+                              talos::reflection::VPIRelationKind::LowConnRel) ||
        compactSelector ==
            static_cast<uint16_t>(
                talos::reflection::VPIRelationKind::HighConnRel))) {
@@ -11523,8 +11485,7 @@ talos_rt_status designVPIRelationRange(const Database &database,
     uint32_t memberIndex = 0;
     if (recordVPIKind(record) ==
             static_cast<uint32_t>(talos::reflection::VPIObjectKind::Port) &&
-        talos::reflection::tryPackTableIndex(table, sourceIndex,
-                                               packedPort) &&
+        talos::reflection::tryPackTableIndex(table, sourceIndex, packedPort) &&
         findDefinitionMemberInstanceInverse(
             database, packedPort, compactSelector, bindingIndex, memberIndex)) {
       outRange->first =
@@ -11538,8 +11499,8 @@ talos_rt_status designVPIRelationRange(const Database &database,
   if (table == talos::reflection::TableKind::Scope) {
     uint16_t sourceType = static_cast<uint16_t>(recordVPIKind(
         database.data + database.scopes + uint64_t{sourceIndex} * kScopeSize));
-    const auto *edge = talos::reflection::findVPITraversal(
-        sourceType, compactSelector, mode);
+    const auto *edge =
+        talos::reflection::findVPITraversal(sourceType, compactSelector, mode);
     if (edge && isDefinitionMemberInventory(*edge)) {
       uint32_t definitionIndex = 0;
       uint32_t specializationIndex = 0;
@@ -11628,10 +11589,10 @@ physicalRelations: {
   return TALOS_RT_OK;
 }
 
-talos_rt_status
-designVPIRelationTarget(const Database &database, uint64_t relationIndex,
-                        talos_rt_design_cursor_v1 *outCursor,
-                        uint32_t *outType, bool *outStatement) {
+talos_rt_status designVPIRelationTarget(const Database &database,
+                                        uint64_t relationIndex,
+                                        talos_rt_design_cursor_v1 *outCursor,
+                                        uint32_t *outType, bool *outStatement) {
   uint32_t bindingIndex = 0;
   uint32_t payload = 0;
   if (decodeVirtualToken(relationIndex, kVirtualMemberTag, bindingIndex,
@@ -11830,8 +11791,7 @@ designVPIRelationTarget(const Database &database, uint64_t relationIndex,
       if (!virtualMemberForCursor(database, cursor, scopeIndex, checkedMember,
                                   member) ||
           read16(member + 16) !=
-              static_cast<uint16_t>(
-                  talos::reflection::VPIObjectKind::IODecl) ||
+              static_cast<uint16_t>(talos::reflection::VPIObjectKind::IODecl) ||
           read16(member + 18) != kVPIIODirectionRef)
         return TALOS_RT_INVALID_HANDLE;
       outCursor->offset = cursor;
@@ -11891,10 +11851,9 @@ designVPIRelationTarget(const Database &database, uint64_t relationIndex,
   return TALOS_RT_INVALID_DESIGN;
 }
 
-talos_rt_status
-designVPIStatementScope(const Database &database,
-                        talos_rt_design_cursor_v1 statement,
-                        talos_rt_design_cursor_v1 *outScope) {
+talos_rt_status designVPIStatementScope(const Database &database,
+                                        talos_rt_design_cursor_v1 statement,
+                                        talos_rt_design_cursor_v1 *outScope) {
   if (!isStatementOffset(database, statement.offset))
     return TALOS_RT_INVALID_HANDLE;
   uint32_t scope = read32(database.data + statement.offset + 12);
@@ -11920,10 +11879,9 @@ talos_rt_status designVPIStatementEnclosingScope(
   return TALOS_RT_OK;
 }
 
-talos_rt_status
-designVPIStatementParent(const Database &database,
-                         talos_rt_design_cursor_v1 statement,
-                         talos_rt_design_cursor_v1 *outParent) {
+talos_rt_status designVPIStatementParent(const Database &database,
+                                         talos_rt_design_cursor_v1 statement,
+                                         talos_rt_design_cursor_v1 *outParent) {
   if (!isStatementOffset(database, statement.offset))
     return TALOS_RT_INVALID_HANDLE;
   uint32_t parent = read32(database.data + statement.offset + 16);
@@ -11937,10 +11895,9 @@ designVPIStatementParent(const Database &database,
   return TALOS_RT_OK;
 }
 
-talos_rt_status
-designVPIStatementOwner(const Database &database,
-                        talos_rt_design_cursor_v1 statement,
-                        talos_rt_design_cursor_v1 *outOwner) {
+talos_rt_status designVPIStatementOwner(const Database &database,
+                                        talos_rt_design_cursor_v1 statement,
+                                        talos_rt_design_cursor_v1 *outOwner) {
   if (!isStatementOffset(database, statement.offset))
     return TALOS_RT_INVALID_HANDLE;
   uint32_t owner = read32(database.data + statement.offset + 8);
@@ -11954,10 +11911,9 @@ designVPIStatementOwner(const Database &database,
   return TALOS_RT_OK;
 }
 
-talos_rt_status
-designVPIStatementIsScope(const Database &database,
-                          talos_rt_design_cursor_v1 statement,
-                          bool *outIsScope) {
+talos_rt_status designVPIStatementIsScope(const Database &database,
+                                          talos_rt_design_cursor_v1 statement,
+                                          bool *outIsScope) {
   if (!isStatementOffset(database, statement.offset))
     return TALOS_RT_INVALID_HANDLE;
   *outIsScope = (read16(database.data + statement.offset + 38) &
@@ -12044,17 +12000,17 @@ void talos_rt_unregister_design_database(
 
 talos_rt_status
 talos_rt_cached_design_root(const talos_rt_context *context,
-                              talos_rt_design_cursor_v1 *outCursor) noexcept {
+                            talos_rt_design_cursor_v1 *outCursor) noexcept {
   if (!outCursor)
     return TALOS_RT_INVALID_ARGUMENT;
   const Database *database = cachedDatabase(context);
-  return database ? designRoot(*database, outCursor)
-                  : TALOS_RT_INVALID_DESIGN;
+  return database ? designRoot(*database, outCursor) : TALOS_RT_INVALID_DESIGN;
 }
 
-talos_rt_status talos_rt_cached_design_parent(
-    const talos_rt_context *context, talos_rt_design_cursor_v1 cursor,
-    talos_rt_design_cursor_v1 *outCursor) noexcept {
+talos_rt_status
+talos_rt_cached_design_parent(const talos_rt_context *context,
+                              talos_rt_design_cursor_v1 cursor,
+                              talos_rt_design_cursor_v1 *outCursor) noexcept {
   if (!outCursor)
     return TALOS_RT_INVALID_ARGUMENT;
   const Database *database = cachedDatabase(context);
@@ -12062,9 +12018,10 @@ talos_rt_status talos_rt_cached_design_parent(
                   : TALOS_RT_INVALID_HANDLE;
 }
 
-talos_rt_status talos_rt_cached_design_child(
-    const talos_rt_context *context, talos_rt_design_cursor_v1 cursor,
-    talos_rt_design_cursor_v1 *outCursor) noexcept {
+talos_rt_status
+talos_rt_cached_design_child(const talos_rt_context *context,
+                             talos_rt_design_cursor_v1 cursor,
+                             talos_rt_design_cursor_v1 *outCursor) noexcept {
   if (!outCursor)
     return TALOS_RT_INVALID_ARGUMENT;
   const Database *database = cachedDatabase(context);
@@ -12082,9 +12039,10 @@ talos_rt_status talos_rt_cached_design_child_at(
                   : TALOS_RT_INVALID_HANDLE;
 }
 
-talos_rt_status talos_rt_cached_design_sibling(
-    const talos_rt_context *context, talos_rt_design_cursor_v1 cursor,
-    talos_rt_design_cursor_v1 *outCursor) noexcept {
+talos_rt_status
+talos_rt_cached_design_sibling(const talos_rt_context *context,
+                               talos_rt_design_cursor_v1 cursor,
+                               talos_rt_design_cursor_v1 *outCursor) noexcept {
   if (!outCursor)
     return TALOS_RT_INVALID_ARGUMENT;
   const Database *database = cachedDatabase(context);
@@ -12092,9 +12050,10 @@ talos_rt_status talos_rt_cached_design_sibling(
                   : TALOS_RT_INVALID_HANDLE;
 }
 
-talos_rt_status talos_rt_cached_design_lookup(
-    const talos_rt_context *context, const uint8_t *name, uint64_t nameSize,
-    talos_rt_design_cursor_v1 *outCursor) noexcept {
+talos_rt_status
+talos_rt_cached_design_lookup(const talos_rt_context *context,
+                              const uint8_t *name, uint64_t nameSize,
+                              talos_rt_design_cursor_v1 *outCursor) noexcept {
   if (!outCursor || (nameSize != 0 && !name))
     return TALOS_RT_INVALID_ARGUMENT;
   const Database *database = cachedDatabase(context);
@@ -12104,8 +12063,8 @@ talos_rt_status talos_rt_cached_design_lookup(
 
 talos_rt_status
 talos_rt_cached_design_info(const talos_rt_context *context,
-                              talos_rt_design_cursor_v1 cursor,
-                              talos_rt_design_info_v1 *outInfo) noexcept {
+                            talos_rt_design_cursor_v1 cursor,
+                            talos_rt_design_info_v1 *outInfo) noexcept {
   if (!outInfo)
     return TALOS_RT_INVALID_ARGUMENT;
   const Database *database = cachedDatabase(context);
@@ -12145,7 +12104,7 @@ talos_rt_status talos_rt_cached_design_semantic_root(
 
 talos_rt_status
 talos_rt_cached_vpi_scope(const talos_rt_context *context, uint64_t scopeID,
-                            talos_rt_design_cursor_v1 *outCursor) noexcept {
+                          talos_rt_design_cursor_v1 *outCursor) noexcept {
   if (!outCursor)
     return TALOS_RT_INVALID_ARGUMENT;
   *outCursor = {};
@@ -12167,9 +12126,10 @@ talos_rt_cached_vpi_scope(const talos_rt_context *context, uint64_t scopeID,
   return TALOS_RT_EOF;
 }
 
-talos_rt_status talos_rt_cached_vpi_event_array_cell(
-    const talos_rt_context *context, talos_rt_design_cursor_v1 event,
-    VPIEventCellBinding *outBinding) noexcept {
+talos_rt_status
+talos_rt_cached_vpi_event_array_cell(const talos_rt_context *context,
+                                     talos_rt_design_cursor_v1 event,
+                                     VPIEventCellBinding *outBinding) noexcept {
   if (!outBinding)
     return TALOS_RT_INVALID_ARGUMENT;
   *outBinding = {};
@@ -12181,8 +12141,7 @@ talos_rt_status talos_rt_cached_vpi_event_array_cell(
   if (status != TALOS_RT_OK)
     return status;
   if (member.arrayType !=
-      static_cast<uint32_t>(
-          talos::reflection::VPIObjectKind::NamedEventArray))
+      static_cast<uint32_t>(talos::reflection::VPIObjectKind::NamedEventArray))
     return TALOS_RT_EOF;
   uint32_t packedArray = 0;
   if (!packedObjectReferenceForCursor(*database, member.array.offset,
@@ -12249,9 +12208,8 @@ void decodeFrameLocalBinding(const Database &database,
 } // namespace
 
 talos_rt_status
-talos_rt_cached_vpi_frame_local(const talos_rt_context *context,
-                                  uint64_t id,
-                                  VPIFrameLocalBinding *outBinding) noexcept {
+talos_rt_cached_vpi_frame_local(const talos_rt_context *context, uint64_t id,
+                                VPIFrameLocalBinding *outBinding) noexcept {
   if (!outBinding)
     return TALOS_RT_INVALID_ARGUMENT;
   *outBinding = {};
@@ -12320,9 +12278,9 @@ talos_rt_status talos_rt_cached_vpi_frame_locals(
 
 talos_rt_status
 talos_rt_cached_vpi_statement(const talos_rt_context *context,
-                                uint64_t statementID,
-                                talos_rt_design_cursor_v1 *outCursor,
-                                uint64_t *outOwnerCodeUnitID) noexcept {
+                              uint64_t statementID,
+                              talos_rt_design_cursor_v1 *outCursor,
+                              uint64_t *outOwnerCodeUnitID) noexcept {
   if (!outCursor || !outOwnerCodeUnitID)
     return TALOS_RT_INVALID_ARGUMENT;
   *outCursor = {};
@@ -12354,9 +12312,10 @@ talos_rt_cached_vpi_statement(const talos_rt_context *context,
   return TALOS_RT_OK;
 }
 
-talos_rt_status talos_rt_cached_vpi_initializer(
-    const talos_rt_context *context, uint64_t codeUnitID,
-    talos_rt_design_cursor_v1 *outSource) noexcept {
+talos_rt_status
+talos_rt_cached_vpi_initializer(const talos_rt_context *context,
+                                uint64_t codeUnitID,
+                                talos_rt_design_cursor_v1 *outSource) noexcept {
   if (!outSource)
     return TALOS_RT_INVALID_ARGUMENT;
   *outSource = {};
@@ -12371,11 +12330,11 @@ talos_rt_status talos_rt_cached_vpi_initializer(
              : TALOS_RT_INVALID_DESIGN;
 }
 
-talos_rt_status
-talos_rt_cached_vpi_call(const talos_rt_context *context, uint64_t callID,
-                           talos_rt_design_cursor_v1 *outCursor,
-                           uint64_t *outOwnerCodeUnitID,
-                           bool *outIsStatement) noexcept {
+talos_rt_status talos_rt_cached_vpi_call(const talos_rt_context *context,
+                                         uint64_t callID,
+                                         talos_rt_design_cursor_v1 *outCursor,
+                                         uint64_t *outOwnerCodeUnitID,
+                                         bool *outIsStatement) noexcept {
   if (!outCursor || !outOwnerCodeUnitID || !outIsStatement)
     return TALOS_RT_INVALID_ARGUMENT;
   *outCursor = {};
@@ -12416,8 +12375,8 @@ talos_rt_cached_vpi_call(const talos_rt_context *context, uint64_t callID,
 
 talos_rt_status
 talos_rt_cached_vpi_code_unit_transport(const talos_rt_context *context,
-                                          uint64_t codeUnitID,
-                                          bool *outIsTask) noexcept {
+                                        uint64_t codeUnitID,
+                                        bool *outIsTask) noexcept {
   if (!outIsTask)
     return TALOS_RT_INVALID_ARGUMENT;
   *outIsTask = false;
@@ -12448,9 +12407,9 @@ talos_rt_cached_vpi_code_unit_transport(const talos_rt_context *context,
 
 talos_rt_status
 talos_rt_cached_vpi_code_unit_scope(const talos_rt_context *context,
-                                      uint64_t codeUnitID,
-                                      talos_rt_design_cursor_v1 *outCursor,
-                                      uint64_t *outLexicalCodeUnitID) noexcept {
+                                    uint64_t codeUnitID,
+                                    talos_rt_design_cursor_v1 *outCursor,
+                                    uint64_t *outLexicalCodeUnitID) noexcept {
   if (!outCursor || !outLexicalCodeUnitID)
     return TALOS_RT_INVALID_ARGUMENT;
   *outCursor = {};
@@ -12504,19 +12463,19 @@ talos_rt_cached_vpi_code_unit_scope(const talos_rt_context *context,
   }
   const auto *kind =
       talos::reflection::findVPIObjectKind(recordVPIKind(object));
-  outCursor->offset = kind && (kind->families &
-                               talos::reflection::vpiFamilyMask(
-                                   talos::reflection::VPIObjectFamily::Scope))
-                          ? found
-                          : read64(object + 16);
+  outCursor->offset =
+      kind && (kind->families & talos::reflection::vpiFamilyMask(
+                                    talos::reflection::VPIObjectFamily::Scope))
+          ? found
+          : read64(object + 16);
   *outLexicalCodeUnitID = codeUnitID;
   return TALOS_RT_OK;
 }
 
 talos_rt_status
 talos_rt_cached_vpi_call_target(const talos_rt_context *context,
-                                  uint64_t callID,
-                                  uint64_t calleeCodeUnitID) noexcept {
+                                uint64_t callID,
+                                uint64_t calleeCodeUnitID) noexcept {
   const Database *database = cachedDatabase(context);
   if (!database)
     return TALOS_RT_INVALID_HANDLE;
@@ -12638,13 +12597,13 @@ talos_rt_cached_vpi_call_target(const talos_rt_context *context,
     return TALOS_RT_EOF;
   VPIRelationRange range{};
   status = talos_rt_cached_vpi_relation_range(context, call, selector, false,
-                                                &range);
+                                              &range);
   if (status != TALOS_RT_OK || !range.count)
     return status == TALOS_RT_OK ? TALOS_RT_EOF : status;
   talos_rt_design_cursor_v1 target{};
   uint32_t targetKind = 0;
   status = talos_rt_cached_vpi_relation_target(context, range.first, &target,
-                                                 &targetKind, &statement);
+                                               &targetKind, &statement);
   if (status != TALOS_RT_OK)
     return status;
   if (statement)
@@ -12685,8 +12644,7 @@ talos_rt_status talos_rt_cached_vpi_net_resolution(
         read64(object + 8) == netID) {
       const auto *origin = talos::reflection::findVPITraversal(
           static_cast<uint32_t>(talos::reflection::VPIObjectKind::Frame),
-          static_cast<uint32_t>(
-              talos::reflection::VPIRelationKind::OriginRel),
+          static_cast<uint32_t>(talos::reflection::VPIRelationKind::OriginRel),
           talos::reflection::VPITraversalMode::Handle);
       if (!origin || !talos::reflection::vpiObjectSetContains(
                          origin->targets, recordVPIKind(object)))
@@ -12700,16 +12658,16 @@ talos_rt_status talos_rt_cached_vpi_net_resolution(
   auto target = [&](talos_rt_design_cursor_v1 source, uint32_t selector,
                     uint32_t expected, talos_rt_design_cursor_v1 &result) {
     VPIRelationRange range{};
-    auto status = talos_rt_cached_vpi_relation_range(context, source,
-                                                       selector, false, &range);
+    auto status = talos_rt_cached_vpi_relation_range(context, source, selector,
+                                                     false, &range);
     if (status != TALOS_RT_OK)
       return status;
     if (range.count != 1)
       return TALOS_RT_INVALID_DESIGN;
     uint32_t kind = 0;
     bool statement = false;
-    status = talos_rt_cached_vpi_relation_target(context, range.first,
-                                                   &result, &kind, &statement);
+    status = talos_rt_cached_vpi_relation_target(context, range.first, &result,
+                                                 &kind, &statement);
     if (status != TALOS_RT_OK)
       return status;
     return !statement && kind == expected ? TALOS_RT_OK : TALOS_RT_EOF;
@@ -12720,10 +12678,10 @@ talos_rt_status talos_rt_cached_vpi_net_resolution(
                        static_cast<uint32_t>(Kind::NettypeDecl), nettype);
   if (status != TALOS_RT_OK)
     return status;
-  status = target(
-      nettype,
-      static_cast<uint32_t>(talos::reflection::VPIRelationKind::WithRel),
-      static_cast<uint32_t>(Kind::Function), function);
+  status =
+      target(nettype,
+             static_cast<uint32_t>(talos::reflection::VPIRelationKind::WithRel),
+             static_cast<uint32_t>(Kind::Function), function);
   if (status != TALOS_RT_OK)
     return status;
   *outNet = net;
@@ -12733,8 +12691,8 @@ talos_rt_status talos_rt_cached_vpi_net_resolution(
 
 talos_rt_status
 talos_rt_cached_vpi_resolution_target(const talos_rt_context *context,
-                                        uint64_t netID,
-                                        uint64_t calleeCodeUnitID) noexcept {
+                                      uint64_t netID,
+                                      uint64_t calleeCodeUnitID) noexcept {
   talos_rt_design_cursor_v1 net{}, function{};
   auto status =
       talos_rt_cached_vpi_net_resolution(context, netID, &net, &function);
@@ -12759,8 +12717,8 @@ talos_rt_cached_vpi_resolution_target(const talos_rt_context *context,
 
 talos_rt_status
 talos_rt_cached_vpi_export_target(const talos_rt_context *context,
-                                    uint64_t codeUnitID, uint64_t scopeID,
-                                    bool isTask) noexcept {
+                                  uint64_t codeUnitID, uint64_t scopeID,
+                                  bool isTask) noexcept {
   const Database *database = cachedDatabase(context);
   if (!database)
     return TALOS_RT_INVALID_HANDLE;
@@ -12799,8 +12757,8 @@ talos_rt_status talos_rt_cached_vpi_frame_origin(
   case 4:
   case 0: {
     uint64_t lexicalOwner = 0;
-    auto status = talos_rt_cached_vpi_code_unit_scope(
-        context, originID, outCursor, &lexicalOwner);
+    auto status = talos_rt_cached_vpi_code_unit_scope(context, originID,
+                                                      outCursor, &lexicalOwner);
     if (status != TALOS_RT_OK)
       return status;
     uint32_t kind = 0;
@@ -12822,8 +12780,8 @@ talos_rt_status talos_rt_cached_vpi_frame_origin(
     uint64_t owner = 0;
     talos_rt_design_cursor_v1 call{};
     bool statement = false;
-    auto status = talos_rt_cached_vpi_call(context, originID, &call, &owner,
-                                             &statement);
+    auto status =
+        talos_rt_cached_vpi_call(context, originID, &call, &owner, &statement);
     if (status != TALOS_RT_OK)
       return status;
     uint32_t kind = 0;
@@ -12834,8 +12792,7 @@ talos_rt_status talos_rt_cached_vpi_frame_origin(
         static_cast<uint32_t>(talos::reflection::VPIObjectKind::Frame),
         static_cast<uint32_t>(talos::reflection::VPIRelationKind::OriginRel),
         talos::reflection::VPITraversalMode::Handle);
-    if (!edge ||
-        !talos::reflection::vpiObjectSetContains(edge->targets, kind))
+    if (!edge || !talos::reflection::vpiObjectSetContains(edge->targets, kind))
       return TALOS_RT_EOF;
     *outCursor = call;
     *outIsStatement = statement;
@@ -12859,7 +12816,7 @@ talos_rt_status talos_rt_cached_vpi_frame_origin(
   case 3: {
     talos_rt_design_cursor_v1 function{};
     return talos_rt_cached_vpi_net_resolution(context, originID, outCursor,
-                                                &function);
+                                              &function);
   }
   default:
     return TALOS_RT_INVALID_ARGUMENT;
@@ -12900,8 +12857,8 @@ talos_rt_status talos_rt_cached_vpi_thread_origin(
 
 talos_rt_status
 talos_rt_cached_vpi_event_binding(const talos_rt_context *context,
-                                    talos_rt_design_cursor_v1 event,
-                                    uint64_t *outEventID) noexcept {
+                                  talos_rt_design_cursor_v1 event,
+                                  uint64_t *outEventID) noexcept {
   if (!outEventID)
     return TALOS_RT_INVALID_ARGUMENT;
   *outEventID = 0;
@@ -12932,8 +12889,8 @@ talos_rt_cached_vpi_event_binding(const talos_rt_context *context,
 
 talos_rt_status
 talos_rt_cached_vpi_modport_binding(const talos_rt_context *context,
-                                      talos_rt_design_cursor_v1 modport,
-                                      VPIModportBinding *outBinding) noexcept {
+                                    talos_rt_design_cursor_v1 modport,
+                                    VPIModportBinding *outBinding) noexcept {
   if (!outBinding)
     return TALOS_RT_INVALID_ARGUMENT;
   *outBinding = {};
@@ -12945,9 +12902,9 @@ talos_rt_cached_vpi_modport_binding(const talos_rt_context *context,
   uint64_t low = 0, high = database->modportBindingCount;
   while (low < high) {
     uint64_t middle = low + (high - low) / 2;
-    talos::reflection::ModportBindingView binding(
-        database->data + database->modportBindings +
-        middle * kModportBindingSize);
+    talos::reflection::ModportBindingView binding(database->data +
+                                                  database->modportBindings +
+                                                  middle * kModportBindingSize);
     if (binding.getModportIndexAndTable() < packed)
       low = middle + 1;
     else
@@ -12971,9 +12928,9 @@ talos_rt_cached_vpi_modport_binding(const talos_rt_context *context,
 
 talos_rt_status
 talos_rt_cached_vpi_modport(const talos_rt_context *context,
-                              talos_rt_design_cursor_v1 scope,
-                              const uint8_t *name, uint64_t nameSize,
-                              talos_rt_design_cursor_v1 *outCursor) noexcept {
+                            talos_rt_design_cursor_v1 scope,
+                            const uint8_t *name, uint64_t nameSize,
+                            talos_rt_design_cursor_v1 *outCursor) noexcept {
   if (!outCursor)
     return TALOS_RT_INVALID_ARGUMENT;
   *outCursor = {};
@@ -12998,13 +12955,13 @@ talos_rt_cached_vpi_modport(const talos_rt_context *context,
     uint32_t type = 0;
     bool statement = false;
     status = talos_rt_cached_vpi_relation_target(context, range.first + index,
-                                                   &modport, &type, &statement);
+                                                 &modport, &type, &statement);
     if (status != TALOS_RT_OK)
       return status;
     VPIModportBinding binding{};
     if (statement ||
-        type != static_cast<uint32_t>(
-                    talos::reflection::VPIObjectKind::Modport) ||
+        type !=
+            static_cast<uint32_t>(talos::reflection::VPIObjectKind::Modport) ||
         talos_rt_cached_vpi_modport_binding(context, modport, &binding) !=
             TALOS_RT_OK ||
         binding.scope.offset != scope.offset)
@@ -13040,9 +12997,9 @@ talos_rt_status talos_rt_cached_vpi_class_typespec(
   }
   if (low == database->classTypeBindingCount)
     return TALOS_RT_EOF;
-  talos::reflection::ClassTypeBindingView binding(
-      database->data + database->classTypeBindings +
-      low * kClassTypeBindingSize);
+  talos::reflection::ClassTypeBindingView binding(database->data +
+                                                  database->classTypeBindings +
+                                                  low * kClassTypeBindingSize);
   if (binding.getClassID() != classID)
     return TALOS_RT_EOF;
   return packedObjectReferenceOffset(
@@ -13051,9 +13008,10 @@ talos_rt_status talos_rt_cached_vpi_class_typespec(
              : TALOS_RT_INVALID_DESIGN;
 }
 
-talos_rt_status talos_rt_cached_vpi_class_member(
-    const talos_rt_context *context, talos_rt_design_cursor_v1 member,
-    VPIClassMemberBinding *outBinding) noexcept {
+talos_rt_status
+talos_rt_cached_vpi_class_member(const talos_rt_context *context,
+                                 talos_rt_design_cursor_v1 member,
+                                 VPIClassMemberBinding *outBinding) noexcept {
   if (!outBinding)
     return TALOS_RT_INVALID_ARGUMENT;
   *outBinding = {};
@@ -13076,7 +13034,8 @@ talos_rt_status talos_rt_cached_vpi_class_member(
   if (low == database->classMemberBindingCount)
     return TALOS_RT_EOF;
   talos::reflection::ClassMemberBindingView binding(
-      database->data + database->classMemberBindings + low * kClassMemberBindingSize);
+      database->data + database->classMemberBindings +
+      low * kClassMemberBindingSize);
   if (binding.getMemberIndexAndTable() != packed)
     return TALOS_RT_EOF;
   outBinding->classID = binding.getClassID();
@@ -13092,10 +13051,12 @@ talos_rt_status talos_rt_cached_vpi_class_member(
   if (!packedObjectReferenceOffset(*database, binding.getOwnerIndexAndTable(),
                                    outBinding->ownerScope.offset) ||
       talos_rt_cached_vpi_class_typespec(context, binding.getClassID(),
-                                          &outBinding->ownerTypespec) != TALOS_RT_OK ||
+                                         &outBinding->ownerTypespec) !=
+          TALOS_RT_OK ||
       (binding.getStorageIndexAndTable() != UINT32_MAX &&
-       !packedObjectReferenceOffset(*database, binding.getStorageIndexAndTable(),
-                                      outBinding->backingStorage.offset)))
+       !packedObjectReferenceOffset(*database,
+                                    binding.getStorageIndexAndTable(),
+                                    outBinding->backingStorage.offset)))
     return TALOS_RT_INVALID_DESIGN;
   return TALOS_RT_OK;
 }
@@ -13143,10 +13104,10 @@ cachedLegacyMailboxElementType(const talos_rt_context *context,
   return TALOS_RT_OK;
 }
 
-talos_rt_status talos_rt_cached_vpi_value_layout_owner(
-    const talos_rt_context *context,
-    talos_rt_design_cursor_v1 reflectedOwner,
-    VPIValueLayoutOwner *outOwner) noexcept {
+talos_rt_status
+talos_rt_cached_vpi_value_layout_owner(const talos_rt_context *context,
+                                       talos_rt_design_cursor_v1 reflectedOwner,
+                                       VPIValueLayoutOwner *outOwner) noexcept {
   if (!outOwner)
     return TALOS_RT_INVALID_ARGUMENT;
   *outOwner = {};
@@ -13162,7 +13123,7 @@ talos_rt_status talos_rt_cached_vpi_value_layout_owner(
 
 talos_rt_status
 talos_rt_cached_vpi_box_type(const talos_rt_context *context, uint64_t id,
-                               VPIBoxTypeBinding *outType) noexcept {
+                             VPIBoxTypeBinding *outType) noexcept {
   if (!outType)
     return TALOS_RT_INVALID_ARGUMENT;
   *outType = {};
@@ -13172,9 +13133,9 @@ talos_rt_cached_vpi_box_type(const talos_rt_context *context, uint64_t id,
   uint64_t low = 0, high = database->boxTypeBindingCount;
   while (low != high) {
     const uint64_t middle = low + (high - low) / 2;
-    talos::reflection::BoxTypeBindingView binding(
-        database->data + database->boxTypeBindings +
-        middle * kBoxTypeBindingSize);
+    talos::reflection::BoxTypeBindingView binding(database->data +
+                                                  database->boxTypeBindings +
+                                                  middle * kBoxTypeBindingSize);
     if (binding.getID() < id)
       low = middle + 1;
     else
@@ -13247,8 +13208,7 @@ talos_rt_status talos_rt_cached_vpi_value_element_type(
 }
 
 talos_rt_status talos_rt_cached_vpi_value_element_type(
-    const talos_rt_context *context,
-    talos_rt_design_cursor_v1 reflectedOwner,
+    const talos_rt_context *context, talos_rt_design_cursor_v1 reflectedOwner,
     talos_rt_design_cursor_v1 semantic,
     talos_rt_design_cursor_v1 *outType) noexcept {
   VPIValueLayoutOwner owner;
@@ -13260,7 +13220,7 @@ talos_rt_status talos_rt_cached_vpi_value_element_type(
     return outType ? status : TALOS_RT_INVALID_ARGUMENT;
   }
   return talos_rt_cached_vpi_value_element_type(context, owner, semantic,
-                                                  outType);
+                                                outType);
 }
 
 talos_rt_status talos_rt_cached_vpi_mailbox_element_type(
@@ -13268,7 +13228,7 @@ talos_rt_status talos_rt_cached_vpi_mailbox_element_type(
     talos_rt_design_cursor_v1 semantic,
     talos_rt_design_cursor_v1 *outType) noexcept {
   return talos_rt_cached_vpi_value_element_type(context, typespec, semantic,
-                                                  outType);
+                                                outType);
 }
 
 talos_rt_status talos_rt_cached_vpi_semantic_class_typespec(
@@ -13318,8 +13278,8 @@ talos_rt_status talos_rt_cached_design_semantic_type_info(
 
 talos_rt_status
 talos_rt_cached_design_semantic_bit_width(const talos_rt_context *context,
-                                            talos_rt_design_cursor_v1 cursor,
-                                            uint64_t *outWidth) noexcept {
+                                          talos_rt_design_cursor_v1 cursor,
+                                          uint64_t *outWidth) noexcept {
   if (!outWidth)
     return TALOS_RT_INVALID_ARGUMENT;
   *outWidth = 0;
@@ -13341,10 +13301,12 @@ talos_rt_status talos_rt_cached_design_semantic_type_edge(
                   : TALOS_RT_INVALID_HANDLE;
 }
 
-talos_rt_status talos_rt_cached_design_source(
-    const talos_rt_context *context, talos_rt_design_cursor_v1 cursor,
-    const uint8_t **outFile, uint64_t *outFileSize, uint32_t *outLine,
-    uint32_t *outColumn) noexcept {
+talos_rt_status talos_rt_cached_design_source(const talos_rt_context *context,
+                                              talos_rt_design_cursor_v1 cursor,
+                                              const uint8_t **outFile,
+                                              uint64_t *outFileSize,
+                                              uint32_t *outLine,
+                                              uint32_t *outColumn) noexcept {
   if (!outFile || !outFileSize || !outLine || !outColumn)
     return TALOS_RT_INVALID_ARGUMENT;
   const Database *database = cachedDatabase(context);
@@ -13402,9 +13364,10 @@ talos_rt_status talos_rt_cached_design_source(
   return TALOS_RT_OK;
 }
 
-talos_rt_status talos_rt_cached_design_name(
-    const talos_rt_context *context, talos_rt_design_cursor_v1 cursor,
-    const uint8_t **outData, uint64_t *outSize) noexcept {
+talos_rt_status talos_rt_cached_design_name(const talos_rt_context *context,
+                                            talos_rt_design_cursor_v1 cursor,
+                                            const uint8_t **outData,
+                                            uint64_t *outSize) noexcept {
   if (!outData || !outSize)
     return TALOS_RT_INVALID_ARGUMENT;
   const Database *database = cachedDatabase(context);
@@ -13413,8 +13376,8 @@ talos_rt_status talos_rt_cached_design_name(
 }
 
 talos_rt_status talos_rt_cached_vpi_type(const talos_rt_context *context,
-                                             talos_rt_design_cursor_v1 cursor,
-                                             uint32_t *outType) noexcept {
+                                         talos_rt_design_cursor_v1 cursor,
+                                         uint32_t *outType) noexcept {
   if (!outType)
     return TALOS_RT_INVALID_ARGUMENT;
   const Database *database = cachedDatabase(context);
@@ -13453,8 +13416,8 @@ talos_rt_status talos_rt_cached_vpi_definition_member_scope(
 
 talos_rt_status
 talos_rt_cached_vpi_frozen_value(const talos_rt_context *context,
-                                   talos_rt_design_cursor_v1 cursor,
-                                   VPIFrozenValue *outValue) noexcept {
+                                 talos_rt_design_cursor_v1 cursor,
+                                 VPIFrozenValue *outValue) noexcept {
   if (!outValue)
     return TALOS_RT_INVALID_ARGUMENT;
   const Database *database = cachedDatabase(context);
@@ -13496,9 +13459,9 @@ talos_rt_status talos_rt_cached_vpi_resolved_net_type(
 
 talos_rt_status
 talos_rt_cached_vpi_net_delay(const talos_rt_context *context,
-                                talos_rt_design_cursor_v1 cursor,
-                                uint64_t bitOffset, uint64_t bitWidth,
-                                VPINetDelayValue *outDelay) noexcept {
+                              talos_rt_design_cursor_v1 cursor,
+                              uint64_t bitOffset, uint64_t bitWidth,
+                              VPINetDelayValue *outDelay) noexcept {
   if (!outDelay)
     return TALOS_RT_INVALID_ARGUMENT;
   const Database *database = cachedDatabase(context);
@@ -13532,8 +13495,8 @@ talos_rt_status talos_rt_cached_vpi_relation_target(
 
 talos_rt_status
 talos_rt_cached_vpi_relation_index(const talos_rt_context *context,
-                                     talos_rt_design_cursor_v1 source,
-                                     VPIRelationIndexInfo *outInfo) noexcept {
+                                   talos_rt_design_cursor_v1 source,
+                                   VPIRelationIndexInfo *outInfo) noexcept {
   if (!outInfo)
     return TALOS_RT_INVALID_ARGUMENT;
   const Database *database = cachedDatabase(context);
@@ -13576,8 +13539,8 @@ talos_rt_status talos_rt_cached_vpi_relation_index_ordinal_key(
 
 talos_rt_status
 talos_rt_cached_vpi_array_member(const talos_rt_context *context,
-                                   talos_rt_design_cursor_v1 member,
-                                   VPIArrayMemberInfo *outInfo) noexcept {
+                                 talos_rt_design_cursor_v1 member,
+                                 VPIArrayMemberInfo *outInfo) noexcept {
   if (!outInfo)
     return TALOS_RT_INVALID_ARGUMENT;
   const Database *database = cachedDatabase(context);
@@ -13628,8 +13591,8 @@ talos_rt_status talos_rt_cached_vpi_statement_owner(
 
 talos_rt_status
 talos_rt_cached_vpi_statement_is_scope(const talos_rt_context *context,
-                                         talos_rt_design_cursor_v1 statement,
-                                         bool *outIsScope) noexcept {
+                                       talos_rt_design_cursor_v1 statement,
+                                       bool *outIsScope) noexcept {
   if (!outIsScope)
     return TALOS_RT_INVALID_ARGUMENT;
   const Database *database = cachedDatabase(context);
@@ -13637,9 +13600,10 @@ talos_rt_cached_vpi_statement_is_scope(const talos_rt_context *context,
                   : TALOS_RT_INVALID_HANDLE;
 }
 
-talos_rt_status talos_rt_cached_vpi_statement_is_protected(
-    const talos_rt_context *context, talos_rt_design_cursor_v1 statement,
-    bool *outIsProtected) noexcept {
+talos_rt_status
+talos_rt_cached_vpi_statement_is_protected(const talos_rt_context *context,
+                                           talos_rt_design_cursor_v1 statement,
+                                           bool *outIsProtected) noexcept {
   if (!outIsProtected)
     return TALOS_RT_INVALID_ARGUMENT;
   const Database *database = cachedDatabase(context);
@@ -13659,8 +13623,8 @@ bool talos_rt_checked_design_record(
   TALOS_RT_CATCH_ALL { return false; }
 }
 
-extern "C" talos_rt_status talos_rt_v1_design_validate(
-    const talos_rt_execution_descriptor_v1 *execution) {
+extern "C" talos_rt_status
+talos_rt_v1_design_validate(const talos_rt_execution_descriptor_v1 *execution) {
   TALOS_RT_TRY {
     Database database;
     return loadValidatedDatabase(execution, database);
@@ -13671,7 +13635,7 @@ extern "C" talos_rt_status talos_rt_v1_design_validate(
 
 extern "C" talos_rt_status
 talos_rt_v1_design_root(const talos_rt_execution_descriptor_v1 *execution,
-                          talos_rt_design_cursor_v1 *outCursor) {
+                        talos_rt_design_cursor_v1 *outCursor) {
   if (!outCursor)
     return TALOS_RT_INVALID_ARGUMENT;
   Database database;
@@ -13683,8 +13647,8 @@ talos_rt_v1_design_root(const talos_rt_execution_descriptor_v1 *execution,
 
 extern "C" talos_rt_status
 talos_rt_v1_design_child(const talos_rt_execution_descriptor_v1 *execution,
-                           talos_rt_design_cursor_v1 cursor,
-                           talos_rt_design_cursor_v1 *outCursor) {
+                         talos_rt_design_cursor_v1 cursor,
+                         talos_rt_design_cursor_v1 *outCursor) {
   if (!outCursor)
     return TALOS_RT_INVALID_ARGUMENT;
   Database database;
@@ -13694,10 +13658,10 @@ talos_rt_v1_design_child(const talos_rt_execution_descriptor_v1 *execution,
   return designChild(database, cursor, outCursor);
 }
 
-extern "C" talos_rt_status talos_rt_v1_design_child_at(
-    const talos_rt_execution_descriptor_v1 *execution,
-    talos_rt_design_cursor_v1 cursor, uint64_t index,
-    talos_rt_design_cursor_v1 *outCursor) {
+extern "C" talos_rt_status
+talos_rt_v1_design_child_at(const talos_rt_execution_descriptor_v1 *execution,
+                            talos_rt_design_cursor_v1 cursor, uint64_t index,
+                            talos_rt_design_cursor_v1 *outCursor) {
   if (!outCursor)
     return TALOS_RT_INVALID_ARGUMENT;
   Database database;
@@ -13707,10 +13671,10 @@ extern "C" talos_rt_status talos_rt_v1_design_child_at(
   return designChildAt(database, cursor, index, outCursor);
 }
 
-extern "C" talos_rt_status talos_rt_v1_design_sibling(
-    const talos_rt_execution_descriptor_v1 *execution,
-    talos_rt_design_cursor_v1 cursor,
-    talos_rt_design_cursor_v1 *outCursor) {
+extern "C" talos_rt_status
+talos_rt_v1_design_sibling(const talos_rt_execution_descriptor_v1 *execution,
+                           talos_rt_design_cursor_v1 cursor,
+                           talos_rt_design_cursor_v1 *outCursor) {
   if (!outCursor)
     return TALOS_RT_INVALID_ARGUMENT;
   Database database;
@@ -13722,8 +13686,8 @@ extern "C" talos_rt_status talos_rt_v1_design_sibling(
 
 extern "C" talos_rt_status
 talos_rt_v1_design_lookup(const talos_rt_execution_descriptor_v1 *execution,
-                            const uint8_t *name, uint64_t nameSize,
-                            talos_rt_design_cursor_v1 *outCursor) {
+                          const uint8_t *name, uint64_t nameSize,
+                          talos_rt_design_cursor_v1 *outCursor) {
   if (!outCursor || (nameSize != 0 && !name))
     return TALOS_RT_INVALID_ARGUMENT;
   Database database;
@@ -13735,8 +13699,8 @@ talos_rt_v1_design_lookup(const talos_rt_execution_descriptor_v1 *execution,
 
 extern "C" talos_rt_status
 talos_rt_v1_design_info(const talos_rt_execution_descriptor_v1 *execution,
-                          talos_rt_design_cursor_v1 cursor,
-                          talos_rt_design_info_v1 *outInfo) {
+                        talos_rt_design_cursor_v1 cursor,
+                        talos_rt_design_info_v1 *outInfo) {
   if (!outInfo)
     return TALOS_RT_INVALID_ARGUMENT;
   Database database;
@@ -13746,10 +13710,10 @@ talos_rt_v1_design_info(const talos_rt_execution_descriptor_v1 *execution,
   return designInfo(database, cursor, outInfo);
 }
 
-extern "C" talos_rt_status talos_rt_v1_design_type_info(
-    const talos_rt_execution_descriptor_v1 *execution,
-    talos_rt_design_cursor_v1 cursor,
-    talos_rt_design_type_info_v1 *outInfo) {
+extern "C" talos_rt_status
+talos_rt_v1_design_type_info(const talos_rt_execution_descriptor_v1 *execution,
+                             talos_rt_design_cursor_v1 cursor,
+                             talos_rt_design_type_info_v1 *outInfo) {
   if (!outInfo)
     return TALOS_RT_INVALID_ARGUMENT;
   Database database;
@@ -13759,10 +13723,10 @@ extern "C" talos_rt_status talos_rt_v1_design_type_info(
   return designTypeInfo(database, cursor, outInfo);
 }
 
-extern "C" talos_rt_status talos_rt_v1_design_type_child(
-    const talos_rt_execution_descriptor_v1 *execution,
-    talos_rt_design_cursor_v1 cursor, uint64_t index,
-    talos_rt_design_cursor_v1 *outCursor) {
+extern "C" talos_rt_status
+talos_rt_v1_design_type_child(const talos_rt_execution_descriptor_v1 *execution,
+                              talos_rt_design_cursor_v1 cursor, uint64_t index,
+                              talos_rt_design_cursor_v1 *outCursor) {
   if (!outCursor)
     return TALOS_RT_INVALID_ARGUMENT;
   Database database;
@@ -13774,8 +13738,8 @@ extern "C" talos_rt_status talos_rt_v1_design_type_child(
 
 extern "C" talos_rt_status
 talos_rt_v1_design_name(const talos_rt_execution_descriptor_v1 *execution,
-                          talos_rt_design_cursor_v1 cursor,
-                          const uint8_t **outData, uint64_t *outSize) {
+                        talos_rt_design_cursor_v1 cursor,
+                        const uint8_t **outData, uint64_t *outSize) {
   if (!outData || !outSize)
     return TALOS_RT_INVALID_ARGUMENT;
   Database database;
@@ -13829,10 +13793,10 @@ void setPackedByte(uint8_t *bytes, uint64_t bit, bool value) {
 }
 
 static talos_rt_status accessState(talos_rt_context *context,
-                                     talos_rt_design_cursor_v1 cursor,
-                                     uint64_t *value, uint64_t *unknown,
-                                     uint64_t bitWidth, bool write,
-                                     bool overrideForce = false) {
+                                   talos_rt_design_cursor_v1 cursor,
+                                   uint64_t *value, uint64_t *unknown,
+                                   uint64_t bitWidth, bool write,
+                                   bool overrideForce = false) {
   if (!context || !value || bitWidth == 0 || !context->execution)
     return TALOS_RT_INVALID_ARGUMENT;
   ContextTransaction transaction(context);
@@ -13887,9 +13851,7 @@ static talos_rt_status accessState(talos_rt_context *context,
         publishedPlanes = overflowPublishedPlanes.data();
       }
     }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
     TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_DESIGN; }
   }
   bool stateChanged = false;
@@ -13898,8 +13860,8 @@ static talos_rt_status accessState(talos_rt_context *context,
     std::lock_guard<std::recursive_mutex> lock(context->mutex);
     uint64_t signalBase = UINT64_MAX;
     if (write) {
-      signalBase = talos_rt_canonical_state_handle_unlocked(
-          context, stateOffset, width);
+      signalBase =
+          talos_rt_canonical_state_handle_unlocked(context, stateOffset, width);
       if (signalBase == UINT64_MAX)
         return TALOS_RT_INVALID_HANDLE;
     }
@@ -13984,8 +13946,7 @@ static talos_rt_status accessState(talos_rt_context *context,
         storePackedBytes(unknownBytes.data(), newUnknown);
         storePackedState(context->stateValue, stateOffset, width, newValue);
         storePackedState(context->stateUnknown, stateOffset, width, newUnknown);
-        talos_rt_sync_native_state_range_unlocked(context, stateOffset,
-                                                    width);
+        talos_rt_sync_native_state_range_unlocked(context, stateOffset, width);
         // Force/release changes the persistent override state and must retain
         // the transactional generic handoff. Only an exact deposit may enter
         // the generated clock coordinator directly.
@@ -14073,8 +14034,7 @@ static talos_rt_status accessState(talos_rt_context *context,
         }
       }
       if (write && stateChanged) {
-        talos_rt_sync_native_state_range_unlocked(context, stateOffset,
-                                                    width);
+        talos_rt_sync_native_state_range_unlocked(context, stateOffset, width);
         bool synchronized =
             !overrideForce && talos_rt_aot_external_deposit_unlocked(
                                   context, signalBase, stateOffset, width);
@@ -14107,7 +14067,7 @@ static talos_rt_status accessState(talos_rt_context *context,
   }
   if (write && kind == TALOS_RT_DESIGN_RECORD_DRIVER)
     return talos_rt_resolve_design_drivers(context, stateOffset,
-                                             stateOffset + width);
+                                           stateOffset + width);
   return TALOS_RT_OK;
 }
 
@@ -14133,11 +14093,11 @@ talos_rt_status talos_rt_design_state_offset(
   return TALOS_RT_OK;
 }
 
-talos_rt_status
-talos_rt_read_design_slice(talos_rt_context *context,
-                             talos_rt_design_cursor_v1 cursor,
-                             uint64_t bitOffset, uint64_t bitWidth,
-                             uint64_t *value, uint64_t *unknown) noexcept {
+talos_rt_status talos_rt_read_design_slice(talos_rt_context *context,
+                                           talos_rt_design_cursor_v1 cursor,
+                                           uint64_t bitOffset,
+                                           uint64_t bitWidth, uint64_t *value,
+                                           uint64_t *unknown) noexcept {
   if (!context || !value || bitWidth == 0 || !context->execution)
     return TALOS_RT_INVALID_ARGUMENT;
   ContextTransaction transaction(context);
@@ -14212,8 +14172,8 @@ talos_rt_read_design_slice(talos_rt_context *context,
 
 extern "C" talos_rt_status
 talos_rt_v1_design_read(talos_rt_context *context,
-                          talos_rt_design_cursor_v1 cursor, uint64_t *value,
-                          uint64_t *unknown, uint64_t bitWidth) {
+                        talos_rt_design_cursor_v1 cursor, uint64_t *value,
+                        uint64_t *unknown, uint64_t bitWidth) {
   return accessState(context, cursor, value, unknown, bitWidth, false);
 }
 
@@ -14262,8 +14222,8 @@ extern "C" talos_rt_status talos_rt_v1_design_force(
                     const_cast<uint64_t *>(unknown), bitWidth, true, true);
     if (status == TALOS_RT_OK) {
       std::lock_guard<std::recursive_mutex> lock(context->mutex);
-      talos_rt_aot_external_write_range_unlocked(context, stateOffset,
-                                                   bitWidth, true);
+      talos_rt_aot_external_write_range_unlocked(context, stateOffset, bitWidth,
+                                                 true);
     }
     return status;
   }
@@ -14273,7 +14233,7 @@ extern "C" talos_rt_status talos_rt_v1_design_force(
 
 extern "C" talos_rt_status
 talos_rt_v1_design_release(talos_rt_context *context,
-                             talos_rt_design_cursor_v1 cursor) {
+                           talos_rt_design_cursor_v1 cursor) {
   if (!context || !context->execution)
     return TALOS_RT_INVALID_ARGUMENT;
   const Database *database = cachedDatabase(context);
@@ -14308,8 +14268,8 @@ talos_rt_v1_design_release(talos_rt_context *context,
   bool stateChanged = false;
   {
     std::lock_guard<std::recursive_mutex> lock(context->mutex);
-    signalBase = talos_rt_canonical_state_handle_unlocked(
-        context, stateOffset, bitWidth);
+    signalBase = talos_rt_canonical_state_handle_unlocked(context, stateOffset,
+                                                          bitWidth);
     if (signalBase == UINT64_MAX)
       return TALOS_RT_INVALID_HANDLE;
     for (uint64_t bit = 0; bit != bitWidth; ++bit) {
@@ -14370,8 +14330,8 @@ talos_rt_v1_design_release(talos_rt_context *context,
 
 talos_rt_status
 talos_rt_cached_vpi_type_default(const talos_rt_context *context,
-                                   talos_rt_design_cursor_v1 cursor,
-                                   VPITypeDefaultInfo *outInfo) noexcept {
+                                 talos_rt_design_cursor_v1 cursor,
+                                 VPITypeDefaultInfo *outInfo) noexcept {
   if (!context || !outInfo)
     return TALOS_RT_INVALID_ARGUMENT;
   *outInfo = {};
@@ -14421,8 +14381,8 @@ talos_rt_cached_vpi_type_default(const talos_rt_context *context,
 
 talos_rt_status
 talos_rt_cached_vpi_expression(const talos_rt_context *context,
-                                 talos_rt_design_cursor_v1 cursor,
-                                 VPIExpressionInfo *outInfo) noexcept {
+                               talos_rt_design_cursor_v1 cursor,
+                               VPIExpressionInfo *outInfo) noexcept {
   if (!context || !outInfo)
     return TALOS_RT_INVALID_ARGUMENT;
   *outInfo = {};
@@ -14554,8 +14514,7 @@ talos_rt_status talos_rt_cached_vpi_expression_use_ranges(
       uint64_t owner = 0;
       if (!expressionUseOwner(*database, root, ownerKind, owner))
         return TALOS_RT_INVALID_DESIGN;
-      if (!talos::reflection::vpiObjectSetContains(edge->targets,
-                                                     ownerKind) ||
+      if (!talos::reflection::vpiObjectSetContains(edge->targets, ownerKind) ||
           !seen.insert(owner).second)
         continue;
       ranges.push_back(

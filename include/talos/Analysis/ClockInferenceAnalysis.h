@@ -1,4 +1,5 @@
-//===- ClockInferenceAnalysis.h - Clock data flow ----------------*- C++ -*-===//
+//===- ClockInferenceAnalysis.h - Clock data flow ----------------*- C++
+//-*-===//
 
 #ifndef TALOS_ANALYSIS_CLOCKINFERENCEANALYSIS_H
 #define TALOS_ANALYSIS_CLOCKINFERENCEANALYSIS_H

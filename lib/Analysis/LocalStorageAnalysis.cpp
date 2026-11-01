@@ -39,19 +39,17 @@ invocationSuspensions(sim::SimFuncOp function,
 /// that must survive one keeps the runtime lifetime. A family defined inside
 /// an anchoring region operation is treated as crossing it.
 bool crossesSuspension(const llvm::SetVector<Value> &family,
-                       ArrayRef<Operation *> anchors,
-                       ValueLiveness &liveness) {
+                       ArrayRef<Operation *> anchors, ValueLiveness &liveness) {
   for (Operation *anchor : anchors) {
     Block *block = anchor->getBlock();
     for (Value value : family) {
       Operation *definition = value.getDefiningOp();
       if (definition && anchor->isAncestor(definition))
         return true;
-      bool liveBefore =
-          definition && definition->getBlock() == block
-              ? definition->isBeforeInBlock(anchor)
-              : value.getParentBlock() == block ||
-                    liveness.isLiveIn(value, block);
+      bool liveBefore = definition && definition->getBlock() == block
+                            ? definition->isBeforeInBlock(anchor)
+                            : value.getParentBlock() == block ||
+                                  liveness.isLiveIn(value, block);
       if (!liveBefore)
         continue;
       if (liveness.isLiveOut(value, block) ||

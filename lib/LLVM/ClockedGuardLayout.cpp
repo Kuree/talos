@@ -1,4 +1,5 @@
-//===- ClockedGuardLayout.cpp - Event-guard arms of clocked kernels --------===//
+//===- ClockedGuardLayout.cpp - Event-guard arms of clocked kernels
+//--------===//
 
 #include "talos/LLVM/ClockedGuardLayout.h"
 #include "talos/Dialect/Schedule/ClockedKernelName.h"

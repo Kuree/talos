@@ -1,4 +1,5 @@
-//===- PrivateStorageAnalysis.h - Exclusive canonical state ------*- C++ -*-===//
+//===- PrivateStorageAnalysis.h - Exclusive canonical state ------*- C++
+//-*-===//
 #ifndef TALOS_ANALYSIS_PRIVATESTORAGEANALYSIS_H
 #define TALOS_ANALYSIS_PRIVATESTORAGEANALYSIS_H
 #include "talos/Analysis/HandleDataflowAnalysis.h"

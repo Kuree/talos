@@ -17,8 +17,7 @@ inline constexpr uint32_t maxDirectStaticStateBits = 64;
 /// Process whose same-edge waits have one explicit, storage-backed
 /// phase dispatcher. Its entry is cold startup, not an eval activation
 /// preamble.
-inline constexpr auto clockedControl =
-    ::talos::schedule::Field::ClockedControl;
+inline constexpr auto clockedControl = ::talos::schedule::Field::ClockedControl;
 /// Uniform delay process normalized to private periodic clock activations.
 inline constexpr auto periodicControl =
     ::talos::schedule::Field::PeriodicControl;
@@ -48,8 +47,7 @@ inline constexpr auto boundedLoopLatch =
     ::talos::schedule::Field::BoundedLoopLatch;
 inline constexpr auto boundedLoopHeader =
     ::talos::schedule::Field::BoundedLoopHeader;
-inline constexpr auto computeKernels =
-    ::talos::schedule::Field::ComputeKernels;
+inline constexpr auto computeKernels = ::talos::schedule::Field::ComputeKernels;
 inline constexpr auto threeTierSchedule =
     ::talos::schedule::Field::ThreeTierSchedule;
 inline constexpr auto staticSpecialization =
@@ -78,8 +76,7 @@ inline constexpr auto evalTier2Convergence =
     ::talos::schedule::Field::EvalTier2Convergence;
 inline constexpr auto evalMayTerminate =
     ::talos::schedule::Field::EvalMayTerminate;
-inline constexpr auto evalInfallible =
-    ::talos::schedule::Field::EvalInfallible;
+inline constexpr auto evalInfallible = ::talos::schedule::Field::EvalInfallible;
 /// A status-returning owner whose nonzero result is a fractured cold
 /// checkpoint. The periodic prefix may call it directly when it checks that
 /// status before running any downstream owner.

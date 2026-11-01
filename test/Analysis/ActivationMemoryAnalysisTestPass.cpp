@@ -32,7 +32,7 @@ public:
     talos::analysis::HandleDataflowAnalysis handles(design);
     auto repeatable =
         talos::schedule::collectRepeatableCombinationalActivations(design,
-                                                                     handles);
+                                                                   handles);
     design.walk([&](talos::sim::SimFuncOp function) {
       llvm::errs() << "repeatable @" << function.getSymName() << " = "
                    << repeatable.contains(function.getSymNameAttr()) << '\n';
@@ -152,9 +152,7 @@ public:
   ActivationMemoryTestPass() = default;
   ActivationMemoryTestPass(const ActivationMemoryTestPass &other)
       : PassWrapper(other) {}
-  StringRef getArgument() const final {
-    return "test-talos-activation-memory";
-  }
+  StringRef getArgument() const final { return "test-talos-activation-memory"; }
   StringRef getDescription() const final {
     return "print source-ordered activation memory facts";
   }
@@ -167,10 +165,10 @@ public:
       for (auto function : design.getBody().getOps<talos::sim::SimFuncOp>()) {
         talos::analysis::ActivationMemoryAnalysis memory(
             function, handles, maximumPartitions,
-            values ? talos::analysis::ActivationMemoryAnalysis::
-                         DependencyMode::ReachingValues
-                   : talos::analysis::ActivationMemoryAnalysis::
-                         DependencyMode::Accesses);
+            values ? talos::analysis::ActivationMemoryAnalysis::DependencyMode::
+                         ReachingValues
+                   : talos::analysis::ActivationMemoryAnalysis::DependencyMode::
+                         Accesses);
         llvm::errs() << "activation @" << function.getSymName()
                      << " valid=" << memory.isValid()
                      << " complete=" << memory.hasCompleteWrites() << '\n';
@@ -277,13 +275,12 @@ public:
         auto proof =
             std::make_unique<talos::analysis::ActivationRegionAnalysis>(
                 function, handles, trace,
-                inputDependencies
-                    ? talos::analysis::ActivationMemoryAnalysis::
-                          DependencyMode::Inputs
-                : reachingValues ? talos::analysis::ActivationMemoryAnalysis::
-                                       DependencyMode::ReachingValues
-                                 : talos::analysis::ActivationMemoryAnalysis::
-                                       DependencyMode::Accesses,
+                inputDependencies ? talos::analysis::ActivationMemoryAnalysis::
+                                        DependencyMode::Inputs
+                : reachingValues  ? talos::analysis::ActivationMemoryAnalysis::
+                                        DependencyMode::ReachingValues
+                                  : talos::analysis::ActivationMemoryAnalysis::
+                                        DependencyMode::Accesses,
                 threadControl ? talos::analysis::ActivationRegionAnalysis::
                                     ControlFlowPreparation::ThreadDispatch
                               : talos::analysis::ActivationRegionAnalysis::
@@ -440,8 +437,7 @@ public:
                        << '\n';
         }
         if (regionOrder) {
-          auto order =
-              talos::analysis::getActivationRegionOrder(views, &cycle);
+          auto order = talos::analysis::getActivationRegionOrder(views, &cycle);
           llvm::errs() << "region order: "
                        << (order           ? "acyclic"
                            : cycle.empty() ? "unavailable"
@@ -481,7 +477,8 @@ private:
     if (!full.getMemory().hasValueDependencies())
       return;
     ActivationRegionAnalysis inputs(
-        function, handles, {}, ActivationMemoryAnalysis::DependencyMode::Inputs);
+        function, handles, {},
+        ActivationMemoryAnalysis::DependencyMode::Inputs);
     if (!inputs.getMemory().hasInputDependencies() ||
         full.getMemory().getValueInputs() !=
             inputs.getMemory().getValueInputs()) {

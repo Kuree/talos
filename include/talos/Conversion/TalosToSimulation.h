@@ -70,14 +70,13 @@ void buildTalosToSimulationPipeline(mlir::OpPassManager &manager);
 
 /// Populate the lowering pipeline with explicit simulation configuration.
 void buildTalosToSimulationPipeline(mlir::OpPassManager &manager,
-                                      uint32_t workers,
-                                      llvm::StringRef vpiMode);
+                                    uint32_t workers, llvm::StringRef vpiMode);
 
 /// Populate the lowering pipeline with explicit simulation and optimization
 /// configuration. `optLevel` is in the inclusive range 0 through 3.
 void buildTalosToSimulationPipeline(mlir::OpPassManager &manager,
-                                      uint32_t workers, llvm::StringRef vpiMode,
-                                      uint32_t optLevel);
+                                    uint32_t workers, llvm::StringRef vpiMode,
+                                    uint32_t optLevel);
 
 /// Populate the lowering pipeline with explicit static-state specialization.
 /// `staticSpecialization` is auto, off, or on. Auto enables the pass at O2/O3.
@@ -85,11 +84,13 @@ void buildTalosToSimulationPipeline(mlir::OpPassManager &manager,
 /// talos-sim-fuse-clocked-kernels); kernels form at O1 and above.
 /// `forwardCopies` is on, off, or census (see
 /// talos-sim-forward-copy-processes); it runs at O1 and above with VPI off.
-void buildTalosToSimulationPipeline(
-    mlir::OpPassManager &manager, uint32_t workers, llvm::StringRef vpiMode,
-    uint32_t optLevel, llvm::StringRef staticSpecialization,
-    bool earlySymbolDCE = true, llvm::StringRef clockedKernels = "deferred",
-    llvm::StringRef forwardCopies = "on");
+void buildTalosToSimulationPipeline(mlir::OpPassManager &manager,
+                                    uint32_t workers, llvm::StringRef vpiMode,
+                                    uint32_t optLevel,
+                                    llvm::StringRef staticSpecialization,
+                                    bool earlySymbolDCE = true,
+                                    llvm::StringRef clockedKernels = "deferred",
+                                    llvm::StringRef forwardCopies = "on");
 
 /// Register the aggregate serial/parallel/serial lowering pipeline.
 void registerTalosToSimulationPipeline();

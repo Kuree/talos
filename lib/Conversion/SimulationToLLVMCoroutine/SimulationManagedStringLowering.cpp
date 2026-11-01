@@ -299,13 +299,13 @@ public:
   LogicalResult
   matchAndRewrite(sim::SimStringLengthOp op, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOp(
-        op, LLVM::CallOp::create(
-                rewriter, op.getLoc(), TypeRange{rewriter.getI64Type()},
-                SymbolRefAttr::get(rewriter.getContext(),
-                                   "talos_rt_v1_string_length"),
-                adaptor.getInput().front())
-                .getResult());
+    rewriter.replaceOp(op, LLVM::CallOp::create(
+                               rewriter, op.getLoc(),
+                               TypeRange{rewriter.getI64Type()},
+                               SymbolRefAttr::get(rewriter.getContext(),
+                                                  "talos_rt_v1_string_length"),
+                               adaptor.getInput().front())
+                               .getResult());
     return success();
   }
 };
@@ -422,14 +422,14 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     auto [context, lane] = managedContextAndLane(rewriter, op.getLoc());
     (void)lane;
-    Value status = LLVM::CallOp::create(
-                       rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-                       SymbolRefAttr::get(rewriter.getContext(),
-                                          "talos_rt_v1_dump_ports"),
-                       ValueRange{context, adaptor.getPath().front(),
-                                  adaptor.getScope().front(),
-                                  adaptor.getTimescaleExponent().front()})
-                       .getResult();
+    Value status =
+        LLVM::CallOp::create(
+            rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
+            SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_dump_ports"),
+            ValueRange{context, adaptor.getPath().front(),
+                       adaptor.getScope().front(),
+                       adaptor.getTimescaleExponent().front()})
+            .getResult();
     reportManagedStatus(rewriter, op.getLoc(), context, status);
     rewriter.eraseOp(op);
     return success();
@@ -708,21 +708,20 @@ public:
     Value output = entryAlloca(rewriter, op.getLoc(), i32, 1, 4);
     LLVM::StoreOp::create(rewriter, op.getLoc(),
                           adaptor.getPlanCursor().front(), output, 4);
-    Value status =
-        LLVM::CallOp::create(
-            rewriter, op.getLoc(), TypeRange{i32},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_scan_dynamic_validate"),
-            ValueRange{
-                context, adaptor.getFormat().front(),
-                adaptor.getPlanCursor().front(),
-                llvmConstant(rewriter, op.getLoc(), i32, op.getFile() ? 1 : 0),
-                llvmConstant(rewriter, op.getLoc(), i32,
-                             op.getFinalize() ? 1 : 0),
-                llvmConstant(rewriter, op.getLoc(), i64,
-                             op.getAllowedSpecifiers()),
-                output})
-            .getResult();
+    Value status = LLVM::CallOp::create(
+                       rewriter, op.getLoc(), TypeRange{i32},
+                       SymbolRefAttr::get(rewriter.getContext(),
+                                          "talos_rt_v1_scan_dynamic_validate"),
+                       ValueRange{context, adaptor.getFormat().front(),
+                                  adaptor.getPlanCursor().front(),
+                                  llvmConstant(rewriter, op.getLoc(), i32,
+                                               op.getFile() ? 1 : 0),
+                                  llvmConstant(rewriter, op.getLoc(), i32,
+                                               op.getFinalize() ? 1 : 0),
+                                  llvmConstant(rewriter, op.getLoc(), i64,
+                                               op.getAllowedSpecifiers()),
+                                  output})
+                       .getResult();
     reportManagedStatus(rewriter, op.getLoc(), context, status);
     rewriter.replaceOp(
         op, LLVM::LoadOp::create(rewriter, op.getLoc(), i32, output, 4));

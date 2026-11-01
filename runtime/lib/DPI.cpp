@@ -39,8 +39,7 @@ bool validKind(talos_rt_design_register_kind kind) {
   return kind == TALOS_RT_DBREG_BITS || kind == TALOS_RT_DBREG_LOGIC ||
          kind == TALOS_RT_DBREG_STATUS || kind == TALOS_RT_DBREG_STRING ||
          kind == TALOS_RT_DBREG_REAL32 || kind == TALOS_RT_DBREG_REAL64 ||
-         kind == TALOS_RT_DBREG_OPEN_ARRAY ||
-         kind == TALOS_RT_DBREG_AGGREGATE;
+         kind == TALOS_RT_DBREG_OPEN_ARRAY || kind == TALOS_RT_DBREG_AGGREGATE;
 }
 
 bool validReal(talos_rt_design_register_kind kind, uint8_t flags,
@@ -56,8 +55,8 @@ bool validStringWord(const uint64_t *value) {
   char scratch[8];
   const char *bytes = nullptr;
   uint64_t size = 0;
-  return value && talos_rt_v1_string_view(*value, scratch, &bytes, &size) ==
-                      TALOS_RT_OK;
+  return value &&
+         talos_rt_v1_string_view(*value, scratch, &bytes, &size) == TALOS_RT_OK;
 }
 
 bool validInput(const talos_rt_import_input_v1 &input) {
@@ -80,7 +79,7 @@ bool validInput(const talos_rt_import_input_v1 &input) {
       input.kind == TALOS_RT_DBREG_REAL64)
     return validReal(input.kind, input.flags, input.bit_width, input.unknown);
   return input.kind == TALOS_RT_DBREG_LOGIC ? input.unknown != nullptr
-                                              : input.unknown == nullptr;
+                                            : input.unknown == nullptr;
 }
 
 bool validOutput(const talos_rt_import_output_v1 &output) {
@@ -88,8 +87,7 @@ bool validOutput(const talos_rt_import_output_v1 &output) {
       (output.flags & ~uint8_t{TALOS_RT_DBREG_SIGNED}) != 0 ||
       output.reserved != 0 || !output.value)
     return false;
-  uint32_t width =
-      output.kind == TALOS_RT_DBREG_STATUS ? 32 : output.bit_width;
+  uint32_t width = output.kind == TALOS_RT_DBREG_STATUS ? 32 : output.bit_width;
   if (width == 0 || output.bit_width != width ||
       output.limb_count != limbCount(width))
     return false;
@@ -105,7 +103,7 @@ bool validOutput(const talos_rt_import_output_v1 &output) {
     return validReal(output.kind, output.flags, output.bit_width,
                      output.unknown);
   return output.kind == TALOS_RT_DBREG_LOGIC ? output.unknown != nullptr
-                                               : output.unknown == nullptr;
+                                             : output.unknown == nullptr;
 }
 
 void normalize(talos_rt_import_output_v1 &output) {
@@ -115,8 +113,7 @@ void normalize(talos_rt_import_output_v1 &output) {
       output.kind == TALOS_RT_DBREG_OPEN_ARRAY ||
       output.kind == TALOS_RT_DBREG_AGGREGATE)
     return;
-  uint32_t width =
-      output.kind == TALOS_RT_DBREG_STATUS ? 32 : output.bit_width;
+  uint32_t width = output.kind == TALOS_RT_DBREG_STATUS ? 32 : output.bit_width;
   unsigned tail = width % 64;
   if (tail != 0) {
     uint64_t mask = (uint64_t{1} << tail) - 1;
@@ -139,7 +136,7 @@ DpiScopeHandle *scopeFromOpaque(ActiveDpiCall *call, const svScope scope) {
 } // namespace
 
 DpiScopeHandle *talos_rt_find_dpi_scope(talos_rt_context *context,
-                                          uint64_t id) {
+                                        uint64_t id) {
   if (!context || id >= context->dpiScopes.size())
     return nullptr;
   return context->dpiScopes[static_cast<size_t>(id)].get();
@@ -194,22 +191,19 @@ talos_rt_status talos_rt_initialize_dpi_scopes(
 }
 
 static talos_rt_status
-importCallImpl(talos_rt_context *context,
-               const talos_rt_import_site_v1 *site,
+importCallImpl(talos_rt_context *context, const talos_rt_import_site_v1 *site,
                const talos_rt_import_input_v1 *inputs, uint32_t inputCount,
                talos_rt_import_output_v1 *outputs, uint32_t outputCount,
                bool exposeContext) {
   if (!context || !site || (inputs == nullptr && inputCount != 0) ||
       (outputs == nullptr && outputCount != 0))
     return TALOS_RT_INVALID_ARGUMENT;
-  constexpr uint32_t validFlags = TALOS_RT_IMPORT_PURE |
-                                  TALOS_RT_IMPORT_CONTEXT |
-                                  TALOS_RT_IMPORT_TASK;
+  constexpr uint32_t validFlags =
+      TALOS_RT_IMPORT_PURE | TALOS_RT_IMPORT_CONTEXT | TALOS_RT_IMPORT_TASK;
   if (site->version != TALOS_RT_VERSION || site->import_id == 0 ||
       site->reserved != 0 || (site->flags & ~validFlags) != 0 ||
       ((site->flags & TALOS_RT_IMPORT_PURE) != 0 &&
-       (site->flags & (TALOS_RT_IMPORT_CONTEXT | TALOS_RT_IMPORT_TASK)) !=
-           0) ||
+       (site->flags & (TALOS_RT_IMPORT_CONTEXT | TALOS_RT_IMPORT_TASK)) != 0) ||
       exposeContext != ((site->flags & TALOS_RT_IMPORT_CONTEXT) != 0) ||
       !validBytes(site->source_file, site->source_file_size))
     return TALOS_RT_INVALID_ARGUMENT;
@@ -333,36 +327,36 @@ extern "C" talos_rt_status talos_rt_v1_import_call_noncontext(
 
 extern "C" talos_rt_status talos_rt_v1_import_call_guarded(
     talos_rt_status priorStatus, talos_rt_context *context,
-    const talos_rt_import_site_v1 *site,
-    const talos_rt_import_input_v1 *inputs, uint32_t inputCount,
-    talos_rt_import_output_v1 *outputs, uint32_t outputCount) {
+    const talos_rt_import_site_v1 *site, const talos_rt_import_input_v1 *inputs,
+    uint32_t inputCount, talos_rt_import_output_v1 *outputs,
+    uint32_t outputCount) {
   if (priorStatus != TALOS_RT_OK)
     return priorStatus;
   return talos_rt_v1_import_call(context, site, inputs, inputCount, outputs,
-                                   outputCount);
+                                 outputCount);
 }
 
 extern "C" talos_rt_status talos_rt_v1_import_call_noncontext_guarded(
     talos_rt_status priorStatus, talos_rt_context *context,
-    const talos_rt_import_site_v1 *site,
-    const talos_rt_import_input_v1 *inputs, uint32_t inputCount,
-    talos_rt_import_output_v1 *outputs, uint32_t outputCount) {
+    const talos_rt_import_site_v1 *site, const talos_rt_import_input_v1 *inputs,
+    uint32_t inputCount, talos_rt_import_output_v1 *outputs,
+    uint32_t outputCount) {
   if (priorStatus != TALOS_RT_OK)
     return priorStatus;
   return talos_rt_v1_import_call_noncontext(context, site, inputs, inputCount,
-                                              outputs, outputCount);
+                                            outputs, outputCount);
 }
 
 extern "C" talos_rt_status
 talos_rt_v1_dpi_string_copy(talos_rt_context *context, const char *string,
-                              talos_rt_string_v1 *outString) {
+                            talos_rt_string_v1 *outString) {
   if (!context || !string || !outString)
     return TALOS_RT_INVALID_ARGUMENT;
   talos_rt_gc_lane_v1 *lane = talos_rt_v1_gc_current_lane(context);
   if (!lane)
     return TALOS_RT_INVALID_LIFECYCLE;
   return talos_rt_v1_string_create(lane, string, std::strlen(string),
-                                     outString);
+                                   outString);
 }
 
 extern "C" const char *svDpiVersion(void) { return "1800-2005"; }

@@ -5,11 +5,11 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
 #include "talos/Reflection/VPIObjectModel.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <cstdlib>
@@ -186,7 +186,7 @@ TEST(GeneratedDesignDatabase, ClassActuals) {
     uint32_t kind = 0;
     bool statement = false;
     EXPECT_EQ(talos_rt_cached_vpi_relation_range(runtime, source, selector,
-                                                   iterate, &range),
+                                                 iterate, &range),
               TALOS_RT_OK);
     EXPECT_LT(ordinal, range.count);
     EXPECT_EQ(talos_rt_cached_vpi_relation_target(
@@ -264,8 +264,7 @@ TEST(GeneratedDesignDatabase, ClassActuals) {
     auto invalid = execution;
     invalid.design_database = bytes.data();
     invalid.design_database_size = bytes.size();
-    EXPECT_EQ(talos_rt_v1_design_validate(&invalid),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&invalid), TALOS_RT_INVALID_DESIGN);
   };
   uint64_t operand = relationRow(packed(operationCursor), vpiOperand);
   uint64_t rhs = relationRow(packed(pActual), vpiRhs);

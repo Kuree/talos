@@ -133,7 +133,8 @@ VPIObjectRefAttr::verify(llvm::function_ref<InFlightDiagnostic()> emitError,
                          FlatSymbolRefAttr symbol) {
   if (kind == VPIObjectRefKind::Symbol) {
     if (id || !symbol)
-      return emitError() << "symbol VPI object reference requires only a symbol";
+      return emitError()
+             << "symbol VPI object reference requires only a symbol";
     return success();
   }
   if (kind == VPIObjectRefKind::DefinitionMember) {

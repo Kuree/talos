@@ -351,9 +351,9 @@ recognizeBoundedLoopImpl(Block *header,
   Value tested;
   if (auto compare = condition.getCondition().getDefiningOp<arith::CmpIOp>()) {
     Value lhs = forMarking ? unwrapUnsignedInduction(compare.getLhs())
-                          : compare.getLhs();
+                           : compare.getLhs();
     Value rhs = forMarking ? unwrapUnsignedInduction(compare.getRhs())
-                          : compare.getRhs();
+                           : compare.getRhs();
     tested = isa_and_nonnull<BlockArgument>(lhs) &&
                      cast<BlockArgument>(lhs).getOwner() == header
                  ? lhs
@@ -392,7 +392,7 @@ recognizeBoundedLoopImpl(Block *header,
   APInt limitMin, limitMax;
   if (auto compare = condition.getCondition().getDefiningOp<arith::CmpIOp>()) {
     bool reversed = (forMarking ? unwrapUnsignedInduction(compare.getRhs())
-                               : compare.getRhs()) == induction;
+                                : compare.getRhs()) == induction;
     Value bound = reversed ? compare.getLhs() : compare.getRhs();
     Value compared = reversed ? compare.getRhs() : compare.getLhs();
     if (compare->getBlock() != header)
@@ -638,7 +638,8 @@ recognizeBoundedLoopImpl(Block *header,
           continue;
         }
         if (auto truncate = dyn_cast<arith::TruncIOp>(op)) {
-          if (truncate.getOverflowFlags() != arith::IntegerOverflowFlags::none ||
+          if (truncate.getOverflowFlags() !=
+                  arith::IntegerOverflowFlags::none ||
               cast<IntegerType>(truncate.getType()).getWidth() < inductionWidth)
             return std::nullopt;
           arithmetic = truncate.getIn();

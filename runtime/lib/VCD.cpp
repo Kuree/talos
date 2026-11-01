@@ -208,7 +208,7 @@ std::string identifierCode(uint64_t index) {
 // is, in every execution tier. `nativeStateValue` is only a lazily synced
 // mirror -- reading it makes bytecode designs dump a waveform frozen at X.
 talos_rt_status dumpPlanes(const talos_rt_context *context,
-                             const uint8_t *&value, const uint8_t *&unknown) {
+                           const uint8_t *&value, const uint8_t *&unknown) {
   const talos_rt_execution_descriptor_v1 &execution = *context->execution;
   const talos_rt_native_schedule_plan *plan = context->nativeSchedulePlan;
   if (plan && plan->state_bit_count == execution.state_bit_count &&
@@ -417,8 +417,7 @@ void finishLimit(VCDTraceState &state) {
 }
 
 template <typename State>
-int32_t resolveTimescale(const talos_rt_context *context,
-                         const State &state) {
+int32_t resolveTimescale(const talos_rt_context *context, const State &state) {
   if (state.timescaleSet)
     return state.timescaleExponent;
   if (context->execution && context->execution->dpi_time_precision != 0)
@@ -567,8 +566,8 @@ bool typeIsReal(const DesignDatabaseCache &database, uint64_t typeOffset) {
 bool typeFourState(const DesignDatabaseCache &database, uint64_t typeOffset) {
   if (!isTypeOffset(database, typeOffset))
     return true;
-  return (typeFlags(database, typeOffset) &
-          TALOS_RT_DESIGN_TYPE_FOUR_STATE) != 0;
+  return (typeFlags(database, typeOffset) & TALOS_RT_DESIGN_TYPE_FOUR_STATE) !=
+         0;
 }
 
 // An unpacked array occupies a contiguous canonical range but is not a value:
@@ -1029,8 +1028,7 @@ void updateShadow(VCDTraceState &state, const uint8_t *valuePlane,
 // settled-slot differencer: `$dumpall` is observable even while ordinary
 // dumping is off, and a call before the pending initial sample must not consume
 // that end-of-slot `$dumpvars` sample.
-talos_rt_status emitDumpAll(talos_rt_context *context,
-                              VCDTraceState &state) {
+talos_rt_status emitDumpAll(talos_rt_context *context, VCDTraceState &state) {
   if (!state.file || !state.planBuilt)
     return TALOS_RT_OK;
   finishLimit(state);
@@ -1064,8 +1062,7 @@ VCDTraceState *traceState(talos_rt_context *context) {
   return context ? context->vcdState : nullptr;
 }
 
-talos_rt_status ensureState(talos_rt_context *context,
-                              VCDTraceState *&state) {
+talos_rt_status ensureState(talos_rt_context *context, VCDTraceState *&state) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   if (!context->vcdState) {
@@ -1087,7 +1084,7 @@ talos_rt_status ensureState(talos_rt_context *context,
 
 template <typename State>
 talos_rt_status openFile(talos_rt_context *context, State &state,
-                           const std::string &path) {
+                         const std::string &path) {
   closeFile(state);
   state.file = std::fopen(path.c_str(), "wb");
   if (!state.file)
@@ -1288,8 +1285,7 @@ void emitEVCDOff(EVCDSession &state, const TraceVariable &variable) {
   append(state, state.scratch);
 }
 
-talos_rt_status buildEVCDPlan(talos_rt_context *context,
-                                EVCDSession &state) {
+talos_rt_status buildEVCDPlan(talos_rt_context *context, EVCDSession &state) {
   if (state.planBuilt)
     return TALOS_RT_OK;
   const DesignDatabaseCache &database = context->designDatabase;
@@ -1346,12 +1342,10 @@ talos_rt_status buildEVCDPlan(talos_rt_context *context,
     std::sort(ports.begin(), ports.end(), [&](uint64_t lhs, uint64_t rhs) {
       uint32_t lhsCaps = read32(database.data + lhs + 4);
       uint32_t rhsCaps = read32(database.data + rhs + 4);
-      uint32_t lhsOrdinal =
-          (lhsCaps & TALOS_RT_DESIGN_CAP_PORT_ORDINAL_MASK) >>
-          TALOS_RT_DESIGN_CAP_PORT_ORDINAL_SHIFT;
-      uint32_t rhsOrdinal =
-          (rhsCaps & TALOS_RT_DESIGN_CAP_PORT_ORDINAL_MASK) >>
-          TALOS_RT_DESIGN_CAP_PORT_ORDINAL_SHIFT;
+      uint32_t lhsOrdinal = (lhsCaps & TALOS_RT_DESIGN_CAP_PORT_ORDINAL_MASK) >>
+                            TALOS_RT_DESIGN_CAP_PORT_ORDINAL_SHIFT;
+      uint32_t rhsOrdinal = (rhsCaps & TALOS_RT_DESIGN_CAP_PORT_ORDINAL_MASK) >>
+                            TALOS_RT_DESIGN_CAP_PORT_ORDINAL_SHIFT;
       return std::tie(lhsOrdinal, lhs) < std::tie(rhsOrdinal, rhs);
     });
     for (uint64_t offset : ports) {
@@ -1436,8 +1430,7 @@ talos_rt_status buildEVCDPlan(talos_rt_context *context,
 }
 
 talos_rt_status emitEVCDSlot(talos_rt_context *context, EVCDSession &state,
-                               bool forceAll,
-                               std::string_view checkpoint = {}) {
+                             bool forceAll, std::string_view checkpoint = {}) {
   if (!state.file || state.limitReached || !state.planBuilt)
     return TALOS_RT_OK;
   const uint8_t *valuePlane = nullptr;
@@ -1516,7 +1509,7 @@ talos_rt_status emitEVCDSlot(talos_rt_context *context, EVCDSession &state,
 }
 
 talos_rt_status prepareEVCDSession(talos_rt_context *context,
-                                     EVCDSession &session) {
+                                   EVCDSession &session) {
   if (session.planBuilt)
     return TALOS_RT_OK;
   if (session.planFailed || session.selections.empty())
@@ -1621,9 +1614,9 @@ void talos_rt_dump_destroy(talos_rt_context *context) noexcept {
   }
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_dump_open(talos_rt_context *context, const uint8_t *path,
-                        uint64_t pathSize) {
+extern "C" talos_rt_status talos_rt_v1_dump_open(talos_rt_context *context,
+                                                 const uint8_t *path,
+                                                 uint64_t pathSize) {
   if (!context || (!path && pathSize != 0) || pathSize == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   ContextTransaction transaction(context);
@@ -1650,7 +1643,7 @@ talos_rt_v1_dump_open(talos_rt_context *context, const uint8_t *path,
 
 extern "C" talos_rt_status
 talos_rt_v1_dump_open_string(talos_rt_context *context,
-                               talos_rt_string_v1 path) {
+                             talos_rt_string_v1 path) {
   char scratch[8] = {};
   const char *bytes = nullptr;
   uint64_t size = 0;
@@ -1662,8 +1655,8 @@ talos_rt_v1_dump_open_string(talos_rt_context *context,
              : status;
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_dump_timescale(talos_rt_context *context, int32_t exponent) {
+extern "C" talos_rt_status talos_rt_v1_dump_timescale(talos_rt_context *context,
+                                                      int32_t exponent) {
   if (!context || exponent > 2 || exponent < -15)
     return TALOS_RT_INVALID_ARGUMENT;
   ContextTransaction transaction(context);
@@ -1687,9 +1680,10 @@ talos_rt_v1_dump_timescale(talos_rt_context *context, int32_t exponent) {
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_ARGUMENT; }
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_dump_vars(talos_rt_context *context, uint64_t levels,
-                        const uint8_t *scope, uint64_t scopeSize) {
+extern "C" talos_rt_status talos_rt_v1_dump_vars(talos_rt_context *context,
+                                                 uint64_t levels,
+                                                 const uint8_t *scope,
+                                                 uint64_t scopeSize) {
   if (!context || (!scope && scopeSize != 0))
     return TALOS_RT_INVALID_ARGUMENT;
   ContextTransaction transaction(context);
@@ -1723,8 +1717,7 @@ talos_rt_v1_dump_vars(talos_rt_context *context, uint64_t levels,
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_ARGUMENT; }
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_dump_all(talos_rt_context *context) {
+extern "C" talos_rt_status talos_rt_v1_dump_all(talos_rt_context *context) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   ContextTransaction transaction(context);
@@ -1743,8 +1736,8 @@ talos_rt_v1_dump_all(talos_rt_context *context) {
   TALOS_RT_CATCH_ALL { return TALOS_RT_IO_ERROR; }
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_dump_control(talos_rt_context *context, uint32_t enabled) {
+extern "C" talos_rt_status talos_rt_v1_dump_control(talos_rt_context *context,
+                                                    uint32_t enabled) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   ContextTransaction transaction(context);
@@ -1792,8 +1785,8 @@ talos_rt_v1_dump_control(talos_rt_context *context, uint32_t enabled) {
   TALOS_RT_CATCH_ALL { return TALOS_RT_IO_ERROR; }
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_dump_limit(talos_rt_context *context, uint64_t bytes) {
+extern "C" talos_rt_status talos_rt_v1_dump_limit(talos_rt_context *context,
+                                                  uint64_t bytes) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   ContextTransaction transaction(context);
@@ -1813,8 +1806,7 @@ talos_rt_v1_dump_limit(talos_rt_context *context, uint64_t bytes) {
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_ARGUMENT; }
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_dump_flush(talos_rt_context *context) {
+extern "C" talos_rt_status talos_rt_v1_dump_flush(talos_rt_context *context) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   ContextTransaction transaction(context);
@@ -1829,8 +1821,7 @@ talos_rt_v1_dump_flush(talos_rt_context *context) {
   TALOS_RT_CATCH_ALL { return TALOS_RT_IO_ERROR; }
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_dump_close(talos_rt_context *context) {
+extern "C" talos_rt_status talos_rt_v1_dump_close(talos_rt_context *context) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   ContextTransaction transaction(context);
@@ -1847,9 +1838,10 @@ talos_rt_v1_dump_close(talos_rt_context *context) {
   TALOS_RT_CATCH_ALL { return TALOS_RT_IO_ERROR; }
 }
 
-extern "C" talos_rt_status talos_rt_v1_dump_ports(
-    talos_rt_context *context, talos_rt_string_v1 pathValue,
-    talos_rt_string_v1 scopeValue, int32_t timescaleExponent) {
+extern "C" talos_rt_status talos_rt_v1_dump_ports(talos_rt_context *context,
+                                                  talos_rt_string_v1 pathValue,
+                                                  talos_rt_string_v1 scopeValue,
+                                                  int32_t timescaleExponent) {
   if (!context || timescaleExponent > 2 || timescaleExponent < -15)
     return TALOS_RT_INVALID_ARGUMENT;
   char pathScratch[8] = {};
@@ -1863,7 +1855,7 @@ extern "C" talos_rt_status talos_rt_v1_dump_ports(
   if (status != TALOS_RT_OK)
     return status;
   status = talos_rt_v1_string_view(scopeValue, scopeScratch, &scopeBytes,
-                                     &scopeSize);
+                                   &scopeSize);
   if (status != TALOS_RT_OK || pathSize == 0 || scopeSize == 0)
     return status == TALOS_RT_OK ? TALOS_RT_INVALID_ARGUMENT : status;
   ContextTransaction transaction(context);
@@ -1925,8 +1917,8 @@ extern "C" talos_rt_status talos_rt_v1_dump_ports(
 
 extern "C" talos_rt_status
 talos_rt_v1_dump_ports_control(talos_rt_context *context,
-                                 talos_rt_string_v1 pathValue,
-                                 uint32_t action, uint64_t value) {
+                               talos_rt_string_v1 pathValue, uint32_t action,
+                               uint64_t value) {
   if (!context || action > 4)
     return TALOS_RT_INVALID_ARGUMENT;
   char scratch[8] = {};

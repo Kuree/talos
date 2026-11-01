@@ -54,8 +54,7 @@ public:
 template <typename T>
 struct IndexKey<
     T, std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool>>> {
-  template <typename Bytes>
-  static void append(Bytes &bytes, T value) {
+  template <typename Bytes> static void append(Bytes &bytes, T value) {
     using U = std::make_unsigned_t<T>;
     U bits = static_cast<U>(value);
     if constexpr (std::is_signed_v<T>)
@@ -65,14 +64,12 @@ struct IndexKey<
   }
 };
 template <> struct IndexKey<bool> {
-  template <typename Bytes>
-  static void append(Bytes &bytes, bool value) {
+  template <typename Bytes> static void append(Bytes &bytes, bool value) {
     bytes.push_back(value);
   }
 };
 template <typename T> struct IndexKey<T, std::enable_if_t<std::is_enum_v<T>>> {
-  template <typename Bytes>
-  static void append(Bytes &bytes, T value) {
+  template <typename Bytes> static void append(Bytes &bytes, T value) {
     IndexKey<std::underlying_type_t<T>>::append(
         bytes, static_cast<std::underlying_type_t<T>>(value));
   }
@@ -89,8 +86,7 @@ template <> struct IndexKey<std::string> {
 };
 template <typename T, size_t N> struct IndexKey<std::array<T, N>> {
   template <typename Bytes>
-  static void append(Bytes &bytes,
-                     const std::array<T, N> &value) {
+  static void append(Bytes &bytes, const std::array<T, N> &value) {
     for (const auto &element : value)
       IndexKey<T>::append(bytes, element);
   }
@@ -107,8 +103,7 @@ template <typename T> struct IndexKey<std::vector<T>> {
 };
 template <typename... T> struct IndexKey<std::tuple<T...>> {
   template <typename Bytes>
-  static void append(Bytes &bytes,
-                     const std::tuple<T...> &value) {
+  static void append(Bytes &bytes, const std::tuple<T...> &value) {
     std::apply(
         [&](const auto &...element) {
           (IndexKey<std::decay_t<decltype(element)>>::append(bytes, element),
@@ -119,8 +114,7 @@ template <typename... T> struct IndexKey<std::tuple<T...>> {
 };
 template <typename A, typename B> struct IndexKey<std::pair<A, B>> {
   template <typename Bytes>
-  static void append(Bytes &bytes,
-                     const std::pair<A, B> &value) {
+  static void append(Bytes &bytes, const std::pair<A, B> &value) {
     IndexKey<std::decay_t<A>>::append(bytes, value.first);
     IndexKey<std::decay_t<B>>::append(bytes, value.second);
   }

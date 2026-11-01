@@ -655,8 +655,7 @@ validateSemanticDesign(ModuleOp module, bool pruneUnusedCoverage) {
     }
   });
   if (!result.root) {
-    module.emitError(
-        "talos-sim-prepare requires an elaborated talos.sv root");
+    module.emitError("talos-sim-prepare requires an elaborated talos.sv root");
     return failure();
   }
 

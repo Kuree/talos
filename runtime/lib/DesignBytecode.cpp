@@ -116,10 +116,10 @@ struct PendingDesignActivation {
 };
 
 talos_rt_status releaseCapturedAutomaticStates(const Image &image,
-                                                 uint32_t functionIndex,
-                                                 talos_rt_context *context,
-                                                 const uint8_t *canonicalFrame,
-                                                 uint64_t canonicalFrameSize) {
+                                               uint32_t functionIndex,
+                                               talos_rt_context *context,
+                                               const uint8_t *canonicalFrame,
+                                               uint64_t canonicalFrameSize) {
   if (!context || !canonicalFrame)
     return TALOS_RT_OK;
   Function function = functionAt(image, functionIndex);
@@ -227,8 +227,7 @@ PendingDesignActivation::~PendingDesignActivation() noexcept {
       for (auto state = context->nativeAutomaticStates.begin();
            state != context->nativeAutomaticStates.end();)
         if (state->second.referenceCount == 0) {
-          talos_rt_erase_automatic_bookkeeping_unlocked(context,
-                                                          state->first);
+          talos_rt_erase_automatic_bookkeeping_unlocked(context, state->first);
           state = context->nativeAutomaticStates.erase(state);
         } else {
           ++state;
@@ -720,7 +719,7 @@ FastOp decodeFastOp(const Image &image, const Function &function,
     if (same(destination, source0) && source1.valid) {
       op.kind = instruction.opcode == TALOS_RT_DB_SHL    ? kFastShl
                 : instruction.opcode == TALOS_RT_DB_LSHR ? kFastLshr
-                                                           : kFastAshr;
+                                                         : kFastAshr;
       use(destination, op.destination, kFastDestinationFourState);
       use(source0, op.source0, kFastSource0FourState);
       use(source1, op.source1, kFastSource1FourState);
@@ -785,7 +784,7 @@ FastOp decodeFastOp(const Image &image, const Function &function,
         displacement > UINT32_MAX)
       break;
     op.kind = instruction.opcode == TALOS_RT_DB_LOAD_FRAME ? kFastLoadFrame
-                                                             : kFastStoreFrame;
+                                                           : kFastStoreFrame;
     use(value, op.destination, kFastDestinationFourState);
     op.width = static_cast<uint8_t>(value.width);
     op.source1 = static_cast<uint32_t>(displacement);
@@ -843,10 +842,10 @@ FastOp decodeFastOp(const Image &image, const Function &function,
     bool reportsChange =
         (instruction.flags & TALOS_RT_DB_STORE_STATE_CHANGED) != 0;
     if (source1.valid && handle(instruction.source0) &&
-        (instruction.flags &
-         ~(TALOS_RT_DB_STORE_STATE_CHANGED |
-           TALOS_RT_DB_STORE_STATE_CONTINUOUS |
-           TALOS_RT_DB_STORE_STATE_DEFER_NET_RESOLUTION)) == 0 &&
+        (instruction.flags & ~(TALOS_RT_DB_STORE_STATE_CHANGED |
+                               TALOS_RT_DB_STORE_STATE_CONTINUOUS |
+                               TALOS_RT_DB_STORE_STATE_DEFER_NET_RESOLUTION)) ==
+            0 &&
         (!reportsChange || destination.valid)) {
       op.kind = kFastStoreState;
       op.width = static_cast<uint8_t>(source1.width);
@@ -1076,8 +1075,7 @@ inline bool executeFastOp(const FastOp &op, uint8_t *data,
                     predicate == TALOS_RT_DB_CMP_WILD_NE;
     bool value = false, unknownResult = false;
     if (!deterministic && !wildcard && (lu | ru)) {
-      if (predicate == TALOS_RT_DB_CMP_EQ ||
-          predicate == TALOS_RT_DB_CMP_NE) {
+      if (predicate == TALOS_RT_DB_CMP_EQ || predicate == TALOS_RT_DB_CMP_NE) {
         if (((lv ^ rv) & ~(lu | ru)) != 0) {
           fastWrite(data, op, predicate == TALOS_RT_DB_CMP_NE, 0);
           break;
@@ -1088,8 +1086,8 @@ inline bool executeFastOp(const FastOp &op, uint8_t *data,
     }
     bool negativeLeft = (lv >> (op.sourceWidth - 1)) & 1;
     bool negativeRight = (rv >> (op.sourceWidth - 1)) & 1;
-    bool signedOrder = predicate >= TALOS_RT_DB_CMP_SLT &&
-                       predicate <= TALOS_RT_DB_CMP_SGE;
+    bool signedOrder =
+        predicate >= TALOS_RT_DB_CMP_SLT && predicate <= TALOS_RT_DB_CMP_SGE;
     int compared = lv == rv ? 0 : lv < rv ? -1 : 1;
     if (signedOrder && negativeLeft != negativeRight)
       compared = negativeLeft ? -1 : 1;
@@ -1118,8 +1116,7 @@ inline bool executeFastOp(const FastOp &op, uint8_t *data,
       break;
     case TALOS_RT_DB_CMP_CASE_EQ:
     case TALOS_RT_DB_CMP_CASE_NE:
-      value =
-          (lv == rv && lu == ru) == (predicate == TALOS_RT_DB_CMP_CASE_EQ);
+      value = (lv == rv && lu == ru) == (predicate == TALOS_RT_DB_CMP_CASE_EQ);
       break;
     case TALOS_RT_DB_CMP_CASEZ_EQ:
     case TALOS_RT_DB_CMP_CASEXZ_EQ: {
@@ -1390,9 +1387,9 @@ inline bool executeFastOp(const FastOp &op, uint8_t *data,
         return true;
       }
       talos_rt_invalidate_signal_snapshots_unlocked(context, published,
-                                                      op.width);
+                                                    op.width);
       if (!talos_rt_notify_observer_signal_unlocked(context, published,
-                                                      op.width)) {
+                                                    op.width)) {
         status = context->schedulerStatus;
         return true;
       }
@@ -1541,15 +1538,13 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
         talos_rt_managed_word_v1 word = 0;
         std::memcpy(&word, frame.data + source.offset, sizeof(word));
         auto *object = talos_rt_object_from_managed_word(word);
-        BuiltinClassKind expected =
-            destination.flags == TALOS_RT_DBREG_MAILBOX
-                ? BuiltinClassKind::Mailbox
-                : BuiltinClassKind::Semaphore;
+        BuiltinClassKind expected = destination.flags == TALOS_RT_DBREG_MAILBOX
+                                        ? BuiltinClassKind::Mailbox
+                                        : BuiltinClassKind::Semaphore;
         if (word != talos_rt_managed_word_from_object(object) ||
             (object &&
              (!talos_rt_managed_object_belongs_to(context, object) ||
-              talos_rt_managed_object_kind(object) !=
-                  TALOS_RT_MANAGED_CLASS ||
+              talos_rt_managed_object_kind(object) != TALOS_RT_MANAGED_CLASS ||
               talos_rt_builtin_class_kind_unlocked(object) != expected)))
           return TALOS_RT_INVALID_BYTECODE;
         std::memcpy(frame.data + destination.offset, &word, sizeof(word));
@@ -1649,10 +1644,9 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
       uint64_t left = 0, right = 0;
       if (readKnownScalar(image, frame, instruction.source0, left) &&
           readKnownScalar(image, frame, instruction.source1, right)) {
-        uint64_t result = instruction.opcode == TALOS_RT_DB_AND ? left & right
-                          : instruction.opcode == TALOS_RT_DB_OR
-                              ? left | right
-                              : left ^ right;
+        uint64_t result = instruction.opcode == TALOS_RT_DB_AND  ? left & right
+                          : instruction.opcode == TALOS_RT_DB_OR ? left | right
+                                                                 : left ^ right;
         if (writeKnownScalar(image, frame, instruction.destination, result))
           break;
       }
@@ -1851,8 +1845,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
       bool wildcardEquality = instruction.flags == TALOS_RT_DB_CMP_WILD_EQ ||
                               instruction.flags == TALOS_RT_DB_CMP_WILD_NE;
       Logic result{1,
-                   layout(instruction.destination).kind ==
-                       TALOS_RT_DBREG_LOGIC,
+                   layout(instruction.destination).kind == TALOS_RT_DBREG_LOGIC,
                    {0},
                    {0}};
       if (!deterministic && !wildcardEquality &&
@@ -1994,8 +1987,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
     case TALOS_RT_DB_EXTRACT: {
       Logic input = read(instruction.source0);
       Layout destination = layout(instruction.destination);
-      Logic result{destination.width,
-                   destination.kind == TALOS_RT_DBREG_LOGIC,
+      Logic result{destination.width, destination.kind == TALOS_RT_DBREG_LOGIC,
                    LimbVector(limbCount(destination.width)),
                    LimbVector(limbCount(destination.width))};
       uint64_t low = instruction.immediate;
@@ -2302,8 +2294,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
     case TALOS_RT_DB_CONCAT: {
       Logic left = read(instruction.source0), right = read(instruction.source1);
       Layout destination = layout(instruction.destination);
-      Logic result{destination.width,
-                   destination.kind == TALOS_RT_DBREG_LOGIC,
+      Logic result{destination.width, destination.kind == TALOS_RT_DBREG_LOGIC,
                    LimbVector(limbCount(destination.width)),
                    LimbVector(limbCount(destination.width))};
       if (uint64_t{left.width} + right.width != destination.width)
@@ -2544,15 +2535,12 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
         context->managedValueOverridePossible.store(true,
                                                     std::memory_order_relaxed);
       bool isAssignOverride =
-          isOverride &&
-          (instruction.flags & TALOS_RT_DB_OVERRIDE_KIND_MASK) ==
-              TALOS_RT_DB_OVERRIDE_ASSIGN;
+          isOverride && (instruction.flags & TALOS_RT_DB_OVERRIDE_KIND_MASK) ==
+                            TALOS_RT_DB_OVERRIDE_ASSIGN;
       bool dynamicOverride =
-          isOverride &&
-          (instruction.flags & TALOS_RT_DB_OVERRIDE_DYNAMIC) != 0;
-      bool overrideClaim =
-          dynamicOverride &&
-          (instruction.flags & TALOS_RT_DB_OVERRIDE_CLAIM) != 0;
+          isOverride && (instruction.flags & TALOS_RT_DB_OVERRIDE_DYNAMIC) != 0;
+      bool overrideClaim = dynamicOverride && (instruction.flags &
+                                               TALOS_RT_DB_OVERRIDE_CLAIM) != 0;
       uint64_t overrideOwner = 0;
       if (dynamicOverride) {
         Logic owner = read(instruction.source2);
@@ -2632,11 +2620,11 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
       if (eventValue && (descriptorKind != TALOS_RT_DESCRIPTOR_STORAGE ||
                          isContinuous || instruction.flags != 0))
         return TALOS_RT_INVALID_HANDLE;
-      if (isOverride && (local || automatic ||
-                         (descriptorKind != TALOS_RT_DESCRIPTOR_STORAGE &&
-                          descriptorKind != TALOS_RT_DESCRIPTOR_NET) ||
-                         (isAssignOverride &&
-                          descriptorKind != TALOS_RT_DESCRIPTOR_STORAGE)))
+      if (isOverride &&
+          (local || automatic ||
+           (descriptorKind != TALOS_RT_DESCRIPTOR_STORAGE &&
+            descriptorKind != TALOS_RT_DESCRIPTOR_NET) ||
+           (isAssignOverride && descriptorKind != TALOS_RT_DESCRIPTOR_STORAGE)))
         return TALOS_RT_INVALID_HANDLE;
       std::vector<uint64_t> retiredOverrideOwners;
       if (isOverride && descriptorKind == TALOS_RT_DESCRIPTOR_NET) {
@@ -2662,7 +2650,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
                    !talos_rt_override_owner_matches_unlocked(
                        context,
                        talos_rt_canonical_net_bit_unlocked(context,
-                                                             absolute + offset),
+                                                           absolute + offset),
                        false, overrideOwner))
               ++offset;
           }
@@ -2675,7 +2663,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
                    talos_rt_override_owner_matches_unlocked(
                        context,
                        talos_rt_canonical_net_bit_unlocked(context,
-                                                             absolute + offset),
+                                                           absolute + offset),
                        false, overrideOwner))
               ++offset;
           } else {
@@ -2705,8 +2693,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
           for (uint64_t offset = 0; offset != value.width; ++offset)
             talos_rt_claim_override_range_unlocked(
                 context,
-                talos_rt_canonical_net_bit_unlocked(context,
-                                                      absolute + offset),
+                talos_rt_canonical_net_bit_unlocked(context, absolute + offset),
                 1, false, dynamicOverride ? overrideOwner : 0,
                 retiredOverrideOwners);
         }
@@ -2762,8 +2749,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
             if (instruction.opcode == TALOS_RT_DB_LOAD_STATE)
               managed = talos_rt_managed_word_from_object(state.managedValue);
             else {
-              previous =
-                  talos_rt_managed_word_from_object(state.managedValue);
+              previous = talos_rt_managed_word_from_object(state.managedValue);
               state.managedValue = talos_rt_object_from_managed_word(managed);
             }
           } else {
@@ -2819,8 +2805,8 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
                       sizeof(managed));
         else if (previous != managed) {
           uint64_t changedHandle =
-              automatic ? (automaticBase & ~uint64_t{UINT32_MAX}) |
-                              static_cast<uint32_t>(start)
+              automatic       ? (automaticBase & ~uint64_t{UINT32_MAX}) |
+                                    static_cast<uint32_t>(start)
               : boundedStatic ? encodeStaticHandle(staticID, start)
                               : static_cast<uint64_t>(start);
           if (changedHandle == UINT64_MAX)
@@ -2828,13 +2814,13 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
           if (!talos_rt_publish_signal_occurrence_unlocked(
                   context, changedHandle, 64, TALOS_RT_SIGNAL_CHANGE))
             return context->schedulerStatus;
-          talos_rt_invalidate_signal_snapshots_unlocked(context,
-                                                          changedHandle, 64);
+          talos_rt_invalidate_signal_snapshots_unlocked(context, changedHandle,
+                                                        64);
           if (!talos_rt_latch_conditional_signal_range_unlocked(
                   context, changedHandle, 64, TALOS_RT_SIGNAL_CHANGE))
             return context->schedulerStatus;
-          if (!talos_rt_notify_observer_signal_unlocked(context,
-                                                          changedHandle, 64))
+          if (!talos_rt_notify_observer_signal_unlocked(context, changedHandle,
+                                                        64))
             return context->schedulerStatus;
           if (++context->schedulerEpoch == 0)
             context->schedulerEpoch = 1;
@@ -2976,8 +2962,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
             if (state.managedRootRegistered) {
               if (start != 0)
                 return TALOS_RT_INVALID_HANDLE;
-              previous =
-                  talos_rt_managed_word_from_object(state.managedValue);
+              previous = talos_rt_managed_word_from_object(state.managedValue);
             } else {
               if (byteOffset > state.value.size() ||
                   sizeof(previous) > state.value.size() - byteOffset)
@@ -3001,8 +2986,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
           if (talos_rt_validate_string(context, previous) != TALOS_RT_OK ||
               talos_rt_validate_string(context, next) != TALOS_RT_OK)
             return TALOS_RT_INVALID_HANDLE;
-          equalStringContents =
-              talos_rt_v1_string_compare(previous, next) == 0;
+          equalStringContents = talos_rt_v1_string_compare(previous, next) == 0;
         }
         bool realValue = valueLayout.kind == TALOS_RT_DBREG_REAL32 ||
                          valueLayout.kind == TALOS_RT_DBREG_REAL64;
@@ -3271,8 +3255,8 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
             if (!local && !realValue && !equalStringContents)
               transitions.push_back(
                   {bitIndex,
-                   automatic ? (automaticBase & ~uint64_t{UINT32_MAX}) |
-                                   static_cast<uint32_t>(absolute)
+                   automatic       ? (automaticBase & ~uint64_t{UINT32_MAX}) |
+                                         static_cast<uint32_t>(absolute)
                    : boundedStatic ? encodeStaticHandle(staticID, coordinate)
                                    : absolute,
                    oldValue, oldUnknown, newValue, newUnknown});
@@ -3319,20 +3303,20 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
           }
           if (changed) {
             uint64_t realHandle =
-                automatic ? (automaticBase & ~uint64_t{UINT32_MAX}) |
-                                static_cast<uint32_t>(start)
+                automatic       ? (automaticBase & ~uint64_t{UINT32_MAX}) |
+                                      static_cast<uint32_t>(start)
                 : boundedStatic ? encodeStaticHandle(staticID, start)
                                 : static_cast<uint64_t>(start);
             if (!talos_rt_publish_signal_occurrence_unlocked(
                     context, realHandle, value.width, TALOS_RT_SIGNAL_CHANGE))
               return context->schedulerStatus;
             talos_rt_invalidate_signal_snapshots_unlocked(context, realHandle,
-                                                            value.width);
+                                                          value.width);
             if (!talos_rt_latch_conditional_signal_range_unlocked(
                     context, realHandle, value.width, TALOS_RT_SIGNAL_CHANGE))
               return context->schedulerStatus;
             if (!talos_rt_notify_observer_signal_unlocked(context, realHandle,
-                                                            value.width))
+                                                          value.width))
               return context->schedulerStatus;
             if (++context->schedulerEpoch == 0)
               context->schedulerEpoch = 1;
@@ -3355,9 +3339,9 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
                   &sequence))
             return context->schedulerStatus;
           talos_rt_invalidate_signal_snapshots_unlocked(context, handle,
-                                                          value.width);
+                                                        value.width);
           if (!talos_rt_notify_observer_signal_unlocked(context, handle,
-                                                          value.width))
+                                                        value.width))
             return context->schedulerStatus;
         }
         if (!transitions.empty()) {
@@ -3539,12 +3523,12 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
             talos_rt_release_override_range_unlocked(
                 context,
                 talos_rt_canonical_net_bit_unlocked(context,
-                                                      storageBegin + offset),
+                                                    storageBegin + offset),
                 1, releaseAssign, retiredOverrideOwners);
         } else {
-          talos_rt_release_override_range_unlocked(context, storageBegin,
-                                                     width, releaseAssign,
-                                                     retiredOverrideOwners);
+          talos_rt_release_override_range_unlocked(context, storageBegin, width,
+                                                   releaseAssign,
+                                                   retiredOverrideOwners);
         }
         for (uint64_t bitIndex = 0; bitIndex != width; ++bitIndex) {
           uint64_t storageBit = storageBegin + bitIndex;
@@ -3603,8 +3587,8 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
                   context, publishedHandle, width, packed.changed(),
                   packed.posedge(), packed.negedge(), 0, &sequence))
             return context->schedulerStatus;
-          talos_rt_invalidate_signal_snapshots_unlocked(
-              context, publishedHandle, width);
+          talos_rt_invalidate_signal_snapshots_unlocked(context,
+                                                        publishedHandle, width);
           if (talos_rt_has_conditional_signal_waiters(context)) {
             for (const PendingTransition &transition : transitions)
               context->signalValueSnapshots[transition.handle] = {
@@ -3618,8 +3602,8 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
                 return context->schedulerStatus;
             }
           }
-          if (!talos_rt_notify_observer_signal_unlocked(
-                  context, publishedHandle, width))
+          if (!talos_rt_notify_observer_signal_unlocked(context,
+                                                        publishedHandle, width))
             return context->schedulerStatus;
         }
       }
@@ -3676,8 +3660,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
         return TALOS_RT_INVALID_BYTECODE;
       }
       talos_rt_fragment_action_v1 callerAction = *action;
-      *action = {
-          TALOS_RT_FRAGMENT_CONTINUE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
+      *action = {TALOS_RT_FRAGMENT_CONTINUE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
       talos_rt_status status =
           executeFunction(image, callee, context, canonicalFrame,
                           canonicalFrameSize, calleeFunction.firstInstruction,
@@ -3709,12 +3692,11 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
             receiver, interfaceID, ordinal, instruction.immediate, &method);
       } else {
         status = talos_rt_v1_method_resolve(receiver, instruction.destination,
-                                              instruction.immediate, &method);
+                                            instruction.immediate, &method);
       }
       if (status != TALOS_RT_OK)
         return status;
-      if (!method ||
-          method->bytecode_function == TALOS_RT_METHOD_NO_BYTECODE ||
+      if (!method || method->bytecode_function == TALOS_RT_METHOD_NO_BYTECODE ||
           method->bytecode_function >= image.functionCount)
         return TALOS_RT_TIER_UNAVAILABLE;
       Function calleeFunction = functionAt(image, method->bytecode_function);
@@ -3747,8 +3729,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
         return TALOS_RT_INVALID_BYTECODE;
       }
       talos_rt_fragment_action_v1 callerAction = *action;
-      *action = {
-          TALOS_RT_FRAGMENT_CONTINUE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
+      *action = {TALOS_RT_FRAGMENT_CONTINUE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
       status = executeFunction(
           image, callee, context, canonicalFrame, canonicalFrameSize,
           calleeFunction.firstInstruction, budget, action, state,
@@ -3863,7 +3844,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
             receiver, interfaceID, ordinal, instruction.immediate, &method);
       } else {
         status = talos_rt_v1_method_resolve(receiver, instruction.destination,
-                                              instruction.immediate, &method);
+                                            instruction.immediate, &method);
       }
       if (status != TALOS_RT_OK)
         return status;
@@ -4058,8 +4039,8 @@ installDesignReadyCohort(talos_rt_context *context,
   context->designReadyCohortExactScan = false;
 }
 
-TALOS_RT_FEATURE_TEXT void
-suppressDesignReadyCohort(talos_rt_context *context, bool persistent) {
+TALOS_RT_FEATURE_TEXT void suppressDesignReadyCohort(talos_rt_context *context,
+                                                     bool persistent) {
   if (!context->designReadyCohort)
     context->designReadyCohort = std::make_unique<DesignReadyCohortState>();
   DesignReadyCohortState &cohort = *context->designReadyCohort;
@@ -4171,9 +4152,8 @@ talos_rt_status talos_rt_execute_design_observer(
         const talos_rt_observer_capture_abi_v1 &abi =
             descriptor->capture_abi[index];
         if (abi.kind == TALOS_RT_OBSERVER_CAPTURE_ARGUMENT_REF) {
-          if (layout.kind != TALOS_RT_DBREG_ARGUMENT_REF ||
-              layout.size != 24 || captures[index].payload1 > 2 ||
-              captures[index].payload2 != 0)
+          if (layout.kind != TALOS_RT_DBREG_ARGUMENT_REF || layout.size != 24 ||
+              captures[index].payload1 > 2 || captures[index].payload2 != 0)
             return TALOS_RT_INVALID_BYTECODE;
           std::memcpy(address, &captures[index], 24);
           continue;
@@ -4275,9 +4255,9 @@ talos_rt_status talos_rt_execute_design_observer(
     state.frames[frame.id] = &frame;
     StepBudget budget{UINT64_MAX, 0};
     talos_rt_fragment_action_v1 action{};
-    talos_rt_status status = executeFunction(image, frame, context, nullptr,
-                                               0, function.firstInstruction,
-                                               budget, &action, state, nullptr);
+    talos_rt_status status = executeFunction(image, frame, context, nullptr, 0,
+                                             function.firstInstruction, budget,
+                                             &action, state, nullptr);
     if (status != TALOS_RT_OK)
       return status;
     Layout result = layoutAt(image, function, function.argumentCount);
@@ -4295,10 +4275,9 @@ talos_rt_status talos_rt_execute_design_observer(
 
 talos_rt_status talos_rt_execute_design_export(
     const talos_rt_execution_descriptor_v1 &execution,
-    const talos_rt_export_descriptor_v1 &descriptor,
-    talos_rt_context *context, const talos_rt_import_input_v1 *inputs,
-    uint32_t inputCount, talos_rt_import_output_v1 *outputs,
-    uint32_t outputCount) noexcept {
+    const talos_rt_export_descriptor_v1 &descriptor, talos_rt_context *context,
+    const talos_rt_import_input_v1 *inputs, uint32_t inputCount,
+    talos_rt_import_output_v1 *outputs, uint32_t outputCount) noexcept {
   if (!context || inputCount != descriptor.input_count ||
       outputCount != descriptor.output_count || (inputCount != 0 && !inputs) ||
       (outputCount != 0 && !outputs) ||
@@ -4321,8 +4300,7 @@ talos_rt_status talos_rt_execute_design_export(
         (function.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) != 0)
       return TALOS_RT_INVALID_BYTECODE;
     Layout contextLayout = layoutAt(image, function, 0);
-    if (contextLayout.kind != TALOS_RT_DBREG_HANDLE ||
-        contextLayout.size != 32)
+    if (contextLayout.kind != TALOS_RT_DBREG_HANDLE || contextLayout.size != 32)
       return TALOS_RT_INVALID_BYTECODE;
 
     auto matches = [](const Layout &layout, uint8_t kind, uint8_t flags,
@@ -4377,8 +4355,7 @@ talos_rt_status talos_rt_execute_design_export(
                              talos_rt_import_output_v1 &output) {
       if (!matches(layout, output.kind, output.flags, output.bit_width) ||
           output.limb_count != limbCount(output.bit_width) || !output.value ||
-          (layout.kind == TALOS_RT_DBREG_LOGIC) !=
-              (output.unknown != nullptr))
+          (layout.kind == TALOS_RT_DBREG_LOGIC) != (output.unknown != nullptr))
         return false;
       uint64_t bytes = output.limb_count * sizeof(uint64_t);
       if (output.kind == TALOS_RT_DBREG_REAL32 ||
@@ -4397,8 +4374,7 @@ talos_rt_status talos_rt_execute_design_export(
       Layout layout = layoutAt(image, function, function.argumentCount + index);
       if (!matches(layout, output.kind, output.flags, output.bit_width) ||
           output.limb_count != limbCount(output.bit_width) || !output.value ||
-          (layout.kind == TALOS_RT_DBREG_LOGIC) !=
-              (output.unknown != nullptr))
+          (layout.kind == TALOS_RT_DBREG_LOGIC) != (output.unknown != nullptr))
         return TALOS_RT_INVALID_BYTECODE;
     }
     if (function.scratchSize > std::numeric_limits<size_t>::max())
@@ -4416,9 +4392,9 @@ talos_rt_status talos_rt_execute_design_export(
     state.frames[frame.id] = &frame;
     StepBudget budget{UINT64_MAX, 0};
     talos_rt_fragment_action_v1 action{};
-    talos_rt_status status = executeFunction(image, frame, context, nullptr,
-                                               0, function.firstInstruction,
-                                               budget, &action, state, nullptr);
+    talos_rt_status status = executeFunction(image, frame, context, nullptr, 0,
+                                             function.firstInstruction, budget,
+                                             &action, state, nullptr);
     if (status != TALOS_RT_OK)
       return status;
     for (uint32_t index = 0; index != outputCount; ++index)
@@ -4435,11 +4411,10 @@ talos_rt_status talos_rt_execute_design_export(
 
 talos_rt_status talos_rt_execute_design_export_task(
     const talos_rt_execution_descriptor_v1 &execution,
-    const talos_rt_export_descriptor_v1 &descriptor,
-    talos_rt_context *context, const talos_rt_import_input_v1 *inputs,
-    uint32_t inputCount, talos_rt_import_output_v1 *outputs,
-    uint32_t outputCount, const uint8_t *directions,
-    const int64_t *const *aggregatePlans,
+    const talos_rt_export_descriptor_v1 &descriptor, talos_rt_context *context,
+    const talos_rt_import_input_v1 *inputs, uint32_t inputCount,
+    talos_rt_import_output_v1 *outputs, uint32_t outputCount,
+    const uint8_t *directions, const int64_t *const *aggregatePlans,
     const uint64_t *aggregatePlanWords) noexcept {
   if (!context || inputCount != descriptor.input_count ||
       outputCount != descriptor.output_count ||
@@ -4550,8 +4525,7 @@ talos_rt_status talos_rt_execute_design_export_task(
       CaptureRecord capture = captures[argument];
       if (!matches(layout, input.kind, input.flags, input.bit_width) ||
           input.limb_count != limbCount(input.bit_width) || !input.value ||
-          (layout.kind == TALOS_RT_DBREG_LOGIC) !=
-              (input.unknown != nullptr) ||
+          (layout.kind == TALOS_RT_DBREG_LOGIC) != (input.unknown != nullptr) ||
           capture.valueOffset == UINT64_MAX ||
           capture.valueOffset > scratchOffset ||
           capture.planeSize > scratchOffset - capture.valueOffset)
@@ -4623,8 +4597,8 @@ talos_rt_status talos_rt_execute_design_export_task(
             reinterpret_cast<const uint8_t *>(inputs[index].unknown),
             aggregatePlans[index], aggregatePlanWords[index], &handle);
       } else if (inputs[index].kind == TALOS_RT_DBREG_STRING) {
-        talos_rt_managed_root_slot_v1 root{
-            0, TALOS_RT_MANAGED_ROOT_KIND_STRING, 0};
+        talos_rt_managed_root_slot_v1 root{0, TALOS_RT_MANAGED_ROOT_KIND_STRING,
+                                           0};
         status = talos_rt_v1_native_state_alloc_with_typed_roots(
             context, inputs[index].bit_width,
             reinterpret_cast<const uint8_t *>(inputs[index].value), nullptr,
@@ -4680,8 +4654,7 @@ talos_rt_status talos_rt_execute_design_export_task(
     }
     // The scheduled task now owns every retained capture reference.
     retained.clear();
-    talos_rt_status status =
-        talos_rt_run_dpi_export_task_logical(context, id);
+    talos_rt_status status = talos_rt_run_dpi_export_task_logical(context, id);
     if (status == TALOS_RT_OK) {
       for (uint32_t index = 0; index != outputCount; ++index) {
         talos_rt_import_output_v1 &destination = outputs[index];
@@ -4711,10 +4684,10 @@ talos_rt_status talos_rt_execute_design_export_task(
 }
 
 static talos_rt_status executeDesignBytecode(
-    const talos_rt_design_bytecode_entry_v1 &entry,
-    talos_rt_context *context, void *frame, uint64_t frameSize,
-    uint64_t scratchOffset, uint64_t scratchSize, uint32_t continuation,
-    uint64_t instructionLimit, talos_rt_fragment_action_v1 *outAction,
+    const talos_rt_design_bytecode_entry_v1 &entry, talos_rt_context *context,
+    void *frame, uint64_t frameSize, uint64_t scratchOffset,
+    uint64_t scratchSize, uint32_t continuation, uint64_t instructionLimit,
+    talos_rt_fragment_action_v1 *outAction,
     std::unique_ptr<PendingDesignActivation> *pendingActivation) noexcept {
   if (!outAction || (frameSize != 0 && !frame))
     return TALOS_RT_INVALID_ARGUMENT;
@@ -4743,8 +4716,7 @@ static talos_rt_status executeDesignBytecode(
     talos_rt_status status = executeFunction(
         image, top, context, static_cast<uint8_t *>(frame), scratchOffset, *pc,
         budget, outAction, state, pendingActivation);
-    if (status != TALOS_RT_OK ||
-        outAction->kind != TALOS_RT_FRAGMENT_TERMINATE)
+    if (status != TALOS_RT_OK || outAction->kind != TALOS_RT_FRAGMENT_TERMINATE)
       return status;
     status = releaseCapturedAutomaticStates(image, entry.function, context,
                                             static_cast<const uint8_t *>(frame),
@@ -4756,10 +4728,9 @@ static talos_rt_status executeDesignBytecode(
 }
 
 talos_rt_status talos_rt_execute_design_bytecode(
-    const talos_rt_design_bytecode_entry_v1 &entry,
-    talos_rt_context *context, void *frame, uint64_t frameSize,
-    uint64_t scratchOffset, uint64_t scratchSize, uint32_t continuation,
-    uint64_t instructionLimit,
+    const talos_rt_design_bytecode_entry_v1 &entry, talos_rt_context *context,
+    void *frame, uint64_t frameSize, uint64_t scratchOffset,
+    uint64_t scratchSize, uint32_t continuation, uint64_t instructionLimit,
     talos_rt_fragment_action_v1 *outAction) noexcept {
   return executeDesignBytecode(entry, context, frame, frameSize, scratchOffset,
                                scratchSize, continuation, instructionLimit,
@@ -4776,9 +4747,9 @@ struct CancelledLogicalDesignActivation {
 };
 
 talos_rt_status cancelLogicalProcessTree(talos_rt_context *context,
-                                           uint64_t root,
-                                           uint64_t preservedActive,
-                                           bool &preserved) {
+                                         uint64_t root,
+                                         uint64_t preservedActive,
+                                         bool &preserved) {
   TALOS_RT_TRY {
     preserved = false;
     std::unordered_set<uint64_t> targets;
@@ -4855,7 +4826,7 @@ talos_rt_status cancelLogicalProcessTree(talos_rt_context *context,
                                                   process.random);
         context->killedNativeProcesses.insert(process.token);
         talos_rt_program_complete_unlocked(context, token,
-                                             process.programOwner);
+                                           process.programOwner);
         if (context->logicalProcessParentsWithChildren.erase(token))
           killedParents.emplace_back(token, process.parent);
         if (!process.started)
@@ -4883,8 +4854,7 @@ talos_rt_status cancelLogicalProcessTree(talos_rt_context *context,
           continue;
         context->terminatedDesignTasks.insert(task.id, task.random);
         context->killedDesignTasks.insert(task.id);
-        talos_rt_program_complete_unlocked(context, task.id,
-                                             task.programOwner);
+        talos_rt_program_complete_unlocked(context, task.id, task.programOwner);
         if (context->logicalProcessParentsWithChildren.erase(task.id))
           killedParents.emplace_back(task.id, task.parent);
         if (!task.started)
@@ -4948,8 +4918,7 @@ talos_rt_status cancelLogicalProcessTree(talos_rt_context *context,
         context->designTaskFrames.release(std::move(activation.frame));
     }
     for (talos_rt_process_instance_v1 *instance : nativeInstances) {
-      talos_rt_status status =
-          talos_rt_v1_process_instance_destroy(instance);
+      talos_rt_status status = talos_rt_v1_process_instance_destroy(instance);
       if (result == TALOS_RT_OK && status != TALOS_RT_OK)
         result = status;
     }
@@ -4981,8 +4950,7 @@ extern "C" talos_rt_status talos_rt_v1_process_control(
       // its ready/deadline inventory stale.
       if (context->nativeSchedulePlan)
         return TALOS_RT_TIER_UNAVAILABLE;
-      bool native =
-          (logicalProcess & TALOS_RT_LOGICAL_PROCESS_NATIVE_TAG) != 0;
+      bool native = (logicalProcess & TALOS_RT_LOGICAL_PROCESS_NATIVE_TAG) != 0;
       uint64_t nativeToken =
           logicalProcess & ~TALOS_RT_LOGICAL_PROCESS_NATIVE_TAG;
       bool terminated =
@@ -5011,8 +4979,7 @@ extern "C" talos_rt_status talos_rt_v1_process_control(
           if (kind == TALOS_RT_PROCESS_CONTROL_RESUME &&
               found->explicitlySuspended)
             talos_rt_resensitize_process_unlocked(context, *found);
-          found->explicitlySuspended =
-              kind == TALOS_RT_PROCESS_CONTROL_SUSPEND;
+          found->explicitlySuspended = kind == TALOS_RT_PROCESS_CONTROL_SUSPEND;
           context->nativePollCandidates.insert(nativeToken);
         } else {
           if (context->scheduledDesignTaskIndices.size() !=
@@ -5246,8 +5213,7 @@ talos_rt_v1_scheduler_disable_children(talos_rt_context *context) {
         context->designTaskFrames.release(std::move(task.frame));
     }
     for (talos_rt_process_instance_v1 *instance : nativeInstances) {
-      talos_rt_status status =
-          talos_rt_v1_process_instance_destroy(instance);
+      talos_rt_status status = talos_rt_v1_process_instance_destroy(instance);
       if (result == TALOS_RT_OK && status != TALOS_RT_OK)
         result = status;
     }
@@ -5258,9 +5224,9 @@ talos_rt_v1_scheduler_disable_children(talos_rt_context *context) {
 }
 
 static talos_rt_status controlDisable(talos_rt_context *context,
-                                        uint64_t targetID, uint64_t activation,
-                                        uint32_t allActivations,
-                                        uint64_t *outSelected) {
+                                      uint64_t targetID, uint64_t activation,
+                                      uint32_t allActivations,
+                                      uint64_t *outSelected) {
   if (outSelected)
     *outSelected = 0;
   uint64_t selected = 0;
@@ -5645,7 +5611,7 @@ static talos_rt_status controlDisable(talos_rt_context *context,
                              ? found->second.vpiFrameDepth
                              : 0;
         return talos_rt_vpi_frame_unwind_process(context, logicalProcess,
-                                                   depth);
+                                                 depth);
       };
       if (!cancelCurrent && trim != context->activeControls.size()) {
         auto status =
@@ -5718,7 +5684,7 @@ static talos_rt_status controlDisable(talos_rt_context *context,
         for (size_t index = trim; index != context->activeControls.size();
              ++index)
           talos_rt_release_control_unlocked(context,
-                                              context->activeControls[index]);
+                                            context->activeControls[index]);
         context->activeControls.resize(trim);
       }
       for (ScheduledProcess &process : context->scheduledProcesses) {
@@ -5733,8 +5699,7 @@ static talos_rt_status controlDisable(talos_rt_context *context,
           if (status != TALOS_RT_OK)
             return status;
           if (resume->control == 0)
-            talos_rt_flush_deferred_immediate_reports_unlocked(context,
-                                                                 token);
+            talos_rt_flush_deferred_immediate_reports_unlocked(context, token);
           size_t owner = nativeResumeOwner(process, resume->control);
           talos_rt_process_instance_v1 *selected = process.instance;
           if (owner != process.callers.size()) {
@@ -5770,8 +5735,7 @@ static talos_rt_status controlDisable(talos_rt_context *context,
               context, process.signalSubscriptions, process.token, false);
           for (size_t index = resume->control; index != process.controls.size();
                ++index)
-            talos_rt_release_control_unlocked(context,
-                                                process.controls[index]);
+            talos_rt_release_control_unlocked(context, process.controls[index]);
           process.controls.resize(resume->control);
           process.suspendKind = TALOS_RT_SUSPEND_NONE;
           process.waitOffset = 0;
@@ -5816,8 +5780,7 @@ static talos_rt_status controlDisable(talos_rt_context *context,
               context, process.signalSubscriptions, process.token, false);
           for (size_t index = unwind->control; index != process.controls.size();
                ++index)
-            talos_rt_release_control_unlocked(context,
-                                                process.controls[index]);
+            talos_rt_release_control_unlocked(context, process.controls[index]);
           process.controls.resize(unwind->control);
           process.suspendKind = TALOS_RT_SUSPEND_NONE;
           process.waitOffset = 0;
@@ -5845,8 +5808,7 @@ static talos_rt_status controlDisable(talos_rt_context *context,
         ++context->schedulerDeadProcessCount;
         context->schedulerCompactionPending = true;
         if (token == current) {
-          talos_rt_release_controls_unlocked(context,
-                                               context->activeControls);
+          talos_rt_release_controls_unlocked(context, context->activeControls);
           context->activeControls.clear();
         } else {
           talos_rt_release_controls_unlocked(context, process.controls);
@@ -5866,7 +5828,7 @@ static talos_rt_status controlDisable(talos_rt_context *context,
             return status;
           if (resume->control == 0)
             talos_rt_flush_deferred_immediate_reports_unlocked(context,
-                                                                 task.id);
+                                                               task.id);
           size_t owner = designResumeOwner(task, resume->control);
           if (owner != task.callers.size()) {
             designTasks.push_back({task.id, task.function, task.scratchOffset,
@@ -5956,8 +5918,7 @@ static talos_rt_status controlDisable(talos_rt_context *context,
         if (context->logicalProcessParentsWithChildren.erase(task.id))
           killedParents.emplace_back(task.id, task.parent);
         if (task.id == current) {
-          talos_rt_release_controls_unlocked(context,
-                                               context->activeControls);
+          talos_rt_release_controls_unlocked(context, context->activeControls);
           context->activeControls.clear();
         } else {
           talos_rt_release_controls_unlocked(context, task.controls);
@@ -6009,8 +5970,7 @@ static talos_rt_status controlDisable(talos_rt_context *context,
         context->designTaskFrames.release(std::move(task.frame));
     }
     for (talos_rt_process_instance_v1 *instance : nativeInstances) {
-      talos_rt_status status =
-          talos_rt_v1_process_instance_destroy(instance);
+      talos_rt_status status = talos_rt_v1_process_instance_destroy(instance);
       if (result == TALOS_RT_OK && status != TALOS_RT_OK)
         result = status;
     }
@@ -6024,7 +5984,7 @@ static talos_rt_status controlDisable(talos_rt_context *context,
 
 extern "C" talos_rt_status
 talos_rt_v1_control_disable(talos_rt_context *context, uint64_t targetID,
-                              uint64_t activation, uint32_t allActivations) {
+                            uint64_t activation, uint32_t allActivations) {
   return controlDisable(context, targetID, activation, allActivations, nullptr);
 }
 
@@ -6169,8 +6129,9 @@ inspectDesignTaskReadiness(talos_rt_context *context,
   return TALOS_RT_OK;
 }
 
-PostObservedPromotion talos_rt_promote_post_observed_design_task_unlocked(
-    talos_rt_context *context, uint64_t taskID) {
+PostObservedPromotion
+talos_rt_promote_post_observed_design_task_unlocked(talos_rt_context *context,
+                                                    uint64_t taskID) {
   auto indexed = context->scheduledDesignTaskIndices.find(taskID);
   if (indexed == context->scheduledDesignTaskIndices.end() ||
       indexed->second >= context->scheduledDesignTasks.size())
@@ -6239,7 +6200,7 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
     TALOS_RT_TRY {
       if (taskDequeued && context->execution) {
         talos_rt_design_bytecode_entry_v1 entry{context->execution,
-                                                  task.function, 0};
+                                                task.function, 0};
         Image image;
         if (loadValidatedImage(entry, context, image)) {
           if (!currentFrameReleased && !task.frame.empty() &&
@@ -6350,8 +6311,8 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
         readyCohortBuild->ready.reserve(context->designPollCandidates.size());
       }
       bool directExactScan = !selectedFromReadyCohort && !collectReadyCohort;
-      auto scanExactDesignCandidates = [&]() __attribute__((always_inline))
-                                           ->talos_rt_status {
+      auto scanExactDesignCandidates =
+          [&]() __attribute__((always_inline)) -> talos_rt_status {
         // Keep the ordinary and negative-admission path in the original scan
         // body. This is the dominant generic-scheduler path and must not pay
         // an outlined feature-scanner call or its altered register layout.
@@ -6587,8 +6548,7 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
       if (!context->schedulerRunningFinals &&
           isReactiveSchedulerRegion(task.queuedRegion))
         setSchedulerDrainingReactive(context, true);
-      bool resuming =
-          task.started && task.suspendKind != TALOS_RT_SUSPEND_NONE;
+      bool resuming = task.started && task.suspendKind != TALOS_RT_SUSPEND_NONE;
       if (!task.started)
         talos_rt_unregister_unstarted_actor(context, task.phase, task.id);
       // Keep a direct wait indexed while its task executes. The task may
@@ -6631,7 +6591,7 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
       context->activeControls = std::move(task.controls);
     }
     talos_rt_design_bytecode_entry_v1 entry{context->execution, task.function,
-                                              0};
+                                            0};
     talos_rt_fragment_action_v1 action{};
     std::unique_ptr<PendingDesignActivation> pendingActivation;
     talos_rt_status status = executeDesignBytecode(
@@ -6677,8 +6637,7 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
         if (releaseStatus != TALOS_RT_OK)
           return abandonTask(releaseStatus);
       }
-      action = {
-          TALOS_RT_FRAGMENT_TERMINATE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
+      action = {TALOS_RT_FRAGMENT_TERMINATE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
       status = TALOS_RT_OK;
     }
     std::optional<uint32_t> nextScheduleRank;
@@ -6721,17 +6680,15 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
       case TALOS_RT_FRAGMENT_SUSPEND: {
         if (action.suspend_kind == TALOS_RT_SUSPEND_OBSERVER) {
           if ((action.flags & ~kResumeActionFlags) != 0 ||
-              action.payload % alignof(talos_rt_computed_wait_record_v1) !=
-                  0 ||
+              action.payload % alignof(talos_rt_computed_wait_record_v1) != 0 ||
               action.payload > task.scratchOffset ||
               sizeof(talos_rt_computed_wait_record_v1) >
                   task.scratchOffset - action.payload) {
             finalizeStatus = TALOS_RT_INVALID_FRAME;
             break;
           }
-          auto *computed =
-              reinterpret_cast<talos_rt_computed_wait_record_v1 *>(
-                  task.frame.data() + action.payload);
+          auto *computed = reinterpret_cast<talos_rt_computed_wait_record_v1 *>(
+              task.frame.data() + action.payload);
           if (!talos_rt_validate_computed_wait_record(
                   context->execution, computed,
                   task.scratchOffset - action.payload)) {
@@ -6745,9 +6702,9 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
           task.signalTriggered = false;
           task.startupProcess = false;
           task.urgent = false;
-          if (!talos_rt_next_queued_region(
-                  task.homeRegion, action.suspend_kind, 1, action.flags,
-                  task.queuedRegion, task.postObserved)) {
+          if (!talos_rt_next_queued_region(task.homeRegion, action.suspend_kind,
+                                           1, action.flags, task.queuedRegion,
+                                           task.postObserved)) {
             finalizeStatus = TALOS_RT_INVALID_BYTECODE;
             break;
           }
@@ -6793,8 +6750,7 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
         bool slotFinal =
             (wait->flags & TALOS_RT_WAIT_CLOCK_OCCURRENCE_SLOT_FINAL) != 0;
         bool mailboxWait = action.suspend_kind == TALOS_RT_SUSPEND_MAILBOX;
-        bool semaphoreWait =
-            action.suspend_kind == TALOS_RT_SUSPEND_SEMAPHORE;
+        bool semaphoreWait = action.suspend_kind == TALOS_RT_SUSPEND_SEMAPHORE;
         bool eventOrderWait =
             action.suspend_kind == TALOS_RT_SUSPEND_EVENT_ORDER;
         bool validFlags =
@@ -6876,8 +6832,7 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
           bool observerCondition =
               iffCondition &&
               waitEntries[index].edge >= TALOS_RT_WAIT_CONDITION_OBSERVER &&
-              waitEntries[index].edge <=
-                  TALOS_RT_WAIT_CONDITION_OBSERVER_LAST;
+              waitEntries[index].edge <= TALOS_RT_WAIT_CONDITION_OBSERVER_LAST;
           if (observerCondition) {
             const talos_rt_observer_descriptor_v1 *descriptor =
                 talos::process::findObserverDescriptor(
@@ -6924,8 +6879,8 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
           }
         }
         if (finalizeStatus == TALOS_RT_OK &&
-            (((wait->flags & TALOS_RT_WAIT_CLOCK_OCCURRENCE_OBSERVERS) !=
-              0) != hasObserverCondition))
+            (((wait->flags & TALOS_RT_WAIT_CLOCK_OCCURRENCE_OBSERVERS) != 0) !=
+             hasObserverCondition))
           finalizeStatus = TALOS_RT_INVALID_FRAME;
         if (finalizeStatus != TALOS_RT_OK)
           break;
@@ -7076,9 +7031,9 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
           currentFrameReleased = false;
         } else {
           talos_rt_program_complete_unlocked(context, task.id,
-                                               task.programOwner);
+                                             task.programOwner);
           talos_rt_retire_process_parent_unlocked(context, task.id,
-                                                    task.parent);
+                                                  task.parent);
           context->terminatedDesignTasks.insert(task.id, task.random);
           releaseDesignTaskOwnedStatesUnlocked(context, task.id);
           talos_rt_release_controls_unlocked(context, task.controls);
@@ -7194,7 +7149,7 @@ talos_rt_status talos_rt_run_one_design_task(
 }
 
 talos_rt_status talos_rt_prime_design_task(talos_rt_context *context,
-                                               uint64_t taskID) noexcept {
+                                           uint64_t taskID) noexcept {
   if (!context || taskID == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   struct ActiveStateGuard {
@@ -7232,7 +7187,7 @@ talos_rt_status talos_rt_prime_design_task(talos_rt_context *context,
       context->controlEscapePending = escapePending;
       context->activeRandom = random;
       talos_rt_set_design_task_filter_unlocked(context, designFilter,
-                                                 forcedDesignTask);
+                                               forcedDesignTask);
     }
   } activeState{context};
   TALOS_RT_TRY {

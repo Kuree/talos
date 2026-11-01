@@ -26,8 +26,7 @@ bool validEventKind(talos_rt_covergroup_block_event_kind_v1 kind) {
          kind == TALOS_RT_COVERGROUP_BLOCK_EVENT_END;
 }
 
-bool validManagedObject(talos_rt_context *context,
-                        talos_rt_object_v1 *object,
+bool validManagedObject(talos_rt_context *context, talos_rt_object_v1 *object,
                         talos_rt_managed_kind_v1 expected) {
   return object && talos_rt_managed_object_context(object) == context &&
          talos_rt_managed_object_kind(object) == expected;
@@ -53,15 +52,14 @@ bool validPackedHandle(talos_rt_context *context, uint64_t handle,
            offset <= found->second.bitWidth &&
            width <= found->second.bitWidth - offset;
   }
-  return decoded.kind == TALOS_RT_STABLE_HANDLE_GLOBAL &&
-         context->execution && offset <= context->execution->state_bit_count &&
+  return decoded.kind == TALOS_RT_STABLE_HANDLE_GLOBAL && context->execution &&
+         offset <= context->execution->state_bit_count &&
          width <= context->execution->state_bit_count - offset;
 }
 
-bool validArgumentReference(
-    talos_rt_context *context,
-    const talos_rt_observer_capture_abi_v1 &captureABI,
-    const talos_rt_computed_capture_v1 &capture) {
+bool validArgumentReference(talos_rt_context *context,
+                            const talos_rt_observer_capture_abi_v1 &captureABI,
+                            const talos_rt_computed_capture_v1 &capture) {
   if (captureABI.width == 0 || capture.payload1 > 2 || capture.payload2 != 0 ||
       (capture.payload1 == 0 && capture.stable_id != 0) ||
       (capture.payload1 != 0 && capture.stable_id == 0))
@@ -72,8 +70,8 @@ bool validArgumentReference(
   talos_rt_object_v1 *owner =
       talos_rt_object_from_managed_word(capture.stable_id);
   talos_rt_managed_kind_v1 expected = capture.payload1 == 1
-                                            ? TALOS_RT_MANAGED_CLASS
-                                            : TALOS_RT_MANAGED_REFERENCE_PATH;
+                                          ? TALOS_RT_MANAGED_CLASS
+                                          : TALOS_RT_MANAGED_REFERENCE_PATH;
   if (!validManagedObject(context, owner, expected) ||
       talos_rt_managed_word_from_object(owner) != capture.stable_id)
     return false;
@@ -182,9 +180,7 @@ evaluateSamplerUnlocked(talos_rt_context *context,
         status = TALOS_RT_TIER_UNAVAILABLE;
       }
     }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      status = TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { status = TALOS_RT_OUT_OF_MEMORY; }
     TALOS_RT_CATCH_ALL { status = TALOS_RT_INVALID_ARGUMENT; }
   }
   --context->observerDepth;
@@ -251,8 +247,7 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_block_event_register(
         findObserverDescriptor(execution, observerCodeUnit);
     if (!descriptor || descriptor->capture_count != captureCount ||
         descriptor->result_width != 1 || descriptor->flags != 0 ||
-        descriptor->capture_abi[0].kind !=
-            TALOS_RT_OBSERVER_CAPTURE_COVERGROUP)
+        descriptor->capture_abi[0].kind != TALOS_RT_OBSERVER_CAPTURE_COVERGROUP)
       return TALOS_RT_INVALID_DESIGN;
     if (native && !descriptor->native_evaluator) {
       if (descriptor->bytecode_function == TALOS_RT_OBSERVER_NO_BYTECODE)

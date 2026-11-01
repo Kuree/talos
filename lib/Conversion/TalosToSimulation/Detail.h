@@ -13,9 +13,9 @@
 
 #include "talos/Analysis/SimulationAnalysis.h"
 #include "talos/Conversion/TalosToSimulation.h"
-#include "talos/Dialect/Talos/TalosOps.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
+#include "talos/Dialect/Talos/TalosOps.h"
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"

@@ -5,10 +5,10 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <algorithm>
@@ -232,14 +232,14 @@ TEST(GeneratedDesignDatabase, PrimitiveTerminals) {
   auto primitive = cursorFor("top.g");
   VPIRelationRange range{};
   ASSERT_EQ(talos_rt_cached_vpi_relation_range(raw, primitive, vpiPrimTerm,
-                                                 true, &range),
+                                               true, &range),
             TALOS_RT_OK);
   ASSERT_EQ(range.count, 3u);
   talos_rt_design_cursor_v1 terminal{};
   uint32_t kind = 0;
   bool statement = false;
   ASSERT_EQ(talos_rt_cached_vpi_relation_target(raw, range.first, &terminal,
-                                                  &kind, &statement),
+                                                &kind, &statement),
             TALOS_RT_OK);
   uint32_t packed = 0, primitivePacked = 0, otherPrimitive = 0;
   ASSERT_TRUE(tryPackTableIndex(TableKind::Object,
@@ -304,8 +304,7 @@ TEST(GeneratedDesignDatabase, PrimitiveTerminals) {
     HeaderWriter(bytes.data()).setChecksum(hash);
     auto invalid = execution;
     invalid.design_database = bytes.data();
-    EXPECT_EQ(talos_rt_v1_design_validate(&invalid),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&invalid), TALOS_RT_INVALID_DESIGN);
   };
   rejects([&](auto &bytes) {
     FixedPropertyWriter(bytes.data() + directionRow).setPayload(vpiMixedIO);

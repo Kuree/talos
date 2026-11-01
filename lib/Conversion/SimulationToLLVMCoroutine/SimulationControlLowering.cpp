@@ -859,8 +859,8 @@ void populateControlToLLVMConversionPatterns(RewritePatternSet &patterns,
       ProcessStatusConversion, ProcessRandomStateConversion,
       ProcessSetRandomStateConversion, MonitorRegisterConversion,
       MonitorControlConversion, MonitorCurrentConversion>(converter, context);
-  patterns.add<OnceConversion<sim::SimStaticOnceOp>>(
-      converter, context, "talos_rt_v1_static_once");
+  patterns.add<OnceConversion<sim::SimStaticOnceOp>>(converter, context,
+                                                     "talos_rt_v1_static_once");
   patterns.add<OnceConversion<sim::SimDeferredOnceOp>>(
       converter, context, "talos_rt_v1_deferred_once");
   patterns.add<DeferredEnqueueConversion, DeferredMatureConversion,

@@ -3,10 +3,10 @@
 #include "talos/Conversion/SimulationToSchedule/Utils.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
-#include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -111,7 +111,6 @@ ReexecutingBlockSet getReexecutingBlocks(sim::SimFuncOp function) {
   }
   return reexecuting;
 }
-
 
 /// IEEE 1800-2023 4.3: a simulator may use any algorithm whose user-visible
 /// effect is consistent with the reference algorithm. A process that only

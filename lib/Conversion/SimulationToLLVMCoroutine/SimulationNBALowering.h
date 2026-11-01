@@ -114,15 +114,12 @@ void emitGeneratedNBATransient(mlir::OpBuilder &builder,
                                mlir::Value newValue, mlir::Value newUnknown,
                                mlir::Value staged = {});
 
-void populateNBAToLLVMConversionPatterns(mlir::RewritePatternSet &patterns,
-                                         mlir::TypeConverter &converter,
-                                         uint64_t stateBitCount,
-                                         const NativeStaticNBAPlan *staticPlan,
-                                         const NativeStateLayout *stateLayout,
-                                         bool staticSitesEnabled,
-                                         bool guardedClaims, bool evalCeiling,
-                                         const llvm::DenseSet<mlir::Operation *>
-                                             &completePackedSliceNBAs);
+void populateNBAToLLVMConversionPatterns(
+    mlir::RewritePatternSet &patterns, mlir::TypeConverter &converter,
+    uint64_t stateBitCount, const NativeStaticNBAPlan *staticPlan,
+    const NativeStateLayout *stateLayout, bool staticSitesEnabled,
+    bool guardedClaims, bool evalCeiling,
+    const llvm::DenseSet<mlir::Operation *> &completePackedSliceNBAs);
 mlir::FailureOr<NativeStaticNBAPlan> buildNativeStaticNBAPlan(
     mlir::ModuleOp module, const NativeStateLayout &stateLayout,
     mlir::ArrayRef<schedule::ComputeNBACommitAttr> orderedCommits,

@@ -99,8 +99,8 @@ VPITypeSemanticsAttr stripVPITypedefAliases(VPITypeSemanticsAttr type) {
       type.getIsTagged(), type.getIsSoft(), type.getBitWidth(),
       type.getSelectableWidth(), type.getBitstreamWidth(), type.getTagBits(),
       type.getQueueBound(), type.getWildcardIndex(), type.getChildOrdinals(),
-      type.getChildPackedOffsets(), type.getChildRandTypes(),
-      mlir::ArrayAttr{}, type.getProjected());
+      type.getChildPackedOffsets(), type.getChildRandTypes(), mlir::ArrayAttr{},
+      type.getProjected());
 }
 
 uint32_t vpiKindForCodeUnit(SimCodeUnitDeclOp codeUnit) {

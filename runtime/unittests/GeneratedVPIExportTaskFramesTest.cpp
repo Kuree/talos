@@ -6,12 +6,12 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
+#include "svdpi.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/DPI/DPIDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
-#include "sv_vpi_user.h"
-#include "svdpi.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <algorithm>
@@ -158,8 +158,7 @@ void inspectOuter(talos_rt_context *context, Probe &probe) {
   ASSERT_EQ(talos_rt_v1_vpi_frame_enter(
                 context, 44, TALOS_RT_VPI_FRAME_CODE_UNIT_SCOPE, 44, &root),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_vpi_call_prepare(context, 20, &ticket),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_vpi_call_prepare(context, 20, &ticket), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_frame_enter_prepared(context, 45, 0, &imported),
             TALOS_RT_OK);
   probe.parent = vpi_handle(vpiFrame, nullptr);
@@ -167,16 +166,16 @@ void inspectOuter(talos_rt_context *context, Probe &probe) {
   probe.thread = vpi_handle(vpiThread, probe.parent);
   ASSERT_NE(probe.thread, nullptr);
   const talos_rt_import_site_v1 site{TALOS_RT_VERSION,
-                                       TALOS_RT_IMPORT_CONTEXT |
-                                           TALOS_RT_IMPORT_TASK,
-                                       123,
-                                       0,
-                                       1,
-                                       "export-task.mlir",
-                                       16,
-                                       1,
-                                       1,
-                                       7};
+                                     TALOS_RT_IMPORT_CONTEXT |
+                                         TALOS_RT_IMPORT_TASK,
+                                     123,
+                                     0,
+                                     1,
+                                     "export-task.mlir",
+                                     16,
+                                     1,
+                                     1,
+                                     7};
   activeProbe = &probe;
   ASSERT_EQ(talos_rt_v1_import_call(context, &site, nullptr, 0, nullptr, 0),
             TALOS_RT_OK);
@@ -284,8 +283,7 @@ talos_rt_status nativeEntry(talos_rt_process_instance_v1 *instance) {
     if (probe.killExport) {
       talos_rt_process_control_disposition disposition = 0;
       auto status = talos_rt_v1_process_control(
-          context, probe.executor, TALOS_RT_PROCESS_CONTROL_KILL,
-          &disposition);
+          context, probe.executor, TALOS_RT_PROCESS_CONTROL_KILL, &disposition);
       if (status != TALOS_RT_OK)
         return status;
       EXPECT_EQ(disposition, TALOS_RT_PROCESS_CONTROL_CONTINUE);
@@ -296,7 +294,7 @@ talos_rt_status nativeEntry(talos_rt_process_instance_v1 *instance) {
     EXPECT_EQ(unit, 46u);
     if (!instance->continuation) {
       auto status = talos_rt_v1_vpi_frame_enter_prepared(context, 46, 1,
-                                                           &probe.activation);
+                                                         &probe.activation);
       if (status != TALOS_RT_OK)
         return status;
       inspectTask(context, probe, 0, probe.activation);
@@ -326,8 +324,7 @@ talos_rt_status nativeEntry(talos_rt_process_instance_v1 *instance) {
     if (!instance->continuation ||
         (probe.nested && instance->continuation == 1)) {
       if (probe.nested) {
-        auto status =
-            talos_rt_v1_vpi_call_finish(context, probe.nestedTicket);
+        auto status = talos_rt_v1_vpi_call_finish(context, probe.nestedTicket);
         if (status != TALOS_RT_OK)
           return status;
       }
@@ -353,8 +350,8 @@ talos_rt_status nativeEntry(talos_rt_process_instance_v1 *instance) {
   return ::testing::Test::HasFatalFailure() ? TALOS_RT_FATAL : TALOS_RT_OK;
 }
 talos_rt_status exported(talos_rt_context *context,
-                           const talos_rt_import_input_v1 *, uint32_t,
-                           talos_rt_import_output_v1 *, uint32_t) {
+                         const talos_rt_import_input_v1 *, uint32_t,
+                         talos_rt_import_output_v1 *, uint32_t) {
   uint64_t ticket = 0;
   auto status = talos_rt_v1_vpi_export_prepare(context, 46, &ticket);
   if (status != TALOS_RT_OK)
@@ -373,15 +370,14 @@ talos_rt_status exported(talos_rt_context *context,
   return talos_rt_v1_vpi_call_finish(context, ticket);
 }
 talos_rt_status imported(talos_rt_context *, uint32_t,
-                           const talos_rt_import_input_v1 *, uint32_t,
-                           talos_rt_import_output_v1 *, uint32_t, void *) {
+                         const talos_rt_import_input_v1 *, uint32_t,
+                         talos_rt_import_output_v1 *, uint32_t, void *) {
   return talos_rt_v1_export_call(1, 7, nullptr, 0, nullptr, 0);
 }
 talos_rt_status inspectImport(talos_rt_context *context, uint32_t,
-                                const talos_rt_import_input_v1 *inputs,
-                                uint32_t inputCount,
-                                talos_rt_import_output_v1 *, uint32_t,
-                                void *data) {
+                              const talos_rt_import_input_v1 *inputs,
+                              uint32_t inputCount, talos_rt_import_output_v1 *,
+                              uint32_t, void *data) {
   if (inputCount != 2)
     return TALOS_RT_ARGUMENT_MISMATCH;
   inspectTask(context, *static_cast<Probe *>(data), inputs[0].value[0],
@@ -395,10 +391,9 @@ void testTask(bool bytecode, bool implicitReturn, bool escapedChild = false,
   const char *input = std::getenv("TALOS_TEST_INPUT");
   ASSERT_NE(input, nullptr);
   mlir::DialectRegistry registry;
-  registry
-      .insert<mlir::arith::ArithDialect, mlir::cf::ControlFlowDialect,
-              talos::dpi::DPIDialect, talos::runtime::TalosRuntimeDialect,
-              talos::sim::TalosSimulationDialect>();
+  registry.insert<mlir::arith::ArithDialect, mlir::cf::ControlFlowDialect,
+                  talos::dpi::DPIDialect, talos::runtime::TalosRuntimeDialect,
+                  talos::sim::TalosSimulationDialect>();
   mlir::MLIRContext context(registry);
   auto module = mlir::parseSourceFile<mlir::ModuleOp>(input, &context);
   ASSERT_TRUE(module);
@@ -447,8 +442,8 @@ void testTask(bool bytecode, bool implicitReturn, bool escapedChild = false,
                    [](const auto &f) { return f.symbol == "exported"; });
   ASSERT_NE(function, encoded->functions.end());
   const talos_rt_export_descriptor_v1 exports[] = {
-      {1, TALOS_RT_EXPORT_TASK | TALOS_RT_EXPORT_HAS_BYTECODE, 1, 46, 7, 0,
-       0, function->index, 0, exported, 0}};
+      {1, TALOS_RT_EXPORT_TASK | TALOS_RT_EXPORT_HAS_BYTECODE, 1, 46, 7, 0, 0,
+       function->index, 0, exported, 0}};
   aggregate.extension.version = TALOS_RT_EXECUTION_EXTENSION_VERSION;
   aggregate.extension.size = sizeof(aggregate.extension);
   aggregate.extension.exports = exports;

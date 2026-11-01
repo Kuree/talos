@@ -123,7 +123,7 @@ public:
                isa<sim::SimCallOp, sim::SimSpawnOp>(op);
       };
       talos::analysis::MustDefinitionAnalysis must(function, definitions,
-                                                     isBarrier);
+                                                   isBarrier);
       talos::analysis::NoBarrierAnalysis prefix(function, isBarrier);
       talos::analysis::WriteExecutionBounds lifetime(
           function, definitions, true,

@@ -520,7 +520,7 @@ void TalosSimMaterializeGraphRegionsPass::runOnOperation() {
   if (!schedule)
     return signalPassFailure();
   ::talos::schedule::set<schedule::metadata::threeTierSchedule>(design,
-                                                                  schedule);
+                                                                schedule);
 }
 
 } // namespace

@@ -707,7 +707,7 @@ FailureOr<Value> UnitLowering::lowerArrayMethod(semantic::SVCallExpressionOp op,
                              : method == ArrayMethod::Product
                                  ? sim::BinaryKind::Mul
                              : method == ArrayMethod::And ? sim::BinaryKind::And
-                             : method == ArrayMethod::Or  ? sim::BinaryKind::Or
+                             : method == ArrayMethod::Or ? sim::BinaryKind::Or
                                                          : sim::BinaryKind::Xor;
       return sim::SimLogicBinaryOp::create(builder, location, reduceType, kind,
                                            accumulator, term);
@@ -1620,8 +1620,8 @@ UnitLowering::lowerAssociativeArrayMethod(semantic::SVCallExpressionOp op) {
       sim::SimAssocDeleteOp::create(builder, location, updated, *key);
     }
     if (!directStorage) {
-      if (failed(writeCapturedLValue(*captured, updated, false, false,
-                                     location, Value{}, StoredValue::Owned)))
+      if (failed(writeCapturedLValue(*captured, updated, false, false, location,
+                                     Value{}, StoredValue::Owned)))
         return failure();
     } else {
       Block *publish = addBlock();
@@ -1629,8 +1629,8 @@ UnitLowering::lowerAssociativeArrayMethod(semantic::SVCallExpressionOp op) {
       cf::CondBranchOp::create(builder, location, wasNull, publish,
                                ValueRange{}, done, ValueRange{});
       setCurrent(publish);
-      if (failed(writeCapturedLValue(*captured, updated, false, false,
-                                     location, Value{}, StoredValue::Owned)))
+      if (failed(writeCapturedLValue(*captured, updated, false, false, location,
+                                     Value{}, StoredValue::Owned)))
         return failure();
       cf::BranchOp::create(builder, location, done);
       setCurrent(done);

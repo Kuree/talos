@@ -193,8 +193,8 @@ TEST_F(RandSolveTest, SolvesHardConstraintWithDynamicCapture) {
   uint64_t capture = 7;
   uint64_t assignment = 0;
   uint32_t success = 0;
-  EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 0,
-                                       16, &capture, 1, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 0, 16,
+                                     &capture, 1, &assignment, &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 1u);
   EXPECT_EQ(assignment, 7u);
@@ -224,7 +224,7 @@ TEST_F(RandSolveTest, ExecutesConcatenationAndReplicationEncoding) {
   uint64_t assignment = 0;
   uint32_t success = 0;
   EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 0,
-                                       1024, nullptr, 0, &assignment, &success),
+                                     1024, nullptr, 0, &assignment, &success),
             TALOS_RT_OK);
   ASSERT_EQ(success, 1u);
   uint64_t x = assignment & 3;
@@ -245,8 +245,8 @@ TEST_F(RandSolveTest, TraversesSparseFiniteDomainInsteadOfUnderlyingBits) {
        {0, 0, 32, UINT32_MAX, UINT32_C(0xf00d)}});
   uint64_t assignment = 0;
   uint32_t success = 0;
-  EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 7,
-                                       3, nullptr, 0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 7, 3,
+                                     nullptr, 0, &assignment, &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 1u);
   EXPECT_EQ(assignment, UINT32_C(0xdeadbeef));
@@ -265,8 +265,8 @@ TEST_F(RandSolveTest, MaterializesTaggedUnionPatternDomain) {
                {0, 0, 6, UINT64_C(0x3f), UINT64_C(0x20)}});
   uint64_t assignment = 0;
   uint32_t success = 0;
-  EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 63,
-                                       1, nullptr, 0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 63, 1,
+                                     nullptr, 0, &assignment, &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 1u);
   bool arm0 = (assignment & UINT64_C(0x3c)) == 0;
@@ -289,8 +289,8 @@ TEST_F(RandSolveTest, TraversesCartesianProductOfFiniteSubdomains) {
       {{0, 0, 2, 3, 1}, {0, 0, 2, 3, 2}, {1, 2, 2, 3, 0}, {1, 2, 2, 3, 3}});
   uint64_t assignment = 0;
   uint32_t success = 0;
-  EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 0,
-                                       8, nullptr, 0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 0, 8,
+                                     nullptr, 0, &assignment, &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 1u);
   EXPECT_EQ(assignment, 30u);
@@ -375,15 +375,15 @@ TEST_F(RandSolveTest, AllowsInvalidFixedDomainValueButRejectsPartialMutation) {
               false, {}, {}, {{0, 0, 4, 15, 1}, {0, 0, 4, 15, 9}});
   uint64_t assignment = 0;
   uint32_t success = 0;
-  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(),
-                                             bytes.size(), 4, 0, 0, 2, nullptr,
-                                             0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(), bytes.size(),
+                                           4, 0, 0, 2, nullptr, 0, &assignment,
+                                           &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 1u);
   EXPECT_EQ(assignment, 4u);
-  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(),
-                                             bytes.size(), 1, 3, 0, 2, nullptr,
-                                             0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(), bytes.size(),
+                                           1, 3, 0, 2, nullptr, 0, &assignment,
+                                           &success),
             TALOS_RT_INVALID_ARGUMENT);
 }
 
@@ -392,7 +392,7 @@ TEST_F(RandSolveTest, RejectsMalformedFiniteDomainMetadata) {
     uint64_t assignment = 0;
     uint32_t success = 0;
     EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 0,
-                                         4, nullptr, 0, &assignment, &success),
+                                       4, nullptr, 0, &assignment, &success),
               TALOS_RT_INVALID_ARGUMENT);
   };
   auto truth = std::initializer_list<EncodedInstruction>{
@@ -415,18 +415,18 @@ TEST_F(RandSolveTest, RejectsMalformedFiniteDomainMetadata) {
 TEST_F(RandSolveTest, PreservesFixedWidthSignedArithmetic) {
   // In four signed bits, 7 + 1 wraps to -8. This checks that arithmetic is
   // truncated before the signed comparison rather than widened as host C++.
-  std::vector<uint8_t> bytes = program(
-      4, 0,
-      {{TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 4},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 1},
-       {TALOS_RT_RANDOM_ADD_V1, 4, TALOS_RT_RANDOM_INSTRUCTION_SIGNED},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 0},
-       {TALOS_RT_RANDOM_LT_V1, 1, TALOS_RT_RANDOM_INSTRUCTION_SIGNED},
-       {TALOS_RT_RANDOM_END_HARD_V1, 1}});
+  std::vector<uint8_t> bytes =
+      program(4, 0,
+              {{TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 4},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 1},
+               {TALOS_RT_RANDOM_ADD_V1, 4, TALOS_RT_RANDOM_INSTRUCTION_SIGNED},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 0},
+               {TALOS_RT_RANDOM_LT_V1, 1, TALOS_RT_RANDOM_INSTRUCTION_SIGNED},
+               {TALOS_RT_RANDOM_END_HARD_V1, 1}});
   uint64_t assignment = 0;
   uint32_t success = 0;
-  EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 0,
-                                       16, nullptr, 0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 0, 16,
+                                     nullptr, 0, &assignment, &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 1u);
   EXPECT_EQ(assignment, 7u);
@@ -467,82 +467,82 @@ TEST_F(RandSolveTest, ResizesSignedOperandsBeforeEvaluation) {
        {TALOS_RT_RANDOM_END_HARD_V1, 1}});
   uint64_t assignment = 0;
   uint32_t success = 0;
-  EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 0,
-                                       2, nullptr, 0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 0, 2,
+                                     nullptr, 0, &assignment, &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 1u);
   EXPECT_EQ(assignment, 1u);
 }
 
 TEST_F(RandSolveTest, EvaluatesDivisionShiftsAndPowerAtFixedWidth) {
-  std::vector<uint8_t> bytes = program(
-      1, 0,
-      {{TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 13},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 3},
-       {TALOS_RT_RANDOM_DIV_V1, 4},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 4},
-       {TALOS_RT_RANDOM_EQ_V1, 1},
-       {TALOS_RT_RANDOM_END_HARD_V1, 1},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 13},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 3},
-       {TALOS_RT_RANDOM_MOD_V1, 4},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 1},
-       {TALOS_RT_RANDOM_EQ_V1, 1},
-       {TALOS_RT_RANDOM_END_HARD_V1, 1},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 9},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 2},
-       {TALOS_RT_RANDOM_DIV_V1, 4, TALOS_RT_RANDOM_INSTRUCTION_SIGNED},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 13},
-       {TALOS_RT_RANDOM_EQ_V1, 1},
-       {TALOS_RT_RANDOM_END_HARD_V1, 1},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 9},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 2},
-       {TALOS_RT_RANDOM_MOD_V1, 4, TALOS_RT_RANDOM_INSTRUCTION_SIGNED},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 15},
-       {TALOS_RT_RANDOM_EQ_V1, 1},
-       {TALOS_RT_RANDOM_END_HARD_V1, 1},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 3},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 8, 0, 0, 1},
-       {TALOS_RT_RANDOM_SHIFT_LEFT_V1, 4},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 6},
-       {TALOS_RT_RANDOM_EQ_V1, 1},
-       {TALOS_RT_RANDOM_END_HARD_V1, 1},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 12},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 8, 0, 0, 2},
-       {TALOS_RT_RANDOM_SHIFT_RIGHT_V1, 4},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 3},
-       {TALOS_RT_RANDOM_EQ_V1, 1},
-       {TALOS_RT_RANDOM_END_HARD_V1, 1},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 8},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 8, 0, 0, 2},
-       {TALOS_RT_RANDOM_SHIFT_RIGHT_ARITH_V1, 4,
-        TALOS_RT_RANDOM_INSTRUCTION_SIGNED},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 14},
-       {TALOS_RT_RANDOM_EQ_V1, 1},
-       {TALOS_RT_RANDOM_END_HARD_V1, 1},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 8},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 8, 0, 0, 7},
-       {TALOS_RT_RANDOM_SHIFT_RIGHT_ARITH_V1, 4,
-        TALOS_RT_RANDOM_INSTRUCTION_SIGNED},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 15},
-       {TALOS_RT_RANDOM_EQ_V1, 1},
-       {TALOS_RT_RANDOM_END_HARD_V1, 1},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 3},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 8, 0, 0, 3},
-       {TALOS_RT_RANDOM_POWER_V1, 4},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 11},
-       {TALOS_RT_RANDOM_EQ_V1, 1},
-       {TALOS_RT_RANDOM_END_HARD_V1, 1},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 0},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 8, 0, 0, 0},
-       {TALOS_RT_RANDOM_POWER_V1, 4},
-       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 1},
-       {TALOS_RT_RANDOM_EQ_V1, 1},
-       {TALOS_RT_RANDOM_END_HARD_V1, 1}});
+  std::vector<uint8_t> bytes =
+      program(1, 0,
+              {{TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 13},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 3},
+               {TALOS_RT_RANDOM_DIV_V1, 4},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 4},
+               {TALOS_RT_RANDOM_EQ_V1, 1},
+               {TALOS_RT_RANDOM_END_HARD_V1, 1},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 13},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 3},
+               {TALOS_RT_RANDOM_MOD_V1, 4},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 1},
+               {TALOS_RT_RANDOM_EQ_V1, 1},
+               {TALOS_RT_RANDOM_END_HARD_V1, 1},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 9},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 2},
+               {TALOS_RT_RANDOM_DIV_V1, 4, TALOS_RT_RANDOM_INSTRUCTION_SIGNED},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 13},
+               {TALOS_RT_RANDOM_EQ_V1, 1},
+               {TALOS_RT_RANDOM_END_HARD_V1, 1},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 9},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 2},
+               {TALOS_RT_RANDOM_MOD_V1, 4, TALOS_RT_RANDOM_INSTRUCTION_SIGNED},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 15},
+               {TALOS_RT_RANDOM_EQ_V1, 1},
+               {TALOS_RT_RANDOM_END_HARD_V1, 1},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 3},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 8, 0, 0, 1},
+               {TALOS_RT_RANDOM_SHIFT_LEFT_V1, 4},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 6},
+               {TALOS_RT_RANDOM_EQ_V1, 1},
+               {TALOS_RT_RANDOM_END_HARD_V1, 1},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 12},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 8, 0, 0, 2},
+               {TALOS_RT_RANDOM_SHIFT_RIGHT_V1, 4},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 3},
+               {TALOS_RT_RANDOM_EQ_V1, 1},
+               {TALOS_RT_RANDOM_END_HARD_V1, 1},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 8},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 8, 0, 0, 2},
+               {TALOS_RT_RANDOM_SHIFT_RIGHT_ARITH_V1, 4,
+                TALOS_RT_RANDOM_INSTRUCTION_SIGNED},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 14},
+               {TALOS_RT_RANDOM_EQ_V1, 1},
+               {TALOS_RT_RANDOM_END_HARD_V1, 1},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 8},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 8, 0, 0, 7},
+               {TALOS_RT_RANDOM_SHIFT_RIGHT_ARITH_V1, 4,
+                TALOS_RT_RANDOM_INSTRUCTION_SIGNED},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 15},
+               {TALOS_RT_RANDOM_EQ_V1, 1},
+               {TALOS_RT_RANDOM_END_HARD_V1, 1},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 3},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 8, 0, 0, 3},
+               {TALOS_RT_RANDOM_POWER_V1, 4},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 11},
+               {TALOS_RT_RANDOM_EQ_V1, 1},
+               {TALOS_RT_RANDOM_END_HARD_V1, 1},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 0},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 8, 0, 0, 0},
+               {TALOS_RT_RANDOM_POWER_V1, 4},
+               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 1},
+               {TALOS_RT_RANDOM_EQ_V1, 1},
+               {TALOS_RT_RANDOM_END_HARD_V1, 1}});
   uint64_t assignment = 0;
   uint32_t success = 0;
-  EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 0,
-                                       2, nullptr, 0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 0, 2,
+                                     nullptr, 0, &assignment, &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 1u);
   EXPECT_EQ(assignment, 0u);
@@ -563,8 +563,8 @@ TEST_F(RandSolveTest, PrefersSoftSolution) {
   uint64_t captures[] = {3, 2};
   uint64_t assignment = 0;
   uint32_t success = 0;
-  EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 3,
-                                       16, captures, 2, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 3, 16,
+                                     captures, 2, &assignment, &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 1u);
   EXPECT_EQ(assignment, 2u);
@@ -585,16 +585,16 @@ TEST_F(RandSolveTest, DropsUnsatisfiableSoftOnlyAfterCompleteSearch) {
   uint64_t captures[] = {3, 7};
   uint64_t assignment = 0;
   uint32_t success = 0;
-  EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 4,
-                                       16, captures, 2, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 4, 16,
+                                     captures, 2, &assignment, &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 1u);
   EXPECT_EQ(assignment, 0u);
 
   assignment = 99;
   success = 1;
-  EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 4,
-                                       4, captures, 2, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 4, 4,
+                                     captures, 2, &assignment, &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 0u);
   EXPECT_EQ(assignment, 0u);
@@ -609,9 +609,9 @@ TEST_F(RandSolveTest, MaskedSolvePreservesFixedAssignmentBits) {
                {TALOS_RT_RANDOM_END_HARD_V1, 1}});
   uint64_t assignment = 0;
   uint32_t success = 0;
-  EXPECT_EQ(talos_rt_v1_random_solve_masked(context, bytes.data(),
-                                              bytes.size(), 10, 5, 4, nullptr,
-                                              0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve_masked(context, bytes.data(), bytes.size(),
+                                            10, 5, 4, nullptr, 0, &assignment,
+                                            &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 1u);
   EXPECT_EQ(assignment, 15u);
@@ -630,9 +630,9 @@ TEST_F(RandSolveTest, MaskedSoftSearchUsesMutableDomainSize) {
               true);
   uint64_t assignment = 0;
   uint32_t success = 0;
-  EXPECT_EQ(talos_rt_v1_random_solve_masked(context, bytes.data(),
-                                              bytes.size(), 10, 1, 2, nullptr,
-                                              0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve_masked(context, bytes.data(), bytes.size(),
+                                            10, 1, 2, nullptr, 0, &assignment,
+                                            &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 1u);
   EXPECT_EQ(assignment, 10u);
@@ -656,42 +656,42 @@ TEST_F(RandSolveTest, ConstraintModesDisableOnlySelectedBlocks) {
                 TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1}});
   uint64_t assignment = 0;
   uint32_t success = 0;
-  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(),
-                                             bytes.size(), 5, UINT64_MAX, 0, 16,
-                                             nullptr, 0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(), bytes.size(),
+                                           5, UINT64_MAX, 0, 16, nullptr, 0,
+                                           &assignment, &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 0u);
 
-  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(),
-                                             bytes.size(), 5, UINT64_MAX, 1, 16,
-                                             nullptr, 0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(), bytes.size(),
+                                           5, UINT64_MAX, 1, 16, nullptr, 0,
+                                           &assignment, &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 1u);
   EXPECT_EQ(assignment, 7u);
 
-  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(),
-                                             bytes.size(), 5, UINT64_MAX, 2, 16,
-                                             nullptr, 0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(), bytes.size(),
+                                           5, UINT64_MAX, 2, 16, nullptr, 0,
+                                           &assignment, &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 1u);
   EXPECT_EQ(assignment, 3u);
 
-  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(),
-                                             bytes.size(), 5, UINT64_MAX, 3, 16,
-                                             nullptr, 0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(), bytes.size(),
+                                           5, UINT64_MAX, 3, 16, nullptr, 0,
+                                           &assignment, &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 1u);
   EXPECT_EQ(assignment, 6u);
 }
 
 TEST_F(RandSolveTest, SamplesResidualCandidatesByDistWeight) {
-  std::vector<uint8_t> bytes = program(
-      1, 2,
-      {{TALOS_RT_RANDOM_PUSH_LITERAL_V1, 1, 0, 0, 1},
-       {TALOS_RT_RANDOM_END_HARD_V1, 1}},
-      false, {},
-      {{0, TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1, 0, 1, 0, 1, 1, 0},
-       {0, TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1, 0, 1, 1, 1, 1, 1}});
+  std::vector<uint8_t> bytes =
+      program(1, 2,
+              {{TALOS_RT_RANDOM_PUSH_LITERAL_V1, 1, 0, 0, 1},
+               {TALOS_RT_RANDOM_END_HARD_V1, 1}},
+              false, {},
+              {{0, TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1, 0, 1, 0, 1, 1, 0},
+               {0, TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1, 0, 1, 1, 1, 1, 1}});
   uint64_t captures[] = {1, 3};
   talos_rt_random_state_v1 state;
   talos_rt_v1_random_state_seed(&state, 123, 17);
@@ -717,16 +717,16 @@ TEST_F(RandSolveTest, DistTargetWeightIgnoresCompanionSolutionMultiplicity) {
   // x is bit 0 and y is bit 1. The hard constraint allows both y values when
   // x is zero, but only y=0 when x is one. Equal x weights must still produce
   // equal x probability rather than weighting each complete assignment.
-  std::vector<uint8_t> bytes = program(
-      2, 1,
-      {{TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 1, 0, 0, 0},
-       {TALOS_RT_RANDOM_LOGICAL_NOT_V1, 1},
-       {TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 1, 0, 1, 0},
-       {TALOS_RT_RANDOM_LOGICAL_NOT_V1, 1},
-       {TALOS_RT_RANDOM_LOGICAL_OR_V1, 1},
-       {TALOS_RT_RANDOM_END_HARD_V1, 1}},
-      false, {},
-      {{0, TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1, 0, 1, 0, 2, 1, 0}});
+  std::vector<uint8_t> bytes =
+      program(2, 1,
+              {{TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 1, 0, 0, 0},
+               {TALOS_RT_RANDOM_LOGICAL_NOT_V1, 1},
+               {TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 1, 0, 1, 0},
+               {TALOS_RT_RANDOM_LOGICAL_NOT_V1, 1},
+               {TALOS_RT_RANDOM_LOGICAL_OR_V1, 1},
+               {TALOS_RT_RANDOM_END_HARD_V1, 1}},
+              false, {},
+              {{0, TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1, 0, 1, 0, 2, 1, 0}});
   uint64_t capture = 1;
   talos_rt_random_state_v1 state;
   talos_rt_v1_random_state_seed(&state, 123, 17);
@@ -749,13 +749,13 @@ TEST_F(RandSolveTest, DistTargetWeightIgnoresCompanionSolutionMultiplicity) {
 }
 
 TEST_F(RandSolveTest, OverlappingDistRangesAccumulatePerValueWeight) {
-  std::vector<uint8_t> bytes = program(
-      2, 1,
-      {{TALOS_RT_RANDOM_PUSH_LITERAL_V1, 1, 0, 0, 1},
-       {TALOS_RT_RANDOM_END_HARD_V1, 1}},
-      false, {},
-      {{0, TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1, 0, 2, 0, 3, 1, 0},
-       {0, TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1, 0, 2, 1, 3, 1, 0}});
+  std::vector<uint8_t> bytes =
+      program(2, 1,
+              {{TALOS_RT_RANDOM_PUSH_LITERAL_V1, 1, 0, 0, 1},
+               {TALOS_RT_RANDOM_END_HARD_V1, 1}},
+              false, {},
+              {{0, TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1, 0, 2, 0, 3, 1, 0},
+               {0, TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1, 0, 2, 1, 3, 1, 0}});
   uint64_t capture = 1;
   talos_rt_random_state_v1 state;
   talos_rt_v1_random_state_seed(&state, 71, 29);
@@ -817,9 +817,9 @@ TEST_F(RandSolveTest, DisabledConstraintDisablesItsDistGroup) {
   uint64_t capture = 1;
   uint64_t assignment = 1;
   uint32_t success = 0;
-  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(),
-                                             bytes.size(), 0, 1, 1, 2, &capture,
-                                             1, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(), bytes.size(),
+                                           0, 1, 1, 2, &capture, 1, &assignment,
+                                           &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 1u);
   EXPECT_EQ(assignment, 0u);
@@ -849,12 +849,12 @@ TEST_F(RandSolveTest, RejectsNegativeDynamicDistWeight) {
 }
 
 TEST_F(RandSolveTest, RejectsMalformedDistGroupInventory) {
-  std::vector<uint8_t> bytes = program(
-      1, 1,
-      {{TALOS_RT_RANDOM_PUSH_LITERAL_V1, 1, 0, 0, 1},
-       {TALOS_RT_RANDOM_END_HARD_V1, 1}},
-      false, {},
-      {{1, TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1, 0, 1, 0, 1, 1, 0}});
+  std::vector<uint8_t> bytes =
+      program(1, 1,
+              {{TALOS_RT_RANDOM_PUSH_LITERAL_V1, 1, 0, 0, 1},
+               {TALOS_RT_RANDOM_END_HARD_V1, 1}},
+              false, {},
+              {{1, TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1, 0, 1, 0, 1, 1, 0}});
   uint64_t capture = 1;
   talos_rt_random_state_v1 state;
   talos_rt_v1_random_state_seed(&state, 9, 5);
@@ -884,16 +884,16 @@ TEST_F(RandSolveTest, DisabledSoftConstraintAcceptsFirstHardSolution) {
   uint64_t assignment = 0;
   uint32_t success = 0;
 
-  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(),
-                                             bytes.size(), 1, 3, 0, 4, nullptr,
-                                             0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(), bytes.size(),
+                                           1, 3, 0, 4, nullptr, 0, &assignment,
+                                           &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 1u);
   EXPECT_EQ(assignment, 2u);
 
-  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(),
-                                             bytes.size(), 1, 3, 1, 4, nullptr,
-                                             0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(), bytes.size(),
+                                           1, 3, 1, 4, nullptr, 0, &assignment,
+                                           &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 1u);
   EXPECT_EQ(assignment, 1u);
@@ -919,9 +919,9 @@ TEST_F(RandSolveTest, HonorsMultipleSoftConstraintPriorities) {
   uint64_t assignment = 0;
   uint32_t success = 0;
 
-  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(),
-                                             bytes.size(), 0, 3, 0, 4, nullptr,
-                                             0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(), bytes.size(),
+                                           0, 3, 0, 4, nullptr, 0, &assignment,
+                                           &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 1u);
   EXPECT_EQ(assignment, 2u);
@@ -963,9 +963,9 @@ TEST_F(RandSolveTest, GuardedSoftPredicatesAreVacuouslySatisfied) {
   uint64_t assignment = 0;
   uint32_t success = 0;
 
-  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(),
-                                             bytes.size(), 0, 3, 0, 4, nullptr,
-                                             0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(), bytes.size(),
+                                           0, 3, 0, 4, nullptr, 0, &assignment,
+                                           &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 1u);
   EXPECT_EQ(assignment, 2u);
@@ -988,9 +988,9 @@ TEST_F(RandSolveTest, DisableSoftUsesLiveConstraintMask) {
   for (uint64_t disabled : {UINT64_C(0), UINT64_C(1) << 63}) {
     uint64_t assignment = 0;
     uint32_t success = 0;
-    ASSERT_EQ(talos_rt_v1_random_solve_modes(
-                  context, bytes.data(), bytes.size(), 2, 3, disabled, 4,
-                  nullptr, 0, &assignment, &success),
+    ASSERT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(),
+                                             bytes.size(), 2, 3, disabled, 4,
+                                             nullptr, 0, &assignment, &success),
               TALOS_RT_OK);
     EXPECT_EQ(success, 1u);
     EXPECT_EQ(assignment, disabled == 0 ? 2u : 1u);
@@ -1022,9 +1022,9 @@ TEST_F(RandSolveTest, IntegralSystemFunctionsKeepUnsignedSourcePrecision) {
                   TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1}});
     uint64_t assignment = 0;
     uint32_t success = 0;
-    ASSERT_EQ(talos_rt_v1_random_solve_modes(
-                  context, bytes.data(), bytes.size(), test.value, 0, 0, 1,
-                  nullptr, 0, &assignment, &success),
+    ASSERT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(),
+                                             bytes.size(), test.value, 0, 0, 1,
+                                             nullptr, 0, &assignment, &success),
               TALOS_RT_OK);
     EXPECT_EQ(success, 1u);
     EXPECT_EQ(assignment, test.value);
@@ -1038,8 +1038,8 @@ TEST_F(RandSolveTest, RejectsMalformedConstraintEnabledInstructions) {
                            TALOS_RT_RANDOM_INSTRUCTION_SIGNED},
         EncodedInstruction{TALOS_RT_RANDOM_PUSH_CONSTRAINT_ENABLED_V1, 1, 0,
                            64},
-        EncodedInstruction{TALOS_RT_RANDOM_PUSH_CONSTRAINT_ENABLED_V1, 1, 0,
-                           0, 1}}) {
+        EncodedInstruction{TALOS_RT_RANDOM_PUSH_CONSTRAINT_ENABLED_V1, 1, 0, 0,
+                           1}}) {
     std::vector<uint8_t> bytes =
         program(2, 0,
                 {instruction,
@@ -1048,7 +1048,7 @@ TEST_F(RandSolveTest, RejectsMalformedConstraintEnabledInstructions) {
     uint64_t assignment = 7;
     uint32_t success = 1;
     EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 0,
-                                         4, nullptr, 0, &assignment, &success),
+                                       4, nullptr, 0, &assignment, &success),
               TALOS_RT_INVALID_ARGUMENT);
     EXPECT_EQ(success, 0u);
   }
@@ -1066,9 +1066,9 @@ TEST_F(RandSolveTest, RejectsNoncontiguousSoftPriorities) {
               true);
   uint64_t assignment = 0;
   uint32_t success = 0;
-  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(),
-                                             bytes.size(), 0, 1, 0, 2, nullptr,
-                                             0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(), bytes.size(),
+                                           0, 1, 0, 2, nullptr, 0, &assignment,
+                                           &success),
             TALOS_RT_INVALID_ARGUMENT);
 }
 
@@ -1154,9 +1154,9 @@ TEST_F(RandSolveTest, StatelessEntryRejectsActiveSolveBefore) {
               false, {{1, 2}});
   uint64_t assignment = 0;
   uint32_t success = 0;
-  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(),
-                                             bytes.size(), 0, 3, 0, 4, nullptr,
-                                             0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(), bytes.size(),
+                                           0, 3, 0, 4, nullptr, 0, &assignment,
+                                           &success),
             TALOS_RT_INVALID_ARGUMENT);
 }
 
@@ -1171,9 +1171,9 @@ TEST_F(RandSolveTest, ConstraintModeDisablesSolveBeforeEdge) {
               false, {{1, 2, 0}});
   uint64_t assignment = 0;
   uint32_t success = 0;
-  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(),
-                                             bytes.size(), 1, 3, 1, 4, nullptr,
-                                             0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(), bytes.size(),
+                                           1, 3, 1, 4, nullptr, 0, &assignment,
+                                           &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 1u);
   EXPECT_EQ(assignment, 2u);
@@ -1263,9 +1263,9 @@ TEST_F(RandSolveTest, SolveBeforeTreatsDisabledPropertyAsFixed) {
               false, {{1, 2}});
   uint64_t assignment = 0;
   uint32_t success = 0;
-  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(),
-                                             bytes.size(), 1, 2, 0, 2, nullptr,
-                                             0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(), bytes.size(),
+                                           1, 2, 0, 2, nullptr, 0, &assignment,
+                                           &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 1u);
   EXPECT_EQ(assignment, 3u);
@@ -1327,9 +1327,9 @@ TEST_F(RandSolveTest, RejectsCyclicSolveBeforeMetadata) {
               false, {{1, 2}, {2, 1}});
   uint64_t assignment = 0;
   uint32_t success = 0;
-  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(),
-                                             bytes.size(), 0, 3, 0, 4, nullptr,
-                                             0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(), bytes.size(),
+                                           0, 3, 0, 4, nullptr, 0, &assignment,
+                                           &success),
             TALOS_RT_INVALID_ARGUMENT);
 }
 
@@ -1346,9 +1346,9 @@ TEST_F(RandSolveTest, RejectsOverlappingPathSolveBeforeCycle) {
       false, {{UINT64_C(0x3), UINT64_C(0x4)}, {UINT64_C(0x4), UINT64_C(0x2)}});
   uint64_t assignment = 0;
   uint32_t success = 0;
-  EXPECT_EQ(talos_rt_v1_random_solve_modes(
-                context, bytes.data(), bytes.size(), 0, UINT64_C(0xf), 0, 16,
-                nullptr, 0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(), bytes.size(),
+                                           0, UINT64_C(0xf), 0, 16, nullptr, 0,
+                                           &assignment, &success),
             TALOS_RT_INVALID_ARGUMENT);
 }
 
@@ -1362,9 +1362,9 @@ TEST_F(RandSolveTest, RejectsTruncatedSolveBeforeMetadata) {
   bytes.pop_back();
   uint64_t assignment = 0;
   uint32_t success = 0;
-  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(),
-                                             bytes.size(), 0, 3, 0, 4, nullptr,
-                                             0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve_modes(context, bytes.data(), bytes.size(),
+                                           0, 3, 0, 4, nullptr, 0, &assignment,
+                                           &success),
             TALOS_RT_INVALID_ARGUMENT);
 }
 
@@ -1375,8 +1375,8 @@ TEST_F(RandSolveTest, RejectsMalformedPrograms) {
   bytes[0] ^= 0xff;
   uint64_t assignment = 0;
   uint32_t success = 0;
-  EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 0,
-                                       16, nullptr, 0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 0, 16,
+                                     nullptr, 0, &assignment, &success),
             TALOS_RT_INVALID_ARGUMENT);
 }
 
@@ -1545,7 +1545,7 @@ TEST_F(RandSolveTest, FunctionPriorityRejectsMalformedSourceRecords) {
                        false, {}, {}, {}, {{2, 2, 2}, {6, 3}});
   talos::random::SamplerPlanView plan;
   ASSERT_TRUE(talos::random::readSamplerPlan(bytes.data(), bytes.size(),
-                                               nullptr, plan));
+                                             nullptr, plan));
   size_t first = plan.coreSize - 48;
   auto reject = [&](size_t offset, uint8_t value) {
     auto malformed = bytes;
@@ -1876,8 +1876,8 @@ TEST_F(RandSolveTest, UniformResidualUsesWholeJointSetInsteadOfCyclicGaps) {
             TALOS_RT_OK);
   EXPECT_EQ(success, 0u);
   EXPECT_EQ(state, original);
-  EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 0,
-                                       1, nullptr, 0, &assignment, &success),
+  EXPECT_EQ(talos_rt_v1_random_solve(context, bytes.data(), bytes.size(), 0, 1,
+                                     nullptr, 0, &assignment, &success),
             TALOS_RT_INVALID_ARGUMENT);
 }
 

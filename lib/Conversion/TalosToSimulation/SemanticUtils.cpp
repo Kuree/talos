@@ -44,7 +44,8 @@ StringAttr getSimulationCovergroupSymbol(SymbolRefAttr semanticCovergroup) {
     }
     return component;
   };
-  std::string identity = semanticName(semanticCovergroup.getRootReference()).str();
+  std::string identity =
+      semanticName(semanticCovergroup.getRootReference()).str();
   for (FlatSymbolRefAttr nested : semanticCovergroup.getNestedReferences()) {
     identity.push_back('.');
     identity.append(semanticName(nested.getValue()));
@@ -52,9 +53,8 @@ StringAttr getSimulationCovergroupSymbol(SymbolRefAttr semanticCovergroup) {
   std::string name = "__talos_covergroup_";
   StringRef leaf = semanticName(semanticCovergroup.getLeafReference());
   for (char character : leaf)
-    name.push_back(std::isalnum(static_cast<unsigned char>(character))
-                       ? character
-                       : '_');
+    name.push_back(
+        std::isalnum(static_cast<unsigned char>(character)) ? character : '_');
   name.push_back('_');
   name.append(llvm::utohexstr(stableCodeUnitID(identity)));
   return StringAttr::get(semanticCovergroup.getContext(), name);
@@ -161,8 +161,7 @@ bool readsDynamicContainerValue(Operation *expression) {
 
 FailureOr<CoverageBinChildren>
 decodeCoverageBinChildren(semantic::SVCoverageBinSymbolOp bin) {
-  auto malformed = [&](const Twine &detail)
-      -> FailureOr<CoverageBinChildren> {
+  auto malformed = [&](const Twine &detail) -> FailureOr<CoverageBinChildren> {
     emitError(getSemanticLocation(bin))
         << "malformed coverage-bin child inventory: " << detail;
     return failure();
@@ -210,8 +209,8 @@ decodeCoverageBinChildren(semantic::SVCoverageBinSymbolOp bin) {
     destination = children[childIndex++];
     return success();
   };
-  if (bin.getHasIff() && failed(consume(semantic::SVCoverageBinChildRole::Iff,
-                                        result.iff)))
+  if (bin.getHasIff() &&
+      failed(consume(semantic::SVCoverageBinChildRole::Iff, result.iff)))
     return malformed("iff expression has no matching child role");
   if (bin.getHasNumberOfBins() &&
       failed(consume(semantic::SVCoverageBinChildRole::NumberOfBins,
@@ -245,8 +244,7 @@ decodeCoverageBinChildren(semantic::SVCoverageBinSymbolOp bin) {
   for (int64_t rangesInSet : setRangeValues) {
     CoverageTransitionSetChildren set;
     set.ranges.reserve(static_cast<size_t>(rangesInSet));
-    for (int64_t ordinal = 0; ordinal < rangesInSet;
-         ++ordinal, ++rangeIndex) {
+    for (int64_t ordinal = 0; ordinal < rangesInSet; ++ordinal, ++rangeIndex) {
       int64_t itemCount = rangeItemValues[rangeIndex];
       int64_t repeatKind = repeatKindValues[rangeIndex];
       int64_t hasFrom = hasRepeatFromValues[rangeIndex];
@@ -254,8 +252,7 @@ decodeCoverageBinChildren(semantic::SVCoverageBinSymbolOp bin) {
       if (itemCount <= 0 ||
           static_cast<uint64_t>(itemCount) > children.size() - childIndex)
         return malformed("transition item count is out of bounds");
-      if (repeatKind < 0 || repeatKind > 3 ||
-          (hasFrom != 0 && hasFrom != 1) ||
+      if (repeatKind < 0 || repeatKind > 3 || (hasFrom != 0 && hasFrom != 1) ||
           (hasTo != 0 && hasTo != 1) || hasTo > hasFrom ||
           ((repeatKind == 0) != (hasFrom == 0)))
         return malformed("transition repetition metadata is invalid");
@@ -271,9 +268,8 @@ decodeCoverageBinChildren(semantic::SVCoverageBinSymbolOp bin) {
         range.items.push_back(expression);
       }
       if (hasFrom &&
-          failed(consume(
-              semantic::SVCoverageBinChildRole::TransitionRepeatFrom,
-              range.repeatFrom)))
+          failed(consume(semantic::SVCoverageBinChildRole::TransitionRepeatFrom,
+                         range.repeatFrom)))
         return malformed("transition lower bound has no matching child role");
       if (hasTo &&
           failed(consume(semantic::SVCoverageBinChildRole::TransitionRepeatTo,
@@ -536,8 +532,8 @@ std::string functionalSemanticIdentity(Operation *operation) {
   bool hasCanonicalSource = operation->hasAttr("source_range");
   appendAttribute("source_range");
   appendAttribute("original_source_range");
-  if (auto frames = operation->getAttrOfType<ArrayAttr>(
-          "macro_expansion_stack")) {
+  if (auto frames =
+          operation->getAttrOfType<ArrayAttr>("macro_expansion_stack")) {
     for (Attribute value : frames) {
       auto frame = dyn_cast<DictionaryAttr>(value);
       if (!frame)
@@ -552,16 +548,15 @@ std::string functionalSemanticIdentity(Operation *operation) {
   }
   if (!hasCanonicalSource)
     if (auto location = operation->getLoc()->findInstanceOf<FileLineColLoc>())
-    stream << "loc=" << location.getFilename() << ':' << location.getLine()
-           << ':' << location.getColumn() << '|';
+      stream << "loc=" << location.getFilename() << ':' << location.getLine()
+             << ':' << location.getColumn() << '|';
   return identity;
 }
 
 uint64_t stableFunctionalTypeID(semantic::SVCovergroupTypeOp covergroup) {
-  uint64_t id = stableCodeUnitID(
-                    (Twine("functional.type|") +
-                     functionalSemanticIdentity(covergroup))
-                        .str()) &
+  uint64_t id = stableCodeUnitID((Twine("functional.type|") +
+                                  functionalSemanticIdentity(covergroup))
+                                     .str()) &
                 static_cast<uint64_t>(INT64_MAX);
   return id ? id : uint64_t{1};
 }

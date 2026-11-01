@@ -459,9 +459,9 @@ ScanResult scanFileRaw(FileEntry &entry, const char *prefix,
 
 } // namespace
 
-talos_rt_status writeUnlocked(talos_rt_context *context,
-                                uint32_t descriptor, const void *data,
-                                uint64_t size, uint64_t *outWritten) {
+talos_rt_status writeUnlocked(talos_rt_context *context, uint32_t descriptor,
+                              const void *data, uint64_t size,
+                              uint64_t *outWritten) {
   if (!validBytes(data, size) || size > std::numeric_limits<size_t>::max())
     return TALOS_RT_INVALID_ARGUMENT;
   std::vector<FileEntry *> outputs;
@@ -510,9 +510,8 @@ checkFileArguments(talos_rt_context *context, uint32_t descriptor,
 
 } // namespace
 
-bool talos_rt_file_name_unlocked(talos_rt_context *context,
-                                   uint32_t descriptor,
-                                   std::string_view &name) noexcept {
+bool talos_rt_file_name_unlocked(talos_rt_context *context, uint32_t descriptor,
+                                 std::string_view &name) noexcept {
   name = {};
   if (!context)
     return false;
@@ -535,9 +534,10 @@ bool talos_rt_file_name_unlocked(talos_rt_context *context,
   return true;
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_file_open_mcd(talos_rt_context *context, const char *path,
-                            uint64_t pathSize, uint32_t *outDescriptor) {
+extern "C" talos_rt_status talos_rt_v1_file_open_mcd(talos_rt_context *context,
+                                                     const char *path,
+                                                     uint64_t pathSize,
+                                                     uint32_t *outDescriptor) {
   if (!context || !outDescriptor)
     return TALOS_RT_INVALID_ARGUMENT;
   *outDescriptor = 0;
@@ -569,8 +569,8 @@ talos_rt_v1_file_open_mcd(talos_rt_context *context, const char *path,
 
 extern "C" talos_rt_status
 talos_rt_v1_file_open(talos_rt_context *context, const char *path,
-                        uint64_t pathSize, const char *mode, uint64_t modeSize,
-                        uint32_t *outDescriptor) {
+                      uint64_t pathSize, const char *mode, uint64_t modeSize,
+                      uint32_t *outDescriptor) {
   if (!context || !outDescriptor)
     return TALOS_RT_INVALID_ARGUMENT;
   *outDescriptor = 0;
@@ -623,8 +623,8 @@ talos_rt_v1_file_open(talos_rt_context *context, const char *path,
 
 extern "C" talos_rt_status
 talos_rt_v1_file_open_string_mcd(talos_rt_context *context,
-                                   talos_rt_string_v1 path,
-                                   uint32_t *outDescriptor) {
+                                 talos_rt_string_v1 path,
+                                 uint32_t *outDescriptor) {
   char scratch[8] = {};
   const char *bytes = nullptr;
   uint64_t size = 0;
@@ -635,9 +635,9 @@ talos_rt_v1_file_open_string_mcd(talos_rt_context *context,
              : status;
 }
 
-extern "C" talos_rt_status talos_rt_v1_file_open_string(
-    talos_rt_context *context, talos_rt_string_v1 path,
-    talos_rt_string_v1 mode, uint32_t *outDescriptor) {
+extern "C" talos_rt_status
+talos_rt_v1_file_open_string(talos_rt_context *context, talos_rt_string_v1 path,
+                             talos_rt_string_v1 mode, uint32_t *outDescriptor) {
   char pathScratch[8] = {};
   char modeScratch[8] = {};
   const char *pathBytes = nullptr;
@@ -651,12 +651,12 @@ extern "C" talos_rt_status talos_rt_v1_file_open_string(
   status = talos_rt_v1_string_view(mode, modeScratch, &modeBytes, &modeSize);
   return status == TALOS_RT_OK
              ? talos_rt_v1_file_open(context, pathBytes, pathSize, modeBytes,
-                                       modeSize, outDescriptor)
+                                     modeSize, outDescriptor)
              : status;
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_file_close(talos_rt_context *context, uint32_t descriptor) {
+extern "C" talos_rt_status talos_rt_v1_file_close(talos_rt_context *context,
+                                                  uint32_t descriptor) {
   if (!context || descriptor == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
@@ -708,8 +708,8 @@ talos_rt_v1_file_close(talos_rt_context *context, uint32_t descriptor) {
   });
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_file_flush(talos_rt_context *context, uint32_t descriptor) {
+extern "C" talos_rt_status talos_rt_v1_file_flush(talos_rt_context *context,
+                                                  uint32_t descriptor) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
@@ -742,8 +742,7 @@ talos_rt_v1_file_flush(talos_rt_context *context, uint32_t descriptor) {
 
 extern "C" talos_rt_status
 talos_rt_v1_file_write(talos_rt_context *context, uint32_t descriptor,
-                         const void *data, uint64_t size,
-                         uint64_t *outWritten) {
+                       const void *data, uint64_t size, uint64_t *outWritten) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   if (outWritten)
@@ -754,9 +753,10 @@ talos_rt_v1_file_write(talos_rt_context *context, uint32_t descriptor,
   });
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_file_read(talos_rt_context *context, uint32_t descriptor,
-                        void *data, uint64_t size, uint64_t *outRead) {
+extern "C" talos_rt_status talos_rt_v1_file_read(talos_rt_context *context,
+                                                 uint32_t descriptor,
+                                                 void *data, uint64_t size,
+                                                 uint64_t *outRead) {
   if (!context || !outRead || !validBytes(data, size) ||
       size > std::numeric_limits<size_t>::max())
     return TALOS_RT_INVALID_ARGUMENT;
@@ -1035,9 +1035,9 @@ extern "C" talos_rt_status talos_rt_v1_file_readmem_token(
   });
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_file_getc(talos_rt_context *context, uint32_t descriptor,
-                        uint8_t *outByte) {
+extern "C" talos_rt_status talos_rt_v1_file_getc(talos_rt_context *context,
+                                                 uint32_t descriptor,
+                                                 uint8_t *outByte) {
   if (!context || !outByte)
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
@@ -1068,9 +1068,9 @@ talos_rt_v1_file_getc(talos_rt_context *context, uint32_t descriptor,
   });
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_file_ungetc(talos_rt_context *context, uint32_t descriptor,
-                          uint8_t byte) {
+extern "C" talos_rt_status talos_rt_v1_file_ungetc(talos_rt_context *context,
+                                                   uint32_t descriptor,
+                                                   uint8_t byte) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
@@ -1097,7 +1097,7 @@ talos_rt_v1_file_ungetc(talos_rt_context *context, uint32_t descriptor,
 
 extern "C" talos_rt_status
 talos_rt_v1_file_getline(talos_rt_context *context, uint32_t descriptor,
-                           uint64_t maxBytes, talos_rt_buffer_v1 *outLine) {
+                         uint64_t maxBytes, talos_rt_buffer_v1 *outLine) {
   if (!context || !outLine)
     return TALOS_RT_INVALID_ARGUMENT;
   outLine->data = nullptr;
@@ -1138,8 +1138,8 @@ talos_rt_v1_file_getline(talos_rt_context *context, uint32_t descriptor,
 }
 
 extern "C" talos_rt_status talos_rt_v1_file_getline_string(
-    talos_rt_context *context, talos_rt_gc_lane_v1 *lane,
-    uint32_t descriptor, talos_rt_string_v1 *outString, uint32_t *outCount) {
+    talos_rt_context *context, talos_rt_gc_lane_v1 *lane, uint32_t descriptor,
+    talos_rt_string_v1 *outString, uint32_t *outCount) {
   if (!outString || !outCount)
     return TALOS_RT_INVALID_ARGUMENT;
   *outString = 0;
@@ -1164,10 +1164,10 @@ extern "C" talos_rt_status talos_rt_v1_file_getline_string(
 }
 
 extern "C" talos_rt_status talos_rt_v1_file_scan_field(
-    talos_rt_context *context, talos_rt_gc_lane_v1 *lane,
-    uint32_t descriptor, uint32_t enabled, const char *prefix,
-    uint64_t prefixSize, uint32_t specifier, uint64_t width,
-    talos_rt_string_v1 *outField, uint32_t *outOk, uint32_t *outEOF) {
+    talos_rt_context *context, talos_rt_gc_lane_v1 *lane, uint32_t descriptor,
+    uint32_t enabled, const char *prefix, uint64_t prefixSize,
+    uint32_t specifier, uint64_t width, talos_rt_string_v1 *outField,
+    uint32_t *outOk, uint32_t *outEOF) {
   if (!context || !lane || !outField || !outOk || !outEOF || enabled > 1 ||
       (!prefix && prefixSize != 0))
     return TALOS_RT_INVALID_ARGUMENT;
@@ -1225,14 +1225,13 @@ extern "C" talos_rt_status talos_rt_v1_file_scan_field(
   });
 }
 
-extern "C" TALOS_RT_FEATURE_TEXT talos_rt_status
-talos_rt_v1_file_scan_dynamic(
-    talos_rt_context *context, talos_rt_gc_lane_v1 *lane,
-    uint32_t descriptor, talos_rt_string_v1 format, uint32_t planCursor,
-    uint32_t enabled, uint32_t finalize, uint64_t allowedSpecifiers,
-    uint64_t rawTwoStateBytes, uint64_t rawFourStateBytes,
-    talos_rt_string_v1 *outField, uint32_t *outPlanCursor,
-    uint32_t *outSpecifier, uint32_t *outOk, uint32_t *outEOF) {
+extern "C" TALOS_RT_FEATURE_TEXT talos_rt_status talos_rt_v1_file_scan_dynamic(
+    talos_rt_context *context, talos_rt_gc_lane_v1 *lane, uint32_t descriptor,
+    talos_rt_string_v1 format, uint32_t planCursor, uint32_t enabled,
+    uint32_t finalize, uint64_t allowedSpecifiers, uint64_t rawTwoStateBytes,
+    uint64_t rawFourStateBytes, talos_rt_string_v1 *outField,
+    uint32_t *outPlanCursor, uint32_t *outSpecifier, uint32_t *outOk,
+    uint32_t *outEOF) {
   if (!context || !lane || !outField || !outPlanCursor || !outSpecifier ||
       !outOk || !outEOF || enabled > 1 || finalize > 1)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -1250,8 +1249,7 @@ talos_rt_v1_file_scan_dynamic(
     return TALOS_RT_OK;
 
   std::shared_ptr<const DynamicScanPlan> plan;
-  talos_rt_status status =
-      talos_rt_dynamic_scan_plan(context, format, plan);
+  talos_rt_status status = talos_rt_dynamic_scan_plan(context, format, plan);
   if (status != TALOS_RT_OK)
     return status;
   if (!plan->error.empty()) {
@@ -1467,9 +1465,9 @@ extern "C" talos_rt_status talos_rt_v1_file_scan_raw(
     }
     if (result == ScanResult::Mismatch)
       return TALOS_RT_OK;
-    if (bitWidth && !talos_rt_decode_scan_raw(
-                        raw.data(), raw.size(), bitWidth, fourState != 0, value,
-                        valueSize, unknown, unknownSize))
+    if (bitWidth && !talos_rt_decode_scan_raw(raw.data(), raw.size(), bitWidth,
+                                              fourState != 0, value, valueSize,
+                                              unknown, unknownSize))
       return TALOS_RT_INVALID_ARGUMENT;
     *outOk = 1;
     return TALOS_RT_OK;
@@ -1477,8 +1475,8 @@ extern "C" talos_rt_status talos_rt_v1_file_scan_raw(
 }
 
 extern "C" talos_rt_status talos_rt_v1_file_eof(talos_rt_context *context,
-                                                    uint32_t descriptor,
-                                                    uint32_t *outIsEOF) {
+                                                uint32_t descriptor,
+                                                uint32_t *outIsEOF) {
   if (!context || !outIsEOF)
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
@@ -1500,8 +1498,7 @@ extern "C" talos_rt_status talos_rt_v1_file_eof(talos_rt_context *context,
 
 extern "C" talos_rt_status
 talos_rt_v1_file_error(talos_rt_context *context, uint32_t descriptor,
-                         int32_t *outErrorCode,
-                         talos_rt_buffer_v1 *outMessage) {
+                       int32_t *outErrorCode, talos_rt_buffer_v1 *outMessage) {
   if (!context || !outErrorCode || !outMessage)
     return TALOS_RT_INVALID_ARGUMENT;
   outMessage->data = nullptr;
@@ -1520,9 +1517,8 @@ talos_rt_v1_file_error(talos_rt_context *context, uint32_t descriptor,
 }
 
 extern "C" talos_rt_status talos_rt_v1_file_error_string(
-    talos_rt_context *context, talos_rt_gc_lane_v1 *lane,
-    uint32_t descriptor, talos_rt_string_v1 *outMessage,
-    int32_t *outErrorCode) {
+    talos_rt_context *context, talos_rt_gc_lane_v1 *lane, uint32_t descriptor,
+    talos_rt_string_v1 *outMessage, int32_t *outErrorCode) {
   if (!outMessage || !outErrorCode)
     return TALOS_RT_INVALID_ARGUMENT;
   *outMessage = 0;
@@ -1542,15 +1538,16 @@ extern "C" talos_rt_status talos_rt_v1_file_error_string(
   return status;
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_file_seek(talos_rt_context *context, uint32_t descriptor,
-                        int64_t offset, talos_rt_seek_origin origin) {
+extern "C" talos_rt_status talos_rt_v1_file_seek(talos_rt_context *context,
+                                                 uint32_t descriptor,
+                                                 int64_t offset,
+                                                 talos_rt_seek_origin origin) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   int hostOrigin = origin == TALOS_RT_SEEK_SET   ? SEEK_SET
                    : origin == TALOS_RT_SEEK_CUR ? SEEK_CUR
                    : origin == TALOS_RT_SEEK_END ? SEEK_END
-                                                   : -1;
+                                                 : -1;
   if (hostOrigin == -1 || offset < std::numeric_limits<long>::min() ||
       offset > std::numeric_limits<long>::max())
     return TALOS_RT_INVALID_ARGUMENT;
@@ -1571,9 +1568,9 @@ talos_rt_v1_file_seek(talos_rt_context *context, uint32_t descriptor,
   });
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_file_tell(talos_rt_context *context, uint32_t descriptor,
-                        int64_t *outOffset) {
+extern "C" talos_rt_status talos_rt_v1_file_tell(talos_rt_context *context,
+                                                 uint32_t descriptor,
+                                                 int64_t *outOffset) {
   if (!context || !outOffset)
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
@@ -1594,7 +1591,7 @@ talos_rt_v1_file_tell(talos_rt_context *context, uint32_t descriptor,
   });
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_file_rewind(talos_rt_context *context, uint32_t descriptor) {
+extern "C" talos_rt_status talos_rt_v1_file_rewind(talos_rt_context *context,
+                                                   uint32_t descriptor) {
   return talos_rt_v1_file_seek(context, descriptor, 0, TALOS_RT_SEEK_SET);
 }

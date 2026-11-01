@@ -149,9 +149,7 @@ bool evaluateNativeBoundObserver(talos_rt_context *context,
         status = TALOS_RT_TIER_UNAVAILABLE;
       }
     }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      status = TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { status = TALOS_RT_OUT_OF_MEMORY; }
     TALOS_RT_CATCH_ALL { status = TALOS_RT_INVALID_ARGUMENT; }
   }
   --context->observerDepth;
@@ -292,9 +290,7 @@ bool evaluateNativeComputedWaiters(talos_rt_context *context,
         }
       }
       if (!affected) {
-        TALOS_RT_TRY {
-          context->pendingNativeComputedWaiters.push_back(token);
-        }
+        TALOS_RT_TRY { context->pendingNativeComputedWaiters.push_back(token); }
         TALOS_RT_CATCH(const std::bad_alloc &) {
           context->schedulerStatus = TALOS_RT_OUT_OF_MEMORY;
           return false;
@@ -479,7 +475,7 @@ void updateScheduledProcessInstance(talos_rt_context *context,
 }
 
 bool talos_rt_notify_observer_event_unlocked(talos_rt_context *context,
-                                               uint64_t stableID) {
+                                             uint64_t stableID) {
   return evaluateNativeComputedWaiters(
              context, TALOS_RT_OBSERVER_DEPENDENCY_EVENT, stableID, 1) &&
          talos_rt_evaluate_design_observers_unlocked(
@@ -487,8 +483,8 @@ bool talos_rt_notify_observer_event_unlocked(talos_rt_context *context,
 }
 
 bool talos_rt_notify_observer_signal_unlocked(talos_rt_context *context,
-                                                uint64_t stableID,
-                                                uint64_t width) {
+                                              uint64_t stableID,
+                                              uint64_t width) {
   return evaluateNativeComputedWaiters(
              context, TALOS_RT_OBSERVER_DEPENDENCY_SIGNAL, stableID, width) &&
          talos_rt_evaluate_design_observers_unlocked(
@@ -496,11 +492,11 @@ bool talos_rt_notify_observer_signal_unlocked(talos_rt_context *context,
 }
 
 bool talos_rt_notify_observer_managed_unlocked(talos_rt_context *context,
-                                                 uint64_t token) {
+                                               uint64_t token) {
   return evaluateNativeComputedWaiters(
              context, TALOS_RT_OBSERVER_DEPENDENCY_MANAGED, token, 1) &&
          talos_rt_evaluate_design_observers_unlocked(
              context, TALOS_RT_OBSERVER_DEPENDENCY_MANAGED, token, 1) &&
          talos_rt_evaluate_covergroup_managed_clock_events_unlocked(context,
-                                                                      token);
+                                                                    token);
 }

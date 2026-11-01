@@ -432,8 +432,7 @@ materializeCWrapper(ModuleOp module, const ExportSpec &spec,
     Value rootStatus =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context,
-                               "talos_rt_v1_dpi_aggregate_roots_push"),
+            SymbolRefAttr::get(context, "talos_rt_v1_dpi_aggregate_roots_push"),
             ValueRange{
                 activeContext, planes.first,
                 llvmConstant(builder, location, i64,
@@ -465,15 +464,13 @@ materializeCWrapper(ModuleOp module, const ExportSpec &spec,
         Value activeContext =
             LLVM::CallOp::create(
                 builder, location, TypeRange{pointer},
-                SymbolRefAttr::get(context,
-                                   "talos_rt_v1_dpi_current_context"),
+                SymbolRefAttr::get(context, "talos_rt_v1_dpi_current_context"),
                 ValueRange{})
                 .getResult();
         Value unpackStatus =
             LLVM::CallOp::create(
                 builder, location, TypeRange{i32},
-                SymbolRefAttr::get(context,
-                                   "talos_rt_v1_dpi_aggregate_unpack"),
+                SymbolRefAttr::get(context, "talos_rt_v1_dpi_aggregate_unpack"),
                 ValueRange{
                     activeContext, argument,
                     llvmConstant(builder, location, i64, layout.getCSize()),
@@ -505,8 +502,7 @@ materializeCWrapper(ModuleOp module, const ExportSpec &spec,
       } else if (isVector(abi)) {
         LLVM::CallOp::create(
             builder, location, TypeRange{},
-            SymbolRefAttr::get(context,
-                               "talos_rt_v1_dpi_export_unpack_vector"),
+            SymbolRefAttr::get(context, "talos_rt_v1_dpi_export_unpack_vector"),
             ValueRange{
                 argument, planes.first, planes.second,
                 llvmConstant(builder, location, i32, abi.width),
@@ -652,12 +648,11 @@ materializeCWrapper(ModuleOp module, const ExportSpec &spec,
       return;
     }
     if (isString(abi)) {
-      Value text =
-          LLVM::CallOp::create(
-              builder, location, TypeRange{pointer},
-              SymbolRefAttr::get(context, "talos_rt_v1_export_string"),
-              llvmConstant(builder, location, i32, outputIndex))
-              .getResult();
+      Value text = LLVM::CallOp::create(
+                       builder, location, TypeRange{pointer},
+                       SymbolRefAttr::get(context, "talos_rt_v1_export_string"),
+                       llvmConstant(builder, location, i32, outputIndex))
+                       .getResult();
       LLVM::StoreOp::create(builder, location, text, target, 1);
       return;
     }
@@ -718,12 +713,12 @@ materializeCWrapper(ModuleOp module, const ExportSpec &spec,
   for (Value handleSlot : llvm::reverse(aggregateRootHandles)) {
     Value handle =
         LLVM::LoadOp::create(builder, location, pointer, handleSlot, 8);
-    Value popStatus = LLVM::CallOp::create(
-                          builder, location, TypeRange{i32},
-                          SymbolRefAttr::get(
-                              context, "talos_rt_v1_dpi_aggregate_roots_pop"),
-                          ValueRange{activeContext, handle})
-                          .getResult();
+    Value popStatus =
+        LLVM::CallOp::create(
+            builder, location, TypeRange{i32},
+            SymbolRefAttr::get(context, "talos_rt_v1_dpi_aggregate_roots_pop"),
+            ValueRange{activeContext, handle})
+            .getResult();
     mergeMarshallingStatus(popStatus);
   }
   marshallingStatus =
@@ -739,8 +734,7 @@ materializeCWrapper(ModuleOp module, const ExportSpec &spec,
   if (spec.isTask) {
     Value disabled = arith::CmpIOp::create(
         builder, location, arith::CmpIPredicate::eq, finalStatus,
-        llvmConstant(builder, location, i32,
-                     TALOS_RT_DPI_DISABLE_UNSUPPORTED));
+        llvmConstant(builder, location, i32, TALOS_RT_DPI_DISABLE_UNSUPPORTED));
     LLVM::ReturnOp::create(
         builder, location,
         arith::SelectOp::create(builder, location, disabled,
@@ -995,9 +989,9 @@ LogicalResult materializeNativeTaskThunk(ModuleOp module,
     Block *failed = new Block;
     thunk.getBody().push_back(next);
     thunk.getBody().push_back(failed);
-    Value ok = LLVM::ICmpOp::create(
-        builder, location, LLVM::ICmpPredicate::eq, status,
-        llvmConstant(builder, location, i32, TALOS_RT_OK));
+    Value ok =
+        LLVM::ICmpOp::create(builder, location, LLVM::ICmpPredicate::eq, status,
+                             llvmConstant(builder, location, i32, TALOS_RT_OK));
     LLVM::CondBrOp::create(builder, location, ok, next, failed);
     builder.setInsertionPointToStart(failed);
     LLVM::StoreOp::create(builder, location, status, statusSlot, 4);
@@ -1158,8 +1152,7 @@ LogicalResult materializeNativeTaskThunk(ModuleOp module,
     Value loadValue =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context,
-                               "talos_rt_v1_native_state_load_plane"),
+            SymbolRefAttr::get(context, "talos_rt_v1_native_state_load_plane"),
             ValueRange{entry->getArgument(0), valueDestination,
                        llvmConstant(builder, location, i64, 0), reference,
                        llvmConstant(builder, location, i64, abi.width),
@@ -1477,9 +1470,9 @@ LogicalResult materializeNativeThunk(ModuleOp module, LLVM::LLVMFuncOp thunk,
     thunk.getBody().push_back(copyResults);
     thunk.getBody().push_back(bodyFailed);
     Value status = resultAt(expectedResults.size());
-    Value succeeded = LLVM::ICmpOp::create(
-        builder, location, LLVM::ICmpPredicate::eq, status,
-        llvmConstant(builder, location, i32, TALOS_RT_OK));
+    Value succeeded =
+        LLVM::ICmpOp::create(builder, location, LLVM::ICmpPredicate::eq, status,
+                             llvmConstant(builder, location, i32, TALOS_RT_OK));
     LLVM::CondBrOp::create(builder, location, succeeded, copyResults,
                            bodyFailed);
     builder.setInsertionPointToStart(bodyFailed);
@@ -1597,8 +1590,7 @@ LogicalResult materializeDPIExportWrappers(ModuleOp module) {
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_export_call_guarded", i32,
       {i32, i32, builder.getI64Type(), pointer, i32, pointer, i32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_dpi_export_status", i32,
-                           {i32});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_dpi_export_status", i32, {i32});
   if (needsTask)
     getOrDeclareLLVMFunction(module, "talos_rt_v1_dpi_export_task_run", i32,
                              {pointer, pointer});
@@ -1616,8 +1608,8 @@ LogicalResult materializeDPIExportWrappers(ModuleOp module) {
                              voidType, {pointer, pointer, pointer, i32, i32});
   }
   if (needsAggregate) {
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_dpi_current_context",
-                             pointer, {});
+    getOrDeclareLLVMFunction(module, "talos_rt_v1_dpi_current_context", pointer,
+                             {});
     getOrDeclareLLVMFunction(module, "talos_rt_v1_dpi_aggregate_pack", i32,
                              {pointer, pointer, builder.getI64Type(),
                               builder.getI64Type(), i32, pointer,
@@ -1631,8 +1623,8 @@ LogicalResult materializeDPIExportWrappers(ModuleOp module) {
         module, "talos_rt_v1_dpi_aggregate_roots_push", i32,
         {pointer, pointer, builder.getI64Type(), builder.getI64Type(), pointer,
          builder.getI64Type(), pointer});
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_dpi_aggregate_roots_pop",
-                             i32, {pointer, pointer});
+    getOrDeclareLLVMFunction(module, "talos_rt_v1_dpi_aggregate_roots_pop", i32,
+                             {pointer, pointer});
     getOrDeclareLLVMFunction(
         module, "talos_rt_v1_dpi_aggregate_export_pack", i32,
         {pointer, pointer, builder.getI64Type(), builder.getI64Type(), i32,

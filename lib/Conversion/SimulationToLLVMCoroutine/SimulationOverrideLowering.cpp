@@ -151,10 +151,10 @@ public:
                 llvmConstant(rewriter, location, i32, op.getIsAssign() ? 1 : 0),
                 valueStorage, unknownStorage})
             .getResult();
-    LLVM::CallOp::create(rewriter, location, TypeRange{},
-                         SymbolRefAttr::get(rewriter.getContext(),
-                                            "talos_rt_v1_scheduler_fail"),
-                         ValueRange{context, status});
+    LLVM::CallOp::create(
+        rewriter, location, TypeRange{},
+        SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_scheduler_fail"),
+        ValueRange{context, status});
     rewriter.eraseOp(op);
     return success();
   }
@@ -269,10 +269,10 @@ public:
                 llvmConstant(rewriter, location, i32, op.getClaim() ? 1 : 0),
                 valueStorage, unknownStorage})
             .getResult();
-    LLVM::CallOp::create(rewriter, location, TypeRange{},
-                         SymbolRefAttr::get(rewriter.getContext(),
-                                            "talos_rt_v1_scheduler_fail"),
-                         ValueRange{context, status});
+    LLVM::CallOp::create(
+        rewriter, location, TypeRange{},
+        SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_scheduler_fail"),
+        ValueRange{context, status});
     rewriter.eraseOp(op);
     return success();
   }
@@ -372,10 +372,10 @@ public:
                        llvmConstant(rewriter, location, i32,
                                     op.getIsAssign() ? 1 : 0)})
             .getResult();
-    LLVM::CallOp::create(rewriter, location, TypeRange{},
-                         SymbolRefAttr::get(rewriter.getContext(),
-                                            "talos_rt_v1_scheduler_fail"),
-                         ValueRange{context, status});
+    LLVM::CallOp::create(
+        rewriter, location, TypeRange{},
+        SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_scheduler_fail"),
+        ValueRange{context, status});
     rewriter.eraseOp(op);
     return success();
   }

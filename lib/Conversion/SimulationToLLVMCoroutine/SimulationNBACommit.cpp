@@ -216,8 +216,7 @@ void emitScalarNBACommitLoop(OpBuilder &b, ModuleOp module,
       b, loc, i64,
       LLVM::LoadOp::create(
           b, loc, i32,
-          field(
-              offsetof(talos_rt_generated_nba_accumulator_256, exec_region)),
+          field(offsetof(talos_rt_generated_nba_accumulator_256, exec_region)),
           4));
   Value valid = LLVM::LoadOp::create(
       b, loc, i32,
@@ -233,11 +232,10 @@ void emitScalarNBACommitLoop(OpBuilder &b, ModuleOp module,
   // Match the unrolled barrier: consume only the roots committed here. A
   // root staged in the canonical accumulator by a runtime-executed actor keeps
   // its bit for the canonical index owner (IEEE 1800-2023 4.9.4, 10.4.2).
-  LLVM::StoreOp::create(
-      b, loc,
-      band(LLVM::LoadOp::create(b, loc, i64, dirtyAddress, 8),
-           inv(arith::ShLIOp::create(b, loc, c(1), bit))),
-      dirtyAddress, 8);
+  LLVM::StoreOp::create(b, loc,
+                        band(LLVM::LoadOp::create(b, loc, i64, dirtyAddress, 8),
+                             inv(arith::ShLIOp::create(b, loc, c(1), bit))),
+                        dirtyAddress, 8);
   Value offset = load(offsetTable, index), shift = load(shiftTable, index),
         widthMask = load(widthTable, index),
         fixedMask = load(fixedTable, index);

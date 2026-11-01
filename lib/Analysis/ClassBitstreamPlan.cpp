@@ -3,8 +3,8 @@
 #include "talos/Analysis/ClassBitstreamPlan.h"
 
 #include "talos/Analysis/ClassBitstreamAnalysis.h"
-#include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
+#include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Runtime/Runtime.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"

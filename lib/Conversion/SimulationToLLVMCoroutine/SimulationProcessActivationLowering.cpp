@@ -49,8 +49,7 @@ makeProcessActivationHelper(ModuleOp module, SymbolTable &symbols,
     transferredReferences = references.asArrayRef();
   std::string checkedHelperName =
       (function.getSymName() + ".__talos_activate_checked").str();
-  std::string helperName =
-      (function.getSymName() + ".__talos_activate").str();
+  std::string helperName = (function.getSymName() + ".__talos_activate").str();
   if (symbols.lookup(checkedHelperName) || symbols.lookup(helperName))
     return success();
   builder.setInsertionPointAfter(function);
@@ -84,8 +83,8 @@ makeProcessActivationHelper(ModuleOp module, SymbolTable &symbols,
   Value status =
       LLVM::CallOp::create(
           builder, location, TypeRange{i32},
-          SymbolRefAttr::get(
-              context, "talos_rt_v1_process_instance_create_for_context"),
+          SymbolRefAttr::get(context,
+                             "talos_rt_v1_process_instance_create_for_context"),
           ValueRange{entry->getArgument(0), descriptor, outInstance})
           .getResult();
   Value succeeded =
@@ -242,8 +241,7 @@ FailureOr<LLVM::LLVMFuncOp> makeProcessSpawnHelper(
            failure();
   sim::EntryKind entryKind = function.getEntryKind();
   bool primeOnSpawn =
-      ::talos::schedule::has<::talos::schedule::Field::PrimeOnSpawn>(
-          function);
+      ::talos::schedule::has<::talos::schedule::Field::PrimeOnSpawn>(function);
   if (primeOnSpawn &&
       (!function->hasAttr("internal") ||
        !::talos::schedule::has<::talos::schedule::Field::DetachedControls>(
@@ -255,8 +253,9 @@ FailureOr<LLVM::LLVMFuncOp> makeProcessSpawnHelper(
   bool startup = sim::isStartupEntryKind(entryKind) ||
                  (entryKind == sim::EntryKind::Initial &&
                   function.getHomeRegion() == sim::EventRegion::Active);
-  bool prioritySignalResume = ::talos::schedule::has<
-      ::talos::schedule::Field::PrioritySignalResume>(function);
+  bool prioritySignalResume =
+      ::talos::schedule::has<::talos::schedule::Field::PrioritySignalResume>(
+          function);
   bool concurrentSignalObserver =
       ::talos::schedule::has<::talos::schedule::Field::ConcurrentCancel>(
           function) ||
@@ -299,16 +298,14 @@ FailureOr<LLVM::LLVMFuncOp> makeProcessSpawnHelper(
           std::max(captureSize, slot.getSecondaryOffset() + slot.storageSize);
     }
   }
-  auto owner =
-      ::talos::schedule::get<::talos::schedule::Field::ProgramOwnerId>(
-          function);
+  auto owner = ::talos::schedule::get<::talos::schedule::Field::ProgramOwnerId>(
+      function);
   uint32_t options = (primeOnSpawn ? TALOS_RT_SPAWN_PRIME : 0) |
                      (owner ? TALOS_RT_SPAWN_PROGRAM_OWNER : 0);
   auto planType = LLVM::LLVMStructType::getLiteral(
       context, {pointer, i64, pointer, pointer, pointer, i64, i32, i32, i32,
                 i32, i32, i32});
-  std::string planName =
-      (function.getSymName() + ".__talos_spawn_plan").str();
+  std::string planName = (function.getSymName() + ".__talos_spawn_plan").str();
   auto plan = makeConstantGlobal(
       module, location, planType, planName, LLVM::Linkage::Internal, 8,
       [&](OpBuilder &initializer) {
@@ -324,8 +321,8 @@ FailureOr<LLVM::LLVMFuncOp> makeProcessSpawnHelper(
                               llvmConstant(initializer, location, type, number),
                               field);
         };
-        address(
-            0, (function.getSymName() + ".__talos_process_descriptor").str());
+        address(0,
+                (function.getSymName() + ".__talos_process_descriptor").str());
         integer(1, i64, captureSize);
         if (!schedule.continuations.empty()) {
           address(2, continuationName);
@@ -461,8 +458,8 @@ void declareProcessSpawnRuntimeABI(ModuleOp module) {
                            {pointer, i64, pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_vpi_call_prepare", i32,
                            {pointer, i64, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_vpi_frame_enter_prepared",
-                           i32, {pointer, i64, i32, pointer});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_vpi_frame_enter_prepared", i32,
+                           {pointer, i64, i32, pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_vpi_frame_enter", i32,
                            {pointer, i64, i32, i64, pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_vpi_frame_checkpoint", i32,
@@ -479,8 +476,8 @@ void declareProcessSpawnRuntimeABI(ModuleOp module) {
                            {pointer, i64});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_control_disable", i32,
                            {pointer, i64, i64, i32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_control_disable_selected",
-                           i32, {pointer, i64, i64, i32, pointer});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_control_disable_selected", i32,
+                           {pointer, i64, i64, i32, pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_control_escape_pending", i32,
                            {pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_static_once", i32,
@@ -489,9 +486,8 @@ void declareProcessSpawnRuntimeABI(ModuleOp module) {
                            {pointer, i64});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_deferred_enqueue", i64,
                            {pointer, i64});
-  getOrDeclareLLVMFunction(module,
-                           "talos_rt_v1_deferred_enqueue_for_assertion", i64,
-                           {pointer, i64, i64});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_deferred_enqueue_for_assertion",
+                           i64, {pointer, i64, i64});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_deferred_mature", i32,
                            {pointer, i64});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_assertion_control", i32,
@@ -502,14 +498,14 @@ void declareProcessSpawnRuntimeABI(ModuleOp module) {
                            {pointer, i64});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_assertion_kill_epoch", i64,
                            {pointer, i64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_monitor_register_logical",
-                           i32, {pointer, i64});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_monitor_register_logical", i32,
+                           {pointer, i64});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_monitor_control", i32,
                            {pointer, i32});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_monitor_current", i32,
                            {pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_process_instance_destroy",
-                           i32, {pointer});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_process_instance_destroy", i32,
+                           {pointer});
 }
 
 } // namespace talos::detail

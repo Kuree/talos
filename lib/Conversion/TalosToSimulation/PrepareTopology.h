@@ -7,8 +7,8 @@
 #ifndef TALOS_LIB_CONVERSION_TALOSTOSIMULATION_PREPARETOPOLOGY_H
 #define TALOS_LIB_CONVERSION_TALOSTOSIMULATION_PREPARETOPOLOGY_H
 
-#include "talos/Dialect/Talos/TalosOps.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
+#include "talos/Dialect/Talos/TalosOps.h"
 
 #include "PrepareDeclarations.h"
 

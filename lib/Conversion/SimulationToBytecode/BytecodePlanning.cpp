@@ -118,9 +118,8 @@ void pruneNativeFunctions(sim::SimDesignOp design,
         !::talos::schedule::has<::talos::schedule::Field::EvalContinuation>(
             function))
       retain(function);
-    bool needsFallback =
-        native.getBytecodeFragments().contains(function) ||
-        native.getRuntimeCheckpointActors().contains(function);
+    bool needsFallback = native.getBytecodeFragments().contains(function) ||
+                         native.getRuntimeCheckpointActors().contains(function);
     function.walk([&](Operation *op) {
       needsFallback |=
           isa<sim::SimTaskCallOp>(op) || sim::isColdRuntimeCheckpoint(op);

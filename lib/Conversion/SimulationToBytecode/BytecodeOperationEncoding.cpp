@@ -275,8 +275,8 @@ LogicalResult Encoder::encodeOperation(FunctionPlan &plan,
             callee.function);
     if (primeOnSpawn &&
         (!callee.function->hasAttr("internal") ||
-         !::talos::schedule::has<
-             ::talos::schedule::Field::DetachedControls>(callee.function) ||
+         !::talos::schedule::has<::talos::schedule::Field::DetachedControls>(
+             callee.function) ||
          entryKind != sim::EntryKind::Fork))
       return op.emitOpError(
           "prime-on-spawn is reserved for internal detached waiters");
@@ -284,8 +284,9 @@ LogicalResult Encoder::encodeOperation(FunctionPlan &plan,
         sim::isStartupEntryKind(entryKind) ||
         (entryKind == sim::EntryKind::Initial &&
          callee.function.getHomeRegion() == sim::EventRegion::Active);
-    bool prioritySignalResume = ::talos::schedule::has<
-        ::talos::schedule::Field::PrioritySignalResume>(callee.function);
+    bool prioritySignalResume =
+        ::talos::schedule::has<::talos::schedule::Field::PrioritySignalResume>(
+            callee.function);
     bool concurrentSignalObserver =
         ::talos::schedule::has<::talos::schedule::Field::ConcurrentCancel>(
             callee.function) ||
@@ -293,8 +294,8 @@ LogicalResult Encoder::encodeOperation(FunctionPlan &plan,
             callee.function);
     if (prioritySignalResume &&
         (!callee.function->hasAttr("internal") || !concurrentSignalObserver ||
-         !::talos::schedule::has<
-             ::talos::schedule::Field::DetachedControls>(callee.function) ||
+         !::talos::schedule::has<::talos::schedule::Field::DetachedControls>(
+             callee.function) ||
          entryKind != sim::EntryKind::Fork ||
          callee.function.getHomeRegion() != sim::EventRegion::Reactive))
       return op.emitOpError(
@@ -310,8 +311,7 @@ LogicalResult Encoder::encodeOperation(FunctionPlan &plan,
              ? TALOS_RT_INTRINSIC_SPAWN_DETACHED_CONTROLS
              : 0) |
         (primeOnSpawn ? TALOS_RT_INTRINSIC_SPAWN_PRIME : 0) |
-        (prioritySignalResume ? TALOS_RT_INTRINSIC_SPAWN_PRIORITY_SIGNAL
-                              : 0) |
+        (prioritySignalResume ? TALOS_RT_INTRINSIC_SPAWN_PRIORITY_SIGNAL : 0) |
         (programOwner ? TALOS_RT_INTRINSIC_SPAWN_PROGRAM : 0);
     SmallVector<uint32_t> inputs;
     llvm::transform(captures, std::back_inserter(inputs),
@@ -367,9 +367,8 @@ LogicalResult Encoder::encodeOperation(FunctionPlan &plan,
     uint32_t flags = emitU64Constant(
         plan,
         (op.getVectorDelay() ? TALOS_RT_INERTIAL_DRIVER_VECTOR_DELAY : 0) |
-            (op.getDeferResolution()
-                 ? TALOS_RT_INERTIAL_DRIVER_DEFER_RESOLUTION
-                 : 0) |
+            (op.getDeferResolution() ? TALOS_RT_INERTIAL_DRIVER_DEFER_RESOLUTION
+                                     : 0) |
             (sim::has<sim::metadata::UserNetRawDrive>(op)
                  ? TALOS_RT_INERTIAL_DRIVER_PUBLISH_RAW
                  : 0) |
@@ -405,9 +404,8 @@ LogicalResult Encoder::encodeOperation(FunctionPlan &plan,
                  ? TALOS_RT_INERTIAL_DRIVER_PUBLISH_RAW
                  : 0) |
             (op.getPulseOnDetect() ? TALOS_RT_INERTIAL_PATH_ON_DETECT : 0) |
-            (op.getPulseShowCancelled()
-                 ? TALOS_RT_INERTIAL_PATH_SHOW_CANCELLED
-                 : 0) |
+            (op.getPulseShowCancelled() ? TALOS_RT_INERTIAL_PATH_SHOW_CANCELLED
+                                        : 0) |
             (op.getPulseTransitionMasks()
                  ? TALOS_RT_INERTIAL_PATH_EXACT_TRANSITIONS
                  : 0));
@@ -451,13 +449,13 @@ LogicalResult Encoder::encodeOperation(FunctionPlan &plan,
     uint32_t pulseError =
         pulseControlled ? emitU64Constant(plan, op.getPulseError()) : 0;
     uint32_t pulseFlags = emitU64Constant(
-        plan, (op.getPulseOnDetect() ? TALOS_RT_INERTIAL_PATH_ON_DETECT : 0) |
-                  (op.getPulseShowCancelled()
-                       ? TALOS_RT_INERTIAL_PATH_SHOW_CANCELLED
-                       : 0) |
-                  (op.getPulseTransitionMasks()
-                       ? TALOS_RT_INERTIAL_PATH_EXACT_TRANSITIONS
-                       : 0));
+        plan,
+        (op.getPulseOnDetect() ? TALOS_RT_INERTIAL_PATH_ON_DETECT : 0) |
+            (op.getPulseShowCancelled() ? TALOS_RT_INERTIAL_PATH_SHOW_CANCELLED
+                                        : 0) |
+            (op.getPulseTransitionMasks()
+                 ? TALOS_RT_INERTIAL_PATH_EXACT_TRANSITIONS
+                 : 0));
     if (siteID == kInvalidRegister || component == kInvalidRegister ||
         group == kInvalidRegister || groupCount == kInvalidRegister ||
         nonblocking == kInvalidRegister ||
@@ -979,8 +977,7 @@ LogicalResult Encoder::encodeOperation(FunctionPlan &plan,
         inputs.push_back(emitU64Constant(plan, slot.bitOffset));
         inputs.push_back(emitU64Constant(plan, slot.kindMask));
         inputs.push_back(emitU64Constant(
-            plan,
-            slot.conditional ? TALOS_RT_MANAGED_ROOT_SLOT_CANDIDATE : 0));
+            plan, slot.conditional ? TALOS_RT_MANAGED_ROOT_SLOT_CANDIDATE : 0));
       }
     }
     return emitIntrinsicRegisters(plan, intrinsic, inputs,
@@ -993,9 +990,9 @@ LogicalResult Encoder::encodeOperation(FunctionPlan &plan,
         op, op.getCallAttr());
     if (!call)
       return op.emitOpError("missing verified VPI call declaration");
-    return emitIntrinsicRegisters(
-        plan, TALOS_RT_INTRINSIC_V1_VPI_CALL_PREPARE,
-        {emitU64Constant(plan, call.getId())}, {reg(plan, op.getTicket())});
+    return emitIntrinsicRegisters(plan, TALOS_RT_INTRINSIC_V1_VPI_CALL_PREPARE,
+                                  {emitU64Constant(plan, call.getId())},
+                                  {reg(plan, op.getTicket())});
   }
   if (auto op = dyn_cast<sim::SimVPIFrameEnterForeignOp>(operation))
     return emitIntrinsicRegisters(

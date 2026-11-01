@@ -46,8 +46,8 @@ uint64_t layoutChecksum(const talos_rt_frame_layout_v1 &layout) {
     hash = talos_stable_hash_append_uint_le(hash, field.reserved, 4);
   }
   for (uint32_t index = 0; index != layout.continuation_count; ++index)
-    hash = talos_stable_hash_append_uint_le(hash, layout.continuations[index],
-                                              4);
+    hash =
+        talos_stable_hash_append_uint_le(hash, layout.continuations[index], 4);
   return hash;
 }
 
@@ -64,11 +64,10 @@ findWaitField(const talos_rt_frame_layout_v1 &layout, uint64_t offset) {
   // process with a large frame finds its wait without visiting every local.
   const talos_rt_frame_field_v1 *begin = layout.fields;
   const talos_rt_frame_field_v1 *end = begin + layout.field_count;
-  const talos_rt_frame_field_v1 *field = std::lower_bound(
-      begin, end, offset,
-      [](const talos_rt_frame_field_v1 &field, uint64_t offset) {
-        return field.offset < offset;
-      });
+  const talos_rt_frame_field_v1 *field =
+      std::lower_bound(begin, end, offset,
+                       [](const talos_rt_frame_field_v1 &field,
+                          uint64_t offset) { return field.offset < offset; });
   if (field == end || field->offset != offset ||
       field->kind != TALOS_RT_FRAME_WAIT)
     return nullptr;
@@ -225,8 +224,8 @@ validateDescriptor(const talos_rt_process_descriptor_v1 &descriptor,
         return TALOS_RT_TIER_UNAVAILABLE;
       uint64_t bytecodeAlignment = 1;
       status = talos_rt_validate_design_bytecode(*descriptor.design_bytecode,
-                                                   context, &bytecodeSize,
-                                                   &bytecodeAlignment);
+                                                 context, &bytecodeSize,
+                                                 &bytecodeAlignment);
       if (status != TALOS_RT_OK)
         return status;
       tailAlignment = std::max(tailAlignment, bytecodeAlignment);
@@ -273,21 +272,19 @@ validateComputedWait(talos_rt_process_instance_v1 &instance,
                      const talos_rt_fragment_action_v1 &action) {
   if (action.auxiliary < sizeof(talos_rt_computed_wait_record_v1))
     return TALOS_RT_INVALID_FRAME;
-  const auto *wait =
-      reinterpret_cast<const talos_rt_computed_wait_record_v1 *>(
-          static_cast<const uint8_t *>(instance.frame) + action.payload);
-  return talos_rt_validate_computed_wait_record(
-             instance.descriptor->execution, wait, action.auxiliary)
+  const auto *wait = reinterpret_cast<const talos_rt_computed_wait_record_v1 *>(
+      static_cast<const uint8_t *>(instance.frame) + action.payload);
+  return talos_rt_validate_computed_wait_record(instance.descriptor->execution,
+                                                wait, action.auxiliary)
              ? TALOS_RT_OK
              : TALOS_RT_INVALID_FRAME;
 }
 
 talos_rt_status validateWait(talos_rt_process_instance_v1 &instance,
-                               talos_rt_fragment_action_v1 &action,
-                               bool allowLegacyBytecode) {
+                             talos_rt_fragment_action_v1 &action,
+                             bool allowLegacyBytecode) {
   const talos_rt_frame_layout_v1 &layout = *instance.descriptor->frame_layout;
-  const talos_rt_frame_field_v1 *field =
-      findWaitField(layout, action.payload);
+  const talos_rt_frame_field_v1 *field = findWaitField(layout, action.payload);
   if (!field)
     return TALOS_RT_INVALID_FRAME;
   if (allowLegacyBytecode && (action.flags & ~kResumeActionFlags) == 0) {
@@ -313,15 +310,14 @@ talos_rt_status validateWait(talos_rt_process_instance_v1 &instance,
               kWaitEntrySize ||
       (entriesSize = uint64_t{wait->count} * kWaitEntrySize,
        addOverflow(kWaitHeaderSize, entriesSize, required)) ||
-      wait->version != TALOS_RT_VERSION ||
-      wait->kind != action.suspend_kind || required > action.auxiliary)
+      wait->version != TALOS_RT_VERSION || wait->kind != action.suspend_kind ||
+      required > action.auxiliary)
     return TALOS_RT_INVALID_FRAME;
 
   const auto *entries = reinterpret_cast<const talos_rt_wait_entry_v1 *>(
       reinterpret_cast<const uint8_t *>(wait) + kWaitHeaderSize);
   auto validEdge = [](talos_rt_wait_edge_kind edge) {
-    return edge >= TALOS_RT_WAIT_EDGE_CHANGE &&
-           edge <= TALOS_RT_WAIT_EDGE_BOTH;
+    return edge >= TALOS_RT_WAIT_EDGE_CHANGE && edge <= TALOS_RT_WAIT_EDGE_BOTH;
   };
   auto validClockEdge = [&](uint32_t edge) {
     return validEdge(static_cast<talos_rt_wait_edge_kind>(edge)) ||
@@ -354,10 +350,10 @@ talos_rt_status validateWait(talos_rt_process_instance_v1 &instance,
       }
       if (requireEdge ? (!managed && entry.reserved == 0) : entry.reserved != 0)
         return false;
-      if (requireEdge ? (exactEdge == TALOS_RT_WAIT_EDGE_NONE
-                             ? !validEdge(entry.edge)
-                             : entry.edge != exactEdge)
-                      : entry.edge != TALOS_RT_WAIT_EDGE_NONE)
+      if (requireEdge
+              ? (exactEdge == TALOS_RT_WAIT_EDGE_NONE ? !validEdge(entry.edge)
+                                                      : entry.edge != exactEdge)
+              : entry.edge != TALOS_RT_WAIT_EDGE_NONE)
         return false;
     }
     return true;
@@ -376,13 +372,12 @@ talos_rt_status validateWait(talos_rt_process_instance_v1 &instance,
     valid = wait->flags == 0 && wait->count == 0 && wait->auxiliary == 0;
     break;
   case TALOS_RT_SUSPEND_CHANGE:
-    valid =
-        (behaviorFlags == 0 || behaviorFlags == TALOS_RT_WAIT_LEVEL_TRUE) &&
-        (!suppressActiveSelf || behaviorFlags == 0) &&
-        (wait->flags & ~(TALOS_RT_WAIT_LEVEL_TRUE |
-                         TALOS_RT_WAIT_SUPPRESS_ACTIVE_SELF)) == 0 &&
-        wait->count == 1 && wait->payload == 0 && wait->auxiliary == 0 &&
-        entriesMatch(true, TALOS_RT_WAIT_EDGE_CHANGE, true);
+    valid = (behaviorFlags == 0 || behaviorFlags == TALOS_RT_WAIT_LEVEL_TRUE) &&
+            (!suppressActiveSelf || behaviorFlags == 0) &&
+            (wait->flags & ~(TALOS_RT_WAIT_LEVEL_TRUE |
+                             TALOS_RT_WAIT_SUPPRESS_ACTIVE_SELF)) == 0 &&
+            wait->count == 1 && wait->payload == 0 && wait->auxiliary == 0 &&
+            entriesMatch(true, TALOS_RT_WAIT_EDGE_CHANGE, true);
     break;
   case TALOS_RT_SUSPEND_EDGE:
     if (behaviorFlags == TALOS_RT_WAIT_CLOCK_OCCURRENCE) {
@@ -447,8 +442,8 @@ talos_rt_status validateWait(talos_rt_process_instance_v1 &instance,
             wait->auxiliary == 0 && entriesMatch(false, 0);
     break;
   case TALOS_RT_SUSPEND_MAILBOX:
-    valid = wait->flags <= TALOS_RT_WAIT_MAILBOX_NOT_FULL &&
-            wait->count == 1 && wait->payload == 0 && wait->auxiliary == 0 &&
+    valid = wait->flags <= TALOS_RT_WAIT_MAILBOX_NOT_FULL && wait->count == 1 &&
+            wait->payload == 0 && wait->auxiliary == 0 &&
             entriesMatch(false, 0);
     break;
   case TALOS_RT_SUSPEND_SEMAPHORE:
@@ -485,8 +480,8 @@ talos_rt_status validateWait(talos_rt_process_instance_v1 &instance,
 }
 
 talos_rt_status validateAction(talos_rt_process_instance_v1 &instance,
-                                 talos_rt_fragment_action_v1 &action,
-                                 bool bytecode) {
+                               talos_rt_fragment_action_v1 &action,
+                               bool bytecode) {
   const talos_rt_frame_layout_v1 &layout = *instance.descriptor->frame_layout;
   switch (action.kind) {
   case TALOS_RT_FRAGMENT_CONTINUE:
@@ -563,8 +558,7 @@ const talos_rt_wait_record_v1 *currentWait(const ScheduledProcess &process) {
   return nullptr;
 }
 
-const talos_rt_wait_entry_v1 *
-waitEntries(const talos_rt_wait_record_v1 *wait) {
+const talos_rt_wait_entry_v1 *waitEntries(const talos_rt_wait_record_v1 *wait) {
   return reinterpret_cast<const talos_rt_wait_entry_v1 *>(wait + 1);
 }
 
@@ -615,9 +609,8 @@ bool talos_rt_validate_computed_wait_record(
       wait, wait->observers_offset, wait->observer_count);
   const auto *captures = computedWaitSpan<talos_rt_computed_capture_v1>(
       wait, wait->captures_offset, wait->capture_count);
-  const auto *dependencies =
-      computedWaitSpan<talos_rt_computed_dependency_v1>(
-          wait, wait->dependencies_offset, wait->dependency_count);
+  const auto *dependencies = computedWaitSpan<talos_rt_computed_dependency_v1>(
+      wait, wait->dependencies_offset, wait->dependency_count);
   const auto *clauses = computedWaitSpan<talos_rt_computed_clause_v1>(
       wait, wait->clauses_offset, wait->clause_count);
   if (!observers || !captures || !dependencies || !clauses)

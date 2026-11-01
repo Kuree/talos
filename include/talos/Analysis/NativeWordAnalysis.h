@@ -11,7 +11,7 @@
 namespace talos::sim {
 class SimFuncOp;
 class SimRefDynExtractOp;
-}
+} // namespace talos::sim
 namespace talos::analysis {
 /// Dependence on one independently bounded unit-stride induction variable.
 /// Index/ReverseIndex mean base +/- induction without integer wrap; Reference

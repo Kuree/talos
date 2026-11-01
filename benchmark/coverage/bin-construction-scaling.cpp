@@ -96,14 +96,13 @@ int main(int argc, char **argv) {
   talos_rt_status status =
       talos_rt_v1_context_create_for_design(&execution.descriptor, &context);
   if (status == TALOS_RT_OK)
-    status =
-        talos_rt_v1_coverage_finalize(context, 0, 0, nullptr, nullptr,
-                                        TALOS_RT_COVERAGE_PERSIST_FUNCTIONAL);
+    status = talos_rt_v1_coverage_finalize(
+        context, 0, 0, nullptr, nullptr, TALOS_RT_COVERAGE_PERSIST_FUNCTIONAL);
   const auto begin = std::chrono::steady_clock::now();
   talos_rt_covergroup_v1 handle = 0;
   if (status == TALOS_RT_OK)
-    status = talos_rt_v1_covergroup_create(context, 10, nullptr, 0, nullptr,
-                                             0, &handle);
+    status = talos_rt_v1_covergroup_create(context, 10, nullptr, 0, nullptr, 0,
+                                           &handle);
   const auto end = std::chrono::steady_clock::now();
   std::printf("points=%llu construct=%.6f status=%u\n",
               static_cast<unsigned long long>(count),
@@ -111,8 +110,7 @@ int main(int argc, char **argv) {
               static_cast<unsigned>(status));
   if (status == TALOS_RT_OK && argc > 2) {
     const std::string path = argv[2];
-    status =
-        talos_rt_v1_coverage_save(context, path.data(), path.size(), 0, 0);
+    status = talos_rt_v1_coverage_save(context, path.data(), path.size(), 0, 0);
     Database saved;
     const std::array<uint32_t, 4> binPrefix = {0, 16, 33, 49};
     const uint64_t expectedBins = count / 4 * 50 + binPrefix[count % 4];

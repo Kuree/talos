@@ -82,13 +82,11 @@ LogicalResult makeNativeAOTPlanLegacy(
   constexpr StringLiteral nodesName = "__talos_aot_schedule_nodes_v1";
   constexpr StringLiteral nbaRootsName = "__talos_aot_nba_roots_v1";
   constexpr StringLiteral nbaSitesName = "__talos_aot_nba_sites_v1";
-  constexpr StringLiteral nbaDirtyRootsName =
-      "__talos_aot_nba_dirty_roots_v1";
+  constexpr StringLiteral nbaDirtyRootsName = "__talos_aot_nba_dirty_roots_v1";
   constexpr StringLiteral nbaDirtySummaryName =
       "__talos_aot_nba_dirty_summary_v1";
   constexpr StringLiteral fanoutName = "__talos_aot_static_fanout_v1";
-  constexpr StringLiteral actorRootsName =
-      "__talos_aot_static_actor_roots_v1";
+  constexpr StringLiteral actorRootsName = "__talos_aot_static_actor_roots_v1";
   constexpr StringLiteral bindName = "__talos_aot_schedule_bind_v1";
   constexpr StringLiteral runName = "__talos_aot_schedule_run_v1";
   constexpr StringLiteral snapshotName = "__talos_aot_schedule_snapshot_v1";
@@ -117,9 +115,8 @@ LogicalResult makeNativeAOTPlanLegacy(
                      LLVM::Linkage::Internal, 4,
                      ArrayAttr::get(context, nodeRows));
 
-  Type nbaRootType =
-      LLVM::LLVMStructType::getLiteral(context,
-                                       {i32, i32, i64, pointer, pointer, i64});
+  Type nbaRootType = LLVM::LLVMStructType::getLiteral(
+      context, {i32, i32, i64, pointer, pointer, i64});
   if (!nbaRoots.empty()) {
     Type rootsType = LLVM::LLVMArrayType::get(nbaRootType, nbaRoots.size());
     makeConstantGlobal(
@@ -281,9 +278,9 @@ LogicalResult makeNativeAOTPlanLegacy(
   Value runStatus =
       LLVM::CallOp::create(
           builder, location, TypeRange{i32},
-          SymbolRefAttr::get(
-              context, fullyStatic ? "talos_rt_v1_scheduler_run_aot_nodes"
-                                   : "talos_rt_v1_scheduler_run"),
+          SymbolRefAttr::get(context,
+                             fullyStatic ? "talos_rt_v1_scheduler_run_aot_nodes"
+                                         : "talos_rt_v1_scheduler_run"),
           fullyStatic ? ValueRange{runEntry->getArgument(1), nodes,
                                    llvmConstant(builder, location, i32,
                                                 executableNodes.size())}
@@ -534,9 +531,8 @@ LogicalResult makeNativeAOTPlanLegacy(
           LLVM::AddressOfOp::create(builder, location, pointer, accumulator);
       Value valid = LLVM::LoadOp::create(
           builder, location, i32,
-          nbaFieldGEP(
-              builder, location, accumulatorBase,
-              offsetof(talos_rt_generated_nba_accumulator_256, valid)),
+          nbaFieldGEP(builder, location, accumulatorBase,
+                      offsetof(talos_rt_generated_nba_accumulator_256, valid)),
           4);
       Value region = LLVM::LoadOp::create(
           builder, location, i32,
@@ -559,9 +555,8 @@ LogicalResult makeNativeAOTPlanLegacy(
       builder.setInsertionPointToStart(commitRoot);
       Value stagedValue = LLVM::LoadOp::create(
           builder, location, i64,
-          nbaFieldGEP(
-              builder, location, accumulatorBase,
-              offsetof(talos_rt_generated_nba_accumulator_256, value)),
+          nbaFieldGEP(builder, location, accumulatorBase,
+                      offsetof(talos_rt_generated_nba_accumulator_256, value)),
           8);
       Value stagedUnknown = LLVM::LoadOp::create(
           builder, location, i64,
@@ -601,9 +596,8 @@ LogicalResult makeNativeAOTPlanLegacy(
           8);
       LLVM::StoreOp::create(
           builder, location, llvmConstant(builder, location, i32, 0),
-          nbaFieldGEP(
-              builder, location, accumulatorBase,
-              offsetof(talos_rt_generated_nba_accumulator_256, valid)),
+          nbaFieldGEP(builder, location, accumulatorBase,
+                      offsetof(talos_rt_generated_nba_accumulator_256, valid)),
           4);
       Value directlyCommitted = LLVM::LoadOp::create(
           builder, location, i64, directlyCommittedByWord[word], 8);
@@ -626,12 +620,11 @@ LogicalResult makeNativeAOTPlanLegacy(
             offsetof(talos_rt_generated_nba_accumulator_256, transient));
         changed = arith::OrIOp::create(
             builder, location, changed,
-            arith::AndIOp::create(
-                builder, location,
-                LLVM::LoadOp::create(builder, location, i64, transientAddress,
-                                     8),
-                llvmConstant(builder, location, i64,
-                             scalarMask(root.bit_width))));
+            arith::AndIOp::create(builder, location,
+                                  LLVM::LoadOp::create(builder, location, i64,
+                                                       transientAddress, 8),
+                                  llvmConstant(builder, location, i64,
+                                               scalarMask(root.bit_width))));
         LLVM::StoreOp::create(builder, location,
                               llvmConstant(builder, location, i64, 0),
                               transientAddress, 8);
@@ -873,11 +866,11 @@ LogicalResult makeNativeAOTPlanLegacy(
                                                       location, pointer,
                                                       "__talos_state_value"),
                             NativeSchedulePlanField::StateValue);
-        value = insertValue(
-            initializerBuilder, location, value,
-            LLVM::AddressOfOp::create(initializerBuilder, location, pointer,
-                                      "__talos_state_unknown"),
-            NativeSchedulePlanField::StateUnknown);
+        value = insertValue(initializerBuilder, location, value,
+                            LLVM::AddressOfOp::create(initializerBuilder,
+                                                      location, pointer,
+                                                      "__talos_state_unknown"),
+                            NativeSchedulePlanField::StateUnknown);
         value = insertValue(initializerBuilder, location, value,
                             llvmConstant(initializerBuilder, location, i64,
                                          stateLayout.bitCount),
@@ -1006,8 +999,8 @@ LogicalResult makeNativeAOTPlanLegacy(
                            NativeSchedulePlanField::Reserved2);
       });
   if (fullyStatic)
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_run_aot_nodes",
-                             i32, {pointer, pointer, i32});
+    getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_run_aot_nodes", i32,
+                             {pointer, pointer, i32});
   else
     getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_run", i32,
                              {pointer});
@@ -1017,8 +1010,8 @@ LogicalResult makeNativeAOTPlanLegacy(
                            {pointer, i32, i32, pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_commit_roots", i32,
                            {pointer, i32, i32, pointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_static_nba_direct_commit_guard", i32, {pointer});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_direct_commit_guard",
+                           i32, {pointer});
   getOrDeclareLLVMFunction(module,
                            "talos_rt_v1_static_nba_account_generated_commits",
                            LLVM::LLVMVoidType::get(context), {pointer, i32});

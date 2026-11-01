@@ -60,7 +60,8 @@ struct SimulationNativeTestPipelineOptions
 };
 
 void buildSimulationNativeTestPipeline(
-    OpPassManager &manager, const SimulationNativeTestPipelineOptions &options) {
+    OpPassManager &manager,
+    const SimulationNativeTestPipelineOptions &options) {
   std::string pipeline;
   if (options.maxInlineOps)
     pipeline = "test-talos-set-module-attributes{attrs=\"{"
@@ -68,13 +69,15 @@ void buildSimulationNativeTestPipeline(
                std::to_string(options.maxInlineOps) + " : i64}\"},";
   pipeline += "simulation.design(";
   if (options.components)
-    pipeline += "talos-sim-build-compute-graph,"
-                "schedule-plan-combinational-statements{component-sections=true},"
-                "talos-sim-materialize-compute-fusion,";
+    pipeline +=
+        "talos-sim-build-compute-graph,"
+        "schedule-plan-combinational-statements{component-sections=true},"
+        "talos-sim-materialize-compute-fusion,";
   pipeline +=
       "simulation.func(talos-sim-thread-process-cfg),"
       "talos-sim-build-compute-graph,talos-sim-verify-compute-graph,"
-      "talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,"
+      "talos-sim-materialize-graph-regions,talos-sim-materialize-compute-"
+      "fusion,"
       "talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),"
       "encode-talos-sim-to-bytecode{vpi=off},"
       "convert-talos-sim-processes-to-llvm-coroutines,"
@@ -82,7 +85,8 @@ void buildSimulationNativeTestPipeline(
   std::string error;
   llvm::raw_string_ostream errorStream(error);
   if (failed(parsePassPipeline(pipeline, manager, errorStream)))
-    llvm::report_fatal_error("test-talos-simulation-to-native: " + Twine(error));
+    llvm::report_fatal_error("test-talos-simulation-to-native: " +
+                             Twine(error));
 }
 
 void buildNativeBackendTestPipeline(
@@ -122,16 +126,16 @@ void buildNativeBackendTestPipeline(
                          "early-symbol-dce=true}";
   if (options.simOptLevel >= 0) {
     loweringAttributes =
-        *mode == 0 ? "schedule.native_scheduler = 3 : i32, "
-                     "schedule.native_scheduler.auto_requested"
-                   : llvm::formatv("schedule.native_scheduler = {0} : i32",
-                                   *mode)
-                         .str();
-    lowering = "lower-talos-to-sim{opt-level=" +
-               std::to_string(options.simOptLevel) +
-               " vpi=off static-specialization=" +
-               std::string(*mode == 3 ? "on" : "auto") +
-               " clocked-kernels=deferred early-symbol-dce=true}";
+        *mode == 0
+            ? "schedule.native_scheduler = 3 : i32, "
+              "schedule.native_scheduler.auto_requested"
+            : llvm::formatv("schedule.native_scheduler = {0} : i32", *mode)
+                  .str();
+    lowering =
+        "lower-talos-to-sim{opt-level=" + std::to_string(options.simOptLevel) +
+        " vpi=off static-specialization=" +
+        std::string(*mode == 3 ? "on" : "auto") +
+        " clocked-kernels=deferred early-symbol-dce=true}";
   }
   std::string pipeline =
       "convert-slang-to-talos,"
@@ -139,9 +143,8 @@ void buildNativeBackendTestPipeline(
       loweringAttributes +
       ", llvm.data_layout = \\\"e-m:e-p:64:64-i64:64-n8:16:32:64-S128\\\", "
       "llvm.target_triple = \\\"x86_64-unknown-linux-gnu\\\"}\"}," +
-      lowering +
-      ",test-talos-set-module-attributes{attrs=\"{" + backendAttributes +
-      "}\"}";
+      lowering + ",test-talos-set-module-attributes{attrs=\"{" +
+      backendAttributes + "}\"}";
   if (stopAfter == "graph") {
     pipeline += ",simulation.design(simulation.func("
                 "talos-sim-thread-process-cfg),"

@@ -45,8 +45,8 @@ uint64_t getStableStorageTypeID(Type type, uint32_t descriptorFlags) {
       mailbox && mailbox.getSpecialization()) {
     constexpr StringLiteral domain = "talos.mailbox.handle";
     hash = talos_stable_hash(domain.data(), domain.size());
-    hash = talos_stable_hash_append_uint_le(hash, mailbox.getSpecialization(),
-                                              8);
+    hash =
+        talos_stable_hash_append_uint_le(hash, mailbox.getSpecialization(), 8);
   } else {
     std::string spelling;
     llvm::raw_string_ostream stream(spelling);
@@ -710,19 +710,19 @@ static Type getTypeAtSubelementIndex(Type type, Attribute index) {
   return getAggregateElementType(type, static_cast<unsigned>(integer.getInt()));
 }
 
-#define TALOS_DEFINE_ARRAY_DESTRUCTURABLE(TypeName)                          \
+#define TALOS_DEFINE_ARRAY_DESTRUCTURABLE(TypeName)                            \
   std::optional<DenseMap<Attribute, Type>> TypeName::getSubelementIndexMap()   \
       const {                                                                  \
-    return ::talos::sim::getSubelementIndexMap(*this, true);                 \
+    return ::talos::sim::getSubelementIndexMap(*this, true);                   \
   }                                                                            \
   Type TypeName::getTypeAtIndex(Attribute index) const {                       \
     return getTypeAtSubelementIndex(*this, index);                             \
   }
 
-#define TALOS_DEFINE_RECORD_DESTRUCTURABLE(TypeName)                         \
+#define TALOS_DEFINE_RECORD_DESTRUCTURABLE(TypeName)                           \
   std::optional<DenseMap<Attribute, Type>> TypeName::getSubelementIndexMap()   \
       const {                                                                  \
-    return ::talos::sim::getSubelementIndexMap(*this, false);                \
+    return ::talos::sim::getSubelementIndexMap(*this, false);                  \
   }                                                                            \
   Type TypeName::getTypeAtIndex(Attribute index) const {                       \
     return getTypeAtSubelementIndex(*this, index);                             \

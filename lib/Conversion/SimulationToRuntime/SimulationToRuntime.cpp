@@ -141,8 +141,8 @@ buildOutputList(Op op, Adaptor &adaptor, ConversionPatternRewriter &rewriter) {
             op,
             "net output item did not convert to packed value and i64 handle");
       Value unknown = converted.size() == 2 ? converted[1] : Value();
-      if (::talos::schedule::has<
-              ::talos::schedule::Field::EvalDirectOutput>(op)) {
+      if (::talos::schedule::has<::talos::schedule::Field::EvalDirectOutput>(
+              op)) {
         arguments.push_back(runtime::RTArgumentPackedOp::create(
             rewriter, loc, runtime::ArgumentType::get(rewriter.getContext()),
             converted.front(), unknown,
@@ -357,8 +357,7 @@ public:
     auto display = runtime::RTDisplayOp::create(
         rewriter, loc, runtime::StatusType::get(rewriter.getContext()), context,
         fd, newline, output->first, output->second, radix);
-    if (::talos::schedule::has<::talos::schedule::Field::EvalDirectOutput>(
-            op))
+    if (::talos::schedule::has<::talos::schedule::Field::EvalDirectOutput>(op))
       ::talos::schedule::set<::talos::schedule::Field::EvalDirectOutput>(
           display, rewriter.getUnitAttr());
     sim::SimStatusCheckOp::create(rewriter, loc, display.getStatus());
@@ -859,17 +858,15 @@ public:
         sim::SimFinishOp, sim::SimProgramExitOp, sim::SimStopOp,
         sim::SimFatalOp, sim::SimErrorOp, sim::SimPublicationBatchBeginOp,
         sim::SimPublicationBatchEndOp, sim::SimTerminationRequestedOp,
-        sim::SimProgramOwnedOp,
-        sim::SimTimeNowOp, sim::SimDisplayOp, sim::SimStringOutputFormatOp,
-        sim::SimFileOpenMCDOp, sim::SimFileOpenOp, sim::SimFileCloseOp,
-        sim::SimFileFlushOp, sim::SimFileGetcOp, sim::SimFileUngetcOp,
-        sim::SimFileGetlineOp, sim::SimFileReadPackedOp,
+        sim::SimProgramOwnedOp, sim::SimTimeNowOp, sim::SimDisplayOp,
+        sim::SimStringOutputFormatOp, sim::SimFileOpenMCDOp, sim::SimFileOpenOp,
+        sim::SimFileCloseOp, sim::SimFileFlushOp, sim::SimFileGetcOp,
+        sim::SimFileUngetcOp, sim::SimFileGetlineOp, sim::SimFileReadPackedOp,
         sim::SimFileReadMemTokenOp, sim::SimFileEofOp, sim::SimFileSeekOp,
         sim::SimFileTellOp, sim::SimFileRewindOp, sim::SimDumpOpenOp,
         sim::SimDumpTimescaleOp, sim::SimDumpVarsOp, sim::SimDumpAllOp,
         sim::SimDumpControlOp, sim::SimDumpLimitOp, sim::SimDumpFlushOp>();
-    target
-        .addLegalDialect<runtime::TalosRuntimeDialect, arith::ArithDialect>();
+    target.addLegalDialect<runtime::TalosRuntimeDialect, arith::ArithDialect>();
     target.addLegalOp<ModuleOp, sim::SimContextRuntimeOp,
                       sim::SimStatusCheckOp>();
     target.addDynamicallyLegalOp<func::FuncOp>([&](func::FuncOp function) {
@@ -901,8 +898,8 @@ void populateSimulationToRuntimePatterns(const TypeConverter &converter,
       converter, context);
   patterns.add<ProgramExitConversion>(converter, context);
   patterns.add<ErrorConversion, TerminationRequestedConversion,
-               ProgramOwnedConversion,
-               SchedulerTimeConversion>(converter, context);
+               ProgramOwnedConversion, SchedulerTimeConversion>(converter,
+                                                                context);
   patterns.add<PublicationBatchConversion<sim::SimPublicationBatchBeginOp,
                                           runtime::RTPublicationBatchBeginOp>,
                PublicationBatchConversion<sim::SimPublicationBatchEndOp,

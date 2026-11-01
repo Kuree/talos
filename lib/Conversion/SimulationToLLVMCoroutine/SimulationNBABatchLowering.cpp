@@ -28,8 +28,8 @@ public:
     Value status = llvmConstant(b, loc, i32, TALOS_RT_OK);
     op.getStatus().replaceAllUsesWith(status);
     auto voidType = LLVM::LLVMVoidType::get(b.getContext());
-    getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_batch_guard",
-                             i32, {ptr, ptr, i32});
+    getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_batch_guard", i32,
+                             {ptr, ptr, i32});
     getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_batch_knownness",
                              voidType, {ptr, i64, i64, i64, i64});
     getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_batch_finish",
@@ -382,8 +382,8 @@ private:
       };
       Value valid = load32(
           field(offsetof(talos_rt_generated_nba_accumulator_256, valid)));
-      Value region = load32(field(
-          offsetof(talos_rt_generated_nba_accumulator_256, exec_region)));
+      Value region = load32(
+          field(offsetof(talos_rt_generated_nba_accumulator_256, exec_region)));
       Value selected =
           band(ne(valid, llvmConstant(b, loc, i32, 0)),
                arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq, region,
@@ -394,16 +394,16 @@ private:
       for (uint64_t local = 0; local < root.getWidth(); local += 64) {
         unsigned width = std::min<uint64_t>(64, root.getWidth() - local);
         uint64_t word = local / 64;
-        Value maskAddr = field(
-            offsetof(talos_rt_generated_nba_accumulator_256, write_mask) +
-            word * 8);
-        Value transAddr = field(
-            offsetof(talos_rt_generated_nba_accumulator_256, transient) +
-            word * 8);
+        Value maskAddr =
+            field(offsetof(talos_rt_generated_nba_accumulator_256, write_mask) +
+                  word * 8);
+        Value transAddr =
+            field(offsetof(talos_rt_generated_nba_accumulator_256, transient) +
+                  word * 8);
         Value writeMask = band(load(maskAddr), c(mask(width)));
-        Value value = load(
-            field(offsetof(talos_rt_generated_nba_accumulator_256, value) +
-                  word * 8));
+        Value value =
+            load(field(offsetof(talos_rt_generated_nba_accumulator_256, value) +
+                       word * 8));
         Value unknown = load(
             field(offsetof(talos_rt_generated_nba_accumulator_256, unknown) +
                   word * 8));

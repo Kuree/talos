@@ -644,8 +644,7 @@ LogicalResult materializeDPIThunk(ModuleOp module, const DPIThunkSpec &spec) {
         builder, location, arith::CmpIPredicate::eq, call.getResult(), one);
     Value failureStatus = arith::SelectOp::create(
         builder, location, disabled,
-        llvmConstant(builder, location, i32,
-                     TALOS_RT_DPI_DISABLE_UNSUPPORTED),
+        llvmConstant(builder, location, i32, TALOS_RT_DPI_DISABLE_UNSUPPORTED),
         llvmConstant(builder, location, i32, TALOS_RT_FATAL));
     Value taskStatus = arith::SelectOp::create(builder, location, succeeded,
                                                zero, failureStatus);
@@ -660,13 +659,12 @@ LogicalResult materializeDPIThunk(ModuleOp module, const DPIThunkSpec &spec) {
       LLVM::StoreOp::create(builder, location, value,
                             planePointer(outputs, index, false), 8);
     }
-    Value popStatus =
-        LLVM::CallOp::create(
-            builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context,
-                               "talos_rt_v1_gc_managed_root_range_pop"),
-            ValueRange{stringRootLane, stringRootRecord})
-            .getResult();
+    Value popStatus = LLVM::CallOp::create(
+                          builder, location, TypeRange{i32},
+                          SymbolRefAttr::get(
+                              context, "talos_rt_v1_gc_managed_root_range_pop"),
+                          ValueRange{stringRootLane, stringRootRecord})
+                          .getResult();
     mergeStatus(popStatus);
   }
   LLVM::ReturnOp::create(builder, location, callbackStatus);

@@ -174,8 +174,7 @@ TEST(RuntimeDeferredAssertion, LabeledDisableCancelsOnlyThatAssertion) {
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
 
   context->activeLogicalProcessToken = 31;
-  uint64_t first =
-      talos_rt_v1_deferred_enqueue_for_assertion(context, 91, 701);
+  uint64_t first = talos_rt_v1_deferred_enqueue_for_assertion(context, 91, 701);
   uint64_t unrelated =
       talos_rt_v1_deferred_enqueue_for_assertion(context, 92, 702);
   context->activeLogicalProcessToken = 32;
@@ -262,8 +261,7 @@ TEST(RuntimeDeferredAssertion, AssertionActionControlsAndLocking) {
   ASSERT_NE(lockedTicket, 0u);
   EXPECT_EQ(talos_rt_v1_assertion_kill_epoch(context, 901), 0u);
   for (uint32_t action = 3; action <= 11; ++action) {
-    EXPECT_EQ(talos_rt_v1_assertion_control(context, action, 901),
-              TALOS_RT_OK);
+    EXPECT_EQ(talos_rt_v1_assertion_control(context, action, 901), TALOS_RT_OK);
     EXPECT_EQ(talos_rt_v1_assertion_enabled(context, 901), 1u);
     EXPECT_EQ(talos_rt_v1_assertion_action_state(context, 901), 7u);
   }
@@ -279,8 +277,7 @@ TEST(RuntimeDeferredAssertion, AssertionActionControlsAndLocking) {
   EXPECT_EQ(talos_rt_v1_assertion_control(context, 9, 902), TALOS_RT_OK);
   EXPECT_EQ(talos_rt_v1_assertion_control(context, 1, 902), TALOS_RT_OK);
   for (uint32_t action = 3; action <= 11; ++action) {
-    EXPECT_EQ(talos_rt_v1_assertion_control(context, action, 902),
-              TALOS_RT_OK);
+    EXPECT_EQ(talos_rt_v1_assertion_control(context, action, 902), TALOS_RT_OK);
     EXPECT_EQ(talos_rt_v1_assertion_enabled(context, 902), 0u);
     EXPECT_EQ(talos_rt_v1_assertion_action_state(context, 902), 0u);
   }
@@ -305,9 +302,8 @@ TEST(RuntimeControl, SelectedDisableIdentifiesRecursiveDynamicActivation) {
   ASSERT_EQ(talos_rt_v1_control_enter(context, 91, &inner), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_control_enter(context, 92, &child), TALOS_RT_OK);
   ASSERT_NE(outer, inner);
-  ASSERT_EQ(
-      talos_rt_v1_control_disable_selected(context, 91, 0, 0, &selected),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_control_disable_selected(context, 91, 0, 0, &selected),
+            TALOS_RT_OK);
   EXPECT_EQ(selected, inner);
   EXPECT_EQ(context->activeControls, std::vector<uint64_t>({outer}));
   EXPECT_EQ(context->controlActivations.count(inner), 0u);
@@ -315,15 +311,13 @@ TEST(RuntimeControl, SelectedDisableIdentifiesRecursiveDynamicActivation) {
 
   ASSERT_EQ(talos_rt_v1_control_enter(context, 91, &inner), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_control_enter(context, 92, &child), TALOS_RT_OK);
-  ASSERT_EQ(
-      talos_rt_v1_control_disable_selected(context, 91, 0, 1, &selected),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_control_disable_selected(context, 91, 0, 1, &selected),
+            TALOS_RT_OK);
   EXPECT_EQ(selected, outer);
   EXPECT_TRUE(context->activeControls.empty());
   EXPECT_TRUE(context->controlActivations.empty());
-  ASSERT_EQ(
-      talos_rt_v1_control_disable_selected(context, 91, 0, 1, &selected),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_control_disable_selected(context, 91, 0, 1, &selected),
+            TALOS_RT_OK);
   EXPECT_EQ(selected, 0u);
   talos_rt_v1_context_destroy(context);
 }
@@ -333,28 +327,25 @@ TEST(RuntimeControl, SelectedDisableReturnsZeroWithoutCurrentEffect) {
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
   context->activeLogicalProcessToken = 51;
   uint64_t activation = 0, selected = UINT64_MAX;
-  ASSERT_EQ(talos_rt_v1_control_enter(context, 93, &activation),
+  ASSERT_EQ(talos_rt_v1_control_enter(context, 93, &activation), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_control_disable_selected(context, 94, 0, 1, &selected),
             TALOS_RT_OK);
-  ASSERT_EQ(
-      talos_rt_v1_control_disable_selected(context, 94, 0, 1, &selected),
-      TALOS_RT_OK);
   EXPECT_EQ(selected, 0u);
   EXPECT_EQ(context->activeControls, std::vector<uint64_t>({activation}));
   selected = UINT64_MAX;
   EXPECT_EQ(talos_rt_v1_control_disable_selected(context, 94, activation, 0,
-                                                   &selected),
+                                                 &selected),
             TALOS_RT_INVALID_LIFECYCLE);
   EXPECT_EQ(selected, 0u);
   EXPECT_EQ(talos_rt_v1_control_disable_selected(context, 93, 0, 0, nullptr),
             TALOS_RT_INVALID_ARGUMENT);
   ASSERT_EQ(talos_rt_v1_control_disable_selected(context, 93, activation, 0,
-                                                   &selected),
+                                                 &selected),
             TALOS_RT_OK);
   EXPECT_EQ(selected, activation);
   selected = UINT64_MAX;
-  EXPECT_EQ(
-      talos_rt_v1_control_disable_selected(nullptr, 93, 0, 1, &selected),
-      TALOS_RT_INVALID_ARGUMENT);
+  EXPECT_EQ(talos_rt_v1_control_disable_selected(nullptr, 93, 0, 1, &selected),
+            TALOS_RT_INVALID_ARGUMENT);
   EXPECT_EQ(selected, 0u);
   talos_rt_v1_context_destroy(context);
 }

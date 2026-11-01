@@ -601,7 +601,8 @@ summarize(sim::SimFuncOp function,
         Block *block = argument.getOwner();
         if (block == &function.getBody().front()) {
           auto kind = function.getArgAttrOfType<IntegerAttr>(
-              argument.getArgNumber(), sim::metadata::CaptureKind::getNameStr());
+              argument.getArgNumber(),
+              sim::metadata::CaptureKind::getNameStr());
           if (kind && kind.getInt() == int32_t(sim::CaptureKind::Formal)) {
             formals.insert(argument.getArgNumber());
             continue;
@@ -609,7 +610,8 @@ summarize(sim::SimFuncOp function,
         }
         bool incoming = false;
         for (Block *predecessor : block->getPredecessors()) {
-          auto branch = dyn_cast<BranchOpInterface>(predecessor->getTerminator());
+          auto branch =
+              dyn_cast<BranchOpInterface>(predecessor->getTerminator());
           if (!branch) {
             unbounded = true;
             continue;
@@ -635,8 +637,8 @@ summarize(sim::SimFuncOp function,
         work.push_back(select.getFalseValue());
         continue;
       }
-      if (definition && isViewOp(definition) &&
-          definition->getNumOperands() && isHandle(definition->getOperand(0))) {
+      if (definition && isViewOp(definition) && definition->getNumOperands() &&
+          isHandle(definition->getOperand(0))) {
         work.push_back(definition->getOperand(0));
         continue;
       }
@@ -881,11 +883,12 @@ void indexSymbolUsers(sim::SimDesignOp design, DesignState &state) {
 /// expression. Its i1 branch condition already encodes the four-state
 /// controlling-value test, so selecting its original outgoing values keeps
 /// X/Z behavior. Only permanent fixed-range reads and speculatable operations
-/// can move out of an arm; calls, dynamic accesses and effects stay conditional.
-/// The existing expression-cloning budget also bounds this normalization.
+/// can move out of an arm; calls, dynamic accesses and effects stay
+/// conditional. The existing expression-cloning budget also bounds this
+/// normalization.
 bool normalizePureExpression(sim::SimFuncOp function,
-                              const analysis::HandleFacts &facts,
-                              const DesignState &state, unsigned budget) {
+                             const analysis::HandleFacts &facts,
+                             const DesignState &state, unsigned budget) {
   if (!budget || function.isExternal() || !function.isPrivate() ||
       function.getHomeRegion() != sim::EventRegion::Active ||
       (function.getEntryKind() != sim::EntryKind::Continuous &&
@@ -919,8 +922,8 @@ bool normalizePureExpression(sim::SimFuncOp function,
                                      : conditional.getFalseDestOperands();
         auto armArgs = shortOnTrue ? conditional.getFalseDestOperands()
                                    : conditional.getTrueDestOperands();
-        if (arm == join || arm == &head || join == &head ||
-            !arm->hasOneUse() || arm->getNumArguments() || !armArgs.empty() ||
+        if (arm == join || arm == &head || join == &head || !arm->hasOneUse() ||
+            arm->getNumArguments() || !armArgs.empty() ||
             cost + join->getNumArguments() > budget)
           continue;
         auto toJoin = dyn_cast<cf::BranchOp>(arm->getTerminator());
@@ -963,9 +966,8 @@ bool normalizePureExpression(sim::SimFuncOp function,
           values.push_back(arith::SelectOp::create(
               rewriter, loc, condition, shortOnTrue ? shortValue : armValue,
               shortOnTrue ? armValue : shortValue));
-        rewriter.modifyOpInPlace(branch, [&] {
-          branch.getDestOperandsMutable().assign(values);
-        });
+        rewriter.modifyOpInPlace(
+            branch, [&] { branch.getDestOperandsMutable().assign(values); });
         cost += values.size();
         if (join->hasOneUse()) {
           rewriter.eraseOp(branch);
@@ -1049,8 +1051,7 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
       continue;
     }
     sink.width = *width;
-    if (!copy->sink.net &&
-        !state.permanent.contains(keyOf(copy->sink)))
+    if (!copy->sink.net && !state.permanent.contains(keyOf(copy->sink)))
       sink.block("nonpermanent storage");
     if (!copy->sink.net && state.observed.contains(keyOf(copy->sink)))
       sink.block("observable storage");
@@ -1092,7 +1093,7 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
       for (const SourceRead &read : piece.copy->reads)
         if ((root.net || piece.copy->relocation) &&
             isa<sim::LogicType>(sim::getPackedScalarType(sink.type)) !=
-            isa<sim::LogicType>(sim::getPackedScalarType(types[read.root])))
+                isa<sim::LogicType>(sim::getPackedScalarType(types[read.root])))
           sink.block("domain");
   }
   // The net's value must be its drivers' (IEEE 1800-2023 6.6.1): a plain,
@@ -1187,11 +1188,10 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
     if (found != coveredFormals.end())
       return found->second;
     auto users = usersOf.find(function.getSymName());
-    bool covered =
-        function.isPrivate() && state.usesKnown &&
-        (function.getEntryKind() == sim::EntryKind::Function ||
-         function.getEntryKind() == sim::EntryKind::Task) &&
-        users != usersOf.end() && !users->second.empty();
+    bool covered = function.isPrivate() && state.usesKnown &&
+                   (function.getEntryKind() == sim::EntryKind::Function ||
+                    function.getEntryKind() == sim::EntryKind::Task) &&
+                   users != usersOf.end() && !users->second.empty();
     if (covered)
       for (Operation *user : users->second) {
         auto caller = user->getParentOfType<sim::SimFuncOp>();
@@ -1215,7 +1215,8 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
         unsigned references = 0;
         for (NamedAttribute named : user->getAttrs())
           named.getValue().walk([&](SymbolRefAttr reference) {
-            if (reference.getRootReference().getValue() == function.getSymName())
+            if (reference.getRootReference().getValue() ==
+                function.getSymName())
               ++references;
           });
         covered &= references == 1;
@@ -1232,8 +1233,7 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
       // caller summaries already pin all possible formal targets and mark
       // their writers' publication shape unknown. Delegate only formal
       // origins: an opaque factory in the same body still needs fallback.
-      if (access.formal &&
-          coveredAtCalls(summary->function, *access.formal))
+      if (access.formal && coveredAtCalls(summary->function, *access.formal))
         continue;
       for (auto [root, type] : types) {
         if (root.net != access.net)
@@ -1286,8 +1286,8 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
         // (6.8, 10.3.2); it must read the variable's original default value.
         // Helpers called by the initializer are also pinned by the existing
         // reader-not-spawned proof below.
-        if (!s->root.net && summary->function.getEntryKind() ==
-                                 sim::EntryKind::RootInitializer)
+        if (!s->root.net &&
+            summary->function.getEntryKind() == sim::EntryKind::RootInitializer)
           s->block("storage read during initialization");
         ++s->readers;
         if (!summary->context)
@@ -1513,9 +1513,9 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
     ArrayRef<Write> writes = summary.writes;
     bool once = true;
     for (size_t i = 0; once && i < writes.size(); ++i) {
-      once = writes[i].plain &&
-             onceInWindow(summary, writes[i].op, writes[i].op,
-                          /*nonblocking=*/false);
+      once =
+          writes[i].plain && onceInWindow(summary, writes[i].op, writes[i].op,
+                                          /*nonblocking=*/false);
       for (size_t j = i + 1; once && j < writes.size(); ++j)
         if (writes[i].op != writes[j].op && writes[i].root == writes[j].root &&
             overlaps(writes[i].low, writes[i].width, writes[j].low,
@@ -2239,11 +2239,11 @@ void TalosSimForwardCopyProcessesPass::runOnOperation() {
         exits.push_back(block.getTerminator());
     if (spawns.empty() || exits.empty())
       continue;
-    if (llvm::any_of(state.usersOf.lookup(function.getSymName()),
-                     [](Operation *user) {
-                       return isa<sim::SimCallOp, sim::SimTaskCallOp,
-                                  sim::SimSpawnOp>(user);
-                     }))
+    if (llvm::any_of(
+            state.usersOf.lookup(function.getSymName()), [](Operation *user) {
+              return isa<sim::SimCallOp, sim::SimTaskCallOp, sim::SimSpawnOp>(
+                  user);
+            }))
       continue;
     DominanceInfo dominance(function);
     DenseSet<Block *> cyclic;

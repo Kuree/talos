@@ -66,10 +66,8 @@ LogicalResult materializeNativeRoutePromotionScan(
     return LLVM::GEPOp::create(builder, loc, ptr, type, base,
                                ArrayRef<LLVM::GEPArg>{index});
   };
-  constexpr StringLiteral ownerName =
-      "__talos_eval_route_promotion_owners_v1";
-  constexpr StringLiteral rangeName =
-      "__talos_eval_route_promotion_ranges_v1";
+  constexpr StringLiteral ownerName = "__talos_eval_route_promotion_owners_v1";
+  constexpr StringLiteral rangeName = "__talos_eval_route_promotion_ranges_v1";
   auto ownerType =
       LLVM::LLVMStructType::getLiteral(module.getContext(), {i64, i64, ptr});
   auto ownerArray = LLVM::LLVMArrayType::get(ownerType, routes.size());
@@ -233,12 +231,10 @@ LogicalResult materializeNativeRoutePromotionScan(
 
 // Kernel and group domains share the same exact masked-word scanner and
 // negative hint protocol. Only kernels own scheduler promotion-pending bits.
-static LogicalResult materializePromotionReadiness(ModuleOp module,
-                                                   ArrayRef<uint64_t> owners,
-                                                   ArrayRef<uint64_t> scans,
-                                                   uint64_t domainCount,
-                                                   bool group,
-                                                   uint64_t stateBits) {
+static LogicalResult
+materializePromotionReadiness(ModuleOp module, ArrayRef<uint64_t> owners,
+                              ArrayRef<uint64_t> scans, uint64_t domainCount,
+                              bool group, uint64_t stateBits) {
   MLIRContext *context = module.getContext();
   OpBuilder builder(context);
   Location loc = module.getLoc();
@@ -587,9 +583,8 @@ LogicalResult materializeNativeKernelPromotionReadiness(
                                           uint64_t{1} << (bit % 64)});
   }
 
-  return materializePromotionReadiness(module, owners, scans,
-                                       twoStateExecutors.size(), false,
-                                       stateBits);
+  return materializePromotionReadiness(
+      module, owners, scans, twoStateExecutors.size(), false, stateBits);
 }
 
 LogicalResult verifyNativeGroupProofDomains(ModuleOp module) {

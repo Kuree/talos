@@ -18,8 +18,7 @@
 using namespace mlir;
 
 namespace talos::schedule {
-LLVM::GlobalOp
-NativeGlobalLookup::operator()(LLVM::AddressOfOp address) const {
+LLVM::GlobalOp NativeGlobalLookup::operator()(LLVM::AddressOfOp address) const {
   if (symbols)
     return address.getGlobal(*symbols);
   return dyn_cast_or_null<LLVM::GlobalOp>(
@@ -157,8 +156,8 @@ static void coalesceFunction(FunctionReadyUpdates &input) {
   SmallVector<SmallVector<NativeReadyUpdateOp>> chains;
   DenseMap<Operation *, unsigned> memberships;
   for (auto update : updates) {
-    auto previous = dyn_cast_or_null<NativeReadyUpdateOp>(
-        previousUpdates.lookup(update));
+    auto previous =
+        dyn_cast_or_null<NativeReadyUpdateOp>(previousUpdates.lookup(update));
     auto member = memberships.find(previous);
     unsigned chain;
     if (previous && previous->getBlock() == update->getBlock() &&

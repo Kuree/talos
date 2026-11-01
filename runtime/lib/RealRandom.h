@@ -272,8 +272,8 @@ public:
     return true;
   }
 
-  static bool sample(talos_rt_random_state_v1 &state, Float lower,
-                     Float upper, uint32_t flags, Float &out) {
+  static bool sample(talos_rt_random_state_v1 &state, Float lower, Float upper,
+                     uint32_t flags, Float &out) {
     Float first = flags & TALOS_RT_REAL_LOWER_OPEN ? nextUp(lower) : lower;
     Float last = flags & TALOS_RT_REAL_UPPER_OPEN ? nextDown(upper) : upper;
     if (!finite(first) || !finite(last) || first > last)
@@ -317,10 +317,8 @@ public:
 };
 
 static_assert(RealCoordinates<double>::rankBits == TALOS_RT_REAL64_RANK_BITS);
-static_assert(RealCoordinates<double>::rankWords ==
-              TALOS_RT_REAL64_RANK_WORDS);
+static_assert(RealCoordinates<double>::rankWords == TALOS_RT_REAL64_RANK_WORDS);
 static_assert(RealCoordinates<float>::rankBits == TALOS_RT_REAL32_RANK_BITS);
-static_assert(RealCoordinates<float>::rankWords ==
-              TALOS_RT_REAL32_RANK_WORDS);
+static_assert(RealCoordinates<float>::rankWords == TALOS_RT_REAL32_RANK_WORDS);
 
 } // namespace talos::runtime

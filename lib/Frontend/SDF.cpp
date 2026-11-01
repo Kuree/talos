@@ -2148,9 +2148,8 @@ buildSDFAnnotationDatabase(slang::ast::Compilation &compilation,
       // Production and talos-translate share this exact typed Clause 32
       // normalization boundary. The database consumes that transient IR and
       // retains no SDF operation or runtime state.
-      auto sdfModule =
-          importSDF(*filename, (*buffer)->getBuffer(), sdfContext, true,
-                    maxStaticSDFFileBytes);
+      auto sdfModule = importSDF(*filename, (*buffer)->getBuffer(), sdfContext,
+                                 true, maxStaticSDFFileBytes);
       std::optional<ParsedSDF> parsed =
           failed(sdfModule) ? std::nullopt : consumeSDFIR(**sdfModule);
       if (!parsed) {

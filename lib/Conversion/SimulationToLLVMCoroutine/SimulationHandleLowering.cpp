@@ -43,7 +43,7 @@ Value offsetNativeHandle(OpBuilder &builder, Location location, Value handle,
   if (handleValue && offsetValue) {
     uint64_t folded =
         talos_rt_stable_handle_offset(handleValue.getValue().getZExtValue(),
-                                        offsetValue.getValue().getSExtValue());
+                                      offsetValue.getValue().getSExtValue());
     return arith::ConstantOp::create(
         builder, location, builder.getI64Type(),
         builder.getI64IntegerAttr(static_cast<int64_t>(folded)));

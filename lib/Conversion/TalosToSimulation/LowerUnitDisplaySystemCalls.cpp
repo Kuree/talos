@@ -881,9 +881,8 @@ UnitLowering::lowerOutputListItems(ArrayRef<Operation *> operations,
       auto system = dyn_cast<semantic::SVCallExpressionOp>(spelling);
       bool isRealtime = system && system.getIsSystemCall() &&
                         system.getCalleeName() == "$realtime";
-      output.flags.push_back(
-          TALOS_RT_OUTPUT_ITEM_REAL |
-          (isRealtime ? TALOS_RT_OUTPUT_ITEM_REAL_TIME : 0));
+      output.flags.push_back(TALOS_RT_OUTPUT_ITEM_REAL |
+                             (isRealtime ? TALOS_RT_OUTPUT_ITEM_REAL_TIME : 0));
     } else if (isa<sim::StringType>((*value).getType())) {
       output.items.push_back(*value);
       // Unconsumed strings in a display output list are format strings just

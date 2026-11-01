@@ -1505,8 +1505,7 @@ UnitLowering::lowerFileSystemCall(semantic::SVCallExpressionOp op) {
       // position in the old value. A zero-byte read produces an out-of-range
       // insertion and therefore leaves every old bit alone.
       uint64_t capacity = (static_cast<uint64_t>(width) + 7) / 8;
-      Value count64 =
-          arith::ExtUIOp::create(builder, location, i64, readCount);
+      Value count64 = arith::ExtUIOp::create(builder, location, i64, readCount);
       Value unreadBytes = arith::SubIOp::create(
           builder, location, constant(i64, static_cast<int64_t>(capacity)),
           count64);
@@ -1633,9 +1632,9 @@ UnitLowering::lowerFileSystemCall(semantic::SVCallExpressionOp op) {
         setCurrent(storeElement);
         Value oldElement = sim::SimContainerReadOp::create(
             builder, location, elementType, memory, index);
-        FailureOr<Value> converted = mergeReadData(
-            oldElement, read.getData(), read.getCount(), elementType,
-            *elementWidth);
+        FailureOr<Value> converted =
+            mergeReadData(oldElement, read.getData(), read.getCount(),
+                          elementType, *elementWidth);
         if (failed(converted))
           return failure();
         sim::SimContainerWriteOp::create(builder, location, memory, index,
@@ -1752,9 +1751,9 @@ UnitLowering::lowerFileSystemCall(semantic::SVCallExpressionOp op) {
             index);
         Value oldElement = sim::SimRefLoadOp::create(
             builder, location, elementType, elementReference);
-        FailureOr<Value> converted = mergeReadData(
-            oldElement, read.getData(), read.getCount(), elementType,
-            *elementWidth);
+        FailureOr<Value> converted =
+            mergeReadData(oldElement, read.getData(), read.getCount(),
+                          elementType, *elementWidth);
         if (failed(converted))
           return failure();
         sim::SimRefStoreOp::create(builder, location, *converted,
@@ -1809,7 +1808,8 @@ UnitLowering::lowerFileSystemCall(semantic::SVCallExpressionOp op) {
       FailureOr<Value> oldValue = loadReference(*destination, location);
       if (failed(oldValue))
         return failure();
-      converted = mergeReadData(*oldValue, data, count, destinationType, *width);
+      converted =
+          mergeReadData(*oldValue, data, count, destinationType, *width);
     } else {
       converted = convert(data, destinationType, false, location);
     }

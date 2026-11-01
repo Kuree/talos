@@ -48,10 +48,8 @@ constexpr StringLiteral kActivationsName = "__talos_activations_v1";
 constexpr StringLiteral kObserversName = "__talos_observers_v1";
 constexpr StringLiteral kSampledRangesName = "__talos_sampled_ranges_v1";
 constexpr StringLiteral kExportsName = "__talos_dpi_exports_v1";
-constexpr StringLiteral kClassBitstreamName =
-    "__talos_class_bitstream_blob_v1";
-constexpr StringLiteral kCoverageSchemaName =
-    "__talos_coverage_schema_blob_v1";
+constexpr StringLiteral kClassBitstreamName = "__talos_class_bitstream_blob_v1";
+constexpr StringLiteral kCoverageSchemaName = "__talos_coverage_schema_blob_v1";
 constexpr uint32_t kActivationHasNative = UINT32_C(1) << 0;
 constexpr uint32_t kActivationHasBytecode = UINT32_C(1) << 1;
 constexpr uint32_t kActivationNoBytecode = UINT32_MAX;
@@ -405,11 +403,11 @@ LLVM_ATTRIBUTE_NOINLINE LogicalResult materializeDPIExportDescriptors(
                                            : TALOS_RT_EXPORT_NO_BYTECODE),
               7);
           if (!bytecodeOnly || info.isTask)
-            record = insertValue(builder, module.getLoc(), record,
-                                 LLVM::AddressOfOp::create(
-                                     builder, module.getLoc(), pointer,
-                                     info.symbol + ".__talos_dpi_export"),
-                                 9);
+            record = insertValue(
+                builder, module.getLoc(), record,
+                LLVM::AddressOfOp::create(builder, module.getLoc(), pointer,
+                                          info.symbol + ".__talos_dpi_export"),
+                9);
           records = LLVM::InsertValueOp::create(
               builder, module.getLoc(), records, record,
               ArrayRef<int64_t>{static_cast<int64_t>(index)});
@@ -732,9 +730,9 @@ materializeEmbeddedSimulationDesign(ModuleOp module,
             if (!bytecodeOnly) {
               record = insertValue(
                   builder, module.getLoc(), record,
-                  LLVM::AddressOfOp::create(
-                      builder, module.getLoc(), pointer,
-                      activation.symbol + ".__talos_process_descriptor"),
+                  LLVM::AddressOfOp::create(builder, module.getLoc(), pointer,
+                                            activation.symbol +
+                                                ".__talos_process_descriptor"),
                   1);
               flags |= kActivationHasNative;
             }
@@ -868,8 +866,7 @@ materializeEmbeddedSimulationDesign(ModuleOp module,
       if (name.empty())
         name = ("scope." + Twine(index)).str();
       dpiScopeNames.push_back(name);
-      std::string globalName =
-          ("__talos_dpi_scope_name_" + Twine(index)).str();
+      std::string globalName = ("__talos_dpi_scope_name_" + Twine(index)).str();
       OpBuilder nameBuilder(context);
       nameBuilder.setInsertionPointToStart(module.getBody());
       Type nameType =

@@ -198,8 +198,8 @@ LogicalResult publishExecutable(StringRef executable, StringRef outputPath,
         if (failed(atomicallyReplace(dll.backupPath, dll.destination))) {
           // Retain the original if another process prevents its restoration.
           dll.backup->releaseFile();
-          errs() << "talos: error: original DLL retained at '"
-                 << dll.backupPath << "'\n";
+          errs() << "talos: error: original DLL retained at '" << dll.backupPath
+                 << "'\n";
         }
       } else if (dll.published) {
         if (std::error_code error = sys::fs::remove(dll.destination))
@@ -235,8 +235,7 @@ LogicalResult linkCOFFExecutable(ArrayRef<std::string> modulePaths,
   sys::fs::remove(*temporary);
   bool fullLTO = options.optLevel != 0 && !options.noLTO && !thinLTO;
   SmallString<256> runtime(supportRoot);
-  sys::path::append(runtime,
-                    fullLTO ? "libtalos_rt_lto.a" : "libtalos_rt.a");
+  sys::path::append(runtime, fullLTO ? "libtalos_rt_lto.a" : "libtalos_rt.a");
   if (!sys::fs::exists(runtime)) {
     errs() << "talos: error: native support is missing '" << runtime << "'\n";
     return failure();
@@ -283,9 +282,8 @@ LogicalResult linkCOFFExecutable(ArrayRef<std::string> modulePaths,
         options.sharedLibraryInputs[input.sharedLibraryIndex];
     if (StringRef(dll.basename)
             .equals_insensitive(sys::path::filename(outputPath))) {
-      errs()
-          << "talos: error: DLL input name conflicts with executable name: '"
-          << dll.basename << "'\n";
+      errs() << "talos: error: DLL input name conflicts with executable name: '"
+             << dll.basename << "'\n";
       return failure();
     }
     std::string keepAlive;

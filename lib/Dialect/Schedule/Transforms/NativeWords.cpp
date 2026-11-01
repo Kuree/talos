@@ -251,12 +251,14 @@ bool coalesceWord(sim::SimFuncOp function, analysis::BoundedLoop loop,
     }
   // Equal geometries can compute directly in their physical slots. Otherwise
   // compute on packed logical lanes and resize lanes at storage boundaries.
-  bool mixedGeometry = paddedStride &&
-      (llvm::any_of(geometries, [&](auto geometry) {
-         return geometry != std::pair{paddedWidth, paddedStride};
-       }) || llvm::any_of(valueWidths, [&](unsigned bits) {
-         return bits != paddedWidth;
-       }));
+  bool mixedGeometry =
+      paddedStride &&
+      (llvm::any_of(geometries,
+                    [&](auto geometry) {
+                      return geometry != std::pair{paddedWidth, paddedStride};
+                    }) ||
+       llvm::any_of(valueWidths,
+                    [&](unsigned bits) { return bits != paddedWidth; }));
   if (mixedGeometry)
     paddedWidth = paddedStride = 0;
   bool nestedArguments = llvm::any_of(loop.blocks, [&](Block *block) {
@@ -431,7 +433,8 @@ bool coalesceWord(sim::SimFuncOp function, analysis::BoundedLoop loop,
       mapping.map(argument, wrapper->getArgument(argument.getArgNumber()));
   auto wordType = [&](Type scalar) -> Type {
     unsigned bits =
-        (paddedStride ? paddedStride : *sim::getPackedWidth(scalar)) * groupSize;
+        (paddedStride ? paddedStride : *sim::getPackedWidth(scalar)) *
+        groupSize;
     return isa<IntegerType>(sim::getPackedScalarType(scalar))
                ? Type(builder.getIntegerType(bits))
                : Type(sim::LogicType::get(function.getContext(), bits));
@@ -464,9 +467,9 @@ bool coalesceWord(sim::SimFuncOp function, analysis::BoundedLoop loop,
     if (paddedStride && sim::getPackedWidth(value.getType()) == paddedWidth &&
         scalarWidth == paddedStride) {
       if (isa<IntegerType>(value.getType()))
-        value = arith::ExtUIOp::create(
-            builder, original.getLoc(), builder.getIntegerType(paddedStride),
-            value);
+        value =
+            arith::ExtUIOp::create(builder, original.getLoc(),
+                                   builder.getIntegerType(paddedStride), value);
       else
         value = sim::SimLogicResizeOp::create(
             builder, original.getLoc(),
@@ -748,10 +751,12 @@ bool coalesceWord(sim::SimFuncOp function, analysis::BoundedLoop loop,
       }
       if (mixedGeometry && logicalWidth != storeWidth) {
         builder.setInsertionPoint(store);
-        store.getValueMutable().assign(schedule::NativeWordResizeLanesOp::create(
-            builder, store.getLoc(),
-            store.getReference().getType().getElementType(),
-            store.getValue(), logicalWidth / groupSize, storeWidth / groupSize));
+        store.getValueMutable().assign(
+            schedule::NativeWordResizeLanesOp::create(
+                builder, store.getLoc(),
+                store.getReference().getType().getElementType(),
+                store.getValue(), logicalWidth / groupSize,
+                storeWidth / groupSize));
       }
       if (paddedStride) {
         builder.setInsertionPoint(store);
@@ -792,9 +797,9 @@ bool coalesceWord(sim::SimFuncOp function, analysis::BoundedLoop loop,
     } else if (auto table = dyn_cast<schedule::NativeWordTableOp>(op)) {
       builder.setInsertionPoint(table);
       for (OpOperand &operand : table->getOpOperands())
-        operand.set(wideValue(operand.get(),
-                              paddedStride ? groupSize * paddedStride
-                                           : groupSize));
+        operand.set(wideValue(operand.get(), paddedStride
+                                                 ? groupSize * paddedStride
+                                                 : groupSize));
     }
   }
   if (!hasTail) {
@@ -823,7 +828,7 @@ struct WordFunctionResult {
 // and own distinct result slots; they never inspect or mutate sibling bodies.
 struct WordDesignState {
   WordDesignState(sim::SimDesignOp design, bool diagnostics,
-                 uint64_t predicationOperationBudget)
+                  uint64_t predicationOperationBudget)
       : observers(design), handles(design), diagnostics(diagnostics),
         predicationOperationBudget(predicationOperationBudget) {
     for (int64_t root :
@@ -910,10 +915,9 @@ public:
           }
         };
         bool retryPredication = false;
-        bool success =
-            coalesceWord(function, loop, handles, observers, privateRoots,
-                         ranges, diagnostics ? &reason : nullptr,
-                         &retryPredication);
+        bool success = coalesceWord(
+            function, loop, handles, observers, privateRoots, ranges,
+            diagnostics ? &reason : nullptr, &retryPredication);
         if (success) {
           reportFormed();
           ++result.formed;

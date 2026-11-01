@@ -67,5 +67,5 @@ int main(int argc, char **argv) {
     forwarded.push_back(argv[index]);
   }
   return talos::driver::runTalosDriver(static_cast<int>(forwarded.size()),
-                                           forwarded.data(), config);
+                                       forwarded.data(), config);
 }

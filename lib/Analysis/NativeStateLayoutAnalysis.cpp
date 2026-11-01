@@ -27,8 +27,7 @@ namespace {
 constexpr uint64_t maximumLeadingRootBits = uint64_t(1) << 16;
 
 uint64_t encodeStaticHandle(uint32_t id) {
-  return talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_STATIC, id,
-                                         0);
+  return talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_STATIC, id, 0);
 }
 
 std::optional<uint64_t> getStaticDriverID(Value value) {

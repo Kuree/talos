@@ -44,8 +44,7 @@ LogicalResult linkMachOExecutable(ArrayRef<std::string> modulePaths,
                                   bool thinLTO) {
   SmallString<256> runtime(supportRoot);
   bool fullLTO = options.optLevel != 0 && !options.noLTO && !thinLTO;
-  sys::path::append(runtime,
-                    fullLTO ? "libtalos_rt_lto.a" : "libtalos_rt.a");
+  sys::path::append(runtime, fullLTO ? "libtalos_rt_lto.a" : "libtalos_rt.a");
   SmallString<256> sysroot(supportRoot);
   sys::path::append(sysroot, "sdk");
   for (StringRef path : {StringRef(runtime), StringRef(sysroot)}) {

@@ -21,9 +21,8 @@ TEST(GeneratedArithmetic, MultiWidthBytecodeMatchesNativeExecution) {
             TALOS_RT_OK);
   talos_rt_process_instance_v1 *native = nullptr;
   talos_rt_process_instance_v1 *bytecode = nullptr;
-  ASSERT_EQ(
-      talos_rt_v1_process_instance_create(&arithmeticDescriptor, &native),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_process_instance_create(&arithmeticDescriptor, &native),
+            TALOS_RT_OK);
   ASSERT_EQ(
       talos_rt_v1_process_instance_create(&arithmeticDescriptor, &bytecode),
       TALOS_RT_OK);

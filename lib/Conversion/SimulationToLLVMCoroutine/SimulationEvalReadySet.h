@@ -122,16 +122,16 @@ inline void materializeEvalReadyIndexes(mlir::OpBuilder &builder,
     for (unsigned level = 1; level != layout.levels; ++level) {
       Block *update = new Block;
       done->getParent()->getBlocks().insert(done->getIterator(), update);
-      Value empty = arith::CmpIOp::create(
-          builder, loc, arith::CmpIPredicate::eq, next, zero);
+      Value empty = arith::CmpIOp::create(builder, loc,
+                                          arith::CmpIPredicate::eq, next, zero);
       cf::CondBranchOp::create(builder, loc, empty, update, ValueRange{}, done,
                                ValueRange{});
       builder.setInsertionPointToStart(update);
       unsigned parent = layout.offsets[level] + child / 64;
       uint64_t bit = uint64_t{1} << (child % 64);
-      next = arith::AndIOp::create(
-          builder, loc, loadOwnerWord(builder, loc, base, parent),
-          llvmConstant(builder, loc, i64, ~bit));
+      next = arith::AndIOp::create(builder, loc,
+                                   loadOwnerWord(builder, loc, base, parent),
+                                   llvmConstant(builder, loc, i64, ~bit));
       LLVM::StoreOp::create(builder, loc, next,
                             ownerWordAddress(builder, loc, base, parent), 8);
       child /= 64;

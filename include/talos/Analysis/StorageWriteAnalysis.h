@@ -1,4 +1,5 @@
-//===- StorageWriteAnalysis.h - Storage writes --------------------*- C++ -*-===//
+//===- StorageWriteAnalysis.h - Storage writes --------------------*- C++
+//-*-===//
 #ifndef TALOS_ANALYSIS_STORAGEWRITEANALYSIS_H
 #define TALOS_ANALYSIS_STORAGEWRITEANALYSIS_H
 
@@ -47,10 +48,10 @@ enum class ExecutionWindow { Unbounded, PositiveDelay, Activation };
 /// post-conversion verification consume the same lattice implementation.
 class WriteExecutionBounds {
 public:
-  WriteExecutionBounds(
-      mlir::Operation *scope, mlir::ArrayRef<mlir::Operation *> tracked,
-      bool unknownCallEffects = true,
-      ExecutionWindow window = ExecutionWindow::PositiveDelay);
+  WriteExecutionBounds(mlir::Operation *scope,
+                       mlir::ArrayRef<mlir::Operation *> tracked,
+                       bool unknownCallEffects = true,
+                       ExecutionWindow window = ExecutionWindow::PositiveDelay);
   bool executesAtMostOnce(mlir::Operation *write) const;
   bool mutuallyExclusive(mlir::Operation *lhs, mlir::Operation *rhs) const;
 

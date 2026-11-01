@@ -6,11 +6,11 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/DPI/DPIDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <algorithm>
@@ -138,10 +138,10 @@ void inspectRecursiveSourceFrames(SourceFrames &state) {
 }
 
 talos_rt_status inspectSourceFrameImport(talos_rt_context *, uint32_t,
-                                           const talos_rt_import_input_v1 *,
-                                           uint32_t inputCount,
-                                           talos_rt_import_output_v1 *outputs,
-                                           uint32_t outputCount, void *data) {
+                                         const talos_rt_import_input_v1 *,
+                                         uint32_t inputCount,
+                                         talos_rt_import_output_v1 *outputs,
+                                         uint32_t outputCount, void *data) {
   if (inputCount || outputCount != 1 || !outputs || !outputs[0].value ||
       outputs[0].bit_width != 32 || outputs[0].limb_count != 1)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -159,10 +159,9 @@ void runSourceFrameActivations(bool nonlocalExit, bool recursiveExit = false) {
   const char *input = std::getenv("TALOS_TEST_INPUT");
   ASSERT_NE(input, nullptr);
   mlir::DialectRegistry registry;
-  registry
-      .insert<mlir::arith::ArithDialect, mlir::cf::ControlFlowDialect,
-              talos::dpi::DPIDialect, talos::runtime::TalosRuntimeDialect,
-              talos::sim::TalosSimulationDialect>();
+  registry.insert<mlir::arith::ArithDialect, mlir::cf::ControlFlowDialect,
+                  talos::dpi::DPIDialect, talos::runtime::TalosRuntimeDialect,
+                  talos::sim::TalosSimulationDialect>();
   mlir::MLIRContext context(registry);
   auto module = mlir::parseSourceFile<mlir::ModuleOp>(input, &context);
   ASSERT_TRUE(module);
@@ -214,14 +213,14 @@ void runSourceFrameActivations(bool nonlocalExit, bool recursiveExit = false) {
   talos_rt_design_bytecode_entry_v1 entry{&execution, startup->index, 0};
   uint64_t scratchSize = 0, scratchAlignment = 0;
   ASSERT_EQ(talos_rt_validate_design_bytecode(entry, runtime, &scratchSize,
-                                                &scratchAlignment),
+                                              &scratchAlignment),
             TALOS_RT_OK);
   ASSERT_LE(scratchAlignment, alignof(uint64_t));
   std::vector<uint64_t> scratch((scratchSize + 7) / 8);
   talos_rt_fragment_action_v1 action{};
   ASSERT_EQ(talos_rt_execute_design_bytecode(entry, runtime, scratch.data(),
-                                               scratch.size() * 8, 0,
-                                               scratchSize, 0, 0, &action),
+                                             scratch.size() * 8, 0, scratchSize,
+                                             0, 0, &action),
             TALOS_RT_OK);
   ASSERT_EQ(action.kind, TALOS_RT_FRAGMENT_TERMINATE);
   ASSERT_EQ(talos_rt_v1_scheduler_run(runtime), TALOS_RT_OK);

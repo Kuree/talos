@@ -36,8 +36,7 @@ LogicalResult DPIDialect::verifyOperationAttribute(Operation *operation,
                               ScopeId, ABISignature, AggregateLayouts,
                               LogicalInputs, ElidedInputs, ABIHash,
                               ExportBridgeSymbol, ExportBodySymbol, HasExports,
-                              TransparentExports>(
-              operation, attribute)))
+                              TransparentExports>(operation, attribute)))
     return failure();
   StringRef name = attribute.getName().strref();
   Attribute value = attribute.getValue();
@@ -237,11 +236,11 @@ AggregateABIAttr::verify(function_ref<InFlightDiagnostic()> emitError,
 }
 
 uint64_t talos::dpi::getSignatureHash(ArrayAttr signature,
-                                        uint64_t logicalInputs) {
+                                      uint64_t logicalInputs) {
   uint64_t hash = TALOS_STABLE_HASH_OFFSET_BASIS;
   hash = talos_stable_hash_append_uint_le(hash, logicalInputs, 8);
-  hash = talos_stable_hash_append_uint_le(
-      hash, signature.size() - logicalInputs, 8);
+  hash = talos_stable_hash_append_uint_le(hash,
+                                          signature.size() - logicalInputs, 8);
   for (Attribute attribute : signature) {
     auto abi = cast<ABIAttr>(attribute);
     hash = talos_stable_hash_append_uint_le(
@@ -251,8 +250,7 @@ uint64_t talos::dpi::getSignatureHash(ArrayAttr signature,
     hash = talos_stable_hash_append_uint_le(hash, abi.getWidth(), 4);
     hash =
         talos_stable_hash_append_uint_le(hash, abi.getFourState() ? 1 : 0, 1);
-    hash =
-        talos_stable_hash_append_uint_le(hash, abi.getIsSigned() ? 1 : 0, 1);
+    hash = talos_stable_hash_append_uint_le(hash, abi.getIsSigned() ? 1 : 0, 1);
   }
   return hash ? hash : 1;
 }

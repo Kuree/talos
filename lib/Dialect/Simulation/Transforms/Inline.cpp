@@ -509,12 +509,13 @@ void TalosSimInlinePass::runOnOperation() {
     if (preset.specializationCost && calleeCost <= preset.specializationCost) {
       auto cached = provenanceCache.find(caller.getOperation());
       if (cached == provenanceCache.end())
-        cached = provenanceCache
-                     .try_emplace(caller.getOperation(),
-                                  (designHandles ? *designHandles
-                                                 : designHandles.emplace(design))
-                                      .derive(caller))
-                     .first;
+        cached =
+            provenanceCache
+                .try_emplace(caller.getOperation(),
+                             (designHandles ? *designHandles
+                                            : designHandles.emplace(design))
+                                 .derive(caller))
+                .first;
       const analysis::HandleFacts &actuals = cached->second;
       Block &entry = callee.getBody().front();
       for (auto [index, argument] : llvm::enumerate(entry.getArguments())) {

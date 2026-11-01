@@ -89,8 +89,8 @@ bool isColdRuntimeCheckpoint(Operation *operation) {
     return isDeferredReportSpawn(spawn);
   return isa<SimFinishOp, SimStopOp, SimFatalOp, SimProgramExitOp, SimErrorOp,
              SimStatusCheckOp, SimDisplayOp, SimSampledReadOp,
-             SimSampledHistoryOp, SimClockedSampleReadOp,
-             SimDeferredEnqueueOp>(operation);
+             SimSampledHistoryOp, SimClockedSampleReadOp, SimDeferredEnqueueOp>(
+      operation);
 }
 
 bool isStartupEntryKind(EntryKind kind) {
@@ -463,8 +463,7 @@ LogicalResult normalizeClassDirectCalls(Operation *root, uint64_t *count) {
 /// Enforce unconditional simulation legality for every MLIR inlining client
 /// and supply CFG/SSA rewriting mechanics. The Talos pass separately owns
 /// profitability, budgets, diagnostics, and statistics.
-struct TalosSimulationInlinerInterface final
-    : public DialectInlinerInterface {
+struct TalosSimulationInlinerInterface final : public DialectInlinerInterface {
   using DialectInlinerInterface::DialectInlinerInterface;
 
   bool isLegalToInline(Operation *call, Operation *callable, bool) const final {
@@ -663,19 +662,18 @@ static const llvm::StringMap<discardable::PayloadCheck> &declarations() {
       metadata::ConsequentFirstMatchEquivalence,
       metadata::CoverSequencePerMatch, metadata::DefaultAssertionFailure,
       metadata::DeferredEpochStorage, metadata::DeferredEvaluator,
-      metadata::DeferredResult,
-      metadata::EmptyAntecedentNonoverlap, metadata::EndOfSimulationStrength,
-      metadata::ExpectBoundedAlternatives, metadata::ExpectBoundedBranching,
-      metadata::ExpectBoundedHorizon, metadata::ExpectBoundedStateWords,
-      metadata::ExpectDonePath, metadata::ExpectEosCoordinator,
-      metadata::ExpectMonitor, metadata::ExpectMonitorActor,
-      metadata::ExpectOneCycleAlternatives, metadata::ExpectOneCycleBranching,
-      metadata::ExpectOperandStrength, metadata::ExpectResultPath,
-      metadata::FirstMatchMonitor, metadata::FirstMatchPriority,
-      metadata::FirstMatchPriorityGroups, metadata::FollowedByMonitor,
-      metadata::GlobalFutureMonitor, metadata::GlobalFutureResolver,
-      metadata::GlobalFutureWait, metadata::ImplicationAntecedent,
-      metadata::ImplicationAntecedentFailure,
+      metadata::DeferredResult, metadata::EmptyAntecedentNonoverlap,
+      metadata::EndOfSimulationStrength, metadata::ExpectBoundedAlternatives,
+      metadata::ExpectBoundedBranching, metadata::ExpectBoundedHorizon,
+      metadata::ExpectBoundedStateWords, metadata::ExpectDonePath,
+      metadata::ExpectEosCoordinator, metadata::ExpectMonitor,
+      metadata::ExpectMonitorActor, metadata::ExpectOneCycleAlternatives,
+      metadata::ExpectOneCycleBranching, metadata::ExpectOperandStrength,
+      metadata::ExpectResultPath, metadata::FirstMatchMonitor,
+      metadata::FirstMatchPriority, metadata::FirstMatchPriorityGroups,
+      metadata::FollowedByMonitor, metadata::GlobalFutureMonitor,
+      metadata::GlobalFutureResolver, metadata::GlobalFutureWait,
+      metadata::ImplicationAntecedent, metadata::ImplicationAntecedentFailure,
       metadata::MixedEmptyAntecedentCurrentTickChannels,
       metadata::MixedEmptyAntecedentHandoffChannels,
       metadata::MixedEmptyAntecedentNonoverlap, metadata::MonitorCallback,
@@ -925,7 +923,7 @@ static LogicalResult verifyDeclaredAttribute(Operation *operation,
 
 LogicalResult
 TalosSimulationDialect::verifyOperationAttribute(Operation *operation,
-                                                   NamedAttribute attribute) {
+                                                 NamedAttribute attribute) {
   if (attribute.getName().strref() == metadata::IntegerRange::getNameStr())
     return operation->emitOpError("attribute '")
            << attribute.getName().strref() << "' belongs on an argument";
@@ -953,9 +951,9 @@ void TalosSimulationDialect::initialize() {
 }
 
 Operation *TalosSimulationDialect::materializeConstant(OpBuilder &builder,
-                                                         Attribute value,
-                                                         Type type,
-                                                         Location location) {
+                                                       Attribute value,
+                                                       Type type,
+                                                       Location location) {
   // FrozenConstantAttr is transient preparation metadata. Packed aggregates
   // require a scalar constant followed by packed.unflatten, which is not a
   // zero-operand constant-like operation and therefore cannot be returned from
@@ -1027,7 +1025,7 @@ Operation *TalosSimulationDialect::materializeConstant(OpBuilder &builder,
 
 OpFoldResult SimBytesConstantOp::fold(FoldAdaptor) { return getValueAttr(); }
 
-#define TALOS_NULL_FOLD(OP)                                                  \
+#define TALOS_NULL_FOLD(OP)                                                    \
   OpFoldResult OP::fold(FoldAdaptor) { return UnitAttr::get(getContext()); }
 
 TALOS_NULL_FOLD(SimCovergroupNullOp)

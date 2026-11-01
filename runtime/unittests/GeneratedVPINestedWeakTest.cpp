@@ -5,9 +5,9 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <array>
@@ -66,10 +66,9 @@ TEST(GeneratedDesignDatabase, MailboxWeakChildren) {
   std::array<talos_rt_object_v1 *, 3> objects{};
   talos_rt_gc_root_range_v1 roots{};
   ASSERT_EQ(talos_rt_v1_gc_root_range_push(lane, &roots, objects.data(),
-                                             objects.size()),
+                                           objects.size()),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_semaphore_create(lane, 1, &objects[2]),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_semaphore_create(lane, 1, &objects[2]), TALOS_RT_OK);
   const uint64_t identity = talos_rt_v1_object_id(objects[2]);
   const uint64_t reference = talos_rt_managed_word_from_object(objects[2]);
   std::array<talos_rt_design_cursor_v1, 2> storages{};
@@ -133,7 +132,7 @@ TEST(GeneratedDesignDatabase, MailboxWeakChildren) {
         talos_rt_cached_design_semantic_type_edge(raw, semantic, 0, &edge),
         TALOS_RT_OK);
     ASSERT_EQ(talos_rt_cached_vpi_mailbox_element_type(raw, owner, edge.child,
-                                                         &physical),
+                                                       &physical),
               TALOS_RT_OK);
     std::vector<uint8_t> value(descriptor->valueSize, 0);
     uint64_t offset = 0;
@@ -150,7 +149,7 @@ TEST(GeneratedDesignDatabase, MailboxWeakChildren) {
     putBits(value, offset + field(physical, 1).packed_offset, 32, 73);
     uint32_t success = 0;
     ASSERT_EQ(talos_rt_v1_mailbox_try_put(lane, objects[index], value.data(),
-                                            nullptr, &success),
+                                          nullptr, &success),
               TALOS_RT_OK);
     ASSERT_EQ(success, 1u);
     const uint64_t word = talos_rt_managed_word_from_object(objects[index]);

@@ -271,9 +271,9 @@ LogicalResult linkELFExecutable(
     SmallVector<std::string> runpaths;
     llvm::StringSet<> seenRunpaths;
     for (const SharedLibraryInput &input : sharedLibraryInputs) {
-      FailureOr<std::string> runpath = getSharedLibraryRunpath(
-          outputPath, input.suppliedDirectory, input.suppliedPathWasAbsolute,
-          "$ORIGIN");
+      FailureOr<std::string> runpath =
+          getSharedLibraryRunpath(outputPath, input.suppliedDirectory,
+                                  input.suppliedPathWasAbsolute, "$ORIGIN");
       if (failed(runpath))
         return failure();
       if (seenRunpaths.insert(*runpath).second)

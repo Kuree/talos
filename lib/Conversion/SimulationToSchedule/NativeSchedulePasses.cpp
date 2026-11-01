@@ -1,5 +1,4 @@
 #include "NativePipeline.h"
-#include "talos/Analysis/NativeWordAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -8,6 +7,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/SymbolTable.h"
 #include "talos/Analysis/LocalStorageAnalysis.h"
+#include "talos/Analysis/NativeWordAnalysis.h"
 #include "talos/Analysis/ParallelWalk.h"
 #include "talos/Analysis/SimulationAnalysis.h"
 #include "talos/Analysis/StaticSpecializationAnalysis.h"
@@ -87,8 +87,7 @@ LogicalResult NativePipelineAnalysis::planState() {
             "static-specialization root references unknown storage");
       talos_rt_stable_handle_v1 decoded{};
       if (!talos_rt_stable_handle_decode(handle->second, &decoded) ||
-          decoded.kind != TALOS_RT_STABLE_HANDLE_STATIC ||
-          decoded.offset != 0)
+          decoded.kind != TALOS_RT_STABLE_HANDLE_STATIC || decoded.offset != 0)
         return module.emitError(
             "static-specialization root has an invalid native handle");
       const auto *bound = stateLayout->findBound(decoded.id);
@@ -339,8 +338,7 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
       stateLayout->transitionHandlesExact = true;
       for (uint32_t staticState : staticFanoutPlan.runtimeTransitionStates)
         stateLayout->transitionHandles.insert(staticState);
-      for (const talos_rt_static_fanout_entry &entry :
-           staticFanoutPlan.entries)
+      for (const talos_rt_static_fanout_entry &entry : staticFanoutPlan.entries)
         stateLayout->transitionHandles.insert(entry.static_state);
       // Toggle coverage observes every committed transition even when the
       // exact language-level fanout is empty. Keep a notification at covered
@@ -500,8 +498,8 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
             // The publication only wakes the runtime waiter; the runtime must
             // also own the calendar so that waiter runs in this time slot
             // (4.5). A generated run-until loop could advance time first.
-            bool ownedPublication = runtimeCalendar && current == function &&
-                                    width && *width <= 64;
+            bool ownedPublication =
+                runtimeCalendar && current == function && width && *width <= 64;
             return handle != handles.end() &&
                    talos_rt_stable_handle_decode(handle->second, &decoded) &&
                    decoded.kind == TALOS_RT_STABLE_HANDLE_STATIC &&
@@ -590,8 +588,7 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
         });
       }
       if (runtimeLocal) {
-        ::talos::schedule::set<
-            ::talos::schedule::Field::EvalCheckpointOnly>(
+        ::talos::schedule::set<::talos::schedule::Field::EvalCheckpointOnly>(
             function, UnitAttr::get(module.getContext()));
         if (detailedTiming) {
           llvm::errs() << "talos eval checkpoint admission: actor="
@@ -641,8 +638,8 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
     };
     SmallVector<sim::SimFuncOp> admittedBodies;
     SmallVector<bool> clockedBodies;
-    if (::talos::schedule::has<
-            ::talos::schedule::Field::EvalRuntimeCalendar>(module)) {
+    if (::talos::schedule::has<::talos::schedule::Field::EvalRuntimeCalendar>(
+            module)) {
       auto clocks = buildNativePeriodicClockPlan(
           module, *stateLayout, aotEligibility.getActorSlots());
       if (failed(clocks))
@@ -670,8 +667,7 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
         if (!slot)
           return;
         auto body =
-            ::talos::schedule::get<::talos::schedule::Field::EvalBody>(
-                actor);
+            ::talos::schedule::get<::talos::schedule::Field::EvalBody>(actor);
         if (body)
           if (sim::SimFuncOp function =
                   planningSymbols.lookupSymbolIn<sim::SimFuncOp>(metadataDesign,
@@ -822,8 +818,7 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
                            (*width + 63) / 64 >= (uint64_t{1} << 15))) ||
           enqueue.getDelay() || site.getTiming() || !function ||
           function.getHomeRegion() != sim::EventRegion::Active ||
-          enqueue->getParentRegion() != &function.getBody() ||
-          !completeSlice ||
+          enqueue->getParentRegion() != &function.getBody() || !completeSlice ||
           (!staticNBAPlan.independentSiteWrites[root->second] &&
            !fixedReference(target)))
         queuePayloadSupported[root->second] = 0;
@@ -838,8 +833,8 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
     // Include initializer writes rather than mistaking them for asynchronous
     // clock writers or requiring a checkpoint on every later clock edge.
     staticNBAPlan.runtimeQueueRoots.assign(staticNBAPlan.roots.size(), 0);
-    if (::talos::schedule::has<
-            ::talos::schedule::Field::EvalRuntimeCalendar>(module))
+    if (::talos::schedule::has<::talos::schedule::Field::EvalRuntimeCalendar>(
+            module))
       for (uint32_t root = 0; root != orderedRootClosed.size(); ++root)
         if (queuePayloadSupported[root]) {
           staticNBAPlan.runtimeQueueRoots[root] = 1;
@@ -918,8 +913,8 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
         continue;
       bool runtimeOwner =
           ::talos::schedule::has<evalRuntimeNBARequiredAttr>(function) ||
-          ::talos::schedule::has<
-              ::talos::schedule::Field::EvalCheckpointOnly>(function) ||
+          ::talos::schedule::has<::talos::schedule::Field::EvalCheckpointOnly>(
+              function) ||
           (bodyNeedsOrderedNBA[index] && !everySiteGenerated) ||
           llvm::any_of(bodyWideRoots[index], [&](uint32_t root) {
             return !orderedRootClosed[root] || !queuePayloadSupported[root];
@@ -966,8 +961,7 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
     for (auto [index, function] : llvm::enumerate(admittedBodies))
       if (bodyUsesOrderedQueue[index] &&
           !::talos::schedule::has<evalRuntimeNBARequiredAttr>(function))
-        ::talos::schedule::set<
-            ::talos::schedule::Field::EvalOrderedNbaQueue>(
+        ::talos::schedule::set<::talos::schedule::Field::EvalOrderedNbaQueue>(
             function, UnitAttr::get(module.getContext()));
     materializeNBAAccumulators = true;
     directStaticState |=
@@ -1073,8 +1067,7 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
       });
       return loopCarried;
     };
-    for (const talos_rt_static_fanout_entry &entry :
-         staticFanoutPlan.entries) {
+    for (const talos_rt_static_fanout_entry &entry : staticFanoutPlan.entries) {
       // The periodic loop forwards an alias entry itself (see
       // isNativePeriodicAliasEntry).
       if (isNativePeriodicAliasEntry(periodicAliases, entry))
@@ -1486,7 +1479,8 @@ LogicalResult NativePipelineAnalysis::planOwnership() {
     }
     if (!invalidConvergenceOwnership.empty()) {
       if (nativeScheduler != schedule::NativeSchedulerMode::Auto)
-        return emitError(module.getLoc(), invalidConvergenceOwnership), failure();
+        return emitError(module.getLoc(), invalidConvergenceOwnership),
+               failure();
       emitRemark(module.getLoc(), "generated eval disabled: ")
           << invalidConvergenceOwnership;
       if (detailedTiming)
@@ -1567,8 +1561,9 @@ LogicalResult NativePipelineAnalysis::planOwnership() {
         bool certifiedRuntimeNBAFallback = false;
         if (entry.actor_slot < actorsBySlot.size())
           if (sim::SimFuncOp actor = actorsBySlot[entry.actor_slot])
-            if (auto body = ::talos::schedule::get<
-                    ::talos::schedule::Field::EvalBody>(actor))
+            if (auto body =
+                    ::talos::schedule::get<::talos::schedule::Field::EvalBody>(
+                        actor))
               if (sim::SimFuncOp evalBody =
                       evalSymbols.getSymbolTable(metadataDesign)
                           .lookup<sim::SimFuncOp>(body.getValue()))
@@ -1680,8 +1675,7 @@ LogicalResult NativePipelineAnalysis::planOwnership() {
         });
       }
       for (sim::SimFuncOp selected : closure)
-        ::talos::schedule::set<
-            ::talos::schedule::Field::EvalSelectedTwoState>(
+        ::talos::schedule::set<::talos::schedule::Field::EvalSelectedTwoState>(
             selected, UnitAttr::get(context));
     }
     // Carry the selected-owner proof on the operation that consumes it.

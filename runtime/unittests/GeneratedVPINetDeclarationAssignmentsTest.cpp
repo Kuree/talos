@@ -3,11 +3,11 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
 #include "talos/Runtime/Runtime.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <algorithm>
@@ -192,9 +192,8 @@ TEST(GeneratedDesignDatabase, NetDeclarationAssignments) {
   unsigned removed = 0;
   for (auto statement :
        baselineDesign.getOps<talos::sim::SimStatementDeclOp>()) {
-    auto properties =
-        statement->getAttrOfType<talos::sim::VPIPropertySetAttr>(
-            "vpi_properties");
+    auto properties = statement->getAttrOfType<talos::sim::VPIPropertySetAttr>(
+        "vpi_properties");
     if (!properties)
       continue;
     llvm::SmallVector<mlir::Attribute> remaining;
@@ -226,8 +225,8 @@ TEST(GeneratedDesignDatabase, NetDeclarationAssignments) {
   auto withoutVPI = talos::encodeSimulationDesign(design, options);
   ASSERT_TRUE(mlir::succeeded(withoutVPI));
   EXPECT_TRUE(withoutVPI->designDatabase.empty());
-  EXPECT_EQ(withoutVPI->executionFlags & (TALOS_RT_EXECUTION_VPI_READ |
-                                          TALOS_RT_EXECUTION_VPI_WRITE),
+  EXPECT_EQ(withoutVPI->executionFlags &
+                (TALOS_RT_EXECUTION_VPI_READ | TALOS_RT_EXECUTION_VPI_WRITE),
             0u);
 }
 } // namespace

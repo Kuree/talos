@@ -112,7 +112,7 @@ public:
         IRMapping mapping;
         for (Value value : forwarded)
           mapping.map(value, continuation->addArgument(value.getType(),
-                                                      value.getLoc()));
+                                                       value.getLoc()));
         rewriter.clone(*terminator, mapping);
         for (Value value : escaping)
           rewriter.replaceUsesWithIf(

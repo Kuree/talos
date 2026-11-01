@@ -15,8 +15,8 @@
 #include <string>
 #include <vector>
 
-extern "C" const talos_rt_process_descriptor_v1 dumpDescriptor asm(
-    TALOS_TEST_SYMBOL("dump.__talos_process_descriptor"));
+extern "C" const talos_rt_process_descriptor_v1
+    dumpDescriptor asm(TALOS_TEST_SYMBOL("dump.__talos_process_descriptor"));
 
 namespace {
 
@@ -95,16 +95,15 @@ PLI_INT32 integerValue(vpiHandle handle) {
 
 TEST(GeneratedVPITraversal, PreservesPortIdentityAndCanonicalNameLookup) {
   ASSERT_NE(dumpDescriptor.execution, nullptr);
-  EXPECT_EQ(dumpDescriptor.execution->flags & (TALOS_RT_EXECUTION_VPI_READ |
-                                               TALOS_RT_EXECUTION_VPI_WRITE),
+  EXPECT_EQ(dumpDescriptor.execution->flags &
+                (TALOS_RT_EXECUTION_VPI_READ | TALOS_RT_EXECUTION_VPI_WRITE),
             TALOS_RT_EXECUTION_VPI_READ);
-  ASSERT_EQ(talos_rt_v1_design_validate(dumpDescriptor.execution),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_design_validate(dumpDescriptor.execution), TALOS_RT_OK);
 
   talos_rt_context *context = nullptr;
-  ASSERT_EQ(talos_rt_v1_context_create_for_design(dumpDescriptor.execution,
-                                                    &context),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_context_create_for_design(dumpDescriptor.execution, &context),
+      TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_startup(context, nullptr, 0), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_end_compile(context), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_start_simulation(context), TALOS_RT_OK);
@@ -208,13 +207,12 @@ TEST(GeneratedVPITraversal, PreservesPortIdentityAndCanonicalNameLookup) {
 
 TEST(GeneratedVPITraversal, TraversesDefinitionSharedIODeclarations) {
   ASSERT_NE(dumpDescriptor.execution, nullptr);
-  ASSERT_EQ(talos_rt_v1_design_validate(dumpDescriptor.execution),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_design_validate(dumpDescriptor.execution), TALOS_RT_OK);
 
   talos_rt_context *context = nullptr;
-  ASSERT_EQ(talos_rt_v1_context_create_for_design(dumpDescriptor.execution,
-                                                    &context),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_context_create_for_design(dumpDescriptor.execution, &context),
+      TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_startup(context, nullptr, 0), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_end_compile(context), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_start_simulation(context), TALOS_RT_OK);
@@ -527,13 +525,12 @@ TEST(GeneratedVPITraversal, TraversesDefinitionSharedIODeclarations) {
 
 TEST(GeneratedVPITraversal, RefObjectValuesUseActualSemanticKindsAndStorage) {
   ASSERT_NE(dumpDescriptor.execution, nullptr);
-  ASSERT_EQ(talos_rt_v1_design_validate(dumpDescriptor.execution),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_design_validate(dumpDescriptor.execution), TALOS_RT_OK);
 
   talos_rt_context *context = nullptr;
-  ASSERT_EQ(talos_rt_v1_context_create_for_design(dumpDescriptor.execution,
-                                                    &context),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_context_create_for_design(dumpDescriptor.execution, &context),
+      TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_startup(context, nullptr, 0), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_end_compile(context), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_start_simulation(context), TALOS_RT_OK);
@@ -541,11 +538,10 @@ TEST(GeneratedVPITraversal, RefObjectValuesUseActualSemanticKindsAndStorage) {
   auto store = [&](const char *name, uint64_t value, uint64_t unknown,
                    uint64_t width) {
     talos_rt_design_cursor_v1 cursor{};
-    ASSERT_EQ(
-        talos_rt_v1_design_lookup(dumpDescriptor.execution,
-                                    reinterpret_cast<const uint8_t *>(name),
-                                    std::strlen(name), &cursor),
-        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_design_lookup(dumpDescriptor.execution,
+                                        reinterpret_cast<const uint8_t *>(name),
+                                        std::strlen(name), &cursor),
+              TALOS_RT_OK);
     uint64_t stateOffset = 0;
     ASSERT_EQ(talos_rt_design_state_offset(context, cursor, 0, &stateOffset),
               TALOS_RT_OK);
@@ -578,8 +574,8 @@ TEST(GeneratedVPITraversal, RefObjectValuesUseActualSemanticKindsAndStorage) {
   ASSERT_EQ(talos_rt_v1_gc_lane_enter(lane), TALOS_RT_OK);
   constexpr char stringText[] = "heap-backed-ref-value";
   talos_rt_string_v1 string = 0;
-  ASSERT_EQ(talos_rt_v1_string_create(lane, stringText,
-                                        sizeof(stringText) - 1, &string),
+  ASSERT_EQ(talos_rt_v1_string_create(lane, stringText, sizeof(stringText) - 1,
+                                      &string),
             TALOS_RT_OK);
   talos_rt_gc_managed_root_v1 stringRoot{};
   ASSERT_EQ(talos_rt_v1_gc_managed_root_push(lane, &stringRoot, &string),
@@ -680,14 +676,11 @@ TEST(GeneratedVPITraversal, RefObjectValuesUseActualSemanticKindsAndStorage) {
     EXPECT_EQ(vpi_release_handle(declaration), 1);
   }
   EXPECT_EQ(vpi_scan(emptyIterator), nullptr);
-  talos_rt_object_v1 *stringObject =
-      talos_rt_object_from_managed_word(string);
+  talos_rt_object_v1 *stringObject = talos_rt_object_from_managed_word(string);
   ASSERT_NE(stringObject, nullptr);
-  ASSERT_EQ(talos_rt_v1_gc_managed_root_pop(lane, &stringRoot),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_managed_root_pop(lane, &stringRoot), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);
-  EXPECT_EQ(talos_rt_validate_string(context, string),
-            TALOS_RT_INVALID_HANDLE);
+  EXPECT_EQ(talos_rt_validate_string(context, string), TALOS_RT_INVALID_HANDLE);
   ASSERT_NE(detachedString, nullptr);
   EXPECT_STREQ(detachedString, stringText);
 
@@ -732,8 +725,7 @@ TEST(GeneratedVPITraversal, RejectsMalformedDefinitionMemberImages) {
     talos_rt_execution_descriptor_v1 mutated = *execution;
     mutated.design_database = database.data();
     mutated.design_database_size = database.size();
-    EXPECT_EQ(talos_rt_v1_design_validate(&mutated),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&mutated), TALOS_RT_INVALID_DESIGN);
   };
 
   std::vector<uint8_t> malformed = original;
@@ -894,20 +886,18 @@ TEST(GeneratedVPITraversal, RejectsMalformedDefinitionMemberImages) {
       objects + uint64_t{downstreamPortIndex} * objectSize;
   malformed = original;
   write32(malformed, downstreamPort + 4,
-          read32(original, downstreamPort + 4) |
-              TALOS_RT_DESIGN_CAP_PORT_REF);
+          read32(original, downstreamPort + 4) | TALOS_RT_DESIGN_CAP_PORT_REF);
   rejects(std::move(malformed));
 }
 
 TEST(GeneratedVPITraversal, VirtualInterfaceTypedefKeepsRawCanonicalIdentity) {
   ASSERT_NE(dumpDescriptor.execution, nullptr);
-  ASSERT_EQ(talos_rt_v1_design_validate(dumpDescriptor.execution),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_design_validate(dumpDescriptor.execution), TALOS_RT_OK);
 
   talos_rt_context *context = nullptr;
-  ASSERT_EQ(talos_rt_v1_context_create_for_design(dumpDescriptor.execution,
-                                                    &context),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_context_create_for_design(dumpDescriptor.execution, &context),
+      TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_startup(context, nullptr, 0), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_end_compile(context), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_start_simulation(context), TALOS_RT_OK);
@@ -939,13 +929,12 @@ TEST(GeneratedVPITraversal, VirtualInterfaceTypedefKeepsRawCanonicalIdentity) {
 
 TEST(GeneratedVPITraversal, TypedefAliasChainEndsAtUnnamedBuiltinType) {
   ASSERT_NE(dumpDescriptor.execution, nullptr);
-  ASSERT_EQ(talos_rt_v1_design_validate(dumpDescriptor.execution),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_design_validate(dumpDescriptor.execution), TALOS_RT_OK);
 
   talos_rt_context *context = nullptr;
-  ASSERT_EQ(talos_rt_v1_context_create_for_design(dumpDescriptor.execution,
-                                                    &context),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_context_create_for_design(dumpDescriptor.execution, &context),
+      TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_startup(context, nullptr, 0), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_end_compile(context), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_start_simulation(context), TALOS_RT_OK);
@@ -986,8 +975,7 @@ TEST(GeneratedVPITraversal, RejectsMalformedUnindexedPortAliases) {
     talos_rt_execution_descriptor_v1 mutated = *execution;
     mutated.design_database = database.data();
     mutated.design_database_size = database.size();
-    EXPECT_EQ(talos_rt_v1_design_validate(&mutated),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&mutated), TALOS_RT_INVALID_DESIGN);
   };
 
   std::vector<uint8_t> wrongRange = original;

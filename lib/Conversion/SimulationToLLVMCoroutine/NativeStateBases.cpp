@@ -276,7 +276,7 @@ LogicalResult addressNativeStateThroughBases(ModuleOp module) {
       return;
     if (!metadataOnly.empty())
       annotateStateMetadataCalls(function, metadataOnly, bases, indexBits,
-                                  pointerBits);
+                                 pointerBits);
     if (uses.empty())
       return;
     // Within one block, code generation already folds the smallest offset
@@ -313,11 +313,12 @@ LogicalResult addressNativeStateThroughBases(ModuleOp module) {
       // restores that fact without restricting unknown pointer arguments or
       // overlapping accesses in one plane. Addresses and ordered value/X/Z
       // effects remain identical (IEEE 1800-2023 4.3, 4.6, 6.3.1).
-      // Repeat the existing dereferenceable facts: otherwise LLVM 22 InstCombine
-      // can sink a base load and drop the separate_storage bundle before
-      // redundant-load elimination sees it. Each fact is its own assumption
-      // because DropUnnecessaryAssumesPass grows the AssumptionCache while
-      // iterating it when it rewrites an assumption that keeps some bundles.
+      // Repeat the existing dereferenceable facts: otherwise LLVM 22
+      // InstCombine can sink a base load and drop the separate_storage bundle
+      // before redundant-load elimination sees it. Each fact is its own
+      // assumption because DropUnnecessaryAssumesPass grows the AssumptionCache
+      // while iterating it when it rewrites an assumption that keeps some
+      // bundles.
       Location location = function.getLoc();
       Value condition = LLVM::ConstantOp::create(
           builder, location, builder.getI1Type(), builder.getBoolAttr(true));

@@ -1,4 +1,5 @@
-//===- DPIEffectAnalysis.h - Design state reachable from DPI calls -*- C++ -*-===//
+//===- DPIEffectAnalysis.h - Design state reachable from DPI calls -*- C++
+//-*-===//
 
 #ifndef TALOS_ANALYSIS_DPIEFFECTANALYSIS_H
 #define TALOS_ANALYSIS_DPIEFFECTANALYSIS_H

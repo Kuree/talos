@@ -304,8 +304,7 @@ bool isEvalClosureRuntimeCall(LLVM::CallOp call, LLVM::LLVMFuncOp function,
 }
 
 LogicalResult verifyGeneratedEvalCallClosures(ModuleOp module) {
-  if (!::talos::schedule::has<::talos::schedule::Field::EvalGenerated>(
-          module))
+  if (!::talos::schedule::has<::talos::schedule::Field::EvalGenerated>(module))
     return success();
   // Verification does not mutate symbols. Build the index once instead of
   // scanning the module for each edge in the generated call closure.
@@ -638,21 +637,20 @@ FailureOr<SmallVector<NativeDirectFragment>> materializeDirectFragments(
         codeUnit && runtimeCheckpointCodeUnits.contains(codeUnit.getUInt());
     if (!actorSlot || analyzed == analyzedActors.end() ||
         (!isGeneratedRegionActor(actor) &&
-         !::talos::schedule::has<::talos::schedule::Field::EvalBody>(
-             actor) &&
+         !::talos::schedule::has<::talos::schedule::Field::EvalBody>(actor) &&
          !hasRuntimeCheckpointActivation))
       continue;
     const SimulationProcessFrameAnalysis &frameAnalysis =
         *analyzed->second.analysis;
     if (auto evalBodyRef =
-            ::talos::schedule::get<::talos::schedule::Field::EvalBody>(
-                actor)) {
+            ::talos::schedule::get<::talos::schedule::Field::EvalBody>(actor)) {
       sim::SimFuncOp evalBody =
           designSymbols.lookup<sim::SimFuncOp>(evalBodyRef.getValue());
       if (!evalBody)
         return actor.emitOpError("references a missing eval body");
-      auto continuation = ::talos::schedule::get<
-          ::talos::schedule::Field::EvalContinuation>(evalBody);
+      auto continuation =
+          ::talos::schedule::get<::talos::schedule::Field::EvalContinuation>(
+              evalBody);
       uint32_t continuationID = 0;
       ArrayRef<ProcessSuspension> suspensions = frameAnalysis.getSuspensions();
       if (suspensions.size() == 1)
@@ -669,8 +667,9 @@ FailureOr<SmallVector<NativeDirectFragment>> materializeDirectFragments(
       bool runtimeCheckpoint =
           codeUnit && runtimeCheckpointContinuations.contains(
                           {codeUnit.getUInt(), continuationID});
-      runtimeCheckpoint |= ::talos::schedule::has<
-          ::talos::schedule::Field::EvalCheckpointOnly>(evalBody);
+      runtimeCheckpoint |=
+          ::talos::schedule::has<::talos::schedule::Field::EvalCheckpointOnly>(
+              evalBody);
       // IEEE 1800-2023 4.6(b), 10.4.2 require observable NBA updates to
       // retain their enqueue order. Keep this activation on the runtime
       // queue through a checkpoint; unrelated generated executors can still
@@ -953,8 +952,7 @@ FailureOr<SmallVector<NativeDirectFragment>> materializeDirectFragments(
       ++nextCodeUnit;
       designSymbols.insert(body);
       detail::copyNativePartition(actor, body);
-      ::talos::schedule::set<
-          ::talos::schedule::Field::EvalBorrowedCaptures>(
+      ::talos::schedule::set<::talos::schedule::Field::EvalBorrowedCaptures>(
           body, UnitAttr::get(context));
       ::talos::schedule::set<::talos::schedule::Field::EvalRawCaptures>(
           body, UnitAttr::get(context));
@@ -962,8 +960,9 @@ FailureOr<SmallVector<NativeDirectFragment>> materializeDirectFragments(
               ::talos::schedule::Field::EvalSourceOwners>(actor))
         ::talos::schedule::set<::talos::schedule::Field::EvalSourceOwners>(
             body, owners);
-      if (auto group = ::talos::schedule::get<
-              ::talos::schedule::Field::EvalFusionGroup>(actor))
+      if (auto group =
+              ::talos::schedule::get<::talos::schedule::Field::EvalFusionGroup>(
+                  actor))
         ::talos::schedule::set<::talos::schedule::Field::EvalFusionGroup>(
             body, group);
       SymbolTable::setSymbolVisibility(body, SymbolTable::Visibility::Private);
@@ -1042,9 +1041,8 @@ FailureOr<SmallVector<NativeDirectFragment>> materializeDirectFragments(
             previous && previous != directFragmentAttr)
           return body.emitOpError(
               "is shared by multiple typed direct fragments");
-        ::talos::schedule::set<
-            ::talos::schedule::Field::EvalDirectFragment>(body,
-                                                            directFragmentAttr);
+        ::talos::schedule::set<::talos::schedule::Field::EvalDirectFragment>(
+            body, directFragmentAttr);
       }
     }
     if (pending.runtimeCheckpoint
@@ -1125,8 +1123,9 @@ FailureOr<SmallVector<NativeDirectFragment>> materializeDirectFragments(
       });
     }
     auto collectSourceOwners = [&](sim::SimFuncOp function) -> LogicalResult {
-      ArrayAttr owners = ::talos::schedule::get<
-          ::talos::schedule::Field::EvalSourceOwners>(function);
+      ArrayAttr owners =
+          ::talos::schedule::get<::talos::schedule::Field::EvalSourceOwners>(
+              function);
       if (!owners)
         return success();
       for (Attribute attribute : owners) {
@@ -1260,8 +1259,8 @@ void NativePipelineAnalysis::markTiming(StringRef name) {
     return;
   auto now = std::chrono::steady_clock::now();
   double seconds = std::chrono::duration<double>(now - lastTiming).count();
-  llvm::errs() << "talos native preparation timing: " << name << ": "
-               << seconds << " s\n";
+  llvm::errs() << "talos native preparation timing: " << name << ": " << seconds
+               << " s\n";
   lastTiming = now;
 }
 LogicalResult NativePipelineAnalysis::initialize() {
@@ -1511,8 +1510,8 @@ LogicalResult NativePipelineAnalysis::collectFrames() {
   }
   markTiming("frame analysis and state threading");
   if (detailedTiming)
-    llvm::errs() << "talos native copy activations: "
-                 << copyActivations.size() << '\n';
+    llvm::errs() << "talos native copy activations: " << copyActivations.size()
+                 << '\n';
   if (detailedTiming)
     llvm::errs() << "talos native table candidates: " << tableProcesses.size()
                  << '\n';
@@ -1656,8 +1655,9 @@ LogicalResult NativePipelineAnalysis::prepareFragments(
         static_cast<uint64_t>(group.getInt()) > UINT32_MAX)
       return actor.emitOpError("has an invalid eval fusion group"), failure();
     uint32_t groupID = static_cast<uint32_t>(group.getUInt());
-    if (ArrayAttr owners = ::talos::schedule::get<
-            ::talos::schedule::Field::EvalSourceOwners>(actor))
+    if (ArrayAttr owners =
+            ::talos::schedule::get<::talos::schedule::Field::EvalSourceOwners>(
+                actor))
       for (Attribute attribute : owners) {
         auto owner = dyn_cast<schedule::SourceOwnerAttr>(attribute);
         auto codeUnit = owner ? owner.getCodeUnit() : IntegerAttr{};
@@ -2374,10 +2374,9 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
   // A declined plan has no generated callers or same-slot resume target.
   if (!::talos::schedule::has<::talos::schedule::Field::EvalGenerated>(
           module)) {
-    ::talos::schedule::remove<
-        ::talos::schedule::Field::EvalPathProbeRoutes>(module);
-    ::talos::schedule::remove<schedule::metadata::evalCheckpointRoutes>(
+    ::talos::schedule::remove<::talos::schedule::Field::EvalPathProbeRoutes>(
         module);
+    ::talos::schedule::remove<schedule::metadata::evalCheckpointRoutes>(module);
     return success();
   }
   // Input bodies and plan globals are stable during route materialization.
@@ -2386,8 +2385,9 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
   llvm::StringMap<std::string> pathKnownProbes;
   llvm::StringMap<std::string> checkpointPathProbes;
   llvm::StringMap<std::pair<uint32_t, uint32_t>> checkpointOwners;
-  if (ArrayAttr mappings = ::talos::schedule::get<
-          ::talos::schedule::Field::EvalPathProbeRoutes>(module)) {
+  if (ArrayAttr mappings =
+          ::talos::schedule::get<::talos::schedule::Field::EvalPathProbeRoutes>(
+              module)) {
     for (Attribute mappingAttr : mappings) {
       auto mapping = dyn_cast<schedule::PathProbeRouteAttr>(mappingAttr);
       auto twoState = mapping ? mapping.getTwoState() : FlatSymbolRefAttr{};
@@ -2401,8 +2401,8 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
       checkpointPathProbes[twoState.getValue()] =
           checkpointProbe.getValue().str();
     }
-    ::talos::schedule::remove<
-        ::talos::schedule::Field::EvalPathProbeRoutes>(module);
+    ::talos::schedule::remove<::talos::schedule::Field::EvalPathProbeRoutes>(
+        module);
   }
   if (ArrayAttr mappings =
           ::talos::schedule::get<schedule::metadata::evalCheckpointRoutes>(
@@ -2425,8 +2425,7 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
         return module.emitError("eval checkpoint route has multiple owners"),
                failure();
     }
-    ::talos::schedule::remove<schedule::metadata::evalCheckpointRoutes>(
-        module);
+    ::talos::schedule::remove<schedule::metadata::evalCheckpointRoutes>(module);
   }
   struct Route {
     LLVM::LLVMFuncOp fourState;
@@ -2452,14 +2451,15 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
   bool routeError = false;
   ::talos::detail::walkNativeFunctions<
       LLVM::LLVMFuncOp>(module, [&](LLVM::LLVMFuncOp function) {
-    auto source = ::talos::schedule::get<
-        ::talos::schedule::Field::EvalFourStateSource>(function);
+    auto source =
+        ::talos::schedule::get<::talos::schedule::Field::EvalFourStateSource>(
+            function);
     auto ranges = ::talos::schedule::get<
         ::talos::schedule::Field::EvalLocalPromotionRanges>(function);
     if (!source || !ranges)
       return;
-    if (!::talos::schedule::has<
-            ::talos::schedule::Field::EvalSelectedTwoState>(function))
+    if (!::talos::schedule::has<::talos::schedule::Field::EvalSelectedTwoState>(
+            function))
       return;
     LLVM::LLVMFuncOp fourState =
         inputSymbols.lookup<LLVM::LLVMFuncOp>(source.getValue());
@@ -2515,13 +2515,11 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
              ::talos::schedule::Field::EvalConditionallyTwoState>(function),
          checkpointActor,
          checkpointContinuation,
-         (Twine("__talos_eval_selected_variant_v1_") + Twine(routeIndex))
-             .str(),
+         (Twine("__talos_eval_selected_variant_v1_") + Twine(routeIndex)).str(),
          (Twine("__talos_eval_path_dispatch_v1_") + Twine(routeIndex)).str(),
          (Twine("__talos_eval_four_state_fallback_v1_") + Twine(routeIndex))
              .str(),
-         (Twine("__talos_eval_checkpoint_body_v1_") + Twine(routeIndex))
-             .str(),
+         (Twine("__talos_eval_checkpoint_body_v1_") + Twine(routeIndex)).str(),
          {}});
   });
   if (routeError)
@@ -2680,8 +2678,7 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
       "talos_rt_v1_scheduler_termination_requested");
   if (!terminationRequested)
     terminationRequested = LLVM::LLVMFuncOp::create(
-        builder, module.getLoc(),
-        "talos_rt_v1_scheduler_termination_requested",
+        builder, module.getLoc(), "talos_rt_v1_scheduler_termination_requested",
         LLVM::LLVMFunctionType::get(builder.getI32Type(), {pointer}));
   LLVM::LLVMFuncOp syncCheckpointStateFunction;
   auto fractureCheckpoints = [&](LLVM::LLVMFuncOp function) {
@@ -2997,8 +2994,8 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
           LLVM::CallOp::create(
               builder, route.fourState.getLoc(),
               TypeRange{builder.getI32Type()},
-              SymbolRefAttr::get(
-                  context, "talos_rt_v1_scheduler_queue_aot_checkpoint"),
+              SymbolRefAttr::get(context,
+                                 "talos_rt_v1_scheduler_queue_aot_checkpoint"),
               ValueRange{callbackEntry->getArgument(0), nextActor,
                          nextContinuation, nextCallback})
               .getResult();
@@ -3021,8 +3018,7 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
         return LLVM::CallOp::create(
                    builder, route.fourState.getLoc(),
                    TypeRange{builder.getI32Type()},
-                   SymbolRefAttr::get(context,
-                                      "talos_rt_v1_native_state_sync"),
+                   SymbolRefAttr::get(context, "talos_rt_v1_native_state_sync"),
                    ValueRange{callbackEntry->getArgument(0),
                               LLVM::AddressOfOp::create(
                                   builder, route.fourState.getLoc(), pointer,
@@ -3544,10 +3540,9 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
     });
     for (LLVM::ReturnOp returnOp : promotionReturns) {
       builder.setInsertionPoint(returnOp);
-      LLVM::CallOp::create(
-          builder, returnOp.getLoc(), routePromotionBoundary,
-          ValueRange{detail::llvmConstant(builder, returnOp.getLoc(), i32,
-                                          TALOS_RT_OK)});
+      LLVM::CallOp::create(builder, returnOp.getLoc(), routePromotionBoundary,
+                           ValueRange{detail::llvmConstant(
+                               builder, returnOp.getLoc(), i32, TALOS_RT_OK)});
     }
   }
 
@@ -3668,8 +3663,8 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
     }
     bool selectedTwoStateClosure =
         caller &&
-        (::talos::schedule::has<
-             ::talos::schedule::Field::EvalFourStateSource>(caller) ||
+        (::talos::schedule::has<::talos::schedule::Field::EvalFourStateSource>(
+             caller) ||
          ::talos::schedule::has<
              ::talos::schedule::Field::EvalTrustedTwoStateClosure>(caller));
     if (selectedTwoStateClosure && !route.dispatcher) {
@@ -3780,9 +3775,8 @@ LogicalResult materializeEvalTwoStateNBACommit(ModuleOp module) {
   for (auto variant : {clone, fastClone})
     variant.walk([&](Operation *operation) {
       if (auto load = dyn_cast<LLVM::LoadOp>(operation);
-          load &&
-          ::talos::schedule::has<
-              ::talos::schedule::Field::EvalTwoStateZeroUnknown>(load))
+          load && ::talos::schedule::has<
+                      ::talos::schedule::Field::EvalTwoStateZeroUnknown>(load))
         stagedUnknownLoads.push_back(load);
     });
   for (LLVM::LoadOp load : stagedUnknownLoads) {
@@ -3875,8 +3869,9 @@ LogicalResult materializeEvalTwoStateNBACommit(ModuleOp module) {
         ::talos::schedule::Field::EvalUseFastTwoStateNba>(call);
     bool useCanonical = ::talos::schedule::has<
         ::talos::schedule::Field::EvalUseCanonicalTwoStateNba>(call);
-    bool keepFourState = ::talos::schedule::has<
-        ::talos::schedule::Field::EvalKeepFourStateNba>(call);
+    bool keepFourState =
+        ::talos::schedule::has<::talos::schedule::Field::EvalKeepFourStateNba>(
+            call);
     unsigned intents = useFast + useCanonical + keepFourState;
     if (intents == 0)
       return WalkResult::advance();
@@ -3921,8 +3916,8 @@ LogicalResult materializeEvalTwoStateNBACommit(ModuleOp module) {
       return call.emitError("four-state NBA intent is attached to an "
                             "unrelated callee"),
              WalkResult::interrupt();
-    ::talos::schedule::remove<
-        ::talos::schedule::Field::EvalKeepFourStateNba>(call);
+    ::talos::schedule::remove<::talos::schedule::Field::EvalKeepFourStateNba>(
+        call);
     return WalkResult::advance();
   };
   for (LLVM::CallOp call :
@@ -4354,8 +4349,7 @@ public:
                                    module, **partitionInventory)))
       return signalPassFailure();
     native::remove<native::OptimizationLevel>(module);
-    ::talos::schedule::remove<::talos::schedule::Field::MaxInlineOps>(
-        module);
+    ::talos::schedule::remove<::talos::schedule::Field::MaxInlineOps>(module);
     native::remove<native::MaxStateDomainFunctions>(module);
     native::remove<native::DisableTwoStateSpecialization>(module);
     native::remove<native::TwoState>(module);

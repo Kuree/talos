@@ -109,8 +109,7 @@ void TalosSimFuseComputeFragmentsPass::runOnOperation() {
           ::talos::schedule::Field::NativeSchedulerAutoRequested>(module))
     return;
   auto scheduler =
-      ::talos::schedule::get<::talos::schedule::Field::NativeScheduler>(
-          module);
+      ::talos::schedule::get<::talos::schedule::Field::NativeScheduler>(module);
   bool evalBodyFusion =
       bodyFusion && scheduler &&
       scheduler.getValue() == schedule::NativeSchedulerMode::Eval;
@@ -394,8 +393,8 @@ void TalosSimFuseComputeFragmentsPass::runOnOperation() {
                                      isBodyEligible(function, primitiveOnly),
                                      primitiveOnly)) ||
           (primitiveOnly &&
-           (!::talos::schedule::has<
-                ::talos::schedule::Field::PrimitiveName>(function) ||
+           (!::talos::schedule::has<::talos::schedule::Field::PrimitiveName>(
+                function) ||
             !entirelyNative.lookup(function.getOperation()))))
         continue;
       seen.insert(function.getOperation());
@@ -419,8 +418,8 @@ void TalosSimFuseComputeFragmentsPass::runOnOperation() {
         continue;
       Attribute primitive =
           primitiveOnly
-              ? ::talos::schedule::get<
-                    ::talos::schedule::Field::PrimitiveName>(function)
+              ? ::talos::schedule::get<::talos::schedule::Field::PrimitiveName>(
+                    function)
               : Attribute{};
       if (combinationalBody)
         primitive = function.getEntryKindAttr();

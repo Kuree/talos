@@ -92,19 +92,18 @@ inline bool parseWeightedGroups(const uint8_t *bytes, size_t size,
     bool expressionTarget =
         (flags & TALOS_RT_RANDOM_DIST_EXPRESSION_TARGET) != 0;
     if (groupIndex >= count || width == 0 || width > 64 ||
-        (expressionTarget ? offset != 0
-                          : offset > aggregateWidth ||
-                                width > aggregateWidth - offset) ||
+        (expressionTarget
+             ? offset != 0
+             : offset > aggregateWidth || width > aggregateWidth - offset) ||
         (block != TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1 && block >= 64) ||
-        capture >= captureCount ||
-        !(flags & TALOS_RT_RANDOM_DIST_RAW_WEIGHT) ||
-        (flags & ~(TALOS_RT_RANDOM_DIST_RAW_WEIGHT |
-                   TALOS_RT_RANDOM_DIST_PER_RANGE |
-                   TALOS_RT_RANDOM_DIST_TARGET_SIGNED |
-                   TALOS_RT_RANDOM_DIST_CAPTURED_INTERVAL |
-                   TALOS_RT_RANDOM_DIST_DEFAULT_COMPLEMENT |
-                   TALOS_RT_RANDOM_DIST_EXPRESSION_WEIGHT |
-                   TALOS_RT_RANDOM_DIST_EXPRESSION_TARGET)))
+        capture >= captureCount || !(flags & TALOS_RT_RANDOM_DIST_RAW_WEIGHT) ||
+        (flags &
+         ~(TALOS_RT_RANDOM_DIST_RAW_WEIGHT | TALOS_RT_RANDOM_DIST_PER_RANGE |
+           TALOS_RT_RANDOM_DIST_TARGET_SIGNED |
+           TALOS_RT_RANDOM_DIST_CAPTURED_INTERVAL |
+           TALOS_RT_RANDOM_DIST_DEFAULT_COMPLEMENT |
+           TALOS_RT_RANDOM_DIST_EXPRESSION_WEIGHT |
+           TALOS_RT_RANDOM_DIST_EXPRESSION_TARGET)))
       return false;
     uint64_t mask = width == 64 ? UINT64_MAX : (uint64_t{1} << width) - 1;
     bool captured = (flags & TALOS_RT_RANDOM_DIST_CAPTURED_INTERVAL) != 0;

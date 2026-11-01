@@ -7,12 +7,12 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/DPI/DPIDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <algorithm>
@@ -64,19 +64,17 @@ void inspectLocalABI(talos_rt_context *context, LocalProbe &probe,
               TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_native_state_release(context, probe.arrayRef, 0),
               TALOS_RT_OK);
-    ASSERT_EQ(talos_rt_v1_vpi_frame_leave(context, probe.frameID),
-              TALOS_RT_OK);
-    ASSERT_EQ(talos_rt_v1_vpi_frame_leave(context, probe.rootID),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_vpi_frame_leave(context, probe.frameID), TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_vpi_frame_leave(context, probe.rootID), TALOS_RT_OK);
     return;
   }
   ASSERT_EQ(phase, 0u);
   ASSERT_EQ(talos_rt_v1_vpi_frame_enter(context, 44,
-                                          TALOS_RT_VPI_FRAME_CODE_UNIT_SCOPE,
-                                          44, &probe.rootID),
+                                        TALOS_RT_VPI_FRAME_CODE_UNIT_SCOPE, 44,
+                                        &probe.rootID),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_vpi_frame_enter(
-                context, 45, TALOS_RT_VPI_FRAME_CALL, 20, &probe.frameID),
+  ASSERT_EQ(talos_rt_v1_vpi_frame_enter(context, 45, TALOS_RT_VPI_FRAME_CALL,
+                                        20, &probe.frameID),
             TALOS_RT_OK);
   probe.frame = vpi_handle(vpiFrame, nullptr);
   ASSERT_NE(probe.frame, nullptr);
@@ -118,9 +116,9 @@ void inspectLocalABI(talos_rt_context *context, LocalProbe &probe,
   ASSERT_NE(probe.typespec, nullptr);
   ASSERT_NE(probe.scope, nullptr);
   uint32_t number = 17;
-  ASSERT_EQ(talos_rt_v1_native_state_alloc(
-                context, 32, reinterpret_cast<uint8_t *>(&number), nullptr,
-                &probe.valueRef),
+  ASSERT_EQ(talos_rt_v1_native_state_alloc(context, 32,
+                                           reinterpret_cast<uint8_t *>(&number),
+                                           nullptr, &probe.valueRef),
             TALOS_RT_OK);
   EXPECT_EQ(talos_rt_v1_vpi_frame_bind(context, 4, probe.valueRef),
             TALOS_RT_INVALID_FRAME);
@@ -140,9 +138,9 @@ void inspectLocalABI(talos_rt_context *context, LocalProbe &probe,
   EXPECT_EQ(vpi_chk_error(nullptr), vpiNotice);
   EXPECT_EQ(readInt(probe.value), 17);
   uint64_t replacementRef = 0;
-  ASSERT_EQ(talos_rt_v1_native_state_alloc(
-                context, 32, reinterpret_cast<uint8_t *>(&number), nullptr,
-                &replacementRef),
+  ASSERT_EQ(talos_rt_v1_native_state_alloc(context, 32,
+                                           reinterpret_cast<uint8_t *>(&number),
+                                           nullptr, &replacementRef),
             TALOS_RT_OK);
   EXPECT_EQ(talos_rt_v1_vpi_frame_bind(context, 1, replacementRef),
             TALOS_RT_INVALID_FRAME);
@@ -159,7 +157,7 @@ void inspectLocalABI(talos_rt_context *context, LocalProbe &probe,
   EXPECT_EQ(readInt(probe.value), 23);
   const uint8_t values[] = {0x5a, 0xa5}, unknowns[] = {0x0c, 0x30};
   ASSERT_EQ(talos_rt_v1_native_state_alloc(context, 16, values, unknowns,
-                                             &probe.arrayRef),
+                                           &probe.arrayRef),
             TALOS_RT_OK);
   EXPECT_EQ(talos_rt_v1_vpi_frame_bind(context, 1, probe.arrayRef),
             TALOS_RT_INVALID_ARGUMENT);
@@ -185,9 +183,8 @@ void inspectLocalABI(talos_rt_context *context, LocalProbe &probe,
   EXPECT_EQ(readInt(probe.bit), 1);
   same(probe.bit, vpiParent, probe.selected);
   uint64_t blockID = 0;
-  ASSERT_EQ(talos_rt_v1_vpi_frame_enter(context, 45,
-                                          TALOS_RT_VPI_FRAME_STATEMENT_SCOPE,
-                                          12, &blockID),
+  ASSERT_EQ(talos_rt_v1_vpi_frame_enter(
+                context, 45, TALOS_RT_VPI_FRAME_STATEMENT_SCOPE, 12, &blockID),
             TALOS_RT_OK);
   auto block = vpi_handle(vpiFrame, nullptr);
   auto shadow = vpi_handle_by_name(const_cast<char *>("value"), block);
@@ -208,9 +205,9 @@ void inspectLocalABI(talos_rt_context *context, LocalProbe &probe,
   EXPECT_EQ(vpi_chk_error(nullptr), vpiNotice);
   number = 5;
   uint64_t shadowRef = 0;
-  ASSERT_EQ(talos_rt_v1_native_state_alloc(
-                context, 32, reinterpret_cast<uint8_t *>(&number), nullptr,
-                &shadowRef),
+  ASSERT_EQ(talos_rt_v1_native_state_alloc(context, 32,
+                                           reinterpret_cast<uint8_t *>(&number),
+                                           nullptr, &shadowRef),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_frame_bind(context, 4, shadowRef), TALOS_RT_OK);
   EXPECT_EQ(readInt(shadow), 5);
@@ -253,17 +250,17 @@ void inspectLocalABI(talos_rt_context *context, LocalProbe &probe,
   // Re-enter the same code unit: an unbound callee variable must not read the
   // caller's live declaration, even though its immutable cursor is identical.
   uint64_t recursiveID = 0, recursiveBlockID = 0;
-  ASSERT_EQ(talos_rt_v1_vpi_frame_enter(
-                context, 45, TALOS_RT_VPI_FRAME_CALL, 22, &recursiveID),
+  ASSERT_EQ(talos_rt_v1_vpi_frame_enter(context, 45, TALOS_RT_VPI_FRAME_CALL,
+                                        22, &recursiveID),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_frame_enter(context, 45,
-                                          TALOS_RT_VPI_FRAME_STATEMENT_SCOPE,
-                                          12, &recursiveBlockID),
+                                        TALOS_RT_VPI_FRAME_STATEMENT_SCOPE, 12,
+                                        &recursiveBlockID),
             TALOS_RT_OK);
   uint64_t recursiveRef = 0;
-  ASSERT_EQ(talos_rt_v1_native_state_alloc(
-                context, 32, reinterpret_cast<uint8_t *>(&number), nullptr,
-                &recursiveRef),
+  ASSERT_EQ(talos_rt_v1_native_state_alloc(context, 32,
+                                           reinterpret_cast<uint8_t *>(&number),
+                                           nullptr, &recursiveRef),
             TALOS_RT_OK);
   ASSERT_EQ(
       talos_rt_v1_vpi_frame_bind_alias(context, 4, nullptr, recursiveRef, 0),
@@ -306,9 +303,8 @@ void inspectLocalABI(talos_rt_context *context, LocalProbe &probe,
   EXPECT_EQ(vpi_chk_error(nullptr), vpiNotice);
   EXPECT_EQ(vpi_get(vpiType, shadow), vpiUndefined);
   EXPECT_NE(vpi_chk_error(nullptr), 0);
-  ASSERT_EQ(talos_rt_v1_vpi_frame_enter(context, 45,
-                                          TALOS_RT_VPI_FRAME_STATEMENT_SCOPE,
-                                          12, &blockID),
+  ASSERT_EQ(talos_rt_v1_vpi_frame_enter(
+                context, 45, TALOS_RT_VPI_FRAME_STATEMENT_SCOPE, 12, &blockID),
             TALOS_RT_OK);
   block = vpi_handle(vpiFrame, nullptr);
   auto fresh = vpi_handle_by_name(const_cast<char *>("value"), block);
@@ -336,8 +332,7 @@ void inspectLocalABI(talos_rt_context *context, LocalProbe &probe,
   ASSERT_EQ(
       talos_rt_native_state_alloc_managed(context, semaphore, &probe.lockRef),
       TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_vpi_frame_bind(context, 3, probe.lockRef),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_vpi_frame_bind(context, 3, probe.lockRef), TALOS_RT_OK);
   auto object = vpi_handle(vpiClassObj, probe.lock);
   ASSERT_NE(object, nullptr);
   ASSERT_EQ(talos_rt_v1_native_state_release(context, probe.lockRef, 0),
@@ -352,9 +347,9 @@ void inspectLocalABI(talos_rt_context *context, LocalProbe &probe,
   ASSERT_NE(probe.pending, nullptr);
 }
 talos_rt_status inspectLocals(talos_rt_context *context, uint32_t id,
-                                const talos_rt_import_input_v1 *inputs,
-                                uint32_t count, talos_rt_import_output_v1 *,
-                                uint32_t outputs, void *data) {
+                              const talos_rt_import_input_v1 *inputs,
+                              uint32_t count, talos_rt_import_output_v1 *,
+                              uint32_t outputs, void *data) {
   if (id != 123 || count != 1 || !inputs || !inputs[0].value || outputs)
     return TALOS_RT_INVALID_ARGUMENT;
   inspectLocalABI(context, *static_cast<LocalProbe *>(data),
@@ -369,10 +364,9 @@ TEST(GeneratedDesignDatabase, FrameAutomaticVariables) {
   const char *input = std::getenv("TALOS_TEST_INPUT");
   ASSERT_NE(input, nullptr);
   mlir::DialectRegistry registry;
-  registry
-      .insert<mlir::arith::ArithDialect, mlir::cf::ControlFlowDialect,
-              talos::dpi::DPIDialect, talos::runtime::TalosRuntimeDialect,
-              talos::sim::TalosSimulationDialect>();
+  registry.insert<mlir::arith::ArithDialect, mlir::cf::ControlFlowDialect,
+                  talos::dpi::DPIDialect, talos::runtime::TalosRuntimeDialect,
+                  talos::sim::TalosSimulationDialect>();
   mlir::MLIRContext context(registry);
   auto module = mlir::parseSourceFile<mlir::ModuleOp>(input, &context);
   ASSERT_TRUE(module);
@@ -424,20 +418,20 @@ TEST(GeneratedDesignDatabase, FrameAutomaticVariables) {
   }
   EXPECT_NE(locals[0].scope.offset, locals[3].scope.offset);
   std::vector<VPIFrameLocalBinding> inventory;
-  ASSERT_EQ(talos_rt_cached_vpi_frame_locals(runtime, 45, locals[0].scope,
-                                               inventory),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_cached_vpi_frame_locals(runtime, 45, locals[0].scope, inventory),
+      TALOS_RT_OK);
   ASSERT_EQ(inventory.size(), 3u);
   for (unsigned index = 0; index != inventory.size(); ++index)
     EXPECT_EQ(inventory[index].id, index + 1);
-  ASSERT_EQ(talos_rt_cached_vpi_frame_locals(runtime, 45, locals[3].scope,
-                                               inventory),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_cached_vpi_frame_locals(runtime, 45, locals[3].scope, inventory),
+      TALOS_RT_OK);
   ASSERT_EQ(inventory.size(), 1u);
   EXPECT_EQ(inventory[0].id, 4u);
-  ASSERT_EQ(talos_rt_cached_vpi_frame_locals(runtime, 46, locals[0].scope,
-                                               inventory),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_cached_vpi_frame_locals(runtime, 46, locals[0].scope, inventory),
+      TALOS_RT_OK);
   EXPECT_TRUE(inventory.empty());
   VPIFrameLocalBinding missing = locals[0];
   EXPECT_EQ(talos_rt_cached_vpi_frame_local(runtime, 999, &missing),
@@ -449,9 +443,9 @@ TEST(GeneratedDesignDatabase, FrameAutomaticVariables) {
   EXPECT_EQ(talos_rt_cached_vpi_frame_local(nullptr, 1, &missing),
             TALOS_RT_INVALID_HANDLE);
   LocalProbe probe;
-  ASSERT_EQ(talos_rt_v1_context_register_import(runtime, 123, inspectLocals,
-                                                  &probe),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_context_register_import(runtime, 123, inspectLocals, &probe),
+      TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_startup(runtime, nullptr, 0), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_end_compile(runtime), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_start_simulation(runtime), TALOS_RT_OK);
@@ -462,14 +456,14 @@ TEST(GeneratedDesignDatabase, FrameAutomaticVariables) {
   talos_rt_design_bytecode_entry_v1 entry{&execution, startup->index, 0};
   uint64_t scratchSize = 0, scratchAlignment = 0;
   ASSERT_EQ(talos_rt_validate_design_bytecode(entry, runtime, &scratchSize,
-                                                &scratchAlignment),
+                                              &scratchAlignment),
             TALOS_RT_OK);
   ASSERT_LE(scratchAlignment, alignof(uint64_t));
   std::vector<uint64_t> frame((scratchSize + 7) / 8);
   talos_rt_fragment_action_v1 action{};
   ASSERT_EQ(talos_rt_execute_design_bytecode(entry, runtime, frame.data(),
-                                               frame.size() * 8, 0, scratchSize,
-                                               0, 0, &action),
+                                             frame.size() * 8, 0, scratchSize,
+                                             0, 0, &action),
             TALOS_RT_OK);
   ASSERT_EQ(action.kind, TALOS_RT_FRAGMENT_TERMINATE);
   ASSERT_EQ(talos_rt_v1_scheduler_run(runtime), TALOS_RT_OK);
@@ -502,8 +496,7 @@ TEST(GeneratedDesignDatabase, FrameAutomaticVariables) {
     auto corrupt = execution;
     corrupt.design_database = bytes.data();
     corrupt.design_database_size = bytes.size();
-    EXPECT_EQ(talos_rt_v1_design_validate(&corrupt),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&corrupt), TALOS_RT_INVALID_DESIGN);
   };
   FrameLocalBindingView firstRow(encoded->designDatabase.data() + first);
   const uint64_t object =
@@ -541,8 +534,7 @@ TEST(GeneratedDesignDatabase, FrameAutomaticVariables) {
   invalid([&](auto &bytes) { ObjectWriter(bytes.data() + object).setCaps(0); });
   invalid([&](auto &bytes) {
     ObjectWriter(bytes.data() + object)
-        .setCaps(TALOS_RT_DESIGN_CAP_FRAME_LOCAL |
-                 TALOS_RT_DESIGN_CAP_WRITE);
+        .setCaps(TALOS_RT_DESIGN_CAP_FRAME_LOCAL | TALOS_RT_DESIGN_CAP_WRITE);
   });
   invalid([&](auto &bytes) { ObjectWriter(bytes.data() + object).setType(0); });
   // A different valid scope in the same code unit does not own this

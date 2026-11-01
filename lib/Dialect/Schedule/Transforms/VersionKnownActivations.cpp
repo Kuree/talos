@@ -122,11 +122,12 @@ struct DesignInputs {
     // A guarded two-state variant already loads only the value planes of
     // its inductively two-state reads; those need no check.
     if (variants &&
-        llvm::any_of(design.getBody().front().getOps<sim::SimFuncOp>(),
-                     [](sim::SimFuncOp function) {
-                       return schedule::has<
-                           schedule::Field::EvalInductiveTwoState>(function);
-                     })) {
+        llvm::any_of(
+            design.getBody().front().getOps<sim::SimFuncOp>(),
+            [](sim::SimFuncOp function) {
+              return schedule::has<schedule::Field::EvalInductiveTwoState>(
+                  function);
+            })) {
       auto proofs = StateDomainAnalysis::computeForSpecialization(design);
       if (succeeded(proofs))
         domains.emplace(std::move(*proofs));
@@ -165,8 +166,8 @@ struct DesignInputs {
   /// the outer certificate. Match its valid-selection and root/value proof
   /// rather than crediting the same saving to another activation copy.
   bool provesKnownStore(sim::SimFuncOp function,
-                         const analysis::HandleDataflowResult &handles,
-                         sim::SimRefStoreOp store) const {
+                        const analysis::HandleDataflowResult &handles,
+                        sim::SimRefStoreOp store) const {
     if (!domains ||
         !schedule::has<schedule::Field::EvalInductiveTwoState>(function))
       return false;
@@ -360,9 +361,9 @@ public:
     builder.setInsertionPoint(enter);
     Value known;
     auto conjoin = [&](Value next) {
-      known = known ? arith::AndIOp::create(builder, loc, known, next)
-                          .getResult()
-                    : next;
+      known = known
+                  ? arith::AndIOp::create(builder, loc, known, next).getResult()
+                  : next;
     };
     Value activation = function.getBody().front().getArgument(0);
     if (!segment.gate.empty()) {
@@ -488,8 +489,7 @@ private:
   /// entry block.
   Value slotOf(sim::SimRefAllocOp allocation) const {
     auto found = hoistedSlots.find(allocation);
-    return found != hoistedSlots.end() ? found->second
-                                       : allocation.getResult();
+    return found != hoistedSlots.end() ? found->second : allocation.getResult();
   }
 
   /// Move `allocation` to the entry block; returns the store of its
@@ -738,9 +738,9 @@ private:
       builder.setInsertionPointToEnd(copyBlock);
       Value known = schedule::NativeKnownValueOp::create(
           builder, copy->getLoc(), builder.getI1Type(), result);
-      auto branch = cf::CondBranchOp::create(builder, copy->getLoc(), known,
-                                             more, ValueRange(), leave,
-                                             ValueRange());
+      auto branch =
+          cf::CondBranchOp::create(builder, copy->getLoc(), known, more,
+                                   ValueRange(), leave, ValueRange());
       branch.setBranchWeights(ArrayRef<int32_t>{likelyWeight, unlikelyWeight});
       builder.setInsertionPointToEnd(leave);
       cf::BranchOp::create(builder, copy->getLoc(), rest);
@@ -813,7 +813,8 @@ private:
       llvm::SmallPtrSet<Block *, 16> definitions{bodyBlock(value)};
       if (Value counterpart = mapping.lookupOrNull(value))
         for (auto [leave, read] : leaves)
-          if (dominance.properlyDominates(counterpart, leave->getTerminator())) {
+          if (dominance.properlyDominates(counterpart,
+                                          leave->getTerminator())) {
             definitions.insert(leave);
             defined[leave].push_back(index);
           }
@@ -987,8 +988,8 @@ private:
         if (!user || inSegment.contains(user) || inCopy.contains(user))
           continue;
         if (sim::isSimulationHandleType(value.getType())) {
-          use.set(recompute(exitBuilder, value, definedInSegment,
-                            rematerialized));
+          use.set(
+              recompute(exitBuilder, value, definedInSegment, rematerialized));
           continue;
         }
         values.insert(value);
@@ -1138,15 +1139,14 @@ public:
     Versioner versioner(function, analysis, *inputs);
     for (auto [index, segment] : llvm::enumerate(results)) {
       bool admitted = admissions[index];
-      if (diagnostics && nested &&
-          (!segment.gate.empty() || segment.checks)) {
+      if (diagnostics && nested && (!segment.gate.empty() || segment.checks)) {
         std::string text;
         llvm::raw_string_ostream os(text);
         os << "talos nested activation cost: " << function.getSymName()
            << " segment=" << index << " residual=" << segment.benefit
            << " check=" << checkCost(segment)
-           << " unchanged=" << segment.unchangedWork
-           << " accepted=" << admitted << '\n';
+           << " unchanged=" << segment.unchangedWork << " accepted=" << admitted
+           << '\n';
         llvm::errs() << text;
       }
       if (!admitted)

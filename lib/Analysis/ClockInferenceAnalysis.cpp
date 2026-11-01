@@ -611,8 +611,10 @@ ClockInferenceAnalysis::ClockInferenceAnalysis(
           fact.inverted = !fact.inverted;
         else if (fact.kind == ClockFact::Kind::Constant)
           fact = fact.constant & 2 ? ClockFact{ClockFact::Kind::Unknown}
-                                   : ClockFact{ClockFact::Kind::Constant, {},
-                                               0, uint8_t(fact.constant ^ 1)};
+                                   : ClockFact{ClockFact::Kind::Constant,
+                                               {},
+                                               0,
+                                               uint8_t(fact.constant ^ 1)};
       }
       // A constant trigger does not imply its consumer's initial output value.
       if (transfer.cadence && fact.kind == ClockFact::Kind::Constant)

@@ -6,11 +6,11 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/DPI/DPIDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <algorithm>
@@ -52,9 +52,9 @@ void inspectFrameABI(talos_rt_context *context, FrameProbe &probe,
     uint64_t depth = UINT64_MAX;
     ASSERT_EQ(talos_rt_v1_vpi_frame_depth(context, &depth), TALOS_RT_OK);
     EXPECT_EQ(depth, 0u);
-    ASSERT_EQ(talos_rt_v1_vpi_frame_enter(
-                  context, 44, TALOS_RT_VPI_FRAME_CODE_UNIT_SCOPE, 44,
-                  &probe.rootID),
+    ASSERT_EQ(talos_rt_v1_vpi_frame_enter(context, 44,
+                                          TALOS_RT_VPI_FRAME_CODE_UNIT_SCOPE,
+                                          44, &probe.rootID),
               TALOS_RT_OK);
     ASSERT_NE(probe.rootID, 0u);
     probe.root = vpi_handle(vpiFrame, nullptr);
@@ -92,27 +92,27 @@ void inspectFrameABI(talos_rt_context *context, FrameProbe &probe,
 
     // Callee ownership and source ownership must both match before mutation.
     uint64_t rejected = UINT64_MAX;
-    EXPECT_EQ(talos_rt_v1_vpi_frame_enter(
-                  context, 46, TALOS_RT_VPI_FRAME_CALL, 20, &rejected),
+    EXPECT_EQ(talos_rt_v1_vpi_frame_enter(context, 46, TALOS_RT_VPI_FRAME_CALL,
+                                          20, &rejected),
               TALOS_RT_INVALID_ARGUMENT);
     EXPECT_EQ(rejected, 0u);
     EXPECT_EQ(talos_rt_v1_vpi_frame_checkpoint(context, 13),
               TALOS_RT_INVALID_FRAME);
-    EXPECT_EQ(
-        talos_rt_v1_vpi_frame_enter(
-            context, 45, TALOS_RT_VPI_FRAME_STATEMENT_SCOPE, 12, &rejected),
-        TALOS_RT_INVALID_FRAME);
+    EXPECT_EQ(talos_rt_v1_vpi_frame_enter(context, 45,
+                                          TALOS_RT_VPI_FRAME_STATEMENT_SCOPE,
+                                          12, &rejected),
+              TALOS_RT_INVALID_FRAME);
     ASSERT_EQ(talos_rt_v1_vpi_frame_depth(context, &depth), TALOS_RT_OK);
     EXPECT_EQ(depth, 1u);
-    EXPECT_EQ(
-        talos_rt_v1_vpi_frame_enter(
-            context, 44, TALOS_RT_VPI_FRAME_CODE_UNIT_SCOPE, 44, &rejected),
-        TALOS_RT_INVALID_FRAME);
+    EXPECT_EQ(talos_rt_v1_vpi_frame_enter(context, 44,
+                                          TALOS_RT_VPI_FRAME_CODE_UNIT_SCOPE,
+                                          44, &rejected),
+              TALOS_RT_INVALID_FRAME);
     EXPECT_EQ(talos_rt_v1_vpi_frame_checkpoint(context, UINT64_MAX),
               TALOS_RT_INVALID_ARGUMENT);
     expectSameRelation(probe.root, vpiStmt, probe.call);
-    ASSERT_EQ(talos_rt_v1_vpi_frame_enter(
-                  context, 45, TALOS_RT_VPI_FRAME_CALL, 20, &probe.middleID),
+    ASSERT_EQ(talos_rt_v1_vpi_frame_enter(context, 45, TALOS_RT_VPI_FRAME_CALL,
+                                          20, &probe.middleID),
               TALOS_RT_OK);
     probe.middle = vpi_handle(vpiFrame, nullptr);
     ASSERT_NE(probe.middle, nullptr);
@@ -124,9 +124,9 @@ void inspectFrameABI(talos_rt_context *context, FrameProbe &probe,
     EXPECT_EQ(talos_rt_v1_vpi_frame_leave(context, probe.rootID),
               TALOS_RT_INVALID_FRAME);
     ASSERT_EQ(talos_rt_v1_vpi_frame_checkpoint(context, 12), TALOS_RT_OK);
-    ASSERT_EQ(talos_rt_v1_vpi_frame_enter(
-                  context, 45, TALOS_RT_VPI_FRAME_STATEMENT_SCOPE, 12,
-                  &probe.blockID),
+    ASSERT_EQ(talos_rt_v1_vpi_frame_enter(context, 45,
+                                          TALOS_RT_VPI_FRAME_STATEMENT_SCOPE,
+                                          12, &probe.blockID),
               TALOS_RT_OK);
     probe.block = vpi_handle(vpiFrame, nullptr);
     ASSERT_NE(probe.block, nullptr);
@@ -142,8 +142,8 @@ void inspectFrameABI(talos_rt_context *context, FrameProbe &probe,
     EXPECT_EQ(vpi_get(vpiType, probe.statement), vpiAssignment);
 
     uint64_t innerID = 0;
-    ASSERT_EQ(talos_rt_v1_vpi_frame_enter(
-                  context, 46, TALOS_RT_VPI_FRAME_CALL, 21, &innerID),
+    ASSERT_EQ(talos_rt_v1_vpi_frame_enter(context, 46, TALOS_RT_VPI_FRAME_CALL,
+                                          21, &innerID),
               TALOS_RT_OK);
     auto inner = vpi_handle(vpiFrame, nullptr);
     ASSERT_NE(inner, nullptr);
@@ -165,16 +165,15 @@ void inspectFrameABI(talos_rt_context *context, FrameProbe &probe,
     EXPECT_EQ(vpi_release_handle(body), 1);
     // Repeated calls share source identity but never activation identity.
     uint64_t repeatedID = 0;
-    ASSERT_EQ(talos_rt_v1_vpi_frame_enter(
-                  context, 46, TALOS_RT_VPI_FRAME_CALL, 21, &repeatedID),
+    ASSERT_EQ(talos_rt_v1_vpi_frame_enter(context, 46, TALOS_RT_VPI_FRAME_CALL,
+                                          21, &repeatedID),
               TALOS_RT_OK);
     EXPECT_GT(repeatedID, innerID);
     auto repeated = vpi_handle(vpiFrame, nullptr);
     ASSERT_NE(repeated, nullptr);
     expectSameRelation(repeated, vpiOrigin, probe.nestedCall);
     EXPECT_EQ(vpi_release_handle(repeated), 1);
-    ASSERT_EQ(talos_rt_v1_vpi_frame_leave(context, repeatedID),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_vpi_frame_leave(context, repeatedID), TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_vpi_frame_depth(context, &depth), TALOS_RT_OK);
     EXPECT_EQ(depth, 3u);
     EXPECT_EQ(vpi_get(vpiActive, probe.block), 1);
@@ -186,8 +185,7 @@ void inspectFrameABI(talos_rt_context *context, FrameProbe &probe,
     EXPECT_EQ(vpi_compare_objects(resumed, probe.block), 1);
     EXPECT_EQ(vpi_release_handle(resumed), 1);
     EXPECT_EQ(vpi_get(vpiActive, probe.block), 1);
-    EXPECT_EQ(talos_rt_v1_vpi_frame_unwind(context, 4),
-              TALOS_RT_INVALID_FRAME);
+    EXPECT_EQ(talos_rt_v1_vpi_frame_unwind(context, 4), TALOS_RT_INVALID_FRAME);
     ASSERT_EQ(talos_rt_v1_vpi_frame_unwind(context, 1), TALOS_RT_OK);
     EXPECT_EQ(vpi_get(vpiType, probe.block), vpiUndefined);
     EXPECT_NE(vpi_chk_error(nullptr), 0);
@@ -195,8 +193,7 @@ void inspectFrameABI(talos_rt_context *context, FrameProbe &probe,
     EXPECT_NE(vpi_chk_error(nullptr), 0);
     EXPECT_EQ(vpi_get(vpiActive, probe.root), 1);
     expectSameRelation(probe.root, vpiStmt, probe.call);
-    ASSERT_EQ(talos_rt_v1_vpi_frame_leave(context, probe.rootID),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_vpi_frame_leave(context, probe.rootID), TALOS_RT_OK);
     EXPECT_EQ(vpi_get(vpiType, probe.root), vpiUndefined);
     EXPECT_NE(vpi_chk_error(nullptr), 0);
     EXPECT_EQ(vpi_handle(vpiFrame, nullptr), nullptr);
@@ -208,10 +205,9 @@ void inspectFrameABI(talos_rt_context *context, FrameProbe &probe,
 }
 
 talos_rt_status inspectFrames(talos_rt_context *context, uint32_t importID,
-                                const talos_rt_import_input_v1 *inputs,
-                                uint32_t inputCount,
-                                talos_rt_import_output_v1 *,
-                                uint32_t outputCount, void *userData) {
+                              const talos_rt_import_input_v1 *inputs,
+                              uint32_t inputCount, talos_rt_import_output_v1 *,
+                              uint32_t outputCount, void *userData) {
   EXPECT_EQ(importID, 123u);
   EXPECT_EQ(inputCount, 1u);
   EXPECT_EQ(outputCount, 0u);
@@ -229,10 +225,9 @@ TEST(GeneratedDesignDatabase, FrameQueriesFollowActivationLifetime) {
   const char *input = std::getenv("TALOS_TEST_INPUT");
   ASSERT_NE(input, nullptr);
   mlir::DialectRegistry registry;
-  registry
-      .insert<mlir::arith::ArithDialect, mlir::cf::ControlFlowDialect,
-              talos::dpi::DPIDialect, talos::runtime::TalosRuntimeDialect,
-              talos::sim::TalosSimulationDialect>();
+  registry.insert<mlir::arith::ArithDialect, mlir::cf::ControlFlowDialect,
+                  talos::dpi::DPIDialect, talos::runtime::TalosRuntimeDialect,
+                  talos::sim::TalosSimulationDialect>();
   mlir::MLIRContext context(registry);
   auto module = mlir::parseSourceFile<mlir::ModuleOp>(input, &context);
   ASSERT_TRUE(module);
@@ -263,9 +258,9 @@ TEST(GeneratedDesignDatabase, FrameQueriesFollowActivationLifetime) {
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &runtime),
             TALOS_RT_OK);
   FrameProbe probe;
-  ASSERT_EQ(talos_rt_v1_context_register_import(runtime, 123, inspectFrames,
-                                                  &probe),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_context_register_import(runtime, 123, inspectFrames, &probe),
+      TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_startup(runtime, nullptr, 0), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_end_compile(runtime), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_start_simulation(runtime), TALOS_RT_OK);
@@ -276,14 +271,14 @@ TEST(GeneratedDesignDatabase, FrameQueriesFollowActivationLifetime) {
   talos_rt_design_bytecode_entry_v1 entry{&execution, startup->index, 0};
   uint64_t scratchSize = 0, scratchAlignment = 0;
   ASSERT_EQ(talos_rt_validate_design_bytecode(entry, runtime, &scratchSize,
-                                                &scratchAlignment),
+                                              &scratchAlignment),
             TALOS_RT_OK);
   ASSERT_LE(scratchAlignment, alignof(uint64_t));
   std::vector<uint64_t> frame((scratchSize + 7) / 8);
   talos_rt_fragment_action_v1 action{};
   ASSERT_EQ(talos_rt_execute_design_bytecode(entry, runtime, frame.data(),
-                                               frame.size() * 8, 0, scratchSize,
-                                               0, 0, &action),
+                                             frame.size() * 8, 0, scratchSize,
+                                             0, 0, &action),
             TALOS_RT_OK);
   ASSERT_EQ(action.kind, TALOS_RT_FRAGMENT_TERMINATE);
   ASSERT_EQ(talos_rt_v1_scheduler_run(runtime), TALOS_RT_OK);

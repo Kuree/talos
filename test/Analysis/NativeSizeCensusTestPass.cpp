@@ -134,9 +134,7 @@ public:
   NativeSizeCensusTestPass(const NativeSizeCensusTestPass &other)
       : PassWrapper(other) {}
 
-  StringRef getArgument() const final {
-    return "test-talos-print-native-size";
-  }
+  StringRef getArgument() const final { return "test-talos-print-native-size"; }
   StringRef getDescription() const final {
     return "print operation counts of a lowered native module by function "
            "and global family";

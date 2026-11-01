@@ -21,12 +21,12 @@ namespace mlir {
 class Block;
 class ModuleOp;
 class Operation;
-}
+} // namespace mlir
 
 namespace talos::sim {
 class SimFuncOp;
 class SimSpawnOp;
-}
+} // namespace talos::sim
 
 namespace talos::analysis {
 
@@ -116,8 +116,7 @@ public:
   /// Actors that keep a static slot but hand every activation to the generic
   /// scheduler at an exact checkpoint: writers of runtime-observed sources,
   /// and actors with a bytecode fragment the generated plan cannot reach.
-  const llvm::DenseSet<mlir::Operation *> &
-  getRuntimeCheckpointActors() const {
+  const llvm::DenseSet<mlir::Operation *> &getRuntimeCheckpointActors() const {
     return runtimeCheckpointActors;
   }
   const llvm::DenseSet<mlir::Operation *> &getRuntimeOwnedFanoutActors() const {

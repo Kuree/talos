@@ -4,10 +4,10 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Analysis/ManagedClassLayoutAnalysis.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "llvm/IR/DataLayout.h"
 #include "gtest/gtest.h"
@@ -38,22 +38,22 @@ TEST(GeneratedDesignDatabase, AssociativeVirtualInterfaceArrays) {
   for (unsigned byte = 0; byte != 8; ++byte)
     checksum |= uint64_t{encoded->bytecode[32 + byte]} << (byte * 8);
   talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                               encoded->executionFlags,
-                                               0,
-                                               encoded->bytecode.data(),
-                                               encoded->bytecode.size(),
-                                               encoded->designDatabase.data(),
-                                               encoded->designDatabase.size(),
-                                               encoded->stateBitCount,
-                                               checksum,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0};
+                                             encoded->executionFlags,
+                                             0,
+                                             encoded->bytecode.data(),
+                                             encoded->bytecode.size(),
+                                             encoded->designDatabase.data(),
+                                             encoded->designDatabase.size(),
+                                             encoded->stateBitCount,
+                                             checksum,
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
   ASSERT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_OK);
   talos_rt_context *runtime = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &runtime),
@@ -92,9 +92,9 @@ TEST(GeneratedDesignDatabase, AssociativeVirtualInterfaceArrays) {
             TALOS_RT_OK &&
         member.isStatic)
       target = member.backingStorage;
-    EXPECT_EQ(talos_rt_v1_design_write(runtime, target, words, unknown.data(),
-                                         width),
-              TALOS_RT_OK)
+    EXPECT_EQ(
+        talos_rt_v1_design_write(runtime, target, words, unknown.data(), width),
+        TALOS_RT_OK)
         << name;
   };
   auto integer = [&](vpiHandle handle) {
@@ -136,7 +136,7 @@ TEST(GeneratedDesignDatabase, AssociativeVirtualInterfaceArrays) {
   std::array<talos_rt_object_v1 *, 12> objects{};
   talos_rt_gc_root_range_v1 roots{};
   ASSERT_EQ(talos_rt_v1_gc_root_range_push(lane, &roots, objects.data(),
-                                             objects.size()),
+                                           objects.size()),
             TALOS_RT_OK);
   auto create = [&](size_t slot, size_t typeID) {
     auto array = mlir::cast<talos::sim::AssocArrayType>(type(typeID));
@@ -177,8 +177,7 @@ TEST(GeneratedDesignDatabase, AssociativeVirtualInterfaceArrays) {
     create(slot, slot);
   create(11, 1);
   auto dynamicType = mlir::cast<talos::sim::DynamicArrayType>(type(7));
-  auto element =
-      talos::sim::getElementDescriptor(dynamicType.getElementType());
+  auto element = talos::sim::getElementDescriptor(dynamicType.getElementType());
   ASSERT_TRUE(element);
   auto slots = slotsFor(*element);
   ASSERT_EQ(talos_rt_v1_container_create_typed(
@@ -202,9 +201,9 @@ TEST(GeneratedDesignDatabase, AssociativeVirtualInterfaceArrays) {
   ASSERT_EQ(talos_rt_v1_gc_managed_root_push(lane, &textRoot, &text),
             TALOS_RT_OK);
   const std::string longText = "z key survives deletion and GC";
-  ASSERT_EQ(talos_rt_v1_string_create(lane, longText.data(), longText.size(),
-                                        &text),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_string_create(lane, longText.data(), longText.size(), &text),
+      TALOS_RT_OK);
   const uint64_t firstID = 2, secondID = 3;
   std::array<uint8_t, 17> negative{};
   negative.fill(255);
@@ -214,14 +213,14 @@ TEST(GeneratedDesignDatabase, AssociativeVirtualInterfaceArrays) {
   negativeKey.width = 130;
   negativeKey.value_data = negative.data();
   ASSERT_EQ(talos_rt_v1_assoc_write(lane, objects[0], &negativeKey, &firstID,
-                                      nullptr),
+                                    nullptr),
             TALOS_RT_OK);
   std::array<uint8_t, 17> positive{};
   positive[0] = 1;
   talos_rt_assoc_key_v1 positiveKey = negativeKey;
   positiveKey.value_data = positive.data();
   ASSERT_EQ(talos_rt_v1_assoc_write(lane, objects[0], &positiveKey, &secondID,
-                                      nullptr),
+                                    nullptr),
             TALOS_RT_OK);
   std::array<uint8_t, 17> wide{};
   wide[12] = 16;
@@ -230,9 +229,8 @@ TEST(GeneratedDesignDatabase, AssociativeVirtualInterfaceArrays) {
   ASSERT_EQ(
       talos_rt_v1_assoc_write(lane, objects[0], &wideKey, &firstID, nullptr),
       TALOS_RT_OK);
-  ASSERT_EQ(
-      talos_rt_v1_assoc_set_default(lane, objects[0], &secondID, nullptr),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_assoc_set_default(lane, objects[0], &secondID, nullptr),
+            TALOS_RT_OK);
   for (size_t entry = 0; entry != 2; ++entry) {
     const uint64_t actual = entry ? secondID : firstID;
     talos_rt_assoc_key_v1 key{};
@@ -241,9 +239,8 @@ TEST(GeneratedDesignDatabase, AssociativeVirtualInterfaceArrays) {
     if (!entry)
       ASSERT_EQ(talos_rt_v1_string_create(lane, "aaa", 3, &key.string),
                 TALOS_RT_OK);
-    ASSERT_EQ(
-        talos_rt_v1_assoc_write(lane, objects[1], &key, &actual, nullptr),
-        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_assoc_write(lane, objects[1], &key, &actual, nullptr),
+              TALOS_RT_OK);
     std::array<uint8_t, 16> record{};
     const int32_t number = entry + 1;
     std::memcpy(record.data(), &number, 4);
@@ -252,24 +249,22 @@ TEST(GeneratedDesignDatabase, AssociativeVirtualInterfaceArrays) {
     key.kind = TALOS_RT_ASSOC_KEY_ELEMENT;
     key.width = record.size() * 8;
     key.value_data = record.data();
-    ASSERT_EQ(
-        talos_rt_v1_assoc_write(lane, objects[2], &key, &actual, nullptr),
-        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_assoc_write(lane, objects[2], &key, &actual, nullptr),
+              TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_container_create_typed(
                   lane, TALOS_RT_CONTAINER_DYNAMIC_ARRAY, 8123,
-                  TALOS_RT_ELEMENT_BITS, 0, 8, 8, 64, nullptr, 0, 1,
-                  UINT64_MAX, &objects[8 + entry]),
+                  TALOS_RT_ELEMENT_BITS, 0, 8, 8, 64, nullptr, 0, 1, UINT64_MAX,
+                  &objects[8 + entry]),
               TALOS_RT_OK);
     const uint64_t wildcard = entry ? 256 : 1;
     ASSERT_EQ(talos_rt_v1_container_write(lane, objects[8 + entry], 0,
-                                            &wildcard, nullptr),
+                                          &wildcard, nullptr),
               TALOS_RT_OK);
     key = {};
     key.kind = TALOS_RT_ASSOC_KEY_WILDCARD;
     key.object = objects[8 + entry];
-    ASSERT_EQ(
-        talos_rt_v1_assoc_write(lane, objects[3], &key, &actual, nullptr),
-        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_assoc_write(lane, objects[3], &key, &actual, nullptr),
+              TALOS_RT_OK);
     key = {};
     key.kind = TALOS_RT_ASSOC_KEY_SIGNED;
     key.width = 32;
@@ -280,14 +275,13 @@ TEST(GeneratedDesignDatabase, AssociativeVirtualInterfaceArrays) {
     key = {};
     key.kind = TALOS_RT_ASSOC_KEY_CLASS;
     key.object = entry ? objects[10] : nullptr;
-    ASSERT_EQ(
-        talos_rt_v1_assoc_write(lane, objects[5], &key, &actual, nullptr),
-        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_assoc_write(lane, objects[5], &key, &actual, nullptr),
+              TALOS_RT_OK);
   }
   talos_rt_assoc_key_v1 processKey{};
   processKey.kind = TALOS_RT_ASSOC_KEY_PROCESS;
   ASSERT_EQ(talos_rt_v1_assoc_write(lane, objects[6], &processKey, &secondID,
-                                      nullptr),
+                                    nullptr),
             TALOS_RT_OK);
   // Container assignment copies its associative value after entries exist.
   ASSERT_EQ(
@@ -372,8 +366,8 @@ TEST(GeneratedDesignDatabase, AssociativeVirtualInterfaceArrays) {
   sameRecordKey.kind = TALOS_RT_ASSOC_KEY_ELEMENT;
   sameRecordKey.width = sameRecord.size() * 8;
   sameRecordKey.value_data = sameRecord.data();
-  ASSERT_EQ(talos_rt_v1_assoc_write(lane, objects[2], &sameRecordKey,
-                                      &secondID, nullptr),
+  ASSERT_EQ(talos_rt_v1_assoc_write(lane, objects[2], &sameRecordKey, &secondID,
+                                    nullptr),
             TALOS_RT_OK);
   actual(elements[2][0], second);
   auto recordElements = children(arrays[2], vpiReg);
@@ -415,8 +409,7 @@ TEST(GeneratedDesignDatabase, AssociativeVirtualInterfaceArrays) {
   // independently of hash-table ordinal or a container's replacement.
   auto pending = vpi_iterate(vpiReg, arrays[0]);
   ASSERT_NE(pending, nullptr);
-  ASSERT_EQ(talos_rt_v1_assoc_delete(objects[0], &negativeKey),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_assoc_delete(objects[0], &negativeKey), TALOS_RT_OK);
   auto deleted = keep(vpi_scan(pending));
   ASSERT_NE(deleted, nullptr);
   EXPECT_EQ(vpi_handle(vpiActual, deleted), nullptr);
@@ -425,7 +418,7 @@ TEST(GeneratedDesignDatabase, AssociativeVirtualInterfaceArrays) {
   actual(keep(vpi_scan(pending)), first);
   EXPECT_EQ(vpi_scan(pending), nullptr);
   ASSERT_EQ(talos_rt_v1_assoc_write(lane, objects[0], &negativeKey, &secondID,
-                                      nullptr),
+                                    nullptr),
             TALOS_RT_OK);
   actual(negativeSelected, second);
   uint64_t emptyStrings = talos_rt_managed_word_from_object(objects[11]);
@@ -435,14 +428,14 @@ TEST(GeneratedDesignDatabase, AssociativeVirtualInterfaceArrays) {
   actual(dynamicElements[1], second);
   talos_rt_string_v1 copiedText = 0;
   ASSERT_EQ(talos_rt_v1_string_create(lane, longText.data(), longText.size(),
-                                        &copiedText),
+                                      &copiedText),
             TALOS_RT_OK);
   talos_rt_assoc_key_v1 copiedKey{};
   copiedKey.kind = TALOS_RT_ASSOC_KEY_STRING;
   copiedKey.string = copiedText;
-  ASSERT_EQ(talos_rt_v1_assoc_write(lane, objects[11], &copiedKey, &firstID,
-                                      nullptr),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_assoc_write(lane, objects[11], &copiedKey, &firstID, nullptr),
+      TALOS_RT_OK);
   actual(elements[1][1], first);
   EXPECT_EQ(
       vpi_compare_objects(children(arrays[1], vpiReg).at(0), elements[1][1]),

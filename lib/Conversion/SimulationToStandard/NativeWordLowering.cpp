@@ -183,12 +183,14 @@ public:
     SmallVector<Value> planes;
     for (Value value : adaptor.getInput()) {
       if (from != to) {
-        value = LLVM::BitcastOp::create(rewriter, op.getLoc(), inputType, value);
-        value = from < to
-                    ? LLVM::ZExtOp::create(rewriter, op.getLoc(), resultType,
-                                           value).getResult()
-                    : LLVM::TruncOp::create(rewriter, op.getLoc(), resultType,
-                                            value).getResult();
+        value =
+            LLVM::BitcastOp::create(rewriter, op.getLoc(), inputType, value);
+        value = from < to ? LLVM::ZExtOp::create(rewriter, op.getLoc(),
+                                                 resultType, value)
+                                .getResult()
+                          : LLVM::TruncOp::create(rewriter, op.getLoc(),
+                                                  resultType, value)
+                                .getResult();
         value = LLVM::BitcastOp::create(
             rewriter, op.getLoc(), rewriter.getIntegerType(width / from * to),
             value);
@@ -203,7 +205,6 @@ public:
 void populateNativeWordValuePatterns(const TypeConverter &converter,
                                      RewritePatternSet &patterns) {
   patterns.add<WordTableConversion, WordReverseConversion,
-               WordResizeLanesConversion>(
-      converter, patterns.getContext());
+               WordResizeLanesConversion>(converter, patterns.getContext());
 }
 } // namespace talos

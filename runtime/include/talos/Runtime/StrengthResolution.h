@@ -1,4 +1,5 @@
-//===- StrengthResolution.h - Shared net strength algebra --------*- C++ -*-===//
+//===- StrengthResolution.h - Shared net strength algebra --------*- C++
+//-*-===//
 //
 // IEEE 1800-2017 28.12 strength combination, shared by the runtime resolver
 // and the compiler, which evaluates the same rules to build bitwise

@@ -135,15 +135,15 @@ public:
     // them in the frame turns an otherwise stateless clock/reset actor into a
     // loop-carried process and prevents whole-clock-group evaluation. Only
     // duplicate these pure representation casts, never loads or computations
-    // that sample state before the event. Bound the chain to keep cloning cheap.
+    // that sample state before the event. Bound the chain to keep cloning
+    // cheap.
     auto collectConstantChain = [](Operation *op,
                                    SmallVectorImpl<Operation *> &chain) {
       while (op && chain.size() < 16) {
         if (op->getNumResults() != 1)
           return false;
         chain.push_back(op);
-        if (op->hasTrait<OpTrait::ConstantLike>() &&
-            op->getNumOperands() == 0)
+        if (op->hasTrait<OpTrait::ConstantLike>() && op->getNumOperands() == 0)
           return true;
         if (!isa<sim::SimPackedFlattenOp, sim::SimPackedUnflattenOp>(op))
           return false;
@@ -277,8 +277,7 @@ public:
       auto bridge = cf::BranchOp::create(
           builder, suspension->getLoc(), continuation,
           resume->getArguments().take_front(forwarded.size()));
-      ::talos::schedule::set<
-          ::talos::schedule::Field::ObserverCaptureBridge>(
+      ::talos::schedule::set<::talos::schedule::Field::ObserverCaptureBridge>(
           bridge, builder.getUnitAttr());
     }
 

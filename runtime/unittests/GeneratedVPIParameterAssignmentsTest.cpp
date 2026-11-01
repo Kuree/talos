@@ -4,11 +4,11 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
 #include "talos/Runtime/Runtime.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <cstdlib>
@@ -158,8 +158,7 @@ TEST(GeneratedDesignDatabase, SharedParameterAssignments) {
     HeaderWriter(bytes.data()).setChecksum(hash);
     auto invalid = execution;
     invalid.design_database = bytes.data();
-    EXPECT_EQ(talos_rt_v1_design_validate(&invalid),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&invalid), TALOS_RT_INVALID_DESIGN);
   };
   std::vector<uint32_t> assignmentMembers, parameterMembers;
   for (uint32_t i = 0; i != directory.getDefinitionMemberCount(); ++i) {
@@ -371,8 +370,7 @@ module attributes {llvm.data_layout = "e-p:64:64-i64:64-i32:32-i16:16-i8:8", llv
               TALOS_RT_OK);
     if (!raw)
       return {};
-    std::unique_ptr<talos_rt_context,
-                    decltype(&talos_rt_v1_context_destroy)>
+    std::unique_ptr<talos_rt_context, decltype(&talos_rt_v1_context_destroy)>
         runtime(raw, talos_rt_v1_context_destroy);
     EXPECT_EQ(talos_rt_v1_vpi_startup(raw, nullptr, 0), TALOS_RT_OK);
     EXPECT_EQ(talos_rt_v1_vpi_end_compile(raw), TALOS_RT_OK);
@@ -648,8 +646,7 @@ TEST(GeneratedDesignDatabase, ParameterAssignmentsInInstanceScopes) {
     HeaderWriter(bytes.data()).setChecksum(hash);
     auto invalid = execution;
     invalid.design_database = bytes.data();
-    EXPECT_EQ(talos_rt_v1_design_validate(&invalid),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&invalid), TALOS_RT_INVALID_DESIGN);
   }
 
   for (auto handle : handles)

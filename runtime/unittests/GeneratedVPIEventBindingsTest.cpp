@@ -6,12 +6,12 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Analysis/ManagedClassLayoutAnalysis.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
 #include "talos/Runtime/Runtime.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "llvm/IR/DataLayout.h"
 #include "gtest/gtest.h"
@@ -84,16 +84,16 @@ TEST(GeneratedDesignDatabase, EventBindings) {
     return cursor;
   };
   uint64_t identity = UINT64_MAX;
-  EXPECT_EQ(talos_rt_cached_vpi_event_binding(runtime, event("top.first"),
-                                                &identity),
-            TALOS_RT_OK);
+  EXPECT_EQ(
+      talos_rt_cached_vpi_event_binding(runtime, event("top.first"), &identity),
+      TALOS_RT_OK);
   EXPECT_EQ(identity, 0u);
   EXPECT_EQ(talos_rt_cached_vpi_event_binding(runtime, event("top.second"),
-                                                &identity),
+                                              &identity),
             TALOS_RT_OK);
   EXPECT_EQ(identity, 7u);
   EXPECT_EQ(talos_rt_cached_vpi_event_binding(runtime, event("top.unbound"),
-                                                &identity),
+                                              &identity),
             TALOS_RT_EOF);
   EXPECT_EQ(identity, 0u);
   EXPECT_EQ(talos_rt_cached_vpi_event_binding(runtime, {}, &identity),
@@ -133,10 +133,10 @@ TEST(GeneratedDesignDatabase, EventBindings) {
             TALOS_RT_OK);
   const std::array<uint64_t, 2> eventIDs{0, 7};
   ASSERT_EQ(talos_rt_v1_object_write(object, offsets.at("ready"),
-                                       eventIDs.data(), sizeof(uint64_t)),
+                                     eventIDs.data(), sizeof(uint64_t)),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_object_write(object, offsets.at("events"),
-                                       eventIDs.data(), sizeof(eventIDs)),
+                                     eventIDs.data(), sizeof(eventIDs)),
             TALOS_RT_OK);
   auto objectStorage = event("top.obj");
   auto aliasStorage = event("top.alias");
@@ -145,9 +145,8 @@ TEST(GeneratedDesignDatabase, EventBindings) {
       talos_rt_v1_design_write(runtime, objectStorage, &word, nullptr, 64),
       TALOS_RT_OK);
   word = 0;
-  ASSERT_EQ(
-      talos_rt_v1_design_write(runtime, aliasStorage, &word, nullptr, 64),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_design_write(runtime, aliasStorage, &word, nullptr, 64),
+            TALOS_RT_OK);
 
   // Run the authored initializer normally: it creates three real design
   // threads with event/event-order waits. No scheduler wait records are forged.
@@ -158,14 +157,14 @@ TEST(GeneratedDesignDatabase, EventBindings) {
   talos_rt_design_bytecode_entry_v1 entry{&execution, initial->index, 0};
   uint64_t scratchSize = 0, scratchAlignment = 0;
   ASSERT_EQ(talos_rt_validate_design_bytecode(entry, runtime, &scratchSize,
-                                                &scratchAlignment),
+                                              &scratchAlignment),
             TALOS_RT_OK);
   ASSERT_LE(scratchAlignment, alignof(uint64_t));
   std::vector<uint64_t> frame((scratchSize + 7) / 8);
   talos_rt_fragment_action_v1 action{};
   ASSERT_EQ(talos_rt_execute_design_bytecode(entry, runtime, frame.data(),
-                                               frame.size() * 8, 0, scratchSize,
-                                               0, 0, &action),
+                                             frame.size() * 8, 0, scratchSize,
+                                             0, 0, &action),
             TALOS_RT_OK);
   ASSERT_EQ(action.kind, TALOS_RT_FRAGMENT_TERMINATE);
   ASSERT_EQ(talos_rt_v1_scheduler_run(runtime), TALOS_RT_OK);
@@ -255,14 +254,12 @@ TEST(GeneratedDesignDatabase, EventBindings) {
     EXPECT_EQ(vpi_chk_error(nullptr), vpiNotice);
   }
   word = UINT64_MAX;
-  ASSERT_EQ(
-      talos_rt_v1_design_write(runtime, aliasStorage, &word, nullptr, 64),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_design_write(runtime, aliasStorage, &word, nullptr, 64),
+            TALOS_RT_OK);
   countWaiters(alias, 0);
   word = 7;
-  ASSERT_EQ(
-      talos_rt_v1_design_write(runtime, aliasStorage, &word, nullptr, 64),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_design_write(runtime, aliasStorage, &word, nullptr, 64),
+            TALOS_RT_OK);
   countWaiters(alias, 2);
   auto pending = keep(vpi_iterate(vpiWaitingProcesses, firstElement));
   // Waiting-process queries retain only a weak receiver recipe. The scalar
@@ -315,8 +312,7 @@ TEST(GeneratedDesignDatabase, EventBindings) {
     HeaderWriter(bytes.data()).setChecksum(imageChecksum(bytes));
     auto invalid = execution;
     invalid.design_database = bytes.data();
-    EXPECT_EQ(talos_rt_v1_design_validate(&invalid),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&invalid), TALOS_RT_INVALID_DESIGN);
   };
   rejects([&](auto &bytes) {
     EventBindingWriter(bytes.data() + offset).setReserved(1);

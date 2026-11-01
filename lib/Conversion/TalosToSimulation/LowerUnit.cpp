@@ -78,41 +78,41 @@ static bool containsSequentialContainer(Type type) {
   return false;
 }
 
-static_assert(
-    sameEventRegionEncoding(ir::EventRegion::Preponed,
-                            sim::EventRegion::Preponed) &&
-        sameEventRegionEncoding(ir::EventRegion::PreActive,
-                                sim::EventRegion::PreActive) &&
-        sameEventRegionEncoding(ir::EventRegion::Active,
-                                sim::EventRegion::Active) &&
-        sameEventRegionEncoding(ir::EventRegion::Inactive,
-                                sim::EventRegion::Inactive) &&
-        sameEventRegionEncoding(ir::EventRegion::PreNBA,
-                                sim::EventRegion::PreNBA) &&
-        sameEventRegionEncoding(ir::EventRegion::NBA, sim::EventRegion::NBA) &&
-        sameEventRegionEncoding(ir::EventRegion::PostNBA,
-                                sim::EventRegion::PostNBA) &&
-        sameEventRegionEncoding(ir::EventRegion::PreObserved,
-                                sim::EventRegion::PreObserved) &&
-        sameEventRegionEncoding(ir::EventRegion::Observed,
-                                sim::EventRegion::Observed) &&
-        sameEventRegionEncoding(ir::EventRegion::PostObserved,
-                                sim::EventRegion::PostObserved) &&
-        sameEventRegionEncoding(ir::EventRegion::Reactive,
-                                sim::EventRegion::Reactive) &&
-        sameEventRegionEncoding(ir::EventRegion::ReInactive,
-                                sim::EventRegion::ReInactive) &&
-        sameEventRegionEncoding(ir::EventRegion::PreReNBA,
-                                sim::EventRegion::PreReNBA) &&
-        sameEventRegionEncoding(ir::EventRegion::ReNBA,
-                                sim::EventRegion::ReNBA) &&
-        sameEventRegionEncoding(ir::EventRegion::PostReNBA,
-                                sim::EventRegion::PostReNBA) &&
-        sameEventRegionEncoding(ir::EventRegion::PrePostponed,
-                                sim::EventRegion::PrePostponed) &&
-        sameEventRegionEncoding(ir::EventRegion::Postponed,
-                                sim::EventRegion::Postponed),
-    "Talos and simulation event-region enums must stay in lockstep");
+static_assert(sameEventRegionEncoding(ir::EventRegion::Preponed,
+                                      sim::EventRegion::Preponed) &&
+                  sameEventRegionEncoding(ir::EventRegion::PreActive,
+                                          sim::EventRegion::PreActive) &&
+                  sameEventRegionEncoding(ir::EventRegion::Active,
+                                          sim::EventRegion::Active) &&
+                  sameEventRegionEncoding(ir::EventRegion::Inactive,
+                                          sim::EventRegion::Inactive) &&
+                  sameEventRegionEncoding(ir::EventRegion::PreNBA,
+                                          sim::EventRegion::PreNBA) &&
+                  sameEventRegionEncoding(ir::EventRegion::NBA,
+                                          sim::EventRegion::NBA) &&
+                  sameEventRegionEncoding(ir::EventRegion::PostNBA,
+                                          sim::EventRegion::PostNBA) &&
+                  sameEventRegionEncoding(ir::EventRegion::PreObserved,
+                                          sim::EventRegion::PreObserved) &&
+                  sameEventRegionEncoding(ir::EventRegion::Observed,
+                                          sim::EventRegion::Observed) &&
+                  sameEventRegionEncoding(ir::EventRegion::PostObserved,
+                                          sim::EventRegion::PostObserved) &&
+                  sameEventRegionEncoding(ir::EventRegion::Reactive,
+                                          sim::EventRegion::Reactive) &&
+                  sameEventRegionEncoding(ir::EventRegion::ReInactive,
+                                          sim::EventRegion::ReInactive) &&
+                  sameEventRegionEncoding(ir::EventRegion::PreReNBA,
+                                          sim::EventRegion::PreReNBA) &&
+                  sameEventRegionEncoding(ir::EventRegion::ReNBA,
+                                          sim::EventRegion::ReNBA) &&
+                  sameEventRegionEncoding(ir::EventRegion::PostReNBA,
+                                          sim::EventRegion::PostReNBA) &&
+                  sameEventRegionEncoding(ir::EventRegion::PrePostponed,
+                                          sim::EventRegion::PrePostponed) &&
+                  sameEventRegionEncoding(ir::EventRegion::Postponed,
+                                          sim::EventRegion::Postponed),
+              "Talos and simulation event-region enums must stay in lockstep");
 
 // Simulation enum values are serialized directly into the sole runtime ABI.
 static_assert(static_cast<uint32_t>(sim::ElementKind::Bits) ==
@@ -1349,10 +1349,9 @@ Value UnitLowering::createReadWindowView(Value reference, Type scalar,
   Type window = isa<sim::LogicType>(scalar)
                     ? Type(sim::LogicType::get(context, width))
                     : Type(IntegerType::get(context, width));
-  return sim::SimRefExtractOp::create(builder, function.getLoc(),
-                                      sim::RefType::get(context, window),
-                                      reference,
-                                      builder.getI64IntegerAttr(offset));
+  return sim::SimRefExtractOp::create(
+      builder, function.getLoc(), sim::RefType::get(context, window), reference,
+      builder.getI64IntegerAttr(offset));
 }
 
 FailureOr<Value> UnitLowering::bindObserver(
@@ -1471,8 +1470,8 @@ FailureOr<Value> UnitLowering::bindObserver(
       operands,
       builder.getI32IntegerAttr(static_cast<uint32_t>(captures.size())));
   if (*parsedResult == ObserverResult::Event)
-    ::talos::schedule::set<observerEventPrimaryAttrName>(
-        binding, builder.getUnitAttr());
+    ::talos::schedule::set<observerEventPrimaryAttrName>(binding,
+                                                         builder.getUnitAttr());
   return binding.getResult();
 }
 
@@ -6958,8 +6957,7 @@ LogicalResult UnitLowering::lowerRoots(ArrayRef<Operation *> roots) {
     return failure();
   }
   auto primitive =
-      ::talos::schedule::get<::talos::schedule::Field::PrimitiveName>(
-          function);
+      ::talos::schedule::get<::talos::schedule::Field::PrimitiveName>(function);
   llvm::MapVector<Value, ReferenceWindows> implicitProcessWrites;
   auto *savedWrites = observedWrites;
   llvm::SetVector<Value> implicitProcessDependencies;
@@ -7149,8 +7147,8 @@ LogicalResult UnitLowering::lowerRoots(ArrayRef<Operation *> roots) {
         if (writeEnd <= begin || writeBegin >= end)
           continue;
         if (writeBegin > begin) {
-          sensitivity.insert(createReadWindowView(written, scalar, begin,
-                                                  writeBegin - begin));
+          sensitivity.insert(
+              createReadWindowView(written, scalar, begin, writeBegin - begin));
         }
         begin = std::max(begin, writeEnd);
       }

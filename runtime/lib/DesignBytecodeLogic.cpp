@@ -475,7 +475,7 @@ Logic bitwise(const Logic &left, const Logic &right, uint16_t opcode) {
     if (!left.fourState) {
       result.value[index] = opcode == TALOS_RT_DB_AND  ? lv & rv
                             : opcode == TALOS_RT_DB_OR ? lv | rv
-                                                         : lv ^ rv;
+                                                       : lv ^ rv;
       continue;
     }
     uint64_t lk = ~lu, rk = ~ru;

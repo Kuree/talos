@@ -42,9 +42,9 @@ using namespace talos::process;
 using namespace talos::runtime;
 
 bool talos_rt_read_signal_bit_unlocked(talos_rt_context *context,
-                                         uint64_t stableID, uint64_t bit,
-                                         bool &value, bool &unknown,
-                                         bool useSnapshot) {
+                                       uint64_t stableID, uint64_t bit,
+                                       bool &value, bool &unknown,
+                                       bool useSnapshot) {
   value = false;
   unknown = false;
   if (!context || stableID == UINT64_MAX)
@@ -991,8 +991,8 @@ void wakeMonitorProcessUnlocked(talos_rt_context *context,
   for (ScheduledDesignTask &task : context->scheduledDesignTasks) {
     if (task.id != logicalToken || task.terminated)
       continue;
-    talos_rt_unregister_signal_wait_unlocked(
-        context, task.signalSubscriptions, task.id, true);
+    talos_rt_unregister_signal_wait_unlocked(context, task.signalSubscriptions,
+                                             task.id, true);
     task.suspendKind = TALOS_RT_SUSPEND_NONE;
     task.signalTriggered = false;
     task.urgent = false;
@@ -1101,8 +1101,7 @@ publishSignalOccurrenceUnlocked(talos_rt_context *context, uint64_t stableID,
               const auto &entry = context->nativeScheduleFanoutEntries[index];
               const auto &kernel =
                   context->nativeSchedulePlan->clock_kernels[entry.kernel];
-              talos::runtime::publishClockKernelReady(kernel,
-                                                        entry.merged_bit);
+              talos::runtime::publishClockKernelReady(kernel, entry.merged_bit);
               context->nativeScheduleClockIngressPending = true;
               continue;
             }
@@ -1774,8 +1773,8 @@ bool talos_rt_publish_signal_transition_batch_unlocked(
     const uint8_t *oldUnknown, const uint8_t *newValue,
     const uint8_t *newUnknown) {
   if (context->coverage)
-    talos_rt_coverage_record_transition_unlocked(
-        context, stableID, bitWidth, changed, newValue, newUnknown);
+    talos_rt_coverage_record_transition_unlocked(context, stableID, bitWidth,
+                                                 changed, newValue, newUnknown);
   ClockOccurrenceFeatureState *feature = context->clockOccurrences.get();
   if (edgeBitOffset == 0) {
     uint64_t sequence = 0;
@@ -1825,10 +1824,10 @@ bool talos_rt_publish_signal_transition_batch_unlocked(
 }
 
 bool talos_rt_publish_signal_occurrence_unlocked(talos_rt_context *context,
-                                                   uint64_t stableID,
-                                                   uint64_t bitWidth,
-                                                   uint32_t edges,
-                                                   uint64_t *outSequence) {
+                                                 uint64_t stableID,
+                                                 uint64_t bitWidth,
+                                                 uint32_t edges,
+                                                 uint64_t *outSequence) {
   if (!context || bitWidth == 0 || edges == 0)
     return context != nullptr;
   uint64_t sequence = 0;
@@ -1852,9 +1851,9 @@ bool talos_rt_publish_signal_occurrence_unlocked(talos_rt_context *context,
 }
 
 extern "C" void talos_rt_v1_scheduler_signal(talos_rt_context *context,
-                                               uint64_t bitOffset,
-                                               uint64_t bitWidth,
-                                               uint32_t edges) {
+                                             uint64_t bitOffset,
+                                             uint64_t bitWidth,
+                                             uint32_t edges) {
   if (!context || bitOffset == UINT64_MAX || bitWidth == 0 || edges == 0 ||
       (edges & ~(TALOS_RT_SIGNAL_CHANGE | TALOS_RT_SIGNAL_POSEDGE |
                  TALOS_RT_SIGNAL_NEGEDGE)) != 0)
@@ -1888,10 +1887,10 @@ extern "C" void talos_rt_v1_scheduler_signal(talos_rt_context *context,
                              static_cast<__int128>(offset) + bitWidth <= 0))
       return;
     if (!talos_rt_publish_signal_occurrence_unlocked(context, bitOffset,
-                                                       bitWidth, edges))
+                                                     bitWidth, edges))
       return;
     if (!talos_rt_latch_conditional_signal_range_unlocked(context, bitOffset,
-                                                            bitWidth, edges))
+                                                          bitWidth, edges))
       return;
     if (++context->schedulerEpoch == 0)
       context->schedulerEpoch = 1;
@@ -2329,7 +2328,8 @@ BatchDeferral deferStaticTransitionUnlocked(
                   TALOS_RT_STABLE_HANDLE_STATIC, staticState)] != 0)
     return BatchDeferral::Publish;
   if (batch.staticID == 0) {
-    const NativeStaticState *state = findNativeStaticState(context, staticState);
+    const NativeStaticState *state =
+        findNativeStaticState(context, staticState);
     if (!state || lowBit > state->bitWidth ||
         bitWidth > state->bitWidth - lowBit)
       return BatchDeferral::Publish;
@@ -2419,8 +2419,8 @@ void flushPublicationBatch(talos_rt_context *context) {
       (void)publishNativeSignalTransitionUnlocked(
           context,
           talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_STATIC,
-                                          batch.staticID,
-                                          static_cast<int64_t>(low)),
+                                        batch.staticID,
+                                        static_cast<int64_t>(low)),
           width, bytes(PublicationBatch::Changed),
           bytes(PublicationBatch::Posedge), bytes(PublicationBatch::Negedge),
           bytes(PublicationBatch::OldValue),
@@ -2572,8 +2572,8 @@ extern "C" void talos_rt_v1_scheduler_static_transition_owned(
   context->activeLogicalProcessParent =
       context->scheduledProcesses[index].parent;
   talos_rt_v1_scheduler_static_transition(context, staticState, lowBit,
-                                            bitWidth, oldValue, oldUnknown,
-                                            newValue, newUnknown);
+                                          bitWidth, oldValue, oldUnknown,
+                                          newValue, newUnknown);
 }
 
 extern "C" void talos_rt_v1_scheduler_static_transition(
@@ -2597,8 +2597,8 @@ extern "C" void talos_rt_v1_scheduler_static_transition(
   // follows the held writes.
   if (publicationBatchContext == context) {
     if (deferBatchedStaticTransition(context, staticState, lowBit, bitWidth,
-                                     oldValue, oldUnknown, newValue,
-                                     newUnknown, changed))
+                                     oldValue, oldUnknown, newValue, newUnknown,
+                                     changed))
       return;
     flushPublicationBatch(context);
   }
@@ -2623,8 +2623,7 @@ extern "C" void talos_rt_v1_scheduler_static_transition(
     return;
   }
   uint64_t handle = talos_rt_stable_handle_encode(
-      TALOS_RT_STABLE_HANDLE_STATIC, staticState,
-      static_cast<int64_t>(lowBit));
+      TALOS_RT_STABLE_HANDLE_STATIC, staticState, static_cast<int64_t>(lowBit));
   if ((context->nativeSchedulePlan->flags &
        TALOS_RT_NATIVE_SCHEDULE_STATIC_EVAL_ISLAND) != 0 &&
       (context->nativeSchedulePlan->flags &
@@ -2820,10 +2819,8 @@ extern "C" void talos_rt_v1_scheduler_static_transition(
     context->schedulerEpoch = 1;
 }
 
-extern "C" void
-talos_rt_v1_scheduler_activate_static_nodes(talos_rt_context *context,
-                                              const uint64_t *nodeWords,
-                                              uint32_t wordCount) {
+extern "C" void talos_rt_v1_scheduler_activate_static_nodes(
+    talos_rt_context *context, const uint64_t *nodeWords, uint32_t wordCount) {
   if (!context || !nodeWords)
     return;
   if (!context->nativeSchedulePlan ||
@@ -2907,9 +2904,11 @@ talos_rt_v1_scheduler_activate_static_nodes(talos_rt_context *context,
     context->schedulerEpoch = 1;
 }
 
-extern "C" void talos_rt_v1_scheduler_real_transition(
-    talos_rt_context *context, uint64_t bitOffset, uint32_t bitWidth,
-    const void *oldValue, const void *newValue) {
+extern "C" void talos_rt_v1_scheduler_real_transition(talos_rt_context *context,
+                                                      uint64_t bitOffset,
+                                                      uint32_t bitWidth,
+                                                      const void *oldValue,
+                                                      const void *newValue) {
   if (!context || bitOffset == UINT64_MAX ||
       (bitWidth != 32 && bitWidth != 64) || !oldValue || !newValue)
     return;
@@ -2937,13 +2936,11 @@ extern "C" void talos_rt_v1_scheduler_real_transition(
     if (!talos_rt_publish_signal_occurrence_unlocked(
             context, bitOffset, bitWidth, TALOS_RT_SIGNAL_CHANGE))
       return;
-    talos_rt_invalidate_signal_snapshots_unlocked(context, bitOffset,
-                                                    bitWidth);
+    talos_rt_invalidate_signal_snapshots_unlocked(context, bitOffset, bitWidth);
     if (!talos_rt_latch_conditional_signal_range_unlocked(
             context, bitOffset, bitWidth, TALOS_RT_SIGNAL_CHANGE))
       return;
-    if (!talos_rt_notify_observer_signal_unlocked(context, bitOffset,
-                                                    bitWidth))
+    if (!talos_rt_notify_observer_signal_unlocked(context, bitOffset, bitWidth))
       return;
     if (++context->schedulerEpoch == 0)
       context->schedulerEpoch = 1;
@@ -2954,14 +2951,14 @@ extern "C" void talos_rt_v1_scheduler_real_transition(
 }
 
 extern "C" void talos_rt_v1_scheduler_event(talos_rt_context *context,
-                                              uint64_t stableID,
-                                              uint32_t nonblocking) {
+                                            uint64_t stableID,
+                                            uint32_t nonblocking) {
   talos_rt_v1_scheduler_event_after(context, stableID, nonblocking, 0);
 }
 
 extern "C" talos_rt_status
 talos_rt_v1_scheduler_event_create(talos_rt_context *context,
-                                     uint64_t *outStableID) {
+                                   uint64_t *outStableID) {
   if (!context || !outStableID)
     return TALOS_RT_INVALID_ARGUMENT;
   *outStableID = UINT64_MAX;
@@ -2970,8 +2967,7 @@ talos_rt_v1_scheduler_event_create(talos_rt_context *context,
     if (context->schedulerStatus != TALOS_RT_OK)
       return context->schedulerStatus;
     if (context->nextDynamicEventID == 0 ||
-        context->nextDynamicEventID >=
-            TALOS_RT_STABLE_HANDLE_DYNAMIC_EVENT_TAG)
+        context->nextDynamicEventID >= TALOS_RT_STABLE_HANDLE_DYNAMIC_EVENT_TAG)
       return TALOS_RT_OUT_OF_RESOURCES;
     *outStableID = TALOS_RT_STABLE_HANDLE_DYNAMIC_EVENT_TAG |
                    context->nextDynamicEventID++;
@@ -2982,9 +2978,9 @@ talos_rt_v1_scheduler_event_create(talos_rt_context *context,
 }
 
 extern "C" void talos_rt_v1_scheduler_event_after(talos_rt_context *context,
-                                                    uint64_t stableID,
-                                                    uint32_t nonblocking,
-                                                    uint64_t delay) {
+                                                  uint64_t stableID,
+                                                  uint32_t nonblocking,
+                                                  uint64_t delay) {
   if (!context || nonblocking > 1 || (!nonblocking && delay != 0)) {
     if (context)
       talos_rt_v1_scheduler_fail(context, TALOS_RT_INVALID_ARGUMENT);
@@ -3065,8 +3061,8 @@ extern "C" void talos_rt_v1_scheduler_event_after(talos_rt_context *context,
 
 extern "C" void
 talos_rt_v1_scheduler_event_replace_after(talos_rt_context *context,
-                                            uint64_t stableID, uint32_t active,
-                                            uint64_t delay) {
+                                          uint64_t stableID, uint32_t active,
+                                          uint64_t delay) {
   if (!context || active > 1) {
     if (context)
       talos_rt_v1_scheduler_fail(context, TALOS_RT_INVALID_ARGUMENT);
@@ -3174,7 +3170,7 @@ talos_rt_v1_scheduler_event_replace_after(talos_rt_context *context,
 
 extern "C" uint32_t
 talos_rt_v1_scheduler_event_triggered(talos_rt_context *context,
-                                        uint64_t stableID) {
+                                      uint64_t stableID) {
   if (!context)
     return 0;
   TALOS_RT_TRY {
@@ -3200,7 +3196,7 @@ talos_rt_v1_scheduler_wait_order_failed(talos_rt_context *context) {
 
 extern "C" uint64_t
 talos_rt_v1_clock_occurrence_consume(talos_rt_context *context,
-                                       uint64_t occurrenceSite) {
+                                     uint64_t occurrenceSite) {
   if (!context || occurrenceSite == 0)
     return 0;
   TALOS_RT_TRY {
@@ -3252,10 +3248,10 @@ talos_rt_v1_clock_occurrence_consume(talos_rt_context *context,
 }
 
 extern "C" uint64_t talos_rt_v1_nochange_update(talos_rt_context *context,
-                                                  uint64_t occurrenceSite,
-                                                  uint64_t occurrenceMask,
-                                                  int64_t startOffset,
-                                                  int64_t endOffset) {
+                                                uint64_t occurrenceSite,
+                                                uint64_t occurrenceMask,
+                                                int64_t startOffset,
+                                                int64_t endOffset) {
   if (!context || occurrenceSite == 0 || (occurrenceMask & ~uint64_t{7}) != 0)
     return 0;
   TALOS_RT_TRY {

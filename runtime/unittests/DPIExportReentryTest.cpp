@@ -68,14 +68,14 @@ TEST(Process, DPIExportReentryPreservesCompactedCallerIdentity) {
         alignof(State *), 0}}};
   const uint32_t continuations[] = {0, 1};
   talos_rt_frame_layout_v1 layout{TALOS_RT_VERSION,
-                                    0,
-                                    sizeof(Frame),
-                                    alignof(Frame),
-                                    fields.data(),
-                                    uint32_t(fields.size()),
-                                    2,
-                                    continuations,
-                                    0};
+                                  0,
+                                  sizeof(Frame),
+                                  alignof(Frame),
+                                  fields.data(),
+                                  uint32_t(fields.size()),
+                                  2,
+                                  continuations,
+                                  0};
   layout.checksum = talos::process::layoutChecksum(layout);
   std::array<talos_rt_process_descriptor_v1, 3> descriptors{};
   for (unsigned i = 0; i != descriptors.size(); ++i)

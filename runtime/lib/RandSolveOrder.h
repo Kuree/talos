@@ -46,8 +46,8 @@ inline bool readPriorityInputs(const uint8_t *program, size_t size,
   uint32_t count = orderRead32(program + offset);
   offset += TALOS_RT_RANDOM_PRIORITY_INPUT_HEADER_SIZE;
   size_t words = (uint64_t(width) + 63) / 64;
-  uint64_t stride = TALOS_RT_RANDOM_PRIORITY_INPUT_RECORD_HEADER_SIZE +
-                    uint64_t(words) * 16;
+  uint64_t stride =
+      TALOS_RT_RANDOM_PRIORITY_INPUT_RECORD_HEADER_SIZE + uint64_t(words) * 16;
   if (count > (size - offset) / stride)
     return false;
   bool sawDynamicMask = false;

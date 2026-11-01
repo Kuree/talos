@@ -11,7 +11,7 @@
 
 namespace talos::runtime {
 
-#define TALOS_RT_RESOURCE(Name, Text)                                        \
+#define TALOS_RT_RESOURCE(Name, Text)                                          \
   struct Name : public ::mlir::SideEffects::Resource::Base<Name> {             \
     ::llvm::StringRef getName() final { return Text; }                         \
   }

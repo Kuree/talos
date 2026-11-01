@@ -54,17 +54,16 @@ ScopedBytecodeFrameRoots::ScopedBytecodeFrameRoots(const Image &image,
   bool hasManaged = false;
   for (uint32_t index = 0; index != frame.function.layoutCount; ++index) {
     uint8_t kind = layoutAt(image, frame.function, index).kind;
-    hasManaged |= kind == TALOS_RT_DBREG_MANAGED ||
-                  kind == TALOS_RT_DBREG_MANAGED_REF ||
-                  kind == TALOS_RT_DBREG_ARGUMENT_REF ||
-                  kind == TALOS_RT_DBREG_STRING;
+    hasManaged |=
+        kind == TALOS_RT_DBREG_MANAGED || kind == TALOS_RT_DBREG_MANAGED_REF ||
+        kind == TALOS_RT_DBREG_ARGUMENT_REF || kind == TALOS_RT_DBREG_STRING;
   }
   if (!hasManaged)
     return;
   lane = talos_rt_v1_gc_current_lane(context);
-  status =
-      lane ? talos_rt_managed_roots_push(lane, &provider, enumerate, &roots)
-           : TALOS_RT_INVALID_LIFECYCLE;
+  status = lane
+               ? talos_rt_managed_roots_push(lane, &provider, enumerate, &roots)
+               : TALOS_RT_INVALID_LIFECYCLE;
   pushed = status == TALOS_RT_OK;
 }
 
@@ -112,8 +111,7 @@ void talos_rt_enumerate_design_managed_roots(
           continue;
         talos_rt_managed_word_v1 word = 0;
         std::memcpy(&word, state.value.data() + root.byteOffset, sizeof(word));
-        word =
-            talos_rt_v1_gc_candidate_root(context, word, root.allowedKinds);
+        word = talos_rt_v1_gc_candidate_root(context, word, root.allowedKinds);
         if (talos_rt_object_v1 *object =
                 talos_rt_object_from_managed_word(word)) {
           visit(visitorEnvironment, &object);
@@ -236,7 +234,7 @@ void talos_rt_enumerate_design_managed_roots(
       const auto *wait =
           reinterpret_cast<const talos_rt_computed_wait_record_v1 *>(record);
       if (!talos_rt_validate_computed_wait_record(context->execution, wait,
-                                                    available))
+                                                  available))
         return;
       const auto *observers =
           talos::process::computedWaitSpan<talos_rt_computed_observer_v1>(
@@ -252,7 +250,7 @@ void talos_rt_enumerate_design_managed_roots(
             observers[observerIndex];
         const talos_rt_observer_descriptor_v1 *descriptor =
             talos::process::findObserverDescriptor(context->execution,
-                                                     observer.code_unit_id);
+                                                   observer.code_unit_id);
         if (!descriptor)
           continue;
         for (uint32_t captureIndex = 0; captureIndex != observer.capture_count;
@@ -264,8 +262,7 @@ void talos_rt_enumerate_design_managed_roots(
                 (capture.payload1 == 1 || capture.payload1 == 2)))
             continue;
           talos_rt_managed_word_v1 word = capture.stable_id;
-          talos_rt_object_v1 *object =
-              talos_rt_object_from_managed_word(word);
+          talos_rt_object_v1 *object = talos_rt_object_from_managed_word(word);
           if (talos_rt_managed_word_from_object(object) != word)
             continue;
           visit(visitorEnvironment, &object);
@@ -280,8 +277,7 @@ void talos_rt_enumerate_design_managed_roots(
         visitComputedWait(process.suspendKind, wait, process.waitSize);
       }
     for (const ScheduledDesignTask &task : context->scheduledDesignTasks) {
-      if (task.terminated ||
-          task.waitSize < sizeof(talos_rt_wait_record_v1) ||
+      if (task.terminated || task.waitSize < sizeof(talos_rt_wait_record_v1) ||
           task.waitOffset > task.scratchOffset ||
           task.waitSize > task.scratchOffset - task.waitOffset)
         continue;
@@ -354,7 +350,7 @@ void talos_rt_enumerate_design_managed_roots(
                 talos_rt_managed_word_v1 word = 0;
                 std::memcpy(&word, address, sizeof(word));
                 word = talos_rt_v1_gc_candidate_root(context, word,
-                                                       instruction.destination);
+                                                     instruction.destination);
                 if (talos_rt_object_v1 *object =
                         talos_rt_object_from_managed_word(word)) {
                   visit(visitorEnvironment, &object);

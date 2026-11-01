@@ -4,10 +4,10 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <cstdlib>
@@ -47,8 +47,8 @@ TEST(GeneratedDesignDatabase, CallArguments) {
   auto off = encodeSimulationDesign(design, offOptions);
   ASSERT_TRUE(mlir::succeeded(off));
   EXPECT_TRUE(off->designDatabase.empty());
-  EXPECT_EQ(off->executionFlags & (TALOS_RT_EXECUTION_VPI_READ |
-                                   TALOS_RT_EXECUTION_VPI_WRITE),
+  EXPECT_EQ(off->executionFlags &
+                (TALOS_RT_EXECUTION_VPI_READ | TALOS_RT_EXECUTION_VPI_WRITE),
             0u);
   const auto &image = encoded->designDatabase;
   HeaderView header(image.data());
@@ -68,8 +68,7 @@ TEST(GeneratedDesignDatabase, CallArguments) {
     HeaderWriter(bytes.data()).setChecksum(hash);
     auto invalid = execution;
     invalid.design_database = bytes.data();
-    EXPECT_EQ(talos_rt_v1_design_validate(&invalid),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&invalid), TALOS_RT_INVALID_DESIGN);
   };
   uint64_t roots = directory.getExpressionRootBindingOffset();
   rejects([&](auto &bytes) {

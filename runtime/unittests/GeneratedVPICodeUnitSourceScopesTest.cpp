@@ -7,10 +7,10 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <cstdlib>
@@ -46,22 +46,22 @@ TEST(GeneratedDesignDatabase, CodeUnitSourceScopes) {
   for (unsigned byte = 0; byte != 8; ++byte)
     checksum |= uint64_t{encoded->bytecode[32 + byte]} << (byte * 8);
   talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                               encoded->executionFlags,
-                                               0,
-                                               encoded->bytecode.data(),
-                                               encoded->bytecode.size(),
-                                               encoded->designDatabase.data(),
-                                               encoded->designDatabase.size(),
-                                               encoded->stateBitCount,
-                                               checksum,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0};
+                                             encoded->executionFlags,
+                                             0,
+                                             encoded->bytecode.data(),
+                                             encoded->bytecode.size(),
+                                             encoded->designDatabase.data(),
+                                             encoded->designDatabase.size(),
+                                             encoded->stateBitCount,
+                                             checksum,
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
   ASSERT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_OK);
   talos_rt_context *runtime = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &runtime),
@@ -83,7 +83,7 @@ TEST(GeneratedDesignDatabase, CodeUnitSourceScopes) {
   for (unsigned index = 0; index != 2; ++index) {
     uint64_t owner = 0;
     ASSERT_EQ(talos_rt_cached_vpi_code_unit_scope(runtime, 45 + index,
-                                                    &scopes[index], &owner),
+                                                  &scopes[index], &owner),
               TALOS_RT_OK);
     EXPECT_EQ(owner, 45u + index);
     uint32_t kind = 0;
@@ -92,8 +92,8 @@ TEST(GeneratedDesignDatabase, CodeUnitSourceScopes) {
     EXPECT_EQ(kind, index ? vpiTask : vpiFunction);
     talos_rt_design_cursor_v1 origin{};
     bool statement = true;
-    ASSERT_EQ(talos_rt_cached_vpi_frame_origin(runtime, 0, 45 + index,
-                                                 &origin, &statement),
+    ASSERT_EQ(talos_rt_cached_vpi_frame_origin(runtime, 0, 45 + index, &origin,
+                                               &statement),
               TALOS_RT_OK);
     EXPECT_FALSE(statement);
     EXPECT_EQ(origin.offset, scopes[index].offset);
@@ -105,14 +105,12 @@ TEST(GeneratedDesignDatabase, CodeUnitSourceScopes) {
   EXPECT_EQ(talos_rt_cached_vpi_call_target(runtime, 21, 48), TALOS_RT_EOF);
   talos_rt_design_cursor_v1 ordinary{};
   uint64_t owner = 0;
-  ASSERT_EQ(
-      talos_rt_cached_vpi_code_unit_scope(runtime, 47, &ordinary, &owner),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_cached_vpi_code_unit_scope(runtime, 47, &ordinary, &owner),
+            TALOS_RT_OK);
   EXPECT_EQ(owner, 47u);
   EXPECT_NE(ordinary.offset, scopes[0].offset);
-  EXPECT_EQ(
-      talos_rt_cached_vpi_code_unit_scope(runtime, 48, &ordinary, &owner),
-      TALOS_RT_EOF);
+  EXPECT_EQ(talos_rt_cached_vpi_code_unit_scope(runtime, 48, &ordinary, &owner),
+            TALOS_RT_EOF);
   EXPECT_EQ(ordinary.offset, 0u);
   EXPECT_EQ(owner, 0u);
   EXPECT_EQ(talos_rt_cached_vpi_code_unit_scope(runtime, 45, nullptr, &owner),
@@ -174,8 +172,7 @@ TEST(GeneratedDesignDatabase, CodeUnitSourceScopes) {
     HeaderWriter(bytes.data()).setChecksum(imageChecksum(bytes));
     auto corrupt = execution;
     corrupt.design_database = bytes.data();
-    EXPECT_EQ(talos_rt_v1_design_validate(&corrupt),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&corrupt), TALOS_RT_INVALID_DESIGN);
   };
   for (uint64_t id :
        {uint64_t{0}, UINT64_C(1) << 63, uint64_t{44}, uint64_t{999}}) {

@@ -735,7 +735,8 @@ verifyExecutableSubtree(Operation *root, ModuleOp module,
             if (auto endpoint =
                     dyn_cast<sim::VPIObjectRefAttr>(named.getValue()))
               contextualMemberReference =
-                  endpoint.getKind() == sim::VPIObjectRefKind::DefinitionMember &&
+                  endpoint.getKind() ==
+                      sim::VPIObjectRefKind::DefinitionMember &&
                   endpoint.getSymbol() == reference;
         if (auto binding =
                 dyn_cast<sim::SimVPIDefinitionMemberInstanceBindingOp>(op))
@@ -1135,8 +1136,8 @@ static void buildTalosToSimulationPipelineImpl(
     if (optLevel >= 3) {
       PlanCombinationalStatementsPassOptions statementOptions;
       statementOptions.componentSections = true;
-      designManager.addPass(createPlanCombinationalStatementsPass(
-          std::move(statementOptions)));
+      designManager.addPass(
+          createPlanCombinationalStatementsPass(std::move(statementOptions)));
       TalosSimMaterializeComputeFusionPassOptions materializeOptions;
       materializeOptions.materializeEvalBodies = false;
       designManager.addPass(createTalosSimMaterializeComputeFusionPass(
@@ -1198,14 +1199,14 @@ static void buildTalosToSimulationPipelineImpl(
 }
 
 void buildTalosToSimulationPipeline(OpPassManager &manager, uint32_t workers,
-                                      StringRef vpiMode, uint32_t optLevel,
-                                      StringRef staticSpecialization,
-                                      bool earlySymbolDCE,
-                                      StringRef clockedKernels,
-                                      StringRef forwardCopies) {
+                                    StringRef vpiMode, uint32_t optLevel,
+                                    StringRef staticSpecialization,
+                                    bool earlySymbolDCE,
+                                    StringRef clockedKernels,
+                                    StringRef forwardCopies) {
   buildTalosToSimulationPipelineImpl(manager, workers, vpiMode, optLevel,
-                                       staticSpecialization, earlySymbolDCE,
-                                       clockedKernels, false, forwardCopies);
+                                     staticSpecialization, earlySymbolDCE,
+                                     clockedKernels, false, forwardCopies);
 }
 
 void buildTalosToSimulationPipeline(OpPassManager &manager) {
@@ -1213,14 +1214,14 @@ void buildTalosToSimulationPipeline(OpPassManager &manager) {
 }
 
 void buildTalosToSimulationPipeline(OpPassManager &manager, uint32_t workers,
-                                      StringRef vpiMode) {
+                                    StringRef vpiMode) {
   buildTalosToSimulationPipeline(manager, workers, vpiMode, 3, "auto", true);
 }
 
 void buildTalosToSimulationPipeline(OpPassManager &manager, uint32_t workers,
-                                      StringRef vpiMode, uint32_t optLevel) {
+                                    StringRef vpiMode, uint32_t optLevel) {
   buildTalosToSimulationPipeline(manager, workers, vpiMode, optLevel, "auto",
-                                   true);
+                                 true);
 }
 
 void registerTalosToSimulationPipeline() {

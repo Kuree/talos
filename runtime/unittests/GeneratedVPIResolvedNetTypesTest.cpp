@@ -25,8 +25,8 @@ public:
       return;
     EXPECT_EQ(talos_rt_v1_design_validate(initialDescriptor.execution),
               TALOS_RT_OK);
-    EXPECT_EQ(talos_rt_v1_context_create_for_design(
-                  initialDescriptor.execution, &context),
+    EXPECT_EQ(talos_rt_v1_context_create_for_design(initialDescriptor.execution,
+                                                    &context),
               TALOS_RT_OK);
     if (!context)
       return;
@@ -67,8 +67,8 @@ TEST(GeneratedVPIResolvedNetTypes,
   ASSERT_NE(fixture.context, nullptr);
   constexpr std::array<PLI_INT32, 4> types{vpiWand, vpiTriAnd, vpiWor,
                                            vpiTriOr};
-  constexpr std::array<const char *, 4> names{"vpiWand", "vpiTriAnd",
-                                               "vpiWor", "vpiTriOr"};
+  constexpr std::array<const char *, 4> names{"vpiWand", "vpiTriAnd", "vpiWor",
+                                              "vpiTriOr"};
   for (const char *netName : {"top.sink", "top.sink_reverse"}) {
     vpiHandle net = fixture.byName(netName);
     ASSERT_NE(net, nullptr);
@@ -109,8 +109,8 @@ TEST(GeneratedVPIResolvedNetTypes,
   expectResolved(interconnect, vpiWand, "vpiWand");
   EXPECT_EQ(vpi_release_handle(interconnect), 1);
 
-  for (const char *name : {"top.mixed", "top.cycle_a", "top.cycle_b",
-                           "top.cycle_c"}) {
+  for (const char *name :
+       {"top.mixed", "top.cycle_a", "top.cycle_b", "top.cycle_c"}) {
     vpiHandle net = fixture.byName(name);
     expectUnavailable(net);
     EXPECT_EQ(vpi_release_handle(net), 1);

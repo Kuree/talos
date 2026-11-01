@@ -18,8 +18,7 @@ namespace {
 namespace sim = ::talos::sim;
 
 class TalosSimInsertGCPollsPass final
-    : public impl::TalosSimInsertGCPollsPassBase<
-          TalosSimInsertGCPollsPass> {
+    : public impl::TalosSimInsertGCPollsPassBase<TalosSimInsertGCPollsPass> {
 public:
   void runOnOperation() override {
     ModuleOp module = getOperation();

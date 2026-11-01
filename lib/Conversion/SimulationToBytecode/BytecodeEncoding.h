@@ -15,8 +15,7 @@ namespace talos::bytecode {
 
 constexpr uint32_t kInvalidRegister = UINT32_MAX;
 
-constexpr uint32_t kIntrinsicStringOutputFormat =
-    TALOS_RT_INTRINSIC_V1_FORMAT;
+constexpr uint32_t kIntrinsicStringOutputFormat = TALOS_RT_INTRINSIC_V1_FORMAT;
 constexpr uint32_t kIntrinsicDisplay = TALOS_RT_INTRINSIC_V1_DISPLAY;
 constexpr uint32_t kIntrinsicFinish = TALOS_RT_INTRINSIC_V1_FINISH;
 constexpr uint32_t kIntrinsicProgramExit = TALOS_RT_INTRINSIC_V1_PROGRAM_EXIT;
@@ -25,8 +24,7 @@ constexpr uint32_t kIntrinsicFatal = TALOS_RT_INTRINSIC_V1_FATAL;
 constexpr uint32_t kIntrinsicError = TALOS_RT_INTRINSIC_V1_ERROR;
 constexpr uint32_t kIntrinsicTerminationRequested =
     TALOS_RT_INTRINSIC_V1_TERMINATION_REQUESTED;
-constexpr uint32_t kIntrinsicProgramOwned =
-    TALOS_RT_INTRINSIC_V1_PROGRAM_OWNED;
+constexpr uint32_t kIntrinsicProgramOwned = TALOS_RT_INTRINSIC_V1_PROGRAM_OWNED;
 constexpr uint32_t kIntrinsicTimeNow = TALOS_RT_INTRINSIC_V1_TIME_NOW;
 constexpr uint32_t kIntrinsicSampledRead = TALOS_RT_INTRINSIC_V1_SAMPLED_READ;
 constexpr uint32_t kIntrinsicSampledHistory =
@@ -44,8 +42,7 @@ constexpr uint32_t kIntrinsicRealToInteger =
     TALOS_RT_INTRINSIC_V1_REAL_TO_INTEGER;
 constexpr uint32_t kIntrinsicCountBits = TALOS_RT_INTRINSIC_V1_COUNT_BITS;
 constexpr uint32_t kIntrinsicClog2 = TALOS_RT_INTRINSIC_V1_CLOG2;
-constexpr uint32_t kIntrinsicFileOpenMCD =
-    TALOS_RT_INTRINSIC_V1_FILE_OPEN_MCD;
+constexpr uint32_t kIntrinsicFileOpenMCD = TALOS_RT_INTRINSIC_V1_FILE_OPEN_MCD;
 constexpr uint32_t kIntrinsicFileOpen = TALOS_RT_INTRINSIC_V1_FILE_OPEN;
 constexpr uint32_t kIntrinsicFileOpenStringMCD =
     TALOS_RT_INTRINSIC_V1_FILE_OPEN_STRING_MCD;
@@ -67,8 +64,7 @@ constexpr uint32_t kIntrinsicTimeFormat = TALOS_RT_INTRINSIC_V1_TIME_FORMAT;
 constexpr uint32_t kIntrinsicTimeScanScale =
     TALOS_RT_INTRINSIC_V1_TIME_SCAN_SCALE;
 constexpr uint32_t kIntrinsicPlusargTest = TALOS_RT_INTRINSIC_V1_PLUSARG_TEST;
-constexpr uint32_t kIntrinsicPlusargValue =
-    TALOS_RT_INTRINSIC_V1_PLUSARG_VALUE;
+constexpr uint32_t kIntrinsicPlusargValue = TALOS_RT_INTRINSIC_V1_PLUSARG_VALUE;
 constexpr uint32_t kIntrinsicPlusargScan = TALOS_RT_INTRINSIC_V1_PLUSARG_SCAN;
 constexpr uint32_t kIntrinsicPlusargParseLogic =
     TALOS_RT_INTRINSIC_V1_PLUSARG_PARSE_LOGIC;
@@ -110,8 +106,7 @@ constexpr uint32_t kIntrinsicInertialPathDriver =
     TALOS_RT_INTRINSIC_V1_INERTIAL_PATH_DRIVER;
 constexpr uint32_t kIntrinsicInertialPathStorage =
     TALOS_RT_INTRINSIC_V1_INERTIAL_PATH_STORAGE;
-constexpr uint32_t kIntrinsicEventTrigger =
-    TALOS_RT_INTRINSIC_V1_EVENT_TRIGGER;
+constexpr uint32_t kIntrinsicEventTrigger = TALOS_RT_INTRINSIC_V1_EVENT_TRIGGER;
 constexpr uint32_t kIntrinsicEventReplaceAfter =
     TALOS_RT_INTRINSIC_V1_EVENT_REPLACE_AFTER;
 constexpr uint32_t kIntrinsicEventTriggered =
@@ -139,19 +134,16 @@ constexpr uint32_t kIntrinsicStateAllocTyped =
     TALOS_RT_INTRINSIC_V1_STATE_ALLOC_TYPED;
 constexpr uint32_t kIntrinsicDisableChildren =
     TALOS_RT_INTRINSIC_V1_DISABLE_CHILDREN;
-constexpr uint32_t kIntrinsicControlEnter =
-    TALOS_RT_INTRINSIC_V1_CONTROL_ENTER;
+constexpr uint32_t kIntrinsicControlEnter = TALOS_RT_INTRINSIC_V1_CONTROL_ENTER;
 constexpr uint32_t kIntrinsicControlBoundary =
     TALOS_RT_INTRINSIC_V1_CONTROL_BOUNDARY;
-constexpr uint32_t kIntrinsicControlLeave =
-    TALOS_RT_INTRINSIC_V1_CONTROL_LEAVE;
+constexpr uint32_t kIntrinsicControlLeave = TALOS_RT_INTRINSIC_V1_CONTROL_LEAVE;
 constexpr uint32_t kIntrinsicControlDisable =
     TALOS_RT_INTRINSIC_V1_CONTROL_DISABLE;
 constexpr uint32_t kIntrinsicControlEscapePending =
     TALOS_RT_INTRINSIC_V1_CONTROL_ESCAPE_PENDING;
 constexpr uint32_t kIntrinsicStaticOnce = TALOS_RT_INTRINSIC_V1_STATIC_ONCE;
-constexpr uint32_t kIntrinsicDeferredOnce =
-    TALOS_RT_INTRINSIC_V1_DEFERRED_ONCE;
+constexpr uint32_t kIntrinsicDeferredOnce = TALOS_RT_INTRINSIC_V1_DEFERRED_ONCE;
 constexpr uint32_t kIntrinsicDeferredEnqueue =
     TALOS_RT_INTRINSIC_V1_DEFERRED_ENQUEUE;
 constexpr uint32_t kIntrinsicDeferredMature =
@@ -192,11 +184,9 @@ constexpr uint32_t kIntrinsicClassIsInstance =
 constexpr uint32_t kIntrinsicClassCast = TALOS_RT_INTRINSIC_V1_CLASS_CAST;
 constexpr uint32_t kIntrinsicClassFieldRef =
     TALOS_RT_INTRINSIC_V1_CLASS_FIELD_REF;
-constexpr uint32_t kIntrinsicManagedWatch =
-    TALOS_RT_INTRINSIC_V1_MANAGED_WATCH;
+constexpr uint32_t kIntrinsicManagedWatch = TALOS_RT_INTRINSIC_V1_MANAGED_WATCH;
 constexpr uint32_t kIntrinsicManagedLoad = TALOS_RT_INTRINSIC_V1_MANAGED_LOAD;
-constexpr uint32_t kIntrinsicManagedStore =
-    TALOS_RT_INTRINSIC_V1_MANAGED_STORE;
+constexpr uint32_t kIntrinsicManagedStore = TALOS_RT_INTRINSIC_V1_MANAGED_STORE;
 constexpr uint32_t kIntrinsicManagedOverride =
     TALOS_RT_INTRINSIC_V1_MANAGED_OVERRIDE;
 constexpr uint32_t kIntrinsicManagedReleaseOverride =
@@ -305,8 +295,7 @@ constexpr uint32_t kIntrinsicAggregateImportBitstream =
     TALOS_RT_INTRINSIC_V1_AGGREGATE_IMPORT_BITSTREAM;
 constexpr uint32_t kIntrinsicVPIFrameBind =
     TALOS_RT_INTRINSIC_V1_VPI_FRAME_BIND;
-constexpr uint32_t kIntrinsicBoxBindType =
-    TALOS_RT_INTRINSIC_V1_BOX_BIND_TYPE;
+constexpr uint32_t kIntrinsicBoxBindType = TALOS_RT_INTRINSIC_V1_BOX_BIND_TYPE;
 constexpr uint32_t kIntrinsicBoxIsType = TALOS_RT_INTRINSIC_V1_BOX_IS_TYPE;
 constexpr uint32_t kIntrinsicArgumentRefFromPath =
     TALOS_RT_INTRINSIC_V1_ARGUMENT_REF_FROM_PATH;
@@ -316,16 +305,12 @@ constexpr uint32_t kIntrinsicStringFromPacked =
     TALOS_RT_INTRINSIC_V1_STRING_FROM_PACKED;
 constexpr uint32_t kIntrinsicStringToPacked =
     TALOS_RT_INTRINSIC_V1_STRING_TO_PACKED;
-constexpr uint32_t kIntrinsicStringConcat =
-    TALOS_RT_INTRINSIC_V1_STRING_CONCAT;
-constexpr uint32_t kIntrinsicStringRepeat =
-    TALOS_RT_INTRINSIC_V1_STRING_REPEAT;
-constexpr uint32_t kIntrinsicStringLength =
-    TALOS_RT_INTRINSIC_V1_STRING_LENGTH;
+constexpr uint32_t kIntrinsicStringConcat = TALOS_RT_INTRINSIC_V1_STRING_CONCAT;
+constexpr uint32_t kIntrinsicStringRepeat = TALOS_RT_INTRINSIC_V1_STRING_REPEAT;
+constexpr uint32_t kIntrinsicStringLength = TALOS_RT_INTRINSIC_V1_STRING_LENGTH;
 constexpr uint32_t kIntrinsicStringGetc = TALOS_RT_INTRINSIC_V1_STRING_GETC;
 constexpr uint32_t kIntrinsicStringPutc = TALOS_RT_INTRINSIC_V1_STRING_PUTC;
-constexpr uint32_t kIntrinsicStringSubstr =
-    TALOS_RT_INTRINSIC_V1_STRING_SUBSTR;
+constexpr uint32_t kIntrinsicStringSubstr = TALOS_RT_INTRINSIC_V1_STRING_SUBSTR;
 constexpr uint32_t kIntrinsicStringCompare =
     TALOS_RT_INTRINSIC_V1_STRING_COMPARE;
 constexpr uint32_t kIntrinsicStringCaseConvert =
@@ -336,8 +321,7 @@ constexpr uint32_t kIntrinsicStringScanDynamic =
     TALOS_RT_INTRINSIC_V1_STRING_SCAN_DYNAMIC;
 constexpr uint32_t kIntrinsicStringScanRaw =
     TALOS_RT_INTRINSIC_V1_STRING_SCAN_RAW;
-constexpr uint32_t kIntrinsicFileScanRaw =
-    TALOS_RT_INTRINSIC_V1_FILE_SCAN_RAW;
+constexpr uint32_t kIntrinsicFileScanRaw = TALOS_RT_INTRINSIC_V1_FILE_SCAN_RAW;
 constexpr uint32_t kIntrinsicStringParseInteger =
     TALOS_RT_INTRINSIC_V1_STRING_PARSE_INTEGER;
 constexpr uint32_t kIntrinsicStringParseLogic =
@@ -390,8 +374,7 @@ constexpr uint32_t kIntrinsicRandomInitializationEnter =
     TALOS_RT_INTRINSIC_V1_RANDOM_INITIALIZATION_ENTER;
 constexpr uint32_t kIntrinsicRandomInitializationLeave =
     TALOS_RT_INTRINSIC_V1_RANDOM_INITIALIZATION_LEAVE;
-constexpr uint32_t kIntrinsicLegacyRandom =
-    TALOS_RT_INTRINSIC_V1_RANDOM_LEGACY;
+constexpr uint32_t kIntrinsicLegacyRandom = TALOS_RT_INTRINSIC_V1_RANDOM_LEGACY;
 constexpr uint32_t kIntrinsicRandomSeed = TALOS_RT_INTRINSIC_V1_RANDOM_SEED;
 constexpr uint32_t kIntrinsicRandomGetState =
     TALOS_RT_INTRINSIC_V1_RANDOM_GET_STATE;
@@ -410,8 +393,7 @@ constexpr uint32_t kIntrinsicMailboxTryGet =
     TALOS_RT_INTRINSIC_V1_MAILBOX_TRY_GET;
 constexpr uint32_t kIntrinsicSemaphoreCreate =
     TALOS_RT_INTRINSIC_V1_SEMAPHORE_CREATE;
-constexpr uint32_t kIntrinsicSemaphorePut =
-    TALOS_RT_INTRINSIC_V1_SEMAPHORE_PUT;
+constexpr uint32_t kIntrinsicSemaphorePut = TALOS_RT_INTRINSIC_V1_SEMAPHORE_PUT;
 constexpr uint32_t kIntrinsicSemaphoreTryGet =
     TALOS_RT_INTRINSIC_V1_SEMAPHORE_TRY_GET;
 constexpr uint32_t kIntrinsicEventCreate = TALOS_RT_INTRINSIC_V1_EVENT_CREATE;
@@ -420,8 +402,7 @@ constexpr uint32_t kIntrinsicAssocRead = TALOS_RT_INTRINSIC_V1_ASSOC_READ;
 constexpr uint32_t kIntrinsicAssocWrite = TALOS_RT_INTRINSIC_V1_ASSOC_WRITE;
 constexpr uint32_t kIntrinsicAssocExists = TALOS_RT_INTRINSIC_V1_ASSOC_EXISTS;
 constexpr uint32_t kIntrinsicAssocDelete = TALOS_RT_INTRINSIC_V1_ASSOC_DELETE;
-constexpr uint32_t kIntrinsicAssocDefault =
-    TALOS_RT_INTRINSIC_V1_ASSOC_DEFAULT;
+constexpr uint32_t kIntrinsicAssocDefault = TALOS_RT_INTRINSIC_V1_ASSOC_DEFAULT;
 constexpr uint32_t kIntrinsicAssocTraverse =
     TALOS_RT_INTRINSIC_V1_ASSOC_TRAVERSE;
 constexpr uint32_t kIntrinsicReferencePathAssoc =

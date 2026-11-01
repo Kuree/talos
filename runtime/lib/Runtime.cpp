@@ -65,8 +65,7 @@ bool validActivationInventory(
     if (hasNative != (activation.native_entry != nullptr))
       return false;
     if (hasNative &&
-        (activation.native_entry->handle.kind !=
-             TALOS_RT_DESCRIPTOR_PROCESS ||
+        (activation.native_entry->handle.kind != TALOS_RT_DESCRIPTOR_PROCESS ||
          activation.native_entry->handle.id != activation.code_unit_id ||
          activation.native_entry->version != TALOS_RT_VERSION ||
          activation.native_entry->execution != &execution))
@@ -85,8 +84,7 @@ bool validActivationInventory(
   return true;
 }
 
-bool validObserverInventory(
-    const talos_rt_execution_descriptor_v1 &execution) {
+bool validObserverInventory(const talos_rt_execution_descriptor_v1 &execution) {
   if ((execution.observer_count == 0) != (execution.observers == nullptr))
     return false;
   uint64_t previousID = 0;
@@ -101,12 +99,12 @@ bool validObserverInventory(
            TALOS_RT_OBSERVER_REAL64)) != 0 ||
         ((observer.flags & TALOS_RT_OBSERVER_REAL32) != 0 &&
          (observer.result_width != 32 ||
-          (observer.flags & (TALOS_RT_OBSERVER_FOUR_STATE |
-                             TALOS_RT_OBSERVER_REAL64)) != 0)) ||
+          (observer.flags &
+           (TALOS_RT_OBSERVER_FOUR_STATE | TALOS_RT_OBSERVER_REAL64)) != 0)) ||
         ((observer.flags & TALOS_RT_OBSERVER_REAL64) != 0 &&
          (observer.result_width != 64 ||
-          (observer.flags & (TALOS_RT_OBSERVER_FOUR_STATE |
-                             TALOS_RT_OBSERVER_REAL32)) != 0)) ||
+          (observer.flags &
+           (TALOS_RT_OBSERVER_FOUR_STATE | TALOS_RT_OBSERVER_REAL32)) != 0)) ||
         observer.reserved != 0 ||
         (observer.capture_count == 0) != (observer.capture_abi == nullptr))
       return false;
@@ -115,8 +113,7 @@ bool validObserverInventory(
       const talos_rt_observer_capture_abi_v1 &abi =
           observer.capture_abi[capture];
       if (abi.kind < TALOS_RT_OBSERVER_CAPTURE_STORAGE ||
-          abi.kind > TALOS_RT_OBSERVER_CAPTURE_ARGUMENT_REF ||
-          abi.width == 0 ||
+          abi.kind > TALOS_RT_OBSERVER_CAPTURE_ARGUMENT_REF || abi.width == 0 ||
           (abi.kind == TALOS_RT_OBSERVER_CAPTURE_EVENT && abi.width != 1) ||
           ((abi.kind == TALOS_RT_OBSERVER_CAPTURE_MANAGED ||
             abi.kind == TALOS_RT_OBSERVER_CAPTURE_COVERGROUP) &&
@@ -125,8 +122,7 @@ bool validObserverInventory(
     }
     bool hasBytecode =
         observer.bytecode_function != TALOS_RT_OBSERVER_NO_BYTECODE;
-    if (hasBytecode &&
-        (execution.flags & TALOS_RT_EXECUTION_HAS_BYTECODE) == 0)
+    if (hasBytecode && (execution.flags & TALOS_RT_EXECUTION_HAS_BYTECODE) == 0)
       return false;
     if (!observer.native_evaluator && !hasBytecode)
       return false;
@@ -148,8 +144,7 @@ executionExtension(const talos_rt_execution_descriptor_v1 &execution) {
 
 bool validExecutionExtension(
     const talos_rt_execution_descriptor_v1 &execution) {
-  bool sampled =
-      (execution.flags & TALOS_RT_EXECUTION_PREPONED_SNAPSHOT) != 0;
+  bool sampled = (execution.flags & TALOS_RT_EXECUTION_PREPONED_SNAPSHOT) != 0;
   bool exported = (execution.flags & TALOS_RT_EXECUTION_DPI_EXPORTS) != 0;
   bool classBitstream =
       (execution.flags & TALOS_RT_EXECUTION_CLASS_BITSTREAM) != 0;
@@ -165,8 +160,8 @@ bool validExecutionExtension(
     return false;
   if (coverage) {
     if (!extension->coverage_schema ||
-        extension->coverage_schema_size < talos::coverage::HeaderSize +
-                                              talos::coverage::ChecksumSize ||
+        extension->coverage_schema_size <
+            talos::coverage::HeaderSize + talos::coverage::ChecksumSize ||
         extension->coverage_schema_size > SIZE_MAX)
       return false;
     if (std::memcmp(extension->coverage_schema, talos::coverage::Magic,
@@ -233,7 +228,7 @@ void seedContextUnlocked(talos_rt_context *context, uint64_t seed) {
   if (context->initializationRandomScopes)
     for (auto &[scope, state] : context->initializationRandomScopes->streams)
       talos_rt_v1_random_state_seed(&state, seed,
-                                      TALOS_RT_RANDOM_DEFAULT_INCREMENT >> 1);
+                                    TALOS_RT_RANDOM_DEFAULT_INCREMENT >> 1);
   for (RootStream root : roots)
     talos_rt_random_split_initialization_unlocked(
         context, root.initializationScope, *root.state);
@@ -294,8 +289,7 @@ talos_rt_context::talos_rt_context() {
   talos_rt_random_seed_context_unlocked(this, 1);
 }
 
-void talos_rt_report_signal_diagnostics_unlocked(
-    talos_rt_context *context) {
+void talos_rt_report_signal_diagnostics_unlocked(talos_rt_context *context) {
   if (!context || !context->signalDiagnosticsReport)
     return;
   std::fprintf(
@@ -402,16 +396,15 @@ talos_rt_context::~talos_rt_context() {
       std::strcmp(diagnostics, "0") != 0) {
     talos_rt_gc_statistics_v1 statistics{};
     talos_rt_v1_gc_statistics(this, &statistics);
-    std::fprintf(
-        stderr,
-        "talos-gc-diagnostics collections=%llu designated=%llu "
-        "allocated_objects=%llu reclaimed_objects=%llu polled=%d\n",
-        static_cast<unsigned long long>(statistics.collection_count),
-        static_cast<unsigned long long>(
-            talos_rt_managed_heap_designated_collections(managedHeap)),
-        static_cast<unsigned long long>(statistics.allocated_objects),
-        static_cast<unsigned long long>(statistics.reclaimed_objects),
-        talos_rt_managed_heap_collections_polled(managedHeap) ? 1 : 0);
+    std::fprintf(stderr,
+                 "talos-gc-diagnostics collections=%llu designated=%llu "
+                 "allocated_objects=%llu reclaimed_objects=%llu polled=%d\n",
+                 static_cast<unsigned long long>(statistics.collection_count),
+                 static_cast<unsigned long long>(
+                     talos_rt_managed_heap_designated_collections(managedHeap)),
+                 static_cast<unsigned long long>(statistics.allocated_objects),
+                 static_cast<unsigned long long>(statistics.reclaimed_objects),
+                 talos_rt_managed_heap_collections_polled(managedHeap) ? 1 : 0);
   }
   talos_rt_managed_heap_destroy(managedHeap);
 }
@@ -429,11 +422,11 @@ void destroyContextNow(talos_rt_context *context) noexcept {
     {
       std::lock_guard<std::recursive_mutex> lock(context->mutex);
       for (ScheduledProcess &scheduled : context->scheduledProcesses)
-        talos_rt_unregister_signal_wait_unlocked(
-            context, scheduled.signalSubscriptions);
+        talos_rt_unregister_signal_wait_unlocked(context,
+                                                 scheduled.signalSubscriptions);
       for (ScheduledDesignTask &task : context->scheduledDesignTasks)
         talos_rt_unregister_signal_wait_unlocked(context,
-                                                   task.signalSubscriptions);
+                                                 task.signalSubscriptions);
       processes.swap(context->scheduledProcesses);
       context->scheduledProcessTokens.clear();
     }
@@ -530,22 +523,22 @@ void setLastError(talos_rt_context *context, std::string message) {
   TALOS_RT_CATCH_ALL {}
 }
 
-void talos_rt_retain_controls_unlocked(
-    talos_rt_context *context, const std::vector<uint64_t> &controls) {
+void talos_rt_retain_controls_unlocked(talos_rt_context *context,
+                                       const std::vector<uint64_t> &controls) {
   for (uint64_t token : controls)
     if (auto found = context->controlActivations.find(token);
         found != context->controlActivations.end())
       ++found->second.memberships;
 }
 
-void talos_rt_release_controls_unlocked(
-    talos_rt_context *context, const std::vector<uint64_t> &controls) {
+void talos_rt_release_controls_unlocked(talos_rt_context *context,
+                                        const std::vector<uint64_t> &controls) {
   for (uint64_t token : controls)
     talos_rt_release_control_unlocked(context, token);
 }
 
 void talos_rt_release_control_unlocked(talos_rt_context *context,
-                                         uint64_t token) {
+                                       uint64_t token) {
   auto found = context->controlActivations.find(token);
   if (found == context->controlActivations.end())
     return;
@@ -555,9 +548,9 @@ void talos_rt_release_control_unlocked(talos_rt_context *context,
     context->controlActivations.erase(found);
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_control_enter(talos_rt_context *context, uint64_t targetID,
-                            uint64_t *outActivation) {
+extern "C" talos_rt_status talos_rt_v1_control_enter(talos_rt_context *context,
+                                                     uint64_t targetID,
+                                                     uint64_t *outActivation) {
   if (!context || targetID == 0 || !outActivation)
     return TALOS_RT_INVALID_ARGUMENT;
   *outActivation = 0;
@@ -590,7 +583,7 @@ talos_rt_v1_control_enter(talos_rt_context *context, uint64_t targetID,
 
 extern "C" talos_rt_status
 talos_rt_v1_control_boundary(talos_rt_context *context, uint64_t activation,
-                               uint32_t continuation) {
+                             uint32_t continuation) {
   if (!context || activation == 0 || continuation == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
@@ -608,8 +601,8 @@ talos_rt_v1_control_boundary(talos_rt_context *context, uint64_t activation,
   });
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_control_leave(talos_rt_context *context, uint64_t activation) {
+extern "C" talos_rt_status talos_rt_v1_control_leave(talos_rt_context *context,
+                                                     uint64_t activation) {
   if (!context || activation == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
@@ -640,7 +633,7 @@ talos_rt_v1_control_escape_pending(talos_rt_context *context) {
 }
 
 extern "C" uint32_t talos_rt_v1_static_once(talos_rt_context *context,
-                                              uint64_t siteID) {
+                                            uint64_t siteID) {
   if (!context || siteID == 0)
     return 0;
   TALOS_RT_TRY {
@@ -655,7 +648,7 @@ extern "C" uint32_t talos_rt_v1_static_once(talos_rt_context *context,
 }
 
 extern "C" uint32_t talos_rt_v1_deferred_once(talos_rt_context *context,
-                                                uint64_t siteID) {
+                                              uint64_t siteID) {
   if (!context || siteID == 0)
     return 0;
   TALOS_RT_TRY {
@@ -724,8 +717,7 @@ void talos_rt_flush_deferred_immediate_reports_unlocked(
 }
 
 bool talos_rt_cancel_deferred_immediate_assertion_unlocked(
-    talos_rt_context *context, uint64_t assertionID,
-    uint64_t logicalProcess) {
+    talos_rt_context *context, uint64_t assertionID, uint64_t logicalProcess) {
   if (!context || assertionID == 0)
     return false;
   resetDeferredImmediateReportsForTime(context);
@@ -772,7 +764,7 @@ constexpr uint8_t kAssertionFailDisabled = UINT8_C(1) << 4;
 
 extern "C" talos_rt_status
 talos_rt_v1_assertion_control(talos_rt_context *context, uint32_t action,
-                                uint64_t assertionID) {
+                              uint64_t assertionID) {
   if (!context || assertionID == 0 || action < 1 || action > 11)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
@@ -831,7 +823,7 @@ talos_rt_v1_assertion_control(talos_rt_context *context, uint32_t action,
     if (killApplied) {
       ++context->assertionKillEpochs[assertionID];
       talos_rt_cancel_deferred_immediate_assertion_unlocked(context,
-                                                              assertionID);
+                                                            assertionID);
     }
     return TALOS_RT_OK;
   }
@@ -842,7 +834,7 @@ talos_rt_v1_assertion_control(talos_rt_context *context, uint32_t action,
 }
 
 extern "C" uint32_t talos_rt_v1_assertion_enabled(talos_rt_context *context,
-                                                    uint64_t assertionID) {
+                                                  uint64_t assertionID) {
   if (!context || assertionID == 0)
     return 0;
   TALOS_RT_TRY {
@@ -861,7 +853,7 @@ extern "C" uint32_t talos_rt_v1_assertion_enabled(talos_rt_context *context,
 
 extern "C" uint32_t
 talos_rt_v1_assertion_action_state(talos_rt_context *context,
-                                     uint64_t assertionID) {
+                                   uint64_t assertionID) {
   if (!context || assertionID == 0)
     return 0;
   TALOS_RT_TRY {
@@ -884,9 +876,8 @@ talos_rt_v1_assertion_action_state(talos_rt_context *context,
   }
 }
 
-extern "C" uint64_t
-talos_rt_v1_assertion_kill_epoch(talos_rt_context *context,
-                                   uint64_t assertionID) {
+extern "C" uint64_t talos_rt_v1_assertion_kill_epoch(talos_rt_context *context,
+                                                     uint64_t assertionID) {
   if (!context || assertionID == 0)
     return 0;
   TALOS_RT_TRY {
@@ -918,8 +909,8 @@ extern "C" uint64_t talos_rt_v1_deferred_enqueue_for_assertion(
     if (logicalProcess == 0)
       ++context->generatedDeferredReports;
     context->deferredImmediateReports.emplace(
-        ticket, talos_rt_context::DeferredImmediateReport{logicalProcess,
-                                                            assertionID});
+        ticket,
+        talos_rt_context::DeferredImmediateReport{logicalProcess, assertionID});
     context->deferredImmediateProcessReports[logicalProcess].insert(ticket);
     if (assertionID != 0)
       context->deferredImmediateAssertionReports[assertionID].insert(ticket);
@@ -933,12 +924,12 @@ extern "C" uint64_t talos_rt_v1_deferred_enqueue_for_assertion(
 }
 
 extern "C" uint64_t talos_rt_v1_deferred_enqueue(talos_rt_context *context,
-                                                   uint64_t siteID) {
+                                                 uint64_t siteID) {
   return talos_rt_v1_deferred_enqueue_for_assertion(context, siteID, 0);
 }
 
 extern "C" uint32_t talos_rt_v1_deferred_mature(talos_rt_context *context,
-                                                  uint64_t ticket) {
+                                                uint64_t ticket) {
   if (!context || ticket == 0)
     return 0;
   TALOS_RT_TRY {
@@ -966,7 +957,7 @@ extern "C" uint32_t talos_rt_v1_deferred_mature(talos_rt_context *context,
 }
 
 talos_rt_status makeBuffer(std::string_view source,
-                             talos_rt_buffer_v1 *output) {
+                           talos_rt_buffer_v1 *output) {
   if (!output)
     return TALOS_RT_INVALID_ARGUMENT;
   output->data = nullptr;
@@ -997,8 +988,8 @@ talos_rt_v1_context_create(talos_rt_context **outContext) {
   return talos_rt_v1_context_create_for_design(nullptr, outContext);
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_context_seed(talos_rt_context *context, uint64_t seed) {
+extern "C" talos_rt_status talos_rt_v1_context_seed(talos_rt_context *context,
+                                                    uint64_t seed) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
@@ -1014,7 +1005,7 @@ talos_rt_v1_context_seed(talos_rt_context *context, uint64_t seed) {
 
 extern "C" talos_rt_status
 talos_rt_v1_context_configure_argv(talos_rt_context *context, int argc,
-                                     const char *const *argv) {
+                                   const char *const *argv) {
   if (!context || argc < 0 || (argc != 0 && !argv))
     return TALOS_RT_INVALID_ARGUMENT;
   for (int index = 1; index < argc; ++index)
@@ -1136,8 +1127,8 @@ talos_rt_v1_context_configure_argv(talos_rt_context *context, int argc,
     std::unique_ptr<talos::coverage::Database> stagedSchema;
     if (!loadedDatabases.empty()) {
       if (liveCoverage && liveCoverage->schema)
-        stagedSchema = std::make_unique<talos::coverage::Database>(
-            *liveCoverage->schema);
+        stagedSchema =
+            std::make_unique<talos::coverage::Database>(*liveCoverage->schema);
       for (talos::coverage::Database &incoming : loadedDatabases) {
         if (liveCoverage && liveCoverage->finalized) {
           uint64_t incomingLines = 0;
@@ -1149,13 +1140,13 @@ talos_rt_v1_context_configure_argv(talos_rt_context *context, int argc,
             return TALOS_RT_INVALID_DESIGN;
         }
         if (!stagedSchema) {
-          stagedSchema = std::make_unique<talos::coverage::Database>(
-              std::move(incoming));
+          stagedSchema =
+              std::make_unique<talos::coverage::Database>(std::move(incoming));
           continue;
         }
         talos::coverage::Diagnostic diagnostic;
-        talos::coverage::Status status = talos::coverage::merge(
-            *stagedSchema, incoming, false, &diagnostic);
+        talos::coverage::Status status =
+            talos::coverage::merge(*stagedSchema, incoming, false, &diagnostic);
         if (status != talos::coverage::Status::Ok) {
           std::fprintf(stderr, "error: coverage load failed%s%s%s%s\n",
                        diagnostic.field ? " in " : "",
@@ -1198,7 +1189,7 @@ talos_rt_v1_context_configure_argv(talos_rt_context *context, int argc,
 }
 
 extern "C" uint32_t talos_rt_v1_import_id(const uint8_t *symbol,
-                                            uint64_t symbolSize) {
+                                          uint64_t symbolSize) {
   if (!validBytes(symbol, symbolSize) || symbolSize == 0)
     return 0;
   uint64_t hash = talos_stable_hash(symbol, symbolSize);
@@ -1210,7 +1201,7 @@ extern "C" talos_rt_status talos_rt_v1_context_register_import(
     talos_rt_context *context, uint32_t importID,
     talos_rt_import_callback_v1 callback, void *userData) {
   return talos_rt_v1_context_register_import_signature(context, importID, 0,
-                                                         callback, userData);
+                                                       callback, userData);
 }
 
 extern "C" talos_rt_status talos_rt_v1_context_register_import_signature(
@@ -1237,18 +1228,15 @@ extern "C" talos_rt_status talos_rt_v1_context_create_for_design(
     talos::coverage::Database coverageSchema;
     bool hasCoverageSchema = false;
     if (execution) {
-      constexpr uint32_t validFlags = TALOS_RT_EXECUTION_HAS_BYTECODE |
-                                      TALOS_RT_EXECUTION_HAS_DESIGN_DATABASE |
-                                      TALOS_RT_EXECUTION_VPI_READ |
-                                      TALOS_RT_EXECUTION_VPI_WRITE |
-                                      TALOS_RT_EXECUTION_REQUIRE_BYTECODE |
-                                      TALOS_RT_EXECUTION_PREPONED_SNAPSHOT |
-                                      TALOS_RT_EXECUTION_WAVEFORM_METADATA |
-                                      TALOS_RT_EXECUTION_DPI_EXPORTS |
-                                      TALOS_RT_EXECUTION_CLASS_BITSTREAM |
-                                      TALOS_RT_EXECUTION_COVERAGE_SCHEMA |
-                                      TALOS_RT_EXECUTION_POLLED_COLLECTION |
-                                      TALOS_RT_EXECUTION_TWO_STATE;
+      constexpr uint32_t validFlags =
+          TALOS_RT_EXECUTION_HAS_BYTECODE |
+          TALOS_RT_EXECUTION_HAS_DESIGN_DATABASE | TALOS_RT_EXECUTION_VPI_READ |
+          TALOS_RT_EXECUTION_VPI_WRITE | TALOS_RT_EXECUTION_REQUIRE_BYTECODE |
+          TALOS_RT_EXECUTION_PREPONED_SNAPSHOT |
+          TALOS_RT_EXECUTION_WAVEFORM_METADATA |
+          TALOS_RT_EXECUTION_DPI_EXPORTS | TALOS_RT_EXECUTION_CLASS_BITSTREAM |
+          TALOS_RT_EXECUTION_COVERAGE_SCHEMA |
+          TALOS_RT_EXECUTION_POLLED_COLLECTION | TALOS_RT_EXECUTION_TWO_STATE;
       if (execution->version != TALOS_RT_VERSION ||
           execution->dpi_reserved != 0 ||
           (execution->flags & ~validFlags) != 0 ||
@@ -1257,8 +1245,7 @@ extern "C" talos_rt_status talos_rt_v1_context_create_for_design(
           ((execution->flags & TALOS_RT_EXECUTION_REQUIRE_BYTECODE) != 0 &&
            (execution->flags & TALOS_RT_EXECUTION_HAS_BYTECODE) == 0) ||
           ((execution->flags & TALOS_RT_EXECUTION_WAVEFORM_METADATA) != 0 &&
-           (execution->flags & TALOS_RT_EXECUTION_HAS_DESIGN_DATABASE) ==
-               0) ||
+           (execution->flags & TALOS_RT_EXECUTION_HAS_DESIGN_DATABASE) == 0) ||
           ((execution->flags & TALOS_RT_EXECUTION_HAS_BYTECODE) != 0
                ? (!execution->bytecode || execution->bytecode_size == 0 ||
                   execution->checksum == 0)
@@ -1437,7 +1424,7 @@ extern "C" void talos_rt_v1_buffer_release(talos_rt_buffer_v1 *buffer) {
 
 extern "C" talos_rt_status
 talos_rt_v1_last_error(talos_rt_context *context,
-                         talos_rt_buffer_v1 *outMessage) {
+                       talos_rt_buffer_v1 *outMessage) {
   if (!context || !outMessage)
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
@@ -1450,9 +1437,8 @@ talos_rt_v1_last_error(talos_rt_context *context,
   });
 }
 
-extern "C" void
-talos_rt_v1_scheduler_report_status(talos_rt_context *context,
-                                      talos_rt_status status) {
+extern "C" void talos_rt_v1_scheduler_report_status(talos_rt_context *context,
+                                                    talos_rt_status status) {
   // A standalone simulator returns this status from main and exits, so this is
   // the last chance to say what ended the run. A design-requested end is not a
   // failure to report: $finish is OK and $fatal already printed its message.

@@ -166,8 +166,7 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
                 builder.getArrayAttr({builder.getStringAttr("cold"),
                                       builder.getStringAttr("noinline")}));
   auto recheck = getOrDeclareLLVMFunction(
-      module, "__talos_eval_promotion_recheck_range_v1", voidType,
-      {i64, i64});
+      module, "__talos_eval_promotion_recheck_range_v1", voidType, {i64, i64});
   if (!recheck.empty())
     return recheck.emitError("range recheck was materialized twice");
   recheck->setAttr("passthrough", hook->getAttr("passthrough"));
@@ -256,9 +255,8 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
   auto certificateArray =
       LLVM::LLVMArrayType::get(certificateType, certificates.size());
   auto actions = makeConstantGlobal(
-      module, location, certificateArray,
-      "__talos_eval_proof_certificates_v1", LLVM::Linkage::Internal, 8,
-      [&](OpBuilder &b) {
+      module, location, certificateArray, "__talos_eval_proof_certificates_v1",
+      LLVM::Linkage::Internal, 8, [&](OpBuilder &b) {
         Value array = LLVM::ZeroOp::create(b, location, certificateArray);
         for (auto [index, certificate] : llvm::enumerate(certificates)) {
           Value record = LLVM::ZeroOp::create(b, location, certificateType);
@@ -640,8 +638,8 @@ public:
 LogicalResult materializeNativePromotionWrites(ModuleOp module) {
   auto hook = module.lookupSymbol<LLVM::LLVMFuncOp>(
       "__talos_eval_promotion_invalidate_range_v1");
-  auto dependencies = module.lookupSymbol<LLVM::GlobalOp>(
-      "__talos_eval_proof_dependencies_v1");
+  auto dependencies =
+      module.lookupSymbol<LLVM::GlobalOp>("__talos_eval_proof_dependencies_v1");
   if (!hook || !dependencies)
     return success();
   auto coverage =

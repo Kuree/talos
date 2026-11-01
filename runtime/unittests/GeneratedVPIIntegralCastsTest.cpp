@@ -5,11 +5,11 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
 #include "talos/Runtime/Runtime.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <algorithm>
@@ -228,8 +228,7 @@ TEST(GeneratedDesignDatabase, IntegralCasts) {
     HeaderWriter(bytes.data()).setChecksum(hash);
     auto invalid = execution;
     invalid.design_database = bytes.data();
-    EXPECT_EQ(talos_rt_v1_design_validate(&invalid),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&invalid), TALOS_RT_INVALID_DESIGN);
   };
   rejects([&](auto &bytes) {
     ExpressionNodeWriter(bytes.data() + casts.front())

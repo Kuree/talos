@@ -5,10 +5,10 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
-#include "talos/Conversion/SimulationToBytecode.h"
-#include "talos/Dialect/Simulation/SimulationOps.h"
 #include "sv_vpi_user.h"
 #include "svdpi.h"
+#include "talos/Conversion/SimulationToBytecode.h"
+#include "talos/Dialect/Simulation/SimulationOps.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <cstdlib>
@@ -24,15 +24,15 @@ struct TransportProbe {
 };
 thread_local TransportProbe *activeProbe = nullptr;
 const talos_rt_import_site_v1 importSite{TALOS_RT_VERSION,
-                                           TALOS_RT_IMPORT_CONTEXT,
-                                           123,
-                                           0,
-                                           1,
-                                           "export-frames.mlir",
-                                           18,
-                                           1,
-                                           1,
-                                           7};
+                                         TALOS_RT_IMPORT_CONTEXT,
+                                         123,
+                                         0,
+                                         1,
+                                         "export-frames.mlir",
+                                         18,
+                                         1,
+                                         1,
+                                         7};
 void invokeImport(talos_rt_context *context, TransportProbe &probe,
                   uint64_t call);
 void inspectExport(talos_rt_context *context, uint64_t unit,
@@ -50,18 +50,15 @@ void inspectExport(talos_rt_context *context, uint64_t unit,
   EXPECT_EQ(duplicate, 0u);
   if (probe.exit == Exit::PreparedFailure)
     return;
-  EXPECT_EQ(
-      talos_rt_v1_vpi_frame_enter_prepared(context, unit, 1, &activation),
-      TALOS_RT_INVALID_LIFECYCLE);
+  EXPECT_EQ(talos_rt_v1_vpi_frame_enter_prepared(context, unit, 1, &activation),
+            TALOS_RT_INVALID_LIFECYCLE);
   EXPECT_EQ(activation, 0u);
   EXPECT_EQ(talos_rt_v1_vpi_frame_enter_prepared(context, 45, 0, &activation),
             TALOS_RT_INVALID_ARGUMENT);
-  ASSERT_EQ(
-      talos_rt_v1_vpi_frame_enter_prepared(context, unit, 0, &activation),
-      TALOS_RT_OK);
-  EXPECT_EQ(talos_rt_v1_vpi_frame_enter(context, unit,
-                                          TALOS_RT_VPI_FRAME_DPI_EXPORT, unit,
-                                          &duplicate),
+  ASSERT_EQ(talos_rt_v1_vpi_frame_enter_prepared(context, unit, 0, &activation),
+            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_vpi_frame_enter(
+                context, unit, TALOS_RT_VPI_FRAME_DPI_EXPORT, unit, &duplicate),
             TALOS_RT_INVALID_FRAME);
   auto frame = vpi_handle(vpiFrame, nullptr);
   ASSERT_NE(frame, nullptr);
@@ -95,20 +92,20 @@ void inspectExport(talos_rt_context *context, uint64_t unit,
   EXPECT_EQ(vpi_release_handle(origin), 1);
 }
 talos_rt_status exported(talos_rt_context *context,
-                           const talos_rt_import_input_v1 *, uint32_t,
-                           talos_rt_import_output_v1 *, uint32_t) {
+                         const talos_rt_import_input_v1 *, uint32_t,
+                         talos_rt_import_output_v1 *, uint32_t) {
   inspectExport(context, 46, *activeProbe);
   return activeProbe->exit == Exit::Return ? TALOS_RT_OK : TALOS_RT_FATAL;
 }
 talos_rt_status nested(talos_rt_context *context,
-                         const talos_rt_import_input_v1 *, uint32_t,
-                         talos_rt_import_output_v1 *, uint32_t) {
+                       const talos_rt_import_input_v1 *, uint32_t,
+                       talos_rt_import_output_v1 *, uint32_t) {
   inspectExport(context, 47, *activeProbe);
   return TALOS_RT_OK;
 }
 talos_rt_status wrongScope(talos_rt_context *context,
-                             const talos_rt_import_input_v1 *, uint32_t,
-                             talos_rt_import_output_v1 *, uint32_t) {
+                           const talos_rt_import_input_v1 *, uint32_t,
+                           talos_rt_import_output_v1 *, uint32_t) {
   uint64_t ticket = UINT64_MAX;
   EXPECT_EQ(talos_rt_v1_vpi_export_prepare(context, 46, &ticket),
             TALOS_RT_INVALID_ARGUMENT);
@@ -116,9 +113,9 @@ talos_rt_status wrongScope(talos_rt_context *context,
   return TALOS_RT_OK;
 }
 talos_rt_status importCallback(talos_rt_context *, uint32_t id,
-                                 const talos_rt_import_input_v1 *, uint32_t,
-                                 talos_rt_import_output_v1 *, uint32_t,
-                                 void *userData) {
+                               const talos_rt_import_input_v1 *, uint32_t,
+                               talos_rt_import_output_v1 *, uint32_t,
+                               void *userData) {
   auto &probe = *static_cast<TransportProbe *>(userData);
   EXPECT_EQ(id, 123u);
   ++probe.imports;
@@ -139,8 +136,7 @@ talos_rt_status importCallback(talos_rt_context *, uint32_t id,
 void invokeImport(talos_rt_context *context, TransportProbe &probe,
                   uint64_t call) {
   uint64_t ticket = 0, activation = 0;
-  ASSERT_EQ(talos_rt_v1_vpi_call_prepare(context, call, &ticket),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_vpi_call_prepare(context, call, &ticket), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_frame_enter_prepared(context, 45, 0, &activation),
             TALOS_RT_OK);
   auto previous = probe.parent;
@@ -259,27 +255,26 @@ void testTransport(Exit exit) {
             TALOS_RT_OK);
   std::unique_ptr<talos_rt_context, decltype(&talos_rt_v1_context_destroy)>
       runtime(rawContext, talos_rt_v1_context_destroy);
-  ASSERT_EQ(talos_rt_v1_vpi_startup(runtime.get(), nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_vpi_startup(runtime.get(), nullptr, 0), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_end_compile(runtime.get()), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_start_simulation(runtime.get()), TALOS_RT_OK);
   TransportProbe probe{exit};
-  ASSERT_EQ(talos_rt_v1_context_register_import(rawContext, 123,
-                                                  importCallback, &probe),
+  ASSERT_EQ(talos_rt_v1_context_register_import(rawContext, 123, importCallback,
+                                                &probe),
             TALOS_RT_OK);
   const talos_rt_frame_field_v1 field{
-      TALOS_RT_FRAME_CAPTURE,  0, 0, sizeof(TransportProbe *),
+      TALOS_RT_FRAME_CAPTURE,    0, 0, sizeof(TransportProbe *),
       alignof(TransportProbe *), 0};
   const uint32_t continuation = 0;
   talos_rt_frame_layout_v1 layout{TALOS_RT_VERSION,
-                                    0,
-                                    sizeof(TransportProbe *),
-                                    alignof(TransportProbe *),
-                                    &field,
-                                    1,
-                                    1,
-                                    &continuation,
-                                    0};
+                                  0,
+                                  sizeof(TransportProbe *),
+                                  alignof(TransportProbe *),
+                                  &field,
+                                  1,
+                                  1,
+                                  &continuation,
+                                  0};
   uint64_t hash = UINT64_C(14695981039346656037);
   auto append = [&](const auto &value) {
     const auto *bytes = reinterpret_cast<const uint8_t *>(&value);
@@ -318,8 +313,7 @@ void testTransport(Exit exit) {
   ASSERT_EQ(talos_rt_v1_process_instance_create(&descriptor, &instance),
             TALOS_RT_OK);
   *static_cast<TransportProbe **>(instance->frame) = &probe;
-  ASSERT_EQ(talos_rt_v1_scheduler_add(runtime.get(), instance, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add(runtime.get(), instance, 0), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_run(runtime.get()), TALOS_RT_OK);
   EXPECT_TRUE(probe.ran);
   EXPECT_EQ(probe.imports, exit == Exit::Return ? 2u : 1u);

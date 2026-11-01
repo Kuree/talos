@@ -82,10 +82,9 @@ struct VPIContext {
 
   void start() {
     ASSERT_NE(staticArraysDescriptor.execution, nullptr);
-    ASSERT_EQ(
-        staticArraysDescriptor.execution->flags &
-            (TALOS_RT_EXECUTION_VPI_READ | TALOS_RT_EXECUTION_VPI_WRITE),
-        TALOS_RT_EXECUTION_VPI_READ);
+    ASSERT_EQ(staticArraysDescriptor.execution->flags &
+                  (TALOS_RT_EXECUTION_VPI_READ | TALOS_RT_EXECUTION_VPI_WRITE),
+              TALOS_RT_EXECUTION_VPI_READ);
     ASSERT_EQ(talos_rt_v1_design_validate(staticArraysDescriptor.execution),
               TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_context_create_for_design(

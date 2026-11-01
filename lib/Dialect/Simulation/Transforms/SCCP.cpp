@@ -345,8 +345,7 @@ static void rewriteFunction(const DenseMap<Value, ConstantValue> &constants,
   }
 }
 
-class TalosSimSCCPPass
-    : public impl::TalosSimSCCPPassBase<TalosSimSCCPPass> {
+class TalosSimSCCPPass : public impl::TalosSimSCCPPassBase<TalosSimSCCPPass> {
 public:
   using Base::Base;
   void runOnOperation() override;

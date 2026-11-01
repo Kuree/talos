@@ -242,8 +242,7 @@ static void preserveEvalNBASiteOrigins(sim::SimFuncOp body) {
 bool useEvalBodyFusion(sim::SimDesignOp design) {
   ModuleOp module = design->getParentOfType<ModuleOp>();
   auto scheduler =
-      ::talos::schedule::get<::talos::schedule::Field::NativeScheduler>(
-          module);
+      ::talos::schedule::get<::talos::schedule::Field::NativeScheduler>(module);
   if (!scheduler)
     return false;
   bool autoRequested = ::talos::schedule::has<
@@ -430,10 +429,9 @@ materializeStandaloneEvalBody(sim::SimDesignOp design, SymbolTable &symbols,
                               const DenseSet<uint64_t> &controlTargets,
                               bool foreignControl) {
   if (function.isExternal() ||
-      ::talos::schedule::has<::talos::schedule::Field::EvalBody>(
-          function) ||
-      ::talos::schedule::has<
-          ::talos::schedule::Field::EvalBorrowedCaptures>(function))
+      ::talos::schedule::has<::talos::schedule::Field::EvalBody>(function) ||
+      ::talos::schedule::has<::talos::schedule::Field::EvalBorrowedCaptures>(
+          function))
     return success();
   bool portMethod = function.getEntryKind() == sim::EntryKind::PortInput ||
                     function.getEntryKind() == sim::EntryKind::PortOutput;
@@ -509,15 +507,16 @@ materializeStandaloneEvalBody(sim::SimDesignOp design, SymbolTable &symbols,
       evalBody, builder.getUnitAttr());
   ::talos::schedule::set<::talos::schedule::Field::EvalRawCaptures>(
       evalBody, builder.getUnitAttr());
-  if (auto owners = ::talos::schedule::get<
-          ::talos::schedule::Field::EvalSourceOwners>(function))
-    ::talos::schedule::set<::talos::schedule::Field::EvalSourceOwners>(
-        evalBody, owners);
+  if (auto owners =
+          ::talos::schedule::get<::talos::schedule::Field::EvalSourceOwners>(
+              function))
+    ::talos::schedule::set<::talos::schedule::Field::EvalSourceOwners>(evalBody,
+                                                                       owners);
   if (auto group =
           ::talos::schedule::get<::talos::schedule::Field::EvalFusionGroup>(
               function))
-    ::talos::schedule::set<::talos::schedule::Field::EvalFusionGroup>(
-        evalBody, group);
+    ::talos::schedule::set<::talos::schedule::Field::EvalFusionGroup>(evalBody,
+                                                                      group);
   schedule::ContinuationSiteAttr activationSite;
   if (auto suspend = dyn_cast<sim::SimSuspendChangeOp>(wait->getTerminator()))
     activationSite = suspend.getSiteAttr();
@@ -1513,7 +1512,8 @@ uint64_t localizeActivationStorage(
   }
   if (!forwardOnly.empty()) {
     localized += analysis::forwardSourceMemoryLoads(
-        function, /*canonicalWrites=*/true, [&](Operation *operation) {
+        function, /*canonicalWrites=*/true,
+        [&](Operation *operation) {
           auto root = resolveStorageRoot(
               cast<sim::SimRefLoadOp>(operation).getReference());
           return root && forwardOnly.contains(*root);
@@ -2002,8 +2002,8 @@ void finalizeDormantTier1Stores(sim::SimDesignOp design) {
   SmallVector<sim::SimFuncOp> evalBodies;
   for (sim::SimFuncOp function :
        design.getBody().front().getOps<sim::SimFuncOp>())
-    if (::talos::schedule::has<
-            ::talos::schedule::Field::EvalBorrowedCaptures>(function))
+    if (::talos::schedule::has<::talos::schedule::Field::EvalBorrowedCaptures>(
+            function))
       evalBodies.push_back(function);
 
   for (sim::SimFuncOp evalBody : evalBodies) {
@@ -2043,8 +2043,8 @@ void finalizeDormantTier1Stores(sim::SimDesignOp design) {
     // later. Keep their proof marker until that specialization consumes it;
     // every actor/coroutine canonical body is complete here and must not leak
     // the transient marker into emitted Simulation IR.
-    if (!::talos::schedule::has<
-            ::talos::schedule::Field::EvalBorrowedCaptures>(function) &&
+    if (!::talos::schedule::has<::talos::schedule::Field::EvalBorrowedCaptures>(
+            function) &&
         function.getEntryKind() == sim::EntryKind::Function)
       continue;
     function.walk([&](sim::SimRefStoreOp store) {
@@ -2465,8 +2465,7 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
   SymbolTable::setSymbolVisibility(kernel, SymbolTable::Visibility::Private);
   ::talos::schedule::set<schedule::metadata::nativeRegionBody>(
       kernel, builder.getUnitAttr());
-  ::talos::schedule::set<
-      schedule::metadata::evalReconstructsContinuationArgs>(
+  ::talos::schedule::set<schedule::metadata::evalReconstructsContinuationArgs>(
       kernel, builder.getUnitAttr());
   ::talos::schedule::set<::talos::schedule::Field::EvalFusionGroup>(
       kernel, builder.getI32IntegerAttr(fusion.getId()));
@@ -3009,7 +3008,7 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
                   ::talos::schedule::Field::DeferNetResolution>(drive))
             ::talos::schedule::set<
                 ::talos::schedule::Field::DeferNetResolution>(replacement,
-                                                                defer);
+                                                              defer);
           changed = arith::OrIOp::create(builder, drive.getLoc(), changed,
                                          replacement.getChanged());
         } else {
@@ -3138,8 +3137,8 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
   SmallVector<unsigned> deferredDriveOperations;
   for (auto [operationIndex, operation] : llvm::enumerate(templateOperations))
     if (auto drive = dyn_cast<sim::SimDriverDriveOp>(operation)) {
-      if (::talos::schedule::has<
-              ::talos::schedule::Field::DeferNetResolution>(drive))
+      if (::talos::schedule::has<::talos::schedule::Field::DeferNetResolution>(
+              drive))
         return bail();
       if (resolveDrivers.insert(drive.getDriver()))
         resolveDriveOperations.push_back(operationIndex);
@@ -3353,8 +3352,7 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
     memberHelper = helper;
     symbols.insert(helper);
     SymbolTable::setSymbolVisibility(helper, SymbolTable::Visibility::Private);
-    ::talos::schedule::set<
-        ::talos::schedule::Field::OutlinedPrimitiveMember>(
+    ::talos::schedule::set<::talos::schedule::Field::OutlinedPrimitiveMember>(
         helper, helperBuilder.getUnitAttr());
     ::talos::schedule::set<
         ::talos::schedule::Field::OutlinedPrimitiveFingerprint>(
@@ -3392,8 +3390,7 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
         auto replacement = sim::SimDriverDriveChangedOp::create(
             helperBuilder, drive.getLoc(), driver, value);
         replacement->setAttrs(drive->getAttrs());
-        ::talos::schedule::set<
-            ::talos::schedule::Field::DeferNetResolution>(
+        ::talos::schedule::set<::talos::schedule::Field::DeferNetResolution>(
             replacement, helperBuilder.getUnitAttr());
         continue;
       }
@@ -3409,8 +3406,7 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
         Value value = helperMapping.lookup(drive.getValue());
         recordRawChange(drive.getLoc(), driver, value);
         Operation *cloned = helperBuilder.clone(*operation, helperMapping);
-        ::talos::schedule::set<
-            ::talos::schedule::Field::DeferNetResolution>(
+        ::talos::schedule::set<::talos::schedule::Field::DeferNetResolution>(
             cloned, helperBuilder.getUnitAttr());
         continue;
       }
@@ -3924,8 +3920,7 @@ FailureOr<sim::SimFuncOp> materializeFusion(
   SymbolTable::setSymbolVisibility(fused, SymbolTable::Visibility::Private);
   ::talos::schedule::set<schedule::metadata::nativeRegionBody>(
       fused, builder.getUnitAttr());
-  ::talos::schedule::set<
-      schedule::metadata::evalReconstructsContinuationArgs>(
+  ::talos::schedule::set<schedule::metadata::evalReconstructsContinuationArgs>(
       fused, builder.getUnitAttr());
   ::talos::schedule::set<::talos::schedule::Field::EvalFusionGroup>(
       fused, builder.getI32IntegerAttr(fusion.getId()));
@@ -3961,8 +3956,7 @@ FailureOr<sim::SimFuncOp> materializeFusion(
   // while its body is running. Mark it so native lowering can prove which NBA
   // sites are safe in the clean body selected by AOT actor dispatch.
   if (analysis::SimulationVPIAnalysis::compute(design).allowsWrite())
-    ::talos::schedule::set<
-        schedule::metadata::nativeGuardedSpecializationBody>(
+    ::talos::schedule::set<schedule::metadata::nativeGuardedSpecializationBody>(
         fused, builder.getUnitAttr());
 
   Block &entry = fused.getBody().front();
@@ -4185,8 +4179,7 @@ FailureOr<sim::SimFuncOp> materializeFusion(
         evalBody, builder.getUnitAttr());
     ::talos::schedule::set<::talos::schedule::Field::EvalRawCaptures>(
         evalBody, builder.getUnitAttr());
-    ::talos::schedule::set<
-        ::talos::schedule::Field::EvalInstanceCoordinator>(
+    ::talos::schedule::set<::talos::schedule::Field::EvalInstanceCoordinator>(
         evalBody, builder.getUnitAttr());
     ::talos::schedule::set<::talos::schedule::Field::EvalFusionGroup>(
         evalBody,
@@ -4372,8 +4365,7 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
   bool forgedDiscardableStore = false;
   design.walk([&](sim::SimRefStoreOp store) {
     forgedDiscardableStore |=
-        ::talos::schedule::has<schedule::metadata::evalDiscardableStore>(
-            store);
+        ::talos::schedule::has<schedule::metadata::evalDiscardableStore>(store);
   });
   if (forgedDiscardableStore) {
     design.emitOpError("contains a preexisting internal eval-store proof");

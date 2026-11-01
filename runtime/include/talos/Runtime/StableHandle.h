@@ -17,9 +17,9 @@
 // reserved for the runtime's once-per-time-slot Preponed snapshot event.
 // Compiler-generated sampled observers may depend on this event; user named
 // events always carry a nonzero dynamic payload or a design-assigned ID.
-#define TALOS_RT_STABLE_HANDLE_PREPONED_EVENT                                \
+#define TALOS_RT_STABLE_HANDLE_PREPONED_EVENT                                  \
   TALOS_RT_STABLE_HANDLE_DYNAMIC_EVENT_TAG
-#define TALOS_RT_STABLE_HANDLE_TAG_MASK                                      \
+#define TALOS_RT_STABLE_HANDLE_TAG_MASK                                        \
   (TALOS_RT_STABLE_HANDLE_AUTOMATIC_TAG | TALOS_RT_STABLE_HANDLE_STATIC_TAG)
 #define TALOS_RT_STABLE_HANDLE_MAX_AUTOMATIC_ID UINT32_C(0x7ffffffe)
 #define TALOS_RT_STABLE_HANDLE_MAX_STATIC_ID UINT32_C(0x3fffffff)
@@ -49,7 +49,7 @@ typedef struct talos_rt_stable_handle_v1 {
 
 static inline int
 talos_rt_stable_handle_decode(uint64_t handle,
-                                talos_rt_stable_handle_v1 *decoded) {
+                              talos_rt_stable_handle_v1 *decoded) {
   if (!decoded)
     return 0;
   decoded->kind = TALOS_RT_STABLE_HANDLE_INVALID;
@@ -85,8 +85,8 @@ talos_rt_stable_handle_decode(uint64_t handle,
 }
 
 static inline uint64_t
-talos_rt_stable_handle_encode(talos_rt_stable_handle_kind_v1 kind,
-                                uint32_t id, int64_t offset) {
+talos_rt_stable_handle_encode(talos_rt_stable_handle_kind_v1 kind, uint32_t id,
+                              int64_t offset) {
   if (kind == TALOS_RT_STABLE_HANDLE_GLOBAL)
     return offset >= 0 &&
                    (uint64_t)offset < TALOS_RT_STABLE_HANDLE_DYNAMIC_EVENT_TAG
@@ -110,18 +110,18 @@ talos_rt_stable_handle_encode(talos_rt_stable_handle_kind_v1 kind,
 }
 
 static inline uint64_t talos_rt_stable_handle_offset(uint64_t handle,
-                                                       int64_t amount) {
+                                                     int64_t amount) {
   talos_rt_stable_handle_v1 decoded;
   if (!talos_rt_stable_handle_decode(handle, &decoded) ||
       (amount > 0 && decoded.offset > INT64_MAX - amount) ||
       (amount < 0 && decoded.offset < INT64_MIN - amount))
     return UINT64_MAX;
   return talos_rt_stable_handle_encode(decoded.kind, decoded.id,
-                                         decoded.offset + amount);
+                                       decoded.offset + amount);
 }
 
 static inline int talos_rt_stable_handle_same_object(uint64_t left,
-                                                       uint64_t right) {
+                                                     uint64_t right) {
   talos_rt_stable_handle_v1 lhs;
   talos_rt_stable_handle_v1 rhs;
   return talos_rt_stable_handle_decode(left, &lhs) &&

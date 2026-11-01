@@ -236,7 +236,7 @@ void TalosSimSpecializeStaticStateNBAPass::runOnOperation() {
       graph, builder.getArrayAttr(roots), builder.getArrayAttr(actorRoots),
       builder.getDenseI64ArrayAttr(nbaRoots));
   ::talos::schedule::set<schedule::metadata::staticSpecialization>(design,
-                                                                     plan);
+                                                                   plan);
 }
 
 } // namespace

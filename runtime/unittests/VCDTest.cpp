@@ -39,7 +39,7 @@ uint32_t designRecordKind(uint32_t physicalKind, uint32_t vpiKind) {
 
 uint64_t nameHash(const std::string &name) {
   return talos_stable_hash(reinterpret_cast<const uint8_t *>(name.data()),
-                             name.size());
+                           name.size());
 }
 
 uint64_t imageChecksum(const std::vector<uint8_t> &bytes) {
@@ -227,8 +227,7 @@ struct DesignImage {
       put32(bytes, offset, TALOS_RT_DESIGN_RECORD_TYPE);
       put32(bytes, offset + 4,
             TALOS_RT_DESIGN_TYPE_SCALAR |
-                ((TALOS_RT_DESIGN_TYPE_FOUR_STATE |
-                  TALOS_RT_DESIGN_TYPE_PACKED)
+                ((TALOS_RT_DESIGN_TYPE_FOUR_STATE | TALOS_RT_DESIGN_TYPE_PACKED)
                  << 8));
       put64(bytes, offset + 8, width);
       put64(bytes, offset + 16, static_cast<uint64_t>(left));
@@ -246,11 +245,10 @@ struct DesignImage {
 
     // A packed struct of two four-state nibbles.
     put32(bytes, structType, TALOS_RT_DESIGN_RECORD_TYPE);
-    put32(
-        bytes, structType + 4,
-        TALOS_RT_DESIGN_TYPE_STRUCT |
-            ((TALOS_RT_DESIGN_TYPE_FOUR_STATE | TALOS_RT_DESIGN_TYPE_PACKED)
-             << 8));
+    put32(bytes, structType + 4,
+          TALOS_RT_DESIGN_TYPE_STRUCT |
+              ((TALOS_RT_DESIGN_TYPE_FOUR_STATE | TALOS_RT_DESIGN_TYPE_PACKED)
+               << 8));
     put64(bytes, structType + 8, 8);
     put64(bytes, structType + 16, 7);
     put64(bytes, structType + 40, field0Type);
@@ -275,8 +273,7 @@ struct DesignImage {
     // An unpacked array of three nibbles: three elements, twelve bits.
     put32(bytes, arrayType, TALOS_RT_DESIGN_RECORD_TYPE);
     put32(bytes, arrayType + 4,
-          TALOS_RT_DESIGN_TYPE_ARRAY |
-              (TALOS_RT_DESIGN_TYPE_FOUR_STATE << 8));
+          TALOS_RT_DESIGN_TYPE_ARRAY | (TALOS_RT_DESIGN_TYPE_FOUR_STATE << 8));
     put64(bytes, arrayType + 8, 12);
     put64(bytes, arrayType + 16, 0);
     put64(bytes, arrayType + 24, 2);
@@ -462,8 +459,7 @@ TEST(VCD, HeaderDeclaresHierarchy) {
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_dump_timescale(fixture.context, -9), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.advanceTo(10);
   std::string text = fixture.read();
 
@@ -480,8 +476,7 @@ TEST(VCD, TimescaleFallsBackToTheDesignDefault) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.advanceTo(10);
   EXPECT_NE(fixture.read().find("$timescale\n\t1ns\n$end\n"),
             std::string::npos);
@@ -492,8 +487,7 @@ TEST(VCD, TimescaleUsesAScaledUnitWhenThePrecisionIsNotAPowerOfAThousand) {
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_dump_timescale(fixture.context, -10), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.advanceTo(10);
   EXPECT_NE(fixture.read().find("$timescale\n\t100ps\n$end\n"),
             std::string::npos);
@@ -504,8 +498,7 @@ TEST(VCD, TimescaleAcceptsThePositiveLegalExponentRange) {
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_dump_timescale(fixture.context, 2), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.advanceTo(10);
   EXPECT_NE(fixture.read().find("$timescale\n\t100s\n$end\n"),
             std::string::npos);
@@ -524,8 +517,7 @@ TEST(VCD, AliasesShareOneIdentifierCode) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.advanceTo(10);
   std::string text = fixture.read();
 
@@ -545,8 +537,7 @@ TEST(VCD, AliasesAreEachDeclaredWithTheirOwnName) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.advanceTo(10);
   std::string text = fixture.read();
 
@@ -565,8 +556,7 @@ TEST(VCD, AliasedRangeIsDumpedOnlyOnceInitially) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.setBits(kDataBit, 8, 0xa5, 0);
   fixture.advanceTo(10);
   std::string text = fixture.read();
@@ -579,8 +569,7 @@ TEST(VCD, AliasedRangeProducesOneRecordPerChange) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.setBits(kDataBit, 8, 0x00, 0);
   fixture.advanceTo(10);
   fixture.setBits(kDataBit, 8, 0x03, 0);
@@ -599,8 +588,7 @@ TEST(VCD, AliasedRangeIsDifferencedOnce) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.advanceTo(10);
   std::string text = fixture.read();
 
@@ -618,8 +606,7 @@ TEST(VCD, RealsAreDumpedAsNumbersNotBitPatterns) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   uint64_t bits = 0;
   double value = 1.5;
   std::memcpy(&bits, &value, sizeof(bits));
@@ -655,8 +642,7 @@ TEST(VCD, ShortRealsArePromotedAndDumpedAsNumbers) {
 
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   float value = 1.5f;
   uint32_t bits = 0;
   std::memcpy(&bits, &value, sizeof(bits));
@@ -679,8 +665,7 @@ TEST(VCD, RealsAreNotCheckpointedAsXByDumpOff) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.advanceTo(10);
   ASSERT_EQ(talos_rt_v1_dump_control(fixture.context, 0), TALOS_RT_OK);
   std::string text = fixture.read();
@@ -699,8 +684,7 @@ TEST(VCD, PackedStructsAreDumpedAsOneVector) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   // hi = 1, lo = 2 across the two nibbles.
   fixture.setBits(kStructBit, 8, 0x12, 0);
   fixture.advanceTo(10);
@@ -722,8 +706,7 @@ TEST(VCD, PackedStructEmitsOneRecordWhenAnyFieldChanges) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.setBits(kStructBit, 8, 0x00, 0);
   fixture.advanceTo(10);
   // Only the high nibble moves.
@@ -743,8 +726,7 @@ TEST(VCD, UnpackedArraysAreExpandedPerElement) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.advanceTo(10);
   std::string text = fixture.read();
 
@@ -768,8 +750,7 @@ TEST(VCD, UnpackedArrayElementsAreDifferencedIndependently) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   // mem[0] = 0, mem[1] = 5, mem[2] = 0.
   fixture.setBits(kArrayBit, 12, 0x050, 0);
   fixture.advanceTo(10);
@@ -796,8 +777,7 @@ TEST(VCD, OversizedUnpackedArraysAreOmittedNotSmashed) {
   ASSERT_EQ(setTestEnvironment("TALOS_RT_DUMP_MAX_ARRAY", "2"), 0);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
   ASSERT_EQ(unsetTestEnvironment("TALOS_RT_DUMP_MAX_ARRAY"), 0);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.advanceTo(10);
   std::string text = fixture.read();
 
@@ -817,8 +797,7 @@ TEST(VCD, EscapedNamesContainingDotsKeepTheirWholeLeaf) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.advanceTo(10);
   std::string text = fixture.read();
 
@@ -831,8 +810,7 @@ TEST(VCD, SelectingOnlyOneAliasStillTracesTheSharedRange) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 1, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 1, nullptr, 0), TALOS_RT_OK);
   fixture.setBits(kDataBit, 8, 0x01, 0);
   fixture.advanceTo(10);
   std::string text = fixture.read();
@@ -847,8 +825,7 @@ TEST(VCD, InitialValuesAreDumpedOnceAtTheSelectingSlot) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.setBits(kClkBit, 1, 1, 0);
   fixture.setBits(kDataBit, 8, 0xa5, 0);
   fixture.advanceTo(5);
@@ -867,8 +844,7 @@ TEST(VCD, OnlyChangedVariablesAreEmittedPerSlot) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   // Uninitialized canonical state is X, so drive known values into the slot
   // that carries the initial section.
   fixture.setBits(kClkBit, 1, 0, 0);
@@ -904,8 +880,7 @@ TEST(VCD, VectorsDropRedundantLeadingCharacters) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.advanceTo(10);
   fixture.setBits(kDataBit, 8, 0x05, 0);
   fixture.advanceTo(20);
@@ -928,8 +903,7 @@ TEST(VCD, VectorsKeepKnownZeroBeforeUnknownOrHighImpedance) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   // 0X10 must not shorten to X10: the latter left-extends with X, not zero.
   fixture.setBits(kCountBit, 4, 0x2, 0x4);
   fixture.advanceTo(10);
@@ -967,8 +941,7 @@ TEST(VCD, ManagedStringStorageIsNotTracedAsItsGCHandleBits) {
   fixture.image.makeRealObjectAString();
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.advanceTo(10);
   std::string text = fixture.read();
 
@@ -981,8 +954,7 @@ TEST(VCD, FieldNamedStringDoesNotHideAnOrdinaryPackedStruct) {
   fixture.image.makeStructFieldNamedString();
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.advanceTo(10);
   std::string text = fixture.read();
 
@@ -996,11 +968,11 @@ TEST(VCD, VariableSelectionRestrictsTheTracedSetWithoutEnablingVPI) {
             TALOS_RT_PERMISSION_DENIED);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
   const std::string variable = "top.sub.count";
-  ASSERT_EQ(talos_rt_v1_dump_vars(
-                fixture.context, 0,
-                reinterpret_cast<const uint8_t *>(variable.data()),
-                variable.size()),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_dump_vars(fixture.context, 0,
+                            reinterpret_cast<const uint8_t *>(variable.data()),
+                            variable.size()),
+      TALOS_RT_OK);
   fixture.advanceTo(10);
   std::string text = fixture.read();
 
@@ -1015,8 +987,7 @@ TEST(VCD, DepthLimitedSelectionExcludesNestedScopes) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 1, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 1, nullptr, 0), TALOS_RT_OK);
   fixture.advanceTo(10);
   std::string text = fixture.read();
 
@@ -1029,8 +1000,7 @@ TEST(VCD, DumpOffCheckpointsXAndDumpOnRepublishes) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.setBits(kClkBit, 1, 1, 0);
   fixture.advanceTo(10);
   ASSERT_EQ(talos_rt_v1_dump_control(fixture.context, 0), TALOS_RT_OK);
@@ -1057,8 +1027,7 @@ TEST(VCD, DumpAllEmitsEverySelectedVariable) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.setBits(kClkBit, 1, 0, 0);
   fixture.advanceTo(10);
   // Nothing changed in this slot, so only $dumpall can republish the value.
@@ -1077,8 +1046,7 @@ TEST(VCD, DumpAllUpdatesTheActiveShadowWithoutDuplicateSlotRecords) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.setBits(kClkBit, 1, 0, 0);
   fixture.advanceTo(10);
   fixture.setBits(kClkBit, 1, 1, 0);
@@ -1095,8 +1063,7 @@ TEST(VCD, DumpAllRemainsObservableWhileOrdinaryDumpingIsOff) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.setBits(kClkBit, 1, 0, 0);
   fixture.advanceTo(10);
   ASSERT_EQ(talos_rt_v1_dump_control(fixture.context, 0), TALOS_RT_OK);
@@ -1122,8 +1089,7 @@ TEST(VCD, DumpAllDoesNotConsumeThePendingEndOfSlotInitialSample) {
   Fixture fixture;
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.setBits(kClkBit, 1, 0, 0);
   ASSERT_EQ(talos_rt_v1_dump_all(fixture.context), TALOS_RT_OK);
   fixture.setBits(kClkBit, 1, 1, 0);
@@ -1144,8 +1110,7 @@ TEST(VCD, DumpLimitStopsWriting) {
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_dump_limit(fixture.context, 64), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.advanceTo(10);
   fixture.setBits(kDataBit, 8, 0xff, 0);
   fixture.advanceTo(20);
@@ -1162,8 +1127,7 @@ TEST(VCD, ExactAndZeroDumpLimitsStopWithOneComment) {
   Fixture exact;
   ASSERT_EQ(exact.create(), TALOS_RT_OK);
   ASSERT_EQ(exact.openDump(), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(exact.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(exact.context, 0, nullptr, 0), TALOS_RT_OK);
   exact.advanceTo(10);
   ASSERT_EQ(talos_rt_v1_dump_flush(exact.context), TALOS_RT_OK);
   std::ifstream exactFile(exact.path, std::ios::binary | std::ios::ate);
@@ -1179,8 +1143,7 @@ TEST(VCD, ExactAndZeroDumpLimitsStopWithOneComment) {
   ASSERT_EQ(zero.create(), TALOS_RT_OK);
   ASSERT_EQ(zero.openDump(), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_dump_limit(zero.context, 0), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(zero.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(zero.context, 0, nullptr, 0), TALOS_RT_OK);
   std::string zeroText = zero.read();
   EXPECT_NE(zeroText.find("$comment dump limit of 0 bytes reached $end"),
             std::string::npos);
@@ -1193,8 +1156,7 @@ TEST(VCD, HeaderLimitClosesImmediatelyAndDoesNotRetryPerSlot) {
   ASSERT_EQ(fixture.create(), TALOS_RT_OK);
   ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_dump_limit(fixture.context, 8), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dump_vars(fixture.context, 0, nullptr, 0), TALOS_RT_OK);
   fixture.advanceTo(10);
   fixture.setBits(kClkBit, 1, 1, 0);
   fixture.advanceTo(20);

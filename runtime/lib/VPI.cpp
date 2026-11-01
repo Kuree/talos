@@ -521,12 +521,11 @@ void setError(VPIState *state, const char *message, int level = vpiError,
   TALOS_RT_CATCH_ALL {}
 }
 
-bool dynamicHandleIsLive(const __vpiHandle &handle,
-                         talos_rt_gc_lane_v1 *lane) {
+bool dynamicHandleIsLive(const __vpiHandle &handle, talos_rt_gc_lane_v1 *lane) {
   ManagedObjectLease lease;
-  return talos_rt_managed_object_acquire(
-             lane, handle.dynamicObject, TALOS_RT_MANAGED_INVALID, &lease) ==
-             TALOS_RT_OK &&
+  return talos_rt_managed_object_acquire(lane, handle.dynamicObject,
+                                         TALOS_RT_MANAGED_INVALID,
+                                         &lease) == TALOS_RT_OK &&
          talos_rt_v1_object_id(handle.dynamicObject) == handle.dynamicIdentity;
 }
 
@@ -575,8 +574,8 @@ uint64_t sourceThread(VPIState *state, uint64_t executor) {
 bool threadIsLive(VPIState *state, uint64_t logicalProcess) {
   logicalProcess = sourceThread(state, logicalProcess);
   talos_rt_process_state status{};
-  return talos_rt_v1_process_status(state->context, logicalProcess,
-                                      &status) == TALOS_RT_OK &&
+  return talos_rt_v1_process_status(state->context, logicalProcess, &status) ==
+             TALOS_RT_OK &&
          status != TALOS_RT_PROCESS_FINISHED &&
          status != TALOS_RT_PROCESS_KILLED;
 }
@@ -818,7 +817,7 @@ bool fixedProtectionFor(VPIState *state, talos_rt_design_cursor_v1 cursor,
     bool protectedStatement = false;
     talos_rt_status statementStatus =
         talos_rt_cached_vpi_statement_is_protected(state->context, cursor,
-                                                     &protectedStatement);
+                                                   &protectedStatement);
     if (statementStatus == TALOS_RT_OK) {
       isProtected = protectedStatement;
       return true;
@@ -906,7 +905,7 @@ vpiHandle makeRelatedHandle(__vpiHandle *source,
   uint32_t sourceType = source->exactVpiType;
   if (!sourceType)
     (void)talos_rt_cached_vpi_type(source->owner->context, source->cursor,
-                                     &sourceType);
+                                   &sourceType);
   vpiHandle result =
       makeHandle(source->owner, target, targetType, statement,
                  talos::runtime::hasClassDefinitionValueOrigin(
@@ -916,8 +915,8 @@ vpiHandle makeRelatedHandle(__vpiHandle *source,
   if (!result || !source->dynamicObject)
     return result;
   VPIClassMemberBinding member{};
-  talos_rt_status status = talos_rt_cached_vpi_class_member(
-      source->owner->context, target, &member);
+  talos_rt_status status =
+      talos_rt_cached_vpi_class_member(source->owner->context, target, &member);
   bool instanceMember = status == TALOS_RT_OK && !member.isStatic;
   if (status != TALOS_RT_OK && status != TALOS_RT_EOF) {
     source->owner->handles.erase(reinterpret_cast<uintptr_t>(result));
@@ -954,8 +953,8 @@ void projectScalarBitTypespec(talos_rt_design_semantic_type_info_v1 &info) {
   const bool fourState =
       (info.flags & TALOS_RT_DESIGN_SEMANTIC_FOUR_STATE) != 0;
   info = {};
-  info.kind = fourState ? TALOS_RT_DESIGN_SEMANTIC_LOGIC
-                        : TALOS_RT_DESIGN_SEMANTIC_BIT;
+  info.kind =
+      fourState ? TALOS_RT_DESIGN_SEMANTIC_LOGIC : TALOS_RT_DESIGN_SEMANTIC_BIT;
   info.flags = fourState ? TALOS_RT_DESIGN_SEMANTIC_FOUR_STATE : 0;
   info.public_vpi_kind = fourState ? vpiLogicTypespec : vpiBitTypespec;
   info.bit_width = 1;
@@ -977,7 +976,7 @@ vpiHandle makeTypespecHandle(VPIState *state, talos_rt_design_cursor_v1 base,
   if (honorAlias && info.alias_object.offset != 0) {
     uint32_t exactType = 0;
     if (talos_rt_cached_vpi_type(state->context, info.alias_object,
-                                   &exactType) != TALOS_RT_OK)
+                                 &exactType) != TALOS_RT_OK)
       return nullptr;
     return makeHandle(state, info.alias_object, exactType);
   }
@@ -985,7 +984,7 @@ vpiHandle makeTypespecHandle(VPIState *state, talos_rt_design_cursor_v1 base,
       info.identity_target.offset != 0) {
     uint32_t exactType = 0;
     if (talos_rt_cached_vpi_type(state->context, info.identity_target,
-                                   &exactType) != TALOS_RT_OK ||
+                                 &exactType) != TALOS_RT_OK ||
         exactType != vpiInterfaceTypespec)
       return nullptr;
     return makeHandle(state, info.identity_target, exactType);
@@ -1321,8 +1320,7 @@ bool frameLocalInfo(__vpiHandle *handle, talos_rt_design_info_v1 &info) {
 enum class VPIValueShape { Neither, Scalar, Vector };
 
 PLI_INT32 vpiTypeForHandle(__vpiHandle *handle);
-bool semanticCursorFor(__vpiHandle *handle,
-                       talos_rt_design_cursor_v1 &cursor);
+bool semanticCursorFor(__vpiHandle *handle, talos_rt_design_cursor_v1 &cursor);
 bool semanticTypeInfo(__vpiHandle *handle, talos_rt_design_cursor_v1 cursor,
                       talos_rt_design_semantic_type_info_v1 &info);
 bool semanticEdge(__vpiHandle *handle, talos_rt_design_cursor_v1 cursor,
@@ -1357,7 +1355,7 @@ bool valueShapeFor(__vpiHandle *handle,
     talos_rt_design_type_info_v1 type{};
     if (cursor.offset == 0 ||
         talos_rt_cached_design_type_info(handle->owner->context, cursor,
-                                           &type) != TALOS_RT_OK) {
+                                         &type) != TALOS_RT_OK) {
       setError(handle->owner, "design type metadata lookup failed",
                vpiInternal);
       return false;
@@ -1397,10 +1395,10 @@ bool hasValueRequirement(
 const talos::reflection::VPIValuePolicyDescriptor *
 valuePolicyFor(__vpiHandle *handle) {
   PLI_INT32 type = vpiTypeForHandle(handle);
-  const auto *policy = type == vpiUndefined
-                           ? nullptr
-                           : talos::reflection::findVPIValuePolicy(
-                                 static_cast<uint32_t>(type));
+  const auto *policy =
+      type == vpiUndefined
+          ? nullptr
+          : talos::reflection::findVPIValuePolicy(static_cast<uint32_t>(type));
   if (!policy)
     setError(handle->owner, "vpi_get_value is not defined for this VPI object",
              vpiNotice);
@@ -1422,16 +1420,16 @@ bool refActualValueSource(__vpiHandle *handle,
   }
   VPIRelationRange range{};
   bool statement = false;
-  if (talos_rt_cached_vpi_relation_range(handle->owner->context,
-                                           handle->cursor, vpiActual, false,
-                                           &range) != TALOS_RT_OK ||
+  if (talos_rt_cached_vpi_relation_range(handle->owner->context, handle->cursor,
+                                         vpiActual, false,
+                                         &range) != TALOS_RT_OK ||
       range.count != 1 ||
       talos_rt_cached_vpi_relation_target(handle->owner->context, range.first,
-                                            &source.cursor, &source.exactType,
-                                            &statement) != TALOS_RT_OK ||
+                                          &source.cursor, &source.exactType,
+                                          &statement) != TALOS_RT_OK ||
       statement ||
       talos_rt_cached_design_info(handle->owner->context, source.cursor,
-                                    &source.info) != TALOS_RT_OK) {
+                                  &source.info) != TALOS_RT_OK) {
     setError(handle->owner, "VPI RefObj actual cannot be resolved",
              vpiInternal);
     return false;
@@ -1444,8 +1442,8 @@ bool refActualValueSource(__vpiHandle *handle,
 bool unresolvedValueParameter(uint32_t type,
                               const talos_rt_design_info_v1 &info) {
   return type == vpiParameter &&
-         (info.capabilities &
-          TALOS_RT_DESIGN_CAP_UNRESOLVED_VALUE_PARAMETER) != 0;
+         (info.capabilities & TALOS_RT_DESIGN_CAP_UNRESOLVED_VALUE_PARAMETER) !=
+             0;
 }
 
 bool isSourceClassProperty(const talos_rt_design_info_v1 &info) {
@@ -1511,12 +1509,12 @@ bool rejectUnavailableInheritanceRelation(__vpiHandle *handle,
     uint32_t kind = 0;
     bool statement = false;
     return talos_rt_cached_vpi_relation_range(handle->owner->context, source,
-                                                relation, false,
-                                                &range) == TALOS_RT_OK &&
+                                              relation, false,
+                                              &range) == TALOS_RT_OK &&
            range.count == 1 &&
            talos_rt_cached_vpi_relation_target(handle->owner->context,
-                                                 range.first, &target, &kind,
-                                                 &statement) == TALOS_RT_OK &&
+                                               range.first, &target, &kind,
+                                               &statement) == TALOS_RT_OK &&
            !statement;
   };
   if (!iterate && selector == vpiRhs &&
@@ -1524,10 +1522,9 @@ bool rejectUnavailableInheritanceRelation(__vpiHandle *handle,
     talos_rt_design_cursor_v1 parameter{};
     talos_rt_design_info_v1 info{};
     if (targetFor(handle->cursor, vpiLhs, parameter) &&
-        talos_rt_cached_design_info(handle->owner->context, parameter,
-                                      &info) == TALOS_RT_OK &&
-        (info.capabilities &
-         TALOS_RT_DESIGN_CAP_UNAVAILABLE_PARAMETER_DEFAULT))
+        talos_rt_cached_design_info(handle->owner->context, parameter, &info) ==
+            TALOS_RT_OK &&
+        (info.capabilities & TALOS_RT_DESIGN_CAP_UNAVAILABLE_PARAMETER_DEFAULT))
       message = "original parameter default form is unavailable";
   }
   if (!iterate && selector == vpiExtends &&
@@ -1663,7 +1660,7 @@ bool valueRequirementsSatisfied(
     return true;
   VPIClassMemberBinding member{};
   if (talos_rt_cached_vpi_class_member(handle->owner->context, handle->cursor,
-                                         &member) == TALOS_RT_OK &&
+                                       &member) == TALOS_RT_OK &&
       !member.isStatic && !handle->dynamicObject) {
     setError(handle->owner,
              "a non-static class member requires a live class object",
@@ -1673,18 +1670,18 @@ bool valueRequirementsSatisfied(
   VPIFrozenValue frozen{};
   if (handle->form == VPIObjectForm::Design &&
       talos_rt_cached_vpi_frozen_value(handle->owner->context, handle->cursor,
-                                         &frozen) == TALOS_RT_OK)
+                                       &frozen) == TALOS_RT_OK)
     return true;
   VPIExpressionInfo expression{};
   if (handle->form == VPIObjectForm::Design &&
       talos_rt_cached_vpi_expression(handle->owner->context, handle->cursor,
-                                       &expression) == TALOS_RT_OK)
+                                     &expression) == TALOS_RT_OK)
     return true;
   talos_rt_design_type_info_v1 type{};
   if (objectInfo.type_offset == 0 ||
       talos_rt_cached_design_type_info(handle->owner->context,
-                                         {objectInfo.type_offset},
-                                         &type) != TALOS_RT_OK) {
+                                       {objectInfo.type_offset},
+                                       &type) != TALOS_RT_OK) {
     setError(handle->owner, "design type metadata lookup failed", vpiInternal);
     return false;
   }
@@ -1856,7 +1853,7 @@ PLI_INT32 vpiTypeForHandle(__vpiHandle *handle) {
     return static_cast<PLI_INT32>(handle->exactVpiType);
   uint32_t exact = 0;
   if (talos_rt_cached_vpi_type(handle->owner->context, handle->cursor,
-                                 &exact) == TALOS_RT_OK &&
+                               &exact) == TALOS_RT_OK &&
       exact != 0) {
     handle->exactVpiType = exact;
     return static_cast<PLI_INT32>(exact);
@@ -1890,10 +1887,10 @@ propertyFor(__vpiHandle *handle, PLI_INT32 property) {
 
 // Optional immutable facts are sparse overrides, not default values. Legacy
 // images and live views without a row retain the generated derived behavior.
-talos_rt_status optionalPropertyFor(
-    __vpiHandle *handle,
-    const talos::reflection::VPIPropertyDescriptor *descriptor,
-    VPIFixedPropertyValue &value) {
+talos_rt_status
+optionalPropertyFor(__vpiHandle *handle,
+                    const talos::reflection::VPIPropertyDescriptor *descriptor,
+                    VPIFixedPropertyValue &value) {
   if (!descriptor || handle->form != VPIObjectForm::Design ||
       descriptor->realization !=
           talos::reflection::VPIPropertyRealization::OptionalImage)
@@ -1947,7 +1944,7 @@ bool fixedPropertyFor(
   }
   setError(handle->owner,
            status == TALOS_RT_EOF ? "fixed VPI property value is unavailable"
-                                    : "fixed VPI property image lookup failed",
+                                  : "fixed VPI property image lookup failed",
            status == TALOS_RT_EOF ? vpiNotice : vpiInternal);
   return false;
 }
@@ -1972,9 +1969,8 @@ bool indexedImagePropertyFor(
   if (status == TALOS_RT_OK)
     return true;
   setError(handle->owner,
-           status == TALOS_RT_EOF
-               ? "indexed VPI property value is unavailable"
-               : "indexed VPI property image lookup failed",
+           status == TALOS_RT_EOF ? "indexed VPI property value is unavailable"
+                                  : "indexed VPI property image lookup failed",
            status == TALOS_RT_EOF ? vpiNotice : vpiInternal);
   return false;
 }
@@ -1991,8 +1987,7 @@ bool allowProtectedSource(__vpiHandle *handle, const char *operation) {
 int exactTypeFor(VPIState *state, talos_rt_design_cursor_v1 cursor,
                  uint32_t fallbackKind) {
   uint32_t exact = 0;
-  if (talos_rt_cached_vpi_type(state->context, cursor, &exact) ==
-      TALOS_RT_OK)
+  if (talos_rt_cached_vpi_type(state->context, cursor, &exact) == TALOS_RT_OK)
     return static_cast<int>(exact);
   return vpiTypeFor(fallbackKind);
 }
@@ -2004,8 +1999,8 @@ bool nameFor(__vpiHandle *handle, std::string &name, bool localMember = false) {
       handle->owner->context, handle->cursor, &data, &size);
   if (localMember) {
     VPIClassMemberBinding member{};
-    if (talos_rt_cached_vpi_class_member(
-            handle->owner->context, handle->cursor, &member) == TALOS_RT_OK) {
+    if (talos_rt_cached_vpi_class_member(handle->owner->context, handle->cursor,
+                                         &member) == TALOS_RT_OK) {
       data = member.name;
       size = member.nameSize;
       status = TALOS_RT_OK;
@@ -2071,13 +2066,11 @@ DpiScopeHandle *timeScopeFor(__vpiHandle *handle) {
       talos_rt_design_info_v1 info{};
       status =
           talos_rt_cached_design_info(handle->owner->context, cursor, &info);
-      if (status == TALOS_RT_OK &&
-          info.kind == TALOS_RT_DESIGN_RECORD_SCOPE)
-        return talos_rt_find_dpi_scope(handle->owner->context,
-                                         info.handle.id);
+      if (status == TALOS_RT_OK && info.kind == TALOS_RT_DESIGN_RECORD_SCOPE)
+        return talos_rt_find_dpi_scope(handle->owner->context, info.handle.id);
       if (status == TALOS_RT_OK)
         status = talos_rt_cached_design_parent(handle->owner->context, cursor,
-                                                 &parent);
+                                               &parent);
     }
     if (status != TALOS_RT_OK || parent.offset == cursor.offset)
       return nullptr;
@@ -2103,7 +2096,7 @@ bool fullNameForStatement(__vpiHandle *handle, std::string &name) {
       const uint8_t *data = nullptr;
       uint64_t size = 0;
       if (talos_rt_cached_design_name(handle->owner->context, cursor, &data,
-                                        &size) != TALOS_RT_OK)
+                                      &size) != TALOS_RT_OK)
         return false;
       if (size != 0)
         components.emplace_back(reinterpret_cast<const char *>(data),
@@ -2144,7 +2137,7 @@ bool fullNameForStatement(__vpiHandle *handle, std::string &name) {
     const uint8_t *baseName = nullptr;
     uint64_t baseNameSize = 0;
     if (talos_rt_cached_design_name(handle->owner->context, base, &baseName,
-                                      &baseNameSize) != TALOS_RT_OK ||
+                                    &baseNameSize) != TALOS_RT_OK ||
         baseNameSize == 0)
       return false;
     name.assign(reinterpret_cast<const char *>(baseName),
@@ -2207,18 +2200,16 @@ bool lookup(VPIState *state, const std::string &name,
 
 bool isTypespecVPIKind(uint32_t type) {
   const auto *descriptor = talos::reflection::findVPIObjectKind(type);
-  return descriptor &&
-         (descriptor->families &
-          talos::reflection::vpiFamilyMask(
-              talos::reflection::VPIObjectFamily::Typespec)) != 0;
+  return descriptor && (descriptor->families &
+                        talos::reflection::vpiFamilyMask(
+                            talos::reflection::VPIObjectFamily::Typespec)) != 0;
 }
 
 bool isVariableVPIKind(uint32_t type) {
   const auto *descriptor = talos::reflection::findVPIObjectKind(type);
-  return descriptor &&
-         (descriptor->families &
-          talos::reflection::vpiFamilyMask(
-              talos::reflection::VPIObjectFamily::Variable)) != 0;
+  return descriptor && (descriptor->families &
+                        talos::reflection::vpiFamilyMask(
+                            talos::reflection::VPIObjectFamily::Variable)) != 0;
 }
 
 bool isSemanticObjectForm(VPIObjectForm form) {
@@ -2228,8 +2219,7 @@ bool isSemanticObjectForm(VPIObjectForm form) {
          form == VPIObjectForm::IntegralConstant;
 }
 
-bool semanticCursorFor(__vpiHandle *handle,
-                       talos_rt_design_cursor_v1 &cursor) {
+bool semanticCursorFor(__vpiHandle *handle, talos_rt_design_cursor_v1 &cursor) {
   if (handle->form != VPIObjectForm::Design) {
     cursor = handle->semanticCursor;
     return cursor.offset != 0;
@@ -2240,8 +2230,8 @@ bool semanticCursorFor(__vpiHandle *handle,
 
 bool semanticTypeInfo(__vpiHandle *handle, talos_rt_design_cursor_v1 cursor,
                       talos_rt_design_semantic_type_info_v1 &info) {
-  if (talos_rt_cached_design_semantic_type_info(
-          handle->owner->context, cursor, &info) == TALOS_RT_OK) {
+  if (talos_rt_cached_design_semantic_type_info(handle->owner->context, cursor,
+                                                &info) == TALOS_RT_OK) {
     if (handle->suppressSemanticDimension &&
         cursor.offset == handle->semanticCursor.offset)
       projectScalarBitTypespec(info);
@@ -2255,8 +2245,8 @@ bool semanticTypeInfo(__vpiHandle *handle, talos_rt_design_cursor_v1 cursor,
 bool semanticEdge(__vpiHandle *handle, talos_rt_design_cursor_v1 cursor,
                   uint32_t ordinal,
                   talos_rt_design_semantic_type_edge_v1 &edge) {
-  if (talos_rt_cached_design_semantic_type_edge(
-          handle->owner->context, cursor, ordinal, &edge) == TALOS_RT_OK)
+  if (talos_rt_cached_design_semantic_type_edge(handle->owner->context, cursor,
+                                                ordinal, &edge) == TALOS_RT_OK)
     return true;
   setError(handle->owner, "VPI semantic type edge lookup failed", vpiInternal);
   return false;
@@ -2303,7 +2293,7 @@ bool unpackedArrayElementCount(__vpiHandle *handle,
     talos_rt_design_type_info_v1 type{};
     if (cursor.offset == 0 ||
         talos_rt_cached_design_type_info(handle->owner->context, cursor,
-                                           &type) != TALOS_RT_OK)
+                                         &type) != TALOS_RT_OK)
       return false;
     if (type.kind != TALOS_RT_DESIGN_TYPE_ARRAY ||
         (type.flags & TALOS_RT_DESIGN_TYPE_PACKED) != 0)
@@ -2318,8 +2308,7 @@ bool unpackedArrayElementCount(__vpiHandle *handle,
   }
 }
 
-bool physicalTypeInfo(__vpiHandle *handle,
-                      talos_rt_design_type_info_v1 &type) {
+bool physicalTypeInfo(__vpiHandle *handle, talos_rt_design_type_info_v1 &type) {
   talos_rt_design_info_v1 info{};
   if (!infoFor(handle, info))
     return false;
@@ -2343,7 +2332,7 @@ bool physicalUnpackedArrayDimensions(__vpiHandle *handle,
     talos_rt_design_type_info_v1 type{};
     if (cursor.offset == 0 ||
         talos_rt_cached_design_type_info(handle->owner->context, cursor,
-                                           &type) != TALOS_RT_OK) {
+                                         &type) != TALOS_RT_OK) {
       setError(handle->owner, "design type metadata lookup failed",
                vpiInternal);
       return false;
@@ -2560,9 +2549,8 @@ bool isStoredClassEventArray(__vpiHandle *source) {
   if (rootType != vpiNamedEventArray)
     return false;
   VPIClassMemberBinding member{};
-  return talos_rt_cached_vpi_class_member(source->owner->context,
-                                            source->cursor,
-                                            &member) == TALOS_RT_OK &&
+  return talos_rt_cached_vpi_class_member(
+             source->owner->context, source->cursor, &member) == TALOS_RT_OK &&
          !member.isMethod;
 }
 
@@ -2571,13 +2559,13 @@ bool indexedInfoForSteps(__vpiHandle *source,
                          talos_rt_design_info_v1 &info) {
   if (steps.empty() ||
       talos_rt_cached_design_info(source->owner->context, source->cursor,
-                                    &info) != TALOS_RT_OK)
+                                  &info) != TALOS_RT_OK)
     return false;
   const VPISelectionStep &last = steps.back();
   talos_rt_design_type_info_v1 type{};
   if (last.physicalType.offset == 0 ||
-      talos_rt_cached_design_type_info(
-          source->owner->context, last.physicalType, &type) != TALOS_RT_OK)
+      talos_rt_cached_design_type_info(source->owner->context,
+                                       last.physicalType, &type) != TALOS_RT_OK)
     return false;
   info.type_offset = last.physicalType.offset;
   info.bit_width = last.bitWidth;
@@ -2591,10 +2579,9 @@ bool indexedInfoForSteps(__vpiHandle *source,
   return true;
 }
 
-vpiHandle
-makeIndexedHandle(__vpiHandle *source, uint32_t rootType,
-                  talos::reflection::VPIIndexedAccessKind accessKind,
-                  std::vector<VPISelectionStep> steps) {
+vpiHandle makeIndexedHandle(__vpiHandle *source, uint32_t rootType,
+                            talos::reflection::VPIIndexedAccessKind accessKind,
+                            std::vector<VPISelectionStep> steps) {
   if (!source || steps.empty())
     return nullptr;
   talos_rt_design_info_v1 info{};
@@ -2750,9 +2737,8 @@ vpiHandle makeIndexedPrefix(__vpiHandle *source, size_t count) {
             talos::reflection::VPIIndexedAccessKind::RelationElement &&
         !isStoredClassEventArray(source)) {
       VPIRelationIndexInfo index{};
-      if (talos_rt_cached_vpi_relation_index(source->owner->context,
-                                               source->cursor,
-                                               &index) != TALOS_RT_OK ||
+      if (talos_rt_cached_vpi_relation_index(
+              source->owner->context, source->cursor, &index) != TALOS_RT_OK ||
           index.sparse || count >= index.dimensionCount)
         return nullptr;
       uint64_t remaining = 1;
@@ -2848,11 +2834,11 @@ bool sequentialInterfaceElement(__vpiHandle *source,
           ? TALOS_RT_CONTAINER_DYNAMIC_ARRAY
           : TALOS_RT_CONTAINER_QUEUE;
   VPIValueLayoutOwner layout;
-  auto match = talos_rt_cached_vpi_value_layout_owner(
-      source->owner->context, source->cursor, &layout);
+  auto match = talos_rt_cached_vpi_value_layout_owner(source->owner->context,
+                                                      source->cursor, &layout);
   if (match == TALOS_RT_OK)
     match = talos_rt_vpi_element_matches(source->owner->context, layout,
-                                           childSemantic, snapshot.element);
+                                         childSemantic, snapshot.element);
   if (snapshot.kind != expectedContainer || match != TALOS_RT_OK) {
     setError(source->owner,
              "virtual-interface array does not match its declared layout",
@@ -2910,7 +2896,7 @@ bool interfaceAssociativeSnapshot(__vpiHandle *source,
   auto status = talos_rt_assoc_snapshot(object, &snapshot);
   if (status == TALOS_RT_OK)
     status = talos_rt_vpi_element_matches(source->owner->context, layout,
-                                            element, snapshot.element);
+                                          element, snapshot.element);
   if (status != TALOS_RT_OK) {
     setError(source->owner, "associative virtual-interface storage mismatch",
              status == TALOS_RT_OUT_OF_MEMORY ||
@@ -3062,8 +3048,8 @@ bool appendInterfaceAssociativeSelection(
   talos_rt_design_cursor_v1 childSemantic{}, childPhysical{};
   if (!semanticElement(source, semantic, childSemantic) ||
       talos_rt_cached_vpi_value_element_type(source->owner->context,
-                                               source->cursor, childSemantic,
-                                               &childPhysical) != TALOS_RT_OK)
+                                             source->cursor, childSemantic,
+                                             &childPhysical) != TALOS_RT_OK)
     return false;
   talos_rt_design_type_info_v1 childType{};
   uint32_t currentType = steps.empty()
@@ -3074,7 +3060,7 @@ bool appendInterfaceAssociativeSelection(
       access->accessKind !=
           talos::reflection::VPIIndexedAccessKind::VariableElement ||
       talos_rt_cached_design_type_info(source->owner->context, childPhysical,
-                                         &childType) != TALOS_RT_OK ||
+                                       &childType) != TALOS_RT_OK ||
       steps.size() > UINT32_MAX)
     return false;
   VPISelectionStep step;
@@ -3095,12 +3081,13 @@ bool appendInterfaceAssociativeSelection(
   return true;
 }
 
-bool appendIndexedSelection(
-    __vpiHandle *source, talos::reflection::VPIIndexedAccessKind accessKind,
-    int64_t index, std::vector<VPISelectionStep> &steps) {
+bool appendIndexedSelection(__vpiHandle *source,
+                            talos::reflection::VPIIndexedAccessKind accessKind,
+                            int64_t index,
+                            std::vector<VPISelectionStep> &steps) {
   talos_rt_design_info_v1 object{};
   if (talos_rt_cached_design_info(source->owner->context, source->cursor,
-                                    &object) != TALOS_RT_OK ||
+                                  &object) != TALOS_RT_OK ||
       object.type_offset == 0) {
     setError(source->owner, "indexed VPI object has no physical type",
              vpiNotice);
@@ -3113,7 +3100,7 @@ bool appendIndexedSelection(
     semantic = steps.back().semanticType;
   else
     (void)talos_rt_cached_design_semantic_root(source->owner->context,
-                                                 source->cursor, &semantic);
+                                               source->cursor, &semantic);
   if (!steps.empty() && steps.back().suppressSemanticDimension)
     return false;
 
@@ -3126,7 +3113,7 @@ bool appendIndexedSelection(
 
   talos_rt_design_type_info_v1 type{};
   if (talos_rt_cached_design_type_info(source->owner->context, physical,
-                                         &type) != TALOS_RT_OK) {
+                                       &type) != TALOS_RT_OK) {
     setError(source->owner, "indexed VPI type metadata lookup failed",
              vpiInternal);
     return false;
@@ -3157,16 +3144,16 @@ bool appendIndexedSelection(
       return false;
     talos_rt_design_cursor_v1 childSemantic{}, childPhysical{};
     if (!semanticElement(source, semantic, childSemantic) ||
-        talos_rt_cached_vpi_value_element_type(
-            source->owner->context, source->cursor, childSemantic,
-            &childPhysical) != TALOS_RT_OK) {
+        talos_rt_cached_vpi_value_element_type(source->owner->context,
+                                               source->cursor, childSemantic,
+                                               &childPhysical) != TALOS_RT_OK) {
       setError(source->owner, "virtual-interface array layout is unavailable",
                vpiNotice);
       return false;
     }
     talos_rt_design_type_info_v1 childType{};
-    if (talos_rt_cached_design_type_info(
-            source->owner->context, childPhysical, &childType) != TALOS_RT_OK)
+    if (talos_rt_cached_design_type_info(source->owner->context, childPhysical,
+                                         &childType) != TALOS_RT_OK)
       return false;
     ManagedExecutionScope managed(source->owner->context);
     if (managed.getStatus() != TALOS_RT_OK || !managed.getLane())
@@ -3177,11 +3164,11 @@ bool appendIndexedSelection(
         !sequentialInterfaceElement(source, semantic, word,
                                     static_cast<uint64_t>(index), selected))
       return false;
-    const uint32_t resultType = indexedResultType(
-        source, *access, childSemantic,
-        childType.kind == TALOS_RT_DESIGN_TYPE_ARRAY &&
-            !(childType.flags & TALOS_RT_DESIGN_TYPE_PACKED),
-        false);
+    const uint32_t resultType =
+        indexedResultType(source, *access, childSemantic,
+                          childType.kind == TALOS_RT_DESIGN_TYPE_ARRAY &&
+                              !(childType.flags & TALOS_RT_DESIGN_TYPE_PACKED),
+                          false);
     if (!resultType || steps.size() > UINT32_MAX)
       return false;
     VPISelectionStep step;
@@ -3214,8 +3201,8 @@ bool appendIndexedSelection(
   if (isArray) {
     selectedPhysical = type.element_type;
     if (talos_rt_cached_design_type_info(source->owner->context,
-                                           selectedPhysical,
-                                           &selectedType) != TALOS_RT_OK) {
+                                         selectedPhysical,
+                                         &selectedType) != TALOS_RT_OK) {
       setError(source->owner, "indexed VPI element type lookup failed",
                vpiInternal);
       return false;
@@ -3291,7 +3278,7 @@ bool appendAggregateMemberSelection(
     uint32_t edgeIndex, std::vector<VPISelectionStep> &steps) {
   talos_rt_design_info_v1 object{};
   if (talos_rt_cached_design_info(source->owner->context, source->cursor,
-                                    &object) != TALOS_RT_OK ||
+                                  &object) != TALOS_RT_OK ||
       object.type_offset == 0)
     return false;
   talos_rt_design_cursor_v1 physical{
@@ -3300,8 +3287,8 @@ bool appendAggregateMemberSelection(
   if (!steps.empty())
     semantic = steps.back().semanticType;
   else if (talos_rt_cached_design_semantic_root(source->owner->context,
-                                                  source->cursor,
-                                                  &semantic) != TALOS_RT_OK)
+                                                source->cursor,
+                                                &semantic) != TALOS_RT_OK)
     return false;
 
   uint32_t currentType = steps.empty()
@@ -3314,7 +3301,7 @@ bool appendAggregateMemberSelection(
   talos_rt_design_type_info_v1 aggregate{};
   talos_rt_design_semantic_type_info_v1 semanticInfo{};
   if (talos_rt_cached_design_type_info(source->owner->context, physical,
-                                         &aggregate) != TALOS_RT_OK ||
+                                       &aggregate) != TALOS_RT_OK ||
       (aggregate.kind != TALOS_RT_DESIGN_TYPE_STRUCT &&
        aggregate.kind != TALOS_RT_DESIGN_TYPE_UNION) ||
       !semanticTypeInfo(source, semantic, semanticInfo) ||
@@ -3332,15 +3319,14 @@ bool appendAggregateMemberSelection(
   talos_rt_design_type_info_v1 fieldInfo{};
   talos_rt_design_type_info_v1 selectedType{};
   if (talos_rt_cached_design_type_child(source->owner->context, physical,
-                                          edge.ordinal,
-                                          &field) != TALOS_RT_OK ||
+                                        edge.ordinal, &field) != TALOS_RT_OK ||
       talos_rt_cached_design_type_info(source->owner->context, field,
-                                         &fieldInfo) != TALOS_RT_OK ||
+                                       &fieldInfo) != TALOS_RT_OK ||
       fieldInfo.kind != TALOS_RT_DESIGN_TYPE_FIELD ||
       fieldInfo.element_type.offset == 0 ||
       talos_rt_cached_design_type_info(source->owner->context,
-                                         fieldInfo.element_type,
-                                         &selectedType) != TALOS_RT_OK)
+                                       fieldInfo.element_type,
+                                       &selectedType) != TALOS_RT_OK)
     return false;
 
   const bool unpackedArray =
@@ -3357,8 +3343,8 @@ bool appendAggregateMemberSelection(
                    previousOffset + fieldInfo.packed_offset,
                    fieldInfo.bit_width, static_cast<int64_t>(edge.ordinal),
                    edgeIndex, resultType, semantic,
-                   (aggregate.flags & TALOS_RT_DESIGN_TYPE_PACKED) != 0,
-                   false, true, false, false});
+                   (aggregate.flags & TALOS_RT_DESIGN_TYPE_PACKED) != 0, false,
+                   true, false, false});
   return true;
 }
 
@@ -3382,11 +3368,10 @@ vpiHandle handleByAggregateMember(__vpiHandle *source, uint32_t edgeIndex) {
     }
     if (!appendAggregateMemberSelection(source, accessKind, edgeIndex, steps))
       return nullptr;
-    const auto *rootAccess =
-        talos::reflection::findVPIIndexedAccess(rootType);
+    const auto *rootAccess = talos::reflection::findVPIIndexedAccess(rootType);
     if (!rootAccess || rootAccess->accessKind != accessKind ||
-        !talos::reflection::indexedVPIResultAllowed(
-            *rootAccess, steps.back().exactVpiType))
+        !talos::reflection::indexedVPIResultAllowed(*rootAccess,
+                                                    steps.back().exactVpiType))
       return nullptr;
     return makeIndexedHandle(source, rootType, accessKind, std::move(steps));
   }
@@ -3405,7 +3390,7 @@ vpiHandle makeRelationIndexedHandle(__vpiHandle *source, uint32_t rootType,
     return nullptr;
   talos_rt_design_info_v1 info{};
   if (talos_rt_cached_design_info(source->owner->context, source->cursor,
-                                    &info) != TALOS_RT_OK) {
+                                  &info) != TALOS_RT_OK) {
     setError(source->owner, "relation-indexed VPI metadata lookup failed",
              vpiInternal);
     return nullptr;
@@ -3451,8 +3436,8 @@ vpiHandle handleRelationByIndices(
     const talos::reflection::VPIIndexedAccessDescriptor &access,
     PLI_INT32 count, const PLI_INT32 *indices) {
   VPIRelationIndexInfo indexInfo{};
-  if (talos_rt_cached_vpi_relation_index(
-          source->owner->context, source->cursor, &indexInfo) != TALOS_RT_OK)
+  if (talos_rt_cached_vpi_relation_index(source->owner->context, source->cursor,
+                                         &indexInfo) != TALOS_RT_OK)
     return nullptr;
   size_t priorCount = source->form == VPIObjectForm::Indexed
                           ? source->selectionSteps.size()
@@ -3475,7 +3460,7 @@ vpiHandle handleRelationByIndices(
     uint64_t flattened = 0;
     talos_rt_design_cursor_v1 semantic{};
     (void)talos_rt_cached_design_semantic_root(source->owner->context,
-                                                 source->cursor, &semantic);
+                                               source->cursor, &semantic);
     for (size_t dimension = 0; dimension != requested.size(); ++dimension) {
       uint64_t ordinal = 0;
       uint64_t extent = 0;
@@ -3581,8 +3566,7 @@ vpiHandle handleRelationByIndices(
   }
 }
 
-vpiHandle makeSnapshotHandle(VPIState *state,
-                             talos_rt_design_cursor_v1 source,
+vpiHandle makeSnapshotHandle(VPIState *state, talos_rt_design_cursor_v1 source,
                              std::shared_ptr<const VPISnapshotValue> value);
 
 // A selected bit owns only itself and an alias of its copied parent arena.
@@ -3616,9 +3600,8 @@ snapshotBitSelection(__vpiHandle *source,
     auto &bit = owner->second;
     bit.semantic = original.semantic;
     bit.parent = &original;
-    bit.exactType =
-        talos::reflection::findVPIIndexedAccess(original.exactType)
-            ->terminalResult;
+    bit.exactType = talos::reflection::findVPIIndexedAccess(original.exactType)
+                        ->terminalResult;
     bit.bitWidth = 1;
     bit.variableView = bit.integral = bit.bitSelection = true;
     bit.readable = original.readable;
@@ -3742,8 +3725,8 @@ vpiHandle handleByIndices(vpiHandle opaque, PLI_INT32 count,
           currentAccess->accessKind !=
               talos::reflection::VPIIndexedAccessKind::RelationElement ||
           talos_rt_cached_vpi_relation_index(current->owner->context,
-                                               current->cursor,
-                                               &indexInfo) != TALOS_RT_OK ||
+                                             current->cursor,
+                                             &indexInfo) != TALOS_RT_OK ||
           priorCount >= indexInfo.dimensionCount) {
         if (ownsCurrent)
           current->owner->handles.erase(current->token);
@@ -3784,11 +3767,10 @@ vpiHandle handleByIndices(vpiHandle opaque, PLI_INT32 count,
       if (!appendIndexedSelection(source, accessKind, indices[position], steps))
         return nullptr;
 
-    const auto *rootAccess =
-        talos::reflection::findVPIIndexedAccess(rootType);
+    const auto *rootAccess = talos::reflection::findVPIIndexedAccess(rootType);
     if (!rootAccess || rootAccess->accessKind != accessKind || steps.empty() ||
-        !talos::reflection::indexedVPIResultAllowed(
-            *rootAccess, steps.back().exactVpiType))
+        !talos::reflection::indexedVPIResultAllowed(*rootAccess,
+                                                    steps.back().exactVpiType))
       return nullptr;
     return makeIndexedHandle(source, rootType, accessKind, std::move(steps));
   }
@@ -3967,11 +3949,11 @@ bool functionReturnVariable(__vpiHandle *function, __vpiHandle &variable) {
   uint32_t kind = 0;
   bool statement = false;
   if (talos_rt_cached_vpi_relation_range(function->owner->context,
-                                           function->cursor, vpiReturn, false,
-                                           &range) != TALOS_RT_OK ||
-      talos_rt_cached_vpi_relation_target(function->owner->context,
-                                            range.first, &cursor, &kind,
-                                            &statement) != TALOS_RT_OK ||
+                                         function->cursor, vpiReturn, false,
+                                         &range) != TALOS_RT_OK ||
+      talos_rt_cached_vpi_relation_target(function->owner->context, range.first,
+                                          &cursor, &kind,
+                                          &statement) != TALOS_RT_OK ||
       statement)
     return false;
   variable.owner = function->owner;
@@ -4004,9 +3986,8 @@ PLI_INT32 functionReturnProperty(__vpiHandle *function, PLI_INT32 property) {
                 type.kind == TALOS_RT_DESIGN_SEMANTIC_PACKED_ARRAY ||
                 type.kind == TALOS_RT_DESIGN_SEMANTIC_PACKED_STRUCT ||
                 type.kind == TALOS_RT_DESIGN_SEMANTIC_PACKED_UNION;
-  if (packed &&
-      talos_rt_cached_design_semantic_bit_width(
-          function->owner->context, semantic, &width) == TALOS_RT_OK)
+  if (packed && talos_rt_cached_design_semantic_bit_width(
+                    function->owner->context, semantic, &width) == TALOS_RT_OK)
     return static_cast<PLI_INT32>(std::min<uint64_t>(width, INT32_MAX));
   if (type.kind == TALOS_RT_DESIGN_SEMANTIC_UNPACKED_STRUCT ||
       type.kind == TALOS_RT_DESIGN_SEMANTIC_UNPACKED_UNION)
@@ -4094,7 +4075,7 @@ bool relationElementSelectorForIteration(uint32_t sourceType,
         talos::reflection::vpiObjectSets[static_cast<uint16_t>(edge->targets)]
                 .kindCount != 1 ||
         !talos::reflection::vpiObjectSetContains(edge->targets,
-                                                   access->terminalResult))
+                                                 access->terminalResult))
       return false;
   }
   storageSelector = access->relationSelector;
@@ -4121,8 +4102,8 @@ vpiHandle makeSemanticRelation(__vpiHandle *handle, PLI_INT32 selector) {
       uint32_t actualType = 0;
       bool actualStatement = false;
       if (talos_rt_cached_vpi_relation_range(handle->owner->context,
-                                               handle->cursor, vpiActual, false,
-                                               &range) != TALOS_RT_OK ||
+                                             handle->cursor, vpiActual, false,
+                                             &range) != TALOS_RT_OK ||
           talos_rt_cached_vpi_relation_target(
               handle->owner->context, range.first, &actual, &actualType,
               &actualStatement) != TALOS_RT_OK ||
@@ -4144,18 +4125,17 @@ vpiHandle makeSemanticRelation(__vpiHandle *handle, PLI_INT32 selector) {
     if ((honorAlias && info.alias_object.offset != 0) ||
         (info.kind == TALOS_RT_DESIGN_SEMANTIC_VIRTUAL_INTERFACE &&
          info.identity_target.offset != 0)) {
-      talos_rt_design_cursor_v1 target = honorAlias && info.alias_object.offset != 0
-                                               ? info.alias_object
-                                               : info.identity_target;
+      talos_rt_design_cursor_v1 target =
+          honorAlias && info.alias_object.offset != 0 ? info.alias_object
+                                                      : info.identity_target;
       if (talos_rt_cached_vpi_type(handle->owner->context, target,
-                                     &targetType) != TALOS_RT_OK)
+                                   &targetType) != TALOS_RT_OK)
         return nullptr;
     }
-    if (!talos::reflection::vpiObjectSetContains(relation->targets,
-                                                   targetType))
+    if (!talos::reflection::vpiObjectSetContains(relation->targets, targetType))
       return nullptr;
-    return makeTypespecHandle(handle->owner, handle->cursor, semantic, honorAlias,
-                              handle->suppressSemanticDimension);
+    return makeTypespecHandle(handle->owner, handle->cursor, semantic,
+                              honorAlias, handle->suppressSemanticDimension);
   }
 
   if (handle->form == VPIObjectForm::Typespec ||
@@ -4168,15 +4148,13 @@ vpiHandle makeSemanticRelation(__vpiHandle *handle, PLI_INT32 selector) {
     if (selector == vpiInstance) {
       talos_rt_design_cursor_v1 instance{};
       uint32_t instanceType = 0;
-      if (talos_rt_cached_design_parent(handle->owner->context,
-                                          handle->cursor,
-                                          &instance) != TALOS_RT_OK ||
+      if (talos_rt_cached_design_parent(handle->owner->context, handle->cursor,
+                                        &instance) != TALOS_RT_OK ||
           talos_rt_cached_vpi_type(handle->owner->context, instance,
-                                     &instanceType) != TALOS_RT_OK)
+                                   &instanceType) != TALOS_RT_OK)
         return nullptr;
       const auto *relation = talos::reflection::findVPITraversal(
-          sourceType, vpiInstance,
-          talos::reflection::VPITraversalMode::Handle);
+          sourceType, vpiInstance, talos::reflection::VPITraversalMode::Handle);
       if (!relation || !talos::reflection::vpiObjectSetContains(
                            relation->targets, instanceType))
         return nullptr;
@@ -4186,9 +4164,8 @@ vpiHandle makeSemanticRelation(__vpiHandle *handle, PLI_INT32 selector) {
         info.kind == TALOS_RT_DESIGN_SEMANTIC_CLASS &&
         info.identity_target.offset != 0) {
       uint32_t targetType = 0;
-      if (talos_rt_cached_vpi_type(handle->owner->context,
-                                     info.identity_target,
-                                     &targetType) != TALOS_RT_OK)
+      if (talos_rt_cached_vpi_type(handle->owner->context, info.identity_target,
+                                   &targetType) != TALOS_RT_OK)
         return nullptr;
       const auto *relation = talos::reflection::findVPITraversal(
           sourceType, vpiClassDefn,
@@ -4202,7 +4179,7 @@ vpiHandle makeSemanticRelation(__vpiHandle *handle, PLI_INT32 selector) {
         info.alias_object.offset != 0) {
       uint32_t targetType = 0;
       if (talos_rt_cached_vpi_type(handle->owner->context, info.alias_object,
-                                     &targetType) != TALOS_RT_OK)
+                                   &targetType) != TALOS_RT_OK)
         return nullptr;
       return makeHandle(handle->owner, info.alias_object, targetType);
     }
@@ -4283,7 +4260,6 @@ vpiHandle makeSemanticRelation(__vpiHandle *handle, PLI_INT32 selector) {
   }
   return nullptr;
 }
-
 
 void copyUseRecipe(__vpiHandle &iterator, const __vpiHandle &source) {
   iterator.hasUse = true;
@@ -4392,12 +4368,12 @@ void inheritExpressionContext(__vpiHandle &target, const __vpiHandle &source) {
   talos_rt_design_info_v1 info{};
   const bool local =
       talos_rt_cached_design_info(target.owner->context, target.cursor,
-                                    &info) == TALOS_RT_OK &&
+                                  &info) == TALOS_RT_OK &&
       (info.capabilities & TALOS_RT_DESIGN_CAP_FRAME_LOCAL);
   VPIExpressionInfo expression{};
   if (!local && !target.statement &&
       talos_rt_cached_vpi_expression(target.owner->context, target.cursor,
-                                       &expression) != TALOS_RT_OK)
+                                     &expression) != TALOS_RT_OK)
     return;
   target.expressionFrameActivation = activation;
   if (!local)
@@ -4458,8 +4434,8 @@ vpiHandle frameLocalByName(__vpiHandle *source, std::string_view name) {
   for (const auto &local : locals) {
     VPIFixedPropertyValue declared{};
     if (talos_rt_cached_vpi_fixed_property(source->owner->context,
-                                             local.declaration, vpiName,
-                                             &declared) != TALOS_RT_OK)
+                                           local.declaration, vpiName,
+                                           &declared) != TALOS_RT_OK)
       continue;
     if (std::string_view(reinterpret_cast<const char *>(declared.stringData),
                          declared.stringSize) == name)
@@ -4514,8 +4490,8 @@ vpiHandle classWaitingProcesses(__vpiHandle *source) {
   {
     ManagedObjectLease lease;
     if (talos_rt_managed_object_acquire(
-            managed.getLane(), source->dynamicObject,
-            TALOS_RT_MANAGED_INVALID, &lease) != TALOS_RT_OK ||
+            managed.getLane(), source->dynamicObject, TALOS_RT_MANAGED_INVALID,
+            &lease) != TALOS_RT_OK ||
         talos_rt_v1_object_id(source->dynamicObject) !=
             source->dynamicIdentity) {
       setError(source->owner, "invalid or reclaimed VPI class object handle");
@@ -4667,9 +4643,9 @@ bool interfaceArrayExtent(__vpiHandle *source,
     return false;
   talos_rt_design_cursor_v1 childSemantic{}, childPhysical{};
   if (!semanticElement(source, semantic, childSemantic) ||
-      talos_rt_cached_vpi_value_element_type(
-          source->owner->context, source->cursor, childSemantic,
-          &childPhysical) != TALOS_RT_OK) {
+      talos_rt_cached_vpi_value_element_type(source->owner->context,
+                                             source->cursor, childSemantic,
+                                             &childPhysical) != TALOS_RT_OK) {
     setError(source->owner, "virtual-interface array layout is unavailable",
              vpiNotice);
     return false;
@@ -5048,11 +5024,11 @@ bool encodeRealBits(__vpiHandle *handle, PLI_INT32 type, uint64_t width,
 }
 
 talos_rt_status readFrameReference(VPIState *state,
-                                     const VPIFrameReference &reference,
-                                     talos_rt_design_cursor_v1 declaration,
-                                     const talos_rt_design_info_v1 &info,
-                                     uint64_t firstBit, uint64_t bitWidth,
-                                     uint64_t *value, uint64_t *unknown) {
+                                   const VPIFrameReference &reference,
+                                   talos_rt_design_cursor_v1 declaration,
+                                   const talos_rt_design_info_v1 &info,
+                                   uint64_t firstBit, uint64_t bitWidth,
+                                   uint64_t *value, uint64_t *unknown) {
   TALOS_RT_TRY {
     if (!info.bit_width || info.bit_width > UINT64_MAX - 7 ||
         firstBit > info.bit_width || bitWidth > info.bit_width - firstBit)
@@ -5089,8 +5065,8 @@ talos_rt_status readFrameReference(VPIState *state,
         talos_rt_v1_object_id(reference.owner) != reference.identity)
       return TALOS_RT_INVALID_HANDLE;
     talos_rt_design_type_info_v1 type{};
-    if (talos_rt_cached_design_type_info(context, {info.type_offset},
-                                           &type) != TALOS_RT_OK)
+    if (talos_rt_cached_design_type_info(context, {info.type_offset}, &type) !=
+        TALOS_RT_OK)
       return TALOS_RT_INVALID_DESIGN;
     bool fourState = (type.flags & TALOS_RT_DESIGN_TYPE_FOUR_STATE) != 0;
     uint64_t planeSize = (info.bit_width + 7) / 8;
@@ -5114,10 +5090,10 @@ talos_rt_status readFrameReference(VPIState *state,
       VPIValueLayoutOwner layout;
       if (status == TALOS_RT_OK)
         status = talos_rt_cached_design_semantic_root(context, declaration,
-                                                        &semantic);
+                                                      &semantic);
       if (status == TALOS_RT_OK)
         status = talos_rt_cached_vpi_value_layout_owner(context, declaration,
-                                                          &layout);
+                                                        &layout);
       if (status == TALOS_RT_OK)
         status =
             talos_rt_vpi_element_matches(context, layout, semantic, element);
@@ -5156,9 +5132,9 @@ talos_rt_status readFrameReference(VPIState *state,
 }
 
 talos_rt_status readFrameLocalBits(__vpiHandle *handle,
-                                     talos_rt_design_cursor_v1 cursor,
-                                     uint64_t firstBit, uint64_t bitWidth,
-                                     uint64_t *value, uint64_t *unknown) {
+                                   talos_rt_design_cursor_v1 cursor,
+                                   uint64_t firstBit, uint64_t bitWidth,
+                                   uint64_t *value, uint64_t *unknown) {
   talos_rt_design_info_v1 info{};
   if (talos_rt_cached_design_info(handle->owner->context, cursor, &info) !=
           TALOS_RT_OK ||
@@ -5186,16 +5162,16 @@ talos_rt_status readFrameLocalBits(__vpiHandle *handle,
 }
 
 talos_rt_status readClassMemberBits(__vpiHandle *handle,
-                                      talos_rt_design_cursor_v1 cursor,
-                                      uint64_t firstBit, uint64_t bitWidth,
-                                      uint64_t *value, uint64_t *unknown) {
+                                    talos_rt_design_cursor_v1 cursor,
+                                    uint64_t firstBit, uint64_t bitWidth,
+                                    uint64_t *value, uint64_t *unknown) {
   auto localStatus =
       readFrameLocalBits(handle, cursor, firstBit, bitWidth, value, unknown);
   if (localStatus != TALOS_RT_EOF)
     return localStatus;
   VPIClassMemberBinding member{};
-  talos_rt_status status = talos_rt_cached_vpi_class_member(
-      handle->owner->context, cursor, &member);
+  talos_rt_status status =
+      talos_rt_cached_vpi_class_member(handle->owner->context, cursor, &member);
   if (status != TALOS_RT_OK)
     return status;
   if (member.isMethod || handle->classDefinitionOrigin ||
@@ -5206,17 +5182,17 @@ talos_rt_status readClassMemberBits(__vpiHandle *handle,
   if (member.isStatic)
     return member.backingStorage.offset
                ? talos_rt_read_design_slice(handle->owner->context,
-                                              member.backingStorage, firstBit,
-                                              bitWidth, value, unknown)
+                                            member.backingStorage, firstBit,
+                                            bitWidth, value, unknown)
                : TALOS_RT_INVALID_HANDLE;
 
   ManagedExecutionScope managed(handle->owner->context);
   if (managed.getStatus() != TALOS_RT_OK || !managed.getLane())
     return TALOS_RT_INVALID_LIFECYCLE;
   ManagedObjectLease lease;
-  if (talos_rt_managed_object_acquire(
-          managed.getLane(), handle->dynamicObject, TALOS_RT_MANAGED_CLASS,
-          &lease) != TALOS_RT_OK ||
+  if (talos_rt_managed_object_acquire(managed.getLane(), handle->dynamicObject,
+                                      TALOS_RT_MANAGED_CLASS,
+                                      &lease) != TALOS_RT_OK ||
       talos_rt_v1_object_id(handle->dynamicObject) != handle->dynamicIdentity)
     return TALOS_RT_INVALID_HANDLE;
   const auto *descriptor =
@@ -5255,9 +5231,10 @@ talos_rt_status readClassMemberBits(__vpiHandle *handle,
 // Every tag and selected value comes from one coherent copy of the storage
 // segment. A managed-array hop starts a new segment, copied by the existing
 // container snapshot helper; later offsets are relative to that copy.
-talos_rt_status readTaggedSelection(
-    __vpiHandle *source, const std::vector<VPISelectionStep> &steps,
-    uint64_t firstBit, uint64_t bitWidth, uint64_t *value, uint64_t *unknown) {
+talos_rt_status readTaggedSelection(__vpiHandle *source,
+                                    const std::vector<VPISelectionStep> &steps,
+                                    uint64_t firstBit, uint64_t bitWidth,
+                                    uint64_t *value, uint64_t *unknown) {
   if (steps.empty())
     return TALOS_RT_EOF;
   TALOS_RT_TRY {
@@ -5273,7 +5250,7 @@ talos_rt_status readTaggedSelection(
     talos_rt_design_info_v1 root{};
     talos_rt_design_cursor_v1 semantic{};
     if (talos_rt_cached_design_info(source->owner->context, source->cursor,
-                                      &root) != TALOS_RT_OK)
+                                    &root) != TALOS_RT_OK)
       return TALOS_RT_INVALID_DESIGN;
     const auto semanticStatus = talos_rt_cached_design_semantic_root(
         source->owner->context, source->cursor, &semantic);
@@ -5287,7 +5264,7 @@ talos_rt_status readTaggedSelection(
       if (step.memberSelection) {
         talos_rt_design_type_info_v1 parent{};
         if (talos_rt_cached_design_type_info(source->owner->context, physical,
-                                               &parent) != TALOS_RT_OK)
+                                             &parent) != TALOS_RT_OK)
           return TALOS_RT_INVALID_DESIGN;
         if (parent.kind == TALOS_RT_DESIGN_TYPE_UNION &&
             (parent.flags & TALOS_RT_DESIGN_TYPE_TAGGED)) {
@@ -5351,9 +5328,8 @@ talos_rt_status readTaggedSelection(
                  end / 8 + (end % 8 != 0) > element->value_size ||
                  element->value_size >
                      payload.size() /
-                         ((element->flags & TALOS_RT_ELEMENT_FOUR_STATE)
-                              ? 2
-                              : 1)) {
+                         ((element->flags & TALOS_RT_ELEMENT_FOUR_STATE) ? 2
+                                                                         : 1)) {
         return TALOS_RT_INVALID_DESIGN;
       }
       auto bit = [&](uint64_t at, bool unknownPlane) {
@@ -5457,7 +5433,7 @@ bool readManagedSelectionWord(__vpiHandle *source,
       if (status == TALOS_RT_EOF)
         status =
             talos_rt_read_design_slice(source->owner->context, source->cursor,
-                                         bitOffset, 64, &result, &unknown);
+                                       bitOffset, 64, &result, &unknown);
       return status == TALOS_RT_OK && unknown == 0;
     };
     talos_rt_design_cursor_v1 semantic{};
@@ -5565,13 +5541,12 @@ bool readExpressionValue(__vpiHandle *handle, const VPIExpressionInfo &rootInfo,
     pending.push_back({handle->cursor, rootInfo, 0, {}});
     auto setShape = [&](Evaluated &result) {
       talos_rt_design_semantic_type_info_v1 semantic{};
-      if (talos_rt_cached_design_semantic_type_info(
-              handle->owner->context, result.semantic, &semantic) !=
-          TALOS_RT_OK)
+      if (talos_rt_cached_design_semantic_type_info(handle->owner->context,
+                                                    result.semantic,
+                                                    &semantic) != TALOS_RT_OK)
         return false;
       result.shape = {
-          result.width,
-          bool(semantic.flags & TALOS_RT_DESIGN_SEMANTIC_SIGNED),
+          result.width, bool(semantic.flags & TALOS_RT_DESIGN_SEMANTIC_SIGNED),
           bool(semantic.flags & TALOS_RT_DESIGN_SEMANTIC_FOUR_STATE),
           result.info.kind == vpiOperation ? result.info.code : 0};
       return true;
@@ -5617,7 +5592,7 @@ bool readExpressionValue(__vpiHandle *handle, const VPIExpressionInfo &rootInfo,
           continue;
         VPIExpressionInfo expression{};
         if (talos_rt_cached_vpi_expression(handle->owner->context, child,
-                                             &expression) == TALOS_RT_OK)
+                                           &expression) == TALOS_RT_OK)
           pending.push_back({child, expression, 0, {}});
         else if (!readLeaf(child, kind))
           return false;
@@ -5645,9 +5620,8 @@ bool readExpressionValue(__vpiHandle *handle, const VPIExpressionInfo &rootInfo,
       };
       if (current.info.kind == vpiConstant) {
         VPIFrozenValue frozen{};
-        if (talos_rt_cached_vpi_frozen_value(handle->owner->context,
-                                               current.cursor,
-                                               &frozen) != TALOS_RT_OK)
+        if (talos_rt_cached_vpi_frozen_value(
+                handle->owner->context, current.cursor, &frozen) != TALOS_RT_OK)
           return false;
         uint64_t bytes = (result.width + 7) / 8;
         for (uint64_t byte = 0; byte != bytes; ++byte) {
@@ -5661,8 +5635,7 @@ bool readExpressionValue(__vpiHandle *handle, const VPIExpressionInfo &rootInfo,
             current.info.code != vpiMultiConcatOp) {
           using talos::designbytecode::Logic;
           std::array<Logic, 3> values{};
-          std::array<talos::reflection::VPIIntegralExpressionShape, 3>
-              shapes{};
+          std::array<talos::reflection::VPIIntegralExpressionShape, 3> shapes{};
           if (current.children.size() > values.size())
             return false;
           for (size_t index = 0; index != current.children.size(); ++index) {
@@ -5701,9 +5674,9 @@ bool readExpressionValue(__vpiHandle *handle, const VPIExpressionInfo &rootInfo,
       } else {
         const auto &parent = child(0);
         talos_rt_design_semantic_type_info_v1 semantic{};
-        if (talos_rt_cached_design_semantic_type_info(
-                handle->owner->context, parent.semantic, &semantic) !=
-            TALOS_RT_OK)
+        if (talos_rt_cached_design_semantic_type_info(handle->owner->context,
+                                                      parent.semantic,
+                                                      &semantic) != TALOS_RT_OK)
           return false;
         bool hasRange =
             (semantic.flags & TALOS_RT_DESIGN_SEMANTIC_HAS_RANGE) != 0;
@@ -5780,7 +5753,7 @@ bool readValue(__vpiHandle *handle, const VPIValueSource &source,
   VPIExpressionInfo expression{};
   if (source.form == VPIObjectForm::Design &&
       talos_rt_cached_vpi_expression(handle->owner->context, source.cursor,
-                                       &expression) == TALOS_RT_OK)
+                                     &expression) == TALOS_RT_OK)
     return readExpressionValue(handle, expression, value, unknown);
   if (source.form == VPIObjectForm::SnapshotValue) {
     if (!handle->snapshot->readable) {
@@ -5876,7 +5849,7 @@ bool readValue(__vpiHandle *handle, const VPIValueSource &source,
   }
   talos_rt_status status =
       talos_rt_v1_design_read(handle->owner->context, source.cursor,
-                                value.data(), unknown.data(), info.bit_width);
+                              value.data(), unknown.data(), info.bit_width);
   if (status != TALOS_RT_OK) {
     setError(handle->owner, "VPI design read failed");
     return false;
@@ -5886,8 +5859,7 @@ bool readValue(__vpiHandle *handle, const VPIValueSource &source,
 
 bool readManagedStateWord(__vpiHandle *handle,
                           const talos_rt_design_info_v1 &info,
-                          VPIObjectForm form,
-                          talos_rt_design_cursor_v1 cursor,
+                          VPIObjectForm form, talos_rt_design_cursor_v1 cursor,
                           uint64_t selectionBitOffset, uint64_t &word) {
   if (form == VPIObjectForm::SnapshotValue &&
       handle->snapshot->exactType == vpiClassVar &&
@@ -5955,10 +5927,10 @@ bool readManagedStateWord(__vpiHandle *handle,
   if (status == TALOS_RT_EOF)
     status = form == VPIObjectForm::Indexed
                  ? talos_rt_read_design_slice(handle->owner->context, cursor,
-                                                selectionBitOffset, 64, &word,
-                                                &unknown)
+                                              selectionBitOffset, 64, &word,
+                                              &unknown)
                  : talos_rt_v1_design_read(handle->owner->context, cursor,
-                                             &word, &unknown, 64);
+                                           &word, &unknown, 64);
   if (status != TALOS_RT_OK) {
     if (!handle->owner->errorLevel)
       setError(handle->owner, "managed VPI state read failed", vpiInternal);
@@ -6027,7 +5999,7 @@ bool managedStringLength(__vpiHandle *handle,
                             string))
     return false;
   if (talos_rt_v1_gc_candidate_root(handle->owner->context, string,
-                                      TALOS_RT_MANAGED_ROOT_KIND_STRING) !=
+                                    TALOS_RT_MANAGED_ROOT_KIND_STRING) !=
       string) {
     setError(handle->owner, "invalid managed string in VPI design state",
              vpiInternal);
@@ -6035,8 +6007,7 @@ bool managedStringLength(__vpiHandle *handle,
   }
   ScopedManagedWordRoot root(managed.getLane(), &string);
   if (root.getStatus() != TALOS_RT_OK ||
-      talos_rt_validate_string(handle->owner->context, string) !=
-          TALOS_RT_OK) {
+      talos_rt_validate_string(handle->owner->context, string) != TALOS_RT_OK) {
     setError(handle->owner, "invalid managed string in VPI design state",
              vpiInternal);
     return false;
@@ -6056,9 +6027,8 @@ void setLogicBit(std::vector<uint64_t> &plane, uint64_t bit) {
   plane[static_cast<size_t>(bit / 64)] |= uint64_t{1} << (bit % 64);
 }
 
-bool valueSigned(__vpiHandle *handle,
-                 const talos_rt_design_info_v1 &objectInfo, PLI_INT32 type,
-                 bool hasSemanticCursor,
+bool valueSigned(__vpiHandle *handle, const talos_rt_design_info_v1 &objectInfo,
+                 PLI_INT32 type, bool hasSemanticCursor,
                  talos_rt_design_cursor_v1 semanticCursor) {
   if (type == vpiNetBit || type == vpiRegBit || type == vpiBitSelect ||
       type == vpiPartSelect || type == vpiIndexedPartSelect)
@@ -6072,8 +6042,8 @@ bool valueSigned(__vpiHandle *handle,
   if (objectInfo.type_offset != 0) {
     talos_rt_design_type_info_v1 typeInfo{};
     if (talos_rt_cached_design_type_info(handle->owner->context,
-                                           {objectInfo.type_offset},
-                                           &typeInfo) == TALOS_RT_OK)
+                                         {objectInfo.type_offset},
+                                         &typeInfo) == TALOS_RT_OK)
       return (typeInfo.flags & TALOS_RT_DESIGN_TYPE_SIGNED) != 0;
   }
   // Legacy immutable records may lack both semantic and physical type
@@ -6297,14 +6267,14 @@ bool readNetStrength(__vpiHandle *handle, talos_rt_design_cursor_v1 cursor,
                      uint64_t bitOffset, uint16_t &range) {
   uint64_t stateOffset = 0;
   if (talos_rt_design_state_offset(handle->owner->context, cursor, bitOffset,
-                                     &stateOffset) != TALOS_RT_OK) {
+                                   &stateOffset) != TALOS_RT_OK) {
     setError(handle->owner, "VPI net strength offset is unavailable",
              vpiInternal);
     return false;
   }
   const bool useDirectState = useDirectStateForValue(handle->owner->context);
-  if (talos_rt_design_net_strength(handle->owner->context, stateOffset,
-                                     &range, useDirectState) == TALOS_RT_OK)
+  if (talos_rt_design_net_strength(handle->owner->context, stateOffset, &range,
+                                   useDirectState) == TALOS_RT_OK)
     return true;
   setError(handle->owner, "could not retrieve VPI net strength", vpiInternal);
   return false;
@@ -6322,9 +6292,9 @@ struct VPISelectedSpan {
 // Strength forwarding alone may look through scalar concat/replication. Those
 // Operation occurrences never become aliases for object comparison (38.3).
 talos_rt_status selectedObjectSpan(__vpiHandle *handle,
-                                     const VPIValueSource &initial,
-                                     uint64_t width, bool forwardScalarConcat,
-                                     VPISelectedSpan &span) {
+                                   const VPIValueSource &initial,
+                                   uint64_t width, bool forwardScalarConcat,
+                                   VPISelectedSpan &span) {
   auto *context = handle->owner->context;
   __vpiHandle selected;
   selected.owner = handle->owner;
@@ -6364,8 +6334,8 @@ talos_rt_status selectedObjectSpan(__vpiHandle *handle,
   };
   for (;;) {
     VPIExpressionInfo expression{};
-    if (talos_rt_cached_vpi_expression(context, selected.cursor,
-                                         &expression) != TALOS_RT_OK) {
+    if (talos_rt_cached_vpi_expression(context, selected.cursor, &expression) !=
+        TALOS_RT_OK) {
       uint64_t base =
           source.form == VPIObjectForm::Indexed ? source.selectionBitOffset : 0;
       if (!width || offset > source.info.bit_width ||
@@ -6412,8 +6382,7 @@ talos_rt_status selectedObjectSpan(__vpiHandle *handle,
             context, parentSource.semanticCursor, &semantic) != TALOS_RT_OK)
       return TALOS_RT_INVALID_DESIGN;
     bool indexed = expression.kind == vpiIndexedPartSelect;
-    bool hasRange =
-        (semantic.flags & TALOS_RT_DESIGN_SEMANTIC_HAS_RANGE) != 0;
+    bool hasRange = (semantic.flags & TALOS_RT_DESIGN_SEMANTIC_HAS_RANGE) != 0;
     bool ascending = hasRange && semantic.range_left < semantic.range_right;
     int64_t right = hasRange ? semantic.range_right : 0;
     int64_t bound = 0;
@@ -6422,8 +6391,7 @@ talos_rt_status selectedObjectSpan(__vpiHandle *handle,
                      ? 1
                      : 2,
                  bound))
-      return handle->owner->errorLevel ? TALOS_RT_INVALID_HANDLE
-                                       : TALOS_RT_EOF;
+      return handle->owner->errorLevel ? TALOS_RT_INVALID_HANDLE : TALOS_RT_EOF;
     __int128 first = bound;
     if (indexed && expression.code == 1 && ascending)
       first += expression.bitWidth - 1;
@@ -6446,8 +6414,8 @@ talos_rt_status selectedObjectSpan(__vpiHandle *handle,
 // Pure selections preserve the underlying net bit's resolved strength. Other
 // expressions have ordinary value strength; they are not aliases to a net.
 talos_rt_status readSelectedNetStrength(__vpiHandle *handle,
-                                          const VPIValueSource &initial,
-                                          uint16_t &strength) {
+                                        const VPIValueSource &initial,
+                                        uint16_t &strength) {
   VPISelectedSpan span{};
   auto status = selectedObjectSpan(handle, initial, 1, true, span);
   if (status != TALOS_RT_OK)
@@ -6463,9 +6431,8 @@ bool isSourceSelection(__vpiHandle *handle) {
   if (handle->form != VPIObjectForm::Design || handle->statement)
     return false;
   VPIExpressionInfo expression{};
-  return talos_rt_cached_vpi_expression(handle->owner->context,
-                                          handle->cursor,
-                                          &expression) == TALOS_RT_OK &&
+  return talos_rt_cached_vpi_expression(handle->owner->context, handle->cursor,
+                                        &expression) == TALOS_RT_OK &&
          (talos::reflection::isVPIBitSelection(expression.kind) ||
           expression.kind == vpiPartSelect ||
           expression.kind == vpiIndexedPartSelect);
@@ -6498,8 +6465,7 @@ bool selectedObjectIdentity(__vpiHandle *handle,
       span.info.kind == TALOS_RT_DESIGN_RECORD_NET) {
     uint64_t stateOffset = 0;
     if (talos_rt_design_state_offset(handle->owner->context, span.cursor,
-                                       span.offset,
-                                       &stateOffset) != TALOS_RT_OK)
+                                     span.offset, &stateOffset) != TALOS_RT_OK)
       return false;
     identity = {span.info.kind, 0, stateOffset, span.width};
     return true;
@@ -6524,7 +6490,7 @@ bool selectedObjectIdentity(__vpiHandle *handle,
     talos_rt_design_info_v1 declaration{};
     if (bound == frame->second.localReferences.end() ||
         talos_rt_cached_design_info(handle->owner->context, span.cursor,
-                                      &declaration) != TALOS_RT_OK ||
+                                    &declaration) != TALOS_RT_OK ||
         readFrameReference(handle->owner, bound->second, span.cursor,
                            declaration, span.offset, span.width, nullptr,
                            nullptr) != TALOS_RT_OK)
@@ -6553,7 +6519,7 @@ bool selectedObjectIdentity(__vpiHandle *handle,
 // selections, not uses confined to unrelated bits. Candidate recipes are
 // immutable; their indices are evaluated at this query's observation point.
 talos_rt_status selectedUseRanges(__vpiHandle *handle,
-                                    std::vector<VPIRelationRange> &ranges) {
+                                  std::vector<VPIRelationRange> &ranges) {
   const auto *policy = valuePolicyFor(handle);
   VPIValueSource source{};
   VPISelectedSpan span{};
@@ -6579,7 +6545,7 @@ talos_rt_status selectedUseRanges(__vpiHandle *handle,
       selected.owner = handle->owner;
       selected.cursor = candidate.selection;
       if (talos_rt_cached_vpi_type(handle->owner->context, selected.cursor,
-                                     &selected.exactVpiType) != TALOS_RT_OK)
+                                   &selected.exactVpiType) != TALOS_RT_OK)
         return TALOS_RT_INVALID_DESIGN;
       inheritExpressionContext(selected, *handle);
       const auto *candidatePolicy = valuePolicyFor(&selected);
@@ -6606,8 +6572,8 @@ talos_rt_status selectedUseRanges(__vpiHandle *handle,
       bool statement = false;
       uint64_t token = candidate.owners.first + index;
       if (talos_rt_cached_vpi_relation_target(handle->owner->context, token,
-                                                &owner, &kind,
-                                                &statement) != TALOS_RT_OK)
+                                              &owner, &kind,
+                                              &statement) != TALOS_RT_OK)
         return TALOS_RT_INVALID_DESIGN;
       if (talos::reflection::vpiObjectSetContains(edge->targets, kind) &&
           seen.insert(owner.offset).second)
@@ -6813,20 +6779,19 @@ selectedNetConnections(__vpiHandle *handle, uint32_t selector,
   VPIFixedPropertyValue netType{};
   if (drivers && bitQuery &&
       talos_rt_cached_vpi_fixed_property(context, query.cursor, vpiNetType,
-                                           &netType) == TALOS_RT_OK &&
+                                         &netType) == TALOS_RT_OK &&
       (netType.payload == vpiNettypeNet ||
        netType.payload == vpiNettypeNetSelect))
     return TALOS_RT_EOF;
   uint64_t queryOffset = 0;
   if (talos_rt_design_state_offset(context, query.cursor, query.offset,
-                                     &queryOffset) != TALOS_RT_OK)
+                                   &queryOffset) != TALOS_RT_OK)
     return TALOS_RT_INVALID_DESIGN;
   talos_rt_design_cursor_v1 queryModule = query.cursor;
   if (local) {
     uint32_t kind = 0;
     for (;;) {
-      if (talos_rt_cached_vpi_type(context, queryModule, &kind) !=
-          TALOS_RT_OK)
+      if (talos_rt_cached_vpi_type(context, queryModule, &kind) != TALOS_RT_OK)
         return TALOS_RT_INVALID_DESIGN;
       if (kind == vpiModule)
         break;
@@ -6839,8 +6804,7 @@ selectedNetConnections(__vpiHandle *handle, uint32_t selector,
     }
   }
   const auto *edge = talos::reflection::findVPITraversal(
-      source.exactType, selector,
-      talos::reflection::VPITraversalMode::Iterate);
+      source.exactType, selector, talos::reflection::VPITraversalMode::Iterate);
   if (!edge)
     return TALOS_RT_EOF;
   auto append = [&](VPIConnectionTarget target) {
@@ -6873,15 +6837,15 @@ selectedNetConnections(__vpiHandle *handle, uint32_t selector,
   // rows. Do not merge their instances through an enclosing module.
   if (local && !queryModule.offset) {
     VPIRelationRange physical{};
-    status = talos_rt_cached_vpi_relation_range(context, query.cursor,
-                                                  selector, true, &physical);
+    status = talos_rt_cached_vpi_relation_range(context, query.cursor, selector,
+                                                true, &physical);
     if (status != TALOS_RT_OK)
       return status;
     for (uint64_t index = 0; index != physical.count; ++index) {
       VPIConnectionTarget target;
-      if (talos_rt_cached_vpi_relation_target(
-              context, physical.first + index, &target.cursor, &target.kind,
-              &target.statement) != TALOS_RT_OK)
+      if (talos_rt_cached_vpi_relation_target(context, physical.first + index,
+                                              &target.cursor, &target.kind,
+                                              &target.statement) != TALOS_RT_OK)
         return TALOS_RT_INVALID_DESIGN;
       append(target);
     }
@@ -6889,7 +6853,7 @@ selectedNetConnections(__vpiHandle *handle, uint32_t selector,
   }
   std::vector<VPINetConnectionCandidate> candidates;
   status = talos_rt_cached_vpi_net_connection_candidates(context, drivers,
-                                                           candidates);
+                                                         candidates);
   if (status != TALOS_RT_OK && status != TALOS_RT_EOF)
     return status;
   std::vector<VPINetConnectionRead> reads;
@@ -6937,8 +6901,8 @@ selectedNetConnections(__vpiHandle *handle, uint32_t selector,
         break;
       }
       uint32_t kind = 0;
-      if (talos_rt_cached_vpi_expression_operand(
-              context, backing, 0, &backing, &kind) != TALOS_RT_OK)
+      if (talos_rt_cached_vpi_expression_operand(context, backing, 0, &backing,
+                                                 &kind) != TALOS_RT_OK)
         return TALOS_RT_INVALID_DESIGN;
     }
     talos_rt_design_info_v1 backingInfo{};
@@ -6970,7 +6934,7 @@ selectedNetConnections(__vpiHandle *handle, uint32_t selector,
       continue;
     uint64_t first = 0;
     if (talos_rt_design_state_offset(context, span.cursor, span.offset,
-                                       &first) != TALOS_RT_OK)
+                                     &first) != TALOS_RT_OK)
       return TALOS_RT_INVALID_DESIGN;
     if (first >= queryOffset + query.width || queryOffset >= first + span.width)
       continue;
@@ -7004,15 +6968,15 @@ selectedNetConnections(__vpiHandle *handle, uint32_t selector,
   // terminals above are re-derived, including collapsed backing aliases.
   VPIRelationRange physical{};
   status = talos_rt_cached_vpi_relation_range(context, query.cursor, selector,
-                                                true, &physical);
+                                              true, &physical);
   if (status != TALOS_RT_OK && status != TALOS_RT_EOF)
     return status;
   if (status == TALOS_RT_OK)
     for (uint64_t index = 0; index != physical.count; ++index) {
       VPIConnectionTarget target;
-      if (talos_rt_cached_vpi_relation_target(
-              context, physical.first + index, &target.cursor, &target.kind,
-              &target.statement) != TALOS_RT_OK)
+      if (talos_rt_cached_vpi_relation_target(context, physical.first + index,
+                                              &target.cursor, &target.kind,
+                                              &target.statement) != TALOS_RT_OK)
         return TALOS_RT_INVALID_DESIGN;
       if ((target.kind == vpiContAssign || target.kind == vpiPrimTerm) &&
           (bitQuery || derivedOwners.count(target.cursor.offset)))
@@ -7034,25 +6998,24 @@ bool preparePrimitiveValue(__vpiHandle *handle, VPIValueSource &source) {
   auto direction = [&](talos_rt_design_cursor_v1 terminal) -> uint32_t {
     VPIFixedPropertyValue value{};
     if (talos_rt_cached_vpi_fixed_property(context, terminal, vpiDirection,
-                                             &value) != TALOS_RT_OK)
+                                           &value) != TALOS_RT_OK)
       return 0;
     return static_cast<uint32_t>(value.payload);
   };
   talos_rt_design_cursor_v1 terminal = source.cursor;
   if (source.exactType != vpiPrimTerm) {
     VPIRelationRange terminals{};
-    if (talos_rt_cached_vpi_relation_range(context, source.cursor,
-                                             vpiPrimTerm, true,
-                                             &terminals) != TALOS_RT_OK)
+    if (talos_rt_cached_vpi_relation_range(context, source.cursor, vpiPrimTerm,
+                                           true, &terminals) != TALOS_RT_OK)
       return unavailable();
     uint32_t outputs = 0;
     for (uint64_t index = 0; index != terminals.count; ++index) {
       talos_rt_design_cursor_v1 candidate{};
       uint32_t kind = 0;
       bool statement = false;
-      if (talos_rt_cached_vpi_relation_target(
-              context, terminals.first + index, &candidate, &kind,
-              &statement) != TALOS_RT_OK ||
+      if (talos_rt_cached_vpi_relation_target(context, terminals.first + index,
+                                              &candidate, &kind,
+                                              &statement) != TALOS_RT_OK ||
           statement || kind != vpiPrimTerm)
         return unavailable();
       if (direction(candidate) == vpiOutput) {
@@ -7082,7 +7045,7 @@ bool preparePrimitiveValue(__vpiHandle *handle, VPIValueSource &source) {
     expression.owner = handle->owner;
     bool statement = false;
     if (talos_rt_cached_vpi_relation_range(context, terminal, vpiExpr, false,
-                                             &expressions) != TALOS_RT_OK ||
+                                           &expressions) != TALOS_RT_OK ||
         expressions.count != 1 ||
         talos_rt_cached_vpi_relation_target(
             context, expressions.first, &expression.cursor,
@@ -7230,7 +7193,7 @@ vpiHandle namedEventWaitingProcesses(__vpiHandle *source) {
   uint64_t eventID = UINT64_MAX;
   VPIClassMemberBinding member{};
   auto status = talos_rt_cached_vpi_class_member(source->owner->context,
-                                                   source->cursor, &member);
+                                                 source->cursor, &member);
   if (status != TALOS_RT_OK && status != TALOS_RT_EOF) {
     setError(source->owner, "named event VPI class binding is invalid",
              vpiInternal);
@@ -7243,7 +7206,7 @@ vpiHandle namedEventWaitingProcesses(__vpiHandle *source) {
   } else {
     status = source->form == VPIObjectForm::Design
                  ? talos_rt_cached_vpi_event_binding(source->owner->context,
-                                                       source->cursor, &eventID)
+                                                     source->cursor, &eventID)
                  : TALOS_RT_EOF;
     if (status != TALOS_RT_OK && status != TALOS_RT_EOF) {
       setError(source->owner, "named event VPI executable binding is invalid",
@@ -7253,12 +7216,12 @@ vpiHandle namedEventWaitingProcesses(__vpiHandle *source) {
     if (status == TALOS_RT_EOF && source->form == VPIObjectForm::Design) {
       VPIEventCellBinding cell{};
       status = talos_rt_cached_vpi_event_array_cell(source->owner->context,
-                                                      source->cursor, &cell);
+                                                    source->cursor, &cell);
       if (status == TALOS_RT_OK) {
         uint64_t unknown = 0;
-        status = talos_rt_read_design_slice(source->owner->context,
-                                              cell.storage, cell.bitOffset, 64,
-                                              &eventID, &unknown);
+        status =
+            talos_rt_read_design_slice(source->owner->context, cell.storage,
+                                       cell.bitOffset, 64, &eventID, &unknown);
         if (status != TALOS_RT_OK || unknown) {
           setError(source->owner, "named event VPI array cell read failed",
                    vpiInternal);
@@ -7286,8 +7249,8 @@ vpiHandle namedEventWaitingProcesses(__vpiHandle *source) {
     }
   }
   std::vector<uint64_t> processes;
-  status = talos_rt_named_event_waiters(source->owner->context, eventID,
-                                          processes);
+  status =
+      talos_rt_named_event_waiters(source->owner->context, eventID, processes);
   if (status != TALOS_RT_OK) {
     setError(source->owner, "named event VPI waiter query failed",
              status == TALOS_RT_OUT_OF_MEMORY ? vpiSystem : vpiInternal);
@@ -7338,8 +7301,8 @@ vpiHandle virtualInterfaceActual(__vpiHandle *source) {
   if (info.modport_size != 0) {
     talos_rt_design_cursor_v1 modport{};
     if (talos_rt_cached_vpi_modport(source->owner->context, actual,
-                                      info.modport, info.modport_size,
-                                      &modport) != TALOS_RT_OK) {
+                                    info.modport, info.modport_size,
+                                    &modport) != TALOS_RT_OK) {
       setError(source->owner,
                "virtual interface modport metadata is unavailable",
                vpiInternal);
@@ -7364,10 +7327,11 @@ struct VPIClassReference {
 // Capture reference identity without reporting an API error. Union views may
 // contain bytes that are not a valid value of another overlapping member type;
 // their metadata still exists, and value access reports that condition later.
-talos_rt_status
-captureClassReference(__vpiHandle *source, talos_rt_gc_lane_v1 *lane,
-                      uint64_t word, talos_rt_design_cursor_v1 semantic,
-                      uint32_t semanticKind, VPIClassReference &reference) {
+talos_rt_status captureClassReference(__vpiHandle *source,
+                                      talos_rt_gc_lane_v1 *lane, uint64_t word,
+                                      talos_rt_design_cursor_v1 semantic,
+                                      uint32_t semanticKind,
+                                      VPIClassReference &reference) {
   if (word == 0)
     return TALOS_RT_OK;
   if (semanticKind == TALOS_RT_DESIGN_SEMANTIC_PROCESS) {
@@ -7388,10 +7352,10 @@ captureClassReference(__vpiHandle *source, talos_rt_gc_lane_v1 *lane,
     ManagedObjectLease lease;
     if (!object || word != talos_rt_managed_word_from_object(object) ||
         talos_rt_managed_object_acquire(lane, object,
-                                          expected == BuiltinClassKind::None
-                                              ? TALOS_RT_MANAGED_CLASS
-                                              : TALOS_RT_MANAGED_INVALID,
-                                          &lease) != TALOS_RT_OK ||
+                                        expected == BuiltinClassKind::None
+                                            ? TALOS_RT_MANAGED_CLASS
+                                            : TALOS_RT_MANAGED_INVALID,
+                                        &lease) != TALOS_RT_OK ||
         talos_rt_managed_object_context(object) != source->owner->context ||
         (expected != BuiltinClassKind::None &&
          talos_rt_builtin_class_kind(lease) != expected))
@@ -7429,14 +7393,15 @@ bool readClassReference(__vpiHandle *source, talos_rt_gc_lane_v1 *lane,
 
 vpiHandle makeClassObjectHandle(__vpiHandle *source) {
   if (source->classDefinitionOrigin) {
-    setError(source->owner,
-             "a lexical class variable has no live class object", vpiNotice);
+    setError(source->owner, "a lexical class variable has no live class object",
+             vpiNotice);
     return nullptr;
   }
   ContextTransaction transaction(source->owner->context);
   ManagedExecutionScope managed(source->owner->context);
   if (managed.getStatus() != TALOS_RT_OK || !managed.getLane()) {
-    setError(source->owner, "class VPI query cannot enter GC scope", vpiInternal);
+    setError(source->owner, "class VPI query cannot enter GC scope",
+             vpiInternal);
     return nullptr;
   }
   VPIClassReference reference;
@@ -7452,13 +7417,14 @@ vpiHandle makeClassObjectHandle(__vpiHandle *source) {
   talos_rt_status typeStatus =
       reference.semantic.offset ? TALOS_RT_EOF
       : descriptor
-          ? talos_rt_cached_vpi_class_typespec(
-                source->owner->context, descriptor->class_id, &typespec)
+          ? talos_rt_cached_vpi_class_typespec(source->owner->context,
+                                               descriptor->class_id, &typespec)
           : TALOS_RT_INVALID_HANDLE;
   if ((typeStatus != TALOS_RT_OK && typeStatus != TALOS_RT_EOF) ||
       (typeStatus == TALOS_RT_OK &&
        !fixedProtectionFor(source->owner, typespec, isProtected))) {
-    setError(source->owner, "class VPI type metadata is unavailable", vpiInternal);
+    setError(source->owner, "class VPI type metadata is unavailable",
+             vpiInternal);
     return nullptr;
   }
   TALOS_RT_TRY {
@@ -7491,18 +7457,17 @@ vpiHandle classObjectTypespec(__vpiHandle *handle) {
   if (managed.getStatus() != TALOS_RT_OK || !managed.getLane())
     return nullptr;
   ManagedObjectLease lease;
-  if (talos_rt_managed_object_acquire(
-          managed.getLane(), handle->dynamicObject, TALOS_RT_MANAGED_CLASS,
-          &lease) != TALOS_RT_OK ||
+  if (talos_rt_managed_object_acquire(managed.getLane(), handle->dynamicObject,
+                                      TALOS_RT_MANAGED_CLASS,
+                                      &lease) != TALOS_RT_OK ||
       talos_rt_v1_object_id(handle->dynamicObject) != handle->dynamicIdentity)
     return nullptr;
   const auto *descriptor =
       talos_rt_managed_object_class_descriptor(handle->dynamicObject);
   talos_rt_design_cursor_v1 typespec{};
-  if (!descriptor ||
-      talos_rt_cached_vpi_class_typespec(
-          handle->owner->context, descriptor->class_id, &typespec) !=
-          TALOS_RT_OK)
+  if (!descriptor || talos_rt_cached_vpi_class_typespec(
+                         handle->owner->context, descriptor->class_id,
+                         &typespec) != TALOS_RT_OK)
     return nullptr;
   return makeHandle(handle->owner, typespec, vpiClassTypespec);
 }
@@ -7520,8 +7485,8 @@ bool mailboxElementSemantic(__vpiHandle *source,
     std::set<uint64_t> visited;
     for (;;) {
       if (!semantic.offset &&
-          talos_rt_cached_design_semantic_root(
-              source->owner->context, typespec, &semantic) != TALOS_RT_OK)
+          talos_rt_cached_design_semantic_root(source->owner->context, typespec,
+                                               &semantic) != TALOS_RT_OK)
         break;
       talos_rt_design_semantic_type_info_v1 info{};
       if (!semanticTypeInfo(source, semantic, info))
@@ -7541,12 +7506,12 @@ bool mailboxElementSemantic(__vpiHandle *source,
       uint32_t type = 0;
       bool statement = false;
       if (talos_rt_cached_vpi_relation_range(source->owner->context, typespec,
-                                               vpiExtends, false,
-                                               &base) != TALOS_RT_OK ||
+                                             vpiExtends, false,
+                                             &base) != TALOS_RT_OK ||
           base.count != 1 ||
           talos_rt_cached_vpi_relation_target(source->owner->context,
-                                                base.first, &typespec, &type,
-                                                &statement) != TALOS_RT_OK ||
+                                              base.first, &typespec, &type,
+                                              &statement) != TALOS_RT_OK ||
           type != vpiClassTypespec || statement)
         break;
       semantic = {};
@@ -7562,8 +7527,7 @@ bool mailboxElementSemantic(__vpiHandle *source,
   return false;
 }
 
-vpiHandle makeSnapshotHandle(VPIState *state,
-                             talos_rt_design_cursor_v1 source,
+vpiHandle makeSnapshotHandle(VPIState *state, talos_rt_design_cursor_v1 source,
                              std::shared_ptr<const VPISnapshotValue> value) {
   TALOS_RT_TRY {
     auto handle = std::make_unique<__vpiHandle>();
@@ -7615,11 +7579,10 @@ snapshotMailboxValue(__vpiHandle *source, talos_rt_gc_lane_v1 *lane,
   value->semantic = semantic;
   value->bitWidth = element.bit_width;
   const bool fourState = (element.flags & TALOS_RT_ELEMENT_FOUR_STATE) != 0;
-  const bool classReference =
-      info.kind == TALOS_RT_DESIGN_SEMANTIC_CLASS ||
-      info.kind == TALOS_RT_DESIGN_SEMANTIC_MAILBOX ||
-      info.kind == TALOS_RT_DESIGN_SEMANTIC_SEMAPHORE ||
-      info.kind == TALOS_RT_DESIGN_SEMANTIC_PROCESS;
+  const bool classReference = info.kind == TALOS_RT_DESIGN_SEMANTIC_CLASS ||
+                              info.kind == TALOS_RT_DESIGN_SEMANTIC_MAILBOX ||
+                              info.kind == TALOS_RT_DESIGN_SEMANTIC_SEMAPHORE ||
+                              info.kind == TALOS_RT_DESIGN_SEMANTIC_PROCESS;
   bool compatible = false;
   if (classReference) {
     value->exactType = vpiClassVar;
@@ -7669,8 +7632,8 @@ snapshotMailboxValue(__vpiHandle *source, talos_rt_gc_lane_v1 *lane,
       value->integral = true;
       value->constType = vpiBinaryConst;
       uint64_t semanticWidth;
-      if (talos_rt_cached_design_semantic_bit_width(
-              source->owner->context, semantic, &semanticWidth) !=
+      if (talos_rt_cached_design_semantic_bit_width(source->owner->context,
+                                                    semantic, &semanticWidth) !=
           TALOS_RT_OK) {
         setError(source->owner, "mailbox message has no fixed semantic width",
                  vpiInternal);
@@ -7725,10 +7688,8 @@ snapshotMailboxValue(__vpiHandle *source, talos_rt_gc_lane_v1 *lane,
     char scratch[8]{};
     const char *data = nullptr;
     uint64_t size = 0;
-    if (talos_rt_validate_string(source->owner->context, word) !=
-            TALOS_RT_OK ||
-        talos_rt_v1_string_view(word, scratch, &data, &size) !=
-            TALOS_RT_OK ||
+    if (talos_rt_validate_string(source->owner->context, word) != TALOS_RT_OK ||
+        talos_rt_v1_string_view(word, scratch, &data, &size) != TALOS_RT_OK ||
         size > std::numeric_limits<size_t>::max() || size > UINT64_MAX / 8) {
       if (variableView) {
         value->readable = false;
@@ -7784,8 +7745,7 @@ bool messageElementDescriptor(__vpiHandle *source,
       info.kind != TALOS_RT_DESIGN_SEMANTIC_REAL &&
       info.kind != TALOS_RT_DESIGN_SEMANTIC_SHORT_REAL &&
       info.kind != TALOS_RT_DESIGN_SEMANTIC_REALTIME) {
-    element.kind =
-        fourState ? TALOS_RT_ELEMENT_LOGIC : TALOS_RT_ELEMENT_BITS;
+    element.kind = fourState ? TALOS_RT_ELEMENT_LOGIC : TALOS_RT_ELEMENT_BITS;
     element.bit_width = width;
     element.value_size = (width - 1) / 8 + 1;
   } else if (info.kind == TALOS_RT_DESIGN_SEMANTIC_UNPACKED_ARRAY ||
@@ -7795,10 +7755,10 @@ bool messageElementDescriptor(__vpiHandle *source,
     talos_rt_design_type_info_v1 layout{};
     if (!layoutOwner ||
         talos_rt_cached_vpi_value_element_type(source->owner->context,
-                                                 *layoutOwner, semantic,
-                                                 &physical) != TALOS_RT_OK ||
+                                               *layoutOwner, semantic,
+                                               &physical) != TALOS_RT_OK ||
         talos_rt_cached_design_type_info(source->owner->context, physical,
-                                           &layout) != TALOS_RT_OK ||
+                                         &layout) != TALOS_RT_OK ||
         !layout.bit_width || layout.bit_width > UINT64_MAX - 7) {
       setError(source->owner, "mailbox value has no exact storage layout",
                vpiNotice);
@@ -7853,15 +7813,13 @@ struct VPISnapshotRequest {
   std::shared_ptr<VPISnapshotValue> prepared;
 };
 
-std::shared_ptr<VPISnapshotValue>
-snapshotMessageNode(__vpiHandle *source, talos_rt_gc_lane_v1 *lane,
-                    std::optional<VPIValueLayoutOwner> layoutOwner,
-                    talos_rt_design_cursor_v1 semantic,
-                    const talos_rt_element_type_v1 &element,
-                    const uint8_t *bytes,
-                    std::vector<VPISnapshotRequest> &pending,
-                    std::vector<std::shared_ptr<VPISnapshotValue>> &aggregates,
-                    bool variableView = false, bool readable = true) {
+std::shared_ptr<VPISnapshotValue> snapshotMessageNode(
+    __vpiHandle *source, talos_rt_gc_lane_v1 *lane,
+    std::optional<VPIValueLayoutOwner> layoutOwner,
+    talos_rt_design_cursor_v1 semantic, const talos_rt_element_type_v1 &element,
+    const uint8_t *bytes, std::vector<VPISnapshotRequest> &pending,
+    std::vector<std::shared_ptr<VPISnapshotValue>> &aggregates,
+    bool variableView = false, bool readable = true) {
   talos_rt_design_semantic_type_info_v1 info{};
   if (!semanticTypeInfo(source, semantic, info))
     return {};
@@ -7874,19 +7832,17 @@ snapshotMessageNode(__vpiHandle *source, talos_rt_gc_lane_v1 *lane,
   const bool dynamic = info.kind == TALOS_RT_DESIGN_SEMANTIC_DYNAMIC_ARRAY;
   const bool queue = info.kind == TALOS_RT_DESIGN_SEMANTIC_QUEUE;
   const bool associative = info.kind == TALOS_RT_DESIGN_SEMANTIC_ASSOC_ARRAY;
-  const bool unionType =
-      info.kind == TALOS_RT_DESIGN_SEMANTIC_UNPACKED_UNION ||
-      info.kind == TALOS_RT_DESIGN_SEMANTIC_PACKED_UNION;
+  const bool unionType = info.kind == TALOS_RT_DESIGN_SEMANTIC_UNPACKED_UNION ||
+                         info.kind == TALOS_RT_DESIGN_SEMANTIC_PACKED_UNION;
   variableView |= unionType || associative;
   auto variableKind = [&]() -> uint32_t {
     const auto *access = talos::reflection::findVPIIndexedAccess(vpiUnionVar);
-    return access
-               ? indexedResultType(
-                     source, *access, semantic,
-                     info.kind == TALOS_RT_DESIGN_SEMANTIC_UNPACKED_ARRAY ||
-                         associative || dynamic || queue,
-                     false)
-               : 0;
+    return access ? indexedResultType(
+                        source, *access, semantic,
+                        info.kind == TALOS_RT_DESIGN_SEMANTIC_UNPACKED_ARRAY ||
+                            associative || dynamic || queue,
+                        false)
+                  : 0;
   };
   if (!array && !structure && !dynamic && !queue && !associative &&
       !unionType) {
@@ -7981,8 +7937,8 @@ snapshotMessageNode(__vpiHandle *source, talos_rt_gc_lane_v1 *lane,
       ManagedObjectLease lease;
       if (word != talos_rt_managed_word_from_object(object) ||
           talos_rt_managed_object_acquire(lane, object,
-                                            TALOS_RT_MANAGED_CONTAINER,
-                                            &lease) != TALOS_RT_OK) {
+                                          TALOS_RT_MANAGED_CONTAINER,
+                                          &lease) != TALOS_RT_OK) {
         if (variableView) {
           value->readable = value->sizeKnown = false;
           return value;
@@ -8041,8 +7997,8 @@ snapshotMessageNode(__vpiHandle *source, talos_rt_gc_lane_v1 *lane,
           matches = (keyElement.kind == TALOS_RT_ELEMENT_BITS ||
                      keyElement.kind == TALOS_RT_ELEMENT_LOGIC) &&
                     keyElement.bit_width == copied.keyWidth &&
-                    ((keyInfo.flags & TALOS_RT_DESIGN_SEMANTIC_SIGNED) !=
-                     0) == (copied.keyKind == TALOS_RT_ASSOC_KEY_SIGNED);
+                    ((keyInfo.flags & TALOS_RT_DESIGN_SEMANTIC_SIGNED) != 0) ==
+                        (copied.keyKind == TALOS_RT_ASSOC_KEY_SIGNED);
           break;
         case TALOS_RT_ASSOC_KEY_STRING:
           matches = keyInfo.kind == TALOS_RT_DESIGN_SEMANTIC_STRING;
@@ -8165,18 +8121,18 @@ snapshotMessageNode(__vpiHandle *source, talos_rt_gc_lane_v1 *lane,
   talos_rt_design_type_info_v1 layout{};
   if (!layoutOwner ||
       talos_rt_cached_vpi_value_element_type(source->owner->context,
-                                               *layoutOwner, semantic,
-                                               &physical) != TALOS_RT_OK ||
+                                             *layoutOwner, semantic,
+                                             &physical) != TALOS_RT_OK ||
       talos_rt_cached_design_type_info(source->owner->context, physical,
-                                         &layout) != TALOS_RT_OK) {
+                                       &layout) != TALOS_RT_OK) {
     setError(source->owner, "mailbox aggregate has no exact storage layout",
              vpiNotice);
     return {};
   }
   const bool fourState = (element.flags & TALOS_RT_ELEMENT_FOUR_STATE) != 0;
   if (!layout.bit_width || layout.bit_width > UINT64_MAX - 7 ||
-      (packed ? element.kind != (fourState ? TALOS_RT_ELEMENT_LOGIC
-                                           : TALOS_RT_ELEMENT_BITS)
+      (packed ? element.kind !=
+                    (fourState ? TALOS_RT_ELEMENT_LOGIC : TALOS_RT_ELEMENT_BITS)
               : element.kind != TALOS_RT_ELEMENT_AGGREGATE) ||
       element.value_size != (layout.bit_width + 7) / 8 ||
       element.bit_width !=
@@ -8215,8 +8171,8 @@ snapshotMessageNode(__vpiHandle *source, talos_rt_gc_lane_v1 *lane,
     talos_rt_design_type_info_v1 child{};
     if (!semanticElement(source, semantic, arraySemantic) ||
         talos_rt_cached_design_type_info(source->owner->context,
-                                           layout.element_type,
-                                           &child) != TALOS_RT_OK ||
+                                         layout.element_type,
+                                         &child) != TALOS_RT_OK ||
         !child.bit_width) {
       setError(source->owner, "invalid array message layout", vpiInternal);
       return {};
@@ -8245,9 +8201,9 @@ snapshotMessageNode(__vpiHandle *source, talos_rt_gc_lane_v1 *lane,
       talos_rt_design_type_info_v1 fieldInfo{};
       talos_rt_design_semantic_type_edge_v1 edge{};
       if (talos_rt_cached_design_type_child(source->owner->context, physical,
-                                              index, &field) != TALOS_RT_OK ||
+                                            index, &field) != TALOS_RT_OK ||
           talos_rt_cached_design_type_info(source->owner->context, field,
-                                             &fieldInfo) != TALOS_RT_OK ||
+                                           &fieldInfo) != TALOS_RT_OK ||
           !semanticEdge(source, semantic, index, edge)) {
         setError(source->owner, "invalid struct message layout", vpiInternal);
         return {};
@@ -8283,8 +8239,8 @@ snapshotMessageNode(__vpiHandle *source, talos_rt_gc_lane_v1 *lane,
               source->owner->context, *layoutOwner, childSemantic,
               &childPhysical) != TALOS_RT_OK ||
           talos_rt_cached_design_type_info(source->owner->context,
-                                             childPhysical,
-                                             &childLayout) != TALOS_RT_OK)
+                                           childPhysical,
+                                           &childLayout) != TALOS_RT_OK)
         return {};
       copiedWidth = childLayout.bit_width;
     }
@@ -8349,14 +8305,13 @@ snapshotMessageValue(__vpiHandle *source, talos_rt_gc_lane_v1 *lane,
       talos_rt_design_semantic_type_info_v1 childType{};
       if (!semanticTypeInfo(source, child->semantic, childType))
         return {};
-      const bool scalarBit =
-          childType.kind == TALOS_RT_DESIGN_SEMANTIC_BIT ||
-          childType.kind == TALOS_RT_DESIGN_SEMANTIC_LOGIC ||
-          childType.kind == TALOS_RT_DESIGN_SEMANTIC_REG;
+      const bool scalarBit = childType.kind == TALOS_RT_DESIGN_SEMANTIC_BIT ||
+                             childType.kind == TALOS_RT_DESIGN_SEMANTIC_LOGIC ||
+                             childType.kind == TALOS_RT_DESIGN_SEMANTIC_REG;
       if (scalarBit &&
           (childType.flags & TALOS_RT_DESIGN_SEMANTIC_HAS_RANGE) == 0) {
-        const auto *access = talos::reflection::findVPIIndexedAccess(
-            request.parent->exactType);
+        const auto *access =
+            talos::reflection::findVPIIndexedAccess(request.parent->exactType);
         if (!access)
           return {};
         child->exactType = access->terminalResult;
@@ -8498,7 +8453,7 @@ vpiHandle snapshotChildren(__vpiHandle *source, PLI_INT32 selector) {
         continue;
       }
       if (talos::reflection::vpiObjectSetContains(edge->targets,
-                                                    child->exactType))
+                                                  child->exactType))
         iterator->snapshotItems.emplace_back(source->snapshot, child);
     }
     if (iterator->snapshotItems.empty())
@@ -8524,8 +8479,8 @@ snapshotBoxedMessage(__vpiHandle *source, talos_rt_gc_lane_v1 *lane,
   {
     ManagedObjectLease lease;
     if (!word || !box || word != talos_rt_managed_word_from_object(box) ||
-        talos_rt_managed_object_acquire(
-            lane, box, TALOS_RT_MANAGED_CONTAINER, &lease) != TALOS_RT_OK) {
+        talos_rt_managed_object_acquire(lane, box, TALOS_RT_MANAGED_CONTAINER,
+                                        &lease) != TALOS_RT_OK) {
       setError(source->owner, "invalid box in untyped mailbox", vpiInternal);
       return {};
     }
@@ -8545,13 +8500,12 @@ snapshotBoxedMessage(__vpiHandle *source, talos_rt_gc_lane_v1 *lane,
     return {};
   }
   VPIBoxTypeBinding binding;
-  if (talos_rt_cached_vpi_box_type(source->owner->context, typeID,
-                                     &binding) != TALOS_RT_OK) {
+  if (talos_rt_cached_vpi_box_type(source->owner->context, typeID, &binding) !=
+      TALOS_RT_OK) {
     setError(source->owner, "invalid boxed message type metadata", vpiInternal);
     return {};
   }
-  const size_t planes =
-      (element->flags & TALOS_RT_ELEMENT_FOUR_STATE) ? 2 : 1;
+  const size_t planes = (element->flags & TALOS_RT_ELEMENT_FOUR_STATE) ? 2 : 1;
   if (!element->value_size || element->value_size > SIZE_MAX / planes ||
       contents.size() != element->value_size * planes) {
     setError(source->owner, "invalid boxed message snapshot storage",
@@ -8574,8 +8528,8 @@ vpiHandle classMessages(__vpiHandle *source) {
   {
     ManagedObjectLease lease;
     if (talos_rt_managed_object_acquire(
-            managed.getLane(), source->dynamicObject,
-            TALOS_RT_MANAGED_INVALID, &lease) != TALOS_RT_OK ||
+            managed.getLane(), source->dynamicObject, TALOS_RT_MANAGED_INVALID,
+            &lease) != TALOS_RT_OK ||
         talos_rt_v1_object_id(source->dynamicObject) !=
             source->dynamicIdentity) {
       setError(source->owner, "invalid or reclaimed VPI mailbox handle");
@@ -8687,8 +8641,8 @@ vpiHandle classMemberByName(__vpiHandle *source, std::string_view name) {
     for (PLI_INT32 selector : selectors) {
       VPIRelationRange range{};
       if (talos_rt_cached_vpi_relation_range(source->owner->context, scope,
-                                               selector, true,
-                                               &range) != TALOS_RT_OK)
+                                             selector, true,
+                                             &range) != TALOS_RT_OK)
         continue;
       for (uint64_t index = 0; index != range.count; ++index) {
         talos_rt_design_cursor_v1 target{};
@@ -8700,7 +8654,7 @@ vpiHandle classMemberByName(__vpiHandle *source, std::string_view name) {
                 source->owner->context, range.first + index, &target, &type,
                 &statement) != TALOS_RT_OK ||
             talos_rt_cached_design_name(source->owner->context, target, &data,
-                                          &size) != TALOS_RT_OK)
+                                        &size) != TALOS_RT_OK)
           return nullptr;
         std::string_view qualified(reinterpret_cast<const char *>(data), size);
         // Match the declaration name, using the same qualification convention
@@ -8711,7 +8665,7 @@ vpiHandle classMemberByName(__vpiHandle *source, std::string_view name) {
                                      : qualified.substr(separator + 1);
         VPIClassMemberBinding member{};
         if (talos_rt_cached_vpi_class_member(source->owner->context, target,
-                                               &member) == TALOS_RT_OK)
+                                             &member) == TALOS_RT_OK)
           local = std::string_view(reinterpret_cast<const char *>(member.name),
                                    member.nameSize);
         if (local == name)
@@ -8720,14 +8674,14 @@ vpiHandle classMemberByName(__vpiHandle *source, std::string_view name) {
     }
     VPIRelationRange base{};
     if (talos_rt_cached_vpi_relation_range(source->owner->context, scope,
-                                             vpiExtends, false,
-                                             &base) != TALOS_RT_OK)
+                                           vpiExtends, false,
+                                           &base) != TALOS_RT_OK)
       return nullptr;
     uint32_t type = 0;
     bool statement = false;
-    if (talos_rt_cached_vpi_relation_target(source->owner->context,
-                                              base.first, &scope, &type,
-                                              &statement) != TALOS_RT_OK ||
+    if (talos_rt_cached_vpi_relation_target(source->owner->context, base.first,
+                                            &scope, &type,
+                                            &statement) != TALOS_RT_OK ||
         type != vpiClassTypespec || statement)
       return nullptr;
   }
@@ -8868,8 +8822,7 @@ talos_rt_vpi_dispatch_time_callbacks_unlocked(talos_rt_context *context) {
   return TALOS_RT_OK;
 }
 
-bool talos_rt_vpi_sync_due_unlocked(talos_rt_context *context,
-                                      uint32_t stage) {
+bool talos_rt_vpi_sync_due_unlocked(talos_rt_context *context, uint32_t stage) {
   auto *state = static_cast<VPIState *>(context->vpiState);
   if (!state || state != currentState())
     return false;
@@ -8884,7 +8837,7 @@ bool talos_rt_vpi_sync_due_unlocked(talos_rt_context *context,
 
 talos_rt_status
 talos_rt_vpi_dispatch_sync_callbacks_unlocked(talos_rt_context *context,
-                                                uint32_t stage) {
+                                              uint32_t stage) {
   auto *state = static_cast<VPIState *>(context->vpiState);
   if (!state || state != currentState() || context->vpiTimeCallbackActive)
     return TALOS_RT_INVALID_LIFECYCLE;
@@ -8955,8 +8908,7 @@ extern "C" TALOS_VPI_EXPORT talos_rt_status talos_rt_v1_vpi_frame_enter(
     uint64_t originID, uint64_t *outActivation) {
   if (outActivation)
     *outActivation = 0;
-  if (!context || !outActivation ||
-      originKind > TALOS_RT_VPI_FRAME_DPI_EXPORT)
+  if (!context || !outActivation || originKind > TALOS_RT_VPI_FRAME_DPI_EXPORT)
     return TALOS_RT_INVALID_ARGUMENT;
   ContextMutexLock lock(context);
   auto *state = static_cast<VPIState *>(context->vpiState);
@@ -8972,8 +8924,8 @@ extern "C" TALOS_VPI_EXPORT talos_rt_status talos_rt_v1_vpi_frame_enter(
       lexicalCodeUnit = owner->second.first;
       scope = owner->second.second;
     } else {
-      status = talos_rt_cached_vpi_code_unit_scope(context, codeUnitID,
-                                                     &scope, &lexicalCodeUnit);
+      status = talos_rt_cached_vpi_code_unit_scope(context, codeUnitID, &scope,
+                                                   &lexicalCodeUnit);
       if (status != TALOS_RT_OK)
         return status == TALOS_RT_EOF ? TALOS_RT_INVALID_ARGUMENT : status;
       state->frameLexicalOwners.emplace(codeUnitID,
@@ -8983,7 +8935,7 @@ extern "C" TALOS_VPI_EXPORT talos_rt_status talos_rt_v1_vpi_frame_enter(
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
   TALOS_RT_CATCH_ALL { return TALOS_RT_OUT_OF_RESOURCES; }
   status = talos_rt_cached_vpi_frame_origin(context, originKind, originID,
-                                              &origin, &originIsStatement);
+                                            &origin, &originIsStatement);
   if (status != TALOS_RT_OK)
     return status == TALOS_RT_EOF ? TALOS_RT_INVALID_ARGUMENT : status;
   const uint64_t process =
@@ -9016,10 +8968,10 @@ extern "C" TALOS_VPI_EXPORT talos_rt_status talos_rt_v1_vpi_frame_enter(
     talos_rt_design_cursor_v1 checked{};
     bool callIsStatement = false;
     status = originKind == TALOS_RT_VPI_FRAME_CALL
-                 ? talos_rt_cached_vpi_call(context, originID, &checked,
-                                              &owner, &callIsStatement)
+                 ? talos_rt_cached_vpi_call(context, originID, &checked, &owner,
+                                            &callIsStatement)
                  : talos_rt_cached_vpi_statement(context, originID, &checked,
-                                                   &owner);
+                                                 &owner);
     if (status != TALOS_RT_OK)
       return status;
     talos_rt_design_cursor_v1 initialized{};
@@ -9089,10 +9041,9 @@ extern "C" TALOS_VPI_EXPORT talos_rt_status talos_rt_v1_vpi_frame_enter(
 }
 
 static talos_rt_status prepareVPIFrameCall(VPIState *state, uint64_t process,
-                                             uint64_t parent,
-                                             uint32_t originKind,
-                                             uint64_t originID,
-                                             uint64_t *outTicket) {
+                                           uint64_t parent, uint32_t originKind,
+                                           uint64_t originID,
+                                           uint64_t *outTicket) {
   if (!state->nextCallTicket)
     return TALOS_RT_OUT_OF_RESOURCES;
   TALOS_RT_TRY {
@@ -9153,17 +9104,16 @@ extern "C" TALOS_VPI_EXPORT talos_rt_status talos_rt_v1_vpi_call_prepare(
   if (!initializer &&
       (!parent || owner != state->frames.at(parent).lexicalCodeUnit))
     return TALOS_RT_INVALID_FRAME;
-  status = talos_rt_cached_vpi_frame_origin(
-      context, TALOS_RT_VPI_FRAME_CALL, callID, &source, &statement);
+  status = talos_rt_cached_vpi_frame_origin(context, TALOS_RT_VPI_FRAME_CALL,
+                                            callID, &source, &statement);
   if (status != TALOS_RT_OK)
     return status == TALOS_RT_EOF ? TALOS_RT_INVALID_ARGUMENT : status;
   return prepareVPIFrameCall(state, process, parent, TALOS_RT_VPI_FRAME_CALL,
                              callID, outTicket);
 }
 
-extern "C" TALOS_VPI_EXPORT talos_rt_status
-talos_rt_v1_vpi_resolution_prepare(talos_rt_context *context,
-                                     uint64_t netID, uint64_t *outTicket) {
+extern "C" TALOS_VPI_EXPORT talos_rt_status talos_rt_v1_vpi_resolution_prepare(
+    talos_rt_context *context, uint64_t netID, uint64_t *outTicket) {
   if (outTicket)
     *outTicket = 0;
   if (!context || !outTicket)
@@ -9186,8 +9136,8 @@ talos_rt_v1_vpi_resolution_prepare(talos_rt_context *context,
 
 talos_rt_status
 talos_rt_vpi_export_begin(talos_rt_context *context,
-                            const talos_rt_export_descriptor_v1 *descriptor,
-                            uint64_t *outToken) {
+                          const talos_rt_export_descriptor_v1 *descriptor,
+                          uint64_t *outToken) {
   if (outToken)
     *outToken = 0;
   if (!context || !descriptor || !outToken)
@@ -9205,10 +9155,10 @@ talos_rt_vpi_export_begin(talos_rt_context *context,
   if (stack != state->frameStacks.end())
     depth = stack->second.size();
   TALOS_RT_TRY {
-    state->exports.push_back(
-        {state->nextExportToken, descriptor->code_unit_id, descriptor->scope_id,
-         process, depth, context->activeLogicalProcessToken,
-         bool(descriptor->flags & TALOS_RT_EXPORT_TASK)});
+    state->exports.push_back({state->nextExportToken, descriptor->code_unit_id,
+                              descriptor->scope_id, process, depth,
+                              context->activeLogicalProcessToken,
+                              bool(descriptor->flags & TALOS_RT_EXPORT_TASK)});
     *outToken = state->nextExportToken++;
     return TALOS_RT_OK;
   }
@@ -9217,7 +9167,7 @@ talos_rt_vpi_export_begin(talos_rt_context *context,
 }
 
 talos_rt_status talos_rt_vpi_export_task_enter(talos_rt_context *context,
-                                                   uint64_t executor) {
+                                               uint64_t executor) {
   if (!context || !executor)
     return TALOS_RT_INVALID_ARGUMENT;
   ContextMutexLock lock(context);
@@ -9255,7 +9205,7 @@ talos_rt_status talos_rt_vpi_export_task_enter(talos_rt_context *context,
 }
 
 talos_rt_status talos_rt_vpi_export_end(talos_rt_context *context,
-                                            uint64_t token) {
+                                        uint64_t token) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   ContextMutexLock lock(context);
@@ -9277,7 +9227,7 @@ talos_rt_status talos_rt_vpi_export_end(talos_rt_context *context,
   if (depth < dispatch.frameDepth)
     return TALOS_RT_OK; // A nonlocal disable already unwound the caller.
   auto status = talos_rt_vpi_frame_unwind_process(context, dispatch.process,
-                                                    dispatch.frameDepth);
+                                                  dispatch.frameDepth);
   if (status != TALOS_RT_OK)
     return status;
   auto calls = state->frameCalls.find(dispatch.process);
@@ -9294,9 +9244,8 @@ talos_rt_status talos_rt_vpi_export_end(talos_rt_context *context,
   return TALOS_RT_OK;
 }
 
-extern "C" TALOS_VPI_EXPORT talos_rt_status
-talos_rt_v1_vpi_export_prepare(talos_rt_context *context,
-                                 uint64_t codeUnitID, uint64_t *outTicket) {
+extern "C" TALOS_VPI_EXPORT talos_rt_status talos_rt_v1_vpi_export_prepare(
+    talos_rt_context *context, uint64_t codeUnitID, uint64_t *outTicket) {
   if (outTicket)
     *outTicket = 0;
   if (!context || !outTicket)
@@ -9326,7 +9275,7 @@ talos_rt_v1_vpi_export_prepare(talos_rt_context *context,
 }
 
 talos_rt_status talos_rt_vpi_pending_call(talos_rt_context *context,
-                                              uint64_t *outCallID) {
+                                          uint64_t *outCallID) {
   if (outCallID)
     *outCallID = 0;
   if (!context || !outCallID)
@@ -9349,8 +9298,8 @@ talos_rt_status talos_rt_vpi_pending_call(talos_rt_context *context,
 
 extern "C" TALOS_VPI_EXPORT talos_rt_status
 talos_rt_v1_vpi_frame_enter_prepared(talos_rt_context *context,
-                                       uint64_t codeUnitID, uint32_t isTask,
-                                       uint64_t *outActivation) {
+                                     uint64_t codeUnitID, uint32_t isTask,
+                                     uint64_t *outActivation) {
   if (outActivation)
     *outActivation = 0;
   if (!context || !codeUnitID || isTask > 1 || !outActivation)
@@ -9378,25 +9327,24 @@ talos_rt_v1_vpi_frame_enter_prepared(talos_rt_context *context,
     const auto &dispatch = state->exports.back();
     targetStatus =
         codeUnitID == call.originID
-            ? talos_rt_cached_vpi_export_target(
-                  context, codeUnitID, dispatch.scope, dispatch.isTask)
+            ? talos_rt_cached_vpi_export_target(context, codeUnitID,
+                                                dispatch.scope, dispatch.isTask)
             : TALOS_RT_EOF;
   } else {
     targetStatus = call.originKind == TALOS_RT_VPI_FRAME_CALL
-                       ? talos_rt_cached_vpi_call_target(
-                             context, call.originID, codeUnitID)
+                       ? talos_rt_cached_vpi_call_target(context, call.originID,
+                                                         codeUnitID)
                        : talos_rt_cached_vpi_resolution_target(
                              context, call.originID, codeUnitID);
   }
   if (targetStatus != TALOS_RT_OK)
     return targetStatus == TALOS_RT_EOF ? TALOS_RT_INVALID_ARGUMENT
-                                          : targetStatus;
+                                        : targetStatus;
   bool physicalTask = false;
-  auto transport = talos_rt_cached_vpi_code_unit_transport(
-      context, codeUnitID, &physicalTask);
+  auto transport = talos_rt_cached_vpi_code_unit_transport(context, codeUnitID,
+                                                           &physicalTask);
   if (transport != TALOS_RT_OK)
-    return transport == TALOS_RT_EOF ? TALOS_RT_INVALID_ARGUMENT
-                                       : transport;
+    return transport == TALOS_RT_EOF ? TALOS_RT_INVALID_ARGUMENT : transport;
   if (physicalTask != bool(isTask))
     return TALOS_RT_INVALID_LIFECYCLE;
   if (isTask && call.originKind == TALOS_RT_VPI_FRAME_DPI_EXPORT) {
@@ -9450,9 +9398,8 @@ talos_rt_v1_vpi_call_finish(talos_rt_context *context, uint64_t ticket) {
   return TALOS_RT_OK;
 }
 
-extern "C" TALOS_VPI_EXPORT talos_rt_status
-talos_rt_v1_vpi_frame_bind(talos_rt_context *context, uint64_t localID,
-                             uint64_t automaticReference) {
+extern "C" TALOS_VPI_EXPORT talos_rt_status talos_rt_v1_vpi_frame_bind(
+    talos_rt_context *context, uint64_t localID, uint64_t automaticReference) {
   if (!context || !localID || !automaticReference)
     return TALOS_RT_INVALID_ARGUMENT;
   ContextMutexLock lock(context);
@@ -9476,7 +9423,7 @@ talos_rt_v1_vpi_frame_bind(talos_rt_context *context, uint64_t localID,
   if (status != TALOS_RT_OK)
     return status;
   status = talos_rt_vpi_automatic_validate(context, automaticReference,
-                                             info.bit_width);
+                                           info.bit_width);
   if (status != TALOS_RT_OK)
     return status;
   TALOS_RT_TRY {
@@ -9490,11 +9437,9 @@ talos_rt_v1_vpi_frame_bind(talos_rt_context *context, uint64_t localID,
   TALOS_RT_CATCH_ALL { return TALOS_RT_OUT_OF_RESOURCES; }
 }
 
-extern "C" TALOS_VPI_EXPORT talos_rt_status
-talos_rt_v1_vpi_frame_bind_alias(talos_rt_context *context,
-                                   uint64_t localID,
-                                   talos_rt_object_v1 *owner,
-                                   uint64_t payload, uint32_t managed) {
+extern "C" TALOS_VPI_EXPORT talos_rt_status talos_rt_v1_vpi_frame_bind_alias(
+    talos_rt_context *context, uint64_t localID, talos_rt_object_v1 *owner,
+    uint64_t payload, uint32_t managed) {
   if (!context || !localID || managed > 2 || (!managed && owner) ||
       (managed && !owner) || (managed == 2 && payload))
     return TALOS_RT_INVALID_ARGUMENT;
@@ -9538,9 +9483,8 @@ talos_rt_v1_vpi_frame_bind_alias(talos_rt_context *context,
   TALOS_RT_CATCH_ALL { return TALOS_RT_OUT_OF_RESOURCES; }
 }
 
-extern "C" TALOS_VPI_EXPORT talos_rt_status
-talos_rt_v1_vpi_frame_checkpoint(talos_rt_context *context,
-                                   uint64_t statementID) {
+extern "C" TALOS_VPI_EXPORT talos_rt_status talos_rt_v1_vpi_frame_checkpoint(
+    talos_rt_context *context, uint64_t statementID) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   ContextMutexLock lock(context);
@@ -9569,9 +9513,9 @@ talos_rt_v1_vpi_frame_checkpoint(talos_rt_context *context,
   return TALOS_RT_OK;
 }
 
-talos_rt_status
-talos_rt_vpi_frame_unwind_process(talos_rt_context *context,
-                                    uint64_t logicalProcess, uint64_t depth) {
+talos_rt_status talos_rt_vpi_frame_unwind_process(talos_rt_context *context,
+                                                  uint64_t logicalProcess,
+                                                  uint64_t depth) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   ContextMutexLock lock(context);
@@ -9627,8 +9571,9 @@ talos_rt_v1_vpi_frame_unwind(talos_rt_context *context, uint64_t depth) {
       context, context->activeLogicalProcessToken, depth);
 }
 
-talos_rt_status talos_rt_vpi_frame_depth_process(
-    talos_rt_context *context, uint64_t logicalProcess, uint64_t *outDepth) {
+talos_rt_status talos_rt_vpi_frame_depth_process(talos_rt_context *context,
+                                                 uint64_t logicalProcess,
+                                                 uint64_t *outDepth) {
   if (outDepth)
     *outDepth = 0;
   if (!context || !outDepth)
@@ -9655,8 +9600,8 @@ talos_rt_v1_vpi_frame_depth(talos_rt_context *context, uint64_t *outDepth) {
       context, context->activeLogicalProcessToken, outDepth);
 }
 
-extern "C" TALOS_VPI_EXPORT talos_rt_status talos_rt_v1_vpi_frame_leave(
-    talos_rt_context *context, uint64_t activation) {
+extern "C" TALOS_VPI_EXPORT talos_rt_status
+talos_rt_v1_vpi_frame_leave(talos_rt_context *context, uint64_t activation) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   ContextMutexLock lock(context);
@@ -9689,8 +9634,8 @@ extern "C" TALOS_VPI_EXPORT talos_rt_status talos_rt_v1_vpi_frame_leave(
 }
 
 extern "C" TALOS_VPI_EXPORT talos_rt_status
-talos_rt_v1_vpi_startup(talos_rt_context *context,
-                          const char *const *modules, uint64_t moduleCount) {
+talos_rt_v1_vpi_startup(talos_rt_context *context, const char *const *modules,
+                        uint64_t moduleCount) {
   if (!context || (moduleCount != 0 && !modules) || context->vpiState ||
       currentState())
     return TALOS_RT_INVALID_ARGUMENT;
@@ -9789,8 +9734,8 @@ talos_rt_v1_vpi_startup(talos_rt_context *context,
       setError(state.get(), "VPI startup table has no readable Mach-O storage");
       return TALOS_RT_INVALID_DESIGN;
     }
-    size_t entries = std::min<size_t>((size - (table - address)) / sizeof(void *),
-                                      65536);
+    size_t entries =
+        std::min<size_t>((size - (table - address)) / sizeof(void *), 65536);
 #else
     size_t entries = 0;
     Dl_info addressInfo{};
@@ -9901,7 +9846,7 @@ talos_rt_v1_vpi_shutdown(talos_rt_context *context) {
 }
 
 extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle_by_name(PLI_BYTE8 *name,
-                                                           vpiHandle scope) {
+                                                         vpiHandle scope) {
   VPICallScope vpiCallScope;
   VPIState *state = requireState();
   if (!state || !name)
@@ -10039,7 +9984,7 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle_by_name(PLI_BYTE8 *name,
 }
 
 extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle(PLI_INT32 type,
-                                                   vpiHandle reference) {
+                                                 vpiHandle reference) {
   VPICallScope vpiCallScope;
   // IEEE 1800-2023 37.43 detail 4: the innermost executing activation.
   if (!reference && type == vpiFrame) {
@@ -10071,7 +10016,7 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle(PLI_INT32 type,
   uint32_t sourceType = handle->exactVpiType;
   if (sourceType == 0 &&
       talos_rt_cached_vpi_type(handle->owner->context, handle->cursor,
-                                 &sourceType) != TALOS_RT_OK)
+                               &sourceType) != TALOS_RT_OK)
     return nullptr;
   if (handle->form == VPIObjectForm::ContAssignBit) {
     if (type == vpiParent)
@@ -10141,7 +10086,7 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle(PLI_INT32 type,
   if (type == vpiTypespec && handle->form == VPIObjectForm::Design) {
     VPIExpressionInfo expression{};
     if (talos_rt_cached_vpi_expression(handle->owner->context, handle->cursor,
-                                         &expression) == TALOS_RT_OK &&
+                                       &expression) == TALOS_RT_OK &&
         expression.sourceOnly) {
       setError(handle->owner, "source expression has no elaborated result type",
                vpiNotice);
@@ -10165,7 +10110,7 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle(PLI_INT32 type,
       handle->form == VPIObjectForm::Design) {
     VPITypeDefaultInfo original{};
     auto status = talos_rt_cached_vpi_type_default(handle->owner->context,
-                                                     handle->cursor, &original);
+                                                   handle->cursor, &original);
     if (status == TALOS_RT_OK)
       return makeTypespecHandle(handle->owner, handle->cursor,
                                 original.semantic, true, false, true);
@@ -10218,13 +10163,12 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle(PLI_INT32 type,
           handle->owner->context, handle->logicalProcess, &codeUnit);
       if (status != TALOS_RT_OK) {
         setError(handle->owner, "VPI thread activation lookup failed",
-                 status == TALOS_RT_OUT_OF_RESOURCES ? vpiSystem
-                                                       : vpiInternal);
+                 status == TALOS_RT_OUT_OF_RESOURCES ? vpiSystem : vpiInternal);
         return nullptr;
       }
       talos_rt_design_cursor_v1 statement{};
       status = talos_rt_cached_vpi_thread_origin(handle->owner->context,
-                                                   codeUnit, &statement);
+                                                 codeUnit, &statement);
       if (status == TALOS_RT_EOF) {
         setError(handle->owner, "VPI thread source statement is unavailable",
                  vpiNotice);
@@ -10233,7 +10177,7 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle(PLI_INT32 type,
       uint32_t statementType = 0;
       if (status != TALOS_RT_OK ||
           talos_rt_cached_vpi_type(handle->owner->context, statement,
-                                     &statementType) != TALOS_RT_OK) {
+                                   &statementType) != TALOS_RT_OK) {
         setError(handle->owner, "VPI thread source statement lookup failed",
                  vpiInternal);
         return nullptr;
@@ -10304,7 +10248,7 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle(PLI_INT32 type,
       const auto *parent = snapshotParentValue(handle, *handle->snapshot);
       if (parent && relation &&
           talos::reflection::vpiObjectSetContains(relation->targets,
-                                                    parent->exactType))
+                                                  parent->exactType))
         return makeSnapshotHandle(
             handle->owner, handle->cursor,
             std::shared_ptr<const VPISnapshotValue>(handle->snapshot, parent));
@@ -10321,16 +10265,15 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle(PLI_INT32 type,
     return makeReceiverHandle(handle);
   if (handle->form == VPIObjectForm::Indexed && type == vpiScope &&
       talos::reflection::findVPITraversal(
-          sourceType, vpiScope,
-          talos::reflection::VPITraversalMode::Handle)) {
+          sourceType, vpiScope, talos::reflection::VPITraversalMode::Handle)) {
     VPIClassMemberBinding member{};
-    if (talos_rt_cached_vpi_class_member(
-            handle->owner->context, handle->cursor, &member) == TALOS_RT_OK) {
+    if (talos_rt_cached_vpi_class_member(handle->owner->context, handle->cursor,
+                                         &member) == TALOS_RT_OK) {
       if (handle->dynamicObject)
         return makeReceiverHandle(handle);
       uint32_t ownerType = 0;
       if (talos_rt_cached_vpi_type(handle->owner->context, member.ownerScope,
-                                     &ownerType) != TALOS_RT_OK)
+                                   &ownerType) != TALOS_RT_OK)
         return nullptr;
       return makeRelatedHandle(handle, member.ownerScope, ownerType, false);
     }
@@ -10380,20 +10323,19 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle(PLI_INT32 type,
       sourceType == vpiInterconnectNet && type == vpiParent) {
     VPIArrayMemberInfo member{};
     std::vector<VPISelectionStep> indices;
-    if (talos_rt_cached_vpi_array_member(
-            handle->owner->context, handle->cursor, &member) != TALOS_RT_OK ||
+    if (talos_rt_cached_vpi_array_member(handle->owner->context, handle->cursor,
+                                         &member) != TALOS_RT_OK ||
         !staticArrayMemberIndexSteps(handle, indices) || indices.empty())
       return nullptr;
     uint32_t rootType = 0;
     if (talos_rt_cached_vpi_type(handle->owner->context, member.array,
-                                   &rootType) != TALOS_RT_OK)
+                                 &rootType) != TALOS_RT_OK)
       return nullptr;
     if (indices.size() == 1)
       return makeHandle(handle->owner, member.array, rootType);
     const auto *access = talos::reflection::findVPIIndexedAccess(rootType);
-    if (!access ||
-        access->accessKind !=
-            talos::reflection::VPIIndexedAccessKind::RelationElement)
+    if (!access || access->accessKind !=
+                       talos::reflection::VPIIndexedAccessKind::RelationElement)
       return nullptr;
     TALOS_RT_TRY {
       std::vector<PLI_INT32> prefix;
@@ -10441,8 +10383,7 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle(PLI_INT32 type,
       source.allocationScheme = handle->allocationScheme;
       source.classDefinitionOrigin = handle->classDefinitionOrigin;
       source.selectionRootType = targetType;
-      const auto *access =
-          talos::reflection::findVPIIndexedAccess(targetType);
+      const auto *access = talos::reflection::findVPIIndexedAccess(targetType);
       if (!access)
         return nullptr;
       source.selectionAccessKind = access->accessKind;
@@ -10460,7 +10401,7 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle(PLI_INT32 type,
       while (true) {
         talos_rt_design_info_v1 rootInfo{};
         if (talos_rt_cached_design_info(handle->owner->context, target,
-                                          &rootInfo) != TALOS_RT_OK ||
+                                        &rootInfo) != TALOS_RT_OK ||
             rootInfo.type_offset == 0)
           return nullptr;
         talos_rt_design_cursor_v1 physical{
@@ -10468,7 +10409,7 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle(PLI_INT32 type,
                           : steps.back().physicalType.offset};
         talos_rt_design_type_info_v1 typeInfo{};
         if (talos_rt_cached_design_type_info(handle->owner->context, physical,
-                                               &typeInfo) != TALOS_RT_OK)
+                                             &typeInfo) != TALOS_RT_OK)
           return nullptr;
         bool isArray = typeInfo.kind == TALOS_RT_DESIGN_TYPE_ARRAY;
         bool packed = (typeInfo.flags & TALOS_RT_DESIGN_TYPE_PACKED) != 0;
@@ -10477,8 +10418,8 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle(PLI_INT32 type,
           talos_rt_design_type_info_v1 element{};
           if (typeInfo.element_type.offset == 0 ||
               talos_rt_cached_design_type_info(handle->owner->context,
-                                                 typeInfo.element_type,
-                                                 &element) != TALOS_RT_OK ||
+                                               typeInfo.element_type,
+                                               &element) != TALOS_RT_OK ||
               element.bit_width == 0)
             return nullptr;
           childWidth = element.bit_width;
@@ -10547,9 +10488,9 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle(PLI_INT32 type,
     talos_rt_design_cursor_v1 target{};
     uint32_t targetType = 0;
     bool targetIsStatement = false;
-    if (talos_rt_cached_vpi_relation_target(
-            handle->owner->context, range.first, &target, &targetType,
-            &targetIsStatement) != TALOS_RT_OK)
+    if (talos_rt_cached_vpi_relation_target(handle->owner->context, range.first,
+                                            &target, &targetType,
+                                            &targetIsStatement) != TALOS_RT_OK)
       return nullptr;
     if (indexedSimNet) {
       if (targetIsStatement)
@@ -10570,7 +10511,7 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle(PLI_INT32 type,
         sourceType, vpiSimNet, talos::reflection::VPITraversalMode::Handle);
     if (edge &&
         talos_rt_cached_vpi_type(handle->owner->context, handle->cursor,
-                                   &rootType) == TALOS_RT_OK &&
+                                 &rootType) == TALOS_RT_OK &&
         talos::reflection::vpiObjectSetContains(edge->targets, rootType))
       return makeSimulatedNetHandle(handle->cursor, rootType);
   }
@@ -10641,10 +10582,10 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle(PLI_INT32 type,
                   handle->owner->context, handle->cursor, &parent,
                   &parentIsStatement)
             : talos_rt_cached_design_parent(handle->owner->context,
-                                              handle->cursor, &parent);
+                                            handle->cursor, &parent);
     if (parentStatus != TALOS_RT_OK ||
-        talos_rt_cached_vpi_type(handle->owner->context, parent,
-                                   &parentType) != TALOS_RT_OK ||
+        talos_rt_cached_vpi_type(handle->owner->context, parent, &parentType) !=
+            TALOS_RT_OK ||
         !talos::reflection::vpiObjectSetContains(edge->targets, parentType))
       return nullptr;
     return makeHandle(
@@ -10658,7 +10599,7 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle(PLI_INT32 type,
 }
 
 extern "C" TALOS_VPI_EXPORT vpiHandle vpi_iterate(PLI_INT32 type,
-                                                    vpiHandle reference) {
+                                                  vpiHandle reference) {
   VPICallScope vpiCallScope;
   VPIState *state = requireState();
   if (!state)
@@ -10736,16 +10677,14 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_iterate(PLI_INT32 type,
       std::vector<uint64_t> times;
       {
         ContextMutexLock lock(state->context);
-        talos_rt_status status =
-            talos_rt_snapshot_future_time_queues_unlocked(state->context,
-                                                            times);
+        talos_rt_status status = talos_rt_snapshot_future_time_queues_unlocked(
+            state->context, times);
         if (status != TALOS_RT_OK) {
           setError(state,
                    status == TALOS_RT_OUT_OF_MEMORY
                        ? "could not allocate VPI time-queue snapshot"
                        : "could not inspect scheduler time queues",
-                   status == TALOS_RT_OUT_OF_MEMORY ? vpiSystem
-                                                      : vpiInternal);
+                   status == TALOS_RT_OUT_OF_MEMORY ? vpiSystem : vpiInternal);
           return nullptr;
         }
         if ((state->phase == VPIPhase::StartSimulation ||
@@ -10901,7 +10840,8 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_iterate(PLI_INT32 type,
         if (status == TALOS_RT_EOF)
           return nullptr;
         if (status != TALOS_RT_OK) {
-          setError(state, "builtin class VPI typespec lookup failed", vpiInternal);
+          setError(state, "builtin class VPI typespec lookup failed",
+                   vpiInternal);
           return nullptr;
         }
       }
@@ -10910,9 +10850,8 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_iterate(PLI_INT32 type,
       sourceDesign = true;
     }
     sourceType = handle->exactVpiType;
-    if (sourceType == 0 &&
-        talos_rt_cached_vpi_type(state->context, parent, &sourceType) !=
-            TALOS_RT_OK)
+    if (sourceType == 0 && talos_rt_cached_vpi_type(state->context, parent,
+                                                    &sourceType) != TALOS_RT_OK)
       return nullptr;
     if (type == vpiPortInst &&
         (sourceType == vpiNetBit || sourceType == vpiRegBit)) {
@@ -11006,8 +10945,8 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_iterate(PLI_INT32 type,
         uint32_t memberSelector =
             type == vpiVirtualInterfaceVar ? vpiVariables : type;
         if (talos_rt_cached_vpi_relation_range(state->context, scope,
-                                                 memberSelector, true,
-                                                 &range) == TALOS_RT_OK) {
+                                               memberSelector, true,
+                                               &range) == TALOS_RT_OK) {
           if (type != vpiVirtualInterfaceVar)
             ranges.push_back(range);
           else {
@@ -11034,15 +10973,14 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_iterate(PLI_INT32 type,
         if (!classSource)
           break;
         VPIRelationRange base{};
-        if (talos_rt_cached_vpi_relation_range(state->context, scope,
-                                                 vpiExtends, false,
-                                                 &base) != TALOS_RT_OK)
+        if (talos_rt_cached_vpi_relation_range(
+                state->context, scope, vpiExtends, false, &base) != TALOS_RT_OK)
           break;
         uint32_t baseType = 0;
         bool statement = false;
-        if (talos_rt_cached_vpi_relation_target(
-                state->context, base.first, &scope, &baseType, &statement) !=
-                TALOS_RT_OK ||
+        if (talos_rt_cached_vpi_relation_target(state->context, base.first,
+                                                &scope, &baseType,
+                                                &statement) != TALOS_RT_OK ||
             baseType != vpiClassTypespec || statement)
           return nullptr;
       }
@@ -11146,9 +11084,8 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_iterate(PLI_INT32 type,
                                           ? source->selectionRootType
                                           : sourceType)
                                 : nullptr;
-    if (access &&
-        access->accessKind ==
-            talos::reflection::VPIIndexedAccessKind::RelationElement)
+    if (access && access->accessKind ==
+                      talos::reflection::VPIIndexedAccessKind::RelationElement)
       if (vpiHandle semantic = makeSemanticIterator(source, type))
         return semantic;
   }
@@ -11159,9 +11096,10 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_iterate(PLI_INT32 type,
         true, &range);
   } else {
     __vpiHandle *source = referenceHandle;
-    const auto *access = source ? talos::reflection::findVPIIndexedAccess(
-                                      source->selectionRootType)
-                                : nullptr;
+    const auto *access =
+        source
+            ? talos::reflection::findVPIIndexedAccess(source->selectionRootType)
+            : nullptr;
     if (source && source->form == VPIObjectForm::Indexed && access &&
         access->accessKind ==
             talos::reflection::VPIIndexedAccessKind::RelationElement &&
@@ -11219,9 +11157,9 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_iterate(PLI_INT32 type,
   // a physical child happens to have a compatible kind. NULL-root discovery
   // remains defined by the generated root target set.
   if (!edge || edge->statementContainment ||
-      (reference &&
-       (!sourceDesign || edge->automaticRelation !=
-                             talos::reflection::VPIAutomaticRelation::DirectChild)))
+      (reference && (!sourceDesign ||
+                     edge->automaticRelation !=
+                         talos::reflection::VPIAutomaticRelation::DirectChild)))
     return nullptr;
   talos_rt_design_cursor_v1 cursor{};
   talos_rt_status status =
@@ -11687,7 +11625,7 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_scan(vpiHandle opaque) {
           iterator->iteratorType == vpiMethods) {
         VPIClassMemberBinding member{};
         if (talos_rt_cached_vpi_class_member(iterator->owner->context, target,
-                                               &member) == TALOS_RT_OK) {
+                                             &member) == TALOS_RT_OK) {
           TALOS_RT_TRY {
             if (!iterator->seenClassMethods
                      .emplace(reinterpret_cast<const char *>(member.name),
@@ -11782,7 +11720,7 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_scan(vpiHandle opaque) {
 }
 
 extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get(PLI_INT32 property,
-                                                vpiHandle opaque) {
+                                              vpiHandle opaque) {
   VPICallScope vpiCallScope;
   if (!opaque) {
     VPIState *state = requireState();
@@ -11921,9 +11859,8 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get(PLI_INT32 property,
   }
   if (property == vpiLocalVarDecls && handle->statement) {
     bool isScope = false;
-    if (talos_rt_cached_vpi_statement_is_scope(handle->owner->context,
-                                                 handle->cursor,
-                                                 &isScope) != TALOS_RT_OK) {
+    if (talos_rt_cached_vpi_statement_is_scope(
+            handle->owner->context, handle->cursor, &isScope) != TALOS_RT_OK) {
       setError(handle->owner, "for statement scope lookup failed", vpiInternal);
       return vpiUndefined;
     }
@@ -11935,8 +11872,8 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get(PLI_INT32 property,
   if (property == vpiAllocScheme)
     return handle->allocationScheme;
   if (property == vpiActive && handle->form == VPIObjectForm::Thread)
-    return sourceThread(handle->owner, talos_rt_v1_process_current(
-                                           handle->owner->context)) ==
+    return sourceThread(handle->owner,
+                        talos_rt_v1_process_current(handle->owner->context)) ==
            handle->logicalProcess;
   if (property == vpiActive && handle->form == VPIObjectForm::Frame) {
     ContextMutexLock lock(handle->owner->context);
@@ -11975,8 +11912,8 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get(PLI_INT32 property,
                                 nullptr) == TALOS_RT_OK;
     }
     VPIClassMemberBinding member{};
-    if (talos_rt_cached_vpi_class_member(
-            handle->owner->context, handle->cursor, &member) == TALOS_RT_OK)
+    if (talos_rt_cached_vpi_class_member(handle->owner->context, handle->cursor,
+                                         &member) == TALOS_RT_OK)
       return member.isStatic || handle->dynamicObject != nullptr;
     return 1;
   }
@@ -11994,8 +11931,8 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get(PLI_INT32 property,
     if (objectType == vpiClassDefn || objectType == vpiClassTypespec)
       return 1;
     VPIClassMemberBinding member{};
-    if (talos_rt_cached_vpi_class_member(
-            handle->owner->context, handle->cursor, &member) == TALOS_RT_OK &&
+    if (talos_rt_cached_vpi_class_member(handle->owner->context, handle->cursor,
+                                         &member) == TALOS_RT_OK &&
         !member.isMethod)
       return !member.isStatic;
     if (isVariableVPIKind(objectType))
@@ -12097,7 +12034,7 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get(PLI_INT32 property,
   VPIExpressionInfo expression{};
   if (handle->form == VPIObjectForm::Design &&
       talos_rt_cached_vpi_expression(handle->owner->context, handle->cursor,
-                                       &expression) == TALOS_RT_OK) {
+                                     &expression) == TALOS_RT_OK) {
     if (!propertyFor(handle, property))
       return vpiUndefined;
     if (expression.sourceOnly &&
@@ -12116,9 +12053,9 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get(PLI_INT32 property,
       return expression.constantSelect;
     if (property == vpiSigned) {
       talos_rt_design_semantic_type_info_v1 semantic{};
-      if (talos_rt_cached_design_semantic_type_info(
-              handle->owner->context, expression.semantic, &semantic) !=
-          TALOS_RT_OK)
+      if (talos_rt_cached_design_semantic_type_info(handle->owner->context,
+                                                    expression.semantic,
+                                                    &semantic) != TALOS_RT_OK)
         return vpiUndefined;
       return (semantic.flags & TALOS_RT_DESIGN_SEMANTIC_SIGNED) != 0;
     }
@@ -12151,8 +12088,7 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get(PLI_INT32 property,
     if (usesSemanticSignedness && semanticCursorFor(handle, semanticCursor)) {
       talos_rt_design_semantic_type_info_v1 semantic{};
       if (talos_rt_cached_design_semantic_type_info(
-              handle->owner->context, semanticCursor, &semantic) ==
-          TALOS_RT_OK)
+              handle->owner->context, semanticCursor, &semantic) == TALOS_RT_OK)
         return (semantic.flags & TALOS_RT_DESIGN_SEMANTIC_SIGNED) != 0;
     }
     talos_rt_design_info_v1 info{};
@@ -12418,9 +12354,8 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get(PLI_INT32 property,
          exactType == vpiInterconnectArray) &&
         info.type_offset != 0) {
       talos_rt_design_type_info_v1 type{};
-      if (talos_rt_cached_design_type_info(handle->owner->context,
-                                             {info.type_offset},
-                                             &type) != TALOS_RT_OK)
+      if (talos_rt_cached_design_type_info(
+              handle->owner->context, {info.type_offset}, &type) != TALOS_RT_OK)
         return vpiUndefined;
       if (type.kind == TALOS_RT_DESIGN_TYPE_ARRAY &&
           (type.flags & TALOS_RT_DESIGN_TYPE_PACKED) == 0) {
@@ -12458,16 +12393,14 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get(PLI_INT32 property,
     uint32_t kind = 0;
     bool statement = false;
     if (talos_rt_cached_vpi_relation_range(context, handle->cursor,
-                                             vpiPrimitive, false,
-                                             &owner) == TALOS_RT_OK &&
+                                           vpiPrimitive, false,
+                                           &owner) == TALOS_RT_OK &&
         owner.count == 1 &&
         talos_rt_cached_vpi_relation_target(context, owner.first, &primitive,
-                                              &kind,
-                                              &statement) == TALOS_RT_OK &&
+                                            &kind, &statement) == TALOS_RT_OK &&
         !statement &&
         talos_rt_cached_vpi_relation_range(context, primitive, vpiPrimTerm,
-                                             true,
-                                             &terminals) == TALOS_RT_OK) {
+                                           true, &terminals) == TALOS_RT_OK) {
       // The validated relation group is dense and is the terminal source order.
       // Reuse that ordinal instead of serializing one fixed fact per terminal.
       for (uint32_t index = 0; index != terminals.count; ++index) {
@@ -12490,7 +12423,7 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get(PLI_INT32 property,
     uint32_t exactType = handle->exactVpiType;
     if (exactType == 0 &&
         talos_rt_cached_vpi_type(handle->owner->context, handle->cursor,
-                                   &exactType) == TALOS_RT_OK)
+                                 &exactType) == TALOS_RT_OK)
       handle->exactVpiType = exactType;
     if (!talos::reflection::findVPIProperty(exactType, property)) {
       setError(handle->owner, "property is not defined for this VPI object",
@@ -12517,8 +12450,7 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get(PLI_INT32 property,
       if ((info.capabilities & TALOS_RT_DESIGN_CAP_PORT_REF) != 0)
         return vpiRef;
       bool input = (info.capabilities & TALOS_RT_DESIGN_CAP_PORT_INPUT) != 0;
-      bool output =
-          (info.capabilities & TALOS_RT_DESIGN_CAP_PORT_OUTPUT) != 0;
+      bool output = (info.capabilities & TALOS_RT_DESIGN_CAP_PORT_OUTPUT) != 0;
       if (input && output)
         return vpiInout;
       return input ? vpiInput : vpiOutput;
@@ -12558,9 +12490,8 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get(PLI_INT32 property,
   if (property == vpiLineNo) {
     if (handle->originalTypeDefault) {
       VPITypeDefaultInfo original{};
-      if (talos_rt_cached_vpi_type_default(handle->owner->context,
-                                             handle->cursor,
-                                             &original) != TALOS_RT_OK)
+      if (talos_rt_cached_vpi_type_default(
+              handle->owner->context, handle->cursor, &original) != TALOS_RT_OK)
         return vpiUndefined;
       return original.line;
     }
@@ -12568,8 +12499,8 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get(PLI_INT32 property,
     uint64_t fileSize = 0;
     uint32_t line = 0, column = 0;
     if (talos_rt_cached_design_source(handle->owner->context, handle->cursor,
-                                        &file, &fileSize, &line,
-                                        &column) != TALOS_RT_OK)
+                                      &file, &fileSize, &line,
+                                      &column) != TALOS_RT_OK)
       return vpiUndefined;
     return static_cast<PLI_INT32>(std::min<uint32_t>(line, INT32_MAX));
   }
@@ -12578,7 +12509,7 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get(PLI_INT32 property,
 }
 
 extern "C" TALOS_VPI_EXPORT PLI_INT64 vpi_get64(PLI_INT32 property,
-                                                  vpiHandle opaque) {
+                                                vpiHandle opaque) {
   VPICallScope vpiCallScope;
   __vpiHandle *handle = findHandle(opaque);
   if (!handle)
@@ -12586,8 +12517,7 @@ extern "C" TALOS_VPI_EXPORT PLI_INT64 vpi_get64(PLI_INT32 property,
   const auto *descriptor = propertyFor(handle, property);
   if (!descriptor)
     return vpiUndefined;
-  if (descriptor->valueKind !=
-      talos::reflection::VPIPropertyValueKind::Int64) {
+  if (descriptor->valueKind != talos::reflection::VPIPropertyValueKind::Int64) {
     setError(handle->owner, "property is not a 64-bit integer VPI property",
              vpiNotice);
     return vpiUndefined;
@@ -12661,12 +12591,12 @@ static bool decompileSnapshotScalar(__vpiHandle *handle,
     talos_rt_design_semantic_type_info_v1 info{};
     if (!value.unsignedIndex && !semanticTypeInfo(handle, value.semantic, info))
       return false;
-    result = std::to_string(value.bitWidth) +
-             ((!value.bitSelection &&
-               (info.flags & TALOS_RT_DESIGN_SEMANTIC_SIGNED))
-                  ? "'sb"
-                  : "'b") +
-             bits;
+    result =
+        std::to_string(value.bitWidth) +
+        ((!value.bitSelection && (info.flags & TALOS_RT_DESIGN_SEMANTIC_SIGNED))
+             ? "'sb"
+             : "'b") +
+        bits;
     return true;
   }
   if (value.constType == vpiRealConst) {
@@ -12825,8 +12755,7 @@ bool decompileSourceExpression(__vpiHandle *handle, std::string &result) {
       if (item.type == vpiParameter) {
         VPIFixedPropertyValue nameProperty{};
         if (talos_rt_cached_vpi_fixed_property(context, item.cursor, vpiName,
-                                                 &nameProperty) !=
-                TALOS_RT_OK ||
+                                               &nameProperty) != TALOS_RT_OK ||
             !nameProperty.stringSize || nameProperty.stringSize > SIZE_MAX)
           return invalid();
         std::string_view name(
@@ -12849,10 +12778,10 @@ bool decompileSourceExpression(__vpiHandle *handle, std::string &result) {
                 static_cast<uint32_t>(
                     talos::reflection::FrozenValueKind::Packed) ||
             !value.bitWidth ||
-            talos_rt_cached_design_semantic_root(
-                context, item.cursor, &semantic) != TALOS_RT_OK ||
+            talos_rt_cached_design_semantic_root(context, item.cursor,
+                                                 &semantic) != TALOS_RT_OK ||
             talos_rt_cached_design_semantic_type_info(context, semantic,
-                                                        &info) != TALOS_RT_OK)
+                                                      &info) != TALOS_RT_OK)
           return invalid();
         const uint64_t bytes = (value.bitWidth - 1) / 8 + 1;
         if (bytes > UINT64_MAX / 2 || value.payloadSize != bytes * 2)
@@ -12871,14 +12800,13 @@ bool decompileSourceExpression(__vpiHandle *handle, std::string &result) {
         return invalid();
       VPIFixedPropertyValue property{};
       if (talos_rt_cached_vpi_fixed_property(context, item.cursor, vpiOpType,
-                                               &property) != TALOS_RT_OK)
+                                             &property) != TALOS_RT_OK)
         return invalid();
       const auto *operation = findVPISourceOperator(property.payload);
       VPIRelationRange operands{};
       if (!operation ||
           talos_rt_cached_vpi_relation_range(context, item.cursor, vpiOperand,
-                                               true,
-                                               &operands) != TALOS_RT_OK ||
+                                             true, &operands) != TALOS_RT_OK ||
           operands.count != operation->arity)
         return invalid();
       const bool parentheses =
@@ -12993,9 +12921,9 @@ bool decompileRetainedExpression(__vpiHandle *handle, std::string &result) {
       std::vector<Pending> children;
       for (uint32_t index = 0; index != expression.operandCount; ++index) {
         Pending child;
-        if (talos_rt_cached_vpi_expression_operand(
-                context, item.cursor, index, &child.cursor, &child.kind) !=
-            TALOS_RT_OK)
+        if (talos_rt_cached_vpi_expression_operand(context, item.cursor, index,
+                                                   &child.cursor,
+                                                   &child.kind) != TALOS_RT_OK)
           return false;
         const uint8_t *name = nullptr;
         uint64_t size = 0;
@@ -13185,7 +13113,7 @@ bool decompileRetainedExpression(__vpiHandle *handle, std::string &result) {
 }
 
 extern "C" TALOS_VPI_EXPORT PLI_BYTE8 *vpi_get_str(PLI_INT32 property,
-                                                     vpiHandle opaque) {
+                                                   vpiHandle opaque) {
   VPICallScope vpiCallScope;
   __vpiHandle *handle = findHandle(opaque);
   if (!handle)
@@ -13193,10 +13121,10 @@ extern "C" TALOS_VPI_EXPORT PLI_BYTE8 *vpi_get_str(PLI_INT32 property,
   std::string &scratch = handle->owner->propertyStringScratch;
   if (property == vpiType) {
     PLI_INT32 type = vpiTypeForHandle(handle);
-    const auto *descriptor = type == vpiUndefined
-                                 ? nullptr
-                                 : talos::reflection::findVPIObjectKind(
-                                       static_cast<uint32_t>(type));
+    const auto *descriptor =
+        type == vpiUndefined
+            ? nullptr
+            : talos::reflection::findVPIObjectKind(static_cast<uint32_t>(type));
     if (!descriptor) {
       setError(handle->owner, "VPI object type has no symbolic spelling",
                vpiNotice);
@@ -13352,9 +13280,9 @@ extern "C" TALOS_VPI_EXPORT PLI_BYTE8 *vpi_get_str(PLI_INT32 property,
   const bool hasDeclarationName =
       property == vpiDecompile && handle->form == VPIObjectForm::Design &&
       vpiTypeForHandle(handle) == vpiParameter &&
-      talos_rt_cached_vpi_fixed_property(handle->owner->context,
-                                           handle->cursor, vpiName,
-                                           &declarationName) == TALOS_RT_OK;
+      talos_rt_cached_vpi_fixed_property(handle->owner->context, handle->cursor,
+                                         vpiName,
+                                         &declarationName) == TALOS_RT_OK;
   if (propertyDescriptor &&
       (propertyDescriptor->realization ==
            talos::reflection::VPIPropertyRealization::FixedImage ||
@@ -13412,7 +13340,7 @@ extern "C" TALOS_VPI_EXPORT PLI_BYTE8 *vpi_get_str(PLI_INT32 property,
     VPIExpressionInfo expression{};
     if (handle->form == VPIObjectForm::Design && !handle->statement &&
         talos_rt_cached_vpi_expression(handle->owner->context, handle->cursor,
-                                         &expression) == TALOS_RT_OK)
+                                       &expression) == TALOS_RT_OK)
       return decompileRetainedExpression(handle, scratch) ? scratch.data()
                                                           : nullptr;
     if (hasDeclarationName)
@@ -13434,10 +13362,9 @@ extern "C" TALOS_VPI_EXPORT PLI_BYTE8 *vpi_get_str(PLI_INT32 property,
     const uint8_t *parentName = nullptr;
     uint64_t parentNameSize = 0;
     if (talos_rt_cached_design_parent(handle->owner->context, handle->cursor,
-                                        &parent) == TALOS_RT_OK &&
-        talos_rt_cached_design_name(handle->owner->context, parent,
-                                      &parentName,
-                                      &parentNameSize) == TALOS_RT_OK &&
+                                      &parent) == TALOS_RT_OK &&
+        talos_rt_cached_design_name(handle->owner->context, parent, &parentName,
+                                    &parentNameSize) == TALOS_RT_OK &&
         parentNameSize != 0 && scratch.size() > parentNameSize &&
         std::memcmp(scratch.data(), parentName,
                     static_cast<size_t>(parentNameSize)) == 0) {
@@ -13470,9 +13397,9 @@ extern "C" TALOS_VPI_EXPORT PLI_BYTE8 *vpi_get_str(PLI_INT32 property,
       const uint8_t *local = nullptr, *parent = nullptr;
       uint64_t localSize = 0, parentSize = 0;
       if (talos_rt_cached_design_name(handle->owner->context, handle->cursor,
-                                        &local, &localSize) != TALOS_RT_OK ||
+                                      &local, &localSize) != TALOS_RT_OK ||
           talos_rt_cached_design_name(handle->owner->context, scope, &parent,
-                                        &parentSize) != TALOS_RT_OK)
+                                      &parentSize) != TALOS_RT_OK)
         return nullptr;
       TALOS_RT_TRY {
         scratch.assign(reinterpret_cast<const char *>(parent), parentSize);
@@ -13496,22 +13423,22 @@ extern "C" TALOS_VPI_EXPORT PLI_BYTE8 *vpi_get_str(PLI_INT32 property,
     uint32_t instanceType = 0;
     bool statement = false;
     if (talos_rt_cached_design_name(handle->owner->context, handle->cursor,
-                                      &memberName,
-                                      &memberNameSize) != TALOS_RT_OK ||
+                                    &memberName,
+                                    &memberNameSize) != TALOS_RT_OK ||
         memberNameSize == 0 ||
         talos_rt_cached_vpi_relation_range(handle->owner->context,
-                                             handle->cursor, vpiInstance, false,
-                                             &range) != TALOS_RT_OK ||
-        talos_rt_cached_vpi_relation_target(
-            handle->owner->context, range.first, &instance, &instanceType,
-            &statement) != TALOS_RT_OK ||
+                                           handle->cursor, vpiInstance, false,
+                                           &range) != TALOS_RT_OK ||
+        talos_rt_cached_vpi_relation_target(handle->owner->context, range.first,
+                                            &instance, &instanceType,
+                                            &statement) != TALOS_RT_OK ||
         statement)
       return nullptr;
     const uint8_t *instanceName = nullptr;
     uint64_t instanceNameSize = 0;
     if (talos_rt_cached_design_name(handle->owner->context, instance,
-                                      &instanceName,
-                                      &instanceNameSize) != TALOS_RT_OK ||
+                                    &instanceName,
+                                    &instanceNameSize) != TALOS_RT_OK ||
         instanceNameSize == 0)
       return nullptr;
     TALOS_RT_TRY {
@@ -13571,8 +13498,8 @@ extern "C" TALOS_VPI_EXPORT PLI_BYTE8 *vpi_get_str(PLI_INT32 property,
         const uint8_t *name = nullptr;
         uint64_t size = 0;
         if (talos_rt_cached_design_name(handle->owner->context,
-                                          info.identity_target, &name,
-                                          &size) != TALOS_RT_OK ||
+                                        info.identity_target, &name,
+                                        &size) != TALOS_RT_OK ||
             size == 0)
           return nullptr;
         scratch.assign(reinterpret_cast<const char *>(name),
@@ -13614,9 +13541,9 @@ extern "C" TALOS_VPI_EXPORT PLI_BYTE8 *vpi_get_str(PLI_INT32 property,
       talos_rt_design_cursor_v1 semanticCursor{};
       talos_rt_design_semantic_type_info_v1 semantic{};
       if (!semanticCursorFor(&parent, semanticCursor) ||
-          talos_rt_cached_design_semantic_type_info(
-              handle->owner->context, semanticCursor, &semantic) !=
-              TALOS_RT_OK ||
+          talos_rt_cached_design_semantic_type_info(handle->owner->context,
+                                                    semanticCursor,
+                                                    &semantic) != TALOS_RT_OK ||
           !nameFor(&parent, scratch))
         return nullptr;
       bool hasRange =
@@ -13648,9 +13575,8 @@ extern "C" TALOS_VPI_EXPORT PLI_BYTE8 *vpi_get_str(PLI_INT32 property,
     }
     if (property == vpiName && objectType == vpiModport) {
       VPIModportBinding binding{};
-      if (talos_rt_cached_vpi_modport_binding(handle->owner->context,
-                                                handle->cursor,
-                                                &binding) != TALOS_RT_OK)
+      if (talos_rt_cached_vpi_modport_binding(
+              handle->owner->context, handle->cursor, &binding) != TALOS_RT_OK)
         return nullptr;
       TALOS_RT_TRY {
         scratch.assign(reinterpret_cast<const char *>(binding.name),
@@ -13665,24 +13591,22 @@ extern "C" TALOS_VPI_EXPORT PLI_BYTE8 *vpi_get_str(PLI_INT32 property,
     }
     if (property == vpiName) {
       VPIClassMemberBinding member{};
-      if (talos_rt_cached_vpi_class_member(handle->owner->context,
-                                             handle->cursor,
-                                             &member) == TALOS_RT_OK) {
+      if (talos_rt_cached_vpi_class_member(
+              handle->owner->context, handle->cursor, &member) == TALOS_RT_OK) {
         return nameFor(handle, scratch, true) ? scratch.data() : nullptr;
       }
     }
     if (property == vpiFullName && handle->dynamicObject) {
       VPIClassMemberBinding member{};
-      if (talos_rt_cached_vpi_class_member(handle->owner->context,
-                                             handle->cursor,
-                                             &member) == TALOS_RT_OK &&
+      if (talos_rt_cached_vpi_class_member(
+              handle->owner->context, handle->cursor, &member) == TALOS_RT_OK &&
           !member.isStatic && !member.isMethod)
         return nullptr;
     }
     if (property == vpiName && !handle->statement) {
       talos_rt_design_info_v1 info{};
       if (talos_rt_cached_design_info(handle->owner->context, handle->cursor,
-                                        &info) != TALOS_RT_OK)
+                                      &info) != TALOS_RT_OK)
         return nullptr;
       if (info.kind == TALOS_RT_DESIGN_RECORD_STATIC_OBJECT &&
           concreteTypespec && handle->exactVpiType != vpiClassTypespec &&
@@ -13716,8 +13640,8 @@ extern "C" TALOS_VPI_EXPORT PLI_BYTE8 *vpi_get_str(PLI_INT32 property,
     if (handle->originalTypeDefault) {
       VPITypeDefaultInfo original{};
       if (talos_rt_cached_vpi_type_default(handle->owner->context,
-                                             handle->cursor,
-                                             &original) != TALOS_RT_OK ||
+                                           handle->cursor,
+                                           &original) != TALOS_RT_OK ||
           !original.fileSize)
         return nullptr;
       scratch.assign(reinterpret_cast<const char *>(original.file),
@@ -13728,8 +13652,8 @@ extern "C" TALOS_VPI_EXPORT PLI_BYTE8 *vpi_get_str(PLI_INT32 property,
     uint64_t size = 0;
     uint32_t line = 0, column = 0;
     if (talos_rt_cached_design_source(handle->owner->context, handle->cursor,
-                                        &file, &size, &line,
-                                        &column) != TALOS_RT_OK)
+                                      &file, &size, &line,
+                                      &column) != TALOS_RT_OK)
       return nullptr;
     if (size == 0) {
       scratch.clear();
@@ -13744,7 +13668,7 @@ extern "C" TALOS_VPI_EXPORT PLI_BYTE8 *vpi_get_str(PLI_INT32 property,
 }
 
 extern "C" TALOS_VPI_EXPORT void vpi_get_value(vpiHandle opaque,
-                                                 p_vpi_value destination) {
+                                               p_vpi_value destination) {
   VPICallScope vpiCallScope;
   __vpiHandle *handle = validate(opaque);
   if (!handle)
@@ -13832,7 +13756,7 @@ extern "C" TALOS_VPI_EXPORT void vpi_get_value(vpiHandle opaque,
     if (!readManagedStateWord(handle, source, rootedString))
       return;
     if (talos_rt_v1_gc_candidate_root(handle->owner->context, rootedString,
-                                        TALOS_RT_MANAGED_ROOT_KIND_STRING) !=
+                                      TALOS_RT_MANAGED_ROOT_KIND_STRING) !=
         rootedString) {
       setError(handle->owner, "invalid managed string in VPI design state",
                vpiInternal);
@@ -13854,16 +13778,16 @@ extern "C" TALOS_VPI_EXPORT void vpi_get_value(vpiHandle opaque,
   if (source.hasSemanticCursor) {
     talos_rt_design_semantic_type_info_v1 semantic{};
     if (talos_rt_cached_design_semantic_type_info(handle->owner->context,
-                                                    source.semanticCursor,
-                                                    &semantic) == TALOS_RT_OK)
+                                                  source.semanticCursor,
+                                                  &semantic) == TALOS_RT_OK)
       semanticKind = semantic.kind;
   }
-  const bool realSource =
-      semanticKind == TALOS_RT_DESIGN_SEMANTIC_SHORT_REAL ||
-      semanticKind == TALOS_RT_DESIGN_SEMANTIC_REAL ||
-      semanticKind == TALOS_RT_DESIGN_SEMANTIC_REALTIME ||
-      exactType == vpiShortRealVar || exactType == vpiShortRealNet ||
-      exactType == vpiRealVar || exactType == vpiRealNet;
+  const bool realSource = semanticKind == TALOS_RT_DESIGN_SEMANTIC_SHORT_REAL ||
+                          semanticKind == TALOS_RT_DESIGN_SEMANTIC_REAL ||
+                          semanticKind == TALOS_RT_DESIGN_SEMANTIC_REALTIME ||
+                          exactType == vpiShortRealVar ||
+                          exactType == vpiShortRealNet ||
+                          exactType == vpiRealVar || exactType == vpiRealNet;
   const bool stringSource = semanticKind == TALOS_RT_DESIGN_SEMANTIC_STRING ||
                             exactType == vpiStringVar;
   double sourceReal = 0;
@@ -14158,7 +14082,7 @@ extern "C" TALOS_VPI_EXPORT void vpi_get_value(vpiHandle opaque,
 }
 
 extern "C" TALOS_VPI_EXPORT void vpi_get_time(vpiHandle opaque,
-                                                p_vpi_time destination) {
+                                              p_vpi_time destination) {
   VPICallScope vpiCallScope;
   VPIState *state = requireState();
   if (!state)
@@ -14221,9 +14145,9 @@ extern "C" TALOS_VPI_EXPORT void vpi_get_time(vpiHandle opaque,
 }
 
 extern "C" TALOS_VPI_EXPORT vpiHandle vpi_put_value(vpiHandle opaque,
-                                                      p_vpi_value source,
-                                                      p_vpi_time,
-                                                      PLI_INT32 flags) {
+                                                    p_vpi_value source,
+                                                    p_vpi_time,
+                                                    PLI_INT32 flags) {
   VPICallScope vpiCallScope;
   __vpiHandle *handle = validate(opaque);
   if (!handle)
@@ -14249,8 +14173,8 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_put_value(vpiHandle opaque,
     return nullptr;
   }
   VPIClassMemberBinding member{};
-  bool classMember = talos_rt_cached_vpi_class_member(
-                         context, handle->cursor, &member) == TALOS_RT_OK;
+  bool classMember = talos_rt_cached_vpi_class_member(context, handle->cursor,
+                                                      &member) == TALOS_RT_OK;
   if (handle->classDefinitionOrigin ||
       (classMember &&
        (member.isMethod || (!member.isStatic && !handle->dynamicObject)))) {
@@ -14316,15 +14240,13 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_put_value(vpiHandle opaque,
     while (descriptor && descriptor->class_id != member.classID)
       descriptor = descriptor->base;
     talos_rt_design_type_info_v1 type{};
-    if (!descriptor ||
-        talos_rt_cached_design_type_info(context, {info.type_offset},
-                                           &type) != TALOS_RT_OK) {
+    if (!descriptor || talos_rt_cached_design_type_info(
+                           context, {info.type_offset}, &type) != TALOS_RT_OK) {
       setError(handle->owner, "class member layout is invalid", vpiInternal);
       return nullptr;
     }
     const uint64_t bytes = info.bit_width / 8 + (info.bit_width % 8 != 0);
-    const bool fourState =
-        (type.flags & TALOS_RT_DESIGN_TYPE_FOUR_STATE) != 0;
+    const bool fourState = (type.flags & TALOS_RT_DESIGN_TYPE_FOUR_STATE) != 0;
     // The public write entry points acquire the object lock and notify field
     // observers. Release our validation lease before entering them; the active
     // GC lane continues to protect the receiver.
@@ -14332,11 +14254,10 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_put_value(vpiHandle opaque,
     talos_rt_status status =
         fourState
             ? talos_rt_v1_object_write_planes(handle->dynamicObject,
-                                                member.byteOffset, value.data(),
-                                                unknown.data(), bytes)
-            : talos_rt_v1_object_write(handle->dynamicObject,
-                                         member.byteOffset, value.data(),
-                                         bytes);
+                                              member.byteOffset, value.data(),
+                                              unknown.data(), bytes)
+            : talos_rt_v1_object_write(handle->dynamicObject, member.byteOffset,
+                                       value.data(), bytes);
     if (status != TALOS_RT_OK)
       setError(handle->owner, "VPI class member write failed");
     return nullptr;
@@ -14344,16 +14265,16 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_put_value(vpiHandle opaque,
   talos_rt_status status =
       flags == vpiForceFlag
           ? talos_rt_v1_design_force(context, storage, value.data(),
-                                       unknown.data(), info.bit_width)
+                                     unknown.data(), info.bit_width)
           : talos_rt_v1_design_write(context, storage, value.data(),
-                                       unknown.data(), info.bit_width);
+                                     unknown.data(), info.bit_width);
   if (status != TALOS_RT_OK)
     setError(handle->owner, "VPI write failed");
   return nullptr;
 }
 
 extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_compare_objects(vpiHandle first,
-                                                            vpiHandle second) {
+                                                          vpiHandle second) {
   VPICallScope vpiCallScope;
   __vpiHandle *left = findHandle(first);
   __vpiHandle *right = findHandle(second);
@@ -14410,9 +14331,9 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_compare_objects(vpiHandle first,
   if (!sameDeclaration) {
     VPIClassMemberBinding a{}, b{};
     if (talos_rt_cached_vpi_class_member(left->owner->context, left->cursor,
-                                           &a) == TALOS_RT_OK &&
+                                         &a) == TALOS_RT_OK &&
         talos_rt_cached_vpi_class_member(right->owner->context, right->cursor,
-                                           &b) == TALOS_RT_OK &&
+                                         &b) == TALOS_RT_OK &&
         !a.isMethod && !b.isMethod && a.classID == b.classID &&
         a.isStatic == b.isStatic)
       sameDeclaration =
@@ -14496,7 +14417,7 @@ vpi_chk_error(p_vpi_error_info destination) {
 }
 
 extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_vprintf(PLI_BYTE8 *format,
-                                                    va_list arguments) {
+                                                  va_list arguments) {
   VPICallScope vpiCallScope;
   return requireState() && format ? std::vprintf(format, arguments) : -1;
 }
@@ -14521,7 +14442,7 @@ extern "C" TALOS_VPI_EXPORT void *vpi_get_userdata(vpiHandle opaque) {
 }
 
 extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_put_userdata(vpiHandle opaque,
-                                                         void *data) {
+                                                       void *data) {
   VPICallScope vpiCallScope;
   __vpiHandle *handle = validate(opaque);
   if (!handle)
@@ -14530,8 +14451,7 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_put_userdata(vpiHandle opaque,
   return 1;
 }
 
-extern "C" TALOS_VPI_EXPORT vpiHandle
-vpi_register_cb(p_cb_data callbackData) {
+extern "C" TALOS_VPI_EXPORT vpiHandle vpi_register_cb(p_cb_data callbackData) {
   VPICallScope vpiCallScope;
   VPIState *state = currentState();
   if (!state || !callbackData || !callbackData->cb_rtn) {
@@ -14665,7 +14585,7 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_remove_cb(vpiHandle opaque) {
 }
 
 extern "C" TALOS_VPI_EXPORT void vpi_get_cb_info(vpiHandle opaque,
-                                                   p_cb_data destination) {
+                                                 p_cb_data destination) {
   VPICallScope vpiCallScope;
   if (!destination)
     return;
@@ -14802,8 +14722,7 @@ vpi_register_systf(p_vpi_systf_data registration) {
   }
 }
 
-extern "C" TALOS_VPI_EXPORT PLI_INT32
-vpi_get_vlog_info(p_vpi_vlog_info info) {
+extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get_vlog_info(p_vpi_vlog_info info) {
   VPICallScope vpiCallScope;
   static char product[] = "talos";
   static char version[] = TALOS_VERSION_STRING;
@@ -14844,7 +14763,7 @@ vpi_get_vlog_info(p_vpi_vlog_info info) {
 }
 
 extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get_data(PLI_INT32, PLI_BYTE8 *,
-                                                     PLI_INT32) {
+                                                   PLI_INT32) {
   VPICallScope vpiCallScope;
   VPIState *state = requireState();
   if (!state)
@@ -14854,7 +14773,7 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get_data(PLI_INT32, PLI_BYTE8 *,
 }
 
 extern "C" TALOS_VPI_EXPORT void vpi_get_delays(vpiHandle opaque,
-                                                  p_vpi_delay destination) {
+                                                p_vpi_delay destination) {
   VPICallScope vpiCallScope;
   VPIState *state = requireState();
   if (!state)
@@ -14911,11 +14830,11 @@ extern "C" TALOS_VPI_EXPORT void vpi_get_delays(vpiHandle opaque,
         handle->form == VPIObjectForm::Indexed ? handle->selectionBitOffset : 0;
     talos_rt_status status =
         talos_rt_cached_vpi_net_delay(handle->owner->context, handle->cursor,
-                                        bitOffset, info.bit_width, &delay);
+                                      bitOffset, info.bit_width, &delay);
     if (status != TALOS_RT_OK) {
       setError(state,
                status == TALOS_RT_EOF ? "VPI delay metadata is unavailable"
-                                        : "VPI net delay image lookup failed",
+                                      : "VPI net delay image lookup failed",
                status == TALOS_RT_EOF ? vpiNotice : vpiInternal);
       return;
     }
@@ -15165,8 +15084,7 @@ vpi_get_value_array(vpiHandle opaque, p_vpi_arrayvalue destination,
       : access                               ? access->accessKind
                : talos::reflection::VPIIndexedAccessKind::RelationElement;
   if (!access ||
-      accessKind ==
-          talos::reflection::VPIIndexedAccessKind::RelationElement) {
+      accessKind == talos::reflection::VPIIndexedAccessKind::RelationElement) {
     failArrayValueQuery(state, destination,
                         "VPI array query has no fixed storage geometry",
                         vpiNotice);
@@ -15199,7 +15117,7 @@ vpi_get_value_array(vpiHandle opaque, p_vpi_arrayvalue destination,
   TALOS_RT_TRY {
     for (;;) {
       if (talos_rt_cached_design_type_info(state->context, physical,
-                                             &elementType) != TALOS_RT_OK) {
+                                           &elementType) != TALOS_RT_OK) {
         failArrayValueQuery(state, destination,
                             "VPI array type metadata is invalid", vpiInternal);
         return;
@@ -15276,7 +15194,7 @@ vpi_get_value_array(vpiHandle opaque, p_vpi_arrayvalue destination,
   }
   const uint32_t elementVPIType = firstElement.exactVpiType;
   if (!talos::reflection::acceptsVPIArrayValueFormat(destination->format,
-                                                       elementVPIType)) {
+                                                     elementVPIType)) {
     failArrayValueQuery(
         state, destination,
         "VPI array value format does not match its element type", vpiNotice);
@@ -15425,9 +15343,9 @@ vpi_get_value_array(vpiHandle opaque, p_vpi_arrayvalue destination,
                         "VPI array read buffer is out of memory", vpiSystem);
     return;
   }
-  if (talos_rt_read_design_slice(
-          state->context, source->cursor, firstElement.selectionBitOffset,
-          readWidth, value.data(), unknown.data()) != TALOS_RT_OK) {
+  if (talos_rt_read_design_slice(state->context, source->cursor,
+                                 firstElement.selectionBitOffset, readWidth,
+                                 value.data(), unknown.data()) != TALOS_RT_OK) {
     failArrayValueQuery(state, destination, "VPI array design read failed");
     return;
   }
@@ -15520,9 +15438,8 @@ vpi_get_value_array(vpiHandle opaque, p_vpi_arrayvalue destination,
 }
 
 extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle_multi(PLI_INT32 type,
-                                                         vpiHandle first,
-                                                         vpiHandle second,
-                                                         ...) {
+                                                       vpiHandle first,
+                                                       vpiHandle second, ...) {
   VPICallScope vpiCallScope;
   VPIState *state = requireState();
   if (!state)
@@ -15605,7 +15522,7 @@ extern "C" TALOS_VPI_EXPORT PLI_BYTE8 *vpi_mcd_name(PLI_UINT32 descriptor) {
 }
 
 extern "C" TALOS_VPI_EXPORT vpiHandle vpi_handle_by_index(vpiHandle object,
-                                                            PLI_INT32 index) {
+                                                          PLI_INT32 index) {
   VPICallScope vpiCallScope;
   return handleByIndices(object, 1, &index);
 }
@@ -15665,9 +15582,9 @@ PLI_INT32 controlCoverage(VPIState *state, int32_t control, PLI_INT32 type,
   int32_t status = 0;
   if (talos_rt_coverage_scope_for_path(state->context, path, scopeID) !=
           TALOS_RT_OK ||
-      talos_rt_v1_coverage_control_instance(
-          state->context, control, *coverageType, svCovModule, scopeID,
-          &status) != TALOS_RT_OK) {
+      talos_rt_v1_coverage_control_instance(state->context, control,
+                                            *coverageType, svCovModule, scopeID,
+                                            &status) != TALOS_RT_OK) {
     setError(state, "VPI coverage control found no coverage for the instance",
              vpiNotice);
     return 0;
@@ -15691,10 +15608,10 @@ PLI_INT32 persistCoverage(VPIState *state, bool save, PLI_INT32 type,
   if (managed.getStatus() != TALOS_RT_OK || !lane ||
       talos_rt_v1_string_create(lane, name, std::strlen(name), &string) !=
           TALOS_RT_OK ||
-      (save ? talos_rt_v1_coverage_database_save(
-                  state->context, *coverageType, string, &status)
-            : talos_rt_v1_coverage_database_merge(
-                  state->context, *coverageType, string, &status)) !=
+      (save ? talos_rt_v1_coverage_database_save(state->context, *coverageType,
+                                                 string, &status)
+            : talos_rt_v1_coverage_database_merge(state->context, *coverageType,
+                                                  string, &status)) !=
           TALOS_RT_OK) {
     setError(state, "VPI coverage persistence failed", vpiNotice);
     return 0;
@@ -15721,9 +15638,9 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_control(PLI_INT32 operation, ...) {
     talos_rt_status status =
         operation == vpiFinish
             ? talos_rt_v1_scheduler_finish(state->context,
-                                             static_cast<uint32_t>(diagnostic))
+                                           static_cast<uint32_t>(diagnostic))
             : talos_rt_v1_scheduler_stop(state->context,
-                                           static_cast<uint32_t>(diagnostic));
+                                         static_cast<uint32_t>(diagnostic));
     result = status == TALOS_RT_OK;
     if (!result)
       setError(state, "VPI simulation control failed");

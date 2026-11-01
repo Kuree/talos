@@ -1,9 +1,9 @@
 //===- DevirtualizeClassCalls.cpp - Resolve exact class dispatches -------===//
 
 #include "talos/Analysis/ClassDispatchAnalysis.h"
-#include "talos/Dialect/Talos/TalosOps.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Dialect/Simulation/Transforms/Passes.h"
+#include "talos/Dialect/Talos/TalosOps.h"
 
 #include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"

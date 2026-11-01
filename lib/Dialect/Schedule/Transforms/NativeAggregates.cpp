@@ -1,4 +1,5 @@
-//===- NativeAggregates.cpp - Forward SSA array updates --------------------===//
+//===- NativeAggregates.cpp - Forward SSA array updates
+//--------------------===//
 
 #include "../../../Conversion/SimulationToSchedule/NativePipeline.h"
 #include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"

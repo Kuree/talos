@@ -3,10 +3,10 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Runtime/Runtime.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <algorithm>
@@ -166,9 +166,11 @@ TEST(GeneratedDesignDatabase, TopologyExpressions) {
   auto qUses = children(q, vpiUse);
   ASSERT_EQ(qUses.size(), 2u);
   for (unsigned i = 0; i != 2; ++i)
-    EXPECT_EQ(std::count_if(qUses.begin(), qUses.end(), [&](auto actual) {
-                return vpi_compare_objects(actual, assignments[i]) == 1;
-              }),
+    EXPECT_EQ(std::count_if(qUses.begin(), qUses.end(),
+                            [&](auto actual) {
+                              return vpi_compare_objects(actual,
+                                                         assignments[i]) == 1;
+                            }),
               1);
   for (auto handle : handles)
     EXPECT_EQ(vpi_release_handle(handle), 1);

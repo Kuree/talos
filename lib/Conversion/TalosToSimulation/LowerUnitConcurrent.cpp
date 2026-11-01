@@ -1908,8 +1908,7 @@ compileFixedSequenceAlternatives(Operation *operation,
       } else {
         FixedSequence term;
         term.ages.resize(1);
-        if (Operation *operand =
-                getTwoStateLogicalNotOperand(children.front()))
+        if (Operation *operand = getTwoStateLogicalNotOperand(children.front()))
           term.ages.front().negatedPredicates.push_back(operand);
         else
           term.ages.front().predicates.push_back(children.front());
@@ -3315,9 +3314,8 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
       return;
     Value context = function.getBody().front().getArgument(0);
     if (!enabled)
-      enabled = arith::ConstantOp::create(builder, location,
-                                          builder.getI1Type(),
-                                          builder.getBoolAttr(true));
+      enabled = arith::ConstantOp::create(
+          builder, location, builder.getI1Type(), builder.getBoolAttr(true));
     sim::SimCoveragePointHitOp::create(builder, location, context, enabled,
                                        point);
   };
@@ -4407,13 +4405,13 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
           kind == semantic::SVAssertionBinaryOperator::NonOverlappedFollowedBy;
       bool innerImplication =
           kind == semantic::SVAssertionBinaryOperator::OverlappedImplication ||
-          kind ==
-              semantic::SVAssertionBinaryOperator::NonOverlappedImplication;
+          kind == semantic::SVAssertionBinaryOperator::NonOverlappedImplication;
       SmallVector<Operation *> innerOperands = getChildren(inner);
       if ((followedBy ? !innerFollowedBy : !innerImplication) ||
           innerOperands.size() != 2)
         break;
-      fusedAntecedents.push_back({innerOperands.front(), nonoverlapped ? 1 : 0});
+      fusedAntecedents.push_back(
+          {innerOperands.front(), nonoverlapped ? 1 : 0});
       nonoverlapped =
           kind ==
               semantic::SVAssertionBinaryOperator::NonOverlappedImplication ||
@@ -4460,9 +4458,10 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
       // its consequent on the current tick under |=>, which concatenation
       // does not express; such antecedents stay unfused.
       if (failed(lhs) || failed(inner) || inner->empty() ||
-          llvm::any_of(*inner, [](const FixedSequence &alternative) {
-            return alternative.emptyMatch;
-          }) ||
+          llvm::any_of(*inner,
+                       [](const FixedSequence &alternative) {
+                         return alternative.emptyMatch;
+                       }) ||
           lhs->size() > maxFixedSequenceAlternatives / inner->size()) {
         lhs = failure();
         break;
@@ -5278,11 +5277,11 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
     // with its operand's strength (IEEE 1800-2023 16.12.2). An implication is
     // vacuously true and a followed-by false while its antecedent is pending;
     // once the consequent starts, the consequent's strength decides.
-    bool expectOperandStrong =
-        implication ? (sequence.hasIntrinsicEndStrength
-                           ? *consequentUniformIntrinsicEndStrong
-                           : true)
-                    : expectEndStrong.value_or(true);
+    bool expectOperandStrong = implication
+                                   ? (sequence.hasIntrinsicEndStrength
+                                          ? *consequentUniformIntrinsicEndStrong
+                                          : true)
+                                   : expectEndStrong.value_or(true);
     auto pendingOuterResult = [&](bool operandResult) {
       return temporalNegation ? !operandResult : operandResult;
     };
@@ -5716,8 +5715,8 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
         consequentStep = steps.size();
       }
       for (auto [index, age] : llvm::enumerate(sequence.ages))
-        steps.push_back({&age, failureBlock,
-                         !implication || index != 0 || nonoverlapped});
+        steps.push_back(
+            {&age, failureBlock, !implication || index != 0 || nonoverlapped});
       // An overlapped consequent samples the antecedent's tick, so it reuses
       // that tick's evaluated predicates.
       ExpectAgeCache cache;
@@ -6219,8 +6218,7 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
         sim::EventRegionAttr::get(function.getContext(),
                                   sim::EventRegion::Reactive),
         cancelLiveAttempts);
-    ::talos::schedule::set<
-        ::talos::schedule::Field::ConcurrentCancelLevelTrue>(
+    ::talos::schedule::set<::talos::schedule::Field::ConcurrentCancelLevelTrue>(
         cancelWait, builder.getUnitAttr());
 
     OpBuilder cancelBuilder = OpBuilder::atBlockEnd(cancelLiveAttempts);
@@ -6696,8 +6694,7 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
         sim::EntryKind::Final, attributes, argumentAttrs);
     SymbolTable::setSymbolVisibility(coordinator,
                                      SymbolTable::Visibility::Private);
-    ::talos::schedule::set<
-        ::talos::schedule::Field::ConcurrentEosCoordinator>(
+    ::talos::schedule::set<::talos::schedule::Field::ConcurrentEosCoordinator>(
         coordinator, builder.getUnitAttr());
     ::talos::schedule::set<::talos::schedule::Field::ConcurrentEosCounted>(
         coordinator, builder.getUnitAttr());
@@ -7211,8 +7208,7 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
         sim::EventRegionAttr::get(function.getContext(),
                                   sim::EventRegion::Reactive),
         abortLiveAttempts);
-    ::talos::schedule::set<
-        ::talos::schedule::Field::ConcurrentAbortLevelTrue>(
+    ::talos::schedule::set<::talos::schedule::Field::ConcurrentAbortLevelTrue>(
         abortWait, builder.getUnitAttr());
 
     OpBuilder abortBuilder = OpBuilder::atBlockEnd(abortLiveAttempts);
@@ -7795,8 +7791,7 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
         sim::EventRegionAttr::get(function.getContext(),
                                   sim::EventRegion::Reactive),
         abortLiveAttempts);
-    ::talos::schedule::set<
-        ::talos::schedule::Field::ConcurrentAbortLevelTrue>(
+    ::talos::schedule::set<::talos::schedule::Field::ConcurrentAbortLevelTrue>(
         abortWait, builder.getUnitAttr());
 
     Block *currentBlock = abortLiveAttempts;
@@ -11554,8 +11549,7 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
               outlineBuilder.getStringAttr(hierarchy)),
           sim::named<sim::metadata::ConcurrentMatchCallChain>(
               outlineBuilder.getUnitAttr()),
-          ::talos::schedule::named<
-              ::talos::schedule::Field::DetachedControls>(
+          ::talos::schedule::named<::talos::schedule::Field::DetachedControls>(
               outlineBuilder.getUnitAttr()),
       };
       auto coordinator = sim::SimFuncOp::create(
@@ -11715,8 +11709,7 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
                                                  function.getContext(),
                                                  sim::ExecutionDomain::Design));
           sim::mark<sim::metadata::ConcurrentMatchCall>(callback->first);
-          ::talos::schedule::set<
-              ::talos::schedule::Field::DetachedControls>(
+          ::talos::schedule::set<::talos::schedule::Field::DetachedControls>(
               callback->first, builder.getUnitAttr());
           guardReactiveCallback(
               callback->first, callback->second, getSemanticLocation(item),
@@ -11992,8 +11985,7 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
     ensureAttemptEnabled(attemptEnabled);
     if (attemptEnabled) {
       Block *evaluateStart = addBlock();
-      cf::CondBranchOp::create(builder, location, attemptEnabled,
-                               evaluateStart,
+      cf::CondBranchOp::create(builder, location, attemptEnabled, evaluateStart,
                                ValueRange{}, afterStart, ValueRange{nextState});
       setCurrent(evaluateStart);
     }

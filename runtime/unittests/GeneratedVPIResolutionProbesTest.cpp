@@ -6,11 +6,11 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/DPI/DPIDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <algorithm>
@@ -60,9 +60,9 @@ void inspectResolution(Probe &probe, unsigned phase) {
   probe.origins.push_back(origin);
 }
 talos_rt_status inspectImport(talos_rt_context *, uint32_t id,
-                                const talos_rt_import_input_v1 *inputs,
-                                uint32_t count, talos_rt_import_output_v1 *,
-                                uint32_t outputs, void *userData) {
+                              const talos_rt_import_input_v1 *inputs,
+                              uint32_t count, talos_rt_import_output_v1 *,
+                              uint32_t outputs, void *userData) {
   if (id != 123 || count != 1 || !inputs || !inputs[0].value || outputs)
     return TALOS_RT_INVALID_ARGUMENT;
   inspectResolution(*static_cast<Probe *>(userData), inputs[0].value[0]);
@@ -74,10 +74,9 @@ TEST(GeneratedDesignDatabase, CompiledResolutionProbes) {
   const char *input = std::getenv("TALOS_TEST_INPUT");
   ASSERT_NE(input, nullptr);
   mlir::DialectRegistry registry;
-  registry
-      .insert<mlir::arith::ArithDialect, mlir::cf::ControlFlowDialect,
-              talos::dpi::DPIDialect, talos::runtime::TalosRuntimeDialect,
-              talos::sim::TalosSimulationDialect>();
+  registry.insert<mlir::arith::ArithDialect, mlir::cf::ControlFlowDialect,
+                  talos::dpi::DPIDialect, talos::runtime::TalosRuntimeDialect,
+                  talos::sim::TalosSimulationDialect>();
   mlir::MLIRContext context(registry);
   auto module = mlir::parseSourceFile<mlir::ModuleOp>(input, &context);
   ASSERT_TRUE(module);
@@ -109,10 +108,9 @@ TEST(GeneratedDesignDatabase, CompiledResolutionProbes) {
       runtime(raw, talos_rt_v1_context_destroy);
   Probe probe;
   ASSERT_EQ(talos_rt_v1_context_register_import(runtime.get(), 123,
-                                                  inspectImport, &probe),
+                                                inspectImport, &probe),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_vpi_startup(runtime.get(), nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_vpi_startup(runtime.get(), nullptr, 0), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_end_compile(runtime.get()), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_start_simulation(runtime.get()), TALOS_RT_OK);
   auto startup = std::find_if(
@@ -122,14 +120,14 @@ TEST(GeneratedDesignDatabase, CompiledResolutionProbes) {
   talos_rt_design_bytecode_entry_v1 entry{&execution, startup->index, 0};
   uint64_t size = 0, alignment = 0;
   ASSERT_EQ(talos_rt_validate_design_bytecode(entry, runtime.get(), &size,
-                                                &alignment),
+                                              &alignment),
             TALOS_RT_OK);
   ASSERT_LE(alignment, alignof(uint64_t));
   std::vector<uint64_t> frame((size + 7) / 8);
   talos_rt_fragment_action_v1 action{};
-  ASSERT_EQ(talos_rt_execute_design_bytecode(entry, runtime.get(),
-                                               frame.data(), frame.size() * 8,
-                                               0, size, 0, 0, &action),
+  ASSERT_EQ(talos_rt_execute_design_bytecode(entry, runtime.get(), frame.data(),
+                                             frame.size() * 8, 0, size, 0, 0,
+                                             &action),
             TALOS_RT_OK);
   ASSERT_EQ(action.kind, TALOS_RT_FRAGMENT_TERMINATE);
   ASSERT_EQ(talos_rt_v1_scheduler_run(runtime.get()), TALOS_RT_OK);

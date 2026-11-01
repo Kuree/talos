@@ -3,7 +3,7 @@
 #include "VPIInternal.h"
 #include "talos/Reflection/VPIObjectModel.h"
 
-#define TALOS_CHECK_VPI_VALUE(apiName, schemaValue)                          \
+#define TALOS_CHECK_VPI_VALUE(apiName, schemaValue)                            \
   static_assert(static_cast<uint32_t>(apiName) == uint32_t(schemaValue),       \
                 #apiName " differs from the generated VPI schema");
 

@@ -166,8 +166,9 @@ PreservedAnalyses AssembleWideIntegerWordsPass::run(Function &function,
   return preserved;
 }
 
-PreservedAnalyses LimitWideIntegerVectorizationPass::run(
-    Function &function, FunctionAnalysisManager &analyses) {
+PreservedAnalyses
+LimitWideIntegerVectorizationPass::run(Function &function,
+                                       FunctionAnalysisManager &analyses) {
   if (!function.hasFnAttribute(Attribute::NoImplicitFloat) &&
       hasWideReductionChain(function)) {
     function.addFnAttr(Attribute::NoImplicitFloat);
@@ -178,8 +179,7 @@ PreservedAnalyses LimitWideIntegerVectorizationPass::run(
     bool wideShift = false;
     for (BasicBlock *block : loop->blocks()) {
       for (Instruction &instruction : *block) {
-        if (instruction.isShift() &&
-            instruction.getType()->isIntegerTy() &&
+        if (instruction.isShift() && instruction.getType()->isIntegerTy() &&
             instruction.getType()->getIntegerBitWidth() > 128 &&
             !isa<ConstantInt>(instruction.getOperand(1))) {
           wideShift = true;

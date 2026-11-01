@@ -127,10 +127,10 @@ void storeBulkStatePlane(ConversionPatternRewriter &rewriter, Location location,
   Value context = loadCurrentRuntimeContext(rewriter, location);
   LLVM::CallOp::create(
       rewriter, location, TypeRange{i32},
-      SymbolRefAttr::get(
-          rewriter.getContext(),
-          continuous ? "talos_rt_v1_native_state_store_continuous_plane"
-                     : "talos_rt_v1_native_state_store_plane"),
+      SymbolRefAttr::get(rewriter.getContext(),
+                         continuous
+                             ? "talos_rt_v1_native_state_store_continuous_plane"
+                             : "talos_rt_v1_native_state_store_plane"),
       ValueRange{context, base,
                  llvmConstant(rewriter, location, i64, stateBitCount), handle,
                  llvmConstant(rewriter, location, i64, width),
@@ -183,9 +183,8 @@ bool tryStoreBulkDirect(ConversionPatternRewriter &rewriter, Location location,
     }
   };
   if (continuous && layout->directContinuous) {
-    copy(globalName == "__talos_state_unknown"
-             ? "__talos_continuous_unknown"
-             : "__talos_continuous_value");
+    copy(globalName == "__talos_state_unknown" ? "__talos_continuous_unknown"
+                                               : "__talos_continuous_value");
     if (globalName == "__talos_state_value")
       copy("__talos_continuous_mask", true);
   }
@@ -213,7 +212,7 @@ void notifyBulkSignal(ConversionPatternRewriter &rewriter, Location location,
                  pointerOrNull(newUnknown)});
   if (sourceOwner)
     ::talos::schedule::set<schedule::metadata::evalSourceOwner>(call,
-                                                                  sourceOwner);
+                                                                sourceOwner);
 }
 
 class BulkRefCopyConversion final
@@ -360,8 +359,7 @@ public:
       talos_rt_stable_handle_v1 decoded{};
       auto bit = layout.unknownSummaryBits.end();
       if (handle && talos_rt_stable_handle_decode(*handle, &decoded) &&
-          decoded.kind == TALOS_RT_STABLE_HANDLE_STATIC &&
-          decoded.offset == 0)
+          decoded.kind == TALOS_RT_STABLE_HANDLE_STATIC && decoded.offset == 0)
         bit = layout.unknownSummaryBits.find(decoded.id);
       if (bit != layout.unknownSummaryBits.end() &&
           bit->second == NativeStateLayout::twoStateRoot)
@@ -486,8 +484,7 @@ public:
                          unsigned width) const {
     APInt unknown(width, 0);
     if (!layout ||
-        !::talos::schedule::has<::talos::schedule::Field::NativeKnownRead>(
-            op))
+        !::talos::schedule::has<::talos::schedule::Field::NativeKnownRead>(op))
       return unknown;
     std::optional<uint64_t> value = resolveCFGConstantInteger(handle);
     talos_rt_stable_handle_v1 decoded{};
@@ -517,8 +514,7 @@ public:
                                                  *width, directLayout);
       auto read = [&](StringRef name, bool unknown) {
         if (locals->canBorrowMemory(op.getResult()) && range &&
-            range->offset % 8 == 0 &&
-            (!range->guarded || assumeClean)) {
+            range->offset % 8 == 0 && (!range->guarded || assumeClean)) {
           Value base = LLVM::AddressOfOp::create(
               rewriter, op.getLoc(),
               LLVM::LLVMPointerType::get(op.getContext()), name);
@@ -625,8 +621,7 @@ public:
     // A known store leaves the destination's zero unknown bits in place.
     bool twoState =
         useTwoStateSpecialization(op, experimentalTwoState) ||
-        ::talos::schedule::has<::talos::schedule::Field::NativeKnownStore>(
-            op);
+        ::talos::schedule::has<::talos::schedule::Field::NativeKnownStore>(op);
     auto proof = stateAccesses.find(op);
     const NativeStateAccessInfo *access =
         proof == stateAccesses.end() ? nullptr : &proof->second;
@@ -774,8 +769,8 @@ public:
     if (!needsNotification) {
       (void)storeStatePlane(
           rewriter, op.getLoc(), adaptor.getReference().front(), storedValue,
-          "__talos_state_value", stateBitCount, directLayout,
-          guardedPermission, assumeClean, /*trackChange=*/false, continuous);
+          "__talos_state_value", stateBitCount, directLayout, guardedPermission,
+          assumeClean, /*trackChange=*/false, continuous);
       if (containsLogic(valueType) && !twoState)
         (void)storeStatePlane(
             rewriter, op.getLoc(), adaptor.getReference().front(),
@@ -807,11 +802,11 @@ public:
                                     : Value{};
     if (isa<sim::StringType>(valueType)) {
       Value comparison =
-          LLVM::CallOp::create(
-              rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-              SymbolRefAttr::get(rewriter.getContext(),
-                                 "talos_rt_v1_string_compare"),
-              ValueRange{oldValue, storedValue})
+          LLVM::CallOp::create(rewriter, op.getLoc(),
+                               TypeRange{rewriter.getI32Type()},
+                               SymbolRefAttr::get(rewriter.getContext(),
+                                                  "talos_rt_v1_string_compare"),
+                               ValueRange{oldValue, storedValue})
               .getResult();
       Value equal = arith::CmpIOp::create(
           rewriter, op.getLoc(), arith::CmpIPredicate::eq, comparison,
@@ -835,11 +830,11 @@ public:
       Value storedUnknown = adaptor.getValue().size() == 2
                                 ? adaptor.getValue()[1]
                                 : llvmConstant(rewriter, op.getLoc(), plane, 0);
-      Value unknownChanged = storeStatePlane(
-          rewriter, op.getLoc(), adaptor.getReference().front(), storedUnknown,
-          "__talos_state_unknown", stateBitCount, directLayout,
-          guardedPermission, assumeClean,
-          /*trackChange=*/true, continuous);
+      Value unknownChanged =
+          storeStatePlane(rewriter, op.getLoc(), adaptor.getReference().front(),
+                          storedUnknown, "__talos_state_unknown", stateBitCount,
+                          directLayout, guardedPermission, assumeClean,
+                          /*trackChange=*/true, continuous);
       notificationUnknown = arith::SelectOp::create(
           rewriter, op.getLoc(), unknownChanged, storedUnknown, oldUnknown);
     }
@@ -1032,8 +1027,8 @@ public:
     IntegerType plane = rewriter.getIntegerType(*width);
     Value handle = adaptor.getNet().front();
     Value oldValue = loadStatePlane(rewriter, op.getLoc(), handle, plane,
-                                    "__talos_state_value", false,
-                                    stateBitCount, directLayout);
+                                    "__talos_state_value", false, stateBitCount,
+                                    directLayout);
     Value oldUnknown;
     if (containsLogic(valueType))
       oldUnknown = twoState ? llvmConstant(rewriter, op.getLoc(), plane, 0)

@@ -95,8 +95,8 @@ Encoder::encodeStateOperation(FunctionPlan &plan, Operation *operation) {
                        entryKind == sim::EntryKind::PortInput ||
                        entryKind == sim::EntryKind::PortOutput);
     emit({StoreState,
-          static_cast<uint16_t>(
-              continuous ? TALOS_RT_DB_STORE_STATE_CONTINUOUS : 0),
+          static_cast<uint16_t>(continuous ? TALOS_RT_DB_STORE_STATE_CONTINUOUS
+                                           : 0),
           0, reference, value});
     return success();
   }
@@ -119,11 +119,10 @@ Encoder::encodeStateOperation(FunctionPlan &plan, Operation *operation) {
            emitU64Constant(plan, flags), emitU64Constant(plan, 0)},
           {});
     }
-    emit(
-        {OverrideState,
-         static_cast<uint16_t>(op.getIsAssign() ? TALOS_RT_DB_OVERRIDE_ASSIGN
-                                                : TALOS_RT_DB_OVERRIDE_FORCE),
-         0, reg(plan, op.getTarget()), reg(plan, op.getValue())});
+    emit({OverrideState,
+          static_cast<uint16_t>(op.getIsAssign() ? TALOS_RT_DB_OVERRIDE_ASSIGN
+                                                 : TALOS_RT_DB_OVERRIDE_FORCE),
+          0, reg(plan, op.getTarget()), reg(plan, op.getValue())});
     return success();
   }
   if (auto op = dyn_cast<sim::SimDynamicOverrideOp>(operation)) {
@@ -166,18 +165,17 @@ Encoder::encodeStateOperation(FunctionPlan &plan, Operation *operation) {
                                      emitU64Constant(plan, flags)},
                                     {});
     }
-    emit(
-        {ReleaseState,
-         static_cast<uint16_t>(op.getIsAssign() ? TALOS_RT_DB_OVERRIDE_ASSIGN
-                                                : TALOS_RT_DB_OVERRIDE_FORCE),
-         0, reg(plan, op.getTarget())});
+    emit({ReleaseState,
+          static_cast<uint16_t>(op.getIsAssign() ? TALOS_RT_DB_OVERRIDE_ASSIGN
+                                                 : TALOS_RT_DB_OVERRIDE_FORCE),
+          0, reg(plan, op.getTarget())});
     return success();
   }
   if (auto op = dyn_cast<sim::SimDriverDriveOp>(operation)) {
-    uint16_t flags = ::talos::schedule::has<
-                         ::talos::schedule::Field::DeferNetResolution>(op)
-                         ? TALOS_RT_DB_STORE_STATE_DEFER_NET_RESOLUTION
-                         : 0;
+    uint16_t flags =
+        ::talos::schedule::has<::talos::schedule::Field::DeferNetResolution>(op)
+            ? TALOS_RT_DB_STORE_STATE_DEFER_NET_RESOLUTION
+            : 0;
     emit({StoreState, flags, 0, reg(plan, op.getDriver()),
           reg(plan, op.getValue())});
     return success();
@@ -192,8 +190,8 @@ Encoder::encodeStateOperation(FunctionPlan &plan, Operation *operation) {
   }
   if (auto op = dyn_cast<sim::SimDriverDriveChangedOp>(operation)) {
     uint16_t flags = TALOS_RT_DB_STORE_STATE_CHANGED;
-    if (::talos::schedule::has<
-            ::talos::schedule::Field::DeferNetResolution>(op))
+    if (::talos::schedule::has<::talos::schedule::Field::DeferNetResolution>(
+            op))
       flags |= TALOS_RT_DB_STORE_STATE_DEFER_NET_RESOLUTION;
     emit({StoreState, flags, reg(plan, op.getChanged()),
           reg(plan, op.getDriver()), reg(plan, op.getValue())});

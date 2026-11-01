@@ -3,7 +3,7 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 namespace talos::sim {
 
-#define TALOS_SIM_RESOURCE(Name, Text)                                       \
+#define TALOS_SIM_RESOURCE(Name, Text)                                         \
   struct Name : public ::mlir::SideEffects::Resource::Base<Name> {             \
     ::llvm::StringRef getName() final { return Text; }                         \
   }

@@ -112,8 +112,8 @@ inline bool anyPackedBits(const uint8_t *plane, uint64_t bitOffset,
 }
 
 template <typename Plane>
-inline uint64_t loadPackedBits(const Plane &plane,
-                               uint64_t bitOffset, uint64_t bitWidth) {
+inline uint64_t loadPackedBits(const Plane &plane, uint64_t bitOffset,
+                               uint64_t bitWidth) {
   uint64_t limb = bitOffset / 64;
   uint32_t shift = bitOffset % 64;
   uint64_t value = plane[limb] >> shift;
@@ -170,8 +170,8 @@ inline uint64_t loadPackedBytes(const uint8_t *plane, uint64_t bitOffset,
 }
 
 template <typename Plane>
-inline void storePackedBits(Plane &plane, uint64_t bitOffset,
-                            uint64_t bitWidth, uint64_t value) {
+inline void storePackedBits(Plane &plane, uint64_t bitOffset, uint64_t bitWidth,
+                            uint64_t value) {
   uint64_t limb = bitOffset / 64;
   uint32_t shift = bitOffset % 64;
   uint64_t mask = packedWidthMask(bitWidth);

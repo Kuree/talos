@@ -27,11 +27,11 @@ bool decodeAutomatic(uint64_t handle, uint32_t &id, int64_t &offset) {
 // The caller holds the context lock. Automatic state may outlive its owner
 // because executable references retain it, so frame-handle lifetime is checked
 // separately by VPI before reaching this storage helper.
-talos_rt_status
-resolveVPIAutomaticSlice(talos_rt_context *context, uint64_t reference,
-                         uint64_t bitOffset, uint64_t bitWidth,
-                         const NativeAutomaticState *&outState,
-                         uint64_t &outOffset) {
+talos_rt_status resolveVPIAutomaticSlice(talos_rt_context *context,
+                                         uint64_t reference, uint64_t bitOffset,
+                                         uint64_t bitWidth,
+                                         const NativeAutomaticState *&outState,
+                                         uint64_t &outOffset) {
   uint32_t id = 0;
   int64_t base = 0;
   if (!decodeAutomatic(reference, id, base))
@@ -81,8 +81,8 @@ bool managedRootWordBelongsTo(talos_rt_context *context,
 }
 
 talos_rt_status publishNativeAutomaticState(talos_rt_context *context,
-                                              NativeAutomaticState state,
-                                              uint64_t *outHandle) {
+                                            NativeAutomaticState state,
+                                            uint64_t *outHandle) {
   ContextTransaction transaction(context);
   TALOS_RT_TRY {
     ContextMutexLock lock(context);
@@ -97,8 +97,8 @@ talos_rt_status publishNativeAutomaticState(talos_rt_context *context,
     if (!context->nativeAutomaticStates.emplace(id, std::move(state)).second)
       return TALOS_RT_INVALID_LIFECYCLE;
     ++context->nextNativeAutomaticID;
-    *outHandle = talos_rt_stable_handle_encode(
-        TALOS_RT_STABLE_HANDLE_AUTOMATIC, id, 0);
+    *outHandle =
+        talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_AUTOMATIC, id, 0);
     return TALOS_RT_OK;
   }
   TALOS_RT_CATCH(const std::bad_alloc &) {
@@ -113,10 +113,9 @@ talos_rt_status publishNativeAutomaticState(talos_rt_context *context,
 
 } // namespace
 
-talos_rt_status
-talos_rt_vpi_automatic_validate(talos_rt_context *context,
-                                  uint64_t reference,
-                                  uint64_t bitWidth) noexcept {
+talos_rt_status talos_rt_vpi_automatic_validate(talos_rt_context *context,
+                                                uint64_t reference,
+                                                uint64_t bitWidth) noexcept {
   if (!context || !bitWidth || bitWidth > UINT64_MAX - 7)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
@@ -131,8 +130,8 @@ talos_rt_vpi_automatic_validate(talos_rt_context *context,
 
 talos_rt_status
 talos_rt_vpi_automatic_read(talos_rt_context *context, uint64_t reference,
-                              uint64_t bitOffset, uint64_t bitWidth,
-                              uint8_t *outValue, uint8_t *outUnknown) noexcept {
+                            uint64_t bitOffset, uint64_t bitWidth,
+                            uint8_t *outValue, uint8_t *outUnknown) noexcept {
   if (!context || !outValue || !outUnknown || !bitWidth ||
       bitWidth > UINT64_MAX - 7 || (bitWidth + 7) / 8 > SIZE_MAX)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -148,8 +147,7 @@ talos_rt_vpi_automatic_read(talos_rt_context *context, uint64_t reference,
     if (status != TALOS_RT_OK)
       return status;
     if (state->managedRootRegistered) {
-      const auto word =
-          talos_rt_managed_word_from_object(state->managedValue);
+      const auto word = talos_rt_managed_word_from_object(state->managedValue);
       std::memcpy(outValue, &word, sizeof(word));
       return TALOS_RT_OK;
     }
@@ -168,8 +166,8 @@ talos_rt_vpi_automatic_read(talos_rt_context *context, uint64_t reference,
 
 uint64_t
 talos_rt_canonical_state_handle_unlocked(const talos_rt_context *context,
-                                           uint64_t bitOffset,
-                                           uint64_t bitWidth) noexcept {
+                                         uint64_t bitOffset,
+                                         uint64_t bitWidth) noexcept {
   if (!context || bitWidth == 0 || bitOffset > UINT64_MAX - bitWidth)
     return UINT64_MAX;
   uint32_t selectedID = UINT32_MAX;
@@ -232,30 +230,28 @@ talos_rt_canonical_state_handle_unlocked(const talos_rt_context *context,
   if (selectedID != UINT32_MAX) {
     if (selectedOffset > static_cast<uint64_t>(INT64_MAX))
       return UINT64_MAX;
-    return talos_rt_stable_handle_encode(
-        TALOS_RT_STABLE_HANDLE_STATIC, selectedID,
-        static_cast<int64_t>(selectedOffset));
+    return talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_STATIC,
+                                         selectedID,
+                                         static_cast<int64_t>(selectedOffset));
   }
   if (bitOffset > static_cast<uint64_t>(INT64_MAX))
     return UINT64_MAX;
   return talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_GLOBAL, 0,
-                                         static_cast<int64_t>(bitOffset));
+                                       static_cast<int64_t>(bitOffset));
 }
 
 extern "C" uint64_t talos_rt_v1_native_state_static_handle(uint32_t id) {
-  return talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_STATIC, id,
-                                         0);
+  return talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_STATIC, id, 0);
 }
 
 extern "C" uint64_t talos_rt_v1_native_handle_offset(uint64_t handle,
-                                                       int64_t offset) {
+                                                     int64_t offset) {
   return talos_rt_stable_handle_offset(handle, offset);
 }
 
-talos_rt_status
-talos_rt_native_state_alloc_managed(talos_rt_context *context,
-                                      talos_rt_object_v1 *value,
-                                      uint64_t *outHandle) {
+talos_rt_status talos_rt_native_state_alloc_managed(talos_rt_context *context,
+                                                    talos_rt_object_v1 *value,
+                                                    uint64_t *outHandle) {
   if (!outHandle)
     return TALOS_RT_INVALID_ARGUMENT;
   *outHandle = UINT64_MAX;
@@ -322,15 +318,14 @@ talos_rt_status talos_rt_native_state_alloc_with_root_offsets(
 
 extern "C" talos_rt_status
 talos_rt_v1_native_state_alloc(talos_rt_context *context, uint64_t bitWidth,
-                                 const uint8_t *value, const uint8_t *unknown,
-                                 uint64_t *outHandle) {
-  return talos_rt_native_state_alloc_with_root_offsets(
-      context, bitWidth, value, unknown, {}, outHandle);
+                               const uint8_t *value, const uint8_t *unknown,
+                               uint64_t *outHandle) {
+  return talos_rt_native_state_alloc_with_root_offsets(context, bitWidth, value,
+                                                       unknown, {}, outHandle);
 }
 
 extern "C" talos_rt_status
-talos_rt_v1_native_state_retain(talos_rt_context *context,
-                                  uint64_t handle) {
+talos_rt_v1_native_state_retain(talos_rt_context *context, uint64_t handle) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   if (handle == UINT64_MAX)
@@ -489,7 +484,7 @@ extern "C" talos_rt_status talos_rt_v1_native_state_alloc_with_typed_roots(
 
 extern "C" talos_rt_status
 talos_rt_v1_native_state_release(talos_rt_context *context, uint64_t handle,
-                                   uint32_t ownerReference) {
+                                 uint32_t ownerReference) {
   if (!context || ownerReference > 1)
     return TALOS_RT_INVALID_ARGUMENT;
   if (handle == UINT64_MAX)
@@ -551,10 +546,9 @@ extern "C" talos_rt_status talos_rt_v1_argument_ref_load(
     if (shape != TALOS_RT_OK)
       return shape;
     uint32_t present = 0;
-    talos_rt_status status = talos_rt_v1_reference_path_load(
-        owner, outValue, outUnknown, &present);
-    if (status != TALOS_RT_OK ||
-        valueKind != TALOS_RT_ARGUMENT_VALUE_STRING)
+    talos_rt_status status =
+        talos_rt_v1_reference_path_load(owner, outValue, outUnknown, &present);
+    if (status != TALOS_RT_OK || valueKind != TALOS_RT_ARGUMENT_VALUE_STRING)
       return status;
     talos_rt_string_v1 string = 0;
     std::memcpy(&string, outValue, sizeof(string));
@@ -592,7 +586,7 @@ extern "C" talos_rt_status talos_rt_v1_argument_ref_load(
       return TALOS_RT_INVALID_ARGUMENT;
     if (fourState)
       return talos_rt_v1_object_read_planes(owner, payload, outValue,
-                                              outUnknown, planeSize);
+                                            outUnknown, planeSize);
     return talos_rt_v1_object_read(owner, payload, outValue, planeSize);
   }
   ContextTransaction transaction(context);
@@ -680,7 +674,7 @@ extern "C" talos_rt_status talos_rt_v1_argument_ref_store(
       return TALOS_RT_INVALID_ARGUMENT;
     if (fourState)
       return talos_rt_v1_object_write_planes(owner, payload, value, unknown,
-                                               planeSize);
+                                             planeSize);
     return talos_rt_v1_object_write(owner, payload, value, planeSize);
   }
   // Keep one reusable transition snapshot per host thread. This avoids a heap

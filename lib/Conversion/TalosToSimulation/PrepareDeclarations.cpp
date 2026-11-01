@@ -1587,8 +1587,8 @@ FailureOr<PreparedClassDeclarations> materializeClassDeclarations(
           declaration,
           addRandomField("__talos_rand_mode", "__talos_rand_mode"));
       sim::set<sim::metadata::ConstraintModeField>(
-          declaration, addRandomField("__talos_constraint_mode",
-                                      "__talos_constraint_mode"));
+          declaration,
+          addRandomField("__talos_constraint_mode", "__talos_constraint_mode"));
     }
     // Append managed histories after the existing inventory so source fields
     // and their ordinal-derived symbols keep their identities.
@@ -1874,8 +1874,7 @@ FailureOr<PreparedScopeDeclarations> materializeScopeDeclarations(
     uint32_t vpiKind = 0;
     switch (definition.getDefinitionKind()) {
     case semantic::SVDefinitionKind::Module:
-      vpiKind =
-          static_cast<uint32_t>(talos::reflection::VPIObjectKind::Module);
+      vpiKind = static_cast<uint32_t>(talos::reflection::VPIObjectKind::Module);
       break;
     case semantic::SVDefinitionKind::Interface:
       vpiKind =

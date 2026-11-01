@@ -21,8 +21,8 @@
 // <sys/types.h>, which on Darwin lacks the unsigned ones.
 #include <cstdint>
 
-#include "talos/vpi_user_compat.h"
 #include "sv_vpi_user.h"
+#include "talos/vpi_user_compat.h"
 #include "vpi_user.h"
 
 #include "talos/Reflection/VPIObjectModel.h"

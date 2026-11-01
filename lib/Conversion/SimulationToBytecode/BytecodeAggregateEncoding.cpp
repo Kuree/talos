@@ -317,16 +317,15 @@ FailureOr<uint32_t> Encoder::encodeArrayOffset(FunctionPlan &plan, Type array,
       (sourceLayout->width > 64 &&
        (roundTrip == kInvalidRegister || fits == kInvalidRegister)))
     return failure();
-  emit({Extract, TALOS_RT_DB_EXTRACT_SIGN_EXTEND, index,
-        reg(plan, indexValue), kInvalidRegister});
+  emit({Extract, TALOS_RT_DB_EXTRACT_SIGN_EXTEND, index, reg(plan, indexValue),
+        kInvalidRegister});
   if (sourceLayout->width > 64) {
     // Narrowing alone would turn an overflowing or high-plane-X index into
     // an apparently valid low 64-bit value. Require the original index to
     // equal a signed round trip through the runtime's i64 coordinate type.
     emit({Extract, TALOS_RT_DB_EXTRACT_SIGN_EXTEND, roundTrip, index,
           kInvalidRegister});
-    emit({Compare, TALOS_RT_DB_CMP_EQ, fits, reg(plan, indexValue),
-          roundTrip});
+    emit({Compare, TALOS_RT_DB_CMP_EQ, fits, reg(plan, indexValue), roundTrip});
   }
   auto constant = [&](uint32_t destination, const APInt &value) {
     emit({Constant, 0, destination, 0, 0, 0, 0,
@@ -464,8 +463,8 @@ LogicalResult Encoder::encodeUnionIsActive(FunctionPlan &plan,
   uint32_t expectedTag = temporaryLike(plan, tagType, op.getInput());
   if (tag == kInvalidRegister || expectedTag == kInvalidRegister)
     return failure();
-  emit({Extract, TALOS_RT_DB_EXTRACT_ZERO_EXTEND, tag,
-        reg(plan, op.getInput()), kInvalidRegister, 0, 0, *payloadSpan});
+  emit({Extract, TALOS_RT_DB_EXTRACT_ZERO_EXTEND, tag, reg(plan, op.getInput()),
+        kInvalidRegister, 0, 0, *payloadSpan});
   emit({Constant, 0, expectedTag, 0, 0, 0, 0,
         addConstant(plan.layouts[expectedTag], APInt(tagBits, expected))});
   emit({Compare, TALOS_RT_DB_CMP_CASE_EQ, reg(plan, op.getResult()), tag,

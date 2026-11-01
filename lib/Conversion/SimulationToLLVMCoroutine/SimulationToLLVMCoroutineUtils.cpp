@@ -469,8 +469,7 @@ void emitNativeStateRetain(OpBuilder &builder, Location location,
 }
 
 std::string managedClassDescriptorName(SymbolRefAttr className) {
-  return (className.getRootReference().getValue() +
-          ".__talos_class_descriptor")
+  return (className.getRootReference().getValue() + ".__talos_class_descriptor")
       .str();
 }
 

@@ -87,19 +87,19 @@ Blob makeBlob(uint64_t staticClassID, uint64_t memberClassID,
       0};
   put(blob, 0, header);
   put(blob, siteOffset,
-      talos_rt_class_bitstream_site_v1{
-          1, TALOS_RT_CLASS_BITSTREAM_NO_BYTECODE,
-          TALOS_RT_CLASS_BITSTREAM_NO_BYTECODE, sitePlanOffset, 80, 0});
+      talos_rt_class_bitstream_site_v1{1, TALOS_RT_CLASS_BITSTREAM_NO_BYTECODE,
+                                       TALOS_RT_CLASS_BITSTREAM_NO_BYTECODE,
+                                       sitePlanOffset, 80, 0});
   put(blob, groupOffset,
       talos_rt_class_bitstream_group_v1{1, staticClassID, 0, 1, 0, 0});
   put64(blob, memberOffset, memberClassID);
   put(blob, schemaOffset,
       talos_rt_class_bitstream_schema_v1{memberClassID, instanceSize, 0, 1,
-                                           instanceAlignment, 0, 0});
+                                         instanceAlignment, 0, 0});
   put(blob, fieldOffsetTable,
       talos_rt_class_bitstream_field_v1{fieldOffset, fieldPlaneSize,
-                                          fieldRootSpan, fieldPlanOffset, 80,
-                                          fieldFlags, 1});
+                                        fieldRootSpan, fieldPlanOffset, 80,
+                                        fieldFlags, 1});
   putPlan(blob, fieldPlanOffset,
           fieldIsObject ? TALOS_RT_RECURSIVE_BITSTREAM_PLAN_OBJECT_VERSION
                         : TALOS_RT_RECURSIVE_BITSTREAM_PLAN_VERSION,
@@ -126,9 +126,9 @@ Blob makeEmptyGroupBlob(uint64_t staticClassID) {
           blobSize, siteOffset, 1, groupOffset, 1, planOffset, 0, planOffset, 0,
           planOffset, 0, planOffset, 80, 0, 0});
   put(blob, siteOffset,
-      talos_rt_class_bitstream_site_v1{
-          1, TALOS_RT_CLASS_BITSTREAM_NO_BYTECODE,
-          TALOS_RT_CLASS_BITSTREAM_NO_BYTECODE, planOffset, 80, 0});
+      talos_rt_class_bitstream_site_v1{1, TALOS_RT_CLASS_BITSTREAM_NO_BYTECODE,
+                                       TALOS_RT_CLASS_BITSTREAM_NO_BYTECODE,
+                                       planOffset, 80, 0});
   put(blob, groupOffset,
       talos_rt_class_bitstream_group_v1{1, staticClassID, 0, 0, 0, 0});
   putPlan(blob, planOffset, TALOS_RT_RECURSIVE_BITSTREAM_PLAN_OBJECT_VERSION,
@@ -153,20 +153,19 @@ Blob makeWideSharedCycleBlob(uint64_t classCount) {
           schemaOffset, classCount, fieldOffset, classCount, planOffset, 80, 0,
           0});
   put(blob, siteOffset,
-      talos_rt_class_bitstream_site_v1{
-          1, TALOS_RT_CLASS_BITSTREAM_NO_BYTECODE,
-          TALOS_RT_CLASS_BITSTREAM_NO_BYTECODE, planOffset, 80, 0});
+      talos_rt_class_bitstream_site_v1{1, TALOS_RT_CLASS_BITSTREAM_NO_BYTECODE,
+                                       TALOS_RT_CLASS_BITSTREAM_NO_BYTECODE,
+                                       planOffset, 80, 0});
   put(blob, groupOffset,
       talos_rt_class_bitstream_group_v1{1, 1, 0, classCount, 0, 0});
   for (uint64_t index = 0; index != classCount; ++index) {
     put64(blob, memberOffset + index * 8, index + 1);
     put(blob, schemaOffset + index * 48,
         talos_rt_class_bitstream_schema_v1{index + 1, 16, index, 1,
-                                             alignof(void *), 0, 0});
+                                           alignof(void *), 0, 0});
     put(blob, fieldOffset + index * 48,
         talos_rt_class_bitstream_field_v1{sizeof(void *), sizeof(void *), 64,
-                                            planOffset, 80, 0,
-                                            alignof(void *)});
+                                          planOffset, 80, 0, alignof(void *)});
   }
   putPlan(blob, planOffset, TALOS_RT_RECURSIVE_BITSTREAM_PLAN_OBJECT_VERSION,
           64, TALOS_RT_RECURSIVE_BITSTREAM_OBJECT, 1, 0);
@@ -232,9 +231,9 @@ struct ClassInfo {
 };
 
 talos_rt_status finalize(const Blob &blob,
-                           const std::vector<ClassInfo *> &classes,
-                           talos_rt_context **outContext = nullptr,
-                           Execution *retainedExecution = nullptr) {
+                         const std::vector<ClassInfo *> &classes,
+                         talos_rt_context **outContext = nullptr,
+                         Execution *retainedExecution = nullptr) {
   Execution localExecution(blob.data(), blob.size());
   if (retainedExecution)
     *retainedExecution = localExecution;
@@ -269,8 +268,8 @@ TEST(ClassBitstreamTest, RejectsHostileWireImages) {
   EXPECT_EQ(finalize(reserved, {&leaf}), TALOS_RT_INVALID_DESIGN);
 
   Blob headerLeak = valid;
-  auto *header = reinterpret_cast<talos_rt_class_bitstream_header_v1 *>(
-      headerLeak.data());
+  auto *header =
+      reinterpret_cast<talos_rt_class_bitstream_header_v1 *>(headerLeak.data());
   auto *field = reinterpret_cast<talos_rt_class_bitstream_field_v1 *>(
       headerLeak.data() + header->field_offset);
   field->offset = 0;
@@ -295,8 +294,7 @@ TEST(ClassBitstreamTest, RejectsHostileWireImages) {
   ASSERT_EQ(
       talos_rt_v1_context_create_for_design(&execution.descriptor, &context),
       TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_class_register(context, &leaf.descriptor),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_class_register(context, &leaf.descriptor), TALOS_RT_OK);
   EXPECT_EQ(talos_rt_v1_class_bitstream_finalize(context),
             TALOS_RT_INVALID_DESIGN);
   talos_rt_v1_context_destroy(context);
@@ -363,7 +361,7 @@ TEST(ClassBitstreamTest, ExportsFourStateFieldAndRejectsStaticCycles) {
             TALOS_RT_OK);
   const uint8_t value[2] = {0xa5, 0x11}, unknown[2] = {0x3c, 0x22};
   ASSERT_EQ(talos_rt_v1_object_write_planes(object, sizeof(void *), value,
-                                              unknown, 2),
+                                            unknown, 2),
             TALOS_RT_OK);
   talos_rt_managed_word_v1 input = static_cast<talos_rt_managed_word_v1>(
       reinterpret_cast<uintptr_t>(object));
@@ -389,7 +387,7 @@ TEST(ClassBitstreamTest, ExportsFourStateFieldAndRejectsStaticCycles) {
   {
     std::lock_guard<std::recursive_mutex> lock(context->mutex);
     ASSERT_TRUE(talos_rt_register_signal_wait_unlocked(context, &record.wait,
-                                                         subscriptions, latch));
+                                                       subscriptions, latch));
   }
   const uint8_t overlap = 0x44;
   ASSERT_EQ(talos_rt_v1_object_write(object, sizeof(void *) + 1, &overlap, 1),

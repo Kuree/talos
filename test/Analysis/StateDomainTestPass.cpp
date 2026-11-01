@@ -27,8 +27,8 @@ bool shouldPrint(Value value) {
       return true;
     if (!talos::sim::isAggregateType(type))
       return false;
-    for (unsigned index = 0;
-         index < talos::sim::getAggregateNumElements(type); ++index)
+    for (unsigned index = 0; index < talos::sim::getAggregateNumElements(type);
+         ++index)
       if (containsLogic(talos::sim::getAggregateElementType(type, index)))
         return true;
     return false;
@@ -46,9 +46,7 @@ public:
   StateDomainTestPass() = default;
   StateDomainTestPass(const StateDomainTestPass &other) : PassWrapper(other) {}
 
-  StringRef getArgument() const final {
-    return "test-talos-sim-state-domain";
-  }
+  StringRef getArgument() const final { return "test-talos-sim-state-domain"; }
   StringRef getDescription() const final {
     return "print read-only Talos simulation state-domain facts";
   }
@@ -85,8 +83,7 @@ private:
   static void printDesign(talos::sim::SimDesignOp design,
                           const talos::StateDomainAnalysis &analysis) {
     llvm::errs() << "state-domain @" << design.getSymName() << "\n";
-    for (const talos::InductiveStateRoot &root :
-         analysis.getInductiveRoots()) {
+    for (const talos::InductiveStateRoot &root : analysis.getInductiveRoots()) {
       StringRef resource = "unknown";
       if (root.resource == talos::schedule::ComputeResourceKind::Storage)
         resource = "storage";
@@ -181,8 +178,7 @@ public:
       for (auto [index, block] : llvm::enumerate(function.getBody()))
         blockIndex[&block] = index;
       auto kind = [](talos::analysis::KnownRegionKind value) {
-        return value == talos::analysis::KnownRegionKind::Loop ? "loop"
-                                                                 : "run";
+        return value == talos::analysis::KnownRegionKind::Loop ? "loop" : "run";
       };
       auto name = [](Operation *op) -> std::string {
         return op ? op->getName().getStringRef().str() : "<none>";

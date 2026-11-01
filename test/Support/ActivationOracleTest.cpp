@@ -51,8 +51,8 @@ enum class Action {
   PartialHold,
 };
 constexpr Action actions[] = {
-    Action::Hold,     Action::Replace,     Action::Counter,
-    Action::Swap,     Action::Snapshot,    Action::Copy,
+    Action::Hold,       Action::Replace,     Action::Counter,
+    Action::Swap,       Action::Snapshot,    Action::Copy,
     Action::Sequential, Action::HoldDerived, Action::OverwrittenSnapshot,
     Action::PartialHold};
 constexpr const char *controls[] = {"input", "old_a", "old_b", "xor_ab"};
@@ -232,8 +232,7 @@ std::string program(ArrayRef<Case> cases) {
        << "  %xor_ab = arith.xori %old_a, %old_b : i2\n"
        << "  %derived = arith.xori %old_a, %input : i2\n";
     if (c.useSwitch)
-      os << "  cf.switch %" << c.control
-         << " : i2, [default: ^no, 0: ^yes]\n";
+      os << "  cf.switch %" << c.control << " : i2, [default: ^no, 0: ^yes]\n";
     else
       os << "  %test = arith.cmpi eq, %" << c.control << ", %zero : i2\n"
          << "  cf.cond_br %test, ^yes, ^no\n";
@@ -297,9 +296,9 @@ TEST_F(ActivationOracle, IdempotenceProofsAreSound) {
       if (first == second)
         continue;
       idempotent = false;
-      EXPECT_FALSE(admitted) << "admitted, but state " << state[0] << ','
-                             << state[1] << ',' << state[2]
-                             << " changes on a second activation";
+      EXPECT_FALSE(admitted)
+          << "admitted, but state " << state[0] << ',' << state[1] << ','
+          << state[2] << " changes on a second activation";
     }
     accepted += admitted;
     rejectedNonidempotent += !idempotent;
@@ -331,7 +330,8 @@ TEST_F(ActivationOracle, InputDependenciesCoverEveryObservedBit) {
     ASSERT_TRUE(full.getMemory().hasValueDependencies());
     // The cheaper input-only proof must agree with full publication analysis.
     ActivationRegionAnalysis inputs(
-        function, handles, {}, ActivationMemoryAnalysis::DependencyMode::Inputs);
+        function, handles, {},
+        ActivationMemoryAnalysis::DependencyMode::Inputs);
     ASSERT_TRUE(inputs.isValid());
     ASSERT_TRUE(inputs.getMemory().hasValueDependencies() ||
                 inputs.getMemory().hasInputDependencies());

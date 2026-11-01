@@ -1371,16 +1371,13 @@ private:
       for (const auto &entry : finalLocals[function].values)
         facts.erase(entry.first);
     sim::SimDesignOp design = program.design;
-    parallelFor(design.getContext(), 0, functions.size(),
-                [&](size_t position) {
-                  unsigned index = functions[position];
-                  finalLocals[index] =
-                      initializeLocalFacts(program.summaries[index]);
-                  propagateFunction(program.summaries[index],
-                                    resolvedFormals[index], resolvedResults,
-                                    program.calleeIndex, assumedKnownRoots,
-                                    finalLocals[index]);
-                });
+    parallelFor(design.getContext(), 0, functions.size(), [&](size_t position) {
+      unsigned index = functions[position];
+      finalLocals[index] = initializeLocalFacts(program.summaries[index]);
+      propagateFunction(program.summaries[index], resolvedFormals[index],
+                        resolvedResults, program.calleeIndex, assumedKnownRoots,
+                        finalLocals[index]);
+    });
     for (unsigned function : functions) {
       const LocalFacts &local = finalLocals[function];
       for (auto [value, fact] : local.values) {

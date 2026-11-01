@@ -525,7 +525,7 @@ Status planSections(const Database &db, const StringTable &strings,
     sections.push_back({kind, required ? RequiredSection : 0, count, bytes});
     return true;
   };
-#define TALOS_COVERAGE_PLAN(KIND, COUNT)                                     \
+#define TALOS_COVERAGE_PLAN(KIND, COUNT)                                       \
   if (!add(SectionKind::KIND, (COUNT)))                                        \
   return Status::IntegerOverflow
   if (!add(SectionKind::Strings, strings.strings.size(), true))
@@ -542,88 +542,83 @@ Status planSections(const Database &db, const StringTable &strings,
   TALOS_COVERAGE_PLAN(CrossPlans, db.crossPlans.size());
   TALOS_COVERAGE_PLAN(Exclusions, db.exclusions.size());
   TALOS_COVERAGE_PLAN(Runs, db.runs.size());
-  TALOS_COVERAGE_PLAN(ResolvedCovergroupInstances,
-                        db.resolvedInstances.size());
+  TALOS_COVERAGE_PLAN(ResolvedCovergroupInstances, db.resolvedInstances.size());
   TALOS_COVERAGE_PLAN(Counters, db.counters.size());
   TALOS_COVERAGE_PLAN(SparseCrossTuples, db.sparseCrossTuples.size());
   TALOS_COVERAGE_PLAN(IllegalBinDiagnostics, db.illegalBinDiagnostics.size());
   TALOS_COVERAGE_PLAN(UserMetadata, tagCount + 1);
-  TALOS_COVERAGE_PLAN(FunctionalSourceRanges,
-                        db.functionalSourceRanges.size());
-  TALOS_COVERAGE_PLAN(TransitionAlternatives,
-                        db.transitionAlternatives.size());
+  TALOS_COVERAGE_PLAN(FunctionalSourceRanges, db.functionalSourceRanges.size());
+  TALOS_COVERAGE_PLAN(TransitionAlternatives, db.transitionAlternatives.size());
   TALOS_COVERAGE_PLAN(TransitionSteps, db.transitionSteps.size());
   TALOS_COVERAGE_PLAN(CrossTargets, db.crossTargets.size());
   TALOS_COVERAGE_PLAN(CrossBins, db.crossBins.size());
   TALOS_COVERAGE_PLAN(CrossSelectorNodes, db.crossSelectorNodes.size());
   TALOS_COVERAGE_PLAN(CrossSelectorOperands, db.crossSelectorOperands.size());
   TALOS_COVERAGE_PLAN(SparseCrossTupleComponents,
-                        db.sparseCrossTupleComponents.size());
+                      db.sparseCrossTupleComponents.size());
   TALOS_COVERAGE_PLAN(FunctionalValueSets, db.functionalValueSets.size());
   TALOS_COVERAGE_PLAN(FunctionalValueAtoms, db.functionalValueAtoms.size());
   TALOS_COVERAGE_PLAN(FunctionalValueLimbs, db.functionalValueLimbs.size());
   TALOS_COVERAGE_PLAN(FunctionalExpressions, db.functionalExpressions.size());
   TALOS_COVERAGE_PLAN(FunctionalConfigurations,
-                        db.functionalConfigurations.size());
+                      db.functionalConfigurations.size());
   TALOS_COVERAGE_PLAN(ResolvedFunctionalItems,
-                        db.resolvedFunctionalItems.size());
-  TALOS_COVERAGE_PLAN(ResolvedFunctionalBins,
-                        db.resolvedFunctionalBins.size());
+                      db.resolvedFunctionalItems.size());
+  TALOS_COVERAGE_PLAN(ResolvedFunctionalBins, db.resolvedFunctionalBins.size());
   TALOS_COVERAGE_PLAN(ResolvedTransitionSteps,
-                        db.resolvedTransitionSteps.size());
+                      db.resolvedTransitionSteps.size());
   TALOS_COVERAGE_PLAN(ResolvedCrossPlans, db.resolvedCrossPlans.size());
   TALOS_COVERAGE_PLAN(ResolvedCrossSelectorBindings,
-                        db.resolvedCrossSelectorBindings.size());
+                      db.resolvedCrossSelectorBindings.size());
   TALOS_COVERAGE_PLAN(ResolvedFunctionalValueSets,
-                        db.resolvedFunctionalValueSets.size());
+                      db.resolvedFunctionalValueSets.size());
   TALOS_COVERAGE_PLAN(ResolvedFunctionalValueAtoms,
-                        db.resolvedFunctionalValueAtoms.size());
+                      db.resolvedFunctionalValueAtoms.size());
   TALOS_COVERAGE_PLAN(ResolvedFunctionalValueLimbs,
-                        db.resolvedFunctionalValueLimbs.size());
+                      db.resolvedFunctionalValueLimbs.size());
   TALOS_COVERAGE_PLAN(FunctionalBinPlans, db.functionalBinPlans.size());
   TALOS_COVERAGE_PLAN(FunctionalTupleSets, db.functionalTupleSets.size());
   TALOS_COVERAGE_PLAN(FunctionalTupleSetTuples,
-                        db.functionalTupleSetTuples.size());
+                      db.functionalTupleSetTuples.size());
   TALOS_COVERAGE_PLAN(FunctionalTupleSetComponents,
-                        db.functionalTupleSetComponents.size());
+                      db.functionalTupleSetComponents.size());
   TALOS_COVERAGE_PLAN(FunctionalOptionPlans, db.functionalOptionPlans.size());
   TALOS_COVERAGE_PLAN(FunctionalConfigurationOptions,
-                        db.functionalConfigurationOptions.size());
+                      db.functionalConfigurationOptions.size());
   TALOS_COVERAGE_PLAN(ResolvedFunctionalBinPlans,
-                        db.resolvedFunctionalBinPlans.size());
+                      db.resolvedFunctionalBinPlans.size());
   TALOS_COVERAGE_PLAN(ResolvedFunctionalTupleSets,
-                        db.resolvedFunctionalTupleSets.size());
+                      db.resolvedFunctionalTupleSets.size());
   TALOS_COVERAGE_PLAN(ResolvedFunctionalTupleSetTuples,
-                        db.resolvedFunctionalTupleSetTuples.size());
+                      db.resolvedFunctionalTupleSetTuples.size());
   TALOS_COVERAGE_PLAN(ResolvedFunctionalTupleSetComponents,
-                        db.resolvedFunctionalTupleSetComponents.size());
+                      db.resolvedFunctionalTupleSetComponents.size());
   TALOS_COVERAGE_PLAN(ResolvedTransitionAlternatives,
-                        db.resolvedTransitionAlternatives.size());
+                      db.resolvedTransitionAlternatives.size());
   TALOS_COVERAGE_PLAN(ResolvedFunctionalBinGroups,
-                        db.resolvedFunctionalBinGroups.size());
+                      db.resolvedFunctionalBinGroups.size());
   TALOS_COVERAGE_PLAN(ResolvedTransitionExpansionGroups,
-                        db.resolvedTransitionExpansionGroups.size());
+                      db.resolvedTransitionExpansionGroups.size());
   TALOS_COVERAGE_PLAN(ResolvedCrossAutomaticBinCountLimbs,
-                        db.resolvedCrossAutomaticBinCountLimbs.size());
+                      db.resolvedCrossAutomaticBinCountLimbs.size());
   TALOS_COVERAGE_PLAN(ResolvedCrossAutomaticNodes,
-                        db.resolvedCrossAutomaticNodes.size());
+                      db.resolvedCrossAutomaticNodes.size());
   TALOS_COVERAGE_PLAN(ResolvedCrossAutomaticEdges,
-                        db.resolvedCrossAutomaticEdges.size());
+                      db.resolvedCrossAutomaticEdges.size());
   TALOS_COVERAGE_PLAN(FunctionalFormals, db.functionalFormals.size());
   TALOS_COVERAGE_PLAN(ResolvedInstanceOptions,
-                        db.resolvedInstanceOptions.size());
+                      db.resolvedInstanceOptions.size());
   TALOS_COVERAGE_PLAN(FunctionalContainerTypes,
-                        db.functionalContainerTypes.size());
+                      db.functionalContainerTypes.size());
   TALOS_COVERAGE_PLAN(FunctionalAggregateTypes,
-                        db.functionalAggregateTypes.size());
+                      db.functionalAggregateTypes.size());
   TALOS_COVERAGE_PLAN(FunctionalClassTypes, db.functionalClassTypes.size());
   TALOS_COVERAGE_PLAN(FunctionalVirtualInterfaceTypes,
-                        db.functionalVirtualInterfaceTypes.size());
+                      db.functionalVirtualInterfaceTypes.size());
   TALOS_COVERAGE_PLAN(FunctionalVirtualInterfaceScopes,
-                        db.functionalVirtualInterfaceScopes.size());
+                      db.functionalVirtualInterfaceScopes.size());
   TALOS_COVERAGE_PLAN(CrossPredicateNodes, db.crossPredicateNodes.size());
-  TALOS_COVERAGE_PLAN(CrossPredicateOperands,
-                        db.crossPredicateOperands.size());
+  TALOS_COVERAGE_PLAN(CrossPredicateOperands, db.crossPredicateOperands.size());
   TALOS_COVERAGE_PLAN(AssertionPoints, db.assertionPoints.size());
   TALOS_COVERAGE_PLAN(FSMStates, db.fsmStates.size());
 #undef TALOS_COVERAGE_PLAN

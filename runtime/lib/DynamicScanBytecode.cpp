@@ -32,7 +32,7 @@ readScalar(const Image &image, const Frame &frame, uint32_t reg) {
 }
 
 TALOS_RT_FEATURE_HELPER bool writeScalar(const Image &image, Frame &frame,
-                                           uint32_t reg, uint64_t value) {
+                                         uint32_t reg, uint64_t value) {
   if (!validRegister(frame.function, reg))
     return false;
   Layout layout = layoutAt(image, frame.function, reg);
@@ -48,9 +48,9 @@ TALOS_RT_FEATURE_HELPER bool writeScalar(const Image &image, Frame &frame,
   return true;
 }
 
-TALOS_RT_FEATURE_HELPER bool
-readString(const Image &image, const Frame &frame, talos_rt_context *context,
-           uint32_t reg, talos_rt_string_v1 &string) {
+TALOS_RT_FEATURE_HELPER bool readString(const Image &image, const Frame &frame,
+                                        talos_rt_context *context, uint32_t reg,
+                                        talos_rt_string_v1 &string) {
   if (!validRegister(frame.function, reg))
     return false;
   Layout layout = layoutAt(image, frame.function, reg);
@@ -61,8 +61,8 @@ readString(const Image &image, const Frame &frame, talos_rt_context *context,
 }
 
 TALOS_RT_FEATURE_HELPER bool writeString(const Image &image, Frame &frame,
-                                           uint32_t reg,
-                                           talos_rt_string_v1 string) {
+                                         uint32_t reg,
+                                         talos_rt_string_v1 string) {
   if (!validRegister(frame.function, reg))
     return false;
   Layout layout = layoutAt(image, frame.function, reg);
@@ -77,8 +77,7 @@ TALOS_RT_FEATURE_HELPER bool writeString(const Image &image, Frame &frame,
 // A dynamic-scan bytecode image emits one strong call to this otherwise inert
 // anchor. The ordinary dispatcher holds only a weak handler reference, so a
 // design without these intrinsic IDs does not extract this archive member.
-extern "C" TALOS_RT_FEATURE_TEXT void
-talos_rt_v1_dynamic_scan_link_anchor() {}
+extern "C" TALOS_RT_FEATURE_TEXT void talos_rt_v1_dynamic_scan_link_anchor() {}
 
 // This is deliberately a separate, last-linked service object. Designs that
 // do not encode dynamic scan intrinsics retain the established bytecode
@@ -95,8 +94,7 @@ TALOS_RT_FEATURE_TEXT talos_rt_status invokeDynamicScanIntrinsic(
   auto scalar = [&](uint32_t index) {
     return readScalar(image, frame, inputRegister(index));
   };
-  auto sentinel = [&](uint32_t index,
-                      uint64_t value) {
+  auto sentinel = [&](uint32_t index, uint64_t value) {
     return writeScalar(image, frame, outputRegister(index), value)
                ? TALOS_RT_OK
                : TALOS_RT_INVALID_BYTECODE;

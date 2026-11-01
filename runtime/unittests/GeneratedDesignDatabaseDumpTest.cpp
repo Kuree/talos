@@ -444,11 +444,9 @@ TEST(GeneratedDesignDatabase, Dump) {
   }
 
   constexpr uint32_t semanticFlagsMask =
-      TALOS_RT_DESIGN_SEMANTIC_SIGNED |
-      TALOS_RT_DESIGN_SEMANTIC_FOUR_STATE |
+      TALOS_RT_DESIGN_SEMANTIC_SIGNED | TALOS_RT_DESIGN_SEMANTIC_FOUR_STATE |
       TALOS_RT_DESIGN_SEMANTIC_HAS_RANGE | TALOS_RT_DESIGN_SEMANTIC_TAGGED |
-      TALOS_RT_DESIGN_SEMANTIC_SOFT |
-      TALOS_RT_DESIGN_SEMANTIC_WILDCARD_INDEX;
+      TALOS_RT_DESIGN_SEMANTIC_SOFT | TALOS_RT_DESIGN_SEMANTIC_WILDCARD_INDEX;
   for (uint64_t index = 0; index != semanticTypeCount; ++index) {
     const SemanticTypeView type(image + semanticTypeOffset +
                                 index * SemanticTypeLayout.size);
@@ -1295,24 +1293,23 @@ TEST(GeneratedDesignDatabase, RejectsMalformedFrozenParameterImage) {
   auto expectRejected = [&](std::vector<uint8_t> image) {
     put64(image, field::HeaderChecksum, imageChecksum(image));
     const talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                                       encoded->executionFlags,
-                                                       0,
-                                                       encoded->bytecode.data(),
-                                                       encoded->bytecode.size(),
-                                                       image.data(),
-                                                       image.size(),
-                                                       encoded->stateBitCount,
-                                                       bytecodeChecksum,
-                                                       nullptr,
-                                                       0,
-                                                       0,
-                                                       0,
-                                                       nullptr,
-                                                       0,
-                                                       nullptr,
-                                                       0};
-    EXPECT_EQ(talos_rt_v1_design_validate(&execution),
-              TALOS_RT_INVALID_DESIGN);
+                                                     encoded->executionFlags,
+                                                     0,
+                                                     encoded->bytecode.data(),
+                                                     encoded->bytecode.size(),
+                                                     image.data(),
+                                                     image.size(),
+                                                     encoded->stateBitCount,
+                                                     bytecodeChecksum,
+                                                     nullptr,
+                                                     0,
+                                                     0,
+                                                     0,
+                                                     nullptr,
+                                                     0,
+                                                     nullptr,
+                                                     0};
+    EXPECT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_INVALID_DESIGN);
   };
 
   std::vector<uint8_t> malformed(encoded->designDatabase.begin(),
@@ -2187,22 +2184,22 @@ TEST(GeneratedDesignDatabase, ClassSpecializationBindings) {
   for (unsigned byte = 0; byte != 8; ++byte)
     bytecodeChecksum |= uint64_t{encoded->bytecode[32 + byte]} << (byte * 8);
   talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                               encoded->executionFlags,
-                                               0,
-                                               encoded->bytecode.data(),
-                                               encoded->bytecode.size(),
-                                               encoded->designDatabase.data(),
-                                               encoded->designDatabase.size(),
-                                               encoded->stateBitCount,
-                                               bytecodeChecksum,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0};
+                                             encoded->executionFlags,
+                                             0,
+                                             encoded->bytecode.data(),
+                                             encoded->bytecode.size(),
+                                             encoded->designDatabase.data(),
+                                             encoded->designDatabase.size(),
+                                             encoded->stateBitCount,
+                                             bytecodeChecksum,
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
   ASSERT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_OK);
   talos_rt_context *runtime = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &runtime),
@@ -2216,10 +2213,8 @@ TEST(GeneratedDesignDatabase, ClassSpecializationBindings) {
     return cursor;
   };
   talos_rt_design_cursor_v1 one{}, two{};
-  ASSERT_EQ(talos_rt_cached_vpi_class_typespec(runtime, 1, &one),
-            TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_cached_vpi_class_typespec(runtime, 2, &two),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_cached_vpi_class_typespec(runtime, 1, &one), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_cached_vpi_class_typespec(runtime, 2, &two), TALOS_RT_OK);
   auto lexical = lookup("top.Generic");
   EXPECT_NE(one.offset, two.offset);
   talos_rt_design_cursor_v1 result{};
@@ -2235,15 +2230,15 @@ TEST(GeneratedDesignDatabase, ClassSpecializationBindings) {
   EXPECT_EQ(talos_rt_cached_vpi_class_typespec(runtime, 1, nullptr),
             TALOS_RT_INVALID_ARGUMENT);
   const talos_rt_design_cursor_v1 sources[] = {lookup("top.obj"),
-                                                 lookup("top.Alias"), one, two};
+                                               lookup("top.Alias"), one, two};
   for (unsigned index = 0; index != 4; ++index) {
     talos_rt_design_cursor_v1 semantic{};
     ASSERT_EQ(talos_rt_cached_design_semantic_root(runtime, sources[index],
-                                                     &semantic),
+                                                   &semantic),
               TALOS_RT_OK);
-    ASSERT_EQ(talos_rt_cached_vpi_semantic_class_typespec(runtime, semantic,
-                                                            &result),
-              TALOS_RT_OK);
+    ASSERT_EQ(
+        talos_rt_cached_vpi_semantic_class_typespec(runtime, semantic, &result),
+        TALOS_RT_OK);
     EXPECT_EQ(result.offset, index == 3 ? two.offset : one.offset);
     talos_rt_design_semantic_type_info_v1 info{};
     ASSERT_EQ(
@@ -2291,8 +2286,7 @@ TEST(GeneratedDesignDatabase, ClassSpecializationBindings) {
     put64(image, field::HeaderChecksum, imageChecksum(image));
     execution.design_database = image.data();
     execution.design_database_size = image.size();
-    EXPECT_EQ(talos_rt_v1_design_validate(&execution),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_INVALID_DESIGN);
   };
   auto original = [&] {
     return std::vector<uint8_t>(encoded->designDatabase.begin(),
@@ -2441,8 +2435,7 @@ TEST(GeneratedDesignDatabase, LiveClassObjectTypes) {
   derivedDescriptor.base = &baseDescriptor;
   talos_rt_class_descriptor_v1 hiddenDescriptor = derivedDescriptor;
   hiddenDescriptor.class_id = 3;
-  ASSERT_EQ(talos_rt_v1_class_register(runtime, &baseDescriptor),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_class_register(runtime, &baseDescriptor), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_class_register(runtime, &derivedDescriptor),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_class_register(runtime, &hiddenDescriptor),
@@ -2545,22 +2538,22 @@ TEST(GeneratedDesignDatabase, ClassConstraints) {
   for (unsigned byte = 0; byte != 8; ++byte)
     bytecodeChecksum |= uint64_t{encoded->bytecode[32 + byte]} << (byte * 8);
   talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                               encoded->executionFlags,
-                                               0,
-                                               encoded->bytecode.data(),
-                                               encoded->bytecode.size(),
-                                               encoded->designDatabase.data(),
-                                               encoded->designDatabase.size(),
-                                               encoded->stateBitCount,
-                                               bytecodeChecksum,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0};
+                                             encoded->executionFlags,
+                                             0,
+                                             encoded->bytecode.data(),
+                                             encoded->bytecode.size(),
+                                             encoded->designDatabase.data(),
+                                             encoded->designDatabase.size(),
+                                             encoded->stateBitCount,
+                                             bytecodeChecksum,
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
   ASSERT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_OK);
   talos_rt_context *runtime = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &runtime),
@@ -2654,22 +2647,22 @@ TEST(GeneratedDesignDatabase, ClassParameters) {
   for (unsigned byte = 0; byte != 8; ++byte)
     bytecodeChecksum |= uint64_t{encoded->bytecode[32 + byte]} << (byte * 8);
   talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                               encoded->executionFlags,
-                                               0,
-                                               encoded->bytecode.data(),
-                                               encoded->bytecode.size(),
-                                               encoded->designDatabase.data(),
-                                               encoded->designDatabase.size(),
-                                               encoded->stateBitCount,
-                                               bytecodeChecksum,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0};
+                                             encoded->executionFlags,
+                                             0,
+                                             encoded->bytecode.data(),
+                                             encoded->bytecode.size(),
+                                             encoded->designDatabase.data(),
+                                             encoded->designDatabase.size(),
+                                             encoded->stateBitCount,
+                                             bytecodeChecksum,
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
   ASSERT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_OK);
   talos_rt_context *runtime = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &runtime),
@@ -2780,22 +2773,22 @@ TEST(GeneratedDesignDatabase, LiveClassMembers) {
   for (unsigned byte = 0; byte != 8; ++byte)
     bytecodeChecksum |= uint64_t{encoded->bytecode[32 + byte]} << (byte * 8);
   talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                               encoded->executionFlags,
-                                               0,
-                                               encoded->bytecode.data(),
-                                               encoded->bytecode.size(),
-                                               encoded->designDatabase.data(),
-                                               encoded->designDatabase.size(),
-                                               encoded->stateBitCount,
-                                               bytecodeChecksum,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0};
+                                             encoded->executionFlags,
+                                             0,
+                                             encoded->bytecode.data(),
+                                             encoded->bytecode.size(),
+                                             encoded->designDatabase.data(),
+                                             encoded->designDatabase.size(),
+                                             encoded->stateBitCount,
+                                             bytecodeChecksum,
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
   ASSERT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_OK);
   talos_rt_context *runtime = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &runtime),
@@ -2825,8 +2818,8 @@ TEST(GeneratedDesignDatabase, LiveClassMembers) {
     uint32_t kind = 0;
     bool statement = false;
     ASSERT_EQ(talos_rt_cached_vpi_relation_target(runtime,
-                                                    memberRange.first + index,
-                                                    &cursor, &kind, &statement),
+                                                  memberRange.first + index,
+                                                  &cursor, &kind, &statement),
               TALOS_RT_OK);
     VPIClassMemberBinding binding{};
     ASSERT_EQ(talos_rt_cached_vpi_class_member(runtime, cursor, &binding),
@@ -2854,7 +2847,7 @@ TEST(GeneratedDesignDatabase, LiveClassMembers) {
   const uint64_t instanceSize = bindings.at("next").byteOffset + sizeof(void *);
   const talos_rt_trace_entry_v1 traceEntry{
       bindings.at("next").byteOffset, 0,      1, TALOS_RT_TRACE_STRONG,
-      TALOS_RT_MANAGED_SLOT_CLASS,  nullptr};
+      TALOS_RT_MANAGED_SLOT_CLASS,    nullptr};
   const talos_rt_trace_layout_v1 traceLayout{
       TALOS_RT_VERSION, 0, instanceSize, alignof(void *), &traceEntry, 1};
   talos_rt_class_descriptor_v1 descriptor{};
@@ -2875,16 +2868,16 @@ TEST(GeneratedDesignDatabase, LiveClassMembers) {
     uint8_t bits = index ? 0xc3 : 0x5a;
     uint8_t flags = 0xa9, unknown = 0x0c;
     ASSERT_EQ(talos_rt_v1_object_write(objects[index],
-                                         bindings.at("number").byteOffset,
-                                         &number, sizeof(number)),
+                                       bindings.at("number").byteOffset,
+                                       &number, sizeof(number)),
               TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_object_write(objects[index],
-                                         bindings.at("bits").byteOffset, &bits,
-                                         sizeof(bits)),
+                                       bindings.at("bits").byteOffset, &bits,
+                                       sizeof(bits)),
               TALOS_RT_OK);
-    ASSERT_EQ(talos_rt_v1_object_write_planes(
-                  objects[index], bindings.at("flags").byteOffset, &flags,
-                  &unknown, sizeof(flags)),
+    ASSERT_EQ(talos_rt_v1_object_write_planes(objects[index],
+                                              bindings.at("flags").byteOffset,
+                                              &flags, &unknown, sizeof(flags)),
               TALOS_RT_OK);
   }
   ASSERT_EQ(talos_rt_v1_object_field_store(
@@ -2899,9 +2892,9 @@ TEST(GeneratedDesignDatabase, LiveClassMembers) {
                   name.size(), &variables[index]),
               TALOS_RT_OK);
     uint64_t word = talos_rt_managed_word_from_object(objects[index]);
-    ASSERT_EQ(talos_rt_v1_design_write(runtime, variables[index], &word,
-                                         nullptr, 64),
-              TALOS_RT_OK);
+    ASSERT_EQ(
+        talos_rt_v1_design_write(runtime, variables[index], &word, nullptr, 64),
+        TALOS_RT_OK);
     variableHandles[index] = vpi_handle_by_name(name.data(), nullptr);
     ASSERT_NE(variableHandles[index], nullptr);
     objectHandles[index] = vpi_handle(vpiClassObj, variableHandles[index]);
@@ -2909,8 +2902,8 @@ TEST(GeneratedDesignDatabase, LiveClassMembers) {
   }
   uint64_t sharedValue = 41;
   ASSERT_EQ(talos_rt_v1_design_write(runtime,
-                                       bindings.at("shared").backingStorage,
-                                       &sharedValue, nullptr, 32),
+                                     bindings.at("shared").backingStorage,
+                                     &sharedValue, nullptr, 32),
             TALOS_RT_OK);
   auto members = [](vpiHandle owner) {
     std::unordered_map<std::string, vpiHandle> result;
@@ -3089,8 +3082,7 @@ TEST(GeneratedDesignDatabase, LiveClassMembers) {
     put64(image, field::HeaderChecksum, imageChecksum(image));
     execution.design_database = image.data();
     execution.design_database_size = image.size();
-    EXPECT_EQ(talos_rt_v1_design_validate(&execution),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_INVALID_DESIGN);
   };
   for (uint64_t badClass : {UINT64_C(0), UINT64_C(42)}) {
     auto image = original();
@@ -3140,22 +3132,22 @@ TEST(GeneratedDesignDatabase, InheritedClassMembers) {
   for (unsigned byte = 0; byte != 8; ++byte)
     bytecodeChecksum |= uint64_t{encoded->bytecode[32 + byte]} << (byte * 8);
   talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                               encoded->executionFlags,
-                                               0,
-                                               encoded->bytecode.data(),
-                                               encoded->bytecode.size(),
-                                               encoded->designDatabase.data(),
-                                               encoded->designDatabase.size(),
-                                               encoded->stateBitCount,
-                                               bytecodeChecksum,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0};
+                                             encoded->executionFlags,
+                                             0,
+                                             encoded->bytecode.data(),
+                                             encoded->bytecode.size(),
+                                             encoded->designDatabase.data(),
+                                             encoded->designDatabase.size(),
+                                             encoded->stateBitCount,
+                                             bytecodeChecksum,
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
   ASSERT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_OK);
   talos_rt_context *runtime = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &runtime),
@@ -3180,8 +3172,7 @@ TEST(GeneratedDesignDatabase, InheritedClassMembers) {
     descriptor.instance_size = layout->size;
     descriptor.instance_alignment = layout->alignment;
     descriptor.base = id == 2 ? &descriptors[0] : nullptr;
-    ASSERT_EQ(talos_rt_v1_class_register(runtime, &descriptor),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_class_register(runtime, &descriptor), TALOS_RT_OK);
     for (const auto &field : layout->fields) {
       auto declaration = field.declaration;
       offsets.emplace(declaration.getSymName().str(), field.offset);
@@ -3191,7 +3182,7 @@ TEST(GeneratedDesignDatabase, InheritedClassMembers) {
               TALOS_RT_OK);
     VPIRelationRange range{};
     ASSERT_EQ(talos_rt_cached_vpi_relation_range(runtime, type, vpiVariables,
-                                                   true, &range),
+                                                 true, &range),
               TALOS_RT_OK);
     ASSERT_EQ(range.count, layout->fields.size());
     for (uint64_t index = 0; index != range.count; ++index) {
@@ -3222,11 +3213,11 @@ TEST(GeneratedDesignDatabase, InheritedClassMembers) {
        {std::pair{"number", int32_t{17}}, std::pair{"escaped", int32_t{23}},
         std::pair{"record", int32_t{52}}, std::pair{"own", int32_t{41}}})
     ASSERT_EQ(talos_rt_v1_object_write(object, offsets.at(name), &number,
-                                         sizeof(number)),
+                                       sizeof(number)),
               TALOS_RT_OK);
   uint8_t flags = 0x55, unknown = 0;
-  ASSERT_EQ(talos_rt_v1_object_write_planes(object, offsets.at("flags"),
-                                              &flags, &unknown, sizeof(flags)),
+  ASSERT_EQ(talos_rt_v1_object_write_planes(object, offsets.at("flags"), &flags,
+                                            &unknown, sizeof(flags)),
             TALOS_RT_OK);
   char variableName[] = "top.obj";
   talos_rt_design_cursor_v1 variable{};
@@ -3244,9 +3235,9 @@ TEST(GeneratedDesignDatabase, InheritedClassMembers) {
                 sizeof(arrayName) - 1, &array),
             TALOS_RT_OK);
   std::array<uint64_t, 2> arrayWords{word, word};
-  ASSERT_EQ(talos_rt_v1_design_write(runtime, array, arrayWords.data(),
-                                       nullptr, 128),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_design_write(runtime, array, arrayWords.data(), nullptr, 128),
+      TALOS_RT_OK);
   vpiHandle variableHandle = vpi_handle_by_name(variableName, nullptr);
   ASSERT_NE(variableHandle, nullptr);
   vpiHandle objectHandle = vpi_handle(vpiClassObj, variableHandle);
@@ -3359,9 +3350,9 @@ TEST(GeneratedDesignDatabase, InheritedClassMembers) {
   ASSERT_EQ(talos_rt_v1_design_write(runtime, variable, &word, nullptr, 64),
             TALOS_RT_OK);
   arrayWords.fill(0);
-  ASSERT_EQ(talos_rt_v1_design_write(runtime, array, arrayWords.data(),
-                                       nullptr, 128),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_design_write(runtime, array, arrayWords.data(), nullptr, 128),
+      TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_root_pop(lane, &root), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);
   for (vpiHandle stale : {methods.at("visit"), methods.at("other.visit"),
@@ -3410,22 +3401,22 @@ TEST(GeneratedDesignDatabase, ClassMemberArrays) {
   for (unsigned byte = 0; byte != 8; ++byte)
     checksum |= uint64_t{encoded->bytecode[32 + byte]} << (byte * 8);
   talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                               encoded->executionFlags,
-                                               0,
-                                               encoded->bytecode.data(),
-                                               encoded->bytecode.size(),
-                                               encoded->designDatabase.data(),
-                                               encoded->designDatabase.size(),
-                                               encoded->stateBitCount,
-                                               checksum,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0};
+                                             encoded->executionFlags,
+                                             0,
+                                             encoded->bytecode.data(),
+                                             encoded->bytecode.size(),
+                                             encoded->designDatabase.data(),
+                                             encoded->designDatabase.size(),
+                                             encoded->stateBitCount,
+                                             checksum,
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
   ASSERT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_OK);
   talos_rt_context *runtime = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &runtime),
@@ -3456,22 +3447,20 @@ TEST(GeneratedDesignDatabase, ClassMemberArrays) {
   ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &root, &object), TALOS_RT_OK);
   std::array<uint64_t, 9> eventIDs{};
   for (auto &id : eventIDs)
-    ASSERT_EQ(talos_rt_v1_scheduler_event_create(runtime, &id),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_scheduler_event_create(runtime, &id), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_object_write(object, offsets.at("ready"),
-                                       eventIDs.data(), sizeof(uint64_t)),
+                                     eventIDs.data(), sizeof(uint64_t)),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_object_write(object, offsets.at("events"),
-                                       eventIDs.data() + 1,
-                                       4 * sizeof(uint64_t)),
+                                     eventIDs.data() + 1, 4 * sizeof(uint64_t)),
             TALOS_RT_OK);
   talos_rt_design_cursor_v1 canonicalCursor{};
   ASSERT_EQ(talos_rt_cached_vpi_class_typespec(runtime, 1, &canonicalCursor),
             TALOS_RT_OK);
   VPIRelationRange arrayRange{};
   ASSERT_EQ(talos_rt_cached_vpi_relation_range(runtime, canonicalCursor,
-                                                 vpiNamedEventArray, true,
-                                                 &arrayRange),
+                                               vpiNamedEventArray, true,
+                                               &arrayRange),
             TALOS_RT_OK);
   ASSERT_EQ(arrayRange.count, 2u);
   talos_rt_design_cursor_v1 staticStorage{};
@@ -3480,8 +3469,8 @@ TEST(GeneratedDesignDatabase, ClassMemberArrays) {
     uint32_t kind = 0;
     bool statement = false;
     ASSERT_EQ(talos_rt_cached_vpi_relation_target(runtime,
-                                                    arrayRange.first + index,
-                                                    &member, &kind, &statement),
+                                                  arrayRange.first + index,
+                                                  &member, &kind, &statement),
               TALOS_RT_OK);
     VPIClassMemberBinding binding{};
     ASSERT_EQ(talos_rt_cached_vpi_class_member(runtime, member, &binding),
@@ -3494,7 +3483,7 @@ TEST(GeneratedDesignDatabase, ClassMemberArrays) {
   }
   ASSERT_NE(staticStorage.offset, 0u);
   ASSERT_EQ(talos_rt_v1_design_write(runtime, staticStorage,
-                                       eventIDs.data() + 5, nullptr, 256),
+                                     eventIDs.data() + 5, nullptr, 256),
             TALOS_RT_OK);
   char variableName[] = "top.obj";
   talos_rt_design_cursor_v1 variable{};
@@ -3767,22 +3756,22 @@ TEST(GeneratedDesignDatabase, VirtualInterfaceActual) {
   for (unsigned byte = 0; byte != 8; ++byte)
     checksum |= uint64_t{encoded->bytecode[32 + byte]} << (byte * 8);
   talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                               encoded->executionFlags,
-                                               0,
-                                               encoded->bytecode.data(),
-                                               encoded->bytecode.size(),
-                                               encoded->designDatabase.data(),
-                                               encoded->designDatabase.size(),
-                                               encoded->stateBitCount,
-                                               checksum,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0};
+                                             encoded->executionFlags,
+                                             0,
+                                             encoded->bytecode.data(),
+                                             encoded->bytecode.size(),
+                                             encoded->designDatabase.data(),
+                                             encoded->designDatabase.size(),
+                                             encoded->stateBitCount,
+                                             checksum,
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
   ASSERT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_OK);
   talos_rt_context *runtime = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &runtime),
@@ -3853,9 +3842,8 @@ TEST(GeneratedDesignDatabase, VirtualInterfaceActual) {
                     &modport),
                 TALOS_RT_OK);
       VPIModportBinding binding{};
-      ASSERT_EQ(
-          talos_rt_cached_vpi_modport_binding(runtime, modport, &binding),
-          TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_cached_vpi_modport_binding(runtime, modport, &binding),
+                TALOS_RT_OK);
       EXPECT_EQ(binding.scope.offset, scope.offset);
       EXPECT_EQ(std::string_view(reinterpret_cast<const char *>(binding.name),
                                  binding.nameSize),
@@ -3891,8 +3879,7 @@ TEST(GeneratedDesignDatabase, VirtualInterfaceActual) {
   baseDescriptor.class_id = 2;
   baseDescriptor.instance_size = baseLayout->size;
   baseDescriptor.instance_alignment = baseLayout->alignment;
-  ASSERT_EQ(talos_rt_v1_class_register(runtime, &baseDescriptor),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_class_register(runtime, &baseDescriptor), TALOS_RT_OK);
   talos_rt_class_descriptor_v1 descriptor{};
   descriptor.base = &baseDescriptor;
   descriptor.version = TALOS_RT_VERSION;
@@ -3908,7 +3895,7 @@ TEST(GeneratedDesignDatabase, VirtualInterfaceActual) {
   auto objectStorage = lookup("top.obj");
   uint64_t objectWord = talos_rt_managed_word_from_object(object);
   ASSERT_EQ(talos_rt_v1_design_write(runtime, objectStorage, &objectWord,
-                                       nullptr, 64),
+                                     nullptr, 64),
             TALOS_RT_OK);
   vpiHandle variable = named("top.obj");
   vpiHandle receiver = vpi_handle(vpiClassObj, variable);
@@ -3953,13 +3940,13 @@ TEST(GeneratedDesignDatabase, VirtualInterfaceActual) {
   EXPECT_EQ(vpi_chk_error(nullptr), vpiNotice);
 
   auto writeGlobal = [&](std::string_view name, uint64_t scopeID) {
-    EXPECT_EQ(talos_rt_v1_design_write(runtime, lookup(name), &scopeID,
-                                         nullptr, 64),
-              TALOS_RT_OK);
+    EXPECT_EQ(
+        talos_rt_v1_design_write(runtime, lookup(name), &scopeID, nullptr, 64),
+        TALOS_RT_OK);
   };
   auto writeField = [&](const char *name, uint64_t scopeID) {
     EXPECT_EQ(talos_rt_v1_object_write(object, offsets.at(name), &scopeID,
-                                         sizeof(scopeID)),
+                                       sizeof(scopeID)),
               TALOS_RT_OK);
   };
   talos_rt_design_cursor_v1 canonicalCursor{};
@@ -3967,7 +3954,7 @@ TEST(GeneratedDesignDatabase, VirtualInterfaceActual) {
             TALOS_RT_OK);
   VPIRelationRange members{};
   ASSERT_EQ(talos_rt_cached_vpi_relation_range(runtime, canonicalCursor,
-                                                 vpiVariables, true, &members),
+                                               vpiVariables, true, &members),
             TALOS_RT_OK);
   talos_rt_design_cursor_v1 staticStorage{};
   for (uint64_t index = 0; index != members.count; ++index) {
@@ -3988,18 +3975,17 @@ TEST(GeneratedDesignDatabase, VirtualInterfaceActual) {
   writeGlobal("top.port", 3);
   std::array<uint64_t, 3> globalValues{2, 3, 0};
   ASSERT_EQ(talos_rt_v1_design_write(runtime, lookup("top.ports"),
-                                       globalValues.data(), nullptr, 192),
+                                     globalValues.data(), nullptr, 192),
             TALOS_RT_OK);
   writeField("plain", 3);
   writeField("port", 2);
   std::array<uint64_t, 3> objectValues{0, 2, 3};
   ASSERT_EQ(talos_rt_v1_object_write(object, offsets.at("ports"),
-                                       objectValues.data(),
-                                       sizeof(objectValues)),
+                                     objectValues.data(), sizeof(objectValues)),
             TALOS_RT_OK);
   uint64_t sharedValue = 3;
   ASSERT_EQ(talos_rt_v1_design_write(runtime, staticStorage, &sharedValue,
-                                       nullptr, 64),
+                                     nullptr, 64),
             TALOS_RT_OK);
   auto expectActual = [](vpiHandle source, vpiHandle expected) {
     vpiHandle actual = vpi_handle(vpiActual, source);
@@ -4052,16 +4038,15 @@ TEST(GeneratedDesignDatabase, VirtualInterfaceActual) {
   writeField("port", 3);
   globalValues[0] = 3;
   ASSERT_EQ(talos_rt_v1_design_write(runtime, lookup("top.ports"),
-                                       globalValues.data(), nullptr, 192),
+                                     globalValues.data(), nullptr, 192),
             TALOS_RT_OK);
   objectValues[1] = 3;
   ASSERT_EQ(talos_rt_v1_object_write(object, offsets.at("ports"),
-                                       objectValues.data(),
-                                       sizeof(objectValues)),
+                                     objectValues.data(), sizeof(objectValues)),
             TALOS_RT_OK);
   sharedValue = 2;
   ASSERT_EQ(talos_rt_v1_design_write(runtime, staticStorage, &sharedValue,
-                                       nullptr, 64),
+                                     nullptr, 64),
             TALOS_RT_OK);
   expectActual(globalPorts.at("plain"), second);
   expectActual(objectPorts.at("port"), secondPorts.at("m.dot"));
@@ -4075,7 +4060,7 @@ TEST(GeneratedDesignDatabase, VirtualInterfaceActual) {
 
   objectWord = 0;
   ASSERT_EQ(talos_rt_v1_design_write(runtime, objectStorage, &objectWord,
-                                       nullptr, 64),
+                                     nullptr, 64),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_root_pop(lane, &root), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);
@@ -4133,8 +4118,7 @@ TEST(GeneratedDesignDatabase, VirtualInterfaceActual) {
     put64(image, field::HeaderChecksum, imageChecksum(image));
     execution.design_database = image.data();
     execution.design_database_size = image.size();
-    EXPECT_EQ(talos_rt_v1_design_validate(&execution),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_INVALID_DESIGN);
   };
   auto image = original();
   uint32_t packed = 0;
@@ -4204,22 +4188,22 @@ TEST(GeneratedDesignDatabase, BuiltinClassInheritance) {
   for (unsigned byte = 0; byte != 8; ++byte)
     checksum |= uint64_t{encoded->bytecode[32 + byte]} << (byte * 8);
   talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                               encoded->executionFlags,
-                                               0,
-                                               encoded->bytecode.data(),
-                                               encoded->bytecode.size(),
-                                               encoded->designDatabase.data(),
-                                               encoded->designDatabase.size(),
-                                               encoded->stateBitCount,
-                                               checksum,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0};
+                                             encoded->executionFlags,
+                                             0,
+                                             encoded->bytecode.data(),
+                                             encoded->bytecode.size(),
+                                             encoded->designDatabase.data(),
+                                             encoded->designDatabase.size(),
+                                             encoded->stateBitCount,
+                                             checksum,
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
   ASSERT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_OK);
   talos_rt_context *runtime = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &runtime),
@@ -4309,22 +4293,22 @@ TEST(GeneratedDesignDatabase, LiveBuiltinClasses) {
   for (unsigned byte = 0; byte != 8; ++byte)
     checksum |= uint64_t{encoded->bytecode[32 + byte]} << (byte * 8);
   talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                               encoded->executionFlags,
-                                               0,
-                                               encoded->bytecode.data(),
-                                               encoded->bytecode.size(),
-                                               encoded->designDatabase.data(),
-                                               encoded->designDatabase.size(),
-                                               encoded->stateBitCount,
-                                               checksum,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0};
+                                             encoded->executionFlags,
+                                             0,
+                                             encoded->bytecode.data(),
+                                             encoded->bytecode.size(),
+                                             encoded->designDatabase.data(),
+                                             encoded->designDatabase.size(),
+                                             encoded->stateBitCount,
+                                             checksum,
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
   ASSERT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_OK);
   talos_rt_context *runtime = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &runtime),
@@ -4406,8 +4390,8 @@ TEST(GeneratedDesignDatabase, LiveBuiltinClasses) {
     auto &descriptor = descriptors[id - 1];
     auto &trace = traces[id - 1];
     auto &runtimeLayout = runtimeLayouts[id - 1];
-    runtimeLayout = {TALOS_RT_VERSION, 0,      layout->size,
-                     layout->alignment,  &trace, 1};
+    runtimeLayout = {TALOS_RT_VERSION,  0,      layout->size,
+                     layout->alignment, &trace, 1};
     trace.count = 1;
     descriptor.version = TALOS_RT_VERSION;
     descriptor.class_id = id;
@@ -4421,29 +4405,26 @@ TEST(GeneratedDesignDatabase, LiveBuiltinClasses) {
     } else {
       ASSERT_TRUE(layout->builtinBaseOffset);
       descriptor.builtin_base_offset = *layout->builtinBaseOffset;
-      descriptor.builtin_base_kind = id == 1
-                                         ? TALOS_RT_BUILTIN_CLASS_SEMAPHORE
-                                         : TALOS_RT_BUILTIN_CLASS_MAILBOX;
+      descriptor.builtin_base_kind = id == 1 ? TALOS_RT_BUILTIN_CLASS_SEMAPHORE
+                                             : TALOS_RT_BUILTIN_CLASS_MAILBOX;
       trace.offset = *layout->builtinBaseOffset;
       trace.kind = TALOS_RT_TRACE_STRONG;
       trace.slot_kind = id == 1 ? TALOS_RT_MANAGED_SLOT_SEMAPHORE
                                 : TALOS_RT_MANAGED_SLOT_MAILBOX;
     }
-    ASSERT_EQ(talos_rt_v1_class_register(runtime, &descriptor),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_class_register(runtime, &descriptor), TALOS_RT_OK);
   }
   std::array<talos_rt_object_v1 *, 4> objects{};
   talos_rt_gc_root_range_v1 roots{};
   ASSERT_EQ(talos_rt_v1_gc_root_range_push(lane, &roots, objects.data(),
-                                             objects.size()),
+                                           objects.size()),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_semaphore_create(lane, 2, &objects[0]),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_semaphore_create(lane, 2, &objects[0]), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_object_allocate(lane, &descriptors[1], &objects[1]),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_mailbox_create_typed(
-                lane, 77, TALOS_RT_ELEMENT_BITS, TALOS_RT_ELEMENT_SIGNED, 4,
-                4, 32, nullptr, 0, 0, &objects[2]),
+  ASSERT_EQ(talos_rt_v1_mailbox_create_typed(lane, 77, TALOS_RT_ELEMENT_BITS,
+                                             TALOS_RT_ELEMENT_SIGNED, 4, 4, 32,
+                                             nullptr, 0, 0, &objects[2]),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_object_allocate(lane, &descriptors[2], &objects[3]),
             TALOS_RT_OK);
@@ -4451,8 +4432,8 @@ TEST(GeneratedDesignDatabase, LiveBuiltinClasses) {
     uint64_t payload = talos_rt_managed_word_from_object(objects[2 * i]);
     ASSERT_EQ(
         talos_rt_v1_object_write(objects[2 * i + 1],
-                                   descriptors[i ? 2 : 0].builtin_base_offset,
-                                   &payload, sizeof(payload)),
+                                 descriptors[i ? 2 : 0].builtin_base_offset,
+                                 &payload, sizeof(payload)),
         TALOS_RT_OK);
   }
   std::array<talos_rt_design_cursor_v1, 8> storage{};
@@ -4477,9 +4458,8 @@ TEST(GeneratedDesignDatabase, LiveBuiltinClasses) {
   }
   for (size_t i = 0; i != 3; ++i) {
     uint64_t word = talos_rt_managed_word_from_object(objects[i ? 3 : 1]);
-    ASSERT_EQ(
-        talos_rt_v1_design_write(runtime, storage[i], &word, nullptr, 64),
-        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_design_write(runtime, storage[i], &word, nullptr, 64),
+              TALOS_RT_OK);
   }
   vpiHandle semaphoreObject = vpi_handle(vpiClassObj, semaphoreVariable);
   vpiHandle mailboxObject = vpi_handle(vpiClassObj, aliasedVariable);
@@ -4511,7 +4491,7 @@ TEST(GeneratedDesignDatabase, LiveBuiltinClasses) {
   EXPECT_EQ(success, 1u);
   uint32_t message = 23;
   ASSERT_EQ(talos_rt_v1_mailbox_try_put(lane, objects[3], &message, nullptr,
-                                          &success),
+                                        &success),
             TALOS_RT_OK);
   EXPECT_EQ(success, 1u);
 
@@ -4563,9 +4543,8 @@ TEST(GeneratedDesignDatabase, LiveBuiltinClasses) {
 
   const uint64_t zero = 0;
   for (size_t i = 0; i != 3; ++i)
-    ASSERT_EQ(
-        talos_rt_v1_design_write(runtime, storage[i], &zero, nullptr, 64),
-        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_design_write(runtime, storage[i], &zero, nullptr, 64),
+              TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);
   for (vpiHandle handle : {semaphoreObject, mailboxObject, mailboxAlias}) {
     EXPECT_EQ(vpi_get(vpiType, handle), vpiUndefined);
@@ -4587,8 +4566,7 @@ TEST(GeneratedDesignDatabase, LiveBuiltinClasses) {
     put64(bytes, field::HeaderChecksum, imageChecksum(bytes));
     execution.design_database = bytes.data();
     execution.design_database_size = bytes.size();
-    EXPECT_EQ(talos_rt_v1_design_validate(&execution),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_INVALID_DESIGN);
   };
   auto bytes = original();
   SemanticClassBindingWriter(bytes.data() + bindingOffsets[1])
@@ -4728,23 +4706,20 @@ TEST(GeneratedDesignDatabase, BuiltinClassAliases) {
       ASSERT_EQ(talos_rt_v1_gc_lane_create(runtime, &lane), TALOS_RT_OK);
       ASSERT_EQ(talos_rt_v1_gc_lane_enter(lane), TALOS_RT_OK);
       talos_rt_object_v1 *mailbox = nullptr;
-      ASSERT_EQ(
-          talos_rt_v1_mailbox_create_typed(lane, 77, TALOS_RT_ELEMENT_BITS,
-                                             TALOS_RT_ELEMENT_SIGNED, 4, 4,
-                                             32, nullptr, 0, 0, &mailbox),
-          TALOS_RT_OK);
-      talos_rt_gc_root_v1 root{};
-      ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &root, &mailbox),
+      ASSERT_EQ(talos_rt_v1_mailbox_create_typed(
+                    lane, 77, TALOS_RT_ELEMENT_BITS, TALOS_RT_ELEMENT_SIGNED, 4,
+                    4, 32, nullptr, 0, 0, &mailbox),
                 TALOS_RT_OK);
+      talos_rt_gc_root_v1 root{};
+      ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &root, &mailbox), TALOS_RT_OK);
       talos_rt_design_cursor_v1 cursor{};
       ASSERT_EQ(talos_rt_cached_design_lookup(
                     runtime, reinterpret_cast<const uint8_t *>(name.data()),
                     name.size(), &cursor),
                 TALOS_RT_OK);
       uint64_t value = talos_rt_managed_word_from_object(mailbox);
-      ASSERT_EQ(
-          talos_rt_v1_design_write(runtime, cursor, &value, nullptr, 64),
-          TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_design_write(runtime, cursor, &value, nullptr, 64),
+                TALOS_RT_OK);
       vpiHandle object = vpi_handle(vpiClassObj, variable);
       ASSERT_NE(object, nullptr);
       vpiHandle objectIterator = vpi_iterate(vpiParameter, object);
@@ -4758,9 +4733,8 @@ TEST(GeneratedDesignDatabase, BuiltinClassAliases) {
       EXPECT_EQ(vpi_scan(objectIterator), nullptr);
       EXPECT_EQ(vpi_compare_objects(objectParameter, parameter), 1);
       value = 0;
-      ASSERT_EQ(
-          talos_rt_v1_design_write(runtime, cursor, &value, nullptr, 64),
-          TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_design_write(runtime, cursor, &value, nullptr, 64),
+                TALOS_RT_OK);
       ASSERT_EQ(talos_rt_v1_gc_root_pop(lane, &root), TALOS_RT_OK);
       ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);
       EXPECT_EQ(vpi_get(vpiType, object), vpiUndefined);
@@ -4797,22 +4771,22 @@ TEST(GeneratedDesignDatabase, SourceTypeParameters) {
   for (unsigned byte = 0; byte != 8; ++byte)
     bytecodeChecksum |= uint64_t{encoded->bytecode[32 + byte]} << (byte * 8);
   talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                               encoded->executionFlags,
-                                               0,
-                                               encoded->bytecode.data(),
-                                               encoded->bytecode.size(),
-                                               encoded->designDatabase.data(),
-                                               encoded->designDatabase.size(),
-                                               encoded->stateBitCount,
-                                               bytecodeChecksum,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0};
+                                             encoded->executionFlags,
+                                             0,
+                                             encoded->bytecode.data(),
+                                             encoded->bytecode.size(),
+                                             encoded->designDatabase.data(),
+                                             encoded->designDatabase.size(),
+                                             encoded->stateBitCount,
+                                             bytecodeChecksum,
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
   ASSERT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_OK);
   talos_rt_context *runtime = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &runtime),
@@ -4899,8 +4873,7 @@ TEST(GeneratedDesignDatabase, SourceTypeParameters) {
     put64(image, field::HeaderChecksum, imageChecksum(image));
     execution.design_database = image.data();
     execution.design_database_size = image.size();
-    EXPECT_EQ(talos_rt_v1_design_validate(&execution),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_INVALID_DESIGN);
   };
   // Rootless typespecs require the exact unresolved declaration proof.
   auto image = original();

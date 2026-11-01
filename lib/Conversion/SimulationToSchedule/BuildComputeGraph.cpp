@@ -203,8 +203,7 @@ void TalosSimBuildComputeGraphPass::runOnOperation() {
   // IEEE 1800-2023 4.3) and left processes that only read and wait. They are
   // no actors and no observers; erase them before describing the design, and
   // never reuse a graph that still names them.
-  bool pruned = pruneEffectFree &&
-                *vpiMode == schedule::ComputeVPIMode::Off &&
+  bool pruned = pruneEffectFree && *vpiMode == schedule::ComputeVPIMode::Off &&
                 simlowering::removeEffectFreeProcesses(design) != 0;
   if (reuseKnownCurrentGraph && !pruned) {
     schedule::ComputeGraphAttr graph = design.getComputeGraphAttr();
@@ -272,6 +271,6 @@ void TalosSimBuildComputeGraphPass::runOnOperation() {
 std::unique_ptr<mlir::Pass> createTalosSimBuildCurrentComputeGraphPass(
     TalosSimBuildComputeGraphPassOptions options) {
   return std::make_unique<TalosSimBuildComputeGraphPass>(std::move(options),
-                                                           true);
+                                                         true);
 }
 } // namespace talos

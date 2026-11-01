@@ -19,8 +19,7 @@ namespace talos::analysis {
 /// contiguous chunks. mlir::parallelFor orders diagnostics per element under a
 /// lock, which dominates when there are many small elements.
 template <typename Func>
-void parallelForChunked(mlir::MLIRContext *context, size_t count,
-                        Func &&func) {
+void parallelForChunked(mlir::MLIRContext *context, size_t count, Func &&func) {
   constexpr size_t maxChunks = 256;
   size_t chunks = std::min(count, maxChunks);
   mlir::parallelFor(context, 0, chunks, [&](size_t chunk) {
@@ -50,8 +49,8 @@ inline bool walksConcurrently(mlir::Operation *root, size_t children) {
 /// Returns the `OpT` operations under `root`, `root` included, for which
 /// `select` holds, in the order `root->walk<Order>` visits them. The subtrees
 /// of a module's or design's children are walked concurrently, so `select`
-/// may only read IR. Gathering first and then rewriting serially in this order gives the
-/// same result as rewriting during a single walk.
+/// may only read IR. Gathering first and then rewriting serially in this order
+/// gives the same result as rewriting during a single walk.
 template <typename OpT, mlir::WalkOrder Order = mlir::WalkOrder::PostOrder,
           typename Select>
 llvm::SmallVector<OpT> collectInWalkOrder(mlir::Operation *root,

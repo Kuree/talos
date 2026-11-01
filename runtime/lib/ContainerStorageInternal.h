@@ -83,10 +83,9 @@ inline uint64_t assocSlotStride(const talos_rt_element_type_v1 *element) {
 /// Materialize and publish the cached index-sorted slot order for an
 /// associative array. The first ordering pass may allocate the cache.
 talos_rt_status ensureAssocOrdered(talos_rt_gc_lane_v1 *lane,
-                                     talos_rt_object_v1 *array);
-talos_rt_status
-ensureAssocOrderedWithoutSafepoint(talos_rt_gc_lane_v1 *lane,
                                    talos_rt_object_v1 *array);
+talos_rt_status ensureAssocOrderedWithoutSafepoint(talos_rt_gc_lane_v1 *lane,
+                                                   talos_rt_object_v1 *array);
 
 } // namespace talos::runtime_detail
 

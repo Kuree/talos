@@ -2,8 +2,8 @@
 
 #include "talos/Conversion/SlangToTalos.h"
 
-#include "talos/Dialect/Talos/TalosOps.h"
 #include "talos/Dialect/Slang/SlangOps.h"
+#include "talos/Dialect/Talos/TalosOps.h"
 
 #include "mlir/IR/AttrTypeSubElements.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -128,29 +128,26 @@ static_assert(haveSameEncoding(slangir::CoverageBinKind::Bins,
                                ir::SVCoverageBinKind::Bins) &&
               haveSameEncoding(slangir::CoverageBinKind::IgnoreBins,
                                ir::SVCoverageBinKind::IgnoreBins));
-static_assert(
-    haveSameEncoding(slangir::CoverageEventKind::None,
-                     ir::SVCoverageEventKind::None) &&
-    haveSameEncoding(slangir::CoverageEventKind::Clocking,
-                     ir::SVCoverageEventKind::Clocking) &&
-    haveSameEncoding(slangir::CoverageEventKind::CustomSample,
-                     ir::SVCoverageEventKind::CustomSample) &&
-    haveSameEncoding(slangir::CoverageEventKind::Block,
-                     ir::SVCoverageEventKind::Block) &&
-    haveSameEncoding(slangir::CoverageEventKind::Inherited,
-                     ir::SVCoverageEventKind::Inherited));
-static_assert(
-    haveSameEncoding(slangir::CoverageOptionOwnerKind::Covergroup,
-                     ir::SVCoverageOptionOwnerKind::Covergroup) &&
-    haveSameEncoding(slangir::CoverageOptionOwnerKind::Coverpoint,
-                     ir::SVCoverageOptionOwnerKind::Coverpoint) &&
-    haveSameEncoding(slangir::CoverageOptionOwnerKind::Cross,
-                     ir::SVCoverageOptionOwnerKind::Cross));
-static_assert(
-    haveSameEncoding(slangir::CoverageOptionScopeKind::Instance,
-                     ir::SVCoverageOptionScopeKind::Instance) &&
-    haveSameEncoding(slangir::CoverageOptionScopeKind::Type,
-                     ir::SVCoverageOptionScopeKind::Type));
+static_assert(haveSameEncoding(slangir::CoverageEventKind::None,
+                               ir::SVCoverageEventKind::None) &&
+              haveSameEncoding(slangir::CoverageEventKind::Clocking,
+                               ir::SVCoverageEventKind::Clocking) &&
+              haveSameEncoding(slangir::CoverageEventKind::CustomSample,
+                               ir::SVCoverageEventKind::CustomSample) &&
+              haveSameEncoding(slangir::CoverageEventKind::Block,
+                               ir::SVCoverageEventKind::Block) &&
+              haveSameEncoding(slangir::CoverageEventKind::Inherited,
+                               ir::SVCoverageEventKind::Inherited));
+static_assert(haveSameEncoding(slangir::CoverageOptionOwnerKind::Covergroup,
+                               ir::SVCoverageOptionOwnerKind::Covergroup) &&
+              haveSameEncoding(slangir::CoverageOptionOwnerKind::Coverpoint,
+                               ir::SVCoverageOptionOwnerKind::Coverpoint) &&
+              haveSameEncoding(slangir::CoverageOptionOwnerKind::Cross,
+                               ir::SVCoverageOptionOwnerKind::Cross));
+static_assert(haveSameEncoding(slangir::CoverageOptionScopeKind::Instance,
+                               ir::SVCoverageOptionScopeKind::Instance) &&
+              haveSameEncoding(slangir::CoverageOptionScopeKind::Type,
+                               ir::SVCoverageOptionScopeKind::Type));
 static_assert(
     haveSameEncoding(slangir::CoverageOptionKind::Name,
                      ir::SVCoverageOptionKind::Name) &&
@@ -182,24 +179,20 @@ static_assert(
                      ir::SVCoverageOptionKind::DistributeFirst) &&
     haveSameEncoding(slangir::CoverageOptionKind::RealInterval,
                      ir::SVCoverageOptionKind::RealInterval));
-static_assert(
-    haveSameEncoding(slangir::CoverageSelectUnaryOperator::Negation,
-                     ir::SVCoverageSelectUnaryOperator::Negation));
-static_assert(
-    haveSameEncoding(slangir::CoverageExpressionRole::Sample,
-                     ir::SVCoverageExpressionRole::Sample) &&
-    haveSameEncoding(slangir::CoverageExpressionRole::Iff,
-                     ir::SVCoverageExpressionRole::Iff));
-static_assert(
-    haveSameEncoding(slangir::CoverageBlockEventKind::Begin,
-                     ir::SVCoverageBlockEventKind::Begin) &&
-    haveSameEncoding(slangir::CoverageBlockEventKind::End,
-                     ir::SVCoverageBlockEventKind::End));
-static_assert(
-    haveSameEncoding(slangir::CoverageSelectBinaryOperator::And,
-                     ir::SVCoverageSelectBinaryOperator::And) &&
-    haveSameEncoding(slangir::CoverageSelectBinaryOperator::Or,
-                     ir::SVCoverageSelectBinaryOperator::Or));
+static_assert(haveSameEncoding(slangir::CoverageSelectUnaryOperator::Negation,
+                               ir::SVCoverageSelectUnaryOperator::Negation));
+static_assert(haveSameEncoding(slangir::CoverageExpressionRole::Sample,
+                               ir::SVCoverageExpressionRole::Sample) &&
+              haveSameEncoding(slangir::CoverageExpressionRole::Iff,
+                               ir::SVCoverageExpressionRole::Iff));
+static_assert(haveSameEncoding(slangir::CoverageBlockEventKind::Begin,
+                               ir::SVCoverageBlockEventKind::Begin) &&
+              haveSameEncoding(slangir::CoverageBlockEventKind::End,
+                               ir::SVCoverageBlockEventKind::End));
+static_assert(haveSameEncoding(slangir::CoverageSelectBinaryOperator::And,
+                               ir::SVCoverageSelectBinaryOperator::And) &&
+              haveSameEncoding(slangir::CoverageSelectBinaryOperator::Or,
+                               ir::SVCoverageSelectBinaryOperator::Or));
 static_assert(
     haveSameEncoding(slangir::CoverageBinChildRole::Iff,
                      ir::SVCoverageBinChildRole::Iff) &&

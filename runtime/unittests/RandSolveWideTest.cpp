@@ -707,8 +707,7 @@ TEST_F(RandSolveWideTest, RejectsMalformedConstraintEnabledInstructions) {
         Instruction{TALOS_RT_RANDOM_PUSH_CONSTRAINT_ENABLED_V1, 1,
                     TALOS_RT_RANDOM_INSTRUCTION_SIGNED},
         Instruction{TALOS_RT_RANDOM_PUSH_CONSTRAINT_ENABLED_V1, 1, 0, 64},
-        Instruction{TALOS_RT_RANDOM_PUSH_CONSTRAINT_ENABLED_V1, 1, 0, 0,
-                    1}}) {
+        Instruction{TALOS_RT_RANDOM_PUSH_CONSTRAINT_ENABLED_V1, 1, 0, 0, 1}}) {
     std::vector<uint8_t> bytes =
         program(65, 0,
                 {instruction,
@@ -1029,8 +1028,7 @@ TEST_F(RandSolveWideTest, WeightedWideMassIgnoresCompanionMultiplicity) {
        {TALOS_RT_RANDOM_GT_V1, 1},
        {TALOS_RT_RANDOM_LOGICAL_AND_V1, 1},
        {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, UINT32_MAX}},
-      TALOS_RT_RANDOM_PROGRAM_HAS_DIST |
-          TALOS_RT_RANDOM_PROGRAM_EXACT_WEIGHTED,
+      TALOS_RT_RANDOM_PROGRAM_HAS_DIST | TALOS_RT_RANDOM_PROGRAM_EXACT_WEIGHTED,
       {}, {},
       {{0, UINT32_MAX, 0, 1, 0, 1, 0, 0, TALOS_RT_RANDOM_DIST_RAW_WEIGHT},
        {0, UINT32_MAX, 0, 1, 1, 1, 1, 1, TALOS_RT_RANDOM_DIST_RAW_WEIGHT}});
@@ -1148,16 +1146,15 @@ TEST_F(RandSolveWideTest, WeightedExpressionTargetWeighsEachValue) {
   for (uint32_t bit = 0; bit != 3; ++bit)
     instructions.push_back(
         {TALOS_RT_RANDOM_END_DIST_TARGET_BIT_V1, 3, 0, 0, bit});
-  uint32_t target = TALOS_RT_RANDOM_DIST_RAW_WEIGHT |
-                    TALOS_RT_RANDOM_DIST_EXPRESSION_TARGET;
-  auto bytes = program(
-      4, 1, instructions,
-      TALOS_RT_RANDOM_PROGRAM_HAS_DIST |
-          TALOS_RT_RANDOM_PROGRAM_EXACT_WEIGHTED,
-      {}, {},
-      {{0, UINT32_MAX, 0, 3, 0, 1, 0, 0, target},
-       {0, UINT32_MAX, 0, 3, 1, 6, 1, 0,
-        target | TALOS_RT_RANDOM_DIST_PER_RANGE}});
+  uint32_t target =
+      TALOS_RT_RANDOM_DIST_RAW_WEIGHT | TALOS_RT_RANDOM_DIST_EXPRESSION_TARGET;
+  auto bytes = program(4, 1, instructions,
+                       TALOS_RT_RANDOM_PROGRAM_HAS_DIST |
+                           TALOS_RT_RANDOM_PROGRAM_EXACT_WEIGHTED,
+                       {}, {},
+                       {{0, UINT32_MAX, 0, 3, 0, 1, 0, 0, target},
+                        {0, UINT32_MAX, 0, 3, 1, 6, 1, 0,
+                         target | TALOS_RT_RANDOM_DIST_PER_RANGE}});
   uint64_t start = 0, mask = 15, weight = 1, assignment = 0, state = 713;
   uint32_t width = 64, success = 0;
   unsigned values[8] = {};
@@ -1186,21 +1183,20 @@ TEST_F(RandSolveWideTest, WeightedProjectionNormalizesHugeLegalCardinalities) {
   // denominator and overlapping contributions without traversing the domain.
   uint32_t raw =
       TALOS_RT_RANDOM_DIST_RAW_WEIGHT | TALOS_RT_RANDOM_DIST_PER_RANGE;
-  auto bytes =
-      program(64, 1,
-              {{TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 64},
-               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 64, 0, 0, 0, {0}},
-               {TALOS_RT_RANDOM_NE_V1, 1},
-               {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, UINT32_MAX},
-               {TALOS_RT_RANDOM_PUSH_CAPTURE_V1, 129},
-               {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 129, 0, 0, 0, {0, 0, 0}},
-               {TALOS_RT_RANDOM_GT_V1, 1},
-               {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, UINT32_MAX}},
-              TALOS_RT_RANDOM_PROGRAM_HAS_DIST |
-                  TALOS_RT_RANDOM_PROGRAM_EXACT_WEIGHTED,
-              {}, {},
-              {{0, UINT32_MAX, 0, 64, 0, 0, 0, 0, raw},
-               {0, UINT32_MAX, 0, 64, 1, 1, 1, 0, raw}});
+  auto bytes = program(
+      64, 1,
+      {{TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 64},
+       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 64, 0, 0, 0, {0}},
+       {TALOS_RT_RANDOM_NE_V1, 1},
+       {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, UINT32_MAX},
+       {TALOS_RT_RANDOM_PUSH_CAPTURE_V1, 129},
+       {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 129, 0, 0, 0, {0, 0, 0}},
+       {TALOS_RT_RANDOM_GT_V1, 1},
+       {TALOS_RT_RANDOM_END_HARD_V1, 1, 0, UINT32_MAX}},
+      TALOS_RT_RANDOM_PROGRAM_HAS_DIST | TALOS_RT_RANDOM_PROGRAM_EXACT_WEIGHTED,
+      {}, {},
+      {{0, UINT32_MAX, 0, 64, 0, 0, 0, 0, raw},
+       {0, UINT32_MAX, 0, 64, 1, 1, 1, 0, raw}});
   uint64_t start = 0, mask = UINT64_MAX,
            captures[] = {UINT64_MAX, UINT64_MAX, 1};
   uint64_t assignment = 0, state = 713, otherBits = 0;
@@ -1229,8 +1225,8 @@ TEST_F(RandSolveWideTest, SamplesIndependentFieldsApart) {
   constexpr unsigned fields = 64, fieldWidth = 16;
   std::vector<Instruction> instructions;
   for (unsigned field = 0; field != fields; ++field) {
-    instructions.push_back({TALOS_RT_RANDOM_PUSH_VARIABLE_V1, fieldWidth, 0,
-                            field * fieldWidth});
+    instructions.push_back(
+        {TALOS_RT_RANDOM_PUSH_VARIABLE_V1, fieldWidth, 0, field * fieldWidth});
     instructions.push_back(
         {TALOS_RT_RANDOM_PUSH_LITERAL_V1, fieldWidth, 0, 0, 0, {1000}});
     instructions.push_back({TALOS_RT_RANDOM_LT_V1, 1});
@@ -1326,8 +1322,7 @@ TEST_F(RandSolveWideTest, SizeLayerSeparatesGuardedElements) {
     instructions.push_back({TALOS_RT_RANDOM_LT_V1, 1});
     instructions.push_back(
         {TALOS_RT_RANDOM_PUSH_VARIABLE_V1, 4, 0, 4 + 4 * element});
-    instructions.push_back(
-        {TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 0, {5}});
+    instructions.push_back({TALOS_RT_RANDOM_PUSH_LITERAL_V1, 4, 0, 0, 0, {5}});
     instructions.push_back({TALOS_RT_RANDOM_LT_V1, 1});
     instructions.push_back({TALOS_RT_RANDOM_LOGICAL_IMPLIES_V1, 1});
     if (element)

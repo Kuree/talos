@@ -4,10 +4,10 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Analysis/ManagedClassLayoutAnalysis.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "llvm/IR/DataLayout.h"
 #include "gtest/gtest.h"
@@ -44,22 +44,22 @@ TEST(GeneratedDesignDatabase, ManagedVirtualInterfaceArrays) {
   for (unsigned byte = 0; byte != 8; ++byte)
     checksum |= uint64_t{encoded->bytecode[32 + byte]} << (byte * 8);
   talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                               encoded->executionFlags,
-                                               0,
-                                               encoded->bytecode.data(),
-                                               encoded->bytecode.size(),
-                                               encoded->designDatabase.data(),
-                                               encoded->designDatabase.size(),
-                                               encoded->stateBitCount,
-                                               checksum,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0};
+                                             encoded->executionFlags,
+                                             0,
+                                             encoded->bytecode.data(),
+                                             encoded->bytecode.size(),
+                                             encoded->designDatabase.data(),
+                                             encoded->designDatabase.size(),
+                                             encoded->stateBitCount,
+                                             checksum,
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
   ASSERT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_OK);
   talos_rt_context *runtime = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &runtime),
@@ -98,9 +98,9 @@ TEST(GeneratedDesignDatabase, ManagedVirtualInterfaceArrays) {
             TALOS_RT_OK &&
         member.isStatic)
       target = member.backingStorage;
-    EXPECT_EQ(talos_rt_v1_design_write(runtime, target, words, unknown.data(),
-                                         width),
-              TALOS_RT_OK)
+    EXPECT_EQ(
+        talos_rt_v1_design_write(runtime, target, words, unknown.data(), width),
+        TALOS_RT_OK)
         << name;
   };
   auto integer = [&](vpiHandle handle) {
@@ -132,7 +132,7 @@ TEST(GeneratedDesignDatabase, ManagedVirtualInterfaceArrays) {
   std::array<talos_rt_object_v1 *, 8> objects{};
   talos_rt_gc_root_range_v1 roots{};
   ASSERT_EQ(talos_rt_v1_gc_root_range_push(lane, &roots, objects.data(),
-                                             objects.size()),
+                                           objects.size()),
             TALOS_RT_OK);
   auto create = [&](size_t slot, mlir::Type elementType, uint32_t kind,
                     uint64_t size) {
@@ -155,17 +155,14 @@ TEST(GeneratedDesignDatabase, ManagedVirtualInterfaceArrays) {
   create(0, interfaceType, TALOS_RT_CONTAINER_DYNAMIC_ARRAY, 2);
   create(1, interfaceType, TALOS_RT_CONTAINER_QUEUE, 0);
   create(2, interfaceType, TALOS_RT_CONTAINER_DYNAMIC_ARRAY, 1);
-  create(3,
-         mlir::cast<talos::sim::DynamicArrayType>(type(3)).getElementType(),
+  create(3, mlir::cast<talos::sim::DynamicArrayType>(type(3)).getElementType(),
          TALOS_RT_CONTAINER_DYNAMIC_ARRAY, 2);
-  create(4,
-         mlir::cast<talos::sim::DynamicArrayType>(type(4)).getElementType(),
+  create(4, mlir::cast<talos::sim::DynamicArrayType>(type(4)).getElementType(),
          TALOS_RT_CONTAINER_DYNAMIC_ARRAY, 1);
   create(5, interfaceType, TALOS_RT_CONTAINER_DYNAMIC_ARRAY, 0);
   uint64_t firstID = 2, secondID = 3, nullID = 0;
-  ASSERT_EQ(
-      talos_rt_v1_container_write(lane, objects[0], 0, &firstID, nullptr),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_container_write(lane, objects[0], 0, &firstID, nullptr),
+            TALOS_RT_OK);
   ASSERT_EQ(
       talos_rt_v1_container_write(lane, objects[0], 1, &secondID, nullptr),
       TALOS_RT_OK);
@@ -205,14 +202,11 @@ TEST(GeneratedDesignDatabase, ManagedVirtualInterfaceArrays) {
       portsOffset = field.offset;
   }
   ASSERT_NE(portsOffset, UINT64_MAX);
-  talos_rt_trace_entry_v1 trace{portsOffset,
-                                  0,
-                                  1,
-                                  TALOS_RT_TRACE_STRONG,
-                                  TALOS_RT_MANAGED_SLOT_CONTAINER,
-                                  nullptr};
-  talos_rt_trace_layout_v1 traceLayout{
-      TALOS_RT_VERSION, 0, layout->size, layout->alignment, &trace, 1};
+  talos_rt_trace_entry_v1 trace{
+      portsOffset, 0, 1, TALOS_RT_TRACE_STRONG, TALOS_RT_MANAGED_SLOT_CONTAINER,
+      nullptr};
+  talos_rt_trace_layout_v1 traceLayout{TALOS_RT_VERSION,  0,      layout->size,
+                                       layout->alignment, &trace, 1};
   talos_rt_class_descriptor_v1 descriptor{};
   descriptor.version = TALOS_RT_VERSION;
   descriptor.class_id = 1;
@@ -337,18 +331,15 @@ TEST(GeneratedDesignDatabase, ManagedVirtualInterfaceArrays) {
   EXPECT_EQ(vpi_handle(vpiActual, removed), nullptr);
   EXPECT_EQ(vpi_chk_error(nullptr), vpiNotice);
   EXPECT_EQ(vpi_scan(pending), nullptr);
-  ASSERT_EQ(talos_rt_v1_dynamic_array_resize(lane, objects[2], 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dynamic_array_resize(lane, objects[2], 0), TALOS_RT_OK);
   EXPECT_EQ(vpi_get(vpiSize, dynamic), 0);
   EXPECT_EQ(vpi_get(vpiSize, dynamicRanges[0]), 0);
   EXPECT_EQ(vpi_handle(vpiLeftRange, dynamic), nullptr);
   EXPECT_EQ(vpi_handle(vpiRightRange, dynamicRanges[0]), nullptr);
   EXPECT_EQ(vpi_iterate(vpiReg, dynamic), nullptr);
-  ASSERT_EQ(talos_rt_v1_dynamic_array_resize(lane, objects[2], 1),
+  ASSERT_EQ(talos_rt_v1_dynamic_array_resize(lane, objects[2], 1), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_container_write(lane, objects[2], 0, &firstID, nullptr),
             TALOS_RT_OK);
-  ASSERT_EQ(
-      talos_rt_v1_container_write(lane, objects[2], 0, &firstID, nullptr),
-      TALOS_RT_OK);
   actual(d0, first);
 
   // Class receivers govern bound-view lifetime; ordinary root/index metadata

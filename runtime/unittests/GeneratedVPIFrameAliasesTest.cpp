@@ -5,11 +5,11 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
 #include "talos/Runtime/StableHandle.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <cstdlib>
@@ -73,29 +73,21 @@ TEST(GeneratedDesignDatabase, FrameReferenceAliases) {
   ASSERT_EQ(execution.state_bit_count, 64u);
   ASSERT_EQ(talos_rt_v1_native_state_register_static(raw, 1, 3, 40),
             TALOS_RT_OK);
-  const talos_rt_trace_layout_v1 layout{
-      TALOS_RT_VERSION, 0, 24, 8, nullptr, 0};
+  const talos_rt_trace_layout_v1 layout{TALOS_RT_VERSION, 0, 24, 8, nullptr, 0};
   talos_rt_class_descriptor_v1 descriptor{};
   descriptor.version = TALOS_RT_VERSION;
   descriptor.class_id = 100;
   descriptor.instance_size = 24;
   descriptor.instance_alignment = 8;
   descriptor.layout = &layout;
-  const talos_rt_element_type_v1 element{TALOS_RT_VERSION,
-                                           TALOS_RT_ELEMENT_BITS,
-                                           123,
-                                           0,
-                                           0,
-                                           4,
-                                           4,
-                                           32,
-                                           nullptr,
-                                           nullptr};
+  const talos_rt_element_type_v1 element{
+      TALOS_RT_VERSION, TALOS_RT_ELEMENT_BITS, 123, 0, 0, 4, 4, 32, nullptr,
+      nullptr};
   for (unsigned kind = 0; kind != 5; ++kind) {
     SCOPED_TRACE(kind);
     uint64_t activation = 0;
-    ASSERT_EQ(talos_rt_v1_vpi_frame_enter(raw, 45, TALOS_RT_VPI_FRAME_CALL,
-                                            20, &activation),
+    ASSERT_EQ(talos_rt_v1_vpi_frame_enter(raw, 45, TALOS_RT_VPI_FRAME_CALL, 20,
+                                          &activation),
               TALOS_RT_OK);
     auto frame = vpi_handle(vpiFrame, nullptr);
     ASSERT_NE(frame, nullptr);
@@ -145,7 +137,7 @@ TEST(GeneratedDesignDatabase, FrameReferenceAliases) {
     } else {
       managed = 2;
       ASSERT_EQ(talos_rt_v1_queue_create(lane.getLane(), &element, UINT64_MAX,
-                                           &queue),
+                                         &queue),
                 TALOS_RT_OK);
       ASSERT_EQ(talos_rt_v1_gc_root_push(lane.getLane(), &queueRoot, &queue),
                 TALOS_RT_OK);
@@ -164,12 +156,10 @@ TEST(GeneratedDesignDatabase, FrameReferenceAliases) {
     EXPECT_EQ(
         talos_rt_v1_vpi_frame_bind_alias(raw, 999, owner, payload, managed),
         TALOS_RT_INVALID_ARGUMENT);
-    ASSERT_EQ(
-        talos_rt_v1_vpi_frame_bind_alias(raw, 1, owner, payload, managed),
-        TALOS_RT_OK);
-    EXPECT_EQ(
-        talos_rt_v1_vpi_frame_bind_alias(raw, 1, owner, payload, managed),
-        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_vpi_frame_bind_alias(raw, 1, owner, payload, managed),
+              TALOS_RT_OK);
+    EXPECT_EQ(talos_rt_v1_vpi_frame_bind_alias(raw, 1, owner, payload, managed),
+              TALOS_RT_OK);
     EXPECT_EQ(vpi_get(vpiHasActual, value), 1);
     EXPECT_EQ(read(value), 17);
     number = 23;
@@ -196,8 +186,7 @@ TEST(GeneratedDesignDatabase, FrameReferenceAliases) {
       EXPECT_EQ(u, 0u);
       EXPECT_EQ(raw->schedulerStatus, TALOS_RT_OK);
     } else if (kind == 2) {
-      ASSERT_EQ(talos_rt_v1_native_state_release(raw, payload, 0),
-                TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_native_state_release(raw, payload, 0), TALOS_RT_OK);
       unavailable(value);
     } else if (kind == 3) {
       uint16_t v = 0x101, u = 0x80;
@@ -225,8 +214,8 @@ TEST(GeneratedDesignDatabase, FrameReferenceAliases) {
       // A ref to a removed queue element retains that detached element.
       EXPECT_EQ(read(value), 23);
       number = 57;
-      ASSERT_EQ(talos_rt_v1_reference_path_store(lane.getLane(), owner,
-                                                   &number, nullptr),
+      ASSERT_EQ(talos_rt_v1_reference_path_store(lane.getLane(), owner, &number,
+                                                 nullptr),
                 TALOS_RT_OK);
       EXPECT_EQ(read(value), 57);
     }
@@ -251,8 +240,8 @@ TEST(GeneratedDesignDatabase, FrameReferenceAliases) {
   }
   // A managed word in an actual automatic variable remains weak as well.
   uint64_t activation = 0;
-  ASSERT_EQ(talos_rt_v1_vpi_frame_enter(raw, 45, TALOS_RT_VPI_FRAME_CALL,
-                                          20, &activation),
+  ASSERT_EQ(talos_rt_v1_vpi_frame_enter(raw, 45, TALOS_RT_VPI_FRAME_CALL, 20,
+                                        &activation),
             TALOS_RT_OK);
   auto frame = vpi_handle(vpiFrame, nullptr);
   ASSERT_NE(frame, nullptr);
@@ -271,8 +260,7 @@ TEST(GeneratedDesignDatabase, FrameReferenceAliases) {
               TALOS_RT_OK);
     auto object = vpi_handle(vpiClassObj, lock);
     ASSERT_NE(object, nullptr);
-    ASSERT_EQ(talos_rt_v1_native_state_release(raw, reference, 0),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_native_state_release(raw, reference, 0), TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_gc_collect(lane.getLane()), TALOS_RT_OK);
     EXPECT_EQ(vpi_get(vpiHasActual, lock), 0);
     EXPECT_EQ(vpi_get(vpiType, object), vpiUndefined);
@@ -282,8 +270,7 @@ TEST(GeneratedDesignDatabase, FrameReferenceAliases) {
     // descriptor instead of requiring equal physical and copy widths.
     auto declaration = mlir::cast<talos::sim::SimVPILocalDeclOp>(
         mlir::SymbolTable::lookupSymbolIn(design, "tagged"));
-    auto element =
-        talos::sim::getElementDescriptor(declaration.getValueType());
+    auto element = talos::sim::getElementDescriptor(declaration.getValueType());
     ASSERT_TRUE(element);
     EXPECT_EQ(element->valueSize, 2u);
     EXPECT_EQ(element->bitWidth, 16u);
@@ -299,12 +286,11 @@ TEST(GeneratedDesignDatabase, FrameReferenceAliases) {
     ASSERT_EQ(talos_rt_v1_gc_root_push(lane.getLane(), &queueRoot, &queue),
               TALOS_RT_OK);
     uint8_t bytes[2] = {5, 1};
-    ASSERT_EQ(
-        talos_rt_v1_queue_push(lane.getLane(), queue, 0, bytes, nullptr),
-        TALOS_RT_OK);
-    ASSERT_EQ(talos_rt_v1_reference_path_index_create(
-                  lane.getLane(), queue, 0, nullptr, 0, 0, nullptr, nullptr, 0,
-                  &path),
+    ASSERT_EQ(talos_rt_v1_queue_push(lane.getLane(), queue, 0, bytes, nullptr),
+              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_reference_path_index_create(lane.getLane(), queue, 0,
+                                                      nullptr, 0, 0, nullptr,
+                                                      nullptr, 0, &path),
               TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_gc_root_push(lane.getLane(), &pathRoot, &path),
               TALOS_RT_OK);
@@ -314,14 +300,12 @@ TEST(GeneratedDesignDatabase, FrameReferenceAliases) {
     ASSERT_NE(tagged, nullptr);
     EXPECT_EQ(vpi_get(vpiHasActual, tagged), 1);
     bytes[0] = 9;
-    ASSERT_EQ(talos_rt_v1_reference_path_store(lane.getLane(), path, bytes,
-                                                 nullptr),
-              TALOS_RT_OK);
+    ASSERT_EQ(
+        talos_rt_v1_reference_path_store(lane.getLane(), path, bytes, nullptr),
+        TALOS_RT_OK);
     EXPECT_EQ(vpi_get(vpiHasActual, tagged), 1);
-    ASSERT_EQ(talos_rt_v1_gc_root_pop(lane.getLane(), &pathRoot),
-              TALOS_RT_OK);
-    ASSERT_EQ(talos_rt_v1_gc_root_pop(lane.getLane(), &queueRoot),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_gc_root_pop(lane.getLane(), &pathRoot), TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_gc_root_pop(lane.getLane(), &queueRoot), TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_gc_collect(lane.getLane()), TALOS_RT_OK);
     EXPECT_EQ(vpi_get(vpiHasActual, tagged), 0);
   }

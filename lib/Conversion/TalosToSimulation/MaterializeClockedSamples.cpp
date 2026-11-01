@@ -81,8 +81,7 @@ public:
           }
           schedule::set(evaluator, targetName,
                         UnitAttr::get(design.getContext()));
-          ::talos::schedule::set<
-              ::talos::schedule::Field::DetachedControls>(
+          ::talos::schedule::set<::talos::schedule::Field::DetachedControls>(
               evaluator, UnitAttr::get(design.getContext()));
         }
         if (!requestInvalid)
@@ -138,8 +137,9 @@ public:
                                           current.getWidth(), current.getEdge(),
                                           current.getLoc()});
       });
-      auto plan = ::talos::schedule::get<
-          ::talos::schedule::Field::ClockedSamplePlan>(function);
+      auto plan =
+          ::talos::schedule::get<::talos::schedule::Field::ClockedSamplePlan>(
+              function);
       auto key = plan ? plan.getKey() : StringAttr{};
       if (key)
         planGroups[key.getValue()].push_back(function);
@@ -192,8 +192,9 @@ public:
         return lhs.getSymName() < rhs.getSymName();
       });
       sim::SimFuncOp sampler = group.front();
-      auto plan = ::talos::schedule::get<
-          ::talos::schedule::Field::ClockedSamplePlan>(sampler);
+      auto plan =
+          ::talos::schedule::get<::talos::schedule::Field::ClockedSamplePlan>(
+              sampler);
       auto id = plan.getId();
       auto hierarchy = plan.getHierarchy();
       if (!id || !id.getValue().isStrictlyPositive() || !hierarchy) {
@@ -205,8 +206,9 @@ public:
       bool compatible = true;
       ArrayRef<sim::SimFuncOp> duplicates(group);
       for (sim::SimFuncOp duplicate : duplicates.drop_front()) {
-        auto duplicatePlan = ::talos::schedule::get<
-            ::talos::schedule::Field::ClockedSamplePlan>(duplicate);
+        auto duplicatePlan =
+            ::talos::schedule::get<::talos::schedule::Field::ClockedSamplePlan>(
+                duplicate);
         compatible &= duplicate.getFunctionType() == sampler.getFunctionType();
         compatible &= duplicatePlan && duplicatePlan.getId() == id;
         if (duplicate.getNumArguments() == sampler.getNumArguments())
@@ -234,8 +236,8 @@ public:
       for (sim::SimFuncOp duplicate : duplicates.drop_front())
         duplicate.erase();
       sampler->setAttr("code_unit_id", id);
-      ::talos::schedule::remove<
-          ::talos::schedule::Field::ClockedSamplePlan>(sampler);
+      ::talos::schedule::remove<::talos::schedule::Field::ClockedSamplePlan>(
+          sampler);
       sim::SimCodeUnitDeclOp::create(
           declarationBuilder, sampler.getLoc(), codeUnitID, uint64_t{0},
           sim::EntryKind::Always, hierarchy,

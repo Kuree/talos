@@ -25,9 +25,9 @@
 
 extern "C" const talos_rt_process_descriptor_v1 generatedDescriptor asm(
     TALOS_TEST_SYMBOL("execution_process.__talos_process_descriptor"));
-extern "C" void generatedRamp(talos_rt_process_instance_v1 *, uint32_t,
-                              uint64_t *, uint64_t *)
-    asm(TALOS_TEST_SYMBOL("execution_process.__talos_coro_ramp"));
+extern "C" void generatedRamp(
+    talos_rt_process_instance_v1 *, uint32_t, uint64_t *,
+    uint64_t *) asm(TALOS_TEST_SYMBOL("execution_process.__talos_coro_ramp"));
 extern "C" const talos_rt_process_descriptor_v1 failingDescriptor asm(
     TALOS_TEST_SYMBOL("failing_process.__talos_process_descriptor"));
 extern "C" const talos_rt_process_descriptor_v1 orchestrationDescriptor asm(
@@ -53,7 +53,7 @@ uint64_t requestedNativeSize;
 uint64_t requestedNativeAlignment;
 
 talos_rt_status requestedNativeRequirements(uint64_t *size,
-                                              uint64_t *alignment) {
+                                            uint64_t *alignment) {
   if (!size || !alignment)
     return TALOS_RT_INVALID_ARGUMENT;
   *size = requestedNativeSize;
@@ -103,14 +103,14 @@ struct DualTierDescriptor {
   DualTierDescriptor() {
     const talos_rt_frame_field_v1 *wait = findWaitField();
     EXPECT_NE(wait, nullptr);
-    appendInstruction(code, 0, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0,
-                      0, 0, wait->offset);
-    appendInstruction(code, 1, TALOS_RT_BC_SUSPEND, TALOS_RT_BC_TYPE_NONE,
-                      0, TALOS_RT_SUSPEND_DELAY, 0, 1);
-    appendInstruction(code, 2, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0,
-                      0, 0, wait->offset);
-    appendInstruction(code, 3, TALOS_RT_BC_SUSPEND, TALOS_RT_BC_TYPE_NONE,
-                      0, TALOS_RT_SUSPEND_DELAY, 0, 1);
+    appendInstruction(code, 0, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0, 0, 0,
+                      wait->offset);
+    appendInstruction(code, 1, TALOS_RT_BC_SUSPEND, TALOS_RT_BC_TYPE_NONE, 0,
+                      TALOS_RT_SUSPEND_DELAY, 0, 1);
+    appendInstruction(code, 2, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0, 0, 0,
+                      wait->offset);
+    appendInstruction(code, 3, TALOS_RT_BC_SUSPEND, TALOS_RT_BC_TYPE_NONE, 0,
+                      TALOS_RT_SUSPEND_DELAY, 0, 1);
 
     uint64_t nativeSize = 0;
     uint64_t nativeAlignment = 0;
@@ -206,14 +206,14 @@ TEST(GeneratedProcess, NativeResumeTerminateAndSuspendedDestroy) {
             TALOS_RT_OK);
 
   talos_rt_fragment_action_v1 action{};
-  ASSERT_EQ(talos_rt_v1_process_instance_execute(
-                instance, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  ASSERT_EQ(talos_rt_v1_process_instance_execute(instance, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_OK);
   EXPECT_EQ(action.kind, TALOS_RT_FRAGMENT_SUSPEND);
   EXPECT_EQ(action.continuation, 1u);
   EXPECT_EQ(action.suspend_kind, TALOS_RT_SUSPEND_DELAY);
-  ASSERT_EQ(talos_rt_v1_process_instance_execute(
-                instance, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  ASSERT_EQ(talos_rt_v1_process_instance_execute(instance, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_OK);
   EXPECT_EQ(action.kind, TALOS_RT_FRAGMENT_SUSPEND);
   EXPECT_EQ(action.continuation, 2u);
@@ -224,8 +224,8 @@ TEST(GeneratedProcess, NativeResumeTerminateAndSuspendedDestroy) {
       talos_rt_v1_process_instance_frame(instance, &sameFrame, &frameSize),
       TALOS_RT_OK);
   EXPECT_EQ(sameFrame, frame);
-  ASSERT_EQ(talos_rt_v1_process_instance_execute(
-                instance, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  ASSERT_EQ(talos_rt_v1_process_instance_execute(instance, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_OK);
   EXPECT_EQ(action.kind, TALOS_RT_FRAGMENT_TERMINATE);
   EXPECT_EQ(instance->lifecycle, TALOS_RT_PROCESS_TERMINATED);
@@ -234,8 +234,8 @@ TEST(GeneratedProcess, NativeResumeTerminateAndSuspendedDestroy) {
   ASSERT_EQ(
       talos_rt_v1_process_instance_create(&generatedDescriptor, &instance),
       TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_process_instance_execute(
-                instance, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  ASSERT_EQ(talos_rt_v1_process_instance_execute(instance, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_OK);
   EXPECT_EQ(instance->lifecycle, TALOS_RT_PROCESS_SUSPENDED);
   EXPECT_EQ(talos_rt_v1_process_instance_destroy(instance), TALOS_RT_OK);
@@ -247,14 +247,13 @@ TEST(GeneratedProcess, EmittedDesignBytecodeMatchesNativeLifecycle) {
   ASSERT_NE(generatedDescriptor.execution, nullptr);
   ASSERT_NE(generatedDescriptor.design_bytecode, nullptr);
   talos_rt_context *context = nullptr;
-  ASSERT_EQ(talos_rt_v1_context_create_for_design(
-                generatedDescriptor.execution, &context),
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(generatedDescriptor.execution,
+                                                  &context),
             TALOS_RT_OK);
   talos_rt_process_instance_v1 *native = nullptr;
   talos_rt_process_instance_v1 *bytecode = nullptr;
-  ASSERT_EQ(
-      talos_rt_v1_process_instance_create(&generatedDescriptor, &native),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_process_instance_create(&generatedDescriptor, &native),
+            TALOS_RT_OK);
   ASSERT_EQ(
       talos_rt_v1_process_instance_create(&generatedDescriptor, &bytecode),
       TALOS_RT_OK);
@@ -299,9 +298,8 @@ TEST(GeneratedProcess, DirectGroupResumesCanonicalStateAcrossBytecode) {
     ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 2, 64, 64),
               TALOS_RT_OK);
     talos_rt_process_instance_v1 *instance = nullptr;
-    ASSERT_EQ(
-        talos_rt_v1_process_instance_create(&groupDescriptor, &instance),
-        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_process_instance_create(&groupDescriptor, &instance),
+              TALOS_RT_OK);
     unsigned captures = 0;
     uint64_t captureOffset = 0;
     const auto &layout = *groupDescriptor.frame_layout;
@@ -351,8 +349,7 @@ TEST(GeneratedProcess, DirectGroupResumesCanonicalStateAcrossBytecode) {
 
 TEST(GeneratedProcess, CopyActivationPreservesFourStateTierHandoff) {
   uint64_t size = UINT64_MAX, alignment = 0;
-  ASSERT_EQ(copyDescriptor.native_requirements(&size, &alignment),
-            TALOS_RT_OK);
+  ASSERT_EQ(copyDescriptor.native_requirements(&size, &alignment), TALOS_RT_OK);
   ASSERT_EQ(size, 0u);
   ASSERT_EQ(alignment, 1u);
   for (const auto *descriptor : {&copyDescriptor, &secondCopyDescriptor}) {
@@ -361,13 +358,13 @@ TEST(GeneratedProcess, CopyActivationPreservesFourStateTierHandoff) {
       std::array<talos_rt_process_instance_v1 *, 2> instances{};
       for (unsigned lane = 0; lane != 2; ++lane) {
         ASSERT_EQ(talos_rt_v1_context_create_for_design(descriptor->execution,
-                                                          &contexts[lane]),
+                                                        &contexts[lane]),
                   TALOS_RT_OK);
         ASSERT_EQ(talos_rt_v1_native_state_register_static(contexts[lane], 3,
-                                                             128, 65),
+                                                           128, 65),
                   TALOS_RT_OK);
         ASSERT_EQ(talos_rt_v1_native_state_register_static(contexts[lane], 4,
-                                                             193, 65),
+                                                           193, 65),
                   TALOS_RT_OK);
         ASSERT_EQ(
             talos_rt_v1_process_instance_create(descriptor, &instances[lane]),
@@ -403,12 +400,11 @@ TEST(GeneratedProcess, CopyActivationPreservesFourStateTierHandoff) {
             x = (x & ~mask) | (unknown ? mask : 0);
           }
           bool native = lane == 0 && ((step % 2 == 0) == nativeFirst);
-          ASSERT_EQ(
-              talos_rt_v1_process_instance_execute(
-                  instances[lane], context,
-                  native ? TALOS_RT_TIER_NATIVE : TALOS_RT_TIER_BYTECODE,
-                  &actions[lane]),
-              TALOS_RT_OK);
+          ASSERT_EQ(talos_rt_v1_process_instance_execute(
+                        instances[lane], context,
+                        native ? TALOS_RT_TIER_NATIVE : TALOS_RT_TIER_BYTECODE,
+                        &actions[lane]),
+                    TALOS_RT_OK);
           EXPECT_EQ(instances[lane]->native_handle, nullptr);
           EXPECT_EQ(actions[lane].kind, TALOS_RT_FRAGMENT_SUSPEND);
           EXPECT_EQ(actions[lane].suspend_kind, TALOS_RT_SUSPEND_CHANGE);
@@ -452,7 +448,7 @@ TEST(GeneratedProcess, TableEntriesChooseWaitsAcrossTierHandoffs) {
     std::array<talos_rt_process_instance_v1 *, 2> instances{};
     for (unsigned lane = 0; lane != 2; ++lane) {
       ASSERT_EQ(talos_rt_v1_context_create_for_design(descriptor.execution,
-                                                        &contexts[lane]),
+                                                      &contexts[lane]),
                 TALOS_RT_OK);
       for (unsigned capture = 0; capture != 2; ++capture)
         ASSERT_EQ(talos_rt_v1_native_state_register_static(
@@ -485,12 +481,11 @@ TEST(GeneratedProcess, TableEntriesChooseWaitsAcrossTierHandoffs) {
         ASSERT_TRUE(storeNativeScheduleStateUnlocked(contexts[lane], 0, 64,
                                                      step >= 2, 0));
         bool native = lane == 0 && ((step % 2 == 0) == nativeFirst);
-        ASSERT_EQ(
-            talos_rt_v1_process_instance_execute(
-                instances[lane], contexts[lane],
-                native ? TALOS_RT_TIER_NATIVE : TALOS_RT_TIER_BYTECODE,
-                &actions[lane]),
-            TALOS_RT_OK);
+        ASSERT_EQ(talos_rt_v1_process_instance_execute(
+                      instances[lane], contexts[lane],
+                      native ? TALOS_RT_TIER_NATIVE : TALOS_RT_TIER_BYTECODE,
+                      &actions[lane]),
+                  TALOS_RT_OK);
         EXPECT_EQ(instances[lane]->native_handle, nullptr);
         EXPECT_EQ(actions[lane].continuation,
                   (std::array<uint32_t, 4>{3, 7, 13, 0})[step]);
@@ -530,9 +525,9 @@ TEST(GeneratedProcess, SchedulerRunsEventSpawnJoinAndAwait) {
                 orchestrationDescriptor.execution, &context),
             TALOS_RT_OK);
   talos_rt_process_instance_v1 *instance = nullptr;
-  ASSERT_EQ(talos_rt_v1_process_instance_create(&orchestrationDescriptor,
-                                                  &instance),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_process_instance_create(&orchestrationDescriptor, &instance),
+      TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_add(context, instance, 0), TALOS_RT_OK);
   testing::internal::CaptureStdout();
   EXPECT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
@@ -544,8 +539,8 @@ TEST(GeneratedProcess, SchedulerRunsEventSpawnJoinAndAwait) {
 TEST(GeneratedProcess, DynamicAutomaticSurvivesCallSpawnAndDelayedNBA) {
   ASSERT_NE(automaticDescriptor.execution, nullptr);
   talos_rt_context *context = nullptr;
-  ASSERT_EQ(talos_rt_v1_context_create_for_design(
-                automaticDescriptor.execution, &context),
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(automaticDescriptor.execution,
+                                                  &context),
             TALOS_RT_OK);
   talos_rt_process_instance_v1 *instance = nullptr;
   ASSERT_EQ(
@@ -563,20 +558,20 @@ TEST(GeneratedProcess, CrossBlockAutomaticLoopReleasesEveryIteration) {
                 automaticLoopDescriptor.execution, &context),
             TALOS_RT_OK);
   talos_rt_process_instance_v1 *instance = nullptr;
-  ASSERT_EQ(talos_rt_v1_process_instance_create(&automaticLoopDescriptor,
-                                                  &instance),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_process_instance_create(&automaticLoopDescriptor, &instance),
+      TALOS_RT_OK);
   talos_rt_fragment_action_v1 action{};
-  ASSERT_EQ(talos_rt_v1_process_instance_execute(
-                instance, context, TALOS_RT_TIER_NATIVE, &action),
+  ASSERT_EQ(talos_rt_v1_process_instance_execute(instance, context,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_OK);
   ASSERT_EQ(action.kind, TALOS_RT_FRAGMENT_SUSPEND);
   {
     std::lock_guard<std::recursive_mutex> lock(context->mutex);
     EXPECT_TRUE(context->nativeAutomaticStates.empty());
   }
-  ASSERT_EQ(talos_rt_v1_process_instance_execute(
-                instance, context, TALOS_RT_TIER_NATIVE, &action),
+  ASSERT_EQ(talos_rt_v1_process_instance_execute(instance, context,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_OK);
   EXPECT_EQ(action.kind, TALOS_RT_FRAGMENT_TERMINATE);
   EXPECT_EQ(talos_rt_v1_process_instance_destroy(instance), TALOS_RT_OK);
@@ -596,8 +591,8 @@ TEST(GeneratedProcess, NativeBytecodeNativeReusesFrameAndScratch) {
       static_cast<uint8_t *>(instance->allocation) + instance->scratch_offset;
   talos_rt_fragment_action_v1 action{};
 
-  ASSERT_EQ(talos_rt_v1_process_instance_execute(
-                instance, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  ASSERT_EQ(talos_rt_v1_process_instance_execute(instance, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_OK);
   EXPECT_EQ(action.continuation, 1u);
   ASSERT_EQ(talos_rt_v1_process_instance_execute(
@@ -605,8 +600,8 @@ TEST(GeneratedProcess, NativeBytecodeNativeReusesFrameAndScratch) {
             TALOS_RT_OK);
   EXPECT_EQ(action.continuation, 1u);
   EXPECT_EQ(instance->native_handle, nullptr);
-  ASSERT_EQ(talos_rt_v1_process_instance_execute(
-                instance, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  ASSERT_EQ(talos_rt_v1_process_instance_execute(instance, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_OK);
   EXPECT_EQ(action.continuation, 2u);
   EXPECT_EQ(instance->frame, frame);
@@ -631,8 +626,8 @@ TEST(GeneratedProcess, BytecodeFirstReconstructsNativeContinuation) {
                 instance, nullptr, TALOS_RT_TIER_BYTECODE, &action),
             TALOS_RT_OK);
   EXPECT_EQ(action.continuation, 1u);
-  ASSERT_EQ(talos_rt_v1_process_instance_execute(
-                instance, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  ASSERT_EQ(talos_rt_v1_process_instance_execute(instance, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_OK);
   EXPECT_EQ(action.continuation, 2u);
   EXPECT_EQ(alignedAllocationCount.load(), afterCreate);
@@ -642,21 +637,20 @@ TEST(GeneratedProcess, BytecodeFirstReconstructsNativeContinuation) {
 TEST(GeneratedProcess, RuntimeFailureReconstructsInsteadOfResumingDoneHandle) {
   size_t before = alignedAllocationCount.load();
   talos_rt_process_instance_v1 *instance = nullptr;
-  ASSERT_EQ(
-      talos_rt_v1_process_instance_create(&failingDescriptor, &instance),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_process_instance_create(&failingDescriptor, &instance),
+            TALOS_RT_OK);
   ASSERT_LE(alignedAllocationCount.load(), before + 1);
   size_t afterCreate = alignedAllocationCount.load();
   void *frame = instance->frame;
   talos_rt_fragment_action_v1 action{};
 
-  ASSERT_EQ(talos_rt_v1_process_instance_execute(
-                instance, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  ASSERT_EQ(talos_rt_v1_process_instance_execute(instance, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_OK);
   ASSERT_EQ(instance->continuation, 1u);
   ASSERT_NE(instance->native_handle, nullptr);
-  EXPECT_EQ(talos_rt_v1_process_instance_execute(
-                instance, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  EXPECT_EQ(talos_rt_v1_process_instance_execute(instance, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_INVALID_ARGUMENT);
   EXPECT_EQ(instance->native_handle, nullptr);
   EXPECT_EQ(instance->continuation, 1u);
@@ -664,8 +658,8 @@ TEST(GeneratedProcess, RuntimeFailureReconstructsInsteadOfResumingDoneHandle) {
   EXPECT_EQ(instance->frame, frame);
   EXPECT_EQ(alignedAllocationCount.load(), afterCreate);
 
-  EXPECT_EQ(talos_rt_v1_process_instance_execute(
-                instance, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  EXPECT_EQ(talos_rt_v1_process_instance_execute(instance, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_INVALID_ARGUMENT);
   EXPECT_EQ(instance->native_handle, nullptr);
   EXPECT_EQ(instance->continuation, 1u);
@@ -765,7 +759,7 @@ TEST(GeneratedProcess, ConcurrentProcessFrameChurnUsesThreadLocalCaches) {
       for (unsigned iteration = 0; iteration != iterations; ++iteration) {
         talos_rt_process_instance_v1 *instance = nullptr;
         if (talos_rt_v1_process_instance_create(&generatedDescriptor,
-                                                  &instance) != TALOS_RT_OK ||
+                                                &instance) != TALOS_RT_OK ||
             talos_rt_v1_process_instance_destroy(instance) != TALOS_RT_OK)
           ++failures;
       }

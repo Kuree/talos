@@ -6,12 +6,12 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Analysis/ManagedClassLayoutAnalysis.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
 #include "talos/Runtime/Runtime.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "llvm/IR/DataLayout.h"
 #include "gtest/gtest.h"
@@ -100,20 +100,19 @@ TEST(GeneratedDesignDatabase, MailboxMessages) {
       descriptor.builtin_base_kind = TALOS_RT_BUILTIN_CLASS_MAILBOX;
       descriptor.builtin_base_offset = *layout->builtinBaseOffset;
       entries[0] = {
-          *layout->builtinBaseOffset,      0,      1, TALOS_RT_TRACE_STRONG,
+          *layout->builtinBaseOffset,    0,      1, TALOS_RT_TRACE_STRONG,
           TALOS_RT_MANAGED_SLOT_MAILBOX, nullptr};
     } else if (i == 2) {
       descriptor.base = &descriptors[1];
       entries[1] = {0, 0, 1, TALOS_RT_TRACE_EMBEDDED, 0, &traces[1]};
     }
-    ASSERT_EQ(talos_rt_v1_class_register(runtime, &descriptor),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_class_register(runtime, &descriptor), TALOS_RT_OK);
   }
 
   std::array<talos_rt_object_v1 *, 10> objects{};
   talos_rt_gc_root_range_v1 roots{};
   ASSERT_EQ(talos_rt_v1_gc_root_range_push(lane, &roots, objects.data(),
-                                             objects.size()),
+                                           objects.size()),
             TALOS_RT_OK);
   struct Element {
     uint32_t kind, flags;
@@ -145,19 +144,17 @@ TEST(GeneratedDesignDatabase, MailboxMessages) {
             TALOS_RT_OK);
   const uint64_t payloadWord = talos_rt_managed_word_from_object(objects[9]);
   ASSERT_EQ(talos_rt_v1_object_write(objects[0],
-                                       descriptors[1].builtin_base_offset,
-                                       &payloadWord, sizeof(payloadWord)),
+                                     descriptors[1].builtin_base_offset,
+                                     &payloadWord, sizeof(payloadWord)),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_semaphore_create(lane, 1, &objects[8]),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_semaphore_create(lane, 1, &objects[8]), TALOS_RT_OK);
   talos_rt_string_v1 string = 0;
   talos_rt_gc_managed_root_v1 stringRoot{};
   ASSERT_EQ(talos_rt_v1_gc_managed_root_push(lane, &stringRoot, &string),
             TALOS_RT_OK);
   const std::string text = "snapshot survives mailbox collection\n\"quoted\"";
-  ASSERT_EQ(
-      talos_rt_v1_string_create(lane, text.data(), text.size(), &string),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_string_create(lane, text.data(), text.size(), &string),
+            TALOS_RT_OK);
   std::array<uint8_t, 17> firstValue{}, firstUnknown{}, secondValue{};
   firstValue[0] = 0x12;
   firstUnknown[0] = 0x18; // Internal X=(0,1), Z=(1,1).
@@ -166,14 +163,13 @@ TEST(GeneratedDesignDatabase, MailboxMessages) {
   const double real = 3.25;
   const float shortReal = -1.5f;
   const uint64_t classWord = talos_rt_managed_word_from_object(objects[7]);
-  const uint64_t semaphoreWord =
-      talos_rt_managed_word_from_object(objects[8]);
+  const uint64_t semaphoreWord = talos_rt_managed_word_from_object(objects[8]);
   const uint64_t nullWord = 0;
   auto put = [&](size_t index, const void *value,
                  const void *unknown = nullptr) {
     uint32_t success = 0;
-    EXPECT_EQ(talos_rt_v1_mailbox_try_put(lane, objects[index], value,
-                                            unknown, &success),
+    EXPECT_EQ(talos_rt_v1_mailbox_try_put(lane, objects[index], value, unknown,
+                                          &success),
               TALOS_RT_OK);
     EXPECT_EQ(success, 1u);
   };
@@ -213,16 +209,14 @@ TEST(GeneratedDesignDatabase, MailboxMessages) {
                       TALOS_RT_MANAGED_ROOT_KIND_CONTAINER),
               TALOS_RT_OK);
     uint64_t word = talos_rt_managed_word_from_object(objects[i]);
-    ASSERT_EQ(
-        talos_rt_v1_design_write(runtime, storage[i], &word, nullptr, 64),
-        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_design_write(runtime, storage[i], &word, nullptr, 64),
+              TALOS_RT_OK);
     variables[i] =
         keep(vpi_handle_by_name(const_cast<char *>(names[i]), nullptr));
     mailboxes[i] = vpi_handle(vpiClassObj, variables[i]);
     ASSERT_NE(mailboxes[i], nullptr);
   }
-  ASSERT_EQ(talos_rt_v1_gc_managed_root_pop(lane, &stringRoot),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_managed_root_pop(lane, &stringRoot), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_root_range_pop(lane, &roots), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);
 
@@ -281,7 +275,7 @@ TEST(GeneratedDesignDatabase, MailboxMessages) {
   std::array<uint8_t, 17> removed{}, removedUnknown{};
   uint32_t present = 0;
   ASSERT_EQ(talos_rt_v1_mailbox_try_get(objects[0], removed.data(),
-                                          removedUnknown.data(), &present),
+                                        removedUnknown.data(), &present),
             TALOS_RT_OK);
   EXPECT_EQ(present, 1u);
   EXPECT_EQ(removed, firstValue);
@@ -312,9 +306,9 @@ TEST(GeneratedDesignDatabase, MailboxMessages) {
   vpiHandle wordMessage = single(6);
   const std::array<vpiHandle, 5> scalarMessages{
       first, realMessage, shortRealMessage, stringMessage, wordMessage};
-  const std::array<PLI_INT32, 5> scalarKinds{
-      vpiLogicTypespec, vpiRealTypespec, vpiShortRealTypespec,
-      vpiStringTypespec, vpiIntTypespec};
+  const std::array<PLI_INT32, 5> scalarKinds{vpiLogicTypespec, vpiRealTypespec,
+                                             vpiShortRealTypespec,
+                                             vpiStringTypespec, vpiIntTypespec};
   std::array<vpiHandle, 5> scalarTypes{};
   for (size_t i = 0; i != scalarMessages.size(); ++i) {
     scalarTypes[i] = keep(vpi_handle(vpiTypespec, scalarMessages[i]));
@@ -403,9 +397,8 @@ TEST(GeneratedDesignDatabase, MailboxMessages) {
   // Clearing language roots collects the mailbox, string storage, and class
   // referents. VPI snapshots preserve values, never SystemVerilog liveness.
   for (auto cursor : storage)
-    ASSERT_EQ(
-        talos_rt_v1_design_write(runtime, cursor, &nullWord, nullptr, 64),
-        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_design_write(runtime, cursor, &nullWord, nullptr, 64),
+              TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);
   talos_rt_gc_statistics_v1 statistics{};
   ASSERT_EQ(talos_rt_v1_gc_statistics(runtime, &statistics), TALOS_RT_OK);

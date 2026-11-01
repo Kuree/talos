@@ -111,8 +111,7 @@ bool packBytes(const Image &image, Frame &frame, uint32_t reg,
   if (!validRegister(frame.function, reg))
     return false;
   Layout layout = layoutAt(image, frame.function, reg);
-  if (layout.kind != TALOS_RT_DBREG_BITS &&
-      layout.kind != TALOS_RT_DBREG_LOGIC)
+  if (layout.kind != TALOS_RT_DBREG_BITS && layout.kind != TALOS_RT_DBREG_LOGIC)
     return false;
   uint64_t capacity = (uint64_t{layout.width} + 7) / 8;
   uint64_t count = std::min(size, capacity);
@@ -133,8 +132,7 @@ bool packBytes(const Image &image, Frame &frame, uint32_t reg,
 }
 
 talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
-                                  talos_rt_context *context,
-                                  uint32_t siteIndex) {
+                                talos_rt_context *context, uint32_t siteIndex) {
   if (!validIntrinsic(image, frame.function, siteIndex))
     return TALOS_RT_INVALID_BYTECODE;
   IntrinsicSite site = siteAt(image, siteIndex);
@@ -208,8 +206,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     Layout layout = layoutAt(image, frame.function, reg);
     if (layout.kind != TALOS_RT_DBREG_MANAGED || layout.size != 8)
       return false;
-    talos_rt_managed_word_v1 word =
-        talos_rt_managed_word_from_object(object);
+    talos_rt_managed_word_v1 word = talos_rt_managed_word_from_object(object);
     std::memcpy(frame.data + layout.offset, &word, sizeof(word));
     return true;
   };
@@ -296,8 +293,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     Layout layout = layoutAt(image, frame.function, reg);
     result = {};
     result.id = id;
-    result.bit_width =
-        layout.kind == TALOS_RT_DBREG_REAL64 ? 64 : layout.width;
+    result.bit_width = layout.kind == TALOS_RT_DBREG_REAL64 ? 64 : layout.width;
     result.value_size = layout.kind == TALOS_RT_DBREG_REAL64
                             ? sizeof(double)
                             : (uint64_t{layout.width} + 7) / 8;
@@ -420,8 +416,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
                           talos_rt_assoc_key_v1 &key) {
     Layout layout = layoutAt(image, frame.function, reg);
     key = {};
-    if (talos_rt_v1_assoc_key_info(array, &key.kind, &key.width) !=
-        TALOS_RT_OK)
+    if (talos_rt_v1_assoc_key_info(array, &key.kind, &key.width) != TALOS_RT_OK)
       return false;
     if (key.kind == TALOS_RT_ASSOC_KEY_ELEMENT) {
       // An element key travels as its container-element planes. Copy them so
@@ -601,8 +596,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
   };
   switch (signature.id) {
   case TALOS_RT_INTRINSIC_V1_CONTAINER_SIZE:
-    return sentinel(
-        0, talos_rt_v1_container_size(readManaged(inputRegister(0))));
+    return sentinel(0,
+                    talos_rt_v1_container_size(readManaged(inputRegister(0))));
   case TALOS_RT_INTRINSIC_V1_CONTAINER_CREATE_LIKE: {
     auto size = scalar(2);
     talos_rt_gc_lane_v1 *lane = talos_rt_v1_gc_current_lane(context);
@@ -786,18 +781,17 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     auto right = scalar(2);
     return left && right
                ? talos_rt_v1_container_swap(readManaged(inputRegister(0)),
-                                              static_cast<int64_t>(*left),
-                                              static_cast<int64_t>(*right))
+                                            static_cast<int64_t>(*left),
+                                            static_cast<int64_t>(*right))
                : TALOS_RT_INVALID_BYTECODE;
   }
   case TALOS_RT_INTRINSIC_V1_CONTAINER_DELETE:
     return talos_rt_v1_container_delete(readManaged(inputRegister(0)));
   case TALOS_RT_INTRINSIC_V1_QUEUE_DELETE: {
     auto index = scalar(1);
-    return index
-               ? talos_rt_v1_queue_delete_index(readManaged(inputRegister(0)),
+    return index ? talos_rt_v1_queue_delete_index(readManaged(inputRegister(0)),
                                                   static_cast<int64_t>(*index))
-               : TALOS_RT_INVALID_BYTECODE;
+                 : TALOS_RT_INVALID_BYTECODE;
   }
   case TALOS_RT_INTRINSIC_V1_QUEUE_INSERT: {
     auto index = scalar(1);
@@ -811,8 +805,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       int64_t event = kInvalidHandleStart;
       std::memcpy(&event, frame.data + input.offset + 16, sizeof(event));
       return talos_rt_v1_queue_insert(lane, readManaged(inputRegister(0)),
-                                        static_cast<int64_t>(*index), &event,
-                                        nullptr);
+                                      static_cast<int64_t>(*index), &event,
+                                      nullptr);
     }
     uint64_t planeSize =
         input.kind == TALOS_RT_DBREG_LOGIC ? input.size / 2 : input.size;
@@ -820,8 +814,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
                               ? frame.data + input.offset + planeSize
                               : nullptr;
     return talos_rt_v1_queue_insert(lane, readManaged(inputRegister(0)),
-                                      static_cast<int64_t>(*index),
-                                      frame.data + input.offset, unknown);
+                                    static_cast<int64_t>(*index),
+                                    frame.data + input.offset, unknown);
   }
   case TALOS_RT_INTRINSIC_V1_MAILBOX_CREATE: {
     std::array<std::optional<uint64_t>, 7> inputs;
@@ -873,7 +867,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
   case TALOS_RT_INTRINSIC_V1_BOX_BIND_TYPE: {
     auto id = scalar(1);
     return id ? talos_rt_v1_box_bind_type(context,
-                                            readManaged(inputRegister(0)), *id)
+                                          readManaged(inputRegister(0)), *id)
               : TALOS_RT_INVALID_BYTECODE;
   }
   case TALOS_RT_INTRINSIC_V1_BOX_IS_TYPE: {
@@ -968,7 +962,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
   case TALOS_RT_INTRINSIC_V1_SEMAPHORE_PUT: {
     std::optional<uint64_t> keys = scalar(1);
     return keys ? talos_rt_v1_semaphore_put(readManaged(inputRegister(0)),
-                                              static_cast<int32_t>(*keys))
+                                            static_cast<int32_t>(*keys))
                 : TALOS_RT_INVALID_BYTECODE;
   }
   case TALOS_RT_INTRINSIC_V1_SEMAPHORE_TRY_GET: {
@@ -1106,16 +1100,16 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       int64_t event = kInvalidHandleStart;
       std::memcpy(&event, frame.data + input.offset + 16, sizeof(event));
       return talos_rt_v1_assoc_write_checked(lane, array, &key, &event,
-                                               sizeof(event), nullptr, 0);
+                                             sizeof(event), nullptr, 0);
     }
     uint64_t planeSize =
         input.kind == TALOS_RT_DBREG_LOGIC ? input.size / 2 : input.size;
     const void *unknown = input.kind == TALOS_RT_DBREG_LOGIC
                               ? frame.data + input.offset + planeSize
                               : nullptr;
-    return talos_rt_v1_assoc_write_checked(
-        lane, array, &key, frame.data + input.offset, planeSize, unknown,
-        unknown ? planeSize : 0);
+    return talos_rt_v1_assoc_write_checked(lane, array, &key,
+                                           frame.data + input.offset, planeSize,
+                                           unknown, unknown ? planeSize : 0);
   }
   case TALOS_RT_INTRINSIC_V1_ASSOC_EXISTS: {
     talos_rt_object_v1 *array = readManaged(inputRegister(0));
@@ -1143,7 +1137,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       int64_t event = kInvalidHandleStart;
       std::memcpy(&event, frame.data + input.offset + 16, sizeof(event));
       return talos_rt_v1_assoc_set_default_checked(lane, array, &event,
-                                                     sizeof(event), nullptr, 0);
+                                                   sizeof(event), nullptr, 0);
     }
     uint64_t planeSize =
         input.kind == TALOS_RT_DBREG_LOGIC ? input.size / 2 : input.size;
@@ -1264,7 +1258,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     int32_t result = 0;
     talos_rt_status status = talos_rt_v1_random_legacy(context, &result);
     return status == TALOS_RT_OK ? sentinel(0, static_cast<uint32_t>(result))
-                                   : status;
+                                 : status;
   }
   case TALOS_RT_INTRINSIC_V1_RANDOM_SEED: {
     auto seed = scalar(0);
@@ -1390,9 +1384,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
                         capture.value.end());
       }
     }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
     TALOS_RT_CATCH(const std::length_error &) {
       return TALOS_RT_OUT_OF_RESOURCES;
     }
@@ -1442,9 +1434,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
                         capture.value.end());
       }
     }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
     TALOS_RT_CATCH(const std::length_error &) {
       return TALOS_RT_OUT_OF_RESOURCES;
     }
@@ -1489,24 +1479,21 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
         float value;
         std::memcpy(&value, frame.data + valueLayout.offset, sizeof(value));
         status = talos_rt_v1_random_real32_to_rank(value, rank.value.data(),
-                                                     rank.value.size());
+                                                   rank.value.size());
       } else {
         double value;
         std::memcpy(&value, frame.data + valueLayout.offset, sizeof(value));
         status = talos_rt_v1_random_real64_to_rank(value, rank.value.data(),
-                                                     rank.value.size());
+                                                   rank.value.size());
       }
       if (status != TALOS_RT_OK && status != TALOS_RT_INVALID_ARGUMENT)
         return status;
       writeLogic(frame.data, rankLayout, rank);
-      if (!writeScalar(image, frame, outputRegister(1),
-                       status == TALOS_RT_OK))
+      if (!writeScalar(image, frame, outputRegister(1), status == TALOS_RT_OK))
         return TALOS_RT_INVALID_BYTECODE;
       return TALOS_RT_OK;
     }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
     TALOS_RT_CATCH(const std::length_error &) {
       return TALOS_RT_OUT_OF_RESOURCES;
     }
@@ -1526,22 +1513,20 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       talos_rt_status status;
       if (shortReal) {
         float value;
-        status = talos_rt_v1_random_real32_from_rank(
-            rank.value.data(), rank.value.size(), &value);
+        status = talos_rt_v1_random_real32_from_rank(rank.value.data(),
+                                                     rank.value.size(), &value);
         if (status == TALOS_RT_OK)
           std::memcpy(frame.data + valueLayout.offset, &value, sizeof(value));
       } else {
         double value;
-        status = talos_rt_v1_random_real64_from_rank(
-            rank.value.data(), rank.value.size(), &value);
+        status = talos_rt_v1_random_real64_from_rank(rank.value.data(),
+                                                     rank.value.size(), &value);
         if (status == TALOS_RT_OK)
           std::memcpy(frame.data + valueLayout.offset, &value, sizeof(value));
       }
       return status;
     }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
     TALOS_RT_CATCH(const std::length_error &) {
       return TALOS_RT_OUT_OF_RESOURCES;
     }
@@ -1549,9 +1534,9 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
   case TALOS_RT_INTRINSIC_V1_COVERAGE_POINT_HIT: {
     auto point = scalar(0);
     auto enabled = scalar(1);
-    return point && enabled ? talos_rt_v1_coverage_point_hit(context, *point,
-                                                               *enabled != 0)
-                            : TALOS_RT_INVALID_BYTECODE;
+    return point && enabled
+               ? talos_rt_v1_coverage_point_hit(context, *point, *enabled != 0)
+               : TALOS_RT_INVALID_BYTECODE;
   }
   case TALOS_RT_INTRINSIC_V1_COVERGROUP_PREPARE: {
     auto type = scalar(0), count = scalar(1);
@@ -1569,9 +1554,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
           return TALOS_RT_INVALID_BYTECODE;
       }
     }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
     TALOS_RT_CATCH(const std::length_error &) {
       return TALOS_RT_OUT_OF_RESOURCES;
     }
@@ -1585,15 +1568,15 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     if (!token || !selector || !maximum || *maximum > UINT32_MAX)
       return TALOS_RT_INVALID_BYTECODE;
     return talos_rt_v1_covergroup_candidates(context, *token, *selector,
-                                               readManaged(inputRegister(2)),
-                                               static_cast<uint32_t>(*maximum));
+                                             readManaged(inputRegister(2)),
+                                             static_cast<uint32_t>(*maximum));
   }
   case TALOS_RT_INTRINSIC_V1_COVERGROUP_BIND_WITH: {
     auto token = scalar(0), selector = scalar(1);
     if (!token || !selector)
       return TALOS_RT_INVALID_BYTECODE;
     return talos_rt_v1_covergroup_bind_with(context, *token, *selector,
-                                              readManaged(inputRegister(2)));
+                                            readManaged(inputRegister(2)));
   }
   case TALOS_RT_INTRINSIC_V1_COVERGROUP_RELEASE_PREPARATION: {
     auto token = scalar(0);
@@ -1632,9 +1615,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
           return TALOS_RT_INVALID_BYTECODE;
       }
     }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
     TALOS_RT_CATCH(const std::length_error &) {
       return TALOS_RT_OUT_OF_RESOURCES;
     }
@@ -1698,7 +1679,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
           return TALOS_RT_INVALID_BYTECODE;
         const talos_rt_observer_descriptor_v1 *descriptor =
             talos::process::findObserverDescriptor(context->execution,
-                                                     *codeUnit);
+                                                   *codeUnit);
         uint32_t expectedFlags =
             *fourState != 0 ? TALOS_RT_OBSERVER_FOUR_STATE : 0;
         if (!descriptor || descriptor->capture_count != *captures ||
@@ -1839,9 +1820,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
                                    meta.descriptor->capture_abi[local],
                                    capture))
             return TALOS_RT_INVALID_BYTECODE;
-          writeRecord(capturesOffset +
-                          uint64_t{captureIndex} *
-                              sizeof(talos_rt_computed_capture_v1),
+          writeRecord(capturesOffset + uint64_t{captureIndex} *
+                                           sizeof(talos_rt_computed_capture_v1),
                       &capture, sizeof(capture));
         }
       }
@@ -1870,8 +1850,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
         if ((layout.kind != TALOS_RT_DBREG_BITS &&
              layout.kind != TALOS_RT_DBREG_LOGIC) ||
             layout.width != metadata[index].width ||
-            (layout.kind == TALOS_RT_DBREG_LOGIC) !=
-                metadata[index].fourState)
+            (layout.kind == TALOS_RT_DBREG_LOGIC) != metadata[index].fourState)
           return TALOS_RT_INVALID_BYTECODE;
         Logic initial = readLogic(frame.data, layout);
         uint64_t limbs = (uint64_t{metadata[index].width} + 63) / 64;
@@ -1883,7 +1862,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       }
       const talos_rt_observer_descriptor_v1 *samplerDescriptor =
           talos::process::findObserverDescriptor(context->execution,
-                                                   *observerCodeUnit);
+                                                 *observerCodeUnit);
       if (!samplerDescriptor ||
           samplerDescriptor->capture_count != captureCount)
         return TALOS_RT_INVALID_BYTECODE;
@@ -1898,9 +1877,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       if (cursor != site.inputCount)
         return TALOS_RT_INVALID_BYTECODE;
     }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
     TALOS_RT_CATCH(const std::length_error &) {
       return TALOS_RT_OUT_OF_RESOURCES;
     }
@@ -1941,7 +1918,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
 
     const talos_rt_observer_descriptor_v1 *samplerDescriptor =
         talos::process::findObserverDescriptor(context->execution,
-                                                 *observerCodeUnit);
+                                               *observerCodeUnit);
     if (!samplerDescriptor ||
         samplerDescriptor->capture_count != captureCount ||
         samplerDescriptor->result_width != 1 || samplerDescriptor->flags != 0)
@@ -1973,9 +1950,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
                                  captures[index]))
           return TALOS_RT_INVALID_BYTECODE;
     }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
     TALOS_RT_CATCH(const std::length_error &) {
       return TALOS_RT_OUT_OF_RESOURCES;
     }
@@ -2051,7 +2026,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     talos_rt_status status = talos_rt_v1_covergroup_get_integer_option(
         context, *handle, *item, static_cast<uint32_t>(*option), &value);
     return status == TALOS_RT_OK ? sentinel(0, static_cast<uint64_t>(value))
-                                   : status;
+                                 : status;
   }
   case TALOS_RT_INTRINSIC_V1_COVERGROUP_GET_STRING_OPTION: {
     auto handle = scalar(0), item = scalar(1), option = scalar(2);
@@ -2123,8 +2098,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     bool container = output.kind == TALOS_RT_DBREG_MANAGED &&
                      output.width == 64 && output.size == 8;
     bool event = output.kind == TALOS_RT_DBREG_HANDLE &&
-                 (output.flags & TALOS_RT_DBREG_EVENT) &&
-                 output.width == 256 && output.size == 32;
+                 (output.flags & TALOS_RT_DBREG_EVENT) && output.width == 256 &&
+                 output.size == 32;
     if (event) {
       uint64_t word = UINT64_MAX;
       talos_rt_status status = talos_rt_v1_covergroup_formal_read(
@@ -2139,32 +2114,31 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     bool reference = output.kind == TALOS_RT_DBREG_ARGUMENT_REF;
     if (reference && (output.width != 192 || output.size != 24))
       return TALOS_RT_INVALID_BYTECODE;
-    uint32_t kind =
-        container && (output.flags & TALOS_RT_DBREG_MAILBOX)
-            ? TALOS_RT_FUNCTIONAL_VALUE_MAILBOX
-        : output.flags & TALOS_RT_DBREG_SEMAPHORE
-            ? TALOS_RT_FUNCTIONAL_VALUE_SEMAPHORE
-        : output.flags & TALOS_RT_DBREG_VIRTUAL_INTERFACE
-            ? TALOS_RT_FUNCTIONAL_VALUE_VIRTUAL_INTERFACE
-        : output.flags & TALOS_RT_DBREG_PROCESS
-            ? TALOS_RT_FUNCTIONAL_VALUE_PROCESS
-        : output.flags & TALOS_RT_DBREG_COVERGROUP
-            ? TALOS_RT_FUNCTIONAL_VALUE_COVERGROUP
-        : output.flags & TALOS_RT_DBREG_CHANDLE
-            ? TALOS_RT_FUNCTIONAL_VALUE_CHANDLE
-        : container && (output.flags & TALOS_RT_DBREG_CLASS_HANDLE)
-            ? TALOS_RT_FUNCTIONAL_VALUE_CLASS_HANDLE
-        : container ? TALOS_RT_FUNCTIONAL_VALUE_MANAGED_CONTAINER
-        : reference ? TALOS_RT_FUNCTIONAL_VALUE_ARGUMENT_REF
-        : output.kind == TALOS_RT_DBREG_REAL64
-            ? TALOS_RT_FUNCTIONAL_VALUE_REAL
-        : output.kind == TALOS_RT_DBREG_REAL32
-            ? TALOS_RT_FUNCTIONAL_VALUE_SHORTREAL
-        : output.kind == TALOS_RT_DBREG_STRING
-            ? TALOS_RT_FUNCTIONAL_VALUE_STRING
-        : output.kind == TALOS_RT_DBREG_LOGIC
-            ? TALOS_RT_FUNCTIONAL_VALUE_FOUR_STATE
-            : TALOS_RT_FUNCTIONAL_VALUE_INTEGRAL;
+    uint32_t kind = container && (output.flags & TALOS_RT_DBREG_MAILBOX)
+                        ? TALOS_RT_FUNCTIONAL_VALUE_MAILBOX
+                    : output.flags & TALOS_RT_DBREG_SEMAPHORE
+                        ? TALOS_RT_FUNCTIONAL_VALUE_SEMAPHORE
+                    : output.flags & TALOS_RT_DBREG_VIRTUAL_INTERFACE
+                        ? TALOS_RT_FUNCTIONAL_VALUE_VIRTUAL_INTERFACE
+                    : output.flags & TALOS_RT_DBREG_PROCESS
+                        ? TALOS_RT_FUNCTIONAL_VALUE_PROCESS
+                    : output.flags & TALOS_RT_DBREG_COVERGROUP
+                        ? TALOS_RT_FUNCTIONAL_VALUE_COVERGROUP
+                    : output.flags & TALOS_RT_DBREG_CHANDLE
+                        ? TALOS_RT_FUNCTIONAL_VALUE_CHANDLE
+                    : container && (output.flags & TALOS_RT_DBREG_CLASS_HANDLE)
+                        ? TALOS_RT_FUNCTIONAL_VALUE_CLASS_HANDLE
+                    : container ? TALOS_RT_FUNCTIONAL_VALUE_MANAGED_CONTAINER
+                    : reference ? TALOS_RT_FUNCTIONAL_VALUE_ARGUMENT_REF
+                    : output.kind == TALOS_RT_DBREG_REAL64
+                        ? TALOS_RT_FUNCTIONAL_VALUE_REAL
+                    : output.kind == TALOS_RT_DBREG_REAL32
+                        ? TALOS_RT_FUNCTIONAL_VALUE_SHORTREAL
+                    : output.kind == TALOS_RT_DBREG_STRING
+                        ? TALOS_RT_FUNCTIONAL_VALUE_STRING
+                    : output.kind == TALOS_RT_DBREG_LOGIC
+                        ? TALOS_RT_FUNCTIONAL_VALUE_FOUR_STATE
+                        : TALOS_RT_FUNCTIONAL_VALUE_INTEGRAL;
     if (output.kind != TALOS_RT_DBREG_BITS &&
         output.kind != TALOS_RT_DBREG_LOGIC &&
         output.kind != TALOS_RT_DBREG_REAL64 &&
@@ -2186,8 +2160,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       std::memset(unknown, 0, static_cast<size_t>(output.size / 2));
     return talos_rt_v1_covergroup_formal_read(
         context, *handle, *formal, kind,
-        output.kind == TALOS_RT_DBREG_REAL64 ? 64 : output.width, size,
-        nullptr, nullptr, 0, value, unknown);
+        output.kind == TALOS_RT_DBREG_REAL64 ? 64 : output.width, size, nullptr,
+        nullptr, 0, value, unknown);
   }
   case TALOS_RT_INTRINSIC_V1_COVERGROUP_SAMPLE: {
     auto handle = scalar(0), count = scalar(1);
@@ -2205,14 +2179,12 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
           return TALOS_RT_INVALID_BYTECODE;
       }
     }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
     TALOS_RT_CATCH(const std::length_error &) {
       return TALOS_RT_OUT_OF_RESOURCES;
     }
     return talos_rt_v1_covergroup_sample(context, *handle, expressions.data(),
-                                           expressions.size());
+                                         expressions.size());
   }
   case TALOS_RT_INTRINSIC_V1_COVERGROUP_INSTANCE_QUERY: {
     auto handle = scalar(0), item = scalar(1);
@@ -2230,7 +2202,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       return status;
     status = sentinel(1, static_cast<uint32_t>(covered));
     return status == TALOS_RT_OK ? sentinel(2, static_cast<uint32_t>(total))
-                                   : status;
+                                 : status;
   }
   case TALOS_RT_INTRINSIC_V1_COVERGROUP_TYPE_QUERY: {
     auto type = scalar(0), item = scalar(1);
@@ -2248,7 +2220,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       return status;
     status = sentinel(1, static_cast<uint32_t>(covered));
     return status == TALOS_RT_OK ? sentinel(2, static_cast<uint32_t>(total))
-                                   : status;
+                                 : status;
   }
   case TALOS_RT_INTRINSIC_V1_COVERAGE_CONTROL_DEFINITION: {
     auto control = scalar(0);
@@ -2264,7 +2236,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
         static_cast<int32_t>(*coverageType),
         static_cast<int32_t>(*scopeDefinition), definition, &result);
     return status == TALOS_RT_OK ? sentinel(0, static_cast<uint32_t>(result))
-                                   : status;
+                                 : status;
   }
   case TALOS_RT_INTRINSIC_V1_COVERAGE_CONTROL_INSTANCE: {
     auto control = scalar(0);
@@ -2279,7 +2251,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
         static_cast<int32_t>(*coverageType),
         static_cast<int32_t>(*scopeDefinition), *coverageScope, &result);
     return status == TALOS_RT_OK ? sentinel(0, static_cast<uint32_t>(result))
-                                   : status;
+                                 : status;
   }
   case TALOS_RT_INTRINSIC_V1_COVERAGE_QUERY_DEFINITION: {
     auto coverageType = scalar(0);
@@ -2295,7 +2267,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
         static_cast<int32_t>(*scopeDefinition), definition,
         static_cast<uint32_t>(*maximum), &result);
     return status == TALOS_RT_OK ? sentinel(0, static_cast<uint32_t>(result))
-                                   : status;
+                                 : status;
   }
   case TALOS_RT_INTRINSIC_V1_COVERAGE_QUERY_INSTANCE: {
     auto coverageType = scalar(0);
@@ -2311,7 +2283,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
         static_cast<int32_t>(*scopeDefinition), *coverageScope,
         static_cast<uint32_t>(*maximum), &result);
     return status == TALOS_RT_OK ? sentinel(0, static_cast<uint32_t>(result))
-                                   : status;
+                                 : status;
   }
   case TALOS_RT_INTRINSIC_V1_COVERAGE_DATABASE_SAVE:
   case TALOS_RT_INTRINSIC_V1_COVERAGE_DATABASE_MERGE: {
@@ -2327,7 +2299,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
             : talos_rt_v1_coverage_database_merge(
                   context, static_cast<int32_t>(*coverageType), name, &result);
     return status == TALOS_RT_OK ? sentinel(0, static_cast<uint32_t>(result))
-                                   : status;
+                                 : status;
   }
   case TALOS_RT_INTRINSIC_V1_FUNCTIONAL_COVERAGE_GET: {
     double percentage = 0.0;
@@ -2340,8 +2312,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     talos_rt_string_v1 name = 0;
     if (!readString(inputRegister(0), name))
       return TALOS_RT_INVALID_BYTECODE;
-    return signature.id ==
-                   TALOS_RT_INTRINSIC_V1_FUNCTIONAL_COVERAGE_SET_DB_NAME
+    return signature.id == TALOS_RT_INTRINSIC_V1_FUNCTIONAL_COVERAGE_SET_DB_NAME
                ? talos_rt_v1_functional_coverage_set_db_name(context, name)
                : talos_rt_v1_functional_coverage_load_db(context, name);
   }
@@ -2349,8 +2320,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     auto literal = bytes(0);
     talos_rt_gc_lane_v1 *lane = talos_rt_v1_gc_current_lane(context);
     if (!literal || !lane)
-      return literal ? TALOS_RT_INVALID_LIFECYCLE
-                     : TALOS_RT_INVALID_BYTECODE;
+      return literal ? TALOS_RT_INVALID_LIFECYCLE : TALOS_RT_INVALID_BYTECODE;
     talos_rt_string_v1 result = 0;
     talos_rt_status status = talos_rt_v1_string_create(
         lane, reinterpret_cast<const char *>(literal->data), literal->size,
@@ -2446,7 +2416,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     talos_rt_string_v1 result = 0;
     talos_rt_status status =
         talos_rt_v1_string_putc(lane, input, static_cast<int64_t>(*index),
-                                  static_cast<uint32_t>(*character), &result);
+                                static_cast<uint32_t>(*character), &result);
     return status == TALOS_RT_OK && !writeString(outputRegister(0), result)
                ? TALOS_RT_INVALID_BYTECODE
                : status;
@@ -2463,7 +2433,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     talos_rt_string_v1 result = 0;
     talos_rt_status status =
         talos_rt_v1_string_substr(lane, input, static_cast<int64_t>(*left),
-                                    static_cast<int64_t>(*right), &result);
+                                  static_cast<int64_t>(*right), &result);
     return status == TALOS_RT_OK && !writeString(outputRegister(0), result)
                ? TALOS_RT_INVALID_BYTECODE
                : status;
@@ -2744,8 +2714,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       return TALOS_RT_INVALID_BYTECODE;
     Layout output = layoutAt(image, frame.function, outputRegister(0));
     talos_rt_object_v1 *object = readManaged(inputRegister(0));
-    talos_rt_managed_word_v1 word =
-        talos_rt_managed_word_from_object(object);
+    talos_rt_managed_word_v1 word = talos_rt_managed_word_from_object(object);
     std::memcpy(frame.data + output.offset, &word, sizeof(word));
     std::memcpy(frame.data + output.offset + 8, &*offset, sizeof(*offset));
     return TALOS_RT_OK;
@@ -2787,8 +2756,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
   }
   case TALOS_RT_INTRINSIC_V1_COVERGROUP_OPTION_REFERENCE:
   case TALOS_RT_INTRINSIC_V1_COVERGROUP_TYPE_OPTION_REFERENCE: {
-    bool typeOption = signature.id ==
-                      TALOS_RT_INTRINSIC_V1_COVERGROUP_TYPE_OPTION_REFERENCE;
+    bool typeOption =
+        signature.id == TALOS_RT_INTRINSIC_V1_COVERGROUP_TYPE_OPTION_REFERENCE;
     uint32_t first = typeOption ? 1 : 0;
     std::array<std::optional<uint64_t>, 6> inputs;
     for (uint32_t index = 0; index != inputs.size(); ++index)
@@ -2850,11 +2819,9 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
         context->stateUnknown.empty()
             ? nullptr
             : reinterpret_cast<uint8_t *>(context->stateUnknown.data());
-    talos_rt_status status =
-        talos_rt_v1_reference_path_string_character_create(
-            lane, string, static_cast<int64_t>(*index), watchOwner,
-            ownerPayload, ownerManaged, stateValue, stateUnknown,
-            image.stateBitCount, &path);
+    talos_rt_status status = talos_rt_v1_reference_path_string_character_create(
+        lane, string, static_cast<int64_t>(*index), watchOwner, ownerPayload,
+        ownerManaged, stateValue, stateUnknown, image.stateBitCount, &path);
     if (status != TALOS_RT_OK)
       return status;
     return writeManaged(outputRegister(0), path) ? TALOS_RT_OK
@@ -2915,8 +2882,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       return TALOS_RT_INVALID_BYTECODE;
     talos_rt_object_v1 *path = readManaged(inputRegister(0));
     std::memset(frame.data + output.offset, 0, output.size);
-    talos_rt_managed_word_v1 pathWord =
-        talos_rt_managed_word_from_object(path);
+    talos_rt_managed_word_v1 pathWord = talos_rt_managed_word_from_object(path);
     std::memcpy(frame.data + output.offset, &pathWord, sizeof(pathWord));
     uint64_t managed = 2;
     std::memcpy(frame.data + output.offset + 16, &managed, sizeof(managed));
@@ -3052,9 +3018,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     std::memcpy(&word, frame.data + input.offset + *bitOffset / 8,
                 sizeof(word));
     talos_rt_object_v1 *object = talos_rt_object_from_managed_word(word);
-    return writeManaged(outputRegister(0), object)
-               ? TALOS_RT_OK
-               : TALOS_RT_INVALID_BYTECODE;
+    return writeManaged(outputRegister(0), object) ? TALOS_RT_OK
+                                                   : TALOS_RT_INVALID_BYTECODE;
   }
   case TALOS_RT_INTRINSIC_V1_MANAGED_CANDIDATE_ROOT: {
     Layout input = layoutAt(image, frame.function, inputRegister(0));
@@ -3069,11 +3034,10 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     std::memcpy(&word, frame.data + input.offset + *bitOffset / 8,
                 sizeof(word));
     word = talos_rt_v1_gc_candidate_root(context, word,
-                                           static_cast<uint32_t>(*kindMask));
+                                         static_cast<uint32_t>(*kindMask));
     talos_rt_object_v1 *object = talos_rt_object_from_managed_word(word);
-    return writeManaged(outputRegister(0), object)
-               ? TALOS_RT_OK
-               : TALOS_RT_INVALID_BYTECODE;
+    return writeManaged(outputRegister(0), object) ? TALOS_RT_OK
+                                                   : TALOS_RT_INVALID_BYTECODE;
   }
   case TALOS_RT_INTRINSIC_V1_MANAGED_WATCH: {
     std::optional<uint64_t> encodedKind = scalar(1);
@@ -3118,8 +3082,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
           talos_rt_v1_object_read(object, offset, &value, sizeof(value));
       if (status != TALOS_RT_OK)
         return status;
-      talos_rt_object_v1 *decoded =
-          talos_rt_object_from_managed_word(value);
+      talos_rt_object_v1 *decoded = talos_rt_object_from_managed_word(value);
       return value != talos_rt_managed_word_from_object(decoded) ||
                      !writeManaged(outputRegister(0), decoded)
                  ? TALOS_RT_INVALID_HANDLE
@@ -3129,8 +3092,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       if (*planeSize != sizeof(uint64_t) || output.size < 32)
         return TALOS_RT_INVALID_BYTECODE;
       uint64_t stableID = UINT64_MAX;
-      talos_rt_status status = talos_rt_v1_object_read(
-          object, offset, &stableID, sizeof(stableID));
+      talos_rt_status status =
+          talos_rt_v1_object_read(object, offset, &stableID, sizeof(stableID));
       if (status != TALOS_RT_OK)
         return status;
       uint32_t kind = TALOS_RT_DESCRIPTOR_EVENT;
@@ -3158,7 +3121,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
           object, offset, frame.data + output.offset,
           frame.data + output.offset + scratchPlaneSize, *planeSize);
     return talos_rt_v1_object_read(object, offset, frame.data + output.offset,
-                                     *planeSize);
+                                   *planeSize);
   }
   case TALOS_RT_INTRINSIC_V1_MANAGED_STORE: {
     talos_rt_object_v1 *object = nullptr;
@@ -3185,7 +3148,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       if (kind != TALOS_RT_DESCRIPTOR_EVENT)
         return TALOS_RT_INVALID_BYTECODE;
       return talos_rt_v1_object_write(object, offset, &stableID,
-                                        sizeof(stableID));
+                                      sizeof(stableID));
     }
     uint64_t scratchPlaneSize = ((uint64_t{input.width} + 63) / 64) * 8;
     bool fourState = input.kind == TALOS_RT_DBREG_LOGIC;
@@ -3197,7 +3160,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
           object, offset, frame.data + input.offset,
           frame.data + input.offset + scratchPlaneSize, *planeSize);
     return talos_rt_v1_object_write(object, offset, frame.data + input.offset,
-                                      *planeSize);
+                                    *planeSize);
   }
   case TALOS_RT_INTRINSIC_V1_MANAGED_OVERRIDE: {
     talos_rt_object_v1 *object = nullptr;
@@ -3234,8 +3197,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
         !flags || *planeSize == 0 || (*flags & ~uint64_t{9}) != 0)
       return TALOS_RT_INVALID_BYTECODE;
     return talos_rt_v1_object_release_override(object, offset, *planeSize,
-                                                 (*flags & 8) != 0 ? 1 : 0,
-                                                 (*flags & 1) != 0 ? 1 : 0);
+                                               (*flags & 8) != 0 ? 1 : 0,
+                                               (*flags & 1) != 0 ? 1 : 0);
   }
   case TALOS_RT_INTRINSIC_V1_MANAGED_NBA: {
     talos_rt_object_v1 *object = nullptr;
@@ -3274,7 +3237,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
         unknown = frame.data + input.offset + scratchPlaneSize;
     }
     return talos_rt_v1_scheduler_managed_nba(context, object, offset, value,
-                                               unknown, *planeSize, delay);
+                                             unknown, *planeSize, delay);
   }
   case TALOS_RT_INTRINSIC_V1_MANAGED_NBA_MASKED: {
     talos_rt_object_v1 *object = nullptr;
@@ -3334,8 +3297,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     return talos_rt_v1_weak_clear(readManaged(inputRegister(0)));
   case TALOS_RT_INTRINSIC_V1_GC_SAFEPOINT: {
     talos_rt_gc_lane_v1 *lane = talos_rt_v1_gc_current_lane(context);
-    return lane ? talos_rt_v1_gc_safepoint(lane)
-                : TALOS_RT_INVALID_LIFECYCLE;
+    return lane ? talos_rt_v1_gc_safepoint(lane) : TALOS_RT_INVALID_LIFECYCLE;
   }
   case TALOS_RT_INTRINSIC_V1_SPAWN: {
     if (!context)
@@ -3440,8 +3402,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       // slow-dominant scheduler shape profitable.
       talos_rt_invalidate_design_ready_cohort(context);
       task.id = id;
-      task.phase =
-          (callee.flags & TALOS_RT_DESIGN_FUNCTION_FINAL) != 0 ? 1 : 0;
+      task.phase = (callee.flags & TALOS_RT_DESIGN_FUNCTION_FINAL) != 0 ? 1 : 0;
       task.homeRegion = functionHomeRegion(callee);
       task.queuedRegion = task.homeRegion;
       if (task.phase == 0 && context->activeDesignTaskID != 0)
@@ -3466,8 +3427,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
           context->scheduledDesignTaskIndices[scheduledID] =
               context->scheduledDesignTasks.size() - 1;
           context->designPollCandidates.insert(scheduledID);
-          if ((signature.flags &
-               TALOS_RT_INTRINSIC_SPAWN_DETACHED_CONTROLS) == 0)
+          if ((signature.flags & TALOS_RT_INTRINSIC_SPAWN_DETACHED_CONTROLS) ==
+              0)
             talos_rt_register_unstarted_actor(
                 context, context->scheduledDesignTasks.back().phase,
                 scheduledID);
@@ -4305,13 +4266,11 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       eventState.generation = 1;
     eventState.lastTriggeredTime = context->schedulerTime;
     if (!talos_rt_notify_event_order_waiters_unlocked(context, stableID))
-      return context->schedulerStatus == TALOS_RT_OK
-                 ? TALOS_RT_INVALID_DESIGN
-                 : context->schedulerStatus;
+      return context->schedulerStatus == TALOS_RT_OK ? TALOS_RT_INVALID_DESIGN
+                                                     : context->schedulerStatus;
     if (!talos_rt_notify_observer_event_unlocked(context, stableID))
-      return context->schedulerStatus == TALOS_RT_OK
-                 ? TALOS_RT_INVALID_DESIGN
-                 : context->schedulerStatus;
+      return context->schedulerStatus == TALOS_RT_OK ? TALOS_RT_INVALID_DESIGN
+                                                     : context->schedulerStatus;
     if (++context->schedulerEpoch == 0)
       context->schedulerEpoch = 1;
     return TALOS_RT_OK;
@@ -4382,7 +4341,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       return TALOS_RT_INVALID_HANDLE;
     if (signature.id == TALOS_RT_INTRINSIC_V1_CLOCKING_OUTPUT_TRACK)
       return talos_rt_v1_clocking_output_track(context, stable, *width,
-                                                 signature.flags);
+                                               signature.flags);
     return sentinel(0, talos_rt_v1_clocking_output_current(
                            context, stable, *width, signature.flags));
   }
@@ -4392,10 +4351,10 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     std::optional<uint64_t> end = readScalar(image, frame, inputRegister(2));
     if (!mask || !start || !end)
       return TALOS_RT_INVALID_DESIGN;
-    return sentinel(
-        0, talos_rt_v1_nochange_update(context, signature.flags, *mask,
-                                         static_cast<int64_t>(*start),
-                                         static_cast<int64_t>(*end)));
+    return sentinel(0,
+                    talos_rt_v1_nochange_update(context, signature.flags, *mask,
+                                                static_cast<int64_t>(*start),
+                                                static_cast<int64_t>(*end)));
   }
   case TALOS_RT_INTRINSIC_V1_STATE_ALLOC:
   case TALOS_RT_INTRINSIC_V1_STATE_ALLOC_TYPED: {
@@ -4462,7 +4421,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
             &stable);
       } else
         status = talos_rt_v1_native_state_alloc(context, initial.width, value,
-                                                  unknown, &stable);
+                                                unknown, &stable);
     }
     if (status != TALOS_RT_OK)
       return status;
@@ -4503,8 +4462,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     std::optional<uint64_t> activation = scalar(0);
     if (!activation || signature.flags == 0)
       return TALOS_RT_INVALID_BYTECODE;
-    return talos_rt_v1_control_boundary(context, *activation,
-                                          signature.flags);
+    return talos_rt_v1_control_boundary(context, *activation, signature.flags);
   }
   case TALOS_RT_INTRINSIC_V1_CONTROL_LEAVE: {
     if (!context)
@@ -4525,8 +4483,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       activation = *value;
     }
     return talos_rt_v1_control_disable(context,
-                                         signature.flags & ~(UINT32_C(1) << 31),
-                                         activation, signature.flags >> 31);
+                                       signature.flags & ~(UINT32_C(1) << 31),
+                                       activation, signature.flags >> 31);
   }
   case TALOS_RT_INTRINSIC_V1_CONTROL_DISABLE_SELECTED: {
     auto target = scalar(0), activation = scalar(1), all = scalar(2);
@@ -4607,8 +4565,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     std::optional<uint64_t> assertionID = scalar(0);
     if (!assertionID || *assertionID == 0)
       return TALOS_RT_INVALID_BYTECODE;
-    return sentinel(
-        0, talos_rt_v1_assertion_action_state(context, *assertionID));
+    return sentinel(0,
+                    talos_rt_v1_assertion_action_state(context, *assertionID));
   }
   case TALOS_RT_INTRINSIC_V1_ASSERTION_KILL_EPOCH: {
     if (!context)
@@ -4616,8 +4574,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     std::optional<uint64_t> assertionID = scalar(0);
     if (!assertionID || *assertionID == 0)
       return TALOS_RT_INVALID_BYTECODE;
-    return sentinel(0,
-                    talos_rt_v1_assertion_kill_epoch(context, *assertionID));
+    return sentinel(0, talos_rt_v1_assertion_kill_epoch(context, *assertionID));
   }
   case TALOS_RT_INTRINSIC_V1_MONITOR_REGISTER: {
     if (!context)
@@ -4643,7 +4600,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
         end != begin + 1)
       return TALOS_RT_INVALID_HANDLE;
     return talos_rt_v1_monitor_register(context, static_cast<uint64_t>(begin),
-                                          1);
+                                        1);
   }
   case TALOS_RT_INTRINSIC_V1_PROCESS_CURRENT:
     return sentinel(0, talos_rt_v1_process_current(context));
@@ -4675,8 +4632,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     if (!logicalProcess || !state || !increment)
       return TALOS_RT_INVALID_BYTECODE;
     talos_rt_random_state_v1 snapshot{*state, *increment};
-    return talos_rt_v1_process_random_set(context, *logicalProcess,
-                                            &snapshot);
+    return talos_rt_v1_process_random_set(context, *logicalProcess, &snapshot);
   }
   case TALOS_RT_INTRINSIC_V1_DUMP_OPEN: {
     auto path = bytes(0);
@@ -4733,7 +4689,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     if (!readString(inputRegister(0), path) || !value)
       return TALOS_RT_INVALID_BYTECODE;
     return talos_rt_v1_dump_ports_control(context, path, signature.flags,
-                                            *value);
+                                          *value);
   }
   case TALOS_RT_INTRINSIC_V1_MONITOR_CONTROL:
     return talos_rt_v1_monitor_control(context, signature.flags);
@@ -5023,8 +4979,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
           return layout.kind == TALOS_RT_DBREG_REAL32 && layout.width == 32;
         if (abi.kind == 11)
           return layout.kind == TALOS_RT_DBREG_REAL64 && layout.width == 64;
-        uint8_t expectedKind = (abi.flags & 1) != 0 ? TALOS_RT_DBREG_LOGIC
-                                                    : TALOS_RT_DBREG_BITS;
+        uint8_t expectedKind =
+            (abi.flags & 1) != 0 ? TALOS_RT_DBREG_LOGIC : TALOS_RT_DBREG_BITS;
         return layout.kind == expectedKind && layout.width == abi.width;
       };
       uint64_t hash = TALOS_STABLE_HASH_OFFSET_BASIS;
@@ -5111,8 +5067,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
                        : layout.kind == TALOS_RT_DBREG_HANDLE
                            ? 4
                            : limbCount(layout.width);
-      uint32_t width =
-          layout.kind == TALOS_RT_DBREG_STATUS ? 32 : layout.width;
+      uint32_t width = layout.kind == TALOS_RT_DBREG_STATUS ? 32 : layout.width;
       return std::tuple<uint32_t, uint64_t, uint64_t *, uint64_t *>{
           width, limbs, reinterpret_cast<uint64_t *>(address),
           layout.kind == TALOS_RT_DBREG_LOGIC
@@ -5130,19 +5085,18 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
         uint64_t rootPlaneSize = limbCount(registerLayout.width) * uint64_t{8};
         uint8_t *address = frame.data + registerLayout.offset;
         talos_rt_dpi_open_array_storage_v1 prepared{};
-        talos_rt_status recursiveStatus =
-            designBytecodeDpiOpenPrepareRecursive(
-                address,
-                layout.transportFourState ? address + rootPlaneSize : nullptr,
-                rootPlaneSize, layout.transportWidth, layout.transportFourState,
-                dpiEntries[index].direction != 0 ? 1 : 0, layout.elementKind,
-                layout.elementWidth, layout.fourState,
-                static_cast<int32_t>(layout.packedLeft),
-                static_cast<int32_t>(layout.packedRight), layout.elementCSize,
-                layout.elementCAlignment, layout.elementStringCount,
-                layout.elementPlan.data(), layout.elementPlan.size(),
-                layout.shapePlan.data(),
-                static_cast<uint32_t>(layout.ranges.size() / 2), &prepared);
+        talos_rt_status recursiveStatus = designBytecodeDpiOpenPrepareRecursive(
+            address,
+            layout.transportFourState ? address + rootPlaneSize : nullptr,
+            rootPlaneSize, layout.transportWidth, layout.transportFourState,
+            dpiEntries[index].direction != 0 ? 1 : 0, layout.elementKind,
+            layout.elementWidth, layout.fourState,
+            static_cast<int32_t>(layout.packedLeft),
+            static_cast<int32_t>(layout.packedRight), layout.elementCSize,
+            layout.elementCAlignment, layout.elementStringCount,
+            layout.elementPlan.data(), layout.elementPlan.size(),
+            layout.shapePlan.data(),
+            static_cast<uint32_t>(layout.ranges.size() / 2), &prepared);
         if (recursiveStatus != TALOS_RT_OK)
           return recursiveStatus;
         storage.descriptor = prepared.descriptor;
@@ -5258,11 +5212,11 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
           return TALOS_RT_INVALID_BYTECODE;
         storage.dimensions[dimension] = {
             static_cast<int32_t>(left), static_cast<int32_t>(right), stride,
-            storage.dynamic ? TALOS_RT_DPI_DIMENSION_RUNTIME |
-                                  (storage.elementCount == 0
-                                       ? TALOS_RT_DPI_DIMENSION_EMPTY
-                                       : 0)
-                            : 0,
+            storage.dynamic
+                ? TALOS_RT_DPI_DIMENSION_RUNTIME |
+                      (storage.elementCount == 0 ? TALOS_RT_DPI_DIMENSION_EMPTY
+                                                 : 0)
+                : 0,
             0};
         uint64_t extent = storage.dynamic
                               ? storage.elementCount
@@ -5300,8 +5254,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
           0};
       return TALOS_RT_OK;
     };
-    auto prepareAggregateInput =
-        [&](uint32_t index, Layout registerLayout) -> talos_rt_status {
+    auto prepareAggregateInput = [&](uint32_t index,
+                                     Layout registerLayout) -> talos_rt_status {
       const DPIAggregateLayout &layout = *dpiAggregateLayouts[index];
       uint64_t capacity = layout.cSize + layout.stringCount * uint64_t{8};
       if (capacity > SIZE_MAX)
@@ -5406,8 +5360,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     talos_rt_status importStatus =
         (importSite.flags & TALOS_RT_IMPORT_CONTEXT) != 0
             ? talos_rt_v1_import_call(context, &importSite, inputs.data(),
-                                        inputCount, outputs.data(),
-                                        dataOutputCount)
+                                      inputCount, outputs.data(),
+                                      dataOutputCount)
             : talos_rt_v1_import_call_noncontext(
                   context, &importSite, inputs.data(), inputCount,
                   outputs.data(), dataOutputCount);
@@ -5461,8 +5415,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
               open.shapePlan.data(),
               static_cast<uint32_t>(open.ranges.size() / 2));
           if (status != TALOS_RT_OK || input.size != output.size)
-            return status != TALOS_RT_OK ? status
-                                           : TALOS_RT_INVALID_BYTECODE;
+            return status != TALOS_RT_OK ? status : TALOS_RT_INVALID_BYTECODE;
           std::memcpy(frame.data + output.offset, inputAddress, input.size);
           continue;
         }
@@ -5573,8 +5526,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       uint32_t itemFlags = read32(flags + uint64_t{index} * 4);
       if ((itemFlags & ~uint32_t{TALOS_RT_OUTPUT_ITEM_ALL}) != 0 ||
           ((itemFlags & TALOS_RT_OUTPUT_ITEM_REAL) != 0 &&
-           (itemFlags & (TALOS_RT_OUTPUT_ITEM_SIGNED |
-                         TALOS_RT_OUTPUT_ITEM_OMITTED)) != 0))
+           (itemFlags &
+            (TALOS_RT_OUTPUT_ITEM_SIGNED | TALOS_RT_OUTPUT_ITEM_OMITTED)) != 0))
         return TALOS_RT_INVALID_BYTECODE;
       if ((itemFlags & TALOS_RT_OUTPUT_ITEM_OMITTED) != 0) {
         arguments.push_back({TALOS_RT_ARG_EMPTY, 0, 0, nullptr, nullptr});
@@ -5608,12 +5561,12 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
                                        : 0),
              0, value.value.data(),
              value.fourState ? value.unknown.data() : nullptr, name});
-        arguments.push_back({TALOS_RT_ARG_ENUM,
-                             static_cast<talos_rt_arg_flags>(
-                                 (itemFlags & TALOS_RT_OUTPUT_ITEM_SIGNED)
-                                     ? TALOS_RT_ARG_SIGNED
-                                     : 0),
-                             0, &enumArguments.back(), nullptr});
+        arguments.push_back(
+            {TALOS_RT_ARG_ENUM,
+             static_cast<talos_rt_arg_flags>(
+                 (itemFlags & TALOS_RT_OUTPUT_ITEM_SIGNED) ? TALOS_RT_ARG_SIGNED
+                                                           : 0),
+             0, &enumArguments.back(), nullptr});
       } else if ((itemFlags & TALOS_RT_OUTPUT_ITEM_NET) != 0) {
         if (itemFlags != TALOS_RT_OUTPUT_ITEM_NET &&
             itemFlags !=
@@ -5642,12 +5595,12 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
                  : 0u,
              value.value.data(),
              value.fourState ? value.unknown.data() : nullptr, stable});
-        arguments.push_back({TALOS_RT_ARG_NET,
-                             static_cast<talos_rt_arg_flags>(
-                                 (itemFlags & TALOS_RT_OUTPUT_ITEM_SIGNED)
-                                     ? TALOS_RT_ARG_SIGNED
-                                     : 0),
-                             0, &netArguments.back(), nullptr});
+        arguments.push_back(
+            {TALOS_RT_ARG_NET,
+             static_cast<talos_rt_arg_flags>(
+                 (itemFlags & TALOS_RT_OUTPUT_ITEM_SIGNED) ? TALOS_RT_ARG_SIGNED
+                                                           : 0),
+             0, &netArguments.back(), nullptr});
       } else if ((itemFlags & TALOS_RT_OUTPUT_ITEM_RAW_AGGREGATE) != 0) {
         if (itemFlags != TALOS_RT_OUTPUT_ITEM_RAW_AGGREGATE ||
             physical + 1 >= site.inputCount)
@@ -5685,8 +5638,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
             (itemFlags != TALOS_RT_OUTPUT_ITEM_STRING &&
              itemFlags != (TALOS_RT_OUTPUT_ITEM_STRING |
                            TALOS_RT_OUTPUT_ITEM_DESIGNATED_FORMAT) &&
-             itemFlags != (TALOS_RT_OUTPUT_ITEM_STRING |
-                           TALOS_RT_OUTPUT_ITEM_FORMAT)))
+             itemFlags !=
+                 (TALOS_RT_OUTPUT_ITEM_STRING | TALOS_RT_OUTPUT_ITEM_FORMAT)))
           return TALOS_RT_INVALID_BYTECODE;
         arguments.push_back(
             {TALOS_RT_ARG_MANAGED_STRING,
@@ -5723,12 +5676,12 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
             layout.kind != TALOS_RT_DBREG_BITS || layout.width != 64 ||
             layout.size != 8)
           return TALOS_RT_INVALID_BYTECODE;
-        arguments.push_back({TALOS_RT_ARG_PROCESS, 0, 0,
-                             frame.data + layout.offset, nullptr});
+        arguments.push_back(
+            {TALOS_RT_ARG_PROCESS, 0, 0, frame.data + layout.offset, nullptr});
       } else if ((itemFlags & TALOS_RT_OUTPUT_ITEM_REAL) != 0) {
         if (itemFlags != TALOS_RT_OUTPUT_ITEM_REAL &&
-            itemFlags != (TALOS_RT_OUTPUT_ITEM_REAL |
-                          TALOS_RT_OUTPUT_ITEM_REAL_TIME))
+            itemFlags !=
+                (TALOS_RT_OUTPUT_ITEM_REAL | TALOS_RT_OUTPUT_ITEM_REAL_TIME))
           return TALOS_RT_INVALID_BYTECODE;
         if (layout.kind != TALOS_RT_DBREG_REAL32 &&
             layout.kind != TALOS_RT_DBREG_REAL64)
@@ -5753,25 +5706,25 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
           return TALOS_RT_INVALID_BYTECODE;
         values.push_back(readLogic(frame.data, layout));
         Logic &value = values.back();
-        arguments.push_back({TALOS_RT_ARG_LOGIC,
-                             static_cast<talos_rt_arg_flags>(
-                                 (itemFlags & TALOS_RT_OUTPUT_ITEM_SIGNED)
-                                     ? TALOS_RT_ARG_SIGNED
-                                     : 0),
-                             value.width, value.value.data(),
-                             value.fourState ? value.unknown.data() : nullptr});
+        arguments.push_back(
+            {TALOS_RT_ARG_LOGIC,
+             static_cast<talos_rt_arg_flags>(
+                 (itemFlags & TALOS_RT_OUTPUT_ITEM_SIGNED) ? TALOS_RT_ARG_SIGNED
+                                                           : 0),
+             value.width, value.value.data(),
+             value.fourState ? value.unknown.data() : nullptr});
       }
     }
     if (physical != site.inputCount)
       return TALOS_RT_INVALID_BYTECODE;
     talos_rt_format_env_v1 environment{scope,       scopeSize, library,
-                                         librarySize, 0,         precision,
-                                         nullptr,     0,         multiplier};
+                                       librarySize, 0,         precision,
+                                       nullptr,     0,         multiplier};
     if (!stringOutput)
-      return talos_rt_v1_display(
-          context, static_cast<uint32_t>(*descriptor), newline,
-          static_cast<talos_rt_radix>(radix), arguments.data(),
-          arguments.size(), &environment);
+      return talos_rt_v1_display(context, static_cast<uint32_t>(*descriptor),
+                                 newline, static_cast<talos_rt_radix>(radix),
+                                 arguments.data(), arguments.size(),
+                                 &environment);
     talos_rt_string_v1 result = 0;
     talos_rt_status status = talos_rt_v1_string_output_format(
         context, static_cast<talos_rt_radix>(radix), arguments.data(),
@@ -5789,12 +5742,12 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       return TALOS_RT_INVALID_BYTECODE;
     if (signature.id == TALOS_RT_INTRINSIC_V1_FINISH)
       return talos_rt_v1_scheduler_finish(context,
-                                            static_cast<uint32_t>(*verbosity));
+                                          static_cast<uint32_t>(*verbosity));
     if (signature.id == TALOS_RT_INTRINSIC_V1_STOP)
       return talos_rt_v1_scheduler_stop(context,
-                                          static_cast<uint32_t>(*verbosity));
+                                        static_cast<uint32_t>(*verbosity));
     return talos_rt_v1_scheduler_fatal(context,
-                                         static_cast<uint32_t>(*verbosity));
+                                       static_cast<uint32_t>(*verbosity));
   }
   case TALOS_RT_INTRINSIC_V1_ERROR:
     return talos_rt_v1_scheduler_error(context);
@@ -5835,7 +5788,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
                            ? static_cast<uint32_t>(control.unknown[0] & 1)
                            : 0;
     return talos_rt_v1_pass_switch_control(context, signature.flags, value,
-                                             unknown);
+                                           unknown);
   }
   case TALOS_RT_INTRINSIC_V1_PASS_SWITCH_CONTROL_DELAYED: {
     Layout input = layoutAt(image, frame.function, inputRegister(0));
@@ -5851,8 +5804,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
                            ? static_cast<uint32_t>(control.unknown[0] & 1)
                            : 0;
     return talos_rt_v1_pass_switch_control_delayed(context, signature.flags,
-                                                     value, unknown, *turnOn,
-                                                     *turnOff, *unknownDelay);
+                                                   value, unknown, *turnOn,
+                                                   *turnOff, *unknownDelay);
   }
   case TALOS_RT_INTRINSIC_V1_MOS_DRIVE_DELAYED: {
     Layout input = layoutAt(image, frame.function, inputRegister(0));
@@ -5868,7 +5821,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
                            ? static_cast<uint32_t>(control.unknown[0] & 1)
                            : 0;
     return talos_rt_v1_mos_drive_delayed(context, signature.flags, value,
-                                           unknown, *rise, *fall, *turnoff);
+                                         unknown, *rise, *fall, *turnoff);
   }
   case TALOS_RT_INTRINSIC_V1_TIME_NOW:
     return sentinel(0, talos_rt_v1_scheduler_time(context));
@@ -6183,10 +6136,10 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     auto suffix = bytes(2);
     if (!units || !digits || !width || !suffix)
       return TALOS_RT_INVALID_BYTECODE;
-    return talos_rt_v1_time_format(
-        context, static_cast<int32_t>(*units), static_cast<uint32_t>(*digits),
-        reinterpret_cast<const char *>(suffix->data), suffix->size,
-        static_cast<uint32_t>(*width));
+    return talos_rt_v1_time_format(context, static_cast<int32_t>(*units),
+                                   static_cast<uint32_t>(*digits),
+                                   reinterpret_cast<const char *>(suffix->data),
+                                   suffix->size, static_cast<uint32_t>(*width));
   }
   case TALOS_RT_INTRINSIC_V1_TIME_SCAN_SCALE: {
     auto input = realInput(0);
@@ -6195,15 +6148,14 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       return TALOS_RT_INVALID_BYTECODE;
     return writeReal(
         0, talos_rt_v1_time_scan_scale(context, *input, *multiplier,
-                                         static_cast<int32_t>(*precision)));
+                                       static_cast<int32_t>(*precision)));
   }
   case TALOS_RT_INTRINSIC_V1_PLUSARG_TEST: {
     talos_rt_string_v1 name = 0;
     if (!readString(inputRegister(0), name))
       return TALOS_RT_INVALID_BYTECODE;
     uint32_t found = 0;
-    talos_rt_status status =
-        talos_rt_v1_plusarg_test(context, name, &found);
+    talos_rt_status status = talos_rt_v1_plusarg_test(context, name, &found);
     return sentinel(0, status == TALOS_RT_OK ? found : 0);
   }
   case TALOS_RT_INTRINSIC_V1_PLUSARG_VALUE: {
@@ -6276,7 +6228,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     int32_t result = -1;
     talos_rt_status status = talos_rt_v1_system(context, command, &result);
     return sentinel(0, status == TALOS_RT_OK ? static_cast<uint32_t>(result)
-                                               : UINT32_MAX);
+                                             : UINT32_MAX);
   }
   case TALOS_RT_INTRINSIC_V1_FILE_ERROR_STRING: {
     auto descriptor = scalar(0);
@@ -6306,11 +6258,9 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     // the runtime's last-error record, but it must not terminate the calling
     // procedural process.
     if (signature.id == TALOS_RT_INTRINSIC_V1_FILE_CLOSE)
-      (void)talos_rt_v1_file_close(context,
-                                     static_cast<uint32_t>(*descriptor));
+      (void)talos_rt_v1_file_close(context, static_cast<uint32_t>(*descriptor));
     else
-      (void)talos_rt_v1_file_flush(context,
-                                     static_cast<uint32_t>(*descriptor));
+      (void)talos_rt_v1_file_flush(context, static_cast<uint32_t>(*descriptor));
     return TALOS_RT_OK;
   }
   case TALOS_RT_INTRINSIC_V1_FILE_GETC: {
@@ -6328,7 +6278,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       return TALOS_RT_INVALID_BYTECODE;
     talos_rt_status status =
         talos_rt_v1_file_ungetc(context, static_cast<uint32_t>(*descriptor),
-                                  static_cast<uint8_t>(*byte));
+                                static_cast<uint8_t>(*byte));
     return sentinel(0, status == TALOS_RT_OK ? 0 : UINT32_MAX);
   }
   case TALOS_RT_INTRINSIC_V1_FILE_GETLINE: {
@@ -6357,7 +6307,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     uint64_t count = 0;
     talos_rt_status status =
         talos_rt_v1_file_read(context, static_cast<uint32_t>(*descriptor),
-                                data.data(), capacity, &count);
+                              data.data(), capacity, &count);
     if (!packBytes(image, frame, outputRegister(0), data.data(), count, true))
       return TALOS_RT_INVALID_BYTECODE;
     return sentinel(1, status == TALOS_RT_OK ? count : 0);
@@ -6366,8 +6316,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     auto descriptor = scalar(0), radix = scalar(1);
     Layout output = layoutAt(image, frame.function, outputRegister(0));
     if (!descriptor || !radix || *descriptor > UINT32_MAX ||
-        (*radix != 2 && *radix != 16) ||
-        output.kind != TALOS_RT_DBREG_LOGIC || output.width == 0)
+        (*radix != 2 && *radix != 16) || output.kind != TALOS_RT_DBREG_LOGIC ||
+        output.width == 0)
       return TALOS_RT_INVALID_BYTECODE;
     uint64_t byteSize = (uint64_t{output.width} + 7) / 8;
     std::vector<uint8_t> value(static_cast<size_t>(byteSize));
@@ -6444,8 +6394,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     if (!descriptor || *descriptor > UINT32_MAX)
       return TALOS_RT_INVALID_BYTECODE;
     uint32_t eof = 0;
-    talos_rt_status status = talos_rt_v1_file_eof(
-        context, static_cast<uint32_t>(*descriptor), &eof);
+    talos_rt_status status =
+        talos_rt_v1_file_eof(context, static_cast<uint32_t>(*descriptor), &eof);
     return sentinel(0, status == TALOS_RT_OK ? eof : 0);
   }
   case TALOS_RT_INTRINSIC_V1_FILE_SEEK: {
@@ -6455,8 +6405,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       return TALOS_RT_INVALID_BYTECODE;
     talos_rt_status status =
         talos_rt_v1_file_seek(context, static_cast<uint32_t>(*descriptor),
-                                static_cast<int64_t>(*offset),
-                                static_cast<talos_rt_seek_origin>(*origin));
+                              static_cast<int64_t>(*offset),
+                              static_cast<talos_rt_seek_origin>(*origin));
     return sentinel(0, status == TALOS_RT_OK ? 0 : UINT32_MAX);
   }
   case TALOS_RT_INTRINSIC_V1_FILE_TELL: {
@@ -6467,7 +6417,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     talos_rt_status status = talos_rt_v1_file_tell(
         context, static_cast<uint32_t>(*descriptor), &offset);
     return sentinel(0, status == TALOS_RT_OK ? static_cast<uint64_t>(offset)
-                                               : UINT64_MAX);
+                                             : UINT64_MAX);
   }
   case TALOS_RT_INTRINSIC_V1_FILE_REWIND: {
     auto descriptor = scalar(0);
@@ -6560,10 +6510,9 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       return TALOS_RT_INVALID_BYTECODE;
     talos_rt_status status =
         signature.id == TALOS_RT_INTRINSIC_V1_VPI_CHILD_AT
-            ? talos_rt_cached_design_child_at(context, cursor, *index,
-                                                &result)
+            ? talos_rt_cached_design_child_at(context, cursor, *index, &result)
             : talos_rt_cached_design_type_child(context, cursor, *index,
-                                                  &result);
+                                                &result);
     if (!writeScalar(image, frame, outputRegister(0), result.offset))
       return TALOS_RT_INVALID_BYTECODE;
     return finishVPI(1, status);
@@ -6575,8 +6524,8 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     if (!name)
       return TALOS_RT_INVALID_BYTECODE;
     talos_rt_design_cursor_v1 cursor{};
-    talos_rt_status status = talos_rt_cached_design_lookup(
-        context, name->data, name->size, &cursor);
+    talos_rt_status status =
+        talos_rt_cached_design_lookup(context, name->data, name->size, &cursor);
     if (!writeScalar(image, frame, outputRegister(0), cursor.offset))
       return TALOS_RT_INVALID_BYTECODE;
     return finishVPI(1, status);

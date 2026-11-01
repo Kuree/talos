@@ -51,15 +51,15 @@ inline bool decodeGlobalHandle(uint64_t handle, int64_t &offset) {
 
 inline uint64_t encodeGlobalHandle(int64_t offset) {
   return talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_GLOBAL, 0,
-                                         offset);
+                                       offset);
 }
 inline uint64_t encodeAutomaticHandle(uint32_t id, int64_t offset) {
   return talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_AUTOMATIC, id,
-                                         offset);
+                                       offset);
 }
 inline uint64_t encodeStaticHandle(uint32_t id, int64_t offset) {
   return talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_STATIC, id,
-                                         offset);
+                                       offset);
 }
 
 inline bool isDynamicEventStableHandle(uint64_t stable) {
@@ -125,11 +125,11 @@ inline bool decodeCanonicalEventHandle(uint64_t stable, uint8_t *address) {
     else if (!decodeGlobalHandle(stable, start))
       return false;
   }
-  uint64_t words[4] = {
-      TALOS_RT_DESCRIPTOR_EVENT, static_cast<uint64_t>(start),
-      static_cast<uint64_t>(start),
-      static_cast<uint64_t>(start == -1 || start == INT64_MAX ? start
-                                                              : start + 1)};
+  uint64_t words[4] = {TALOS_RT_DESCRIPTOR_EVENT, static_cast<uint64_t>(start),
+                       static_cast<uint64_t>(start),
+                       static_cast<uint64_t>(start == -1 || start == INT64_MAX
+                                                 ? start
+                                                 : start + 1)};
   std::memcpy(address, words, sizeof(words));
   return true;
 }
@@ -246,8 +246,7 @@ inline uint64_t read64(const uint8_t *data) {
 }
 
 constexpr uint64_t kLayoutSize = 40;
-constexpr uint64_t kInstructionSize =
-    TALOS_RT_DESIGN_BYTECODE_INSTRUCTION_SIZE;
+constexpr uint64_t kInstructionSize = TALOS_RT_DESIGN_BYTECODE_INSTRUCTION_SIZE;
 
 inline Layout layoutAt(const Image &image, const Function &function,
                        uint32_t index) {

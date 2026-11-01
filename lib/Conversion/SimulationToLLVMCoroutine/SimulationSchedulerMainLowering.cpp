@@ -120,8 +120,7 @@ LogicalResult makeSchedulerMain(ModuleOp module,
   // 35.5.3) and must see that caller's stores, which the shared storage
   // already holds; it needs no separate image.
   bool sharedNativeState = hasExecution && useAOT && directEval &&
-                           stateLayout.bitCount && !hasObserver &&
-                           !hasCoverage;
+                           stateLayout.bitCount && !hasObserver && !hasCoverage;
   uint64_t linePointCount = 0;
   uint64_t toggleBitCount = 0;
   if (hasCoverage) {
@@ -151,8 +150,7 @@ LogicalResult makeSchedulerMain(ModuleOp module,
   } else {
     auto create = LLVM::CallOp::create(
         builder, location, TypeRange{i32},
-        SymbolRefAttr::get(context, "talos_rt_v1_context_create"),
-        outContext);
+        SymbolRefAttr::get(context, "talos_rt_v1_context_create"), outContext);
     Value succeeded = arith::CmpIOp::create(
         builder, location, arith::CmpIPredicate::eq, create.getResult(),
         llvmConstant(builder, location, i32, 0));
@@ -206,14 +204,14 @@ LogicalResult makeSchedulerMain(ModuleOp module,
                                             "__talos_state_value");
     Value unknown = LLVM::AddressOfOp::create(builder, location, pointer,
                                               "__talos_state_unknown");
-    Value status = LLVM::CallOp::create(
-                       builder, location, TypeRange{i32},
-                       SymbolRefAttr::get(
-                           context, "talos_rt_v1_native_state_bind_shared"),
-                       ValueRange{runtimeContext, value, unknown,
-                                  llvmConstant(builder, location, i64,
-                                               stateLayout.bitCount)})
-                       .getResult();
+    Value status =
+        LLVM::CallOp::create(
+            builder, location, TypeRange{i32},
+            SymbolRefAttr::get(context, "talos_rt_v1_native_state_bind_shared"),
+            ValueRange{
+                runtimeContext, value, unknown,
+                llvmConstant(builder, location, i64, stateLayout.bitCount)})
+            .getResult();
     LLVM::CallOp::create(
         builder, location, TypeRange{},
         SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
@@ -255,14 +253,13 @@ LogicalResult makeSchedulerMain(ModuleOp module,
   if (requiresClassBitstreamFeature)
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(context,
-                           "talos_rt_v1_class_bitstream_link_anchor"),
+        SymbolRefAttr::get(context, "talos_rt_v1_class_bitstream_link_anchor"),
         ValueRange{});
   if (requiresClassBitstreamBytecodeFeature)
     LLVM::CallOp::create(
         builder, location, TypeRange{},
-        SymbolRefAttr::get(
-            context, "talos_rt_v1_class_bitstream_bytecode_link_anchor"),
+        SymbolRefAttr::get(context,
+                           "talos_rt_v1_class_bitstream_bytecode_link_anchor"),
         ValueRange{});
   if (requiresDPIExportBytecodeFeature)
     LLVM::CallOp::create(
@@ -353,12 +350,12 @@ LogicalResult makeSchedulerMain(ModuleOp module,
           ValueRange{runtimeContext, status});
     }
   if (requiresClassBitstreamFeature) {
-    Value status = LLVM::CallOp::create(
-                       builder, location, TypeRange{i32},
-                       SymbolRefAttr::get(
-                           context, "talos_rt_v1_class_bitstream_finalize"),
-                       ValueRange{runtimeContext})
-                       .getResult();
+    Value status =
+        LLVM::CallOp::create(
+            builder, location, TypeRange{i32},
+            SymbolRefAttr::get(context, "talos_rt_v1_class_bitstream_finalize"),
+            ValueRange{runtimeContext})
+            .getResult();
     LLVM::CallOp::create(
         builder, location, TypeRange{},
         SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
@@ -385,8 +382,8 @@ LogicalResult makeSchedulerMain(ModuleOp module,
     Value status =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
-            SymbolRefAttr::get(
-                context, "talos_rt_v1_context_register_import_signature"),
+            SymbolRefAttr::get(context,
+                               "talos_rt_v1_context_register_import_signature"),
             ValueRange{runtimeContext,
                        llvmConstant(builder, location, i32,
                                     importID.getValue().getZExtValue()),
@@ -399,13 +396,12 @@ LogicalResult makeSchedulerMain(ModuleOp module,
         SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
         ValueRange{runtimeContext, status});
   }
-  auto emitBoundRegistration = [&](OpBuilder &builder, Value runtimeContext,
-                                   const NativeStateLayout::Bound &bound)
-      -> LogicalResult {
+  auto emitBoundRegistration =
+      [&](OpBuilder &builder, Value runtimeContext,
+          const NativeStateLayout::Bound &bound) -> LogicalResult {
     auto status = LLVM::CallOp::create(
         builder, location, TypeRange{i32},
-        SymbolRefAttr::get(context,
-                           "talos_rt_v1_native_state_register_static"),
+        SymbolRefAttr::get(context, "talos_rt_v1_native_state_register_static"),
         ValueRange{runtimeContext,
                    llvmConstant(builder, location, i32, bound.handleID),
                    llvmConstant(builder, location, i64, bound.offset),
@@ -588,13 +584,12 @@ LogicalResult makeSchedulerMain(ModuleOp module,
       if (hasDesignBytecode && !sharedNativeState) {
         Value bit = LLVM::ShlOp::create(
             builder, location, byte, llvmConstant(builder, location, i64, 3));
-        fail(
-            LLVM::CallOp::create(
-                builder, location, TypeRange{i32},
-                SymbolRefAttr::get(
-                    context, "talos_rt_v1_gc_design_candidate_root_register"),
-                ValueRange{helperContext, bit, kind})
-                .getResult());
+        fail(LLVM::CallOp::create(
+                 builder, location, TypeRange{i32},
+                 SymbolRefAttr::get(
+                     context, "talos_rt_v1_gc_design_candidate_root_register"),
+                 ValueRange{helperContext, bit, kind})
+                 .getResult());
       }
       Value nextRoot = LLVM::AddOp::create(
           builder, location, root, llvmConstant(builder, location, i64, 1));
@@ -783,12 +778,12 @@ LogicalResult makeSchedulerMain(ModuleOp module,
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
             SymbolRefAttr::get(context, "talos_rt_v1_coverage_finalize"),
-            ValueRange{runtimeContext,
-                       llvmConstant(builder, location, i64, linePointCount),
-                       llvmConstant(builder, location, i64, toggleBitCount),
-                       initialValue, initialUnknown,
-                       llvmConstant(builder, location, i32,
-                                    coveragePersistenceMask)})
+            ValueRange{
+                runtimeContext,
+                llvmConstant(builder, location, i64, linePointCount),
+                llvmConstant(builder, location, i64, toggleBitCount),
+                initialValue, initialUnknown,
+                llvmConstant(builder, location, i32, coveragePersistenceMask)})
             .getResult();
     LLVM::CallOp::create(
         builder, location, TypeRange{},
@@ -954,9 +949,8 @@ LogicalResult makeSchedulerMain(ModuleOp module,
                              "talos_rt_v1_native_state_bind_specialization",
                              i32, {pointer, pointer});
   if (stateLayout.directContinuous)
-    getOrDeclareLLVMFunction(module,
-                             "talos_rt_v1_native_state_bind_continuous", i32,
-                             {pointer, pointer, pointer, pointer});
+    getOrDeclareLLVMFunction(module, "talos_rt_v1_native_state_bind_continuous",
+                             i32, {pointer, pointer, pointer, pointer});
   if (!stateLayout.unknownSummaryRoots.empty())
     getOrDeclareLLVMFunction(
         module, "talos_rt_v1_native_state_bind_unknown_summary", i32,
@@ -964,24 +958,23 @@ LogicalResult makeSchedulerMain(ModuleOp module,
   getOrDeclareLLVMFunction(module, "talos_rt_v1_gc_static_root_register", i32,
                            {pointer, pointer});
   getOrDeclareLLVMFunction(module,
-                           "talos_rt_v1_gc_candidate_static_root_register",
-                           i32, {pointer, pointer, i32});
+                           "talos_rt_v1_gc_candidate_static_root_register", i32,
+                           {pointer, pointer, i32});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_gc_design_root_register", i32,
                            {pointer, i64});
   getOrDeclareLLVMFunction(module,
-                           "talos_rt_v1_gc_design_candidate_root_register",
-                           i32, {pointer, i64, i32});
+                           "talos_rt_v1_gc_design_candidate_root_register", i32,
+                           {pointer, i64, i32});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_class_register", i32,
                            {pointer, pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_element_type_define_default",
                            i32, {pointer, i64, pointer, i64});
   getOrDeclareLLVMFunction(module,
-                           "talos_rt_v1_context_register_import_signature",
-                           i32, {pointer, i32, i64, pointer, pointer});
+                           "talos_rt_v1_context_register_import_signature", i32,
+                           {pointer, i32, i64, pointer, pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_fail", voidType,
                            {pointer, i32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_run", i32,
-                           {pointer});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_run", i32, {pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_report_status",
                            voidType, {pointer, i32});
   if (hasCoverage) {
@@ -1011,15 +1004,15 @@ LogicalResult makeSchedulerMain(ModuleOp module,
     getOrDeclareLLVMFunction(
         module, "talos_rt_v1_recursive_bitstream_link_anchor", voidType, {});
   if (requiresClassBitstreamFeature)
-    getOrDeclareLLVMFunction(
-        module, "talos_rt_v1_class_bitstream_link_anchor", voidType, {});
+    getOrDeclareLLVMFunction(module, "talos_rt_v1_class_bitstream_link_anchor",
+                             voidType, {});
   if (requiresClassBitstreamFeature)
     getOrDeclareLLVMFunction(module, "talos_rt_v1_class_bitstream_finalize",
                              i32, {pointer});
   if (requiresClassBitstreamBytecodeFeature)
-    getOrDeclareLLVMFunction(
-        module, "talos_rt_v1_class_bitstream_bytecode_link_anchor", voidType,
-        {});
+    getOrDeclareLLVMFunction(module,
+                             "talos_rt_v1_class_bitstream_bytecode_link_anchor",
+                             voidType, {});
   if (requiresDPIExportBytecodeFeature)
     getOrDeclareLLVMFunction(
         module, "talos_rt_v1_dpi_export_bytecode_link_anchor", voidType, {});

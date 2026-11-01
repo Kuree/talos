@@ -32,8 +32,8 @@ void foldNativeSpawnInitializationScopes(ModuleOp module) {
     if (succeeded(
             sim::SimRandomInitializationLeaveOp::canonicalize(leave, rewriter)))
       continue;
-    auto enter =
-        leave.getActivation().getDefiningOp<sim::SimRandomInitializationEnterOp>();
+    auto enter = leave.getActivation()
+                     .getDefiningOp<sim::SimRandomInitializationEnterOp>();
     if (!enter || enter->getBlock() != leave->getBlock() || !enter->hasOneUse())
       continue;
     sim::SimSpawnOp spawn;
@@ -70,8 +70,7 @@ void materializeNativeSpawnBatches(Operation *root,
   Type pointer = LLVM::LLVMPointerType::get(context);
   Type i32 = IntegerType::get(context, 32);
   Type i64 = IntegerType::get(context, 64);
-  auto rowType =
-      LLVM::LLVMStructType::getLiteral(context, {pointer, i64, i64});
+  auto rowType = LLVM::LLVMStructType::getLiteral(context, {pointer, i64, i64});
   SymbolTableCollection local;
   SymbolTableCollection &symbols = cache ? *cache : local;
   unsigned batchID = 0;
@@ -88,9 +87,9 @@ void materializeNativeSpawnBatches(Operation *root,
     auto spawn = dyn_cast<schedule::NativeSpawnOp>(operation);
     auto helper =
         spawn ? symbols.lookupNearestSymbolFrom<LLVM::LLVMFuncOp>(
-                    spawn, StringAttr::get(
-                               context,
-                               (spawn.getCallee() + ".__talos_spawn").str()))
+                    spawn,
+                    StringAttr::get(
+                        context, (spawn.getCallee() + ".__talos_spawn").str()))
               : LLVM::LLVMFuncOp{};
     auto offsets = helper ? native::get<native::SpawnCaptureOffsets>(helper)
                           : DenseI64ArrayAttr{};
@@ -205,10 +204,9 @@ void materializeNativeSpawnBatches(Operation *root,
     Value spawnContext = batch.front().operation->getOperand(0);
     Value address = LLVM::AddressOfOp::create(builder, location, pointer, base);
     Value captures =
-        words.empty()
-            ? Value(LLVM::ZeroOp::create(builder, location, pointer))
-            : Value(LLVM::AddressOfOp::create(builder, location, pointer,
-                                              capturesName));
+        words.empty() ? Value(LLVM::ZeroOp::create(builder, location, pointer))
+                      : Value(LLVM::AddressOfOp::create(builder, location,
+                                                        pointer, capturesName));
     Value status =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
@@ -308,8 +306,8 @@ lowerNativeFunctionBody(Operation *root, NativeReturnLowering returnLowering,
   if (returnLowering != NativeReturnLowering::None)
     patterns.add<NativeReturnPattern>(root->getContext(), returnLowering);
   FrozenRewritePatternSet frozenPatterns(std::move(patterns));
-  if (::talos::schedule::has<
-          ::talos::schedule::Field::EvalPathKnownPredicate>(root)) {
+  if (::talos::schedule::has<::talos::schedule::Field::EvalPathKnownPredicate>(
+          root)) {
     // Region simplification of a long chain of case-item tests can need more
     // rounds than the driver allows. That only leaves a less simplified
     // predicate; the rewrites above are what lowering requires.

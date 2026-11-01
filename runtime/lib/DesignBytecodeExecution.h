@@ -21,8 +21,7 @@ Logic readLogic(const uint8_t *frame, const Layout &layout);
 void writeLogic(uint8_t *frame, const Layout &layout, const Logic &value);
 
 talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
-                                  talos_rt_context *context,
-                                  uint32_t siteIndex);
+                                talos_rt_context *context, uint32_t siteIndex);
 
 // Keep uncommon feature service bodies out of the monolithic intrinsic
 // dispatcher. This preserves the established bytecode interpreter layout for
@@ -59,15 +58,15 @@ TALOS_RT_FEATURE_SERVICE talos_rt_status invokeContainerBitstreamIntrinsic(
 // anchor, which extracts the strong definition that replaces each fallback.
 #if defined(__APPLE__) && defined(TALOS_RT_BYTECODE_DISPATCHER)
 talos_rt_status invokeDynamicScanIntrinsic(const Image &, Frame &,
-                                             talos_rt_context *,
-                                             IntrinsicSite, uint32_t) {
+                                           talos_rt_context *, IntrinsicSite,
+                                           uint32_t) {
   return TALOS_RT_INVALID_BYTECODE;
 }
 
 talos_rt_status invokeContainerBitstreamIntrinsic(const Image &, Frame &,
-                                                    talos_rt_context *,
-                                                    IntrinsicSite, uint32_t,
-                                                    uint32_t) {
+                                                  talos_rt_context *,
+                                                  IntrinsicSite, uint32_t,
+                                                  uint32_t) {
   return TALOS_RT_INVALID_BYTECODE;
 }
 #endif

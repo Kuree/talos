@@ -65,27 +65,24 @@ struct FunctionalCoverageConstructionSchemas {
   talos::coverage::detail::IndexMap<
       uint64_t, std::shared_ptr<const talos::coverage::Database>>
       types;
-  talos::coverage::detail::IndexMap<
-      uint64_t, talos::coverage::FunctionalContainerType>
+  talos::coverage::detail::IndexMap<uint64_t,
+                                    talos::coverage::FunctionalContainerType>
       containerTypes;
-  talos::coverage::detail::IndexMap<
-      uint64_t, talos::coverage::FunctionalAggregateType>
+  talos::coverage::detail::IndexMap<uint64_t,
+                                    talos::coverage::FunctionalAggregateType>
       aggregateTypes;
   talos::coverage::detail::IndexMap<uint64_t,
-                                      talos::coverage::FunctionalClassType>
+                                    talos::coverage::FunctionalClassType>
       classTypes;
   talos::coverage::detail::IndexMap<uint64_t, uint64_t> virtualInterfaceTypes;
-  talos::coverage::detail::IndexMap<uint64_t, uint64_t>
-      virtualInterfaceScopes;
+  talos::coverage::detail::IndexMap<uint64_t, uint64_t> virtualInterfaceScopes;
   talos::coverage::detail::IndexMap<uint64_t, uint64_t> formalValueTypes;
   talos::coverage::detail::IndexSet<uint64_t> itemIDs, binIDs, valueSetIDs;
-  talos::coverage::detail::IndexMap<uint64_t,
-                                      talos::coverage::FunctionalItem>
+  talos::coverage::detail::IndexMap<uint64_t, talos::coverage::FunctionalItem>
       items;
   using TypeProfile = talos::coverage::detail::IndexMap<
       std::tuple<talos::coverage::FunctionalConfigurationOptionOwnerKind,
-                 uint64_t,
-                 talos::coverage::FunctionalConfigurationOptionKind>,
+                 uint64_t, talos::coverage::FunctionalConfigurationOptionKind>,
       std::tuple<talos::coverage::FunctionalConfigurationValueKind, uint64_t,
                  std::string>>;
   talos::coverage::detail::IndexMap<uint64_t, TypeProfile> loadedTypeProfiles;
@@ -136,12 +133,10 @@ struct FunctionalCoverageQueryMetadata {
   talos::coverage::detail::IndexSet<uint64_t> explicitAtLeastItems;
   /// Sample ordinals are frozen with the configuration. Optional defaults
   /// occupy their own slots even when omitted from a particular ABI batch.
-  std::vector<const talos::coverage::FunctionalExpression *>
-      sampleExpressions;
+  std::vector<const talos::coverage::FunctionalExpression *> sampleExpressions;
   std::vector<SampleItem> sampleItems;
   std::vector<size_t> binIffs;
-  std::vector<const talos::coverage::ResolvedFunctionalValueSet *>
-      binValueSets;
+  std::vector<const talos::coverage::ResolvedFunctionalValueSet *> binValueSets;
   talos::coverage::detail::IndexMap<
       uint64_t, const talos::coverage::ResolvedFunctionalValueSet *>
       valueSets;
@@ -175,7 +170,7 @@ struct FunctionalCoverageLoadedData {
   };
   const talos::coverage::Database *source = nullptr;
   talos::coverage::detail::IndexMap<FunctionalCoverageTypeKey,
-                                      std::vector<Instance>>
+                                    std::vector<Instance>>
       configurations;
 };
 
@@ -499,8 +494,7 @@ void recordToggleBit(CoverageState &coverage, uint64_t index, bool newValue,
 /// publishedLow + publishedWidth) come from the new planes when given; the
 /// others from committed static state. A vector with unknown bits holds no
 /// state.
-void recordFSMMachine(const talos_rt_context *context,
-                      CoverageState &coverage,
+void recordFSMMachine(const talos_rt_context *context, CoverageState &coverage,
                       const CoverageFSMMachine &machine, uint32_t published,
                       uint64_t publishedLow, uint64_t publishedWidth,
                       const uint8_t *newValue, const uint8_t *newUnknown) {
@@ -545,8 +539,8 @@ void recordFSMMachine(const talos_rt_context *context,
       coverage.fsmOverflow[index] = 1;
 }
 
-bool schemaCounts(const talos::coverage::Database &schema,
-                  uint64_t &lineCount, uint64_t &toggleBitCount) {
+bool schemaCounts(const talos::coverage::Database &schema, uint64_t &lineCount,
+                  uint64_t &toggleBitCount) {
   lineCount = schema.linePoints.size();
   toggleBitCount = 0;
   for (const talos::coverage::ToggleObject &object : schema.toggleObjects) {
@@ -872,8 +866,8 @@ int32_t querySelectedCoverage(const CoverageState &coverage,
         continue;
       total = saturatingAdd(total, 1);
       if (coverage.fsmCounters[index] ||
-          loadedCounterHit(coverage, talos::coverage::MetricKind::FSM,
-                           state.id, 0))
+          loadedCounterHit(coverage, talos::coverage::MetricKind::FSM, state.id,
+                           0))
         covered = saturatingAdd(covered, 1);
     }
   } else if (coverageType == SVCovAssertion) {
@@ -1066,7 +1060,7 @@ struct FailedCoverageSaveCleanup {
 };
 
 talos_rt_status copyManagedCoverageString(talos_rt_string_v1 value,
-                                            std::string &result) {
+                                          std::string &result) {
   char scratch[8] = {};
   const char *bytes = nullptr;
   uint64_t size = 0;
@@ -1126,7 +1120,7 @@ std::string expandOutputPath(const CoverageState &coverage) {
 }
 
 talos::coverage::UUID makeRunUUID(talos_rt_context *context,
-                                    CoverageState &coverage) {
+                                  CoverageState &coverage) {
   if (!std::all_of(coverage.runUUID.begin(), coverage.runUUID.end(),
                    [](uint8_t byte) { return byte == 0; }))
     return coverage.runUUID;
@@ -1148,17 +1142,15 @@ talos::coverage::UUID makeRunUUID(talos_rt_context *context,
 
 talos_rt_status mapCoverageStatus(talos::coverage::Status status);
 
-talos_rt_status makeSnapshot(talos_rt_context *context,
-                               CoverageState &coverage, uint32_t runStatus,
-                               uint64_t simulationTime,
-                               talos::coverage::Database &result) {
+talos_rt_status makeSnapshot(talos_rt_context *context, CoverageState &coverage,
+                             uint32_t runStatus, uint64_t simulationTime,
+                             talos::coverage::Database &result) {
   if (!coverage.schema)
     return TALOS_RT_INVALID_LIFECYCLE;
   result = *coverage.schema;
   talos::coverage::Diagnostic canonicalDiagnostic;
-  auto canonicalStatus =
-      talos::coverage::canonicalizeFunctionalConfigurations(
-          result, &canonicalDiagnostic);
+  auto canonicalStatus = talos::coverage::canonicalizeFunctionalConfigurations(
+      result, &canonicalDiagnostic);
   if (canonicalStatus != talos::coverage::Status::Ok)
     return mapCoverageStatus(canonicalStatus);
   retainPersistedRunData(result, coverage.persistedRunFlags);
@@ -1209,8 +1201,7 @@ talos_rt_status makeSnapshot(talos_rt_context *context,
                                  coverage.fsmOverflow[index] ? 1u : 0u,
                                  coverage.fsmCounters[index]});
   }
-  if (coverage.finalized &&
-      (run.flags & talos::coverage::RunContainsToggle)) {
+  if (coverage.finalized && (run.flags & talos::coverage::RunContainsToggle)) {
     uint64_t base = 0;
     for (const talos::coverage::ToggleObject &object : result.toggleObjects) {
       for (uint64_t bitIndex = 0; bitIndex != object.bitWidth; ++bitIndex)
@@ -1268,8 +1259,7 @@ talos_rt_status makeSnapshot(talos_rt_context *context,
              item ? Owner::Item : Owner::Group, Option::Comment,
              ValueKind::String, value, 0, 0});
     }
-    using ResolvedKey =
-        std::tuple<uint64_t, talos::coverage::Digest, uint64_t>;
+    using ResolvedKey = std::tuple<uint64_t, talos::coverage::Digest, uint64_t>;
     IndexMap<ResolvedKey, const talos::coverage::ResolvedFunctionalItem *>
         itemsByID;
     for (const auto &item : result.resolvedFunctionalItems)
@@ -1312,19 +1302,19 @@ talos_rt_status makeSnapshot(talos_rt_context *context,
                ? talos::coverage::ResolvedInstanceGeneratedName
                : 0,
            instance.configuration});
-      auto appendUnsignedOption = [&, &handle = handle](
-                                      uint64_t owner, Owner ownerKind,
-                                      Option option, uint64_t value) {
-        result.resolvedInstanceOptions.push_back({run.uuid,
-                                                  handle,
-                                                  owner,
-                                                  ownerKind,
-                                                  option,
-                                                  ValueKind::Unsigned,
-                                                  {},
-                                                  value,
-                                                  0});
-      };
+      auto appendUnsignedOption =
+          [&, &handle = handle](uint64_t owner, Owner ownerKind, Option option,
+                                uint64_t value) {
+            result.resolvedInstanceOptions.push_back({run.uuid,
+                                                      handle,
+                                                      owner,
+                                                      ownerKind,
+                                                      option,
+                                                      ValueKind::Unsigned,
+                                                      {},
+                                                      value,
+                                                      0});
+          };
       appendUnsignedOption(0, Owner::Group, Option::Goal,
                            instance.instanceGoal);
       appendUnsignedOption(0, Owner::Group, Option::Weight,
@@ -1453,8 +1443,7 @@ talos_rt_status makeSnapshot(talos_rt_context *context,
         entry.components.end());
     result.sparseCrossTuples.push_back(entry.tuple);
   }
-  result.schemaFingerprint =
-      talos::coverage::computeSchemaFingerprint(result);
+  result.schemaFingerprint = talos::coverage::computeSchemaFingerprint(result);
   return TALOS_RT_OK;
 }
 
@@ -1480,8 +1469,7 @@ struct CoverageResult {
 
 struct FunctionalCoverageSetQueryIndex;
 talos_rt_status
-markStaticallyEmptyStateBins(talos::coverage::Database &schema,
-                             uint64_t typeID,
+markStaticallyEmptyStateBins(talos::coverage::Database &schema, uint64_t typeID,
                              const talos::coverage::Digest &configuration,
                              FunctionalCoverageSetQueryIndex &setQueries);
 talos_rt_status
@@ -1575,9 +1563,8 @@ FunctionalInteger
 functionalIntegerFromBits(std::vector<uint64_t> bits, uint32_t bitWidth,
                           talos::coverage::CoverageSignedness signedness) {
   FunctionalInteger result;
-  result.negative =
-      signedness == talos::coverage::CoverageSignedness::Signed &&
-      ((bits.back() >> ((bitWidth - 1) % 64)) & 1);
+  result.negative = signedness == talos::coverage::CoverageSignedness::Signed &&
+                    ((bits.back() >> ((bitWidth - 1) % 64)) & 1);
   result.magnitude = std::move(bits);
   if (result.negative) {
     uint64_t carry = 1;
@@ -2242,8 +2229,8 @@ struct IntegralCoverageShape {
 
 bool makeIntegralCoverageShape(
     const talos::coverage::Database &schema,
-    const talos::coverage::ResolvedFunctionalValueAtom &atom,
-    uint32_t bitWidth, talos::coverage::CoverageSignedness signedness,
+    const talos::coverage::ResolvedFunctionalValueAtom &atom, uint32_t bitWidth,
+    talos::coverage::CoverageSignedness signedness,
     IntegralCoverageShape &shape);
 
 bool coverageShapeIntersectsPrefix(const IntegralCoverageShape &shape,
@@ -2551,9 +2538,9 @@ struct FunctionalCoverageSetQueryIndex {
   IndexMap<std::tuple<uint64_t, uint64_t, bool>, std::shared_ptr<CompiledSet>>
       selections;
 
-  FunctionalCoverageSetQueryIndex(
-      const talos::coverage::Database &schema, uint64_t type,
-      const talos::coverage::Digest &configuration)
+  FunctionalCoverageSetQueryIndex(const talos::coverage::Database &schema,
+                                  uint64_t type,
+                                  const talos::coverage::Digest &configuration)
       : schema(schema), type(type), configuration(configuration) {
     using namespace talos::coverage;
     auto indexRows = [&](const auto &rows, auto &index) {
@@ -2697,9 +2684,9 @@ struct FunctionalCoverageSetQueryIndex {
   Graph &graphFor(const DomainKey &domain) {
     auto found = graphs.find(domain);
     if (found == graphs.end()) {
-      bool real = std::get<0>(domain) ==
-                  static_cast<uint32_t>(
-                      talos::coverage::FunctionalValueSetKind::Real);
+      bool real =
+          std::get<0>(domain) ==
+          static_cast<uint32_t>(talos::coverage::FunctionalValueSetKind::Real);
       uint32_t width =
           real ? (std::get<3>(domain) ? 32 : 64) : std::get<1>(domain);
       found = graphs.emplace(domain, std::make_unique<Graph>(width)).first;
@@ -2714,10 +2701,9 @@ struct FunctionalCoverageSetQueryIndex {
   void setTransitionValues(uint64_t bin, uint32_t width,
                            talos::coverage::CoverageSignedness signedness,
                            Root root) {
-    DomainKey domain = {
-        static_cast<uint32_t>(
-            talos::coverage::FunctionalValueSetKind::Integral),
-        width, static_cast<uint32_t>(signedness), false};
+    DomainKey domain = {static_cast<uint32_t>(
+                            talos::coverage::FunctionalValueSetKind::Integral),
+                        width, static_cast<uint32_t>(signedness), false};
     auto key = std::make_pair(domain, root);
     auto found = transitionSets.find(key);
     if (found == transitionSets.end()) {
@@ -2932,9 +2918,9 @@ struct FunctionalCoverageSetQueryIndex {
         left->domain != right->domain)
       return false;
     if (left->numeric && right->numeric && (!excluded || excluded->numeric)) {
-      auto key = std::make_tuple(
-          definition->item, selectionID,
-          definition->kind == talos::coverage::FunctionalBinKind::State);
+      auto key = std::make_tuple(definition->item, selectionID,
+                                 definition->kind ==
+                                     talos::coverage::FunctionalBinKind::State);
       auto cached = selections.find(key);
       if (cached == selections.end()) {
         auto trimmed = std::make_shared<CompiledSet>();
@@ -3143,7 +3129,7 @@ struct PreparedCrossValueIndex {
     if (!set || set->graph != axis.source ||
         (mask && mask->domain != set->domain)) {
       status = queries.status == TALOS_RT_OK ? TALOS_RT_INVALID_DESIGN
-                                               : queries.status;
+                                             : queries.status;
       return 0;
     }
     auto key = std::make_pair(reinterpret_cast<uintptr_t>(set.get()),
@@ -3592,9 +3578,9 @@ struct PreparedCrossValueIndex {
   }
 
   talos_rt_status bind(const talos::coverage::CrossPlan &plan,
-                         const talos::coverage::CrossSelectorNode &node,
-                         uint64_t resolvedCross,
-                         const CoverageTupleQueueSnapshot &snapshot) {
+                       const talos::coverage::CrossSelectorNode &node,
+                       uint64_t resolvedCross,
+                       const CoverageTupleQueueSnapshot &snapshot) {
     using namespace talos::coverage;
     auto matches = prepared.withMatches.find(node.id);
     if (!node.withExpression || matches == prepared.withMatches.end() ||
@@ -3669,9 +3655,9 @@ struct PreparedCrossValueIndex {
   }
 
   talos_rt_status candidates(const talos::coverage::CrossPlan &plan,
-                               const talos::coverage::CrossSelectorNode &root,
-                               uint64_t resolvedCross, uint32_t maximum,
-                               CoverageTupleQueueSnapshot &output) {
+                             const talos::coverage::CrossSelectorNode &root,
+                             uint64_t resolvedCross, uint32_t maximum,
+                             CoverageTupleQueueSnapshot &output) {
     using namespace talos::coverage;
     Root selected =
         select(root, resolvedCross, root.withExpression ? root.id : 0);
@@ -4602,8 +4588,7 @@ talos_rt_status resolveStaticFunctionalType(
   };
   auto resolveTransitionAtom =
       [&](const FunctionalValueAtom &atom, const FunctionalValueSet &set,
-          bool wildcard,
-          std::vector<PendingAtom> &result) -> talos_rt_status {
+          bool wildcard, std::vector<PendingAtom> &result) -> talos_rt_status {
     if (atom.kind != FunctionalValueAtomKind::IntegralValue &&
         atom.kind != FunctionalValueAtomKind::IntegralRange)
       return TALOS_RT_INVALID_DESIGN;
@@ -5496,9 +5481,8 @@ talos_rt_status resolveStaticFunctionalType(
           value.kind = sourceReal ? (setExpression->bitWidth == 32
                                          ? TALOS_RT_FUNCTIONAL_VALUE_SHORTREAL
                                          : TALOS_RT_FUNCTIONAL_VALUE_REAL)
-                       : sourceFourState
-                           ? TALOS_RT_FUNCTIONAL_VALUE_FOUR_STATE
-                           : TALOS_RT_FUNCTIONAL_VALUE_INTEGRAL;
+                       : sourceFourState ? TALOS_RT_FUNCTIONAL_VALUE_FOUR_STATE
+                                         : TALOS_RT_FUNCTIONAL_VALUE_INTEGRAL;
           return value;
         };
         auto decodeReal = [&](const talos_rt_functional_value_v1 &value,
@@ -7650,14 +7634,13 @@ talos_rt_status resolveStaticFunctionalType(
         return TALOS_RT_INVALID_DESIGN;
 
       CoverageTupleQueueSnapshot snapshot;
-      talos_rt_status snapshotStatus =
-          talos_rt_coverage_tuple_queue_snapshot(
-              context, construction->owner, staticPlan->tupleElementType,
-              staticPlan->tupleProvenanceSpan,
-              (staticPlan->tupleFlags & CrossTupleFourState) != 0,
-              node.withExpression ? MaxFunctionalCrossWithCandidates
-                                  : ParseLimits{}.maxRecords,
-              snapshot);
+      talos_rt_status snapshotStatus = talos_rt_coverage_tuple_queue_snapshot(
+          context, construction->owner, staticPlan->tupleElementType,
+          staticPlan->tupleProvenanceSpan,
+          (staticPlan->tupleFlags & CrossTupleFourState) != 0,
+          node.withExpression ? MaxFunctionalCrossWithCandidates
+                              : ParseLimits{}.maxRecords,
+          snapshot);
       if (snapshotStatus != TALOS_RT_OK)
         return snapshotStatus;
 
@@ -9018,8 +9001,8 @@ talos_rt_status resolveStaticFunctionalType(
 }
 
 talos_rt_status validateFunctionalTypeOptionOwner(CoverageState &coverage,
-                                                    uint64_t typeID,
-                                                    uint64_t itemID) {
+                                                  uint64_t typeID,
+                                                  uint64_t itemID) {
   talos_rt_status status = ensureFunctionalConstructionSchemas(coverage);
   if (status != TALOS_RT_OK)
     return status;
@@ -9034,9 +9017,9 @@ talos_rt_status validateFunctionalTypeOptionOwner(CoverageState &coverage,
   return TALOS_RT_OK;
 }
 
-talos_rt_status
-applyFunctionalTypeOptions(CoverageState &coverage, uint64_t typeID,
-                           FunctionalCoverageTypeState &type) {
+talos_rt_status applyFunctionalTypeOptions(CoverageState &coverage,
+                                           uint64_t typeID,
+                                           FunctionalCoverageTypeState &type) {
   auto overrides = coverage.typeOptions.find(typeID);
   if (overrides == coverage.typeOptions.end())
     return TALOS_RT_OK;
@@ -9198,10 +9181,9 @@ talos_rt_status createResolvedFunctionalType(
   for (const auto &option : groupOptions)
     if (option.type == typeID && option.configuration == configuration &&
         option.owner == typeID &&
-        option.ownerKind == talos::coverage::
-                                FunctionalConfigurationOptionOwnerKind::Group &&
-        option.scope ==
-            talos::coverage::FunctionalOptionScopeKind::Instance &&
+        option.ownerKind ==
+            talos::coverage::FunctionalConfigurationOptionOwnerKind::Group &&
+        option.scope == talos::coverage::FunctionalOptionScopeKind::Instance &&
         option.option ==
             talos::coverage::FunctionalConfigurationOptionKind::AtLeast)
       groupAtLeast = option.value;
@@ -9242,8 +9224,8 @@ talos_rt_status createResolvedFunctionalType(
     for (const auto &option : itemOptions)
       if (option.type == typeID && option.configuration == configuration &&
           option.owner == item->id &&
-          option.ownerKind == talos::coverage::
-                                  FunctionalConfigurationOptionOwnerKind::Item &&
+          option.ownerKind ==
+              talos::coverage::FunctionalConfigurationOptionOwnerKind::Item &&
           option.scope ==
               talos::coverage::FunctionalOptionScopeKind::Instance &&
           option.option ==
@@ -9252,13 +9234,12 @@ talos_rt_status createResolvedFunctionalType(
     for (const auto &option : itemOptions)
       if (option.type == typeID && option.configuration == configuration &&
           option.owner == item->id &&
-          option.ownerKind == talos::coverage::
-                                  FunctionalConfigurationOptionOwnerKind::Item &&
+          option.ownerKind ==
+              talos::coverage::FunctionalConfigurationOptionOwnerKind::Item &&
           option.scope ==
               talos::coverage::FunctionalOptionScopeKind::Instance &&
-          option.option == talos::coverage::
-                               FunctionalConfigurationOptionKind::
-                                   CrossNumPrintMissing) {
+          option.option == talos::coverage::FunctionalConfigurationOptionKind::
+                               CrossNumPrintMissing) {
         if (item->kind != talos::coverage::FunctionalItemKind::Cross)
           return TALOS_RT_INVALID_DESIGN;
         type.crossNumPrintMissing[item->templateItem] = option.value;
@@ -9584,8 +9565,7 @@ talos_rt_status createResolvedFunctionalType(
     if (option.type == typeID && option.configuration == configuration &&
         option.ownerKind ==
             talos::coverage::FunctionalConfigurationOptionOwnerKind::Item &&
-        option.scope ==
-            talos::coverage::FunctionalOptionScopeKind::Instance &&
+        option.scope == talos::coverage::FunctionalOptionScopeKind::Instance &&
         option.option ==
             talos::coverage::FunctionalConfigurationOptionKind::AtLeast)
       metadata->explicitAtLeastItems.insert(option.owner);
@@ -9647,8 +9627,8 @@ template <typename T>
 bool prepareConfigurationColumn(std::vector<T> &destination,
                                 const std::vector<T> &bundle,
                                 std::vector<T> &prepared) {
-  const size_t limit = std::min<uint64_t>(
-      UINT32_MAX, talos::coverage::ParseLimits{}.maxRecords);
+  const size_t limit =
+      std::min<uint64_t>(UINT32_MAX, talos::coverage::ParseLimits{}.maxRecords);
   if (destination.size() > limit || bundle.size() > limit - destination.size())
     return false;
   prepared = bundle;
@@ -9800,8 +9780,7 @@ void appendPreparedConfiguration(talos::coverage::Database &destination,
          prepared.resolvedFunctionalTupleSetComponents);
 }
 
-talos_rt_status
-ensureFunctionalConfigurationSchemas(CoverageState &coverage) {
+talos_rt_status ensureFunctionalConfigurationSchemas(CoverageState &coverage) {
   if (!coverage.schema)
     return TALOS_RT_INVALID_DESIGN;
   if (coverage.loadedConfigurationSchemas &&
@@ -9824,8 +9803,7 @@ ensureFunctionalConfigurationSchemas(CoverageState &coverage) {
     if (source == coverage.constructionSchemas->types.end() ||
         !talos::coverage::isSchemaOnly(*source->second))
       return TALOS_RT_INVALID_DESIGN;
-    auto schema =
-        std::make_shared<talos::coverage::Database>(*source->second);
+    auto schema = std::make_shared<talos::coverage::Database>(*source->second);
     // Partitioning has already checked/rebased each owned payload. The static
     // projection has no resolved rows, so adopt its bundle without another
     // allocation, copy, or rebase of the twenty resolved columns.
@@ -10015,8 +9993,7 @@ functionalDefaultClassType(const CoverageState &coverage, uint64_t formal) {
              : functionalClassType(coverage, found->second);
 }
 
-bool validateClassFormal(talos_rt_context *context,
-                         talos_rt_object_v1 *object,
+bool validateClassFormal(talos_rt_context *context, talos_rt_object_v1 *object,
                          const talos::coverage::FunctionalClassType *type) {
   if (!type)
     return false;
@@ -10057,8 +10034,8 @@ bool validateSemaphoreFormal(talos_rt_context *context,
   return talos_rt_semaphore_keys_ready(object, 0, ready) == TALOS_RT_OK;
 }
 
-bool validateVirtualInterfaceFormal(talos_rt_context *context,
-                                    uint64_t handle, uint64_t valueType) {
+bool validateVirtualInterfaceFormal(talos_rt_context *context, uint64_t handle,
+                                    uint64_t valueType) {
   if (!handle)
     return true;
   CoverageState *coverage = coverageState(context, false);
@@ -10089,8 +10066,7 @@ bool validateCovergroupFormal(talos_rt_context *context, uint64_t handle,
 bool validateAggregateFormal(
     talos_rt_context *context, talos_rt_object_v1 *object,
     const talos::coverage::FunctionalAggregateType *type) {
-  if (!type || !object ||
-      !talos_rt_managed_object_belongs_to(context, object))
+  if (!type || !object || !talos_rt_managed_object_belongs_to(context, object))
     return false;
   const talos_rt_element_type_v1 *element = nullptr;
   return talos_rt_reference_path_element(object, &element) == TALOS_RT_OK &&
@@ -10112,7 +10088,7 @@ bool validateContainerFormal(
   if (type->kind == talos::coverage::FunctionalContainerKind::Mailbox) {
     talos_rt_object_v1 *payload = nullptr;
     if (talos_rt_builtin_class_payload(object, BuiltinClassKind::Mailbox,
-                                         &payload) != TALOS_RT_OK)
+                                       &payload) != TALOS_RT_OK)
       return false;
     object = payload;
   }
@@ -10135,9 +10111,8 @@ bool validateContainerFormal(
                const auto &validation =
                    *static_cast<const Validation *>(environment);
                const auto &type = validation.type;
-               bool mailbox =
-                   type.kind ==
-                   talos::coverage::FunctionalContainerKind::Mailbox;
+               bool mailbox = type.kind ==
+                              talos::coverage::FunctionalContainerKind::Mailbox;
                uint32_t kind = mailbox ? TALOS_RT_CONTAINER_QUEUE
                                        : static_cast<uint32_t>(type.kind);
                return header.kind == kind &&
@@ -10265,10 +10240,9 @@ bool validateValue(
            !value.unknown && !value.payload && !value.argument_ref_kind &&
            validateAggregateFormal(context, value.owner, aggregateType);
   if (result == Result::Container || result == Result::Mailbox)
-    return value.kind ==
-               (result == Result::Mailbox
-                    ? TALOS_RT_FUNCTIONAL_VALUE_MAILBOX
-                    : TALOS_RT_FUNCTIONAL_VALUE_MANAGED_CONTAINER) &&
+    return value.kind == (result == Result::Mailbox
+                              ? TALOS_RT_FUNCTIONAL_VALUE_MAILBOX
+                              : TALOS_RT_FUNCTIONAL_VALUE_MANAGED_CONTAINER) &&
            !value.bit_width && !value.value_size && !value.value &&
            !value.unknown && !value.payload && !value.argument_ref_kind &&
            validateContainerFormal(context, value.owner, containerType);
@@ -10355,8 +10329,8 @@ std::vector<const Entry *> schemaOrdered(const std::vector<Entry> &entries,
   for (const auto &entry : entries) {
     if constexpr (std::is_same_v<Entry, talos::coverage::FunctionalFormal>) {
       if (entry.type == typeID &&
-          (entry.kind ==
-           talos::coverage::FunctionalFormalKind::Constructor) == constructor)
+          (entry.kind == talos::coverage::FunctionalFormalKind::Constructor) ==
+              constructor)
         result.push_back(&entry);
     } else {
       using Phase = talos::coverage::FunctionalExpressionEvaluationPhase;
@@ -10534,9 +10508,8 @@ int compareIntegral(
 bool valueSetMatches(const talos::coverage::Database &schema,
                      const talos::coverage::ResolvedFunctionalValueSet *set,
                      const talos_rt_functional_value_v1 &value) {
-  if (!set ||
-      (set->kind == talos::coverage::FunctionalValueSetKind::Integral &&
-       set->bitWidth != value.bit_width))
+  if (!set || (set->kind == talos::coverage::FunctionalValueSetKind::Integral &&
+               set->bitWidth != value.bit_width))
     return false;
   for (uint32_t atomIndex = 0; atomIndex != set->atomCount; ++atomIndex) {
     const auto &atom =
@@ -10580,16 +10553,14 @@ bool valueSetMatches(const talos::coverage::Database &schema,
       exact &= !(bval & limb.wildcardMask) && !((aval ^ limb.lowAval) & mask) &&
                !((bval ^ limb.lowBval) & mask);
     }
-    if (atom.kind ==
-            talos::coverage::FunctionalValueAtomKind::IntegralValue &&
+    if (atom.kind == talos::coverage::FunctionalValueAtomKind::IntegralValue &&
         exact)
       return true;
     bool known = true;
     for (uint32_t limbIndex = 0; limbIndex != (value.bit_width + 63) / 64;
          ++limbIndex)
       known &= !readPlaneLimb(value.unknown, value.value_size, limbIndex);
-    if (atom.kind ==
-            talos::coverage::FunctionalValueAtomKind::IntegralRange &&
+    if (atom.kind == talos::coverage::FunctionalValueAtomKind::IntegralRange &&
         known) {
       int low = compareIntegral(value, schema.resolvedFunctionalValueLimbs,
                                 atom, false, set->signedness);
@@ -10612,8 +10583,8 @@ bool valueSetMatches(const talos::coverage::Database &schema,
 
 bool makeIntegralCoverageShape(
     const talos::coverage::Database &schema,
-    const talos::coverage::ResolvedFunctionalValueAtom &atom,
-    uint32_t bitWidth, talos::coverage::CoverageSignedness signedness,
+    const talos::coverage::ResolvedFunctionalValueAtom &atom, uint32_t bitWidth,
+    talos::coverage::CoverageSignedness signedness,
     IntegralCoverageShape &shape) {
   using AtomKind = talos::coverage::FunctionalValueAtomKind;
   if (atom.kind == AtomKind::RealInterval)
@@ -10745,8 +10716,7 @@ bool crossSelectorUsesSet(const talos::coverage::Database &schema,
 
 talos_rt_status resolvedFunctionalBinCardinalityCapped(
     const talos::coverage::Database &schema, uint64_t type,
-    const talos::coverage::Digest &configuration, uint64_t binID,
-    uint64_t cap,
+    const talos::coverage::Digest &configuration, uint64_t binID, uint64_t cap,
     const std::unordered_set<uint64_t> &suppressedTransitionAlternatives,
     FunctionalCoverageSetQueryIndex &setQueries, uint64_t &result) {
   result = 0;
@@ -10870,7 +10840,7 @@ talos_rt_status resolvedCrossSelectorSelectsBinTuple(
       }
       base = node.kind == CrossSelectorKind::Not    ? !operands[0]
              : node.kind == CrossSelectorKind::With ? operands[0]
-             : node.kind == CrossSelectorKind::And  ? operands[0] && operands[1]
+             : node.kind == CrossSelectorKind::And ? operands[0] && operands[1]
                                                    : operands[0] || operands[1];
     } else {
       return TALOS_RT_INVALID_DESIGN;
@@ -11725,8 +11695,7 @@ deriveTransitionExclusions(const talos::coverage::Database &schema,
 }
 
 talos_rt_status
-markStaticallyEmptyStateBins(talos::coverage::Database &schema,
-                             uint64_t typeID,
+markStaticallyEmptyStateBins(talos::coverage::Database &schema, uint64_t typeID,
                              const talos::coverage::Digest &configuration,
                              FunctionalCoverageSetQueryIndex &setQueries) {
   using namespace talos::coverage;
@@ -11956,11 +11925,9 @@ queryInstanceItem(const FunctionalCoverageInstanceState &instance,
   if (instanceProfileIndex == SIZE_MAX)
     instanceProfileIndex = itemIndex;
   const uint32_t weight = typeProfile ? type.typeItemWeights[itemIndex]
-                                      : instanceProfileIndex <
-                                                instance.itemWeights.size()
-                                            ? instance.itemWeights[
-                                                  instanceProfileIndex]
-                                            : type.itemWeights[itemIndex];
+                          : instanceProfileIndex < instance.itemWeights.size()
+                              ? instance.itemWeights[instanceProfileIndex]
+                              : type.itemWeights[itemIndex];
   const FunctionalCoverageCrossState *cross = findFunctionalCross(type, item);
   if (cross) {
     if (cross->excluded)
@@ -12228,14 +12195,13 @@ buildLoadedFunctionalInstance(const CoverageState &coverage,
         hasGroupGoal = true;
       } else if (option.option == Option::Weight) {
         instance.instanceWeight =
-            hasGroupWeight
-                ? std::max(instance.instanceWeight,
-                           static_cast<uint32_t>(option.value))
-                : static_cast<uint32_t>(option.value);
+            hasGroupWeight ? std::max(instance.instanceWeight,
+                                      static_cast<uint32_t>(option.value))
+                           : static_cast<uint32_t>(option.value);
         hasGroupWeight = true;
       } else if (option.option == Option::AtLeast) {
-        groupAtLeast = groupAtLeast ? std::max(*groupAtLeast, option.value)
-                                    : option.value;
+        groupAtLeast =
+            groupAtLeast ? std::max(*groupAtLeast, option.value) : option.value;
       } else if (option.option == Option::CrossNumPrintMissing) {
         groupCrossNumPrintMissing =
             groupCrossNumPrintMissing
@@ -12348,18 +12314,18 @@ talos_rt_status collectCumulativeAtLeast(
     }
     auto accumulate = [&](const FunctionalCoverageInstanceState &instance,
                           bool projectedLiveInstance) {
-      const bool projected = projectedLiveInstance &&
-                             type->projectedItemIndex != SIZE_MAX;
+      const bool projected =
+          projectedLiveInstance && type->projectedItemIndex != SIZE_MAX;
       if ((!projected && instance.itemAtLeast.size() != type->items.size()) ||
           (projected &&
            type->projectedItemIndex >= instance.itemAtLeast.size()))
         return false;
       for (size_t itemIndex = 0; itemIndex != type->items.size(); ++itemIndex) {
-        const size_t profileIndex = projected ? type->projectedItemIndex
-                                              : itemIndex;
-        thresholds[templateItems[itemIndex]] = std::max(
-            thresholds[templateItems[itemIndex]],
-            instance.itemAtLeast[profileIndex]);
+        const size_t profileIndex =
+            projected ? type->projectedItemIndex : itemIndex;
+        thresholds[templateItems[itemIndex]] =
+            std::max(thresholds[templateItems[itemIndex]],
+                     instance.itemAtLeast[profileIndex]);
       }
       return true;
     };
@@ -12372,8 +12338,8 @@ talos_rt_status collectCumulativeAtLeast(
     for (const LoadedFunctionalInstance &loaded :
          collectLoadedFunctionalInstances(coverage, typeID, *type)) {
       const FunctionalCoverageInstanceState *instance = nullptr;
-      talos_rt_status status =
-          materializeLoadedFunctionalInstance(coverage, loaded, *type, instance);
+      talos_rt_status status = materializeLoadedFunctionalInstance(
+          coverage, loaded, *type, instance);
       if (status != TALOS_RT_OK)
         return status;
       if (!accumulate(*instance, true))
@@ -12651,8 +12617,7 @@ queryType(const CoverageState &coverage, uint64_t typeID,
       weightedPercentage +=
           current.percentage *
           static_cast<double>(instance->second.instanceWeight);
-      totalWeight =
-          saturatingAdd(totalWeight, instance->second.instanceWeight);
+      totalWeight = saturatingAdd(totalWeight, instance->second.instanceWeight);
     }
     result.covered = saturatingAdd(result.covered, current.covered);
     result.total = saturatingAdd(result.total, current.total);
@@ -12690,10 +12655,11 @@ queryType(const CoverageState &coverage, uint64_t typeID,
   return result;
 }
 
-talos_rt_status
-queryAllTypeConfigurations(CoverageState &coverage, uint64_t typeID,
-                           CoverageResult &result, uint64_t &instanceCount,
-                           uint64_t *outTypeWeight = nullptr) {
+talos_rt_status queryAllTypeConfigurations(CoverageState &coverage,
+                                           uint64_t typeID,
+                                           CoverageResult &result,
+                                           uint64_t &instanceCount,
+                                           uint64_t *outTypeWeight = nullptr) {
   if (!coverage.schema)
     return TALOS_RT_INVALID_DESIGN;
   indexFunctionalConfigurations(coverage);
@@ -12882,11 +12848,10 @@ bool selectFunctionalItem(const CoverageState &coverage, uint64_t typeID,
   return true;
 }
 
-CoverageResult
-queryFunctionalItemInstance(const FunctionalCoverageInstanceState &instance,
-                            const FunctionalCoverageTypeState &type,
-                            std::optional<uint64_t> cumulativeAtLeast =
-                                std::nullopt) {
+CoverageResult queryFunctionalItemInstance(
+    const FunctionalCoverageInstanceState &instance,
+    const FunctionalCoverageTypeState &type,
+    std::optional<uint64_t> cumulativeAtLeast = std::nullopt) {
   if (type.items.size() != 1 || type.itemGoals.size() != 1 ||
       type.itemWeights.size() != 1 || instance.bins.size() != type.bins.size())
     return {};
@@ -12894,17 +12859,16 @@ queryFunctionalItemInstance(const FunctionalCoverageInstanceState &instance,
                            cumulativeAtLeast);
 }
 
-talos_rt_status
-queryFunctionalItemType(const CoverageState &coverage, uint64_t typeID,
-                        const FunctionalCoverageTypeState &type,
-                        CoverageResult &result, uint64_t *outTotalWeight,
-                        std::optional<uint64_t> cumulativeAtLeast =
-                            std::nullopt) {
+talos_rt_status queryFunctionalItemType(
+    const CoverageState &coverage, uint64_t typeID,
+    const FunctionalCoverageTypeState &type, CoverageResult &result,
+    uint64_t *outTotalWeight,
+    std::optional<uint64_t> cumulativeAtLeast = std::nullopt) {
   result = {};
   uint64_t totalWeight = 0;
   double weightedPercentage = 0.0;
-  auto accumulate = [&](const FunctionalCoverageInstanceState &instance)
-      -> talos_rt_status {
+  auto accumulate =
+      [&](const FunctionalCoverageInstanceState &instance) -> talos_rt_status {
     if (type.projectedItemIndex >= instance.itemWeights.size())
       return TALOS_RT_INVALID_DESIGN;
     // IEEE 19.11.3 weights each point/cross instance by its own option.weight,
@@ -12993,9 +12957,9 @@ void makeFunctionalCountsConsistent(CoverageResult &result) {
 }
 
 talos_rt_status queryAllItemConfigurations(CoverageState &coverage,
-                                             uint64_t typeID,
-                                             uint64_t templateItem,
-                                             CoverageResult &result) {
+                                           uint64_t typeID,
+                                           uint64_t templateItem,
+                                           CoverageResult &result) {
   if (!coverage.schema || !templateItem)
     return TALOS_RT_INVALID_DESIGN;
   talos_rt_status templateStatus =
@@ -13097,9 +13061,8 @@ talos_rt_status queryAllItemConfigurations(CoverageState &coverage,
   return TALOS_RT_OK;
 }
 
-talos_rt_status writeResult(const CoverageResult &result,
-                              double *outPercentage, int32_t *outCovered,
-                              int32_t *outTotal) {
+talos_rt_status writeResult(const CoverageResult &result, double *outPercentage,
+                            int32_t *outCovered, int32_t *outTotal) {
   if (!outPercentage || !outCovered || !outTotal)
     return TALOS_RT_INVALID_ARGUMENT;
   *outPercentage = std::max(0.0, std::min(100.0, result.percentage));
@@ -13248,9 +13211,8 @@ talos_rt_status talos_rt_coverage_prepared_candidates(
   }
 }
 
-talos_rt_status
-talos_rt_coverage_release_preparation(talos_rt_context *context,
-                                        uint64_t token) {
+talos_rt_status talos_rt_coverage_release_preparation(talos_rt_context *context,
+                                                      uint64_t token) {
   if (!context || !token || !static_cast<uint32_t>(token))
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
@@ -13271,18 +13233,17 @@ talos_rt_coverage_release_preparation(talos_rt_context *context,
   }
 }
 
-extern "C" talos_rt_status talos_rt_v1_covergroup_prepare(
-    talos_rt_context *context, uint64_t typeID,
-    const talos_rt_functional_value_v1 *expressions, uint64_t expressionCount,
-    uint64_t *outToken) {
+extern "C" talos_rt_status
+talos_rt_v1_covergroup_prepare(talos_rt_context *context, uint64_t typeID,
+                               const talos_rt_functional_value_v1 *expressions,
+                               uint64_t expressionCount, uint64_t *outToken) {
   return talos_rt_coverage_prepare_construction(context, typeID, expressions,
-                                                  expressionCount, outToken);
+                                                expressionCount, outToken);
 }
 
 extern "C" talos_rt_status
 talos_rt_v1_covergroup_bind_with(talos_rt_context *context, uint64_t token,
-                                   uint64_t selector,
-                                   talos_rt_object_v1 *queue) {
+                                 uint64_t selector, talos_rt_object_v1 *queue) {
   using namespace talos::coverage;
   if (!context || !token || !static_cast<uint32_t>(token) || !selector ||
       !queue)
@@ -13338,13 +13299,14 @@ talos_rt_v1_covergroup_bind_with(talos_rt_context *context, uint64_t token,
 
 extern "C" talos_rt_status
 talos_rt_v1_covergroup_release_preparation(talos_rt_context *context,
-                                             uint64_t token) {
+                                           uint64_t token) {
   return talos_rt_coverage_release_preparation(context, token);
 }
 
-extern "C" talos_rt_status talos_rt_v1_covergroup_candidates(
-    talos_rt_context *context, uint64_t token, uint64_t selector,
-    talos_rt_object_v1 *queue, uint32_t maximumCandidates) {
+extern "C" talos_rt_status
+talos_rt_v1_covergroup_candidates(talos_rt_context *context, uint64_t token,
+                                  uint64_t selector, talos_rt_object_v1 *queue,
+                                  uint32_t maximumCandidates) {
   if (!context || !token || !static_cast<uint32_t>(token) || !selector ||
       !queue ||
       maximumCandidates > talos::coverage::MaxFunctionalCrossWithCandidates)
@@ -13376,15 +13338,14 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_candidates(
       return status;
     CoverageTupleQueueSnapshot values;
     status = talos_rt_coverage_prepared_candidates(context, token, selector,
-                                                     maximumCandidates, values);
+                                                   maximumCandidates, values);
     if (status != TALOS_RT_OK)
       return status;
     ManagedExecutionScope execution(context);
     if (execution.getStatus() != TALOS_RT_OK)
       return execution.getStatus();
     talos_rt_gc_root_v1 rootGuard{};
-    status =
-        talos_rt_v1_gc_root_push(execution.getLane(), &rootGuard, &queue);
+    status = talos_rt_v1_gc_root_push(execution.getLane(), &rootGuard, &queue);
     if (status != TALOS_RT_OK)
       return status;
     for (uint64_t ordinal = 0; ordinal != values.count; ++ordinal) {
@@ -13417,11 +13378,11 @@ bool talos_rt_coverage_tracks_static_state_unlocked(
 }
 
 void talos_rt_coverage_record_transition_unlocked(talos_rt_context *context,
-                                                    uint64_t stableID,
-                                                    uint64_t bitWidth,
-                                                    const uint8_t *changed,
-                                                    const uint8_t *newValue,
-                                                    const uint8_t *newUnknown) {
+                                                  uint64_t stableID,
+                                                  uint64_t bitWidth,
+                                                  const uint8_t *changed,
+                                                  const uint8_t *newValue,
+                                                  const uint8_t *newUnknown) {
   if (!context || !changed || bitWidth == 0)
     return;
   CoverageState *coverage = coverageState(context, false);
@@ -13542,16 +13503,14 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_create(
             formals[index].argument_ref_kind == 2
                 ? TALOS_RT_MANAGED_REFERENCE_PATH
                 : TALOS_RT_MANAGED_CLASS;
-        if (talos_rt_managed_object_kind(formals[index].owner) !=
-            expectedKind)
+        if (talos_rt_managed_object_kind(formals[index].owner) != expectedKind)
           return TALOS_RT_INVALID_HANDLE;
       }
     }
     size_t supplied = 0;
     for (const auto *expression : expectedExpressions) {
-      bool isDefault =
-          expression->role ==
-          talos::coverage::FunctionalExpressionRole::FormalDefault;
+      bool isDefault = expression->role ==
+                       talos::coverage::FunctionalExpressionRole::FormalDefault;
       if (isDefault && (supplied == expressionCount ||
                         expressions[supplied].id != expression->id))
         continue;
@@ -13634,8 +13593,8 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_create(
     bool hasExplicitName = false;
     for (const auto &plan : schema.functionalOptionPlans) {
       if (plan.owner != typeID ||
-          plan.ownerKind != talos::coverage::
-                                FunctionalConfigurationOptionOwnerKind::Group ||
+          plan.ownerKind !=
+              talos::coverage::FunctionalConfigurationOptionOwnerKind::Group ||
           plan.option !=
               talos::coverage::FunctionalConfigurationOptionKind::Name)
         continue;
@@ -13704,8 +13663,8 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_create(
 
 extern "C" talos_rt_status
 talos_rt_v1_covergroup_set_enabled(talos_rt_context *context,
-                                     talos_rt_covergroup_v1 handle,
-                                     uint64_t itemID, uint32_t enabled) {
+                                   talos_rt_covergroup_v1 handle,
+                                   uint64_t itemID, uint32_t enabled) {
   if (!context || enabled > 1)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
@@ -13745,8 +13704,8 @@ talos_rt_v1_covergroup_set_enabled(talos_rt_context *context,
 
 extern "C" talos_rt_status
 talos_rt_v1_covergroup_set_name(talos_rt_context *context,
-                                  talos_rt_covergroup_v1 handle,
-                                  talos_rt_string_v1 name) {
+                                talos_rt_covergroup_v1 handle,
+                                talos_rt_string_v1 name) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   talos_rt_status ownership = talos_rt_validate_string(context, name);
@@ -13823,9 +13782,8 @@ talos_rt_status talos_rt_covergroup_validate_option_reference(
 }
 
 extern "C" talos_rt_status talos_rt_v1_covergroup_set_integer_option(
-    talos_rt_context *context, talos_rt_covergroup_v1 handle,
-    uint64_t itemID, talos_rt_covergroup_instance_option_v1 option,
-    int64_t value) {
+    talos_rt_context *context, talos_rt_covergroup_v1 handle, uint64_t itemID,
+    talos_rt_covergroup_instance_option_v1 option, int64_t value) {
   if (!context || value < 0 ||
       (option != TALOS_RT_COVERGROUP_OPTION_WEIGHT &&
        option != TALOS_RT_COVERGROUP_OPTION_GOAL &&
@@ -13934,9 +13892,8 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_set_integer_option(
 }
 
 extern "C" talos_rt_status talos_rt_v1_covergroup_get_integer_option(
-    talos_rt_context *context, talos_rt_covergroup_v1 handle,
-    uint64_t itemID, talos_rt_covergroup_instance_option_v1 option,
-    int64_t *outValue) {
+    talos_rt_context *context, talos_rt_covergroup_v1 handle, uint64_t itemID,
+    talos_rt_covergroup_instance_option_v1 option, int64_t *outValue) {
   if (!context || !outValue ||
       (option != TALOS_RT_COVERGROUP_OPTION_WEIGHT &&
        option != TALOS_RT_COVERGROUP_OPTION_GOAL &&
@@ -14043,9 +14000,8 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_get_integer_option(
 }
 
 extern "C" talos_rt_status talos_rt_v1_covergroup_set_string_option(
-    talos_rt_context *context, talos_rt_covergroup_v1 handle,
-    uint64_t itemID, talos_rt_covergroup_instance_option_v1 option,
-    talos_rt_string_v1 value) {
+    talos_rt_context *context, talos_rt_covergroup_v1 handle, uint64_t itemID,
+    talos_rt_covergroup_instance_option_v1 option, talos_rt_string_v1 value) {
   if (!context || option != TALOS_RT_COVERGROUP_OPTION_COMMENT)
     return TALOS_RT_INVALID_ARGUMENT;
   talos_rt_status ownership = talos_rt_validate_string(context, value);
@@ -14083,8 +14039,8 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_set_string_option(
 }
 
 extern "C" talos_rt_status talos_rt_v1_covergroup_get_string_option(
-    talos_rt_gc_lane_v1 *lane, talos_rt_covergroup_v1 handle,
-    uint64_t itemID, talos_rt_covergroup_instance_option_v1 option,
+    talos_rt_gc_lane_v1 *lane, talos_rt_covergroup_v1 handle, uint64_t itemID,
+    talos_rt_covergroup_instance_option_v1 option,
     talos_rt_string_v1 *outValue) {
   talos_rt_context *context = talos_rt_managed_lane_context(lane);
   if (!context || !outValue ||
@@ -14115,7 +14071,7 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_get_string_option(
           comment == found->second.comments.end() ? &empty : &comment->second;
     }
     return talos_rt_v1_string_create(lane, text->data(), text->size(),
-                                       outValue);
+                                     outValue);
   }
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
   TALOS_RT_CATCH(const std::length_error &) {
@@ -14123,8 +14079,7 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_get_string_option(
   }
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_covergroup_set_type_integer_option(
+extern "C" talos_rt_status talos_rt_v1_covergroup_set_type_integer_option(
     talos_rt_context *context, uint64_t typeID, uint64_t itemID,
     talos_rt_covergroup_instance_option_v1 option, int64_t value) {
   if (!context || !typeID || value < 0 ||
@@ -14209,11 +14164,9 @@ talos_rt_v1_covergroup_set_type_integer_option(
   }
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_covergroup_set_type_string_option(
+extern "C" talos_rt_status talos_rt_v1_covergroup_set_type_string_option(
     talos_rt_context *context, uint64_t typeID, uint64_t itemID,
-    talos_rt_covergroup_instance_option_v1 option,
-    talos_rt_string_v1 value) {
+    talos_rt_covergroup_instance_option_v1 option, talos_rt_string_v1 value) {
   if (!context || !typeID || option != TALOS_RT_COVERGROUP_OPTION_COMMENT)
     return TALOS_RT_INVALID_ARGUMENT;
   talos_rt_status ownership = talos_rt_validate_string(context, value);
@@ -14244,8 +14197,8 @@ talos_rt_v1_covergroup_set_type_string_option(
 
 extern "C" talos_rt_status
 talos_rt_v1_covergroup_sample_enabled(talos_rt_context *context,
-                                        talos_rt_covergroup_v1 handle,
-                                        uint32_t *outEnabled) {
+                                      talos_rt_covergroup_v1 handle,
+                                      uint32_t *outEnabled) {
   if (!context || !outEnabled)
     return TALOS_RT_INVALID_ARGUMENT;
   std::lock_guard<std::recursive_mutex> lock(context->mutex);
@@ -14259,9 +14212,9 @@ talos_rt_v1_covergroup_sample_enabled(talos_rt_context *context,
   return TALOS_RT_OK;
 }
 
-talos_rt_status
-talos_rt_covergroup_strobe_unlocked(talos_rt_context *context,
-                                      uint64_t handle, bool &strobe) {
+talos_rt_status talos_rt_covergroup_strobe_unlocked(talos_rt_context *context,
+                                                    uint64_t handle,
+                                                    bool &strobe) {
   if (!context || !handle)
     return TALOS_RT_INVALID_ARGUMENT;
   CoverageState *coverage = coverageState(context, false);
@@ -14276,8 +14229,7 @@ talos_rt_covergroup_strobe_unlocked(talos_rt_context *context,
 
 extern "C" talos_rt_status talos_rt_v1_covergroup_sample(
     talos_rt_context *context, talos_rt_covergroup_v1 handle,
-    const talos_rt_functional_value_v1 *expressions,
-    uint64_t expressionCount) {
+    const talos_rt_functional_value_v1 *expressions, uint64_t expressionCount) {
   if (!context || (expressionCount && !expressions))
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
@@ -14306,9 +14258,8 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_sample(
     for (size_t index = 0; index != metadata.sampleExpressions.size();
          ++index) {
       const auto *entry = metadata.sampleExpressions[index];
-      bool isDefault =
-          entry->role ==
-          talos::coverage::FunctionalExpressionRole::FormalDefault;
+      bool isDefault = entry->role ==
+                       talos::coverage::FunctionalExpressionRole::FormalDefault;
       if (isDefault && (supplied == expressionCount ||
                         expressions[supplied].id != entry->id))
         continue;
@@ -14573,9 +14524,8 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_sample(
           } else if (!matched &&
                      (repetition ==
                           talos::coverage::TransitionRepetitionKind::Goto ||
-                      repetition ==
-                          talos::coverage::TransitionRepetitionKind::
-                              Nonconsecutive)) {
+                      repetition == talos::coverage::TransitionRepetitionKind::
+                                        Nonconsecutive)) {
             retain(sampledState, fromPrevious);
           }
           if (!matched)
@@ -14591,8 +14541,8 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_sample(
                        fromPrevious);
             } else
               retain({ordinal + 1,
-                      repetition == talos::coverage::
-                                        TransitionRepetitionKind::Nonconsecutive
+                      repetition == talos::coverage::TransitionRepetitionKind::
+                                        Nonconsecutive
                           ? ordinal
                           : UINT32_MAX,
                       0, activeState.excluded, sampledState.samplesConsumed},
@@ -14912,9 +14862,9 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_sample(
 }
 
 extern "C" talos_rt_status talos_rt_v1_covergroup_formal_read(
-    talos_rt_context *context, talos_rt_covergroup_v1 handle,
-    uint64_t formalID, talos_rt_functional_value_kind_v1 kind,
-    uint64_t bitWidth, uint64_t valueSize, const uint8_t *globalValue,
+    talos_rt_context *context, talos_rt_covergroup_v1 handle, uint64_t formalID,
+    talos_rt_functional_value_kind_v1 kind, uint64_t bitWidth,
+    uint64_t valueSize, const uint8_t *globalValue,
     const uint8_t *globalUnknown, uint64_t globalBitCount, void *outValue,
     void *outUnknown) {
   if (!context || !formalID || !outValue)
@@ -14939,9 +14889,8 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_formal_read(
     bool virtualInterface =
         formal.resultKind ==
         talos::coverage::FunctionalExpressionResultKind::VirtualInterface;
-    bool semaphore =
-        formal.resultKind ==
-        talos::coverage::FunctionalExpressionResultKind::Semaphore;
+    bool semaphore = formal.resultKind ==
+                     talos::coverage::FunctionalExpressionResultKind::Semaphore;
     bool mailbox = formal.resultKind ==
                    talos::coverage::FunctionalExpressionResultKind::Mailbox;
     auto validHandle = [&](uint64_t word) {
@@ -15009,9 +14958,8 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_formal_read(
     }
     bool string = formal.resultKind ==
                   talos::coverage::FunctionalExpressionResultKind::String;
-    bool container =
-        formal.resultKind ==
-        talos::coverage::FunctionalExpressionResultKind::Container;
+    bool container = formal.resultKind ==
+                     talos::coverage::FunctionalExpressionResultKind::Container;
     bool classHandle =
         formal.resultKind ==
         talos::coverage::FunctionalExpressionResultKind::ClassHandle;
@@ -15126,9 +15074,8 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_formal_read(
 }
 
 extern "C" talos_rt_status talos_rt_v1_covergroup_instance_query(
-    talos_rt_context *context, talos_rt_covergroup_v1 handle,
-    uint64_t itemID, double *outPercentage, int32_t *outCovered,
-    int32_t *outTotal) {
+    talos_rt_context *context, talos_rt_covergroup_v1 handle, uint64_t itemID,
+    double *outPercentage, int32_t *outCovered, int32_t *outTotal) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
@@ -15181,9 +15128,10 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_instance_query(
   }
 }
 
-extern "C" talos_rt_status talos_rt_v1_covergroup_type_query(
-    talos_rt_context *context, uint64_t typeID, uint64_t itemID,
-    double *outPercentage, int32_t *outCovered, int32_t *outTotal) {
+extern "C" talos_rt_status
+talos_rt_v1_covergroup_type_query(talos_rt_context *context, uint64_t typeID,
+                                  uint64_t itemID, double *outPercentage,
+                                  int32_t *outCovered, int32_t *outTotal) {
   if (!context || !typeID || !outPercentage || !outCovered || !outTotal)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
@@ -15212,7 +15160,7 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_type_query(
 
 extern "C" talos_rt_status
 talos_rt_v1_functional_coverage_get(talos_rt_context *context,
-                                      double *outPercentage) {
+                                    double *outPercentage) {
   if (!context || !outPercentage)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
@@ -15257,7 +15205,7 @@ talos_rt_v1_functional_coverage_get(talos_rt_context *context,
 
 extern "C" talos_rt_status
 talos_rt_v1_functional_coverage_set_db_name(talos_rt_context *context,
-                                              talos_rt_string_v1 name) {
+                                            talos_rt_string_v1 name) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   char scratch[8] = {};
@@ -15287,7 +15235,7 @@ talos_rt_v1_functional_coverage_set_db_name(talos_rt_context *context,
 
 extern "C" talos_rt_status
 talos_rt_v1_functional_coverage_load_db(talos_rt_context *context,
-                                          talos_rt_string_v1 name) {
+                                        talos_rt_string_v1 name) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   char scratch[8] = {};
@@ -15464,7 +15412,7 @@ extern "C" talos_rt_status talos_rt_v1_coverage_finalize(
 
 extern "C" talos_rt_status
 talos_rt_v1_coverage_point_hit(talos_rt_context *context, uint64_t point,
-                                 uint32_t enabled) {
+                               uint32_t enabled) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   CoverageState *coverage = context->coverage.get();
@@ -15536,9 +15484,9 @@ talos_rt_v1_coverage_toggle_seal(talos_rt_context *context) {
 }
 
 extern "C" talos_rt_status
-talos_rt_v1_coverage_fsm_bind(talos_rt_context *context,
-                                uint64_t machineKey, uint64_t shift,
-                                uint64_t bitCount, uint64_t stateHandle) {
+talos_rt_v1_coverage_fsm_bind(talos_rt_context *context, uint64_t machineKey,
+                              uint64_t shift, uint64_t bitCount,
+                              uint64_t stateHandle) {
   if (!context || bitCount == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
@@ -15571,9 +15519,8 @@ talos_rt_v1_coverage_fsm_bind(talos_rt_context *context,
 }
 
 extern "C" talos_rt_status
-talos_rt_v1_coverage_toggle_bind(talos_rt_context *context,
-                                   uint64_t firstBit, uint64_t bitCount,
-                                   uint64_t stateHandle) {
+talos_rt_v1_coverage_toggle_bind(talos_rt_context *context, uint64_t firstBit,
+                                 uint64_t bitCount, uint64_t stateHandle) {
   if (!context || bitCount == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   std::lock_guard<std::recursive_mutex> lock(context->mutex);
@@ -15605,8 +15552,8 @@ talos_rt_v1_coverage_toggle_bind(talos_rt_context *context,
 
 extern "C" talos_rt_status
 talos_rt_v1_coverage_reset(talos_rt_context *context, uint32_t metric,
-                             const uint8_t *currentValue,
-                             const uint8_t *currentUnknown) {
+                           const uint8_t *currentValue,
+                           const uint8_t *currentUnknown) {
   if (!context || (metric != TALOS_RT_COVERAGE_STATEMENT &&
                    metric != TALOS_RT_COVERAGE_TOGGLE &&
                    metric != TALOS_RT_COVERAGE_ASSERTION &&
@@ -15655,10 +15602,11 @@ talos_rt_v1_coverage_reset(talos_rt_context *context, uint32_t metric,
   return TALOS_RT_OK;
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_coverage_query(talos_rt_context *context, uint32_t metric,
-                             uint64_t *outCovered, uint64_t *outTotal,
-                             double *outPercentage) {
+extern "C" talos_rt_status talos_rt_v1_coverage_query(talos_rt_context *context,
+                                                      uint32_t metric,
+                                                      uint64_t *outCovered,
+                                                      uint64_t *outTotal,
+                                                      double *outPercentage) {
   if (!context || !outCovered || !outTotal || !outPercentage ||
       (metric != TALOS_RT_COVERAGE_STATEMENT &&
        metric != TALOS_RT_COVERAGE_TOGGLE &&
@@ -15787,9 +15735,9 @@ extern "C" talos_rt_status talos_rt_v1_coverage_control_definition(
   }
 }
 
-talos_rt_status
-talos_rt_coverage_scope_for_path(talos_rt_context *context,
-                                   std::string_view path, uint64_t &scopeID) {
+talos_rt_status talos_rt_coverage_scope_for_path(talos_rt_context *context,
+                                                 std::string_view path,
+                                                 uint64_t &scopeID) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   std::lock_guard<std::recursive_mutex> lock(context->mutex);
@@ -15891,8 +15839,8 @@ extern "C" talos_rt_status talos_rt_v1_coverage_query_instance(
 }
 
 extern "C" talos_rt_status talos_rt_v1_coverage_database_save(
-    talos_rt_context *context, int32_t coverageType,
-    talos_rt_string_v1 name, int32_t *outStatus) {
+    talos_rt_context *context, int32_t coverageType, talos_rt_string_v1 name,
+    int32_t *outStatus) {
   if (!context || !outStatus)
     return TALOS_RT_INVALID_ARGUMENT;
   *outStatus = SVCovError;
@@ -15950,8 +15898,8 @@ extern "C" talos_rt_status talos_rt_v1_coverage_database_save(
 }
 
 extern "C" talos_rt_status talos_rt_v1_coverage_database_merge(
-    talos_rt_context *context, int32_t coverageType,
-    talos_rt_string_v1 name, int32_t *outStatus) {
+    talos_rt_context *context, int32_t coverageType, talos_rt_string_v1 name,
+    int32_t *outStatus) {
   if (!context || !outStatus)
     return TALOS_RT_INVALID_ARGUMENT;
   *outStatus = SVCovError;
@@ -16016,7 +15964,7 @@ extern "C" talos_rt_status talos_rt_v1_coverage_database_merge(
     talos::coverage::Database combined = *coverage->schema;
     talos::coverage::Status canonicalStatus =
         talos::coverage::canonicalizeFunctionalConfigurations(combined,
-                                                                &diagnostic);
+                                                              &diagnostic);
     if (canonicalStatus != talos::coverage::Status::Ok)
       return mapCoverageStatus(canonicalStatus);
     talos::coverage::Status mergeStatus =
@@ -16040,9 +15988,9 @@ extern "C" talos_rt_status talos_rt_v1_coverage_database_merge(
   }
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_coverage_load(talos_rt_context *context, const char *path,
-                            uint64_t pathSize) {
+extern "C" talos_rt_status talos_rt_v1_coverage_load(talos_rt_context *context,
+                                                     const char *path,
+                                                     uint64_t pathSize) {
   if (!context || !path || !pathSize || pathSize > SIZE_MAX)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
@@ -16106,10 +16054,11 @@ talos_rt_v1_coverage_load(talos_rt_context *context, const char *path,
   }
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_coverage_save(talos_rt_context *context, const char *path,
-                            uint64_t pathSize, uint32_t runStatus,
-                            uint64_t simulationTime) {
+extern "C" talos_rt_status talos_rt_v1_coverage_save(talos_rt_context *context,
+                                                     const char *path,
+                                                     uint64_t pathSize,
+                                                     uint32_t runStatus,
+                                                     uint64_t simulationTime) {
   if (!context || !path || !pathSize || pathSize > SIZE_MAX)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
@@ -16120,19 +16069,17 @@ talos_rt_v1_coverage_save(talos_rt_context *context, const char *path,
       CoverageState *coverage = coverageState(context, false);
       if (!coverage) {
         setLastErrorUnlocked(
-            context, "failed to create coverage snapshot for '" + pathText +
-                         "': " +
-                         talos_rt_v1_status_string(
-                             TALOS_RT_INVALID_LIFECYCLE));
+            context,
+            "failed to create coverage snapshot for '" + pathText +
+                "': " + talos_rt_v1_status_string(TALOS_RT_INVALID_LIFECYCLE));
         return TALOS_RT_INVALID_LIFECYCLE;
       }
       talos_rt_status status =
           makeSnapshot(context, *coverage, runStatus, simulationTime, snapshot);
       if (status != TALOS_RT_OK) {
-        setLastErrorUnlocked(context,
-                             "failed to create coverage snapshot for '" +
-                                 pathText + "': " +
-                                 talos_rt_v1_status_string(status));
+        setLastErrorUnlocked(
+            context, "failed to create coverage snapshot for '" + pathText +
+                         "': " + talos_rt_v1_status_string(status));
         return status;
       }
     }
@@ -16141,8 +16088,7 @@ talos_rt_v1_coverage_save(talos_rt_context *context, const char *path,
         talos::coverage::writeFileAtomically(pathText, snapshot, &diagnostic);
     if (writeStatus != talos::coverage::Status::Ok) {
       std::string message = "failed to write coverage database '" + pathText +
-                            "': " +
-                            talos::coverage::statusName(writeStatus);
+                            "': " + talos::coverage::statusName(writeStatus);
       if (diagnostic.field) {
         message += " (";
         message += diagnostic.field;
@@ -16178,7 +16124,7 @@ talos_rt_v1_coverage_save(talos_rt_context *context, const char *path,
 
 extern "C" talos_rt_status
 talos_rt_v1_coverage_snapshot(talos_rt_context *context, uint32_t runStatus,
-                                uint64_t simulationTime) {
+                              uint64_t simulationTime) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
@@ -16191,13 +16137,12 @@ talos_rt_v1_coverage_snapshot(talos_rt_context *context, uint32_t runStatus,
       output = expandOutputPath(*coverage);
     }
     return talos_rt_v1_coverage_save(context, output.data(), output.size(),
-                                       runStatus, simulationTime);
+                                     runStatus, simulationTime);
   }
   TALOS_RT_CATCH(const std::bad_alloc &) {
     TALOS_RT_TRY {
-      setLastError(context,
-                   "failed to prepare coverage output path: runtime "
-                   "allocation failed");
+      setLastError(context, "failed to prepare coverage output path: runtime "
+                            "allocation failed");
     }
     TALOS_RT_CATCH_ALL {}
     return TALOS_RT_OUT_OF_MEMORY;

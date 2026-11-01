@@ -148,8 +148,9 @@ Expected<MachODylib> readMachODylib(StringRef path) {
   if (!macho || !macho->is64Bit() ||
       macho->getArch() != Triple(TALOS_NATIVE_TARGET_TRIPLE).getArch() ||
       macho->getHeader64().cpusubtype != MachO::CPU_SUBTYPE_ARM64_ALL)
-    return createStringError(inconvertibleErrorCode(),
-                             "Mach-O library is not for the native ARM64 target");
+    return createStringError(
+        inconvertibleErrorCode(),
+        "Mach-O library is not for the native ARM64 target");
   if (macho->getHeader64().filetype != MachO::MH_DYLIB)
     return createStringError(inconvertibleErrorCode(),
                              "Mach-O input is not a dynamic library");
@@ -196,8 +197,9 @@ Expected<MachODylib> readMachODylib(StringRef path) {
     result.installName = name.take_front(end).str();
     return std::move(result);
   }
-  return createStringError(inconvertibleErrorCode(),
-                           "Mach-O library has no valid LC_ID_DYLIB install name");
+  return createStringError(
+      inconvertibleErrorCode(),
+      "Mach-O library has no valid LC_ID_DYLIB install name");
 }
 
 LogicalResult classifySharedLibrary(StringRef suppliedPath, file_magic magic,

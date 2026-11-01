@@ -69,8 +69,8 @@ Encoder::encodeArithmeticOperation(FunctionPlan &plan, Operation *operation) {
     if (condition == kInvalidRegister)
       return failure();
     emit({Compare, predicate, condition, reg(plan, lhs), reg(plan, rhs)});
-    emit({Select, TALOS_RT_DB_SELECT_BINARY, reg(plan, result),
-          reg(plan, lhs), reg(plan, rhs), condition});
+    emit({Select, TALOS_RT_DB_SELECT_BINARY, reg(plan, result), reg(plan, lhs),
+          reg(plan, rhs), condition});
     return success();
   };
   if (auto op = dyn_cast<arith::MinUIOp>(operation))

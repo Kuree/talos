@@ -222,8 +222,8 @@ void lowerNBABatches(Operation *operation, SymbolTableCollection *cache) {
     auto ptr = LLVM::LLVMPointerType::get(builder.getContext());
     auto i32 = builder.getI32Type();
     detail::getOrDeclareLLVMFunction(module,
-                                     "talos_rt_v1_static_nba_commit_batch",
-                                     i32, {ptr, ptr, i32, i32, ptr});
+                                     "talos_rt_v1_static_nba_commit_batch", i32,
+                                     {ptr, ptr, i32, i32, ptr});
     SmallVector<uint32_t> roots;
     for (auto commit : batch.getBody().getOps<schedule::NativeNBACommitOp>())
       roots.push_back(commit.getRoot());
@@ -369,7 +369,6 @@ void materializeLocalScheduleActions(
     transition.erase();
   }
 }
-
 
 LogicalResult convertActionArithmetic(Operation *operation) {
   LLVMTypeConverter converter(operation->getContext());

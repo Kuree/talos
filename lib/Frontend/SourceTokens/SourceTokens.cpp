@@ -25,8 +25,8 @@ void lexSystemVerilogTokens(
   // a few malformed tokens and report the rest as one disabled region.
   lexerOptions.maxErrors = std::numeric_limits<uint32_t>::max();
 
-  slang::SourceBuffer buffer = sourceManager.assignText(
-      std::string_view(text.data(), text.size()));
+  slang::SourceBuffer buffer =
+      sourceManager.assignText(std::string_view(text.data(), text.size()));
   // Lexer diagnostics are not reported: a listing describes the text as
   // written, and compiling the design is what reports its errors.
   slang::BumpAllocator alloc;

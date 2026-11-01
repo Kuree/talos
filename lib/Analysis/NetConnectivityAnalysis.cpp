@@ -30,17 +30,17 @@ uint64_t inventoryDigest(sim::SimDesignOp design) {
 }
 struct TopologyCache {
   std::mutex mutex;
-  llvm::DenseMap<Operation *,
-                 std::pair<uint64_t,
-                           std::shared_ptr<const IsolatedWireDriverTopology>>>
+  llvm::DenseMap<
+      Operation *,
+      std::pair<uint64_t, std::shared_ptr<const IsolatedWireDriverTopology>>>
       entries;
 };
 TopologyCache &getTopologyCache() {
   static TopologyCache cache;
   return cache;
 }
-IsolatedWireDriverTopology computeIsolatedWireDriverTopology(
-    sim::SimDesignOp design);
+IsolatedWireDriverTopology
+computeIsolatedWireDriverTopology(sim::SimDesignOp design);
 } // namespace
 
 std::shared_ptr<const IsolatedWireDriverTopology>
@@ -158,8 +158,8 @@ computeIsolatedWireDriverTopology(sim::SimDesignOp design) {
                  !net.getNettypeAttr() &&
                  net.getResolutionKind() == sim::NetResolutionKind::Wire;
     if (auto delays = net.getPropagationDelays())
-      info.plain &= llvm::none_of(*delays,
-                                  [](int64_t delay) { return delay != -1; });
+      info.plain &=
+          llvm::none_of(*delays, [](int64_t delay) { return delay != -1; });
     connectedNets[net.getId()] = info;
   }
   // Strong contributions covering one bit, or nothing for a malformed or

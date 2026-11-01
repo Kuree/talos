@@ -329,7 +329,7 @@ extern "C" talos_rt_status talos_rt_v1_dpi_aggregate_unpack(
       const char *bytes = nullptr;
       std::memcpy(&bytes, current, sizeof(bytes));
       status = talos_rt_v1_dpi_string_copy(context, bytes,
-                                             &stringRoots[stringIndex]);
+                                           &stringRoots[stringIndex]);
       if (status != TALOS_RT_OK)
         return false;
       copyPlaneBits(
@@ -371,8 +371,7 @@ extern "C" talos_rt_status talos_rt_v1_dpi_aggregate_unpack(
   };
   bool walked = walkPlan(plan, planWords / recordWords, 0, 0, unpackLeaf);
   if (stringCount != 0) {
-    talos_rt_status pop =
-        talos_rt_v1_gc_managed_root_range_pop(lane, &roots);
+    talos_rt_status pop = talos_rt_v1_gc_managed_root_range_pop(lane, &roots);
     if (status == TALOS_RT_OK && pop != TALOS_RT_OK)
       status = pop;
   }
@@ -411,8 +410,7 @@ void enumerateAggregateStringRoots(void *opaque, ManagedRootVisit visit,
     // pointer word and can be visited in place so a moving collector updates
     // the aggregate plane before dispatch or copy-out resumes.
     if (*slot != 0 && (*slot & 3) == 0)
-      visit(visitorEnvironment,
-            reinterpret_cast<talos_rt_object_v1 **>(slot));
+      visit(visitorEnvironment, reinterpret_cast<talos_rt_object_v1 **>(slot));
     return true;
   };
   (void)walkPlan(roots->plan.data(), roots->plan.size() / recordWords, 0, 0,
@@ -421,10 +419,11 @@ void enumerateAggregateStringRoots(void *opaque, ManagedRootVisit visit,
 
 } // namespace
 
-extern "C" talos_rt_status talos_rt_v1_dpi_aggregate_roots_push(
-    talos_rt_context *context, void *value, uint64_t planeSize,
-    uint64_t totalBitWidth, const int64_t *plan, uint64_t planWords,
-    void **outHandle) {
+extern "C" talos_rt_status
+talos_rt_v1_dpi_aggregate_roots_push(talos_rt_context *context, void *value,
+                                     uint64_t planeSize, uint64_t totalBitWidth,
+                                     const int64_t *plan, uint64_t planWords,
+                                     void **outHandle) {
   if (!context || !value || !plan || planWords == 0 ||
       planWords % recordWords != 0 || planeSize < (totalBitWidth + 7) / 8 ||
       !outHandle)
@@ -460,8 +459,7 @@ extern "C" talos_rt_status talos_rt_v1_dpi_aggregate_roots_push(
 }
 
 extern "C" talos_rt_status
-talos_rt_v1_dpi_aggregate_roots_pop(talos_rt_context *context,
-                                      void *handle) {
+talos_rt_v1_dpi_aggregate_roots_pop(talos_rt_context *context, void *handle) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   if (!handle)
@@ -568,8 +566,8 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_aggregate_roots_push(
   }
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
   return talos_rt_v1_dpi_aggregate_roots_push(context, value, planeSize,
-                                                totalBitWidth, plan.data(),
-                                                plan.size(), outHandle);
+                                              totalBitWidth, plan.data(),
+                                              plan.size(), outHandle);
 }
 
 extern "C" talos_rt_status talos_rt_v1_dpi_open_array_aggregate_pack(
@@ -625,9 +623,9 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_aggregate_unpack(
                          elementCSize, unpackedRanges, unpackedDimensions,
                          elementPlan, elementPlanWords, plan))
     return TALOS_RT_INVALID_ARGUMENT;
-  return talos_rt_v1_dpi_aggregate_unpack(
-      context, data, dataSize, plan.data(), plan.size(), outValue, outUnknown,
-      planeSize, totalBitWidth, fourState);
+  return talos_rt_v1_dpi_aggregate_unpack(context, data, dataSize, plan.data(),
+                                          plan.size(), outValue, outUnknown,
+                                          planeSize, totalBitWidth, fourState);
 }
 
 extern "C" talos_rt_status talos_rt_v1_dpi_aggregate_export_pack(

@@ -72,9 +72,8 @@ talos_rt_status buildPlusargIndex(talos_rt_context *context) {
 }
 
 // The matched argument, or nullptr when no plusarg starts with `prefix`.
-talos_rt_status findPlusarg(talos_rt_context *context,
-                              std::string_view prefix,
-                              const std::string *&match) {
+talos_rt_status findPlusarg(talos_rt_context *context, std::string_view prefix,
+                            const std::string *&match) {
   match = nullptr;
   talos_rt_status status = buildPlusargIndex(context);
   if (status != TALOS_RT_OK || context->plusargIndexNodes.empty())
@@ -355,8 +354,7 @@ extern "C" talos_rt_status talos_rt_v1_plusarg_parse_logic(
 }
 
 extern "C" talos_rt_status
-talos_rt_v1_plusarg_parse_real(talos_rt_string_v1 string,
-                                 double *outValue) {
+talos_rt_v1_plusarg_parse_real(talos_rt_string_v1 string, double *outValue) {
   if (!outValue)
     return TALOS_RT_INVALID_ARGUMENT;
   *outValue = 0.0;
@@ -392,9 +390,9 @@ talos_rt_v1_plusarg_parse_real(talos_rt_string_v1 string,
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_plusarg_test(talos_rt_context *context,
-                           talos_rt_string_v1 name, uint32_t *outFound) {
+extern "C" talos_rt_status talos_rt_v1_plusarg_test(talos_rt_context *context,
+                                                    talos_rt_string_v1 name,
+                                                    uint32_t *outFound) {
   if (!context || !outFound)
     return TALOS_RT_INVALID_ARGUMENT;
   *outFound = 0;
@@ -416,10 +414,9 @@ talos_rt_v1_plusarg_test(talos_rt_context *context,
 }
 
 extern "C" talos_rt_status
-talos_rt_v1_plusarg_value(talos_rt_context *context,
-                            talos_rt_gc_lane_v1 *lane,
-                            talos_rt_string_v1 prefix,
-                            talos_rt_string_v1 *outTail, uint32_t *outFound) {
+talos_rt_v1_plusarg_value(talos_rt_context *context, talos_rt_gc_lane_v1 *lane,
+                          talos_rt_string_v1 prefix,
+                          talos_rt_string_v1 *outTail, uint32_t *outFound) {
   if (!context || !outTail || !outFound)
     return TALOS_RT_INVALID_ARGUMENT;
   *outTail = 0;
@@ -450,10 +447,10 @@ talos_rt_v1_plusarg_value(talos_rt_context *context,
   return talos_rt_v1_string_create(lane, tail.data(), tail.size(), outTail);
 }
 
-extern "C" talos_rt_status talos_rt_v1_plusarg_scan(
-    talos_rt_context *context, talos_rt_gc_lane_v1 *lane,
-    talos_rt_string_v1 format, talos_rt_string_v1 *outTail,
-    uint32_t *outConversion, uint32_t *outFound) {
+extern "C" talos_rt_status
+talos_rt_v1_plusarg_scan(talos_rt_context *context, talos_rt_gc_lane_v1 *lane,
+                         talos_rt_string_v1 format, talos_rt_string_v1 *outTail,
+                         uint32_t *outConversion, uint32_t *outFound) {
   if (!context || !lane || !outTail || !outConversion || !outFound)
     return TALOS_RT_INVALID_ARGUMENT;
   *outTail = 0;

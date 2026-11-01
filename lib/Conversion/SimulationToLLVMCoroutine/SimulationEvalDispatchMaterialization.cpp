@@ -26,8 +26,7 @@ using namespace mlir;
 namespace talos::detail {
 namespace {
 
-constexpr StringLiteral evalFastNBARootsName =
-    "__talos_eval_fast_nba_roots_v1";
+constexpr StringLiteral evalFastNBARootsName = "__talos_eval_fast_nba_roots_v1";
 constexpr StringLiteral promotionPendingMaskName =
     "__talos_eval_promotion_pending_mask_v1";
 constexpr StringLiteral periodicTerminationName =
@@ -228,18 +227,17 @@ materializeNativeEvalDispatch(ModuleOp module,
     Value prioritySignalPending =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
-            SymbolRefAttr::get(
-                context, "talos_rt_v1_scheduler_priority_signal_pending"),
+            SymbolRefAttr::get(context,
+                               "talos_rt_v1_scheduler_priority_signal_pending"),
             ValueRange{fastEntry->getArgument(1)})
             .getResult();
     Value mustHandoff = arith::CmpIOp::create(
         builder, location, arith::CmpIPredicate::ne, prioritySignalPending,
         llvmConstant(builder, location, i32, 0));
-    cf::CondBranchOp::create(
-        builder, location, mustHandoff, complete,
-        ValueRange{
-            llvmConstant(builder, location, i32, TALOS_RT_AOT_CHECKPOINT)},
-        scanReady, ValueRange{});
+    cf::CondBranchOp::create(builder, location, mustHandoff, complete,
+                             ValueRange{llvmConstant(builder, location, i32,
+                                                     TALOS_RT_AOT_CHECKPOINT)},
+                             scanReady, ValueRange{});
   } else {
     cf::BranchOp::create(builder, location, scanReady);
   }
@@ -317,9 +315,8 @@ materializeNativeEvalDispatch(ModuleOp module,
   // event, deferred owners included (IEEE 1800-2023 9.2.3, 20.2). The NBA cut
   // reports no barrier the same way, so read the termination latch itself.
   auto terminationRequested = [&]() -> Value {
-    getOrDeclareLLVMFunction(module,
-                             "talos_rt_v1_scheduler_termination_requested",
-                             i32, {pointer});
+    getOrDeclareLLVMFunction(
+        module, "talos_rt_v1_scheduler_termination_requested", i32, {pointer});
     Value latch =
         LLVM::CallOp::create(builder, location, TypeRange{i32},
                              "talos_rt_v1_scheduler_termination_requested",
@@ -683,8 +680,7 @@ materializeNativeEvalDispatch(ModuleOp module,
               SymbolRefAttr::get(context, mergedTwoStateExecutors[recordIndex]),
               ValueRange{targets.context})
               .getResult();
-      ::talos::schedule::set<
-          ::talos::schedule::Field::EvalProvenTwoStateCall>(
+      ::talos::schedule::set<::talos::schedule::Field::EvalProvenTwoStateCall>(
           twoStateStatus.getDefiningOp(), builder.getUnitAttr());
       cf::BranchOp::create(builder, location, executeJoin,
                            ValueRange{twoStateStatus});
@@ -728,8 +724,7 @@ materializeNativeEvalDispatch(ModuleOp module,
     mayTerminate |= convergenceOwner;
     bool infallible =
         executor &&
-        ::talos::schedule::has<schedule::metadata::evalInfallible>(
-            executor) &&
+        ::talos::schedule::has<schedule::metadata::evalInfallible>(executor) &&
         (!twoStateExecutor ||
          ::talos::schedule::has<schedule::metadata::evalInfallible>(
              twoStateExecutor));
@@ -792,7 +787,7 @@ materializeNativeEvalDispatch(ModuleOp module,
       // (4.4.2.3-4.4.2.4), as do ranked owners and priority signals.
       uint64_t first = index << segmentShift;
       uint64_t last = std::min<uint64_t>(first + (1u << segmentShift),
-                                        mergedFragments.size());
+                                         mergedFragments.size());
       bool localDispatch = !prioritySignalHandoff &&
                            (!hasDeferred || last <= plan.firstDeferredBit);
       bool completeSegment = segment.cases.size() == last - first;
@@ -812,17 +807,18 @@ materializeNativeEvalDispatch(ModuleOp module,
         body.push_back(done);
         Value ingress = ingressAddress();
         Value word = loadOwnerWord(builder, location, ingress,
-                                    readyLayout.cacheOffset());
+                                   readyLayout.cacheOffset());
         Value relative = arith::SubIOp::create(
             builder, location, word,
             llvmConstant(builder, location, i64, first / 64));
         Value inSegment = arith::CmpIOp::create(
             builder, location, arith::CmpIPredicate::ult, relative,
-            llvmConstant(builder, location, i64, (last + 63) / 64 - first / 64));
+            llvmConstant(builder, location, i64,
+                         (last + 63) / 64 - first / 64));
         if (plan.hasOrderedNBA) {
-          Value status = LLVM::LoadOp::create(
-              builder, location, i32, evalNBAQueueField(builder, location, 3),
-              4);
+          Value status =
+              LLVM::LoadOp::create(builder, location, i32,
+                                   evalNBAQueueField(builder, location, 3), 4);
           Value ok = arith::CmpIOp::create(
               builder, location, arith::CmpIPredicate::eq, status,
               llvmConstant(builder, location, i32, TALOS_RT_OK));
@@ -934,9 +930,8 @@ materializeNativeEvalDispatch(ModuleOp module,
     // enqueue-time RHS/target values; runtime cuts never reevaluate them.
     getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_prepare_eval_nba",
                              i32, {pointer, pointer});
-    getOrDeclareLLVMFunction(module,
-                             "talos_rt_v1_scheduler_complete_eval_nba", i32,
-                             {pointer, i32, i32});
+    getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_complete_eval_nba",
+                             i32, {pointer, i32, i32});
     Value region = entryAlloca(builder, location, i32, 1, 4);
     Value prepareStatus =
         LLVM::CallOp::create(builder, location, TypeRange{i32},
@@ -1226,8 +1221,7 @@ materializeNativeEvalDispatch(ModuleOp module,
         SymbolRefAttr::get(context, nbaCommitName),
         ValueRange{fastEntry->getArgument(0), fastEntry->getArgument(1),
                    llvmConstant(builder, location, i32, 2), changed});
-    ::talos::schedule::set<
-        ::talos::schedule::Field::EvalUseFastTwoStateNba>(
+    ::talos::schedule::set<::talos::schedule::Field::EvalUseFastTwoStateNba>(
         fastTwoStateCall, builder.getUnitAttr());
     cf::BranchOp::create(builder, location, commitJoin,
                          ValueRange{fastTwoStateCall.getResult()});

@@ -43,22 +43,22 @@ TEST(GeneratedDesignDatabase, ClassCallDispatch) {
   for (unsigned byte = 0; byte != 8; ++byte)
     checksum |= uint64_t{encoded->bytecode[32 + byte]} << (byte * 8);
   talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                               encoded->executionFlags,
-                                               0,
-                                               encoded->bytecode.data(),
-                                               encoded->bytecode.size(),
-                                               encoded->designDatabase.data(),
-                                               encoded->designDatabase.size(),
-                                               encoded->stateBitCount,
-                                               checksum,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0};
+                                             encoded->executionFlags,
+                                             0,
+                                             encoded->bytecode.data(),
+                                             encoded->bytecode.size(),
+                                             encoded->designDatabase.data(),
+                                             encoded->designDatabase.size(),
+                                             encoded->stateBitCount,
+                                             checksum,
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
   ASSERT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_OK);
   talos_rt_context *runtime = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &runtime),
@@ -71,8 +71,7 @@ TEST(GeneratedDesignDatabase, ClassCallDispatch) {
       EXPECT_EQ(talos_rt_cached_vpi_call_target(runtime, 20 + call, callee),
                 expected[call].count(callee) ? TALOS_RT_OK : TALOS_RT_EOF);
   }
-  EXPECT_EQ(talos_rt_cached_vpi_call_target(runtime, 999, 101),
-            TALOS_RT_EOF);
+  EXPECT_EQ(talos_rt_cached_vpi_call_target(runtime, 999, 101), TALOS_RT_EOF);
   talos_rt_v1_context_destroy(runtime);
 
   HeaderView header(encoded->designDatabase.data());
@@ -88,8 +87,7 @@ TEST(GeneratedDesignDatabase, ClassCallDispatch) {
     HeaderWriter(bytes.data()).setChecksum(imageChecksum(bytes));
     auto corrupt = execution;
     corrupt.design_database = bytes.data();
-    EXPECT_EQ(talos_rt_v1_design_validate(&corrupt),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&corrupt), TALOS_RT_INVALID_DESIGN);
   };
   invalid([&](auto &bytes) {
     CallDispatchBindingWriter(bytes.data() + calls +
@@ -173,22 +171,22 @@ TEST(GeneratedDesignDatabase, ClassCallDispatchProducer) {
   for (unsigned byte = 0; byte != 8; ++byte)
     checksum |= uint64_t{encoded->bytecode[32 + byte]} << (byte * 8);
   talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                               encoded->executionFlags,
-                                               0,
-                                               encoded->bytecode.data(),
-                                               encoded->bytecode.size(),
-                                               encoded->designDatabase.data(),
-                                               encoded->designDatabase.size(),
-                                               encoded->stateBitCount,
-                                               checksum,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0};
+                                             encoded->executionFlags,
+                                             0,
+                                             encoded->bytecode.data(),
+                                             encoded->bytecode.size(),
+                                             encoded->designDatabase.data(),
+                                             encoded->designDatabase.size(),
+                                             encoded->stateBitCount,
+                                             checksum,
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
   ASSERT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_OK);
   talos_rt_context *runtime = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &runtime),
@@ -209,10 +207,10 @@ TEST(GeneratedDesignDatabase, ClassCallDispatchProducer) {
   ASSERT_TRUE(function);
   ASSERT_TRUE(function.getCodeUnitId());
   EXPECT_EQ(talos_rt_cached_vpi_call_target(runtime, call.getId(),
-                                              *function.getCodeUnitId()),
+                                            *function.getCodeUnitId()),
             TALOS_RT_OK);
   EXPECT_EQ(talos_rt_cached_vpi_call_target(runtime, call.getId(),
-                                              call.getCodeUnitId()),
+                                            call.getCodeUnitId()),
             TALOS_RT_EOF);
   talos_rt_v1_context_destroy(runtime);
 }

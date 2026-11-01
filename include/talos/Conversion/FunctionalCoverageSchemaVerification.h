@@ -509,9 +509,8 @@ verifyFunctionalCoverageSchemaBeforeBackend(mlir::ModuleOp module) {
       ValueRange values = create.getPayloads().drop_front(
           static_cast<size_t>(create.getArgumentCount()));
       if (!types.contains(type)) {
-        create.emitError(
-            "declaration schema type is absent from the embedded "
-            "functional schema");
+        create.emitError("declaration schema type is absent from the embedded "
+                         "functional schema");
         invalid = true;
       }
       auto expectedIt = constructorFormalsByType.find(type);

@@ -269,9 +269,9 @@ OpFoldResult SimTimeFromRealOp::fold(FoldAdaptor adaptor) {
   APFloat value = input.getValue();
   if (!(value >= APFloat::getZero(value.getSemantics())))
     value = APFloat::getZero(value.getSemantics());
-  value.multiply(APFloat(static_cast<double>(scale) /
-                         static_cast<double>(quantum)),
-                 APFloat::rmNearestTiesToEven);
+  value.multiply(
+      APFloat(static_cast<double>(scale) / static_cast<double>(quantum)),
+      APFloat::rmNearestTiesToEven);
   value.add(APFloat(0.5), APFloat::rmNearestTiesToEven);
   uint64_t maximumSteps = UINT64_MAX / quantum;
   uint64_t steps = maximumSteps;
@@ -746,8 +746,8 @@ LogicalResult SimSuspendObserveOp::verify() {
                     ::talos::schedule::Field::ConcurrentAbort>(function)) ||
         !::talos::schedule::has<::talos::schedule::Field::DetachedControls>(
             function) ||
-        !::talos::schedule::has<
-            ::talos::schedule::Field::PrioritySignalResume>(function) ||
+        !::talos::schedule::has<::talos::schedule::Field::PrioritySignalResume>(
+            function) ||
         function.getEntryKind() != EntryKind::Fork ||
         function.getHomeRegion() != EventRegion::Reactive)
       return emitOpError() << "concurrent "
@@ -888,8 +888,7 @@ static LogicalResult verifyOutputItems(Operation *operation, ValueRange items,
     Value item = items[itemIndex++];
     if ((flags & TALOS_RT_OUTPUT_ITEM_ENUM) != 0) {
       if (flags != TALOS_RT_OUTPUT_ITEM_ENUM &&
-          flags !=
-              (TALOS_RT_OUTPUT_ITEM_ENUM | TALOS_RT_OUTPUT_ITEM_SIGNED))
+          flags != (TALOS_RT_OUTPUT_ITEM_ENUM | TALOS_RT_OUTPUT_ITEM_SIGNED))
         return operation->emitOpError(
             "enum display items may only also carry the signed flag");
       if (!isa<IntegerType, LogicType>(item.getType()) ||
@@ -963,13 +962,11 @@ static LogicalResult verifyOutputItems(Operation *operation, ValueRange items,
         (flags & TALOS_RT_OUTPUT_ITEM_REAL) == 0)
       return operation->emitOpError(
           "realtime display items must also be marked real");
-    if ((flags &
-         (TALOS_RT_OUTPUT_ITEM_REAL | TALOS_RT_OUTPUT_ITEM_SIGNED)) ==
+    if ((flags & (TALOS_RT_OUTPUT_ITEM_REAL | TALOS_RT_OUTPUT_ITEM_SIGNED)) ==
         (TALOS_RT_OUTPUT_ITEM_REAL | TALOS_RT_OUTPUT_ITEM_SIGNED))
       return operation->emitOpError(
           "real display items cannot be marked signed");
-    if (isa<BytesType>(item.getType()) &&
-        flags == TALOS_RT_OUTPUT_ITEM_SIGNED)
+    if (isa<BytesType>(item.getType()) && flags == TALOS_RT_OUTPUT_ITEM_SIGNED)
       return operation->emitOpError("literal byte items cannot be signed");
     if (isa<BytesType>(item.getType()) && flags != 0 &&
         (!allowDesignatedFormat ||
@@ -981,8 +978,7 @@ static LogicalResult verifyOutputItems(Operation *operation, ValueRange items,
       if (flags != TALOS_RT_OUTPUT_ITEM_STRING &&
           flags != (TALOS_RT_OUTPUT_ITEM_STRING |
                     TALOS_RT_OUTPUT_ITEM_DESIGNATED_FORMAT) &&
-          flags !=
-              (TALOS_RT_OUTPUT_ITEM_STRING | TALOS_RT_OUTPUT_ITEM_FORMAT))
+          flags != (TALOS_RT_OUTPUT_ITEM_STRING | TALOS_RT_OUTPUT_ITEM_FORMAT))
         return operation->emitOpError(
             "managed string items require the string flag and may also carry "
             "the format flag");
@@ -1006,8 +1002,7 @@ static LogicalResult verifyOutputItems(Operation *operation, ValueRange items,
             "process-handle items require only the process flag");
     } else if (item.getType().isF64()) {
       if (flags != TALOS_RT_OUTPUT_ITEM_REAL &&
-          flags !=
-              (TALOS_RT_OUTPUT_ITEM_REAL | TALOS_RT_OUTPUT_ITEM_REAL_TIME))
+          flags != (TALOS_RT_OUTPUT_ITEM_REAL | TALOS_RT_OUTPUT_ITEM_REAL_TIME))
         return operation->emitOpError(
             "f64 items require the real flag and may carry the realtime flag");
     } else if (!isa<BytesType>(item.getType()) && flags != 0 &&

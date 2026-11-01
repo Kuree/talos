@@ -44,8 +44,7 @@ struct IndexGraph {
 } // namespace
 } // namespace talos::analysis
 
-template <>
-struct llvm::GraphTraits<talos::analysis::IndexGraph::Node *> {
+template <> struct llvm::GraphTraits<talos::analysis::IndexGraph::Node *> {
   using NodeRef = talos::analysis::IndexGraph::Node *;
   using ChildIteratorType = SmallVectorImpl<NodeRef>::iterator;
   static ChildIteratorType child_begin(NodeRef node) {
@@ -80,8 +79,8 @@ llvm::BitVector IndexGraph::cyclicNodes() {
   return cyclic;
 }
 
-constexpr unsigned allEffects = ManagedCollectionAnalysis::Allocates |
-                                ManagedCollectionAnalysis::Polls;
+constexpr unsigned allEffects =
+    ManagedCollectionAnalysis::Allocates | ManagedCollectionAnalysis::Polls;
 
 /// A DPI boundary converts managed strings, open arrays, and handles through
 /// managed storage; plain bits cross it without allocation.
@@ -183,8 +182,9 @@ void CallGraph::build(Operation *root) {
       dispatch = std::make_unique<ClassDispatchAnalysis>(design);
     return dispatch.get();
   };
-  auto functionIndex = [&](Operation *user,
-                           FlatSymbolRefAttr symbol) -> std::optional<unsigned> {
+  auto functionIndex =
+      [&](Operation *user,
+          FlatSymbolRefAttr symbol) -> std::optional<unsigned> {
     auto callee = symbols.lookupNearestSymbolFrom<sim::SimFuncOp>(user, symbol);
     if (!callee || callee.isExternal())
       return std::nullopt;
@@ -195,9 +195,9 @@ void CallGraph::build(Operation *root) {
   };
   // The implementations a dispatch may select, or nullopt when the closed
   // hierarchy does not account for the receiver.
-  auto dispatchTargets = [&](Operation *call, Value receiver, uint64_t slot,
-                             uint64_t signature,
-                             bool isTask) -> std::optional<SmallVector<unsigned>> {
+  auto dispatchTargets =
+      [&](Operation *call, Value receiver, uint64_t slot, uint64_t signature,
+          bool isTask) -> std::optional<SmallVector<unsigned>> {
     ClassDispatchAnalysis *dispatch = dispatchFor(call);
     auto type = dyn_cast<sim::ClassHandleType>(receiver.getType());
     sim::SimClassDeclOp staticClass =
@@ -235,7 +235,8 @@ void CallGraph::build(Operation *root) {
       setTarget(functionIndex(direct, direct.getCalleeAttr()));
     } else if (auto method = dyn_cast<sim::SimClassDirectCallOp>(operation)) {
       setTarget(functionIndex(method, method.getCalleeAttr()));
-    } else if (auto dispatch = dyn_cast<sim::SimClassVirtualCallOp>(operation)) {
+    } else if (auto dispatch =
+                   dyn_cast<sim::SimClassVirtualCallOp>(operation)) {
       setTargets(dispatchTargets(dispatch, dispatch.getReceiver(),
                                  dispatch.getSlot(), dispatch.getSignatureId(),
                                  /*isTask=*/false));
@@ -244,7 +245,8 @@ void CallGraph::build(Operation *root) {
         call.callees = foreignEntries;
     } else if (auto task = dyn_cast<sim::SimTaskCallOp>(operation)) {
       setTarget(functionIndex(task, task.getCalleeAttr()));
-    } else if (auto task = dyn_cast<sim::SimClassVirtualTaskCallOp>(operation)) {
+    } else if (auto task =
+                   dyn_cast<sim::SimClassVirtualTaskCallOp>(operation)) {
       setTargets(dispatchTargets(task, task.getReceiver(), task.getSlot(),
                                  task.getSignatureId(), /*isTask=*/true));
     } else {
@@ -316,9 +318,9 @@ void CallGraph::build(Operation *root) {
 }
 
 template <typename SummaryOf>
-SmallVector<Operation *>
-CallGraph::pollSites(const FunctionInfo &info, unsigned functionSummary,
-                     SummaryOf summaryOf) const {
+SmallVector<Operation *> CallGraph::pollSites(const FunctionInfo &info,
+                                              unsigned functionSummary,
+                                              SummaryOf summaryOf) const {
   llvm::SetVector<Operation *> sites;
   if (isForeignEntry(info.function) &&
       (functionSummary & ManagedCollectionAnalysis::Allocates) &&
@@ -358,7 +360,8 @@ public:
 
   LogicalResult initialize(Operation *) override {
     for (const FunctionInfo &info : graph.functions)
-      if (failed(visit(getProgramPointBefore(static_cast<Operation *>(info.function)))))
+      if (failed(visit(
+              getProgramPointBefore(static_cast<Operation *>(info.function)))))
         return failure();
     return success();
   }
@@ -375,8 +378,8 @@ public:
     }
     auto summaryOf = [&](unsigned callee) {
       return getOrCreateFor<SummaryState>(
-                 point, getProgramPointBefore(
-                            static_cast<Operation *>(graph.functions[callee].function)))
+                 point, getProgramPointBefore(static_cast<Operation *>(
+                            graph.functions[callee].function)))
           ->summary;
     };
     unsigned summary = 0;
@@ -421,8 +424,9 @@ ManagedCollectionAnalysis::ManagedCollectionAnalysis(Operation *root) {
       summaries[info.function] = allEffects;
   } else {
     for (const FunctionInfo &info : graph.functions)
-      if (auto *state = solver.lookupState<SummaryState>(
-              solver.getProgramPointBefore(static_cast<Operation *>(info.function))))
+      if (auto *state =
+              solver.lookupState<SummaryState>(solver.getProgramPointBefore(
+                  static_cast<Operation *>(info.function))))
         summaries[info.function] = state->summary;
   }
   auto summaryOf = [&](unsigned callee) {

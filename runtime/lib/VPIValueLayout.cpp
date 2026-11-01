@@ -67,9 +67,9 @@ uint32_t traceKind(const ManagedSlot &slot) {
 using TraceSlots = std::vector<std::pair<uint64_t, uint32_t>>;
 
 talos_rt_status expectedTrace(const talos_rt_context *context,
-                                VPIValueLayoutOwner owner,
-                                talos_rt_design_cursor_v1 root,
-                                uint64_t valueSize, TraceSlots &out) {
+                              VPIValueLayoutOwner owner,
+                              talos_rt_design_cursor_v1 root,
+                              uint64_t valueSize, TraceSlots &out) {
   // Compute which semantic subgraphs contain managed words before expanding
   // fixed dimensions. Large arrays of ordinary bits require no per-element
   // work. Container elements live in another allocation and are not descended.
@@ -93,8 +93,8 @@ talos_rt_status expectedTrace(const talos_rt_context *context,
     if (nodes.count(cursor.offset))
       continue;
     Node node;
-    auto status = talos_rt_cached_design_semantic_type_info(context, cursor,
-                                                              &node.info);
+    auto status =
+        talos_rt_cached_design_semantic_type_info(context, cursor, &node.info);
     if (status != TALOS_RT_OK)
       return status;
     node.hasManaged = managedLeaf(node.info.kind).mask != 0;
@@ -102,7 +102,7 @@ talos_rt_status expectedTrace(const talos_rt_context *context,
       for (uint32_t i = 0; i != node.info.edge_count; ++i) {
         talos_rt_design_semantic_type_edge_v1 edge{};
         status = talos_rt_cached_design_semantic_type_edge(context, cursor, i,
-                                                             &edge);
+                                                           &edge);
         if (status != TALOS_RT_OK)
           return status;
         node.children.push_back(edge.child);
@@ -145,10 +145,9 @@ talos_rt_status expectedTrace(const talos_rt_context *context,
     status = talos_rt_cached_design_type_info(context, physical, &type);
     if (status != TALOS_RT_OK)
       return status;
-    const bool overlapping =
-        type.kind == TALOS_RT_DESIGN_TYPE_UNION &&
-        ((type.flags & TALOS_RT_DESIGN_TYPE_PACKED) != 0 ||
-         (type.flags & TALOS_RT_DESIGN_TYPE_TAGGED) == 0);
+    const bool overlapping = type.kind == TALOS_RT_DESIGN_TYPE_UNION &&
+                             ((type.flags & TALOS_RT_DESIGN_TYPE_PACKED) != 0 ||
+                              (type.flags & TALOS_RT_DESIGN_TYPE_TAGGED) == 0);
     if (type.kind == TALOS_RT_DESIGN_TYPE_ARRAY) {
       if (node.children.size() != 1)
         return TALOS_RT_INVALID_DESIGN;
@@ -271,18 +270,18 @@ bool matchingTrace(const talos_rt_trace_layout_v1 *root,
 
 talos_rt_status
 talos_rt_vpi_element_matches(const talos_rt_context *context,
-                               VPIValueLayoutOwner owner,
-                               talos_rt_design_cursor_v1 semantic,
-                               const talos_rt_element_type_v1 *element) {
+                             VPIValueLayoutOwner owner,
+                             talos_rt_design_cursor_v1 semantic,
+                             const talos_rt_element_type_v1 *element) {
   if (!context || !element)
     return TALOS_RT_INVALID_ARGUMENT;
   const auto validation = talos_rt_v1_element_type_validate(element);
   if (validation != TALOS_RT_OK)
     return validation == TALOS_RT_INVALID_DESIGN ? TALOS_RT_INVALID_ARGUMENT
-                                                   : validation;
+                                                 : validation;
   talos_rt_design_cursor_v1 physical{};
-  auto status = talos_rt_cached_vpi_value_element_type(context, owner,
-                                                         semantic, &physical);
+  auto status = talos_rt_cached_vpi_value_element_type(context, owner, semantic,
+                                                       &physical);
   if (status != TALOS_RT_OK)
     return status;
   talos_rt_design_semantic_type_info_v1 source{};
@@ -296,10 +295,8 @@ talos_rt_vpi_element_matches(const talos_rt_context *context,
     return TALOS_RT_INVALID_DESIGN;
   uint64_t size = (storage.bit_width + 7) / 8;
   uint64_t width = storage.bit_width;
-  const bool fourState =
-      (storage.flags & TALOS_RT_DESIGN_TYPE_FOUR_STATE) != 0;
-  uint32_t kind =
-      fourState ? TALOS_RT_ELEMENT_LOGIC : TALOS_RT_ELEMENT_BITS;
+  const bool fourState = (storage.flags & TALOS_RT_DESIGN_TYPE_FOUR_STATE) != 0;
+  uint32_t kind = fourState ? TALOS_RT_ELEMENT_LOGIC : TALOS_RT_ELEMENT_BITS;
   switch (source.kind) {
   case TALOS_RT_DESIGN_SEMANTIC_SHORT_REAL:
   case TALOS_RT_DESIGN_SEMANTIC_REAL:
@@ -348,9 +345,8 @@ talos_rt_vpi_element_matches(const talos_rt_context *context,
     status = expectedTrace(context, owner, semantic, size, expected);
     if (status != TALOS_RT_OK)
       return status;
-    return matchingTrace(element->trace, expected)
-               ? TALOS_RT_OK
-               : TALOS_RT_INVALID_ARGUMENT;
+    return matchingTrace(element->trace, expected) ? TALOS_RT_OK
+                                                   : TALOS_RT_INVALID_ARGUMENT;
   }
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
   TALOS_RT_CATCH_ALL { return TALOS_RT_OUT_OF_RESOURCES; }

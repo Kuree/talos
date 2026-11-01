@@ -41,11 +41,10 @@ int main(int argc, char **argv) {
         return success();
       },
       [](DialectRegistry &registry) {
-        registry
-            .insert<LLVM::LLVMDialect, talos::cov::CoverageDialect,
-                    talos::dpi::DPIDialect, talos::native::NativeDialect,
-                    talos::runtime::TalosRuntimeDialect,
-                    talos::schedule::ScheduleDialect>();
+        registry.insert<LLVM::LLVMDialect, talos::cov::CoverageDialect,
+                        talos::dpi::DPIDialect, talos::native::NativeDialect,
+                        talos::runtime::TalosRuntimeDialect,
+                        talos::schedule::ScheduleDialect>();
         registerBuiltinDialectTranslation(registry);
         registerLLVMDialectTranslation(registry);
       });

@@ -30,8 +30,7 @@ inline llvm::StringRef nativePrunedSymbolCategory(llvm::StringRef name) {
     return "frame";
   if (name.contains(".__talos_process_descriptor"))
     return "process-descriptor";
-  if (name.contains(".__talos_spawn") ||
-      name.contains(".__talos_schedule_") ||
+  if (name.contains(".__talos_spawn") || name.contains(".__talos_schedule_") ||
       name.contains(".__talos_bytecode_continuations"))
     return "spawn";
   if (name.contains(".__talos_activate"))
@@ -157,8 +156,8 @@ pruneNativeExecutableSymbols(mlir::ModuleOp module,
     if (name == "main" || exports.contains(name) || name.starts_with("llvm."))
       continue;
     if (requiresLifecycle &&
-        (name == "__talos_current_context" ||
-         name == "__talos_state_value" || name == "__talos_state_unknown" ||
+        (name == "__talos_current_context" || name == "__talos_state_value" ||
+         name == "__talos_state_unknown" ||
          name == "__talos_execution_descriptor_v1"))
       continue;
     if (auto function = mlir::dyn_cast<mlir::LLVM::LLVMFuncOp>(&operation)) {

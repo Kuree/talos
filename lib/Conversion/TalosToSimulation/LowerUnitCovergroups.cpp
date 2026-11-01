@@ -1880,8 +1880,7 @@ LogicalResult materializeCovergroupClockingSamplers(
         outlineBuilder.getNamedAttr(
             "code_unit_id", outlineBuilder.getI64IntegerAttr(codeUnitID)),
         outlineBuilder.getNamedAttr("internal", outlineBuilder.getUnitAttr()),
-        ::talos::schedule::named<
-            ::talos::schedule::Field::DetachedControls>(
+        ::talos::schedule::named<::talos::schedule::Field::DetachedControls>(
             outlineBuilder.getUnitAttr()),
         ::talos::schedule::named<::talos::schedule::Field::PrimeOnSpawn>(
             outlineBuilder.getUnitAttr()),
@@ -1912,8 +1911,7 @@ LogicalResult materializeCovergroupClockingSamplers(
                 static_cast<uint32_t>(ObserverResult::Truth))),
         ::talos::schedule::named<::talos::schedule::Field::ObserverWidth>(
             outlineBuilder.getI32IntegerAttr(1)),
-        ::talos::schedule::named<
-            ::talos::schedule::Field::ObserverFourState>(
+        ::talos::schedule::named<::talos::schedule::Field::ObserverFourState>(
             outlineBuilder.getBoolAttr(false))};
     if (classOwnerCapture >= 0)
       evaluatorAttributes.push_back(sim::named<sim::metadata::ThisArgument>(
@@ -2151,8 +2149,7 @@ LogicalResult materializeCovergroupClockingSamplers(
                 static_cast<uint32_t>(ObserverResult::Truth))),
         ::talos::schedule::named<::talos::schedule::Field::ObserverWidth>(
             outlineBuilder.getI32IntegerAttr(1)),
-        ::talos::schedule::named<
-            ::talos::schedule::Field::ObserverFourState>(
+        ::talos::schedule::named<::talos::schedule::Field::ObserverFourState>(
             outlineBuilder.getBoolAttr(false))};
     if (classOwnerCapture >= 0)
       attributes.push_back(sim::named<sim::metadata::ThisArgument>(

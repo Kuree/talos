@@ -38,8 +38,7 @@ materializeGeneratedNBAAccumulators(ModuleOp module,
   // Their sizes are already fixed by the native NBA plan.
   uint64_t words = (plan.roots.size() + 63) / 64;
   for (auto [name, count] :
-       {std::pair<StringRef, uint64_t>{"__talos_aot_nba_dirty_roots_v1",
-                                       words},
+       {std::pair<StringRef, uint64_t>{"__talos_aot_nba_dirty_roots_v1", words},
         {"__talos_aot_nba_dirty_summary_v1", (words + 63) / 64}}) {
     if (!count)
       continue;
@@ -78,10 +77,9 @@ void materializeEvalStepFourStateGlobals(ModuleOp module, uint64_t taintWords) {
   Location location = module.getLoc();
   builder.setInsertionPointToStart(module.getBody());
   if (!module.lookupSymbol(evalStepFourStateFallbackName))
-    LLVM::GlobalOp::create(builder, location, builder.getI8Type(), false,
-                           LLVM::Linkage::Internal,
-                           evalStepFourStateFallbackName,
-                           builder.getI8IntegerAttr(0), 1);
+    LLVM::GlobalOp::create(
+        builder, location, builder.getI8Type(), false, LLVM::Linkage::Internal,
+        evalStepFourStateFallbackName, builder.getI8IntegerAttr(0), 1);
   if (taintWords == 0 || module.lookupSymbol(evalStepFourStateNBARootsName))
     return;
   Type taintType = LLVM::LLVMArrayType::get(builder.getI64Type(), taintWords);

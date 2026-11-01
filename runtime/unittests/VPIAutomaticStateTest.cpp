@@ -8,8 +8,8 @@
 #include <memory>
 
 namespace {
-using Context = std::unique_ptr<talos_rt_context,
-                                decltype(&talos_rt_v1_context_destroy)>;
+using Context =
+    std::unique_ptr<talos_rt_context, decltype(&talos_rt_v1_context_destroy)>;
 
 TEST(VPIAutomaticState, ReadsExactUnalignedFourStateSlicesWithoutFallback) {
   talos_rt_context *raw = nullptr;
@@ -23,7 +23,7 @@ TEST(VPIAutomaticState, ReadsExactUnalignedFourStateSlicesWithoutFallback) {
   constexpr uint64_t width = 177;
   uint64_t reference = UINT64_MAX;
   ASSERT_EQ(talos_rt_v1_native_state_alloc(context.get(), width, value.data(),
-                                             unknown.data(), &reference),
+                                           unknown.data(), &reference),
             TALOS_RT_OK);
   const uint64_t selectionGeneration = context->schedulerSelectionGeneration;
   const uint64_t epoch = context->schedulerEpoch;
@@ -53,8 +53,8 @@ TEST(VPIAutomaticState, ReadsExactUnalignedFourStateSlicesWithoutFallback) {
   ASSERT_EQ(talos_rt_vpi_automatic_validate(context.get(), selected, 172),
             TALOS_RT_OK);
   uint8_t actual = 0, actualUnknown = 0;
-  ASSERT_EQ(talos_rt_vpi_automatic_read(context.get(), selected, 3, 8,
-                                          &actual, &actualUnknown),
+  ASSERT_EQ(talos_rt_vpi_automatic_read(context.get(), selected, 3, 8, &actual,
+                                        &actualUnknown),
             TALOS_RT_OK);
   EXPECT_EQ(actual, value[1]);
   EXPECT_EQ(actualUnknown, unknown[1]);
@@ -66,21 +66,20 @@ TEST(VPIAutomaticState, ReadsExactUnalignedFourStateSlicesWithoutFallback) {
   for (uint64_t offset : {uint64_t{175}, UINT64_MAX}) {
     actual = actualUnknown = 0xff;
     EXPECT_EQ(talos_rt_vpi_automatic_read(context.get(), reference, offset, 8,
-                                            &actual, &actualUnknown),
+                                          &actual, &actualUnknown),
               TALOS_RT_INVALID_ARGUMENT);
     EXPECT_EQ(actual, 0);
     EXPECT_EQ(actualUnknown, 0);
   }
-  EXPECT_EQ(
-      talos_rt_vpi_automatic_validate(
-          context.get(), talos_rt_stable_handle_offset(reference, -1), 1),
-      TALOS_RT_INVALID_ARGUMENT);
-  for (auto invalid : {UINT64_MAX, uint64_t{0},
-                       talos_rt_stable_handle_encode(
-                           TALOS_RT_STABLE_HANDLE_STATIC, 1, 0)}) {
+  EXPECT_EQ(talos_rt_vpi_automatic_validate(
+                context.get(), talos_rt_stable_handle_offset(reference, -1), 1),
+            TALOS_RT_INVALID_ARGUMENT);
+  for (auto invalid :
+       {UINT64_MAX, uint64_t{0},
+        talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_STATIC, 1, 0)}) {
     actual = actualUnknown = 0xff;
-    EXPECT_EQ(talos_rt_vpi_automatic_read(context.get(), invalid, 0, 8,
-                                            &actual, &actualUnknown),
+    EXPECT_EQ(talos_rt_vpi_automatic_read(context.get(), invalid, 0, 8, &actual,
+                                          &actualUnknown),
               TALOS_RT_INVALID_HANDLE);
     EXPECT_EQ(actual, 0);
     EXPECT_EQ(actualUnknown, 0);
@@ -89,11 +88,11 @@ TEST(VPIAutomaticState, ReadsExactUnalignedFourStateSlicesWithoutFallback) {
             TALOS_RT_INVALID_ARGUMENT);
   EXPECT_EQ(talos_rt_vpi_automatic_validate(context.get(), reference, 0),
             TALOS_RT_INVALID_ARGUMENT);
-  EXPECT_EQ(talos_rt_vpi_automatic_read(context.get(), reference, 0, 1,
-                                          nullptr, &actualUnknown),
+  EXPECT_EQ(talos_rt_vpi_automatic_read(context.get(), reference, 0, 1, nullptr,
+                                        &actualUnknown),
             TALOS_RT_INVALID_ARGUMENT);
-  EXPECT_EQ(talos_rt_vpi_automatic_read(context.get(), reference, 0,
-                                          UINT64_MAX, &actual, &actualUnknown),
+  EXPECT_EQ(talos_rt_vpi_automatic_read(context.get(), reference, 0, UINT64_MAX,
+                                        &actual, &actualUnknown),
             TALOS_RT_INVALID_ARGUMENT);
   EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);
   EXPECT_EQ(context->schedulerSelectionGeneration, selectionGeneration);
@@ -102,8 +101,8 @@ TEST(VPIAutomaticState, ReadsExactUnalignedFourStateSlicesWithoutFallback) {
             TALOS_RT_OK);
   EXPECT_TRUE(context->nativeAutomaticStates.empty());
   actual = actualUnknown = 0xff;
-  EXPECT_EQ(talos_rt_vpi_automatic_read(context.get(), selected, 0, 8,
-                                          &actual, &actualUnknown),
+  EXPECT_EQ(talos_rt_vpi_automatic_read(context.get(), selected, 0, 8, &actual,
+                                        &actualUnknown),
             TALOS_RT_INVALID_HANDLE);
   EXPECT_EQ(actual, 0);
   EXPECT_EQ(actualUnknown, 0);
@@ -113,12 +112,12 @@ TEST(VPIAutomaticState, ReadsExactUnalignedFourStateSlicesWithoutFallback) {
   // executable fallback. A newly allocated state never reuses the old ID.
   uint64_t twoState = UINT64_MAX;
   ASSERT_EQ(talos_rt_v1_native_state_alloc(context.get(), 8, value.data(),
-                                             nullptr, &twoState),
+                                           nullptr, &twoState),
             TALOS_RT_OK);
   EXPECT_NE(twoState, reference);
   actual = actualUnknown = 0xff;
-  ASSERT_EQ(talos_rt_vpi_automatic_read(context.get(), twoState, 0, 8,
-                                          &actual, &actualUnknown),
+  ASSERT_EQ(talos_rt_vpi_automatic_read(context.get(), twoState, 0, 8, &actual,
+                                        &actualUnknown),
             TALOS_RT_OK);
   EXPECT_EQ(actual, value[0]);
   EXPECT_EQ(actualUnknown, 0);
@@ -136,23 +135,23 @@ TEST(VPIAutomaticState, ManagedWordsStayWeakAfterAutomaticStorageRelease) {
   talos_rt_object_v1 *semaphore = nullptr;
   ASSERT_EQ(talos_rt_v1_semaphore_create(lane, 0, &semaphore), TALOS_RT_OK);
   uint64_t reference = UINT64_MAX;
-  ASSERT_EQ(talos_rt_native_state_alloc_managed(context.get(), semaphore,
-                                                  &reference),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_native_state_alloc_managed(context.get(), semaphore, &reference),
+      TALOS_RT_OK);
   ASSERT_EQ(talos_rt_vpi_automatic_validate(context.get(), reference, 64),
             TALOS_RT_OK);
   EXPECT_EQ(talos_rt_vpi_automatic_validate(context.get(), reference, 32),
             TALOS_RT_INVALID_ARGUMENT);
   std::array<uint8_t, 8> value{}, unknown{};
   ASSERT_EQ(talos_rt_vpi_automatic_read(context.get(), reference, 0, 64,
-                                          value.data(), unknown.data()),
+                                        value.data(), unknown.data()),
             TALOS_RT_OK);
   talos_rt_managed_word_v1 copied = 0;
   std::memcpy(&copied, value.data(), sizeof(copied));
   EXPECT_EQ(copied, talos_rt_managed_word_from_object(semaphore));
   EXPECT_EQ(unknown, (std::array<uint8_t, 8>{}));
   EXPECT_EQ(talos_rt_vpi_automatic_read(context.get(), reference, 1, 8,
-                                          value.data(), unknown.data()),
+                                        value.data(), unknown.data()),
             TALOS_RT_INVALID_ARGUMENT);
   ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);
   talos_rt_gc_statistics_v1 stats{};
@@ -168,17 +167,17 @@ TEST(VPIAutomaticState, ManagedWordsStayWeakAfterAutomaticStorageRelease) {
   ASSERT_EQ(talos_rt_v1_gc_statistics(context.get(), &stats), TALOS_RT_OK);
   EXPECT_EQ(stats.live_objects, 0u);
   EXPECT_EQ(talos_rt_vpi_automatic_read(context.get(), reference, 0, 64,
-                                          value.data(), unknown.data()),
+                                        value.data(), unknown.data()),
             TALOS_RT_INVALID_HANDLE);
   EXPECT_EQ(value, (std::array<uint8_t, 8>{}));
   EXPECT_EQ(unknown, (std::array<uint8_t, 8>{}));
   EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);
   uint64_t nullReference = UINT64_MAX;
   ASSERT_EQ(talos_rt_native_state_alloc_managed(context.get(), nullptr,
-                                                  &nullReference),
+                                                &nullReference),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_vpi_automatic_read(context.get(), nullReference, 0, 64,
-                                          value.data(), unknown.data()),
+                                        value.data(), unknown.data()),
             TALOS_RT_OK);
   EXPECT_EQ(value, (std::array<uint8_t, 8>{}));
   EXPECT_EQ(unknown, (std::array<uint8_t, 8>{}));

@@ -631,7 +631,7 @@ class TalosSimMarkBoundedLoopsPass
     auto loops = analysis::analyzeBoundedLoops(function.getBody());
     for (const auto &loop : loops) {
       ::talos::schedule::set<schedule::metadata::boundedLoopLatch>(loop.latch,
-                                                                     marker);
+                                                                   marker);
       ::talos::schedule::set<schedule::metadata::boundedLoopHeader>(
           loop.condition, marker);
     }

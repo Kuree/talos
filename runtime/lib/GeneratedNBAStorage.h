@@ -66,19 +66,19 @@ public:
   GeneratedNBAStorage(talos_rt_generated_nba_accumulator_256 *base,
                       bool twoState)
       : value(field<uint64_t>(base, 0)),
-        unknown(twoState ? nullptr
-                         : field<uint64_t>(
-                               base,
-                               offsetof(talos_rt_generated_nba_accumulator_256,
-                                        unknown))),
+        unknown(twoState
+                    ? nullptr
+                    : field<uint64_t>(
+                          base, offsetof(talos_rt_generated_nba_accumulator_256,
+                                         unknown))),
         write_mask(field<uint64_t>(
             base, select(twoState, offsetof(TwoStateNBAAccumulator, write_mask),
                          offsetof(talos_rt_generated_nba_accumulator_256,
                                   write_mask)))),
         valid(field<uint32_t>(
-            base, select(twoState, offsetof(TwoStateNBAAccumulator, valid),
-                         offsetof(talos_rt_generated_nba_accumulator_256,
-                                  valid)))),
+            base,
+            select(twoState, offsetof(TwoStateNBAAccumulator, valid),
+                   offsetof(talos_rt_generated_nba_accumulator_256, valid)))),
         exec_region(field<uint32_t>(
             base,
             select(twoState, offsetof(TwoStateNBAAccumulator, exec_region),

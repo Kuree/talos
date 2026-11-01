@@ -349,8 +349,7 @@ buildNativeStateFootprints(ModuleOp module,
             uint64_t end =
                 std::min(uint64_t(interval[1]), array.getNumElements());
             if (begin < end) {
-              (global == "__talos_state_value" ? result.value
-                                                 : result.unknown)
+              (global == "__talos_state_value" ? result.value : result.unknown)
                   .emplace_back(begin, end);
               return;
             }
@@ -1319,9 +1318,8 @@ LogicalResult materializeNativeEvalValueCalls(
           while (auto gep = pointer.getDefiningOp<LLVM::GEPOp>())
             pointer = gep.getBase();
           auto address = pointer.getDefiningOp<LLVM::AddressOfOp>();
-          if (!address ||
-              (address.getGlobalName() != "__talos_state_value" &&
-               address.getGlobalName() != "__talos_state_unknown"))
+          if (!address || (address.getGlobalName() != "__talos_state_value" &&
+                           address.getGlobalName() != "__talos_state_unknown"))
             return;
           auto array = cast<LLVM::LLVMArrayType>(
               globalTypes.lookup(address.getGlobalName()));
@@ -1359,9 +1357,8 @@ LogicalResult materializeNativeEvalValueCalls(
           while (auto gep = root.getDefiningOp<LLVM::GEPOp>())
             root = gep.getBase();
           auto address = root.getDefiningOp<LLVM::AddressOfOp>();
-          if (!address ||
-              (address.getGlobalName() != "__talos_state_value" &&
-               address.getGlobalName() != "__talos_state_unknown"))
+          if (!address || (address.getGlobalName() != "__talos_state_value" &&
+                           address.getGlobalName() != "__talos_state_unknown"))
             return;
           auto offset = staticByteOffset(pointer);
           auto type = dyn_cast<IntegerType>(load ? load.getType()
@@ -1623,8 +1620,7 @@ inlineGroupBody(LLVM::LLVMFuncOp function, const SymbolTable &symbols,
   InlinerInterface interface(function.getContext());
   SmallVector<LLVM::CallOp> pending;
   function.walk([&](LLVM::CallOp call) {
-    if (::talos::schedule::has<::talos::schedule::Field::EvalGroupMember>(
-            call))
+    if (::talos::schedule::has<::talos::schedule::Field::EvalGroupMember>(call))
       pending.push_back(call);
   });
   std::reverse(pending.begin(), pending.end());
@@ -1643,10 +1639,9 @@ inlineGroupBody(LLVM::LLVMFuncOp function, const SymbolTable &symbols,
         expanded.contains(callee) ||
         !(::talos::schedule::has<
               ::talos::schedule::Field::EvalGroupDomainSelected>(call) ||
-          ::talos::schedule::has<schedule::metadata::evalInfallible>(
+          ::talos::schedule::has<schedule::metadata::evalInfallible>(callee) ||
+          ::talos::schedule::has<::talos::schedule::Field::EvalFourStateSource>(
               callee) ||
-          ::talos::schedule::has<
-              ::talos::schedule::Field::EvalFourStateSource>(callee) ||
           ::talos::schedule::has<
               ::talos::schedule::Field::EvalConditionallyTwoState>(callee)))
       continue;
@@ -1666,8 +1661,7 @@ inlineGroupBody(LLVM::LLVMFuncOp function, const SymbolTable &symbols,
       continue;
     SmallVector<LLVM::CallOp> nested;
     auto owner =
-        ::talos::schedule::get<::talos::schedule::Field::EvalGroupMember>(
-            call);
+        ::talos::schedule::get<::talos::schedule::Field::EvalGroupMember>(call);
     auto clone = [&](OpBuilder &, Region *source, Block *inlineBlock,
                      Block *postInsertBlock, IRMapping &mapping,
                      bool shouldClone) {
@@ -1680,8 +1674,8 @@ inlineGroupBody(LLVM::LLVMFuncOp function, const SymbolTable &symbols,
             schedule::set<schedule::Field::EvalGroupOwner>(&operation, owner);
           if (auto child = dyn_cast<LLVM::CallOp>(operation)) {
             if (owner)
-              ::talos::schedule::set<
-                  ::talos::schedule::Field::EvalGroupMember>(child, owner);
+              ::talos::schedule::set<::talos::schedule::Field::EvalGroupMember>(
+                  child, owner);
             nested.push_back(child);
           }
         }
@@ -2064,8 +2058,9 @@ materializeNativeEvalGroupBodies(ModuleOp module, AnalysisManager manager) {
     if (auto candidate = ::talos::schedule::get<
             ::talos::schedule::Field::EvalDataflowCandidate>(function)) {
       auto original = symbols.lookup<LLVM::LLVMFuncOp>(candidate.getValue());
-      auto members = ::talos::schedule::get<
-          ::talos::schedule::Field::EvalRankedMembers>(function);
+      auto members =
+          ::talos::schedule::get<::talos::schedule::Field::EvalRankedMembers>(
+              function);
       if (original &&
           schedule::get<schedule::Field::EvalGroupProofDomain>(original) !=
               schedule::get<schedule::Field::EvalGroupProofDomain>(function))
@@ -2089,11 +2084,10 @@ materializeNativeEvalGroupBodies(ModuleOp module, AnalysisManager manager) {
               ::talos::schedule::Field::EvalDataflowFallback>(original) &&
           !members.empty() &&
           original.getFunctionType() == function.getFunctionType() &&
-          ::talos::schedule::get<
-              ::talos::schedule::Field::EvalRankedMembers>(original) ==
-              members &&
-          ::talos::schedule::get<
-              ::talos::schedule::Field::EvalGroupIngress>(original) ==
+          ::talos::schedule::get<::talos::schedule::Field::EvalRankedMembers>(
+              original) == members &&
+          ::talos::schedule::get<::talos::schedule::Field::EvalGroupIngress>(
+              original) ==
               ::talos::schedule::get<
                   ::talos::schedule::Field::EvalGroupIngress>(function) &&
           pendingType && pendingType.getElementType().isInteger(64);
@@ -2161,8 +2155,7 @@ materializeNativeEvalGroupBodies(ModuleOp module, AnalysisManager manager) {
         // The parent owns this child's selection point. Keeping another
         // guarded wrapper on the fast path would add a call boundary which
         // physical native partitioning cannot reliably inline away.
-        ::talos::schedule::set<
-            ::talos::schedule::Field::EvalDataflowExecutor>(
+        ::talos::schedule::set<::talos::schedule::Field::EvalDataflowExecutor>(
             original, FlatSymbolRefAttr::get(function));
         ::talos::schedule::remove<
             ::talos::schedule::Field::EvalDataflowCandidate>(function);
@@ -2232,8 +2225,7 @@ materializeNativeEvalGroupBodies(ModuleOp module, AnalysisManager manager) {
       LLVM::CallOp::create(builder, loc, TypeRange{}, function.getSymName(),
                            guard->getArguments());
       LLVM::ReturnOp::create(builder, loc, ValueRange{});
-      ::talos::schedule::set<
-          ::talos::schedule::Field::EvalDataflowFallback>(
+      ::talos::schedule::set<::talos::schedule::Field::EvalDataflowFallback>(
           original, FlatSymbolRefAttr::get(function));
       continue;
     }
@@ -2281,8 +2273,8 @@ materializeNativeEvalGroupBodies(ModuleOp module, AnalysisManager manager) {
       // Reacquire after each child: an earlier child can publish a later one.
       std::map<unsigned, uint64_t> masks;
       for (int32_t owner :
-           ::talos::schedule::get<
-               ::talos::schedule::Field::EvalRankedMembers>(child)
+           ::talos::schedule::get<::talos::schedule::Field::EvalRankedMembers>(
+               child)
                .asArrayRef())
         masks[unsigned(owner) / 64] |= uint64_t{1} << (unsigned(owner) % 64);
       Value pending =
@@ -2339,8 +2331,8 @@ materializeNativeEvalGroupBodies(ModuleOp module, AnalysisManager manager) {
   llvm::erase_if(residuals, [&](const auto &residual) {
     auto function = residual.first;
     return discarded.contains(function) || finalized.contains(function) ||
-           ::talos::schedule::has<
-               ::talos::schedule::Field::EvalGroupChildren>(function);
+           ::talos::schedule::has<::talos::schedule::Field::EvalGroupChildren>(
+               function);
   });
   // A canonical output need not be globally private to keep its intermediate
   // contents in SSA during a native activation. Transition/knownness actions

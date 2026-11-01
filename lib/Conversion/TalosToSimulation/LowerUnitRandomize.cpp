@@ -3477,8 +3477,8 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
           << "random constraint template state escaped materialization";
       return failure();
     }
-    instruction(TALOS_RT_RANDOM_PUSH_VARIABLE_V1, reference->getWidth(),
-                false, **variable);
+    instruction(TALOS_RT_RANDOM_PUSH_VARIABLE_V1, reference->getWidth(), false,
+                **variable);
     return success();
   };
 
@@ -3557,8 +3557,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         captureIndex = *appended;
         materializedTemplateCaptures[value] = captureIndex;
       }
-      instruction(TALOS_RT_RANDOM_PUSH_CAPTURE_V1, width, false,
-                  captureIndex);
+      instruction(TALOS_RT_RANDOM_PUSH_CAPTURE_V1, width, false, captureIndex);
       return success();
     }
     if (auto reference = dyn_cast<sim::SimRandomConstraintValueOp>(operation))
@@ -3767,8 +3766,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       auto width = expressionWidth(expression);
       if (failed(width))
         return failure();
-      instruction(TALOS_RT_RANDOM_LOAD_VALUE_V1, *width, false,
-                  found->second);
+      instruction(TALOS_RT_RANDOM_LOAD_VALUE_V1, *width, false, found->second);
       return success();
     }
     if (failed(emitProgramNode(expression)))
@@ -3809,8 +3807,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       FailureOr<unsigned> width = expressionWidth(expression);
       if (failed(width) || failed(emitProgramExpression(nested.back())))
         return failure();
-      instruction(TALOS_RT_RANDOM_CAST_V1, *width,
-                  isSignedNode(nested.back()));
+      instruction(TALOS_RT_RANDOM_CAST_V1, *width, isSignedNode(nested.back()));
       return success();
     }
     if (auto dist = dyn_cast<semantic::SVDistExpressionOp>(expression)) {
@@ -4198,7 +4195,10 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
           programCaptures.push_back(value);
           return index;
         };
-        DistPlan plan{expression, distTarget, activeProgramConstraintBlock, {},
+        DistPlan plan{expression,
+                      distTarget,
+                      activeProgramConstraintBlock,
+                      {},
                       activeSoftDistSource};
         SmallVector<std::pair<uint32_t, Value>> rawWeights;
         for (auto [identity, item] : llvm::enumerate(rawItems)) {
@@ -4324,8 +4324,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
           };
           if (failed(emitOrdinal()))
             return failure();
-          instruction(TALOS_RT_RANDOM_PUSH_CAPTURE_V1, 64, false,
-                      range.lower);
+          instruction(TALOS_RT_RANDOM_PUSH_CAPTURE_V1, 64, false, range.lower);
           instruction(TALOS_RT_RANDOM_GE_V1, 1);
           if (failed(emitOrdinal()))
             return failure();
@@ -4598,7 +4597,10 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         normalization *= factor;
       }
 
-      DistPlan plan{expression, distTarget, activeProgramConstraintBlock, {},
+      DistPlan plan{expression,
+                    distTarget,
+                    activeProgramConstraintBlock,
+                    {},
                     activeSoftDistSource};
       for (const PendingRange &range : pending) {
         bool weightSigned = false;
@@ -4746,8 +4748,8 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       // retain their complete original IEEE payload, including NaN/infinity.
       instruction(TALOS_RT_RANDOM_PUSH_CAPTURE_V1, 1, false,
                   found->second.second);
-      instruction(TALOS_RT_RANDOM_PUSH_VARIABLE_V1, planned[index].width,
-                  false, propertyOffsets[index]);
+      instruction(TALOS_RT_RANDOM_PUSH_VARIABLE_V1, planned[index].width, false,
+                  propertyOffsets[index]);
       instruction(*width == 32 ? TALOS_RT_RANDOM_REAL32_FROM_RANK_V1
                                : TALOS_RT_RANDOM_REAL64_FROM_RANK_V1,
                   *width);
@@ -5283,9 +5285,8 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         opcode = TALOS_RT_RANDOM_SHIFT_RIGHT_V1;
         break;
       case Binary::ArithmeticShiftRight:
-        opcode = isSignedNode(nested[0])
-                     ? TALOS_RT_RANDOM_SHIFT_RIGHT_ARITH_V1
-                     : TALOS_RT_RANDOM_SHIFT_RIGHT_V1;
+        opcode = isSignedNode(nested[0]) ? TALOS_RT_RANDOM_SHIFT_RIGHT_ARITH_V1
+                                         : TALOS_RT_RANDOM_SHIFT_RIGHT_V1;
         break;
       case Binary::Power:
         opcode = TALOS_RT_RANDOM_POWER_V1;
@@ -5401,8 +5402,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       if (failed(emitProgramExpression(nested[conditionCount])) ||
           failed(emitProgramExpression(nested[conditionCount + 1])))
         return failure();
-      instruction(TALOS_RT_RANDOM_SELECT_V1, *width,
-                  isSignedNode(expression));
+      instruction(TALOS_RT_RANDOM_SELECT_V1, *width, isSignedNode(expression));
       return success();
     }
     if (isa<semantic::SVInsideExpressionOp>(expression)) {
@@ -5427,15 +5427,13 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
             if (failed(emitProgramExpression(nested.front())) ||
                 failed(emitProgramExpression(endpoints[0])))
               return failure();
-            instruction(TALOS_RT_RANDOM_GE_V1, 1,
-                        isSignedNode(nested.front()));
+            instruction(TALOS_RT_RANDOM_GE_V1, 1, isSignedNode(nested.front()));
           }
           if (!unboundedHigh) {
             if (failed(emitProgramExpression(nested.front())) ||
                 failed(emitProgramExpression(endpoints[1])))
               return failure();
-            instruction(TALOS_RT_RANDOM_LE_V1, 1,
-                        isSignedNode(nested.front()));
+            instruction(TALOS_RT_RANDOM_LE_V1, 1, isSignedNode(nested.front()));
           }
           if (!unboundedLow && !unboundedHigh)
             instruction(TALOS_RT_RANDOM_LOGICAL_AND_V1, 1);
@@ -6383,10 +6381,10 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
             matchPattern(values[1].value, m_ConstantInt(&constantIndex))) {
           // A known constant address against static bounds is decided here,
           // so the guard algebra sees an error-free read as such (11.5.1).
-          int64_t low = std::min(leftBound.getSExtValue(),
-                                 rightBound.getSExtValue());
-          int64_t high = std::max(leftBound.getSExtValue(),
-                                  rightBound.getSExtValue());
+          int64_t low =
+              std::min(leftBound.getSExtValue(), rightBound.getSExtValue());
+          int64_t high =
+              std::max(leftBound.getSExtValue(), rightBound.getSExtValue());
           std::optional<int64_t> address =
               signedIndex ? (constantIndex.getSignificantBits() <= 64
                                  ? std::optional(constantIndex.getSExtValue())
@@ -7063,11 +7061,11 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       if (orderClass.ranked)
         rankedBits |= orderClass.bits;
     for (auto [group, plan] : llvm::enumerate(distPlans)) {
-      APInt target = plan.target.exported
-                         ? priorityInputs(plan.target.value)
-                         : APInt::getBitsSet(assignmentWidth, plan.target.offset,
-                                             plan.target.offset +
-                                                 plan.target.width);
+      APInt target =
+          plan.target.exported
+              ? priorityInputs(plan.target.value)
+              : APInt::getBitsSet(assignmentWidth, plan.target.offset,
+                                  plan.target.offset + plan.target.width);
       if (plan.target.exported)
         for (auto [index, property] : llvm::enumerate(planned))
           if (property.isRandC && !(target & propertyMasks[index]).isZero()) {
@@ -7093,8 +7091,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
       for (;;) {
         APInt previous = predecessors;
         for (const SolveBeforeEdge &edge : solveBeforeEdges)
-          if ((edge.constraintBlock ==
-                   TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1 ||
+          if ((edge.constraintBlock == TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1 ||
                edge.constraintBlock == plan.constraintBlock) &&
               !(edge.afterMask & predecessors).isZero())
             predecessors |= edge.beforeMask;
@@ -7164,8 +7161,8 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         instruction(TALOS_RT_RANDOM_CAST_V1, plan.target.width,
                     plan.target.isSigned);
         for (unsigned bit = 0; bit != plan.target.width; ++bit)
-          instruction(TALOS_RT_RANDOM_END_DIST_TARGET_BIT_V1,
-                      plan.target.width, false, group, bit);
+          instruction(TALOS_RT_RANDOM_END_DIST_TARGET_BIT_V1, plan.target.width,
+                      false, group, bit);
       }
     }
     for (auto [capture, source] : llvm::enumerate(expressionWeightSources)) {
@@ -8321,11 +8318,10 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         }
         bool logical = encoded.opcode >= TALOS_RT_RANDOM_LOGICAL_AND_V1 &&
                        encoded.opcode <= TALOS_RT_RANDOM_LOGICAL_EQUIV_V1;
-        unsigned operandWidth =
-            encoded.opcode >= TALOS_RT_RANDOM_EQ_V1 &&
-                    encoded.opcode <= TALOS_RT_RANDOM_LT_V1
-                ? std::max(lhs.width, rhs.width)
-                : encoded.width;
+        unsigned operandWidth = encoded.opcode >= TALOS_RT_RANDOM_EQ_V1 &&
+                                        encoded.opcode <= TALOS_RT_RANDOM_LT_V1
+                                    ? std::max(lhs.width, rhs.width)
+                                    : encoded.width;
         Value left =
             logical ? lhs.bits
                     : resizeDefinitionValue(lhs, operandWidth, signedOperation);
@@ -9047,9 +9043,8 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
         field = arith::XOrIOp::create(
             builder, location, field,
             constant64(uint64_t{1} << (target.width - 1)));
-      uint64_t localFieldMask = target.width == 64
-                                    ? UINT64_MAX
-                                    : (uint64_t{1} << target.width) - 1;
+      uint64_t localFieldMask =
+          target.width == 64 ? UINT64_MAX : (uint64_t{1} << target.width) - 1;
       field = arith::AndIOp::create(builder, location, field,
                                     constant64(localFieldMask));
       if (field.getType() != assignmentType)
@@ -9474,8 +9469,7 @@ FailureOr<Value> UnitLowering::lowerRandomize(semantic::SVCallExpressionOp op,
           SmallVector<Value> intervalMatches;
           for (const DistRangePlan &range : plan->ranges) {
             Value matches;
-            if (range.intervalFlags &
-                TALOS_RT_RANDOM_DIST_DEFAULT_COMPLEMENT) {
+            if (range.intervalFlags & TALOS_RT_RANDOM_DIST_DEFAULT_COMPLEMENT) {
               intervalMatches.push_back({});
               continue;
             } else if (range.intervalFlags &

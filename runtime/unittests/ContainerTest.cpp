@@ -17,8 +17,7 @@
 namespace {
 
 const talos_rt_trace_entry_v1 managedWordTraceEntry{
-    0,      0, 1, TALOS_RT_TRACE_STRONG, TALOS_RT_MANAGED_SLOT_CONTAINER,
-    nullptr};
+    0, 0, 1, TALOS_RT_TRACE_STRONG, TALOS_RT_MANAGED_SLOT_CONTAINER, nullptr};
 const talos_rt_trace_layout_v1 managedWordTraceLayout{
     TALOS_RT_VERSION,
     0,
@@ -31,38 +30,35 @@ const talos_rt_trace_entry_v1 stringTraceEntry{
 // A managed string is a tagged 64-bit word, not a pointer, so its slot stays
 // eight bytes wide at any pointer width.
 const talos_rt_trace_layout_v1 stringTraceLayout{
-    TALOS_RT_VERSION,
-    0,
-    sizeof(talos_rt_string_v1),
-    alignof(talos_rt_string_v1),
-    &stringTraceEntry,
-    1};
+    TALOS_RT_VERSION,           0,
+    sizeof(talos_rt_string_v1), alignof(talos_rt_string_v1),
+    &stringTraceEntry,          1};
 const talos_rt_element_type_v1 wordElement{
     TALOS_RT_VERSION, TALOS_RT_ELEMENT_BITS, 1,  0,       0,
-    sizeof(uint64_t),   alignof(uint64_t),       64, nullptr, nullptr};
+    sizeof(uint64_t), alignof(uint64_t),     64, nullptr, nullptr};
 const talos_rt_element_type_v1 byteElement{
     TALOS_RT_VERSION, TALOS_RT_ELEMENT_BITS, 4, 0,       0,
-    sizeof(uint8_t),    alignof(uint8_t),        8, nullptr, nullptr};
+    sizeof(uint8_t),  alignof(uint8_t),      8, nullptr, nullptr};
 const talos_rt_element_type_v1 logicElement{TALOS_RT_VERSION,
-                                              TALOS_RT_ELEMENT_LOGIC,
-                                              5,
-                                              TALOS_RT_ELEMENT_FOUR_STATE,
-                                              0,
-                                              sizeof(uint8_t),
-                                              alignof(uint8_t),
-                                              4,
-                                              nullptr,
-                                              nullptr};
+                                            TALOS_RT_ELEMENT_LOGIC,
+                                            5,
+                                            TALOS_RT_ELEMENT_FOUR_STATE,
+                                            0,
+                                            sizeof(uint8_t),
+                                            alignof(uint8_t),
+                                            4,
+                                            nullptr,
+                                            nullptr};
 const talos_rt_element_type_v1 stringElement{TALOS_RT_VERSION,
-                                               TALOS_RT_ELEMENT_STRING,
-                                               2,
-                                               0,
-                                               0,
-                                               sizeof(talos_rt_string_v1),
-                                               alignof(talos_rt_string_v1),
-                                               0,
-                                               &stringTraceLayout,
-                                               nullptr};
+                                             TALOS_RT_ELEMENT_STRING,
+                                             2,
+                                             0,
+                                             0,
+                                             sizeof(talos_rt_string_v1),
+                                             alignof(talos_rt_string_v1),
+                                             0,
+                                             &stringTraceLayout,
+                                             nullptr};
 const talos_rt_element_type_v1 containerElement{
     TALOS_RT_VERSION,
     TALOS_RT_ELEMENT_CONTAINER_HANDLE,
@@ -105,8 +101,7 @@ TEST_F(ManagedValueTest, StringsAreImmutableNonInternedManagedValues) {
             TALOS_RT_OK);
   EXPECT_NE(first, second);
   EXPECT_EQ(talos_rt_v1_string_length(first), 8u);
-  EXPECT_EQ(talos_rt_v1_string_hash(first),
-            talos_rt_v1_string_hash(second));
+  EXPECT_EQ(talos_rt_v1_string_hash(first), talos_rt_v1_string_hash(second));
   EXPECT_EQ(talos_rt_v1_string_compare(first, second), 0);
 
   const char *bytes = nullptr;
@@ -122,12 +117,10 @@ TEST_F(ManagedValueTest, StringsAreImmutableNonInternedManagedValues) {
   EXPECT_EQ(talos_rt_v1_string_getc(first, 8), 0u);
 
   talos_rt_string_v1 empty = first;
-  ASSERT_EQ(talos_rt_v1_string_create(lane, nullptr, 0, &empty),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_string_create(lane, nullptr, 0, &empty), TALOS_RT_OK);
   EXPECT_EQ(empty, 0u);
   EXPECT_EQ(talos_rt_v1_string_length(0), 0u);
-  ASSERT_EQ(talos_rt_v1_string_view(0, scratch, &bytes, &size),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_string_view(0, scratch, &bytes, &size), TALOS_RT_OK);
   EXPECT_EQ(size, 0u);
   EXPECT_STREQ(bytes, "");
 }
@@ -167,7 +160,7 @@ TEST_F(ManagedValueTest, StringSSOCoversEveryLengthAndEmbeddedNullBytes) {
   EXPECT_EQ(talos_rt_v1_string_view(UINT64_C(0x1), scratch, &bytes, &size),
             TALOS_RT_INVALID_HANDLE);
   EXPECT_EQ(talos_rt_v1_string_view(UINT64_C(0x0000000000420005), scratch,
-                                      &bytes, &size),
+                                    &bytes, &size),
             TALOS_RT_INVALID_HANDLE);
   EXPECT_EQ(talos_rt_v1_string_view(UINT64_C(0x1000), scratch, &bytes, &size),
             TALOS_RT_INVALID_HANDLE);
@@ -222,7 +215,7 @@ TEST_F(ManagedValueTest, ScansNativeRawWordsWithoutTextInterpretation) {
   cursor = UINT32_MAX;
   ok = 0;
   EXPECT_EQ(talos_rt_v1_string_scan_raw(input, 0, nullptr, 0, 4, 0, 0, 4,
-                                          nullptr, 0, nullptr, 0, &cursor, &ok),
+                                        nullptr, 0, nullptr, 0, &cursor, &ok),
             TALOS_RT_OK);
   EXPECT_EQ(cursor, 4u);
   EXPECT_EQ(ok, 1u);
@@ -264,9 +257,8 @@ TEST_F(ManagedValueTest, RepeatsAndConvertsPackedByteSequences) {
   const uint8_t packed[] = {'D', 'C', 'B', 'A'};
   const uint8_t unknown[] = {0, 0xff, 0, 0};
   talos_rt_string_v1 string = 0;
-  ASSERT_EQ(
-      talos_rt_v1_string_from_packed(lane, packed, unknown, 32, &string),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_string_from_packed(lane, packed, unknown, 32, &string),
+            TALOS_RT_OK);
   char scratch[8] = {};
   const char *bytes = nullptr;
   uint64_t size = 0;
@@ -278,8 +270,7 @@ TEST_F(ManagedValueTest, RepeatsAndConvertsPackedByteSequences) {
   EXPECT_EQ(static_cast<uint8_t>(bytes[2]), 'D');
 
   talos_rt_string_v1 repeated = 0;
-  ASSERT_EQ(talos_rt_v1_string_repeat(lane, string, 3, &repeated),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_string_repeat(lane, string, 3, &repeated), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_string_view(repeated, scratch, &bytes, &size),
             TALOS_RT_OK);
   ASSERT_EQ(size, 9u);
@@ -299,23 +290,22 @@ TEST_F(ManagedValueTest, RepeatsAndConvertsPackedByteSequences) {
 
   const uint8_t sparsePacked[] = {0, 'A', 0, 'B'};
   talos_rt_string_v1 sparse = 0;
-  ASSERT_EQ(talos_rt_v1_string_from_packed(lane, sparsePacked, nullptr, 32,
-                                             &sparse),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_string_from_packed(lane, sparsePacked, nullptr, 32, &sparse),
+      TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_string_view(sparse, scratch, &bytes, &size),
             TALOS_RT_OK);
   EXPECT_EQ(std::string(bytes, size), "BA");
 
   const uint32_t zero = 0;
   talos_rt_string_v1 convertedEmpty = UINT64_MAX;
-  ASSERT_EQ(talos_rt_v1_string_from_packed(lane, &zero, nullptr, 32,
-                                             &convertedEmpty),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_string_from_packed(lane, &zero, nullptr, 32, &convertedEmpty),
+      TALOS_RT_OK);
   EXPECT_EQ(talos_rt_v1_string_length(convertedEmpty), 0u);
 
   talos_rt_string_v1 empty = UINT64_MAX;
-  EXPECT_EQ(talos_rt_v1_string_repeat(lane, string, 0, &empty),
-            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_string_repeat(lane, string, 0, &empty), TALOS_RT_OK);
   EXPECT_EQ(empty, 0u);
   EXPECT_EQ(talos_rt_v1_string_repeat(lane, string, UINT64_MAX, &empty),
             TALOS_RT_OUT_OF_RESOURCES);
@@ -326,15 +316,13 @@ TEST_F(ManagedValueTest, ParsesAndFormatsStringNumbers) {
   ASSERT_EQ(talos_rt_v1_string_create(lane, "1_23tail", 8, &input),
             TALOS_RT_OK);
   uint64_t integer = 0;
-  ASSERT_EQ(talos_rt_v1_string_parse_integer(input, 10, &integer),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_string_parse_integer(input, 10, &integer), TALOS_RT_OK);
   EXPECT_EQ(integer, 123u);
 
   // IEEE 1800-2023 6.16.9: the scan accepts neither a sign nor leading white
   // space, so both stop before the first digit and return zero.
   for (std::string_view text : {"-1", "+1", " 1"}) {
-    ASSERT_EQ(talos_rt_v1_string_create(lane, text.data(), text.size(),
-                                          &input),
+    ASSERT_EQ(talos_rt_v1_string_create(lane, text.data(), text.size(), &input),
               TALOS_RT_OK);
     integer = UINT64_MAX;
     ASSERT_EQ(talos_rt_v1_string_parse_integer(input, 10, &integer),
@@ -342,10 +330,8 @@ TEST_F(ManagedValueTest, ParsesAndFormatsStringNumbers) {
     EXPECT_EQ(integer, 0u) << text;
   }
 
-  ASSERT_EQ(talos_rt_v1_string_create(nullptr, "f_f", 3, &input),
-            TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_string_parse_integer(input, 16, &integer),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_string_create(nullptr, "f_f", 3, &input), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_string_parse_integer(input, 16, &integer), TALOS_RT_OK);
   EXPECT_EQ(integer, 255u);
 
   // IEEE 1800-2023 6.16.10: atoreal converts the longest prefix that is a
@@ -376,9 +362,8 @@ TEST_F(ManagedValueTest, ParsesAndFormatsStringNumbers) {
             "00000000000000000000000000000000000000000000000000000000000000"
             "0000000000000000000000000000000000000000000000000000000000001",
             0.0}}) {
-    ASSERT_EQ(
-        talos_rt_v1_string_create(lane, text.data(), text.size(), &input),
-        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_string_create(lane, text.data(), text.size(), &input),
+              TALOS_RT_OK);
     double real = -1.0;
     ASSERT_EQ(talos_rt_v1_string_parse_real_constant(input, &real),
               TALOS_RT_OK);
@@ -388,9 +373,8 @@ TEST_F(ManagedValueTest, ParsesAndFormatsStringNumbers) {
   for (auto [text, expected] :
        std::initializer_list<std::pair<std::string_view, double>>{
            {" 3.2_5junk", 3.25}, {"-1.5", -1.5}, {".5", 0.5}}) {
-    ASSERT_EQ(
-        talos_rt_v1_string_create(lane, text.data(), text.size(), &input),
-        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_string_create(lane, text.data(), text.size(), &input),
+              TALOS_RT_OK);
     double real = 0.0;
     ASSERT_EQ(talos_rt_v1_string_parse_real(input, &real), TALOS_RT_OK);
     EXPECT_DOUBLE_EQ(real, expected) << text;
@@ -428,8 +412,7 @@ TEST_F(ManagedValueTest, ParsesAndFormatsStringNumbers) {
                 lane, static_cast<uint64_t>(int64_t{-11}), 2, 1, &output),
             TALOS_RT_OK);
   expectString(output, "-1011");
-  ASSERT_EQ(talos_rt_v1_string_format_real(lane, 3.25, &output),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_string_format_real(lane, 3.25, &output), TALOS_RT_OK);
   expectString(output, "3.25");
 
   EXPECT_EQ(talos_rt_v1_string_parse_integer(input, 3, &integer),
@@ -445,19 +428,17 @@ TEST_F(ManagedValueTest, FormatsManagedStringArguments) {
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_string_create(lane, "managed!", 8, &value),
             TALOS_RT_OK);
-  talos_rt_arg_v1 argument{TALOS_RT_ARG_MANAGED_STRING, 0, 0, &value,
-                             nullptr};
+  talos_rt_arg_v1 argument{TALOS_RT_ARG_MANAGED_STRING, 0, 0, &value, nullptr};
   talos_rt_format_env_v1 environment{};
   environment.time_multiplier = 1;
   talos_rt_buffer_v1 output{};
   char scratch[8] = {};
   const char *formatBytes = nullptr;
   uint64_t formatSize = 0;
-  ASSERT_EQ(
-      talos_rt_v1_string_view(format, scratch, &formatBytes, &formatSize),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_string_view(format, scratch, &formatBytes, &formatSize),
+            TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_format(context, formatBytes, formatSize, &argument, 1,
-                                 &environment, &output),
+                               &environment, &output),
             TALOS_RT_OK);
   EXPECT_EQ(
       std::string(reinterpret_cast<const char *>(output.data), output.size),
@@ -476,16 +457,16 @@ TEST_F(ManagedValueTest, FormatsByteContainersAsStrings) {
             TALOS_RT_OK);
   const uint8_t text[] = {'h', 0, 'i'};
   for (int64_t index = 0; index != 3; ++index)
-    ASSERT_EQ(talos_rt_v1_container_write(lane, bytes, index, &text[index],
-                                            nullptr),
-              TALOS_RT_OK);
+    ASSERT_EQ(
+        talos_rt_v1_container_write(lane, bytes, index, &text[index], nullptr),
+        TALOS_RT_OK);
   talos_rt_arg_v1 argument{TALOS_RT_ARG_MANAGED_CONTAINER, 0, 0, &bytes,
-                             nullptr};
+                           nullptr};
   talos_rt_format_env_v1 environment{};
   environment.time_multiplier = 1;
   talos_rt_buffer_v1 output{};
-  ASSERT_EQ(talos_rt_v1_format(context, "[%4s]", 5, &argument, 1,
-                                 &environment, &output),
+  ASSERT_EQ(talos_rt_v1_format(context, "[%4s]", 5, &argument, 1, &environment,
+                               &output),
             TALOS_RT_OK);
   EXPECT_EQ(
       std::string(reinterpret_cast<const char *>(output.data), output.size),
@@ -500,9 +481,9 @@ TEST_F(ManagedValueTest, FormatsByteContainersAsStrings) {
                 1, 0, &words),
             TALOS_RT_OK);
   argument.data = &words;
-  EXPECT_EQ(talos_rt_v1_format(context, "%s", 2, &argument, 1, &environment,
-                                 &output),
-            TALOS_RT_ARGUMENT_MISMATCH);
+  EXPECT_EQ(
+      talos_rt_v1_format(context, "%s", 2, &argument, 1, &environment, &output),
+      TALOS_RT_ARGUMENT_MISMATCH);
   talos_rt_v1_buffer_release(&output);
 }
 
@@ -521,13 +502,13 @@ TEST_F(ManagedValueTest, CreatesTypedContainersAndFormatsPatterns) {
             TALOS_RT_OK);
 
   talos_rt_arg_v1 argument{TALOS_RT_ARG_MANAGED_CONTAINER, 0, 0, &array,
-                             nullptr};
+                           nullptr};
   talos_rt_format_env_v1 environment{};
   environment.time_multiplier = 1;
   talos_rt_buffer_v1 output{};
-  ASSERT_EQ(talos_rt_v1_format(context, "%p", 2, &argument, 1, &environment,
-                                 &output),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_format(context, "%p", 2, &argument, 1, &environment, &output),
+      TALOS_RT_OK);
   EXPECT_EQ(
       std::string(reinterpret_cast<const char *>(output.data), output.size),
       // IEEE 1800-2017 21.2.1.7: an element that is a plain integral prints
@@ -539,9 +520,8 @@ TEST_F(ManagedValueTest, CreatesTypedContainersAndFormatsPatterns) {
   talos_rt_object_v1 *clone = nullptr;
   ASSERT_EQ(talos_rt_v1_container_clone(lane, array, &clone), TALOS_RT_OK);
   uint32_t replacement = 9;
-  ASSERT_EQ(
-      talos_rt_v1_container_write(lane, clone, 0, &replacement, nullptr),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_container_write(lane, clone, 0, &replacement, nullptr),
+            TALOS_RT_OK);
   uint32_t observed = 0;
   ASSERT_EQ(talos_rt_v1_container_read(array, 0, &observed, nullptr),
             TALOS_RT_OK);
@@ -550,8 +530,8 @@ TEST_F(ManagedValueTest, CreatesTypedContainersAndFormatsPatterns) {
   talos_rt_object_v1 *conflict = nullptr;
   EXPECT_EQ(talos_rt_v1_container_create_typed(
                 lane, TALOS_RT_CONTAINER_DYNAMIC_ARRAY, 777,
-                TALOS_RT_ELEMENT_REAL, 0, sizeof(double), 1, 64, nullptr, 0,
-                1, 0, &conflict),
+                TALOS_RT_ELEMENT_REAL, 0, sizeof(double), 1, 64, nullptr, 0, 1,
+                0, &conflict),
             TALOS_RT_INVALID_DESIGN);
   talos_rt_object_v1 *negativeSize = nullptr;
   EXPECT_EQ(talos_rt_v1_container_create_typed(
@@ -566,18 +546,17 @@ TEST_F(ManagedValueTest, CreatesElementsFromDeclaredDefaults) {
   // differ from Table 6-7. Value plane {7, 0xa}, then a known unknown plane.
   const uint8_t image[] = {7, 0xa, 0, 0};
   ASSERT_EQ(talos_rt_v1_element_type_define_default(context, 779, image,
-                                                      sizeof(image)),
+                                                    sizeof(image)),
             TALOS_RT_OK);
   talos_rt_object_v1 *array = nullptr;
   ASSERT_EQ(talos_rt_v1_container_create_typed(
                 lane, TALOS_RT_CONTAINER_DYNAMIC_ARRAY, 779,
-                TALOS_RT_ELEMENT_AGGREGATE, TALOS_RT_ELEMENT_FOUR_STATE, 2,
-                1, 16, nullptr, 0, 2, 0, &array),
+                TALOS_RT_ELEMENT_AGGREGATE, TALOS_RT_ELEMENT_FOUR_STATE, 2, 1,
+                16, nullptr, 0, 2, 0, &array),
             TALOS_RT_OK);
   std::array<uint8_t, 2> value{}, unknown{0xff, 0xff};
-  ASSERT_EQ(
-      talos_rt_v1_container_read(array, 1, value.data(), unknown.data()),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_container_read(array, 1, value.data(), unknown.data()),
+            TALOS_RT_OK);
   EXPECT_EQ(value, (std::array<uint8_t, 2>{7, 0xa}));
   EXPECT_EQ(unknown, (std::array<uint8_t, 2>{0, 0}));
 
@@ -585,10 +564,10 @@ TEST_F(ManagedValueTest, CreatesElementsFromDeclaredDefaults) {
   // not apply to elements that already exist.
   const uint8_t other[] = {1, 0, 0, 0};
   EXPECT_EQ(talos_rt_v1_element_type_define_default(context, 779, other,
-                                                      sizeof(other)),
+                                                    sizeof(other)),
             TALOS_RT_INVALID_DESIGN);
   EXPECT_EQ(talos_rt_v1_element_type_define_default(context, 779, image,
-                                                      sizeof(image)),
+                                                    sizeof(image)),
             TALOS_RT_INVALID_DESIGN);
 }
 
@@ -621,18 +600,17 @@ TEST_F(ManagedValueTest, FormatsFixedArrayElementsAsNestedPatterns) {
                 nullptr, 0, pattern, sizeof(words), 1, 0, &array),
             TALOS_RT_OK);
   std::array<uint32_t, 2> value{1, 2};
-  ASSERT_EQ(
-      talos_rt_v1_container_write(lane, array, 0, value.data(), nullptr),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_container_write(lane, array, 0, value.data(), nullptr),
+            TALOS_RT_OK);
 
   talos_rt_arg_v1 argument{TALOS_RT_ARG_MANAGED_CONTAINER, 0, 0, &array,
-                             nullptr};
+                           nullptr};
   talos_rt_format_env_v1 environment{};
   environment.time_multiplier = 1;
   talos_rt_buffer_v1 output{};
-  ASSERT_EQ(talos_rt_v1_format(context, "%p", 2, &argument, 1, &environment,
-                                 &output),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_format(context, "%p", 2, &argument, 1, &environment, &output),
+      TALOS_RT_OK);
   EXPECT_EQ(
       std::string(reinterpret_cast<const char *>(output.data), output.size),
       "'{'{1, 2}}");
@@ -670,8 +648,7 @@ TEST_F(ManagedValueTest, SeededBoundedRandomIsRepeatableAndBounded) {
   EXPECT_EQ(talos_rt_v1_random_bounded(context, 0, &value),
             TALOS_RT_INVALID_ARGUMENT);
   const char *valid[] = {"sim", "--seed=18446744073709551615"};
-  EXPECT_EQ(talos_rt_v1_context_configure_argv(context, 2, valid),
-            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_context_configure_argv(context, 2, valid), TALOS_RT_OK);
   const char *invalid[] = {"sim", "--seed=18446744073709551616"};
   EXPECT_EQ(talos_rt_v1_context_configure_argv(context, 2, invalid),
             TALOS_RT_INVALID_ARGUMENT);
@@ -705,8 +682,8 @@ TEST(RandomStateTest, RandCCyclesAreBijectiveThroughWidth16) {
       uint64_t nextPosition = 0;
       uint64_t value = 0;
       ASSERT_EQ(talos_rt_v1_random_cycle_next(UINT64_C(0x0123456789abcdef),
-                                                position, width, &nextPosition,
-                                                &value),
+                                              position, width, &nextPosition,
+                                              &value),
                 TALOS_RT_OK)
           << "width " << width << " position " << position;
       ASSERT_LT(value, cardinality);
@@ -749,8 +726,7 @@ TEST(RandomStateTest, RandCRejectsMalformedState) {
 }
 
 TEST_F(ManagedValueTest, RandomSeedRestartsTheActiveStream) {
-  EXPECT_EQ(talos_rt_v1_random_seed(nullptr, 123),
-            TALOS_RT_INVALID_ARGUMENT);
+  EXPECT_EQ(talos_rt_v1_random_seed(nullptr, 123), TALOS_RT_INVALID_ARGUMENT);
   ASSERT_EQ(talos_rt_v1_random_seed(context, 123), TALOS_RT_OK);
   uint64_t first = 0;
   ASSERT_EQ(talos_rt_v1_random_next(context, &first), TALOS_RT_OK);
@@ -801,20 +777,17 @@ TEST_F(ManagedValueTest, StringOperationsSurviveCollectionAtEveryAllocation) {
   ASSERT_EQ(talos_rt_v1_gc_set_threshold(context, 1), TALOS_RT_OK);
   talos_rt_string_v1 left = 0;
   talos_rt_string_v1 right = 0;
-  ASSERT_EQ(talos_rt_v1_string_create(lane, "hello", 5, &left),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_string_create(lane, "hello", 5, &left), TALOS_RT_OK);
   talos_rt_gc_managed_root_v1 leftRoot{};
   ASSERT_EQ(talos_rt_v1_gc_managed_root_push(lane, &leftRoot, &left),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_string_create(lane, " WORLD", 6, &right),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_string_create(lane, " WORLD", 6, &right), TALOS_RT_OK);
   talos_rt_gc_managed_root_v1 rightRoot{};
   ASSERT_EQ(talos_rt_v1_gc_managed_root_push(lane, &rightRoot, &right),
             TALOS_RT_OK);
 
   talos_rt_string_v1 joined = 0;
-  ASSERT_EQ(talos_rt_v1_string_concat(lane, left, right, &joined),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_string_concat(lane, left, right, &joined), TALOS_RT_OK);
   talos_rt_gc_managed_root_v1 joinedRoot{};
   ASSERT_EQ(talos_rt_v1_gc_managed_root_push(lane, &joinedRoot, &joined),
             TALOS_RT_OK);
@@ -837,9 +810,8 @@ TEST_F(ManagedValueTest, StringOperationsSurviveCollectionAtEveryAllocation) {
   ASSERT_EQ(talos_rt_v1_string_substr(lane, lower, 6, 10, &substring),
             TALOS_RT_OK);
   talos_rt_gc_managed_root_v1 substringRoot{};
-  ASSERT_EQ(
-      talos_rt_v1_gc_managed_root_push(lane, &substringRoot, &substring),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_managed_root_push(lane, &substringRoot, &substring),
+            TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_string_view(substring, scratch, &bytes, &size),
             TALOS_RT_OK);
   EXPECT_EQ(std::string(bytes, size), "world");
@@ -852,11 +824,9 @@ TEST_F(ManagedValueTest, StringOperationsSurviveCollectionAtEveryAllocation) {
   EXPECT_EQ(std::string(bytes, size), "World");
   EXPECT_EQ(talos_rt_v1_string_getc(substring, 0), 'w');
 
-  EXPECT_EQ(talos_rt_v1_gc_managed_root_pop(lane, &substringRoot),
-            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_gc_managed_root_pop(lane, &substringRoot), TALOS_RT_OK);
   EXPECT_EQ(talos_rt_v1_gc_managed_root_pop(lane, &lowerRoot), TALOS_RT_OK);
-  EXPECT_EQ(talos_rt_v1_gc_managed_root_pop(lane, &joinedRoot),
-            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_gc_managed_root_pop(lane, &joinedRoot), TALOS_RT_OK);
   EXPECT_EQ(talos_rt_v1_gc_managed_root_pop(lane, &rightRoot), TALOS_RT_OK);
   EXPECT_EQ(talos_rt_v1_gc_managed_root_pop(lane, &leftRoot), TALOS_RT_OK);
 }
@@ -868,7 +838,7 @@ TEST_F(ManagedValueTest, AccountsActualSmallAndLargeStringExtents) {
   std::string largeBytes(40'000, 'x');
   talos_rt_string_v1 large = 0;
   ASSERT_EQ(talos_rt_v1_string_create(lane, largeBytes.data(),
-                                        largeBytes.size(), &large),
+                                      largeBytes.size(), &large),
             TALOS_RT_OK);
   talos_rt_gc_managed_root_v1 roots[2]{};
   ASSERT_EQ(talos_rt_v1_gc_managed_root_push(lane, &roots[0], &small),
@@ -894,32 +864,30 @@ TEST_F(ManagedValueTest, AccountsActualSmallAndLargeStringExtents) {
 
 TEST_F(ManagedValueTest, RegistersEquivalentElementDescriptorsByStableID) {
   const talos_rt_trace_entry_v1 traceEntry{
-      0,      0, 1, TALOS_RT_TRACE_STRONG, TALOS_RT_MANAGED_SLOT_STRING,
-      nullptr};
+      0, 0, 1, TALOS_RT_TRACE_STRONG, TALOS_RT_MANAGED_SLOT_STRING, nullptr};
   const talos_rt_trace_layout_v1 traceLayout{TALOS_RT_VERSION,
-                                               0,
-                                               sizeof(talos_rt_string_v1),
-                                               alignof(talos_rt_string_v1),
-                                               &traceEntry,
-                                               1};
+                                             0,
+                                             sizeof(talos_rt_string_v1),
+                                             alignof(talos_rt_string_v1),
+                                             &traceEntry,
+                                             1};
   const talos_rt_element_type_v1 first{TALOS_RT_VERSION,
-                                         TALOS_RT_ELEMENT_STRING,
-                                         42,
-                                         0,
-                                         0,
-                                         sizeof(talos_rt_string_v1),
-                                         alignof(talos_rt_string_v1),
-                                         0,
-                                         &traceLayout,
-                                         nullptr};
+                                       TALOS_RT_ELEMENT_STRING,
+                                       42,
+                                       0,
+                                       0,
+                                       sizeof(talos_rt_string_v1),
+                                       alignof(talos_rt_string_v1),
+                                       0,
+                                       &traceLayout,
+                                       nullptr};
   talos_rt_trace_entry_v1 equivalentEntry = traceEntry;
   talos_rt_trace_layout_v1 equivalentLayout = traceLayout;
   equivalentLayout.entries = &equivalentEntry;
   talos_rt_element_type_v1 equivalent = first;
   equivalent.trace = &equivalentLayout;
   EXPECT_EQ(talos_rt_v1_element_type_validate(&first), TALOS_RT_OK);
-  EXPECT_EQ(talos_rt_v1_element_type_register(context, &first),
-            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_element_type_register(context, &first), TALOS_RT_OK);
   EXPECT_EQ(talos_rt_v1_element_type_register(context, &equivalent),
             TALOS_RT_OK);
 
@@ -953,15 +921,15 @@ TEST_F(ManagedValueTest, ContainerConstructionUsesRegisteredDescriptorIDs) {
 
   talos_rt_element_type_v1 equivalent = wordElement;
   talos_rt_object_v1 *equivalentArray = nullptr;
-  EXPECT_EQ(talos_rt_v1_dynamic_array_create(lane, &equivalent, 1,
-                                               &equivalentArray),
-            TALOS_RT_OK);
+  EXPECT_EQ(
+      talos_rt_v1_dynamic_array_create(lane, &equivalent, 1, &equivalentArray),
+      TALOS_RT_OK);
 
   talos_rt_element_type_v1 conflicting = wordElement;
   conflicting.kind = TALOS_RT_ELEMENT_REAL;
   talos_rt_object_v1 *conflictingArray = nullptr;
   EXPECT_EQ(talos_rt_v1_dynamic_array_create(lane, &conflicting, 1,
-                                               &conflictingArray),
+                                             &conflictingArray),
             TALOS_RT_INVALID_DESIGN);
   EXPECT_EQ(conflictingArray, nullptr);
 }
@@ -981,9 +949,9 @@ TEST_F(ManagedValueTest, FourStateDefaultsKeepPaddingClear) {
   ASSERT_EQ(talos_rt_v1_dynamic_array_resize(lane, array, 2), TALOS_RT_OK);
   for (int64_t index : {0, 1}) {
     std::array<uint8_t, 2> value{0xaa, 0xaa}, unknown{};
-    ASSERT_EQ(talos_rt_v1_container_read(array, index, value.data(),
-                                           unknown.data()),
-              TALOS_RT_OK);
+    ASSERT_EQ(
+        talos_rt_v1_container_read(array, index, value.data(), unknown.data()),
+        TALOS_RT_OK);
     EXPECT_EQ(value, (std::array<uint8_t, 2>{0, 0})) << index;
     EXPECT_EQ(unknown, (std::array<uint8_t, 2>{0xff, 0x03})) << index;
   }
@@ -994,18 +962,15 @@ TEST_F(ManagedValueTest, StoredSemaphoresKeepTheirIdentity) {
   // A semaphore is a built-in class (IEEE 1800-2023 15.3): storing its handle
   // in a container and copying that container share the one object.
   talos_rt_object_v1 *semaphore = nullptr, *array = nullptr, *copy = nullptr;
-  ASSERT_EQ(talos_rt_v1_semaphore_create(lane, 1, &semaphore),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_semaphore_create(lane, 1, &semaphore), TALOS_RT_OK);
   talos_rt_gc_root_v1 semaphoreRoot{}, arrayRoot{}, copyRoot{};
   ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &semaphoreRoot, &semaphore),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_dynamic_array_create(lane, &containerElement, 1,
-                                               &array),
-            TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array),
-            TALOS_RT_OK);
-  talos_rt_managed_word_v1 word =
-      talos_rt_managed_word_from_object(semaphore);
+  ASSERT_EQ(
+      talos_rt_v1_dynamic_array_create(lane, &containerElement, 1, &array),
+      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array), TALOS_RT_OK);
+  talos_rt_managed_word_v1 word = talos_rt_managed_word_from_object(semaphore);
   ASSERT_EQ(talos_rt_v1_container_write(lane, array, 0, &word, nullptr),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_container_clone(lane, array, &copy), TALOS_RT_OK);
@@ -1038,8 +1003,7 @@ TEST_F(ManagedValueTest, DynamicArraysResizeAndCloneWithValueSemantics) {
   ASSERT_EQ(talos_rt_v1_dynamic_array_create(lane, &wordElement, 2, &array),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 arrayRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array), TALOS_RT_OK);
   uint64_t first = 11;
   uint64_t second = 22;
   ASSERT_EQ(talos_rt_v1_container_write(lane, array, 0, &first, nullptr),
@@ -1049,15 +1013,12 @@ TEST_F(ManagedValueTest, DynamicArraysResizeAndCloneWithValueSemantics) {
   ASSERT_EQ(talos_rt_v1_dynamic_array_resize(lane, array, 5), TALOS_RT_OK);
   EXPECT_EQ(talos_rt_v1_container_size(array), 5u);
   uint64_t value = 0;
-  ASSERT_EQ(talos_rt_v1_container_read(array, 0, &value, nullptr),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_container_read(array, 0, &value, nullptr), TALOS_RT_OK);
   EXPECT_EQ(value, first);
-  ASSERT_EQ(talos_rt_v1_container_read(array, 1, &value, nullptr),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_container_read(array, 1, &value, nullptr), TALOS_RT_OK);
   EXPECT_EQ(value, second);
   value = 99;
-  ASSERT_EQ(talos_rt_v1_container_read(array, 4, &value, nullptr),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_container_read(array, 4, &value, nullptr), TALOS_RT_OK);
   EXPECT_EQ(value, 0u);
 
   talos_rt_object_v1 *copy = nullptr;
@@ -1067,11 +1028,9 @@ TEST_F(ManagedValueTest, DynamicArraysResizeAndCloneWithValueSemantics) {
   uint64_t replacement = 77;
   ASSERT_EQ(talos_rt_v1_container_write(lane, copy, 0, &replacement, nullptr),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_container_read(array, 0, &value, nullptr),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_container_read(array, 0, &value, nullptr), TALOS_RT_OK);
   EXPECT_EQ(value, first);
-  ASSERT_EQ(talos_rt_v1_container_read(copy, 0, &value, nullptr),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_container_read(copy, 0, &value, nullptr), TALOS_RT_OK);
   EXPECT_EQ(value, replacement);
 
   EXPECT_EQ(talos_rt_v1_container_delete(copy), TALOS_RT_OK);
@@ -1096,11 +1055,10 @@ TEST_F(ManagedValueTest, FourStateElementsPreserveBothPlanes) {
   EXPECT_EQ(unknown, 0x4);
 
   talos_rt_object_v1 *assoc = nullptr;
-  ASSERT_EQ(talos_rt_v1_assoc_create(
-                lane, &wordElement, TALOS_RT_ASSOC_KEY_UNSIGNED, 8, &assoc),
+  ASSERT_EQ(talos_rt_v1_assoc_create(lane, &wordElement,
+                                     TALOS_RT_ASSOC_KEY_UNSIGNED, 8, &assoc),
             TALOS_RT_OK);
-  talos_rt_assoc_key_v1 xKey{
-      TALOS_RT_ASSOC_KEY_UNSIGNED, 0, 8, {3}, {1}, 0};
+  talos_rt_assoc_key_v1 xKey{TALOS_RT_ASSOC_KEY_UNSIGNED, 0, 8, {3}, {1}, 0};
   uint64_t stored = 12;
   ASSERT_EQ(talos_rt_v1_assoc_write(lane, assoc, &xKey, &stored, nullptr),
             TALOS_RT_OK);
@@ -1112,31 +1070,31 @@ TEST_F(ManagedValueTest, CheckedContainerAccessRejectsMismatchedPlanes) {
   ASSERT_EQ(talos_rt_v1_dynamic_array_create(lane, &wordElement, 1, &words),
             TALOS_RT_OK);
   uint8_t undersized[2] = {0xa5, 0x5a};
-  EXPECT_EQ(talos_rt_v1_container_read_checked(
-                words, 0, undersized, sizeof(undersized), nullptr, 0),
+  EXPECT_EQ(talos_rt_v1_container_read_checked(words, 0, undersized,
+                                               sizeof(undersized), nullptr, 0),
             TALOS_RT_INVALID_ARGUMENT);
   EXPECT_EQ(undersized[0], 0xa5);
   EXPECT_EQ(undersized[1], 0x5a);
-  EXPECT_EQ(talos_rt_v1_container_write_checked(
-                lane, words, 0, undersized, sizeof(undersized), nullptr, 0),
+  EXPECT_EQ(talos_rt_v1_container_write_checked(lane, words, 0, undersized,
+                                                sizeof(undersized), nullptr, 0),
             TALOS_RT_INVALID_ARGUMENT);
 
   uint64_t word = 42;
   ASSERT_EQ(talos_rt_v1_container_write_checked(lane, words, 0, &word,
-                                                  sizeof(word), nullptr, 0),
+                                                sizeof(word), nullptr, 0),
             TALOS_RT_OK);
   word = 0;
   ASSERT_EQ(talos_rt_v1_container_read_checked(words, 0, &word, sizeof(word),
-                                                 nullptr, 0),
+                                               nullptr, 0),
             TALOS_RT_OK);
   EXPECT_EQ(word, 42u);
   uint64_t paddedWord[2] = {84, UINT64_C(0xfeedfacecafebeef)};
-  ASSERT_EQ(talos_rt_v1_container_write_checked(
-                lane, words, 0, paddedWord, sizeof(paddedWord), nullptr, 0),
+  ASSERT_EQ(talos_rt_v1_container_write_checked(lane, words, 0, paddedWord,
+                                                sizeof(paddedWord), nullptr, 0),
             TALOS_RT_OK);
   paddedWord[0] = 0;
-  ASSERT_EQ(talos_rt_v1_container_read_checked(
-                words, 0, paddedWord, sizeof(paddedWord), nullptr, 0),
+  ASSERT_EQ(talos_rt_v1_container_read_checked(words, 0, paddedWord,
+                                               sizeof(paddedWord), nullptr, 0),
             TALOS_RT_OK);
   EXPECT_EQ(paddedWord[0], 84u);
   EXPECT_EQ(paddedWord[1], UINT64_C(0xfeedfacecafebeef));
@@ -1147,14 +1105,14 @@ TEST_F(ManagedValueTest, CheckedContainerAccessRejectsMismatchedPlanes) {
   uint8_t value = 0xa;
   uint8_t unknown = 0x4;
   EXPECT_EQ(talos_rt_v1_container_write_checked(lane, logic, 0, &value,
-                                                  sizeof(value), nullptr, 0),
+                                                sizeof(value), nullptr, 0),
             TALOS_RT_INVALID_ARGUMENT);
-  EXPECT_EQ(talos_rt_v1_container_read_checked(logic, 0, &value,
-                                                 sizeof(value), &unknown, 0),
+  EXPECT_EQ(talos_rt_v1_container_read_checked(logic, 0, &value, sizeof(value),
+                                               &unknown, 0),
             TALOS_RT_INVALID_ARGUMENT);
   ASSERT_EQ(talos_rt_v1_container_write_checked(lane, logic, 0, &value,
-                                                  sizeof(value), &unknown,
-                                                  sizeof(unknown)),
+                                                sizeof(value), &unknown,
+                                                sizeof(unknown)),
             TALOS_RT_OK);
 }
 
@@ -1226,9 +1184,9 @@ TEST_F(ManagedValueTest, CreateLikePreservesSequentialContainerMetadata) {
 
   talos_rt_object_v1 *nullResult =
       reinterpret_cast<talos_rt_object_v1 *>(UINTPTR_MAX);
-  EXPECT_EQ(talos_rt_v1_container_create_like(lane, nullptr, nullptr, 0,
-                                                &nullResult),
-            TALOS_RT_OK);
+  EXPECT_EQ(
+      talos_rt_v1_container_create_like(lane, nullptr, nullptr, 0, &nullResult),
+      TALOS_RT_OK);
   EXPECT_EQ(nullResult, nullptr);
 }
 
@@ -1240,9 +1198,8 @@ TEST_F(ManagedValueTest, ContainersTraceStringsAndRecursivelyCloneContainers) {
   ASSERT_EQ(talos_rt_v1_gc_managed_root_push(lane, &textRoot, &text),
             TALOS_RT_OK);
   talos_rt_object_v1 *strings = nullptr;
-  ASSERT_EQ(
-      talos_rt_v1_dynamic_array_create(lane, &stringElement, 1, &strings),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dynamic_array_create(lane, &stringElement, 1, &strings),
+            TALOS_RT_OK);
   talos_rt_gc_root_v1 stringsRoot{};
   ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &stringsRoot, &strings),
             TALOS_RT_OK);
@@ -1259,16 +1216,14 @@ TEST_F(ManagedValueTest, ContainersTraceStringsAndRecursivelyCloneContainers) {
   const char *bytes = nullptr;
   uint64_t size = 0;
   char scratch[8];
-  ASSERT_EQ(talos_rt_v1_string_view(text, scratch, &bytes, &size),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_string_view(text, scratch, &bytes, &size), TALOS_RT_OK);
   EXPECT_EQ(std::string(bytes, size), "kept");
 
   talos_rt_object_v1 *inner = nullptr;
   ASSERT_EQ(talos_rt_v1_dynamic_array_create(lane, &wordElement, 1, &inner),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 innerRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &innerRoot, &inner),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &innerRoot, &inner), TALOS_RT_OK);
   uint64_t original = 12;
   ASSERT_EQ(talos_rt_v1_container_write(lane, inner, 0, &original, nullptr),
             TALOS_RT_OK);
@@ -1277,8 +1232,7 @@ TEST_F(ManagedValueTest, ContainersTraceStringsAndRecursivelyCloneContainers) {
       talos_rt_v1_dynamic_array_create(lane, &containerElement, 1, &outer),
       TALOS_RT_OK);
   talos_rt_gc_root_v1 outerRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &outerRoot, &outer),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &outerRoot, &outer), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_container_write(lane, outer, 0, &inner, nullptr),
             TALOS_RT_OK);
   uint64_t changed = 34;
@@ -1303,7 +1257,7 @@ TEST_F(ManagedValueTest, DPIAggregateRootsTraceMultipleStringsWithScalarRoot) {
   talos_rt_gc_lane_v1 *executionLane = nullptr;
   bool executionEntered = false;
   ASSERT_EQ(talos_rt_managed_execution_enter(context, &executionLane,
-                                               &executionEntered),
+                                             &executionEntered),
             TALOS_RT_OK);
   ASSERT_NE(executionLane, nullptr);
   ASSERT_EQ(talos_rt_v1_gc_set_threshold(context, 1), TALOS_RT_OK);
@@ -1312,14 +1266,14 @@ TEST_F(ManagedValueTest, DPIAggregateRootsTraceMultipleStringsWithScalarRoot) {
   talos_rt_string_v1 aggregateStrings[2] = {};
   void *aggregateRoots[2] = {};
   ASSERT_EQ(talos_rt_v1_string_create(executionLane, "first-aggregate", 15,
-                                        &aggregateStrings[0]),
+                                      &aggregateStrings[0]),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_dpi_aggregate_roots_push(
                 context, &aggregateStrings[0], sizeof(aggregateStrings[0]), 64,
                 stringPlan, std::size(stringPlan), &aggregateRoots[0]),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_string_create(executionLane, "second-aggregate", 16,
-                                        &aggregateStrings[1]),
+                                      &aggregateStrings[1]),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_dpi_aggregate_roots_push(
                 context, &aggregateStrings[1], sizeof(aggregateStrings[1]), 64,
@@ -1328,11 +1282,11 @@ TEST_F(ManagedValueTest, DPIAggregateRootsTraceMultipleStringsWithScalarRoot) {
 
   talos_rt_string_v1 scalarString = 0;
   ASSERT_EQ(talos_rt_v1_string_create(executionLane, "scalar-string", 13,
-                                        &scalarString),
+                                      &scalarString),
             TALOS_RT_OK);
   talos_rt_gc_managed_root_v1 scalarRoot{};
   ASSERT_EQ(talos_rt_v1_gc_managed_root_push(executionLane, &scalarRoot,
-                                               &scalarString),
+                                             &scalarString),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_collect(executionLane), TALOS_RT_OK);
 
@@ -1378,15 +1332,13 @@ TEST_F(ManagedValueTest,
                 &outer),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 outerRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &outerRoot, &outer),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &outerRoot, &outer), TALOS_RT_OK);
 
   talos_rt_object_v1 *inner = nullptr;
   ASSERT_EQ(talos_rt_v1_dynamic_array_create(lane, &wordElement, 1, &inner),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 innerRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &innerRoot, &inner),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &innerRoot, &inner), TALOS_RT_OK);
   uint64_t original = 12;
   ASSERT_EQ(talos_rt_v1_container_write(lane, inner, 0, &original, nullptr),
             TALOS_RT_OK);
@@ -1419,9 +1371,8 @@ TEST_F(ManagedValueTest,
   EXPECT_EQ(std::string(bytes, size), "kept");
   EXPECT_NE(stored.nested, inner);
   uint64_t storedValue = 0;
-  ASSERT_EQ(
-      talos_rt_v1_container_read(stored.nested, 0, &storedValue, nullptr),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_container_read(stored.nested, 0, &storedValue, nullptr),
+            TALOS_RT_OK);
   EXPECT_EQ(storedValue, original);
 
   talos_rt_object_v1 *copy = nullptr;
@@ -1429,16 +1380,14 @@ TEST_F(ManagedValueTest,
   talos_rt_gc_root_v1 copyRoot{};
   ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &copyRoot, &copy), TALOS_RT_OK);
   Aggregate copied{};
-  ASSERT_EQ(talos_rt_v1_container_read(copy, 0, &copied, nullptr),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_container_read(copy, 0, &copied, nullptr), TALOS_RT_OK);
   EXPECT_NE(copied.nested, stored.nested);
   ASSERT_EQ(
       talos_rt_v1_container_write(lane, copied.nested, 0, &changed, nullptr),
       TALOS_RT_OK);
   storedValue = 0;
-  ASSERT_EQ(
-      talos_rt_v1_container_read(stored.nested, 0, &storedValue, nullptr),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_container_read(stored.nested, 0, &storedValue, nullptr),
+            TALOS_RT_OK);
   EXPECT_EQ(storedValue, original);
 
   EXPECT_EQ(talos_rt_v1_gc_root_pop(lane, &copyRoot), TALOS_RT_OK);
@@ -1451,8 +1400,7 @@ TEST_F(ManagedValueTest, QueueRingOperationsPreserveLogicalOrder) {
   ASSERT_EQ(talos_rt_v1_queue_create(lane, &wordElement, UINT64_MAX, &queue),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 queueRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &queueRoot, &queue),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &queueRoot, &queue), TALOS_RT_OK);
   for (uint64_t value = 1; value <= 5; ++value)
     ASSERT_EQ(talos_rt_v1_queue_push(lane, queue, 0, &value, nullptr),
               TALOS_RT_OK);
@@ -1479,8 +1427,8 @@ TEST_F(ManagedValueTest, QueueRingOperationsPreserveLogicalOrder) {
   }
   uint64_t appended = 6;
   ASSERT_EQ(talos_rt_v1_container_write(lane, queue,
-                                          talos_rt_v1_container_size(queue),
-                                          &appended, nullptr),
+                                        talos_rt_v1_container_size(queue),
+                                        &appended, nullptr),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_queue_pop(queue, 0, &value, nullptr, &present),
             TALOS_RT_OK);
@@ -1505,13 +1453,11 @@ TEST_F(ManagedValueTest, CoverageSetSnapshotUsesLogicalContainerOrder) {
             TALOS_RT_OK);
   ASSERT_EQ(present, 1u);
   uint64_t six = 6;
-  ASSERT_EQ(talos_rt_v1_queue_push(lane, queue, 0, &six, nullptr),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_queue_push(lane, queue, 0, &six, nullptr), TALOS_RT_OK);
 
   CoverageSetSnapshot snapshot;
-  ASSERT_EQ(talos_rt_coverage_set_snapshot(context, queue, 64,
-                                             TALOS_RT_ELEMENT_BITS, false, 5,
-                                             snapshot),
+  ASSERT_EQ(talos_rt_coverage_set_snapshot(
+                context, queue, 64, TALOS_RT_ELEMENT_BITS, false, 5, snapshot),
             TALOS_RT_OK);
   ASSERT_EQ(snapshot.count, 5u);
   ASSERT_EQ(snapshot.valueSize, sizeof(uint64_t));
@@ -1524,9 +1470,8 @@ TEST_F(ManagedValueTest, CoverageSetSnapshotUsesLogicalContainerOrder) {
     EXPECT_EQ(observed, expected[index]);
   }
   EXPECT_TRUE(snapshot.unknown.empty());
-  EXPECT_EQ(talos_rt_coverage_set_snapshot(context, queue, 64,
-                                             TALOS_RT_ELEMENT_BITS, false, 4,
-                                             snapshot),
+  EXPECT_EQ(talos_rt_coverage_set_snapshot(
+                context, queue, 64, TALOS_RT_ELEMENT_BITS, false, 4, snapshot),
             TALOS_RT_INVALID_DESIGN);
   EXPECT_EQ(talos_rt_v1_gc_root_pop(lane, &root), TALOS_RT_OK);
 }
@@ -1536,14 +1481,13 @@ TEST_F(ManagedValueTest, CoverageSetSnapshotPreservesLogicAndRealValues) {
   ASSERT_EQ(talos_rt_v1_dynamic_array_create(lane, &logicElement, 2, &logic),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 logicRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &logicRoot, &logic),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &logicRoot, &logic), TALOS_RT_OK);
   const uint8_t logicValues[] = {0x5, 0xa};
   const uint8_t logicUnknown[] = {0x2, 0x4};
   for (int64_t index = 0; index != 2; ++index)
     ASSERT_EQ(talos_rt_v1_container_write(lane, logic, index,
-                                            &logicValues[index],
-                                            &logicUnknown[index]),
+                                          &logicValues[index],
+                                          &logicUnknown[index]),
               TALOS_RT_OK);
 
   CoverageSetSnapshot snapshot;
@@ -1557,7 +1501,7 @@ TEST_F(ManagedValueTest, CoverageSetSnapshotPreservesLogicAndRealValues) {
 
   const talos_rt_element_type_v1 realElement{
       TALOS_RT_VERSION, TALOS_RT_ELEMENT_REAL, 901, 0,       0,
-      sizeof(double),     alignof(double),         64,  nullptr, nullptr};
+      sizeof(double),   alignof(double),       64,  nullptr, nullptr};
   talos_rt_object_v1 *reals = nullptr;
   ASSERT_EQ(talos_rt_v1_dynamic_array_create(lane, &realElement, 2, &reals),
             TALOS_RT_OK);
@@ -1566,11 +1510,10 @@ TEST_F(ManagedValueTest, CoverageSetSnapshotPreservesLogicAndRealValues) {
   const double realValues[] = {1.25, -2.5};
   for (int64_t index = 0; index != 2; ++index)
     ASSERT_EQ(talos_rt_v1_container_write(lane, reals, index,
-                                            &realValues[index], nullptr),
+                                          &realValues[index], nullptr),
               TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_coverage_set_snapshot(context, reals, 64,
-                                             TALOS_RT_ELEMENT_REAL, false, 2,
-                                             snapshot),
+  ASSERT_EQ(talos_rt_coverage_set_snapshot(
+                context, reals, 64, TALOS_RT_ELEMENT_REAL, false, 2, snapshot),
             TALOS_RT_OK);
   ASSERT_EQ(snapshot.value.size(), sizeof(realValues));
   EXPECT_EQ(std::memcmp(snapshot.value.data(), realValues, sizeof(realValues)),
@@ -1578,22 +1521,22 @@ TEST_F(ManagedValueTest, CoverageSetSnapshotPreservesLogicAndRealValues) {
 
   const talos_rt_element_type_v1 shortRealElement{
       TALOS_RT_VERSION, TALOS_RT_ELEMENT_REAL, 902, 0,       0,
-      sizeof(float),      alignof(float),          32,  nullptr, nullptr};
+      sizeof(float),    alignof(float),        32,  nullptr, nullptr};
   talos_rt_object_v1 *shortReals = nullptr;
-  ASSERT_EQ(talos_rt_v1_dynamic_array_create(lane, &shortRealElement, 2,
-                                               &shortReals),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_dynamic_array_create(lane, &shortRealElement, 2, &shortReals),
+      TALOS_RT_OK);
   talos_rt_gc_root_v1 shortRealRoot{};
   ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &shortRealRoot, &shortReals),
             TALOS_RT_OK);
   const float shortRealValues[] = {3.5f, -4.5f};
   for (int64_t index = 0; index != 2; ++index)
     ASSERT_EQ(talos_rt_v1_container_write(lane, shortReals, index,
-                                            &shortRealValues[index], nullptr),
+                                          &shortRealValues[index], nullptr),
               TALOS_RT_OK);
   ASSERT_EQ(talos_rt_coverage_set_snapshot(context, shortReals, 32,
-                                             TALOS_RT_ELEMENT_REAL, false, 2,
-                                             snapshot),
+                                           TALOS_RT_ELEMENT_REAL, false, 2,
+                                           snapshot),
             TALOS_RT_OK);
   ASSERT_EQ(snapshot.value.size(), sizeof(shortRealValues));
   EXPECT_EQ(std::memcmp(snapshot.value.data(), shortRealValues,
@@ -1640,8 +1583,8 @@ TEST_F(ManagedValueTest, QueueBoundsAreMaximumLegalIndices) {
     }
     uint64_t replacement = 99;
     ASSERT_EQ(talos_rt_v1_container_write(lane, queue,
-                                            static_cast<int64_t>(bound + 1),
-                                            &replacement, nullptr),
+                                          static_cast<int64_t>(bound + 1),
+                                          &replacement, nullptr),
               TALOS_RT_OK);
     EXPECT_EQ(talos_rt_v1_container_size(queue), bound + 1);
     EXPECT_EQ(talos_rt_v1_gc_root_pop(lane, &root), TALOS_RT_OK);
@@ -1652,28 +1595,25 @@ TEST_F(ManagedValueTest,
        AssociativeArraysGrowDeleteCloneAndTraverseInKeyOrder) {
   talos_rt_object_v1 *array = nullptr;
   ASSERT_EQ(talos_rt_v1_assoc_create(lane, &wordElement,
-                                       TALOS_RT_ASSOC_KEY_SIGNED, 16, &array),
+                                     TALOS_RT_ASSOC_KEY_SIGNED, 16, &array),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 arrayRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array), TALOS_RT_OK);
   const int16_t keys[] = {7, -3, 40, 2, -9, 18, 99, 1, -1, 63};
   for (int16_t sourceKey : keys) {
-    talos_rt_assoc_key_v1 key{TALOS_RT_ASSOC_KEY_SIGNED,        0,   16,
-                                {static_cast<uint16_t>(sourceKey)}, {0}, 0};
+    talos_rt_assoc_key_v1 key{TALOS_RT_ASSOC_KEY_SIGNED,          0,   16,
+                              {static_cast<uint16_t>(sourceKey)}, {0}, 0};
     uint64_t value = static_cast<uint64_t>(sourceKey + 1000);
     ASSERT_EQ(talos_rt_v1_assoc_write(lane, array, &key, &value, nullptr),
               TALOS_RT_OK);
   }
   EXPECT_EQ(talos_rt_v1_container_size(array), std::size(keys));
 
-  talos_rt_assoc_key_v1 missing{
-      TALOS_RT_ASSOC_KEY_SIGNED, 0, 16, {88}, {0}, 0};
+  talos_rt_assoc_key_v1 missing{TALOS_RT_ASSOC_KEY_SIGNED, 0, 16, {88}, {0}, 0};
   uint64_t value = UINT64_MAX;
   uint32_t present = 1;
-  ASSERT_EQ(
-      talos_rt_v1_assoc_read(array, &missing, &value, nullptr, &present),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_assoc_read(array, &missing, &value, nullptr, &present),
+            TALOS_RT_OK);
   EXPECT_EQ(present, 0u);
   EXPECT_EQ(value, 0u);
 
@@ -1690,12 +1630,11 @@ TEST_F(ManagedValueTest,
   EXPECT_EQ(ordered,
             (std::vector<int16_t>{-9, -3, -1, 1, 2, 7, 18, 40, 63, 99}));
 
-  talos_rt_assoc_key_v1 removed{TALOS_RT_ASSOC_KEY_SIGNED, 0,   16,
-                                  {static_cast<uint16_t>(-3)}, {0}, 0};
+  talos_rt_assoc_key_v1 removed{TALOS_RT_ASSOC_KEY_SIGNED,   0,   16,
+                                {static_cast<uint16_t>(-3)}, {0}, 0};
   ASSERT_EQ(talos_rt_v1_assoc_delete(array, &removed), TALOS_RT_OK);
   uint32_t exists = 1;
-  ASSERT_EQ(talos_rt_v1_assoc_exists(array, &removed, &exists),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_assoc_exists(array, &removed, &exists), TALOS_RT_OK);
   EXPECT_EQ(exists, 0u);
   cursor = removed;
   ASSERT_EQ(talos_rt_v1_assoc_next(lane, array, &cursor, &success),
@@ -1712,15 +1651,13 @@ TEST_F(ManagedValueTest,
   ASSERT_EQ(talos_rt_v1_container_clone(lane, array, &copy), TALOS_RT_OK);
   talos_rt_gc_root_v1 copyRoot{};
   ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &copyRoot, &copy), TALOS_RT_OK);
-  talos_rt_assoc_key_v1 changed{
-      TALOS_RT_ASSOC_KEY_SIGNED, 0, 16, {7}, {0}, 0};
+  talos_rt_assoc_key_v1 changed{TALOS_RT_ASSOC_KEY_SIGNED, 0, 16, {7}, {0}, 0};
   uint64_t replacement = 12345;
   ASSERT_EQ(
       talos_rt_v1_assoc_write(lane, copy, &changed, &replacement, nullptr),
       TALOS_RT_OK);
-  ASSERT_EQ(
-      talos_rt_v1_assoc_read(array, &changed, &value, nullptr, &present),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_assoc_read(array, &changed, &value, nullptr, &present),
+            TALOS_RT_OK);
   EXPECT_EQ(value, 1007u);
   ASSERT_EQ(talos_rt_v1_assoc_read(copy, &changed, &value, nullptr, &present),
             TALOS_RT_OK);
@@ -1735,8 +1672,8 @@ TEST_F(ManagedValueTest,
   constexpr uint64_t width = 129;
   constexpr size_t bytes = 17;
   talos_rt_object_v1 *array = nullptr;
-  ASSERT_EQ(talos_rt_v1_assoc_create(
-                lane, &wordElement, TALOS_RT_ASSOC_KEY_SIGNED, width, &array),
+  ASSERT_EQ(talos_rt_v1_assoc_create(lane, &wordElement,
+                                     TALOS_RT_ASSOC_KEY_SIGNED, width, &array),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 root{};
   ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &root, &array), TALOS_RT_OK);
@@ -1750,8 +1687,7 @@ TEST_F(ManagedValueTest,
   keys[4][16] = 0; // 2**128 - 1
   for (size_t index = 0; index != keys.size(); ++index) {
     SCOPED_TRACE(index);
-    talos_rt_assoc_key_v1 key{
-        TALOS_RT_ASSOC_KEY_SIGNED, 0, width, {}, {}, 0};
+    talos_rt_assoc_key_v1 key{TALOS_RT_ASSOC_KEY_SIGNED, 0, width, {}, {}, 0};
     key.value_data = keys[index].data();
     uint64_t value = index + 100;
     ASSERT_EQ(talos_rt_v1_assoc_write(lane, array, &key, &value, nullptr),
@@ -1760,8 +1696,7 @@ TEST_F(ManagedValueTest,
 
   std::array<uint8_t, bytes> highKey{};
   highKey[8] = 1;
-  talos_rt_assoc_key_v1 lookup{
-      TALOS_RT_ASSOC_KEY_SIGNED, 0, width, {}, {}, 0};
+  talos_rt_assoc_key_v1 lookup{TALOS_RT_ASSOC_KEY_SIGNED, 0, width, {}, {}, 0};
   lookup.value_data = highKey.data();
   uint64_t value = 0;
   uint32_t present = 0;
@@ -1783,16 +1718,15 @@ TEST_F(ManagedValueTest,
 
   talos_rt_object_v1 *path = nullptr;
   ASSERT_EQ(talos_rt_v1_reference_path_assoc_create(lane, array, &lookup,
-                                                      nullptr, 0, 0, nullptr,
-                                                      nullptr, 0, &path),
+                                                    nullptr, 0, 0, nullptr,
+                                                    nullptr, 0, &path),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 pathRoot{};
   ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &pathRoot, &path), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);
   uint64_t replacement = 909;
-  ASSERT_EQ(
-      talos_rt_v1_reference_path_store(lane, path, &replacement, nullptr),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_reference_path_store(lane, path, &replacement, nullptr),
+            TALOS_RT_OK);
   value = 0;
   ASSERT_EQ(talos_rt_v1_reference_path_load(path, &value, nullptr, &present),
             TALOS_RT_OK);
@@ -1801,8 +1735,7 @@ TEST_F(ManagedValueTest,
   ASSERT_EQ(talos_rt_v1_gc_root_pop(lane, &pathRoot), TALOS_RT_OK);
 
   std::array<uint8_t, bytes> cursorBytes{};
-  talos_rt_assoc_key_v1 cursor{
-      TALOS_RT_ASSOC_KEY_SIGNED, 0, width, {}, {}, 0};
+  talos_rt_assoc_key_v1 cursor{TALOS_RT_ASSOC_KEY_SIGNED, 0, width, {}, {}, 0};
   cursor.value_data = cursorBytes.data();
   uint32_t success = 0;
   for (const auto &expected : keys) {
@@ -1842,15 +1775,14 @@ TEST_F(ManagedValueTest,
   ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &root, &array), TALOS_RT_OK);
 
   uint64_t fallback = 77;
-  ASSERT_EQ(talos_rt_v1_assoc_set_default_checked(
-                lane, array, &fallback, sizeof(fallback), nullptr, 0),
+  ASSERT_EQ(talos_rt_v1_assoc_set_default_checked(lane, array, &fallback,
+                                                  sizeof(fallback), nullptr, 0),
             TALOS_RT_OK);
-  talos_rt_assoc_key_v1 missing{
-      TALOS_RT_ASSOC_KEY_SIGNED, 0, 12, {3}, {0}, 0};
+  talos_rt_assoc_key_v1 missing{TALOS_RT_ASSOC_KEY_SIGNED, 0, 12, {3}, {0}, 0};
   uint64_t value = 0;
   uint32_t present = 1;
-  ASSERT_EQ(talos_rt_v1_assoc_read_checked(
-                array, &missing, &value, sizeof(value), nullptr, 0, &present),
+  ASSERT_EQ(talos_rt_v1_assoc_read_checked(array, &missing, &value,
+                                           sizeof(value), nullptr, 0, &present),
             TALOS_RT_OK);
   EXPECT_EQ(present, 0u);
   EXPECT_EQ(value, fallback);
@@ -1863,8 +1795,7 @@ TEST_F(ManagedValueTest,
   present = 1;
   testing::internal::CaptureStderr();
   ASSERT_EQ(talos_rt_v1_assoc_read_checked(array, &unknownKey, &value,
-                                             sizeof(value), nullptr, 0,
-                                             &present),
+                                           sizeof(value), nullptr, 0, &present),
             TALOS_RT_OK);
   EXPECT_EQ(testing::internal::GetCapturedStderr(), "");
   EXPECT_EQ(present, 0u);
@@ -1872,20 +1803,20 @@ TEST_F(ManagedValueTest,
 
   for (auto [keyValue, stored] : {std::pair<int16_t, uint64_t>{4, 9},
                                   std::pair<int16_t, uint64_t>{-2, 5}}) {
-    talos_rt_assoc_key_v1 key{TALOS_RT_ASSOC_KEY_SIGNED,       0,   12,
-                                {static_cast<uint16_t>(keyValue)}, {0}, 0};
+    talos_rt_assoc_key_v1 key{TALOS_RT_ASSOC_KEY_SIGNED,         0,   12,
+                              {static_cast<uint16_t>(keyValue)}, {0}, 0};
     ASSERT_EQ(talos_rt_v1_assoc_write_checked(lane, array, &key, &stored,
-                                                sizeof(stored), nullptr, 0),
+                                              sizeof(stored), nullptr, 0),
               TALOS_RT_OK);
   }
   talos_rt_arg_v1 argument{TALOS_RT_ARG_MANAGED_CONTAINER, 0, 0, &array,
-                             nullptr};
+                           nullptr};
   talos_rt_format_env_v1 environment{};
   environment.time_multiplier = 1;
   talos_rt_buffer_v1 output{};
-  ASSERT_EQ(talos_rt_v1_format(context, "%p", 2, &argument, 1, &environment,
-                                 &output),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_format(context, "%p", 2, &argument, 1, &environment, &output),
+      TALOS_RT_OK);
   EXPECT_EQ(
       std::string(reinterpret_cast<const char *>(output.data), output.size),
       "'{-2:5, 4:9}");
@@ -1929,26 +1860,22 @@ TEST_F(ManagedValueTest,
   ASSERT_EQ(talos_rt_v1_dynamic_array_create(lane, &wordElement, 1, &inner),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 innerRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &innerRoot, &inner),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &innerRoot, &inner), TALOS_RT_OK);
   uint64_t stored = 91;
   ASSERT_EQ(talos_rt_v1_container_write(lane, inner, 0, &stored, nullptr),
             TALOS_RT_OK);
 
   talos_rt_object_v1 *outer = nullptr;
   ASSERT_EQ(talos_rt_v1_assoc_create(lane, &containerElement,
-                                       TALOS_RT_ASSOC_KEY_UNSIGNED, 32,
-                                       &outer),
+                                     TALOS_RT_ASSOC_KEY_UNSIGNED, 32, &outer),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 outerRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &outerRoot, &outer),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &outerRoot, &outer), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_assoc_set_default(lane, outer, &inner, nullptr),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_root_pop(lane, &outerRoot), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_root_pop(lane, &innerRoot), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &outerRoot, &outer),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &outerRoot, &outer), TALOS_RT_OK);
   inner = nullptr;
   ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);
 
@@ -1971,8 +1898,8 @@ TEST_F(ManagedValueTest,
 
 TEST_F(ManagedValueTest, AssociativeSlotsPreserveAlignmentForByteElements) {
   talos_rt_object_v1 *array = nullptr;
-  ASSERT_EQ(talos_rt_v1_assoc_create(
-                lane, &byteElement, TALOS_RT_ASSOC_KEY_UNSIGNED, 32, &array),
+  ASSERT_EQ(talos_rt_v1_assoc_create(lane, &byteElement,
+                                     TALOS_RT_ASSOC_KEY_UNSIGNED, 32, &array),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 root{};
   ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &root, &array), TALOS_RT_OK);
@@ -1999,27 +1926,23 @@ TEST_F(ManagedValueTest, AssociativeSlotsPreserveAlignmentForByteElements) {
 TEST_F(ManagedValueTest, AssociativeStringKeysRemainTracedByValue) {
   ASSERT_EQ(talos_rt_v1_gc_set_threshold(context, 1), TALOS_RT_OK);
   talos_rt_string_v1 keyText = 0;
-  ASSERT_EQ(talos_rt_v1_string_create(lane, "alpha", 5, &keyText),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_string_create(lane, "alpha", 5, &keyText), TALOS_RT_OK);
   talos_rt_gc_managed_root_v1 keyRoot{};
   ASSERT_EQ(talos_rt_v1_gc_managed_root_push(lane, &keyRoot, &keyText),
             TALOS_RT_OK);
   talos_rt_object_v1 *array = nullptr;
   ASSERT_EQ(talos_rt_v1_assoc_create(lane, &wordElement,
-                                       TALOS_RT_ASSOC_KEY_STRING, 0, &array),
+                                     TALOS_RT_ASSOC_KEY_STRING, 0, &array),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 arrayRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array),
-            TALOS_RT_OK);
-  talos_rt_assoc_key_v1 key{
-      TALOS_RT_ASSOC_KEY_STRING, 0, 0, {0}, {0}, keyText};
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array), TALOS_RT_OK);
+  talos_rt_assoc_key_v1 key{TALOS_RT_ASSOC_KEY_STRING, 0, 0, {0}, {0}, keyText};
   uint64_t stored = 55;
   ASSERT_EQ(talos_rt_v1_assoc_write(lane, array, &key, &stored, nullptr),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_root_pop(lane, &arrayRoot), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_managed_root_pop(lane, &keyRoot), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array), TALOS_RT_OK);
   keyText = 0;
   ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);
 
@@ -2053,11 +1976,10 @@ TEST_F(ManagedValueTest, AssociativeTraversalRootsStringCursorDuringRebuild) {
   ASSERT_EQ(talos_rt_v1_gc_set_threshold(context, 1), TALOS_RT_OK);
   talos_rt_object_v1 *array = nullptr;
   ASSERT_EQ(talos_rt_v1_assoc_create(lane, &wordElement,
-                                       TALOS_RT_ASSOC_KEY_STRING, 0, &array),
+                                     TALOS_RT_ASSOC_KEY_STRING, 0, &array),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 arrayRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array), TALOS_RT_OK);
 
   for (const char *text : {"alpha", "charlie"}) {
     talos_rt_string_v1 keyString = 0;
@@ -2095,12 +2017,11 @@ TEST_F(ManagedValueTest, AssociativeTraversalRootsStringCursorDuringRebuild) {
 
 TEST_F(ManagedValueTest, ManagedWritesRejectCrossContextHandles) {
   talos_rt_object_v1 *values = nullptr;
-  ASSERT_EQ(
-      talos_rt_v1_dynamic_array_create(lane, &stringElement, 1, &values),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_dynamic_array_create(lane, &stringElement, 1, &values),
+            TALOS_RT_OK);
   talos_rt_object_v1 *keys = nullptr;
   ASSERT_EQ(talos_rt_v1_assoc_create(lane, &wordElement,
-                                       TALOS_RT_ASSOC_KEY_STRING, 0, &keys),
+                                     TALOS_RT_ASSOC_KEY_STRING, 0, &keys),
             TALOS_RT_OK);
 
   ASSERT_EQ(talos_rt_v1_gc_lane_leave(lane), TALOS_RT_OK);
@@ -2116,7 +2037,7 @@ TEST_F(ManagedValueTest, ManagedWritesRejectCrossContextHandles) {
       TALOS_RT_OK);
   talos_rt_object_v1 *foreignArray = nullptr;
   ASSERT_EQ(talos_rt_v1_dynamic_array_create(foreignLane, &wordElement, 1,
-                                               &foreignArray),
+                                             &foreignArray),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_lane_leave(foreignLane), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_lane_enter(lane), TALOS_RT_OK);
@@ -2143,46 +2064,43 @@ TEST_F(ManagedValueTest, RealReferencePathsPreservePrecisionAndPayloads) {
   for (uint64_t size : {sizeof(float), sizeof(double)}) {
     const uint64_t width = size * 8;
     const talos_rt_element_type_v1 element{TALOS_RT_VERSION,
-                                             TALOS_RT_ELEMENT_REAL,
-                                             910 + size,
-                                             0,
-                                             0,
-                                             size,
-                                             size,
-                                             width,
-                                             nullptr,
-                                             nullptr};
+                                           TALOS_RT_ELEMENT_REAL,
+                                           910 + size,
+                                           0,
+                                           0,
+                                           size,
+                                           size,
+                                           width,
+                                           nullptr,
+                                           nullptr};
     talos_rt_object_v1 *array = nullptr;
     ASSERT_EQ(talos_rt_v1_dynamic_array_create(lane, &element, 1, &array),
               TALOS_RT_OK);
     talos_rt_gc_root_v1 arrayRoot{};
-    ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array), TALOS_RT_OK);
     std::array<uint8_t, sizeof(double)> bits{};
     bits[size - 1] = 0x80;
-    ASSERT_EQ(
-        talos_rt_v1_container_write(lane, array, 0, bits.data(), nullptr),
-        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_container_write(lane, array, 0, bits.data(), nullptr),
+              TALOS_RT_OK);
     talos_rt_object_v1 *path = nullptr;
     ASSERT_EQ(talos_rt_v1_reference_path_index_create(
                   lane, array, 0, nullptr, 0, 0, nullptr, nullptr, 0, &path),
               TALOS_RT_OK);
     talos_rt_gc_root_v1 pathRoot{};
-    ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &pathRoot, &path),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &pathRoot, &path), TALOS_RT_OK);
     std::array<uint8_t, 16> loaded;
     loaded.fill(0x5a);
-    ASSERT_EQ(talos_rt_v1_argument_ref_load(context, nullptr, nullptr, 0,
-                                              path, 0, 2, width, size, 0, 0,
-                                              loaded.data(), nullptr),
+    ASSERT_EQ(talos_rt_v1_argument_ref_load(context, nullptr, nullptr, 0, path,
+                                            0, 2, width, size, 0, 0,
+                                            loaded.data(), nullptr),
               TALOS_RT_OK);
     EXPECT_EQ(std::memcmp(loaded.data(), bits.data(), size), 0);
     for (size_t index = size; index != loaded.size(); ++index)
       EXPECT_EQ(loaded[index], 0x5a);
     loaded.fill(0x5a);
-    EXPECT_EQ(talos_rt_v1_argument_ref_load(
-                  context, nullptr, nullptr, 0, path, 0, 2,
-                  width == 32 ? 64 : 32, size, 0, 0, loaded.data(), nullptr),
+    EXPECT_EQ(talos_rt_v1_argument_ref_load(context, nullptr, nullptr, 0, path,
+                                            0, 2, width == 32 ? 64 : 32, size,
+                                            0, 0, loaded.data(), nullptr),
               TALOS_RT_ARGUMENT_MISMATCH);
     for (size_t index = 0; index != loaded.size(); ++index)
       EXPECT_EQ(loaded[index], index < size ? 0 : 0x5a);
@@ -2196,9 +2114,9 @@ TEST_F(ManagedValueTest, RealReferencePathsPreservePrecisionAndPayloads) {
         talos_rt_v1_reference_path_store(lane, path, bits.data(), nullptr),
         TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);
-    ASSERT_EQ(talos_rt_v1_argument_ref_load(context, nullptr, nullptr, 0,
-                                              path, 0, 2, width, size, 0, 0,
-                                              loaded.data(), nullptr),
+    ASSERT_EQ(talos_rt_v1_argument_ref_load(context, nullptr, nullptr, 0, path,
+                                            0, 2, width, size, 0, 0,
+                                            loaded.data(), nullptr),
               TALOS_RT_OK);
     EXPECT_EQ(std::memcmp(loaded.data(), bits.data(), size), 0);
     EXPECT_EQ(talos_rt_v1_gc_root_pop(lane, &pathRoot), TALOS_RT_OK);
@@ -2211,8 +2129,7 @@ TEST_F(ManagedValueTest, ReferencePathsResolveAgainAfterContainerMutation) {
   ASSERT_EQ(talos_rt_v1_queue_create(lane, &wordElement, UINT64_MAX, &queue),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 queueRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &queueRoot, &queue),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &queueRoot, &queue), TALOS_RT_OK);
   talos_rt_object_v1 *path = nullptr;
   ASSERT_EQ(talos_rt_v1_reference_path_index_create(
                 lane, queue, 0, nullptr, 0, 0, nullptr, nullptr, 0, &path),
@@ -2231,13 +2148,13 @@ TEST_F(ManagedValueTest, ReferencePathsResolveAgainAfterContainerMutation) {
   EXPECT_EQ(value, 41u);
   uint8_t stateValue[8]{};
   uint8_t stateUnknown[8]{};
-  EXPECT_EQ(talos_rt_v1_argument_ref_load(context, stateValue, stateUnknown,
-                                            64, path, 0, 2, 32, sizeof(value),
-                                            0, 0, &value, nullptr),
+  EXPECT_EQ(talos_rt_v1_argument_ref_load(context, stateValue, stateUnknown, 64,
+                                          path, 0, 2, 32, sizeof(value), 0, 0,
+                                          &value, nullptr),
             TALOS_RT_ARGUMENT_MISMATCH);
-  EXPECT_EQ(talos_rt_v1_argument_ref_load(context, stateValue, stateUnknown,
-                                            64, path, 0, 2, 64, sizeof(value),
-                                            0, 1, &value, nullptr),
+  EXPECT_EQ(talos_rt_v1_argument_ref_load(context, stateValue, stateUnknown, 64,
+                                          path, 0, 2, 64, sizeof(value), 0, 1,
+                                          &value, nullptr),
             TALOS_RT_ARGUMENT_MISMATCH);
 
   for (uint64_t next = 0; next != 20; ++next)
@@ -2246,8 +2163,7 @@ TEST_F(ManagedValueTest, ReferencePathsResolveAgainAfterContainerMutation) {
   value = 77;
   ASSERT_EQ(talos_rt_v1_reference_path_store(lane, path, &value, nullptr),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_container_read(queue, 0, &value, nullptr),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_container_read(queue, 0, &value, nullptr), TALOS_RT_OK);
   EXPECT_EQ(value, 77u);
 
   // IEEE 1800-2017 7.10.3 preserves the identity of every queue element that
@@ -2258,8 +2174,7 @@ TEST_F(ManagedValueTest, ReferencePathsResolveAgainAfterContainerMutation) {
   value = 78;
   ASSERT_EQ(talos_rt_v1_reference_path_store(lane, path, &value, nullptr),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_container_read(queue, 1, &value, nullptr),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_container_read(queue, 1, &value, nullptr), TALOS_RT_OK);
   EXPECT_EQ(value, 78u);
 
   ASSERT_EQ(talos_rt_v1_container_swap(queue, 1, 5), TALOS_RT_OK);
@@ -2267,8 +2182,7 @@ TEST_F(ManagedValueTest, ReferencePathsResolveAgainAfterContainerMutation) {
   value = 79;
   ASSERT_EQ(talos_rt_v1_reference_path_store(lane, path, &value, nullptr),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_container_read(queue, 5, &value, nullptr),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_container_read(queue, 5, &value, nullptr), TALOS_RT_OK);
   EXPECT_EQ(value, 79u);
 
   ASSERT_EQ(talos_rt_v1_queue_delete_index(queue, 5), TALOS_RT_OK);
@@ -2296,8 +2210,7 @@ TEST_F(ManagedValueTest, RepeatedCapturesShareStorageAfterQueueRemoval) {
   ASSERT_EQ(talos_rt_v1_queue_create(lane, &wordElement, UINT64_MAX, &queue),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 queueRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &queueRoot, &queue),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &queueRoot, &queue), TALOS_RT_OK);
   uint64_t value = 41;
   ASSERT_EQ(talos_rt_v1_queue_push(lane, queue, 0, &value, nullptr),
             TALOS_RT_OK);
@@ -2339,11 +2252,10 @@ TEST_F(ManagedValueTest, RepeatedCapturesShareStorageAfterQueueRemoval) {
 TEST_F(ManagedValueTest, EqualAssociativeKeysShareOnlyTheLiveCapture) {
   talos_rt_object_v1 *array = nullptr;
   ASSERT_EQ(talos_rt_v1_assoc_create(lane, &wordElement,
-                                       TALOS_RT_ASSOC_KEY_STRING, 0, &array),
+                                     TALOS_RT_ASSOC_KEY_STRING, 0, &array),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 arrayRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array), TALOS_RT_OK);
   constexpr char text[] = "equal keys with distinct non-interned storage";
   talos_rt_string_v1 keys[2] = {};
   talos_rt_object_v1 *paths[2] = {};
@@ -2361,8 +2273,7 @@ TEST_F(ManagedValueTest, EqualAssociativeKeysShareOnlyTheLiveCapture) {
   }
   EXPECT_EQ(paths[0], paths[1]);
   talos_rt_gc_root_v1 pathRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &pathRoot, &paths[0]),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &pathRoot, &paths[0]), TALOS_RT_OK);
   uint64_t value = 41;
   ASSERT_EQ(talos_rt_v1_reference_path_store(lane, paths[0], &value, nullptr),
             TALOS_RT_OK);
@@ -2395,15 +2306,15 @@ TEST_F(ManagedValueTest, EqualAssociativeKeysShareOnlyTheLiveCapture) {
 
 TEST_F(ManagedValueTest, AggregateReferencesAcceptPartialFinalBytes) {
   const talos_rt_element_type_v1 element{TALOS_RT_VERSION,
-                                           TALOS_RT_ELEMENT_AGGREGATE,
-                                           9400,
-                                           TALOS_RT_ELEMENT_FOUR_STATE,
-                                           0,
-                                           6,
-                                           1,
-                                           48,
-                                           nullptr,
-                                           nullptr};
+                                         TALOS_RT_ELEMENT_AGGREGATE,
+                                         9400,
+                                         TALOS_RT_ELEMENT_FOUR_STATE,
+                                         0,
+                                         6,
+                                         1,
+                                         48,
+                                         nullptr,
+                                         nullptr};
   talos_rt_object_v1 *array = nullptr, *path = nullptr;
   ASSERT_EQ(talos_rt_v1_dynamic_array_create(lane, &element, 1, &array),
             TALOS_RT_OK);
@@ -2421,22 +2332,20 @@ TEST_F(ManagedValueTest, AggregateReferencesAcceptPartialFinalBytes) {
 
 TEST_F(ManagedValueTest, AggregateWindowsPreservePlanesAndDetachedAliases) {
   const talos_rt_element_type_v1 recordElement{TALOS_RT_VERSION,
-                                                 TALOS_RT_ELEMENT_AGGREGATE,
-                                                 9300,
-                                                 TALOS_RT_ELEMENT_FOUR_STATE,
-                                                 0,
-                                                 8,
-                                                 1,
-                                                 64,
-                                                 nullptr,
-                                                 nullptr};
+                                               TALOS_RT_ELEMENT_AGGREGATE,
+                                               9300,
+                                               TALOS_RT_ELEMENT_FOUR_STATE,
+                                               0,
+                                               8,
+                                               1,
+                                               64,
+                                               nullptr,
+                                               nullptr};
   talos_rt_object_v1 *queue = nullptr;
-  ASSERT_EQ(
-      talos_rt_v1_queue_create(lane, &recordElement, UINT64_MAX, &queue),
-      TALOS_RT_OK);
-  talos_rt_gc_root_v1 queueRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &queueRoot, &queue),
+  ASSERT_EQ(talos_rt_v1_queue_create(lane, &recordElement, UINT64_MAX, &queue),
             TALOS_RT_OK);
+  talos_rt_gc_root_v1 queueRoot{};
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &queueRoot, &queue), TALOS_RT_OK);
   uint64_t original = UINT64_C(0x12345678abcd9876);
   uint64_t unknown = UINT64_C(0x5555555555555555);
   ASSERT_EQ(talos_rt_v1_queue_push(lane, queue, 0, &original, &unknown),
@@ -2446,8 +2355,7 @@ TEST_F(ManagedValueTest, AggregateWindowsPreservePlanesAndDetachedAliases) {
                 lane, queue, 0, nullptr, 0, 0, nullptr, nullptr, 0, &parent),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 parentRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &parentRoot, &parent),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &parentRoot, &parent), TALOS_RT_OK);
   talos_rt_object_v1 *views[2] = {};
   talos_rt_gc_root_v1 viewRoots[2] = {};
   for (unsigned index = 0; index != 2; ++index) {
@@ -2456,9 +2364,8 @@ TEST_F(ManagedValueTest, AggregateWindowsPreservePlanesAndDetachedAliases) {
                   1, 9301, TALOS_RT_ELEMENT_BITS, 0, 1, 1, 7, nullptr, 0,
                   &views[index]),
               TALOS_RT_OK);
-    ASSERT_EQ(
-        talos_rt_v1_gc_root_push(lane, &viewRoots[index], &views[index]),
-        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &viewRoots[index], &views[index]),
+              TALOS_RT_OK);
   }
   uint8_t selected = 0x65;
   ASSERT_EQ(
@@ -2471,9 +2378,8 @@ TEST_F(ManagedValueTest, AggregateWindowsPreservePlanesAndDetachedAliases) {
   EXPECT_EQ(actual, (original & ~mask) | (uint64_t{selected} << 5));
   EXPECT_EQ(actualUnknown, unknown & ~mask);
   uint32_t present = 0;
-  ASSERT_EQ(
-      talos_rt_v1_queue_pop(queue, 0, &actual, &actualUnknown, &present),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_queue_pop(queue, 0, &actual, &actualUnknown, &present),
+            TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);
   selected = 0x36;
   ASSERT_EQ(
@@ -2521,14 +2427,14 @@ const talos_rt_element_trace_slot_v1 structKeyTrace{
     8, TALOS_RT_MANAGED_SLOT_STRING, 0};
 
 talos_rt_status createStructKeyed(talos_rt_gc_lane_v1 *lane,
-                                    const std::vector<uint8_t> &plan,
-                                    talos_rt_object_v1 **array) {
+                                  const std::vector<uint8_t> &plan,
+                                  talos_rt_object_v1 **array) {
   return talos_rt_v1_assoc_create_element_keyed(
       lane, wordElement.type_id, wordElement.kind, wordElement.flags,
       wordElement.value_size, wordElement.alignment, wordElement.bit_width,
       nullptr, 0, structKeyTypeID, TALOS_RT_ELEMENT_AGGREGATE,
-      TALOS_RT_ELEMENT_FOUR_STATE, 16, 1, 128, &structKeyTrace, 1,
-      plan.data(), plan.size(), array);
+      TALOS_RT_ELEMENT_FOUR_STATE, 16, 1, 128, &structKeyTrace, 1, plan.data(),
+      plan.size(), array);
 }
 
 const std::vector<uint8_t> structKeyPlan =
@@ -2555,8 +2461,7 @@ TEST_F(ManagedValueTest, AssociativeElementKeysCompareThroughTheirPlan) {
   talos_rt_object_v1 *array = nullptr;
   ASSERT_EQ(createStructKeyed(lane, structKeyPlan, &array), TALOS_RT_OK);
   talos_rt_gc_root_v1 arrayRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array), TALOS_RT_OK);
   talos_rt_assoc_key_kind_v1 kind = 0;
   uint64_t width = 0;
   ASSERT_EQ(talos_rt_v1_assoc_key_info(array, &kind, &width), TALOS_RT_OK);
@@ -2651,9 +2556,9 @@ TEST_F(ManagedValueTest, AssociativeElementKeysCompareThroughTheirPlan) {
 TEST_F(ManagedValueTest, AssociativeElementKeysOwnTheirDynamicMembers) {
   // int k[] indexing int a[k]: the key is a dynamic array compared by size and
   // then element by element; a null array is the empty array.
-  std::vector<uint8_t> plan = keyPlanBytes(
-      {keyPlanRecord(TALOS_RT_ASSOC_KEY_PLAN_SEQUENCE, 0, 8, 0, 1),
-       keyPlanRecord(TALOS_RT_ASSOC_KEY_PLAN_BITS, 0, 64, 0)});
+  std::vector<uint8_t> plan =
+      keyPlanBytes({keyPlanRecord(TALOS_RT_ASSOC_KEY_PLAN_SEQUENCE, 0, 8, 0, 1),
+                    keyPlanRecord(TALOS_RT_ASSOC_KEY_PLAN_BITS, 0, 64, 0)});
   talos_rt_object_v1 *array = nullptr;
   ASSERT_EQ(talos_rt_v1_assoc_create_element_keyed(
                 lane, wordElement.type_id, wordElement.kind, wordElement.flags,
@@ -2663,15 +2568,12 @@ TEST_F(ManagedValueTest, AssociativeElementKeysOwnTheirDynamicMembers) {
                 plan.data(), plan.size(), &array),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 arrayRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array), TALOS_RT_OK);
   talos_rt_object_v1 *keyArray = nullptr;
-  ASSERT_EQ(
-      talos_rt_v1_dynamic_array_create(lane, &wordElement, 2, &keyArray),
-      TALOS_RT_OK);
-  talos_rt_gc_root_v1 keyRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &keyRoot, &keyArray),
+  ASSERT_EQ(talos_rt_v1_dynamic_array_create(lane, &wordElement, 2, &keyArray),
             TALOS_RT_OK);
+  talos_rt_gc_root_v1 keyRoot{};
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &keyRoot, &keyArray), TALOS_RT_OK);
   auto setElement = [&](int64_t index, uint64_t element) {
     ASSERT_EQ(
         talos_rt_v1_container_write(lane, keyArray, index, &element, nullptr),
@@ -2717,9 +2619,8 @@ TEST_F(ManagedValueTest, AssociativeElementKeysOwnTheirDynamicMembers) {
   ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &emptyRoot, &emptyArray),
             TALOS_RT_OK);
   talos_rt_assoc_key_v1 emptyKey = keyFor(emptyArray);
-  ASSERT_EQ(
-      talos_rt_v1_assoc_read(array, &emptyKey, &value, nullptr, &present),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_assoc_read(array, &emptyKey, &value, nullptr, &present),
+            TALOS_RT_OK);
   EXPECT_EQ(present, 1u);
   EXPECT_EQ(value, empty);
 
@@ -2743,13 +2644,13 @@ TEST_F(ManagedValueTest, AssociativeElementKeysOwnTheirDynamicMembers) {
   EXPECT_EQ(talos_rt_v1_container_size(cursorArray), 0u);
 
   talos_rt_arg_v1 argument{TALOS_RT_ARG_MANAGED_CONTAINER, 0, 0, &array,
-                             nullptr};
+                           nullptr};
   talos_rt_format_env_v1 environment{};
   environment.time_multiplier = 1;
   talos_rt_buffer_v1 output{};
-  ASSERT_EQ(talos_rt_v1_format(context, "%p", 2, &argument, 1, &environment,
-                                 &output),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_format(context, "%p", 2, &argument, 1, &environment, &output),
+      TALOS_RT_OK);
   EXPECT_EQ(
       std::string(reinterpret_cast<const char *>(output.data), output.size),
       "'{'{}:3, '{1, 2}:12}");
@@ -2758,13 +2659,12 @@ TEST_F(ManagedValueTest, AssociativeElementKeysOwnTheirDynamicMembers) {
   // Paths through equal keys share one capture, and deleting the entry
   // detaches it.
   talos_rt_object_v1 *paths[2] = {};
-  ASSERT_EQ(talos_rt_v1_reference_path_assoc_create(lane, array, &key,
-                                                      nullptr, 0, 0, nullptr,
-                                                      nullptr, 0, &paths[0]),
+  ASSERT_EQ(talos_rt_v1_reference_path_assoc_create(lane, array, &key, nullptr,
+                                                    0, 0, nullptr, nullptr, 0,
+                                                    &paths[0]),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 pathRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &pathRoot, &paths[0]),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &pathRoot, &paths[0]), TALOS_RT_OK);
   talos_rt_object_v1 *equalArray = nullptr;
   ASSERT_EQ(talos_rt_v1_container_clone(lane, keyArray, &equalArray),
             TALOS_RT_OK);
@@ -2773,8 +2673,8 @@ TEST_F(ManagedValueTest, AssociativeElementKeysOwnTheirDynamicMembers) {
             TALOS_RT_OK);
   talos_rt_assoc_key_v1 equalKey = keyFor(equalArray);
   ASSERT_EQ(talos_rt_v1_reference_path_assoc_create(lane, array, &equalKey,
-                                                      nullptr, 0, 0, nullptr,
-                                                      nullptr, 0, &paths[1]),
+                                                    nullptr, 0, 0, nullptr,
+                                                    nullptr, 0, &paths[1]),
             TALOS_RT_OK);
   EXPECT_EQ(paths[0], paths[1]);
   value = 0;
@@ -2825,8 +2725,7 @@ TEST_F(ManagedValueTest, AssociativeElementKeysCompareActiveTaggedMembers) {
                 plan.data(), plan.size(), &array),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 arrayRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array), TALOS_RT_OK);
   auto keyed = [&](uint8_t tag, uint32_t a, uint32_t b, uint64_t stored) {
     std::array<uint8_t, 9> value{};
     std::memcpy(value.data(), &a, sizeof(a));
@@ -2873,8 +2772,7 @@ TEST_F(ManagedValueTest, AssociativeElementKeyPlansAreValidatedAndInterned) {
 }
 
 TEST_F(ManagedValueTest, BuiltinClassQueriesDistinguishMailboxFromQueue) {
-  talos_rt_object_v1 *mailbox = nullptr, *queue = nullptr,
-                       *semaphore = nullptr;
+  talos_rt_object_v1 *mailbox = nullptr, *queue = nullptr, *semaphore = nullptr;
   ASSERT_EQ(talos_rt_v1_mailbox_create_typed(
                 lane, wordElement.type_id, wordElement.kind, wordElement.flags,
                 wordElement.value_size, wordElement.alignment,
@@ -2885,8 +2783,7 @@ TEST_F(ManagedValueTest, BuiltinClassQueriesDistinguishMailboxFromQueue) {
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_queue_create(lane, &wordElement, UINT64_MAX, &queue),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &queueRoot, &queue),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &queueRoot, &queue), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_semaphore_create(lane, 2, &semaphore), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &semaphoreRoot, &semaphore),
             TALOS_RT_OK);
@@ -2895,8 +2792,8 @@ TEST_F(ManagedValueTest, BuiltinClassQueriesDistinguishMailboxFromQueue) {
         std::pair{semaphore, BuiltinClassKind::Semaphore},
         std::pair{queue, BuiltinClassKind::None}}) {
     ManagedObjectLease lease;
-    ASSERT_EQ(talos_rt_managed_object_acquire(
-                  lane, object, TALOS_RT_MANAGED_INVALID, &lease),
+    ASSERT_EQ(talos_rt_managed_object_acquire(lane, object,
+                                              TALOS_RT_MANAGED_INVALID, &lease),
               TALOS_RT_OK);
     EXPECT_EQ(talos_rt_builtin_class_kind(lease), expected);
   }
@@ -2910,8 +2807,7 @@ TEST_F(ManagedValueTest, BuiltinClassQueriesDistinguishMailboxFromQueue) {
   EXPECT_TRUE(values.empty());
   EXPECT_EQ(talos_rt_mailbox_snapshot(mailbox, nullptr, values),
             TALOS_RT_INVALID_ARGUMENT);
-  ASSERT_EQ(talos_rt_mailbox_snapshot(mailbox, &element, values),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_mailbox_snapshot(mailbox, &element, values), TALOS_RT_OK);
   ASSERT_NE(element, nullptr);
   EXPECT_EQ(element->kind, TALOS_RT_ELEMENT_BITS);
   EXPECT_TRUE(values.empty());
@@ -2933,17 +2829,16 @@ TEST_F(ManagedValueTest, MailboxSnapshotPreservesFourStateFIFOWithoutMutation) {
   auto put = [&](uint8_t value) {
     uint8_t unknown = value & 1;
     uint32_t success = 0;
-    EXPECT_EQ(talos_rt_v1_mailbox_try_put(lane, mailbox, &value, &unknown,
-                                            &success),
-              TALOS_RT_OK);
+    EXPECT_EQ(
+        talos_rt_v1_mailbox_try_put(lane, mailbox, &value, &unknown, &success),
+        TALOS_RT_OK);
     EXPECT_EQ(success, 1u);
   };
   auto get = [&](uint8_t expected) {
     uint8_t value = 0, unknown = 0;
     uint32_t present = 0;
-    EXPECT_EQ(
-        talos_rt_v1_mailbox_try_get(mailbox, &value, &unknown, &present),
-        TALOS_RT_OK);
+    EXPECT_EQ(talos_rt_v1_mailbox_try_get(mailbox, &value, &unknown, &present),
+              TALOS_RT_OK);
     EXPECT_EQ(present, 1u);
     EXPECT_EQ(value, expected);
     EXPECT_EQ(unknown, expected & 1);
@@ -2956,8 +2851,7 @@ TEST_F(ManagedValueTest, MailboxSnapshotPreservesFourStateFIFOWithoutMutation) {
   put(6);
   const talos_rt_element_type_v1 *element = nullptr;
   std::vector<uint8_t> values;
-  ASSERT_EQ(talos_rt_mailbox_snapshot(mailbox, &element, values),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_mailbox_snapshot(mailbox, &element, values), TALOS_RT_OK);
   ASSERT_NE(element, nullptr);
   EXPECT_EQ(element->kind, TALOS_RT_ELEMENT_LOGIC);
   EXPECT_EQ(element->bit_width, 4u);
@@ -2989,11 +2883,10 @@ protected:
     slotKind = kind == BuiltinClassKind::Mailbox
                    ? TALOS_RT_MANAGED_SLOT_MAILBOX
                    : TALOS_RT_MANAGED_SLOT_SEMAPHORE;
-    payloadTrace = {slotOffset, 0,      1, TALOS_RT_TRACE_STRONG,
-                    slotKind,   nullptr};
+    payloadTrace = {slotOffset, 0, 1, TALOS_RT_TRACE_STRONG, slotKind, nullptr};
     classLayout = {TALOS_RT_VERSION, 0,
-                   instanceSize,       alignof(talos_rt_managed_word_v1),
-                   &payloadTrace,      1};
+                   instanceSize,     alignof(talos_rt_managed_word_v1),
+                   &payloadTrace,    1};
     base.version = TALOS_RT_VERSION;
     base.class_id = 1;
     base.instance_size = instanceSize;
@@ -3016,8 +2909,7 @@ protected:
     ordinary.instance_size = sizeof(void *);
     ordinary.layout = nullptr;
     for (auto *descriptor : {&base, &derived, &holder, &ordinary})
-      ASSERT_EQ(talos_rt_v1_class_register(context, descriptor),
-                TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_class_register(context, descriptor), TALOS_RT_OK);
     elementTrace = {0, 0, 1, TALOS_RT_TRACE_STRONG, slotKind, nullptr};
     elementLayout = {TALOS_RT_VERSION,
                      0,
@@ -3057,28 +2949,26 @@ protected:
     EXPECT_EQ(resolved, payload);
     {
       ManagedObjectLease lease;
-      ASSERT_EQ(talos_rt_managed_object_acquire(
-                    lane, outer, TALOS_RT_MANAGED_CLASS, &lease),
+      ASSERT_EQ(talos_rt_managed_object_acquire(lane, outer,
+                                                TALOS_RT_MANAGED_CLASS, &lease),
                 TALOS_RT_OK);
       EXPECT_EQ(talos_rt_builtin_class_kind(lease), kind);
     }
     uint32_t success = 0;
     if (kind == BuiltinClassKind::Semaphore) {
-      ASSERT_EQ(talos_rt_v1_semaphore_try_get(outer, 1, &success),
-                TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_semaphore_try_get(outer, 1, &success), TALOS_RT_OK);
       EXPECT_EQ(success, 1u);
       ASSERT_EQ(talos_rt_v1_semaphore_put(outer, 3), TALOS_RT_OK);
       ASSERT_EQ(talos_rt_v1_semaphore_try_get(payload, 4, &success),
                 TALOS_RT_OK);
       EXPECT_EQ(success, 1u);
-      ASSERT_EQ(talos_rt_v1_semaphore_try_get(outer, 1, &success),
-                TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_semaphore_try_get(outer, 1, &success), TALOS_RT_OK);
       EXPECT_EQ(success, 0u);
     } else {
       uint64_t message = 73;
-      ASSERT_EQ(talos_rt_v1_mailbox_try_put(lane, outer, &message, nullptr,
-                                              &success),
-                TALOS_RT_OK);
+      ASSERT_EQ(
+          talos_rt_v1_mailbox_try_put(lane, outer, &message, nullptr, &success),
+          TALOS_RT_OK);
       EXPECT_EQ(success, 1u);
       uint32_t count = 0;
       ASSERT_EQ(talos_rt_v1_mailbox_num(outer, &count), TALOS_RT_OK);
@@ -3104,25 +2994,21 @@ protected:
 
 TEST_P(BuiltinInheritanceTest, TypedClassSlotRetainsDerivedObjectAndPayload) {
   talos_rt_object_v1 *owner = nullptr, *payload = nullptr, *outer = nullptr;
-  ASSERT_EQ(talos_rt_v1_object_allocate(lane, &holder, &owner),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_object_allocate(lane, &holder, &owner), TALOS_RT_OK);
   talos_rt_gc_root_v1 ownerRoot{}, payloadRoot{}, outerRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &ownerRoot, &owner),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &ownerRoot, &owner), TALOS_RT_OK);
   ASSERT_EQ(createPayload(&payload), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &payloadRoot, &payload),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_object_allocate(lane, &derived, &outer),
-            TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &outerRoot, &outer),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_object_allocate(lane, &derived, &outer), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &outerRoot, &outer), TALOS_RT_OK);
   uint64_t payloadWord = talos_rt_managed_word_from_object(payload);
   uint64_t outerWord = talos_rt_managed_word_from_object(outer);
   ASSERT_EQ(talos_rt_v1_object_write(outer, slotOffset, &payloadWord,
-                                       sizeof(payloadWord)),
+                                     sizeof(payloadWord)),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_object_write(owner, slotOffset, &outerWord,
-                                       sizeof(outerWord)),
+                                     sizeof(outerWord)),
             TALOS_RT_OK);
   const uint64_t identity = talos_rt_v1_object_id(outer);
   ASSERT_NE(identity, 0u);
@@ -3150,13 +3036,12 @@ TEST_P(BuiltinInheritanceTest, TypedClassSlotRetainsDerivedObjectAndPayload) {
             TALOS_RT_OK);
   uint64_t wrongWord = talos_rt_managed_word_from_object(wrong);
   EXPECT_EQ(talos_rt_v1_object_write(owner, slotOffset, &wrongWord,
-                                       sizeof(wrongWord)),
+                                     sizeof(wrongWord)),
             TALOS_RT_INVALID_ARGUMENT);
-  ASSERT_EQ(talos_rt_v1_object_allocate(lane, &ordinary, &wrong),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_object_allocate(lane, &ordinary, &wrong), TALOS_RT_OK);
   wrongWord = talos_rt_managed_word_from_object(wrong);
   EXPECT_EQ(talos_rt_v1_object_write(owner, slotOffset, &wrongWord,
-                                       sizeof(wrongWord)),
+                                     sizeof(wrongWord)),
             TALOS_RT_INVALID_ARGUMENT);
   if (kind == BuiltinClassKind::Mailbox) {
     ASSERT_EQ(talos_rt_v1_semaphore_create(lane, 0, &wrong), TALOS_RT_OK);
@@ -3170,12 +3055,11 @@ TEST_P(BuiltinInheritanceTest, TypedClassSlotRetainsDerivedObjectAndPayload) {
   }
   wrongWord = talos_rt_managed_word_from_object(wrong);
   EXPECT_EQ(talos_rt_v1_object_write(owner, slotOffset, &wrongWord,
-                                       sizeof(wrongWord)),
+                                     sizeof(wrongWord)),
             TALOS_RT_INVALID_ARGUMENT);
   uint64_t stored = 0;
-  ASSERT_EQ(
-      talos_rt_v1_object_read(owner, slotOffset, &stored, sizeof(stored)),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_object_read(owner, slotOffset, &stored, sizeof(stored)),
+            TALOS_RT_OK);
   EXPECT_EQ(stored, outerWord);
   stored = 0;
   ASSERT_EQ(
@@ -3193,8 +3077,7 @@ TEST_P(BuiltinInheritanceTest, TypedClassSlotRetainsDerivedObjectAndPayload) {
 
 TEST_P(BuiltinInheritanceTest, TypedContainerElementRetainsDerivedIdentity) {
   talos_rt_object_v1 *queue = nullptr, *payload = nullptr, *outer = nullptr;
-  ASSERT_EQ(talos_rt_v1_element_type_validate(&builtinElement),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_element_type_validate(&builtinElement), TALOS_RT_OK);
   const talos_rt_element_trace_slot_v1 traceSlot{0, slotKind, 0};
   ASSERT_EQ(talos_rt_v1_container_create_typed(
                 lane, TALOS_RT_CONTAINER_QUEUE, builtinElement.type_id,
@@ -3203,19 +3086,16 @@ TEST_P(BuiltinInheritanceTest, TypedContainerElementRetainsDerivedIdentity) {
                 builtinElement.bit_width, &traceSlot, 1, 0, UINT64_MAX, &queue),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 queueRoot{}, payloadRoot{}, outerRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &queueRoot, &queue),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &queueRoot, &queue), TALOS_RT_OK);
   ASSERT_EQ(createPayload(&payload), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &payloadRoot, &payload),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_object_allocate(lane, &derived, &outer),
-            TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &outerRoot, &outer),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_object_allocate(lane, &derived, &outer), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &outerRoot, &outer), TALOS_RT_OK);
   uint64_t payloadWord = talos_rt_managed_word_from_object(payload);
   uint64_t outerWord = talos_rt_managed_word_from_object(outer);
   ASSERT_EQ(talos_rt_v1_object_write(outer, slotOffset, &payloadWord,
-                                       sizeof(payloadWord)),
+                                     sizeof(payloadWord)),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_queue_push(lane, queue, 1, &outerWord, nullptr),
             TALOS_RT_OK);
@@ -3286,19 +3166,18 @@ TEST_F(ManagedValueTest, SequentialElementSnapshotsTrackResizeAndQueueOrder) {
   for (bool queueKind : {false, true}) {
     talos_rt_object_v1 *container = nullptr;
     ASSERT_EQ(queueKind ? talos_rt_v1_queue_create(lane, &logicElement,
-                                                     UINT64_MAX, &container)
-                        : talos_rt_v1_dynamic_array_create(
-                              lane, &logicElement, 4, &container),
+                                                   UINT64_MAX, &container)
+                        : talos_rt_v1_dynamic_array_create(lane, &logicElement,
+                                                           4, &container),
               TALOS_RT_OK);
     talos_rt_gc_root_v1 root{};
-    ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &root, &container),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &root, &container), TALOS_RT_OK);
     for (uint8_t i = 0; i != 4; ++i) {
       uint8_t value = i + 1, unknown = i & 1;
       ASSERT_EQ(queueKind ? talos_rt_v1_queue_push(lane, container, 0, &value,
-                                                     &unknown)
+                                                   &unknown)
                           : talos_rt_v1_container_write(lane, container, i,
-                                                          &value, &unknown),
+                                                        &value, &unknown),
                 TALOS_RT_OK);
     }
     if (queueKind) {
@@ -3312,15 +3191,14 @@ TEST_F(ManagedValueTest, SequentialElementSnapshotsTrackResizeAndQueueOrder) {
       }
       for (uint8_t value : {5, 6}) {
         uint8_t unknown = value & 1;
-        ASSERT_EQ(
-            talos_rt_v1_queue_push(lane, container, 0, &value, &unknown),
-            TALOS_RT_OK);
+        ASSERT_EQ(talos_rt_v1_queue_push(lane, container, 0, &value, &unknown),
+                  TALOS_RT_OK);
       }
     }
     VPIContainerElementSnapshot metadata;
-    ASSERT_EQ(talos_rt_container_element_snapshot(container, std::nullopt,
-                                                    &metadata),
-              TALOS_RT_OK);
+    ASSERT_EQ(
+        talos_rt_container_element_snapshot(container, std::nullopt, &metadata),
+        TALOS_RT_OK);
     EXPECT_EQ(metadata.kind, queueKind ? TALOS_RT_CONTAINER_QUEUE
                                        : TALOS_RT_CONTAINER_DYNAMIC_ARRAY);
     EXPECT_EQ(metadata.size, 4u);
@@ -3334,9 +3212,8 @@ TEST_F(ManagedValueTest, SequentialElementSnapshotsTrackResizeAndQueueOrder) {
                                         : (std::vector<uint8_t>{3, 0}));
     EXPECT_EQ(talos_rt_v1_container_size(container), 4u);
     auto copied = selected.value;
-    ASSERT_EQ(queueKind
-                  ? talos_rt_v1_container_delete(container)
-                  : talos_rt_v1_dynamic_array_resize(lane, container, 1),
+    ASSERT_EQ(queueKind ? talos_rt_v1_container_delete(container)
+                        : talos_rt_v1_dynamic_array_resize(lane, container, 1),
               TALOS_RT_OK);
     EXPECT_EQ(selected.value, copied);
     EXPECT_EQ(talos_rt_container_element_snapshot(container, 2, &selected),
@@ -3344,9 +3221,9 @@ TEST_F(ManagedValueTest, SequentialElementSnapshotsTrackResizeAndQueueOrder) {
     EXPECT_EQ(selected.kind, 0u);
     EXPECT_EQ(selected.element, nullptr);
     EXPECT_TRUE(selected.value.empty());
-    ASSERT_EQ(talos_rt_container_element_snapshot(container, std::nullopt,
-                                                    &selected),
-              TALOS_RT_OK);
+    ASSERT_EQ(
+        talos_rt_container_element_snapshot(container, std::nullopt, &selected),
+        TALOS_RT_OK);
     EXPECT_EQ(selected.size, queueKind ? 0u : 1u);
     EXPECT_EQ(talos_rt_container_element_snapshot(container, 0, nullptr),
               TALOS_RT_INVALID_ARGUMENT);

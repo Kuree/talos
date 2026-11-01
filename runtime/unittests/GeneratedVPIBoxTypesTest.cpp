@@ -36,22 +36,22 @@ TEST(GeneratedDesignDatabase, BoxTypeLayouts) {
   for (unsigned byte = 0; byte != 8; ++byte)
     checksum |= uint64_t{encoded->bytecode[32 + byte]} << (byte * 8);
   talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                               encoded->executionFlags,
-                                               0,
-                                               encoded->bytecode.data(),
-                                               encoded->bytecode.size(),
-                                               encoded->designDatabase.data(),
-                                               encoded->designDatabase.size(),
-                                               encoded->stateBitCount,
-                                               checksum,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0};
+                                             encoded->executionFlags,
+                                             0,
+                                             encoded->bytecode.data(),
+                                             encoded->bytecode.size(),
+                                             encoded->designDatabase.data(),
+                                             encoded->designDatabase.size(),
+                                             encoded->stateBitCount,
+                                             checksum,
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
   ASSERT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_OK);
   talos_rt_context *runtime = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &runtime),
@@ -66,14 +66,14 @@ TEST(GeneratedDesignDatabase, BoxTypeLayouts) {
   talos_rt_design_bytecode_entry_v1 entry{&execution, initial->index, 0};
   uint64_t scratchSize = 0, scratchAlignment = 0;
   ASSERT_EQ(talos_rt_validate_design_bytecode(entry, runtime, &scratchSize,
-                                                &scratchAlignment),
+                                              &scratchAlignment),
             TALOS_RT_OK);
   ASSERT_LE(scratchAlignment, alignof(uint64_t));
   std::vector<uint64_t> frame((scratchSize + 7) / 8);
   talos_rt_fragment_action_v1 action{};
   ASSERT_EQ(talos_rt_execute_design_bytecode(entry, runtime, frame.data(),
-                                               frame.size() * 8, 0, scratchSize,
-                                               0, 0, &action),
+                                             frame.size() * 8, 0, scratchSize,
+                                             0, 0, &action),
             TALOS_RT_OK);
   ASSERT_EQ(action.kind, TALOS_RT_FRAGMENT_TERMINATE);
   talos_rt_design_cursor_v1 output{};
@@ -90,10 +90,9 @@ TEST(GeneratedDesignDatabase, BoxTypeLayouts) {
             TALOS_RT_OK);
   const talos_rt_element_type_v1 *element = nullptr;
   std::vector<uint8_t> planes;
-  ASSERT_EQ(
-      talos_rt_box_snapshot(talos_rt_object_from_managed_word(boxWord),
-                              &boxID, &element, planes),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_box_snapshot(talos_rt_object_from_managed_word(boxWord),
+                                  &boxID, &element, planes),
+            TALOS_RT_OK);
   EXPECT_EQ(boxID, 7u);
   ASSERT_NE(element, nullptr);
   EXPECT_EQ(element->bit_width, 32u);
@@ -105,12 +104,10 @@ TEST(GeneratedDesignDatabase, BoxTypeLayouts) {
   ASSERT_EQ(talos_rt_v1_gc_lane_destroy(lane), TALOS_RT_OK);
 
   VPIBoxTypeBinding signedType{}, unsignedType{}, enumType{};
-  ASSERT_EQ(talos_rt_cached_vpi_box_type(runtime, 7, &signedType),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_cached_vpi_box_type(runtime, 7, &signedType), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_cached_vpi_box_type(runtime, 8, &unsignedType),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_cached_vpi_box_type(runtime, 9, &enumType),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_cached_vpi_box_type(runtime, 9, &enumType), TALOS_RT_OK);
   EXPECT_EQ(signedType.physical.offset, unsignedType.physical.offset);
   EXPECT_EQ(signedType.physical.offset, enumType.physical.offset);
   EXPECT_NE(signedType.semantic.offset, unsignedType.semantic.offset);
@@ -129,10 +126,9 @@ TEST(GeneratedDesignDatabase, BoxTypeLayouts) {
                 runtime, enumType.semantic, 0, &enumBase),
             TALOS_RT_OK);
   EXPECT_EQ(talos_rt_cached_vpi_value_element_type(runtime, enumType.layout,
-                                                     enumBase.child, &physical),
+                                                   enumBase.child, &physical),
             TALOS_RT_EOF);
-  EXPECT_EQ(talos_rt_cached_vpi_box_type(runtime, 10, &enumType),
-            TALOS_RT_EOF);
+  EXPECT_EQ(talos_rt_cached_vpi_box_type(runtime, 10, &enumType), TALOS_RT_EOF);
   talos_rt_v1_context_destroy(runtime);
 
   HeaderView header(encoded->designDatabase.data());
@@ -159,8 +155,7 @@ TEST(GeneratedDesignDatabase, BoxTypeLayouts) {
     HeaderWriter(image.data()).setChecksum(hash);
     execution.design_database = image.data();
     execution.design_database_size = image.size();
-    EXPECT_EQ(talos_rt_v1_design_validate(&execution),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_INVALID_DESIGN);
   };
   ASSERT_EQ(ValueElementBindingView(encoded->designDatabase.data() + rows)
                 .getOwnerKind(),

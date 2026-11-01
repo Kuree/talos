@@ -40,8 +40,7 @@ struct IsolatedWireDriverTopology {
   /// [memberLow, memberLow + width) of `member`, bit `low + i` matching
   /// `memberLow + i`, or `memberLow + width - 1 - i` when reversed.
   struct AliasRun {
-    uint64_t low = 0, width = 0, member = 0, memberLow = 0,
-             memberWidth = 0;
+    uint64_t low = 0, width = 0, member = 0, memberLow = 0, memberWidth = 0;
     bool reversed = false;
   };
   llvm::DenseSet<uint64_t> singleDriverNets;

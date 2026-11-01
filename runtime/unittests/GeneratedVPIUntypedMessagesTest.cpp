@@ -5,11 +5,11 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Analysis/ManagedClassLayoutAnalysis.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "llvm/IR/DataLayout.h"
 #include "gtest/gtest.h"
@@ -47,22 +47,22 @@ TEST(GeneratedDesignDatabase, UntypedMailboxMessages) {
   for (unsigned byte = 0; byte != 8; ++byte)
     checksum |= uint64_t{encoded->bytecode[32 + byte]} << (byte * 8);
   talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                               encoded->executionFlags,
-                                               0,
-                                               encoded->bytecode.data(),
-                                               encoded->bytecode.size(),
-                                               encoded->designDatabase.data(),
-                                               encoded->designDatabase.size(),
-                                               encoded->stateBitCount,
-                                               checksum,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0};
+                                             encoded->executionFlags,
+                                             0,
+                                             encoded->bytecode.data(),
+                                             encoded->bytecode.size(),
+                                             encoded->designDatabase.data(),
+                                             encoded->designDatabase.size(),
+                                             encoded->stateBitCount,
+                                             checksum,
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
   ASSERT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_OK);
   talos_rt_context *runtime = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &runtime),
@@ -83,7 +83,7 @@ TEST(GeneratedDesignDatabase, UntypedMailboxMessages) {
   std::array<talos_rt_object_v1 *, 13> objects{};
   talos_rt_gc_root_range_v1 roots{};
   ASSERT_EQ(talos_rt_v1_gc_root_range_push(lane, &roots, objects.data(),
-                                             objects.size()),
+                                           objects.size()),
             TALOS_RT_OK);
   auto slotsFor = [](const talos::sim::ElementDescriptor &descriptor) {
     std::vector<talos_rt_element_trace_slot_v1> slots;
@@ -176,13 +176,12 @@ TEST(GeneratedDesignDatabase, UntypedMailboxMessages) {
   key.kind = TALOS_RT_ASSOC_KEY_SIGNED;
   key.width = 32;
   key.value = static_cast<uint32_t>(-4);
-  ASSERT_EQ(
-      talos_rt_v1_assoc_write(lane, objects[10], &key, &second, nullptr),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_assoc_write(lane, objects[10], &key, &second, nullptr),
+            TALOS_RT_OK);
   const auto *classLayout = layouts->lookup(1);
   ASSERT_NE(classLayout, nullptr);
   const talos_rt_trace_layout_v1 trace{
-      TALOS_RT_VERSION,     0,       classLayout->size,
+      TALOS_RT_VERSION,       0,       classLayout->size,
       classLayout->alignment, nullptr, 0};
   talos_rt_class_descriptor_v1 classDescriptor{};
   classDescriptor.version = TALOS_RT_VERSION;
@@ -190,8 +189,7 @@ TEST(GeneratedDesignDatabase, UntypedMailboxMessages) {
   classDescriptor.instance_size = classLayout->size;
   classDescriptor.instance_alignment = classLayout->alignment;
   classDescriptor.layout = &trace;
-  ASSERT_EQ(talos_rt_v1_class_register(runtime, &classDescriptor),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_class_register(runtime, &classDescriptor), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_object_allocate(lane, &classDescriptor, &objects[11]),
             TALOS_RT_OK);
   talos_rt_string_v1 string = 0;
@@ -199,9 +197,8 @@ TEST(GeneratedDesignDatabase, UntypedMailboxMessages) {
   ASSERT_EQ(talos_rt_v1_gc_managed_root_push(lane, &stringRoot, &string),
             TALOS_RT_OK);
   const std::string text = "untyped source identity survives collection";
-  ASSERT_EQ(
-      talos_rt_v1_string_create(lane, text.data(), text.size(), &string),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_string_create(lane, text.data(), text.size(), &string),
+            TALOS_RT_OK);
   std::array<uint8_t, 17> wide{}, unknown{};
   wide[0] = 0x12;
   unknown[0] = 0x18;
@@ -219,7 +216,7 @@ TEST(GeneratedDesignDatabase, UntypedMailboxMessages) {
       &string, record.data(), &sparseWord, &classWord};
   for (size_t i = 0; i != messageCount; ++i) {
     ASSERT_EQ(talos_rt_v1_container_write(lane, objects[i + 1], 0, values[i],
-                                            i == 3 ? unknown.data() : nullptr),
+                                          i == 3 ? unknown.data() : nullptr),
               TALOS_RT_OK);
     // Mailbox puts copy value containers; cloning each outer box explicitly
     // also verifies that its source descriptor follows ordinary value copies.
@@ -236,13 +233,12 @@ TEST(GeneratedDesignDatabase, UntypedMailboxMessages) {
         TALOS_RT_OK);
     EXPECT_EQ(copiedID, i + 1);
     ASSERT_NE(copiedElement, nullptr);
-    const bool four =
-        (copiedElement->flags & TALOS_RT_ELEMENT_FOUR_STATE) != 0;
+    const bool four = (copiedElement->flags & TALOS_RT_ELEMENT_FOUR_STATE) != 0;
     EXPECT_EQ(copiedPlanes.size(), copiedElement->value_size * (four ? 2 : 1));
     uint32_t success = 0;
     const uint64_t boxed = talos_rt_managed_word_from_object(objects[i + 1]);
     ASSERT_EQ(talos_rt_v1_mailbox_try_put(lane, objects[0], &boxed, nullptr,
-                                            &success),
+                                          &success),
               TALOS_RT_OK);
     ASSERT_EQ(success, 1u);
   }
@@ -343,13 +339,12 @@ TEST(GeneratedDesignDatabase, UntypedMailboxMessages) {
                 word.alignment, word.bitWidth, nullptr, 0, 1, UINT64_MAX,
                 &objects[12]),
             TALOS_RT_OK);
-  ASSERT_EQ(
-      talos_rt_v1_container_write(lane, objects[12], 0, &number, nullptr),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_container_write(lane, objects[12], 0, &number, nullptr),
+            TALOS_RT_OK);
   const uint64_t unbound = talos_rt_managed_word_from_object(objects[12]);
   uint32_t inserted = 0;
   ASSERT_EQ(talos_rt_v1_mailbox_try_put(lane, objects[0], &unbound, nullptr,
-                                          &inserted),
+                                        &inserted),
             TALOS_RT_OK);
   ASSERT_EQ(inserted, 1u);
   EXPECT_EQ(vpi_iterate(vpiMessages, mailbox), nullptr);
@@ -359,11 +354,9 @@ TEST(GeneratedDesignDatabase, UntypedMailboxMessages) {
   EXPECT_EQ(count, messageCount + 1);
   // Neither snapshots nor their pending iterators keep managed values alive.
   const uint64_t nullWord = 0;
-  ASSERT_EQ(
-      talos_rt_v1_design_write(runtime, storage, &nullWord, nullptr, 64),
-      TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_gc_managed_root_pop(lane, &stringRoot),
+  ASSERT_EQ(talos_rt_v1_design_write(runtime, storage, &nullWord, nullptr, 64),
             TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_managed_root_pop(lane, &stringRoot), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_root_range_pop(lane, &roots), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);
   talos_rt_gc_statistics_v1 statistics{};

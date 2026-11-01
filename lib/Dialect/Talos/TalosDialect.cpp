@@ -2,9 +2,9 @@
 
 #include "talos/Dialect/ForeachLoopMetadata.h"
 #include "talos/Dialect/ImplicitLoopScope.h"
-#include "talos/Dialect/Talos/TalosOps.h"
 #include "talos/Dialect/SourceClassMetadata.h"
 #include "talos/Dialect/SourceParameterMetadata.h"
+#include "talos/Dialect/Talos/TalosOps.h"
 
 #include "mlir/IR/AttrTypeSubElements.h"
 #include "mlir/IR/Diagnostics.h"

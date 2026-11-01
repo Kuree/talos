@@ -130,10 +130,8 @@ makeProcessDescriptor(ModuleOp module, SymbolTable &embeddedSymbols,
 
   std::string continuationsName = (baseName + ".__talos_continuations").str();
   std::string layoutName = (baseName + ".__talos_frame_layout").str();
-  std::string descriptorName =
-      (baseName + ".__talos_process_descriptor").str();
-  std::string designBytecodeName =
-      (baseName + ".__talos_bytecode_entry").str();
+  std::string descriptorName = (baseName + ".__talos_process_descriptor").str();
+  std::string designBytecodeName = (baseName + ".__talos_bytecode_entry").str();
   constexpr StringLiteral executionName = "__talos_execution_descriptor_v1";
   // These embedded-image symbols are frozen before process finalization.
   // Generated wrappers and frame globals do not change their presence.
@@ -166,8 +164,8 @@ makeProcessDescriptor(ModuleOp module, SymbolTable &embeddedSymbols,
     llvm::append_range(fieldWords, row);
   }
   ArrayAttr fields = ArrayAttr::get(context, fieldRows);
-  uint64_t fieldsHash = talos_stable_hash(
-      fieldWords.data(), fieldWords.size() * sizeof(uint64_t));
+  uint64_t fieldsHash = talos_stable_hash(fieldWords.data(),
+                                          fieldWords.size() * sizeof(uint64_t));
   std::string sharedName =
       "__talos_frame_fields_" + llvm::utohexstr(fieldsHash, true);
   std::string fieldsName = sharedName;
@@ -259,11 +257,10 @@ makeProcessDescriptor(ModuleOp module, SymbolTable &embeddedSymbols,
               insertValue(builder, location, descriptor,
                           llvmConstant(builder, location, i32, flags), 2);
         uint32_t availableTiers =
-            bytecodeOnly
-                ? TALOS_RT_TIER_MASK_BYTECODE
-                : (hasDesignBytecode ? TALOS_RT_TIER_MASK_NATIVE |
-                                           TALOS_RT_TIER_MASK_BYTECODE
-                                     : TALOS_RT_TIER_MASK_NATIVE);
+            bytecodeOnly ? TALOS_RT_TIER_MASK_BYTECODE
+                         : (hasDesignBytecode ? TALOS_RT_TIER_MASK_NATIVE |
+                                                    TALOS_RT_TIER_MASK_BYTECODE
+                                              : TALOS_RT_TIER_MASK_NATIVE);
         descriptor = insertValue(
             builder, location, descriptor,
             llvmConstant(builder, location, i32, availableTiers), 3);
@@ -284,9 +281,8 @@ makeProcessDescriptor(ModuleOp module, SymbolTable &embeddedSymbols,
               builder, location, descriptor,
               LLVM::AddressOfOp::create(
                   builder, location, pointer,
-                  tableProcess
-                      ? "talos_rt_v1_table_process_execute"
-                      : (baseName + ".__talos_native_execute").str()),
+                  tableProcess ? "talos_rt_v1_table_process_execute"
+                               : (baseName + ".__talos_native_execute").str()),
               7);
           descriptor =
               insertValue(builder, location, descriptor,
@@ -312,11 +308,11 @@ makeProcessDescriptor(ModuleOp module, SymbolTable &embeddedSymbols,
           return descriptor;
         Value extended = LLVM::ZeroOp::create(builder, location, globalType);
         extended = insertValue(builder, location, extended, descriptor, 0);
-        return insertValue(builder, location, extended,
-                           LLVM::AddressOfOp::create(
-                               builder, location, pointer,
-                               (baseName + ".__talos_table.plan").str()),
-                           1);
+        return insertValue(
+            builder, location, extended,
+            LLVM::AddressOfOp::create(builder, location, pointer,
+                                      (baseName + ".__talos_table.plan").str()),
+            1);
       });
   return success();
 }

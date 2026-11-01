@@ -106,9 +106,9 @@ public:
       ArrayRef<int8_t> bytes = blob.asArrayRef();
       coverage::Database database;
       coverage::Diagnostic diagnostic;
-      if (coverage::Status status = coverage::parse(
-              reinterpret_cast<const uint8_t *>(bytes.data()), bytes.size(),
-              database, {}, &diagnostic);
+      if (coverage::Status status =
+              coverage::parse(reinterpret_cast<const uint8_t *>(bytes.data()),
+                              bytes.size(), database, {}, &diagnostic);
           status != coverage::Status::Ok) {
         module.emitError() << "invalid coverage schema: "
                            << coverage::statusName(status) << " "
@@ -119,8 +119,8 @@ public:
       if (failed(print(database, os, expressions, module)))
         return signalPassFailure();
     }
-    WalkResult result = getOperation()->walk(
-        [&](talos::sim::SimCovergroupSampleOp sample) {
+    WalkResult result =
+        getOperation()->walk([&](talos::sim::SimCovergroupSampleOp sample) {
           return failed(checkSample(sample, expressions))
                      ? WalkResult::interrupt()
                      : WalkResult::advance();
@@ -187,8 +187,8 @@ private:
          << " terminal_value_set=" << alternative.terminalValueSet
          << " first_step=" << alternative.firstStep
          << " step_count=" << alternative.stepCount
-         << " ordinal=" << alternative.ordinal
-         << " flags=" << alternative.flags << '\n';
+         << " ordinal=" << alternative.ordinal << " flags=" << alternative.flags
+         << '\n';
     for (const coverage::TransitionStep &step : db.transitionSteps)
       os << "transition_step bin=" << step.bin << " value_set=" << step.valueSet
          << " lower_expression=" << step.lowerExpression
@@ -246,8 +246,8 @@ private:
               predicate.operandCount <=
           operands.size())
         llvm::interleave(
-            operands.slice(predicate.firstOperand, predicate.operandCount),
-            os, ",");
+            operands.slice(predicate.firstOperand, predicate.operandCount), os,
+            ",");
       os << " expression=" << predicate.expression
          << " target=" << predicate.target << " kind=" << raw(predicate.kind)
          << " width=" << predicate.bitWidth
@@ -277,8 +277,8 @@ private:
          << " kind=" << raw(container.kind)
          << " key_kind=" << raw(container.keyKind)
          << " element_type=" << container.elementType
-         << " key_width=" << container.keyWidth
-         << " bound=" << container.bound << '\n';
+         << " key_width=" << container.keyWidth << " bound=" << container.bound
+         << '\n';
     for (const coverage::FunctionalAggregateType &aggregate :
          db.functionalAggregateTypes)
       os << "functional_aggregate_type id=" << aggregate.id
@@ -363,10 +363,10 @@ private:
 
   /// A sample batch passes sample-phase expression results in result-ordinal
   /// order, each typed by the expression's result kind.
-  static LogicalResult checkSample(
-      talos::sim::SimCovergroupSampleOp sample,
-      const llvm::DenseMap<uint64_t, coverage::FunctionalExpression>
-          &expressions) {
+  static LogicalResult
+  checkSample(talos::sim::SimCovergroupSampleOp sample,
+              const llvm::DenseMap<uint64_t, coverage::FunctionalExpression>
+                  &expressions) {
     ArrayRef<int64_t> ids = sample.getExpressionIds();
     if (ids.size() != sample.getValues().size())
       return sample.emitError("sample ID/type cardinality mismatch");

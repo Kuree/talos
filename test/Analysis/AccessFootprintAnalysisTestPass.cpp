@@ -18,9 +18,7 @@ public:
       *this, "print-handles",
       llvm::cl::desc("print block executability and SSA handle facts"),
       llvm::cl::init(false)};
-  StringRef getArgument() const final {
-    return "test-talos-access-footprints";
-  }
+  StringRef getArgument() const final { return "test-talos-access-footprints"; }
   StringRef getDescription() const final {
     return "print reachable reference access footprints";
   }

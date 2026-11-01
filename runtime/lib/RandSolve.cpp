@@ -151,8 +151,8 @@ bool buildSolveBeforeLayers(const std::vector<SolveBeforeEdge> &edges,
                             std::vector<uint64_t> &layers) {
   std::vector<talos::runtime::OrderMask> masks;
   if (!talos::runtime::buildSolveOrderLayers(toSolveOrderEdges(edges),
-                                               {mutableMask}, constraintMask,
-                                               false, masks))
+                                             {mutableMask}, constraintMask,
+                                             false, masks))
     return false;
   layers.clear();
   for (const auto &mask : masks)
@@ -619,13 +619,11 @@ randomSolveModesImpl(talos_rt_context *context, const uint8_t *program,
                           TALOS_RT_RANDOM_PROGRAM_HAS_GUARD_INPUT_MASKS |
                           TALOS_RT_RANDOM_PROGRAM_HAS_SAMPLER_PLAN |
                           TALOS_RT_RANDOM_PROGRAM_HAS_REAL |
-                          TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY)) !=
-            0)
+                          TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY)) != 0)
       return TALOS_RT_INVALID_ARGUMENT;
     bool real = (programFlags & TALOS_RT_RANDOM_PROGRAM_HAS_REAL) != 0;
-    if (real &&
-        (!(programFlags & TALOS_RT_RANDOM_PROGRAM_HAS_SAMPLER_PLAN) ||
-         !(programFlags & TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM)))
+    if (real && (!(programFlags & TALOS_RT_RANDOM_PROGRAM_HAS_SAMPLER_PLAN) ||
+                 !(programFlags & TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM)))
       return TALOS_RT_INVALID_ARGUMENT;
     size_t bundleSize = static_cast<size_t>(programSize);
     if (programFlags & TALOS_RT_RANDOM_PROGRAM_HAS_SAMPLER_PLAN) {
@@ -652,8 +650,7 @@ randomSolveModesImpl(talos_rt_context *context, const uint8_t *program,
       return TALOS_RT_INVALID_ARGUMENT;
     uint32_t solveEdgeCount = 0;
     if (encodedSolveBefore) {
-      if (programSize <
-          instructionEnd + TALOS_RT_RANDOM_SOLVE_EDGE_HEADER_SIZE)
+      if (programSize < instructionEnd + TALOS_RT_RANDOM_SOLVE_EDGE_HEADER_SIZE)
         return TALOS_RT_INVALID_ARGUMENT;
       solveEdgeCount = read32(program + instructionEnd);
       instructionEnd += TALOS_RT_RANDOM_SOLVE_EDGE_HEADER_SIZE +
@@ -706,8 +703,7 @@ randomSolveModesImpl(talos_rt_context *context, const uint8_t *program,
         return TALOS_RT_INVALID_ARGUMENT;
       domainGroupCount = read32(program + instructionEnd);
       domainRecordCount = read32(program + instructionEnd + 4);
-      domainRecordsOffset =
-          instructionEnd + TALOS_RT_RANDOM_DOMAIN_HEADER_SIZE;
+      domainRecordsOffset = instructionEnd + TALOS_RT_RANDOM_DOMAIN_HEADER_SIZE;
       if (domainRecordCount > (UINT64_MAX - domainRecordsOffset) /
                                   TALOS_RT_RANDOM_DOMAIN_RECORD_SIZE)
         return TALOS_RT_INVALID_ARGUMENT;
@@ -726,7 +722,7 @@ randomSolveModesImpl(talos_rt_context *context, const uint8_t *program,
     talos::random::SoftPrioritySet softPriorities;
     const uint8_t *cursor = program + TALOS_RT_RANDOM_PROGRAM_HEADER_SIZE;
     talos::random::DistBitSequence distBits(encodedCaptures, std::nullopt,
-                                              weighted);
+                                            weighted);
     for (uint32_t index = 0; index != instructionCount; ++index) {
       Instruction instruction{cursor[0], cursor[1], cursor[2],
                               read32(cursor + 4), read64(cursor + 8)};
@@ -736,8 +732,7 @@ randomSolveModesImpl(talos_rt_context *context, const uint8_t *program,
                           instruction.immediate) ||
           !validateInstruction(instruction, aggregateWidth, encodedCaptures,
                                stackWidths, temporaryWidths, maxDepth, sawHard,
-                               sawSoft, softPriorities, instructionCount,
-                               real))
+                               sawSoft, softPriorities, instructionCount, real))
         return TALOS_RT_INVALID_ARGUMENT;
       instructions.push_back(instruction);
       cursor += TALOS_RT_RANDOM_INSTRUCTION_SIZE;
@@ -826,8 +821,7 @@ randomSolveModesImpl(talos_rt_context *context, const uint8_t *program,
             range.coefficient == 0 || range.weightCapture >= captureCount ||
             (range.flags & ~(TALOS_RT_RANDOM_DIST_WEIGHT_SIGNED |
                              TALOS_RT_RANDOM_DIST_TARGET_SIGNED)) != 0 ||
-            (range.constraintBlock !=
-                 TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1 &&
+            (range.constraintBlock != TALOS_RT_RANDOM_UNMASKED_CONSTRAINT_V1 &&
              range.constraintBlock >= 64))
           return TALOS_RT_INVALID_ARGUMENT;
         std::vector<DistRange> &groupRanges = distGroups[group];
@@ -1230,8 +1224,8 @@ randomSolveModesImpl(talos_rt_context *context, const uint8_t *program,
         totalWeight += group.weight;
       }
       uint64_t selected = 0;
-      talos_rt_status status = talos_rt_v1_random_state_bounded(
-          randomState, totalWeight, &selected);
+      talos_rt_status status =
+          talos_rt_v1_random_state_bounded(randomState, totalWeight, &selected);
       if (status != TALOS_RT_OK)
         return status;
       for (const WeightedCandidateGroup &group : weightedCandidateGroups) {

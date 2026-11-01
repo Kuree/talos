@@ -29,22 +29,22 @@ TEST(GeneratedDesignDatabase, ExactVPIElementDescriptors) {
   for (unsigned i = 0; i != 8; ++i)
     checksum |= uint64_t{encoded->bytecode[32 + i]} << (i * 8);
   talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                               encoded->executionFlags,
-                                               0,
-                                               encoded->bytecode.data(),
-                                               encoded->bytecode.size(),
-                                               encoded->designDatabase.data(),
-                                               encoded->designDatabase.size(),
-                                               encoded->stateBitCount,
-                                               checksum,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0};
+                                             encoded->executionFlags,
+                                             0,
+                                             encoded->bytecode.data(),
+                                             encoded->bytecode.size(),
+                                             encoded->designDatabase.data(),
+                                             encoded->designDatabase.size(),
+                                             encoded->stateBitCount,
+                                             checksum,
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
   ASSERT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_OK);
   talos_rt_context *runtime = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &runtime),
@@ -53,8 +53,7 @@ TEST(GeneratedDesignDatabase, ExactVPIElementDescriptors) {
   for (auto declaration :
        design.getBody().front().getOps<talos::sim::SimVPIBoxTypeDeclOp>()) {
     SCOPED_TRACE(declaration.getSymName().str());
-    auto native =
-        talos::sim::getElementDescriptor(declaration.getValueType());
+    auto native = talos::sim::getElementDescriptor(declaration.getValueType());
     ASSERT_TRUE(native);
     VPIBoxTypeBinding binding;
     ASSERT_EQ(
@@ -80,24 +79,24 @@ TEST(GeneratedDesignDatabase, ExactVPIElementDescriptors) {
         entries.push_back({0, 0, 1, TALOS_RT_TRACE_STRONG, slot, nullptr});
     }
     talos_rt_trace_layout_v1 trace{TALOS_RT_VERSION,
+                                   0,
+                                   native->valueSize,
+                                   native->alignment,
+                                   entries.empty() ? nullptr : entries.data(),
+                                   entries.size()};
+    talos_rt_element_type_v1 element{TALOS_RT_VERSION,
+                                     static_cast<uint32_t>(native->kind),
+                                     native->typeID,
+                                     static_cast<uint32_t>(native->flags),
                                      0,
                                      native->valueSize,
                                      native->alignment,
-                                     entries.empty() ? nullptr : entries.data(),
-                                     entries.size()};
-    talos_rt_element_type_v1 element{TALOS_RT_VERSION,
-                                       static_cast<uint32_t>(native->kind),
-                                       native->typeID,
-                                       static_cast<uint32_t>(native->flags),
-                                       0,
-                                       native->valueSize,
-                                       native->alignment,
-                                       native->bitWidth,
-                                       entries.empty() ? nullptr : &trace,
-                                       nullptr};
+                                     native->bitWidth,
+                                     entries.empty() ? nullptr : &trace,
+                                     nullptr};
     auto matches = [&](const talos_rt_element_type_v1 &candidate) {
       return talos_rt_vpi_element_matches(runtime, binding.layout,
-                                            binding.semantic, &candidate);
+                                          binding.semantic, &candidate);
     };
     ASSERT_EQ(talos_rt_v1_element_type_validate(&element), TALOS_RT_OK);
     EXPECT_EQ(matches(element), TALOS_RT_OK);
@@ -108,9 +107,8 @@ TEST(GeneratedDesignDatabase, ExactVPIElementDescriptors) {
     signedStorage.flags ^= TALOS_RT_ELEMENT_SIGNED;
     EXPECT_EQ(matches(signedStorage), TALOS_RT_OK);
     auto wrong = element;
-    wrong.kind = element.kind == TALOS_RT_ELEMENT_BITS
-                     ? TALOS_RT_ELEMENT_LOGIC
-                     : TALOS_RT_ELEMENT_BITS;
+    wrong.kind = element.kind == TALOS_RT_ELEMENT_BITS ? TALOS_RT_ELEMENT_LOGIC
+                                                       : TALOS_RT_ELEMENT_BITS;
     EXPECT_EQ(matches(wrong), TALOS_RT_INVALID_ARGUMENT);
     wrong = element;
     ++wrong.bit_width;
@@ -156,14 +154,13 @@ TEST(GeneratedDesignDatabase, ExactVPIElementDescriptors) {
     }
     if (declaration.getSymName() == "overlap") {
       ASSERT_EQ(entries.size(), 1u);
-      EXPECT_EQ(entries[0].slot_kind,
-                TALOS_RT_MANAGED_SLOT_CANDIDATE |
-                    TALOS_RT_MANAGED_ROOT_KIND_STRING |
-                    TALOS_RT_MANAGED_ROOT_KIND_CLASS |
-                    TALOS_RT_MANAGED_ROOT_KIND_CONTAINER);
+      EXPECT_EQ(entries[0].slot_kind, TALOS_RT_MANAGED_SLOT_CANDIDATE |
+                                          TALOS_RT_MANAGED_ROOT_KIND_STRING |
+                                          TALOS_RT_MANAGED_ROOT_KIND_CLASS |
+                                          TALOS_RT_MANAGED_ROOT_KIND_CONTAINER);
       auto narrowed = entries[0];
-      narrowed.slot_kind = TALOS_RT_MANAGED_SLOT_CANDIDATE |
-                           TALOS_RT_MANAGED_ROOT_KIND_STRING;
+      narrowed.slot_kind =
+          TALOS_RT_MANAGED_SLOT_CANDIDATE | TALOS_RT_MANAGED_ROOT_KIND_STRING;
       auto narrowTrace = trace;
       narrowTrace.entries = &narrowed;
       wrong = element;
@@ -184,13 +181,10 @@ TEST(GeneratedDesignDatabase, ExactVPIElementDescriptors) {
       ASSERT_EQ(entries[1].offset, 24u);
       auto childEntry = entries[0];
       talos_rt_trace_layout_v1 child{TALOS_RT_VERSION, 0, 16, 1,
-                                       &childEntry,        1};
-      talos_rt_trace_entry_v1 embedded{0,
-                                         16,
-                                         2,
-                                         TALOS_RT_TRACE_EMBEDDED,
-                                         TALOS_RT_MANAGED_SLOT_INVALID,
-                                         &child};
+                                     &childEntry,      1};
+      talos_rt_trace_entry_v1 embedded{
+          0,     16, 2, TALOS_RT_TRACE_EMBEDDED, TALOS_RT_MANAGED_SLOT_INVALID,
+          &child};
       auto embeddedTrace = trace;
       embeddedTrace.entries = &embedded;
       embeddedTrace.entry_count = 1;
@@ -205,7 +199,7 @@ TEST(GeneratedDesignDatabase, ExactVPIElementDescriptors) {
       EXPECT_EQ(element.value_size, 4u);
     }
     EXPECT_EQ(talos_rt_vpi_element_matches(runtime, binding.layout,
-                                             binding.semantic, nullptr),
+                                           binding.semantic, nullptr),
               TALOS_RT_INVALID_ARGUMENT);
     ++checked;
   }

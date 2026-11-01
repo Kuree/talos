@@ -14,11 +14,11 @@
 #include "talos/Analysis/SimulationVPIAnalysis.h"
 #include "talos/Runtime/Runtime.h"
 
-#include "talos/Analysis/SSAValueAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
+#include "talos/Analysis/SSAValueAnalysis.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"

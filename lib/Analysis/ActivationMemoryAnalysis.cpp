@@ -52,9 +52,9 @@ public:
       // Each lane is a separate relation at every node that touches the
       // type. Past the cap, the padding precision is not worth that cost.
       auto runs = getLogicalStorageRuns(type, maximumLogicalLanes);
-      if (!runs || (runs->size() == 1 && runs->front().first == 0 &&
-                    runs->front().second ==
-                        *getSimulationStorageBitWidth(type)))
+      if (!runs ||
+          (runs->size() == 1 && runs->front().first == 0 &&
+           runs->front().second == *getSimulationStorageBitWidth(type)))
         return {};
       for (auto [low, laneWidth] : *runs)
         entry->second->push_back({0, low, laneWidth});
@@ -311,10 +311,11 @@ public:
         cells.try_emplace(root, cell);
       } else {
         ReachingDefinitions copy = cell->value;
-        copy.links.insert(
-            copy.links.begin() + (position - cell->value.links.begin()),
-            identity);
-        cells.try_emplace(root, llvm::makeIntrusiveRefCnt<Cell>(std::move(copy)));
+        copy.links.insert(copy.links.begin() +
+                              (position - cell->value.links.begin()),
+                          identity);
+        cells.try_emplace(root,
+                          llvm::makeIntrusiveRefCnt<Cell>(std::move(copy)));
       }
       changed = true;
     }
@@ -752,8 +753,7 @@ public:
     return node;
   }
   LogicalResult solve(
-      Ranges &inputs, Ranges &finalInputs,
-      const ReachingMap &finalMemory,
+      Ranges &inputs, Ranges &finalInputs, const ReachingMap &finalMemory,
       ArrayRef<Range> finalWrites,
       DenseMap<Operation *, SmallVector<ActivationMemoryAnalysis::Publication>>
           &publications,
@@ -793,9 +793,9 @@ public:
       if (!record.exact)
         inputs = spread(sources(inputs), record.output.width);
       auto &output = stored[{record.operation, record.output.root}];
-      llvm::append_range(output, project(inputs, record.exact ? record.lane : 0,
-                                         record.output.width,
-                                         record.output.low));
+      llvm::append_range(output,
+                         project(inputs, record.exact ? record.lane : 0,
+                                 record.output.width, record.output.low));
       normalize(output);
       unite(written[record.operation], {record.output});
     }
@@ -852,7 +852,8 @@ private:
              link.sourceLow == 0 && link.width == node.width &&
              link.sourceWidth == node.width;
     };
-    auto forwardedSource = [&](const LaneNode &node) -> std::optional<unsigned> {
+    auto forwardedSource =
+        [&](const LaneNode &node) -> std::optional<unsigned> {
       if (!node.seed.empty())
         return std::nullopt;
       std::optional<unsigned> source;
@@ -1086,19 +1087,17 @@ void ActivationValueGraph::pure(Operation *op,
   } else if (auto extend = dyn_cast<arith::ExtUIOp>(op)) {
     if (isa<IntegerType>(extend.getIn().getType())) {
       uint64_t width = valueSpan(extend.getIn());
-      put(extend.getResult(),
-          {{0, width, valueNode(extend.getIn()), 0, width,
-            LaneMapping::Identity}});
+      put(extend.getResult(), {{0, width, valueNode(extend.getIn()), 0, width,
+                                LaneMapping::Identity}});
       return;
     }
   } else if (isa<arith::ShLIOp, arith::ShRUIOp>(op)) {
     Value input = op->getOperand(0), result = op->getResult(0);
     auto amount = knownIndex(op->getOperand(1), constants);
-    bool hasPoisonFlags =
-        isa<arith::ShLIOp>(op)
-            ? cast<arith::ShLIOp>(op).getOverflowFlags() !=
-                  arith::IntegerOverflowFlags::none
-            : cast<arith::ShRUIOp>(op).getIsExact();
+    bool hasPoisonFlags = isa<arith::ShLIOp>(op)
+                              ? cast<arith::ShLIOp>(op).getOverflowFlags() !=
+                                    arith::IntegerOverflowFlags::none
+                              : cast<arith::ShRUIOp>(op).getIsExact();
     // Overflow/exact promises make discarded bits observable through poison.
     if (!hasPoisonFlags && isa<IntegerType>(input.getType()) && amount &&
         !amount.getValue().isNegative() &&
@@ -1880,9 +1879,9 @@ private:
       if (!values)
         return success();
       auto slot = localRoots.find(getLocalSlot(value));
-      const ReachingDefinitions *cell =
-          slot == localRoots.end() ? nullptr
-                                   : state.reaching.find(slot->second);
+      const ReachingDefinitions *cell = slot == localRoots.end()
+                                            ? nullptr
+                                            : state.reaching.find(slot->second);
       if (!cell || !fact->width || fact->low > cell->width ||
           fact->width > cell->width - fact->low) {
         untrackedLocalSlots = true;
@@ -1907,9 +1906,8 @@ private:
         (!fact || !fact->descriptor ||
          fact->resource != schedule::ComputeResourceKind::Net ||
          !(provenance.hasIsolatedSingleDriver(*fact->descriptor) ||
-           (!fact->dynamic &&
-            provenance.hasExclusiveDriverSlice(*fact->descriptor, fact->low,
-                                               fact->width)))))
+           (!fact->dynamic && provenance.hasExclusiveDriverSlice(
+                                  *fact->descriptor, fact->low, fact->width)))))
       return failure();
     auto root = fact && fact->descriptor
                     ? ActivationMemoryAnalysis::getRoot(fact->resource,
@@ -1968,7 +1966,8 @@ private:
                      candidate, exact);
       }
       normalize(access);
-      mixedPrivateWrites |= bool(store) && hasPrivateCandidate && !access.empty();
+      mixedPrivateWrites |=
+          bool(store) && hasPrivateCandidate && !access.empty();
       if (load) {
         if (!access.empty())
           unite(reads[op], access);
@@ -2022,7 +2021,8 @@ private:
                      value, *fact, exact);
       else
         writeReaching(inputsOnly ? incoming : *state.reaching.write(*root),
-                      store, *fact, exact, Range{*root, fact->low, fact->width});
+                      store, *fact, exact,
+                      Range{*root, fact->low, fact->width});
       for (const auto &alias : aliases) {
         uint64_t aliasRoot = *ActivationMemoryAnalysis::getRoot(
             schedule::ComputeResourceKind::Net, alias.net);
@@ -2099,9 +2099,9 @@ private:
   void writeReaching(ReachingDefinitions &cell, Operation *store,
                      const HandleFact &fact, bool exact,
                      std::optional<Range> publication, uint64_t lane = 0) {
-    unsigned node =
-        publication ? values->publication(store, *publication, exact, lane)
-                    : values->privateStore(cast<sim::SimRefStoreOp>(store));
+    unsigned node = publication
+                        ? values->publication(store, *publication, exact, lane)
+                        : values->privateStore(cast<sim::SimRefStoreOp>(store));
     if (exact) {
       auto retained = projectLinks(cell.links, 0, fact.low);
       llvm::append_range(retained,
@@ -2111,10 +2111,10 @@ private:
       cell.links = std::move(retained);
     }
     uint64_t span = valueSpan(ActivationMemoryAnalysis::getStoredValue(store));
-    cell.links.push_back({fact.low, fact.width, node, exact ? lane : 0,
-                          exact ? span - std::min(lane, span) : span,
-                          exact ? LaneMapping::Identity
-                                : LaneMapping::AllToAll});
+    cell.links.push_back(
+        {fact.low, fact.width, node, exact ? lane : 0,
+         exact ? span - std::min(lane, span) : span,
+         exact ? LaneMapping::Identity : LaneMapping::AllToAll});
     normalize(cell.links);
   }
   sim::SimFuncOp function;

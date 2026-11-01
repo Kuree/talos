@@ -225,9 +225,9 @@ bool talos_rt_evaluate_design_bound_observer_unlocked(
 }
 
 bool talos_rt_evaluate_design_observers_unlocked(talos_rt_context *context,
-                                                   uint32_t dependencyKind,
-                                                   uint64_t publishedHandle,
-                                                   uint64_t publishedWidth) {
+                                                 uint32_t dependencyKind,
+                                                 uint64_t publishedHandle,
+                                                 uint64_t publishedWidth) {
   if (!context || context->schedulerStatus != TALOS_RT_OK)
     return context != nullptr;
   if (!context->execution)

@@ -1,4 +1,5 @@
-//===- PrepareStatements.h - Procedural statement inventory ----------------===//
+//===- PrepareStatements.h - Procedural statement inventory
+//----------------===//
 
 #ifndef TALOS_LIB_CONVERSION_TALOSTOSIMULATION_PREPARESTATEMENTS_H
 #define TALOS_LIB_CONVERSION_TALOSTOSIMULATION_PREPARESTATEMENTS_H

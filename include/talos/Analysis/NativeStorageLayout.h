@@ -32,7 +32,7 @@ private:
 /// Attach target-derived geometry before any executable handles or bit-stream
 /// plans are built. A target-independent module retains its existing layout.
 mlir::FailureOr<mlir::Type> encodeNativeStorageLayout(mlir::Type type,
-                                                   mlir::Operation *scope);
+                                                      mlir::Operation *scope);
 
 /// Default X bits of an aggregate, excluding two-state fields and LLVM padding.
 /// Padding is always initialized to zero in both execution tiers.
@@ -63,7 +63,7 @@ bool hasMemberDefaults(mlir::Type type);
 /// Reject stored layout encodings from a different target before either
 /// execution backend consumes their physical offsets.
 mlir::LogicalResult verifyNativeStorageLayouts(mlir::Operation *root,
-                                              const llvm::DataLayout &layout);
+                                               const llvm::DataLayout &layout);
 
 } // namespace talos::analysis
 #endif

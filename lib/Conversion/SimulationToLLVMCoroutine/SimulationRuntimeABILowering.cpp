@@ -21,8 +21,7 @@ void declareNativeRuntimeABI(ModuleOp module) {
                             IntegerType::get(context, 16),
                             IntegerType::get(context, 32)});
   getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_signal",
-      LLVM::LLVMVoidType::get(context),
+      module, "talos_rt_v1_scheduler_signal", LLVM::LLVMVoidType::get(context),
       {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
        IntegerType::get(context, 64), IntegerType::get(context, 32)});
   getOrDeclareLLVMFunction(
@@ -120,8 +119,7 @@ void declareNativeRuntimeABI(ModuleOp module) {
        IntegerType::get(context, 64), IntegerType::get(context, 64),
        IntegerType::get(context, 64)});
   getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_native_handle_offset",
-      IntegerType::get(context, 64),
+      module, "talos_rt_v1_native_handle_offset", IntegerType::get(context, 64),
       {IntegerType::get(context, 64), IntegerType::get(context, 64)});
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_net_count_drivers", IntegerType::get(context, 32),
@@ -130,8 +128,7 @@ void declareNativeRuntimeABI(ModuleOp module) {
        LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
        LLVM::LLVMPointerType::get(context)});
   getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_pass_switch_control",
-      IntegerType::get(context, 32),
+      module, "talos_rt_v1_pass_switch_control", IntegerType::get(context, 32),
       {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32),
        IntegerType::get(context, 32), IntegerType::get(context, 32)});
   getOrDeclareLLVMFunction(
@@ -166,8 +163,7 @@ void declareNativeRuntimeABI(ModuleOp module) {
        LLVM::LLVMPointerType::get(context),
        LLVM::LLVMPointerType::get(context)});
   getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_driver_nba",
-      IntegerType::get(context, 32),
+      module, "talos_rt_v1_scheduler_driver_nba", IntegerType::get(context, 32),
       {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
        LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
        IntegerType::get(context, 64), IntegerType::get(context, 64),
@@ -184,28 +180,28 @@ void declareNativeRuntimeABI(ModuleOp module) {
        IntegerType::get(context, 64), IntegerType::get(context, 64),
        LLVM::LLVMPointerType::get(context),
        LLVM::LLVMPointerType::get(context)});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_inertial_path_driver",
-      IntegerType::get(context, 32), {LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      IntegerType::get(context, 64),
-                                      IntegerType::get(context, 64),
-                                      IntegerType::get(context, 64),
-                                      IntegerType::get(context, 64),
-                                      IntegerType::get(context, 32),
-                                      IntegerType::get(context, 32),
-                                      IntegerType::get(context, 32),
-                                      IntegerType::get(context, 32),
-                                      IntegerType::get(context, 64),
-                                      IntegerType::get(context, 64),
-                                      IntegerType::get(context, 64),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context),
-                                      LLVM::LLVMPointerType::get(context)});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_inertial_path_driver",
+                           IntegerType::get(context, 32),
+                           {LLVM::LLVMPointerType::get(context),
+                            LLVM::LLVMPointerType::get(context),
+                            LLVM::LLVMPointerType::get(context),
+                            IntegerType::get(context, 64),
+                            IntegerType::get(context, 64),
+                            IntegerType::get(context, 64),
+                            IntegerType::get(context, 64),
+                            IntegerType::get(context, 32),
+                            IntegerType::get(context, 32),
+                            IntegerType::get(context, 32),
+                            IntegerType::get(context, 32),
+                            IntegerType::get(context, 64),
+                            IntegerType::get(context, 64),
+                            IntegerType::get(context, 64),
+                            LLVM::LLVMPointerType::get(context),
+                            LLVM::LLVMPointerType::get(context),
+                            LLVM::LLVMPointerType::get(context),
+                            LLVM::LLVMPointerType::get(context),
+                            LLVM::LLVMPointerType::get(context),
+                            LLVM::LLVMPointerType::get(context)});
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_scheduler_inertial_path_driver_pulse",
       IntegerType::get(context, 32),
@@ -342,8 +338,7 @@ void declareNativeRuntimeABI(ModuleOp module) {
        IntegerType::get(context, 64), LLVM::LLVMPointerType::get(context),
        LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64)});
   getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_static_nba",
-      IntegerType::get(context, 32),
+      module, "talos_rt_v1_scheduler_static_nba", IntegerType::get(context, 32),
       {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
        LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
        IntegerType::get(context, 64), IntegerType::get(context, 64),
@@ -372,8 +367,7 @@ void declareNativeRuntimeABI(ModuleOp module) {
        IntegerType::get(context, 64), IntegerType::get(context, 64),
        IntegerType::get(context, 32)});
   getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_scheduler_string_nba",
-      IntegerType::get(context, 32),
+      module, "talos_rt_v1_scheduler_string_nba", IntegerType::get(context, 32),
       {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
        IntegerType::get(context, 64), IntegerType::get(context, 64),
        IntegerType::get(context, 64), IntegerType::get(context, 64)});
@@ -414,14 +408,12 @@ void declareNativeRuntimeABI(ModuleOp module) {
        LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
        LLVM::LLVMPointerType::get(context)});
   getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_native_state_retain",
-      IntegerType::get(context, 32),
+      module, "talos_rt_v1_native_state_retain", IntegerType::get(context, 32),
       {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64)});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_native_state_release",
-                           IntegerType::get(context, 32),
-                           {LLVM::LLVMPointerType::get(context),
-                            IntegerType::get(context, 64),
-                            IntegerType::get(context, 32)});
+  getOrDeclareLLVMFunction(
+      module, "talos_rt_v1_native_state_release", IntegerType::get(context, 32),
+      {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 64),
+       IntegerType::get(context, 32)});
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_native_state_load_plane",
       IntegerType::get(context, 32),
@@ -501,15 +493,14 @@ void declareNativeRuntimeABI(ModuleOp module) {
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_gc_root_range_push", managedI32,
       {managedPointer, managedPointer, managedPointer, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_gc_root_range_pop",
-                           managedI32, {managedPointer, managedPointer});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_gc_root_range_pop", managedI32,
+                           {managedPointer, managedPointer});
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_gc_managed_root_range_push", managedI32,
       {managedPointer, managedPointer, managedPointer, managedI64});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_gc_managed_root_range_pop",
                            managedI32, {managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_gc_candidate_root",
-                           managedI64,
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_gc_candidate_root", managedI64,
                            {managedPointer, managedI64, managedI32});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_gc_safepoint", managedI32,
                            {managedPointer});
@@ -520,24 +511,22 @@ void declareNativeRuntimeABI(ModuleOp module) {
       {managedPointer, managedPointer, managedI64, managedPointer, managedI64,
        managedI32, managedPointer, managedPointer, managedI64, managedPointer});
   getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_reference_path_covergroup_option_create",
-      managedI32,
+      module, "talos_rt_v1_reference_path_covergroup_option_create", managedI32,
       {managedPointer, managedI64, managedI64, managedI64, managedI32,
        managedI64, managedI64, managedI32, managedPointer, managedI64,
        managedI32, managedPointer, managedPointer, managedI64, managedPointer});
   getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_reference_path_string_character_create",
-      managedI32,
+      module, "talos_rt_v1_reference_path_string_character_create", managedI32,
       {managedPointer, managedI64, managedI64, managedPointer, managedI64,
        managedI32, managedPointer, managedPointer, managedI64, managedPointer});
   getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_reference_path_aggregate_element_create",
-      managedI32, {managedPointer, managedPointer, managedI64,    managedI32,
-                   managedPointer, managedPointer, managedI64,    managedI64,
-                   managedI64,     managedI64,     managedI64,    managedI64,
-                   managedI64,     managedI32,     managedI64,    managedI32,
-                   managedI32,     managedI64,     managedI64,    managedI64,
-                   managedPointer, managedI64,     managedPointer});
+      module, "talos_rt_v1_reference_path_aggregate_element_create", managedI32,
+      {managedPointer, managedPointer, managedI64,    managedI32,
+       managedPointer, managedPointer, managedI64,    managedI64,
+       managedI64,     managedI64,     managedI64,    managedI64,
+       managedI64,     managedI32,     managedI64,    managedI32,
+       managedI32,     managedI64,     managedI64,    managedI64,
+       managedPointer, managedI64,     managedPointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_container_size", managedI64,
                            {managedPointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_vpi_frame_bind", managedI32,
@@ -583,8 +572,8 @@ void declareNativeRuntimeABI(ModuleOp module) {
        managedI32, managedI64, managedI64});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_container_delete", managedI32,
                            {managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_queue_delete_index",
-                           managedI32, {managedPointer, managedI64});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_queue_delete_index", managedI32,
+                           {managedPointer, managedI64});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_queue_insert", managedI32,
                            {managedPointer, managedPointer, managedI64,
                             managedPointer, managedPointer});
@@ -603,8 +592,7 @@ void declareNativeRuntimeABI(ModuleOp module) {
                            {managedPointer, managedI32, managedPointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_semaphore_put", managedI32,
                            {managedPointer, managedI32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_semaphore_try_get",
-                           managedI32,
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_semaphore_try_get", managedI32,
                            {managedPointer, managedI32, managedPointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_random_bounded", managedI32,
                            {managedPointer, managedI64, managedPointer});
@@ -725,13 +713,12 @@ void declareNativeRuntimeABI(ModuleOp module) {
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_covergroup_bind_with", managedI32,
       {managedPointer, managedI64, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(module,
-                           "talos_rt_v1_covergroup_release_preparation",
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_covergroup_release_preparation",
                            managedI32, {managedPointer, managedI64});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_covergroup_create", managedI32,
-      {managedPointer, managedI64, managedPointer, managedI64, managedPointer,
-       managedI64, managedPointer});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_covergroup_create", managedI32,
+                           {managedPointer, managedI64, managedPointer,
+                            managedI64, managedPointer, managedI64,
+                            managedPointer});
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_covergroup_formal_read", managedI32,
       {managedPointer, managedI64, managedI64, managedI32, managedI64,
@@ -748,8 +735,7 @@ void declareNativeRuntimeABI(ModuleOp module) {
                            managedI32,
                            {managedPointer, managedI64, managedI64,
                             managedPointer, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_coverage_point_hit",
-                           managedI32,
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_coverage_point_hit", managedI32,
                            {managedPointer, managedI64, managedI32});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_coverage_control_definition",
                            managedI32,
@@ -780,12 +766,10 @@ void declareNativeRuntimeABI(ModuleOp module) {
                            managedI32, {managedPointer, managedI64});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_functional_coverage_load_db",
                            managedI32, {managedPointer, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_coverage_finalize",
-                           managedI32,
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_coverage_finalize", managedI32,
                            {managedPointer, managedI64, managedI64,
                             managedPointer, managedPointer, managedI32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_coverage_snapshot",
-                           managedI32,
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_coverage_snapshot", managedI32,
                            {managedPointer, managedI32, managedI64});
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_container_read", managedI32,
@@ -793,21 +777,21 @@ void declareNativeRuntimeABI(ModuleOp module) {
   getOrDeclareLLVMFunction(module, "talos_rt_v1_container_write", managedI32,
                            {managedPointer, managedPointer, managedI64,
                             managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_assoc_create_typed", managedI32,
-      {managedPointer, managedI64, managedI32, managedI32, managedI64,
-       managedI64, managedI64, managedPointer, managedI64, managedI32,
-       managedI64, managedPointer});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_assoc_create_typed", managedI32,
+                           {managedPointer, managedI64, managedI32, managedI32,
+                            managedI64, managedI64, managedI64, managedPointer,
+                            managedI64, managedI32, managedI64,
+                            managedPointer});
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_assoc_create_element_keyed", managedI32,
       {managedPointer, managedI64, managedI32,     managedI32, managedI64,
        managedI64,     managedI64, managedPointer, managedI64, managedI64,
        managedI32,     managedI32, managedI64,     managedI64, managedI64,
        managedPointer, managedI64, managedPointer, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_assoc_read_checked", managedI32,
-      {managedPointer, managedPointer, managedPointer, managedI64,
-       managedPointer, managedI64, managedPointer});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_assoc_read_checked", managedI32,
+                           {managedPointer, managedPointer, managedPointer,
+                            managedI64, managedPointer, managedI64,
+                            managedPointer});
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_assoc_write_checked", managedI32,
       {managedPointer, managedPointer, managedPointer, managedPointer,
@@ -820,9 +804,8 @@ void declareNativeRuntimeABI(ModuleOp module) {
                            managedI32,
                            {managedPointer, managedPointer, managedPointer,
                             managedI64, managedPointer, managedI64});
-  for (StringRef name :
-       {"talos_rt_v1_assoc_first", "talos_rt_v1_assoc_last",
-        "talos_rt_v1_assoc_next", "talos_rt_v1_assoc_prev"})
+  for (StringRef name : {"talos_rt_v1_assoc_first", "talos_rt_v1_assoc_last",
+                         "talos_rt_v1_assoc_next", "talos_rt_v1_assoc_prev"})
     getOrDeclareLLVMFunction(
         module, name, managedI32,
         {managedPointer, managedPointer, managedPointer, managedPointer});
@@ -840,8 +823,7 @@ void declareNativeRuntimeABI(ModuleOp module) {
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_object_write", managedI32,
       {managedPointer, managedI64, managedPointer, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_object_bits_insert",
-                           managedI32,
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_object_bits_insert", managedI32,
                            {managedPointer, managedI64, managedI64, managedI64,
                             managedI32, managedI64, managedI32});
   getOrDeclareLLVMFunction(
@@ -850,11 +832,9 @@ void declareNativeRuntimeABI(ModuleOp module) {
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_object_write_planes", managedI32,
       {managedPointer, managedI64, managedPointer, managedPointer, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_object_field_load",
-                           managedI32,
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_object_field_load", managedI32,
                            {managedPointer, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_object_field_store",
-                           managedI32,
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_object_field_store", managedI32,
                            {managedPointer, managedI64, managedPointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_object_override", managedI32,
                            {managedPointer, managedI64, managedI64, managedI32,
@@ -863,8 +843,8 @@ void declareNativeRuntimeABI(ModuleOp module) {
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_object_release_override", managedI32,
       {managedPointer, managedI64, managedI64, managedI32, managedI32});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_object_is_instance",
-                           managedI32, {managedPointer, managedPointer});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_object_is_instance", managedI32,
+                           {managedPointer, managedPointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_object_id", managedI64,
                            {managedPointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_managed_watch", managedI64,
@@ -897,8 +877,7 @@ void declareNativeRuntimeABI(ModuleOp module) {
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_string_create", managedI32,
       {managedPointer, managedPointer, managedI64, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_string_from_packed",
-                           managedI32,
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_string_from_packed", managedI32,
                            {managedPointer, managedPointer, managedPointer,
                             managedI64, managedPointer});
   getOrDeclareLLVMFunction(
@@ -933,15 +912,14 @@ void declareNativeRuntimeABI(ModuleOp module) {
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_string_parse_logic", managedI32,
       {managedI64, managedI32, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_string_parse_real",
-                           managedI32, {managedI64, managedPointer});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_string_parse_real", managedI32,
+                           {managedI64, managedPointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_string_parse_real_constant",
                            managedI32, {managedI64, managedPointer});
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_string_format_integer", managedI32,
       {managedPointer, managedI64, managedI32, managedI32, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_string_format_real",
-                           managedI32,
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_string_format_real", managedI32,
                            {managedPointer, managedF64, managedPointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_file_open_string_mcd",
                            managedI32,
@@ -971,14 +949,13 @@ void declareNativeRuntimeABI(ModuleOp module) {
       {managedPointer, managedI32, managedI32, managedPointer, managedI64,
        managedI64, managedI64, managedI32, managedI64, managedPointer,
        managedI64, managedPointer, managedI64, managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_file_error_string",
-                           managedI32,
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_file_error_string", managedI32,
                            {managedPointer, managedPointer, managedI32,
                             managedPointer, managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_string_scan_field", managedI32,
-      {managedPointer, managedI64, managedI32, managedPointer, managedI64,
-       managedI32, managedI64, managedPointer, managedPointer, managedPointer});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_string_scan_field", managedI32,
+                           {managedPointer, managedI64, managedI32,
+                            managedPointer, managedI64, managedI32, managedI64,
+                            managedPointer, managedPointer, managedPointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_string_scan_raw", managedI32,
                            {managedI64, managedI32, managedPointer, managedI64,
                             managedI64, managedI64, managedI32, managedI64,
@@ -996,8 +973,8 @@ void declareNativeRuntimeABI(ModuleOp module) {
                            managedI32,
                            {managedI64, managedI32, managedI64, managedPointer,
                             managedI64, managedPointer, managedI64});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_plusarg_parse_real",
-                           managedI32, {managedI64, managedPointer});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_plusarg_parse_real", managedI32,
+                           {managedI64, managedPointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_system", managedI32,
                            {managedPointer, managedI64, managedPointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_import_call", managedI32,
@@ -1052,10 +1029,10 @@ void declareNativeRuntimeABI(ModuleOp module) {
   getOrDeclareLLVMFunction(module,
                            "talos_rt_v1_dpi_open_array_release_recursive",
                            LLVM::LLVMVoidType::get(context), {managedPointer});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_dpi_aggregate_pack", managedI32,
-      {managedPointer, managedPointer, managedI64, managedI64, managedI32,
-       managedPointer, managedI64, managedI64, managedPointer, managedI64});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_dpi_aggregate_pack", managedI32,
+                           {managedPointer, managedPointer, managedI64,
+                            managedI64, managedI32, managedPointer, managedI64,
+                            managedI64, managedPointer, managedI64});
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_dpi_aggregate_unpack", managedI32,
       {managedPointer, managedPointer, managedI64, managedPointer, managedI64,

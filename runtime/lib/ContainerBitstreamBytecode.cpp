@@ -13,26 +13,28 @@
 // calls the public entry point directly, so a fallback cannot take its name.
 // Reach the recursive service through a private name defined only beside it.
 __attribute__((weak)) talos_rt_status
-talos_rt_recursive_export_bitstream_service(
-    talos_rt_context *, const void *, const void *, uint64_t, uint64_t,
-    uint32_t, void *, void *, uint64_t, uint64_t, uint32_t, const void *,
-    uint64_t, uint32_t, uint32_t *, uint64_t *) {
+talos_rt_recursive_export_bitstream_service(talos_rt_context *, const void *,
+                                            const void *, uint64_t, uint64_t,
+                                            uint32_t, void *, void *, uint64_t,
+                                            uint64_t, uint32_t, const void *,
+                                            uint64_t, uint32_t, uint32_t *,
+                                            uint64_t *) {
   return TALOS_RT_INVALID_BYTECODE;
 }
-#define TALOS_RT_RECURSIVE_EXPORT_BITSTREAM                                  \
+#define TALOS_RT_RECURSIVE_EXPORT_BITSTREAM                                    \
   talos_rt_recursive_export_bitstream_service
 #else
 #if defined(__clang__) || defined(__GNUC__)
 extern "C" __attribute__((weak)) talos_rt_status
 talos_rt_v1_recursive_export_bitstream(
-    talos_rt_context *context, const void *inputValue,
-    const void *inputUnknown, uint64_t inputPlaneSize, uint64_t inputBitWidth,
-    uint32_t inputFourState, void *outValue, void *outUnknown,
-    uint64_t outputPlaneSize, uint64_t outputBitWidth, uint32_t outputFourState,
-    const void *plan, uint64_t planSize, uint32_t observe, uint32_t *outMatched,
+    talos_rt_context *context, const void *inputValue, const void *inputUnknown,
+    uint64_t inputPlaneSize, uint64_t inputBitWidth, uint32_t inputFourState,
+    void *outValue, void *outUnknown, uint64_t outputPlaneSize,
+    uint64_t outputBitWidth, uint32_t outputFourState, const void *plan,
+    uint64_t planSize, uint32_t observe, uint32_t *outMatched,
     uint64_t *outWatch);
 #endif
-#define TALOS_RT_RECURSIVE_EXPORT_BITSTREAM                                  \
+#define TALOS_RT_RECURSIVE_EXPORT_BITSTREAM                                    \
   talos_rt_v1_recursive_export_bitstream
 #endif
 
@@ -41,18 +43,18 @@ namespace talos::designbytecode {
 #if defined(__clang__) || defined(__GNUC__)
 __attribute__((weak))
 #endif
-talos_rt_status
-invokeClassBitstreamIntrinsic(const Image &image, Frame &frame,
-                              talos_rt_context *context, IntrinsicSite site,
-                              uint32_t siteIndex, uint32_t intrinsicId);
+talos_rt_status invokeClassBitstreamIntrinsic(const Image &image, Frame &frame,
+                                              talos_rt_context *context,
+                                              IntrinsicSite site,
+                                              uint32_t siteIndex,
+                                              uint32_t intrinsicId);
 
 #if defined(__APPLE__)
 // ClassBitstreamBytecode.cpp's strong definition replaces this when a design
 // references its link anchor.
 talos_rt_status invokeClassBitstreamIntrinsic(const Image &, Frame &,
-                                                talos_rt_context *,
-                                                IntrinsicSite, uint32_t,
-                                                uint32_t) {
+                                              talos_rt_context *, IntrinsicSite,
+                                              uint32_t, uint32_t) {
   return TALOS_RT_INVALID_BYTECODE;
 }
 #endif
@@ -177,9 +179,8 @@ TALOS_RT_FEATURE_TEXT talos_rt_status invokeContainerBitstreamIntrinsic(
         (inputFourState && (input.size & 1)) ||
         (outputFourState && (output.size & 1)) ||
         matched.kind != TALOS_RT_DBREG_BITS || matched.width != 1 ||
-        matched.size < sizeof(uint32_t) ||
-        watch.kind != TALOS_RT_DBREG_BITS || watch.width != 64 ||
-        watch.size < sizeof(uint64_t) || plan->size < 32)
+        matched.size < sizeof(uint32_t) || watch.kind != TALOS_RT_DBREG_BITS ||
+        watch.width != 64 || watch.size < sizeof(uint64_t) || plan->size < 32)
       return TALOS_RT_INVALID_BYTECODE;
     uint64_t inputPlaneSize = inputFourState ? input.size / 2 : input.size;
     uint64_t outputPlaneSize = outputFourState ? output.size / 2 : output.size;

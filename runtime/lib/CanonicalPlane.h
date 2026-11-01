@@ -1,4 +1,5 @@
-//===- CanonicalPlane.h - Owned or generated state storage -------*- C++ -*-===//
+//===- CanonicalPlane.h - Owned or generated state storage -------*- C++
+//-*-===//
 
 #ifndef TALOS_RUNTIME_LIB_CANONICALPLANE_H
 #define TALOS_RUNTIME_LIB_CANONICALPLANE_H

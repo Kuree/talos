@@ -135,7 +135,8 @@ public:
       auto body =
           eligibility.analyze(function, handles, /*interleaved=*/true, &reason);
       if (!body &&
-          (reason.reason == CombinationalFusionFailure::Reason::UnwatchedLiveIn ||
+          (reason.reason ==
+               CombinationalFusionFailure::Reason::UnwatchedLiveIn ||
            reason.reason ==
                CombinationalFusionFailure::Reason::IncomingOutputState)) {
         body = eligibility.analyzeForReordering(function, handles, &reason);

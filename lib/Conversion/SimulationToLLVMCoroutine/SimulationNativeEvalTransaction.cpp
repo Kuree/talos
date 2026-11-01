@@ -234,9 +234,9 @@ void transfer(OpBuilder &builder, Location loc, Value frame,
             llvmConstant(builder, loc, builder.getI32Type(), 0));
         Value region = LLVM::LoadOp::create(
             builder, loc, builder.getI32Type(),
-            nbaFieldGEP(builder, loc, accumulator,
-                        offsetof(talos_rt_generated_nba_accumulator_256,
-                                 exec_region)),
+            nbaFieldGEP(
+                builder, loc, accumulator,
+                offsetof(talos_rt_generated_nba_accumulator_256, exec_region)),
             4);
         Value capturedMask = LLVM::LoadOp::create(
             builder, loc, builder.getI64Type(),
@@ -297,9 +297,9 @@ void transfer(OpBuilder &builder, Location loc, Value frame,
         LLVM::StoreOp::create(
             builder, loc,
             llvmConstant(builder, loc, builder.getI32Type(), root.region),
-            nbaFieldGEP(builder, loc, accumulator,
-                        offsetof(talos_rt_generated_nba_accumulator_256,
-                                 exec_region)),
+            nbaFieldGEP(
+                builder, loc, accumulator,
+                offsetof(talos_rt_generated_nba_accumulator_256, exec_region)),
             4);
         Value old =
             LLVM::LoadOp::create(builder, loc, builder.getI64Type(), leaf, 8);
@@ -348,9 +348,9 @@ void transfer(OpBuilder &builder, Location loc, Value frame,
         if (root.transient)
           LLVM::StoreOp::create(
               builder, loc, constant(builder, loc, 0),
-              nbaFieldGEP(builder, loc, accumulator,
-                          offsetof(talos_rt_generated_nba_accumulator_256,
-                                   transient)),
+              nbaFieldGEP(
+                  builder, loc, accumulator,
+                  offsetof(talos_rt_generated_nba_accumulator_256, transient)),
               8);
         LLVM::StoreOp::create(
             builder, loc,
@@ -480,8 +480,7 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
   SmallVector<LLVM::LLVMFuncOp> work;
   for (auto function : module.getOps<LLVM::LLVMFuncOp>()) {
     functions.try_emplace(function.getSymName(), function);
-    writable |=
-        function.getSymName().starts_with("__talos_eval_write_guard_");
+    writable |= function.getSymName().starts_with("__talos_eval_write_guard_");
     if (schedule::has<schedule::metadata::evalCallClosureRoot>(function))
       work.push_back(function);
   }
@@ -552,9 +551,8 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
         if (auto root =
                 schedule::get<schedule::Field::EvalPendingDirtyRoot>(read))
           if (auto at = address(read.getAddr());
-              at &&
-              at->offset ==
-                  offsetof(talos_rt_generated_nba_accumulator_256, valid))
+              at && at->offset ==
+                        offsetof(talos_rt_generated_nba_accumulator_256, valid))
             commitConsumers.try_emplace(root.getValue().getZExtValue(),
                                         at->global.str());
       if (read || write) {
@@ -577,25 +575,25 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
                        write.getOrdering() == LLVM::AtomicOrdering::not_atomic;
         bool index = name == dirtyName || name == summaryName;
         bool word =
-            index ? at->offset % 8 == 0
-                  : at->offset ==
-                            offsetof(talos_rt_generated_nba_accumulator_256,
-                                     value) ||
-                        at->offset ==
-                            offsetof(talos_rt_generated_nba_accumulator_256,
-                                     unknown) ||
-                        at->offset ==
-                            offsetof(talos_rt_generated_nba_accumulator_256,
-                                     write_mask) ||
-                        at->offset ==
-                            offsetof(talos_rt_generated_nba_accumulator_256,
-                                     transient);
+            index
+                ? at->offset % 8 == 0
+                : at->offset == offsetof(talos_rt_generated_nba_accumulator_256,
+                                         value) ||
+                      at->offset ==
+                          offsetof(talos_rt_generated_nba_accumulator_256,
+                                   unknown) ||
+                      at->offset ==
+                          offsetof(talos_rt_generated_nba_accumulator_256,
+                                   write_mask) ||
+                      at->offset ==
+                          offsetof(talos_rt_generated_nba_accumulator_256,
+                                   transient);
         bool flag =
             !index &&
             (at->offset ==
                  offsetof(talos_rt_generated_nba_accumulator_256, valid) ||
-             at->offset == offsetof(talos_rt_generated_nba_accumulator_256,
-                                    exec_region));
+             at->offset ==
+                 offsetof(talos_rt_generated_nba_accumulator_256, exec_region));
         memory.exact &=
             (word && type.isInteger(64)) || (flag && type.isInteger(32));
       } else if (auto call = dyn_cast<LLVM::CallOp>(nested)) {
@@ -917,8 +915,7 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
                    offsetof(talos_rt_generated_nba_accumulator_256, unknown))
             lane = 1;
           else if (at->offset ==
-                   offsetof(talos_rt_generated_nba_accumulator_256,
-                            transient))
+                   offsetof(talos_rt_generated_nba_accumulator_256, transient))
             lane = 2;
           if (lane) {
             if ((*lane == 1 && root.twoState) ||
@@ -971,8 +968,8 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
             write.erase();
           } else {
             Value replacement;
-            if (at->offset == offsetof(talos_rt_generated_nba_accumulator_256,
-                                       write_mask)) {
+            if (at->offset ==
+                offsetof(talos_rt_generated_nba_accumulator_256, write_mask)) {
               if (schedule::has<schedule::Field::EvalPendingMaskAtCommit>(
                       read)) {
                 replacement = constant(builder, loc, root.mask);
@@ -1006,9 +1003,8 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
             } else {
               replacement = llvmConstant(
                   builder, loc, read.getType(),
-                  at->offset ==
-                          offsetof(talos_rt_generated_nba_accumulator_256,
-                                   exec_region)
+                  at->offset == offsetof(talos_rt_generated_nba_accumulator_256,
+                                         exec_region)
                       ? root.region
                       : 1);
             }

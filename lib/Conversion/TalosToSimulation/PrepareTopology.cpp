@@ -1041,8 +1041,7 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
     // Slang symbol stub. It describes the connection's type/shape, not a
     // second elaborated array with a runtime VPI identity. Real arrays live
     // in the elaborated hierarchy and must still satisfy the extent checks.
-    if (isa<ModuleOp>(array->getParentOp()) &&
-        array.getBody().front().empty())
+    if (isa<ModuleOp>(array->getParentOp()) && array.getBody().front().empty())
       return;
     if (isa_and_nonnull<semantic::SVInstanceArraySymbolOp>(
             array->getParentOp()))
@@ -1388,7 +1387,8 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
       // constraint inventory. Inherited constraints are reached through
       // extends, and inline randomize constraints have no declaration here.
       auto owner = dyn_cast<semantic::SVClassTypeOp>(operation->getParentOp());
-      if (!owner || owner.getIsUninstantiated() || !classes.symbols.count(owner))
+      if (!owner || owner.getIsUninstantiated() ||
+          !classes.symbols.count(owner))
         return std::nullopt;
       return VPIKind::Constraint;
     }
@@ -1498,13 +1498,14 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
   SmallVector<ParameterPayload> parameterPayloads(anchorSources.size());
   SmallVector<size_t> parameterIndices;
   for (auto [index, source] : llvm::enumerate(anchorSources))
-    if (isa<semantic::SVParameterSymbolOp,
-            semantic::SVTypeParameterSymbolOp>(source))
+    if (isa<semantic::SVParameterSymbolOp, semantic::SVTypeParameterSymbolOp>(
+            source))
       parameterIndices.push_back(index);
   if (failed(failableParallelForEach(
           module.getContext(), parameterIndices, [&](size_t index) {
             Operation *source = anchorSources[index];
-            auto semanticType = source->getAttrOfType<TypeAttr>("semantic_type");
+            auto semanticType =
+                source->getAttrOfType<TypeAttr>("semantic_type");
             if (!semanticType) {
               emitError(getSemanticLocation(source))
                   << "VPI parameter is missing semantic type metadata";
@@ -1647,8 +1648,8 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
     // Named event anchors preserve the declaration lifetime even when no
     // activation frame currently exists.
     if (auto variable = dyn_cast<semantic::SVVariableSymbolOp>(source))
-      isAutomatic = variable.getLifetime() ==
-                    semantic::SVVariableLifetime::Automatic;
+      isAutomatic =
+          variable.getLifetime() == semantic::SVVariableLifetime::Automatic;
     auto addMethodProperties = [&](semantic::SVVisibility visibility,
                                    bool isMethod) {
       int32_t value = 1; // vpiPublicVis
@@ -1749,8 +1750,8 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
       properties.push_back(sim::VPIPropertyAttr::get(
           builder.getContext(), builder.getI32IntegerAttr(604), // vpiAccessType
           builder.getI32IntegerAttr(constraint.getOutOfBlockIndex() != 0
-                                       ? 2  // vpiExternAcc
-                                       : 0)));
+                                        ? 2 // vpiExternAcc
+                                        : 0)));
     if (auto constraint =
             dyn_cast<semantic::SVSourceClassConstraintSymbolOp>(source))
       properties.push_back(sim::VPIPropertyAttr::get(
@@ -1972,8 +1973,8 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
         count += primitiveTerminalDirection(primitive, index, terminal) == 1;
       primitiveInputCount = builder.getI64IntegerAttr(count);
     }
-    if (isa<semantic::SVParameterSymbolOp,
-            semantic::SVTypeParameterSymbolOp>(source)) {
+    if (isa<semantic::SVParameterSymbolOp, semantic::SVTypeParameterSymbolOp>(
+            source)) {
       anchorVPIType = parameterPayloads[inventoryId].type;
       immutableValue = parameterPayloads[inventoryId].value;
       if (auto parameter = dyn_cast<semantic::SVParameterSymbolOp>(source))
@@ -2010,9 +2011,9 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
       }
       auto &definition = builtinPrimitiveDefinitions[name.getValue()];
       if (!definition) {
-        std::string symbol = (Twine("__talos_vpi_primitive_definition_") +
-                              Twine(subtype->value))
-                                 .str();
+        std::string symbol =
+            (Twine("__talos_vpi_primitive_definition_") + Twine(subtype->value))
+                .str();
         auto declared = sim::SimVPIDefinitionDeclOp::create(
             builder, getSemanticLocation(source), symbol, subtype->objectKind,
             name.getValue(), LocationAttr{},
@@ -2034,8 +2035,8 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
       addParameterView(source, anchor);
     anchorDeclarations[source] = anchor;
     if (anchorVPIType)
-      if (auto identity = source->getAttrOfType<IntegerAttr>(
-              vpiSourceTypeIdentityAttrName))
+      if (auto identity =
+              source->getAttrOfType<IntegerAttr>(vpiSourceTypeIdentityAttrName))
         sim::set<sim::metadata::VpiSourceTypeIdentity>(anchor, identity);
     if (isa<semantic::SVPackageSymbolOp, semantic::SVCompilationUnitSymbolOp>(
             source))
@@ -2177,141 +2178,137 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
       });
   if (invalid)
     return failure();
-  semanticRoot.walk<WalkOrder::PreOrder>(
-      [&](semantic::SVInstanceBodySymbolOp body) {
-        if (isCompileTimeOnlyInstanceMember(body))
-          return;
-        uint64_t scopeId = scopes.lookup(body);
-        if (scopeId >= scopes.declarations.size())
-          return;
-        sim::SimScopeDeclOp scope = scopes.declarations[scopeId];
-        FlatSymbolRefAttr definition = scope.getVpiDefinitionAttr();
-        uint32_t scopeKind = sim::vpiKindForScope(scope);
-        if (!definition ||
-            (scopeKind != static_cast<uint32_t>(VPIKind::Module) &&
-             scopeKind != static_cast<uint32_t>(VPIKind::Interface)))
-          return;
+  semanticRoot.walk<WalkOrder::PreOrder>([&](semantic::SVInstanceBodySymbolOp
+                                                 body) {
+    if (isCompileTimeOnlyInstanceMember(body))
+      return;
+    uint64_t scopeId = scopes.lookup(body);
+    if (scopeId >= scopes.declarations.size())
+      return;
+    sim::SimScopeDeclOp scope = scopes.declarations[scopeId];
+    FlatSymbolRefAttr definition = scope.getVpiDefinitionAttr();
+    uint32_t scopeKind = sim::vpiKindForScope(scope);
+    if (!definition || (scopeKind != static_cast<uint32_t>(VPIKind::Module) &&
+                        scopeKind != static_cast<uint32_t>(VPIKind::Interface)))
+      return;
 
-        SmallVector<DefinitionMemberSignature> signatures;
-        SmallVector<Operation *> members;
-        uint64_t parameterOrdinal = 0;
-        for (Operation &child : body.getBody().front()) {
-          DefinitionMemberSignature signature{{}, getSemanticLocation(&child)};
-          auto &direction = signature.direction;
-          if (isa<semantic::SVParameterSymbolOp,
-                  semantic::SVTypeParameterSymbolOp>(child)) {
-            signature.kind = isa<semantic::SVTypeParameterSymbolOp>(child)
-                                 ? VPIKind::TypeParameter
-                                 : VPIKind::Parameter;
-            uint64_t sourceOrdinal = parameterOrdinal++;
-            if (signature.kind == VPIKind::Parameter &&
-                unsupportedParameters[definition].contains(sourceOrdinal))
-              continue;
-            signature.localParam = child.hasAttr("is_local_param");
-            signature.explicitRange = child.hasAttr("has_explicit_range");
-            auto originalDefault = originalDefaultKey(&child);
-            if (failed(originalDefault)) {
-              invalid = true;
-              return;
-            }
-            signature.originalDefault = *originalDefault;
-            signature.unavailableDefault = !originalDefault->empty();
-          } else if (scopeKind != static_cast<uint32_t>(VPIKind::Module)) {
-            continue;
-          } else if (auto port = dyn_cast<semantic::SVPortSymbolOp>(child)) {
-            switch (port.getDirection()) {
-            case semantic::SVArgumentDirection::In:
-              direction = sim::VPIIODirection::Input;
-              break;
-            case semantic::SVArgumentDirection::Out:
-              direction = sim::VPIIODirection::Output;
-              break;
-            case semantic::SVArgumentDirection::InOut:
-              direction = sim::VPIIODirection::InOut;
-              break;
-            case semantic::SVArgumentDirection::Ref:
-              direction = sim::VPIIODirection::Ref;
-              break;
-            }
-            // IEEE 1800-2023 37.13 defines virtual-interface IO declarations
-            // as directionless, irrespective of the source argument mode.
-            if (auto type = child.getAttrOfType<TypeAttr>("semantic_type");
-                type && isa<semantic::VirtualInterfaceType>(type.getValue()))
-              direction = sim::VPIIODirection::Undefined;
-          } else if (!isa<semantic::SVInterfacePortSymbolOp>(child)) {
-            // A multi-port is a vpiPort association. Its leaf declarations
-            // appear as ordinary SVPortSymbolOps and are the IODecl objects.
-            continue;
-          }
-          StringRef name = getDebugName(&child);
-          // Empty ordered-port slots are connectivity placeholders, not IO
-          // declarations in the source definition's VPI object graph.
-          if (name.empty())
-            continue;
-          signature.name = name.str();
-          signature.location = getSemanticLocation(&child);
-          signatures.push_back(signature);
-          members.push_back(&child);
-        }
-
-        DefinitionMemberPlan &plan =
-            definitionMemberPlans[definition.getValue()];
-        if (!plan.initialized) {
-          plan.initialized = true;
-          plan.signatures = signatures;
-          for (auto [ordinal, signature] : llvm::enumerate(signatures)) {
-            std::string symbol = (Twine("__talos_vpi_definition_member_") +
-                                  Twine(nextDefinitionMemberId++))
-                                     .str();
-            auto declaration = sim::SimVPIDefinitionMemberDeclOp::create(
-                builder, signature.location, builder.getStringAttr(symbol),
-                definition,
-                builder.getI32IntegerAttr(
-                    static_cast<uint32_t>(signature.kind)),
-                builder.getI32IntegerAttr(static_cast<uint32_t>(ordinal)),
-                builder.getStringAttr(signature.name),
-                signature.kind == VPIKind::IODecl
-                    ? sim::VPIIODirectionAttr::get(builder.getContext(),
-                                                   signature.direction)
-                    : sim::VPIIODirectionAttr{},
-                signature.localParam ? builder.getUnitAttr() : UnitAttr{},
-                signature.explicitRange ? builder.getUnitAttr() : UnitAttr{},
-                signature.unavailableDefault ? builder.getUnitAttr()
-                                             : UnitAttr{},
-                UnitAttr{}, UnitAttr{}, UnitAttr{}, UnitAttr{}, UnitAttr{},
-                UnitAttr{});
-            plan.memberSymbols.push_back(FlatSymbolRefAttr::get(declaration));
-          }
-        } else if (plan.signatures.size() != signatures.size()) {
-          emitError(getSemanticLocation(body))
-              << "instances of one definition disagree on declaration "
-                 "count";
+    SmallVector<DefinitionMemberSignature> signatures;
+    SmallVector<Operation *> members;
+    uint64_t parameterOrdinal = 0;
+    for (Operation &child : body.getBody().front()) {
+      DefinitionMemberSignature signature{{}, getSemanticLocation(&child)};
+      auto &direction = signature.direction;
+      if (isa<semantic::SVParameterSymbolOp, semantic::SVTypeParameterSymbolOp>(
+              child)) {
+        signature.kind = isa<semantic::SVTypeParameterSymbolOp>(child)
+                             ? VPIKind::TypeParameter
+                             : VPIKind::Parameter;
+        uint64_t sourceOrdinal = parameterOrdinal++;
+        if (signature.kind == VPIKind::Parameter &&
+            unsupportedParameters[definition].contains(sourceOrdinal))
+          continue;
+        signature.localParam = child.hasAttr("is_local_param");
+        signature.explicitRange = child.hasAttr("has_explicit_range");
+        auto originalDefault = originalDefaultKey(&child);
+        if (failed(originalDefault)) {
           invalid = true;
           return;
-        } else {
-          for (auto [expected, actual] :
-               llvm::zip_equal(plan.signatures, signatures)) {
-            if (expected.name != actual.name || expected.kind != actual.kind ||
-                expected.direction != actual.direction ||
-                expected.localParam != actual.localParam ||
-                expected.explicitRange != actual.explicitRange ||
-                expected.unavailableDefault != actual.unavailableDefault ||
-                expected.originalDefault != actual.originalDefault) {
-              emitError(getSemanticLocation(body))
-                  << "instances of one definition disagree on declaration "
-                     "identity";
-              invalid = true;
-              return;
-            }
-          }
         }
-        if (!signatures.empty() ||
-            llvm::any_of(getChildren(body), [](Operation *child) {
-              return isa<semantic::SVSourceParameterActualOp>(child);
-            }))
-          definitionInstancePlans.push_back(
-              {body, scope, definition, std::move(members)});
-      });
+        signature.originalDefault = *originalDefault;
+        signature.unavailableDefault = !originalDefault->empty();
+      } else if (scopeKind != static_cast<uint32_t>(VPIKind::Module)) {
+        continue;
+      } else if (auto port = dyn_cast<semantic::SVPortSymbolOp>(child)) {
+        switch (port.getDirection()) {
+        case semantic::SVArgumentDirection::In:
+          direction = sim::VPIIODirection::Input;
+          break;
+        case semantic::SVArgumentDirection::Out:
+          direction = sim::VPIIODirection::Output;
+          break;
+        case semantic::SVArgumentDirection::InOut:
+          direction = sim::VPIIODirection::InOut;
+          break;
+        case semantic::SVArgumentDirection::Ref:
+          direction = sim::VPIIODirection::Ref;
+          break;
+        }
+        // IEEE 1800-2023 37.13 defines virtual-interface IO declarations
+        // as directionless, irrespective of the source argument mode.
+        if (auto type = child.getAttrOfType<TypeAttr>("semantic_type");
+            type && isa<semantic::VirtualInterfaceType>(type.getValue()))
+          direction = sim::VPIIODirection::Undefined;
+      } else if (!isa<semantic::SVInterfacePortSymbolOp>(child)) {
+        // A multi-port is a vpiPort association. Its leaf declarations
+        // appear as ordinary SVPortSymbolOps and are the IODecl objects.
+        continue;
+      }
+      StringRef name = getDebugName(&child);
+      // Empty ordered-port slots are connectivity placeholders, not IO
+      // declarations in the source definition's VPI object graph.
+      if (name.empty())
+        continue;
+      signature.name = name.str();
+      signature.location = getSemanticLocation(&child);
+      signatures.push_back(signature);
+      members.push_back(&child);
+    }
+
+    DefinitionMemberPlan &plan = definitionMemberPlans[definition.getValue()];
+    if (!plan.initialized) {
+      plan.initialized = true;
+      plan.signatures = signatures;
+      for (auto [ordinal, signature] : llvm::enumerate(signatures)) {
+        std::string symbol = (Twine("__talos_vpi_definition_member_") +
+                              Twine(nextDefinitionMemberId++))
+                                 .str();
+        auto declaration = sim::SimVPIDefinitionMemberDeclOp::create(
+            builder, signature.location, builder.getStringAttr(symbol),
+            definition,
+            builder.getI32IntegerAttr(static_cast<uint32_t>(signature.kind)),
+            builder.getI32IntegerAttr(static_cast<uint32_t>(ordinal)),
+            builder.getStringAttr(signature.name),
+            signature.kind == VPIKind::IODecl
+                ? sim::VPIIODirectionAttr::get(builder.getContext(),
+                                               signature.direction)
+                : sim::VPIIODirectionAttr{},
+            signature.localParam ? builder.getUnitAttr() : UnitAttr{},
+            signature.explicitRange ? builder.getUnitAttr() : UnitAttr{},
+            signature.unavailableDefault ? builder.getUnitAttr() : UnitAttr{},
+            UnitAttr{}, UnitAttr{}, UnitAttr{}, UnitAttr{}, UnitAttr{},
+            UnitAttr{});
+        plan.memberSymbols.push_back(FlatSymbolRefAttr::get(declaration));
+      }
+    } else if (plan.signatures.size() != signatures.size()) {
+      emitError(getSemanticLocation(body))
+          << "instances of one definition disagree on declaration "
+             "count";
+      invalid = true;
+      return;
+    } else {
+      for (auto [expected, actual] :
+           llvm::zip_equal(plan.signatures, signatures)) {
+        if (expected.name != actual.name || expected.kind != actual.kind ||
+            expected.direction != actual.direction ||
+            expected.localParam != actual.localParam ||
+            expected.explicitRange != actual.explicitRange ||
+            expected.unavailableDefault != actual.unavailableDefault ||
+            expected.originalDefault != actual.originalDefault) {
+          emitError(getSemanticLocation(body))
+              << "instances of one definition disagree on declaration "
+                 "identity";
+          invalid = true;
+          return;
+        }
+      }
+    }
+    if (!signatures.empty() ||
+        llvm::any_of(getChildren(body), [](Operation *child) {
+          return isa<semantic::SVSourceParameterActualOp>(child);
+        }))
+      definitionInstancePlans.push_back(
+          {body, scope, definition, std::move(members)});
+  });
   if (invalid)
     return failure();
 
@@ -2754,9 +2751,9 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
     if (!source->hasAttr(vpiTypedefLayersAttrName))
       continue;
     auto semanticType = source->getAttrOfType<TypeAttr>("semantic_type");
-    auto converted = makeVPITypeSemantics(
-        semanticType.getValue(), getSemanticLocation(source),
-        typedefLayersFor(source), source);
+    auto converted = makeVPITypeSemantics(semanticType.getValue(),
+                                          getSemanticLocation(source),
+                                          typedefLayersFor(source), source);
     if (failed(converted)) {
       invalid = true;
       continue;
@@ -2971,9 +2968,9 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
                      "original default expression IDs exhausted"),
                  failure();
         ids[index] = nextSharedExpressionId++;
-        auto candidate = FlatSymbolRefAttr::get(
-            builder.getContext(),
-            "__talos_vpi_shared_default_" + std::to_string(ids[index]));
+        auto candidate = FlatSymbolRefAttr::get(builder.getContext(),
+                                                "__talos_vpi_shared_default_" +
+                                                    std::to_string(ids[index]));
         if (!defaultSymbols.lookupSymbolIn(design, candidate)) {
           nodes[index].reference = candidate;
           break;
@@ -3699,9 +3696,9 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
       invalid = true;
       continue;
     }
-    FailureOr<sim::VPITypeSemanticsAttr> target = makeVPITypeSemantics(
-        classType.getSemanticType(), getSemanticLocation(classType), {},
-        classType);
+    FailureOr<sim::VPITypeSemanticsAttr> target =
+        makeVPITypeSemantics(classType.getSemanticType(),
+                             getSemanticLocation(classType), {}, classType);
     if (failed(target)) {
       invalid = true;
       continue;
@@ -3724,8 +3721,9 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
     for (Operation *child : getChildren(classType)) {
       semantic::SVSubroutineSymbolOp method = getClassMethod(child);
       Operation *source = method ? method.getOperation() : child;
-      bool parameter = isa<semantic::SVParameterSymbolOp,
-                           semantic::SVTypeParameterSymbolOp>(source);
+      bool parameter =
+          isa<semantic::SVParameterSymbolOp, semantic::SVTypeParameterSymbolOp>(
+              source);
       bool constraint = isa<semantic::SVConstraintBlockSymbolOp>(source);
       sim::SimVPIObjectAnchorOp lexical = anchorDeclarations.lookup(source);
       if (!lexical ||
@@ -5038,9 +5036,9 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
         invalid = true;
         continue;
       }
-      FailureOr<sim::VPITypeSemanticsAttr> vpiType = makeVPITypeSemantics(
-          *semanticType, getSemanticLocation(property),
-          typedefLayersFor(property), property);
+      FailureOr<sim::VPITypeSemanticsAttr> vpiType =
+          makeVPITypeSemantics(*semanticType, getSemanticLocation(property),
+                               typedefLayersFor(property), property);
       if (failed(vpiType)) {
         invalid = true;
         continue;
@@ -5066,9 +5064,8 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
           eventID = id;
       }
       auto emitMember = [&](FlatSymbolRefAttr owner) {
-        std::string symbolName =
-            "__talos_vpi_class_member_" +
-            std::to_string(nextSyntheticInventoryId);
+        std::string symbolName = "__talos_vpi_class_member_" +
+                                 std::to_string(nextSyntheticInventoryId);
         auto declaration = sim::SimVPIClassMemberDeclOp::create(
             builder, getSemanticLocation(property), symbolName,
             nextSyntheticInventoryId++, scopes.lookup(property),

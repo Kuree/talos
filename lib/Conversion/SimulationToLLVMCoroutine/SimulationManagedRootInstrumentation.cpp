@@ -256,8 +256,8 @@ LogicalResult instrumentManagedRoots(sim::SimFuncOp function,
     Value status = schedule::NativeManagedRootPushOp::create(
         builder, collectionPoint->getLoc(), i32, record, slotsBase, rootCount,
         /*lazy=*/true);
-    Operation *check =
-        reportManagedStatus(builder, collectionPoint->getLoc(), Value{}, status);
+    Operation *check = reportManagedStatus(builder, collectionPoint->getLoc(),
+                                           Value{}, status);
     native::mark<native::ManagedRootRangePushCheck>(check);
   }
 
@@ -296,8 +296,8 @@ public:
   void runOnOperation() override {
     if (getOperation().isExternal())
       return;
-    if (failed(detail::instrumentManagedRoots(
-            getOperation(), getAnalysis<Liveness>(), polled)))
+    if (failed(detail::instrumentManagedRoots(getOperation(),
+                                              getAnalysis<Liveness>(), polled)))
       signalPassFailure();
   }
 };

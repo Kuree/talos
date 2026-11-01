@@ -468,8 +468,7 @@ std::optional<RandomProgramSMT> buildRandomProgramSMT(const uint8_t *program,
                                    : (uint64_t{1} << width) - 1;
       bool fullDomain = cardinality == 0 && width == 64 && lower == 0;
       bool captured = flags & TALOS_RT_RANDOM_DIST_CAPTURED_INTERVAL;
-      bool defaultComplement =
-          flags & TALOS_RT_RANDOM_DIST_DEFAULT_COMPLEMENT;
+      bool defaultComplement = flags & TALOS_RT_RANDOM_DIST_DEFAULT_COMPLEMENT;
       if (group >= distGroupCount || width == 0 || width > 64 ||
           targetOffset > aggregateWidth ||
           width > aggregateWidth - targetOffset ||
@@ -741,7 +740,8 @@ std::optional<RandomProgramSMT> buildRandomProgramSMT(const uint8_t *program,
           operand >= (opcode == TALOS_RT_RANDOM_END_DIST_WEIGHT_BIT_V1
                           ? captureCount
                           : guardSeen.size()) ||
-          stack.size() != 1 || stack.back().width != width || immediate >= width)
+          stack.size() != 1 || stack.back().width != width ||
+          immediate >= width)
         return std::nullopt;
       if (immediate + 1 == width)
         stack.clear();
@@ -947,8 +947,7 @@ std::optional<RandomProgramSMT> buildRandomProgramSMT(const uint8_t *program,
     stack.pop_back();
     StackValue lhs = stack.back();
     stack.pop_back();
-    if (opcode >= TALOS_RT_RANDOM_EQ_V1 &&
-        opcode <= TALOS_RT_RANDOM_LT_V1) {
+    if (opcode >= TALOS_RT_RANDOM_EQ_V1 && opcode <= TALOS_RT_RANDOM_LT_V1) {
       unsigned compareWidth = std::max(lhs.width, rhs.width);
       mlir::Value left =
           resize(builder, location, lhs, compareWidth, signedOperation);
@@ -966,21 +965,19 @@ std::optional<RandomProgramSMT> buildRandomProgramSMT(const uint8_t *program,
       default: {
         mlir::smt::BVCmpPredicate comparison;
         if (signedOperation) {
-          comparison = opcode == TALOS_RT_RANDOM_GE_V1
-                           ? mlir::smt::BVCmpPredicate::sge
-                       : opcode == TALOS_RT_RANDOM_GT_V1
-                           ? mlir::smt::BVCmpPredicate::sgt
-                       : opcode == TALOS_RT_RANDOM_LE_V1
-                           ? mlir::smt::BVCmpPredicate::sle
-                           : mlir::smt::BVCmpPredicate::slt;
+          comparison =
+              opcode == TALOS_RT_RANDOM_GE_V1   ? mlir::smt::BVCmpPredicate::sge
+              : opcode == TALOS_RT_RANDOM_GT_V1 ? mlir::smt::BVCmpPredicate::sgt
+              : opcode == TALOS_RT_RANDOM_LE_V1
+                  ? mlir::smt::BVCmpPredicate::sle
+                  : mlir::smt::BVCmpPredicate::slt;
         } else {
-          comparison = opcode == TALOS_RT_RANDOM_GE_V1
-                           ? mlir::smt::BVCmpPredicate::uge
-                       : opcode == TALOS_RT_RANDOM_GT_V1
-                           ? mlir::smt::BVCmpPredicate::ugt
-                       : opcode == TALOS_RT_RANDOM_LE_V1
-                           ? mlir::smt::BVCmpPredicate::ule
-                           : mlir::smt::BVCmpPredicate::ult;
+          comparison =
+              opcode == TALOS_RT_RANDOM_GE_V1   ? mlir::smt::BVCmpPredicate::uge
+              : opcode == TALOS_RT_RANDOM_GT_V1 ? mlir::smt::BVCmpPredicate::ugt
+              : opcode == TALOS_RT_RANDOM_LE_V1
+                  ? mlir::smt::BVCmpPredicate::ule
+                  : mlir::smt::BVCmpPredicate::ult;
         }
         predicate = mlir::smt::BVCmpOp::create(builder, location, comparison,
                                                left, right);
@@ -1024,10 +1021,10 @@ std::optional<RandomProgramSMT> buildRandomProgramSMT(const uint8_t *program,
           return std::nullopt;
         return found->second;
       };
-      if (lhs.width == rhs.width && (opcode == TALOS_RT_RANDOM_GE_V1 ||
-                                     opcode == TALOS_RT_RANDOM_GT_V1 ||
-                                     opcode == TALOS_RT_RANDOM_LE_V1 ||
-                                     opcode == TALOS_RT_RANDOM_LT_V1)) {
+      if (lhs.width == rhs.width &&
+          (opcode == TALOS_RT_RANDOM_GE_V1 || opcode == TALOS_RT_RANDOM_GT_V1 ||
+           opcode == TALOS_RT_RANDOM_LE_V1 ||
+           opcode == TALOS_RT_RANDOM_LT_V1)) {
         std::optional<uint32_t> lhsCapture = directCaptureIndex(lhs);
         std::optional<uint32_t> rhsCapture = directCaptureIndex(rhs);
         if (lhs.directVariable && rhsCapture) {

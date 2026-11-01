@@ -2,11 +2,11 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
 #include "talos/Runtime/Runtime.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <cstdlib>
@@ -32,22 +32,22 @@ TEST(GeneratedDesignDatabase, SharedInstanceParameters) {
   for (unsigned byte = 0; byte != 8; ++byte)
     checksum |= uint64_t{encoded->bytecode[32 + byte]} << (byte * 8);
   talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                               encoded->executionFlags,
-                                               0,
-                                               encoded->bytecode.data(),
-                                               encoded->bytecode.size(),
-                                               encoded->designDatabase.data(),
-                                               encoded->designDatabase.size(),
-                                               encoded->stateBitCount,
-                                               checksum,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0};
+                                             encoded->executionFlags,
+                                             0,
+                                             encoded->bytecode.data(),
+                                             encoded->bytecode.size(),
+                                             encoded->designDatabase.data(),
+                                             encoded->designDatabase.size(),
+                                             encoded->stateBitCount,
+                                             checksum,
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
   ASSERT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_OK);
   talos_rt_context *runtime = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &runtime),
@@ -197,8 +197,7 @@ TEST(GeneratedDesignDatabase, SharedInstanceParameters) {
     HeaderWriter(bytes.data()).setChecksum(hash);
     execution.design_database = bytes.data();
     execution.design_database_size = bytes.size();
-    EXPECT_EQ(talos_rt_v1_design_validate(&execution),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_INVALID_DESIGN);
   };
   auto memberNamed = [&](const char *name) {
     for (uint32_t index = 0; index != directory.getDefinitionMemberCount();
@@ -366,22 +365,22 @@ module attributes {llvm.data_layout = "e-p:64:64-i64:64-i32:32-i16:16-i8:8", llv
     for (unsigned byte = 0; byte != 8; ++byte)
       checksum |= uint64_t{encoded->bytecode[32 + byte]} << (byte * 8);
     talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                                 encoded->executionFlags,
-                                                 0,
-                                                 encoded->bytecode.data(),
-                                                 encoded->bytecode.size(),
-                                                 image.data(),
-                                                 image.size(),
-                                                 encoded->stateBitCount,
-                                                 checksum,
-                                                 nullptr,
-                                                 0,
-                                                 0,
-                                                 0,
-                                                 nullptr,
-                                                 0,
-                                                 nullptr,
-                                                 0};
+                                               encoded->executionFlags,
+                                               0,
+                                               encoded->bytecode.data(),
+                                               encoded->bytecode.size(),
+                                               image.data(),
+                                               image.size(),
+                                               encoded->stateBitCount,
+                                               checksum,
+                                               nullptr,
+                                               0,
+                                               0,
+                                               0,
+                                               nullptr,
+                                               0,
+                                               nullptr,
+                                               0};
     EXPECT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_OK);
     HeaderView header(image.data());
     SemanticDirectoryView directory(image.data() + header.getReserved());

@@ -39,8 +39,9 @@ bool continues(StringRef predicate, unsigned value, unsigned bound,
     lhs = value < modulus / 2 ? int(value) : int(value) - int(modulus);
     rhs = bound < modulus / 2 ? int(bound) : int(bound) - int(modulus);
   }
-  StringRef comparison =
-      predicate == "eq" || predicate == "ne" ? predicate : predicate.drop_front();
+  StringRef comparison = predicate == "eq" || predicate == "ne"
+                             ? predicate
+                             : predicate.drop_front();
   if (comparison == "eq")
     return lhs == rhs;
   if (comparison == "ne")
@@ -89,8 +90,8 @@ std::vector<size_t> provenLoops(StringRef functions, size_t count,
     return loops;
   module->walk([&](talos::sim::SimFuncOp function) {
     size_t index = std::stoul(function.getSymName().drop_front().str());
-    loops[index] = talos::analysis::analyzeBoundedLoops(function.getBody())
-                       .size();
+    loops[index] =
+        talos::analysis::analyzeBoundedLoops(function.getBody()).size();
   });
   return loops;
 }
@@ -133,10 +134,9 @@ TEST(BoundedLoopOracle, ConstantInitializer) {
   std::string type = "i" + std::to_string(width);
   for (auto [index, c] : llvm::enumerate(cases))
     os << header(index) << "  %start = arith.constant " << c.start << " : "
-       << type << "\n  cf.br ^head(%start : " << type << ")\n^head(%i: "
-       << type << "):\n  %bound = arith.constant " << c.bound << " : "
-       << type << "\n  %test = arith.cmpi " << c.predicate
-       << ", %i, %bound : " << type
+       << type << "\n  cf.br ^head(%start : " << type << ")\n^head(%i: " << type
+       << "):\n  %bound = arith.constant " << c.bound << " : " << type
+       << "\n  %test = arith.cmpi " << c.predicate << ", %i, %bound : " << type
        << "\n  cf.cond_br %test, ^body, ^exit\n^body:\n  %step = "
           "arith.constant "
        << c.stride << " : " << type << "\n  %next = arith."
@@ -146,14 +146,13 @@ TEST(BoundedLoopOracle, ConstantInitializer) {
   std::vector<size_t> loops = provenLoops(functions, cases.size());
   size_t marked = 0;
   for (auto [index, c] : llvm::enumerate(cases)) {
-    SCOPED_TRACE(testing::Message()
-                 << c.predicate.str() << " start=" << c.start
-                 << " bound=" << c.bound << " stride=" << c.stride
-                 << " subtract=" << c.subtract);
+    SCOPED_TRACE(testing::Message() << c.predicate.str() << " start=" << c.start
+                                    << " bound=" << c.bound << " stride="
+                                    << c.stride << " subtract=" << c.subtract);
     ASSERT_LE(loops[index], 1u);
     bool proven = loops[index];
-    bool finite =
-        terminates(c.predicate, c.start, c.bound, c.stride, c.subtract, modulus);
+    bool finite = terminates(c.predicate, c.start, c.bound, c.stride,
+                             c.subtract, modulus);
     EXPECT_TRUE(!proven || finite) << "nonterminating loop proven bounded";
     // Equality reachability and zero-trip recognition should be complete.
     if (c.predicate == "eq" || c.predicate == "ne" ||
@@ -214,8 +213,8 @@ TEST(BoundedLoopOracle, InitializerIntervals) {
     if (!loops[index])
       continue;
     for (unsigned start = c.range.low; start <= c.range.high; ++start)
-      EXPECT_TRUE(terminates(c.predicate, start, c.bound, c.stride,
-                             c.subtract, modulus))
+      EXPECT_TRUE(terminates(c.predicate, start, c.bound, c.stride, c.subtract,
+                             modulus))
           << "start " << start << " does not terminate";
     ++marked;
   }
@@ -236,9 +235,9 @@ void checkBoundIntervals(bool correlated) {
     unsigned parameter, stride;
     bool subtract;
   };
-  std::vector<unsigned> parameters =
-      correlated ? std::vector<unsigned>{0, 1, 3}
-                 : std::vector<unsigned>{0, 1, 2, 3};
+  std::vector<unsigned> parameters = correlated
+                                         ? std::vector<unsigned>{0, 1, 3}
+                                         : std::vector<unsigned>{0, 1, 2, 3};
   std::vector<Case> cases;
   for (StringRef predicate : predicates)
     for (Interval range : intervals(modulus))
@@ -284,8 +283,8 @@ void checkBoundIntervals(bool correlated) {
     for (unsigned outer = c.range.low; outer <= c.range.high; ++outer) {
       unsigned start = correlated ? outer : c.parameter;
       unsigned limit = correlated ? (outer + c.parameter) % modulus : outer;
-      EXPECT_TRUE(terminates(c.predicate, start, limit, c.stride, c.subtract,
-                             modulus))
+      EXPECT_TRUE(
+          terminates(c.predicate, start, limit, c.stride, c.subtract, modulus))
           << "outer value " << outer << " does not terminate";
     }
     ++marked;
@@ -315,7 +314,8 @@ TEST(BoundedLoopOracle, PackedRecurrences) {
         for (unsigned stride = 0; stride < modulus; ++stride)
           for (bool subtract : {false, true})
             for (unsigned wide : {width, width + 2})
-              cases.push_back({predicate, start, bound, stride, subtract, wide});
+              cases.push_back(
+                  {predicate, start, bound, stride, subtract, wide});
   std::string functions;
   llvm::raw_string_ostream os(functions);
   for (auto [index, c] : llvm::enumerate(cases)) {
@@ -330,8 +330,8 @@ TEST(BoundedLoopOracle, PackedRecurrences) {
           "  %narrow = simulation.packed.flatten %i : (!counter) -> "
        << narrow << "\n  %value = simulation.logic.resize %narrow signed = "
        << "false : " << narrow << " -> " << logic
-       << "\n  %bound = simulation.logic.constant " << c.bound << " : "
-       << bits << ", 0 : " << bits << " : " << logic
+       << "\n  %bound = simulation.logic.constant " << c.bound << " : " << bits
+       << ", 0 : " << bits << " : " << logic
        << "\n  %compare = simulation.logic.compare " << c.predicate
        << " %value, %bound : (" << logic << ", " << logic
        << ") -> !simulation.logic<1>\n"
@@ -339,8 +339,8 @@ TEST(BoundedLoopOracle, PackedRecurrences) {
           "  cf.cond_br %test, ^body, ^exit\n^body:\n"
           "  %step = simulation.logic.constant "
        << c.stride << " : " << bits << ", 0 : " << bits << " : " << logic
-       << "\n  %sum = simulation.logic.binary "
-       << (c.subtract ? "sub" : "add") << " %value, %step : " << logic
+       << "\n  %sum = simulation.logic.binary " << (c.subtract ? "sub" : "add")
+       << " %value, %step : " << logic
        << "\n  %nextbits = simulation.logic.resize %sum signed = false : "
        << logic << " -> " << narrow
        << "\n  %next = simulation.packed.unflatten %nextbits : (" << narrow
@@ -358,8 +358,8 @@ TEST(BoundedLoopOracle, PackedRecurrences) {
                  << " subtract=" << c.subtract << " wide=" << c.wide);
     ASSERT_LE(loops[index], 1u);
     bool proven = loops[index];
-    bool finite =
-        terminates(c.predicate, c.start, c.bound, c.stride, c.subtract, modulus);
+    bool finite = terminates(c.predicate, c.start, c.bound, c.stride,
+                             c.subtract, modulus);
     EXPECT_TRUE(!proven || finite) << "packed recurrence wraps";
     if (c.predicate == "eq" || c.predicate == "ne" ||
         !continues(c.predicate, c.start, c.bound, modulus))

@@ -40,8 +40,8 @@ namespace {
 /// dead control flow remains in the generated loop.
 void removeCollection(schedule::NativeGCCollectOp collection) {
   OpBuilder builder(collection);
-  Value ok = arith::ConstantOp::create(
-      builder, collection.getLoc(), builder.getI32IntegerAttr(TALOS_RT_OK));
+  Value ok = arith::ConstantOp::create(builder, collection.getLoc(),
+                                       builder.getI32IntegerAttr(TALOS_RT_OK));
   collection.getStatus().replaceAllUsesWith(ok);
   collection.erase();
   // A folded branch is erased, and it may also forward the status or the

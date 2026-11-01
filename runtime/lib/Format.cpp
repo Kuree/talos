@@ -80,8 +80,7 @@ bool getLogicView(const talos_rt_arg_v1 &argument, LogicView &view) {
         !enumeration->value || enumeration->reserved != 0 ||
         enumeration->flags != argument.flags)
       return false;
-    view = {enumeration->width,
-            (enumeration->flags & TALOS_RT_ARG_SIGNED) != 0,
+    view = {enumeration->width, (enumeration->flags & TALOS_RT_ARG_SIGNED) != 0,
             enumeration->value, enumeration->unknown};
     return true;
   }
@@ -129,8 +128,7 @@ bool getStringBytes(const talos_rt_arg_v1 &argument, char scratch[8],
     return false;
   talos_rt_string_v1 string = 0;
   std::memcpy(&string, argument.data, sizeof(string));
-  return talos_rt_v1_string_view(string, scratch, &data, &size) ==
-         TALOS_RT_OK;
+  return talos_rt_v1_string_view(string, scratch, &data, &size) == TALOS_RT_OK;
 }
 
 bool getStringLogicView(const talos_rt_arg_v1 &argument,
@@ -373,8 +371,8 @@ uint32_t defaultDecimalWidth(const LogicView &view) {
 }
 
 talos_rt_status formatDecimal(std::string &output, const LogicView &view,
-                                const FormatOptions &options,
-                                uint64_t multiplier = 1) {
+                              const FormatOptions &options,
+                              uint64_t multiplier = 1) {
   std::string field;
   if (std::optional<char> unknown = decimalUnknown(view))
     field.push_back(*unknown);
@@ -386,7 +384,7 @@ talos_rt_status formatDecimal(std::string &output, const LogicView &view,
 }
 
 talos_rt_status formatInteger(std::string &output, const LogicView &view,
-                                char specifier, const FormatOptions &options) {
+                              char specifier, const FormatOptions &options) {
   char spec =
       static_cast<char>(std::tolower(static_cast<unsigned char>(specifier)));
   if (spec == 'd')
@@ -429,14 +427,14 @@ std::string logicToString(const LogicView &view, bool trimLeadingNulls) {
 }
 
 talos_rt_status formatStringValue(std::string &output, std::string field,
-                                    const FormatOptions &options) {
+                                  const FormatOptions &options) {
   uint32_t width = options.width.value_or(0);
   applyPadding(output, std::move(field), width, options.left, ' ');
   return TALOS_RT_OK;
 }
 
 talos_rt_status formatFloat(std::string &output, double value, char specifier,
-                              const FormatOptions &options) {
+                            const FormatOptions &options) {
   std::string format = "%";
   if (options.left)
     format.push_back('-');
@@ -485,7 +483,7 @@ double logicToDouble(const LogicView &view) {
 }
 
 talos_rt_status appendRaw(std::string &output, const LogicView &view,
-                            bool fourState) {
+                          bool fourState) {
   uint64_t chunks = (view.width + 31) / 32;
   if (chunks > std::numeric_limits<size_t>::max() / (fourState ? 8 : 4))
     return TALOS_RT_OUT_OF_MEMORY;
@@ -517,8 +515,8 @@ talos_rt_status appendRaw(std::string &output, const LogicView &view,
 // here, matching the compact spelling the clause's own examples use for
 // pattern elements.
 std::string talos_rt_pattern_integer_text(uint64_t width, bool isSigned,
-                                            const uint64_t *value,
-                                            const uint64_t *unknown) {
+                                          const uint64_t *value,
+                                          const uint64_t *unknown) {
   LogicView view;
   view.width = width;
   view.isSigned = isSigned;
@@ -534,8 +532,8 @@ namespace {
 std::string scalarPattern(const talos_rt_arg_v1 &argument) {
   LogicView view;
   if (getLogicView(argument, view))
-    return talos_rt_pattern_integer_text(view.width, view.isSigned,
-                                           view.value, view.unknown);
+    return talos_rt_pattern_integer_text(view.width, view.isSigned, view.value,
+                                         view.unknown);
   char scratch[8];
   const char *bytes = nullptr;
   uint64_t size = 0;
@@ -569,9 +567,9 @@ TimeOverride snapshotTimeFormat(talos_rt_context *context) {
 // precision units, whose own magnitude comes from the format environment, so
 // the two exponents give the factor between them.
 talos_rt_status formatOverriddenTime(std::string &output, long double ticks,
-                                       int32_t precisionExponent,
-                                       const TimeOverride &timeFormat,
-                                       uint32_t width) {
+                                     int32_t precisionExponent,
+                                     const TimeOverride &timeFormat,
+                                     uint32_t width) {
   long double scaled =
       ticks * std::pow(10.0L, static_cast<long double>(precisionExponent -
                                                        timeFormat.units));
@@ -591,7 +589,7 @@ talos_rt_status formatOverriddenTime(std::string &output, long double ticks,
 }
 
 talos_rt_status getManagedContainer(const talos_rt_arg_v1 &argument,
-                                      talos_rt_object_v1 *&container) {
+                                    talos_rt_object_v1 *&container) {
   if (argument.size != 0 || !argument.data || argument.unknown)
     return TALOS_RT_INVALID_ARGUMENT;
   talos_rt_managed_word_v1 word = 0;
@@ -602,12 +600,11 @@ talos_rt_status getManagedContainer(const talos_rt_arg_v1 &argument,
   return TALOS_RT_OK;
 }
 
-talos_rt_status formatArgument(talos_rt_context *context,
-                                 std::string &output,
-                                 const talos_rt_arg_v1 &argument,
-                                 char specifier, const FormatOptions &options,
-                                 const talos_rt_format_env_v1 *environment,
-                                 const TimeOverride &timeFormat) {
+talos_rt_status formatArgument(talos_rt_context *context, std::string &output,
+                               const talos_rt_arg_v1 &argument, char specifier,
+                               const FormatOptions &options,
+                               const talos_rt_format_env_v1 *environment,
+                               const TimeOverride &timeFormat) {
   if ((argument.flags & TALOS_RT_ARG_REAL_TIME) != 0 &&
       argument.kind != TALOS_RT_ARG_REAL)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -624,8 +621,8 @@ talos_rt_status formatArgument(talos_rt_context *context,
       selected = &aggregate->two_state;
     else if (spec == 'z')
       selected = &aggregate->four_state;
-    talos_rt_arg_v1 stringArgument{TALOS_RT_ARG_MANAGED_STRING, 0, 0,
-                                     selected, nullptr};
+    talos_rt_arg_v1 stringArgument{TALOS_RT_ARG_MANAGED_STRING, 0, 0, selected,
+                                   nullptr};
     // The compiler has already emitted each scalar raw record independently;
     // copying the selected managed string preserves that padding and keeps a
     // dynamic conversion O(total bytes). Every non-raw conversion delegates
@@ -689,8 +686,7 @@ talos_rt_status formatArgument(talos_rt_context *context,
     if (argument.kind == TALOS_RT_ARG_NET) {
       if (!context || !getLogicView(argument, view) || view.width != 1)
         return TALOS_RT_ARGUMENT_MISMATCH;
-      const auto *net =
-          static_cast<const talos_rt_net_arg_v1 *>(argument.data);
+      const auto *net = static_cast<const talos_rt_net_arg_v1 *>(argument.data);
       talos_rt_status status = talos_rt_design_net_strength(
           context, net->handle, &strengths, net->native_state != 0);
       if (status != TALOS_RT_OK)
@@ -868,8 +864,7 @@ talos_rt_status formatArgument(talos_rt_context *context,
           status != TALOS_RT_OK)
         return status;
       std::string value;
-      talos_rt_status status =
-          talos_rt_container_pattern(container, value, 0);
+      talos_rt_status status = talos_rt_container_pattern(container, value, 0);
       if (status != TALOS_RT_OK)
         return status;
       return formatStringValue(output, std::move(value), options);
@@ -948,13 +943,14 @@ bool parseUnsigned(std::string_view format, size_t &position,
   return true;
 }
 
-talos_rt_status
-formatSequence(talos_rt_context *context, std::string &output,
-               std::string_view format, const talos_rt_arg_v1 *arguments,
-               uint64_t argumentCount, uint64_t &argumentIndex,
-               const talos_rt_format_env_v1 *environment,
-               const TimeOverride &timeFormat, std::string &error,
-               std::vector<std::string> *warnings = nullptr) {
+talos_rt_status formatSequence(talos_rt_context *context, std::string &output,
+                               std::string_view format,
+                               const talos_rt_arg_v1 *arguments,
+                               uint64_t argumentCount, uint64_t &argumentIndex,
+                               const talos_rt_format_env_v1 *environment,
+                               const TimeOverride &timeFormat,
+                               std::string &error,
+                               std::vector<std::string> *warnings = nullptr) {
   for (size_t position = 0; position < format.size();) {
     if (format[position] != '%') {
       output.push_back(format[position++]);
@@ -1085,8 +1081,7 @@ formatSequence(talos_rt_context *context, std::string &output,
   return TALOS_RT_OK;
 }
 
-char defaultSpecifier(const talos_rt_arg_v1 &argument,
-                      talos_rt_radix radix) {
+char defaultSpecifier(const talos_rt_arg_v1 &argument, talos_rt_radix radix) {
   switch (argument.kind) {
   case TALOS_RT_ARG_LOGIC:
   case TALOS_RT_ARG_TIME:
@@ -1095,7 +1090,7 @@ char defaultSpecifier(const talos_rt_arg_v1 &argument,
     return radix == TALOS_RT_RADIX_BINARY  ? 'b'
            : radix == TALOS_RT_RADIX_OCTAL ? 'o'
            : radix == TALOS_RT_RADIX_HEX   ? 'h'
-                                             : 'd';
+                                           : 'd';
   case TALOS_RT_ARG_STRING:
   case TALOS_RT_ARG_MANAGED_STRING:
   case TALOS_RT_ARG_RAW_AGGREGATE:
@@ -1128,12 +1123,12 @@ realtimeFractionDigits(const talos_rt_format_env_v1 *environment) {
   return digits;
 }
 
-talos_rt_status
-buildDisplay(talos_rt_context *context, std::string &output,
-             talos_rt_radix radix, const talos_rt_arg_v1 *items,
-             uint64_t itemCount, const talos_rt_format_env_v1 *environment,
-             const TimeOverride &timeFormat, std::string &error,
-             std::vector<std::string> &warnings) {
+talos_rt_status buildDisplay(talos_rt_context *context, std::string &output,
+                             talos_rt_radix radix, const talos_rt_arg_v1 *items,
+                             uint64_t itemCount,
+                             const talos_rt_format_env_v1 *environment,
+                             const TimeOverride &timeFormat, std::string &error,
+                             std::vector<std::string> &warnings) {
   if (radix != TALOS_RT_RADIX_BINARY && radix != TALOS_RT_RADIX_OCTAL &&
       radix != TALOS_RT_RADIX_DECIMAL && radix != TALOS_RT_RADIX_HEX) {
     error = "invalid default display radix";
@@ -1187,8 +1182,8 @@ buildDisplay(talos_rt_context *context, std::string &output,
       }
       FormatOptions options;
       options.precision = *digits;
-      talos_rt_status status = formatArgument(
-          context, output, item, 'f', options, environment, timeFormat);
+      talos_rt_status status = formatArgument(context, output, item, 'f',
+                                              options, environment, timeFormat);
       if (status != TALOS_RT_OK) {
         error = "failed to format realtime display item";
         return status;
@@ -1201,7 +1196,7 @@ buildDisplay(talos_rt_context *context, std::string &output,
       return TALOS_RT_ARGUMENT_MISMATCH;
     }
     talos_rt_status status = formatArgument(context, output, item, specifier,
-                                              {}, environment, timeFormat);
+                                            {}, environment, timeFormat);
     if (status != TALOS_RT_OK) {
       error = "failed to format display item";
       return status;
@@ -1221,12 +1216,10 @@ void reportFormatWarnings(talos_rt_context *context,
 
 } // namespace
 
-extern "C" talos_rt_status
-talos_rt_v1_format(talos_rt_context *context, const char *format,
-                     uint64_t formatSize, const talos_rt_arg_v1 *arguments,
-                     uint64_t argumentCount,
-                     const talos_rt_format_env_v1 *environment,
-                     talos_rt_buffer_v1 *outBuffer) {
+extern "C" talos_rt_status talos_rt_v1_format(
+    talos_rt_context *context, const char *format, uint64_t formatSize,
+    const talos_rt_arg_v1 *arguments, uint64_t argumentCount,
+    const talos_rt_format_env_v1 *environment, talos_rt_buffer_v1 *outBuffer) {
   if (!context || !outBuffer || !validBytes(format, formatSize) ||
       (argumentCount != 0 && !arguments) ||
       formatSize > std::numeric_limits<size_t>::max())
@@ -1255,8 +1248,8 @@ talos_rt_v1_format(talos_rt_context *context, const char *format,
 
 extern "C" talos_rt_status
 talos_rt_v1_time_format(talos_rt_context *context, int32_t units,
-                          uint32_t fractionDigits, const char *suffix,
-                          uint64_t suffixSize, uint32_t width) {
+                        uint32_t fractionDigits, const char *suffix,
+                        uint64_t suffixSize, uint32_t width) {
   // The buffer %t renders through is fixed, so a precision that could not fit
   // is rejected rather than silently truncated.
   if (!context || !validBytes(suffix, suffixSize) || fractionDigits > 128 ||
@@ -1275,9 +1268,9 @@ talos_rt_v1_time_format(talos_rt_context *context, int32_t units,
 }
 
 extern "C" double talos_rt_v1_time_scan_scale(talos_rt_context *context,
-                                                double value,
-                                                uint64_t timeMultiplier,
-                                                int32_t timePrecision) {
+                                              double value,
+                                              uint64_t timeMultiplier,
+                                              int32_t timePrecision) {
   if (!context || timeMultiplier == 0 || !std::isfinite(value))
     return value;
 
@@ -1310,8 +1303,7 @@ extern "C" double talos_rt_v1_time_scan_scale(talos_rt_context *context,
 extern "C" talos_rt_status talos_rt_v1_string_output_format(
     talos_rt_context *context, talos_rt_radix defaultRadix,
     const talos_rt_arg_v1 *items, uint64_t itemCount,
-    const talos_rt_format_env_v1 *environment,
-    talos_rt_string_v1 *outString) {
+    const talos_rt_format_env_v1 *environment, talos_rt_string_v1 *outString) {
   if (!context || !outString || (itemCount != 0 && !items))
     return TALOS_RT_INVALID_ARGUMENT;
   *outString = 0;
@@ -1332,14 +1324,15 @@ extern "C" talos_rt_status talos_rt_v1_string_output_format(
     if (!lane)
       return TALOS_RT_INVALID_LIFECYCLE;
     return talos_rt_v1_string_create(lane, output.data(), output.size(),
-                                       outString);
+                                     outString);
   });
 }
 
-extern "C" talos_rt_status talos_rt_v1_eval_display(
-    talos_rt_context *context, uint32_t descriptor, uint32_t appendNewline,
-    talos_rt_radix defaultRadix, const talos_rt_arg_v1 *items,
-    uint64_t itemCount, const talos_rt_format_env_v1 *environment) {
+extern "C" talos_rt_status
+talos_rt_v1_eval_display(talos_rt_context *context, uint32_t descriptor,
+                         uint32_t appendNewline, talos_rt_radix defaultRadix,
+                         const talos_rt_arg_v1 *items, uint64_t itemCount,
+                         const talos_rt_format_env_v1 *environment) {
   if (!context || (descriptor != 1 && descriptor != 0x80000002u) ||
       (itemCount != 0 && !items))
     return TALOS_RT_INVALID_ARGUMENT;
@@ -1370,9 +1363,9 @@ extern "C" talos_rt_status talos_rt_v1_eval_display(
 
 extern "C" talos_rt_status
 talos_rt_v1_display(talos_rt_context *context, uint32_t descriptor,
-                      uint32_t appendNewline, talos_rt_radix defaultRadix,
-                      const talos_rt_arg_v1 *items, uint64_t itemCount,
-                      const talos_rt_format_env_v1 *environment) {
+                    uint32_t appendNewline, talos_rt_radix defaultRadix,
+                    const talos_rt_arg_v1 *items, uint64_t itemCount,
+                    const talos_rt_format_env_v1 *environment) {
   if (!context || (itemCount != 0 && !items))
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
@@ -1435,8 +1428,8 @@ talos_rt_v1_display(talos_rt_context *context, uint32_t descriptor,
       context->monitorReport = std::move(report);
       context->monitorReported = true;
     }
-    talos_rt_status written = writeUnlocked(
-        context, descriptor, output.data(), output.size(), nullptr);
+    talos_rt_status written = writeUnlocked(context, descriptor, output.data(),
+                                            output.size(), nullptr);
     if (written != TALOS_RT_INVALID_HANDLE)
       return written;
     if (monitorReport) {

@@ -1,4 +1,5 @@
-//===- ManagedCollectionAnalysis.h - Managed heap collection points -*- C++ -*-===//
+//===- ManagedCollectionAnalysis.h - Managed heap collection points -*- C++
+//-*-===//
 
 #ifndef TALOS_ANALYSIS_MANAGEDCOLLECTIONANALYSIS_H
 #define TALOS_ANALYSIS_MANAGEDCOLLECTIONANALYSIS_H

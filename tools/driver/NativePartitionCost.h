@@ -1,4 +1,5 @@
-//===- NativePartitionCost.h - Definition-local partition weights -*- C++ -*-===//
+//===- NativePartitionCost.h - Definition-local partition weights -*- C++
+//-*-===//
 
 #ifndef TALOS_TOOLS_DRIVER_NATIVEPARTITIONCOST_H
 #define TALOS_TOOLS_DRIVER_NATIVEPARTITIONCOST_H

@@ -101,8 +101,8 @@ const T *findRecord(const IndexMap<Key, const T *> &index, const Key &key) {
 struct ReportIndex {
   IndexMap<ConfigurationOptionKey, const FunctionalConfigurationOption *>
       options;
-  IndexMap<ConfigurationKey, talos::coverage::detail::RecordRange<
-                                 FunctionalConfigurationOption>>
+  IndexMap<ConfigurationKey,
+           talos::coverage::detail::RecordRange<FunctionalConfigurationOption>>
       optionsByConfiguration;
   IndexMap<uint64_t, const FunctionalItem *> templateItems;
   IndexMap<uint64_t, const CrossPlan *> crossPlans;
@@ -2041,11 +2041,12 @@ void textReport(llvm::raw_ostream &out, const Database &database,
     for (const FunctionalType &type : database.functionalTypes)
       if (report.functionalTypes.count(type.id))
         types.push_back(&type);
-    std::stable_sort(types.begin(), types.end(),
-                     [](const FunctionalType *left, const FunctionalType *right) {
-                       return std::tie(left->hierarchy, left->name) <
-                              std::tie(right->hierarchy, right->name);
-                     });
+    std::stable_sort(
+        types.begin(), types.end(),
+        [](const FunctionalType *left, const FunctionalType *right) {
+          return std::tie(left->hierarchy, left->name) <
+                 std::tie(right->hierarchy, right->name);
+        });
     out << "functional detail:\n";
     for (const FunctionalType *type : types) {
       const uint64_t typeID = type->id;
@@ -3451,8 +3452,8 @@ void htmlReport(llvm::raw_ostream &out, const Database &database,
           }
           std::string listing;
           llvm::raw_string_ostream listingStream(listing);
-          talos::frontend::writeSystemVerilogTokenListing(
-              text, languageVersion, listingStream);
+          talos::frontend::writeSystemVerilogTokenListing(text, languageVersion,
+                                                          listingStream);
           json.attribute("text", text);
           json.attribute("tokens", listing);
         });

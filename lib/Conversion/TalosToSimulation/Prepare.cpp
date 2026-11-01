@@ -523,9 +523,10 @@ static bool typeContainsEvent(Type type) {
   return false;
 }
 
-static bool isProgramCodeUnit(
-    Operation *op, const llvm::StringMap<bool> &programDefinitionsByName,
-    llvm::DenseMap<Operation *, bool> &programInstances) {
+static bool
+isProgramCodeUnit(Operation *op,
+                  const llvm::StringMap<bool> &programDefinitionsByName,
+                  llvm::DenseMap<Operation *, bool> &programInstances) {
   if (op->getParentOfType<semantic::SVAnonymousProgramSymbolOp>())
     return true;
   auto instance = op->getParentOfType<semantic::SVInstanceSymbolOp>();
@@ -548,9 +549,8 @@ static bool isProgramCodeUnit(
   // which may be flat even when parsed as a nested SymbolRefAttr. Resolve the
   // source definition name as a deterministic fallback.
   auto referencedPath = instance->getAttrOfType<StringAttr>("referenced_path");
-  return cached->second =
-             referencedPath &&
-             programDefinitionsByName.lookup(referencedPath.getValue());
+  return cached->second = referencedPath && programDefinitionsByName.lookup(
+                                                referencedPath.getValue());
 }
 
 class TalosSimPreparePass
@@ -707,8 +707,7 @@ void TalosSimPreparePass::runOnOperation() {
       operation->removeAttr(foldedConstantAttrName);
       Operation *parent = operation->getParentOp();
       if (isSemanticExpression(parent))
-        (staleFold ? staleFoldExpressions : callFoldExpressions)
-            .insert(parent);
+        (staleFold ? staleFoldExpressions : callFoldExpressions).insert(parent);
     }
 
     if (!call)
@@ -4739,8 +4738,8 @@ void TalosSimPreparePass::runOnOperation() {
       module, semanticRoot, sourceUnits, semanticSymbols, *scopes, builder);
   if (failed(preparedUnits))
     return abort();
-  if (failed(materializeProceduralStatements(
-          design, *preparedUnits, semanticSymbols, builder)))
+  if (failed(materializeProceduralStatements(design, *preparedUnits,
+                                             semanticSymbols, builder)))
     return abort();
   if (failed(
           materializeProceduralTypes(module, design, proceduralTypes, builder)))
@@ -5697,8 +5696,7 @@ void TalosSimPreparePass::runOnOperation() {
     SmallVector<Operation *> callChildren = getChildren(call);
     uint64_t argumentCount = call.getArgumentCount();
     bool hasInlineConstraints = call.getHasInlineConstraints();
-    if (argumentCount == 0 &&
-        call->hasAttr("talos.implicit_this_randomize")) {
+    if (argumentCount == 0 && call->hasAttr("talos.implicit_this_randomize")) {
       // randomize() inside a class method is this.randomize(). Make the
       // receiver explicit, as slang does for a written `this`.
       auto method = call->getParentOfType<semantic::SVSubroutineSymbolOp>();
@@ -9725,8 +9723,8 @@ void TalosSimPreparePass::runOnOperation() {
   };
   for (PreparedUnit &unit : units) {
     SmallVector<Attribute> frozen;
-    if (auto rules = unit.source->getAttrOfType<ArrayAttr>(
-            "talos.timing_path_rules")) {
+    if (auto rules =
+            unit.source->getAttrOfType<ArrayAttr>("talos.timing_path_rules")) {
       for (auto rule : rules.getAsRange<sim::TimingPathRuleAttr>()) {
         FailureOr<sim::TimingPathConditionAttr> condition =
             freezeTimingCondition(unit, rule.getCondition());
@@ -10707,8 +10705,8 @@ void TalosSimPreparePass::runOnOperation() {
       functionAttrs.push_back(
           sim::named<sim::metadata::UdpMetadata>(declaration));
     }
-    if (auto rules = unit.source->getAttrOfType<ArrayAttr>(
-            "talos.timing_path_rules")) {
+    if (auto rules =
+            unit.source->getAttrOfType<ArrayAttr>("talos.timing_path_rules")) {
       // Delays and pulse limits are whole design precision ticks.
       auto toTicks = [&](DenseI64ArrayAttr femtoseconds) -> DenseI64ArrayAttr {
         SmallVector<int64_t, 12> ticks;
@@ -10782,9 +10780,9 @@ void TalosSimPreparePass::runOnOperation() {
               static_cast<uint32_t>(unit.observerResult))));
     if (::talos::schedule::has<::talos::schedule::Field::OverrideEvaluator>(
             unit.source))
-      functionAttrs.push_back(::talos::schedule::named<
-                              ::talos::schedule::Field::OverrideEvaluator>(
-          builder.getUnitAttr()));
+      functionAttrs.push_back(
+          ::talos::schedule::named<::talos::schedule::Field::OverrideEvaluator>(
+              builder.getUnitAttr()));
     if (unit.entryKind == sim::EntryKind::Observer) {
       std::optional<unsigned> width =
           results.empty()
@@ -10799,9 +10797,9 @@ void TalosSimPreparePass::runOnOperation() {
       functionAttrs.push_back(
           ::talos::schedule::named<::talos::schedule::Field::ObserverWidth>(
               builder.getI32IntegerAttr(*width)));
-      functionAttrs.push_back(::talos::schedule::named<
-                              ::talos::schedule::Field::ObserverFourState>(
-          builder.getBoolAttr(isa<sim::LogicType>(results.front()))));
+      functionAttrs.push_back(
+          ::talos::schedule::named<::talos::schedule::Field::ObserverFourState>(
+              builder.getBoolAttr(isa<sim::LogicType>(results.front()))));
     }
     if (auto subroutine =
             dyn_cast<semantic::SVSubroutineSymbolOp>(unit.source)) {
@@ -10938,9 +10936,9 @@ void TalosSimPreparePass::runOnOperation() {
                                  unit.entryKind == sim::EntryKind::AlwaysFF ||
                                  unit.entryKind == sim::EntryKind::AlwaysLatch;
     if (programDomain && programProceduralRoot && !hierarchy.empty())
-      functionAttrs.push_back(::talos::schedule::named<
-                              ::talos::schedule::Field::ProgramOwnerId>(
-          builder.getI64IntegerAttr(stableCodeUnitID(hierarchy))));
+      functionAttrs.push_back(
+          ::talos::schedule::named<::talos::schedule::Field::ProgramOwnerId>(
+              builder.getI64IntegerAttr(stableCodeUnitID(hierarchy))));
     // Final procedures are held in the runtime's end-of-simulation phase; the
     // compute graph independently places their executable fragment in its
     // postponed plan.  Their process ABI home must remain Active even when the
@@ -10955,7 +10953,8 @@ void TalosSimPreparePass::runOnOperation() {
     // keep invariant scheduling. Checker code is not program code and takes
     // no part in program completion.
     bool checkerProcess =
-        unit.source->getParentOfType<semantic::SVCheckerInstanceBodySymbolOp>() &&
+        unit.source
+            ->getParentOfType<semantic::SVCheckerInstanceBodySymbolOp>() &&
         (unit.entryKind == sim::EntryKind::Initial ||
          unit.entryKind == sim::EntryKind::AlwaysComb ||
          unit.entryKind == sim::EntryKind::AlwaysFF ||

@@ -398,8 +398,8 @@ LogicalResult lowerNativeDPICall(sim::SimDPICallOp operation,
         Value packStatus =
             LLVM::CallOp::create(
                 rewriter, location, TypeRange{i32},
-                SymbolRefAttr::get(
-                    context, "talos_rt_v1_dpi_open_array_aggregate_pack"),
+                SymbolRefAttr::get(context,
+                                   "talos_rt_v1_dpi_open_array_aggregate_pack"),
                 ValueRange{valueStorage, unknownStorage, planeSizeValue,
                            totalWidthValue, c32(layout.getFourState()),
                            c32(layout.getElementWidth()), elementCountValue,
@@ -760,8 +760,7 @@ LogicalResult lowerNativeDPICall(sim::SimDPICallOp operation,
                           fieldGEP(rewriter, location, site, siteType, field),
                           alignment);
   };
-  storeSiteField(0, llvmConstant(rewriter, location, i32, TALOS_RT_VERSION),
-                 4);
+  storeSiteField(0, llvmConstant(rewriter, location, i32, TALOS_RT_VERSION), 4);
   storeSiteField(1, llvmConstant(rewriter, location, i32, flags), 4);
   storeSiteField(
       2, llvmConstant(rewriter, location, i32, operation.getImportId()), 4);
@@ -955,8 +954,8 @@ LogicalResult lowerNativeDPICall(sim::SimDPICallOp operation,
       Value unpackStatus =
           LLVM::CallOp::create(
               rewriter, location, TypeRange{i32},
-              SymbolRefAttr::get(
-                  context, "talos_rt_v1_dpi_open_array_aggregate_unpack"),
+              SymbolRefAttr::get(context,
+                                 "talos_rt_v1_dpi_open_array_aggregate_unpack"),
               ValueRange{
                   operation.getRuntimeContext(), storage.data,
                   c64(storage.dataSize), c64(storage.layout.getElementCSize()),

@@ -15,7 +15,7 @@ struct DriverConfiguration {
 };
 
 int runTalosDriver(int argc, char **argv,
-                     const DriverConfiguration &config = {});
+                   const DriverConfiguration &config = {});
 
 } // namespace talos::driver
 

@@ -5,10 +5,10 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <cstdlib>
@@ -60,14 +60,12 @@ TEST(GeneratedDesignDatabase, InitializerFrames) {
   for (bool withParent : {false, true}) {
     uint64_t parentID = 0;
     if (withParent)
-      ASSERT_EQ(
-          talos_rt_v1_vpi_frame_enter(
-              raw, 44, TALOS_RT_VPI_FRAME_CODE_UNIT_SCOPE, 44, &parentID),
-          TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_vpi_frame_enter(
+                    raw, 44, TALOS_RT_VPI_FRAME_CODE_UNIT_SCOPE, 44, &parentID),
+                TALOS_RT_OK);
     auto saved = vpi_handle(vpiFrame, nullptr);
     for (uint64_t call : {20u, 21u}) {
-      ASSERT_EQ(talos_rt_v1_vpi_call_prepare(raw, call, &ticket),
-                TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_vpi_call_prepare(raw, call, &ticket), TALOS_RT_OK);
       EXPECT_EQ(talos_rt_v1_vpi_call_finish(raw, ticket),
                 TALOS_RT_INVALID_LIFECYCLE);
       EXPECT_EQ(talos_rt_v1_vpi_frame_enter_prepared(raw, 61, 0, &activation),
@@ -155,8 +153,7 @@ TEST(GeneratedDesignDatabase, InitializerFrames) {
     HeaderWriter(bytes.data()).setChecksum(hash);
     auto invalid = execution;
     invalid.design_database = bytes.data();
-    EXPECT_EQ(talos_rt_v1_design_validate(&invalid),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&invalid), TALOS_RT_INVALID_DESIGN);
   };
   rejects([&](auto &bytes) {
     InitializerBindingWriter(bytes.data() + first).setReserved(1);

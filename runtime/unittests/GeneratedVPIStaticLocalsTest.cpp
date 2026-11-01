@@ -4,10 +4,10 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <algorithm>
@@ -143,18 +143,17 @@ void checkStaticLocals(bool sourceTypes) {
     ASSERT_EQ(talos_rt_cached_vpi_statement(raw, 11, &statement, &owner),
               TALOS_RT_OK);
     VPIRelationRange range{};
-    ASSERT_EQ(talos_rt_cached_vpi_relation_range(raw, call, vpiScope, false,
-                                                   &range),
-              TALOS_RT_OK);
+    ASSERT_EQ(
+        talos_rt_cached_vpi_relation_range(raw, call, vpiScope, false, &range),
+        TALOS_RT_OK);
     ASSERT_EQ(range.count, 1u);
     uint32_t kind = 0;
     ASSERT_EQ(talos_rt_cached_vpi_relation_target(raw, range.first, &scope,
-                                                    &kind, &isStatement),
+                                                  &kind, &isStatement),
               TALOS_RT_OK);
     EXPECT_TRUE(isStatement);
     EXPECT_EQ(scope.offset, statement.offset);
-    ASSERT_EQ(talos_rt_cached_vpi_initializer(raw, 46, &source),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_cached_vpi_initializer(raw, 46, &source), TALOS_RT_OK);
     talos_rt_design_cursor_v1 expected{};
     const std::string name = "top.work.block.x";
     ASSERT_EQ(talos_rt_v1_design_lookup(
@@ -179,8 +178,7 @@ void checkStaticLocals(bool sourceTypes) {
       HeaderWriter(bytes.data()).setChecksum(hash);
       auto invalid = execution;
       invalid.design_database = bytes.data();
-      EXPECT_EQ(talos_rt_v1_design_validate(&invalid),
-                TALOS_RT_INVALID_DESIGN);
+      EXPECT_EQ(talos_rt_v1_design_validate(&invalid), TALOS_RT_INVALID_DESIGN);
     };
     rejects([&](auto &bytes) {
       ObjectWriter(bytes.data() + source.offset)

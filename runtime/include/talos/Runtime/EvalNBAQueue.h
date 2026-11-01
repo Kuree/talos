@@ -30,6 +30,6 @@ struct EvalNBAQueue {
 
 extern "C" talos_rt_status
 talos_rt_v1_eval_nba_reserve(talos_rt_context *context,
-                               talos::runtime::EvalNBAQueue *queue);
+                             talos::runtime::EvalNBAQueue *queue);
 
 #endif

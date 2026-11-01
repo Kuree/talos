@@ -17,8 +17,9 @@ void __talos_eval_promotion_invalidate_v1();
 void __talos_eval_promotion_invalidate_range_v1(uint64_t, uint64_t);
 void __talos_eval_promotion_recheck_range_v1(uint64_t, uint64_t);
 int model_main(int, char **);
-talos_rt_status __real_talos_rt_v1_scheduler_install_aot(
-    talos_rt_context *, const talos_rt_native_schedule_plan *);
+talos_rt_status
+__real_talos_rt_v1_scheduler_install_aot(talos_rt_context *,
+                                         const talos_rt_native_schedule_plan *);
 void __real_talos_rt_v1_context_destroy(talos_rt_context *);
 }
 
@@ -53,8 +54,7 @@ extern "C" talos_rt_status __wrap_talos_rt_v1_scheduler_install_aot(
   ++installs;
   return status;
 }
-extern "C" void
-__wrap_talos_rt_v1_context_destroy(talos_rt_context *context) {
+extern "C" void __wrap_talos_rt_v1_context_destroy(talos_rt_context *context) {
   // The final source values are known. Leave a positive result for release to
   // revoke, regardless of the final observer's preceding checkpoint behavior.
   __talos_eval_group_promotion_latched_v1[0] = 1;

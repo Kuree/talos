@@ -7,10 +7,10 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <array>
@@ -274,11 +274,11 @@ TEST(GeneratedDesignDatabase, SourceValueDefaults) {
     uint32_t type = 0;
     bool statement = false;
     EXPECT_EQ(talos_rt_cached_vpi_relation_range(runtime, parameter, vpiExpr,
-                                                   false, &range),
+                                                 false, &range),
               TALOS_RT_OK);
     EXPECT_EQ(range.count, 1u);
-    EXPECT_EQ(talos_rt_cached_vpi_relation_target(runtime, range.first,
-                                                    &result, &type, &statement),
+    EXPECT_EQ(talos_rt_cached_vpi_relation_target(runtime, range.first, &result,
+                                                  &type, &statement),
               TALOS_RT_OK);
     return result;
   };
@@ -335,8 +335,7 @@ TEST(GeneratedDesignDatabase, SourceValueDefaults) {
     auto invalid = execution;
     invalid.design_database = bytes.data();
     invalid.design_database_size = bytes.size();
-    EXPECT_EQ(talos_rt_v1_design_validate(&invalid),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&invalid), TALOS_RT_INVALID_DESIGN);
   };
   rejects([&](auto &bytes) { setFlags(bytes, n, 0); });
   rejects([&](auto &bytes) {

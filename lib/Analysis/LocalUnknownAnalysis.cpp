@@ -1323,8 +1323,7 @@ unsigned downstreamWork(Value value, unsigned budget = 256) {
     for (Operation *user : next.getUsers()) {
       if (!seen.insert(user).second || ++visited > budget)
         continue;
-      if (isa<sim::SimRefStoreOp, sim::SimNBAEnqueueOp, CallOpInterface>(
-              user))
+      if (isa<sim::SimRefStoreOp, sim::SimNBAEnqueueOp, CallOpInterface>(user))
         continue;
       work += getUnknownPlaneWork(user);
       if (auto branch = dyn_cast<BranchOpInterface>(user)) {
@@ -1449,8 +1448,8 @@ LocalUnknownAnalysis::LocalUnknownAnalysis(sim::SimFuncOp function,
         if (steady)
           inputs.steady.insert(read);
         site.kind = ReadKind::Gated;
-        site.root = inputs.rootIndex(fact->second.resource,
-                                     *fact->second.descriptor);
+        site.root =
+            inputs.rootIndex(fact->second.resource, *fact->second.descriptor);
         site.low = fact->second.low;
         site.high = fact->second.low + width;
         descriptors[site.root] = *fact->second.descriptor;
@@ -1728,8 +1727,8 @@ LocalUnknownAnalysis::LocalUnknownAnalysis(sim::SimFuncOp function,
                     sim::SimContextDriverOp, sim::SimRefExtractOp,
                     sim::SimRefSubelementOp, sim::SimNetExtractOp,
                     sim::SimDriverExtractOp, sim::SimDriverSubelementOp,
-                    sim::SimLogicFromBitsOp,
-                    sim::SimPackedFlattenOp, sim::SimPackedUnflattenOp>(op);
+                    sim::SimLogicFromBitsOp, sim::SimPackedFlattenOp,
+                    sim::SimPackedUnflattenOp>(op);
     if (auto toBits = dyn_cast<sim::SimLogicToBitsOp>(op))
       free = knownInCopy.contains(toBits.getInput());
     if (!free && !residualBenefit.lookup(op)) {
@@ -1738,8 +1737,7 @@ LocalUnknownAnalysis::LocalUnknownAnalysis(sim::SimFuncOp function,
         Value value = op->getResult(0);
         uint64_t width = sim::getProvenanceSpan(value.getType()).value_or(1);
         work = accessWork(value.getType(), width);
-        if (hasUnknownPlane(value.getType()) &&
-            !knownInCopy.contains(value))
+        if (hasUnknownPlane(value.getType()) && !knownInCopy.contains(value))
           work *= 2;
       } else if (auto store = dyn_cast<sim::SimRefStoreOp>(op)) {
         Type type = store.getValue().getType();
@@ -1750,10 +1748,11 @@ LocalUnknownAnalysis::LocalUnknownAnalysis(sim::SimFuncOp function,
         // Four-to-two-state coercion computes value & ~unknown. It is a
         // representation-only cast only after the input is proved known.
         work = 2;
-      } else if (llvm::any_of(op->getOperands(), [&](Value value) {
-                   return hasUnknownPlane(value.getType()) &&
-                          !knownInCopy.contains(value);
-                 }) ||
+      } else if (llvm::any_of(op->getOperands(),
+                              [&](Value value) {
+                                return hasUnknownPlane(value.getType()) &&
+                                       !knownInCopy.contains(value);
+                              }) ||
                  llvm::any_of(op->getResults(), [&](Value value) {
                    return hasUnknownPlane(value.getType()) &&
                           !knownInCopy.contains(value);

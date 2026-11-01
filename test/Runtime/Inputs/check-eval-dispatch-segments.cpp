@@ -9,8 +9,7 @@
 // asm labels are final symbol names; Mach-O prefixes C symbols with '_'.
 #define TALOS_TEST_STRINGIFY_(text) #text
 #define TALOS_TEST_STRINGIFY(text) TALOS_TEST_STRINGIFY_(text)
-#define TALOS_TEST_SYMBOL(name)                                              \
-  TALOS_TEST_STRINGIFY(__USER_LABEL_PREFIX__) name
+#define TALOS_TEST_SYMBOL(name) TALOS_TEST_STRINGIFY(__USER_LABEL_PREFIX__) name
 
 extern "C" {
 extern uint64_t __talos_aot_model_ingress_v1[];

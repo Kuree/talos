@@ -8,8 +8,7 @@
 
 using namespace talos::reflection;
 
-static_assert(HeaderLayout.size ==
-              sizeof(talos_rt_design_database_header_v1));
+static_assert(HeaderLayout.size == sizeof(talos_rt_design_database_header_v1));
 static_assert(HeaderLayout.size == TALOS_RT_DESIGN_DATABASE_HEADER_SIZE);
 static_assert(field::HeaderMagic ==
               offsetof(talos_rt_design_database_header_v1, magic));
@@ -219,12 +218,10 @@ static_assert(unpackTableIndexKind((uint32_t{2} << 30) | 17) ==
 static_assert(unpackTableIndex((uint32_t{2} << 30) | 17) == 17);
 
 static_assert(uint32_t(RecordKind::Scope) == TALOS_RT_DESIGN_RECORD_SCOPE);
-static_assert(uint32_t(RecordKind::Storage) ==
-              TALOS_RT_DESIGN_RECORD_STORAGE);
+static_assert(uint32_t(RecordKind::Storage) == TALOS_RT_DESIGN_RECORD_STORAGE);
 static_assert(uint32_t(RecordKind::Net) == TALOS_RT_DESIGN_RECORD_NET);
 static_assert(uint32_t(RecordKind::Driver) == TALOS_RT_DESIGN_RECORD_DRIVER);
-static_assert(uint32_t(RecordKind::Process) ==
-              TALOS_RT_DESIGN_RECORD_PROCESS);
+static_assert(uint32_t(RecordKind::Process) == TALOS_RT_DESIGN_RECORD_PROCESS);
 static_assert(uint32_t(RecordKind::Type) == TALOS_RT_DESIGN_RECORD_TYPE);
 static_assert(uint32_t(RecordKind::Function) ==
               TALOS_RT_DESIGN_RECORD_FUNCTION);

@@ -7,10 +7,10 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <algorithm>
@@ -115,18 +115,17 @@ TEST(GeneratedDesignDatabase, ThreadOrigins) {
       encoded->functions.begin(), encoded->functions.end(),
       [](const auto &function) { return function.symbol == "initial"; });
   ASSERT_NE(entryFunction, encoded->functions.end());
-  talos_rt_design_bytecode_entry_v1 entry{&execution, entryFunction->index,
-                                            0};
+  talos_rt_design_bytecode_entry_v1 entry{&execution, entryFunction->index, 0};
   uint64_t scratchSize = 0, scratchAlignment = 0;
   ASSERT_EQ(talos_rt_validate_design_bytecode(entry, runtime, &scratchSize,
-                                                &scratchAlignment),
+                                              &scratchAlignment),
             TALOS_RT_OK);
   ASSERT_LE(scratchAlignment, alignof(uint64_t));
   std::vector<uint64_t> frame((scratchSize + 7) / 8);
   talos_rt_fragment_action_v1 action{};
   ASSERT_EQ(talos_rt_execute_design_bytecode(entry, runtime, frame.data(),
-                                               frame.size() * 8, 0, scratchSize,
-                                               0, 0, &action),
+                                             frame.size() * 8, 0, scratchSize,
+                                             0, 0, &action),
             TALOS_RT_OK);
   ASSERT_EQ(action.kind, TALOS_RT_FRAGMENT_TERMINATE);
   ASSERT_EQ(talos_rt_v1_scheduler_run(runtime), TALOS_RT_OK);
@@ -188,8 +187,7 @@ TEST(GeneratedDesignDatabase, ThreadOrigins) {
     HeaderWriter(image.data()).setChecksum(imageChecksum(image));
     auto invalid = execution;
     invalid.design_database = image.data();
-    EXPECT_EQ(talos_rt_v1_design_validate(&invalid),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&invalid), TALOS_RT_INVALID_DESIGN);
   };
   const uint64_t offset = directory.getThreadOriginBindingOffset();
   reject([&](auto &image) {

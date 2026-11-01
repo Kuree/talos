@@ -23,12 +23,10 @@ using ResultExprs = TalosSimulationDialect::ResultExprsAttrHelper;
 using KnownLogicResult = TalosSimulationDialect::KnownLogicResultAttrHelper;
 using GCPolled = TalosSimulationDialect::GcPolledAttrHelper;
 using InlineLegalityCache = TalosSimulationDialect::InlineLegalityAttrHelper;
-using PulseRejectPercent =
-    TalosSimulationDialect::PulseRejectPercentAttrHelper;
+using PulseRejectPercent = TalosSimulationDialect::PulseRejectPercentAttrHelper;
 using PulseErrorPercent = TalosSimulationDialect::PulseErrorPercentAttrHelper;
 using PulseOnDetect = TalosSimulationDialect::PulseOnDetectAttrHelper;
-using PulseShowCancelled =
-    TalosSimulationDialect::PulseShowCancelledAttrHelper;
+using PulseShowCancelled = TalosSimulationDialect::PulseShowCancelledAttrHelper;
 using ConstraintMode = TalosSimulationDialect::ConstraintModeAttrHelper;
 using ConstraintModeBlock =
     TalosSimulationDialect::ConstraintModeBlockAttrHelper;
@@ -43,13 +41,11 @@ using ObjectRandomDispatchClasses =
 using RandMode = TalosSimulationDialect::RandModeAttrHelper;
 using RandModeAncestorMask =
     TalosSimulationDialect::RandModeAncestorMaskAttrHelper;
-using RandModeArrayField =
-    TalosSimulationDialect::RandModeArrayFieldAttrHelper;
+using RandModeArrayField = TalosSimulationDialect::RandModeArrayFieldAttrHelper;
 using RandModeArrayStorage =
     TalosSimulationDialect::RandModeArrayStorageAttrHelper;
 using RandModeArrayType = TalosSimulationDialect::RandModeArrayTypeAttrHelper;
-using RandModeFamilyMask =
-    TalosSimulationDialect::RandModeFamilyMaskAttrHelper;
+using RandModeFamilyMask = TalosSimulationDialect::RandModeFamilyMaskAttrHelper;
 using RandModeProperty = TalosSimulationDialect::RandModePropertyAttrHelper;
 using RandModeSelectionMask =
     TalosSimulationDialect::RandModeSelectionMaskAttrHelper;
@@ -114,8 +110,7 @@ using RandomNestedStatePath =
 using RandomNestedStateStorageType =
     TalosSimulationDialect::RandomNestedStateStorageTypeAttrHelper;
 using RandomObjectEdge = TalosSimulationDialect::RandomObjectEdgeAttrHelper;
-using EmbeddedCovergroup =
-    TalosSimulationDialect::EmbeddedCovergroupAttrHelper;
+using EmbeddedCovergroup = TalosSimulationDialect::EmbeddedCovergroupAttrHelper;
 using CheckerProcedure = TalosSimulationDialect::CheckerProcedureAttrHelper;
 using RandomPostHook = TalosSimulationDialect::RandomPostHookAttrHelper;
 using RandomPreHook = TalosSimulationDialect::RandomPreHookAttrHelper;
@@ -136,8 +131,7 @@ using RandomTotalWidth = TalosSimulationDialect::RandomTotalWidthAttrHelper;
 using RandomVariable = TalosSimulationDialect::RandomVariableAttrHelper;
 using RandomVariableBitOffset =
     TalosSimulationDialect::RandomVariableBitOffsetAttrHelper;
-using RandomVariableKind =
-    TalosSimulationDialect::RandomVariableKindAttrHelper;
+using RandomVariableKind = TalosSimulationDialect::RandomVariableKindAttrHelper;
 using RandomVariableSigned =
     TalosSimulationDialect::RandomVariableSignedAttrHelper;
 using Randomize = TalosSimulationDialect::RandomizeAttrHelper;
@@ -167,8 +161,7 @@ using RandomizeNestedDispatchStorageType =
     TalosSimulationDialect::RandomizeNestedDispatchStorageTypeAttrHelper;
 using RandomizeNestedPlans =
     TalosSimulationDialect::RandomizeNestedPlansAttrHelper;
-using RandomizePlanClass =
-    TalosSimulationDialect::RandomizePlanClassAttrHelper;
+using RandomizePlanClass = TalosSimulationDialect::RandomizePlanClassAttrHelper;
 using RandomizeScope = TalosSimulationDialect::RandomizeScopeAttrHelper;
 using StaticConstraintStorage =
     TalosSimulationDialect::StaticConstraintStorageAttrHelper;
@@ -216,8 +209,8 @@ using BranchingAntecedentBackedge =
     TalosSimulationDialect::BranchingAntecedentBackedgeAttrHelper;
 using BranchingAntecedentChannel =
     TalosSimulationDialect::BranchingAntecedentChannelAttrHelper;
-using BranchingAntecedentConsequentEosStrength = TalosSimulationDialect::
-    BranchingAntecedentConsequentEosStrengthAttrHelper;
+using BranchingAntecedentConsequentEosStrength =
+    TalosSimulationDialect::BranchingAntecedentConsequentEosStrengthAttrHelper;
 using BranchingAntecedentConsequentTrigger =
     TalosSimulationDialect::BranchingAntecedentConsequentTriggerAttrHelper;
 using BranchingAntecedentEosCoalescer =
@@ -280,16 +273,14 @@ using CombinedBooleanBranchingMonitor =
     TalosSimulationDialect::CombinedBooleanBranchingMonitorAttrHelper;
 using CombinedBooleanBranchingPairs =
     TalosSimulationDialect::CombinedBooleanBranchingPairsAttrHelper;
-using CombinedBooleanBranchingPairsBeforeMinimization =
-    TalosSimulationDialect::
-        CombinedBooleanBranchingPairsBeforeMinimizationAttrHelper;
+using CombinedBooleanBranchingPairsBeforeMinimization = TalosSimulationDialect::
+    CombinedBooleanBranchingPairsBeforeMinimizationAttrHelper;
 using CombinedBoundedBranchingMonitor =
     TalosSimulationDialect::CombinedBoundedBranchingMonitorAttrHelper;
 using CombinedBoundedBranchingPairs =
     TalosSimulationDialect::CombinedBoundedBranchingPairsAttrHelper;
-using CombinedBoundedBranchingPairsBeforeMinimization =
-    TalosSimulationDialect::
-        CombinedBoundedBranchingPairsBeforeMinimizationAttrHelper;
+using CombinedBoundedBranchingPairsBeforeMinimization = TalosSimulationDialect::
+    CombinedBoundedBranchingPairsBeforeMinimizationAttrHelper;
 using ConcurrentAbortCounted =
     TalosSimulationDialect::ConcurrentAbortCountedAttrHelper;
 using ConcurrentActionClass =
@@ -360,8 +351,7 @@ using ExpectDonePath = TalosSimulationDialect::ExpectDonePathAttrHelper;
 using ExpectEosCoordinator =
     TalosSimulationDialect::ExpectEosCoordinatorAttrHelper;
 using ExpectMonitor = TalosSimulationDialect::ExpectMonitorAttrHelper;
-using ExpectMonitorActor =
-    TalosSimulationDialect::ExpectMonitorActorAttrHelper;
+using ExpectMonitorActor = TalosSimulationDialect::ExpectMonitorActorAttrHelper;
 using ExpectOneCycleAlternatives =
     TalosSimulationDialect::ExpectOneCycleAlternativesAttrHelper;
 using ExpectOneCycleBranching =
@@ -370,8 +360,7 @@ using ExpectOperandStrength =
     TalosSimulationDialect::ExpectOperandStrengthAttrHelper;
 using ExpectResultPath = TalosSimulationDialect::ExpectResultPathAttrHelper;
 using FirstMatchMonitor = TalosSimulationDialect::FirstMatchMonitorAttrHelper;
-using FirstMatchPriority =
-    TalosSimulationDialect::FirstMatchPriorityAttrHelper;
+using FirstMatchPriority = TalosSimulationDialect::FirstMatchPriorityAttrHelper;
 using FirstMatchPriorityGroups =
     TalosSimulationDialect::FirstMatchPriorityGroupsAttrHelper;
 using FollowedByMonitor = TalosSimulationDialect::FollowedByMonitorAttrHelper;
@@ -521,8 +510,7 @@ using DelayedNet = TalosSimulationDialect::DelayedNetAttrHelper;
 using InitialDriverX = TalosSimulationDialect::InitialDriverXAttrHelper;
 using InterconnectLeafPath =
     TalosSimulationDialect::InterconnectLeafPathAttrHelper;
-using InterconnectLeaves =
-    TalosSimulationDialect::InterconnectLeavesAttrHelper;
+using InterconnectLeaves = TalosSimulationDialect::InterconnectLeavesAttrHelper;
 using InterconnectNettype =
     TalosSimulationDialect::InterconnectNettypeAttrHelper;
 using InterconnectVpiType =
@@ -542,11 +530,9 @@ using ResolutionFunctionPath =
     TalosSimulationDialect::ResolutionFunctionPathAttrHelper;
 using ResolutionFunctionSymbol =
     TalosSimulationDialect::ResolutionFunctionSymbolAttrHelper;
-using SkewDeadlineHelper =
-    TalosSimulationDialect::SkewDeadlineHelperAttrHelper;
+using SkewDeadlineHelper = TalosSimulationDialect::SkewDeadlineHelperAttrHelper;
 using StrengthBank = TalosSimulationDialect::StrengthBankAttrHelper;
-using StrengthDriverBank =
-    TalosSimulationDialect::StrengthDriverBankAttrHelper;
+using StrengthDriverBank = TalosSimulationDialect::StrengthDriverBankAttrHelper;
 using StrengthGroup = TalosSimulationDialect::StrengthGroupAttrHelper;
 using TimingAdjustedTicks =
     TalosSimulationDialect::TimingAdjustedTicksAttrHelper;
@@ -564,8 +550,7 @@ using TimingPathMonitorRules =
     TalosSimulationDialect::TimingPathMonitorRulesAttrHelper;
 using TimingPathRules = TalosSimulationDialect::TimingPathRulesAttrHelper;
 using TimingTimerHelper = TalosSimulationDialect::TimingTimerHelperAttrHelper;
-using TimingTimerStorage =
-    TalosSimulationDialect::TimingTimerStorageAttrHelper;
+using TimingTimerStorage = TalosSimulationDialect::TimingTimerStorageAttrHelper;
 using UdpMetadata = TalosSimulationDialect::UdpMetadataAttrHelper;
 using UserDefinedNet = TalosSimulationDialect::UserDefinedNetAttrHelper;
 using UserNetDriver = TalosSimulationDialect::UserNetDriverAttrHelper;
@@ -578,8 +563,7 @@ using Bindings = TalosSimulationDialect::BindingsAttrHelper;
 using Callee = TalosSimulationDialect::CalleeAttrHelper;
 using CalleeCaptures = TalosSimulationDialect::CalleeCapturesAttrHelper;
 using CalleeFormals = TalosSimulationDialect::CalleeFormalsAttrHelper;
-using CalleeReadCaptures =
-    TalosSimulationDialect::CalleeReadCapturesAttrHelper;
+using CalleeReadCaptures = TalosSimulationDialect::CalleeReadCapturesAttrHelper;
 using CalleeWrittenCaptures =
     TalosSimulationDialect::CalleeWrittenCapturesAttrHelper;
 using CaptureKind = TalosSimulationDialect::CaptureKindAttrHelper;
@@ -631,8 +615,7 @@ using InitializeTypeOptionOwner =
     TalosSimulationDialect::InitializeTypeOptionOwnerAttrHelper;
 using IsTask = TalosSimulationDialect::IsTaskAttrHelper;
 using Lowered = TalosSimulationDialect::LoweredAttrHelper;
-using NbaEventCodeUnitId =
-    TalosSimulationDialect::NbaEventCodeUnitIdAttrHelper;
+using NbaEventCodeUnitId = TalosSimulationDialect::NbaEventCodeUnitIdAttrHelper;
 using NbaEventHierarchy = TalosSimulationDialect::NbaEventHierarchyAttrHelper;
 using Observer = TalosSimulationDialect::ObserverAttrHelper;
 using ObserverCaptures = TalosSimulationDialect::ObserverCapturesAttrHelper;
@@ -648,8 +631,7 @@ using ResumableControlTarget =
     TalosSimulationDialect::ResumableControlTargetAttrHelper;
 using ExternalControlTarget =
     TalosSimulationDialect::ExternalControlTargetAttrHelper;
-using ReturnVariablePath =
-    TalosSimulationDialect::ReturnVariablePathAttrHelper;
+using ReturnVariablePath = TalosSimulationDialect::ReturnVariablePathAttrHelper;
 using SampledObserver = TalosSimulationDialect::SampledObserverAttrHelper;
 using StaticClassProperty =
     TalosSimulationDialect::StaticClassPropertyAttrHelper;
@@ -685,10 +667,8 @@ using DescriptorIndices = TalosSimulationDialect::DescriptorIndicesAttrHelper;
 using DescriptorLow = TalosSimulationDialect::DescriptorLowAttrHelper;
 using DescriptorPackedLow =
     TalosSimulationDialect::DescriptorPackedLowAttrHelper;
-using DescriptorRootType =
-    TalosSimulationDialect::DescriptorRootTypeAttrHelper;
-using FlushedPrivateSlot =
-    TalosSimulationDialect::FlushedPrivateSlotAttrHelper;
+using DescriptorRootType = TalosSimulationDialect::DescriptorRootTypeAttrHelper;
+using FlushedPrivateSlot = TalosSimulationDialect::FlushedPrivateSlotAttrHelper;
 using GcPollFree = TalosSimulationDialect::GcPollFreeAttrHelper;
 using HierarchicalName = TalosSimulationDialect::HierarchicalNameAttrHelper;
 using Rematerialized = TalosSimulationDialect::RematerializedAttrHelper;

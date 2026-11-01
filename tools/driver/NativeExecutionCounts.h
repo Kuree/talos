@@ -77,9 +77,8 @@ inline bool addNativeExecutionCounts(llvm::Module &module) {
     Value *runtime = builder.CreateLoad(pointer, current);
     builder.CreateCondBr(builder.CreateIsNull(runtime), zero, query);
     builder.SetInsertPoint(query);
-    FunctionCallee time =
-        module.getOrInsertFunction("talos_rt_v1_scheduler_time",
-                                   FunctionType::get(i64, {pointer}, false));
+    FunctionCallee time = module.getOrInsertFunction(
+        "talos_rt_v1_scheduler_time", FunctionType::get(i64, {pointer}, false));
     Value *now = builder.CreateCall(time, {runtime});
     builder.CreateRet(builder.CreateZExt(
         builder.CreateICmpNE(now, builder.getInt64(0)), i64));
@@ -133,8 +132,7 @@ inline bool addNativeExecutionCounts(llvm::Module &module) {
   }
   SmallVector<Constant *> names;
   for (const std::string &name : counterNames)
-    names.push_back(
-        builder.CreateGlobalString(name, "__talos_execution_name"));
+    names.push_back(builder.CreateGlobalString(name, "__talos_execution_name"));
   auto *namesType = ArrayType::get(builder.getPtrTy(), names.size());
   auto *nameTable = new GlobalVariable(
       module, namesType, true, GlobalValue::InternalLinkage,

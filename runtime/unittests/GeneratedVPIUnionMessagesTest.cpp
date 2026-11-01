@@ -6,9 +6,9 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <array>
@@ -69,15 +69,14 @@ TEST(GeneratedDesignDatabase, MailboxUnionMessages) {
   std::array<talos_rt_object_v1 *, 3> objects{};
   talos_rt_gc_root_range_v1 roots{};
   ASSERT_EQ(talos_rt_v1_gc_root_range_push(lane, &roots, objects.data(),
-                                             objects.size()),
+                                           objects.size()),
             TALOS_RT_OK);
   std::array<talos_rt_design_cursor_v1, 3> storage{}, physical{};
   std::array<talos_rt_design_type_info_v1, 3> types{};
   std::array<talos::sim::ElementDescriptor, 3> descriptors{};
   for (size_t index = 0; index != names.size(); ++index) {
-    auto declaration =
-        mlir::dyn_cast_or_null<talos::sim::SimVPITypespecDeclOp>(
-            mlir::SymbolTable::lookupSymbolIn(design, symbols[index]));
+    auto declaration = mlir::dyn_cast_or_null<talos::sim::SimVPITypespecDeclOp>(
+        mlir::SymbolTable::lookupSymbolIn(design, symbols[index]));
     ASSERT_TRUE(declaration);
     auto descriptor = talos::sim::getElementDescriptor(
         declaration.getMessageTypeAttr().getValue());
@@ -100,20 +99,20 @@ TEST(GeneratedDesignDatabase, MailboxUnionMessages) {
               TALOS_RT_OK);
     talos_rt_design_cursor_v1 semantic{}, owner{};
     ASSERT_EQ(talos_rt_cached_design_semantic_root(runtime, storage[index],
-                                                     &semantic),
+                                                   &semantic),
               TALOS_RT_OK);
-    ASSERT_EQ(talos_rt_cached_vpi_semantic_class_typespec(runtime, semantic,
-                                                            &owner),
-              TALOS_RT_OK);
+    ASSERT_EQ(
+        talos_rt_cached_vpi_semantic_class_typespec(runtime, semantic, &owner),
+        TALOS_RT_OK);
     talos_rt_design_semantic_type_edge_v1 edge{};
-    ASSERT_EQ(talos_rt_cached_design_semantic_type_edge(runtime, semantic, 0,
-                                                          &edge),
-              TALOS_RT_OK);
+    ASSERT_EQ(
+        talos_rt_cached_design_semantic_type_edge(runtime, semantic, 0, &edge),
+        TALOS_RT_OK);
     ASSERT_EQ(talos_rt_cached_vpi_mailbox_element_type(
                   runtime, owner, edge.child, &physical[index]),
               TALOS_RT_OK);
     ASSERT_EQ(talos_rt_cached_design_type_info(runtime, physical[index],
-                                                 &types[index]),
+                                               &types[index]),
               TALOS_RT_OK);
     const uint64_t word = talos_rt_managed_word_from_object(objects[index]);
     ASSERT_EQ(
@@ -157,9 +156,9 @@ TEST(GeneratedDesignDatabase, MailboxUnionMessages) {
   auto put = [&](size_t mailbox, const std::vector<uint8_t> &value,
                  const std::vector<uint8_t> *unknown = nullptr) {
     uint32_t success = 0;
-    EXPECT_EQ(talos_rt_v1_mailbox_try_put(
-                  lane, objects[mailbox], value.data(),
-                  unknown ? unknown->data() : nullptr, &success),
+    EXPECT_EQ(talos_rt_v1_mailbox_try_put(lane, objects[mailbox], value.data(),
+                                          unknown ? unknown->data() : nullptr,
+                                          &success),
               TALOS_RT_OK);
     EXPECT_EQ(success, 1u);
   };
@@ -232,8 +231,7 @@ TEST(GeneratedDesignDatabase, MailboxUnionMessages) {
         talos_rt_v1_design_write(runtime, storage[index], &zero, nullptr, 64),
         TALOS_RT_OK);
   }
-  ASSERT_EQ(talos_rt_v1_gc_managed_root_pop(lane, &stringRoot),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_managed_root_pop(lane, &stringRoot), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_root_range_pop(lane, &roots), TALOS_RT_OK);
   objects.fill(nullptr);
   ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);

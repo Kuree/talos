@@ -189,8 +189,7 @@ public:
             writes.push_back(user);
         } else if (auto call = dyn_cast<LLVM::CallOp>(user)) {
           // Runtime services report the writes they make.
-          if (!call.getCallee() ||
-              !call.getCallee()->starts_with("talos_rt_"))
+          if (!call.getCallee() || !call.getCallee()->starts_with("talos_rt_"))
             escapes.push_back(user);
         } else if (auto branch = dyn_cast<BranchOpInterface>(user)) {
           for (unsigned index = 0; index != user->getNumSuccessors(); ++index) {

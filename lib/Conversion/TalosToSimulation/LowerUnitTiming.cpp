@@ -343,8 +343,7 @@ LogicalResult UnitLowering::emitEventSuspend(Operation *control,
                 static_cast<uint32_t>(ObserverResult::Event))),
         ::talos::schedule::named<::talos::schedule::Field::ObserverWidth>(
             outlineBuilder.getI32IntegerAttr(1)),
-        ::talos::schedule::named<
-            ::talos::schedule::Field::ObserverFourState>(
+        ::talos::schedule::named<::talos::schedule::Field::ObserverFourState>(
             outlineBuilder.getBoolAttr(false))};
     sim::SimFuncOp evaluator = sim::SimFuncOp::create(
         outlineBuilder, location, identity,
@@ -366,8 +365,8 @@ LogicalResult UnitLowering::emitEventSuspend(Operation *control,
     auto binding = sim::SimObserverBindOp::create(
         builder, location, sim::ObserverType::get(context, builder.getI1Type()),
         evaluator.getSymName(), ValueRange{event, event}, uint32_t{1});
-    ::talos::schedule::set<observerEventPrimaryAttrName>(
-        binding, builder.getUnitAttr());
+    ::talos::schedule::set<observerEventPrimaryAttrName>(binding,
+                                                         builder.getUnitAttr());
     return binding.getResult();
   };
   auto evaluateInitial =

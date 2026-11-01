@@ -183,12 +183,12 @@ struct Fixture {
               continuations.data(),
               0};
     layout.checksum = checksum(layout);
-    appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0, 0,
-                      0, 8);
+    appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0, 0, 0,
+                      8);
     appendInstruction(code, TALOS_RT_BC_SUSPEND, TALOS_RT_BC_TYPE_NONE, 0,
                       TALOS_RT_SUSPEND_DELAY, 0, 1);
-    appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0, 0,
-                      0, 8);
+    appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0, 0, 0,
+                      8);
     appendInstruction(code, TALOS_RT_BC_SUSPEND, TALOS_RT_BC_TYPE_NONE, 0,
                       TALOS_RT_SUSPEND_DELAY, 0, 1);
     bytecode = {code.data(),
@@ -287,7 +287,7 @@ struct AOTTestState {
 };
 
 talos_rt_status aotBind(void *opaque, talos_rt_context *, uint32_t slot,
-                          talos_rt_process_instance_v1 *instance) {
+                        talos_rt_process_instance_v1 *instance) {
   auto *state = static_cast<AOTTestState *>(opaque);
   if (!state || slot >= state->actors.size())
     return TALOS_RT_INVALID_ARGUMENT;
@@ -315,21 +315,21 @@ talos_rt_status aotRun(void *opaque, talos_rt_context *context) {
 }
 
 talos_rt_status aotCommitOneNBARoot(void *, talos_rt_context *context,
-                                      uint32_t barrierRegion,
-                                      uint32_t *outChanged) {
+                                    uint32_t barrierRegion,
+                                    uint32_t *outChanged) {
   return talos_rt_v1_static_nba_commit_roots(context, 1, barrierRegion,
-                                               outChanged);
+                                             outChanged);
 }
 
 talos_rt_status aotCommitAllNBARoots(void *, talos_rt_context *context,
-                                       uint32_t barrierRegion,
-                                       uint32_t *outChanged) {
+                                     uint32_t barrierRegion,
+                                     uint32_t *outChanged) {
   return talos_rt_v1_static_nba_commit_roots(
       context, context->nativeScheduleNBARootCount, barrierRegion, outChanged);
 }
 
 talos_rt_status runGuardedNBAOrdering(AOTTestState *state,
-                                        talos_rt_context *context) {
+                                      talos_rt_context *context) {
   if (!state || !state->generatedNBA || !context ||
       !context->nativeSchedulePlan)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -351,7 +351,7 @@ talos_rt_status runGuardedNBAOrdering(AOTTestState *state,
 }
 
 talos_rt_status runSpecializationFastRearm(AOTTestState *state,
-                                             talos_rt_context *context) {
+                                           talos_rt_context *context) {
   if (!state || !context || !context->nativeSchedulePlan ||
       !context->nativeSchedulePlan->specialization_fast ||
       context->staticNBASlowRoots.empty())
@@ -366,7 +366,7 @@ talos_rt_status runSpecializationFastRearm(AOTTestState *state,
 }
 
 talos_rt_status runCheckpointThenReenter(AOTTestState *state,
-                                           talos_rt_context *) {
+                                         talos_rt_context *) {
   if (!state)
     return TALOS_RT_INVALID_ARGUMENT;
   ++state->runCalls;
@@ -374,7 +374,7 @@ talos_rt_status runCheckpointThenReenter(AOTTestState *state,
 }
 
 talos_rt_status runTimedCheckpointThenReenter(AOTTestState *state,
-                                                talos_rt_context *context) {
+                                              talos_rt_context *context) {
   if (!state || !context)
     return TALOS_RT_INVALID_ARGUMENT;
   ++state->runCalls;
@@ -392,13 +392,13 @@ talos_rt_status runCountOK(AOTTestState *state, talos_rt_context *) {
 }
 
 talos_rt_status runObserverPlaneAuthority(AOTTestState *state,
-                                            talos_rt_context *context) {
+                                          talos_rt_context *context) {
   if (!state || !context || !state->authorityPlane)
     return TALOS_RT_INVALID_ARGUMENT;
   auto load = [&](uint8_t &value) {
     return talos_rt_v1_native_state_load_plane(context, state->authorityPlane,
-                                                 8, state->authorityHandle, 8,
-                                                 0, 0, &value);
+                                               8, state->authorityHandle, 8, 0,
+                                               0, &value);
   };
   if (talos_rt_status status = load(state->ordinaryAOTLoad);
       status != TALOS_RT_OK)
@@ -416,7 +416,7 @@ talos_rt_status runObserverPlaneAuthority(AOTTestState *state,
 }
 
 talos_rt_status runDirectSelfTransition(AOTTestState *state,
-                                          talos_rt_context *context) {
+                                        talos_rt_context *context) {
   if (!state || !context)
     return TALOS_RT_INVALID_ARGUMENT;
   talos_rt_process_instance_v1 *instance = nullptr;
@@ -432,8 +432,7 @@ talos_rt_status aotRunNodes(void *opaque, talos_rt_context *context) {
   if (!opaque)
     return TALOS_RT_INVALID_ARGUMENT;
   constexpr talos_rt_native_schedule_node nodes[] = {{0, 0, 0}, {0, 1, 0}};
-  return talos_rt_v1_scheduler_run_aot_nodes(context, nodes,
-                                               std::size(nodes));
+  return talos_rt_v1_scheduler_run_aot_nodes(context, nodes, std::size(nodes));
 }
 
 talos_rt_status generatedCheckpointCallback(talos_rt_context *context) {
@@ -443,14 +442,13 @@ talos_rt_status generatedCheckpointCallback(talos_rt_context *context) {
   if (generatedCheckpointCallbackCount == 1) {
     talos_rt_status status = talos_rt_v1_scheduler_queue_aot_checkpoint(
         context, 0, 1, generatedCheckpointCallback);
-    return status == TALOS_RT_OK ? TALOS_RT_AOT_GENERATED_CHECKPOINT
-                                   : status;
+    return status == TALOS_RT_OK ? TALOS_RT_AOT_GENERATED_CHECKPOINT : status;
   }
   return TALOS_RT_OK;
 }
 
 talos_rt_status runGeneratedCheckpoint(AOTTestState *state,
-                                         talos_rt_context *context) {
+                                       talos_rt_context *context) {
   if (!state || !context)
     return TALOS_RT_INVALID_ARGUMENT;
   ++state->runCalls;
@@ -460,9 +458,8 @@ talos_rt_status runGeneratedCheckpoint(AOTTestState *state,
   // progress must survive the subsequent current-slot drain.
   context->schedulerTime = 17;
   context->schedulerSlotProgress = 0;
-  invalidGeneratedCheckpointStatus =
-      talos_rt_v1_scheduler_queue_aot_checkpoint(context, 0, 2,
-                                                   generatedCheckpointCallback);
+  invalidGeneratedCheckpointStatus = talos_rt_v1_scheduler_queue_aot_checkpoint(
+      context, 0, 2, generatedCheckpointCallback);
   validGeneratedCheckpointStatus = talos_rt_v1_scheduler_queue_aot_checkpoint(
       context, 0, 1, generatedCheckpointCallback);
   return validGeneratedCheckpointStatus == TALOS_RT_OK
@@ -477,20 +474,17 @@ talos_rt_status aotRunWaitNodes(void *opaque, talos_rt_context *context) {
       {0, 0, UINT32_MAX},
       {0, 1, UINT32_MAX},
   };
-  return talos_rt_v1_scheduler_run_aot_nodes(context, nodes,
-                                               std::size(nodes));
+  return talos_rt_v1_scheduler_run_aot_nodes(context, nodes, std::size(nodes));
 }
 
 talos_rt_status aotRunOneNode(void *opaque, talos_rt_context *context) {
   if (!opaque)
     return TALOS_RT_INVALID_ARGUMENT;
   constexpr talos_rt_native_schedule_node nodes[] = {{0, 0, 0}};
-  return talos_rt_v1_scheduler_run_aot_nodes(context, nodes,
-                                               std::size(nodes));
+  return talos_rt_v1_scheduler_run_aot_nodes(context, nodes, std::size(nodes));
 }
 
-talos_rt_status runAOTNodes(AOTTestState *state,
-                              talos_rt_context *context) {
+talos_rt_status runAOTNodes(AOTTestState *state, talos_rt_context *context) {
   if (!state)
     return TALOS_RT_INVALID_ARGUMENT;
   ++state->runCalls;
@@ -498,28 +492,27 @@ talos_rt_status runAOTNodes(AOTTestState *state,
 }
 
 talos_rt_status aotRunOneNodeThenFallback(void *opaque,
-                                            talos_rt_context *context) {
+                                          talos_rt_context *context) {
   talos_rt_status status = aotRunOneNode(opaque, context);
   return status == TALOS_RT_OK ? TALOS_RT_TIER_UNAVAILABLE : status;
 }
 
 talos_rt_status runGroupedStaticActivationNodes(AOTTestState *state,
-                                                  talos_rt_context *context) {
+                                                talos_rt_context *context) {
   if (!state->testNodes.empty())
-    return talos_rt_v1_scheduler_run_aot_nodes(
-        context, state->testNodes.data(), state->testNodes.size());
+    return talos_rt_v1_scheduler_run_aot_nodes(context, state->testNodes.data(),
+                                               state->testNodes.size());
   constexpr talos_rt_native_schedule_node nodes[] = {
       {0, 0, UINT32_MAX},
       {1, 0, UINT32_MAX},
       {0, 1, UINT32_MAX},
       {1, 1, UINT32_MAX},
   };
-  return talos_rt_v1_scheduler_run_aot_nodes(context, nodes,
-                                               std::size(nodes));
+  return talos_rt_v1_scheduler_run_aot_nodes(context, nodes, std::size(nodes));
 }
 
 talos_rt_status aotSnapshot(void *opaque, talos_rt_context *context,
-                              talos_rt_aot_deopt_snapshot *snapshot) {
+                            talos_rt_aot_deopt_snapshot *snapshot) {
   auto *state = static_cast<AOTTestState *>(opaque);
   if (!state || !context || !snapshot)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -542,8 +535,7 @@ talos_rt_status clockCoordinator(void *, talos_rt_context *context) {
   return TALOS_RT_OK;
 }
 
-talos_rt_status clockWaitCoordinator(void *opaque,
-                                       talos_rt_context *context) {
+talos_rt_status clockWaitCoordinator(void *opaque, talos_rt_context *context) {
   if (!context || !clockCoordinatorIngress || clockCoordinatorWords != 1)
     return TALOS_RT_INVALID_ARGUMENT;
   uint64_t ready = (clockCoordinatorIngress[0] & 1) != 0 ? uint64_t{2} : 0;
@@ -556,7 +548,7 @@ talos_rt_status clockWaitCoordinator(void *opaque,
 }
 
 talos_rt_native_schedule_plan makeAOTPlan(AOTTestState &state,
-                                            uint32_t actors = 2) {
+                                          uint32_t actors = 2) {
   return {sizeof(talos_rt_native_schedule_plan),
           0,
           &state,
@@ -629,8 +621,7 @@ talos_rt_status schedulerExecute(talos_rt_process_instance_v1 *instance) {
       static_cast<uint8_t *>(instance->frame) + schedulerWaitOffset);
   auto *entry = reinterpret_cast<talos_rt_wait_entry_v1 *>(wait + 1);
   if (schedulerWaitKind == TALOS_RT_SUSPEND_DELAY) {
-    *wait = {
-        TALOS_RT_VERSION, schedulerWaitKind, 0, 0, schedulerWaitDelay, 0};
+    *wait = {TALOS_RT_VERSION, schedulerWaitKind, 0, 0, schedulerWaitDelay, 0};
   } else {
     *wait = {TALOS_RT_VERSION, schedulerWaitKind, 0, 1, 0, 0};
     *entry = {schedulerWaitHandle, schedulerWaitEdge,
@@ -660,16 +651,15 @@ cachedSignalCohortExecute(talos_rt_process_instance_v1 *instance) {
       cachedCohortContinued = true;
       if (cachedCohortContinuePublishes)
         talos_rt_v1_scheduler_signal(instance->context,
-                                       cachedCohortSecondarySignal, 1,
-                                       TALOS_RT_SIGNAL_CHANGE);
+                                     cachedCohortSecondarySignal, 1,
+                                     TALOS_RT_SIGNAL_CHANGE);
       *instance->action = {
           TALOS_RT_FRAGMENT_CONTINUE, TALOS_RT_SUSPEND_NONE, 1, 0, 0, 0};
       return TALOS_RT_OK;
     }
     if (id == cachedCohortFrontierID && !cachedCohortFrontierSuspended) {
       cachedCohortFrontierSuspended = true;
-      auto *wait =
-          reinterpret_cast<talos_rt_wait_record_v1 *>(instance->frame);
+      auto *wait = reinterpret_cast<talos_rt_wait_record_v1 *>(instance->frame);
       auto *entry = reinterpret_cast<talos_rt_wait_entry_v1 *>(wait + 1);
       *wait = {TALOS_RT_VERSION, TALOS_RT_SUSPEND_FRONTIER, 0, 1, 0, 0};
       *entry = {0, TALOS_RT_WAIT_EDGE_NONE, 0};
@@ -685,8 +675,8 @@ cachedSignalCohortExecute(talos_rt_process_instance_v1 *instance) {
       if (!cachedCohortTaskCallee)
         return TALOS_RT_INVALID_LIFECYCLE;
       talos_rt_process_instance_v1 *callee = nullptr;
-      talos_rt_status status = talos_rt_v1_process_instance_create(
-          cachedCohortTaskCallee, &callee);
+      talos_rt_status status =
+          talos_rt_v1_process_instance_create(cachedCohortTaskCallee, &callee);
       if (status != TALOS_RT_OK)
         return status;
       cachedCohortTaskCalled = true;
@@ -713,12 +703,12 @@ cachedSignalCohortExecute(talos_rt_process_instance_v1 *instance) {
         return status;
       }
       talos_rt_process_instance_v1 *urgent = nullptr;
-      status = talos_rt_v1_process_instance_create(cachedCohortUrgentChild,
-                                                     &urgent);
+      status =
+          talos_rt_v1_process_instance_create(cachedCohortUrgentChild, &urgent);
       if (status != TALOS_RT_OK)
         return status;
       status = talos_rt_v1_scheduler_add(instance->context, urgent,
-                                           TALOS_RT_SCHEDULE_STARTUP);
+                                         TALOS_RT_SCHEDULE_STARTUP);
       if (status != TALOS_RT_OK) {
         talos_rt_v1_process_instance_destroy(urgent);
         return status;
@@ -726,8 +716,8 @@ cachedSignalCohortExecute(talos_rt_process_instance_v1 *instance) {
     }
     if (id == cachedCohortPublishID)
       talos_rt_v1_scheduler_signal(instance->context,
-                                     cachedCohortSecondarySignal, 1,
-                                     TALOS_RT_SIGNAL_CHANGE);
+                                   cachedCohortSecondarySignal, 1,
+                                   TALOS_RT_SIGNAL_CHANGE);
     *instance->action = {
         TALOS_RT_FRAGMENT_TERMINATE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
     return TALOS_RT_OK;
@@ -754,8 +744,7 @@ bool postObservedDelayed;
 // Process 1 and 2 wait for a post-Observed resumption, process 3 resumes in
 // Observed like a clocking-input sample, and process 4 is a Reactive-home
 // post-Observed waiter. After its resumption, process 1 takes a `#0`.
-talos_rt_status
-postObservedExecute(talos_rt_process_instance_v1 *instance) {
+talos_rt_status postObservedExecute(talos_rt_process_instance_v1 *instance) {
   if (!instance || !instance->context || !instance->action)
     return TALOS_RT_INVALID_ARGUMENT;
   instance->native_handle = instance;
@@ -810,8 +799,8 @@ incrementalCohortExecute(talos_rt_process_instance_v1 *instance) {
     schedulerOrder.push_back(id);
     if (id <= incrementalCohortSize)
       talos_rt_v1_scheduler_signal(instance->context,
-                                     incrementalCohortSignal + id, 1,
-                                     TALOS_RT_SIGNAL_CHANGE);
+                                   incrementalCohortSignal + id, 1,
+                                   TALOS_RT_SIGNAL_CHANGE);
     if (id == 1 && incrementalCohortDisturbRank) {
       // An unrelated ordering change between two direct publications must
       // invalidate the entire cached ordering, even with a pending journal.
@@ -837,8 +826,12 @@ incrementalCohortExecute(talos_rt_process_instance_v1 *instance) {
   *entry = {incrementalCohortSignal +
                 (id <= incrementalCohortSize ? 0 : id - incrementalCohortSize),
             TALOS_RT_WAIT_EDGE_CHANGE, 1};
-  *instance->action = {TALOS_RT_FRAGMENT_SUSPEND, TALOS_RT_SUSPEND_CHANGE,
-                       1, TALOS_RT_ACTION_FRAME_WAIT_RECORD, 0, 48};
+  *instance->action = {TALOS_RT_FRAGMENT_SUSPEND,
+                       TALOS_RT_SUSPEND_CHANGE,
+                       1,
+                       TALOS_RT_ACTION_FRAME_WAIT_RECORD,
+                       0,
+                       48};
   return TALOS_RT_OK;
 }
 
@@ -861,15 +854,13 @@ schedulerSelfTriggerExecute(talos_rt_process_instance_v1 *instance) {
           oldValue ^ 1, 0);
     } else {
       talos_rt_v1_scheduler_signal(instance->context, schedulerWaitHandle,
-                                     schedulerWaitWidth,
-                                     TALOS_RT_SIGNAL_CHANGE);
+                                   schedulerWaitWidth, TALOS_RT_SIGNAL_CHANGE);
     }
   }
   auto *wait = reinterpret_cast<talos_rt_wait_record_v1 *>(instance->frame);
   auto *entry = reinterpret_cast<talos_rt_wait_entry_v1 *>(wait + 1);
   *wait = {TALOS_RT_VERSION, TALOS_RT_SUSPEND_CHANGE, 0, 1, 0, 0};
-  *entry = {schedulerWaitHandle, TALOS_RT_WAIT_EDGE_CHANGE,
-            schedulerWaitWidth};
+  *entry = {schedulerWaitHandle, TALOS_RT_WAIT_EDGE_CHANGE, schedulerWaitWidth};
   *instance->action = {TALOS_RT_FRAGMENT_SUSPEND,
                        TALOS_RT_SUSPEND_CHANGE,
                        1,
@@ -892,8 +883,7 @@ schedulerWaitCountExecute(talos_rt_process_instance_v1 *instance) {
   auto *wait = reinterpret_cast<talos_rt_wait_record_v1 *>(instance->frame);
   auto *entry = reinterpret_cast<talos_rt_wait_entry_v1 *>(wait + 1);
   *wait = {TALOS_RT_VERSION, TALOS_RT_SUSPEND_CHANGE, 0, 1, 0, 0};
-  *entry = {schedulerWaitHandle, TALOS_RT_WAIT_EDGE_CHANGE,
-            schedulerWaitWidth};
+  *entry = {schedulerWaitHandle, TALOS_RT_WAIT_EDGE_CHANGE, schedulerWaitWidth};
   *instance->action = {TALOS_RT_FRAGMENT_SUSPEND,
                        TALOS_RT_SUSPEND_CHANGE,
                        1,
@@ -933,9 +923,9 @@ groupedStaticActivationExecute(talos_rt_process_instance_v1 *instance) {
           nodes[node / 64] |= uint64_t{1} << (node % 64);
       // The second publication must leave one ready bit and one resume.
       talos_rt_v1_scheduler_activate_static_nodes(instance->context,
-                                                    nodes.data(), nodes.size());
+                                                  nodes.data(), nodes.size());
       talos_rt_v1_scheduler_activate_static_nodes(instance->context,
-                                                    nodes.data(), nodes.size());
+                                                  nodes.data(), nodes.size());
     } else {
       ++schedulerResumeCount;
     }
@@ -954,8 +944,8 @@ groupedStaticActivationExecute(talos_rt_process_instance_v1 *instance) {
   }
   *instance->action = {
       TALOS_RT_FRAGMENT_SUSPEND,
-      static_cast<talos_rt_suspend_kind>(
-          id == 90 ? TALOS_RT_SUSPEND_DELAY : TALOS_RT_SUSPEND_CHANGE),
+      static_cast<talos_rt_suspend_kind>(id == 90 ? TALOS_RT_SUSPEND_DELAY
+                                                  : TALOS_RT_SUSPEND_CHANGE),
       1,
       TALOS_RT_ACTION_FRAME_WAIT_RECORD,
       0,
@@ -978,8 +968,7 @@ talos_rt_status finishExecute(talos_rt_process_instance_v1 *instance) {
   if (!instance || !instance->context || !instance->action)
     return TALOS_RT_INVALID_ARGUMENT;
   instance->native_handle = instance;
-  talos_rt_status status =
-      talos_rt_v1_scheduler_finish(instance->context, 0);
+  talos_rt_status status = talos_rt_v1_scheduler_finish(instance->context, 0);
   if (status != TALOS_RT_OK)
     return status;
   *instance->action = {
@@ -1032,8 +1021,7 @@ uint64_t retainedAutomaticHandle;
 uint64_t nbaAutomaticHandle;
 uint8_t nbaDummyPlane;
 
-talos_rt_status
-automaticStateExecute(talos_rt_process_instance_v1 *instance) {
+talos_rt_status automaticStateExecute(talos_rt_process_instance_v1 *instance) {
   if (!instance || !instance->context || !instance->action)
     return TALOS_RT_INVALID_ARGUMENT;
   instance->native_handle = instance;
@@ -1058,11 +1046,11 @@ retainedAutomaticStateExecute(talos_rt_process_instance_v1 *instance) {
   if (status != TALOS_RT_OK)
     return status;
   status = talos_rt_v1_native_state_retain(instance->context,
-                                             retainedAutomaticHandle);
+                                           retainedAutomaticHandle);
   if (status != TALOS_RT_OK)
     return status;
   status = talos_rt_v1_native_state_release(instance->context,
-                                              retainedAutomaticHandle, 1);
+                                            retainedAutomaticHandle, 1);
   if (status != TALOS_RT_OK)
     return status;
   *instance->action = {
@@ -1070,8 +1058,7 @@ retainedAutomaticStateExecute(talos_rt_process_instance_v1 *instance) {
   return TALOS_RT_OK;
 }
 
-talos_rt_status
-automaticNBAExecute(talos_rt_process_instance_v1 *instance) {
+talos_rt_status automaticNBAExecute(talos_rt_process_instance_v1 *instance) {
   if (!instance || !instance->context || !instance->action)
     return TALOS_RT_INVALID_ARGUMENT;
   instance->native_handle = instance;
@@ -1081,13 +1068,13 @@ automaticNBAExecute(talos_rt_process_instance_v1 *instance) {
   if (status != TALOS_RT_OK)
     return status;
   uint8_t replacement = 0xa5;
-  status = talos_rt_v1_scheduler_nba(instance->context, &nbaDummyPlane,
-                                       nullptr, 8, nbaAutomaticHandle, 8, 3,
-                                       &replacement, nullptr);
+  status = talos_rt_v1_scheduler_nba(instance->context, &nbaDummyPlane, nullptr,
+                                     8, nbaAutomaticHandle, 8, 3, &replacement,
+                                     nullptr);
   if (status != TALOS_RT_OK)
     return status;
   status = talos_rt_v1_native_state_release(instance->context,
-                                              nbaAutomaticHandle, 1);
+                                            nbaAutomaticHandle, 1);
   if (status != TALOS_RT_OK)
     return status;
   *instance->action = {
@@ -1233,10 +1220,10 @@ struct EventOnlyComputedWait {
 };
 
 talos_rt_status eventOnlyComputedEvaluator(talos_rt_context *context,
-                                             const uint64_t *,
-                                             uint32_t captureCount,
-                                             uint64_t *value, uint64_t *unknown,
-                                             uint32_t limbCount) {
+                                           const uint64_t *,
+                                           uint32_t captureCount,
+                                           uint64_t *value, uint64_t *unknown,
+                                           uint32_t limbCount) {
   if (!context || captureCount != 0 || !value || !unknown || limbCount != 1)
     return TALOS_RT_INVALID_ARGUMENT;
   value[0] = 1;
@@ -1335,18 +1322,15 @@ struct EventOnlyComputedFixture {
 talos_rt_process_instance_v1 *
 makeClockOccurrenceLifecycleInstance(ClockOccurrenceLifecycleFixture &fixture) {
   talos_rt_process_instance_v1 *instance = nullptr;
-  EXPECT_EQ(
-      talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
-      TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+            TALOS_RT_OK);
   return instance;
 }
 
-talos_rt_process_instance_v1 *
-makeSchedulerInstance(SchedulerFixture &fixture) {
+talos_rt_process_instance_v1 *makeSchedulerInstance(SchedulerFixture &fixture) {
   talos_rt_process_instance_v1 *instance = nullptr;
-  EXPECT_EQ(
-      talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
-      TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+            TALOS_RT_OK);
   return instance;
 }
 
@@ -1541,18 +1525,17 @@ TEST(RuntimeInternals, ResumeOverridesRequireExecutableHomeRegions) {
   uint32_t postponed =
       TALOS_RT_ACTION_RESUME_REGION_VALID |
       (TALOS_RT_REGION_POSTPONED << TALOS_RT_ACTION_RESUME_REGION_SHIFT);
-  EXPECT_TRUE(talos_rt_next_queued_region(
-      TALOS_RT_REGION_ACTIVE, TALOS_RT_SUSPEND_CHANGE, 1, postponed,
-      queuedRegion, postObserved));
+  EXPECT_TRUE(talos_rt_next_queued_region(TALOS_RT_REGION_ACTIVE,
+                                          TALOS_RT_SUSPEND_CHANGE, 1, postponed,
+                                          queuedRegion, postObserved));
   EXPECT_EQ(queuedRegion, TALOS_RT_REGION_POSTPONED);
   EXPECT_FALSE(postObserved);
 
-  uint32_t nba =
-      TALOS_RT_ACTION_RESUME_REGION_VALID |
-      (TALOS_RT_REGION_NBA << TALOS_RT_ACTION_RESUME_REGION_SHIFT);
+  uint32_t nba = TALOS_RT_ACTION_RESUME_REGION_VALID |
+                 (TALOS_RT_REGION_NBA << TALOS_RT_ACTION_RESUME_REGION_SHIFT);
   EXPECT_FALSE(talos_rt_next_queued_region(TALOS_RT_REGION_ACTIVE,
-                                             TALOS_RT_SUSPEND_CHANGE, 1, nba,
-                                             queuedRegion, postObserved));
+                                           TALOS_RT_SUSPEND_CHANGE, 1, nba,
+                                           queuedRegion, postObserved));
 }
 
 TEST(RuntimeInternals, PostObservedResumesTheHomeIterationAfterObserved) {
@@ -1597,7 +1580,7 @@ TEST(RuntimeInternals, MonitorRepeatsOnlyWhenItsDisplayedValuesChange) {
   std::string mode = "w+b";
   uint32_t descriptor = 0;
   ASSERT_EQ(talos_rt_v1_file_open(context, path.data(), path.size(),
-                                    mode.data(), mode.size(), &descriptor),
+                                  mode.data(), mode.size(), &descriptor),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_monitor_register(context, 21, 1), TALOS_RT_OK);
   context->activeLogicalProcessToken = 21;
@@ -1607,11 +1590,11 @@ TEST(RuntimeInternals, MonitorRepeatsOnlyWhenItsDisplayedValuesChange) {
   uint64_t one = 1;
   auto report = [&](const uint64_t &value) {
     talos_rt_arg_v1 items[2] = {
-        {TALOS_RT_ARG_STRING, TALOS_RT_ARG_FORMAT_STRING,
-         formatString.size(), formatString.data(), nullptr},
+        {TALOS_RT_ARG_STRING, TALOS_RT_ARG_FORMAT_STRING, formatString.size(),
+         formatString.data(), nullptr},
         {TALOS_RT_ARG_LOGIC, 0, 1, &value, nullptr}};
-    return talos_rt_v1_display(context, descriptor, 1,
-                                 TALOS_RT_RADIX_DECIMAL, items, 2, nullptr);
+    return talos_rt_v1_display(context, descriptor, 1, TALOS_RT_RADIX_DECIMAL,
+                               items, 2, nullptr);
   };
   ASSERT_EQ(report(zero), TALOS_RT_OK);
   ASSERT_EQ(report(zero), TALOS_RT_OK);
@@ -1624,13 +1607,13 @@ TEST(RuntimeInternals, MonitorRepeatsOnlyWhenItsDisplayedValuesChange) {
   uint64_t early = 10;
   uint64_t late = 20;
   auto timedReport = [&](const uint64_t &time, const uint64_t &value) {
-    talos_rt_arg_v1 items[3] = {
-        {TALOS_RT_ARG_STRING, TALOS_RT_ARG_FORMAT_STRING,
-         timedFormat.size(), timedFormat.data(), nullptr},
-        {TALOS_RT_ARG_TIME, 0, 64, &time, nullptr},
-        {TALOS_RT_ARG_LOGIC, 0, 1, &value, nullptr}};
-    return talos_rt_v1_display(context, descriptor, 1,
-                                 TALOS_RT_RADIX_DECIMAL, items, 3, nullptr);
+    talos_rt_arg_v1 items[3] = {{TALOS_RT_ARG_STRING,
+                                 TALOS_RT_ARG_FORMAT_STRING, timedFormat.size(),
+                                 timedFormat.data(), nullptr},
+                                {TALOS_RT_ARG_TIME, 0, 64, &time, nullptr},
+                                {TALOS_RT_ARG_LOGIC, 0, 1, &value, nullptr}};
+    return talos_rt_v1_display(context, descriptor, 1, TALOS_RT_RADIX_DECIMAL,
+                               items, 3, nullptr);
   };
   ASSERT_EQ(timedReport(early, one), TALOS_RT_OK);
   ASSERT_EQ(timedReport(late, one), TALOS_RT_OK);
@@ -1663,7 +1646,7 @@ TEST(RuntimeInternals, ClosingAChannelDisablesTheMonitorWritingToIt) {
   std::string mode = "w+b";
   uint32_t descriptor = 0;
   ASSERT_EQ(talos_rt_v1_file_open(context, path.data(), path.size(),
-                                    mode.data(), mode.size(), &descriptor),
+                                  mode.data(), mode.size(), &descriptor),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_monitor_register(context, 21, 1), TALOS_RT_OK);
   context->activeLogicalProcessToken = 21;
@@ -1673,11 +1656,11 @@ TEST(RuntimeInternals, ClosingAChannelDisablesTheMonitorWritingToIt) {
   uint64_t one = 1;
   auto report = [&](const uint64_t &value) {
     talos_rt_arg_v1 items[2] = {
-        {TALOS_RT_ARG_STRING, TALOS_RT_ARG_FORMAT_STRING,
-         formatString.size(), formatString.data(), nullptr},
+        {TALOS_RT_ARG_STRING, TALOS_RT_ARG_FORMAT_STRING, formatString.size(),
+         formatString.data(), nullptr},
         {TALOS_RT_ARG_LOGIC, 0, 1, &value, nullptr}};
-    return talos_rt_v1_display(context, descriptor, 1,
-                                 TALOS_RT_RADIX_DECIMAL, items, 2, nullptr);
+    return talos_rt_v1_display(context, descriptor, 1, TALOS_RT_RADIX_DECIMAL,
+                               items, 2, nullptr);
   };
   ASSERT_EQ(report(zero), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_file_close(context, descriptor), TALOS_RT_OK);
@@ -1712,8 +1695,7 @@ TEST(RuntimeInternals, ReplacedAndReenabledMonitorsAreWokenInPostponed) {
             TALOS_RT_REGION_POSTPONED);
   EXPECT_NE(context->schedulerSelectionGeneration, selectionGeneration);
 
-  context->scheduledDesignTasks.front().suspendKind =
-      TALOS_RT_SUSPEND_FOREVER;
+  context->scheduledDesignTasks.front().suspendKind = TALOS_RT_SUSPEND_FOREVER;
   selectionGeneration = context->schedulerSelectionGeneration;
   ASSERT_EQ(talos_rt_v1_monitor_register(context, 17, 1), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_monitor_control(context, 0), TALOS_RT_OK);
@@ -1923,7 +1905,7 @@ TEST(RuntimeInternals, SignalSubscriptionsAreRangeIndexedStableAndBounded) {
   EXPECT_EQ(context->signalDiagnostics.subscribersExamined - examinedBefore,
             2u);
   talos_rt_unregister_signal_wait_unlocked(context, computedSubscriptions, 42,
-                                             false);
+                                           false);
   EXPECT_EQ(context->activeComputedObserverWaiterCount, 0u);
   context->pendingNativeComputedWaiters.clear();
 
@@ -1956,22 +1938,22 @@ TEST(RuntimeInternals, SignalSubscriptionsAreRangeIndexedStableAndBounded) {
       context, &objectRecord.wait, objectSubscriptions, objectLatch));
   ASSERT_TRUE(talos_rt_publish_signal_occurrence_unlocked(
       context,
-      talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_AUTOMATIC, 8, 5),
-      1, TALOS_RT_SIGNAL_CHANGE));
+      talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_AUTOMATIC, 8, 5), 1,
+      TALOS_RT_SIGNAL_CHANGE));
   EXPECT_FALSE(objectLatch->triggered);
   ASSERT_TRUE(talos_rt_publish_signal_occurrence_unlocked(
       context,
-      talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_AUTOMATIC, 7, 5),
-      1, TALOS_RT_SIGNAL_CHANGE));
+      talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_AUTOMATIC, 7, 5), 1,
+      TALOS_RT_SIGNAL_CHANGE));
   EXPECT_TRUE(objectLatch->triggered);
   talos_rt_unregister_signal_wait_unlocked(context, objectSubscriptions);
 
   context->scheduledProcesses.back().instance = nullptr;
   context->nativeConditionalSignalWaiters.insert(UINT64_C(0xdeadbeef));
   ASSERT_TRUE(talos_rt_append_signal_event_unlocked(context, 16, false, false,
-                                                      true, false, false));
-  ASSERT_TRUE(talos_rt_append_signal_event_unlocked(
-      context, 4096, false, false, true, false, false));
+                                                    true, false, false));
+  ASSERT_TRUE(talos_rt_append_signal_event_unlocked(context, 4096, false, false,
+                                                    true, false, false));
   ASSERT_EQ(context->signalValueSnapshots.size(), 2u);
   talos_rt_invalidate_signal_snapshots_unlocked(context, 16, 1);
   EXPECT_EQ(context->signalValueSnapshots.count(16), 0u);
@@ -2226,8 +2208,8 @@ TEST(RuntimeInternals, ClockOccurrenceStateIsLazyAndOrdinaryWaitLayoutStable) {
   struct {
     talos_rt_wait_record_v1 wait;
     talos_rt_wait_entry_v1 entry;
-  } ordinary{{TALOS_RT_VERSION, TALOS_RT_SUSPEND_EDGE,
-              TALOS_RT_WAIT_FLAGS_NONE, 1, 0, 0},
+  } ordinary{{TALOS_RT_VERSION, TALOS_RT_SUSPEND_EDGE, TALOS_RT_WAIT_FLAGS_NONE,
+              1, 0, 0},
              {16, TALOS_RT_WAIT_EDGE_POSEDGE, 1}};
   std::vector<std::unique_ptr<SignalSubscription>> subscriptions;
   std::unique_ptr<SignalWaitLatch> latch;
@@ -2365,8 +2347,7 @@ TEST(RuntimeInternals,
   EXPECT_EQ(feature.pending.size(), 2u);
 
   std::vector<std::unique_ptr<SignalSubscription>> noSubscriptions;
-  talos_rt_unregister_signal_wait_unlocked(context, noSubscriptions, 31,
-                                             true);
+  talos_rt_unregister_signal_wait_unlocked(context, noSubscriptions, 31, true);
   ASSERT_TRUE(context->clockOccurrences);
   ASSERT_TRUE(context->clockOccurrences->replaceableEvents);
   auto &remaining = *context->clockOccurrences->replaceableEvents;
@@ -2389,8 +2370,7 @@ TEST(RuntimeInternals,
   EXPECT_TRUE(remaining.calendar.empty());
   EXPECT_EQ(remaining.pending.size(), 1u);
 
-  talos_rt_unregister_signal_wait_unlocked(context, noSubscriptions, 32,
-                                             true);
+  talos_rt_unregister_signal_wait_unlocked(context, noSubscriptions, 32, true);
   EXPECT_FALSE(context->clockOccurrences);
   talos_rt_v1_context_destroy(context);
 }
@@ -2443,7 +2423,7 @@ TEST(RuntimeInternals,
         context, &changed.wait, token, design));
 
     talos_rt_unregister_signal_wait_unlocked(context, subscriptions, token,
-                                               design);
+                                             design);
     EXPECT_FALSE(talos_rt_same_clock_occurrence_wait_unlocked(
         context, &record.wait, token, design));
     EXPECT_FALSE(context->clockOccurrences);
@@ -2456,7 +2436,7 @@ TEST(RuntimeInternals,
     EXPECT_TRUE(talos_rt_same_clock_occurrence_wait_unlocked(
         context, &record.wait, token, design));
     talos_rt_unregister_signal_wait_unlocked(context, subscriptions, token,
-                                               design);
+                                             design);
     EXPECT_FALSE(context->clockOccurrences);
   };
   exercise(21, false);
@@ -2492,7 +2472,7 @@ TEST(RuntimeInternals, ClockOccurrenceWaitAccepts64AndRejects65Clocks) {
             .size(),
         64u);
     talos_rt_unregister_signal_wait_unlocked(context, subscriptions, token,
-                                               design);
+                                             design);
     EXPECT_FALSE(context->clockOccurrences);
 
     record.wait.count = 65;
@@ -2544,7 +2524,7 @@ TEST(RuntimeInternals, ClockOccurrenceIffSamplesCommittedPublicationValue) {
 
   context->stateValue[1] |= uint64_t{1} << 16;
   ASSERT_TRUE(talos_rt_append_signal_event_unlocked(context, 80, false, false,
-                                                      true, false));
+                                                    true, false));
   ASSERT_TRUE(talos_rt_publish_signal_occurrence_unlocked(
       context, 16, 1, TALOS_RT_SIGNAL_CHANGE | TALOS_RT_SIGNAL_POSEDGE));
   ASSERT_TRUE(talos_rt_publish_signal_occurrence_unlocked(
@@ -2636,7 +2616,7 @@ TEST(RuntimeInternals,
 
   context->clockOccurrences->subscriptions[token].front()->stableID =
       talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_STATIC,
-                                      generatedState, 0);
+                                    generatedState, 0);
   EXPECT_TRUE(nativeClockOccurrencePrimaryReadsGeneratedState(
       context, generatedWritableStates));
 
@@ -2664,19 +2644,19 @@ TEST(RuntimeInternals, ClockConditionPublicationViewMergesOnlyCapturedOverlap) {
   // A huge unrelated publication must not be copied, walked, or even require
   // storage proportional to its declared width. The captured one-bit load is
   // resolved wholly outside the publication interval.
-  ASSERT_EQ(talos_rt_v1_native_state_load_plane(context, globalPlane, 64, 16,
-                                                  1, 0, 0, &value),
+  ASSERT_EQ(talos_rt_v1_native_state_load_plane(context, globalPlane, 64, 16, 1,
+                                                0, 0, &value),
             TALOS_RT_OK);
   EXPECT_EQ(value, 0);
 
   // IEEE 1800-2017 31.7 instead exposes the post-transition value and X plane
   // when the condition capture aliases the controlled publication.
   publication = {16, 8, 0, &publishedValue, &publishedUnknown};
-  ASSERT_EQ(talos_rt_v1_native_state_load_plane(context, globalPlane, 64, 16,
-                                                  8, 0, 0, &value),
+  ASSERT_EQ(talos_rt_v1_native_state_load_plane(context, globalPlane, 64, 16, 8,
+                                                0, 0, &value),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_native_state_load_plane(context, globalPlane, 64, 16,
-                                                  8, 1, 0, &unknown),
+  ASSERT_EQ(talos_rt_v1_native_state_load_plane(context, globalPlane, 64, 16, 8,
+                                                1, 0, &unknown),
             TALOS_RT_OK);
   EXPECT_EQ(value, publishedValue);
   EXPECT_EQ(unknown, publishedUnknown);
@@ -2689,13 +2669,13 @@ TEST(RuntimeInternals, ClockConditionPublicationViewMergesOnlyCapturedOverlap) {
   publication.stableID = talos_rt_v1_native_handle_offset(root, 16);
   std::array<uint8_t, 4> partialValue{}, partialUnknown{};
   uint64_t partial = talos_rt_v1_native_handle_offset(root, -3);
-  ASSERT_EQ(talos_rt_v1_native_state_load_plane(
-                context, globalPlane, 64, partial, 32, 0, 0,
-                partialValue.data()),
+  ASSERT_EQ(talos_rt_v1_native_state_load_plane(context, globalPlane, 64,
+                                                partial, 32, 0, 0,
+                                                partialValue.data()),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_native_state_load_plane(
-                context, globalPlane, 64, partial, 32, 1, 1,
-                partialUnknown.data()),
+  ASSERT_EQ(talos_rt_v1_native_state_load_plane(context, globalPlane, 64,
+                                                partial, 32, 1, 1,
+                                                partialUnknown.data()),
             TALOS_RT_OK);
   EXPECT_EQ(loadPackedBytes(partialValue.data(), 0, 32),
             uint64_t{publishedValue} << 19);
@@ -2718,10 +2698,9 @@ TEST(RuntimeInternals,
   struct {
     talos_rt_wait_record_v1 wait;
     talos_rt_wait_entry_v1 entry;
-  } record{
-      {TALOS_RT_VERSION, TALOS_RT_SUSPEND_EDGE,
-       TALOS_RT_WAIT_CLOCK_OCCURRENCE, 1, 74, 0},
-      {16, TALOS_RT_WAIT_EDGE_TRANSITION_MASK | (1u << 0) | (1u << 3), 4}};
+  } record{{TALOS_RT_VERSION, TALOS_RT_SUSPEND_EDGE,
+            TALOS_RT_WAIT_CLOCK_OCCURRENCE, 1, 74, 0},
+           {16, TALOS_RT_WAIT_EDGE_TRANSITION_MASK | (1u << 0) | (1u << 3), 4}};
   ScheduledDesignTask task;
   task.id = 14;
   task.started = true;
@@ -2890,12 +2869,8 @@ TEST(RuntimeInternals, ConditionalWakeUpdatesSchedulerSelectionGeneration) {
       sizeof(talos_rt_wait_record_v1) + 2 * sizeof(talos_rt_wait_entry_v1);
   task.frame.resize(task.waitSize);
   auto *wait = reinterpret_cast<talos_rt_wait_record_v1 *>(task.frame.data());
-  *wait = {TALOS_RT_VERSION,
-           TALOS_RT_SUSPEND_EDGE,
-           TALOS_RT_WAIT_EDGE_IFF,
-           2,
-           0,
-           0};
+  *wait = {
+      TALOS_RT_VERSION, TALOS_RT_SUSPEND_EDGE, TALOS_RT_WAIT_EDGE_IFF, 2, 0, 0};
   auto *entries = reinterpret_cast<talos_rt_wait_entry_v1 *>(wait + 1);
   entries[0] = {watched, TALOS_RT_WAIT_EDGE_POSEDGE, 1};
   entries[1] = {condition, TALOS_RT_WAIT_EDGE_NONE, 1};
@@ -2923,8 +2898,7 @@ TEST(Scheduler, NamedEventWaitersExcludeReadyAndTerminatedThreads) {
   schedulerResumeCount = 0;
   auto *instance = makeSchedulerInstance(fixture);
   ASSERT_EQ(talos_rt_v1_scheduler_add(context, instance, 0), TALOS_RT_OK);
-  const uint64_t token =
-      talos_rt_v1_scheduler_process_token(context, instance);
+  const uint64_t token = talos_rt_v1_scheduler_process_token(context, instance);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   std::vector<uint64_t> waiters;
   EXPECT_EQ(talos_rt_named_event_waiters(context, 0, waiters), TALOS_RT_OK);
@@ -2936,9 +2910,8 @@ TEST(Scheduler, NamedEventWaitersExcludeReadyAndTerminatedThreads) {
   EXPECT_TRUE(waiters.empty());
 
   talos_rt_process_control_disposition disposition{};
-  ASSERT_EQ(talos_rt_v1_process_control(context, token,
-                                          TALOS_RT_PROCESS_CONTROL_SUSPEND,
-                                          &disposition),
+  ASSERT_EQ(talos_rt_v1_process_control(
+                context, token, TALOS_RT_PROCESS_CONTROL_SUSPEND, &disposition),
             TALOS_RT_OK);
   EXPECT_EQ(talos_rt_named_event_waiters(context, 0, waiters), TALOS_RT_OK);
   EXPECT_EQ(waiters, (std::vector<uint64_t>{token}));
@@ -2966,8 +2939,7 @@ struct NamedEventOrderWait {
   std::array<talos_rt_wait_entry_v1, 3> entries{};
 };
 
-talos_rt_status
-namedEventOrderExecute(talos_rt_process_instance_v1 *instance) {
+talos_rt_status namedEventOrderExecute(talos_rt_process_instance_v1 *instance) {
   if (!instance || !instance->action || !instance->frame ||
       instance->frame_size < sizeof(NamedEventOrderWait))
     return TALOS_RT_INVALID_ARGUMENT;
@@ -2978,8 +2950,7 @@ namedEventOrderExecute(talos_rt_process_instance_v1 *instance) {
     return TALOS_RT_OK;
   }
   auto &record = *static_cast<NamedEventOrderWait *>(instance->frame);
-  record.wait = {
-      TALOS_RT_VERSION, TALOS_RT_SUSPEND_EVENT_ORDER, 0, 3, 0, 0};
+  record.wait = {TALOS_RT_VERSION, TALOS_RT_SUSPEND_EVENT_ORDER, 0, 3, 0, 0};
   record.entries = {{{41, TALOS_RT_WAIT_EDGE_NONE, 0},
                      {42, TALOS_RT_WAIT_EDGE_NONE, 0},
                      {43, TALOS_RT_WAIT_EDGE_NONE, 0}}};
@@ -3014,8 +2985,7 @@ TEST(Scheduler, NamedEventWaitersTrackOnlyRemainingEventOrder) {
       EXPECT_EQ(waiters, (std::vector<uint64_t>{token}));
     }
     talos_rt_v1_scheduler_event(context, 41, 0);
-    EXPECT_EQ(talos_rt_named_event_waiters(context, 41, waiters),
-              TALOS_RT_OK);
+    EXPECT_EQ(talos_rt_named_event_waiters(context, 41, waiters), TALOS_RT_OK);
     EXPECT_TRUE(waiters.empty());
     for (uint64_t event : {42, 43}) {
       EXPECT_EQ(talos_rt_named_event_waiters(context, event, waiters),
@@ -3103,13 +3073,13 @@ namedEventConditionalExecute(talos_rt_process_instance_v1 *instance) {
 
 TEST(Scheduler, NamedEventWaitersIgnoreObserverConditionsAndDeduplicate) {
   talos_rt_observer_descriptor_v1 observer{eventOnlyComputedObserverID,
-                                             nullptr,
-                                             0,
-                                             1,
-                                             0,
-                                             TALOS_RT_OBSERVER_NO_BYTECODE,
-                                             eventOnlyComputedEvaluator,
-                                             0};
+                                           nullptr,
+                                           0,
+                                           1,
+                                           0,
+                                           TALOS_RT_OBSERVER_NO_BYTECODE,
+                                           eventOnlyComputedEvaluator,
+                                           0};
   talos_rt_execution_descriptor_v1 execution{};
   execution.version = TALOS_RT_VERSION;
   execution.observers = &observer;
@@ -3124,23 +3094,18 @@ TEST(Scheduler, NamedEventWaitersIgnoreObserverConditionsAndDeduplicate) {
   fixture.descriptor.execution = &execution;
   fixture.descriptor.native_execute = namedEventConditionalExecute;
   talos_rt_process_instance_v1 *instance = nullptr;
-  ASSERT_EQ(
-      talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+            TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_add(context, instance, 0), TALOS_RT_OK);
-  const uint64_t token =
-      talos_rt_v1_scheduler_process_token(context, instance);
+  const uint64_t token = talos_rt_v1_scheduler_process_token(context, instance);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   std::vector<uint64_t> waiters;
-  EXPECT_EQ(talos_rt_named_event_waiters(context, 91, waiters),
-            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_named_event_waiters(context, 91, waiters), TALOS_RT_OK);
   EXPECT_EQ(waiters, (std::vector<uint64_t>{token}));
-  EXPECT_EQ(talos_rt_named_event_waiters(context, 92, waiters),
-            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_named_event_waiters(context, 92, waiters), TALOS_RT_OK);
   EXPECT_TRUE(waiters.empty());
   talos_rt_v1_scheduler_event(context, 92, 0);
-  EXPECT_EQ(talos_rt_named_event_waiters(context, 91, waiters),
-            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_named_event_waiters(context, 91, waiters), TALOS_RT_OK);
   EXPECT_EQ(waiters, (std::vector<uint64_t>{token}));
   const auto &scheduled = context->scheduledProcesses.front();
   EXPECT_FALSE(scheduled.signalTriggered);
@@ -3153,8 +3118,7 @@ TEST(Scheduler, NamedEventWaitersIgnoreObserverConditionsAndDeduplicate) {
   EXPECT_TRUE(waiters.empty());
   record.observers[0].dependency_count = 2;
   talos_rt_v1_scheduler_event(context, 91, 0);
-  EXPECT_EQ(talos_rt_named_event_waiters(context, 91, waiters),
-            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_named_event_waiters(context, 91, waiters), TALOS_RT_OK);
   EXPECT_TRUE(waiters.empty());
   EXPECT_TRUE(context->scheduledProcesses.front().signalTriggered);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
@@ -3230,11 +3194,9 @@ TEST(Scheduler, ClockOccurrenceWaitExitReclaimsFeatureState) {
       ASSERT_FALSE(
           context->scheduledProcesses.front().signalSubscriptions.front());
       ASSERT_TRUE(talos_rt_publish_signal_occurrence_unlocked(
-          context, 16, 1,
-          TALOS_RT_SIGNAL_CHANGE | TALOS_RT_SIGNAL_POSEDGE));
+          context, 16, 1, TALOS_RT_SIGNAL_CHANGE | TALOS_RT_SIGNAL_POSEDGE));
       ASSERT_TRUE(talos_rt_publish_signal_occurrence_unlocked(
-          context, 32, 1,
-          TALOS_RT_SIGNAL_CHANGE | TALOS_RT_SIGNAL_POSEDGE));
+          context, 32, 1, TALOS_RT_SIGNAL_CHANGE | TALOS_RT_SIGNAL_POSEDGE));
       ++context->schedulerSlotProgress;
       ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
       EXPECT_EQ(clockOccurrenceLifecycleResumes, 2u);
@@ -3256,8 +3218,7 @@ TEST(Scheduler, ClockOccurrenceWaitExitReclaimsFeatureState) {
       EXPECT_EQ(context->scheduledProcesses.front().signalSubscriptions.size(),
                 1u);
       ASSERT_TRUE(talos_rt_publish_signal_occurrence_unlocked(
-          context, 48, 1,
-          TALOS_RT_SIGNAL_CHANGE | TALOS_RT_SIGNAL_POSEDGE));
+          context, 48, 1, TALOS_RT_SIGNAL_CHANGE | TALOS_RT_SIGNAL_POSEDGE));
       ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
       EXPECT_EQ(clockOccurrenceLifecycleResumes, 2u);
     }
@@ -3277,17 +3238,12 @@ TEST(Scheduler, PrimeFindsTailAndNonTailActors) {
   schedulerWaitHandle = 700;
   schedulerWaitWidth = 1;
   talos_rt_process_instance_v1 *firstInstance = makeSchedulerInstance(first);
-  talos_rt_process_instance_v1 *secondInstance =
-      makeSchedulerInstance(second);
-  ASSERT_EQ(talos_rt_v1_scheduler_add(context, firstInstance, 0),
-            TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_scheduler_add(context, secondInstance, 0),
-            TALOS_RT_OK);
+  talos_rt_process_instance_v1 *secondInstance = makeSchedulerInstance(second);
+  ASSERT_EQ(talos_rt_v1_scheduler_add(context, firstInstance, 0), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add(context, secondInstance, 0), TALOS_RT_OK);
 
-  ASSERT_EQ(talos_rt_v1_scheduler_prime(context, firstInstance),
-            TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_scheduler_prime(context, secondInstance),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_prime(context, firstInstance), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_prime(context, secondInstance), TALOS_RT_OK);
   EXPECT_TRUE(context->scheduledProcesses[0].started);
   EXPECT_TRUE(context->scheduledProcesses[1].started);
   EXPECT_EQ(context->scheduledProcesses[0].suspendKind,
@@ -3334,7 +3290,7 @@ TEST(Scheduler, CachedSignalCohortPreservesOrderingChildrenAndCompaction) {
   ASSERT_TRUE(schedulerOrder.empty());
 
   talos_rt_v1_scheduler_signal(context, cachedCohortPrimarySignal, 1,
-                                 TALOS_RT_SIGNAL_CHANGE);
+                               TALOS_RT_SIGNAL_CHANGE);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   std::vector<uint64_t> expected{30, 31, 1, 100, 101};
   for (uint64_t id = 2; id <= 20; ++id)
@@ -3371,7 +3327,7 @@ TEST(Scheduler, CachedEqualRankSignalCohortPreservesInsertionOrder) {
   }
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   talos_rt_v1_scheduler_signal(context, cachedCohortPrimarySignal, 1,
-                                 TALOS_RT_SIGNAL_CHANGE);
+                               TALOS_RT_SIGNAL_CHANGE);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
 
   std::vector<uint64_t> expected;
@@ -3413,7 +3369,7 @@ TEST(Scheduler, CachedSignalCohortInvalidatesForNewPriorityPublication) {
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
 
   talos_rt_v1_scheduler_signal(context, cachedCohortPrimarySignal, 1,
-                                 TALOS_RT_SIGNAL_CHANGE);
+                               TALOS_RT_SIGNAL_CHANGE);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   std::vector<uint64_t> expected{1, 40};
   for (uint64_t id = 2; id <= 17; ++id)
@@ -3450,7 +3406,7 @@ TEST(Scheduler, PostObservedResumptionsRunTogetherAfterObserved) {
   ASSERT_TRUE(schedulerOrder.empty());
 
   talos_rt_v1_scheduler_signal(context, postObservedSignal, 1,
-                                 TALOS_RT_SIGNAL_CHANGE);
+                               TALOS_RT_SIGNAL_CHANGE);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   EXPECT_EQ(schedulerOrder, (std::vector<uint64_t>{3, 1, 2, 11, 4}));
   EXPECT_TRUE(context->scheduledProcesses.empty());
@@ -3458,7 +3414,8 @@ TEST(Scheduler, PostObservedResumptionsRunTogetherAfterObserved) {
   talos_rt_v1_context_destroy(context);
 }
 
-TEST(Scheduler, IncrementalSignalCohortOrdersNewWakesAndInvalidatesDisturbances) {
+TEST(Scheduler,
+     IncrementalSignalCohortOrdersNewWakesAndInvalidatesDisturbances) {
   for (unsigned mode : {0u, 1u, 2u}) {
     SCOPED_TRACE(mode);
     bool disturb = mode == 1;
@@ -3469,8 +3426,8 @@ TEST(Scheduler, IncrementalSignalCohortOrdersNewWakesAndInvalidatesDisturbances)
     exported.descriptor.native_execute =
         +[](talos_rt_process_instance_v1 *instance) -> talos_rt_status {
       instance->native_handle = instance;
-      *instance->action = {TALOS_RT_FRAGMENT_TERMINATE,
-                           TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
+      *instance->action = {
+          TALOS_RT_FRAGMENT_TERMINATE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
       return TALOS_RT_OK;
     };
     incrementalCohortReentry = mode == 2 ? &exported.descriptor : nullptr;
@@ -3479,10 +3436,11 @@ TEST(Scheduler, IncrementalSignalCohortOrdersNewWakesAndInvalidatesDisturbances)
     for (uint64_t id = 1; id <= incrementalCohortSize * 2; ++id) {
       fixtures.push_back(std::make_unique<SchedulerFixture>(id));
       fixtures.back()->descriptor.native_execute = incrementalCohortExecute;
-      ASSERT_EQ(talos_rt_v1_scheduler_add_ranked(
-                    context, makeSchedulerInstance(*fixtures.back()), 0,
-                    id <= incrementalCohortSize ? static_cast<uint32_t>(id) : 0),
-                TALOS_RT_OK);
+      ASSERT_EQ(
+          talos_rt_v1_scheduler_add_ranked(
+              context, makeSchedulerInstance(*fixtures.back()), 0,
+              id <= incrementalCohortSize ? static_cast<uint32_t>(id) : 0),
+          TALOS_RT_OK);
     }
     // Future timed work remains in the exact slow candidate scan. Its
     // presence must not disable incremental admission of independent wakes.
@@ -3492,17 +3450,19 @@ TEST(Scheduler, IncrementalSignalCohortOrdersNewWakesAndInvalidatesDisturbances)
       instance->native_handle = instance;
       if (instance->continuation != 0)
         return TALOS_RT_INVALID_LIFECYCLE;
-      auto *wait =
-          reinterpret_cast<talos_rt_wait_record_v1 *>(instance->frame);
+      auto *wait = reinterpret_cast<talos_rt_wait_record_v1 *>(instance->frame);
       *wait = {TALOS_RT_VERSION, TALOS_RT_SUSPEND_DELAY, 0, 0, 1, 0};
       *instance->action = {TALOS_RT_FRAGMENT_SUSPEND,
-                           TALOS_RT_SUSPEND_DELAY, 1,
-                           TALOS_RT_ACTION_FRAME_WAIT_RECORD, 0, 48};
+                           TALOS_RT_SUSPEND_DELAY,
+                           1,
+                           TALOS_RT_ACTION_FRAME_WAIT_RECORD,
+                           0,
+                           48};
       return TALOS_RT_OK;
     };
-    ASSERT_EQ(talos_rt_v1_scheduler_add(
-                  context, makeSchedulerInstance(timer), 0),
-              TALOS_RT_OK);
+    ASSERT_EQ(
+        talos_rt_v1_scheduler_add(context, makeSchedulerInstance(timer), 0),
+        TALOS_RT_OK);
     auto drainCurrentSlot = [&] {
       NativeAOTMutexScope lock(context);
       return runScheduler(context, {/*nativePlan=*/false,
@@ -3513,7 +3473,7 @@ TEST(Scheduler, IncrementalSignalCohortOrdersNewWakesAndInvalidatesDisturbances)
     context->signalDiagnosticsEnabled = true;
     context->signalDiagnostics.candidateScans = 0;
     talos_rt_v1_scheduler_signal(context, incrementalCohortSignal, 1,
-                                   TALOS_RT_SIGNAL_CHANGE);
+                                 TALOS_RT_SIGNAL_CHANGE);
     ASSERT_EQ(drainCurrentSlot(), TALOS_RT_OK);
     std::vector<uint64_t> expected;
     if (disturb)
@@ -3568,10 +3528,10 @@ TEST(Scheduler, CachedReactiveSignalCohortYieldsToSameSlotNBA) {
   }
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_nba(context, &plane, nullptr, 8, 0, 8, 0,
-                                        &replacement, nullptr),
+                                      &replacement, nullptr),
             TALOS_RT_OK);
   talos_rt_v1_scheduler_signal(context, cachedCohortPrimarySignal, 1,
-                                 TALOS_RT_SIGNAL_CHANGE);
+                               TALOS_RT_SIGNAL_CHANGE);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   EXPECT_TRUE(cachedCohortNBAVisible);
   EXPECT_EQ(plane, replacement);
@@ -3609,7 +3569,7 @@ TEST(Scheduler, CachedSignalCohortRequeuesUrgentTaskCallToken) {
   }
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   talos_rt_v1_scheduler_signal(context, cachedCohortPrimarySignal, 1,
-                                 TALOS_RT_SIGNAL_CHANGE);
+                               TALOS_RT_SIGNAL_CHANGE);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
 
   std::vector<uint64_t> expected{1, 150, 1};
@@ -3645,9 +3605,9 @@ TEST(Scheduler, CachedUrgentRequeueRebuildsOldCursorDistances) {
         makeSchedulerInstance(*fixtures.back());
     ASSERT_NE(instance, nullptr);
     instance->continuation = 1;
-    ASSERT_EQ(talos_rt_v1_scheduler_add(context, instance,
-                                          TALOS_RT_SCHEDULE_STARTUP),
-              TALOS_RT_OK);
+    ASSERT_EQ(
+        talos_rt_v1_scheduler_add(context, instance, TALOS_RT_SCHEDULE_STARTUP),
+        TALOS_RT_OK);
   }
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
 
@@ -3690,7 +3650,7 @@ TEST(Scheduler, CachedSignalCohortReadmitsSameTokenContinue) {
   }
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   talos_rt_v1_scheduler_signal(context, cachedCohortPrimarySignal, 1,
-                                 TALOS_RT_SIGNAL_CHANGE);
+                               TALOS_RT_SIGNAL_CHANGE);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
 
   std::vector<uint64_t> expected{1, 1};
@@ -3734,7 +3694,7 @@ TEST(Scheduler, CachedSameTokenPublicationInvalidatesBeforeContinue) {
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   talos_rt_v1_scheduler_signal(context, cachedCohortPrimarySignal, 1,
-                                 TALOS_RT_SIGNAL_CHANGE);
+                               TALOS_RT_SIGNAL_CHANGE);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
 
   std::vector<uint64_t> expected{1, 40, 1};
@@ -3773,7 +3733,7 @@ TEST(Scheduler, CachedSameTokenWaitMovesToSlowUntilEpochReady) {
   }
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   talos_rt_v1_scheduler_signal(context, cachedCohortPrimarySignal, 1,
-                                 TALOS_RT_SIGNAL_CHANGE);
+                               TALOS_RT_SIGNAL_CHANGE);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
 
   std::vector<uint64_t> expected{1, 2, 1};
@@ -3799,8 +3759,8 @@ TEST(Scheduler, SignalChangedWhileExecutingRetriggersTheSameWait) {
       TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
 
-  talos_rt_v1_scheduler_signal(context, schedulerWaitHandle,
-                                 schedulerWaitWidth, TALOS_RT_SIGNAL_CHANGE);
+  talos_rt_v1_scheduler_signal(context, schedulerWaitHandle, schedulerWaitWidth,
+                               TALOS_RT_SIGNAL_CHANGE);
   EXPECT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   EXPECT_EQ(schedulerSelfTriggerCount, 3u);
   EXPECT_TRUE(context->scheduledProcesses.empty());
@@ -3835,10 +3795,10 @@ TEST(Scheduler, AOTStaticTransitionRetriggersTheExecutingWait) {
   schedulerWaitWidth = 1;
   schedulerSelfTriggerCount = 0;
   schedulerSelfTriggerStaticState = 1;
-  ASSERT_EQ(
-      talos_rt_v1_scheduler_add_aot(context, makeSchedulerInstance(fixture),
-                                      0, 0, 0, nullptr, nullptr, 0, nullptr, 0),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
+                                          makeSchedulerInstance(fixture), 0, 0,
+                                          0, nullptr, nullptr, 0, nullptr, 0),
+            TALOS_RT_OK);
   constexpr talos_rt_native_schedule_node nodes[] = {
       {0, 0, UINT32_MAX},
       {0, 1, UINT32_MAX},
@@ -3888,8 +3848,7 @@ TEST(Scheduler, PublicationBatchMergesStaticTransitions) {
     EXPECT_EQ(
         talos_rt_v1_native_state_register_static(context, 1, 0, rootWidth),
         TALOS_RT_OK);
-    EXPECT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan),
-              TALOS_RT_OK);
+    EXPECT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
     SchedulerFixture fixture(44);
     fixture.descriptor.execution = &execution;
     fixture.descriptor.native_execute = schedulerWaitCountExecute;
@@ -3897,11 +3856,10 @@ TEST(Scheduler, PublicationBatchMergesStaticTransitions) {
         TALOS_RT_STABLE_HANDLE_STATIC, 1, static_cast<int64_t>(waitLow));
     schedulerWaitWidth = 8;
     schedulerWaitWakeCount = 0;
-    EXPECT_EQ(talos_rt_v1_scheduler_add_aot(context,
-                                              makeSchedulerInstance(fixture), 0,
-                                              0, 0, nullptr, nullptr, 0,
-                                              nullptr, 0),
-              TALOS_RT_OK);
+    EXPECT_EQ(
+        talos_rt_v1_scheduler_add_aot(context, makeSchedulerInstance(fixture),
+                                      0, 0, 0, nullptr, nullptr, 0, nullptr, 0),
+        TALOS_RT_OK);
     constexpr talos_rt_native_schedule_node nodes[] = {
         {0, 0, UINT32_MAX},
         {0, 1, UINT32_MAX},
@@ -3921,9 +3879,9 @@ TEST(Scheduler, PublicationBatchMergesStaticTransitions) {
     talos_rt_v1_scheduler_static_transition(context, 1, 0, 8, 0, 0, 0xa5, 0);
     if (touchWaitedBits) {
       talos_rt_v1_scheduler_static_transition(context, 1, waitLow, 8, 0, 0,
-                                                0x5a, 0);
-      talos_rt_v1_scheduler_static_transition(context, 1, waitLow, 8, 0x5a,
-                                                0, 0, 0);
+                                              0x5a, 0);
+      talos_rt_v1_scheduler_static_transition(context, 1, waitLow, 8, 0x5a, 0,
+                                              0, 0);
     }
     if (batched) {
       bool held = !vpiObserved;
@@ -3985,10 +3943,10 @@ TEST(Scheduler, AOTStaticTransitionCanSuppressTheExecutingWait) {
   schedulerWaitWidth = 1;
   schedulerSelfTriggerCount = 0;
   schedulerSelfTriggerStaticState = 1;
-  ASSERT_EQ(
-      talos_rt_v1_scheduler_add_aot(context, makeSchedulerInstance(fixture),
-                                      0, 0, 0, nullptr, nullptr, 0, nullptr, 0),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
+                                          makeSchedulerInstance(fixture), 0, 0,
+                                          0, nullptr, nullptr, 0, nullptr, 0),
+            TALOS_RT_OK);
   constexpr talos_rt_native_schedule_node nodes[] = {
       {0, 0, UINT32_MAX},
       {0, 1, UINT32_MAX},
@@ -4039,17 +3997,17 @@ TEST(Scheduler, AOTDirectFragmentRetainsSelfRetrigger) {
   schedulerWaitWidth = 1;
   schedulerSelfTriggerCount = 0;
   schedulerSelfTriggerStaticState = 1;
-  ASSERT_EQ(
-      talos_rt_v1_scheduler_add_aot(context, makeSchedulerInstance(fixture),
-                                      0, 0, 0, nullptr, nullptr, 0, nullptr, 0),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
+                                          makeSchedulerInstance(fixture), 0, 0,
+                                          0, nullptr, nullptr, 0, nullptr, 0),
+            TALOS_RT_OK);
   constexpr talos_rt_native_schedule_node initial[] = {
       {0, 0, UINT32_MAX},
       {0, 1, UINT32_MAX},
   };
-  ASSERT_EQ(talos_rt_v1_scheduler_run_aot_nodes(context, initial,
-                                                  std::size(initial)),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_scheduler_run_aot_nodes(context, initial, std::size(initial)),
+      TALOS_RT_OK);
 
   ASSERT_EQ(talos_rt_v1_scheduler_run_aot(context), TALOS_RT_OK);
   ASSERT_EQ(context->scheduledProcesses.size(), 1u);
@@ -4062,27 +4020,26 @@ TEST(Scheduler, AOTDirectFragmentRetainsSelfRetrigger) {
 TEST(Scheduler, CompactBytecodeUsesDirectSignalSubscriptions) {
   SchedulerFixture fixture(31);
   std::vector<uint8_t> code;
-  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0, 0, 0,
-                    0);
+  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0, 0, 0, 0);
   appendInstruction(code, TALOS_RT_BC_SUSPEND, TALOS_RT_BC_TYPE_NONE, 0,
                     TALOS_RT_SUSPEND_EDGE, 0, 1);
-  appendInstruction(code, TALOS_RT_BC_TERMINATE, TALOS_RT_BC_TYPE_NONE, 0,
-                    0, 0, 0);
+  appendInstruction(code, TALOS_RT_BC_TERMINATE, TALOS_RT_BC_TYPE_NONE, 0, 0, 0,
+                    0);
   std::array<talos_rt_bytecode_entry_v1, 2> entries{{{0, 0}, {1, 2}}};
   talos_rt_bytecode_v1 bytecode{code.data(),
-                                  code.size(),
-                                  entries.data(),
-                                  static_cast<uint32_t>(entries.size()),
-                                  1,
-                                  fixture.layout.frame_size,
-                                  nullptr,
-                                  nullptr,
-                                  0,
-                                  nullptr,
-                                  0,
-                                  0,
-                                  nullptr,
-                                  0};
+                                code.size(),
+                                entries.data(),
+                                static_cast<uint32_t>(entries.size()),
+                                1,
+                                fixture.layout.frame_size,
+                                nullptr,
+                                nullptr,
+                                0,
+                                nullptr,
+                                0,
+                                0,
+                                nullptr,
+                                0};
   fixture.descriptor.available_tiers = TALOS_RT_TIER_MASK_BYTECODE;
   fixture.descriptor.native_requirements = nullptr;
   fixture.descriptor.native_execute = nullptr;
@@ -4240,9 +4197,8 @@ TEST(Scheduler, DynamicNativeChildrenInheritPhaseThroughIndexedParent) {
         talos_rt_v1_scheduler_add(context, makeSchedulerInstance(fixture), 0),
         TALOS_RT_OK);
   talos_rt_process_instance_v1 *parent = makeSchedulerInstance(fixture);
-  ASSERT_EQ(
-      talos_rt_v1_scheduler_add(context, parent, TALOS_RT_SCHEDULE_FINAL),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add(context, parent, TALOS_RT_SCHEDULE_FINAL),
+            TALOS_RT_OK);
   uint64_t parentToken = context->scheduledProcesses.back().token;
   context->activeNativeProcess = parent;
   context->activeLogicalProcessToken =
@@ -4274,8 +4230,7 @@ talos_rt_status finalPollExecute(talos_rt_process_instance_v1 *instance) {
   uint64_t id = instance->descriptor->handle.id;
   finalPollObservations.push_back(
       {id, talos_rt_v1_scheduler_termination_requested(instance->context)});
-  EXPECT_EQ(talos_rt_v1_scheduler_finish(instance->context, 0),
-            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_scheduler_finish(instance->context, 0), TALOS_RT_OK);
   finalPollObservations.push_back(
       {id, talos_rt_v1_scheduler_termination_requested(instance->context)});
   *instance->action = {
@@ -4298,10 +4253,10 @@ TEST(Scheduler, FinalProceduresPollOnlyTheirOwnTerminationRequests) {
       talos_rt_v1_scheduler_add(context, makeSchedulerInstance(initial), 0),
       TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_add(context, makeSchedulerInstance(first),
-                                        TALOS_RT_SCHEDULE_FINAL),
+                                      TALOS_RT_SCHEDULE_FINAL),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_add(context, makeSchedulerInstance(second),
-                                        TALOS_RT_SCHEDULE_FINAL),
+                                      TALOS_RT_SCHEDULE_FINAL),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   ASSERT_EQ(finalPollObservations.size(), 4u);
@@ -4336,8 +4291,8 @@ TEST(Scheduler, UnstartedPostponedActorsDoNotPreemptActiveResumes) {
   // that preempted this active resume would observe the values from before
   // the active region ran, and would leave the Postponed region reachable a
   // second time in the same time slot (IEEE 1800-2017 4.4.2.9).
-  talos_rt_v1_scheduler_signal(context, schedulerWaitHandle,
-                                 schedulerWaitWidth, TALOS_RT_SIGNAL_CHANGE);
+  talos_rt_v1_scheduler_signal(context, schedulerWaitHandle, schedulerWaitWidth,
+                               TALOS_RT_SIGNAL_CHANGE);
   ASSERT_EQ(talos_rt_v1_scheduler_add(
                 context, makeSchedulerInstance(monitor),
                 TALOS_RT_SCHEDULE_HOME(TALOS_RT_REGION_POSTPONED)),
@@ -4362,14 +4317,14 @@ TEST(Scheduler, PlannedContinuationRanksApplyAfterResume) {
   const uint32_t continuation = 1;
   const uint32_t laterRank = 9;
   const uint32_t earlierRank = 1;
-  ASSERT_EQ(
-      talos_rt_v1_scheduler_add_planned(context, makeSchedulerInstance(later),
-                                          0, 0, &continuation, &laterRank, 1),
-      TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_scheduler_add_planned(
-                context, makeSchedulerInstance(earlier), 0, 0, &continuation,
-                &earlierRank, 1),
+  ASSERT_EQ(talos_rt_v1_scheduler_add_planned(context,
+                                              makeSchedulerInstance(later), 0,
+                                              0, &continuation, &laterRank, 1),
             TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_scheduler_add_planned(context, makeSchedulerInstance(earlier),
+                                        0, 0, &continuation, &earlierRank, 1),
+      TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   EXPECT_EQ(schedulerOrder, (std::vector<uint64_t>{20, 10}));
   talos_rt_v1_context_destroy(context);
@@ -4404,7 +4359,7 @@ TEST(Scheduler, AOTPlanInstallBindRunAndExclusiveMutableState) {
   SchedulerFixture fixture(100);
   talos_rt_process_instance_v1 *instance = makeSchedulerInstance(fixture);
   ASSERT_EQ(talos_rt_v1_scheduler_add_aot(first, instance, 0, 0, 7, nullptr,
-                                            nullptr, 0, nullptr, 0),
+                                          nullptr, 0, nullptr, 0),
             TALOS_RT_OK);
   EXPECT_EQ(state.actors[0], instance);
   EXPECT_NE(talos_rt_v1_scheduler_process_token(first, instance), 0u);
@@ -4412,7 +4367,7 @@ TEST(Scheduler, AOTPlanInstallBindRunAndExclusiveMutableState) {
   talos_rt_process_instance_v1 *duplicate = makeSchedulerInstance(fixture);
   ASSERT_NE(duplicate, nullptr);
   EXPECT_EQ(talos_rt_v1_scheduler_add_aot(first, duplicate, 0, 0, 7, nullptr,
-                                            nullptr, 0, nullptr, 0),
+                                          nullptr, 0, nullptr, 0),
             TALOS_RT_INVALID_ARGUMENT);
   EXPECT_EQ(talos_rt_v1_process_instance_destroy(duplicate), TALOS_RT_OK);
 
@@ -4512,9 +4467,9 @@ TEST(Scheduler, PeriodicWriteFootprintTracksInstalledPlanOwnership) {
   for (uint32_t id = 1; id <= 3; ++id)
     ASSERT_EQ(talos_rt_v1_native_state_register_static(context, id, id - 1, 1),
               TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, sparseNBAState,
-                                                       3, 1),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_native_state_register_static(context, sparseNBAState, 3, 1),
+      TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
   // Include direct-owner writes and all NBA roots, not read-only dependencies
   // or runtime-only writers. Sparse IDs must not require a huge dense bitmap.
@@ -4565,12 +4520,11 @@ TEST(Scheduler, SharedDriverArbitratesPlanAndDescriptorContinuations) {
   schedulerResumeCount = 0;
   schedulerOrder.clear();
   std::vector<uint8_t> code;
-  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0, 0, 0,
-                    0);
+  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0, 0, 0, 0);
   appendInstruction(code, TALOS_RT_BC_SUSPEND, TALOS_RT_BC_TYPE_NONE, 0,
                     TALOS_RT_SUSPEND_DELAY, 0, 1);
-  appendInstruction(code, TALOS_RT_BC_TERMINATE, TALOS_RT_BC_TYPE_NONE, 0,
-                    0, 0, 0);
+  appendInstruction(code, TALOS_RT_BC_TERMINATE, TALOS_RT_BC_TYPE_NONE, 0, 0, 0,
+                    0);
   std::array<talos_rt_bytecode_entry_v1, 2> entries{{{0, 0}, {1, 2}}};
   talos_rt_bytecode_v1 bytecode{};
   bytecode.code = code.data();
@@ -4588,25 +4542,25 @@ TEST(Scheduler, SharedDriverArbitratesPlanAndDescriptorContinuations) {
   *wait = {TALOS_RT_VERSION, TALOS_RT_SUSPEND_DELAY, 0, 0, 17, 0};
   uint32_t bytecodeEntry = 0;
   ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context, nativeInstance, 0, 0, 3,
-                                            nullptr, nullptr, 0, nullptr, 0),
+                                          nullptr, nullptr, 0, nullptr, 0),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context, bytecodeInstance, 0, 1, 2,
-                                            nullptr, nullptr, 0, &bytecodeEntry,
-                                            1),
+                                          nullptr, nullptr, 0, &bytecodeEntry,
+                                          1),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_add_ranked(
                 context, makeSchedulerInstance(descriptor), 0, 1),
             TALOS_RT_OK);
   // Deliberately scramble node layout: scheduler rank governs execution.
   const talos_rt_native_schedule_node nodes[] = {{1, 1, UINT32_MAX},
-                                                   {0, 0, UINT32_MAX},
-                                                   {0, 1, UINT32_MAX},
-                                                   {1, 0, UINT32_MAX}};
+                                                 {0, 0, UINT32_MAX},
+                                                 {0, 1, UINT32_MAX},
+                                                 {1, 0, UINT32_MAX}};
   ASSERT_EQ(initializeNativeAOTNodesUnlocked(context, nodes, std::size(nodes)),
             TALOS_RT_OK);
   uint8_t futurePlane = 0, replacement = 9;
   ASSERT_EQ(talos_rt_v1_scheduler_nba(context, &futurePlane, nullptr, 8, 0, 8,
-                                        99, &replacement, nullptr),
+                                      99, &replacement, nullptr),
             TALOS_RT_OK);
   {
     NativeAOTContextScope active(context);
@@ -4642,10 +4596,10 @@ TEST(Scheduler, SynchronousDrivesKeepOnlyTheLastValue) {
   uint8_t plane = 0b1111;
   uint8_t whole = 0b0000, high = 0b01;
   ASSERT_EQ(talos_rt_v1_scheduler_clocking_nba(context, &plane, nullptr, 8, 0,
-                                                 4, 0, &whole, nullptr, 7),
+                                               4, 0, &whole, nullptr, 7),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_clocking_nba(context, &plane, nullptr, 8, 2,
-                                                 2, 0, &high, nullptr, 7),
+                                               2, 0, &high, nullptr, 7),
             TALOS_RT_OK);
   ASSERT_EQ(context->scheduledNBAs.size(), 2u);
   uint32_t region = context->scheduledNBAs.front().execRegion;
@@ -4688,9 +4642,9 @@ TEST(Scheduler, SharedDriverReactivatesPlanAfterEachSameSlotNBA) {
         if (value == 3)
           return schedulerExecute(instance);
         uint8_t next = value + 1;
-        auto status = talos_rt_v1_scheduler_nba(
-            context, &nbaDummyPlane, nullptr, 8, schedulerWaitHandle, 8, 0,
-            &next, nullptr);
+        auto status = talos_rt_v1_scheduler_nba(context, &nbaDummyPlane,
+                                                nullptr, 8, schedulerWaitHandle,
+                                                8, 0, &next, nullptr);
         *instance->action = {TALOS_RT_FRAGMENT_SUSPEND,
                              TALOS_RT_SUSPEND_CHANGE,
                              1,
@@ -4706,18 +4660,18 @@ TEST(Scheduler, SharedDriverReactivatesPlanAfterEachSameSlotNBA) {
   schedulerResumeCount = 0;
   schedulerOrder.clear();
   nbaDummyPlane = 0;
-  ASSERT_EQ(
-      talos_rt_v1_scheduler_add_aot(context, makeSchedulerInstance(fixture),
-                                      0, 0, 0, nullptr, nullptr, 0, nullptr, 0),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
+                                          makeSchedulerInstance(fixture), 0, 0,
+                                          0, nullptr, nullptr, 0, nullptr, 0),
+            TALOS_RT_OK);
   const talos_rt_native_schedule_node nodes[] = {{0, 0, UINT32_MAX},
-                                                   {0, 1, UINT32_MAX}};
+                                                 {0, 1, UINT32_MAX}};
   ASSERT_EQ(initializeNativeAOTNodesUnlocked(context, nodes, std::size(nodes)),
             TALOS_RT_OK);
   uint8_t first = 1;
   ASSERT_EQ(talos_rt_v1_scheduler_nba(context, &nbaDummyPlane, nullptr, 8,
-                                        schedulerWaitHandle, 8, 0, &first,
-                                        nullptr),
+                                      schedulerWaitHandle, 8, 0, &first,
+                                      nullptr),
             TALOS_RT_OK);
   {
     NativeAOTContextScope active(context);
@@ -4755,30 +4709,30 @@ TEST(Scheduler, AOTNodeAdapterHonorsRequiredBytecode) {
   SchedulerFixture fixture(100);
   fixture.descriptor.execution = &execution;
   std::vector<uint8_t> code;
-  appendInstruction(code, TALOS_RT_BC_TERMINATE, TALOS_RT_BC_TYPE_NONE, 0,
-                    0, 0, 0);
+  appendInstruction(code, TALOS_RT_BC_TERMINATE, TALOS_RT_BC_TYPE_NONE, 0, 0, 0,
+                    0);
   std::array<talos_rt_bytecode_entry_v1, 2> entries{{{0, 0}, {1, 0}}};
   talos_rt_bytecode_v1 bytecode{code.data(),
-                                  code.size(),
-                                  entries.data(),
-                                  2,
-                                  0,
-                                  fixture.layout.frame_size,
-                                  nullptr,
-                                  nullptr,
-                                  0,
-                                  nullptr,
-                                  0,
-                                  0,
-                                  nullptr,
-                                  0};
+                                code.size(),
+                                entries.data(),
+                                2,
+                                0,
+                                fixture.layout.frame_size,
+                                nullptr,
+                                nullptr,
+                                0,
+                                nullptr,
+                                0,
+                                0,
+                                nullptr,
+                                0};
   fixture.descriptor.available_tiers |= TALOS_RT_TIER_MASK_BYTECODE;
   fixture.descriptor.bytecode = &bytecode;
   schedulerOrder.clear();
-  ASSERT_EQ(
-      talos_rt_v1_scheduler_add_aot(context, makeSchedulerInstance(fixture),
-                                      0, 0, 0, nullptr, nullptr, 0, nullptr, 0),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
+                                          makeSchedulerInstance(fixture), 0, 0,
+                                          0, nullptr, nullptr, 0, nullptr, 0),
+            TALOS_RT_OK);
   const talos_rt_native_schedule_node nodes[] = {{0, 0, UINT32_MAX}};
   {
     NativeAOTContextScope active(context);
@@ -4818,50 +4772,50 @@ TEST(Scheduler, ScopedDisturbanceRetainsCompiledExecutors) {
   ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
   SchedulerFixture first(100), second(101);
   std::vector<uint8_t> code;
-  appendInstruction(code, TALOS_RT_BC_TERMINATE, TALOS_RT_BC_TYPE_NONE, 0,
-                    0, 0, 0);
+  appendInstruction(code, TALOS_RT_BC_TERMINATE, TALOS_RT_BC_TYPE_NONE, 0, 0, 0,
+                    0);
   std::array<talos_rt_bytecode_entry_v1, 2> entries{{{0, 0}, {1, 0}}};
   talos_rt_bytecode_v1 bytecode{code.data(),
-                                  code.size(),
-                                  entries.data(),
-                                  2,
-                                  0,
-                                  first.layout.frame_size,
-                                  nullptr,
-                                  nullptr,
-                                  0,
-                                  nullptr,
-                                  0,
-                                  0,
-                                  nullptr,
-                                  0};
+                                code.size(),
+                                entries.data(),
+                                2,
+                                0,
+                                first.layout.frame_size,
+                                nullptr,
+                                nullptr,
+                                0,
+                                nullptr,
+                                0,
+                                0,
+                                nullptr,
+                                0};
   schedulerOrder.clear();
   for (auto *fixture : {&first, &second}) {
     fixture->descriptor.execution = &execution;
     fixture->descriptor.available_tiers |= TALOS_RT_TIER_MASK_BYTECODE;
     fixture->descriptor.bytecode = &bytecode;
-    fixture->descriptor
-        .native_execute = [](talos_rt_process_instance_v1 *instance) {
-      uint32_t root = instance->descriptor->handle.id - 99;
-      auto direct = talos_rt_v1_static_specialization_guard(
-          instance->context, root - 1, root, TALOS_RT_STATIC_ROOT_READ);
-      schedulerOrder.push_back(root * 10 + direct);
-      instance->native_handle = instance;
-      *instance->action = {
-          TALOS_RT_FRAGMENT_TERMINATE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
-      return TALOS_RT_OK;
-    };
-    ASSERT_EQ(talos_rt_v1_scheduler_add_aot(
-                  context, makeSchedulerInstance(*fixture), 0,
-                  fixture->descriptor.handle.id - 100, 0, nullptr, nullptr, 0,
-                  nullptr, 0),
+    fixture->descriptor.native_execute =
+        [](talos_rt_process_instance_v1 *instance) {
+          uint32_t root = instance->descriptor->handle.id - 99;
+          auto direct = talos_rt_v1_static_specialization_guard(
+              instance->context, root - 1, root, TALOS_RT_STATIC_ROOT_READ);
+          schedulerOrder.push_back(root * 10 + direct);
+          instance->native_handle = instance;
+          *instance->action = {
+              TALOS_RT_FRAGMENT_TERMINATE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
+          return TALOS_RT_OK;
+        };
+    ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
+                                            makeSchedulerInstance(*fixture), 0,
+                                            fixture->descriptor.handle.id - 100,
+                                            0, nullptr, nullptr, 0, nullptr, 0),
               TALOS_RT_OK);
   }
   talos_rt_aot_external_write_handle_unlocked(
       context, talos_rt_v1_native_state_static_handle(1), 0, 1, false);
   EXPECT_TRUE(context->nativeScheduleExternalWritePending);
   const talos_rt_native_schedule_node nodes[] = {{0, 0, UINT32_MAX},
-                                                   {1, 0, UINT32_MAX}};
+                                                 {1, 0, UINT32_MAX}};
   ASSERT_EQ(talos_rt_v1_scheduler_run_aot_nodes(context, nodes, 2),
             TALOS_RT_OK);
   // Both fragments remain compiled. Only the affected root loses direct
@@ -4892,10 +4846,10 @@ TEST(Scheduler, GeneratedCheckpointValidatesAndConsumesExactContinuation) {
   generatedCheckpointCallbackCount = 0;
   invalidGeneratedCheckpointStatus = TALOS_RT_OK;
   validGeneratedCheckpointStatus = TALOS_RT_INVALID_CONTINUATION;
-  ASSERT_EQ(
-      talos_rt_v1_scheduler_add_aot(context, makeSchedulerInstance(fixture),
-                                      0, 0, 0, nullptr, nullptr, 0, nullptr, 0),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
+                                          makeSchedulerInstance(fixture), 0, 0,
+                                          0, nullptr, nullptr, 0, nullptr, 0),
+            TALOS_RT_OK);
   // Establish the source wait before the generated transaction takes direct
   // ownership of continuation 1.
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
@@ -4925,7 +4879,7 @@ TEST(Scheduler, AOTTimedCheckpointCommitsSameSlotNBAAndReentersNatively) {
   uint8_t plane = 0;
   uint8_t replacement = 0xa5;
   ASSERT_EQ(talos_rt_v1_scheduler_nba(context, &plane, nullptr, 8, 0, 8, 5,
-                                        &replacement, nullptr),
+                                      &replacement, nullptr),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_run_aot(context), TALOS_RT_OK);
   EXPECT_EQ(state.runCalls, 2u);
@@ -5006,7 +4960,7 @@ TEST(Scheduler, IndexedClockKernelIngressMaintainsReadySetAcrossReentry) {
     plan.clock_kernels = &clock;
     plan.clock_kernel_count = 1;
     talos_rt_native_merged_fragment merged{0, 0, 0,      capacity - 1,
-                                             0, 0, nullptr};
+                                           0, 0, nullptr};
     plan.merged_fragments = &merged;
     plan.merged_fragment_count = 1;
     plan.timeslot_coordinator = clockCoordinator;
@@ -5023,12 +4977,11 @@ TEST(Scheduler, IndexedClockKernelIngressMaintainsReadySetAcrossReentry) {
     EXPECT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan),
               TALOS_RT_INVALID_ARGUMENT);
     clock.reserved = talos::runtime::indexedClockKernelReadySet;
-    ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
     for (unsigned iteration = 0; iteration != 3; ++iteration) {
-      ASSERT_EQ(talos_rt_v1_scheduler_activate_clock_kernel(context, 0,
-                                                              capacity - 1),
-                TALOS_RT_OK);
+      ASSERT_EQ(
+          talos_rt_v1_scheduler_activate_clock_kernel(context, 0, capacity - 1),
+          TALOS_RT_OK);
       EXPECT_EQ(ready.findFirst(), capacity - 1);
       ASSERT_EQ(talos_rt_v1_scheduler_activate_clock_kernel(context, 0, 0),
                 TALOS_RT_OK);
@@ -5084,20 +5037,17 @@ TEST(Scheduler, AOTClockKernelIngressSuppressesDuplicateBits) {
   // must not recursively run the clock loop. The outer drain consumes it once
   // the current actor has returned.
   context->nativeScheduleRunning = true;
-  EXPECT_EQ(talos_rt_v1_scheduler_run_clock_coordinator(context),
-            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_scheduler_run_clock_coordinator(context), TALOS_RT_OK);
   EXPECT_EQ(clockCoordinatorCalls, 0u);
   EXPECT_EQ(ingress[1], 2u);
   context->nativeScheduleRunning = false;
   talos_rt_process_instance_v1 active{};
   context->activeNativeProcess = &active;
-  EXPECT_EQ(talos_rt_v1_scheduler_run_clock_coordinator(context),
-            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_scheduler_run_clock_coordinator(context), TALOS_RT_OK);
   EXPECT_EQ(clockCoordinatorCalls, 0u);
   EXPECT_EQ(ingress[1], 2u);
   context->activeNativeProcess = nullptr;
-  EXPECT_EQ(talos_rt_v1_scheduler_run_clock_coordinator(context),
-            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_scheduler_run_clock_coordinator(context), TALOS_RT_OK);
   EXPECT_EQ(clockCoordinatorCalls, 1u);
   EXPECT_EQ(ingress[0], 0u);
   EXPECT_EQ(ingress[1], 0u);
@@ -5241,8 +5191,7 @@ TEST(Scheduler, AOTStaticEvalIslandIsDistinctFromFullyStatic) {
   execution.flags = TALOS_RT_EXECUTION_DPI_EXPORTS;
   EXPECT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan),
             TALOS_RT_INVALID_ARGUMENT);
-  execution.flags =
-      TALOS_RT_EXECUTION_VPI_READ | TALOS_RT_EXECUTION_VPI_WRITE;
+  execution.flags = TALOS_RT_EXECUTION_VPI_READ | TALOS_RT_EXECUTION_VPI_WRITE;
   ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
   EXPECT_FALSE(context->nativeStaticEvalIslandCertified);
   EXPECT_TRUE(canUseStaticAOTFanout(context));
@@ -5292,10 +5241,10 @@ TEST(Scheduler, AOTCleanSuperstepExecutesCertifiedNativeActor) {
   SchedulerFixture fixture(100);
   fixture.descriptor.execution = &execution;
   schedulerOrder.clear();
-  ASSERT_EQ(
-      talos_rt_v1_scheduler_add_aot(context, makeSchedulerInstance(fixture),
-                                      0, 0, 0, nullptr, nullptr, 0, nullptr, 0),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
+                                          makeSchedulerInstance(fixture), 0, 0,
+                                          0, nullptr, nullptr, 0, nullptr, 0),
+            TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_run_aot(context), TALOS_RT_OK);
   EXPECT_EQ(schedulerOrder, (std::vector<uint64_t>{100}));
   EXPECT_EQ(context->signalDiagnostics.aotNodeExecutions, 1u);
@@ -5321,10 +5270,10 @@ TEST(Scheduler, AOTCleanSuperstepDirectNodeCallUsesLockedGenericPath) {
   SchedulerFixture fixture(100);
   fixture.descriptor.execution = &execution;
   schedulerOrder.clear();
-  ASSERT_EQ(
-      talos_rt_v1_scheduler_add_aot(context, makeSchedulerInstance(fixture),
-                                      0, 0, 0, nullptr, nullptr, 0, nullptr, 0),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
+                                          makeSchedulerInstance(fixture), 0, 0,
+                                          0, nullptr, nullptr, 0, nullptr, 0),
+            TALOS_RT_OK);
   constexpr talos_rt_native_schedule_node nodes[] = {{0, 0, 0}};
   ASSERT_EQ(
       talos_rt_v1_scheduler_run_aot_nodes(context, nodes, std::size(nodes)),
@@ -5359,12 +5308,12 @@ TEST(Scheduler, AOTGroupedStaticActivationSuppressesDuplicateWake) {
   schedulerOrder.clear();
   schedulerResumeCount = 0;
   ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
-                                            makeSchedulerInstance(source), 0, 0,
-                                            0, nullptr, nullptr, 0, nullptr, 0),
+                                          makeSchedulerInstance(source), 0, 0,
+                                          0, nullptr, nullptr, 0, nullptr, 0),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
-                                            makeSchedulerInstance(target), 0, 1,
-                                            0, nullptr, nullptr, 0, nullptr, 0),
+                                          makeSchedulerInstance(target), 0, 1,
+                                          0, nullptr, nullptr, 0, nullptr, 0),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_run_aot(context), TALOS_RT_OK);
   EXPECT_EQ(schedulerOrder, (std::vector<uint64_t>{90, 91}));
@@ -5402,8 +5351,7 @@ TEST_P(SchedulerReadySet, SparseCrossWordActivationAndDuplicateSuppression) {
     talos_rt_context *context = nullptr;
     ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
               TALOS_RT_OK);
-    ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
     SchedulerFixture source(90), target(91);
     std::vector<uint32_t> continuations;
     for (uint32_t continuation = 0; continuation < count + 2; ++continuation)
@@ -5417,13 +5365,13 @@ TEST_P(SchedulerReadySet, SparseCrossWordActivationAndDuplicateSuppression) {
     }
     schedulerOrder.clear();
     schedulerResumeCount = 0;
-    ASSERT_EQ(talos_rt_v1_scheduler_add_aot(
-                  context, makeSchedulerInstance(source), 0, 0, 0, nullptr,
-                  nullptr, 0, nullptr, 0),
+    ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
+                                            makeSchedulerInstance(source), 0, 0,
+                                            0, nullptr, nullptr, 0, nullptr, 0),
               TALOS_RT_OK);
-    ASSERT_EQ(talos_rt_v1_scheduler_add_aot(
-                  context, makeSchedulerInstance(target), 0, 1, 0, nullptr,
-                  nullptr, 0, nullptr, 0),
+    ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
+                                            makeSchedulerInstance(target), 0, 1,
+                                            0, nullptr, nullptr, 0, nullptr, 0),
               TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_scheduler_run_aot(context), TALOS_RT_OK);
     EXPECT_EQ(schedulerOrder, (std::vector<uint64_t>{90, 91}));
@@ -5491,9 +5439,9 @@ TEST(Scheduler, GenericSpecializationUsesBoundPlanesAndScopedOverrides) {
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 2, 8, 8),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_native_state_sync(context, value.data(),
-                                            unknown.data(), 16),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_native_state_sync(context, value.data(), unknown.data(), 16),
+      TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_native_state_bind_specialization(context, &fast),
             TALOS_RT_OK);
   EXPECT_EQ(fast, 1u);
@@ -5545,16 +5493,16 @@ TEST(Scheduler, BoundContinuousPlanesRetainPartialContributions) {
             TALOS_RT_OK);
   uint8_t *retained = nullptr, *unknown = nullptr, *mask = nullptr;
   EXPECT_EQ(talos_rt_v1_native_state_bind_continuous(context, &retained,
-                                                       &unknown, &mask),
+                                                     &unknown, &mask),
             TALOS_RT_INVALID_LIFECYCLE);
   std::array<uint8_t, 2> visible{0x12, 0x34}, visibleUnknown{0, 0};
   ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 0, 16),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_native_state_sync(context, visible.data(),
-                                            visibleUnknown.data(), 16),
+                                          visibleUnknown.data(), 16),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_native_state_bind_continuous(context, &retained,
-                                                       &unknown, &mask),
+                                                     &unknown, &mask),
             TALOS_RT_OK);
   EXPECT_EQ(mask[0], 0);
   EXPECT_EQ(mask[1], 0);
@@ -5574,8 +5522,8 @@ TEST(Scheduler, BoundContinuousPlanesRetainPartialContributions) {
   EXPECT_EQ(retained[1], 0x78);
   EXPECT_EQ(mask[1], 0xff);
   uint8_t *againValue = nullptr, *againUnknown = nullptr, *againMask = nullptr;
-  ASSERT_EQ(talos_rt_v1_native_state_bind_continuous(
-                context, &againValue, &againUnknown, &againMask),
+  ASSERT_EQ(talos_rt_v1_native_state_bind_continuous(context, &againValue,
+                                                     &againUnknown, &againMask),
             TALOS_RT_OK);
   EXPECT_EQ(againValue, retained);
   EXPECT_EQ(againUnknown, unknown);
@@ -5616,30 +5564,30 @@ TEST(Scheduler, StaticSpecializationGuardsIntersectOnlyDirtyRoots) {
   cleanFixture.descriptor.execution = &execution;
   talos_rt_process_instance_v1 *cleanActor =
       makeSchedulerInstance(cleanFixture);
-  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context, cleanActor, 1, 0, 0,
-                                            nullptr, nullptr, 0, nullptr, 0),
+  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context, cleanActor, 1, 0, 0, nullptr,
+                                          nullptr, 0, nullptr, 0),
             TALOS_RT_OK);
   // Tier construction was already validated. Advertising bytecode here is
   // enough to exercise root-local handover selection without building an
   // unrelated interpreter program for this guard test.
   cleanFixture.descriptor.available_tiers |= TALOS_RT_TIER_MASK_BYTECODE;
 
-  EXPECT_EQ(talos_rt_v1_static_specialization_guard(
-                context, 0, 1, TALOS_RT_STATIC_ROOT_READ),
+  EXPECT_EQ(talos_rt_v1_static_specialization_guard(context, 0, 1,
+                                                    TALOS_RT_STATIC_ROOT_READ),
             1u);
-  EXPECT_EQ(talos_rt_v1_static_specialization_guard(
-                context, 1, 2, TALOS_RT_STATIC_ROOT_WRITE),
+  EXPECT_EQ(talos_rt_v1_static_specialization_guard(context, 1, 2,
+                                                    TALOS_RT_STATIC_ROOT_WRITE),
             1u);
   EXPECT_EQ(cleanActor->tier, 0u);
   {
     std::lock_guard<std::recursive_mutex> lock(context->mutex);
     talos_rt_aot_external_write_range_unlocked(context, 0, 8, false);
   }
-  EXPECT_EQ(talos_rt_v1_static_specialization_guard(
-                context, 0, 1, TALOS_RT_STATIC_ROOT_READ),
+  EXPECT_EQ(talos_rt_v1_static_specialization_guard(context, 0, 1,
+                                                    TALOS_RT_STATIC_ROOT_READ),
             0u);
-  EXPECT_EQ(talos_rt_v1_static_specialization_guard(
-                context, 1, 2, TALOS_RT_STATIC_ROOT_WRITE),
+  EXPECT_EQ(talos_rt_v1_static_specialization_guard(context, 1, 2,
+                                                    TALOS_RT_STATIC_ROOT_WRITE),
             1u);
 
   context->nativeScheduleTransientDirtyRoots.clear();
@@ -5652,15 +5600,15 @@ TEST(Scheduler, StaticSpecializationGuardsIntersectOnlyDirtyRoots) {
     std::lock_guard<std::recursive_mutex> lock(context->mutex);
     talos_rt_aot_external_write_range_unlocked(context, 8, 8, true);
   }
-  EXPECT_EQ(talos_rt_v1_static_specialization_guard(
-                context, 1, 2, TALOS_RT_STATIC_ROOT_WRITE),
+  EXPECT_EQ(talos_rt_v1_static_specialization_guard(context, 1, 2,
+                                                    TALOS_RT_STATIC_ROOT_WRITE),
             0u);
   {
     std::lock_guard<std::recursive_mutex> lock(context->mutex);
     talos_rt_aot_release_range_unlocked(context, 8, 8);
   }
-  EXPECT_EQ(talos_rt_v1_static_specialization_guard(
-                context, 1, 2, TALOS_RT_STATIC_ROOT_WRITE),
+  EXPECT_EQ(talos_rt_v1_static_specialization_guard(context, 1, 2,
+                                                    TALOS_RT_STATIC_ROOT_WRITE),
             1u);
   talos_rt_v1_context_destroy(context);
 }
@@ -5739,8 +5687,8 @@ TEST(Scheduler, ExternalDirtyRootIndexSummarizesLeafPages) {
   EXPECT_EQ(context->nativeSchedulePersistentDirtyMask[0], 0u);
   EXPECT_EQ(context->nativeSchedulePersistentDirtyMask[1], uint64_t{1} << 1);
   EXPECT_EQ(context->nativeSchedulePersistentDirtySummary[0], uint64_t{1} << 1);
-  EXPECT_EQ(talos_rt_v1_static_specialization_guard(
-                context, UINT32_MAX, 65, TALOS_RT_STATIC_ROOT_READ),
+  EXPECT_EQ(talos_rt_v1_static_specialization_guard(context, UINT32_MAX, 65,
+                                                    TALOS_RT_STATIC_ROOT_READ),
             0u);
 
   {
@@ -5994,7 +5942,7 @@ TEST(Scheduler, NativePlaneFillsPreserveBitsAndInitializeOnce) {
     ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
               TALOS_RT_OK);
     const talos_rt_native_state_fill_v1 malformed[] = {{0, 8, 1, 1},
-                                                         {7, 1, 0, 1}};
+                                                       {7, 1, 0, 1}};
     EXPECT_EQ(talos_rt_v1_native_state_initialize(
                   context, value.data(), unknown.data(), 195, malformed, 2),
               TALOS_RT_INVALID_ARGUMENT);
@@ -6011,7 +5959,7 @@ TEST(Scheduler, NativePlaneFillsPreserveBitsAndInitializeOnce) {
               TALOS_RT_INVALID_LIFECYCLE);
     EXPECT_EQ(value[0], 0x5a);
     ASSERT_EQ(talos_rt_v1_native_state_bind_shared(context, value.data(),
-                                                     unknown.data(), 195),
+                                                   unknown.data(), 195),
               TALOS_RT_OK);
     EXPECT_EQ(context->stateValue.data(),
               reinterpret_cast<uint64_t *>(value.data()));
@@ -6316,13 +6264,13 @@ TEST(Scheduler, VPIObservationDemandRoutesAroundTier1UntilReleased) {
 TEST(Scheduler, AOTObserverInventoryTracksLiveComputedWaitsOnly) {
   constexpr uint64_t observerID = 101;
   talos_rt_observer_descriptor_v1 observer{observerID,
-                                             nullptr,
-                                             0,
-                                             1,
-                                             0,
-                                             TALOS_RT_OBSERVER_NO_BYTECODE,
-                                             collapsedAliasObserverEvaluator,
-                                             0};
+                                           nullptr,
+                                           0,
+                                           1,
+                                           0,
+                                           TALOS_RT_OBSERVER_NO_BYTECODE,
+                                           collapsedAliasObserverEvaluator,
+                                           0};
   talos_rt_execution_descriptor_v1 execution{};
   execution.version = TALOS_RT_VERSION;
   execution.observers = &observer;
@@ -6373,13 +6321,13 @@ TEST(Scheduler, AOTObserverInventoryTracksLiveComputedWaitsOnly) {
 
 TEST(Scheduler, EventOnlyComputedWaitUnregistersWhenNativeProcessTerminates) {
   talos_rt_observer_descriptor_v1 observer{eventOnlyComputedObserverID,
-                                             nullptr,
-                                             0,
-                                             1,
-                                             0,
-                                             TALOS_RT_OBSERVER_NO_BYTECODE,
-                                             eventOnlyComputedEvaluator,
-                                             0};
+                                           nullptr,
+                                           0,
+                                           1,
+                                           0,
+                                           TALOS_RT_OBSERVER_NO_BYTECODE,
+                                           eventOnlyComputedEvaluator,
+                                           0};
   talos_rt_execution_descriptor_v1 execution{};
   execution.version = TALOS_RT_VERSION;
   execution.observers = &observer;
@@ -6391,9 +6339,8 @@ TEST(Scheduler, EventOnlyComputedWaitUnregistersWhenNativeProcessTerminates) {
   EventOnlyComputedFixture fixture(0x7e03);
   fixture.descriptor.execution = &execution;
   talos_rt_process_instance_v1 *instance = nullptr;
-  ASSERT_EQ(
-      talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+            TALOS_RT_OK);
   eventOnlyComputedResumeCount = 0;
   ASSERT_EQ(talos_rt_v1_scheduler_add(context, instance, 0), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
@@ -6459,18 +6406,18 @@ TEST(Scheduler, AOTNodesValidateInventoryAndExecuteExactActor) {
   ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
 
   SchedulerFixture fixture(100);
-  ASSERT_EQ(
-      talos_rt_v1_scheduler_add_aot(context, makeSchedulerInstance(fixture),
-                                      0, 0, 7, nullptr, nullptr, 0, nullptr, 0),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
+                                          makeSchedulerInstance(fixture), 0, 0,
+                                          7, nullptr, nullptr, 0, nullptr, 0),
+            TALOS_RT_OK);
   constexpr talos_rt_native_schedule_node duplicateNodes[] = {{0, 0, 0},
-                                                                {0, 0, 0}};
+                                                              {0, 0, 0}};
   EXPECT_EQ(talos_rt_v1_scheduler_run_aot_nodes(context, duplicateNodes,
-                                                  std::size(duplicateNodes)),
+                                                std::size(duplicateNodes)),
             TALOS_RT_INVALID_ARGUMENT);
   constexpr talos_rt_native_schedule_node missingEntry[] = {{0, 1, 0}};
   EXPECT_EQ(talos_rt_v1_scheduler_run_aot_nodes(context, missingEntry,
-                                                  std::size(missingEntry)),
+                                                std::size(missingEntry)),
             TALOS_RT_INVALID_CONTINUATION);
   EXPECT_FALSE(context->nativeScheduleSingleStep);
   EXPECT_EQ(context->nativeScheduleForcedSlot, UINT32_MAX);
@@ -6536,8 +6483,7 @@ TEST(Scheduler, SharedAOTCandidateIndexHandlesLargeStaticPublication) {
             auto *wait =
                 static_cast<talos_rt_wait_record_v1 *>(instance->frame);
             *wait = {TALOS_RT_VERSION, TALOS_RT_SUSPEND_CHANGE, 0, 1, 0, 0};
-            auto *entry =
-                reinterpret_cast<talos_rt_wait_entry_v1 *>(wait + 1);
+            auto *entry = reinterpret_cast<talos_rt_wait_entry_v1 *>(wait + 1);
             *entry = {887, TALOS_RT_WAIT_EDGE_NONE, 1};
             *instance->action = {TALOS_RT_FRAGMENT_SUSPEND,
                                  TALOS_RT_SUSPEND_CHANGE,
@@ -6548,12 +6494,8 @@ TEST(Scheduler, SharedAOTCandidateIndexHandlesLargeStaticPublication) {
           } else {
             schedulerOrder.push_back(instance->descriptor->handle.id);
             ++schedulerResumeCount;
-            *instance->action = {TALOS_RT_FRAGMENT_TERMINATE,
-                                 TALOS_RT_SUSPEND_NONE,
-                                 0,
-                                 0,
-                                 0,
-                                 0};
+            *instance->action = {
+                TALOS_RT_FRAGMENT_TERMINATE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
           }
           return TALOS_RT_OK;
         };
@@ -6564,9 +6506,9 @@ TEST(Scheduler, SharedAOTCandidateIndexHandlesLargeStaticPublication) {
     nodes.push_back({slot, 0, 0});
     nodes.push_back({slot, 1, 0});
   }
-  ASSERT_EQ(talos_rt_v1_scheduler_run_aot_nodes(context, nodes.data(),
-                                                  nodes.size()),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_scheduler_run_aot_nodes(context, nodes.data(), nodes.size()),
+      TALOS_RT_OK);
   EXPECT_TRUE(schedulerOrder.empty());
   EXPECT_TRUE(context->nativePollCandidates.empty());
   // More than 64 owners, deliberately reverse the node order with ranks.
@@ -6578,13 +6520,13 @@ TEST(Scheduler, SharedAOTCandidateIndexHandlesLargeStaticPublication) {
     NativeAOTContextScope aotScope(context);
     NativeAOTMutexScope mutexScope(context);
     talos_rt_v1_scheduler_activate_static_nodes(context, ready.data(),
-                                                  ready.size());
+                                                ready.size());
   }
   ASSERT_EQ(context->schedulerStatus, TALOS_RT_OK);
   EXPECT_EQ(context->nativePollCandidates.size(), actors);
-  ASSERT_EQ(talos_rt_v1_scheduler_run_aot_nodes(context, nodes.data(),
-                                                  nodes.size()),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_scheduler_run_aot_nodes(context, nodes.data(), nodes.size()),
+      TALOS_RT_OK);
   std::vector<uint64_t> expected;
   for (uint32_t slot = actors; slot != 0; --slot)
     expected.push_back(slot);
@@ -6603,13 +6545,13 @@ TEST(Scheduler, AOTPartialInventoryRejectsBeforePublishingReadyActors) {
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
   SchedulerFixture first(100), second(101);
-  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
-                                            makeSchedulerInstance(first), 0, 0,
-                                            0, nullptr, nullptr, 0, nullptr, 0),
+  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context, makeSchedulerInstance(first),
+                                          0, 0, 0, nullptr, nullptr, 0, nullptr,
+                                          0),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
-                                            makeSchedulerInstance(second), 0, 1,
-                                            0, nullptr, nullptr, 0, nullptr, 0),
+                                          makeSchedulerInstance(second), 0, 1,
+                                          0, nullptr, nullptr, 0, nullptr, 0),
             TALOS_RT_OK);
   constexpr talos_rt_native_schedule_node partial[] = {{0, 0, 0}};
   EXPECT_EQ(talos_rt_v1_scheduler_run_aot_nodes(context, partial, 1),
@@ -6636,13 +6578,13 @@ TEST(Scheduler, AOTFusedReadyNodesRetainStaticNodeOrder) {
 
   SchedulerFixture first(100);
   SchedulerFixture second(200);
-  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
-                                            makeSchedulerInstance(first), 0, 0,
-                                            0, nullptr, nullptr, 0, nullptr, 0),
+  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context, makeSchedulerInstance(first),
+                                          0, 0, 0, nullptr, nullptr, 0, nullptr,
+                                          0),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
-                                            makeSchedulerInstance(second), 0, 1,
-                                            0, nullptr, nullptr, 0, nullptr, 0),
+                                          makeSchedulerInstance(second), 0, 1,
+                                          0, nullptr, nullptr, 0, nullptr, 0),
             TALOS_RT_OK);
   constexpr talos_rt_native_schedule_node nodes[] = {
       {0, 0, 7},
@@ -6692,8 +6634,8 @@ TEST(Scheduler, NativeTransitionKeepsOverriddenBits) {
   uint8_t oldUnknown = 0;
   uint8_t newValue = (1u << 1) | (1u << 2);
   uint8_t newUnknown = 1u << 1;
-  talos_rt_v1_scheduler_signal_transition(
-      context, root, 8, &oldValue, &oldUnknown, &newValue, &newUnknown);
+  talos_rt_v1_scheduler_signal_transition(context, root, 8, &oldValue,
+                                          &oldUnknown, &newValue, &newUnknown);
 
   // The forced bit keeps its overridden value; the unforced bit still lands.
   EXPECT_EQ((context->stateValue[0] >> 1) & 1, 1u);
@@ -6706,8 +6648,8 @@ TEST(Scheduler, NativeTransitionKeepsOverriddenBits) {
                 talos_rt_v1_native_handle_offset(root, 1), 1,
                 TALOS_RT_DESCRIPTOR_STORAGE, 0),
             TALOS_RT_OK);
-  talos_rt_v1_scheduler_signal_transition(
-      context, root, 8, &oldValue, &oldUnknown, &newValue, &newUnknown);
+  talos_rt_v1_scheduler_signal_transition(context, root, 8, &oldValue,
+                                          &oldUnknown, &newValue, &newUnknown);
   EXPECT_EQ((context->stateUnknown[0] >> 1) & 1, 1u);
 
   talos_rt_v1_context_destroy(context);
@@ -6748,9 +6690,9 @@ TEST(Scheduler, NativeOverrideWakesWaitersOnTheForcedValue) {
   uint8_t globalUnknown = 0;
   uint8_t forced = 1;
   uint8_t forcedUnknown = 0;
-  ASSERT_EQ(talos_rt_v1_native_override(
-                context, &globalValue, &globalUnknown, 8, root, 8,
-                TALOS_RT_DESCRIPTOR_STORAGE, 0, &forced, &forcedUnknown),
+  ASSERT_EQ(talos_rt_v1_native_override(context, &globalValue, &globalUnknown,
+                                        8, root, 8, TALOS_RT_DESCRIPTOR_STORAGE,
+                                        0, &forced, &forcedUnknown),
             TALOS_RT_OK);
   EXPECT_EQ(context->stateValue[0] & 0xffu, 1u);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
@@ -6775,25 +6717,23 @@ TEST(Scheduler, NativeForceReleaseRestoresAssignedValueOnce) {
   uint8_t globalUnknown = 0;
   constexpr uint8_t zero = 0;
   constexpr uint8_t one = 1;
-  ASSERT_EQ(talos_rt_v1_native_override(
-                context, &globalValue, &globalUnknown, 1, root, 1,
-                TALOS_RT_DESCRIPTOR_STORAGE, 1, &one, &zero),
+  ASSERT_EQ(talos_rt_v1_native_override(context, &globalValue, &globalUnknown,
+                                        1, root, 1, TALOS_RT_DESCRIPTOR_STORAGE,
+                                        1, &one, &zero),
             TALOS_RT_OK);
   ASSERT_EQ(globalValue, 1u);
 
   // Rebase toggle coverage to the already-active assign. The force contributes
   // one 1->0 transition; release must publish the restored assign as exactly
   // one 0->1 transition even though assignMask remains active.
-  ASSERT_EQ(talos_rt_v1_coverage_finalize(
-                context, 0, 1, &one, &zero,
-                TALOS_RT_COVERAGE_PERSIST_ALL),
+  ASSERT_EQ(talos_rt_v1_coverage_finalize(context, 0, 1, &one, &zero,
+                                          TALOS_RT_COVERAGE_PERSIST_ALL),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_coverage_toggle_bind(context, 0, 1, root),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_coverage_toggle_bind(context, 0, 1, root), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_coverage_toggle_seal(context), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_native_override(
-                context, &globalValue, &globalUnknown, 1, root, 1,
-                TALOS_RT_DESCRIPTOR_STORAGE, 0, &zero, &zero),
+  ASSERT_EQ(talos_rt_v1_native_override(context, &globalValue, &globalUnknown,
+                                        1, root, 1, TALOS_RT_DESCRIPTOR_STORAGE,
+                                        0, &zero, &zero),
             TALOS_RT_OK);
   ASSERT_EQ(globalValue, 0u);
 
@@ -6810,9 +6750,9 @@ TEST(Scheduler, NativeForceReleaseRestoresAssignedValueOnce) {
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   ASSERT_EQ(schedulerResumeCount, 0u);
 
-  ASSERT_EQ(talos_rt_v1_native_release_override(
-                context, &globalValue, &globalUnknown, 1, root, 1,
-                TALOS_RT_DESCRIPTOR_STORAGE, 0),
+  ASSERT_EQ(talos_rt_v1_native_release_override(context, &globalValue,
+                                                &globalUnknown, 1, root, 1,
+                                                TALOS_RT_DESCRIPTOR_STORAGE, 0),
             TALOS_RT_OK);
   EXPECT_EQ(globalValue, 1u);
   EXPECT_EQ(context->stateValue[0] & 1, 1u);
@@ -6859,10 +6799,10 @@ TEST(Scheduler, AOTStaticFanoutMatchesRangeAndFourStateEdgeExactly) {
   schedulerWaitHandle = talos_rt_v1_native_handle_offset(root, 2);
   schedulerWaitWidth = 2;
   schedulerResumeCount = 0;
-  ASSERT_EQ(
-      talos_rt_v1_scheduler_add_aot(context, makeSchedulerInstance(fixture),
-                                      0, 0, 0, nullptr, nullptr, 0, nullptr, 0),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
+                                          makeSchedulerInstance(fixture), 0, 0,
+                                          0, nullptr, nullptr, 0, nullptr, 0),
+            TALOS_RT_OK);
   constexpr talos_rt_native_schedule_node nodes[] = {
       {0, 0, UINT32_MAX},
       {0, 1, UINT32_MAX},
@@ -6873,8 +6813,8 @@ TEST(Scheduler, AOTStaticFanoutMatchesRangeAndFourStateEdgeExactly) {
 
   uint8_t oldValue = 0;
   uint8_t newValue = 1;
-  talos_rt_v1_scheduler_signal_transition(context, root, 8, &oldValue,
-                                            nullptr, &newValue, nullptr);
+  talos_rt_v1_scheduler_signal_transition(context, root, 8, &oldValue, nullptr,
+                                          &newValue, nullptr);
   ASSERT_EQ(
       talos_rt_v1_scheduler_run_aot_nodes(context, nodes, std::size(nodes)),
       TALOS_RT_OK);
@@ -6882,8 +6822,8 @@ TEST(Scheduler, AOTStaticFanoutMatchesRangeAndFourStateEdgeExactly) {
 
   oldValue = 1u << 2;
   newValue = 0;
-  talos_rt_v1_scheduler_signal_transition(context, root, 8, &oldValue,
-                                            nullptr, &newValue, nullptr);
+  talos_rt_v1_scheduler_signal_transition(context, root, 8, &oldValue, nullptr,
+                                          &newValue, nullptr);
   ASSERT_EQ(
       talos_rt_v1_scheduler_run_aot_nodes(context, nodes, std::size(nodes)),
       TALOS_RT_OK);
@@ -6893,8 +6833,8 @@ TEST(Scheduler, AOTStaticFanoutMatchesRangeAndFourStateEdgeExactly) {
   newValue = 0;
   uint8_t oldUnknown = 0;
   uint8_t newUnknown = 1u << 2;
-  talos_rt_v1_scheduler_signal_transition(
-      context, root, 8, &oldValue, &oldUnknown, &newValue, &newUnknown);
+  talos_rt_v1_scheduler_signal_transition(context, root, 8, &oldValue,
+                                          &oldUnknown, &newValue, &newUnknown);
   ASSERT_EQ(
       talos_rt_v1_scheduler_run_aot_nodes(context, nodes, std::size(nodes)),
       TALOS_RT_OK);
@@ -6909,7 +6849,7 @@ TEST(Scheduler, AOTStaticFanoutMatchesRangeAndFourStateEdgeExactly) {
   oldValue = 0;
   newValue = 1;
   talos_rt_v1_scheduler_signal_transition(context, unobserved, 1, &oldValue,
-                                            nullptr, &newValue, nullptr);
+                                          nullptr, &newValue, nullptr);
   EXPECT_EQ(context->signalDiagnostics.publications, 1u);
   talos_rt_v1_context_destroy(context);
 }
@@ -6956,9 +6896,8 @@ TEST(Scheduler, IndexedExternalDepositResumesFourStateAOTWithoutBytecode) {
   ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 0, 1),
             TALOS_RT_OK);
   constexpr uint8_t zero = 0;
-  ASSERT_EQ(talos_rt_v1_coverage_finalize(
-                context, 0, 1, &zero, &zero,
-                TALOS_RT_COVERAGE_PERSIST_ALL),
+  ASSERT_EQ(talos_rt_v1_coverage_finalize(context, 0, 1, &zero, &zero,
+                                          TALOS_RT_COVERAGE_PERSIST_ALL),
             TALOS_RT_OK);
   uint64_t coveredState = talos_rt_v1_native_state_static_handle(1);
   ASSERT_NE(coveredState, UINT64_MAX);
@@ -6972,23 +6911,23 @@ TEST(Scheduler, IndexedExternalDepositResumesFourStateAOTWithoutBytecode) {
   // Bytecode is available, but only the native resume records execution.
   // Availability must not be confused with REQUIRE_BYTECODE policy.
   std::vector<uint8_t> code;
-  appendInstruction(code, TALOS_RT_BC_TERMINATE, TALOS_RT_BC_TYPE_NONE, 0,
-                    0, 0, 0);
+  appendInstruction(code, TALOS_RT_BC_TERMINATE, TALOS_RT_BC_TYPE_NONE, 0, 0, 0,
+                    0);
   std::array<talos_rt_bytecode_entry_v1, 2> entries{{{0, 0}, {1, 0}}};
   talos_rt_bytecode_v1 bytecode{code.data(),
-                                  code.size(),
-                                  entries.data(),
-                                  2,
-                                  0,
-                                  fixture.layout.frame_size,
-                                  nullptr,
-                                  nullptr,
-                                  0,
-                                  nullptr,
-                                  0,
-                                  0,
-                                  nullptr,
-                                  0};
+                                code.size(),
+                                entries.data(),
+                                2,
+                                0,
+                                fixture.layout.frame_size,
+                                nullptr,
+                                nullptr,
+                                0,
+                                nullptr,
+                                0,
+                                0,
+                                nullptr,
+                                0};
   fixture.descriptor.available_tiers |= TALOS_RT_TIER_MASK_BYTECODE;
   fixture.descriptor.bytecode = &bytecode;
   uint64_t root = talos_rt_canonical_state_handle_unlocked(context, 0, 1);
@@ -6997,10 +6936,10 @@ TEST(Scheduler, IndexedExternalDepositResumesFourStateAOTWithoutBytecode) {
   schedulerWaitHandle = root;
   schedulerWaitWidth = 1;
   schedulerResumeCount = 0;
-  ASSERT_EQ(
-      talos_rt_v1_scheduler_add_aot(context, makeSchedulerInstance(fixture),
-                                      0, 0, 0, nullptr, nullptr, 0, nullptr, 0),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
+                                          makeSchedulerInstance(fixture), 0, 0,
+                                          0, nullptr, nullptr, 0, nullptr, 0),
+            TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_run_aot(context), TALOS_RT_OK);
   EXPECT_EQ(schedulerResumeCount, 0u);
 
@@ -7020,8 +6959,7 @@ TEST(Scheduler, IndexedExternalDepositResumesFourStateAOTWithoutBytecode) {
   clockCoordinatorIngress = &ingress;
   clockCoordinatorWords = 1;
   clockCoordinatorCalls = 0;
-  ASSERT_EQ(talos_rt_v1_scheduler_run_clock_coordinator(context),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_run_clock_coordinator(context), TALOS_RT_OK);
   EXPECT_EQ(clockCoordinatorCalls, 1u);
   EXPECT_EQ(ingress, 0u);
   clockCoordinatorIngress = nullptr;
@@ -7030,7 +6968,7 @@ TEST(Scheduler, IndexedExternalDepositResumesFourStateAOTWithoutBytecode) {
   uint64_t covered = 0, total = 0;
   double percentage = 0;
   ASSERT_EQ(talos_rt_v1_coverage_query(context, TALOS_RT_COVERAGE_TOGGLE,
-                                         &covered, &total, &percentage),
+                                       &covered, &total, &percentage),
             TALOS_RT_OK);
   EXPECT_EQ(covered, 1u);
   EXPECT_EQ(total, 2u);
@@ -7047,9 +6985,8 @@ TEST(Coverage, GenericScalarNetPublicationRecordsToggleTransition) {
   ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 0, 1),
             TALOS_RT_OK);
   constexpr uint8_t zero = 0;
-  ASSERT_EQ(talos_rt_v1_coverage_finalize(
-                context, 0, 1, &zero, &zero,
-                TALOS_RT_COVERAGE_PERSIST_ALL),
+  ASSERT_EQ(talos_rt_v1_coverage_finalize(context, 0, 1, &zero, &zero,
+                                          TALOS_RT_COVERAGE_PERSIST_ALL),
             TALOS_RT_OK);
   uint64_t state = talos_rt_v1_native_state_static_handle(1);
   ASSERT_NE(state, UINT64_MAX);
@@ -7058,11 +6995,11 @@ TEST(Coverage, GenericScalarNetPublicationRecordsToggleTransition) {
   ASSERT_EQ(talos_rt_v1_coverage_toggle_seal(context), TALOS_RT_OK);
 
   ASSERT_TRUE(talos_rt_append_signal_event_unlocked(context, state, false,
-                                                      false, true, false));
+                                                    false, true, false));
   uint64_t covered = 0, total = 0;
   double percentage = 0;
   ASSERT_EQ(talos_rt_v1_coverage_query(context, TALOS_RT_COVERAGE_TOGGLE,
-                                         &covered, &total, &percentage),
+                                       &covered, &total, &percentage),
             TALOS_RT_OK);
   EXPECT_EQ(covered, 1u);
   EXPECT_EQ(total, 2u);
@@ -7084,18 +7021,17 @@ TEST(Coverage, TransitionFastPathsObserveLateToggleBinding) {
     auto plan = makeAOTPlan(state, 1);
     plan.flags = TALOS_RT_NATIVE_SCHEDULE_FULLY_STATIC |
                  TALOS_RT_NATIVE_SCHEDULE_STATIC_FANOUT;
-    ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
     uint64_t handle = talos_rt_v1_native_state_static_handle(1);
     auto publish = [&](uint8_t oldValue, uint8_t newValue) {
       if (staticAOT) {
         NativeAOTContextScope active(context);
         NativeAOTMutexScope locked(context);
         talos_rt_v1_scheduler_static_transition(context, 1, 0, 1, oldValue, 0,
-                                                  newValue, 0);
+                                                newValue, 0);
       } else {
         talos_rt_v1_scheduler_signal_transition(context, handle, 1, &oldValue,
-                                                  nullptr, &newValue, nullptr);
+                                                nullptr, &newValue, nullptr);
       }
     };
     publish(0, 1);
@@ -7103,7 +7039,7 @@ TEST(Coverage, TransitionFastPathsObserveLateToggleBinding) {
     EXPECT_EQ(context->coverage, nullptr);
     constexpr uint8_t zero = 0;
     ASSERT_EQ(talos_rt_v1_coverage_finalize(context, 0, 1, &zero, &zero,
-                                              TALOS_RT_COVERAGE_PERSIST_ALL),
+                                            TALOS_RT_COVERAGE_PERSIST_ALL),
               TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_coverage_toggle_bind(context, 0, 1, handle),
               TALOS_RT_OK);
@@ -7113,7 +7049,7 @@ TEST(Coverage, TransitionFastPathsObserveLateToggleBinding) {
     uint64_t covered = 0, total = 0;
     double percentage = 0;
     ASSERT_EQ(talos_rt_v1_coverage_query(context, TALOS_RT_COVERAGE_TOGGLE,
-                                           &covered, &total, &percentage),
+                                         &covered, &total, &percentage),
               TALOS_RT_OK);
     EXPECT_EQ(covered, 2u);
     EXPECT_EQ(total, 2u);
@@ -7135,13 +7071,13 @@ TEST(Scheduler, AOTTiedDeadlinesUseFixedHeapAndDeterministicNodeOrder) {
   schedulerWaitKind = TALOS_RT_SUSPEND_DELAY;
   schedulerResumeCount = 0;
   schedulerOrder.clear();
-  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
-                                            makeSchedulerInstance(first), 0, 0,
-                                            0, nullptr, nullptr, 0, nullptr, 0),
+  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context, makeSchedulerInstance(first),
+                                          0, 0, 0, nullptr, nullptr, 0, nullptr,
+                                          0),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
-                                            makeSchedulerInstance(second), 0, 1,
-                                            0, nullptr, nullptr, 0, nullptr, 0),
+                                          makeSchedulerInstance(second), 0, 1,
+                                          0, nullptr, nullptr, 0, nullptr, 0),
             TALOS_RT_OK);
   constexpr talos_rt_native_schedule_node nodes[] = {
       {0, 0, UINT32_MAX},
@@ -7218,8 +7154,7 @@ TEST(Scheduler, FutureDelaysLeavePollCandidatesUntilTheirTimeSlot) {
   context->scheduledProcesses[3].wakeTime = 7;
   rebuildNativeSchedulerIndexUnlocked(context);
   ASSERT_EQ(enterSchedulerTimeSlotUnlocked(context), TALOS_RT_OK);
-  EXPECT_EQ(context->nativePollCandidates,
-            (std::unordered_set<uint64_t>{4}));
+  EXPECT_EQ(context->nativePollCandidates, (std::unordered_set<uint64_t>{4}));
 
   // Re-suspending replaces the calendar entry; the stale one admits nothing.
   auto &moved = context->scheduledProcesses[1];
@@ -7253,7 +7188,7 @@ TEST(Scheduler, AOTZeroDelayUsesInactiveBeforeNBAWithoutWholePlanFallback) {
     constexpr talos_rt_native_schedule_node nodes[] = {
         {0, 0, 0}, {1, 0, 0}, {0, 1, 0}};
     return talos_rt_v1_scheduler_run_aot_nodes(context, nodes,
-                                                 std::size(nodes));
+                                               std::size(nodes));
   };
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
@@ -7264,28 +7199,27 @@ TEST(Scheduler, AOTZeroDelayUsesInactiveBeforeNBAWithoutWholePlanFallback) {
   uint8_t plane = 0, next = 1;
   cachedCohortNBAPlane = &plane;
   cachedCohortNBAVisible = false;
-  fixture.descriptor.native_execute =
-      [](talos_rt_process_instance_v1 *actor) {
-        if (actor->continuation == 1)
-          cachedCohortNBAVisible =
-              *cachedCohortNBAPlane == 0 &&
-              actor->context->activeExecRegion == TALOS_RT_REGION_INACTIVE;
-        return schedulerExecute(actor);
-      };
+  fixture.descriptor.native_execute = [](talos_rt_process_instance_v1 *actor) {
+    if (actor->continuation == 1)
+      cachedCohortNBAVisible =
+          *cachedCohortNBAPlane == 0 &&
+          actor->context->activeExecRegion == TALOS_RT_REGION_INACTIVE;
+    return schedulerExecute(actor);
+  };
   schedulerOrder.clear();
   schedulerWaitKind = TALOS_RT_SUSPEND_DELAY;
   schedulerWaitDelay = 0;
   schedulerResumeCount = 0;
-  ASSERT_EQ(
-      talos_rt_v1_scheduler_add_aot(context, makeSchedulerInstance(fixture),
-                                      0, 0, 0, nullptr, nullptr, 0, nullptr, 0),
-      TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(
-                context, makeSchedulerInstance(independent), 0, 1, 0, nullptr,
-                nullptr, 0, nullptr, 0),
+  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
+                                          makeSchedulerInstance(fixture), 0, 0,
+                                          0, nullptr, nullptr, 0, nullptr, 0),
             TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_scheduler_add_aot(context, makeSchedulerInstance(independent),
+                                    0, 1, 0, nullptr, nullptr, 0, nullptr, 0),
+      TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_nba(context, &plane, nullptr, 1, 0, 1, 0,
-                                        &next, nullptr),
+                                      &next, nullptr),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_run_aot(context), TALOS_RT_OK);
   EXPECT_TRUE(cachedCohortNBAVisible);
@@ -7307,10 +7241,10 @@ TEST(Scheduler, AOTFallbackSnapshotIsValidatedBeforeGenericResume) {
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
   SchedulerFixture fixture(200);
-  ASSERT_EQ(
-      talos_rt_v1_scheduler_add_aot(context, makeSchedulerInstance(fixture),
-                                      0, 0, 0, nullptr, nullptr, 0, nullptr, 0),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
+                                          makeSchedulerInstance(fixture), 0, 0,
+                                          0, nullptr, nullptr, 0, nullptr, 0),
+            TALOS_RT_OK);
   schedulerOrder.clear();
   ASSERT_EQ(talos_rt_v1_scheduler_run_aot(context), TALOS_RT_OK);
   EXPECT_TRUE(context->nativeScheduleDeoptimized);
@@ -7326,8 +7260,7 @@ TEST(Scheduler, AOTFallbackSnapshotIsValidatedBeforeGenericResume) {
   plan = makeAOTPlan(invalid);
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
-  EXPECT_EQ(talos_rt_v1_scheduler_run_aot(context),
-            TALOS_RT_INVALID_ARGUMENT);
+  EXPECT_EQ(talos_rt_v1_scheduler_run_aot(context), TALOS_RT_INVALID_ARGUMENT);
   EXPECT_FALSE(context->nativeScheduleDeoptimized);
   talos_rt_v1_context_destroy(context);
 }
@@ -7348,10 +7281,10 @@ TEST(Scheduler, AOTEventWaitResumesInSharedDriverWithoutWholePlanFallback) {
   schedulerWaitWidth = 0;
   schedulerResumeCount = 0;
   schedulerOrder.clear();
-  ASSERT_EQ(
-      talos_rt_v1_scheduler_add_aot(context, makeSchedulerInstance(fixture),
-                                      0, 0, 0, nullptr, nullptr, 0, nullptr, 0),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
+                                          makeSchedulerInstance(fixture), 0, 0,
+                                          0, nullptr, nullptr, 0, nullptr, 0),
+            TALOS_RT_OK);
 
   ASSERT_EQ(talos_rt_v1_scheduler_run_aot(context), TALOS_RT_OK);
   ASSERT_FALSE(context->nativeScheduleDeoptimized);
@@ -7386,7 +7319,7 @@ TEST(Scheduler, AOTFinishDestroysTheCompleteTaskCallerStack) {
   ASSERT_NE(callee, nullptr);
   ASSERT_NE(caller, nullptr);
   ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context, callee, 0, 0, 0, nullptr,
-                                            nullptr, 0, nullptr, 0),
+                                          nullptr, 0, nullptr, 0),
             TALOS_RT_OK);
   // A real suspended caller retains its native coroutine handle while the
   // callee occupies the actor slot.
@@ -7413,8 +7346,7 @@ TEST(Scheduler, ThreadOriginKeepsOutermostNativeActivation) {
     plan.flags = TALOS_RT_NATIVE_SCHEDULE_FULLY_STATIC;
     plan.run = aotRunNodes;
     if (aot)
-      ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan),
-                TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
     SchedulerFixture outer(44), middle(45), inner(46);
     outer.descriptor.native_execute = [](talos_rt_process_instance_v1 *p) {
       uint64_t origin = UINT64_MAX;
@@ -7465,8 +7397,8 @@ TEST(Scheduler, ThreadOriginKeepsOutermostNativeActivation) {
     auto *instance = makeSchedulerInstance(outer);
     ASSERT_NE(instance, nullptr);
     ASSERT_EQ(aot ? talos_rt_v1_scheduler_add_aot(context, instance, 0, 0, 0,
-                                                    nullptr, nullptr, 0,
-                                                    nullptr, 0)
+                                                  nullptr, nullptr, 0, nullptr,
+                                                  0)
                   : talos_rt_v1_scheduler_add(context, instance, 0),
               TALOS_RT_OK);
     const auto token = talos_rt_v1_scheduler_process_token(context, instance);
@@ -7499,8 +7431,7 @@ TEST(Scheduler, AOTTaskCallLocallySuspendsAndResumesTheCaller) {
       };
     talos_rt_context *context = nullptr;
     ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
-    ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
 
     SchedulerFixture caller(44);
     SchedulerFixture callee(45);
@@ -7514,9 +7445,9 @@ TEST(Scheduler, AOTTaskCallLocallySuspendsAndResumesTheCaller) {
     taskCalleeDescriptor = &callee.descriptor;
     taskCallerExecutions = 0;
     taskCalleeExecutions = 0;
-    ASSERT_EQ(talos_rt_v1_scheduler_add_aot(
-                  context, makeSchedulerInstance(caller), 0, 0, 0, nullptr,
-                  nullptr, 0, nullptr, 0),
+    ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
+                                            makeSchedulerInstance(caller), 0, 0,
+                                            0, nullptr, nullptr, 0, nullptr, 0),
               TALOS_RT_OK);
 
     ASSERT_EQ(talos_rt_v1_scheduler_run_aot(context), TALOS_RT_OK);
@@ -7531,8 +7462,7 @@ TEST(Scheduler, AOTTaskCallLocallySuspendsAndResumesTheCaller) {
 }
 
 TEST(Scheduler, AOTTaskWaitKeepsOtherActorsAndCallerBinding) {
-  for (uint32_t waitKind :
-       {TALOS_RT_SUSPEND_DELAY, TALOS_RT_SUSPEND_EDGE}) {
+  for (uint32_t waitKind : {TALOS_RT_SUSPEND_DELAY, TALOS_RT_SUSPEND_EDGE}) {
     SCOPED_TRACE(waitKind);
     AOTTestState state;
     talos_rt_native_schedule_plan plan = makeAOTPlan(state, 2);
@@ -7549,12 +7479,11 @@ TEST(Scheduler, AOTTaskWaitKeepsOtherActorsAndCallerBinding) {
       constexpr talos_rt_native_schedule_node nodes[] = {
           {0, 0, 0}, {0, 1, 0}, {1, 0, 0}};
       return talos_rt_v1_scheduler_run_aot_nodes(context, nodes,
-                                                   std::size(nodes));
+                                                 std::size(nodes));
     };
     talos_rt_context *context = nullptr;
     ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
-    ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
     context->signalDiagnosticsEnabled = true;
     SchedulerFixture caller(44), callee(45), independent(143);
     caller.descriptor.native_execute = taskCallerExecute;
@@ -7567,9 +7496,9 @@ TEST(Scheduler, AOTTaskWaitKeepsOtherActorsAndCallerBinding) {
     schedulerWaitEdge = TALOS_RT_WAIT_EDGE_POSEDGE;
     schedulerWaitHandle = 17;
     schedulerWaitWidth = 1;
-    ASSERT_EQ(talos_rt_v1_scheduler_add_aot(
-                  context, makeSchedulerInstance(caller), 0, 0, 0, nullptr,
-                  nullptr, 0, nullptr, 0),
+    ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
+                                            makeSchedulerInstance(caller), 0, 0,
+                                            0, nullptr, nullptr, 0, nullptr, 0),
               TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_scheduler_add_aot(
                   context, makeSchedulerInstance(independent), 0, 1, 1, nullptr,
@@ -7583,11 +7512,9 @@ TEST(Scheduler, AOTTaskWaitKeepsOtherActorsAndCallerBinding) {
       auto *duplicate = makeSchedulerInstance(caller);
       ASSERT_NE(duplicate, nullptr);
       EXPECT_EQ(talos_rt_v1_scheduler_add_aot(context, duplicate, 0, 0, 0,
-                                                nullptr, nullptr, 0, nullptr,
-                                                0),
+                                              nullptr, nullptr, 0, nullptr, 0),
                 TALOS_RT_INVALID_ARGUMENT);
-      EXPECT_EQ(talos_rt_v1_process_instance_destroy(duplicate),
-                TALOS_RT_OK);
+      EXPECT_EQ(talos_rt_v1_process_instance_destroy(duplicate), TALOS_RT_OK);
       talos_rt_v1_scheduler_signal(context, 17, 1, TALOS_RT_SIGNAL_POSEDGE);
       ASSERT_EQ(talos_rt_v1_scheduler_run_aot(context), TALOS_RT_OK);
     }
@@ -7621,8 +7548,7 @@ TEST(Scheduler, AOTNestedTaskReturnsOrFinishesWithoutRebindingInnerFrames) {
     };
     talos_rt_context *context = nullptr;
     ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
-    ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
     SchedulerFixture caller(44), outer(45), inner(46);
     caller.descriptor.native_execute = taskCallerExecute;
     outer.descriptor.native_execute = [](talos_rt_process_instance_v1 *p) {
@@ -7662,9 +7588,9 @@ TEST(Scheduler, AOTNestedTaskReturnsOrFinishesWithoutRebindingInnerFrames) {
     schedulerOrder.clear();
     schedulerWaitKind = TALOS_RT_SUSPEND_DELAY;
     schedulerWaitDelay = 5;
-    ASSERT_EQ(talos_rt_v1_scheduler_add_aot(
-                  context, makeSchedulerInstance(caller), 0, 0, 0, nullptr,
-                  nullptr, 0, nullptr, 0),
+    ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
+                                            makeSchedulerInstance(caller), 0, 0,
+                                            0, nullptr, nullptr, 0, nullptr, 0),
               TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_scheduler_run_aot(context), TALOS_RT_OK);
     EXPECT_EQ(taskCallerExecutions, finish ? 1u : 2u);
@@ -7688,27 +7614,26 @@ TEST(Scheduler, AOTExternalWriteUsesNativeFineSchedulerUntilCleanBoundary) {
   ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
   SchedulerFixture fixture(33);
   std::vector<uint8_t> code;
-  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0, 0, 0,
-                    0);
+  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0, 0, 0, 0);
   appendInstruction(code, TALOS_RT_BC_SUSPEND, TALOS_RT_BC_TYPE_NONE, 0,
                     TALOS_RT_SUSPEND_EDGE, 0, 1);
-  appendInstruction(code, TALOS_RT_BC_TERMINATE, TALOS_RT_BC_TYPE_NONE, 0,
-                    0, 0, 0);
+  appendInstruction(code, TALOS_RT_BC_TERMINATE, TALOS_RT_BC_TYPE_NONE, 0, 0, 0,
+                    0);
   std::array<talos_rt_bytecode_entry_v1, 2> entries{{{0, 0}, {1, 2}}};
   talos_rt_bytecode_v1 bytecode{code.data(),
-                                  code.size(),
-                                  entries.data(),
-                                  static_cast<uint32_t>(entries.size()),
-                                  1,
-                                  fixture.layout.frame_size,
-                                  nullptr,
-                                  nullptr,
-                                  0,
-                                  nullptr,
-                                  0,
-                                  0,
-                                  nullptr,
-                                  0};
+                                code.size(),
+                                entries.data(),
+                                static_cast<uint32_t>(entries.size()),
+                                1,
+                                fixture.layout.frame_size,
+                                nullptr,
+                                nullptr,
+                                0,
+                                nullptr,
+                                0,
+                                0,
+                                nullptr,
+                                0};
   fixture.descriptor.available_tiers =
       TALOS_RT_TIER_MASK_NATIVE | TALOS_RT_TIER_MASK_BYTECODE;
   fixture.descriptor.bytecode = &bytecode;
@@ -7723,7 +7648,7 @@ TEST(Scheduler, AOTExternalWriteUsesNativeFineSchedulerUntilCleanBoundary) {
   *wait = {TALOS_RT_VERSION, TALOS_RT_SUSPEND_EDGE, 0, 1, 0, 0};
   *entry = {17, TALOS_RT_WAIT_EDGE_NEGEDGE, 8};
   ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context, instance, 0, 0, 0, nullptr,
-                                            nullptr, 0, nullptr, 0),
+                                          nullptr, 0, nullptr, 0),
             TALOS_RT_OK);
   EXPECT_EQ(instance->tier, 0u);
   {
@@ -7796,27 +7721,26 @@ TEST(Scheduler, AOTExternalWriteExecutesNativeActorAtCleanBoundary) {
 
   SchedulerFixture fixture(34);
   std::vector<uint8_t> code;
-  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0, 0, 0,
-                    0);
+  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0, 0, 0, 0);
   appendInstruction(code, TALOS_RT_BC_SUSPEND, TALOS_RT_BC_TYPE_NONE, 0,
                     TALOS_RT_SUSPEND_EDGE, 0, 1);
-  appendInstruction(code, TALOS_RT_BC_TERMINATE, TALOS_RT_BC_TYPE_NONE, 0,
-                    0, 0, 0);
+  appendInstruction(code, TALOS_RT_BC_TERMINATE, TALOS_RT_BC_TYPE_NONE, 0, 0, 0,
+                    0);
   std::array<talos_rt_bytecode_entry_v1, 2> entries{{{0, 0}, {1, 2}}};
   talos_rt_bytecode_v1 bytecode{code.data(),
-                                  code.size(),
-                                  entries.data(),
-                                  static_cast<uint32_t>(entries.size()),
-                                  1,
-                                  fixture.layout.frame_size,
-                                  nullptr,
-                                  nullptr,
-                                  0,
-                                  nullptr,
-                                  0,
-                                  0,
-                                  nullptr,
-                                  0};
+                                code.size(),
+                                entries.data(),
+                                static_cast<uint32_t>(entries.size()),
+                                1,
+                                fixture.layout.frame_size,
+                                nullptr,
+                                nullptr,
+                                0,
+                                nullptr,
+                                0,
+                                0,
+                                nullptr,
+                                0};
   fixture.descriptor.available_tiers =
       TALOS_RT_TIER_MASK_NATIVE | TALOS_RT_TIER_MASK_BYTECODE;
   fixture.descriptor.bytecode = &bytecode;
@@ -7828,13 +7752,13 @@ TEST(Scheduler, AOTExternalWriteExecutesNativeActorAtCleanBoundary) {
   talos_rt_process_instance_v1 *instance = makeSchedulerInstance(fixture);
   ASSERT_NE(instance, nullptr);
   talos_rt_fragment_action_v1 action{};
-  ASSERT_EQ(talos_rt_v1_process_instance_execute(
-                instance, context, TALOS_RT_TIER_NATIVE, &action),
+  ASSERT_EQ(talos_rt_v1_process_instance_execute(instance, context,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_OK);
   ASSERT_NE(instance->native_handle, nullptr);
   ASSERT_EQ(instance->tier, TALOS_RT_TIER_NATIVE);
   ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context, instance, 0, 0, 0, nullptr,
-                                            nullptr, 0, nullptr, 0),
+                                          nullptr, 0, nullptr, 0),
             TALOS_RT_OK);
 
   {
@@ -7861,27 +7785,26 @@ TEST(Scheduler, AOTBytecodeFragmentReturnsToNativeAtContinuationBoundary) {
   ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
   SchedulerFixture fixture(32);
   std::vector<uint8_t> code;
-  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0, 0, 0,
-                    0);
+  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0, 0, 0, 0);
   appendInstruction(code, TALOS_RT_BC_SUSPEND, TALOS_RT_BC_TYPE_NONE, 0,
                     TALOS_RT_SUSPEND_EDGE, 0, 1);
-  appendInstruction(code, TALOS_RT_BC_TERMINATE, TALOS_RT_BC_TYPE_NONE, 0,
-                    0, 0, 0);
+  appendInstruction(code, TALOS_RT_BC_TERMINATE, TALOS_RT_BC_TYPE_NONE, 0, 0, 0,
+                    0);
   std::array<talos_rt_bytecode_entry_v1, 2> entries{{{0, 0}, {1, 2}}};
   talos_rt_bytecode_v1 bytecode{code.data(),
-                                  code.size(),
-                                  entries.data(),
-                                  static_cast<uint32_t>(entries.size()),
-                                  1,
-                                  fixture.layout.frame_size,
-                                  nullptr,
-                                  nullptr,
-                                  0,
-                                  nullptr,
-                                  0,
-                                  0,
-                                  nullptr,
-                                  0};
+                                code.size(),
+                                entries.data(),
+                                static_cast<uint32_t>(entries.size()),
+                                1,
+                                fixture.layout.frame_size,
+                                nullptr,
+                                nullptr,
+                                0,
+                                nullptr,
+                                0,
+                                0,
+                                nullptr,
+                                0};
   fixture.descriptor.available_tiers =
       TALOS_RT_TIER_MASK_NATIVE | TALOS_RT_TIER_MASK_BYTECODE;
   fixture.descriptor.bytecode = &bytecode;
@@ -7894,8 +7817,7 @@ TEST(Scheduler, AOTBytecodeFragmentReturnsToNativeAtContinuationBoundary) {
   const uint32_t bytecodeContinuation = 0;
   schedulerResumeCount = 0;
   ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context, instance, 0, 0, 0, nullptr,
-                                            nullptr, 0, &bytecodeContinuation,
-                                            1),
+                                          nullptr, 0, &bytecodeContinuation, 1),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_run_aot(context), TALOS_RT_OK);
   EXPECT_EQ(schedulerResumeCount, 0u);
@@ -7921,27 +7843,26 @@ TEST(Scheduler, AOTNativeCheckpointRunsBytecodeIslandAndReturnsToNative) {
 
   SchedulerFixture fixture(35);
   std::vector<uint8_t> code;
-  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0, 0, 0,
-                    0);
+  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0, 0, 0, 0);
   appendInstruction(code, TALOS_RT_BC_SUSPEND, TALOS_RT_BC_TYPE_NONE, 0,
                     TALOS_RT_SUSPEND_EDGE, 0, 1);
-  appendInstruction(code, TALOS_RT_BC_TERMINATE, TALOS_RT_BC_TYPE_NONE, 0,
-                    0, 0, 0);
+  appendInstruction(code, TALOS_RT_BC_TERMINATE, TALOS_RT_BC_TYPE_NONE, 0, 0, 0,
+                    0);
   std::array<talos_rt_bytecode_entry_v1, 2> entries{{{0, 0}, {1, 2}}};
   talos_rt_bytecode_v1 bytecode{code.data(),
-                                  code.size(),
-                                  entries.data(),
-                                  static_cast<uint32_t>(entries.size()),
-                                  1,
-                                  fixture.layout.frame_size,
-                                  nullptr,
-                                  nullptr,
-                                  0,
-                                  nullptr,
-                                  0,
-                                  0,
-                                  nullptr,
-                                  0};
+                                code.size(),
+                                entries.data(),
+                                static_cast<uint32_t>(entries.size()),
+                                1,
+                                fixture.layout.frame_size,
+                                nullptr,
+                                nullptr,
+                                0,
+                                nullptr,
+                                0,
+                                0,
+                                nullptr,
+                                0};
   fixture.descriptor.available_tiers =
       TALOS_RT_TIER_MASK_NATIVE | TALOS_RT_TIER_MASK_BYTECODE;
   fixture.descriptor.native_execute = schedulerCheckpointThenNativeExecute;
@@ -7956,7 +7877,7 @@ TEST(Scheduler, AOTNativeCheckpointRunsBytecodeIslandAndReturnsToNative) {
   *wait = {TALOS_RT_VERSION, TALOS_RT_SUSPEND_EDGE, 0, 1, 0, 0};
   *entry = {16, TALOS_RT_WAIT_EDGE_NEGEDGE, 8};
   ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context, instance, 0, 0, 0, nullptr,
-                                            nullptr, 0, nullptr, 0),
+                                          nullptr, 0, nullptr, 0),
             TALOS_RT_OK);
 
   ASSERT_EQ(talos_rt_v1_scheduler_run_aot(context), TALOS_RT_OK);
@@ -7986,12 +7907,9 @@ TEST(Scheduler, AwaitUsesStableNonAddressProcessTokens) {
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
   SchedulerFixture completed(100);
-  talos_rt_process_instance_v1 *oldInstance =
-      makeSchedulerInstance(completed);
-  ASSERT_EQ(talos_rt_v1_scheduler_add(context, oldInstance, 0),
-            TALOS_RT_OK);
-  uint64_t oldToken =
-      talos_rt_v1_scheduler_process_token(context, oldInstance);
+  talos_rt_process_instance_v1 *oldInstance = makeSchedulerInstance(completed);
+  ASSERT_EQ(talos_rt_v1_scheduler_add(context, oldInstance, 0), TALOS_RT_OK);
+  uint64_t oldToken = talos_rt_v1_scheduler_process_token(context, oldInstance);
   ASSERT_NE(oldToken, 0u);
   EXPECT_NE(oldToken,
             static_cast<uint64_t>(reinterpret_cast<uintptr_t>(oldInstance)));
@@ -8027,8 +7945,7 @@ TEST(Scheduler, ProcessAssociativeKeysUseStableTombstoneIdentity) {
   SchedulerFixture first(100);
   SchedulerFixture second(200);
   talos_rt_process_instance_v1 *firstInstance = makeSchedulerInstance(first);
-  talos_rt_process_instance_v1 *secondInstance =
-      makeSchedulerInstance(second);
+  talos_rt_process_instance_v1 *secondInstance = makeSchedulerInstance(second);
   ASSERT_EQ(talos_rt_v1_scheduler_add_ranked(context, firstInstance, 0, 0),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_add_ranked(context, secondInstance, 0, 1),
@@ -8046,14 +7963,13 @@ TEST(Scheduler, ProcessAssociativeKeysUseStableTombstoneIdentity) {
   ASSERT_EQ(talos_rt_v1_gc_lane_enter(lane), TALOS_RT_OK);
   const talos_rt_element_type_v1 wordElement{
       TALOS_RT_VERSION, TALOS_RT_ELEMENT_BITS, 92, 0,       0,
-      sizeof(uint64_t),   alignof(uint64_t),       64, nullptr, nullptr};
+      sizeof(uint64_t), alignof(uint64_t),     64, nullptr, nullptr};
   talos_rt_object_v1 *array = nullptr;
   ASSERT_EQ(talos_rt_v1_assoc_create(lane, &wordElement,
-                                       TALOS_RT_ASSOC_KEY_PROCESS, 0, &array),
+                                     TALOS_RT_ASSOC_KEY_PROCESS, 0, &array),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 arrayRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array), TALOS_RT_OK);
 
   const uint64_t tokens[] = {0, firstToken, secondToken};
   for (uint64_t index = 0; index != std::size(tokens); ++index) {
@@ -8129,8 +8045,8 @@ TEST(Scheduler, ProcessObjectIdentitySharesManagedNamespaceAndSurvivesExit) {
 
   talos_rt_process_control_disposition disposition{};
   ASSERT_EQ(talos_rt_v1_process_control(context, secondToken,
-                                          TALOS_RT_PROCESS_CONTROL_KILL,
-                                          &disposition),
+                                        TALOS_RT_PROCESS_CONTROL_KILL,
+                                        &disposition),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_lane_leave(lane), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
@@ -8216,8 +8132,8 @@ TEST(RuntimeInternals,
   // with the same low token must stay live; this metadata fixture does not
   // execute or terminate a bytecode frame.
   ASSERT_EQ(talos_rt_v1_process_control(context, nativeToken,
-                                          TALOS_RT_PROCESS_CONTROL_KILL,
-                                          &disposition),
+                                        TALOS_RT_PROCESS_CONTROL_KILL,
+                                        &disposition),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_process_object_identity(context, designToken, &output),
             TALOS_RT_OK);
@@ -8235,15 +8151,14 @@ TEST(Scheduler, ConcurrentProcessObjectQueriesShareOneIdentity) {
   SchedulerFixture fixture(100);
   auto *instance = makeSchedulerInstance(fixture);
   ASSERT_EQ(talos_rt_v1_scheduler_add(context, instance, 0), TALOS_RT_OK);
-  const uint64_t token =
-      talos_rt_v1_scheduler_process_token(context, instance);
+  const uint64_t token = talos_rt_v1_scheduler_process_token(context, instance);
   std::array<uint64_t, 8> identities{};
   std::array<talos_rt_status, 8> statuses{};
   std::array<std::thread, 8> threads;
   for (size_t index = 0; index != threads.size(); ++index)
     threads[index] = std::thread([&, index] {
-      statuses[index] = talos_rt_process_object_identity(context, token,
-                                                           &identities[index]);
+      statuses[index] =
+          talos_rt_process_object_identity(context, token, &identities[index]);
     });
   for (std::thread &thread : threads)
     thread.join();
@@ -8261,9 +8176,9 @@ TEST(Scheduler, CompletedProcessStorageStaysCompactAcrossChurn) {
   SchedulerFixture completed(100);
   constexpr uint64_t processCount = 1000;
   for (uint64_t iteration = 0; iteration != processCount; ++iteration) {
-    ASSERT_EQ(talos_rt_v1_scheduler_add(context,
-                                          makeSchedulerInstance(completed), 0),
-              TALOS_RT_OK);
+    ASSERT_EQ(
+        talos_rt_v1_scheduler_add(context, makeSchedulerInstance(completed), 0),
+        TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   }
 
@@ -8283,15 +8198,13 @@ TEST(Scheduler, CompactionPreservesCursorAcrossInterleavedDeadSlots) {
   SchedulerFixture first(101);
   SchedulerFixture second(102);
   SchedulerFixture third(103);
-  ASSERT_EQ(
-      talos_rt_v1_scheduler_add(context, makeSchedulerInstance(first), 0),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add(context, makeSchedulerInstance(first), 0),
+            TALOS_RT_OK);
   ASSERT_EQ(
       talos_rt_v1_scheduler_add(context, makeSchedulerInstance(second), 0),
       TALOS_RT_OK);
-  ASSERT_EQ(
-      talos_rt_v1_scheduler_add(context, makeSchedulerInstance(third), 0),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add(context, makeSchedulerInstance(third), 0),
+            TALOS_RT_OK);
   context->scheduledProcesses.insert(context->scheduledProcesses.begin() + 1,
                                      ScheduledProcess{});
   context->scheduledProcesses.insert(context->scheduledProcesses.begin() + 3,
@@ -8345,9 +8258,8 @@ TEST(Scheduler, TerminatedJoinNoneParentsPreserveDescendantAncestry) {
 
   // Descendant collection from the parent reaches them through the link.
   bool rootLive = true;
-  EXPECT_EQ(
-      talos_rt_collect_process_tree_unlocked(context, tag | 2, rootLive),
-      (std::unordered_set<uint64_t>{tag | 2, tag | 4, tag | 5, 7}));
+  EXPECT_EQ(talos_rt_collect_process_tree_unlocked(context, tag | 2, rootLive),
+            (std::unordered_set<uint64_t>{tag | 2, tag | 4, tag | 5, 7}));
   EXPECT_FALSE(rootLive);
 
   // The link survives while anything descends from it.
@@ -8404,9 +8316,8 @@ TEST(Scheduler, ProcessTreeCollectionFollowsChainsInAnyOrder) {
       talos_rt_collect_process_tree_unlocked(context, tag | 1, rootLive),
       (std::unordered_set<uint64_t>{tag | 1, 10, tag | 2, 11, tag | 3, 12}));
   EXPECT_TRUE(rootLive);
-  EXPECT_EQ(
-      talos_rt_collect_process_tree_unlocked(context, tag | 2, rootLive),
-      (std::unordered_set<uint64_t>{tag | 2, 11, tag | 3, 12}));
+  EXPECT_EQ(talos_rt_collect_process_tree_unlocked(context, tag | 2, rootLive),
+            (std::unordered_set<uint64_t>{tag | 2, 11, tag | 3, 12}));
   EXPECT_FALSE(rootLive);
   EXPECT_EQ(talos_rt_collect_process_tree_unlocked(context, 11, rootLive),
             (std::unordered_set<uint64_t>{11, tag | 3, 12}));
@@ -8441,9 +8352,8 @@ TEST(Scheduler, ProcessTreeTakesScheduledParentsFromTheScheduler) {
   context->activeLogicalProcessToken = tag | 3;
   context->activeLogicalProcessParent = tag | 1;
   bool rootLive = false;
-  EXPECT_EQ(
-      talos_rt_collect_process_tree_unlocked(context, tag | 1, rootLive),
-      (std::unordered_set<uint64_t>{tag | 1, tag | 2}));
+  EXPECT_EQ(talos_rt_collect_process_tree_unlocked(context, tag | 1, rootLive),
+            (std::unordered_set<uint64_t>{tag | 1, tag | 2}));
   EXPECT_TRUE(rootLive);
 
   context->activeLogicalProcessToken = 0;
@@ -8571,10 +8481,8 @@ TEST(Scheduler, DisabledBlockOwnerKeepsItsEarlierChildrenAsDescendants) {
     ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
     auto spawn = [&](SchedulerFixture &fixture, uint64_t parent) {
       context->activeLogicalProcessToken = parent;
-      talos_rt_process_instance_v1 *instance =
-          makeSchedulerInstance(fixture);
-      EXPECT_EQ(talos_rt_v1_scheduler_add(context, instance, 0),
-                TALOS_RT_OK);
+      talos_rt_process_instance_v1 *instance = makeSchedulerInstance(fixture);
+      EXPECT_EQ(talos_rt_v1_scheduler_add(context, instance, 0), TALOS_RT_OK);
       return talos_rt_v1_scheduler_process_token(context, instance);
     };
     scenario.ancestor = spawn(ancestorFixture, 0);
@@ -8591,8 +8499,7 @@ TEST(Scheduler, DisabledBlockOwnerKeepsItsEarlierChildrenAsDescendants) {
     owner->controls.swap(context->activeControls);
 
     context->activeLogicalProcessToken = tag | 900;
-    ASSERT_EQ(talos_rt_v1_control_disable(context, 901, 0, 1),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_control_disable(context, 901, 0, 1), TALOS_RT_OK);
     context->activeLogicalProcessToken = 0;
     talos_rt_process_state state{};
     ASSERT_EQ(talos_rt_v1_process_status(context, scenario.owner, &state),
@@ -8605,9 +8512,9 @@ TEST(Scheduler, DisabledBlockOwnerKeepsItsEarlierChildrenAsDescendants) {
   };
   auto childState = [](const Scenario &scenario) {
     talos_rt_process_state state{};
-    EXPECT_EQ(talos_rt_v1_process_status(scenario.context, scenario.child,
-                                           &state),
-              TALOS_RT_OK);
+    EXPECT_EQ(
+        talos_rt_v1_process_status(scenario.context, scenario.child, &state),
+        TALOS_RT_OK);
     return state;
   };
 
@@ -8624,8 +8531,8 @@ TEST(Scheduler, DisabledBlockOwnerKeepsItsEarlierChildrenAsDescendants) {
   disableOwnerBlock(kill);
   talos_rt_process_control_disposition disposition{};
   ASSERT_EQ(talos_rt_v1_process_control(kill.context, kill.owner,
-                                          TALOS_RT_PROCESS_CONTROL_KILL,
-                                          &disposition),
+                                        TALOS_RT_PROCESS_CONTROL_KILL,
+                                        &disposition),
             TALOS_RT_OK);
   EXPECT_EQ(childState(kill), TALOS_RT_PROCESS_KILLED);
   talos_rt_v1_context_destroy(kill.context);
@@ -8647,9 +8554,8 @@ TEST(Scheduler, KillOfFinishedProcessTerminatesLiveDescendants) {
   talos_rt_retire_process_parent_unlocked(context, tag | 41, 0);
 
   talos_rt_process_control_disposition disposition{};
-  ASSERT_EQ(talos_rt_v1_process_control(context, tag | 41,
-                                          TALOS_RT_PROCESS_CONTROL_KILL,
-                                          &disposition),
+  ASSERT_EQ(talos_rt_v1_process_control(
+                context, tag | 41, TALOS_RT_PROCESS_CONTROL_KILL, &disposition),
             TALOS_RT_OK);
   EXPECT_EQ(disposition, TALOS_RT_PROCESS_CONTROL_CONTINUE);
   talos_rt_process_state state{};
@@ -8666,11 +8572,10 @@ TEST(Scheduler, DetachedChildlessTerminationDoesNotCreateParentIndex) {
   context->activeLogicalProcessToken = tag | 99;
   SchedulerFixture fixture(150);
   schedulerDestroyCount = 0;
-  ASSERT_EQ(
-      talos_rt_v1_scheduler_add(context, makeSchedulerInstance(fixture),
-                                  TALOS_RT_SCHEDULE_STARTUP |
-                                      TALOS_RT_SCHEDULE_DETACHED_CONTROLS),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add(context, makeSchedulerInstance(fixture),
+                                      TALOS_RT_SCHEDULE_STARTUP |
+                                          TALOS_RT_SCHEDULE_DETACHED_CONTROLS),
+            TALOS_RT_OK);
   ASSERT_EQ(context->scheduledProcesses.size(), 1u);
   EXPECT_EQ(context->scheduledProcesses.front().parent, 0u);
   EXPECT_TRUE(context->logicalProcessParentsWithChildren.empty());
@@ -8703,9 +8608,9 @@ TEST(Scheduler, ParentIndexStaysBoundedAcrossNaturalAndKilledChurn) {
     talos_rt_process_instance_v1 *instance = makeSchedulerInstance(parent);
     ASSERT_NE(instance, nullptr);
     instance->continuation = 1;
-    ASSERT_EQ(talos_rt_v1_scheduler_add(context, instance,
-                                          TALOS_RT_SCHEDULE_STARTUP),
-              TALOS_RT_OK);
+    ASSERT_EQ(
+        talos_rt_v1_scheduler_add(context, instance, TALOS_RT_SCHEDULE_STARTUP),
+        TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
     EXPECT_TRUE(context->scheduledProcesses.empty());
     EXPECT_TRUE(context->logicalProcessParentsWithChildren.empty());
@@ -8815,13 +8720,12 @@ TEST(Scheduler, AOTStaticNBASitesMergeAndCommitEachRootOnce) {
   uint64_t root = talos_rt_v1_native_state_static_handle(1);
   ASSERT_NE(root, UINT64_MAX);
   ASSERT_EQ(talos_rt_v1_scheduler_static_nba(context, 7, &plane, nullptr, 8,
-                                               root, 4, &first, nullptr),
+                                             root, 4, &first, nullptr),
             TALOS_RT_OK);
   EXPECT_EQ(context->staticNBAPendingAccumulatorCount, 1u);
   ASSERT_EQ(talos_rt_v1_scheduler_static_nba(
                 context, 8, &plane, nullptr, 8,
-                talos_rt_v1_native_handle_offset(root, 2), 4, &second,
-                nullptr),
+                talos_rt_v1_native_handle_offset(root, 2), 4, &second, nullptr),
             TALOS_RT_OK);
   // Repeated partial stages of one root remain one pending accumulator.
   EXPECT_EQ(context->staticNBAPendingAccumulatorCount, 1u);
@@ -8865,7 +8769,8 @@ TEST(Scheduler, WideStaticNBACapturesClippedRHSAndOrderedOverwrites) {
                   TALOS_RT_OK);
         context->stateUnknown.assign(4, 0);
         ASSERT_EQ(talos_rt_v1_native_state_register_static(
-                      context, 1, rootOffset, rootWidth), TALOS_RT_OK);
+                      context, 1, rootOffset, rootWidth),
+                  TALOS_RT_OK);
         ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan),
                   TALOS_RT_OK);
         std::array<uint8_t, (planeWidth + 7) / 8> value{}, unknown{};
@@ -8891,10 +8796,10 @@ TEST(Scheduler, WideStaticNBACapturesClippedRHSAndOrderedOverwrites) {
             if (dest < 0 || dest >= int64_t(rootWidth))
               continue;
             bool v = (rhs[source / 8] >> (source % 8)) & 1;
-            bool u = fourState &&
-                     ((rhsUnknown[source / 8] >> (source % 8)) & 1);
-            transient[dest] |= captured[dest] &&
-                               (stagedValue[dest] != v || stagedUnknown[dest] != u);
+            bool u =
+                fourState && ((rhsUnknown[source / 8] >> (source % 8)) & 1);
+            transient[dest] |= captured[dest] && (stagedValue[dest] != v ||
+                                                  stagedUnknown[dest] != u);
             captured[dest] = true;
             stagedValue[dest] = v;
             stagedUnknown[dest] = u;
@@ -8903,14 +8808,16 @@ TEST(Scheduler, WideStaticNBACapturesClippedRHSAndOrderedOverwrites) {
           }
           auto *uPlane = fourState ? unknown.data() : nullptr;
           auto *uRHS = fourState ? rhsUnknown.data() : nullptr;
-          auto status = packedSlice
-              ? talos_rt_v1_scheduler_packed_slice_nba(
-                    context, value.data(), uPlane, planeWidth, handle, rootWidth,
-                    offset, 1, sourceWidth, 0, 7, UINT64_MAX, rhs.data(), uRHS)
-              : talos_rt_v1_scheduler_static_nba(
-                    context, 7, value.data(), uPlane, planeWidth,
-                    talos_rt_v1_native_handle_offset(handle, offset),
-                    sourceWidth, rhs.data(), uRHS);
+          auto status =
+              packedSlice
+                  ? talos_rt_v1_scheduler_packed_slice_nba(
+                        context, value.data(), uPlane, planeWidth, handle,
+                        rootWidth, offset, 1, sourceWidth, 0, 7, UINT64_MAX,
+                        rhs.data(), uRHS)
+                  : talos_rt_v1_scheduler_static_nba(
+                        context, 7, value.data(), uPlane, planeWidth,
+                        talos_rt_v1_native_handle_offset(handle, offset),
+                        sourceWidth, rhs.data(), uRHS);
           ASSERT_EQ(status, TALOS_RT_OK);
           EXPECT_TRUE(std::all_of(value.begin(), value.end(),
                                   [](uint8_t byte) { return byte == 0xa5; }));
@@ -8980,8 +8887,8 @@ TEST(Scheduler, GeneratedNBA256SnapshotsAndPreservesGenericLastWrite) {
   uint8_t newer = 0xaa;
   uint64_t root = talos_rt_v1_native_state_static_handle(1);
   ASSERT_EQ(talos_rt_v1_scheduler_static_nba(context, 7, valuePlane.data(),
-                                               nullptr, 256, root, 8, &newer,
-                                               nullptr),
+                                             nullptr, 256, root, 8, &newer,
+                                             nullptr),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   EXPECT_EQ(valuePlane[0], 0xaa);
@@ -8994,8 +8901,7 @@ TEST(Scheduler, GeneratedNBA256SnapshotsAndPreservesGenericLastWrite) {
 TEST(RuntimeInternals, WritableNBADirectCommitRequiresCleanLockedBoundary) {
   talos_rt_execution_descriptor_v1 execution{};
   execution.version = TALOS_RT_VERSION;
-  execution.flags =
-      TALOS_RT_EXECUTION_VPI_READ | TALOS_RT_EXECUTION_VPI_WRITE;
+  execution.flags = TALOS_RT_EXECUTION_VPI_READ | TALOS_RT_EXECUTION_VPI_WRITE;
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
             TALOS_RT_OK);
@@ -9042,12 +8948,12 @@ TEST(RuntimeInternals, PrivateNBABatchPreservesMasksTransientsAndFallback) {
             TALOS_RT_OK);
   alignas(uint64_t) std::array<uint8_t, 16> value{}, unknown{};
   ASSERT_EQ(talos_rt_v1_native_state_bind_shared(context, value.data(),
-                                                   unknown.data(), 64),
+                                                 unknown.data(), 64),
             TALOS_RT_OK);
   talos_rt_generated_nba_accumulator_256 staged[3]{};
   talos_rt_static_nba_root roots[] = {{0, 1, 8, &staged[0], nullptr, 0},
-                                        {1, 2, 8, &staged[1], nullptr, 0},
-                                        {2, 3, 8, &staged[2], nullptr, 0}};
+                                      {1, 2, 8, &staged[1], nullptr, 0},
+                                      {2, 3, 8, &staged[2], nullptr, 0}};
   uint64_t dirty = 7, summary = 1, ingress = 0;
   talos_rt_native_clock_kernel kernel{};
   kernel.ingress_mask = &ingress;
@@ -9100,37 +9006,37 @@ TEST(RuntimeInternals, PrivateNBABatchPreservesMasksTransientsAndFallback) {
     NativeAOTContextScope active(context);
     NativeAOTMutexScope locked(context);
     // Neither a region mismatch nor external observation consumes staging.
+    EXPECT_EQ(
+        talos_rt_v1_static_nba_batch_guard(context, &plan, TALOS_RT_REGION_NBA),
+        1u);
     EXPECT_EQ(talos_rt_v1_static_nba_batch_guard(context, &plan,
-                                                   TALOS_RT_REGION_NBA),
-              1u);
-    EXPECT_EQ(talos_rt_v1_static_nba_batch_guard(context, &plan,
-                                                   TALOS_RT_REGION_RE_NBA),
+                                                 TALOS_RT_REGION_RE_NBA),
               0u);
     context->staticNBAAccumulatorsPending = true;
-    EXPECT_EQ(talos_rt_v1_static_nba_batch_guard(context, &plan,
-                                                   TALOS_RT_REGION_NBA),
-              0u);
+    EXPECT_EQ(
+        talos_rt_v1_static_nba_batch_guard(context, &plan, TALOS_RT_REGION_NBA),
+        0u);
     context->staticNBAAccumulatorsPending = false;
     context->staticNBASlowRootsPresent = true;
-    EXPECT_EQ(talos_rt_v1_static_nba_batch_guard(context, &plan,
-                                                   TALOS_RT_REGION_NBA),
-              0u);
+    EXPECT_EQ(
+        talos_rt_v1_static_nba_batch_guard(context, &plan, TALOS_RT_REGION_NBA),
+        0u);
     context->staticNBASlowRootsPresent = false;
     ASSERT_EQ(talos_rt_v1_static_nba_commit_batch(
                   context, candidates, 3, TALOS_RT_REGION_RE_NBA, &changed),
               TALOS_RT_OK);
     context->vpiObservationDemand = true;
-    EXPECT_EQ(talos_rt_v1_static_nba_batch_guard(context, &plan,
-                                                   TALOS_RT_REGION_NBA),
-              0u);
+    EXPECT_EQ(
+        talos_rt_v1_static_nba_batch_guard(context, &plan, TALOS_RT_REGION_NBA),
+        0u);
     ASSERT_EQ(talos_rt_v1_static_nba_commit_batch(
                   context, candidates, 3, TALOS_RT_REGION_NBA, &changed),
               TALOS_RT_OK);
     context->vpiObservationDemand = false;
     context->forceMask.assign(1, 8);
-    EXPECT_EQ(talos_rt_v1_static_nba_batch_guard(context, &plan,
-                                                   TALOS_RT_REGION_NBA),
-              0u);
+    EXPECT_EQ(
+        talos_rt_v1_static_nba_batch_guard(context, &plan, TALOS_RT_REGION_NBA),
+        0u);
     ASSERT_EQ(talos_rt_v1_static_nba_commit_batch(
                   context, candidates, 3, TALOS_RT_REGION_NBA, &changed),
               TALOS_RT_OK);
@@ -9167,9 +9073,9 @@ TEST(RuntimeInternals, PrivateNBABatchPreservesMasksTransientsAndFallback) {
   {
     NativeAOTContextScope active(context);
     NativeAOTMutexScope locked(context);
-    EXPECT_EQ(talos_rt_v1_static_nba_batch_guard(context, &plan,
-                                                   TALOS_RT_REGION_NBA),
-              0u);
+    EXPECT_EQ(
+        talos_rt_v1_static_nba_batch_guard(context, &plan, TALOS_RT_REGION_NBA),
+        0u);
     ASSERT_EQ(talos_rt_v1_static_nba_commit_batch(
                   context, candidates + 1, 1, TALOS_RT_REGION_NBA, &changed),
               TALOS_RT_OK);
@@ -9189,8 +9095,10 @@ TEST(Scheduler, GeneratedFixedNBASlotsShareBarrierAndSnapshotWithoutQueue) {
   std::array<uint32_t, 2> valid{};
   std::array<std::array<uint64_t, 4>, 2> transitions{};
   const talos_rt_generated_nba_slot slots[] = {
-      {&offsets[0], &values[0], &unknowns[0], &valid[0], transitions[0].data(), 64},
-      {&offsets[1], &values[1], &unknowns[1], &valid[1], transitions[1].data(), 64}};
+      {&offsets[0], &values[0], &unknowns[0], &valid[0], transitions[0].data(),
+       64},
+      {&offsets[1], &values[1], &unknowns[1], &valid[1], transitions[1].data(),
+       64}};
   const talos_rt_static_nba_root roots[] = {{17, 1, 128, nullptr, slots, 2}};
   alignas(uint64_t) std::array<uint8_t, 16> valuePlane{}, unknownPlane{};
   uint64_t dirtyRoots = 0, dirtySummary = 0;
@@ -9210,12 +9118,14 @@ TEST(Scheduler, GeneratedFixedNBASlotsShareBarrierAndSnapshotWithoutQueue) {
   execution.version = TALOS_RT_VERSION;
   execution.state_bit_count = 128;
   talos_rt_context *context = nullptr;
-  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context), TALOS_RT_OK);
-  context->stateUnknown.assign(2, 0);
-  ASSERT_EQ(talos_rt_v1_native_state_bind_shared(
-                context, valuePlane.data(), unknownPlane.data(), 128),
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 0, 128), TALOS_RT_OK);
+  context->stateUnknown.assign(2, 0);
+  ASSERT_EQ(talos_rt_v1_native_state_bind_shared(context, valuePlane.data(),
+                                                 unknownPlane.data(), 128),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 0, 128),
+            TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
 
   // LRM 9.4.2, 10.6.2: a forced bit and unchanged X bits do not produce a
@@ -9231,8 +9141,8 @@ TEST(Scheduler, GeneratedFixedNBASlotsShareBarrierAndSnapshotWithoutQueue) {
   valid = {1, 1};
   dirtyRoots = dirtySummary = 1;
   uint32_t unchanged = 0;
-  ASSERT_EQ(talos_rt_v1_static_nba_commit_roots(
-                context, 1, TALOS_RT_REGION_NBA, &unchanged),
+  ASSERT_EQ(talos_rt_v1_static_nba_commit_roots(context, 1, TALOS_RT_REGION_NBA,
+                                                &unchanged),
             TALOS_RT_OK);
   EXPECT_EQ(unchanged, 0u);
   EXPECT_EQ(context->stateValue[0], 0x20u);
@@ -9256,18 +9166,21 @@ TEST(Scheduler, GeneratedFixedNBASlotsShareBarrierAndSnapshotWithoutQueue) {
   EXPECT_EQ(nextDueNBABarrierRegionUnlocked(context), TALOS_RT_REGION_NBA);
   uint32_t changed = 0;
   ASSERT_EQ(talos_rt_v1_static_nba_commit_roots(
-      context, 1, TALOS_RT_REGION_ACTIVE, &changed), TALOS_RT_OK);
+                context, 1, TALOS_RT_REGION_ACTIVE, &changed),
+            TALOS_RT_OK);
   EXPECT_EQ(valid[0], 1u);
   EXPECT_EQ(dirtyRoots, 1u);
-  ASSERT_EQ(talos_rt_v1_static_nba_commit_roots(
-      context, 1, TALOS_RT_REGION_NBA, &changed), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_static_nba_commit_roots(context, 1, TALOS_RT_REGION_NBA,
+                                                &changed),
+            TALOS_RT_OK);
   EXPECT_EQ(context->stateValue[0], values[0]);
   EXPECT_EQ(context->stateValue[1], values[1]);
   EXPECT_EQ(context->stateUnknown[0], unknowns[0]);
   EXPECT_EQ(context->stateUnknown[1], unknowns[1]);
   std::array<uint64_t, 2> generatedValues{}, generatedUnknowns{};
   std::memcpy(generatedValues.data(), valuePlane.data(), valuePlane.size());
-  std::memcpy(generatedUnknowns.data(), unknownPlane.data(), unknownPlane.size());
+  std::memcpy(generatedUnknowns.data(), unknownPlane.data(),
+              unknownPlane.size());
   EXPECT_EQ(generatedValues, values);
   EXPECT_EQ(generatedUnknowns, unknowns);
   EXPECT_EQ(valid[0] | valid[1], 0u);
@@ -9284,13 +9197,15 @@ TEST(Scheduler, GeneratedFixedNBASlotsShareBarrierAndSnapshotWithoutQueue) {
   valid[0] = 1;
   dirtyRoots = dirtySummary = 1;
   talos_rt_aot_deopt_snapshot snapshot{};
-  ASSERT_EQ(talos_rt_v1_scheduler_snapshot_aot(context, &snapshot), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_snapshot_aot(context, &snapshot),
+            TALOS_RT_OK);
   EXPECT_EQ(snapshot.nba_count, 1u);
   EXPECT_EQ(valid[0], 0u);
   EXPECT_TRUE(context->staticNBAAccumulators[0].valid);
   EXPECT_TRUE(context->scheduledNBAs.empty());
-  ASSERT_EQ(talos_rt_v1_static_nba_commit_roots(
-      context, 1, TALOS_RT_REGION_NBA, &changed), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_static_nba_commit_roots(context, 1, TALOS_RT_REGION_NBA,
+                                                &changed),
+            TALOS_RT_OK);
   EXPECT_EQ(context->stateValue[0], 0xabcu);
   EXPECT_EQ(context->stateUnknown[0], 0x12u);
   talos_rt_v1_context_destroy(context);
@@ -9324,9 +9239,9 @@ TEST(Scheduler, GeneratedNBAScalarCommitsValueUnknownAndPartMaskDirectly) {
   context->stateUnknown.assign(1, 0);
   ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 0, 8),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_native_state_sync(context, &nativeValue,
-                                            &nativeUnknown, 8),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_native_state_sync(context, &nativeValue, &nativeUnknown, 8),
+      TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
 
   generated.value[0] = 0x0a;
@@ -9388,15 +9303,13 @@ TEST(Scheduler, GeneratedNBAScalarRecordsCoveredTransitionsExactlyOnce) {
   ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 0, 1),
             TALOS_RT_OK);
   constexpr std::array<uint8_t, 1> zero{0};
-  ASSERT_EQ(
-      talos_rt_v1_coverage_finalize(
-          context, 0, 1, zero.data(), zero.data(),
-          TALOS_RT_COVERAGE_PERSIST_ALL),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_coverage_finalize(context, 0, 1, zero.data(),
+                                          zero.data(),
+                                          TALOS_RT_COVERAGE_PERSIST_ALL),
+            TALOS_RT_OK);
   uint64_t root = talos_rt_v1_native_state_static_handle(1);
   ASSERT_NE(root, UINT64_MAX);
-  ASSERT_EQ(talos_rt_v1_coverage_toggle_bind(context, 0, 1, root),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_coverage_toggle_bind(context, 0, 1, root), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_coverage_toggle_seal(context), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
 
@@ -9450,8 +9363,7 @@ TEST(Scheduler, RebuiltCalendarRetainsDetachedPeriodicDeadline) {
 TEST(Scheduler, DeoptimizedNBACommitDoesNotReenterGeneratedBarrier) {
   AOTTestState state;
   talos_rt_generated_nba_accumulator_256 generated{};
-  const talos_rt_static_nba_root roots[] = {
-      {17, 1, 4, &generated, nullptr, 0}};
+  const talos_rt_static_nba_root roots[] = {{17, 1, 4, &generated, nullptr, 0}};
   std::array<uint8_t, 8> valuePlane{};
   std::array<uint8_t, 8> unknownPlane{};
   uint64_t dirtyRoots = 1;
@@ -9490,13 +9402,13 @@ TEST(Scheduler, DeoptimizedNBACommitDoesNotReenterGeneratedBarrier) {
   generated.exec_region = TALOS_RT_REGION_NBA;
 
   bool changed = false;
-  EXPECT_EQ(commitStaticNBAAccumulatorsUnlocked(
-                context, TALOS_RT_REGION_NBA, changed),
+  EXPECT_EQ(commitStaticNBAAccumulatorsUnlocked(context, TALOS_RT_REGION_NBA,
+                                                changed),
             TALOS_RT_TIER_UNAVAILABLE);
   EXPECT_EQ(generated.valid, 1u);
   context->nativeScheduleDeoptimized = true;
-  ASSERT_EQ(commitStaticNBAAccumulatorsUnlocked(
-                context, TALOS_RT_REGION_NBA, changed),
+  ASSERT_EQ(commitStaticNBAAccumulatorsUnlocked(context, TALOS_RT_REGION_NBA,
+                                                changed),
             TALOS_RT_OK);
   EXPECT_TRUE(changed);
   EXPECT_EQ(valuePlane[0], 5u);
@@ -9554,8 +9466,8 @@ TEST(Scheduler, GeneratedNBADirtyHierarchySkipsEmptyLeafPages) {
   generated[0].exec_region = TALOS_RT_REGION_ACTIVE;
   EXPECT_EQ(nextDueNBABarrierRegionUnlocked(context), TALOS_RT_REGION_NBA);
   uint32_t changed = 0;
-  ASSERT_EQ(talos_rt_v1_static_nba_commit_roots(
-                context, rootCount, TALOS_RT_REGION_NBA, &changed),
+  ASSERT_EQ(talos_rt_v1_static_nba_commit_roots(context, rootCount,
+                                                TALOS_RT_REGION_NBA, &changed),
             TALOS_RT_OK);
   EXPECT_EQ(changed, 1u);
   EXPECT_EQ(valuePlane[8] & 1, 1u);
@@ -9663,8 +9575,8 @@ TEST(Scheduler, DPIExportTemporarilyReleasesOuterExecutorSelection) {
   {
     NativeScheduleStepScope caller(context, 5, true, true, 19);
     context->nativeScheduleForcedExecuted = true;
-    EXPECT_EQ(talos_rt_v1_dpi_export_task_run(
-                  context, makeSchedulerInstance(exported)),
+    EXPECT_EQ(talos_rt_v1_dpi_export_task_run(context,
+                                              makeSchedulerInstance(exported)),
               TALOS_RT_OK);
     EXPECT_EQ(schedulerResumeCount, 1u);
     EXPECT_EQ(schedulerOrder, (std::vector<uint64_t>{7}));
@@ -9763,8 +9675,8 @@ TEST(Scheduler, LocalEvalNBACapturesUseTheCommonBarrier) {
               TALOS_RT_OK);
     EXPECT_EQ(context->events.count(3), 0u);
     region = 99;
-    ASSERT_EQ(talos_rt_v1_scheduler_prepare_eval_nba_local(
-                  context, UINT32_MAX, &region),
+    ASSERT_EQ(talos_rt_v1_scheduler_prepare_eval_nba_local(context, UINT32_MAX,
+                                                           &region),
               TALOS_RT_OK);
     EXPECT_EQ(region, TALOS_RT_REGION_POSTPONED);
     EXPECT_EQ(context->events.count(3), 0u);
@@ -9826,13 +9738,13 @@ TEST(Scheduler, IdleCurrentSlotEntriesKeepLoopEffects) {
     // An empty barrier still accounts for the generated prefix's update.
     uint64_t epoch = context->schedulerEpoch;
     uint64_t progress = context->schedulerSlotProgress;
-    ASSERT_EQ(talos_rt_v1_scheduler_complete_eval_nba(
-                  context, TALOS_RT_REGION_NBA, 1),
+    ASSERT_EQ(talos_rt_v1_scheduler_complete_eval_nba(context,
+                                                      TALOS_RT_REGION_NBA, 1),
               TALOS_RT_OK);
     EXPECT_EQ(context->schedulerEpoch, epoch + 1);
     EXPECT_EQ(context->schedulerSlotProgress, progress + 1);
-    ASSERT_EQ(talos_rt_v1_scheduler_complete_eval_nba(
-                  context, TALOS_RT_REGION_NBA, 0),
+    ASSERT_EQ(talos_rt_v1_scheduler_complete_eval_nba(context,
+                                                      TALOS_RT_REGION_NBA, 0),
               TALOS_RT_OK);
     EXPECT_EQ(context->schedulerEpoch, epoch + 1);
     EXPECT_EQ(context->schedulerSlotProgress, progress + 2);
@@ -9857,8 +9769,8 @@ TEST(Scheduler, IdleCurrentSlotEntriesKeepLoopEffects) {
     EXPECT_FALSE(context->nativeScheduleClockIngressPending);
     // Exhausted slot progress still fails in the full loop.
     context->schedulerSlotProgress = UINT64_MAX;
-    EXPECT_EQ(talos_rt_v1_scheduler_complete_eval_nba(
-                  context, TALOS_RT_REGION_NBA, 0),
+    EXPECT_EQ(talos_rt_v1_scheduler_complete_eval_nba(context,
+                                                      TALOS_RT_REGION_NBA, 0),
               TALOS_RT_OUT_OF_RESOURCES);
     context->schedulerStatus = TALOS_RT_OK;
     context->schedulerSlotProgress = 0;
@@ -9938,9 +9850,8 @@ TEST(Scheduler, WritableEvalNBACutReturnsBeforeUnscopedActor) {
   SchedulerFixture actor(101);
   schedulerResumeCount = 0;
   schedulerOrder.clear();
-  ASSERT_EQ(
-      talos_rt_v1_scheduler_add(context, makeSchedulerInstance(actor), 0),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add(context, makeSchedulerInstance(actor), 0),
+            TALOS_RT_OK);
   {
     ContextMutexLock lock(context);
     NativeAOTContextScope aot(context);
@@ -9970,10 +9881,9 @@ TEST(Scheduler, SharedNBABarrierSelectionMatchesScalarInventory) {
   // Cross both the leaf and summary boundaries; include stale generated
   // payloads, runtime stages, empty pages, and all iterative region choices.
   constexpr uint32_t rootCount = 4103;
-  constexpr uint32_t regions[] = {TALOS_RT_REGION_ACTIVE,
-                                 TALOS_RT_REGION_NBA,
-                                 TALOS_RT_REGION_REACTIVE,
-                                 TALOS_RT_REGION_RE_NBA};
+  constexpr uint32_t regions[] = {TALOS_RT_REGION_ACTIVE, TALOS_RT_REGION_NBA,
+                                  TALOS_RT_REGION_REACTIVE,
+                                  TALOS_RT_REGION_RE_NBA};
   std::vector<talos_rt_generated_nba_accumulator_256> generated(rootCount);
   std::vector<talos_rt_static_nba_root> roots(rootCount);
   std::vector<uint64_t> dirty((rootCount + 63) / 64);
@@ -9999,8 +9909,7 @@ TEST(Scheduler, SharedNBABarrierSelectionMatchesScalarInventory) {
     // batches use only NBA/Re-NBA. Compare their early barrier selection
     // with the same exhaustive oracle, including reactive-set isolation.
     bool certified = trial % 4 >= 2;
-    plan.flags =
-        certified ? TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL : 0;
+    plan.flags = certified ? TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL : 0;
     auto nextRegion = [&] {
       return regions[certified ? 1 + 2 * (random() % 2)
                                : random() % std::size(regions)];
@@ -10103,10 +10012,10 @@ TEST(Scheduler, AOTControlSelectsNBABarrierFromDirtyHierarchy) {
   schedulerWaitKind = TALOS_RT_SUSPEND_DELAY;
   schedulerResumeCount = 0;
   schedulerOrder.clear();
-  ASSERT_EQ(
-      talos_rt_v1_scheduler_add_aot(context, makeSchedulerInstance(fixture),
-                                      0, 0, 0, nullptr, nullptr, 0, nullptr, 0),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context,
+                                          makeSchedulerInstance(fixture), 0, 0,
+                                          0, nullptr, nullptr, 0, nullptr, 0),
+            TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_run_aot(context), TALOS_RT_OK);
   EXPECT_EQ(schedulerResumeCount, 1u);
   EXPECT_EQ(valuePlane[8] & 1, 1u);
@@ -10156,8 +10065,8 @@ TEST(Scheduler, GuardedNBAClaimsPreserveGeneratedLastWriteOrder) {
   state.claimedNBAValue = 0x22222222;
   ASSERT_EQ(talos_rt_v1_scheduler_run_aot(context), TALOS_RT_OK);
   uint32_t changed = 0;
-  ASSERT_EQ(talos_rt_v1_static_nba_commit_root(
-                context, 0, TALOS_RT_REGION_NBA, &changed),
+  ASSERT_EQ(talos_rt_v1_static_nba_commit_root(context, 0, TALOS_RT_REGION_NBA,
+                                               &changed),
             TALOS_RT_OK);
   EXPECT_EQ(changed, 1u);
   uint32_t observed = 0;
@@ -10169,8 +10078,8 @@ TEST(Scheduler, GuardedNBAClaimsPreserveGeneratedLastWriteOrder) {
   state.claimedNBAValue = 0x33333333;
   ASSERT_EQ(talos_rt_v1_scheduler_run_aot(context), TALOS_RT_OK);
   changed = 0;
-  ASSERT_EQ(talos_rt_v1_static_nba_commit_root(
-                context, 0, TALOS_RT_REGION_NBA, &changed),
+  ASSERT_EQ(talos_rt_v1_static_nba_commit_root(context, 0, TALOS_RT_REGION_NBA,
+                                               &changed),
             TALOS_RT_OK);
   EXPECT_EQ(changed, 1u);
   std::memcpy(&observed, valuePlane.data(), sizeof(observed));
@@ -10251,8 +10160,8 @@ TEST(Scheduler, GeneratedNBA256CommitsDirectlyWithoutFanout) {
   context->stateUnknown.assign(4, 0);
   ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 0, 256),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_native_state_sync(
-                context, nativeValue.data(), nativeUnknown.data(), 256),
+  ASSERT_EQ(talos_rt_v1_native_state_sync(context, nativeValue.data(),
+                                          nativeUnknown.data(), 256),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
 
@@ -10331,8 +10240,8 @@ TEST(Scheduler, GeneratedNBA256BatchRejectsRootsThatNeedTransitions) {
   generated.valid = 1;
   generated.exec_region = TALOS_RT_REGION_NBA;
   uint32_t changed = 0;
-  ASSERT_EQ(talos_rt_v1_static_nba_commit_roots(
-                context, 1, TALOS_RT_REGION_NBA, &changed),
+  ASSERT_EQ(talos_rt_v1_static_nba_commit_roots(context, 1, TALOS_RT_REGION_NBA,
+                                                &changed),
             TALOS_RT_OK);
   EXPECT_EQ(changed, 1u);
   EXPECT_EQ(valuePlane[0], 0x55);
@@ -10570,8 +10479,8 @@ TEST(Scheduler, PersistentReleaseReconcilesRetainedValueToGeneratedPlane) {
   talos_rt_aot_release_range_unlocked(context, 0, 8);
   EXPECT_EQ(context->nativeSchedulePersistentDirtyRoots.count(1), 0u);
   EXPECT_EQ(valuePlane, 0xa5);
-  EXPECT_EQ(talos_rt_v1_static_specialization_guard(
-                context, UINT32_MAX, 1, TALOS_RT_STATIC_ROOT_READ),
+  EXPECT_EQ(talos_rt_v1_static_specialization_guard(context, UINT32_MAX, 1,
+                                                    TALOS_RT_STATIC_ROOT_READ),
             1u);
   talos_rt_v1_context_destroy(context);
 }
@@ -10667,12 +10576,12 @@ TEST(Scheduler, AOTStaticNBASitesPreserveMixedGenericExecutionOrder) {
   context->nativeStateSpecializationFast = &stateFast;
   plan.specialization_fast = &nbaFast;
   ASSERT_EQ(talos_rt_v1_scheduler_nba(context, &plane, nullptr, 8, root, 8, 0,
-                                        &older, nullptr),
+                                      &older, nullptr),
             TALOS_RT_OK);
   EXPECT_EQ(stateFast, 1u);
   EXPECT_EQ(nbaFast, 0u);
   ASSERT_EQ(talos_rt_v1_scheduler_static_nba(context, 7, &plane, nullptr, 8,
-                                               root, 8, &newer, nullptr),
+                                             root, 8, &newer, nullptr),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   EXPECT_EQ(plane, 0xaa);
@@ -10774,7 +10683,7 @@ TEST(Scheduler, AOTStaticNBATablesRejectDuplicateAndMismatchedRoots) {
   uint8_t value = 1;
   uint64_t root = talos_rt_v1_native_state_static_handle(1);
   EXPECT_EQ(talos_rt_v1_scheduler_static_nba(context, 8, &plane, nullptr, 8,
-                                               root, 8, &value, nullptr),
+                                             root, 8, &value, nullptr),
             TALOS_RT_INVALID_DESIGN);
   talos_rt_v1_context_destroy(context);
 }
@@ -10786,10 +10695,10 @@ TEST(Scheduler, DelayedNBAsAdvanceTimeAndPreserveQueueOrder) {
   uint8_t first = 0x35;
   uint8_t second = 0xa6;
   ASSERT_EQ(talos_rt_v1_scheduler_nba(context, &plane, nullptr, 8, 0, 8, 5,
-                                        &first, nullptr),
+                                      &first, nullptr),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_nba(context, &plane, nullptr, 8, 0, 8, 5,
-                                        &second, nullptr),
+                                      &second, nullptr),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   EXPECT_EQ(plane, second);
@@ -10808,9 +10717,9 @@ TEST(Scheduler, CanonicalNBAKeepsBoundNativeStateMirrorCoherent) {
 
   uint8_t nativeValue = 0;
   uint8_t nativeUnknown = 0;
-  ASSERT_EQ(talos_rt_v1_native_state_sync(context, &nativeValue,
-                                            &nativeUnknown, 8),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_native_state_sync(context, &nativeValue, &nativeUnknown, 8),
+      TALOS_RT_OK);
   uint8_t value = 0xa6;
   uint8_t unknown = 0x18;
   uint64_t root = talos_rt_v1_native_state_static_handle(1);
@@ -10858,7 +10767,7 @@ TEST(Scheduler, UnknownSummaryClearsCleanRootsAndReportsRuntimeWrites) {
       {128, 64, 0, 1}, {0, 64, 0, 0}, {64, 8, 0, 0}};
   const uint64_t patterns[] = {160, 8};
   const talos_rt_native_unknown_root_v1 overlapping[] = {{0, 64, 0, 0},
-                                                           {32, 8, 0, 0}};
+                                                         {32, 8, 0, 0}};
   uint64_t summary = 0;
   EXPECT_EQ(talos_rt_v1_native_state_bind_unknown_summary(
                 context, u, 192, &summary, overlapping, 2, nullptr, 0),
@@ -10872,7 +10781,7 @@ TEST(Scheduler, UnknownSummaryClearsCleanRootsAndReportsRuntimeWrites) {
             TALOS_RT_INVALID_LIFECYCLE);
   const uint64_t all[] = {0, 0b111};
   EXPECT_EQ(talos_rt_v1_native_state_refresh_unknown_summary(context, all, 1,
-                                                               nullptr),
+                                                             nullptr),
             1u);
   EXPECT_EQ(summary, 0u);
 
@@ -10887,7 +10796,7 @@ TEST(Scheduler, UnknownSummaryClearsCleanRootsAndReportsRuntimeWrites) {
   uint64_t backoff = 0;
   auto refresh = [&] {
     return talos_rt_v1_native_state_refresh_unknown_summary(context, third, 1,
-                                                              &backoff);
+                                                            &backoff);
   };
   EXPECT_EQ(refresh(), 0u);
   EXPECT_EQ(state.rescans, 4u);
@@ -10947,7 +10856,7 @@ TEST(Scheduler, AllKnownSummaryRetainsUnknownsAcrossPartialKnownWrites) {
   const uint64_t all[] = {0, 3};
   auto refresh = [&] {
     return talos_rt_v1_native_state_refresh_unknown_summary(context, all, 1,
-                                                              nullptr);
+                                                            nullptr);
   };
   ASSERT_EQ(refresh(), 1u);
   EXPECT_EQ(summary, 0u);
@@ -10986,7 +10895,7 @@ TEST(Scheduler, UnknownSummaryRefreshRereadsLastDifference) {
   const uint64_t gate[] = {0, 1};
   auto refresh = [&] {
     return talos_rt_v1_native_state_refresh_unknown_summary(context, gate, 1,
-                                                              nullptr);
+                                                            nullptr);
   };
   const auto &mismatch = context->nativeUnknownSummary->mismatches[0];
   ASSERT_EQ(refresh(), 1u);
@@ -11036,7 +10945,7 @@ TEST(SchedulerDeathTest, UnknownSummaryVerificationRejectsUnreportedWrites) {
   const uint64_t gate[] = {0, 1};
   auto refresh = [&] {
     return talos_rt_v1_native_state_refresh_unknown_summary(context, gate, 1,
-                                                              nullptr);
+                                                            nullptr);
   };
   EXPECT_EQ(refresh(), 1u);
   unknown = 2;
@@ -11113,8 +11022,8 @@ TEST(Scheduler, InertialPathsCancelReturnToPublishedFourStateValue) {
             if (kind == 0)
               return talos_rt_v1_scheduler_inertial_path_driver(
                   context, &nativeValue, &nativeUnknown, 1, handle, 1, 17, 0,
-                  group, groups, TALOS_RT_INERTIAL_DRIVER_DEFER_RESOLUTION,
-                  5, 5, 5, &value, &unknown, &active, &mask, &mask, &mask);
+                  group, groups, TALOS_RT_INERTIAL_DRIVER_DEFER_RESOLUTION, 5,
+                  5, 5, &value, &unknown, &active, &mask, &mask, &mask);
             return talos_rt_v1_scheduler_inertial_path_storage(
                 context, &nativeValue, &nativeUnknown, 1, handle, 1, 17, 0,
                 group, groups, kind == 2, 5, 5, 5, &value, &unknown, &active,
@@ -11122,7 +11031,8 @@ TEST(Scheduler, InertialPathsCancelReturnToPublishedFourStateValue) {
           };
           ASSERT_EQ(schedule(nextValue, nextUnknown, 1, 0, 1), TALOS_RT_OK);
           ASSERT_EQ(context->scheduledInertialPathNBAs.size(), 1u);
-          EXPECT_EQ(context->scheduledInertialPathNBAs.begin()->first.first, 5u);
+          EXPECT_EQ(context->scheduledInertialPathNBAs.begin()->first.first,
+                    5u);
           context->schedulerTime = 1;
           ASSERT_EQ(schedule(oldValue, oldUnknown, returnMask, 0, 2),
                     TALOS_RT_OK);
@@ -11162,8 +11072,8 @@ TEST(Scheduler, InertialGateDriversUsePerBitTransitionDelays) {
                 context,
                 reinterpret_cast<uint8_t *>(context->stateValue.data()),
                 reinterpret_cast<uint8_t *>(context->stateUnknown.data()), 4,
-                handle, 4, 17, 3, TALOS_RT_INERTIAL_DRIVER_DEFER_RESOLUTION,
-                7, 11, 13, &value, &unknown),
+                handle, 4, 17, 3, TALOS_RT_INERTIAL_DRIVER_DEFER_RESOLUTION, 7,
+                11, 13, &value, &unknown),
             TALOS_RT_OK);
   ASSERT_EQ(context->scheduledNBAs.size(), 4u);
   EXPECT_EQ(context->scheduledNBAs[0].dueTime, 7u);
@@ -11235,7 +11145,7 @@ TEST(Scheduler, InertialStrengthPairsMatureAtomicallyAndRejectPulses) {
   std::array<uint8_t, 3> nativeValue{1, 1, 1};
   std::array<uint8_t, 3> nativeUnknown{1, 1, 1};
   ASSERT_EQ(talos_rt_v1_native_state_sync(context, nativeValue.data(),
-                                            nativeUnknown.data(), 17),
+                                          nativeUnknown.data(), 17),
             TALOS_RT_OK);
   uint64_t low = talos_rt_v1_native_state_static_handle(1);
   uint64_t high = talos_rt_v1_native_state_static_handle(2);
@@ -11328,10 +11238,8 @@ TEST(Scheduler, InertialStrengthPairsClipOnlyMatchingDynamicViews) {
   };
   writeDescriptor(0, talos::designbytecode::kNetStateDescriptor, 1, 0,
                   UINT64_MAX);
-  writeDescriptor(1, talos::designbytecode::kDriverStateDescriptor, 185, 4,
-                  0);
-  writeDescriptor(2, talos::designbytecode::kDriverStateDescriptor, 2953, 8,
-                  0);
+  writeDescriptor(1, talos::designbytecode::kDriverStateDescriptor, 185, 4, 0);
+  writeDescriptor(2, talos::designbytecode::kDriverStateDescriptor, 2953, 8, 0);
   talos::designbytecode::Image image{};
   image.data = bytes.data();
   image.size = bytes.size();
@@ -11439,8 +11347,8 @@ TEST(Scheduler, NetDeclarationDelaysApplyAfterDriverResolution) {
   context->stateValue[0] = 0b1001'0000'1111;
   context->stateUnknown[0] = 0b1100'0000'1111;
   bool changed = false;
-  ASSERT_TRUE(talos::designbytecode::resolveDrivenNets(image, context, 8, 12,
-                                                         changed));
+  ASSERT_TRUE(
+      talos::designbytecode::resolveDrivenNets(image, context, 8, 12, changed));
   EXPECT_FALSE(changed);
   EXPECT_EQ(context->stateValue[0] & 0xf, 0xfu);
   ASSERT_EQ(context->scheduledNBAs.size(), 3u);
@@ -11461,19 +11369,19 @@ TEST(Scheduler, NetDeclarationDelaysApplyAfterDriverResolution) {
   context->stateUnknown[0] &= ~uint64_t{1};
   context->stateValue[0] |= uint64_t{1} << 8;
   changed = false;
-  ASSERT_TRUE(talos::designbytecode::resolveDrivenNets(image, context, 8, 9,
-                                                         changed));
+  ASSERT_TRUE(
+      talos::designbytecode::resolveDrivenNets(image, context, 8, 9, changed));
   ASSERT_EQ(context->scheduledNBAs.size(), 1u);
   EXPECT_EQ(context->scheduledNBAs.front().dueTime, 18u);
   context->schedulerTime = 14;
-  ASSERT_TRUE(talos::designbytecode::resolveDrivenNets(image, context, 8, 9,
-                                                         changed));
+  ASSERT_TRUE(
+      talos::designbytecode::resolveDrivenNets(image, context, 8, 9, changed));
   ASSERT_EQ(context->scheduledNBAs.size(), 1u);
   EXPECT_EQ(context->scheduledNBAs.front().dueTime, 18u);
   context->schedulerTime = 15;
   context->stateValue[0] &= ~(uint64_t{1} << 8);
-  ASSERT_TRUE(talos::designbytecode::resolveDrivenNets(image, context, 8, 9,
-                                                         changed));
+  ASSERT_TRUE(
+      talos::designbytecode::resolveDrivenNets(image, context, 8, 9, changed));
   EXPECT_TRUE(context->scheduledNBAs.empty());
   EXPECT_TRUE(context->inertialNetPending.empty());
   EXPECT_EQ(context->stateValue[0] & 1, 0u);
@@ -11570,7 +11478,7 @@ TEST(Scheduler, TriregChargeDecayStartsCancelsAndUsesItsOwnDelay) {
   auto resolve = [&] {
     bool changed = false;
     ASSERT_TRUE(talos::designbytecode::resolveDrivenNets(image, context, 8, 9,
-                                                           changed));
+                                                         changed));
     EXPECT_FALSE(changed);
   };
 
@@ -11680,8 +11588,8 @@ TEST(Scheduler, TriregChargeDecayStartsCancelsAndUsesItsOwnDelay) {
   set(0, true, false);
   set(8, true, true);
   bool changed = false;
-  ASSERT_TRUE(talos::designbytecode::resolveDrivenNets(image, context, 8, 9,
-                                                         changed));
+  ASSERT_TRUE(
+      talos::designbytecode::resolveDrivenNets(image, context, 8, 9, changed));
   EXPECT_TRUE(context->scheduledNBAs.empty());
   EXPECT_EQ(context->stateValue[0] & 1, 1u);
   EXPECT_EQ(context->stateUnknown[0] & 1, 0u);
@@ -11701,8 +11609,8 @@ TEST(Scheduler, TriregChargeDecayStartsCancelsAndUsesItsOwnDelay) {
   set(0, true, false);
   set(8, true, true);
   changed = false;
-  ASSERT_TRUE(talos::designbytecode::resolveDrivenNets(image, context, 8, 9,
-                                                         changed));
+  ASSERT_TRUE(
+      talos::designbytecode::resolveDrivenNets(image, context, 8, 9, changed));
   ASSERT_EQ(context->scheduledNBAs.size(), 1u);
   EXPECT_EQ(context->scheduledNBAs.front().dueTime, 0u);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
@@ -11789,8 +11697,8 @@ TEST(Scheduler, DelayedTriregSharesChargeBeforeDecay) {
   context->stateValue[0] = (uint64_t{1} << 1) | (uint64_t{1} << 8);
   context->stateUnknown[0] = uint64_t{1} << 8;
   bool changed = false;
-  ASSERT_TRUE(talos::designbytecode::resolveDrivenNets(image, context, 8, 9,
-                                                         changed));
+  ASSERT_TRUE(
+      talos::designbytecode::resolveDrivenNets(image, context, 8, 9, changed));
   EXPECT_TRUE(changed);
   EXPECT_EQ(context->stateValue[0] & 3, 3u);
   EXPECT_EQ(context->stateUnknown[0] & 3, 0u);
@@ -11869,13 +11777,13 @@ TEST(Scheduler, DominatingNetDelayPublishesEveryCollapsedAlias) {
 
   constexpr uint64_t observerID = 77;
   talos_rt_observer_descriptor_v1 observer{observerID,
-                                             nullptr,
-                                             0,
-                                             1,
-                                             0,
-                                             TALOS_RT_OBSERVER_NO_BYTECODE,
-                                             collapsedAliasObserverEvaluator,
-                                             0};
+                                           nullptr,
+                                           0,
+                                           1,
+                                           0,
+                                           TALOS_RT_OBSERVER_NO_BYTECODE,
+                                           collapsedAliasObserverEvaluator,
+                                           0};
   talos_rt_execution_descriptor_v1 execution{};
   execution.version = TALOS_RT_VERSION;
   execution.state_bit_count = 9;
@@ -11930,7 +11838,7 @@ TEST(Scheduler, DominatingNetDelayPublishesEveryCollapsedAlias) {
   record.clause = {0, TALOS_RT_OBSERVER_CONDITION_NONE,
                    TALOS_RT_WAIT_EDGE_NEGEDGE, 0};
   ASSERT_TRUE(talos_rt_validate_computed_wait_record(&execution, &record.wait,
-                                                       sizeof(record)));
+                                                     sizeof(record)));
   talos_rt_process_descriptor_v1 descriptor{};
   descriptor.execution = &execution;
   talos_rt_process_instance_v1 instance{};
@@ -11954,8 +11862,8 @@ TEST(Scheduler, DominatingNetDelayPublishesEveryCollapsedAlias) {
   context->stateValue[0] = (uint64_t{1} << 8) | 3;
   context->stateUnknown[0] = 3;
   bool changed = false;
-  ASSERT_TRUE(talos::designbytecode::resolveDrivenNets(image, context, 8, 9,
-                                                         changed));
+  ASSERT_TRUE(
+      talos::designbytecode::resolveDrivenNets(image, context, 8, 9, changed));
   EXPECT_FALSE(changed);
   ASSERT_EQ(context->scheduledNBAs.size(), 2u);
   EXPECT_EQ(context->scheduledNBAs[0].dueTime, 7u);
@@ -12028,8 +11936,8 @@ TEST(Scheduler, BitwiseDominatingNetDelaysPreserveImmediateVectorBits) {
   context->stateValue[0] = (uint64_t{3} << 8) | 3;
   context->stateUnknown[0] = 3;
   bool changed = false;
-  ASSERT_TRUE(talos::designbytecode::resolveDrivenNets(image, context, 8, 10,
-                                                         changed));
+  ASSERT_TRUE(
+      talos::designbytecode::resolveDrivenNets(image, context, 8, 10, changed));
   EXPECT_TRUE(changed);
   EXPECT_EQ(context->stateValue[0] & 3, 3u);
   EXPECT_EQ(context->stateUnknown[0] & 3, 1u);
@@ -12339,8 +12247,7 @@ TEST(Scheduler, BytecodeInertialDriversClipAndSuppressDynamicViews) {
   frame.function.layoutCount = 8;
   frame.function.scratchSize = frameData.size();
   frame.data = frameData.data();
-  ASSERT_TRUE(
-      talos::designbytecode::validIntrinsic(image, frame.function, 0));
+  ASSERT_TRUE(talos::designbytecode::validIntrinsic(image, frame.function, 0));
   uint64_t value = 0b1101;
   std::memcpy(frameData.data(), &value, sizeof(value));
   uint32_t kind = TALOS_RT_DESCRIPTOR_DRIVER;
@@ -12429,8 +12336,7 @@ TEST(Scheduler, BytecodeInertialStrengthPairsUseLogicalTransitionDelay) {
   for (uint32_t index = 5; index != 10; ++index)
     writeLayout(index, TALOS_RT_DBREG_BITS, 64, 112 + uint64_t{index - 5} * 8,
                 8);
-  write32(intrinsicOffset,
-          TALOS_RT_INTRINSIC_V1_INERTIAL_DRIVER_STRENGTH_PAIR);
+  write32(intrinsicOffset, TALOS_RT_INTRINSIC_V1_INERTIAL_DRIVER_STRENGTH_PAIR);
   write32(intrinsicOffset + 4, 10);
   write32(siteOffset + 8, 10);
   for (uint32_t index = 0; index != 10; ++index)
@@ -12447,10 +12353,8 @@ TEST(Scheduler, BytecodeInertialStrengthPairsUseLogicalTransitionDelay) {
   };
   writeDescriptor(0, talos::designbytecode::kNetStateDescriptor, 1, 0,
                   UINT64_MAX);
-  writeDescriptor(1, talos::designbytecode::kDriverStateDescriptor, 185, 1,
-                  0);
-  writeDescriptor(2, talos::designbytecode::kDriverStateDescriptor, 2953, 2,
-                  0);
+  writeDescriptor(1, talos::designbytecode::kDriverStateDescriptor, 185, 1, 0);
+  writeDescriptor(2, talos::designbytecode::kDriverStateDescriptor, 2953, 2, 0);
 
   talos::designbytecode::Image image{};
   image.data = bytes.data();
@@ -12472,8 +12376,7 @@ TEST(Scheduler, BytecodeInertialStrengthPairsUseLogicalTransitionDelay) {
   frame.function.layoutCount = 10;
   frame.function.scratchSize = frameData.size();
   frame.data = frameData.data();
-  ASSERT_TRUE(
-      talos::designbytecode::validIntrinsic(image, frame.function, 0));
+  ASSERT_TRUE(talos::designbytecode::validIntrinsic(image, frame.function, 0));
   // Low=z, high=x is an H strength range. Its logical transition is x, so
   // §28.6 requires min(rise, fall, turn-off), despite the z-looking low bank.
   uint64_t one = 1;
@@ -12581,7 +12484,7 @@ TEST(Scheduler, MaximumRepresentableDueTimeIsNotDropped) {
   uint8_t plane = 0;
   uint8_t value = 0xa5;
   ASSERT_EQ(talos_rt_v1_scheduler_nba(context, &plane, nullptr, 8, 0, 8,
-                                        UINT64_MAX, &value, nullptr),
+                                      UINT64_MAX, &value, nullptr),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   EXPECT_EQ(plane, value);
@@ -12676,8 +12579,8 @@ TEST(RuntimeInternals,
               TALOS_RT_OK);
     EXPECT_DOUBLE_EQ(loadedReal, real);
     uint8_t loadedClock = 0;
-    ASSERT_EQ(talos_rt_v1_native_state_load_plane(
-                  context, value.data(), 128, clock, 1, 0, 0, &loadedClock),
+    ASSERT_EQ(talos_rt_v1_native_state_load_plane(context, value.data(), 128,
+                                                  clock, 1, 0, 0, &loadedClock),
               TALOS_RT_OK);
     EXPECT_EQ(loadedClock, 1);
     EXPECT_EQ(value[0], 0);
@@ -12700,8 +12603,8 @@ TEST(RuntimeInternals,
               TALOS_RT_OK);
     EXPECT_FLOAT_EQ(loadedShortReal, shortReal);
     loadedClock = 0;
-    EXPECT_EQ(talos_rt_v1_native_state_load_plane(
-                  context, value.data(), 128, clock, 1, 0, 0, &loadedClock),
+    EXPECT_EQ(talos_rt_v1_native_state_load_plane(context, value.data(), 128,
+                                                  clock, 1, 0, 0, &loadedClock),
               TALOS_RT_OK);
     EXPECT_EQ(loadedClock, 1);
     context->activeNativeProcess = nullptr;
@@ -12737,11 +12640,11 @@ TEST(RuntimeInternals,
   EXPECT_EQ(context->stateUnknown[0], unknown);
   uint8_t read = 0;
   ASSERT_EQ(talos_rt_v1_native_state_load_plane(context, &nativeValue, 8,
-                                                  handle, 8, 0, 0, &read),
+                                                handle, 8, 0, 0, &read),
             TALOS_RT_OK);
   EXPECT_EQ(read, value);
   ASSERT_EQ(talos_rt_v1_native_state_load_plane(context, &nativeUnknown, 8,
-                                                  handle, 8, 1, 0, &read),
+                                                handle, 8, 1, 0, &read),
             TALOS_RT_OK);
   EXPECT_EQ(read, unknown);
   context->observerForcesCanonicalPlane = false;
@@ -12797,8 +12700,8 @@ TEST(RuntimeInternals, PackedCanonicalReadMergesOnlyOverriddenBits) {
             }
             ASSERT_EQ(talos_rt_v1_native_state_load_plane(
                           context, global.data(), 256,
-                          talos_rt_v1_native_handle_offset(root, offset),
-                          width, plane, fallback, actual.data()),
+                          talos_rt_v1_native_handle_offset(root, offset), width,
+                          plane, fallback, actual.data()),
                       TALOS_RT_OK);
             EXPECT_EQ(actual, expected);
           }
@@ -12824,9 +12727,9 @@ TEST(RuntimeInternals, WidePlaneStoresPreserveBoundsMasksAndContinuousValues) {
           talos_rt_context *context = nullptr;
           ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
                     TALOS_RT_OK);
-          ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 53,
-                                                               130),
-                    TALOS_RT_OK);
+          ASSERT_EQ(
+              talos_rt_v1_native_state_register_static(context, 1, 53, 130),
+              TALOS_RT_OK);
           context->observerForcesCanonicalPlane = canonical;
           if (forced)
             context->forceMask.assign(3, UINT64_C(0x2222222222222222));
@@ -12870,8 +12773,8 @@ TEST(RuntimeInternals, WidePlaneStoresPreserveBoundsMasksAndContinuousValues) {
               bool next = (payload[bit / 8] >> (bit % 8)) & 1;
               uint8_t byteMask = uint8_t{1} << (absolute % 8);
               expected[absolute / 8] = next
-                  ? expected[absolute / 8] | byteMask
-                  : expected[absolute / 8] & ~byteMask;
+                                           ? expected[absolute / 8] | byteMask
+                                           : expected[absolute / 8] & ~byteMask;
               if (canonical) {
                 auto &&limb = expectedCanonical[absolute / 64];
                 limb = next ? limb | mask : limb & ~mask;
@@ -12880,12 +12783,13 @@ TEST(RuntimeInternals, WidePlaneStoresPreserveBoundsMasksAndContinuousValues) {
             uint64_t handle = talos_rt_v1_native_handle_offset(
                 talos_rt_v1_native_state_static_handle(1), offset);
             auto store = continuous
-                ? talos_rt_v1_native_state_store_continuous_plane
-                : talos_rt_v1_native_state_store_plane;
+                             ? talos_rt_v1_native_state_store_continuous_plane
+                             : talos_rt_v1_native_state_store_plane;
             bool expectChange = global != expected;
             uint8_t changed = 0;
             ASSERT_EQ(store(context, global.data(), 183, handle, 130, plane,
-                            payload.data(), &changed), TALOS_RT_OK);
+                            payload.data(), &changed),
+                      TALOS_RT_OK);
             EXPECT_EQ(global, expected);
             EXPECT_EQ(storage, expectedCanonical);
             EXPECT_EQ(changed, expectChange);
@@ -12898,14 +12802,15 @@ TEST(RuntimeInternals, WidePlaneStoresPreserveBoundsMasksAndContinuousValues) {
             lost.fill(false);
             recovered.fill(false);
             ASSERT_EQ(store(context, global.data(), 183, handle, 130, plane,
-                            payload.data(), &changed), TALOS_RT_OK);
+                            payload.data(), &changed),
+                      TALOS_RT_OK);
             EXPECT_EQ(changed, 0);
             EXPECT_EQ(lost, (std::array<bool, 183>{}));
             EXPECT_EQ(recovered, (std::array<bool, 183>{}));
             context->nativeSchedulePlan = nullptr;
             if (canonical && continuous) {
-              const auto &retained = plane ? context->continuousUnknown
-                                           : context->continuousValue;
+              const auto &retained =
+                  plane ? context->continuousUnknown : context->continuousValue;
               for (uint64_t bit = 0; bit < 130; ++bit) {
                 int64_t local = offset + bit;
                 if (local < 0 || local >= 130)
@@ -12914,7 +12819,8 @@ TEST(RuntimeInternals, WidePlaneStoresPreserveBoundsMasksAndContinuousValues) {
                 EXPECT_EQ((retained[absolute / 64] >> (absolute % 64)) & 1,
                           (payload[bit / 8] >> (bit % 8)) & 1);
                 EXPECT_NE(context->continuousMask[absolute / 64] &
-                              (uint64_t{1} << (absolute % 64)), 0u);
+                              (uint64_t{1} << (absolute % 64)),
+                          0u);
               }
             }
           }
@@ -12925,30 +12831,31 @@ TEST(RuntimeInternals, WidePlaneStoresPreserveBoundsMasksAndContinuousValues) {
 TEST(Scheduler, WideNativeTransitionsFollowFourStateEdgeTable) {
   // IEEE 1800-2023 9.4.2, Table 9-2. In our planes the state encodings are
   // 0, 1, X, Z. Test subscribers in both full words and the partial tail.
-  constexpr bool posedge[4][4] = {
-      {false, true, true, true}, {false, false, false, false},
-      {false, true, false, false}, {false, true, false, false}};
-  constexpr bool negedge[4][4] = {
-      {false, false, false, false}, {true, false, true, true},
-      {true, false, false, false}, {true, false, false, false}};
+  constexpr bool posedge[4][4] = {{false, true, true, true},
+                                  {false, false, false, false},
+                                  {false, true, false, false},
+                                  {false, true, false, false}};
+  constexpr bool negedge[4][4] = {{false, false, false, false},
+                                  {true, false, true, true},
+                                  {true, false, false, false},
+                                  {true, false, false, false}};
   for (unsigned oldState = 0; oldState < 4; ++oldState)
     for (unsigned newState = 0; newState < 4; ++newState)
-      for (uint32_t edge : {TALOS_RT_WAIT_EDGE_CHANGE,
-                            TALOS_RT_WAIT_EDGE_POSEDGE,
-                            TALOS_RT_WAIT_EDGE_NEGEDGE})
+      for (uint32_t edge :
+           {TALOS_RT_WAIT_EDGE_CHANGE, TALOS_RT_WAIT_EDGE_POSEDGE,
+            TALOS_RT_WAIT_EDGE_NEGEDGE})
         for (unsigned watchedBit : {0, 64, 129}) {
-          SCOPED_TRACE(testing::Message()
-                       << oldState << "->" << newState << ":" << edge
-                       << ":" << watchedBit);
+          SCOPED_TRACE(testing::Message() << oldState << "->" << newState << ":"
+                                          << edge << ":" << watchedBit);
           talos_rt_execution_descriptor_v1 execution{};
           execution.version = TALOS_RT_VERSION;
           execution.state_bit_count = 183;
           talos_rt_context *context = nullptr;
           ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
                     TALOS_RT_OK);
-          ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 53,
-                                                               130),
-                    TALOS_RT_OK);
+          ASSERT_EQ(
+              talos_rt_v1_native_state_register_static(context, 1, 53, 130),
+              TALOS_RT_OK);
           SchedulerFixture fixture(77);
           fixture.descriptor.execution = &execution;
           uint64_t root = talos_rt_v1_native_state_static_handle(1);
@@ -12967,9 +12874,9 @@ TEST(Scheduler, WideNativeTransitionsFollowFourStateEdgeTable) {
           oldU.fill(oldState & 2 ? 0xff : 0);
           newV.fill(newState & 1 ? 0xff : 0);
           newU.fill(newState & 2 ? 0xff : 0);
-          talos_rt_v1_scheduler_signal_transition(
-              context, root, 130, oldV.data(), oldU.data(), newV.data(),
-              newU.data());
+          talos_rt_v1_scheduler_signal_transition(context, root, 130,
+                                                  oldV.data(), oldU.data(),
+                                                  newV.data(), newU.data());
           ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
           bool expected = edge == TALOS_RT_WAIT_EDGE_CHANGE
                               ? oldState != newState
@@ -12990,27 +12897,27 @@ TEST(Scheduler, AutomaticStateAllocationsAreIsolatedAndBoundsChecked) {
   uint64_t first = UINT64_MAX;
   uint64_t second = UINT64_MAX;
   ASSERT_EQ(talos_rt_v1_native_state_alloc(context, 8, &firstInitial, nullptr,
-                                             &first),
+                                           &first),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_native_state_alloc(context, 8, &secondInitial,
-                                             nullptr, &second),
+  ASSERT_EQ(talos_rt_v1_native_state_alloc(context, 8, &secondInitial, nullptr,
+                                           &second),
             TALOS_RT_OK);
   ASSERT_NE(first, second);
   uint8_t replacement = 0xfe;
   uint8_t changed = 0;
-  ASSERT_EQ(talos_rt_v1_native_state_store_plane(
-                context, &global, 8, first, 8, 0, &replacement, &changed),
+  ASSERT_EQ(talos_rt_v1_native_state_store_plane(context, &global, 8, first, 8,
+                                                 0, &replacement, &changed),
             TALOS_RT_OK);
   EXPECT_EQ(changed, 1u);
   uint8_t loaded = 0;
-  ASSERT_EQ(talos_rt_v1_native_state_load_plane(context, &global, 8, second,
-                                                  8, 0, 0, &loaded),
+  ASSERT_EQ(talos_rt_v1_native_state_load_plane(context, &global, 8, second, 8,
+                                                0, 0, &loaded),
             TALOS_RT_OK);
   EXPECT_EQ(loaded, secondInitial);
   loaded = 0;
   uint64_t tail = talos_rt_v1_native_handle_offset(first, 6);
-  ASSERT_EQ(talos_rt_v1_native_state_load_plane(context, &global, 8, tail, 4,
-                                                  0, 1, &loaded),
+  ASSERT_EQ(talos_rt_v1_native_state_load_plane(context, &global, 8, tail, 4, 0,
+                                                1, &loaded),
             TALOS_RT_OK);
   EXPECT_EQ(loaded & 0xfu, 0xfu);
   EXPECT_EQ(global, 0x5a);
@@ -13024,7 +12931,7 @@ TEST(Scheduler, AutomaticEventBookkeepingFollowsObjectLifetime) {
 
   uint64_t immediateObject = UINT64_MAX;
   ASSERT_EQ(talos_rt_v1_native_state_alloc(context, 8, &initial, nullptr,
-                                             &immediateObject),
+                                           &immediateObject),
             TALOS_RT_OK);
   uint64_t immediateEvent =
       talos_rt_v1_native_handle_offset(immediateObject, 3);
@@ -13037,7 +12944,7 @@ TEST(Scheduler, AutomaticEventBookkeepingFollowsObjectLifetime) {
 
   uint64_t delayedObject = UINT64_MAX;
   ASSERT_EQ(talos_rt_v1_native_state_alloc(context, 8, &initial, nullptr,
-                                             &delayedObject),
+                                           &delayedObject),
             TALOS_RT_OK);
   uint64_t delayedEvent = talos_rt_v1_native_handle_offset(delayedObject, 5);
   uint64_t secondDelayedEvent =
@@ -13057,7 +12964,7 @@ TEST(Scheduler, AutomaticEventBookkeepingFollowsObjectLifetime) {
 
   uint64_t waitedObject = UINT64_MAX;
   ASSERT_EQ(talos_rt_v1_native_state_alloc(context, 8, &initial, nullptr,
-                                             &waitedObject),
+                                           &waitedObject),
             TALOS_RT_OK);
   uint64_t waitedEvent = talos_rt_v1_native_handle_offset(waitedObject, 7);
   ASSERT_NE(waitedEvent, UINT64_MAX);
@@ -13115,8 +13022,8 @@ TEST(Scheduler, DirectExecutionOwnsAndReleasesAutomaticState) {
   talos_rt_process_instance_v1 *instance = makeSchedulerInstance(fixture);
   ASSERT_NE(instance, nullptr);
   talos_rt_fragment_action_v1 action{};
-  ASSERT_EQ(talos_rt_v1_process_instance_execute(
-                instance, context, TALOS_RT_TIER_NATIVE, &action),
+  ASSERT_EQ(talos_rt_v1_process_instance_execute(instance, context,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_OK);
   EXPECT_EQ(action.kind, TALOS_RT_FRAGMENT_TERMINATE);
   ASSERT_NE(processAutomaticHandle, UINT64_MAX);
@@ -13167,21 +13074,21 @@ TEST(Scheduler, DelayedNBARetainsItsAutomaticDestination) {
   talos_rt_process_instance_v1 *instance = makeSchedulerInstance(fixture);
   ASSERT_NE(instance, nullptr);
   talos_rt_fragment_action_v1 action{};
-  ASSERT_EQ(talos_rt_v1_process_instance_execute(
-                instance, context, TALOS_RT_TIER_NATIVE, &action),
+  ASSERT_EQ(talos_rt_v1_process_instance_execute(instance, context,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_OK);
   ASSERT_NE(nbaAutomaticHandle, UINT64_MAX);
 
   uint8_t loaded = 0;
   ASSERT_EQ(talos_rt_v1_native_state_load_plane(context, &nbaDummyPlane, 8,
-                                                  nbaAutomaticHandle, 8, 0, 0,
-                                                  &loaded),
+                                                nbaAutomaticHandle, 8, 0, 0,
+                                                &loaded),
             TALOS_RT_OK);
   EXPECT_EQ(loaded, 0u);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   EXPECT_EQ(talos_rt_v1_native_state_load_plane(context, &nbaDummyPlane, 8,
-                                                  nbaAutomaticHandle, 8, 0, 0,
-                                                  &loaded),
+                                                nbaAutomaticHandle, 8, 0, 0,
+                                                &loaded),
             TALOS_RT_INVALID_HANDLE);
   EXPECT_EQ(talos_rt_v1_process_instance_destroy(instance), TALOS_RT_OK);
   talos_rt_v1_context_destroy(context);
@@ -13211,17 +13118,17 @@ TEST(Scheduler, PartialOutOfBoundsHandlesPreserveInRangeBits) {
   EXPECT_EQ(plane, 0xe7);
   EXPECT_EQ(changed, 1u);
   uint8_t loaded = 0;
-  ASSERT_EQ(talos_rt_v1_native_state_load_plane(context, &plane, 8, lower, 2,
-                                                  0, 0, &loaded),
+  ASSERT_EQ(talos_rt_v1_native_state_load_plane(context, &plane, 8, lower, 2, 0,
+                                                0, &loaded),
             TALOS_RT_OK);
   EXPECT_EQ(loaded & 0x3, 0x2);
 
   plane = 0xc3;
-  ASSERT_EQ(talos_rt_v1_scheduler_nba(context, &plane, nullptr, 8, lower, 2,
-                                        0, &lowerReplacement, nullptr),
+  ASSERT_EQ(talos_rt_v1_scheduler_nba(context, &plane, nullptr, 8, lower, 2, 0,
+                                      &lowerReplacement, nullptr),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_scheduler_nba(context, &plane, nullptr, 8, upper, 2,
-                                        0, &upperReplacement, nullptr),
+  ASSERT_EQ(talos_rt_v1_scheduler_nba(context, &plane, nullptr, 8, upper, 2, 0,
+                                      &upperReplacement, nullptr),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   EXPECT_EQ(plane, 0xe7);
@@ -13250,14 +13157,14 @@ TEST(Scheduler, OutOfBoundsTransitionsDoNotWakeAdjacentStaticObjects) {
       talos_rt_v1_native_state_static_handle(1), 3);
   uint8_t oldValue = 0;
   uint8_t newValue = 2;
-  talos_rt_v1_scheduler_signal_transition(context, upper, 2, &oldValue,
-                                            nullptr, &newValue, nullptr);
+  talos_rt_v1_scheduler_signal_transition(context, upper, 2, &oldValue, nullptr,
+                                          &newValue, nullptr);
   EXPECT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   EXPECT_EQ(schedulerResumeCount, 0u);
 
   talos_rt_v1_scheduler_signal(context,
-                                 talos_rt_v1_native_state_static_handle(2), 1,
-                                 TALOS_RT_SIGNAL_CHANGE);
+                               talos_rt_v1_native_state_static_handle(2), 1,
+                               TALOS_RT_SIGNAL_CHANGE);
   EXPECT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   EXPECT_EQ(schedulerResumeCount, 1u);
   talos_rt_v1_context_destroy(context);
@@ -13275,17 +13182,17 @@ TEST(ProcessSpawn, BatchPreservesCapturesOrderRanksAndFailureOwnership) {
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
   uint32_t continuation = 1, rank = 17;
   talos_rt_process_spawn_plan_v1 plan{&fixture.descriptor,
-                                        8,
-                                        &continuation,
-                                        &rank,
-                                        nullptr,
-                                        0,
-                                        TALOS_RT_SCHEDULE_STARTUP,
-                                        UINT32_MAX,
-                                        9,
-                                        1,
-                                        0,
-                                        0};
+                                      8,
+                                      &continuation,
+                                      &rank,
+                                      nullptr,
+                                      0,
+                                      TALOS_RT_SCHEDULE_STARTUP,
+                                      UINT32_MAX,
+                                      9,
+                                      1,
+                                      0,
+                                      0};
   uint64_t first = 0x123456789abcdef0, second = 0xfedcba9876543210;
   auto invalid = plan;
   invalid.schedule_flags = UINT32_MAX;
@@ -13332,7 +13239,7 @@ TEST(ProcessSpawn, RejectsInvalidCaptureAndDescriptorBeforeInsertion) {
     if (failure == 2)
       plan.options = UINT32_MAX;
     EXPECT_EQ(talos_rt_v1_process_spawn(context, &plan,
-                                          failure == 3 ? nullptr : &capture),
+                                        failure == 3 ? nullptr : &capture),
               0u);
     EXPECT_EQ(context->schedulerStatus, TALOS_RT_INVALID_ARGUMENT);
     EXPECT_TRUE(context->scheduledProcesses.empty());
@@ -13348,17 +13255,17 @@ TEST(ProcessSpawn, CreationAndAOTInsertionFailuresDoNotTransferOwnership) {
     if (invalidDescriptor)
       fixture.layout.checksum ^= 1;
     talos_rt_process_spawn_plan_v1 plan{&fixture.descriptor,
-                                          0,
-                                          nullptr,
-                                          nullptr,
-                                          nullptr,
-                                          0,
-                                          0,
-                                          invalidDescriptor ? UINT32_MAX : 0,
-                                          0,
-                                          0,
-                                          0,
-                                          0};
+                                        0,
+                                        nullptr,
+                                        nullptr,
+                                        nullptr,
+                                        0,
+                                        0,
+                                        invalidDescriptor ? UINT32_MAX : 0,
+                                        0,
+                                        0,
+                                        0,
+                                        0};
     EXPECT_EQ(talos_rt_v1_process_spawn(context, &plan, nullptr), 0u);
     EXPECT_NE(context->schedulerStatus, TALOS_RT_OK);
     EXPECT_TRUE(context->scheduledProcesses.empty());
@@ -13372,17 +13279,17 @@ TEST(ProcessSpawn, PrimingFailureLeavesInstanceOwnedByScheduler) {
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
   nativeExecuteStatus = TALOS_RT_OUT_OF_RESOURCES;
   talos_rt_process_spawn_plan_v1 plan{&fixture.descriptor,
-                                        0,
-                                        nullptr,
-                                        nullptr,
-                                        nullptr,
-                                        0,
-                                        TALOS_RT_SCHEDULE_DETACHED_CONTROLS,
-                                        UINT32_MAX,
-                                        0,
-                                        0,
-                                        0,
-                                        TALOS_RT_SPAWN_PRIME};
+                                      0,
+                                      nullptr,
+                                      nullptr,
+                                      nullptr,
+                                      0,
+                                      TALOS_RT_SCHEDULE_DETACHED_CONTROLS,
+                                      UINT32_MAX,
+                                      0,
+                                      0,
+                                      0,
+                                      TALOS_RT_SPAWN_PRIME};
   EXPECT_EQ(talos_rt_v1_process_spawn(context, &plan, nullptr), 0u);
   EXPECT_EQ(context->schedulerStatus, TALOS_RT_OUT_OF_RESOURCES);
   ASSERT_EQ(context->scheduledProcesses.size(), 1u);
@@ -13402,8 +13309,7 @@ TEST(ProcessSpawn, ReturnsTaggedLogicalProcessIdentity) {
   uint64_t token = talos_rt_v1_process_spawn(context, &plan, nullptr);
   EXPECT_EQ(token, TALOS_RT_LOGICAL_PROCESS_NATIVE_TAG | 1);
   uint32_t state = UINT32_MAX;
-  EXPECT_EQ(talos_rt_v1_process_status(context, token, &state),
-            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_process_status(context, token, &state), TALOS_RT_OK);
   EXPECT_EQ(state, TALOS_RT_PROCESS_RUNNING);
   talos_rt_v1_context_destroy(context);
 }
@@ -13417,8 +13323,8 @@ TEST(ProcessInstance, InitializesOutputRecordsOnFailure) {
   EXPECT_EQ(frameSize, 0u);
 
   talos_rt_fragment_action_v1 action{99, 99, 99, 99, 99, 99};
-  EXPECT_EQ(talos_rt_v1_process_instance_execute(
-                nullptr, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  EXPECT_EQ(talos_rt_v1_process_instance_execute(nullptr, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_INVALID_ARGUMENT);
   EXPECT_EQ(action.kind, TALOS_RT_FRAGMENT_TERMINATE);
   EXPECT_EQ(action.suspend_kind, TALOS_RT_SUSPEND_NONE);
@@ -13432,9 +13338,8 @@ TEST(ProcessInstance, DefersDestroyWhileObserverPinsActivation) {
   Fixture fixture;
   nativeDestroyCount = 0;
   talos_rt_process_instance_v1 *instance = nullptr;
-  ASSERT_EQ(
-      talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+            TALOS_RT_OK);
   instance->native_handle = instance;
   instance->observer_pin_count = 1;
 
@@ -13462,9 +13367,8 @@ TEST(ProcessInstance, NativeBytecodeNativeUsesStableCanonicalFrame) {
   destroyDuringExecute = TALOS_RT_OK;
   observedContext = nullptr;
   talos_rt_process_instance_v1 *instance = nullptr;
-  ASSERT_EQ(
-      talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+            TALOS_RT_OK);
   ASSERT_NE(instance, nullptr);
   void *frame = nullptr;
   uint64_t frameSize = 0;
@@ -13475,8 +13379,8 @@ TEST(ProcessInstance, NativeBytecodeNativeUsesStableCanonicalFrame) {
   talos_rt_fragment_action_v1 action{};
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_process_instance_execute(
-                instance, context, TALOS_RT_TIER_NATIVE, &action),
+  ASSERT_EQ(talos_rt_v1_process_instance_execute(instance, context,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_OK);
   EXPECT_EQ(action.kind, TALOS_RT_FRAGMENT_SUSPEND);
   EXPECT_EQ(instance->continuation, 1u);
@@ -13495,13 +13399,13 @@ TEST(ProcessInstance, NativeBytecodeNativeUsesStableCanonicalFrame) {
       talos_rt_v1_process_instance_frame(instance, &sameFrame, &frameSize),
       TALOS_RT_OK);
   EXPECT_EQ(sameFrame, frame);
-  ASSERT_EQ(talos_rt_v1_process_instance_execute(
-                instance, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  ASSERT_EQ(talos_rt_v1_process_instance_execute(instance, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_OK);
   EXPECT_EQ(action.kind, TALOS_RT_FRAGMENT_TERMINATE);
   EXPECT_EQ(instance->native_handle, instance);
-  EXPECT_EQ(talos_rt_v1_process_instance_execute(
-                instance, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  EXPECT_EQ(talos_rt_v1_process_instance_execute(instance, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_INVALID_LIFECYCLE);
   EXPECT_EQ(talos_rt_v1_process_instance_destroy(instance), TALOS_RT_OK);
   EXPECT_EQ(nativeDestroyCount, 2);
@@ -13515,9 +13419,8 @@ TEST(ProcessInstance, BytecodeFirstCanReconstructNativeAtContinuation) {
   emitInvalidNativeTerminate = false;
   emitExistingNativeWait = false;
   talos_rt_process_instance_v1 *instance = nullptr;
-  ASSERT_EQ(
-      talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+            TALOS_RT_OK);
   void *frame = nullptr;
   uint64_t frameSize = 0;
   ASSERT_EQ(talos_rt_v1_process_instance_frame(instance, &frame, &frameSize),
@@ -13530,8 +13433,8 @@ TEST(ProcessInstance, BytecodeFirstCanReconstructNativeAtContinuation) {
   EXPECT_EQ(action.kind, TALOS_RT_FRAGMENT_SUSPEND);
   EXPECT_EQ(action.flags, TALOS_RT_ACTION_FRAME_WAIT_RECORD);
   EXPECT_EQ(action.auxiliary, sizeof(talos_rt_wait_record_v1));
-  ASSERT_EQ(talos_rt_v1_process_instance_execute(
-                instance, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  ASSERT_EQ(talos_rt_v1_process_instance_execute(instance, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_OK);
   EXPECT_EQ(action.kind, TALOS_RT_FRAGMENT_TERMINATE);
   EXPECT_EQ(instance->native_handle, instance);
@@ -13548,48 +13451,41 @@ TEST(ProcessInstance, RejectsLayoutsTiersContinuationsAndFrameRecords) {
   talos_rt_process_instance_v1 *instance = nullptr;
   uint64_t savedChecksum = fixture.layout.checksum;
   fixture.layout.checksum ^= 1;
-  EXPECT_EQ(
-      talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
-      TALOS_RT_LAYOUT_MISMATCH);
+  EXPECT_EQ(talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+            TALOS_RT_LAYOUT_MISMATCH);
   fixture.layout.checksum = savedChecksum;
   fixture.layout.frame_size = 41;
   fixture.layout.checksum = checksum(fixture.layout);
-  EXPECT_EQ(
-      talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
-      TALOS_RT_LAYOUT_MISMATCH);
+  EXPECT_EQ(talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+            TALOS_RT_LAYOUT_MISMATCH);
   fixture.layout.frame_size = 48;
   fixture.fields[1].size = 33;
   fixture.layout.checksum = checksum(fixture.layout);
-  EXPECT_EQ(
-      talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
-      TALOS_RT_LAYOUT_MISMATCH);
+  EXPECT_EQ(talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+            TALOS_RT_LAYOUT_MISMATCH);
   fixture.layout.frame_size = 40;
   fixture.fields[1].size = 40;
   fixture.layout.checksum = checksum(fixture.layout);
-  EXPECT_EQ(
-      talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
-      TALOS_RT_LAYOUT_MISMATCH);
+  EXPECT_EQ(talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+            TALOS_RT_LAYOUT_MISMATCH);
   fixture.fields[1].size = sizeof(talos_rt_wait_record_v1);
   fixture.fields[0].flags = TALOS_RT_FRAME_FOUR_STATE_UNKNOWN;
   fixture.layout.checksum = checksum(fixture.layout);
-  EXPECT_EQ(
-      talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
-      TALOS_RT_LAYOUT_MISMATCH);
+  EXPECT_EQ(talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+            TALOS_RT_LAYOUT_MISMATCH);
   fixture.fields[0].flags = TALOS_RT_FRAME_FIELD_FLAGS_NONE;
   fixture.layout.checksum = checksum(fixture.layout);
   uint8_t savedOpcode = fixture.code[0];
   fixture.code[0] = UINT8_MAX;
-  EXPECT_EQ(
-      talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
-      TALOS_RT_INVALID_BYTECODE);
+  EXPECT_EQ(talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+            TALOS_RT_INVALID_BYTECODE);
   fixture.code[0] = savedOpcode;
-  ASSERT_EQ(
-      talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+            TALOS_RT_OK);
   talos_rt_fragment_action_v1 action{};
   instance->continuation = 99;
-  EXPECT_EQ(talos_rt_v1_process_instance_execute(
-                instance, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  EXPECT_EQ(talos_rt_v1_process_instance_execute(instance, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_INVALID_CONTINUATION);
   instance->continuation = 0;
   fixture.descriptor.available_tiers = TALOS_RT_TIER_MASK_NATIVE;
@@ -13599,15 +13495,15 @@ TEST(ProcessInstance, RejectsLayoutsTiersContinuationsAndFrameRecords) {
   fixture.descriptor.available_tiers =
       TALOS_RT_TIER_MASK_NATIVE | TALOS_RT_TIER_MASK_BYTECODE;
   emitInvalidNativeWait = true;
-  EXPECT_EQ(talos_rt_v1_process_instance_execute(
-                instance, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  EXPECT_EQ(talos_rt_v1_process_instance_execute(instance, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_INVALID_FRAME);
   EXPECT_EQ(instance->lifecycle, TALOS_RT_PROCESS_SUSPENDED);
   emitInvalidNativeWait = false;
   emitInvalidNativeTerminate = true;
   instance->continuation = 1;
-  EXPECT_EQ(talos_rt_v1_process_instance_execute(
-                instance, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  EXPECT_EQ(talos_rt_v1_process_instance_execute(instance, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_INVALID_ARGUMENT);
   EXPECT_EQ(talos_rt_v1_process_instance_destroy(instance), TALOS_RT_OK);
   EXPECT_EQ(nativeDestroyCount, 2);
@@ -13622,12 +13518,11 @@ TEST(ProcessInstance, NativeFailureDestroysHandleBeforeRetry) {
   emitExistingNativeWait = false;
 
   talos_rt_process_instance_v1 *instance = nullptr;
-  ASSERT_EQ(
-      talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+            TALOS_RT_OK);
   talos_rt_fragment_action_v1 action{};
-  EXPECT_EQ(talos_rt_v1_process_instance_execute(
-                instance, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  EXPECT_EQ(talos_rt_v1_process_instance_execute(instance, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_IO_ERROR);
   EXPECT_EQ(instance->native_handle, nullptr);
   EXPECT_EQ(instance->continuation, 0u);
@@ -13635,8 +13530,8 @@ TEST(ProcessInstance, NativeFailureDestroysHandleBeforeRetry) {
   EXPECT_EQ(nativeDestroyCount, 1);
 
   nativeExecuteStatus = TALOS_RT_OK;
-  ASSERT_EQ(talos_rt_v1_process_instance_execute(
-                instance, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  ASSERT_EQ(talos_rt_v1_process_instance_execute(instance, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_OK);
   EXPECT_EQ(action.kind, TALOS_RT_FRAGMENT_SUSPEND);
   EXPECT_EQ(instance->continuation, 1u);
@@ -13653,12 +13548,11 @@ TEST(ProcessInstance, MissingBytecodeContinuationPreservesNativeHandle) {
   emitExistingNativeWait = false;
 
   talos_rt_process_instance_v1 *instance = nullptr;
-  ASSERT_EQ(
-      talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+            TALOS_RT_OK);
   talos_rt_fragment_action_v1 action{};
-  ASSERT_EQ(talos_rt_v1_process_instance_execute(
-                instance, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  ASSERT_EQ(talos_rt_v1_process_instance_execute(instance, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_OK);
   ASSERT_EQ(instance->continuation, 1u);
   void *nativeHandle = instance->native_handle;
@@ -13696,17 +13590,16 @@ TEST(ProcessInstance,
   emitExistingNativeWait = false;
 
   talos_rt_process_instance_v1 *instance = nullptr;
-  ASSERT_EQ(
-      talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+            TALOS_RT_OK);
   *static_cast<uint64_t *>(instance->frame) = UINT64_C(0x123456789abcdef0);
   talos_rt_fragment_action_v1 action{};
 
   // A generated/native activation suspends at continuation 1. Tier 3 resumes
   // that exact continuation in the shared canonical frame, then the supported
   // return continuation routes directly back to native execution.
-  ASSERT_EQ(talos_rt_v1_process_instance_execute(
-                instance, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  ASSERT_EQ(talos_rt_v1_process_instance_execute(instance, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_OK);
   ASSERT_EQ(action.kind, TALOS_RT_FRAGMENT_SUSPEND);
   ASSERT_EQ(instance->continuation, 1u);
@@ -13723,8 +13616,8 @@ TEST(ProcessInstance,
   EXPECT_EQ(*static_cast<uint64_t *>(instance->frame),
             UINT64_C(0x123456789abcdef0));
 
-  ASSERT_EQ(talos_rt_v1_process_instance_execute(
-                instance, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  ASSERT_EQ(talos_rt_v1_process_instance_execute(instance, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_OK);
   EXPECT_EQ(action.kind, TALOS_RT_FRAGMENT_TERMINATE);
   EXPECT_EQ(instance->tier, TALOS_RT_TIER_NATIVE);
@@ -13743,16 +13636,14 @@ TEST(ProcessInstance, RejectsOverlappingCanonicalFrameFields) {
   fixture.fields[1] = {
       TALOS_RT_FRAME_CAPTURE, TALOS_RT_FRAME_FIELD_FLAGS_NONE, 4, 8, 4, 0};
   fixture.layout.checksum = checksum(fixture.layout);
-  EXPECT_EQ(
-      talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
-      TALOS_RT_LAYOUT_MISMATCH);
+  EXPECT_EQ(talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+            TALOS_RT_LAYOUT_MISMATCH);
 
   fixture.fields[1] = {
       TALOS_RT_FRAME_WAIT, TALOS_RT_FRAME_FIELD_FLAGS_NONE, 0, 32, 8, 0};
   fixture.layout.checksum = checksum(fixture.layout);
-  EXPECT_EQ(
-      talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
-      TALOS_RT_LAYOUT_MISMATCH);
+  EXPECT_EQ(talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+            TALOS_RT_LAYOUT_MISMATCH);
 }
 
 TEST(ProcessInstance, RejectsMalformedWaitSemantics) {
@@ -13769,9 +13660,8 @@ TEST(ProcessInstance, RejectsMalformedWaitSemantics) {
   fixture.descriptor.bytecode = nullptr;
 
   talos_rt_process_instance_v1 *instance = nullptr;
-  ASSERT_EQ(
-      talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+            TALOS_RT_OK);
   auto *wait = reinterpret_cast<talos_rt_wait_record_v1 *>(
       static_cast<uint8_t *>(instance->frame) + 8);
   auto *entries = reinterpret_cast<talos_rt_wait_entry_v1 *>(wait + 1);
@@ -13846,18 +13736,18 @@ TEST(ProcessInstance, RejectsMalformedWaitSemantics) {
 
   std::memset(wait, 0, 64);
   *wait = {TALOS_RT_VERSION, TALOS_RT_SUSPEND_CHANGE, 0, 1, 0, 0};
-  entries[0] = {TALOS_RT_STABLE_HANDLE_AUTOMATIC_TAG,
-                TALOS_RT_WAIT_EDGE_CHANGE, 1};
-  EXPECT_EQ(talos_rt_v1_process_instance_execute(
-                instance, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  entries[0] = {TALOS_RT_STABLE_HANDLE_AUTOMATIC_TAG, TALOS_RT_WAIT_EDGE_CHANGE,
+                1};
+  EXPECT_EQ(talos_rt_v1_process_instance_execute(instance, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_INVALID_FRAME);
 
   std::memset(wait, 0, 64);
   *wait = {TALOS_RT_VERSION, TALOS_RT_SUSPEND_CHANGE, 0, 1, 0, 0};
   entries[0] = {17, TALOS_RT_WAIT_EDGE_CHANGE, 0};
   emitInvalidResumeRegion = true;
-  EXPECT_EQ(talos_rt_v1_process_instance_execute(
-                instance, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  EXPECT_EQ(talos_rt_v1_process_instance_execute(instance, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_INVALID_FRAME);
   emitInvalidResumeRegion = false;
 
@@ -13865,8 +13755,8 @@ TEST(ProcessInstance, RejectsMalformedWaitSemantics) {
   *wait = {TALOS_RT_VERSION, TALOS_RT_SUSPEND_EDGE, 0, 2, 0, 0};
   entries[0] = {UINT64_MAX, TALOS_RT_WAIT_EDGE_CHANGE, 1};
   entries[1] = {18, TALOS_RT_WAIT_EDGE_POSEDGE, 1};
-  EXPECT_EQ(talos_rt_v1_process_instance_execute(
-                instance, nullptr, TALOS_RT_TIER_NATIVE, &action),
+  EXPECT_EQ(talos_rt_v1_process_instance_execute(instance, nullptr,
+                                                 TALOS_RT_TIER_NATIVE, &action),
             TALOS_RT_OK);
 
   EXPECT_EQ(talos_rt_v1_process_instance_destroy(instance), TALOS_RT_OK);
@@ -13934,8 +13824,7 @@ TEST(SampledValues, CapturesCanonicalPreponedPlane) {
   talos_rt_v1_context_destroy(context);
 }
 
-talos_rt_status
-rootInitializerExecute(talos_rt_process_instance_v1 *instance) {
+talos_rt_status rootInitializerExecute(talos_rt_process_instance_v1 *instance) {
   if (!instance || !instance->context || !instance->action)
     return TALOS_RT_INVALID_ARGUMENT;
   instance->native_handle = instance;
@@ -13979,7 +13868,7 @@ TEST(SampledValues, TimeZeroSamplesDeclarationInitializers) {
   SchedulerFixture fixture(100);
   fixture.descriptor.native_execute = rootInitializerExecute;
   ASSERT_EQ(talos_rt_v1_scheduler_add(context, makeSchedulerInstance(fixture),
-                                        TALOS_RT_SCHEDULE_ROOT),
+                                      TALOS_RT_SCHEDULE_ROOT),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
   ASSERT_EQ(context->schedulerTime, 0u);
@@ -14010,11 +13899,9 @@ uint32_t covergroupClockEventRegion = UINT32_MAX;
 constexpr uint64_t covergroupClockEventPrimaryObserverID = 979;
 constexpr uint64_t covergroupClockEventOrObserverID = 980;
 
-talos_rt_status
-covergroupClockEventPrimaryEvaluator(talos_rt_context *context,
-                                     const uint64_t *captures,
-                                     uint32_t captureCount, uint64_t *value,
-                                     uint64_t *unknown, uint32_t limbCount) {
+talos_rt_status covergroupClockEventPrimaryEvaluator(
+    talos_rt_context *context, const uint64_t *captures, uint32_t captureCount,
+    uint64_t *value, uint64_t *unknown, uint32_t limbCount) {
   if (!context || !captures || captureCount != 1 || !value || !unknown ||
       limbCount != 1)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -14023,20 +13910,17 @@ covergroupClockEventPrimaryEvaluator(talos_rt_context *context,
   if (!talos_rt_read_clock_condition_publication_bit_unlocked(
           context, captures[0], 0, bitValue, bitUnknown) &&
       !talos_rt_read_signal_bit_unlocked(context, captures[0], 0, bitValue,
-                                           bitUnknown,
-                                           /*useSnapshot=*/false))
+                                         bitUnknown,
+                                         /*useSnapshot=*/false))
     return TALOS_RT_INVALID_HANDLE;
   value[0] = bitValue;
   unknown[0] = bitUnknown;
   return TALOS_RT_OK;
 }
 
-talos_rt_status covergroupClockEventOrEvaluator(talos_rt_context *context,
-                                                  const uint64_t *captures,
-                                                  uint32_t captureCount,
-                                                  uint64_t *value,
-                                                  uint64_t *unknown,
-                                                  uint32_t limbCount) {
+talos_rt_status covergroupClockEventOrEvaluator(
+    talos_rt_context *context, const uint64_t *captures, uint32_t captureCount,
+    uint64_t *value, uint64_t *unknown, uint32_t limbCount) {
   if (!context || !captures || captureCount != 1 || !value || !unknown ||
       limbCount != 1)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -14044,8 +13928,8 @@ talos_rt_status covergroupClockEventOrEvaluator(talos_rt_context *context,
     return talos_rt_read_clock_condition_publication_bit_unlocked(
                context, stableID, 0, bitValue, bitUnknown) ||
            talos_rt_read_signal_bit_unlocked(context, stableID, 0, bitValue,
-                                               bitUnknown,
-                                               /*useSnapshot=*/false);
+                                             bitUnknown,
+                                             /*useSnapshot=*/false);
   };
   bool lhs = false;
   bool lhsUnknown = false;
@@ -14089,23 +13973,22 @@ makeCovergroupClockEventPlan(const std::vector<uint64_t> &primaries,
     auto *storage = reinterpret_cast<uint8_t *>(bytes.data());
     std::memcpy(storage + offset, &record, sizeof(record));
   };
-  talos_rt_computed_wait_record_v1 header{
-      TALOS_RT_VERSION,
-      TALOS_RT_SUSPEND_OBSERVER,
-      TALOS_RT_COMPUTED_WAIT_INTERLEAVED,
-      clauseCount,
-      observerCount,
-      captureCount,
-      dependencyCount,
-      clauseCount,
-      observersOffset,
-      capturesOffset,
-      dependenciesOffset,
-      clausesOffset,
-      previousOffset,
-      0,
-      totalSize,
-      0};
+  talos_rt_computed_wait_record_v1 header{TALOS_RT_VERSION,
+                                          TALOS_RT_SUSPEND_OBSERVER,
+                                          TALOS_RT_COMPUTED_WAIT_INTERLEAVED,
+                                          clauseCount,
+                                          observerCount,
+                                          captureCount,
+                                          dependencyCount,
+                                          clauseCount,
+                                          observersOffset,
+                                          capturesOffset,
+                                          dependenciesOffset,
+                                          clausesOffset,
+                                          previousOffset,
+                                          0,
+                                          totalSize,
+                                          0};
   write(0, header);
   std::vector<uint64_t> handles(primaries);
   for (uint64_t condition : conditions)
@@ -14137,24 +14020,20 @@ makeCovergroupClockEventPlan(const std::vector<uint64_t> &primaries,
   }
   uint32_t conditionIndex = 0;
   for (uint32_t index = 0; index != clauseCount; ++index) {
-    talos_rt_computed_clause_v1 clause{
-        index,
-        conditions[index] == UINT64_MAX ? TALOS_RT_OBSERVER_CONDITION_NONE
-                                        : clauseCount + conditionIndex++,
-        edges[index], 0};
-    write(clausesOffset +
-              uint64_t{index} * sizeof(talos_rt_computed_clause_v1),
+    talos_rt_computed_clause_v1 clause{index,
+                                       conditions[index] == UINT64_MAX
+                                           ? TALOS_RT_OBSERVER_CONDITION_NONE
+                                           : clauseCount + conditionIndex++,
+                                       edges[index], 0};
+    write(clausesOffset + uint64_t{index} * sizeof(talos_rt_computed_clause_v1),
           clause);
   }
   return bytes;
 }
 
-talos_rt_status covergroupClockEventEvaluator(talos_rt_context *context,
-                                                const uint64_t *captures,
-                                                uint32_t captureCount,
-                                                uint64_t *value,
-                                                uint64_t *unknown,
-                                                uint32_t limbCount) {
+talos_rt_status covergroupClockEventEvaluator(
+    talos_rt_context *context, const uint64_t *captures, uint32_t captureCount,
+    uint64_t *value, uint64_t *unknown, uint32_t limbCount) {
   if (!context || !captures || captureCount != 1 || captures[0] != 42 ||
       !value || !unknown || limbCount != 1)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -14171,8 +14050,8 @@ talos_rt_status covergroupClockEventEvaluator(talos_rt_context *context,
     if (kind == 1) {
       const uint8_t oldValue = 0;
       const uint8_t newValue = 1;
-      talos_rt_v1_scheduler_signal_transition(context, 1, 1, &oldValue,
-                                                nullptr, &newValue, nullptr);
+      talos_rt_v1_scheduler_signal_transition(context, 1, 1, &oldValue, nullptr,
+                                              &newValue, nullptr);
       context->stateValue[0] |= uint64_t{1} << 2;
       context->stateUnknown[0] &= ~(uint64_t{1} << 2);
     }
@@ -14182,7 +14061,7 @@ talos_rt_status covergroupClockEventEvaluator(talos_rt_context *context,
     const uint8_t oldValue = 0;
     const uint8_t newValue = 1;
     talos_rt_v1_scheduler_signal_transition(context, 0, 1, &oldValue, nullptr,
-                                              &newValue, nullptr);
+                                            &newValue, nullptr);
   }
   if (covergroupClockEventCompletionTarget != 0) {
     uint64_t target = covergroupClockEventCompletionTarget;
@@ -14195,10 +14074,10 @@ talos_rt_status covergroupClockEventEvaluator(talos_rt_context *context,
 }
 
 talos_rt_status preponedObserverEvaluator(talos_rt_context *context,
-                                            const uint64_t *,
-                                            uint32_t captureCount,
-                                            uint64_t *value, uint64_t *unknown,
-                                            uint32_t limbCount) {
+                                          const uint64_t *,
+                                          uint32_t captureCount,
+                                          uint64_t *value, uint64_t *unknown,
+                                          uint32_t limbCount) {
   if (!context || captureCount != 0 || !value || !unknown || limbCount != 1)
     return TALOS_RT_INVALID_ARGUMENT;
   uint8_t sampledValue = 0;
@@ -14222,10 +14101,8 @@ TEST(RuntimeInternals, ComputedWaitAcceptsDynamicEventCapture) {
   const talos_rt_observer_capture_abi_v1 captureABI{
       TALOS_RT_OBSERVER_CAPTURE_EVENT, 1};
   talos_rt_observer_descriptor_v1 observer{
-      observerID, &captureABI,
-      1,          1,
-      0,          TALOS_RT_OBSERVER_NO_BYTECODE,
-      nullptr,    0};
+      observerID, &captureABI, 1, 1, 0, TALOS_RT_OBSERVER_NO_BYTECODE, nullptr,
+      0};
   talos_rt_execution_descriptor_v1 execution{};
   execution.version = TALOS_RT_VERSION;
   execution.observers = &observer;
@@ -14266,12 +14143,12 @@ TEST(RuntimeInternals, ComputedWaitAcceptsDynamicEventCapture) {
                    TALOS_RT_WAIT_EDGE_CHANGE,
                    TALOS_RT_COMPUTED_CLAUSE_EVENT_PRIMARY};
   EXPECT_TRUE(talos_rt_validate_computed_wait_record(&execution, &record.wait,
-                                                       sizeof(record)));
+                                                     sizeof(record)));
 
   // The all-ones null sentinel is not a schedulable event capture.
   record.capture.stable_id = UINT64_MAX;
-  EXPECT_FALSE(talos_rt_validate_computed_wait_record(
-      &execution, &record.wait, sizeof(record)));
+  EXPECT_FALSE(talos_rt_validate_computed_wait_record(&execution, &record.wait,
+                                                      sizeof(record)));
 }
 
 TEST(RuntimeInternals,
@@ -14369,7 +14246,7 @@ TEST(RuntimeInternals,
   const uint8_t bothOld = 0;
   const uint8_t bothNew = 3;
   talos_rt_v1_scheduler_signal_transition(context, 0, 2, &bothOld, nullptr,
-                                            &bothNew, nullptr);
+                                          &bothNew, nullptr);
   // Both clauses matched one atomic publication, and the evaluator's direct
   // load observed that publication's new bit before canonical commit.
   ASSERT_EQ(covergroupClockEventSamples, std::vector<uint32_t>({1}));
@@ -14377,9 +14254,9 @@ TEST(RuntimeInternals,
   const uint8_t oneOld = 1;
   const uint8_t oneNew = 0;
   talos_rt_v1_scheduler_signal_transition(context, 0, 1, &oneOld, nullptr,
-                                            &oneNew, nullptr);
+                                          &oneNew, nullptr);
   talos_rt_v1_scheduler_signal_transition(context, 1, 1, &oneOld, nullptr,
-                                            &oneNew, nullptr);
+                                          &oneNew, nullptr);
   EXPECT_EQ(covergroupClockEventSamples, std::vector<uint32_t>({1, 0}));
 
   context->stateValue[0] |= uint64_t{1} << 2;
@@ -14387,16 +14264,16 @@ TEST(RuntimeInternals,
   bool conditionValue = false;
   bool conditionUnknown = false;
   ASSERT_TRUE(talos_rt_read_signal_bit_unlocked(context, 2, 0, conditionValue,
-                                                  conditionUnknown));
+                                                conditionUnknown));
   ASSERT_TRUE(conditionValue);
   ASSERT_FALSE(conditionUnknown);
   talos_rt_v1_scheduler_signal_transition(context, 0, 1, &oneNew, nullptr,
-                                            &oneOld, nullptr);
+                                          &oneOld, nullptr);
   EXPECT_EQ(covergroupClockEventSamples, std::vector<uint32_t>({1, 0, 1}));
 
   context->coverage->instances[42].enabled = false;
   talos_rt_v1_scheduler_signal_transition(context, 0, 1, &oneOld, nullptr,
-                                            &oneNew, nullptr);
+                                          &oneNew, nullptr);
   EXPECT_EQ(covergroupClockEventSamples.size(), 3u);
 
   talos_rt_program_complete_unlocked(
@@ -14406,7 +14283,7 @@ TEST(RuntimeInternals,
   EXPECT_EQ(talos_rt_v1_scheduler_handoff_pending(context), 1u);
   context->schedulerStatus = TALOS_RT_OK;
   talos_rt_v1_scheduler_signal_transition(context, 0, 2, &bothOld, nullptr,
-                                            &bothNew, nullptr);
+                                          &bothNew, nullptr);
   EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);
   context->scheduledProcesses.clear();
   context->scheduledProcessIndices.clear();
@@ -14464,10 +14341,9 @@ TEST(RuntimeInternals,
   auto *eventObservers = reinterpret_cast<talos_rt_computed_observer_v1 *>(
       reinterpret_cast<uint8_t *>(eventPlan.data()) +
       eventRecord->observers_offset);
-  auto *eventDependencies =
-      reinterpret_cast<talos_rt_computed_dependency_v1 *>(
-          reinterpret_cast<uint8_t *>(eventPlan.data()) +
-          eventRecord->dependencies_offset);
+  auto *eventDependencies = reinterpret_cast<talos_rt_computed_dependency_v1 *>(
+      reinterpret_cast<uint8_t *>(eventPlan.data()) +
+      eventRecord->dependencies_offset);
   eventObservers[1].code_unit_id = covergroupClockEventOrObserverID;
   eventObservers[1].dependency_begin = 0;
   eventObservers[1].dependency_count = 2;
@@ -14486,14 +14362,14 @@ TEST(RuntimeInternals,
   const uint8_t zero = 0;
   const uint8_t one = 1;
   talos_rt_v1_scheduler_signal_transition(context, 0, 1, &zero, nullptr, &one,
-                                            nullptr);
+                                          nullptr);
   ASSERT_EQ(covergroupClockEventSamples, std::vector<uint32_t>({1}));
 
   // The first publication also changes (a | b), even though posedge a wins
   // sample coalescing. Updating b from zero to one leaves (a | b) stable and
   // therefore must not synthesize a second event from stale clause history.
   talos_rt_v1_scheduler_signal_transition(context, 1, 1, &zero, nullptr, &one,
-                                            nullptr);
+                                          nullptr);
   EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);
   EXPECT_EQ(covergroupClockEventSamples, std::vector<uint32_t>({1}));
 
@@ -14545,8 +14421,8 @@ TEST(RuntimeInternals,
     context->activeNativeProcess = &instances[token - 1];
     context->activeLogicalProcessToken =
         TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | token;
-    auto *record = reinterpret_cast<talos_rt_computed_wait_record_v1 *>(
-        eventPlan.data());
+    auto *record =
+        reinterpret_cast<talos_rt_computed_wait_record_v1 *>(eventPlan.data());
     return talos_rt_v1_covergroup_clock_event_register(
         context, record, eventPlan.size() * sizeof(uint64_t), 0, observerID,
         &capture, 1);
@@ -14567,7 +14443,7 @@ TEST(RuntimeInternals,
   const uint8_t zero = 0;
   const uint8_t one = 1;
   talos_rt_v1_scheduler_signal_transition(context, 0, 1, &zero, nullptr, &one,
-                                            nullptr);
+                                          nullptr);
   EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);
   // The outer sampler publishes signal 1 while gate bit 2 is zero, then sets
   // the gate before returning. The nested iff is evaluated synchronously at
@@ -14622,8 +14498,8 @@ TEST(RuntimeInternals, CovergroupClockEventComposesNestedPublicationSnapshots) {
     context->activeNativeProcess = &instances[token - 1];
     context->activeLogicalProcessToken =
         TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | token;
-    auto *record = reinterpret_cast<talos_rt_computed_wait_record_v1 *>(
-        eventPlan.data());
+    auto *record =
+        reinterpret_cast<talos_rt_computed_wait_record_v1 *>(eventPlan.data());
     return talos_rt_v1_covergroup_clock_event_register(
         context, record, eventPlan.size() * sizeof(uint64_t), 0, observerID,
         &capture, 1);
@@ -14644,7 +14520,7 @@ TEST(RuntimeInternals, CovergroupClockEventComposesNestedPublicationSnapshots) {
   const uint8_t zero = 0;
   const uint8_t one = 1;
   talos_rt_v1_scheduler_signal_transition(context, 0, 1, &zero, nullptr, &one,
-                                            nullptr);
+                                          nullptr);
   EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);
   // The outer A publication has not committed canonical storage when its
   // sampler publishes B. B's synchronous sampler must nevertheless retain
@@ -14714,12 +14590,12 @@ TEST(RuntimeInternals, CovergroupClockEventRejectsFalseSamplerSentinel) {
   const uint8_t newValue = 1;
   context->covergroupClockEventEvaluationDepth = 1;
   talos_rt_v1_scheduler_signal_transition(context, 3, 1, &oldValue, nullptr,
-                                            &newValue, nullptr);
+                                          &newValue, nullptr);
   EXPECT_EQ(context->schedulerStatus, TALOS_RT_INVALID_DESIGN);
   context->covergroupClockEventEvaluationDepth = 0;
   context->schedulerStatus = TALOS_RT_OK;
   talos_rt_v1_scheduler_signal_transition(context, 0, 1, &oldValue, nullptr,
-                                            &newValue, nullptr);
+                                          &newValue, nullptr);
   EXPECT_EQ(context->schedulerStatus, TALOS_RT_INVALID_DESIGN);
   EXPECT_EQ(covergroupClockEventSamples, std::vector<uint32_t>({1}));
   covergroupClockEventSentinel = 1;
@@ -14796,7 +14672,7 @@ TEST(RuntimeInternals,
   const uint8_t oldValue = 0;
   const uint8_t newValue = 1;
   talos_rt_v1_scheduler_signal_transition(context, 0, 1, &oldValue, nullptr,
-                                            &newValue, nullptr);
+                                          &newValue, nullptr);
   EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);
   EXPECT_EQ(covergroupClockEventSamples, std::vector<uint32_t>({1}));
   ASSERT_NE(context->covergroupClockEvents, nullptr);
@@ -14877,9 +14753,9 @@ TEST(RuntimeInternals, CovergroupStrobeDefersAndCoalescesUntilPostponedDrain) {
   const uint8_t zero = 0;
   const uint8_t one = 1;
   talos_rt_v1_scheduler_signal_transition(context, 0, 1, &zero, nullptr, &one,
-                                            nullptr);
+                                          nullptr);
   talos_rt_v1_scheduler_signal_transition(context, 0, 1, &one, nullptr, &zero,
-                                            nullptr);
+                                          nullptr);
   EXPECT_TRUE(talos_rt_covergroup_strobes_pending_unlocked(context));
   EXPECT_TRUE(covergroupClockEventSamples.empty());
   EXPECT_EQ(context->nativePeriodicTerminationRequested, 0u);
@@ -14894,42 +14770,38 @@ TEST(RuntimeInternals, CovergroupStrobeDefersAndCoalescesUntilPostponedDrain) {
   covergroupClockEventRegion = UINT32_MAX;
   context->activeHomeRegion = TALOS_RT_REGION_REACTIVE;
   context->activeExecRegion = TALOS_RT_REGION_REACTIVE;
-  ASSERT_EQ(talos_rt_drain_covergroup_strobes_unlocked(context),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_drain_covergroup_strobes_unlocked(context), TALOS_RT_OK);
   EXPECT_EQ(covergroupClockEventSamples, std::vector<uint32_t>({1}));
   EXPECT_EQ(covergroupClockEventRegion, TALOS_RT_REGION_POSTPONED);
   EXPECT_EQ(context->activeHomeRegion, TALOS_RT_REGION_REACTIVE);
   EXPECT_EQ(context->activeExecRegion, TALOS_RT_REGION_REACTIVE);
   EXPECT_FALSE(talos_rt_covergroup_strobes_pending_unlocked(context));
   EXPECT_EQ(talos_rt_v1_scheduler_handoff_pending(context), 0u);
-  ASSERT_EQ(talos_rt_drain_covergroup_strobes_unlocked(context),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_drain_covergroup_strobes_unlocked(context), TALOS_RT_OK);
   EXPECT_EQ(covergroupClockEventSamples.size(), 1u);
 
   // start()/stop() controls collection at the actual Postponed sample time.
   ++context->schedulerTime;
   talos_rt_v1_scheduler_signal_transition(context, 0, 1, &zero, nullptr, &one,
-                                            nullptr);
+                                          nullptr);
   context->coverage->instances[42].enabled = false;
-  ASSERT_EQ(talos_rt_drain_covergroup_strobes_unlocked(context),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_drain_covergroup_strobes_unlocked(context), TALOS_RT_OK);
   EXPECT_EQ(covergroupClockEventSamples.size(), 1u);
 
   ++context->schedulerTime;
   context->coverage->instances[42].enabled = false;
   talos_rt_v1_scheduler_signal_transition(context, 0, 1, &one, nullptr, &zero,
-                                            nullptr);
+                                          nullptr);
   context->coverage->instances[42].enabled = true;
   covergroupClockEventGlobalPlane = 0;
-  ASSERT_EQ(talos_rt_drain_covergroup_strobes_unlocked(context),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_drain_covergroup_strobes_unlocked(context), TALOS_RT_OK);
   EXPECT_EQ(covergroupClockEventSamples, std::vector<uint32_t>({1, 0}));
 
   // Removing an owner with a queued sample removes its pending contribution;
   // no stale Postponed work survives process teardown.
   ++context->schedulerTime;
   talos_rt_v1_scheduler_signal_transition(context, 0, 1, &zero, nullptr, &one,
-                                            nullptr);
+                                          nullptr);
   EXPECT_TRUE(talos_rt_covergroup_strobes_pending_unlocked(context));
   talos_rt_program_complete_unlocked(
       context, TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | uint64_t{1}, 0);
@@ -14957,13 +14829,13 @@ TEST(SampledValues, PreponedObserverRunsOncePerTimeSlot) {
                        nullptr,
                        0};
   talos_rt_observer_descriptor_v1 observer{observerID,
-                                             nullptr,
-                                             0,
-                                             1,
-                                             0,
-                                             TALOS_RT_OBSERVER_NO_BYTECODE,
-                                             preponedObserverEvaluator,
-                                             0};
+                                           nullptr,
+                                           0,
+                                           1,
+                                           0,
+                                           TALOS_RT_OBSERVER_NO_BYTECODE,
+                                           preponedObserverEvaluator,
+                                           0};
   auto &execution = storage.execution;
   execution.version = TALOS_RT_VERSION;
   execution.flags = TALOS_RT_EXECUTION_PREPONED_SNAPSHOT;
@@ -15009,7 +14881,7 @@ TEST(SampledValues, PreponedObserverRunsOncePerTimeSlot) {
   record.clause = {0, TALOS_RT_OBSERVER_CONDITION_NONE,
                    TALOS_RT_WAIT_EDGE_NEGEDGE, 0};
   ASSERT_TRUE(talos_rt_validate_computed_wait_record(&execution, &record.wait,
-                                                       sizeof(record)));
+                                                     sizeof(record)));
 
   talos_rt_process_descriptor_v1 descriptor{};
   descriptor.execution = &execution;
@@ -15049,7 +14921,7 @@ TEST(SampledValues, PreponedObserverRunsOncePerTimeSlot) {
   uint64_t handle =
       talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_GLOBAL, 0, 0);
   ASSERT_EQ(talos_rt_v1_sampled_read(context, handle, 1, &sampledValue,
-                                       &sampledUnknown),
+                                     &sampledUnknown),
             TALOS_RT_OK);
   EXPECT_EQ(sampledValue, 0);
   EXPECT_EQ(sampledUnknown, 0);
@@ -15060,9 +14932,9 @@ TEST(SampledValues, PreponedObserverRunsOncePerTimeSlot) {
   EXPECT_EQ(preponedObserverSamples, std::vector<uint32_t>({0, 1}));
   EXPECT_EQ(context->events[TALOS_RT_STABLE_HANDLE_PREPONED_EVENT].generation,
             2u);
-  EXPECT_EQ(context->events[TALOS_RT_STABLE_HANDLE_PREPONED_EVENT]
-                .lastTriggeredTime,
-            1u);
+  EXPECT_EQ(
+      context->events[TALOS_RT_STABLE_HANDLE_PREPONED_EVENT].lastTriggeredTime,
+      1u);
 
   talos_rt_unregister_signal_wait_unlocked(
       context, scheduled.signalSubscriptions, scheduled.token, false);
@@ -15143,9 +15015,8 @@ TEST(SampledValues, CapturesBoundNativePlanesWithoutWholeStateCopies) {
   uint8_t firstUnknown[4] = {};
   uint8_t secondValue[4] = {};
   uint8_t secondUnknown[4] = {};
-  ASSERT_EQ(
-      talos_rt_v1_native_state_sync(first, firstValue, firstUnknown, 32),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_sync(first, firstValue, firstUnknown, 32),
+            TALOS_RT_OK);
   ASSERT_EQ(
       talos_rt_v1_native_state_sync(second, secondValue, secondUnknown, 32),
       TALOS_RT_OK);
@@ -15183,13 +15054,13 @@ TEST(SampledValues, SharesCompilerPlannedAlternateClockHistory) {
   // Missing ages have the sampled-value default. A disabled clock tick does
   // not advance the shared ring.
   ASSERT_EQ(talos_rt_v1_clocked_sample_read(context, site, 4, 2, 0, 1,
-                                              &resultValue, &resultUnknown),
+                                            &resultValue, &resultUnknown),
             TALOS_RT_OK);
   EXPECT_EQ(resultValue, UINT8_C(0x00));
   EXPECT_EQ(resultUnknown, UINT8_C(0x0f));
   value = UINT8_C(0x03);
-  ASSERT_EQ(talos_rt_v1_clocked_sample_update(context, site, 4, 2, 1, 0,
-                                                &value, &unknown),
+  ASSERT_EQ(talos_rt_v1_clocked_sample_update(context, site, 4, 2, 1, 0, &value,
+                                              &unknown),
             TALOS_RT_OK);
 
   const uint8_t samples[] = {UINT8_C(0x0a), UINT8_C(0x04), UINT8_C(0x0c)};
@@ -15205,13 +15076,13 @@ TEST(SampledValues, SharesCompilerPlannedAlternateClockHistory) {
                                       UINT8_C(0x00)};
   for (uint64_t age = 0; age != 3; ++age) {
     ASSERT_EQ(talos_rt_v1_clocked_sample_read(context, site, 4, 2, age, 1,
-                                                &resultValue, &resultUnknown),
+                                              &resultValue, &resultUnknown),
               TALOS_RT_OK);
     EXPECT_EQ(resultValue, expectedValues[age]);
     EXPECT_EQ(resultUnknown, expectedUnknowns[age]);
   }
   EXPECT_EQ(talos_rt_v1_clocked_sample_read(context, site, 4, 2, 3, 1,
-                                              &resultValue, &resultUnknown),
+                                            &resultValue, &resultUnknown),
             TALOS_RT_INVALID_ARGUMENT);
   talos_rt_v1_context_destroy(context);
 }
@@ -15250,8 +15121,8 @@ TEST(SampledValues, UsesBoundedGatedPerProcessHistory) {
     currentValue = value;
     previousValue = previousUnknown = 0;
     return talos_rt_v1_sampled_history(context, 91, 4, 2, 1, gate,
-                                         &currentValue, &currentUnknown,
-                                         &previousValue, &previousUnknown);
+                                       &currentValue, &currentUnknown,
+                                       &previousValue, &previousUnknown);
   };
 
   ASSERT_EQ(sample(1, 1), TALOS_RT_OK);
@@ -15279,20 +15150,18 @@ TEST(RuntimeInternals, BuiltinClassWaitersSelectExactNativeAndDesignObjects) {
   talos_rt_gc_lane_v1 *lane = nullptr;
   ASSERT_EQ(talos_rt_v1_gc_lane_create(context, &lane), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_lane_enter(lane), TALOS_RT_OK);
-  talos_rt_object_v1 *mailbox = nullptr, *other = nullptr,
-                       *semaphore = nullptr;
+  talos_rt_object_v1 *mailbox = nullptr, *other = nullptr, *semaphore = nullptr;
   auto createMailbox = [&](talos_rt_object_v1 **result) {
-    return talos_rt_v1_mailbox_create_typed(
-        lane, 1, TALOS_RT_ELEMENT_BITS, 0, sizeof(uint32_t),
-        alignof(uint32_t), 32, nullptr, 0, 1, result);
+    return talos_rt_v1_mailbox_create_typed(lane, 1, TALOS_RT_ELEMENT_BITS, 0,
+                                            sizeof(uint32_t), alignof(uint32_t),
+                                            32, nullptr, 0, 1, result);
   };
   talos_rt_gc_root_v1 mailboxRoot{}, otherRoot{}, semaphoreRoot{};
   ASSERT_EQ(createMailbox(&mailbox), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &mailboxRoot, &mailbox),
             TALOS_RT_OK);
   ASSERT_EQ(createMailbox(&other), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &otherRoot, &other),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &otherRoot, &other), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_semaphore_create(lane, 0, &semaphore), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &semaphoreRoot, &semaphore),
             TALOS_RT_OK);
@@ -15303,8 +15172,7 @@ TEST(RuntimeInternals, BuiltinClassWaitersSelectExactNativeAndDesignObjects) {
   auto makeWait = [](talos_rt_object_v1 *object, uint32_t kind,
                      uint32_t flags = 0) {
     return WaitRecord{{TALOS_RT_VERSION, kind, flags, 1,
-                       kind == TALOS_RT_SUSPEND_SEMAPHORE ? UINT64_C(1) : 0,
-                       0},
+                       kind == TALOS_RT_SUSPEND_SEMAPHORE ? UINT64_C(1) : 0, 0},
                       {talos_rt_managed_word_from_object(object),
                        TALOS_RT_WAIT_EDGE_NONE, 0}};
   };
@@ -15332,20 +15200,20 @@ TEST(RuntimeInternals, BuiltinClassWaitersSelectExactNativeAndDesignObjects) {
   context->activeLogicalProcessToken = 6;
 
   const talos_rt_frame_field_v1 field{TALOS_RT_FRAME_WAIT,
-                                        TALOS_RT_FRAME_FIELD_FLAGS_NONE,
+                                      TALOS_RT_FRAME_FIELD_FLAGS_NONE,
+                                      0,
+                                      sizeof(WaitRecord),
+                                      alignof(WaitRecord),
+                                      0};
+  const talos_rt_frame_layout_v1 layout{TALOS_RT_VERSION,
                                         0,
                                         sizeof(WaitRecord),
                                         alignof(WaitRecord),
+                                        &field,
+                                        1,
+                                        0,
+                                        nullptr,
                                         0};
-  const talos_rt_frame_layout_v1 layout{TALOS_RT_VERSION,
-                                          0,
-                                          sizeof(WaitRecord),
-                                          alignof(WaitRecord),
-                                          &field,
-                                          1,
-                                          0,
-                                          nullptr,
-                                          0};
   talos_rt_process_descriptor_v1 descriptor{};
   descriptor.frame_layout = &layout;
   std::array<WaitRecord, 3> waits{
@@ -15381,8 +15249,7 @@ TEST(RuntimeInternals, BuiltinClassWaitersSelectExactNativeAndDesignObjects) {
   std::sort(waiters.begin(), waiters.end());
   EXPECT_EQ(waiters, (std::vector<uint64_t>{
                          5, TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | 12}));
-  ASSERT_EQ(talos_rt_builtin_class_waiters(lane, other, waiters),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_builtin_class_waiters(lane, other, waiters), TALOS_RT_OK);
   EXPECT_EQ(waiters, (std::vector<uint64_t>{3}));
   EXPECT_EQ(context->schedulerSelectionGeneration, selectionGeneration);
   EXPECT_EQ(context->schedulerEpoch, schedulerEpoch);
@@ -15395,7 +15262,7 @@ TEST(RuntimeInternals, BuiltinClassWaitersSelectExactNativeAndDesignObjects) {
             TALOS_RT_OK);
   std::sort(waiters.begin(), waiters.end());
   EXPECT_EQ(waiters, (std::vector<uint64_t>{
-                        1, 2, 6, TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | 11}));
+                         1, 2, 6, TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | 11}));
   waits[0].header.count = 2;
   EXPECT_EQ(talos_rt_builtin_class_waiters(lane, mailbox, waiters),
             TALOS_RT_INVALID_FRAME);

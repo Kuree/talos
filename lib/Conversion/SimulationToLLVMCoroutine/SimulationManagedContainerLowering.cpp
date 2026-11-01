@@ -460,8 +460,7 @@ public:
     std::optional<unsigned> outputWidth =
         sim::getPackedWidth(op.getResult().getType());
     if (failed(inputStorage) || failed(outputStorage) || !outputWidth ||
-        op.getPlan().size() <
-            TALOS_RT_RECURSIVE_BITSTREAM_PLAN_HEADER_WORDS ||
+        op.getPlan().size() < TALOS_RT_RECURSIVE_BITSTREAM_PLAN_HEADER_WORDS ||
         adaptor.getInput().size() !=
             analysis::getSimulationPhysicalStorageCount(*inputStorage) ||
         resultTypes.size() !=
@@ -498,20 +497,19 @@ public:
     (void)lane;
     Value status;
     if (auto site = op.getClassSiteIdAttr()) {
-      status =
-          LLVM::CallOp::create(
-              rewriter, location, TypeRange{i32},
-              SymbolRefAttr::get(rewriter.getContext(),
-                                 "talos_rt_v2_recursive_export_bitstream"),
-              ValueRange{context, c64(site.getValue().getZExtValue()),
-                         inputs[0], inputs.size() == 2 ? inputs[1] : null,
-                         c64(inputStorage->size), c64(inputWidth),
-                         c32(inputStorage->fourState), outputs[0],
-                         outputs.size() == 2 ? outputs[1] : null,
-                         c64(outputStorage->size), c64(*outputWidth),
-                         c32(outputStorage->fourState),
-                         c32(op.getObserve() ? 1 : 0), matched, watch})
-              .getResult();
+      status = LLVM::CallOp::create(
+                   rewriter, location, TypeRange{i32},
+                   SymbolRefAttr::get(rewriter.getContext(),
+                                      "talos_rt_v2_recursive_export_bitstream"),
+                   ValueRange{context, c64(site.getValue().getZExtValue()),
+                              inputs[0], inputs.size() == 2 ? inputs[1] : null,
+                              c64(inputStorage->size), c64(inputWidth),
+                              c32(inputStorage->fourState), outputs[0],
+                              outputs.size() == 2 ? outputs[1] : null,
+                              c64(outputStorage->size), c64(*outputWidth),
+                              c32(outputStorage->fourState),
+                              c32(op.getObserve() ? 1 : 0), matched, watch})
+                   .getResult();
     } else {
       StringAttr globalName =
           native::get<native::AggregateBitstreamPlanGlobal>(op);
@@ -520,21 +518,20 @@ public:
             "recursive bit-stream plan was not prepared before conversion");
       Value plan = LLVM::AddressOfOp::create(rewriter, location, pointer,
                                              globalName.getValue());
-      status =
-          LLVM::CallOp::create(
-              rewriter, location, TypeRange{i32},
-              SymbolRefAttr::get(rewriter.getContext(),
-                                 "talos_rt_v1_recursive_export_bitstream"),
-              ValueRange{context, inputs[0],
-                         inputs.size() == 2 ? inputs[1] : null,
-                         c64(inputStorage->size), c64(inputWidth),
-                         c32(inputStorage->fourState), outputs[0],
-                         outputs.size() == 2 ? outputs[1] : null,
-                         c64(outputStorage->size), c64(*outputWidth),
-                         c32(outputStorage->fourState), plan,
-                         c64(op.getPlan().size() * sizeof(int64_t)),
-                         c32(op.getObserve() ? 1 : 0), matched, watch})
-              .getResult();
+      status = LLVM::CallOp::create(
+                   rewriter, location, TypeRange{i32},
+                   SymbolRefAttr::get(rewriter.getContext(),
+                                      "talos_rt_v1_recursive_export_bitstream"),
+                   ValueRange{context, inputs[0],
+                              inputs.size() == 2 ? inputs[1] : null,
+                              c64(inputStorage->size), c64(inputWidth),
+                              c32(inputStorage->fourState), outputs[0],
+                              outputs.size() == 2 ? outputs[1] : null,
+                              c64(outputStorage->size), c64(*outputWidth),
+                              c32(outputStorage->fourState), plan,
+                              c64(op.getPlan().size() * sizeof(int64_t)),
+                              c32(op.getObserve() ? 1 : 0), matched, watch})
+                   .getResult();
     }
     reportManagedStatus(rewriter, location, context, status);
     SmallVector<Value> results;
@@ -1442,16 +1439,15 @@ public:
     Value gate =
         LLVM::ZExtOp::create(rewriter, op.getLoc(), rewriter.getI32Type(),
                              adaptor.getGate().front());
-    Value status =
-        LLVM::CallOp::create(
-            rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_clocked_sample_update"),
-            ValueRange{adaptor.getContext().front(), c64(op.getId()),
-                       c64(plane.getWidth()), c64(op.getDepth()),
-                       c32(adaptor.getCurrent().size() == 2), gate,
-                       currentValue, currentUnknown})
-            .getResult();
+    Value status = LLVM::CallOp::create(
+                       rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
+                       SymbolRefAttr::get(rewriter.getContext(),
+                                          "talos_rt_v1_clocked_sample_update"),
+                       ValueRange{adaptor.getContext().front(), c64(op.getId()),
+                                  c64(plane.getWidth()), c64(op.getDepth()),
+                                  c32(adaptor.getCurrent().size() == 2), gate,
+                                  currentValue, currentUnknown})
+                       .getResult();
     reportManagedStatus(rewriter, op.getLoc(), adaptor.getContext().front(),
                         status);
     rewriter.eraseOp(op);
@@ -1765,9 +1761,8 @@ public:
     }
     Type valueType = op.getValue().getType();
     Value output = entryAlloca(rewriter, op.getLoc(), valueType, 1, 8);
-    StringRef name = valueType.isF32()
-                         ? "talos_rt_v1_random_real32_from_rank"
-                         : "talos_rt_v1_random_real64_from_rank";
+    StringRef name = valueType.isF32() ? "talos_rt_v1_random_real32_from_rank"
+                                       : "talos_rt_v1_random_real64_from_rank";
     Value status =
         LLVM::CallOp::create(
             rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
@@ -1805,8 +1800,8 @@ public:
     Type i32 = rewriter.getI32Type();
     Type i64 = rewriter.getI64Type();
     StringRef program = op.getProgram();
-    std::string name = "__talos_random_program_" +
-                       llvm::utohexstr(llvm::hash_value(program));
+    std::string name =
+        "__talos_random_program_" + llvm::utohexstr(llvm::hash_value(program));
     Value programAddress =
         LLVM::AddressOfOp::create(rewriter, op.getLoc(), pointer, name);
 
@@ -1892,8 +1887,8 @@ public:
     Type i32 = rewriter.getI32Type();
     Type i64 = rewriter.getI64Type();
     StringRef program = op.getProgram();
-    std::string name = "__talos_random_program_" +
-                       llvm::utohexstr(llvm::hash_value(program));
+    std::string name =
+        "__talos_random_program_" + llvm::utohexstr(llvm::hash_value(program));
     Value programAddress =
         LLVM::AddressOfOp::create(rewriter, op.getLoc(), pointer, name);
     auto c64 = [&](uint64_t value) {

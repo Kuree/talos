@@ -19,9 +19,8 @@ inline ReadySetLayout clockKernelReadySetLayout(uint32_t words) {
       std::min(uint64_t{words} * 64, uint64_t{UINT32_MAX})));
 }
 
-inline void
-publishClockKernelReady(const talos_rt_native_clock_kernel &kernel,
-                        uint32_t bit) {
+inline void publishClockKernelReady(const talos_rt_native_clock_kernel &kernel,
+                                    uint32_t bit) {
   if (kernel.reserved & indexedClockKernelReadySet) {
     const ReadySetLayout layout =
         clockKernelReadySetLayout(kernel.ingress_word_count);

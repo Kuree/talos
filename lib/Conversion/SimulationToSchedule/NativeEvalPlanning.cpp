@@ -64,8 +64,7 @@ void reorderOwners(ResolvedNativeEvalPlan &plan, ArrayRef<uint32_t> order) {
     mask = std::move(mapped);
   }
   for (auto &entry : plan.fanoutEntries)
-    if ((entry.reserved & TALOS_RT_FANOUT_ROUTE_MASK) ==
-        TALOS_RT_FANOUT_DIRECT)
+    if ((entry.reserved & TALOS_RT_FANOUT_ROUTE_MASK) == TALOS_RT_FANOUT_DIRECT)
       entry.merged_bit = remap[entry.merged_bit];
   for (uint32_t &bit : plan.periodicOwnerBits)
     if (bit != UINT32_MAX)
@@ -180,15 +179,13 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
   DenseSet<uint32_t> multipleClocks;
   for (const auto &entry : plan.fanoutEntries) {
     if (entry.merged_bit >= clocks.size() ||
-        (entry.reserved & TALOS_RT_FANOUT_ROUTE_MASK) !=
-            TALOS_RT_FANOUT_DIRECT)
+        (entry.reserved & TALOS_RT_FANOUT_ROUTE_MASK) != TALOS_RT_FANOUT_DIRECT)
       continue;
     ClockKey key{entry.static_state, entry.edge, entry.low_bit,
                  entry.bit_width};
     auto &clock = clocks[entry.merged_bit];
-    if ((clock && *clock != key) ||
-        (entry.edge != TALOS_RT_WAIT_EDGE_POSEDGE &&
-         entry.edge != TALOS_RT_WAIT_EDGE_NEGEDGE))
+    if ((clock && *clock != key) || (entry.edge != TALOS_RT_WAIT_EDGE_POSEDGE &&
+                                     entry.edge != TALOS_RT_WAIT_EDGE_NEGEDGE))
       multipleClocks.insert(entry.merged_bit);
     clock = key;
   }
@@ -416,8 +413,7 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
             talos_rt_stable_handle_v1 decoded{};
             if (handle == handles.end() ||
                 !talos_rt_stable_handle_decode(handle->second, &decoded) ||
-                decoded.kind != TALOS_RT_STABLE_HANDLE_STATIC ||
-                decoded.offset)
+                decoded.kind != TALOS_RT_STABLE_HANDLE_STATIC || decoded.offset)
               return false;
             auto width = widths.find(decoded.id);
             if (width == widths.end() || range.low >= width->second ||
@@ -539,8 +535,7 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
           talos_rt_stable_handle_v1 decoded{};
           if (handle == handles.end() ||
               !talos_rt_stable_handle_decode(handle->second, &decoded) ||
-              decoded.kind != TALOS_RT_STABLE_HANDLE_STATIC ||
-              decoded.offset) {
+              decoded.kind != TALOS_RT_STABLE_HANDLE_STATIC || decoded.offset) {
             opaque = true;
             continue;
           }
@@ -697,7 +692,8 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
   DenseMap<StringAttr, uint32_t> virtualActivations;
   for (Attribute raw : graph.getNodes()) {
     auto fragment = dyn_cast<schedule::ComputeFragmentAttr>(raw);
-    if (!fragment || fragment.getRegion() != schedule::ComputeRegionKind::Active)
+    if (!fragment ||
+        fragment.getRegion() != schedule::ComputeRegionKind::Active)
       continue;
     auto function = functions.lookup(fragment.getFunction().getValue());
     if (!function || function.getEntryKind() == sim::EntryKind::RootInitializer)
@@ -707,8 +703,8 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
     if (inserted) {
       auto kind = function.getEntryKind();
       bool settling = analysis::isSettlingEntryKind(kind);
-      bool repeating = kind == sim::EntryKind::Always ||
-                       kind == sim::EntryKind::AlwaysFF;
+      bool repeating =
+          kind == sim::EntryKind::Always || kind == sim::EntryKind::AlwaysFF;
       shape->second = (settling || repeating) && eventWaits.lookup(name) == 1 &&
                       !otherBoundaries.contains(name);
       if (shape->second && !settling) {
@@ -752,9 +748,8 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
     if (byFragment.contains(fragment.getId()))
       continue;
     auto found = virtualActivations.find(name);
-    uint32_t id = found != virtualActivations.end() && single
-                      ? found->second
-                      : result.size();
+    uint32_t id = found != virtualActivations.end() && single ? found->second
+                                                              : result.size();
     if (id == result.size()) {
       NativeRankedEvalNode boundary;
       boundary.owner = UINT32_MAX;
@@ -989,8 +984,8 @@ NativeActivationInputs collectNativeActivationInputs(sim::SimDesignOp design,
   result.repeatable =
       schedule::collectRepeatableCombinationalActivations(design, handles);
   if (explain)
-    llvm::errs() << "talos repeatable activations: "
-                 << result.repeatable.size() << '\n';
+    llvm::errs() << "talos repeatable activations: " << result.repeatable.size()
+                 << '\n';
   result.completeNBAWriters = true;
   SymbolTable symbols(design);
   llvm::MapVector<StringAttr, SmallVector<schedule::ComputeEffectAttr>>
@@ -1353,14 +1348,14 @@ resolveNativeEvalPlan(ModuleOp module,
       auto candidates = directsByWrapper.find(executor);
       if (candidates == directsByWrapper.end())
         continue;
-      auto found = llvm::find_if(candidates->second, [&, &recordIndex =
-                                                             recordIndex](
-                                                         unsigned candidate) {
-        return directFragments[candidate].actorSlot ==
-                   result.mergedFragments[recordIndex].actor_slot &&
-               directFragments[candidate].continuation ==
-                   result.mergedFragments[recordIndex].continuation;
-      });
+      auto found = llvm::find_if(
+          candidates->second,
+          [&, &recordIndex = recordIndex](unsigned candidate) {
+            return directFragments[candidate].actorSlot ==
+                       result.mergedFragments[recordIndex].actor_slot &&
+                   directFragments[candidate].continuation ==
+                       result.mergedFragments[recordIndex].continuation;
+          });
       if (found == candidates->second.end())
         continue;
       const NativeDirectFragment *direct = &directFragments[*found];
@@ -1660,15 +1655,15 @@ resolveNativeEvalPlan(ModuleOp module,
     }
   }
   for (auto [recordIndex, executor] : llvm::enumerate(result.mergedExecutors)) {
-    auto direct = llvm::find_if(directFragments, [&, &executor = executor,
-                                                  &recordIndex = recordIndex](
-                                                     const auto &candidate) {
-      return candidate.wrapper == executor &&
-             candidate.actorSlot ==
-                 result.mergedFragments[recordIndex].actor_slot &&
-             candidate.continuation ==
-                 result.mergedFragments[recordIndex].continuation;
-    });
+    auto direct = llvm::find_if(
+        directFragments, [&, &executor = executor,
+                          &recordIndex = recordIndex](const auto &candidate) {
+          return candidate.wrapper == executor &&
+                 candidate.actorSlot ==
+                     result.mergedFragments[recordIndex].actor_slot &&
+                 candidate.continuation ==
+                     result.mergedFragments[recordIndex].continuation;
+        });
     if (direct == directFragments.end()) {
       fillAllRoots(result.recordNBATaintMasks[recordIndex]);
       result.nbaTaintedRecords.set(recordIndex);

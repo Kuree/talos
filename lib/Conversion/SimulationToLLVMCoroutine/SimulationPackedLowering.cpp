@@ -239,8 +239,7 @@ NativeStateLayout makeCleanEvalStateLayout(const NativeStateLayout &layout) {
       (void)descriptor;
       talos_rt_stable_handle_v1 decoded{};
       if (talos_rt_stable_handle_decode(handle, &decoded) &&
-          decoded.kind == TALOS_RT_STABLE_HANDLE_STATIC &&
-          decoded.offset == 0)
+          decoded.kind == TALOS_RT_STABLE_HANDLE_STATIC && decoded.offset == 0)
         clean.directHandles.insert(decoded.id);
     }
   };
@@ -333,7 +332,8 @@ LogicalResult lowerPackedSimulationOperations(
   });
   std::vector<analysis::HandleDataflowResult> handleProofs(
       proofFunctions.size());
-  std::vector<SmallVector<Operation *>> completeSliceProofs(proofFunctions.size());
+  std::vector<SmallVector<Operation *>> completeSliceProofs(
+      proofFunctions.size());
   parallelForEach(
       context, llvm::seq<size_t>(0, proofFunctions.size()), [&](size_t index) {
         auto function = proofFunctions[index];
@@ -790,8 +790,7 @@ LogicalResult lowerPackedSimulationOperations(
       return WalkResult::advance();
     }
     if (auto create = dyn_cast<sim::SimMailboxCreateOp>(operation)) {
-      if (failed(reserveTrace(create.getLoc(),
-                              "__talos_mailbox_element_trace_",
+      if (failed(reserveTrace(create.getLoc(), "__talos_mailbox_element_trace_",
                               create.getTypeId(), create.getTraceOffsets(),
                               create.getTraceKinds())))
         return WalkResult::interrupt();
@@ -1023,41 +1022,39 @@ LogicalResult lowerPackedSimulationOperations(
   if (virtualTaskABI.wasInterrupted())
     return failure();
   ReferenceArgumentMap referenceArguments;
-  WalkResult lifetimeInputs =
-      module.walk<WalkOrder::PreOrder>([&](sim::SimFuncOp function) {
-        if (function.getBody().empty())
-          return WalkResult::skip();
-        // Observer captures are borrowed from the persistent computed-wait
-        // record. Unlike an ordinary direct call, invoking an observer does not
-        // transfer one retained reference per argument, so its return must not
-        // consume captured automatic state. The waiting activation owns that
-        // state across suspension and releases it on resumption or
-        // cancellation.
-        if (function.getEntryKind() == sim::EntryKind::Observer ||
-            ::talos::schedule::has<
-                ::talos::schedule::Field::EvalBorrowedCaptures>(function))
-          return WalkResult::skip();
-        unsigned physical = 0;
-        for (BlockArgument argument :
-             function.getBody().front().getArguments()) {
-          SmallVector<Type> converted;
-          if (failed(
-                  packedConverter.convertType(argument.getType(), converted)))
-            return WalkResult::interrupt();
-          if (isa<sim::RefType>(argument.getType())) {
-            if (converted.size() != 1)
-              return WalkResult::interrupt();
-            referenceArguments[function.getOperation()].push_back(physical);
-          }
-          physical += converted.size();
-        }
-        SmallVector<int64_t> referenceIndices;
-        for (unsigned index : referenceArguments[function.getOperation()])
-          referenceIndices.push_back(index);
-        native::set<native::TransferredReferences>(
-            function, DenseI64ArrayAttr::get(context, referenceIndices));
-        return WalkResult::skip();
-      });
+  WalkResult lifetimeInputs = module.walk<
+      WalkOrder::PreOrder>([&](sim::SimFuncOp function) {
+    if (function.getBody().empty())
+      return WalkResult::skip();
+    // Observer captures are borrowed from the persistent computed-wait
+    // record. Unlike an ordinary direct call, invoking an observer does not
+    // transfer one retained reference per argument, so its return must not
+    // consume captured automatic state. The waiting activation owns that
+    // state across suspension and releases it on resumption or
+    // cancellation.
+    if (function.getEntryKind() == sim::EntryKind::Observer ||
+        ::talos::schedule::has<::talos::schedule::Field::EvalBorrowedCaptures>(
+            function))
+      return WalkResult::skip();
+    unsigned physical = 0;
+    for (BlockArgument argument : function.getBody().front().getArguments()) {
+      SmallVector<Type> converted;
+      if (failed(packedConverter.convertType(argument.getType(), converted)))
+        return WalkResult::interrupt();
+      if (isa<sim::RefType>(argument.getType())) {
+        if (converted.size() != 1)
+          return WalkResult::interrupt();
+        referenceArguments[function.getOperation()].push_back(physical);
+      }
+      physical += converted.size();
+    }
+    SmallVector<int64_t> referenceIndices;
+    for (unsigned index : referenceArguments[function.getOperation()])
+      referenceIndices.push_back(index);
+    native::set<native::TransferredReferences>(
+        function, DenseI64ArrayAttr::get(context, referenceIndices));
+    return WalkResult::skip();
+  });
   if (lifetimeInputs.wasInterrupted())
     return failure();
   markTiming("managed lifetime inventory");
@@ -1121,15 +1118,14 @@ LogicalResult lowerPackedSimulationOperations(
         sim::SimFatalOp, sim::SimErrorOp, sim::SimPublicationBatchBeginOp,
         sim::SimPublicationBatchEndOp, sim::SimTerminationRequestedOp,
         sim::SimProgramOwnedOp, sim::SimProgramExitOp, sim::SimTimeNowOp,
-        sim::SimDisplayOp,
-        sim::SimStringOutputFormatOp, sim::SimFileOpenMCDOp, sim::SimFileOpenOp,
-        sim::SimFileCloseOp, sim::SimFileFlushOp, sim::SimFileGetcOp,
-        sim::SimFileUngetcOp, sim::SimFileGetlineOp, sim::SimFileReadPackedOp,
-        sim::SimFileEofOp, sim::SimFileSeekOp, sim::SimFileTellOp,
-        sim::SimFileRewindOp, sim::SimDumpOpenOp, sim::SimDumpOpenStringOp,
-        sim::SimDumpTimescaleOp, sim::SimDumpVarsOp, sim::SimDumpAllOp,
-        sim::SimDumpControlOp, sim::SimDumpLimitOp, sim::SimDumpFlushOp,
-        sim::SimDumpPortsOp, sim::SimDumpPortsControlOp>();
+        sim::SimDisplayOp, sim::SimStringOutputFormatOp, sim::SimFileOpenMCDOp,
+        sim::SimFileOpenOp, sim::SimFileCloseOp, sim::SimFileFlushOp,
+        sim::SimFileGetcOp, sim::SimFileUngetcOp, sim::SimFileGetlineOp,
+        sim::SimFileReadPackedOp, sim::SimFileEofOp, sim::SimFileSeekOp,
+        sim::SimFileTellOp, sim::SimFileRewindOp, sim::SimDumpOpenOp,
+        sim::SimDumpOpenStringOp, sim::SimDumpTimescaleOp, sim::SimDumpVarsOp,
+        sim::SimDumpAllOp, sim::SimDumpControlOp, sim::SimDumpLimitOp,
+        sim::SimDumpFlushOp, sim::SimDumpPortsOp, sim::SimDumpPortsControlOp>();
     target.addIllegalOp<
         sim::SimContextStorageOp, sim::SimContextNetOp, sim::SimContextDriverOp,
         sim::SimContextEventOp, sim::SimRefAllocOp, sim::SimRefReleaseOwnerOp,
@@ -1395,8 +1391,8 @@ LogicalResult lowerPackedSimulationOperations(
     for (const auto &timing : chunkTimings)
       if (timing.cfgSeconds + timing.storageSeconds + timing.conversionSeconds >
           1.0)
-        llvm::errs() << "talos packed chunk: " << timing.largestFunction
-                     << ": " << timing.sourceOps << " -> " << timing.loweredOps
+        llvm::errs() << "talos packed chunk: " << timing.largestFunction << ": "
+                     << timing.sourceOps << " -> " << timing.loweredOps
                      << " ops; CFG " << timing.cfgSeconds << " s; storage "
                      << timing.storageSeconds << " s; conversion "
                      << timing.conversionSeconds << " s\n";

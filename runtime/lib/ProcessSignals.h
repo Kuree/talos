@@ -19,7 +19,7 @@ bool signalSubscriptionBucketRange(uint64_t stableID, uint64_t bitWidth,
                                    int64_t &firstPage, int64_t &lastPage);
 
 bool talos_rt_notify_managed_waiters_unlocked(talos_rt_context *context,
-                                                uint64_t token);
+                                              uint64_t token);
 bool talos_rt_same_clock_occurrence_wait_unlocked(
     const talos_rt_context *context, const talos_rt_wait_record_v1 *wait,
     uint64_t waiterToken, bool designWaiter);

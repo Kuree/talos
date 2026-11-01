@@ -18,14 +18,14 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/Dialect/SCF/Utils/Utils.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/AttrTypeSubElements.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Iterators.h"
-#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -185,8 +185,8 @@ public:
       *this, "bytes-attr",
       llvm::cl::desc("module attribute set to the contents of `bytes-file` "
                      "as an array<i8>")};
-  Option<std::string> bytesFile{
-      *this, "bytes-file", llvm::cl::desc("file read for `bytes-attr`")};
+  Option<std::string> bytesFile{*this, "bytes-file",
+                                llvm::cl::desc("file read for `bytes-attr`")};
 
   void runOnOperation() final {
     ModuleOp module = getOperation();
@@ -203,12 +203,12 @@ public:
         return signalPassFailure();
       }
       StringRef bytes = (*buffer)->getBuffer();
-      module->setAttr(bytesAttribute,
-                      DenseI8ArrayAttr::get(
-                          &getContext(),
-                          ArrayRef<int8_t>(
-                              reinterpret_cast<const int8_t *>(bytes.data()),
-                              bytes.size())));
+      module->setAttr(
+          bytesAttribute,
+          DenseI8ArrayAttr::get(
+              &getContext(),
+              ArrayRef<int8_t>(reinterpret_cast<const int8_t *>(bytes.data()),
+                               bytes.size())));
     }
     if (attributes.empty())
       return;
@@ -216,8 +216,8 @@ public:
     for (size_t at = source.find("\\\""); at != std::string::npos;
          at = source.find("\\\"", at + 1))
       source.erase(at, 1);
-    auto dictionary = dyn_cast_or_null<DictionaryAttr>(
-        parseAttribute(source, &getContext()));
+    auto dictionary =
+        dyn_cast_or_null<DictionaryAttr>(parseAttribute(source, &getContext()));
     if (!dictionary) {
       module.emitError() << "attrs is not a dictionary attribute: "
                          << attributes;
@@ -247,15 +247,13 @@ public:
   EditAttributesTestPass(const EditAttributesTestPass &other)
       : PassWrapper(other) {}
 
-  StringRef getArgument() const final {
-    return "test-talos-edit-attributes";
-  }
+  StringRef getArgument() const final { return "test-talos-edit-attributes"; }
   StringRef getDescription() const final {
     return "edit, replace within, or erase operations that match attributes";
   }
 
-  Option<std::string> opName{*this, "op",
-                             llvm::cl::desc("only edit operations of this name")};
+  Option<std::string> opName{
+      *this, "op", llvm::cl::desc("only edit operations of this name")};
   Option<std::string> match{
       *this, "match",
       llvm::cl::desc("dictionary of attributes an operation must carry")};
@@ -333,12 +331,13 @@ public:
     AttrTypeReplacer replacer;
     if (auto fromType = dyn_cast_or_null<TypeAttr>(from)) {
       Type toType = cast<TypeAttr>(to).getValue();
-      replacer.addReplacement([&, fromType, toType](Type type) -> std::optional<Type> {
-        if (type != fromType.getValue())
-          return std::nullopt;
-        replaced = true;
-        return toType;
-      });
+      replacer.addReplacement(
+          [&, fromType, toType](Type type) -> std::optional<Type> {
+            if (type != fromType.getValue())
+              return std::nullopt;
+            replaced = true;
+            return toType;
+          });
     } else if (from) {
       replacer.addReplacement(
           [&](Attribute attribute) -> std::optional<Attribute> {
@@ -374,7 +373,8 @@ public:
         operation = builder.clone(*operation);
       }
       if (operandValue || poisonType) {
-        if (static_cast<uint64_t>(operandIndex) >= operation->getNumOperands()) {
+        if (static_cast<uint64_t>(operandIndex) >=
+            operation->getNumOperands()) {
           operation->emitError("test-talos-edit-attributes operand index is "
                                "out of range");
           return signalPassFailure();
@@ -426,8 +426,8 @@ private:
     std::string source = unescape(text);
     if (!StringRef(source).starts_with("{"))
       source = "{" + source + "}";
-    auto dictionary = dyn_cast_or_null<DictionaryAttr>(
-        parseAttribute(source, &getContext()));
+    auto dictionary =
+        dyn_cast_or_null<DictionaryAttr>(parseAttribute(source, &getContext()));
     if (!dictionary)
       getOperation().emitError()
           << option << " is not a dictionary attribute: " << text;
@@ -468,8 +468,7 @@ public:
     OpBuilder builder(&getContext());
     for (cf::BranchOp branch : branches) {
       auto length = branch->getAttrOfType<IntegerAttr>("test.chain_length");
-      if (!length || length.getInt() < 0 ||
-          !branch.getDestOperands().empty()) {
+      if (!length || length.getInt() < 0 || !branch.getDestOperands().empty()) {
         branch.emitError("test.chain_length must be a non-negative integer on "
                          "a branch without operands");
         return signalPassFailure();
@@ -486,7 +485,6 @@ public:
     }
   }
 };
-
 
 class UnrollLoopsTestPass
     : public PassWrapper<UnrollLoopsTestPass, OperationPass<ModuleOp>> {
@@ -526,11 +524,12 @@ public:
 /// Replaces each operation carrying `test.replicate = N` with N copies in
 /// place. Copy k replaces `#` with k in every string and symbol name inside
 /// it, including those in types such as class handles, so the copies of a
-/// symbol and of its references stay distinct and consistent, and adds k times each stride of a `test.replicate_stride`
-/// dictionary to the integer attribute of that name on the same operation or
-/// on its function arguments. Copy k uses copy k of an earlier operation
-/// replicated as many times, as an unrolled loop body would. An optional
-/// `test.replicate_first = F` numbers the names from F instead of zero.
+/// symbol and of its references stay distinct and consistent, and adds k times
+/// each stride of a `test.replicate_stride` dictionary to the integer attribute
+/// of that name on the same operation or on its function arguments. Copy k uses
+/// copy k of an earlier operation replicated as many times, as an unrolled loop
+/// body would. An optional `test.replicate_first = F` numbers the names from F
+/// instead of zero.
 class ReplicateTestPass
     : public PassWrapper<ReplicateTestPass, OperationPass<ModuleOp>> {
 public:
@@ -543,12 +542,11 @@ public:
 
   void runOnOperation() final {
     SmallVector<Operation *> marked;
-    WalkResult walk = getOperation().walk<WalkOrder::PreOrder>(
-        [&](Operation *operation) {
+    WalkResult walk =
+        getOperation().walk<WalkOrder::PreOrder>([&](Operation *operation) {
           if (!operation->hasAttr("test.replicate"))
             return WalkResult::advance();
-          auto count =
-              operation->getAttrOfType<IntegerAttr>("test.replicate");
+          auto count = operation->getAttrOfType<IntegerAttr>("test.replicate");
           if (!count || count.getInt() < 1) {
             operation->emitError("test.replicate must be a positive integer");
             return WalkResult::interrupt();

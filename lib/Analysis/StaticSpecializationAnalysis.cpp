@@ -17,8 +17,7 @@ FailureOr<StaticSpecializationAnalysis>
 StaticSpecializationAnalysis::compute(sim::SimDesignOp design) {
   StaticSpecializationAnalysis result;
   result.plan =
-      ::talos::schedule::get<schedule::metadata::staticSpecialization>(
-          design);
+      ::talos::schedule::get<schedule::metadata::staticSpecialization>(design);
   if (!result.plan)
     return result;
 

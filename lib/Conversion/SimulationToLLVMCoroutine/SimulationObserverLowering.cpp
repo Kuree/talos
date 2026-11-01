@@ -58,8 +58,7 @@ LogicalResult makeNativeObserverThunk(ModuleOp module,
   }
 
   OpBuilder builder(module.getContext());
-  std::string thunkName =
-      (evaluator.getSymName() + ".__talos_observer").str();
+  std::string thunkName = (evaluator.getSymName() + ".__talos_observer").str();
   auto thunk = module.lookupSymbol<LLVM::LLVMFuncOp>(thunkName);
   if (!thunk)
     return evaluator.emitError(
@@ -159,8 +158,9 @@ LogicalResult serializeComputedObserverRecord(
           "converted observer inventory exceeds v1 count fields");
     captureCountWide += captures;
     dependencyCountWide += dependencies;
-    auto width = ::talos::schedule::get<
-        ::talos::schedule::Field::NativeObserverWidth>(binding);
+    auto width =
+        ::talos::schedule::get<::talos::schedule::Field::NativeObserverWidth>(
+            binding);
     auto fourState = ::talos::schedule::get<
         ::talos::schedule::Field::NativeObserverFourState>(binding);
     if (!width || !fourState || width.getValue().isNegative() ||
@@ -235,8 +235,9 @@ LogicalResult serializeComputedObserverRecord(
     auto observerID =
         ::talos::schedule::get<::talos::schedule::Field::NativeObserverId>(
             binding);
-    auto dependencyKinds = ::talos::schedule::get<
-        ::talos::schedule::Field::NativeDependencyKinds>(binding);
+    auto dependencyKinds =
+        ::talos::schedule::get<::talos::schedule::Field::NativeDependencyKinds>(
+            binding);
     auto dependencyWidths = ::talos::schedule::get<
         ::talos::schedule::Field::NativeDependencyWidths>(binding);
     auto dependencyCaptureIndices = ::talos::schedule::get<

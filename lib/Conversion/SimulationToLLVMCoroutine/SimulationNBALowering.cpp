@@ -114,10 +114,10 @@ public:
                 adaptor.getRiseDelay().front(), adaptor.getFallDelay().front(),
                 adaptor.getTurnoffDelay().front(), value, unknown})
             .getResult();
-    LLVM::CallOp::create(rewriter, location, TypeRange{},
-                         SymbolRefAttr::get(rewriter.getContext(),
-                                            "talos_rt_v1_scheduler_fail"),
-                         ValueRange{runtimeContext, status});
+    LLVM::CallOp::create(
+        rewriter, location, TypeRange{},
+        SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_scheduler_fail"),
+        ValueRange{runtimeContext, status});
     rewriter.eraseOp(op);
     return success();
   }
@@ -223,10 +223,10 @@ public:
                     : "talos_rt_v1_scheduler_inertial_path_driver"),
             arguments)
             .getResult();
-    LLVM::CallOp::create(rewriter, location, TypeRange{},
-                         SymbolRefAttr::get(rewriter.getContext(),
-                                            "talos_rt_v1_scheduler_fail"),
-                         ValueRange{runtimeContext, status});
+    LLVM::CallOp::create(
+        rewriter, location, TypeRange{},
+        SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_scheduler_fail"),
+        ValueRange{runtimeContext, status});
     rewriter.eraseOp(op);
     return success();
   }
@@ -333,10 +333,10 @@ public:
                     : "talos_rt_v1_scheduler_inertial_path_storage"),
             arguments)
             .getResult();
-    LLVM::CallOp::create(rewriter, location, TypeRange{},
-                         SymbolRefAttr::get(rewriter.getContext(),
-                                            "talos_rt_v1_scheduler_fail"),
-                         ValueRange{runtimeContext, status});
+    LLVM::CallOp::create(
+        rewriter, location, TypeRange{},
+        SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_scheduler_fail"),
+        ValueRange{runtimeContext, status});
     rewriter.eraseOp(op);
     return success();
   }
@@ -410,10 +410,10 @@ public:
                 adaptor.getTurnoffDelay().front(), lowValue, lowUnknown,
                 highValue, highUnknown, transitionValue, transitionUnknown})
             .getResult();
-    LLVM::CallOp::create(rewriter, location, TypeRange{},
-                         SymbolRefAttr::get(rewriter.getContext(),
-                                            "talos_rt_v1_scheduler_fail"),
-                         ValueRange{runtimeContext, status});
+    LLVM::CallOp::create(
+        rewriter, location, TypeRange{},
+        SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_scheduler_fail"),
+        ValueRange{runtimeContext, status});
     rewriter.eraseOp(op);
     return success();
   }
@@ -520,10 +520,10 @@ public:
             rewriter, location, TypeRange{i32},
             SymbolRefAttr::get(rewriter.getContext(), function), arguments)
             .getResult();
-    LLVM::CallOp::create(rewriter, location, TypeRange{},
-                         SymbolRefAttr::get(rewriter.getContext(),
-                                            "talos_rt_v1_scheduler_fail"),
-                         ValueRange{runtimeContext, status});
+    LLVM::CallOp::create(
+        rewriter, location, TypeRange{},
+        SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_scheduler_fail"),
+        ValueRange{runtimeContext, status});
     rewriter.eraseOp(op);
     return success();
   }
@@ -653,8 +653,8 @@ public:
         auto owner =
             dyn_cast<sim::SimFuncOp>(argument.getOwner()->getParentOp());
         if (!owner || argument.getOwner() != &owner.getBody().front() ||
-            !::talos::schedule::has<
-                ::talos::schedule::Field::EvalRawCaptures>(owner) ||
+            !::talos::schedule::has<::talos::schedule::Field::EvalRawCaptures>(
+                owner) ||
             !stateLayout || rootIndex == UINT32_MAX || !staticPlan ||
             rootIndex >= staticPlan->roots.size())
           return std::nullopt;
@@ -851,9 +851,9 @@ public:
           rewriter, location,
           arith::OrIOp::create(rewriter, location, previousMask, mask),
           maskAddress, 8);
-      Value validAddress = nbaFieldGEP(
-          rewriter, location, accumulator,
-          offsetof(talos_rt_generated_nba_accumulator_256, valid));
+      Value validAddress =
+          nbaFieldGEP(rewriter, location, accumulator,
+                      offsetof(talos_rt_generated_nba_accumulator_256, valid));
       Value previousValid =
           LLVM::LoadOp::create(rewriter, location, i32, validAddress, 4);
       LLVM::StoreOp::create(
@@ -1001,10 +1001,10 @@ public:
                        llvmConstant(rewriter, location, i64, *sourceWidth),
                        delay, staticSite, clockingOutput, value, unknown})
             .getResult();
-    LLVM::CallOp::create(rewriter, location, TypeRange{},
-                         SymbolRefAttr::get(rewriter.getContext(),
-                                            "talos_rt_v1_scheduler_fail"),
-                         ValueRange{runtimeContext, status});
+    LLVM::CallOp::create(
+        rewriter, location, TypeRange{},
+        SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_scheduler_fail"),
+        ValueRange{runtimeContext, status});
     if (guardContinuation) {
       cf::BranchOp::create(rewriter, location, guardContinuation);
       rewriter.setInsertionPointToStart(guardContinuation);
@@ -1101,8 +1101,7 @@ public:
     // IEEE 1800-2023 4.4.2.4, 4.5: a shared runtime NBA barrier must see
     // validity, masks and region even when all payload bits are known.
     bool compactEvalMetadata =
-        !::talos::schedule::has<
-            ::talos::schedule::Field::EvalRuntimeCalendar>(
+        !::talos::schedule::has<::talos::schedule::Field::EvalRuntimeCalendar>(
             op->getParentOfType<ModuleOp>()) &&
         (inductiveTwoStateAccess ||
          ::talos::schedule::has<schedule::metadata::evalCompactNBAMetadata>(
@@ -1200,11 +1199,11 @@ public:
             LLVM::AddressOfOp::create(rewriter, location, pointer,
                                       evalStepFourStateFallbackName),
             1);
-        Value roots = byteGEP(
-            rewriter, location,
-            LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                      evalStepFourStateNBARootsName),
-            uint64_t{staticRoot->second / 64} * sizeof(uint64_t));
+        Value roots =
+            byteGEP(rewriter, location,
+                    LLVM::AddressOfOp::create(rewriter, location, pointer,
+                                              evalStepFourStateNBARootsName),
+                    uint64_t{staticRoot->second / 64} * sizeof(uint64_t));
         Value marked = LLVM::LoadOp::create(rewriter, location, i64, roots, 8);
         LLVM::StoreOp::create(
             rewriter, location,
@@ -1397,9 +1396,8 @@ public:
           // selected unknown bits with zero: otherwise a later mixed or
           // checkpoint barrier can replay stale X/Z data from the prior
           // phase into canonical state.
-          mergeField(
-              offsetof(talos_rt_generated_nba_accumulator_256, unknown),
-              unknown);
+          mergeField(offsetof(talos_rt_generated_nba_accumulator_256, unknown),
+                     unknown);
           if (!compactEvalMetadata ||
               (!fullRootEvalStage && fixedWriteMask == 0)) {
             Value maskAddress = nbaFieldGEP(
@@ -1432,10 +1430,10 @@ public:
           LLVM::StoreOp::create(
               rewriter, location,
               llvmConstant(rewriter, location, i32, UINT32_MAX),
-              nbaFieldGEP(rewriter, location, base,
-                          offsetof(talos_rt_generated_nba_accumulator_256,
-                                   write_mask) +
-                              laneOffset),
+              nbaFieldGEP(
+                  rewriter, location, base,
+                  offsetof(talos_rt_generated_nba_accumulator_256, write_mask) +
+                      laneOffset),
               4);
           LLVM::StoreOp::create(
               rewriter, location, llvmConstant(rewriter, location, i32, 0),
@@ -1480,9 +1478,8 @@ public:
             markDirty, rewriter.getI32IntegerAttr(staticRoot->second));
         certifyCapture(markDirty);
         if (!compactEvalMetadata) {
-          Value summaryBase =
-              LLVM::AddressOfOp::create(rewriter, location, pointer,
-                                        "__talos_aot_nba_dirty_summary_v1");
+          Value summaryBase = LLVM::AddressOfOp::create(
+              rewriter, location, pointer, "__talos_aot_nba_dirty_summary_v1");
           uint32_t dirtyWordIndex = staticRoot->second / 64;
           Value summaryWord = byteGEP(
               rewriter, location, summaryBase,
@@ -1664,8 +1661,8 @@ public:
           mappedSite ? staticPlan->siteRoots.lookup(site.getId()) : UINT32_MAX;
       bool orderedEvalQueue =
           function &&
-          ::talos::schedule::has<
-              ::talos::schedule::Field::EvalOrderedNbaQueue>(function);
+          ::talos::schedule::has<::talos::schedule::Field::EvalOrderedNbaQueue>(
+              function);
       bool staticallyStaged =
           !op.getClockingOutputAttr() && !driverDestination &&
           staticSitesEnabled && mappedSite &&
@@ -1770,15 +1767,12 @@ Value buildNativeNBAChange(OpBuilder &builder, Location location,
                                  unknown);
 }
 
-void populateNBAToLLVMConversionPatterns(RewritePatternSet &patterns,
-                                         TypeConverter &converter,
-                                         uint64_t stateBitCount,
-                                         const NativeStaticNBAPlan *staticPlan,
-                                         const NativeStateLayout *stateLayout,
-                                         bool staticSitesEnabled,
-                                         bool guardedClaims, bool evalCeiling,
-                                         const DenseSet<Operation *>
-                                             &completePackedSliceNBAs) {
+void populateNBAToLLVMConversionPatterns(
+    RewritePatternSet &patterns, TypeConverter &converter,
+    uint64_t stateBitCount, const NativeStaticNBAPlan *staticPlan,
+    const NativeStateLayout *stateLayout, bool staticSitesEnabled,
+    bool guardedClaims, bool evalCeiling,
+    const DenseSet<Operation *> &completePackedSliceNBAs) {
   patterns.add<InertialDriverConversion>(converter, patterns.getContext(),
                                          stateBitCount);
   patterns.add<InertialPathDriverConversion>(converter, patterns.getContext(),
@@ -1789,10 +1783,9 @@ void populateNBAToLLVMConversionPatterns(RewritePatternSet &patterns,
                                                stateBitCount);
   patterns.add<InertialPathStrengthPairConversion>(
       converter, patterns.getContext(), stateBitCount);
-  patterns.add<PackedSliceNBAConversion>(converter, patterns.getContext(),
-                                         stateBitCount, staticPlan, stateLayout,
-                                         staticSitesEnabled, guardedClaims,
-                                         completePackedSliceNBAs);
+  patterns.add<PackedSliceNBAConversion>(
+      converter, patterns.getContext(), stateBitCount, staticPlan, stateLayout,
+      staticSitesEnabled, guardedClaims, completePackedSliceNBAs);
   patterns.add<ImmediateNBAConversion>(converter, patterns.getContext(),
                                        stateBitCount, staticPlan,
                                        staticSitesEnabled, guardedClaims);

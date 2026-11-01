@@ -543,8 +543,8 @@ public:
         operand >= (weight ? weightSeen.size() : groups.value_or(UINT32_MAX)))
       return false;
     if (next == 0) {
-      bool repeated = weight ? weightSeen[operand]
-                             : !targetSeen.insert(operand).second;
+      bool repeated =
+          weight ? weightSeen[operand] : !targetSeen.insert(operand).second;
       if (bit || repeated)
         return false;
       if (weight)

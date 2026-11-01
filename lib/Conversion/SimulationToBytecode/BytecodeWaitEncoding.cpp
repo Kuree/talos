@@ -138,8 +138,8 @@ LogicalResult Encoder::encodeObserverWait(FunctionPlan &plan,
     captureCursor += binding.getCaptures().size();
     for (Value dependency : binding.getDependencies()) {
       uint64_t entryOffset =
-          dependenciesOffset + uint64_t{dependencyCursor} *
-                                   sizeof(talos_rt_computed_dependency_v1);
+          dependenciesOffset +
+          uint64_t{dependencyCursor} * sizeof(talos_rt_computed_dependency_v1);
       if (auto reference =
               dyn_cast<sim::ArgumentRefType>(dependency.getType())) {
         auto capture = llvm::find(binding.getCaptures(), dependency);
@@ -420,8 +420,7 @@ LogicalResult Encoder::encodeWait(FunctionPlan &plan, Operation *operation,
   }
   if (delay)
     emit({StoreFrame, 0, 0, reg(plan, delay), 0, 0, 0,
-          suspension->waitOffset +
-              offsetof(talos_rt_wait_record_v1, payload)});
+          suspension->waitOffset + offsetof(talos_rt_wait_record_v1, payload)});
   Layout offsetLayout{Bits, 0, 64, 0, 8, 0};
   uint32_t offsetRegister = plan.layouts.size();
   offsetLayout.offset = llvm::alignTo(plan.scratchSize, uint64_t{8});

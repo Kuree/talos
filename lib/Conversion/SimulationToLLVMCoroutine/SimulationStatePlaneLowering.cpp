@@ -93,7 +93,7 @@ void notifySignal(ConversionPatternRewriter &builder, Location location,
                  save(newUnknown)});
   if (sourceOwner)
     ::talos::schedule::set<schedule::metadata::evalSourceOwner>(transition,
-                                                                  sourceOwner);
+                                                                sourceOwner);
   // The runtime consumes the transition before returning.
   for (Value storage : temporaries)
     endTemporary(builder, location, storage);
@@ -118,8 +118,7 @@ resolveDirectStaticStateRange(Value handle, unsigned width,
   // Direct accesses are authorized either by the specialization policy or by
   // a fully static VPI-off wide-NBA plan, which records its roots in the same
   // direct-handle inventory before conversion.
-  if (!bound ||
-      static_cast<uint64_t>(decoded.offset) > bound->width ||
+  if (!bound || static_cast<uint64_t>(decoded.offset) > bound->width ||
       width > bound->width - static_cast<uint64_t>(decoded.offset))
     return std::nullopt;
   return DirectStaticStateRange{
@@ -714,10 +713,12 @@ Value storeDirectPackedPlane(OpBuilder &builder, Location location, Value input,
 
 namespace detail {
 
-Value tryLoadSelectedStaticStatePlane(
-    OpBuilder &builder, Location location, Value handle, IntegerType resultType,
-    StringRef globalName, const NativeStateLayout *directLayout,
-    bool assumeClean, bool knownZero, llvm::function_ref<Value(Value)> remap) {
+Value tryLoadSelectedStaticStatePlane(OpBuilder &builder, Location location,
+                                      Value handle, IntegerType resultType,
+                                      StringRef globalName,
+                                      const NativeStateLayout *directLayout,
+                                      bool assumeClean, bool knownZero,
+                                      llvm::function_ref<Value(Value)> remap) {
   // CFG canonicalization can merge reads into selects or block arguments of
   // distinct handles. Every incoming leaf must be in bounds and free of
   // runtime overlays before its read can be speculated. Keep the loads at the
@@ -807,8 +808,8 @@ Value tryLoadSelectedStaticStatePlane(
         Value matches = arith::CmpIOp::create(
             builder, location, arith::CmpIPredicate::eq, handle,
             llvmConstant(builder, location, handle.getType(), encoded));
-        result = arith::SelectOp::create(builder, location, matches, loaded,
-                                        result);
+        result =
+            arith::SelectOp::create(builder, location, matches, loaded, result);
       }
       return result;
     }
@@ -986,12 +987,12 @@ Value storeStatePlane(ConversionPatternRewriter &rewriter, Location location,
             rewriter.getContext(),
             continuous ? "talos_rt_v1_native_state_store_continuous_plane"
                        : "talos_rt_v1_native_state_store_plane"),
-        ValueRange{
-            context, base, llvmConstant(rewriter, location, i64, stateBitCount),
-            handle, llvmConstant(rewriter, location, i64, inputType.getWidth()),
-            llvmConstant(rewriter, location, i32,
-                         globalName == "__talos_state_unknown" ? 1 : 0),
-            in, changed});
+        ValueRange{context, base,
+                   llvmConstant(rewriter, location, i64, stateBitCount), handle,
+                   llvmConstant(rewriter, location, i64, inputType.getWidth()),
+                   llvmConstant(rewriter, location, i32,
+                                globalName == "__talos_state_unknown" ? 1 : 0),
+                   in, changed});
     Value changedByte =
         LLVM::LoadOp::create(rewriter, location, i8, changed, 1);
     endTemporary(rewriter, location, in);

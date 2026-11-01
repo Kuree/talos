@@ -4422,10 +4422,10 @@ mlir::GenRegistration reflectionLayoutGen(
     "Generate Talos design-reflection layouts and record kinds",
     emitReflectionLayouts);
 
-mlir::GenRegistration vpiObjectModelGen(
-    "gen-talos-vpi-object-model",
-    "Generate Talos VPI object and relationship descriptors",
-    emitVPIObjectModel);
+mlir::GenRegistration
+    vpiObjectModelGen("gen-talos-vpi-object-model",
+                      "Generate Talos VPI object and relationship descriptors",
+                      emitVPIObjectModel);
 
 bool validateCoverageSchema(const RecordKeeper &records) {
   auto metrics = records.getAllDerivedDefinitions("CoverageMetric");
@@ -4463,8 +4463,7 @@ bool validateCoverageSchema(const RecordKeeper &records) {
   auto containerKeyKinds =
       records.getAllDerivedDefinitions("CoverageFunctionalContainerKeyKind");
   auto signedness = records.getAllDerivedDefinitions("CoverageSignedness");
-  auto arrayModes =
-      records.getAllDerivedDefinitions("CoverageBinArrayMode");
+  auto arrayModes = records.getAllDerivedDefinitions("CoverageBinArrayMode");
   auto distributions =
       records.getAllDerivedDefinitions("CoverageBinDistributionKind");
   auto matchesPolicies =
@@ -4473,12 +4472,12 @@ bool validateCoverageSchema(const RecordKeeper &records) {
       records.getAllDerivedDefinitions("CoverageOptionScopeKind");
   auto optionKinds =
       records.getAllDerivedDefinitions("CoverageConfigurationOptionKind");
-  auto optionOwners = records.getAllDerivedDefinitions(
-      "CoverageConfigurationOptionOwnerKind");
+  auto optionOwners =
+      records.getAllDerivedDefinitions("CoverageConfigurationOptionOwnerKind");
   auto optionValues =
       records.getAllDerivedDefinitions("CoverageConfigurationValueKind");
-  auto expressionPhases = records.getAllDerivedDefinitions(
-      "CoverageExpressionEvaluationPhase");
+  auto expressionPhases =
+      records.getAllDerivedDefinitions("CoverageExpressionEvaluationPhase");
   auto tupleModes =
       records.getAllDerivedDefinitions("CoverageTupleElementMode");
   auto resolvedValueSetRoles =
@@ -4595,10 +4594,8 @@ bool validateCoverageSchema(const RecordKeeper &records) {
     }
   }
 
-  auto encodings =
-      records.getAllDerivedDefinitions("CoverageFieldEncoding");
-  auto domainDefs =
-      records.getAllDerivedDefinitions("CoverageFieldDomain");
+  auto encodings = records.getAllDerivedDefinitions("CoverageFieldEncoding");
+  auto domainDefs = records.getAllDerivedDefinitions("CoverageFieldDomain");
   SmallVector<const Record *> domains(domainDefs.begin(), domainDefs.end());
   auto physicalRecords = records.getAllDerivedDefinitions("CoverageRecord");
   if (encodings.empty() || domains.empty() || physicalRecords.empty()) {
@@ -4618,13 +4615,14 @@ bool validateCoverageSchema(const RecordKeeper &records) {
       return false;
     StringRef category = domain->getValueAsString("category");
     static constexpr StringLiteral categories[] = {
-        "None", "Enum", "String", "StableRef", "Range", "UUIDRef",
-        "Relational"};
+        "None",  "Enum",    "String",    "StableRef",
+        "Range", "UUIDRef", "Relational"};
     uint32_t targetSection = 0;
     if (!llvm::is_contained(categories, category) ||
         !getU32(*domain, "targetSection", 0, targetSection) ||
         (targetSection && !knownSectionValues.count(targetSection)) ||
-        !domainNames.insert(name).second || !domainRecords.insert(domain).second) {
+        !domainNames.insert(name).second ||
+        !domainRecords.insert(domain).second) {
       PrintError(domain->getLoc(), "invalid coverage field domain");
       return false;
     }
@@ -4716,8 +4714,7 @@ bool validateCoverageSchema(const RecordKeeper &records) {
         !getU32(*encoding, "width", 1, width))
       return false;
     if (!encodingWidths.try_emplace(name, width).second) {
-      PrintError(encoding->getLoc(),
-                 "duplicate coverage field encoding name");
+      PrintError(encoding->getLoc(), "duplicate coverage field encoding name");
       return false;
     }
   }
@@ -4762,9 +4759,9 @@ bool validateCoverageSchema(const RecordKeeper &records) {
       StringRef diagnosticName = field->getValueAsString("diagnosticName");
       StringRef semantic = field->getValueAsString("semantic");
       static constexpr StringLiteral validSemantics[] = {
-          "Scalar",      "Enum",        "StableID",    "StableIDRef",
-          "RangeStart",  "RangeCount",  "StringIndex", "Flags",
-          "ReservedZero", "UUIDID",     "UUIDRef",    "Digest"};
+          "Scalar",       "Enum",       "StableID",    "StableIDRef",
+          "RangeStart",   "RangeCount", "StringIndex", "Flags",
+          "ReservedZero", "UUIDID",     "UUIDRef",     "Digest"};
       if (!llvm::is_contained(validSemantics, semantic)) {
         PrintError(field->getLoc(), "unknown coverage field semantic role");
         return false;
@@ -4773,11 +4770,10 @@ bool validateCoverageSchema(const RecordKeeper &records) {
       StringRef domainCategory = domainRecord->getValueAsString("category");
       StringRef pairedField = field->getValueAsString("pairedField");
       StringRef expectedCategory =
-          semantic == "Enum"          ? "Enum"
-          : semantic == "StringIndex" ? "String"
-          : semantic == "RangeStart" || semantic == "RangeCount"
-              ? "Range"
-          : semantic == "UUIDID" || semantic == "UUIDRef" ? "UUIDRef"
+          semantic == "Enum"                                     ? "Enum"
+          : semantic == "StringIndex"                            ? "String"
+          : semantic == "RangeStart" || semantic == "RangeCount" ? "Range"
+          : semantic == "UUIDID" || semantic == "UUIDRef"        ? "UUIDRef"
           : semantic == "StableID" || semantic == "StableIDRef"
               ? (domainCategory == "Relational" ? "Relational" : "StableRef")
               : "None";
@@ -4797,8 +4793,7 @@ bool validateCoverageSchema(const RecordKeeper &records) {
       if (!getCppName(*encoding, "coverage field encoding", encodingName))
         return false;
       if (((semantic == "Enum" || semantic == "RangeStart" ||
-            semantic == "RangeCount" ||
-            semantic == "StringIndex") &&
+            semantic == "RangeCount" || semantic == "StringIndex") &&
            encodingName != "U32") ||
           (semantic == "Flags" && encodingName != "U32" &&
            encodingName != "U64") ||
@@ -4970,8 +4965,7 @@ bool emitCoverageDecls(const RecordKeeper &records, raw_ostream &os) {
          << kind->getValueAsInt("value") << ",\n";
     os << "};\n";
   };
-  emitEnum("TransitionRepetitionKind",
-           "CoverageTransitionRepetitionKind");
+  emitEnum("TransitionRepetitionKind", "CoverageTransitionRepetitionKind");
   emitEnum("FunctionalValueSetKind", "CoverageValueSetKind");
   emitEnum("FunctionalValueAtomKind", "CoverageValueAtomKind");
   emitEnum("CrossRetainAutoPolicy", "CoverageCrossRetainAutoPolicy");
@@ -4980,16 +4974,13 @@ bool emitCoverageDecls(const RecordKeeper &records, raw_ostream &os) {
   emitEnum("FunctionalExpressionOwnerKind", "CoverageExpressionOwnerKind");
   emitEnum("FunctionalExpressionRole", "CoverageExpressionRole");
   emitEnum("FunctionalFormalKind", "CoverageFunctionalFormalKind");
-  emitEnum("FunctionalFormalDirection",
-           "CoverageFunctionalFormalDirection");
-  emitEnum("FunctionalExpressionResultKind",
-           "CoverageExpressionResultKind");
+  emitEnum("FunctionalFormalDirection", "CoverageFunctionalFormalDirection");
+  emitEnum("FunctionalExpressionResultKind", "CoverageExpressionResultKind");
   emitEnum("FunctionalContainerKind", "CoverageFunctionalContainerKind");
   emitEnum("FunctionalContainerKeyKind", "CoverageFunctionalContainerKeyKind");
   emitEnum("CoverageSignedness", "CoverageSignedness");
   emitEnum("FunctionalBinArrayMode", "CoverageBinArrayMode");
-  emitEnum("FunctionalBinDistributionKind",
-           "CoverageBinDistributionKind");
+  emitEnum("FunctionalBinDistributionKind", "CoverageBinDistributionKind");
   emitEnum("CrossMatchesPolicy", "CoverageCrossMatchesPolicy");
   emitEnum("FunctionalOptionScopeKind", "CoverageOptionScopeKind");
   emitEnum("FunctionalConfigurationOptionKind",
@@ -5060,14 +5051,13 @@ bool emitCoverageDecls(const RecordKeeper &records, raw_ostream &os) {
        << section->getValueAsString("cppName") << ";\n";
     os << "  static constexpr uint32_t Size = "
        << section->getValueAsInt("recordSize") << ";\n";
-    for (const Record *field :
-         physicalRecord->getValueAsListOfDefs("fields")) {
+    for (const Record *field : physicalRecord->getValueAsListOfDefs("fields")) {
       StringRef fieldName = field->getValueAsString("cppName");
       const Record *encoding = field->getValueAsDef("encoding");
-      os << "  static constexpr uint32_t " << fieldName << "Offset = "
-         << field->getValueAsInt("offset") << ";\n";
-      os << "  static constexpr uint32_t " << fieldName << "Width = "
-         << encoding->getValueAsInt("width") << ";\n";
+      os << "  static constexpr uint32_t " << fieldName
+         << "Offset = " << field->getValueAsInt("offset") << ";\n";
+      os << "  static constexpr uint32_t " << fieldName
+         << "Width = " << encoding->getValueAsInt("width") << ";\n";
       os << "  static constexpr const char *" << fieldName << "Name = \""
          << field->getValueAsString("diagnosticName") << "\";\n";
       os << "  static constexpr CoverageFieldSemantic " << fieldName
@@ -5077,19 +5067,23 @@ bool emitCoverageDecls(const RecordKeeper &records, raw_ostream &os) {
       uint32_t width = static_cast<uint32_t>(encoding->getValueAsInt("width"));
       if (encodingName == "U32" || encodingName == "U64" ||
           encodingName == "S64") {
-        StringRef type = encodingName == "U32" ? "uint32_t"
+        StringRef type = encodingName == "U32"   ? "uint32_t"
                          : encodingName == "S64" ? "int64_t"
-                                                   : "uint64_t";
+                                                 : "uint64_t";
         StringRef unsignedType =
             encodingName == "U32" ? "uint32_t" : "uint64_t";
         os << "  static " << type << " get" << fieldName
            << "(const uint8_t *data) {\n"
-              "    " << unsignedType << " value = 0;\n"
+              "    "
+           << unsignedType
+           << " value = 0;\n"
               "    for (uint32_t i = 0; i != "
            << width << "; ++i)\n"
            << "      value |= " << unsignedType << "(data[" << fieldName
            << "Offset + i]) << (i * 8);\n"
-              "    return static_cast<" << type << ">(value);\n"
+              "    return static_cast<"
+           << type
+           << ">(value);\n"
               "  }\n"
               "  static void set"
            << fieldName << "(uint8_t *data, " << type << " value) {\n"
@@ -5106,7 +5100,8 @@ bool emitCoverageDecls(const RecordKeeper &records, raw_ostream &os) {
               "  static void set"
            << fieldName << "(uint8_t *data, const uint8_t *value) {\n"
            << "    for (uint32_t i = 0; i != " << width << "; ++i)\n"
-           << "      data[" << fieldName << "Offset + i] = value[i];\n"
+           << "      data[" << fieldName
+           << "Offset + i] = value[i];\n"
               "  }\n";
       }
     }
@@ -5116,10 +5111,9 @@ bool emitCoverageDecls(const RecordKeeper &records, raw_ostream &os) {
   return false;
 }
 
-bool emitCoverageRecordDescriptors(const RecordKeeper &records,
-                                   raw_ostream &os, StringRef prefix) {
-  auto domainRecords =
-      records.getAllDerivedDefinitions("CoverageFieldDomain");
+bool emitCoverageRecordDescriptors(const RecordKeeper &records, raw_ostream &os,
+                                   StringRef prefix) {
+  auto domainRecords = records.getAllDerivedDefinitions("CoverageFieldDomain");
   SmallVector<const Record *> domains(domainRecords.begin(),
                                       domainRecords.end());
   llvm::sort(domains, [](const Record *left, const Record *right) {
@@ -5141,9 +5135,8 @@ bool emitCoverageRecordDescriptors(const RecordKeeper &records,
   for (const Record *domain : domains) {
     auto values = domain->getValueAsListOfDefs("enumValues");
     os << "  {CoverageFieldDomain::" << domain->getValueAsString("cppName")
-       << ", CoverageFieldDomainKind::"
-       << domain->getValueAsString("category") << ", "
-       << domain->getValueAsInt("targetSection") << ", ";
+       << ", CoverageFieldDomainKind::" << domain->getValueAsString("category")
+       << ", " << domain->getValueAsInt("targetSection") << ", ";
     if (values.empty())
       os << "nullptr, 0";
     else
@@ -5163,8 +5156,7 @@ bool emitCoverageRecordDescriptors(const RecordKeeper &records,
     StringRef recordName = physicalRecord->getValueAsString("cppName");
     os << "inline constexpr FieldDescriptor " << prefix << recordName
        << "Fields[] = {\n";
-    for (const Record *field :
-         physicalRecord->getValueAsListOfDefs("fields")) {
+    for (const Record *field : physicalRecord->getValueAsListOfDefs("fields")) {
       const Record *encoding = field->getValueAsDef("encoding");
       const Record *domain = field->getValueAsDef("domain");
       StringRef pairedDiagnostic;
@@ -5173,21 +5165,17 @@ bool emitCoverageRecordDescriptors(const RecordKeeper &records,
         for (const Record *candidate :
              physicalRecord->getValueAsListOfDefs("fields"))
           if (candidate->getValueAsString("cppName") == pairedName) {
-            pairedDiagnostic =
-                candidate->getValueAsString("diagnosticName");
+            pairedDiagnostic = candidate->getValueAsString("diagnosticName");
             break;
           }
       os << "  {\"" << field->getValueAsString("diagnosticName") << "\", "
          << field->getValueAsInt("offset") << ", "
          << encoding->getValueAsInt("width")
-         << ", CoverageFieldEncoding::"
-         << encoding->getValueAsString("cppName")
-         << ", CoverageFieldSemantic::"
-         << field->getValueAsString("semantic")
-         << ", CoverageFieldDomain::"
-         << domain->getValueAsString("cppName") << ", "
-         << (field->getValueAsBit("nullable") ? "true" : "false") << ", "
-         << field->getValueAsInt("validMask") << ", \""
+         << ", CoverageFieldEncoding::" << encoding->getValueAsString("cppName")
+         << ", CoverageFieldSemantic::" << field->getValueAsString("semantic")
+         << ", CoverageFieldDomain::" << domain->getValueAsString("cppName")
+         << ", " << (field->getValueAsBit("nullable") ? "true" : "false")
+         << ", " << field->getValueAsInt("validMask") << ", \""
          << pairedDiagnostic << "\"},\n";
     }
     os << "};\n";
@@ -5197,10 +5185,9 @@ bool emitCoverageRecordDescriptors(const RecordKeeper &records,
   for (const Record *physicalRecord : physicalRecords) {
     StringRef recordName = physicalRecord->getValueAsString("cppName");
     const Record *section = physicalRecord->getValueAsDef("section");
-    os << "  {SectionKind::" << section->getValueAsString("cppName")
-       << ", \"" << recordName << "\", "
-       << section->getValueAsInt("recordSize") << ", " << prefix
-       << recordName << "Fields, "
+    os << "  {SectionKind::" << section->getValueAsString("cppName") << ", \""
+       << recordName << "\", " << section->getValueAsInt("recordSize") << ", "
+       << prefix << recordName << "Fields, "
        << physicalRecord->getValueAsListOfDefs("fields").size() << "},\n";
   }
   os << "};\n";

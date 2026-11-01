@@ -6,11 +6,11 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
 #include "talos/Runtime/Runtime.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <array>
@@ -194,8 +194,7 @@ TEST(GeneratedDesignDatabase, SharedParameterDefaults) {
     auto malformed = execution;
     malformed.design_database = bytes.data();
     malformed.design_database_size = bytes.size();
-    EXPECT_EQ(talos_rt_v1_design_validate(&malformed),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&malformed), TALOS_RT_INVALID_DESIGN);
   };
   uint64_t roots = directory.getExpressionRootBindingOffset();
   uint64_t nodes = directory.getExpressionNodeOffset();
@@ -297,13 +296,12 @@ TEST(GeneratedDesignDatabase, SharedParameterDefaults) {
     ASSERT_TRUE(prototype);
     auto specialization = prototype.getVpiSpecializationAttr();
     for (auto binding : llvm::make_early_inc_range(
-             design.getOps<
-                 talos::sim::SimVPIDefinitionMemberSpecializationOp>()))
+             design
+                 .getOps<talos::sim::SimVPIDefinitionMemberSpecializationOp>()))
       if (binding.getSpecializationAttr() != specialization)
         binding.erase();
     for (auto type : llvm::make_early_inc_range(
-             design
-                 .getOps<talos::sim::SimVPIDefinitionSpecializationDeclOp>()))
+             design.getOps<talos::sim::SimVPIDefinitionSpecializationDeclOp>()))
       if (mlir::FlatSymbolRefAttr::get(type) != specialization)
         type.erase();
     for (auto anchor : llvm::make_early_inc_range(

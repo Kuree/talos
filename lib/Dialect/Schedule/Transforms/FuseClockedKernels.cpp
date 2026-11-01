@@ -734,11 +734,10 @@ private:
                                         getProgramPointBefore(predecessor))
           ->after;
     if (from.transfer == Transfer::TaskCall)
-      return !from.callee ||
-             getOrCreateFor<AfterState>(
-                 point, getLatticeAnchor<AfterEntry>(
-                            std::make_pair(from.callee, 1u)))
-                 ->after;
+      return !from.callee || getOrCreateFor<AfterState>(
+                                 point, getLatticeAnchor<AfterEntry>(
+                                            std::make_pair(from.callee, 1u)))
+                                 ->after;
     if (!config.phases.getPhases(block).meets(config.kernel))
       return false;
     if (config.otherKernelWaits.contains(from.terminator))
@@ -821,9 +820,8 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
   bool unsupportedDesign =
       analysis::DPIEffectAnalysis(design).anyCallMayAccessDesign();
   design.walk([&](Operation *operation) {
-    unsupportedDesign |=
-        isa<sim::SimOverrideOp, sim::SimDynamicOverrideOp,
-            sim::SimReleaseOverrideOp>(operation);
+    unsupportedDesign |= isa<sim::SimOverrideOp, sim::SimDynamicOverrideOp,
+                             sim::SimReleaseOverrideOp>(operation);
   });
   auto bail = [&](StringRef reason) {
     if (report)
@@ -1068,7 +1066,8 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
   // A declaration initializer gives an initial value only that root has.
   enum InitialLevel : unsigned { Low, High, Unknown, Initialized };
   DenseMap<uint64_t, Type> storageTypes;
-  for (auto declaration : design.getBody().front().getOps<sim::SimStorageDeclOp>())
+  for (auto declaration :
+       design.getBody().front().getOps<sim::SimStorageDeclOp>())
     storageTypes[declaration.getId()] = declaration.getType();
   DenseMap<uint64_t, Type> netTypes;
   for (auto declaration : design.getBody().front().getOps<sim::SimNetDeclOp>())
@@ -1577,9 +1576,13 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
     // kernels, and other Inactive events of its phase with what they wake can
     // run after it. The window analysis covers the whole design, so it runs
     // only when deferral could store more roots (see below).
-    PostKernelAnalysis::Config windowConfig{
-        design.getOperation(), phases, kernelPhases, rootInitializer,
-        memberFunctions,       {},     {}};
+    PostKernelAnalysis::Config windowConfig{design.getOperation(),
+                                            phases,
+                                            kernelPhases,
+                                            rootInitializer,
+                                            memberFunctions,
+                                            {},
+                                            {}};
     DataFlowSolver window(DataFlowConfig().setInterprocedural(false));
     auto isAfter = [&](StringAttr name, uint32_t index) {
       auto function = symbols.lookup<sim::SimFuncOp>(name);
@@ -1624,9 +1627,13 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
           return "inactive event writes kernel input";
         // Without kernel updates, the window holds exactly what Inactive
         // events start or wake in the phase, plus what it cannot model.
-        PostKernelAnalysis::Config inactiveConfig{
-            design.getOperation(), phases, kernelPhases, rootInitializer,
-            memberFunctions,       {},     {}};
+        PostKernelAnalysis::Config inactiveConfig{design.getOperation(),
+                                                  phases,
+                                                  kernelPhases,
+                                                  rootInitializer,
+                                                  memberFunctions,
+                                                  {},
+                                                  {}};
         DataFlowSolver inactive(DataFlowConfig().setInterprocedural(false));
         inactive.load<PostKernelAnalysis>(inactiveConfig);
         if (failed(inactive.initializeAndRun(design)))
@@ -2075,8 +2082,8 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
               sim::NetType::get(design.getContext(), type), context,
               redirect.getI64IntegerAttr(
                   root & ~ActivationMemoryAnalysis::netRootTag));
-          value = sim::SimNetReadOp::create(redirect, cloned->getLoc(), type,
-                                            net);
+          value =
+              sim::SimNetReadOp::create(redirect, cloned->getLoc(), type, net);
         } else {
           Value reference = sim::SimContextStorageOp::create(
               redirect, cloned->getLoc(),
@@ -2086,7 +2093,7 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
         }
         if (type != produced)
           value = sim::SimLogicFromBitsOp::create(redirect, cloned->getLoc(),
-                                                 produced, value);
+                                                  produced, value);
         cloned->getResult(0).replaceAllUsesWith(value);
         cloned->erase();
         ++redirectedClockReads;

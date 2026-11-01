@@ -1,4 +1,5 @@
-//===- ClockedGuardLayout.h - Event-guard arms of clocked kernels ----------===//
+//===- ClockedGuardLayout.h - Event-guard arms of clocked kernels
+//----------===//
 //
 // LLVM IR passes that run on the generated design during optimization and
 // codegen. They are linked into the driver and also built as an `opt` plugin

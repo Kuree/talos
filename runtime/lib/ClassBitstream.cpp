@@ -50,7 +50,7 @@ TALOS_RT_FEATURE_HELPER uint64_t read64(const uint8_t *bytes) {
 }
 
 TALOS_RT_FEATURE_HELPER bool checkedAdd(uint64_t left, uint64_t right,
-                                          uint64_t &result) {
+                                        uint64_t &result) {
   if (right > UINT64_MAX - left)
     return false;
   result = left + right;
@@ -58,15 +58,15 @@ TALOS_RT_FEATURE_HELPER bool checkedAdd(uint64_t left, uint64_t right,
 }
 
 TALOS_RT_FEATURE_HELPER bool checkedTable(uint64_t begin, uint64_t count,
-                                            uint64_t stride, uint64_t &end) {
+                                          uint64_t stride, uint64_t &end) {
   return count <= (UINT64_MAX - begin) / stride &&
          checkedAdd(begin, count * stride, end);
 }
 
 TALOS_RT_FEATURE_HELPER bool checkedPointerRange(const void *pointer,
-                                                   uint64_t size,
-                                                   uintptr_t &begin,
-                                                   uintptr_t &end) {
+                                                 uint64_t size,
+                                                 uintptr_t &begin,
+                                                 uintptr_t &end) {
   if (!pointer || size > UINTPTR_MAX)
     return false;
   begin = reinterpret_cast<uintptr_t>(pointer);
@@ -77,8 +77,8 @@ TALOS_RT_FEATURE_HELPER bool checkedPointerRange(const void *pointer,
 }
 
 TALOS_RT_FEATURE_HELPER bool overlaps(uintptr_t leftBegin, uintptr_t leftEnd,
-                                        uintptr_t rightBegin,
-                                        uintptr_t rightEnd) {
+                                      uintptr_t rightBegin,
+                                      uintptr_t rightEnd) {
   return leftBegin < rightEnd && rightBegin < leftEnd;
 }
 
@@ -93,7 +93,7 @@ struct PlanRecord {
 };
 
 TALOS_RT_FEATURE_HELPER PlanRecord readRecord(const uint8_t *records,
-                                                uint64_t index) {
+                                              uint64_t index) {
   const uint8_t *record = records + index * kPlanRecordSize;
   uint64_t operation = read64(record);
   return {static_cast<uint32_t>(operation),
@@ -186,8 +186,7 @@ struct ClassBitstreamStateImpl final : ClassBitstreamState {
       if (range.begin == offset || offset >= range.end || range.begin >= end)
         continue;
       if ((!talos_rt_notify_managed_waiters_unlocked(context, range.token) ||
-           !talos_rt_notify_observer_managed_unlocked(context,
-                                                        range.token)) &&
+           !talos_rt_notify_observer_managed_unlocked(context, range.token)) &&
           context->schedulerStatus == TALOS_RT_OK)
         context->schedulerStatus = TALOS_RT_INVALID_ARGUMENT;
     }
@@ -235,8 +234,8 @@ descriptorIsA(const talos_rt_class_descriptor_v1 *candidate,
 }
 
 TALOS_RT_FEATURE_HELPER bool rangeInPlanRegion(uint64_t offset, uint64_t size,
-                                                 uint64_t planOffset,
-                                                 uint64_t planSize) {
+                                               uint64_t planOffset,
+                                               uint64_t planSize) {
   return (offset & 7) == 0 && (size & 7) == 0 && offset >= planOffset &&
          offset <= planOffset + planSize &&
          size <= planOffset + planSize - offset;
@@ -334,9 +333,10 @@ validateBody(const uint8_t *records, uint64_t recordCount, uint64_t rootSpan,
   }
 }
 
-TALOS_RT_FEATURE_HELPER bool
-validatePlan(Plan &plan, const uint8_t *blob, uint64_t offset, uint64_t size,
-             const ClassBitstreamStateImpl &state, bool &sawObject) {
+TALOS_RT_FEATURE_HELPER bool validatePlan(Plan &plan, const uint8_t *blob,
+                                          uint64_t offset, uint64_t size,
+                                          const ClassBitstreamStateImpl &state,
+                                          bool &sawObject) {
   if (size < kPlanHeaderSize || size > SIZE_MAX ||
       size != kPlanHeaderSize + ((size - kPlanHeaderSize) / kPlanRecordSize) *
                                     kPlanRecordSize)
@@ -418,8 +418,7 @@ finalizeClassBitstream(talos_rt_context *context) {
       !checkedPointerRange(blob, blobSize, blobBegin, blobEnd))
     return TALOS_RT_INVALID_DESIGN;
   uint64_t identity = read64(blob);
-  if (static_cast<uint32_t>(identity) !=
-          TALOS_RT_CLASS_BITSTREAM_BLOB_MAGIC ||
+  if (static_cast<uint32_t>(identity) != TALOS_RT_CLASS_BITSTREAM_BLOB_MAGIC ||
       static_cast<uint32_t>(identity >> 32) !=
           TALOS_RT_CLASS_BITSTREAM_BLOB_VERSION ||
       read64(blob + 8) != blobSize || read64(blob + 112) != 0 ||
@@ -712,8 +711,7 @@ finalizeClassBitstream(talos_rt_context *context) {
       bytecodeReferences.assign(static_cast<size_t>(image.siteCount), 0);
       for (uint32_t functionIndex = 0; functionIndex != image.functionCount;
            ++functionIndex) {
-        auto function =
-            talos::designbytecode::functionAt(image, functionIndex);
+        auto function = talos::designbytecode::functionAt(image, functionIndex);
         for (uint64_t ordinal = 0; ordinal != function.instructionCount;
              ++ordinal) {
           auto instruction = talos::designbytecode::instructionAt(
@@ -741,8 +739,8 @@ finalizeClassBitstream(talos_rt_context *context) {
       bool noFunction = site.function == TALOS_RT_CLASS_BITSTREAM_NO_BYTECODE;
       bool noSite = site.bytecodeSite == TALOS_RT_CLASS_BITSTREAM_NO_BYTECODE;
       if (site.id != index + 1 || noFunction != noSite ||
-          (((context->execution->flags &
-             TALOS_RT_EXECUTION_REQUIRE_BYTECODE) != 0) &&
+          (((context->execution->flags & TALOS_RT_EXECUTION_REQUIRE_BYTECODE) !=
+            0) &&
            noFunction) ||
           read64(record + 32) != 0 ||
           !rangeInPlanRegion(sitePlanOffset, sitePlanSize, planOffset,
@@ -760,14 +758,12 @@ finalizeClassBitstream(talos_rt_context *context) {
             site.function >= image.functionCount ||
             site.bytecodeSite >= image.siteCount)
           return TALOS_RT_INVALID_DESIGN;
-        auto function =
-            talos::designbytecode::functionAt(image, site.function);
+        auto function = talos::designbytecode::functionAt(image, site.function);
         auto intrinsicSite =
             talos::designbytecode::siteAt(image, site.bytecodeSite);
-        auto signature = talos::designbytecode::intrinsicAt(
-            image, intrinsicSite.intrinsic);
-        if (signature.id !=
-                TALOS_RT_INTRINSIC_V1_CONTAINER_EXPORT_BITSTREAM ||
+        auto signature =
+            talos::designbytecode::intrinsicAt(image, intrinsicSite.intrinsic);
+        if (signature.id != TALOS_RT_INTRINSIC_V1_CONTAINER_EXPORT_BITSTREAM ||
             (signature.flags != 3 && signature.flags != 4) ||
             signature.inputCount != 1 || signature.outputCount != 3 ||
             intrinsicSite.inputCount != 1 || intrinsicSite.outputCount != 3)
@@ -835,8 +831,8 @@ TALOS_RT_FEATURE_TEXT uint64_t talos_rt_managed_watch_range(
     uint64_t identity = talos_rt_v1_object_id(object);
     if (identity == 0)
       return 0;
-    uint64_t token = talos_rt_v1_managed_watch(
-        object, TALOS_RT_MANAGED_WATCH_FIELD, offset);
+    uint64_t token =
+        talos_rt_v1_managed_watch(object, TALOS_RT_MANAGED_WATCH_FIELD, offset);
     if (token == 0)
       return 0;
     auto &ranges = state->watchRanges[identity];
@@ -900,9 +896,9 @@ struct View {
   uint64_t base = 0;
 };
 
-TALOS_RT_FEATURE_HELPER bool
-readManagedWord(const View &view, uint64_t bitOffset,
-                talos_rt_managed_word_v1 &word) {
+TALOS_RT_FEATURE_HELPER bool readManagedWord(const View &view,
+                                             uint64_t bitOffset,
+                                             talos_rt_managed_word_v1 &word) {
   if (bitOffset > view.span || view.base > UINT64_MAX - bitOffset)
     return false;
   uint64_t absolute = view.base + bitOffset;
@@ -1022,9 +1018,7 @@ acquireContainer(Request &request, talos_rt_object_v1 *container,
     if (token == 0)
       return TALOS_RT_INVALID_HANDLE;
     TALOS_RT_TRY { request.watchTokens.insert(token); }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
   }
   talos_rt_status status = talos_rt_managed_object_acquire(
       request.lane, container, TALOS_RT_MANAGED_CONTAINER, &lease.header);
@@ -1051,16 +1045,13 @@ acquireContainer(Request &request, talos_rt_object_v1 *container,
   lease.capacity = header->capacity;
   lease.head = header->head;
   lease.planeSize = header->element->value_size;
-  lease.fourState =
-      (header->element->flags & TALOS_RT_ELEMENT_FOUR_STATE) != 0;
+  lease.fourState = (header->element->flags & TALOS_RT_ELEMENT_FOUR_STATE) != 0;
   lease.physicalAssociative =
       associative && request.collectAssociative && !header->ordered;
   if (lease.physicalAssociative) {
     request.needsOrdering = true;
     TALOS_RT_TRY { request.associative.insert(container); }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
   }
   if (header->size == 0)
     return TALOS_RT_OK;
@@ -1099,7 +1090,7 @@ acquireContainer(Request &request, talos_rt_object_v1 *container,
 }
 
 TALOS_RT_FEATURE_HELPER void popFrame(Request &request,
-                                        std::vector<Frame> &stack) {
+                                      std::vector<Frame> &stack) {
   if (stack.back().kind == Frame::Container && stack.back().container.object)
     request.active.erase(stack.back().container.object);
   else if (stack.back().kind == Frame::Object && stack.back().object)
@@ -1107,17 +1098,16 @@ TALOS_RT_FEATURE_HELPER void popFrame(Request &request,
   stack.pop_back();
 }
 
-TALOS_RT_FEATURE_HELPER talos_rt_status
-pushActive(Request &request, std::vector<Frame> &stack, Frame frame,
-           talos_rt_object_v1 *object) {
+TALOS_RT_FEATURE_HELPER talos_rt_status pushActive(Request &request,
+                                                   std::vector<Frame> &stack,
+                                                   Frame frame,
+                                                   talos_rt_object_v1 *object) {
   if (object) {
     TALOS_RT_TRY {
       if (!request.active.insert(object).second)
         return TALOS_RT_INVALID_HANDLE;
     }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
   }
   TALOS_RT_TRY { stack.push_back(std::move(frame)); }
   TALOS_RT_CATCH(const std::bad_alloc &) {
@@ -1127,9 +1117,10 @@ pushActive(Request &request, std::vector<Frame> &stack, Frame frame,
   return TALOS_RT_OK;
 }
 
-TALOS_RT_FEATURE_HELPER talos_rt_status
-pushObject(Request &request, std::vector<Frame> &stack,
-           talos_rt_object_v1 *object, const Group &group) {
+TALOS_RT_FEATURE_HELPER talos_rt_status pushObject(Request &request,
+                                                   std::vector<Frame> &stack,
+                                                   talos_rt_object_v1 *object,
+                                                   const Group &group) {
   if (!object)
     return TALOS_RT_OK;
   Frame frame;
@@ -1154,9 +1145,8 @@ pushObject(Request &request, std::vector<Frame> &stack,
   return pushActive(request, stack, std::move(frame), object);
 }
 
-TALOS_RT_FEATURE_HELPER talos_rt_status walk(Request &request,
-                                                 const Plan &plan,
-                                                 const View &root) {
+TALOS_RT_FEATURE_HELPER talos_rt_status walk(Request &request, const Plan &plan,
+                                             const View &root) {
   std::vector<Frame> stack;
   TALOS_RT_TRY { stack.reserve(16); }
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
@@ -1183,9 +1173,7 @@ TALOS_RT_FEATURE_HELPER talos_rt_status walk(Request &request,
       body.view = {frame.view.value, frame.view.unknown, frame.view.planeSize,
                    frame.record.sourceSpan, frame.view.base + base};
       TALOS_RT_TRY { stack.push_back(std::move(body)); }
-      TALOS_RT_CATCH(const std::bad_alloc &) {
-        return TALOS_RT_OUT_OF_MEMORY;
-      }
+      TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
       continue;
     }
     if (frame.kind == Frame::Object) {
@@ -1215,9 +1203,7 @@ TALOS_RT_FEATURE_HELPER talos_rt_status walk(Request &request,
       body.view = {value, fieldFourState ? value + field.planeSize : nullptr,
                    field.planeSize, field.rootSpan, 0};
       TALOS_RT_TRY { stack.push_back(std::move(body)); }
-      TALOS_RT_CATCH(const std::bad_alloc &) {
-        return TALOS_RT_OUT_OF_MEMORY;
-      }
+      TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
       continue;
     }
     if (frame.kind == Frame::Container) {
@@ -1266,9 +1252,7 @@ TALOS_RT_FEATURE_HELPER talos_rt_status walk(Request &request,
                                        : nullptr,
                    container.planeSize, container.record.sourceSpan, 0};
       TALOS_RT_TRY { stack.push_back(std::move(body)); }
-      TALOS_RT_CATCH(const std::bad_alloc &) {
-        return TALOS_RT_OUT_OF_MEMORY;
-      }
+      TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
       continue;
     }
     if (frame.index == frame.end) {
@@ -1297,8 +1281,7 @@ TALOS_RT_FEATURE_HELPER talos_rt_status walk(Request &request,
           talos_rt_object_from_managed_word(string);
       if (string != 0 && stringObject) {
         talos_rt_status acquire = talos_rt_managed_object_acquire(
-            request.lane, stringObject, TALOS_RT_MANAGED_STRING,
-            &stringLease);
+            request.lane, stringObject, TALOS_RT_MANAGED_STRING, &stringLease);
         if (acquire != TALOS_RT_OK)
           return acquire;
       } else if (talos_rt_validate_string(request.context, string) !=
@@ -1355,9 +1338,7 @@ TALOS_RT_FEATURE_HELPER talos_rt_status walk(Request &request,
       repeat.view = frame.view;
       repeat.record = record;
       TALOS_RT_TRY { stack.push_back(std::move(repeat)); }
-      TALOS_RT_CATCH(const std::bad_alloc &) {
-        return TALOS_RT_OUT_OF_MEMORY;
-      }
+      TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
       continue;
     }
     if (record.opcode != TALOS_RT_RECURSIVE_BITSTREAM_CONTAINER)
@@ -1570,8 +1551,7 @@ talos_rt_v2_recursive_export_bitstream(
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_ARGUMENT; }
 }
 
-TALOS_RT_FEATURE_TEXT talos_rt_status
-talos_rt_class_bitstream_export_bytecode(
+TALOS_RT_FEATURE_TEXT talos_rt_status talos_rt_class_bitstream_export_bytecode(
     talos_rt_context *context, uint32_t function, uint32_t bytecodeSite,
     const void *inputValue, const void *inputUnknown, uint64_t inputPlaneSize,
     uint64_t inputBitWidth, uint32_t inputFourState, void *outValue,
@@ -1597,8 +1577,8 @@ talos_rt_class_bitstream_export_bytecode(
 
 TALOS_RT_FEATURE_TEXT bool
 talos_rt_expand_class_watch_group(talos_rt_context *context, uint64_t token,
-                                    RecursiveWatchGroupVisit visit,
-                                    void *environment) {
+                                  RecursiveWatchGroupVisit visit,
+                                  void *environment) {
   if (!context || (token & kClassWatchGroupBit) == 0 ||
       (token & kRecursiveWatchGroupBit) != 0 || !visit)
     return false;

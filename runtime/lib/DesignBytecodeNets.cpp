@@ -95,9 +95,9 @@ static uint8_t decodeChargeStrength(uint32_t flags) {
 bool appendSignalEvent(talos_rt_context *context, uint64_t bitOffset,
                        bool oldValue, bool oldUnknown, bool newValue,
                        bool newUnknown, bool evaluateComputedObservers = true) {
-  return talos_rt_append_signal_event_unlocked(
-      context, bitOffset, oldValue, oldUnknown, newValue, newUnknown,
-      evaluateComputedObservers);
+  return talos_rt_append_signal_event_unlocked(context, bitOffset, oldValue,
+                                               oldUnknown, newValue, newUnknown,
+                                               evaluateComputedObservers);
 }
 
 static bool rebuildPassComponent(NetPassComponent &component) {
@@ -160,8 +160,7 @@ static bool rebuildPassComponent(NetPassComponent &component) {
   return true;
 }
 
-NetAliasCache *getNetAliasCache(const Image &image,
-                                talos_rt_context *context) {
+NetAliasCache *getNetAliasCache(const Image &image, talos_rt_context *context) {
   if (context->netAliases.execution == context->execution)
     return &context->netAliases;
   NetAliasCache cache;
@@ -464,8 +463,8 @@ bool publishNetBits(talos_rt_context *context, const NetAliasCache &cache,
                publication.oldUnknown != publication.unknown;
     setBit(context->stateValue, publication.destination, publication.value);
     setBit(context->stateUnknown, publication.destination, publication.unknown);
-    talos_rt_sync_native_state_range_unlocked(context,
-                                                publication.destination, 1);
+    talos_rt_sync_native_state_range_unlocked(context, publication.destination,
+                                              1);
     // A generated schedule reads its own state planes, so a net resolved here
     // has to reach those as well as the canonical image. Otherwise the value an
     // IEEE 1800-2017 10.3.3 delayed continuous assignment finally publishes
@@ -1131,9 +1130,9 @@ bool resolveNetRoots(const NetAliasCache &cache, talos_rt_context *context,
             for (uint64_t bit = 0; bit != net->width; ++bit)
               initial->second &=
                   talos::designbytecode::bit(context->stateValue,
-                                               net->valueOffset + bit) &&
+                                             net->valueOffset + bit) &&
                   talos::designbytecode::bit(context->stateUnknown,
-                                               net->valueOffset + bit);
+                                             net->valueOffset + bit);
           delayedPublications.push_back(
               {root, group, publication, *delays, resolution, initial->second});
         }
@@ -1273,9 +1272,9 @@ extern "C" uint16_t talos_rt_v1_strength_resolve(uint16_t lhs, uint16_t rhs) {
 }
 
 talos_rt_status talos_rt_design_net_strength(talos_rt_context *context,
-                                                 uint64_t netHandle,
-                                                 uint16_t *outStrengths,
-                                                 bool useNativeState) noexcept {
+                                             uint64_t netHandle,
+                                             uint16_t *outStrengths,
+                                             bool useNativeState) noexcept {
   if (!context || !context->execution || !outStrengths)
     return TALOS_RT_INVALID_ARGUMENT;
   *outStrengths = 0;
@@ -1318,9 +1317,11 @@ talos_rt_status talos_rt_design_net_strength(talos_rt_context *context,
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_BYTECODE; }
 }
 
-talos_rt_status talos_rt_design_driver_strength(
-    talos_rt_context *context, uint64_t lowOffset, uint64_t highOffset,
-    uint16_t *outStrengths, bool useNativeState) noexcept {
+talos_rt_status talos_rt_design_driver_strength(talos_rt_context *context,
+                                                uint64_t lowOffset,
+                                                uint64_t highOffset,
+                                                uint16_t *outStrengths,
+                                                bool useNativeState) noexcept {
   if (!context || !context->execution || !outStrengths)
     return TALOS_RT_INVALID_ARGUMENT;
   *outStrengths = 0;
@@ -1545,19 +1546,18 @@ talos_rt_status talos_rt_count_design_drivers(
 
 extern "C" talos_rt_status
 talos_rt_v1_net_count_drivers(talos_rt_context *context, uint64_t netHandle,
-                                uint32_t *outForced, uint32_t *outTotal,
-                                uint32_t *outZero, uint32_t *outOne,
-                                uint32_t *outUnknown) {
-  return talos_rt_count_design_drivers(context, netHandle, outForced,
-                                         outTotal, outZero, outOne, outUnknown,
-                                         true);
+                              uint32_t *outForced, uint32_t *outTotal,
+                              uint32_t *outZero, uint32_t *outOne,
+                              uint32_t *outUnknown) {
+  return talos_rt_count_design_drivers(context, netHandle, outForced, outTotal,
+                                       outZero, outOne, outUnknown, true);
 }
 
 namespace talos::designbytecode {
 
 talos_rt_status applyPassSwitchControl(talos_rt_context *context,
-                                         uint32_t passSwitchId,
-                                         uint8_t nextState, bool &changed) {
+                                       uint32_t passSwitchId, uint8_t nextState,
+                                       bool &changed) {
   if (!context || !context->designBytecodeImageValidated ||
       passSwitchId == UINT32_MAX || nextState > 2)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -1626,13 +1626,13 @@ talos_rt_status applyPassSwitchControl(talos_rt_context *context,
   if (!resolveNetRoots(*cache, context, std::move(roots), changed,
                        context->nativeStateValue != nullptr))
     return context->schedulerStatus == TALOS_RT_OK ? TALOS_RT_INVALID_DESIGN
-                                                     : context->schedulerStatus;
+                                                   : context->schedulerStatus;
   return TALOS_RT_OK;
 }
 
 talos_rt_status applyDelayedMosEvent(talos_rt_context *context,
-                                       uint64_t edgeKey, uint16_t strengths,
-                                       bool &changed) {
+                                     uint64_t edgeKey, uint16_t strengths,
+                                     bool &changed) {
   if (!context || !context->designBytecodeImageValidated || strengths == 0 ||
       (strengths & ~uint16_t{0x7fff}) != 0)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -1651,7 +1651,7 @@ talos_rt_status applyDelayedMosEvent(talos_rt_context *context,
   if (!resolveNetRoots(*cache, context, {edge->second.destinationRoot}, changed,
                        context->nativeStateValue != nullptr))
     return context->schedulerStatus == TALOS_RT_OK ? TALOS_RT_INVALID_DESIGN
-                                                     : context->schedulerStatus;
+                                                   : context->schedulerStatus;
   return TALOS_RT_OK;
 }
 
@@ -1659,8 +1659,8 @@ talos_rt_status applyDelayedMosEvent(talos_rt_context *context,
 
 extern "C" talos_rt_status
 talos_rt_v1_pass_switch_control(talos_rt_context *context,
-                                  uint32_t passSwitchId, uint32_t value,
-                                  uint32_t unknown) {
+                                uint32_t passSwitchId, uint32_t value,
+                                uint32_t unknown) {
   if (!context || !context->execution || value > 1 || unknown > 1 ||
       passSwitchId == UINT32_MAX)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -1669,7 +1669,7 @@ talos_rt_v1_pass_switch_control(talos_rt_context *context,
     talos_rt_design_bytecode_entry_v1 entry{context->execution, 0, 0};
     talos::designbytecode::Image image;
     if (!talos::designbytecode::loadValidatedImage(entry, context, image,
-                                                     /*inventoryOnly=*/true))
+                                                   /*inventoryOnly=*/true))
       return TALOS_RT_INVALID_BYTECODE;
     std::lock_guard<std::recursive_mutex> lock(context->mutex);
     bool changed = false;
@@ -1698,7 +1698,7 @@ extern "C" talos_rt_status talos_rt_v1_pass_switch_control_delayed(
     talos_rt_design_bytecode_entry_v1 entry{context->execution, 0, 0};
     talos::designbytecode::Image image;
     if (!talos::designbytecode::loadValidatedImage(entry, context, image,
-                                                     /*inventoryOnly=*/true))
+                                                   /*inventoryOnly=*/true))
       return TALOS_RT_INVALID_BYTECODE;
     std::lock_guard<std::recursive_mutex> lock(context->mutex);
     NetAliasCache *cache =
@@ -1713,9 +1713,8 @@ extern "C" talos_rt_status talos_rt_v1_pass_switch_control_delayed(
       return TALOS_RT_INVALID_DESIGN;
     if (current->second == 3) {
       bool initialized = false;
-      talos_rt_status status =
-          talos::designbytecode::applyPassSwitchControl(context, passSwitchId,
-                                                          2, initialized);
+      talos_rt_status status = talos::designbytecode::applyPassSwitchControl(
+          context, passSwitchId, 2, initialized);
       if (status != TALOS_RT_OK)
         return status;
       if (initialized && ++context->schedulerEpoch == 0)
@@ -1741,9 +1740,8 @@ extern "C" talos_rt_status talos_rt_v1_pass_switch_control_delayed(
                                       : unknownDelay;
     if (delay == 0) {
       bool changed = false;
-      talos_rt_status status =
-          talos::designbytecode::applyPassSwitchControl(context, passSwitchId,
-                                                          nextState, changed);
+      talos_rt_status status = talos::designbytecode::applyPassSwitchControl(
+          context, passSwitchId, nextState, changed);
       if (status != TALOS_RT_OK)
         return status;
       if (changed && ++context->schedulerEpoch == 0)
@@ -1782,10 +1780,10 @@ extern "C" talos_rt_status talos_rt_v1_pass_switch_control_delayed(
 }
 
 extern "C" talos_rt_status
-talos_rt_v1_mos_drive_delayed(talos_rt_context *context,
-                                uint32_t passSwitchId, uint32_t value,
-                                uint32_t unknown, uint64_t riseDelay,
-                                uint64_t fallDelay, uint64_t turnoffDelay) {
+talos_rt_v1_mos_drive_delayed(talos_rt_context *context, uint32_t passSwitchId,
+                              uint32_t value, uint32_t unknown,
+                              uint64_t riseDelay, uint64_t fallDelay,
+                              uint64_t turnoffDelay) {
   if (!context || !context->execution || value > 1 || unknown > 1 ||
       passSwitchId == UINT32_MAX)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -1829,8 +1827,8 @@ talos_rt_v1_mos_drive_delayed(talos_rt_context *context,
 }
 
 extern "C" uint16_t talos_rt_v1_strength_resolve_kind(uint16_t lhs,
-                                                        uint16_t rhs,
-                                                        uint32_t resolution) {
+                                                      uint16_t rhs,
+                                                      uint32_t resolution) {
   return combineStrengthRanges(lhs, rhs, static_cast<uint8_t>(resolution));
 }
 
@@ -1885,9 +1883,8 @@ talos_rt_initialize_design_state(talos_rt_context *context) noexcept {
     }
     bool changed = false;
     if (!resolveInitialDriverNets(image, context, false, changed))
-      return context->schedulerStatus == TALOS_RT_OK
-                 ? TALOS_RT_INVALID_DESIGN
-                 : context->schedulerStatus;
+      return context->schedulerStatus == TALOS_RT_OK ? TALOS_RT_INVALID_DESIGN
+                                                     : context->schedulerStatus;
     return TALOS_RT_OK;
   }
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
@@ -1895,8 +1892,8 @@ talos_rt_initialize_design_state(talos_rt_context *context) noexcept {
 }
 
 talos_rt_status talos_rt_resolve_design_drivers(talos_rt_context *context,
-                                                    uint64_t begin,
-                                                    uint64_t end) noexcept {
+                                                uint64_t begin,
+                                                uint64_t end) noexcept {
   if (!context || !context->execution || begin > end ||
       end > uint64_t{INT64_MAX})
     return TALOS_RT_INVALID_ARGUMENT;
@@ -1910,9 +1907,8 @@ talos_rt_status talos_rt_resolve_design_drivers(talos_rt_context *context,
     bool changed = false;
     if (!resolveDrivenNets(image, context, static_cast<int64_t>(begin),
                            static_cast<int64_t>(end), changed, true))
-      return context->schedulerStatus == TALOS_RT_OK
-                 ? TALOS_RT_INVALID_HANDLE
-                 : context->schedulerStatus;
+      return context->schedulerStatus == TALOS_RT_OK ? TALOS_RT_INVALID_HANDLE
+                                                     : context->schedulerStatus;
     if (changed && ++context->schedulerEpoch == 0)
       context->schedulerEpoch = 1;
     return TALOS_RT_OK;
@@ -1922,8 +1918,8 @@ talos_rt_status talos_rt_resolve_design_drivers(talos_rt_context *context,
 }
 
 extern "C" talos_rt_status
-talos_rt_v1_scheduler_resolve_drivers(talos_rt_context *context,
-                                        uint64_t begin, uint64_t end) {
+talos_rt_v1_scheduler_resolve_drivers(talos_rt_context *context, uint64_t begin,
+                                      uint64_t end) {
   return talos_rt_resolve_design_drivers(context, begin, end);
 }
 
@@ -1942,9 +1938,8 @@ talos_rt_v1_scheduler_resolve_initial_drivers(talos_rt_context *context) {
     bool useNativeState = context->nativeStateValue != nullptr &&
                           context->nativeStateUnknown != nullptr;
     if (!resolveInitialDriverNets(image, context, useNativeState, changed))
-      return context->schedulerStatus == TALOS_RT_OK
-                 ? TALOS_RT_INVALID_DESIGN
-                 : context->schedulerStatus;
+      return context->schedulerStatus == TALOS_RT_OK ? TALOS_RT_INVALID_DESIGN
+                                                     : context->schedulerStatus;
     return TALOS_RT_OK;
   }
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
@@ -1967,10 +1962,10 @@ synchronizeNativeNetOverrideStateUnlocked(talos_rt_context *context) {
                                          plan->state_bit_count);
 }
 
-talos_rt_status
-talos_rt_force_design_nets(talos_rt_context *context, uint64_t begin,
-                             uint64_t width, const uint8_t *value,
-                             const uint8_t *unknown) noexcept {
+talos_rt_status talos_rt_force_design_nets(talos_rt_context *context,
+                                           uint64_t begin, uint64_t width,
+                                           const uint8_t *value,
+                                           const uint8_t *unknown) noexcept {
   if (!context || !context->execution || !value || width == 0 ||
       begin > UINT64_MAX - width)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -2023,7 +2018,7 @@ talos_rt_force_design_nets(talos_rt_context *context, uint64_t begin,
         // Every alias of a forced net must leave the clean native path, even
         // when forcing the value already present produces no transition.
         talos_rt_aot_external_write_range_unlocked(context, destination, 1,
-                                                     true);
+                                                   true);
       }
     }
     bool changed = false;
@@ -2040,9 +2035,8 @@ talos_rt_force_design_nets(talos_rt_context *context, uint64_t begin,
                          /*useNativeState=*/context->nativeStateValue !=
                                  nullptr ||
                              !cache->passComponents.empty()))
-      return context->schedulerStatus == TALOS_RT_OK
-                 ? TALOS_RT_INVALID_HANDLE
-                 : context->schedulerStatus;
+      return context->schedulerStatus == TALOS_RT_OK ? TALOS_RT_INVALID_HANDLE
+                                                     : context->schedulerStatus;
     if (changed && ++context->schedulerEpoch == 0)
       context->schedulerEpoch = 1;
     return TALOS_RT_OK;
@@ -2051,16 +2045,15 @@ talos_rt_force_design_nets(talos_rt_context *context, uint64_t begin,
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_BYTECODE; }
 }
 
-uint64_t
-talos_rt_canonical_net_bit_unlocked(const talos_rt_context *context,
-                                      uint64_t bit) noexcept {
+uint64_t talos_rt_canonical_net_bit_unlocked(const talos_rt_context *context,
+                                             uint64_t bit) noexcept {
   auto found = context->netAliases.rootByBit.find(bit);
   return found == context->netAliases.rootByBit.end() ? bit : found->second;
 }
 
 talos_rt_status talos_rt_release_design_nets(talos_rt_context *context,
-                                                 uint64_t begin,
-                                                 uint64_t width) noexcept {
+                                             uint64_t begin,
+                                             uint64_t width) noexcept {
   if (!context || !context->execution || width == 0 ||
       begin > UINT64_MAX - width)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -2100,9 +2093,8 @@ talos_rt_status talos_rt_release_design_nets(talos_rt_context *context,
                          /*useNativeState=*/context->nativeStateValue !=
                                  nullptr ||
                              !cache->passComponents.empty()))
-      return context->schedulerStatus == TALOS_RT_OK
-                 ? TALOS_RT_INVALID_HANDLE
-                 : context->schedulerStatus;
+      return context->schedulerStatus == TALOS_RT_OK ? TALOS_RT_INVALID_HANDLE
+                                                     : context->schedulerStatus;
     if (changed && ++context->schedulerEpoch == 0)
       context->schedulerEpoch = 1;
     // Resolve first: re-promotion must see the released driver's value, not
@@ -2115,9 +2107,9 @@ talos_rt_status talos_rt_release_design_nets(talos_rt_context *context,
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_BYTECODE; }
 }
 
-talos_rt_status
-talos_rt_design_net_is_connected(talos_rt_context *context, uint64_t begin,
-                                   uint64_t end, bool *outConnected) noexcept {
+talos_rt_status talos_rt_design_net_is_connected(talos_rt_context *context,
+                                                 uint64_t begin, uint64_t end,
+                                                 bool *outConnected) noexcept {
   if (!context || !context->execution || !outConnected || begin > end)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {

@@ -175,10 +175,10 @@ lowerSuspendTerminator(Operation *operation, Value instance, Value handle,
     Type i32 = builder.getI32Type();
     Type i64 = builder.getI64Type();
     Value disposition = entryAlloca(builder, location, i32, 1, 4);
-    LLVM::StoreOp::create(builder, location,
-                          llvmConstant(builder, location, i32,
-                                       TALOS_RT_PROCESS_CONTROL_CONTINUE),
-                          disposition, 4);
+    LLVM::StoreOp::create(
+        builder, location,
+        llvmConstant(builder, location, i32, TALOS_RT_PROCESS_CONTROL_CONTINUE),
+        disposition, 4);
     auto [context, lane] = managedContextAndLane(builder, location);
     (void)lane;
     Value status =
@@ -223,11 +223,11 @@ lowerSuspendTerminator(Operation *operation, Value instance, Value handle,
     SmallVector<Block *> destinations{continueAction, suspendAction,
                                       killAction};
     SmallVector<ValueRange> destinationOperands(3);
-    LLVM::SwitchOp::create(
-        builder, location, selected, failed,
-        ValueRange{
-            llvmConstant(builder, location, i32, TALOS_RT_INVALID_ARGUMENT)},
-        cases, destinations, destinationOperands, ArrayRef<int32_t>{});
+    LLVM::SwitchOp::create(builder, location, selected, failed,
+                           ValueRange{llvmConstant(builder, location, i32,
+                                                   TALOS_RT_INVALID_ARGUMENT)},
+                           cases, destinations, destinationOperands,
+                           ArrayRef<int32_t>{});
 
     builder.setInsertionPointToStart(continueAction);
     LLVM::BrOp::create(builder, location, blocks.shims.lookup(continuation));
@@ -246,10 +246,10 @@ lowerSuspendTerminator(Operation *operation, Value instance, Value handle,
     LLVM::BrOp::create(builder, location, yield);
 
     builder.setInsertionPointToStart(failed);
-    LLVM::CallOp::create(builder, location, TypeRange{},
-                         SymbolRefAttr::get(builder.getContext(),
-                                            "talos_rt_v1_scheduler_fail"),
-                         ValueRange{context, failed->getArgument(0)});
+    LLVM::CallOp::create(
+        builder, location, TypeRange{},
+        SymbolRefAttr::get(builder.getContext(), "talos_rt_v1_scheduler_fail"),
+        ValueRange{context, failed->getArgument(0)});
     if (!blocks.terminate)
       return control.emitOpError("has no coroutine termination block");
     LLVM::BrOp::create(builder, location, blocks.terminate);
@@ -284,10 +284,10 @@ lowerSuspendTerminator(Operation *operation, Value instance, Value handle,
                        llvmConstant(builder, location, builder.getI32Type(),
                                     continuationID)})
             .getResult();
-    LLVM::CallOp::create(builder, location, TypeRange{},
-                         SymbolRefAttr::get(builder.getContext(),
-                                            "talos_rt_v1_scheduler_fail"),
-                         ValueRange{context, status});
+    LLVM::CallOp::create(
+        builder, location, TypeRange{},
+        SymbolRefAttr::get(builder.getContext(), "talos_rt_v1_scheduler_fail"),
+        ValueRange{context, status});
     cf::BranchOp::create(builder, location, boundary.getBody());
     builder.eraseOp(operation);
     return success();
@@ -361,8 +361,7 @@ lowerSuspendTerminator(Operation *operation, Value instance, Value handle,
         if (argumentIndex < 0 ||
             static_cast<uint64_t>(argumentIndex) >= argumentStorage.size() ||
             byteOffset < 0 || sizesAttr[argumentIndex] < 0 || kindMask <= 0 ||
-            static_cast<uint64_t>(kindMask) >
-                TALOS_RT_MANAGED_ROOT_KIND_ALL ||
+            static_cast<uint64_t>(kindMask) > TALOS_RT_MANAGED_ROOT_KIND_ALL ||
             (conditional != 0 && conditional != 1) ||
             static_cast<uint64_t>(byteOffset) >
                 static_cast<uint64_t>(sizesAttr[argumentIndex]) ||
@@ -475,10 +474,10 @@ lowerSuspendTerminator(Operation *operation, Value instance, Value handle,
                                               "talos_rt_v1_scheduler_fail"),
                            ValueRange{context, releaseStatus});
     }
-    LLVM::CallOp::create(builder, location, TypeRange{},
-                         SymbolRefAttr::get(builder.getContext(),
-                                            "talos_rt_v1_scheduler_fail"),
-                         ValueRange{context, failed->getArgument(0)});
+    LLVM::CallOp::create(
+        builder, location, TypeRange{},
+        SymbolRefAttr::get(builder.getContext(), "talos_rt_v1_scheduler_fail"),
+        ValueRange{context, failed->getArgument(0)});
     if (!blocks.terminate)
       return task.emitOpError("has no coroutine termination block");
     LLVM::BrOp::create(builder, location, blocks.terminate);
@@ -570,8 +569,7 @@ lowerSuspendTerminator(Operation *operation, Value instance, Value handle,
   if (actionFlags == UINT32_MAX)
     return operation->emitError("has no executable resume region");
   publishAction(builder, location, instance, TALOS_RT_FRAGMENT_SUSPEND, kind,
-                continuationID,
-                TALOS_RT_ACTION_FRAME_WAIT_RECORD | actionFlags,
+                continuationID, TALOS_RT_ACTION_FRAME_WAIT_RECORD | actionFlags,
                 llvmConstant(builder, location, i64, waitOffset), waitSize);
 
   // A certified group ends at this semantic boundary. Its live continuation
@@ -689,8 +687,7 @@ FailureOr<PreparedSuspendableProcess> prepareSuspendableProcess(
       ::talos::schedule::has<::talos::schedule::Field::EvalBody>(function);
   bool regionActivation =
       !(taskCaller && hasEvalBody) &&
-      ::talos::schedule::has<schedule::metadata::nativeRegionBody>(
-          function) &&
+      ::talos::schedule::has<schedule::metadata::nativeRegionBody>(function) &&
       ::talos::schedule::has<
           schedule::metadata::evalReconstructsContinuationArgs>(function) &&
       analysis.getSuspensions().size() == 1;
@@ -720,10 +717,9 @@ FailureOr<PreparedSuspendableProcess> prepareSuspendableProcess(
     });
   if (!directActivation)
     tableProcess.reset();
-  std::string rampName =
-      baseName + (tableProcess       ? ".__talos_table_body"
-                  : directActivation ? ".__talos_group_body"
-                                     : ".__talos_coro_ramp");
+  std::string rampName = baseName + (tableProcess       ? ".__talos_table_body"
+                                     : directActivation ? ".__talos_group_body"
+                                                        : ".__talos_coro_ramp");
   SmallVector<Type> parameters =
       tableProcess ? SmallVector<Type>{pointer, i32}
                    : SmallVector<Type>{pointer, i32, pointer, pointer};
@@ -818,8 +814,8 @@ lowerPreparedSuspendableProcess(PreparedSuspendableProcess &process) {
   builder.setInsertionPointToStart(execute);
   Value instance = entry->getArgument(0);
   if (process.tableProcess) {
-    Value currentContext = LLVM::AddressOfOp::create(
-        builder, location, pointer, "__talos_current_context");
+    Value currentContext = LLVM::AddressOfOp::create(builder, location, pointer,
+                                                     "__talos_current_context");
     LLVM::StoreOp::create(
         builder, location,
         loadAt(builder, location, instance, kInstanceContextField, pointer, 0),
@@ -877,12 +873,11 @@ lowerPreparedSuspendableProcess(PreparedSuspendableProcess &process) {
     blocks.suspendReturn = new Block;
     ramp.getBody().push_back(blocks.suspendReturn);
     builder.setInsertionPointToStart(blocks.suspendReturn);
-    LLVM::ReturnOp::create(
-        builder, location,
-        process.tableProcess
-            ? ValueRange{llvmConstant(builder, location, i32,
-                                      TALOS_RT_TABLE_TERMINATE)}
-            : ValueRange{});
+    LLVM::ReturnOp::create(builder, location,
+                           process.tableProcess ? ValueRange{llvmConstant(
+                                                      builder, location, i32,
+                                                      TALOS_RT_TABLE_TERMINATE)}
+                                                : ValueRange{});
   } else {
     blocks.suspendReturn =
         makeCoroutineReturnBlock(ramp.getBody(), location, handle);

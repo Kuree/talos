@@ -190,14 +190,12 @@ private:
                          uint64_t secondaryOffset = UINT64_MAX);
   mlir::LogicalResult encodeObserverWait(FunctionPlan &plan,
                                          sim::SimSuspendObserveOp operation);
-  mlir::LogicalResult encodeWait(FunctionPlan &plan, mlir::Operation *operation,
-                                 mlir::ValueRange continuationOperands,
-                                 talos_rt_suspend_kind kind,
-                                 talos_rt_wait_flags flags,
-                                 llvm::ArrayRef<uint32_t> edges,
-                                 llvm::ArrayRef<mlir::Value> watched,
-                                 mlir::Value delay = {}, uint64_t payload = 0,
-                                 uint64_t auxiliary = 0);
+  mlir::LogicalResult
+  encodeWait(FunctionPlan &plan, mlir::Operation *operation,
+             mlir::ValueRange continuationOperands, talos_rt_suspend_kind kind,
+             talos_rt_wait_flags flags, llvm::ArrayRef<uint32_t> edges,
+             llvm::ArrayRef<mlir::Value> watched, mlir::Value delay = {},
+             uint64_t payload = 0, uint64_t auxiliary = 0);
 
   uint32_t getVPIProfile();
   llvm::SmallVector<uint8_t> serializeBytecode();

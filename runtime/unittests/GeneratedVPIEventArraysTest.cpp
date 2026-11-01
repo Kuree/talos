@@ -7,10 +7,10 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <algorithm>
@@ -86,7 +86,7 @@ TEST(GeneratedDesignDatabase, EventArrays) {
   for (size_t index = 0; index != names.size(); ++index) {
     cursors[index] = lookup(names[index]);
     ASSERT_EQ(talos_rt_cached_vpi_event_array_cell(runtime, cursors[index],
-                                                     &cells[index]),
+                                                   &cells[index]),
               TALOS_RT_OK);
     EXPECT_EQ(cells[index].storage.offset, cells[0].storage.offset);
     EXPECT_EQ(cells[index].bitOffset, index * 64);
@@ -102,20 +102,19 @@ TEST(GeneratedDesignDatabase, EventArrays) {
   EXPECT_EQ(absent.bitOffset, 0u);
   EXPECT_EQ(talos_rt_cached_vpi_event_array_cell(runtime, {}, &absent),
             TALOS_RT_INVALID_HANDLE);
-  EXPECT_EQ(
-      talos_rt_cached_vpi_event_array_cell(runtime, cursors[0], nullptr),
-      TALOS_RT_INVALID_ARGUMENT);
+  EXPECT_EQ(talos_rt_cached_vpi_event_array_cell(runtime, cursors[0], nullptr),
+            TALOS_RT_INVALID_ARGUMENT);
   VPIEventCellBinding other{};
   ASSERT_EQ(talos_rt_cached_vpi_event_array_cell(
                 runtime, lookup("top.other[4]"), &other),
             TALOS_RT_OK);
   std::array<uint64_t, 4> words{0, 7, UINT64_MAX, 0};
   ASSERT_EQ(talos_rt_v1_design_write(runtime, cells[0].storage, words.data(),
-                                       nullptr, 256),
+                                     nullptr, 256),
             TALOS_RT_OK);
   const std::array<uint64_t, 2> otherWords{7, UINT64_MAX};
-  ASSERT_EQ(talos_rt_v1_design_write(runtime, other.storage,
-                                       otherWords.data(), nullptr, 128),
+  ASSERT_EQ(talos_rt_v1_design_write(runtime, other.storage, otherWords.data(),
+                                     nullptr, 128),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_startup(runtime, nullptr, 0), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_end_compile(runtime), TALOS_RT_OK);
@@ -127,14 +126,14 @@ TEST(GeneratedDesignDatabase, EventArrays) {
   talos_rt_design_bytecode_entry_v1 entry{&execution, initial->index, 0};
   uint64_t scratchSize = 0, scratchAlignment = 0;
   ASSERT_EQ(talos_rt_validate_design_bytecode(entry, runtime, &scratchSize,
-                                                &scratchAlignment),
+                                              &scratchAlignment),
             TALOS_RT_OK);
   ASSERT_LE(scratchAlignment, alignof(uint64_t));
   std::vector<uint64_t> frame((scratchSize + 7) / 8);
   talos_rt_fragment_action_v1 action{};
   ASSERT_EQ(talos_rt_execute_design_bytecode(entry, runtime, frame.data(),
-                                               frame.size() * 8, 0, scratchSize,
-                                               0, 0, &action),
+                                             frame.size() * 8, 0, scratchSize,
+                                             0, 0, &action),
             TALOS_RT_OK);
   ASSERT_EQ(action.kind, TALOS_RT_FRAGMENT_TERMINATE);
   ASSERT_EQ(talos_rt_v1_scheduler_run(runtime), TALOS_RT_OK);
@@ -208,7 +207,7 @@ TEST(GeneratedDesignDatabase, EventArrays) {
   waiters(named("top.other[4]"), 1);
   words[0] = 7;
   ASSERT_EQ(talos_rt_v1_design_write(runtime, cells[0].storage, words.data(),
-                                       nullptr, 256),
+                                     nullptr, 256),
             TALOS_RT_OK);
   talos_rt_v1_scheduler_event(runtime, 0, 0);
   waiters(leaves[0],
@@ -243,8 +242,7 @@ TEST(GeneratedDesignDatabase, EventArrays) {
     HeaderWriter(bytes.data()).setChecksum(imageChecksum(bytes));
     auto invalid = execution;
     invalid.design_database = bytes.data();
-    EXPECT_EQ(talos_rt_v1_design_validate(&invalid),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&invalid), TALOS_RT_INVALID_DESIGN);
   };
   rejects([&](auto &bytes) {
     SemanticDirectoryWriter(bytes.data() + header.getReserved())
@@ -315,7 +313,7 @@ TEST(GeneratedDesignDatabase, EventArrays) {
       paddedWords[offsets[index] / 64 + 1] |= value >> (64 - shift);
   }
   ASSERT_EQ(talos_rt_v1_design_write(runtime, cells[0].storage,
-                                       paddedWords.data(), nullptr, 512),
+                                     paddedWords.data(), nullptr, 512),
             TALOS_RT_OK);
   for (size_t index = 0; index != offsets.size(); ++index) {
     VPIEventCellBinding cell{};
@@ -324,8 +322,8 @@ TEST(GeneratedDesignDatabase, EventArrays) {
         TALOS_RT_OK);
     EXPECT_EQ(cell.bitOffset, offsets[index]);
     uint64_t value = 0, unknown = 0;
-    ASSERT_EQ(talos_rt_read_design_slice(
-                  runtime, cell.storage, cell.bitOffset, 64, &value, &unknown),
+    ASSERT_EQ(talos_rt_read_design_slice(runtime, cell.storage, cell.bitOffset,
+                                         64, &value, &unknown),
               TALOS_RT_OK);
     EXPECT_EQ(value, UINT64_C(0x123456789abc0000) + index);
     EXPECT_EQ(unknown, 0u);

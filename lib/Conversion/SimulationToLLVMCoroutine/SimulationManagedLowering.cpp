@@ -283,12 +283,12 @@ public:
     Value object = managedObjectPointer(rewriter, op.getLoc(),
                                         adaptor.getObject().front());
     rewriter.replaceOp(
-        op, LLVM::CallOp::create(rewriter, op.getLoc(),
-                                 TypeRange{rewriter.getI64Type()},
-                                 SymbolRefAttr::get(rewriter.getContext(),
-                                                    "talos_rt_v1_object_id"),
-                                 object)
-                .getResults());
+        op,
+        LLVM::CallOp::create(
+            rewriter, op.getLoc(), TypeRange{rewriter.getI64Type()},
+            SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_object_id"),
+            object)
+            .getResults());
     return success();
   }
 };
@@ -511,13 +511,13 @@ public:
       return failure();
     auto [context, lane] = managedContextAndLane(rewriter, op.getLoc());
     (void)lane;
-    Value status = LLVM::CallOp::create(
-                       rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
-                       SymbolRefAttr::get(rewriter.getContext(),
-                                          "talos_rt_v1_weak_clear"),
-                       managedObjectPointer(rewriter, op.getLoc(),
-                                            adaptor.getWeak().front()))
-                       .getResult();
+    Value status =
+        LLVM::CallOp::create(
+            rewriter, op.getLoc(), TypeRange{rewriter.getI32Type()},
+            SymbolRefAttr::get(rewriter.getContext(), "talos_rt_v1_weak_clear"),
+            managedObjectPointer(rewriter, op.getLoc(),
+                                 adaptor.getWeak().front()))
+            .getResult();
     reportManagedStatus(rewriter, op.getLoc(), context, status);
     rewriter.eraseOp(op);
     return success();

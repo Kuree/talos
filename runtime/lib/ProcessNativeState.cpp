@@ -36,8 +36,8 @@
 using namespace talos::process;
 using namespace talos::runtime;
 
-const NativeStaticState *
-findNativeStaticState(const talos_rt_context *context, uint32_t id) {
+const NativeStaticState *findNativeStaticState(const talos_rt_context *context,
+                                               uint32_t id) {
   if (id < context->nativeScheduleStaticStateIndex.size() &&
       context->nativeScheduleStaticStateIndex[id].bitWidth != 0)
     return &context->nativeScheduleStaticStateIndex[id];
@@ -65,8 +65,8 @@ static talos_rt_status resolveCheckedNativePackedRangeUnlocked(
 }
 
 talos_rt_status talos_rt_vpi_state_validate(talos_rt_context *context,
-                                                uint64_t reference,
-                                                uint64_t bitWidth) noexcept {
+                                            uint64_t reference,
+                                            uint64_t bitWidth) noexcept {
   if (!context || !bitWidth || bitWidth > UINT64_MAX - 7)
     return TALOS_RT_INVALID_ARGUMENT;
   talos_rt_stable_handle_v1 decoded{};
@@ -93,10 +93,10 @@ talos_rt_status talos_rt_vpi_state_validate(talos_rt_context *context,
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_ARGUMENT; }
 }
 
-talos_rt_status
-talos_rt_vpi_state_read(talos_rt_context *context, uint64_t reference,
-                          uint64_t bitOffset, uint64_t bitWidth,
-                          uint8_t *outValue, uint8_t *outUnknown) noexcept {
+talos_rt_status talos_rt_vpi_state_read(talos_rt_context *context,
+                                        uint64_t reference, uint64_t bitOffset,
+                                        uint64_t bitWidth, uint8_t *outValue,
+                                        uint8_t *outUnknown) noexcept {
   if (!context || !outValue || !outUnknown || bitOffset > INT64_MAX ||
       !bitWidth || bitWidth > UINT64_MAX - 7)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -115,7 +115,7 @@ talos_rt_vpi_state_read(talos_rt_context *context, uint64_t reference,
     talos_rt_stable_handle_decode(reference, &decoded);
     if (decoded.kind == TALOS_RT_STABLE_HANDLE_AUTOMATIC)
       return talos_rt_vpi_automatic_read(context, reference, 0, bitWidth,
-                                           outValue, outUnknown);
+                                         outValue, outUnknown);
     const uint64_t bits = context->execution->state_bit_count;
     const uint8_t *value =
         context->nativeStateValue
@@ -158,10 +158,11 @@ void releaseOwnedNativeStates(talos_rt_context *context,
   instance->ownership_context = nullptr;
 }
 
-extern "C" talos_rt_status talos_rt_v1_native_state_initialize(
-    talos_rt_context *context, uint8_t *value, uint8_t *unknown,
-    uint64_t bitCount, const talos_rt_native_state_fill_v1 *fills,
-    uint64_t fillCount) {
+extern "C" talos_rt_status
+talos_rt_v1_native_state_initialize(talos_rt_context *context, uint8_t *value,
+                                    uint8_t *unknown, uint64_t bitCount,
+                                    const talos_rt_native_state_fill_v1 *fills,
+                                    uint64_t fillCount) {
   if (!context || !value || (!unknown && !context->twoState()) ||
       value == unknown ||
       (reinterpret_cast<uintptr_t>(value) % alignof(uint64_t)) ||
@@ -238,8 +239,8 @@ uint64_t lowBits(uint64_t width) {
 /// `bit`, scanning its ranges from `*cursor`, which advances past ranges that
 /// end before `bit`.
 uint64_t patternBits(const NativeUnknownSummary &summary,
-                     const talos_rt_native_unknown_root_v1 &entry,
-                     uint64_t bit, uint64_t width, uint32_t *cursor) {
+                     const talos_rt_native_unknown_root_v1 &entry, uint64_t bit,
+                     uint64_t width, uint32_t *cursor) {
   const uint64_t *ranges = &summary.patterns[2 * entry.first_pattern];
   uint32_t index = cursor ? *cursor : 0;
   while (index != entry.pattern_count &&
@@ -371,8 +372,7 @@ void markNativeUnknownBitsUnlocked(const talos_rt_context *context,
   bitWidth = std::min<uint64_t>(bitWidth, 64);
   // A known write cannot break an all-known pattern. Keep the existing
   // dirty bits until refresh proves the whole root clean (LRM 6.11.2).
-  if (summary->patterns.empty() &&
-      !(unknown & written & lowBits(bitWidth)))
+  if (summary->patterns.empty() && !(unknown & written & lowBits(bitWidth)))
     return;
   forEachUnknownRoot(*summary, bitOffset, bitWidth, [&](uint32_t root) {
     const talos_rt_native_unknown_root_v1 &entry = summary->roots[root];
@@ -506,9 +506,9 @@ extern "C" uint32_t talos_rt_v1_native_state_refresh_unknown_summary(
   TALOS_RT_CATCH_ALL { return 0; }
 }
 
-extern "C" void
-talos_rt_v1_native_state_mark_unknown(talos_rt_context *context,
-                                        uint64_t bitOffset, uint64_t bitWidth) {
+extern "C" void talos_rt_v1_native_state_mark_unknown(talos_rt_context *context,
+                                                      uint64_t bitOffset,
+                                                      uint64_t bitWidth) {
   if (!context)
     return;
   ContextMutexLock lock(context);
@@ -634,8 +634,8 @@ bool exportNativeStatePlanesUnlocked(const talos_rt_context *context,
 }
 
 bool reconcileNativeRootToPlanesUnlocked(
-    const talos_rt_context *context,
-    const talos_rt_native_schedule_plan *plan, uint32_t id) {
+    const talos_rt_context *context, const talos_rt_native_schedule_plan *plan,
+    uint32_t id) {
   if (!context || !plan ||
       !validNativeStatePlanesUnlocked(context, plan->state_value,
                                       plan->state_unknown,
@@ -706,8 +706,7 @@ bool nativeMaskIntersectsRange(const std::vector<uint64_t> &mask,
 }
 
 void talos_rt_sync_native_state_range_unlocked(talos_rt_context *context,
-                                                 uint64_t begin,
-                                                 uint64_t width) {
+                                               uint64_t begin, uint64_t width) {
   if (!context || !context->nativeStateValue ||
       (!context->nativeStateUnknown && !context->twoState()) ||
       begin >= context->nativeStateBitCount)
@@ -835,12 +834,12 @@ void talos_rt_release_override_range_unlocked(
     talos_rt_context *context, uint64_t begin, uint64_t width, bool assign,
     std::vector<uint64_t> &retiredOwners) {
   talos_rt_claim_override_range_unlocked(context, begin, width, assign, 0,
-                                           retiredOwners);
+                                         retiredOwners);
 }
 
-bool talos_rt_override_owner_matches_unlocked(
-    const talos_rt_context *context, uint64_t bit, bool assign,
-    uint64_t owner) {
+bool talos_rt_override_owner_matches_unlocked(const talos_rt_context *context,
+                                              uint64_t bit, bool assign,
+                                              uint64_t owner) {
   const auto &owners =
       assign ? context->dynamicAssignOwners : context->dynamicForceOwners;
   auto found = owners.find(bit);
@@ -849,7 +848,7 @@ bool talos_rt_override_owner_matches_unlocked(
 
 talos_rt_status
 talos_rt_retire_override_owners(talos_rt_context *context,
-                                  std::vector<uint64_t> retiredOwners) {
+                                std::vector<uint64_t> retiredOwners) {
   std::sort(retiredOwners.begin(), retiredOwners.end());
   retiredOwners.erase(std::unique(retiredOwners.begin(), retiredOwners.end()),
                       retiredOwners.end());
@@ -908,8 +907,7 @@ bool talos_rt_publish_native_signal_transition_unlocked(
     if (context->coverage)
       talos_rt_coverage_record_transition_unlocked(
           context, stableID, bitWidth, changed, newValue, newUnknown);
-    talos_rt_invalidate_signal_snapshots_unlocked(context, stableID,
-                                                    bitWidth);
+    talos_rt_invalidate_signal_snapshots_unlocked(context, stableID, bitWidth);
     if (++context->schedulerEpoch == 0)
       context->schedulerEpoch = 1;
     return context->schedulerStatus == TALOS_RT_OK;
@@ -950,15 +948,14 @@ nativeOverride(talos_rt_context *context, uint8_t *globalValue,
       }
       talos_rt_status status = TALOS_RT_OK;
       if (!dynamic || claim) {
-        status = talos_rt_force_design_nets(context, absolute, bitWidth,
-                                              value, unknown);
+        status = talos_rt_force_design_nets(context, absolute, bitWidth, value,
+                                            unknown);
         if (status == TALOS_RT_OK) {
           ContextMutexLock lock(context);
           for (uint64_t offset = 0; offset != bitWidth; ++offset)
             talos_rt_claim_override_range_unlocked(
                 context,
-                talos_rt_canonical_net_bit_unlocked(context,
-                                                      absolute + offset),
+                talos_rt_canonical_net_bit_unlocked(context, absolute + offset),
                 1, assign != 0, dynamic ? ownerProcess : 0, retiredOwners);
         }
       } else {
@@ -970,7 +967,7 @@ nativeOverride(talos_rt_context *context, uint8_t *globalValue,
                    !talos_rt_override_owner_matches_unlocked(
                        context,
                        talos_rt_canonical_net_bit_unlocked(context,
-                                                             absolute + offset),
+                                                           absolute + offset),
                        assign != 0, ownerProcess))
               ++offset;
           }
@@ -983,7 +980,7 @@ nativeOverride(talos_rt_context *context, uint8_t *globalValue,
                    talos_rt_override_owner_matches_unlocked(
                        context,
                        talos_rt_canonical_net_bit_unlocked(context,
-                                                             absolute + offset),
+                                                           absolute + offset),
                        assign != 0, ownerProcess))
               ++offset;
           }
@@ -1007,8 +1004,7 @@ nativeOverride(talos_rt_context *context, uint8_t *globalValue,
       }
       if (status != TALOS_RT_OK)
         return status;
-      return talos_rt_retire_override_owners(context,
-                                               std::move(retiredOwners));
+      return talos_rt_retire_override_owners(context, std::move(retiredOwners));
     }
     std::vector<uint8_t> oldValue(static_cast<size_t>(byteCount), 0);
     std::vector<uint8_t> oldUnknown(static_cast<size_t>(byteCount), 0);
@@ -1079,7 +1075,7 @@ nativeOverride(talos_rt_context *context, uint8_t *globalValue,
         setByteBit(publishedUnknown.data(), bit, nextU);
       }
       talos_rt_aot_external_write_range_unlocked(context, absolute, bitWidth,
-                                                   true);
+                                                 true);
     }
     publishOverrideTransition(context, handle, bitWidth, oldValue.data(),
                               oldUnknown.data(), publishedValue.data(),
@@ -1092,10 +1088,10 @@ nativeOverride(talos_rt_context *context, uint8_t *globalValue,
 
 extern "C" talos_rt_status
 talos_rt_v1_native_override(talos_rt_context *context, uint8_t *globalValue,
-                              uint8_t *globalUnknown, uint64_t globalBitCount,
-                              uint64_t handle, uint64_t bitWidth,
-                              uint32_t descriptorKind, uint32_t assign,
-                              const uint8_t *value, const uint8_t *unknown) {
+                            uint8_t *globalUnknown, uint64_t globalBitCount,
+                            uint64_t handle, uint64_t bitWidth,
+                            uint32_t descriptorKind, uint32_t assign,
+                            const uint8_t *value, const uint8_t *unknown) {
   return nativeOverride(context, globalValue, globalUnknown, globalBitCount,
                         handle, bitWidth, descriptorKind, assign, false, 0,
                         true, value, unknown);
@@ -1147,8 +1143,7 @@ extern "C" talos_rt_status talos_rt_v1_native_release_override(
           talos_rt_release_design_nets(context, absolute, bitWidth);
       if (status != TALOS_RT_OK)
         return status;
-      return talos_rt_retire_override_owners(context,
-                                               std::move(retiredOwners));
+      return talos_rt_retire_override_owners(context, std::move(retiredOwners));
     }
     std::vector<uint8_t> oldValue(static_cast<size_t>(byteCount), 0);
     std::vector<uint8_t> oldUnknown(static_cast<size_t>(byteCount), 0);
@@ -1160,7 +1155,7 @@ extern "C" talos_rt_status talos_rt_v1_native_release_override(
       if (!staticOverrideRange(context, handle, bitWidth, absolute))
         return TALOS_RT_INVALID_HANDLE;
       talos_rt_release_override_range_unlocked(context, absolute, bitWidth,
-                                                 assign != 0, retiredOwners);
+                                               assign != 0, retiredOwners);
       for (uint64_t bit = 0; bit != bitWidth; ++bit) {
         uint64_t destination = absolute + bit;
         uint64_t mask = uint64_t{1} << (destination % 64);
@@ -1456,8 +1451,7 @@ static talos_rt_status nativeStateStorePlane(
           return TALOS_RT_INVALID_HANDLE;
         talos_rt_managed_word_v1 word = 0;
         std::memcpy(&word, value, sizeof(word));
-        talos_rt_object_v1 *managed =
-            talos_rt_object_from_managed_word(word);
+        talos_rt_object_v1 *managed = talos_rt_object_from_managed_word(word);
         if (word != talos_rt_managed_word_from_object(managed))
           return TALOS_RT_INVALID_HANDLE;
         if (!talos_rt_managed_object_belongs_to(context, managed))

@@ -1187,25 +1187,37 @@ TEST(VPIObjectModel, ReadPropertySelectorInventoryIsExhaustive) {
     const char *clause;
   };
 #define STATIC_PROPERTY(NAME, KIND, CLAUSE)                                    \
-  {                                                                            \
-    NAME, #NAME, PropertyKind::KIND, PropertyStability::Static,                \
-        ProtectedAccess::Denied, false, CLAUSE                                 \
-  }
+  {NAME,                                                                       \
+   #NAME,                                                                      \
+   PropertyKind::KIND,                                                         \
+   PropertyStability::Static,                                                  \
+   ProtectedAccess::Denied,                                                    \
+   false,                                                                      \
+   CLAUSE}
 #define DYNAMIC_PROPERTY(NAME, KIND, CLAUSE)                                   \
-  {                                                                            \
-    NAME, #NAME, PropertyKind::KIND, PropertyStability::Dynamic,               \
-        ProtectedAccess::Denied, false, CLAUSE                                 \
-  }
+  {NAME,                                                                       \
+   #NAME,                                                                      \
+   PropertyKind::KIND,                                                         \
+   PropertyStability::Dynamic,                                                 \
+   ProtectedAccess::Denied,                                                    \
+   false,                                                                      \
+   CLAUSE}
 #define PROTECTED_PROPERTY(NAME, KIND, CLAUSE)                                 \
-  {                                                                            \
-    NAME, #NAME, PropertyKind::KIND, PropertyStability::Static,                \
-        ProtectedAccess::Allowed, false, CLAUSE                                \
-  }
+  {NAME,                                                                       \
+   #NAME,                                                                      \
+   PropertyKind::KIND,                                                         \
+   PropertyStability::Static,                                                  \
+   ProtectedAccess::Allowed,                                                   \
+   false,                                                                      \
+   CLAUSE}
 #define SYMBOLIC_PROPERTY(NAME, CLAUSE)                                        \
-  {                                                                            \
-    NAME, #NAME, PropertyKind::Integer, PropertyStability::Static,             \
-        ProtectedAccess::Denied, true, CLAUSE                                  \
-  }
+  {NAME,                                                                       \
+   #NAME,                                                                      \
+   PropertyKind::Integer,                                                      \
+   PropertyStability::Static,                                                  \
+   ProtectedAccess::Denied,                                                    \
+   true,                                                                       \
+   CLAUSE}
 #define PROTECTED_SYMBOLIC_PROPERTY(NAME, CLAUSE)                              \
   {                                                                            \
     NAME, #NAME, PropertyKind::Integer, PropertyStability::Static,             \
@@ -1819,8 +1831,7 @@ TEST(VPIObjectModel, IntegerPropertyDomainImageExactlyMatchesGeneratedModel) {
 }
 
 TEST(VPIObjectModel, RuntimeExportsCanonicalImmutableModelImage) {
-  const talos_rt_vpi_object_model_v1 *model =
-      talos_rt_v1_vpi_object_model();
+  const talos_rt_vpi_object_model_v1 *model = talos_rt_v1_vpi_object_model();
   ASSERT_NE(model, nullptr);
   ASSERT_NE(model->data, nullptr);
   EXPECT_EQ(model->size, sizeof(vpiObjectModelImage));
@@ -3485,9 +3496,8 @@ TEST(VPIObjectModel, RootTraversalsHaveExactSpecialTargetsAndOrders) {
 // relationships.  These negative cases prevent a generic Scope/Array family
 // from leaking into a relation with a narrower LRM node.
 TEST(VPIObjectModel, InstanceScopeAndArrayRelationsDoNotLeak) {
-  for (uint32_t owner : {vpiModule, vpiPackage, vpiClassDefn,
-                         vpiClassTypespec, vpiClassObj, vpiPropertyDecl,
-                         vpiSequenceDecl})
+  for (uint32_t owner : {vpiModule, vpiPackage, vpiClassDefn, vpiClassTypespec,
+                         vpiClassObj, vpiPropertyDecl, vpiSequenceDecl})
     expectContains(owner, vpiVariables, Mode::Iterate,
                    {vpiIntVar, vpiRegArray, vpiVirtualInterfaceVar},
                    {vpiNamedEvent, vpiNamedEventArray, vpiParameter});
@@ -3741,9 +3751,9 @@ TEST(VPIObjectModel, ClassClassObjectAndClockingIterationsDoNotInventOrder) {
     expectNoOrder(vpiClassDefn, selector, Mode::Iterate);
   EXPECT_EQ(requireTraversal(vpiClassDefn, vpiConstraint, Mode::Iterate).order,
             Order::Declaration);
-  EXPECT_EQ(requireTraversal(vpiClassTypespec, vpiConstraint, Mode::Iterate)
-                .order,
-            Order::Declaration);
+  EXPECT_EQ(
+      requireTraversal(vpiClassTypespec, vpiConstraint, Mode::Iterate).order,
+      Order::Declaration);
   expectNoOrder(vpiClassTypespec, vpiMethods, Mode::Iterate);
   EXPECT_EQ(findVPITraversal(vpiClassDefn, vpiClassTypespec, Mode::Handle),
             nullptr);

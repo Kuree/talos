@@ -6,8 +6,7 @@
 // asm labels are final symbol names; Mach-O prefixes C symbols with '_'.
 #define TALOS_TEST_STRINGIFY_(text) #text
 #define TALOS_TEST_STRINGIFY(text) TALOS_TEST_STRINGIFY_(text)
-#define TALOS_TEST_SYMBOL(name)                                              \
-  TALOS_TEST_STRINGIFY(__USER_LABEL_PREFIX__) name
+#define TALOS_TEST_SYMBOL(name) TALOS_TEST_STRINGIFY(__USER_LABEL_PREFIX__) name
 
 extern "C" {
 extern uint8_t __talos_state_value[], __talos_state_unknown[];
@@ -58,8 +57,8 @@ int main() {
     __talos_eval_step_four_state_fallback_v1 = 0;
     __talos_eval_path_dispatch_v1_0(nullptr);
     assert(!__talos_eval_step_four_state_fallback_v1);
-    assert(__talos_eval_four_state_nba_handoff_v1(nullptr, nullptr,
-                                                    nullptr) == 0);
+    assert(__talos_eval_four_state_nba_handoff_v1(nullptr, nullptr, nullptr) ==
+           0);
     assert(__talos_state_value[2] == tick);
     assert(__talos_state_value[3] == tick);
     assert(!__talos_eval_route_promotion_pending_v1[0]);

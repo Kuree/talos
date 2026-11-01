@@ -278,8 +278,7 @@ class PrepareNativeTransferKernelsPass final
              wait.waitSize,
              TALOS_RT_SUSPEND_CHANGE,
              0,
-             {{uint64_t(offsets[kernel.getSource()]),
-               TALOS_RT_WAIT_EDGE_CHANGE,
+             {{uint64_t(offsets[kernel.getSource()]), TALOS_RT_WAIT_EDGE_CHANGE,
                uint32_t(*analysis::getSimulationStorageBitWidth(element))}}});
         schedule::set<schedule::Field::NativeContinuation>(
             wait.operation, builder.getI32IntegerAttr(wait.continuationID));

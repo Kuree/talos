@@ -47,8 +47,7 @@ public:
   talos_rt_context *context = nullptr;
 };
 
-std::vector<std::string> scanNames(vpiHandle iterator,
-                                   PLI_INT32 expectedType) {
+std::vector<std::string> scanNames(vpiHandle iterator, PLI_INT32 expectedType) {
   std::vector<std::string> names;
   for (vpiHandle item = vpi_scan(iterator); item; item = vpi_scan(iterator)) {
     EXPECT_EQ(vpi_get(vpiType, item), expectedType);
@@ -124,8 +123,7 @@ TEST(GeneratedVPIInterconnects,
   vpiHandle leaves = vpi_iterate(vpiElement, row);
   ASSERT_NE(leaves, nullptr);
   EXPECT_EQ(scanNames(leaves, vpiInterconnectNet),
-            (std::vector<std::string>{"top.d.bus[1][-1]",
-                                      "top.d.bus[1][0]"}));
+            (std::vector<std::string>{"top.d.bus[1][-1]", "top.d.bus[1][0]"}));
 
   PLI_INT32 indices[] = {1, -1};
   vpiHandle leaf = vpi_handle_by_index(row, -1);
@@ -197,8 +195,7 @@ TEST(GeneratedVPIInterconnects,
   EXPECT_EQ(vpi_get(vpiStructUnionMember, memberA), 1);
   EXPECT_EQ(vpi_get(vpiStructUnionMember, memberB), 1);
   EXPECT_STREQ(vpi_get_str(vpiName, memberA), "a");
-  EXPECT_STREQ(vpi_get_str(vpiFullName, memberA),
-               "top.d.bus[0][0].a");
+  EXPECT_STREQ(vpi_get_str(vpiFullName, memberA), "top.d.bus[0][0].a");
   EXPECT_STREQ(vpi_get_str(vpiDecompile, memberA), "bus[0][0].a");
   EXPECT_STREQ(vpi_get_str(vpiName, memberB), "b");
   vpiHandle namedMember = fixture.byName("top.d.bus[0][0].a");
@@ -223,8 +220,7 @@ TEST(GeneratedVPIInterconnects,
   ASSERT_NE(memberBit0, nullptr);
   EXPECT_EQ(vpi_scan(memberBits), nullptr);
   EXPECT_EQ(vpi_get(vpiType, memberBit2), vpiNetBit);
-  EXPECT_STREQ(vpi_get_str(vpiFullName, memberBit2),
-               "top.d.bus[0][0].a[2]");
+  EXPECT_STREQ(vpi_get_str(vpiFullName, memberBit2), "top.d.bus[0][0].a[2]");
   vpiHandle memberBitParent = vpi_handle(vpiParent, memberBit2);
   ASSERT_NE(memberBitParent, nullptr);
   EXPECT_EQ(vpi_compare_objects(memberBitParent, memberA), 1);

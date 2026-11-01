@@ -47,8 +47,8 @@ bool materializeNativeGroupDataflow(LLVM::LLVMFuncOp function,
   // without creating runtime children for a lowering artifact.
   SmallVector<PromotableAllocationOpInterface> allocations;
   function.walk([&](LLVM::AllocaOp allocation) {
-    allocations.push_back(cast<PromotableAllocationOpInterface>(
-        allocation.getOperation()));
+    allocations.push_back(
+        cast<PromotableAllocationOpInterface>(allocation.getOperation()));
   });
   if (!allocations.empty() &&
       function.getBody().getBlocks().size() <= budget / allocations.size()) {
@@ -60,8 +60,8 @@ bool materializeNativeGroupDataflow(LLVM::LLVMFuncOp function,
   auto reject = [&](StringRef reason, Operation *operation = nullptr) {
     if (native::has<native::DebugTiming>(
             function->getParentOfType<ModuleOp>())) {
-      llvm::errs() << "talos group dataflow rejected: "
-                   << function.getSymName() << " " << reason;
+      llvm::errs() << "talos group dataflow rejected: " << function.getSymName()
+                   << " " << reason;
       if (operation)
         llvm::errs() << " (" << *operation << ")";
       llvm::errs() << '\n';
@@ -256,8 +256,9 @@ bool materializeNativeGroupDataflow(LLVM::LLVMFuncOp function,
   // literal overlapping bytes of the same authoritative global. Preserve the
   // other bytes of a partial store, including canonical X/Z in the mask plane.
   std::optional<bool> littleEndian;
-  if (auto layout = function->getParentOfType<ModuleOp>()->getAttrOfType<StringAttr>(
-          "llvm.data_layout")) {
+  if (auto layout =
+          function->getParentOfType<ModuleOp>()->getAttrOfType<StringAttr>(
+              "llvm.data_layout")) {
     auto parsed = llvm::DataLayout::parse(layout.getValue());
     if (!parsed) {
       llvm::consumeError(parsed.takeError());
@@ -273,14 +274,15 @@ bool materializeNativeGroupDataflow(LLVM::LLVMFuncOp function,
   for (auto [key, id] : rangeIndex) {
     const Slot &slot = slots[id];
     if (!merged.empty() && merged.back().global == slot.global &&
-        merged.back().offset + merged.back().type.getWidth() / 8 > slot.offset) {
+        merged.back().offset + merged.back().type.getWidth() / 8 >
+            slot.offset) {
       Slot &previous = merged.back();
       uint64_t end = std::max(previous.offset + previous.type.getWidth() / 8,
                               slot.offset + slot.type.getWidth() / 8);
       if (!littleEndian || end - previous.offset > 32)
         return reject("unproved or oversized overlapping physical ranges");
-      previous.type = IntegerType::get(function.getContext(),
-                                       (end - previous.offset) * 8);
+      previous.type =
+          IntegerType::get(function.getContext(), (end - previous.offset) * 8);
       previous.written |= slot.written;
     } else
       merged.push_back(slot);
@@ -388,9 +390,10 @@ bool materializeNativeGroupDataflow(LLVM::LLVMFuncOp function,
         Access access = canonical[accesses.lookup(load)];
         Value value = memory[access.slot];
         auto type = slots[access.slot].type;
-        unsigned shift = littleEndian.value_or(true)
-                             ? access.byteOffset * 8
-                             : type.getWidth() - access.byteOffset * 8 - access.width;
+        unsigned shift =
+            littleEndian.value_or(true)
+                ? access.byteOffset * 8
+                : type.getWidth() - access.byteOffset * 8 - access.width;
         if (shift)
           value = LLVM::LShrOp::create(builder, loc, value,
                                        llvmConstant(builder, loc, type, shift));
@@ -402,14 +405,16 @@ bool materializeNativeGroupDataflow(LLVM::LLVMFuncOp function,
         Value value = mapping.lookup(store.getValue());
         auto type = slots[access.slot].type;
         if (access.width != type.getWidth()) {
-          unsigned shift = littleEndian.value_or(true)
-                               ? access.byteOffset * 8
-                               : type.getWidth() - access.byteOffset * 8 - access.width;
+          unsigned shift =
+              littleEndian.value_or(true)
+                  ? access.byteOffset * 8
+                  : type.getWidth() - access.byteOffset * 8 - access.width;
           value = LLVM::ZExtOp::create(builder, loc, type, value);
           if (shift)
-            value = LLVM::ShlOp::create(builder, loc, value,
-                                        llvmConstant(builder, loc, type, shift));
-          APInt keep = ~APInt::getBitsSet(type.getWidth(), shift, shift + access.width);
+            value = LLVM::ShlOp::create(
+                builder, loc, value, llvmConstant(builder, loc, type, shift));
+          APInt keep =
+              ~APInt::getBitsSet(type.getWidth(), shift, shift + access.width);
           Value preserved = LLVM::AndOp::create(
               builder, loc, memory[access.slot],
               LLVM::ConstantOp::create(builder, loc, type, keep));
@@ -450,9 +455,9 @@ bool materializeNativeGroupDataflow(LLVM::LLVMFuncOp function,
       rawCount.getUInt() <= runtime::ReadySetLayout::flatWordLimit) {
     uint64_t count = rawCount.getUInt();
     auto readyGlobal = symbols.lookup<LLVM::GlobalOp>(ingress.getValue());
-    auto readyType = readyGlobal
-                         ? dyn_cast<LLVM::LLVMArrayType>(readyGlobal.getGlobalType())
-                         : LLVM::LLVMArrayType{};
+    auto readyType =
+        readyGlobal ? dyn_cast<LLVM::LLVMArrayType>(readyGlobal.getGlobalType())
+                    : LLVM::LLVMArrayType{};
     auto cache = slotIndex.find({ingress.getValue().str(), count * 8});
     if (readyType && readyType.getElementType().isInteger(64) &&
         readyType.getNumElements() == count + 1 && cache != slotIndex.end() &&
@@ -473,16 +478,15 @@ bool materializeNativeGroupDataflow(LLVM::LLVMFuncOp function,
             builder, loc, LLVM::ICmpPredicate::eq, final[id],
             llvmConstant(builder, loc, builder.getI64Type(), 0));
         Value advance = LLVM::AndOp::create(builder, loc, atWord, empty);
-        lower = select(advance,
-                       llvmConstant(builder, loc, builder.getI64Type(), word + 1),
-                       lower);
+        lower = select(
+            advance, llvmConstant(builder, loc, builder.getI64Type(), word + 1),
+            lower);
         ++hints;
       }
       if (hints) {
         final[cacheID] = lower;
         slots[cacheID].written = true;
-        ::talos::schedule::set<
-            ::talos::schedule::Field::EvalCacheHintWords>(
+        ::talos::schedule::set<::talos::schedule::Field::EvalCacheHintWords>(
             function, builder.getI64IntegerAttr(hints));
       }
     }

@@ -24,8 +24,8 @@ public:
       return;
     EXPECT_EQ(talos_rt_v1_design_validate(initialDescriptor.execution),
               TALOS_RT_OK);
-    EXPECT_EQ(talos_rt_v1_context_create_for_design(
-                  initialDescriptor.execution, &context),
+    EXPECT_EQ(talos_rt_v1_context_create_for_design(initialDescriptor.execution,
+                                                    &context),
               TALOS_RT_OK);
     if (!context)
       return;

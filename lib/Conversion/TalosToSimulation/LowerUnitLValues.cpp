@@ -1250,9 +1250,11 @@ UnitLowering::enqueueClassBackedSelectionNBA(const CapturedLValue &destination,
   return success();
 }
 
-LogicalResult UnitLowering::writeCapturedLValue(
-    CapturedLValue &destination, Value value, bool sourceSigned,
-    bool nonblocking, Location location, Value delay, StoredValue stored) {
+LogicalResult UnitLowering::writeCapturedLValue(CapturedLValue &destination,
+                                                Value value, bool sourceSigned,
+                                                bool nonblocking,
+                                                Location location, Value delay,
+                                                StoredValue stored) {
   if (!nonblocking || observeNonblockingWrites)
     recordImplicitWrite(destination.reference);
   switch (destination.kind) {
@@ -1850,8 +1852,8 @@ LogicalResult UnitLowering::writeCapturedLValue(
           return function.emitError(
               "delayed drive value has no fixed packed width");
         bool vectorDelay =
-            !::talos::schedule::has<
-                ::talos::schedule::Field::PrimitiveName>(function) &&
+            !::talos::schedule::has<::talos::schedule::Field::PrimitiveName>(
+                function) &&
             *drivenWidth != 1;
         if (nextInertialDriveComponent > UINT32_MAX)
           return function.emitError("too many delayed drive sites");
@@ -1894,8 +1896,7 @@ LogicalResult UnitLowering::writeCapturedLValue(
         auto drive = sim::SimDriverDriveOp::create(
             builder, location, destination.reference, published);
         if (deferDriverResolution || userRaw)
-          ::talos::schedule::set<
-              ::talos::schedule::Field::DeferNetResolution>(
+          ::talos::schedule::set<::talos::schedule::Field::DeferNetResolution>(
               drive, builder.getUnitAttr());
         if (userRaw)
           sim::mark<sim::metadata::UserNetRawDrive>(drive);
@@ -2995,9 +2996,9 @@ LogicalResult UnitLowering::lowerStaticClockingOutputAssignment(
         clockingVariable->getAttrOfType<SymbolRefAttr>("referenced_symbol");
     auto declaration =
         reference
-            ? loweringInputs.lookupNearestSymbolFrom<
-                  semantic::SVClockVarSymbolOp>(
-                  clockingVariable->getParentOfType<ModuleOp>(), reference)
+            ? loweringInputs
+                  .lookupNearestSymbolFrom<semantic::SVClockVarSymbolOp>(
+                      clockingVariable->getParentOfType<ModuleOp>(), reference)
             : semantic::SVClockVarSymbolOp{};
     SmallVector<Operation *> declarationChildren =
         declaration ? getChildren(declaration) : SmallVector<Operation *>{};
@@ -4906,8 +4907,7 @@ UnitLowering::lowerPortConnection(semantic::SVPortConnectionOp op) {
       auto drive = sim::SimDriverDriveOp::create(builder, location, destination,
                                                  *converted);
       if (isUserNetDriver(destination)) {
-        ::talos::schedule::set<
-            ::talos::schedule::Field::DeferNetResolution>(
+        ::talos::schedule::set<::talos::schedule::Field::DeferNetResolution>(
             drive, builder.getUnitAttr());
         sim::mark<sim::metadata::UserNetRawDrive>(drive);
       }

@@ -142,8 +142,7 @@ planNativeRankedGroups(ModuleOp module, const NativeEvalCoordinatorPlan &plan,
   }
   SmallVector<NativeRankedEvalNode> ordered(plan.rankedNodes);
   for (auto &node : ordered)
-    if (!node.boundary && !node.clocked &&
-        islandSizes.lookup(node.island) == 1)
+    if (!node.boundary && !node.clocked && islandSizes.lookup(node.island) == 1)
       node.island = nextIsland + node.owner / 64;
   llvm::stable_sort(ordered, [](const auto &a, const auto &b) {
     return a.island < b.island;
@@ -358,8 +357,7 @@ materializeNativeRankedGroups(ModuleOp module,
       return;
     }
     builder.setInsertionPointToEnd(module.getBody());
-    std::string name =
-        "__talos_eval_ranked_group_" + std::to_string(groupID++);
+    std::string name = "__talos_eval_ranked_group_" + std::to_string(groupID++);
     auto group = LLVM::LLVMFuncOp::create(
         builder, loc, name,
         LLVM::LLVMFunctionType::get(
@@ -416,8 +414,7 @@ materializeNativeRankedGroups(ModuleOp module,
           call, builder.getI32IntegerAttr(owner));
       // The group has selected this value-domain branch explicitly. Route
       // lowering must not introduce a mutable function pointer here.
-      ::talos::schedule::set<
-          ::talos::schedule::Field::EvalGroupDomainSelected>(
+      ::talos::schedule::set<::talos::schedule::Field::EvalGroupDomainSelected>(
           call, builder.getUnitAttr());
     };
     for (const auto *node : members) {
@@ -469,19 +466,17 @@ materializeNativeRankedGroups(ModuleOp module,
         cf::BranchOp::create(builder, loc, next);
         builder.setInsertionPointToStart(four);
       }
-      LLVM::StoreOp::create(builder, loc,
-                            llvmConstant(builder, loc, builder.getI8Type(), 1),
-                            LLVM::AddressOfOp::create(
-                                builder, loc, pointer,
-                                "__talos_eval_step_four_state_fallback_v1"),
-                            1);
+      LLVM::StoreOp::create(
+          builder, loc, llvmConstant(builder, loc, builder.getI8Type(), 1),
+          LLVM::AddressOfOp::create(builder, loc, pointer,
+                                    "__talos_eval_step_four_state_fallback_v1"),
+          1);
       for (unsigned word = 0; word < plan.nbaTaintWordCount; ++word) {
         uint64_t mask = plan.nbaTaintMasks[owner][word];
         if (!mask)
           continue;
         Value base = LLVM::AddressOfOp::create(
-            builder, loc, pointer,
-            "__talos_eval_step_four_state_nba_roots_v1");
+            builder, loc, pointer, "__talos_eval_step_four_state_nba_roots_v1");
         updateOwnerWord(builder, loc, base, word,
                         llvmConstant(builder, loc, i64, mask));
       }
@@ -508,14 +503,14 @@ materializeNativeRankedGroups(ModuleOp module,
       if (proof)
         schedule::set<schedule::Field::EvalGroupProofDomain>(candidate, proof);
       ::talos::schedule::set<::talos::schedule::Field::EvalGroupIngress>(
-          candidate, ::talos::schedule::get<
-                         ::talos::schedule::Field::EvalGroupIngress>(group));
+          candidate,
+          ::talos::schedule::get<::talos::schedule::Field::EvalGroupIngress>(
+              group));
       ::talos::schedule::set<::talos::schedule::Field::EvalReadyWordCount>(
           candidate,
-          ::talos::schedule::get<
-              ::talos::schedule::Field::EvalReadyWordCount>(group));
-      ::talos::schedule::set<
-          ::talos::schedule::Field::EvalDataflowCandidate>(
+          ::talos::schedule::get<::talos::schedule::Field::EvalReadyWordCount>(
+              group));
+      ::talos::schedule::set<::talos::schedule::Field::EvalDataflowCandidate>(
           candidate, FlatSymbolRefAttr::get(module.getContext(), name));
       ::talos::schedule::set<schedule::metadata::evalCallClosureRoot>(
           candidate, builder.getUnitAttr());
@@ -530,8 +525,7 @@ materializeNativeRankedGroups(ModuleOp module,
             llvmConstant(builder, loc, i64, uint64_t{1} << (owner % 64));
         Value ingress = schedule::NativeReadyReadOp::create(
             builder, loc, i64, ready, readyLayout.capacity, owner / 64);
-        ::talos::schedule::set<
-            ::talos::schedule::Field::EvalActivationEntry>(
+        ::talos::schedule::set<::talos::schedule::Field::EvalActivationEntry>(
             ingress.getDefiningOp(), builder.getI32IntegerAttr(owner));
         Value dirty = arith::AndIOp::create(builder, loc, ingress, bit);
         Value active =

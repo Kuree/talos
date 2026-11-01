@@ -4,9 +4,9 @@
 
 #include "talos/Analysis/SimulationAnalysis.h"
 #include "talos/Coverage/CoverageDatabase.h"
-#include "talos/Dialect/Talos/TalosOps.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
+#include "talos/Dialect/Talos/TalosOps.h"
 #include "talos/Reflection/VPIObjectModel.h"
 #include "talos/Runtime/Runtime.h"
 #include "talos/Runtime/StableHash.h"
@@ -1628,10 +1628,9 @@ static uint64_t stableFunctionalExpressionID(
   uint64_t hash =
       appendText(TALOS_STABLE_HASH_OFFSET_BASIS, "functional.expression");
   hash = talos_stable_hash_append_uint_le(hash, owner, 8);
-  hash = talos_stable_hash_append_uint_le(
-      hash, static_cast<uint32_t>(ownerKind), 4);
-  hash =
-      talos_stable_hash_append_uint_le(hash, static_cast<uint32_t>(role), 4);
+  hash = talos_stable_hash_append_uint_le(hash,
+                                          static_cast<uint32_t>(ownerKind), 4);
+  hash = talos_stable_hash_append_uint_le(hash, static_cast<uint32_t>(role), 4);
   hash = talos_stable_hash_append_uint_le(hash, ownerOrdinal, 4);
   hash = talos_stable_hash_append_uint_le(hash, ownerSubordinal, 4);
   if (std::optional<SourceInfo> source = getSourceInfo(operation)) {
@@ -1691,8 +1690,7 @@ static bool isExecutableStatement(Operation *operation) {
       assertion.getAssertionKind() == ir::SVAssertionKind::Restrict)
     return false;
   if (name == "talos.sv.statement.empty" ||
-      name == "talos.sv.statement.block" ||
-      name == "talos.sv.statement.list")
+      name == "talos.sv.statement.block" || name == "talos.sv.statement.list")
     return false;
   // A declaration without an initializer has no procedural execution effect.
   if (name == "talos.sv.statement.variable_declaration") {
@@ -2665,10 +2663,8 @@ void TalosSimPrepareCoveragePass::runOnOperation() {
             width += segment.width;
           if (width == 0 || width > 64)
             continue;
-          uint64_t machine =
-              appendText(TALOS_STABLE_HASH_OFFSET_BASIS, "fsm");
-          machine =
-              talos_stable_hash_append_uint_le(machine, scope->second, 8);
+          uint64_t machine = appendText(TALOS_STABLE_HASH_OFFSET_BASIS, "fsm");
+          machine = talos_stable_hash_append_uint_le(machine, scope->second, 8);
           machine = appendText(machine, vector.name);
           if (!machine)
             machine = 1;

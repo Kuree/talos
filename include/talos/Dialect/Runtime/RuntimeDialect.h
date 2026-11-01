@@ -29,8 +29,7 @@ using ClassBitstreamBlob = TalosRuntimeDialect::ClassBitstreamBlobAttrHelper;
 using CoverageSchemaBlob = TalosRuntimeDialect::CoverageSchemaBlobAttrHelper;
 using FeatureSet = TalosRuntimeDialect::FeaturesAttrHelper;
 using BytecodeFunction = TalosRuntimeDialect::BytecodeFunctionAttrHelper;
-using BytecodeScratchSize =
-    TalosRuntimeDialect::BytecodeScratchSizeAttrHelper;
+using BytecodeScratchSize = TalosRuntimeDialect::BytecodeScratchSizeAttrHelper;
 using BytecodeScratchAlignment =
     TalosRuntimeDialect::BytecodeScratchAlignmentAttrHelper;
 using BytecodeTwoStateLogicRegisters =

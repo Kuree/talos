@@ -6,11 +6,11 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/DPI/DPIDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <algorithm>
@@ -48,8 +48,7 @@ void expectDepth(talos_rt_context *context, uint64_t expected) {
   EXPECT_EQ(depth, expected);
 }
 
-void inspectCalls(talos_rt_context *context, CallProbe &probe,
-                  unsigned phase) {
+void inspectCalls(talos_rt_context *context, CallProbe &probe, unsigned phase) {
   probe.phases.push_back(phase);
   const uint64_t current = talos_rt_v1_process_current(context);
   ASSERT_NE(current, 0u);
@@ -59,9 +58,8 @@ void inspectCalls(talos_rt_context *context, CallProbe &probe,
   if (phase == 10) {
     expectDepth(context, 4);
     uint64_t activation = 0;
-    ASSERT_EQ(
-        talos_rt_v1_vpi_frame_enter_prepared(context, 47, 0, &activation),
-        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_vpi_frame_enter_prepared(context, 47, 0, &activation),
+              TALOS_RT_OK);
     expectDepth(context, 5);
     auto frame = vpi_handle(vpiFrame, nullptr);
     ASSERT_NE(frame, nullptr);
@@ -79,8 +77,7 @@ void inspectCalls(talos_rt_context *context, CallProbe &probe,
               TALOS_RT_INVALID_LIFECYCLE);
     EXPECT_EQ(rejected, 0u);
     ASSERT_EQ(talos_rt_v1_vpi_frame_checkpoint(context, 15), TALOS_RT_OK);
-    ASSERT_EQ(talos_rt_v1_vpi_frame_leave(context, activation),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_vpi_frame_leave(context, activation), TALOS_RT_OK);
     expectExpired(frame);
     return;
   }
@@ -121,17 +118,16 @@ void inspectCalls(talos_rt_context *context, CallProbe &probe,
           talos_rt_v1_vpi_frame_enter_prepared(context, unit, 0, &rejected),
           TALOS_RT_INVALID_LIFECYCLE);
       EXPECT_EQ(rejected, 0u);
-      EXPECT_EQ(
-          talos_rt_v1_vpi_frame_enter_prepared(context, 47, 1, &rejected),
-          TALOS_RT_INVALID_ARGUMENT);
+      EXPECT_EQ(talos_rt_v1_vpi_frame_enter_prepared(context, 47, 1, &rejected),
+                TALOS_RT_INVALID_ARGUMENT);
       EXPECT_EQ(rejected, 0u);
       ASSERT_EQ(
           talos_rt_v1_vpi_frame_enter_prepared(context, unit, 1, &activation),
           TALOS_RT_OK);
     } else {
-      ASSERT_EQ(talos_rt_v1_vpi_frame_enter(context, unit, kind, origin,
-                                              &activation),
-                TALOS_RT_OK);
+      ASSERT_EQ(
+          talos_rt_v1_vpi_frame_enter(context, unit, kind, origin, &activation),
+          TALOS_RT_OK);
     }
     if (phase == 2)
       probe.blockID = activation;
@@ -169,8 +165,7 @@ void inspectCalls(talos_rt_context *context, CallProbe &probe,
     expectDepth(context, 4);
     EXPECT_EQ(vpi_get(vpiActive, probe.frames[3]), 1);
     if (phase == 4 && probe.exit == Exit::EscapeBlock) {
-      ASSERT_EQ(talos_rt_v1_control_disable(context, 777, 0, 1),
-                TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_control_disable(context, 777, 0, 1), TALOS_RT_OK);
       expectDepth(context, 2);
       expectExpired(probe.frames[2]);
       expectExpired(probe.frames[3]);
@@ -183,8 +178,7 @@ void inspectCalls(talos_rt_context *context, CallProbe &probe,
     EXPECT_EQ(vpi_get(vpiActive, probe.frames[2]), 1);
     ASSERT_EQ(talos_rt_v1_vpi_call_finish(context, probe.innerTicket),
               TALOS_RT_OK);
-    ASSERT_EQ(talos_rt_v1_vpi_frame_leave(context, probe.blockID),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_vpi_frame_leave(context, probe.blockID), TALOS_RT_OK);
   } else if (phase == 7) {
     expectDepth(context, 2);
     expectExpired(probe.frames[2]);
@@ -196,10 +190,9 @@ void inspectCalls(talos_rt_context *context, CallProbe &probe,
     // A prepared call whose lexical scope is disabled must never supply the
     // source identity for an unrelated activation after that scope exits.
     uint64_t scope = 0, cancelled = 0;
-    ASSERT_EQ(
-        talos_rt_v1_vpi_frame_enter(
-            context, 45, TALOS_RT_VPI_FRAME_STATEMENT_SCOPE, 12, &scope),
-        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_vpi_frame_enter(
+                  context, 45, TALOS_RT_VPI_FRAME_STATEMENT_SCOPE, 12, &scope),
+              TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_vpi_call_prepare(context, 21, &cancelled),
               TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_vpi_frame_unwind(context, 2), TALOS_RT_OK);
@@ -225,12 +218,11 @@ void inspectCalls(talos_rt_context *context, CallProbe &probe,
   // Their return must restore the exact saved caller depth in the scheduler.
 }
 
-talos_rt_status inspectCallsImport(talos_rt_context *context,
-                                     uint32_t importID,
-                                     const talos_rt_import_input_v1 *inputs,
-                                     uint32_t inputCount,
-                                     talos_rt_import_output_v1 *,
-                                     uint32_t outputCount, void *userData) {
+talos_rt_status inspectCallsImport(talos_rt_context *context, uint32_t importID,
+                                   const talos_rt_import_input_v1 *inputs,
+                                   uint32_t inputCount,
+                                   talos_rt_import_output_v1 *,
+                                   uint32_t outputCount, void *userData) {
   EXPECT_EQ(importID, 123u);
   EXPECT_EQ(outputCount, 0u);
   if (inputCount != 1 || !inputs || !inputs[0].value)
@@ -394,11 +386,11 @@ TEST(GeneratedDesignDatabase, FrameCallActionContract) {
   auto *instance = descriptor.create(probe);
   ASSERT_NE(instance, nullptr);
   talos_rt_fragment_action_v1 action{TALOS_RT_FRAGMENT_TASK_CALL,
-                                       TALOS_RT_SUSPEND_NONE,
-                                       1,
-                                       0,
-                                       reinterpret_cast<uintptr_t>(instance),
-                                       0};
+                                     TALOS_RT_SUSPEND_NONE,
+                                     1,
+                                     0,
+                                     reinterpret_cast<uintptr_t>(instance),
+                                     0};
   EXPECT_EQ(talos::process::validateAction(*instance, action, false),
             TALOS_RT_OK);
   action.flags = TALOS_RT_ACTION_VPI_CALL_SITE;
@@ -426,10 +418,9 @@ TEST(GeneratedDesignDatabase, FrameCallProtocol) {
   const char *input = std::getenv("TALOS_TEST_INPUT");
   ASSERT_NE(input, nullptr);
   mlir::DialectRegistry registry;
-  registry
-      .insert<mlir::arith::ArithDialect, mlir::cf::ControlFlowDialect,
-              talos::dpi::DPIDialect, talos::runtime::TalosRuntimeDialect,
-              talos::sim::TalosSimulationDialect>();
+  registry.insert<mlir::arith::ArithDialect, mlir::cf::ControlFlowDialect,
+                  talos::dpi::DPIDialect, talos::runtime::TalosRuntimeDialect,
+                  talos::sim::TalosSimulationDialect>();
   mlir::MLIRContext context(registry);
   auto module = mlir::parseSourceFile<mlir::ModuleOp>(input, &context);
   ASSERT_TRUE(module);
@@ -476,20 +467,17 @@ TEST(GeneratedDesignDatabase, FrameCallProtocol) {
       talos_rt_process_instance_v1 *actor = nullptr;
       talos_rt_native_schedule_plan plan{};
       talos_rt_context *rawContext = nullptr;
-      ASSERT_EQ(
-          talos_rt_v1_context_create_for_design(&execution, &rawContext),
-          TALOS_RT_OK);
-      std::unique_ptr<talos_rt_context,
-                      decltype(&talos_rt_v1_context_destroy)>
+      ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &rawContext),
+                TALOS_RT_OK);
+      std::unique_ptr<talos_rt_context, decltype(&talos_rt_v1_context_destroy)>
           runtime(rawContext, talos_rt_v1_context_destroy);
-      ASSERT_EQ(talos_rt_v1_context_register_import(
-                    runtime.get(), 123, inspectCallsImport, &probe),
+      ASSERT_EQ(talos_rt_v1_context_register_import(runtime.get(), 123,
+                                                    inspectCallsImport, &probe),
                 TALOS_RT_OK);
       ASSERT_EQ(talos_rt_v1_vpi_startup(runtime.get(), nullptr, 0),
                 TALOS_RT_OK);
       ASSERT_EQ(talos_rt_v1_vpi_end_compile(runtime.get()), TALOS_RT_OK);
-      ASSERT_EQ(talos_rt_v1_vpi_start_simulation(runtime.get()),
-                TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_vpi_start_simulation(runtime.get()), TALOS_RT_OK);
       if (engine == Engine::AOT) {
         plan.size = sizeof(plan);
         plan.graph_layout_checksum = execution.checksum;
@@ -508,7 +496,7 @@ TEST(GeneratedDesignDatabase, FrameCallProtocol) {
           constexpr talos_rt_native_schedule_node nodes[] = {
               {0, 0, UINT32_MAX}, {0, 1, UINT32_MAX}};
           return talos_rt_v1_scheduler_run_aot_nodes(ctx, nodes,
-                                                       std::size(nodes));
+                                                     std::size(nodes));
         };
         plan.fallback_snapshot = [](void *, talos_rt_context *ctx,
                                     talos_rt_aot_deopt_snapshot *snapshot) {
@@ -518,8 +506,7 @@ TEST(GeneratedDesignDatabase, FrameCallProtocol) {
                   TALOS_RT_OK);
       }
       if (engine == Engine::Bytecode) {
-        talos_rt_design_bytecode_entry_v1 entry{&execution, startup->index,
-                                                  0};
+        talos_rt_design_bytecode_entry_v1 entry{&execution, startup->index, 0};
         uint64_t scratchSize = 0, scratchAlignment = 0;
         ASSERT_EQ(talos_rt_validate_design_bytecode(
                       entry, runtime.get(), &scratchSize, &scratchAlignment),
@@ -537,8 +524,8 @@ TEST(GeneratedDesignDatabase, FrameCallProtocol) {
         ASSERT_NE(instance, nullptr);
         ASSERT_EQ(engine == Engine::AOT
                       ? talos_rt_v1_scheduler_add_aot(runtime.get(), instance,
-                                                        0, 0, 0, nullptr,
-                                                        nullptr, 0, nullptr, 0)
+                                                      0, 0, 0, nullptr, nullptr,
+                                                      0, nullptr, 0)
                       : talos_rt_v1_scheduler_add(runtime.get(), instance, 0),
                   TALOS_RT_OK);
       }
@@ -569,9 +556,9 @@ TEST(GeneratedDesignDatabase, FrameCallProtocol) {
           runtime->signalDiagnostics.aotNodeExecutions;
       if (exit == Exit::Kill) {
         talos_rt_process_control_disposition disposition{};
-        auto status = talos_rt_v1_process_control(
-            runtime.get(), probe.token, TALOS_RT_PROCESS_CONTROL_KILL,
-            &disposition);
+        auto status = talos_rt_v1_process_control(runtime.get(), probe.token,
+                                                  TALOS_RT_PROCESS_CONTROL_KILL,
+                                                  &disposition);
         if (engine == Engine::AOT) {
           // process.control is deliberately excluded from installed AOT plans.
           // Rejection must retain the suspended activation; resume normally.
@@ -611,9 +598,9 @@ TEST(GeneratedDesignDatabase, FrameCallProtocol) {
         expectExpired(frame);
       expectExpired(probe.thread);
       uint64_t depth = UINT64_MAX;
-      ASSERT_EQ(talos_rt_vpi_frame_depth_process(runtime.get(), probe.token,
-                                                   &depth),
-                TALOS_RT_OK);
+      ASSERT_EQ(
+          talos_rt_vpi_frame_depth_process(runtime.get(), probe.token, &depth),
+          TALOS_RT_OK);
       EXPECT_EQ(depth, 0u);
       EXPECT_EQ(vpi_get(vpiType, probe.statement), vpiTaskCall);
       EXPECT_EQ(vpi_release_handle(probe.statement), 1);

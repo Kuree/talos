@@ -5,11 +5,11 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/DPI/DPIDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <algorithm>
@@ -37,17 +37,14 @@ void inspectResolution(talos_rt_context *context) {
     ASSERT_EQ(talos_rt_vpi_pending_call(context, &pending), TALOS_RT_OK);
     EXPECT_EQ(pending, 0u);
     // A valid function with the wrong source identity cannot consume it.
-    EXPECT_EQ(
-        talos_rt_v1_vpi_frame_enter_prepared(context, 46, 0, &activation),
-        TALOS_RT_INVALID_ARGUMENT);
+    EXPECT_EQ(talos_rt_v1_vpi_frame_enter_prepared(context, 46, 0, &activation),
+              TALOS_RT_INVALID_ARGUMENT);
     EXPECT_EQ(activation, 0u);
-    EXPECT_EQ(
-        talos_rt_v1_vpi_frame_enter_prepared(context, 45, 1, &activation),
-        TALOS_RT_INVALID_LIFECYCLE);
+    EXPECT_EQ(talos_rt_v1_vpi_frame_enter_prepared(context, 45, 1, &activation),
+              TALOS_RT_INVALID_LIFECYCLE);
     EXPECT_EQ(activation, 0u);
-    ASSERT_EQ(
-        talos_rt_v1_vpi_frame_enter_prepared(context, 45, 0, &activation),
-        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_vpi_frame_enter_prepared(context, 45, 0, &activation),
+              TALOS_RT_OK);
     auto frame = vpi_handle(vpiFrame, nullptr);
     ASSERT_NE(frame, nullptr);
     EXPECT_EQ(vpi_get(vpiActive, frame), 1);
@@ -69,9 +66,9 @@ void inspectResolution(talos_rt_context *context) {
     uint64_t nestedTicket = 0, nestedActivation = 0;
     ASSERT_EQ(talos_rt_v1_vpi_call_prepare(context, 20, &nestedTicket),
               TALOS_RT_OK);
-    ASSERT_EQ(talos_rt_v1_vpi_frame_enter_prepared(context, 46, 0,
-                                                     &nestedActivation),
-              TALOS_RT_OK);
+    ASSERT_EQ(
+        talos_rt_v1_vpi_frame_enter_prepared(context, 46, 0, &nestedActivation),
+        TALOS_RT_OK);
     auto nested = vpi_handle(vpiFrame, nullptr);
     ASSERT_NE(nested, nullptr);
     auto parent = vpi_handle(vpiParent, nested);
@@ -84,10 +81,8 @@ void inspectResolution(talos_rt_context *context) {
     EXPECT_EQ(vpi_release_handle(nested), 1);
     ASSERT_EQ(talos_rt_v1_vpi_frame_leave(context, nestedActivation),
               TALOS_RT_OK);
-    ASSERT_EQ(talos_rt_v1_vpi_call_finish(context, nestedTicket),
-              TALOS_RT_OK);
-    ASSERT_EQ(talos_rt_v1_vpi_frame_leave(context, activation),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_vpi_call_finish(context, nestedTicket), TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_vpi_frame_leave(context, activation), TALOS_RT_OK);
     EXPECT_EQ(vpi_handle(vpiFrame, nullptr), nullptr);
     EXPECT_EQ(vpi_get(vpiType, frame), vpiUndefined);
     EXPECT_NE(vpi_chk_error(nullptr), 0);
@@ -122,9 +117,9 @@ void inspectResolution(talos_rt_context *context) {
 }
 
 talos_rt_status inspectImport(talos_rt_context *context, uint32_t id,
-                                const talos_rt_import_input_v1 *,
-                                uint32_t inputs, talos_rt_import_output_v1 *,
-                                uint32_t outputs, void *userData) {
+                              const talos_rt_import_input_v1 *, uint32_t inputs,
+                              talos_rt_import_output_v1 *, uint32_t outputs,
+                              void *userData) {
   EXPECT_EQ(id, 123u);
   EXPECT_EQ(inputs, 0u);
   EXPECT_EQ(outputs, 0u);
@@ -138,10 +133,9 @@ TEST(GeneratedDesignDatabase, ResolutionFrames) {
   const char *input = std::getenv("TALOS_TEST_INPUT");
   ASSERT_NE(input, nullptr);
   mlir::DialectRegistry registry;
-  registry
-      .insert<mlir::arith::ArithDialect, mlir::cf::ControlFlowDialect,
-              talos::dpi::DPIDialect, talos::runtime::TalosRuntimeDialect,
-              talos::sim::TalosSimulationDialect>();
+  registry.insert<mlir::arith::ArithDialect, mlir::cf::ControlFlowDialect,
+                  talos::dpi::DPIDialect, talos::runtime::TalosRuntimeDialect,
+                  talos::sim::TalosSimulationDialect>();
   mlir::MLIRContext context(registry);
   auto module = mlir::parseSourceFile<mlir::ModuleOp>(input, &context);
   ASSERT_TRUE(module);
@@ -173,10 +167,9 @@ TEST(GeneratedDesignDatabase, ResolutionFrames) {
       runtime(raw, talos_rt_v1_context_destroy);
   bool called = false;
   ASSERT_EQ(talos_rt_v1_context_register_import(runtime.get(), 123,
-                                                  inspectImport, &called),
+                                                inspectImport, &called),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_vpi_startup(runtime.get(), nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_vpi_startup(runtime.get(), nullptr, 0), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_end_compile(runtime.get()), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_start_simulation(runtime.get()), TALOS_RT_OK);
   auto startup = std::find_if(
@@ -186,14 +179,14 @@ TEST(GeneratedDesignDatabase, ResolutionFrames) {
   talos_rt_design_bytecode_entry_v1 entry{&execution, startup->index, 0};
   uint64_t size = 0, alignment = 0;
   ASSERT_EQ(talos_rt_validate_design_bytecode(entry, runtime.get(), &size,
-                                                &alignment),
+                                              &alignment),
             TALOS_RT_OK);
   ASSERT_LE(alignment, alignof(uint64_t));
   std::vector<uint64_t> frame((size + 7) / 8);
   talos_rt_fragment_action_v1 action{};
-  ASSERT_EQ(talos_rt_execute_design_bytecode(entry, runtime.get(),
-                                               frame.data(), frame.size() * 8,
-                                               0, size, 0, 0, &action),
+  ASSERT_EQ(talos_rt_execute_design_bytecode(entry, runtime.get(), frame.data(),
+                                             frame.size() * 8, 0, size, 0, 0,
+                                             &action),
             TALOS_RT_OK);
   ASSERT_EQ(action.kind, TALOS_RT_FRAGMENT_TERMINATE);
   ASSERT_EQ(talos_rt_v1_scheduler_run(runtime.get()), TALOS_RT_OK);

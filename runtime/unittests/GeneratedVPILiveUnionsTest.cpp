@@ -4,11 +4,11 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
 #include "talos/Runtime/StableHandle.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <cstdlib>
@@ -111,7 +111,7 @@ TEST(GeneratedDesignDatabase, LiveUnionMembers) {
   auto field = [&](const talos_rt_design_info_v1 &info, unsigned ordinal) {
     talos_rt_design_cursor_v1 cursor{};
     EXPECT_EQ(talos_rt_cached_design_type_child(raw, {info.type_offset},
-                                                  ordinal, &cursor),
+                                                ordinal, &cursor),
               TALOS_RT_OK);
     talos_rt_design_type_info_v1 result{};
     EXPECT_EQ(talos_rt_cached_design_type_info(raw, cursor, &result),
@@ -126,16 +126,16 @@ TEST(GeneratedDesignDatabase, LiveUnionMembers) {
     EXPECT_EQ(talos_rt_v1_native_state_store_plane(
                   raw, reinterpret_cast<uint8_t *>(raw->stateValue.data()),
                   execution.state_bit_count,
-                  talos::reflection::ObjectView(
-                      encoded->designDatabase.data() + cursor.offset)
+                  talos::reflection::ObjectView(encoded->designDatabase.data() +
+                                                cursor.offset)
                       .getStateOffset(),
                   info.bit_width, 0, value.data(), &changed),
               TALOS_RT_OK);
     EXPECT_EQ(talos_rt_v1_native_state_store_plane(
                   raw, reinterpret_cast<uint8_t *>(raw->stateUnknown.data()),
                   execution.state_bit_count,
-                  talos::reflection::ObjectView(
-                      encoded->designDatabase.data() + cursor.offset)
+                  talos::reflection::ObjectView(encoded->designDatabase.data() +
+                                                cursor.offset)
                       .getStateOffset(),
                   info.bit_width, 1, unknown.data(), &changed),
               TALOS_RT_OK);
@@ -147,7 +147,7 @@ TEST(GeneratedDesignDatabase, LiveUnionMembers) {
   auto [physicalCursor, physicalInfo] = metadata("top.physical_only");
   talos_rt_design_cursor_v1 missingSemantic{};
   ASSERT_EQ(talos_rt_cached_design_semantic_root(raw, physicalCursor,
-                                                   &missingSemantic),
+                                                 &missingSemantic),
             TALOS_RT_EOF);
   std::vector<uint8_t> physicalValue(4), physicalUnknown(4);
   physicalValue[0] = 5;
@@ -169,12 +169,12 @@ TEST(GeneratedDesignDatabase, LiveUnionMembers) {
   auto [nestedCursor, nestedInfo] = metadata("top.nested");
   talos_rt_design_type_info_v1 nestedLayout{};
   ASSERT_EQ(talos_rt_cached_design_type_info(raw, {nestedInfo.type_offset},
-                                               &nestedLayout),
+                                             &nestedLayout),
             TALOS_RT_OK);
   const auto innerField = field(nestedInfo, 0);
   talos_rt_design_type_info_v1 innerLayout{};
   ASSERT_EQ(talos_rt_cached_design_type_info(raw, innerField.element_type,
-                                               &innerLayout),
+                                             &innerLayout),
             TALOS_RT_OK);
   std::vector<uint8_t> nestedValue((nestedInfo.bit_width + 7) / 8),
       nestedUnknown(nestedValue.size());
@@ -215,9 +215,8 @@ TEST(GeneratedDesignDatabase, LiveUnionMembers) {
       if (storage.getId() == 5) {
         auto unionType =
             mlir::cast<talos::sim::UnpackedUnionType>(storage.getType());
-        queueType =
-            mlir::cast<talos::sim::FieldAttr>(unionType.getFields()[0])
-                .getType();
+        queueType = mlir::cast<talos::sim::FieldAttr>(unionType.getFields()[0])
+                        .getType();
       }
     ASSERT_TRUE(queueType);
     auto element = talos::sim::getElementDescriptor(
@@ -245,7 +244,7 @@ TEST(GeneratedDesignDatabase, LiveUnionMembers) {
     auto [portsCursor, portsInfo] = metadata("top.ports");
     talos_rt_design_type_info_v1 portsLayout{};
     ASSERT_EQ(talos_rt_cached_design_type_info(raw, {portsInfo.type_offset},
-                                                 &portsLayout),
+                                               &portsLayout),
               TALOS_RT_OK);
     std::vector<uint8_t> portsValue((portsInfo.bit_width + 7) / 8),
         portsUnknown(portsValue.size());
@@ -264,7 +263,7 @@ TEST(GeneratedDesignDatabase, LiveUnionMembers) {
               1);
     EXPECT_EQ(vpi_chk_error(nullptr), 0);
     ASSERT_EQ(talos_rt_v1_container_write(lane.getLane(), queue, 0, &secondID,
-                                            nullptr),
+                                          nullptr),
               TALOS_RT_OK);
     EXPECT_EQ(vpi_compare_objects(keep(vpi_handle(vpiActual, selected)),
                                   secondInterface),
@@ -280,8 +279,7 @@ TEST(GeneratedDesignDatabase, LiveUnionMembers) {
                                   secondInterface),
               1);
     EXPECT_EQ(vpi_chk_error(nullptr), 0);
-    ASSERT_EQ(talos_rt_v1_gc_root_pop(lane.getLane(), &queueRoot),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_gc_root_pop(lane.getLane(), &queueRoot), TALOS_RT_OK);
   }
 
   auto tagged = named("top.tagged");
@@ -302,7 +300,7 @@ TEST(GeneratedDesignDatabase, LiveUnionMembers) {
   auto [taggedCursor, taggedInfo] = metadata("top.tagged");
   talos_rt_design_type_info_v1 taggedLayout{};
   ASSERT_EQ(talos_rt_cached_design_type_info(raw, {taggedInfo.type_offset},
-                                               &taggedLayout),
+                                             &taggedLayout),
             TALOS_RT_OK);
   std::vector<uint8_t> bytes((taggedInfo.bit_width + 7) / 8),
       unknown(bytes.size());
@@ -355,12 +353,12 @@ TEST(GeneratedDesignDatabase, LiveUnionMembers) {
     ASSERT_EQ(lane.getStatus(), TALOS_RT_OK);
     talos_rt_string_v1 string = 0;
     ASSERT_EQ(talos_rt_v1_string_create(lane.getLane(), "union copied string",
-                                          19, &string),
+                                        19, &string),
               TALOS_RT_OK);
     talos_rt_gc_managed_root_v1 stringRoot{};
-    ASSERT_EQ(talos_rt_v1_gc_managed_root_push(lane.getLane(), &stringRoot,
-                                                 &string),
-              TALOS_RT_OK);
+    ASSERT_EQ(
+        talos_rt_v1_gc_managed_root_push(lane.getLane(), &stringRoot, &string),
+        TALOS_RT_OK);
     tag(2);
     setBits(bytes, field(taggedInfo, 1).packed_offset, 64, string);
     store(taggedCursor, taggedInfo, bytes, unknown);
@@ -423,8 +421,8 @@ TEST(GeneratedDesignDatabase, LiveUnionMembers) {
   for (unsigned backing = 0; backing != 3; ++backing) {
     SCOPED_TRACE(backing);
     uint64_t activation = 0;
-    ASSERT_EQ(talos_rt_v1_vpi_frame_enter(raw, 45, TALOS_RT_VPI_FRAME_CALL,
-                                            20, &activation),
+    ASSERT_EQ(talos_rt_v1_vpi_frame_enter(raw, 45, TALOS_RT_VPI_FRAME_CALL, 20,
+                                          &activation),
               TALOS_RT_OK);
     auto frame = vpi_handle(vpiFrame, nullptr);
     auto local = vpi_handle_by_name(const_cast<char *>("small"), frame);
@@ -439,8 +437,8 @@ TEST(GeneratedDesignDatabase, LiveUnionMembers) {
         mlir::SymbolTable::lookupSymbolIn(design, "small"));
     auto element = talos::sim::getElementDescriptor(localDecl.getValueType());
     ASSERT_TRUE(element);
-    const talos_rt_trace_layout_v1 layout{
-        TALOS_RT_VERSION, 0, 16, 8, nullptr, 0};
+    const talos_rt_trace_layout_v1 layout{TALOS_RT_VERSION, 0, 16, 8,
+                                          nullptr,          0};
     talos_rt_class_descriptor_v1 descriptor{};
     descriptor.version = TALOS_RT_VERSION;
     descriptor.class_id = 100;
@@ -471,9 +469,8 @@ TEST(GeneratedDesignDatabase, LiveUnionMembers) {
                 TALOS_RT_OK);
       ASSERT_EQ(talos_rt_v1_gc_root_push(lane.getLane(), &queueRoot, &queue),
                 TALOS_RT_OK);
-      ASSERT_EQ(
-          talos_rt_v1_queue_push(lane.getLane(), queue, 0, data, nullptr),
-          TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_queue_push(lane.getLane(), queue, 0, data, nullptr),
+                TALOS_RT_OK);
       ASSERT_EQ(talos_rt_v1_reference_path_index_create(
                     lane.getLane(), queue, 0, nullptr, 0, 0, nullptr, nullptr,
                     0, &owner),
@@ -500,7 +497,7 @@ TEST(GeneratedDesignDatabase, LiveUnionMembers) {
       ASSERT_EQ(talos_rt_v1_object_write(owner, 8, data, 2), TALOS_RT_OK);
     else
       ASSERT_EQ(talos_rt_v1_reference_path_store(lane.getLane(), owner, data,
-                                                   nullptr),
+                                                 nullptr),
                 TALOS_RT_OK);
     unreadable(selected[0]);
     EXPECT_EQ(read(selected[1]), 9);

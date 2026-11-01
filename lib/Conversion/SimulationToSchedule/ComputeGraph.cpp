@@ -594,7 +594,7 @@ struct ProgramAnalysis {
           effect.target.dynamic ? effect.target.rootWidth : effect.target.width;
       for (uint64_t bit = 0; bit != width; ++bit) {
         ::talos::analysis::NetBit source{*effect.target.descriptor,
-                                           begin + bit};
+                                         begin + bit};
         ArrayRef<::talos::analysis::NetBit> component =
             connectivity.getComponent(source);
         ::talos::analysis::NetBit canonical =
@@ -1972,12 +1972,12 @@ FailureOr<ArrayAttr> ComputeGraphBuilder::buildRegions() {
       SmallVector<int64_t> ids(group.begin(), group.end());
       bool cyclic = group.size() > 1;
       if (!cyclic)
-        cyclic = llvm::any_of(groupEdges, [&, &group = group](
-                                              schedule::ComputeEdgeAttr edge) {
-          return isSchedulingEdge(edge.getKind()) &&
-                 edge.getSource() == group.front() &&
-                 edge.getTarget() == group.front();
-        });
+        cyclic = llvm::any_of(
+            groupEdges, [&, &group = group](schedule::ComputeEdgeAttr edge) {
+              return isSchedulingEdge(edge.getKind()) &&
+                     edge.getSource() == group.front() &&
+                     edge.getTarget() == group.front();
+            });
       schedule::ComputeScheduleKind schedule =
           schedule::ComputeScheduleKind::Acyclic;
       SmallVector<Attribute> feedback;
@@ -2018,8 +2018,7 @@ FailureOr<ArrayAttr> ComputeGraphBuilder::buildRegions() {
   SmallVector<SmallVector<uint32_t>> postponedGroups;
   for (Fragment &fragment : fragments) {
     bool assertionEndOfSimulationCoordinator = ::talos::schedule::has<
-        ::talos::schedule::Field::ConcurrentEosCoordinator>(
-        fragment.function);
+        ::talos::schedule::Field::ConcurrentEosCoordinator>(fragment.function);
     if (fragment.function.getEntryKind() == sim::EntryKind::Final &&
         !assertionEndOfSimulationCoordinator)
       postponedGroups.push_back({fragment.id});
@@ -2100,15 +2099,15 @@ FailureOr<ComputeGraphResult> ComputeGraphBuilder::derive() {
       llvm::count_if(analysis.functions, [](const FunctionInfo &info) {
         return info.getFunction().getEntryKind() ==
                    sim::EntryKind::Continuous &&
-               ::talos::schedule::has<
-                   ::talos::schedule::Field::PrimitiveName>(
+               ::talos::schedule::has<::talos::schedule::Field::PrimitiveName>(
                    info.getFunction());
       });
   ModuleOp module = design->getParentOfType<ModuleOp>();
   auto scheduler =
-      module ? ::talos::schedule::get<
-                   ::talos::schedule::Field::NativeScheduler>(module)
-             : schedule::NativeSchedulerModeAttr{};
+      module
+          ? ::talos::schedule::get<::talos::schedule::Field::NativeScheduler>(
+                module)
+          : schedule::NativeSchedulerModeAttr{};
   bool demotePrimitiveActors =
       primitiveActors >= primitiveBytecodeThreshold && scheduler &&
       scheduler.getValue() == schedule::NativeSchedulerMode::Eval && module &&
@@ -2120,8 +2119,7 @@ FailureOr<ComputeGraphResult> ComputeGraphBuilder::derive() {
   for (Fragment &fragment : fragments) {
     schedule::ComputeRegionKind region = schedule::ComputeRegionKind::Active;
     bool assertionEndOfSimulationCoordinator = ::talos::schedule::has<
-        ::talos::schedule::Field::ConcurrentEosCoordinator>(
-        fragment.function);
+        ::talos::schedule::Field::ConcurrentEosCoordinator>(fragment.function);
     if ((fragment.function.getEntryKind() == sim::EntryKind::Final &&
          !assertionEndOfSimulationCoordinator) ||
         fragment.function.getHomeRegion() == sim::EventRegion::Postponed)
@@ -2131,9 +2129,9 @@ FailureOr<ComputeGraphResult> ComputeGraphBuilder::derive() {
     else if (fragment.function.getHomeRegion() == sim::EventRegion::Reactive)
       region = schedule::ComputeRegionKind::Reactive;
     schedule::ComputeTierKind tier =
-        demotePrimitiveActors && ::talos::schedule::has<
-                                     ::talos::schedule::Field::PrimitiveName>(
-                                     fragment.function)
+        demotePrimitiveActors &&
+                ::talos::schedule::has<::talos::schedule::Field::PrimitiveName>(
+                    fragment.function)
             ? schedule::ComputeTierKind::Bytecode
             : schedule::ComputeTierKind::Native;
     nodes.push_back(schedule::ComputeFragmentAttr::get(

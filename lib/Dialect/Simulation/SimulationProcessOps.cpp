@@ -848,8 +848,7 @@ LogicalResult SimObserverBindOp::verify() {
       return emitOpError(
           "dependencies must be storage, argument-ref, net, named-event, or "
           "managed-watch handles");
-  if (::talos::schedule::has<::talos::schedule::Field::EventPrimary>(
-          (*this))) {
+  if (::talos::schedule::has<::talos::schedule::Field::EventPrimary>((*this))) {
     auto observer = cast<ObserverType>(getResult().getType());
     auto integer = dyn_cast<IntegerType>(observer.getResultType());
     if (!integer || integer.getWidth() != 1 ||

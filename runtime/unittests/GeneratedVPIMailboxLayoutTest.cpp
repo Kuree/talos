@@ -36,22 +36,22 @@ TEST(GeneratedDesignDatabase, MailboxElementLayouts) {
   for (unsigned byte = 0; byte != 8; ++byte)
     checksum |= uint64_t{encoded->bytecode[32 + byte]} << (byte * 8);
   talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                               encoded->executionFlags,
-                                               0,
-                                               encoded->bytecode.data(),
-                                               encoded->bytecode.size(),
-                                               encoded->designDatabase.data(),
-                                               encoded->designDatabase.size(),
-                                               encoded->stateBitCount,
-                                               checksum,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0};
+                                             encoded->executionFlags,
+                                             0,
+                                             encoded->bytecode.data(),
+                                             encoded->bytecode.size(),
+                                             encoded->designDatabase.data(),
+                                             encoded->designDatabase.size(),
+                                             encoded->stateBitCount,
+                                             checksum,
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
   ASSERT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_OK);
   talos_rt_context *runtime = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &runtime),
@@ -71,7 +71,7 @@ TEST(GeneratedDesignDatabase, MailboxElementLayouts) {
     ASSERT_EQ(talos_rt_cached_design_semantic_root(runtime, storage, &root),
               TALOS_RT_OK);
     ASSERT_EQ(talos_rt_cached_vpi_semantic_class_typespec(runtime, root,
-                                                            &owners[index]),
+                                                          &owners[index]),
               TALOS_RT_OK);
     talos_rt_design_semantic_type_edge_v1 edge{};
     ASSERT_EQ(
@@ -99,14 +99,14 @@ TEST(GeneratedDesignDatabase, MailboxElementLayouts) {
   EXPECT_EQ(record.bit_width, 192u);
   talos_rt_design_semantic_type_edge_v1 recordSemantic{};
   ASSERT_EQ(talos_rt_cached_design_semantic_type_edge(runtime, elements[0], 0,
-                                                        &recordSemantic),
+                                                      &recordSemantic),
             TALOS_RT_OK);
   const std::array<uint64_t, 4> offsets{0, 32, 64, 128};
   for (size_t index = 0; index != offsets.size(); ++index) {
     talos_rt_design_cursor_v1 field{};
     talos_rt_design_type_info_v1 info{};
     ASSERT_EQ(talos_rt_cached_design_type_child(runtime, array.element_type,
-                                                  index, &field),
+                                                index, &field),
               TALOS_RT_OK);
     ASSERT_EQ(talos_rt_cached_design_type_info(runtime, field, &info),
               TALOS_RT_OK);
@@ -128,32 +128,31 @@ TEST(GeneratedDesignDatabase, MailboxElementLayouts) {
               TALOS_RT_OK);
     talos_rt_design_cursor_v1 child{};
     ASSERT_EQ(talos_rt_cached_vpi_mailbox_element_type(runtime, owners[index],
-                                                         edge.child, &child),
+                                                       edge.child, &child),
               TALOS_RT_OK);
     EXPECT_EQ(child.offset, array.element_type.offset);
   }
   // A packed associative key is copied as one integral value; its retained
   // source dimensions do not manufacture an executable array layout.
   talos_rt_design_semantic_type_edge_v1 key{};
-  ASSERT_EQ(talos_rt_cached_design_semantic_type_edge(runtime, elements[2], 0,
-                                                        &key),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_cached_design_semantic_type_edge(runtime, elements[2], 0, &key),
+      TALOS_RT_OK);
   talos_rt_design_cursor_v1 missing{123};
   EXPECT_EQ(talos_rt_cached_vpi_mailbox_element_type(runtime, owners[2],
-                                                       key.child, &missing),
+                                                     key.child, &missing),
             TALOS_RT_EOF);
   EXPECT_EQ(missing.offset, 0u);
   EXPECT_EQ(talos_rt_cached_vpi_mailbox_element_type(runtime, owners[0], {},
-                                                       &missing),
+                                                     &missing),
             TALOS_RT_INVALID_HANDLE);
   EXPECT_EQ(talos_rt_cached_vpi_mailbox_element_type(runtime, owners[0],
-                                                       elements[0], nullptr),
+                                                     elements[0], nullptr),
             TALOS_RT_INVALID_ARGUMENT);
   for (size_t index : {4u, 5u, 7u}) {
     talos_rt_design_type_info_v1 info{};
-    ASSERT_EQ(
-        talos_rt_cached_design_type_info(runtime, physical[index], &info),
-        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_cached_design_type_info(runtime, physical[index], &info),
+              TALOS_RT_OK);
     EXPECT_EQ(info.kind, TALOS_RT_DESIGN_TYPE_UNION);
     EXPECT_EQ(info.bit_width, index == 4 ? 130u : index == 5 ? 128u : 10u);
     EXPECT_EQ(info.tag_bits, index == 5 ? 0u : 2u);
@@ -183,7 +182,7 @@ TEST(GeneratedDesignDatabase, MailboxElementLayouts) {
   const std::array<uint8_t, 2> value{0xa5, 0x02};
   uint32_t success = 0;
   ASSERT_EQ(talos_rt_v1_mailbox_try_put(lane, mailbox, value.data(), nullptr,
-                                          &success),
+                                        &success),
             TALOS_RT_OK);
   ASSERT_EQ(success, 1u);
   ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);

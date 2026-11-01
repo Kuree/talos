@@ -115,7 +115,7 @@ const talos_rt_trace_entry_v1 coverageStringTraceEntry{
 const talos_rt_trace_layout_v1 coverageStringTraceLayout{
     TALOS_RT_VERSION,           0,
     sizeof(talos_rt_string_v1), alignof(talos_rt_string_v1),
-    &coverageStringTraceEntry,    1};
+    &coverageStringTraceEntry,  1};
 const talos_rt_element_type_v1 coverageStringElement{
     TALOS_RT_VERSION,
     TALOS_RT_ELEMENT_STRING,
@@ -328,8 +328,7 @@ void enumerateTraceSlots(talos_rt_context *context, uint8_t *base,
         talos_rt_managed_word_v1 word = 0;
         std::memcpy(&word, address, sizeof(word));
         word = talos_rt_v1_gc_candidate_root(
-            context, word,
-            entry.slot_kind & ~TALOS_RT_MANAGED_SLOT_CANDIDATE);
+            context, word, entry.slot_kind & ~TALOS_RT_MANAGED_SLOT_CANDIDATE);
         if (word == 0 || (word & stringTagMask) != 0)
           continue;
         if (talos_rt_object_v1 *object =
@@ -411,8 +410,7 @@ void enumerateValueRoots(void *opaque, ManagedRootVisit visit,
 
 class ScopedValueRoots {
 public:
-  ScopedValueRoots(talos_rt_gc_lane_v1 *lane,
-                   ValueRootEnvironment *environment)
+  ScopedValueRoots(talos_rt_gc_lane_v1 *lane, ValueRootEnvironment *environment)
       : lane(lane), status(talos_rt_managed_roots_push(
                         lane, &provider, enumerateValueRoots, environment)) {}
   ScopedValueRoots(const ScopedValueRoots &) = delete;
@@ -429,60 +427,56 @@ private:
   talos_rt_status status;
 };
 
-talos_rt_status
-validateManagedSlots(talos_rt_context *context,
-                     const talos_rt_element_type_v1 *element,
-                     const uint8_t *value) {
+talos_rt_status validateManagedSlots(talos_rt_context *context,
+                                     const talos_rt_element_type_v1 *element,
+                                     const uint8_t *value) {
   talos_rt_status status = TALOS_RT_OK;
-  walkTraceSlots(const_cast<uint8_t *>(value), element->trace,
-                 [&](talos_rt_managed_word_v1 *slot,
-                     talos_rt_managed_slot_kind_v1 kind) {
-                   if (status != TALOS_RT_OK || !slot || *slot == 0)
-                     return;
-                   if ((kind & TALOS_RT_MANAGED_SLOT_CANDIDATE) != 0)
-                     return;
-                   if (kind == TALOS_RT_MANAGED_SLOT_STRING) {
-                     if (!stringBelongsTo(context, *slot))
-                       status = TALOS_RT_INVALID_HANDLE;
-                     return;
-                   }
-                   if ((*slot & stringTagMask) != 0) {
-                     status = TALOS_RT_INVALID_HANDLE;
-                     return;
-                   }
-                   auto *object = heapStringObject(*slot);
-                   if (kind == TALOS_RT_MANAGED_SLOT_MAILBOX ||
-                       kind == TALOS_RT_MANAGED_SLOT_SEMAPHORE) {
-                     BuiltinClassKind expected =
-                         kind == TALOS_RT_MANAGED_SLOT_MAILBOX
-                             ? BuiltinClassKind::Mailbox
-                             : BuiltinClassKind::Semaphore;
-                     if (!talos_rt_managed_object_belongs_to(context,
-                                                               object) ||
-                         talos_rt_builtin_class_kind_unlocked(object) !=
-                             expected)
-                       status = TALOS_RT_INVALID_HANDLE;
-                     return;
-                   }
-                   talos_rt_managed_kind_v1 expected;
-                   switch (kind) {
-                   case TALOS_RT_MANAGED_SLOT_CLASS:
-                     expected = TALOS_RT_MANAGED_CLASS;
-                     break;
-                   case TALOS_RT_MANAGED_SLOT_CONTAINER:
-                     expected = TALOS_RT_MANAGED_CONTAINER;
-                     break;
-                   case TALOS_RT_MANAGED_SLOT_REFERENCE_PATH:
-                     expected = TALOS_RT_MANAGED_REFERENCE_PATH;
-                     break;
-                   default:
-                     status = TALOS_RT_INVALID_HANDLE;
-                     return;
-                   }
-                   if (!talos_rt_managed_object_belongs_to(context, object) ||
-                       talos_rt_managed_object_kind(object) != expected)
-                     status = TALOS_RT_INVALID_HANDLE;
-                 });
+  walkTraceSlots(
+      const_cast<uint8_t *>(value), element->trace,
+      [&](talos_rt_managed_word_v1 *slot, talos_rt_managed_slot_kind_v1 kind) {
+        if (status != TALOS_RT_OK || !slot || *slot == 0)
+          return;
+        if ((kind & TALOS_RT_MANAGED_SLOT_CANDIDATE) != 0)
+          return;
+        if (kind == TALOS_RT_MANAGED_SLOT_STRING) {
+          if (!stringBelongsTo(context, *slot))
+            status = TALOS_RT_INVALID_HANDLE;
+          return;
+        }
+        if ((*slot & stringTagMask) != 0) {
+          status = TALOS_RT_INVALID_HANDLE;
+          return;
+        }
+        auto *object = heapStringObject(*slot);
+        if (kind == TALOS_RT_MANAGED_SLOT_MAILBOX ||
+            kind == TALOS_RT_MANAGED_SLOT_SEMAPHORE) {
+          BuiltinClassKind expected = kind == TALOS_RT_MANAGED_SLOT_MAILBOX
+                                          ? BuiltinClassKind::Mailbox
+                                          : BuiltinClassKind::Semaphore;
+          if (!talos_rt_managed_object_belongs_to(context, object) ||
+              talos_rt_builtin_class_kind_unlocked(object) != expected)
+            status = TALOS_RT_INVALID_HANDLE;
+          return;
+        }
+        talos_rt_managed_kind_v1 expected;
+        switch (kind) {
+        case TALOS_RT_MANAGED_SLOT_CLASS:
+          expected = TALOS_RT_MANAGED_CLASS;
+          break;
+        case TALOS_RT_MANAGED_SLOT_CONTAINER:
+          expected = TALOS_RT_MANAGED_CONTAINER;
+          break;
+        case TALOS_RT_MANAGED_SLOT_REFERENCE_PATH:
+          expected = TALOS_RT_MANAGED_REFERENCE_PATH;
+          break;
+        default:
+          status = TALOS_RT_INVALID_HANDLE;
+          return;
+        }
+        if (!talos_rt_managed_object_belongs_to(context, object) ||
+            talos_rt_managed_object_kind(object) != expected)
+          status = TALOS_RT_INVALID_HANDLE;
+      });
   return status;
 }
 
@@ -491,7 +485,7 @@ struct HeaderSnapshot {
 };
 
 talos_rt_status snapshotHeader(talos_rt_object_v1 *container,
-                                 ContainerHeader &header) {
+                               ContainerHeader &header) {
   HeaderSnapshot snapshot;
   talos_rt_status status = talos_rt_managed_object_access(
       container, TALOS_RT_MANAGED_CONTAINER,
@@ -557,10 +551,10 @@ talos_rt_status snapshotHeader(talos_rt_object_v1 *container,
 }
 
 talos_rt_status finishContainerMutation(talos_rt_object_v1 *container,
-                                          talos_rt_status status) {
+                                        talos_rt_status status) {
   if (status == TALOS_RT_OK)
     talos_rt_notify_managed_watch(container,
-                                    TALOS_RT_MANAGED_WATCH_CONTAINER_SIZE, 0);
+                                  TALOS_RT_MANAGED_WATCH_CONTAINER_SIZE, 0);
   return status;
 }
 
@@ -588,8 +582,8 @@ talos_rt_status accessBuffer(talos_rt_object_v1 *buffer, Access &&access) {
 }
 
 talos_rt_status allocateBuffer(talos_rt_gc_lane_v1 *lane, uint64_t capacity,
-                                 uint64_t stride,
-                                 talos_rt_object_v1 **outBuffer) {
+                               uint64_t stride,
+                               talos_rt_object_v1 **outBuffer) {
   if (!outBuffer)
     return TALOS_RT_INVALID_ARGUMENT;
   *outBuffer = nullptr;
@@ -600,8 +594,8 @@ talos_rt_status allocateBuffer(talos_rt_gc_lane_v1 *lane, uint64_t capacity,
       bytes > UINT64_MAX - sizeof(BufferHeader))
     return TALOS_RT_OUT_OF_RESOURCES;
   return talos_rt_managed_allocate(lane, TALOS_RT_MANAGED_BUFFER,
-                                     sizeof(BufferHeader) + bytes, 16,
-                                     &bufferDescriptorToken, outBuffer);
+                                   sizeof(BufferHeader) + bytes, 16,
+                                   &bufferDescriptorToken, outBuffer);
 }
 
 TALOS_RT_FEATURE_HELPER talos_rt_status allocateBufferWithoutSafepoint(
@@ -628,8 +622,8 @@ static talos_rt_status indexContainerReferences(
     talos_rt_object_v1 *addedPath = nullptr, uint64_t addedOrdinal = 0);
 
 talos_rt_status registerContainerReference(talos_rt_gc_lane_v1 *lane,
-                                             talos_rt_object_v1 *container,
-                                             talos_rt_object_v1 *path) {
+                                           talos_rt_object_v1 *container,
+                                           talos_rt_object_v1 *path) {
   if (!lane || !container || !path)
     return TALOS_RT_INVALID_ARGUMENT;
   ScopedManagedRoot containerRoot(lane, &container);
@@ -687,8 +681,7 @@ talos_rt_status registerContainerReference(talos_rt_gc_lane_v1 *lane,
     } publish{snapshot, replacement, weak, capacity};
     status = talos_rt_managed_object_access(
         container, TALOS_RT_MANAGED_CONTAINER,
-        [](void *opaque, uint8_t *object,
-           uint64_t extent) -> talos_rt_status {
+        [](void *opaque, uint8_t *object, uint64_t extent) -> talos_rt_status {
           if (extent != sizeof(ContainerHeader))
             return TALOS_RT_INVALID_HANDLE;
           auto *publish = static_cast<Publish *>(opaque);
@@ -726,9 +719,10 @@ talos_rt_status registerContainerReference(talos_rt_gc_lane_v1 *lane,
 
 enum class SequentialReferenceMutation { Insert, Erase, Shrink, Clear };
 
-talos_rt_status mutateSequentialReferences(
-    talos_rt_object_v1 *container, ContainerHeader &header,
-    SequentialReferenceMutation mutation, uint64_t index) {
+talos_rt_status mutateSequentialReferences(talos_rt_object_v1 *container,
+                                           ContainerHeader &header,
+                                           SequentialReferenceMutation mutation,
+                                           uint64_t index) {
   if (header.referenceCount == 0)
     return TALOS_RT_OK;
   return accessBuffer(header.referenceBuffer, [&](uint8_t *data,
@@ -740,8 +734,7 @@ talos_rt_status mutateSequentialReferences(
     uint64_t retained = 0;
     for (uint64_t ordinal = 0; ordinal != header.referenceCount; ++ordinal) {
       talos_rt_object_v1 *path = nullptr;
-      talos_rt_status status =
-          talos_rt_v1_weak_get(references[ordinal], &path);
+      talos_rt_status status = talos_rt_v1_weak_get(references[ordinal], &path);
       if (status != TALOS_RT_OK)
         return status;
       if (!path)
@@ -829,8 +822,8 @@ talos_rt_status mutateSequentialReferences(
 }
 
 talos_rt_status swapSequentialReferences(talos_rt_object_v1 *container,
-                                           ContainerHeader &header,
-                                           uint64_t left, uint64_t right) {
+                                         ContainerHeader &header, uint64_t left,
+                                         uint64_t right) {
   if (header.referenceCount == 0 || left == right)
     return TALOS_RT_OK;
   return accessBuffer(header.referenceBuffer, [&](uint8_t *data,
@@ -841,8 +834,7 @@ talos_rt_status swapSequentialReferences(talos_rt_object_v1 *container,
     uint64_t retained = 0;
     for (uint64_t ordinal = 0; ordinal != header.referenceCount; ++ordinal) {
       talos_rt_object_v1 *path = nullptr;
-      talos_rt_status status =
-          talos_rt_v1_weak_get(references[ordinal], &path);
+      talos_rt_status status = talos_rt_v1_weak_get(references[ordinal], &path);
       if (status != TALOS_RT_OK)
         return status;
       if (!path)
@@ -885,11 +877,11 @@ talos_rt_status swapSequentialReferences(talos_rt_object_v1 *container,
 }
 
 talos_rt_status initializeContainer(talos_rt_gc_lane_v1 *lane,
-                                      talos_rt_container_kind_v1 kind,
-                                      const talos_rt_element_type_v1 *element,
-                                      uint64_t size, uint64_t bound,
-                                      talos_rt_object_v1 **outContainer,
-                                      bool isMailbox = false) {
+                                    talos_rt_container_kind_v1 kind,
+                                    const talos_rt_element_type_v1 *element,
+                                    uint64_t size, uint64_t bound,
+                                    talos_rt_object_v1 **outContainer,
+                                    bool isMailbox = false) {
   if (!outContainer ||
       talos_rt_v1_element_type_validate(element) != TALOS_RT_OK)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -1070,8 +1062,8 @@ uint64_t physicalIndex(const ContainerHeader &header, uint64_t logical) {
 }
 
 talos_rt_status ensureCapacity(talos_rt_gc_lane_v1 *lane,
-                                 talos_rt_object_v1 *container,
-                                 uint64_t required) {
+                               talos_rt_object_v1 *container,
+                               uint64_t required) {
   if (!lane || !container)
     return TALOS_RT_INVALID_ARGUMENT;
   if (talos_rt_managed_object_context(container) !=
@@ -1198,7 +1190,7 @@ bool stringBelongsTo(talos_rt_context *context, talos_rt_string_v1 string) {
     return isValidInlineString(string);
   return (string & stringTagMask) == 0 &&
          talos_rt_managed_object_belongs_to(context,
-                                              heapStringObject(string)) &&
+                                            heapStringObject(string)) &&
          talos_rt_managed_object_kind(heapStringObject(string)) ==
              TALOS_RT_MANAGED_STRING;
 }
@@ -1263,7 +1255,7 @@ talos_rt_status readString(talos_rt_string_v1 string, StringView &view) {
 }
 
 talos_rt_status createString(talos_rt_gc_lane_v1 *lane, const char *bytes,
-                               uint64_t size, talos_rt_string_v1 *outString) {
+                             uint64_t size, talos_rt_string_v1 *outString) {
   if (!outString || (!bytes && size != 0))
     return TALOS_RT_INVALID_ARGUMENT;
   *outString = 0;
@@ -1422,11 +1414,13 @@ talos_rt_status talos_rt_coverage_tuple_queue_snapshot(
   return TALOS_RT_OK;
 }
 
-talos_rt_status talos_rt_coverage_set_snapshot(
-    talos_rt_context *context, talos_rt_object_v1 *container,
-    uint64_t expectedBitWidth, uint32_t expectedElementKind,
-    bool expectedFourState, uint64_t maximumElements,
-    CoverageSetSnapshot &output) {
+talos_rt_status talos_rt_coverage_set_snapshot(talos_rt_context *context,
+                                               talos_rt_object_v1 *container,
+                                               uint64_t expectedBitWidth,
+                                               uint32_t expectedElementKind,
+                                               bool expectedFourState,
+                                               uint64_t maximumElements,
+                                               CoverageSetSnapshot &output) {
   output = {};
   const bool integral = expectedElementKind == TALOS_RT_ELEMENT_BITS ||
                         expectedElementKind == TALOS_RT_ELEMENT_LOGIC;
@@ -1512,8 +1506,8 @@ talos_rt_status talos_rt_coverage_set_snapshot(
   }
 
   if (integral && expectedBitWidth % 8) {
-    const uint8_t padding = static_cast<uint8_t>(
-        ~((uint16_t{1} << (expectedBitWidth % 8)) - 1));
+    const uint8_t padding =
+        static_cast<uint8_t>(~((uint16_t{1} << (expectedBitWidth % 8)) - 1));
     for (uint64_t index = 0; index != header.size; ++index) {
       const uint64_t tail = (index + 1) * expectedValueSize - 1;
       if ((output.value[tail] & padding) ||
@@ -1527,9 +1521,8 @@ talos_rt_status talos_rt_coverage_set_snapshot(
   return TALOS_RT_OK;
 }
 
-talos_rt_status
-talos_rt_validate_string(talos_rt_context *context,
-                           talos_rt_string_v1 string) noexcept {
+talos_rt_status talos_rt_validate_string(talos_rt_context *context,
+                                         talos_rt_string_v1 string) noexcept {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   return stringBelongsTo(context, string) ? TALOS_RT_OK
@@ -1537,9 +1530,9 @@ talos_rt_validate_string(talos_rt_context *context,
 }
 
 void talos_rt_managed_trace_runtime_object(talos_rt_managed_kind_v1 kind,
-                                             uint8_t *object, uint64_t extent,
-                                             ManagedTraceVisit visit,
-                                             void *environment) noexcept {
+                                           uint8_t *object, uint64_t extent,
+                                           ManagedTraceVisit visit,
+                                           void *environment) noexcept {
   // Keeping this dispatch centralized prevents runtime values from being
   // interpreted as class descriptors.
   switch (kind) {
@@ -1596,8 +1589,7 @@ void talos_rt_managed_trace_runtime_object(talos_rt_managed_kind_v1 kind,
             &adapter);
     }
     if (!header->buffer || header->size == 0 ||
-        talos_rt_managed_object_kind(header->buffer) !=
-            TALOS_RT_MANAGED_BUFFER)
+        talos_rt_managed_object_kind(header->buffer) != TALOS_RT_MANAGED_BUFFER)
       return;
     uint64_t bufferExtent = talos_rt_managed_object_extent(header->buffer);
     if (bufferExtent < sizeof(BufferHeader))
@@ -1709,13 +1701,14 @@ void talos_rt_managed_trace_runtime_object(talos_rt_managed_kind_v1 kind,
 
 extern "C" talos_rt_status
 talos_rt_v1_string_create(talos_rt_gc_lane_v1 *lane, const char *bytes,
-                            uint64_t size, talos_rt_string_v1 *outString) {
+                          uint64_t size, talos_rt_string_v1 *outString) {
   return createString(lane, bytes, size, outString);
 }
 
-extern "C" talos_rt_status talos_rt_v1_string_concat(
-    talos_rt_gc_lane_v1 *lane, talos_rt_string_v1 left,
-    talos_rt_string_v1 right, talos_rt_string_v1 *outString) {
+extern "C" talos_rt_status
+talos_rt_v1_string_concat(talos_rt_gc_lane_v1 *lane, talos_rt_string_v1 left,
+                          talos_rt_string_v1 right,
+                          talos_rt_string_v1 *outString) {
   const talos_rt_string_span_v1 spans[] = {{left}, {right}};
   return talos_rt_v1_string_concat_many(lane, spans, 2, outString);
 }
@@ -1824,9 +1817,8 @@ extern "C" talos_rt_status talos_rt_v1_string_concat_many(
 }
 
 extern "C" talos_rt_status
-talos_rt_v1_string_repeat(talos_rt_gc_lane_v1 *lane,
-                            talos_rt_string_v1 string, uint64_t count,
-                            talos_rt_string_v1 *outString) {
+talos_rt_v1_string_repeat(talos_rt_gc_lane_v1 *lane, talos_rt_string_v1 string,
+                          uint64_t count, talos_rt_string_v1 *outString) {
   if (!outString)
     return TALOS_RT_INVALID_ARGUMENT;
   *outString = 0;
@@ -1860,8 +1852,8 @@ talos_rt_v1_string_repeat(talos_rt_gc_lane_v1 *lane,
 
 extern "C" talos_rt_status
 talos_rt_v1_string_from_packed(talos_rt_gc_lane_v1 *lane, const void *value,
-                                 const void *unknown, uint64_t bitWidth,
-                                 talos_rt_string_v1 *outString) {
+                               const void *unknown, uint64_t bitWidth,
+                               talos_rt_string_v1 *outString) {
   if (!outString || bitWidth == 0 || !value)
     return TALOS_RT_INVALID_ARGUMENT;
   *outString = 0;
@@ -1897,7 +1889,7 @@ talos_rt_v1_string_from_packed(talos_rt_gc_lane_v1 *lane, const void *value,
 
 extern "C" talos_rt_status
 talos_rt_v1_string_to_packed(talos_rt_string_v1 string, void *value,
-                               void *unknown, uint64_t bitWidth) {
+                             void *unknown, uint64_t bitWidth) {
   if (!value || bitWidth == 0 || bitWidth > UINT64_MAX - 7)
     return TALOS_RT_INVALID_ARGUMENT;
   uint64_t byteCount = (bitWidth + 7) / 8;
@@ -1919,9 +1911,10 @@ talos_rt_v1_string_to_packed(talos_rt_string_v1 string, void *value,
   return TALOS_RT_OK;
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_string_view(talos_rt_string_v1 string, char scratch[8],
-                          const char **outBytes, uint64_t *outSize) {
+extern "C" talos_rt_status talos_rt_v1_string_view(talos_rt_string_v1 string,
+                                                   char scratch[8],
+                                                   const char **outBytes,
+                                                   uint64_t *outSize) {
   if (!scratch || !outBytes || !outSize)
     return TALOS_RT_INVALID_ARGUMENT;
   *outBytes = "";
@@ -1948,12 +1941,11 @@ extern "C" uint64_t talos_rt_v1_string_length(talos_rt_string_v1 string) {
 
 extern "C" uint64_t talos_rt_v1_string_hash(talos_rt_string_v1 string) {
   StringView view;
-  return readString(string, view) == TALOS_RT_OK ? view.hash
-                                                   : hashBytes("", 0);
+  return readString(string, view) == TALOS_RT_OK ? view.hash : hashBytes("", 0);
 }
 
 extern "C" uint32_t talos_rt_v1_string_getc(talos_rt_string_v1 string,
-                                              int64_t index) {
+                                            int64_t index) {
   StringView view;
   if (index < 0 || readString(string, view) != TALOS_RT_OK ||
       static_cast<uint64_t>(index) >= view.size)
@@ -1962,9 +1954,9 @@ extern "C" uint32_t talos_rt_v1_string_getc(talos_rt_string_v1 string,
 }
 
 extern "C" talos_rt_status
-talos_rt_v1_string_putc(talos_rt_gc_lane_v1 *lane,
-                          talos_rt_string_v1 string, int64_t index,
-                          uint32_t character, talos_rt_string_v1 *outString) {
+talos_rt_v1_string_putc(talos_rt_gc_lane_v1 *lane, talos_rt_string_v1 string,
+                        int64_t index, uint32_t character,
+                        talos_rt_string_v1 *outString) {
   if (!outString)
     return TALOS_RT_INVALID_ARGUMENT;
   *outString = 0;
@@ -1991,9 +1983,9 @@ talos_rt_v1_string_putc(talos_rt_gc_lane_v1 *lane,
 }
 
 extern "C" talos_rt_status
-talos_rt_v1_string_substr(talos_rt_gc_lane_v1 *lane,
-                            talos_rt_string_v1 string, int64_t left,
-                            int64_t right, talos_rt_string_v1 *outString) {
+talos_rt_v1_string_substr(talos_rt_gc_lane_v1 *lane, talos_rt_string_v1 string,
+                          int64_t left, int64_t right,
+                          talos_rt_string_v1 *outString) {
   if (!outString)
     return TALOS_RT_INVALID_ARGUMENT;
   *outString = 0;
@@ -2016,7 +2008,7 @@ talos_rt_v1_string_substr(talos_rt_gc_lane_v1 *lane,
 }
 
 extern "C" int32_t talos_rt_v1_string_compare(talos_rt_string_v1 left,
-                                                talos_rt_string_v1 right) {
+                                              talos_rt_string_v1 right) {
   if (left == right)
     return 0;
   StringView leftView;
@@ -2029,7 +2021,7 @@ extern "C" int32_t talos_rt_v1_string_compare(talos_rt_string_v1 left,
 
 extern "C" int32_t
 talos_rt_v1_string_compare_insensitive(talos_rt_string_v1 left,
-                                         talos_rt_string_v1 right) {
+                                       talos_rt_string_v1 right) {
   StringView leftView;
   StringView rightView;
   if (readString(left, leftView) != TALOS_RT_OK ||
@@ -2040,8 +2032,8 @@ talos_rt_v1_string_compare_insensitive(talos_rt_string_v1 left,
 
 extern "C" talos_rt_status
 talos_rt_v1_string_case_convert(talos_rt_gc_lane_v1 *lane,
-                                  talos_rt_string_v1 string, uint32_t toUpper,
-                                  talos_rt_string_v1 *outString) {
+                                talos_rt_string_v1 string, uint32_t toUpper,
+                                talos_rt_string_v1 *outString) {
   if (!outString || toUpper > 1)
     return TALOS_RT_INVALID_ARGUMENT;
   *outString = 0;
@@ -2218,7 +2210,7 @@ extern "C" talos_rt_status talos_rt_v1_string_scan_field(
   if (letter == 'v') {
     char logic = 0;
     if (!talos_rt_parse_strength_field(view.bytes + index - extent, extent,
-                                         logic))
+                                       logic))
       return TALOS_RT_OK;
     status = createString(lane, &logic, 1, outField);
   } else {
@@ -2260,8 +2252,7 @@ talos_rt_v1_string_scan_dynamic(
     return TALOS_RT_OK;
 
   std::shared_ptr<const DynamicScanPlan> plan;
-  talos_rt_status status =
-      talos_rt_dynamic_scan_plan(context, format, plan);
+  talos_rt_status status = talos_rt_dynamic_scan_plan(context, format, plan);
   if (status != TALOS_RT_OK)
     return status;
   if (!plan->error.empty()) {
@@ -2279,8 +2270,7 @@ talos_rt_v1_string_scan_dynamic(
     return status;
   uint64_t index = cursor;
 
-  auto matchPrefix = [&](std::string_view prefix,
-                         uint64_t &position) {
+  auto matchPrefix = [&](std::string_view prefix, uint64_t &position) {
     uint64_t candidate = position;
     for (char expected : prefix) {
       if (scanSpace(expected)) {
@@ -2389,7 +2379,7 @@ talos_rt_v1_string_scan_dynamic(
         if (normalized == 'v') {
           char logic = 0;
           if (!talos_rt_parse_strength_field(view.bytes + fieldBegin, extent,
-                                               logic))
+                                             logic))
             return TALOS_RT_OK;
           status = createString(lane, &logic, 1, outField);
         } else {
@@ -2473,8 +2463,8 @@ extern "C" talos_rt_status talos_rt_v1_string_scan_raw(
   if ((maxWidth != 0 && rawSize > maxWidth) || rawSize > view.size - index)
     return TALOS_RT_OK;
   if (bitWidth && !talos_rt_decode_scan_raw(view.bytes + index, rawSize,
-                                              bitWidth, fourState != 0, value,
-                                              valueSize, unknown, unknownSize))
+                                            bitWidth, fourState != 0, value,
+                                            valueSize, unknown, unknownSize))
     return TALOS_RT_INVALID_ARGUMENT;
   index += rawSize;
   if (index > UINT32_MAX)
@@ -2486,7 +2476,7 @@ extern "C" talos_rt_status talos_rt_v1_string_scan_raw(
 
 extern "C" talos_rt_status
 talos_rt_v1_string_parse_integer(talos_rt_string_v1 string, uint32_t radix,
-                                   uint64_t *outValue) {
+                                 uint64_t *outValue) {
   if (!outValue || (radix != 2 && radix != 8 && radix != 10 && radix != 16))
     return TALOS_RT_INVALID_ARGUMENT;
   *outValue = 0;
@@ -2516,7 +2506,7 @@ talos_rt_v1_string_parse_integer(talos_rt_string_v1 string, uint32_t radix,
 
 extern "C" talos_rt_status
 talos_rt_v1_string_parse_logic(talos_rt_string_v1 string, uint32_t radix,
-                                 uint64_t *outValue, uint64_t *outUnknown) {
+                               uint64_t *outValue, uint64_t *outUnknown) {
   if (!outValue || !outUnknown ||
       (radix != 2 && radix != 8 && radix != 10 && radix != 16))
     return TALOS_RT_INVALID_ARGUMENT;
@@ -2588,9 +2578,8 @@ static double parseRealInCLocale(const char *spelling) {
   return std::strtod(spelling, nullptr);
 }
 
-std::from_chars_result talos_rt_from_chars_real(const char *first,
-                                                  const char *last,
-                                                  double &value) {
+std::from_chars_result
+talos_rt_from_chars_real(const char *first, const char *last, double &value) {
   auto isDigit = [](char byte) { return byte >= '0' && byte <= '9'; };
   auto startsWith = [&](const char *at, std::string_view word) {
     if (static_cast<size_t>(last - at) < word.size())
@@ -2692,7 +2681,7 @@ talos_rt_v1_string_parse_real(talos_rt_string_v1 string, double *outValue) {
 
 extern "C" talos_rt_status
 talos_rt_v1_string_parse_real_constant(talos_rt_string_v1 string,
-                                         double *outValue) {
+                                       double *outValue) {
   if (!outValue)
     return TALOS_RT_INVALID_ARGUMENT;
   *outValue = 0.0;
@@ -2773,8 +2762,8 @@ talos_rt_v1_string_parse_real_constant(talos_rt_string_v1 string,
 
 extern "C" talos_rt_status
 talos_rt_v1_string_format_integer(talos_rt_gc_lane_v1 *lane, uint64_t value,
-                                    uint32_t radix, uint32_t isSigned,
-                                    talos_rt_string_v1 *outString) {
+                                  uint32_t radix, uint32_t isSigned,
+                                  talos_rt_string_v1 *outString) {
   if (!outString || isSigned > 1 ||
       (radix != 2 && radix != 8 && radix != 10 && radix != 16))
     return TALOS_RT_INVALID_ARGUMENT;
@@ -2799,7 +2788,7 @@ talos_rt_v1_string_format_integer(talos_rt_gc_lane_v1 *lane, uint64_t value,
 
 extern "C" talos_rt_status
 talos_rt_v1_string_format_real(talos_rt_gc_lane_v1 *lane, double value,
-                                 talos_rt_string_v1 *outString) {
+                               talos_rt_string_v1 *outString) {
   if (!outString)
     return TALOS_RT_INVALID_ARGUMENT;
   *outString = 0;
@@ -2815,14 +2804,14 @@ talos_rt_v1_string_format_real(talos_rt_gc_lane_v1 *lane, double value,
 namespace {
 
 talos_rt_status cloneContainerImpl(talos_rt_gc_lane_v1 *lane,
-                                     talos_rt_object_v1 *container,
-                                     talos_rt_object_v1 **outContainer);
+                                   talos_rt_object_v1 *container,
+                                   talos_rt_object_v1 **outContainer);
 
 talos_rt_status prepareElementValue(talos_rt_gc_lane_v1 *lane,
-                                      talos_rt_context *context,
-                                      const talos_rt_element_type_v1 *element,
-                                      const void *value, const void *unknown,
-                                      std::vector<uint8_t> &storage) {
+                                    talos_rt_context *context,
+                                    const talos_rt_element_type_v1 *element,
+                                    const void *value, const void *unknown,
+                                    std::vector<uint8_t> &storage) {
   if (!lane || !element || !value ||
       ((element->flags & TALOS_RT_ELEMENT_FOUR_STATE) && !unknown))
     return TALOS_RT_INVALID_ARGUMENT;
@@ -2842,12 +2831,12 @@ talos_rt_status prepareElementValue(talos_rt_gc_lane_v1 *lane,
 
   ValueRootEnvironment roots{context, storage.data(), 1, stride, element};
   ManagedRootProvider provider{};
-  status = talos_rt_managed_roots_push(lane, &provider, enumerateValueRoots,
-                                         &roots);
+  status =
+      talos_rt_managed_roots_push(lane, &provider, enumerateValueRoots, &roots);
   if (status != TALOS_RT_OK)
     return status;
-  status = talos_rt_clone_traced_containers(lane, storage.data(),
-                                              element->trace);
+  status =
+      talos_rt_clone_traced_containers(lane, storage.data(), element->trace);
   talos_rt_status popStatus = talos_rt_managed_roots_pop(lane, &provider);
   return status == TALOS_RT_OK ? popStatus : status;
 }
@@ -2871,8 +2860,8 @@ uint64_t mixAssocHash(uint64_t value) {
 }
 
 talos_rt_status normalizeWildcardAssocObject(talos_rt_context *context,
-                                               talos_rt_object_v1 *object,
-                                               NormalizedAssocKey &normalized) {
+                                             talos_rt_object_v1 *object,
+                                             NormalizedAssocKey &normalized) {
   if (!object || !talos_rt_managed_object_belongs_to(context, object) ||
       talos_rt_managed_object_kind(object) != TALOS_RT_MANAGED_CONTAINER)
     return TALOS_RT_INVALID_HANDLE;
@@ -2881,8 +2870,8 @@ talos_rt_status normalizeWildcardAssocObject(talos_rt_context *context,
   if (status != TALOS_RT_OK)
     return status;
   const talos_rt_element_type_v1 *element = snapshot.element;
-  if (snapshot.kind != TALOS_RT_CONTAINER_DYNAMIC_ARRAY ||
-      snapshot.size != 1 || !element || element->bit_width == 0 ||
+  if (snapshot.kind != TALOS_RT_CONTAINER_DYNAMIC_ARRAY || snapshot.size != 1 ||
+      !element || element->bit_width == 0 ||
       (element->kind != TALOS_RT_ELEMENT_BITS &&
        element->kind != TALOS_RT_ELEMENT_LOGIC) ||
       element->value_size == 0 || element->value_size > SIZE_MAX)
@@ -2977,8 +2966,7 @@ bool validateAssocKeyPlan(const uint64_t *plan, uint64_t begin, uint64_t end,
     AssocKeyPlanRecord record = assocKeyPlanRecord(plan, index);
     uint64_t bodyBegin = index + 1;
     if (record.body > end - bodyBegin ||
-        (record.opcode == TALOS_RT_ASSOC_KEY_PLAN_ALTERNATIVE) !=
-            alternatives)
+        (record.opcode == TALOS_RT_ASSOC_KEY_PLAN_ALTERNATIVE) != alternatives)
       return false;
     uint64_t bodyEnd = bodyBegin + record.body;
     bool valid = false;
@@ -3059,10 +3047,10 @@ void extractAssocKeyBits(const uint8_t *plane, uint64_t offset, uint64_t width,
 }
 
 talos_rt_status readIntegralSlot(const ContainerHeader &header,
-                                   const AssocSlot &slot, StringView &view);
+                                 const AssocSlot &slot, StringView &view);
 talos_rt_status normalizeWildcardAssocObject(talos_rt_context *context,
-                                               talos_rt_object_v1 *object,
-                                               NormalizedAssocKey &normalized);
+                                             talos_rt_object_v1 *object,
+                                             NormalizedAssocKey &normalized);
 
 class AssocKeySerializer {
 public:
@@ -3072,11 +3060,11 @@ public:
 
   // Append the canonical bytes of the value whose planes start at `base`
   // bits. An X or Z bit in a four-state part sets `invalid` and stops.
-  talos_rt_status serialize(uint64_t begin, uint64_t end,
-                              const uint8_t *value, const uint8_t *unknown,
-                              uint64_t base, unsigned depth);
+  talos_rt_status serialize(uint64_t begin, uint64_t end, const uint8_t *value,
+                            const uint8_t *unknown, uint64_t base,
+                            unsigned depth);
   talos_rt_status serialize(const uint8_t *value, const uint8_t *unknown,
-                              unsigned depth) {
+                            unsigned depth) {
     return serialize(0, plan[1], value, unknown, 0, depth);
   }
 
@@ -3084,8 +3072,8 @@ public:
 
 private:
   talos_rt_status container(const AssocKeyPlanRecord &record,
-                              uint64_t bodyBegin, uint64_t bodyEnd,
-                              talos_rt_managed_word_v1 word, unsigned depth);
+                            uint64_t bodyBegin, uint64_t bodyEnd,
+                            talos_rt_managed_word_v1 word, unsigned depth);
 
   talos_rt_context *context;
   const uint64_t *plan;
@@ -3096,8 +3084,8 @@ private:
 // key. The planes share the stored key's dynamic members. Only the key's own
 // one-element array is accessed, so this is safe while its owner is locked.
 talos_rt_status readAssocKeyBox(talos_rt_object_v1 *box,
-                                  std::vector<uint8_t> &storage,
-                                  talos_rt_assoc_key_v1 &key) {
+                                std::vector<uint8_t> &storage,
+                                talos_rt_assoc_key_v1 &key) {
   if (!box)
     return TALOS_RT_INVALID_HANDLE;
   ContainerHeader stored;
@@ -3127,9 +3115,9 @@ talos_rt_status readAssocKeyBox(talos_rt_object_v1 *box,
 
 // The canonical bytes of an element key stored as a one-element array.
 talos_rt_status serializeAssocKeyBox(const ContainerHeader &header,
-                                       talos_rt_object_v1 *box,
-                                       std::vector<uint8_t> &bytes,
-                                       unsigned depth) {
+                                     talos_rt_object_v1 *box,
+                                     std::vector<uint8_t> &bytes,
+                                     unsigned depth) {
   std::vector<uint8_t> storage;
   talos_rt_assoc_key_v1 key;
   talos_rt_status status = readAssocKeyBox(box, storage, key);
@@ -3143,17 +3131,16 @@ talos_rt_status serializeAssocKeyBox(const ContainerHeader &header,
                                 static_cast<const uint8_t *>(key.unknown_data),
                                 depth);
   // An invalid index is never stored.
-  return status == TALOS_RT_OK && serializer.invalid
-             ? TALOS_RT_INVALID_HANDLE
-             : status;
+  return status == TALOS_RT_OK && serializer.invalid ? TALOS_RT_INVALID_HANDLE
+                                                     : status;
 }
 
 // The canonical bytes of any stored index, for an associative array nested
 // in an element key.
 talos_rt_status serializeStoredAssocKey(const ContainerHeader &header,
-                                          const AssocSlot &slot,
-                                          std::vector<uint8_t> &bytes,
-                                          unsigned depth) {
+                                        const AssocSlot &slot,
+                                        std::vector<uint8_t> &bytes,
+                                        unsigned depth) {
   switch (header.keyKind) {
   case TALOS_RT_ASSOC_KEY_STRING: {
     StringView view;
@@ -3167,8 +3154,7 @@ talos_rt_status serializeStoredAssocKey(const ContainerHeader &header,
   case TALOS_RT_ASSOC_KEY_WILDCARD: {
     NormalizedAssocKey normalized;
     talos_rt_status status = normalizeWildcardAssocObject(
-        talos_rt_managed_object_context(slot.object), slot.object,
-        normalized);
+        talos_rt_managed_object_context(slot.object), slot.object, normalized);
     if (status != TALOS_RT_OK)
       return status;
     bytes.insert(bytes.end(), normalized.wideIntegral.begin(),
@@ -3199,9 +3185,9 @@ talos_rt_status serializeStoredAssocKey(const ContainerHeader &header,
 }
 
 talos_rt_status AssocKeySerializer::serialize(uint64_t begin, uint64_t end,
-                                                const uint8_t *value,
-                                                const uint8_t *unknown,
-                                                uint64_t base, unsigned depth) {
+                                              const uint8_t *value,
+                                              const uint8_t *unknown,
+                                              uint64_t base, unsigned depth) {
   if (depth > TALOS_RT_ASSOC_KEY_PLAN_MAX_DEPTH)
     return TALOS_RT_OUT_OF_RESOURCES;
   TALOS_RT_TRY {
@@ -3251,11 +3237,9 @@ talos_rt_status AssocKeySerializer::serialize(uint64_t begin, uint64_t end,
         if (position % 8 != 0)
           return TALOS_RT_INVALID_DESIGN;
         talos_rt_managed_word_v1 word = readWord();
-        talos_rt_object_v1 *object =
-            talos_rt_object_from_managed_word(word);
-        if (word != 0 &&
-            (!object || (word & stringTagMask) != 0 ||
-             !talos_rt_managed_object_belongs_to(context, object)))
+        talos_rt_object_v1 *object = talos_rt_object_from_managed_word(word);
+        if (word != 0 && (!object || (word & stringTagMask) != 0 ||
+                          !talos_rt_managed_object_belongs_to(context, object)))
           return TALOS_RT_INVALID_HANDLE;
         appendAssocKeyWord(bytes, object ? talos_rt_v1_object_id(object) : 0);
         break;
@@ -3314,10 +3298,11 @@ talos_rt_status AssocKeySerializer::serialize(uint64_t begin, uint64_t end,
   return TALOS_RT_OK;
 }
 
-talos_rt_status
-AssocKeySerializer::container(const AssocKeyPlanRecord &record,
-                              uint64_t bodyBegin, uint64_t bodyEnd,
-                              talos_rt_managed_word_v1 word, unsigned depth) {
+talos_rt_status AssocKeySerializer::container(const AssocKeyPlanRecord &record,
+                                              uint64_t bodyBegin,
+                                              uint64_t bodyEnd,
+                                              talos_rt_managed_word_v1 word,
+                                              unsigned depth) {
   // An unallocated array equals an empty one.
   if (word == 0) {
     appendAssocKeyWord(bytes, 0);
@@ -3342,9 +3327,9 @@ AssocKeySerializer::container(const AssocKeyPlanRecord &record,
     std::vector<uint8_t> unknown(fourState ? valueSize : 0);
     appendAssocKeyWord(bytes, header.size);
     for (uint64_t index = 0; index != header.size && !invalid; ++index) {
-      status = talos_rt_v1_container_read(
-          array, static_cast<int64_t>(index), value.data(),
-          fourState ? unknown.data() : nullptr);
+      status = talos_rt_v1_container_read(array, static_cast<int64_t>(index),
+                                          value.data(),
+                                          fourState ? unknown.data() : nullptr);
       if (status == TALOS_RT_OK)
         status = serialize(bodyBegin, bodyEnd, value.data(),
                            fourState ? unknown.data() : nullptr, 0, depth + 1);
@@ -3418,9 +3403,9 @@ int compareAssocKeyBytes(const std::vector<uint8_t> &left,
 }
 
 talos_rt_status normalizeAssocKey(talos_rt_context *context,
-                                    const ContainerHeader &header,
-                                    const talos_rt_assoc_key_v1 *key,
-                                    NormalizedAssocKey &normalized) {
+                                  const ContainerHeader &header,
+                                  const talos_rt_assoc_key_v1 *key,
+                                  NormalizedAssocKey &normalized) {
   if (!key || key->reserved != 0 || key->kind != header.keyKind ||
       key->width != header.keyWidth)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -3441,8 +3426,7 @@ talos_rt_status normalizeAssocKey(talos_rt_context *context,
       return TALOS_RT_INVALID_ARGUMENT;
     if (key->object &&
         (!talos_rt_managed_object_belongs_to(context, key->object) ||
-         talos_rt_managed_object_kind(key->object) !=
-             TALOS_RT_MANAGED_CLASS))
+         talos_rt_managed_object_kind(key->object) != TALOS_RT_MANAGED_CLASS))
       return TALOS_RT_INVALID_HANDLE;
     normalized.object = key->object;
     normalized.integral = talos_rt_v1_object_id(key->object);
@@ -3624,7 +3608,7 @@ std::string integralBytesToDecimal(const uint8_t *bytes, size_t size,
 }
 
 talos_rt_status readIntegralSlot(const ContainerHeader &header,
-                                   const AssocSlot &slot, StringView &view) {
+                                 const AssocSlot &slot, StringView &view) {
   talos_rt_status status = readString(slot.string, view);
   if (status != TALOS_RT_OK)
     return status;
@@ -3644,8 +3628,7 @@ bool assocKeysEqual(const ContainerHeader &header, const AssocSlot &slot,
   }
   if (header.keyKind == TALOS_RT_ASSOC_KEY_WILDCARD) {
     NormalizedAssocKey stored;
-    talos_rt_context *context =
-        talos_rt_managed_object_context(slot.object);
+    talos_rt_context *context = talos_rt_managed_object_context(slot.object);
     return normalizeWildcardAssocObject(context, slot.object, stored) ==
                TALOS_RT_OK &&
            !stored.ignored && stored.wideIntegral == key.wideIntegral;
@@ -3689,8 +3672,8 @@ std::optional<uint64_t> findAssocSlot(const ContainerHeader &header,
 }
 
 talos_rt_status insertAssocCandidate(const ContainerHeader &header,
-                                       uint8_t *data, uint64_t dataSize,
-                                       std::vector<uint8_t> &candidate) {
+                                     uint8_t *data, uint64_t dataSize,
+                                     std::vector<uint8_t> &candidate) {
   uint64_t stride = assocSlotStride(header.element);
   if (candidate.size() != stride || dataSize < header.capacity * stride)
     return TALOS_RT_INVALID_HANDLE;
@@ -3716,8 +3699,8 @@ talos_rt_status insertAssocCandidate(const ContainerHeader &header,
 }
 
 talos_rt_status ensureAssocCapacity(talos_rt_gc_lane_v1 *lane,
-                                      talos_rt_object_v1 *array,
-                                      uint64_t required) {
+                                    talos_rt_object_v1 *array,
+                                    uint64_t required) {
   ScopedManagedRoot ownerRoot(lane, &array);
   if (ownerRoot.getStatus() != TALOS_RT_OK)
     return ownerRoot.getStatus();
@@ -3745,9 +3728,7 @@ talos_rt_status ensureAssocCapacity(talos_rt_gc_lane_v1 *lane,
       return replacementRoot.getStatus();
     std::vector<uint8_t> candidate;
     TALOS_RT_TRY { candidate.resize(static_cast<size_t>(stride)); }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
     struct Publish {
       ContainerHeader snapshot;
       talos_rt_object_v1 *replacement;
@@ -3757,8 +3738,7 @@ talos_rt_status ensureAssocCapacity(talos_rt_gc_lane_v1 *lane,
     } publish{snapshot, replacement, capacity, &candidate};
     status = talos_rt_managed_object_access(
         array, TALOS_RT_MANAGED_CONTAINER,
-        [](void *opaque, uint8_t *object,
-           uint64_t extent) -> talos_rt_status {
+        [](void *opaque, uint8_t *object, uint64_t extent) -> talos_rt_status {
           auto *publish = static_cast<Publish *>(opaque);
           if (extent != sizeof(ContainerHeader))
             return TALOS_RT_INVALID_HANDLE;
@@ -3816,12 +3796,11 @@ talos_rt_status ensureAssocCapacity(talos_rt_gc_lane_v1 *lane,
 #if defined(__clang__) || defined(__GNUC__)
 __attribute__((noinline, cold))
 #endif
-talos_rt_status
-prepareAssocWriteCapacity(talos_rt_gc_lane_v1 *lane,
-                          talos_rt_object_v1 *array,
-                          talos_rt_string_v1 &keyRootValue,
-                          NormalizedAssocKey &normalized,
-                          ContainerHeader &snapshot) {
+talos_rt_status prepareAssocWriteCapacity(talos_rt_gc_lane_v1 *lane,
+                                          talos_rt_object_v1 *array,
+                                          talos_rt_string_v1 &keyRootValue,
+                                          NormalizedAssocKey &normalized,
+                                          ContainerHeader &snapshot) {
   while (true) {
     normalized.string = keyRootValue;
     talos_rt_status status = snapshotHeader(array, snapshot);
@@ -3863,8 +3842,8 @@ prepareAssocWriteCapacity(talos_rt_gc_lane_v1 *lane,
 }
 
 talos_rt_status snapshotValues(talos_rt_object_v1 *container,
-                                 ContainerHeader &snapshot,
-                                 std::vector<uint8_t> &values) {
+                               ContainerHeader &snapshot,
+                               std::vector<uint8_t> &values) {
   while (true) {
     talos_rt_status status = snapshotHeader(container, snapshot);
     if (status != TALOS_RT_OK)
@@ -3874,9 +3853,7 @@ talos_rt_status snapshotValues(talos_rt_object_v1 *container,
         bytes > std::numeric_limits<size_t>::max())
       return TALOS_RT_OUT_OF_RESOURCES;
     TALOS_RT_TRY { values.assign(static_cast<size_t>(bytes), 0); }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
     struct Copy {
       ContainerHeader snapshot;
       std::vector<uint8_t> *values;
@@ -3884,8 +3861,7 @@ talos_rt_status snapshotValues(talos_rt_object_v1 *container,
     } copy{snapshot, &values};
     status = talos_rt_managed_object_access(
         container, TALOS_RT_MANAGED_CONTAINER,
-        [](void *opaque, uint8_t *object,
-           uint64_t extent) -> talos_rt_status {
+        [](void *opaque, uint8_t *object, uint64_t extent) -> talos_rt_status {
           auto *copy = static_cast<Copy *>(opaque);
           if (extent != sizeof(ContainerHeader))
             return TALOS_RT_INVALID_HANDLE;
@@ -3949,9 +3925,9 @@ void enumerateAssocCloneRoots(void *opaque, ManagedRootVisit visit,
 }
 
 talos_rt_status cloneAssocContainer(talos_rt_gc_lane_v1 *lane,
-                                      talos_rt_object_v1 *container,
-                                      const ContainerHeader &initial,
-                                      talos_rt_object_v1 **outContainer) {
+                                    talos_rt_object_v1 *container,
+                                    const ContainerHeader &initial,
+                                    talos_rt_object_v1 **outContainer) {
   uint64_t stride = assocSlotStride(initial.element);
   uint64_t valueOffset = assocValueOffset(initial.element);
   std::vector<uint8_t> entries;
@@ -3965,9 +3941,7 @@ talos_rt_status cloneAssocContainer(talos_rt_gc_lane_v1 *lane,
         bytes > std::numeric_limits<size_t>::max())
       return TALOS_RT_OUT_OF_RESOURCES;
     TALOS_RT_TRY { entries.assign(static_cast<size_t>(bytes), 0); }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
     struct Copy {
       ContainerHeader snapshot;
       std::vector<uint8_t> *entries;
@@ -3976,8 +3950,7 @@ talos_rt_status cloneAssocContainer(talos_rt_gc_lane_v1 *lane,
     } copy{snapshot, &entries, stride};
     status = talos_rt_managed_object_access(
         container, TALOS_RT_MANAGED_CONTAINER,
-        [](void *opaque, uint8_t *object,
-           uint64_t extent) -> talos_rt_status {
+        [](void *opaque, uint8_t *object, uint64_t extent) -> talos_rt_status {
           auto *copy = static_cast<Copy *>(opaque);
           if (extent != sizeof(ContainerHeader))
             return TALOS_RT_INVALID_HANDLE;
@@ -4039,9 +4012,7 @@ talos_rt_status cloneAssocContainer(talos_rt_gc_lane_v1 *lane,
     TALOS_RT_TRY {
       defaultBytes.resize(static_cast<size_t>(elementStride(snapshot.element)));
     }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      status = TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { status = TALOS_RT_OUT_OF_MEMORY; }
     if (status == TALOS_RT_OK)
       status = accessBuffer(
           snapshot.defaultValue, [&](uint8_t *data, uint64_t size) {
@@ -4055,8 +4026,8 @@ talos_rt_status cloneAssocContainer(talos_rt_gc_lane_v1 *lane,
           snapshot.element->flags & TALOS_RT_ELEMENT_FOUR_STATE
               ? defaultBytes.data() + snapshot.element->value_size
               : nullptr;
-      status = talos_rt_v1_assoc_set_default(lane, result,
-                                               defaultBytes.data(), unknown);
+      status = talos_rt_v1_assoc_set_default(lane, result, defaultBytes.data(),
+                                             unknown);
     }
   }
   for (uint64_t index = 0; status == TALOS_RT_OK && index != snapshot.size;
@@ -4086,10 +4057,9 @@ talos_rt_status cloneAssocContainer(talos_rt_gc_lane_v1 *lane,
       key.value_data = const_cast<char *>(integralKey.bytes);
     }
     const uint8_t *value = reinterpret_cast<uint8_t *>(slot) + valueOffset;
-    const void *unknown =
-        snapshot.element->flags & TALOS_RT_ELEMENT_FOUR_STATE
-            ? value + snapshot.element->value_size
-            : nullptr;
+    const void *unknown = snapshot.element->flags & TALOS_RT_ELEMENT_FOUR_STATE
+                              ? value + snapshot.element->value_size
+                              : nullptr;
     status = talos_rt_v1_assoc_write(lane, result, &key, value, unknown);
   }
   talos_rt_status providerPop = talos_rt_managed_roots_pop(lane, &provider);
@@ -4101,8 +4071,8 @@ talos_rt_status cloneAssocContainer(talos_rt_gc_lane_v1 *lane,
 }
 
 talos_rt_status cloneContainerImpl(talos_rt_gc_lane_v1 *lane,
-                                     talos_rt_object_v1 *container,
-                                     talos_rt_object_v1 **outContainer) {
+                                   talos_rt_object_v1 *container,
+                                   talos_rt_object_v1 **outContainer) {
   if (!lane || !outContainer)
     return TALOS_RT_INVALID_ARGUMENT;
   *outContainer = nullptr;
@@ -4137,16 +4107,14 @@ talos_rt_status cloneContainerImpl(talos_rt_gc_lane_v1 *lane,
   std::vector<uint8_t> values;
   if (status == TALOS_RT_OK)
     status = snapshotValues(container, snapshot, values);
-  uint64_t stride =
-      status == TALOS_RT_OK ? elementStride(snapshot.element) : 0;
-  ValueRootEnvironment roots{talos_rt_managed_lane_context(lane),
-                             values.data(), snapshot.size, stride,
-                             snapshot.element};
+  uint64_t stride = status == TALOS_RT_OK ? elementStride(snapshot.element) : 0;
+  ValueRootEnvironment roots{talos_rt_managed_lane_context(lane), values.data(),
+                             snapshot.size, stride, snapshot.element};
   ManagedRootProvider provider{};
   bool providerPushed = false;
   if (status == TALOS_RT_OK && snapshot.element->trace) {
     status = talos_rt_managed_roots_push(lane, &provider, enumerateValueRoots,
-                                           &roots);
+                                         &roots);
     providerPushed = status == TALOS_RT_OK;
   }
   if (status == TALOS_RT_OK && snapshot.element->trace) {
@@ -4173,7 +4141,7 @@ talos_rt_status cloneContainerImpl(talos_rt_gc_lane_v1 *lane,
   }
   if (status == TALOS_RT_OK && snapshot.boxTypeID)
     status = talos_rt_v1_box_bind_type(talos_rt_managed_lane_context(lane),
-                                         result, snapshot.boxTypeID);
+                                       result, snapshot.boxTypeID);
   if (providerPushed) {
     talos_rt_status popStatus = talos_rt_managed_roots_pop(lane, &provider);
     if (status == TALOS_RT_OK)
@@ -4191,7 +4159,7 @@ talos_rt_status cloneContainerImpl(talos_rt_gc_lane_v1 *lane,
 
 talos_rt_status
 talos_rt_clone_traced_containers(talos_rt_gc_lane_v1 *lane, uint8_t *image,
-                                   const talos_rt_trace_layout_v1 *layout) {
+                                 const talos_rt_trace_layout_v1 *layout) {
   if (!layout)
     return TALOS_RT_OK;
   talos_rt_context *context = talos_rt_managed_lane_context(lane);
@@ -4212,9 +4180,9 @@ talos_rt_clone_traced_containers(talos_rt_gc_lane_v1 *lane, uint8_t *image,
                        (kind & TALOS_RT_MANAGED_ROOT_KIND_CONTAINER) != 0;
       if (entry.kind != TALOS_RT_TRACE_STRONG || *word == 0 ||
           (kind != TALOS_RT_MANAGED_SLOT_CONTAINER && !candidate) ||
-          (candidate && talos_rt_v1_gc_candidate_root(
-                            context, *word,
-                            TALOS_RT_MANAGED_ROOT_KIND_CONTAINER) == 0))
+          (candidate &&
+           talos_rt_v1_gc_candidate_root(
+               context, *word, TALOS_RT_MANAGED_ROOT_KIND_CONTAINER) == 0))
         continue;
       talos_rt_object_v1 *source = talos_rt_object_from_managed_word(*word);
       if (talos_rt_managed_object_kind(source) != TALOS_RT_MANAGED_CONTAINER)
@@ -4229,9 +4197,8 @@ talos_rt_clone_traced_containers(talos_rt_gc_lane_v1 *lane, uint8_t *image,
   return TALOS_RT_OK;
 }
 
-talos_rt_status
-talos_rt_container_byte_text(talos_rt_object_v1 *container,
-                               std::string &output) {
+talos_rt_status talos_rt_container_byte_text(talos_rt_object_v1 *container,
+                                             std::string &output) {
   if (!container)
     return TALOS_RT_OK;
   ContainerHeader snapshot;
@@ -4256,9 +4223,8 @@ talos_rt_container_byte_text(talos_rt_object_v1 *container,
   for (uint64_t index = 0; index != snapshot.size; ++index) {
     uint8_t value = 0;
     uint8_t unknown = 0;
-    status =
-        talos_rt_v1_container_read(container, static_cast<int64_t>(index),
-                                     &value, fourState ? &unknown : nullptr);
+    status = talos_rt_v1_container_read(container, static_cast<int64_t>(index),
+                                        &value, fourState ? &unknown : nullptr);
     if (status != TALOS_RT_OK)
       return status;
     // As in a string assigned from the array (6.16), unknown bits read as 0
@@ -4270,8 +4236,8 @@ talos_rt_container_byte_text(talos_rt_object_v1 *container,
 }
 
 talos_rt_status talos_rt_container_pattern(talos_rt_object_v1 *container,
-                                               std::string &output,
-                                               unsigned depth) {
+                                           std::string &output,
+                                           unsigned depth) {
   if (!container) {
     output += "'{}";
     return TALOS_RT_OK;
@@ -4324,7 +4290,7 @@ talos_rt_status talos_rt_container_pattern(talos_rt_object_v1 *container,
     if (stringStatus != TALOS_RT_OK ||
         size > std::numeric_limits<size_t>::max())
       return stringStatus == TALOS_RT_OK ? TALOS_RT_OUT_OF_RESOURCES
-                                           : stringStatus;
+                                         : stringStatus;
     output.push_back('"');
     for (size_t index = 0; index != static_cast<size_t>(size); ++index) {
       unsigned char character = static_cast<unsigned char>(bytes[index]);
@@ -4378,9 +4344,7 @@ talos_rt_status talos_rt_container_pattern(talos_rt_object_v1 *container,
       stack.reserve(static_cast<size_t>(dimensionCount));
       stack.push_back({0, 0, 0, false});
     }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
     while (!stack.empty()) {
       Frame &frame = stack.back();
       uint64_t record =
@@ -4427,18 +4391,14 @@ talos_rt_status talos_rt_container_pattern(talos_rt_object_v1 *container,
     TALOS_RT_TRY {
       associativeOrder.reserve(static_cast<size_t>(snapshot.size));
     }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
     uint64_t stride = assocSlotStride(snapshot.element);
     std::vector<std::vector<uint8_t>> elementKeys;
     if (snapshot.keyKind == TALOS_RT_ASSOC_KEY_ELEMENT) {
       TALOS_RT_TRY {
         elementKeys.resize(static_cast<size_t>(snapshot.capacity));
       }
-      TALOS_RT_CATCH(const std::bad_alloc &) {
-        return TALOS_RT_OUT_OF_MEMORY;
-      }
+      TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
     }
     status = accessBuffer(snapshot.buffer, [&](uint8_t *data, uint64_t size) {
       if (size < snapshot.capacity * stride)
@@ -4548,11 +4508,10 @@ talos_rt_status talos_rt_container_pattern(talos_rt_object_v1 *container,
         } else if (snapshot.keyKind == TALOS_RT_ASSOC_KEY_WILDCARD) {
           NormalizedAssocKey key;
           talos_rt_status keyStatus = normalizeWildcardAssocObject(
-              talos_rt_managed_object_context(slot->object), slot->object,
-              key);
+              talos_rt_managed_object_context(slot->object), slot->object, key);
           if (keyStatus != TALOS_RT_OK || key.wideIntegral.size() < 24)
             return keyStatus == TALOS_RT_OK ? TALOS_RT_INVALID_HANDLE
-                                              : keyStatus;
+                                            : keyStatus;
           uint64_t bitWidth = 0;
           std::memcpy(&bitWidth, key.wideIntegral.data() + 8, sizeof(bitWidth));
           output += integralBytesToDecimal(key.wideIntegral.data() + 24,
@@ -4694,25 +4653,27 @@ talos_rt_status talos_rt_container_pattern(talos_rt_object_v1 *container,
   return TALOS_RT_OK;
 }
 
-extern "C" talos_rt_status talos_rt_v1_dynamic_array_create(
-    talos_rt_gc_lane_v1 *lane, const talos_rt_element_type_v1 *elementType,
-    uint64_t size, talos_rt_object_v1 **outArray) {
+extern "C" talos_rt_status
+talos_rt_v1_dynamic_array_create(talos_rt_gc_lane_v1 *lane,
+                                 const talos_rt_element_type_v1 *elementType,
+                                 uint64_t size, talos_rt_object_v1 **outArray) {
   return initializeContainer(lane, TALOS_RT_CONTAINER_DYNAMIC_ARRAY,
                              elementType, size, 0, outArray);
 }
 
 extern "C" talos_rt_status
 talos_rt_v1_queue_create(talos_rt_gc_lane_v1 *lane,
-                           const talos_rt_element_type_v1 *elementType,
-                           uint64_t bound, talos_rt_object_v1 **outQueue) {
+                         const talos_rt_element_type_v1 *elementType,
+                         uint64_t bound, talos_rt_object_v1 **outQueue) {
   return initializeContainer(lane, TALOS_RT_CONTAINER_QUEUE, elementType, 0,
                              bound, outQueue);
 }
 
-extern "C" talos_rt_status talos_rt_v1_container_create_like(
-    talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *preferred,
-    talos_rt_object_v1 *fallback, uint64_t size,
-    talos_rt_object_v1 **outContainer) {
+extern "C" talos_rt_status
+talos_rt_v1_container_create_like(talos_rt_gc_lane_v1 *lane,
+                                  talos_rt_object_v1 *preferred,
+                                  talos_rt_object_v1 *fallback, uint64_t size,
+                                  talos_rt_object_v1 **outContainer) {
   if (!lane || !outContainer)
     return TALOS_RT_INVALID_ARGUMENT;
   *outContainer = nullptr;
@@ -4783,8 +4744,8 @@ static bool validateContainerPatternPlan(uint32_t elementKind,
   uint64_t leafWidth = readContainerPatternWord(bytes, 5);
   if ((leafKind != TALOS_RT_ELEMENT_BITS &&
        leafKind != TALOS_RT_ELEMENT_LOGIC) ||
-      (leafFlags &
-       ~(TALOS_RT_ELEMENT_FOUR_STATE | TALOS_RT_ELEMENT_SIGNED)) != 0 ||
+      (leafFlags & ~(TALOS_RT_ELEMENT_FOUR_STATE | TALOS_RT_ELEMENT_SIGNED)) !=
+          0 ||
       leafSize == 0 || leafWidth == 0 || leafSize > UINT64_MAX / 8 ||
       leafWidth > leafSize * 8 ||
       ((leafKind == TALOS_RT_ELEMENT_LOGIC) !=
@@ -4841,12 +4802,11 @@ static talos_rt_status internElementType(
     slotKind = TALOS_RT_MANAGED_SLOT_STRING;
   else if (elementKind == TALOS_RT_ELEMENT_CONTAINER_HANDLE)
     slotKind = TALOS_RT_MANAGED_SLOT_CONTAINER;
-  bool builtinHandle =
-      elementKind == TALOS_RT_ELEMENT_CONTAINER_HANDLE &&
-      traceSlotCount == 1 && traceSlots[0].offset == 0 &&
-      traceSlots[0].reserved == 0 &&
-      (traceSlots[0].kind == TALOS_RT_MANAGED_SLOT_MAILBOX ||
-       traceSlots[0].kind == TALOS_RT_MANAGED_SLOT_SEMAPHORE);
+  bool builtinHandle = elementKind == TALOS_RT_ELEMENT_CONTAINER_HANDLE &&
+                       traceSlotCount == 1 && traceSlots[0].offset == 0 &&
+                       traceSlots[0].reserved == 0 &&
+                       (traceSlots[0].kind == TALOS_RT_MANAGED_SLOT_MAILBOX ||
+                        traceSlots[0].kind == TALOS_RT_MANAGED_SLOT_SEMAPHORE);
   if (builtinHandle)
     slotKind = 0;
   if (slotKind && traceSlotCount != 0)
@@ -4879,7 +4839,7 @@ static talos_rt_status internElementType(
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
   if (!owned->entries.empty()) {
     owned->trace = {
-        TALOS_RT_VERSION,   0, valueSize, alignment, owned->entries.data(),
+        TALOS_RT_VERSION,     0, valueSize, alignment, owned->entries.data(),
         owned->entries.size()};
     owned->descriptor.trace = &owned->trace;
   }
@@ -4935,8 +4895,7 @@ static talos_rt_status internElementType(
           typeID, std::move(owned));
       if (!inserted)
         return TALOS_RT_INVALID_DESIGN;
-      const talos_rt_element_type_v1 *descriptor =
-          &stored->second->descriptor;
+      const talos_rt_element_type_v1 *descriptor = &stored->second->descriptor;
       talos_rt_status status =
           talos_rt_v1_element_type_register(context, descriptor);
       if (status != TALOS_RT_OK) {
@@ -4953,8 +4912,8 @@ static talos_rt_status internElementType(
 
 extern "C" talos_rt_status
 talos_rt_v1_element_type_define_default(talos_rt_context *context,
-                                          uint64_t typeID, const uint8_t *image,
-                                          uint64_t imageSize) {
+                                        uint64_t typeID, const uint8_t *image,
+                                        uint64_t imageSize) {
   if (!context || typeID == 0 || !image || imageSize == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
@@ -5031,7 +4990,7 @@ extern "C" talos_rt_status talos_rt_v1_container_create_typed_pattern(
 }
 
 BuiltinClassKind talos_rt_builtin_container_kind(const uint8_t *object,
-                                                   uint64_t extent) noexcept {
+                                                 uint64_t extent) noexcept {
   if (!object)
     return BuiltinClassKind::None;
   if (extent == sizeof(SemaphoreHeader) &&
@@ -5057,8 +5016,8 @@ talos_rt_builtin_class_kind(const ManagedObjectLease &lease) noexcept {
 
 talos_rt_status
 talos_rt_builtin_class_payload(talos_rt_object_v1 *object,
-                                 BuiltinClassKind expected,
-                                 talos_rt_object_v1 **outPayload) {
+                               BuiltinClassKind expected,
+                               talos_rt_object_v1 **outPayload) {
   if (!outPayload)
     return TALOS_RT_INVALID_ARGUMENT;
   *outPayload = nullptr;
@@ -5105,8 +5064,8 @@ talos_rt_builtin_class_payload(talos_rt_object_v1 *object,
 
 talos_rt_status
 talos_rt_mailbox_snapshot(talos_rt_object_v1 *mailbox,
-                            const talos_rt_element_type_v1 **outElement,
-                            std::vector<uint8_t> &outValues) {
+                          const talos_rt_element_type_v1 **outElement,
+                          std::vector<uint8_t> &outValues) {
 
   outValues.clear();
   if (!outElement)
@@ -5116,8 +5075,7 @@ talos_rt_mailbox_snapshot(talos_rt_object_v1 *mailbox,
   talos_rt_status payloadStatus = talos_rt_builtin_class_payload(
       mailbox, BuiltinClassKind::Mailbox, &payload);
   if (payloadStatus != TALOS_RT_OK)
-    return talos_rt_managed_object_kind(mailbox) ==
-                   TALOS_RT_MANAGED_CONTAINER
+    return talos_rt_managed_object_kind(mailbox) == TALOS_RT_MANAGED_CONTAINER
                ? TALOS_RT_INVALID_ARGUMENT
                : payloadStatus;
 
@@ -5138,10 +5096,9 @@ talos_rt_mailbox_snapshot(talos_rt_object_v1 *mailbox,
 }
 
 talos_rt_status
-talos_rt_container_snapshot(talos_rt_object_v1 *container,
-                              uint32_t *outKind,
-                              const talos_rt_element_type_v1 **outElement,
-                              std::vector<uint8_t> &outValues) {
+talos_rt_container_snapshot(talos_rt_object_v1 *container, uint32_t *outKind,
+                            const talos_rt_element_type_v1 **outElement,
+                            std::vector<uint8_t> &outValues) {
   outValues.clear();
   if (outKind)
     *outKind = 0;
@@ -5171,8 +5128,8 @@ talos_rt_container_snapshot(talos_rt_object_v1 *container,
 // at one epoch. Binding increments that epoch, just like a value mutation.
 talos_rt_status
 talos_rt_box_snapshot(talos_rt_object_v1 *box, uint64_t *outTypeID,
-                        const talos_rt_element_type_v1 **outElement,
-                        std::vector<uint8_t> &outPlanes) {
+                      const talos_rt_element_type_v1 **outElement,
+                      std::vector<uint8_t> &outPlanes) {
   outPlanes.clear();
   if (outTypeID)
     *outTypeID = 0;
@@ -5204,9 +5161,9 @@ talos_rt_box_snapshot(talos_rt_object_v1 *box, uint64_t *outTypeID,
   return TALOS_RT_OK;
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_box_bind_type(talos_rt_context *context,
-                            talos_rt_object_v1 *box, uint64_t id) {
+extern "C" talos_rt_status talos_rt_v1_box_bind_type(talos_rt_context *context,
+                                                     talos_rt_object_v1 *box,
+                                                     uint64_t id) {
   if (!context || !box || !id)
     return TALOS_RT_INVALID_ARGUMENT;
   if (!talos_rt_managed_object_belongs_to(context, box))
@@ -5222,11 +5179,11 @@ talos_rt_v1_box_bind_type(talos_rt_context *context,
   status = snapshotHeader(box, snapshot);
   if (status != TALOS_RT_OK)
     return status;
-  if (snapshot.kind != TALOS_RT_CONTAINER_DYNAMIC_ARRAY ||
-      snapshot.isMailbox || snapshot.size != 1)
+  if (snapshot.kind != TALOS_RT_CONTAINER_DYNAMIC_ARRAY || snapshot.isMailbox ||
+      snapshot.size != 1)
     return TALOS_RT_INVALID_ARGUMENT;
   status = talos_rt_vpi_element_matches(context, type.layout, type.semantic,
-                                          snapshot.element);
+                                        snapshot.element);
   if (status != TALOS_RT_OK)
     return status;
   struct Bind {
@@ -5255,9 +5212,10 @@ talos_rt_v1_box_bind_type(talos_rt_context *context,
       &bind);
 }
 
-talos_rt_status talos_rt_container_element_snapshot(
-    talos_rt_object_v1 *container, std::optional<uint64_t> index,
-    VPIContainerElementSnapshot *outSnapshot) {
+talos_rt_status
+talos_rt_container_element_snapshot(talos_rt_object_v1 *container,
+                                    std::optional<uint64_t> index,
+                                    VPIContainerElementSnapshot *outSnapshot) {
   if (!outSnapshot)
     return TALOS_RT_INVALID_ARGUMENT;
   *outSnapshot = {};
@@ -5350,7 +5308,7 @@ extern "C" talos_rt_status talos_rt_v1_mailbox_create_typed(
 
 extern "C" talos_rt_status
 talos_rt_v1_semaphore_create(talos_rt_gc_lane_v1 *lane, int32_t keys,
-                               talos_rt_object_v1 **outSemaphore) {
+                             talos_rt_object_v1 **outSemaphore) {
   if (!lane || !outSemaphore)
     return TALOS_RT_INVALID_ARGUMENT;
   *outSemaphore = nullptr;
@@ -5408,9 +5366,9 @@ talos_rt_v1_semaphore_put(talos_rt_object_v1 *semaphore, int32_t keys) {
       &put);
 }
 
-talos_rt_status
-talos_rt_semaphore_try_get_raw(talos_rt_object_v1 *semaphore, int32_t keys,
-                                 uint32_t *outSuccess) {
+talos_rt_status talos_rt_semaphore_try_get_raw(talos_rt_object_v1 *semaphore,
+                                               int32_t keys,
+                                               uint32_t *outSuccess) {
 
   if (!semaphore || !outSuccess)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -5444,9 +5402,8 @@ talos_rt_semaphore_try_get_raw(talos_rt_object_v1 *semaphore, int32_t keys,
       &get);
 }
 
-talos_rt_status
-talos_rt_semaphore_keys_ready(talos_rt_object_v1 *semaphore, int32_t keys,
-                                bool &ready) {
+talos_rt_status talos_rt_semaphore_keys_ready(talos_rt_object_v1 *semaphore,
+                                              int32_t keys, bool &ready) {
 
   ready = false;
   talos_rt_status payloadStatus = talos_rt_builtin_class_payload(
@@ -5486,9 +5443,9 @@ extern "C" talos_rt_status talos_rt_v1_assoc_create_typed(
   *outArray = nullptr;
   talos_rt_object_v1 *registration = nullptr;
   talos_rt_status status = talos_rt_v1_container_create_typed(
-      lane, TALOS_RT_CONTAINER_DYNAMIC_ARRAY, typeID, elementKind,
-      elementFlags, valueSize, alignment, bitWidth, traceSlots, traceSlotCount,
-      0, 0, &registration);
+      lane, TALOS_RT_CONTAINER_DYNAMIC_ARRAY, typeID, elementKind, elementFlags,
+      valueSize, alignment, bitWidth, traceSlots, traceSlotCount, 0, 0,
+      &registration);
   if (status != TALOS_RT_OK)
     return status;
   ContainerHeader registered;
@@ -5580,17 +5537,15 @@ extern "C" talos_rt_status talos_rt_v1_assoc_create_element_keyed(
                          plan);
 }
 
-extern "C" uint64_t
-talos_rt_v1_container_size(talos_rt_object_v1 *container) {
+extern "C" uint64_t talos_rt_v1_container_size(talos_rt_object_v1 *container) {
   if (!container)
     return 0;
   ContainerHeader snapshot;
-  return snapshotHeader(container, snapshot) == TALOS_RT_OK ? snapshot.size
-                                                              : 0;
+  return snapshotHeader(container, snapshot) == TALOS_RT_OK ? snapshot.size : 0;
 }
 
 extern "C" uint32_t talos_rt_v1_box_is_type(talos_rt_object_v1 *box,
-                                              uint64_t typeID) {
+                                            uint64_t typeID) {
   ContainerHeader snapshot;
   return snapshotHeader(box, snapshot) == TALOS_RT_OK &&
          snapshot.kind == TALOS_RT_CONTAINER_DYNAMIC_ARRAY &&
@@ -5599,7 +5554,7 @@ extern "C" uint32_t talos_rt_v1_box_is_type(talos_rt_object_v1 *box,
 
 extern "C" talos_rt_status
 talos_rt_v1_container_read(talos_rt_object_v1 *container, int64_t index,
-                             void *outValue, void *outUnknown) {
+                           void *outValue, void *outUnknown) {
   if (!container || !outValue)
     return TALOS_RT_INVALID_ARGUMENT;
   ContainerHeader snapshot;
@@ -5649,9 +5604,10 @@ talos_rt_v1_container_read(talos_rt_object_v1 *container, int64_t index,
       &read);
 }
 
-extern "C" talos_rt_status talos_rt_v1_container_read_checked(
-    talos_rt_object_v1 *container, int64_t index, void *outValue,
-    uint64_t valueSize, void *outUnknown, uint64_t unknownSize) {
+extern "C" talos_rt_status
+talos_rt_v1_container_read_checked(talos_rt_object_v1 *container, int64_t index,
+                                   void *outValue, uint64_t valueSize,
+                                   void *outUnknown, uint64_t unknownSize) {
   if (!outValue || ((outUnknown == nullptr) != (unknownSize == 0)))
     return TALOS_RT_INVALID_ARGUMENT;
   // A default-initialized dynamic array or queue is represented by a null
@@ -5665,8 +5621,7 @@ extern "C" talos_rt_status talos_rt_v1_container_read_checked(
   talos_rt_status status = snapshotHeader(container, snapshot);
   if (status != TALOS_RT_OK)
     return status;
-  bool fourState =
-      (snapshot.element->flags & TALOS_RT_ELEMENT_FOUR_STATE) != 0;
+  bool fourState = (snapshot.element->flags & TALOS_RT_ELEMENT_FOUR_STATE) != 0;
   if (valueSize < snapshot.element->value_size ||
       (fourState && unknownSize < snapshot.element->value_size) ||
       (!fourState && unknownSize != 0) || fourState != (outUnknown != nullptr))
@@ -5676,8 +5631,7 @@ extern "C" talos_rt_status talos_rt_v1_container_read_checked(
 
 extern "C" talos_rt_status
 talos_rt_v1_dynamic_array_resize(talos_rt_gc_lane_v1 *lane,
-                                   talos_rt_object_v1 *array,
-                                   uint64_t newSize) {
+                                 talos_rt_object_v1 *array, uint64_t newSize) {
   if (!lane || !array)
     return TALOS_RT_INVALID_ARGUMENT;
   if (talos_rt_managed_object_context(array) !=
@@ -5741,8 +5695,8 @@ talos_rt_v1_dynamic_array_resize(talos_rt_gc_lane_v1 *lane,
 
 extern "C" talos_rt_status
 talos_rt_v1_container_write(talos_rt_gc_lane_v1 *lane,
-                              talos_rt_object_v1 *container, int64_t index,
-                              const void *value, const void *unknown) {
+                            talos_rt_object_v1 *container, int64_t index,
+                            const void *value, const void *unknown) {
   if (!lane || !container)
     return TALOS_RT_INVALID_ARGUMENT;
   if (talos_rt_managed_object_context(container) !=
@@ -5778,9 +5732,8 @@ talos_rt_v1_container_write(talos_rt_gc_lane_v1 *lane,
       return status;
   }
   std::vector<uint8_t> prepared;
-  status =
-      prepareElementValue(lane, talos_rt_managed_object_context(container),
-                          snapshot.element, value, unknown, prepared);
+  status = prepareElementValue(lane, talos_rt_managed_object_context(container),
+                               snapshot.element, value, unknown, prepared);
   if (status != TALOS_RT_OK)
     return status;
   struct Write {
@@ -5834,8 +5787,7 @@ extern "C" talos_rt_status talos_rt_v1_container_write_checked(
   talos_rt_status status = snapshotHeader(container, snapshot);
   if (status != TALOS_RT_OK)
     return status;
-  bool fourState =
-      (snapshot.element->flags & TALOS_RT_ELEMENT_FOUR_STATE) != 0;
+  bool fourState = (snapshot.element->flags & TALOS_RT_ELEMENT_FOUR_STATE) != 0;
   if (valueSize < snapshot.element->value_size ||
       (fourState && unknownSize < snapshot.element->value_size) ||
       (!fourState && unknownSize != 0) || fourState != (unknown != nullptr))
@@ -5845,14 +5797,14 @@ extern "C" talos_rt_status talos_rt_v1_container_write_checked(
 
 extern "C" talos_rt_status
 talos_rt_v1_container_clone(talos_rt_gc_lane_v1 *lane,
-                              talos_rt_object_v1 *container,
-                              talos_rt_object_v1 **outContainer) {
+                            talos_rt_object_v1 *container,
+                            talos_rt_object_v1 **outContainer) {
   return cloneContainerImpl(lane, container, outContainer);
 }
 
 extern "C" talos_rt_status
 talos_rt_v1_container_swap(talos_rt_object_v1 *container, int64_t left,
-                             int64_t right) {
+                           int64_t right) {
   if (!container)
     return TALOS_RT_INVALID_ARGUMENT;
   if (left < 0 || right < 0)
@@ -5899,7 +5851,7 @@ talos_rt_v1_container_swap(talos_rt_object_v1 *container, int64_t left,
       &swap);
   if (status == TALOS_RT_OK)
     talos_rt_notify_managed_watch(container,
-                                    TALOS_RT_MANAGED_WATCH_CONTAINER_SIZE, 0);
+                                  TALOS_RT_MANAGED_WATCH_CONTAINER_SIZE, 0);
   return status;
 }
 
@@ -5908,7 +5860,7 @@ static talos_rt_status materializeReferenceAssocKey(
     std::vector<uint8_t> &unknownStorage, talos_rt_assoc_key_v1 &key);
 
 static talos_rt_status detachAllAssocReferences(talos_rt_object_v1 *array,
-                                                  ContainerHeader &header) {
+                                                ContainerHeader &header) {
   if (header.referenceCount == 0)
     return TALOS_RT_OK;
   return accessBuffer(header.referenceBuffer, [&](uint8_t *data,
@@ -5951,8 +5903,8 @@ static talos_rt_status detachAllAssocReferences(talos_rt_object_v1 *array,
               return status;
             NormalizedAssocKey normalized;
             status = normalizeAssocKey(
-                talos_rt_managed_object_context(detach->array),
-                *detach->header, &key, normalized);
+                talos_rt_managed_object_context(detach->array), *detach->header,
+                &key, normalized);
             if (status != TALOS_RT_OK || normalized.ignored)
               return status;
             status =
@@ -6035,10 +5987,9 @@ talos_rt_v1_container_delete(talos_rt_object_v1 *container) {
 }
 
 static talos_rt_status queuePushImpl(talos_rt_gc_lane_v1 *lane,
-                                       talos_rt_object_v1 *queue,
-                                       uint32_t front, const void *value,
-                                       const void *unknown,
-                                       uint32_t *outInserted) {
+                                     talos_rt_object_v1 *queue, uint32_t front,
+                                     const void *value, const void *unknown,
+                                     uint32_t *outInserted) {
   if (!lane || !queue || front > 1)
     return TALOS_RT_INVALID_ARGUMENT;
   if (outInserted)
@@ -6119,16 +6070,15 @@ static talos_rt_status queuePushImpl(talos_rt_gc_lane_v1 *lane,
 }
 
 extern "C" talos_rt_status
-talos_rt_v1_queue_push(talos_rt_gc_lane_v1 *lane,
-                         talos_rt_object_v1 *queue, uint32_t front,
-                         const void *value, const void *unknown) {
+talos_rt_v1_queue_push(talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *queue,
+                       uint32_t front, const void *value, const void *unknown) {
   return queuePushImpl(lane, queue, front, value, unknown, nullptr);
 }
 
 extern "C" talos_rt_status
 talos_rt_v1_mailbox_try_put(talos_rt_gc_lane_v1 *lane,
-                              talos_rt_object_v1 *mailbox, const void *value,
-                              const void *unknown, uint32_t *outSuccess) {
+                            talos_rt_object_v1 *mailbox, const void *value,
+                            const void *unknown, uint32_t *outSuccess) {
   if (!outSuccess)
     return TALOS_RT_INVALID_ARGUMENT;
   *outSuccess = 0;
@@ -6146,9 +6096,9 @@ talos_rt_v1_mailbox_try_put(talos_rt_gc_lane_v1 *lane,
 }
 
 extern "C" talos_rt_status talos_rt_v1_mailbox_try_put_checked(
-    talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *mailbox,
-    const void *value, uint64_t valueSize, const void *unknown,
-    uint64_t unknownSize, uint32_t *outSuccess) {
+    talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *mailbox, const void *value,
+    uint64_t valueSize, const void *unknown, uint64_t unknownSize,
+    uint32_t *outSuccess) {
   talos_rt_object_v1 *payload = nullptr;
   talos_rt_status payloadStatus = talos_rt_builtin_class_payload(
       mailbox, BuiltinClassKind::Mailbox, &payload);
@@ -6158,18 +6108,16 @@ extern "C" talos_rt_status talos_rt_v1_mailbox_try_put_checked(
   talos_rt_status status = snapshotHeader(payload, snapshot);
   if (status != TALOS_RT_OK)
     return status;
-  bool fourState =
-      (snapshot.element->flags & TALOS_RT_ELEMENT_FOUR_STATE) != 0;
+  bool fourState = (snapshot.element->flags & TALOS_RT_ELEMENT_FOUR_STATE) != 0;
   if (!value || valueSize < snapshot.element->value_size ||
       (fourState && (!unknown || unknownSize < snapshot.element->value_size)) ||
       (!fourState && (unknown || unknownSize != 0)))
     return TALOS_RT_INVALID_ARGUMENT;
-  return talos_rt_v1_mailbox_try_put(lane, mailbox, value, unknown,
-                                       outSuccess);
+  return talos_rt_v1_mailbox_try_put(lane, mailbox, value, unknown, outSuccess);
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_mailbox_num(talos_rt_object_v1 *mailbox, uint32_t *outCount) {
+extern "C" talos_rt_status talos_rt_v1_mailbox_num(talos_rt_object_v1 *mailbox,
+                                                   uint32_t *outCount) {
 
   if (!outCount)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -6190,8 +6138,7 @@ talos_rt_v1_mailbox_num(talos_rt_object_v1 *mailbox, uint32_t *outCount) {
 }
 
 talos_rt_status talos_rt_mailbox_wait_ready(talos_rt_object_v1 *mailbox,
-                                                uint32_t predicate,
-                                                bool &ready) {
+                                            uint32_t predicate, bool &ready) {
 
   ready = false;
   talos_rt_status payloadStatus = talos_rt_builtin_class_payload(
@@ -6212,10 +6159,10 @@ talos_rt_status talos_rt_mailbox_wait_ready(talos_rt_object_v1 *mailbox,
   return TALOS_RT_OK;
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_queue_pop(talos_rt_object_v1 *queue, uint32_t front,
-                        void *outValue, void *outUnknown,
-                        uint32_t *outPresent) {
+extern "C" talos_rt_status talos_rt_v1_queue_pop(talos_rt_object_v1 *queue,
+                                                 uint32_t front, void *outValue,
+                                                 void *outUnknown,
+                                                 uint32_t *outPresent) {
   if (front > 1 || !outValue || !outPresent)
     return TALOS_RT_INVALID_ARGUMENT;
   *outPresent = 0;
@@ -6283,7 +6230,7 @@ talos_rt_v1_queue_pop(talos_rt_object_v1 *queue, uint32_t front,
 
 extern "C" talos_rt_status
 talos_rt_v1_mailbox_try_peek(talos_rt_object_v1 *mailbox, void *outValue,
-                               void *outUnknown, uint32_t *outPresent) {
+                             void *outUnknown, uint32_t *outPresent) {
 
   if (!outValue || !outPresent)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -6337,10 +6284,11 @@ talos_rt_v1_mailbox_try_peek(talos_rt_object_v1 *mailbox, void *outValue,
       &peek);
 }
 
-static talos_rt_status
-verifyMailboxOutputBuffers(talos_rt_object_v1 *mailbox, void *outValue,
-                           uint64_t valueSize, void *outUnknown,
-                           uint64_t unknownSize) {
+static talos_rt_status verifyMailboxOutputBuffers(talos_rt_object_v1 *mailbox,
+                                                  void *outValue,
+                                                  uint64_t valueSize,
+                                                  void *outUnknown,
+                                                  uint64_t unknownSize) {
   talos_rt_status payloadStatus = talos_rt_builtin_class_payload(
       mailbox, BuiltinClassKind::Mailbox, &mailbox);
   if (payloadStatus != TALOS_RT_OK)
@@ -6350,8 +6298,7 @@ verifyMailboxOutputBuffers(talos_rt_object_v1 *mailbox, void *outValue,
   talos_rt_status status = snapshotHeader(mailbox, snapshot);
   if (status != TALOS_RT_OK)
     return status;
-  bool fourState =
-      (snapshot.element->flags & TALOS_RT_ELEMENT_FOUR_STATE) != 0;
+  bool fourState = (snapshot.element->flags & TALOS_RT_ELEMENT_FOUR_STATE) != 0;
   if (!outValue || valueSize < snapshot.element->value_size ||
       (fourState &&
        (!outUnknown || unknownSize < snapshot.element->value_size)) ||
@@ -6365,15 +6312,14 @@ extern "C" talos_rt_status talos_rt_v1_mailbox_try_peek_checked(
     void *outUnknown, uint64_t unknownSize, uint32_t *outPresent) {
   talos_rt_status status = verifyMailboxOutputBuffers(
       mailbox, outValue, valueSize, outUnknown, unknownSize);
-  return status == TALOS_RT_OK
-             ? talos_rt_v1_mailbox_try_peek(mailbox, outValue, outUnknown,
-                                              outPresent)
-             : status;
+  return status == TALOS_RT_OK ? talos_rt_v1_mailbox_try_peek(
+                                     mailbox, outValue, outUnknown, outPresent)
+                               : status;
 }
 
 extern "C" talos_rt_status
 talos_rt_v1_mailbox_try_get(talos_rt_object_v1 *mailbox, void *outValue,
-                              void *outUnknown, uint32_t *outPresent) {
+                            void *outUnknown, uint32_t *outPresent) {
   talos_rt_status payloadStatus = talos_rt_builtin_class_payload(
       mailbox, BuiltinClassKind::Mailbox, &mailbox);
   if (payloadStatus != TALOS_RT_OK)
@@ -6387,16 +6333,16 @@ extern "C" talos_rt_status talos_rt_v1_mailbox_try_get_checked(
     void *outUnknown, uint64_t unknownSize, uint32_t *outPresent) {
   talos_rt_status status = verifyMailboxOutputBuffers(
       mailbox, outValue, valueSize, outUnknown, unknownSize);
-  return status == TALOS_RT_OK
-             ? talos_rt_v1_mailbox_try_get(mailbox, outValue, outUnknown,
-                                             outPresent)
-             : status;
+  return status == TALOS_RT_OK ? talos_rt_v1_mailbox_try_get(
+                                     mailbox, outValue, outUnknown, outPresent)
+                               : status;
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_queue_insert(talos_rt_gc_lane_v1 *lane,
-                           talos_rt_object_v1 *queue, int64_t index,
-                           const void *value, const void *unknown) {
+extern "C" talos_rt_status talos_rt_v1_queue_insert(talos_rt_gc_lane_v1 *lane,
+                                                    talos_rt_object_v1 *queue,
+                                                    int64_t index,
+                                                    const void *value,
+                                                    const void *unknown) {
   if (!lane || !queue)
     return TALOS_RT_INVALID_ARGUMENT;
   if (talos_rt_managed_object_context(queue) !=
@@ -6522,9 +6468,9 @@ talos_rt_v1_queue_delete_index(talos_rt_object_v1 *queue, int64_t index) {
 
 extern "C" talos_rt_status
 talos_rt_v1_assoc_create(talos_rt_gc_lane_v1 *lane,
-                           const talos_rt_element_type_v1 *elementType,
-                           talos_rt_assoc_key_kind_v1 keyKind,
-                           uint64_t keyWidth, talos_rt_object_v1 **outArray) {
+                         const talos_rt_element_type_v1 *elementType,
+                         talos_rt_assoc_key_kind_v1 keyKind, uint64_t keyWidth,
+                         talos_rt_object_v1 **outArray) {
   return initializeAssoc(lane, elementType, keyKind, keyWidth, outArray);
 }
 
@@ -6535,8 +6481,8 @@ static void warnIgnoredAssocKey() {
 }
 
 static talos_rt_status assocKeyExists(talos_rt_object_v1 *array,
-                                        const NormalizedAssocKey &key,
-                                        uint32_t &result) {
+                                      const NormalizedAssocKey &key,
+                                      uint32_t &result) {
   result = 0;
   struct Exists {
     const NormalizedAssocKey *key;
@@ -6567,9 +6513,9 @@ static talos_rt_status assocKeyExists(talos_rt_object_v1 *array,
 // key type, whose write deep-copies the key's dynamic members (IEEE 1800-2023
 // 7.8.5 indices are values).
 static talos_rt_status createAssocKeyBox(talos_rt_gc_lane_v1 *lane,
-                                           const ContainerHeader &header,
-                                           const talos_rt_assoc_key_v1 *key,
-                                           talos_rt_object_v1 **outBox) {
+                                         const ContainerHeader &header,
+                                         const talos_rt_assoc_key_v1 *key,
+                                         talos_rt_object_v1 **outBox) {
   const talos_rt_element_type_v1 *element = header.keyElement;
   ValueRootEnvironment keyRoots{talos_rt_managed_lane_context(lane),
                                 static_cast<uint8_t *>(key->value_data), 1,
@@ -6581,12 +6527,8 @@ static talos_rt_status createAssocKeyBox(talos_rt_gc_lane_v1 *lane,
   std::vector<uint8_t> known;
   const void *unknown = key->unknown_data;
   if ((element->flags & TALOS_RT_ELEMENT_FOUR_STATE) && !unknown) {
-    TALOS_RT_TRY {
-      known.assign(static_cast<size_t>(element->value_size), 0);
-    }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_TRY { known.assign(static_cast<size_t>(element->value_size), 0); }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
     unknown = known.data();
   }
   talos_rt_status status = initializeContainer(
@@ -6594,13 +6536,13 @@ static talos_rt_status createAssocKeyBox(talos_rt_gc_lane_v1 *lane,
   if (status != TALOS_RT_OK)
     return status;
   return talos_rt_v1_container_write(lane, *outBox, 0, key->value_data,
-                                       unknown);
+                                     unknown);
 }
 
 extern "C" talos_rt_status
 talos_rt_v1_assoc_exists(talos_rt_object_v1 *array,
-                           const talos_rt_assoc_key_v1 *key,
-                           uint32_t *outExists) {
+                         const talos_rt_assoc_key_v1 *key,
+                         uint32_t *outExists) {
   if (!array || !outExists)
     return TALOS_RT_INVALID_ARGUMENT;
   *outExists = 0;
@@ -6623,8 +6565,8 @@ talos_rt_v1_assoc_exists(talos_rt_object_v1 *array,
 
 extern "C" talos_rt_status
 talos_rt_v1_assoc_key_info(talos_rt_object_v1 *array,
-                             talos_rt_assoc_key_kind_v1 *outKind,
-                             uint64_t *outWidth) {
+                           talos_rt_assoc_key_kind_v1 *outKind,
+                           uint64_t *outWidth) {
   if (!array || !outKind || !outWidth)
     return TALOS_RT_INVALID_ARGUMENT;
   ContainerHeader snapshot;
@@ -6639,8 +6581,8 @@ talos_rt_v1_assoc_key_info(talos_rt_object_v1 *array,
 
 extern "C" talos_rt_status
 talos_rt_v1_assoc_read(talos_rt_object_v1 *array,
-                         const talos_rt_assoc_key_v1 *key, void *outValue,
-                         void *outUnknown, uint32_t *outPresent) {
+                       const talos_rt_assoc_key_v1 *key, void *outValue,
+                       void *outUnknown, uint32_t *outPresent) {
   if (!array || !outValue || !outPresent)
     return TALOS_RT_INVALID_ARGUMENT;
   *outPresent = 0;
@@ -6724,10 +6666,11 @@ talos_rt_v1_assoc_read(talos_rt_object_v1 *array,
       &read);
 }
 
-extern "C" talos_rt_status talos_rt_v1_assoc_read_checked(
-    talos_rt_object_v1 *array, const talos_rt_assoc_key_v1 *key,
-    void *outValue, uint64_t valueSize, void *outUnknown, uint64_t unknownSize,
-    uint32_t *outPresent) {
+extern "C" talos_rt_status
+talos_rt_v1_assoc_read_checked(talos_rt_object_v1 *array,
+                               const talos_rt_assoc_key_v1 *key, void *outValue,
+                               uint64_t valueSize, void *outUnknown,
+                               uint64_t unknownSize, uint32_t *outPresent) {
   if (!array || !outValue || !outPresent)
     return TALOS_RT_INVALID_ARGUMENT;
   ContainerHeader snapshot;
@@ -6735,8 +6678,7 @@ extern "C" talos_rt_status talos_rt_v1_assoc_read_checked(
   if (status != TALOS_RT_OK ||
       snapshot.kind != TALOS_RT_CONTAINER_ASSOCIATIVE_ARRAY)
     return status == TALOS_RT_OK ? TALOS_RT_INVALID_ARGUMENT : status;
-  bool fourState =
-      (snapshot.element->flags & TALOS_RT_ELEMENT_FOUR_STATE) != 0;
+  bool fourState = (snapshot.element->flags & TALOS_RT_ELEMENT_FOUR_STATE) != 0;
   if (valueSize < snapshot.element->value_size ||
       (fourState && unknownSize < snapshot.element->value_size) ||
       (!fourState && unknownSize != 0) || fourState != (outUnknown != nullptr))
@@ -6745,10 +6687,9 @@ extern "C" talos_rt_status talos_rt_v1_assoc_read_checked(
 }
 
 extern "C" talos_rt_status
-talos_rt_v1_assoc_write(talos_rt_gc_lane_v1 *lane,
-                          talos_rt_object_v1 *array,
-                          const talos_rt_assoc_key_v1 *key, const void *value,
-                          const void *unknown) {
+talos_rt_v1_assoc_write(talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *array,
+                        const talos_rt_assoc_key_v1 *key, const void *value,
+                        const void *unknown) {
   if (!lane || !array || !key)
     return TALOS_RT_INVALID_ARGUMENT;
   if (talos_rt_managed_object_context(array) !=
@@ -6896,8 +6837,7 @@ extern "C" talos_rt_status talos_rt_v1_assoc_write_checked(
   if (status != TALOS_RT_OK ||
       snapshot.kind != TALOS_RT_CONTAINER_ASSOCIATIVE_ARRAY)
     return status == TALOS_RT_OK ? TALOS_RT_INVALID_ARGUMENT : status;
-  bool fourState =
-      (snapshot.element->flags & TALOS_RT_ELEMENT_FOUR_STATE) != 0;
+  bool fourState = (snapshot.element->flags & TALOS_RT_ELEMENT_FOUR_STATE) != 0;
   if (valueSize < snapshot.element->value_size ||
       (fourState && unknownSize < snapshot.element->value_size) ||
       (!fourState && unknownSize != 0) || fourState != (unknown != nullptr))
@@ -6907,8 +6847,8 @@ extern "C" talos_rt_status talos_rt_v1_assoc_write_checked(
 
 extern "C" talos_rt_status
 talos_rt_v1_assoc_set_default(talos_rt_gc_lane_v1 *lane,
-                                talos_rt_object_v1 *array, const void *value,
-                                const void *unknown) {
+                              talos_rt_object_v1 *array, const void *value,
+                              const void *unknown) {
   if (!lane || !array || !value)
     return TALOS_RT_INVALID_ARGUMENT;
   if (talos_rt_managed_object_context(array) !=
@@ -6979,8 +6919,7 @@ extern "C" talos_rt_status talos_rt_v1_assoc_set_default_checked(
   if (status != TALOS_RT_OK ||
       snapshot.kind != TALOS_RT_CONTAINER_ASSOCIATIVE_ARRAY)
     return status == TALOS_RT_OK ? TALOS_RT_INVALID_ARGUMENT : status;
-  bool fourState =
-      (snapshot.element->flags & TALOS_RT_ELEMENT_FOUR_STATE) != 0;
+  bool fourState = (snapshot.element->flags & TALOS_RT_ELEMENT_FOUR_STATE) != 0;
   if (valueSize < snapshot.element->value_size ||
       (fourState && unknownSize < snapshot.element->value_size) ||
       (!fourState && unknownSize != 0) || fourState != (unknown != nullptr))
@@ -6992,10 +6931,10 @@ static talos_rt_status materializeReferenceAssocKey(
     const ReferencePathHeader &path, std::vector<uint8_t> &storage,
     std::vector<uint8_t> &unknownStorage, talos_rt_assoc_key_v1 &key);
 
-static talos_rt_status
-normalizedAssocKeysEqual(const ContainerHeader &header,
-                         const NormalizedAssocKey &left,
-                         const NormalizedAssocKey &right, bool &equal) {
+static talos_rt_status normalizedAssocKeysEqual(const ContainerHeader &header,
+                                                const NormalizedAssocKey &left,
+                                                const NormalizedAssocKey &right,
+                                                bool &equal) {
   equal = false;
   if (left.hash != right.hash)
     return TALOS_RT_OK;
@@ -7025,9 +6964,10 @@ normalizedAssocKeysEqual(const ContainerHeader &header,
   return TALOS_RT_OK;
 }
 
-static talos_rt_status
-detachAssocReferences(talos_rt_object_v1 *array, ContainerHeader &header,
-                      const NormalizedAssocKey &deleted, const uint8_t *value) {
+static talos_rt_status detachAssocReferences(talos_rt_object_v1 *array,
+                                             ContainerHeader &header,
+                                             const NormalizedAssocKey &deleted,
+                                             const uint8_t *value) {
   if (header.referenceCount == 0)
     return TALOS_RT_OK;
   return accessBuffer(header.referenceBuffer, [&](uint8_t *data,
@@ -7073,8 +7013,8 @@ detachAssocReferences(talos_rt_object_v1 *array, ContainerHeader &header,
               return status;
             NormalizedAssocKey normalized;
             status = normalizeAssocKey(
-                talos_rt_managed_object_context(detach->array),
-                *detach->header, &key, normalized);
+                talos_rt_managed_object_context(detach->array), *detach->header,
+                &key, normalized);
             if (status != TALOS_RT_OK)
               return status;
             bool equal = false;
@@ -7109,7 +7049,7 @@ detachAssocReferences(talos_rt_object_v1 *array, ContainerHeader &header,
 
 extern "C" talos_rt_status
 talos_rt_v1_assoc_delete(talos_rt_object_v1 *array,
-                           const talos_rt_assoc_key_v1 *key) {
+                         const talos_rt_assoc_key_v1 *key) {
   if (!array || !key)
     return TALOS_RT_INVALID_ARGUMENT;
   if (talos_rt_managed_value_mutation_masked(array))
@@ -7201,9 +7141,9 @@ static int64_t signedAssocValue(uint64_t value, uint64_t width) {
 }
 
 static talos_rt_status compareAssocSlotWithKey(const ContainerHeader &header,
-                                                 const AssocSlot &slot,
-                                                 const NormalizedAssocKey &key,
-                                                 int &comparison) {
+                                               const AssocSlot &slot,
+                                               const NormalizedAssocKey &key,
+                                               int &comparison) {
   if (header.keyKind == TALOS_RT_ASSOC_KEY_STRING) {
     StringView slotView;
     StringView keyView;
@@ -7267,7 +7207,7 @@ static talos_rt_status compareAssocSlotWithKey(const ContainerHeader &header,
 }
 
 talos_rt_status talos_rt_assoc_snapshot(talos_rt_object_v1 *array,
-                                            VPIAssocSnapshot *outSnapshot) {
+                                        VPIAssocSnapshot *outSnapshot) {
   if (!outSnapshot)
     return TALOS_RT_INVALID_ARGUMENT;
   *outSnapshot = {};
@@ -7289,8 +7229,7 @@ talos_rt_status talos_rt_assoc_snapshot(talos_rt_object_v1 *array,
   TALOS_RT_TRY {
     status = talos_rt_managed_object_access(
         array, TALOS_RT_MANAGED_CONTAINER,
-        [](void *opaque, uint8_t *object,
-           uint64_t extent) -> talos_rt_status {
+        [](void *opaque, uint8_t *object, uint64_t extent) -> talos_rt_status {
           auto &copy = *static_cast<Copy *>(opaque);
           if (extent != sizeof(ContainerHeader))
             return TALOS_RT_INVALID_HANDLE;
@@ -7397,9 +7336,8 @@ talos_rt_status talos_rt_assoc_snapshot(talos_rt_object_v1 *array,
                 return status;
               copy.entries.push_back(std::move(entry));
             }
-            return copy.entries.size() == header.size
-                       ? TALOS_RT_OK
-                       : TALOS_RT_INVALID_HANDLE;
+            return copy.entries.size() == header.size ? TALOS_RT_OK
+                                                      : TALOS_RT_INVALID_HANDLE;
           });
         },
         &copy);
@@ -7422,8 +7360,8 @@ talos_rt_status talos_rt_assoc_snapshot(talos_rt_object_v1 *array,
                   return compareIntegralBytes(
                              left.value.key.data(), right.value.key.data(),
                              left.value.key.size(), copy.result.keyWidth,
-                             copy.result.keyKind ==
-                                 TALOS_RT_ASSOC_KEY_SIGNED) < 0;
+                             copy.result.keyKind == TALOS_RT_ASSOC_KEY_SIGNED) <
+                         0;
                 }
               });
     copy.result.entries.reserve(copy.entries.size());
@@ -7436,13 +7374,12 @@ talos_rt_status talos_rt_assoc_snapshot(talos_rt_object_v1 *array,
   TALOS_RT_CATCH_ALL { return TALOS_RT_OUT_OF_RESOURCES; }
 }
 
-using AllocateOrderBuffer = talos_rt_status (*)(talos_rt_gc_lane_v1 *,
-                                                  uint64_t,
-                                                  talos_rt_object_v1 **);
+using AllocateOrderBuffer = talos_rt_status (*)(talos_rt_gc_lane_v1 *, uint64_t,
+                                                talos_rt_object_v1 **);
 
 static talos_rt_status allocateOrderBuffer(talos_rt_gc_lane_v1 *lane,
-                                             uint64_t count,
-                                             talos_rt_object_v1 **outBuffer) {
+                                           uint64_t count,
+                                           talos_rt_object_v1 **outBuffer) {
   return allocateBuffer(lane, count, sizeof(uint64_t), outBuffer);
 }
 
@@ -7471,9 +7408,7 @@ ensureAssocOrderedImpl(talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *array,
       return TALOS_RT_OK;
     std::vector<uint64_t> indices;
     TALOS_RT_TRY { indices.resize(static_cast<size_t>(snapshot.size)); }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
     struct Order {
       ContainerHeader snapshot;
       std::vector<uint64_t> *indices;
@@ -7481,8 +7416,7 @@ ensureAssocOrderedImpl(talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *array,
     } order{snapshot, &indices};
     status = talos_rt_managed_object_access(
         array, TALOS_RT_MANAGED_CONTAINER,
-        [](void *opaque, uint8_t *object,
-           uint64_t extent) -> talos_rt_status {
+        [](void *opaque, uint8_t *object, uint64_t extent) -> talos_rt_status {
           auto *order = static_cast<Order *>(opaque);
           if (extent != sizeof(ContainerHeader))
             return TALOS_RT_INVALID_HANDLE;
@@ -7518,8 +7452,8 @@ ensureAssocOrderedImpl(talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *array,
               talos_rt_status keyStatus = TALOS_RT_OK;
               if (!wildcardKeys.empty())
                 keyStatus = normalizeWildcardAssocObject(
-                    talos_rt_managed_object_context(slot->object),
-                    slot->object, wildcardKeys[static_cast<size_t>(index)]);
+                    talos_rt_managed_object_context(slot->object), slot->object,
+                    wildcardKeys[static_cast<size_t>(index)]);
               else if (!elementKeys.empty())
                 keyStatus = serializeAssocKeyBox(
                     *header, slot->object,
@@ -7575,8 +7509,7 @@ ensureAssocOrderedImpl(talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *array,
                              reinterpret_cast<const uint8_t *>(rightView.bytes),
                              static_cast<size_t>(leftView.size),
                              header->keyWidth,
-                             header->keyKind == TALOS_RT_ASSOC_KEY_SIGNED) <
-                         0;
+                             header->keyKind == TALOS_RT_ASSOC_KEY_SIGNED) < 0;
                 });
             return TALOS_RT_OK;
           });
@@ -7609,8 +7542,7 @@ ensureAssocOrderedImpl(talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *array,
     } publish{snapshot, ordered};
     status = talos_rt_managed_object_access(
         array, TALOS_RT_MANAGED_CONTAINER,
-        [](void *opaque, uint8_t *object,
-           uint64_t extent) -> talos_rt_status {
+        [](void *opaque, uint8_t *object, uint64_t extent) -> talos_rt_status {
           auto *publish = static_cast<Publish *>(opaque);
           if (extent != sizeof(ContainerHeader))
             return TALOS_RT_INVALID_HANDLE;
@@ -7635,7 +7567,7 @@ ensureAssocOrderedImpl(talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *array,
 
 talos_rt_status
 talos::runtime_detail::ensureAssocOrdered(talos_rt_gc_lane_v1 *lane,
-                                            talos_rt_object_v1 *array) {
+                                          talos_rt_object_v1 *array) {
   return ensureAssocOrderedImpl(lane, array, allocateOrderBuffer);
 }
 
@@ -7647,10 +7579,10 @@ talos::runtime_detail::ensureAssocOrderedWithoutSafepoint(
 }
 
 static talos_rt_status assocTraverse(talos_rt_gc_lane_v1 *lane,
-                                       talos_rt_object_v1 *array,
-                                       talos_rt_assoc_key_v1 *inoutKey,
-                                       uint32_t *outSuccess, int direction,
-                                       bool endpoint) {
+                                     talos_rt_object_v1 *array,
+                                     talos_rt_assoc_key_v1 *inoutKey,
+                                     uint32_t *outSuccess, int direction,
+                                     bool endpoint) {
   if (!lane || !array || !inoutKey || !outSuccess ||
       (direction != -1 && direction != 1))
     return TALOS_RT_INVALID_ARGUMENT;
@@ -7699,8 +7631,7 @@ static talos_rt_status assocTraverse(talos_rt_gc_lane_v1 *lane,
   if (status == TALOS_RT_OK)
     status = talos_rt_managed_object_access(
         array, TALOS_RT_MANAGED_CONTAINER,
-        [](void *opaque, uint8_t *object,
-           uint64_t extent) -> talos_rt_status {
+        [](void *opaque, uint8_t *object, uint64_t extent) -> talos_rt_status {
           auto *traverse = static_cast<Traverse *>(opaque);
           if (extent != sizeof(ContainerHeader))
             return TALOS_RT_INVALID_HANDLE;
@@ -7850,32 +7781,32 @@ static talos_rt_status assocTraverse(talos_rt_gc_lane_v1 *lane,
   return status;
 }
 
-extern "C" talos_rt_status talos_rt_v1_assoc_first(
-    talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *array,
-    talos_rt_assoc_key_v1 *inoutKey, uint32_t *outSuccess) {
+extern "C" talos_rt_status
+talos_rt_v1_assoc_first(talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *array,
+                        talos_rt_assoc_key_v1 *inoutKey, uint32_t *outSuccess) {
   return assocTraverse(lane, array, inoutKey, outSuccess, 1, true);
 }
 
-extern "C" talos_rt_status talos_rt_v1_assoc_last(
-    talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *array,
-    talos_rt_assoc_key_v1 *inoutKey, uint32_t *outSuccess) {
+extern "C" talos_rt_status
+talos_rt_v1_assoc_last(talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *array,
+                       talos_rt_assoc_key_v1 *inoutKey, uint32_t *outSuccess) {
   return assocTraverse(lane, array, inoutKey, outSuccess, -1, true);
 }
 
-extern "C" talos_rt_status talos_rt_v1_assoc_next(
-    talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *array,
-    talos_rt_assoc_key_v1 *inoutKey, uint32_t *outSuccess) {
+extern "C" talos_rt_status
+talos_rt_v1_assoc_next(talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *array,
+                       talos_rt_assoc_key_v1 *inoutKey, uint32_t *outSuccess) {
   return assocTraverse(lane, array, inoutKey, outSuccess, 1, false);
 }
 
-extern "C" talos_rt_status talos_rt_v1_assoc_prev(
-    talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *array,
-    talos_rt_assoc_key_v1 *inoutKey, uint32_t *outSuccess) {
+extern "C" talos_rt_status
+talos_rt_v1_assoc_prev(talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *array,
+                       talos_rt_assoc_key_v1 *inoutKey, uint32_t *outSuccess) {
   return assocTraverse(lane, array, inoutKey, outSuccess, -1, false);
 }
 
 static talos_rt_status snapshotReferencePath(talos_rt_object_v1 *path,
-                                               ReferencePathHeader &snapshot) {
+                                             ReferencePathHeader &snapshot) {
   struct Snapshot {
     ReferencePathHeader *output;
   } environment{&snapshot};
@@ -7947,10 +7878,10 @@ static talos_rt_status snapshotReferencePath(talos_rt_object_v1 *path,
 }
 
 talos_rt_status talos_rt_reference_path_shape(talos_rt_object_v1 *path,
-                                                  uint64_t valueSize,
-                                                  uint64_t bitWidth,
-                                                  uint32_t fourState,
-                                                  uint32_t managedValue) {
+                                              uint64_t valueSize,
+                                              uint64_t bitWidth,
+                                              uint32_t fourState,
+                                              uint32_t managedValue) {
   ReferencePathHeader snapshot;
   talos_rt_status status = snapshotReferencePath(path, snapshot);
   if (status != TALOS_RT_OK)
@@ -7994,8 +7925,9 @@ talos_rt_status talos_rt_reference_path_shape(talos_rt_object_v1 *path,
              : TALOS_RT_ARGUMENT_MISMATCH;
 }
 
-talos_rt_status talos_rt_reference_path_element(
-    talos_rt_object_v1 *path, const talos_rt_element_type_v1 **outElement) {
+talos_rt_status
+talos_rt_reference_path_element(talos_rt_object_v1 *path,
+                                const talos_rt_element_type_v1 **outElement) {
   if (!outElement)
     return TALOS_RT_INVALID_ARGUMENT;
   ReferencePathHeader snapshot;
@@ -8066,7 +7998,7 @@ static bool referenceBinding(const ReferencePathHeader &path,
 // index with X or Z bits, which the path keeps so that every access through it
 // is invalid, its planes. The path's owner must not be locked.
 static talos_rt_status referenceAssocKeyBytes(const ReferencePathHeader &path,
-                                                std::vector<uint8_t> &bytes) {
+                                              std::vector<uint8_t> &bytes) {
   ContainerHeader owner;
   talos_rt_status status = snapshotHeader(path.owner, owner);
   if (status != TALOS_RT_OK)
@@ -8095,7 +8027,7 @@ static talos_rt_status referenceAssocKeyBytes(const ReferencePathHeader &path,
 }
 
 static talos_rt_status referenceIdentityHash(const ReferencePathHeader &path,
-                                               uint64_t &hash) {
+                                             uint64_t &hash) {
   ReferenceBinding binding;
   if (!referenceBinding(path, binding))
     return TALOS_RT_INVALID_HANDLE;
@@ -8177,9 +8109,10 @@ static bool sameReferenceIdentity(const ReferencePathHeader &left,
          sameString(left.keyUnknown, right.keyUnknown);
 }
 
-static talos_rt_status indexContainerReferences(
-    talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *container,
-    talos_rt_object_v1 *addedPath, uint64_t addedOrdinal) {
+static talos_rt_status indexContainerReferences(talos_rt_gc_lane_v1 *lane,
+                                                talos_rt_object_v1 *container,
+                                                talos_rt_object_v1 *addedPath,
+                                                uint64_t addedOrdinal) {
   ContainerHeader header;
   talos_rt_status status = snapshotHeader(container, header);
   if (status != TALOS_RT_OK || header.referenceCount == 0)
@@ -8263,9 +8196,10 @@ static talos_rt_status indexContainerReferences(
       &publish);
 }
 
-static talos_rt_status findContainerReference(
-    talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *container,
-    const ReferencePathHeader &wanted, talos_rt_object_v1 **outPath) {
+static talos_rt_status findContainerReference(talos_rt_gc_lane_v1 *lane,
+                                              talos_rt_object_v1 *container,
+                                              const ReferencePathHeader &wanted,
+                                              talos_rt_object_v1 **outPath) {
   talos_rt_status status = indexContainerReferences(lane, container);
   if (status != TALOS_RT_OK)
     return status;
@@ -8468,8 +8402,8 @@ extern "C" talos_rt_status talos_rt_v1_reference_path_assoc_create(
       owner.kind != TALOS_RT_CONTAINER_ASSOCIATIVE_ARRAY)
     return status == TALOS_RT_OK ? TALOS_RT_INVALID_ARGUMENT : status;
   NormalizedAssocKey normalized;
-  status = normalizeAssocKey(talos_rt_managed_object_context(array), owner,
-                             key, normalized);
+  status = normalizeAssocKey(talos_rt_managed_object_context(array), owner, key,
+                             normalized);
   if (status != TALOS_RT_OK)
     return status;
   ScopedManagedRoot ownerRoot(lane, &array);
@@ -8508,9 +8442,7 @@ extern "C" talos_rt_status talos_rt_v1_reference_path_assoc_create(
       auto *unknown = static_cast<const uint8_t *>(key->unknown_data);
       unknownBytes.assign(unknown, unknown + byteCount);
     }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
     if (owner.keyWidth % 8 != 0)
       unknownBytes.back() &=
           static_cast<uint8_t>((1u << (owner.keyWidth % 8)) - 1);
@@ -8616,8 +8548,7 @@ extern "C" talos_rt_status talos_rt_v1_reference_path_assoc_create(
     }
     status = talos_rt_managed_object_access(
         path, TALOS_RT_MANAGED_REFERENCE_PATH,
-        [](void *opaque, uint8_t *object,
-           uint64_t extent) -> talos_rt_status {
+        [](void *opaque, uint8_t *object, uint64_t extent) -> talos_rt_status {
           if (extent != sizeof(ReferencePathHeader))
             return TALOS_RT_INVALID_HANDLE;
           auto *initialize = static_cast<Initialize *>(opaque);
@@ -8648,8 +8579,7 @@ extern "C" talos_rt_status talos_rt_v1_reference_path_assoc_create(
   return status;
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_reference_path_covergroup_option_create(
+extern "C" talos_rt_status talos_rt_v1_reference_path_covergroup_option_create(
     talos_rt_gc_lane_v1 *lane, uint64_t handle, uint64_t typeID,
     uint64_t itemID, uint32_t option, uint64_t mask, int64_t index,
     uint32_t character, talos_rt_object_v1 *watchOwner, uint64_t ownerPayload,
@@ -8675,19 +8605,17 @@ talos_rt_v1_reference_path_covergroup_option_create(
   ScopedManagedRoot watchRoot(lane, &watchOwner);
   if (watchRoot.getStatus() != TALOS_RT_OK)
     return watchRoot.getStatus();
-  uint32_t width =
-      string ? 64
-      : option == TALOS_RT_COVERGROUP_OPTION_MERGE_INSTANCES ||
-              option == TALOS_RT_COVERGROUP_OPTION_DISTRIBUTE_FIRST
-          ? 1
-          : 32;
+  uint32_t width = string ? 64
+                   : option == TALOS_RT_COVERGROUP_OPTION_MERGE_INSTANCES ||
+                           option == TALOS_RT_COVERGROUP_OPTION_DISTRIBUTE_FIRST
+                       ? 1
+                       : 32;
   if (typeID) {
     uint64_t previous = 0;
     status = talos_rt_v1_argument_ref_load(
         context, stateValue, stateUnknown, stateBitCount, watchOwner,
         ownerPayload, ownerManaged, width, (width + 7) / 8, 0,
-        string ? TALOS_RT_ARGUMENT_VALUE_STRING
-               : TALOS_RT_ARGUMENT_VALUE_BITS,
+        string ? TALOS_RT_ARGUMENT_VALUE_STRING : TALOS_RT_ARGUMENT_VALUE_BITS,
         &previous, nullptr);
     if (status != TALOS_RT_OK)
       return status;
@@ -8733,8 +8661,7 @@ talos_rt_v1_reference_path_covergroup_option_create(
   return status;
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_reference_path_string_character_create(
+extern "C" talos_rt_status talos_rt_v1_reference_path_string_character_create(
     talos_rt_gc_lane_v1 *lane, talos_rt_string_v1 string, int64_t index,
     talos_rt_object_v1 *watchOwner, uint64_t ownerPayload,
     uint32_t ownerManaged, uint8_t *stateValue, uint8_t *stateUnknown,
@@ -8794,8 +8721,7 @@ talos_rt_v1_reference_path_string_character_create(
   return status;
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_reference_path_aggregate_element_create(
+extern "C" talos_rt_status talos_rt_v1_reference_path_aggregate_element_create(
     talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *watchOwner,
     uint64_t ownerPayload, uint32_t ownerManaged, uint8_t *stateValue,
     uint8_t *stateUnknown, uint64_t stateBitCount, int64_t index, int64_t left,
@@ -8920,9 +8846,7 @@ static talos_rt_status materializeReferenceAssocKey(
                             reinterpret_cast<const uint8_t *>(unknown.bytes) +
                                 unknown.size);
     }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
   }
   key.unknown_data = unknownStorage.empty() ? nullptr : unknownStorage.data();
   key.string = 0;
@@ -8977,10 +8901,9 @@ static void copyBitRange(uint8_t *destination, uint64_t destinationOffset,
 }
 
 extern "C" talos_rt_status talos_rt_v1_container_import_fixed(
-    talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *container,
-    const void *value, const void *unknown, uint64_t planeSize,
-    uint64_t bitWidth, uint32_t fourState, uint64_t elementSpan,
-    uint64_t count) {
+    talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *container, const void *value,
+    const void *unknown, uint64_t planeSize, uint64_t bitWidth,
+    uint32_t fourState, uint64_t elementSpan, uint64_t count) {
   if (!lane || fourState > 1)
     return TALOS_RT_INVALID_ARGUMENT;
   if (!container)
@@ -9100,31 +9023,30 @@ ensureReferencePathCurrent(talos_rt_object_v1 *path,
       snapshot.ownerManaged, sizeof(talos_rt_managed_word_v1) * 8,
       sizeof(talos_rt_managed_word_v1), 0, TALOS_RT_ARGUMENT_VALUE_CLASS,
       &currentWord, nullptr);
-  talos_rt_object_v1 *current =
-      talos_rt_object_from_managed_word(currentWord);
+  talos_rt_object_v1 *current = talos_rt_object_from_managed_word(currentWord);
   if (status != TALOS_RT_OK || current == snapshot.owner)
     return status;
-  status = accessBuffer(snapshot.detachedValue, [&](uint8_t *data,
-                                                    uint64_t size) {
-    if (size < elementStride(snapshot.element))
-      return TALOS_RT_INVALID_HANDLE;
-    void *unknown = (snapshot.element->flags & TALOS_RT_ELEMENT_FOUR_STATE)
-                        ? data + snapshot.element->value_size
-                        : nullptr;
-    if (snapshot.selector == ReferenceSelector::Index)
-      return talos_rt_v1_container_read(snapshot.owner, snapshot.index, data,
-                                          unknown);
-    std::vector<uint8_t> keyStorage;
-    std::vector<uint8_t> unknownStorage;
-    talos_rt_assoc_key_v1 key{};
-    talos_rt_status keyStatus =
-        materializeReferenceAssocKey(snapshot, keyStorage, unknownStorage, key);
-    if (keyStatus != TALOS_RT_OK)
-      return keyStatus;
-    uint32_t present = 0;
-    return talos_rt_v1_assoc_read(snapshot.owner, &key, data, unknown,
-                                    &present);
-  });
+  status =
+      accessBuffer(snapshot.detachedValue, [&](uint8_t *data, uint64_t size) {
+        if (size < elementStride(snapshot.element))
+          return TALOS_RT_INVALID_HANDLE;
+        void *unknown = (snapshot.element->flags & TALOS_RT_ELEMENT_FOUR_STATE)
+                            ? data + snapshot.element->value_size
+                            : nullptr;
+        if (snapshot.selector == ReferenceSelector::Index)
+          return talos_rt_v1_container_read(snapshot.owner, snapshot.index,
+                                            data, unknown);
+        std::vector<uint8_t> keyStorage;
+        std::vector<uint8_t> unknownStorage;
+        talos_rt_assoc_key_v1 key{};
+        talos_rt_status keyStatus = materializeReferenceAssocKey(
+            snapshot, keyStorage, unknownStorage, key);
+        if (keyStatus != TALOS_RT_OK)
+          return keyStatus;
+        uint32_t present = 0;
+        return talos_rt_v1_assoc_read(snapshot.owner, &key, data, unknown,
+                                      &present);
+      });
   if (status != TALOS_RT_OK)
     return status;
   status = talos_rt_managed_object_access(
@@ -9153,8 +9075,7 @@ loadCoverageOptionReference(talos_rt_gc_lane_v1 *lane,
         context, path.stateValue, path.stateUnknown, path.stateBitCount,
         path.watchOwner, path.ownerPayload, path.ownerManaged,
         path.coverage.fieldWidth, (path.coverage.fieldWidth + 7) / 8, 0,
-        string ? TALOS_RT_ARGUMENT_VALUE_STRING
-               : TALOS_RT_ARGUMENT_VALUE_BITS,
+        string ? TALOS_RT_ARGUMENT_VALUE_STRING : TALOS_RT_ARGUMENT_VALUE_BITS,
         &value, nullptr);
   if (string)
     return talos_rt_v1_covergroup_get_string_option(
@@ -9194,9 +9115,9 @@ storeCoverageOptionReference(talos_rt_gc_lane_v1 *lane,
     ScopedManagedWordRoot updatedRoot(lane, &updated);
     if (updatedRoot.getStatus() != TALOS_RT_OK)
       return updatedRoot.getStatus();
-    status = talos_rt_v1_string_putc(
-        lane, value, path.index, *static_cast<const uint8_t *>(replacement),
-        &updated);
+    status = talos_rt_v1_string_putc(lane, value, path.index,
+                                     *static_cast<const uint8_t *>(replacement),
+                                     &updated);
     if (status != TALOS_RT_OK)
       return status;
     value = updated;
@@ -9243,22 +9164,19 @@ storeCoverageOptionReference(talos_rt_gc_lane_v1 *lane,
       context, path.stateValue, path.stateUnknown, path.stateBitCount,
       path.watchOwner, path.ownerPayload, path.ownerManaged,
       path.coverage.fieldWidth, (path.coverage.fieldWidth + 7) / 8, 0,
-      string ? TALOS_RT_ARGUMENT_VALUE_STRING
-             : TALOS_RT_ARGUMENT_VALUE_BITS,
+      string ? TALOS_RT_ARGUMENT_VALUE_STRING : TALOS_RT_ARGUMENT_VALUE_BITS,
       &value, nullptr);
 }
 
 // A projection touches only its selected bits. Parent projections compose
 // offsets until a state slot, class field, or container element is reached.
 // No whole-owner temporary is needed for a member read or write.
-static talos_rt_status
-accessReferenceWindow(talos_rt_context *context, talos_rt_gc_lane_v1 *lane,
-                      uint8_t *stateValue, uint8_t *stateUnknown,
-                      uint64_t stateBits, talos_rt_object_v1 *owner,
-                      uint64_t payload, uint32_t managed, uint64_t ownerWidth,
-                      uint64_t ownerSize, bool ownerFourState, uint64_t offset,
-                      uint64_t width, bool fourState, uint8_t *value,
-                      uint8_t *unknown, bool store) {
+static talos_rt_status accessReferenceWindow(
+    talos_rt_context *context, talos_rt_gc_lane_v1 *lane, uint8_t *stateValue,
+    uint8_t *stateUnknown, uint64_t stateBits, talos_rt_object_v1 *owner,
+    uint64_t payload, uint32_t managed, uint64_t ownerWidth, uint64_t ownerSize,
+    bool ownerFourState, uint64_t offset, uint64_t width, bool fourState,
+    uint8_t *value, uint8_t *unknown, bool store) {
   if (!width || offset > ownerWidth || width > ownerWidth - offset ||
       ownerSize > SIZE_MAX ||
       ownerSize < ownerWidth / 8 + ((ownerWidth & 7) != 0) ||
@@ -9290,15 +9208,14 @@ accessReferenceWindow(talos_rt_context *context, talos_rt_gc_lane_v1 *lane,
   if (managed == 0) {
     if (offset > INT64_MAX)
       return TALOS_RT_INVALID_ARGUMENT;
-    uint64_t selected = talos_rt_v1_native_handle_offset(
-        payload, static_cast<int64_t>(offset));
+    uint64_t selected =
+        talos_rt_v1_native_handle_offset(payload, static_cast<int64_t>(offset));
     if (!selected && payload)
       return TALOS_RT_INVALID_HANDLE;
     if (!store)
       return talos_rt_v1_argument_ref_load(
           context, stateValue, stateUnknown, stateBits, nullptr, selected, 0,
-          width, size, fourState, TALOS_RT_ARGUMENT_VALUE_BITS, value,
-          unknown);
+          width, size, fourState, TALOS_RT_ARGUMENT_VALUE_BITS, value, unknown);
     std::vector<uint8_t> zeros;
     if (ownerFourState && !fourState)
       zeros.resize(static_cast<size_t>(size));
@@ -9325,8 +9242,8 @@ accessReferenceWindow(talos_rt_context *context, talos_rt_gc_lane_v1 *lane,
     if (status != TALOS_RT_OK)
       return status;
     if (ownerFourState) {
-      status = talos_rt_v1_object_read(owner, address + ownerSize,
-                                         bval.data(), windowSize);
+      status = talos_rt_v1_object_read(owner, address + ownerSize, bval.data(),
+                                       windowSize);
       if (status != TALOS_RT_OK)
         return status;
     }
@@ -9336,11 +9253,10 @@ accessReferenceWindow(talos_rt_context *context, talos_rt_gc_lane_v1 *lane,
     offset = originalOffset;
     if (status != TALOS_RT_OK || !store)
       return status;
-    status =
-        talos_rt_v1_object_write(owner, address, bytes.data(), windowSize);
+    status = talos_rt_v1_object_write(owner, address, bytes.data(), windowSize);
     if (status == TALOS_RT_OK && ownerFourState)
-      status = talos_rt_v1_object_write(owner, address + ownerSize,
-                                          bval.data(), windowSize);
+      status = talos_rt_v1_object_write(owner, address + ownerSize, bval.data(),
+                                        windowSize);
     return status;
   }
   if (managed != 2 || !owner ||
@@ -9352,8 +9268,7 @@ accessReferenceWindow(talos_rt_context *context, talos_rt_gc_lane_v1 *lane,
     return status;
   if (path.element->value_size != ownerSize ||
       referenceElementBitWidth(path.element) != ownerWidth ||
-      bool(path.element->flags & TALOS_RT_ELEMENT_FOUR_STATE) !=
-          ownerFourState)
+      bool(path.element->flags & TALOS_RT_ELEMENT_FOUR_STATE) != ownerFourState)
     return TALOS_RT_ARGUMENT_MISMATCH;
   status = ensureReferencePathCurrent(owner, path);
   if (status != TALOS_RT_OK)
@@ -9469,7 +9384,7 @@ accessReferenceWindow(talos_rt_context *context, talos_rt_gc_lane_v1 *lane,
 
 extern "C" talos_rt_status
 talos_rt_v1_reference_path_load(talos_rt_object_v1 *path, void *outValue,
-                                  void *outUnknown, uint32_t *outPresent) {
+                                void *outUnknown, uint32_t *outPresent) {
   if (!outValue || !outPresent)
     return TALOS_RT_INVALID_ARGUMENT;
   ReferencePathHeader snapshot;
@@ -9539,9 +9454,7 @@ talos_rt_v1_reference_path_load(talos_rt_object_v1 *path, void *outValue,
           static_cast<uint8_t *>(outValue), static_cast<uint8_t *>(outUnknown),
           false);
     }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
   }
 
   if (snapshot.selector == ReferenceSelector::StringCharacter) {
@@ -9569,7 +9482,7 @@ talos_rt_v1_reference_path_load(talos_rt_object_v1 *path, void *outValue,
     if (status != TALOS_RT_OK)
       return status;
     return talos_rt_v1_assoc_read(snapshot.owner, &key, outValue, outUnknown,
-                                    outPresent);
+                                  outPresent);
   }
   ContainerHeader owner;
   status = snapshotHeader(snapshot.owner, owner);
@@ -9578,13 +9491,13 @@ talos_rt_v1_reference_path_load(talos_rt_object_v1 *path, void *outValue,
   *outPresent =
       snapshot.index >= 0 && static_cast<uint64_t>(snapshot.index) < owner.size;
   return talos_rt_v1_container_read(snapshot.owner, snapshot.index, outValue,
-                                      outUnknown);
+                                    outUnknown);
 }
 
 extern "C" talos_rt_status
 talos_rt_v1_reference_path_store(talos_rt_gc_lane_v1 *lane,
-                                   talos_rt_object_v1 *path,
-                                   const void *value, const void *unknown) {
+                                 talos_rt_object_v1 *path, const void *value,
+                                 const void *unknown) {
   if (!lane || !value)
     return TALOS_RT_INVALID_ARGUMENT;
   if (!path || talos_rt_managed_object_context(path) !=
@@ -9640,9 +9553,7 @@ talos_rt_v1_reference_path_store(talos_rt_gc_lane_v1 *lane,
               : nullptr,
           true);
     }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
   }
 
   if (snapshot.selector == ReferenceSelector::StringCharacter) {
@@ -9656,9 +9567,9 @@ talos_rt_v1_reference_path_store(talos_rt_gc_lane_v1 *lane,
     if (status != TALOS_RT_OK)
       return status;
     talos_rt_string_v1 updated = 0;
-    status = talos_rt_v1_string_putc(lane, string, snapshot.index,
-                                       *static_cast<const uint8_t *>(value),
-                                       &updated);
+    status =
+        talos_rt_v1_string_putc(lane, string, snapshot.index,
+                                *static_cast<const uint8_t *>(value), &updated);
     if (status != TALOS_RT_OK)
       return status;
     return talos_rt_v1_argument_ref_store(
@@ -9689,7 +9600,7 @@ talos_rt_v1_reference_path_store(talos_rt_gc_lane_v1 *lane,
   bool present =
       snapshot.index >= 0 && static_cast<uint64_t>(snapshot.index) < owner.size;
   status = talos_rt_v1_container_write(lane, snapshot.owner, snapshot.index,
-                                         value, unknown);
+                                       value, unknown);
   if (status == TALOS_RT_OK && present && snapshot.ownerManaged == 0)
     talos_rt_v1_scheduler_signal(
         talos_rt_managed_lane_context(lane), snapshot.ownerPayload,

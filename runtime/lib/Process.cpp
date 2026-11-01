@@ -95,8 +95,7 @@ struct DueUpdateCursor {
 struct MixedNBABarrierQueues {
   talos_rt_context *context;
   DueUpdateCursor native, design, events;
-  explicit MixedNBABarrierQueues(talos_rt_context *context)
-      : context(context) {
+  explicit MixedNBABarrierQueues(talos_rt_context *context) : context(context) {
     assert(!context->schedulerDrainingNBAQueues);
     context->schedulerDrainingNBAQueues = true;
   }
@@ -119,8 +118,8 @@ struct ProcessAllocationMetadata {
 };
 
 constexpr size_t kProcessAllocationMetadataOffset =
-    (sizeof(talos_rt_process_instance_v1) +
-     alignof(ProcessAllocationMetadata) - 1) &
+    (sizeof(talos_rt_process_instance_v1) + alignof(ProcessAllocationMetadata) -
+     1) &
     ~(alignof(ProcessAllocationMetadata) - 1);
 
 ProcessAllocationMetadata *
@@ -135,12 +134,10 @@ registerManagedFrameRoots(talos_rt_process_instance_v1 *instance,
     return TALOS_RT_OK;
   ProcessAllocationMetadata *metadata = processMetadata(instance);
   if (metadata->managedRootContext)
-    return metadata->managedRootContext == context
-               ? TALOS_RT_OK
-               : TALOS_RT_INVALID_LIFECYCLE;
+    return metadata->managedRootContext == context ? TALOS_RT_OK
+                                                   : TALOS_RT_INVALID_LIFECYCLE;
 
-  const talos_rt_frame_layout_v1 &layout =
-      *instance->descriptor->frame_layout;
+  const talos_rt_frame_layout_v1 &layout = *instance->descriptor->frame_layout;
   bool hasManagedRoots = false;
   for (uint32_t index = 0; index != layout.field_count; ++index)
     hasManagedRoots |=
@@ -196,13 +193,13 @@ designTaskWait(const ScheduledDesignTask &task) {
       task.waitSize > task.scratchOffset - task.waitOffset)
     return nullptr;
   return reinterpret_cast<const talos_rt_wait_record_v1 *>(task.frame.data() +
-                                                             task.waitOffset);
+                                                           task.waitOffset);
 }
 
 talos_rt_status
 talos_rt_builtin_class_waiters(talos_rt_gc_lane_v1 *lane,
-                                 talos_rt_object_v1 *object,
-                                 std::vector<uint64_t> &outProcesses) {
+                               talos_rt_object_v1 *object,
+                               std::vector<uint64_t> &outProcesses) {
   outProcesses.clear();
   if (!lane || !object)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -227,8 +224,7 @@ talos_rt_builtin_class_waiters(talos_rt_gc_lane_v1 *lane,
     std::vector<uint64_t> processes;
     auto append = [&](uint64_t token, uint64_t waitSize,
                       const talos_rt_wait_record_v1 *wait) {
-      if (!wait ||
-          waitSize < sizeof(*wait) + sizeof(talos_rt_wait_entry_v1) ||
+      if (!wait || waitSize < sizeof(*wait) + sizeof(talos_rt_wait_entry_v1) ||
           wait->version != TALOS_RT_VERSION || wait->kind != suspendKind ||
           wait->count != 1)
         return false;
@@ -264,8 +260,8 @@ talos_rt_builtin_class_waiters(talos_rt_gc_lane_v1 *lane,
 
 talos_rt_status
 talos_rt_vpi_bind_native_callsite(talos_rt_context *context,
-                                    talos_rt_process_instance_v1 *callee,
-                                    uint64_t callID, uint64_t preparedCallID) {
+                                  talos_rt_process_instance_v1 *callee,
+                                  uint64_t callID, uint64_t preparedCallID) {
   if (!context || !callee || !callee->descriptor || callID > INT64_MAX)
     return TALOS_RT_INVALID_ARGUMENT;
   ContextMutexLock lock(context);
@@ -287,9 +283,8 @@ talos_rt_vpi_bind_native_callsite(talos_rt_context *context,
   return TALOS_RT_OK;
 }
 
-talos_rt_status
-talos_rt_vpi_activation_callsite(talos_rt_context *context,
-                                   uint64_t *outCallID) {
+talos_rt_status talos_rt_vpi_activation_callsite(talos_rt_context *context,
+                                                 uint64_t *outCallID) {
   if (outCallID)
     *outCallID = 0;
   if (!context || !outCallID)
@@ -311,8 +306,8 @@ talos_rt_vpi_activation_callsite(talos_rt_context *context,
 
 talos_rt_status
 talos_rt_logical_process_origin(talos_rt_context *context,
-                                  uint64_t logicalProcess,
-                                  uint64_t *outCodeUnit) noexcept {
+                                uint64_t logicalProcess,
+                                uint64_t *outCodeUnit) noexcept {
   if (!context || !logicalProcess || !outCodeUnit)
     return TALOS_RT_INVALID_ARGUMENT;
   *outCodeUnit = UINT64_MAX;
@@ -369,7 +364,7 @@ talos_rt_logical_process_origin(talos_rt_context *context,
 // or mutate scheduler readiness, subscriptions, or event generations.
 talos_rt_status
 talos_rt_named_event_waiters(talos_rt_context *context, uint64_t eventID,
-                               std::vector<uint64_t> &outProcesses) {
+                             std::vector<uint64_t> &outProcesses) {
   outProcesses.clear();
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -400,14 +395,12 @@ talos_rt_named_event_waiters(talos_rt_context *context, uint64_t eventID,
           return false;
         const auto *wait =
             reinterpret_cast<const talos_rt_computed_wait_record_v1 *>(bytes);
-        if (!talos_rt_validate_computed_wait_record(execution, wait,
-                                                      waitSize))
+        if (!talos_rt_validate_computed_wait_record(execution, wait, waitSize))
           return false;
         if (signalTriggered)
           return true;
-        const auto *observers =
-            computedWaitSpan<talos_rt_computed_observer_v1>(
-                wait, wait->observers_offset, wait->observer_count);
+        const auto *observers = computedWaitSpan<talos_rt_computed_observer_v1>(
+            wait, wait->observers_offset, wait->observer_count);
         const auto *dependencies =
             computedWaitSpan<talos_rt_computed_dependency_v1>(
                 wait, wait->dependencies_offset, wait->dependency_count);
@@ -421,9 +414,8 @@ talos_rt_named_event_waiters(talos_rt_context *context, uint64_t eventID,
                ++offset) {
             const auto &dependency =
                 dependencies[primary.dependency_begin + offset];
-            matches |=
-                dependency.kind == TALOS_RT_OBSERVER_DEPENDENCY_EVENT &&
-                dependency.stable_id == eventID;
+            matches |= dependency.kind == TALOS_RT_OBSERVER_DEPENDENCY_EVENT &&
+                       dependency.stable_id == eventID;
           }
         }
       } else {
@@ -542,8 +534,8 @@ bool talos_rt_initialize_event_order_wait_unlocked(
 static bool updateEventOrderWait(const talos_rt_wait_record_v1 *wait,
                                  uint64_t stableID, uint32_t &index,
                                  bool &ready, bool &failed) {
-  if (!wait || wait->kind != TALOS_RT_SUSPEND_EVENT_ORDER ||
-      wait->count == 0 || index >= wait->count)
+  if (!wait || wait->kind != TALOS_RT_SUSPEND_EVENT_ORDER || wait->count == 0 ||
+      index >= wait->count)
     return false;
   if (ready)
     return true;
@@ -580,7 +572,7 @@ static bool updateEventOrderWait(const talos_rt_wait_record_v1 *wait,
 }
 
 bool talos_rt_notify_event_order_waiters_unlocked(talos_rt_context *context,
-                                                    uint64_t stableID) {
+                                                  uint64_t stableID) {
   if (!context)
     return false;
   for (ScheduledProcess &process : context->scheduledProcesses) {
@@ -639,10 +631,11 @@ semaphoreQueuedAcquisitionReady(talos_rt_context *context,
       semaphore, static_cast<int32_t>(first->payload), ready);
 }
 
-talos_rt_status
-talos_rt_semaphore_wait_ready(talos_rt_context *context,
-                                talos_rt_object_v1 *semaphore, int32_t keys,
-                                uint64_t waitSequence, bool &ready) {
+talos_rt_status talos_rt_semaphore_wait_ready(talos_rt_context *context,
+                                              talos_rt_object_v1 *semaphore,
+                                              int32_t keys,
+                                              uint64_t waitSequence,
+                                              bool &ready) {
   ready = false;
   if (!context || !semaphore || waitSequence == 0)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -668,7 +661,7 @@ talos_rt_semaphore_wait_ready(talos_rt_context *context,
 
 extern "C" talos_rt_status
 talos_rt_v1_semaphore_try_get(talos_rt_object_v1 *semaphore, int32_t keys,
-                                uint32_t *outSuccess) {
+                              uint32_t *outSuccess) {
   if (!semaphore || !outSuccess)
     return TALOS_RT_INVALID_ARGUMENT;
   *outSuccess = 0;
@@ -690,7 +683,7 @@ talos_rt_v1_semaphore_try_get(talos_rt_object_v1 *semaphore, int32_t keys,
 
 talos_rt_status
 talos_rt_semaphore_wait_acquire(const talos_rt_wait_record_v1 *wait,
-                                  bool &acquired) {
+                                bool &acquired) {
   acquired = false;
   if (!wait || wait->flags != 0 || wait->count != 1 ||
       wait->payload > UINT32_MAX || static_cast<int32_t>(wait->payload) < 0 ||
@@ -757,8 +750,8 @@ nativeWaitReadyImpl(talos_rt_context &context,
     return status == TALOS_RT_OK && ready;
   }
   case TALOS_RT_SUSPEND_AWAIT:
-    return wait->count == 1 && talos_rt_logical_process_terminated(
-                                   &context, entries[0].stable_id);
+    return wait->count == 1 &&
+           talos_rt_logical_process_terminated(&context, entries[0].stable_id);
   case TALOS_RT_SUSPEND_JOIN: {
     bool ready = wait->flags == 0;
     for (uint32_t index = 0; index != wait->count; ++index) {
@@ -844,7 +837,7 @@ void talos_rt_promote_post_observed_resumptions_unlocked(
             ? promotePostObservedProcess(*context,
                                          logical & ~kNativeLogicalProcessTag)
             : talos_rt_promote_post_observed_design_task_unlocked(context,
-                                                                    logical);
+                                                                  logical);
     if (result == PostObservedPromotion::Waiting)
       pending[kept++] = logical;
     promoted |= result == PostObservedPromotion::Promoted;
@@ -868,8 +861,7 @@ static bool indexedBlocked(const talos_rt_context &context,
     return process.phase == 0 && process.wakeTime > context.schedulerTime;
   bool signalSuspend = process.suspendKind == TALOS_RT_SUSPEND_CHANGE ||
                        process.suspendKind == TALOS_RT_SUSPEND_EDGE;
-  return (signalSuspend ||
-          process.suspendKind == TALOS_RT_SUSPEND_OBSERVER) &&
+  return (signalSuspend || process.suspendKind == TALOS_RT_SUSPEND_OBSERVER) &&
          (!process.signalLatch || !process.signalLatch->triggered);
 }
 
@@ -977,8 +969,9 @@ nextScheduledProcessDelayUnlocked(talos_rt_context *context) {
   return std::nullopt;
 }
 
-talos_rt_status talos_rt_snapshot_future_time_queues_unlocked(
-    const talos_rt_context *context, std::vector<uint64_t> &times) {
+talos_rt_status
+talos_rt_snapshot_future_time_queues_unlocked(const talos_rt_context *context,
+                                              std::vector<uint64_t> &times) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   times.clear();
@@ -1028,8 +1021,7 @@ talos_rt_status talos_rt_snapshot_future_time_queues_unlocked(
   }
 }
 
-bool talos_rt_current_time_queue_pending_unlocked(
-    talos_rt_context *context) {
+bool talos_rt_current_time_queue_pending_unlocked(talos_rt_context *context) {
   if (!context)
     return false;
   const uint64_t now = context->schedulerTime;
@@ -1089,8 +1081,7 @@ bool talos_rt_current_time_queue_pending_unlocked(
       std::any_of(replaceable->calendar.begin(), replaceable->calendar.end(),
                   [now](const auto &entry) {
                     return entry.first.first <= now &&
-                           entry.second.execRegion <
-                               TALOS_RT_REGION_POSTPONED;
+                           entry.second.execRegion < TALOS_RT_REGION_POSTPONED;
                   }))
     return true;
   if (!context->scheduledPassSwitchEvents.empty() &&
@@ -1098,8 +1089,7 @@ bool talos_rt_current_time_queue_pending_unlocked(
     return true;
 
   for (const StaticNBAAccumulator &accumulator : context->staticNBAAccumulators)
-    if (accumulator.valid &&
-        accumulator.execRegion < TALOS_RT_REGION_POSTPONED)
+    if (accumulator.valid && accumulator.execRegion < TALOS_RT_REGION_POSTPONED)
       return true;
   if (context->nativeScheduleHasGeneratedNBAAccumulators)
     for (uint32_t root = 0; root != context->nativeScheduleNBARootCount;
@@ -1116,8 +1106,7 @@ bool talos_rt_current_time_queue_pending_unlocked(
   return false;
 }
 
-static void
-refreshNativeSchedulerReadinessUnlocked(talos_rt_context *context) {
+static void refreshNativeSchedulerReadinessUnlocked(talos_rt_context *context) {
   context->nativePollCandidates.clear();
   context->scheduledProcessDelayHeap.clear();
   for (const ScheduledProcess &process : context->scheduledProcesses) {
@@ -1156,8 +1145,8 @@ void rebuildNativeSchedulerIndexUnlocked(talos_rt_context *context) {
   refreshNativeSchedulerReadinessUnlocked(context);
 }
 
-void talos_rt_erase_automatic_bookkeeping_unlocked(
-    talos_rt_context *context, uint32_t automaticID) {
+void talos_rt_erase_automatic_bookkeeping_unlocked(talos_rt_context *context,
+                                                   uint32_t automaticID) {
   if (!context)
     return;
   if (auto state = context->nativeAutomaticStates.find(automaticID);
@@ -1189,8 +1178,9 @@ void talos_rt_erase_automatic_bookkeeping_unlocked(
                         context->events.upper_bound(last));
 }
 
-void talos_rt_invalidate_signal_snapshots_unlocked(
-    talos_rt_context *context, uint64_t bitOffset, uint64_t bitWidth) {
+void talos_rt_invalidate_signal_snapshots_unlocked(talos_rt_context *context,
+                                                   uint64_t bitOffset,
+                                                   uint64_t bitWidth) {
   if (!context || bitWidth == 0)
     return;
   // Snapshots are stored per canonical stable bit handle. For the common
@@ -1265,21 +1255,21 @@ createProcessInstance(talos_rt_context *context,
   void *frame = static_cast<uint8_t *>(allocation) + frameOffset;
   auto *instance = ::new (allocation)
       talos_rt_process_instance_v1{descriptor,
-                                     frame,
-                                     frame,
-                                     descriptor->frame_layout->frame_size,
-                                     scratchOffset,
-                                     scratchSize,
-                                     nullptr,
-                                     0,
-                                     0,
-                                     TALOS_RT_PROCESS_READY,
-                                     TALOS_RT_OK,
-                                     nullptr,
-                                     nullptr,
-                                     nullptr,
-                                     0,
-                                     0};
+                                   frame,
+                                   frame,
+                                   descriptor->frame_layout->frame_size,
+                                   scratchOffset,
+                                   scratchSize,
+                                   nullptr,
+                                   0,
+                                   0,
+                                   TALOS_RT_PROCESS_READY,
+                                   TALOS_RT_OK,
+                                   nullptr,
+                                   nullptr,
+                                   nullptr,
+                                   0,
+                                   0};
   ::new (static_cast<uint8_t *>(allocation) + kProcessAllocationMetadataOffset)
       ProcessAllocationMetadata{
           kProcessAllocationMagic, static_cast<size_t>(totalSize),
@@ -1295,8 +1285,7 @@ extern "C" talos_rt_status talos_rt_v1_process_instance_create(
 }
 
 extern "C" talos_rt_status talos_rt_v1_process_instance_create_for_context(
-    talos_rt_context *context,
-    const talos_rt_process_descriptor_v1 *descriptor,
+    talos_rt_context *context, const talos_rt_process_descriptor_v1 *descriptor,
     talos_rt_process_instance_v1 **outInstance) {
   if (!context) {
     if (outInstance)
@@ -1308,7 +1297,7 @@ extern "C" talos_rt_status talos_rt_v1_process_instance_create_for_context(
 
 extern "C" talos_rt_status
 talos_rt_v1_process_instance_frame(talos_rt_process_instance_v1 *instance,
-                                     void **outFrame, uint64_t *outSize) {
+                                   void **outFrame, uint64_t *outSize) {
   if (!outFrame || !outSize)
     return TALOS_RT_INVALID_ARGUMENT;
   *outFrame = nullptr;
@@ -1322,14 +1311,14 @@ talos_rt_v1_process_instance_frame(talos_rt_process_instance_v1 *instance,
   return TALOS_RT_OK;
 }
 
-extern "C" talos_rt_status talos_rt_v1_process_instance_execute(
-    talos_rt_process_instance_v1 *instance, talos_rt_context *context,
-    talos_rt_execution_tier requestedTier,
-    talos_rt_fragment_action_v1 *outAction) {
+extern "C" talos_rt_status
+talos_rt_v1_process_instance_execute(talos_rt_process_instance_v1 *instance,
+                                     talos_rt_context *context,
+                                     talos_rt_execution_tier requestedTier,
+                                     talos_rt_fragment_action_v1 *outAction) {
   if (!outAction)
     return TALOS_RT_INVALID_ARGUMENT;
-  *outAction = {
-      TALOS_RT_FRAGMENT_TERMINATE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
+  *outAction = {TALOS_RT_FRAGMENT_TERMINATE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
   if (!instance || (requestedTier != TALOS_RT_TIER_NATIVE &&
                     requestedTier != TALOS_RT_TIER_BYTECODE))
     return TALOS_RT_INVALID_ARGUMENT;
@@ -1424,9 +1413,7 @@ extern "C" talos_rt_status talos_rt_v1_process_instance_execute(
   talos_rt_status status;
   if (requestedTier == TALOS_RT_TIER_NATIVE) {
     TALOS_RT_TRY { status = instance->descriptor->native_execute(instance); }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      status = TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { status = TALOS_RT_OUT_OF_MEMORY; }
     TALOS_RT_CATCH_ALL { status = TALOS_RT_INVALID_ARGUMENT; }
   } else {
     if (instance->descriptor->design_bytecode) {
@@ -1448,8 +1435,8 @@ extern "C" talos_rt_status talos_rt_v1_process_instance_execute(
     }
     // The interpreter writes shared planes in place without reporting its
     // footprint to the generated unknown summary.
-    if (context && !(instance->descriptor->flags &
-                     TALOS_RT_PROCESS_BYTECODE_READ_ONLY)) {
+    if (context &&
+        !(instance->descriptor->flags & TALOS_RT_PROCESS_BYTECODE_READ_ONLY)) {
       ContextMutexLock lock(context);
       markNativeUnknownAllUnlocked(context);
     }
@@ -1492,8 +1479,8 @@ extern "C" talos_rt_status talos_rt_v1_process_instance_execute(
   return TALOS_RT_OK;
 }
 
-extern "C" talos_rt_status talos_rt_v1_process_instance_destroy(
-    talos_rt_process_instance_v1 *instance) {
+extern "C" talos_rt_status
+talos_rt_v1_process_instance_destroy(talos_rt_process_instance_v1 *instance) {
   if (!instance)
     return TALOS_RT_INVALID_ARGUMENT;
   if (instance->lifecycle == TALOS_RT_PROCESS_EXECUTING)
@@ -1533,8 +1520,8 @@ static void requestImplicitProgramFinishUnlocked(talos_rt_context *context) {
 }
 
 void talos_rt_program_register_unlocked(talos_rt_context *context,
-                                          uint64_t logicalProcess,
-                                          uint64_t programOwner) {
+                                        uint64_t logicalProcess,
+                                        uint64_t programOwner) {
   if (!context || !logicalProcess || !programOwner)
     return;
   auto [owner, insertedOwner] =
@@ -1546,12 +1533,11 @@ void talos_rt_program_register_unlocked(talos_rt_context *context,
 }
 
 void talos_rt_program_complete_unlocked(talos_rt_context *context,
-                                          uint64_t logicalProcess,
-                                          uint64_t programOwner) {
+                                        uint64_t logicalProcess,
+                                        uint64_t programOwner) {
   if (!context || !logicalProcess)
     return;
-  talos_rt_unregister_covergroup_clock_events_unlocked(context,
-                                                         logicalProcess);
+  talos_rt_unregister_covergroup_clock_events_unlocked(context, logicalProcess);
   if (!programOwner)
     return;
   auto owner = context->programProcesses.find(programOwner);
@@ -1573,10 +1559,8 @@ void talos_rt_program_seal_unlocked(talos_rt_context *context) {
   requestImplicitProgramFinishUnlocked(context);
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_scheduler_program_register(talos_rt_context *context,
-                                         uint64_t logicalProcess,
-                                         uint64_t programOwner) {
+extern "C" talos_rt_status talos_rt_v1_scheduler_program_register(
+    talos_rt_context *context, uint64_t logicalProcess, uint64_t programOwner) {
   if (!context || !logicalProcess || !programOwner)
     return TALOS_RT_INVALID_ARGUMENT;
   ContextTransaction transaction(context);
@@ -1608,24 +1592,23 @@ talos_rt_v1_scheduler_program_register(talos_rt_context *context,
 
 extern "C" talos_rt_status
 talos_rt_v1_scheduler_add(talos_rt_context *context,
-                            talos_rt_process_instance_v1 *instance,
-                            uint32_t flags) {
-  return talos_rt_v1_scheduler_add_ranked(context, instance, flags,
-                                            UINT32_MAX);
+                          talos_rt_process_instance_v1 *instance,
+                          uint32_t flags) {
+  return talos_rt_v1_scheduler_add_ranked(context, instance, flags, UINT32_MAX);
 }
 
 extern "C" talos_rt_status
 talos_rt_v1_scheduler_add_ranked(talos_rt_context *context,
-                                   talos_rt_process_instance_v1 *instance,
-                                   uint32_t flags, uint32_t scheduleRank) {
+                                 talos_rt_process_instance_v1 *instance,
+                                 uint32_t flags, uint32_t scheduleRank) {
   return talos_rt_v1_scheduler_add_planned(context, instance, flags,
-                                             scheduleRank, nullptr, nullptr, 0);
+                                           scheduleRank, nullptr, nullptr, 0);
 }
 
 extern "C" uint64_t
 talos_rt_v1_process_spawn(talos_rt_context *context,
-                            const talos_rt_process_spawn_plan_v1 *plan,
-                            const void *captures) {
+                          const talos_rt_process_spawn_plan_v1 *plan,
+                          const void *captures) {
   auto fail = [&](talos_rt_status status) -> uint64_t {
     talos_rt_v1_scheduler_fail(context, status);
     return 0;
@@ -1634,8 +1617,7 @@ talos_rt_v1_process_spawn(talos_rt_context *context,
       !plan->descriptor->frame_layout ||
       plan->capture_size > plan->descriptor->frame_layout->frame_size ||
       (plan->capture_size && !captures) ||
-      (plan->options &
-       ~(TALOS_RT_SPAWN_PRIME | TALOS_RT_SPAWN_PROGRAM_OWNER)))
+      (plan->options & ~(TALOS_RT_SPAWN_PRIME | TALOS_RT_SPAWN_PROGRAM_OWNER)))
     return fail(TALOS_RT_INVALID_ARGUMENT);
   talos_rt_process_instance_v1 *instance = nullptr;
   talos_rt_status status = talos_rt_v1_process_instance_create_for_context(
@@ -1669,14 +1651,14 @@ talos_rt_v1_process_spawn(talos_rt_context *context,
   if (plan->options & TALOS_RT_SPAWN_PROGRAM_OWNER)
     talos_rt_v1_scheduler_fail(
         context, talos_rt_v1_scheduler_program_register(context, token,
-                                                          plan->program_owner));
+                                                        plan->program_owner));
   return token;
 }
 
-extern "C" talos_rt_status talos_rt_v1_process_spawn_batch(
-    talos_rt_context *context,
-    const talos_rt_process_spawn_entry_v1 *entries, const void *captures,
-    uint32_t count) {
+extern "C" talos_rt_status
+talos_rt_v1_process_spawn_batch(talos_rt_context *context,
+                                const talos_rt_process_spawn_entry_v1 *entries,
+                                const void *captures, uint32_t count) {
   if (!context || (count && !entries)) {
     talos_rt_v1_scheduler_fail(context, TALOS_RT_INVALID_ARGUMENT);
     return TALOS_RT_INVALID_ARGUMENT;
@@ -1695,8 +1677,7 @@ extern "C" talos_rt_status talos_rt_v1_process_spawn_batch(
     }
     talos_rt_v1_process_spawn(
         context, entry.plan,
-        captures ? static_cast<const uint8_t *>(captures) +
-                       entry.capture_offset
+        captures ? static_cast<const uint8_t *>(captures) + entry.capture_offset
                  : nullptr);
     if (entry.initialization_scope) {
       talos_rt_status status =
@@ -1805,7 +1786,7 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_add_planned(
       context->nativePollCandidates.insert(token);
       if ((flags & TALOS_RT_SCHEDULE_DETACHED_CONTROLS) == 0)
         talos_rt_register_unstarted_actor(context, phase,
-                                            kNativeLogicalProcessTag | token);
+                                          kNativeLogicalProcessTag | token);
       if (context->scheduledProcesses.back().programOwner)
         talos_rt_program_register_unlocked(
             context, kNativeLogicalProcessTag | token,
@@ -1825,7 +1806,7 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_add_planned(
         }
       context->nativePollCandidates.erase(token);
       talos_rt_unregister_unstarted_actor(context, phase,
-                                            kNativeLogicalProcessTag | token);
+                                          kNativeLogicalProcessTag | token);
       context->scheduledProcesses.pop_back();
       TALOS_RT_RETHROW;
     }
@@ -1872,10 +1853,10 @@ template <typename Key> static bool hasDuplicateKey(std::vector<Key> keys) {
   return std::adjacent_find(keys.begin(), keys.end()) != keys.end();
 }
 
-extern "C" talos_rt_status talos_rt_v1_scheduler_install_aot(
-    talos_rt_context *context, const talos_rt_native_schedule_plan *plan) {
-  if (!context || !plan ||
-      plan->size != sizeof(talos_rt_native_schedule_plan))
+extern "C" talos_rt_status
+talos_rt_v1_scheduler_install_aot(talos_rt_context *context,
+                                  const talos_rt_native_schedule_plan *plan) {
+  if (!context || !plan || plan->size != sizeof(talos_rt_native_schedule_plan))
     return TALOS_RT_INVALID_ARGUMENT;
   bool actorStorageFits = plan->mutable_state_size >=
                           uint64_t{plan->actor_capacity} * sizeof(void *);
@@ -1902,9 +1883,8 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_install_aot(
         plan->merged_fragment_count != 0 && plan->merged_fragments != nullptr &&
         plan->timeslot_coordinator != nullptr)) &&
       plan->merged_fragment_count <= std::numeric_limits<size_t>::max();
-  bool nbaCommitValid =
-      ((plan->flags & TALOS_RT_NATIVE_SCHEDULE_STATIC_NBA) != 0) ==
-      (plan->nba_commit != nullptr);
+  bool nbaCommitValid = ((plan->flags & TALOS_RT_NATIVE_SCHEDULE_STATIC_NBA) !=
+                         0) == (plan->nba_commit != nullptr);
   uint32_t expectedNBADirtyWords = (plan->nba_root_count + 63) / 64;
   uint32_t expectedNBADirtySummaryWords = (expectedNBADirtyWords + 63) / 64;
   bool nbaDirtyRootsValid =
@@ -1917,8 +1897,8 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_install_aot(
         plan->nba_dirty_summary_word_count == expectedNBADirtySummaryWords &&
         plan->nba_dirty_summary != nullptr));
   bool specializationFastValid =
-      ((plan->flags & TALOS_RT_NATIVE_SCHEDULE_GUARDED_SPECIALIZATION) !=
-       0) == (plan->specialization_fast != nullptr) &&
+      ((plan->flags & TALOS_RT_NATIVE_SCHEDULE_GUARDED_SPECIALIZATION) != 0) ==
+          (plan->specialization_fast != nullptr) &&
       ((plan->flags & TALOS_RT_NATIVE_SCHEDULE_GUARDED_SPECIALIZATION) == 0 ||
        (plan->flags & (TALOS_RT_NATIVE_SCHEDULE_DIRECT_STATE |
                        TALOS_RT_NATIVE_SCHEDULE_STATIC_NBA)) != 0);
@@ -2033,8 +2013,8 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_install_aot(
     const talos_rt_static_fanout_entry &entry = fanoutEntries[index];
     uint32_t route = entry.reserved & TALOS_RT_FANOUT_ROUTE_MASK;
     uint32_t unknownFlags =
-        entry.reserved & ~(TALOS_RT_FANOUT_ROUTE_MASK |
-                           TALOS_RT_FANOUT_SUPPRESS_ACTIVE_SELF);
+        entry.reserved &
+        ~(TALOS_RT_FANOUT_ROUTE_MASK | TALOS_RT_FANOUT_SUPPRESS_ACTIVE_SELF);
     if (entry.static_state == 0 || entry.actor_slot >= plan->actor_capacity ||
         entry.continuation == 0 || entry.bit_width == 0 ||
         entry.compute_node == UINT32_MAX || unknownFlags != 0 ||
@@ -2067,8 +2047,7 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_install_aot(
         kernel.edge > TALOS_RT_WAIT_EDGE_BOTH || !kernel.ingress_mask ||
         kernel.ingress_word_count == 0 ||
         kernel.ingress_word_count > (uint64_t{UINT32_MAX} + 63) / 64 ||
-        (kernel.reserved & ~talos::runtime::indexedClockKernelReadySet) !=
-            0 ||
+        (kernel.reserved & ~talos::runtime::indexedClockKernelReadySet) != 0 ||
         (((plan->flags & TALOS_RT_NATIVE_SCHEDULE_EVAL) != 0) &&
          !kernel.active_mask))
       return TALOS_RT_INVALID_ARGUMENT;
@@ -2125,8 +2104,8 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_install_aot(
     if (entry.actor_slot >= plan->actor_capacity || entry.reserved != 0 ||
         entry.flags == 0 ||
         (!scopeRecord &&
-         ((entry.flags & ~(TALOS_RT_STATIC_ROOT_READ |
-                           TALOS_RT_STATIC_ROOT_WRITE)) != 0 ||
+         ((entry.flags &
+           ~(TALOS_RT_STATIC_ROOT_READ | TALOS_RT_STATIC_ROOT_WRITE)) != 0 ||
           !findNativeStaticState(context, entry.static_state))) ||
         (scopeRecord && index != 0 &&
          actorRoots[index - 1].actor_slot == entry.actor_slot &&
@@ -2572,7 +2551,7 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_direct_fragment_enter(
 
 extern "C" talos_rt_status
 talos_rt_v1_scheduler_direct_fragment_leave(talos_rt_context *context,
-                                              uint32_t actorSlot) {
+                                            uint32_t actorSlot) {
   if (!context || activeNativeAOTContext != context ||
       lockedNativeAOTContext != context ||
       context->nativeScheduleDirectActorSlot != actorSlot ||
@@ -2676,9 +2655,7 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_add_aot(
       actorToken = found->token;
     }
   }
-  TALOS_RT_CATCH(const std::bad_alloc &) {
-    status = TALOS_RT_OUT_OF_MEMORY;
-  }
+  TALOS_RT_CATCH(const std::bad_alloc &) { status = TALOS_RT_OUT_OF_MEMORY; }
   TALOS_RT_CATCH_ALL { status = TALOS_RT_INVALID_ARGUMENT; }
   if (status != TALOS_RT_OK) {
     rollback();
@@ -2725,8 +2702,9 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_add_aot(
   return status;
 }
 
-extern "C" uint64_t talos_rt_v1_scheduler_process_token(
-    talos_rt_context *context, talos_rt_process_instance_v1 *instance) {
+extern "C" uint64_t
+talos_rt_v1_scheduler_process_token(talos_rt_context *context,
+                                    talos_rt_process_instance_v1 *instance) {
   if (!context || !instance)
     return 0;
   TALOS_RT_TRY {
@@ -2749,9 +2727,8 @@ extern "C" uint64_t talos_rt_v1_process_current(talos_rt_context *context) {
 }
 
 extern "C" talos_rt_status
-talos_rt_v1_process_status(talos_rt_context *context,
-                             uint64_t logicalProcess,
-                             talos_rt_process_state *outState) {
+talos_rt_v1_process_status(talos_rt_context *context, uint64_t logicalProcess,
+                           talos_rt_process_state *outState) {
   if (!context || logicalProcess == 0 || !outState)
     return TALOS_RT_INVALID_ARGUMENT;
   *outState = TALOS_RT_PROCESS_FINISHED;
@@ -2804,8 +2781,7 @@ talos_rt_v1_process_status(talos_rt_context *context,
       return TALOS_RT_INVALID_HANDLE;
     if (task.terminated)
       return TALOS_RT_OK;
-    *outState = task.explicitlySuspended
-                    ? TALOS_RT_PROCESS_EXPLICITLY_SUSPENDED
+    *outState = task.explicitlySuspended ? TALOS_RT_PROCESS_EXPLICITLY_SUSPENDED
                 : task.suspendKind != TALOS_RT_SUSPEND_NONE
                     ? TALOS_RT_PROCESS_WAITING
                     : TALOS_RT_PROCESS_RUNNING;
@@ -2815,9 +2791,10 @@ talos_rt_v1_process_status(talos_rt_context *context,
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_ARGUMENT; }
 }
 
-talos_rt_status talos_rt_process_object_identity(
-    talos_rt_context *context, uint64_t logicalProcess,
-    uint64_t *outIdentity) noexcept {
+talos_rt_status
+talos_rt_process_object_identity(talos_rt_context *context,
+                                 uint64_t logicalProcess,
+                                 uint64_t *outIdentity) noexcept {
   if (!outIdentity)
     return TALOS_RT_INVALID_ARGUMENT;
   *outIdentity = 0;
@@ -2847,8 +2824,8 @@ talos_rt_status talos_rt_process_object_identity(
 }
 
 extern "C" talos_rt_status
-talos_rt_v1_monitor_register(talos_rt_context *context,
-                               uint64_t processToken, uint32_t designProcess) {
+talos_rt_v1_monitor_register(talos_rt_context *context, uint64_t processToken,
+                             uint32_t designProcess) {
   if (!context || processToken == 0 || designProcess > 1)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
@@ -2871,7 +2848,7 @@ talos_rt_v1_monitor_register(talos_rt_context *context,
 
 extern "C" talos_rt_status
 talos_rt_v1_monitor_register_logical(talos_rt_context *context,
-                                       uint64_t logicalProcess) {
+                                     uint64_t logicalProcess) {
   if (logicalProcess == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   bool native = (logicalProcess & TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG) != 0;
@@ -2910,7 +2887,7 @@ extern "C" uint32_t talos_rt_v1_monitor_current(talos_rt_context *context) {
 }
 
 extern "C" void talos_rt_v1_scheduler_fail(talos_rt_context *context,
-                                             talos_rt_status status) {
+                                           talos_rt_status status) {
   if (!context || status == TALOS_RT_OK)
     return;
   TALOS_RT_TRY {
@@ -2922,9 +2899,9 @@ extern "C" void talos_rt_v1_scheduler_fail(talos_rt_context *context,
 }
 
 extern "C" talos_rt_status
-talos_rt_v1_native_state_register_static(talos_rt_context *context,
-                                           uint32_t id, uint64_t bitOffset,
-                                           uint64_t bitWidth) {
+talos_rt_v1_native_state_register_static(talos_rt_context *context, uint32_t id,
+                                         uint64_t bitOffset,
+                                         uint64_t bitWidth) {
   if (!context || id == 0 || id > TALOS_RT_STABLE_HANDLE_MAX_STATIC_ID ||
       bitWidth == 0 || bitOffset > UINT64_MAX - bitWidth)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -2955,9 +2932,8 @@ talos_rt_v1_native_state_register_static(talos_rt_context *context,
 }
 
 extern "C" talos_rt_status
-talos_rt_v1_native_state_bind_shared(talos_rt_context *context,
-                                       uint8_t *value, uint8_t *unknown,
-                                       uint64_t bitCount) {
+talos_rt_v1_native_state_bind_shared(talos_rt_context *context, uint8_t *value,
+                                     uint8_t *unknown, uint64_t bitCount) {
   if (!context || !value || (!unknown && !context->twoState()) ||
       value == unknown ||
       (reinterpret_cast<uintptr_t>(value) % alignof(uint64_t)) ||
@@ -2995,7 +2971,7 @@ talos_rt_v1_native_state_bind_shared(talos_rt_context *context,
 
 extern "C" talos_rt_status
 talos_rt_v1_native_state_sync(talos_rt_context *context, uint8_t *value,
-                                uint8_t *unknown, uint64_t bitCount) {
+                              uint8_t *unknown, uint64_t bitCount) {
   if (!context || !value || (!unknown && !context->twoState()))
     return TALOS_RT_INVALID_ARGUMENT;
   ContextTransaction transaction(context);
@@ -3029,7 +3005,7 @@ talos_rt_v1_native_state_sync(talos_rt_context *context, uint8_t *value,
 
 extern "C" talos_rt_status
 talos_rt_v1_native_state_bind_specialization(talos_rt_context *context,
-                                               uint32_t *fast) {
+                                             uint32_t *fast) {
   if (!context || !fast)
     return TALOS_RT_INVALID_ARGUMENT;
   ContextMutexLock lock(context);
@@ -3047,8 +3023,8 @@ talos_rt_v1_native_state_bind_specialization(talos_rt_context *context,
 
 extern "C" talos_rt_status
 talos_rt_v1_native_state_bind_continuous(talos_rt_context *context,
-                                           uint8_t **value, uint8_t **unknown,
-                                           uint8_t **mask) {
+                                         uint8_t **value, uint8_t **unknown,
+                                         uint8_t **mask) {
   if (!context || !value || !unknown || !mask)
     return TALOS_RT_INVALID_ARGUMENT;
   *value = *unknown = *mask = nullptr;
@@ -3124,8 +3100,7 @@ static void requestExplicitFinishUnlocked(talos_rt_context *context,
 }
 
 extern "C" talos_rt_status
-talos_rt_v1_scheduler_finish(talos_rt_context *context,
-                               uint32_t verbosity) {
+talos_rt_v1_scheduler_finish(talos_rt_context *context, uint32_t verbosity) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   ContextTransaction transaction(context);
@@ -3199,8 +3174,8 @@ talos_rt_v1_scheduler_program_exit(talos_rt_context *context) {
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_ARGUMENT; }
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_scheduler_stop(talos_rt_context *context, uint32_t verbosity) {
+extern "C" talos_rt_status talos_rt_v1_scheduler_stop(talos_rt_context *context,
+                                                      uint32_t verbosity) {
   // Standalone executables have no interactive command loop in which a
   // stopped design can remain suspended. Keep the request distinct at the ABI
   // boundary, but use the documented batch-mode termination policy.
@@ -3244,8 +3219,7 @@ talos_rt_v1_scheduler_termination_requested(talos_rt_context *context) {
   // request they make themselves (9.2.3).
   if (!context)
     return 0;
-  return context->schedulerFinishRequested.load(std::memory_order_relaxed) &
-         1;
+  return context->schedulerFinishRequested.load(std::memory_order_relaxed) & 1;
 }
 
 extern "C" uint64_t talos_rt_v1_scheduler_time(talos_rt_context *context) {
@@ -3268,8 +3242,7 @@ talos_rt_status runPreponedHooks(talos_rt_context *context) {
   if (status != TALOS_RT_OK || !context->preponedObserverPresent)
     return status;
   TALOS_RT_TRY {
-    EventState &event =
-        context->events[TALOS_RT_STABLE_HANDLE_PREPONED_EVENT];
+    EventState &event = context->events[TALOS_RT_STABLE_HANDLE_PREPONED_EVENT];
     if (++event.generation == 0)
       event.generation = 1;
     event.lastTriggeredTime = context->schedulerTime;
@@ -3328,8 +3301,8 @@ uint32_t nextDueNBABarrierRegionUnlocked(const talos_rt_context *context,
       !context->scheduledInertialPathNBAs.empty() &&
       context->scheduledInertialPathNBAs.begin()->first.first <=
           context->schedulerTime)
-    barrierRegion = std::min(barrierRegion,
-                             static_cast<uint32_t>(TALOS_RT_REGION_ACTIVE));
+    barrierRegion =
+        std::min(barrierRegion, static_cast<uint32_t>(TALOS_RT_REGION_ACTIVE));
   for (uint32_t region : {TALOS_RT_REGION_NBA, TALOS_RT_REGION_RE_NBA})
     if (const ScheduledManagedNBA *entry =
             context->scheduledManagedNBAs.front(region);
@@ -3354,8 +3327,8 @@ uint32_t nextDueNBABarrierRegionUnlocked(const talos_rt_context *context,
       !context->scheduledPassSwitchEvents.empty() &&
       context->scheduledPassSwitchEvents.begin()->first.first <=
           context->schedulerTime)
-    barrierRegion = std::min(barrierRegion,
-                             static_cast<uint32_t>(TALOS_RT_REGION_ACTIVE));
+    barrierRegion =
+        std::min(barrierRegion, static_cast<uint32_t>(TALOS_RT_REGION_ACTIVE));
   // IEEE 1800-2023 4.4.2.4, 4.4.2.8, 4.5: generated/static NBA roots
   // cannot precede an already selected NBA (or eligible Re-NBA) barrier.
   // Checkpoints within a large Active batch must not rescan every staged
@@ -3489,12 +3462,12 @@ static void resensitizeWait(talos_rt_context *context, Scheduled &scheduled,
 }
 
 void talos_rt_resensitize_process_unlocked(talos_rt_context *context,
-                                             ScheduledProcess &process) {
+                                           ScheduledProcess &process) {
   resensitizeWait(context, process, currentWait(process));
 }
 
 void talos_rt_resensitize_design_task_unlocked(talos_rt_context *context,
-                                                 ScheduledDesignTask &task) {
+                                               ScheduledDesignTask &task) {
   resensitizeWait(context, task, designTaskWait(task));
 }
 
@@ -3522,7 +3495,7 @@ void talos_rt_prune_finished_process_parents_unlocked(
 
 std::unordered_set<uint64_t>
 talos_rt_collect_process_tree_unlocked(const talos_rt_context *context,
-                                         uint64_t root, bool &rootLive) {
+                                       uint64_t root, bool &rootLive) {
   const auto &links = context->finishedProcessParents;
   const auto &parentMarks = context->logicalProcessParentsWithChildren;
   uint64_t active = context->activeLogicalProcessToken;
@@ -3666,8 +3639,8 @@ adoptScheduledSuspendUnlocked(talos_rt_context *context,
     return context->schedulerStatus;
   bool sameSignalWait =
       wait && talos_rt_is_clock_occurrence_wait_flags(wait->flags)
-          ? talos_rt_same_clock_occurrence_wait_unlocked(
-                context, wait, scheduled.token, false)
+          ? talos_rt_same_clock_occurrence_wait_unlocked(context, wait,
+                                                         scheduled.token, false)
           : hasSameDirectSignalWait(scheduled, wait);
   if (directSignalSuspend && !sameSignalWait &&
       !talos_rt_register_signal_wait_unlocked(
@@ -3787,7 +3760,7 @@ idleCurrentSlotResult(talos_rt_context *context,
 } // namespace
 
 talos_rt_status runScheduler(talos_rt_context *context,
-                               SchedulerRunOptions options) {
+                             SchedulerRunOptions options) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   if (options.nativePlan &&
@@ -3887,9 +3860,9 @@ talos_rt_status runScheduler(talos_rt_context *context,
                                                ? cachedNativeReady.front()
                                                : cachedNativeReady.back(),
                                            cachedNativeDynamicReady.front()));
-    return {dynamic ? cachedNativeDynamicReady.front()
-                    : cachedNativeReadyIsHeap ? cachedNativeReady.front()
-                                              : cachedNativeReady.back(),
+    return {dynamic                   ? cachedNativeDynamicReady.front()
+            : cachedNativeReadyIsHeap ? cachedNativeReady.front()
+                                      : cachedNativeReady.back(),
             dynamic};
   };
   auto popCachedNativeReady = [&](bool dynamic) {
@@ -4449,7 +4422,8 @@ talos_rt_status runScheduler(talos_rt_context *context,
               if (alreadyEarlierFirst)
                 std::reverse(batch.begin(), batch.end());
               else
-                std::make_heap(batch.begin(), batch.end(), cachedNativeReadyLater);
+                std::make_heap(batch.begin(), batch.end(),
+                               cachedNativeReadyLater);
               cachedNativeReadyIsHeap = !alreadyEarlierFirst;
               cachedNativeUrgentCount = static_cast<size_t>(std::count_if(
                   batch.begin(), batch.end(),
@@ -4546,8 +4520,8 @@ talos_rt_status runScheduler(talos_rt_context *context,
       if (context->nextVPISyncCallback &&
           *context->nextVPISyncCallback <= context->schedulerTime &&
           !context->vpiTimeCallbackActive && !context->schedulerRunningFinals) {
-        vpiPreNBASyncPending = talos_rt_vpi_sync_due_unlocked(
-            context, TALOS_RT_VPI_SYNC_PRE_NBA);
+        vpiPreNBASyncPending =
+            talos_rt_vpi_sync_due_unlocked(context, TALOS_RT_VPI_SYNC_PRE_NBA);
         vpiReadOnlySyncPending = talos_rt_vpi_sync_due_unlocked(
             context, TALOS_RT_VPI_SYNC_READ_ONLY);
       }
@@ -4653,8 +4627,8 @@ talos_rt_status runScheduler(talos_rt_context *context,
       setSchedulerDrainingReactive(context, false);
       continue;
     }
-    uint32_t evalCutRegion = options.stopBeforeNBA ? TALOS_RT_REGION_NBA
-                                                   : TALOS_RT_REGION_INACTIVE;
+    uint32_t evalCutRegion =
+        options.stopBeforeNBA ? TALOS_RT_REGION_NBA : TALOS_RT_REGION_INACTIVE;
     if ((deferredEvalIngress ||
          (options.stopBeforeNBA && !context->schedulerRunningFinals)) &&
         nativeRegion >= evalCutRegion && barrierRegion >= evalCutRegion) {
@@ -4702,9 +4676,8 @@ talos_rt_status runScheduler(talos_rt_context *context,
       }
       {
         ContextMutexLock lock(context);
-        talos_rt_status status =
-            talos_rt_vpi_dispatch_sync_callbacks_unlocked(context,
-                                                            *vpiSyncStage);
+        talos_rt_status status = talos_rt_vpi_dispatch_sync_callbacks_unlocked(
+            context, *vpiSyncStage);
         if (status != TALOS_RT_OK)
           return status;
       }
@@ -4772,11 +4745,11 @@ talos_rt_status runScheduler(talos_rt_context *context,
             (candidate.signalLatch && candidate.signalLatch->triggered);
         uint32_t orderingRegion =
             schedulerOrderingRegion(*context, candidate, signalResume);
-        auto key = candidate.prioritySignal && signalResume
-                       ? std::tuple{orderingRegion, uint32_t{0}, uint64_t{0}}
-                       : std::tuple{orderingRegion,
-                                    talos_rt_scheduler_rank(candidate),
-                                    candidate.insertionSequence};
+        auto key =
+            candidate.prioritySignal && signalResume
+                ? std::tuple{orderingRegion, uint32_t{0}, uint64_t{0}}
+                : std::tuple{orderingRegion, talos_rt_scheduler_rank(candidate),
+                             candidate.insertionSequence};
         if (runnable &&
             (candidate.urgent ||
              (key == std::tuple{nativeRegion, nativeRank,
@@ -4865,7 +4838,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
                   UINT32_MAX)
             return TALOS_RT_INVALID_CONTINUATION;
           talos_rt_status status = plan->bind(plan->mutable_state, context,
-                                                slot, candidate.instance);
+                                              slot, candidate.instance);
           if (status != TALOS_RT_OK)
             return status;
           candidate.aotActorSlot = slot;
@@ -4878,8 +4851,8 @@ talos_rt_status runScheduler(talos_rt_context *context,
         }
         if (candidate.suspendKind == TALOS_RT_SUSPEND_SEMAPHORE) {
           bool acquired = false;
-          talos_rt_status status = talos_rt_semaphore_wait_acquire(
-              currentWait(candidate), acquired);
+          talos_rt_status status =
+              talos_rt_semaphore_wait_acquire(currentWait(candidate), acquired);
           if (status != TALOS_RT_OK) {
             context->schedulerStatus = status;
             return status;
@@ -4914,8 +4887,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
           context->nativeScheduleMinimumActivatedNode = UINT32_MAX;
           if (context->nativeScheduleForcedSlot != UINT32_MAX)
             context->nativeScheduleForcedExecuted = true;
-          talos_rt_status status =
-              executeNativeAOTNodeUnlocked(context, slot);
+          talos_rt_status status = executeNativeAOTNodeUnlocked(context, slot);
           if (status != TALOS_RT_OK)
             return status;
           auto indexed = context->scheduledProcessIndices.find(selectedToken);
@@ -4934,8 +4906,8 @@ talos_rt_status runScheduler(talos_rt_context *context,
             return TALOS_RT_OK;
           continue;
         }
-        selectedResuming = candidate.started &&
-                           candidate.suspendKind != TALOS_RT_SUSPEND_NONE;
+        selectedResuming =
+            candidate.started && candidate.suspendKind != TALOS_RT_SUSPEND_NONE;
         context->schedulerCursor = (selectedIndex + 1) % processCount;
         if (candidate.aotActorSlot != UINT32_MAX) {
           uint32_t node =
@@ -4957,8 +4929,8 @@ talos_rt_status runScheduler(talos_rt_context *context,
         context->nativePollCandidates.erase(candidate.token);
         if (!candidate.started)
           talos_rt_unregister_unstarted_actor(context, candidate.phase,
-                                                kNativeLogicalProcessTag |
-                                                    candidate.token);
+                                              kNativeLogicalProcessTag |
+                                                  candidate.token);
         candidate.started = true;
         candidate.observedEpoch = context->schedulerEpoch;
       }
@@ -5217,13 +5189,12 @@ talos_rt_status runScheduler(talos_rt_context *context,
                             sizeof(previous));
               }
             }
-            if (talos_rt_validate_string(context, previous) !=
-                TALOS_RT_OK) {
+            if (talos_rt_validate_string(context, previous) != TALOS_RT_OK) {
               context->schedulerStatus = TALOS_RT_INVALID_HANDLE;
               return;
             }
-            equalStringContents = talos_rt_v1_string_compare(
-                                      previous, update.rootedString) == 0;
+            equalStringContents =
+                talos_rt_v1_string_compare(previous, update.rootedString) == 0;
           }
           PackedSignalTransitionBuffer transitions(update.bitWidth);
           uint64_t packedPlaneBit = 0;
@@ -5322,10 +5293,9 @@ talos_rt_status runScheduler(talos_rt_context *context,
             if (context->nativeSchedulePlan &&
                 canonicalUnknown == context->nativeSchedulePlan->state_unknown)
               nativeOldUnknown = oldUnknown;
-            if (!storeNativeScheduleStateUnlocked(context, packedPlaneBit,
-                                                  update.bitWidth, newValue,
-                                                  newUnknown,
-                                                  nativeOldUnknown)) {
+            if (!storeNativeScheduleStateUnlocked(
+                    context, packedPlaneBit, update.bitWidth, newValue,
+                    newUnknown, nativeOldUnknown)) {
               context->schedulerStatus = TALOS_RT_LAYOUT_MISMATCH;
               return;
             }
@@ -5445,7 +5415,8 @@ talos_rt_status runScheduler(talos_rt_context *context,
                                               newUnknown ? 1 : 0);
               std::optional<uint64_t> nativeOldUnknown;
               if (canonical && context->nativeSchedulePlan &&
-                  reinterpret_cast<const uint8_t *>(context->stateUnknown.data()) ==
+                  reinterpret_cast<const uint8_t *>(
+                      context->stateUnknown.data()) ==
                       context->nativeSchedulePlan->state_unknown)
                 nativeOldUnknown = oldUnknown ? 1 : 0;
               if (canonical && !storeNativeScheduleStateUnlocked(
@@ -5714,8 +5685,8 @@ talos_rt_status runScheduler(talos_rt_context *context,
                 context->stateValue[static_cast<uint64_t>(update.start) / 64];
             if (talos_rt_validate_string(context, previous) != TALOS_RT_OK)
               return false;
-            equalStringContents = talos_rt_v1_string_compare(
-                                      previous, update.rootedString) == 0;
+            equalStringContents =
+                talos_rt_v1_string_compare(previous, update.rootedString) == 0;
           }
           for (uint64_t bit = 0; bit != update.bitWidth; ++bit) {
             if (bit > uint64_t{INT64_MAX} ||
@@ -6055,7 +6026,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
               event.lastTriggeredTime = context->schedulerTime;
               bool notified =
                   talos_rt_notify_event_order_waiters_unlocked(context,
-                                                                 stableID) &&
+                                                               stableID) &&
                   talos_rt_notify_observer_event_unlocked(context, stableID);
               if (retainedAutomaticID != 0) {
                 auto found =
@@ -6090,8 +6061,8 @@ talos_rt_status runScheduler(talos_rt_context *context,
               event.lastTriggeredTime = context->schedulerTime;
               if (!talos_rt_notify_event_order_waiters_unlocked(
                       context, scheduled.stableID) ||
-                  !talos_rt_notify_observer_event_unlocked(
-                      context, scheduled.stableID))
+                  !talos_rt_notify_observer_event_unlocked(context,
+                                                           scheduled.stableID))
                 return context->schedulerStatus;
               eventTriggered = true;
             } else {
@@ -6181,8 +6152,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
             considerTime(update.dueTime);
         if (!context->scheduledInertialPathNBAs.empty())
           considerTime(context->scheduledInertialPathNBAs.begin()->first.first);
-        for (uint32_t region :
-             {TALOS_RT_REGION_NBA, TALOS_RT_REGION_RE_NBA})
+        for (uint32_t region : {TALOS_RT_REGION_NBA, TALOS_RT_REGION_RE_NBA})
           if (const ScheduledManagedNBA *update =
                   context->scheduledManagedNBAs.front(region))
             considerTime(update->dueTime);
@@ -6203,10 +6173,8 @@ talos_rt_status runScheduler(talos_rt_context *context,
           // collection reclaims pressure that no poll reached.
           if (talos_rt_managed_heap_collections_designated(
                   context->managedHeap) ||
-              talos_rt_managed_heap_collections_polled(
-                  context->managedHeap)) {
-            talos_rt_status collected =
-                talos_rt_v1_gc_collect_pending(context);
+              talos_rt_managed_heap_collections_polled(context->managedHeap)) {
+            talos_rt_status collected = talos_rt_v1_gc_collect_pending(context);
             if (collected != TALOS_RT_OK)
               return collected;
           }
@@ -6275,33 +6243,30 @@ talos_rt_status runScheduler(talos_rt_context *context,
         context->scheduledProcesses[selectedIndex];
     const uint64_t selectedToken = scheduled.token;
     bool requireBytecode =
-        context->execution && (context->execution->flags &
-                               TALOS_RT_EXECUTION_REQUIRE_BYTECODE) != 0;
+        context->execution &&
+        (context->execution->flags & TALOS_RT_EXECUTION_REQUIRE_BYTECODE) != 0;
     if (requireBytecode) {
       tier = TALOS_RT_TIER_BYTECODE;
     } else if (scheduled.aotActorSlot != UINT32_MAX) {
       bool bytecodeFragment = std::binary_search(
           scheduled.bytecodeContinuations.begin(),
           scheduled.bytecodeContinuations.end(), selected->continuation);
-      tier =
-          bytecodeFragment ? TALOS_RT_TIER_BYTECODE : TALOS_RT_TIER_NATIVE;
+      tier = bytecodeFragment ? TALOS_RT_TIER_BYTECODE : TALOS_RT_TIER_NATIVE;
       // External writes fracture the fused Tier-1 schedule, but supported
       // fragments remain native while the fine scheduler converges them.
       // Only an explicitly bytecode-only continuation enters Tier 3.
     }
     if (tier != TALOS_RT_TIER_NATIVE && tier != TALOS_RT_TIER_BYTECODE)
-      tier =
-          (selected->descriptor->available_tiers & TALOS_RT_TIER_MASK_NATIVE)
-              ? TALOS_RT_TIER_NATIVE
-              : TALOS_RT_TIER_BYTECODE;
-    talos_rt_status status = talos_rt_v1_process_instance_execute(
-        selected, context, tier, &action);
+      tier = (selected->descriptor->available_tiers & TALOS_RT_TIER_MASK_NATIVE)
+                 ? TALOS_RT_TIER_NATIVE
+                 : TALOS_RT_TIER_BYTECODE;
+    talos_rt_status status =
+        talos_rt_v1_process_instance_execute(selected, context, tier, &action);
     uint64_t preparedCallID = 0;
     talos_rt_status preparedCallStatus = TALOS_RT_OK;
     if (status == TALOS_RT_OK && context->vpiState &&
         action.kind == TALOS_RT_FRAGMENT_TASK_CALL)
-      preparedCallStatus =
-          talos_rt_vpi_pending_call(context, &preparedCallID);
+      preparedCallStatus = talos_rt_vpi_pending_call(context, &preparedCallID);
     bool terminationRequested = false;
     bool killRequested = false;
     auto clearActiveProcess = [&](bool dpiDisabled) {
@@ -6359,21 +6324,18 @@ talos_rt_status runScheduler(talos_rt_context *context,
     std::unique_ptr<talos_rt_process_instance_v1,
                     decltype(destroyPendingCallee)>
         pendingCallee(nullptr, destroyPendingCallee);
-    if (status == TALOS_RT_OK &&
-        action.kind == TALOS_RT_FRAGMENT_TASK_CALL) {
+    if (status == TALOS_RT_OK && action.kind == TALOS_RT_FRAGMENT_TASK_CALL) {
       auto *callee = reinterpret_cast<talos_rt_process_instance_v1 *>(
           static_cast<uintptr_t>(action.payload));
       if (!callee || callee == selected)
         return TALOS_RT_INVALID_LIFECYCLE;
       pendingCallee.reset(callee);
-      if (callee->lifecycle != TALOS_RT_PROCESS_READY ||
-          !callee->descriptor ||
+      if (callee->lifecycle != TALOS_RT_PROCESS_READY || !callee->descriptor ||
           callee->descriptor->execution != selected->descriptor->execution ||
           (callee->ownership_context && callee->ownership_context != context))
         return TALOS_RT_INVALID_LIFECYCLE;
-      const uint64_t callID = (action.flags & TALOS_RT_ACTION_VPI_CALL_SITE)
-                                  ? action.auxiliary
-                                  : 0;
+      const uint64_t callID =
+          (action.flags & TALOS_RT_ACTION_VPI_CALL_SITE) ? action.auxiliary : 0;
       if (preparedCallStatus != TALOS_RT_OK)
         return preparedCallStatus;
       auto callStatus = talos_rt_vpi_bind_native_callsite(
@@ -6382,8 +6344,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
         return callStatus;
     }
     if (terminationRequested)
-      action = {
-          TALOS_RT_FRAGMENT_TERMINATE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
+      action = {TALOS_RT_FRAGMENT_TERMINATE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
     bool destroy = false;
     std::vector<talos_rt_process_instance_v1 *> terminatedCallers;
     {
@@ -6428,8 +6389,8 @@ talos_rt_status runScheduler(talos_rt_context *context,
                 context, kNativeLogicalProcessTag | scheduled.token, 0);
           uint64_t token = scheduled.token;
           talos_rt_program_complete_unlocked(context,
-                                               kNativeLogicalProcessTag | token,
-                                               scheduled.programOwner);
+                                             kNativeLogicalProcessTag | token,
+                                             scheduled.programOwner);
           if (scheduled.rootProcess) {
             if (tier == TALOS_RT_TIER_NATIVE &&
                 !importNativeRootInitializerPlanesUnlocked(context))
@@ -6576,7 +6537,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
 
 extern "C" talos_rt_status
 talos_rt_v1_scheduler_prime(talos_rt_context *context,
-                              talos_rt_process_instance_v1 *instance) {
+                            talos_rt_process_instance_v1 *instance) {
   if (!context || !instance)
     return TALOS_RT_INVALID_ARGUMENT;
   ContextTransaction transaction(context);
@@ -6613,7 +6574,7 @@ talos_rt_v1_scheduler_prime(talos_rt_context *context,
       context->controlEscapePending = escapePending;
       context->activeRandom = random;
       talos_rt_set_design_task_filter_unlocked(context, designFilter,
-                                                 forcedDesignTask);
+                                               forcedDesignTask);
     }
   } activeState{context};
   TALOS_RT_TRY {
@@ -6677,8 +6638,8 @@ talos_rt_v1_scheduler_prime(talos_rt_context *context,
           bool bytecodeFragment = std::binary_search(
               scheduled.bytecodeContinuations.begin(),
               scheduled.bytecodeContinuations.end(), instance->continuation);
-          tier = bytecodeFragment ? TALOS_RT_TIER_BYTECODE
-                                  : TALOS_RT_TIER_NATIVE;
+          tier =
+              bytecodeFragment ? TALOS_RT_TIER_BYTECODE : TALOS_RT_TIER_NATIVE;
         } else if (instance->tier == TALOS_RT_TIER_NATIVE ||
                    instance->tier == TALOS_RT_TIER_BYTECODE)
           tier = static_cast<talos_rt_execution_tier>(instance->tier);
@@ -6700,8 +6661,7 @@ talos_rt_v1_scheduler_prime(talos_rt_context *context,
         ScheduledProcess &scheduled =
             context->scheduledProcesses[indexed->second];
         scheduled.controls = std::move(context->activeControls);
-        if (status == TALOS_RT_OK &&
-            action.kind == TALOS_RT_FRAGMENT_SUSPEND)
+        if (status == TALOS_RT_OK && action.kind == TALOS_RT_FRAGMENT_SUSPEND)
           status = adoptScheduledSuspendUnlocked(context, scheduled, action);
         else if (status == TALOS_RT_OK &&
                  action.kind == TALOS_RT_FRAGMENT_CONTINUE) {
@@ -6716,8 +6676,7 @@ talos_rt_v1_scheduler_prime(talos_rt_context *context,
         } else if (status == TALOS_RT_OK) {
           status = TALOS_RT_INVALID_LIFECYCLE;
         }
-        if (status == TALOS_RT_OK &&
-            action.kind == TALOS_RT_FRAGMENT_SUSPEND) {
+        if (status == TALOS_RT_OK && action.kind == TALOS_RT_FRAGMENT_SUSPEND) {
           if (indexedBlocked(*context, scheduled))
             context->nativePollCandidates.erase(token);
           else
@@ -6760,7 +6719,7 @@ talos_rt_v1_scheduler_run(talos_rt_context *context) {
 
 talos_rt_status
 talos_rt_run_dpi_export_task_logical(talos_rt_context *context,
-                                       uint64_t logical) noexcept {
+                                     uint64_t logical) noexcept {
   if (!context || logical == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   auto frameStatus = talos_rt_vpi_export_task_enter(context, logical);
@@ -6885,7 +6844,7 @@ talos_rt_run_dpi_export_task_logical(talos_rt_context *context,
 
 extern "C" TALOS_RT_FEATURE_TEXT talos_rt_status
 talos_rt_v1_dpi_export_task_run(talos_rt_context *context,
-                                  talos_rt_process_instance_v1 *instance) {
+                                talos_rt_process_instance_v1 *instance) {
   if (!context || !instance)
     return TALOS_RT_INVALID_ARGUMENT;
   ContextTransaction transaction(context);

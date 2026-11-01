@@ -456,11 +456,11 @@ public:
     StringRef callee;
     int32_t direction = static_cast<int32_t>(op.getDirection());
     if (op.getEndpoint())
-      callee = direction > 0 ? "talos_rt_v1_assoc_first"
-                             : "talos_rt_v1_assoc_last";
+      callee =
+          direction > 0 ? "talos_rt_v1_assoc_first" : "talos_rt_v1_assoc_last";
     else
-      callee = direction > 0 ? "talos_rt_v1_assoc_next"
-                             : "talos_rt_v1_assoc_prev";
+      callee =
+          direction > 0 ? "talos_rt_v1_assoc_next" : "talos_rt_v1_assoc_prev";
     auto [context, lane] = managedContextAndLane(rewriter, op.getLoc());
     Value status =
         LLVM::CallOp::create(

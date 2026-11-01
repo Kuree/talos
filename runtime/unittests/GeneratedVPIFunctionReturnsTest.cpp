@@ -5,10 +5,10 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <algorithm>
@@ -80,8 +80,7 @@ TEST(GeneratedDesignDatabase, FunctionReturns) {
     HeaderWriter(bytes.data()).setChecksum(hash);
     auto invalid = execution;
     invalid.design_database = bytes.data();
-    EXPECT_EQ(talos_rt_v1_design_validate(&invalid),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&invalid), TALOS_RT_INVALID_DESIGN);
   };
   rejects([&](auto &bytes) {
     RelationWriter(bytes.data() + returns[0])
@@ -157,8 +156,8 @@ TEST(GeneratedDesignDatabase, FunctionReturns) {
   auto off = encodeSimulationDesign(design, offOptions);
   ASSERT_TRUE(mlir::succeeded(off));
   EXPECT_TRUE(off->designDatabase.empty());
-  EXPECT_EQ(off->executionFlags & (TALOS_RT_EXECUTION_VPI_READ |
-                                   TALOS_RT_EXECUTION_VPI_WRITE),
+  EXPECT_EQ(off->executionFlags &
+                (TALOS_RT_EXECUTION_VPI_READ | TALOS_RT_EXECUTION_VPI_WRITE),
             0u);
   talos_rt_context *raw = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &raw),

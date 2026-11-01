@@ -4009,8 +4009,7 @@ struct ConstantBitsDynamicExtract final
   }
 };
 
-struct SimplifyBitsExtractSource final
-    : OpRewritePattern<SimBitsDynExtractOp> {
+struct SimplifyBitsExtractSource final : OpRewritePattern<SimBitsDynExtractOp> {
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(SimBitsDynExtractOp op,
@@ -4021,7 +4020,8 @@ struct SimplifyBitsExtractSource final
         !isKnownInRangeIndex(*index->value, op.getInput().getType().getWidth(),
                              op.getType().getWidth(), low))
       return failure();
-    auto source = getBitsInsertSlice(op.getInput(), low, op.getType().getWidth());
+    auto source =
+        getBitsInsertSlice(op.getInput(), low, op.getType().getWidth());
     if (!source)
       return failure();
     rewriter.replaceOp(op, extractIntegerBits(rewriter, op.getLoc(),
@@ -5055,9 +5055,8 @@ void SimLogicInsertOp::getCanonicalizationPatterns(RewritePatternSet &results,
 
 void SimBitsDynExtractOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
-  results
-      .add<TwoStateIndex<SimBitsDynExtractOp, 1>, SimplifyBitsExtractSource,
-           ConstantBitsDynamicExtract>(context);
+  results.add<TwoStateIndex<SimBitsDynExtractOp, 1>, SimplifyBitsExtractSource,
+              ConstantBitsDynamicExtract>(context);
 }
 
 void SimBitsDynInsertOp::getCanonicalizationPatterns(RewritePatternSet &results,

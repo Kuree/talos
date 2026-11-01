@@ -55,7 +55,7 @@ public:
     }
     FailureOr<talos::analysis::ManagedClassLayoutAnalysis> analysis =
         talos::analysis::ManagedClassLayoutAnalysis::compute(designs.front(),
-                                                               *dataLayout);
+                                                             *dataLayout);
     if (failed(analysis))
       return signalPassFailure();
     for (const auto &layout : analysis->classes) {
@@ -78,12 +78,11 @@ public:
         llvm::errs() << " weak-referent-offset=" << *layout.weakReferentOffset;
       if (!bitstreamFields->empty()) {
         llvm::errs() << " bitstream-fields=[";
-        llvm::interleaveComma(*bitstreamFields, llvm::errs(),
-                              [&](const auto *field) {
-                                talos::sim::SimClassFieldDeclOp declaration =
-                                    field->declaration;
-                                llvm::errs() << declaration.getSymName();
-                              });
+        llvm::interleaveComma(
+            *bitstreamFields, llvm::errs(), [&](const auto *field) {
+              talos::sim::SimClassFieldDeclOp declaration = field->declaration;
+              llvm::errs() << declaration.getSymName();
+            });
         llvm::errs() << "]";
       }
       llvm::errs() << "\n";
@@ -116,7 +115,7 @@ public:
             "test.class_bitstream_source")) {
       FailureOr<talos::analysis::ClassBitstreamAnalysis> bitstream =
           talos::analysis::ClassBitstreamAnalysis::compute(designs.front(),
-                                                             *dataLayout);
+                                                           *dataLayout);
       if (failed(bitstream))
         return signalPassFailure();
       auto sourceType =
@@ -133,19 +132,17 @@ public:
         return signalPassFailure();
       }
       llvm::errs() << "class-bitstream roots=[";
-      llvm::interleaveComma((*closure)->roots, llvm::errs(),
-                            [](const auto *item) {
-                              talos::sim::SimClassDeclOp declaration =
-                                  item->layout->declaration;
-                              llvm::errs() << declaration.getSymName();
-                            });
+      llvm::interleaveComma(
+          (*closure)->roots, llvm::errs(), [](const auto *item) {
+            talos::sim::SimClassDeclOp declaration = item->layout->declaration;
+            llvm::errs() << declaration.getSymName();
+          });
       llvm::errs() << "] schemas=[";
-      llvm::interleaveComma((*closure)->schemas, llvm::errs(),
-                            [](const auto *item) {
-                              talos::sim::SimClassDeclOp declaration =
-                                  item->layout->declaration;
-                              llvm::errs() << declaration.getSymName();
-                            });
+      llvm::interleaveComma(
+          (*closure)->schemas, llvm::errs(), [](const auto *item) {
+            talos::sim::SimClassDeclOp declaration = item->layout->declaration;
+            llvm::errs() << declaration.getSymName();
+          });
       llvm::errs() << "]\n";
     }
     markAllAnalysesPreserved();

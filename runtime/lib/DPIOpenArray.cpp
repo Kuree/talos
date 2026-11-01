@@ -21,8 +21,7 @@ extern decltype(&talos_rt_v1_dpi_open_array_aggregate_pack)
     designBytecodeDpiOpenAggregatePack;
 extern decltype(&talos_rt_v1_dpi_open_array_aggregate_unpack)
     designBytecodeDpiOpenAggregateUnpack;
-extern decltype(&talos_rt_v1_dpi_aggregate_pack)
-    designBytecodeDpiAggregatePack;
+extern decltype(&talos_rt_v1_dpi_aggregate_pack) designBytecodeDpiAggregatePack;
 extern decltype(&talos_rt_v1_dpi_aggregate_unpack)
     designBytecodeDpiAggregateUnpack;
 extern decltype(&talos_rt_v1_dpi_open_array_aggregate_roots_push)
@@ -98,8 +97,7 @@ const talos_rt_dpi_open_array_v1 *descriptor(svOpenArrayHandle handle) {
   for (uint32_t dimension = 0; dimension != value->dimensions; ++dimension)
     if (value->ranges[dimension].reserved != 0 ||
         (value->ranges[dimension].flags &
-         ~(TALOS_RT_DPI_DIMENSION_EMPTY |
-           TALOS_RT_DPI_DIMENSION_RUNTIME)) != 0)
+         ~(TALOS_RT_DPI_DIMENSION_EMPTY | TALOS_RT_DPI_DIMENSION_RUNTIME)) != 0)
       return nullptr;
   return value;
 }
@@ -255,8 +253,7 @@ extern "C" void talos_rt_v1_dpi_import_bytecode_link_anchor(void) {
       &talos_rt_v1_dpi_open_array_prepare_recursive;
   designBytecodeDpiOpenFinishRecursive =
       &talos_rt_v1_dpi_open_array_finish_recursive;
-  designBytecodeDpiAggregateStateAlloc =
-      &talos_rt_v1_dpi_aggregate_state_alloc;
+  designBytecodeDpiAggregateStateAlloc = &talos_rt_v1_dpi_aggregate_state_alloc;
 }
 
 extern "C" talos_rt_status talos_rt_v1_dpi_open_array_pack(
@@ -564,9 +561,8 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_prepare_recursive(
               return TALOS_RT_ARGUMENT_MISMATCH;
             range.left = 0;
             range.right = right;
-            range.flags =
-                TALOS_RT_DPI_DIMENSION_RUNTIME |
-                (frame.count == 0 ? TALOS_RT_DPI_DIMENSION_EMPTY : 0);
+            range.flags = TALOS_RT_DPI_DIMENSION_RUNTIME |
+                          (frame.count == 0 ? TALOS_RT_DPI_DIMENSION_EMPTY : 0);
             runtimeKnown[frame.depth] = 1;
           } else {
             range = {static_cast<int32_t>(descriptorLeft),
@@ -761,11 +757,10 @@ extern "C" talos_rt_status talos_rt_v1_dpi_open_array_finish_recursive(
       return status;
   }
   void *aggregateRoots = nullptr;
-  talos_rt_status rootStatus =
-      talos_rt_v1_dpi_open_array_aggregate_roots_push(
-          context, flatValue.data(), flatBytes, flatWidth, elementWidth,
-          elementCount, 0, nullptr, 0, elementCSize, elementPlan,
-          elementPlanWords, &aggregateRoots);
+  talos_rt_status rootStatus = talos_rt_v1_dpi_open_array_aggregate_roots_push(
+      context, flatValue.data(), flatBytes, flatWidth, elementWidth,
+      elementCount, 0, nullptr, 0, elementCSize, elementPlan, elementPlanWords,
+      &aggregateRoots);
   if (rootStatus != TALOS_RT_OK)
     return rootStatus;
   struct AggregateRootGuard {
@@ -1074,14 +1069,14 @@ extern "C" void *svGetArrElemPtr3(const svOpenArrayHandle handle, int first,
              : nullptr;
 }
 
-#define TALOS_DEFINE_VECTOR_ACCESS(Name, Logic, Type)                        \
+#define TALOS_DEFINE_VECTOR_ACCESS(Name, Logic, Type)                          \
   extern "C" void svPut##Name##ArrElemVecVal(                                  \
       const svOpenArrayHandle handle, const Type *source, int index, ...) {    \
     va_list arguments;                                                         \
     va_start(arguments, index);                                                \
     withVariadicElement(                                                       \
         handle, index, arguments, [&](const auto &array, void *element) {      \
-          if ((array.flags & TALOS_RT_DPI_OPEN_ARRAY_WRITABLE) != 0)         \
+          if ((array.flags & TALOS_RT_DPI_OPEN_ARRAY_WRITABLE) != 0)           \
             copyVector(element, source, array, Logic);                         \
         });                                                                    \
     va_end(arguments);                                                         \
@@ -1090,7 +1085,7 @@ extern "C" void *svGetArrElemPtr3(const svOpenArrayHandle handle, int first,
                                               const Type *source, int first) { \
     int indices[] = {first};                                                   \
     withFixedElement(handle, 1, indices, [&](const auto &array, void *elem) {  \
-      if ((array.flags & TALOS_RT_DPI_OPEN_ARRAY_WRITABLE) != 0)             \
+      if ((array.flags & TALOS_RT_DPI_OPEN_ARRAY_WRITABLE) != 0)               \
         copyVector(elem, source, array, Logic);                                \
     });                                                                        \
   }                                                                            \
@@ -1099,7 +1094,7 @@ extern "C" void *svGetArrElemPtr3(const svOpenArrayHandle handle, int first,
                                               int second) {                    \
     int indices[] = {first, second};                                           \
     withFixedElement(handle, 2, indices, [&](const auto &array, void *elem) {  \
-      if ((array.flags & TALOS_RT_DPI_OPEN_ARRAY_WRITABLE) != 0)             \
+      if ((array.flags & TALOS_RT_DPI_OPEN_ARRAY_WRITABLE) != 0)               \
         copyVector(elem, source, array, Logic);                                \
     });                                                                        \
   }                                                                            \
@@ -1108,7 +1103,7 @@ extern "C" void *svGetArrElemPtr3(const svOpenArrayHandle handle, int first,
                                               int second, int third) {         \
     int indices[] = {first, second, third};                                    \
     withFixedElement(handle, 3, indices, [&](const auto &array, void *elem) {  \
-      if ((array.flags & TALOS_RT_DPI_OPEN_ARRAY_WRITABLE) != 0)             \
+      if ((array.flags & TALOS_RT_DPI_OPEN_ARRAY_WRITABLE) != 0)               \
         copyVector(elem, source, array, Logic);                                \
     });                                                                        \
   }                                                                            \
@@ -1176,7 +1171,7 @@ void putScalar(svOpenArrayHandle handle, Scalar value, uint32_t count,
 }
 } // namespace
 
-#define TALOS_DEFINE_SCALAR_ACCESS(Name, Type, Logic)                        \
+#define TALOS_DEFINE_SCALAR_ACCESS(Name, Type, Logic)                          \
   extern "C" Type svGet##Name##ArrElem(const svOpenArrayHandle handle,         \
                                        int index, ...) {                       \
     const auto *array = descriptor(handle);                                    \
@@ -1188,8 +1183,7 @@ void putScalar(svOpenArrayHandle handle, Scalar value, uint32_t count,
     void *elem = elementPointer(*array, array->dimensions, index, arguments);  \
     va_end(arguments);                                                         \
     if (elem && array->element_bit_width == 1 &&                               \
-        (((array->flags & TALOS_RT_DPI_OPEN_ARRAY_FOUR_STATE) != 0) ==       \
-         Logic))                                                               \
+        (((array->flags & TALOS_RT_DPI_OPEN_ARRAY_FOUR_STATE) != 0) == Logic)) \
       std::memcpy(&result, elem, sizeof(result));                              \
     return result;                                                             \
   }                                                                            \
@@ -1217,10 +1211,9 @@ void putScalar(svOpenArrayHandle handle, Scalar value, uint32_t count,
     va_start(arguments, index);                                                \
     void *elem = elementPointer(*array, array->dimensions, index, arguments);  \
     va_end(arguments);                                                         \
-    if (elem && (array->flags & TALOS_RT_DPI_OPEN_ARRAY_WRITABLE) != 0 &&    \
+    if (elem && (array->flags & TALOS_RT_DPI_OPEN_ARRAY_WRITABLE) != 0 &&      \
         array->element_bit_width == 1 &&                                       \
-        (((array->flags & TALOS_RT_DPI_OPEN_ARRAY_FOUR_STATE) != 0) ==       \
-         Logic))                                                               \
+        (((array->flags & TALOS_RT_DPI_OPEN_ARRAY_FOUR_STATE) != 0) == Logic)) \
       std::memcpy(elem, &value, sizeof(value));                                \
   }                                                                            \
   extern "C" void svPut##Name##ArrElem1(const svOpenArrayHandle handle,        \

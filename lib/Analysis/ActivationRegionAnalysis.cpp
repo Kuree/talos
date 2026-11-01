@@ -860,8 +860,7 @@ getActivationTemporaryRoots(sim::SimFuncOp function,
       bases[value] = *fact.descriptor;
     }
   }
-  auto reconstructible = [&](Value reference,
-                             auto &reconstructible) -> bool {
+  auto reconstructible = [&](Value reference, auto &reconstructible) -> bool {
     if (auto found = bases.find(reference); found != bases.end())
       return roots.contains(found->second);
     Operation *definition = reference.getDefiningOp();

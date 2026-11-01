@@ -206,13 +206,11 @@ public:
                     static_cast<uint64_t>(*evaluator.getCodeUnitId())));
     ::talos::schedule::set<::talos::schedule::Field::NativeObserverWidth>(
         bridge, rewriter.getI32IntegerAttr(*resultWidth));
-    ::talos::schedule::set<
-        ::talos::schedule::Field::NativeObserverFourState>(
+    ::talos::schedule::set<::talos::schedule::Field::NativeObserverFourState>(
         bridge, rewriter.getBoolAttr(isa<sim::LogicType>(observerType)));
     ::talos::schedule::set<::talos::schedule::Field::NativeDependencyKinds>(
         bridge, rewriter.getDenseI32ArrayAttr(dependencyKinds));
-    ::talos::schedule::set<
-        ::talos::schedule::Field::NativeDependencyWidths>(
+    ::talos::schedule::set<::talos::schedule::Field::NativeDependencyWidths>(
         bridge, rewriter.getDenseI32ArrayAttr(dependencyWidths));
     ::talos::schedule::set<
         ::talos::schedule::Field::NativeDependencyCaptureIndices>(
@@ -265,10 +263,9 @@ public:
     state.addOperands(operands);
     state.addSuccessors(operation->getSuccessors());
     state.addAttributes(operation->getAttrs());
-    state.addAttribute(
-        ::talos::schedule::getFieldName(
-            ::talos::schedule::Field::NativeInitialPlaneCounts),
-        rewriter.getDenseI32ArrayAttr(initialPlaneCounts));
+    state.addAttribute(::talos::schedule::getFieldName(
+                           ::talos::schedule::Field::NativeInitialPlaneCounts),
+                       rewriter.getDenseI32ArrayAttr(initialPlaneCounts));
     state.addAttribute(
         ::talos::schedule::getFieldName(
             ::talos::schedule::Field::NativeConditionOperandBegin),

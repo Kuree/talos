@@ -39,9 +39,7 @@ class ActivationPhaseAnalysisTestPass
                          OperationPass<ModuleOp>> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ActivationPhaseAnalysisTestPass)
-  StringRef getArgument() const final {
-    return "test-talos-activation-phases";
-  }
+  StringRef getArgument() const final { return "test-talos-activation-phases"; }
   StringRef getDescription() const final {
     return "print time-slot phases of activations and root changes";
   }

@@ -82,8 +82,8 @@ void releaseOwnedNativeStates(talos_rt_context *context,
 // Native state planes and dirty-root tracking (ProcessNativeState.cpp)
 //===----------------------------------------------------------------------===//
 
-const NativeStaticState *
-findNativeStaticState(const talos_rt_context *context, uint32_t id);
+const NativeStaticState *findNativeStaticState(const talos_rt_context *context,
+                                               uint32_t id);
 // These leaf accesses also serve bytecode publication and NBA boundaries.
 // Keep their bodies visible to callers without requiring whole-runtime LTO.
 inline bool byteBit(const uint8_t *bytes, uint64_t bit) {
@@ -109,11 +109,10 @@ bool exportNativeStatePlanesUnlocked(const talos_rt_context *context,
                                      uint8_t *value, uint8_t *unknown,
                                      uint64_t bitCount);
 bool reconcileNativeRootToPlanesUnlocked(
-    const talos_rt_context *context,
-    const talos_rt_native_schedule_plan *plan, uint32_t id);
+    const talos_rt_context *context, const talos_rt_native_schedule_plan *plan,
+    uint32_t id);
 bool reconcileNativeDirtyRootsToPlanesUnlocked(
-    const talos_rt_context *context,
-    const talos_rt_native_schedule_plan *plan);
+    const talos_rt_context *context, const talos_rt_native_schedule_plan *plan);
 bool nativeStaticRootDirty(const talos_rt_context *context,
                            uint32_t staticState);
 bool nativeStaticSpecializationEnvironmentClean(
@@ -156,8 +155,7 @@ bool storeNativeScheduleStateUnlocked(
 //===----------------------------------------------------------------------===//
 
 inline bool isReactiveSchedulerRegion(uint32_t region) {
-  return region >= TALOS_RT_REGION_REACTIVE &&
-         region <= TALOS_RT_REGION_RE_NBA;
+  return region >= TALOS_RT_REGION_REACTIVE && region <= TALOS_RT_REGION_RE_NBA;
 }
 
 inline bool schedulerRegionEligible(const talos_rt_context *context,
@@ -197,12 +195,12 @@ designTaskCurrentWait(const ScheduledDesignTask &task) {
       task.waitSize > task.frame.size() - task.waitOffset)
     return nullptr;
   return reinterpret_cast<const talos_rt_wait_record_v1 *>(task.frame.data() +
-                                                             task.waitOffset);
+                                                           task.waitOffset);
 }
 inline uint32_t designTaskOrderingRegion(const ScheduledDesignTask &task,
                                          bool signalResume) {
-  if (signalResume && talos_rt_is_slot_final_clock_occurrence_wait(
-                          designTaskCurrentWait(task)))
+  if (signalResume &&
+      talos_rt_is_slot_final_clock_occurrence_wait(designTaskCurrentWait(task)))
     return TALOS_RT_REGION_POSTPONED;
   return task.queuedRegion == TALOS_RT_REGION_POSTPONED
              ? TALOS_RT_REGION_POSTPONED + 1
@@ -249,9 +247,9 @@ struct SchedulerRunOptions {
 };
 static_assert(sizeof(SchedulerRunOptions) <= 16);
 talos_rt_status runScheduler(talos_rt_context *context,
-                               SchedulerRunOptions options = {});
+                             SchedulerRunOptions options = {});
 talos_rt_status executeNativeAOTNodeUnlocked(talos_rt_context *context,
-                                               uint32_t actorSlot);
+                                             uint32_t actorSlot);
 talos_rt_status runPreponedHooks(talos_rt_context *context);
 // Initialize the current slot once, regardless of which executor entered it.
 // Reentry in the same slot preserves its sampled state and progress cursor.
@@ -297,20 +295,17 @@ void wakeMonitorProcessUnlocked(talos_rt_context *context,
 
 bool markNativeAOTActorReadyUnlocked(talos_rt_context *context,
                                      uint32_t actorSlot);
-talos_rt_status
-suspendNativeAOTTaskCallerUnlocked(talos_rt_context *context,
-                                   ScheduledProcess &scheduled);
-void clearNativeAOTNodeReadyUnlocked(talos_rt_context *context,
-                                     uint32_t node);
-void setNativeAOTDeadlineUnlocked(talos_rt_context *context,
-                                  uint32_t actorSlot, uint64_t deadline);
+talos_rt_status suspendNativeAOTTaskCallerUnlocked(talos_rt_context *context,
+                                                   ScheduledProcess &scheduled);
+void clearNativeAOTNodeReadyUnlocked(talos_rt_context *context, uint32_t node);
+void setNativeAOTDeadlineUnlocked(talos_rt_context *context, uint32_t actorSlot,
+                                  uint64_t deadline);
 void removeNativeAOTDeadlineUnlocked(talos_rt_context *context,
                                      uint32_t actorSlot);
 bool markDueNativeAOTDeadlinesUnlocked(talos_rt_context *context);
 uint32_t findNativeAOTNodeUnlocked(const talos_rt_context *context,
                                    uint32_t actorSlot, uint32_t continuation);
-talos_rt_status
-refreshNativeAOTReadyPhaseUnlocked(talos_rt_context *context);
+talos_rt_status refreshNativeAOTReadyPhaseUnlocked(talos_rt_context *context);
 talos_rt_status
 initializeNativeAOTNodesUnlocked(talos_rt_context *context,
                                  const talos_rt_native_schedule_node *nodes,
@@ -325,9 +320,8 @@ bool nativeClockOccurrencePrimaryReadsGeneratedState(
 
 // Shared native pending-update selection for every execution policy. With an
 // installed dirty index, retained generated payloads are not pending work.
-uint32_t
-nextDueNativeNBABarrierRegionUnlocked(const talos_rt_context *context,
-                                      bool includeGenerated);
+uint32_t nextDueNativeNBABarrierRegionUnlocked(const talos_rt_context *context,
+                                               bool includeGenerated);
 
 bool hasGeneratedNBAStages(const GeneratedNBAStorage &generated);
 bool hasGeneratedNBASlots(const talos_rt_static_nba_root &root);
@@ -337,12 +331,11 @@ void markStaticNBAAccumulatorPending(talos_rt_context *context,
 void refreshStaticNBAAccumulatorsPending(talos_rt_context *context);
 bool staticNBARootNeedsTransitions(const talos_rt_context *context,
                                    uint32_t rootIndex);
-talos_rt_status
-commitStaticNBAAccumulatorsUnlocked(talos_rt_context *context,
-                                    uint32_t barrierRegion, bool &changed);
-talos_rt_status
-resolveClockingDriveConflictsUnlocked(talos_rt_context *context,
-                                      uint32_t barrierRegion);
+talos_rt_status commitStaticNBAAccumulatorsUnlocked(talos_rt_context *context,
+                                                    uint32_t barrierRegion,
+                                                    bool &changed);
+talos_rt_status resolveClockingDriveConflictsUnlocked(talos_rt_context *context,
+                                                      uint32_t barrierRegion);
 talos_rt_status materializeGeneratedNBAAccumulatorUnlocked(
     talos_rt_context *context, uint32_t rootIndex, uint32_t execRegion);
 

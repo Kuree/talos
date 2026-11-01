@@ -611,10 +611,9 @@ buildNativeStaticActorRootPlan(
   sim::SimDesignOp design;
   module.walk([&](sim::SimDesignOp candidate) { design = candidate; });
   auto specialization =
-      design
-          ? ::talos::schedule::get<schedule::metadata::staticSpecialization>(
-                design)
-          : schedule::StaticSpecializationAttr{};
+      design ? ::talos::schedule::get<schedule::metadata::staticSpecialization>(
+                   design)
+             : schedule::StaticSpecializationAttr{};
   if (!design || (!specialization && !writableVPI))
     return plan;
   SymbolTable symbols(design);
@@ -876,8 +875,7 @@ FailureOr<NativeStaticFanoutPlan> buildNativeStaticFanoutPlan(
       }
       if (runtimeOwnedFanoutActors.contains(function.getOperation()) &&
           ::talos::schedule::has<
-              ::talos::schedule::Field::CovergroupClockingSampler>(
-              function)) {
+              ::talos::schedule::Field::CovergroupClockingSampler>(function)) {
         // Computed covergroup primaries expose an abstract graph Watch: the
         // runtime indexes their exact static dependencies from the serialized
         // observer plan. Reconstruct those same roots from the bound observer
@@ -939,8 +937,7 @@ FailureOr<NativeStaticFanoutPlan> buildNativeStaticFanoutPlan(
               break;
             }
             const auto *bound = stateLayout.findBound(decoded.id);
-            if (!bound ||
-                found->second.low > bound->width ||
+            if (!bound || found->second.low > bound->width ||
                 width > bound->width - found->second.low) {
               valid = false;
               break;
@@ -984,8 +981,7 @@ FailureOr<NativeStaticFanoutPlan> buildNativeStaticFanoutPlan(
                      "runtime fanout has an invalid native root"),
                  failure();
         const auto *bound = stateLayout.findBound(decoded.id);
-        if (!bound ||
-            effect.getLow() > bound->width ||
+        if (!bound || effect.getLow() > bound->width ||
             effect.getWidth() > bound->width - effect.getLow())
           return block->getTerminator()->emitError(
                      "runtime fanout range is out of bounds"),
@@ -1082,14 +1078,12 @@ FailureOr<NativeStaticFanoutPlan> buildNativeStaticFanoutPlan(
                failure();
       talos_rt_stable_handle_v1 decoded{};
       if (!talos_rt_stable_handle_decode(handle->second, &decoded) ||
-          decoded.kind != TALOS_RT_STABLE_HANDLE_STATIC ||
-          decoded.offset != 0)
+          decoded.kind != TALOS_RT_STABLE_HANDLE_STATIC || decoded.offset != 0)
         return terminator->emitError(
                    "static fanout descriptor has an invalid native root"),
                failure();
       const auto *bound = stateLayout.findBound(decoded.id);
-      if (!bound || effect.getWidth() == 0 ||
-          effect.getLow() > bound->width ||
+      if (!bound || effect.getWidth() == 0 || effect.getLow() > bound->width ||
           effect.getWidth() > bound->width - effect.getLow())
         return terminator->emitError("static fanout range is out of bounds"),
                failure();

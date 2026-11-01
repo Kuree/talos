@@ -131,9 +131,8 @@ LogicalResult lowerCallableProcessControls(func::FuncOp function) {
                          continuationOperands);
 
     rewriter.setInsertionPointToStart(unsupportedAction);
-    if (failed(
-            makeReturn(location, llvmConstant(rewriter, location, i32,
-                                              TALOS_RT_INVALID_LIFECYCLE))))
+    if (failed(makeReturn(location, llvmConstant(rewriter, location, i32,
+                                                 TALOS_RT_INVALID_LIFECYCLE))))
       return failure();
 
     rewriter.setInsertionPointToStart(failureBlock);
@@ -277,8 +276,7 @@ prepareOrdinaryFunction(sim::SimFuncOp function) {
       !::talos::schedule::has<::talos::schedule::Field::OverrideEvaluator>(
           function);
   auto observerWidth =
-      ::talos::schedule::get<::talos::schedule::Field::ObserverWidth>(
-          function);
+      ::talos::schedule::get<::talos::schedule::Field::ObserverWidth>(function);
   auto observerFourState =
       ::talos::schedule::get<::talos::schedule::Field::ObserverFourState>(
           function);
@@ -292,17 +290,19 @@ prepareOrdinaryFunction(sim::SimFuncOp function) {
   auto evalPathKnownProbe =
       ::talos::schedule::get<::talos::schedule::Field::EvalPathKnownProbe>(
           function);
-  auto evalPathKnownPredicate = ::talos::schedule::get<
-      ::talos::schedule::Field::EvalPathKnownPredicate>(function);
+  auto evalPathKnownPredicate =
+      ::talos::schedule::get<::talos::schedule::Field::EvalPathKnownPredicate>(
+          function);
   auto evalInfallible =
       ::talos::schedule::get<schedule::Field::EvalInfallible>(function);
   auto evalRawCaptures =
       ::talos::schedule::get<schedule::Field::EvalRawCaptures>(function);
-  auto evalSelectedTwoState = ::talos::schedule::get<
-      ::talos::schedule::Field::EvalSelectedTwoState>(function);
+  auto evalSelectedTwoState =
+      ::talos::schedule::get<::talos::schedule::Field::EvalSelectedTwoState>(
+          function);
   ArrayAttr outlinedPassthrough;
-  if (::talos::schedule::has<
-          ::talos::schedule::Field::OutlinedPrimitiveMember>(function)) {
+  if (::talos::schedule::has<::talos::schedule::Field::OutlinedPrimitiveMember>(
+          function)) {
     outlinedPassthrough = function->getAttrOfType<ArrayAttr>("passthrough");
     if (!outlinedPassthrough || outlinedPassthrough.size() != 1 ||
         outlinedPassthrough[0] !=
@@ -331,26 +331,23 @@ prepareOrdinaryFunction(sim::SimFuncOp function) {
     ::talos::schedule::set<::talos::schedule::Field::EvalFourStateSource>(
         replacement, evalFourStateSource);
   if (evalPromotionRanges)
-    ::talos::schedule::set<
-        ::talos::schedule::Field::EvalLocalPromotionRanges>(
+    ::talos::schedule::set<::talos::schedule::Field::EvalLocalPromotionRanges>(
         replacement, evalPromotionRanges);
   if (evalConditionallyTwoState)
-    ::talos::schedule::set<
-        ::talos::schedule::Field::EvalConditionallyTwoState>(
+    ::talos::schedule::set<::talos::schedule::Field::EvalConditionallyTwoState>(
         replacement, evalConditionallyTwoState);
   if (evalPathKnownProbe)
     ::talos::schedule::set<::talos::schedule::Field::EvalPathKnownProbe>(
         replacement, evalPathKnownProbe);
   if (evalPathKnownPredicate)
-    ::talos::schedule::set<
-        ::talos::schedule::Field::EvalPathKnownPredicate>(
+    ::talos::schedule::set<::talos::schedule::Field::EvalPathKnownPredicate>(
         replacement, evalPathKnownPredicate);
   if (evalInfallible)
     ::talos::schedule::set<schedule::Field::EvalInfallible>(replacement,
-                                                              evalInfallible);
+                                                            evalInfallible);
   if (evalRawCaptures)
     ::talos::schedule::set<schedule::Field::EvalRawCaptures>(replacement,
-                                                               evalRawCaptures);
+                                                             evalRawCaptures);
   if (evalSelectedTwoState)
     ::talos::schedule::set<::talos::schedule::Field::EvalSelectedTwoState>(
         replacement, evalSelectedTwoState);

@@ -625,8 +625,7 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
                 i64, APInt(64, TALOS_RT_RANDOM_DEFAULT_INCREMENT)));
         Value multiplier = arith::ConstantOp::create(
             builder, location, i64,
-            builder.getIntegerAttr(i64,
-                                   APInt(64, TALOS_RT_RANDOM_MULTIPLIER)));
+            builder.getIntegerAttr(i64, APInt(64, TALOS_RT_RANDOM_MULTIPLIER)));
         Value state = arith::AddIOp::create(builder, location, increment, seed);
         state = arith::MulIOp::create(builder, location, state, multiplier);
         state = arith::AddIOp::create(builder, location, state, increment);
@@ -1704,8 +1703,8 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
       }
       Value increment = arith::ConstantOp::create(
           builder, location, i64,
-          builder.getIntegerAttr(
-              i64, APInt(64, TALOS_RT_RANDOM_DEFAULT_INCREMENT)));
+          builder.getIntegerAttr(i64,
+                                 APInt(64, TALOS_RT_RANDOM_DEFAULT_INCREMENT)));
       Value multiplier = arith::ConstantOp::create(
           builder, location, i64,
           builder.getIntegerAttr(i64, APInt(64, TALOS_RT_RANDOM_MULTIPLIER)));
@@ -2163,7 +2162,8 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
         taskCopyOuts.push_back(
             {temporary, destination, scopeObject, formalSigned});
       } else {
-        copyOuts.push_back({destination, scopeObject, formalType, formalSigned});
+        copyOuts.push_back(
+            {destination, scopeObject, formalType, formalSigned});
       }
     }
     if (auto captures = sim::get<sim::metadata::CalleeCaptures>(op))
@@ -2199,8 +2199,7 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
               cast<sim::RefType>(copyOut.formal.getType()).getElementType(),
               copyOut.formal);
           if (failed(copyOutToActual(copyOut.actual, copyOut.scopeObject,
-                                     returned, copyOut.formalSigned,
-                                     location)))
+                                     returned, copyOut.formalSigned, location)))
             return failure();
         }
         return arith::ConstantOp::create(builder, location, builder.getI1Type(),
@@ -2256,10 +2255,9 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
       return failure();
     if (!classTask)
       for (auto [index, copyOut] : llvm::enumerate(copyOuts))
-        if (failed(copyOutToActual(
-                copyOut.actual, copyOut.scopeObject,
-                results[index + (hasFunctionResult ? 1 : 0)],
-                copyOut.formalSigned, location)))
+        if (failed(copyOutToActual(copyOut.actual, copyOut.scopeObject,
+                                   results[index + (hasFunctionResult ? 1 : 0)],
+                                   copyOut.formalSigned, location)))
           return failure();
     if (hasFunctionResult)
       return results.front();
@@ -2590,13 +2588,12 @@ FailureOr<Value> UnitLowering::lowerCall(semantic::SVCallExpressionOp op) {
       dpiCategory = static_cast<uint32_t>(*category);
     }
     bool dpiImport = dpi::has<dpi::ImportId>(op);
-    bool openFormal =
-        dpiImport && formalSemantic &&
-        llvm::any_of(getSemanticDimensions(formalSemantic),
-                     [](const SemanticDimension &dimension) {
-                       return dimension.kind ==
-                              SemanticDimensionKind::OpenArray;
-                     });
+    bool openFormal = dpiImport && formalSemantic &&
+                      llvm::any_of(getSemanticDimensions(formalSemantic),
+                                   [](const SemanticDimension &dimension) {
+                                     return dimension.kind ==
+                                            SemanticDimensionKind::OpenArray;
+                                   });
     dpi::AggregateABIAttr formalAggregateLayout;
     if (dpiImport && !openFormal) {
       if (isa<semantic::DynArrayType, semantic::QueueType,

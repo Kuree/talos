@@ -306,10 +306,10 @@ struct DynamicEvalNBAProofAnalysis {
             }
             ++proof.periodicIngressCount;
             uint64_t end = fanout.low_bit + fanout.bit_width;
-            const auto *inferredBound = stateLayout.findBound(fanout.static_state);
+            const auto *inferredBound =
+                stateLayout.findBound(fanout.static_state);
             bool inferredTickBound =
-                inferredBound &&
-                fanout.bit_width == 1 &&
+                inferredBound && fanout.bit_width == 1 &&
                 stateLayout.hasClockTickBound(fanout.static_state,
                                               inferredBound->offset +
                                                   fanout.low_bit);
@@ -361,8 +361,9 @@ struct DynamicEvalNBAProofAnalysis {
 static uint32_t
 getDynamicNBACommitRegion(sim::SimFuncOp function,
                           const DynamicEvalNBAProofContext &proofContext) {
-  if (auto identity = ::talos::schedule::get<
-          ::talos::schedule::Field::EvalDirectFragment>(function);
+  if (auto identity =
+          ::talos::schedule::get<::talos::schedule::Field::EvalDirectFragment>(
+              function);
       identity && identity.getInt() >= 0 &&
       static_cast<uint64_t>(identity.getInt()) <
           proofContext.directFragments.size() &&
@@ -730,8 +731,9 @@ FailureOr<bool> makeNativeEvalPlan(
       if (function && selectedEvalBodies.insert(name).second)
         pending.push_back(function);
     };
-    ArrayAttr probeRoutes = ::talos::schedule::get<
-        ::talos::schedule::Field::EvalPathProbeRoutes>(module);
+    ArrayAttr probeRoutes =
+        ::talos::schedule::get<::talos::schedule::Field::EvalPathProbeRoutes>(
+            module);
     while (!pending.empty()) {
       sim::SimFuncOp function = pending.pop_back_val();
       if (!visited.insert(function.getOperation()).second)
@@ -785,14 +787,13 @@ FailureOr<bool> makeNativeEvalPlan(
           if (sourceIndex != UINT_MAX)
             return false;
           uint64_t end = low + width;
-          return llvm::any_of(
-              resolved->fanoutEntries,
-              [&, &state = state, &low = low](const auto &entry) {
-                return entry.static_state == state && entry.low_bit < end &&
-                       low < entry.low_bit + entry.bit_width &&
-                       (entry.reserved &
-                        TALOS_RT_FANOUT_SUPPRESS_ACTIVE_SELF) != 0;
-              });
+          return llvm::any_of(resolved->fanoutEntries, [&, &state = state,
+                                                        &low = low](
+                                                           const auto &entry) {
+            return entry.static_state == state && entry.low_bit < end &&
+                   low < entry.low_bit + entry.bit_width &&
+                   (entry.reserved & TALOS_RT_FANOUT_SUPPRESS_ACTIVE_SELF) != 0;
+          });
         });
     if (unownedTransitionNeedsActiveSelfCheck) {
       if (native::has<native::DebugTiming>(module))
@@ -813,8 +814,8 @@ FailureOr<bool> makeNativeEvalPlan(
                                                                : origin->second;
     };
     for (sim::SimFuncOp function : evalClosure) {
-      if (!::talos::schedule::has<
-              ::talos::schedule::Field::EvalDirectFragment>(function))
+      if (!::talos::schedule::has<::talos::schedule::Field::EvalDirectFragment>(
+              function))
         continue;
       function.walk([&](LLVM::CallOp call) {
         if (!call.getCallee() ||
@@ -951,8 +952,9 @@ FailureOr<bool> makeNativeEvalPlan(
     for (sim::SimFuncOp function : evalClosure) {
       if (failed(valid))
         break;
-      bool directBody = ::talos::schedule::has<
-          ::talos::schedule::Field::EvalDirectFragment>(function);
+      bool directBody =
+          ::talos::schedule::has<::talos::schedule::Field::EvalDirectFragment>(
+              function);
       function.walk([&](LLVM::CallOp call) {
         if (failed(valid) || !call.getCallee() ||
             *call.getCallee() != "talos_rt_v1_scheduler_static_nba")
@@ -1112,9 +1114,9 @@ FailureOr<bool> makeNativeEvalPlan(
   auto markOwnerNBATaint = [&](unsigned recordIndex) {
     if (!ownerMayTaintNBA(recordIndex) || nbaTaintWordCount == 0)
       return;
-    Value taintBase = LLVM::AddressOfOp::create(
-        builder, location, pointer,
-        "__talos_eval_step_four_state_nba_roots_v1");
+    Value taintBase =
+        LLVM::AddressOfOp::create(builder, location, pointer,
+                                  "__talos_eval_step_four_state_nba_roots_v1");
     for (uint32_t word = 0; word != nbaTaintWordCount; ++word) {
       uint64_t mask = recordNBATaintMasks[recordIndex][word];
       if (mask == 0)
@@ -1172,13 +1174,11 @@ FailureOr<bool> makeNativeEvalPlan(
   constexpr StringLiteral nodesName = "__talos_aot_schedule_nodes_v1";
   constexpr StringLiteral nbaRootsName = "__talos_aot_nba_roots_v1";
   constexpr StringLiteral nbaSitesName = "__talos_aot_nba_sites_v1";
-  constexpr StringLiteral nbaDirtyRootsName =
-      "__talos_aot_nba_dirty_roots_v1";
+  constexpr StringLiteral nbaDirtyRootsName = "__talos_aot_nba_dirty_roots_v1";
   constexpr StringLiteral nbaDirtySummaryName =
       "__talos_aot_nba_dirty_summary_v1";
   constexpr StringLiteral fanoutName = "__talos_aot_static_fanout_v1";
-  constexpr StringLiteral actorRootsName =
-      "__talos_aot_static_actor_roots_v1";
+  constexpr StringLiteral actorRootsName = "__talos_aot_static_actor_roots_v1";
   constexpr StringLiteral clockKernelsName = "__talos_aot_clock_kernels_v1";
   constexpr StringLiteral mergedFragmentsName =
       "__talos_aot_merged_fragments_v1";
@@ -1305,8 +1305,7 @@ FailureOr<bool> makeNativeEvalPlan(
         builder.getI64IntegerAttr(mergedFragments[index].bit),
         builder.getDenseI64ArrayAttr(encoded)));
   }
-  ::talos::schedule::set<
-      ::talos::schedule::Field::EvalKernelProofDependencies>(
+  ::talos::schedule::set<::talos::schedule::Field::EvalKernelProofDependencies>(
       promotionKernelLatched, builder.getArrayAttr(promotionDependencies));
 
   if (failed(materializeNativeKernelPromotionReadiness(
@@ -1835,8 +1834,7 @@ FailureOr<bool> makeNativeEvalPlan(
       // without adding a runtime token lookup to the hot path.
       bool needsActiveSelfCheck = false;
       for (uint32_t fanoutIndex : fanoutIndicesOf(*staticState)) {
-        const talos_rt_static_fanout_entry &entry =
-            fanoutEntries[fanoutIndex];
+        const talos_rt_static_fanout_entry &entry = fanoutEntries[fanoutIndex];
         uint64_t overlapLow = std::max(*lowBit, entry.low_bit);
         uint64_t overlapHigh =
             std::min(rangeEnd, entry.low_bit + entry.bit_width);
@@ -1994,7 +1992,7 @@ FailureOr<bool> makeNativeEvalPlan(
               ::talos::schedule::Field::EvalRuntimeRoutedPublication>(call))
         ::talos::schedule::set<
             ::talos::schedule::Field::EvalRuntimeRoutedPublication>(owned,
-                                                                      routed);
+                                                                    routed);
       call.erase();
     }
 
@@ -2325,8 +2323,7 @@ FailureOr<bool> makeNativeEvalPlan(
             Value status =
                 LLVM::CallOp::create(
                     nbaBuilder, call.getLoc(), TypeRange{i32},
-                    SymbolRefAttr::get(context,
-                                       "talos_rt_v1_eval_nba_reserve"),
+                    SymbolRefAttr::get(context, "talos_rt_v1_eval_nba_reserve"),
                     ValueRange{arguments[0], LLVM::AddressOfOp::create(
                                                  nbaBuilder, call.getLoc(),
                                                  pointer, evalNBAQueueName)})
@@ -2448,8 +2445,7 @@ FailureOr<bool> makeNativeEvalPlan(
               entry.valueName =
                   (Twine("__talos_eval_nba_value_") + Twine(slotSite)).str();
               entry.unknownName =
-                  (Twine("__talos_eval_nba_unknown_") + Twine(slotSite))
-                      .str();
+                  (Twine("__talos_eval_nba_unknown_") + Twine(slotSite)).str();
               entry.validName =
                   (Twine("__talos_eval_nba_valid_") + Twine(slotSite)).str();
               auto makeZero = [&, &call = call](StringRef name, Type type,
@@ -2624,9 +2620,8 @@ FailureOr<bool> makeNativeEvalPlan(
           };
           mergeField(offsetof(talos_rt_generated_nba_accumulator_256, value),
                      position(staged64));
-          mergeField(
-              offsetof(talos_rt_generated_nba_accumulator_256, unknown),
-              position(stagedUnknown64));
+          mergeField(offsetof(talos_rt_generated_nba_accumulator_256, unknown),
+                     position(stagedUnknown64));
           Value maskAddress = nbaFieldGEP(
               nbaBuilder, call.getLoc(), accumulator,
               offsetof(talos_rt_generated_nba_accumulator_256, write_mask));
@@ -2761,8 +2756,7 @@ FailureOr<bool> makeNativeEvalPlan(
       if (Value selected = tryLoadSelectedStaticStatePlane(
               selectedBuilder, call.getLoc(), handle,
               selectedBuilder.getIntegerType(*width),
-              *unknownPlane ? "__talos_state_unknown"
-                            : "__talos_state_value",
+              *unknownPlane ? "__talos_state_unknown" : "__talos_state_value",
               &stateLayout, true, twoState && *unknownPlane)) {
         if (call.getNumResults() != 1 || call.getResult().getType() != i32)
           return call.emitError("unsupported native state load status ABI"),
@@ -2808,12 +2802,12 @@ FailureOr<bool> makeNativeEvalPlan(
           owner &&
           !::talos::schedule::has<
               ::talos::schedule::Field::EvalPathKnownPredicate>(owner) &&
-          ((!::talos::schedule::has<
-                ::talos::schedule::Field::EvalRawCaptures>(owner) &&
+          ((!::talos::schedule::has<::talos::schedule::Field::EvalRawCaptures>(
+                owner) &&
             ::talos::schedule::has<
                 ::talos::schedule::Field::EvalSelectedTwoState>(owner)) ||
-           ::talos::schedule::has<
-               schedule::metadata::evalPathGuardedTwoState>(owner) ||
+           ::talos::schedule::has<schedule::metadata::evalPathGuardedTwoState>(
+               owner) ||
            (::talos::schedule::has<
                 ::talos::schedule::Field::EvalInheritedTwoStateCheckpoint>(
                 owner) &&
@@ -2928,8 +2922,7 @@ FailureOr<bool> makeNativeEvalPlan(
         return failure();
       }
       const auto *bound = stateLayout.findBound(decoded.id);
-      if (!bound || *width > bound->width ||
-          decoded.offset < 0 ||
+      if (!bound || *width > bound->width || decoded.offset < 0 ||
           static_cast<uint64_t>(decoded.offset) > bound->width - *width)
         return call.emitError("dynamic state load root is out of bounds"),
                failure();
@@ -3594,14 +3587,14 @@ FailureOr<bool> makeNativeEvalPlan(
         8);
     Value nodes =
         LLVM::AddressOfOp::create(builder, location, pointer, nodesName);
-    Value status = LLVM::CallOp::create(
-                       builder, location, TypeRange{i32},
-                       SymbolRefAttr::get(
-                           context, "talos_rt_v1_scheduler_run_aot_nodes"),
-                       ValueRange{runEntry->getArgument(1), nodes,
-                                  llvmConstant(builder, location, i32,
-                                               executableNodes.size())})
-                       .getResult();
+    Value status =
+        LLVM::CallOp::create(
+            builder, location, TypeRange{i32},
+            SymbolRefAttr::get(context, "talos_rt_v1_scheduler_run_aot_nodes"),
+            ValueRange{
+                runEntry->getArgument(1), nodes,
+                llvmConstant(builder, location, i32, executableNodes.size())})
+            .getResult();
     Block *checkpoint = new Block;
     Block *finished = new Block;
     run.getBody().push_back(checkpoint);
@@ -3643,8 +3636,7 @@ FailureOr<bool> makeNativeEvalPlan(
         llvmConstant(builder, location, i32, TALOS_RT_OK));
     Value result = arith::SelectOp::create(
         builder, location, ok,
-        llvmConstant(builder, location, i32, TALOS_RT_AOT_CHECKPOINT),
-        queued);
+        llvmConstant(builder, location, i32, TALOS_RT_AOT_CHECKPOINT), queued);
     LLVM::ReturnOp::create(builder, location, result);
     builder.setInsertionPointToStart(finished);
     LLVM::ReturnOp::create(builder, location, finished->getArgument(0));
@@ -3690,8 +3682,8 @@ FailureOr<bool> makeNativeEvalPlan(
            ::talos::schedule::has<schedule::metadata::evalCheckpointSafe>(
                executor));
       return directStatus &&
-             !::talos::schedule::has<
-                 schedule::metadata::evalTier2Convergence>(executor);
+             !::talos::schedule::has<schedule::metadata::evalTier2Convergence>(
+                 executor);
     };
     auto periodicBitTouchesFanout =
         [](uint64_t bit, const talos_rt_static_fanout_entry &fanout) {
@@ -3704,28 +3696,27 @@ FailureOr<bool> makeNativeEvalPlan(
     for (auto [clockIndex, clock] : llvm::enumerate(periodicClocks)) {
       auto clockState = clock.getStaticState();
       const auto *bound = stateLayout.findBound(clockState);
-      if (!bound ||
-          clock.getBitOffset() < bound->offset ||
+      if (!bound || clock.getBitOffset() < bound->offset ||
           clock.getBitOffset() - bound->offset >= bound->width)
         continue;
       uint64_t localBit = clock.getBitOffset() - bound->offset;
       for (uint32_t fanoutIndex : fanoutIndicesOf(clock.getStaticState())) {
-        const talos_rt_static_fanout_entry &fanout =
-            fanoutEntries[fanoutIndex];
+        const talos_rt_static_fanout_entry &fanout = fanoutEntries[fanoutIndex];
         if (fanoutRoute(fanout) == TALOS_RT_FANOUT_RUNTIME ||
             !periodicBitTouchesFanout(localBit, fanout) ||
             fanout.kernel >= clockKernels.size())
           continue;
-        if (llvm::any_of(
-                periodicAliases,
-                [&, &clock = clock](const NativePeriodicAlias &alias) {
-                  return alias.getSourceStaticState() ==
-                             clock.getStaticState() &&
-                         alias.getSourceBitOffset() == clock.getBitOffset() &&
-                         alias.getForwardingActorSlot() == fanout.actor_slot &&
-                         alias.getForwardingContinuation() ==
-                             fanout.continuation;
-                }))
+        if (llvm::any_of(periodicAliases,
+                         [&, &clock = clock](const NativePeriodicAlias &alias) {
+                           return alias.getSourceStaticState() ==
+                                      clock.getStaticState() &&
+                                  alias.getSourceBitOffset() ==
+                                      clock.getBitOffset() &&
+                                  alias.getForwardingActorSlot() ==
+                                      fanout.actor_slot &&
+                                  alias.getForwardingContinuation() ==
+                                      fanout.continuation;
+                         }))
           continue;
         uint32_t owner = periodicOwnerBits[fanoutIndex] == UINT32_MAX
                              ? fanout.merged_bit
@@ -3752,9 +3743,9 @@ FailureOr<bool> makeNativeEvalPlan(
       if (clock == periodicClocks.end())
         continue;
       size_t clockIndex = static_cast<size_t>(clock - periodicClocks.begin());
-      const auto *targetBound = stateLayout.findBound(alias.getTargetStaticState());
-      if (!targetBound ||
-          alias.getTargetBitOffset() < targetBound->offset ||
+      const auto *targetBound =
+          stateLayout.findBound(alias.getTargetStaticState());
+      if (!targetBound || alias.getTargetBitOffset() < targetBound->offset ||
           alias.getTargetBitOffset() - targetBound->offset >=
               targetBound->width)
         continue;
@@ -3762,8 +3753,7 @@ FailureOr<bool> makeNativeEvalPlan(
           alias.getTargetBitOffset() - targetBound->offset;
       for (uint32_t fanoutIndex :
            fanoutIndicesOf(alias.getTargetStaticState())) {
-        const talos_rt_static_fanout_entry &fanout =
-            fanoutEntries[fanoutIndex];
+        const talos_rt_static_fanout_entry &fanout = fanoutEntries[fanoutIndex];
         if (fanoutRoute(fanout) == TALOS_RT_FANOUT_RUNTIME ||
             fanoutRoute(fanout) == TALOS_RT_FANOUT_PERIODIC_ALIAS ||
             (fanout.actor_slot == alias.getForwardingActorSlot() &&
@@ -3796,8 +3786,8 @@ FailureOr<bool> makeNativeEvalPlan(
     Value control = entryAlloca(builder, location, controlType, 1, 8);
     Value nodes =
         LLVM::AddressOfOp::create(builder, location, pointer, nodesName);
-    Value clocks = LLVM::AddressOfOp::create(
-        builder, location, pointer, "__talos_periodic_clock_plan_v1");
+    Value clocks = LLVM::AddressOfOp::create(builder, location, pointer,
+                                             "__talos_periodic_clock_plan_v1");
     LLVM::StoreOp::create(
         builder, location, runEntry->getArgument(0),
         LLVM::AddressOfOp::create(builder, location, pointer,
@@ -3959,10 +3949,10 @@ FailureOr<bool> makeNativeEvalPlan(
         builder, location, TypeRange{i32},
         SymbolRefAttr::get(context, "talos_rt_v1_gc_designate"),
         ValueRange{runEntry->getArgument(1)});
-    cf::CondBranchOp::create(
-        builder, location, enterHotLoop, promote, ValueRange{}, handoff,
-        ValueRange{
-            llvmConstant(builder, location, i32, TALOS_RT_AOT_CHECKPOINT)});
+    cf::CondBranchOp::create(builder, location, enterHotLoop, promote,
+                             ValueRange{}, handoff,
+                             ValueRange{llvmConstant(builder, location, i32,
+                                                     TALOS_RT_AOT_CHECKPOINT)});
 
     builder.setInsertionPointToStart(promote);
     // Synthetic region kernels do not have a source coroutine whose initial
@@ -3977,13 +3967,13 @@ FailureOr<bool> makeNativeEvalPlan(
       auto candidates = directsByWrapper.find(executor);
       if (candidates == directsByWrapper.end())
         continue;
-      auto direct = llvm::find_if(candidates->second, [&, &index = index](
-                                                          unsigned candidate) {
-        return directFragments[candidate].actorSlot ==
-                   mergedFragments[index].actor_slot &&
-               directFragments[candidate].continuation ==
-                   mergedFragments[index].continuation;
-      });
+      auto direct = llvm::find_if(
+          candidates->second, [&, &index = index](unsigned candidate) {
+            return directFragments[candidate].actorSlot ==
+                       mergedFragments[index].actor_slot &&
+                   directFragments[candidate].continuation ==
+                       mergedFragments[index].continuation;
+          });
       if (direct != candidates->second.end() &&
           directFragments[*direct].initialActivation)
         initialMask.setBit(mergedFragments[index].bit);
@@ -5058,8 +5048,7 @@ FailureOr<bool> makeNativeEvalPlan(
     Value fallbackStatus =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
-            SymbolRefAttr::get(context,
-                               "talos_rt_v1_scheduler_run_aot_nodes"),
+            SymbolRefAttr::get(context, "talos_rt_v1_scheduler_run_aot_nodes"),
             ValueRange{
                 runEntry->getArgument(1), nodes,
                 llvmConstant(builder, location, i32, executableNodes.size())})
@@ -5323,8 +5312,7 @@ FailureOr<bool> makeNativeEvalPlan(
             builder.getDenseI64ArrayAttr(
                 {static_cast<int64_t>(staticNBAPlan.generatedOffsets[index]),
                  static_cast<int64_t>(nbaRoots[index].bit_width)})));
-    ::talos::schedule::set<
-        ::talos::schedule::Field::EvalNbaProofDependencies>(
+    ::talos::schedule::set<::talos::schedule::Field::EvalNbaProofDependencies>(
         module.lookupSymbol<LLVM::GlobalOp>(evalFastNBARootsName),
         builder.getArrayAttr(rootDependencies));
   }
@@ -5390,13 +5378,13 @@ FailureOr<bool> makeNativeEvalPlan(
   llvm::DenseMap<uint64_t, Block *> queueCases;
   llvm::DenseMap<std::pair<uint32_t, uint64_t>, Block *> commitCases;
   if (hasOrderedNBA) {
-    if (::talos::schedule::has<
-            ::talos::schedule::Field::EvalRuntimeCalendar>(module)) {
+    if (::talos::schedule::has<::talos::schedule::Field::EvalRuntimeCalendar>(
+            module)) {
       Value guard =
           LLVM::CallOp::create(
               builder, location, TypeRange{i32},
-              SymbolRefAttr::get(
-                  context, "talos_rt_v1_static_nba_direct_commit_guard"),
+              SymbolRefAttr::get(context,
+                                 "talos_rt_v1_static_nba_direct_commit_guard"),
               ValueRange{nbaCommitEntry->getArgument(1)})
               .getResult();
       orderedDirectGuard =
@@ -5492,8 +5480,8 @@ FailureOr<bool> makeNativeEvalPlan(
     // Fixed latches belong to the canonical barrier in a shared calendar.
     // Only the ordered queue is drained by this generated callback.
     if (!entry.queued &&
-        ::talos::schedule::has<
-            ::talos::schedule::Field::EvalRuntimeCalendar>(module))
+        ::talos::schedule::has<::talos::schedule::Field::EvalRuntimeCalendar>(
+            module))
       continue;
     auto legacyIP = builder.saveInsertionPoint();
     Value validAddress, active;
@@ -5767,8 +5755,7 @@ FailureOr<bool> makeNativeEvalPlan(
       Value unknownAddress = planeAddress(stateUnknown);
       auto oldUnknown = LLVM::LoadOp::create(builder, location, windowType,
                                              unknownAddress, 1);
-      ::talos::schedule::set<
-          ::talos::schedule::Field::EvalPreserveNbaUnknown>(
+      ::talos::schedule::set<::talos::schedule::Field::EvalPreserveNbaUnknown>(
           oldUnknown, builder.getUnitAttr());
       Value oldSelectedUnknown = arith::AndIOp::create(
           builder, location,
@@ -5807,14 +5794,12 @@ FailureOr<bool> makeNativeEvalPlan(
           arith::SelectOp::create(builder, location, active, mergedUnknown,
                                   oldUnknown),
           unknownAddress, 1);
-      ::talos::schedule::set<
-          ::talos::schedule::Field::EvalPreserveNbaUnknown>(
+      ::talos::schedule::set<::talos::schedule::Field::EvalPreserveNbaUnknown>(
           store, builder.getUnitAttr());
       // The clipped mask preserves every bit outside this canonical root,
       // including neighbors in the byte-rounded load/store window.
-      ::talos::schedule::set<
-          ::talos::schedule::Field::EvalUnknownWriteRange>(store,
-                                                             publicationRange);
+      ::talos::schedule::set<::talos::schedule::Field::EvalUnknownWriteRange>(
+          store, publicationRange);
     } else
       LLVM::StoreOp::create(builder, location,
                             llvmConstant(builder, location, i64, 0),
@@ -6257,9 +6242,9 @@ FailureOr<bool> makeNativeEvalPlan(
             4);
         Value region = LLVM::LoadOp::create(
             builder, location, i32,
-            nbaFieldGEP(builder, location, accumulatorBase,
-                        offsetof(talos_rt_generated_nba_accumulator_256,
-                                 exec_region)),
+            nbaFieldGEP(
+                builder, location, accumulatorBase,
+                offsetof(talos_rt_generated_nba_accumulator_256, exec_region)),
             4);
         regionMatches = arith::AndIOp::create(
             builder, location,
@@ -6292,9 +6277,8 @@ FailureOr<bool> makeNativeEvalPlan(
       }
       Value stagedValue = LLVM::LoadOp::create(
           builder, location, i64,
-          nbaFieldGEP(
-              builder, location, accumulatorBase,
-              offsetof(talos_rt_generated_nba_accumulator_256, value)),
+          nbaFieldGEP(builder, location, accumulatorBase,
+                      offsetof(talos_rt_generated_nba_accumulator_256, value)),
           8);
       Value stagedUnknown;
       if (forcedTwoStateEval) {
@@ -6402,8 +6386,7 @@ FailureOr<bool> makeNativeEvalPlan(
       };
       SmallVector<TriggerGroup> groups;
       for (uint32_t fanoutIndex : fanoutIndicesOf(root.static_state)) {
-        const talos_rt_static_fanout_entry &entry =
-            fanoutEntries[fanoutIndex];
+        const talos_rt_static_fanout_entry &entry = fanoutEntries[fanoutIndex];
         if (entry.low_bit >= root.bit_width)
           continue;
         uint64_t high =
@@ -6703,9 +6686,8 @@ FailureOr<bool> makeNativeEvalPlan(
         privateRoots.push_back(index);
     }
   if (native::has<native::DebugTiming>(module))
-    llvm::errs() << "talos native NBA batch: candidates="
-                 << privateRoots.size() << " roots=" << nbaRoots.size()
-                 << " private-cone="
+    llvm::errs() << "talos native NBA batch: candidates=" << privateRoots.size()
+                 << " roots=" << nbaRoots.size() << " private-cone="
                  << llvm::count(staticNBAPlan.privateInfluenceRoots, true)
                  << " unread=" << llvm::count(staticNBAPlan.unreadRoots, true)
                  << " wide="
@@ -6932,9 +6914,9 @@ FailureOr<bool> makeNativeEvalPlan(
             4);
         Value region = LLVM::LoadOp::create(
             builder, location, i32,
-            nbaFieldGEP(builder, location, accumulatorBase,
-                        offsetof(talos_rt_generated_nba_accumulator_256,
-                                 exec_region)),
+            nbaFieldGEP(
+                builder, location, accumulatorBase,
+                offsetof(talos_rt_generated_nba_accumulator_256, exec_region)),
             4);
         regionMatches = arith::AndIOp::create(
             builder, location,
@@ -7105,8 +7087,8 @@ FailureOr<bool> makeNativeEvalPlan(
                          : 0) |
                     (cleanSuperstepEnabled && staticEvalIsland &&
                              ::talos::schedule::has<
-                                 ::talos::schedule::Field::
-                                     EvalRuntimeCalendar>(module)
+                                 ::talos::schedule::Field::EvalRuntimeCalendar>(
+                                 module)
                          ? TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL
                          : 0) |
                     (sharedPeriodic ? TALOS_RT_NATIVE_SCHEDULE_SHARED_PERIODIC
@@ -7118,11 +7100,11 @@ FailureOr<bool> makeNativeEvalPlan(
                                                       location, pointer,
                                                       "__talos_state_value"),
                             NativeSchedulePlanField::StateValue);
-        value = insertValue(
-            initializerBuilder, location, value,
-            LLVM::AddressOfOp::create(initializerBuilder, location, pointer,
-                                      "__talos_state_unknown"),
-            NativeSchedulePlanField::StateUnknown);
+        value = insertValue(initializerBuilder, location, value,
+                            LLVM::AddressOfOp::create(initializerBuilder,
+                                                      location, pointer,
+                                                      "__talos_state_unknown"),
+                            NativeSchedulePlanField::StateUnknown);
         value = insertValue(initializerBuilder, location, value,
                             llvmConstant(initializerBuilder, location, i64,
                                          stateLayout.bitCount),
@@ -7335,11 +7317,9 @@ FailureOr<bool> makeNativeEvalPlan(
   getOrDeclareLLVMFunction(
       module, "talos_rt_v1_scheduler_prepare_periodic_aot", i32,
       {pointer, pointer, i32, pointer, i32, pointer, i32, pointer, pointer});
-  getOrDeclareLLVMFunction(module,
-                           "talos_rt_v1_scheduler_handoff_periodic_aot", i32,
-                           {pointer, pointer, i32, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_gc_designate", i32,
-                           {pointer});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_handoff_periodic_aot",
+                           i32, {pointer, pointer, i32, pointer});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_gc_designate", i32, {pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_drain_periodic_aot",
                            i32, {pointer, pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_enter_periodic_aot",
@@ -7348,10 +7328,10 @@ FailureOr<bool> makeNativeEvalPlan(
                            {pointer, i32, i32, pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_commit_roots", i32,
                            {pointer, i32, i32, pointer});
-  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_commit_ordered",
-                           i32, {pointer, i32, i64, i64, i64, i64});
-  getOrDeclareLLVMFunction(
-      module, "talos_rt_v1_static_nba_direct_commit_guard", i32, {pointer});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_commit_ordered", i32,
+                           {pointer, i32, i64, i64, i64, i64});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_direct_commit_guard",
+                           i32, {pointer});
   getOrDeclareLLVMFunction(module,
                            "talos_rt_v1_static_nba_account_generated_commits",
                            LLVM::LLVMVoidType::get(context), {pointer, i32});
@@ -7366,12 +7346,10 @@ FailureOr<bool> makeNativeEvalPlan(
                            {pointer, i32});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_execute_aot_actor",
                            i32, {pointer, i32});
-  getOrDeclareLLVMFunction(module,
-                           "talos_rt_v1_scheduler_priority_signal_pending",
-                           i32, {pointer});
-  getOrDeclareLLVMFunction(module,
-                           "talos_rt_v1_scheduler_queue_aot_checkpoint", i32,
-                           {pointer, i32, i32, pointer});
+  getOrDeclareLLVMFunction(
+      module, "talos_rt_v1_scheduler_priority_signal_pending", i32, {pointer});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_queue_aot_checkpoint",
+                           i32, {pointer, i32, i32, pointer});
   return true;
 }
 

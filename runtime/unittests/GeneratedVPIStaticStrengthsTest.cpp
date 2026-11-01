@@ -4,10 +4,10 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <cstdlib>
@@ -59,8 +59,9 @@ void checkStaticStrengths(bool missingDefinition) {
     // banks. Omit them too when deliberately testing a missing definition.
     for (auto binding : llvm::make_early_inc_range(
              design.getOps<sim::SimVPITerminalDriverBindingOp>())) {
-      auto terminal = mlir::SymbolTable::lookupNearestSymbolFrom<
-          sim::SimVPIObjectAnchorOp>(binding, binding.getTerminalAttr());
+      auto terminal =
+          mlir::SymbolTable::lookupNearestSymbolFrom<sim::SimVPIObjectAnchorOp>(
+              binding, binding.getTerminalAttr());
       ASSERT_TRUE(terminal);
       if (terminal.getParentAttr() == target)
         binding.erase();

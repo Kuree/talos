@@ -4,11 +4,11 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
 #include "talos/Runtime/Runtime.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <algorithm>
@@ -171,8 +171,7 @@ TEST(GeneratedDesignDatabase, FixedArrayForeach) {
     auto malformed = execution;
     malformed.design_database = bytes.data();
     malformed.design_database_size = bytes.size();
-    EXPECT_EQ(talos_rt_v1_design_validate(&malformed),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&malformed), TALOS_RT_INVALID_DESIGN);
   };
   {
     auto bytes = image;
@@ -290,8 +289,7 @@ TEST(GeneratedDesignDatabase, FixedArrayForeach) {
     auto malformed = execution;
     malformed.design_database = incomplete->designDatabase.data();
     malformed.design_database_size = incomplete->designDatabase.size();
-    EXPECT_EQ(talos_rt_v1_design_validate(&malformed),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&malformed), TALOS_RT_INVALID_DESIGN);
     partial.erase();
   }
   for (auto handle : handles)

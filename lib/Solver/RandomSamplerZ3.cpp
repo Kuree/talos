@@ -308,8 +308,7 @@ public:
     unsigned commonWidth = std::max(lhs.width, rhs.width);
     Z3_ast a = resize(lhs, commonWidth, sign);
     Z3_ast b = resize(rhs, commonWidth, sign);
-    if (opcode == TALOS_RT_RANDOM_EQ_V1 ||
-        opcode == TALOS_RT_RANDOM_NE_V1) {
+    if (opcode == TALOS_RT_RANDOM_EQ_V1 || opcode == TALOS_RT_RANDOM_NE_V1) {
       for (auto pair : {std::make_pair(a, b), std::make_pair(b, a)}) {
         auto count = popcounts.find(pair.first);
         if (count == popcounts.end())
@@ -687,7 +686,7 @@ public:
         Z3_ast equal = conjunction(Z3_mk_fpa_eq(context, widened, target),
                                    compare(TALOS_RT_RANDOM_EQ_V1));
         return opcode == TALOS_RT_RANDOM_EQ_V1 ? equal
-                                                 : Z3_mk_not(context, equal);
+                                               : Z3_mk_not(context, equal);
       }
       case TALOS_RT_RANDOM_LT_V1:
         return Z3_mk_ite(context, Z3_mk_fpa_lt(context, widened, target),
@@ -802,7 +801,7 @@ public:
                                              constant(0, fraction))));
     return Z3_mk_ite(context, nan,
                      opcode == TALOS_RT_RANDOM_NE_V1 ? Z3_mk_true(context)
-                                                       : Z3_mk_false(context),
+                                                     : Z3_mk_false(context),
                      Z3_mk_ite(context, special, infinite, finite));
   }
 
@@ -1504,9 +1503,9 @@ compileRandomSamplerPlan(const uint8_t *program, size_t programSize,
   std::vector<Bits> stack;
   std::vector<Bits> temporaries;
   std::vector<std::pair<unsigned, ID>> roots;
-  random::DistBitSequence distBits(
-      captureWidths.size(), std::nullopt,
-      read32(program + 20) & TALOS_RT_RANDOM_PROGRAM_EXACT_WEIGHTED);
+  random::DistBitSequence distBits(captureWidths.size(), std::nullopt,
+                                   read32(program + 20) &
+                                       TALOS_RT_RANDOM_PROGRAM_EXACT_WEIGHTED);
   for (unsigned index = 0; index != instructions; ++index) {
     const uint8_t *p = program + header + size_t(index) * 16;
     unsigned opcode = p[0], bits = wide ? read32(p + 4) : p[1];

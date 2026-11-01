@@ -313,7 +313,8 @@ private:
                        : phases;
     if (!start.empty())
       for (Operation *callee : summary.spawns)
-        propagateIfChanged(entryState(callee), entryState(callee)->merge(start));
+        propagateIfChanged(entryState(callee),
+                           entryState(callee)->merge(start));
     if (phases.empty())
       return;
     for (Operation *callee : summary.taskCalls)
@@ -440,8 +441,7 @@ void summarize(const ActivationPhaseAnalysis::Shared &shared,
     summary.returns = tasked && summary.isReturn;
     if (auto index = shared.blockIndices.find(block);
         index != shared.blockIndices.end())
-      summary.hasEffects =
-          shared.fragmentEffects.count({name, index->second});
+      summary.hasEffects = shared.fragmentEffects.count({name, index->second});
     successors.push_back(executableSuccessors(*block));
 
     using Transfer = BlockInfo::Transfer;
@@ -452,7 +452,7 @@ void summarize(const ActivationPhaseAnalysis::Shared &shared,
       summary.calleeName = call.getCalleeAttr().getAttr();
     } else if (auto delay = dyn_cast<sim::SimSuspendDelayOp>(terminator)) {
       auto constant = delay.getDelay().getDefiningOp<sim::SimTimeConstantOp>();
-      summary.transfer = !constant                ? Transfer::Variable
+      summary.transfer = !constant                 ? Transfer::Variable
                          : constant.getValue() > 0 ? Transfer::Positive
                                                    : Transfer::Zero;
     } else if (isa<sim::SimSuspendForeverOp>(terminator)) {
@@ -489,8 +489,7 @@ void summarize(const ActivationPhaseAnalysis::Shared &shared,
   for (auto [position, entry] : llvm::enumerate(result.blocks))
     for (Block *successor : successors[position])
       if (auto found = positions.find(successor); found != positions.end()) {
-        result.blocks[found->second].second.predecessors.push_back(
-            entry.first);
+        result.blocks[found->second].second.predecessors.push_back(entry.first);
         entry.second.successors.push_back(successor);
       }
   // Executability of the root initializer's blocks decides its spawns.
@@ -646,10 +645,9 @@ ActivationPhaseAnalysis::ActivationPhaseAnalysis(
        design.getBody().front().getOps<sim::SimFuncOp>())
     if (!function.isExternal())
       functions.emplace_back().function = function;
-  parallelForEach(design.getContext(), functions,
-                  [&](FunctionSummary &function) {
-                    summarize(facts, function);
-                  });
+  parallelForEach(
+      design.getContext(), functions,
+      [&](FunctionSummary &function) { summarize(facts, function); });
   for (FunctionSummary &function : functions) {
     if (function.facts)
       facts.facts[function.function.getSymNameAttr()] =

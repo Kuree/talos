@@ -1253,7 +1253,7 @@ private:
 void populateRuntimePatterns(const TypeConverter &converter,
                              RewritePatternSet &patterns, const ABITypes &abi) {
   MLIRContext *context = patterns.getContext();
-#define TALOS_RUNTIME_MATERIALIZER(Op, Kind)                                 \
+#define TALOS_RUNTIME_MATERIALIZER(Op, Kind)                                   \
   patterns.add<RuntimeMaterializerLowering>(                                   \
       converter, runtime::Op::getOperationName(), RuntimeMaterializer::Kind,   \
       context, abi)
@@ -1271,14 +1271,12 @@ void populateRuntimePatterns(const TypeConverter &converter,
   TALOS_RUNTIME_MATERIALIZER(RTArgumentRawAggregateOp, ArgumentRawAggregate);
   TALOS_RUNTIME_MATERIALIZER(RTArgumentRealOp, ArgumentReal);
   TALOS_RUNTIME_MATERIALIZER(RTArgumentBytesOp, ArgumentBytes);
-  TALOS_RUNTIME_MATERIALIZER(RTArgumentManagedStringOp,
-                               ArgumentManagedString);
+  TALOS_RUNTIME_MATERIALIZER(RTArgumentManagedStringOp, ArgumentManagedString);
   TALOS_RUNTIME_MATERIALIZER(RTArgumentManagedContainerOp,
-                               ArgumentManagedContainer);
-  TALOS_RUNTIME_MATERIALIZER(RTArgumentManagedObjectOp,
-                               ArgumentManagedObject);
+                             ArgumentManagedContainer);
+  TALOS_RUNTIME_MATERIALIZER(RTArgumentManagedObjectOp, ArgumentManagedObject);
   TALOS_RUNTIME_MATERIALIZER(RTArgumentVirtualInterfaceOp,
-                               ArgumentVirtualInterface);
+                             ArgumentVirtualInterface);
   TALOS_RUNTIME_MATERIALIZER(RTArgumentProcessOp, ArgumentProcess);
   TALOS_RUNTIME_MATERIALIZER(RTArgumentArrayOp, ArgumentArray);
   TALOS_RUNTIME_MATERIALIZER(RTFormatEnvironmentOp, FormatEnvironment);
@@ -1288,7 +1286,7 @@ void populateRuntimePatterns(const TypeConverter &converter,
   TALOS_RUNTIME_MATERIALIZER(RTStatusFromBitsOp, StatusCast);
   TALOS_RUNTIME_MATERIALIZER(RTStatusToBitsOp, StatusCast);
 #undef TALOS_RUNTIME_MATERIALIZER
-#define TALOS_RUNTIME_CALL(Name, Op, Symbol, Signature)                      \
+#define TALOS_RUNTIME_CALL(Name, Op, Symbol, Signature)                        \
   patterns.add<RuntimeCallLowering>(converter,                                 \
                                     runtime::Op::getOperationName(),           \
                                     runtime::RuntimeCall::Name, context, abi);

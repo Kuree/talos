@@ -1,9 +1,9 @@
 #include "talos/Analysis/PrivateStorageAnalysis.h"
-#include "talos/Analysis/DPIEffectAnalysis.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Interfaces/ViewLikeInterface.h"
+#include "talos/Analysis/DPIEffectAnalysis.h"
 #include "talos/Dialect/Schedule/ScheduleOps.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 using namespace mlir;

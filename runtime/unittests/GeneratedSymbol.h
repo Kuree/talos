@@ -6,7 +6,6 @@
 
 #define TALOS_TEST_STRINGIFY_(text) #text
 #define TALOS_TEST_STRINGIFY(text) TALOS_TEST_STRINGIFY_(text)
-#define TALOS_TEST_SYMBOL(name)                                              \
-  TALOS_TEST_STRINGIFY(__USER_LABEL_PREFIX__) name
+#define TALOS_TEST_SYMBOL(name) TALOS_TEST_STRINGIFY(__USER_LABEL_PREFIX__) name
 
 #endif // TALOS_UNITTESTS_GENERATEDSYMBOL_H

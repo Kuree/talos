@@ -48,8 +48,7 @@ void materializeNativeSchedulerGlobals(ModuleOp module) {
   Location location = module.getLoc();
 
   Type pointer = LLVM::LLVMPointerType::get(module.getContext());
-  constexpr llvm::StringLiteral currentContextName =
-      "__talos_current_context";
+  constexpr llvm::StringLiteral currentContextName = "__talos_current_context";
   if (!module.lookupSymbol(currentContextName)) {
     auto global = LLVM::GlobalOp::create(
         builder, location, pointer, false, LLVM::Linkage::Internal,

@@ -1,20 +1,20 @@
 //===- talos-opt.cpp - Talos IR parser and optimizer driver ----------===//
 
-#include "talos/Conversion/TalosToSimulation.h"
 #include "talos/Conversion/RuntimeToLLVM.h"
 #include "talos/Conversion/SimulationToLLVMCoroutine.h"
 #include "talos/Conversion/SimulationToSchedule.h"
 #include "talos/Conversion/SlangToTalos.h"
+#include "talos/Conversion/TalosToSimulation.h"
 #include "talos/Dialect/Coverage/CoverageDialect.h"
 #include "talos/Dialect/DPI/DPIDialect.h"
 #include "talos/Dialect/Native/NativeDialect.h"
-#include "talos/Dialect/Talos/TalosDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
 #include "talos/Dialect/SDF/SDFDialect.h"
 #include "talos/Dialect/Schedule/Transforms/Passes.h"
 #include "talos/Dialect/Simulation/SimulationDialect.h"
 #include "talos/Dialect/Simulation/Transforms/Passes.h"
 #include "talos/Dialect/Slang/SlangDialect.h"
+#include "talos/Dialect/Talos/TalosDialect.h"
 
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/IR/DialectRegistry.h"
@@ -70,12 +70,12 @@ int main(int argc, char **argv) {
 
   mlir::DialectRegistry registry;
   mlir::registerAllDialects(registry);
-  registry.insert<
-      talos::slangir::SlangDialect, talos::ir::TalosDialect,
-      talos::cov::CoverageDialect, talos::dpi::DPIDialect,
-      talos::native::NativeDialect, talos::runtime::TalosRuntimeDialect,
-      talos::sdf::TalosSDFDialect, talos::schedule::ScheduleDialect,
-      talos::sim::TalosSimulationDialect>();
+  registry
+      .insert<talos::slangir::SlangDialect, talos::ir::TalosDialect,
+              talos::cov::CoverageDialect, talos::dpi::DPIDialect,
+              talos::native::NativeDialect, talos::runtime::TalosRuntimeDialect,
+              talos::sdf::TalosSDFDialect, talos::schedule::ScheduleDialect,
+              talos::sim::TalosSimulationDialect>();
 
   return mlir::asMainReturnCode(
       mlir::MlirOptMain(argc, argv, "Talos IR optimizer\n", registry));

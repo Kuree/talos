@@ -19,17 +19,15 @@ public:
 
   bool contains(uint16_t index) const { return index < count; }
   talos_rt_bytecode_type type(uint16_t index) const {
-    return data[static_cast<uint64_t>(index) *
-                TALOS_RT_BYTECODE_REGISTER_SIZE];
+    return data[static_cast<uint64_t>(index) * TALOS_RT_BYTECODE_REGISTER_SIZE];
   }
   uint64_t value(uint16_t index) const {
     uint64_t result;
-    std::memcpy(&result,
-                data +
-                    static_cast<uint64_t>(index) *
-                        TALOS_RT_BYTECODE_REGISTER_SIZE +
-                    8,
-                sizeof(result));
+    std::memcpy(
+        &result,
+        data + static_cast<uint64_t>(index) * TALOS_RT_BYTECODE_REGISTER_SIZE +
+            8,
+        sizeof(result));
     return result;
   }
   void define(uint16_t index, talos_rt_bytecode_type type, uint64_t value) {
@@ -95,8 +93,7 @@ uint64_t scalarByteSize(talos_rt_bytecode_value_kind kind) {
 }
 
 bool validOperandRange(const talos_rt_bytecode_operand_v1 &operand,
-                       const talos_rt_bytecode_v1 &program,
-                       uint64_t byteSize) {
+                       const talos_rt_bytecode_v1 &program, uint64_t byteSize) {
   if (operand.kind == TALOS_RT_BC_OPERAND_FRAME)
     return validRange(operand.value, byteSize, program.register_offset);
   if (operand.kind == TALOS_RT_BC_OPERAND_CONSTANT)
@@ -106,8 +103,7 @@ bool validOperandRange(const talos_rt_bytecode_operand_v1 &operand,
 
 bool validArgumentOperand(const talos_rt_bytecode_operand_v1 &operand,
                           const talos_rt_bytecode_v1 &program) {
-  if (operand.reserved != 0 ||
-      operand.direction != TALOS_RT_BC_OPERAND_INPUT ||
+  if (operand.reserved != 0 || operand.direction != TALOS_RT_BC_OPERAND_INPUT ||
       (operand.flags & ~(TALOS_RT_ARG_SIGNED | TALOS_RT_ARG_FORMAT_STRING |
                          TALOS_RT_ARG_DESIGNATED_FORMAT)) != 0)
     return false;
@@ -128,8 +124,8 @@ bool validArgumentOperand(const talos_rt_bytecode_operand_v1 &operand,
            validOperandRange(operand, program, sizeof(uint64_t));
   case TALOS_RT_BC_VALUE_ARGUMENT_LOGIC: {
     if (operand.size == 0 ||
-        (operand.flags & (TALOS_RT_ARG_FORMAT_STRING |
-                          TALOS_RT_ARG_DESIGNATED_FORMAT)) != 0 ||
+        (operand.flags &
+         (TALOS_RT_ARG_FORMAT_STRING | TALOS_RT_ARG_DESIGNATED_FORMAT)) != 0 ||
         (operand.kind != TALOS_RT_BC_OPERAND_FRAME &&
          operand.kind != TALOS_RT_BC_OPERAND_CONSTANT))
       return false;
@@ -215,8 +211,7 @@ bool validServiceOperand(const talos_rt_bytecode_operand_v1 &operand,
   }
   case TALOS_RT_BC_VALUE_FORMAT_ENVIRONMENT: {
     if (direction != TALOS_RT_BC_OPERAND_INPUT ||
-        operand.kind != TALOS_RT_BC_OPERAND_IMMEDIATE ||
-        operand.auxiliary != 0)
+        operand.kind != TALOS_RT_BC_OPERAND_IMMEDIATE || operand.auxiliary != 0)
       return false;
     if (operand.size == 0)
       return operand.value == 0;
@@ -248,39 +243,35 @@ bool validateServiceSite(const talos_rt_bytecode_service_site_v1 &site,
     return false;
   const auto *operands =
       site.operand_count == 0 ? nullptr : program.operands + site.first_operand;
-  auto matches =
-      [&](std::initializer_list<talos_rt_bytecode_value_kind> kinds,
-          size_t outputCount = 0,
-          std::optional<size_t> inoutIndex = std::nullopt) {
-        if (kinds.size() != site.operand_count || outputCount > kinds.size())
-          return false;
-        size_t index = 0;
-        for (auto kind : kinds) {
-          auto direction = inoutIndex && index == *inoutIndex
-                               ? TALOS_RT_BC_OPERAND_INOUT
-                           : index >= kinds.size() - outputCount
-                               ? TALOS_RT_BC_OPERAND_OUTPUT
-                               : TALOS_RT_BC_OPERAND_INPUT;
-          ++index;
-          if (!validServiceOperand(operands[index - 1], program, kind,
-                                   direction))
-            return false;
-        }
-        return true;
-      };
+  auto matches = [&](std::initializer_list<talos_rt_bytecode_value_kind> kinds,
+                     size_t outputCount = 0,
+                     std::optional<size_t> inoutIndex = std::nullopt) {
+    if (kinds.size() != site.operand_count || outputCount > kinds.size())
+      return false;
+    size_t index = 0;
+    for (auto kind : kinds) {
+      auto direction =
+          inoutIndex && index == *inoutIndex    ? TALOS_RT_BC_OPERAND_INOUT
+          : index >= kinds.size() - outputCount ? TALOS_RT_BC_OPERAND_OUTPUT
+                                                : TALOS_RT_BC_OPERAND_INPUT;
+      ++index;
+      if (!validServiceOperand(operands[index - 1], program, kind, direction))
+        return false;
+    }
+    return true;
+  };
   bool valid = false;
   switch (site.service) {
   case TALOS_RT_BC_SERVICE_FORMAT:
-    valid = matches(
-        {TALOS_RT_BC_VALUE_BYTES, TALOS_RT_BC_VALUE_ARGUMENT_ARRAY,
-         TALOS_RT_BC_VALUE_FORMAT_ENVIRONMENT, TALOS_RT_BC_VALUE_BUFFER},
-        1);
+    valid = matches({TALOS_RT_BC_VALUE_BYTES, TALOS_RT_BC_VALUE_ARGUMENT_ARRAY,
+                     TALOS_RT_BC_VALUE_FORMAT_ENVIRONMENT,
+                     TALOS_RT_BC_VALUE_BUFFER},
+                    1);
     break;
   case TALOS_RT_BC_SERVICE_DISPLAY:
-    valid =
-        matches({TALOS_RT_BC_VALUE_U32, TALOS_RT_BC_VALUE_U32,
-                 TALOS_RT_BC_VALUE_U32, TALOS_RT_BC_VALUE_ARGUMENT_ARRAY,
-                 TALOS_RT_BC_VALUE_FORMAT_ENVIRONMENT});
+    valid = matches({TALOS_RT_BC_VALUE_U32, TALOS_RT_BC_VALUE_U32,
+                     TALOS_RT_BC_VALUE_U32, TALOS_RT_BC_VALUE_ARGUMENT_ARRAY,
+                     TALOS_RT_BC_VALUE_FORMAT_ENVIRONMENT});
     break;
   case TALOS_RT_BC_SERVICE_BUFFER_RELEASE:
     valid = matches({TALOS_RT_BC_VALUE_BUFFER});
@@ -299,9 +290,9 @@ bool validateServiceSite(const talos_rt_bytecode_service_site_v1 &site,
     valid = matches({TALOS_RT_BC_VALUE_U32});
     break;
   case TALOS_RT_BC_SERVICE_FILE_WRITE:
-    valid = matches({TALOS_RT_BC_VALUE_U32, TALOS_RT_BC_VALUE_BYTES,
-                     TALOS_RT_BC_VALUE_U64},
-                    1);
+    valid = matches(
+        {TALOS_RT_BC_VALUE_U32, TALOS_RT_BC_VALUE_BYTES, TALOS_RT_BC_VALUE_U64},
+        1);
     break;
   case TALOS_RT_BC_SERVICE_FILE_READ:
     valid = matches({TALOS_RT_BC_VALUE_U32, TALOS_RT_BC_VALUE_MUTABLE_BYTES,
@@ -328,8 +319,8 @@ bool validateServiceSite(const talos_rt_bytecode_service_site_v1 &site,
                     2);
     break;
   case TALOS_RT_BC_SERVICE_FILE_SEEK:
-    valid = matches({TALOS_RT_BC_VALUE_U32, TALOS_RT_BC_VALUE_I64,
-                     TALOS_RT_BC_VALUE_U32});
+    valid = matches(
+        {TALOS_RT_BC_VALUE_U32, TALOS_RT_BC_VALUE_I64, TALOS_RT_BC_VALUE_U32});
     break;
   case TALOS_RT_BC_SERVICE_FILE_TELL:
     valid = matches({TALOS_RT_BC_VALUE_U32, TALOS_RT_BC_VALUE_I64}, 1);
@@ -402,8 +393,7 @@ bool validateInstructionEncoding(const talos_rt_bytecode_v1 &program,
     case TALOS_RT_BC_CONST:
       if (!scalarOrStatus() || !validRegister(destination) || !noSources() ||
           (type == TALOS_RT_BC_TYPE_BOOL && immediate > 1) ||
-          (type == TALOS_RT_BC_TYPE_STATUS &&
-           immediate > TALOS_RT_STEP_LIMIT))
+          (type == TALOS_RT_BC_TYPE_STATUS && immediate > TALOS_RT_STEP_LIMIT))
         return false;
       break;
     case TALOS_RT_BC_MOVE:
@@ -439,7 +429,7 @@ bool validateInstructionEncoding(const talos_rt_bytecode_v1 &program,
     case TALOS_RT_BC_ULT:
     case TALOS_RT_BC_SLT:
       if (type != (opcode == TALOS_RT_BC_ULT ? TALOS_RT_BC_TYPE_U64
-                                               : TALOS_RT_BC_TYPE_I64) ||
+                                             : TALOS_RT_BC_TYPE_I64) ||
           !validRegister(destination) || !validRegister(source0) ||
           !validRegister(source1) || immediate != 0)
         return false;
@@ -507,8 +497,7 @@ bool validateServiceMetadata(const talos_rt_bytecode_v1 &program,
     return false;
   for (uint64_t index = 0; index != program.operand_count; ++index) {
     const auto &operand = program.operands[index];
-    if (operand.reserved != 0 ||
-        operand.kind > TALOS_RT_BC_OPERAND_RESOURCE ||
+    if (operand.reserved != 0 || operand.kind > TALOS_RT_BC_OPERAND_RESOURCE ||
         operand.direction > TALOS_RT_BC_OPERAND_INOUT ||
         operand.value_kind > TALOS_RT_BC_VALUE_ARGUMENT_TIME)
       return false;
@@ -543,8 +532,7 @@ bool validateServiceMetadata(const talos_rt_bytecode_v1 &program,
   return true;
 }
 
-talos_rt_bytecode_type
-registerTypeForValue(talos_rt_bytecode_value_kind kind);
+talos_rt_bytecode_type registerTypeForValue(talos_rt_bytecode_value_kind kind);
 
 using AbstractRegisterState = std::vector<uint8_t>;
 
@@ -557,9 +545,9 @@ bool requiresType(const AbstractRegisterState &state, uint64_t index,
   return index < state.size() && state[index] == typeMask(type);
 }
 
-bool validateServiceInputRegisters(
-    const talos_rt_bytecode_operand_v1 &operand,
-    const talos_rt_bytecode_v1 &program, const AbstractRegisterState &state) {
+bool validateServiceInputRegisters(const talos_rt_bytecode_operand_v1 &operand,
+                                   const talos_rt_bytecode_v1 &program,
+                                   const AbstractRegisterState &state) {
   if (operand.direction == TALOS_RT_BC_OPERAND_OUTPUT)
     return true;
   if (scalarByteSize(operand.value_kind) != 0 &&
@@ -841,8 +829,7 @@ private:
   std::vector<Entry> entries;
 };
 
-talos_rt_bytecode_type
-registerTypeForValue(talos_rt_bytecode_value_kind kind) {
+talos_rt_bytecode_type registerTypeForValue(talos_rt_bytecode_value_kind kind) {
   switch (kind) {
   case TALOS_RT_BC_VALUE_I32:
   case TALOS_RT_BC_VALUE_I64:
@@ -1068,9 +1055,8 @@ bool writeBufferOperand(const talos_rt_bytecode_operand_v1 &operand,
 
 std::optional<talos_rt_status>
 invokeService(const talos_rt_bytecode_service_site_v1 &site,
-              const talos_rt_bytecode_v1 &program,
-              talos_rt_context *context, void *frame, RegisterFile &registers,
-              ResourceTable &resources) {
+              const talos_rt_bytecode_v1 &program, talos_rt_context *context,
+              void *frame, RegisterFile &registers, ResourceTable &resources) {
   const auto *operand = program.operands + site.first_operand;
   // Validate result destinations before invoking a service. In particular,
   // do not perform an externally visible file operation and only then learn
@@ -1126,10 +1112,10 @@ invokeService(const talos_rt_bytecode_service_site_v1 &site,
         *radix > UINT32_MAX)
       return std::nullopt;
     return talos_rt_v1_display(context, static_cast<uint32_t>(*descriptor),
-                                 static_cast<uint32_t>(*newline),
-                                 static_cast<talos_rt_radix>(*radix),
-                                 args->arguments.data(), args->arguments.size(),
-                                 env->present ? &env->environment : nullptr);
+                               static_cast<uint32_t>(*newline),
+                               static_cast<talos_rt_radix>(*radix),
+                               args->arguments.data(), args->arguments.size(),
+                               env->present ? &env->environment : nullptr);
   }
   case TALOS_RT_BC_SERVICE_BUFFER_RELEASE: {
     uint16_t index = static_cast<uint16_t>(operand[0].value);
@@ -1172,17 +1158,14 @@ invokeService(const talos_rt_bytecode_service_site_v1 &site,
     if (!context)
       return TALOS_RT_INVALID_ARGUMENT;
     if (site.service == TALOS_RT_BC_SERVICE_FILE_CLOSE) {
-      (void)talos_rt_v1_file_close(context,
-                                     static_cast<uint32_t>(*descriptor));
+      (void)talos_rt_v1_file_close(context, static_cast<uint32_t>(*descriptor));
       return TALOS_RT_OK;
     }
     if (site.service == TALOS_RT_BC_SERVICE_FILE_FLUSH) {
-      (void)talos_rt_v1_file_flush(context,
-                                     static_cast<uint32_t>(*descriptor));
+      (void)talos_rt_v1_file_flush(context, static_cast<uint32_t>(*descriptor));
       return TALOS_RT_OK;
     }
-    return talos_rt_v1_file_rewind(context,
-                                     static_cast<uint32_t>(*descriptor));
+    return talos_rt_v1_file_rewind(context, static_cast<uint32_t>(*descriptor));
   }
   case TALOS_RT_BC_SERVICE_FILE_WRITE: {
     auto descriptor = scalar(0);
@@ -1190,9 +1173,8 @@ invokeService(const talos_rt_bytecode_service_site_v1 &site,
     if (!descriptor || *descriptor > UINT32_MAX || !data)
       return std::nullopt;
     uint64_t written = 0;
-    status =
-        talos_rt_v1_file_write(context, static_cast<uint32_t>(*descriptor),
-                                 data->data, data->size, &written);
+    status = talos_rt_v1_file_write(context, static_cast<uint32_t>(*descriptor),
+                                    data->data, data->size, &written);
     if (!writeScalar(2, written))
       return std::nullopt;
     return status;
@@ -1205,9 +1187,8 @@ invokeService(const talos_rt_bytecode_service_site_v1 &site,
                      ? nullptr
                      : static_cast<uint8_t *>(frame) + operand[1].value;
     uint64_t read = 0;
-    status =
-        talos_rt_v1_file_read(context, static_cast<uint32_t>(*descriptor),
-                                data, operand[1].size, &read);
+    status = talos_rt_v1_file_read(context, static_cast<uint32_t>(*descriptor),
+                                   data, operand[1].size, &read);
     if (!writeScalar(2, read))
       return std::nullopt;
     return status;
@@ -1217,8 +1198,8 @@ invokeService(const talos_rt_bytecode_service_site_v1 &site,
     if (!descriptor || *descriptor > UINT32_MAX)
       return std::nullopt;
     uint8_t byte = 0;
-    status = talos_rt_v1_file_getc(context,
-                                     static_cast<uint32_t>(*descriptor), &byte);
+    status = talos_rt_v1_file_getc(context, static_cast<uint32_t>(*descriptor),
+                                   &byte);
     if (!writeScalar(1, byte))
       return std::nullopt;
     return status;
@@ -1227,9 +1208,8 @@ invokeService(const talos_rt_bytecode_service_site_v1 &site,
     auto descriptor = scalar(0), byte = scalar(1);
     if (!descriptor || !byte || *descriptor > UINT32_MAX || *byte > UINT8_MAX)
       return std::nullopt;
-    return talos_rt_v1_file_ungetc(context,
-                                     static_cast<uint32_t>(*descriptor),
-                                     static_cast<uint8_t>(*byte));
+    return talos_rt_v1_file_ungetc(context, static_cast<uint32_t>(*descriptor),
+                                   static_cast<uint8_t>(*byte));
   }
   case TALOS_RT_BC_SERVICE_FILE_GETLINE: {
     auto descriptor = scalar(0), maxBytes = scalar(1);
@@ -1249,8 +1229,8 @@ invokeService(const talos_rt_bytecode_service_site_v1 &site,
     if (!descriptor || *descriptor > UINT32_MAX)
       return std::nullopt;
     uint32_t eof = 0;
-    status = talos_rt_v1_file_eof(context, static_cast<uint32_t>(*descriptor),
-                                    &eof);
+    status =
+        talos_rt_v1_file_eof(context, static_cast<uint32_t>(*descriptor), &eof);
     if (!writeScalar(1, eof))
       return std::nullopt;
     return status;
@@ -1261,8 +1241,8 @@ invokeService(const talos_rt_bytecode_service_site_v1 &site,
       return std::nullopt;
     int32_t code = 0;
     talos_rt_buffer_v1 output{};
-    status = talos_rt_v1_file_error(
-        context, static_cast<uint32_t>(*descriptor), &code, &output);
+    status = talos_rt_v1_file_error(context, static_cast<uint32_t>(*descriptor),
+                                    &code, &output);
     if (!writeScalar(1, static_cast<uint64_t>(static_cast<int64_t>(code))) ||
         !writeBufferOperand(operand[2], output, registers, resources)) {
       talos_rt_v1_buffer_release(&output);
@@ -1275,18 +1255,17 @@ invokeService(const talos_rt_bytecode_service_site_v1 &site,
     if (!descriptor || !offset || !origin || *descriptor > UINT32_MAX ||
         *origin > UINT32_MAX)
       return std::nullopt;
-    return talos_rt_v1_file_seek(
-        context, static_cast<uint32_t>(*descriptor),
-        static_cast<int64_t>(*offset),
-        static_cast<talos_rt_seek_origin>(*origin));
+    return talos_rt_v1_file_seek(context, static_cast<uint32_t>(*descriptor),
+                                 static_cast<int64_t>(*offset),
+                                 static_cast<talos_rt_seek_origin>(*origin));
   }
   case TALOS_RT_BC_SERVICE_FILE_TELL: {
     auto descriptor = scalar(0);
     if (!descriptor || *descriptor > UINT32_MAX)
       return std::nullopt;
     int64_t offset = 0;
-    status = talos_rt_v1_file_tell(
-        context, static_cast<uint32_t>(*descriptor), &offset);
+    status = talos_rt_v1_file_tell(context, static_cast<uint32_t>(*descriptor),
+                                   &offset);
     if (!writeScalar(1, static_cast<uint64_t>(offset)))
       return std::nullopt;
     return status;
@@ -1297,10 +1276,10 @@ invokeService(const talos_rt_bytecode_service_site_v1 &site,
 }
 
 talos_rt_status executeBytecodeV1(const talos_rt_bytecode_v1 &program,
-                                    talos_rt_context *context, void *frame,
-                                    uint64_t frameSize, uint32_t continuation,
-                                    uint64_t instructionLimit,
-                                    talos_rt_fragment_action_v1 *action) {
+                                  talos_rt_context *context, void *frame,
+                                  uint64_t frameSize, uint32_t continuation,
+                                  uint64_t instructionLimit,
+                                  talos_rt_fragment_action_v1 *action) {
   if ((program.code_size != 0 && !program.code) || program.code_size == 0 ||
       program.code_size % TALOS_RT_BYTECODE_INSTRUCTION_SIZE != 0 ||
       program.register_count > static_cast<uint32_t>(UINT16_MAX) + 1u ||
@@ -1424,7 +1403,7 @@ talos_rt_status executeBytecodeV1(const talos_rt_bytecode_v1 &program,
     case TALOS_RT_BC_NOT:
       if (!validSource(source0, type, registers) ||
           !define(type == TALOS_RT_BC_TYPE_BOOL ? !registers.value(source0)
-                                                  : ~registers.value(source0),
+                                                : ~registers.value(source0),
                   type))
         return TALOS_RT_INVALID_BYTECODE;
       break;
@@ -1464,8 +1443,7 @@ talos_rt_status executeBytecodeV1(const talos_rt_bytecode_v1 &program,
       uint64_t value;
       std::memcpy(&value, static_cast<uint8_t *>(frame) + immediate,
                   sizeof(value));
-      if ((type == TALOS_RT_BC_TYPE_BOOL && value > 1) ||
-          !define(value, type))
+      if ((type == TALOS_RT_BC_TYPE_BOOL && value > 1) || !define(value, type))
         return TALOS_RT_INVALID_BYTECODE;
       break;
     }
@@ -1506,8 +1484,7 @@ talos_rt_status executeBytecodeV1(const talos_rt_bytecode_v1 &program,
                  0};
       return TALOS_RT_OK;
     case TALOS_RT_BC_SUSPEND:
-      if (type != TALOS_RT_BC_TYPE_NONE ||
-          source0 < TALOS_RT_SUSPEND_DELAY ||
+      if (type != TALOS_RT_BC_TYPE_NONE || source0 < TALOS_RT_SUSPEND_DELAY ||
           source0 > TALOS_RT_SUSPEND_CHILDREN || immediate > UINT32_MAX ||
           (source1 != UINT16_MAX &&
            !validSource(source1, TALOS_RT_BC_TYPE_U64, registers)))
@@ -1534,8 +1511,8 @@ talos_rt_status executeBytecodeV1(const talos_rt_bytecode_v1 &program,
                  0};
       return TALOS_RT_OK;
     case TALOS_RT_BC_CALL_SERVICE: {
-      if (type != TALOS_RT_BC_TYPE_STATUS ||
-          !registers.contains(destination) || source0 != 0 || source1 != 0 ||
+      if (type != TALOS_RT_BC_TYPE_STATUS || !registers.contains(destination) ||
+          source0 != 0 || source1 != 0 ||
           immediate >= program.service_site_count ||
           registers.type(destination) == TALOS_RT_BC_TYPE_RESOURCE)
         return TALOS_RT_INVALID_BYTECODE;
@@ -1553,8 +1530,8 @@ talos_rt_status executeBytecodeV1(const talos_rt_bytecode_v1 &program,
     case TALOS_RT_BC_FAIL: {
       if (type != TALOS_RT_BC_TYPE_STATUS || destination != 0 ||
           !registers.contains(source0) ||
-          registers.type(source0) != TALOS_RT_BC_TYPE_STATUS ||
-          source1 != 0 || immediate != 0)
+          registers.type(source0) != TALOS_RT_BC_TYPE_STATUS || source1 != 0 ||
+          immediate != 0)
         return TALOS_RT_INVALID_BYTECODE;
       int64_t value = static_cast<int64_t>(registers.value(source0));
       if (value <= TALOS_RT_OK || value > TALOS_RT_STEP_LIMIT)
@@ -1596,8 +1573,7 @@ executeFragment(const talos_rt_fragment_descriptor_v1 *descriptor,
       descriptor->handle.kind != TALOS_RT_DESCRIPTOR_FRAGMENT ||
       (frameSize != 0 && !frame))
     return TALOS_RT_INVALID_ARGUMENT;
-  *outAction = {
-      TALOS_RT_FRAGMENT_TERMINATE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
+  *outAction = {TALOS_RT_FRAGMENT_TERMINATE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
   if (descriptor->flags != TALOS_RT_FRAGMENT_FLAGS_NONE)
     return TALOS_RT_INVALID_ARGUMENT;
   ManagedExecutionScope managedExecution(context);
@@ -1611,9 +1587,7 @@ executeFragment(const talos_rt_fragment_descriptor_v1 *descriptor,
       status = descriptor->code.native_entry(context, frame, frameSize,
                                              continuation, outAction);
     }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
     TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_ARGUMENT; }
   } else if (descriptor->code_kind == TALOS_RT_FRAGMENT_BYTECODE) {
     TALOS_RT_TRY {
@@ -1621,9 +1595,7 @@ executeFragment(const talos_rt_fragment_descriptor_v1 *descriptor,
                                  frameSize, continuation, instructionLimit,
                                  outAction);
     }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
     TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_BYTECODE; }
   } else {
     return TALOS_RT_INVALID_ARGUMENT;
@@ -1637,7 +1609,7 @@ executeFragment(const talos_rt_fragment_descriptor_v1 *descriptor,
 
 talos_rt_status
 talos_rt_validate_bytecode_program(const talos_rt_bytecode_v1 &program,
-                                     uint32_t continuation) noexcept {
+                                   uint32_t continuation) noexcept {
   TALOS_RT_TRY {
     if (!program.code || program.code_size == 0 ||
         program.code_size % TALOS_RT_BYTECODE_INSTRUCTION_SIZE != 0 ||
@@ -1663,10 +1635,11 @@ talos_rt_validate_bytecode_program(const talos_rt_bytecode_v1 &program,
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_BYTECODE; }
 }
 
-extern "C" talos_rt_status talos_rt_v1_fragment_execute(
-    const talos_rt_fragment_descriptor_v1 *descriptor,
-    talos_rt_context *context, void *frame, uint64_t frameSize,
-    uint32_t continuation, talos_rt_fragment_action_v1 *outAction) {
+extern "C" talos_rt_status
+talos_rt_v1_fragment_execute(const talos_rt_fragment_descriptor_v1 *descriptor,
+                             talos_rt_context *context, void *frame,
+                             uint64_t frameSize, uint32_t continuation,
+                             talos_rt_fragment_action_v1 *outAction) {
   return executeFragment(descriptor, context, frame, frameSize, continuation, 0,
                          false, outAction);
 }

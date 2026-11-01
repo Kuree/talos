@@ -122,9 +122,8 @@ serializeRuntimeWait(Operation *operation, Value wait, uint32_t kind,
           watchedEdges.push_back(
               getConvertedObserverBinding(condition)
                   ? TALOS_RT_WAIT_CONDITION_OBSERVER + predicate
-                  : (predicates
-                         ? TALOS_RT_WAIT_CONDITION_PREDICATE + predicate
-                         : noEdge));
+                  : (predicates ? TALOS_RT_WAIT_CONDITION_PREDICATE + predicate
+                                : noEdge));
         }
       })
       .Case<schedule::NativeSuspendEventOp>([&](auto op) {
@@ -165,8 +164,9 @@ serializeRuntimeWait(Operation *operation, Value wait, uint32_t kind,
     uint64_t entryOffset = waitHeaderSize + index * waitEntrySize;
     Operation *binding = getConvertedObserverBinding(value);
     if (binding) {
-      auto observerID = ::talos::schedule::get<
-          ::talos::schedule::Field::NativeObserverId>(binding);
+      auto observerID =
+          ::talos::schedule::get<::talos::schedule::Field::NativeObserverId>(
+              binding);
       auto captures = getConvertedObserverCaptures(binding);
       if (!observerID || captures.size() > UINT32_MAX)
         return binding->emitOpError("has malformed clock-condition metadata");

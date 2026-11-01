@@ -6,10 +6,10 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <algorithm>
@@ -40,22 +40,22 @@ TEST(GeneratedDesignDatabase, MailboxAssociativeMessages) {
   for (unsigned byte = 0; byte != 8; ++byte)
     checksum |= uint64_t{encoded->bytecode[32 + byte]} << (byte * 8);
   talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                               encoded->executionFlags,
-                                               0,
-                                               encoded->bytecode.data(),
-                                               encoded->bytecode.size(),
-                                               encoded->designDatabase.data(),
-                                               encoded->designDatabase.size(),
-                                               encoded->stateBitCount,
-                                               checksum,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0};
+                                             encoded->executionFlags,
+                                             0,
+                                             encoded->bytecode.data(),
+                                             encoded->bytecode.size(),
+                                             encoded->designDatabase.data(),
+                                             encoded->designDatabase.size(),
+                                             encoded->stateBitCount,
+                                             checksum,
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
   ASSERT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_OK);
   talos_rt_context *runtime = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &runtime),
@@ -72,7 +72,7 @@ TEST(GeneratedDesignDatabase, MailboxAssociativeMessages) {
   std::array<talos_rt_object_v1 *, 12> objects{};
   talos_rt_gc_root_range_v1 roots{};
   ASSERT_EQ(talos_rt_v1_gc_root_range_push(lane, &roots, objects.data(),
-                                             objects.size()),
+                                           objects.size()),
             TALOS_RT_OK);
   auto slotsFor = [](const talos::sim::ElementDescriptor &descriptor) {
     std::vector<talos_rt_element_trace_slot_v1> slots;
@@ -133,19 +133,12 @@ TEST(GeneratedDesignDatabase, MailboxAssociativeMessages) {
   ASSERT_EQ(talos_rt_v1_gc_managed_root_push(lane, &textRoot, &text),
             TALOS_RT_OK);
   const std::string longText = "z key survives all live storage";
-  ASSERT_EQ(talos_rt_v1_string_create(lane, longText.data(), longText.size(),
-                                        &text),
-            TALOS_RT_OK);
-  const talos_rt_element_type_v1 boxedWord{TALOS_RT_VERSION,
-                                             TALOS_RT_ELEMENT_BITS,
-                                             8123,
-                                             0,
-                                             0,
-                                             8,
-                                             8,
-                                             64,
-                                             nullptr,
-                                             nullptr};
+  ASSERT_EQ(
+      talos_rt_v1_string_create(lane, longText.data(), longText.size(), &text),
+      TALOS_RT_OK);
+  const talos_rt_element_type_v1 boxedWord{
+      TALOS_RT_VERSION, TALOS_RT_ELEMENT_BITS, 8123, 0, 0, 8, 8, 64, nullptr,
+      nullptr};
   for (size_t entry = 0; entry != 3; ++entry) {
     std::array<uint8_t, 17> wide{};
     if (entry == 0)
@@ -160,9 +153,8 @@ TEST(GeneratedDesignDatabase, MailboxAssociativeMessages) {
     key.width = 130;
     key.value_data = wide.data();
     const int32_t value = entry == 0 ? 30 : entry == 1 ? 10 : 20;
-    ASSERT_EQ(
-        talos_rt_v1_assoc_write(lane, objects[5], &key, &value, nullptr),
-        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_assoc_write(lane, objects[5], &key, &value, nullptr),
+              TALOS_RT_OK);
   }
   for (size_t entry = 0; entry != 2; ++entry) {
     const int32_t value = entry ? 11 : 22;
@@ -172,9 +164,8 @@ TEST(GeneratedDesignDatabase, MailboxAssociativeMessages) {
     if (entry)
       ASSERT_EQ(talos_rt_v1_string_create(lane, "aaa", 3, &key.string),
                 TALOS_RT_OK);
-    ASSERT_EQ(
-        talos_rt_v1_assoc_write(lane, objects[6], &key, &value, nullptr),
-        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_assoc_write(lane, objects[6], &key, &value, nullptr),
+              TALOS_RT_OK);
     std::array<uint8_t, 16> record{};
     const int32_t number = entry ? 1 : 2;
     std::memcpy(record.data(), &number, sizeof(number));
@@ -183,9 +174,8 @@ TEST(GeneratedDesignDatabase, MailboxAssociativeMessages) {
     key.kind = TALOS_RT_ASSOC_KEY_ELEMENT;
     key.width = record.size() * 8;
     key.value_data = record.data();
-    ASSERT_EQ(
-        talos_rt_v1_assoc_write(lane, objects[7], &key, &value, nullptr),
-        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_assoc_write(lane, objects[7], &key, &value, nullptr),
+              TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_container_create_typed(
                   lane, TALOS_RT_CONTAINER_DYNAMIC_ARRAY, boxedWord.type_id,
                   boxedWord.kind, boxedWord.flags, boxedWord.value_size,
@@ -194,14 +184,13 @@ TEST(GeneratedDesignDatabase, MailboxAssociativeMessages) {
               TALOS_RT_OK);
     const uint64_t wildcard = entry ? 1 : 256;
     ASSERT_EQ(talos_rt_v1_container_write(lane, objects[10 + entry], 0,
-                                            &wildcard, nullptr),
+                                          &wildcard, nullptr),
               TALOS_RT_OK);
     key = {};
     key.kind = TALOS_RT_ASSOC_KEY_WILDCARD;
     key.object = objects[10 + entry];
-    ASSERT_EQ(
-        talos_rt_v1_assoc_write(lane, objects[8], &key, &value, nullptr),
-        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_assoc_write(lane, objects[8], &key, &value, nullptr),
+              TALOS_RT_OK);
     key = {};
     key.kind = TALOS_RT_ASSOC_KEY_SIGNED;
     key.width = 32;
@@ -268,13 +257,13 @@ TEST(GeneratedDesignDatabase, MailboxAssociativeMessages) {
     const uint64_t arrayWord =
         talos_rt_managed_word_from_object(objects[5 + i]);
     uint32_t success = 0;
-    ASSERT_EQ(talos_rt_v1_mailbox_try_put(lane, objects[i], &arrayWord,
-                                            nullptr, &success),
+    ASSERT_EQ(talos_rt_v1_mailbox_try_put(lane, objects[i], &arrayWord, nullptr,
+                                          &success),
               TALOS_RT_OK);
     ASSERT_EQ(success, 1u);
     const uint64_t emptyArray = 0;
     ASSERT_EQ(talos_rt_v1_mailbox_try_put(lane, objects[i], &emptyArray,
-                                            nullptr, &success),
+                                          nullptr, &success),
               TALOS_RT_OK);
     ASSERT_EQ(success, 1u);
     const std::string name = std::string("top.") + names[i];
@@ -282,10 +271,9 @@ TEST(GeneratedDesignDatabase, MailboxAssociativeMessages) {
                   runtime, reinterpret_cast<const uint8_t *>(name.data()),
                   name.size(), &storage[i]),
               TALOS_RT_OK);
-    const uint64_t mailboxWord =
-        talos_rt_managed_word_from_object(objects[i]);
+    const uint64_t mailboxWord = talos_rt_managed_word_from_object(objects[i]);
     ASSERT_EQ(talos_rt_v1_design_write(runtime, storage[i], &mailboxWord,
-                                         nullptr, 64),
+                                       nullptr, 64),
               TALOS_RT_OK);
     auto variable =
         keep(vpi_handle_by_name(const_cast<char *>(name.c_str()), nullptr));

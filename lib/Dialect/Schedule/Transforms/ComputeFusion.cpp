@@ -976,8 +976,8 @@ llvm::DenseSet<StringAttr> schedule::collectRepeatableCombinationalActivations(
   });
   // Only the distribution is reported: a remark per process would serialize
   // the design once per rejected process.
-  bool report = native::has<native::DebugTiming>(
-      design->getParentOfType<ModuleOp>());
+  bool report =
+      native::has<native::DebugTiming>(design->getParentOfType<ModuleOp>());
   llvm::StringMap<uint64_t> rejections;
   auto reject = [&](StringRef reason) {
     if (report)
@@ -1005,8 +1005,9 @@ llvm::DenseSet<StringAttr> schedule::collectRepeatableCombinationalActivations(
         std::string message = failure.getMessage();
         // Storage identities and operation names vary per process; the
         // histogram needs the class of failure.
-        reject(message.empty() ? "no structured activation"
-                               : StringRef(message).split(" on storage ").first);
+        reject(message.empty()
+                   ? "no structured activation"
+                   : StringRef(message).split(" on storage ").first);
       }
       return;
     }
@@ -1036,8 +1037,7 @@ llvm::DenseSet<StringAttr> schedule::collectRepeatableCombinationalActivations(
     });
     for (StringRef reason : ordered)
       llvm::errs() << "talos repeatable rejection: count="
-                   << rejections.lookup(reason) << " reason=" << reason
-                   << '\n';
+                   << rejections.lookup(reason) << " reason=" << reason << '\n';
   }
   return result;
 }

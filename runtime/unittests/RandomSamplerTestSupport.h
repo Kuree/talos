@@ -27,7 +27,7 @@ inline void appendTestSamplerPlan(std::vector<uint8_t> &bytes) {
       }
     }
   auto plan = talos::solver::compileRandomSamplerPlan(bytes.data(),
-                                                        bytes.size(), widths);
+                                                      bytes.size(), widths);
   if (!plan)
     return; // Deliberately malformed residual fixtures still reach validation.
   bytes.insert(bytes.end(), plan->begin(), plan->end());

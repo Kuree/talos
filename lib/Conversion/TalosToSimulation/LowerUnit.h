@@ -327,11 +327,12 @@ private:
     return writeCapturedLValue(destination, value, sourceSigned, nonblocking,
                                location, delay, StoredValue::Borrowed);
   }
-  ::mlir::LogicalResult
-  writeCapturedLValue(CapturedLValue &destination, ::mlir::Value value,
-                      bool sourceSigned, bool nonblocking,
-                      ::mlir::Location location, ::mlir::Value delay,
-                      StoredValue stored);
+  ::mlir::LogicalResult writeCapturedLValue(CapturedLValue &destination,
+                                            ::mlir::Value value,
+                                            bool sourceSigned, bool nonblocking,
+                                            ::mlir::Location location,
+                                            ::mlir::Value delay,
+                                            StoredValue stored);
   bool haveSameCapturedStorage(const CapturedLValue &lhs,
                                const CapturedLValue &rhs) const;
   void propagateCapturedContainers(const CapturedLValue &source,

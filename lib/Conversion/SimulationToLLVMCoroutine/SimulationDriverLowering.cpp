@@ -30,7 +30,7 @@ namespace {
 
 uint64_t encodeNativeStaticHandle(uint32_t id, int32_t offset = 0) {
   return talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_STATIC, id,
-                                         offset);
+                                       offset);
 }
 
 // Keep ordinary narrow driver resolution straight-line.  Wide port aliases
@@ -70,10 +70,10 @@ struct DriverLookupIndex {
     if (found == segmentsByNet.end())
       return {};
     const auto &segments = found->second;
-    auto next = llvm::upper_bound(segments, offset,
-                                  [](uint64_t bit, const DriverSegment &segment) {
-                                    return bit < segment.low;
-                                  });
+    auto next = llvm::upper_bound(
+        segments, offset, [](uint64_t bit, const DriverSegment &segment) {
+          return bit < segment.low;
+        });
     if (next == segments.begin() || offset >= std::prev(next)->high)
       return {};
     return std::prev(next)->drivers;
@@ -502,8 +502,8 @@ public:
       // net leaves its driver unforced, but release needs the retained driver
       // contribution in canonical storage.
       if (cleanLayout && !native::has<native::GuardedBulkDrive>(op) &&
-          !::talos::schedule::has<
-              ::talos::schedule::Field::DeferNetResolution>(op) &&
+          !::talos::schedule::has<::talos::schedule::Field::DeferNetResolution>(
+              op) &&
           !sim::has<sim::metadata::UserNetRawDrive>(op)) {
         auto id = native::get<native::DriverId>(op);
         auto found = id ? cleanIndex->driverByID.find(id.getUInt())
@@ -549,9 +549,9 @@ public:
           }
           rewriter.setInsertionPointToEnd(head);
           Type pointer = LLVM::LLVMPointerType::get(rewriter.getContext());
-          Value address = LLVM::AddressOfOp::create(
-              rewriter, op.getLoc(), pointer,
-              "__talos_state_specialization_fast_v1");
+          Value address =
+              LLVM::AddressOfOp::create(rewriter, op.getLoc(), pointer,
+                                        "__talos_state_specialization_fast_v1");
           Value flag = LLVM::LoadOp::create(rewriter, op.getLoc(),
                                             rewriter.getI32Type(), address, 4);
           Value allowed = arith::CmpIOp::create(
@@ -666,8 +666,9 @@ public:
     // A conditional gate stores its complementary low-polarity bank before
     // its high-polarity bank. The first store deliberately stops here so the
     // second drive resolves and publishes one atomic logical transition.
-    bool deferResolution = ::talos::schedule::has<
-        ::talos::schedule::Field::DeferNetResolution>(op);
+    bool deferResolution =
+        ::talos::schedule::has<::talos::schedule::Field::DeferNetResolution>(
+            op);
     if constexpr (std::is_same_v<DriveOp, sim::SimDriverDriveDelayedNetOp>)
       deferResolution = op.getDeferResolution();
     if (deferResolution) {
@@ -697,8 +698,7 @@ public:
               rewriter, op.getLoc(), adaptor.getDriver().front(), *sourceWidth,
               oldRawValue, oldRawUnknown, driveValue, driveUnknown,
               std::nullopt,
-              ::talos::schedule::get<schedule::metadata::evalSourceOwner>(
-                  op));
+              ::talos::schedule::get<schedule::metadata::evalSourceOwner>(op));
         }
       }
       if constexpr (std::is_same_v<DriveOp, sim::SimDriverDriveChangedOp>)
@@ -836,7 +836,8 @@ public:
       auto driverID = native::get<native::DriverId>(op);
       const NativeStateLayout::Driver *driver = getDriver(driverID);
       if (driver) {
-        const NativeStateLayout::Net *net = lookup.netByID.lookup(driver->netId);
+        const NativeStateLayout::Net *net =
+            lookup.netByID.lookup(driver->netId);
         auto foundDrivers = lookup.driversByNet.find(driver->netId);
         bool onlyDriver = foundDrivers != lookup.driversByNet.end() &&
                           foundDrivers->second.size() == 1;
@@ -879,14 +880,13 @@ public:
             rewriter.getI64IntegerAttr(
                 encodeNativeStaticHandle(net->handleID)));
         Value oldValue = loadStatePlane(rewriter, op.getLoc(), netHandle,
-                                        driveType, "__talos_state_value",
-                                        false, layout.bitCount, &layout);
+                                        driveType, "__talos_state_value", false,
+                                        layout.bitCount, &layout);
         Value oldUnknown =
-            !known
-                ? loadStatePlane(rewriter, op.getLoc(), netHandle, driveType,
-                                 "__talos_state_unknown", true,
-                                 layout.bitCount, &layout)
-                : integerConstant(APInt::getZero(driveType.getWidth()));
+            !known ? loadStatePlane(rewriter, op.getLoc(), netHandle, driveType,
+                                    "__talos_state_unknown", true,
+                                    layout.bitCount, &layout)
+                   : integerConstant(APInt::getZero(driveType.getWidth()));
         Value publishValue = driveValue;
         Value publishUnknown = driveUnknown;
         if (!net->fourState) {
@@ -914,9 +914,8 @@ public:
         Value unknownChanged =
             !publication.known
                 ? storeStatePlane(rewriter, op.getLoc(), publication.handle,
-                                  publication.unknown,
-                                  "__talos_state_unknown", layout.bitCount,
-                                  &layout)
+                                  publication.unknown, "__talos_state_unknown",
+                                  layout.bitCount, &layout)
                 : boolean(false);
         changed = arith::OrIOp::create(
             rewriter, op.getLoc(), changed,
@@ -1010,11 +1009,11 @@ public:
         return std::nullopt;
       // Strength combination is commutative and associative; a fixed order
       // keeps the generated IR deterministic.
-      llvm::sort(shape.contributions, [](const Contribution &lhs,
-                                         const Contribution &rhs) {
-        return std::pair(lhs.driver, lhs.member) <
-               std::pair(rhs.driver, rhs.member);
-      });
+      llvm::sort(shape.contributions,
+                 [](const Contribution &lhs, const Contribution &rhs) {
+                   return std::pair(lhs.driver, lhs.member) <
+                          std::pair(rhs.driver, rhs.member);
+                 });
       return shape;
     };
     // The next bit continues a run when its whole component is the previous
@@ -1054,8 +1053,7 @@ public:
       auto kind = static_cast<uint8_t>(shape.resolution);
       for (unsigned entry = 0; entry != entries; ++entry) {
         uint16_t strengths = runtime::implicitNetStrength(kind);
-        for (auto [index, contribution] :
-             llvm::enumerate(shape.contributions))
+        for (auto [index, contribution] : llvm::enumerate(shape.contributions))
           strengths = runtime::combineStrengthRanges(
               strengths,
               runtime::driverBitStrengths(
@@ -1100,8 +1098,7 @@ public:
         // into run order on load and back on publication.
         auto sliceLow = [&](unsigned member) -> uint64_t {
           uint64_t start = first.members[member].offset;
-          return reversed(member) ? start - delta - (width - 1)
-                                  : start + delta;
+          return reversed(member) ? start - delta - (width - 1) : start + delta;
         };
         auto inRunOrder = [&](unsigned member, Value slice) -> Value {
           if (!reversed(member) || width == 1 || constantOf(slice))
@@ -1134,26 +1131,25 @@ public:
         for (const Contribution &contribution : first.contributions) {
           const NativeStateLayout::Driver &driver = *contribution.driver;
           uint64_t offset = sliceLow(contribution.member);
-          if (&driver == affectedDriver && updateLow &&
-              offset >= *updateLow &&
+          if (&driver == affectedDriver && updateLow && offset >= *updateLow &&
               offset + width <= *updateLow + *sourceWidth) {
-            planes.push_back(inRunOrder(contribution.member,
-                                        ownSlice(driveValue, offset)));
+            planes.push_back(
+                inRunOrder(contribution.member, ownSlice(driveValue, offset)));
             planes.push_back(inRunOrder(contribution.member,
                                         ownSlice(driveUnknown, offset)));
             continue;
           }
           Value handle = handleAt(driver.handleID, offset);
-          planes.push_back(inRunOrder(
-              contribution.member,
-              loadStatePlane(rewriter, op.getLoc(), handle, type,
-                             "__talos_state_value", false, layout.bitCount,
-                             &layout)));
-          planes.push_back(inRunOrder(
-              contribution.member,
-              loadStatePlane(rewriter, op.getLoc(), handle, type,
-                             "__talos_state_unknown", true, layout.bitCount,
-                             &layout)));
+          planes.push_back(
+              inRunOrder(contribution.member,
+                         loadStatePlane(rewriter, op.getLoc(), handle, type,
+                                        "__talos_state_value", false,
+                                        layout.bitCount, &layout)));
+          planes.push_back(
+              inRunOrder(contribution.member,
+                         loadStatePlane(rewriter, op.getLoc(), handle, type,
+                                        "__talos_state_unknown", true,
+                                        layout.bitCount, &layout)));
         }
         // Project the constant planes out of the tables, so the expansion
         // below sees every remaining independence: known inputs cost nothing.
@@ -1218,7 +1214,8 @@ public:
               result = arith::AndIOp::create(rewriter, op.getLoc(),
                                              invert(plane), clear);
             else if (set == ones)
-              result = arith::OrIOp::create(rewriter, op.getLoc(), plane, clear);
+              result =
+                  arith::OrIOp::create(rewriter, op.getLoc(), plane, clear);
             else if (clear == ones)
               result = arith::OrIOp::create(rewriter, op.getLoc(),
                                             invert(plane), set);
@@ -1233,7 +1230,8 @@ public:
           return result;
         };
         unsigned count = static_cast<unsigned>(variables.size());
-        Value resolvedValue = synthesize(synthesize, project(valueTable), count);
+        Value resolvedValue =
+            synthesize(synthesize, project(valueTable), count);
         Value resolvedUnknown =
             synthesize(synthesize, project(unknownTable), count);
         for (auto [memberIndex, member] : llvm::enumerate(first.members)) {
@@ -1250,17 +1248,17 @@ public:
           // X/Z changes and invalidates that certificate.
           bool known =
               !memberNet.fourState ||
-              (schedule::has<schedule::Field::EvalInductiveTwoStateAccess>(op) &&
+              (schedule::has<schedule::Field::EvalInductiveTwoStateAccess>(
+                   op) &&
                affectedDriver && affectedDriver->netId == memberNet.id &&
                layout.isolatedPartitionedDriverNets.contains(memberNet.id) &&
                first.contributions.size() == 1 &&
                first.contributions.front().driver == affectedDriver);
           Value oldUnknown =
-              !known
-                  ? loadStatePlane(rewriter, op.getLoc(), netHandle, type,
-                                   "__talos_state_unknown", true,
-                                   layout.bitCount, &layout)
-                  : zero;
+              !known ? loadStatePlane(rewriter, op.getLoc(), netHandle, type,
+                                      "__talos_state_unknown", true,
+                                      layout.bitCount, &layout)
+                     : zero;
           Value publishValue =
               memberNet.fourState
                   ? resolvedValue
@@ -1270,8 +1268,7 @@ public:
           Value publishUnknown = memberNet.fourState ? resolvedUnknown : zero;
           unsigned index = static_cast<unsigned>(memberIndex);
           publications.push_back(
-              {netHandle, oldValue, oldUnknown,
-               inRunOrder(index, publishValue),
+              {netHandle, oldValue, oldUnknown, inRunOrder(index, publishValue),
                inRunOrder(index, publishUnknown), memberNet.fourState,
                resolveDirectStaticStateRange(netHandle, width, &layout), width,
                !known});
@@ -1388,8 +1385,8 @@ public:
                 rewriter.getI64IntegerAttr(encodeNativeStaticHandle(
                     driver.handleID, static_cast<int32_t>(member.offset))));
             Value driverValue = loadStatePlane(rewriter, op.getLoc(), handle,
-                                               i1, "__talos_state_value",
-                                               false, layout.bitCount, &layout);
+                                               i1, "__talos_state_value", false,
+                                               layout.bitCount, &layout);
             Value driverUnknown = loadStatePlane(
                 rewriter, op.getLoc(), handle, i1, "__talos_state_unknown",
                 true, layout.bitCount, &layout);
@@ -1478,8 +1475,8 @@ public:
                 rewriter.getI64IntegerAttr(encodeNativeStaticHandle(
                     memberNet->handleID, static_cast<int32_t>(member.offset))));
             Value memberValue = loadStatePlane(
-                rewriter, op.getLoc(), memberHandle, i1,
-                "__talos_state_value", false, layout.bitCount, &layout);
+                rewriter, op.getLoc(), memberHandle, i1, "__talos_state_value",
+                false, layout.bitCount, &layout);
             Value memberUnknown = loadStatePlane(
                 rewriter, op.getLoc(), memberHandle, i1,
                 "__talos_state_unknown", true, layout.bitCount, &layout);
@@ -1630,8 +1627,7 @@ public:
         const Publication &publication = run.front();
         notifySignal(
             rewriter, op.getLoc(), publication.handle, publication.width,
-            publication.oldValue,
-            publication.oldUnknown, publication.value,
+            publication.oldValue, publication.oldUnknown, publication.value,
             publication.fourState ? publication.unknown : Value{},
             publication.directRange,
             ::talos::schedule::get<schedule::metadata::evalSourceOwner>(op));

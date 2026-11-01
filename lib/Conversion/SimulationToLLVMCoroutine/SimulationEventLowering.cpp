@@ -36,13 +36,12 @@ public:
         rewriter, location,
         llvmConstant(rewriter, location, rewriter.getI64Type(), UINT64_MAX),
         output, 8);
-    Value status =
-        LLVM::CallOp::create(
-            rewriter, location, TypeRange{rewriter.getI32Type()},
-            SymbolRefAttr::get(rewriter.getContext(),
-                               "talos_rt_v1_scheduler_event_create"),
-            ValueRange{context, output})
-            .getResult();
+    Value status = LLVM::CallOp::create(
+                       rewriter, location, TypeRange{rewriter.getI32Type()},
+                       SymbolRefAttr::get(rewriter.getContext(),
+                                          "talos_rt_v1_scheduler_event_create"),
+                       ValueRange{context, output})
+                       .getResult();
     reportManagedStatus(rewriter, location, context, status);
     rewriter.replaceOp(operation,
                        LLVM::LoadOp::create(rewriter, location,

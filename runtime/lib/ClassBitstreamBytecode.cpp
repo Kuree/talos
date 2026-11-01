@@ -46,8 +46,7 @@ TALOS_RT_FEATURE_TEXT talos_rt_status invokeClassBitstreamIntrinsic(
   bool validInput = input.kind == TALOS_RT_DBREG_BITS || inputFourState ||
                     input.kind == TALOS_RT_DBREG_MANAGED ||
                     input.kind == TALOS_RT_DBREG_STRING;
-  if (!validInput ||
-      (output.kind != TALOS_RT_DBREG_BITS && !outputFourState) ||
+  if (!validInput || (output.kind != TALOS_RT_DBREG_BITS && !outputFourState) ||
       (inputFourState && (input.size & 1)) ||
       (outputFourState && (output.size & 1)) ||
       matched.kind != TALOS_RT_DBREG_BITS || matched.width != 1 ||

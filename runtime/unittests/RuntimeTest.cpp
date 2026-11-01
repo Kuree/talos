@@ -1,8 +1,8 @@
 //===- RuntimeTest.cpp - Tests for the Talos native runtime -------------===//
 
-#include "talos/Runtime/DescriptorMap.h"
 #include "talos/Runtime/Runtime.h"
 #include "svdpi.h"
+#include "talos/Runtime/DescriptorMap.h"
 
 #include "gtest/gtest.h"
 
@@ -120,8 +120,8 @@ void appendCheckedService(std::vector<uint8_t> &code, uint64_t site,
   uint64_t first = code.size() / TALOS_RT_BYTECODE_INSTRUCTION_SIZE;
   appendInstruction(code, TALOS_RT_BC_CALL_SERVICE, TALOS_RT_BC_TYPE_STATUS,
                     statusRegister, 0, 0, site);
-  appendInstruction(code, TALOS_RT_BC_BRANCH_ZERO, TALOS_RT_BC_TYPE_STATUS,
-                    0, statusRegister, 0, first + 3);
+  appendInstruction(code, TALOS_RT_BC_BRANCH_ZERO, TALOS_RT_BC_TYPE_STATUS, 0,
+                    statusRegister, 0, first + 3);
   appendInstruction(code, TALOS_RT_BC_FAIL, TALOS_RT_BC_TYPE_STATUS, 0,
                     statusRegister);
 }
@@ -153,9 +153,9 @@ std::atomic<ObserverEvaluatorMode> observerEvaluatorMode{
 std::atomic<uint32_t> observerEvaluatorCalls{0};
 std::atomic<bool> observerJoinedReadCompleted{false};
 
-talos_rt_status observerEvaluator(talos_rt_context *context,
-                                    const uint64_t *, uint32_t, uint64_t *value,
-                                    uint64_t *unknown, uint32_t limbCount) {
+talos_rt_status observerEvaluator(talos_rt_context *context, const uint64_t *,
+                                  uint32_t, uint64_t *value, uint64_t *unknown,
+                                  uint32_t limbCount) {
   if (!value || !unknown || limbCount == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   std::fill(value, value + limbCount, 0);
@@ -187,8 +187,8 @@ talos_rt_status observerEvaluator(talos_rt_context *context,
       const uint8_t one = 1;
       const uint8_t zero = 0;
       talos_rt_v1_scheduler_signal_transition(
-          context, talos_rt_v1_native_state_static_handle(1), 1, &one,
-          nullptr, &zero, nullptr);
+          context, talos_rt_v1_native_state_static_handle(1), 1, &one, nullptr,
+          &zero, nullptr);
     }
     value[0] = 1;
     break;
@@ -206,8 +206,7 @@ talos_rt_status observerEvaluator(talos_rt_context *context,
   return TALOS_RT_OK;
 }
 
-talos_rt_status observerWaitRequirements(uint64_t *size,
-                                           uint64_t *alignment) {
+talos_rt_status observerWaitRequirements(uint64_t *size, uint64_t *alignment) {
   if (!size || !alignment)
     return TALOS_RT_INVALID_ARGUMENT;
   *size = 0;
@@ -223,8 +222,7 @@ talos_rt_status overAlignedRequirements(uint64_t *size, uint64_t *alignment) {
   return TALOS_RT_OK;
 }
 
-talos_rt_status
-observerWaitExecute(talos_rt_process_instance_v1 *instance) {
+talos_rt_status observerWaitExecute(talos_rt_process_instance_v1 *instance) {
   if (!instance || !instance->action)
     return TALOS_RT_INVALID_ARGUMENT;
   *instance->action = {TALOS_RT_FRAGMENT_SUSPEND,
@@ -240,10 +238,9 @@ void observerWaitDestroy(talos_rt_process_instance_v1 *) {}
 
 uint32_t observerSecondClauseCalls = 0;
 
-talos_rt_status observerSecondEvaluator(talos_rt_context *,
-                                          const uint64_t *, uint32_t,
-                                          uint64_t *value, uint64_t *unknown,
-                                          uint32_t limbCount) {
+talos_rt_status observerSecondEvaluator(talos_rt_context *, const uint64_t *,
+                                        uint32_t, uint64_t *value,
+                                        uint64_t *unknown, uint32_t limbCount) {
   if (!value || !unknown || limbCount != 1)
     return TALOS_RT_INVALID_ARGUMENT;
   ++observerSecondClauseCalls;
@@ -289,8 +286,7 @@ uint64_t observerWaitLayoutChecksum(const talos_rt_frame_layout_v1 &layout) {
 
 struct ObserverWaitTestDescriptor {
   talos_rt_observer_descriptor_v1 observer{
-      7, nullptr, 0, 1, 0, TALOS_RT_OBSERVER_NO_BYTECODE, observerEvaluator,
-      0};
+      7, nullptr, 0, 1, 0, TALOS_RT_OBSERVER_NO_BYTECODE, observerEvaluator, 0};
   talos_rt_execution_descriptor_v1 execution{};
   talos_rt_frame_field_v1 field{
       TALOS_RT_FRAME_WAIT, TALOS_RT_FRAME_FIELD_FLAGS_NONE, 0, 176, 8, 0};
@@ -354,13 +350,13 @@ struct ObserverWaitTestDescriptor {
                    TALOS_RT_OBSERVER_DEPENDENCY_SIGNAL, 1};
     auto *clause = reinterpret_cast<talos_rt_computed_clause_v1 *>(
         static_cast<uint8_t *>(frame) + wait->clauses_offset);
-    *clause = {0, TALOS_RT_OBSERVER_CONDITION_NONE,
-               TALOS_RT_WAIT_EDGE_CHANGE, 0};
+    *clause = {0, TALOS_RT_OBSERVER_CONDITION_NONE, TALOS_RT_WAIT_EDGE_CHANGE,
+               0};
   }
 };
 
 talos_rt_status startObserverWait(ObserverWaitTestDescriptor &descriptor,
-                                    talos_rt_context **outContext) {
+                                  talos_rt_context **outContext) {
   if (!outContext)
     return TALOS_RT_INVALID_ARGUMENT;
   *outContext = nullptr;
@@ -375,8 +371,7 @@ talos_rt_status startObserverWait(ObserverWaitTestDescriptor &descriptor,
     return status;
   }
   talos_rt_process_instance_v1 *instance = nullptr;
-  status =
-      talos_rt_v1_process_instance_create(&descriptor.process, &instance);
+  status = talos_rt_v1_process_instance_create(&descriptor.process, &instance);
   if (status != TALOS_RT_OK) {
     talos_rt_v1_context_destroy(context);
     return status;
@@ -405,12 +400,12 @@ talos_rt_status startObserverWait(ObserverWaitTestDescriptor &descriptor,
   return TALOS_RT_OK;
 }
 
-talos_rt_status
-executeBytecode(const talos_rt_fragment_descriptor_v1 &input, void *frame,
-                uint64_t frameSize, uint32_t continuation,
-                talos_rt_fragment_action_v1 *action,
-                uint64_t instructionLimit = 0,
-                talos_rt_context *context = nullptr) {
+talos_rt_status executeBytecode(const talos_rt_fragment_descriptor_v1 &input,
+                                void *frame, uint64_t frameSize,
+                                uint32_t continuation,
+                                talos_rt_fragment_action_v1 *action,
+                                uint64_t instructionLimit = 0,
+                                talos_rt_context *context = nullptr) {
   talos_rt_fragment_descriptor_v1 descriptor = input;
   descriptor.code.bytecode.register_offset = frameSize;
   uint64_t scratchSize =
@@ -422,9 +417,9 @@ executeBytecode(const talos_rt_fragment_descriptor_v1 &input, void *frame,
   talos_rt_status status =
       instructionLimit == 0
           ? talos_rt_v1_fragment_execute(&descriptor, context,
-                                           storage.empty() ? nullptr
-                                                           : storage.data(),
-                                           storage.size(), continuation, action)
+                                         storage.empty() ? nullptr
+                                                         : storage.data(),
+                                         storage.size(), continuation, action)
           : talos_rt_v1_bytecode_execute_bounded(
                 &descriptor, context,
                 storage.empty() ? nullptr : storage.data(), storage.size(),
@@ -488,8 +483,8 @@ protected:
     std::string pathString = path.string();
     uint32_t descriptor = 0;
     EXPECT_EQ(talos_rt_v1_file_open(context, pathString.data(),
-                                      pathString.size(), mode.data(),
-                                      mode.size(), &descriptor),
+                                    pathString.size(), mode.data(), mode.size(),
+                                    &descriptor),
               TALOS_RT_OK);
     EXPECT_NE(descriptor, 0u);
     return descriptor;
@@ -550,23 +545,9 @@ TEST(RuntimeABI, RejectsMalformedActivationInventory) {
   const talos_rt_activation_descriptor_v1 activation{
       1, nullptr, TALOS_RT_ACTIVATION_NO_BYTECODE,
       TALOS_RT_ACTIVATION_HAS_NATIVE};
-  const talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                                     0,
-                                                     0,
-                                                     nullptr,
-                                                     0,
-                                                     nullptr,
-                                                     0,
-                                                     0,
-                                                     0,
-                                                     nullptr,
-                                                     0,
-                                                     0,
-                                                     0,
-                                                     &activation,
-                                                     1,
-                                                     nullptr,
-                                                     0};
+  const talos_rt_execution_descriptor_v1 execution{
+      TALOS_RT_VERSION, 0, 0, nullptr, 0,           nullptr, 0,       0, 0,
+      nullptr,          0, 0, 0,       &activation, 1,       nullptr, 0};
   talos_rt_context *context = nullptr;
   EXPECT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
             TALOS_RT_INVALID_DESIGN);
@@ -574,8 +555,8 @@ TEST(RuntimeABI, RejectsMalformedActivationInventory) {
 }
 
 TEST(RuntimeABI, ValidatesObserverInventoryAndDescriptorVersion) {
-  talos_rt_observer_capture_abi_v1 capture{
-      TALOS_RT_OBSERVER_CAPTURE_STORAGE, 8};
+  talos_rt_observer_capture_abi_v1 capture{TALOS_RT_OBSERVER_CAPTURE_STORAGE,
+                                           8};
   talos_rt_observer_descriptor_v1 observer{
       7, &capture, 1, 1, 0, TALOS_RT_OBSERVER_NO_BYTECODE, observerEvaluator,
       0};
@@ -609,21 +590,20 @@ TEST(RuntimeABI, ValidatesObserverInventoryAndDescriptorVersion) {
 TEST(RuntimeABI, AlignsProcessFramesForNativeState) {
   const uint32_t continuation = 0;
   talos_rt_frame_layout_v1 layout{TALOS_RT_VERSION, 0, 8, 8, nullptr, 0, 1,
-                                    &continuation,      0};
+                                  &continuation,    0};
   layout.checksum = observerWaitLayoutChecksum(layout);
-  talos_rt_process_descriptor_v1 process{
-      {TALOS_RT_DESCRIPTOR_PROCESS, 0, 19},
-      TALOS_RT_VERSION,
-      0,
-      TALOS_RT_TIER_MASK_NATIVE,
-      0,
-      &layout,
-      overAlignedRequirements,
-      observerWaitExecute,
-      observerWaitDestroy,
-      nullptr,
-      nullptr,
-      nullptr};
+  talos_rt_process_descriptor_v1 process{{TALOS_RT_DESCRIPTOR_PROCESS, 0, 19},
+                                         TALOS_RT_VERSION,
+                                         0,
+                                         TALOS_RT_TIER_MASK_NATIVE,
+                                         0,
+                                         &layout,
+                                         overAlignedRequirements,
+                                         observerWaitExecute,
+                                         observerWaitDestroy,
+                                         nullptr,
+                                         nullptr,
+                                         nullptr};
   talos_rt_process_instance_v1 *instance = nullptr;
   ASSERT_EQ(talos_rt_v1_process_instance_create(&process, &instance),
             TALOS_RT_OK);
@@ -645,9 +625,8 @@ TEST(RuntimeABI, RejectsMalformedComputedWaitRecords) {
         TALOS_RT_OK);
     void *frame = nullptr;
     uint64_t frameSize = 0;
-    ASSERT_EQ(
-        talos_rt_v1_process_instance_frame(instance, &frame, &frameSize),
-        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_process_instance_frame(instance, &frame, &frameSize),
+              TALOS_RT_OK);
     ASSERT_EQ(frameSize, 176u);
     ObserverWaitTestDescriptor::populate(frame);
     mutate(*static_cast<talos_rt_computed_wait_record_v1 *>(frame), frame);
@@ -686,17 +665,15 @@ TEST(RuntimeABI, RejectsMalformedComputedWaitRecords) {
       TALOS_RT_INVALID_FRAME);
   execute(
       [](auto &wait, void *frame) {
-        auto *dependency =
-            reinterpret_cast<talos_rt_computed_dependency_v1 *>(
-                static_cast<uint8_t *>(frame) + wait.dependencies_offset);
+        auto *dependency = reinterpret_cast<talos_rt_computed_dependency_v1 *>(
+            static_cast<uint8_t *>(frame) + wait.dependencies_offset);
         dependency->stable_id = UINT64_MAX;
       },
       TALOS_RT_INVALID_FRAME);
   execute(
       [](auto &wait, void *frame) {
-        auto *dependency =
-            reinterpret_cast<talos_rt_computed_dependency_v1 *>(
-                static_cast<uint8_t *>(frame) + wait.dependencies_offset);
+        auto *dependency = reinterpret_cast<talos_rt_computed_dependency_v1 *>(
+            static_cast<uint8_t *>(frame) + wait.dependencies_offset);
         dependency->width = 0;
       },
       TALOS_RT_INVALID_FRAME);
@@ -783,28 +760,27 @@ TEST(RuntimeABI, NestedObserverLatchStopsLaterSourceClauses) {
       TALOS_RT_FRAME_WAIT, TALOS_RT_FRAME_FIELD_FLAGS_NONE, 0, 256, 8, 0};
   std::array<uint32_t, 2> continuations{{0, 1}};
   talos_rt_frame_layout_v1 layout{TALOS_RT_VERSION,
-                                    0,
-                                    256,
-                                    8,
-                                    &field,
-                                    1,
-                                    static_cast<uint32_t>(continuations.size()),
-                                    continuations.data(),
-                                    0};
+                                  0,
+                                  256,
+                                  8,
+                                  &field,
+                                  1,
+                                  static_cast<uint32_t>(continuations.size()),
+                                  continuations.data(),
+                                  0};
   layout.checksum = observerWaitLayoutChecksum(layout);
-  talos_rt_process_descriptor_v1 process{
-      {TALOS_RT_DESCRIPTOR_PROCESS, 0, 18},
-      TALOS_RT_VERSION,
-      0,
-      TALOS_RT_TIER_MASK_NATIVE,
-      0,
-      &layout,
-      observerWaitRequirements,
-      observerTwoClauseExecute,
-      observerWaitDestroy,
-      nullptr,
-      &execution,
-      nullptr};
+  talos_rt_process_descriptor_v1 process{{TALOS_RT_DESCRIPTOR_PROCESS, 0, 18},
+                                         TALOS_RT_VERSION,
+                                         0,
+                                         TALOS_RT_TIER_MASK_NATIVE,
+                                         0,
+                                         &layout,
+                                         observerWaitRequirements,
+                                         observerTwoClauseExecute,
+                                         observerWaitDestroy,
+                                         nullptr,
+                                         &execution,
+                                         nullptr};
 
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
@@ -848,10 +824,10 @@ TEST(RuntimeABI, NestedObserverLatchStopsLaterSourceClauses) {
   dependencies[1] = dependencies[0];
   auto *clauses = reinterpret_cast<talos_rt_computed_clause_v1 *>(
       static_cast<uint8_t *>(frame) + wait->clauses_offset);
-  clauses[0] = {0, TALOS_RT_OBSERVER_CONDITION_NONE,
-                TALOS_RT_WAIT_EDGE_CHANGE, 0};
-  clauses[1] = {1, TALOS_RT_OBSERVER_CONDITION_NONE,
-                TALOS_RT_WAIT_EDGE_CHANGE, 0};
+  clauses[0] = {0, TALOS_RT_OBSERVER_CONDITION_NONE, TALOS_RT_WAIT_EDGE_CHANGE,
+                0};
+  clauses[1] = {1, TALOS_RT_OBSERVER_CONDITION_NONE, TALOS_RT_WAIT_EDGE_CHANGE,
+                0};
   ASSERT_EQ(talos_rt_v1_scheduler_add(context, instance, 0), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
 
@@ -903,8 +879,7 @@ TEST(RuntimeABI, ReportsEveryStatusAndReleasesBuffersIdempotently) {
       {TALOS_RT_LAYOUT_MISMATCH, "process frame layout mismatch"},
       {TALOS_RT_INVALID_CONTINUATION, "invalid process continuation"},
       {TALOS_RT_TIER_UNAVAILABLE, "requested process tier unavailable"},
-      {TALOS_RT_AOT_CHECKPOINT,
-       "native scheduler synchronization checkpoint"},
+      {TALOS_RT_AOT_CHECKPOINT, "native scheduler synchronization checkpoint"},
       {TALOS_RT_AOT_TIMED_CHECKPOINT,
        "native scheduler timed synchronization checkpoint"},
       {TALOS_RT_AOT_GENERATED_CHECKPOINT,
@@ -931,10 +906,8 @@ TEST(RuntimeABI, ReportsEveryStatusAndReleasesBuffersIdempotently) {
 TEST(RuntimeABI, FinishStopAndFatalHaveDistinctEntryPoints) {
   EXPECT_EQ(talos_rt_v1_scheduler_finish(nullptr, 0),
             TALOS_RT_INVALID_ARGUMENT);
-  EXPECT_EQ(talos_rt_v1_scheduler_stop(nullptr, 0),
-            TALOS_RT_INVALID_ARGUMENT);
-  EXPECT_EQ(talos_rt_v1_scheduler_fatal(nullptr, 0),
-            TALOS_RT_INVALID_ARGUMENT);
+  EXPECT_EQ(talos_rt_v1_scheduler_stop(nullptr, 0), TALOS_RT_INVALID_ARGUMENT);
+  EXPECT_EQ(talos_rt_v1_scheduler_fatal(nullptr, 0), TALOS_RT_INVALID_ARGUMENT);
   EXPECT_EQ(talos_rt_v1_scheduler_termination_requested(nullptr), 0u);
   EXPECT_EQ(talos_rt_v1_scheduler_time(nullptr), 0u);
 
@@ -1051,10 +1024,10 @@ TEST(RuntimeDPI, ImplementsCanonicalPackedVectorUtilities) {
 }
 
 talos_rt_status observeDpiCall(talos_rt_context *context, uint32_t importID,
-                                 const talos_rt_import_input_v1 *inputs,
-                                 uint32_t inputCount,
-                                 talos_rt_import_output_v1 *outputs,
-                                 uint32_t outputCount, void *userData) {
+                               const talos_rt_import_input_v1 *inputs,
+                               uint32_t inputCount,
+                               talos_rt_import_output_v1 *outputs,
+                               uint32_t outputCount, void *userData) {
   auto &observation = *static_cast<DpiObservation *>(userData);
   ++observation.calls;
   EXPECT_NE(importID, 0u);
@@ -1080,10 +1053,10 @@ talos_rt_status observeDpiCall(talos_rt_context *context, uint32_t importID,
 
   if (observation.invokeNested && importID != observation.nestedID) {
     uint64_t nestedValue[2]{};
-    talos_rt_import_output_v1 nestedOutput{
-        TALOS_RT_DBREG_BITS, 0, 0, 65, nestedValue, nullptr, 2};
-    EXPECT_EQ(talos_rt_v1_import_call(context, &observation.nestedSite,
-                                        inputs, inputCount, &nestedOutput, 1),
+    talos_rt_import_output_v1 nestedOutput{TALOS_RT_DBREG_BITS, 0,       0, 65,
+                                           nestedValue,         nullptr, 2};
+    EXPECT_EQ(talos_rt_v1_import_call(context, &observation.nestedSite, inputs,
+                                      inputCount, &nestedOutput, 1),
               TALOS_RT_OK);
     EXPECT_EQ(svGetScope(), initial);
     EXPECT_STREQ(svGetNameFromScope(initial), "top");
@@ -1111,20 +1084,18 @@ TEST(RuntimeState, TwoStateUsesValueOnlyBacking) {
   EXPECT_EQ(copied, context->stateUnknown);
 
   alignas(8) uint8_t values[32]{};
-  const talos_rt_native_state_fill_v1 fills[] = {{0, 65, 1, 1},
-                                                   {65, 1, 1, 0}};
+  const talos_rt_native_state_fill_v1 fills[] = {{0, 65, 1, 1}, {65, 1, 1, 0}};
   ASSERT_EQ(talos_rt_v1_native_state_initialize(context, values, nullptr, 129,
-                                                  fills, 2),
+                                                fills, 2),
             TALOS_RT_OK);
   EXPECT_EQ(values[0], 0u);
   EXPECT_EQ(values[8], 2u);
-  ASSERT_EQ(
-      talos_rt_v1_native_state_bind_shared(context, values, nullptr, 129),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_bind_shared(context, values, nullptr, 129),
+            TALOS_RT_OK);
   EXPECT_EQ(context->stateUnknown.data(), nullptr);
   uint8_t *retained = nullptr, *unknown = nullptr, *mask = nullptr;
   ASSERT_EQ(talos_rt_v1_native_state_bind_continuous(context, &retained,
-                                                       &unknown, &mask),
+                                                     &unknown, &mask),
             TALOS_RT_OK);
   EXPECT_NE(retained, nullptr);
   EXPECT_NE(mask, nullptr);
@@ -1141,8 +1112,8 @@ TEST(RuntimeDPI, ValidatesDispatchContextAndNestedRestoration) {
       {1, 0, childName, sizeof(childName) - 1, -9, -12, 0},
   };
   talos_rt_execution_descriptor_v1 execution{
-      TALOS_RT_VERSION, 0,   0, nullptr, 0, nullptr, 0, 0, 0, scopes,
-      std::size(scopes),  -12, 0, nullptr, 0, nullptr, 0};
+      TALOS_RT_VERSION,  0,   0, nullptr, 0, nullptr, 0, 0, 0, scopes,
+      std::size(scopes), -12, 0, nullptr, 0, nullptr, 0};
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
             TALOS_RT_OK);
@@ -1166,28 +1137,21 @@ TEST(RuntimeDPI, ValidatesDispatchContextAndNestedRestoration) {
                             0};
   observation.invokeNested = true;
   ASSERT_EQ(talos_rt_v1_context_register_import(context, outerID,
-                                                  observeDpiCall, &observation),
+                                                observeDpiCall, &observation),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_context_register_import(context, observation.nestedID,
-                                                  observeDpiCall, &observation),
+                                                observeDpiCall, &observation),
             TALOS_RT_OK);
 
   uint64_t inputValue[2]{UINT64_C(0x123456789abcdef0), 1};
   uint64_t outputValue[2]{UINT64_MAX, UINT64_MAX};
-  talos_rt_import_input_v1 input{
-      TALOS_RT_DBREG_BITS, 0, 0, 65, inputValue, nullptr, 2};
+  talos_rt_import_input_v1 input{TALOS_RT_DBREG_BITS, 0,       0, 65,
+                                 inputValue,          nullptr, 2};
   talos_rt_import_output_v1 output{TALOS_RT_DBREG_BITS, 0,       0, 65,
-                                     outputValue,           nullptr, 2};
-  talos_rt_import_site_v1 site{TALOS_RT_VERSION,
-                                 TALOS_RT_IMPORT_CONTEXT,
-                                 outerID,
-                                 0,
-                                 0,
-                                 caller,
-                                 sizeof(caller) - 1,
-                                 41,
-                                 3,
-                                 0};
+                                   outputValue,         nullptr, 2};
+  talos_rt_import_site_v1 site{
+      TALOS_RT_VERSION, TALOS_RT_IMPORT_CONTEXT, outerID, 0, 0,
+      caller,           sizeof(caller) - 1,      41,      3, 0};
   EXPECT_EQ(talos_rt_v1_import_call(context, &site, &input, 1, &output, 1),
             TALOS_RT_OK);
   EXPECT_EQ(observation.calls, 2u);
@@ -1222,9 +1186,9 @@ TEST(RuntimeDPI, ValidatesDispatchContextAndNestedRestoration) {
 }
 
 talos_rt_status observeNoncontextDpi(talos_rt_context *, uint32_t,
-                                       const talos_rt_import_input_v1 *,
-                                       uint32_t, talos_rt_import_output_v1 *,
-                                       uint32_t, void *userData) {
+                                     const talos_rt_import_input_v1 *, uint32_t,
+                                     talos_rt_import_output_v1 *, uint32_t,
+                                     void *userData) {
   auto &calls = *static_cast<uint32_t *>(userData);
   ++calls;
   EXPECT_EQ(talos_rt_v1_dpi_current_context(), nullptr);
@@ -1236,23 +1200,9 @@ talos_rt_status observeNoncontextDpi(talos_rt_context *, uint32_t,
 }
 
 TEST(RuntimeDPI, NoncontextBoundaryHasNoActiveCallState) {
-  talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0};
+  talos_rt_execution_descriptor_v1 execution{
+      TALOS_RT_VERSION, 0, 0, nullptr, 0,       nullptr, 0,       0, 0,
+      nullptr,          0, 0, 0,       nullptr, 0,       nullptr, 0};
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
             TALOS_RT_OK);
@@ -1261,26 +1211,26 @@ TEST(RuntimeDPI, NoncontextBoundaryHasNoActiveCallState) {
       reinterpret_cast<const uint8_t *>(name.data()), name.size());
   uint32_t calls = 0;
   ASSERT_EQ(talos_rt_v1_context_register_import(context, importID,
-                                                  observeNoncontextDpi, &calls),
+                                                observeNoncontextDpi, &calls),
             TALOS_RT_OK);
-  talos_rt_import_site_v1 site{
-      TALOS_RT_VERSION, 0, importID, 0, UINT64_MAX, nullptr, 0, 0, 0, 0};
+  talos_rt_import_site_v1 site{TALOS_RT_VERSION, 0, importID, 0, UINT64_MAX,
+                               nullptr,          0, 0,        0, 0};
   EXPECT_EQ(talos_rt_v1_import_call_noncontext(context, &site, nullptr, 0,
-                                                 nullptr, 0),
+                                               nullptr, 0),
             TALOS_RT_OK);
   EXPECT_EQ(calls, 1u);
   site.flags = TALOS_RT_IMPORT_CONTEXT;
   EXPECT_EQ(talos_rt_v1_import_call_noncontext(context, &site, nullptr, 0,
-                                                 nullptr, 0),
+                                               nullptr, 0),
             TALOS_RT_INVALID_ARGUMENT);
   EXPECT_EQ(calls, 1u);
   talos_rt_v1_context_destroy(context);
 }
 
 talos_rt_status observeDpiTime(talos_rt_context *, uint32_t,
-                                 const talos_rt_import_input_v1 *, uint32_t,
-                                 talos_rt_import_output_v1 *, uint32_t,
-                                 void *userData) {
+                               const talos_rt_import_input_v1 *, uint32_t,
+                               talos_rt_import_output_v1 *, uint32_t,
+                               void *userData) {
   ++*static_cast<uint32_t *>(userData);
   // IEEE 1800-2023 H.13: a scope reports its own time unit and precision; a
   // NULL scope reports simulation time, whose unit is the global precision.
@@ -1330,8 +1280,8 @@ TEST(RuntimeDPI, ReportsScopeTimeUnitsAndTime) {
       {1, 0, childName, sizeof(childName) - 1, -6, -9, 0},
   };
   talos_rt_execution_descriptor_v1 execution{
-      TALOS_RT_VERSION, 0,   0, nullptr, 0, nullptr, 0, 0, 0, scopes,
-      std::size(scopes),  -12, 0, nullptr, 0, nullptr, 0};
+      TALOS_RT_VERSION,  0,   0, nullptr, 0, nullptr, 0, 0, 0, scopes,
+      std::size(scopes), -12, 0, nullptr, 0, nullptr, 0};
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
             TALOS_RT_OK);
@@ -1340,19 +1290,19 @@ TEST(RuntimeDPI, ReportsScopeTimeUnitsAndTime) {
       reinterpret_cast<const uint8_t *>(name.data()), name.size());
   uint32_t calls = 0;
   ASSERT_EQ(talos_rt_v1_context_register_import(context, importID,
-                                                  observeDpiTime, &calls),
+                                                observeDpiTime, &calls),
             TALOS_RT_OK);
   context->schedulerTime = 1500000;
   talos_rt_import_site_v1 site{TALOS_RT_VERSION,
-                                 TALOS_RT_IMPORT_CONTEXT,
-                                 importID,
-                                 0,
-                                 0,
-                                 nullptr,
-                                 0,
-                                 0,
-                                 0,
-                                 0};
+                               TALOS_RT_IMPORT_CONTEXT,
+                               importID,
+                               0,
+                               0,
+                               nullptr,
+                               0,
+                               0,
+                               0,
+                               0};
   EXPECT_EQ(talos_rt_v1_import_call(context, &site, nullptr, 0, nullptr, 0),
             TALOS_RT_OK);
   EXPECT_EQ(calls, 1u);
@@ -1372,8 +1322,8 @@ TEST(RuntimeDPI, AggregatePlanSupportsDeepLegalNesting) {
   plan.insert(plan.end(), {0, 0, 0, 2, 8, 0, 0, 0});
   uint8_t value = 0x5a;
   uint8_t result = 0;
-  ASSERT_EQ(talos_rt_v1_dpi_aggregate_pack(&value, nullptr, 1, 8, 0, &result,
-                                             1, 1, plan.data(), plan.size()),
+  ASSERT_EQ(talos_rt_v1_dpi_aggregate_pack(&value, nullptr, 1, 8, 0, &result, 1,
+                                           1, plan.data(), plan.size()),
             TALOS_RT_OK);
   EXPECT_EQ(result, value);
 }
@@ -1385,9 +1335,9 @@ struct DpiDisableObservation {
 };
 
 talos_rt_status observeDpiDisable(talos_rt_context *, uint32_t,
-                                    const talos_rt_import_input_v1 *,
-                                    uint32_t, talos_rt_import_output_v1 *,
-                                    uint32_t, void *userData) {
+                                  const talos_rt_import_input_v1 *, uint32_t,
+                                  talos_rt_import_output_v1 *, uint32_t,
+                                  void *userData) {
   auto &observation = *static_cast<DpiDisableObservation *>(userData);
   EXPECT_EQ(svIsDisabledState(), 0);
   EXPECT_NE(activeDpiCall, nullptr);
@@ -1412,8 +1362,8 @@ TEST(RuntimeDPI, EnforcesFunctionAndTaskDisableProtocol) {
       {0, UINT64_MAX, scopeName, sizeof(scopeName) - 1, -9, -12, 0},
   };
   talos_rt_execution_descriptor_v1 execution{
-      TALOS_RT_VERSION, 0,   0, nullptr, 0, nullptr, 0, 0, 0, scopes,
-      std::size(scopes),  -12, 0, nullptr, 0, nullptr, 0};
+      TALOS_RT_VERSION,  0,   0, nullptr, 0, nullptr, 0, 0, 0, scopes,
+      std::size(scopes), -12, 0, nullptr, 0, nullptr, 0};
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
             TALOS_RT_OK);
@@ -1423,15 +1373,15 @@ TEST(RuntimeDPI, EnforcesFunctionAndTaskDisableProtocol) {
                 context, importID, observeDpiDisable, &observation),
             TALOS_RT_OK);
   talos_rt_import_site_v1 site{TALOS_RT_VERSION,
-                                 TALOS_RT_IMPORT_CONTEXT,
-                                 importID,
-                                 0,
-                                 0,
-                                 nullptr,
-                                 0,
-                                 0,
-                                 0,
-                                 0};
+                               TALOS_RT_IMPORT_CONTEXT,
+                               importID,
+                               0,
+                               0,
+                               nullptr,
+                               0,
+                               0,
+                               0,
+                               0};
 
   observation.acknowledge = true;
   observation.tryExportAfterDisable = true;
@@ -1459,10 +1409,10 @@ struct DpiRealObservation {
 };
 
 talos_rt_status observeDpiRealCall(talos_rt_context *, uint32_t,
-                                     const talos_rt_import_input_v1 *inputs,
-                                     uint32_t inputCount,
-                                     talos_rt_import_output_v1 *outputs,
-                                     uint32_t outputCount, void *userData) {
+                                   const talos_rt_import_input_v1 *inputs,
+                                   uint32_t inputCount,
+                                   talos_rt_import_output_v1 *outputs,
+                                   uint32_t outputCount, void *userData) {
   auto &observation = *static_cast<DpiRealObservation *>(userData);
   ++observation.calls;
   EXPECT_EQ(inputCount, 2u);
@@ -1522,8 +1472,8 @@ TEST(RuntimeDPI, MarshalsBinary32AndBinary64WithoutOverwritingNeighbors) {
       {TALOS_RT_DBREG_REAL64, 0, 0, 64,
        reinterpret_cast<uint64_t *>(&wideOutput), nullptr, 1},
   };
-  talos_rt_import_site_v1 site{
-      TALOS_RT_VERSION, 0, importID, 0, UINT64_MAX, nullptr, 0, 0, 0, 0};
+  talos_rt_import_site_v1 site{TALOS_RT_VERSION, 0, importID, 0, UINT64_MAX,
+                               nullptr,          0, 0,        0, 0};
   EXPECT_EQ(talos_rt_v1_import_call(context, &site, inputs, 2, outputs, 2),
             TALOS_RT_OK);
   EXPECT_EQ(observation.calls, 1u);
@@ -1542,24 +1492,10 @@ TEST(RuntimeDPI, MarshalsBinary32AndBinary64WithoutOverwritingNeighbors) {
 TEST(RuntimeDPI, RejectsMalformedScopeMetadata) {
   static constexpr char name[] = "top";
   talos_rt_dpi_scope_v1 scope{1,  UINT64_MAX, name, sizeof(name) - 1,
-                                -9, -12,        0};
-  talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               &scope,
-                                               1,
-                                               -12,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0};
+                              -9, -12,        0};
+  talos_rt_execution_descriptor_v1 execution{
+      TALOS_RT_VERSION, 0, 0,   nullptr, 0,       nullptr, 0,       0, 0,
+      &scope,           1, -12, 0,       nullptr, 0,       nullptr, 0};
   talos_rt_context *context = nullptr;
   EXPECT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
             TALOS_RT_INVALID_DESIGN);
@@ -1575,24 +1511,10 @@ TEST(RuntimeDPI, RejectsMalformedScopeMetadata) {
 TEST(RuntimeDPI, AcceptsPositiveLegalTimeUnitExponents) {
   static constexpr char name[] = "top";
   const talos_rt_dpi_scope_v1 scope{0, UINT64_MAX, name, sizeof(name) - 1,
-                                      2, -15,        0};
-  const talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                                     0,
-                                                     0,
-                                                     nullptr,
-                                                     0,
-                                                     nullptr,
-                                                     0,
-                                                     0,
-                                                     0,
-                                                     &scope,
-                                                     1,
-                                                     -15,
-                                                     0,
-                                                     nullptr,
-                                                     0,
-                                                     nullptr,
-                                                     0};
+                                    2, -15,        0};
+  const talos_rt_execution_descriptor_v1 execution{
+      TALOS_RT_VERSION, 0, 0,   nullptr, 0,       nullptr, 0,       0, 0,
+      &scope,           1, -15, 0,       nullptr, 0,       nullptr, 0};
   talos_rt_context *context = nullptr;
   EXPECT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
             TALOS_RT_OK);
@@ -1612,8 +1534,8 @@ TEST(RuntimeABI, RejectsNullPublicArguments) {
   EXPECT_EQ(
       talos_rt_v1_format(nullptr, nullptr, 0, nullptr, 0, nullptr, nullptr),
       TALOS_RT_INVALID_ARGUMENT);
-  EXPECT_EQ(talos_rt_v1_display(nullptr, 0, 0, TALOS_RT_RADIX_DECIMAL,
-                                  nullptr, 0, nullptr),
+  EXPECT_EQ(talos_rt_v1_display(nullptr, 0, 0, TALOS_RT_RADIX_DECIMAL, nullptr,
+                                0, nullptr),
             TALOS_RT_INVALID_ARGUMENT);
   EXPECT_EQ(talos_rt_v1_file_open_mcd(nullptr, nullptr, 0, nullptr),
             TALOS_RT_INVALID_ARGUMENT);
@@ -1627,8 +1549,7 @@ TEST(RuntimeABI, RejectsNullPublicArguments) {
             TALOS_RT_INVALID_ARGUMENT);
   EXPECT_EQ(talos_rt_v1_file_getc(nullptr, 0, nullptr),
             TALOS_RT_INVALID_ARGUMENT);
-  EXPECT_EQ(talos_rt_v1_file_ungetc(nullptr, 0, 0),
-            TALOS_RT_INVALID_ARGUMENT);
+  EXPECT_EQ(talos_rt_v1_file_ungetc(nullptr, 0, 0), TALOS_RT_INVALID_ARGUMENT);
   EXPECT_EQ(talos_rt_v1_file_getline(nullptr, 0, 0, nullptr),
             TALOS_RT_INVALID_ARGUMENT);
   EXPECT_EQ(talos_rt_v1_file_eof(nullptr, 0, nullptr),
@@ -1796,14 +1717,14 @@ TEST_F(RuntimeTest, FormatsStringsRealsTimeAndEnvironment) {
   std::string libraryCell = "work.top";
   std::string suffix = "ns";
   talos_rt_format_env_v1 environment{scope.data(),
-                                       scope.size(),
-                                       libraryCell.data(),
-                                       libraryCell.size(),
-                                       20,
-                                       0,
-                                       suffix.data(),
-                                       suffix.size(),
-                                       100};
+                                     scope.size(),
+                                     libraryCell.data(),
+                                     libraryCell.size(),
+                                     20,
+                                     0,
+                                     suffix.data(),
+                                     suffix.size(),
+                                     100};
 
   auto [status, output] =
       format("[%4h][%-4h][%0h][%4s][%-4s] %.2f %m %l %0t%%",
@@ -1866,15 +1787,13 @@ TEST_F(RuntimeTest, ScalesTimeInputThroughCurrentTimeFormat) {
   ASSERT_EQ(talos_rt_v1_time_format(context, -9, 1, nullptr, 0, 0),
             TALOS_RT_OK);
   EXPECT_DOUBLE_EQ(talos_rt_v1_time_scan_scale(context, 1.25, 10, -10), 1.3);
-  EXPECT_DOUBLE_EQ(talos_rt_v1_time_scan_scale(context, -1.25, 10, -10),
-                   -1.3);
+  EXPECT_DOUBLE_EQ(talos_rt_v1_time_scan_scale(context, -1.25, 10, -10), -1.3);
 
   // Changing the design-global state takes effect at the next scan. Picosecond
   // input is finer than the same caller's 1 ns time unit.
   ASSERT_EQ(talos_rt_v1_time_format(context, -12, 0, nullptr, 0, 0),
             TALOS_RT_OK);
-  EXPECT_DOUBLE_EQ(talos_rt_v1_time_scan_scale(context, 1250.0, 10, -10),
-                   1.25);
+  EXPECT_DOUBLE_EQ(talos_rt_v1_time_scan_scale(context, 1250.0, 10, -10), 1.25);
   EXPECT_TRUE(std::isinf(talos_rt_v1_time_scan_scale(
       context, std::numeric_limits<double>::infinity(), 10, -10)));
 }
@@ -2026,9 +1945,8 @@ TEST_F(RuntimeTest, DisplayHandlesFormatItemsDefaultsAndNewline) {
   std::vector<talos_rt_arg_v1> items = {
       stringArg(formatString, TALOS_RT_ARG_FORMAT_STRING), value.arg(),
       stringArg(text), value.arg()};
-  ASSERT_EQ(talos_rt_v1_display(context, descriptor, 1,
-                                  TALOS_RT_RADIX_BINARY, items.data(),
-                                  items.size(), nullptr),
+  ASSERT_EQ(talos_rt_v1_display(context, descriptor, 1, TALOS_RT_RADIX_BINARY,
+                                items.data(), items.size(), nullptr),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_file_flush(context, descriptor), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_file_rewind(context, descriptor), TALOS_RT_OK);
@@ -2049,50 +1967,43 @@ TEST_F(RuntimeTest, DisplayValidatesItemsAndHandlesEmptyValues) {
   double real = 2.5;
   talos_rt_arg_v1 empty{TALOS_RT_ARG_EMPTY, 0, 0, nullptr, nullptr};
   talos_rt_arg_v1 emptyString{TALOS_RT_ARG_STRING, 0, 0, nullptr, nullptr};
-  talos_rt_arg_v1 emptyFormat{
-      TALOS_RT_ARG_STRING, TALOS_RT_ARG_FORMAT_STRING, 0, nullptr, nullptr};
-  talos_rt_arg_v1 invalidFormat{
-      TALOS_RT_ARG_LOGIC, TALOS_RT_ARG_FORMAT_STRING, 1, nullptr, nullptr};
+  talos_rt_arg_v1 emptyFormat{TALOS_RT_ARG_STRING, TALOS_RT_ARG_FORMAT_STRING,
+                              0, nullptr, nullptr};
+  talos_rt_arg_v1 invalidFormat{TALOS_RT_ARG_LOGIC, TALOS_RT_ARG_FORMAT_STRING,
+                                1, nullptr, nullptr};
   talos_rt_arg_v1 invalidKind{99, 0, 0, nullptr, nullptr};
-  talos_rt_arg_v1 invalidString{TALOS_RT_ARG_STRING, 0, 1, nullptr,
-                                  nullptr};
+  talos_rt_arg_v1 invalidString{TALOS_RT_ARG_STRING, 0, 1, nullptr, nullptr};
   std::string malformed = "%q";
   talos_rt_arg_v1 malformedFormat =
       stringArg(malformed, TALOS_RT_ARG_FORMAT_STRING);
 
-  EXPECT_EQ(
-      talos_rt_v1_display(context, descriptor, 0, 3, nullptr, 0, nullptr),
-      TALOS_RT_INVALID_ARGUMENT);
-  EXPECT_EQ(talos_rt_v1_display(context, descriptor, 0,
-                                  TALOS_RT_RADIX_DECIMAL, &invalidFormat, 1,
-                                  nullptr),
+  EXPECT_EQ(talos_rt_v1_display(context, descriptor, 0, 3, nullptr, 0, nullptr),
             TALOS_RT_INVALID_ARGUMENT);
-  EXPECT_EQ(talos_rt_v1_display(context, descriptor, 0,
-                                  TALOS_RT_RADIX_DECIMAL, &invalidKind, 1,
-                                  nullptr),
+  EXPECT_EQ(talos_rt_v1_display(context, descriptor, 0, TALOS_RT_RADIX_DECIMAL,
+                                &invalidFormat, 1, nullptr),
+            TALOS_RT_INVALID_ARGUMENT);
+  EXPECT_EQ(talos_rt_v1_display(context, descriptor, 0, TALOS_RT_RADIX_DECIMAL,
+                                &invalidKind, 1, nullptr),
             TALOS_RT_ARGUMENT_MISMATCH);
-  EXPECT_EQ(talos_rt_v1_display(context, descriptor, 0,
-                                  TALOS_RT_RADIX_DECIMAL, &invalidString, 1,
-                                  nullptr),
+  EXPECT_EQ(talos_rt_v1_display(context, descriptor, 0, TALOS_RT_RADIX_DECIMAL,
+                                &invalidString, 1, nullptr),
             TALOS_RT_INVALID_ARGUMENT);
-  EXPECT_EQ(talos_rt_v1_display(context, descriptor, 0,
-                                  TALOS_RT_RADIX_DECIMAL, &malformedFormat, 1,
-                                  nullptr),
+  EXPECT_EQ(talos_rt_v1_display(context, descriptor, 0, TALOS_RT_RADIX_DECIMAL,
+                                &malformedFormat, 1, nullptr),
             TALOS_RT_FORMAT_ERROR);
 
   std::vector<talos_rt_arg_v1> items = {empty, realArg(real), emptyString,
-                                          emptyFormat};
-  ASSERT_EQ(talos_rt_v1_display(context, descriptor, 0,
-                                  TALOS_RT_RADIX_DECIMAL, items.data(),
-                                  items.size(), nullptr),
+                                        emptyFormat};
+  ASSERT_EQ(talos_rt_v1_display(context, descriptor, 0, TALOS_RT_RADIX_DECIMAL,
+                                items.data(), items.size(), nullptr),
             TALOS_RT_OK);
   LogicValue value("00001010");
   talos_rt_arg_v1 logic = value.arg();
-  ASSERT_EQ(talos_rt_v1_display(context, descriptor, 0,
-                                  TALOS_RT_RADIX_OCTAL, &logic, 1, nullptr),
+  ASSERT_EQ(talos_rt_v1_display(context, descriptor, 0, TALOS_RT_RADIX_OCTAL,
+                                &logic, 1, nullptr),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_display(context, descriptor, 0, TALOS_RT_RADIX_HEX,
-                                  &logic, 1, nullptr),
+                                &logic, 1, nullptr),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_file_flush(context, descriptor), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_file_rewind(context, descriptor), TALOS_RT_OK);
@@ -2118,7 +2029,7 @@ TEST_F(RuntimeTest, EvalDisplayUsesSnapshotsWithoutMonitorOrSchedulerEffects) {
   context->monitorReport = "unchanged";
   testing::internal::CaptureStdout();
   EXPECT_EQ(talos_rt_v1_eval_display(context, 1, 1, TALOS_RT_RADIX_DECIMAL,
-                                       items.data(), items.size(), nullptr),
+                                     items.data(), items.size(), nullptr),
             TALOS_RT_OK);
   EXPECT_EQ(testing::internal::GetCapturedStdout(), "bits=10xz\n");
   EXPECT_EQ(context->activeLogicalProcessToken, 17u);
@@ -2135,8 +2046,7 @@ TEST_F(RuntimeTest, EvalDisplayWritesDiagnosticSnapshotsToStandardError) {
   context->monitorReport = "unchanged";
   testing::internal::CaptureStderr();
   EXPECT_EQ(talos_rt_v1_eval_display(context, 0x80000002u, 1,
-                                       TALOS_RT_RADIX_DECIMAL, &item, 1,
-                                       nullptr),
+                                     TALOS_RT_RADIX_DECIMAL, &item, 1, nullptr),
             TALOS_RT_OK);
   EXPECT_EQ(testing::internal::GetCapturedStderr(), diagnostic + "\n");
   EXPECT_EQ(context->monitorReport, "unchanged");
@@ -2145,15 +2055,15 @@ TEST_F(RuntimeTest, EvalDisplayWritesDiagnosticSnapshotsToStandardError) {
 
 TEST_F(RuntimeTest, EvalDisplayRejectsRuntimeOwnedArgumentsAndChannels) {
   EXPECT_EQ(talos_rt_v1_eval_display(context, 2, 0, TALOS_RT_RADIX_DECIMAL,
-                                       nullptr, 0, nullptr),
+                                     nullptr, 0, nullptr),
             TALOS_RT_INVALID_ARGUMENT);
   for (uint32_t kind :
        {TALOS_RT_ARG_NET, TALOS_RT_ARG_MANAGED_STRING,
         TALOS_RT_ARG_MANAGED_CONTAINER, TALOS_RT_ARG_MANAGED_OBJECT,
         TALOS_RT_ARG_ENUM, TALOS_RT_ARG_PROCESS}) {
     talos_rt_arg_v1 item{kind, 0, 0, nullptr, nullptr};
-    EXPECT_EQ(talos_rt_v1_eval_display(
-                  context, 1, 0, TALOS_RT_RADIX_DECIMAL, &item, 1, nullptr),
+    EXPECT_EQ(talos_rt_v1_eval_display(context, 1, 0, TALOS_RT_RADIX_DECIMAL,
+                                       &item, 1, nullptr),
               TALOS_RT_INVALID_ARGUMENT);
   }
 }
@@ -2167,19 +2077,16 @@ TEST_F(RuntimeTest, ReadsWritesAndPositionsBinaryFiles) {
             TALOS_RT_OK);
   EXPECT_EQ(written, 0u);
   ASSERT_EQ(talos_rt_v1_file_write(context, descriptor, bytes.data(),
-                                     bytes.size(), &written),
+                                   bytes.size(), &written),
             TALOS_RT_OK);
   EXPECT_EQ(written, bytes.size());
 
   int64_t offset = -1;
-  ASSERT_EQ(talos_rt_v1_file_tell(context, descriptor, &offset),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_file_tell(context, descriptor, &offset), TALOS_RT_OK);
   EXPECT_EQ(offset, 4);
-  ASSERT_EQ(
-      talos_rt_v1_file_seek(context, descriptor, -2, TALOS_RT_SEEK_CUR),
-      TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_file_tell(context, descriptor, &offset),
+  ASSERT_EQ(talos_rt_v1_file_seek(context, descriptor, -2, TALOS_RT_SEEK_CUR),
             TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_file_tell(context, descriptor, &offset), TALOS_RT_OK);
   EXPECT_EQ(offset, 2);
   ASSERT_EQ(talos_rt_v1_file_rewind(context, descriptor), TALOS_RT_OK);
 
@@ -2188,9 +2095,9 @@ TEST_F(RuntimeTest, ReadsWritesAndPositionsBinaryFiles) {
   ASSERT_EQ(talos_rt_v1_file_read(context, descriptor, nullptr, 0, &read),
             TALOS_RT_OK);
   EXPECT_EQ(read, 0u);
-  ASSERT_EQ(talos_rt_v1_file_read(context, descriptor, result, sizeof(result),
-                                    &read),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_file_read(context, descriptor, result, sizeof(result), &read),
+      TALOS_RT_OK);
   EXPECT_EQ(read, 4u);
   EXPECT_EQ(std::string(result, sizeof(result)), bytes);
   EXPECT_EQ(talos_rt_v1_file_close(context, descriptor), TALOS_RT_OK);
@@ -2199,7 +2106,9 @@ TEST_F(RuntimeTest, ReadsWritesAndPositionsBinaryFiles) {
 TEST_F(RuntimeTest, HierarchyScanMatchesPrefixWithoutConsumingAField) {
   TempDirectory temporary;
   std::filesystem::path path = temporary.file("hierarchy-scan.bin");
-  { std::ofstream(path, std::ios::binary) << "tag=Q"; }
+  {
+    std::ofstream(path, std::ios::binary) << "tag=Q";
+  }
   uint32_t descriptor = open(path, "rb");
 
   talos_rt_gc_lane_v1 *lane = nullptr;
@@ -2208,16 +2117,15 @@ TEST_F(RuntimeTest, HierarchyScanMatchesPrefixWithoutConsumingAField) {
   talos_rt_string_v1 field = 1;
   uint32_t ok = 0;
   uint32_t scanEOF = 1;
-  ASSERT_EQ(talos_rt_v1_file_scan_field(context, lane, descriptor, 1, "tag=",
-                                          4, 'M', 0, &field, &ok, &scanEOF),
+  ASSERT_EQ(talos_rt_v1_file_scan_field(context, lane, descriptor, 1, "tag=", 4,
+                                        'M', 0, &field, &ok, &scanEOF),
             TALOS_RT_OK);
   EXPECT_EQ(field, 0u);
   EXPECT_EQ(ok, 1u);
   EXPECT_EQ(scanEOF, 0u);
 
   int64_t offset = -1;
-  ASSERT_EQ(talos_rt_v1_file_tell(context, descriptor, &offset),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_file_tell(context, descriptor, &offset), TALOS_RT_OK);
   EXPECT_EQ(offset, 4);
   uint8_t byte = 0;
   ASSERT_EQ(talos_rt_v1_file_getc(context, descriptor, &byte), TALOS_RT_OK);
@@ -2225,22 +2133,22 @@ TEST_F(RuntimeTest, HierarchyScanMatchesPrefixWithoutConsumingAField) {
   EXPECT_EQ(talos_rt_v1_file_close(context, descriptor), TALOS_RT_OK);
 
   std::filesystem::path emptyPath = temporary.file("empty-hierarchy-scan.bin");
-  { std::ofstream(emptyPath, std::ios::binary); }
+  {
+    std::ofstream(emptyPath, std::ios::binary);
+  }
   descriptor = open(emptyPath, "rb");
   field = 1;
   ok = 0;
   scanEOF = 1;
   ASSERT_EQ(talos_rt_v1_file_scan_field(context, lane, descriptor, 1, nullptr,
-                                          0, 'm', 0, &field, &ok, &scanEOF),
+                                        0, 'm', 0, &field, &ok, &scanEOF),
             TALOS_RT_OK);
   EXPECT_EQ(field, 0u);
   EXPECT_EQ(ok, 1u);
   EXPECT_EQ(scanEOF, 0u);
-  ASSERT_EQ(talos_rt_v1_file_tell(context, descriptor, &offset),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_file_tell(context, descriptor, &offset), TALOS_RT_OK);
   EXPECT_EQ(offset, 0);
-  EXPECT_EQ(talos_rt_v1_file_getc(context, descriptor, &byte),
-            TALOS_RT_EOF);
+  EXPECT_EQ(talos_rt_v1_file_getc(context, descriptor, &byte), TALOS_RT_EOF);
   EXPECT_EQ(talos_rt_v1_file_close(context, descriptor), TALOS_RT_OK);
   EXPECT_EQ(talos_rt_v1_gc_lane_leave(lane), TALOS_RT_OK);
   EXPECT_EQ(talos_rt_v1_gc_lane_destroy(lane), TALOS_RT_OK);
@@ -2249,7 +2157,9 @@ TEST_F(RuntimeTest, HierarchyScanMatchesPrefixWithoutConsumingAField) {
 TEST_F(RuntimeTest, FileScanAcceptsFourStateNumericFieldsExactly) {
   TempDirectory temporary;
   std::filesystem::path path = temporary.file("four-state-scan.txt");
-  { std::ofstream(path, std::ios::binary) << "1x?zQ ?R +7"; }
+  {
+    std::ofstream(path, std::ios::binary) << "1x?zQ ?R +7";
+  }
   uint32_t descriptor = open(path, "rb");
   talos_rt_gc_lane_v1 *lane = nullptr;
   ASSERT_EQ(talos_rt_v1_gc_lane_create(context, &lane), TALOS_RT_OK);
@@ -2260,9 +2170,9 @@ TEST_F(RuntimeTest, FileScanAcceptsFourStateNumericFieldsExactly) {
     talos_rt_string_v1 field = 0;
     uint32_t ok = 0;
     uint32_t scanEOF = 1;
-    ASSERT_EQ(talos_rt_v1_file_scan_field(
-                  context, lane, descriptor, 1, prefix.data(), prefix.size(),
-                  specifier, 0, &field, &ok, &scanEOF),
+    ASSERT_EQ(talos_rt_v1_file_scan_field(context, lane, descriptor, 1,
+                                          prefix.data(), prefix.size(),
+                                          specifier, 0, &field, &ok, &scanEOF),
               TALOS_RT_OK);
     EXPECT_EQ(ok, 1u);
     EXPECT_EQ(scanEOF, 0u);
@@ -2285,8 +2195,7 @@ TEST_F(RuntimeTest, FileScanAcceptsFourStateNumericFieldsExactly) {
   // power-of-two field. The signed decimal field is consumed in full.
   expectField('d', " ", "+7");
   int64_t offset = -1;
-  ASSERT_EQ(talos_rt_v1_file_tell(context, descriptor, &offset),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_file_tell(context, descriptor, &offset), TALOS_RT_OK);
   EXPECT_EQ(offset, 11);
 
   EXPECT_EQ(talos_rt_v1_file_close(context, descriptor), TALOS_RT_OK);
@@ -2373,8 +2282,7 @@ TEST_F(RuntimeTest, DynamicScanPlansCacheAndInterpretSuppressionExactly) {
   talos_rt_string_v1 hexFormat = 0;
   ASSERT_EQ(talos_rt_v1_string_putc(lane, decimalFormat, 8, 'h', &hexFormat),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_dynamic_scan_plan(context, hexFormat, plan),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_dynamic_scan_plan(context, hexFormat, plan), TALOS_RT_OK);
   EXPECT_EQ(plan->conversions.front().specifier, 'h');
 
   // The LRU stays bounded even when a runtime variable cycles through formats.
@@ -2425,7 +2333,7 @@ TEST_F(RuntimeTest, DynamicScanIdentityHitsDoNotWalkFormatBytes) {
     spelling += "%d ";
   talos_rt_string_v1 format = 0;
   ASSERT_EQ(talos_rt_v1_string_create(lane, spelling.data(), spelling.size(),
-                                        &format),
+                                      &format),
             TALOS_RT_OK);
   std::shared_ptr<const DynamicScanPlan> plan;
   ASSERT_EQ(talos_rt_dynamic_scan_plan(context, format, plan), TALOS_RT_OK);
@@ -2436,8 +2344,7 @@ TEST_F(RuntimeTest, DynamicScanIdentityHitsDoNotWalkFormatBytes) {
   EXPECT_EQ(context->dynamicScanState->contentCompareBytes, 0u);
   for (size_t ordinal = 0; ordinal != plan->conversions.size(); ++ordinal) {
     std::shared_ptr<const DynamicScanPlan> cached;
-    ASSERT_EQ(talos_rt_dynamic_scan_plan(context, format, cached),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_dynamic_scan_plan(context, format, cached), TALOS_RT_OK);
     ASSERT_EQ(cached.get(), plan.get());
   }
   EXPECT_EQ(context->dynamicScanState->parseCount, 1u);
@@ -2524,8 +2431,7 @@ TEST_F(RuntimeTest, DynamicRawScanUsesDestinationSpecificTransferSizes) {
                 UINT64_C(1) << ('s' - 'a'), &validationCursor),
             TALOS_RT_INVALID_ARGUMENT);
   int64_t position = -1;
-  EXPECT_EQ(talos_rt_v1_file_tell(context, descriptor, &position),
-            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_file_tell(context, descriptor, &position), TALOS_RT_OK);
   EXPECT_EQ(position, 0);
 
   format = string("%z");
@@ -2540,8 +2446,7 @@ TEST_F(RuntimeTest, DynamicRawScanUsesDestinationSpecificTransferSizes) {
   EXPECT_EQ(planCursor, 1u);
   EXPECT_EQ(kind, TALOS_RT_SCAN_DYNAMIC_RAW4);
   EXPECT_EQ(view(field), raw.substr(4));
-  EXPECT_EQ(talos_rt_v1_file_tell(context, descriptor, &position),
-            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_file_tell(context, descriptor, &position), TALOS_RT_OK);
   EXPECT_EQ(position, 8);
   EXPECT_EQ(talos_rt_v1_file_close(context, descriptor), TALOS_RT_OK);
 
@@ -2567,8 +2472,7 @@ TEST_F(RuntimeTest, DynamicScanRejectsCrossContextLanesAndHeapStrings) {
   talos_rt_context *otherContext = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create(&otherContext), TALOS_RT_OK);
   talos_rt_gc_lane_v1 *otherLane = nullptr;
-  ASSERT_EQ(talos_rt_v1_gc_lane_create(otherContext, &otherLane),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_lane_create(otherContext, &otherLane), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_lane_enter(otherLane), TALOS_RT_OK);
   talos_rt_string_v1 otherInput = create(otherLane, "other-input");
   talos_rt_string_v1 otherFormat = create(otherLane, "other=%d");
@@ -2591,15 +2495,15 @@ TEST_F(RuntimeTest, DynamicScanRejectsCrossContextLanesAndHeapStrings) {
                 &field, &cursor, &planCursor, &kind, &ok),
             TALOS_RT_INVALID_HANDLE);
   EXPECT_EQ(talos_rt_v1_file_scan_dynamic(context, otherLane, 0, format, 0, 1,
-                                            0, decimal, 0, 0, &field,
-                                            &planCursor, &kind, &ok, &eof),
+                                          0, decimal, 0, 0, &field, &planCursor,
+                                          &kind, &ok, &eof),
             TALOS_RT_INVALID_ARGUMENT);
   EXPECT_EQ(talos_rt_v1_file_scan_dynamic(context, lane, 0, otherFormat, 0, 1,
-                                            0, decimal, 0, 0, &field,
-                                            &planCursor, &kind, &ok, &eof),
+                                          0, decimal, 0, 0, &field, &planCursor,
+                                          &kind, &ok, &eof),
             TALOS_RT_INVALID_HANDLE);
   EXPECT_EQ(talos_rt_v1_scan_dynamic_validate(context, otherFormat, 0, 0, 0,
-                                                decimal, &planCursor),
+                                              decimal, &planCursor),
             TALOS_RT_INVALID_HANDLE);
 
   ASSERT_EQ(talos_rt_v1_gc_lane_leave(lane), TALOS_RT_OK);
@@ -2611,7 +2515,9 @@ TEST_F(RuntimeTest, DynamicScanRejectsCrossContextLanesAndHeapStrings) {
 TEST_F(RuntimeTest, DynamicFileScanPreservesPositionAndEOF) {
   TempDirectory temporary;
   std::filesystem::path path = temporary.file("dynamic-scan.txt");
-  { std::ofstream(path, std::ios::binary) << "A=12 SKIP 7f!"; }
+  {
+    std::ofstream(path, std::ios::binary) << "A=12 SKIP 7f!";
+  }
   uint32_t descriptor = open(path, "rb");
   talos_rt_gc_lane_v1 *lane = nullptr;
   ASSERT_EQ(talos_rt_v1_gc_lane_create(context, &lane), TALOS_RT_OK);
@@ -2640,8 +2546,7 @@ TEST_F(RuntimeTest, DynamicFileScanPreservesPositionAndEOF) {
   EXPECT_EQ(planCursor, 1u);
   EXPECT_EQ(kind, TALOS_RT_SCAN_DYNAMIC_LOGIC10);
   int64_t position = -1;
-  ASSERT_EQ(talos_rt_v1_file_tell(context, descriptor, &position),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_file_tell(context, descriptor, &position), TALOS_RT_OK);
   EXPECT_EQ(position, 4);
 
   ASSERT_EQ(talos_rt_v1_file_scan_dynamic(
@@ -2651,21 +2556,21 @@ TEST_F(RuntimeTest, DynamicFileScanPreservesPositionAndEOF) {
   EXPECT_EQ(ok, 1u);
   EXPECT_EQ(planCursor, 3u);
   EXPECT_EQ(kind, TALOS_RT_SCAN_DYNAMIC_LOGIC16);
-  ASSERT_EQ(talos_rt_v1_file_tell(context, descriptor, &position),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_file_tell(context, descriptor, &position), TALOS_RT_OK);
   EXPECT_EQ(position, 12);
   ASSERT_EQ(talos_rt_v1_file_scan_dynamic(context, lane, descriptor, format,
-                                            planCursor, 1, 1, 0, 0, 0, &field,
-                                            &planCursor, &kind, &ok, &scanEOF),
+                                          planCursor, 1, 1, 0, 0, 0, &field,
+                                          &planCursor, &kind, &ok, &scanEOF),
             TALOS_RT_OK);
   EXPECT_EQ(ok, 1u);
-  ASSERT_EQ(talos_rt_v1_file_tell(context, descriptor, &position),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_file_tell(context, descriptor, &position), TALOS_RT_OK);
   EXPECT_EQ(position, 13);
   EXPECT_EQ(talos_rt_v1_file_close(context, descriptor), TALOS_RT_OK);
 
   std::filesystem::path empty = temporary.file("dynamic-empty.txt");
-  { std::ofstream(empty, std::ios::binary); }
+  {
+    std::ofstream(empty, std::ios::binary);
+  }
   descriptor = open(empty, "rb");
   format = string("%d");
   planCursor = 0;
@@ -2902,7 +2807,7 @@ TEST_F(RuntimeTest, ReadMemTokenizerRejectsMalformedInput) {
   uint32_t kind = 0;
   uint64_t address = 0;
   EXPECT_EQ(talos_rt_v1_file_readmem_token(context, descriptor, 16, 8, &value,
-                                             1, &unknown, 1, &kind, &address),
+                                           1, &unknown, 1, &kind, &address),
             TALOS_RT_FORMAT_ERROR);
   EXPECT_EQ(talos_rt_v1_file_close(context, descriptor), TALOS_RT_OK);
 }
@@ -2919,20 +2824,17 @@ TEST_F(RuntimeTest, ReadsBytesLinesAndReportsEOF) {
   uint8_t byte = 0;
   ASSERT_EQ(talos_rt_v1_file_getc(context, descriptor, &byte), TALOS_RT_OK);
   EXPECT_EQ(byte, 'a');
-  ASSERT_EQ(talos_rt_v1_file_ungetc(context, descriptor, byte),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_file_ungetc(context, descriptor, byte), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_file_getc(context, descriptor, &byte), TALOS_RT_OK);
   EXPECT_EQ(byte, 'a');
 
   RuntimeBuffer firstLine;
-  ASSERT_EQ(
-      talos_rt_v1_file_getline(context, descriptor, 64, firstLine.out()),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_file_getline(context, descriptor, 64, firstLine.out()),
+            TALOS_RT_OK);
   EXPECT_EQ(firstLine.str(), std::string("\0b\n", 3));
   RuntimeBuffer secondLine;
-  ASSERT_EQ(
-      talos_rt_v1_file_getline(context, descriptor, 64, secondLine.out()),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_file_getline(context, descriptor, 64, secondLine.out()),
+            TALOS_RT_OK);
   EXPECT_EQ(secondLine.str(), "last");
   RuntimeBuffer eofLine;
   EXPECT_EQ(talos_rt_v1_file_getline(context, descriptor, 64, eofLine.out()),
@@ -2951,8 +2853,7 @@ TEST_F(RuntimeTest, ReadsWithoutReadAccessReportEndOfFileInsteadOfIOError) {
   // The host refuses these reads with EBADF. Reporting that as an I/O error
   // would fail the whole simulation instead of the individual system call.
   uint8_t byte = 0;
-  EXPECT_EQ(talos_rt_v1_file_getc(context, descriptor, &byte),
-            TALOS_RT_EOF);
+  EXPECT_EQ(talos_rt_v1_file_getc(context, descriptor, &byte), TALOS_RT_EOF);
   char bytes[4] = {};
   uint64_t read = 1;
   ASSERT_EQ(
@@ -2973,7 +2874,7 @@ TEST_F(RuntimeTest, ReadsWithoutReadAccessReportEndOfFileInsteadOfIOError) {
   uint32_t ok = 1;
   uint32_t scanEOF = 0;
   EXPECT_EQ(talos_rt_v1_file_scan_field(context, lane, descriptor, 1, nullptr,
-                                          0, 'd', 0, &field, &ok, &scanEOF),
+                                        0, 'd', 0, &field, &ok, &scanEOF),
             TALOS_RT_OK);
   EXPECT_EQ(field, 0u);
   EXPECT_EQ(ok, 0u);
@@ -3005,8 +2906,8 @@ TEST_F(RuntimeTest, ScansOnAnInvalidDescriptorReportEndOfFile) {
   talos_rt_string_v1 field = 1;
   uint32_t ok = 1;
   uint32_t scanEOF = 0;
-  EXPECT_EQ(talos_rt_v1_file_scan_field(context, lane, 0, 1, nullptr, 0, 'd',
-                                          0, &field, &ok, &scanEOF),
+  EXPECT_EQ(talos_rt_v1_file_scan_field(context, lane, 0, 1, nullptr, 0, 'd', 0,
+                                        &field, &ok, &scanEOF),
             TALOS_RT_OK);
   EXPECT_EQ(field, 0u);
   EXPECT_EQ(ok, 0u);
@@ -3015,8 +2916,8 @@ TEST_F(RuntimeTest, ScansOnAnInvalidDescriptorReportEndOfFile) {
   // A disabled conversion still leaves the stream alone and reports nothing:
   // lowering stops issuing them once an earlier one failed.
   scanEOF = 1;
-  EXPECT_EQ(talos_rt_v1_file_scan_field(context, lane, 0, 0, nullptr, 0, 'd',
-                                          0, &field, &ok, &scanEOF),
+  EXPECT_EQ(talos_rt_v1_file_scan_field(context, lane, 0, 0, nullptr, 0, 'd', 0,
+                                        &field, &ok, &scanEOF),
             TALOS_RT_OK);
   EXPECT_EQ(scanEOF, 0u);
 
@@ -3046,9 +2947,8 @@ TEST_F(RuntimeTest, FormattedScanReadErrorsAreInputFailures) {
     EXPECT_EQ(eof, 0u);
     int32_t code = 0;
     RuntimeBuffer message;
-    EXPECT_EQ(
-        talos_rt_v1_file_error(context, descriptor, &code, message.out()),
-        TALOS_RT_OK);
+    EXPECT_EQ(talos_rt_v1_file_error(context, descriptor, &code, message.out()),
+              TALOS_RT_OK);
     EXPECT_NE(code, 0);
     EXPECT_FALSE(message.str().empty());
     EXPECT_EQ(talos_rt_v1_file_close(context, descriptor), TALOS_RT_OK);
@@ -3059,8 +2959,7 @@ TEST_F(RuntimeTest, FormattedScanReadErrorsAreInputFailures) {
   uint32_t inputFailure = 0;
   uint32_t descriptor = open(directory, "r");
   ASSERT_EQ(talos_rt_v1_file_scan_field(context, lane, descriptor, 1, nullptr,
-                                          0, 'd', 0, &field, &ok,
-                                          &inputFailure),
+                                        0, 'd', 0, &field, &ok, &inputFailure),
             TALOS_RT_OK);
   EXPECT_EQ(field, 0u);
   EXPECT_EQ(ok, 0u);
@@ -3070,9 +2969,9 @@ TEST_F(RuntimeTest, FormattedScanReadErrorsAreInputFailures) {
   descriptor = open(directory, "r");
   uint32_t value = UINT32_MAX;
   uint32_t unknown = UINT32_MAX;
-  ASSERT_EQ(talos_rt_v1_file_scan_raw(
-                context, descriptor, 1, nullptr, 0, 4, 32, 0, 0, &value,
-                sizeof(value), &unknown, sizeof(unknown), &ok, &inputFailure),
+  ASSERT_EQ(talos_rt_v1_file_scan_raw(context, descriptor, 1, nullptr, 0, 4, 32,
+                                      0, 0, &value, sizeof(value), &unknown,
+                                      sizeof(unknown), &ok, &inputFailure),
             TALOS_RT_OK);
   EXPECT_EQ(value, 0u);
   EXPECT_EQ(unknown, 0u);
@@ -3085,10 +2984,10 @@ TEST_F(RuntimeTest, FormattedScanReadErrorsAreInputFailures) {
   descriptor = open(directory, "r");
   uint32_t planCursor = 0;
   uint32_t kind = 0;
-  ASSERT_EQ(talos_rt_v1_file_scan_dynamic(context, lane, descriptor, format,
-                                            0, 1, 0, UINT64_C(1) << ('d' - 'a'),
-                                            0, 0, &field, &planCursor, &kind,
-                                            &ok, &inputFailure),
+  ASSERT_EQ(talos_rt_v1_file_scan_dynamic(context, lane, descriptor, format, 0,
+                                          1, 0, UINT64_C(1) << ('d' - 'a'), 0,
+                                          0, &field, &planCursor, &kind, &ok,
+                                          &inputFailure),
             TALOS_RT_OK);
   EXPECT_EQ(field, 0u);
   EXPECT_EQ(planCursor, 0u);
@@ -3097,12 +2996,11 @@ TEST_F(RuntimeTest, FormattedScanReadErrorsAreInputFailures) {
   EXPECT_EQ(inputFailure, 1u);
   expectErrorState(descriptor);
 
-  ASSERT_EQ(talos_rt_v1_string_create(lane, "tail", 4, &format),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_string_create(lane, "tail", 4, &format), TALOS_RT_OK);
   descriptor = open(directory, "r");
-  ASSERT_EQ(talos_rt_v1_file_scan_dynamic(
-                context, lane, descriptor, format, 0, 1, 1, 0, 0, 0, &field,
-                &planCursor, &kind, &ok, &inputFailure),
+  ASSERT_EQ(talos_rt_v1_file_scan_dynamic(context, lane, descriptor, format, 0,
+                                          1, 1, 0, 0, 0, &field, &planCursor,
+                                          &kind, &ok, &inputFailure),
             TALOS_RT_OK);
   EXPECT_EQ(field, 0u);
   EXPECT_EQ(planCursor, 0u);
@@ -3123,8 +3021,7 @@ TEST_F(RuntimeTest, HoldsOnePushedBackByteWithoutReadAccess) {
   // The runtime holds the byte itself: glibc accepts ungetc() on a write-only
   // stream and then crashes on the next write through it.
   ASSERT_EQ(talos_rt_v1_file_ungetc(context, descriptor, 'z'), TALOS_RT_OK);
-  EXPECT_EQ(talos_rt_v1_file_ungetc(context, descriptor, 'y'),
-            TALOS_RT_EOF);
+  EXPECT_EQ(talos_rt_v1_file_ungetc(context, descriptor, 'y'), TALOS_RT_EOF);
   uint32_t isEOF = 1;
   ASSERT_EQ(talos_rt_v1_file_eof(context, descriptor, &isEOF), TALOS_RT_OK);
   EXPECT_EQ(isEOF, 0u);
@@ -3132,8 +3029,7 @@ TEST_F(RuntimeTest, HoldsOnePushedBackByteWithoutReadAccess) {
   uint8_t byte = 0;
   ASSERT_EQ(talos_rt_v1_file_getc(context, descriptor, &byte), TALOS_RT_OK);
   EXPECT_EQ(byte, 'z');
-  EXPECT_EQ(talos_rt_v1_file_getc(context, descriptor, &byte),
-            TALOS_RT_EOF);
+  EXPECT_EQ(talos_rt_v1_file_getc(context, descriptor, &byte), TALOS_RT_EOF);
   ASSERT_EQ(talos_rt_v1_file_eof(context, descriptor, &isEOF), TALOS_RT_OK);
   EXPECT_EQ(isEOF, 1u);
 
@@ -3152,8 +3048,7 @@ TEST_F(RuntimeTest, FormattedScansConsumeSyntheticPushback) {
   ASSERT_EQ(talos_rt_v1_gc_lane_create(context, &lane), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_lane_enter(lane), TALOS_RT_OK);
 
-  auto expectField = [&](talos_rt_string_v1 field,
-                         std::string_view expected) {
+  auto expectField = [&](talos_rt_string_v1 field, std::string_view expected) {
     char scratch[8]{};
     const char *bytes = nullptr;
     uint64_t size = 0;
@@ -3163,14 +3058,12 @@ TEST_F(RuntimeTest, FormattedScansConsumeSyntheticPushback) {
   };
   auto expectPosition = [&] {
     int64_t offset = -1;
-    ASSERT_EQ(talos_rt_v1_file_tell(context, descriptor, &offset),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_file_tell(context, descriptor, &offset), TALOS_RT_OK);
     EXPECT_EQ(offset, 0);
   };
   auto expectEOF = [&](uint32_t expected) {
     uint32_t isEOF = 2;
-    ASSERT_EQ(talos_rt_v1_file_eof(context, descriptor, &isEOF),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_file_eof(context, descriptor, &isEOF), TALOS_RT_OK);
     EXPECT_EQ(isEOF, expected);
   };
 
@@ -3179,7 +3072,7 @@ TEST_F(RuntimeTest, FormattedScansConsumeSyntheticPushback) {
   uint32_t scanEOF = 0;
   ASSERT_EQ(talos_rt_v1_file_ungetc(context, descriptor, 'Q'), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_file_scan_field(context, lane, descriptor, 1, nullptr,
-                                          0, 'c', 0, &field, &ok, &scanEOF),
+                                        0, 'c', 0, &field, &ok, &scanEOF),
             TALOS_RT_OK);
   EXPECT_EQ(ok, 1u);
   EXPECT_EQ(scanEOF, 0u);
@@ -3189,7 +3082,7 @@ TEST_F(RuntimeTest, FormattedScansConsumeSyntheticPushback) {
 
   ASSERT_EQ(talos_rt_v1_file_ungetc(context, descriptor, 'S'), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_file_scan_field(context, lane, descriptor, 1, nullptr,
-                                          0, 's', 0, &field, &ok, &scanEOF),
+                                        0, 's', 0, &field, &ok, &scanEOF),
             TALOS_RT_OK);
   EXPECT_EQ(ok, 1u);
   EXPECT_EQ(scanEOF, 0u);
@@ -3201,7 +3094,7 @@ TEST_F(RuntimeTest, FormattedScansConsumeSyntheticPushback) {
   // ungetc() restores a byte on an ordinary readable stream.
   ASSERT_EQ(talos_rt_v1_file_ungetc(context, descriptor, 'Q'), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_file_scan_field(context, lane, descriptor, 1, nullptr,
-                                          0, 'd', 0, &field, &ok, &scanEOF),
+                                        0, 'd', 0, &field, &ok, &scanEOF),
             TALOS_RT_OK);
   EXPECT_EQ(ok, 0u);
   EXPECT_EQ(scanEOF, 0u);
@@ -3216,12 +3109,12 @@ TEST_F(RuntimeTest, FormattedScansConsumeSyntheticPushback) {
   // zero-byte %m consumes it and can still succeed at synthetic EOF.
   ASSERT_EQ(talos_rt_v1_file_ungetc(context, descriptor, 'Q'), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_file_scan_field(context, lane, descriptor, 1, "X", 1,
-                                          'm', 0, &field, &ok, &scanEOF),
+                                        'm', 0, &field, &ok, &scanEOF),
             TALOS_RT_OK);
   EXPECT_EQ(ok, 0u);
   expectEOF(0);
   ASSERT_EQ(talos_rt_v1_file_scan_field(context, lane, descriptor, 1, "Q", 1,
-                                          'm', 0, &field, &ok, &scanEOF),
+                                        'm', 0, &field, &ok, &scanEOF),
             TALOS_RT_OK);
   EXPECT_EQ(ok, 1u);
   EXPECT_EQ(scanEOF, 0u);
@@ -3232,9 +3125,9 @@ TEST_F(RuntimeTest, FormattedScansConsumeSyntheticPushback) {
   // conversion needs a full native word; consuming the one available byte
   // and then reaching EOF is a partial conversion, not a mismatch.
   ASSERT_EQ(talos_rt_v1_file_ungetc(context, descriptor, 'Q'), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_file_scan_raw(context, descriptor, 1, nullptr, 0, 1,
-                                        0, 0, 1, nullptr, 0, nullptr, 0, &ok,
-                                        &scanEOF),
+  ASSERT_EQ(talos_rt_v1_file_scan_raw(context, descriptor, 1, nullptr, 0, 1, 0,
+                                      0, 1, nullptr, 0, nullptr, 0, &ok,
+                                      &scanEOF),
             TALOS_RT_OK);
   EXPECT_EQ(ok, 1u);
   EXPECT_EQ(scanEOF, 0u);
@@ -3244,9 +3137,9 @@ TEST_F(RuntimeTest, FormattedScansConsumeSyntheticPushback) {
   uint32_t value = UINT32_MAX;
   uint32_t unknown = UINT32_MAX;
   ASSERT_EQ(talos_rt_v1_file_ungetc(context, descriptor, 'Q'), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_file_scan_raw(
-                context, descriptor, 1, nullptr, 0, 4, 32, 0, 0, &value,
-                sizeof(value), &unknown, sizeof(unknown), &ok, &scanEOF),
+  ASSERT_EQ(talos_rt_v1_file_scan_raw(context, descriptor, 1, nullptr, 0, 4, 32,
+                                      0, 0, &value, sizeof(value), &unknown,
+                                      sizeof(unknown), &ok, &scanEOF),
             TALOS_RT_OK);
   EXPECT_EQ(ok, 0u);
   EXPECT_EQ(scanEOF, 1u);
@@ -3275,9 +3168,8 @@ TEST_F(RuntimeTest, BoundsPackedLineReadsWithoutDiscardingRemainingBytes) {
   EXPECT_EQ(prefix.str(), "abc");
 
   RuntimeBuffer remainder;
-  ASSERT_EQ(
-      talos_rt_v1_file_getline(context, descriptor, 64, remainder.out()),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_file_getline(context, descriptor, 64, remainder.out()),
+            TALOS_RT_OK);
   EXPECT_EQ(remainder.str(), "def\n");
   EXPECT_EQ(talos_rt_v1_file_close(context, descriptor), TALOS_RT_OK);
 }
@@ -3297,9 +3189,9 @@ TEST_F(RuntimeTest, FlushesAllStreamsAndReportsByteEOF) {
   TempDirectory temporary;
   std::string mcdPath = temporary.file("flush-mcd.txt").string();
   uint32_t mcd = 0;
-  ASSERT_EQ(talos_rt_v1_file_open_mcd(context, mcdPath.data(), mcdPath.size(),
-                                        &mcd),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_file_open_mcd(context, mcdPath.data(), mcdPath.size(), &mcd),
+      TALOS_RT_OK);
   uint32_t descriptor = open(temporary.file("flush-file.txt"), "w");
   uint64_t written = 0;
   ASSERT_EQ(talos_rt_v1_file_write(context, mcd, "mcd", 3, &written),
@@ -3323,13 +3215,13 @@ TEST_F(RuntimeTest, RejectsInvalidFileArgumentsAndOpenFailures) {
   TempDirectory temporary;
   std::string missing = temporary.file("missing/child.txt").string();
   uint32_t descriptor = 123;
-  EXPECT_EQ(talos_rt_v1_file_open(context, missing.data(), missing.size(),
-                                    "r", 1, &descriptor),
+  EXPECT_EQ(talos_rt_v1_file_open(context, missing.data(), missing.size(), "r",
+                                  1, &descriptor),
             TALOS_RT_IO_ERROR);
   EXPECT_EQ(descriptor, 0u);
   descriptor = 123;
   EXPECT_EQ(talos_rt_v1_file_open_mcd(context, missing.data(), missing.size(),
-                                        &descriptor),
+                                      &descriptor),
             TALOS_RT_IO_ERROR);
   EXPECT_EQ(descriptor, 0u);
 
@@ -3345,9 +3237,8 @@ TEST_F(RuntimeTest, RejectsInvalidFileArgumentsAndOpenFailures) {
   EXPECT_EQ(
       talos_rt_v1_file_write(context, invalidDescriptor, &byte, 1, &count),
       TALOS_RT_INVALID_HANDLE);
-  EXPECT_EQ(
-      talos_rt_v1_file_read(context, invalidDescriptor, &byte, 1, &count),
-      TALOS_RT_INVALID_HANDLE);
+  EXPECT_EQ(talos_rt_v1_file_read(context, invalidDescriptor, &byte, 1, &count),
+            TALOS_RT_INVALID_HANDLE);
   EXPECT_EQ(talos_rt_v1_file_getc(context, invalidDescriptor, &unsignedByte),
             TALOS_RT_INVALID_HANDLE);
   EXPECT_EQ(talos_rt_v1_file_ungetc(context, invalidDescriptor, 'x'),
@@ -3358,11 +3249,11 @@ TEST_F(RuntimeTest, RejectsInvalidFileArgumentsAndOpenFailures) {
   EXPECT_EQ(talos_rt_v1_file_eof(context, invalidDescriptor, &eof),
             TALOS_RT_INVALID_HANDLE);
   EXPECT_EQ(talos_rt_v1_file_error(context, invalidDescriptor, &errorCode,
-                                     error.out()),
+                                   error.out()),
             TALOS_RT_INVALID_HANDLE);
-  EXPECT_EQ(talos_rt_v1_file_seek(context, invalidDescriptor, 0,
-                                    TALOS_RT_SEEK_SET),
-            TALOS_RT_INVALID_HANDLE);
+  EXPECT_EQ(
+      talos_rt_v1_file_seek(context, invalidDescriptor, 0, TALOS_RT_SEEK_SET),
+      TALOS_RT_INVALID_HANDLE);
   EXPECT_EQ(talos_rt_v1_file_tell(context, invalidDescriptor, &offset),
             TALOS_RT_INVALID_HANDLE);
   EXPECT_EQ(talos_rt_v1_file_flush(context, invalidDescriptor),
@@ -3395,9 +3286,8 @@ TEST_F(RuntimeTest, SupportsAppendAndUpdateModes) {
   ASSERT_EQ(talos_rt_v1_file_rewind(context, append), TALOS_RT_OK);
   char bytes[6]{};
   uint64_t read = 0;
-  ASSERT_EQ(
-      talos_rt_v1_file_read(context, append, bytes, sizeof(bytes), &read),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_file_read(context, append, bytes, sizeof(bytes), &read),
+            TALOS_RT_OK);
   EXPECT_EQ(std::string(bytes, static_cast<size_t>(read)), "onetwo");
   EXPECT_EQ(talos_rt_v1_file_close(context, append), TALOS_RT_OK);
 }
@@ -3446,10 +3336,10 @@ TEST_F(RuntimeTest, FansOutMultichannelDescriptors) {
   uint32_t first = 0;
   uint32_t second = 0;
   ASSERT_EQ(talos_rt_v1_file_open_mcd(context, firstPath.data(),
-                                        firstPath.size(), &first),
+                                      firstPath.size(), &first),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_file_open_mcd(context, secondPath.data(),
-                                        secondPath.size(), &second),
+                                      secondPath.size(), &second),
             TALOS_RT_OK);
   EXPECT_EQ(first & second, 0u);
   uint64_t written = 0;
@@ -3470,7 +3360,7 @@ TEST_F(RuntimeTest, ReportsMCDExhaustionAndReusesChannels) {
     std::string path = temporary.file("mcd-" + std::to_string(index)).string();
     uint32_t descriptor = 0;
     ASSERT_EQ(talos_rt_v1_file_open_mcd(context, path.data(), path.size(),
-                                          &descriptor),
+                                        &descriptor),
               TALOS_RT_OK);
     EXPECT_EQ(combined & descriptor, 0u);
     combined |= descriptor;
@@ -3481,12 +3371,12 @@ TEST_F(RuntimeTest, ReportsMCDExhaustionAndReusesChannels) {
   ASSERT_FALSE(highestPath.empty());
   talos_rt_arg_v1 item = stringArg("highest");
   ASSERT_EQ(talos_rt_v1_display(context, uint32_t{1} << 30, 0,
-                                  TALOS_RT_RADIX_DECIMAL, &item, 1, nullptr),
+                                TALOS_RT_RADIX_DECIMAL, &item, 1, nullptr),
             TALOS_RT_OK);
   std::string overflowPath = temporary.file("overflow").string();
   uint32_t overflow = 123;
   EXPECT_EQ(talos_rt_v1_file_open_mcd(context, overflowPath.data(),
-                                        overflowPath.size(), &overflow),
+                                      overflowPath.size(), &overflow),
             TALOS_RT_OUT_OF_RESOURCES);
   EXPECT_EQ(overflow, 0u);
   ASSERT_EQ(talos_rt_v1_file_close(context, combined), TALOS_RT_OK);
@@ -3494,7 +3384,7 @@ TEST_F(RuntimeTest, ReportsMCDExhaustionAndReusesChannels) {
 
   uint32_t reused = 0;
   ASSERT_EQ(talos_rt_v1_file_open_mcd(context, overflowPath.data(),
-                                        overflowPath.size(), &reused),
+                                      overflowPath.size(), &reused),
             TALOS_RT_OK);
   EXPECT_NE(reused, 0u);
   EXPECT_EQ(talos_rt_v1_file_close(context, reused), TALOS_RT_OK);
@@ -3505,19 +3395,18 @@ TEST_F(RuntimeTest, ValidatesModesHandlesAndFileErrors) {
   std::string path = temporary.file("errors.txt").string();
   uint32_t descriptor = 99;
   EXPECT_EQ(talos_rt_v1_file_open(context, path.data(), path.size(), "bad", 3,
-                                    &descriptor),
+                                  &descriptor),
             TALOS_RT_INVALID_ARGUMENT);
   EXPECT_EQ(descriptor, 0u);
 
   const char pathWithNul[] = {'b', 'a', 'd', '\0', 'p', 'a', 't', 'h'};
   EXPECT_EQ(talos_rt_v1_file_open(context, pathWithNul, sizeof(pathWithNul),
-                                    "w", 1, &descriptor),
+                                  "w", 1, &descriptor),
             TALOS_RT_INVALID_ARGUMENT);
 
   uint32_t readOnly = open(temporary.file("missing.txt"), "w+");
   EXPECT_EQ(talos_rt_v1_file_close(context, readOnly), TALOS_RT_OK);
-  EXPECT_EQ(talos_rt_v1_file_close(context, readOnly),
-            TALOS_RT_INVALID_HANDLE);
+  EXPECT_EQ(talos_rt_v1_file_close(context, readOnly), TALOS_RT_INVALID_HANDLE);
 
   readOnly = open(temporary.file("missing.txt"), "r");
   uint64_t written = 0;
@@ -3525,9 +3414,9 @@ TEST_F(RuntimeTest, ValidatesModesHandlesAndFileErrors) {
             TALOS_RT_IO_ERROR);
   int32_t errorCode = 0;
   RuntimeBuffer errorMessage;
-  ASSERT_EQ(talos_rt_v1_file_error(context, readOnly, &errorCode,
-                                     errorMessage.out()),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_file_error(context, readOnly, &errorCode, errorMessage.out()),
+      TALOS_RT_OK);
   EXPECT_NE(errorCode, 0);
   EXPECT_FALSE(errorMessage.str().empty());
   EXPECT_EQ(talos_rt_v1_file_close(context, readOnly), TALOS_RT_OK);
@@ -3620,7 +3509,7 @@ TEST_F(RuntimeTest, SerializesConcurrentWholeMessageWrites) {
       for (int write = 0; write < writesPerThread; ++write) {
         uint64_t count = 0;
         EXPECT_EQ(talos_rt_v1_file_write(context, descriptor, line.data(),
-                                           line.size(), &count),
+                                         line.size(), &count),
                   TALOS_RT_OK);
         EXPECT_EQ(count, line.size());
       }
@@ -3634,7 +3523,7 @@ TEST_F(RuntimeTest, SerializesConcurrentWholeMessageWrites) {
   std::string contents(threadCount * writesPerThread * 9, '\0');
   uint64_t read = 0;
   ASSERT_EQ(talos_rt_v1_file_read(context, descriptor, contents.data(),
-                                    contents.size(), &read),
+                                  contents.size(), &read),
             TALOS_RT_OK);
   contents.resize(static_cast<size_t>(read));
   std::array<int, threadCount> counts{};
@@ -3658,13 +3547,11 @@ TEST_F(RuntimeTest, SerializesConcurrentWholeMessageWrites) {
 
 TEST(RuntimeFragmentTest, ExecutesTypedBytecodeThroughSharedABI) {
   std::vector<uint8_t> code;
-  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0, 0, 0,
-                    19);
-  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 1, 0, 0,
-                    23);
+  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0, 0, 0, 19);
+  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 1, 0, 0, 23);
   appendInstruction(code, TALOS_RT_BC_ADD, TALOS_RT_BC_TYPE_U64, 2, 0, 1);
-  appendInstruction(code, TALOS_RT_BC_STORE_FRAME, TALOS_RT_BC_TYPE_U64, 0,
-                    2, 0, 8);
+  appendInstruction(code, TALOS_RT_BC_STORE_FRAME, TALOS_RT_BC_TYPE_U64, 0, 2,
+                    0, 8);
   appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 3, 0, 0,
                     1234);
   appendInstruction(code, TALOS_RT_BC_SUSPEND, TALOS_RT_BC_TYPE_NONE, 0,
@@ -3685,11 +3572,9 @@ TEST(RuntimeFragmentTest, ExecutesTypedBytecodeThroughSharedABI) {
 
 TEST(RuntimeFragmentTest, ExecutesArithmeticComparisonAndControlOpcodes) {
   std::vector<uint8_t> code;
-  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0, 0, 0,
-                    7);
+  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0, 0, 0, 7);
   appendInstruction(code, TALOS_RT_BC_MOVE, TALOS_RT_BC_TYPE_U64, 1, 0);
-  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 2, 0, 0,
-                    3);
+  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 2, 0, 0, 3);
   appendInstruction(code, TALOS_RT_BC_SUB, TALOS_RT_BC_TYPE_U64, 3, 1, 2);
   appendInstruction(code, TALOS_RT_BC_MUL, TALOS_RT_BC_TYPE_U64, 4, 3, 2);
   appendInstruction(code, TALOS_RT_BC_AND, TALOS_RT_BC_TYPE_U64, 5, 4, 1);
@@ -3700,31 +3585,28 @@ TEST(RuntimeFragmentTest, ExecutesArithmeticComparisonAndControlOpcodes) {
   appendInstruction(code, TALOS_RT_BC_ULT, TALOS_RT_BC_TYPE_U64, 10, 2, 0);
   appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_I64, 11, 0, 0,
                     UINT64_MAX);
-  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_I64, 12, 0, 0,
+  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_I64, 12, 0, 0, 0);
+  appendInstruction(code, TALOS_RT_BC_SLT, TALOS_RT_BC_TYPE_I64, 13, 11, 12);
+  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_BOOL, 14, 0, 0,
                     0);
-  appendInstruction(code, TALOS_RT_BC_SLT, TALOS_RT_BC_TYPE_I64, 13, 11,
-                    12);
-  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_BOOL, 14, 0,
-                    0, 0);
-  appendInstruction(code, TALOS_RT_BC_BRANCH_ZERO, TALOS_RT_BC_TYPE_BOOL, 0,
-                    14, 0, 17);
+  appendInstruction(code, TALOS_RT_BC_BRANCH_ZERO, TALOS_RT_BC_TYPE_BOOL, 0, 14,
+                    0, 17);
   appendInstruction(code, TALOS_RT_BC_TERMINATE);
-  appendInstruction(code, TALOS_RT_BC_JUMP, TALOS_RT_BC_TYPE_NONE, 0, 0, 0,
-                    19);
+  appendInstruction(code, TALOS_RT_BC_JUMP, TALOS_RT_BC_TYPE_NONE, 0, 0, 0, 19);
   appendInstruction(code, TALOS_RT_BC_TERMINATE);
   appendInstruction(code, TALOS_RT_BC_NOP);
-  appendInstruction(code, TALOS_RT_BC_STORE_FRAME, TALOS_RT_BC_TYPE_U64, 0,
-                    3, 0, 0);
-  appendInstruction(code, TALOS_RT_BC_STORE_FRAME, TALOS_RT_BC_TYPE_U64, 0,
-                    8, 0, 8);
-  appendInstruction(code, TALOS_RT_BC_STORE_FRAME, TALOS_RT_BC_TYPE_BOOL, 0,
-                    9, 0, 16);
-  appendInstruction(code, TALOS_RT_BC_STORE_FRAME, TALOS_RT_BC_TYPE_BOOL, 0,
-                    10, 0, 24);
-  appendInstruction(code, TALOS_RT_BC_STORE_FRAME, TALOS_RT_BC_TYPE_BOOL, 0,
-                    13, 0, 32);
-  appendInstruction(code, TALOS_RT_BC_TERMINATE, TALOS_RT_BC_TYPE_NONE, 0,
-                    0, 0, 99);
+  appendInstruction(code, TALOS_RT_BC_STORE_FRAME, TALOS_RT_BC_TYPE_U64, 0, 3,
+                    0, 0);
+  appendInstruction(code, TALOS_RT_BC_STORE_FRAME, TALOS_RT_BC_TYPE_U64, 0, 8,
+                    0, 8);
+  appendInstruction(code, TALOS_RT_BC_STORE_FRAME, TALOS_RT_BC_TYPE_BOOL, 0, 9,
+                    0, 16);
+  appendInstruction(code, TALOS_RT_BC_STORE_FRAME, TALOS_RT_BC_TYPE_BOOL, 0, 10,
+                    0, 24);
+  appendInstruction(code, TALOS_RT_BC_STORE_FRAME, TALOS_RT_BC_TYPE_BOOL, 0, 13,
+                    0, 32);
+  appendInstruction(code, TALOS_RT_BC_TERMINATE, TALOS_RT_BC_TYPE_NONE, 0, 0, 0,
+                    99);
   auto descriptor = bytecodeDescriptor(code, 15);
   std::array<uint64_t, 5> frame{};
   talos_rt_fragment_action_v1 action{};
@@ -3745,8 +3627,7 @@ TEST(RuntimeFragmentTest, BoundsRunawayBytecodeOnlyWhenAskedTo) {
   // A backward jump to itself is well-formed bytecode, so validation cannot
   // reject it. Only an explicit budget turns it into a reported failure.
   std::vector<uint8_t> code;
-  appendInstruction(code, TALOS_RT_BC_JUMP, TALOS_RT_BC_TYPE_NONE, 0, 0, 0,
-                    0);
+  appendInstruction(code, TALOS_RT_BC_JUMP, TALOS_RT_BC_TYPE_NONE, 0, 0, 0, 0);
   auto descriptor = bytecodeDescriptor(code, 0);
   talos_rt_fragment_action_v1 action{};
   EXPECT_EQ(executeBytecode(descriptor, nullptr, 0, 0, &action, 1000),
@@ -3762,10 +3643,10 @@ TEST(RuntimeFragmentTest, BoundsRunawayBytecodeOnlyWhenAskedTo) {
 
 TEST(RuntimeFragmentTest, ContinuationSelectsBytecodeEntryInstruction) {
   std::vector<uint8_t> code;
-  appendInstruction(code, TALOS_RT_BC_TERMINATE, TALOS_RT_BC_TYPE_NONE, 0,
-                    0, 0, 1);
-  appendInstruction(code, TALOS_RT_BC_CONTINUE, TALOS_RT_BC_TYPE_NONE, 0, 0,
-                    0, 17);
+  appendInstruction(code, TALOS_RT_BC_TERMINATE, TALOS_RT_BC_TYPE_NONE, 0, 0, 0,
+                    1);
+  appendInstruction(code, TALOS_RT_BC_CONTINUE, TALOS_RT_BC_TYPE_NONE, 0, 0, 0,
+                    17);
   auto descriptor = bytecodeDescriptor(code, 0);
   constexpr talos_rt_bytecode_entry_v1 entries[] = {{3, 0}, {11, 1}};
   descriptor.code.bytecode.entries = entries;
@@ -3773,8 +3654,7 @@ TEST(RuntimeFragmentTest, ContinuationSelectsBytecodeEntryInstruction) {
   talos_rt_bytecode_validation_v1 validation{};
   descriptor.code.bytecode.validation = &validation;
   talos_rt_fragment_action_v1 action{};
-  ASSERT_EQ(executeBytecode(descriptor, nullptr, 0, 11, &action),
-            TALOS_RT_OK);
+  ASSERT_EQ(executeBytecode(descriptor, nullptr, 0, 11, &action), TALOS_RT_OK);
   EXPECT_EQ(action.kind, TALOS_RT_FRAGMENT_CONTINUE);
   EXPECT_EQ(action.continuation, 17u);
   EXPECT_NE(validation.state, 0u);
@@ -3791,8 +3671,7 @@ TEST(RuntimeFragmentTest, ValidationRecordSupportsConcurrentDispatch) {
   for (unsigned index = 0; index != 16; ++index)
     threads.emplace_back([&] {
       talos_rt_fragment_action_v1 action{};
-      if (executeBytecode(descriptor, nullptr, 0, 0, &action) !=
-              TALOS_RT_OK ||
+      if (executeBytecode(descriptor, nullptr, 0, 0, &action) != TALOS_RT_OK ||
           action.kind != TALOS_RT_FRAGMENT_TERMINATE)
         ++failures;
     });
@@ -3817,8 +3696,8 @@ TEST(RuntimeFragmentTest, RejectsMalformedBytecodeAndFrameAccess) {
             TALOS_RT_INVALID_BYTECODE);
 
   std::vector<uint8_t> code;
-  appendInstruction(code, TALOS_RT_BC_LOAD_FRAME, TALOS_RT_BC_TYPE_U64, 0,
-                    0, 0, 8);
+  appendInstruction(code, TALOS_RT_BC_LOAD_FRAME, TALOS_RT_BC_TYPE_U64, 0, 0, 0,
+                    8);
   appendInstruction(code, TALOS_RT_BC_TERMINATE);
   auto badFrame = bytecodeDescriptor(code, 1);
   uint64_t frame = 0;
@@ -3826,8 +3705,8 @@ TEST(RuntimeFragmentTest, RejectsMalformedBytecodeAndFrameAccess) {
             TALOS_RT_INVALID_BYTECODE);
 
   std::vector<uint8_t> invalidBool;
-  appendInstruction(invalidBool, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_BOOL,
-                    0, 0, 0, 2);
+  appendInstruction(invalidBool, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_BOOL, 0, 0,
+                    0, 2);
   appendInstruction(invalidBool, TALOS_RT_BC_TERMINATE);
   auto badBool = bytecodeDescriptor(invalidBool, 1);
   EXPECT_EQ(executeBytecode(badBool, nullptr, 0, 0, &action),
@@ -3836,15 +3715,15 @@ TEST(RuntimeFragmentTest, RejectsMalformedBytecodeAndFrameAccess) {
                "invalid bytecode");
 
   std::vector<uint8_t> noneStore;
-  appendInstruction(noneStore, TALOS_RT_BC_STORE_FRAME,
-                    TALOS_RT_BC_TYPE_NONE, 0, 0);
+  appendInstruction(noneStore, TALOS_RT_BC_STORE_FRAME, TALOS_RT_BC_TYPE_NONE,
+                    0, 0);
   auto badStore = bytecodeDescriptor(noneStore, 1);
   EXPECT_EQ(executeBytecode(badStore, &frame, sizeof(frame), 0, &action),
             TALOS_RT_INVALID_BYTECODE);
 
   std::vector<uint8_t> noneBranch;
-  appendInstruction(noneBranch, TALOS_RT_BC_BRANCH_ZERO,
-                    TALOS_RT_BC_TYPE_NONE, 0, 0, 0, 0);
+  appendInstruction(noneBranch, TALOS_RT_BC_BRANCH_ZERO, TALOS_RT_BC_TYPE_NONE,
+                    0, 0, 0, 0);
   auto badBranch = bytecodeDescriptor(noneBranch, 1);
   EXPECT_EQ(executeBytecode(badBranch, nullptr, 0, 0, &action),
             TALOS_RT_INVALID_BYTECODE);
@@ -3856,12 +3735,12 @@ TEST(RuntimeFragmentTest, RejectsMalformedBytecodeAndFrameAccess) {
   appendInstruction(invalidType, TALOS_RT_BC_CONST, 0xff, 0);
   EXPECT_EQ(rejects(invalidType, 1), TALOS_RT_INVALID_BYTECODE);
   std::vector<uint8_t> uninitializedMove;
-  appendInstruction(uninitializedMove, TALOS_RT_BC_MOVE,
-                    TALOS_RT_BC_TYPE_U64, 0, 0);
+  appendInstruction(uninitializedMove, TALOS_RT_BC_MOVE, TALOS_RT_BC_TYPE_U64,
+                    0, 0);
   EXPECT_EQ(rejects(uninitializedMove, 1), TALOS_RT_INVALID_BYTECODE);
   std::vector<uint8_t> invalidJump;
-  appendInstruction(invalidJump, TALOS_RT_BC_JUMP, TALOS_RT_BC_TYPE_NONE, 0,
-                    0, 0, 1);
+  appendInstruction(invalidJump, TALOS_RT_BC_JUMP, TALOS_RT_BC_TYPE_NONE, 0, 0,
+                    0, 1);
   EXPECT_EQ(rejects(invalidJump, 0), TALOS_RT_INVALID_BYTECODE);
   std::vector<uint8_t> unterminated;
   appendInstruction(unterminated, TALOS_RT_BC_NOP);
@@ -3904,8 +3783,8 @@ TEST(RuntimeFragmentTest, RejectsMalformedBytecodeAndFrameAccess) {
 }
 
 talos_rt_status nativeFragment(talos_rt_context *, void *frame,
-                                 uint64_t frameSize, uint32_t continuation,
-                                 talos_rt_fragment_action_v1 *action) {
+                               uint64_t frameSize, uint32_t continuation,
+                               talos_rt_fragment_action_v1 *action) {
   if (!frame || frameSize != sizeof(uint64_t))
     return TALOS_RT_INVALID_ARGUMENT;
   ++*static_cast<uint64_t *>(frame);
@@ -3919,8 +3798,8 @@ talos_rt_status nativeFragment(talos_rt_context *, void *frame,
 }
 
 talos_rt_status invalidNativeAction(talos_rt_context *, void *, uint64_t,
-                                      uint32_t,
-                                      talos_rt_fragment_action_v1 *action) {
+                                    uint32_t,
+                                    talos_rt_fragment_action_v1 *action) {
   *action = {TALOS_RT_FRAGMENT_CONTINUE, TALOS_RT_SUSPEND_NONE, 1, 0, 1, 0};
   return TALOS_RT_OK;
 }
@@ -3932,21 +3811,21 @@ TEST(RuntimeFragmentTest, ValidatesNativeDescriptorsAndActions) {
   descriptor.code.native_entry = invalidNativeAction;
   talos_rt_fragment_action_v1 action{};
   EXPECT_EQ(talos_rt_v1_fragment_execute(&descriptor, nullptr, nullptr, 0, 0,
-                                           &action),
+                                         &action),
             TALOS_RT_INVALID_ARGUMENT);
 
   descriptor.flags = 1;
   EXPECT_EQ(talos_rt_v1_fragment_execute(&descriptor, nullptr, nullptr, 0, 0,
-                                           &action),
+                                         &action),
             TALOS_RT_INVALID_ARGUMENT);
   descriptor.flags = 0;
   descriptor.code.native_entry = nullptr;
   EXPECT_EQ(talos_rt_v1_fragment_execute(&descriptor, nullptr, nullptr, 0, 0,
-                                           &action),
+                                         &action),
             TALOS_RT_INVALID_ARGUMENT);
   descriptor.handle.kind = TALOS_RT_DESCRIPTOR_PROCESS;
   EXPECT_EQ(talos_rt_v1_fragment_execute(&descriptor, nullptr, nullptr, 0, 0,
-                                           &action),
+                                         &action),
             TALOS_RT_INVALID_ARGUMENT);
 }
 
@@ -3958,21 +3837,20 @@ TEST(RuntimeFragmentTest, NativeAndBytecodeUseOneDispatchContract) {
   uint64_t nativeFrame = 4;
   talos_rt_fragment_action_v1 nativeAction{};
   EXPECT_EQ(talos_rt_v1_fragment_execute(&native, nullptr, &nativeFrame,
-                                           sizeof(nativeFrame), 11,
-                                           &nativeAction),
+                                         sizeof(nativeFrame), 11,
+                                         &nativeAction),
             TALOS_RT_OK);
   EXPECT_EQ(nativeFrame, 5u);
 
   std::vector<uint8_t> code;
-  appendInstruction(code, TALOS_RT_BC_LOAD_FRAME, TALOS_RT_BC_TYPE_U64, 0,
-                    0, 0, 0);
-  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 1, 0, 0,
-                    1);
+  appendInstruction(code, TALOS_RT_BC_LOAD_FRAME, TALOS_RT_BC_TYPE_U64, 0, 0, 0,
+                    0);
+  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 1, 0, 0, 1);
   appendInstruction(code, TALOS_RT_BC_ADD, TALOS_RT_BC_TYPE_U64, 2, 0, 1);
-  appendInstruction(code, TALOS_RT_BC_STORE_FRAME, TALOS_RT_BC_TYPE_U64, 0,
-                    2, 0, 0);
-  appendInstruction(code, TALOS_RT_BC_CONTINUE, TALOS_RT_BC_TYPE_NONE, 0, 0,
-                    0, 12);
+  appendInstruction(code, TALOS_RT_BC_STORE_FRAME, TALOS_RT_BC_TYPE_U64, 0, 2,
+                    0, 0);
+  appendInstruction(code, TALOS_RT_BC_CONTINUE, TALOS_RT_BC_TYPE_NONE, 0, 0, 0,
+                    12);
   auto bytecode = bytecodeDescriptor(code, 3);
   constexpr talos_rt_bytecode_entry_v1 entry{11, 0};
   bytecode.code.bytecode.entries = &entry;
@@ -4049,20 +3927,20 @@ TEST_F(RuntimeTest, BytecodeServicesFormatWriteAndReleaseOwnedBuffers) {
   };
 
   std::vector<uint8_t> code;
-  appendInstruction(code, TALOS_RT_BC_CALL_SERVICE, TALOS_RT_BC_TYPE_STATUS,
-                    0, 0, 0, 0);
-  appendInstruction(code, TALOS_RT_BC_BRANCH_ZERO, TALOS_RT_BC_TYPE_STATUS,
-                    0, 0, 0, 3);
+  appendInstruction(code, TALOS_RT_BC_CALL_SERVICE, TALOS_RT_BC_TYPE_STATUS, 0,
+                    0, 0, 0);
+  appendInstruction(code, TALOS_RT_BC_BRANCH_ZERO, TALOS_RT_BC_TYPE_STATUS, 0,
+                    0, 0, 3);
   appendInstruction(code, TALOS_RT_BC_FAIL, TALOS_RT_BC_TYPE_STATUS, 0, 0);
-  appendInstruction(code, TALOS_RT_BC_CALL_SERVICE, TALOS_RT_BC_TYPE_STATUS,
-                    0, 0, 0, 1);
-  appendInstruction(code, TALOS_RT_BC_BRANCH_ZERO, TALOS_RT_BC_TYPE_STATUS,
-                    0, 0, 0, 6);
+  appendInstruction(code, TALOS_RT_BC_CALL_SERVICE, TALOS_RT_BC_TYPE_STATUS, 0,
+                    0, 0, 1);
+  appendInstruction(code, TALOS_RT_BC_BRANCH_ZERO, TALOS_RT_BC_TYPE_STATUS, 0,
+                    0, 0, 6);
   appendInstruction(code, TALOS_RT_BC_FAIL, TALOS_RT_BC_TYPE_STATUS, 0, 0);
-  appendInstruction(code, TALOS_RT_BC_CALL_SERVICE, TALOS_RT_BC_TYPE_STATUS,
-                    0, 0, 0, 2);
-  appendInstruction(code, TALOS_RT_BC_BRANCH_ZERO, TALOS_RT_BC_TYPE_STATUS,
-                    0, 0, 0, 9);
+  appendInstruction(code, TALOS_RT_BC_CALL_SERVICE, TALOS_RT_BC_TYPE_STATUS, 0,
+                    0, 0, 2);
+  appendInstruction(code, TALOS_RT_BC_BRANCH_ZERO, TALOS_RT_BC_TYPE_STATUS, 0,
+                    0, 0, 9);
   appendInstruction(code, TALOS_RT_BC_FAIL, TALOS_RT_BC_TYPE_STATUS, 0, 0);
   appendInstruction(code, TALOS_RT_BC_TERMINATE);
 
@@ -4089,7 +3967,7 @@ TEST_F(RuntimeTest, BytecodeServicesFormatWriteAndReleaseOwnedBuffers) {
   char output[64]{};
   uint64_t read = 0;
   ASSERT_EQ(talos_rt_v1_file_read(context, descriptorValue, output,
-                                    sizeof(output), &read),
+                                  sizeof(output), &read),
             TALOS_RT_OK);
   EXPECT_EQ(std::string(output, read), "top.worker work.top 4200ns");
   EXPECT_EQ(talos_rt_v1_file_close(context, descriptorValue), TALOS_RT_OK);
@@ -4167,8 +4045,8 @@ TEST_F(RuntimeTest, BytecodeServicesExerciseEveryFileAndDisplayCall) {
                     talos_rt_bytecode_value_kind valueKind, uint64_t value,
                     uint64_t size = 0, uint64_t auxiliary = 0,
                     uint8_t flags = 0) {
-    return talos_rt_bytecode_operand_v1{kind,  direction, valueKind, flags, 0,
-                                          value, size,      auxiliary};
+    return talos_rt_bytecode_operand_v1{kind, direction, valueKind, flags,
+                                        0,    value,     size,      auxiliary};
   };
   auto constantBytes = [&](ConstantSpan span) {
     return operand(TALOS_RT_BC_OPERAND_CONSTANT, TALOS_RT_BC_OPERAND_INPUT,
@@ -4176,13 +4054,13 @@ TEST_F(RuntimeTest, BytecodeServicesExerciseEveryFileAndDisplayCall) {
   };
   auto inputFrame = [&](talos_rt_bytecode_value_kind kind, uint64_t offset,
                         uint64_t size) {
-    return operand(TALOS_RT_BC_OPERAND_FRAME, TALOS_RT_BC_OPERAND_INPUT,
-                   kind, offset, size);
+    return operand(TALOS_RT_BC_OPERAND_FRAME, TALOS_RT_BC_OPERAND_INPUT, kind,
+                   offset, size);
   };
   auto outputFrame = [&](talos_rt_bytecode_value_kind kind, uint64_t offset,
                          uint64_t size) {
-    return operand(TALOS_RT_BC_OPERAND_FRAME, TALOS_RT_BC_OPERAND_OUTPUT,
-                   kind, offset, size);
+    return operand(TALOS_RT_BC_OPERAND_FRAME, TALOS_RT_BC_OPERAND_OUTPUT, kind,
+                   offset, size);
   };
   auto immediate = [&](talos_rt_bytecode_value_kind kind, uint64_t value) {
     return operand(TALOS_RT_BC_OPERAND_IMMEDIATE, TALOS_RT_BC_OPERAND_INPUT,
@@ -4233,10 +4111,9 @@ TEST_F(RuntimeTest, BytecodeServicesExerciseEveryFileAndDisplayCall) {
                     sizeof(frame.descriptor))});
 
   uint64_t displayArgument = operands.size();
-  operands.push_back(operand(TALOS_RT_BC_OPERAND_CONSTANT,
-                             TALOS_RT_BC_OPERAND_INPUT,
-                             TALOS_RT_BC_VALUE_ARGUMENT_STRING,
-                             displayText.offset, displayText.size));
+  operands.push_back(operand(
+      TALOS_RT_BC_OPERAND_CONSTANT, TALOS_RT_BC_OPERAND_INPUT,
+      TALOS_RT_BC_VALUE_ARGUMENT_STRING, displayText.offset, displayText.size));
   call(TALOS_RT_BC_SERVICE_DISPLAY,
        {descriptor(), immediate(TALOS_RT_BC_VALUE_U32, 1),
         immediate(TALOS_RT_BC_VALUE_U32, TALOS_RT_RADIX_DECIMAL),
@@ -4336,8 +4213,8 @@ TEST_F(RuntimeTest, BytecodeServicesExerciseEveryFileAndDisplayCall) {
 
 TEST(RuntimeFragmentTest, RejectsMalformedServiceMetadataAndResources) {
   std::vector<uint8_t> code;
-  appendInstruction(code, TALOS_RT_BC_CALL_SERVICE, TALOS_RT_BC_TYPE_STATUS,
-                    0, 0, 0, 0);
+  appendInstruction(code, TALOS_RT_BC_CALL_SERVICE, TALOS_RT_BC_TYPE_STATUS, 0,
+                    0, 0, 0);
   appendInstruction(code, TALOS_RT_BC_TERMINATE);
   auto descriptor = bytecodeDescriptor(code, 1);
   talos_rt_fragment_action_v1 action{};
@@ -4349,15 +4226,15 @@ TEST(RuntimeFragmentTest, RejectsMalformedServiceMetadataAndResources) {
             TALOS_RT_INVALID_BYTECODE);
 
   talos_rt_bytecode_operand_v1 forged{TALOS_RT_BC_OPERAND_RESOURCE,
-                                        TALOS_RT_BC_OPERAND_INPUT,
-                                        TALOS_RT_BC_VALUE_BUFFER,
-                                        0,
-                                        0,
-                                        0,
-                                        0,
-                                        0};
-  talos_rt_bytecode_service_site_v1 release{
-      TALOS_RT_BC_SERVICE_BUFFER_RELEASE, 0, 1, 0, 0};
+                                      TALOS_RT_BC_OPERAND_INPUT,
+                                      TALOS_RT_BC_VALUE_BUFFER,
+                                      0,
+                                      0,
+                                      0,
+                                      0,
+                                      0};
+  talos_rt_bytecode_service_site_v1 release{TALOS_RT_BC_SERVICE_BUFFER_RELEASE,
+                                            0, 1, 0, 0};
   descriptor.code.bytecode.service_sites = &release;
   descriptor.code.bytecode.operands = &forged;
   descriptor.code.bytecode.operand_count = 1;
@@ -4383,8 +4260,8 @@ TEST(RuntimeFragmentTest, RejectsMalformedServiceMetadataAndResources) {
       {TALOS_RT_BC_OPERAND_REGISTER, TALOS_RT_BC_OPERAND_OUTPUT,
        TALOS_RT_BC_VALUE_U32, 0, 0, 0, 0, 0},
   };
-  const talos_rt_bytecode_service_site_v1 eofSite{
-      TALOS_RT_BC_SERVICE_FILE_EOF, 0, 2, 0, 0};
+  const talos_rt_bytecode_service_site_v1 eofSite{TALOS_RT_BC_SERVICE_FILE_EOF,
+                                                  0, 2, 0, 0};
   descriptor.code.bytecode.service_sites = &eofSite;
   descriptor.code.bytecode.operands = eofOperands;
   descriptor.code.bytecode.operand_count = std::size(eofOperands);
@@ -4500,63 +4377,63 @@ TEST(RuntimeFragmentTest, ValidatesEveryServiceOperandBoundary) {
     return executeBytecode(descriptor, frame, frameSize, 0, &action);
   };
 
-  talos_rt_bytecode_service_site_v1 noArity{TALOS_RT_BC_SERVICE_FILE_CLOSE,
-                                              0, 0, 0, 0};
+  talos_rt_bytecode_service_site_v1 noArity{TALOS_RT_BC_SERVICE_FILE_CLOSE, 0,
+                                            0, 0, 0};
   EXPECT_EQ(check(noArity, nullptr, 0), TALOS_RT_INVALID_BYTECODE);
 
   talos_rt_bytecode_operand_v1 wrongType{TALOS_RT_BC_OPERAND_IMMEDIATE,
-                                           TALOS_RT_BC_OPERAND_INPUT,
-                                           TALOS_RT_BC_VALUE_I64,
-                                           0,
-                                           0,
-                                           0,
-                                           0,
-                                           0};
-  talos_rt_bytecode_service_site_v1 close{TALOS_RT_BC_SERVICE_FILE_CLOSE, 0,
-                                            1, 0, 0};
+                                         TALOS_RT_BC_OPERAND_INPUT,
+                                         TALOS_RT_BC_VALUE_I64,
+                                         0,
+                                         0,
+                                         0,
+                                         0,
+                                         0};
+  talos_rt_bytecode_service_site_v1 close{TALOS_RT_BC_SERVICE_FILE_CLOSE, 0, 1,
+                                          0, 0};
   EXPECT_EQ(check(close, &wrongType, 1), TALOS_RT_INVALID_BYTECODE);
 
   talos_rt_bytecode_operand_v1 badFrame{TALOS_RT_BC_OPERAND_FRAME,
-                                          TALOS_RT_BC_OPERAND_INPUT,
-                                          TALOS_RT_BC_VALUE_U32,
-                                          0,
-                                          0,
-                                          8,
-                                          4,
-                                          0};
+                                        TALOS_RT_BC_OPERAND_INPUT,
+                                        TALOS_RT_BC_VALUE_U32,
+                                        0,
+                                        0,
+                                        8,
+                                        4,
+                                        0};
   uint32_t frame = 0;
   EXPECT_EQ(check(close, &badFrame, 1, 1, &frame, sizeof(frame)),
             TALOS_RT_INVALID_BYTECODE);
 
   talos_rt_bytecode_operand_v1 badRegister{TALOS_RT_BC_OPERAND_REGISTER,
-                                             TALOS_RT_BC_OPERAND_INPUT,
-                                             TALOS_RT_BC_VALUE_U32,
-                                             0,
-                                             0,
-                                             1,
-                                             0,
-                                             0};
+                                           TALOS_RT_BC_OPERAND_INPUT,
+                                           TALOS_RT_BC_VALUE_U32,
+                                           0,
+                                           0,
+                                           1,
+                                           0,
+                                           0};
   EXPECT_EQ(check(close, &badRegister, 1), TALOS_RT_INVALID_BYTECODE);
 
   talos_rt_bytecode_operand_v1 badConstant{TALOS_RT_BC_OPERAND_CONSTANT,
-                                             TALOS_RT_BC_OPERAND_INPUT,
-                                             TALOS_RT_BC_VALUE_BYTES,
-                                             0,
-                                             0,
-                                             1,
-                                             8,
-                                             0};
+                                           TALOS_RT_BC_OPERAND_INPUT,
+                                           TALOS_RT_BC_VALUE_BYTES,
+                                           0,
+                                           0,
+                                           1,
+                                           8,
+                                           0};
   talos_rt_bytecode_operand_v1 output{TALOS_RT_BC_OPERAND_REGISTER,
-                                        TALOS_RT_BC_OPERAND_OUTPUT,
-                                        TALOS_RT_BC_VALUE_U32,
-                                        0,
-                                        0,
-                                        0,
-                                        0,
-                                        0};
+                                      TALOS_RT_BC_OPERAND_OUTPUT,
+                                      TALOS_RT_BC_VALUE_U32,
+                                      0,
+                                      0,
+                                      0,
+                                      0,
+                                      0};
   const talos_rt_bytecode_operand_v1 openOperands[] = {badConstant, output};
-  talos_rt_bytecode_service_site_v1 openSite{
-      TALOS_RT_BC_SERVICE_FILE_OPEN_MCD, 0, 2, 0, 0};
+  talos_rt_bytecode_service_site_v1 openSite{TALOS_RT_BC_SERVICE_FILE_OPEN_MCD,
+                                             0, 2, 0, 0};
   auto descriptor = bytecodeDescriptor(code, 1);
   const uint8_t constant = 0;
   descriptor.code.bytecode.constants = &constant;
@@ -4607,8 +4484,8 @@ TEST_F(RuntimeTest, BytecodeFailureOutputsMatchNativeZeroInitialization) {
       {TALOS_RT_BC_OPERAND_FRAME, TALOS_RT_BC_OPERAND_OUTPUT,
        TALOS_RT_BC_VALUE_U32, 0, 0, 0, 4, 0},
   };
-  const talos_rt_bytecode_service_site_v1 site{TALOS_RT_BC_SERVICE_FILE_EOF,
-                                                 0, 2, 0, 0};
+  const talos_rt_bytecode_service_site_v1 site{TALOS_RT_BC_SERVICE_FILE_EOF, 0,
+                                               2, 0, 0};
   std::vector<uint8_t> code;
   appendCheckedService(code, 0);
   appendInstruction(code, TALOS_RT_BC_TERMINATE);
@@ -4643,10 +4520,10 @@ TEST(RuntimeFragmentTest, FailedBufferServiceStillProducesReleasableResource) {
       {TALOS_RT_BC_SERVICE_BUFFER_RELEASE, 4, 1, 0, 0},
   };
   std::vector<uint8_t> code;
-  appendInstruction(code, TALOS_RT_BC_CALL_SERVICE, TALOS_RT_BC_TYPE_STATUS,
-                    0, 0, 0, 0);
-  appendInstruction(code, TALOS_RT_BC_CALL_SERVICE, TALOS_RT_BC_TYPE_STATUS,
-                    2, 0, 0, 1);
+  appendInstruction(code, TALOS_RT_BC_CALL_SERVICE, TALOS_RT_BC_TYPE_STATUS, 0,
+                    0, 0, 0);
+  appendInstruction(code, TALOS_RT_BC_CALL_SERVICE, TALOS_RT_BC_TYPE_STATUS, 2,
+                    0, 0, 1);
   appendInstruction(code, TALOS_RT_BC_FAIL, TALOS_RT_BC_TYPE_STATUS, 0, 0);
   auto descriptor = bytecodeDescriptor(code, 3);
   descriptor.code.bytecode.service_sites = sites;
@@ -4672,11 +4549,11 @@ TEST_F(RuntimeTest, MalformedInstructionCannotRunEarlierFileService) {
       {TALOS_RT_BC_OPERAND_FRAME, TALOS_RT_BC_OPERAND_OUTPUT,
        TALOS_RT_BC_VALUE_U32, 0, 0, 0, 4, 0},
   };
-  const talos_rt_bytecode_service_site_v1 site{
-      TALOS_RT_BC_SERVICE_FILE_OPEN, 0, 3, 0, 0};
+  const talos_rt_bytecode_service_site_v1 site{TALOS_RT_BC_SERVICE_FILE_OPEN, 0,
+                                               3, 0, 0};
   std::vector<uint8_t> code;
-  appendInstruction(code, TALOS_RT_BC_CALL_SERVICE, TALOS_RT_BC_TYPE_STATUS,
-                    0, 0, 0, 0);
+  appendInstruction(code, TALOS_RT_BC_CALL_SERVICE, TALOS_RT_BC_TYPE_STATUS, 0,
+                    0, 0, 0);
   appendInstruction(code, 255);
   talos_rt_bytecode_validation_v1 validation{};
   auto descriptor = bytecodeDescriptor(code, 1);
@@ -4698,15 +4575,15 @@ TEST_F(RuntimeTest, MalformedInstructionCannotRunEarlierFileService) {
 
 TEST(RuntimeFragmentTest, BytecodeServiceStatusPropagatesMissingContext) {
   const talos_rt_bytecode_operand_v1 operand{TALOS_RT_BC_OPERAND_IMMEDIATE,
-                                               TALOS_RT_BC_OPERAND_INPUT,
-                                               TALOS_RT_BC_VALUE_U32,
-                                               0,
-                                               0,
-                                               0,
-                                               0,
-                                               0};
-  const talos_rt_bytecode_service_site_v1 site{
-      TALOS_RT_BC_SERVICE_FILE_FLUSH, 0, 1, 0, 0};
+                                             TALOS_RT_BC_OPERAND_INPUT,
+                                             TALOS_RT_BC_VALUE_U32,
+                                             0,
+                                             0,
+                                             0,
+                                             0,
+                                             0};
+  const talos_rt_bytecode_service_site_v1 site{TALOS_RT_BC_SERVICE_FILE_FLUSH,
+                                               0, 1, 0, 0};
   std::vector<uint8_t> code;
   appendCheckedService(code, 0);
   appendInstruction(code, TALOS_RT_BC_TERMINATE);
@@ -4733,48 +4610,44 @@ constexpr uint64_t kNodeLinkOffset = kSlot;
 constexpr uint64_t kNodeValueOffset = kSlot * 2;
 constexpr uint64_t kDerivedExtraOffset = kSlot * 3;
 
-const talos_rt_trace_entry_v1 nodeTraceEntry{kNodeLinkOffset,
-                                               0,
-                                               1,
-                                               TALOS_RT_TRACE_STRONG,
-                                               TALOS_RT_MANAGED_SLOT_CLASS,
-                                               nullptr};
+const talos_rt_trace_entry_v1 nodeTraceEntry{
+    kNodeLinkOffset, 0, 1, TALOS_RT_TRACE_STRONG, TALOS_RT_MANAGED_SLOT_CLASS,
+    nullptr};
 const talos_rt_trace_layout_v1 nodeTraceLayout{
     TALOS_RT_VERSION, 0, kSlot * 3, kSlotAlign, &nodeTraceEntry, 1};
-const talos_rt_trace_entry_v1 derivedTraceEntry{
-    0,
-    0,
-    1,
-    TALOS_RT_TRACE_EMBEDDED,
-    TALOS_RT_MANAGED_SLOT_INVALID,
-    &nodeTraceLayout};
+const talos_rt_trace_entry_v1 derivedTraceEntry{0,
+                                                0,
+                                                1,
+                                                TALOS_RT_TRACE_EMBEDDED,
+                                                TALOS_RT_MANAGED_SLOT_INVALID,
+                                                &nodeTraceLayout};
 const talos_rt_trace_layout_v1 derivedTraceLayout{
     TALOS_RT_VERSION, 0, kSlot * 4, kSlotAlign, &derivedTraceEntry, 1};
 
 talos_rt_status nodeValueMethod(talos_rt_context *context,
-                                  talos_rt_gc_lane_v1 *,
-                                  talos_rt_object_v1 *receiver,
-                                  const talos_rt_method_argument_v1 *,
-                                  uint32_t argumentCount, void *result,
-                                  uint64_t resultSize) {
+                                talos_rt_gc_lane_v1 *,
+                                talos_rt_object_v1 *receiver,
+                                const talos_rt_method_argument_v1 *,
+                                uint32_t argumentCount, void *result,
+                                uint64_t resultSize) {
   if (!context || argumentCount != 0 || !result ||
       resultSize != sizeof(uint64_t))
     return TALOS_RT_INVALID_ARGUMENT;
   return talos_rt_v1_object_read(receiver, kNodeValueOffset, result,
-                                   resultSize);
+                                 resultSize);
 }
 
 talos_rt_status derivedValueMethod(talos_rt_context *context,
-                                     talos_rt_gc_lane_v1 *,
-                                     talos_rt_object_v1 *receiver,
-                                     const talos_rt_method_argument_v1 *,
-                                     uint32_t argumentCount, void *result,
-                                     uint64_t resultSize) {
+                                   talos_rt_gc_lane_v1 *,
+                                   talos_rt_object_v1 *receiver,
+                                   const talos_rt_method_argument_v1 *,
+                                   uint32_t argumentCount, void *result,
+                                   uint64_t resultSize) {
   uint64_t value = 0;
   if (!context || argumentCount != 0 || !result ||
       resultSize != sizeof(value) ||
       talos_rt_v1_object_read(receiver, kNodeValueOffset, &value,
-                                sizeof(value)) != TALOS_RT_OK)
+                              sizeof(value)) != TALOS_RT_OK)
     return TALOS_RT_INVALID_ARGUMENT;
   value += 100;
   std::memcpy(result, &value, sizeof(value));
@@ -4788,26 +4661,26 @@ const talos_rt_method_descriptor_v1 derivedMethods[]{
 const char nodeName[] = "node";
 const char derivedName[] = "derived_node";
 const talos_rt_class_descriptor_v1 nodeDescriptor{TALOS_RT_VERSION,
-                                                    0,
-                                                    1,
-                                                    kSlot * 3,
-                                                    kSlotAlign,
-                                                    nullptr,
-                                                    nullptr,
-                                                    0,
-                                                    &nodeTraceLayout,
-                                                    nodeMethods,
-                                                    std::size(nodeMethods),
-                                                    nodeName,
-                                                    sizeof(nodeName) - 1,
-                                                    nullptr,
-                                                    nullptr,
-                                                    0,
-                                                    0,
-                                                    0,
-                                                    0};
-const talos_rt_random_edge_v1 randomNodeEdge{kNodeLinkOffset,
-                                               kNodeValueOffset, UINT64_C(2)};
+                                                  0,
+                                                  1,
+                                                  kSlot * 3,
+                                                  kSlotAlign,
+                                                  nullptr,
+                                                  nullptr,
+                                                  0,
+                                                  &nodeTraceLayout,
+                                                  nodeMethods,
+                                                  std::size(nodeMethods),
+                                                  nodeName,
+                                                  sizeof(nodeName) - 1,
+                                                  nullptr,
+                                                  nullptr,
+                                                  0,
+                                                  0,
+                                                  0,
+                                                  0};
+const talos_rt_random_edge_v1 randomNodeEdge{kNodeLinkOffset, kNodeValueOffset,
+                                             UINT64_C(2)};
 constexpr uint64_t kRandomNodeValueOffset = kSlot * 3;
 const talos_rt_random_variable_v1 randomNodeVariable{
     kRandomNodeValueOffset,
@@ -4822,26 +4695,26 @@ const talos_rt_random_layout_v1 randomNodeLayout{
 const talos_rt_trace_layout_v1 randomNodeTraceLayout{
     TALOS_RT_VERSION, 0, kSlot * 4, kSlotAlign, &nodeTraceEntry, 1};
 const char randomNodeName[] = "random_node";
-const talos_rt_class_descriptor_v1 randomNodeDescriptor{
-    TALOS_RT_VERSION,
-    0,
-    6,
-    kSlot * 4,
-    kSlotAlign,
-    nullptr,
-    nullptr,
-    0,
-    &randomNodeTraceLayout,
-    nodeMethods,
-    std::size(nodeMethods),
-    randomNodeName,
-    sizeof(randomNodeName) - 1,
-    &randomNodeLayout,
-    nullptr,
-    0,
-    0,
-    0,
-    0};
+const talos_rt_class_descriptor_v1 randomNodeDescriptor{TALOS_RT_VERSION,
+                                                        0,
+                                                        6,
+                                                        kSlot * 4,
+                                                        kSlotAlign,
+                                                        nullptr,
+                                                        nullptr,
+                                                        0,
+                                                        &randomNodeTraceLayout,
+                                                        nodeMethods,
+                                                        std::size(nodeMethods),
+                                                        randomNodeName,
+                                                        sizeof(randomNodeName) -
+                                                            1,
+                                                        &randomNodeLayout,
+                                                        nullptr,
+                                                        0,
+                                                        0,
+                                                        0,
+                                                        0};
 const talos_rt_trace_entry_v1 randomDerivedTraceEntries[]{
     {0, 0, 1, TALOS_RT_TRACE_EMBEDDED, TALOS_RT_MANAGED_SLOT_INVALID,
      &randomNodeTraceLayout},
@@ -4855,7 +4728,7 @@ const talos_rt_trace_layout_v1 randomDerivedTraceLayout{
     randomDerivedTraceEntries,
     std::size(randomDerivedTraceEntries)};
 const talos_rt_random_edge_v1 randomDerivedEdge{kSlot * 4, kNodeValueOffset,
-                                                  UINT64_C(4)};
+                                                UINT64_C(4)};
 const talos_rt_random_variable_v1 randomDerivedVariable{
     kSlot * 5, kNodeValueOffset, UINT64_C(8), UINT64_MAX, UINT64_MAX, 32, 0};
 const talos_rt_random_layout_v1 randomDerivedLayout{
@@ -4881,26 +4754,25 @@ const talos_rt_class_descriptor_v1 randomDerivedDescriptor{
     0,
     0,
     0};
-const talos_rt_class_descriptor_v1 derivedDescriptor{
-    TALOS_RT_VERSION,
-    TALOS_RT_CLASS_FINAL,
-    2,
-    kSlot * 4,
-    kSlotAlign,
-    &nodeDescriptor,
-    nullptr,
-    0,
-    &derivedTraceLayout,
-    derivedMethods,
-    std::size(derivedMethods),
-    derivedName,
-    sizeof(derivedName) - 1,
-    nullptr,
-    nullptr,
-    0,
-    0,
-    0,
-    0};
+const talos_rt_class_descriptor_v1 derivedDescriptor{TALOS_RT_VERSION,
+                                                     TALOS_RT_CLASS_FINAL,
+                                                     2,
+                                                     kSlot * 4,
+                                                     kSlotAlign,
+                                                     &nodeDescriptor,
+                                                     nullptr,
+                                                     0,
+                                                     &derivedTraceLayout,
+                                                     derivedMethods,
+                                                     std::size(derivedMethods),
+                                                     derivedName,
+                                                     sizeof(derivedName) - 1,
+                                                     nullptr,
+                                                     nullptr,
+                                                     0,
+                                                     0,
+                                                     0,
+                                                     0};
 // One handle slot followed by a 128-bit packed payload. Spelling the payload
 // as two more pointers happened to be right at 64 bits and leaves the object
 // too small at 32.
@@ -4908,24 +4780,24 @@ const talos_rt_trace_layout_v1 planeTraceLayout{
     TALOS_RT_VERSION, 0, sizeof(void *) + 16, alignof(void *), nullptr, 0};
 const char planeName[] = "plane_object";
 const talos_rt_class_descriptor_v1 planeDescriptor{TALOS_RT_VERSION,
-                                                     TALOS_RT_CLASS_FINAL,
-                                                     3,
-                                                     sizeof(void *) + 16,
-                                                     alignof(void *),
-                                                     nullptr,
-                                                     nullptr,
-                                                     0,
-                                                     &planeTraceLayout,
-                                                     nullptr,
-                                                     0,
-                                                     planeName,
-                                                     sizeof(planeName) - 1,
-                                                     nullptr,
-                                                     nullptr,
-                                                     0,
-                                                     0,
-                                                     0,
-                                                     0};
+                                                   TALOS_RT_CLASS_FINAL,
+                                                   3,
+                                                   sizeof(void *) + 16,
+                                                   alignof(void *),
+                                                   nullptr,
+                                                   nullptr,
+                                                   0,
+                                                   &planeTraceLayout,
+                                                   nullptr,
+                                                   0,
+                                                   planeName,
+                                                   sizeof(planeName) - 1,
+                                                   nullptr,
+                                                   nullptr,
+                                                   0,
+                                                   0,
+                                                   0,
+                                                   0};
 const talos_rt_trace_entry_v1 weakTraceEntry{
     sizeof(talos_rt_managed_word_v1), 0,      1, TALOS_RT_TRACE_WEAK,
     TALOS_RT_MANAGED_SLOT_CLASS,      nullptr};
@@ -4991,12 +4863,12 @@ TEST_F(ManagedHeapTest, PlusargsPreservePrefixOrderAndReplaceTheirIndex) {
                    uint32_t &found) {
     talos_rt_string_v1 prefixString = 0;
     EXPECT_EQ(talos_rt_v1_string_create(lane, prefix.data(), prefix.size(),
-                                          &prefixString),
+                                        &prefixString),
               TALOS_RT_OK);
     talos_rt_string_v1 result = 0;
-    EXPECT_EQ(talos_rt_v1_plusarg_value(context, lane, prefixString, &result,
-                                          &found),
-              TALOS_RT_OK);
+    EXPECT_EQ(
+        talos_rt_v1_plusarg_value(context, lane, prefixString, &result, &found),
+        TALOS_RT_OK);
     char scratch[8] = {};
     const char *bytes = nullptr;
     uint64_t size = 0;
@@ -5041,8 +4913,7 @@ TEST_F(ManagedHeapTest, PlusargsPreservePrefixOrderAndReplaceTheirIndex) {
             (std::pair<std::string, std::string>{"suite", "kept"}));
 
   talos_rt_random_state_v1 randomBefore{};
-  ASSERT_EQ(talos_rt_v1_random_get_state(context, &randomBefore),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_random_get_state(context, &randomBefore), TALOS_RT_OK);
   const char *failedCoverageLoad[] = {"sim", "+BROKEN", "--seed=19",
                                       "--coverage-load=missing.obcov"};
   EXPECT_EQ(talos_rt_v1_context_configure_argv(
@@ -5050,8 +4921,7 @@ TEST_F(ManagedHeapTest, PlusargsPreservePrefixOrderAndReplaceTheirIndex) {
                 failedCoverageLoad),
             TALOS_RT_IO_ERROR);
   talos_rt_random_state_v1 randomAfter{};
-  ASSERT_EQ(talos_rt_v1_random_get_state(context, &randomAfter),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_random_get_state(context, &randomAfter), TALOS_RT_OK);
   EXPECT_EQ(randomAfter.state, randomBefore.state);
   EXPECT_EQ(randomAfter.increment, randomBefore.increment);
   query("NEW=", tail, found);
@@ -5077,7 +4947,7 @@ TEST_F(ManagedHeapTest, PlusargsPreservePrefixOrderAndReplaceTheirIndex) {
   mismatchedDatabase.linePoints.push_back({3, 1, 1, 2, "", 1, 1, 1, 2, 0, 0});
   std::filesystem::path mismatchedPath = temporary.file("mismatch.obcov");
   ASSERT_EQ(talos::coverage::writeFileAtomically(mismatchedPath.string(),
-                                                   mismatchedDatabase),
+                                                 mismatchedDatabase),
             talos::coverage::Status::Ok);
   std::vector<std::string> stagedStorage{
       "sim",
@@ -5146,8 +5016,7 @@ TEST_F(ManagedHeapTest, PlusargIndexIsLazyAndEmptyWithoutArguments) {
   EXPECT_FALSE(context->plusargIndexNodes.empty());
 
   const char *empty[] = {"sim"};
-  ASSERT_EQ(talos_rt_v1_context_configure_argv(context, 1, empty),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_context_configure_argv(context, 1, empty), TALOS_RT_OK);
   EXPECT_FALSE(context->plusargIndexBuilt);
   EXPECT_TRUE(context->plusargIndexNodes.empty());
   ASSERT_EQ(talos_rt_v1_plusarg_test(context, prefix, &found), TALOS_RT_OK);
@@ -5161,15 +5030,15 @@ TEST_F(ManagedHeapTest, PlusargConversionsAreStrictWideAndFourState) {
   auto parse = [&](std::string_view spelling, uint32_t radix, uint64_t width,
                    std::vector<uint8_t> &value, std::vector<uint8_t> &unknown) {
     talos_rt_string_v1 string = 0;
-    EXPECT_EQ(talos_rt_v1_string_create(lane, spelling.data(),
-                                          spelling.size(), &string),
+    EXPECT_EQ(talos_rt_v1_string_create(lane, spelling.data(), spelling.size(),
+                                        &string),
               TALOS_RT_OK);
     uint64_t bytes = (width + 7) / 8;
     value.assign(static_cast<size_t>(bytes), 0xcc);
     unknown.assign(static_cast<size_t>(bytes), 0xcc);
     EXPECT_EQ(talos_rt_v1_plusarg_parse_logic(string, radix, width,
-                                                value.data(), value.size(),
-                                                unknown.data(), unknown.size()),
+                                              value.data(), value.size(),
+                                              unknown.data(), unknown.size()),
               TALOS_RT_OK);
   };
 
@@ -5285,32 +5154,32 @@ TEST_F(ManagedHeapTest, NarrowBitInsertPreservesPackedStorageAndHandles) {
 
   std::array<uint8_t, 16> bytes{};
   ASSERT_EQ(talos_rt_v1_object_bits_insert(object, sizeof(void *), 128, 4, 1,
-                                             UINT64_C(0xa5), 8),
+                                           UINT64_C(0xa5), 8),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_object_read(object, sizeof(void *), bytes.data(),
-                                      bytes.size()),
+                                    bytes.size()),
             TALOS_RT_OK);
   EXPECT_EQ(bytes[0], 0x50);
   EXPECT_EQ(bytes[1], 0x0a);
 
   bytes.fill(0);
   ASSERT_EQ(talos_rt_v1_object_write(object, sizeof(void *), bytes.data(),
-                                       bytes.size()),
+                                     bytes.size()),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_object_bits_insert(object, sizeof(void *), 128, -3, 1,
-                                             UINT64_MAX, 8),
+                                           UINT64_MAX, 8),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_object_read(object, sizeof(void *), bytes.data(),
-                                      bytes.size()),
+                                    bytes.size()),
             TALOS_RT_OK);
   EXPECT_EQ(bytes[0], 0x1f);
 
   std::array<uint8_t, 16> before = bytes;
   EXPECT_EQ(talos_rt_v1_object_bits_insert(object, sizeof(void *), 128,
-                                             INT64_MAX, 0, 0, 8),
+                                           INT64_MAX, 0, 0, 8),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_object_read(object, sizeof(void *), bytes.data(),
-                                      bytes.size()),
+                                    bytes.size()),
             TALOS_RT_OK);
   EXPECT_EQ(bytes, before);
 
@@ -5318,7 +5187,7 @@ TEST_F(ManagedHeapTest, NarrowBitInsertPreservesPackedStorageAndHandles) {
   ASSERT_EQ(talos_rt_v1_object_allocate(lane, &nodeDescriptor, &node),
             TALOS_RT_OK);
   EXPECT_EQ(talos_rt_v1_object_bits_insert(node, kNodeLinkOffset, 64, 0, 1,
-                                             UINT64_C(1), 1),
+                                           UINT64_C(1), 1),
             TALOS_RT_INVALID_ARGUMENT);
 }
 
@@ -5337,15 +5206,13 @@ TEST_F(ManagedHeapTest, PropertyOverrideKeepsHiddenManagedValueRooted) {
             TALOS_RT_OK);
 
   talos_rt_gc_root_v1 holderRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &holderRoot, &holder),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &holderRoot, &holder), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_object_override(holder, kNodeLinkOffset,
-                                          sizeof(assigned), 0, 1, 0, 0, 0,
-                                          &assigned, nullptr),
+                                        sizeof(assigned), 0, 1, 0, 0, 0,
+                                        &assigned, nullptr),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_object_override(holder, kNodeLinkOffset,
-                                          sizeof(forced), 0, 0, 0, 0, 0,
-                                          &forced, nullptr),
+  ASSERT_EQ(talos_rt_v1_object_override(holder, kNodeLinkOffset, sizeof(forced),
+                                        0, 0, 0, 0, 0, &forced, nullptr),
             TALOS_RT_OK);
 
   // Ordinary writes are masked while either layer is active.
@@ -5360,14 +5227,14 @@ TEST_F(ManagedHeapTest, PropertyOverrideKeepsHiddenManagedValueRooted) {
   forced = nullptr;
   ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_object_release_override(holder, kNodeLinkOffset,
-                                                  sizeof(visible), 0, 0),
+                                                sizeof(visible), 0, 0),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_object_field_load(holder, kNodeLinkOffset, &visible),
             TALOS_RT_OK);
   EXPECT_TRUE(talos_rt_v1_object_is_instance(visible, &nodeDescriptor));
 
   ASSERT_EQ(talos_rt_v1_object_release_override(holder, kNodeLinkOffset,
-                                                  sizeof(visible), 0, 1),
+                                                sizeof(visible), 0, 1),
             TALOS_RT_OK);
   EXPECT_EQ(talos_rt_v1_gc_root_pop(lane, &holderRoot), TALOS_RT_OK);
 }
@@ -5458,8 +5325,8 @@ TEST_F(RuntimeTest, ClosedOutputDescriptorWarnsAndContinues) {
   ASSERT_EQ(talos_rt_v1_file_close(context, descriptor), TALOS_RT_OK);
   testing::internal::CaptureStderr();
   talos_rt_arg_v1 item = stringArg("dropped");
-  EXPECT_EQ(talos_rt_v1_display(context, descriptor, 1,
-                                  TALOS_RT_RADIX_DECIMAL, &item, 1, nullptr),
+  EXPECT_EQ(talos_rt_v1_display(context, descriptor, 1, TALOS_RT_RADIX_DECIMAL,
+                                &item, 1, nullptr),
             TALOS_RT_OK);
   std::string warnings = testing::internal::GetCapturedStderr();
   EXPECT_NE(warnings.find("output descriptor"), std::string::npos);
@@ -5472,16 +5339,14 @@ TEST_F(RuntimeTest, DesignatedFormatContinuesWithUnformattedArguments) {
       TALOS_RT_ARG_FORMAT_STRING | TALOS_RT_ARG_DESIGNATED_FORMAT;
   testing::internal::CaptureStderr();
   talos_rt_arg_v1 missing = stringArg("%s", designated);
-  EXPECT_EQ(talos_rt_v1_display(context, descriptor, 0,
-                                  TALOS_RT_RADIX_DECIMAL, &missing, 1,
-                                  nullptr),
+  EXPECT_EQ(talos_rt_v1_display(context, descriptor, 0, TALOS_RT_RADIX_DECIMAL,
+                                &missing, 1, nullptr),
             TALOS_RT_OK);
   LogicValue surplus("10");
   std::vector<talos_rt_arg_v1> extra = {stringArg("%s", designated),
-                                          stringArg("kept"), surplus.arg()};
-  EXPECT_EQ(talos_rt_v1_display(context, descriptor, 0,
-                                  TALOS_RT_RADIX_DECIMAL, extra.data(),
-                                  extra.size(), nullptr),
+                                        stringArg("kept"), surplus.arg()};
+  EXPECT_EQ(talos_rt_v1_display(context, descriptor, 0, TALOS_RT_RADIX_DECIMAL,
+                                extra.data(), extra.size(), nullptr),
             TALOS_RT_OK);
   std::string warnings = testing::internal::GetCapturedStderr();
   EXPECT_NE(warnings.find("not enough arguments"), std::string::npos);
@@ -5510,12 +5375,11 @@ TEST_F(ManagedHeapTest, FormatsClassHandlesAsSingularPatterns) {
   environment.time_multiplier = 1;
   RuntimeBuffer output;
   ASSERT_EQ(talos_rt_v1_format(context, "%p|%0p", 6, arguments,
-                                 std::size(arguments), &environment,
-                                 output.out()),
+                               std::size(arguments), &environment,
+                               output.out()),
             TALOS_RT_OK);
-  EXPECT_EQ(output.str(), "class@" +
-                              std::to_string(talos_rt_v1_object_id(object)) +
-                              "|null");
+  EXPECT_EQ(output.str(),
+            "class@" + std::to_string(talos_rt_v1_object_id(object)) + "|null");
 
   talos_rt_string_v1 string = 0;
   ASSERT_EQ(talos_rt_v1_string_create(lane, "not-a-class", 11, &string),
@@ -5526,23 +5390,22 @@ TEST_F(ManagedHeapTest, FormatsClassHandlesAsSingularPatterns) {
   const talos_rt_arg_v1 invalid[] = {
       {TALOS_RT_ARG_MANAGED_OBJECT, 0, 0, &notClass, nullptr}};
   EXPECT_EQ(talos_rt_v1_format(context, "%p", 2, invalid, std::size(invalid),
-                                 &environment, output.out()),
+                               &environment, output.out()),
             TALOS_RT_INVALID_HANDLE);
 }
 
 TEST_F(ManagedHeapTest, FormatsEnumsWithNamesAndPackedFallbacks) {
   talos_rt_string_v1 name = 0;
-  ASSERT_EQ(talos_rt_v1_string_create(lane, "ELARGE", 6, &name),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_string_create(lane, "ELARGE", 6, &name), TALOS_RT_OK);
   uint64_t value = UINT64_C(0xf00d);
-  talos_rt_enum_arg_v1 enumeration{
-      32, TALOS_RT_ARG_SIGNED, 0, &value, nullptr, name};
+  talos_rt_enum_arg_v1 enumeration{32,  TALOS_RT_ARG_SIGNED, 0, &value, nullptr,
+                                   name};
   talos_rt_arg_v1 argument{TALOS_RT_ARG_ENUM, TALOS_RT_ARG_SIGNED, 0,
-                             &enumeration, nullptr};
+                           &enumeration, nullptr};
   const talos_rt_arg_v1 named[] = {argument, argument, argument};
   RuntimeBuffer output;
-  ASSERT_EQ(talos_rt_v1_format(context, "%p|%0h|%s", 9, named,
-                                 std::size(named), nullptr, output.out()),
+  ASSERT_EQ(talos_rt_v1_format(context, "%p|%0h|%s", 9, named, std::size(named),
+                               nullptr, output.out()),
             TALOS_RT_OK);
   EXPECT_EQ(output.str(), "ELARGE|f00d|ELARGE");
 
@@ -5550,14 +5413,14 @@ TEST_F(ManagedHeapTest, FormatsEnumsWithNamesAndPackedFallbacks) {
   value = 17;
   RuntimeBuffer fallbackOutput;
   ASSERT_EQ(talos_rt_v1_format(context, "%p", 2, &argument, 1, nullptr,
-                                 fallbackOutput.out()),
+                               fallbackOutput.out()),
             TALOS_RT_OK);
   EXPECT_EQ(fallbackOutput.str(), "17");
 
   enumeration.reserved = 1;
   RuntimeBuffer invalidOutput;
   EXPECT_EQ(talos_rt_v1_format(context, "%p", 2, &argument, 1, nullptr,
-                                 invalidOutput.out()),
+                               invalidOutput.out()),
             TALOS_RT_INVALID_ARGUMENT);
 }
 
@@ -5567,47 +5430,44 @@ TEST_F(ManagedHeapTest, FormatsRawAggregateRepresentationsWithoutTextLoss) {
   const std::string fourState("C\0D", 3);
   talos_rt_raw_aggregate_arg_v1 aggregate{};
   ASSERT_EQ(talos_rt_v1_string_create(lane, pattern.data(), pattern.size(),
-                                        &aggregate.pattern),
+                                      &aggregate.pattern),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_string_create(lane, twoState.data(), twoState.size(),
-                                        &aggregate.two_state),
+                                      &aggregate.two_state),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_string_create(lane, fourState.data(),
-                                        fourState.size(),
-                                        &aggregate.four_state),
+  ASSERT_EQ(talos_rt_v1_string_create(lane, fourState.data(), fourState.size(),
+                                      &aggregate.four_state),
             TALOS_RT_OK);
   talos_rt_arg_v1 argument{TALOS_RT_ARG_RAW_AGGREGATE, 0, 0, &aggregate,
-                             nullptr};
+                           nullptr};
   const talos_rt_arg_v1 arguments[] = {argument, argument};
   RuntimeBuffer rawOutput;
   ASSERT_EQ(talos_rt_v1_format(context, "%u%z", 4, arguments,
-                                 std::size(arguments), nullptr,
-                                 rawOutput.out()),
+                               std::size(arguments), nullptr, rawOutput.out()),
             TALOS_RT_OK);
   EXPECT_EQ(rawOutput.str(), twoState + fourState);
   EXPECT_EQ(rawOutput.str().size(), 6u);
 
   RuntimeBuffer patternOutput;
   ASSERT_EQ(talos_rt_v1_format(context, "%s", 2, &argument, 1, nullptr,
-                                 patternOutput.out()),
+                               patternOutput.out()),
             TALOS_RT_OK);
   EXPECT_EQ(patternOutput.str(), "P Q");
 
   uint64_t packed = 1;
-  talos_rt_arg_v1 packedArgument{TALOS_RT_ARG_LOGIC, 0, 1, &packed,
-                                   nullptr};
+  talos_rt_arg_v1 packedArgument{TALOS_RT_ARG_LOGIC, 0, 1, &packed, nullptr};
   RuntimeBuffer packedWidth;
   RuntimeBuffer aggregateWidth;
   EXPECT_EQ(talos_rt_v1_format(context, "%1u", 3, &packedArgument, 1, nullptr,
-                                 packedWidth.out()),
+                               packedWidth.out()),
             TALOS_RT_FORMAT_ERROR);
   EXPECT_EQ(talos_rt_v1_format(context, "%1u", 3, &argument, 1, nullptr,
-                                 aggregateWidth.out()),
+                               aggregateWidth.out()),
             TALOS_RT_FORMAT_ERROR);
 
   RuntimeBuffer malformed;
   EXPECT_EQ(talos_rt_v1_format(context, "%", 1, &argument, 1, nullptr,
-                                 malformed.out()),
+                               malformed.out()),
             TALOS_RT_FORMAT_ERROR);
 }
 
@@ -5624,8 +5484,7 @@ TEST_F(ManagedHeapTest, CollectsCyclesAndClearsWeakReferences) {
             TALOS_RT_OK);
 
   talos_rt_gc_root_v1 firstRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &firstRoot, &first),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &firstRoot, &first), TALOS_RT_OK);
   talos_rt_object_v1 *weak = nullptr;
   ASSERT_EQ(talos_rt_v1_weak_create(lane, &weakDescriptor, second, &weak),
             TALOS_RT_OK);
@@ -5656,9 +5515,8 @@ TEST_F(ManagedHeapTest, DiscoversActiveRandomObjectGraphByIdentity) {
   talos_rt_object_v1 *root = nullptr;
   talos_rt_object_v1 *child = nullptr;
   talos_rt_object_v1 *derivedChild = nullptr;
-  ASSERT_EQ(
-      talos_rt_v1_object_allocate(lane, &randomDerivedDescriptor, &root),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_object_allocate(lane, &randomDerivedDescriptor, &root),
+            TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_object_allocate(lane, &randomNodeDescriptor, &child),
             TALOS_RT_OK);
   ASSERT_EQ(
@@ -5672,8 +5530,7 @@ TEST_F(ManagedHeapTest, DiscoversActiveRandomObjectGraphByIdentity) {
             TALOS_RT_OK);
 
   talos_rt_random_graph_v1 *graph = nullptr;
-  ASSERT_EQ(talos_rt_v1_random_graph_discover(lane, root, &graph),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_random_graph_discover(lane, root, &graph), TALOS_RT_OK);
   ASSERT_NE(graph, nullptr);
   EXPECT_EQ(talos_rt_v1_random_graph_size(graph), 3u);
   EXPECT_EQ(talos_rt_v1_random_graph_object(graph, 0), root);
@@ -5720,8 +5577,7 @@ TEST_F(ManagedHeapTest, DiscoversActiveRandomObjectGraphByIdentity) {
   const talos_rt_random_variable_v1 *referencedVariable = nullptr;
   uint64_t graphVariableIndex = UINT64_MAX;
   const talos_rt_random_variable_reference_v1 rootValueReference{
-      nullptr, 0, kRandomNodeValueOffset, 64,
-      TALOS_RT_RANDOM_VARIABLE_SIGNED};
+      nullptr, 0, kRandomNodeValueOffset, 64, TALOS_RT_RANDOM_VARIABLE_SIGNED};
   ASSERT_EQ(talos_rt_v1_random_graph_resolve_variable(
                 graph, 0, &rootValueReference, &referencedObject,
                 &referencedVariable, &graphVariableIndex),
@@ -5782,11 +5638,10 @@ TEST_F(ManagedHeapTest, DiscoversActiveRandomObjectGraphByIdentity) {
 
   uint64_t disabled = 7;
   ASSERT_EQ(talos_rt_v1_object_write(root, kNodeValueOffset, &disabled,
-                                       sizeof(disabled)),
+                                     sizeof(disabled)),
             TALOS_RT_OK);
   graph = nullptr;
-  ASSERT_EQ(talos_rt_v1_random_graph_discover(lane, root, &graph),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_random_graph_discover(lane, root, &graph), TALOS_RT_OK);
   ASSERT_NE(graph, nullptr);
   EXPECT_EQ(talos_rt_v1_random_graph_size(graph), 1u);
   EXPECT_EQ(talos_rt_v1_random_graph_object(graph, 0), root);
@@ -5819,24 +5674,22 @@ TEST_F(ManagedHeapTest,
        ClassAssociativeKeysPreserveIdentityNullAndDerivedObjects) {
   const talos_rt_element_type_v1 wordElement{
       TALOS_RT_VERSION, TALOS_RT_ELEMENT_BITS, 91, 0,       0,
-      sizeof(uint64_t),   alignof(uint64_t),       64, nullptr, nullptr};
+      sizeof(uint64_t), alignof(uint64_t),     64, nullptr, nullptr};
   talos_rt_object_v1 *objects[2] = {};
   ASSERT_EQ(talos_rt_v1_object_allocate(lane, &nodeDescriptor, &objects[0]),
             TALOS_RT_OK);
-  ASSERT_EQ(
-      talos_rt_v1_object_allocate(lane, &derivedDescriptor, &objects[1]),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_object_allocate(lane, &derivedDescriptor, &objects[1]),
+            TALOS_RT_OK);
   talos_rt_gc_root_range_v1 objectRoots{};
   ASSERT_EQ(talos_rt_v1_gc_root_range_push(lane, &objectRoots, objects, 2),
             TALOS_RT_OK);
 
   talos_rt_object_v1 *array = nullptr;
   ASSERT_EQ(talos_rt_v1_assoc_create(lane, &wordElement,
-                                       TALOS_RT_ASSOC_KEY_CLASS, 0, &array),
+                                     TALOS_RT_ASSOC_KEY_CLASS, 0, &array),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 arrayRoot{};
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &arrayRoot, &array), TALOS_RT_OK);
 
   talos_rt_object_v1 *expectedKeys[] = {nullptr, objects[0], objects[1]};
   for (uint64_t index = 0; index != std::size(expectedKeys); ++index) {
@@ -5867,22 +5720,19 @@ TEST_F(ManagedHeapTest,
   talos_rt_gc_root_v1 cursorRoot{};
   ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &cursorRoot, &cursorOnly),
             TALOS_RT_OK);
-  talos_rt_assoc_key_v1 absentCursor{
-      TALOS_RT_ASSOC_KEY_CLASS, 0, 0, {}, {}, 0};
+  talos_rt_assoc_key_v1 absentCursor{TALOS_RT_ASSOC_KEY_CLASS, 0, 0, {}, {}, 0};
   absentCursor.object = cursorOnly;
   ASSERT_EQ(talos_rt_v1_gc_root_pop(lane, &cursorRoot), TALOS_RT_OK);
   uint32_t cursorSuccess = 1;
-  ASSERT_EQ(
-      talos_rt_v1_assoc_next(lane, array, &absentCursor, &cursorSuccess),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_assoc_next(lane, array, &absentCursor, &cursorSuccess),
+            TALOS_RT_OK);
   EXPECT_EQ(cursorSuccess, 0u);
 
   talos_rt_object_v1 *copy = nullptr;
   ASSERT_EQ(talos_rt_v1_container_clone(lane, array, &copy), TALOS_RT_OK);
   talos_rt_gc_root_v1 copyRoot{};
   ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &copyRoot, &copy), TALOS_RT_OK);
-  talos_rt_assoc_key_v1 derivedKey{
-      TALOS_RT_ASSOC_KEY_CLASS, 0, 0, {}, {}, 0};
+  talos_rt_assoc_key_v1 derivedKey{TALOS_RT_ASSOC_KEY_CLASS, 0, 0, {}, {}, 0};
   derivedKey.object = expectedKeys[2];
   uint64_t value = 0;
   uint32_t present = 0;
@@ -5895,17 +5745,16 @@ TEST_F(ManagedHeapTest,
 
   talos_rt_object_v1 *path = nullptr;
   ASSERT_EQ(talos_rt_v1_reference_path_assoc_create(lane, array, &derivedKey,
-                                                      nullptr, 0, 0, nullptr,
-                                                      nullptr, 0, &path),
+                                                    nullptr, 0, 0, nullptr,
+                                                    nullptr, 0, &path),
             TALOS_RT_OK);
   talos_rt_gc_root_v1 pathRoot{};
   ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &pathRoot, &path), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_assoc_delete(array, &derivedKey), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);
   uint64_t replacement = 42;
-  ASSERT_EQ(
-      talos_rt_v1_reference_path_store(lane, path, &replacement, nullptr),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_reference_path_store(lane, path, &replacement, nullptr),
+            TALOS_RT_OK);
   value = 0;
   present = 0;
   ASSERT_EQ(talos_rt_v1_reference_path_load(path, &value, nullptr, &present),
@@ -5999,7 +5848,7 @@ TEST_F(ManagedHeapTest, TracesManagedValuesInAutomaticAggregateState) {
   EXPECT_EQ(rolledBackHandle, UINT64_MAX);
   uint64_t handle = UINT64_MAX;
   ASSERT_EQ(talos_rt_v1_native_state_alloc(context, sizeof(initial) * 8,
-                                             initial, nullptr, &handle),
+                                           initial, nullptr, &handle),
             TALOS_RT_OK);
   const uint64_t rootOffsets[] = {0, 64};
   ASSERT_EQ(talos_rt_v1_native_state_register_managed_roots(
@@ -6015,8 +5864,7 @@ TEST_F(ManagedHeapTest, TracesManagedValuesInAutomaticAggregateState) {
   EXPECT_EQ(talos_rt_v1_weak_get(weak[1], &referent), TALOS_RT_OK);
   EXPECT_NE(referent, nullptr);
 
-  ASSERT_EQ(talos_rt_v1_native_state_release(context, handle, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_release(context, handle, 0), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);
   EXPECT_EQ(talos_rt_v1_weak_get(weak[0], &referent), TALOS_RT_OK);
   EXPECT_EQ(referent, nullptr);
@@ -6027,8 +5875,7 @@ TEST_F(ManagedHeapTest, TracesManagedValuesInAutomaticAggregateState) {
 
 TEST_F(ManagedHeapTest, AutomaticStringStatePreservesSSOAndHeapRoots) {
   talos_rt_string_v1 small = 0;
-  ASSERT_EQ(talos_rt_v1_string_create(lane, "seven!!", 7, &small),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_string_create(lane, "seven!!", 7, &small), TALOS_RT_OK);
   ASSERT_EQ(small & UINT64_C(3), UINT64_C(1));
   const uint64_t rootOffset = 0;
   uint64_t smallHandle = UINT64_MAX;
@@ -6090,7 +5937,7 @@ TEST_F(ManagedHeapTest, AccessesFourStatePlanesAtomicallyAcrossThreads) {
   constexpr uint64_t second = UINT64_C(0x5555555555555555);
   uint64_t initialUnknown = ~first;
   ASSERT_EQ(talos_rt_v1_object_write_planes(object, sizeof(void *), &first,
-                                              &initialUnknown, sizeof(first)),
+                                            &initialUnknown, sizeof(first)),
             TALOS_RT_OK);
 
   std::atomic<bool> inconsistent{false};
@@ -6099,8 +5946,8 @@ TEST_F(ManagedHeapTest, AccessesFourStatePlanesAtomicallyAcrossThreads) {
       uint64_t value = (iteration & 1) ? first : second;
       uint64_t unknown = ~value;
       if (talos_rt_v1_object_write_planes(object, sizeof(void *), &value,
-                                            &unknown,
-                                            sizeof(value)) != TALOS_RT_OK) {
+                                          &unknown,
+                                          sizeof(value)) != TALOS_RT_OK) {
         inconsistent.store(true, std::memory_order_relaxed);
         return;
       }
@@ -6111,8 +5958,8 @@ TEST_F(ManagedHeapTest, AccessesFourStatePlanesAtomicallyAcrossThreads) {
       uint64_t value = 0;
       uint64_t unknown = 0;
       if (talos_rt_v1_object_read_planes(object, sizeof(void *), &value,
-                                           &unknown,
-                                           sizeof(value)) != TALOS_RT_OK ||
+                                         &unknown,
+                                         sizeof(value)) != TALOS_RT_OK ||
           unknown != ~value) {
         inconsistent.store(true, std::memory_order_relaxed);
         return;
@@ -6131,22 +5978,22 @@ TEST_F(ManagedHeapTest, DispatchesOverridesAndShallowCopiesDynamicType) {
             TALOS_RT_OK);
   const uint64_t value = 23;
   const uint64_t extra = 99;
-  ASSERT_EQ(talos_rt_v1_object_write(object, kNodeValueOffset, &value,
-                                       sizeof(value)),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_object_write(object, kNodeValueOffset, &value, sizeof(value)),
+      TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_object_write(object, kDerivedExtraOffset, &extra,
-                                       sizeof(extra)),
+                                     sizeof(extra)),
             TALOS_RT_OK);
   EXPECT_TRUE(talos_rt_v1_object_is_instance(object, &derivedDescriptor));
   EXPECT_TRUE(talos_rt_v1_object_is_instance(object, &nodeDescriptor));
 
   uint64_t result = 0;
-  ASSERT_EQ(talos_rt_v1_method_invoke(lane, object, 0, 42, nullptr, 0,
-                                        &result, sizeof(result)),
+  ASSERT_EQ(talos_rt_v1_method_invoke(lane, object, 0, 42, nullptr, 0, &result,
+                                      sizeof(result)),
             TALOS_RT_OK);
   EXPECT_EQ(result, 123u);
-  EXPECT_EQ(talos_rt_v1_method_invoke(lane, object, 0, 43, nullptr, 0,
-                                        &result, sizeof(result)),
+  EXPECT_EQ(talos_rt_v1_method_invoke(lane, object, 0, 43, nullptr, 0, &result,
+                                      sizeof(result)),
             TALOS_RT_LAYOUT_MISMATCH);
 
   talos_rt_object_v1 *copy = nullptr;
@@ -6156,12 +6003,12 @@ TEST_F(ManagedHeapTest, DispatchesOverridesAndShallowCopiesDynamicType) {
   EXPECT_TRUE(talos_rt_v1_object_is_instance(copy, &nodeDescriptor));
   EXPECT_TRUE(talos_rt_v1_object_is_instance(copy, &derivedDescriptor));
   ASSERT_EQ(talos_rt_v1_method_invoke(lane, copy, 0, 42, nullptr, 0, &result,
-                                        sizeof(result)),
+                                      sizeof(result)),
             TALOS_RT_OK);
   EXPECT_EQ(result, 123u);
   result = 0;
   ASSERT_EQ(talos_rt_v1_object_read(copy, kDerivedExtraOffset, &result,
-                                      sizeof(result)),
+                                    sizeof(result)),
             TALOS_RT_OK);
   EXPECT_EQ(result, extra);
   EXPECT_NE(talos_rt_v1_object_id(object), talos_rt_v1_object_id(copy));
@@ -6188,33 +6035,32 @@ TEST_F(ManagedHeapTest, ShallowCopiesContainerPropertiesAsValues) {
        nullptr},
       {kSlot * 2, 0, 1, TALOS_RT_TRACE_STRONG, TALOS_RT_MANAGED_SLOT_CLASS,
        nullptr}};
-  const talos_rt_trace_layout_v1 layout{
-      TALOS_RT_VERSION, 0, kSlot * 3, kSlotAlign, entries, 2};
+  const talos_rt_trace_layout_v1 layout{TALOS_RT_VERSION, 0,       kSlot * 3,
+                                        kSlotAlign,       entries, 2};
   talos_rt_class_descriptor_v1 descriptor = nodeDescriptor;
   descriptor.class_id = 91;
   descriptor.layout = &layout;
   const talos_rt_element_type_v1 word{
       TALOS_RT_VERSION, TALOS_RT_ELEMENT_BITS, 93, 0,       0,
-      sizeof(uint64_t),   alignof(uint64_t),       64, nullptr, nullptr};
+      sizeof(uint64_t), alignof(uint64_t),     64, nullptr, nullptr};
 
   talos_rt_object_v1 *object = nullptr, *child = nullptr, *array = nullptr,
-                       *copy = nullptr;
+                     *copy = nullptr;
   talos_rt_gc_root_v1 objectRoot{}, copyRoot{};
   ASSERT_EQ(talos_rt_v1_object_allocate(lane, &descriptor, &object),
             TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &objectRoot, &object),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &objectRoot, &object), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_object_allocate(lane, &nodeDescriptor, &child),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_object_field_store(object, kSlot * 2, child),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_dynamic_array_create(lane, &word, 1, &array),
             TALOS_RT_OK);
-  auto arrayWord = static_cast<talos_rt_managed_word_v1>(
-      reinterpret_cast<uintptr_t>(array));
-  ASSERT_EQ(talos_rt_v1_object_write(object, kSlot, &arrayWord,
-                                       sizeof(arrayWord)),
-            TALOS_RT_OK);
+  auto arrayWord =
+      static_cast<talos_rt_managed_word_v1>(reinterpret_cast<uintptr_t>(array));
+  ASSERT_EQ(
+      talos_rt_v1_object_write(object, kSlot, &arrayWord, sizeof(arrayWord)),
+      TALOS_RT_OK);
   const uint64_t value = 7;
   ASSERT_EQ(talos_rt_v1_container_write(lane, array, 0, &value, nullptr),
             TALOS_RT_OK);
@@ -6224,9 +6070,9 @@ TEST_F(ManagedHeapTest, ShallowCopiesContainerPropertiesAsValues) {
   ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &copyRoot, &copy), TALOS_RT_OK);
   talos_rt_managed_word_v1 copiedWord = 0;
   talos_rt_object_v1 *copiedChild = nullptr;
-  ASSERT_EQ(talos_rt_v1_object_read(copy, kSlot, &copiedWord,
-                                      sizeof(copiedWord)),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_object_read(copy, kSlot, &copiedWord, sizeof(copiedWord)),
+      TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_object_field_load(copy, kSlot * 2, &copiedChild),
             TALOS_RT_OK);
   auto *copiedArray = reinterpret_cast<talos_rt_object_v1 *>(
@@ -6260,8 +6106,7 @@ TEST_F(ManagedHeapTest, ShallowCopiesClearCopyResetRanges) {
   ASSERT_EQ(talos_rt_v1_class_validate(&derived), TALOS_RT_OK);
 
   talos_rt_object_v1 *object = nullptr, *copy = nullptr;
-  ASSERT_EQ(talos_rt_v1_object_allocate(lane, &derived, &object),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_object_allocate(lane, &derived, &object), TALOS_RT_OK);
   talos_rt_gc_root_v1 root{};
   ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &root, &object), TALOS_RT_OK);
   const uint64_t value = 23;
@@ -6272,9 +6117,9 @@ TEST_F(ManagedHeapTest, ShallowCopiesClearCopyResetRanges) {
             TALOS_RT_OK);
   for (uint64_t offset : {kNodeValueOffset, kDerivedExtraOffset}) {
     uint64_t original = 0, copied = 1;
-    ASSERT_EQ(talos_rt_v1_object_read(object, offset, &original,
-                                        sizeof(original)),
-              TALOS_RT_OK);
+    ASSERT_EQ(
+        talos_rt_v1_object_read(object, offset, &original, sizeof(original)),
+        TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_object_read(copy, offset, &copied, sizeof(copied)),
               TALOS_RT_OK);
     EXPECT_EQ(original, value) << offset;
@@ -6285,8 +6130,7 @@ TEST_F(ManagedHeapTest, ShallowCopiesClearCopyResetRanges) {
   // Ranges must be nonempty, follow the descriptor word and fit the instance.
   for (talos_rt_byte_range_v1 invalid :
        {talos_rt_byte_range_v1{kNodeValueOffset, 0},
-        talos_rt_byte_range_v1{0, 8},
-        talos_rt_byte_range_v1{kSlot * 3, 8}}) {
+        talos_rt_byte_range_v1{0, 8}, talos_rt_byte_range_v1{kSlot * 3, 8}}) {
     base.copy_resets = &invalid;
     EXPECT_EQ(talos_rt_v1_class_validate(&base), TALOS_RT_INVALID_DESIGN);
   }
@@ -6506,8 +6350,7 @@ TEST(ManagedHeap, DesignatedCollectionReclaimsOnlyAtQuiescentPoints) {
   uint64_t objectBytes = statistics().live_bytes;
   ASSERT_GT(objectBytes, 0u);
   uint64_t keptID = talos_rt_v1_object_id(kept);
-  ASSERT_EQ(talos_rt_v1_gc_static_root_register(context, &kept),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_static_root_register(context, &kept), TALOS_RT_OK);
 
   // Exceed the threshold, staying below the emergency multiple.
   ASSERT_EQ(talos_rt_v1_gc_set_threshold(context, objectBytes * 16),
@@ -6520,9 +6363,9 @@ TEST(ManagedHeap, DesignatedCollectionReclaimsOnlyAtQuiescentPoints) {
   {
     talos_rt_gc_lane_v1 *nested = nullptr;
     bool nestedEntered = true;
-    ASSERT_EQ(talos_rt_managed_execution_enter(context, &nested,
-                                                 &nestedEntered),
-              TALOS_RT_OK);
+    ASSERT_EQ(
+        talos_rt_managed_execution_enter(context, &nested, &nestedEntered),
+        TALOS_RT_OK);
     EXPECT_FALSE(nestedEntered);
     EXPECT_EQ(talos_rt_v1_gc_collect_pending(context), TALOS_RT_OK);
     talos_rt_managed_execution_leave(nested, nestedEntered);
@@ -6548,8 +6391,7 @@ TEST(ManagedHeap, DesignatedCollectionReclaimsOnlyAtQuiescentPoints) {
     allocate(lane);
   EXPECT_GE(statistics().collection_count, 2u);
   talos_rt_managed_execution_leave(lane, entered);
-  ASSERT_EQ(talos_rt_v1_gc_static_root_unregister(context, &kept),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_static_root_unregister(context, &kept), TALOS_RT_OK);
   talos_rt_v1_context_destroy(context);
 }
 
@@ -6563,8 +6405,7 @@ TEST(ManagedHeap, PolledCollectionReclaimsOnlyAtPollsAndBetweenActivations) {
     talos_rt_context *context = nullptr;
     ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
     talos_rt_managed_heap_poll_collections(context->managedHeap);
-    ASSERT_EQ(talos_rt_v1_gc_set_threshold(context, UINT64_MAX),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_gc_set_threshold(context, UINT64_MAX), TALOS_RT_OK);
     auto statistics = [&] {
       talos_rt_gc_statistics_v1 result{};
       EXPECT_EQ(talos_rt_v1_gc_statistics(context, &result), TALOS_RT_OK);
@@ -6589,8 +6430,7 @@ TEST(ManagedHeap, PolledCollectionReclaimsOnlyAtPollsAndBetweenActivations) {
     uint64_t objectBytes = statistics().live_bytes;
     ASSERT_GT(objectBytes, 0u);
     uint64_t keptID = talos_rt_v1_object_id(kept);
-    ASSERT_EQ(talos_rt_v1_gc_static_root_register(context, &kept),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_gc_static_root_register(context, &kept), TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_gc_set_threshold(context, objectBytes * 16),
               TALOS_RT_OK);
     if (designate)
@@ -6649,8 +6489,7 @@ TEST(ManagedHeap, PolledAllocationLeavesCollectorsWaitingForAPoll) {
     if (polled)
       talos_rt_managed_heap_poll_collections(context->managedHeap);
     // Only the explicit request below collects.
-    ASSERT_EQ(talos_rt_v1_gc_set_threshold(context, UINT64_MAX),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_gc_set_threshold(context, UINT64_MAX), TALOS_RT_OK);
     auto statistics = [&] {
       talos_rt_gc_statistics_v1 result{};
       EXPECT_EQ(talos_rt_v1_gc_statistics(context, &result), TALOS_RT_OK);
@@ -6658,8 +6497,7 @@ TEST(ManagedHeap, PolledAllocationLeavesCollectorsWaitingForAPoll) {
     };
     talos_rt_gc_lane_v1 *activation = nullptr;
     talos_rt_gc_lane_v1 *collector = nullptr;
-    ASSERT_EQ(talos_rt_v1_gc_lane_create(context, &activation),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_gc_lane_create(context, &activation), TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_gc_lane_create(context, &collector), TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_gc_lane_enter(activation), TALOS_RT_OK);
     auto allocate = [&] {
@@ -6676,8 +6514,7 @@ TEST(ManagedHeap, PolledAllocationLeavesCollectorsWaitingForAPoll) {
 
     // Reachable: a static root, and a chain held only by the activation.
     talos_rt_object_v1 *kept = allocate();
-    ASSERT_EQ(talos_rt_v1_gc_static_root_register(context, &kept),
-              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_gc_static_root_register(context, &kept), TALOS_RT_OK);
     talos_rt_object_v1 *head = allocate();
     talos_rt_object_v1 *middle = allocate();
     talos_rt_object_v1 *tail = allocate();
@@ -6686,13 +6523,12 @@ TEST(ManagedHeap, PolledAllocationLeavesCollectorsWaitingForAPoll) {
     uint64_t tailID = talos_rt_v1_object_id(tail);
     // Unreachable once the activation drops it.
     link(allocate(), allocate());
-    talos_rt_managed_word_v1 slots[]{
-        talos_rt_managed_word_from_object(head)};
+    talos_rt_managed_word_v1 slots[]{talos_rt_managed_word_from_object(head)};
     talos_rt_gc_managed_root_range_v1 range{};
     auto registerChain = [&] {
-      EXPECT_EQ(talos_rt_v1_gc_managed_root_range_push(activation, &range,
-                                                          slots, 1),
-                TALOS_RT_OK);
+      EXPECT_EQ(
+          talos_rt_v1_gc_managed_root_range_push(activation, &range, slots, 1),
+          TALOS_RT_OK);
     };
     if (!polled)
       registerChain();
@@ -6807,8 +6643,7 @@ TEST(ManagedHeap, SerializesConcurrentCollectionRequestsWithoutDeadlock) {
 }
 
 TEST(ManagedHeap, RejectsMalformedClassLayouts) {
-  talos_rt_method_descriptor_v1 sparseMethods[]{nodeMethods[0],
-                                                  nodeMethods[0]};
+  talos_rt_method_descriptor_v1 sparseMethods[]{nodeMethods[0], nodeMethods[0]};
   sparseMethods[1].slot = UINT64_C(1) << 20;
   talos_rt_class_descriptor_v1 sparse = nodeDescriptor;
   sparse.methods = sparseMethods;
@@ -6820,16 +6655,14 @@ TEST(ManagedHeap, RejectsMalformedClassLayouts) {
 
   talos_rt_class_descriptor_v1 malformed = nodeDescriptor;
   malformed.class_id = 0;
-  EXPECT_EQ(talos_rt_v1_class_validate(&malformed),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&malformed), TALOS_RT_INVALID_DESIGN);
   malformed = nodeDescriptor;
   talos_rt_trace_entry_v1 badEntry = nodeTraceEntry;
   badEntry.offset = 1;
   talos_rt_trace_layout_v1 badLayout = nodeTraceLayout;
   badLayout.entries = &badEntry;
   malformed.layout = &badLayout;
-  EXPECT_EQ(talos_rt_v1_class_validate(&malformed),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&malformed), TALOS_RT_INVALID_DESIGN);
 
   talos_rt_random_edge_v1 badRandomEdge = randomNodeEdge;
   badRandomEdge.handle_offset = kNodeValueOffset;
@@ -6837,67 +6670,55 @@ TEST(ManagedHeap, RejectsMalformedClassLayouts) {
   badRandomLayout.edges = &badRandomEdge;
   malformed = randomNodeDescriptor;
   malformed.random_layout = &badRandomLayout;
-  EXPECT_EQ(talos_rt_v1_class_validate(&malformed),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&malformed), TALOS_RT_INVALID_DESIGN);
   badRandomEdge = randomNodeEdge;
   badRandomEdge.mode_mask = 3;
-  EXPECT_EQ(talos_rt_v1_class_validate(&malformed),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&malformed), TALOS_RT_INVALID_DESIGN);
   talos_rt_random_variable_v1 badRandomVariable = randomNodeVariable;
   badRandomLayout = randomNodeLayout;
   badRandomLayout.variables = &badRandomVariable;
   malformed = randomNodeDescriptor;
   malformed.random_layout = &badRandomLayout;
   badRandomVariable.value_offset = kNodeLinkOffset;
-  EXPECT_EQ(talos_rt_v1_class_validate(&malformed),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&malformed), TALOS_RT_INVALID_DESIGN);
   badRandomVariable = randomNodeVariable;
   badRandomVariable.mode_mask = randomNodeEdge.mode_mask;
-  EXPECT_EQ(talos_rt_v1_class_validate(&malformed),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&malformed), TALOS_RT_INVALID_DESIGN);
   badRandomVariable = randomNodeVariable;
   badRandomVariable.randc_key_offset = kRandomNodeValueOffset;
-  EXPECT_EQ(talos_rt_v1_class_validate(&malformed),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&malformed), TALOS_RT_INVALID_DESIGN);
   malformed = nodeDescriptor;
   malformed.flags = TALOS_RT_CLASS_ABSTRACT;
   EXPECT_EQ(talos_rt_v1_class_validate(&malformed), TALOS_RT_OK);
   malformed = nodeDescriptor;
   malformed.flags = TALOS_RT_CLASS_WEAK_WRAPPER;
-  EXPECT_EQ(talos_rt_v1_class_validate(&malformed),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&malformed), TALOS_RT_INVALID_DESIGN);
   talos_rt_trace_entry_v1 ambiguousWeakEntries[] = {
       {8, 1, 8, TALOS_RT_TRACE_WEAK, TALOS_RT_MANAGED_SLOT_CLASS, nullptr},
-      {8, 1, 8, TALOS_RT_TRACE_STRONG, TALOS_RT_MANAGED_SLOT_CLASS,
-       nullptr}};
-  talos_rt_trace_layout_v1 ambiguousWeakLayout{TALOS_RT_VERSION,   0, 16, 8,
-                                                 ambiguousWeakEntries, 2};
+      {8, 1, 8, TALOS_RT_TRACE_STRONG, TALOS_RT_MANAGED_SLOT_CLASS, nullptr}};
+  talos_rt_trace_layout_v1 ambiguousWeakLayout{TALOS_RT_VERSION,     0, 16, 8,
+                                               ambiguousWeakEntries, 2};
   malformed.layout = &ambiguousWeakLayout;
-  EXPECT_EQ(talos_rt_v1_class_validate(&malformed),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&malformed), TALOS_RT_INVALID_DESIGN);
 
-  talos_rt_trace_entry_v1 duplicateEntries[] = {nodeTraceEntry,
-                                                  nodeTraceEntry};
+  talos_rt_trace_entry_v1 duplicateEntries[] = {nodeTraceEntry, nodeTraceEntry};
   talos_rt_trace_layout_v1 duplicateLayout{
-      TALOS_RT_VERSION, 0,
+      TALOS_RT_VERSION,   0,
       sizeof(void *) * 3, alignof(void *),
       duplicateEntries,   std::size(duplicateEntries)};
   malformed = nodeDescriptor;
   malformed.layout = &duplicateLayout;
-  EXPECT_EQ(talos_rt_v1_class_validate(&malformed),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&malformed), TALOS_RT_INVALID_DESIGN);
 
   talos_rt_class_descriptor_v1 finalBase = nodeDescriptor;
   finalBase.flags = TALOS_RT_CLASS_FINAL;
   malformed = derivedDescriptor;
   malformed.base = &finalBase;
-  EXPECT_EQ(talos_rt_v1_class_validate(&malformed),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&malformed), TALOS_RT_INVALID_DESIGN);
 
   malformed = derivedDescriptor;
   malformed.layout = nullptr;
-  EXPECT_EQ(talos_rt_v1_class_validate(&malformed),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&malformed), TALOS_RT_INVALID_DESIGN);
 
   auto scalarBase = nodeDescriptor;
   scalarBase.layout = nullptr;
@@ -6912,8 +6733,7 @@ TEST(ManagedHeap, RejectsMalformedClassLayouts) {
   pureMethod.flags = TALOS_RT_METHOD_PURE;
   malformed = nodeDescriptor;
   malformed.methods = &pureMethod;
-  EXPECT_EQ(talos_rt_v1_class_validate(&malformed),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&malformed), TALOS_RT_INVALID_DESIGN);
 }
 
 TEST(ManagedHeap, ValidatesDeepClassChainsAndRejectsAliasedIDs) {
@@ -6940,13 +6760,10 @@ TEST(ManagedHeap, ValidatesDeepClassChainsAndRejectsAliasedIDs) {
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
   // Registering the leaf first validates unregistered ancestors as well.
-  EXPECT_EQ(talos_rt_v1_class_register(context, &classes.back()),
-            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_class_register(context, &classes.back()), TALOS_RT_OK);
   for (const auto &descriptor : classes) {
-    EXPECT_EQ(talos_rt_v1_class_register(context, &descriptor),
-              TALOS_RT_OK);
-    EXPECT_EQ(talos_rt_v1_class_register(context, &descriptor),
-              TALOS_RT_OK);
+    EXPECT_EQ(talos_rt_v1_class_register(context, &descriptor), TALOS_RT_OK);
+    EXPECT_EQ(talos_rt_v1_class_register(context, &descriptor), TALOS_RT_OK);
   }
   auto duplicate = classes.front();
   EXPECT_EQ(talos_rt_v1_class_register(context, &duplicate),
@@ -6961,16 +6778,14 @@ TEST(ManagedHeap, ValidatesDeepClassChainsAndRejectsAliasedIDs) {
 
 TEST(ManagedHeap, ValidatesSharedNestedTraceLayoutsAndRejectsCycles) {
   talos_rt_trace_entry_v1 fields[] = {
-      {8, 0, 1, TALOS_RT_TRACE_STRONG, TALOS_RT_MANAGED_SLOT_CLASS,
-       nullptr},
+      {8, 0, 1, TALOS_RT_TRACE_STRONG, TALOS_RT_MANAGED_SLOT_CLASS, nullptr},
       {0, 0, 1, TALOS_RT_TRACE_WEAK, TALOS_RT_MANAGED_SLOT_REFERENCE_PATH,
        nullptr}};
   talos_rt_trace_layout_v1 element{TALOS_RT_VERSION, 0, 16, 8, fields, 2};
   talos_rt_trace_entry_v1 entries[] = {
       {8, 16, 8, TALOS_RT_TRACE_EMBEDDED, TALOS_RT_MANAGED_SLOT_INVALID,
        &element},
-      {16, 0, 1, TALOS_RT_TRACE_STRONG, TALOS_RT_MANAGED_SLOT_CLASS,
-       nullptr}};
+      {16, 0, 1, TALOS_RT_TRACE_STRONG, TALOS_RT_MANAGED_SLOT_CLASS, nullptr}};
   talos_rt_trace_layout_v1 layout{TALOS_RT_VERSION, 0, 136, 8, entries, 1};
   auto descriptor = nodeDescriptor;
   descriptor.instance_size = layout.size;
@@ -6978,16 +6793,13 @@ TEST(ManagedHeap, ValidatesSharedNestedTraceLayoutsAndRejectsCycles) {
   EXPECT_EQ(talos_rt_v1_class_validate(&descriptor), TALOS_RT_OK);
   // A direct slot aliases a slot reached through the repeated child layout.
   layout.entry_count = 2;
-  EXPECT_EQ(talos_rt_v1_class_validate(&descriptor),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&descriptor), TALOS_RT_INVALID_DESIGN);
   layout.entry_count = 1;
   element.alignment = 0;
-  EXPECT_EQ(talos_rt_v1_class_validate(&descriptor),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&descriptor), TALOS_RT_INVALID_DESIGN);
   element.alignment = 8;
   entries[0].stride = 8;
-  EXPECT_EQ(talos_rt_v1_class_validate(&descriptor),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&descriptor), TALOS_RT_INVALID_DESIGN);
 
   talos_rt_trace_entry_v1 cycleEntry{
       0,       0, 1, TALOS_RT_TRACE_EMBEDDED, TALOS_RT_MANAGED_SLOT_INVALID,
@@ -6995,8 +6807,7 @@ TEST(ManagedHeap, ValidatesSharedNestedTraceLayoutsAndRejectsCycles) {
   element.entries = &cycleEntry;
   element.entry_count = 1;
   entries[0].stride = 16;
-  EXPECT_EQ(talos_rt_v1_class_validate(&descriptor),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&descriptor), TALOS_RT_INVALID_DESIGN);
 }
 
 TEST(ManagedHeap, ValidatesDeepTraceLayoutsWithoutRecursiveValidation) {
@@ -7005,26 +6816,26 @@ TEST(ManagedHeap, ValidatesDeepTraceLayoutsWithoutRecursiveValidation) {
   for (size_t index = 0; index != children.size(); ++index) {
     entries[index] =
         index ? talos_rt_trace_entry_v1{8,
-                                          0,
-                                          1,
-                                          TALOS_RT_TRACE_EMBEDDED,
-                                          TALOS_RT_MANAGED_SLOT_INVALID,
-                                          &children[index - 1]}
+                                        0,
+                                        1,
+                                        TALOS_RT_TRACE_EMBEDDED,
+                                        TALOS_RT_MANAGED_SLOT_INVALID,
+                                        &children[index - 1]}
               : talos_rt_trace_entry_v1{0,
-                                          8,
-                                          8,
-                                          TALOS_RT_TRACE_STRONG,
-                                          TALOS_RT_MANAGED_SLOT_CLASS,
-                                          nullptr};
+                                        8,
+                                        8,
+                                        TALOS_RT_TRACE_STRONG,
+                                        TALOS_RT_MANAGED_SLOT_CLASS,
+                                        nullptr};
     children[index] = {TALOS_RT_VERSION, 0, 64 + index * 8, 8,
-                       &entries[index],    1};
+                       &entries[index],  1};
   }
   talos_rt_trace_entry_v1 rootEntry{8,
-                                      0,
-                                      1,
-                                      TALOS_RT_TRACE_EMBEDDED,
-                                      TALOS_RT_MANAGED_SLOT_INVALID,
-                                      &children.back()};
+                                    0,
+                                    1,
+                                    TALOS_RT_TRACE_EMBEDDED,
+                                    TALOS_RT_MANAGED_SLOT_INVALID,
+                                    &children.back()};
   talos_rt_trace_layout_v1 root{
       TALOS_RT_VERSION, 0, children.back().size + 8, 8, &rootEntry, 1};
   auto descriptor = nodeDescriptor;
@@ -7044,8 +6855,7 @@ TEST(ManagedHeap, ValidatesDeepTraceLayoutsWithoutRecursiveValidation) {
                      TALOS_RT_TRACE_EMBEDDED,
                      TALOS_RT_MANAGED_SLOT_INVALID,
                      &children.back()};
-  EXPECT_EQ(talos_rt_v1_class_validate(&descriptor),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&descriptor), TALOS_RT_INVALID_DESIGN);
 }
 
 TEST(ManagedHeap, ValidatesUnorderedRandomStorageAndSharedModeWords) {
@@ -7072,12 +6882,11 @@ TEST(ManagedHeap, ValidatesUnorderedRandomStorageAndSharedModeWords) {
     }
   }
   talos_rt_trace_entry_v1 entry{
-      8,      8, count, TALOS_RT_TRACE_STRONG, TALOS_RT_MANAGED_SLOT_CLASS,
-      nullptr};
+      8, 8, count, TALOS_RT_TRACE_STRONG, TALOS_RT_MANAGED_SLOT_CLASS, nullptr};
   talos_rt_trace_layout_v1 trace{
       TALOS_RT_VERSION, 0, valueOffset + count * 32, 8, &entry, 1};
-  talos_rt_random_layout_v1 random{
-      TALOS_RT_VERSION, 0, edges.data(), count, variables.data(), count};
+  talos_rt_random_layout_v1 random{TALOS_RT_VERSION, 0,    edges.data(), count,
+                                   variables.data(), count};
   auto descriptor = nodeDescriptor;
   descriptor.instance_size = trace.size;
   descriptor.layout = &trace;
@@ -7086,34 +6895,27 @@ TEST(ManagedHeap, ValidatesUnorderedRandomStorageAndSharedModeWords) {
 
   auto savedEdge = edges.back();
   edges.back().handle_offset = edges.front().handle_offset;
-  EXPECT_EQ(talos_rt_v1_class_validate(&descriptor),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&descriptor), TALOS_RT_INVALID_DESIGN);
   edges.back() = savedEdge;
   edges.back().mode_mask = variables.front().mode_mask;
-  EXPECT_EQ(talos_rt_v1_class_validate(&descriptor),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&descriptor), TALOS_RT_INVALID_DESIGN);
   edges.back() = savedEdge;
   auto savedVariable = variables.back();
   variables.back().value_offset = variables.front().value_offset + 4;
   // The value aliases the unknown plane of another four-state variable.
-  EXPECT_EQ(talos_rt_v1_class_validate(&descriptor),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&descriptor), TALOS_RT_INVALID_DESIGN);
   variables.back() = savedVariable;
   variables.back().value_offset = 10;
-  EXPECT_EQ(talos_rt_v1_class_validate(&descriptor),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&descriptor), TALOS_RT_INVALID_DESIGN);
   variables.back() = savedVariable;
   variables.back().randc_key_offset = variables.front().value_offset;
-  EXPECT_EQ(talos_rt_v1_class_validate(&descriptor),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&descriptor), TALOS_RT_INVALID_DESIGN);
   variables.back() = savedVariable;
   variables.back().mode_mask = variables.front().mode_mask;
-  EXPECT_EQ(talos_rt_v1_class_validate(&descriptor),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&descriptor), TALOS_RT_INVALID_DESIGN);
   variables.back() = savedVariable;
   variables.back().value_offset = UINT64_MAX - 2;
-  EXPECT_EQ(talos_rt_v1_class_validate(&descriptor),
-            TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(talos_rt_v1_class_validate(&descriptor), TALOS_RT_INVALID_DESIGN);
   variables.back() = savedVariable;
   EXPECT_EQ(talos_rt_v1_class_validate(&descriptor), TALOS_RT_OK);
 }
@@ -7121,8 +6923,7 @@ TEST(ManagedHeap, ValidatesUnorderedRandomStorageAndSharedModeWords) {
 TEST(ManagedHeap, ChecksCachedBaseLayoutsAndRollsBackFailedRegistration) {
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
-  ASSERT_EQ(talos_rt_v1_class_register(context, &nodeDescriptor),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_class_register(context, &nodeDescriptor), TALOS_RT_OK);
   auto child = derivedDescriptor;
   auto entry = nodeTraceEntry;
   auto layout = derivedTraceLayout;
@@ -7160,7 +6961,7 @@ TEST_F(ManagedHeapTest,
   };
   // Registered immutable metadata must outlive its context, including failures.
   std::unique_ptr<talos_rt_context, decltype(destroy)> cleanup(context,
-                                                                 destroy);
+                                                               destroy);
   for (size_t index = 0; index != count; ++index) {
     methods[index][0] = nodeMethods[0];
     if (index) {
@@ -7173,12 +6974,12 @@ TEST_F(ManagedHeapTest,
                            TALOS_RT_MANAGED_SLOT_INVALID,
                            &layouts[index - 1]};
       entries[index][1] = {
-          kSlot * (index + 2),           0,      1, TALOS_RT_TRACE_STRONG,
+          kSlot * (index + 2),         0,      1, TALOS_RT_TRACE_STRONG,
           TALOS_RT_MANAGED_SLOT_CLASS, nullptr};
     } else {
       entries[index][0] = nodeTraceEntry;
     }
-    layouts[index] = {TALOS_RT_VERSION,    0,
+    layouts[index] = {TALOS_RT_VERSION,      0,
                       kSlot * (index + 3),   kSlotAlign,
                       entries[index].data(), index ? 2u : 1u};
     classes[index] = nodeDescriptor;
@@ -7203,26 +7004,22 @@ TEST_F(ManagedHeapTest,
             TALOS_RT_INVALID_DESIGN);
   methods.back()[0] = derivedMethods[0];
 
-  ASSERT_EQ(talos_rt_v1_class_register(context, &classes.back()),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_class_register(context, &classes.back()), TALOS_RT_OK);
   talos_rt_object_v1 *object = nullptr;
   ASSERT_EQ(talos_rt_v1_object_allocate(lane, &classes.back(), &object),
             TALOS_RT_OK);
   const talos_rt_method_descriptor_v1 *resolved = nullptr;
-  ASSERT_EQ(talos_rt_v1_method_resolve(object, 0, 42, &resolved),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_method_resolve(object, 0, 42, &resolved), TALOS_RT_OK);
   EXPECT_EQ(resolved, &methods.back()[0]);
   ASSERT_EQ(talos_rt_v1_method_resolve(object, (UINT64_C(1) << 20) + 1, 101,
-                                         &resolved),
+                                       &resolved),
             TALOS_RT_OK);
   EXPECT_EQ(resolved, &methods[1][0]);
-  ASSERT_EQ(
-      talos_rt_v1_interface_method_resolve(object, 501, 0, 42, &resolved),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_interface_method_resolve(object, 501, 0, 42, &resolved),
+            TALOS_RT_OK);
   EXPECT_EQ(resolved, &methods.back()[0]);
-  EXPECT_EQ(
-      talos_rt_v1_interface_method_resolve(object, 501, 0, 43, &resolved),
-      TALOS_RT_LAYOUT_MISMATCH);
+  EXPECT_EQ(talos_rt_v1_interface_method_resolve(object, 501, 0, 43, &resolved),
+            TALOS_RT_LAYOUT_MISMATCH);
   EXPECT_EQ(
       talos_rt_v1_method_resolve(object, UINT64_C(1) << 48, 42, &resolved),
       TALOS_RT_INVALID_HANDLE);
@@ -7255,7 +7052,7 @@ TEST_F(ManagedHeapTest,
     context = nullptr;
   };
   std::unique_ptr<talos_rt_context, decltype(destroy)> cleanup(context,
-                                                                 destroy);
+                                                               destroy);
   child.methods = &method;
   method.signature_id = 43;
   EXPECT_EQ(talos_rt_v1_class_register(context, &child),
@@ -7270,12 +7067,10 @@ TEST_F(ManagedHeapTest,
   interface.base_count = 0;
   ASSERT_EQ(talos_rt_v1_class_register(context, &child), TALOS_RT_OK);
   talos_rt_object_v1 *object = nullptr;
-  ASSERT_EQ(talos_rt_v1_object_allocate(lane, &child, &object),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_object_allocate(lane, &child, &object), TALOS_RT_OK);
   const talos_rt_method_descriptor_v1 *resolved = nullptr;
-  EXPECT_EQ(
-      talos_rt_v1_interface_method_resolve(object, 701, 0, 42, &resolved),
-      TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_interface_method_resolve(object, 701, 0, 42, &resolved),
+            TALOS_RT_OK);
   EXPECT_EQ(resolved, &method);
 }
 
@@ -7405,7 +7200,7 @@ TEST_F(ManagedHeapTest, RegistersGrowingInterfaceParentsAndRepairsFailedMerge) {
     context = nullptr;
   };
   std::unique_ptr<talos_rt_context, decltype(destroy)> cleanup(context,
-                                                                 destroy);
+                                                               destroy);
   for (size_t index = 0; index != count; ++index) {
     signatures[index] = {2000 + index * 2, 2001 + index * 2};
     if (index) {
@@ -7446,15 +7241,15 @@ TEST_F(ManagedHeapTest, RegistersGrowingInterfaceParentsAndRepairsFailedMerge) {
   ASSERT_EQ(talos_rt_v1_object_allocate(lane, &classes.back(), &object),
             TALOS_RT_OK);
   const talos_rt_method_descriptor_v1 *resolved = nullptr;
-  ASSERT_EQ(talos_rt_v1_interface_method_resolve(
-                object, left.front().interface_id, 0, signatures.front()[0],
-                &resolved),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_interface_method_resolve(object, left.front().interface_id, 0,
+                                           signatures.front()[0], &resolved),
+      TALOS_RT_OK);
   EXPECT_EQ(resolved, &methods.front()[0]);
-  ASSERT_EQ(talos_rt_v1_interface_method_resolve(
-                object, right.back().interface_id, 0, signatures.back()[1],
-                &resolved),
-            TALOS_RT_OK);
+  ASSERT_EQ(
+      talos_rt_v1_interface_method_resolve(object, right.back().interface_id, 0,
+                                           signatures.back()[1], &resolved),
+      TALOS_RT_OK);
   EXPECT_EQ(resolved, &methods.back()[1]);
   auto target = nodeDescriptor;
   target.flags = TALOS_RT_CLASS_ABSTRACT | TALOS_RT_CLASS_INTERFACE;

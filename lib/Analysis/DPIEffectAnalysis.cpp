@@ -103,8 +103,8 @@ bool exportClosuresAreTransparent(sim::SimDesignOp design) {
 
 void DPIEffectAnalysis::record(sim::SimDesignOp design) {
   dpi::set<dpi::TransparentExports>(
-      design, BoolAttr::get(design.getContext(),
-                            exportClosuresAreTransparent(design)));
+      design,
+      BoolAttr::get(design.getContext(), exportClosuresAreTransparent(design)));
 }
 
 DPIEffectAnalysis::DPIEffectAnalysis(sim::SimDesignOp design) {

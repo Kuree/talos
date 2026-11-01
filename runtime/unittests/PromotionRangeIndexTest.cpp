@@ -11,10 +11,10 @@ namespace {
 
 TEST(PromotionRangeIndex, MergesOnlyTheSameProofAndRejectsInvalidRanges) {
   std::vector<talos_rt_native_promotion_dependency> entries{{9, 20, 0, 0},
-                                                              {1, 10, 0, 0},
-                                                              {20, 25, 0, 0},
-                                                              {2, 12, 0, 1},
-                                                              {30, 31, 0, 0}};
+                                                            {1, 10, 0, 0},
+                                                            {20, 25, 0, 0},
+                                                            {2, 12, 0, 1},
+                                                            {30, 31, 0, 0}};
   ASSERT_TRUE(buildPromotionRangeIndex(entries, 32, 2));
   ASSERT_EQ(entries.size(), 3u);
   EXPECT_EQ(entries[0].begin, 1u);
@@ -139,12 +139,12 @@ TEST(PromotionRangeIndex, NBACertificatesAndRecoveryAreIndependent) {
   EXPECT_EQ(route, promotedRoute);
   EXPECT_EQ(aggregateInvalidations, 2u);
   talos_rt_v1_native_promotion_recheck_ranges(entries.data(), entries.size(),
-                                                certificates,
-                                                invalidateAggregate, 8, 120);
+                                              certificates, invalidateAggregate,
+                                              8, 120);
   EXPECT_EQ(aggregateInvalidations, 2u);
-  talos_rt_v1_native_promotion_invalidate_ranges(entries.data(),
-                                                   entries.size(), certificates,
-                                                   invalidateAggregate, 129, 1);
+  talos_rt_v1_native_promotion_invalidate_ranges(entries.data(), entries.size(),
+                                                 certificates,
+                                                 invalidateAggregate, 129, 1);
   EXPECT_EQ(knownRoots[0], 4u);
   EXPECT_EQ(knownRoots[1], 0u);
   EXPECT_EQ(routePending, 0u);
@@ -167,8 +167,7 @@ TEST(PromotionBucketIndex, BudgetAndEncodingRejectUnboundedExpansion) {
   talos::runtime::PromotionBucketIndex buckets;
   auto build = [&](std::vector<talos_rt_native_promotion_dependency> entries,
                    uint64_t budget) {
-    return talos::runtime::buildPromotionBucketIndex(entries, budget,
-                                                       buckets);
+    return talos::runtime::buildPromotionBucketIndex(entries, budget, buckets);
   };
   EXPECT_FALSE(build({}, 1024));
   EXPECT_FALSE(build({{1, 1, 0, 0}}, 1024));
@@ -223,10 +222,10 @@ TEST(PromotionBucketIndex, RuntimeActionsMatchIntervalIndex) {
   // Include duplicate certificate visits across buckets, holes, the high word
   // bit, a failed and a valid latch, an NBA bit, and a function-pointer route.
   std::vector<talos_rt_native_promotion_dependency> entries{{0, 130, 0, 0},
-                                                              {63, 68, 0, 1},
-                                                              {60, 66, 0, 2},
-                                                              {192, 193, 0, 0},
-                                                              {257, 300, 0, 3}};
+                                                            {63, 68, 0, 1},
+                                                            {60, 66, 0, 2},
+                                                            {192, 193, 0, 0},
+                                                            {257, 300, 0, 3}};
   ASSERT_TRUE(buildPromotionRangeIndex(entries, 320, 4));
   talos::runtime::PromotionBucketIndex buckets;
   ASSERT_TRUE(
@@ -239,7 +238,7 @@ TEST(PromotionBucketIndex, RuntimeActionsMatchIntervalIndex) {
         uint64_t words[2][2] = {{0, UINT64_MAX}, {0, UINT64_MAX}};
         auto firstRoute = recover ? fourStateRoute : promotedRoute;
         talos_rt_native_promotion_invalidate routes[] = {firstRoute,
-                                                           firstRoute};
+                                                         firstRoute};
         unsigned aggregate[2];
         for (unsigned variant = 0; variant != 2; ++variant) {
           talos_rt_native_promotion_certificate certificates[] = {
@@ -251,16 +250,16 @@ TEST(PromotionBucketIndex, RuntimeActionsMatchIntervalIndex) {
                fourStateRoute}};
           aggregateInvalidations = 0;
           if (variant) {
-            auto action =
-                recover ? talos_rt_v1_native_promotion_recheck_buckets
-                        : talos_rt_v1_native_promotion_invalidate_buckets;
+            auto action = recover
+                              ? talos_rt_v1_native_promotion_recheck_buckets
+                              : talos_rt_v1_native_promotion_invalidate_buckets;
             action(buckets.starts.data(), buckets.records.data(),
                    buckets.starts.size() - 1, certificates, invalidateAggregate,
                    offset, width);
           } else {
-            auto action =
-                recover ? talos_rt_v1_native_promotion_recheck_ranges
-                        : talos_rt_v1_native_promotion_invalidate_ranges;
+            auto action = recover
+                              ? talos_rt_v1_native_promotion_recheck_ranges
+                              : talos_rt_v1_native_promotion_invalidate_ranges;
             action(entries.data(), entries.size(), certificates,
                    invalidateAggregate, offset, width);
           }

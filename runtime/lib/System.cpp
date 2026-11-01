@@ -10,8 +10,8 @@
 #endif
 
 extern "C" talos_rt_status talos_rt_v1_system(talos_rt_context *context,
-                                                  talos_rt_string_v1 command,
-                                                  int32_t *outStatus) {
+                                              talos_rt_string_v1 command,
+                                              int32_t *outStatus) {
   if (!context || !outStatus)
     return TALOS_RT_INVALID_ARGUMENT;
   *outStatus = -1;

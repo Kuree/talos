@@ -59,13 +59,11 @@ struct DirectFragmentTerminationCache {
   llvm::DenseMap<mlir::Operation *, Facts> facts;
 };
 
-mlir::FailureOr<mlir::LLVM::LLVMFuncOp>
-makeDirectFragmentWrapper(mlir::ModuleOp module, sim::SimFuncOp body,
-                          sim::SimFuncOp actor, llvm::StringRef wrapperName,
-                          uint32_t actorSlot, uint32_t continuation,
-                          const SimulationProcessFrameAnalysis &analysis,
-                          bool materializeBody = true,
-                          DirectFragmentTerminationCache *cache = nullptr);
+mlir::FailureOr<mlir::LLVM::LLVMFuncOp> makeDirectFragmentWrapper(
+    mlir::ModuleOp module, sim::SimFuncOp body, sim::SimFuncOp actor,
+    llvm::StringRef wrapperName, uint32_t actorSlot, uint32_t continuation,
+    const SimulationProcessFrameAnalysis &analysis, bool materializeBody = true,
+    DirectFragmentTerminationCache *cache = nullptr);
 mlir::LogicalResult
 makeDirectFragmentBody(mlir::LLVM::LLVMFuncOp wrapper, sim::SimFuncOp body,
                        sim::SimFuncOp actor, uint32_t actorSlot,

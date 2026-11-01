@@ -30,12 +30,12 @@
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Conversion/SimulationToLLVMCoroutine.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
-#include "talos/LLVM/ClockedGuardLayout.h"
-#include "talos/LLVM/ClockedKernelOutlining.h"
-#include "talos/LLVM/WideIntegerVectorization.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Dialect/Simulation/Transforms/Passes.h"
+#include "talos/LLVM/ClockedGuardLayout.h"
+#include "talos/LLVM/ClockedKernelOutlining.h"
+#include "talos/LLVM/WideIntegerVectorization.h"
 #include "talos/Runtime/OutputItemFlags.h"
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -186,38 +186,15 @@ ArrayRef<StringLiteral> getRuntimeDPIEntryPoints() {
 
 ArrayRef<StringLiteral> getRuntimeVPIEntryPoints() {
   static constexpr StringLiteral names[] = {
-      "vpi_chk_error",
-      "vpi_compare_objects",
-      "vpi_control",
-      "vpi_flush",
-      "vpi_free_object",
-      "vpi_get",
-      "vpi_get64",
-      "vpi_get_cb_info",
-      "vpi_get_data",
-      "vpi_get_delays",
-      "vpi_get_str",
-      "vpi_get_systf_info",
-      "vpi_get_time",
-      "vpi_get_userdata",
-      "vpi_get_value",
-      "vpi_get_value_array",
-      "vpi_get_vlog_info",
-      "vpi_handle",
-      "vpi_handle_by_index",
-      "vpi_handle_by_multi_index",
-      "vpi_handle_by_name",
-      "vpi_handle_multi",
-      "vpi_iterate",
-      "vpi_mcd_name",
-      "vpi_printf",
-      "vpi_put_userdata",
-      "vpi_put_value",
-      "vpi_register_cb",
-      "vpi_register_systf",
-      "vpi_release_handle",
-      "vpi_remove_cb",
-      "vpi_scan",
+      "vpi_chk_error", "vpi_compare_objects", "vpi_control", "vpi_flush",
+      "vpi_free_object", "vpi_get", "vpi_get64", "vpi_get_cb_info",
+      "vpi_get_data", "vpi_get_delays", "vpi_get_str", "vpi_get_systf_info",
+      "vpi_get_time", "vpi_get_userdata", "vpi_get_value",
+      "vpi_get_value_array", "vpi_get_vlog_info", "vpi_handle",
+      "vpi_handle_by_index", "vpi_handle_by_multi_index", "vpi_handle_by_name",
+      "vpi_handle_multi", "vpi_iterate", "vpi_mcd_name", "vpi_printf",
+      "vpi_put_userdata", "vpi_put_value", "vpi_register_cb",
+      "vpi_register_systf", "vpi_release_handle", "vpi_remove_cb", "vpi_scan",
       "vpi_vprintf",
       // Talos's object-model query for VPI applications.
       "talos_rt_v1_vpi_object_model"};
@@ -495,8 +472,7 @@ planNativeModuleSplit(llvm::Module &module, const NativePartitionPlan &plan) {
         continue;
       unsigned group = assignments.lookup(caller);
       llvm::MapVector<const llvm::Function *, uint64_t> callCounts;
-      for (const llvm::Instruction &instruction :
-           llvm::instructions(*caller)) {
+      for (const llvm::Instruction &instruction : llvm::instructions(*caller)) {
         const auto *call = dyn_cast<llvm::CallBase>(&instruction);
         const llvm::Function *callee =
             call ? call->getCalledFunction() : nullptr;
@@ -801,8 +777,7 @@ static bool formattedOutputMayReadNetStrength(ValueRange items,
     if (itemIndex == items.size())
       return true;
     mlir::Value item = items[itemIndex++];
-    if ((flags & (TALOS_RT_OUTPUT_ITEM_ENUM | TALOS_RT_OUTPUT_ITEM_NET)) !=
-        0) {
+    if ((flags & (TALOS_RT_OUTPUT_ITEM_ENUM | TALOS_RT_OUTPUT_ITEM_NET)) != 0) {
       if (itemIndex == items.size())
         return true;
       ++itemIndex;
@@ -829,8 +804,7 @@ lowerToLLVM(ModuleOp module, TargetMachine &targetMachine, StringRef triple,
             uint32_t optLevel, bool planSemanticPartitions, bool timing,
             bool verifyEach, const PassIRDumpOptions &irDump,
             bool &requiresStateSync, bool &resolveInitialDrivers) {
-  if (bytecode &&
-      nativeScheduler == talos::schedule::NativeSchedulerMode::Auto)
+  if (bytecode && nativeScheduler == talos::schedule::NativeSchedulerMode::Auto)
     nativeScheduler = talos::schedule::NativeSchedulerMode::Generic;
   module->setAttr("llvm.target_triple",
                   StringAttr::get(module.getContext(), triple));
@@ -865,13 +839,12 @@ lowerToLLVM(ModuleOp module, TargetMachine &targetMachine, StringRef triple,
   bool hasPassSwitch = false;
   bool hasClockOccurrenceCondition = false;
   module.walk([&](mlir::Operation *operation) {
-    if (mlir::isa<talos::sim::SimOverrideOp,
-                  talos::sim::SimDynamicOverrideOp,
+    if (mlir::isa<talos::sim::SimOverrideOp, talos::sim::SimDynamicOverrideOp,
                   talos::sim::SimReleaseOverrideOp>(operation))
       hasLanguageOverride = true;
     if (auto enqueue = mlir::dyn_cast<talos::sim::SimNBAEnqueueOp>(operation))
-      hasDriverNBA |= mlir::isa<talos::sim::DriverType>(
-          enqueue.getDestination().getType());
+      hasDriverNBA |=
+          mlir::isa<talos::sim::DriverType>(enqueue.getDestination().getType());
     if (auto net = mlir::dyn_cast<talos::sim::SimNetDeclOp>(operation))
       hasDelayedNet |= static_cast<bool>(net.getPropagationDelays());
     hasInertialDriver |=
@@ -881,8 +854,7 @@ lowerToLLVM(ModuleOp module, TargetMachine &targetMachine, StringRef triple,
                   talos::sim::SimDriverDriveInertialPathStrengthPairOp>(
             operation);
     hasPassSwitch |= mlir::isa<talos::sim::SimPassSwitchDeclOp>(operation);
-    if (auto wait =
-            mlir::dyn_cast<talos::sim::SimSuspendClockSetOp>(operation))
+    if (auto wait = mlir::dyn_cast<talos::sim::SimSuspendClockSetOp>(operation))
       hasClockOccurrenceCondition |= !wait.getConditions().empty();
   });
   requiresStateSync = vpi != "off" || hasLanguageOverride || hasDriverNBA ||
@@ -890,8 +862,8 @@ lowerToLLVM(ModuleOp module, TargetMachine &targetMachine, StringRef triple,
                       hasClockOccurrenceCondition;
   resolveInitialDrivers = hasInertialDriver;
   ::talos::schedule::set<::talos::schedule::Field::NativeScheduler>(
-      module, talos::schedule::NativeSchedulerModeAttr::get(
-                  module.getContext(), nativeScheduler));
+      module, talos::schedule::NativeSchedulerModeAttr::get(module.getContext(),
+                                                            nativeScheduler));
   // Hybrid AOT keeps bytecode available as the canonical implementation for
   // fragments that cannot be scheduled statically and for writable VPI
   // transition stages. The shared process frame lets those fragments return
@@ -906,13 +878,13 @@ lowerToLLVM(ModuleOp module, TargetMachine &targetMachine, StringRef triple,
   bool needsWaveformMetadata = false;
   bool needsNetDriverTopology = hasPassSwitch;
   module.walk([&](mlir::Operation *operation) {
-    needsWaveformMetadata |= mlir::isa<
-        talos::sim::SimDumpOpenOp, talos::sim::SimDumpOpenStringOp,
-        talos::sim::SimDumpTimescaleOp, talos::sim::SimDumpVarsOp,
-        talos::sim::SimDumpAllOp, talos::sim::SimDumpControlOp,
-        talos::sim::SimDumpLimitOp, talos::sim::SimDumpFlushOp,
-        talos::sim::SimDumpPortsOp, talos::sim::SimDumpPortsControlOp>(
-        operation);
+    needsWaveformMetadata |=
+        mlir::isa<talos::sim::SimDumpOpenOp, talos::sim::SimDumpOpenStringOp,
+                  talos::sim::SimDumpTimescaleOp, talos::sim::SimDumpVarsOp,
+                  talos::sim::SimDumpAllOp, talos::sim::SimDumpControlOp,
+                  talos::sim::SimDumpLimitOp, talos::sim::SimDumpFlushOp,
+                  talos::sim::SimDumpPortsOp,
+                  talos::sim::SimDumpPortsControlOp>(operation);
     needsNetDriverTopology |=
         mlir::isa<talos::sim::SimNetCountDriversOp>(operation);
     if (auto display = mlir::dyn_cast<talos::sim::SimDisplayOp>(operation))
@@ -1103,8 +1075,8 @@ LogicalResult lowerLLVMCoroutines(llvm::Module &module,
   passes.addPass(CoroCleanupPass());
   // Preserve the wide-shift loop policy when LLD optimizes these LTO modules.
   if (optimizeFrame)
-    passes.addPass(createModuleToFunctionPassAdaptor(
-        LimitWideIntegerVectorizationPass()));
+    passes.addPass(
+        createModuleToFunctionPassAdaptor(LimitWideIntegerVectorizationPass()));
   passes.run(module, moduleAnalyses);
   if (verifyModule(module, &errs())) {
     errs() << "talos: error: invalid LLVM IR after coroutine lowering\n";
@@ -1261,8 +1233,7 @@ addVPIStartupLifecycle(llvm::Module &module, StringRef vpi,
           : nullptr;
   if (!stateUnknown && (!executionFlags || !(executionFlags->getZExtValue() &
                                              TALOS_RT_EXECUTION_TWO_STATE))) {
-    errs()
-        << "talos: error: four-state execution requires an unknown plane\n";
+    errs() << "talos: error: four-state execution requires an unknown plane\n";
     return failure();
   }
   llvm::Constant *unknownPointer =
@@ -1324,9 +1295,8 @@ addVPIStartupLifecycle(llvm::Module &module, StringRef vpi,
         llvm::FunctionType::get(llvm::Type::getVoidTy(context), {pointer},
                                 false));
     llvm::IRBuilder<> beforeReport(report);
-    llvm::Value *endStatus =
-        beforeReport.CreateCall(endSimulation, {report->getArgOperand(0)},
-                                "talos.vpi.end_simulation");
+    llvm::Value *endStatus = beforeReport.CreateCall(
+        endSimulation, {report->getArgOperand(0)}, "talos.vpi.end_simulation");
     llvm::Value *runStatus = report->getArgOperand(1);
     llvm::Value *runFailed = beforeReport.CreateICmpNE(
         runStatus, llvm::ConstantInt::get(runStatus->getType(), 0),
@@ -1611,8 +1581,8 @@ LogicalResult emitTargetOutput(ModuleOp module,
       return failure();
     prunePartitionInventory(*removed);
     if (options.timing) {
-      errs() << "talos native pruning: MLIR symbols removed="
-             << removed->size() << '\n';
+      errs() << "talos native pruning: MLIR symbols removed=" << removed->size()
+             << '\n';
       detail::reportNativePrunedSymbols(*removed, "MLIR");
     }
     markBackendTiming("MLIR symbol dead-code elimination");
@@ -1682,8 +1652,8 @@ LogicalResult emitTargetOutput(ModuleOp module,
         detail::pruneNativeExecutableModel(*llvmModule, nativeExports);
     prunePartitionInventory(removed);
     if (options.timing) {
-      errs() << "talos native pruning: LLVM symbols removed="
-             << removed.size() << '\n';
+      errs() << "talos native pruning: LLVM symbols removed=" << removed.size()
+             << '\n';
       detail::reportNativePrunedSymbols(removed, "LLVM");
     }
     markBackendTiming("generated model dead-code elimination");
@@ -1927,8 +1897,8 @@ LogicalResult emitTargetOutput(ModuleOp module,
         std::unique_ptr<TargetMachine> workerTarget =
             backend->createTargetMachine(error, hostOptLevel);
         if (!workerTarget) {
-          errs() << "talos: error: could not create partition target: "
-                 << error << '\n';
+          errs() << "talos: error: could not create partition target: " << error
+                 << '\n';
           removeTemporaries();
           return failure();
         }

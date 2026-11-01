@@ -7,8 +7,7 @@
 // asm labels are final symbol names; Mach-O prefixes C symbols with '_'.
 #define TALOS_TEST_STRINGIFY_(text) #text
 #define TALOS_TEST_STRINGIFY(text) TALOS_TEST_STRINGIFY_(text)
-#define TALOS_TEST_SYMBOL(name)                                              \
-  TALOS_TEST_STRINGIFY(__USER_LABEL_PREFIX__) name
+#define TALOS_TEST_SYMBOL(name) TALOS_TEST_STRINGIFY(__USER_LABEL_PREFIX__) name
 
 extern "C" {
 extern uint8_t __talos_state_unknown[];
@@ -24,7 +23,7 @@ int executeSelectedWork(void *) asm(
     TALOS_TEST_SYMBOL("__talos_direct_fragment_2_12.__talos_execute"));
 int executeTrustedWork(void *) asm(
     TALOS_TEST_SYMBOL("__talos_direct_fragment_2_12.__talos_"
-                        "execute.two_state.__talos_trusted"));
+                      "execute.two_state.__talos_trusted"));
 void executeFourStateWork(void *) asm(
     TALOS_TEST_SYMBOL("work.__talos_eval_body_0"));
 void executeOtherFourStateWork(void *) asm(
@@ -220,7 +219,7 @@ int main() {
   // bit 400 belongs only to the second proof. Also exercise a complete run
   // of 64 bits, whose length must never become an undefined shift by 64.
   __talos_eval_promotion_invalidate_mask_v1(356, (uint64_t{1} << 28) |
-                                                       (uint64_t{1} << 44));
+                                                     (uint64_t{1} << 44));
   assert(__talos_eval_kernel_promotion_latched_v1[1] == known);
   assert(__talos_eval_kernel_promotion_latched_v1[0] != otherKnown);
   promote();

@@ -52,9 +52,9 @@ uint64_t randcPermute(uint64_t key, uint64_t position, unsigned width) {
 
 } // namespace
 
-extern "C" void
-talos_rt_v1_random_state_seed(talos_rt_random_state_v1 *state,
-                                uint64_t seed, uint64_t sequence) {
+extern "C" void talos_rt_v1_random_state_seed(talos_rt_random_state_v1 *state,
+                                              uint64_t seed,
+                                              uint64_t sequence) {
   if (!state)
     return;
   state->state = 0;
@@ -82,7 +82,7 @@ talos_rt_v1_random_state_next64(talos_rt_random_state_v1 *state) {
 
 extern "C" talos_rt_status
 talos_rt_v1_random_cycle_next(uint64_t key, uint64_t position, uint32_t width,
-                                uint64_t *outNextPosition, uint64_t *outValue) {
+                              uint64_t *outNextPosition, uint64_t *outValue) {
   if (!outNextPosition || !outValue || width == 0 || width > 32 ||
       (position & ~lowMask(width)) != 0)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -94,7 +94,7 @@ talos_rt_v1_random_cycle_next(uint64_t key, uint64_t position, uint32_t width,
 
 extern "C" talos_rt_status
 talos_rt_v1_random_state_bounded(talos_rt_random_state_v1 *state,
-                                   uint64_t bound, uint64_t *outValue) {
+                                 uint64_t bound, uint64_t *outValue) {
   if (!state || !outValue || bound == 0 || (state->increment & 1) == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   uint64_t threshold = (uint64_t{0} - bound) % bound;
@@ -127,8 +127,7 @@ talos_rt_random_active_state_unlocked(talos_rt_context *context) {
 }
 
 static talos_rt_random_state_v1 *
-processRandomStateUnlocked(talos_rt_context *context,
-                           uint64_t logicalProcess) {
+processRandomStateUnlocked(talos_rt_context *context, uint64_t logicalProcess) {
   if (!context || logicalProcess == 0)
     return nullptr;
   if (context->activeLogicalProcessToken == logicalProcess &&
@@ -148,7 +147,7 @@ processRandomStateUnlocked(talos_rt_context *context,
 }
 
 void talos_rt_random_split_unlocked(talos_rt_context *context,
-                                      talos_rt_random_state_v1 &child) {
+                                    talos_rt_random_state_v1 &child) {
   talos_rt_random_state_v1 *parent =
       talos_rt_random_active_state_unlocked(context);
   uint64_t seed = next64(*parent);
@@ -191,7 +190,7 @@ extern "C" talos_rt_status talos_rt_v1_random_initialization_enter(
     auto [stream, inserted] = scopes.streams.try_emplace(scope);
     if (inserted)
       talos_rt_v1_random_state_seed(&stream->second, context->configuredSeed,
-                                      kDefaultSequence);
+                                    kDefaultSequence);
     uint64_t token = scopes.nextToken++;
     scopes.activations.push_back(
         {token, scopes.activeScope, context->activeLogicalProcessToken,
@@ -208,7 +207,7 @@ extern "C" talos_rt_status talos_rt_v1_random_initialization_enter(
 
 extern "C" talos_rt_status
 talos_rt_v1_random_initialization_leave(talos_rt_context *context,
-                                          uint64_t activation) {
+                                        uint64_t activation) {
   if (!context || activation == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
@@ -232,12 +231,12 @@ talos_rt_v1_random_initialization_leave(talos_rt_context *context,
 }
 
 void talos_rt_random_seed_context_unlocked(talos_rt_context *context,
-                                             uint64_t seed) {
+                                           uint64_t seed) {
   talos_rt_v1_random_state_seed(&context->random, seed, kDefaultSequence);
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_random_next(talos_rt_context *context, uint64_t *outValue) {
+extern "C" talos_rt_status talos_rt_v1_random_next(talos_rt_context *context,
+                                                   uint64_t *outValue) {
   if (!context || !outValue)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
@@ -248,8 +247,8 @@ talos_rt_v1_random_next(talos_rt_context *context, uint64_t *outValue) {
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_ARGUMENT; }
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_random_seed(talos_rt_context *context, uint64_t seed) {
+extern "C" talos_rt_status talos_rt_v1_random_seed(talos_rt_context *context,
+                                                   uint64_t seed) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
@@ -265,9 +264,9 @@ talos_rt_v1_random_seed(talos_rt_context *context, uint64_t seed) {
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_ARGUMENT; }
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_random_bounded(talos_rt_context *context, uint64_t bound,
-                             uint64_t *outValue) {
+extern "C" talos_rt_status talos_rt_v1_random_bounded(talos_rt_context *context,
+                                                      uint64_t bound,
+                                                      uint64_t *outValue) {
   if (!context || !outValue || bound == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
@@ -394,11 +393,9 @@ int32_t annexDistUniform(int32_t &seed, int32_t start, int32_t end) {
 
 } // namespace
 
-extern "C" talos_rt_status
-talos_rt_v1_random_distribution(talos_rt_context *context,
-                                  talos_rt_distribution distribution,
-                                  int32_t seed, int32_t first, int32_t second,
-                                  int32_t *outValue, int32_t *outNextSeed) {
+extern "C" talos_rt_status talos_rt_v1_random_distribution(
+    talos_rt_context *context, talos_rt_distribution distribution, int32_t seed,
+    int32_t first, int32_t second, int32_t *outValue, int32_t *outNextSeed) {
   if (!context || !outValue || !outNextSeed)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
@@ -438,8 +435,8 @@ talos_rt_v1_random_distribution(talos_rt_context *context,
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_ARGUMENT; }
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_random_legacy(talos_rt_context *context, int32_t *outValue) {
+extern "C" talos_rt_status talos_rt_v1_random_legacy(talos_rt_context *context,
+                                                     int32_t *outValue) {
   if (!context || !outValue)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
@@ -454,7 +451,7 @@ talos_rt_v1_random_legacy(talos_rt_context *context, int32_t *outValue) {
 
 extern "C" talos_rt_status
 talos_rt_v1_random_get_state(talos_rt_context *context,
-                               talos_rt_random_state_v1 *outState) {
+                             talos_rt_random_state_v1 *outState) {
   if (!context || !outState)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
@@ -467,7 +464,7 @@ talos_rt_v1_random_get_state(talos_rt_context *context,
 
 extern "C" talos_rt_status
 talos_rt_v1_random_set_state(talos_rt_context *context,
-                               const talos_rt_random_state_v1 *state) {
+                             const talos_rt_random_state_v1 *state) {
   if (!context || !state || (state->increment & 1) == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
@@ -480,8 +477,8 @@ talos_rt_v1_random_set_state(talos_rt_context *context,
 
 extern "C" talos_rt_status
 talos_rt_v1_process_random_get(talos_rt_context *context,
-                                 uint64_t logicalProcess,
-                                 talos_rt_random_state_v1 *outState) {
+                               uint64_t logicalProcess,
+                               talos_rt_random_state_v1 *outState) {
   if (!context || logicalProcess == 0 || !outState)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
@@ -498,8 +495,8 @@ talos_rt_v1_process_random_get(talos_rt_context *context,
 
 extern "C" talos_rt_status
 talos_rt_v1_process_random_set(talos_rt_context *context,
-                                 uint64_t logicalProcess,
-                                 const talos_rt_random_state_v1 *state) {
+                               uint64_t logicalProcess,
+                               const talos_rt_random_state_v1 *state) {
   if (!context || logicalProcess == 0 || !state || (state->increment & 1) == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {

@@ -22,29 +22,29 @@ using namespace talos::runtime;
 #if defined(__clang__) || defined(__GNUC__)
 __attribute__((weak))
 #endif
-bool talos_rt_expand_recursive_watch_group(
-    talos_rt_context *context, uint64_t token,
-    RecursiveWatchGroupVisit visit, void *environment);
+bool talos_rt_expand_recursive_watch_group(talos_rt_context *context,
+                                           uint64_t token,
+                                           RecursiveWatchGroupVisit visit,
+                                           void *environment);
 #if defined(__clang__) || defined(__GNUC__)
 __attribute__((weak))
 #endif
 bool talos_rt_expand_class_watch_group(talos_rt_context *context,
-                                         uint64_t token,
-                                         RecursiveWatchGroupVisit visit,
-                                         void *environment);
+                                       uint64_t token,
+                                       RecursiveWatchGroupVisit visit,
+                                       void *environment);
 
 #if defined(__APPLE__)
 // Mach-O extracts archive members even for weak references. Define the
 // absent-feature result here; the bit-stream feature objects' strong
 // definitions replace it when a design links them.
-bool talos_rt_expand_recursive_watch_group(talos_rt_context *context,
-                                             uint64_t, RecursiveWatchGroupVisit,
-                                             void *) {
+bool talos_rt_expand_recursive_watch_group(talos_rt_context *context, uint64_t,
+                                           RecursiveWatchGroupVisit, void *) {
   context->schedulerStatus = TALOS_RT_INVALID_HANDLE;
   return false;
 }
 bool talos_rt_expand_class_watch_group(talos_rt_context *context, uint64_t,
-                                         RecursiveWatchGroupVisit, void *) {
+                                       RecursiveWatchGroupVisit, void *) {
   context->schedulerStatus = TALOS_RT_INVALID_HANDLE;
   return false;
 }
@@ -130,8 +130,8 @@ bool appendSignalSubscriptionUnlocked(
         auto node = std::move(context->signalSubscriptionNodes.back());
         context->signalSubscriptionNodes.pop_back();
         node.key() = key;
-        found = context->signalSubscriptionBuckets.insert(std::move(node))
-                    .position;
+        found =
+            context->signalSubscriptionBuckets.insert(std::move(node)).position;
       }
       auto &bucket = found != context->signalSubscriptionBuckets.end()
                          ? found->second
@@ -208,7 +208,7 @@ bool appendClockOccurrenceSubscriptionUnlocked(
       bool value = false;
       bool unknown = false;
       if (!talos_rt_read_signal_bit_unlocked(context, stableID, bit, value,
-                                               unknown))
+                                             unknown))
         // Native timing coordinators can register before the root initializer
         // has imported its generated plane. Defer only that feature-local
         // snapshot to the first real publication, before its state commit.
@@ -455,9 +455,8 @@ bool appendManagedSubscriptionUnlocked(
 } // namespace
 
 extern "C" talos_rt_status
-talos_rt_v1_clocking_output_track(talos_rt_context *context,
-                                    uint64_t stableID, uint64_t bitWidth,
-                                    uint32_t edge) {
+talos_rt_v1_clocking_output_track(talos_rt_context *context, uint64_t stableID,
+                                  uint64_t bitWidth, uint32_t edge) {
   if (!context || stableID == UINT64_MAX || bitWidth == 0 ||
       !validClockingOutputEdge(edge))
     return TALOS_RT_INVALID_ARGUMENT;
@@ -499,8 +498,8 @@ talos_rt_v1_clocking_output_track(talos_rt_context *context,
 
 extern "C" uint32_t
 talos_rt_v1_clocking_output_current(talos_rt_context *context,
-                                      uint64_t stableID, uint64_t bitWidth,
-                                      uint32_t edge) {
+                                    uint64_t stableID, uint64_t bitWidth,
+                                    uint32_t edge) {
   if (!context || stableID == UINT64_MAX || bitWidth == 0 ||
       !validClockingOutputEdge(edge))
     return 0;
@@ -584,13 +583,12 @@ bool isValidArgumentRefCapture(talos_rt_context *context,
     return isStaticCoverageSignal(context, capture.payload0, abi.width);
   talos_rt_object_v1 *owner =
       talos_rt_object_from_managed_word(capture.stable_id);
-  if (!owner ||
-      talos_rt_managed_word_from_object(owner) != capture.stable_id ||
+  if (!owner || talos_rt_managed_word_from_object(owner) != capture.stable_id ||
       talos_rt_managed_object_context(owner) != context)
     return false;
   talos_rt_managed_kind_v1 expected = capture.payload1 == 1
-                                            ? TALOS_RT_MANAGED_CLASS
-                                            : TALOS_RT_MANAGED_REFERENCE_PATH;
+                                          ? TALOS_RT_MANAGED_CLASS
+                                          : TALOS_RT_MANAGED_REFERENCE_PATH;
   if (talos_rt_managed_object_kind(owner) != expected)
     return false;
   if (expected != TALOS_RT_MANAGED_CLASS)
@@ -812,11 +810,10 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_clock_event_register(
     if (!descriptor || descriptor->capture_count != captureCount ||
         descriptor->result_width != 1 || descriptor->flags != 0 ||
         captureCount == 0 ||
-        descriptor->capture_abi[0].kind !=
-            TALOS_RT_OBSERVER_CAPTURE_COVERGROUP)
+        descriptor->capture_abi[0].kind != TALOS_RT_OBSERVER_CAPTURE_COVERGROUP)
       return TALOS_RT_INVALID_DESIGN;
     if (!talos_rt_validate_computed_wait_record(execution, eventPlan,
-                                                  eventPlanSize) ||
+                                                eventPlanSize) ||
         eventPlan->clause_count > 64 || eventPlan->total_size != eventPlanSize)
       return TALOS_RT_INVALID_DESIGN;
 
@@ -855,8 +852,8 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_clock_event_register(
     if (covergroupHandle == 0)
       return TALOS_RT_INVALID_DESIGN;
     bool strobe = false;
-    talos_rt_status status = talos_rt_covergroup_strobe_unlocked(
-        context, covergroupHandle, strobe);
+    talos_rt_status status =
+        talos_rt_covergroup_strobe_unlocked(context, covergroupHandle, strobe);
     if (status != TALOS_RT_OK)
       return status;
     if (strobe != (expectedStrobe != 0))
@@ -865,9 +862,8 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_clock_event_register(
     const auto *eventObservers =
         computedWaitSpan<talos_rt_computed_observer_v1>(
             eventPlan, eventPlan->observers_offset, eventPlan->observer_count);
-    const auto *eventCaptures =
-        computedWaitSpan<talos_rt_computed_capture_v1>(
-            eventPlan, eventPlan->captures_offset, eventPlan->capture_count);
+    const auto *eventCaptures = computedWaitSpan<talos_rt_computed_capture_v1>(
+        eventPlan, eventPlan->captures_offset, eventPlan->capture_count);
     const auto *eventDependencies =
         computedWaitSpan<talos_rt_computed_dependency_v1>(
             eventPlan, eventPlan->dependencies_offset,
@@ -1215,8 +1211,8 @@ bool talos_rt_register_signal_wait_unlocked(
     bool designWaiter) {
   if (!context || !wait)
     return false;
-  talos_rt_unregister_signal_wait_unlocked(context, subscriptions,
-                                             waiterToken, designWaiter);
+  talos_rt_unregister_signal_wait_unlocked(context, subscriptions, waiterToken,
+                                           designWaiter);
   if (latch) {
     latch->triggered = false;
     latch->affected = false;
@@ -1255,23 +1251,21 @@ bool talos_rt_register_signal_wait_unlocked(
       uint32_t conditionEntry = primaryCount;
       const auto *captures =
           reinterpret_cast<const talos_rt_computed_capture_v1 *>(entries +
-                                                                   wait->count);
+                                                                 wait->count);
       uint64_t captureCursor = 0;
       for (uint32_t index = 0; index != primaryCount; ++index) {
         if ((wait->auxiliary & (uint64_t{1} << index)) == 0)
           continue;
         const talos_rt_wait_entry_v1 &condition = entries[conditionEntry++];
         ClockOccurrenceCondition &stored = state.conditions[index];
-        bool observer =
-            condition.edge >= TALOS_RT_WAIT_CONDITION_OBSERVER &&
-            condition.edge <= TALOS_RT_WAIT_CONDITION_OBSERVER_LAST;
+        bool observer = condition.edge >= TALOS_RT_WAIT_CONDITION_OBSERVER &&
+                        condition.edge <= TALOS_RT_WAIT_CONDITION_OBSERVER_LAST;
         stored.predicate =
             condition.edge == TALOS_RT_WAIT_EDGE_NONE
                 ? static_cast<uint32_t>(TALOS_RT_WAIT_CONDITION_KNOWN_ONE)
-            : observer
-                ? TALOS_RT_WAIT_CONDITION_PREDICATE +
-                      (condition.edge - TALOS_RT_WAIT_CONDITION_OBSERVER)
-                : condition.edge;
+            : observer ? TALOS_RT_WAIT_CONDITION_PREDICATE +
+                             (condition.edge - TALOS_RT_WAIT_CONDITION_OBSERVER)
+                       : condition.edge;
         if (observer) {
           if (condition.reserved > UINT64_MAX - captureCursor)
             return false;
@@ -1294,7 +1288,7 @@ bool talos_rt_register_signal_wait_unlocked(
                 entries[index].reserved, entries[index].edge, waiterToken,
                 !designWaiter, static_cast<uint8_t>(index))) {
           talos_rt_unregister_signal_wait_unlocked(context, subscriptions,
-                                                     waiterToken, designWaiter);
+                                                   waiterToken, designWaiter);
           return false;
         }
       // Cohort subscriptions live in the feature-local index above, but a
@@ -1307,11 +1301,9 @@ bool talos_rt_register_signal_wait_unlocked(
     TALOS_RT_CATCH(const std::bad_alloc &) {
       context->schedulerStatus = TALOS_RT_OUT_OF_MEMORY;
     }
-    TALOS_RT_CATCH_ALL {
-      context->schedulerStatus = TALOS_RT_INVALID_ARGUMENT;
-    }
+    TALOS_RT_CATCH_ALL { context->schedulerStatus = TALOS_RT_INVALID_ARGUMENT; }
     talos_rt_unregister_signal_wait_unlocked(context, subscriptions,
-                                               waiterToken, designWaiter);
+                                             waiterToken, designWaiter);
     return false;
   }
   if (behaviorFlags != TALOS_RT_WAIT_FLAGS_NONE) {
@@ -1353,7 +1345,7 @@ bool talos_rt_register_signal_wait_unlocked(
                              : SignalSubscription::NativeManagedWait,
                 waiterToken, suppressActiveSelf, latch.get(), subscriptions)) {
           talos_rt_unregister_signal_wait_unlocked(context, subscriptions,
-                                                     waiterToken, designWaiter);
+                                                   waiterToken, designWaiter);
           return false;
         }
         continue;
@@ -1373,7 +1365,7 @@ bool talos_rt_register_signal_wait_unlocked(
                            : SignalSubscription::NativeDirectWait,
               waiterToken, suppressActiveSelf, latch.get(), subscriptions)) {
         talos_rt_unregister_signal_wait_unlocked(context, subscriptions,
-                                                   waiterToken, designWaiter);
+                                                 waiterToken, designWaiter);
         return false;
       }
     }
@@ -1382,11 +1374,9 @@ bool talos_rt_register_signal_wait_unlocked(
   TALOS_RT_CATCH(const std::bad_alloc &) {
     context->schedulerStatus = TALOS_RT_OUT_OF_MEMORY;
   }
-  TALOS_RT_CATCH_ALL {
-    context->schedulerStatus = TALOS_RT_INVALID_ARGUMENT;
-  }
-  talos_rt_unregister_signal_wait_unlocked(context, subscriptions,
-                                             waiterToken, designWaiter);
+  TALOS_RT_CATCH_ALL { context->schedulerStatus = TALOS_RT_INVALID_ARGUMENT; }
+  talos_rt_unregister_signal_wait_unlocked(context, subscriptions, waiterToken,
+                                           designWaiter);
   return false;
 }
 
@@ -1421,9 +1411,8 @@ bool talos_rt_same_clock_occurrence_wait_unlocked(
       subscriptions->second.size() != primaryCount)
     return false;
   const talos_rt_wait_entry_v1 *entries = waitEntries(wait);
-  const auto *captures =
-      reinterpret_cast<const talos_rt_computed_capture_v1 *>(entries +
-                                                               wait->count);
+  const auto *captures = reinterpret_cast<const talos_rt_computed_capture_v1 *>(
+      entries + wait->count);
   uint64_t captureCursor = 0;
   uint32_t conditionEntry = primaryCount;
   for (uint32_t index = 0; index != primaryCount; ++index) {
@@ -1485,7 +1474,7 @@ bool talos_rt_same_clock_occurrence_wait_unlocked(
 }
 
 bool talos_rt_notify_managed_waiters_unlocked(talos_rt_context *context,
-                                                uint64_t token) {
+                                              uint64_t token) {
   if (!context || token == 0)
     return context != nullptr;
   auto found = context->managedWatchWaiters.find(token);
@@ -1545,8 +1534,8 @@ bool talos_rt_register_computed_signal_wait_unlocked(
       context->nativeSchedulePlan->specialization_fast)
     *context->nativeSchedulePlan->specialization_fast = 0;
   context->nativeScheduleGuardedFanoutActive = false;
-  talos_rt_unregister_signal_wait_unlocked(context, subscriptions,
-                                             waiterToken, designWaiter);
+  talos_rt_unregister_signal_wait_unlocked(context, subscriptions, waiterToken,
+                                           designWaiter);
   TALOS_RT_TRY {
     if (!latch)
       latch = std::make_unique<SignalWaitLatch>();
@@ -1571,7 +1560,7 @@ bool talos_rt_register_computed_signal_wait_unlocked(
                            : SignalSubscription::NativeComputedWait,
               waiterToken, false, latch.get(), subscriptions)) {
         talos_rt_unregister_signal_wait_unlocked(context, subscriptions,
-                                                   waiterToken, designWaiter);
+                                                 waiterToken, designWaiter);
         return false;
       }
     }
@@ -1596,7 +1585,7 @@ bool talos_rt_register_computed_signal_wait_unlocked(
       if (context->activeComputedObserverWaiterCount == UINT64_MAX) {
         context->schedulerStatus = TALOS_RT_OUT_OF_RESOURCES;
         talos_rt_unregister_signal_wait_unlocked(context, subscriptions,
-                                                   waiterToken, designWaiter);
+                                                 waiterToken, designWaiter);
         return false;
       }
       *computedRegistered = true;
@@ -1607,11 +1596,9 @@ bool talos_rt_register_computed_signal_wait_unlocked(
   TALOS_RT_CATCH(const std::bad_alloc &) {
     context->schedulerStatus = TALOS_RT_OUT_OF_MEMORY;
   }
-  TALOS_RT_CATCH_ALL {
-    context->schedulerStatus = TALOS_RT_INVALID_ARGUMENT;
-  }
-  talos_rt_unregister_signal_wait_unlocked(context, subscriptions,
-                                             waiterToken, designWaiter);
+  TALOS_RT_CATCH_ALL { context->schedulerStatus = TALOS_RT_INVALID_ARGUMENT; }
+  talos_rt_unregister_signal_wait_unlocked(context, subscriptions, waiterToken,
+                                           designWaiter);
   return false;
 }
 
@@ -1687,9 +1674,8 @@ bool latchConditionalSignalWaitersImpl(talos_rt_context *context,
   auto levelTrue = [&](const talos_rt_wait_entry_v1 &entry) {
     return talos_rt_level_wait_entry_true_unlocked(context, entry);
   };
-  auto consider = [&](const talos_rt_wait_record_v1 *wait,
-                      uint32_t suspendKind, uint64_t logicalToken,
-                      bool &latched) {
+  auto consider = [&](const talos_rt_wait_record_v1 *wait, uint32_t suspendKind,
+                      uint64_t logicalToken, bool &latched) {
     if (!wait || latched || wait->version != TALOS_RT_VERSION ||
         wait->kind != suspendKind)
       return;
@@ -1703,8 +1689,7 @@ bool latchConditionalSignalWaitersImpl(talos_rt_context *context,
         latched = levelTrue(entries[0]);
       return;
     }
-    uint32_t behaviorFlags =
-        wait->flags & ~TALOS_RT_WAIT_SUPPRESS_ACTIVE_SELF;
+    uint32_t behaviorFlags = wait->flags & ~TALOS_RT_WAIT_SUPPRESS_ACTIVE_SELF;
     if (behaviorFlags != TALOS_RT_WAIT_EDGE_IFF || wait->count != 2 ||
         !rangesOverlap(entries[0].stable_id, entries[0].reserved, bitOffset,
                        1) ||
@@ -1769,9 +1754,10 @@ bool talos_rt_latch_conditional_signal_waiters_unlocked(
   return context && latchConditionalSignalWaitersImpl(context, stableID, edges);
 }
 
-bool talos_rt_latch_conditional_signal_range_unlocked(
-    talos_rt_context *context, uint64_t stableID, uint64_t bitWidth,
-    uint32_t edges) {
+bool talos_rt_latch_conditional_signal_range_unlocked(talos_rt_context *context,
+                                                      uint64_t stableID,
+                                                      uint64_t bitWidth,
+                                                      uint32_t edges) {
   if (!context)
     return false;
   if (!talos_rt_has_conditional_signal_waiters(context))
@@ -1789,18 +1775,18 @@ bool talos_rt_latch_conditional_signal_range_unlocked(
 }
 
 bool talos_rt_append_signal_event_unlocked(talos_rt_context *context,
-                                             uint64_t bitOffset, bool oldValue,
-                                             bool oldUnknown, bool newValue,
-                                             bool newUnknown) {
+                                           uint64_t bitOffset, bool oldValue,
+                                           bool oldUnknown, bool newValue,
+                                           bool newUnknown) {
   return talos_rt_append_signal_event_unlocked(
       context, bitOffset, oldValue, oldUnknown, newValue, newUnknown, true);
 }
 
 bool talos_rt_append_signal_event_unlocked(talos_rt_context *context,
-                                             uint64_t bitOffset, bool oldValue,
-                                             bool oldUnknown, bool newValue,
-                                             bool newUnknown,
-                                             bool evaluateComputedObservers) {
+                                           uint64_t bitOffset, bool oldValue,
+                                           bool oldUnknown, bool newValue,
+                                           bool newUnknown,
+                                           bool evaluateComputedObservers) {
   if (!context)
     return false;
   uint32_t edges = transitionEdges(oldValue, oldUnknown, newValue, newUnknown);
@@ -1812,10 +1798,8 @@ bool talos_rt_append_signal_event_unlocked(talos_rt_context *context,
     // The AOT publisher consumes packed byte planes. A scalar transition is
     // represented by one byte per plane, with bit zero populated.
     const uint8_t changedBits = 1;
-    const uint8_t posedgeBits =
-        (edges & TALOS_RT_SIGNAL_POSEDGE) != 0 ? 1 : 0;
-    const uint8_t negedgeBits =
-        (edges & TALOS_RT_SIGNAL_NEGEDGE) != 0 ? 1 : 0;
+    const uint8_t posedgeBits = (edges & TALOS_RT_SIGNAL_POSEDGE) != 0 ? 1 : 0;
+    const uint8_t negedgeBits = (edges & TALOS_RT_SIGNAL_NEGEDGE) != 0 ? 1 : 0;
     const uint8_t oldValueBits = oldValue ? 1 : 0;
     const uint8_t oldUnknownBits = oldUnknown ? 1 : 0;
     const uint8_t newValueBits = newValue ? 1 : 0;
@@ -1833,13 +1817,13 @@ bool talos_rt_append_signal_event_unlocked(talos_rt_context *context,
       talos_rt_coverage_record_transition_unlocked(
           context, bitOffset, 1, &changedBits, &newValueBits, &newUnknownBits);
     if (!talos_rt_publish_signal_occurrence_unlocked(context, bitOffset, 1,
-                                                       edges, &sequence))
+                                                     edges, &sequence))
       return false;
   }
   if (talos_rt_has_conditional_signal_waiters(context))
     context->signalValueSnapshots[bitOffset] = {sequence, newValue, newUnknown};
   if (!talos_rt_latch_conditional_signal_waiters_unlocked(context, bitOffset,
-                                                            edges))
+                                                          edges))
     return false;
   if (evaluateComputedObservers &&
       !talos_rt_notify_observer_signal_unlocked(context, bitOffset, 1))

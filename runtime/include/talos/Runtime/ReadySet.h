@@ -235,9 +235,9 @@ private:
       updateSummaryWords(storage, layout, child, nonempty);
   }
   static TALOS_READYSET_NOINLINE void updateSummaryWords(uint64_t *storage,
-                                                           const Layout &layout,
-                                                           uint32_t child,
-                                                           bool nonempty) {
+                                                         const Layout &layout,
+                                                         uint32_t child,
+                                                         bool nonempty) {
     for (unsigned level = 1; level < layout.levels; ++level) {
       uint32_t index = child / 64;
       uint64_t mask = uint64_t{1} << (child & 63);

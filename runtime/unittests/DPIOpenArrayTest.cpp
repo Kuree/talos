@@ -1,7 +1,7 @@
 //===- DPIOpenArrayTest.cpp - DPI open-array C layer tests ----------------===//
 
-#include "talos/Runtime/Runtime.h"
 #include "svdpi.h"
+#include "talos/Runtime/Runtime.h"
 
 #include "../lib/RuntimeInternal.h"
 
@@ -76,7 +76,7 @@ TEST_F(DPIOpenArrayManagedTest,
        RecursiveFinishImportsCanonicalWritesIntoDynamicArray) {
   const talos_rt_element_type_v1 elementType{
       TALOS_RT_VERSION, TALOS_RT_ELEMENT_BITS, 91, 0,       0,
-      sizeof(uint8_t),    alignof(uint8_t),        8,  nullptr, nullptr};
+      sizeof(uint8_t),  alignof(uint8_t),      8,  nullptr, nullptr};
   talos_rt_object_v1 *array = nullptr;
   ASSERT_EQ(talos_rt_v1_dynamic_array_create(lane, &elementType, 2, &array),
             TALOS_RT_OK);
@@ -92,8 +92,7 @@ TEST_F(DPIOpenArrayManagedTest,
   const std::array<int64_t, 8> shapePlan{1, 0, -1, 0, 0, 8, 0, 0};
   const std::array<int64_t, 8> elementPlan{0, 0, 0, 6, 8, 0, 0, 0};
   talos_rt_managed_word_v1 transport =
-      static_cast<talos_rt_managed_word_v1>(
-          reinterpret_cast<uintptr_t>(array));
+      static_cast<talos_rt_managed_word_v1>(reinterpret_cast<uintptr_t>(array));
   talos_rt_dpi_open_array_storage_v1 storage{};
   ASSERT_EQ(talos_rt_v1_dpi_open_array_prepare_recursive(
                 &transport, nullptr, sizeof(transport), 64, 0, 1, 6, 8, 0, 7, 0,
@@ -176,8 +175,7 @@ TEST(DPIOpenArray, PackedBitVectorCopiesAndMasksTail) {
   talos_rt_dpi_dimension_v1 range{4, 5, sizeof(svBitVecVal) * 2, 0, 0};
   auto array = makeArray(
       values.data(), sizeof(values), &range, 1, sizeof(svBitVecVal) * 2, 33,
-      TALOS_RT_DPI_OPEN_ARRAY_PACKED | TALOS_RT_DPI_OPEN_ARRAY_WRITABLE, 32,
-      0);
+      TALOS_RT_DPI_OPEN_ARRAY_PACKED | TALOS_RT_DPI_OPEN_ARRAY_WRITABLE, 32, 0);
   svOpenArrayHandle handle = &array;
 
   EXPECT_EQ(svLeft(handle, 0), 32);
@@ -213,10 +211,9 @@ TEST(DPIOpenArray, FourStateVectorsAndScalarUtilitiesRoundTrip) {
 
   std::array<svLogic, 2> scalars{sv_x, sv_0};
   talos_rt_dpi_dimension_v1 scalarRange{0, 1, sizeof(svLogic), 0, 0};
-  auto scalarArray = makeArray(scalars.data(), sizeof(scalars), &scalarRange, 1,
-                               sizeof(svLogic), 1,
-                               TALOS_RT_DPI_OPEN_ARRAY_FOUR_STATE |
-                                   TALOS_RT_DPI_OPEN_ARRAY_WRITABLE);
+  auto scalarArray = makeArray(
+      scalars.data(), sizeof(scalars), &scalarRange, 1, sizeof(svLogic), 1,
+      TALOS_RT_DPI_OPEN_ARRAY_FOUR_STATE | TALOS_RT_DPI_OPEN_ARRAY_WRITABLE);
   EXPECT_EQ(svGetLogicArrElem1(&scalarArray, 0), sv_x);
   svPutLogicArrElem(&scalarArray, sv_z, 1);
   EXPECT_EQ(scalars[1], sv_z);

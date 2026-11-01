@@ -60,7 +60,7 @@ copyBits(uint8_t *destination, uint64_t destinationOffset,
 }
 
 TALOS_RT_FEATURE_HELPER bool checkedRange(const void *pointer, uint64_t size,
-                                            uintptr_t &begin, uintptr_t &end) {
+                                          uintptr_t &begin, uintptr_t &end) {
   if (!pointer || size > UINTPTR_MAX)
     return false;
   begin = reinterpret_cast<uintptr_t>(pointer);
@@ -71,8 +71,8 @@ TALOS_RT_FEATURE_HELPER bool checkedRange(const void *pointer, uint64_t size,
 }
 
 TALOS_RT_FEATURE_HELPER bool overlaps(uintptr_t leftBegin, uintptr_t leftEnd,
-                                        uintptr_t rightBegin,
-                                        uintptr_t rightEnd) {
+                                      uintptr_t rightBegin,
+                                      uintptr_t rightEnd) {
   return leftBegin < rightEnd && rightBegin < leftEnd;
 }
 
@@ -96,8 +96,8 @@ struct BufferRequest {
 };
 
 TALOS_RT_FEATURE_HELPER talos_rt_status packBuffer(void *opaque,
-                                                       uint8_t *buffer,
-                                                       uint64_t extent) {
+                                                   uint8_t *buffer,
+                                                   uint64_t extent) {
   auto *environment = static_cast<BufferRequest *>(opaque);
   ContainerHeader &header = *environment->header;
   ExportRequest &request = *environment->request;
@@ -133,8 +133,8 @@ struct AssocBufferRequest {
 };
 
 TALOS_RT_FEATURE_HELPER talos_rt_status packAssocBuffer(void *opaque,
-                                                            uint8_t *buffer,
-                                                            uint64_t extent) {
+                                                        uint8_t *buffer,
+                                                        uint64_t extent) {
   auto *environment = static_cast<AssocBufferRequest *>(opaque);
   ContainerHeader &header = *environment->header;
   ExportRequest &request = *environment->request;
@@ -172,8 +172,8 @@ struct AssocOrderRequest {
 };
 
 TALOS_RT_FEATURE_HELPER talos_rt_status packAssocOrder(void *opaque,
-                                                           uint8_t *buffer,
-                                                           uint64_t extent) {
+                                                       uint8_t *buffer,
+                                                       uint64_t extent) {
   auto *environment = static_cast<AssocOrderRequest *>(opaque);
   if (extent < sizeof(BufferHeader) ||
       reinterpret_cast<BufferHeader *>(buffer)->reserved != 0 ||
@@ -185,13 +185,13 @@ TALOS_RT_FEATURE_HELPER talos_rt_status packAssocOrder(void *opaque,
   AssocBufferRequest request{environment->header, environment->request,
                              indices};
   return talos_rt_managed_object_access(environment->header->buffer,
-                                          TALOS_RT_MANAGED_BUFFER,
-                                          packAssocBuffer, &request);
+                                        TALOS_RT_MANAGED_BUFFER,
+                                        packAssocBuffer, &request);
 }
 
 TALOS_RT_FEATURE_HELPER talos_rt_status packContainer(void *opaque,
-                                                          uint8_t *object,
-                                                          uint64_t extent) {
+                                                      uint8_t *object,
+                                                      uint64_t extent) {
   if (extent != sizeof(ContainerHeader))
     return TALOS_RT_INVALID_HANDLE;
   auto *header = reinterpret_cast<ContainerHeader *>(object);
@@ -199,8 +199,8 @@ TALOS_RT_FEATURE_HELPER talos_rt_status packContainer(void *opaque,
   bool sequential = header->kind == TALOS_RT_CONTAINER_DYNAMIC_ARRAY ||
                     header->kind == TALOS_RT_CONTAINER_QUEUE;
   bool associative = header->kind == TALOS_RT_CONTAINER_ASSOCIATIVE_ARRAY;
-  bool fourState = header->element && (header->element->flags &
-                                       TALOS_RT_ELEMENT_FOUR_STATE) != 0;
+  bool fourState = header->element &&
+                   (header->element->flags & TALOS_RT_ELEMENT_FOUR_STATE) != 0;
   if ((!sequential && !associative) || !header->element ||
       (header->element->kind != TALOS_RT_ELEMENT_BITS &&
        header->element->kind != TALOS_RT_ELEMENT_LOGIC) ||
@@ -212,8 +212,7 @@ TALOS_RT_FEATURE_HELPER talos_rt_status packContainer(void *opaque,
       fourState != (request->elementFourState != 0) ||
       (sequential ? header->size < request->count
                   : header->size != request->count) ||
-      header->size > header->capacity ||
-      !header->buffer ||
+      header->size > header->capacity || !header->buffer ||
       (header->kind == TALOS_RT_CONTAINER_QUEUE &&
        (header->capacity == 0 ||
         (header->capacity & (header->capacity - 1)) != 0 ||
@@ -226,24 +225,24 @@ TALOS_RT_FEATURE_HELPER talos_rt_status packContainer(void *opaque,
       return assocOrderRequired;
     AssocOrderRequest orderRequest{header, request};
     return talos_rt_managed_object_access(header->ordered,
-                                            TALOS_RT_MANAGED_BUFFER,
-                                            packAssocOrder, &orderRequest);
+                                          TALOS_RT_MANAGED_BUFFER,
+                                          packAssocOrder, &orderRequest);
   }
   BufferRequest bufferRequest{header, request};
-  return talos_rt_managed_object_access(
-      header->buffer, TALOS_RT_MANAGED_BUFFER, packBuffer, &bufferRequest);
+  return talos_rt_managed_object_access(header->buffer, TALOS_RT_MANAGED_BUFFER,
+                                        packBuffer, &bufferRequest);
 }
 
 } // namespace
 
 extern "C" TALOS_RT_FEATURE_TEXT talos_rt_status
 talos_rt_v1_container_export_bitstream(talos_rt_object_v1 *container,
-                                         void *outValue, void *outUnknown,
-                                         uint64_t planeSize, uint64_t bitWidth,
-                                         uint32_t fourState,
-                                         uint64_t elementWidth, uint64_t count,
-                                         uint64_t elementPlaneSize,
-                                         uint32_t elementFourState) {
+                                       void *outValue, void *outUnknown,
+                                       uint64_t planeSize, uint64_t bitWidth,
+                                       uint32_t fourState,
+                                       uint64_t elementWidth, uint64_t count,
+                                       uint64_t elementPlaneSize,
+                                       uint32_t elementFourState) {
   if (!container || !outValue || planeSize == 0 || bitWidth == 0 ||
       planeSize < bitWidth / 8 + ((bitWidth & 7) != 0) || fourState > 1 ||
       (fourState && !outUnknown) || elementWidth == 0 ||
@@ -268,8 +267,8 @@ talos_rt_v1_container_export_bitstream(talos_rt_object_v1 *container,
   status = ensureAssocOrderedWithoutSafepoint(lane, container);
   if (status != TALOS_RT_OK)
     return status;
-  status = talos_rt_managed_object_access(
-      container, TALOS_RT_MANAGED_CONTAINER, packContainer, &request);
+  status = talos_rt_managed_object_access(container, TALOS_RT_MANAGED_CONTAINER,
+                                          packContainer, &request);
   return status == assocOrderRequired ? TALOS_RT_INVALID_HANDLE : status;
 }
 
@@ -437,9 +436,7 @@ struct RecursiveObjectSet {
         TALOS_RT_RETHROW;
       }
     }
-    TALOS_RT_CATCH(const std::bad_alloc &) {
-      return TALOS_RT_OUT_OF_MEMORY;
-    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
     return TALOS_RT_OK;
   }
 
@@ -556,11 +553,9 @@ struct RecursiveContainerLease {
   TALOS_RT_RECURSIVE_BITSTREAM_HELPER ~RecursiveContainerLease() = default;
 };
 
-TALOS_RT_RECURSIVE_BITSTREAM_HELPER talos_rt_status
-acquireRecursiveContainer(RecursiveExport &request,
-                          talos_rt_object_v1 *container,
-                          const RecursiveRecord &record,
-                          RecursiveContainerLease &lease) {
+TALOS_RT_RECURSIVE_BITSTREAM_HELPER talos_rt_status acquireRecursiveContainer(
+    RecursiveExport &request, talos_rt_object_v1 *container,
+    const RecursiveRecord &record, RecursiveContainerLease &lease) {
   lease.record = record;
   if (!container)
     return TALOS_RT_OK;
@@ -602,8 +597,7 @@ acquireRecursiveContainer(RecursiveExport &request,
   lease.capacity = header->capacity;
   lease.head = header->head;
   lease.planeSize = header->element->value_size;
-  lease.fourState =
-      (header->element->flags & TALOS_RT_ELEMENT_FOUR_STATE) != 0;
+  lease.fourState = (header->element->flags & TALOS_RT_ELEMENT_FOUR_STATE) != 0;
   lease.physicalAssociative =
       associative && request.collectAssociative && !header->ordered;
   if (lease.physicalAssociative)
@@ -691,9 +685,7 @@ struct RecursiveFrameStack {
         return TALOS_RT_OUT_OF_RESOURCES;
       std::vector<Entry> replacement;
       TALOS_RT_TRY { replacement.resize(newSize); }
-      TALOS_RT_CATCH(const std::bad_alloc &) {
-        return TALOS_RT_OUT_OF_MEMORY;
-      }
+      TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
       for (const Entry &entry : overflow) {
         if (!entry.object)
           continue;
@@ -744,8 +736,7 @@ struct RecursiveFrameStack {
       return TALOS_RT_OK;
     }
 
-    TALOS_RT_RECURSIVE_BITSTREAM_HELPER void
-    erase(talos_rt_object_v1 *object) {
+    TALOS_RT_RECURSIVE_BITSTREAM_HELPER void erase(talos_rt_object_v1 *object) {
       if (!object)
         return;
       if (!overflow.empty()) {
@@ -779,9 +770,9 @@ struct RecursiveFrameStack {
 
   TALOS_RT_RECURSIVE_BITSTREAM_HELPER talos_rt_status
   push(RecursiveWalkFrame frame) {
-    talos_rt_object_v1 *container =
-        frame.kind == RecursiveWalkFrame::Container ? frame.container.object
-                                                    : nullptr;
+    talos_rt_object_v1 *container = frame.kind == RecursiveWalkFrame::Container
+                                        ? frame.container.object
+                                        : nullptr;
     talos_rt_status status = activeContainers.insert(container);
     if (status != TALOS_RT_OK)
       return status;
@@ -800,9 +791,9 @@ struct RecursiveFrameStack {
     return overflow.empty() ? inlineFrames[inlineSize - 1] : overflow.back();
   }
   TALOS_RT_RECURSIVE_BITSTREAM_HELPER void pop() {
-    talos_rt_object_v1 *container =
-        top().kind == RecursiveWalkFrame::Container ? top().container.object
-                                                    : nullptr;
+    talos_rt_object_v1 *container = top().kind == RecursiveWalkFrame::Container
+                                        ? top().container.object
+                                        : nullptr;
     if (!overflow.empty()) {
       overflow.pop_back();
     } else {
@@ -935,9 +926,8 @@ walkRecursiveBody(RecursiveExport &request, uint64_t begin, uint64_t end,
           talos_rt_object_from_managed_word(string);
       if (string != 0 && stringObject) {
         ManagedObjectLease stringLease;
-        status = talos_rt_managed_object_acquire(request.lane, stringObject,
-                                                   TALOS_RT_MANAGED_STRING,
-                                                   &stringLease);
+        status = talos_rt_managed_object_acquire(
+            request.lane, stringObject, TALOS_RT_MANAGED_STRING, &stringLease);
         if (status != TALOS_RT_OK)
           return status;
       } else {
@@ -1009,8 +999,7 @@ struct RecursiveWatchGroupStateImpl final : RecursiveWatchGroupState {
   std::unordered_map<uint64_t, std::vector<uint64_t>> byToken;
   uint64_t next = 1;
 
-  TALOS_RT_RECURSIVE_BITSTREAM_HELPER ~RecursiveWatchGroupStateImpl() =
-      default;
+  TALOS_RT_RECURSIVE_BITSTREAM_HELPER ~RecursiveWatchGroupStateImpl() = default;
 
   static TALOS_RT_RECURSIVE_BITSTREAM_HELPER void
   destroyState(RecursiveWatchGroupState *state) noexcept {
@@ -1020,10 +1009,9 @@ struct RecursiveWatchGroupStateImpl final : RecursiveWatchGroupState {
   RecursiveWatchGroupStateImpl() { destroy = destroyState; }
 };
 
-TALOS_RT_RECURSIVE_BITSTREAM_HELPER talos_rt_status
-createRecursiveWatchGroup(talos_rt_context *context,
-                          const RecursiveObjectSet &containers,
-                          uint64_t &outToken) {
+TALOS_RT_RECURSIVE_BITSTREAM_HELPER talos_rt_status createRecursiveWatchGroup(
+    talos_rt_context *context, const RecursiveObjectSet &containers,
+    uint64_t &outToken) {
   outToken = 0;
   if (containers.empty())
     return TALOS_RT_OK;
@@ -1031,15 +1019,14 @@ createRecursiveWatchGroup(talos_rt_context *context,
   TALOS_RT_TRY {
     members.reserve(containers.size());
     talos_rt_status status = containers.visit(
-        [&](talos_rt_object_v1 *container)
-            TALOS_RT_RECURSIVE_BITSTREAM_HELPER {
-              uint64_t token = talos_rt_v1_managed_watch(
-                  container, TALOS_RT_MANAGED_WATCH_CONTAINER_SIZE, 0);
-              if (token == 0)
-                return TALOS_RT_INVALID_HANDLE;
-              members.push_back(token);
-              return TALOS_RT_OK;
-            });
+        [&](talos_rt_object_v1 *container) TALOS_RT_RECURSIVE_BITSTREAM_HELPER {
+          uint64_t token = talos_rt_v1_managed_watch(
+              container, TALOS_RT_MANAGED_WATCH_CONTAINER_SIZE, 0);
+          if (token == 0)
+            return TALOS_RT_INVALID_HANDLE;
+          members.push_back(token);
+          return TALOS_RT_OK;
+        });
     if (status != TALOS_RT_OK)
       return status;
     std::lock_guard<std::recursive_mutex> lock(context->mutex);
@@ -1075,10 +1062,9 @@ discardRecursiveWatchGroup(talos_rt_context *context, uint64_t token) {
 } // namespace
 
 TALOS_RT_RECURSIVE_BITSTREAM_TEXT bool
-talos_rt_expand_recursive_watch_group(talos_rt_context *context,
-                                        uint64_t token,
-                                        RecursiveWatchGroupVisit visit,
-                                        void *environment) {
+talos_rt_expand_recursive_watch_group(talos_rt_context *context, uint64_t token,
+                                      RecursiveWatchGroupVisit visit,
+                                      void *environment) {
   if (!context || (token & kRecursiveWatchGroupBit) == 0 || !visit)
     return false;
   std::lock_guard<std::recursive_mutex> lock(context->mutex);
@@ -1102,11 +1088,11 @@ talos_rt_v1_recursive_bitstream_link_anchor() {}
 
 extern "C" TALOS_RT_RECURSIVE_BITSTREAM_TEXT talos_rt_status
 talos_rt_v1_recursive_export_bitstream(
-    talos_rt_context *context, const void *inputValue,
-    const void *inputUnknown, uint64_t inputPlaneSize, uint64_t inputBitWidth,
-    uint32_t inputFourState, void *outValue, void *outUnknown,
-    uint64_t outputPlaneSize, uint64_t outputBitWidth, uint32_t outputFourState,
-    const void *plan, uint64_t planSize, uint32_t observe, uint32_t *outMatched,
+    talos_rt_context *context, const void *inputValue, const void *inputUnknown,
+    uint64_t inputPlaneSize, uint64_t inputBitWidth, uint32_t inputFourState,
+    void *outValue, void *outUnknown, uint64_t outputPlaneSize,
+    uint64_t outputBitWidth, uint32_t outputFourState, const void *plan,
+    uint64_t planSize, uint32_t observe, uint32_t *outMatched,
     uint64_t *outWatch) {
   constexpr uint64_t headerSize =
       TALOS_RT_RECURSIVE_BITSTREAM_PLAN_HEADER_WORDS * 8;
@@ -1141,13 +1127,12 @@ talos_rt_v1_recursive_export_bitstream(
       !checkedRange(outWatch, sizeof(*outWatch), watchBegin, watchEnd))
     return TALOS_RT_INVALID_ARGUMENT;
   auto outputOverlapsInput =
-      [&](uintptr_t begin, uintptr_t end)
-          TALOS_RT_RECURSIVE_BITSTREAM_HELPER {
-            return overlaps(begin, end, inputValueBegin, inputValueEnd) ||
-                   (inputFourState &&
-                    overlaps(begin, end, inputUnknownBegin, inputUnknownEnd)) ||
-                   overlaps(begin, end, planBegin, planEnd);
-          };
+      [&](uintptr_t begin, uintptr_t end) TALOS_RT_RECURSIVE_BITSTREAM_HELPER {
+        return overlaps(begin, end, inputValueBegin, inputValueEnd) ||
+               (inputFourState &&
+                overlaps(begin, end, inputUnknownBegin, inputUnknownEnd)) ||
+               overlaps(begin, end, planBegin, planEnd);
+      };
   if (outputOverlapsInput(outputValueBegin, outputValueEnd) ||
       outputOverlapsInput(matchedBegin, matchedEnd) ||
       outputOverlapsInput(watchBegin, watchEnd) ||
@@ -1282,11 +1267,11 @@ talos_rt_v1_recursive_export_bitstream(
 // Mach-O; its weak fallback must not capture native calls to the public one.
 TALOS_RT_RECURSIVE_BITSTREAM_TEXT talos_rt_status
 talos_rt_recursive_export_bitstream_service(
-    talos_rt_context *context, const void *inputValue,
-    const void *inputUnknown, uint64_t inputPlaneSize, uint64_t inputBitWidth,
-    uint32_t inputFourState, void *outValue, void *outUnknown,
-    uint64_t outputPlaneSize, uint64_t outputBitWidth, uint32_t outputFourState,
-    const void *plan, uint64_t planSize, uint32_t observe, uint32_t *outMatched,
+    talos_rt_context *context, const void *inputValue, const void *inputUnknown,
+    uint64_t inputPlaneSize, uint64_t inputBitWidth, uint32_t inputFourState,
+    void *outValue, void *outUnknown, uint64_t outputPlaneSize,
+    uint64_t outputBitWidth, uint32_t outputFourState, const void *plan,
+    uint64_t planSize, uint32_t observe, uint32_t *outMatched,
     uint64_t *outWatch) {
   return talos_rt_v1_recursive_export_bitstream(
       context, inputValue, inputUnknown, inputPlaneSize, inputBitWidth,
@@ -1319,7 +1304,7 @@ struct PlanRecord {
 };
 
 TALOS_RT_FEATURE_HELPER PlanRecord readRecord(const uint8_t *records,
-                                                uint64_t index) {
+                                              uint64_t index) {
   const uint8_t *record = records + index * 48;
   uint64_t operation = readPlan64(record);
   return {

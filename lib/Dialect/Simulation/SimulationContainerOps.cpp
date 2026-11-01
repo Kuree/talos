@@ -364,8 +364,7 @@ getFixedBitStreamPlanImpl(Type type, bool importing, bool provenanceLayout) {
   if (!isa<UnpackedArrayType, UnpackedStructType>(type))
     return std::nullopt;
 
-  constexpr unsigned maximumDepth =
-      TALOS_RT_AGGREGATE_BITSTREAM_PLAN_MAX_DEPTH;
+  constexpr unsigned maximumDepth = TALOS_RT_AGGREGATE_BITSTREAM_PLAN_MAX_DEPTH;
   constexpr uint64_t maximumRecords =
       TALOS_RT_AGGREGATE_BITSTREAM_PLAN_MAX_RECORDS;
   SmallVector<uint64_t> records;
@@ -900,69 +899,69 @@ bool getManagedHandleSlots(Type type,
     return std::nullopt;
   };
 
-  std::function<bool(Type, uint64_t, bool)> collect =
-      [&](Type nestedType, uint64_t baseOffset, bool conditional) {
-        if (std::optional<uint32_t> kind = leafKind(nestedType)) {
-          slots.push_back(
-              {baseOffset, *kind, conditional,
-               isa<MailboxType>(nestedType)     ? ManagedBuiltinKind::Mailbox
-               : isa<SemaphoreType>(nestedType) ? ManagedBuiltinKind::Semaphore
-                                                : ManagedBuiltinKind::None});
-          return true;
-        }
-        if (!isAggregateType(nestedType))
-          return true;
-        bool overlapping = isa<PackedUnionType>(nestedType);
-        if (auto unpacked = dyn_cast<UnpackedUnionType>(nestedType))
-          overlapping = !unpacked.getIsTagged();
-        unsigned count = getAggregateNumElements(nestedType);
-        bool prefixLayout =
-            !getStorageLayout(nestedType) &&
-            (isa<UnpackedStructType>(nestedType) ||
-             (isa<UnpackedUnionType>(nestedType) && !overlapping));
-        uint64_t nextOffset = 0;
-        auto collectElement = [&](unsigned index) {
-          Type element = getAggregateElementType(nestedType, index);
-          std::optional<std::pair<uint64_t, uint64_t>> child;
-          if (prefixLayout) {
-            auto span = getElementStorageSpan(element);
-            auto alignment = getProvenanceAlignment(element);
-            if (!span || !alignment || !*alignment ||
-                nextOffset > UINT64_MAX - (*alignment - 1))
-              return false;
-            uint64_t offset = llvm::alignTo(nextOffset, *alignment);
-            if (*span > UINT64_MAX - offset)
-              return false;
-            nextOffset = offset + *span;
-            child = std::pair<uint64_t, uint64_t>{offset, *span};
-          } else {
-            child = getAggregateProvenanceSubelement(nestedType, index);
-          }
-          if (!child ||
-              child->first > std::numeric_limits<uint64_t>::max() - baseOffset)
-            return false;
-          return collect(element, baseOffset + child->first,
-                         conditional || overlapping);
-        };
-        unsigned first = 0;
-        if (count && isa<PackedArrayType, UnpackedArrayType>(nestedType)) {
-          size_t before = slots.size();
-          if (!collectElement(0))
-            return false;
-          // Every array element has the same type. If the first has no
-          // managed roots, neither do the remaining elements: do not walk
-          // millions of RAM words to rediscover an empty trace layout.
-          // Check the other endpoint as well so the monotonic element offsets
-          // (including nested offsets) retain their overflow validation.
-          if (slots.size() == before)
-            return count == 1 || collectElement(count - 1);
-          first = 1;
-        }
-        for (unsigned index = first; index < count; ++index)
-          if (!collectElement(index))
-            return false;
-        return true;
-      };
+  std::function<bool(Type, uint64_t, bool)> collect = [&](Type nestedType,
+                                                          uint64_t baseOffset,
+                                                          bool conditional) {
+    if (std::optional<uint32_t> kind = leafKind(nestedType)) {
+      slots.push_back(
+          {baseOffset, *kind, conditional,
+           isa<MailboxType>(nestedType)     ? ManagedBuiltinKind::Mailbox
+           : isa<SemaphoreType>(nestedType) ? ManagedBuiltinKind::Semaphore
+                                            : ManagedBuiltinKind::None});
+      return true;
+    }
+    if (!isAggregateType(nestedType))
+      return true;
+    bool overlapping = isa<PackedUnionType>(nestedType);
+    if (auto unpacked = dyn_cast<UnpackedUnionType>(nestedType))
+      overlapping = !unpacked.getIsTagged();
+    unsigned count = getAggregateNumElements(nestedType);
+    bool prefixLayout = !getStorageLayout(nestedType) &&
+                        (isa<UnpackedStructType>(nestedType) ||
+                         (isa<UnpackedUnionType>(nestedType) && !overlapping));
+    uint64_t nextOffset = 0;
+    auto collectElement = [&](unsigned index) {
+      Type element = getAggregateElementType(nestedType, index);
+      std::optional<std::pair<uint64_t, uint64_t>> child;
+      if (prefixLayout) {
+        auto span = getElementStorageSpan(element);
+        auto alignment = getProvenanceAlignment(element);
+        if (!span || !alignment || !*alignment ||
+            nextOffset > UINT64_MAX - (*alignment - 1))
+          return false;
+        uint64_t offset = llvm::alignTo(nextOffset, *alignment);
+        if (*span > UINT64_MAX - offset)
+          return false;
+        nextOffset = offset + *span;
+        child = std::pair<uint64_t, uint64_t>{offset, *span};
+      } else {
+        child = getAggregateProvenanceSubelement(nestedType, index);
+      }
+      if (!child ||
+          child->first > std::numeric_limits<uint64_t>::max() - baseOffset)
+        return false;
+      return collect(element, baseOffset + child->first,
+                     conditional || overlapping);
+    };
+    unsigned first = 0;
+    if (count && isa<PackedArrayType, UnpackedArrayType>(nestedType)) {
+      size_t before = slots.size();
+      if (!collectElement(0))
+        return false;
+      // Every array element has the same type. If the first has no
+      // managed roots, neither do the remaining elements: do not walk
+      // millions of RAM words to rediscover an empty trace layout.
+      // Check the other endpoint as well so the monotonic element offsets
+      // (including nested offsets) retain their overflow validation.
+      if (slots.size() == before)
+        return count == 1 || collectElement(count - 1);
+      first = 1;
+    }
+    for (unsigned index = first; index < count; ++index)
+      if (!collectElement(index))
+        return false;
+    return true;
+  };
   size_t originalSize = slots.size();
   if (!collect(type, 0, false)) {
     slots.resize(originalSize);
@@ -1296,10 +1295,9 @@ std::optional<SmallVector<uint64_t>> getAssocKeyPlan(Type type) {
           element ? getElementDescriptor(element) : std::nullopt;
       if (!descriptor)
         return false;
-      uint64_t index =
-          record(associative ? TALOS_RT_ASSOC_KEY_PLAN_ASSOCIATIVE
-                             : TALOS_RT_ASSOC_KEY_PLAN_SEQUENCE,
-                 offset, descriptor->valueSize);
+      uint64_t index = record(associative ? TALOS_RT_ASSOC_KEY_PLAN_ASSOCIATIVE
+                                          : TALOS_RT_ASSOC_KEY_PLAN_SEQUENCE,
+                              offset, descriptor->valueSize);
       if (!append(element, 0, depth + 1))
         return false;
       closeBody(index);
@@ -1438,8 +1436,8 @@ static LogicalResult verifyRealRank(Operation *op, Type real, Type rank) {
   auto integer = dyn_cast<IntegerType>(rank);
   if (!floating || (!floating.isF32() && !floating.isF64()))
     return op->emitOpError("requires IEEE binary32 or binary64");
-  unsigned width = floating.isF32() ? TALOS_RT_REAL32_RANK_BITS
-                                    : TALOS_RT_REAL64_RANK_BITS;
+  unsigned width =
+      floating.isF32() ? TALOS_RT_REAL32_RANK_BITS : TALOS_RT_REAL64_RANK_BITS;
   if (!integer || !integer.isSignless() || integer.getWidth() != width)
     return op->emitOpError()
            << "requires a " << width << "-bit signed numeric coordinate";

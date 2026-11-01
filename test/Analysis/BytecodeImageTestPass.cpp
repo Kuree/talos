@@ -78,8 +78,9 @@ public:
       return signalPassFailure();
     }
     ArrayRef<int8_t> signedImage = attr.asArrayRef();
-    ArrayRef<uint8_t> image(reinterpret_cast<const uint8_t *>(signedImage.data()),
-                            signedImage.size());
+    ArrayRef<uint8_t> image(
+        reinterpret_cast<const uint8_t *>(signedImage.data()),
+        signedImage.size());
     if (image.size() < TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE ||
         StringRef(reinterpret_cast<const char *>(image.data()), 8) !=
             StringRef(TALOS_RT_DESIGN_BYTECODE_MAGIC, 8)) {
@@ -111,7 +112,8 @@ private:
         } else {
           os << "capture";
         }
-        os << " flags=" << flags << " value=" << reader.read<uint64_t>(record + 8)
+        os << " flags=" << flags
+           << " value=" << reader.read<uint64_t>(record + 8)
            << " target=" << reader.read<uint64_t>(record + 16)
            << " width=" << reader.read<uint64_t>(record + 24);
         if (kind == 0xFFFFFFFFu) {
@@ -126,7 +128,8 @@ private:
     }
 
     uint64_t codeOffset = reader.header(offsetof(Header, code_offset));
-    uint64_t instructionCount = reader.header(offsetof(Header, instruction_count));
+    uint64_t instructionCount =
+        reader.header(offsetof(Header, instruction_count));
     if (!reader.fits(codeOffset, instructionCount,
                      TALOS_RT_DESIGN_BYTECODE_INSTRUCTION_SIZE))
       return failure();
@@ -152,7 +155,8 @@ private:
     };
 
     if (metadata) {
-      uint64_t functionOffset = reader.header(offsetof(Header, function_offset));
+      uint64_t functionOffset =
+          reader.header(offsetof(Header, function_offset));
       uint64_t functionCount = reader.header(offsetof(Header, function_count));
       uint64_t layoutOffset = reader.header(offsetof(Header, layout_offset));
       uint64_t layoutCount = reader.header(offsetof(Header, layout_count));
@@ -217,7 +221,8 @@ private:
          << " reserved=" << reader.read<uint32_t>(record + 20) << '\n';
     }
 
-    uint64_t intrinsicOffset = reader.header(offsetof(Header, intrinsic_offset));
+    uint64_t intrinsicOffset =
+        reader.header(offsetof(Header, intrinsic_offset));
     uint64_t intrinsicCount = reader.header(offsetof(Header, intrinsic_count));
     if (!reader.fits(intrinsicOffset, intrinsicCount, 16))
       return failure();
@@ -226,8 +231,8 @@ private:
     };
     for (uint64_t index = 0; index < intrinsicCount; ++index) {
       uint64_t record = intrinsicOffset + index * 16;
-      os << "intrinsic " << index << ": id="
-         << llvm::format_hex(intrinsicId(index), 10)
+      os << "intrinsic " << index
+         << ": id=" << llvm::format_hex(intrinsicId(index), 10)
          << " inputs=" << reader.read<uint32_t>(record + 4)
          << " outputs=" << reader.read<uint32_t>(record + 8)
          << " flags=" << reader.read<uint32_t>(record + 12) << '\n';

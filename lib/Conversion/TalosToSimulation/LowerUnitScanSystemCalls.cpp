@@ -498,28 +498,28 @@ UnitLowering::lowerScanSystemCall(semantic::SVCallExpressionOp op) {
         return success();
       };
       if (string || packed) {
-        if (failed(addConversion(TALOS_RT_SCAN_DYNAMIC_TEXT, kTextRadix,
-                                 false, false)) ||
+        if (failed(addConversion(TALOS_RT_SCAN_DYNAMIC_TEXT, kTextRadix, false,
+                                 false)) ||
             failed(addConversion(TALOS_RT_SCAN_DYNAMIC_HIERARCHY, kTextRadix,
                                  true, false)))
           return failure();
       }
       if (real || packed) {
-        if (failed(addConversion(TALOS_RT_SCAN_DYNAMIC_REAL, kRealRadix,
-                                 false, false)) ||
-            failed(addConversion(TALOS_RT_SCAN_DYNAMIC_TIME, kRealRadix,
-                                 false, true)))
+        if (failed(addConversion(TALOS_RT_SCAN_DYNAMIC_REAL, kRealRadix, false,
+                                 false)) ||
+            failed(addConversion(TALOS_RT_SCAN_DYNAMIC_TIME, kRealRadix, false,
+                                 true)))
           return failure();
       }
       if (packed) {
-        if (failed(addConversion(TALOS_RT_SCAN_DYNAMIC_LOGIC2, 2, false,
-                                 false)) ||
-            failed(addConversion(TALOS_RT_SCAN_DYNAMIC_LOGIC8, 8, false,
-                                 false)) ||
+        if (failed(
+                addConversion(TALOS_RT_SCAN_DYNAMIC_LOGIC2, 2, false, false)) ||
+            failed(
+                addConversion(TALOS_RT_SCAN_DYNAMIC_LOGIC8, 8, false, false)) ||
             failed(addConversion(TALOS_RT_SCAN_DYNAMIC_LOGIC10, 10, false,
                                  false)) ||
-            failed(addConversion(TALOS_RT_SCAN_DYNAMIC_LOGIC16, 16, false,
-                                 false)))
+            failed(
+                addConversion(TALOS_RT_SCAN_DYNAMIC_LOGIC16, 16, false, false)))
           return failure();
       }
       auto addRawConversion = [&](int32_t kind,

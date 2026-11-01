@@ -839,7 +839,7 @@ public:
         uint64_t next, rank = 0;
         if (previousWidth &&
             talos_rt_v1_random_cycle_next(key, step, previousWidth, &next,
-                                            &rank) != TALOS_RT_OK)
+                                          &rank) != TALOS_RT_OK)
           return SamplerResult::Invalid;
         if (rank < previousCardinality)
           history.insert(fieldValue(previous.assignment(ModelCount(rank))));
@@ -879,8 +879,7 @@ public:
           if (position == 0)
             key = talos_rt_v1_random_state_next64(&nextState);
           if (talos_rt_v1_random_cycle_next(key, position, permutation,
-                                              &position,
-                                              &rank) != TALOS_RT_OK)
+                                            &position, &rank) != TALOS_RT_OK)
             return false;
           if (rank >= cardinality)
             continue;
@@ -921,9 +920,8 @@ public:
            const std::vector<WeightedGroup> &groups,
            const std::vector<ID> &guards,
            const std::vector<Bits> &expressionWeights,
-           const std::vector<bool> &retainedSoft,
-           uint64_t constraintMask, const uint64_t *captures,
-           const uint32_t *captureWidths,
+           const std::vector<bool> &retainedSoft, uint64_t constraintMask,
+           const uint64_t *captures, const uint32_t *captureWidths,
            const std::vector<size_t> &captureOffsets, const uint64_t *start,
            const uint64_t *mutableMask, talos_rt_random_state_v1 &state,
            const uint64_t *masks, size_t layerCount, uint64_t *output) {
@@ -1092,12 +1090,11 @@ public:
       // An auxiliary target bit is decided with the last of its inputs.
       for (size_t bit = 0; bit != bits.size(); ++bit)
         if (physicalBits[bit] >= width)
-          keep[bit] = !accepted[bit] &&
-                      std::all_of(auxiliarySupport[bit].begin(),
-                                  auxiliarySupport[bit].end(),
-                                  [&](size_t input) {
-                                    return accepted[input] || keep[input];
-                                  });
+          keep[bit] =
+              !accepted[bit] &&
+              std::all_of(
+                  auxiliarySupport[bit].begin(), auxiliarySupport[bit].end(),
+                  [&](size_t input) { return accepted[input] || keep[input]; });
       std::vector<bool> targets(bits.size(), false);
       std::vector<std::vector<Choice>> choices;
       for (size_t groupIndex = 0; groupIndex != groups.size(); ++groupIndex) {
@@ -1315,9 +1312,8 @@ public:
   /// an unsatisfiable relation is reported without a separate check.
   SamplerResult ordered(unsigned width, const uint64_t *start,
                         const uint64_t *mutableMask,
-                        talos_rt_random_state_v1 &state,
-                        const uint64_t *masks, size_t layerCount,
-                        uint64_t *output) {
+                        talos_rt_random_state_v1 &state, const uint64_t *masks,
+                        size_t layerCount, uint64_t *output) {
     // The unspecified remaining fields retain the ordinary joint distribution
     // conditional on the accepted earlier-layer values.
     talos_rt_random_state_v1 nextState = state;
@@ -1711,8 +1707,8 @@ SamplerResult sampleRandomPlan(
       return SamplerResult::Invalid;
     if (!distribution.expressionTarget)
       continue;
-    std::vector<size_t> support = circuitSupport(circuit,
-                                                 expressionTargets[group]);
+    std::vector<size_t> support =
+        circuitSupport(circuit, expressionTargets[group]);
     distribution.targetOffset = static_cast<uint32_t>(variable.size());
     for (ID bit : expressionTargets[group]) {
       ID input = circuit.input(PlanOpcode::RandomBit,
@@ -1902,8 +1898,8 @@ SamplerResult sampleRandomPlan(
         }
       edge.block = read32(cursor);
       edge.functionPriority =
-          (read32(cursor + 4) &
-           TALOS_RT_RANDOM_SOLVE_EDGE_FUNCTION_PRIORITY) != 0;
+          (read32(cursor + 4) & TALOS_RT_RANDOM_SOLVE_EDGE_FUNCTION_PRIORITY) !=
+          0;
       cursor += 8;
       if (dynamicMasks && edge.functionPriority) {
         bool live = false;
@@ -1971,9 +1967,9 @@ SamplerResult sampleRandomPlan(
     std::unordered_map<size_t, ID> componentHard;
     for (size_t index = 0; index != parts.size(); ++index)
       if (partInputs[index] != InputPartition::none) {
-        ID &hard = componentHard.try_emplace(partition.find(partInputs[index]),
-                                             1)
-                       .first->second;
+        ID &hard =
+            componentHard.try_emplace(partition.find(partInputs[index]), 1)
+                .first->second;
         hard = circuit.conjunction(hard, parts[index]);
       }
     std::unordered_map<size_t, ModelCounter> relations;
@@ -1986,9 +1982,8 @@ SamplerResult sampleRandomPlan(
         auto [relation, created] =
             relations.try_emplace(component, circuit, booleanBits);
         auto hard = componentHard.find(component);
-        if ((created &&
-             !relation->second.build(
-                 hard == componentHard.end() ? 1 : hard->second)) ||
+        if ((created && !relation->second.build(
+                            hard == componentHard.end() ? 1 : hard->second)) ||
             !relation->second.conjoinIfSatisfiable(soft[priority], retained))
           return SamplerResult::Invalid;
       }

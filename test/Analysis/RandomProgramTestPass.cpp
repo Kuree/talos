@@ -29,7 +29,7 @@ namespace {
 StringRef opcodeName(unsigned opcode) {
   switch (opcode) {
 #define OPCODE(name)                                                           \
-  case TALOS_RT_RANDOM_##name##_V1:                                          \
+  case TALOS_RT_RANDOM_##name##_V1:                                            \
     return #name;
     OPCODE(PUSH_VARIABLE)
     OPCODE(PUSH_CAPTURE)
@@ -215,11 +215,9 @@ LogicalResult printProgram(Operation *op, StringRef bytes, raw_ostream &os) {
        {TALOS_RT_RANDOM_PROGRAM_HAS_DIST, "HAS_DIST"},
        {TALOS_RT_RANDOM_PROGRAM_HAS_DOMAINS, "HAS_DOMAINS"},
        {TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM, "EXACT_UNIFORM"},
-       {TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY,
-        "HAS_FUNCTION_PRIORITY"},
+       {TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY, "HAS_FUNCTION_PRIORITY"},
        {TALOS_RT_RANDOM_PROGRAM_EXACT_WEIGHTED, "EXACT_WEIGHTED"},
-       {TALOS_RT_RANDOM_PROGRAM_HAS_GUARD_INPUT_MASKS,
-        "HAS_GUARD_INPUT_MASKS"},
+       {TALOS_RT_RANDOM_PROGRAM_HAS_GUARD_INPUT_MASKS, "HAS_GUARD_INPUT_MASKS"},
        {TALOS_RT_RANDOM_PROGRAM_HAS_SAMPLER_PLAN, "HAS_SAMPLER_PLAN"},
        {TALOS_RT_RANDOM_PROGRAM_HAS_REAL, "HAS_REAL"}});
   os << "\n";
@@ -246,8 +244,8 @@ LogicalResult printProgram(Operation *op, StringRef bytes, raw_ostream &os) {
       // A version 2 literal is a pool index; print its low word.
       if (wide && auxiliary >= literals)
         return op->emitError("random program literal is out of range");
-      os << " value " << (wide ? reader.read(pool + auxiliary * 8, 8)
-                                : auxiliary);
+      os << " value "
+         << (wide ? reader.read(pool + auxiliary * 8, 8) : auxiliary);
     } else if (auxiliary) {
       os << " auxiliary " << auxiliary;
     }
@@ -258,10 +256,10 @@ LogicalResult printProgram(Operation *op, StringRef bytes, raw_ostream &os) {
   if (flags & TALOS_RT_RANDOM_PROGRAM_HAS_SOLVE_BEFORE) {
     if (!reader.fits(offset, 4))
       return op->emitError("random program solve edges are truncated");
-    offset += 4 + reader.read(offset, 4) *
-                      (wide ? words * 16 +
-                                  TALOS_RT_RANDOM_SOLVE_EDGE_TAIL_SIZE_V2
-                            : TALOS_RT_RANDOM_SOLVE_EDGE_SIZE);
+    offset +=
+        4 + reader.read(offset, 4) *
+                (wide ? words * 16 + TALOS_RT_RANDOM_SOLVE_EDGE_TAIL_SIZE_V2
+                      : TALOS_RT_RANDOM_SOLVE_EDGE_SIZE);
   }
   if (flags & TALOS_RT_RANDOM_PROGRAM_HAS_FUNCTION_PRIORITY) {
     if (!reader.fits(offset, 4))

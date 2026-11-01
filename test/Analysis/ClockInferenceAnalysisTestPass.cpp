@@ -42,8 +42,8 @@ public:
       }
     });
     ClockInferenceAnalysis inference(getOperation(), *layout, seeds);
-    auto print = [&](StringRef kind, const llvm::DenseMap<uint64_t, uint64_t>
-                                         &offsets) {
+    auto print = [&](StringRef kind,
+                     const llvm::DenseMap<uint64_t, uint64_t> &offsets) {
       SmallVector<uint64_t> descriptors;
       for (const auto &entry : offsets)
         descriptors.push_back(entry.first);
@@ -57,11 +57,10 @@ public:
     markAllAnalysesPreserved();
   }
 
-  static void printFact(StringRef kind, uint64_t descriptor, uint64_t offset,
-                        const talos::analysis::NativeStateLayoutAnalysis
-                            &layout,
-                        const talos::analysis::ClockInferenceAnalysis
-                            &inference) {
+  static void
+  printFact(StringRef kind, uint64_t descriptor, uint64_t offset,
+            const talos::analysis::NativeStateLayoutAnalysis &layout,
+            const talos::analysis::ClockInferenceAnalysis &inference) {
     using namespace talos::analysis;
     {
       auto bound = llvm::find_if(layout.bounds, [&](const auto &bound) {
@@ -98,7 +97,8 @@ public:
       ClockOrigin origin = inference.getOrigin(bit);
       if (origin.bit != bit)
         llvm::errs() << " origin=" << origin.bit.first << ":"
-                     << origin.bit.second << (origin.inverted ? " complement" : "");
+                     << origin.bit.second
+                     << (origin.inverted ? " complement" : "");
       llvm::errs() << '\n';
     }
   }

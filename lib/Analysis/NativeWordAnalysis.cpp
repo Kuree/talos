@@ -35,7 +35,8 @@ uint64_t getWordLaneStorageWidth(Value value) {
     value = op->getOperand(0);
     op = value.getDefiningOp();
   }
-  if (isa_and_nonnull<sim::SimRefArrayElementOp, sim::SimArrayDynExtractOp>(op)) {
+  if (isa_and_nonnull<sim::SimRefArrayElementOp, sim::SimArrayDynExtractOp>(
+          op)) {
     Type parent = op->getOperand(0).getType();
     if (auto reference = dyn_cast<sim::RefType>(parent))
       parent = reference.getElementType();
@@ -541,7 +542,8 @@ NativeWordRangeAnalysis::getRange(Operation *op, Value value) {
                                    : std::nullopt;
 }
 
-bool NativeWordRangeAnalysis::containsPackedSlice(sim::SimRefDynExtractOp view) {
+bool NativeWordRangeAnalysis::containsPackedSlice(
+    sim::SimRefDynExtractOp view) {
   // IEEE 1800-2023 11.5.1: a partial out-of-range write updates only the
   // in-range bits. Prove containment in the immediate view, not its wider
   // storage root, before omitting that clipping mask.

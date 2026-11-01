@@ -22,9 +22,9 @@ bool fireNestedEvent = false;
 bool samplerKnownTrue = true;
 
 talos_rt_status blockEventSampler(talos_rt_context *context,
-                                    const uint64_t *captures,
-                                    uint32_t captureCount, uint64_t *value,
-                                    uint64_t *unknown, uint32_t limbCount) {
+                                  const uint64_t *captures,
+                                  uint32_t captureCount, uint64_t *value,
+                                  uint64_t *unknown, uint32_t limbCount) {
   if (!context || !captures || captureCount != 1 || !value || !unknown ||
       limbCount != 1)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -32,8 +32,7 @@ talos_rt_status blockEventSampler(talos_rt_context *context,
   if (fireNestedEvent) {
     fireNestedEvent = false;
     talos_rt_status status = talos_rt_v1_covergroup_block_event_fire(
-        context, kNestedTarget, TALOS_RT_COVERGROUP_BLOCK_EVENT_BEGIN,
-        nullptr);
+        context, kNestedTarget, TALOS_RT_COVERGROUP_BLOCK_EVENT_BEGIN, nullptr);
     if (status != TALOS_RT_OK)
       return status;
   }
@@ -121,8 +120,8 @@ TEST_F(CoverageBlockEventsTest,
 
   fireNestedEvent = true;
   ASSERT_EQ(talos_rt_v1_covergroup_block_event_fire(
-                context, kPrimaryTarget,
-                TALOS_RT_COVERGROUP_BLOCK_EVENT_BEGIN, nullptr),
+                context, kPrimaryTarget, TALOS_RT_COVERGROUP_BLOCK_EVENT_BEGIN,
+                nullptr),
             TALOS_RT_OK);
   EXPECT_EQ(sampledHandles, std::vector<uint64_t>({42, 43}));
 
@@ -136,8 +135,8 @@ TEST_F(CoverageBlockEventsTest,
   context->coverage->instances.find(42)->second.enabled = false;
   sampledHandles.clear();
   ASSERT_EQ(talos_rt_v1_covergroup_block_event_fire(
-                context, kPrimaryTarget,
-                TALOS_RT_COVERGROUP_BLOCK_EVENT_BEGIN, nullptr),
+                context, kPrimaryTarget, TALOS_RT_COVERGROUP_BLOCK_EVENT_BEGIN,
+                nullptr),
             TALOS_RT_OK);
   EXPECT_TRUE(sampledHandles.empty());
 }
@@ -151,8 +150,8 @@ TEST_F(CoverageBlockEventsTest, RejectsMalformedRegistrationAndSamplerResult) {
   context->activeNativeProcess = nullptr;
   context->activeLogicalProcessToken = 0;
   EXPECT_EQ(talos_rt_v1_covergroup_block_event_register(context, 42, nullptr,
-                                                          kObserverID, &capture,
-                                                          1, &target, &kind, 1),
+                                                        kObserverID, &capture,
+                                                        1, &target, &kind, 1),
             TALOS_RT_INVALID_LIFECYCLE);
   context->activeNativeProcess = &process;
   context->activeLogicalProcessToken =
@@ -169,12 +168,12 @@ TEST_F(CoverageBlockEventsTest, RejectsMalformedRegistrationAndSamplerResult) {
                 &invalidKind, 1),
             TALOS_RT_INVALID_DESIGN);
   EXPECT_EQ(talos_rt_v1_covergroup_block_event_fire(context, target,
-                                                      invalidKind, nullptr),
+                                                    invalidKind, nullptr),
             TALOS_RT_INVALID_ARGUMENT);
 
   ASSERT_EQ(talos_rt_v1_covergroup_block_event_register(context, 42, nullptr,
-                                                          kObserverID, &capture,
-                                                          1, &target, &kind, 1),
+                                                        kObserverID, &capture,
+                                                        1, &target, &kind, 1),
             TALOS_RT_OK);
   samplerKnownTrue = false;
   EXPECT_EQ(
@@ -186,32 +185,31 @@ TEST_F(CoverageBlockEventsTest,
        RootsReceiversAndFiltersOnlyReceiverScopedFires) {
   constexpr char className[] = "block_event_owner";
   const talos_rt_class_descriptor_v1 classDescriptor{TALOS_RT_VERSION,
-                                                       0,
-                                                       9001,
-                                                       sizeof(void *),
-                                                       alignof(void *),
-                                                       nullptr,
-                                                       nullptr,
-                                                       0,
-                                                       nullptr,
-                                                       nullptr,
-                                                       0,
-                                                       className,
-                                                       sizeof(className) - 1,
-                                                       nullptr,
-                                                       nullptr,
-                                                       0,
-                                                       0,
-                                                       0,
-                                                       0};
+                                                     0,
+                                                     9001,
+                                                     sizeof(void *),
+                                                     alignof(void *),
+                                                     nullptr,
+                                                     nullptr,
+                                                     0,
+                                                     nullptr,
+                                                     nullptr,
+                                                     0,
+                                                     className,
+                                                     sizeof(className) - 1,
+                                                     nullptr,
+                                                     nullptr,
+                                                     0,
+                                                     0,
+                                                     0,
+                                                     0};
   talos_rt_gc_lane_v1 *lane = nullptr;
   ASSERT_EQ(talos_rt_v1_gc_lane_create(context, &lane), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_gc_lane_enter(lane), TALOS_RT_OK);
   talos_rt_object_v1 *firstReceiver = nullptr;
   talos_rt_object_v1 *secondReceiver = nullptr;
-  ASSERT_EQ(
-      talos_rt_v1_object_allocate(lane, &classDescriptor, &firstReceiver),
-      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_object_allocate(lane, &classDescriptor, &firstReceiver),
+            TALOS_RT_OK);
   ASSERT_EQ(
       talos_rt_v1_object_allocate(lane, &classDescriptor, &secondReceiver),
       TALOS_RT_OK);
@@ -247,7 +245,7 @@ TEST_F(CoverageBlockEventsTest,
   talos_rt_object_v1 *retainedFirst = registrations.find(1)->second->receiver;
   sampledHandles.clear();
   ASSERT_EQ(talos_rt_v1_covergroup_block_event_fire(context, target, kind,
-                                                      retainedFirst),
+                                                    retainedFirst),
             TALOS_RT_OK);
   // Multiple OR clauses (including clauses reached through aliased object
   // variables) denote one triggering event and sample an instance only once.

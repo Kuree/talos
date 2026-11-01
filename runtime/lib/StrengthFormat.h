@@ -50,7 +50,7 @@ inline std::string talos_rt_format_strength_range(uint16_t strengths) {
 // Parse exactly one canonical three-character strength field and return its
 // four-state logic component. The caller owns any cursor or stream rollback.
 inline bool talos_rt_parse_strength_field(const char *data, uint64_t size,
-                                            char &logic) noexcept {
+                                          char &logic) noexcept {
   if (!data || size != 3)
     return false;
   char first = data[0];

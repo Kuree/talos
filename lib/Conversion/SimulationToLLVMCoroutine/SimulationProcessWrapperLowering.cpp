@@ -41,9 +41,9 @@ LogicalResult materializeEvalCheckpointHandoffGlobals(ModuleOp module) {
     if (LLVM::GlobalOp global = module.lookupSymbol<LLVM::GlobalOp>(name))
       return global.getGlobalType() == pointer;
     builder.setInsertionPointToStart(module.getBody());
-    auto global = LLVM::GlobalOp::create(builder, location, pointer, false,
-                                         LLVM::Linkage::Internal, name,
-                                         Attribute{}, 8);
+    auto global =
+        LLVM::GlobalOp::create(builder, location, pointer, false,
+                               LLVM::Linkage::Internal, name, Attribute{}, 8);
     Block *initializer = new Block;
     global.getInitializerRegion().push_back(initializer);
     builder.setInsertionPointToStart(initializer);
@@ -341,28 +341,25 @@ FailureOr<LLVM::LLVMFuncOp> makeDirectFragmentWrapper(
       builder, location, wrapperName,
       LLVM::LLVMFunctionType::get(i32, {pointer}, false));
   copyNativePartition(body, wrapper);
-  if (::talos::schedule::has<
-          ::talos::schedule::Field::EvalInductiveTwoState>(body) ||
-      ::talos::schedule::has<
-          ::talos::schedule::Field::EvalSelectedTwoState>(body) ||
+  if (::talos::schedule::has<::talos::schedule::Field::EvalInductiveTwoState>(
+          body) ||
+      ::talos::schedule::has<::talos::schedule::Field::EvalSelectedTwoState>(
+          body) ||
       ::talos::schedule::has<::talos::schedule::Field::EvalFourStateSource>(
           body))
     ::talos::schedule::set<schedule::Field::EvalTwoStateWrapper>(
         wrapper, builder.getUnitAttr());
-  if (::talos::schedule::has<schedule::metadata::evalPathGuardedTwoState>(
-          body))
+  if (::talos::schedule::has<schedule::metadata::evalPathGuardedTwoState>(body))
     ::talos::schedule::set<schedule::metadata::evalPathGuardedTwoState>(
         wrapper, builder.getUnitAttr());
   if (::talos::schedule::has<
           schedule::metadata::evalPathGuardedKnownPreserving>(body))
-    ::talos::schedule::set<
-        schedule::metadata::evalPathGuardedKnownPreserving>(
+    ::talos::schedule::set<schedule::metadata::evalPathGuardedKnownPreserving>(
         wrapper, builder.getUnitAttr());
   if (auto unsupportedOwner = ::talos::schedule::get<
           schedule::metadata::evalUnsupportedCheckpointOwner>(body))
-    ::talos::schedule::set<
-        schedule::metadata::evalUnsupportedCheckpointOwner>(wrapper,
-                                                            unsupportedOwner);
+    ::talos::schedule::set<schedule::metadata::evalUnsupportedCheckpointOwner>(
+        wrapper, unsupportedOwner);
   auto design = body->getParentOfType<sim::SimDesignOp>();
   // Whether `function` itself may terminate, and the functions it calls.
   auto scan = [&](sim::SimFuncOp function) {
@@ -381,10 +378,9 @@ FailureOr<LLVM::LLVMFuncOp> makeDirectFragmentWrapper(
               sim::SimProgramExitOp, sim::SimErrorOp,
               sim::SimPublicationBatchBeginOp, sim::SimPublicationBatchEndOp,
               sim::SimTerminationRequestedOp, sim::SimProgramOwnedOp,
-              sim::SimStatusCheckOp,
-              sim::SimDisplayOp, sim::SimFileOpenMCDOp, sim::SimFileOpenOp,
-              sim::SimFileCloseOp, sim::SimFileFlushOp, sim::SimFileGetcOp,
-              sim::SimFileUngetcOp, sim::SimFileGetlineOp,
+              sim::SimStatusCheckOp, sim::SimDisplayOp, sim::SimFileOpenMCDOp,
+              sim::SimFileOpenOp, sim::SimFileCloseOp, sim::SimFileFlushOp,
+              sim::SimFileGetcOp, sim::SimFileUngetcOp, sim::SimFileGetlineOp,
               sim::SimFileReadPackedOp, sim::SimFileEofOp, sim::SimFileSeekOp,
               sim::SimFileTellOp, sim::SimFileRewindOp, sim::SimDumpOpenOp,
               sim::SimDumpOpenStringOp, sim::SimDumpTimescaleOp,
@@ -395,14 +391,13 @@ FailureOr<LLVM::LLVMFuncOp> makeDirectFragmentWrapper(
       // (IEEE 1800-2023 16.4.1); its enqueue may already be an ABI call.
       mayTerminate |= sim::isColdRuntimeCheckpoint(operation);
       if (auto call = dyn_cast<LLVM::CallOp>(operation))
-        mayTerminate |=
-            call.getCallee() &&
-            call.getCallee()->starts_with("talos_rt_v1_deferred_enqueue");
+        mayTerminate |= call.getCallee() && call.getCallee()->starts_with(
+                                                "talos_rt_v1_deferred_enqueue");
       if (auto call = dyn_cast<sim::SimCallOp>(operation))
         facts.callees.push_back(
-            cache ? cache->designSymbols.lookup<sim::SimFuncOp>(
-                        call.getCallee())
-                  : design.lookupSymbol<sim::SimFuncOp>(call.getCallee()));
+            cache
+                ? cache->designSymbols.lookup<sim::SimFuncOp>(call.getCallee())
+                : design.lookupSymbol<sim::SimFuncOp>(call.getCallee()));
     });
     return facts;
   };
@@ -430,15 +425,13 @@ FailureOr<LLVM::LLVMFuncOp> makeDirectFragmentWrapper(
     ::talos::schedule::set<schedule::metadata::evalMayTerminate>(
         wrapper, builder.getUnitAttr());
     if (::talos::schedule::has<
-            ::talos::schedule::Field::EvalInheritedTwoStateCheckpoint>(
-            body) ||
+            ::talos::schedule::Field::EvalInheritedTwoStateCheckpoint>(body) ||
         ::talos::schedule::has<
             ::talos::schedule::Field::EvalInheritedTwoStateCheckpoint>(actor))
       ::talos::schedule::set<schedule::metadata::evalCheckpointSafe>(
           wrapper, builder.getUnitAttr());
   }
-  if (::talos::schedule::has<::talos::schedule::Field::EvalRawCaptures>(
-          body)) {
+  if (::talos::schedule::has<::talos::schedule::Field::EvalRawCaptures>(body)) {
     if (!mayTerminate)
       ::talos::schedule::set<schedule::metadata::evalInfallible>(
           wrapper, builder.getUnitAttr());
@@ -685,9 +678,9 @@ LogicalResult makeRuntimeCheckpointWrapper(ModuleOp module,
       LLVM::AddressOfOp::create(builder, location, pointer,
                                 evalCheckpointCallbackName),
       8);
-  LLVM::ReturnOp::create(builder, location,
-                         llvmConstant(builder, location, i32,
-                                      TALOS_RT_AOT_GENERATED_CHECKPOINT));
+  LLVM::ReturnOp::create(
+      builder, location,
+      llvmConstant(builder, location, i32, TALOS_RT_AOT_GENERATED_CHECKPOINT));
   return success();
 }
 

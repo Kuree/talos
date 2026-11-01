@@ -5,9 +5,9 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <cstdlib>
@@ -29,21 +29,21 @@ void inspectTransport(talos_rt_context *context, TransportProbe &probe) {
             TALOS_RT_OK);
   bool physicalTask = true;
   ASSERT_EQ(talos_rt_cached_vpi_code_unit_transport(context, probe.callee,
-                                                      &physicalTask),
+                                                    &physicalTask),
             TALOS_RT_OK);
   EXPECT_FALSE(physicalTask);
   ASSERT_EQ(talos_rt_v1_vpi_call_prepare(context, probe.call, &ticket),
             TALOS_RT_OK);
   EXPECT_EQ(talos_rt_v1_vpi_frame_enter_prepared(context, probe.callee, 1,
-                                                   &activation),
+                                                 &activation),
             TALOS_RT_INVALID_LIFECYCLE);
   EXPECT_EQ(activation, 0u);
-  EXPECT_NE(talos_rt_v1_vpi_frame_enter_prepared(context, probe.wrongCallee,
-                                                   0, &activation),
+  EXPECT_NE(talos_rt_v1_vpi_frame_enter_prepared(context, probe.wrongCallee, 0,
+                                                 &activation),
             TALOS_RT_OK);
   EXPECT_EQ(activation, 0u);
   ASSERT_EQ(talos_rt_v1_vpi_frame_enter_prepared(context, probe.callee, 0,
-                                                   &activation),
+                                                 &activation),
             TALOS_RT_OK);
   vpiHandle frame = vpi_handle(vpiFrame, nullptr);
   ASSERT_NE(frame, nullptr);
@@ -56,8 +56,8 @@ void inspectTransport(talos_rt_context *context, TransportProbe &probe) {
   EXPECT_EQ(vpi_get(vpiType, probe.source), vpiTask);
   talos_rt_design_cursor_v1 source{};
   uint64_t lexical = 0;
-  ASSERT_EQ(talos_rt_cached_vpi_code_unit_scope(context, probe.callee,
-                                                  &source, &lexical),
+  ASSERT_EQ(talos_rt_cached_vpi_code_unit_scope(context, probe.callee, &source,
+                                                &lexical),
             TALOS_RT_OK);
   EXPECT_EQ(lexical, probe.callee);
   uint32_t sourceKind = 0;
@@ -99,46 +99,45 @@ void testTransport(uint64_t call, uint64_t callee, uint64_t wrongCallee,
   for (unsigned byte = 0; byte != 8; ++byte)
     checksum |= uint64_t{encoded->bytecode[32 + byte]} << (byte * 8);
   talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
-                                               encoded->executionFlags,
-                                               0,
-                                               encoded->bytecode.data(),
-                                               encoded->bytecode.size(),
-                                               encoded->designDatabase.data(),
-                                               encoded->designDatabase.size(),
-                                               encoded->stateBitCount,
-                                               checksum,
-                                               nullptr,
-                                               0,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               0};
+                                             encoded->executionFlags,
+                                             0,
+                                             encoded->bytecode.data(),
+                                             encoded->bytecode.size(),
+                                             encoded->designDatabase.data(),
+                                             encoded->designDatabase.size(),
+                                             encoded->stateBitCount,
+                                             checksum,
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
   ASSERT_EQ(talos_rt_v1_design_validate(&execution), TALOS_RT_OK);
   talos_rt_context *rawContext = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &rawContext),
             TALOS_RT_OK);
   std::unique_ptr<talos_rt_context, decltype(&talos_rt_v1_context_destroy)>
       runtime(rawContext, talos_rt_v1_context_destroy);
-  ASSERT_EQ(talos_rt_v1_vpi_startup(runtime.get(), nullptr, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_vpi_startup(runtime.get(), nullptr, 0), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_end_compile(runtime.get()), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_vpi_start_simulation(runtime.get()), TALOS_RT_OK);
   TransportProbe probe{call, callee, wrongCallee, sourceName};
   const talos_rt_frame_field_v1 field{
-      TALOS_RT_FRAME_CAPTURE,  0, 0, sizeof(TransportProbe *),
+      TALOS_RT_FRAME_CAPTURE,    0, 0, sizeof(TransportProbe *),
       alignof(TransportProbe *), 0};
   const uint32_t continuation = 0;
   talos_rt_frame_layout_v1 layout{TALOS_RT_VERSION,
-                                    0,
-                                    sizeof(TransportProbe *),
-                                    alignof(TransportProbe *),
-                                    &field,
-                                    1,
-                                    1,
-                                    &continuation,
-                                    0};
+                                  0,
+                                  sizeof(TransportProbe *),
+                                  alignof(TransportProbe *),
+                                  &field,
+                                  1,
+                                  1,
+                                  &continuation,
+                                  0};
   uint64_t hash = UINT64_C(14695981039346656037);
   auto append = [&](const auto &value) {
     const auto *bytes = reinterpret_cast<const uint8_t *>(&value);
@@ -177,8 +176,7 @@ void testTransport(uint64_t call, uint64_t callee, uint64_t wrongCallee,
   ASSERT_EQ(talos_rt_v1_process_instance_create(&descriptor, &instance),
             TALOS_RT_OK);
   *static_cast<TransportProbe **>(instance->frame) = &probe;
-  ASSERT_EQ(talos_rt_v1_scheduler_add(runtime.get(), instance, 0),
-            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add(runtime.get(), instance, 0), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_run(runtime.get()), TALOS_RT_OK);
   EXPECT_TRUE(probe.ran);
   ASSERT_NE(probe.source, nullptr);

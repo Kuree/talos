@@ -1223,7 +1223,8 @@ bool validIntrinsic(const Image &image, const Function &function,
     for (uint32_t index = 3; index != site.inputCount; ++index)
       if (!twoStateBits(input(index), 64) && !numeric(input(index)) &&
           !floating(input(index)) && !argumentRef(input(index)) &&
-          !string(input(index)) && !managed(input(index)) && !event(input(index)))
+          !string(input(index)) && !managed(input(index)) &&
+          !event(input(index)))
         return false;
     return true;
   case TALOS_RT_INTRINSIC_V1_COVERGROUP_CLOCK_EVENT_REGISTER:
@@ -1314,7 +1315,8 @@ bool validIntrinsic(const Image &image, const Function &function,
       return false;
     for (uint32_t index = 2; index != site.inputCount; ++index)
       if (!numeric(input(index)) && !floating(input(index)) &&
-          !string(input(index)) && !managed(input(index)) && !event(input(index)))
+          !string(input(index)) && !managed(input(index)) &&
+          !event(input(index)))
         return false;
     return true;
   case TALOS_RT_INTRINSIC_V1_COVERGROUP_INSTANCE_QUERY:
@@ -1607,9 +1609,8 @@ bool validIntrinsic(const Image &image, const Function &function,
         !bits(input(4), 64) || !bits(input(5), 64) || !bits(input(6), 64))
       return false;
     return (site.outputCount == 3 && output(0) &&
-            output(0)->kind == TALOS_RT_DBREG_LOGIC &&
-            output(0)->width != 0 && bits(output(1), 32) &&
-            bits(output(2), 32)) ||
+            output(0)->kind == TALOS_RT_DBREG_LOGIC && output(0)->width != 0 &&
+            bits(output(1), 32) && bits(output(2), 32)) ||
            (site.outputCount == 2 && bits(output(0), 32) &&
             bits(output(1), 32));
   case TALOS_RT_INTRINSIC_V1_FILE_SCAN_RAW:
@@ -1618,9 +1619,8 @@ bool validIntrinsic(const Image &image, const Function &function,
         !bits(input(4), 64) || !bits(input(5), 64) || !bits(input(6), 64))
       return false;
     return (site.outputCount == 3 && output(0) &&
-            output(0)->kind == TALOS_RT_DBREG_LOGIC &&
-            output(0)->width != 0 && bits(output(1), 32) &&
-            bits(output(2), 32)) ||
+            output(0)->kind == TALOS_RT_DBREG_LOGIC && output(0)->width != 0 &&
+            bits(output(1), 32) && bits(output(2), 32)) ||
            (site.outputCount == 2 && bits(output(0), 32) &&
             bits(output(1), 32));
   case TALOS_RT_INTRINSIC_V1_FILE_READMEM_TOKEN:
@@ -1634,8 +1634,8 @@ bool validIntrinsic(const Image &image, const Function &function,
            bits(input(2), 32) && bits(input(3), 32) && bits(input(4), 64) &&
            output(0) && output(0)->kind == TALOS_RT_DBREG_LOGIC &&
            output(0)->width == 64 && output(1) &&
-           output(1)->kind == TALOS_RT_DBREG_LOGIC &&
-           output(1)->width == 64 && bits(output(2), 32);
+           output(1)->kind == TALOS_RT_DBREG_LOGIC && output(1)->width == 64 &&
+           bits(output(2), 32);
   case TALOS_RT_INTRINSIC_V1_PLUSARG_TEST:
     return site.inputCount == 1 && site.outputCount == 1 && string(input(0)) &&
            bits(output(0), 32);
@@ -2662,7 +2662,7 @@ bool validateImage(const Image &image) {
           : layout.kind == TALOS_RT_DBREG_HANDLE && layout.width == 256
               ? TALOS_RT_DBREG_EVENT
           : layout.kind == TALOS_RT_DBREG_LOGIC ? TALOS_RT_DBREG_SIGNED
-                                                  : 0;
+                                                : 0;
       if (layout.width == 0 || expected == 0 || layout.size != expected ||
           (layout.kind == TALOS_RT_DBREG_REAL32 && layout.width != 32) ||
           (layout.kind == TALOS_RT_DBREG_REAL64 && layout.width != 64) ||
@@ -2722,8 +2722,7 @@ bool validateImage(const Image &image) {
         if (!reg(index))
           return false;
         uint8_t kind = layoutAt(image, function, index).kind;
-        return kind == TALOS_RT_DBREG_REAL32 ||
-               kind == TALOS_RT_DBREG_REAL64;
+        return kind == TALOS_RT_DBREG_REAL32 || kind == TALOS_RT_DBREG_REAL64;
       };
       auto binary = [&] {
         return reg(instruction.destination) && reg(instruction.source0) &&
@@ -3050,10 +3049,9 @@ bool validateImage(const Image &image) {
       }
       case TALOS_RT_DB_LOAD_FRAME:
       case TALOS_RT_DB_STORE_FRAME: {
-        if (instruction.source2 ||
-            (instruction.opcode == TALOS_RT_DB_LOAD_FRAME
-                 ? instruction.source0 != 0
-                 : instruction.destination != 0))
+        if (instruction.source2 || (instruction.opcode == TALOS_RT_DB_LOAD_FRAME
+                                        ? instruction.source0 != 0
+                                        : instruction.destination != 0))
           return reject(__LINE__, "invalid instruction encoding or operands",
                         functionIndex, pc, instruction.opcode);
         uint32_t valueRegister = instruction.opcode == TALOS_RT_DB_LOAD_FRAME
@@ -3596,9 +3594,8 @@ talos_rt_status talos_rt_initialize_design_bytecode_image(
 }
 
 talos_rt_status talos_rt_validate_design_bytecode(
-    const talos_rt_design_bytecode_entry_v1 &entry,
-    talos_rt_context *context, uint64_t *outScratchSize,
-    uint64_t *outScratchAlignment) noexcept {
+    const talos_rt_design_bytecode_entry_v1 &entry, talos_rt_context *context,
+    uint64_t *outScratchSize, uint64_t *outScratchAlignment) noexcept {
   TALOS_RT_TRY {
     Image image;
     if (!loadValidatedImage(entry, context, image))

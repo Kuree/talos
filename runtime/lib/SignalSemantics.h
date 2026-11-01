@@ -36,8 +36,8 @@ inline bool signalEdgeMatches(uint32_t requested, uint32_t observed) {
   case TALOS_RT_WAIT_EDGE_NEGEDGE:
     return (observed & TALOS_RT_SIGNAL_NEGEDGE) != 0;
   case TALOS_RT_WAIT_EDGE_BOTH:
-    return (observed &
-            (TALOS_RT_SIGNAL_POSEDGE | TALOS_RT_SIGNAL_NEGEDGE)) != 0;
+    return (observed & (TALOS_RT_SIGNAL_POSEDGE | TALOS_RT_SIGNAL_NEGEDGE)) !=
+           0;
   default:
     return false;
   }

@@ -594,8 +594,8 @@ bool UnitLowering::isBorrowedAggregate(Operation *base) {
   if (!reference)
     reference = lvalues.lookup(path);
   return reference &&
-         isa<sim::ManagedRefType, sim::ArgumentRefType,
-             sim::ReferencePathType>(reference.getType());
+         isa<sim::ManagedRefType, sim::ArgumentRefType, sim::ReferencePathType>(
+             reference.getType());
 }
 
 FailureOr<Value>
@@ -2742,8 +2742,7 @@ FailureOr<Value> UnitLowering::lowerSampledDynamicValue(Operation *expression) {
         outlineBuilder.getNamedAttr("domain",
                                     sim::ExecutionDomainAttr::get(
                                         context, sim::ExecutionDomain::Design)),
-        ::talos::schedule::named<
-            ::talos::schedule::Field::ClockedSamplePlan>(
+        ::talos::schedule::named<::talos::schedule::Field::ClockedSamplePlan>(
             schedule::ClockedSamplePlanAttr::get(
                 context, outlineBuilder.getStringAttr(key),
                 outlineBuilder.getI64IntegerAttr(siteID),
@@ -3054,8 +3053,7 @@ FailureOr<Value> UnitLowering::lowerClockingInputSample(
           outlineBuilder.getNamedAttr(
               "domain", sim::ExecutionDomainAttr::get(
                             context, sim::ExecutionDomain::Design)),
-          ::talos::schedule::named<
-              ::talos::schedule::Field::ClockedSamplePlan>(
+          ::talos::schedule::named<::talos::schedule::Field::ClockedSamplePlan>(
               schedule::ClockedSamplePlanAttr::get(
                   outlineBuilder.getContext(),
                   outlineBuilder.getStringAttr(delayKey),
@@ -3238,8 +3236,7 @@ FailureOr<Value> UnitLowering::lowerClockingInputSample(
         outlineBuilder.getNamedAttr("domain",
                                     sim::ExecutionDomainAttr::get(
                                         context, sim::ExecutionDomain::Design)),
-        ::talos::schedule::named<
-            ::talos::schedule::Field::ClockedSamplePlan>(
+        ::talos::schedule::named<::talos::schedule::Field::ClockedSamplePlan>(
             schedule::ClockedSamplePlanAttr::get(
                 outlineBuilder.getContext(), outlineBuilder.getStringAttr(key),
                 outlineBuilder.getI64IntegerAttr(siteID),
@@ -5521,13 +5518,14 @@ FailureOr<Value> UnitLowering::lowerSelection(Operation *op, bool lvalue) {
         }
   FailureOr<Value> input;
   {
-    llvm::SaveAndRestore recordsWindow(
-        selectionRecordsReadWindow,
-        selectionRecordsReadWindow || bool(selectedVariable));
-    input = selectedNet ? FailureOr<Value>(selectedNet)
-                        : lowerExpression(children.front(),
-                                          lvalue || selectsSampledReferences() ||
-                                              fixedArrayElement);
+    llvm::SaveAndRestore recordsWindow(selectionRecordsReadWindow,
+                                       selectionRecordsReadWindow ||
+                                           bool(selectedVariable));
+    input = selectedNet
+                ? FailureOr<Value>(selectedNet)
+                : lowerExpression(children.front(),
+                                  lvalue || selectsSampledReferences() ||
+                                      fixedArrayElement);
   }
   if (failed(resultType) || failed(input))
     return failure();
@@ -6129,11 +6127,12 @@ FailureOr<Value> UnitLowering::lowerSelection(Operation *op, bool lvalue) {
     Type selected = sim::RefType::get(function.getContext(), *resultType);
     Value reference;
     if (constant)
-      reference = sim::SimRefExtractOp::create(
-          builder, location, selected, *input, builder.getI64IntegerAttr(lowBit));
+      reference =
+          sim::SimRefExtractOp::create(builder, location, selected, *input,
+                                       builder.getI64IntegerAttr(lowBit));
     else
-      reference = sim::SimRefDynExtractOp::create(
-          builder, location, selected, *input, dynamicLow);
+      reference = sim::SimRefDynExtractOp::create(builder, location, selected,
+                                                  *input, dynamicLow);
     if (lvalue)
       return reference;
     // Assertion sampling requests an addressable base even for an rvalue.

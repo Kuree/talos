@@ -21,9 +21,8 @@ bool isObserverCaptureBridge(Block &block) {
   if (block.getOperations().size() != 1)
     return false;
   auto branch = dyn_cast<cf::BranchOp>(block.getTerminator());
-  return branch &&
-         ::talos::schedule::has<
-             ::talos::schedule::Field::ObserverCaptureBridge>(branch);
+  return branch && ::talos::schedule::has<
+                       ::talos::schedule::Field::ObserverCaptureBridge>(branch);
 }
 
 bool isScheduledRegion(schedule::ComputeRegionKind kind) {

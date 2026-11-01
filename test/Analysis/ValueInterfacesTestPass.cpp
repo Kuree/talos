@@ -51,9 +51,7 @@ class ValueInterfacesTestPass final
     : public PassWrapper<ValueInterfacesTestPass, OperationPass<ModuleOp>> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ValueInterfacesTestPass)
-  StringRef getArgument() const final {
-    return "test-talos-value-interfaces";
-  }
+  StringRef getArgument() const final { return "test-talos-value-interfaces"; }
   StringRef getDescription() const final {
     return "exercise value analyses through a second select interface model";
   }

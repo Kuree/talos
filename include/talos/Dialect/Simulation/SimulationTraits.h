@@ -1,4 +1,5 @@
-//===- SimulationTraits.h - Simulation operation traits ----------*- C++ -*-===//
+//===- SimulationTraits.h - Simulation operation traits ----------*- C++
+//-*-===//
 
 #ifndef TALOS_DIALECT_SIMULATION_SIMULATIONTRAITS_H
 #define TALOS_DIALECT_SIMULATION_SIMULATIONTRAITS_H

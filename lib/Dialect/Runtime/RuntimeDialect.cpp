@@ -29,9 +29,8 @@ using namespace mlir;
 namespace talos::runtime {
 
 Operation *TalosRuntimeDialect::materializeConstant(OpBuilder &builder,
-                                                      Attribute value,
-                                                      Type type,
-                                                      Location location) {
+                                                    Attribute value, Type type,
+                                                    Location location) {
   if (!isa<ByteSpanType>(type))
     return nullptr;
   auto bytes = dyn_cast<StringAttr>(value);
@@ -43,7 +42,7 @@ OpFoldResult RTBytesConstantOp::fold(FoldAdaptor) { return getValueAttr(); }
 
 llvm::StringRef getRuntimeSymbol(RuntimeCall call) {
   switch (call) {
-#define TALOS_RUNTIME_CALL(Name, Op, Symbol, Signature)                      \
+#define TALOS_RUNTIME_CALL(Name, Op, Symbol, Signature)                        \
   case RuntimeCall::Name:                                                      \
     return #Symbol;
 #include "talos/Dialect/Runtime/RuntimeABI.def"
@@ -54,7 +53,7 @@ llvm::StringRef getRuntimeSymbol(RuntimeCall call) {
 
 RuntimeSignature getRuntimeSignature(RuntimeCall call) {
   switch (call) {
-#define TALOS_RUNTIME_CALL(Name, Op, Symbol, Signature)                      \
+#define TALOS_RUNTIME_CALL(Name, Op, Symbol, Signature)                        \
   case RuntimeCall::Name:                                                      \
     return RuntimeSignature::Signature;
 #include "talos/Dialect/Runtime/RuntimeABI.def"
@@ -64,7 +63,7 @@ RuntimeSignature getRuntimeSignature(RuntimeCall call) {
 }
 
 std::optional<RuntimeCall> getRuntimeCall(Operation *operation) {
-#define TALOS_RUNTIME_CALL(Name, Op, Symbol, Signature)                      \
+#define TALOS_RUNTIME_CALL(Name, Op, Symbol, Signature)                        \
   if (isa<Op>(operation))                                                      \
     return RuntimeCall::Name;
 #include "talos/Dialect/Runtime/RuntimeABI.def"
@@ -189,7 +188,7 @@ void setFeatures(Operation *module, Features features, bool required) {
 
 LogicalResult
 TalosRuntimeDialect::verifyOperationAttribute(Operation *operation,
-                                                NamedAttribute attribute) {
+                                              NamedAttribute attribute) {
   if (failed(discardable::verify<
              BytecodeImage, DesignDatabase, ExecutionFlagSet, StateBits,
              SampledRanges, Materialized, ClassBitstreamBlob,
@@ -216,13 +215,11 @@ TalosRuntimeDialect::verifyOperationAttribute(Operation *operation,
 
 static_assert(static_cast<uint32_t>(Radix::Binary) == TALOS_RT_RADIX_BINARY);
 static_assert(static_cast<uint32_t>(Radix::Octal) == TALOS_RT_RADIX_OCTAL);
-static_assert(static_cast<uint32_t>(Radix::Decimal) ==
-              TALOS_RT_RADIX_DECIMAL);
+static_assert(static_cast<uint32_t>(Radix::Decimal) == TALOS_RT_RADIX_DECIMAL);
 static_assert(static_cast<uint32_t>(Radix::Hex) == TALOS_RT_RADIX_HEX);
 
 static_assert(static_cast<uint32_t>(SeekOrigin::Set) == TALOS_RT_SEEK_SET);
-static_assert(static_cast<uint32_t>(SeekOrigin::Current) ==
-              TALOS_RT_SEEK_CUR);
+static_assert(static_cast<uint32_t>(SeekOrigin::Current) == TALOS_RT_SEEK_CUR);
 static_assert(static_cast<uint32_t>(SeekOrigin::End) == TALOS_RT_SEEK_END);
 static_assert(static_cast<uint32_t>(CodeKind::Native) ==
               TALOS_RT_FRAGMENT_NATIVE);
@@ -244,8 +241,7 @@ static_assert(static_cast<uint32_t>(BytecodeValueKind::Resource) ==
 static_assert(static_cast<uint32_t>(BytecodeOpcode::Nop) == TALOS_RT_BC_NOP);
 static_assert(static_cast<uint32_t>(BytecodeOpcode::Const) ==
               TALOS_RT_BC_CONST);
-static_assert(static_cast<uint32_t>(BytecodeOpcode::Move) ==
-              TALOS_RT_BC_MOVE);
+static_assert(static_cast<uint32_t>(BytecodeOpcode::Move) == TALOS_RT_BC_MOVE);
 static_assert(static_cast<uint32_t>(BytecodeOpcode::Add) == TALOS_RT_BC_ADD);
 static_assert(static_cast<uint32_t>(BytecodeOpcode::Sub) == TALOS_RT_BC_SUB);
 static_assert(static_cast<uint32_t>(BytecodeOpcode::Mul) == TALOS_RT_BC_MUL);
@@ -260,8 +256,7 @@ static_assert(static_cast<uint32_t>(BytecodeOpcode::LoadFrame) ==
               TALOS_RT_BC_LOAD_FRAME);
 static_assert(static_cast<uint32_t>(BytecodeOpcode::StoreFrame) ==
               TALOS_RT_BC_STORE_FRAME);
-static_assert(static_cast<uint32_t>(BytecodeOpcode::Jump) ==
-              TALOS_RT_BC_JUMP);
+static_assert(static_cast<uint32_t>(BytecodeOpcode::Jump) == TALOS_RT_BC_JUMP);
 static_assert(static_cast<uint32_t>(BytecodeOpcode::BranchZero) ==
               TALOS_RT_BC_BRANCH_ZERO);
 static_assert(static_cast<uint32_t>(BytecodeOpcode::Continue) ==
@@ -272,8 +267,7 @@ static_assert(static_cast<uint32_t>(BytecodeOpcode::Terminate) ==
               TALOS_RT_BC_TERMINATE);
 static_assert(static_cast<uint32_t>(BytecodeOpcode::CallService) ==
               TALOS_RT_BC_CALL_SERVICE);
-static_assert(static_cast<uint32_t>(BytecodeOpcode::Fail) ==
-              TALOS_RT_BC_FAIL);
+static_assert(static_cast<uint32_t>(BytecodeOpcode::Fail) == TALOS_RT_BC_FAIL);
 
 #define RT_ENUM_EQ(Enum, Case, Value)                                          \
   static_assert(static_cast<uint32_t>(Enum::Case) == Value)
@@ -313,8 +307,7 @@ RT_ENUM_EQ(BytecodeServiceValueKind, ArgumentTime,
 
 RT_ENUM_EQ(BytecodeService, Format, TALOS_RT_BC_SERVICE_FORMAT);
 RT_ENUM_EQ(BytecodeService, Display, TALOS_RT_BC_SERVICE_DISPLAY);
-RT_ENUM_EQ(BytecodeService, BufferRelease,
-           TALOS_RT_BC_SERVICE_BUFFER_RELEASE);
+RT_ENUM_EQ(BytecodeService, BufferRelease, TALOS_RT_BC_SERVICE_BUFFER_RELEASE);
 RT_ENUM_EQ(BytecodeService, FileOpenMCD, TALOS_RT_BC_SERVICE_FILE_OPEN_MCD);
 RT_ENUM_EQ(BytecodeService, FileOpen, TALOS_RT_BC_SERVICE_FILE_OPEN);
 RT_ENUM_EQ(BytecodeService, FileClose, TALOS_RT_BC_SERVICE_FILE_CLOSE);
@@ -347,8 +340,7 @@ RT_ENUM_EQ(StatusCode, InvalidLifecycle, TALOS_RT_INVALID_LIFECYCLE);
 RT_ENUM_EQ(StatusCode, InvalidFrame, TALOS_RT_INVALID_FRAME);
 RT_ENUM_EQ(StatusCode, InvalidDesign, TALOS_RT_INVALID_DESIGN);
 RT_ENUM_EQ(StatusCode, PermissionDenied, TALOS_RT_PERMISSION_DENIED);
-RT_ENUM_EQ(StatusCode, DpiDisableUnsupported,
-           TALOS_RT_DPI_DISABLE_UNSUPPORTED);
+RT_ENUM_EQ(StatusCode, DpiDisableUnsupported, TALOS_RT_DPI_DISABLE_UNSUPPORTED);
 RT_ENUM_EQ(StatusCode, Fatal, TALOS_RT_FATAL);
 RT_ENUM_EQ(StatusCode, AotCheckpoint, TALOS_RT_AOT_CHECKPOINT);
 RT_ENUM_EQ(StatusCode, AotTimedCheckpoint, TALOS_RT_AOT_TIMED_CHECKPOINT);

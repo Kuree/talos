@@ -105,8 +105,7 @@ bool resolveSnapshotRange(const talos_rt_context *context,
 
 } // namespace
 
-talos_rt_status
-talos_rt_capture_preponed_unlocked(talos_rt_context *context) {
+talos_rt_status talos_rt_capture_preponed_unlocked(talos_rt_context *context) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   if (!context->execution ||
@@ -151,8 +150,7 @@ talos_rt_capture_preponed_unlocked(talos_rt_context *context) {
         reinterpret_cast<uint8_t *>(context->preponedUnknown.data());
     uint64_t stateBytes = (execution.state_bit_count + 7) / 8;
     for (uint64_t index = 0; index != extension.sampled_range_count; ++index) {
-      const talos_rt_sampled_range_v1 &range =
-          extension.sampled_ranges[index];
+      const talos_rt_sampled_range_v1 &range = extension.sampled_ranges[index];
       copyPackedRange(sampledValue + range.snapshot_byte_offset, value,
                       stateBytes, range.source_bit_offset, range.bit_width);
       if (sampledUnknown)
@@ -165,17 +163,18 @@ talos_rt_capture_preponed_unlocked(talos_rt_context *context) {
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_DESIGN; }
 }
 
-talos_rt_status talos_rt_recapture_initialized_preponed_unlocked(
-    talos_rt_context *context) {
+talos_rt_status
+talos_rt_recapture_initialized_preponed_unlocked(talos_rt_context *context) {
   if (context->schedulerTime != 0 || context->preponedValue.empty())
     return TALOS_RT_OK;
   return talos_rt_capture_preponed_unlocked(context);
 }
 
-extern "C" talos_rt_status
-talos_rt_v1_sampled_read(talos_rt_context *context, uint64_t stableID,
-                           uint64_t bitWidth, uint8_t *outValue,
-                           uint8_t *outUnknown) {
+extern "C" talos_rt_status talos_rt_v1_sampled_read(talos_rt_context *context,
+                                                    uint64_t stableID,
+                                                    uint64_t bitWidth,
+                                                    uint8_t *outValue,
+                                                    uint8_t *outUnknown) {
   size_t bytes = 0;
   if (!context || !outValue || !outUnknown || !checkedBytes(bitWidth, bytes))
     return TALOS_RT_INVALID_ARGUMENT;
@@ -186,8 +185,7 @@ talos_rt_v1_sampled_read(talos_rt_context *context, uint64_t stableID,
     std::memset(outValue, 0, bytes);
     std::memset(outUnknown, UINT8_MAX, bytes);
     if (bitWidth % 8)
-      outUnknown[bytes - 1] &=
-          static_cast<uint8_t>((1u << (bitWidth % 8)) - 1);
+      outUnknown[bytes - 1] &= static_cast<uint8_t>((1u << (bitWidth % 8)) - 1);
     return TALOS_RT_OK;
   }
   ContextTransaction transaction(context);
@@ -317,9 +315,9 @@ extern "C" talos_rt_status talos_rt_v1_clocked_sample_update(
 
 extern "C" talos_rt_status
 talos_rt_v1_clocked_sample_read(talos_rt_context *context, uint64_t siteID,
-                                  uint64_t bitWidth, uint64_t depth,
-                                  uint64_t age, uint32_t fourState,
-                                  uint8_t *outValue, uint8_t *outUnknown) {
+                                uint64_t bitWidth, uint64_t depth, uint64_t age,
+                                uint32_t fourState, uint8_t *outValue,
+                                uint8_t *outUnknown) {
   size_t bytes = 0;
   if (!context || siteID == 0 || depth == UINT64_MAX || age > depth ||
       fourState > 1 || !outValue || !outUnknown ||

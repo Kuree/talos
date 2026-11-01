@@ -242,8 +242,7 @@ FailureOr<Value> UnitLowering::lowerAlternateClockSample(
         outlineBuilder.getNamedAttr("domain",
                                     sim::ExecutionDomainAttr::get(
                                         context, sim::ExecutionDomain::Design)),
-        ::talos::schedule::named<
-            ::talos::schedule::Field::ClockedSamplePlan>(
+        ::talos::schedule::named<::talos::schedule::Field::ClockedSamplePlan>(
             schedule::ClockedSamplePlanAttr::get(
                 outlineBuilder.getContext(), outlineBuilder.getStringAttr(key),
                 outlineBuilder.getI64IntegerAttr(siteID),
@@ -2615,8 +2614,8 @@ UnitLowering::lowerSystemCall(semantic::SVCallExpressionOp op) {
     // IEEE 1800-2023 24.7: `$exit` ends the program whose initial procedure
     // the calling thread originates in. Any other thread ignores it, which a
     // shared subroutine can only decide when it runs.
-    Value owned = sim::SimProgramOwnedOp::create(
-        builder, location, builder.getI1Type(), context);
+    Value owned = sim::SimProgramOwnedOp::create(builder, location,
+                                                 builder.getI1Type(), context);
     Block *exit = addBlock();
     Block *ignored = addBlock();
     cf::CondBranchOp::create(builder, location, owned, exit, ValueRange{},
@@ -2811,13 +2810,11 @@ UnitLowering::lowerSystemCall(semantic::SVCallExpressionOp op) {
       }
       Value result =
           name == "$coverage_merge"
-              ? sim::SimCoverageMergeOp::create(builder, location, i32,
-                                                context, *coverageType,
-                                                *databaseName)
+              ? sim::SimCoverageMergeOp::create(builder, location, i32, context,
+                                                *coverageType, *databaseName)
                     .getStatus()
-              : sim::SimCoverageSaveOp::create(builder, location, i32,
-                                               context, *coverageType,
-                                               *databaseName)
+              : sim::SimCoverageSaveOp::create(builder, location, i32, context,
+                                               *coverageType, *databaseName)
                     .getStatus();
       return convertResult(result);
     }

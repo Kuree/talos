@@ -40,8 +40,7 @@ inline bool isKnownOperation(llvm::StringRef name) {
          name == DelayQuantum::getNameStr() ||
          name == HierarchicalName::getNameStr() ||
          name == ReturnVariablePath::getNameStr() ||
-         name == VpiCallSite::getNameStr() ||
-         name == Lowered::getNameStr() ||
+         name == VpiCallSite::getNameStr() || name == Lowered::getNameStr() ||
          name == RandomModeIndex::getNameStr() ||
          name == RandomObjectEdge::getNameStr() ||
          name == RandomVariableKind::getNameStr() ||

@@ -20,13 +20,11 @@
 #include "TargetBackend.h"
 
 #include "talos/Analysis/SimulationScheduleAnalysis.h"
-#include "talos/Conversion/TalosToSimulation.h"
 #include "talos/Conversion/SlangToTalos.h"
+#include "talos/Conversion/TalosToSimulation.h"
 #include "talos/Dialect/Coverage/CoverageDialect.h"
 #include "talos/Dialect/DPI/DPIDialect.h"
 #include "talos/Dialect/Native/NativeDialect.h"
-#include "talos/Dialect/Talos/TalosDialect.h"
-#include "talos/Dialect/Talos/TalosOps.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
 #include "talos/Dialect/Schedule/Export.h"
 #include "talos/Dialect/Schedule/ScheduleDialect.h"
@@ -34,6 +32,8 @@
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Dialect/Slang/SlangDialect.h"
 #include "talos/Dialect/Slang/SlangOps.h"
+#include "talos/Dialect/Talos/TalosDialect.h"
+#include "talos/Dialect/Talos/TalosOps.h"
 #include "talos/Frontend/Frontend.h"
 #include "talos/Version.h"
 
@@ -197,7 +197,7 @@ static std::string resolveSVLibraryPath(StringRef root, StringRef path,
     // Annex J names libraries without a suffix; the registered native target
     // supplies its shared-library extension.
     Triple target(TALOS_NATIVE_TARGET_TRIPLE);
-    resolved += target.isOSWindows() ? ".dll"
+    resolved += target.isOSWindows()  ? ".dll"
                 : target.isOSDarwin() ? ".dylib"
                                       : ".so";
   }
@@ -455,8 +455,8 @@ static bool expandCommandFiles(SmallVectorImpl<const char *> &argv,
 static FileLineColLoc
 scheduleSourceLocation(SymbolTable &symbols,
                        talos::schedule::ComputeFragmentAttr fragment) {
-  auto function = symbols.lookup<talos::sim::SimFuncOp>(
-      fragment.getFunction().getValue());
+  auto function =
+      symbols.lookup<talos::sim::SimFuncOp>(fragment.getFunction().getValue());
   if (!function)
     return {};
   Block *block =
@@ -946,9 +946,9 @@ static void writeBindingReport(ModuleOp module, raw_ostream &output) {
   }
 }
 
-static talos::frontend::FrontendOptions buildFrontendOptions(
-    const InputArgList &args, bool &valid,
-    const talos::driver::DriverConfiguration &config) {
+static talos::frontend::FrontendOptions
+buildFrontendOptions(const InputArgList &args, bool &valid,
+                     const talos::driver::DriverConfiguration &config) {
   talos::frontend::FrontendOptions options;
   // Split only the conventional '+' aliases. A canonical -I or -D value may
   // itself contain '+' (a directory name or an arithmetic macro expression).
@@ -1054,18 +1054,17 @@ static talos::frontend::FrontendOptions buildFrontendOptions(
     valid = false;
   }
   options.languageVersion =
-      standard == "1800-2017"
-          ? talos::frontend::LanguageVersion::IEEE1800_2017
-          : talos::frontend::LanguageVersion::IEEE1800_2023;
+      standard == "1800-2017" ? talos::frontend::LanguageVersion::IEEE1800_2017
+                              : talos::frontend::LanguageVersion::IEEE1800_2023;
   for (std::string argument : args.getAllArgValues(OPT_Xslang))
     options.slangArgs.push_back(std::move(argument));
   options.sdfLimits = config.sdfLimits;
   return options;
 }
 
-static int executeCompilation(
-    const InputArgList &args,
-    const talos::driver::DriverConfiguration &config) {
+static int
+executeCompilation(const InputArgList &args,
+                   const talos::driver::DriverConfiguration &config) {
   SmallVector<std::string> inputs;
   for (const Arg *arg : args.filtered(OPT_INPUT))
     inputs.emplace_back(arg->getValue());
@@ -1181,8 +1180,7 @@ static int executeCompilation(
                     staticSpecialization + "'; expected auto, off, or on");
     valid = false;
   }
-  StringRef forwardCopies =
-      args.getLastArgValue(OPT_forward_copies_EQ, "on");
+  StringRef forwardCopies = args.getLastArgValue(OPT_forward_copies_EQ, "on");
   if (forwardCopies != "on" && forwardCopies != "off" &&
       forwardCopies != "census") {
     emitDriverError(Twine("unsupported forward copies '") + forwardCopies +
@@ -1327,10 +1325,9 @@ static int executeCompilation(
 
   if (preprocess || dumpTokens) {
     FailureOr<std::string> text =
-        preprocess ? talos::frontend::preprocessSystemVerilog(inputs,
-                                                                frontendOptions)
-                   : talos::frontend::listSystemVerilogTokens(
-                         inputs, frontendOptions);
+        preprocess
+            ? talos::frontend::preprocessSystemVerilog(inputs, frontendOptions)
+            : talos::frontend::listSystemVerilogTokens(inputs, frontendOptions);
     if (failed(text))
       return 1;
     std::string outputFilename = args.getLastArgValue(OPT_o, "-").str();
@@ -1347,11 +1344,11 @@ static int executeCompilation(
   }
 
   DialectRegistry registry;
-  registry.insert<
-      talos::slangir::SlangDialect, talos::ir::TalosDialect,
-      talos::cov::CoverageDialect, talos::dpi::DPIDialect,
-      talos::native::NativeDialect, talos::runtime::TalosRuntimeDialect,
-      talos::sim::TalosSimulationDialect, mlir::LLVM::LLVMDialect>();
+  registry
+      .insert<talos::slangir::SlangDialect, talos::ir::TalosDialect,
+              talos::cov::CoverageDialect, talos::dpi::DPIDialect,
+              talos::native::NativeDialect, talos::runtime::TalosRuntimeDialect,
+              talos::sim::TalosSimulationDialect, mlir::LLVM::LLVMDialect>();
   // One explicitly sized pool is shared by all MLIR parallel pass adaptors.
   // Its lifetime encloses the context as required by MLIRContext.
   std::unique_ptr<llvm::DefaultThreadPool> compilerPool;
@@ -1409,8 +1406,7 @@ static int executeCompilation(
   if (frontendOptions.twoState)
     talos::native::mark<talos::native::TwoState>(*module);
   if (args.hasArg(OPT_no_two_state_specialization))
-    talos::native::mark<talos::native::DisableTwoStateSpecialization>(
-        *module);
+    talos::native::mark<talos::native::DisableTwoStateSpecialization>(*module);
 
   if (pulseRejectPercent || pulseErrorPercent) {
     talos::sim::set<talos::sim::metadata::PulseRejectPercent>(
@@ -1439,7 +1435,7 @@ static int executeCompilation(
         metrics.push_back(StringAttr::get(&context, metric));
     }
     talos::cov::set<talos::cov::Metrics>((*module),
-                                             ArrayAttr::get(&context, metrics));
+                                         ArrayAttr::get(&context, metrics));
   }
   if (!coverageConfigContents.empty())
     talos::cov::set<talos::cov::Config>(
@@ -1624,9 +1620,8 @@ static int executeCompilation(
 
 } // namespace
 
-int talos::driver::runTalosDriver(
-    int argc, char **argv,
-    const DriverConfiguration &config) {
+int talos::driver::runTalosDriver(int argc, char **argv,
+                                  const DriverConfiguration &config) {
   driverExecutablePath = sys::fs::getMainExecutable(
       argv[0], reinterpret_cast<void *>(&runTalosDriver));
   const OptTable &optionTable = talos::driver::getDriverOptTable();
@@ -1676,7 +1671,7 @@ int talos::driver::runTalosDriver(
 #if TALOS_HAS_HOST_C_RUNTIME
     FailureOr<talos::driver::HostCRuntimeInputs> inputs =
         talos::driver::discoverHostCRuntime(TALOS_NATIVE_TARGET_TRIPLE,
-                                              driverExecutablePath);
+                                            driverExecutablePath);
     if (failed(inputs))
       return 1;
     outs() << "dynamic-linker=" << inputs->dynamicLinker << '\n'

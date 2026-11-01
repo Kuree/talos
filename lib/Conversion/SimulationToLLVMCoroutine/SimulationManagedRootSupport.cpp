@@ -57,13 +57,14 @@ void emitGuardedManagedRootRangePop(OpBuilder &builder, Location location,
                                     Block *registered, Block *rest) {
   MLIRContext *context = builder.getContext();
   Type pointer = LLVM::LLVMPointerType::get(context);
-  LLVM::CondBrOp::create(builder, location,
-                         isManagedRootRangeRegistered(builder, location, record),
-                         registered, rest);
+  LLVM::CondBrOp::create(
+      builder, location,
+      isManagedRootRangeRegistered(builder, location, record), registered,
+      rest);
   builder.setInsertionPointToEnd(registered);
   if (!runtimeContext) {
-    Value contextAddress = LLVM::AddressOfOp::create(
-        builder, location, pointer, "__talos_current_context");
+    Value contextAddress = LLVM::AddressOfOp::create(builder, location, pointer,
+                                                     "__talos_current_context");
     runtimeContext =
         LLVM::LoadOp::create(builder, location, pointer, contextAddress, 8);
   }
@@ -72,12 +73,12 @@ void emitGuardedManagedRootRangePop(OpBuilder &builder, Location location,
                    SymbolRefAttr::get(context, "talos_rt_v1_gc_current_lane"),
                    runtimeContext)
                    .getResult();
-  Value status = LLVM::CallOp::create(
-                     builder, location, TypeRange{builder.getI32Type()},
-                     SymbolRefAttr::get(
-                         context, "talos_rt_v1_gc_managed_root_range_pop"),
-                     ValueRange{lane, record})
-                     .getResult();
+  Value status =
+      LLVM::CallOp::create(
+          builder, location, TypeRange{builder.getI32Type()},
+          SymbolRefAttr::get(context, "talos_rt_v1_gc_managed_root_range_pop"),
+          ValueRange{lane, record})
+          .getResult();
   LLVM::CallOp::create(
       builder, location, TypeRange{},
       SymbolRefAttr::get(context, "talos_rt_v1_scheduler_fail"),
@@ -99,8 +100,8 @@ void emitManagedRootRangePop(OpBuilder &builder, Location location,
   Block *registered = new Block;
   block->getParent()->getBlocks().insert(rest->getIterator(), registered);
   builder.setInsertionPointToEnd(block);
-  emitGuardedManagedRootRangePop(builder, location, Value{}, record,
-                                 registered, rest);
+  emitGuardedManagedRootRangePop(builder, location, Value{}, record, registered,
+                                 rest);
   builder.setInsertionPointToStart(rest);
 }
 

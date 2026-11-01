@@ -815,9 +815,9 @@ void populateAggregateToLLVMConversionPatterns(RewritePatternSet &patterns,
       .add<PackedAggregateExtractConversion, PackedAggregateInsertConversion,
            PackedAggregateConstructConversion, PackedAggregateSplatConversion,
            AggregateDynamicExtractConversion, NativeWordExtractConversion,
-           AggregateDynamicInsertConversion,
-           AggregateDefaultConversion, UnionConstructConversion,
-           UnionExtractConversion, UnionIsActiveConversion>(converter, context);
+           AggregateDynamicInsertConversion, AggregateDefaultConversion,
+           UnionConstructConversion, UnionExtractConversion,
+           UnionIsActiveConversion>(converter, context);
 }
 
 } // namespace talos::detail

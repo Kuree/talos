@@ -120,8 +120,8 @@ public:
       return lhs.getSymName() < rhs.getSymName();
     });
     for (talos::sim::SimFuncOp function : functions) {
-      auto frame = talos::SimulationProcessFrameAnalysis::create(function,
-                                                                   *dataLayout);
+      auto frame =
+          talos::SimulationProcessFrameAnalysis::create(function, *dataLayout);
       if (failed(frame)) {
         signalPassFailure();
         return;
@@ -152,8 +152,7 @@ private:
     llvm::errs() << "    continuations=";
     llvm::interleaveComma(frame.getContinuations(), llvm::errs());
     llvm::errs() << "\n";
-    for (const talos::ProcessSuspension &suspension :
-         frame.getSuspensions()) {
+    for (const talos::ProcessSuspension &suspension : frame.getSuspensions()) {
       llvm::errs() << "    suspend "
                    << suspension.operation->getName().getStringRef()
                    << " id=" << suspension.continuationID

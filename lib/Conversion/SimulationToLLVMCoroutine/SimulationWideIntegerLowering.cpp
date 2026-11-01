@@ -283,7 +283,8 @@ static bool scopeNativeOutputTemporaries(LLVM::LLVMFuncOp function) {
           } else {
             // The context can retain pointers. Only the synchronous items
             // and format-environment operands carry the borrowing contract.
-            for (auto [index, argument] : llvm::enumerate(call.getArgOperands()))
+            for (auto [index, argument] :
+                 llvm::enumerate(call.getArgOperands()))
               if (argument == value && index != 4 && index != 6)
                 valid = false;
             access(user);
@@ -357,7 +358,8 @@ static bool scopeNativeOutputTemporaries(LLVM::LLVMFuncOp function) {
     LLVM::LifetimeStartOp::create(builder, scope.first->getLoc(),
                                   scope.allocation);
     builder.setInsertionPointAfter(scope.last);
-    LLVM::LifetimeEndOp::create(builder, scope.last->getLoc(), scope.allocation);
+    LLVM::LifetimeEndOp::create(builder, scope.last->getLoc(),
+                                scope.allocation);
   }
   return !scopes.empty();
 }
@@ -445,8 +447,9 @@ static bool shareScopedTemporaries(LLVM::LLVMFuncOp function) {
         shared = allocation.getResult();
       } else {
         if (!one)
-          one = LLVM::ConstantOp::create(builder, location, builder.getI64Type(),
-                                          builder.getI64IntegerAttr(1));
+          one =
+              LLVM::ConstantOp::create(builder, location, builder.getI64Type(),
+                                       builder.getI64IntegerAttr(1));
         shared = LLVM::AllocaOp::create(builder, location, pointer, key.first,
                                         one, key.second);
       }

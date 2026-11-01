@@ -3,8 +3,8 @@
 #ifndef TALOS_CONVERSION_SIMULATIONTOBYTECODE_H
 #define TALOS_CONVERSION_SIMULATIONTOBYTECODE_H
 
-#include "talos/Conversion/Passes.h"
 #include "mlir/Support/LogicalResult.h"
+#include "talos/Conversion/Passes.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"

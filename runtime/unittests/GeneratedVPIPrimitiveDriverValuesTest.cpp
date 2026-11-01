@@ -5,10 +5,10 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
+#include "sv_vpi_user.h"
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
-#include "sv_vpi_user.h"
 #include "vpi_user.h"
 #include "gtest/gtest.h"
 #include <algorithm>
@@ -98,8 +98,7 @@ TEST(GeneratedDesignDatabase, PrimitiveDriverValues) {
   auto rejects = [&](auto bytes) {
     auto invalid = execution;
     invalid.design_database = bytes.data();
-    EXPECT_EQ(talos_rt_v1_design_validate(&invalid),
-              TALOS_RT_INVALID_DESIGN);
+    EXPECT_EQ(talos_rt_v1_design_validate(&invalid), TALOS_RT_INVALID_DESIGN);
   };
   rejects(mutate(conditionalRow, [](auto &binding) {
     binding.setHighDriverIndex(UINT32_MAX);
@@ -128,8 +127,8 @@ TEST(GeneratedDesignDatabase, PrimitiveDriverValues) {
     std::vector<uint64_t> frame((size + 7) / 8);
     talos_rt_fragment_action_v1 action{};
     ASSERT_EQ(talos_rt_execute_design_bytecode(entry, runtime, frame.data(),
-                                                 frame.size() * 8, 0, size, 0,
-                                                 0, &action),
+                                               frame.size() * 8, 0, size, 0, 0,
+                                               &action),
               TALOS_RT_OK);
     ASSERT_EQ(action.kind, TALOS_RT_FRAGMENT_TERMINATE);
   };
@@ -137,8 +136,7 @@ TEST(GeneratedDesignDatabase, PrimitiveDriverValues) {
     talos_rt_context *raw = nullptr;
     ASSERT_EQ(talos_rt_v1_context_create_for_design(&descriptor, &raw),
               TALOS_RT_OK);
-    std::unique_ptr<talos_rt_context,
-                    decltype(&talos_rt_v1_context_destroy)>
+    std::unique_ptr<talos_rt_context, decltype(&talos_rt_v1_context_destroy)>
         runtime(raw, talos_rt_v1_context_destroy);
     ASSERT_EQ(talos_rt_v1_vpi_startup(raw, nullptr, 0), TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_vpi_end_compile(raw), TALOS_RT_OK);
@@ -320,8 +318,8 @@ TEST(GeneratedDesignDatabase, SourcePrimitiveValues) {
   std::vector<uint64_t> frame((size + 7) / 8);
   talos_rt_fragment_action_v1 action{};
   ASSERT_EQ(talos_rt_execute_design_bytecode(entry, raw, frame.data(),
-                                               frame.size() * 8, 0, size, 0, 0,
-                                               &action),
+                                             frame.size() * 8, 0, size, 0, 0,
+                                             &action),
             TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_run(raw), TALOS_RT_OK);
   std::vector<vpiHandle> handles;

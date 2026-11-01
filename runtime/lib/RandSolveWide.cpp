@@ -385,8 +385,8 @@ bool buildSolveBeforeLayers(const std::vector<SolveBeforeEdge> &edges,
                             std::vector<WideValue> &layers) {
   std::vector<talos::runtime::OrderMask> masks;
   if (!talos::runtime::buildSolveOrderLayers(toSolveOrderEdges(edges),
-                                               mutableMask.words,
-                                               constraintMask, false, masks))
+                                             mutableMask.words, constraintMask,
+                                             false, masks))
     return false;
   layers.clear();
   for (auto &mask : masks) {
@@ -442,7 +442,7 @@ bool parseWideProgram(const uint8_t *bytes, size_t size, WideProgram &result,
     return false;
   bool real = (flags & TALOS_RT_RANDOM_PROGRAM_HAS_REAL) != 0;
   if (real && (!(flags & TALOS_RT_RANDOM_PROGRAM_HAS_SAMPLER_PLAN) ||
-                !(flags & TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM)))
+               !(flags & TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM)))
     return false;
   if ((encodedDist != weighted) || (weighted && encodedPriority))
     return false;
@@ -474,8 +474,7 @@ bool parseWideProgram(const uint8_t *bytes, size_t size, WideProgram &result,
         size - expectedSize < TALOS_RT_RANDOM_SOLVE_EDGE_HEADER_SIZE)
       return false;
     solveEdgeCount = read32(bytes + expectedSize);
-    solveRecordsOffset =
-        expectedSize + TALOS_RT_RANDOM_SOLVE_EDGE_HEADER_SIZE;
+    solveRecordsOffset = expectedSize + TALOS_RT_RANDOM_SOLVE_EDGE_HEADER_SIZE;
     solveRecordSize = ((uint64_t(result.aggregateWidth) + 63) / 64) * 16 +
                       TALOS_RT_RANDOM_SOLVE_EDGE_TAIL_SIZE_V2;
     if ((!encodedPriority && solveEdgeCount == 0) ||
@@ -532,8 +531,8 @@ bool parseWideProgram(const uint8_t *bytes, size_t size, WideProgram &result,
     domainGroupCount = read32(bytes + expectedSize);
     domainRecordCount = read32(bytes + expectedSize + 4);
     domainRecordsOffset = expectedSize + TALOS_RT_RANDOM_DOMAIN_HEADER_SIZE;
-    if (domainRecordCount > (UINT64_MAX - domainRecordsOffset) /
-                                TALOS_RT_RANDOM_DOMAIN_RECORD_SIZE)
+    if (domainRecordCount >
+        (UINT64_MAX - domainRecordsOffset) / TALOS_RT_RANDOM_DOMAIN_RECORD_SIZE)
       return false;
     expectedSize =
         domainRecordsOffset + static_cast<uint64_t>(domainRecordCount) *
@@ -788,10 +787,9 @@ bool parseWideProgram(const uint8_t *bytes, size_t size, WideProgram &result,
       uint32_t width = decoded.width;
       // Wide semantic domains are sampled by the compiled exact plan. The
       // legacy bounded radix traversal only stores narrow domain indices.
-      if (width > 64 &&
-          (!(flags & TALOS_RT_RANDOM_PROGRAM_HAS_SAMPLER_PLAN) ||
-           !(flags & (TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM |
-                      TALOS_RT_RANDOM_PROGRAM_EXACT_WEIGHTED))))
+      if (width > 64 && (!(flags & TALOS_RT_RANDOM_PROGRAM_HAS_SAMPLER_PLAN) ||
+                         !(flags & (TALOS_RT_RANDOM_PROGRAM_EXACT_UNIFORM |
+                                    TALOS_RT_RANDOM_PROGRAM_EXACT_WEIGHTED))))
         return false;
       DomainGroup &group = result.domainGroups[groupIndex];
       if (seen[groupIndex] &&
