@@ -4569,9 +4569,22 @@ private:
                   slangir::DefinitionKindAttr::get(
                       builder.getContext(), convertEnum(node.definitionKind)));
     } else if constexpr (std::same_as<T, slang::ast::ProceduralBlockSymbol>) {
+      // IEEE 1800-2023 16.4.3: a static deferred assertion is treated as if it
+      // were contained in an always_comb procedure. Slang models it as a plain
+      // always, which has no event control and would never yield.
+      auto procedureKind = node.procedureKind;
+      if (node.isFromAssertion) {
+        // A label wraps the assertion in an implicit block.
+        const slang::ast::Statement *assertion = &node.getBody();
+        while (const auto *block =
+                   assertion->as_if<slang::ast::BlockStatement>())
+          assertion = &block->body;
+        if (assertion->kind == slang::ast::StatementKind::ImmediateAssertion)
+          procedureKind = slang::ast::ProceduralBlockKind::AlwaysComb;
+      }
       SET_OP_ATTR(ProcedureKind,
                   slangir::ProceduralBlockKindAttr::get(
-                      builder.getContext(), convertEnum(node.procedureKind)));
+                      builder.getContext(), convertEnum(procedureKind)));
     } else if constexpr (std::same_as<T, slang::ast::StatementBlockSymbol>) {
       SET_OP_ATTR(BlockKind,
                   slangir::StatementBlockKindAttr::get(
