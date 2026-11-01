@@ -5908,6 +5908,22 @@ private:
       if (node.range)
         addSequenceRange<Op>(attrs, *node.range);
     } else if constexpr (std::same_as<T, slang::ast::BinaryAssertionExpr>) {
+      // IEEE 1800-2023 16.12.22 c): a sequence used as the antecedent of |=>
+      // shall admit at least one match (an only-empty match is allowed). Slang
+      // reports a never-matching sequence as a warning wherever it appears, so
+      // the antecedent-only rule is enforced here.
+      if (node.op ==
+              slang::ast::BinaryAssertionOperator::NonOverlappedImplication &&
+          node.left.checkNondegeneracy().status.has(
+              slang::ast::NondegeneracyStatus::AdmitsNoMatch)) {
+        slang::SourceLocation where = node.left.syntax
+                                          ? node.left.syntax->sourceRange().start()
+                                          : node.opRange.start();
+        emitError(sourceLocation(where))
+            << "IEEE 1800-2023 16.12.22: the antecedent of a nonoverlapping "
+               "implication must admit at least one match";
+        sawInvalidNode = true;
+      }
       SET_OP_ATTR(OperatorKind,
                   slangir::AssertionBinaryOperatorAttr::get(
                       builder.getContext(), convertEnum(node.op)));

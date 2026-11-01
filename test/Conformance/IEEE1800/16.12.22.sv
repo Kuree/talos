@@ -1,6 +1,5 @@
 // CLAUSE: Nondegenerate sequences evaluate as properties; forbidden degenerate uses are rejected
-// XFAIL: *
-// 16.12.22 rule c: an antecedent of |=> that never matches only warns (-Wseq-no-match). Raising that warning to an error also rejects legal `assert property (0)`, so the rule needs an antecedent-only check.
+// SINCE: 0.1.0
 // RUN: %not %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %S/Inputs/16.12.22/property.sv -o %t.bad.exe
 // RUN: %not %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %S/Inputs/16.12.22/admits_empty.sv -o %t.bad.exe
 // RUN: %not %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %S/Inputs/16.12.22/overlap.sv -o %t.bad.exe
@@ -10,7 +9,7 @@
 // DIAG: sequence must not admit an empty match
 // DIAG: sequence must not admit an empty match
 // DIAG: sequence admits only empty matches
-// DIAG: XX-NOMATCH
+// DIAG: antecedent of a nonoverlapping implication must admit at least one match
 // CHECK: sequence pass=3 fail=1{{$}}
 // CHECK-NEXT: empty antecedent pass=2 fail=2{{$}}
 
