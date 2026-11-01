@@ -3673,7 +3673,7 @@ private:
         // it for elaboration-only bounds/counts, but let executable expressions
         // be folded again after their operands enter the two-state domain.
         attrs.set(twoState ? "elaborated_constant" : foldedConstantAttrName,
-                  builder.getStringAttr(formatConstant(*folded)));
+                  getFoldedIntegerString(folded->integer()));
     }
 
     if constexpr (std::same_as<T, slang::ast::ParameterSymbol> ||
@@ -7627,6 +7627,28 @@ private:
   llvm::DenseMap<const slang::ast::Type *,
                  std::pair<ArrayAttr, DenseBoolArrayAttr>>
       declaredSelectionsCache;
+  /// Slang prints an integer one whole-value shift per digit, which is
+  /// quadratic in its width, and a wide parameter folds at every reference to
+  /// it. Spell each distinct wide value once.
+  StringAttr getFoldedIntegerString(const slang::SVInt &value) {
+    auto spell = [&] {
+      return builder.getStringAttr(value.toString(slang::SVInt::MAX_BITS,
+                                                  /*exactUnknowns=*/true));
+    };
+    if (value.getBitWidth() <= 64)
+      return spell();
+    llvm::SmallString<128> key;
+    llvm::raw_svector_ostream os(key);
+    os << value.getBitWidth() << ':' << value.isSigned() << ':';
+    os.write(reinterpret_cast<const char *>(value.getRawPtr()),
+             value.getNumWords() * sizeof(uint64_t));
+    auto [entry, inserted] = wideIntegerStrings.try_emplace(key);
+    if (inserted)
+      entry->second = spell();
+    return entry->second;
+  }
+  /// Exact bits, width and signedness of a wide integer, to its spelling.
+  llvm::StringMap<StringAttr> wideIntegerStrings;
   llvm::DenseMap<const slang::ast::SystemSubroutine *, bool> builtinMethodCache;
   llvm::DenseMap<const slang::ast::Type *, ArrayAttr> arrayQueryDimensionCache;
   llvm::DenseMap<const slang::ast::Type *, ArrayAttr> vpiTypedefLayerCache;
