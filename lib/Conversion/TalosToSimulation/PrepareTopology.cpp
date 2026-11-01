@@ -4926,9 +4926,15 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
     // IEEE 1800-2023 E.2: `default_decay_time sets the decay time of the
     // trireg nets "that do not have any decay time specified in the
     // declaration", in the module's time units; `infinite keeps the charge.
-    if (resolution == sim::NetResolutionKind::TriReg &&
-        getNetInitializerExpressions(op).empty() &&
-        !(net.getDelayFs() && net.getDelayFs()->size() == 3)) {
+    // A declaration assignment takes the rise and fall delays, but a third
+    // delay is still the net's charge decay (28.16.2).
+    bool declaredDecay = net.getDelayFs() && net.getDelayFs()->size() == 3;
+    if (resolution == sim::NetResolutionKind::TriReg && declaredDecay &&
+        !getNetInitializerExpressions(op).empty()) {
+      propagationDelays = builder.getDenseI64ArrayAttr(
+          {0, 0,
+           (*net.getDelayFs())[2] / static_cast<int64_t>(designPrecisionFs)});
+    } else if (resolution == sim::NetResolutionKind::TriReg && !declaredDecay) {
       auto body = op->getParentOfType<semantic::SVInstanceBodySymbolOp>();
       auto decay = body ? sim::get<sim::metadata::DefaultDecayTime>(body)
                         : mlir::FloatAttr{};

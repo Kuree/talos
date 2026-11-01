@@ -27,6 +27,13 @@ module reset;
   trireg q;
 endmodule
 
+`default_decay_time 2
+module zz_assigned;
+  timeunit 1ns; timeprecision 100ps;
+  trireg assigned = 1'bz;
+  trireg #(1, 1, 5) assigned_with_decay = 1'bz;
+endmodule
+
 // 100 ps ticks: 2 ns is 20 ticks and 1.5 ns is 15; an explicit decay wins.
 // CHECK: hierarchy "decayed.declared_decay_nets_keep_theirs"
 // CHECK-SAME: propagation_delays = array<i64: 0, 0, 20>
@@ -41,3 +48,8 @@ endmodule
 // CHECK-SAME: propagation_delays = array<i64: 0, 0, 15>
 // CHECK: hierarchy "reset.q"
 // CHECK-NOT: propagation_delays
+// A declaration assignment takes the other delays, but the decay stays the net's.
+// CHECK: hierarchy "zz_assigned.assigned"
+// CHECK-SAME: propagation_delays = array<i64: 0, 0, 20>
+// CHECK: hierarchy "zz_assigned.assigned_with_decay"
+// CHECK-SAME: propagation_delays = array<i64: 0, 0, 50>
