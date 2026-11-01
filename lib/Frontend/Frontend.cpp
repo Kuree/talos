@@ -2607,6 +2607,60 @@ private:
     return true;
   }
 
+  // IEEE 1800-2023 7.3, 7.3.2: dynamic types and chandle types shall not be used
+  // in untagged unions. Slang admits them, and a typedef nobody uses still
+  // declares one, so every semantic type is checked when it is first seen.
+  void diagnoseUntaggedUnionMembers(const slang::ast::Type &sourceType) {
+    const slang::ast::Type &type = sourceType.getCanonicalType();
+    if (!checkedUnionTypes.insert(&type).second)
+      return;
+    auto isDynamic = [](const slang::ast::Type &member) {
+      const slang::ast::Type &canonical = member.getCanonicalType();
+      return canonical.isString() || canonical.isCHandle() ||
+             canonical.isClass() || canonical.isDynamicallySizedArray();
+    };
+    std::function<bool(const slang::ast::Type &)> holdsDynamic =
+        [&](const slang::ast::Type &member) {
+          const slang::ast::Type &canonical = member.getCanonicalType();
+          if (isDynamic(canonical))
+            return true;
+          if (canonical.isUnpackedArray())
+            return holdsDynamic(*canonical.getArrayElementType());
+          if (canonical.kind != slang::ast::SymbolKind::UnpackedStructType)
+            return false;
+          for (const auto &field :
+               canonical.as<slang::ast::UnpackedStructType>()
+                   .template membersOfType<slang::ast::FieldSymbol>())
+            if (holdsDynamic(field.getType()))
+              return true;
+          return false;
+        };
+    if (type.isUnpackedArray() && !type.isDynamicallySizedArray()) {
+      diagnoseUntaggedUnionMembers(*type.getArrayElementType());
+      return;
+    }
+    if (type.kind == slang::ast::SymbolKind::UnpackedStructType) {
+      for (const auto &field :
+           type.as<slang::ast::UnpackedStructType>()
+               .template membersOfType<slang::ast::FieldSymbol>())
+        diagnoseUntaggedUnionMembers(field.getType());
+      return;
+    }
+    if (type.kind != slang::ast::SymbolKind::UnpackedUnionType)
+      return;
+    const auto &value = type.as<slang::ast::UnpackedUnionType>();
+    for (const auto &field :
+         value.template membersOfType<slang::ast::FieldSymbol>()) {
+      diagnoseUntaggedUnionMembers(field.getType());
+      if (value.isTagged || !holdsDynamic(field.getType()))
+        continue;
+      emitError(sourceLocation(field.location))
+          << "IEEE 1800-2023 7.3 forbids dynamic and chandle types in an "
+             "untagged union";
+      sawInvalidNode = true;
+    }
+  }
+
   template <typename Op, typename Node>
   void addSpecificAttributes(const Node &node, NamedAttrList &attrs) {
     using T = std::remove_cvref_t<Node>;
@@ -7018,9 +7072,12 @@ private:
         llvm_unreachable(
             "semantic type produced for an operation without a type field");
       }
-      if (const slang::ast::Type *source = getUncanonicalizedSemanticType(node))
+      if (const slang::ast::Type *source =
+              getUncanonicalizedSemanticType(node)) {
+        diagnoseUntaggedUnionMembers(*source);
         if (ArrayAttr layers = getVPITypedefLayers(*source))
           attrs.set("vpi_typedef_layers", layers);
+      }
       if constexpr (std::derived_from<Node, slang::ast::Symbol>)
         if (node.kind == slang::ast::SymbolKind::Variable ||
             node.kind == slang::ast::SymbolKind::Net ||
@@ -7802,6 +7859,7 @@ private:
   std::deque<SmallVector<const slang::ast::Expression *>> modportCallArguments;
   std::deque<slang::ast::CallExpression> modportCalls;
   llvm::SmallPtrSet<const slang::ast::Expression *, 8> modportDefaultArguments;
+  llvm::SmallPtrSet<const slang::ast::Type *, 16> checkedUnionTypes;
   llvm::DenseMap<const slang::syntax::SyntaxNode *, SmallVector<Operation *, 1>>
       dpiExportOperationsBySyntax;
   bool dpiExportSyntaxIndexBuilt = false;
