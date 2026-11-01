@@ -2781,6 +2781,9 @@ UnitLowering::lowerSystemCall(semantic::SVCallExpressionOp op) {
                   "$dumpportson", "$dumpportsall", "$dumpportsflush",
                   "$dumpportslimit"},
                  true)
+          .Cases({"$log", "$nolog", "$reset", "$reset_count", "$reset_value",
+                  "$input", "$scope", "$showscopes", "$showvars", "$list"},
+                 true)
           .Default(false);
   if (dumpCall)
     return lowerDumpSystemCall(op);

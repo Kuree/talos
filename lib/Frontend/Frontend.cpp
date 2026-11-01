@@ -2672,6 +2672,97 @@ private:
         integer.isSigned()));
   }
 
+  /// The modules, tasks, functions and named blocks that IEEE 1800-2023 D.6 and
+  /// D.12 list, in hierarchy order with the first top-level module first, as
+  /// parent path, name and source. Named blocks come from the syntax, since slang
+  /// makes no symbol for one that declares nothing.
+  void forEachListedObject(
+      llvm::function_ref<void(StringRef, StringRef,
+                              const slang::syntax::SyntaxNode *)>
+          visit) {
+    struct BlockFinder : slang::syntax::SyntaxVisitor<BlockFinder> {
+      using Visit = llvm::function_ref<void(StringRef, StringRef,
+                                            const slang::syntax::SyntaxNode *)>;
+      BlockFinder(std::string parent, Visit report)
+          : parent(std::move(parent)), report(report) {}
+      std::string parent;
+      Visit report;
+      void handle(const slang::syntax::BlockStatementSyntax &block) {
+        if (!block.blockName) {
+          visitDefault(block);
+          return;
+        }
+        std::string name(block.blockName->name.valueText());
+        report(parent, name, &block);
+        std::string outer = parent;
+        parent += "." + name;
+        visitDefault(block);
+        parent = std::move(outer);
+      }
+    };
+    auto parentOf = [](StringRef path, StringRef name) {
+      return path.size() > name.size() ? path.drop_back(name.size() + 1)
+                                       : StringRef();
+    };
+    currentScopes.back()->getCompilation().getRoot().visit(slang::ast::makeVisitor(
+        [&](auto &visitor, const slang::ast::InstanceSymbol &instance) {
+          std::string path = instance.getHierarchicalPath();
+          const slang::syntax::SyntaxNode *syntax =
+              instance.getDefinition().getSyntax();
+          visit(parentOf(path, instance.name), instance.name, syntax);
+          visitor.visitDefault(instance);
+          if (syntax) {
+            BlockFinder finder(path, visit);
+            syntax->visit(finder);
+          }
+        },
+        [&](auto &, const slang::ast::SubroutineSymbol &subroutine) {
+          std::string path = subroutine.getHierarchicalPath();
+          visit(parentOf(path, subroutine.name), subroutine.name,
+                subroutine.getSyntax());
+        }));
+  }
+
+  /// IEEE 1800-2023 D.6: $list "produces a listing of the module, task, function,
+  /// or named block" given, or of the interactive scope selected at run time.
+  /// The source text is only known here: the one named object's text, or the path
+  /// and text of every object a scope can select.
+  ArrayAttr listSource(const slang::ast::CallExpression &call) {
+    SmallVector<Attribute> entries;
+    auto textOf = [](const slang::syntax::SyntaxNode *syntax, StringRef name) {
+      return syntax ? syntax->toString() : name.str();
+    };
+    if (!call.arguments().empty()) {
+      if (const auto *named =
+              call.arguments()[0]->as_if<slang::ast::ArbitrarySymbolExpression>()) {
+        const slang::ast::Symbol &symbol = *named->symbol;
+        const slang::syntax::SyntaxNode *syntax = symbol.getSyntax();
+        if (const auto *instance = symbol.as_if<slang::ast::InstanceSymbol>())
+          syntax = instance->getDefinition().getSyntax();
+        entries.push_back(builder.getStringAttr(textOf(syntax, symbol.name)));
+      }
+      return builder.getArrayAttr(entries);
+    }
+    forEachListedObject([&](StringRef parent, StringRef name,
+                            const slang::syntax::SyntaxNode *syntax) {
+      entries.push_back(builder.getStringAttr(
+          parent.empty() ? name.str() : (parent + "." + name).str()));
+      entries.push_back(builder.getStringAttr(textOf(syntax, name)));
+    });
+    return builder.getArrayAttr(entries);
+  }
+
+  /// IEEE 1800-2023 D.12: the parent path and name of every listed object.
+  ArrayAttr showScopesSource() {
+    SmallVector<Attribute> entries;
+    forEachListedObject([&](StringRef parent, StringRef name,
+                            const slang::syntax::SyntaxNode *) {
+      entries.push_back(builder.getStringAttr(parent));
+      entries.push_back(builder.getStringAttr(name));
+    });
+    return builder.getArrayAttr(entries);
+  }
+
   /// The vpiDelayMode constant in force for the design element holding `symbol`
   /// (IEEE 1800-2023 E.4 to E.7).
   int32_t delayModeOf(const slang::ast::Symbol &symbol) const {
@@ -4703,6 +4794,10 @@ private:
           node.syntax->parent->kind ==
               slang::syntax::SyntaxKind::VoidCastedCallStatement)
         SET_OP_ATTR(IsVoidCasted, builder.getUnitAttr());
+      if (node.isSystemCall() && node.getSubroutineName() == "$list")
+        attrs.set("list_source", listSource(node));
+      if (node.isSystemCall() && node.getSubroutineName() == "$showscopes")
+        attrs.set("list_source", showScopesSource());
       if (node.isSystemCall() &&
           (node.getSubroutineName() == "$readmemb" ||
            node.getSubroutineName() == "$readmemh" ||

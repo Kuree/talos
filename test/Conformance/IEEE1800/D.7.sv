@@ -1,6 +1,5 @@
 // CLAUSE: $log and $nolog optional interface
-// XFAIL: *
-// Optional Annex D interface; the compiler does not implement $log and $nolog.
+// SINCE: 0.1.0
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe
 // RUN: %FileCheck %s --check-prefix=FILE0 --input-file=session.log

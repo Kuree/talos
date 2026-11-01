@@ -485,6 +485,9 @@ talos_rt_status writeUnlocked(talos_rt_context *context, uint32_t descriptor,
         *outWritten = minimum;
       return TALOS_RT_IO_ERROR;
     }
+    // IEEE 1800-2023 D.7: a log file holds a copy of the standard output text.
+    if (context->logFile && !context->logPaused && entry->stream == stdout)
+      std::fwrite(data, 1, static_cast<size_t>(size), context->logFile);
   }
   if (outWritten)
     *outWritten = minimum;

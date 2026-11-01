@@ -1,6 +1,5 @@
 // CLAUSE: $reset, $reset_count, and $reset_value optional interface
-// XFAIL: *
-// Optional Annex D interface; the compiler does not implement $reset.
+// SINCE: 0.1.0
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe
 // Pins D.8: $reset(0,42) returns to time zero with $reset_count()==1 and $reset_value()==42.

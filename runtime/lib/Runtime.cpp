@@ -446,6 +446,8 @@ void destroyContextNow(talos_rt_context *context) noexcept {
         std::fclose(context->files[index].stream);
     }
     std::fflush(stdout);
+    if (context->logFile)
+      std::fclose(context->logFile);
   }
   TALOS_RT_CATCH_ALL {}
   if (context->nativeStateSpecializationFast)

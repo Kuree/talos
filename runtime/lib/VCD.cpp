@@ -1770,6 +1770,97 @@ bool talos_rt_dump_active_unlocked(const talos_rt_context *context) {
   return false;
 }
 
+std::string talos_rt_interactive_first_scope(talos_rt_context *context) {
+  const DesignDatabaseCache &database = context->designDatabase;
+  const uint8_t *root;
+  uint32_t kind;
+  if (!database.validated || !getRecord(database, database.root, root, kind))
+    return {};
+  for (uint64_t child = firstChildOffset(root); child != 0;) {
+    const uint8_t *record;
+    uint32_t childKind;
+    if (!getRecord(database, child, record, childKind))
+      return {};
+    std::string_view name;
+    if (childKind == TALOS_RT_DESIGN_RECORD_SCOPE &&
+        getString(database, nameOffset(record), name))
+      return std::string(name);
+    child = nextSiblingOffset(record, childKind);
+  }
+  return {};
+}
+
+talos_rt_status talos_rt_interactive_scope_objects(
+    talos_rt_context *context, const std::string &scope,
+    std::vector<std::string> &paths) {
+  const DesignDatabaseCache &database = context->designDatabase;
+  uint64_t offset;
+  uint32_t kind;
+  const uint8_t *record;
+  if (!database.validated || !resolveSelection(database, scope, offset, kind) ||
+      kind != TALOS_RT_DESIGN_RECORD_SCOPE ||
+      !getRecord(database, offset, record, kind))
+    return TALOS_RT_OK;
+  for (uint64_t child = firstChildOffset(record); child != 0;) {
+    const uint8_t *childRecord;
+    uint32_t childKind;
+    if (!getRecord(database, child, childRecord, childKind))
+      break;
+    std::string_view name;
+    if (traceableObject(database, childKind, childRecord) &&
+        getString(database, nameOffset(childRecord), name))
+      paths.emplace_back(name);
+    child = nextSiblingOffset(childRecord, childKind);
+  }
+  return TALOS_RT_OK;
+}
+
+talos_rt_status
+talos_rt_interactive_show_vars(talos_rt_context *context,
+                               const std::vector<std::string> &paths) {
+  const DesignDatabaseCache &database = context->designDatabase;
+  if (!database.validated)
+    return TALOS_RT_OK;
+  const uint8_t *valuePlane = nullptr;
+  const uint8_t *unknownPlane = nullptr;
+  if (talos_rt_status status =
+          dumpPlanes(context, valuePlane, unknownPlane);
+      status != TALOS_RT_OK)
+    return status;
+  // Generated code without a schedule plan owns its planes, and they alone hold
+  // what it initialized and wrote since the last commit point.
+  if (!context->nativeSchedulePlan && context->nativeStateValue &&
+      (context->execution->flags & TALOS_RT_EXECUTION_HAS_BYTECODE) == 0) {
+    valuePlane = context->nativeStateValue;
+    unknownPlane = context->nativeStateUnknown;
+  }
+  // IEEE 1800-2023 D.13: status information for each named reg and net, in the
+  // whole vector even when only a select of it is named.
+  std::string listing;
+  for (const std::string &path : paths) {
+    uint64_t offset;
+    uint32_t kind;
+    const uint8_t *record;
+    if (!resolveSelection(database, path, offset, kind) ||
+        !getRecord(database, offset, record, kind) ||
+        !traceableObject(database, kind, record))
+      continue;
+    uint64_t width = objectBitWidth(record);
+    uint64_t start = objectStateBit(record);
+    listing += path;
+    listing += kind == TALOS_RT_DESIGN_RECORD_NET ? " net " : " reg ";
+    listing += "[" + std::to_string(width - 1) + ":0] = " +
+               std::to_string(width) + "'b";
+    for (uint64_t bit = width; bit != 0; --bit) {
+      bool value = bitAt(valuePlane, start + bit - 1);
+      bool unknown = unknownPlane && bitAt(unknownPlane, start + bit - 1);
+      listing.push_back(unknown ? (value ? 'z' : 'x') : (value ? '1' : '0'));
+    }
+    listing.push_back('\n');
+  }
+  return writeUnlocked(context, 1, listing.data(), listing.size(), nullptr);
+}
+
 void talos_rt_dump_destroy(talos_rt_context *context) noexcept {
   if (!context)
     return;

@@ -2912,6 +2912,13 @@ struct talos_rt_context {
   // Built once from the immutable execution image and shared by net
   // resolution, force/release, deposits, and reflection connectivity checks.
   NetAliasCache netAliases;
+  // IEEE 1800-2023 D.7: the log file that copies standard output, when one is
+  // open, and whether $nolog has paused it.
+  std::FILE *logFile = nullptr;
+  bool logPaused = false;
+  // IEEE 1800-2023 D.11: the interactive scope $scope selected. Empty means the
+  // initial setting, the first top-level module.
+  std::string interactiveScope;
   DesignDatabaseCache designDatabase;
   bool designDatabaseRegistered = false;
   talos::designbytecode::Image designBytecodeImage;
@@ -3114,6 +3121,16 @@ bool talos_rt_dump_active_unlocked(const talos_rt_context *context);
 uint64_t talos_rt_dump_traced_range_count(const talos_rt_context *context);
 
 // Flush and release the dump state during context teardown.
+// IEEE 1800-2023 D.11 and D.13 over the design database: the first top-level
+// module's name, and the listing of $showvars.
+std::string talos_rt_interactive_first_scope(talos_rt_context *context);
+talos_rt_status
+talos_rt_interactive_show_vars(talos_rt_context *context,
+                               const std::vector<std::string> &paths);
+talos_rt_status talos_rt_interactive_scope_objects(
+    talos_rt_context *context, const std::string &scope,
+    std::vector<std::string> &paths);
+
 void talos_rt_dump_destroy(talos_rt_context *context) noexcept;
 
 inline std::unordered_set<uint64_t> &

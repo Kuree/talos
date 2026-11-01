@@ -56,6 +56,131 @@ UnitLowering::lowerDumpSystemCall(semantic::SVCallExpressionOp op) {
     return constant(i32, exponent);
   };
 
+  // IEEE 1800-2023 Annex D tasks acting on the tool reach the runtime through
+  // its host command entry, as a command no SystemVerilog string can spell since
+  // it starts with a NUL (6.16). See runtime/lib/System.cpp.
+  Type stringType = sim::StringType::get(function.getContext());
+  auto stringConstant = [&](StringRef text) -> Value {
+    return sim::SimStringLiteralOp::create(builder, location, stringType, text);
+  };
+  auto controlCall = [&](StringRef task, ArrayRef<Value> arguments) -> Value {
+    std::string head(1, '\0');
+    head += task.str();
+    SmallVector<Value> parts{stringConstant(head)};
+    for (Value argument : arguments) {
+      parts.push_back(stringConstant(StringRef("\0", 1)));
+      parts.push_back(argument);
+    }
+    Value command = parts.size() == 1
+                        ? parts.front()
+                        : Value(sim::SimStringConcatOp::create(
+                              builder, location, stringType, parts));
+    return sim::SimSystemOp::create(builder, location, i32, context, command)
+        .getResult();
+  };
+  auto stringArgument = [&](Operation *child) -> FailureOr<Value> {
+    FailureOr<Value> value = lowerExpression(child);
+    if (failed(value))
+      return failure();
+    return convert(*value, stringType, isSignedNode(child), location);
+  };
+  auto integerArgument = [&](Operation *child) -> FailureOr<Value> {
+    FailureOr<Value> value = lowerExpression(child);
+    FailureOr<Value> integer =
+        succeeded(value) ? convert(*value, i64, true, location)
+                         : FailureOr<Value>(failure());
+    if (failed(integer))
+      return failure();
+    return Value(sim::SimStringFormatIntegerOp::create(
+        builder, location, stringType, *integer, sim::Radix::Decimal, true));
+  };
+  // The referenced scope or variable; a select stands for its whole vector
+  // (D.13).
+  auto rootPath = [](Operation *child) -> StringAttr {
+    while (child) {
+      if (auto path = child->getAttrOfType<StringAttr>("referenced_path"))
+        return path;
+      SmallVector<Operation *> nested = getChildren(child);
+      child = nested.empty() ? nullptr : nested.front();
+    }
+    return {};
+  };
+  if (name == "$log" || name == "$input") {
+    SmallVector<Value, 1> arguments;
+    if (!children.empty()) {
+      FailureOr<Value> path = stringArgument(children.front());
+      if (failed(path))
+        return failure();
+      arguments.push_back(*path);
+    }
+    controlCall(name.drop_front(), arguments);
+    return dummyTaskResult();
+  }
+  if (name == "$nolog") {
+    controlCall("nolog", {});
+    return dummyTaskResult();
+  }
+  if (name == "$reset") {
+    // Only the reset_value crosses the reset; see D.8 in the runtime.
+    SmallVector<Value, 1> arguments;
+    if (children.size() > 1) {
+      FailureOr<Value> value = integerArgument(children[1]);
+      if (failed(value))
+        return failure();
+      arguments.push_back(*value);
+    }
+    controlCall("reset", arguments);
+    return dummyTaskResult();
+  }
+  if (name == "$reset_count" || name == "$reset_value") {
+    FailureOr<Type> type = getNormalizedSemanticType(op);
+    if (failed(type))
+      return failure();
+    return convert(controlCall(name.drop_front(), {}), *type, true, location);
+  }
+  if (name == "$showscopes") {
+    SmallVector<Value> arguments;
+    if (!children.empty()) {
+      FailureOr<Value> level = integerArgument(children.front());
+      if (failed(level))
+        return failure();
+      arguments.push_back(*level);
+    } else {
+      arguments.push_back(stringConstant("0"));
+    }
+    if (auto entries = op->getAttrOfType<ArrayAttr>("list_source"))
+      for (auto entry : entries.getAsRange<StringAttr>())
+        arguments.push_back(stringConstant(entry.getValue()));
+    controlCall("showscopes", arguments);
+    return dummyTaskResult();
+  }
+  // $showvars reads the design database, which a dump operation retains; flushing
+  // a dump that does not exist does nothing else.
+  if (name == "$scope" || name == "$showvars") {
+    sim::SimDumpFlushOp::create(builder, location, context);
+    SmallVector<Value> arguments;
+    {
+      for (Operation *child : children) {
+        StringAttr path = rootPath(child);
+        if (!path) {
+          emitError(location) << name << " requires a hierarchical name";
+          return failure();
+        }
+        arguments.push_back(stringConstant(path.getValue()));
+      }
+    }
+    controlCall(name.drop_front(), arguments);
+    return dummyTaskResult();
+  }
+  if (name == "$list") {
+    SmallVector<Value> arguments;
+    if (auto entries = op->getAttrOfType<ArrayAttr>("list_source"))
+      for (auto entry : entries.getAsRange<StringAttr>())
+        arguments.push_back(stringConstant(entry.getValue()));
+    controlCall("list", arguments);
+    return dummyTaskResult();
+  }
+
   // The header carries the elaborated design precision as a decimal exponent
   // in seconds; the runtime cannot recover it from the state image.
   auto declareTimescale = [&]() {

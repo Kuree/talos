@@ -404,6 +404,9 @@ static bool isStatefulResolutionSystemCall(StringRef name) {
       .Cases({"$q_initialize", "$q_add", "$q_remove", "$q_full", "$q_exam"},
              true)
       .Cases({"$timeformat", "$system", "$stop", "$finish"}, true)
+      .Cases({"$log", "$nolog", "$reset", "$reset_count", "$reset_value",
+              "$input", "$scope", "$showscopes", "$showvars", "$list"},
+             true)
       .Cases({"$dumpfile", "$dumpvars", "$dumpon", "$dumpoff"}, true)
       .Cases({"$dumpall", "$dumplimit", "$dumpflush"}, true)
       .Cases({"$display", "$write", "$monitor", "$strobe"}, true)
