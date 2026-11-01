@@ -2700,13 +2700,18 @@ UnitLowering::lowerSystemCall(semantic::SVCallExpressionOp op) {
   if (name == "$stacktrace") {
     // IEEE 1800-2023 20.17.2: the content of the call stack information is
     // implementation dependent. Generated code keeps no activation records, so
-    // this is the calling scope and its source line.
+    // this is the calling scope and its source line, then each caller up to
+    // the top-level process whose call site is unique (see Prepare).
     StringAttr scope = op.getSystemScopePathAttr();
     std::string text = scope ? scope.getValue().str() : std::string("$root");
     if (auto file = dyn_cast<FileLineColLoc>(location))
       text += (Twine(" at ") + file.getFilename().getValue() + ":" +
                Twine(file.getLine()))
                   .str();
+    if (auto frames =
+            op->getAttrOfType<ArrayAttr>("talos.stacktrace_frames"))
+      for (auto frame : frames.getAsRange<StringAttr>())
+        text += ("\n" + frame.getValue()).str();
     if (isa_and_nonnull<semantic::SVExpressionStatementOp>(op->getParentOp())) {
       Value item =
           sim::SimBytesConstantOp::create(builder, location, text).getResult();

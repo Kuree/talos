@@ -775,6 +775,62 @@ void TalosSimPreparePass::runOnOperation() {
       });
   }
 
+  // IEEE 1800-2023 20.17.2: $stacktrace reports the call stack from its
+  // caller up to the top-level process. Generated code keeps no activation
+  // records, so record the frames only where one chain of call sites is known
+  // at compile time: each subroutine on it has exactly one static call site.
+  // A subroutine with several callers, a class method (dispatch is dynamic)
+  // or a recursive chain ends the list at the last unambiguous frame.
+  {
+    SmallVector<Operation *> stacktraces;
+    llvm::StringMap<SmallVector<Operation *>> callSites;
+    semanticRoot->walk([&](semantic::SVCallExpressionOp call) {
+      auto name = call->getAttrOfType<StringAttr>("callee_name");
+      auto system = call->getAttrOfType<BoolAttr>("is_system_call");
+      if (system && system.getValue()) {
+        if (name && name.getValue() == "$stacktrace")
+          stacktraces.push_back(call);
+        return;
+      }
+      if (auto path = call->getAttrOfType<StringAttr>("referenced_path"))
+        callSites[path.getValue()].push_back(call);
+    });
+    auto enclosingSubroutine = [](Operation *op) {
+      return op->getParentOfType<semantic::SVSubroutineSymbolOp>();
+    };
+    auto scopeName = [](Operation *op) -> StringRef {
+      for (; op; op = op->getParentOp())
+        if (auto name = op->getAttrOfType<StringAttr>("hierarchical_name"))
+          return name.getValue();
+      return "$root";
+    };
+    auto describe = [&](Operation *op) {
+      std::string text = scopeName(op).str();
+      if (auto file = dyn_cast<FileLineColLoc>(getSemanticLocation(op)))
+        text += (Twine(" at ") + file.getFilename().getValue() + ":" +
+                 Twine(file.getLine()))
+                    .str();
+      return text;
+    };
+    for (Operation *stacktrace : stacktraces) {
+      SmallVector<Attribute> frames;
+      llvm::StringSet<> visited;
+      semantic::SVSubroutineSymbolOp current = enclosingSubroutine(stacktrace);
+      while (current && !current->getParentOfType<semantic::SVClassTypeOp>() &&
+             visited.insert(getHierarchyName(current)).second) {
+        auto sites = callSites.find(getHierarchyName(current));
+        if (sites == callSites.end() || sites->second.size() != 1)
+          break;
+        Operation *site = sites->second.front();
+        frames.push_back(StringAttr::get(context, describe(site)));
+        current = enclosingSubroutine(site);
+      }
+      if (!frames.empty())
+        stacktrace->setAttr("talos.stacktrace_frames",
+                            ArrayAttr::get(context, frames));
+    }
+  }
+
   // Propagate stale frontend folds through expression parents in postorder.
   // Each expression enters this set at most once, avoiding a repeated upward
   // walk (and quadratic behavior) when one expression contains many affected
