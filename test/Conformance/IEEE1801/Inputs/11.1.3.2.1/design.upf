@@ -1,0 +1,2 @@
+if {![llength [info commands query_upf]]} {error "unsupported command: query_upf"}
+puts "COMMAND_PRESENT:query_upf"

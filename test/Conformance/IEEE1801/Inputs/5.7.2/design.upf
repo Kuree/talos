@@ -1,0 +1,2 @@
+create_power_domain P -elements dut
+create_power_domain Q -elements dut/child

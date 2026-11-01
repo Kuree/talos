@@ -1,0 +1,3 @@
+set nets [list VDD VSS]
+foreach n $nets {create_supply_net $n}
+puts PASS

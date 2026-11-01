@@ -19,6 +19,8 @@ config.test_exec_root = os.path.join(config.talos_obj_root, "test")
 
 config.excludes = [
     "CMakeLists.txt",
+    # Standards probes are opt-in through check-talos-conformance.
+    "Conformance",
     "Inputs",
     "lit.cfg.py",
     "lit.site.cfg.py",

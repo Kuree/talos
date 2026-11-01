@@ -1,0 +1,2 @@
+if {![llength [info commands connect_logic_net]]} {error "unsupported command: connect_logic_net"}
+puts "COMMAND_PRESENT:connect_logic_net"

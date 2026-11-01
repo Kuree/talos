@@ -1,0 +1,10 @@
+// CLAUSE: Continuous assignment and net alias syntax
+// SINCE: 0.1.0
+// RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier  %s -o %t.exe
+// RUN: %t.exe
+// CHECK: {{^PASS$}}
+
+module top;
+wire a,b;assign a=1'b1;alias a=b;
+initial begin #1;if(b!==1)$fatal(1,"result"); $display("PASS");end
+endmodule

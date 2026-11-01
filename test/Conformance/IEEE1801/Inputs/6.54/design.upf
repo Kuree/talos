@@ -1,0 +1,2 @@
+if {![llength [info commands set_variation]]} {error "unsupported command: set_variation"}
+puts "COMMAND_PRESENT:set_variation"

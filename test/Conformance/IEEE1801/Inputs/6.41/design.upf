@@ -1,0 +1,2 @@
+if {![llength [info commands set_design_attributes]]} {error "unsupported command: set_design_attributes"}
+puts "COMMAND_PRESENT:set_design_attributes"

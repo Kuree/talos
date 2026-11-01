@@ -1,0 +1,1 @@
+create_hdl2upf_vct CUSTOM -hdl_type sv -table {{0 OFF} {1 FULL_ON} {X UNDETERMINED} {Z UNDETERMINED}}

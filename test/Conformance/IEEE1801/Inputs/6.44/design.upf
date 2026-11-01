@@ -1,0 +1,2 @@
+if {![llength [info commands set_equivalent]]} {error "unsupported command: set_equivalent"}
+puts "COMMAND_PRESENT:set_equivalent"

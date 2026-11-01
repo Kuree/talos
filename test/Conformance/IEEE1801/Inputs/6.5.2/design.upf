@@ -1,0 +1,2 @@
+create_supply_set S
+add_power_state S -state {RUN -logic_expr {en} -simstate NORMAL}

@@ -1,0 +1,2 @@
+create_power_domain PD -elements dut
+set_repeater R -domain PD -elements dut/q

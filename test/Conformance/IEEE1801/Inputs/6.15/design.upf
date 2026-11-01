@@ -1,0 +1,2 @@
+if {![llength [info commands connect_supply_set]]} {error "unsupported command: connect_supply_set"}
+puts "COMMAND_PRESENT:connect_supply_set"

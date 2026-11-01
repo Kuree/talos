@@ -1,0 +1,2 @@
+if {[lsort [find_objects . -pattern * -object_type inst -transitive]] ne {dut dut/child}} {error "transitive search"}
+puts PASS

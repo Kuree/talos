@@ -1,0 +1,2 @@
+create_supply_set S
+add_power_state S -state {A -supply_expr {power == {FULL_ON 0.7}} -simstate CORRUPT_ON_CHANGE}

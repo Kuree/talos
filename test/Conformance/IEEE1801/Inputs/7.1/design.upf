@@ -1,0 +1,2 @@
+define_always_on_cell -cells aon -power VDD -ground VSS -power_switchable SW
+puts PASS

@@ -1,0 +1,2 @@
+if {![llength [info commands upf_query_object_type]]} {error "unsupported command: upf_query_object_type"}
+puts "COMMAND_PRESENT:upf_query_object_type"

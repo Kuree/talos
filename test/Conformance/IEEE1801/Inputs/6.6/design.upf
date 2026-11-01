@@ -1,0 +1,2 @@
+if {![llength [info commands add_pst_state]]} {error "unsupported command: add_pst_state"}
+puts "COMMAND_PRESENT:add_pst_state"

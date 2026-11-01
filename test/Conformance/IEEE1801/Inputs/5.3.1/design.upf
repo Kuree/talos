@@ -1,0 +1,4 @@
+create_supply_net rail
+create_supply_net Rail
+if {![catch {CREATE_SUPPLY_NET extra}]} {error "case-insensitive command"}
+if {![catch {create_supply_port pad -DIRECTION in}]} {error "case-insensitive option"}

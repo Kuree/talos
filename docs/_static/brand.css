@@ -8,3 +8,34 @@ article table:not(.docutils) {
   overflow-x: auto;
   overscroll-behavior-x: contain;
 }
+
+.conformance-table table {
+  width: 100%;
+  min-width: 36rem;
+  table-layout: fixed;
+}
+
+.conformance-table th:nth-child(1) {
+  width: 18%;
+}
+
+.conformance-table th:nth-child(2) {
+  width: 60%;
+}
+
+.conformance-table th:nth-child(3) {
+  width: 22%;
+}
+
+.conformance-table td:nth-child(1),
+.conformance-table td:nth-child(3) {
+  white-space: nowrap;
+}
+
+.conformance-table td:nth-child(2) {
+  white-space: normal;
+}
+
+.conformance-table .status-muted {
+  color: var(--color-foreground-muted);
+}

@@ -1,0 +1,5 @@
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set AON -function {power VDD} -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary AON}
+add_power_state AON -state {ON -supply_expr {power == {FULL_ON 1.0} && ground == {FULL_ON 0}}}

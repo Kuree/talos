@@ -1,0 +1,3 @@
+set_scope dut
+create_supply_net rail
+set_scope /

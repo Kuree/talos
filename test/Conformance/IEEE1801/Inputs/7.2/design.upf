@@ -1,0 +1,2 @@
+if {![llength [info commands define_always_on_cell]]} {error "unsupported command: define_always_on_cell"}
+puts "COMMAND_PRESENT:define_always_on_cell"

@@ -1,0 +1,8 @@
+create_supply_net rail
+create_supply_net VSS
+create_supply_set S -function {power rail} -function {ground VSS}
+create_power_domain P -elements dut -supply {primary S}
+set_scope dut
+create_supply_port PAD -direction in
+set_scope /
+connect_supply_net rail -ports dut/PAD

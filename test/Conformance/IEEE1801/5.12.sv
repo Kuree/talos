@@ -1,0 +1,12 @@
+// CLAUSE: Units
+// SINCE: 0.1.0
+// REQUIRES: upf
+// RUN: %talos --std=1800-2023 --compile-threads=1 --top=top --upf %S/Inputs/5.12/empty.upf -O3 --execution-tier=%tier %s -o %t.exe
+// RUN: %t.exe
+// CHECK-DAG: {{^PASS$}}
+
+module top;import UPF::*;
+
+initial begin
+if(upf_convert_real_volts_to_int_uvolts(-0.7)!=-700000)$fatal(1,"value");
+$display("PASS");$finish;end endmodule

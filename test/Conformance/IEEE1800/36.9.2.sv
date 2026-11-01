@@ -1,0 +1,15 @@
+// CLAUSE: vlog info global time
+// SINCE: 0.1.0
+// RUN: %clang -c -fPIC %S/Inputs/36.9.2/vpi.c -I%resource_dir/include -o %t.helper0.o
+// RUN: %talos --std=1800-2023 --compile-threads=1 --top=top --vpi=full -O3 --execution-tier=%tier %s %t.helper0.o -o %t.exe
+// RUN: %t.exe
+// CHECK-DAG: {{^PASS$}}
+
+module top;
+timeunit 1ns; timeprecision 1ps;
+import "DPI-C" context function int c36_info_time();
+initial begin
+#1;if(c36_info_time()!=1)$fatal(1,"VPI info/time");
+$display("PASS"); $finish;
+end
+endmodule

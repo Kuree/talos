@@ -1,0 +1,2 @@
+if {![llength [info commands sim_assertion_control]]} {error "unsupported command: sim_assertion_control"}
+puts "COMMAND_PRESENT:sim_assertion_control"

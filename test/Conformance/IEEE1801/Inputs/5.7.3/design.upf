@@ -1,0 +1,10 @@
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set AON -function {power VDD} -function {ground VSS}
+create_supply_set SW -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary SW}
+create_power_switch PS -domain PD -input_supply_port {vin AON.power} -output_supply_port {vout SW.power} -control_port {en en} -on_state {ON vin en}
+create_supply_net VRET
+create_supply_set RET -function {power VRET} -function {ground VSS}
+set_retention KEEP -domain PD -elements dut/q -retention_supply RET -retention_condition rtc
+set_retention WIDE -domain PD -elements dut -retention_supply RET -retention_condition never

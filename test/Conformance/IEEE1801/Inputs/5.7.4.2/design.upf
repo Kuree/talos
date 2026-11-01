@@ -1,0 +1,3 @@
+create_power_domain P -elements dut
+set_isolation A -domain P -elements dut/q -clamp_value 0 -isolation_signal iso -applies_to outputs -location parent
+set_isolation B -domain P -clamp_value 1 -isolation_signal iso -applies_to outputs -location parent

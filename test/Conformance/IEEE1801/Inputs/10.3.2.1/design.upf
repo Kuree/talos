@@ -1,0 +1,13 @@
+create_supply_net first
+create_supply_net second
+proc object {name type} {
+  if {![llength [info commands upf_query_object_type]]} {error "required query upf_query_object_type is unavailable"}
+  foreach candidate [list /$name /top/$name] {
+    if {![catch {upf_query_object_type $candidate} actual] && $actual eq $type} {return $candidate}
+  }
+  error "information-model handle unavailable: $name"
+}
+set a [object first upfSupplyNetT]
+set b [object second upfSupplyNetT]
+if {$a eq $b} {error "object handles are not unique"}
+puts PASS

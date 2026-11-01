@@ -1,0 +1,2 @@
+if {![llength [info commands load_upf_protected]]} {error "unsupported command: load_upf_protected"}
+puts "COMMAND_PRESENT:load_upf_protected"

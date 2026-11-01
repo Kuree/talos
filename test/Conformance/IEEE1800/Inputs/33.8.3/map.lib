@@ -1,0 +1,2 @@
+library other "rtl/*.sv";
+library selected "rtl/a.sv";

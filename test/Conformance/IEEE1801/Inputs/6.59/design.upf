@@ -1,0 +1,2 @@
+if {![llength [info commands use_interface_cell]]} {error "unsupported command: use_interface_cell"}
+puts "COMMAND_PRESENT:use_interface_cell"

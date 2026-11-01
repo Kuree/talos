@@ -1,0 +1,2 @@
+if {![llength [info commands create_composite_domain]]} {error "unsupported command: create_composite_domain"}
+puts "COMMAND_PRESENT:create_composite_domain"

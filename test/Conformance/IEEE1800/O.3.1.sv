@@ -1,0 +1,2 @@
+// CLAUSE: Vendor-key encryption input illustration
+// REFERENCE: Illustrates an encryption-authoring workflow and adds no independent simulator execution rule.

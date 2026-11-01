@@ -1,0 +1,2 @@
+if {![llength [info commands add_state_transition]]} {error "unsupported command: add_state_transition"}
+puts "COMMAND_PRESENT:add_state_transition"

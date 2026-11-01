@@ -11,6 +11,8 @@ import re
 import subprocess
 import tempfile
 
+from conformance import load_report, render_support_pages
+
 
 TOOLS = ("talos", "talos-opt", "talos-translate", "talos-cov", "talos-tblgen")
 
@@ -109,6 +111,7 @@ def generate(args):
     tools = dict(value.split("=", 1) for value in args.tool)
     if set(tools) != set(TOOLS):
         raise ValueError("Provide executable paths for: " + ", ".join(TOOLS))
+    conformance = load_report(Path(args.conformance_report), Path(tools["talos"]))
     index = ["# Talos reference", "", "```{toctree}", ":maxdepth: 1", ":caption: Command-line tools", ""]
     pages = []
     llvm_tablegen = sdk / "bin" / ("llvm-tblgen.exe" if os.name == "nt" else "llvm-tblgen")
@@ -156,6 +159,10 @@ def generate(args):
         index.append(f"{title} <{Path(relative).with_suffix('').as_posix()}>")
         pages.append({"path": relative, "kind": "pass", "name": title})
 
+    index.extend(["```", "", "```{toctree}", ":maxdepth: 1", ":caption: Standards support", ""])
+    for page in render_support_pages(source, output, write_if_changed, conformance):
+        index.append(f"{page['name']} <{Path(page['path']).with_suffix('').as_posix()}>")
+        pages.append(page)
     index.extend(["```", ""])
     write_if_changed(output / "index.md", "\n".join(index))
     current_paths = {page["path"] for page in pages}
@@ -165,7 +172,8 @@ def generate(args):
             stale.unlink()
     write_if_changed(output / "manifest.json", json.dumps({"pages": pages}, indent=2) + "\n")
     print(f"Generated {len(TOOLS)} tool references, {len(DIALECTS)} dialect references, "
-          f"and {sum(item['kind'] == 'pass' for item in pages)} pass references in {output}")
+          f"{sum(item['kind'] == 'pass' for item in pages)} pass references, "
+          f"and 2 standards support tables in {output}")
 
 
 def main():
@@ -173,6 +181,8 @@ def main():
     for name in ["source", "build", "sdk", "output"]:
         parser.add_argument(f"--{name}", required=True)
     parser.add_argument("--tool", action="append", default=[], metavar="NAME=EXECUTABLE")
+    parser.add_argument("--conformance-report", required=True,
+                        help="Fresh results.json produced by scripts/check-conformance.py")
     generate(parser.parse_args())
 
 

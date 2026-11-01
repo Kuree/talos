@@ -1,0 +1,7 @@
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set AON -function {power VDD} -function {ground VSS}
+create_supply_set SW -function {ground VSS}
+create_power_domain PD -elements dut -supply {primary SW}
+create_power_switch PS -domain PD -input_supply_port {vin AON.power} -output_supply_port {vout SW.power} -control_port {en en} -on_partial_state {PART vin en}
+if {[set_partial_on_translation FULL_ON] ne "FULL_ON"} {error "translation return"}

@@ -1,0 +1,2 @@
+if {![llength [info commands load_simstate_behavior]]} {error "unsupported command: load_simstate_behavior"}
+puts "COMMAND_PRESENT:load_simstate_behavior"

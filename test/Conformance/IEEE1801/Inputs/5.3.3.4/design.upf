@@ -1,0 +1,6 @@
+set_scope dut
+create_supply_net VDD
+create_supply_port P -direction in
+set_scope /
+connect_supply_net dut/VDD -ports dut/P
+puts PASS

@@ -1,0 +1,1 @@
+set_port_attributes -ports p -upf_to_hdl_vct UPF_GNDZERO2SV_LOGIC

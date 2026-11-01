@@ -1,0 +1,2 @@
+if {[find_objects . -pattern dut -object_type inst] ne "dut"} {error "instance selection"}
+puts PASS

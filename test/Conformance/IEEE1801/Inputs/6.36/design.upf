@@ -1,0 +1,2 @@
+if {![llength [info commands map_repeater_cell]]} {error "unsupported command: map_repeater_cell"}
+puts "COMMAND_PRESENT:map_repeater_cell"

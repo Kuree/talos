@@ -1,0 +1,8 @@
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set AON -function {power VDD} -function {ground VSS}
+foreach {pd inst control supply} {P dut a S Q other b T} {
+ create_supply_set $supply -function {ground VSS}
+ create_power_domain $pd -elements $inst -supply [list primary $supply]
+ create_power_switch ${pd}_SW -domain $pd -input_supply_port {vin AON.power} -output_supply_port [list vout ${supply}.power] -control_port [list en $control] -on_state {ON vin en}
+}

@@ -1,0 +1,2 @@
+if {![llength [info commands create_pst]]} {error "unsupported command: create_pst"}
+puts "COMMAND_PRESENT:create_pst"

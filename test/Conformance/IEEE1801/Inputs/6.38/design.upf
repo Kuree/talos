@@ -1,0 +1,2 @@
+if {![llength [info commands name_format]]} {error "unsupported command: name_format"}
+puts "COMMAND_PRESENT:name_format"

@@ -1,0 +1,5 @@
+(DELAYFILE
+ (SDFVERSION "3.0")
+ (TIMESCALE 1ns)
+ (CELL (CELLTYPE "delayed_cell") (INSTANCE)
+  (DELAY (ABSOLUTE (IOPATH a y (3:3:3) (3:3:3))))))

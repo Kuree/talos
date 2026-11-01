@@ -1,0 +1,3 @@
+set_scope {dut[0]}
+create_supply_net VDD
+puts PASS

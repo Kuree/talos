@@ -1,0 +1,11 @@
+begin_power_model PM -for leaf
+add_power_state -model leaf -state {RUN -power_expr {1mW 2mW}}
+end_power_model
+apply_power_model PM -elements dut
+if {![llength [info commands upf_query_object_properties]]} {error "required property query unavailable"}
+set expression {}
+foreach candidate {/dut.RUN /top/dut.RUN} {
+  if {![catch {upf_query_object_properties $candidate -property upf_power_expr} value]} {set expression $value;break}
+}
+if {[llength $expression]!=2 || [lindex $expression 0] ne "1mW" || [lindex $expression 1] ne "2mW"} {error "power expression not preserved"}
+puts PASS

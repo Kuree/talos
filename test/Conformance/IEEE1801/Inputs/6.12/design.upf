@@ -1,0 +1,2 @@
+if {![llength [info commands bind_checker]]} {error "unsupported command: bind_checker"}
+puts "COMMAND_PRESENT:bind_checker"

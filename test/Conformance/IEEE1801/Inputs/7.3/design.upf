@@ -1,0 +1,2 @@
+if {![llength [info commands define_diode_clamp]]} {error "unsupported command: define_diode_clamp"}
+puts "COMMAND_PRESENT:define_diode_clamp"

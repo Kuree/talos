@@ -1,0 +1,1 @@
+set_port_attributes -ports p -hdl_to_upf_vct SV_LOGIC2UPF

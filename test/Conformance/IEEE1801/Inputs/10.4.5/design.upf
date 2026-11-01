@@ -1,0 +1,2 @@
+if {![llength [info commands upf_object_in_class]]} {error "unsupported command: upf_object_in_class"}
+puts "COMMAND_PRESENT:upf_object_in_class"

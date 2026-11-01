@@ -1,0 +1,3 @@
+if {[set_scope dut] ne "/"} {error "previous root scope"}
+if {[set_scope /] ne "/dut"} {error "previous child scope"}
+puts PASS

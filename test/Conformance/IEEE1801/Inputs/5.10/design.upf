@@ -1,0 +1,4 @@
+create_supply_set S
+create_supply_net VDD
+create_supply_set S -function {power VDD} -update
+puts PASS

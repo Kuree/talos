@@ -1,0 +1,6 @@
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_power_domain P -elements dut -supply {primary CORE}
+add_power_state CORE -state {ON -supply_expr {power == {FULL_ON 1.0} && ground == {FULL_ON 0}}}
+add_power_state CORE -update -state {RET -supply_expr {power == {FULL_ON 0.7} && ground == {FULL_ON 0}} -simstate NOT_NORMAL}

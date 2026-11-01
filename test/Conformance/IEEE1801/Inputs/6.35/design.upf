@@ -1,0 +1,2 @@
+if {![llength [info commands map_power_switch]]} {error "unsupported command: map_power_switch"}
+puts "COMMAND_PRESENT:map_power_switch"

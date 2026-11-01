@@ -1,0 +1,4 @@
+set found [find_objects . -pattern * -object_type inst -transitive]
+if {[llength $found] != 1} {error "generate scope treated as an instance"}
+set_scope [lindex $found 0]
+puts PASS

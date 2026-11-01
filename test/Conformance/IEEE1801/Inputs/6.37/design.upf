@@ -1,0 +1,2 @@
+if {![llength [info commands map_retention_cell]]} {error "unsupported command: map_retention_cell"}
+puts "COMMAND_PRESENT:map_retention_cell"

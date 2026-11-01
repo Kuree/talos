@@ -1,0 +1,2 @@
+if {[set_design_top top] ne {}} {error "set_design_top result"}
+puts PASS

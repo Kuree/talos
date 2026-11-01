@@ -1,0 +1,1 @@
+set_port_attributes -ports p -upf_to_hdl_vct SV_TIED_HI

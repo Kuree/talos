@@ -1,0 +1,4 @@
+create_supply_net N
+create_supply_port P -direction in
+create_supply_port Q -direction out
+connect_supply_net N -ports {P Q}

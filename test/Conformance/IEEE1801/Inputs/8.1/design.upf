@@ -1,0 +1,3 @@
+set_scope dut
+if {[set_scope .] ne "/dut"} {error "scope change was deferred"}
+puts PASS

@@ -1,0 +1,2 @@
+if {![llength [info commands define_level_shifter_cell]]} {error "unsupported command: define_level_shifter_cell"}
+puts "COMMAND_PRESENT:define_level_shifter_cell"

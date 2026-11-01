@@ -1,0 +1,2 @@
+if {![llength [info commands create_power_state_group]]} {error "unsupported command: create_power_state_group"}
+puts "COMMAND_PRESENT:create_power_state_group"

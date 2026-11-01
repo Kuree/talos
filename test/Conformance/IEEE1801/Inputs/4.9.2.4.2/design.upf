@@ -1,0 +1,2 @@
+if {![llength [info commands apply_power_model]]} {error "unsupported command: apply_power_model"}
+puts "COMMAND_PRESENT:apply_power_model"

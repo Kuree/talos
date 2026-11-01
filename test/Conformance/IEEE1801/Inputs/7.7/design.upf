@@ -1,0 +1,2 @@
+if {![llength [info commands define_retention_cell]]} {error "unsupported command: define_retention_cell"}
+puts "COMMAND_PRESENT:define_retention_cell"

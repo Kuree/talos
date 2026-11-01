@@ -1,0 +1,2 @@
+if {![llength [info commands create_upf2hdl_vct]]} {error "unsupported command: create_upf2hdl_vct"}
+puts "COMMAND_PRESENT:create_upf2hdl_vct"

@@ -1,0 +1,2 @@
+create_power_domain PD -elements dut
+set_level_shifter LS -domain PD -applies_to both -rule both -location self

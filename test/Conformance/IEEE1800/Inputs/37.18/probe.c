@@ -1,0 +1,2 @@
+#include "sv_vpi_user.h"
+int probe(void){vpiHandle h=vpi_handle_by_name((PLI_BYTE8*)"top.a",0);return h && vpi_get(vpiType,h)==vpiPackedArrayVar;}

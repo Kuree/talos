@@ -1,0 +1,2 @@
+if {[set_scope .] ne "/"} {error "child context not reset"}
+puts LOADED

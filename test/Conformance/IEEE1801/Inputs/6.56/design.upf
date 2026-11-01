@@ -1,0 +1,2 @@
+if {![llength [info commands sim_corruption_control]]} {error "unsupported command: sim_corruption_control"}
+puts "COMMAND_PRESENT:sim_corruption_control"

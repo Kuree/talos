@@ -1,0 +1,4 @@
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set S -function {power VDD} -function {ground VSS}
+create_power_domain P -elements {dut other dut} -exclude_elements other -supply {primary S}

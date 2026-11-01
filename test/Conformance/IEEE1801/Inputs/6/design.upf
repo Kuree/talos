@@ -1,0 +1,2 @@
+if {![llength [info commands save_upf]]} {error "unsupported command: save_upf"}
+puts "COMMAND_PRESENT:save_upf"
