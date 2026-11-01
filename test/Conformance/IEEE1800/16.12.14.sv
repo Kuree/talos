@@ -1,16 +1,16 @@
 // CLAUSE: sync accept
-// XFAIL: *
-// An abort inside an implication, the form of the clause's own example, is rejected: abort "currently requires one outermost abort around a plain deterministic bounded property".
+// SINCE: 0.1.0
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe
 // Each attempt is a ##1 b ##1 b. c is sampled true at tick 5, which every form sees. It is also pulsed between ticks
 // after ticks 0 and 12, which only the asynchronous forms see; those results land on the index of the tick before.
-// The last assertion is the clause's example shape: stop aborts a pending consequent.
+// The last assertion is the clause's example shape: stop aborts a pending consequent, of the attempts at ticks 0, 4 and 12,
+// and the attempt at tick 5 has a false antecedent, so it only passes vacuously.
 // CHECK: AP=1000020000101000 AF=0111001101110111
 // CHECK: RP=0000000000100000 RF=1111021101111111
 // CHECK: SAP=0000020000100010 SAF=0121001101110111
 // CHECK: SRP=0000000000100010 SRF=0121021101110111
-// CHECK: IF=0000020000001000
+// CHECK: IF=1000010000001000
 
 module top;
   bit clk, a, b, c; int t;

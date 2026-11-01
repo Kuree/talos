@@ -1,6 +1,5 @@
 // CLAUSE: bounded temporal property example
-// XFAIL: *
-// Most of the clause's example properties are rejected: "not" of a sequence in a consequent, implication nested in and/or, and a goto antecedent with a temporal consequent.
+// SINCE: 0.1.0
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe
 // The clause's rules on one trace. R1P and R2P include a vacuous pass per tick with a false a. rule1 passes at tick 2 and

@@ -9,6 +9,7 @@ add_mlir_library(TalosToSimulation
   LowerUnitCalls.cpp
   LowerUnitConditionals.cpp
   LowerUnitConcurrent.cpp
+  PropertyAutomaton.cpp
   LowerUnitContainers.cpp
   LowerUnitControlFlow.cpp
   LowerUnitCovergroups.cpp

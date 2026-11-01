@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "LowerUnit.h"
+#include "PropertyAutomaton.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
@@ -24,6 +25,7 @@
 
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 
 using namespace mlir;
@@ -3334,8 +3336,102 @@ LogicalResult UnitLowering::lowerGlobalFutureAssertionResolver(
   return success();
 }
 
+/// Diagnostics of one thread, held until it is known whether they stand.
+class CapturedDiagnostics {
+public:
+  explicit CapturedDiagnostics(MLIRContext *context)
+      : owner(std::this_thread::get_id()),
+        handler(context, [this](Diagnostic &diagnostic) -> LogicalResult {
+          if (std::this_thread::get_id() != owner)
+            return failure();
+          if (diagnostic.getSeverity() == DiagnosticSeverity::Error)
+            errors.emplace_back(diagnostic.getLocation(), diagnostic.str());
+          return success();
+        }) {}
+  SmallVector<std::pair<Location, std::string>> errors;
+
+private:
+  std::thread::id owner;
+  ScopedDiagnosticHandler handler;
+};
+
 LogicalResult UnitLowering::lowerConcurrentAssertion(
     semantic::SVConcurrentAssertionStatementOp op) {
+  // The bounded monitor stays the first choice for every property it accepts,
+  // so its cost and behavior do not change. A candidate it rejects, with nothing
+  // of it kept, runs through the automaton. If that rejects it too, the monitor's
+  // diagnostics stand.
+  SmallVector<Operation *> children = getChildren(op);
+  size_t propertyIndex =
+      static_cast<size_t>(op.getHasDefaultDisable()) +
+      static_cast<size_t>(op.getHasContextualClock().value_or(false)) +
+      static_cast<size_t>(static_cast<bool>(op.getDefaultClockingSymbolAttr()));
+  if (propertyIndex >= children.size() ||
+      op.getIsProcedural().value_or(false) ||
+      op.getAssertionKind() == semantic::SVAssertionKind::Expect ||
+      op.getAssertionKind() == semantic::SVAssertionKind::CoverSequence ||
+      !needsPropertyAutomaton(children[propertyIndex]))
+    return lowerConcurrentAssertionImpl(op, /*useAutomaton=*/false);
+
+  Block *startBlock = builder.getInsertionBlock();
+  Operation *lastInBlock = startBlock->empty() ? nullptr : &startBlock->back();
+  Block *lastBlock = &function.getBody().back();
+  Operation *beforeFunction = function->getPrevNode();
+  DictionaryAttr attributes = function->getAttrDictionary();
+  SmallVector<std::pair<Location, std::string>> boundedErrors;
+  {
+    CapturedDiagnostics captured(op.getContext());
+    if (succeeded(lowerConcurrentAssertionImpl(op, /*useAutomaton=*/false)))
+      return success();
+    boundedErrors = std::move(captured.errors);
+  }
+
+  // Everything the failed attempt built: blocks, the tail of the block it
+  // started in, and functions it outlined ahead of this one.
+  SmallVector<Block *> addedBlocks;
+  for (Block *block = lastBlock->getNextNode(); block; block = block->getNextNode())
+    addedBlocks.push_back(block);
+  SmallVector<Operation *> addedOperations;
+  for (Operation *added = lastInBlock ? lastInBlock->getNextNode()
+                                      : (startBlock->empty() ? nullptr
+                                                             : &startBlock->front());
+       added; added = added->getNextNode())
+    addedOperations.push_back(added);
+  for (Operation *added : llvm::reverse(addedOperations))
+    added->dropAllReferences();
+  for (Block *block : addedBlocks)
+    for (Operation &added : *block)
+      added.dropAllReferences();
+  for (Block *block : addedBlocks)
+    block->dropAllDefinedValueUses();
+  for (Operation *added : llvm::reverse(addedOperations)) {
+    added->dropAllUses();
+    added->erase();
+  }
+  for (Block *block : llvm::reverse(addedBlocks))
+    block->erase();
+  for (Operation *outlined = beforeFunction ? beforeFunction->getNextNode()
+                                            : &function->getBlock()->front();
+       outlined != function.getOperation();) {
+    Operation *next = outlined->getNextNode();
+    outlined->erase();
+    outlined = next;
+  }
+  function->setAttrs(attributes);
+  setCurrent(startBlock);
+
+  {
+    CapturedDiagnostics captured(op.getContext());
+    if (succeeded(lowerConcurrentAssertionImpl(op, /*useAutomaton=*/true)))
+      return success();
+  }
+  for (const auto &[at, message] : boundedErrors)
+    emitError(at) << message;
+  return failure();
+}
+
+LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
+    semantic::SVConcurrentAssertionStatementOp op, bool useAutomaton) {
   Location location = getSemanticLocation(op);
   if (sim::has<sim::metadata::DefaultAssertionFailure>(op))
     return emitDefaultAssertionFailure(op, location, "concurrent assertion");
@@ -3357,6 +3453,103 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
                                        point);
   };
   SmallVector<Operation *> children = getChildren(op);
+
+  // A property that only the automaton executes leaves the bounded monitor a
+  // plain true property at its root, whose clock, disable, assertion control and
+  // reports are those of the real one. See the automaton's loop below.
+  std::optional<PropertyAutomaton> automaton;
+  Operation *automatonProperty = nullptr;
+  Operation *automatonStub = nullptr;
+  std::unique_ptr<Block> automatonHolder;
+  auto restoreAutomatonProperty = llvm::make_scope_exit([&] {
+    if (!automatonProperty)
+      return;
+    automatonProperty->moveBefore(automatonStub);
+    automatonStub->erase();
+  });
+  {
+    size_t propertyIndex =
+        static_cast<size_t>(op.getHasDefaultDisable()) +
+        static_cast<size_t>(op.getHasContextualClock().value_or(false)) +
+        static_cast<size_t>(static_cast<bool>(op.getDefaultClockingSymbolAttr()));
+    if (useAutomaton) {
+      Operation *assertionClock =
+          propertyIndex != 0 && (op.getHasContextualClock().value_or(false) ||
+                                 op.getDefaultClockingSymbolAttr())
+              ? children[propertyIndex - 1]
+              : nullptr;
+      // The wrappers the monitor reads stay in place above the real property.
+      Operation *root = children[propertyIndex];
+      while (true) {
+        if (auto instance =
+                dyn_cast<semantic::SVAssertionInstanceExpressionOp>(root)) {
+          if (instance.getLocalVariableCount() != 0 ||
+              !instance.getHasExpandedBody())
+            break;
+          root = getChildren(instance).front();
+        } else if (auto simple =
+                       dyn_cast<semantic::SVSimpleAssertionExprOp>(root)) {
+          SmallVector<Operation *> nested = getChildren(simple);
+          if (simple.getHasRepetition() || nested.size() != 1 ||
+              !isa<semantic::SVAssertionInstanceExpressionOp>(nested.front()))
+            break;
+          root = nested.front();
+        } else if (auto clocking =
+                       dyn_cast<semantic::SVClockingAssertionExprOp>(root)) {
+          SmallVector<Operation *> nested = getChildren(clocking);
+          assertionClock = nested.front();
+          root = nested.back();
+        } else if (isa<semantic::SVDisableIffAssertionExprOp>(root)) {
+          root = getChildren(root).back();
+        } else {
+          break;
+        }
+      }
+      if (!assertionClock)
+        return op.emitError("concurrent assertion has no resolved clock"),
+               failure();
+      FailureOr<PropertyAutomaton> compiled = compilePropertyAutomaton(
+          children[propertyIndex],
+          op.getAssertionKind() != semantic::SVAssertionKind::Assert &&
+              op.getAssertionKind() != semantic::SVAssertionKind::Assume,
+          [&](Operation *nestedClock) {
+            return nestedClock == assertionClock ||
+                   areEquivalentDirectClocks(nestedClock, assertionClock);
+          });
+      if (failed(compiled))
+        return failure();
+      automaton = std::move(*compiled);
+
+      MLIRContext *semanticContext = op.getContext();
+      OpBuilder stubBuilder(semanticContext);
+      Attribute node = root->getAttr("node_id");
+      Type bit = semantic::IntegralType::get(semanticContext, 1, false, false, 0,
+                                             0, semantic::SVIntegralFlavor::Bit);
+      OperationState literal(root->getLoc(),
+                             semantic::SVIntegerLiteralOp::getOperationName());
+      literal.addAttribute("node_id", node);
+      literal.addAttribute("semantic_type", TypeAttr::get(bit));
+      literal.addAttribute("is_signed", stubBuilder.getBoolAttr(false));
+      literal.addAttribute("constant_value", stubBuilder.getStringAttr("1'b1"));
+      literal.addRegion()->push_back(new Block());
+      OperationState simple(root->getLoc(),
+                            semantic::SVSimpleAssertionExprOp::getOperationName());
+      simple.addAttribute("node_id", node);
+      simple.addAttribute("has_repetition", stubBuilder.getBoolAttr(false));
+      simple.addAttribute("is_null", stubBuilder.getBoolAttr(false));
+      simple.addAttribute("repetition_is_unbounded",
+                          stubBuilder.getBoolAttr(false));
+      Block *simpleBody = new Block();
+      simple.addRegion()->push_back(simpleBody);
+      simpleBody->push_back(Operation::create(literal));
+      automatonStub = Operation::create(simple);
+      root->getBlock()->getOperations().insert(root->getIterator(), automatonStub);
+      automatonProperty = root;
+      automatonHolder = std::make_unique<Block>();
+      root->moveBefore(automatonHolder.get(), automatonHolder->end());
+      children = getChildren(op);
+    }
+  }
 
   bool proceduralAttempt =
       sim::has<sim::metadata::ProceduralAssertionAttempt>(function);
@@ -5962,6 +6155,27 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
   if (stateStorage)
     fixedStateStorages.push_back(stateStorage);
   llvm::append_range(fixedStateStorages, attemptActionStateStorages);
+  // The automaton: the live attempts in each state, and masks with one bit per
+  // attempt that ends passing or failing if the run ends. Disable and kill clear
+  // these as they clear any monitor's state.
+  auto automatonRef = [&]() -> Value {
+    return sim::SimRefAllocOp::create(
+        builder, location, sim::RefType::get(function.getContext(), stateType),
+        zero);
+  };
+  SmallVector<Value> automatonCounts, automatonNextCounts;
+  Value automatonPassesAtEnd, automatonFailsAtEnd;
+  if (automaton) {
+    for (size_t state = 0; state != automaton->states.size(); ++state) {
+      automatonCounts.push_back(automatonRef());
+      automatonNextCounts.push_back(automatonRef());
+    }
+    automatonPassesAtEnd = automatonRef();
+    automatonFailsAtEnd = automatonRef();
+    llvm::append_range(fixedStateStorages, automatonCounts);
+    fixedStateStorages.push_back(automatonPassesAtEnd);
+    fixedStateStorages.push_back(automatonFailsAtEnd);
+  }
 
   Value disableEpoch;
   Value initialDisable;
@@ -7678,6 +7892,454 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
     }
     return success();
   };
+
+  if (automaton) {
+    endStrengthSource = property;
+    if (failed(outlineEndOfSimulationReports({automatonPassesAtEnd}, 63, 0,
+                                             std::nullopt, true,
+                                             "automaton_pass")) ||
+        failed(outlineEndOfSimulationReports({automatonFailsAtEnd}, 63, 0,
+                                             std::nullopt, false,
+                                             "automaton_fail")))
+      return failure();
+    // IEEE 1800-2023 16.12.14: an asynchronous abort condition acts "at the
+    // granularity of the simulation time step" with its sampled value. Like a
+    // disable, each gets an actor that wakes when the condition becomes true and
+    // moves the attempts that depend on it. The clocked step below covers an
+    // attempt that begins with the condition already true.
+    for (auto [abortIndex, abortPlan] : llvm::enumerate(automaton->asyncAborts)) {
+      Operation *condition = abortPlan.condition;
+      Location at = getSemanticLocation(condition);
+      Value context = function.getBody().front().getArgument(0);
+      Value preponedEvent = createPreponedSnapshotEvent(builder, at, context);
+      FailureOr<Value> observer = bindObserver(
+          condition, preponedEvent, /*includeStaticDependencies=*/false);
+      auto binding =
+          succeeded(observer)
+              ? (*observer).getDefiningOp<sim::SimObserverBindOp>()
+              : sim::SimObserverBindOp{};
+      if (!binding)
+        return emitError(at)
+                   << "asynchronous property abort expression has no observer; "
+                      "its operands are not executable",
+               failure();
+      for (Value capture : binding.getValues())
+        if (isa<sim::RefType>(capture.getType()) &&
+            !isStaticallyAllocatedOverrideTarget(capture))
+          return emitError(at) << "asynchronous property abort cannot observe an "
+                                  "automatic variable",
+                 failure();
+      appendObserverRequest(function, concurrentAbortObserverRequestAttrName,
+                            binding.getEvaluatorAttr());
+
+      SmallVector<Value> captures{context};
+      DenseMap<Value, unsigned> captureIndices;
+      captureIndices.try_emplace(context, 0);
+      auto capture = [&](Value value) {
+        auto [entry, inserted] =
+            captureIndices.try_emplace(value, captures.size());
+        if (inserted)
+          captures.push_back(value);
+        return entry->second;
+      };
+      SmallVector<unsigned> observerIndices, countIndices;
+      for (Value value : binding.getValues())
+        observerIndices.push_back(capture(value));
+      for (Value count : automatonCounts)
+        countIndices.push_back(capture(count));
+      unsigned passAtEndIndex = capture(automatonPassesAtEnd);
+      unsigned failAtEndIndex = capture(automatonFailsAtEnd);
+      for (const std::optional<ReportCallback> *report :
+           {&passReport, &failReport})
+        if (*report)
+          for (Value value : (*report)->captures)
+            capture(value);
+
+      SmallVector<Type> inputs;
+      SmallVector<DictionaryAttr> argumentAttrs;
+      for (auto [index, value] : llvm::enumerate(captures)) {
+        inputs.push_back(value.getType());
+        SmallVector<NamedAttribute> metadata;
+        if (auto argument = dyn_cast<BlockArgument>(value);
+            argument && argument.getOwner() == &function.getBody().front())
+          if (DictionaryAttr source =
+                  function.getArgAttrDict(argument.getArgNumber()))
+            llvm::append_range(metadata, source);
+        if (metadata.empty())
+          metadata.push_back(
+              sim::named<sim::metadata::CaptureKind>(sim::CaptureKindAttr::get(
+                  function.getContext(), index == 0 ? sim::CaptureKind::Context
+                                                    : sim::CaptureKind::Formal)));
+        if (isa<sim::RefType>(value.getType()) &&
+            !isStaticallyAllocatedOverrideTarget(value))
+          metadata.push_back(sim::named<sim::metadata::AutomaticReferenceCapture>(
+              builder.getUnitAttr()));
+        argumentAttrs.push_back(builder.getDictionaryAttr(metadata));
+      }
+
+      auto design = function->getParentOfType<sim::SimDesignOp>();
+      uint64_t scopeID = 0;
+      std::string parentHierarchy = function.getSymName().str();
+      uint64_t parentID = function.getCodeUnitId().value_or(0);
+      for (sim::SimCodeUnitDeclOp declaration :
+           design.getBody().front().getOps<sim::SimCodeUnitDeclOp>())
+        if (declaration.getId() == parentID) {
+          scopeID = declaration.getScopeId();
+          parentHierarchy = declaration.getHierarchicalName().str();
+          break;
+        }
+      std::string suffix =
+          (".$property_abort." + Twine(node) + "." + Twine(abortIndex)).str();
+      std::string hierarchy = parentHierarchy + suffix;
+      uint64_t actorID =
+          stableCodeUnitID((function.getSymName() + suffix + ".identity").str());
+      OpBuilder outlineBuilder(function);
+      outlineBuilder.setInsertionPoint(function);
+      sim::SimCodeUnitDeclOp::create(
+          outlineBuilder, at, actorID, scopeID, sim::EntryKind::Fork,
+          outlineBuilder.getStringAttr(hierarchy),
+          outlineBuilder.getStringAttr("concurrent property abort observer"),
+          outlineBuilder.getUnitAttr());
+      SmallVector<NamedAttribute> attributes{
+          sim::named<sim::metadata::Bindings>(outlineBuilder.getArrayAttr({})),
+          outlineBuilder.getNamedAttr("code_unit_id",
+                                      outlineBuilder.getI64IntegerAttr(actorID)),
+          outlineBuilder.getNamedAttr("internal", outlineBuilder.getUnitAttr()),
+          outlineBuilder.getNamedAttr(
+              "home_region",
+              sim::EventRegionAttr::get(function.getContext(),
+                                        sim::EventRegion::Reactive)),
+          outlineBuilder.getNamedAttr(
+              "domain", sim::ExecutionDomainAttr::get(
+                            function.getContext(), sim::ExecutionDomain::Design)),
+          sim::named<sim::metadata::HierarchicalName>(
+              outlineBuilder.getStringAttr(hierarchy)),
+      };
+      sim::SimFuncOp actor = sim::SimFuncOp::create(
+          outlineBuilder, at, (function.getSymName() + suffix).str(),
+          FunctionType::get(function.getContext(), inputs, TypeRange{}),
+          sim::EntryKind::Fork, attributes, argumentAttrs);
+      SymbolTable::setSymbolVisibility(actor, SymbolTable::Visibility::Private);
+      ::talos::schedule::set<::talos::schedule::Field::ConcurrentAbort>(
+          actor, builder.getUnitAttr());
+      sim::mark<sim::metadata::ConcurrentAbortCounted>(actor);
+      ::talos::schedule::set<::talos::schedule::Field::DetachedControls>(
+          actor, builder.getUnitAttr());
+      ::talos::schedule::set<::talos::schedule::Field::PrioritySignalResume>(
+          actor, builder.getUnitAttr());
+
+      Block &entry = actor.getBody().front();
+      Block *waitAbort = new Block;
+      Block *current = new Block;
+      actor.getBody().push_back(waitAbort);
+      actor.getBody().push_back(current);
+      OpBuilder actorBuilder = OpBuilder::atBlockEnd(&entry);
+      cf::BranchOp::create(actorBuilder, at, waitAbort);
+      actorBuilder.setInsertionPointToEnd(waitAbort);
+      SmallVector<Value> reboundValues;
+      for (unsigned index : observerIndices)
+        reboundValues.push_back(entry.getArgument(index));
+      auto reboundObserver = sim::SimObserverBindOp::create(
+          actorBuilder, at, binding.getResult().getType(),
+          binding.getEvaluatorAttr(), reboundValues,
+          binding.getCaptureCountAttr());
+      Value initialFalse = arith::ConstantOp::create(
+          actorBuilder, at, actorBuilder.getI1Type(),
+          actorBuilder.getBoolAttr(false));
+      SmallVector<Value> observed{reboundObserver.getResult(), initialFalse};
+      auto abortWait = sim::SimSuspendObserveOp::create(
+          actorBuilder, at, observed, 0,
+          ArrayRef<int32_t>{static_cast<int32_t>(sim::EdgeKind::Posedge)},
+          ArrayRef<int32_t>{-1}, schedule::ContinuationSiteAttr{},
+          sim::EventRegionAttr::get(function.getContext(),
+                                    sim::EventRegion::Reactive),
+          current);
+      ::talos::schedule::set<::talos::schedule::Field::ConcurrentAbortLevelTrue>(
+          abortWait, builder.getUnitAttr());
+
+      auto newBlock = [&]() {
+        Block *block = new Block;
+        actor.getBody().push_back(block);
+        return block;
+      };
+      auto integerIn = [&](int64_t value) -> Value {
+        return arith::ConstantOp::create(actorBuilder, at, stateType,
+                                         actorBuilder.getI64IntegerAttr(value));
+      };
+      auto loadIn = [&](Value reference) -> Value {
+        return sim::SimRefLoadOp::create(actorBuilder, at, stateType, reference);
+      };
+      Value permittedActions;
+      if (actionControlled) {
+        actorBuilder.setInsertionPointToEnd(current);
+        permittedActions = sim::SimAssertionActionStateOp::create(
+            actorBuilder, at, actorBuilder.getI32Type(), entry.getArgument(0),
+            assertionControlID);
+        sim::mark<sim::metadata::ConcurrentAttemptActionState>(
+            permittedActions.getDefiningOp());
+      }
+      for (auto [state, target] : llvm::enumerate(abortPlan.targets)) {
+        if (target == PropertyAutomaton::kNoAbort)
+          continue;
+        Block *move = newBlock();
+        Block *next = newBlock();
+        actorBuilder.setInsertionPointToEnd(current);
+        Value slot = entry.getArgument(countIndices[state]);
+        Value count = loadIn(slot);
+        cf::CondBranchOp::create(
+            actorBuilder, at,
+            arith::CmpIOp::create(actorBuilder, at, arith::CmpIPredicate::ne,
+                                  count, integerIn(0)),
+            move, ValueRange{}, next, ValueRange{});
+        actorBuilder.setInsertionPointToEnd(move);
+        sim::SimRefStoreOp::create(actorBuilder, at, integerIn(0), slot);
+        if (target >= 0) {
+          Value destination = entry.getArgument(countIndices[target]);
+          sim::SimRefStoreOp::create(
+              actorBuilder, at,
+              arith::AddIOp::create(actorBuilder, at, loadIn(destination), count),
+              destination);
+          cf::BranchOp::create(actorBuilder, at, next);
+        } else {
+          bool passed = target != PropertyAutomaton::kFail;
+          bool vacuous = target == PropertyAutomaton::kVacuousPass;
+          std::optional<ReportCallback> &report =
+              passed ? passReport : failReport;
+          if (!report) {
+            cf::BranchOp::create(actorBuilder, at, next);
+          } else {
+            Value permitted = arith::ConstantOp::create(
+                actorBuilder, at, actorBuilder.getI1Type(),
+                actorBuilder.getBoolAttr(true));
+            if (permittedActions) {
+              int32_t mask = passed ? (vacuous ? 2 : 1) : 4;
+              Value selected = arith::AndIOp::create(
+                  actorBuilder, at, permittedActions,
+                  arith::ConstantOp::create(actorBuilder, at,
+                                            actorBuilder.getI32Type(),
+                                            actorBuilder.getI32IntegerAttr(mask)));
+              permitted = arith::CmpIOp::create(
+                  actorBuilder, at, arith::CmpIPredicate::ne, selected,
+                  arith::ConstantOp::create(actorBuilder, at,
+                                            actorBuilder.getI32Type(),
+                                            actorBuilder.getI32IntegerAttr(0)));
+            }
+            Block *loop = newBlock();
+            Block *body = newBlock();
+            loop->addArgument(stateType, at);
+            cf::CondBranchOp::create(actorBuilder, at, permitted, loop,
+                                     ValueRange{count}, next, ValueRange{});
+            actorBuilder.setInsertionPointToEnd(loop);
+            Value remaining = loop->getArgument(0);
+            cf::CondBranchOp::create(
+                actorBuilder, at,
+                arith::CmpIOp::create(actorBuilder, at, arith::CmpIPredicate::ne,
+                                      remaining, integerIn(0)),
+                body, ValueRange{}, next, ValueRange{});
+            actorBuilder.setInsertionPointToEnd(body);
+            SmallVector<Value> reportOperands;
+            for (Value value : report->captures) {
+              Value argument = entry.getArgument(captureIndices.lookup(value));
+              reportOperands.push_back(argument);
+              if (value == disableEpoch || value == killEpochStorage)
+                reportOperands.push_back(loadIn(argument));
+            }
+            sim::SimSpawnOp::create(actorBuilder, report->location,
+                                    report->function.getSymNameAttr(),
+                                    reportOperands, ArrayAttr{}, ArrayAttr{});
+            cf::BranchOp::create(
+                actorBuilder, at, loop,
+                ValueRange{arith::SubIOp::create(actorBuilder, at, remaining,
+                                                 integerIn(1))});
+          }
+        }
+        current = next;
+      }
+      // The end-of-run masks follow the attempts that moved.
+      actorBuilder.setInsertionPointToEnd(current);
+      Value atEndPass = integerIn(0), atEndFail = integerIn(0);
+      for (auto [state, description] : llvm::enumerate(automaton->states)) {
+        Value &total = description.passesAtEnd ? atEndPass : atEndFail;
+        total = arith::AddIOp::create(
+            actorBuilder, at, total,
+            loadIn(entry.getArgument(countIndices[state])));
+      }
+      auto maskOf = [&](Value attempts) -> Value {
+        Value limited =
+            arith::MinUIOp::create(actorBuilder, at, attempts, integerIn(63));
+        return arith::SubIOp::create(
+            actorBuilder, at,
+            arith::ShLIOp::create(actorBuilder, at, integerIn(1), limited),
+            integerIn(1));
+      };
+      sim::SimRefStoreOp::create(actorBuilder, at, maskOf(atEndPass),
+                                 entry.getArgument(passAtEndIndex));
+      sim::SimRefStoreOp::create(actorBuilder, at, maskOf(atEndFail),
+                                 entry.getArgument(failAtEndIndex));
+      cf::BranchOp::create(actorBuilder, at, waitAbort);
+
+      sim::SimSpawnOp::create(builder, at, actor.getSymNameAttr(), captures,
+                              ArrayAttr{}, ArrayAttr{});
+    }
+
+    Block *wait = addBlock();
+    Block *sample = addBlock();
+    emitBranch(wait);
+    setCurrent(wait);
+    if (failed(emitEventSuspend(clock, sample)))
+      return failure();
+    // The clock occurrence samples in Preponed; evaluation resumes in Observed.
+    wait->getTerminator()->setAttr(
+        "resume_region", sim::EventRegionAttr::get(function.getContext(),
+                                                   sim::EventRegion::Observed));
+    setCurrent(sample);
+    Value attemptEnabled = queryAttemptEnabledForCoverage();
+    emitEvaluationCoverageHit(attemptEnabled);
+    Value actionState = queryActionState();
+    if (failed(cancelDisabledSample(wait, fixedStateStorages)) ||
+        failed(cancelKilledSample(fixedStateStorages)))
+      return failure();
+    bool savedSampleAssertionValues = sampleAssertionValues;
+    sampleAssertionValues = true;
+    Operation *savedSampledClock = activeSampledClock;
+    activeSampledClock = clock;
+    llvm::scope_exit restoreSampling([&] {
+      sampleAssertionValues = savedSampleAssertionValues;
+      activeSampledClock = savedSampledClock;
+    });
+    ensureAttemptEnabled(attemptEnabled);
+
+    // The sampled truth of every atom is one letter of the property's word.
+    SmallVector<Value> atoms;
+    for (Operation *atom : automaton->atoms) {
+      FailureOr<Value> value = lowerExpression(atom);
+      FailureOr<Value> truth =
+          succeeded(value) ? truthValue(*value, getSemanticLocation(atom))
+                           : FailureOr<Value>(failure());
+      if (failed(truth))
+        return failure();
+      atoms.push_back(*truth);
+    }
+    auto load = [&](Value reference) -> Value {
+      return sim::SimRefLoadOp::create(builder, location, stateType, reference);
+    };
+    auto store = [&](Value value, Value reference) {
+      sim::SimRefStoreOp::create(builder, location, value, reference);
+    };
+    auto addTo = [&](Value reference, Value amount) {
+      store(arith::AddIOp::create(builder, location, load(reference), amount),
+            reference);
+    };
+    auto integer = [&](int64_t value) -> Value {
+      return arith::ConstantOp::create(builder, location, stateType,
+                                       builder.getI64IntegerAttr(value));
+    };
+    Value starts = gateNewAttempt(
+        arith::ConstantOp::create(builder, location, builder.getI1Type(),
+                                  builder.getBoolAttr(true)),
+        attemptEnabled);
+    addTo(automatonCounts.front(),
+          arith::SelectOp::create(builder, location, starts, integer(1), zero));
+    for (Value next : automatonNextCounts)
+      store(zero, next);
+    Value passes = automatonRef();
+    Value vacuousPasses = automatonRef();
+    Value fails = automatonRef();
+
+    // Step each state with attempts: one decision per atom it depends on.
+    for (auto [index, state] : llvm::enumerate(automaton->states)) {
+      Value count = load(automatonCounts[index]);
+      Value live = arith::CmpIOp::create(
+          builder, location, arith::CmpIPredicate::ne, count, zero);
+      Block *done = addBlock();
+      DenseMap<int, Block *> nodeBlocks;
+      std::function<Block *(int)> blockOf = [&](int node) -> Block * {
+        if (Block *known = nodeBlocks.lookup(node))
+          return known;
+        Block *block = addBlock();
+        nodeBlocks[node] = block;
+        const PropertyAutomaton::Node &decision = automaton->nodes[node];
+        if (decision.atom >= 0) {
+          Block *whenFalse = blockOf(decision.whenFalse);
+          Block *whenTrue = blockOf(decision.whenTrue);
+          setCurrent(block);
+          cf::CondBranchOp::create(builder, location, atoms[decision.atom],
+                                   whenTrue, ValueRange{}, whenFalse,
+                                   ValueRange{});
+          return block;
+        }
+        setCurrent(block);
+        Value target =
+            decision.whenFalse >= 0
+                ? automatonNextCounts[decision.whenFalse]
+                : decision.whenFalse == PropertyAutomaton::kPass  ? passes
+                  : decision.whenFalse == PropertyAutomaton::kFail ? fails
+                                                                   : vacuousPasses;
+        addTo(target, count);
+        cf::BranchOp::create(builder, location, done);
+        return block;
+      };
+      Block *entry = builder.getInsertionBlock();
+      Block *root = blockOf(state.root);
+      setCurrent(entry);
+      cf::CondBranchOp::create(builder, location, live, root, ValueRange{}, done,
+                               ValueRange{});
+      setCurrent(done);
+    }
+    for (auto [current, next] :
+         llvm::zip_equal(automatonCounts, automatonNextCounts))
+      store(load(next), current);
+
+    // What the attempts still live would report if the run ended here.
+    Value atEndPass = zero, atEndFail = zero;
+    for (auto [index, state] : llvm::enumerate(automaton->states)) {
+      Value &total = state.passesAtEnd ? atEndPass : atEndFail;
+      total = arith::AddIOp::create(builder, location, total,
+                                    load(automatonCounts[index]));
+    }
+    auto attemptMask = [&](Value attempts) -> Value {
+      Value limited = arith::MinUIOp::create(builder, location, attempts,
+                                             integer(63));
+      return arith::SubIOp::create(
+          builder, location,
+          arith::ShLIOp::create(builder, location, integer(1), limited),
+          integer(1));
+    };
+    store(attemptMask(atEndPass), automatonPassesAtEnd);
+    store(attemptMask(atEndFail), automatonFailsAtEnd);
+
+    // Each attempt that finished on this letter reports once (16.14.1), and a
+    // vacuous success is a success for a cover too (16.14.3).
+    auto reportAll = [&](Value counter, bool passed, bool vacuous) {
+      Value permitted = gateActionResult(
+          arith::ConstantOp::create(builder, location, builder.getI1Type(),
+                                    builder.getBoolAttr(true)),
+          actionState, passed, vacuous);
+      Block *loop = addBlock();
+      Block *report = addBlock();
+      Block *after = addBlock();
+      cf::CondBranchOp::create(builder, location, permitted, loop, ValueRange{},
+                               after, ValueRange{});
+      setCurrent(loop);
+      Value remaining = load(counter);
+      cf::CondBranchOp::create(
+          builder, location,
+          arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ne,
+                                remaining, zero),
+          report, ValueRange{}, after, ValueRange{});
+      setCurrent(report);
+      scheduleResult(passed);
+      store(arith::SubIOp::create(builder, location, remaining, integer(1)),
+            counter);
+      cf::BranchOp::create(builder, location, loop);
+      setCurrent(after);
+    };
+    reportAll(passes, true, false);
+    reportAll(vacuousPasses, true, true);
+    reportAll(fails, false, false);
+    cf::BranchOp::create(builder, location, wait);
+    return success();
+  }
 
   std::optional<bool> intrinsicOperandStrengthOverride;
   if (explicitConsequentEndStrong)

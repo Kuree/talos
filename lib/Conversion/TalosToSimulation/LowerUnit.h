@@ -585,6 +585,11 @@ private:
   lowerImmediateAssertion(semantic::SVImmediateAssertionStatementOp op);
   ::mlir::LogicalResult
   lowerConcurrentAssertion(semantic::SVConcurrentAssertionStatementOp op);
+  /// `useAutomaton` runs the property through PropertyAutomaton instead of the
+  /// bounded monitor.
+  ::mlir::LogicalResult
+  lowerConcurrentAssertionImpl(semantic::SVConcurrentAssertionStatementOp op,
+                               bool useAutomaton);
   ::mlir::LogicalResult lowerGlobalFutureAssertionResolver(
       semantic::SVConcurrentAssertionStatementOp op);
   ::mlir::LogicalResult
