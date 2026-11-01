@@ -2672,6 +2672,19 @@ private:
         integer.isSigned()));
   }
 
+  /// The vpiDelayMode constant in force for the design element holding `symbol`
+  /// (IEEE 1800-2023 E.4 to E.7).
+  int32_t delayModeOf(const slang::ast::Symbol &symbol) const {
+    for (const slang::ast::Scope *scope = symbol.getParentScope(); scope;
+         scope = scope->asSymbol().getParentScope())
+      if (const auto *body =
+              scope->asSymbol().as_if<slang::ast::InstanceBodySymbol>()) {
+        auto found = optionalDirectives.find(body->getDefinition().getSyntax());
+        return found == optionalDirectives.end() ? 1 : found->second.delayMode;
+      }
+    return 1;
+  }
+
   /// IEEE 1800-2023 32.4.3: "Any expression containing one or more specparams
   /// is reevaluated when annotated to from an SDF file." Slang's evaluator
   /// reads a specparam's source value, so walk the arithmetic around one here.
@@ -2913,6 +2926,17 @@ private:
         return false;
       delays.push_back(static_cast<int64_t>(femtoseconds));
     }
+    // Annex E names the delay modes and leaves their meaning to the established
+    // convention of its source tool: path mode ignores the distributed delays
+    // on nets, gates and continuous assignments, zero mode every delay, and
+    // unit mode makes a nonzero distributed delay one precision step.
+    int32_t delayMode = delayModeOf(contextSymbol);
+    if (delayMode == 2 || delayMode == 5)
+      return true;
+    if (delayMode == 4)
+      for (int64_t &delay : delays)
+        if (delay != 0)
+          delay = static_cast<int64_t>(precisionFs);
     attrs.set("delay_fs", builder.getDenseI64ArrayAttr(delays));
     return true;
   }
@@ -3280,6 +3304,12 @@ private:
       attrs.set("timing_delay_count",
                 builder.getI64IntegerAttr(
                     sdfAnnotated ? delays.size() : node.getDelays().size()));
+      // Only path mode and the default use the delays of module paths (see
+      // addStaticPropagationDelay). A zero path delay leaves the distributed
+      // delay in force (30.6).
+      if (int32_t delayMode = delayModeOf(node);
+          staticDelays && (delayMode == 3 || delayMode == 4 || delayMode == 5))
+        llvm::fill(delays, int64_t{0});
       if (staticDelays)
         attrs.set("timing_delay_fs", builder.getDenseI64ArrayAttr(delays));
 
