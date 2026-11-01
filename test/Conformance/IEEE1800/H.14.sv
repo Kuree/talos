@@ -1,6 +1,5 @@
 // CLAUSE: Legacy DPI imports use opaque packed-data handles
-// XFAIL: *
-// NOTE: The optional legacy packed-data DPI types and access functions are absent.
+// SINCE: 0.1.0
 // RUN: %clang -c -fPIC %S/Inputs/H.14/legacy.c -I%resource_dir/include -o %t.legacy.c.o
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier  %s %t.legacy.c.o -o %t.exe
 // RUN: %t.exe

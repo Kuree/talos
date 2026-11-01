@@ -1142,15 +1142,7 @@ public:
   ArrayAttr getEnumDomains() const { return typeConverter.getEnumDomains(); }
 
   void markDPIExport(const slang::ast::SubroutineSymbol &subroutine,
-                     StringRef cIdentifier,
-                     const slang::syntax::DPIExportSyntax *exportSyntax) {
-    if (exportSyntax && exportSyntax->specString.valueText() == "DPI") {
-      emitError(sourceLocation(exportSyntax->specString.location()))
-          << "legacy SystemVerilog 3.1a `DPI` exports are unsupported; use "
-             "`DPI-C`";
-      sawInvalidNode = true;
-      return;
-    }
+                     StringRef cIdentifier) {
     const slang::syntax::SyntaxNode *syntax = subroutine.getSyntax();
     if (syntax && !dpiExportSyntaxIndexBuilt) {
       for (auto [symbol, operation] : emittedSymbolOperations) {
@@ -1204,8 +1196,6 @@ public:
          compilation.getSyntaxTrees())
       tree->root().visit(collector);
     for (const slang::syntax::DPIExportSyntax *directive : collector.exports) {
-      if (directive->specString.valueText() == "DPI")
-        continue;
       std::string_view name = directive->name.valueText();
       std::string_view cIdentifier =
           directive->c_identifier ? directive->c_identifier.valueText() : name;
@@ -4906,12 +4896,6 @@ private:
         if (const auto *syntax = node.getSyntax()) {
           const auto &dpi =
               syntax->template as<slang::syntax::DPIImportSyntax>();
-          if (dpi.specString.valueText() == "DPI") {
-            emitError(sourceLocation(dpi.specString.location()))
-                << "legacy SystemVerilog 3.1a `DPI` imports are unsupported; "
-                   "use `DPI-C`";
-            sawInvalidNode = true;
-          }
           if (!dpi.c_identifier.valueText().empty())
             cIdentifier = dpi.c_identifier.valueText();
         }
@@ -8481,7 +8465,7 @@ endpackage
     return failure();
   for (const slang::ast::Compilation::DPIExport &entry :
        compilation->getDPIExports())
-    importer.markDPIExport(*entry.subroutine, entry.cIdentifier, entry.syntax);
+    importer.markDPIExport(*entry.subroutine, entry.cIdentifier);
   importer.markSharedDPIExports(*compilation);
   if (!importer.succeeded())
     return failure();

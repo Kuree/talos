@@ -1,6 +1,8 @@
 /*
  * IEEE 1800-2017 Annex I DPI-C include surface provided by Talos.
- * The optional deprecated SV3.1a portion is intentionally omitted.
+ * The deprecated SV3.1a packed-data surface (IEEE 1800-2023 H.14.2) is
+ * included; Talos's packed representation is the canonical one, so a packed
+ * array handle is a pointer to canonical svBitVecVal/svLogicVecVal words.
  */
 #ifndef INCLUDED_SVDPI
 #define INCLUDED_SVDPI
@@ -189,6 +191,42 @@ XXTERN void svAckDisabledState(void);
 XXTERN int svGetTime(const svScope scope, svTimeVal *time);
 XXTERN int svGetTimeUnit(const svScope scope, int32_t *time_unit);
 XXTERN int svGetTimePrecision(const svScope scope, int32_t *time_precision);
+
+/* IEEE 1800-2023 H.14.2: SV3.1a-style packed data processing. */
+#define SV_CANONICAL_SIZE(WIDTH) (((WIDTH) + 31) >> 5)
+
+typedef uint32_t svBitVec32;
+typedef struct {
+  unsigned int c;
+  unsigned int d;
+} svLogicVec32;
+
+typedef void *svBitPackedArrRef;
+typedef void *svLogicPackedArrRef;
+
+XXTERN int svSizeOfBitPackedArr(int width);
+XXTERN int svSizeOfLogicPackedArr(int width);
+XXTERN void svPutBitVec32(svBitPackedArrRef d, const svBitVec32 *s, int w);
+XXTERN void svPutLogicVec32(svLogicPackedArrRef d, const svLogicVec32 *s,
+                            int w);
+XXTERN void svGetBitVec32(svBitVec32 *d, const svBitPackedArrRef s, int w);
+XXTERN void svGetLogicVec32(svLogicVec32 *d, const svLogicPackedArrRef s,
+                            int w);
+XXTERN svBit svGetSelectBit(const svBitPackedArrRef s, int i);
+XXTERN svLogic svGetSelectLogic(const svLogicPackedArrRef s, int i);
+XXTERN void svPutSelectBit(svBitPackedArrRef d, int i, svBit s);
+XXTERN void svPutSelectLogic(svLogicPackedArrRef d, int i, svLogic s);
+XXTERN void svGetPartSelectBit(svBitVec32 *d, const svBitPackedArrRef s, int i,
+                               int w);
+XXTERN svBitVec32 svGetBits(const svBitPackedArrRef s, int i, int w);
+XXTERN svBitVec32 svGet32Bits(const svBitPackedArrRef s, int i);
+XXTERN uint64_t svGet64Bits(const svBitPackedArrRef s, int i);
+XXTERN void svGetPartSelectLogic(svLogicVec32 *d, const svLogicPackedArrRef s,
+                                 int i, int w);
+XXTERN void svPutPartSelectBit(svBitPackedArrRef d, const svBitVec32 s, int i,
+                               int w);
+XXTERN void svPutPartSelectLogic(svLogicPackedArrRef d, const svLogicVec32 s,
+                                 int i, int w);
 
 #undef DPI_EXTERN
 #undef DPI_PROTOTYPES

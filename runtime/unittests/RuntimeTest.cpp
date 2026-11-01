@@ -1023,6 +1023,52 @@ TEST(RuntimeDPI, ImplementsCanonicalPackedVectorUtilities) {
   EXPECT_EQ(logicPart.bval, replacement.bval);
 }
 
+// IEEE 1800-2023 H.14.2: SV3.1a opaque-handle access to packed data.
+TEST(RuntimeDPI, ImplementsDeprecatedPackedHandleAccess) {
+  EXPECT_EQ(SV_CANONICAL_SIZE(33), 2);
+  EXPECT_EQ(svSizeOfBitPackedArr(33), 8);
+  EXPECT_EQ(svSizeOfLogicPackedArr(33), 16);
+
+  svBitVec32 canonical[2]{UINT32_C(0x80000001), UINT32_C(3)};
+  svBitVecVal storage[2]{};
+  svPutBitVec32(storage, canonical, 33);
+  svBitVec32 back[2]{};
+  svGetBitVec32(back, storage, 33);
+  EXPECT_EQ(back[0], canonical[0]);
+  EXPECT_EQ(back[1], canonical[1]);
+  EXPECT_EQ(svGetSelectBit(storage, 31), sv_1);
+  EXPECT_EQ(svGetSelectBit(storage, 1), sv_0);
+  svPutSelectBit(storage, 1, sv_1);
+  EXPECT_EQ(storage[0], UINT32_C(0x80000003));
+  EXPECT_EQ(svGetBits(storage, 28, 8), UINT32_C(0x38));
+  EXPECT_EQ(svGet32Bits(storage, 1), UINT32_C(0xc0000001));
+  EXPECT_EQ(svGet64Bits(storage, 0), UINT64_C(0x0000000380000003));
+  svPutPartSelectBit(storage, UINT32_C(0xa5), 4, 8);
+  svBitVec32 part = 0;
+  svGetPartSelectBit(&part, storage, 4, 8);
+  EXPECT_EQ(part, UINT32_C(0xa5));
+
+  svLogicVec32 logicIn[2]{{UINT32_C(5), UINT32_C(6)}, {UINT32_C(7), UINT32_C(8)}};
+  svLogicVecVal logicStorage[2]{};
+  svPutLogicVec32(logicStorage, logicIn, 33);
+  EXPECT_EQ(logicStorage[1].aval, UINT32_C(7));
+  EXPECT_EQ(logicStorage[1].bval, UINT32_C(8));
+  svLogicVec32 logicOut[2]{};
+  svGetLogicVec32(logicOut, logicStorage, 33);
+  EXPECT_EQ(logicOut[0].c, UINT32_C(5));
+  EXPECT_EQ(logicOut[0].d, UINT32_C(6));
+  EXPECT_EQ(svGetSelectLogic(logicStorage, 1), sv_z);
+  EXPECT_EQ(svGetSelectLogic(logicStorage, 0), sv_1);
+  svPutSelectLogic(logicStorage, 0, sv_x);
+  EXPECT_EQ(svGetSelectLogic(logicStorage, 0), sv_x);
+  svPutPartSelectLogic(logicStorage, svLogicVec32{UINT32_C(0xa), UINT32_C(0xc)},
+                       8, 4);
+  svLogicVec32 logicPart{};
+  svGetPartSelectLogic(&logicPart, logicStorage, 8, 4);
+  EXPECT_EQ(logicPart.c, UINT32_C(0xa));
+  EXPECT_EQ(logicPart.d, UINT32_C(0xc));
+}
+
 talos_rt_status observeDpiCall(talos_rt_context *context, uint32_t importID,
                                const talos_rt_import_input_v1 *inputs,
                                uint32_t inputCount,

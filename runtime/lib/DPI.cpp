@@ -458,6 +458,120 @@ extern "C" void svPutPartselLogic(svLogicVecVal *destination,
   }
 }
 
+// IEEE 1800-2023 H.14.2: the opaque packed-array handle of an SV3.1a ("DPI")
+// declaration points at the canonical words, so conversion is a copy.
+extern "C" int svSizeOfBitPackedArr(int width) {
+  return width <= 0 ? 0 : static_cast<int>(sizeof(svBitVecVal)) * ((width + 31) >> 5);
+}
+
+extern "C" int svSizeOfLogicPackedArr(int width) {
+  return width <= 0 ? 0 : static_cast<int>(sizeof(svLogicVecVal)) * ((width + 31) >> 5);
+}
+
+extern "C" void svPutBitVec32(svBitPackedArrRef destination,
+                              const svBitVec32 *source, int width) {
+  if (!destination || !source || width <= 0)
+    return;
+  std::memcpy(destination, source, svSizeOfBitPackedArr(width));
+}
+
+extern "C" void svPutLogicVec32(svLogicPackedArrRef destination,
+                                const svLogicVec32 *source, int width) {
+  if (!destination || !source)
+    return;
+  auto *words = static_cast<svLogicVecVal *>(destination);
+  for (int word = 0; word < ((width + 31) >> 5); ++word) {
+    words[word].aval = source[word].c;
+    words[word].bval = source[word].d;
+  }
+}
+
+extern "C" void svGetBitVec32(svBitVec32 *destination,
+                              const svBitPackedArrRef source, int width) {
+  if (!destination || !source || width <= 0)
+    return;
+  std::memcpy(destination, source, svSizeOfBitPackedArr(width));
+}
+
+extern "C" void svGetLogicVec32(svLogicVec32 *destination,
+                                const svLogicPackedArrRef source, int width) {
+  if (!destination || !source)
+    return;
+  const auto *words = static_cast<const svLogicVecVal *>(source);
+  for (int word = 0; word < ((width + 31) >> 5); ++word) {
+    destination[word].c = words[word].aval;
+    destination[word].d = words[word].bval;
+  }
+}
+
+extern "C" svBit svGetSelectBit(const svBitPackedArrRef source, int index) {
+  return svGetBitselBit(static_cast<const svBitVecVal *>(source), index);
+}
+
+extern "C" svLogic svGetSelectLogic(const svLogicPackedArrRef source,
+                                    int index) {
+  return svGetBitselLogic(static_cast<const svLogicVecVal *>(source), index);
+}
+
+extern "C" void svPutSelectBit(svBitPackedArrRef destination, int index,
+                               svBit value) {
+  svPutBitselBit(static_cast<svBitVecVal *>(destination), index, value);
+}
+
+extern "C" void svPutSelectLogic(svLogicPackedArrRef destination, int index,
+                                 svLogic value) {
+  svPutBitselLogic(static_cast<svLogicVecVal *>(destination), index, value);
+}
+
+extern "C" void svGetPartSelectBit(svBitVec32 *destination,
+                                   const svBitPackedArrRef source, int index,
+                                   int width) {
+  svGetPartselBit(destination, static_cast<const svBitVecVal *>(source), index,
+                  width);
+}
+
+extern "C" svBitVec32 svGetBits(const svBitPackedArrRef source, int index,
+                                int width) {
+  svBitVec32 value = 0;
+  svGetPartSelectBit(&value, source, index, width);
+  return value;
+}
+
+extern "C" svBitVec32 svGet32Bits(const svBitPackedArrRef source, int index) {
+  return svGetBits(source, index, 32);
+}
+
+extern "C" uint64_t svGet64Bits(const svBitPackedArrRef source, int index) {
+  return static_cast<uint64_t>(svGetBits(source, index, 32)) |
+         (static_cast<uint64_t>(svGetBits(source, index + 32, 32)) << 32);
+}
+
+extern "C" void svGetPartSelectLogic(svLogicVec32 *destination,
+                                     const svLogicPackedArrRef source,
+                                     int index, int width) {
+  if (!destination)
+    return;
+  svLogicVecVal part{destination->c, destination->d};
+  svGetPartselLogic(&part, static_cast<const svLogicVecVal *>(source), index,
+                    width);
+  destination->c = part.aval;
+  destination->d = part.bval;
+}
+
+extern "C" void svPutPartSelectBit(svBitPackedArrRef destination,
+                                   const svBitVec32 source, int index,
+                                   int width) {
+  svPutPartselBit(static_cast<svBitVecVal *>(destination), source, index,
+                  width);
+}
+
+extern "C" void svPutPartSelectLogic(svLogicPackedArrRef destination,
+                                     const svLogicVec32 source, int index,
+                                     int width) {
+  svPutPartselLogic(static_cast<svLogicVecVal *>(destination),
+                    svLogicVecVal{source.c, source.d}, index, width);
+}
+
 extern "C" svScope svGetScope(void) {
   return activeDpiCall ? activeDpiCall->scope : nullptr;
 }

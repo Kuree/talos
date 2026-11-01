@@ -6,6 +6,8 @@ set(TALOS_RESOURCE_DIR "${CMAKE_BINARY_DIR}/lib/talos")
 file(MAKE_DIRECTORY "${TALOS_RESOURCE_DIR}/include")
 configure_file("${PROJECT_SOURCE_DIR}/runtime/include/svdpi.h"
                "${TALOS_RESOURCE_DIR}/include/svdpi.h" COPYONLY)
+configure_file("${PROJECT_SOURCE_DIR}/runtime/include/svdpi_src.h"
+               "${TALOS_RESOURCE_DIR}/include/svdpi_src.h" COPYONLY)
 foreach(vpi_header vpi_user.h sv_vpi_user.h vpi_compatibility.h)
   configure_file(
     "${TALOS_SLANG_SOURCE_DIR}/external/ieee1800/${vpi_header}"
