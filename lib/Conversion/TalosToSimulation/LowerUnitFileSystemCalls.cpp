@@ -578,13 +578,24 @@ UnitLowering::lowerFileSystemCall(semantic::SVCallExpressionOp op) {
     return dummyTaskResult();
   }
 
-  if (name == "$readmemb" || name == "$readmemh") {
-    if (children.size() < 2 || children.size() > 4) {
-      emitError(location) << name << " requires two to four arguments";
+  if (name == "$readmemb" || name == "$readmemh" || name == "$sreadmemb" ||
+      name == "$sreadmemh") {
+    // IEEE 1800-2023 D.14: $sreadmem* take (mem_name, start_address,
+    // finish_address, string {, string}) and load from the strings instead of
+    // a file; every other rule is that of $readmem* (21.4).
+    bool fromStrings = name.starts_with("$s");
+    size_t memoryIndex = fromStrings ? 0 : 1;
+    size_t startIndex = fromStrings ? 1 : 2;
+    size_t finishIndex = fromStrings ? 2 : 3;
+    if (fromStrings ? children.size() < 4
+                    : (children.size() < 2 || children.size() > 4)) {
+      emitError(location) << name
+                          << (fromStrings ? " requires at least four arguments"
+                                          : " requires two to four arguments");
       return failure();
     }
 
-    Operation *actual = children[1];
+    Operation *actual = children[memoryIndex];
     if (auto assignment =
             dyn_cast<semantic::SVAssignmentExpressionOp>(actual)) {
       SmallVector<Operation *> outputChildren = getChildren(assignment);
@@ -719,7 +730,36 @@ UnitLowering::lowerFileSystemCall(semantic::SVCallExpressionOp op) {
     }
 
     Value descriptor;
-    if (getStringLiteral(children[0])) {
+    if (fromStrings) {
+      // The strings have the format of $readmem input files; they are read as
+      // one stream in which consecutive strings are separated by white space.
+      Type stringType = sim::StringType::get(function.getContext());
+      SmallVector<Value> parts;
+      for (Operation *child : llvm::drop_begin(children, 3)) {
+        if (!parts.empty())
+          parts.push_back(sim::SimStringLiteralOp::create(builder, location,
+                                                          stringType, " "));
+        FailureOr<Value> value = lowerExpression(child);
+        FailureOr<Value> converted =
+            succeeded(value) ? convert(*value, stringType, isSignedNode(child),
+                                       location)
+                             : FailureOr<Value>(failure());
+        if (failed(converted))
+          return failure();
+        parts.push_back(*converted);
+      }
+      Value data = parts.size() == 1
+                       ? parts.front()
+                       : Value(sim::SimStringConcatOp::create(
+                             builder, location, stringType, parts));
+      // The runtime opens a string-backed stream for this mode, which no
+      // user string can spell: SystemVerilog strings never hold NUL (6.16).
+      Value mode = sim::SimStringLiteralOp::create(
+          builder, location, stringType, StringRef("\0m", 2));
+      descriptor = sim::SimFileOpenStringOp::create(builder, location, i32,
+                                                    context, data, mode)
+                       .getDescriptor();
+    } else if (getStringLiteral(children[0])) {
       FailureOr<Value> path = lowerBytes(children[0]);
       if (failed(path))
         return failure();
@@ -807,11 +847,11 @@ UnitLowering::lowerFileSystemCall(semantic::SVCallExpressionOp op) {
                                     : associativeLow);
     Value high;
     bool hasExplicitStart =
-        children.size() >= 3 &&
-        !isa<semantic::SVEmptyArgumentExpressionOp>(children[2]);
+        children.size() > startIndex &&
+        !isa<semantic::SVEmptyArgumentExpressionOp>(children[startIndex]);
     bool hasExplicitFinish =
-        children.size() >= 4 &&
-        !isa<semantic::SVEmptyArgumentExpressionOp>(children[3]);
+        children.size() > finishIndex &&
+        !isa<semantic::SVEmptyArgumentExpressionOp>(children[finishIndex]);
     Value emptyDefault = constant(builder.getI1Type(), 0);
     if (array)
       high = indexConstant(std::max(dimensions.front().getLeft(),
@@ -851,8 +891,8 @@ UnitLowering::lowerFileSystemCall(semantic::SVCallExpressionOp op) {
         return fallback;
       return lowerInteger(children[index], i64);
     };
-    FailureOr<Value> start = addressArgument(2, low);
-    FailureOr<Value> finish = addressArgument(3, high);
+    FailureOr<Value> start = addressArgument(startIndex, low);
+    FailureOr<Value> finish = addressArgument(finishIndex, high);
     if (failed(start) || failed(finish))
       return failure();
     bool unsignedAddress = associative && !associative.getSignedKey();
@@ -969,7 +1009,7 @@ UnitLowering::lowerFileSystemCall(semantic::SVCallExpressionOp op) {
         TypeRange{sim::LogicType::get(function.getContext(), *elementWidth),
                   i32, i64},
         context, descriptor,
-        static_cast<sim::Radix>(name == "$readmemb" ? 2 : 16));
+        static_cast<sim::Radix>(name.ends_with("b") ? 2 : 16));
     Value eofKind = constant(i32, TALOS_RT_READMEM_EOF);
     Value isEof = arith::CmpIOp::create(
         builder, location, arith::CmpIPredicate::eq, token.getKind(), eofKind);

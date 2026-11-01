@@ -2752,8 +2752,8 @@ UnitLowering::lowerSystemCall(semantic::SVCallExpressionOp op) {
       llvm::StringSwitch<bool>(name)
           .Cases({"$fopen", "$fclose", "$fflush", "$fgetc", "$ungetc", "$fgets",
                   "$fread", "$feof", "$ferror", "$fseek", "$ftell", "$rewind",
-                  "$timeformat", "$readmemb", "$readmemh", "$writememb",
-                  "$writememh", "$system"},
+                  "$timeformat", "$readmemb", "$readmemh", "$sreadmemb",
+                  "$sreadmemh", "$writememb", "$writememh", "$system"},
                  true)
           .Default(false);
   if (fileCall)

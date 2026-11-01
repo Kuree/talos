@@ -2756,6 +2756,44 @@ TEST_F(RuntimeTest, ReadMemHexPrefixSurvivesRefillsAndMixedCaseDigits) {
   EXPECT_EQ(talos_rt_v1_file_close(context, descriptor), TALOS_RT_OK);
 }
 
+// IEEE 1800-2023 D.14: the text stream behind $sreadmemb/$sreadmemh.
+TEST_F(RuntimeTest, TextStreamModeReadsTheGivenText) {
+  std::string_view text = "@3 ab";
+  std::string_view mode("\0m", 2);
+  uint32_t descriptor = 0;
+  ASSERT_EQ(talos_rt_v1_file_open(context, text.data(), text.size(),
+                                  mode.data(), mode.size(), &descriptor),
+            TALOS_RT_OK);
+  ASSERT_NE(descriptor, 0u);
+  std::array<uint8_t, 1> value{}, unknown{};
+  uint32_t kind = 0;
+  uint64_t address = 0;
+  ASSERT_EQ(talos_rt_v1_file_readmem_token(
+                context, descriptor, 16, 8, value.data(), value.size(),
+                unknown.data(), unknown.size(), &kind, &address),
+            TALOS_RT_OK);
+  EXPECT_EQ(kind, TALOS_RT_READMEM_ADDRESS);
+  EXPECT_EQ(address, 3u);
+  ASSERT_EQ(talos_rt_v1_file_readmem_token(
+                context, descriptor, 16, 8, value.data(), value.size(),
+                unknown.data(), unknown.size(), &kind, &address),
+            TALOS_RT_OK);
+  EXPECT_EQ(kind, TALOS_RT_READMEM_DATA);
+  EXPECT_EQ(value[0], 0xab);
+  ASSERT_EQ(talos_rt_v1_file_readmem_token(
+                context, descriptor, 16, 8, value.data(), value.size(),
+                unknown.data(), unknown.size(), &kind, &address),
+            TALOS_RT_OK);
+  EXPECT_EQ(kind, TALOS_RT_READMEM_EOF);
+  EXPECT_EQ(talos_rt_v1_file_close(context, descriptor), TALOS_RT_OK);
+
+  // Any other mode containing NUL is still an invalid $fopen mode.
+  std::string_view bad("r\0", 2);
+  EXPECT_EQ(talos_rt_v1_file_open(context, text.data(), text.size(),
+                                  bad.data(), bad.size(), &descriptor),
+            TALOS_RT_INVALID_ARGUMENT);
+}
+
 TEST_F(RuntimeTest, ReadMemHexPrefixStopsBeforeEveryNonDigitByte) {
   TempDirectory temporary;
   auto path = temporary.file("hex-delimiters.hex");

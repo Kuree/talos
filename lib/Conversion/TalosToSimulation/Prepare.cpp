@@ -398,7 +398,9 @@ static bool isStatefulResolutionSystemCall(StringRef name) {
       .Case("$ferror", true)
       // These calls mutate simulator or design state independently of their
       // apparent expression result.
-      .Cases({"$readmemb", "$readmemh", "$writememb", "$writememh"}, true)
+      .Cases({"$readmemb", "$readmemh", "$sreadmemb", "$sreadmemh", "$writememb",
+              "$writememh"},
+             true)
       .Cases({"$q_initialize", "$q_add", "$q_remove", "$q_full", "$q_exam"},
              true)
       .Cases({"$timeformat", "$system", "$stop", "$finish"}, true)

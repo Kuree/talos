@@ -575,8 +575,17 @@ talos_rt_v1_file_open(talos_rt_context *context, const char *path,
     return TALOS_RT_INVALID_ARGUMENT;
   *outDescriptor = 0;
   return guarded(context, [&] {
-    std::optional<std::string> pathString = copyCStringBytes(path, pathSize);
-    std::optional<std::string> modeString = copyCStringBytes(mode, modeSize);
+    // Internal mode "\0m": `path` holds the text itself and the descriptor
+    // reads it (IEEE 1800-2023 D.14, $sreadmemb/$sreadmemh). SystemVerilog
+    // strings never hold NUL (6.16), so no $fopen mode can spell it.
+    bool textStream = modeSize == 2 && mode[0] == '\0' && mode[1] == 'm';
+    std::optional<std::string> pathString =
+        textStream ? std::optional<std::string>(
+                         std::string(path ? path : "", path ? pathSize : 0))
+                   : copyCStringBytes(path, pathSize);
+    std::optional<std::string> modeString =
+        textStream ? std::optional<std::string>("r")
+                   : copyCStringBytes(mode, modeSize);
     std::string normalized;
     if (!pathString) {
       setLastError(context, "file path is invalid or contains a NUL byte");
@@ -587,8 +596,20 @@ talos_rt_v1_file_open(talos_rt_context *context, const char *path,
       return TALOS_RT_INVALID_ARGUMENT;
     }
     errno = 0;
-    std::unique_ptr<FILE, decltype(&std::fclose)> stream(
-        std::fopen(pathString->c_str(), normalized.c_str()), &std::fclose);
+    std::unique_ptr<FILE, decltype(&std::fclose)> stream(nullptr,
+                                                         &std::fclose);
+    if (textStream) {
+      stream.reset(std::tmpfile());
+      if (stream && ((!pathString->empty() &&
+                      std::fwrite(pathString->data(), 1, pathString->size(),
+                                  stream.get()) != pathString->size()) ||
+                     std::fflush(stream.get()) != 0 ||
+                     std::fseek(stream.get(), 0, SEEK_SET) != 0))
+        stream.reset();
+      pathString = "<string>";
+    } else {
+      stream.reset(std::fopen(pathString->c_str(), normalized.c_str()));
+    }
     if (!stream) {
       int error = errno ? errno : EIO;
       setLastError(context, "fopen failed: " + hostErrorMessage(error));

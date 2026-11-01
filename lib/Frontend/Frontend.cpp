@@ -4445,7 +4445,9 @@ private:
         SET_OP_ATTR(IsVoidCasted, builder.getUnitAttr());
       if (node.isSystemCall() &&
           (node.getSubroutineName() == "$readmemb" ||
-           node.getSubroutineName() == "$readmemh") &&
+           node.getSubroutineName() == "$readmemh" ||
+           node.getSubroutineName() == "$sreadmemb" ||
+           node.getSubroutineName() == "$sreadmemh") &&
           node.arguments().size() >= 2) {
         auto enumValues = [&](const slang::ast::Type &type) {
           SmallVector<Attribute> values;
@@ -4457,8 +4459,11 @@ private:
                 formatDataConstant(value.getValue(), twoState)));
           return builder.getArrayAttr(values);
         };
+        // IEEE 1800-2023 D.14: $sreadmem* name the memory first.
         const slang::ast::Type *memory =
-            &node.arguments()[1]->type->getCanonicalType();
+            &node.arguments()[node.getSubroutineName().starts_with("$s") ? 0
+                                                                          : 1]
+                 ->type->getCanonicalType();
         while (memory->isUnpackedArray()) {
           if (memory->isAssociativeArray()) {
             const slang::ast::Type *index = memory->getAssociativeIndexType();
