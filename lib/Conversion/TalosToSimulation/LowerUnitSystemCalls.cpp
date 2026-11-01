@@ -2697,6 +2697,31 @@ UnitLowering::lowerSystemCall(semantic::SVCallExpressionOp op) {
     return dummyTaskResult();
   }
 
+  if (name == "$stacktrace") {
+    // IEEE 1800-2023 20.17.2: the content of the call stack information is
+    // implementation dependent. Generated code keeps no activation records, so
+    // this is the calling scope and its source line.
+    StringAttr scope = op.getSystemScopePathAttr();
+    std::string text = scope ? scope.getValue().str() : std::string("$root");
+    if (auto file = dyn_cast<FileLineColLoc>(location))
+      text += (Twine(" at ") + file.getFilename().getValue() + ":" +
+               Twine(file.getLine()))
+                  .str();
+    if (isa_and_nonnull<semantic::SVExpressionStatementOp>(op->getParentOp())) {
+      Value item =
+          sim::SimBytesConstantOp::create(builder, location, text).getResult();
+      sim::SimDisplayOp::create(builder, location, context, constant(i32, 1),
+                                item, true, sim::Radix::Decimal,
+                                ArrayRef<int32_t>{0}, scope, StringAttr{},
+                                builder.getI64IntegerAttr(1), IntegerAttr{});
+      return dummyTaskResult();
+    }
+    return sim::SimStringLiteralOp::create(
+               builder, location, sim::StringType::get(function.getContext()),
+               text)
+        .getResult();
+  }
+
   bool displayCall =
       llvm::StringSwitch<bool>(name)
           .Cases({"$monitoron", "$monitoroff", "$printtimescale", "$strobe",
