@@ -1452,8 +1452,33 @@ talos_rt_status buildEVCDPlan(talos_rt_context *context, EVCDSession &state) {
   return TALOS_RT_OK;
 }
 
+// IEEE 1800-2023 21.7.3.6.1: $vcdclose records the final simulation time when
+// the file closes. Like the 21.7.3.4 comment below, it is outside the limited
+// waveform payload, so it uses the raw path the limiter cannot suppress.
+void closeEVCDFile(EVCDSession &state, uint64_t time) {
+  if (!state.file)
+    return;
+  std::string close = "$vcdclose #" + std::to_string(time) + " $end\n";
+  appendRaw(state, close.data(), close.size());
+  closeFile(state);
+}
+
+// IEEE 1800-2023 21.7.3.4: reaching the size limit stops dumping and inserts a
+// comment recording that the limit was attained.
+void finishEVCDLimit(EVCDSession &state, uint64_t time) {
+  if (!state.file || !state.limitReached)
+    return;
+  std::string comment = "\n$comment dumpports limit of " +
+                        std::to_string(state.limitBytes) +
+                        " bytes reached $end\n";
+  appendRaw(state, comment.data(), comment.size());
+  closeEVCDFile(state, time);
+}
+
 talos_rt_status emitEVCDSlot(talos_rt_context *context, EVCDSession &state,
                              bool forceAll, std::string_view checkpoint = {}) {
+  if (state.limitReached)
+    finishEVCDLimit(state, context->schedulerTime);
   if (!state.file || state.limitReached || !state.planBuilt)
     return TALOS_RT_OK;
   const uint8_t *valuePlane = nullptr;
@@ -1526,8 +1551,7 @@ talos_rt_status emitEVCDSlot(talos_rt_context *context, EVCDSession &state,
                     unknownPlane + range.byteBegin, length);
     }
   }
-  if (state.limitReached)
-    closeFile(state);
+  finishEVCDLimit(state, context->schedulerTime);
   return TALOS_RT_OK;
 }
 
@@ -1630,7 +1654,7 @@ void talos_rt_dump_destroy(talos_rt_context *context) noexcept {
           (void)emitEVCDSlot(context, *session, false);
       }
       TALOS_RT_CATCH_ALL {}
-      closeFile(*session);
+      closeEVCDFile(*session, context->schedulerTime);
     }
     delete context->evcdState;
     context->evcdState = nullptr;
