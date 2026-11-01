@@ -5,4 +5,4 @@
 // CHECK-DAG: {{^PASS$}}
 
 module top;logic[7:0]m[0:1];initial begin
-$sreadmemh(m,0,1,"12 34");if(m[0]!==8'h12 || m[1]!==8'h34)$fatal(1,"memory strings");$display("PASS");$finish;end endmodule
+$sreadmemh(m,0,1,"12 // a comment ends with its string","34");if(m[0]!==8'h12 || m[1]!==8'h34)$fatal(1,"memory strings");$display("PASS");$finish;end endmodule

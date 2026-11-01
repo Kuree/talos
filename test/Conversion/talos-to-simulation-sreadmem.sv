@@ -19,8 +19,8 @@ endmodule
 // so the memory is found as the first argument.
 // CHECK: simulation.logic.constant -2 : i2, 0 : i2
 // CHECK: simulation.logic.constant 1 : i2, 0 : i2
-// A string-backed stream joins the strings with one space.
-// CHECK: %[[SEP:.*]] = simulation.string.literal " "
+// A string-backed stream joins the strings with a line break.
+// CHECK: %[[SEP:.*]] = simulation.string.literal "\0A"
 // CHECK: %[[JOIN:.*]] = simulation.string.concat {{.*}}%[[SEP]]
 // CHECK: simulation.file.open_string %arg0, %[[JOIN]], %{{.*}}
 // CHECK: simulation.file.readmem_token %arg0, %{{.*}} {radix = #simulation.radix<hex>}

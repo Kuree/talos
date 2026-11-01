@@ -732,13 +732,14 @@ UnitLowering::lowerFileSystemCall(semantic::SVCallExpressionOp op) {
     Value descriptor;
     if (fromStrings) {
       // The strings have the format of $readmem input files; they are read as
-      // one stream in which consecutive strings are separated by white space.
+      // one stream with a line break between them, so that white space ends
+      // each string's last number and a // comment stops at the string's end.
       Type stringType = sim::StringType::get(function.getContext());
       SmallVector<Value> parts;
       for (Operation *child : llvm::drop_begin(children, 3)) {
         if (!parts.empty())
           parts.push_back(sim::SimStringLiteralOp::create(builder, location,
-                                                          stringType, " "));
+                                                          stringType, "\n"));
         FailureOr<Value> value = lowerExpression(child);
         FailureOr<Value> converted =
             succeeded(value) ? convert(*value, stringType, isSignedNode(child),
