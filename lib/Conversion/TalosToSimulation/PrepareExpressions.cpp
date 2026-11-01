@@ -904,4 +904,103 @@ LogicalResult materializeProceduralExpressionRelations(
   }
   return failure(invalid);
 }
+LogicalResult resolveInferredAssertionQueries(semantic::SVRootSymbolOp root,
+                                              Builder &builder) {
+  bool invalid = false;
+  // Observers of an event are keyed by its node, so a copy needs its own.
+  std::optional<int64_t> nextNodeId;
+  auto cloneWithFreshNodes = [&](Operation *source) {
+    if (!nextNodeId) {
+      nextNodeId = 0;
+      root->walk([&](Operation *nested) {
+        if (auto id = nested->getAttrOfType<IntegerAttr>("node_id"))
+          *nextNodeId = std::max(*nextNodeId, id.getInt() + 1);
+      });
+    }
+    Operation *copy = source->clone();
+    copy->walk([&](Operation *nested) {
+      if (nested->hasAttr("node_id"))
+        nested->setAttr("node_id", builder.getI64IntegerAttr((*nextNodeId)++));
+    });
+    return copy;
+  };
+  root->walk([&](semantic::SVConcurrentAssertionStatementOp assertion) {
+    SmallVector<Operation *> children = getChildren(assertion);
+    size_t prefix = 0;
+    Operation *disable = nullptr, *contextual = nullptr, *defaultClock = nullptr;
+    if (assertion.getHasDefaultDisable() && prefix < children.size())
+      disable = children[prefix++];
+    if (assertion.getHasContextualClock().value_or(false) &&
+        prefix < children.size())
+      contextual = children[prefix++];
+    if (assertion.getDefaultClockingSymbolAttr() && prefix < children.size())
+      defaultClock = children[prefix++];
+    if (prefix >= children.size())
+      return;
+    // Outermost first: an inner query may copy an enclosing resolved clock.
+    SmallVector<semantic::SVCallExpressionOp> queries;
+    children[prefix]->walk<WalkOrder::PreOrder>(
+        [&](semantic::SVCallExpressionOp call) {
+      if (call.getIsSystemCall() &&
+          (call.getCalleeName() == "$inferred_clock" ||
+           call.getCalleeName() == "$inferred_disable"))
+        queries.push_back(call);
+    });
+    for (semantic::SVCallExpressionOp query : queries) {
+      if (query.getCalleeName() == "$inferred_disable") {
+        Operation *replacement = nullptr;
+        if (disable) {
+          replacement = cloneWithFreshNodes(disable);
+        } else {
+          OperationState literal(
+              query.getLoc(), semantic::SVIntegerLiteralOp::getOperationName());
+          literal.addAttribute("node_id", query->getAttr("node_id"));
+          literal.addAttribute("semantic_type", query->getAttr("semantic_type"));
+          literal.addAttribute("is_signed", builder.getBoolAttr(false));
+          literal.addAttribute("constant_value", builder.getStringAttr("0"));
+          literal.addRegion()->push_back(new Block());
+          replacement = Operation::create(literal);
+        }
+        query->getBlock()->getOperations().insert(query->getIterator(),
+                                                  replacement);
+        query->erase();
+        continue;
+      }
+      auto event = dyn_cast_or_null<semantic::SVSignalEventControlOp>(
+          query->getParentOp());
+      if (!event) {
+        emitError(getSemanticLocation(query))
+            << "$inferred_clock must be the whole clocking event of a property "
+               "or sequence (IEEE 1800-2023 16.14.7)";
+        invalid = true;
+        continue;
+      }
+      // An enclosing clocking of the property flows here (16.13.3) ahead of
+      // the procedural context and the default clocking.
+      Operation *source = nullptr;
+      Operation *clocked = event->getParentOp();
+      for (Operation *cursor = clocked ? clocked->getParentOp() : nullptr;
+           cursor && cursor != assertion.getOperation();
+           cursor = cursor->getParentOp())
+        if (isa<semantic::SVClockingAssertionExprOp>(cursor)) {
+          source = getChildren(cursor).front();
+          break;
+        }
+      if (!source)
+        source = contextual ? contextual : defaultClock;
+      if (!source) {
+        emitError(getSemanticLocation(query))
+            << "$inferred_clock has no current resolved event expression "
+               "(IEEE 1800-2023 16.14.7)";
+        invalid = true;
+        continue;
+      }
+      event->getBlock()->getOperations().insert(event->getIterator(),
+                                                cloneWithFreshNodes(source));
+      event->erase();
+    }
+  });
+  return failure(invalid);
+}
+
 } // namespace talos::simlowering

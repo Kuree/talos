@@ -79,5 +79,12 @@ mlir::LogicalResult materializeProceduralExpressionRelations(
     sim::SimDesignOp design, const PreparedUnits &units,
     const llvm::StringMap<DescriptorInfo> &descriptors,
     mlir::OpBuilder &builder);
+/// IEEE 1800-2023 16.14.7: replace each $inferred_clock and $inferred_disable
+/// reached through a concurrent assertion's property with the event from clock
+/// flow to that point, or the scope's default disable condition or 1'b0.
+mlir::LogicalResult
+resolveInferredAssertionQueries(semantic::SVRootSymbolOp root,
+                                mlir::Builder &builder);
+
 } // namespace talos::simlowering
 #endif

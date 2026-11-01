@@ -626,6 +626,10 @@ void TalosSimPreparePass::runOnOperation() {
     signalPassFailure();
     return;
   }
+  if (failed(resolveInferredAssertionQueries(semanticRoot, coveragePlanBuilder))) {
+    signalPassFailure();
+    return;
+  }
   bool invalid = false;
 
   // Propagate stale frontend folds through expression parents in postorder.
