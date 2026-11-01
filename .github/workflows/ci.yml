@@ -249,7 +249,6 @@ jobs:
             -DTALOS_ENABLE_PCH=ON \
             "-DLLVM_LIT_ARGS=-sv;-j${{ matrix.lit_jobs || 4 }};--time-tests;--output=lit-results.json;--time-trace-output=lit-trace.json" \
             -DTALOS_INCLUDE_TESTS=ON \
-            -DTALOS_CONFORMANCE_JOBS=4 \
             -DTALOS_ENABLE_REAL_UVM_TESTS=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache

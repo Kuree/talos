@@ -831,7 +831,6 @@ endif()
 add_subdirectory(runtime)
 add_subdirectory(lib)
 add_subdirectory(tools)
-include("${PROJECT_SOURCE_DIR}/cmake/Conformance.cmake")
 add_subdirectory(docs)
 
 include("${PROJECT_SOURCE_DIR}/cmake/Install.cmake")

@@ -2,7 +2,9 @@ if(CMAKE_CROSSCOMPILING)
   return()
 endif()
 
+# Keep Python3 in this scope: visible in test/, AddLLVM would run lit under it.
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+include("${PROJECT_SOURCE_DIR}/cmake/Conformance.cmake")
 set(TALOS_DOCS_OUTPUT_DIR "${PROJECT_SOURCE_DIR}/docs/reference" CACHE PATH
     "Generated Markdown reference documentation")
 

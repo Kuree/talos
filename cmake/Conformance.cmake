@@ -1,9 +1,4 @@
-# Conformance also feeds the website when the ordinary test suites are disabled.
-if(CMAKE_CROSSCOMPILING)
-  return()
-endif()
-
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
+# Included from docs/: conformance feeds the website, even with the test suites disabled.
 set(TALOS_CONFORMANCE_JOBS 4 CACHE STRING "Number of concurrent conformance probes")
 set(TALOS_CONFORMANCE_OUTPUT_DIR "${PROJECT_BINARY_DIR}/test/Conformance")
 set(_talos_conformance_command
