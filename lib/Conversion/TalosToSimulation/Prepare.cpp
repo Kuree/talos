@@ -4172,21 +4172,42 @@ void TalosSimPreparePass::runOnOperation() {
                  p.pulseErrorLimits == p.delays && !p.pulseOnDetect &&
                  !p.pulseShowCancelled;
         });
-    if (hasExplicitDriverDelay) {
-      emitError(getSemanticLocation(path.declaration))
-          << "combining a specify path with an explicitly delayed driver is "
-             "not executable yet";
-      invalid = true;
-      continue;
-    }
     if (spans.size() == 1 && spans.front().low == 0 &&
         spans.front().width == path.output.rootWidth && allWholeTerminals &&
         !hasStateDependent && !hasEdgeSensitive && path.delays.size() <= 3 &&
         defaultPulsePolicy && (paths.size() == 1 || identicalDelays) &&
         hasExactInputs(spans.front().unit,
                        identicalDelays && !hasStateDependent)) {
+      // IEEE 1800-2023 30.6: of a path's delay and the distributed delay on
+      // that path, the larger is used. The driver's delay is the distributed
+      // delay here, for each of the rise, fall and turn-off transitions
+      // (28.16 gives the turn-off delay of two values as the smaller).
+      auto transitions = [](ArrayRef<int64_t> delays) {
+        return std::array<int64_t, 3>{
+            delays[0], delays.size() > 1 ? delays[1] : delays[0],
+            delays.size() > 2   ? delays[2]
+            : delays.size() > 1 ? std::min(delays[0], delays[1])
+                                : delays[0]};
+      };
+      SmallVector<int64_t, 3> effective(path.delays.begin(), path.delays.end());
+      if (auto distributed = spans.front().unit->getAttrOfType<DenseI64ArrayAttr>(
+              "delay_fs");
+          distributed && !distributed.empty()) {
+        std::array<int64_t, 3> larger = transitions(path.delays);
+        std::array<int64_t, 3> driver = transitions(distributed.asArrayRef());
+        effective.clear();
+        for (auto [own, other] : llvm::zip_equal(larger, driver))
+          effective.push_back(std::max(own, other));
+      }
       spans.front().unit->setAttr("delay_fs",
-                                  builder.getDenseI64ArrayAttr(path.delays));
+                                  builder.getDenseI64ArrayAttr(effective));
+      continue;
+    }
+    if (hasExplicitDriverDelay) {
+      emitError(getSemanticLocation(path.declaration))
+          << "combining a state-dependent, edge-sensitive or partial specify "
+             "path with an explicitly delayed driver is not executable yet";
+      invalid = true;
       continue;
     }
 
