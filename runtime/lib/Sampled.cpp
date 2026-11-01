@@ -341,8 +341,14 @@ talos_rt_v1_clocked_sample_read(talos_rt_context *context, uint64_t siteID,
       return TALOS_RT_OK;
     uint64_t index = (history.next + capacity - 1 - age) % capacity;
     std::memcpy(outValue, history.value.data() + index * bytes, bytes);
-    if (fourState)
-      std::memcpy(outUnknown, history.unknown.data() + index * bytes, bytes);
+    // A sampler whose operand folded to a two-state constant keeps no unknown
+    // plane, and its samples are fully known to a four-state reader.
+    if (fourState) {
+      if (history.unknown.empty())
+        std::memset(outUnknown, 0, bytes);
+      else
+        std::memcpy(outUnknown, history.unknown.data() + index * bytes, bytes);
+    }
     return TALOS_RT_OK;
   }
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_DESIGN; }

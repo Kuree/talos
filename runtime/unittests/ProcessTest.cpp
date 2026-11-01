@@ -16857,6 +16857,30 @@ TEST(SampledValues, SharesCompilerPlannedAlternateClockHistory) {
   talos_rt_v1_context_destroy(context);
 }
 
+TEST(SampledValues, ReadsTwoStateClockedHistoryAsKnown) {
+  // A clocking input whose source folded to a two-state constant keeps no
+  // unknown plane, while its four-state reader still asks for one.
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  constexpr uint64_t site = UINT64_C(0x12345679);
+  uint8_t value = UINT8_C(0x05), resultValue = 0, resultUnknown = 0;
+  ASSERT_EQ(talos_rt_v1_clocked_sample_update(context, site, 4, 1, 0, 1, &value,
+                                              nullptr),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_clocked_sample_read(context, site, 4, 1, 0, 1,
+                                            &resultValue, &resultUnknown),
+            TALOS_RT_OK);
+  EXPECT_EQ(resultValue, UINT8_C(0x05));
+  EXPECT_EQ(resultUnknown, UINT8_C(0x00));
+  // An age never sampled is still unknown, which the default value requires.
+  ASSERT_EQ(talos_rt_v1_clocked_sample_read(context, site, 4, 1, 1, 1,
+                                            &resultValue, &resultUnknown),
+            TALOS_RT_OK);
+  EXPECT_EQ(resultValue, UINT8_C(0x00));
+  EXPECT_EQ(resultUnknown, UINT8_C(0x0f));
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(SampledValues, SkipsSnapshotAllocationWithoutConsumers) {
   talos_rt_execution_descriptor_v1 execution{};
   execution.version = TALOS_RT_VERSION;
