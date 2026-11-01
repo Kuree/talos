@@ -393,6 +393,9 @@ four-state payloads and fixed64 handles on wasm32. Ordinary links omit the
 snapshot commit service. These operations currently require explicit flushes
 in compiler IR; UPF save/restore elaboration and automatic publication barriers
 are not implemented yet, so balloon strategies still produce a diagnostic.
+When an NBA commits, observers see the value after force and procedural
+assign overrides. Frozen publication views preserve that value across aliases
+and later callback writes; FSM coverage records the same applied state.
 
 The frontend accepts whole-signal and instance `-elements` and
 `-exclude_elements`, `-retention_supply`, `-save_signal`, `-restore_signal`,

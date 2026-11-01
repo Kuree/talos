@@ -1120,22 +1120,64 @@ bool talos_rt_read_clock_condition_publication_bit_unlocked(
   // valid publication. Match the selected bit, not just the view's base.
   if (!talos_rt_stable_handle_decode(stableID, &loaded))
     return false;
+  auto rootBounds = [&](const talos_rt_stable_handle_v1 &handle,
+                        __int128 &begin, __int128 &end) {
+    begin = 0;
+    if (handle.kind == TALOS_RT_STABLE_HANDLE_STATIC) {
+      const auto *state = findNativeStaticState(context, handle.id);
+      if (!state)
+        return false;
+      begin = state->bitOffset;
+      end = begin + state->bitWidth;
+      return true;
+    }
+    if (handle.kind != TALOS_RT_STABLE_HANDLE_GLOBAL)
+      return false;
+    end = context->execution ? context->execution->state_bit_count
+                             : context->stateValue.size() * uint64_t{64};
+    return true;
+  };
   for (const ClockConditionPublicationView *publication =
            context->conditionPublication;
        publication; publication = publication->previous) {
     if (!publication->newValue || publication->bitWidth == 0)
       continue;
     talos_rt_stable_handle_v1 published;
-    if (!talos_rt_stable_handle_decode(publication->stableID, &published) ||
-        published.offset < 0 ||
-        (published.kind != TALOS_RT_STABLE_HANDLE_GLOBAL &&
-         published.kind != TALOS_RT_STABLE_HANDLE_STATIC) ||
-        published.kind != loaded.kind ||
-        (published.kind == TALOS_RT_STABLE_HANDLE_STATIC &&
-         published.id != loaded.id))
+    if (!talos_rt_stable_handle_decode(publication->stableID, &published))
       continue;
+    if (published.kind != TALOS_RT_STABLE_HANDLE_GLOBAL &&
+        published.kind != TALOS_RT_STABLE_HANDLE_STATIC)
+      continue;
+    bool sameObject = published.kind == loaded.kind &&
+                      (published.kind == TALOS_RT_STABLE_HANDLE_GLOBAL ||
+                       published.id == loaded.id);
     __int128 relative = static_cast<__int128>(loaded.offset) + bit -
                         static_cast<__int128>(published.offset);
+    if (sameObject &&
+        (loaded.kind == TALOS_RT_STABLE_HANDLE_STATIC || context->execution)) {
+      __int128 begin = 0, end = 0;
+      __int128 coordinate = static_cast<__int128>(loaded.offset) + bit;
+      if (!rootBounds(loaded, begin, end) || coordinate < 0 ||
+          coordinate >= end - begin)
+        continue;
+    }
+    if (!sameObject || published.offset < 0) {
+      // IEEE 1801-2018 6.50: the newest frozen payload shadows enclosing
+      // values through GLOBAL/STATIC aliases. Clip partial writes to the
+      // declaring root, retaining older views of unrelated bits.
+      __int128 loadedBegin = 0, loadedEnd = 0, publishedBegin = 0,
+               publishedEnd = 0;
+      if (!rootBounds(loaded, loadedBegin, loadedEnd) ||
+          !rootBounds(published, publishedBegin, publishedEnd))
+        continue;
+      __int128 coordinate = loadedBegin + loaded.offset + bit;
+      __int128 start = publishedBegin + published.offset;
+      if (coordinate < loadedBegin || coordinate >= loadedEnd ||
+          coordinate < std::max(start, publishedBegin) ||
+          coordinate >= std::min(start + publication->bitWidth, publishedEnd))
+        continue;
+      relative = coordinate - start;
+    }
     if (relative < 0 || relative >= publication->bitWidth ||
         static_cast<uint64_t>(relative) >
             UINT64_MAX - publication->planeBitOffset)

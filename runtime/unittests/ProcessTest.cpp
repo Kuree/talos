@@ -15462,6 +15462,7 @@ uint64_t eventSnapshotFailSource = UINT64_MAX;
 bool eventSnapshotNotificationFailure = false;
 bool eventSnapshotFlushFromObserver = false;
 bool eventSnapshotPublishFromObserver = false;
+bool eventSnapshotRewriteNBA = false;
 bool eventSnapshotRemoveOwners = false;
 talos_rt_status eventSnapshotObserverFlushStatus = TALOS_RT_OK;
 
@@ -15514,6 +15515,14 @@ talos_rt_status eventSnapshotAtomicEvaluator(talos_rt_context *context,
     const uint8_t zero = 0, one = 1;
     talos_rt_v1_scheduler_signal_transition(context, 48, 1, &zero, nullptr,
                                             &one, nullptr);
+  }
+  if (eventSnapshotRewriteNBA) {
+    eventSnapshotRewriteNBA = false;
+    const uint8_t one = 1, zero = 0;
+    if (context->nativeStateValue)
+      setByteBit(context->nativeStateValue, 0, false);
+    talos_rt_v1_scheduler_signal_transition(context, 0, 1, &one, nullptr, &zero,
+                                            nullptr);
   }
   if (eventSnapshotRemoveOwners)
     for (uint64_t owner : {1, 2, 3, 4})
@@ -15582,6 +15591,7 @@ protected:
     eventSnapshotNotificationFailure = false;
     eventSnapshotFlushFromObserver = false;
     eventSnapshotPublishFromObserver = false;
+    eventSnapshotRewriteNBA = false;
     eventSnapshotRemoveOwners = false;
     eventSnapshotObserverFlushStatus = TALOS_RT_OK;
   }
@@ -15974,6 +15984,249 @@ TEST_F(EventSnapshotRuntime, RejectsUnsupportedPlansAndUnavailableTiers) {
             TALOS_RT_TIER_UNAVAILABLE);
 }
 
+TEST_F(EventSnapshotRuntime, NativeNBAQualifiesFromCommittedHeldBit) {
+  // IEEE 1801-2018 5.4/6.50 and IEEE 1800-2023 10.6/10.4.2: a held known
+  // one qualifies iff even when the NBA RHS says zero. The sampler must also
+  // see the applied value through a different handle alias, shadowing an
+  // enclosing publication of the same bits.
+  snapshotBytecode = talos::test::snapshotObserverBytecode();
+  execution.flags = TALOS_RT_EXECUTION_HAS_BYTECODE;
+  execution.bytecode = snapshotBytecode.data();
+  execution.bytecode_size = snapshotBytecode.size();
+  execution.checksum = talos::test::snapshotImageChecksum(snapshotBytecode);
+  execution.observer_count = 2;
+  observers[0].bytecode_function = 0;
+  observers[1].bytecode_function = 1;
+  observers[1].result_width = samplerABI.width = 65;
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 7, 96, 65),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 8, 16, 65),
+            TALOS_RT_OK);
+  auto sourceRoot = talos_rt_v1_native_state_static_handle(8);
+  auto target = talos_rt_v1_native_state_static_handle(7);
+  for (auto &process : context->scheduledProcesses)
+    process.suspendKind = TALOS_RT_SUSPEND_FOREVER;
+  for (bool bytecode : {false, true}) {
+    SCOPED_TRACE(bytecode);
+    if (bytecode) {
+      execution.flags |= TALOS_RT_EXECUTION_REQUIRE_BYTECODE;
+      observers[0].native_evaluator = nullptr;
+      observers[1].native_evaluator = nullptr;
+      instances[0].tier = TALOS_RT_TIER_BYTECODE;
+    }
+    for (bool assign : {false, true}) {
+      SCOPED_TRACE(assign);
+      for (bool staticSource : {false, true}) {
+        SCOPED_TRACE(staticSource);
+        set(16, 64, 0);
+        set(80, 1, 1);
+        set(96, 64, 0);
+        set(160, 1, 0);
+        context->forceMask.clear();
+        context->assignMask.clear();
+        auto &mask = assign ? context->assignMask : context->forceMask;
+        mask.assign(4, 0);
+        storePackedBits(mask, 80, 1, 1);
+        uint64_t publication = staticSource ? sourceRoot : 16;
+        uint64_t capture = staticSource ? 16 : sourceRoot;
+        ASSERT_EQ(install(1, capture, {{target, 65, 1}}, {publication},
+                          {talos_rt_v1_native_handle_offset(publication, 64)}),
+                  TALOS_RT_OK);
+        std::array<uint8_t, 9> enclosingValue{}, enclosingUnknown{}, rhs{};
+        storePackedBytes(enclosingValue.data(), 64, 1, 1);
+        ClockConditionPublicationView enclosing{
+            capture, 65, 0, enclosingValue.data(), enclosingUnknown.data()};
+        struct RestoreView {
+          talos_rt_context *context;
+          ~RestoreView() {
+            context->conditionPublication = nullptr;
+            context->observerForcesCanonicalPlane = false;
+          }
+        } restore{context};
+        context->conditionPublication = &enclosing;
+        context->observerForcesCanonicalPlane = true;
+        rhs[0] = 1;
+        ASSERT_EQ(talos_rt_v1_scheduler_nba(
+                      context, reinterpret_cast<uint8_t *>(nativeValue.data()),
+                      reinterpret_cast<uint8_t *>(nativeUnknown.data()), 256,
+                      publication, 65, 0, rhs.data(), enclosingUnknown.data()),
+                  TALOS_RT_OK);
+        ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+        ASSERT_TRUE(context->exactEvents);
+        ASSERT_EQ(context->exactEvents->snapshots.size(), 1u);
+        context->conditionPublication = nullptr;
+        context->observerForcesCanonicalPlane = false;
+        ASSERT_EQ(talos_rt_v1_event_snapshot_flush(context), TALOS_RT_OK);
+        EXPECT_EQ(loadPackedBits(context->stateValue, 96, 64), 1u);
+        EXPECT_EQ(loadPackedBits(context->stateValue, 160, 1), 1u);
+        EXPECT_EQ(loadPackedBits(context->stateUnknown, 96, 64), 0u);
+        EXPECT_EQ(loadPackedBits(context->stateUnknown, 160, 1), 0u);
+        talos_rt_unregister_exact_events_unlocked(
+            context, TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | UINT64_C(1));
+      }
+    }
+  }
+}
+
+TEST_F(EventSnapshotRuntime, AppliedPublicationShadowsOnlyBoundedAliases) {
+  // IEEE 1800-2023 4.6 and IEEE 1801-2018 6.50: the newest applied range
+  // shadows older views through aliases, while unrelated enclosing bits
+  // retain their event-time payload. Clip a negative-offset partial write.
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 8, 16, 16),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 9, 16, 16),
+            TALOS_RT_OK);
+  auto root = talos_rt_v1_native_state_static_handle(8);
+  auto alias = talos_rt_v1_native_state_static_handle(9);
+  // The live source has advanced beyond the frozen applied value.
+  set(16, 16, 0xffff);
+  std::array<uint8_t, 16> oldValue{}, oldUnknown{};
+  oldValue.fill(0xff);
+  ClockConditionPublicationView global{0, 128, 0, oldValue.data(),
+                                       oldUnknown.data()};
+  ClockConditionPublicationView enclosing{
+      alias, 16, 0, oldValue.data(), oldUnknown.data(), &global};
+  std::array<uint8_t, 2> appliedValue{}, appliedUnknown{};
+  ClockConditionPublicationView applied{
+      talos_rt_v1_native_handle_offset(root, -4),
+      12,
+      0,
+      appliedValue.data(),
+      appliedUnknown.data(),
+      &enclosing};
+  context->conditionPublication = &applied;
+  context->observerForcesCanonicalPlane = true;
+  for (uint64_t handle : {alias, UINT64_C(16)})
+    for (uint64_t bit = 0; bit != 16; ++bit) {
+      bool value = false, unknown = false;
+      EXPECT_TRUE(talos_rt_read_clock_condition_publication_bit_unlocked(
+                      context, handle, bit, value, unknown) ||
+                  talos_rt_read_signal_bit_unlocked(context, handle, bit, value,
+                                                    unknown, false));
+      EXPECT_EQ(value, bit >= 8);
+      EXPECT_FALSE(unknown);
+    }
+  // An upper-clipped write must leave a typed reference's out-of-range
+  // fallback intact, including on the matching STATIC identity. A GLOBAL
+  // view of the adjacent object still sees the enclosing unrelated payload.
+  applied.stableID = talos_rt_v1_native_handle_offset(root, 12);
+  applied.bitWidth = 16;
+  for (uint64_t handle : {root, alias, UINT64_C(16)})
+    for (uint64_t bit = 0; bit != 24; ++bit) {
+      SCOPED_TRACE(handle);
+      SCOPED_TRACE(bit);
+      bool value = false, unknown = false;
+      bool found = talos_rt_read_clock_condition_publication_bit_unlocked(
+          context, handle, bit, value, unknown);
+      if (handle != 16 && bit >= 16) {
+        EXPECT_FALSE(found);
+      } else {
+        EXPECT_TRUE(found);
+        EXPECT_EQ(value, bit < 12 || bit >= 16);
+        EXPECT_FALSE(unknown);
+      }
+    }
+  context->conditionPublication = nullptr;
+  context->observerForcesCanonicalPlane = false;
+}
+
+TEST_F(EventSnapshotRuntime, NativeNBAKeepsEventValueAcrossCoverageCallbacks) {
+  // IEEE 1800-2023 31.7: a later condition for this same NBA samples its
+  // event-time value even if an earlier coverage callback writes q again.
+  // This ordinary coverage/clock-wait path has no snapshot registration.
+  for (auto &process : context->scheduledProcesses)
+    process.suspendKind = TALOS_RT_SUSPEND_FOREVER;
+  struct ClockWait {
+    talos_rt_wait_record_v1 wait;
+    std::array<talos_rt_wait_entry_v1, 2> entries;
+  } record{{TALOS_RT_VERSION, TALOS_RT_SUSPEND_EDGE,
+            TALOS_RT_WAIT_CLOCK_OCCURRENCE, 2, 73, 1},
+           {{{0, TALOS_RT_WAIT_EDGE_POSEDGE, 1},
+             {0, TALOS_RT_WAIT_CONDITION_CASE_EQ_ONE, 1}}}};
+  auto &waiter = context->scheduledProcesses[1];
+  ASSERT_TRUE(talos_rt_register_signal_wait_unlocked(
+      context, &record.wait, waiter.signalSubscriptions, waiter.signalLatch, 2,
+      false));
+  ASSERT_EQ(probe(0), TALOS_RT_OK);
+  eventSnapshotRewriteNBA = true;
+  const uint8_t rhs = 1, unknown = 0;
+  ASSERT_EQ(talos_rt_v1_scheduler_nba(
+                context, reinterpret_cast<uint8_t *>(nativeValue.data()),
+                reinterpret_cast<uint8_t *>(nativeUnknown.data()), 256, 0, 1, 0,
+                &rhs, &unknown),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  EXPECT_FALSE(eventSnapshotRewriteNBA);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 0, 1), 0u);
+  context->activeLogicalProcessToken =
+      TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | UINT64_C(2);
+  ++context->schedulerSlotProgress;
+  EXPECT_EQ(talos_rt_v1_clock_occurrence_consume(context, 73), 1u);
+  deactivate();
+  talos_rt_unregister_signal_wait_unlocked(context, waiter.signalSubscriptions,
+                                           2, false);
+}
+
+TEST_F(EventSnapshotRuntime, MaskedNativeNBARecordsAppliedFSMState) {
+  // IEEE 1800-2023 10.6/10.4.2/40.4: a changed low bit must record the
+  // complete held state (11), not the unfiltered NBA RHS (01).
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 8, 16, 2),
+            TALOS_RT_OK);
+  auto source = talos_rt_v1_native_state_static_handle(8);
+  for (auto &process : context->scheduledProcesses)
+    process.suspendKind = TALOS_RT_SUSPEND_FOREVER;
+  context->coverage = std::make_unique<CoverageState>();
+  auto &coverage = *context->coverage;
+  coverage.schema = std::make_unique<talos::coverage::Database>();
+  coverage.schema->fsmStates.resize(2);
+  coverage.schema->fsmStates[0].value = 1;
+  coverage.schema->fsmStates[1].value = 3;
+  coverage.fsmEnabled.assign(2, 1);
+  coverage.fsmExcluded.assign(2, 0);
+  coverage.fsmOverflow.assign(2, 0);
+  coverage.fsmMachines[9] = {{{8, 0, 2, 0}}, {0, 1}, 2};
+  coverage.fsmWatches[8] = {9};
+  coverage.finalized = true;
+  for (bool assign : {false, true}) {
+    SCOPED_TRACE(assign);
+    coverage.fsmCounters.assign(2, 0);
+    set(16, 2, 2);
+    context->forceMask.clear();
+    context->assignMask.clear();
+    auto &mask = assign ? context->assignMask : context->forceMask;
+    mask.assign(4, 0);
+    storePackedBits(mask, 17, 1, 1);
+    const uint8_t rhs = 1, unknown = 0;
+    ASSERT_EQ(talos_rt_v1_scheduler_nba(
+                  context, reinterpret_cast<uint8_t *>(nativeValue.data()),
+                  reinterpret_cast<uint8_t *>(nativeUnknown.data()), 256,
+                  source, 2, 0, &rhs, &unknown),
+              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+    EXPECT_EQ(coverage.fsmCounters, (std::vector<uint64_t>{0, 1}));
+  }
+}
+
+TEST_F(EventSnapshotRuntime, LegacyNativePlaneKeepsEventPayload) {
+  // An unbound native plane has no complete canonical image. Its event-time
+  // payload remains authoritative, unlike the fully applied design NBA path.
+  ASSERT_EQ(install(1, 0, {{96, 1, 1}}), TALOS_RT_OK);
+  for (auto &process : context->scheduledProcesses)
+    process.suspendKind = TALOS_RT_SUSPEND_FOREVER;
+  uint8_t value = 0, unknown = 0;
+  const uint8_t rhs = 1, rhsUnknown = 0;
+  ASSERT_EQ(talos_rt_v1_scheduler_nba(context, &value, &unknown, 8, 0, 1, 0,
+                                      &rhs, &rhsUnknown),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  EXPECT_EQ(value, 1u);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 0, 1), 0u);
+  ASSERT_TRUE(context->exactEvents);
+  ASSERT_EQ(context->exactEvents->snapshots.size(), 1u);
+  ASSERT_EQ(talos_rt_v1_event_snapshot_flush(context), TALOS_RT_OK);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 96, 1), 1u);
+}
+
 TEST_F(EventSnapshotRuntime,
        RealBytecodeObserversWorkForActiveAndParkedOwners) {
   snapshotBytecode = talos::test::snapshotObserverBytecode();
@@ -16056,6 +16309,30 @@ TEST(RuntimeInternals, EventSnapshotStandaloneNativeProbe) {
 
 TEST(RuntimeInternals, EventSnapshotStandaloneRequiredBytecodeProbe) {
   EXPECT_EQ(talos::test::runEventSnapshotSmoke(true), 0);
+}
+
+TEST(RuntimeInternals, EventSnapshotMaskedNativeNBA) {
+  for (bool assign : {false, true}) {
+    SCOPED_TRACE(assign);
+    for (bool twoStateRHS : {false, true}) {
+      SCOPED_TRACE(twoStateRHS);
+      EXPECT_EQ(
+          talos::test::runEventSnapshotSmoke(false, true, assign, twoStateRHS),
+          0);
+    }
+  }
+}
+
+TEST(RuntimeInternals, EventSnapshotMaskedBytecodeNBA) {
+  for (bool assign : {false, true}) {
+    SCOPED_TRACE(assign);
+    for (bool twoStateRHS : {false, true}) {
+      SCOPED_TRACE(twoStateRHS);
+      EXPECT_EQ(
+          talos::test::runEventSnapshotSmoke(true, true, assign, twoStateRHS),
+          0);
+    }
+  }
 }
 
 TEST(RuntimeInternals, CovergroupClockEventRejectsFalseSamplerSentinel) {

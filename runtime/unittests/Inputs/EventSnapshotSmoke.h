@@ -28,7 +28,9 @@ inline talos_rt_status snapshotSmokeObserver(talos_rt_context *context,
   }
   for (uint64_t bit = 0; bit != width; ++bit) {
     bool v = false, u = false;
-    if (!talos_rt_read_signal_bit_unlocked(context, captures[0], bit, v, u,
+    if (!talos_rt_read_clock_condition_publication_bit_unlocked(
+            context, captures[0], bit, v, u) &&
+        !talos_rt_read_signal_bit_unlocked(context, captures[0], bit, v, u,
                                            false))
       return TALOS_RT_INVALID_HANDLE;
     value[bit / 64] |= uint64_t{v} << (bit % 64);
@@ -37,7 +39,9 @@ inline talos_rt_status snapshotSmokeObserver(talos_rt_context *context,
   return TALOS_RT_OK;
 }
 
-inline int runEventSnapshotSmoke(bool bytecode) {
+inline int runEventSnapshotSmoke(bool bytecode, bool maskedNBA = false,
+                                 bool assign = false,
+                                 bool twoStateRHS = false) {
   auto image = snapshotObserverBytecode();
   const talos_rt_observer_capture_abi_v1 primaryABI{
       TALOS_RT_OBSERVER_CAPTURE_STORAGE, 1};
@@ -82,8 +86,8 @@ inline int runEventSnapshotSmoke(bool bytecode) {
   context->nativeStateUnknown =
       reinterpret_cast<uint8_t *>(nativeUnknown.data());
   context->nativeStateBitCount = 256;
-  constexpr uint64_t data = UINT64_C(0xfedcba9876543210);
-  constexpr uint64_t unknown = UINT64_C(0x80000000000000f0);
+  const uint64_t data = UINT64_C(0xfedcba9876543210) | (maskedNBA ? 1 : 0);
+  const uint64_t unknown = twoStateRHS ? 0 : UINT64_C(0x80000000000000f0);
   storePackedBits(context->stateValue, 16, 64, data);
   storePackedBits(context->stateUnknown, 16, 64, unknown);
   storePackedBits(context->stateValue, 80, 1, 1);
@@ -92,6 +96,20 @@ inline int runEventSnapshotSmoke(bool bytecode) {
   // samplers must use the publication image for every captured root (IEEE
   // 1801-2018 6.50), even when the triggering control is a different root.
   storePackedBits(nativeValue, 16, 64, UINT64_C(0x2222222222222222));
+  if (maskedNBA) {
+    // IEEE 1800-2023 10.6/10.4.2 and IEEE 1801-2018 6.50: the NBA raises
+    // bit zero, while a force/assign preserves the 65th bit as Z. The raw
+    // RHS has zero there; a save must capture the committed signal instead.
+    storePackedBits(context->stateValue, 16, 64, 0);
+    storePackedBits(context->stateUnknown, 16, 64, 0);
+    storePackedBits(nativeValue, 16, 64, 0);
+    storePackedBits(nativeUnknown, 16, 64, 0);
+    storePackedBits(nativeValue, 80, 1, 1);
+    storePackedBits(nativeUnknown, 80, 1, 1);
+    auto &mask = assign ? context->assignMask : context->forceMask;
+    mask.assign(4, 0);
+    storePackedBits(mask, 80, 1, 1);
+  }
   if (talos_rt_v1_native_state_register_static(context, 7, 96, 65) !=
       TALOS_RT_OK)
     return 2;
@@ -106,6 +124,7 @@ inline int runEventSnapshotSmoke(bool bytecode) {
   process.instance = &instance;
   process.token = 1;
   process.started = true;
+  process.suspendKind = TALOS_RT_SUSPEND_FOREVER;
   context->scheduledProcessIndices.emplace(1, 0);
   context->activeNativeProcess = &instance;
   context->activeLogicalProcessToken = TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | 1;
@@ -139,7 +158,9 @@ inline int runEventSnapshotSmoke(bool bytecode) {
         1,   index,
         1,   static_cast<uint32_t>(offsetof(Plan, previous) + index * 16),
         0};
-    plan.dependencies[index] = {0, TALOS_RT_OBSERVER_DEPENDENCY_SIGNAL, 1};
+    plan.captures[index].stable_id = maskedNBA ? 16 : 0;
+    plan.dependencies[index] = {maskedNBA ? 16u : 0u,
+                                TALOS_RT_OBSERVER_DEPENDENCY_SIGNAL, 1};
     plan.clauses[index] = {index, TALOS_RT_OBSERVER_CONDITION_NONE,
                            TALOS_RT_WAIT_EDGE_POSEDGE, 0};
   }
@@ -166,8 +187,25 @@ inline int runEventSnapshotSmoke(bool bytecode) {
   context->activeLogicalProcessToken = 0;
   snapshotSmokeNativeCalls = 0;
   const uint8_t zero = 0, one = 1;
-  talos_rt_v1_scheduler_signal_transition(context, 0, 1, &zero, nullptr, &one,
-                                          nullptr);
+  if (maskedNBA) {
+    std::array<uint8_t, 9> value{}, unknownPlane{};
+    storePackedBytes(value.data(), 0, 64, data);
+    storePackedBytes(unknownPlane.data(), 0, 64, unknown);
+    status = talos_rt_v1_scheduler_nba(
+        context, reinterpret_cast<uint8_t *>(nativeValue.data()),
+        twoStateRHS ? nullptr
+                    : reinterpret_cast<uint8_t *>(nativeUnknown.data()),
+        256, 16, 65, 0, value.data(),
+        twoStateRHS ? nullptr : unknownPlane.data());
+    if (status != TALOS_RT_OK ||
+        talos_rt_v1_scheduler_run(context) != TALOS_RT_OK)
+      return 8;
+    if (!context->exactEvents || context->exactEvents->snapshots.size() != 1)
+      return 9;
+  } else {
+    talos_rt_v1_scheduler_signal_transition(context, 0, 1, &zero, nullptr, &one,
+                                            nullptr);
+  }
   if (context->schedulerStatus != TALOS_RT_OK ||
       talos_rt_v1_event_snapshot_flush(context) != TALOS_RT_OK)
     return 3;

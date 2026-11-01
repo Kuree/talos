@@ -5275,7 +5275,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
           delayedNetDueTime = update.dueTime;
           return true;
         };
-        auto applyNative = [&](const ScheduledNBA &update) {
+        auto applyNative = [&](ScheduledNBA &update) {
           bool publicationChanged = false;
           uint64_t oldRealBits = 0;
           uint64_t newRealBits = 0;
@@ -5642,8 +5642,32 @@ talos_rt_status runScheduler(talos_rt_context *context,
               bool assigned =
                   planeBit / 64 < context->assignMask.size() &&
                   (context->assignMask[planeBit / 64] & canonicalMask) != 0;
-              if (canonical && (forced || assigned))
+              if (canonical && (forced || assigned)) {
+                // IEEE 1800-2023 10.6/10.4.2 and IEEE 1801-2018 6.50:
+                // retain the actual held bits in this consumed entry's event
+                // payload. Later conditions, samplers and FSM coverage need
+                // its complete applied value even if a callback writes the
+                // source again. Unmasked updates keep their original capture.
+                bool heldValue =
+                    (context->stateValue[planeBit / 64] & canonicalMask) != 0;
+                bool heldUnknown =
+                    (context->stateUnknown[planeBit / 64] & canonicalMask) != 0;
+                if (update.inlinePacked) {
+                  uint64_t mask = uint64_t{1} << bit;
+                  update.inlineValue = heldValue ? update.inlineValue | mask
+                                                 : update.inlineValue & ~mask;
+                  update.inlineUnknown = heldUnknown
+                                             ? update.inlineUnknown | mask
+                                             : update.inlineUnknown & ~mask;
+                } else {
+                  setByteBit(update.value.data(), bit, heldValue);
+                  if (heldUnknown && update.unknown.empty())
+                    update.unknown.resize(update.value.size(), 0);
+                  if (!update.unknown.empty())
+                    setByteBit(update.unknown.data(), bit, heldUnknown);
+                }
                 continue;
+              }
               uint64_t storageBit = automatic ? localBit : planeBit;
               uint64_t destinationByte = storageBit / 8;
               uint8_t destinationMask =

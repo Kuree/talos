@@ -4,7 +4,11 @@
 
 int main(int argc, char **argv) {
   bool bytecode = argc > 1 && std::strcmp(argv[1], "bytecode") == 0;
-  int result = talos::test::runEventSnapshotSmoke(bytecode);
+  bool maskedNBA = argc > 2;
+  bool assign = maskedNBA && std::strcmp(argv[2], "assign-nba") == 0;
+  bool twoStateRHS = argc > 3;
+  int result = talos::test::runEventSnapshotSmoke(bytecode, maskedNBA, assign,
+                                                  twoStateRHS);
   if (!result)
     std::printf("event snapshot %s passed pointer=%u\n",
                 bytecode ? "bytecode" : "native",
