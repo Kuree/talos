@@ -626,7 +626,9 @@ void TalosSimPreparePass::runOnOperation() {
     signalPassFailure();
     return;
   }
-  if (failed(resolveInferredAssertionQueries(semanticRoot, coveragePlanBuilder))) {
+  if (failed(resolveInferredAssertionQueries(semanticRoot, coveragePlanBuilder)) ||
+      failed(rebindVirtualInterfaceCallDefaults(semanticRoot, semanticSymbols,
+                                                coveragePlanBuilder))) {
     signalPassFailure();
     return;
   }

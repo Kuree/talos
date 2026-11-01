@@ -86,5 +86,13 @@ mlir::LogicalResult
 resolveInferredAssertionQueries(semantic::SVRootSymbolOp root,
                                 mlir::Builder &builder);
 
+/// IEEE 1800-2023 13.5.3: a default argument is evaluated in the scope of the
+/// subroutine's declaration. A call through a virtual interface selects that
+/// scope at run time, so replace each read of an interface member in such a
+/// default with a member access through the call's receiver.
+mlir::LogicalResult rebindVirtualInterfaceCallDefaults(
+    semantic::SVRootSymbolOp root,
+    const llvm::StringMap<mlir::Operation *> &symbols, mlir::Builder &builder);
+
 } // namespace talos::simlowering
 #endif

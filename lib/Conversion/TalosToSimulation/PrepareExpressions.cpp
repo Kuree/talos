@@ -1003,4 +1003,68 @@ LogicalResult resolveInferredAssertionQueries(semantic::SVRootSymbolOp root,
   return failure(invalid);
 }
 
+LogicalResult rebindVirtualInterfaceCallDefaults(
+    semantic::SVRootSymbolOp root, const llvm::StringMap<Operation *> &symbols,
+    Builder &builder) {
+  bool invalid = false;
+  root->walk([&](semantic::SVCallExpressionOp call) {
+    if (call.getIsSystemCall() || !call.getHasThisClass())
+      return;
+    std::optional<ArrayRef<int64_t>> defaulted = call.getDefaultedArguments();
+    SmallVector<Operation *> children = getChildren(call);
+    if (!defaulted || children.size() != defaulted->size() + 1)
+      return;
+    Operation *receiver = children.front();
+    auto type = receiver->getAttrOfType<TypeAttr>("semantic_type");
+    if (!type || !isa<semantic::VirtualInterfaceType>(type.getValue()))
+      return;
+    for (auto [isDefaulted, argument] :
+         llvm::zip_equal(*defaulted, ArrayRef(children).drop_front())) {
+      if (!isDefaulted)
+        continue;
+      SmallVector<semantic::SVNamedValueExpressionOp> reads;
+      argument->walk([&](semantic::SVNamedValueExpressionOp read) {
+        auto symbol = symbols.find(read.getReferencedSymbolAttr()
+                                       ? read.getReferencedSymbolAttr()
+                                             .getLeafReference()
+                                             .getValue()
+                                       : StringRef());
+        if (symbol != symbols.end() &&
+            isCompileTimeOnlyInstanceMember(symbol->second))
+          reads.push_back(read);
+      });
+      if (reads.empty())
+        continue;
+      bool receiverHasCall = false;
+      receiver->walk(
+          [&](semantic::SVCallExpressionOp) { receiverHasCall = true; });
+      if (receiverHasCall) {
+        emitError(getSemanticLocation(call))
+            << "a default argument reading interface state requires a virtual "
+               "interface receiver without calls, which it evaluates again";
+        invalid = true;
+        continue;
+      }
+      for (semantic::SVNamedValueExpressionOp read : reads) {
+        Operation *member =
+            symbols.find(read.getReferencedSymbolAttr().getLeafReference())
+                ->second;
+        OperationState state(
+            read.getLoc(),
+            semantic::SVMemberAccessExpressionOp::getOperationName());
+        state.addAttributes(read->getAttrs());
+        state.addAttribute("member_name",
+                           builder.getStringAttr(getDebugName(member)));
+        Block *body = new Block();
+        state.addRegion()->push_back(body);
+        body->push_back(receiver->clone());
+        read->getBlock()->getOperations().insert(read->getIterator(),
+                                                 Operation::create(state));
+        read->erase();
+      }
+    }
+  });
+  return failure(invalid);
+}
+
 } // namespace talos::simlowering
