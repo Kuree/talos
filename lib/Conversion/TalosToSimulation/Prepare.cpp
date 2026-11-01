@@ -562,6 +562,129 @@ public:
   void runOnOperation() override;
 };
 
+// IEEE 1800-2023 8.19: an instance constant may be assigned only once, in its
+// class constructor. Count the assignments that can run along one constructor
+// path: a sequence adds, if/case branches take the maximum, and an assignment
+// in a loop body counts as two. A constructor with an early exit leaves the
+// path structure undecided here, so it is not checked.
+using ConstAssignmentCounts = llvm::StringMap<unsigned>;
+
+static void checkConstructorConstAssignments(
+    Operation *constructor, const llvm::StringSet<> &instanceConstants,
+    bool &invalid) {
+  bool undecided = false;
+  // The last assignment to each constant in source order is the one that can
+  // be the second.
+  llvm::StringMap<Operation *> lastAssignment;
+  auto isStatement = [](Operation *op) {
+    return op->getName().getStringRef().contains(".statement.");
+  };
+  auto assignedConstant = [&](Operation *assignment) -> StringRef {
+    SmallVector<Operation *> children = getChildren(assignment);
+    if (children.empty())
+      return {};
+    Operation *lvalue = children.front();
+    if (auto access = dyn_cast<semantic::SVMemberAccessExpressionOp>(lvalue)) {
+      // Only this.v names the object under construction.
+      SmallVector<Operation *> base = getChildren(access);
+      auto object = base.size() == 1 ? base.front() : nullptr;
+      auto reference =
+          object ? object->getAttrOfType<StringAttr>("referenced_path")
+                 : StringAttr{};
+      if (!reference || !reference.getValue().ends_with(".this"))
+        return {};
+    } else if (!isa<semantic::SVNamedValueExpressionOp>(lvalue)) {
+      return {};
+    }
+    auto path = lvalue->getAttrOfType<StringAttr>("referenced_path");
+    return path && instanceConstants.contains(path.getValue())
+               ? path.getValue()
+               : StringRef{};
+  };
+  auto add = [](ConstAssignmentCounts &into, const ConstAssignmentCounts &from,
+                unsigned factor) {
+    for (const auto &entry : from)
+      into[entry.getKey()] += entry.getValue() * factor;
+  };
+  std::function<ConstAssignmentCounts(Operation *)> count =
+      [&](Operation *op) -> ConstAssignmentCounts {
+    ConstAssignmentCounts result;
+    if (isa<semantic::SVReturnStatementOp, semantic::SVBreakStatementOp,
+            semantic::SVContinueStatementOp, semantic::SVDisableStatementOp,
+            semantic::SVDisableForkStatementOp>(op)) {
+      undecided = true;
+      return result;
+    }
+    SmallVector<Operation *> children = getChildren(op);
+    if (isa<semantic::SVAssignmentExpressionOp>(op))
+      if (StringRef constant = assignedConstant(op); !constant.empty()) {
+        ++result[constant];
+        lastAssignment[constant] = op;
+      }
+    if (auto conditional = dyn_cast<semantic::SVConditionalStatementOp>(op)) {
+      // Conditions run before either branch; the branches exclude each other.
+      size_t conditions = conditional.getConditionCount();
+      ConstAssignmentCounts branches;
+      for (auto [index, child] : llvm::enumerate(children)) {
+        ConstAssignmentCounts inner = count(child);
+        if (index < conditions) {
+          add(result, inner, 1);
+          continue;
+        }
+        for (const auto &entry : inner)
+          branches[entry.getKey()] =
+              std::max(branches[entry.getKey()], entry.getValue());
+      }
+      add(result, branches, 1);
+      return result;
+    }
+    if (isa<semantic::SVCaseStatementOp>(op)) {
+      ConstAssignmentCounts branches;
+      for (Operation *child : children) {
+        ConstAssignmentCounts inner = count(child);
+        if (!isStatement(child)) {
+          add(result, inner, 1);
+          continue;
+        }
+        for (const auto &entry : inner)
+          branches[entry.getKey()] =
+              std::max(branches[entry.getKey()], entry.getValue());
+      }
+      add(result, branches, 1);
+      return result;
+    }
+    bool loop = isa<semantic::SVForLoopStatementOp,
+                    semantic::SVWhileLoopStatementOp,
+                    semantic::SVDoWhileLoopStatementOp,
+                    semantic::SVForeachLoopStatementOp,
+                    semantic::SVRepeatLoopStatementOp,
+                    semantic::SVForeverLoopStatementOp>(op);
+    // Anything else, including a pattern or random case, a fork or a
+    // conditional expression, either adds or cannot be decided structurally.
+    if (isa<semantic::SVPatternCaseStatementOp, semantic::SVRandCaseStatementOp,
+            semantic::SVRandSequenceStatementOp,
+            semantic::SVConditionalExpressionOp>(op))
+      undecided = true;
+    for (Operation *child : children)
+      add(result, count(child), 1);
+    if (loop)
+      for (auto &entry : result)
+        entry.getValue() = std::min(2u, entry.getValue() * 2);
+    return result;
+  };
+  ConstAssignmentCounts total = count(constructor);
+  if (undecided)
+    return;
+  for (const auto &entry : total) {
+    if (entry.getValue() < 2)
+      continue;
+    mlir::emitError(lastAssignment.lookup(entry.getKey())->getLoc())
+        << "instance constant '" << entry.getKey()
+        << "' can be assigned more than once in the constructor";
+    invalid = true;
+  }
+}
+
 void TalosSimPreparePass::runOnOperation() {
   ModuleOp module = getOperation();
   if (failed(normalizeDefaultedConstructors(module)) ||
@@ -633,6 +756,24 @@ void TalosSimPreparePass::runOnOperation() {
     return;
   }
   bool invalid = false;
+
+  // IEEE 1800-2023 8.19: an instance constant takes its value once, in the
+  // class constructor.
+  {
+    llvm::StringSet<> instanceConstants;
+    semanticRoot->walk([&](semantic::SVClassPropertySymbolOp property) {
+      if (property.getIsConst().value_or(false) &&
+          property.getLifetime() != semantic::SVVariableLifetime::Static &&
+          getChildren(property).empty())
+        instanceConstants.insert(getHierarchyName(property));
+    });
+    if (!instanceConstants.empty())
+      semanticRoot->walk([&](semantic::SVSubroutineSymbolOp subroutine) {
+        if (subroutine.getIsConstructor().value_or(false))
+          checkConstructorConstAssignments(subroutine, instanceConstants,
+                                           invalid);
+      });
+  }
 
   // Propagate stale frontend folds through expression parents in postorder.
   // Each expression enters this set at most once, avoiding a repeated upward

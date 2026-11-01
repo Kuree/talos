@@ -1,6 +1,5 @@
 // CLAUSE: Global and instance const class properties hold per-object values; writes outside new are rejected
-// XFAIL: *
-// compiler accepts a second assignment to an instance constant in its constructor, which 8.19 forbids
+// SINCE: 0.1.0
 // RUN: %not %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %S/Inputs/8.19/global.sv -o %t.bad.exe
 // RUN: %not %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %S/Inputs/8.19/outside.sv -o %t.bad.exe
 // RUN: %not %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %S/Inputs/8.19/twice.sv -o %t.bad.exe
