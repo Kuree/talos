@@ -248,6 +248,12 @@ bool isEvalClosureRuntimeCall(LLVM::CallOp call, LLVM::LLVMFuncOp function,
       // continue (IEEE 1800-2023 20.10). It never schedules or executes an
       // actor, so its report stays inline like the direct display above.
       *callee == "talos_rt_v1_scheduler_error" ||
+      // $random and $dist_* (IEEE 1800-2023 20.14, Annex N) only run the
+      // normative algorithm on a context-global or explicit seed. Random
+      // stability (18.14) lists neither, so they need no process identity
+      // and these draws stay inline, in statement order (4.6(a)).
+      *callee == "talos_rt_v1_random_legacy" ||
+      *callee == "talos_rt_v1_random_distribution" ||
       // Assertion control (IEEE 1800-2023 20.11) only affects subsequent
       // attempts; an attempt reads the current state from the runtime's
       // table without scheduling, executing or suspending anything.

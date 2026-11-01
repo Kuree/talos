@@ -516,7 +516,11 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
             // File I/O (IEEE 1800-2023 21.3) and value change dumps (21.7)
             // operate on runtime-owned descriptor tables and dump state. A
             // cold block of the body still runs inline on its four-state
-            // route, so these need the runtime wherever they occur.
+            // route, so these need the runtime wherever they occur. So do the
+            // thread-local random streams behind $urandom, $urandom_range,
+            // std::randomize, shuffle, randcase, randsequence and process
+            // srandom (18.13.3, 18.14.1, 18.14.2): the runtime selects a stream
+            // by its active process, which process::self also reads (9.7).
             bool requiresRuntime = isa<
                 sim::SimFileOpenMCDOp, sim::SimFileOpenOp, sim::SimFileCloseOp,
                 sim::SimFileFlushOp, sim::SimFileGetcOp, sim::SimFileUngetcOp,
@@ -526,7 +530,11 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
                 sim::SimDumpOpenStringOp, sim::SimDumpTimescaleOp,
                 sim::SimDumpVarsOp, sim::SimDumpAllOp, sim::SimDumpControlOp,
                 sim::SimDumpLimitOp, sim::SimDumpFlushOp, sim::SimDumpPortsOp,
-                sim::SimDumpPortsControlOp>(operation);
+                sim::SimDumpPortsControlOp, sim::SimRandomNextOp,
+                sim::SimRandomBoundedOp, sim::SimRandomSeedOp,
+                sim::SimRandomStateOp, sim::SimRandomSetStateOp,
+                sim::SimProcessCurrentOp, sim::SimProcessRandomStateOp,
+                sim::SimProcessSetRandomStateOp>(operation);
             if (!requiresRuntime && !hotFor(current).canExecute(operation))
               return;
             // Dynamic stores without a direct-lowering certificate use
