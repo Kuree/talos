@@ -3909,8 +3909,23 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
   SmallVector<Operation *> clockChildren =
       clockEvent ? getChildren(clockEvent) : SmallVector<Operation *>{};
   size_t expectedClockChildren = clockEvent && clockEvent.getHasIff() ? 2 : 1;
-  if (!clockEvent || clockChildren.size() != expectedClockChildren ||
-      !isAddressableExpression(clockChildren.front()))
+  // IEEE 1800-2023 F.3.1: `e1 or e2` and `e1, e2` tick when any member event
+  // occurs, once per time step. The suspension watches the members together, so
+  // a list of direct signal events needs no further handling by the monitor.
+  bool clockEventList = false;
+  if (auto list = dyn_cast<semantic::SVEventListControlOp>(clock)) {
+    clockEventList = llvm::all_of(getChildren(list), [](Operation *member) {
+      auto event = dyn_cast<semantic::SVSignalEventControlOp>(member);
+      if (!event)
+        return false;
+      SmallVector<Operation *> children = getChildren(event);
+      return children.size() == (event.getHasIff() ? 2u : 1u) &&
+             isAddressableExpression(children.front());
+    });
+  }
+  if (!clockEventList &&
+      (!clockEvent || clockChildren.size() != expectedClockChildren ||
+       !isAddressableExpression(clockChildren.front())))
     return emitError(getSemanticLocation(clock))
                << "AOT concurrent monitors currently require one direct "
                   "signal edge clock with an optional executable iff "
@@ -6409,6 +6424,12 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
     // next occurrence. A procedure whose own event is that clock reaches the
     // assertion only in such a time step.
     if (!op.getStartsOnCurrentClock().value_or(false)) {
+      if (clockEventList)
+        return emitError(getSemanticLocation(clock))
+                   << "a procedural concurrent assertion whose leading clock "
+                      "differs from the current procedural event requires a "
+                      "static signal clock without iff",
+               failure();
       Operation *source = clockChildren.front();
       auto path = source->getAttrOfType<StringAttr>("referenced_path");
       auto descriptor =
