@@ -5370,6 +5370,7 @@ void TalosSimPreparePass::runOnOperation() {
         callChildren.begin(), callChildren.begin() + argumentStart);
     if (failed(
             expandStaticRandomForeachConstraints(constraintRoots, builder)) ||
+        failed(expandStaticRandomArrayReductions(constraintRoots, builder)) ||
         failed(expandStaticRandomUniquenessConstraints(constraintRoots,
                                                        builder))) {
       invalid = true;
@@ -7595,13 +7596,19 @@ void TalosSimPreparePass::runOnOperation() {
               sizeCall = parent;
             return;
           }
-          if (!isa<semantic::SVUniquenessConstraintOp>(parent) &&
+          auto reduction = dyn_cast<semantic::SVCallExpressionOp>(parent);
+          bool isReduction =
+              reduction && reduction.getIsSystemCall() &&
+              isRandomArrayReductionMethod(reduction.getCalleeName()) &&
+              getChildren(parent).back() == reference.getOperation();
+          if (!isReduction && !isa<semantic::SVUniquenessConstraintOp>(parent) &&
               (!isa<semantic::SVElementSelectExpressionOp,
                     semantic::SVForeachConstraintOp>(parent) ||
                getChildren(parent).front() != reference.getOperation())) {
             emitError(getSemanticLocation(reference))
                 << "constraints read a random dynamic array or queue only "
-                   "through size(), element selects, foreach, and unique";
+                   "through size(), element selects, foreach, array reduction "
+                   "methods, and unique";
             unsupported = true;
             return;
           }
@@ -7763,13 +7770,19 @@ void TalosSimPreparePass::runOnOperation() {
           });
       properties.push_back(std::move(elements));
     }
-    if (!containerShadows.empty())
+    if (!containerShadows.empty()) {
+      if (failed(expandShadowedRandomArrayReductions(
+              constraintRoots, containerShadows, builder))) {
+        invalid = true;
+        return true;
+      }
       for (Operation *&root : constraintRoots)
         if (failed(guardRandomContainerElements(root, containerShadows,
                                                 builder))) {
           invalid = true;
           return true;
         }
+    }
     // A reference to a container with a shadow reads the shadow, except as
     // the operand of size().
     auto resolveContainerElements =
@@ -7788,6 +7801,7 @@ void TalosSimPreparePass::runOnOperation() {
 
     if (failed(
             expandStaticRandomForeachConstraints(constraintRoots, builder)) ||
+        failed(expandStaticRandomArrayReductions(constraintRoots, builder)) ||
         failed(expandStaticRandomUniquenessConstraints(constraintRoots,
                                                        builder))) {
       invalid = true;
@@ -8196,10 +8210,14 @@ void TalosSimPreparePass::runOnOperation() {
     if (failed(expandRandomConstraintFunctions(
             constraintRoots, semanticSymbols, builder, randomIndices,
             [&](semantic::SVCallExpressionOp expression) {
+              // A reduction left unexpanded is over state the randomize call
+              // does not write, which the plan captures as a value.
               return isRandomContainerSizeCall(expression) ||
                      (expression.getIsSystemCall() &&
-                      isRandomConstraintSystemFunction(
-                          expression.getCalleeName()));
+                      (isRandomConstraintSystemFunction(
+                           expression.getCalleeName()) ||
+                       isRandomArrayReductionMethod(
+                           expression.getCalleeName())));
             },
             resolveConstraintFunction))) {
       invalid = true;
@@ -8273,7 +8291,9 @@ void TalosSimPreparePass::runOnOperation() {
         auto call = dyn_cast<semantic::SVCallExpressionOp>(nested);
         if (nested->hasTrait<OpTrait::SemanticASTNode>() &&
             !isSupportedRandomConstraintExpression(nested) &&
-            !(call && isRandomContainerSizeCall(call))) {
+            !(call && isRandomContainerSizeCall(call)) &&
+            !(call && call.getIsSystemCall() &&
+              isRandomArrayReductionMethod(call.getCalleeName()))) {
           emitError(getSemanticLocation(nested))
               << "constraint expression is outside the total side-effect-free "
                  "executable boundary: "

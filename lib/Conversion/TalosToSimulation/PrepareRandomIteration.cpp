@@ -7,6 +7,8 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringSwitch.h"
 
 #include <cstdint>
 #include <functional>
@@ -160,6 +162,266 @@ expandStaticRandomForeachConstraints(MutableArrayRef<Operation *> roots,
       return failure();
   }
   return success();
+}
+
+static std::optional<semantic::SVBinaryOperator>
+getArrayReductionJoiner(StringRef method) {
+  return llvm::StringSwitch<std::optional<semantic::SVBinaryOperator>>(method)
+      .Case("sum", semantic::SVBinaryOperator::Add)
+      .Case("product", semantic::SVBinaryOperator::Multiply)
+      .Case("and", semantic::SVBinaryOperator::BinaryAnd)
+      .Case("or", semantic::SVBinaryOperator::BinaryOr)
+      .Case("xor", semantic::SVBinaryOperator::BinaryXor)
+      .Default(std::nullopt);
+}
+
+bool isRandomArrayReductionMethod(StringRef method) {
+  return getArrayReductionJoiner(method).has_value();
+}
+
+/// Expand the reductions over fixed arrays, or with `shadows`, only those over
+/// the shadowed leading elements of a dynamic array or queue.
+static LogicalResult expandRandomArrayReductions(
+    MutableArrayRef<Operation *> roots,
+    const llvm::DenseMap<Operation *, RandomContainerShadow> *shadows,
+    Builder &builder) {
+  MLIRContext *context = builder.getContext();
+  auto create = [&](StringRef name, Location location, Attribute nodeID,
+                    ArrayRef<NamedAttribute> attributes,
+                    ArrayRef<Operation *> children) {
+    OperationState state(location, name);
+    state.addAttribute("node_id", nodeID);
+    state.addAttributes(attributes);
+    Block *body = new Block();
+    state.addRegion()->push_back(body);
+    for (Operation *child : children)
+      body->push_back(child);
+    return Operation::create(state);
+  };
+  for (Operation *&root : roots) {
+    WalkResult result = root->walk<WalkOrder::PostOrder>(
+        [&](semantic::SVCallExpressionOp call) {
+          if (!call.getIsSystemCall())
+            return WalkResult::advance();
+          auto joiner = getArrayReductionJoiner(call.getCalleeName());
+          SmallVector<Operation *> children = getChildren(call);
+          bool hasWith = call.getHasIteratorExpression();
+          if (!joiner || children.size() != (hasWith ? 2u : 1u))
+            return WalkResult::advance();
+          Operation *array = children.back();
+          const RandomContainerShadow *shadow = nullptr;
+          if (shadows) {
+            auto found = shadows->find(array);
+            if (found == shadows->end())
+              return WalkResult::advance();
+            shadow = &found->second;
+          }
+          auto arrayType = array->getAttrOfType<TypeAttr>("semantic_type");
+          Type element;
+          int64_t left = 0, right = 0;
+          if (auto ranged = arrayType ? dyn_cast<semantic::RangedUnpackedArrayType>(
+                                            arrayType.getValue())
+                                      : nullptr) {
+            element = ranged.getElementType();
+            left = ranged.getLeft();
+            right = ranged.getRight();
+          } else if (auto sized =
+                         arrayType ? dyn_cast<semantic::UnpackedArrayType>(
+                                         arrayType.getValue())
+                                   : nullptr) {
+            element = sized.getElementType();
+            right = static_cast<int64_t>(sized.getSize()) - 1;
+          } else {
+            return WalkResult::advance();
+          }
+          uint64_t extent = (left <= right ? right - left : left - right) + 1;
+          if (extent > maxStaticForeachInstances) {
+            emitError(getSemanticLocation(call))
+                << "array reduction constraint exceeds the static expansion "
+                   "limit of "
+                << maxStaticForeachInstances << " elements";
+            return WalkResult::interrupt();
+          }
+          Location location = call.getLoc();
+          Attribute nodeID = call->getAttr("node_id");
+          Type resultType = call->getAttrOfType<TypeAttr>("semantic_type")
+                                .getValue();
+          Attribute resultSigned = call->getAttr("is_signed");
+          Type indexType = semantic::IntegralType::get(
+              context, 32, true, false, 31, 0, semantic::SVIntegralFlavor::Int);
+          auto createLiteral = [&](int64_t value, Type type) {
+            return create(
+                semantic::SVIntegerLiteralOp::getOperationName(), location,
+                nodeID,
+                {builder.getNamedAttr("semantic_type", TypeAttr::get(type)),
+                 builder.getNamedAttr("is_signed", builder.getBoolAttr(true)),
+                 builder.getNamedAttr(
+                     "constant_value",
+                     builder.getStringAttr(std::to_string(value)))},
+                {});
+          };
+          auto createSelect = [&](int64_t index, Attribute isSigned) {
+            return create(
+                semantic::SVElementSelectExpressionOp::getOperationName(),
+                location, nodeID,
+                {builder.getNamedAttr("semantic_type", TypeAttr::get(element)),
+                 builder.getNamedAttr("is_signed", isSigned)},
+                {array->clone(), createLiteral(index, indexType)});
+          };
+          auto iterator = call->getAttrOfType<SymbolRefAttr>(
+              "iterator_variable_symbol");
+          // `item` is the element and `item.index` its index (7.12.4).
+          auto createOperand = [&](int64_t index) -> Operation * {
+            if (!hasWith)
+              return createSelect(index, resultSigned);
+            // The iterator may be the whole expression, so it needs a block.
+            Block scratch;
+            scratch.push_back(children.front()->clone());
+            scratch.front().walk<WalkOrder::PostOrder>([&](Operation *nested) {
+              Operation *replacement = nullptr;
+              auto reads = [&](Operation *operand) {
+                return isa<semantic::SVNamedValueExpressionOp>(operand) &&
+                       operand->getAttrOfType<SymbolRefAttr>(
+                           "referenced_symbol") == iterator;
+              };
+              auto parent = dyn_cast_or_null<semantic::SVCallExpressionOp>(
+                  nested->getParentOp());
+              if (parent && parent.getIsSystemCall() &&
+                  parent.getCalleeName() == "index")
+                return;
+              if (reads(nested)) {
+                replacement = createSelect(
+                    index, nested->getAttr("is_signed")
+                               ? nested->getAttr("is_signed")
+                               : builder.getBoolAttr(false));
+              } else if (auto method =
+                             dyn_cast<semantic::SVCallExpressionOp>(nested);
+                         method && method.getIsSystemCall() &&
+                         method.getCalleeName() == "index") {
+                SmallVector<Operation *> receiver = getChildren(method);
+                if (!receiver.empty() && reads(receiver.front()))
+                  replacement = createLiteral(
+                      index,
+                      nested->getAttrOfType<TypeAttr>("semantic_type")
+                          .getValue());
+              }
+              if (!replacement)
+                return;
+              nested->getBlock()->getOperations().insert(nested->getIterator(),
+                                                         replacement);
+              nested->erase();
+            });
+            Operation *operand = &scratch.front();
+            operand->remove();
+            return operand;
+          };
+          // IEEE 1800-2023 18.5.7.2 joins the current elements: an element at
+          // or beyond size() contributes the operator's identity.
+          std::optional<uint64_t> width = getSemanticPackedWidth(resultType);
+          if (shadow && !width) {
+            emitError(getSemanticLocation(call))
+                << "array reduction over a random dynamic array or queue "
+                   "requires an integral result";
+            return WalkResult::interrupt();
+          }
+          auto createIdentity = [&]() -> Operation * {
+            std::string value = "0";
+            if (*joiner == semantic::SVBinaryOperator::Multiply)
+              value = "1";
+            else if (*joiner == semantic::SVBinaryOperator::BinaryAnd)
+              value = cast<BoolAttr>(resultSigned).getValue()
+                          ? std::string("-1")
+                          : llvm::toString(APInt::getAllOnes(*width), 10,
+                                           /*Signed=*/false);
+            Operation *literal = createLiteral(0, resultType);
+            literal->setAttr("constant_value", builder.getStringAttr(value));
+            literal->setAttr("is_signed", resultSigned);
+            return literal;
+          };
+          auto guard = [&](int64_t index, Operation *operand) -> Operation * {
+            if (!shadow)
+              return operand;
+            Type compareType = semantic::IntegralType::get(
+                context, 32, false, false, 31, 0,
+                semantic::SVIntegralFlavor::Int);
+            auto convert = [&](Operation *value) {
+              return create(
+                  semantic::SVConversionExpressionOp::getOperationName(),
+                  location, nodeID,
+                  {builder.getNamedAttr("semantic_type",
+                                        TypeAttr::get(compareType)),
+                   builder.getNamedAttr("is_signed", builder.getBoolAttr(false)),
+                   builder.getNamedAttr("is_implicit", builder.getBoolAttr(true))},
+                  {value});
+            };
+            Type bitType = semantic::IntegralType::get(
+                context, 1, false, false, 0, 0, semantic::SVIntegralFlavor::Bit);
+            Operation *valid = create(
+                semantic::SVBinaryExpressionOp::getOperationName(), location,
+                nodeID,
+                {builder.getNamedAttr("semantic_type", TypeAttr::get(bitType)),
+                 builder.getNamedAttr("is_signed", builder.getBoolAttr(false)),
+                 builder.getNamedAttr(
+                     "operator_kind",
+                     semantic::SVBinaryOperatorAttr::get(
+                         context, semantic::SVBinaryOperator::LessThan))},
+                {convert(createLiteral(index, indexType)),
+                 convert(shadow->sizeCall->clone())});
+            return create(
+                semantic::SVConditionalExpressionOp::getOperationName(),
+                location, nodeID,
+                {builder.getNamedAttr("semantic_type",
+                                      TypeAttr::get(resultType)),
+                 builder.getNamedAttr("is_signed", resultSigned),
+                 builder.getNamedAttr("condition_count",
+                                      builder.getI64IntegerAttr(1)),
+                 builder.getNamedAttr("condition_pattern_flags",
+                                      builder.getDenseI64ArrayAttr({0}))},
+                {valid, operand, createIdentity()});
+          };
+          Operation *joined = nullptr;
+          int64_t index = left;
+          for (;;) {
+            Operation *operand = guard(index, createOperand(index));
+            joined =
+                joined
+                    ? create(
+                          semantic::SVBinaryExpressionOp::getOperationName(),
+                          location, nodeID,
+                          {builder.getNamedAttr("semantic_type",
+                                                TypeAttr::get(resultType)),
+                           builder.getNamedAttr("is_signed", resultSigned),
+                           builder.getNamedAttr(
+                               "operator_kind",
+                               semantic::SVBinaryOperatorAttr::get(context,
+                                                                   *joiner))},
+                          {joined, operand})
+                    : operand;
+            if (index == right)
+              break;
+            index += left <= right ? 1 : -1;
+          }
+          call->getBlock()->getOperations().insert(call->getIterator(), joined);
+          call->erase();
+          return WalkResult::advance();
+        });
+    if (result.wasInterrupted())
+      return failure();
+  }
+  return success();
+}
+
+LogicalResult
+expandStaticRandomArrayReductions(MutableArrayRef<Operation *> roots,
+                                  Builder &builder) {
+  return expandRandomArrayReductions(roots, nullptr, builder);
+}
+
+LogicalResult expandShadowedRandomArrayReductions(
+    MutableArrayRef<Operation *> roots,
+    const llvm::DenseMap<Operation *, RandomContainerShadow> &shadows,
+    Builder &builder) {
+  return expandRandomArrayReductions(roots, &shadows, builder);
 }
 
 LogicalResult

@@ -75,6 +75,23 @@ mlir::LogicalResult guardRandomContainerElements(
 mlir::LogicalResult expandStaticRandomForeachConstraints(
     llvm::MutableArrayRef<mlir::Operation *> roots, mlir::Builder &builder);
 
+/// Whether `method` is an array reduction method of IEEE 1800-2023 7.12.3.
+bool isRandomArrayReductionMethod(llvm::StringRef method);
+
+/// IEEE 1800-2023 18.5.7.2: replace each array reduction method over a fixed
+/// unpacked array with its operator joining an expression per element, in the
+/// type of the method's result. Other containers remain intact.
+mlir::LogicalResult expandStaticRandomArrayReductions(
+    llvm::MutableArrayRef<mlir::Operation *> roots, mlir::Builder &builder);
+
+/// The same over the container references in `shadows`, where an element at or
+/// beyond size() contributes the operator's identity. Each clone of a reference
+/// is not itself in `shadows`, so its select requires no validity of its own.
+mlir::LogicalResult expandShadowedRandomArrayReductions(
+    llvm::MutableArrayRef<mlir::Operation *> roots,
+    const llvm::DenseMap<mlir::Operation *, RandomContainerShadow> &shadows,
+    mlir::Builder &builder);
+
 /// Replace fixed unpacked array and slice operands of unique constraints with
 /// their leaf selections. Singular operands remain singular; duplicate leaves
 /// retain their identity and consequently make the constraint unsatisfiable.
