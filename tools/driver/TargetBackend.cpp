@@ -87,6 +87,7 @@
 #include <chrono>
 #include <memory>
 #include <mutex>
+#include <numeric>
 #if defined(__GLIBC__)
 #include <malloc.h>
 #endif
@@ -329,6 +330,8 @@ struct NativeModuleSplitPlan {
   llvm::DenseMap<const llvm::GlobalValue *, unsigned> assignments;
   SmallVector<unsigned> groups;
   llvm::DenseSet<unsigned> nativeObjectGroups;
+  /// Estimated size of each group.
+  llvm::DenseMap<unsigned, uint64_t> weights;
 };
 
 Expected<NativeModuleSplitPlan>
@@ -525,15 +528,18 @@ planNativeModuleSplit(llvm::Module &module, const NativePartitionPlan &plan) {
   }
 
   SmallVector<unsigned> groups;
+  llvm::DenseMap<unsigned, uint64_t> weights;
   for (unsigned group = 0; group != groupCount; ++group) {
     bool nonempty = llvm::any_of(
         assignments, [&](const auto &entry) { return entry.second == group; });
     if (!nonempty)
       continue;
     groups.push_back(group);
+    weights[group] = groupWeights[group];
   }
   return NativeModuleSplitPlan{std::move(assignments), std::move(groups),
-                               std::move(nativeObjectGroups)};
+                               std::move(nativeObjectGroups),
+                               std::move(weights)};
 }
 
 // Declares, on first use, a global that a cloned partition definition
@@ -1849,25 +1855,79 @@ LogicalResult emitTargetOutput(ModuleOp module,
       markBackendTiming("parallel coroutine legalization and shard emission");
     } else {
       // CloneModule retains the source LLVMContext. Clone and serialize one
-      // partition at a time, then parse each into a private context so
-      // optimization and codegen are safe to run concurrently without ever
-      // retaining every clone together.
-      std::vector<std::string> partitionBitcode(splitPlan->groups.size());
-      std::vector<double> partitionCodegenSeconds(splitPlan->groups.size(),
-                                                  0.0);
-      std::vector<double> partitionParseSeconds(splitPlan->groups.size(), 0.0);
-      std::vector<double> partitionOptimizationSeconds(splitPlan->groups.size(),
-                                                       0.0);
-      std::vector<double> partitionObjectSeconds(splitPlan->groups.size(), 0.0);
+      // partition at a time on this thread, then parse each into a private
+      // context so optimization and codegen are safe to run concurrently,
+      // without ever retaining every clone together. Each partition starts
+      // compiling as soon as it is serialized, the heaviest first: it leaves
+      // the most work for the others to overlap.
+      size_t partitionCount = splitPlan->groups.size();
+      std::vector<std::string> partitionBitcode(partitionCount);
+      std::vector<double> partitionCodegenSeconds(partitionCount, 0.0);
+      std::vector<double> partitionParseSeconds(partitionCount, 0.0);
+      std::vector<double> partitionOptimizationSeconds(partitionCount, 0.0);
+      std::vector<double> partitionObjectSeconds(partitionCount, 0.0);
       double bitcodeSerializationSeconds = 0.0;
-      std::vector<std::unique_ptr<TargetMachine>> partitionTargets;
-      partitionTargets.reserve(splitPlan->groups.size());
+      std::vector<std::unique_ptr<TargetMachine>> partitionTargets(
+          partitionCount);
+      modulePaths.resize(partitionCount);
       // Destroying a clone drops uses of constants it shares with the source
       // module and with later clones, so clones are released together, off
       // this thread, once no clone remains to be made.
       std::vector<std::unique_ptr<llvm::Module>> serializedPartitions;
       double cloneSeconds = 0.0;
-      for (auto [index, group] : llvm::enumerate(splitPlan->groups)) {
+      SmallVector<size_t> cloneOrder(partitionCount);
+      std::iota(cloneOrder.begin(), cloneOrder.end(), size_t{0});
+      llvm::stable_sort(cloneOrder, [&](size_t lhs, size_t rhs) {
+        return splitPlan->weights.lookup(splitPlan->groups[lhs]) >
+               splitPlan->weights.lookup(splitPlan->groups[rhs]);
+      });
+      std::mutex diagnosticMutex;
+      std::vector<std::shared_future<bool>> futures;
+      futures.reserve(partitionCount);
+      ThreadPoolStrategy strategy =
+          hardware_concurrency(std::max<uint32_t>(1, options.compileThreads));
+      strategy.Limit = true;
+      DefaultThreadPool pool(strategy);
+      auto compilePartition = [&](size_t index) {
+        auto workerStart = std::chrono::steady_clock::now();
+        llvm::LLVMContext workerContext;
+        MemoryBufferRef buffer(partitionBitcode[index], modulePaths[index]);
+        Expected<std::unique_ptr<llvm::Module>> parsed =
+            parseBitcodeFile(buffer, workerContext);
+        if (!parsed) {
+          std::lock_guard<std::mutex> lock(diagnosticMutex);
+          logAllUnhandledErrors(parsed.takeError(), errs(),
+                                "talos: error: partition parse failed: ");
+          return false;
+        }
+        auto optimizationStart = std::chrono::steady_clock::now();
+        partitionParseSeconds[index] =
+            std::chrono::duration<double>(optimizationStart - workerStart)
+                .count();
+        if (failed(optimizeLLVMModule(**parsed, *partitionTargets[index],
+                                      hostOptLevel)))
+          return false;
+        auto objectStart = std::chrono::steady_clock::now();
+        partitionOptimizationSeconds[index] =
+            std::chrono::duration<double>(objectStart - optimizationStart)
+                .count();
+        if (failed(writeObject(**parsed, *partitionTargets[index],
+                               modulePaths[index], backend->getDescription())))
+          return false;
+        partitionTargets[index].reset();
+        auto workerEnd = std::chrono::steady_clock::now();
+        partitionObjectSeconds[index] =
+            std::chrono::duration<double>(workerEnd - objectStart).count();
+        partitionCodegenSeconds[index] =
+            std::chrono::duration<double>(workerEnd - workerStart).count();
+        return true;
+      };
+      auto abandonPartitions = [&] {
+        pool.wait();
+        removeTemporaries();
+      };
+      for (size_t index : cloneOrder) {
+        unsigned group = splitPlan->groups[index];
         auto cloneStart = std::chrono::steady_clock::now();
         std::unique_ptr<llvm::Module> partition =
             cloneNativeModulePartition(*llvmModule, *splitPlan, group);
@@ -1888,81 +1948,43 @@ LogicalResult emitTargetOutput(ModuleOp module,
             (Twine(options.outputPath) + ".part-" + Twine(index)).str(), ".o");
         if (failed(temporary)) {
           errs() << "talos: error: could not create partition temporary\n";
-          removeTemporaries();
+          abandonPartitions();
           return failure();
         }
         moduleTemporaries.push_back(std::move(*temporary));
-        modulePaths.push_back(moduleTemporaries.back().str().str());
+        modulePaths[index] = moduleTemporaries.back().str().str();
         std::string error;
-        std::unique_ptr<TargetMachine> workerTarget =
+        partitionTargets[index] =
             backend->createTargetMachine(error, hostOptLevel);
-        if (!workerTarget) {
+        if (!partitionTargets[index]) {
           errs() << "talos: error: could not create partition target: " << error
                  << '\n';
-          removeTemporaries();
+          abandonPartitions();
           return failure();
         }
-        partitionTargets.push_back(std::move(workerTarget));
+        futures.push_back(pool.async(
+            [&compilePartition, index] { return compilePartition(index); }));
       }
-      if (options.timing) {
-        errs() << "talos backend timing: partition cloning: " << cloneSeconds
-               << " s\n";
-        errs() << "talos backend timing: partition bitcode serialization: "
-               << bitcodeSerializationSeconds << " s\n";
+      {
+        // Workers report failures on the same stream.
+        std::lock_guard<std::mutex> lock(diagnosticMutex);
+        if (options.timing) {
+          errs() << "talos backend timing: partition cloning: " << cloneSeconds
+                 << " s\n";
+          errs() << "talos backend timing: partition bitcode serialization: "
+                 << bitcodeSerializationSeconds << " s\n";
+        }
+        markBackendTiming("partition serialization and target creation");
       }
-      markBackendTiming("partition serialization and target creation");
 
-      ThreadPoolStrategy strategy =
-          hardware_concurrency(std::max<uint32_t>(1, options.compileThreads));
-      strategy.Limit = true;
-      DefaultThreadPool pool(strategy);
       // Workers parse into private contexts; only this task still touches the
-      // source context. It releases the clones and the source module while
+      // source context now. It releases the clones and the source module while
       // partitions compile.
       pool.async([&] {
         serializedPartitions.clear();
         llvmModule.reset();
         releaseFreedHeapPages();
       });
-      std::vector<std::shared_future<bool>> futures;
-      futures.reserve(partitionBitcode.size());
-      std::mutex diagnosticMutex;
-      for (size_t index = 0; index != partitionBitcode.size(); ++index)
-        futures.push_back(pool.async([&, index] {
-          auto workerStart = std::chrono::steady_clock::now();
-          llvm::LLVMContext workerContext;
-          MemoryBufferRef buffer(partitionBitcode[index], modulePaths[index]);
-          Expected<std::unique_ptr<llvm::Module>> parsed =
-              parseBitcodeFile(buffer, workerContext);
-          if (!parsed) {
-            std::lock_guard<std::mutex> lock(diagnosticMutex);
-            logAllUnhandledErrors(parsed.takeError(), errs(),
-                                  "talos: error: partition parse failed: ");
-            return false;
-          }
-          auto optimizationStart = std::chrono::steady_clock::now();
-          partitionParseSeconds[index] =
-              std::chrono::duration<double>(optimizationStart - workerStart)
-                  .count();
-          if (failed(optimizeLLVMModule(**parsed, *partitionTargets[index],
-                                        hostOptLevel)))
-            return false;
-          auto objectStart = std::chrono::steady_clock::now();
-          partitionOptimizationSeconds[index] =
-              std::chrono::duration<double>(objectStart - optimizationStart)
-                  .count();
-          if (failed(writeObject(**parsed, *partitionTargets[index],
-                                 modulePaths[index],
-                                 backend->getDescription())))
-            return false;
-          partitionTargets[index].reset();
-          auto workerEnd = std::chrono::steady_clock::now();
-          partitionObjectSeconds[index] =
-              std::chrono::duration<double>(workerEnd - objectStart).count();
-          partitionCodegenSeconds[index] =
-              std::chrono::duration<double>(workerEnd - workerStart).count();
-          return true;
-        }));
       pool.wait();
       for (const std::shared_future<bool> &future : futures)
         if (!future.get()) {
