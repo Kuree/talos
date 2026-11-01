@@ -259,10 +259,6 @@ bool powerNBAAllowedUnlocked(talos_rt_context *context, uint64_t sequence,
 // Freeze a ready Inactive/Re-Inactive batch before restarting arbitration.
 talos_rt_status promoteInactiveResumptionsUnlocked(talos_rt_context *context,
                                                    uint32_t region);
-// Admit one actual executor activation. Primed children stay in their parent's
-// cohort; promoted Inactive batches and later regions begin an ordered new one.
-talos_rt_status enterSchedulerExecutionCohortUnlocked(talos_rt_context *context,
-                                                      uint32_t region);
 inline uint32_t schedulerCohortRegion(uint32_t region) {
   if (region == TALOS_RT_REGION_INACTIVE)
     return TALOS_RT_REGION_ACTIVE;
@@ -270,18 +266,19 @@ inline uint32_t schedulerCohortRegion(uint32_t region) {
     return TALOS_RT_REGION_REACTIVE;
   return region;
 }
-inline talos_rt_status
-observeSchedulerExecutionCohortUnlocked(talos_rt_context *context,
-                                        uint32_t region) {
-  if (!context->schedulerCohortEnabled)
-    return TALOS_RT_OK;
-  uint32_t normalized = schedulerCohortRegion(region);
-  bool inactive = region == TALOS_RT_REGION_INACTIVE ||
-                  region == TALOS_RT_REGION_RE_INACTIVE;
-  if (context->schedulerCohortRegion == normalized && !inactive)
-    return TALOS_RT_OK;
-  return enterSchedulerExecutionCohortUnlocked(context, region);
+inline bool isInactiveSchedulerRegion(uint32_t region) {
+  return region == TALOS_RT_REGION_INACTIVE ||
+         region == TALOS_RT_REGION_RE_INACTIVE;
 }
+// IEEE 1800-2023 4.5: Inactive events move to Active as one set, so a later #0
+// cannot overtake a pending sibling of the current batch; that sets `retry`, as
+// selection must restart. IEEE 1801-2018 6.50/9.7: otherwise begin the cohort
+// of the work about to run in `region` if cohorts are tracked. Primed children
+// never come here and stay in their parent's cohort.
+talos_rt_status admitSchedulerRegionUnlocked(talos_rt_context *context,
+                                             uint32_t region, bool &retry);
+talos_rt_status nextSchedulerCohortUnlocked(talos_rt_context *context,
+                                            uint32_t region);
 bool hasSameDirectSignalWait(const ScheduledProcess &scheduled,
                              const talos_rt_wait_record_v1 *wait);
 uint32_t nextDueNBABarrierRegionUnlocked(const talos_rt_context *context,

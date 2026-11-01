@@ -107,9 +107,9 @@ set(_talos_target_runtime_common_sources
     ProcessTable ProcessTransitions ProcessValidation Random RandSolve RandSamplePlan RandReal RandSolveWide Runtime
     Sampled StochasticQueue System VCD VPI VPIValueLayout)
 set(_talos_target_runtime_cold_tail_sources
-    EventSnapshot ScanFormat DynamicScanBytecode ContainerBitstream RecursiveBitstream
+    ScanFormat DynamicScanBytecode ContainerBitstream RecursiveBitstream
     ContainerBitstreamBytecode ClassBitstream ClassBitstreamBytecode DPIExport
-    DPIExportBytecode)
+    DPIExportBytecode EventSnapshot)
 set(_talos_target_runtime_check_sources
     DesignReflectionABI VPIObjectModelABI)
 set(_talos_target_runtime_objects)

@@ -4796,6 +4796,9 @@ uint64_t talos_rt_v1_scheduler_time(talos_rt_context *context);
 // across optimizations and execution tiers.
 // IEEE 1801-2018 6.50/9.7 uses this for concurrent restore/write priority.
 uint64_t talos_rt_v1_scheduler_cohort(talos_rt_context *context);
+// Maintain cohorts from now on. A design that queries cohorts calls this before
+// its first activation, so its first query needs no region seed.
+void talos_rt_v1_scheduler_track_cohorts(talos_rt_context *context);
 
 // Read one packed value from the once-per-time-slot Preponed snapshot. The
 // stable handle and width are compiler-resolved; automatic storage is rejected

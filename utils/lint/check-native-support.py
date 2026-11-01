@@ -169,6 +169,7 @@ native_members = [
     "ClassBitstreamBytecode.o",
     "DPIExport.o",
     "DPIExportBytecode.o",
+    "EventSnapshot.o",
     "DPIOpenArray.o",
     "DPIAggregate.o",
 ]

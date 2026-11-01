@@ -173,9 +173,9 @@ set(_talos_target_runtime_common_sources
     ProcessTable ProcessTransitions ProcessValidation Random RandSolve RandSamplePlan RandReal RandSolveWide Runtime
     Sampled StochasticQueue System VCD VPI VPIValueLayout)
 set(_talos_target_runtime_cold_tail_sources
-    EventSnapshot ScanFormat DynamicScanBytecode ContainerBitstream RecursiveBitstream
+    ScanFormat DynamicScanBytecode ContainerBitstream RecursiveBitstream
     ContainerBitstreamBytecode ClassBitstream ClassBitstreamBytecode DPIExport
-    DPIExportBytecode DPIOpenArray DPIAggregate)
+    DPIExportBytecode EventSnapshot DPIOpenArray DPIAggregate)
 foreach(source IN LISTS _talos_target_runtime_common_sources
                         _talos_target_runtime_cold_tail_sources)
   set(object "${_talos_target_runtime_dir}/${source}.o")

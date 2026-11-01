@@ -239,6 +239,13 @@ LogicalResult makeSchedulerMain(ModuleOp module,
         builder, location, TypeRange{},
         SymbolRefAttr::get(context, "talos_rt_v1_event_snapshot_link_anchor"),
         ValueRange{});
+  // Track cohorts from before the first activation. A design without cohort
+  // queries leaves the scheduler's hooks disabled.
+  if (needs(runtime::Features::SchedulerCohort))
+    LLVM::CallOp::create(
+        builder, location, TypeRange{},
+        SymbolRefAttr::get(context, "talos_rt_v1_scheduler_track_cohorts"),
+        ValueRange{runtimeContext});
   if (requiresDynamicScanFeature)
     LLVM::CallOp::create(
         builder, location, TypeRange{},
@@ -1003,6 +1010,9 @@ LogicalResult makeSchedulerMain(ModuleOp module,
   if (requiresEventSnapshotFeature)
     getOrDeclareLLVMFunction(module, "talos_rt_v1_event_snapshot_link_anchor",
                              voidType, {});
+  if (needs(runtime::Features::SchedulerCohort))
+    getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_track_cohorts",
+                             voidType, {pointer});
   if (requiresDynamicScanFeature)
     getOrDeclareLLVMFunction(module, "talos_rt_v1_dynamic_scan_link_anchor",
                              voidType, {});

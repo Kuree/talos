@@ -9,4 +9,5 @@
 // interpreter scheduling in the descriptor; executable tier arguments do not
 // select an execution tier. Cohort queries must use the bytecode intrinsic.
 // SYMBOLS: talos_rt_v1_
+// SYMBOLS: talos_rt_v1_scheduler_track_cohorts
 // TIER: runtime.execution_flags = #runtime.execution_flags<has_bytecode|require_bytecode>

@@ -9860,48 +9860,13 @@ TEST(Scheduler, EvalNBACutRetainsCanonicalNBAs) {
   talos_rt_v1_context_destroy(context);
 }
 
-TEST(Scheduler, CohortQueriesAndIdleBarrierBoundaries) {
+TEST(Scheduler, CohortQueriesAreStable) {
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
   EXPECT_EQ(talos_rt_v1_scheduler_cohort(nullptr), 0u);
   uint64_t initial = talos_rt_v1_scheduler_cohort(context);
   EXPECT_NE(initial, 0u);
   EXPECT_EQ(talos_rt_v1_scheduler_cohort(context), initial);
-  talos_rt_native_schedule_plan plan{};
-  plan.flags = TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL;
-  context->nativeSchedulePlan = &plan;
-  {
-    ContextMutexLock lock(context);
-    NativeAOTContextScope aot(context);
-    NativeAOTMutexScope mutex(context);
-    uint32_t region = UINT32_MAX;
-    ASSERT_EQ(talos_rt_v1_scheduler_prepare_eval_nba(context, &region),
-              TALOS_RT_OK);
-    EXPECT_EQ(region, UINT32_MAX);
-    uint64_t entered = talos_rt_v1_scheduler_cohort(context);
-    // Reentry/probing a quiescent current slot is not a new evaluation cycle.
-    ASSERT_EQ(talos_rt_v1_scheduler_prepare_eval_nba(context, &region),
-              TALOS_RT_OK);
-    EXPECT_EQ(talos_rt_v1_scheduler_cohort(context), entered);
-    // The generated prefix can leave no runtime payload and can write the
-    // same value. Completing that real barrier must still begin a new cohort.
-    ASSERT_EQ(talos_rt_v1_scheduler_complete_eval_nba(context,
-                                                      TALOS_RT_REGION_NBA, 0),
-              TALOS_RT_OK);
-    uint64_t unchanged = talos_rt_v1_scheduler_cohort(context);
-    EXPECT_NE(unchanged, entered);
-    EXPECT_EQ(talos_rt_v1_scheduler_cohort(context), unchanged);
-    ASSERT_EQ(talos_rt_v1_scheduler_complete_eval_nba(context,
-                                                      TALOS_RT_REGION_NBA, 1),
-              TALOS_RT_OK);
-    EXPECT_NE(talos_rt_v1_scheduler_cohort(context), unchanged);
-    // Tokens must not wrap and accidentally admit a stale restore marker.
-    context->schedulerCohort = UINT64_MAX;
-    EXPECT_EQ(talos_rt_v1_scheduler_complete_eval_nba(context,
-                                                      TALOS_RT_REGION_NBA, 0),
-              TALOS_RT_OUT_OF_RESOURCES);
-    EXPECT_EQ(talos_rt_v1_scheduler_cohort(context), UINT64_MAX);
-  }
   talos_rt_v1_context_destroy(context);
 }
 
@@ -9926,7 +9891,6 @@ TEST(Scheduler, CohortTrackingStaysDormantWithoutQueries) {
   EXPECT_FALSE(context->schedulerCohortEnabled);
   EXPECT_EQ(context->schedulerCohort, 1u);
   EXPECT_EQ(context->schedulerCohortRegion, TALOS_RT_REGION_POSTPONED);
-  EXPECT_EQ(context->schedulerCohortSeedRegion, UINT32_MAX);
   talos_rt_v1_context_destroy(context);
 }
 

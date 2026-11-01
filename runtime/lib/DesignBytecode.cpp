@@ -6211,8 +6211,7 @@ template <bool EnableReadyCohort>
 __attribute__((always_inline)) inline talos_rt_status
 runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
                      uint32_t maximumRank, uint64_t maximumInsertionSequence,
-                     bool *outProgress, bool stopBeforeExecution,
-                     bool preserveCohort) noexcept {
+                     bool *outProgress, bool stopBeforeExecution) noexcept {
   if (!context || !outProgress)
     return TALOS_RT_INVALID_ARGUMENT;
   *outProgress = false;
@@ -6542,15 +6541,21 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
         // certificate. Export the enclosing eval captures before execution,
         // leaving this exact selected continuation and its frame intact.
         return TALOS_RT_TIER_UNAVAILABLE;
-      if (!preserveCohort &&
-          (found->queuedRegion == TALOS_RT_REGION_INACTIVE ||
-           found->queuedRegion == TALOS_RT_REGION_RE_INACTIVE)) {
+      // A filtered selection primes a child inside its parent's cohort.
+      if ((isInactiveSchedulerRegion(found->queuedRegion) ||
+           context->schedulerCohortEnabled) &&
+          !context->nativeScheduleDesignTaskFilterActive &&
+          !(found->postObserved &&
+            found->queuedRegion == TALOS_RT_REGION_OBSERVED)) {
+        bool retry = false;
         talos_rt_status status =
-            promoteInactiveResumptionsUnlocked(context, found->queuedRegion);
+            admitSchedulerRegionUnlocked(context, found->queuedRegion, retry);
         if (status != TALOS_RT_OK)
           return status;
-        *outProgress = true;
-        return TALOS_RT_OK;
+        if (retry) {
+          *outProgress = true;
+          return TALOS_RT_OK;
+        }
       }
       if (found->suspendKind == TALOS_RT_SUSPEND_SEMAPHORE) {
         const auto *wait = reinterpret_cast<const talos_rt_wait_record_v1 *>(
@@ -6575,18 +6580,8 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
           readyCohort->valid = false;
       }
       if (found->postObserved &&
-          found->queuedRegion == TALOS_RT_REGION_OBSERVED) {
-        talos_rt_status status =
-            talos_rt_promote_post_observed_resumptions_unlocked(context);
-        if (status != TALOS_RT_OK)
-          return status;
-      }
-      if (!preserveCohort && context->schedulerCohortEnabled) {
-        talos_rt_status cohort = observeSchedulerExecutionCohortUnlocked(
-            context, context->scheduledDesignTasks[selectedIndex].queuedRegion);
-        if (cohort != TALOS_RT_OK)
-          return cohort;
-      }
+          found->queuedRegion == TALOS_RT_REGION_OBSERVED)
+        talos_rt_promote_post_observed_resumptions_unlocked(context);
       task = std::move(context->scheduledDesignTasks[selectedIndex]);
       if (!context->schedulerRunningFinals &&
           isReactiveSchedulerRegion(task.queuedRegion))
@@ -7147,19 +7142,19 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
   TALOS_RT_CATCH_ALL { return abandonTask(TALOS_RT_INVALID_BYTECODE); }
 }
 
-TALOS_RT_FEATURE_TEXT talos_rt_status runOneDesignTaskCohort(
-    talos_rt_context *context, uint32_t maximumRegion, uint32_t maximumRank,
-    uint64_t maximumInsertionSequence, bool *outProgress,
-    bool stopBeforeExecution, bool preserveCohort) noexcept {
+TALOS_RT_FEATURE_TEXT talos_rt_status
+runOneDesignTaskCohort(talos_rt_context *context, uint32_t maximumRegion,
+                       uint32_t maximumRank, uint64_t maximumInsertionSequence,
+                       bool *outProgress, bool stopBeforeExecution) noexcept {
   return runOneDesignTaskImpl<true>(context, maximumRegion, maximumRank,
                                     maximumInsertionSequence, outProgress,
-                                    stopBeforeExecution, preserveCohort);
+                                    stopBeforeExecution);
 }
 
 talos_rt_status talos_rt_run_one_design_task(
     talos_rt_context *context, uint32_t maximumRegion, uint32_t maximumRank,
     uint64_t maximumInsertionSequence, bool *outProgress,
-    bool stopBeforeExecution, bool preserveCohort) noexcept {
+    bool stopBeforeExecution) noexcept {
   bool enableReadyCohort = false;
   if (context && !context->designReadyCohortExactScan &&
       !context->nativeScheduleDesignTaskFilterActive) {
@@ -7185,10 +7180,10 @@ talos_rt_status talos_rt_run_one_design_task(
   if (enableReadyCohort)
     return runOneDesignTaskCohort(context, maximumRegion, maximumRank,
                                   maximumInsertionSequence, outProgress,
-                                  stopBeforeExecution, preserveCohort);
+                                  stopBeforeExecution);
   return runOneDesignTaskImpl<false>(context, maximumRegion, maximumRank,
                                      maximumInsertionSequence, outProgress,
-                                     stopBeforeExecution, preserveCohort);
+                                     stopBeforeExecution);
 }
 
 talos_rt_status talos_rt_prime_design_task(talos_rt_context *context,
@@ -7206,7 +7201,6 @@ talos_rt_status talos_rt_prime_design_task(talos_rt_context *context,
     uint32_t phase = context->activeDesignTaskPhase;
     uint32_t home = context->activeHomeRegion;
     uint32_t region = context->activeExecRegion;
-    uint32_t cohortSeedRegion = context->schedulerCohortSeedRegion;
     bool waitOrderFailed = context->activeWaitOrderFailed;
     bool designExecuting = context->designTaskExecuting;
     bool escapePending = context->controlEscapePending;
@@ -7226,7 +7220,6 @@ talos_rt_status talos_rt_prime_design_task(talos_rt_context *context,
       context->activeDesignTaskPhase = phase;
       context->activeHomeRegion = home;
       context->activeExecRegion = region;
-      context->schedulerCohortSeedRegion = cohortSeedRegion;
       context->activeWaitOrderFailed = waitOrderFailed;
       context->designTaskExecuting = designExecuting;
       context->controlEscapePending = escapePending;
@@ -7236,12 +7229,6 @@ talos_rt_status talos_rt_prime_design_task(talos_rt_context *context,
     }
   } activeState{context};
   TALOS_RT_TRY {
-    if (!context->schedulerCohortEnabled &&
-        context->schedulerCohortSeedRegion == UINT32_MAX)
-      context->schedulerCohortSeedRegion =
-          context->activeExecRegion <= TALOS_RT_REGION_POSTPONED
-              ? context->activeExecRegion
-              : static_cast<uint32_t>(TALOS_RT_REGION_ACTIVE);
     // A primed child executes inside its parent's SPAWN intrinsic. Temporarily
     // lend the active-context fields to the child, force scheduler selection
     // to that one task, and restore the parent before returning from the
@@ -7265,7 +7252,7 @@ talos_rt_status talos_rt_prime_design_task(talos_rt_context *context,
     for (uint32_t step = 0; step != 1024; ++step) {
       bool progress = false;
       talos_rt_status status = talos_rt_run_one_design_task(
-          context, UINT32_MAX, UINT32_MAX, UINT64_MAX, &progress, false, true);
+          context, UINT32_MAX, UINT32_MAX, UINT64_MAX, &progress);
       if (status != TALOS_RT_OK || !progress)
         return status != TALOS_RT_OK ? status : TALOS_RT_INVALID_LIFECYCLE;
       auto indexed = context->scheduledDesignTaskIndices.find(taskID);

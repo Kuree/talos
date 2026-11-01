@@ -511,7 +511,7 @@ struct PruneUnusedInitializationBindingsPass
 struct TalosToSimulationPipelineOptions
     : PassPipelineOptions<TalosToSimulationPipelineOptions> {
   Option<bool> upf{*this, "upf", llvm::cl::desc("elaborate UPF power intent"),
-                   llvm::cl::init(true)};
+                   llvm::cl::init(false)};
   Option<unsigned> workers{*this, "workers",
                            llvm::cl::desc("number of generated worker lanes"),
                            llvm::cl::init(1)};

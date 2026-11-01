@@ -12,6 +12,7 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 
@@ -25,9 +26,19 @@ namespace talos::simlowering {
 /// attribute dictionaries are mutable even when their individual attributes
 /// are immutable: workers must not read a sibling's symbol name, signature, or
 /// callable flags while that sibling is being lowered or canonicalized.
+/// Whether the driver executed UPF against this module. executeUPF leaves its
+/// declarations at module scope until ElaborateUPF consumes them. Lowering
+/// emits power-only proofs only then, so a design without UPF is unaffected.
+inline bool hasPowerIntent(mlir::Operation *module) {
+  return llvm::any_of(module->getRegion(0).front(), [](mlir::Operation &op) {
+    return op.getName().getDialectNamespace() == "upf";
+  });
+}
+
 class UnitLoweringInputs {
 public:
   SemanticTypeIndex semanticTypes;
+  bool powerIntent = false;
   struct Callable {
     mlir::FunctionType type;
     bool voidFunction;

@@ -2805,15 +2805,6 @@ struct talos_rt_context {
   std::unordered_map<std::string, DpiScopeHandle *> dpiScopesByName;
   size_t schedulerCursor = 0;
   uint64_t schedulerEpoch = 1;
-  // IEEE 1801-2018 6.50/9.7: an ordered evaluation cohort is finer than a
-  // timestamp but broader than a publication or one actor invocation.
-  uint64_t schedulerCohort = 1;
-  uint32_t schedulerCohortRegion = TALOS_RT_REGION_ACTIVE;
-  bool schedulerCohortEnabled = false;
-  // Primed children borrow actor fields, but the first query belongs to the
-  // physical caller's region. Set only while priming; ordinary actors do no
-  // cohort region bookkeeping before the first query.
-  uint32_t schedulerCohortSeedRegion = UINT32_MAX;
   uint64_t schedulerTime = 0;
   uint64_t schedulerPreponedTime = UINT64_MAX;
   // Set once a computed observer registers the compiler-reserved Preponed
@@ -3010,6 +3001,13 @@ struct talos_rt_context {
   // IEEE 1801-2018 9.7.3 commit guards are opt-in. Preserve every ordinary
   // context field offset and allocate the condition map only on first use.
   std::unique_ptr<PowerNBAFeatureState> powerNBAs;
+
+  // IEEE 1801-2018 6.50/9.7: an ordered evaluation cohort is finer than a
+  // timestamp but broader than a publication or one actor invocation. Designs
+  // that query cohorts enable tracking before their first activation.
+  uint64_t schedulerCohort = 1;
+  uint32_t schedulerCohortRegion = TALOS_RT_REGION_ACTIVE;
+  bool schedulerCohortEnabled = false;
 
   talos_rt_context();
   ~talos_rt_context();
@@ -3641,7 +3639,7 @@ void latchSchedulerErrorUnlocked(talos_rt_context *context) noexcept;
 /// Begin the Final phase (IEEE 1800-2023 9.2.3). A pending termination
 /// request is consumed so final procedures run to completion unless they
 /// execute $finish themselves.
-talos_rt_status enterFinalPhaseUnlocked(talos_rt_context *context) noexcept;
+void enterFinalPhaseUnlocked(talos_rt_context *context) noexcept;
 void setLastError(talos_rt_context *context, std::string message);
 void talos_rt_report_signal_diagnostics_unlocked(talos_rt_context *context);
 void talos_rt_release_native_schedule_plan(talos_rt_context *context) noexcept;
@@ -3887,14 +3885,14 @@ talos_rt_status talos_rt_design_net_is_connected(talos_rt_context *context,
 talos_rt_status talos_rt_run_one_design_task(
     talos_rt_context *context, uint32_t maximumRegion, uint32_t maximumRank,
     uint64_t maximumInsertionSequence, bool *outProgress,
-    bool stopBeforeExecution = false, bool preserveCohort = false) noexcept;
+    bool stopBeforeExecution = false) noexcept;
 // IEEE 1800-2023 4.5, 9.4.2.4, 14.10: once a post-Observed resumption is the
 // next work to run, nothing else remains before the Reactive region set, so
 // every ready post-Observed resumption moves to its Active home together. The
 // Inactive and NBA work any of them schedules then follows all of them; those
 // not yet ready wait for a later Observed region.
-talos_rt_status
-talos_rt_promote_post_observed_resumptions_unlocked(talos_rt_context *context);
+void talos_rt_promote_post_observed_resumptions_unlocked(
+    talos_rt_context *context);
 enum class PostObservedPromotion { Stale, Waiting, Promoted };
 PostObservedPromotion
 talos_rt_promote_post_observed_design_task_unlocked(talos_rt_context *context,

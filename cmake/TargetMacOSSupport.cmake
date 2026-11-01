@@ -96,9 +96,9 @@ set(_talos_macos_runtime_sources
   ProcessNativeState ProcessNBA ProcessObservers ProcessSignals ProcessState
   ProcessTable ProcessTransitions ProcessValidation Random RandSolve RandSamplePlan
   RandReal RandSolveWide Runtime Sampled StochasticQueue System VCD VPI VPIValueLayout
-  EventSnapshot ScanFormat DynamicScanBytecode ContainerBitstream RecursiveBitstream
+  ScanFormat DynamicScanBytecode ContainerBitstream RecursiveBitstream
   ContainerBitstreamBytecode ClassBitstream ClassBitstreamBytecode DPIExport
-  DPIExportBytecode DPIOpenArray DPIAggregate)
+  DPIExportBytecode EventSnapshot DPIOpenArray DPIAggregate)
 set(_talos_macos_runtime_headers
   "${CMAKE_BINARY_DIR}/include/talos/Reflection/DesignReflectionLayout.h.inc"
   "${CMAKE_BINARY_DIR}/include/talos/Reflection/VPIObjectModel.h.inc"

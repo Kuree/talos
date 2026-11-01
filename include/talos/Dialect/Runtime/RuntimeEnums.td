@@ -388,11 +388,13 @@ def RTFeatureDPIImportBytecode :
     I32BitEnumAttrCaseBit<"DPIImportBytecode", 6, "dpi_import_bytecode">;
 def RTFeatureEventSnapshots :
     I32BitEnumAttrCaseBit<"EventSnapshots", 7, "event_snapshots">;
+def RTFeatureSchedulerCohort :
+    I32BitEnumAttrCaseBit<"SchedulerCohort", 8, "scheduler_cohort">;
 def RTFeatures : I32BitEnumAttr<"Features", "optional runtime libraries", [
   RTFeatureNone, RTFeatureDynamicScan, RTFeatureContainerBitstream,
   RTFeatureRecursiveBitstream, RTFeatureClassBitstream,
   RTFeatureClassBitstreamBytecode, RTFeatureDPIExportBytecode,
-  RTFeatureDPIImportBytecode, RTFeatureEventSnapshots
+  RTFeatureDPIImportBytecode, RTFeatureEventSnapshots, RTFeatureSchedulerCohort
 ]> {
   let cppNamespace = "::talos::runtime";
   let genSpecializedAttr = 0;

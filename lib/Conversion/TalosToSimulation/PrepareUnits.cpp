@@ -3,6 +3,7 @@
 
 #include "PrepareTopology.h"
 #include "PrepareUnits.h"
+#include "UnitLoweringInputs.h"
 
 #include "mlir/IR/SymbolTable.h"
 
@@ -219,6 +220,7 @@ FailureOr<PreparedUnits> materializeCodeUnitDeclarations(
     const PreparedScopeDeclarations &scopes, OpBuilder &builder) {
   MLIRContext *context = builder.getContext();
   bool invalid = false;
+  bool powerIntent = hasPowerIntent(module);
   PreparedUnits result;
   result.units.reserve(sourceUnits.size());
   llvm::DenseMap<uint64_t, Operation *> codeUnitIDs;
@@ -1289,7 +1291,7 @@ FailureOr<PreparedUnits> materializeCodeUnitDeclarations(
     // later port projection can inline it into consumers and erase its actor.
     // IEEE 1801-2018 6.20/9.5.3 assign this inferred logic to the parent scope.
     auto connection = dyn_cast<semantic::SVPortConnectionOp>(unit.source);
-    if (!connection ||
+    if (!powerIntent || !connection ||
         connection.getDirection() != semantic::SVArgumentDirection::In)
       continue;
     Operation *actual = getSingleRegionRoot(connection.getActual());

@@ -29,7 +29,8 @@ UnitLoweringInputs::getVPIStatement(sim::SimDesignOp design,
 }
 
 UnitLoweringInputs::UnitLoweringInputs(Operation *module)
-    : semanticTypes(module), lockedSymbols(symbols) {
+    : semanticTypes(module), powerIntent(hasPowerIntent(module)),
+      lockedSymbols(symbols) {
   ScopedSemanticTypeIndex semanticTypeScope(semanticTypes);
   symbols.getSymbolTable(module);
   module->walk<WalkOrder::PreOrder>([&](Operation *operation) {

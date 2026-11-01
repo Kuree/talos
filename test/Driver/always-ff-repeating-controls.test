@@ -5,13 +5,14 @@
 // RUN: %t.o3 | FileCheck %s
 // RUN: talos -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc
 // RUN: %t.bc | FileCheck %s
-// RUN: talos -O0 -emit-sim --mlir-verify-each %t/design.sv -o - | FileCheck %s --check-prefix=SIM --implicit-check-not=__upf --implicit-check-not=simulation.power
+// RUN: talos -O0 -emit-sim --mlir-verify-each %t/design.sv -o - | FileCheck %s --check-prefix=SIM --implicit-check-not=schedule.repeating_always_wait --implicit-check-not=__upf --implicit-check-not=simulation.power
 // IEEE 1800-2023 9.2.2.4: ordinary always_ff repeats its outer event control.
-// Keep the same single/OR-list waits and initialization behavior without UPF;
-// the marker is a lowering proof and introduces no power runtime machinery.
+// Keep the same single/OR-list waits and initialization behavior without UPF.
+// The repeating marker is a proof for UPF gating and changes a wait's self-wake
+// flag, so only designs with power intent carry it on always_ff (upf-* tests).
 // CHECK: always_ff repeating controls passed
-// SIM-DAG: simulation.suspend.edge posedge {{.*}}schedule.repeating_always_wait
-// SIM-DAG: simulation.suspend.any {{.*}}edges [1, 2] {{.*}}schedule.repeating_always_wait
+// SIM-DAG: simulation.suspend.edge posedge
+// SIM-DAG: simulation.suspend.any {{.*}}edges [1, 2]
 
 //--- design.sv
 module top;

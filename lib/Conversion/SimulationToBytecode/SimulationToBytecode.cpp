@@ -910,6 +910,12 @@ public:
     bool classBitstream = runtime::has<runtime::ClassBitstreamBlob>(module);
     runtime::setFeatures(module, runtime::Features::EventSnapshots,
                          encoded->requiresEventSnapshotFeature);
+    runtime::setFeatures(module, runtime::Features::SchedulerCohort,
+                         module
+                             .walk([](sim::SimSchedulerCohortOp) {
+                               return WalkResult::interrupt();
+                             })
+                             .wasInterrupted());
     runtime::setFeatures(module, runtime::Features::DynamicScan,
                          encoded->requiresDynamicScanFeature);
     runtime::setFeatures(module, runtime::Features::ContainerBitstream,

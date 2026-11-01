@@ -6383,9 +6383,10 @@ LogicalResult UnitLowering::lowerRoots(ArrayRef<Operation *> roots) {
   // IEEE 1800-2023 9.2.2.4: an ordinary always_ff repeats its outer event
   // control just like always. Preserve that proof for UPF gating (1801-2018
   // 9.6.7/9.7.3), including clock/reset event lists. Checker procedures use
-  // their separate sampled-control path above.
+  // their separate sampled-control path above. The marker also changes a wait's
+  // self-wake flag, so a design without UPF keeps its original always_ff wait.
   if ((entryKind == sim::EntryKind::Always ||
-       (entryKind == sim::EntryKind::AlwaysFF &&
+       (entryKind == sim::EntryKind::AlwaysFF && loweringInputs.powerIntent &&
         !sim::has<sim::metadata::CheckerProcedure>(function))) &&
       roots.size() == 1) {
     if (auto timed = dyn_cast<semantic::SVTimedStatementOp>(roots.front())) {
