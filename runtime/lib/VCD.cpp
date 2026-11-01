@@ -697,7 +697,7 @@ struct PlanBuilder {
   // Declare one traced range: a scalar, a vector, or one element of an
   // unpacked array. `name` is already the fully qualified leaf spelling.
   void declareLeaf(uint64_t typeOffset, uint64_t sourceBit, uint64_t width,
-                   std::string_view name, bool isNet) {
+                   std::string_view name, std::string_view keyword) {
     bool isReal = typeIsReal(database, typeOffset);
     auto [entry, inserted] =
         codeByRange.try_emplace(std::make_pair(sourceBit, width),
@@ -720,7 +720,9 @@ struct PlanBuilder {
       // are still in code order here; buildRanges sorts them afterwards.
       state.variables[code].fourState = true;
     }
-    append(state, isReal ? "$var real " : isNet ? "$var wire " : "$var reg ");
+    append(state, "$var ");
+    append(state, isReal ? "real" : keyword);
+    append(state, " ");
     appendUnsigned(state, width);
     append(state, " ");
     append(state, state.codeText[code]);
@@ -756,10 +758,11 @@ struct PlanBuilder {
   // waveform viewer renders as an array. Element ordinal zero occupies the
   // lowest canonical bits and carries the leftmost declared index.
   void declareType(uint64_t typeOffset, uint64_t sourceBit, uint64_t width,
-                   const std::string &name, bool isNet, unsigned depth) {
+                   const std::string &name, std::string_view keyword,
+                   unsigned depth) {
     if (depth == kMaxUnpackedDepth ||
         !typeIsUnpackedArray(database, typeOffset))
-      return declareLeaf(typeOffset, sourceBit, width, name, isNet);
+      return declareLeaf(typeOffset, sourceBit, width, name, keyword);
     uint64_t element = typeElement(database, typeOffset);
     uint64_t elementWidth =
         isTypeOffset(database, element) ? typeWidth(database, element) : 0;
@@ -769,7 +772,7 @@ struct PlanBuilder {
                                     : static_cast<uint64_t>(right - left) + 1;
     if (elementWidth == 0 || extent == 0 || width % extent != 0 ||
         elementWidth > width / extent)
-      return declareLeaf(typeOffset, sourceBit, width, name, isNet);
+      return declareLeaf(typeOffset, sourceBit, width, name, keyword);
     int64_t step = right >= left ? 1 : -1;
     for (uint64_t ordinal = 0; ordinal != extent; ++ordinal) {
       std::string elementName = name;
@@ -778,7 +781,7 @@ struct PlanBuilder {
           std::to_string(left + step * static_cast<int64_t>(ordinal)));
       elementName.push_back(']');
       declareType(element, sourceBit + ordinal * (width / extent), elementWidth,
-                  elementName, isNet, depth + 1);
+                  elementName, keyword, depth + 1);
     }
   }
 
@@ -800,10 +803,30 @@ struct PlanBuilder {
       return;
     }
     declareType(objectTypeOffset(record), objectStateBit(record),
-                objectBitWidth(record), leaf,
-                static_cast<uint32_t>(talos::reflection::unpackRecordKind(
-                    read32(record))) == TALOS_RT_DESIGN_RECORD_NET,
-                0);
+                objectBitWidth(record), leaf, varKeyword(record), 0);
+  }
+
+  // IEEE 1800-2023 Table 21-11 masquerades int and a default-based enum as
+  // integer, and every other integral variable as reg. integer and time keep
+  // their IEEE 1364-2005 VCD types. A 32-bit enum's base type is not recorded,
+  // so an explicitly based one also reads as the default integer.
+  std::string_view varKeyword(const uint8_t *record) const {
+    uint32_t packed = read32(record);
+    if (static_cast<uint32_t>(talos::reflection::unpackRecordKind(packed)) ==
+        TALOS_RT_DESIGN_RECORD_NET)
+      return "wire";
+    // vpiIntVar, vpiIntegerVar, vpiTimeVar and vpiEnumVar respectively.
+    switch (talos::reflection::unpackRecordKindPayload(packed)) {
+    case 612:
+    case 25:
+      return "integer";
+    case 63:
+      return "time";
+    case 617:
+      return objectBitWidth(record) == 32 ? "integer" : "reg";
+    default:
+      return "reg";
+    }
   }
 
   void emitScope(uint64_t scopeOffset, std::string_view parentName) {

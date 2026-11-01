@@ -1,6 +1,5 @@
 // CLAUSE: vcd type mapping
-// XFAIL: *
-// An int is declared as VCD reg rather than the required integer type.
+// SINCE: 0.1.0
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe
 // RUN: %FileCheck %s --check-prefix=FILE0 --input-file=probe.vcd
