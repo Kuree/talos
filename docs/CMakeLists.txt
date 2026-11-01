@@ -14,11 +14,8 @@ add_custom_target(talos-docs
     --output "${TALOS_DOCS_OUTPUT_DIR}"
     --conformance-report "${TALOS_CONFORMANCE_OUTPUT_DIR}/results.json"
     --tool "talos=$<TARGET_FILE:talos>"
-    --tool "talos-opt=$<TARGET_FILE:talos-opt>"
-    --tool "talos-translate=$<TARGET_FILE:talos-translate>"
     --tool "talos-cov=$<TARGET_FILE:talos-cov>"
-    --tool "talos-tblgen=$<TARGET_FILE:talos-tblgen>"
-  DEPENDS talos talos-opt talos-translate talos-cov talos-tblgen check-talos-conformance
+  DEPENDS talos talos-cov check-talos-conformance
   COMMENT "Generating Talos tool, dialect, and pass reference documentation"
   VERBATIM)
 

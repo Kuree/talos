@@ -1,3 +1,7 @@
+set(LLVM_TARGET_DEFINITIONS Options.td)
+tablegen(LLVM Options.inc -gen-opt-parser-defs)
+add_public_tablegen_target(TalosCoverageOptions)
+
 function(embed_coverage_asset filename symbol output_variable)
   set(input "${CMAKE_CURRENT_SOURCE_DIR}/${filename}")
   set(output "${CMAKE_CURRENT_BINARY_DIR}/${filename}.inc")
@@ -28,16 +32,18 @@ embed_coverage_asset(CoverageReport.html CoverageReportHtml coverage_report_html
 embed_coverage_asset(CoverageReport.css CoverageReportCss coverage_report_css)
 embed_coverage_asset(CoverageReport.js CoverageReportJavaScript coverage_report_js)
 
-add_llvm_executable(talos-cov talos-cov.cpp
+add_llvm_executable(talos-cov talos-cov.cpp Options.cpp
   "${coverage_report_html}"
   "${coverage_report_css}"
   "${coverage_report_js}")
+add_dependencies(talos-cov TalosCoverageOptions)
 target_include_directories(talos-cov PRIVATE
   "${CMAKE_CURRENT_BINARY_DIR}"
   "${PROJECT_SOURCE_DIR}/lib/Coverage")
 target_link_libraries(talos-cov PRIVATE
   TalosCoverage
   TalosSourceTokens
+  LLVMOption
   LLVMSupport)
 target_compile_features(talos-cov PRIVATE cxx_std_17)
 set_target_properties(talos-cov PROPERTIES

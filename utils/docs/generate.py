@@ -14,7 +14,10 @@ import tempfile
 from conformance import load_report, render_support_pages
 
 
-TOOLS = ("talos", "talos-opt", "talos-translate", "talos-cov", "talos-tblgen")
+TOOLS = {
+    "talos": "tools/driver/Options.td",
+    "talos-cov": "tools/talos-cov/Options.td",
+}
 
 DIALECTS = {
     "slang": ["Slang/SlangOps.td"],
@@ -29,15 +32,17 @@ DIALECTS = {
 }
 
 
-def driver_options(tablegen, source, sdk):
+def tool_options(tablegen, source, sdk, name):
     """Render parsed TableGen records, preserving each option's argument syntax.
 
     LLVM's -gen-opt-rst adds '=' before metavariables even for Separate and
     Joined options whose names already end in '='. The JSON backend retains
     the option kinds needed to render the driver's actual accepted syntax.
     """
+    definition = TOOLS[name]
     records = json.loads(run([str(tablegen), "--dump-json", "-I", str(sdk / "include"),
-                              str(source / "tools/driver/Options.td")]))
+                              str(source / definition)]))
+    commands = [records[key] for key in records["!instanceof"].get("SubCommand", [])]
     groups = defaultdict(list)
 
     def target(option):
@@ -57,7 +62,7 @@ def driver_options(tablegen, source, sdk):
             return [name + " " + argument for name in names]
         if kind == "KIND_REMAINING_ARGS":
             return [name + " " + argument + "…" for name in names]
-        raise ValueError(f"Unsupported driver option kind: {kind}")
+        raise ValueError(f"Unsupported option kind: {kind}")
 
     count = 0
     for key in records["!instanceof"]["Option"]:
@@ -72,6 +77,10 @@ def driver_options(tablegen, source, sdk):
         help_text = option["HelpText"] or target(option)["HelpText"]
         if help_text:
             lines.extend([escape(help_text, quote=False), ""])
+        applicable = option["SubCommands"] or target(option)["SubCommands"]
+        if applicable and len(applicable) < len(commands):
+            lines.extend(["Commands: " + ", ".join(f"`{records[item['def']]['Name']}`"
+                                                   for item in applicable) + ".", ""])
         if option["Alias"]:
             alias = target(option)
             lines.extend([f"Alias of `{alias['Prefixes'][0] + alias['Name']}`.", ""])
@@ -81,8 +90,14 @@ def driver_options(tablegen, source, sdk):
         if any(flag["def"] == "HelpHidden" for flag in option["Flags"]):
             lines.extend(["Hidden from `--help`.", ""])
         groups[group_name].append((syntax[0].casefold(), "\n".join(lines)))
-    text = ["# `talos`", "", "<!-- Generated from tools/driver/Options.td by llvm-tblgen --dump-json. -->", "",
-            "```text", "talos [options] <input files>", "```", ""]
+    usage = f"{name} <command> [options] <inputs>" if commands else f"{name} [options] <input files>"
+    text = [f"# `{name}`", "", f"<!-- Generated from {definition} by llvm-tblgen --dump-json. -->", "",
+            "```text", usage, "```", ""]
+    if commands:
+        text.extend(["## Commands", ""])
+        for command in sorted(commands, key=lambda item: item["Name"]):
+            text.extend([f"### `{command['Name']}`", "", escape(command["HelpText"], quote=False), "",
+                         "```text", command["Usage"], "```", ""])
     for group, entries in sorted(groups.items()):
         text.extend([f"## {group}", ""])
         text.extend(entry for _, entry in sorted(entries))
@@ -117,19 +132,8 @@ def generate(args):
     llvm_tablegen = sdk / "bin" / ("llvm-tblgen.exe" if os.name == "nt" else "llvm-tblgen")
     for name in TOOLS:
         relative = f"tools/{name}.md"
-        if name == "talos":
-            text, option_count = driver_options(llvm_tablegen, source, sdk)
-            print(f"Generated {option_count} driver options from TableGen records")
-        else:
-            help_args = ["report", "--help"] if name == "talos-cov" else ["--help"]
-            help_text = run([tools[name], *help_args])
-            # Runtime discovery must not leak a particular checkout into the docs.
-            help_text = help_text.replace(str(build), "<build>").replace(str(source), "<source>")
-            help_text = help_text.replace(tools[name], name)
-            command = " ".join([name, *help_args])
-            text = (f"# `{name}`\n\n"
-                    f"## Command-line reference\n\nGenerated from `{command}`.\n\n"
-                    f"```text\n{help_text.rstrip()}\n```\n")
+        text, option_count = tool_options(llvm_tablegen, source, sdk, name)
+        print(f"Generated {option_count} {name} options from TableGen records")
         write_if_changed(output / relative, text)
         index.append(f"{name} <{Path(relative).with_suffix('').as_posix()}>")
         pages.append({"path": relative, "kind": "tool", "name": name})

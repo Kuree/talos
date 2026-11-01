@@ -1,0 +1,9 @@
+# RUN: not talos-cov report --format 2>&1 | FileCheck %s
+# RUN: not talos-cov report --unknown %s 2>&1 | FileCheck %s
+# RUN: not talos-cov report --output= %s 2>&1 | FileCheck %s
+# RUN: not talos-cov report --fail-under=toggle=101 %s 2>&1 | FileCheck %s
+# RUN: not talos-cov merge %s 2>&1 | FileCheck %s
+# RUN: not talos-cov inspect %s %s 2>&1 | FileCheck %s
+# RUN: not talos-cov unknown 2>&1 | FileCheck %s
+
+# CHECK: USAGE:

@@ -24,7 +24,7 @@
 # INSPECT: resolved-functional-bins: 1
 # INSPECT: resolved-instances: 1
 
-# BAD-FORMAT: usage:
+# BAD-FORMAT: USAGE:
 # BAD-FORMAT-NOT: --format=xml
 
 # TEXT: tests: 2

@@ -25,6 +25,6 @@ endmodule
   TOKENS-NEXT: 29 9 EndModuleKeyword
   TOKENS-NEXT: 40 {{[0-9]+}} BlockComment
   HTML: "tokens":"0 6 ModuleKeyword\n7 1 Identifier\n8 1 Semicolon\n12 7 InitialKeyword\n20 7 SystemIdentifier\n27 1 Semicolon\n29 9 EndModuleKeyword\n40 {{[0-9]+}} BlockComment\n"}]
-  BAD-STD: usage:
-  BAD-STD: [--std=1800-2017|1800-2023]
+  BAD-STD: USAGE:
+  BAD-STD: --std=<1800-2017|1800-2023>
 */

@@ -1,6 +1,7 @@
 //===- talos-cov.cpp - Talos coverage reporting tool ----------------===//
 
 #include "CoverageIndex.h"
+#include "Options.h"
 #include "talos/Coverage/CoverageDatabase.h"
 #include "talos/Frontend/SourceTokens.h"
 
@@ -8,6 +9,9 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Option/Arg.h"
+#include "llvm/Option/ArgList.h"
+#include "llvm/Option/Option.h"
 #include "llvm/Support/Base64.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
@@ -325,13 +329,10 @@ std::string digestText(const Digest &digest) {
   return result;
 }
 
-void usage(llvm::raw_ostream &out) {
-  out << "usage:\n"
-         "  talos-cov merge -o OUT.obcov [--discard-test-detail] INPUT...\n"
-         "  talos-cov report --format=text|html|json|lcov [-o OUT]\n"
-         "      [--source-root DIR] [--std=1800-2017|1800-2023] [--test GLOB]\n"
-         "      [--fail-under METRIC=N] INPUT...\n"
-         "  talos-cov inspect INPUT\n";
+void usage(llvm::raw_ostream &out, llvm::StringRef command) {
+  getCoverageOptTable().printHelp(out, "talos-cov <command> [options] <inputs>",
+                                  "Talos coverage reporting tool", false, true,
+                                  llvm::opt::Visibility(), command);
 }
 
 bool wildcard(const char *pattern, const char *text) {
@@ -362,50 +363,62 @@ bool parseDouble(const std::string &text, double &value) {
          value >= 0.0 && value <= 100.0;
 }
 
-bool takeValue(int &index, int argc, char **argv, const std::string &arg,
-               const char *option, std::string &value) {
-  std::string prefix = std::string(option) + "=";
-  if (arg.compare(0, prefix.size(), prefix) == 0) {
-    value = arg.substr(prefix.size());
-    return !value.empty();
-  }
-  if (arg == option && index + 1 < argc) {
-    value = argv[++index];
-    return true;
-  }
-  return false;
-}
+enum class ParseResult { Success, Help, Error };
 
-bool parseOptions(int argc, char **argv, Options &options) {
+ParseResult parseOptions(int argc, char **argv, Options &options) {
+  using namespace talos::coverage::options;
   if (argc < 2)
-    return false;
-  options.command = argv[1];
-  if (options.command != "merge" && options.command != "report" &&
-      options.command != "inspect")
-    return false;
-  for (int i = 2; i < argc; ++i) {
-    std::string arg = argv[i], value;
-    if (arg == "--discard-test-detail") {
+    return ParseResult::Error;
+  const auto &table = getCoverageOptTable();
+  auto commands = table.getSubCommands();
+  bool hasCommand =
+      std::any_of(commands.begin(), commands.end(), [&](const auto &entry) {
+        return llvm::StringRef(argv[1]) == entry.Name;
+      });
+  if (hasCommand)
+    options.command = argv[1];
+  unsigned firstArg = hasCommand ? 2 : 1;
+  unsigned missingIndex = 0, missingCount = 0;
+  auto args = table.ParseArgs(llvm::ArrayRef(argv + firstArg, argc - firstArg),
+                              missingIndex, missingCount);
+  if (missingCount ||
+      (!hasCommand && (args.size() != 1 || !args.hasArg(OPT_help))))
+    return ParseResult::Error;
+  for (const auto *arg : args) {
+    const auto *spelled = arg->getAlias() ? arg->getAlias() : arg;
+    if (arg->getNumValues() && spelled->getSpelling().ends_with("=") &&
+        !*arg->getValue())
+      return ParseResult::Error;
+    switch (arg->getOption().getID()) {
+    case OPT_help:
+      return ParseResult::Help;
+    case OPT_discard_test_detail:
       options.discard = true;
-    } else if (takeValue(i, argc, argv, arg, "-o", value) ||
-               takeValue(i, argc, argv, arg, "--output", value)) {
-      options.output = value;
-    } else if (takeValue(i, argc, argv, arg, "--format", value)) {
-      options.format = value;
-    } else if (takeValue(i, argc, argv, arg, "--test", value)) {
-      options.test = value;
-    } else if (takeValue(i, argc, argv, arg, "--source-root", value)) {
-      options.sourceRoot = value;
-    } else if (takeValue(i, argc, argv, arg, "--std", value)) {
-      if (value == "1800-2017")
+      break;
+    case OPT_output:
+      options.output = arg->getValue();
+      break;
+    case OPT_format:
+      options.format = arg->getValue();
+      break;
+    case OPT_test:
+      options.test = arg->getValue();
+      break;
+    case OPT_source_root:
+      options.sourceRoot = arg->getValue();
+      break;
+    case OPT_std:
+      if (llvm::StringRef(arg->getValue()) == "1800-2017")
         options.languageVersion =
             talos::frontend::LanguageVersion::IEEE1800_2017;
-      else if (value == "1800-2023")
+      else if (llvm::StringRef(arg->getValue()) == "1800-2023")
         options.languageVersion =
             talos::frontend::LanguageVersion::IEEE1800_2023;
       else
-        return false;
-    } else if (takeValue(i, argc, argv, arg, "--fail-under", value)) {
+        return ParseResult::Error;
+      break;
+    case OPT_fail_under: {
+      std::string value = arg->getValue();
       size_t equal = value.find('=');
       MetricKind metric;
       double threshold = 0;
@@ -415,26 +428,28 @@ bool parseOptions(int argc, char **argv, Options &options) {
            metric != MetricKind::Functional &&
            metric != MetricKind::Assertion && metric != MetricKind::FSM) ||
           !parseDouble(value.substr(equal + 1), threshold))
-        return false;
+        return ParseResult::Error;
       options.thresholds[metric] = threshold;
-    } else if (arg == "--help" || arg == "-h") {
-      usage(llvm::outs());
-      std::exit(0);
-    } else if (!arg.empty() && arg[0] == '-') {
-      return false;
-    } else {
-      options.inputs.push_back(arg);
+      break;
+    }
+    case OPT_INPUT:
+      options.inputs.push_back(arg->getValue());
+      break;
+    default:
+      return ParseResult::Error;
     }
   }
   if (options.inputs.empty() ||
       (options.command == "inspect" && options.inputs.size() != 1))
-    return false;
+    return ParseResult::Error;
   if (options.command == "merge" && options.output.empty())
-    return false;
+    return ParseResult::Error;
   static const std::array<std::string, 4> formats = {"text", "html", "json",
                                                      "lcov"};
-  return options.command != "report" ||
-         std::count(formats.begin(), formats.end(), options.format);
+  if (options.command == "report" &&
+      !std::count(formats.begin(), formats.end(), options.format))
+    return ParseResult::Error;
+  return ParseResult::Success;
 }
 
 void printDiagnostic(const std::string &path, const Diagnostic &diagnostic) {
@@ -3507,9 +3522,11 @@ const Summary &summaryFor(const ReportData &report, MetricKind metric) {
 
 int main(int argc, char **argv) {
   Options options;
-  if (!parseOptions(argc, argv, options)) {
-    usage(llvm::errs());
-    return 1;
+  ParseResult parsed = parseOptions(argc, argv, options);
+  if (parsed != ParseResult::Success) {
+    usage(parsed == ParseResult::Help ? llvm::outs() : llvm::errs(),
+          options.command);
+    return parsed == ParseResult::Help ? 0 : 1;
   }
   Database database;
   if (!load(options, database))

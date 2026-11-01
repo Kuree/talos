@@ -1,0 +1,21 @@
+# RUN: talos-cov --help | FileCheck %s --check-prefix=HELP
+# RUN: talos-cov -h | FileCheck %s --check-prefix=HELP
+# RUN: talos-cov merge --help | FileCheck %s --check-prefix=MERGE --implicit-check-not=--format
+# RUN: talos-cov report --help | FileCheck %s --check-prefix=REPORT --implicit-check-not=--discard-test-detail
+# RUN: talos-cov inspect -h | FileCheck %s --check-prefix=INSPECT --implicit-check-not=--output
+
+# HELP-DAG: inspect
+# HELP-DAG: merge
+# HELP-DAG: report
+
+# MERGE-DAG: --discard-test-detail
+# MERGE-DAG: --output
+
+# REPORT-DAG: --format
+# REPORT-DAG: --test
+# REPORT-DAG: --source-root
+# REPORT-DAG: --std
+# REPORT-DAG: --fail-under
+# REPORT-DAG: --output
+
+# INSPECT: --help

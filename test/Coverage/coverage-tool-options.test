@@ -1,0 +1,9 @@
+# RUN: %coverage-fixture %t.obcov 1 alpha 1
+# RUN: talos-cov report --format json --test alpha --source-root %S --std 1800-2017 --fail-under line=50 --fail-under toggle=50 --output %t.separate.json %t.obcov
+# RUN: FileCheck %s --check-prefix=JSON < %t.separate.json
+# RUN: talos-cov report --format=json --test=alpha --source-root=%S --std=1800-2023 --fail-under=line=50 --fail-under=toggle=50 --output=%t.joined.json %t.obcov
+# RUN: FileCheck %s --check-prefix=JSON < %t.joined.json
+# RUN: talos-cov report --format=json -o=%t.short.json %t.obcov
+# RUN: FileCheck %s --check-prefix=JSON < %t.short.json
+# JSON: {"format":"talos-coverage-report"
+# JSON: "name":"alpha"
