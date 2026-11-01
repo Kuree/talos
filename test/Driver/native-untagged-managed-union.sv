@@ -11,7 +11,6 @@ module top;
 
   typedef union {
     Node object;
-    string text;
     logic [63:0] bits;
   } choice_t;
 
@@ -33,8 +32,10 @@ module top;
 
     choice.bits = 'x;
     assert ($isunknown(choice.bits));
-    choice.text = "safe";
-    assert (choice.text == "safe");
+    node = new;
+    node.value = 11;
+    choice.object = node;
+    assert (choice.object.value == 11);
     $display("managed union passed");
   end
 endmodule

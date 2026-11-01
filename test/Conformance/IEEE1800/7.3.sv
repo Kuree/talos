@@ -3,7 +3,7 @@
 // RUN: %not %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %S/Inputs/7.3/illegal.sv -o %t.bad.exe
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe
-// DIAG: forbids dynamic and chandle types in an untagged union
+// DIAG: forbids a string member in an untagged union
 // CHECK: bits=ffffffff
 // CHECK: value=1
 // CHECK: text=hello

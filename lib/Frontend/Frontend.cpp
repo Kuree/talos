@@ -2607,43 +2607,40 @@ private:
     return true;
   }
 
-  // IEEE 1800-2023 7.3, 7.3.2: dynamic types and chandle types shall not be used
-  // in untagged unions. Slang admits them, and a typedef nobody uses still
-  // declares one, so every semantic type is checked when it is first seen.
-  void diagnoseUntaggedUnionMembers(const slang::ast::Type &sourceType) {
+  // IEEE 1800-2023 7.3, 7.3.2: dynamic types shall not be used in untagged
+  // unions. Slang rejects the chandle and dynamically sized array members but
+  // admits string, which a typedef nobody uses still declares, so every semantic
+  // type is checked when it is first seen.
+  void diagnoseUntaggedUnionStrings(const slang::ast::Type &sourceType) {
     const slang::ast::Type &type = sourceType.getCanonicalType();
     if (!checkedUnionTypes.insert(&type).second)
       return;
-    auto isDynamic = [](const slang::ast::Type &member) {
-      const slang::ast::Type &canonical = member.getCanonicalType();
-      return canonical.isString() || canonical.isCHandle() ||
-             canonical.isClass() || canonical.isDynamicallySizedArray();
-    };
-    std::function<bool(const slang::ast::Type &)> holdsDynamic =
+    std::function<bool(const slang::ast::Type &)> holdsString =
         [&](const slang::ast::Type &member) {
           const slang::ast::Type &canonical = member.getCanonicalType();
-          if (isDynamic(canonical))
+          if (canonical.isString())
             return true;
-          if (canonical.isUnpackedArray())
-            return holdsDynamic(*canonical.getArrayElementType());
+          if (canonical.kind ==
+              slang::ast::SymbolKind::FixedSizeUnpackedArrayType)
+            return holdsString(*canonical.getArrayElementType());
           if (canonical.kind != slang::ast::SymbolKind::UnpackedStructType)
             return false;
           for (const auto &field :
                canonical.as<slang::ast::UnpackedStructType>()
                    .template membersOfType<slang::ast::FieldSymbol>())
-            if (holdsDynamic(field.getType()))
+            if (holdsString(field.getType()))
               return true;
           return false;
         };
-    if (type.isUnpackedArray() && !type.isDynamicallySizedArray()) {
-      diagnoseUntaggedUnionMembers(*type.getArrayElementType());
+    if (type.kind == slang::ast::SymbolKind::FixedSizeUnpackedArrayType) {
+      diagnoseUntaggedUnionStrings(*type.getArrayElementType());
       return;
     }
     if (type.kind == slang::ast::SymbolKind::UnpackedStructType) {
       for (const auto &field :
            type.as<slang::ast::UnpackedStructType>()
                .template membersOfType<slang::ast::FieldSymbol>())
-        diagnoseUntaggedUnionMembers(field.getType());
+        diagnoseUntaggedUnionStrings(field.getType());
       return;
     }
     if (type.kind != slang::ast::SymbolKind::UnpackedUnionType)
@@ -2651,12 +2648,11 @@ private:
     const auto &value = type.as<slang::ast::UnpackedUnionType>();
     for (const auto &field :
          value.template membersOfType<slang::ast::FieldSymbol>()) {
-      diagnoseUntaggedUnionMembers(field.getType());
-      if (value.isTagged || !holdsDynamic(field.getType()))
+      diagnoseUntaggedUnionStrings(field.getType());
+      if (value.isTagged || !holdsString(field.getType()))
         continue;
       emitError(sourceLocation(field.location))
-          << "IEEE 1800-2023 7.3 forbids dynamic and chandle types in an "
-             "untagged union";
+          << "IEEE 1800-2023 7.3 forbids a string member in an untagged union";
       sawInvalidNode = true;
     }
   }
@@ -7074,7 +7070,7 @@ private:
       }
       if (const slang::ast::Type *source =
               getUncanonicalizedSemanticType(node)) {
-        diagnoseUntaggedUnionMembers(*source);
+        diagnoseUntaggedUnionStrings(*source);
         if (ArrayAttr layers = getVPITypedefLayers(*source))
           attrs.set("vpi_typedef_layers", layers);
       }
