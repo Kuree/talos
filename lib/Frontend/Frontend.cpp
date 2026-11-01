@@ -53,6 +53,7 @@
 #include <charconv>
 #include <cmath>
 #include <concepts>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <limits>
@@ -4082,8 +4083,9 @@ private:
               : std::span<const slang::ast::FormalArgumentSymbol *const>();
       for (auto [index, argument] : llvm::enumerate(node.arguments())) {
         bool isDefaulted =
-            index < formalArguments.size() &&
-            formalArguments[index]->getDefaultValue() == argument;
+            (index < formalArguments.size() &&
+             formalArguments[index]->getDefaultValue() == argument) ||
+            modportDefaultArguments.contains(argument);
         defaultedArguments.push_back(isDefaulted);
       }
       SET_OP_ATTR(DefaultedArguments,
@@ -5206,8 +5208,9 @@ private:
       auto formalArguments = covergroupType.getArguments();
       for (auto [index, argument] : llvm::enumerate(node.arguments)) {
         bool isDefaulted =
-            index < formalArguments.size() &&
-            formalArguments[index]->getDefaultValue() == argument;
+            (index < formalArguments.size() &&
+             formalArguments[index]->getDefaultValue() == argument) ||
+            modportDefaultArguments.contains(argument);
         defaultedArguments.push_back(isDefaulted);
       }
       SET_OP_ATTR(DefaultedArguments,
@@ -6839,8 +6842,102 @@ private:
     }
   }
 
+  // The modport prototype a call to an interface subroutine goes through, if
+  // any. Slang's lookup forwards a prototype straight to its subroutine, so the
+  // call only records the prototype's modport in its receiver or its syntax.
+  const slang::ast::MethodPrototypeSymbol *
+  findModportPrototype(const slang::ast::CallExpression &call,
+                       const slang::ast::SubroutineSymbol &subroutine) const {
+    const slang::ast::ModportSymbol *modport = nullptr;
+    if (call.thisClass()) {
+      if (const auto *virtualType =
+              call.thisClass()
+                  ->type->getCanonicalType()
+                  .as_if<slang::ast::VirtualInterfaceType>())
+        modport = virtualType->modport;
+    } else if (call.syntax) {
+      const slang::syntax::SyntaxNode *name = call.syntax;
+      if (const auto *invocation =
+              name->as_if<slang::syntax::InvocationExpressionSyntax>())
+        name = invocation->left;
+      const auto *scoped = name->as_if<slang::syntax::ScopedNameSyntax>();
+      std::string_view portName;
+      if (scoped) {
+        if (const auto *left =
+                scoped->left->as_if<slang::syntax::IdentifierNameSyntax>())
+          portName = left->identifier.valueText();
+        else if (const auto *selected =
+                     scoped->left
+                         ->as_if<slang::syntax::IdentifierSelectNameSyntax>())
+          portName = selected->identifier.valueText();
+      }
+      if (!portName.empty() && !currentScopes.empty())
+        if (const slang::ast::Symbol *port = slang::ast::Lookup::unqualified(
+                *currentScopes.back(), portName))
+          if (const auto *interfacePort =
+                  port->as_if<slang::ast::InterfacePortSymbol>())
+            modport = interfacePort->getConnection().second;
+    }
+    if (!modport)
+      return nullptr;
+    // Scope::find would forward a prototype to its subroutine as well.
+    for (const auto &prototype :
+         modport->membersOfType<slang::ast::MethodPrototypeSymbol>())
+      if (prototype.name == subroutine.name)
+        return &prototype;
+    return nullptr;
+  }
+
+  // IEEE 1800-2023 25.7: when both a modport prototype and the declaration
+  // specify a default for an argument, the call uses the prototype's. Returns
+  // the call with those defaults bound, or null when it uses none of them.
+  const slang::ast::CallExpression *
+  withModportPrototypeDefaults(const slang::ast::CallExpression &call) {
+    const auto *subroutine =
+        std::get_if<const slang::ast::SubroutineSymbol *>(&call.subroutine);
+    if (!subroutine)
+      return nullptr;
+    const slang::ast::MethodPrototypeSymbol *prototype =
+        findModportPrototype(call, **subroutine);
+    if (!prototype)
+      return nullptr;
+    auto formals = (*subroutine)->getArguments();
+    auto overrides = prototype->getArguments();
+    if (formals.size() != overrides.size() ||
+        formals.size() != call.arguments().size())
+      return nullptr;
+    SmallVector<const slang::ast::Expression *> arguments(
+        call.arguments().begin(), call.arguments().end());
+    bool rebound = false;
+    for (auto [index, argument] : llvm::enumerate(arguments)) {
+      const slang::ast::Expression *replacement =
+          overrides[index]->getDefaultValue();
+      if (!replacement || argument != formals[index]->getDefaultValue())
+        continue;
+      argument = replacement;
+      modportDefaultArguments.insert(replacement);
+      rebound = true;
+    }
+    if (!rebound)
+      return nullptr;
+    auto &stored = modportCallArguments.emplace_back(std::move(arguments));
+    auto &result = modportCalls.emplace_back(
+        call.subroutine, *call.type, call.thisClass(),
+        std::span<const slang::ast::Expression *>(stored.data(), stored.size()),
+        slang::ast::LookupLocation::max, call.sourceRange);
+    result.syntax = call.syntax;
+    return &result;
+  }
+
   template <typename Op, typename Node> void importNode(const Node &node) {
     using BareNode = std::remove_cvref_t<Node>;
+    if constexpr (std::same_as<BareNode, slang::ast::CallExpression>) {
+      if (const slang::ast::CallExpression *rebound =
+              withModportPrototypeDefaults(node)) {
+        importNode<Op>(*rebound);
+        return;
+      }
+    }
     if constexpr (std::same_as<BareNode, slang::ast::TransparentMemberSymbol>) {
       // Enum members are injected into the surrounding lexical scope through
       // transparent wrappers. Import the real declaration there, preserving its
@@ -7689,6 +7786,11 @@ private:
   llvm::SmallPtrSet<const slang::ast::Symbol *, 16> analyzedAssertionProcedures;
   llvm::DenseMap<const slang::ast::Symbol *, Operation *>
       emittedSymbolOperations;
+  // Calls rebuilt with modport prototype defaults, and those defaults. The
+  // elements must stay put while the import holds pointers to them.
+  std::deque<SmallVector<const slang::ast::Expression *>> modportCallArguments;
+  std::deque<slang::ast::CallExpression> modportCalls;
+  llvm::SmallPtrSet<const slang::ast::Expression *, 8> modportDefaultArguments;
   llvm::DenseMap<const slang::syntax::SyntaxNode *, SmallVector<Operation *, 1>>
       dpiExportOperationsBySyntax;
   bool dpiExportSyntaxIndexBuilt = false;
