@@ -1331,6 +1331,36 @@ talos_rt_status talos_rt_design_net_strength(talos_rt_context *context,
   TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_BYTECODE; }
 }
 
+talos_rt_status talos_rt_design_net_drivers(
+    talos_rt_context *context, uint64_t stateBit,
+    std::vector<talos_rt_net_driver_bit> &drivers) noexcept {
+  drivers.clear();
+  if (!context || !context->execution)
+    return TALOS_RT_INVALID_ARGUMENT;
+  TALOS_RT_TRY {
+    talos_rt_design_bytecode_entry_v1 entry{context->execution, 0, 0};
+    Image image;
+    if (!loadValidatedImage(entry, context, image, /*inventoryOnly=*/true))
+      return TALOS_RT_INVALID_BYTECODE;
+    ContextTransaction transaction(context);
+    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    NetAliasCache *cache = getNetAliasCache(image, context);
+    if (!cache)
+      return TALOS_RT_INVALID_BYTECODE;
+    auto root = cache->rootByBit.find(stateBit);
+    if (root == cache->rootByBit.end())
+      return TALOS_RT_INVALID_HANDLE;
+    auto found = cache->driverBits.find(root->second);
+    if (found != cache->driverBits.end())
+      for (const NetDriverBit &driver : found->second)
+        drivers.push_back(
+            {driver.valueOffset, driver.strength0, driver.strength1});
+    return TALOS_RT_OK;
+  }
+  TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
+  TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_BYTECODE; }
+}
+
 talos_rt_status talos_rt_design_driver_strength(talos_rt_context *context,
                                                 uint64_t lowOffset,
                                                 uint64_t highOffset,

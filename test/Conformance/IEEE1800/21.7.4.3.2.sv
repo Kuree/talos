@@ -1,6 +1,5 @@
 // CLAUSE: evcd driver strength
-// XFAIL: *
-// Extended VCD does not preserve the required direction/strength character for competing input and output drivers.
+// SINCE: 0.1.0
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe
 // RUN: %FileCheck %s --check-prefix=FILE0 --input-file=probe.evcd

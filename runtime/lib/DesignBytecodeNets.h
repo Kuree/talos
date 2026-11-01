@@ -32,6 +32,21 @@ talos_rt_status talos_rt_design_driver_strength(talos_rt_context *context,
                                                 uint16_t *outStrengths,
                                                 bool useNativeState) noexcept;
 
+/// One logical driver bit of a net root and its published strengths.
+struct talos_rt_net_driver_bit {
+  uint64_t valueOffset;
+  uint8_t strength0;
+  uint8_t strength1;
+};
+
+/// List the driver bits that contribute to the net containing state bit
+/// `stateBit`. Used by Extended VCD to tell drivers inside a dumped instance
+/// from those outside it (IEEE 1800-2023 21.7.4.3.2). Fails for a bit that is
+/// not part of a net.
+talos_rt_status talos_rt_design_net_drivers(
+    talos_rt_context *context, uint64_t stateBit,
+    std::vector<talos_rt_net_driver_bit> &drivers) noexcept;
+
 namespace talos::designbytecode {
 
 using talos::runtime::rangesOverlap;

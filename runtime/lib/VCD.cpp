@@ -8,6 +8,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "DesignBytecodeNets.h"
 #include "ProcessContext.h"
 #include "RuntimeInternal.h"
 #include "talos/Reflection/DesignReflection.h"
@@ -240,6 +241,15 @@ struct TraceVariable {
   bool isReal = false;
   // Zero for ordinary VCD. EVCD stores the port-direction capability bits.
   uint32_t portCaps = 0;
+  // EVCD only: per bit, the drivers on both sides of the dumped instance
+  // boundary (IEEE 1800-2023 21.7.4.3.2). Empty unless both sides drive.
+  struct BoundaryDriver {
+    uint64_t valueOffset;
+    uint8_t strength0;
+    uint8_t strength1;
+    bool inside;
+  };
+  std::vector<std::vector<BoundaryDriver>> boundaryDrivers;
 };
 
 // One byte-aligned window of the canonical planes that covers a contiguous
@@ -1263,35 +1273,168 @@ char evcdValueChar(const TraceVariable &variable, bool value, bool unknown) {
   return value ? '1' : '0';
 }
 
+bool resolveEVCDConflict(
+    const std::vector<TraceVariable::BoundaryDriver> &drivers,
+    const uint8_t *valuePlane, const uint8_t *unknownPlane, char &state,
+    int &strength0, int &strength1);
+
 void emitEVCDValue(EVCDSession &state, const TraceVariable &variable,
                    const uint8_t *valuePlane, const uint8_t *unknownPlane) {
+  std::string states, zeroStrengths, oneStrengths;
+  for (uint64_t bit = variable.width; bit != 0; --bit) {
+    bool value = bitAt(valuePlane, variable.sourceBit + bit - 1);
+    bool unknown =
+        variable.fourState && bitAt(unknownPlane, variable.sourceBit + bit - 1);
+    char character = evcdValueChar(variable, value, unknown);
+    char strength0 = unknown && value ? '0' : value ? '0' : '6';
+    char strength1 = unknown ? (value ? '0' : '6') : (value ? '6' : '0');
+    // IEEE 1800-2023 21.7.4.3.2: competing drivers on both sides of the
+    // dumped instance take the conflict states and the winning strength.
+    if (!variable.boundaryDrivers.empty() &&
+        !variable.boundaryDrivers[bit - 1].empty()) {
+      int resolved0 = 0, resolved1 = 0;
+      if (resolveEVCDConflict(variable.boundaryDrivers[bit - 1], valuePlane,
+                              unknownPlane, character, resolved0,
+                              resolved1)) {
+        strength0 = static_cast<char>('0' + resolved0);
+        strength1 = static_cast<char>('0' + resolved1);
+      }
+    }
+    states.push_back(character);
+    zeroStrengths.push_back(strength0);
+    oneStrengths.push_back(strength1);
+  }
   state.scratch.clear();
   state.scratch.push_back('p');
-  for (uint64_t bit = variable.width; bit != 0; --bit) {
-    bool value = bitAt(valuePlane, variable.sourceBit + bit - 1);
-    bool unknown =
-        variable.fourState && bitAt(unknownPlane, variable.sourceBit + bit - 1);
-    state.scratch.push_back(evcdValueChar(variable, value, unknown));
-  }
+  state.scratch.append(states);
   state.scratch.push_back(' ');
-  for (uint64_t bit = variable.width; bit != 0; --bit) {
-    bool value = bitAt(valuePlane, variable.sourceBit + bit - 1);
-    bool unknown =
-        variable.fourState && bitAt(unknownPlane, variable.sourceBit + bit - 1);
-    state.scratch.push_back(unknown && value ? '0' : value ? '0' : '6');
-  }
+  state.scratch.append(zeroStrengths);
   state.scratch.push_back(' ');
-  for (uint64_t bit = variable.width; bit != 0; --bit) {
-    bool value = bitAt(valuePlane, variable.sourceBit + bit - 1);
-    bool unknown =
-        variable.fourState && bitAt(unknownPlane, variable.sourceBit + bit - 1);
-    state.scratch.push_back(unknown ? (value ? '0' : '6')
-                                    : (value ? '6' : '0'));
-  }
+  state.scratch.append(oneStrengths);
   state.scratch.push_back(' ');
   state.scratch.append(state.codeText[variable.code]);
   state.scratch.push_back('\n');
   append(state, state.scratch);
+}
+
+// Driver records by state bit, with the scope that declares each.
+using DriverScopeMap = std::map<uint64_t, std::pair<uint64_t, uint64_t>>;
+
+void collectDriverScopes(const DesignDatabaseCache &database, uint64_t scope,
+                         DriverScopeMap &result) {
+  const uint8_t *scopeRecord = database.data + scope;
+  for (uint64_t child = firstChildOffset(scopeRecord); child != 0;) {
+    const uint8_t *record;
+    uint32_t childKind;
+    if (!getRecord(database, child, record, childKind))
+      return;
+    if (childKind == TALOS_RT_DESIGN_RECORD_SCOPE)
+      collectDriverScopes(database, child, result);
+    else if (childKind == TALOS_RT_DESIGN_RECORD_DRIVER)
+      result[objectStateBit(record)] = {objectBitWidth(record), scope};
+    child = nextSiblingOffset(record, childKind);
+  }
+}
+
+// IEEE 1800-2023 21.7.4.3.2 compares the drivers of a port's net that lie
+// inside the dumped instance (the output) with those outside it (the input).
+void classifyBoundaryDrivers(talos_rt_context *context,
+                             const DesignDatabaseCache &database,
+                             const DriverScopeMap &driverScopes,
+                             uint64_t dumpedScope, TraceVariable &variable) {
+  auto inside = [&](uint64_t driverScope) {
+    for (uint64_t scope = driverScope; scope != 0;) {
+      if (scope == dumpedScope)
+        return true;
+      const uint8_t *record;
+      uint32_t kind;
+      if (!getRecord(database, scope, record, kind) ||
+          kind != TALOS_RT_DESIGN_RECORD_SCOPE)
+        return false;
+      scope = parentOffset(record);
+    }
+    return false;
+  };
+  variable.boundaryDrivers.resize(variable.width);
+  bool any = false;
+  std::vector<talos_rt_net_driver_bit> drivers;
+  for (uint64_t bit = 0; bit != variable.width; ++bit) {
+    if (talos_rt_design_net_drivers(context, variable.sourceBit + bit,
+                                    drivers) != TALOS_RT_OK)
+      continue;
+    bool hasInside = false, hasOutside = false;
+    std::vector<TraceVariable::BoundaryDriver> classified;
+    for (const talos_rt_net_driver_bit &driver : drivers) {
+      auto found = driverScopes.upper_bound(driver.valueOffset);
+      if (found == driverScopes.begin())
+        continue;
+      --found;
+      if (driver.valueOffset - found->first >= found->second.first)
+        continue;
+      bool isInside = inside(found->second.second);
+      (isInside ? hasInside : hasOutside) = true;
+      classified.push_back({driver.valueOffset, driver.strength0,
+                            driver.strength1, isInside});
+    }
+    if (hasInside && hasOutside) {
+      variable.boundaryDrivers[bit] = std::move(classified);
+      any = true;
+    }
+  }
+  if (!any)
+    variable.boundaryDrivers.clear();
+}
+
+// IEEE 1800-2023 21.7.4.3.2: resolve competing input and output drivers of
+// one port bit. Returns false when the bit is not a conflict the clause
+// describes, leaving the direction-based character in force.
+bool resolveEVCDConflict(const std::vector<TraceVariable::BoundaryDriver> &drivers,
+                         const uint8_t *valuePlane, const uint8_t *unknownPlane,
+                         char &state, int &strength0, int &strength1) {
+  struct Side {
+    int level = 0;
+    int value = 0;
+    bool active = false;
+  } input, output;
+  for (const TraceVariable::BoundaryDriver &driver : drivers) {
+    if (unknownPlane && bitAt(unknownPlane, driver.valueOffset))
+      return false;
+    int value = bitAt(valuePlane, driver.valueOffset) ? 1 : 0;
+    int level = value ? driver.strength1 : driver.strength0;
+    // The input drives from outside the instance, the output from inside.
+    Side &side = driver.inside ? output : input;
+    if (level == 0)
+      continue;
+    if (!side.active || level > side.level) {
+      side = {level, value, true};
+    } else if (level == side.level && value != side.value) {
+      return false;
+    }
+  }
+  if (!input.active || !output.active)
+    return false;
+  auto strong = [](int level) { return level >= 5; };
+  int level;
+  if (input.value == output.value) {
+    // Same value with the same strength range: a conflict resolved to 0/1 at
+    // the stronger of the two strengths.
+    if (strong(input.level) != strong(output.level))
+      return false;
+    state = input.value ? '1' : '0';
+    level = std::max(input.level, output.level);
+  } else if (strong(input.level) && !strong(output.level)) {
+    state = input.value ? 'u' : 'd';
+    level = input.level;
+  } else if (!strong(input.level) && strong(output.level)) {
+    state = output.value ? 'h' : 'l';
+    level = output.level;
+  } else {
+    return false;
+  }
+  int value = (state == '1' || state == 'u' || state == 'h') ? 1 : 0;
+  strength0 = value ? 0 : level;
+  strength1 = value ? level : 0;
+  return true;
 }
 
 void emitEVCDOff(EVCDSession &state, const TraceVariable &variable) {
@@ -1339,6 +1482,8 @@ talos_rt_status buildEVCDPlan(talos_rt_context *context, EVCDSession &state) {
 
   writeHeader(context, state);
   uint32_t nextCode = 0;
+  DriverScopeMap driverScopes;
+  collectDriverScopes(database, database.root, driverScopes);
   std::function<talos_rt_status(uint64_t, std::string_view)> emitScope =
       [&](uint64_t scope, std::string_view parentName) -> talos_rt_status {
     const uint8_t *scopeRecord = database.data + scope;
@@ -1385,8 +1530,9 @@ talos_rt_status buildEVCDPlan(talos_rt_context *context, EVCDSession &state) {
       variable.code = nextCode++;
       variable.fourState = typeFourState(database, objectTypeOffset(record));
       variable.portCaps = read32(record + 4);
-      state.variables.push_back(variable);
-      state.codeText.push_back("<" + std::to_string(variable.code));
+      classifyBoundaryDrivers(context, database, driverScopes, scope, variable);
+      state.variables.push_back(std::move(variable));
+      state.codeText.push_back("<" + std::to_string(state.variables.back().code));
       append(state, "$var port ");
       if (width == 1) {
         append(state, "1");
