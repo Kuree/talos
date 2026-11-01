@@ -307,15 +307,13 @@ LogicalResult linkCOFFExecutable(ArrayRef<std::string> modulePaths,
     return failure();
 
   SmallVector<std::string> linkArguments{
-      "lld-link",
-      "/noimplib",
-      "/debug:symtab",
-      "/timestamp:0",
-      "/stack:8388608",
-      "/opt:ref",
-      "/opt:noicf",
+      "lld-link", "/noimplib", "/debug:symtab", "/timestamp:0",
+      "/stack:8388608", "/opt:ref", "/opt:noicf",
       (Twine("/threads:") + Twine(options.compileThreads)).str(),
-      (Twine("/opt:lldlto=") + Twine(options.optLevel)).str()};
+      (Twine("/opt:lldlto=") + Twine(options.optLevel)).str(),
+      // A fixed count keeps codegen boundaries independent of the worker budget
+      // while the runtime linked into a full-LTO image compiles in parallel.
+      "/opt:lldltopartitions=8"};
   llvm::append_range(linkArguments, dllArguments);
   if (options.dpi) {
     // Export the base DPI API only for designs that use the boundary. Marking
