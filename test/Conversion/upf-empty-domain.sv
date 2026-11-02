@@ -1,3 +1,4 @@
+// REQUIRES: upf
 // RUN: %split-file %s %t
 // RUN: talos --upf %t/power.upf -emit-sim %t/design.sv -o - | FileCheck %s
 
