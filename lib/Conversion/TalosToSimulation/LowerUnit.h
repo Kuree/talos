@@ -1203,6 +1203,11 @@ private:
   ::mlir::Value lvalueReferencePlaceholder;
   bool continuousStore = false;
   bool sampleAssertionValues = false;
+  /// Where the wait of the assertion monitor being lowered resumes.
+  sim::EventRegion monitorResumeRegion = sim::EventRegion::Observed;
+  /// The expressions being lowered run only on some ticks of the assertion
+  /// clock.
+  bool conditionalAssertionEvaluation = false;
   bool sampleAssertionDefaults = false;
   /// IEEE 1800-2023 17.5: the statement controlled by a checker always_ff
   /// reads sampled values, except for the variables its event control names.

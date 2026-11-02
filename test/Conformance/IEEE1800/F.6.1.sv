@@ -1,6 +1,5 @@
 // CLAUSE: Extended Booleans finite witness
-// XFAIL: *
-// Rejected: the sequence method matched ("unsupported system call matched") and triggered on a sequence with local variables ("sequence event controls with local variables are not executable").
+// SINCE: 0.1.0
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe
 // T(V).triggered is true at the end letter of a match, whichever attempt it came from; @(c)(T(V).matched) is true at

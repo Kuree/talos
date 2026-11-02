@@ -112,6 +112,15 @@ mlir::LogicalResult
 synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
                                mlir::Builder &builder);
 
+/// IEEE 1800-2023 16.10, F.6.1: local variables flow out of `T(V).triggered`
+/// when it is a maximal Boolean. For a T of fixed length that assigns each
+/// output once from design state, what flows out on an end point is `$past` of
+/// that state, so `T(V).triggered` becomes `(T.triggered, V = $past(expression,
+/// k))` over a T without local variables. Any other form is left to be
+/// rejected.
+void rewriteTriggeredLocalOutputs(semantic::SVRootSymbolOp root,
+                                  mlir::Builder &builder);
+
 /// IEEE 1800-2023 16.13.5, F.6.1: `@(c)(T.matched)` is true at the first tick of
 /// c after an end point of T. For each use add a process recording the end
 /// points of T and one recording the ticks of c, numbered by `trackers`, and drop

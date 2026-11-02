@@ -22,6 +22,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/Support/SaveAndRestore.h"
 
 #include <optional>
 #include <string>
@@ -2904,9 +2905,9 @@ UnitLowering::lowerSequenceEndpointMonitor(ArrayRef<Operation *> roots) {
   sim::remove<sim::metadata::SequenceEndpointPath>(function);
 
   Location location = getSemanticLocation(instance);
-  function->setAttr("home_region",
-                    sim::EventRegionAttr::get(function.getContext(),
-                                              sim::EventRegion::Observed));
+  function->setAttr(
+      "home_region",
+      sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion));
   Type stateType = builder.getI64Type();
   Value zero = arith::ConstantOp::create(builder, location, stateType,
                                          builder.getI64IntegerAttr(0));
@@ -2927,8 +2928,8 @@ UnitLowering::lowerSequenceEndpointMonitor(ArrayRef<Operation *> roots) {
   if (failed(emitEventSuspend(clock, sample)))
     return failure();
   wait->getTerminator()->setAttr(
-      "resume_region", sim::EventRegionAttr::get(function.getContext(),
-                                                 sim::EventRegion::Observed));
+      "resume_region",
+      sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion));
   setCurrent(sample);
 
   bool savedSampleAssertionValues = sampleAssertionValues;
@@ -3330,9 +3331,9 @@ LogicalResult UnitLowering::lowerGlobalFutureAssertionResolver(
   sim::mark<sim::metadata::GlobalFutureResolver>(function);
   ::talos::schedule::set<::talos::schedule::Field::DetachedControls>(
       function, builder.getUnitAttr());
-  function->setAttr("home_region",
-                    sim::EventRegionAttr::get(function.getContext(),
-                                              sim::EventRegion::Observed));
+  function->setAttr(
+      "home_region",
+      sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion));
   return success();
 }
 
@@ -3357,6 +3358,20 @@ private:
 
 LogicalResult UnitLowering::lowerConcurrentAssertion(
     semantic::SVConcurrentAssertionStatementOp op) {
+  // IEEE 1800-2023 16.13.6, F.6.1: `.triggered` is true on the tick of the end
+  // point, whichever order the monitors of one Observed region run in, and end
+  // points are detected there. Reading sampled values and reporting through
+  // action blocks, which the Reactive region runs anyway, a monitor loses
+  // nothing there.
+  bool readsEndPoint = false;
+  op->walk([&](semantic::SVCallExpressionOp call) {
+    readsEndPoint |= call.getIsSystemCall() &&
+                     call.getCalleeName() == "triggered" &&
+                     call.getArgumentCount() == 1;
+  });
+  llvm::SaveAndRestore<sim::EventRegion> resumeRegion(
+      monitorResumeRegion,
+      readsEndPoint ? sim::EventRegion::Reactive : sim::EventRegion::Observed);
   // The bounded monitor stays the first choice for every property it accepts,
   // so its cost and behavior do not change. A candidate it rejects, with nothing
   // of it kept, runs through the automaton. If that rejects it too, the monitor's
@@ -3794,8 +3809,8 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
     if (failed(attempt))
       return failure();
     attempt->first->setAttr(
-        "home_region", sim::EventRegionAttr::get(function.getContext(),
-                                                 sim::EventRegion::Observed));
+        "home_region",
+        sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion));
     attempt->first->setAttr(
         "domain", sim::ExecutionDomainAttr::get(function.getContext(),
                                                 sim::ExecutionDomain::Design));
@@ -4195,8 +4210,8 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
     if (failed(emitEventSuspend(clock, sample)))
       return failure();
     wait->getTerminator()->setAttr(
-        "resume_region", sim::EventRegionAttr::get(function.getContext(),
-                                                   sim::EventRegion::Observed));
+        "resume_region",
+        sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion));
     setCurrent(sample);
     Value attemptEnabled = queryAttemptEnabledForCoverage();
     emitEvaluationCoverageHit(attemptEnabled);
@@ -4353,8 +4368,8 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
     ::talos::schedule::set<::talos::schedule::Field::PrimeOnSpawn>(
         resolver->first, builder.getUnitAttr());
     resolver->first->setAttr(
-        "home_region", sim::EventRegionAttr::get(function.getContext(),
-                                                 sim::EventRegion::Observed));
+        "home_region",
+        sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion));
     sim::SimSpawnOp::create(builder, location, resolver->first.getSymNameAttr(),
                             resolver->second, ArrayAttr{}, ArrayAttr{});
     cf::BranchOp::create(builder, location, wait);
@@ -5518,9 +5533,9 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
       return emitError(location) << "expect monitor has no completion captures",
              failure();
 
-    function->setAttr("home_region",
-                      sim::EventRegionAttr::get(function.getContext(),
-                                                sim::EventRegion::Observed));
+    function->setAttr(
+        "home_region",
+        sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion));
     function->setAttr(
         "domain", sim::ExecutionDomainAttr::get(function.getContext(),
                                                 sim::ExecutionDomain::Design));
@@ -5845,9 +5860,8 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
       if (failed(emitEventSuspend(clock, sample)))
         return failure();
       wait->getTerminator()->setAttr(
-          "resume_region",
-          sim::EventRegionAttr::get(function.getContext(),
-                                    sim::EventRegion::Observed));
+          "resume_region", sim::EventRegionAttr::get(function.getContext(),
+                                                     monitorResumeRegion));
       setCurrent(sample);
       emitEvaluationCoverageHit();
       markExpectStarted();
@@ -5896,9 +5910,8 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
         if (failed(emitEventSuspend(clock, sample)))
           return failure();
         ageWait->getTerminator()->setAttr(
-            "resume_region",
-            sim::EventRegionAttr::get(function.getContext(),
-                                      sim::EventRegion::Observed));
+            "resume_region", sim::EventRegionAttr::get(function.getContext(),
+                                                       monitorResumeRegion));
         setCurrent(sample);
         if (age == 0) {
           emitEvaluationCoverageHit();
@@ -6017,9 +6030,8 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
           if (failed(emitEventSuspend(clock, sample)))
             return failure();
           wait->getTerminator()->setAttr(
-              "resume_region",
-              sim::EventRegionAttr::get(function.getContext(),
-                                        sim::EventRegion::Observed));
+              "resume_region", sim::EventRegionAttr::get(function.getContext(),
+                                                         monitorResumeRegion));
           setCurrent(sample);
         }
         if (index == 0) {
@@ -6054,9 +6066,9 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
     return success();
   }
   // IEEE 1800 evaluates sampled predicates and monitor state in Observed.
-  function->setAttr("home_region",
-                    sim::EventRegionAttr::get(function.getContext(),
-                                              sim::EventRegion::Observed));
+  function->setAttr(
+      "home_region",
+      sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion));
 
   auto isProceduralAge = [](const FixedSequenceAge &age) {
     return age.caseGuards.empty() && age.matchItems.empty();
@@ -6648,8 +6660,8 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
       Block *waitBlock = builder.getInsertionBlock();
       if (failed(emitEventSuspend(clock, sample)))
         return failure();
-      auto observed = sim::EventRegionAttr::get(function.getContext(),
-                                                sim::EventRegion::Observed);
+      auto observed =
+          sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion);
       for (Block &block : function.getBody())
         if ((&block == waitBlock || !existing.contains(&block)) &&
             !block.empty() && sim::isSuspensionOp(&block.back()))
@@ -8190,8 +8202,8 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
       return failure();
     // The clock occurrence samples in Preponed; evaluation resumes in Observed.
     wait->getTerminator()->setAttr(
-        "resume_region", sim::EventRegionAttr::get(function.getContext(),
-                                                   sim::EventRegion::Observed));
+        "resume_region",
+        sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion));
     setCurrent(sample);
     Value attemptEnabled = queryAttemptEnabledForCoverage();
     emitEvaluationCoverageHit(attemptEnabled);
@@ -8707,8 +8719,8 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
     if (failed(emitEventSuspend(clock, sample)))
       return failure();
     wait->getTerminator()->setAttr(
-        "resume_region", sim::EventRegionAttr::get(function.getContext(),
-                                                   sim::EventRegion::Observed));
+        "resume_region",
+        sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion));
     setCurrent(sample);
     Value attemptEnabled = queryAttemptEnabledForCoverage();
     emitEvaluationCoverageHit(attemptEnabled);
@@ -9011,8 +9023,8 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
     if (failed(emitEventSuspend(clock, sample)))
       return failure();
     wait->getTerminator()->setAttr(
-        "resume_region", sim::EventRegionAttr::get(function.getContext(),
-                                                   sim::EventRegion::Observed));
+        "resume_region",
+        sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion));
     setCurrent(sample);
     Value attemptEnabled = queryAttemptEnabledForCoverage();
     emitEvaluationCoverageHit(attemptEnabled);
@@ -9218,8 +9230,8 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
     if (failed(emitEventSuspend(clock, sample)))
       return failure();
     wait->getTerminator()->setAttr(
-        "resume_region", sim::EventRegionAttr::get(function.getContext(),
-                                                   sim::EventRegion::Observed));
+        "resume_region",
+        sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion));
     setCurrent(sample);
     Value attemptEnabled = queryAttemptEnabledForCoverage();
     emitEvaluationCoverageHit(attemptEnabled);
@@ -9551,8 +9563,8 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
     if (failed(emitEventSuspend(clock, sample)))
       return failure();
     wait->getTerminator()->setAttr(
-        "resume_region", sim::EventRegionAttr::get(function.getContext(),
-                                                   sim::EventRegion::Observed));
+        "resume_region",
+        sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion));
     setCurrent(sample);
     Value attemptEnabled = queryAttemptEnabledForCoverage();
     emitEvaluationCoverageHit(attemptEnabled);
@@ -11005,8 +11017,8 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
     if (failed(emitEventSuspend(clock, sample)))
       return failure();
     wait->getTerminator()->setAttr(
-        "resume_region", sim::EventRegionAttr::get(function.getContext(),
-                                                   sim::EventRegion::Observed));
+        "resume_region",
+        sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion));
     setCurrent(sample);
     Value attemptEnabled = queryAttemptEnabledForCoverage();
     emitEvaluationCoverageHit(attemptEnabled);
@@ -11690,8 +11702,8 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
     if (failed(emitEventSuspend(clock, sample)))
       return failure();
     wait->getTerminator()->setAttr(
-        "resume_region", sim::EventRegionAttr::get(function.getContext(),
-                                                   sim::EventRegion::Observed));
+        "resume_region",
+        sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion));
     setCurrent(sample);
     Value attemptEnabled = queryAttemptEnabledForCoverage();
     emitEvaluationCoverageHit(attemptEnabled);
@@ -12062,6 +12074,8 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
   }
 
   if (localMonitor) {
+    llvm::SaveAndRestore<bool> conditional(conditionalAssertionEvaluation,
+                                           true);
     struct LocalState {
       std::string path;
       Type type;
@@ -12637,8 +12651,8 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
     if (failed(emitEventSuspend(clock, sample)))
       return failure();
     wait->getTerminator()->setAttr(
-        "resume_region", sim::EventRegionAttr::get(function.getContext(),
-                                                   sim::EventRegion::Observed));
+        "resume_region",
+        sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion));
     setCurrent(sample);
     Value attemptEnabled = queryAttemptEnabledForCoverage();
     emitEvaluationCoverageHit(attemptEnabled);
@@ -12898,8 +12912,8 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
   // The clock occurrence samples in Preponed; bounded evaluation and monitor
   // bookkeeping resume in Observed.
   wait->getTerminator()->setAttr(
-      "resume_region", sim::EventRegionAttr::get(function.getContext(),
-                                                 sim::EventRegion::Observed));
+      "resume_region",
+      sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion));
   setCurrent(sample);
   Value attemptEnabled = queryAttemptEnabledForCoverage();
   emitEvaluationCoverageHit(attemptEnabled);

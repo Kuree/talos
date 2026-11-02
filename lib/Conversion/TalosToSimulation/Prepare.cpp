@@ -757,6 +757,7 @@ void TalosSimPreparePass::runOnOperation() {
     return;
   }
   bindProceduralCheckerClocks(semanticRoot, coveragePlanBuilder);
+  rewriteTriggeredLocalOutputs(semanticRoot, coveragePlanBuilder);
   if (failed(resolveInferredAssertionQueries(semanticRoot, coveragePlanBuilder)) ||
       failed(rebindVirtualInterfaceCallDefaults(semanticRoot, semanticSymbols,
                                                 coveragePlanBuilder))) {

@@ -1440,10 +1440,12 @@ UnitLowering::lowerSystemCall(semantic::SVCallExpressionOp op) {
     // the history of its evaluations is that sequence of samples. Procedural
     // code may evaluate the call several times in a tick, as in a loop, or
     // in none, so there a clocked sampler records each static variable, and
-    // expression1 is evaluated over those past samples. Automatic variables
-    // keep their current values (16.5.1).
+    // expression1 is evaluated over those past samples. A monitor with local
+    // variables evaluates only what its live attempts reach, so that holds for
+    // it too. Automatic variables keep their current values (16.5.1).
     Operation *historyClock = nullptr;
-    if (!sampleAssertionValues && !globalPastFunction) {
+    if ((!sampleAssertionValues || conditionalAssertionEvaluation) &&
+        !globalPastFunction) {
       Operation *clock =
           clockArgument ? explicitEvent.getOperation() : activeSampledClock;
       if (canLowerClockedHistory(children.front(), gateExpression, clock,

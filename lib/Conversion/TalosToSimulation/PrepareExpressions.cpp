@@ -1667,6 +1667,238 @@ LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
   return success();
 }
 
+void rewriteTriggeredLocalOutputs(semantic::SVRootSymbolOp root,
+                                  Builder &builder) {
+  SmallVector<semantic::SVCallExpressionOp> calls;
+  int64_t nextNodeId = 0;
+  root->walk([&](Operation *op) {
+    if (auto id = op->getAttrOfType<IntegerAttr>("node_id"))
+      nextNodeId = std::max(nextNodeId, id.getInt() + 1);
+    if (auto call = dyn_cast<semantic::SVCallExpressionOp>(op);
+        call && call.getIsSystemCall() && call.getCalleeName() == "triggered" &&
+        call.getArgumentCount() == 1)
+      if (auto instance = dyn_cast<semantic::SVAssertionInstanceExpressionOp>(
+              getChildren(call).front());
+          instance && instance.getLocalVariableCount() != 0 &&
+          instance.getHasExpandedBody())
+        calls.push_back(call);
+  });
+  auto freshNodes = [&](Operation *copy) {
+    copy->walk([&](Operation *nested) {
+      if (nested->hasAttr("node_id"))
+        nested->setAttr("node_id", builder.getI64IntegerAttr(nextNodeId++));
+    });
+    return copy;
+  };
+  for (semantic::SVCallExpressionOp call : calls) {
+    auto instance = cast<semantic::SVAssertionInstanceExpressionOp>(
+        getChildren(call).front());
+    auto assertion =
+        call->getParentOfType<semantic::SVConcurrentAssertionStatementOp>();
+    // Only a maximal Boolean lets anything flow out, and there the outputs are
+    // sampled on the clock of the enclosing assertion.
+    auto parent =
+        dyn_cast<semantic::SVSimpleAssertionExprOp>(call->getParentOp());
+    if (!parent || parent.getHasRepetition())
+      continue;
+    SmallVector<Operation *> instanceChildren = getChildren(instance);
+    if (instanceChildren.size() != 1 + instance.getArgumentCount())
+      continue;
+    Operation *body = instanceChildren.front();
+    Operation *sequence = body;
+    Operation *sourceClock = nullptr;
+    if (isa<semantic::SVClockingAssertionExprOp>(body)) {
+      SmallVector<Operation *> clocked = getChildren(body);
+      sourceClock = clocked.front();
+      sequence = clocked.back();
+    }
+    // A property declaration's own copy is never lowered, but is rejected if it
+    // keeps its local variables, so only an assertion's needs its clock
+    // checked.
+    if (assertion) {
+      Operation *clock = findAssertionClockFlow(call, assertion);
+      if (!clock || (sourceClock && !sameClockEvent(sourceClock, clock)))
+        continue;
+    }
+    // Each element with its distance from the end point.
+    SmallVector<std::pair<Operation *, int64_t>> elements;
+    if (auto concat = dyn_cast<semantic::SVSequenceConcatExprOp>(sequence)) {
+      SmallVector<Operation *> parts = getChildren(concat);
+      ArrayAttr delays = concat.getDelays();
+      if (delays.size() != parts.size())
+        continue;
+      int64_t distance = 0;
+      bool fixedLength = true;
+      for (int64_t index = parts.size() - 1; index >= 0; --index) {
+        elements.emplace_back(parts[index], distance);
+        auto delay = dyn_cast<DictionaryAttr>(delays[index]);
+        auto minimum = delay ? delay.getAs<IntegerAttr>("min") : IntegerAttr{};
+        auto maximum = delay ? delay.getAs<IntegerAttr>("max") : IntegerAttr{};
+        auto unbounded =
+            delay ? delay.getAs<BoolAttr>("is_unbounded") : BoolAttr{};
+        if (!minimum || !maximum || minimum != maximum ||
+            (unbounded && unbounded.getValue())) {
+          fixedLength = false;
+          break;
+        }
+        // The delay ahead of the first element only offsets where it starts.
+        if (index != 0)
+          distance += minimum.getInt();
+      }
+      if (!fixedLength)
+        continue;
+    } else {
+      elements.emplace_back(sequence, 0);
+    }
+    // The assignments, which must set each local output once from design state.
+    llvm::StringMap<Operation *> actuals;
+    for (auto [formal, actual] : llvm::zip_equal(
+             instance.getArgumentFormalPaths().getAsValueRange<StringAttr>(),
+             ArrayRef(instanceChildren).drop_front()))
+      actuals[formal] = actual;
+    llvm::StringSet<> locals;
+    for (StringRef path :
+         instance.getLocalVariablePaths().getAsValueRange<StringAttr>())
+      locals.insert(path);
+    struct Flow {
+      Operation *assignment;
+      Operation *actual;
+      int64_t distance;
+    };
+    SmallVector<Flow> flows;
+    llvm::StringSet<> assigned;
+    bool supported = true;
+    for (auto [element, distance] : elements) {
+      auto matched = dyn_cast<semantic::SVSequenceWithMatchExprOp>(element);
+      if (matched && matched.getHasRepetition())
+        supported = false;
+      if (auto simple = dyn_cast<semantic::SVSimpleAssertionExprOp>(element);
+          !matched && (!simple || simple.getHasRepetition()))
+        supported = false;
+      if (!supported || !matched)
+        continue;
+      for (Operation *item : ArrayRef(getChildren(matched)).drop_front()) {
+        auto assignment = dyn_cast<semantic::SVAssignmentExpressionOp>(item);
+        SmallVector<Operation *> sides =
+            assignment ? getChildren(assignment) : SmallVector<Operation *>{};
+        auto target =
+            sides.size() == 2
+                ? dyn_cast<semantic::SVNamedValueExpressionOp>(sides.front())
+                : semantic::SVNamedValueExpressionOp{};
+        Operation *actual =
+            target ? actuals.lookup(target.getReferencedPath()) : nullptr;
+        if (!actual || assignment.getOperatorKind() ||
+            !assigned.insert(target.getReferencedPath()).second) {
+          supported = false;
+          break;
+        }
+        flows.push_back({assignment, actual, distance});
+      }
+    }
+    // A read of a local anywhere but on the left-hand side of those assignments
+    // would need its value inside the source sequence.
+    llvm::DenseSet<Operation *> targets;
+    for (const Flow &flow : flows)
+      targets.insert(getChildren(flow.assignment).front());
+    body->walk([&](semantic::SVNamedValueExpressionOp read) {
+      if (locals.contains(read.getReferencedPath()) &&
+          !targets.contains(read.getOperation()))
+        supported = false;
+    });
+    if (!supported || flows.empty())
+      continue;
+
+    Location location = call.getLoc();
+    auto makeOp = [&](StringRef name, ArrayRef<NamedAttribute> attributes,
+                      ArrayRef<Operation *> children) {
+      OperationState state(location, name);
+      state.addAttribute("node_id", builder.getI64IntegerAttr(nextNodeId++));
+      state.addAttributes(attributes);
+      Block *block = new Block();
+      state.addRegion()->push_back(block);
+      for (Operation *child : children)
+        block->push_back(child);
+      return Operation::create(state);
+    };
+    // Each item `V = $past(expression, k)`, or the expression when k is zero.
+    SmallVector<Operation *> items;
+    for (const Flow &flow : flows) {
+      Operation *item = freshNodes(flow.assignment->clone());
+      SmallVector<Operation *> sides = getChildren(item);
+      Block *block = sides.front()->getBlock();
+      Operation *value = sides.back();
+      if (flow.distance != 0) {
+        Attribute type = value->getAttr("semantic_type");
+        Attribute isSigned = value->getAttr("is_signed");
+        Operation *depth = makeOp(
+            semantic::SVIntegerLiteralOp::getOperationName(),
+            {builder.getNamedAttr(
+                 "constant_value",
+                 builder.getStringAttr(Twine(flow.distance).str())),
+             builder.getNamedAttr("is_declared_unsized",
+                                  builder.getBoolAttr(true)),
+             builder.getNamedAttr("is_signed", builder.getBoolAttr(true)),
+             builder.getNamedAttr("semantic_type",
+                                  TypeAttr::get(semantic::IntegralType::get(
+                                      builder.getContext(), 32, true, false, 31,
+                                      0, semantic::SVIntegralFlavor::Int)))},
+            {});
+        value->remove();
+        Operation *past = cast<semantic::SVCallExpressionOp>(call->clone());
+        for (Operation *child : getChildren(past))
+          child->erase();
+        past->setAttr("callee_name", builder.getStringAttr("$past"));
+        past->setAttr("argument_count", builder.getI64IntegerAttr(2));
+        past->setAttr("defaulted_arguments",
+                      builder.getDenseI64ArrayAttr({0, 0}));
+        past->setAttr("semantic_type", type);
+        past->setAttr("is_signed", isSigned);
+        past->setAttr("node_id", builder.getI64IntegerAttr(nextNodeId++));
+        Block &arguments = past->getRegion(0).front();
+        arguments.push_back(value);
+        arguments.push_back(depth);
+        block->push_back(past);
+      }
+      sides.front()->erase();
+      block->push_front(freshNodes(flow.actual->clone()));
+      items.push_back(item);
+    }
+
+    // The instance loses its local variables and match items, which leaves the
+    // end points it would have had.
+    for (auto [element, distance] : elements) {
+      if (auto matched =
+              dyn_cast<semantic::SVSequenceWithMatchExprOp>(element)) {
+        Operation *inner = getChildren(matched).front();
+        inner->moveBefore(matched);
+        matched.erase();
+      }
+    }
+    instance->setAttr("local_variable_count", builder.getI64IntegerAttr(0));
+    instance->setAttr("local_variable_has_initializer",
+                      builder.getDenseI64ArrayAttr({}));
+    instance->setAttr("local_variable_paths", builder.getArrayAttr({}));
+    instance->setAttr("local_variable_symbols", builder.getArrayAttr({}));
+
+    // `(T.triggered, items...)`, at the place of the Boolean.
+    Operation *anchor = parent.getOperation();
+    Block *owner = anchor->getBlock();
+    Block::iterator position = std::next(anchor->getIterator());
+    anchor->remove();
+    SmallVector<Operation *> children{anchor};
+    llvm::append_range(children, items);
+    Operation *replacement = makeOp(
+        semantic::SVSequenceWithMatchExprOp::getOperationName(),
+        {builder.getNamedAttr("has_repetition", builder.getBoolAttr(false)),
+         builder.getNamedAttr("match_item_count",
+                              builder.getI64IntegerAttr(items.size())),
+         builder.getNamedAttr("repetition_is_unbounded",
+                              builder.getBoolAttr(false))},
+        children);
+    owner->getOperations().insert(position, replacement);
+  }
+}
+
 LogicalResult synthesizeMatchedTrackers(semantic::SVRootSymbolOp root,
                                         Builder &builder, unsigned &trackers) {
   SmallVector<semantic::SVCallExpressionOp> calls;
@@ -1720,6 +1952,7 @@ LogicalResult synthesizeMatchedTrackers(semantic::SVRootSymbolOp root,
       record->setAttr("argument_count", builder.getI64IntegerAttr(0));
       record->setAttr("defaulted_arguments", builder.getDenseI64ArrayAttr({}));
       record->setAttr("talos.matched_index", index);
+      record->setAttr("is_void_casted", builder.getUnitAttr());
       SmallVector<NamedAttribute> common;
       for (NamedAttribute attribute : call->getAttrs()) {
         StringRef name = attribute.getName().getValue();
