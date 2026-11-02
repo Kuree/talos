@@ -1515,10 +1515,11 @@ executeCompilation(const InputArgList &args,
     if (emitSim || emitSchedule || native)
       talos::buildTalosToSimulationPipeline(
           passManager, requestedWorkers.value_or(1), vpiMode, optLevel,
-          // Exact eval selection needs the verified static-state/NBA and
-          // superstep plans even at O0. Auto otherwise follows optimization
+          // Exact eval and AOT selection need the verified static-state/NBA
+          // and superstep plans even at O0. Auto otherwise follows optimization
           // level; an explicit "off" remains authoritative.
-          staticSpecialization == "auto" && nativeScheduler == "eval" &&
+          staticSpecialization == "auto" &&
+                  (nativeScheduler == "eval" || nativeScheduler == "aot") &&
                   executionTier != "bytecode"
               ? "on"
               : staticSpecialization,

@@ -199,6 +199,16 @@ LogicalResult NativePipelineAnalysis::planActors() {
         nativeScheduler == schedule::NativeSchedulerMode::AOT || evalScheduler;
     useAOT = aotEligibility.isEligible() &&
              (forcedAOT || aotEligibility.isAOTCostEffective());
+    // A writable VPI can force state before the first process runs (38.34), and
+    // only the guarded plans of static specialization keep the generated
+    // coordinator's readiness coherent with that. Lower levels leave those plans
+    // off, so there the generic scheduler runs the design.
+    if (useAOT && vpi.allowsWrite() && !staticSpecialization) {
+      if (forcedAOT)
+        return module.emitError("native AOT scheduling with a writable VPI "
+                                "requires static specialization");
+      useAOT = false;
+    }
   }
   // IEEE 1800-2017 16.14 and Clause 31 coordinators deliberately retain cohort
   // ordering in a runtime-owned actor. Forced-hybrid eligibility alone also
