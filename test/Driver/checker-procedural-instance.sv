@@ -18,6 +18,13 @@ checker c1(event clk, logic [7:0] a, b);
       else $display("%0t %m fail", $time);
   p3: assert #0 (a != 8'hee) $display("%0t %m pass", $time);
 endchecker
+// A child checker's static assertions count as instantiated in the parent.
+checker inner(event clk, logic [7:0] a);
+  i: assert property (@clk a == 10) $display("%0t %m pass", $time);
+endchecker
+checker outer(event clk, logic [7:0] a);
+  inner child(clk, a);
+endchecker
 module top;
   bit clk, en;
   logic [7:0] in1 = 10, arr [0:20];
@@ -27,6 +34,7 @@ module top;
     automatic logic [7:0] v1 = 0;
     if (en) begin
       c1 check_inside(posedge clk, in1, v1);
+      outer nested(posedge clk, in1);
     end
     for (int i = 0; i < 4; i++) begin
       v1 = v1 + 5;
@@ -38,7 +46,8 @@ module top;
   always #5 clk = ~clk;
   initial begin #12 en = 1; #4 $finish; end
 endmodule
-// CHECK-NOT: check_inside
+// CHECK-NOT: {{check_inside|nested}}
+// CHECK-DAG: 15 top.nested.child.i pass
 // CHECK-DAG: 15 top.check_outside.p0 pass sum=11
 // CHECK-DAG: 15 top.check_inside.p0 pass sum=11
 // CHECK-DAG: 15 top.check_loop.p0 pass sum=11

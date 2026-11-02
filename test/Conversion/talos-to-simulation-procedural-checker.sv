@@ -1,4 +1,5 @@
 // RUN: talos -emit-slang %s | talos-opt --convert-slang-to-talos '--lower-talos-to-sim=opt-level=0' | FileCheck %s
+// RUN: talos -emit-slang %s | FileCheck %s --check-prefix=MARK
 
 // IEEE 1800-2023 17.3, 17.4: a procedural checker instance's procedures run at
 // every time step, on the clock of the instantiation when a formal infers it,
@@ -23,3 +24,7 @@ endmodule
 // CHECK: simulation.suspend.edge posedge %arg1
 // CHECK: cf.cond_br
 // CHECK: simulation.spawn @unit_1.fork
+
+// Only the assertion of the procedural instance is marked to move.
+// MARK-COUNT-1: is_from_assertion
+// MARK-NOT: is_from_assertion

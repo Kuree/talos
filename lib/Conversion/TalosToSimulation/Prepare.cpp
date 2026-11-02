@@ -756,29 +756,63 @@ void TalosSimPreparePass::runOnOperation() {
     signalPassFailure();
     return;
   }
-  bindProceduralCheckerClocks(semanticRoot, coveragePlanBuilder);
-  rewriteTriggeredLocalOutputs(semanticRoot, coveragePlanBuilder);
+  // One walk decides which rarely used features are present, so that a design
+  // without them does not pay a walk for each.
+  struct {
+    bool checkers = false;
+    bool proceduralCheckers = false;
+    bool classes = false;
+    bool timingChecks = false;
+    bool triggered = false;
+    bool matched = false;
+    bool getpattern = false;
+    bool stacktrace = false;
+  } rareFeatures;
+  semanticRoot->walk([&](Operation *op) {
+    if (isa<semantic::SVCheckerInstanceBodySymbolOp>(op)) {
+      rareFeatures.checkers = true;
+    } else if (isa<semantic::SVProceduralCheckerStatementOp>(op)) {
+      rareFeatures.proceduralCheckers = true;
+    } else if (isa<semantic::SVClassPropertySymbolOp>(op)) {
+      rareFeatures.classes = true;
+    } else if (isa<semantic::SVSystemTimingCheckSymbolOp>(op)) {
+      rareFeatures.timingChecks = true;
+    } else if (auto call = dyn_cast<semantic::SVCallExpressionOp>(op)) {
+      StringRef name = call.getCalleeName();
+      rareFeatures.triggered |= name == "triggered";
+      rareFeatures.matched |= name == "matched";
+      rareFeatures.getpattern |= name == "$getpattern";
+      rareFeatures.stacktrace |= name == "$stacktrace";
+    }
+  });
+  if (rareFeatures.proceduralCheckers)
+    bindProceduralCheckerClocks(semanticRoot, coveragePlanBuilder);
+  if (rareFeatures.triggered)
+    rewriteTriggeredLocalOutputs(semanticRoot, coveragePlanBuilder);
   if (failed(resolveInferredAssertionQueries(semanticRoot, coveragePlanBuilder)) ||
       failed(rebindVirtualInterfaceCallDefaults(semanticRoot, semanticSymbols,
                                                 coveragePlanBuilder))) {
     signalPassFailure();
     return;
   }
-  if (failed(
-          synthesizeFreeCheckerVariables(semanticRoot, coveragePlanBuilder))) {
+  if (rareFeatures.checkers && failed(synthesizeFreeCheckerVariables(
+                                   semanticRoot, coveragePlanBuilder))) {
     signalPassFailure();
     return;
   }
-  synthesizeProceduralCheckers(semanticRoot, semanticSymbols,
-                               coveragePlanBuilder);
+  if (rareFeatures.proceduralCheckers)
+    synthesizeProceduralCheckers(semanticRoot, semanticSymbols,
+                                 coveragePlanBuilder);
   unsigned matchedTrackers = 0;
-  if (failed(synthesizeMatchedTrackers(semanticRoot, coveragePlanBuilder,
+  if (rareFeatures.matched &&
+      failed(synthesizeMatchedTrackers(semanticRoot, coveragePlanBuilder,
                                        matchedTrackers))) {
     signalPassFailure();
     return;
   }
   llvm::StringSet<> explicitDelayedSources;
-  if (!sim::has<sim::metadata::NoNegativeTimingChecks>(module) &&
+  if (rareFeatures.timingChecks &&
+      !sim::has<sim::metadata::NoNegativeTimingChecks>(module) &&
       failed(synthesizeExplicitDelayedDrivers(semanticRoot, coveragePlanBuilder,
                                               explicitDelayedSources))) {
     signalPassFailure();
@@ -788,7 +822,7 @@ void TalosSimPreparePass::runOnOperation() {
 
   // IEEE 1800-2023 8.19: an instance constant takes its value once, in the
   // class constructor.
-  {
+  if (rareFeatures.classes) {
     llvm::StringSet<> instanceConstants;
     semanticRoot->walk([&](semantic::SVClassPropertySymbolOp property) {
       if (property.getIsConst().value_or(false) &&
@@ -808,52 +842,57 @@ void TalosSimPreparePass::runOnOperation() {
   // assignment statement where the left-hand side is a concatenation of scalar
   // nets and the argument to the system function is a memory element
   // reference."
-  semanticRoot->walk([&](semantic::SVCallExpressionOp call) {
-    if (!call.getIsSystemCall() || call.getCalleeName() != "$getpattern")
-      return;
-    Operation *use = call->getParentOp();
-    while (isa_and_nonnull<semantic::SVConversionExpressionOp>(use))
-      use = use->getParentOp();
-    auto assignment = dyn_cast_or_null<semantic::SVAssignmentExpressionOp>(use);
-    SmallVector<Operation *> operands =
-        assignment ? getChildren(assignment) : SmallVector<Operation *>{};
-    auto target =
-        operands.empty()
-            ? semantic::SVConcatenationExpressionOp{}
-            : dyn_cast<semantic::SVConcatenationExpressionOp>(operands.front());
-    bool placed = target && isa_and_nonnull<semantic::SVContinuousAssignSymbolOp>(
-                                assignment->getParentOp());
-    auto isScalarNet = [&](Operation *operand) {
-      auto reference = operand->getAttrOfType<SymbolRefAttr>("referenced_symbol");
-      auto type = operand->getAttrOfType<TypeAttr>("semantic_type");
-      auto symbol = reference
-                        ? semanticSymbols.find(reference.getLeafReference())
-                        : semanticSymbols.end();
-      return symbol != semanticSymbols.end() &&
-             isa<semantic::SVNetSymbolOp>(symbol->second) && type &&
-             getSemanticPackedWidth(type.getValue()) == 1;
-    };
-    placed = placed && llvm::all_of(getChildren(target), isScalarNet);
-    SmallVector<Operation *> arguments = getChildren(call);
-    auto element =
-        arguments.size() == 1
-            ? dyn_cast<semantic::SVElementSelectExpressionOp>(arguments.front())
-            : semantic::SVElementSelectExpressionOp{};
-    SmallVector<Operation *> selected =
-        element ? getChildren(element) : SmallVector<Operation *>{};
-    auto arrayType = selected.empty()
-                         ? TypeAttr{}
-                         : selected.front()->getAttrOfType<TypeAttr>(
-                               "semantic_type");
-    // A select of a packed vector names a bit, not a memory element.
-    if (!placed || !arrayType || getSemanticPackedWidth(arrayType.getValue())) {
-      emitError(getSemanticLocation(call))
-          << "$getpattern may only be used in a continuous assignment to a "
-             "concatenation of scalar nets with a memory element as its "
-             "argument";
-      invalid = true;
-    }
-  });
+  if (rareFeatures.getpattern)
+    semanticRoot->walk([&](semantic::SVCallExpressionOp call) {
+      if (!call.getIsSystemCall() || call.getCalleeName() != "$getpattern")
+        return;
+      Operation *use = call->getParentOp();
+      while (isa_and_nonnull<semantic::SVConversionExpressionOp>(use))
+        use = use->getParentOp();
+      auto assignment =
+          dyn_cast_or_null<semantic::SVAssignmentExpressionOp>(use);
+      SmallVector<Operation *> operands =
+          assignment ? getChildren(assignment) : SmallVector<Operation *>{};
+      auto target = operands.empty()
+                        ? semantic::SVConcatenationExpressionOp{}
+                        : dyn_cast<semantic::SVConcatenationExpressionOp>(
+                              operands.front());
+      bool placed =
+          target && isa_and_nonnull<semantic::SVContinuousAssignSymbolOp>(
+                        assignment->getParentOp());
+      auto isScalarNet = [&](Operation *operand) {
+        auto reference =
+            operand->getAttrOfType<SymbolRefAttr>("referenced_symbol");
+        auto type = operand->getAttrOfType<TypeAttr>("semantic_type");
+        auto symbol = reference
+                          ? semanticSymbols.find(reference.getLeafReference())
+                          : semanticSymbols.end();
+        return symbol != semanticSymbols.end() &&
+               isa<semantic::SVNetSymbolOp>(symbol->second) && type &&
+               getSemanticPackedWidth(type.getValue()) == 1;
+      };
+      placed = placed && llvm::all_of(getChildren(target), isScalarNet);
+      SmallVector<Operation *> arguments = getChildren(call);
+      auto element = arguments.size() == 1
+                         ? dyn_cast<semantic::SVElementSelectExpressionOp>(
+                               arguments.front())
+                         : semantic::SVElementSelectExpressionOp{};
+      SmallVector<Operation *> selected =
+          element ? getChildren(element) : SmallVector<Operation *>{};
+      auto arrayType =
+          selected.empty()
+              ? TypeAttr{}
+              : selected.front()->getAttrOfType<TypeAttr>("semantic_type");
+      // A select of a packed vector names a bit, not a memory element.
+      if (!placed || !arrayType ||
+          getSemanticPackedWidth(arrayType.getValue())) {
+        emitError(getSemanticLocation(call))
+            << "$getpattern may only be used in a continuous assignment to a "
+               "concatenation of scalar nets with a memory element as its "
+               "argument";
+        invalid = true;
+      }
+    });
 
   // IEEE 1800-2023 20.17.2: $stacktrace reports the call stack from its
   // caller up to the top-level process. Generated code keeps no activation
@@ -861,7 +900,7 @@ void TalosSimPreparePass::runOnOperation() {
   // at compile time: each subroutine on it has exactly one static call site.
   // A subroutine with several callers, a class method (dispatch is dynamic)
   // or a recursive chain ends the list at the last unambiguous frame.
-  {
+  if (rareFeatures.stacktrace) {
     SmallVector<Operation *> stacktraces;
     llvm::StringMap<SmallVector<Operation *>> callSites;
     semanticRoot->walk([&](semantic::SVCallExpressionOp call) {
@@ -3318,24 +3357,25 @@ void TalosSimPreparePass::runOnOperation() {
   SmallVector<semantic::SVSystemTimingCheckSymbolOp> delayedSignalCopies;
   bool negativeChecksEnabled =
       !sim::has<sim::metadata::NoNegativeTimingChecks>(module);
-  semanticRoot->walk([&](semantic::SVSystemTimingCheckSymbolOp check) {
-    bool negative = check->hasAttr("talos.negative_timing_check");
-    if (negative && !negativeChecksEnabled) {
-      // The checks are off: a negative limit then bounds nothing (31.9.4).
-      if (auto times = check->getAttrOfType<DenseI64ArrayAttr>(
-              "timing_check_arg_time_fs")) {
-        SmallVector<int64_t> clamped(times.asArrayRef());
-        for (int64_t &time : clamped)
-          time = std::max<int64_t>(time, 0);
-        check->setAttr("timing_check_arg_time_fs",
-                       builder.getDenseI64ArrayAttr(clamped));
+  if (rareFeatures.timingChecks)
+    semanticRoot->walk([&](semantic::SVSystemTimingCheckSymbolOp check) {
+      bool negative = check->hasAttr("talos.negative_timing_check");
+      if (negative && !negativeChecksEnabled) {
+        // The checks are off: a negative limit then bounds nothing (31.9.4).
+        if (auto times = check->getAttrOfType<DenseI64ArrayAttr>(
+                "timing_check_arg_time_fs")) {
+          SmallVector<int64_t> clamped(times.asArrayRef());
+          for (int64_t &time : clamped)
+            time = std::max<int64_t>(time, 0);
+          check->setAttr("timing_check_arg_time_fs",
+                         builder.getDenseI64ArrayAttr(clamped));
+        }
+        check->removeAttr("talos.negative_timing_check");
+        negative = false;
       }
-      check->removeAttr("talos.negative_timing_check");
-      negative = false;
-    }
-    if (check->hasAttr("talos.delayed_signal_args"))
-      delayedSignalCopies.push_back(check);
-  });
+      if (check->hasAttr("talos.delayed_signal_args"))
+        delayedSignalCopies.push_back(check);
+    });
   if (invalid)
     return abort();
 

@@ -17,11 +17,12 @@ module still_zero; endmodule
 module after_reset; endmodule
 
 // Anchors come in module-name order: after_reset, by_distributed, by_path,
-// by_unit, by_zero, plain, still_zero.
-// CHECK: selector = 47 : i32, value = 1 : i32
+// by_unit, by_zero, plain, still_zero. after_reset and plain have no record, as
+// that is what the runtime reports for none.
+// CHECK-NOT: selector = 47 : i32, value = 1 : i32
 // CHECK: selector = 47 : i32, value = 3 : i32
 // CHECK: selector = 47 : i32, value = 2 : i32
 // CHECK: selector = 47 : i32, value = 4 : i32
 // CHECK: selector = 47 : i32, value = 5 : i32
-// CHECK: selector = 47 : i32, value = 1 : i32
 // CHECK: selector = 47 : i32, value = 5 : i32
+// CHECK-NOT: selector = 47 : i32

@@ -1145,6 +1145,18 @@ public:
   /// modules that follow it in the source description" until `resetall, and
   /// record the state in force at each module, interface or program.
   void collectOptionalDirectives() {
+    // A design without these directives does not pay for a walk over its
+    // tokens, and carries no record of them.
+    bool mentioned = false;
+    for (slang::BufferID buffer : sourceManager.getAllBuffers()) {
+      std::string_view text = sourceManager.getSourceText(buffer);
+      mentioned |=
+          text.find("`delay_mode_") != std::string_view::npos ||
+          text.find("`default_decay_time") != std::string_view::npos ||
+          text.find("`default_trireg_strength") != std::string_view::npos;
+    }
+    if (!mentioned)
+      return;
     using slang::parsing::TokenKind;
     using slang::parsing::TriviaKind;
     using slang::syntax::SyntaxKind;
@@ -4032,8 +4044,11 @@ private:
           auto directives = optionalDirectives.find(declaration);
           if (directives != optionalDirectives.end()) {
             const OptionalDirectiveState &state = directives->second;
-            attrs.set(sim::metadata::VpiDefDelayMode::getNameStr(),
-                      builder.getI32IntegerAttr(state.delayMode));
+            // The runtime reports vpiDelayModeNone without a record (E.4 to
+            // E.7).
+            if (state.delayMode != 1)
+              attrs.set(sim::metadata::VpiDefDelayMode::getNameStr(),
+                        builder.getI32IntegerAttr(state.delayMode));
             if (state.decayTime)
               attrs.set(sim::metadata::DefaultDecayTime::getNameStr(),
                         builder.getF64FloatAttr(*state.decayTime));
@@ -5206,8 +5221,21 @@ private:
       auto procedureKind = node.procedureKind;
       if (node.isFromAssertion) {
         // A procedural checker instance moves these to its instantiation
-        // (17.3).
-        attrs.set("is_from_assertion", builder.getUnitAttr());
+        // (17.3), child checkers' included. No other design needs them marked.
+        // A body's own parent scope is that of the checker's declaration, so
+        // the walk goes through the instance.
+        const slang::ast::Scope *scope = node.getParentScope();
+        while (scope) {
+          const auto *body =
+              scope->asSymbol().as_if<slang::ast::CheckerInstanceBodySymbol>();
+          if (!body || !body->parentInstance)
+            break;
+          if (body->isProcedural) {
+            attrs.set("is_from_assertion", builder.getUnitAttr());
+            break;
+          }
+          scope = body->parentInstance->getParentScope();
+        }
         // A label wraps the assertion in an implicit block.
         const slang::ast::Statement *assertion = &node.getBody();
         while (const auto *block =

@@ -11841,6 +11841,13 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get(PLI_INT32 property,
         property == vpiIsProtected)
       return handle->protectedObject;
     VPIFixedPropertyValue value{};
+    // IEEE 1800-2023 E.4 to E.7: only a module under a delay-mode directive has
+    // a record of one.
+    if (property == vpiDefDelayMode && handle->form == VPIObjectForm::Design &&
+        talos_rt_cached_vpi_fixed_property(handle->owner->context,
+                                           handle->cursor, property,
+                                           &value) != TALOS_RT_OK)
+      return vpiDelayModeNone;
     if (!fixedPropertyFor(handle, *propertyDescriptor, value))
       return vpiUndefined;
     if (value.kind != static_cast<uint8_t>(propertyDescriptor->valueKind)) {
