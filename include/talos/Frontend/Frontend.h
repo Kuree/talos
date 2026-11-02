@@ -57,6 +57,9 @@ struct FrontendOptions {
   std::vector<std::string> warningOptions;
   std::vector<std::string> suppressWarningsPaths;
   std::vector<std::string> slangArgs;
+  /// Holds standard input once the input '-' has read it, for another
+  /// compilation of the same inputs. Standard input cannot be read twice.
+  std::optional<std::string> *standardInputCache = nullptr;
 
   bool singleUnit = false;
   /// Provide the compiler-owned IEEE 1801 package and supply intrinsics.

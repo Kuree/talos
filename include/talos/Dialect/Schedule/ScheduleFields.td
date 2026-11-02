@@ -25,6 +25,12 @@ def EvalCheckpointSafe : ScheduleField<"EvalCheckpointSafe", "schedule.eval.chec
     "::mlir::UnitAttr">;
 def EvalCoalescedSlots : ScheduleField<"EvalCoalescedSlots", "schedule.eval.coalesced_slots",
     "::mlir::IntegerAttr">;
+// The driver can still recompile with the generic scheduler, so a failed eval
+// call closure check marks the module instead of reporting an error.
+def EvalClosureRetryAllowed : ScheduleField<"EvalClosureRetryAllowed", "schedule.eval.closure_retry_allowed",
+    "::mlir::UnitAttr">;
+def EvalClosureRejected : ScheduleField<"EvalClosureRejected", "schedule.eval.closure_rejected",
+    "::mlir::UnitAttr">;
 def EvalCompactNbaMetadata : ScheduleField<"EvalCompactNbaMetadata", "schedule.eval.compact_nba_metadata",
     "::mlir::UnitAttr">;
 def EvalConditionallyTwoState : ScheduleField<"EvalConditionallyTwoState", "schedule.eval.conditionally_two_state",

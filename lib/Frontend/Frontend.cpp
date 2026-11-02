@@ -8656,13 +8656,22 @@ buildSlangArguments(ArrayRef<std::string> inputs,
 /// directory. Cache standard input under that name instead, so slang's own
 /// load still reads it in input order.
 static bool cacheStandardInput(slang::driver::Driver &driver,
-                               ArrayRef<std::string> inputs) {
+                               ArrayRef<std::string> inputs,
+                               const FrontendOptions &options) {
   if (!llvm::is_contained(inputs, "-"))
     return true;
   std::error_code error;
   std::filesystem::path name = std::filesystem::weakly_canonical("-", error);
   // Slang reports a resolution failure itself.
-  if (error || name == "-")
+  if (error)
+    return true;
+  std::optional<std::string> *cache = options.standardInputCache;
+  if (cache && *cache) {
+    driver.sourceManager.assignText(slang::getU8Str(name), **cache);
+    return true;
+  }
+  // Slang can read it itself when nothing else will need it.
+  if (name == "-" && !cache)
     return true;
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> text =
       llvm::MemoryBuffer::getSTDIN();
@@ -8671,6 +8680,8 @@ static bool cacheStandardInput(slang::driver::Driver &driver,
                  << text.getError().message() << '\n';
     return false;
   }
+  if (cache)
+    *cache = (*text)->getBuffer().str();
   driver.sourceManager.assignText(slang::getU8Str(name), (*text)->getBuffer());
   return true;
 }
@@ -8698,7 +8709,8 @@ preprocessSystemVerilog(ArrayRef<std::string> inputFilenames,
     slang::bitmask<slang::driver::PreprocessOutputFlags> flags;
     succeeded =
         driver.parseCommandLine(static_cast<int>(argv.size()), argv.data()) &&
-        driver.processOptions() && cacheStandardInput(driver, inputFilenames);
+        driver.processOptions() &&
+        cacheStandardInput(driver, inputFilenames, options);
     if (succeeded) {
       succeeded = driver.runPreprocessor(flags);
     }
@@ -8726,7 +8738,8 @@ importSystemVerilog(ArrayRef<std::string> inputFilenames, MLIRContext &context,
     argv.push_back(argument.c_str());
 
   if (!driver.parseCommandLine(static_cast<int>(argv.size()), argv.data()) ||
-      !driver.processOptions() || !cacheStandardInput(driver, inputFilenames))
+      !driver.processOptions() ||
+      !cacheStandardInput(driver, inputFilenames, options))
     return failure();
   if (!driver.parseAllSources())
     return failure();

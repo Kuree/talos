@@ -18,6 +18,27 @@ module attributes {
 
 // -----
 
+// While the driver can still compile with the generic scheduler, a failed check of
+// any kind is no error: only the mark on the module tells it to.
+module attributes {
+  llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128",
+  llvm.target_triple = "x86_64-unknown-linux-gnu",
+  schedule.eval.closure_retry_allowed,
+  schedule.eval.generated
+} {
+  llvm.func @talos_rt_forbidden()
+  llvm.func @external_symbol()
+  llvm.func @__talos_eval_fast_coordinator_bad() attributes {
+      schedule.eval.call_closure_root
+  } {
+    llvm.call @talos_rt_forbidden() : () -> ()
+    llvm.call @external_symbol() : () -> ()
+    llvm.return
+  }
+}
+
+// -----
+
 // Strength resolution is a context-free truth-table helper. Generated gate
 // kernels may call it without opening a scheduler or runtime-state edge.
 module attributes {

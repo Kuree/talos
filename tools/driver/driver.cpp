@@ -1064,10 +1064,14 @@ buildFrontendOptions(const InputArgList &args, bool &valid,
   return options;
 }
 
-static int
-executeCompilation(const InputArgList &args,
-                   const talos::driver::DriverConfiguration &config,
-                   bool genericSchedulerRetry = false) {
+/// What executeCompilation returns for the caller to compile once more with the
+/// generic scheduler, after the first attempt has released all it held.
+static constexpr int genericSchedulerRetryStatus = -1;
+
+static int executeCompilation(const InputArgList &args,
+                              const talos::driver::DriverConfiguration &config,
+                              std::optional<std::string> &standardInput,
+                              bool genericSchedulerRetry = false) {
   SmallVector<std::string> inputs;
   for (const Arg *arg : args.filtered(OPT_INPUT))
     inputs.emplace_back(arg->getValue());
@@ -1078,6 +1082,10 @@ executeCompilation(const InputArgList &args,
   bool valid = true;
   talos::frontend::FrontendOptions frontendOptions =
       buildFrontendOptions(args, valid, config);
+  frontendOptions.standardInputCache = &standardInput;
+  // The first attempt reported these already.
+  if (genericSchedulerRetry)
+    frontendOptions.warningOptions.emplace_back("none");
   // Command files were already spliced into argv, so anything they contributed
   // is present here as an ordinary input.
   if (inputs.empty()) {
@@ -1377,7 +1385,10 @@ executeCompilation(const InputArgList &args,
   // handler is registered, so without this every warning and remark a pass
   // emits -- and every note attached to an error -- is dropped on the floor.
   // Print all of them, in the format the fallback uses for errors.
-  context.getDiagEngine().registerHandler([](Diagnostic &diagnostic) {
+  context.getDiagEngine().registerHandler([=](Diagnostic &diagnostic) {
+    if (genericSchedulerRetry &&
+        diagnostic.getSeverity() != DiagnosticSeverity::Error)
+      return success();
     std::function<void(Diagnostic &)> print = [&](Diagnostic &entry) {
       llvm::raw_ostream &os = llvm::errs();
       if (!llvm::isa<UnknownLoc>(entry.getLocation()))
@@ -1579,16 +1590,18 @@ executeCompilation(const InputArgList &args,
     nativeOptions.target = targetName == "wasm32"
                                ? talos::driver::TargetKind::Wasm
                                : talos::driver::TargetKind::Native;
-    // A design the automatic scheduler planned for eval can still need a runtime
-    // call in the eval closure, which only final lowering sees. That is no reason
-    // to reject the design: the generic scheduler runs it.
     if (nativeScheduler == "auto")
-      (*module)->setAttr("talos.eval_closure_retry_allowed",
-                        UnitAttr::get(&context));
+      talos::schedule::set<talos::schedule::Field::EvalClosureRetryAllowed>(
+          *module, UnitAttr::get(&context));
     if (succeeded(talos::driver::emitTargetOutput(*module, nativeOptions)))
       return 0;
-    if ((*module)->hasAttr("talos.eval_closure_rejected"))
-      return executeCompilation(args, config, /*genericSchedulerRetry=*/true);
+    if (talos::schedule::has<talos::schedule::Field::EvalClosureRejected>(
+            *module)) {
+      if (nativeOptions.timing)
+        errs() << "note: eval call closure check failed; compiling again with "
+                  "the generic scheduler\n";
+      return genericSchedulerRetryStatus;
+    }
     return 1;
   }
 
@@ -1727,7 +1740,11 @@ int talos::driver::runTalosDriver(int argc, char **argv,
 #endif
   }
 
-  int status = executeCompilation(args, config);
+  std::optional<std::string> standardInput;
+  int status = executeCompilation(args, config, standardInput);
+  if (status == genericSchedulerRetryStatus)
+    status = executeCompilation(args, config, standardInput,
+                                /*genericSchedulerRetry=*/true);
   // A reusable Emscripten module does not exit after callMain(), so its libc
   // streams do not get the process-exit flush a native invocation receives.
   // Flush explicitly to deliver linker diagnostics to print/printErr.
