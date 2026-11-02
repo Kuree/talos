@@ -1,4 +1,4 @@
-// Portable coverage scaling probe. See README.md for build instructions.
+// Portable coverage scaling probe.
 #include "talos/Coverage/CoverageDatabase.h"
 
 #include <chrono>

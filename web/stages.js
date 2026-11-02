@@ -1,6 +1,6 @@
 // The compiler's actual pipeline, used as the inspector's tab strip.
 //
-// Order follows DESIGN.md: source → slang → talos → sim → schedule → LLVM →
+// Compiler stage order: source → slang → talos → sim → schedule → LLVM →
 // run. Running is the terminus, so it is both the last tab and the default
 // one -- the page's job is to run your design; the IR stages are there when
 // you want to look inside. The waveform and coverage views belong after Run
