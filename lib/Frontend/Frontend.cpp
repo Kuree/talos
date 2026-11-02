@@ -5222,12 +5222,19 @@ private:
       if (node.isFromAssertion) {
         // A procedural checker instance moves these to its instantiation
         // (17.3), child checkers' included. No other design needs them marked.
-        // A body's own parent scope is that of the checker's declaration, so
-        // the walk goes through the instance.
+        // A generate block can sit between them. A body's own parent scope is
+        // that of the checker's declaration, so the walk goes through the
+        // instance.
         const slang::ast::Scope *scope = node.getParentScope();
         while (scope) {
+          const slang::ast::Symbol &symbol = scope->asSymbol();
+          if (symbol.kind == slang::ast::SymbolKind::GenerateBlock ||
+              symbol.kind == slang::ast::SymbolKind::GenerateBlockArray) {
+            scope = symbol.getParentScope();
+            continue;
+          }
           const auto *body =
-              scope->asSymbol().as_if<slang::ast::CheckerInstanceBodySymbol>();
+              symbol.as_if<slang::ast::CheckerInstanceBodySymbol>();
           if (!body || !body->parentInstance)
             break;
           if (body->isProcedural) {

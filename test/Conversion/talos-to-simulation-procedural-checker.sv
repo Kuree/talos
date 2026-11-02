@@ -1,5 +1,7 @@
 // RUN: talos -emit-slang %s | talos-opt --convert-slang-to-talos '--lower-talos-to-sim=opt-level=0' | FileCheck %s
 // RUN: talos -emit-slang %s | FileCheck %s --check-prefix=MARK
+// RUN: talos -emit-slang -DGENERATE %s | FileCheck %s --check-prefix=GENERATE
+// RUN: talos -emit-slang -DINFER %s | talos-opt --convert-slang-to-talos '--lower-talos-to-sim=opt-level=0' | FileCheck %s --check-prefix=INFER
 // RUN: talos -emit-slang -DLOOP %s | talos-opt --convert-slang-to-talos '--lower-talos-to-sim=opt-level=0' | FileCheck %s --check-prefix=LOOP
 
 // IEEE 1800-2023 17.3, 17.4: a procedural checker instance's procedures run at
@@ -26,6 +28,36 @@ module top;
       outer instance_in_loop(posedge clk, in, values[v]);
     end
   end
+endmodule
+`elsif GENERATE
+// A generate block does not take these out of the instance.
+checker c(logic a);
+  if (1) begin : g
+    p: assert #0 (a);
+  end
+endchecker
+module top;
+  bit clk;
+  logic a;
+  always @(posedge clk) c inst(a);
+endmodule
+`elsif INFER
+// IEEE 1800-2023 16.14.6, on the example of 17.5. Two edges leave no unique clock,
+// so the default clocking applies. The term the body reads rules out its edge, so
+// the other one is the clock.
+checker c(logic a, bit dclk, bit c1, bit c2);
+  default clocking @(posedge dclk); endclocking
+  logic z;
+  always_ff @(posedge c1 or posedge c2) p: assert property (a);
+  always_ff @(negedge c1 or negedge c2) begin
+    q: assert property (a);
+    z <= c2;
+  end
+endchecker
+module top;
+  bit clk, dclk, c1, c2;
+  logic a;
+  always @(posedge clk) c inst(a, dclk, c1, c2);
 endmodule
 `else
 checker c(input bit value, input event e = $inferred_clock);
@@ -61,3 +93,13 @@ endmodule
 // LOOP: simulation.spawn @[[UNIT]].fork
 // LOOP: simulation.spawn @[[UNIT]].fork.{{[0-9.]+}}(%arg0, %[[V]],
 // LOOP: cf.br ^bb{{[0-9]+}}(%[[V]],
+
+// GENERATE-COUNT-1: is_from_assertion
+// GENERATE-NOT: is_from_assertion
+
+// INFER: simulation.storage.decl 1 in {{.*}}"top.dclk"
+// INFER: simulation.storage.decl 2 in {{.*}}"top.c1"
+// INFER: simulation.func private @unit_0.fork.{{[0-9]+}}.0.48({{.*}}%[[P:arg[0-9]+]]: !simulation.ref<i1> {{{[^}]*}}descriptor_id = 1 : i64}
+// INFER: simulation.suspend.edge posedge %[[P]]
+// INFER: simulation.func private @unit_1.fork.{{[0-9]+}}.0.48({{.*}}%[[Q:arg[0-9]+]]: !simulation.ref<i1> {{{[^}]*}}descriptor_id = 2 : i64}
+// INFER: simulation.suspend.edge negedge %[[Q]]

@@ -1021,8 +1021,9 @@ findAssertionClockFlow(Operation *operation,
 static bool sameClockEvent(Operation *left, Operation *right) {
   if (left->getName() != right->getName())
     return false;
-  for (StringRef name : {"referenced_path", "edge_kind", "has_iff",
-                         "operator_kind", "constant_value", "callee_name"})
+  for (StringRef name :
+       {"referenced_path", "edge_kind", "has_iff", "operator_kind",
+        "constant_value", "callee_name", "selection_kind"})
     if (left->getAttr(name) != right->getAttr(name))
       return false;
   SmallVector<Operation *> leftChildren = getChildren(left);
@@ -1034,6 +1035,90 @@ static bool sameClockEvent(Operation *left, Operation *right) {
     if (!sameClockEvent(leftChild, rightChild))
       return false;
   return true;
+}
+
+/// The number of children of a concurrent assertion ahead of its property.
+static size_t
+assertionPropertyIndex(semantic::SVConcurrentAssertionStatementOp assertion) {
+  return static_cast<size_t>(assertion.getHasDefaultDisable()) +
+         static_cast<size_t>(
+             assertion.getHasContextualClock().value_or(false)) +
+         static_cast<size_t>(
+             static_cast<bool>(assertion.getDefaultClockingSymbolAttr()));
+}
+
+/// The event expression a procedure infers as the clock of its assertions
+/// (IEEE 1800-2023 16.14.6), or null for the default clocking to apply. Terms
+/// are compared by variable, not by the bits they select.
+static Operation *
+inferProcedureClock(semantic::SVProceduralBlockSymbolOp procedure,
+                    semantic::SVTimedStatementOp timed) {
+  // a), b): exactly one event control, and no blocking timing control.
+  bool anotherControl =
+      procedure
+          ->walk([&](Operation *nested) {
+            return nested != timed.getOperation() &&
+                           isa<semantic::SVTimedStatementOp,
+                               semantic::SVWaitStatementOp,
+                               semantic::SVWaitOrderStatementOp,
+                               semantic::SVWaitForkStatementOp>(nested)
+                       ? WalkResult::interrupt()
+                       : WalkResult::advance();
+          })
+          .wasInterrupted();
+  if (anotherControl)
+    return nullptr;
+  Operation *control = getChildren(timed).front();
+  SmallVector<Operation *> events;
+  if (isa<semantic::SVEventListControlOp>(control))
+    events = getChildren(control);
+  else if (isa<semantic::SVSignalEventControlOp>(control))
+    events.push_back(control);
+  // c) 2): what the body uses, other than as a clocking event or within
+  // assertion statements.
+  llvm::StringSet<> used;
+  procedure->walk<WalkOrder::PreOrder>([&](Operation *nested) {
+    if (nested == control ||
+        isa<semantic::SVConcurrentAssertionStatementOp,
+            semantic::SVImmediateAssertionStatementOp>(nested))
+      return WalkResult::skip();
+    if (auto path = nested->getAttrOfType<StringAttr>("referenced_path"))
+      used.insert(path.getValue());
+    return WalkResult::advance();
+  });
+  // c): the one event expression of the allowed forms.
+  Operation *inferred = nullptr;
+  for (Operation *event : events) {
+    auto signal = dyn_cast<semantic::SVSignalEventControlOp>(event);
+    SmallVector<Operation *> operands =
+        signal ? getChildren(signal) : SmallVector<Operation *>{};
+    if (operands.empty())
+      continue;
+    Operation *expression = operands.front();
+    bool isUsed = expression
+                      ->walk([&](Operation *term) {
+                        auto path =
+                            term->getAttrOfType<StringAttr>("referenced_path");
+                        return path && used.contains(path.getValue())
+                                   ? WalkResult::interrupt()
+                                   : WalkResult::advance();
+                      })
+                      .wasInterrupted();
+    bool allowed = false;
+    if (signal.getEdgeKind() != semantic::EdgeKind::Change) {
+      allowed = !isUsed;
+    } else if (!signal.getHasIff()) {
+      auto type = expression->getAttrOfType<TypeAttr>("semantic_type");
+      allowed = expression->hasAttr("clocking_block_event") ||
+                (type && isa<semantic::EventType>(type.getValue()) && !isUsed);
+    }
+    if (!allowed)
+      continue;
+    if (inferred)
+      return nullptr;
+    inferred = event;
+  }
+  return inferred;
 }
 
 /// The procedural checker statements of the design with the instance bodies
@@ -1091,6 +1176,8 @@ void bindProceduralCheckerClocks(semantic::SVRootSymbolOp root,
         // procedures does not reach into a procedural scope, so it is recorded
         // here. Any other assertion takes the context of the instantiation.
         Operation *clock = clocks.empty() ? nullptr : clocks.front();
+        // The event control of a procedure of the checker.
+        Operation *sensitivity = nullptr;
         bool ownProcedure = !procedure->hasAttr("is_from_assertion");
         if (ownProcedure) {
           SmallVector<Operation *> statements = getChildren(procedure);
@@ -1120,6 +1207,8 @@ void bindProceduralCheckerClocks(semantic::SVRootSymbolOp root,
             clock->erase();
             clock = resolved;
           }
+          sensitivity = clock;
+          clock = timed ? inferProcedureClock(procedure, timed) : nullptr;
         }
         procedure->walk(
             [&](semantic::SVConcurrentAssertionStatementOp assertion) {
@@ -1131,13 +1220,9 @@ void bindProceduralCheckerClocks(semantic::SVRootSymbolOp root,
                 return;
               assertion->setAttr("is_procedural", builder.getBoolAttr(true));
               SmallVector<Operation *> children = getChildren(assertion);
-              size_t index =
-                  static_cast<size_t>(assertion.getHasDefaultDisable()) +
-                  static_cast<size_t>(
-                      assertion.getHasContextualClock().value_or(false)) +
-                  static_cast<size_t>(static_cast<bool>(
-                      assertion.getDefaultClockingSymbolAttr()));
-              if (!clock || index >= children.size())
+              size_t index = assertionPropertyIndex(assertion);
+              if (!clock || !sameClockEvent(sensitivity, clock) ||
+                  index >= children.size())
                 return;
               Operation *leading =
                   findAssertionClockFlow(children[index], assertion);
