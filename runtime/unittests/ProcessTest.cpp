@@ -13955,7 +13955,8 @@ TEST(ProcessSpawn, BatchPreservesCapturesOrderRanksAndFailureOwnership) {
                                       9,
                                       1,
                                       0,
-                                      0};
+                                      0,
+                                      nullptr};
   uint64_t first = 0x123456789abcdef0, second = 0xfedcba9876543210;
   auto invalid = plan;
   invalid.schedule_flags = UINT32_MAX;
@@ -13993,7 +13994,7 @@ TEST(ProcessSpawn, RejectsInvalidCaptureAndDescriptorBeforeInsertion) {
     ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
     talos_rt_process_spawn_plan_v1 plan{
         &fixture.descriptor, 8, nullptr, nullptr, nullptr, 0, 0,
-        UINT32_MAX,          0, 0,       0,       0};
+        UINT32_MAX,          0, 0,       0,       0, nullptr};
     uint64_t capture = 42;
     if (failure == 0)
       plan.capture_size = fixture.layout.frame_size + 1;
@@ -14028,7 +14029,8 @@ TEST(ProcessSpawn, CreationAndAOTInsertionFailuresDoNotTransferOwnership) {
                                         0,
                                         0,
                                         0,
-                                        0};
+                                        0,
+                                        nullptr};
     EXPECT_EQ(talos_rt_v1_process_spawn(context, &plan, nullptr), 0u);
     EXPECT_NE(context->schedulerStatus, TALOS_RT_OK);
     EXPECT_TRUE(context->scheduledProcesses.empty());
@@ -14052,7 +14054,8 @@ TEST(ProcessSpawn, PrimingFailureLeavesInstanceOwnedByScheduler) {
                                       0,
                                       0,
                                       0,
-                                      TALOS_RT_SPAWN_PRIME};
+                                      TALOS_RT_SPAWN_PRIME,
+                                      nullptr};
   EXPECT_EQ(talos_rt_v1_process_spawn(context, &plan, nullptr), 0u);
   EXPECT_EQ(context->schedulerStatus, TALOS_RT_OUT_OF_RESOURCES);
   ASSERT_EQ(context->scheduledProcesses.size(), 1u);
@@ -14068,12 +14071,480 @@ TEST(ProcessSpawn, ReturnsTaggedLogicalProcessIdentity) {
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
   talos_rt_process_spawn_plan_v1 plan{
       &fixture.descriptor, 0, nullptr, nullptr, nullptr, 0, 0,
-      UINT32_MAX,          0, 0,       0,       0};
+      UINT32_MAX,          0, 0,       0,       0, nullptr};
   uint64_t token = talos_rt_v1_process_spawn(context, &plan, nullptr);
   EXPECT_EQ(token, TALOS_RT_LOGICAL_PROCESS_NATIVE_TAG | 1);
   uint32_t state = UINT32_MAX;
   EXPECT_EQ(talos_rt_v1_process_status(context, token, &state), TALOS_RT_OK);
   EXPECT_EQ(state, TALOS_RT_PROCESS_RUNNING);
+  talos_rt_v1_context_destroy(context);
+}
+
+std::vector<uint32_t> startedOwnerContinuations;
+
+// Record each execution's continuation, then wait again on
+// schedulerWaitHandle at continuation 1.
+talos_rt_status startedOwnerExecute(talos_rt_process_instance_v1 *instance) {
+  if (!instance || !instance->action)
+    return TALOS_RT_INVALID_ARGUMENT;
+  startedOwnerContinuations.push_back(instance->continuation);
+  auto *wait = reinterpret_cast<talos_rt_wait_record_v1 *>(instance->frame);
+  auto *entry = reinterpret_cast<talos_rt_wait_entry_v1 *>(wait + 1);
+  *wait = {TALOS_RT_VERSION, TALOS_RT_SUSPEND_CHANGE, 0, 1, 0, 0};
+  *entry = {schedulerWaitHandle, TALOS_RT_WAIT_EDGE_CHANGE, schedulerWaitWidth};
+  instance->continuation = 1;
+  *instance->action = {TALOS_RT_FRAGMENT_SUSPEND,
+                       TALOS_RT_SUSPEND_CHANGE,
+                       1,
+                       TALOS_RT_ACTION_FRAME_WAIT_RECORD,
+                       0,
+                       48};
+  return TALOS_RT_OK;
+}
+
+// IEEE 1800-2023 9.2: a TALOS_RT_SPAWN_STARTED process is created already
+// waiting at its continuation, with the record its suspension would store and
+// no first activation. The first execution through its instance replays the
+// entry: an ordinary owner's entry only arms the same wait, so the instance is
+// resumed again; a TIME_ZERO owner's entry is the activation (9.2.2.2), which
+// a plan without a generated owner takes through the runtime node.
+TEST(ProcessSpawn, StartedProcessWaitsAtItsContinuationAndReplaysItsEntry) {
+  for (bool timeZero : {false, true}) {
+    AOTTestState state;
+    const talos_rt_static_fanout_entry fanout[] = {
+        {1, 0, 1, TALOS_RT_WAIT_EDGE_CHANGE, 1, 0, 0, 1, 0, 0},
+    };
+    talos_rt_native_schedule_plan plan = makeAOTPlan(state, 1);
+    plan.flags = TALOS_RT_NATIVE_SCHEDULE_FULLY_STATIC |
+                 TALOS_RT_NATIVE_SCHEDULE_STATIC_FANOUT;
+    plan.fanout_entries = fanout;
+    plan.fanout_entry_count = std::size(fanout);
+    talos_rt_execution_descriptor_v1 execution{};
+    execution.version = TALOS_RT_VERSION;
+    execution.state_bit_count = 1;
+    talos_rt_context *context = nullptr;
+    ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 0, 1),
+              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
+
+    SchedulerFixture fixture(46);
+    fixture.descriptor.execution = &execution;
+    fixture.descriptor.native_execute = startedOwnerExecute;
+    schedulerWaitHandle = talos_rt_v1_native_state_static_handle(1);
+    schedulerWaitWidth = 1;
+    startedOwnerContinuations.clear();
+    struct {
+      talos_rt_wait_record_v1 header;
+      talos_rt_wait_entry_v1 entry;
+    } record{{TALOS_RT_VERSION, TALOS_RT_SUSPEND_CHANGE, 0, 1, 0, 0},
+             {schedulerWaitHandle, TALOS_RT_WAIT_EDGE_CHANGE, 1}};
+    talos_rt_process_start_v1 start{
+        1, TALOS_RT_ACTION_FRAME_WAIT_RECORD, 0, 48, &record.header,
+        timeZero ? TALOS_RT_PROCESS_START_TIME_ZERO : 0, 0};
+    talos_rt_process_spawn_plan_v1 spawn{&fixture.descriptor,
+                                         0,
+                                         nullptr,
+                                         nullptr,
+                                         nullptr,
+                                         0,
+                                         0,
+                                         0,
+                                         0,
+                                         0,
+                                         0,
+                                         TALOS_RT_SPAWN_STARTED,
+                                         &start};
+    // A started process needs a generated actor slot and a wait field that
+    // holds its record.
+    auto generic = spawn;
+    generic.actor_slot = UINT32_MAX;
+    auto misplaced = spawn;
+    auto misplacedStart = start;
+    misplacedStart.wait_offset = 8;
+    misplaced.start = &misplacedStart;
+    for (auto *invalid : {&generic, &misplaced}) {
+      EXPECT_EQ(talos_rt_v1_process_spawn(context, invalid, nullptr), 0u);
+      EXPECT_EQ(context->schedulerStatus, TALOS_RT_INVALID_ARGUMENT);
+      EXPECT_TRUE(context->scheduledProcesses.empty());
+      context->schedulerStatus = TALOS_RT_OK;
+    }
+
+    ASSERT_NE(talos_rt_v1_process_spawn(context, &spawn, nullptr), 0u);
+    ASSERT_EQ(context->scheduledProcesses.size(), 1u);
+    const ScheduledProcess &process = context->scheduledProcesses.front();
+    EXPECT_TRUE(process.started);
+    EXPECT_EQ(process.suspendKind, TALOS_RT_SUSPEND_CHANGE);
+    EXPECT_EQ(process.instance->continuation, 1u);
+    EXPECT_EQ(process.instance->lifecycle, TALOS_RT_PROCESS_SUSPENDED);
+    EXPECT_EQ(std::memcmp(process.instance->frame, &record, sizeof(record)),
+              0);
+    EXPECT_FALSE(talos_rt_unstarted_actor_pending(context, 0));
+    EXPECT_EQ(context->nativePollCandidates.count(process.token), 0u);
+    EXPECT_TRUE(startedOwnerContinuations.empty());
+    {
+      ContextMutexLock lock(context);
+      ASSERT_EQ(armStartedNativeAOTActorsUnlocked(context), TALOS_RT_OK);
+    }
+    constexpr talos_rt_native_schedule_node nodes[] = {
+        {0, 0, UINT32_MAX},
+        {0, 1, UINT32_MAX},
+    };
+    ASSERT_EQ(
+        talos_rt_v1_scheduler_run_aot_nodes(context, nodes, std::size(nodes)),
+        TALOS_RT_OK);
+    EXPECT_EQ(startedOwnerContinuations,
+              timeZero ? std::vector<uint32_t>{0} : std::vector<uint32_t>{});
+    EXPECT_EQ(context->startedOwnerDiagnostics.armed, 1u);
+    EXPECT_EQ(context->startedOwnerDiagnostics.timeZeroNodes,
+              timeZero ? 1u : 0u);
+
+    uint8_t oldValue = 0;
+    uint8_t newValue = 1;
+    talos_rt_v1_scheduler_signal_transition(context, schedulerWaitHandle, 1,
+                                            &oldValue, nullptr, &newValue,
+                                            nullptr);
+    ASSERT_EQ(
+        talos_rt_v1_scheduler_run_aot_nodes(context, nodes, std::size(nodes)),
+        TALOS_RT_OK);
+    // Either way the entry ran exactly once before the resumption.
+    EXPECT_EQ(startedOwnerContinuations, (std::vector<uint32_t>{0, 1}));
+    EXPECT_EQ(context->startedOwnerDiagnostics.entryReplays, 1u);
+    talos_rt_v1_context_destroy(context);
+  }
+}
+
+struct StartedOwnerRecord {
+  talos_rt_wait_record_v1 header;
+  talos_rt_wait_entry_v1 entry;
+};
+
+StartedOwnerRecord startedOwnerChangeRecord() {
+  return {{TALOS_RT_VERSION, TALOS_RT_SUSPEND_CHANGE, 0, 1, 0, 0},
+          {schedulerWaitHandle, TALOS_RT_WAIT_EDGE_CHANGE, 1}};
+}
+
+talos_rt_process_spawn_plan_v1
+startedOwnerPlan(SchedulerFixture &fixture,
+                 const talos_rt_process_start_v1 &start) {
+  return {&fixture.descriptor, 0, nullptr, nullptr, nullptr,
+          0,                   0, 0,       0,       0,
+          0,                   TALOS_RT_SPAWN_STARTED, &start};
+}
+
+// IEEE 1800-2023 9.2.2.2, 9.4.2: in a certified static eval island every wake
+// of a direct owner is its generated ready bit, so the time-zero activation
+// is that bit; an input change before the coordinator runs sets the same bit
+// and both are one activation. The process body never runs. A deoptimized
+// plan instead arms a runtime subscription and takes the runtime node.
+TEST(ProcessSpawn, StartedTimeZeroOwnerSharesItsWakeRoute) {
+  for (bool deoptimized : {false, true}) {
+    AOTTestState state;
+    uint64_t ingress = 0;
+    uint64_t active = 1;
+    const talos_rt_native_clock_kernel clocks[] = {
+        {1, TALOS_RT_WAIT_EDGE_CHANGE, 0, 1, &ingress, 1, 0, &active},
+    };
+    const talos_rt_native_merged_fragment merged[] = {
+        {0, 1, 0, 0, 0, 0, generatedCheckpointCallback},
+    };
+    const talos_rt_static_fanout_entry fanout[] = {
+        {1, 0, 1, TALOS_RT_WAIT_EDGE_CHANGE, 1, TALOS_RT_FANOUT_DIRECT, 0, 1,
+         0, 0},
+    };
+    talos_rt_native_schedule_plan plan = makeAOTPlan(state, 1);
+    plan.clock_kernels = clocks;
+    plan.clock_kernel_count = std::size(clocks);
+    plan.merged_fragments = merged;
+    plan.merged_fragment_count = std::size(merged);
+    plan.fanout_entries = fanout;
+    plan.fanout_entry_count = std::size(fanout);
+    plan.timeslot_coordinator = clockCoordinator;
+    plan.promotion_invalidate = schedulerInvalidatePromotion;
+    plan.promotion_ready = schedulerPromotionReady;
+    plan.flags = TALOS_RT_NATIVE_SCHEDULE_EVAL |
+                 TALOS_RT_NATIVE_SCHEDULE_STATIC_EVAL_ISLAND |
+                 TALOS_RT_NATIVE_SCHEDULE_STATIC_CONTROL |
+                 TALOS_RT_NATIVE_SCHEDULE_GENERATED_ACTIONS |
+                 TALOS_RT_NATIVE_SCHEDULE_STATIC_FANOUT;
+    talos_rt_execution_descriptor_v1 execution{};
+    execution.version = TALOS_RT_VERSION;
+    execution.state_bit_count = 1;
+    talos_rt_context *context = nullptr;
+    ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 0, 1),
+              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
+    context->nativeStaticEvalIslandCertified = true;
+    context->nativeScheduleDeoptimized = deoptimized;
+
+    SchedulerFixture fixture(47);
+    fixture.descriptor.execution = &execution;
+    fixture.descriptor.native_execute = startedOwnerExecute;
+    schedulerWaitHandle = talos_rt_v1_native_state_static_handle(1);
+    schedulerWaitWidth = 1;
+    startedOwnerContinuations.clear();
+    StartedOwnerRecord record = startedOwnerChangeRecord();
+    talos_rt_process_start_v1 start{1,
+                                    TALOS_RT_ACTION_FRAME_WAIT_RECORD,
+                                    0,
+                                    48,
+                                    &record.header,
+                                    TALOS_RT_PROCESS_START_TIME_ZERO,
+                                    0};
+    auto spawn = startedOwnerPlan(fixture, start);
+    if (deoptimized) {
+      // Spawning onto a deoptimized plan is refused; create the process on
+      // the installed plan and lose it before the root initializer finishes.
+      context->nativeScheduleDeoptimized = false;
+      ASSERT_NE(talos_rt_v1_process_spawn(context, &spawn, nullptr), 0u);
+      context->nativeScheduleDeoptimized = true;
+    } else {
+      ASSERT_NE(talos_rt_v1_process_spawn(context, &spawn, nullptr), 0u);
+    }
+    {
+      ContextMutexLock lock(context);
+      ASSERT_EQ(armStartedNativeAOTActorsUnlocked(context), TALOS_RT_OK);
+    }
+    const auto &counts = context->startedOwnerDiagnostics;
+    EXPECT_EQ(counts.armed, 1u);
+    EXPECT_EQ(counts.staticWaits, deoptimized ? 0u : 1u);
+    EXPECT_EQ(counts.subscribedWaits, deoptimized ? 1u : 0u);
+    EXPECT_EQ(counts.timeZeroReadyBits, deoptimized ? 0u : 1u);
+    EXPECT_EQ(counts.timeZeroNodes, deoptimized ? 1u : 0u);
+    EXPECT_EQ(context->scheduledProcesses.front().signalTriggered, deoptimized);
+    if (!deoptimized) {
+      EXPECT_EQ(ingress, 1u);
+      EXPECT_TRUE(context->nativeScheduleClockIngressPending);
+      // An input change before the coordinator runs raises the same bit.
+      uint8_t oldValue = 0;
+      uint8_t newValue = 1;
+      talos_rt_v1_scheduler_signal_transition(context, schedulerWaitHandle, 1,
+                                              &oldValue, nullptr, &newValue,
+                                              nullptr);
+      EXPECT_EQ(ingress, 1u);
+      EXPECT_FALSE(context->scheduledProcesses.front().signalTriggered);
+      EXPECT_TRUE(startedOwnerContinuations.empty());
+      EXPECT_EQ(counts.entryReplays, 0u);
+    }
+    talos_rt_v1_context_destroy(context);
+  }
+}
+
+// Without static fanout the first suspension would have subscribed to its
+// signals; a started process subscribes when it is armed, and its first wake
+// replays the entry once before the activation.
+TEST(ProcessSpawn, StartedProcessSubscribesWithoutStaticFanout) {
+  AOTTestState state;
+  talos_rt_native_schedule_plan plan = makeAOTPlan(state, 1);
+  talos_rt_execution_descriptor_v1 execution{};
+  execution.version = TALOS_RT_VERSION;
+  execution.state_bit_count = 1;
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 0, 1),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
+  SchedulerFixture fixture(48);
+  fixture.descriptor.execution = &execution;
+  fixture.descriptor.native_execute = startedOwnerExecute;
+  schedulerWaitHandle = talos_rt_v1_native_state_static_handle(1);
+  schedulerWaitWidth = 1;
+  startedOwnerContinuations.clear();
+  StartedOwnerRecord record = startedOwnerChangeRecord();
+  talos_rt_process_start_v1 start{
+      1, TALOS_RT_ACTION_FRAME_WAIT_RECORD, 0, 48, &record.header, 0, 0};
+  auto spawn = startedOwnerPlan(fixture, start);
+  // After the root initializer has sealed program tracking, a started spawn
+  // is armed at once.
+  context->programTrackingSealed = true;
+  ASSERT_NE(talos_rt_v1_process_spawn(context, &spawn, nullptr), 0u);
+  EXPECT_EQ(context->startedOwnerDiagnostics.armed, 1u);
+  EXPECT_EQ(context->startedOwnerDiagnostics.subscribedWaits, 1u);
+  EXPECT_FALSE(
+      context->scheduledProcesses.front().signalSubscriptions.empty());
+  talos_rt_v1_scheduler_signal(context, schedulerWaitHandle, 1,
+                               TALOS_RT_SIGNAL_CHANGE);
+  constexpr talos_rt_native_schedule_node nodes[] = {
+      {0, 0, UINT32_MAX},
+      {0, 1, UINT32_MAX},
+  };
+  ASSERT_EQ(
+      talos_rt_v1_scheduler_run_aot_nodes(context, nodes, std::size(nodes)),
+      TALOS_RT_OK);
+  EXPECT_EQ(startedOwnerContinuations, (std::vector<uint32_t>{0, 1}));
+  EXPECT_EQ(context->startedOwnerDiagnostics.entryReplays, 1u);
+  talos_rt_v1_context_destroy(context);
+}
+
+// A whole-plan fallback keeps pending generated ready bits: the scheduler
+// loop still hands them to the coordinator, so a started owner's pending
+// activation (for example its time-zero activation, 9.2.2.2) runs once and
+// the runtime does not also run the process body.
+TEST(ProcessSpawn, StartedOwnerPendingReadyBitSurvivesPlanFallback) {
+  AOTTestState state;
+  state.requestFallback = true;
+  uint64_t ingress = 0;
+  const talos_rt_native_clock_kernel clocks[] = {
+      {1, TALOS_RT_WAIT_EDGE_CHANGE, 0, 1, &ingress, 1, 0, nullptr},
+  };
+  const talos_rt_native_merged_fragment merged[] = {
+      {0, 1, 0, 0, 0, 0, nullptr},
+  };
+  talos_rt_native_schedule_plan plan = makeAOTPlan(state, 1);
+  plan.clock_kernels = clocks;
+  plan.clock_kernel_count = std::size(clocks);
+  plan.merged_fragments = merged;
+  plan.merged_fragment_count = std::size(merged);
+  plan.timeslot_coordinator = clockCoordinator;
+  plan.flags = TALOS_RT_NATIVE_SCHEDULE_CLEAN_SUPERSTEP |
+               TALOS_RT_NATIVE_SCHEDULE_FULLY_STATIC |
+               TALOS_RT_NATIVE_SCHEDULE_STATIC_CONTROL |
+               TALOS_RT_NATIVE_SCHEDULE_GENERATED_ACTIONS |
+               TALOS_RT_NATIVE_SCHEDULE_STATIC_FANOUT;
+  talos_rt_execution_descriptor_v1 execution{};
+  execution.version = TALOS_RT_VERSION;
+  execution.state_bit_count = 1;
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 0, 1),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
+  SchedulerFixture fixture(50);
+  fixture.descriptor.execution = &execution;
+  fixture.descriptor.native_execute = startedOwnerExecute;
+  schedulerWaitHandle = talos_rt_v1_native_state_static_handle(1);
+  schedulerWaitWidth = 1;
+  startedOwnerContinuations.clear();
+  StartedOwnerRecord record = startedOwnerChangeRecord();
+  talos_rt_process_start_v1 start{
+      1, TALOS_RT_ACTION_FRAME_WAIT_RECORD, 0, 48, &record.header, 0, 0};
+  auto spawn = startedOwnerPlan(fixture, start);
+  context->programTrackingSealed = true;
+  ASSERT_NE(talos_rt_v1_process_spawn(context, &spawn, nullptr), 0u);
+  ASSERT_EQ(talos_rt_v1_scheduler_activate_clock_kernel(context, 0, 0),
+            TALOS_RT_OK);
+  clockCoordinatorIngress = &ingress;
+  clockCoordinatorWords = 1;
+  clockCoordinatorCalls = 0;
+  EXPECT_EQ(talos_rt_v1_scheduler_run_aot(context), TALOS_RT_OK);
+  EXPECT_TRUE(context->nativeScheduleDeoptimized);
+  EXPECT_EQ(clockCoordinatorCalls, 1u);
+  EXPECT_EQ(ingress, 0u);
+  EXPECT_TRUE(startedOwnerContinuations.empty());
+  clockCoordinatorIngress = nullptr;
+  talos_rt_v1_context_destroy(context);
+}
+
+talos_rt_status startedOwnerWrongWaitExecute(talos_rt_process_instance_v1 *i) {
+  talos_rt_status status = startedOwnerExecute(i);
+  i->action->suspend_kind = TALOS_RT_SUSPEND_EDGE;
+  return status;
+}
+
+// A start record must describe exactly the wait its frame holds; a replayed
+// entry that does not reach that wait is a lifecycle error, not a silent
+// activation.
+TEST(ProcessSpawn, StartedPlanValidationAndReplayMismatch) {
+  AOTTestState state;
+  talos_rt_native_schedule_plan plan = makeAOTPlan(state, 1);
+  plan.flags = TALOS_RT_NATIVE_SCHEDULE_FULLY_STATIC |
+               TALOS_RT_NATIVE_SCHEDULE_STATIC_FANOUT;
+  const talos_rt_static_fanout_entry fanout[] = {
+      {1, 0, 1, TALOS_RT_WAIT_EDGE_CHANGE, 1, 0, 0, 1, 0, 0},
+  };
+  plan.fanout_entries = fanout;
+  plan.fanout_entry_count = std::size(fanout);
+  talos_rt_execution_descriptor_v1 execution{};
+  execution.version = TALOS_RT_VERSION;
+  execution.state_bit_count = 1;
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 0, 1),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
+  SchedulerFixture fixture(49);
+  fixture.descriptor.execution = &execution;
+  fixture.descriptor.native_execute = startedOwnerWrongWaitExecute;
+  schedulerWaitHandle = talos_rt_v1_native_state_static_handle(1);
+  schedulerWaitWidth = 1;
+
+  StartedOwnerRecord valid = startedOwnerChangeRecord();
+  talos_rt_process_start_v1 validStart{
+      1, TALOS_RT_ACTION_FRAME_WAIT_RECORD, 0, 48, &valid.header, 0, 0};
+  using Mutation =
+      void (*)(talos_rt_process_start_v1 &, StartedOwnerRecord &,
+               talos_rt_process_spawn_plan_v1 &);
+  const Mutation mutations[] = {
+      [](auto &, auto &, auto &plan) { plan.start = nullptr; },
+      [](auto &, auto &, auto &plan) { plan.options |= TALOS_RT_SPAWN_PRIME; },
+      [](auto &, auto &, auto &plan) { plan.actor_slot = UINT32_MAX; },
+      [](auto &start, auto &, auto &) { start.continuation = 0; },
+      [](auto &start, auto &, auto &) { start.continuation = 7; },
+      [](auto &start, auto &, auto &) { start.flags = 2; },
+      [](auto &start, auto &, auto &) { start.reserved = 1; },
+      [](auto &start, auto &, auto &) { start.action_flags = 0; },
+      [](auto &start, auto &, auto &) {
+        start.action_flags |= TALOS_RT_ACTION_RESUME_POST_OBSERVED;
+      },
+      [](auto &start, auto &, auto &) { start.wait_offset = 8; },
+      [](auto &start, auto &, auto &) { start.wait_size = 40; },
+      [](auto &, auto &record, auto &) { record.header.version = 0; },
+      [](auto &, auto &record, auto &) {
+        record.header.kind = TALOS_RT_SUSPEND_DELAY;
+      },
+      [](auto &, auto &record, auto &) { record.header.count = 0; },
+      [](auto &, auto &record, auto &) { record.header.count = 2; },
+      [](auto &, auto &record, auto &) { record.header.flags = 1u << 4; },
+      [](auto &, auto &record, auto &) { record.header.payload = 1; },
+      [](auto &, auto &record, auto &) { record.header.auxiliary = 1; },
+      [](auto &, auto &record, auto &) {
+        record.entry.edge = TALOS_RT_WAIT_EDGE_POSEDGE;
+      },
+      [](auto &, auto &record, auto &) { record.entry.reserved = 0; },
+  };
+  for (Mutation mutate : mutations) {
+    StartedOwnerRecord record = valid;
+    talos_rt_process_start_v1 start = validStart;
+    start.wait_record = &record.header;
+    auto spawn = startedOwnerPlan(fixture, start);
+    mutate(start, record, spawn);
+    EXPECT_EQ(talos_rt_v1_process_spawn(context, &spawn, nullptr), 0u);
+    EXPECT_EQ(context->schedulerStatus, TALOS_RT_INVALID_ARGUMENT);
+    EXPECT_TRUE(context->scheduledProcesses.empty());
+    context->schedulerStatus = TALOS_RT_OK;
+  }
+  // The flag without a record is refused the same way.
+  auto missing = startedOwnerPlan(fixture, validStart);
+  missing.options = 0;
+  EXPECT_EQ(talos_rt_v1_process_spawn(context, &missing, nullptr), 0u);
+  EXPECT_EQ(context->schedulerStatus, TALOS_RT_INVALID_ARGUMENT);
+  context->schedulerStatus = TALOS_RT_OK;
+
+  auto spawn = startedOwnerPlan(fixture, validStart);
+  ASSERT_NE(talos_rt_v1_process_spawn(context, &spawn, nullptr), 0u);
+  {
+    ContextMutexLock lock(context);
+    ASSERT_EQ(armStartedNativeAOTActorsUnlocked(context), TALOS_RT_OK);
+  }
+  uint8_t oldValue = 0;
+  uint8_t newValue = 1;
+  talos_rt_v1_scheduler_signal_transition(context, schedulerWaitHandle, 1,
+                                          &oldValue, nullptr, &newValue,
+                                          nullptr);
+  constexpr talos_rt_native_schedule_node nodes[] = {
+      {0, 0, UINT32_MAX},
+      {0, 1, UINT32_MAX},
+  };
+  // Action validation or the replay check refuses the mismatched wait.
+  EXPECT_NE(
+      talos_rt_v1_scheduler_run_aot_nodes(context, nodes, std::size(nodes)),
+      TALOS_RT_OK);
   talos_rt_v1_context_destroy(context);
 }
 

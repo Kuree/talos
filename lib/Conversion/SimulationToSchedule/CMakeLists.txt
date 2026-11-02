@@ -26,6 +26,8 @@ add_mlir_library(TalosSimulationToScheduleNative
   NativeEvalPlanning.cpp
   NativePlanning.cpp
   NativeNBAPlanning.cpp
+  NativeStartAdmission.cpp
+  NativeStaticWait.cpp
   DEPENDS
   TalosConversionPassIncGen
   LINK_LIBS PUBLIC

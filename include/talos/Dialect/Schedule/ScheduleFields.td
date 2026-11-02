@@ -296,6 +296,15 @@ def MaxInlineOps : ScheduleField<"MaxInlineOps", "schedule.native.max_inline_ops
 def MaxStatementOps : ScheduleField<"MaxStatementOps", "schedule.native.max_statement_ops", "::mlir::IntegerAttr">;
 def EvalTwoStateWrapper : ScheduleField<"EvalTwoStateWrapper", "schedule.eval.two_state_wrapper", "::mlir::UnitAttr">;
 def StartsWithoutWaiting : ScheduleField<"StartsWithoutWaiting", "schedule.starts_without_waiting", "::mlir::UnitAttr">;
+// An eval owner the runtime creates already waiting at this one continuation
+// (IEEE 1800-2023 9.2: no implied order between initial and always
+// procedures); its process body never takes a first activation at time zero.
+// Set by schedule-admit-native-started-owners, read by makeProcessSpawnHelper.
+def NativeStartedAt : ScheduleField<"NativeStartedAt", "schedule.native.started_at", "::mlir::IntegerAttr">;
+// A started owner whose first activation is its continuation's activation
+// (always_comb/always_latch/continuous shape). It is activated once at time
+// zero, after all procedures have started (9.2.2.2, 9.2.2.3, 4.9.1).
+def NativeTimeZeroActivation : ScheduleField<"NativeTimeZeroActivation", "schedule.native.time_zero_activation", "::mlir::UnitAttr">;
 def PrimeOnSpawn : ScheduleField<"PrimeOnSpawn", "schedule.prime_on_spawn", "::mlir::UnitAttr">;
 def DetachedControls : ScheduleField<"DetachedControls", "schedule.detached_controls", "::mlir::UnitAttr">;
 def PrioritySignalResume : ScheduleField<"PrioritySignalResume", "schedule.priority_signal_resume", "::mlir::UnitAttr">;

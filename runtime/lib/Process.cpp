@@ -165,6 +165,9 @@ struct ProcessAllocationMetadata {
   size_t alignment;
   talos_rt_context *managedRootContext = nullptr;
   uint64_t vpiSourceCallID = 0;
+  // A process created at its wait (TALOS_RT_SPAWN_STARTED) whose body has not
+  // run yet: the first execution through this instance replays its entry.
+  const talos_rt_process_start_v1 *pendingStart = nullptr;
 };
 
 constexpr size_t kProcessAllocationMetadataOffset =
@@ -208,6 +211,48 @@ registerManagedFrameRoots(talos_rt_process_instance_v1 *instance,
 }
 
 } // namespace
+
+bool hasPendingProcessStart(talos_rt_process_instance_v1 *instance) {
+  return processMetadata(instance)->pendingStart != nullptr;
+}
+
+talos_rt_status replayPendingProcessStart(talos_rt_process_instance_v1 *instance,
+                                          talos_rt_context *context,
+                                          talos_rt_execution_tier tier) {
+  ProcessAllocationMetadata *metadata = processMetadata(instance);
+  const talos_rt_process_start_v1 *start = metadata->pendingStart;
+  if (!start)
+    return TALOS_RT_OK;
+  // The process was created waiting at `start->continuation` and its body has
+  // never run, so a coroutine has no frame and a frameless body has stored no
+  // continuation values. Run the entry first. For an admitted owner the
+  // entry only computes values and arms this same wait (compiler
+  // NativeStartAdmission.cpp), so it has no visible effect; a TIME_ZERO
+  // owner's entry is the continuation's activation itself.
+  metadata->pendingStart = nullptr;
+  // A path that moved the instance elsewhere owns its state now.
+  if (instance->continuation != start->continuation)
+    return TALOS_RT_OK;
+  instance->continuation = 0;
+  if (context) {
+    ++context->startedOwnerDiagnostics.entryReplays;
+    if (context->schedulerTime == 0)
+      ++context->startedOwnerDiagnostics.timeZeroEntryReplays;
+  }
+  if (start->flags & TALOS_RT_PROCESS_START_TIME_ZERO)
+    return TALOS_RT_OK;
+  talos_rt_fragment_action_v1 action{};
+  talos_rt_status status =
+      talos_rt_v1_process_instance_execute(instance, context, tier, &action);
+  if (status != TALOS_RT_OK)
+    return status;
+  if (action.kind != TALOS_RT_FRAGMENT_SUSPEND ||
+      action.continuation != start->continuation ||
+      action.suspend_kind != start->wait_record->kind ||
+      instance->continuation != start->continuation)
+    return TALOS_RT_INVALID_LIFECYCLE;
+  return TALOS_RT_OK;
+}
 
 void unregisterManagedFrameRoots(talos_rt_process_instance_v1 *instance) {
   ProcessAllocationMetadata *metadata = processMetadata(instance);
@@ -1461,6 +1506,12 @@ talos_rt_v1_process_instance_execute(talos_rt_process_instance_v1 *instance,
     if (status != TALOS_RT_OK)
       return status;
   }
+  // Only a call that would execute replays a skipped entry.
+  if (processMetadata(instance)->pendingStart)
+    if (talos_rt_status status =
+            replayPendingProcessStart(instance, context, requestedTier);
+        status != TALOS_RT_OK)
+      return status;
 
   // `tier` records the executor that owns the shared frame tail, not a future
   // scheduling preference. Perform every transition here so native coroutine
@@ -1712,6 +1763,51 @@ talos_rt_v1_scheduler_add_ranked(talos_rt_context *context,
                                            scheduleRank, nullptr, nullptr, 0);
 }
 
+static talos_rt_status
+addAOTProcess(talos_rt_context *context, talos_rt_process_instance_v1 *instance,
+              uint32_t flags, uint32_t actorSlot, uint32_t initialRank,
+              const uint32_t *continuations, const uint32_t *ranks,
+              uint32_t continuationCount, const uint32_t *bytecodeContinuations,
+              uint32_t bytecodeContinuationCount,
+              const talos_rt_process_start_v1 *start);
+
+/// Whether `start` is a signal wait at a continuation of `layout` whose
+/// record fits the frame's wait field at `wait_offset`.
+static bool validProcessStart(const talos_rt_frame_layout_v1 &layout,
+                              const talos_rt_process_start_v1 &start) {
+  const talos_rt_wait_record_v1 *record = start.wait_record;
+  if (!record || start.continuation == 0 || start.reserved != 0 ||
+      (start.flags & ~TALOS_RT_PROCESS_START_TIME_ZERO) != 0 ||
+      !validContinuation(layout, start.continuation) ||
+      (start.action_flags & TALOS_RT_ACTION_FRAME_WAIT_RECORD) == 0 ||
+      (start.action_flags & TALOS_RT_ACTION_RESUME_POST_OBSERVED) != 0 ||
+      (start.action_flags &
+       ~(TALOS_RT_ACTION_FRAME_WAIT_RECORD | kResumeActionFlags)) != 0 ||
+      !talos_rt_valid_resume_action_flags(start.action_flags) ||
+      record->version != TALOS_RT_VERSION ||
+      (record->kind != TALOS_RT_SUSPEND_CHANGE &&
+       record->kind != TALOS_RT_SUSPEND_EDGE) ||
+      (record->flags & ~TALOS_RT_WAIT_SUPPRESS_ACTIVE_SELF) != 0 ||
+      record->count == 0 ||
+      (record->kind == TALOS_RT_SUSPEND_CHANGE && record->count != 1) ||
+      record->payload != 0 || record->auxiliary != 0)
+    return false;
+  const talos_rt_frame_field_v1 *field =
+      findWaitField(layout, start.wait_offset);
+  uint64_t recordSize = sizeof(*record) + uint64_t{record->count} *
+                                              sizeof(talos_rt_wait_entry_v1);
+  if (!field || field->size != start.wait_size || recordSize > start.wait_size)
+    return false;
+  const auto *entries = waitEntries(record);
+  for (uint32_t index = 0; index != record->count; ++index)
+    if (entries[index].edge > TALOS_RT_WAIT_EDGE_BOTH ||
+        entries[index].reserved == 0 ||
+        (record->kind == TALOS_RT_SUSPEND_CHANGE &&
+         entries[index].edge != TALOS_RT_WAIT_EDGE_CHANGE))
+      return false;
+  return true;
+}
+
 extern "C" uint64_t
 talos_rt_v1_process_spawn(talos_rt_context *context,
                           const talos_rt_process_spawn_plan_v1 *plan,
@@ -1720,11 +1816,18 @@ talos_rt_v1_process_spawn(talos_rt_context *context,
     talos_rt_v1_scheduler_fail(context, status);
     return 0;
   };
+  bool started = plan && (plan->options & TALOS_RT_SPAWN_STARTED) != 0;
   if (!context || !plan || !plan->descriptor ||
       !plan->descriptor->frame_layout ||
       plan->capture_size > plan->descriptor->frame_layout->frame_size ||
       (plan->capture_size && !captures) ||
-      (plan->options & ~(TALOS_RT_SPAWN_PRIME | TALOS_RT_SPAWN_PROGRAM_OWNER)))
+      (plan->options & ~(TALOS_RT_SPAWN_PRIME | TALOS_RT_SPAWN_PROGRAM_OWNER |
+                         TALOS_RT_SPAWN_STARTED)) ||
+      started != (plan->start != nullptr) ||
+      (started &&
+       ((plan->options & TALOS_RT_SPAWN_PRIME) ||
+        plan->actor_slot == UINT32_MAX ||
+        !validProcessStart(*plan->descriptor->frame_layout, *plan->start))))
     return fail(TALOS_RT_INVALID_ARGUMENT);
   talos_rt_process_instance_v1 *instance = nullptr;
   talos_rt_status status = talos_rt_v1_process_instance_create_for_context(
@@ -1733,16 +1836,29 @@ talos_rt_v1_process_spawn(talos_rt_context *context,
     return fail(status);
   if (plan->capture_size)
     std::memcpy(instance->frame, captures, plan->capture_size);
+  if (started) {
+    // The instance is created suspended at its wait, with the record its
+    // suspension would have stored.
+    const talos_rt_wait_record_v1 &record = *plan->start->wait_record;
+    std::memcpy(static_cast<uint8_t *>(instance->frame) +
+                    plan->start->wait_offset,
+                &record,
+                sizeof(record) +
+                    uint64_t{record.count} * sizeof(talos_rt_wait_entry_v1));
+    instance->continuation = plan->start->continuation;
+    instance->lifecycle = TALOS_RT_PROCESS_SUSPENDED;
+    processMetadata(instance)->pendingStart = plan->start;
+  }
   if (plan->actor_slot == UINT32_MAX)
     status = talos_rt_v1_scheduler_add_planned(
         context, instance, plan->schedule_flags, plan->initial_rank,
         plan->continuations, plan->ranks, plan->continuation_count);
   else
-    status = talos_rt_v1_scheduler_add_aot(
+    status = addAOTProcess(
         context, instance, plan->schedule_flags, plan->actor_slot,
         plan->initial_rank, plan->continuations, plan->ranks,
         plan->continuation_count, plan->bytecode_continuations,
-        plan->bytecode_continuation_count);
+        plan->bytecode_continuation_count, started ? plan->start : nullptr);
   if (status != TALOS_RT_OK) {
     talos_rt_v1_process_instance_destroy(instance);
     return fail(status);
@@ -2706,6 +2822,19 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_add_aot(
     const uint32_t *continuations, const uint32_t *ranks,
     uint32_t continuationCount, const uint32_t *bytecodeContinuations,
     uint32_t bytecodeContinuationCount) {
+  return addAOTProcess(context, instance, flags, actorSlot, initialRank,
+                       continuations, ranks, continuationCount,
+                       bytecodeContinuations, bytecodeContinuationCount,
+                       nullptr);
+}
+
+static talos_rt_status
+addAOTProcess(talos_rt_context *context, talos_rt_process_instance_v1 *instance,
+              uint32_t flags, uint32_t actorSlot, uint32_t initialRank,
+              const uint32_t *continuations, const uint32_t *ranks,
+              uint32_t continuationCount, const uint32_t *bytecodeContinuations,
+              uint32_t bytecodeContinuationCount,
+              const talos_rt_process_start_v1 *start) {
   if (!context || !instance)
     return TALOS_RT_INVALID_ARGUMENT;
   if (bytecodeContinuationCount != 0 && !bytecodeContinuations)
@@ -2767,6 +2896,35 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_add_aot(
                                                 bytecodeContinuationCount);
       found->aotActorSlot = actorSlot;
       actorToken = found->token;
+      if (start) {
+        // IEEE 1800-2023 9.2: "There shall be no implied order of execution
+        // between initial and always procedures" (also 4.7). This one starts
+        // already suspended at its single wait, exactly as its first
+        // activation would leave it; its owner is generated code. Static
+        // fanout can wake it from here on. The root initializer performs every
+        // declaration initializer before its first spawn and its own stores
+        // publish no transitions, so no initializer write reaches it (6.8).
+        talos_rt_unregister_unstarted_actor(context, found->phase,
+                                            kNativeLogicalProcessTag |
+                                                found->token);
+        found->started = true;
+        // A waiting process is not a scheduling candidate until a wake
+        // (indexedBlocked); add_planned queued it as an unstarted one.
+        context->nativePollCandidates.erase(found->token);
+        found->suspendKind = start->wait_record->kind;
+        found->waitOffset = start->wait_offset;
+        found->waitSize = start->wait_size;
+        updateNativeAOTContinuationRank(*found, start->continuation);
+        found->observedEpoch = context->schedulerEpoch;
+        found->signalTriggered = false;
+        found->startupProcess = false;
+        found->urgent = false;
+        if (!talos_rt_next_queued_region(
+                found->homeRegion, found->suspendKind, 1, start->action_flags,
+                found->queuedRegion, found->postObserved) ||
+            found->postObserved)
+          status = TALOS_RT_INVALID_ARGUMENT;
+      }
     }
   }
   TALOS_RT_CATCH(const std::bad_alloc &) { status = TALOS_RT_OUT_OF_MEMORY; }
@@ -2792,7 +2950,31 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_add_aot(
         context->nativeScheduleActors[actorSlot] = instance;
         context->nativeScheduleActorTokens[actorSlot] = actorToken;
         context->nativeScheduleActorIndices[actorSlot] = index->second;
-        if (!markNativeAOTActorReadyUnlocked(context, actorSlot))
+        // A started actor is not ready. The root initializer's completion
+        // (which seals program tracking) adds what its suspension would have
+        // done beyond the wait record: a runtime subscription when static
+        // fanout does not own the wait, and the time-zero activation. A spawn
+        // after that point is armed at once; once registered, the scheduler
+        // owns the instance, so an arming failure fails the scheduler.
+        if (start) {
+          bool queued = false;
+          TALOS_RT_TRY {
+            context->nativeScheduleStartedPending.emplace_back(actorSlot,
+                                                               start);
+            queued = true;
+          }
+          TALOS_RT_CATCH_ALL { status = TALOS_RT_OUT_OF_MEMORY; }
+          if (queued) {
+            if (context->programTrackingSealed)
+              if (talos_rt_status armed =
+                      armStartedNativeAOTActorsUnlocked(context);
+                  armed != TALOS_RT_OK &&
+                  context->schedulerStatus == TALOS_RT_OK)
+                context->schedulerStatus = armed;
+            return TALOS_RT_OK;
+          }
+          // Not queued: fall through to the rollback below.
+        } else if (!markNativeAOTActorReadyUnlocked(context, actorSlot))
           status = TALOS_RT_INVALID_CONTINUATION;
         else
           return TALOS_RT_OK;
@@ -6653,6 +6835,10 @@ talos_rt_status runScheduler(talos_rt_context *context,
                 !importNativeRootInitializerPlanesUnlocked(context))
               return TALOS_RT_LAYOUT_MISMATCH;
             talos_rt_program_seal_unlocked(context);
+            if (talos_rt_status status =
+                    armStartedNativeAOTActorsUnlocked(context);
+                status != TALOS_RT_OK)
+              return status;
             if (talos_rt_status status =
                     talos_rt_recapture_initialized_preponed_unlocked(context);
                 status != TALOS_RT_OK)

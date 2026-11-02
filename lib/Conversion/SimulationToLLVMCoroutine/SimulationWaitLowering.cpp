@@ -1,13 +1,16 @@
 //===- SimulationWaitLowering.cpp - Runtime wait-record lowering ----------===//
 
 #include "SimulationToLLVMCoroutinePrivate.h"
+#include "../SimulationToSchedule/NativeStaticWait.h"
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
 #include "talos/Dialect/Schedule/ScheduleOps.h"
 
+#include "talos/Conversion/SimulationRuntime.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Runtime/Runtime.h"
+
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -18,21 +21,7 @@ using namespace mlir;
 
 namespace talos::detail {
 
-LogicalResult
-serializeRuntimeWait(Operation *operation, Value wait, uint32_t kind,
-                     uint32_t count, OpBuilder &builder,
-                     SmallVectorImpl<Operation *> &observerBindings) {
-  constexpr uint64_t waitHeaderSize = sizeof(talos_rt_wait_record_v1);
-  constexpr uint64_t waitEntrySize = sizeof(talos_rt_wait_entry_v1);
-  constexpr uint32_t noEdge = std::numeric_limits<uint32_t>::max();
-  Location location = operation->getLoc();
-  Type i32 = builder.getI32Type();
-  Type i64 = builder.getI64Type();
-
-  storeAt(builder, location, wait, 0,
-          llvmConstant(builder, location, i32, TALOS_RT_VERSION), 4);
-  storeAt(builder, location, wait, 4,
-          llvmConstant(builder, location, i32, kind), 4);
+uint32_t runtimeWaitFlags(Operation *operation) {
   uint32_t waitFlags = 0;
   if (auto join = dyn_cast<schedule::NativeSuspendJoinOp>(operation))
     waitFlags = static_cast<uint32_t>(join.getKind());
@@ -52,18 +41,26 @@ serializeRuntimeWait(Operation *operation, Value wait, uint32_t kind,
   } else if (auto mailbox =
                  dyn_cast<schedule::NativeSuspendMailboxOp>(operation))
     waitFlags = static_cast<uint32_t>(mailbox.getKind());
-  if ((::talos::schedule::has<schedule::metadata::topLevelWildcardWait>(
-           operation) ||
-       ::talos::schedule::has<schedule::metadata::proceduralEventWait>(
-           operation)) &&
-      !::talos::schedule::has<schedule::metadata::repeatingAlwaysWait>(
-          operation) &&
-      isa<schedule::NativeSuspendChangeOp, schedule::NativeSuspendEdgeOp,
-          schedule::NativeSuspendEdgeIffOp, schedule::NativeSuspendAnyOp>(
-          operation))
-    waitFlags |= TALOS_RT_WAIT_SUPPRESS_ACTIVE_SELF;
+  return waitFlags | signalWaitFlags(operation);
+}
+
+LogicalResult
+serializeRuntimeWait(Operation *operation, Value wait, uint32_t kind,
+                     uint32_t count, OpBuilder &builder,
+                     SmallVectorImpl<Operation *> &observerBindings) {
+  constexpr uint64_t waitHeaderSize = sizeof(talos_rt_wait_record_v1);
+  constexpr uint64_t waitEntrySize = sizeof(talos_rt_wait_entry_v1);
+  constexpr uint32_t noEdge = std::numeric_limits<uint32_t>::max();
+  Location location = operation->getLoc();
+  Type i32 = builder.getI32Type();
+  Type i64 = builder.getI64Type();
+
+  storeAt(builder, location, wait, 0,
+          llvmConstant(builder, location, i32, TALOS_RT_VERSION), 4);
+  storeAt(builder, location, wait, 4,
+          llvmConstant(builder, location, i32, kind), 4);
   storeAt(builder, location, wait, 8,
-          llvmConstant(builder, location, i32, waitFlags), 4);
+          llvmConstant(builder, location, i32, runtimeWaitFlags(operation)), 4);
   storeAt(builder, location, wait, 12,
           llvmConstant(builder, location, i32, count), 4);
   Value payload = llvmConstant(builder, location, i64, 0);

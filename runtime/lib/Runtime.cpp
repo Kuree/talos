@@ -377,6 +377,26 @@ void talos_rt_report_signal_diagnostics_unlocked(talos_rt_context *context) {
       std::fprintf(stderr, "talos-aot-actor slot=%u executions=%llu\n", slot,
                    static_cast<unsigned long long>(
                        context->signalDiagnostics.aotActorExecutions[slot]));
+  if (context->startedOwnerDiagnostics.armed != 0)
+    std::fprintf(
+        stderr,
+        "talos-started-owners armed=%llu static_waits=%llu "
+        "subscribed_waits=%llu time_zero_ready_bits=%llu "
+        "time_zero_nodes=%llu entry_replays=%llu "
+        "time_zero_entry_replays=%llu\n",
+        static_cast<unsigned long long>(context->startedOwnerDiagnostics.armed),
+        static_cast<unsigned long long>(
+            context->startedOwnerDiagnostics.staticWaits),
+        static_cast<unsigned long long>(
+            context->startedOwnerDiagnostics.subscribedWaits),
+        static_cast<unsigned long long>(
+            context->startedOwnerDiagnostics.timeZeroReadyBits),
+        static_cast<unsigned long long>(
+            context->startedOwnerDiagnostics.timeZeroNodes),
+        static_cast<unsigned long long>(
+            context->startedOwnerDiagnostics.entryReplays),
+        static_cast<unsigned long long>(
+            context->startedOwnerDiagnostics.timeZeroEntryReplays));
 }
 
 talos_rt_context::~talos_rt_context() {

@@ -142,7 +142,7 @@ TEST_F(InitializationRandomTest, StaticRegistrationUsesContainingScope) {
 
 TEST_F(InitializationRandomTest, SpawnTableRowsBindTheirScopes) {
   talos_rt_process_spawn_plan_v1 plan{
-      &descriptor, 0, nullptr, nullptr, nullptr, 0, 0, UINT32_MAX, 0, 0, 0, 0};
+      &descriptor, 0, nullptr, nullptr, nullptr, 0, 0, UINT32_MAX, 0, 0, 0, 0, nullptr};
   const talos_rt_process_spawn_entry_v1 entries[] = {
       {&plan, 0, 10}, {&plan, 0, 0}, {&plan, 0, 20}, {&plan, 0, 10}};
   auto *activeRandom = context->activeRandom;
@@ -181,7 +181,7 @@ TEST_F(InitializationRandomTest, SpawnTableRowsBindTheirScopes) {
 
 TEST_F(InitializationRandomTest, SpawnTableStopsAtAFailedBinding) {
   talos_rt_process_spawn_plan_v1 plan{
-      &descriptor, 0, nullptr, nullptr, nullptr, 0, 0, UINT32_MAX, 0, 0, 0, 0};
+      &descriptor, 0, nullptr, nullptr, nullptr, 0, 0, UINT32_MAX, 0, 0, 0, 0, nullptr};
   const talos_rt_process_spawn_entry_v1 entries[] = {{&plan, 0, 10},
                                                      {&plan, 0, 20}};
   ASSERT_EQ(talos_rt_v1_process_spawn_batch(context, entries, nullptr, 1),

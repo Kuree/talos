@@ -5,8 +5,12 @@
 // RUN: %t.o3 | FileCheck %s
 // A runtime-only initial procedure retains its loop-carried state and report
 // order while separating the native blocks before and after its publication.
-// CHECK: boundary 3 count 1
+// The time-zero trace depends on procedure start order, which IEEE 1800-2023
+// 9.2 leaves open. Talos creates the generated step1 owner already waiting,
+// so step2's time-zero write of the gate wakes it; another legal order would
+// print boundary 3 first.
+// CHECK: boundary 2 count 1
+// CHECK-NEXT: boundary 3 count 0
 // CHECK-NEXT: chain 8
-// CHECK-NEXT: boundary 2 count 0
-// CHECK-NEXT: chain 6
+// CHECK-NEXT: chain 7
 // CHECK-NOT: boundary

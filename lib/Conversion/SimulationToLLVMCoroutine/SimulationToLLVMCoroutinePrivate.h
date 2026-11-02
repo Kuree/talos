@@ -614,6 +614,8 @@ mlir::LogicalResult serializeRuntimeWait(
     mlir::Operation *operation, mlir::Value wait, uint32_t kind, uint32_t count,
     mlir::OpBuilder &builder,
     mlir::SmallVectorImpl<mlir::Operation *> &observerBindings);
+/// The wait-record flags serializeRuntimeWait stores for `operation`.
+uint32_t runtimeWaitFlags(mlir::Operation *operation);
 uint64_t stableProcessID(llvm::StringRef name);
 /// Shares symbol resolution and callee verdicts across many processes.
 struct UnmanagedNativeCache {

@@ -129,6 +129,8 @@ inline constexpr auto evalDiscardableStore =
 inline bool pinsOperationBoundary(Field field) {
   switch (field) {
   case Field::StartsWithoutWaiting:
+  case Field::NativeStartedAt:
+  case Field::NativeTimeZeroActivation:
   case Field::PrimeOnSpawn:
   case Field::DetachedControls:
   case Field::PrioritySignalResume:

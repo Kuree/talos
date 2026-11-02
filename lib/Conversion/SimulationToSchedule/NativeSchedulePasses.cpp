@@ -1888,6 +1888,7 @@ namespace talos {
 #define GEN_PASS_DEF_PLANNATIVESCHEDULEPASS
 #define GEN_PASS_DEF_PLANNATIVEEVALOWNERSHIPPASS
 #define GEN_PASS_DEF_RESOLVENATIVEEVALSCHEDULEPASS
+#define GEN_PASS_DEF_ADMITNATIVESTARTEDOWNERSPASS
 #include "talos/Conversion/Passes.h.inc"
 namespace {
 class PlanNativeExecutableNodesPass final
@@ -2033,6 +2034,29 @@ class ResolveNativeEvalSchedulePass final
     if (failed(state.resolveEval()))
       return signalPassFailure();
     state.stage = Analysis::Stage::Resolved;
+    markAnalysesPreserved<Analysis>();
+  }
+};
+
+class AdmitNativeStartedOwnersPass final
+    : public impl::AdmitNativeStartedOwnersPassBase<
+          AdmitNativeStartedOwnersPass> {
+  void runOnOperation() override {
+    using Analysis = detail::NativePipelineAnalysis;
+    auto cached = getCachedAnalysis<Analysis>();
+    if (!cached) {
+      getOperation().emitError("schedule-admit-native-started-owners requires "
+                               "the native preparation pipeline analysis");
+      return signalPassFailure();
+    }
+    auto &state = cached->get();
+    if (state.stage != Analysis::Stage::Resolved) {
+      getOperation().emitError("schedule-admit-native-started-owners requires "
+                               "native pipeline phase Resolved");
+      return signalPassFailure();
+    }
+    if (failed(state.admitStartedOwners()))
+      return signalPassFailure();
     markAnalysesPreserved<Analysis>();
   }
 };

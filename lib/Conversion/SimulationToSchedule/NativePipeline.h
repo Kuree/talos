@@ -72,6 +72,9 @@ struct NativePipelineAnalysis {
   mlir::LogicalResult planOwnership();
   mlir::LogicalResult planExecutableNodes();
   mlir::LogicalResult resolveEval();
+  /// Marks eval owners the runtime creates already waiting at their single
+  /// continuation (NativeStartAdmission.cpp).
+  mlir::LogicalResult admitStartedOwners();
   mlir::LogicalResult materialize();
   std::optional<uint32_t> aotActorSlotFor(sim::SimFuncOp actor) const;
   uint32_t fusionGroupFor(uint32_t slot, uint32_t continuation) const;

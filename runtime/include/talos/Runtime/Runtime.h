@@ -2445,6 +2445,31 @@ talos_rt_v1_table_process_execute(talos_rt_process_instance_v1 *instance);
 // continuation storage and wait records are initialized by the runtime.
 #define TALOS_RT_SPAWN_PRIME UINT32_C(1)
 #define TALOS_RT_SPAWN_PROGRAM_OWNER UINT32_C(2)
+// The generated scheduler creates the process already waiting at its single
+// continuation (IEEE 1800-2023 9.2: no implied order between initial and
+// always procedures), so its body takes no first activation. `start`
+// describes that wait. Requires a generated actor slot. Static fanout can wake
+// it once it exists; the root initializer's completion adds any runtime
+// subscription and the time-zero activation.
+#define TALOS_RT_SPAWN_STARTED UINT32_C(4)
+// A started process whose first activation is its continuation's activation
+// (always_comb, always_latch, continuous assignment): the runtime activates it
+// once at time zero, after all procedures have started (9.2.2.2, 9.2.2.3,
+// 4.9.1), through its generated ready bit when every wake reaches that bit,
+// else through its runtime node.
+#define TALOS_RT_PROCESS_START_TIME_ZERO UINT32_C(1)
+typedef struct talos_rt_process_start_v1 {
+  uint32_t continuation;
+  // Resume action flags of the wait, as its suspension would publish them.
+  uint32_t action_flags;
+  uint64_t wait_offset;
+  uint64_t wait_size;
+  // The complete wait record (header followed by `count` entries) that the
+  // suspension would store at `wait_offset` in the frame.
+  const talos_rt_wait_record_v1 *wait_record;
+  uint32_t flags;
+  uint32_t reserved;
+} talos_rt_process_start_v1;
 typedef struct talos_rt_process_spawn_plan_v1 {
   const talos_rt_process_descriptor_v1 *descriptor;
   uint64_t capture_size;
@@ -2458,6 +2483,8 @@ typedef struct talos_rt_process_spawn_plan_v1 {
   uint32_t continuation_count;
   uint32_t bytecode_continuation_count;
   uint32_t options;
+  // Required with TALOS_RT_SPAWN_STARTED, null otherwise.
+  const talos_rt_process_start_v1 *start;
 } talos_rt_process_spawn_plan_v1;
 
 // One row of a spawn table. Captures live in the table's shared capture blob

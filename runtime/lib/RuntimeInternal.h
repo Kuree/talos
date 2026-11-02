@@ -2546,6 +2546,10 @@ struct talos_rt_context {
   std::vector<talos_rt_process_instance_v1 *> nativeScheduleActors;
   std::vector<uint64_t> nativeScheduleActorTokens;
   std::vector<size_t> nativeScheduleActorIndices;
+  // Actors created at their wait (TALOS_RT_SPAWN_STARTED) that the root
+  // initializer's completion has not armed yet.
+  std::vector<std::pair<uint32_t, const talos_rt_process_start_v1 *>>
+      nativeScheduleStartedPending;
   std::vector<talos_rt_native_schedule_node> nativeScheduleNodes;
   const talos_rt_native_schedule_node *nativeScheduleNodeSource = nullptr;
   std::vector<std::vector<std::pair<uint32_t, uint32_t>>>
@@ -2652,6 +2656,18 @@ struct talos_rt_context {
   bool signalDiagnosticsEnabled = false;
   bool signalDiagnosticsReport = false;
   SignalSubscriptionDiagnostics signalDiagnostics;
+  // Processes created at their wait (TALOS_RT_SPAWN_STARTED): how each was
+  // armed and how its time-zero activation was routed. Reported with the
+  // signal diagnostics.
+  struct {
+    uint64_t armed = 0;
+    uint64_t staticWaits = 0;
+    uint64_t subscribedWaits = 0;
+    uint64_t timeZeroReadyBits = 0;
+    uint64_t timeZeroNodes = 0;
+    uint64_t entryReplays = 0;
+    uint64_t timeZeroEntryReplays = 0;
+  } startedOwnerDiagnostics;
   std::vector<ScheduledNBA> scheduledNBAs;
   // Path-delay events have one live entry per destination bit. Keeping them
   // in an ordered keyed calendar lets pulse rejection remove a superseded

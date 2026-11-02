@@ -5,6 +5,7 @@
 #include "SimulationProcessActivationLowering.h"
 #include "SimulationProcessRuntimeABI.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
+#include "../SimulationToSchedule/NativeStaticWait.h"
 
 #include "talos/Conversion/SimulationRuntime.h"
 #include "talos/Runtime/Runtime.h"
@@ -291,9 +292,93 @@ FailureOr<LLVM::LLVMFuncOp> makeProcessSpawnHelper(
       function);
   uint32_t options = (primeOnSpawn ? TALOS_RT_SPAWN_PRIME : 0) |
                      (owner ? TALOS_RT_SPAWN_PROGRAM_OWNER : 0);
+  // An admitted eval owner is created already waiting at its one
+  // continuation (NativeStartAdmission.cpp); its wait record is data.
+  std::string startName = (function.getSymName() + ".__talos_start").str();
+  if (auto startedAt =
+          ::talos::schedule::get<::talos::schedule::Field::NativeStartedAt>(
+              function)) {
+    Operation *waitOperation = nullptr;
+    function.walk([&](Operation *operation) {
+      auto continuation = ::talos::schedule::get<
+          ::talos::schedule::Field::NativeContinuation>(operation);
+      if (sim::isSuspensionOp(operation) && continuation &&
+          continuation.getInt() == startedAt.getInt())
+        waitOperation = operation;
+    });
+    FailureOr<StaticRuntimeWait> wait =
+        waitOperation ? getStaticRuntimeWait(waitOperation)
+                      : FailureOr<StaticRuntimeWait>(failure());
+    if (failed(wait) || !schedule.actorSlot)
+      return function.emitOpError("is started at a wait whose runtime record "
+                                  "is not static (admission and emission "
+                                  "disagree)"),
+             failure();
+    auto entryType = LLVM::LLVMStructType::getLiteral(context, {i64, i32, i32});
+    auto recordType = LLVM::LLVMStructType::getLiteral(
+        context,
+        {i32, i32, i32, i32, i64, i64,
+         LLVM::LLVMArrayType::get(entryType, wait->stableIDs.size())});
+    std::string recordName =
+        (function.getSymName() + ".__talos_start_wait").str();
+    auto record = makeConstantGlobal(
+        module, location, recordType, recordName, LLVM::Linkage::Internal, 8,
+        [&](OpBuilder &initializer) {
+          Value value = LLVM::ZeroOp::create(initializer, location, recordType);
+          auto integer = [&](ArrayRef<int64_t> position, Type type,
+                             uint64_t number) {
+            value = LLVM::InsertValueOp::create(
+                initializer, location, value,
+                llvmConstant(initializer, location, type, number), position);
+          };
+          integer({0}, i32, TALOS_RT_VERSION);
+          integer({1}, i32, wait->kind);
+          integer({2}, i32, wait->flags);
+          integer({3}, i32, wait->stableIDs.size());
+          for (auto [index, id] : llvm::enumerate(wait->stableIDs)) {
+            int64_t entry = static_cast<int64_t>(index);
+            integer({6, entry, 0}, i64, id);
+            integer({6, entry, 1}, i32, wait->edges[index]);
+            integer({6, entry, 2}, i32, wait->widths[index]);
+          }
+          return value;
+        });
+    copyNativePartition(function, record);
+    indexModuleSymbol(module, symbols, record);
+    auto startType = LLVM::LLVMStructType::getLiteral(
+        context, {i32, i32, i64, i64, pointer, i32, i32});
+    auto start = makeConstantGlobal(
+        module, location, startType, startName, LLVM::Linkage::Internal, 8,
+        [&](OpBuilder &initializer) {
+          Value value = LLVM::ZeroOp::create(initializer, location, startType);
+          auto integer = [&](unsigned field, Type type, uint64_t number) {
+            value = insertValue(
+                initializer, location, value,
+                llvmConstant(initializer, location, type, number), field);
+          };
+          integer(0, i32, wait->continuation);
+          integer(1, i32, wait->actionFlags);
+          integer(2, i64, wait->waitOffset);
+          integer(3, i64, wait->waitSize);
+          value = insertValue(initializer, location, value,
+                              LLVM::AddressOfOp::create(initializer, location,
+                                                        pointer, recordName),
+                              4);
+          integer(5, i32,
+                  ::talos::schedule::has<
+                      ::talos::schedule::Field::NativeTimeZeroActivation>(
+                      function)
+                      ? TALOS_RT_PROCESS_START_TIME_ZERO
+                      : 0);
+          return value;
+        });
+    copyNativePartition(function, start);
+    indexModuleSymbol(module, symbols, start);
+    options |= TALOS_RT_SPAWN_STARTED;
+  }
   auto planType = LLVM::LLVMStructType::getLiteral(
       context, {pointer, i64, pointer, pointer, pointer, i64, i32, i32, i32,
-                i32, i32, i32});
+                i32, i32, i32, pointer});
   std::string planName = (function.getSymName() + ".__talos_spawn_plan").str();
   auto plan = makeConstantGlobal(
       module, location, planType, planName, LLVM::Linkage::Internal, 8,
@@ -326,6 +411,8 @@ FailureOr<LLVM::LLVMFuncOp> makeProcessSpawnHelper(
         integer(9, i32, schedule.continuations.size());
         integer(10, i32, schedule.bytecodeContinuations.size());
         integer(11, i32, options);
+        if (options & TALOS_RT_SPAWN_STARTED)
+          address(12, startName);
         return value;
       });
   copyNativePartition(function, plan);

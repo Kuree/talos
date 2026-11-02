@@ -33,6 +33,7 @@ add_mlir_library(TalosSimulationAnalysis
   PrivateStorageAnalysis.cpp
   SimulationCopyProcessAnalysis.cpp
   SimulationEffectAnalysis.cpp
+  ThreadObservationAnalysis.cpp
   SimulationProcessFrameAnalysis.cpp
   SimulationScheduleAnalysis.cpp
   SimulationAnalysis.cpp

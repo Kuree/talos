@@ -558,6 +558,93 @@ bool markNativeAOTActorReadyUnlocked(talos_rt_context *context,
   return true;
 }
 
+talos_rt_status armStartedNativeAOTActorsUnlocked(talos_rt_context *context) {
+  if (context->nativeScheduleStartedPending.empty())
+    return TALOS_RT_OK;
+  auto pending = std::move(context->nativeScheduleStartedPending);
+  context->nativeScheduleStartedPending.clear();
+  const talos_rt_native_schedule_plan *plan = context->nativeSchedulePlan;
+  if (!plan)
+    return TALOS_RT_INVALID_LIFECYCLE;
+  for (auto [slot, start] : pending) {
+    if (slot >= context->nativeScheduleActors.size())
+      return TALOS_RT_INVALID_LIFECYCLE;
+    talos_rt_process_instance_v1 *actor = context->nativeScheduleActors[slot];
+    size_t index = context->nativeScheduleActorIndices[slot];
+    if (!actor || index >= context->scheduledProcesses.size())
+      return TALOS_RT_INVALID_LIFECYCLE;
+    ScheduledProcess &scheduled = context->scheduledProcesses[index];
+    // Nothing can run or end a started actor before it is armed; a mismatch
+    // would silently drop a mandated time-zero activation (9.2.2.2).
+    if (scheduled.instance != actor || !scheduled.started ||
+        scheduled.suspendKind != start->wait_record->kind)
+      return TALOS_RT_INVALID_LIFECYCLE;
+    // Arm the wait exactly as the first activation's suspension would have:
+    // static fanout when it owns this continuation, otherwise an ordinary
+    // runtime subscription (executeAOTNode's suspend path).
+    bool ownsStaticWait = canUseStaticAOTFanout(context);
+    if (ownsStaticWait &&
+        (plan->flags & TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL)) {
+      uint32_t node = findNativeAOTNodeUnlocked(context, slot,
+                                                start->continuation);
+      ownsStaticWait = node < context->nativeScheduleNodeIngress.size() &&
+                       context->nativeScheduleNodeIngress[node] <
+                           context->nativeScheduleFanoutEntryCount;
+    }
+    if (!ownsStaticWait &&
+        !talos_rt_register_signal_wait_unlocked(
+            context, currentWait(scheduled), scheduled.signalSubscriptions,
+            scheduled.signalLatch, scheduled.token, false))
+      return context->schedulerStatus;
+    ++context->startedOwnerDiagnostics.armed;
+    ++(ownsStaticWait ? context->startedOwnerDiagnostics.staticWaits
+                      : context->startedOwnerDiagnostics.subscribedWaits);
+    if ((start->flags & TALOS_RT_PROCESS_START_TIME_ZERO) == 0)
+      continue;
+    // IEEE 1800-2023 9.2.2.2, 9.2.2.3, 4.9.1: evaluated once at time zero,
+    // after all initial and always procedures have been started. A change of
+    // an input before that evaluation does not schedule a second one: the
+    // process is not yet suspended at its event control (9.4.2, 4.3). So the
+    // activation must share the route of every wake that can precede it. In a certified static eval island every wake of a
+    // direct owner is its generated ready bit (runtime writers' static
+    // transitions do not enqueue nodes there), and the coordinator runs no
+    // owner while a procedure is unstarted. Otherwise the runtime node takes
+    // the activation, marked triggered as a wake would be; executing it
+    // replays the entry, which is the activation.
+    bool raised = false;
+    if (ownsStaticWait &&
+        (plan->flags & TALOS_RT_NATIVE_SCHEDULE_EVAL) &&
+        (plan->flags & TALOS_RT_NATIVE_SCHEDULE_STATIC_EVAL_ISLAND) &&
+        !context->nativeScheduleDeoptimized)
+      for (uint64_t fragment = 0; fragment != plan->merged_fragment_count;
+           ++fragment) {
+        const talos_rt_native_merged_fragment &merged =
+            plan->merged_fragments[fragment];
+        if (merged.actor_slot != slot ||
+            merged.continuation != start->continuation ||
+            merged.kernel >= plan->clock_kernel_count)
+          continue;
+        talos::runtime::publishClockKernelReady(
+            plan->clock_kernels[merged.kernel], merged.bit);
+        context->nativeScheduleClockIngressPending = true;
+        raised = true;
+      }
+    if (raised) {
+      ++context->startedOwnerDiagnostics.timeZeroReadyBits;
+      continue;
+    }
+    if (!markNativeAOTActorReadyUnlocked(context, slot))
+      return TALOS_RT_INVALID_CONTINUATION;
+    // Exactly as a subscription wake: a later wake of the same wait, by any
+    // route, must find the process already triggered (one activation).
+    scheduled.signalTriggered = true;
+    if (scheduled.signalLatch)
+      scheduled.signalLatch->triggered = true;
+    ++context->startedOwnerDiagnostics.timeZeroNodes;
+  }
+  return TALOS_RT_OK;
+}
+
 void clearNativeAOTNodeReadyUnlocked(talos_rt_context *context, uint32_t node) {
   context->nativeScheduleReadyNodes.reset(node);
 }
@@ -842,6 +929,11 @@ __attribute__((always_inline)) inline talos_rt_status executeStaticNativeAOT(
                           instance->continuation)) ||
       (instance->ownership_context && instance->ownership_context != context))
     return TALOS_RT_INVALID_LIFECYCLE;
+  if (__builtin_expect(hasPendingProcessStart(instance), 0))
+    if (talos_rt_status status = replayPendingProcessStart(
+            instance, context, TALOS_RT_TIER_NATIVE);
+        status != TALOS_RT_OK)
+      return status;
   instance->ownership_context = context;
   instance->tier = TALOS_RT_TIER_NATIVE;
   instance->context = context;
@@ -1250,6 +1342,9 @@ talos_rt_status executeAOTNode(talos_rt_context *context, uint32_t actorSlot,
         if (!importNativeRootInitializerPlanesUnlocked(context))
           return TALOS_RT_LAYOUT_MISMATCH;
         talos_rt_program_seal_unlocked(context);
+        if (talos_rt_status status = armStartedNativeAOTActorsUnlocked(context);
+            status != TALOS_RT_OK)
+          return status;
         if (talos_rt_status status =
                 talos_rt_recapture_initialized_preponed_unlocked(context);
             status != TALOS_RT_OK)
@@ -3222,6 +3317,7 @@ void talos_rt_release_native_schedule_plan(talos_rt_context *context) noexcept {
   context->nativeScheduleActors.clear();
   context->nativeScheduleActorTokens.clear();
   context->nativeScheduleActorIndices.clear();
+  context->nativeScheduleStartedPending.clear();
   context->nativeScheduleNodes.clear();
   context->nativeScheduleNodeSource = nullptr;
   context->nativeScheduleActorNodes.clear();

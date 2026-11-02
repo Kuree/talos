@@ -677,6 +677,23 @@ def ResolveNativeEvalSchedulePass : Pass<"schedule-resolve-native-eval", "mlir::
     "mlir::math::MathDialect", "mlir::scf::SCFDialect"
   ];
 }
+def AdmitNativeStartedOwnersPass : Pass<"schedule-admit-native-started-owners", "mlir::ModuleOp"> {
+  let summary = "Create single-wait eval owners already waiting at their continuation";
+  let description = [{
+    Runs as a module pass in the native scheduling pipeline after
+    schedule-resolve-native-eval. Marks each eval owner that waits at one
+    signal event control for its whole life, with an entry that only computes
+    values, `schedule.native.started_at` (and
+    `schedule.native.time_zero_activation` for an always_comb-shaped owner in
+    a static eval island). Its spawn then creates it already waiting there
+    (IEEE 1800-2023 4.7, 9.2.2.2). Optional: without it every owner takes its
+    ordinary first activation.
+  }];
+  let dependentDialects = [
+    "talos::sim::TalosSimulationDialect",
+    "talos::schedule::ScheduleDialect", "mlir::LLVM::LLVMDialect"
+  ];
+}
 
 def ConvertNativeScheduleActionsToLLVMPass
     : Pass<"convert-native-schedule-actions-to-llvm", "mlir::ModuleOp"> {
