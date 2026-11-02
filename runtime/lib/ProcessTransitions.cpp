@@ -3183,9 +3183,10 @@ extern "C" void talos_rt_v1_scheduler_real_transition(talos_rt_context *context,
   if (!context || bitOffset == UINT64_MAX ||
       (bitWidth != 32 && bitWidth != 64) || !oldValue || !newValue)
     return;
-  // A guarded generated store reaches only its own plane, and observers read the
-  // canonical one, so advance that as the integer publication path does. Bits are
-  // compared because -0.0 and 0.0 are no value change but are different values.
+  // A guarded generated store reaches only its own plane, and observers read
+  // the canonical one, so advance that as the integer publication path does.
+  // Bits are compared because -0.0 and 0.0 are no value change but are
+  // different values.
   uint64_t oldBits = 0;
   uint64_t newBits = 0;
   std::memcpy(&oldBits, oldValue, bitWidth / 8);

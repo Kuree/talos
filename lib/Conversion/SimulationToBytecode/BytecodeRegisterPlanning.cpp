@@ -96,7 +96,8 @@ planTwoStateRegisters(sim::SimDesignOp design) {
         if (auto write = dyn_cast<sim::SimContainerWriteOp>(operation))
           force(write.getValue());
         // A class field has both planes too. A known value has to overwrite the
-        // unknown plane there, or a prior X or Z in the field survives the store.
+        // unknown plane there, or a prior X or Z in the field survives the
+        // store.
         if (auto store = dyn_cast<sim::SimManagedStoreOp>(operation))
           force(store.getValue());
         if (auto enqueue = dyn_cast<sim::SimManagedNBAEnqueueOp>(operation))

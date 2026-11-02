@@ -733,7 +733,8 @@ bool validIntrinsic(const Image &image, const Function &function,
            site.outputCount == 1 && bits(input(0), 64) && bits(output(0), 1);
   case TALOS_RT_INTRINSIC_V1_ASSERTION_CONTROL:
     // IEEE 1800-2023 20.11: an integer expression can select the control type,
-    // which generated code range checks. It is then an input ahead of the target.
+    // which generated code range checks. It is then an input ahead of the
+    // target.
     if (signature.flags == 0)
       return site.inputCount == 2 && site.outputCount == 0 &&
              bits(input(0), 32) && bits(input(1), 64);

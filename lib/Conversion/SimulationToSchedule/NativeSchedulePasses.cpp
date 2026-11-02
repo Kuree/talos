@@ -201,8 +201,8 @@ LogicalResult NativePipelineAnalysis::planActors() {
              (forcedAOT || aotEligibility.isAOTCostEffective());
     // A writable VPI can force state before the first process runs (38.34), and
     // only the guarded plans of static specialization keep the generated
-    // coordinator's readiness coherent with that. Lower levels leave those plans
-    // off, so there the generic scheduler runs the design.
+    // coordinator's readiness coherent with that. Lower levels leave those
+    // plans off, so there the generic scheduler runs the design.
     if (useAOT && vpi.allowsWrite() && !staticSpecialization) {
       if (forcedAOT)
         return module.emitError("native AOT scheduling with a writable VPI "
