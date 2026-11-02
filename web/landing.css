@@ -124,8 +124,14 @@ main { width: 100%; display: flex; justify-content: center; flex: none; }
 .copy-command:hover { background: var(--rule); color: var(--text); }
 .copy-check, .copy-command.copied .copy-icon { display: none; }
 .copy-command.copied .copy-check { display: block; color: var(--observed); }
-.phase { opacity: 0; animation-duration: var(--cycle); animation-delay: var(--offset); animation-timing-function: steps(1, end); animation-iteration-count: infinite; }
-.loop { animation-duration: var(--cycle); animation-delay: var(--offset); animation-iteration-count: infinite; }
+.phase, .loop {
+  animation-duration: var(--cycle);
+  animation-delay: var(--offset);
+  animation-iteration-count: infinite;
+  animation-play-state: var(--simulation-visibility, var(--simulation-motion, running));
+}
+.phase { opacity: 0; animation-timing-function: steps(1, end); }
+:root[data-simulation-paused] { --simulation-visibility: paused; }
 .region-preponed { color: var(--preponed); }
 .preponed-text { fill: var(--preponed); }
 .region-active { color: var(--active); }
@@ -142,19 +148,12 @@ main { width: 100%; display: flex; justify-content: center; flex: none; }
 .postponed-text { fill: var(--postponed); }
 
 /* Opacity switches are discrete: signal changes occur at region boundaries. */
-.phase-sample-first { animation-name: phase-sample-first; }
-.phase-sample-second { animation-name: phase-sample-second; }
 .phase-rise { animation-name: phase-rise; }
-.phase-enqueue { animation-name: phase-enqueue; }
 .phase-suspend { animation-name: phase-suspend; }
 .phase-inactive { animation-name: phase-inactive; }
 .phase-resume { animation-name: phase-resume; }
 .phase-strobe { animation-name: phase-strobe; }
-.phase-commit { animation-name: phase-commit; }
-.phase-comb { animation-name: phase-comb; }
-.phase-observe { animation-name: phase-observe; }
 .phase-react { animation-name: phase-react; }
-.phase-postpone { animation-name: phase-postpone; }
 .phase-fall { animation-name: phase-fall; }
 .region-preponed { animation-name: region-preponed; }
 .region-active { animation-name: region-active; }
@@ -163,52 +162,16 @@ main { width: 100%; display: flex; justify-content: center; flex: none; }
 .region-observed { animation-name: region-observed; }
 .region-reactive { animation-name: region-reactive; }
 .region-postponed { animation-name: region-postponed; }
-.time-zero { animation-name: time-zero; }
-.time-five { animation-name: time-five; }
-.time-ten { animation-name: time-ten; }
 .previous-transition { animation-name: previous-transition; }
 .next-transition { animation-name: next-transition; }
-.nba-pending { animation-name: nba-pending; }
 .clock-low { animation-name: clock-low; }
 .clock-high { animation-name: clock-high; }
-.count-zero { animation-name: count-zero; }
-.count-one { animation-name: count-one; }
 .seen-zero { animation-name: seen-zero; }
 .seen-one { animation-name: seen-one; }
 .even-one { animation-name: even-one; }
 .even-zero { animation-name: even-zero; }
 .inactive-feedback { animation-name: inactive-feedback; }
 .nba-feedback { animation-name: nba-feedback; }
-@keyframes phase-sample-first {
-  0% { opacity: 0; }
-  1% { opacity: 1; }
-  2.5% { opacity: 0; }
-  25% { opacity: 0; }
-  26% { opacity: 1; }
-  27.5% { opacity: 0; }
-  50% { opacity: 0; }
-  51% { opacity: 1; }
-  52.5% { opacity: 0; }
-  75% { opacity: 0; }
-  76% { opacity: 1; }
-  77.5% { opacity: 0; }
-  100% { opacity: 0; }
-}
-@keyframes phase-sample-second {
-  0% { opacity: 0; }
-  23% { opacity: 1; }
-  23.5% { opacity: 0; }
-  25% { opacity: 0; }
-  48% { opacity: 1; }
-  48.5% { opacity: 0; }
-  50% { opacity: 0; }
-  73% { opacity: 1; }
-  73.5% { opacity: 0; }
-  75% { opacity: 0; }
-  98% { opacity: 1; }
-  98.5% { opacity: 0; }
-  100% { opacity: 0; }
-}
 @keyframes phase-rise {
   0% { opacity: 0; }
   2.5% { opacity: 1; }
@@ -222,21 +185,6 @@ main { width: 100%; display: flex; justify-content: center; flex: none; }
   75% { opacity: 0; }
   77.5% { opacity: 1; }
   79.25% { opacity: 0; }
-  100% { opacity: 0; }
-}
-@keyframes phase-enqueue {
-  0% { opacity: 0; }
-  4.25% { opacity: 1; }
-  6.25% { opacity: 0; }
-  25% { opacity: 0; }
-  29.25% { opacity: 1; }
-  31.25% { opacity: 0; }
-  50% { opacity: 0; }
-  54.25% { opacity: 1; }
-  56.25% { opacity: 0; }
-  75% { opacity: 0; }
-  79.25% { opacity: 1; }
-  81.25% { opacity: 0; }
   100% { opacity: 0; }
 }
 @keyframes phase-suspend {
@@ -299,51 +247,6 @@ main { width: 100%; display: flex; justify-content: center; flex: none; }
   86.5% { opacity: 0; }
   100% { opacity: 0; }
 }
-@keyframes phase-commit {
-  0% { opacity: 0; }
-  11.5% { opacity: 1; }
-  13.5% { opacity: 0; }
-  25% { opacity: 0; }
-  36.5% { opacity: 1; }
-  38.5% { opacity: 0; }
-  50% { opacity: 0; }
-  61.5% { opacity: 1; }
-  63.5% { opacity: 0; }
-  75% { opacity: 0; }
-  86.5% { opacity: 1; }
-  88.5% { opacity: 0; }
-  100% { opacity: 0; }
-}
-@keyframes phase-comb {
-  0% { opacity: 0; }
-  13.5% { opacity: 1; }
-  15.5% { opacity: 0; }
-  25% { opacity: 0; }
-  38.5% { opacity: 1; }
-  40.5% { opacity: 0; }
-  50% { opacity: 0; }
-  63.5% { opacity: 1; }
-  65.5% { opacity: 0; }
-  75% { opacity: 0; }
-  88.5% { opacity: 1; }
-  90.5% { opacity: 0; }
-  100% { opacity: 0; }
-}
-@keyframes phase-observe {
-  0% { opacity: 0; }
-  15.5% { opacity: 1; }
-  17.5% { opacity: 0; }
-  25% { opacity: 0; }
-  40.5% { opacity: 1; }
-  42.5% { opacity: 0; }
-  50% { opacity: 0; }
-  65.5% { opacity: 1; }
-  67.5% { opacity: 0; }
-  75% { opacity: 0; }
-  90.5% { opacity: 1; }
-  92.5% { opacity: 0; }
-  100% { opacity: 0; }
-}
 @keyframes phase-react {
   0% { opacity: 0; }
   17.5% { opacity: 1; }
@@ -357,21 +260,6 @@ main { width: 100%; display: flex; justify-content: center; flex: none; }
   75% { opacity: 0; }
   92.5% { opacity: 1; }
   94.5% { opacity: 0; }
-  100% { opacity: 0; }
-}
-@keyframes phase-postpone {
-  0% { opacity: 0; }
-  19.5% { opacity: 1; }
-  21% { opacity: 0; }
-  25% { opacity: 0; }
-  44.5% { opacity: 1; }
-  46% { opacity: 0; }
-  50% { opacity: 0; }
-  69.5% { opacity: 1; }
-  71% { opacity: 0; }
-  75% { opacity: 0; }
-  94.5% { opacity: 1; }
-  96% { opacity: 0; }
   100% { opacity: 0; }
 }
 @keyframes phase-fall {
@@ -526,43 +414,6 @@ main { width: 100%; display: flex; justify-content: center; flex: none; }
   96% { opacity: 0; }
   100% { opacity: 0; }
 }
-@keyframes time-zero {
-  0% { opacity: 1; }
-  1% { opacity: 0; }
-  25% { opacity: 1; }
-  26% { opacity: 0; }
-  50% { opacity: 1; }
-  51% { opacity: 0; }
-  75% { opacity: 1; }
-  76% { opacity: 0; }
-  100% { opacity: 0; }
-}
-@keyframes time-five {
-  0% { opacity: 0; }
-  1% { opacity: 1; }
-  22% { opacity: 0; }
-  25% { opacity: 0; }
-  26% { opacity: 1; }
-  47% { opacity: 0; }
-  50% { opacity: 0; }
-  51% { opacity: 1; }
-  72% { opacity: 0; }
-  75% { opacity: 0; }
-  76% { opacity: 1; }
-  97% { opacity: 0; }
-  100% { opacity: 0; }
-}
-@keyframes time-ten {
-  0% { opacity: 0; }
-  22% { opacity: 1; }
-  25% { opacity: 0; }
-  47% { opacity: 1; }
-  50% { opacity: 0; }
-  72% { opacity: 1; }
-  75% { opacity: 0; }
-  97% { opacity: 1; }
-  100% { opacity: 0; }
-}
 @keyframes previous-transition {
   0% { opacity: 1; }
   1% { opacity: 0; }
@@ -601,21 +452,6 @@ main { width: 100%; display: flex; justify-content: center; flex: none; }
   99.5% { opacity: 1; }
   100% { opacity: 0; }
 }
-@keyframes nba-pending {
-  0% { opacity: 0; }
-  4.25% { opacity: 1; }
-  11.5% { opacity: 0; }
-  25% { opacity: 0; }
-  29.25% { opacity: 1; }
-  36.5% { opacity: 0; }
-  50% { opacity: 0; }
-  54.25% { opacity: 1; }
-  61.5% { opacity: 0; }
-  75% { opacity: 0; }
-  79.25% { opacity: 1; }
-  86.5% { opacity: 0; }
-  100% { opacity: 0; }
-}
 @keyframes clock-low {
   0% { opacity: 1; }
   2.5% { opacity: 0; }
@@ -644,28 +480,6 @@ main { width: 100%; display: flex; justify-content: center; flex: none; }
   75% { opacity: 0; }
   77.5% { opacity: 1; }
   98.5% { opacity: 0; }
-  100% { opacity: 0; }
-}
-@keyframes count-zero {
-  0% { opacity: 1; }
-  11.5% { opacity: 0; }
-  25% { opacity: 1; }
-  36.5% { opacity: 0; }
-  50% { opacity: 1; }
-  61.5% { opacity: 0; }
-  75% { opacity: 1; }
-  86.5% { opacity: 0; }
-  100% { opacity: 0; }
-}
-@keyframes count-one {
-  0% { opacity: 0; }
-  11.5% { opacity: 1; }
-  25% { opacity: 0; }
-  36.5% { opacity: 1; }
-  50% { opacity: 0; }
-  61.5% { opacity: 1; }
-  75% { opacity: 0; }
-  86.5% { opacity: 1; }
   100% { opacity: 0; }
 }
 @keyframes seen-zero { 0% { opacity: 1; } 9% { opacity: 0; } 100% { opacity: 0; } }
@@ -995,7 +809,7 @@ main { width: 100%; display: flex; justify-content: center; flex: none; }
 .postpone-3 { animation-name: postpone-3; }
 @keyframes postpone-3 { 0% { opacity: 0; } 94.5% { opacity: 1; } 96% { opacity: 0; } 100% { opacity: 0; } }
 
-.motion-input:checked ~ .landing .simulation-frame * { animation-play-state: paused; }
+.motion-input:checked ~ .landing { --simulation-motion: paused; }
 .motion-input:checked ~ .landing .pause-label { display: none; }
 .motion-input:checked ~ .landing .play-label { display: inline-flex; }
 
@@ -1042,10 +856,10 @@ main { width: 100%; display: flex; justify-content: center; flex: none; }
   .download-command { padding: 10px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .simulation-frame * { animation-play-state: paused; }
+  .landing { --simulation-motion: paused; }
   .pause-label { display: none; }
   .play-label { display: inline-flex; }
-  .motion-input:checked ~ .landing .simulation-frame * { animation-play-state: running; }
+  .motion-input:checked ~ .landing { --simulation-motion: running; }
   .motion-input:checked ~ .landing .pause-label { display: inline-flex; }
   .motion-input:checked ~ .landing .play-label { display: none; }
   .button { transition: none; }

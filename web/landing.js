@@ -1,5 +1,20 @@
 const status = document.getElementById('copy-status');
 
+// Keep the demo's place while it is offscreen or the tab is hidden.
+let inView = true;
+const syncVisibility = () => document.documentElement.toggleAttribute(
+  'data-simulation-paused', document.hidden || !inView,
+);
+document.addEventListener('visibilitychange', syncVisibility);
+if ('IntersectionObserver' in window) {
+  const observer = new IntersectionObserver(([entry]) => {
+    inView = entry.isIntersecting;
+    syncVisibility();
+  });
+  observer.observe(document.querySelector('.simulation-frame'));
+}
+syncVisibility();
+
 for (const button of document.querySelectorAll('[data-copy-command]')) {
   const command = document.getElementById(button.dataset.copyCommand);
   let reset;

@@ -22,6 +22,43 @@ class FakeWorker {
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
+// Cancelling a warm worker releases both pending downloads and ready heaps.
+// The readiness promise settles, and another preload can start afresh.
+{
+  const cancelledWorkers = [];
+  const cancelSession = new CompilerSession({
+    createWorker: (url) => {
+      const worker = new FakeWorker(url);
+      cancelledWorkers.push(worker);
+      return worker;
+    },
+  });
+  const loading = cancelSession.preload();
+  cancelSession.cancelPreload();
+  await assert.rejects(loading, /preload cancelled/);
+  assert.equal(cancelledWorkers[0].terminated, true);
+  cancelledWorkers[0].emit({ type: 'ready' });
+
+  const retry = cancelSession.preload();
+  assert.equal(cancelledWorkers.length, 2);
+  cancelledWorkers[1].emit({ type: 'ready' });
+  await retry;
+  cancelSession.cancelPreload();
+  cancelSession.cancelPreload();
+  assert.equal(cancelledWorkers[1].terminated, true);
+
+  const messages = [];
+  const active = cancelSession.run({ type: 'compile', kind: 'text' }, message => messages.push(message));
+  cancelledWorkers[2].emit({ type: 'ready' });
+  await settle();
+  cancelSession.cancelPreload();
+  assert.equal(cancelledWorkers[2].terminated, false);
+  assert.equal(cancelSession.busy, true);
+  active.stop();
+  assert.deepEqual(messages, [{ type: 'stopped' }]);
+  cancelSession.cancelPreload();
+}
+
 let workers = [];
 const session = new CompilerSession({
   workerUrl: 'https://example.test/compiler-worker.js',

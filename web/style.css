@@ -6,6 +6,22 @@
  * subject already speaks: purple for the driven signal, red for x, cyan for z,
  * green for settled. */
 
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.20/files/ibm-plex-sans-latin-400-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5.0.13/files/ibm-plex-mono-latin-400-normal.woff2") format("woff2");
+}
+
 :root {
   color-scheme: dark;
 

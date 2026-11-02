@@ -64,9 +64,13 @@ const coverage = new CoverageView({
 });
 let scheduleText = '';
 let scheduleRaw = false;
-const storedWaveform = loadWaveform()
-  .then((waveform) => { latestWaveform ??= waveform; })
-  .catch(() => {});
+let storedWaveform = null;
+
+function restoreWaveform() {
+  return storedWaveform ??= loadWaveform()
+    .then((waveform) => { latestWaveform ??= waveform; })
+    .catch(() => {});
+}
 
 // Results are cached per stage and dropped whenever the source or options
 // change, so switching tabs is instant but never shows something stale.
@@ -79,14 +83,43 @@ function setStatus(text, kind = '') {
   ui.status.className = `status ${kind}`;
 }
 
-function clearConsole() { ui.output.textContent = ''; }
+let consoleChunks = [];
+let consoleFrame = null;
 
-function write(text, className) {
-  const node = document.createElement('span');
-  if (className) node.className = className;
-  node.textContent = text;
-  ui.output.appendChild(node);
+function clearConsole() {
+  if (consoleFrame !== null) cancelAnimationFrame(consoleFrame);
+  consoleFrame = null;
+  consoleChunks = [];
+  ui.output.textContent = '';
+}
+
+// Commit streamed output once per frame, with a single layout for scrolling.
+function flushConsole() {
+  if (consoleFrame !== null) cancelAnimationFrame(consoleFrame);
+  consoleFrame = null;
+  if (!consoleChunks.length) return;
+  const fragment = document.createDocumentFragment();
+  let node = null;
+  let text = [];
+  for (const chunk of consoleChunks) {
+    if (!node || node.className !== chunk.className) {
+      if (node) node.textContent = text.join('');
+      node = document.createElement('span');
+      node.className = chunk.className;
+      fragment.appendChild(node);
+      text = [];
+    }
+    text.push(chunk.text);
+  }
+  node.textContent = text.join('');
+  consoleChunks = [];
+  ui.output.appendChild(fragment);
   ui.output.scrollTop = ui.output.scrollHeight;
+}
+
+function write(text, className = '') {
+  consoleChunks.push({ text, className });
+  consoleFrame ??= requestAnimationFrame(flushConsole);
 }
 
 function renderCommand() {
@@ -213,6 +246,7 @@ function record(text, className) {
 }
 
 function finishRecording(statusText, statusKind) {
+  flushConsole();
   // Replace the busy status immediately. Besides exposing the final timings,
   // changing the class removes the flashing .status.busy indicator.
   setStatus(statusText, statusKind);
@@ -223,7 +257,7 @@ function finishRecording(statusText, statusKind) {
 }
 
 function compileStage(stageId) {
-  if (busy) return;
+  if (busy || !editor || compilerUnavailable) return;
   // A token listing for the Embed dialog holds the session for a moment.
   if (tokenJob) {
     const waiting = deferredStage !== null;
@@ -277,6 +311,7 @@ function stop() {
 }
 
 function finishRun(refreshResults = false) {
+  flushConsole();
   busy = false;
   job = null;
   setBusyLabel(false);
@@ -432,6 +467,7 @@ async function finishSimulation(result) {
   }
   const waveform = files.find((file) => isVcd(file));
   await storedWaveform;
+  storedWaveform = Promise.resolve();
   latestWaveform = null;
   if (waveform) {
     latestWaveform = { ...waveform, createdAt: Date.now() };
@@ -476,30 +512,22 @@ function displayFilename(path) {
   return path.split(/[\\/]/).filter(Boolean).at(-1) ?? 'dump.vcd';
 }
 
-function showConsole() {
+function showView(view) {
   scheduleSourceHighlight?.clear();
-  ui.output.hidden = false;
-  ui.irEditor.hidden = true;
-  ui.scheduleView.hidden = true;
-  ui.waveformView.hidden = true;
-  ui.coverageView.hidden = true;
+  for (const panel of [ui.output, ui.irEditor, ui.scheduleView, ui.waveformView, ui.coverageView]) {
+    panel.hidden = panel !== view;
+  }
   ui.downloadCoverage.hidden = true;
   ui.scheduleToggle.hidden = true;
-  ui.copyOutput.hidden = false;
+  ui.copyOutput.hidden = view === ui.waveformView || view === ui.coverageView;
   ui.downloadWaveform.hidden = true;
 }
 
+function showConsole() { showView(ui.output); }
+
 function showIr(text, language = MLIR_LANGUAGE_ID) {
-  scheduleSourceHighlight?.clear();
-  ui.output.hidden = true;
-  ui.irEditor.hidden = false;
-  ui.scheduleView.hidden = true;
-  ui.waveformView.hidden = true;
-  ui.coverageView.hidden = true;
-  ui.downloadCoverage.hidden = true;
-  ui.scheduleToggle.hidden = true;
-  ui.copyOutput.hidden = false;
-  ui.downloadWaveform.hidden = true;
+  showView(ui.irEditor);
+  if (monaco && !irEditor) initIrEditor();
   if (monaco && irModel && language !== irLanguage) {
     monaco.editor.setModelLanguage(irModel, language);
     irLanguage = language;
@@ -527,16 +555,9 @@ function showSchedule(text) {
     showIr(text);
     return;
   }
-  ui.output.hidden = true;
-  ui.irEditor.hidden = true;
-  ui.scheduleView.hidden = false;
-  ui.waveformView.hidden = true;
-  ui.coverageView.hidden = true;
-  ui.downloadCoverage.hidden = true;
+  showView(ui.scheduleView);
   ui.scheduleToggle.hidden = false;
   ui.scheduleToggle.textContent = 'View IR';
-  ui.copyOutput.hidden = false;
-  ui.downloadWaveform.hidden = true;
 }
 
 function revealScheduleSource(location) {
@@ -589,15 +610,7 @@ function ensureSurfer() {
 }
 
 function showCoverage() {
-  scheduleSourceHighlight?.clear();
-  ui.output.hidden = true;
-  ui.irEditor.hidden = true;
-  ui.scheduleView.hidden = true;
-  ui.waveformView.hidden = true;
-  ui.scheduleToggle.hidden = true;
-  ui.copyOutput.hidden = true;
-  ui.downloadWaveform.hidden = true;
-  ui.coverageView.hidden = false;
+  showView(ui.coverageView);
   const status = coverage.show(options.coverage === 'on');
   if (options.coverage === 'on' && busy &&
       (recording?.stage === 'run' || coveragePending)) {
@@ -610,22 +623,14 @@ function showCoverage() {
 
 async function showWaveform() {
   const request = ++waveformRequest;
-  scheduleSourceHighlight?.clear();
-  ui.output.hidden = true;
-  ui.irEditor.hidden = true;
-  ui.scheduleView.hidden = true;
-  ui.waveformView.hidden = false;
-  ui.coverageView.hidden = true;
-  ui.downloadCoverage.hidden = true;
-  ui.scheduleToggle.hidden = true;
-  ui.copyOutput.hidden = true;
+  showView(ui.waveformView);
   ui.downloadWaveform.hidden = !latestWaveform;
   ui.surfer.hidden = true;
   ui.waveformEmpty.hidden = false;
   ui.waveformEmpty.textContent = 'Loading the latest waveform saved in this browser…';
   setStatus('loading', 'busy');
 
-  await storedWaveform;
+  await restoreWaveform();
   if (request !== waveformRequest || activeStage !== 'waveform') return;
   if (!latestWaveform) {
     ui.waveformEmpty.textContent =
@@ -674,8 +679,6 @@ function loadMonaco() {
 async function initEditor(initialSource) {
   monaco = await loadMonaco();
   registerSystemVerilog(monaco);
-  registerMlir(monaco);
-  registerLlvm(monaco);
 
   // Dracula, following the official palette's part of speech: pink keywords,
   // cyan italic types, green functions, purple numbers, yellow strings.
@@ -742,6 +745,30 @@ async function initEditor(initialSource) {
   });
   scheduleSourceHighlight = editor.createDecorationsCollection();
 
+  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, run);
+  editor.onDidChangeModelContent(() => {
+    const source = editor.getValue();
+    const exampleIndex = EXAMPLES.findIndex(
+      (example) => example.source === source,
+    );
+    ui.examples.value = exampleIndex < 0 ? '' : String(exampleIndex);
+    invalidate();
+    // Waveforms and coverage describe the last run, not the edited source.
+    if (activeStage === 'waveform' || activeStage === 'coverage') {
+      waveformRequest++;
+      activeStage = 'run';
+      paintStageSelection();
+      showConsole();
+      clearConsole();
+      if (!busy) setStatus('ready');
+    }
+    persist();
+  });
+}
+
+function initIrEditor() {
+  registerMlir(monaco);
+  registerLlvm(monaco);
   irModel = monaco.editor.createModel('', MLIR_LANGUAGE_ID);
   irEditor = monaco.editor.create(ui.irEditor, {
     model: irModel,
@@ -759,25 +786,6 @@ async function initEditor(initialSource) {
     wordWrap: 'off',
     padding: { top: 12, bottom: 12 },
   });
-
-  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, run);
-  editor.onDidChangeModelContent(() => {
-    const exampleIndex = EXAMPLES.findIndex(
-      (example) => example.source === editor.getValue(),
-    );
-    ui.examples.value = exampleIndex < 0 ? '' : String(exampleIndex);
-    invalidate();
-    // Waveforms and coverage describe the last run, not the edited source.
-    if (activeStage === 'waveform' || activeStage === 'coverage') {
-      waveformRequest++;
-      activeStage = 'run';
-      paintStageSelection();
-      showConsole();
-      clearConsole();
-      if (!busy) setStatus('ready');
-    }
-    persist();
-  });
 }
 
 /* ---------------------------------------------------------------- options */
@@ -790,8 +798,18 @@ function writeOptions() {
   for (const field of OPTION_FIELDS) el(field).value = options[field];
 }
 
-function persist() {
+let persistTimer = null;
+
+function flushState() {
+  if (persistTimer === null) return;
+  clearTimeout(persistTimer);
+  persistTimer = null;
   if (editor) saveState(editor.getValue(), { ...options, stage: activeStage });
+}
+
+function persist() {
+  clearTimeout(persistTimer);
+  persistTimer = setTimeout(flushState, 250);
 }
 
 function initOptions() {
@@ -832,9 +850,11 @@ function initChrome(initialSource) {
     scheduleRaw = !scheduleRaw;
     showSchedule(scheduleText);
   });
-  ui.copyOutput.addEventListener('click', () =>
+  ui.copyOutput.addEventListener('click', () => {
+    flushConsole();
     copy(!ui.scheduleView.hidden ? scheduleText
-      : ui.irEditor.hidden ? ui.output.textContent : irModel.getValue(), ui.copyOutput));
+      : ui.irEditor.hidden ? ui.output.textContent : irModel.getValue(), ui.copyOutput);
+  });
   ui.downloadWaveform.addEventListener('click', () => {
     if (!latestWaveform) return;
     const url = URL.createObjectURL(new Blob(
@@ -848,11 +868,17 @@ function initChrome(initialSource) {
   });
   ui.downloadCoverage.addEventListener('click', () => coverage.save(document));
   ui.share.addEventListener('click', () => {
+    if (!editor) return;
     const link = toPermalink(editor.getValue(), { ...options, stage: activeStage });
     history.replaceState(null, '', link);
     copy(link, ui.share);
   });
   initEmbed();
+
+  window.addEventListener('pagehide', flushState);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) flushState();
+  });
 
   for (const [index, example] of EXAMPLES.entries()) {
     const option = document.createElement('option');
@@ -867,7 +893,7 @@ function initChrome(initialSource) {
   ui.examples.addEventListener('change', () => {
     if (ui.examples.value === '') return;
     const example = EXAMPLES[Number(ui.examples.value)];
-    if (example) {
+    if (example && editor) {
       editor.setValue(example.source);
       editor.focus();
     }
@@ -990,6 +1016,7 @@ function initEmbed() {
   });
 
   ui.embed.addEventListener('click', () => {
+    if (!editor) return;
     // A listing that fell back (busy or failed compiler) is retried on open.
     if (!listed.pending && !listed.tokens) listed = { key: null, tokens: null, pending: false };
     render();
@@ -1152,6 +1179,10 @@ function formatBytes(bytes) {
 }
 
 async function main() {
+  // Download the compiler while Monaco loads. Handle a failed preload below,
+  // even if it rejects before the editor has finished loading.
+  const compiler = Promise.resolve().then(() => session.preload());
+  compiler.catch(() => {});
   const saved = loadState();
   if (saved) {
     options = { ...saved.options };
@@ -1169,6 +1200,7 @@ async function main() {
   try {
     await initEditor(initialSource);
   } catch (error) {
+    session.cancelPreload();
     setStatus('editor failed', 'err');
     write(`${error.message}\n`, 'stderr');
     return;
@@ -1176,7 +1208,7 @@ async function main() {
 
   setStatus('loading compiler', 'busy');
   try {
-    await session.preload();
+    await compiler;
   } catch (error) {
     compilerUnavailable = true;
     ui.run.disabled = true;

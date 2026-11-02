@@ -33,10 +33,14 @@
   globalThis.installTalosToolchain = async function installTalosToolchain(
     mod, { load = defaultLoad } = {},
   ) {
-    for (const [name, path] of ASSETS) {
-      ensureDirectory(mod.FS, path.slice(0, path.lastIndexOf('/')));
-      mod.FS.writeFile(path, await load(name));
-    }
-    mod.FS.writeFile(`${TARGET}/.complete`, 'web toolchain\n');
+    // Accept a module promise so archives download alongside the compiler.
+    await Promise.all(ASSETS.map(async ([name, path]) => {
+      const [driver, data] = await Promise.all([mod, load(name)]);
+      ensureDirectory(driver.FS, path.slice(0, path.lastIndexOf('/')));
+      driver.FS.writeFile(path, data);
+    }));
+    const driver = await mod;
+    driver.FS.writeFile(`${TARGET}/.complete`, 'web toolchain\n');
+    return driver;
   };
 })();

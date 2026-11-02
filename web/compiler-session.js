@@ -36,6 +36,13 @@ export class CompilerSession {
     return this.#warm.ready;
   }
 
+  /** Release a preloaded worker when the caller cannot use the compiler. */
+  cancelPreload() {
+    const entry = this.#warm;
+    this.#warm = null;
+    entry?.cancel();
+  }
+
   /**
    * Starts a compile request on the warm worker, or a new one. Returns a
    * handle whose stop() terminates the worker, which is the only way to end a
@@ -75,8 +82,12 @@ export class CompilerSession {
 
   #spawn() {
     const worker = this.#createWorker(this.#workerUrl);
-    const entry = { worker, listener: null, ready: null };
+    const entry = { worker, listener: null, ready: null, cancel: null };
     entry.ready = new Promise((resolve, reject) => {
+      entry.cancel = () => {
+        worker.terminate();
+        reject(new Error('compiler preload cancelled'));
+      };
       let started = false;
       worker.onmessage = (event) => {
         const message = event.data;

@@ -7,6 +7,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 import { CoverageView } from '../../web/coverage-view.js';
+import { CompilerSession } from '../../web/compiler-session.js';
 import { MLIR_LANGUAGE_ID } from '../../web/mlir-language.js';
 import { DEFAULTS, buildArgs, formatCommand } from '../../web/options.js';
 import { DEFAULT_STAGE, STAGES, findStage } from '../../web/stages.js';
@@ -56,7 +57,10 @@ function app({ savedWaveform = null } = {}) {
     querySelector: element,
     createElement: () => new Element(),
     createTextNode: text => Object.assign(new Element(), { textContent: text }),
+    createDocumentFragment: () => new Element(),
   };
+  const frames = new Map();
+  let nextFrame = 0;
   const loads = [];
   element('surfer').contentWindow = {
     postMessage(message) { loads.push(new TextDecoder().decode(message.buffer)); },
@@ -71,7 +75,7 @@ function app({ savedWaveform = null } = {}) {
     },
     revokeObjectURL(href) { blobs.delete(href); },
   };
-  const storage = { waveform: savedWaveform };
+  const storage = { waveform: savedWaveform, reads: 0 };
   const editor = { source: 'module first; endmodule', getValue() { return this.source; } };
   let session;
   class Session {
@@ -90,10 +94,16 @@ function app({ savedWaveform = null } = {}) {
     CoverageView: class extends CoverageView {
       constructor(elements) { super(elements, urls); }
     },
-    loadWaveform: async () => storage.waveform,
+    loadWaveform: async () => { storage.reads++; return storage.waveform; },
     saveWaveform: async waveform => { storage.waveform = waveform; },
     clearWaveform: async () => { storage.waveform = null; },
     testEditor: editor,
+    requestAnimationFrame(callback) {
+      const id = ++nextFrame;
+      frames.set(id, callback);
+      return id;
+    },
+    cancelAnimationFrame(id) { frames.delete(id); },
   });
   // Run the real application handlers without its network/bootstrap step.
   // Browser objects and the compiler session are the test boundaries.
@@ -105,10 +115,17 @@ function app({ savedWaveform = null } = {}) {
     buildStageTabs();
     globalThis.playground = {
       run,
+      write, clearConsole, flushConsole,
       setCoverage(value) { options.coverage = value; },
     };
   `, context, { filename: 'web/app.js' });
-  const settle = async () => { await new Promise(resolve => setImmediate(resolve)); };
+  const settle = async () => {
+    await new Promise(resolve => setImmediate(resolve));
+    for (const [id, callback] of frames) {
+      frames.delete(id);
+      callback();
+    }
+  };
   const open = async stage => {
     const button = element('stages').querySelectorAll('.stage')
       .find(button => button.dataset.stage === stage);
@@ -129,7 +146,8 @@ function app({ savedWaveform = null } = {}) {
     await settle();
   };
   return {
-    element, loads, storage, open, start, exit, settle,
+    element, loads, storage, open, start, exit, settle, frames,
+    console: context.playground,
     report: async () => blobs.get(element('coverageFrame').src)?.text(),
     emit: async message => { await session.emit(message); await settle(); },
   };
@@ -146,6 +164,86 @@ function waveform(scope) {
 
 const report = (label, percent) => '<!doctype html><script id="coverage-data">' +
   JSON.stringify({ label, metrics: { line: { available: true, percent } } }) + '</script>';
+
+for (const ready of [false, true]) {
+  test(`Editor startup failure releases the ${ready ? 'ready' : 'loading'} compiler`, async () => {
+    const workers = [];
+    const session = new CompilerSession({
+      createWorker: () => {
+        const worker = {
+          terminated: false,
+          postMessage() {},
+          terminate() { this.terminated = true; },
+        };
+        workers.push(worker);
+        return worker;
+      },
+    });
+    const noop = () => {};
+    const context = vm.createContext({
+      session, EXAMPLES: [{ source: '' }], loadState: () => null,
+      buildStageTabs: noop, writeOptions: noop, paintStageSelection: noop,
+      initOptions: noop, initChrome: noop, setStatus: noop, write: noop,
+      initEditor: async () => {
+        if (ready) {
+          await Promise.resolve();
+          workers[0].onmessage({ data: { type: 'ready' } });
+        }
+        throw new Error('editor blocked');
+      },
+    });
+    vm.runInContext(source.slice(source.indexOf('async function main()'),
+      source.lastIndexOf('\nmain();')), context);
+    await vm.runInContext('main()', context);
+    assert.equal(workers.length, 1);
+    assert.equal(workers[0].terminated, true);
+  });
+}
+
+test('Streamed console output shares one frame and keeps stream order', async () => {
+  const ui = app();
+  const output = ui.element('output');
+  for (let index = 0; index < 100; index++) ui.console.write(`${index}\n`);
+  ui.console.write('warning\n', 'stderr');
+  ui.console.write('done\n');
+  assert.equal(ui.frames.size, 1);
+  assert.equal(output.textContent, '');
+  await ui.settle();
+  assert.equal(ui.frames.size, 0);
+  assert.equal(output.textContent,
+    Array.from({ length: 100 }, (_, index) => `${index}\n`).join('') + 'warning\ndone\n');
+  const spans = output.children[0].children;
+  assert.deepEqual(spans.map(span => span.className), ['', 'stderr', '']);
+});
+
+test('Clearing output discards pending writes and explicit flush cancels its frame', async () => {
+  const ui = app();
+  ui.console.write('stale\n');
+  ui.console.clearConsole();
+  assert.equal(ui.frames.size, 0);
+  await ui.settle();
+  assert.equal(ui.element('output').textContent, '');
+  ui.console.write('current\n');
+  ui.console.flushConsole();
+  assert.equal(ui.frames.size, 0);
+  assert.equal(ui.element('output').textContent, 'current\n');
+});
+
+test('Saved waveforms load only when opened, and new runs skip the old download', async () => {
+  const ui = app({ savedWaveform: waveform('saved') });
+  await ui.settle();
+  assert.equal(ui.storage.reads, 0);
+  await ui.open('waveform');
+  await ui.open('waveform');
+  assert.equal(ui.storage.reads, 1);
+
+  const fresh = app({ savedWaveform: waveform('old') });
+  await fresh.start('new');
+  await fresh.exit([waveform('new')]);
+  await fresh.open('waveform');
+  assert.equal(fresh.storage.reads, 0);
+  assert.match(fresh.loads.at(-1), /module new/);
+});
 
 test('Waveform refreshes after another design finishes while its tab is open', async () => {
   const ui = app();

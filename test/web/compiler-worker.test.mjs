@@ -226,8 +226,9 @@ globalThis.self = {
     importedScripts.push(path);
     if (path === './toolchain.js') {
       self.installTalosToolchain = async (mod) => {
-        assert.equal(mod, module);
+        assert.equal(await mod, module);
         installCalls++;
+        return module;
       };
     } else if (path === './talos-cov.js') {
       if (covBehavior === 'no-factory') {

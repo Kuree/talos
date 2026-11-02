@@ -32,15 +32,14 @@ function loadDriver() {
     if (typeof self.createTalosModule !== 'function') {
       throw new Error('talos.js did not expose createTalosModule');
     }
-    const mod = await self.createTalosModule({
+    const mod = self.createTalosModule({
       noInitialRun: true,
       thisProgram: '/bin/talos',
       print: (line) => compilerLog('stdout', line),
       printErr: (line) => compilerLog('stderr', line),
       locateFile: (path) => new URL(path, self.location.href).href,
     });
-    await self.installTalosToolchain(mod);
-    return mod;
+    return self.installTalosToolchain(mod);
   })();
   return modulePromise;
 }
