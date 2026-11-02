@@ -5048,18 +5048,17 @@ talos_rt_status runScheduler(talos_rt_context *context,
       if (selected) {
         ScheduledProcess &candidate =
             context->scheduledProcesses[selectedIndex];
+        bool afterObserved = candidate.postObserved &&
+                             candidate.queuedRegion == TALOS_RT_REGION_OBSERVED;
         // A Reactive home follows what the same promotion returns to Active.
-        if (candidate.postObserved &&
-            candidate.queuedRegion == TALOS_RT_REGION_OBSERVED &&
-            candidate.homeRegion != TALOS_RT_REGION_ACTIVE) {
+        if (afterObserved && candidate.homeRegion != TALOS_RT_REGION_ACTIVE) {
           talos_rt_promote_post_observed_resumptions_unlocked(context);
           clearCachedNativeReady();
           continue;
         }
         if ((isInactiveSchedulerRegion(candidate.queuedRegion) ||
              context->schedulerCohortEnabled) &&
-            !(candidate.postObserved &&
-              candidate.queuedRegion == TALOS_RT_REGION_OBSERVED)) {
+            !afterObserved) {
           bool retry = false;
           talos_rt_status status = admitSchedulerRegionUnlocked(
               context, candidate.queuedRegion, retry);
@@ -5125,8 +5124,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
         if (cachedNativeSelection &&
             candidate.token != cachedNativeSelection->token)
           clearCachedNativeReady();
-        if (candidate.postObserved &&
-            candidate.queuedRegion == TALOS_RT_REGION_OBSERVED) {
+        if (afterObserved) {
           talos_rt_promote_post_observed_resumptions_unlocked(context);
           clearCachedNativeReady();
         }
