@@ -95,6 +95,15 @@ planTwoStateRegisters(sim::SimDesignOp design) {
         // all zero. This is an ABI boundary, not an arithmetic scratch value.
         if (auto write = dyn_cast<sim::SimContainerWriteOp>(operation))
           force(write.getValue());
+        // A class field has both planes too. A known value has to overwrite the
+        // unknown plane there, or a prior X or Z in the field survives the store.
+        if (auto store = dyn_cast<sim::SimManagedStoreOp>(operation))
+          force(store.getValue());
+        if (auto enqueue = dyn_cast<sim::SimManagedNBAEnqueueOp>(operation))
+          force(enqueue.getValue());
+        if (auto enqueue =
+                dyn_cast<sim::SimManagedNBAEnqueueMaskedOp>(operation))
+          force(enqueue.getValue());
 
         // Constructor formals are snapshotted and later read with their
         // declared type. Preserve that ABI even for a known logic constant;

@@ -131,6 +131,14 @@ bool packBytes(const Image &image, Frame &frame, uint32_t reg,
   return true;
 }
 
+/// The bytes of a value in its register: a shortreal holds four, and everything
+/// else whole 64-bit limbs per plane.
+static uint64_t managedScratchPlaneSize(const Layout &layout) {
+  return layout.kind == TALOS_RT_DBREG_REAL32
+             ? sizeof(float)
+             : ((uint64_t{layout.width} + 63) / 64) * 8;
+}
+
 talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
                                 talos_rt_context *context, uint32_t siteIndex) {
   if (!validIntrinsic(image, frame.function, siteIndex))
@@ -3143,7 +3151,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       std::memcpy(frame.data + output.offset + 24, &end, sizeof(end));
       return TALOS_RT_OK;
     }
-    uint64_t scratchPlaneSize = ((uint64_t{output.width} + 63) / 64) * 8;
+    uint64_t scratchPlaneSize = managedScratchPlaneSize(output);
     bool fourState = output.kind == TALOS_RT_DBREG_LOGIC;
     if (*planeSize > scratchPlaneSize ||
         output.size != scratchPlaneSize * (fourState ? 2 : 1))
@@ -3184,7 +3192,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       return talos_rt_v1_object_write(object, offset, &stableID,
                                       sizeof(stableID));
     }
-    uint64_t scratchPlaneSize = ((uint64_t{input.width} + 63) / 64) * 8;
+    uint64_t scratchPlaneSize = managedScratchPlaneSize(input);
     bool fourState = input.kind == TALOS_RT_DBREG_LOGIC;
     if (*planeSize > scratchPlaneSize ||
         input.size != scratchPlaneSize * (fourState ? 2 : 1))
@@ -3209,7 +3217,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     bool fourState = (*flags & 8) != 0;
     if (fourState != (input.kind == TALOS_RT_DBREG_LOGIC))
       return TALOS_RT_INVALID_BYTECODE;
-    uint64_t scratchPlaneSize = ((uint64_t{input.width} + 63) / 64) * 8;
+    uint64_t scratchPlaneSize = managedScratchPlaneSize(input);
     if (fourState &&
         (*planeSize > scratchPlaneSize || input.size != scratchPlaneSize * 2))
       return TALOS_RT_INVALID_BYTECODE;
@@ -3262,7 +3270,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       if (*planeSize != sizeof(talos_rt_managed_word_v1))
         return TALOS_RT_INVALID_BYTECODE;
     } else {
-      uint64_t scratchPlaneSize = ((uint64_t{input.width} + 63) / 64) * 8;
+      uint64_t scratchPlaneSize = managedScratchPlaneSize(input);
       bool fourState = input.kind == TALOS_RT_DBREG_LOGIC;
       if (*planeSize > scratchPlaneSize ||
           input.size != scratchPlaneSize * (fourState ? 2 : 1))
@@ -3290,7 +3298,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       return TALOS_RT_INVALID_BYTECODE;
     Layout input = layoutAt(image, frame.function, inputRegister(1));
     Layout mask = layoutAt(image, frame.function, inputRegister(3));
-    uint64_t scratchPlaneSize = ((uint64_t{input.width} + 63) / 64) * 8;
+    uint64_t scratchPlaneSize = managedScratchPlaneSize(input);
     bool fourState = input.kind == TALOS_RT_DBREG_LOGIC;
     if (*planeSize > scratchPlaneSize ||
         input.size != scratchPlaneSize * (fourState ? 2 : 1) ||
