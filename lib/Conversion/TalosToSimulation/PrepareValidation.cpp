@@ -760,14 +760,6 @@ validateSemanticDesign(ModuleOp module, bool pruneUnusedCoverage) {
     // procedures and static assertions execute under the checker scheduling
     // rules (IEEE 1800-2023 17.5, 17.7.3). Reject only the checker features
     // that have no executable lowering.
-    if (auto body = dyn_cast<semantic::SVCheckerInstanceBodySymbolOp>(op);
-        body && body.getIsProcedural()) {
-      emitError(getSemanticLocation(op->getParentOp() ? op->getParentOp() : op))
-          << "IEEE 1800-2023 17.3 procedural checker instances are not "
-             "executable yet";
-      invalid = true;
-      return;
-    }
     if (auto assertion = dyn_cast<semantic::SVConcurrentAssertionStatementOp>(op)) {
       // IEEE 1800-2023 16.5.1: an input variable of a clocking block is sampled
       // with #1step sampling in a concurrent assertion, and any other sampling
@@ -867,7 +859,8 @@ validateSemanticDesign(ModuleOp module, bool pruneUnusedCoverage) {
     if ((op->hasTrait<OpTrait::SemanticDeclarativeNode>() &&
          !isSupportedClassDeclaration(op) && !isSupportedAssertionNode(op) &&
          !isSupportedConstraintNode(op) && !isCoverageNode(op) &&
-         !isInsideCovergroup(op) && !isSupportedRandSequenceNode(op)) ||
+         !isInsideCovergroup(op) && !isSupportedRandSequenceNode(op) &&
+         !isa<semantic::SVProceduralCheckerStatementOp>(op)) ||
         isDeclarativeLeafNode(op)) {
       emitError(getSemanticLocation(op))
           << "unsupported semantic construct in the first simulation slice: "

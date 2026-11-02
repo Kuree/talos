@@ -1,5 +1,4 @@
 // RUN: talos-opt %s '--lower-talos-to-sim=opt-level=0' | FileCheck %s
-// RUN: not talos-opt %s '--test-talos-edit-attributes=match={is_procedural = false} set={is_procedural = true}' '--lower-talos-to-sim=opt-level=0' 2>&1 | FileCheck %s --check-prefix=PROCEDURAL
 
 // Source:
 //   checker chk(logic clk, logic rst, logic a);
@@ -24,7 +23,6 @@
 // CHECK: simulation.assert.sampled_read %arg0 from %arg3
 // CHECK-NOT: simulation.ref.load %arg3
 
-// PROCEDURAL: error: IEEE 1800-2023 17.3 procedural checker instances are not executable yet
 
 module attributes {coverage.language_version = 2023 : i32} {
   talos.sv.symbol.definition @s0.m attributes {definition_kind = 0 : i32, hierarchical_name = "m", name = "m", node_id = 0 : i64} {

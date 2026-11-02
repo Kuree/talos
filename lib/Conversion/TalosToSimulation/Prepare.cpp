@@ -756,6 +756,7 @@ void TalosSimPreparePass::runOnOperation() {
     signalPassFailure();
     return;
   }
+  bindProceduralCheckerClocks(semanticRoot, coveragePlanBuilder);
   if (failed(resolveInferredAssertionQueries(semanticRoot, coveragePlanBuilder)) ||
       failed(rebindVirtualInterfaceCallDefaults(semanticRoot, semanticSymbols,
                                                 coveragePlanBuilder))) {
@@ -767,6 +768,8 @@ void TalosSimPreparePass::runOnOperation() {
     signalPassFailure();
     return;
   }
+  synthesizeProceduralCheckers(semanticRoot, semanticSymbols,
+                               coveragePlanBuilder);
   unsigned matchedTrackers = 0;
   if (failed(synthesizeMatchedTrackers(semanticRoot, coveragePlanBuilder,
                                        matchedTrackers))) {

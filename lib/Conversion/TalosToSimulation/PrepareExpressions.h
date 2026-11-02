@@ -92,6 +92,19 @@ synthesizeExplicitDelayedDrivers(semantic::SVRootSymbolOp root,
                                  mlir::Builder &builder,
                                  llvm::StringSet<> &delayedSources);
 
+/// IEEE 1800-2023 17.3: give the assertions of a procedural checker instance
+/// the clock of their instantiation, ahead of resolveInferredAssertionQueries.
+void bindProceduralCheckerClocks(semantic::SVRootSymbolOp root,
+                                 mlir::Builder &builder);
+
+/// IEEE 1800-2023 17.3: the static assertions of a procedural checker instance
+/// are procedural assertions at its instantiation. Its variables and procedures
+/// stay where they are, as they exist at every time step. Runs after
+/// synthesizeFreeCheckerVariables, whose assume sets exist at every step too.
+void synthesizeProceduralCheckers(semantic::SVRootSymbolOp root,
+                                  llvm::StringMap<mlir::Operation *> &symbols,
+                                  mlir::Builder &builder);
+
 /// IEEE 1800-2023 17.7.2: give each free variable of a static checker its
 /// initial random value, and for each assume set clock event add a process that
 /// solves the active variables before the Observed region.

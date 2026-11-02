@@ -5205,6 +5205,9 @@ private:
       // always, which has no event control and would never yield.
       auto procedureKind = node.procedureKind;
       if (node.isFromAssertion) {
+        // A procedural checker instance moves these to its instantiation
+        // (17.3).
+        attrs.set("is_from_assertion", builder.getUnitAttr());
         // A label wraps the assertion in an implicit block.
         const slang::ast::Statement *assertion = &node.getBody();
         while (const auto *block =
@@ -6050,6 +6053,23 @@ private:
             builder.getStringAttr(getSymbolPath(*instance)));
         instances.push_back(instance);
       }
+      // IEEE 1800-2023 17.3: a procedural instance's static assertions take the
+      // clock of this context, as they are placed here. The child holds it, and
+      // the attribute says that a matching assertion clock starts on this tick.
+      if (!currentProcedures.empty())
+        if (const slang::analysis::AnalyzedProcedure *procedure =
+                getAnalyzedProcedure(*currentProcedures.back()))
+          if (const slang::ast::TimingControl *clock =
+                  procedure->getInferredClock()) {
+            const slang::analysis::SensitivityList &sensitivity =
+                procedure->getSensitivityList();
+            if (sensitivity.kind ==
+                    slang::analysis::SensitivityList::Kind::Explicit &&
+                sensitivity.timingControl &&
+                (sensitivity.timingControl == clock ||
+                 sensitivity.timingControl->isEquivalentTo(*clock)))
+              attrs.set("starts_on_current_clock", builder.getUnitAttr());
+          }
       SET_OP_ATTR(InstanceCount,
                   builder.getI64IntegerAttr(node.instances.size()));
       SET_OP_ATTR(InstanceSymbols, builder.getArrayAttr(instanceSymbols));
@@ -7964,6 +7984,14 @@ private:
       for (const slang::ast::LocalAssertionVarSymbol *local : node.localVars)
         if (const slang::ast::Expression *initializer = local->getInitializer())
           initializer->visit(*this);
+    } else if constexpr (std::same_as<T,
+                                      slang::ast::ProceduralCheckerStatement>) {
+      if (!currentProcedures.empty())
+        if (const slang::analysis::AnalyzedProcedure *procedure =
+                getAnalyzedProcedure(*currentProcedures.back()))
+          if (const slang::ast::TimingControl *clock =
+                  procedure->getInferredClock())
+            clock->visit(*this);
     } else if constexpr (std::same_as<
                              T, slang::ast::ConcurrentAssertionStatement>) {
       if (const slang::ast::Expression *disable = getCurrentDefaultDisable())

@@ -1017,6 +1017,199 @@ findAssertionClockFlow(Operation *operation,
   return nullptr;
 }
 
+/// Whether two event controls name the same event.
+static bool sameClockEvent(Operation *left, Operation *right) {
+  if (left->getName() != right->getName())
+    return false;
+  for (StringRef name : {"referenced_path", "edge_kind", "has_iff",
+                         "operator_kind", "constant_value", "callee_name"})
+    if (left->getAttr(name) != right->getAttr(name))
+      return false;
+  SmallVector<Operation *> leftChildren = getChildren(left);
+  SmallVector<Operation *> rightChildren = getChildren(right);
+  if (leftChildren.size() != rightChildren.size())
+    return false;
+  for (auto [leftChild, rightChild] :
+       llvm::zip_equal(leftChildren, rightChildren))
+    if (!sameClockEvent(leftChild, rightChild))
+      return false;
+  return true;
+}
+
+/// The procedural checker statements of the design with the instance bodies
+/// they name, and a node id above all those in use.
+struct ProceduralCheckerSites {
+  SmallVector<semantic::SVProceduralCheckerStatementOp> statements;
+  llvm::StringMap<semantic::SVCheckerInstanceBodySymbolOp> bodies;
+  int64_t nextNodeId = 0;
+};
+
+static ProceduralCheckerSites
+collectProceduralCheckerSites(semantic::SVRootSymbolOp root) {
+  ProceduralCheckerSites sites;
+  root->walk([&](Operation *op) {
+    if (auto id = op->getAttrOfType<IntegerAttr>("node_id"))
+      sites.nextNodeId = std::max(sites.nextNodeId, id.getInt() + 1);
+    if (auto statement = dyn_cast<semantic::SVProceduralCheckerStatementOp>(op))
+      sites.statements.push_back(statement);
+    else if (auto body = dyn_cast<semantic::SVCheckerInstanceBodySymbolOp>(op);
+             body && body.getIsProcedural())
+      sites.bodies[*body.getHierarchicalName()] = body;
+  });
+  return sites;
+}
+
+void bindProceduralCheckerClocks(semantic::SVRootSymbolOp root,
+                                 Builder &builder) {
+  ProceduralCheckerSites sites = collectProceduralCheckerSites(root);
+  auto bindClock = [&](semantic::SVConcurrentAssertionStatementOp assertion,
+                       Operation *source) {
+    Operation *clock = source->clone();
+    clock->walk([&](Operation *nested) {
+      if (nested->hasAttr("node_id"))
+        nested->setAttr("node_id",
+                        builder.getI64IntegerAttr(sites.nextNodeId++));
+    });
+    // After a default disable, ahead of any default clocking.
+    Block &children = assertion->getRegion(0).front();
+    auto position = children.begin();
+    if (assertion.getHasDefaultDisable())
+      ++position;
+    children.getOperations().insert(position, clock);
+    assertion->setAttr("has_contextual_clock", builder.getBoolAttr(true));
+  };
+  for (semantic::SVProceduralCheckerStatementOp statement : sites.statements) {
+    SmallVector<Operation *> clocks = getChildren(statement);
+    for (StringRef path :
+         statement.getInstancePaths().getAsValueRange<StringAttr>()) {
+      auto body = sites.bodies.find(path);
+      if (body == sites.bodies.end())
+        continue;
+      body->second->walk([&](semantic::SVProceduralBlockSymbolOp procedure) {
+        // An assertion in a procedure of the checker is procedural already,
+        // with the context of that procedure (17.3). The frontend's analysis of
+        // procedures does not reach into a procedural scope, so it is recorded
+        // here. Any other assertion takes the context of the instantiation.
+        Operation *clock = clocks.empty() ? nullptr : clocks.front();
+        bool ownProcedure = !procedure->hasAttr("is_from_assertion");
+        if (ownProcedure) {
+          SmallVector<Operation *> statements = getChildren(procedure);
+          auto timed =
+              statements.empty()
+                  ? semantic::SVTimedStatementOp{}
+                  : dyn_cast<semantic::SVTimedStatementOp>(statements.front());
+          clock = timed ? getChildren(timed).front() : nullptr;
+          // A formal defaulted to $inferred_clock names the instantiation's
+          // clock here too (16.14.7, 17.4).
+          SmallVector<Operation *> events =
+              clock ? getChildren(clock) : SmallVector<Operation *>{};
+          auto query =
+              events.empty()
+                  ? semantic::SVCallExpressionOp{}
+                  : dyn_cast<semantic::SVCallExpressionOp>(events.front());
+          if (query && query.getIsSystemCall() &&
+              query.getCalleeName() == "$inferred_clock" && !clocks.empty()) {
+            Operation *resolved = clocks.front()->clone();
+            resolved->walk([&](Operation *nested) {
+              if (nested->hasAttr("node_id"))
+                nested->setAttr("node_id",
+                                builder.getI64IntegerAttr(sites.nextNodeId++));
+            });
+            clock->getBlock()->getOperations().insert(clock->getIterator(),
+                                                      resolved);
+            clock->erase();
+            clock = resolved;
+          }
+        }
+        procedure->walk(
+            [&](semantic::SVConcurrentAssertionStatementOp assertion) {
+              if (assertion.getHasContextualClock().value_or(false))
+                return;
+              if (clock)
+                bindClock(assertion, clock);
+              if (!ownProcedure)
+                return;
+              assertion->setAttr("is_procedural", builder.getBoolAttr(true));
+              SmallVector<Operation *> children = getChildren(assertion);
+              size_t index =
+                  static_cast<size_t>(assertion.getHasDefaultDisable()) +
+                  static_cast<size_t>(
+                      assertion.getHasContextualClock().value_or(false)) +
+                  static_cast<size_t>(static_cast<bool>(
+                      assertion.getDefaultClockingSymbolAttr()));
+              if (!clock || index >= children.size())
+                return;
+              Operation *leading =
+                  findAssertionClockFlow(children[index], assertion);
+              if (leading && sameClockEvent(leading, clock))
+                assertion->setAttr("starts_on_current_clock",
+                                   builder.getBoolAttr(true));
+            });
+      });
+    }
+  }
+}
+
+void synthesizeProceduralCheckers(semantic::SVRootSymbolOp root,
+                                  llvm::StringMap<Operation *> &symbols,
+                                  Builder &builder) {
+  ProceduralCheckerSites sites = collectProceduralCheckerSites(root);
+  for (semantic::SVProceduralCheckerStatementOp statement : sites.statements) {
+    OperationState state(statement.getLoc(),
+                         semantic::SVStatementListOp::getOperationName());
+    state.addAttribute("node_id",
+                       builder.getI64IntegerAttr(sites.nextNodeId++));
+    Block *list = new Block();
+    state.addRegion()->push_back(list);
+    SmallVector<Operation *> clocks = getChildren(statement);
+    for (StringRef path :
+         statement.getInstancePaths().getAsValueRange<StringAttr>()) {
+      auto body = sites.bodies.find(path);
+      if (body == sites.bodies.end())
+        continue;
+      // A child checker's static assertions are treated as if instantiated in
+      // this one, so they move here too.
+      SmallVector<semantic::SVProceduralBlockSymbolOp> assertions;
+      body->second->walk([&](semantic::SVProceduralBlockSymbolOp procedure) {
+        if (procedure->hasAttr("is_from_assertion"))
+          assertions.push_back(procedure);
+      });
+      for (semantic::SVProceduralBlockSymbolOp procedure : assertions) {
+        Operation *moved = getChildren(procedure).front();
+        moved->walk([&](semantic::SVConcurrentAssertionStatementOp assertion) {
+          assertion->setAttr("is_procedural", builder.getBoolAttr(true));
+          // 16.14.6.2: an assertion on the clock that resumed its process
+          // starts on this tick. The clock here is the one bound above, unless
+          // the assertion's own leading clock differs.
+          if (!statement->hasAttr("starts_on_current_clock") || clocks.empty())
+            return;
+          SmallVector<Operation *> children = getChildren(assertion);
+          size_t index =
+              static_cast<size_t>(assertion.getHasDefaultDisable()) +
+              static_cast<size_t>(
+                  assertion.getHasContextualClock().value_or(false)) +
+              static_cast<size_t>(
+                  static_cast<bool>(assertion.getDefaultClockingSymbolAttr()));
+          if (index >= children.size())
+            return;
+          Operation *leading =
+              findAssertionClockFlow(children[index], assertion);
+          if (leading && sameClockEvent(leading, clocks.front()))
+            assertion->setAttr("starts_on_current_clock",
+                               builder.getBoolAttr(true));
+        });
+        moved->moveBefore(list, list->end());
+        if (std::optional<StringRef> name = procedure.getSymName())
+          symbols.erase(*name);
+        procedure.erase();
+      }
+    }
+    OpBuilder replacement(statement);
+    replacement.insert(Operation::create(state));
+    statement.erase();
+  }
+}
+
 LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
                                              Builder &builder) {
   SmallVector<semantic::SVCheckerInstanceBodySymbolOp> bodies;
@@ -1079,10 +1272,6 @@ LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
   // Activity belongs to the variable, wherever it is assigned or read: an
   // assume statement of a child checker can read a variable of its parent
   // through a formal's actual argument (17.7.2).
-  SmallVector<semantic::SVCheckerInstanceBodySymbolOp> staticBodies;
-  for (semantic::SVCheckerInstanceBodySymbolOp body : bodies)
-    if (!body.getIsProcedural())
-      staticBodies.push_back(body);
   llvm::StringSet<> assigned;
   std::function<void(Operation *)> collectTargets = [&](Operation *target) {
     if (auto path = target->getAttrOfType<StringAttr>("referenced_path")) {
@@ -1098,7 +1287,7 @@ LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
       collectTargets(nested.front());
     }
   };
-  for (semantic::SVCheckerInstanceBodySymbolOp body : staticBodies)
+  for (semantic::SVCheckerInstanceBodySymbolOp body : bodies)
     body->walk([&](semantic::SVAssignmentExpressionOp assignment) {
       SmallVector<Operation *> sides = getChildren(assignment);
       if (!sides.empty())
@@ -1109,7 +1298,7 @@ LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
   // not const and not on the left-hand side of an assignment are active.
   llvm::StringSet<> active;
   DenseMap<Operation *, SmallVector<StringRef>> bodyActive;
-  for (semantic::SVCheckerInstanceBodySymbolOp body : staticBodies)
+  for (semantic::SVCheckerInstanceBodySymbolOp body : bodies)
     for (Operation *member : getChildren(body)) {
       auto variable = dyn_cast<semantic::SVVariableSymbolOp>(member);
       if (!variable || !variable.getIsCheckerFreeVariable())
@@ -1130,11 +1319,19 @@ LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
     }
   if (active.empty())
     return success();
+  // An actual argument of a procedural checker instance can read one, and a
+  // solve has no process with its value.
+  llvm::StringSet<> automaticVariables;
+  root->walk([&](semantic::SVVariableSymbolOp variable) {
+    if (variable.getLifetime() == semantic::SVVariableLifetime::Automatic)
+      if (std::optional<StringRef> path = variable.getHierarchicalName())
+        automaticVariables.insert(*path);
+  });
 
   // "A sampled value of an active checker variable is defined as its current
   // value", so what a solve chooses is what assertions read.
   llvm::StringMap<Operation *> activeReads;
-  for (semantic::SVCheckerInstanceBodySymbolOp body : staticBodies)
+  for (semantic::SVCheckerInstanceBodySymbolOp body : bodies)
     body->walk([&](semantic::SVNamedValueExpressionOp read) {
       if (active.contains(read.getReferencedPath())) {
         read->setAttr("talos.current_sampled_value", builder.getUnitAttr());
@@ -1191,28 +1388,9 @@ LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
       return solvable(children.front()) ? children.front() : nullptr;
     }
   };
-  std::function<bool(Operation *, Operation *)> sameClock =
-      [&](Operation *left, Operation *right) {
-        if (left->getName() != right->getName())
-          return false;
-        for (StringRef name :
-             {"referenced_path", "edge_kind", "has_iff", "operator_kind",
-              "constant_value", "callee_name"})
-          if (left->getAttr(name) != right->getAttr(name))
-            return false;
-        SmallVector<Operation *> leftChildren = getChildren(left);
-        SmallVector<Operation *> rightChildren = getChildren(right);
-        if (leftChildren.size() != rightChildren.size())
-          return false;
-        for (auto [leftChild, rightChild] :
-             llvm::zip_equal(leftChildren, rightChildren))
-          if (!sameClock(leftChild, rightChild))
-            return false;
-        return true;
-      };
 
   unsigned nextSolve = 0;
-  for (semantic::SVCheckerInstanceBodySymbolOp body : staticBodies) {
+  for (semantic::SVCheckerInstanceBodySymbolOp body : bodies) {
     auto own = bodyActive.find(body);
     if (own == bodyActive.end())
       continue;
@@ -1221,7 +1399,8 @@ LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
       ownActive.insert(path);
 
     // The assume set: assume statements of this checker and its children that
-    // reference an active variable of this checker, without a const cast. Any
+    // reference an active variable of this checker, without a const cast or
+    // automatic value among the actual arguments. Any
     // other form is still checked, as there is "no requirement that a solution
     // be found if it exists".
     struct Constraint {
@@ -1243,9 +1422,11 @@ LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
         if (auto cast = nested->getAttrOfType<BoolAttr>("is_const_cast");
             cast && cast.getValue())
           constCast = true;
-        if (auto read = dyn_cast<semantic::SVNamedValueExpressionOp>(nested);
-            read && ownActive.contains(read.getReferencedPath()))
+        auto read = dyn_cast<semantic::SVNamedValueExpressionOp>(nested);
+        if (read && ownActive.contains(read.getReferencedPath()))
           readsActive = true;
+        if (read && automaticVariables.contains(read.getReferencedPath()))
+          constCast = true;
       });
       if (constCast || !readsActive)
         return;
@@ -1285,7 +1466,7 @@ LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
         return;
       ClockGroup *group = nullptr;
       for (ClockGroup &candidate : groups)
-        if (sameClock(candidate.clock, clock))
+        if (sameClockEvent(candidate.clock, clock))
           group = &candidate;
       if (!group) {
         groups.push_back({clock, {}});
