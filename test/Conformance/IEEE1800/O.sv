@@ -1,6 +1,6 @@
 // CLAUSE: Protected-flow examples
 // XFAIL: *
-// The driver has no protected-envelope key-registration or decryption path.
+// Protected envelopes are rejected by design (docs/lrm-support-roadmap.md Clause 34), so this flow has no decryption path.
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe
 // CHECK-DAG: {{^PASS$}}
