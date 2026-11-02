@@ -1795,51 +1795,72 @@ LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
               {}, {enabled(constraint.disables, disable), item});
         items.push_back(item);
       }
-      SmallVector<Operation *> randomizeChildren{
-          makeNode(location, semantic::SVConstraintListOp::getOperationName(),
-                   {builder.getNamedAttr(
-                       "item_count", builder.getI64IntegerAttr(items.size()))},
-                   items)};
+      auto makeRandomize = [&](ArrayRef<Operation *> selected,
+                               ArrayRef<Operation *> constraints) {
+        SmallVector<Operation *> randomizeChildren{makeNode(
+            location, semantic::SVConstraintListOp::getOperationName(),
+            {builder.getNamedAttr(
+                "item_count", builder.getI64IntegerAttr(constraints.size()))},
+            constraints)};
+        for (Operation *read : selected) {
+          Operation *target = cloneWithFreshNodes(read);
+          Attribute type = target->getAttr("semantic_type");
+          randomizeChildren.push_back(makeNode(
+              location, semantic::SVAssignmentExpressionOp::getOperationName(),
+              {builder.getNamedAttr("assignment_kind",
+                                    builder.getI32IntegerAttr(0)),
+               builder.getNamedAttr("is_signed", builder.getBoolAttr(false)),
+               builder.getNamedAttr("semantic_type", type)},
+              {target,
+               makeNode(
+                   location,
+                   semantic::SVEmptyArgumentExpressionOp::getOperationName(),
+                   {builder.getNamedAttr("is_signed",
+                                         builder.getBoolAttr(false)),
+                    builder.getNamedAttr("semantic_type", type)},
+                   {})}));
+        }
+        Operation *randomize = makeCall(
+            location, "randomize",
+            semantic::IntegralType::get(context, 32, true, false, 31, 0,
+                                        semantic::SVIntegralFlavor::Int),
+            randomizeChildren);
+        randomize->setAttr("argument_count",
+                           builder.getI64IntegerAttr(selected.size()));
+        randomize->setAttr("defaulted_arguments",
+                           builder.getDenseI64ArrayAttr(
+                               SmallVector<int64_t>(selected.size(), 0)));
+        randomize->setAttr("has_inline_constraints", builder.getBoolAttr(true));
+        randomize->setAttr("subroutine_kind", builder.getI32IntegerAttr(0));
+        return randomize;
+      };
+      // 17.7: an initialized variable has the value of its initialization in
+      // the first time step, and a later one is free to change it. There it is
+      // an input to the solve of the others.
+      SmallVector<Operation *> allTargets;
+      SmallVector<Operation *> firstStepTargets;
       for (const auto &entry : targets) {
-        Operation *target = cloneWithFreshNodes(entry.second);
-        Attribute type = target->getAttr("semantic_type");
-        randomizeChildren.push_back(makeNode(
-            location, semantic::SVAssignmentExpressionOp::getOperationName(),
-            {builder.getNamedAttr("assignment_kind",
-                                  builder.getI32IntegerAttr(0)),
-             builder.getNamedAttr("is_signed", builder.getBoolAttr(false)),
-             builder.getNamedAttr("semantic_type", type)},
-            {target,
-             makeNode(
-                 location,
-                 semantic::SVEmptyArgumentExpressionOp::getOperationName(),
-                 {builder.getNamedAttr("is_signed", builder.getBoolAttr(false)),
-                  builder.getNamedAttr("semantic_type", type)},
-                 {})}));
+        allTargets.push_back(entry.second);
+        if (!initialized.contains(entry.first))
+          firstStepTargets.push_back(entry.second);
       }
-      Operation *randomize =
-          makeCall(location, "randomize",
-                   semantic::IntegralType::get(context, 32, true, false, 31, 0,
-                                               semantic::SVIntegralFlavor::Int),
-                   randomizeChildren);
-      randomize->setAttr("argument_count",
-                         builder.getI64IntegerAttr(targets.size()));
-      randomize->setAttr("defaulted_arguments",
-                         builder.getDenseI64ArrayAttr(
-                             SmallVector<int64_t>(targets.size(), 0)));
-      randomize->setAttr("has_inline_constraints", builder.getBoolAttr(true));
-      randomize->setAttr("subroutine_kind", builder.getI32IntegerAttr(0));
-      SmallVector<Operation *> arguments{randomize};
+      bool holdsFirstStep = firstStepTargets.size() != allTargets.size();
+      SmallVector<Operation *> arguments;
+      if (holdsFirstStep && !firstStepTargets.empty()) {
+        SmallVector<Operation *> firstStepItems;
+        for (Operation *item : items)
+          firstStepItems.push_back(cloneWithFreshNodes(item));
+        arguments.push_back(makeRandomize(allTargets, items));
+        arguments.push_back(makeRandomize(firstStepTargets, firstStepItems));
+      } else {
+        arguments.push_back(makeRandomize(allTargets, items));
+      }
       llvm::append_range(arguments, updates);
       Operation *solve = makeCall(location, "$talos_free_solve",
                                   semantic::VoidType::get(context), arguments);
-      // 17.7: an initialized variable has the value of its initialization in
-      // the first time step. A later one is free to change it.
-      if (llvm::any_of(targets, [&](const auto &entry) {
-            return initialized.contains(entry.first);
-          }))
-        solve->setAttr("talos.free_solve_skips_first_step",
-                       builder.getUnitAttr());
+      if (holdsFirstStep)
+        solve->setAttr("talos.free_solve_first_step_solves",
+                       builder.getI64IntegerAttr(!firstStepTargets.empty()));
       Operation *statement = makeNode(
           location, semantic::SVExpressionStatementOp::getOperationName(), {},
           {solve});

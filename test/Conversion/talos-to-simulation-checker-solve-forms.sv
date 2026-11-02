@@ -20,14 +20,20 @@ module top;
   c inst(clk, reset);
 endmodule
 `elsif INITIAL
-// 17.7: the first time step holds the value of the initialization.
+// 17.7: the first time step holds the value of the initialization, and only that
+// variable. A set of initialized variables alone has nothing to solve there.
 checker c(input bit clk);
-  rand bit [7:0] v = 8'h5a;
-  m0: assume property (@(posedge clk) v != 8'h5a);
+  rand bit [7:0] v = 8'h5a, w;
+  m0: assume property (@(posedge clk) w == v + 1);
+endchecker
+checker d(input bit clk);
+  rand bit [7:0] only = 8'h11;
+  m0: assume property (@(posedge clk) only != 8'h11);
 endchecker
 module top;
   bit clk;
-  c inst(clk);
+  c first(clk);
+  d second(clk);
 endmodule
 `elsif CLOCKING
 // 14.13: the event of a clocking block fires in the Observed region, too late for
@@ -128,12 +134,24 @@ endmodule
 // DISABLE: %[[ENABLED:[0-9]+]] = arith.xori %[[AGAIN]]
 // DISABLE: arith.andi %[[ENABLED]]
 
+// INITIAL: simulation.storage.decl 1 in {{.*}}"top.first.v"
+// INITIAL: simulation.storage.decl 2 in {{.*}}"top.first.w"
+// INITIAL: repeating_always_wait
+// INITIAL-NEXT: ^bb2:
+// INITIAL-NEXT: %[[NOW:[0-9]+]] = simulation.time.now %arg0
+// INITIAL: %[[LATER:[0-9]+]] = arith.cmpi ne, %[[NOW]]
+// INITIAL-NEXT: cf.cond_br %[[LATER]], ^bb3, ^bb4
+// INITIAL: simulation.ref.store %{{[0-9]+}} to %arg2
+// INITIAL-NEXT: simulation.ref.store %{{[0-9]+}} to %arg3
+// INITIAL-NEXT: cf.br ^bb1
+// INITIAL-NOT: to %arg2
+// INITIAL: simulation.ref.store %{{[0-9]+}} to %arg3
+// INITIAL-NEXT: cf.br ^bb1
 // INITIAL: repeating_always_wait
 // INITIAL-NEXT: ^bb2:
 // INITIAL-NEXT: %[[NOW:[0-9]+]] = simulation.time.now %arg0
 // INITIAL: %[[LATER:[0-9]+]] = arith.cmpi ne, %[[NOW]]
 // INITIAL-NEXT: cf.cond_br %[[LATER]], ^bb3, ^bb1
-// INITIAL: simulation.random.solve
 
 // CLOCKING: simulation.storage.decl 0 in {{.*}}"top.clk"
 // CLOCKING: simulation.storage.decl 1 in {{.*}}"top.enable"

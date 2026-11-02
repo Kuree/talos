@@ -2673,12 +2673,18 @@ UnitLowering::lowerSystemCall(semantic::SVCallExpressionOp op) {
     // The solve reads sampled values, while what it assigns is current
     // (17.7.2). An unsuccessful solution attempt leaves any values, and its
     // failures are reported by the assume statements in the Observed region.
-    // In the first time step an initialized target keeps its value (17.7).
-    // Each child after the randomize call records an antecedent of `|=>` for
+    // Each child after the randomize calls records an antecedent of `|=>` for
     // the next tick, in state of the process: `prior = antecedent`.
+    //
+    // With initialized targets (17.7), the first time step takes the second
+    // randomize call, without them, if any target is left for it.
+    auto firstStep =
+        op->getAttrOfType<IntegerAttr>("talos.free_solve_first_step_solves");
+    size_t solves = 1 + (firstStep ? firstStep.getInt() : 0);
+    ArrayRef<Operation *> updates = ArrayRef(children).drop_front(solves);
     OpBuilder entryBuilder =
         OpBuilder::atBlockBegin(&function.getBody().front());
-    for (Operation *update : ArrayRef(children).drop_front()) {
+    for (Operation *update : updates) {
       Operation *prior = getChildren(update).front();
       FailureOr<Type> type = getNormalizedSemanticType(prior);
       if (failed(type))
@@ -2692,26 +2698,32 @@ UnitLowering::lowerSystemCall(semantic::SVCallExpressionOp op) {
       lvalues[path] = record;
     }
     llvm::SaveAndRestore<bool> sampling(sampleAssertionValues, true);
-    Block *join = nullptr;
-    if (op->hasAttr("talos.free_solve_skips_first_step")) {
+    if (firstStep) {
       IntegerType i64 = builder.getI64Type();
       Value now = sim::SimTimeNowOp::create(
           builder, location, i64, function.getBody().front().getArgument(0));
       Value later = arith::CmpIOp::create(
           builder, location, arith::CmpIPredicate::ne, now, constant(i64, 0));
       Block *solve = addBlock();
-      join = addBlock();
-      cf::CondBranchOp::create(builder, location, later, solve, join);
+      Block *join = addBlock();
+      Block *first = solves == 2 ? addBlock() : join;
+      cf::CondBranchOp::create(builder, location, later, solve, first);
       setCurrent(solve);
-    }
-    if (failed(lowerExpression(children.front())))
-      return failure();
-    if (join) {
+      if (failed(lowerExpression(children.front())))
+        return failure();
       cf::BranchOp::create(builder, location, join);
+      if (solves == 2) {
+        setCurrent(first);
+        if (failed(lowerExpression(children[1])))
+          return failure();
+        cf::BranchOp::create(builder, location, join);
+      }
       setCurrent(join);
+    } else if (failed(lowerExpression(children.front()))) {
+      return failure();
     }
-    for (Operation *child : ArrayRef(children).drop_front())
-      if (failed(lowerExpression(child)))
+    for (Operation *update : updates)
+      if (failed(lowerExpression(update)))
         return failure();
     return dummyTaskResult();
   }
