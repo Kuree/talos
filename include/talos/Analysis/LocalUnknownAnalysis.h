@@ -1,66 +1,27 @@
-//===- LocalUnknownAnalysis.h - X/Z inside one gated activation -*- C++ -*-===//
+//===- LocalUnknownAnalysis.h - X/Z inside one gated activation -*- C++ -*- ===//
 //
-// Classifies the canonical state accesses of one activation body for a copy
-// that runs only after a check at the activation's entry finds whole storage
-// roots known (schedule.known.roots): a tested root holds X/Z exactly in the
-// bits of its steady pattern (`simulation.steady_unknown`), none elsewhere.
-// In that copy a *gated* read loads only its value plane, and a *known* store
-// writes only its value plane: the root's unknown plane is zero at the stored
-// bits, and a known value keeps it zero. Every other read and store keeps both
-// planes, so the copy performs the same effects with the same values as the
-// original body.
+// Classifies accesses for guarded activation copies. `schedule.known.roots`
+// checks that each root's unknown plane matches `simulation.steady_unknown`.
+// Outside the pattern, gated reads load only values and known stores leave the
+// zero unknown bits unchanged. Pattern reads retain their constant X values;
+// a possible intervening write prevents that substitution.
 //
-// A gated read observes known bits when (1) the entry check covered its root
-// and (2) no write of the activation that can precede it may have stored X/Z
-// into its bits. A known store needs the same of the bits it writes, and a
-// value known whenever the copy computes it. (2) is a dense forward fact over
-// the activation's CFG, kept per bit in persistent range sets; the stored
-// values come from a sparse forward fact giving each value the bits that may
-// hold X/Z, in which gated reads are known. Both are solved together, and
-// their least fixed point is sound by induction over the activation's
-// execution order: before the first X/Z write every gated read sees entry
-// state, and a value the bit fact proves known given known gated reads is
-// known: moves carry their bits, bitwise operators work per bit, and an X/Z
-// operand bit makes arithmetic, relations, reductions and logical operators
-// X (IEEE 1800-2023 11.4), with the X/Z generators of 6.8, 7.4.5, 11.4.3 and
-// 11.5.1 kept four-state. A field of a partially assigned aggregate, or a
-// private slot's bits, are therefore known on their own. The lowering's own
-// tests for X/Z in a value (`x === view(x)`, 11.4.6) fold to true in the
-// copy for a known `x`, so the paths that merge X/Z are dead there.
+// Dense CFG facts track bits that preceding writes may make unknown. Sparse
+// value facts track which computed bits may hold X/Z; both reach a joint fixed
+// point. Callee summaries bound writes through formals. Unknown callee effects
+// invalidate storage and net facts. Private allocations remain local under the
+// simulation call ABI.
 //
-// A call to a function whose summary records the formals it stores through
-// (`CalleeSummary::storedFormals`) adds X/Z to what those formals reference
-// only when the stored values may hold X/Z; any other write of a callee makes
-// every storage root and net unknown. Private allocations passed to such
-// calls stay private: a sibling function cannot retain a reference (13.5).
+// Each segment has one entry check after earlier segments' writes. The check
+// covers required roots, live-in values known only in the copy, and private
+// slots whose contents can predate the segment. Bits defined on every path
+// before a read need no entry test.
 //
-// The body may be cut into segments, each checked at its own entry: a run of
-// the activation's operations that control enters only at its first
-// operation. A check at a segment entry observes the canonical planes after
-// every earlier write, so only writes inside the segment can precede a gated
-// read unchecked. A value computed in another segment has the domain its own
-// copy gives it, but comes from whichever copy ran there: the entry check
-// tests each one that only the copy proves known (`Segment::liveIns`). Private
-// slots likewise hold what either copy stored: a known read of a slot whose
-// contents may predate the segment needs the check to test the slot
-// (`Segment::slotChecks`). Storage bits that every path of the segment stored
-// before a read need no test of their own.
-//
-// A read can instead be tested where it loads: when it holds X/Z the copy
-// continues in the original body at that read, carrying its live values, so
-// nothing runs twice and only the bits the read observes are tested.
-//
-// A gated read of pattern bits loads them as the pattern's constant X, so
-// its value stays four-state. Any write of the segment that may reach
-// pattern bits before such a read keeps the read's planes: it may have made
-// them known. A store reaching pattern bits is never a known store.
-//
-// Reads keep both planes when gating them would be unsound:
-//  - a dynamic selection that may be invalid even with known selectors, or
-//    whose selectors may hold X/Z in the copy: it reads the type's default,
-//    X/Z for four-state types (7.4.5, 11.5.1);
-//  - a read an X/Z write of the activation may reach;
-//  - a read whose root is not a fixed design storage root.
+// Reads outside the entry proof can be checked where they load. On X/Z the
+// copy resumes the original body after that read, carrying live values so no
+// effect runs twice. Unresolved roots, potentially invalid selectors, and reads
+// reachable from an X/Z write retain both planes. See ReadKind and Segment for
+// the resulting access classifications and checks.
 //
 //===----------------------------------------------------------------------===//
 

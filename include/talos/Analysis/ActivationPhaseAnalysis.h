@@ -11,35 +11,23 @@
 
 namespace talos::analysis {
 
-/// IEEE 1800-2023 4.5 executes a time slot as Active passes separated by
-/// region moves. Number the passes by the NBA regions that precede them:
-/// phase 1 runs before the slot's first NBA region, phase p + 1 runs after the
-/// p-th. Inactive passes stay in their phase because the Inactive region is
-/// moved to Active before the NBA region.
+/// Tracks the Active passes in which blocks execute and roots change (IEEE
+/// 1800 4.5). Phase 1 precedes the first NBA barrier; phase p + 1 follows the
+/// p-th. Inactive-to-Active promotion stays within the same phase.
 ///
-/// This forward analysis computes, for every block of every process and task,
-/// the phases in which it may execute, and for every storage or net root the
-/// phases in which it may change. A block's phases are constant, so the
-/// solve is over blocks: each function's blocks are summarized from its own
-/// body (in parallel), and the solver joins them across processes:
-///   - the root initializer starts each process at time zero, in phase 1;
-///     a process started by another activation (fork) and a task called by
-///     one start in the phases of that activation;
-///   - a positive constant delay resumes in phase 1; a zero, variable or
-///     otherwise unknown delay, and any wait without a modeled trigger, may
-///     resume in every phase;
-///   - an edge, change or level wait resumes in the phases its roots change;
-///   - a blocking write changes its root in the writer's phases, an NBA in
-///     the following phases (4.9.4), a delayed NBA in every phase;
-///   - a task without suspensions returns in its caller's phases;
-///   - a proven copy changes its destination in its source's phases.
-/// The time-zero slot is tracked separately from every later slot: a process
-/// leaves time zero only through a positive delay, so a wait made after one
-/// never sees time-zero changes such as continuous assignments' time-zero
-/// evaluations (4.9.1). Two activations can interleave in an Active region
-/// only if their phases meet in the same kind of slot. Effects come from the
-/// verified compute graph, which already folds callee summaries; task formals
-/// resolve through task-call sites.
+/// Function bodies are summarized in parallel, then joined across processes:
+/// - Root-started processes begin in phase 1; forks and tasks inherit callers.
+/// - Positive constant delays resume in phase 1. Unknown delays or unmodeled
+///   triggers may resume in any phase.
+/// - Signal waits inherit their roots' change phases. Blocking writes use
+///   the writer's phase, immediate NBAs the next, and delayed NBAs any phase.
+/// - Non-suspending tasks preserve caller phases; proven copies preserve
+///   source change phases.
+///
+/// Time zero is tracked separately: a positive delay cannot observe startup
+/// publications. Activations can interleave only where their phase sets meet
+/// in the same slot category. Effects use verified graph summaries, with task
+/// formals resolved through call sites.
 class ActivationPhaseAnalysis {
 public:
   /// Bit i is phase i + 1; bit 31 also stands for every later phase, so NBA

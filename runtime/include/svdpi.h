@@ -1,9 +1,6 @@
-/*
- * IEEE 1800-2017 Annex I DPI-C include surface provided by Talos.
- * The deprecated SV3.1a packed-data surface (IEEE 1800-2023 H.14.2) is
- * included; Talos's packed representation is the canonical one, so a packed
- * array handle is a pointer to canonical svBitVecVal/svLogicVecVal words.
- */
+/* IEEE 1800 Annex I DPI-C declarations, including deprecated SV3.1a
+ * packed-data APIs (H.14.2). Packed-array handles point to
+ * svBitVecVal/svLogicVecVal word storage at the DPI boundary. */
 #ifndef INCLUDED_SVDPI
 #define INCLUDED_SVDPI
 

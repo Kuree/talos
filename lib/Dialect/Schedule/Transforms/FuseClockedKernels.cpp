@@ -1,76 +1,29 @@
-//===- FuseClockedKernels.cpp - One activation per clock edge ------------===//
+//===- FuseClockedKernels.cpp - One activation per clock edge ===//
 //
-// IEEE 1800-2023 4.4.2.2 and 4.7 let a simulator take the Active events woken
-// by one clock edge in any order, so every edge-triggered process of a clock
-// may run as one activation (compute-body fusion relies on the same
-// permission inside one instance). A port connection is an implied continuous
-// assignment (23.3.3, 4.9.6). When a copy process is the only writer of a
-// variable, the copy and its source have the same value sequence within each
-// time slot, and an edge of the copy is an Active event the simulator may
-// choose to process immediately after the source changes. This pass therefore
-// forms one kernel per clock alias class and edge, across instances.
+// Groups edge-triggered processes by proven clock alias and edge, including
+// across instances. IEEE 1800 4.7 permits their Active events to run together.
 //
-// Inside that activation an NBA (4.9.4, 10.4.2) normally updates its target
-// in the NBA region, after every Active and Inactive event of the slot (4.5).
-// Storing at the NBA statement has the same user-visible effect (4.3) when:
-//   (a) every read in the kernel that can execute after an NBA site of the
-//       root sees the root's incoming value: either the kernel delays the
-//       root's updates to its end or the read uses a snapshot;
-//   (b) the kernel's NBA sites are the root's only writers, apart from static
-//       initialization and activations that cannot share the kernel's phase;
-//       a delayed NBA may land in any NBA region and always conflicts;
-//   (c) every process waiting on the root, transitively through its writes,
-//       is a side-effect-free combinational process. 4.5 already lets those
-//       evaluate between individual NBA updates, and they reevaluate from the
-//       final values; no edge, level, event, VPI or toggle observer can see
-//       the earlier update (CombinationalFusionAnalysis glitch insensitivity);
-//   (d) no other activation that may share the kernel's phase reads or
-//       writes the root or anything in its combinational cone.
-// Phases come from ActivationPhaseAnalysis: activations in different phases
-// of a slot are separated by an NBA region and cannot interleave. A root that
-// nothing reads keeps its NBA, which unread-NBA elimination removes entirely.
-// The stores keep the NBA execution order (4.6(b)); RHS and target operands
-// are still computed at the statement (4.9.4).
+// An NBA can become a direct store only when:
+//   - Later reads retain the incoming value through snapshots or deferred stores.
+//   - The kernel owns the root's writes in its phase; delayed NBAs conflict.
+//   - Combinational consumers are glitch-insensitive and no edge, level, event,
+//     VPI, or coverage observer can distinguish the earlier publication.
+//   - Other activations in the phase cannot access the root or its consumer cone.
+// RHS and destination evaluation and NBA source order remain unchanged.
 //
-// The kernel must run at most once between NBA regions: a second run in the
-// same phase would read its own stores where the original reads values its
-// NBAs have not updated yet. A kernel that runs as soon as its edge wakes it
-// therefore needs every phase to see clock changes from at most one atomic
-// source: the NBA region before it, or one activation of a process that
-// suspends only on positive constant delays and so runs once per slot. A
-// clock that rises again through an Inactive event keeps every NBA.
+// ActivationPhaseAnalysis separates executions by NBA barriers. A direct-store
+// kernel must run at most once per phase, with clock changes from one atomic
+// source. Clocks that can repeat through Inactive events retain their NBAs.
 //
-// With `defer`, a kernel's wait may instead resume it in the Inactive region,
-// as `@(edge) #0` would: after every Active event of its pass (4.4.2.3, 4.5).
-// The original may run its members last in that pass (4.7). Then (b) and (d)
-// only concern activations that may follow it, which PostKernelAnalysis finds:
-// what its own blocking writes and stores wake, transitively, other kernels,
-// and other Inactive events of its phase with what they wake. Those Inactive
-// events may also run before it, where the original members cannot see their
-// writes, so they must not write what it reads. Same-edge samplers and
-// testbench delays run before it. No activation after it may change its
-// clock.
+// With `defer`, the kernel resumes in Inactive after its pass's Active work.
+// PostKernelAnalysis checks accesses by later activations and their consumers.
+// Unordered Inactive peers must not change kernel inputs, and no later work may
+// change its clock. Roots read by final procedures remain protected when a
+// later activation can finish the simulation; deferred kernels are skipped
+// after a finish request.
 //
-// A simulation may also end within a slot: `$finish` and its kind stop the
-// remaining events, and final procedures read the values from before every
-// pending NBA (9.2.3, 20.2). Where something that may end the simulation can
-// follow the kernel, the roots final procedures read count as accessed by it.
-// Every executor skips a deferred kernel once a finish is requested, so an
-// Active finisher of its pass needs nothing.
-//
-// Cost: direct stores wake their combinational readers in the kernel's phase,
-// the NBAs the kernel keeps wake theirs in the next, so logic both reach may
-// settle twice per slot. Every eligible root is still stored directly: the
-// NBA staging and commit it saves have cost more than the second settle.
-//
-// The kernel never suspends between its members. 4.7 permits interleaving
-// other processes inside an activation but does not require it, so nothing
-// can observe a member part way through. Monitors and strobes print in the
-// Observed and Postponed regions (21.2.2, 21.2.3), and a VCD dump records
-// the values each time increment ends with (21.7.2.1), so none of them sees
-// when in the slot a store happened. VPI value-change callbacks could, which
-// is why the pass requires VPI off; force, procedural continuous assignment
-// and DPI calls make it leave the design unchanged.
+// Requires one worker and VPI off. Overrides and DPI calls that may access
+// design state disable fusion; transparent DPI calls are permitted.
 //
 //===----------------------------------------------------------------------===//
 

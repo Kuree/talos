@@ -1,13 +1,9 @@
-//===- WasmBackend.cpp - wasm32 object and module emission ---------------===//
+//===- WasmBackend.cpp - wasm32 object and module emission ===//
 //
-// The wasm32 TargetBackend, mirroring NativeBackend.cpp. The shared pipeline
-// in TargetBackend.cpp is unchanged; what differs is the backend to
-// initialize, the triple, the target features, and the link.
-//
-// wasm32 rather than wasm64 because no Safari release implements the
-// Memory64 proposal, so a wasm64 module cannot run on an iPhone at all.
-// runtime/lib/ABI.cpp carries layout tables for both pointer widths, so the
-// runtime archive this links against exists for either.
+// Implements TargetBackend for wasm32 using the shared compiler pipeline.
+// Target initialization, features, sysroot discovery, and wasm-ld linking are
+// handled here. wasm32 keeps generated modules compatible with browsers that
+// do not support Memory64.
 //
 //===----------------------------------------------------------------------===//
 
@@ -54,8 +50,7 @@ constexpr StringLiteral kTargetFeatures =
     "+atomics,+bulk-memory,+mutable-globals,+sign-ext";
 
 /// Locates the sysroot holding wasm libc, libc++ and the startup object.
-/// An explicit --sysroot wins; otherwise EMSDK is consulted, which is how a
-/// machine with emsdk on PATH is already configured.
+/// Search order: explicit --sysroot, EM_SYSROOT, then EMSDK's cached sysroot.
 FailureOr<SmallString<256>> findWasmSysroot(StringRef explicitSysroot) {
   SmallString<256> sysroot;
   if (!explicitSysroot.empty()) {

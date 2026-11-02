@@ -22,8 +22,8 @@ class SymbolTableCollection;
 
 namespace talos {
 
-/// Materialize capture-free, scope-specific bridges for every prepared DPI
-/// exported function. This must run before bytecode encoding.
+/// Materialize capture-free, scope-specific bridges for prepared DPI function
+/// and task exports before bytecode encoding.
 mlir::LogicalResult materializeDPIExportBridges(mlir::ModuleOp module);
 
 /// Append each native planning, specialization and lowering pass in ABI order.

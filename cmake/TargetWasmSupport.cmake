@@ -4,10 +4,8 @@
 # sysroot, startup files and C++ runtime at link time, so this file only has to
 # produce the precompiled wasm runtime archive where the driver expects it.
 #
-# wasm32 rather than wasm64, because no Safari release implements the
-# Memory64 proposal. runtime/lib/ABI.cpp carries literal layout tables for both
-# pointer widths, so the archive is correct either way; what selects 32 is that
-# it is the only width an iPhone will load.
+# Match the driver's wasm32 target and 32-bit runtime ABI. This also avoids
+# requiring browser support for Memory64.
 
 set(_talos_source_dir "${PROJECT_SOURCE_DIR}")
 if(DEFINED TALOS_SOURCE_DIR AND NOT TALOS_SOURCE_DIR STREQUAL "")

@@ -4660,8 +4660,7 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
       accessIndex.refresh(kernel);
     }
   }
-  // A planned cohort that fails to materialize is Tier-1 work lost after
-  // planning already accepted it, and the reason was previously discarded.
+  // Report why planned cohorts failed to materialize, ordered by frequency.
   if (native::has<native::DebugTiming>(design->getParentOfType<ModuleOp>())) {
     SmallVector<StringRef> ordered;
     for (const auto &entry : fusionRejections)
@@ -4675,10 +4674,8 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
                    << fusionRejections.lookup(reason) << " reason=" << reason
                    << '\n';
   }
-  // The eval scheduler is a deliberately closed generated-model experiment.
-  // Materialize every eligible actor body: selectively retaining coroutine
-  // actors here recreates the fine-grained runtime dispatch that this mode is
-  // intended to measure without.
+  // Materialize every eligible eval actor body so generated dispatch does
+  // not fall back to per-activation coroutine scheduling.
   if (cloneEvaluators) {
     SmallVector<sim::SimFuncOp> actors;
     for (sim::SimFuncOp function :

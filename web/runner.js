@@ -1,32 +1,21 @@
-// Makes SystemVerilog code blocks on any website runnable.
+// Adds Run buttons to SystemVerilog code blocks on an embedding page:
 //
 //   <script src="https://playground.talos-sv.org/runner.js" defer></script>
 //
-// Every SystemVerilog code block gets a Run button and an output panel. A block
-// is a `pre > code` carrying `language-systemverilog` or `language-sv`, either
-// on the <code> itself or on a wrapper, which is where Jekyll (Rouge) and
-// MkDocs (Pygments) put it. Script attributes configure the page:
+// Matches `pre > code` with language-systemverilog or language-sv on the code
+// or a wrapper. Script attributes set defaults:
+//   data-selector: CSS selector for code blocks
+//   data-args: compiler flags
+//   data-timeout: simulation seconds (60 by default; 0 disables)
+//   data-highlight="off": disable highlighting
 //
-//   data-selector   CSS selector for runnable code elements
-//   data-args       compiler flags added to every block, e.g. "-O0"
-//   data-timeout    seconds a simulation may run before it is stopped (default
-//                   60; 0 disables)
-//   data-highlight  "off" to leave code blocks uncolored
+// Code or pre elements can override data-talos-args and data-talos-timeout,
+// disable highlighting with data-talos-highlight="off", or opt out with
+// data-talos="off". Call TalosRunner.scan(root) for dynamically added blocks.
 //
-// A block can add `data-talos-args` for its own flags and
-// `data-talos-timeout` for its own limit, opt out of highlighting with
-// `data-talos-highlight="off"`, or opt out entirely with
-// `data-talos="off"`, on either the <code> or its <pre>. Pages that render
-// code after load call `TalosRunner.scan(root)`.
-//
-// Blocks are highlighted only when nothing else has: the pass waits for the
-// page's load event, after highlight.js and Prism run their DOMContentLoaded
-// passes, and skips any block that already contains markup. The runner reads
-// the code's text when Run is pressed, so any highlighter's markup is fine.
-//
-// This is a classic script so a plain <script src> works on any site. The
-// compiler runs in a hidden iframe served next to this file (embed.html),
-// created on the first click so readers who never press Run download nothing.
+// Highlighting waits for page load and skips existing markup. Run reads the
+// current textContent. This classic script loads the compiler's same-origin
+// embed.html iframe on the first run.
 
 (() => {
   if (window.TalosRunner) return;

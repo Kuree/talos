@@ -324,9 +324,8 @@ for member, symbol in (
 ):
     require_feature_symbol(member_layout(member), symbol)
 
-# These are the two common-object edges that previously extracted both cold
-# archive members even for a no-scan design. Teardown is now type-erased, and
-# the dispatcher handler must be undefined weak so archive search ignores it.
+# Common teardown must stay type-erased and the dispatcher handler weak, so
+# designs without dynamic scans do not extract the cold archive members.
 runtime_layout = member_layout("Runtime.cpp.o")
 if "talos_rt_dynamic_scan_destroy" in runtime_layout:
     raise SystemExit("common runtime teardown strongly references scan format")

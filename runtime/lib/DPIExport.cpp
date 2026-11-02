@@ -1,4 +1,4 @@
-//===- DPIExport.cpp - Cold zero-time DPI export dispatch ----------------===//
+//===- DPIExport.cpp - DPI function and task export dispatch -------------===//
 
 #include "RuntimeInternal.h"
 

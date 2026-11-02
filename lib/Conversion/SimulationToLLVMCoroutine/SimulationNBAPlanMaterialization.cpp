@@ -1,4 +1,4 @@
-//===- SimulationNBAPlanning.cpp - Native static NBA plan support -------===//
+//===- SimulationNBAPlanMaterialization.cpp - Materialize static NBA plans -------===//
 
 #include "SimulationNBALowering.h"
 #include "SimulationToLLVMCoroutinePrivate.h"

@@ -1,10 +1,8 @@
-//===- Prepare.cpp - Freeze semantic IR into isolated simulation units --===//
+//===- Prepare.cpp - Freeze semantic IR into simulation units ===//
 //
-// Flattens the elaborated design into numeric descriptors and creates one
-// isolated `simulation.func` shell per code unit, with every non-local
-// resource it needs bound to an explicit entry argument. Everything that
-// requires whole-design knowledge happens here, so the per-unit passes that
-// follow can run concurrently.
+// Flattens design objects into numeric descriptors and creates isolated
+// `simulation.func` shells with explicit captures. Shared declaration, type,
+// and callable metadata is prepared before per-unit lowering runs in parallel.
 //
 //===----------------------------------------------------------------------===//
 

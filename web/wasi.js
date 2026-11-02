@@ -1,8 +1,6 @@
-// Minimal WASI preview1 host for running a compiled Talos simulation.
-//
-// Scope is deliberately narrow: enough for a design to print ($display,
-// $write), read the clock, draw randomness, persist coverage and waveforms in
-// an in-memory namespace, and exit ($finish). There is no host filesystem.
+// In-memory WASI preview1 and Emscripten syscall host for compiled simulations.
+// Provides stdio, clocks, randomness, and files for inputs, coverage, and
+// waveforms without exposing the host filesystem.
 
 const WASI_ESUCCESS = 0;
 const WASI_EBADF = 8;

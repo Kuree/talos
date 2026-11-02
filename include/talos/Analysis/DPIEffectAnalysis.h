@@ -11,24 +11,14 @@ class SimDPICallOp;
 
 namespace talos::analysis {
 
-/// Which DPI import calls can reach design state beyond their own operands
-/// and results.
+/// Classifies DPI imports that can affect design state beyond their operands.
+/// Non-context imports are local to their value arguments. With VPI off, a
+/// context import is transparent only when every export closure touches locals
+/// and arguments and has no suspension, process control, scheduler, heap, RNG,
+/// or coverage effects. Output and foreign-private effects are allowed.
 ///
-/// IEEE 1800-2023 35.5.1.3: an import that is not declared context shall not
-/// read or write any SystemVerilog data object other than its actual
-/// arguments, which this IR passes as values. A context import may call
-/// exported subroutines (35.5.3); svSetScope can select any instantiated
-/// scope, so a call may reach every export of the design. The context
-/// property does not enable VPI (35.5.3), and with VPI off the foreign code
-/// has no other route into the design. A context call is therefore
-/// transparent when VPI is off and every export closure touches only its own
-/// locals and arguments, never suspends (35.5.1.5), and neither controls
-/// processes nor uses scheduler, heap, random, or coverage state.
-///
-/// Export transparency is judged from the compute graph's effect summaries.
-/// Building the graph records it on the design (`record`), and later
-/// instances use that record, so every pass sees the same answer after
-/// rewrites drop summaries.
+/// `record` freezes the compute graph's export-transparency result on the
+/// design so later rewrites can discard summaries without changing the answer.
 class DPIEffectAnalysis {
 public:
   explicit DPIEffectAnalysis(sim::SimDesignOp design);

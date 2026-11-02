@@ -40,12 +40,12 @@ def TalosSimPreparePass
 
 def TalosSimMaterializeDPIExportsPass
     : Pass<"talos-sim-materialize-dpi-exports", "mlir::ModuleOp"> {
-  let summary = "Materialize scope-specific zero-time DPI export bridges";
+  let summary = "Materialize scope-specific DPI function and task export bridges";
   let description = [{
-    Builds one capture-free bridge for every elaborated exported function.
-    Each bridge resolves the owning scope's immutable descriptor captures
-    from its runtime context, so native and bytecode export dispatch share the
-    same ordinary simulation function body and result ordering.
+    Builds a capture-free bridge for each elaborated function or task export.
+    Bridges resolve scope-specific descriptor captures from the runtime
+    context. Function bridges use direct calls; task bridges retain scheduler
+    continuations for native and bytecode dispatch.
   }];
   let dependentDialects = [
     "talos::sim::TalosSimulationDialect"

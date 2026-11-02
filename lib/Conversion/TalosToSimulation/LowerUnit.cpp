@@ -1,9 +1,9 @@
-//===- LowerUnit.cpp - Lower one frozen code unit to SSA and CF ---------===//
+//===- LowerUnit.cpp - Lower one frozen code unit to SSA and CF ===//
 //
-// Rewrites the semantic statement and expression tree cloned into one
-// `simulation.func` into an SSA CFG. The unit is isolated and every non-local
-// resource is already an entry argument, so this pass never consults the
-// design or any sibling unit and can run on all units concurrently.
+// Lowers the semantic tree in one isolated `simulation.func` to an SSA CFG.
+// Shared symbol, type, and callable facts come from the prepared
+// UnitLoweringInputs analysis. Workers mutate their own units and use cached
+// metadata rather than reading mutable sibling function attributes.
 //
 //===----------------------------------------------------------------------===//
 

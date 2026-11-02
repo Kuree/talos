@@ -493,20 +493,9 @@ if(WIN32)
 endif()
 
 if(EMSCRIPTEN)
-  # wasm32, not wasm64. No Safari release implements the Memory64 proposal,
-  # so a MEMORY64 module cannot run on any iPhone or Mac; runtime/lib/ABI.cpp
-  # carries layout tables for both pointer widths, so 32-bit costs nothing but
-  # the 4 GB address-space ceiling.
-  #
-  # The exception mode is the second half of running on Safari and is just as
-  # load-bearing as the pointer width. Native wasm exceptions would pick a
-  # Safari generation: 26 implements the standardised exnref encoding and
-  # earlier releases only the superseded one, so either choice excludes half the
-  # installed base. -fexceptions implements the same C++ semantics in JavaScript
-  # and emits no wasm exception opcodes at all, so nothing can reject it. The
-  # runtime only ever throws std::bad_alloc, so the slower throw path costs
-  # nothing outside an out-of-memory condition. Applied to every translation
-  # unit because the mode has to match across the whole link.
+  # Use wasm32 and JavaScript exception handling for browsers without
+  # Memory64 or the selected native Wasm exception encoding. Compile and link
+  # every translation unit with the same exception mode.
   foreach(flags CMAKE_C_FLAGS CMAKE_CXX_FLAGS CMAKE_EXE_LINKER_FLAGS
                 CMAKE_SHARED_LINKER_FLAGS)
     if(NOT ${flags} MATCHES "fexceptions")

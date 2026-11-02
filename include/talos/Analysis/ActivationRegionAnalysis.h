@@ -9,23 +9,18 @@
 
 namespace talos::analysis {
 
-/// A revision-local CFG view of one change-sensitive activation. The original
-/// IR is never changed. The view keeps the activation's canonical CFG: loops
-/// and conditional regions stay as blocks, and no executable iteration is
-/// enumerated. Initial/resumed activations must normalize to equivalent CFGs,
-/// and every remaining CFG cycle must have a bounded-loop termination
-/// certificate.
+/// Read-only CFG view of one change-sensitive activation. Initial and resumed
+/// activations must have equivalent CFGs, and remaining cycles need bounded-loop
+/// termination certificates. Loops remain in the CFG rather than being unrolled.
 ///
-/// Scheduling units are the activation's top-level statements. A chain block
-/// executes exactly once on every path from entry to the suspension: it is a
-/// dominator of the exit and belongs to no CFG cycle. Each operation of a
-/// chain block is one unit. The branch from one chain block to the next,
-/// together with every block strictly between them, is one region unit; its
-/// results are the next chain block's arguments.
+/// Chain blocks dominate the suspension and belong to no CFG cycle. Each of
+/// their operations is a scheduling unit. The branch and intervening blocks
+/// between chain blocks form a region unit whose results are the next block's
+/// arguments.
 ///
-/// Memory facts describe the source activation, including intermediate writes.
-/// This is NOT permission to coalesce publications, remove watches, activate
-/// an otherwise inactive process, or disregard outside observers.
+/// Memory facts include intermediate writes. Clients separately establish
+/// activation eligibility, publication ordering, sensitivity, and observer
+/// legality before transforming the view.
 class ActivationRegionAnalysis {
 public:
   enum class FailureReason {
@@ -187,8 +182,7 @@ cloneActivationSlice(const ActivationSlice &slice,
 /// its execution depend on (SSA values, block arguments and controlling
 /// branches). Overlapping stores and source-local store/load dependences share
 /// a slice, preserving snapshots and source order. Loops are never unrolled:
-/// a slice keeps the complete
-/// CFG.
+/// a slice keeps the complete CFG.
 ///
 /// This is not an observer certificate. Reordering statements of a process is
 /// not a reference-algorithm execution (IEEE 1800-2023 4.6(a)); it is valid

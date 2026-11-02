@@ -1,4 +1,4 @@
-//===- SimulationNBAPlanning.cpp - Native static NBA plan support -------===//
+//===- MarkCleanStaticNBA.cpp - Mark certified native NBA commits -------===//
 
 #include "../../../Conversion/SimulationToLLVMCoroutine/SimulationNBALowering.h"
 #include "../../../Conversion/SimulationToLLVMCoroutine/SimulationToLLVMCoroutinePrivate.h"

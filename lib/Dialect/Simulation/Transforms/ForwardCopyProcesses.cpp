@@ -1,60 +1,27 @@
-//===- ForwardCopyProcesses.cpp - Substitute single-driver assignments ---===//
+//===- ForwardCopyProcesses.cpp - Substitute single-driver assignments ===//
 //
-// A continuous assignment to a net is evaluated whenever an operand changes
-// and its result assigned (IEEE 1800-2023 10.3.2); the update is an Active
-// event (4.9.1) that may be processed in any order with the other Active
-// events (4.7). Where every bit of the net is written by exactly one such
-// process (a wire with one driver takes that driver's value, 6.6.1) and
-// nothing observes the net itself (VPI off, no strength query, no other
-// driver), a reader of the net may evaluate the right-hand sides directly:
-// it observes the same values at every point at which the reference
-// algorithm could have scheduled the readers (4.3), and an always_comb
-// reader's implicit sensitivity follows its reads (9.2.2.2.1), so waits on
-// the net become waits on the operands. An edge on a vector is detected on
-// its least significant bit (9.4.2), so an edge wait moves to the operand
-// bit that drives bit 0. The copy processes and the net are then dead.
+// Replaces unobserved continuous assignments with source views or cloned RHS
+// expressions, then removes their processes. IEEE 1800 4.3, 4.7, and 10.3.2
+// require the substitution to preserve observable value sequences.
 //
-// The assignment process may run only after a writer's activation or an NBA
-// drain, filtering intermediate stores. A reader moved onto an operand wakes
-// on each of its update events (4.3, 9.4.2), and a reader moved onto
-// expression operands also wakes when the expression keeps its value (9.4.2:
-// that is no event of the expression). Such an extra activation is invisible
-// when the reader is quiet: a combinational process that evaluates on the
-// inputs it waits on and on variable bits it stored earlier in the same
-// activation, and whose bits nothing else writes, stores the values they
-// already hold, which is no update event (4.3). A quiet reader that stores a
-// bit twice (`o = 0; if (y) o = 1;`) still publishes a transient, which the
-// waiters of that bit must then be quiet about in turn; a cycle of such
-// readers could wake forever, so the proof is a least fixed point. A waiter
-// on a relocation needs no quietness proof when every blocking writer stores
-// each operand bit at most once per activation, and every immediate NBA writer
-// at most once between proven positive delays. #0 and event waits can enqueue
-// multiple updates for one NBA drain (4.4.2.4). Nonzero or unknown enqueue
-// delays can align commits across those issue windows (4.9.4), so they have no
-// transient-free certificate. Level waits, `iff` conditions and clocking
-// events see intermediate values and keep the net.
+// Net candidates are plain wires with complete, disjoint, strong, undelayed
+// copy drivers. Pulls, charge storage, strength queries, resolution, net delays,
+// VPI, waveform dumps, and toggle observers prevent forwarding. Variable
+// candidates need design lifetime, exclusive complete writers, and startup
+// assignment before any scheduled reader; initialization reads keep storage.
 //
-// The net must be a plain wire whose strong, undelayed drivers partition it
-// and are exactly the copies (6.6.1): tri0/tri1 pulls (6.6.5), trireg charge
-// (6.6.4), supply strength (6.6.6), wired and user resolution (6.6.3, 6.6.7)
-// and net delays (28.16) give the net a value other than its driver's.
-// Nothing else may observe the net: VPI, waveform dumps (21.7) and toggle
-// coverage keep it. LRM 4.5 drains the Reactive region set before returning
-// to the Active set, so a copy pending after a Reactive writer cannot run
-// before a Reactive reader: such a reader keeps the net.
+// Retargeting waits can expose transients or wake readers when an expression's
+// result is unchanged. Such readers must be quiet, including their downstream
+// consumers. This is a least-fixed-point proof so cycles cannot certify each
+// other. Relocations can instead use a transient-free writer certificate:
+// blocking writers store each bit once per activation, and immediate NBA
+// writers once between proven positive delays. Unknown or nonzero NBA delays
+// cannot use that certificate.
 //
-// The same substitution applies to a continuous variable assignment with
-// exclusive, complete writers. Its storage must have design lifetime and no
-// observer of its own. Static initialization reads the declaration default
-// before continuous assignments begin (6.8), so those reads keep the variable;
-// an unconditional, once-only startup spawn proves that its assignment exists
-// before scheduled readers can run. State-domain conversions remain part of
-// the cloned RHS, before any reader's extraction or packed-value adaptation.
-//
-// This is the substitution Verilator performs in V3Gate; here every pure
-// single-write assignment qualifies, relocations (bit taps, slices, packed
-// casts) become views of the source and other expressions are cloned into
-// each reader. Chains resolve over several rounds (leaves first).
+// Level waits, iff qualifiers, clocking events, and Reactive readers that could
+// precede the copy retain it. Vector edge waits follow the source of bit zero.
+// State-domain conversions stay in the cloned RHS before reader selections.
+// Chains resolve over successive rounds, starting with leaves.
 //
 //===----------------------------------------------------------------------===//
 

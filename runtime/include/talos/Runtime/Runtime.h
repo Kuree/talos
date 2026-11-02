@@ -444,8 +444,8 @@ typedef struct talos_rt_handle_v1 {
 // waveform dumping. This grants no VPI access; the VPI permission bits remain
 // the sole authority for VPI handles and reads.
 #define TALOS_RT_EXECUTION_WAVEFORM_METADATA (UINT32_C(1) << 6)
-// The optional v1 execution extension contains scope-specific zero-time DPI
-// export descriptors.
+// The optional v1 execution extension contains scope-specific DPI function
+// and task export descriptors.
 #define TALOS_RT_EXECUTION_DPI_EXPORTS (UINT32_C(1) << 7)
 // The v1 execution extension carries the canonical, pointer-free class
 // bit-stream schema image. The image is validated and bound to the context's
@@ -464,9 +464,8 @@ typedef struct talos_rt_handle_v1 {
  * DPI C representations retain their declared layout and receive zero bval. */
 #define TALOS_RT_EXECUTION_TWO_STATE (UINT32_C(1) << 11)
 
-// Executable event-region ordinals. The eight PLI callback regions remain
-// compiler-only until the callback ABI can populate them. Preponed is serviced
-// by a slot-boundary hook rather than a process queue.
+// Executable scheduler-queue ordinals. PLI callbacks use separate scheduler
+// checkpoints; Preponed sampling uses a slot-boundary hook.
 typedef uint32_t talos_rt_event_region_v1;
 enum {
   TALOS_RT_REGION_ACTIVE = 0,
@@ -753,9 +752,9 @@ typedef struct talos_rt_sampled_range_v1 {
 struct talos_rt_import_input_v1;
 struct talos_rt_import_output_v1;
 
-// Exported zero-time functions use the validated DPI value transport in the
-// opposite direction from imports. One immutable record exists for every
-// elaborated `(C identifier, scope)` binding.
+// Exported functions and tasks reuse the typed import value transport in
+// reverse. One immutable record describes each `(C identifier, scope)` binding.
+// A task's native_entry is its marshalling bridge, including for bytecode tasks.
 typedef talos_rt_status (*talos_rt_native_export_v1)(
     talos_rt_context *context, const struct talos_rt_import_input_v1 *inputs,
     uint32_t input_count, struct talos_rt_import_output_v1 *outputs,
@@ -1576,16 +1575,14 @@ typedef struct talos_rt_class_bitstream_field_v1 {
   uint32_t value_alignment;
 } talos_rt_class_bitstream_field_v1;
 
-// Imported zero-time calls are resolved through mutable context bindings. The
-// bytecode image contains only a deterministic 32-bit symbol ID and typed
-// register metadata; it never contains a host function or data pointer.
-// Generation one imports accept arbitrary-width bits/logic, status values,
-// opaque four-word stable/reference handles, managed string words, and IEEE
-// binary32/binary64 values. A callback may copy a handle but must not
-// synthesize its representation. Floating values occupy exactly four or eight
-// bytes at the eight-byte-aligned `value`; `limb_count` remains one so
-// descriptor counts stay uniform. The callback may inspect inputs and fill the
-// zero-initialized output storage.
+// Imports resolve through mutable context bindings. Bytecode stores symbol
+// IDs and typed register metadata, without host function or data pointers.
+// The transport accepts packed bits/logic, status, opaque stable/reference
+// handles, managed strings, unpacked aggregates, and IEEE binary32/binary64.
+// Callbacks may copy handles but must not synthesize their representation.
+// Floating values occupy four or eight bytes at an eight-byte-aligned `value`,
+// with limb_count equal to one. Output storage is zero-initialized before the
+// callback fills it. Context task imports may reenter the scheduler.
 typedef struct talos_rt_import_input_v1 {
   talos_rt_design_register_kind kind;
   uint8_t flags;
@@ -3515,8 +3512,9 @@ talos_rt_status talos_rt_v1_vpi_frame_unwind(talos_rt_context *context,
 // runtime may omit per-actor handover checks; an unexpected action requests a
 // transactional transfer to the generic scheduler.
 #define TALOS_RT_NATIVE_SCHEDULE_CLEAN_SUPERSTEP UINT32_C(512)
-// Experimental closed-world eval loop: exact static transitions feed the
-// generated trigger masks instead of re-entering the actor worklist.
+// Generated eval loop: exact static transitions feed generated trigger masks
+// instead of re-entering the actor worklist. Additional flags define whether
+// the plan owns the whole design, a static island, or a shared calendar.
 #define TALOS_RT_NATIVE_SCHEDULE_EVAL UINT32_C(1024)
 // The generated eval closure is a certified static island, but runtime-owned
 // actors remain outside it. Unlike FULLY_STATIC, this never suppresses their
@@ -3957,8 +3955,8 @@ talos_rt_status talos_rt_v1_scheduler_direct_fragment_enter(
 talos_rt_status
 talos_rt_v1_scheduler_direct_fragment_leave(talos_rt_context *context,
                                             uint32_t actor_slot);
-// Experimental eval-mode entry: execute one statically bound actor directly
-// inside the scheduler-owned clean transaction.
+// Execute one statically bound eval actor inside the scheduler-owned clean
+// transaction.
 talos_rt_status
 talos_rt_v1_scheduler_execute_aot_actor(talos_rt_context *context,
                                         uint32_t actor_slot);

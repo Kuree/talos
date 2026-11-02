@@ -1,21 +1,15 @@
-//===- SimulationUnknownSummary.cpp - Report X/Z writes per root ---------===//
+//===- SimulationUnknownSummary.cpp - Track root unknown planes ===//
 //
-// schedule.known.roots treats a storage root as known while its bit of the
-// generated unknown summary is clear, without loading its unknown plane: a
-// clear bit means the root's unknown plane equals its pattern
-// (`simulation.steady_unknown`, X/Z exactly in the pattern's bits). So every
-// write that makes a summarized root differ from its pattern must set the
-// root's bit before a later test runs. This pass instruments the generated
-// writes: after each store, memcpy, memmove and memset into the generated
-// unknown plane, it tests what was stored against the patterns of the roots
-// it overlaps and, when they differ, sets those roots' bits.
+// `schedule.known.roots` accepts a root when its summary bit is clear: the
+// unknown plane matches `simulation.steady_unknown`. Every write that may break
+// that match must set the bit before the next check.
 //
-// It runs before native group materialization, which may keep state in SSA
-// and store it later: the report stays at the logical store. A gate's cold
-// path calls the runtime, a group boundary, so a rescan reads the stored
-// plane. Runtime services that receive the plane report their own writes. A
-// plane pointer that escapes anywhere else is reported for every root after
-// the escaping operation.
+// Instruments stores, memcpy, memmove, and memset into generated unknown
+// planes, comparing written bits with each overlapping root's pattern. The
+// pass runs before native group materialization so reports stay at logical
+// stores even when physical stores move. Runtime services report their own
+// writes; other pointer escapes conservatively report every root. A runtime
+// handoff rescans canonical planes before clearing summary bits.
 //
 //===----------------------------------------------------------------------===//
 

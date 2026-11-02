@@ -1,18 +1,10 @@
-// Runs the wasm build of the Talos driver off the main thread.
+// Runs compilation and simulation in a worker so the page can stop a hung
+// simulation by terminating it. Emscripten's createTalosModule factory provides
+// the in-memory FS and callMain(argv).
 //
-// Contract with the driver module (emscripten MODULARIZE build of
-// tools/driver): a factory on self.createTalosModule, an in-memory FS, and
-// callMain(argv). The driver writes a linked wasm simulation to the output
-// path, which this worker then runs itself. Keeping the simulation here leaves
-// the page responsive, and lets it stop a design that never calls $finish by
-// terminating the worker.
-//
-// A run request with `coverageReport` whose flags include --coverage runs with
-// a coverage database, which the wasm build of talos-cov
-// (self.createTalosCovModule, same contract) turns into the self-contained
-// HTML report the Coverage view shows. The run's result is posted first, as
-// `exited` with `coveragePending`, so stopping while the report is built
-// loses only the report; a final `coverage` message carries the report.
+// Coverage requests also load createTalosCovModule. An `exited` message with
+// coveragePending is followed by a final `coverage` message, so stopping report
+// generation preserves the simulation result.
 
 let modulePromise = null;
 

@@ -115,17 +115,14 @@ bool forwardRegionNextState(sim::SimFuncOp function,
       if (successor != wait)
         pending.push_back(successor);
   }
-  // Until the epilogue also owns direct commit and fanout, large state-machine
-  // regions pay more phi traffic than they save in accumulator staging. Keep
-  // this first form within one fine-mask leaf; larger actors remain untouched
-  // rather than taking a compile-time-size heuristic as a semantic proof.
+  // Bound region size to limit phi traffic from accumulator staging. This is
+  // a profitability limit; the CFG checks below establish legality.
   if (activation.empty() || activation.size() > 64)
     return false;
 
-  // The initial implementation deliberately handles an acyclic region with
-  // explicit exits. Convergence SCCs need a generated fixpoint loop and are
-  // not silently approximated here. Mixed conditional exits are split below
-  // so their next-state values reach an edge-local epilogue.
+  // Require an acyclic region with explicit exits. Split mixed conditional
+  // exits so next-state values reach an edge-local epilogue. Convergence SCCs
+  // require a separate fixpoint loop.
   DenseMap<Block *, unsigned> indegree;
   for (Block *block : activation)
     indegree[block] = 0;

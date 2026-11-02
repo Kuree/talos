@@ -1,4 +1,4 @@
-//===- SimulationAOTEvalAnalysis.cpp - Resolve generated eval plan -------===//
+//===- NativeEvalPlanning.cpp - Resolve generated eval plans -------===//
 
 #include "../SimulationToLLVMCoroutine/SimulationAOTPlanning.h"
 #include "../SimulationToLLVMCoroutine/SimulationToLLVMCoroutinePrivate.h"
@@ -428,10 +428,9 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
       }
       return true;
     });
-    // IEEE 1800-2023 9.2.2.2.1 excludes written expressions from always_comb
-    // sensitivity. A read-before-write source therefore cannot be treated as
-    // an algebraic feedback equation and iterated to a fixed point. Keep
-    // self-dependent processes on their existing executor for now.
+    // always_comb excludes written expressions from sensitivity (IEEE 1800
+    // 9.2.2.2.1). A read-before-write process cannot be iterated as algebraic
+    // feedback, so overlapping read/write ranges keep their existing executor.
     if (safe) {
       normalizeRanges(node.reads);
       normalizeRanges(node.writes);

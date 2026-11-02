@@ -104,21 +104,12 @@ std::optional<ConstantIntRanges> getInductionRange(const BoundedLoop &loop,
   APInt high = (increasing ? last : start).trunc(width);
   return ConstantIntRanges::range(low, high, loop.signedCompare);
 }
-// Preserve the exact sequential activations of IEEE 1800-2023 12.7. A small
-// constant induction loop is not a scheduler control loop: exposing its finite
-// CFG before compute-graph construction also exposes constant packed indices.
-// Suspension and unproved cycles are excluded. Termination marking accepts
-// early exits, matching constant entries and already proved inner loops;
-// replication additionally requires repairable SSA state. No loop-progress
-// assumption comes from a source type or an arbitrary iteration cutoff.
-//
-// Termination and unrolling are separate questions. The structural proof below
-// establishes that the loop finishes without any external event; whether to
-// replicate its body is a code-size policy on top of that. A large constant
-// induction loop -- an X-initialization sweep over a memory, a reset sweep over
-// a queue -- must keep the proof even when replication is refused, because the
-// scheduler otherwise has to treat it as an unbounded control loop and hand its
-// whole process to bytecode.
+// Prove finite induction loops independently of the unrolling budget.
+// Marking accepts early exits, matching entries, and proven bounded inner
+// loops; replication additionally requires repairable SSA state. Suspensions
+// and unproved cycles are excluded. A loop that is too large to unroll still
+// keeps its termination certificate for scheduler classification (IEEE 1800
+// 12.7); code-size limits must not turn it into an unbounded control loop.
 
 arith::CmpIPredicate swapPredicate(arith::CmpIPredicate predicate) {
   using P = arith::CmpIPredicate;
@@ -320,22 +311,11 @@ inferInvariantRange(Value value, Block *header, ArrayRef<BoundedLoop> enclosing,
   return infer(value, infer);
 }
 
-/// Structural recognition shared by the marking and unrolling consumers.
-/// `provenBackedges` names latch branches already proven to terminate, so an
-/// enclosing loop can be recognized once its inner loops are: the DAG check
-/// below would otherwise reject every nested sweep.
-///
-/// `forMarking` asks only whether the latch runs a bounded number of times,
-/// not whether the loop can be replicated. IEEE 1800-2023 12.7.1 exits a
-/// for-loop as soon as its test fails, and the induction variable here is an
-/// SSA value no other process can modify. The marking therefore accepts a body
-/// that leaves before the induction bound: `break` and `return` (12.8) only
-/// leave the loop sooner, and neither does the `$finish` check that an inlined
-/// call leaves behind (20.2), a terminator with no successors. It also accepts
-/// other header computations and values used after the loop: none of them
-/// can change how often the induction test passes. Replication also supports
-/// loop-carried accumulators when their results leave via exit block arguments;
-/// direct uses outside the loop still require a separate SSA repair.
+/// Shared loop recognition. `provenBackedges` excludes already-proven inner
+/// loops from the enclosing DAG check. Marking accepts early exits and extra
+/// header computations that cannot change the induction bound. Replication
+/// supports accumulators forwarded through exit block arguments; other uses
+/// outside the loop require SSA repair.
 static std::optional<BoundedLoop>
 recognizeBoundedLoopImpl(Block *header,
                          const llvm::DenseSet<Operation *> &provenBackedges,

@@ -407,10 +407,8 @@ planNativeModuleSplit(llvm::Module &module, const NativePartitionPlan &plan) {
       uint64_t instructions = function->getInstructionCount();
       instructionCount += instructions;
       unit.weight = std::max<uint64_t>(1, instructions);
-      // Keep only genuinely exceptional bodies out of ThinLTO. Medium-sized
-      // generated functions still benefit from importing small helpers, and
-      // the wide-packed RMW patterns that previously poisoned instruction
-      // selection are removed before translation.
+      // Keep large bodies out of ThinLTO while allowing smaller generated
+      // functions to import helpers.
       unit.nativeObject = instructions > 20000;
     } else if (auto *global = dyn_cast<llvm::GlobalVariable>(&value))
       unit.weight = detail::estimateNativeGlobalWeight(*global);

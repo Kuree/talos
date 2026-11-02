@@ -1,17 +1,10 @@
-// Owns the compiler worker lifecycle for every page that compiles in the
-// browser: the playground and the embed service.
+// Shares the compiler-worker lifecycle between the playground and embed
+// service. Each worker handles one request to isolate compiler global state;
+// the session preloads its replacement for the next request.
 //
-// LLVM, MLIR, Slang, and wasm LLD all carry process-global state. A
-// command-line invocation gets a fresh process, so each worker serves exactly
-// one request and is then terminated. Instantiating the driver and installing
-// the target archives costs a few hundred milliseconds, so the session keeps
-// the next worker warm while the page is idle.
-//
-// A request streams its worker messages to the caller and ends with exactly
-// one final message: `compiled` for a text stage or a failed compile, `exited`
-// once a simulation returns, `coverage` after an `exited` whose coverage
-// report was still pending, `failed` when the worker itself breaks, or
-// `stopped` when the caller stops it.
+// Progress messages stream to the caller. A request ends with a text or failed
+// `compiled`, final `exited`, `coverage`, `failed`, or caller-issued `stopped`
+// message. An `exited` with coveragePending is intermediate.
 
 function isFinal(message) {
   if (message.type === 'compiled') return !message.ok || message.kind !== 'binary';

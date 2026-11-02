@@ -22,10 +22,6 @@
 
 namespace talos::simlowering {
 
-/// Module analysis computed before the nested function pipeline. Operation
-/// attribute dictionaries are mutable even when their individual attributes
-/// are immutable: workers must not read a sibling's symbol name, signature, or
-/// callable flags while that sibling is being lowered or canonicalized.
 /// Whether the driver executed UPF against this module. executeUPF leaves its
 /// declarations at module scope until ElaborateUPF consumes them. Lowering
 /// emits power-only proofs only then, so a design without UPF is unaffected.
@@ -35,6 +31,9 @@ inline bool hasPowerIntent(mlir::Operation *module) {
   });
 }
 
+/// Shared metadata captured before parallel function lowering. Workers use
+/// these snapshots instead of reading sibling symbol names, signatures, and
+/// callable flags while those operations are being rewritten.
 class UnitLoweringInputs {
 public:
   SemanticTypeIndex semanticTypes;

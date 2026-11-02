@@ -132,12 +132,9 @@ specializeNativeAOTCaptures(ModuleOp module,
   if (specialized.wasInterrupted())
     return failure();
 
-  // Body fusion may leave large activation bodies outlined behind an
-  // instance coordinator.  Their capture operands are the same fixed context
-  // projections proven above, but they are now reached by sim.call rather
-  // than sim.spawn.  Specialize singleton direct callees as well so keeping a
-  // large body out of line does not turn every state access back into dynamic
-  // stable-handle decoding.
+  // Outlined activation bodies use simulation.call with the same fixed
+  // context captures as spawned bodies. Specialize singleton callees too,
+  // preserving direct state access when a large body stays out of line.
   SmallVector<sim::SimCallOp> calls;
   module.walk([&](sim::SimCallOp call) { calls.push_back(call); });
   for (sim::SimCallOp call : calls) {

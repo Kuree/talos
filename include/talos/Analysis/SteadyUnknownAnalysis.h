@@ -1,37 +1,20 @@
-//===- SteadyUnknownAnalysis.h - Storage bits X/Z in steady state -*- C++
-//-*-===//
+//===- SteadyUnknownAnalysis.h - Steady-state X/Z patterns -*- C++ -*- ===//
 //
-// Which bits of each design storage root hold X or Z once the design runs:
-// bits that every repeating write stores X/Z into, and bits that keep an
-// initial X (IEEE 1800-2023 6.8, Table 6-7) because nothing writes them. A
-// field that a design never assigns in the value it copies into a register
-// is the typical case.
+// Finds candidate X/Z bits in design storage: bits left at an X/Z declaration
+// default and bits that repeating writes only fill with X/Z.
 //
-// The fact is the complement of a least fixed point of *may-known* bits: a
-// bit may become known when a write may store a known bit into it, and a
-// value bit may be known when it may be computed from may-known bits by the
-// LRM's X rules (IEEE 1800-2023 11.4): moves (selections, concatenations,
-// extensions, aggregates, selects and block arguments) carry their bits,
-// bitwise operators work per bit, and an X/Z operand bit makes arithmetic
-// and relations X. Any other computation, call result, argument or
-// unresolved read may be known. An indexed selection reaches the elements
-// its index may select: the values a bounded loop's induction takes, or
-// every element. Writes of run-once initialization code (initial and
-// root-initializer processes), and the initial value itself, count only for
-// bits that no repeating write replaces in full: at a fixed range, in every
-// element through fixed writes or a loop visiting each index, or as a whole
-// array. Those bits take what the repeating writes store, while an element
-// an indexed write misses keeps its initial value. A write whose target
-// cannot be attributed makes every root may-known. One DataFlowSolver over
-// the design solves both facts: a sparse forward analysis for values, and
-// states anchored per storage root and private allocation for writes and
-// reads. Packed values and nested unpacked arrays of packed elements up to
-// 4096 bits are tracked bit by bit; a larger array, value or root, shares
-// one mask for all its packed leaves.
+// A sparse value analysis and root/private-storage states solve the least
+// fixed point of bits that may become known. Unmodeled computations and reads
+// may be known; an unattributed write invalidates the whole result. Initial
+// values and run-once writes matter unless repeating writes completely cover
+// the affected bits. Bounded-loop indices refine indexed writes.
 //
-// The result is a guess about steady state, not a proof: initialization can
-// leave such a bit known, and writes the design does not contain (VPI) can
-// change it. Clients must check it at run time before relying on it.
+// Packed values and nested arrays are tracked per bit within the analysis's
+// size limit; larger shapes share a mask across packed leaves.
+//
+// These patterns require runtime validation. Startup writes can leave a bit
+// known, and external writes can change it. Clients must check the actual
+// unknown plane before specializing accesses.
 //
 //===----------------------------------------------------------------------===//
 

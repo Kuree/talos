@@ -974,20 +974,11 @@ LogicalResult materializeEvalTwoStateVariants(
     return nextCodeUnit++;
   };
 
-  // Build a side-effect-free entry predicate while the Simulation CFG still
-  // preserves source short-circuiting.  A whole-owner range scan is necessarily
-  // path insensitive: an X input on an untaken branch would otherwise keep the
-  // owner in its four-state body forever.  The predicate follows the activation
-  // CFG and rejects the two-state edge only when a four-state load that is
-  // actually reached contains X/Z. Restrict this first implementation to
-  // reads, fixed NBA staging, and cold checkpoints. The cold route resumes the
-  // same generated slot coordinator, so staged NBA and downstream fixpoint
-  // work still reach the one combined barrier exactly once.
-  // A net whose handle was not authorized as directly addressable — VPI
-  // observability and language overrides both withdraw that authorization —
-  // materializes through a runtime plane accessor. A probe reading it would
-  // carry that call into the generated closure, so those owners keep their
-  // canonical route instead.
+  // Follow source short-circuiting so X/Z on an untaken branch does not
+  // reject the two-state route. Probes support reads, fixed NBA staging, and
+  // cold checkpoints; fallback rejoins the same slot coordinator and barrier.
+  // Nets must be directly addressable. A VPI-observable or overridden net
+  // requires a runtime accessor, so its owner keeps the canonical route.
   bool netsDirectlyAddressable =
       llvm::all_of(stateLayout.nets, [&](const auto &entry) {
         talos_rt_stable_handle_v1 decoded{};

@@ -1,17 +1,8 @@
-"""Compiling and executing a single test with Talos.
+"""Compile and execute Talos benchmark cases.
 
-The benchmark owns its run loop rather than delegating to the upstream test
-harnesses. That keeps the harness small and independent of upstream churn, and it
-reflects what the suites actually need: Talos compiles a design either to
-frontend IR or a native executable, and each suite judges the applicable phase —
-
-  * a test that expects an error passes iff its selected phase fails;
-  * a test with a gold file passes iff its stdout matches the gold;
-  * otherwise the test self-checks through its suite-specific output protocol.
-
-The reference simulator (real Verilator/Icarus/vvp) is never involved; gold files
-are the ones checked into each suite. This module provides just the frontend,
-native compile, and execute primitives; judgement lives in each suite driver.
+Suite adapters judge expected phase failures, checked-in golden stdout, or
+self-check protocols. This module supplies frontend, native compile, and
+execution primitives without invoking reference simulators.
 """
 
 from __future__ import annotations

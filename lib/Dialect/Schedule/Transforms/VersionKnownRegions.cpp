@@ -1,25 +1,12 @@
-//===- VersionKnownRegions.cpp - Two-state copies of known regions
-//---------===//
+//===- VersionKnownRegions.cpp - Guarded two-state regions ===//
 //
-// A region found by KnownVersioningAnalysis is entered through a check of its
-// four-state inputs. When they are known, a two-state copy runs: its live-ins
-// and checked reads become `from_bits(to_bits(x))`, which is `x` for a known
-// value, and its reads load only value planes. Otherwise the original code
-// runs unchanged.
+// Clones regions selected by KnownVersioningAnalysis. Checks establish that
+// live-ins and selected reads are known before their two-state views are used;
+// a failed check selects the original four-state code.
 //
-// A run (acyclic, single entry and exit) checks once:
-//
-//   head:  ... ; cond_br %known, ^cast, ^run          ^run:  original
-//   ^cast: casts ; br ^copy                            ^copy: two-state copy
-//   ^run, ^copy -> ^exit(live-outs)
-//
-// A loop checks at every header visit, so it leaves the four-state copy as
-// soon as its carried values become known and returns to it for an iteration
-// that reads X/Z:
-//
-//   preheader, latches -> ^check(args): cond_br %known, ^cast(args), ^header
-//   ^cast(args): casts ; br ^header2(casts)
-//   two-state latches -> ^recheck(args): cond_br %reads, ^header2, ^header
+// An acyclic region checks once at entry. A loop rechecks carried values at
+// header visits and checked reads on its two-state backedge, allowing execution
+// to switch between copies as unknown values disappear or reappear.
 //
 //===----------------------------------------------------------------------===//
 

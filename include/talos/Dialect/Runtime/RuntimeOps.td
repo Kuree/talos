@@ -322,7 +322,7 @@ def RTErrorOp : RTOp<"error", [
   let results = (outs RTStatusType:$status);
 }
 
-// Delimit sim.publication.batch_begin/end. Transition publication reaches the
+// Delimit simulation.publication.batch_begin/end. Publication reaches the
 // runtime through ordinary memory, so both are full barriers here.
 def RTPublicationBatchBeginOp : RTOp<"publication.batch_begin", [
   MemoryEffects<[MemRead, MemWrite, MemRead<RTRuntimeResource>,

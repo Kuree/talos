@@ -194,8 +194,8 @@ def VoidType : TalosType<"Void"> {
   let summary = "source-level SystemVerilog void";
 }
 
-// Simulation time is unsigned and independent of host time_t.  The eventual
-// runtime ABI uses a fixed-width representation selected by the lowering.
+// Simulation time is unsigned and independent of host time_t. Lowering uses
+// fixed-width design-precision ticks at the runtime boundary.
 def TimeType : TalosType<"Time"> {
   let mnemonic = "time";
   let summary = "scaled simulation time";

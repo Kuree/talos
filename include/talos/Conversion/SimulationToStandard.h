@@ -27,7 +27,7 @@ public:
 };
 
 /// Extend a composing converter so packed aggregate values use the same
-/// scalar value/unknown planes as `sim.packed.flatten` exposes.
+/// scalar value/unknown planes as `simulation.packed.flatten` exposes.
 void addSimulationPackedAggregateTypeConversions(
     mlir::TypeConverter &converter);
 

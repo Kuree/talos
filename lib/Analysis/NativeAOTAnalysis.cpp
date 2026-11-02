@@ -850,34 +850,13 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
     // to the user design and cannot inherit coordinator-only hybrid admission.
     return true;
   };
-  // A control loop needs bytecode scheduling because its progress is not driven
-  // solely by state change. That property belongs to the fragments on the
-  // procedural cycle, not to every fragment the SCC happens to contain: one
-  // testbench oscillator that reads a design signal inside `forever` closes an
-  // SCC around the whole clocked datapath, whose members are ordinary
-  // state-driven work.
-  //
-  // The hazard is a loop that re-reaches its own work without suspending, which
-  // IEEE 1800-2023 12.7.6 describes as hanging the event scheduler. A fragment
-  // merely reachable *after* such a loop is not that hazard: it runs once the
-  // loop finishes. So condense this group's process-order subgraph and keep
-  // only nontrivial components and self-loops, rather than every fragment a
-  // topological sweep fails to order. A fragment outside every process-order
-  // cycle cannot be re-entered without suspending, which is exactly the
-  // requirement the Convergence arm below already admits natively. IEEE
-  // 1800-2023 4.7 lets a simulator run a process to completion as one event
-  // instead of interleaving, and 4.6's source-order and NBA-order guarantees
-  // are preserved by doing so. Index the process-order edges once: a per-group
-  // rescan of the whole edge list is quadratic on a design with many
-  // control-loop groups.
-  //
-  // A latch whose loop is proven to leave after finitely many iterations is
-  // not that hazard either: its for-loop test fails after a bounded number of
-  // steps (12.7.1), and break or return only leave sooner (12.8).
-  // ComputeGraph.cpp drops the same backedge before classifying the group.
-  // Keep it out here too. Otherwise one genuine control loop anywhere in a
-  // large combinational SCC withholds every bounded sweep the SCC happens to
-  // contain.
+  // Only fragments on a process-order cycle need control-loop fallback;
+  // descendants of the cycle and state-driven members of the same SCC do not.
+  // Condense the process-order subgraph and retain nontrivial components and
+  // self-loops. Ignore proven bounded-loop backedges, as ComputeGraph.cpp does.
+  // Finite activations may execute atomically under IEEE 1800 4.7 without
+  // changing source or NBA order. Index edges once to avoid rescanning the
+  // whole graph for each group.
   llvm::DenseMap<uint32_t, SmallVector<uint32_t>> processOrderSuccessors;
   for (Attribute edgeAttribute : graph.getEdges()) {
     auto edge = dyn_cast<schedule::ComputeEdgeAttr>(edgeAttribute);
@@ -1393,18 +1372,10 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
         requireBytecodeFragment(operation,
                                 "continuation-site metadata is missing");
     }
-    // Real-valued publications use IEEE comparison semantics, including a
-    // NaN self-assignment being observable. The generated direct-wait path
-    // currently models only packed value/unknown planes, so it cannot own a
-    // real-reactive continuation without losing the runtime publication. Keep
-    // the complete containing actor in Tier 3 until real transition records
-    // are part of the native schedule ABI.
-    // Pure arithmetic in the one-shot root initializer is not a reactive
-    // publication or a value carried through a wait. For example, the initial
-    // UPF NORMAL predicate can decode voltages after HDL declaration calls
-    // (IEEE 1801-2018 9.2.1) without depending on store forwarding to fold it.
-    // Keep real storage accesses/publications and all reactive actors under
-    // the existing restriction; their transition ABI remains unchanged.
+    // Direct waits model packed planes, so real-valued reactive actors stay
+    // in bytecode to preserve publications, including NaN self-assignments.
+    // Pure arithmetic in the one-shot root initializer has no reactive
+    // publication or suspended value and can remain native.
     auto function = operation->getParentOfType<sim::SimFuncOp>();
     bool pureRootArithmetic =
         function &&

@@ -1,6 +1,6 @@
 #ifndef TALOS_SIMULATION_TO_SCHEDULE_NATIVE_NBA_UTILS_H
 #define TALOS_SIMULATION_TO_SCHEDULE_NATIVE_NBA_UTILS_H
-//===- SimulationNBAPlanning.cpp - Native static NBA plan support -------===//
+//===- NativeNBAUtils.h - Shared native NBA planning helpers -------===//
 
 #include "../SimulationToLLVMCoroutine/SimulationNBALowering.h"
 #include "../SimulationToLLVMCoroutine/SimulationToLLVMCoroutinePrivate.h"

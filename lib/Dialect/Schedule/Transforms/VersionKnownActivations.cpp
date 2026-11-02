@@ -1,29 +1,17 @@
-//===- VersionKnownActivations.cpp - Gated two-state activation copies ----===//
+//===- VersionKnownActivations.cpp - Guarded activation copies ===//
 //
-// An activation whose storage roots are known in steady state runs copies in
-// which its reads of those roots load only their value planes and its stores
-// of known values write only theirs. The body is cut into segments: runs of
-// operations that control enters only at their first operation. One check at
-// a segment's entry tests the unknown summary bits of the roots the segment
-// reads or stores known, and the private slots and live-in values that only
-// the copy treats as known; when it fails, the original four-state segment
-// runs:
+// Clones single-entry activation segments for value-plane specialization.
+// Entry checks cover root unknown summaries, required private slots, and
+// live-ins known only in the copy. A failed check runs the original segment.
+// Reads outside that proof are checked where they load; on X/Z execution
+// continues after the same read in the original body, without replaying effects.
 //
-//   head:  %ok = known.roots ...  cond_br %ok, ^cast, ^segment
-//   ^cast: live-in casts; br ^copy     ^segment: the original operations
-//   ^copy: the same operations, gated reads and known stores value-only
-//   both -> ^exit(live-outs)
+// LocalUnknownAnalysis proves which accesses can omit unknown planes and which
+// must retain steady-pattern X values. Known stores require zero unknown bits
+// at the destination as well as a known value.
 //
-// A read the check cannot cover is tested where the copy loads it; on X/Z
-// the copy continues in the original right after the same read.
-//
-// Both copies perform the same effects with the same values: every gated
-// read observes known bits, and every known store writes a known value over
-// unknown bits that are zero (LocalUnknownAnalysis). A check observes the
-// canonical planes after every earlier write, so a failed check affects only
-// its own segment. Original blocks keep their positions, which native
-// compute-graph fragments use to name blocks; split blocks and copies go to
-// the end of the body.
+// Original blocks retain their positions because compute-graph fragments name
+// them by ordinal. Split blocks and copies are appended to the body.
 //
 //===----------------------------------------------------------------------===//
 
