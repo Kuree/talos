@@ -577,8 +577,8 @@ inline bool talos_rt_decode_schedule_flags(uint32_t flags, uint32_t &phase,
 }
 
 /// Computes the region a suspension queues its resumption in. A post-Observed
-/// resumption of an Active-home process queues with Observed and sets
-/// `postObserved`, which orders it after all other work there.
+/// resumption queues with Observed and sets `postObserved`, which orders it
+/// after all other work there.
 inline bool
 talos_rt_next_queued_region(uint32_t homeRegion, uint32_t suspendKind,
                             uint64_t delayPayload, uint32_t actionFlags,
@@ -590,11 +590,12 @@ talos_rt_next_queued_region(uint32_t homeRegion, uint32_t suspendKind,
   postObserved = false;
   if ((actionFlags & TALOS_RT_ACTION_RESUME_POST_OBSERVED) != 0) {
     // IEEE 1800-2023 9.4.2.4, 14.10: the process executes in the first
-    // iteration of its home region set after the Observed region.
+    // iteration of its home region set after the Observed region. An event of
+    // the Reactive region set is yet to reach that region.
     if (!talos_rt_is_mutable_home_region(homeRegion))
       return false;
-    postObserved = homeRegion == TALOS_RT_REGION_ACTIVE;
-    queuedRegion = postObserved ? TALOS_RT_REGION_OBSERVED : homeRegion;
+    postObserved = true;
+    queuedRegion = TALOS_RT_REGION_OBSERVED;
     return true;
   }
   if ((actionFlags & TALOS_RT_ACTION_RESUME_REGION_VALID) != 0) {
@@ -1130,8 +1131,9 @@ struct ScheduledDesignTask {
 
 /// The scheduler rank that orders a queued process or design task within its
 /// region. IEEE 1800-2023 9.4.2.4, 14.10: a post-Observed resumption executes
-/// in the first Active iteration after the Observed region, so it follows the
-/// other work queued with Observed, such as clocking-block input samples.
+/// in the first iteration of its home region after the Observed region, so it
+/// follows the other work queued with Observed, such as clocking-block input
+/// samples.
 template <typename Process>
 inline uint32_t talos_rt_scheduler_rank(const Process &process) {
   return process.postObserved &&

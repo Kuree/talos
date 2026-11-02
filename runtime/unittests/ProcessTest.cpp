@@ -1542,8 +1542,8 @@ TEST(RuntimeInternals, ResumeOverridesRequireExecutableHomeRegions) {
 }
 
 TEST(RuntimeInternals, PostObservedResumesTheHomeIterationAfterObserved) {
-  // IEEE 1800-2023 9.4.2.4, 14.10: an Active-home process queues with
-  // Observed, after its other work; a Reactive home resumes in Reactive.
+  // IEEE 1800-2023 9.4.2.4, 14.10: a process of either home queues with
+  // Observed, after its other work, as a Reactive event has yet to reach it.
   uint32_t queuedRegion = UINT32_MAX;
   bool postObserved = false;
   EXPECT_TRUE(talos_rt_next_queued_region(
@@ -1554,8 +1554,8 @@ TEST(RuntimeInternals, PostObservedResumesTheHomeIterationAfterObserved) {
   EXPECT_TRUE(talos_rt_next_queued_region(
       TALOS_RT_REGION_REACTIVE, TALOS_RT_SUSPEND_CHANGE, 1,
       TALOS_RT_ACTION_RESUME_POST_OBSERVED, queuedRegion, postObserved));
-  EXPECT_EQ(queuedRegion, TALOS_RT_REGION_REACTIVE);
-  EXPECT_FALSE(postObserved);
+  EXPECT_EQ(queuedRegion, TALOS_RT_REGION_OBSERVED);
+  EXPECT_TRUE(postObserved);
   EXPECT_FALSE(talos_rt_next_queued_region(
       TALOS_RT_REGION_OBSERVED, TALOS_RT_SUSPEND_CHANGE, 1,
       TALOS_RT_ACTION_RESUME_POST_OBSERVED, queuedRegion, postObserved));

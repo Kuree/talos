@@ -1203,7 +1203,9 @@ private:
   ::mlir::Value lvalueReferencePlaceholder;
   bool continuousStore = false;
   bool sampleAssertionValues = false;
-  /// Where the wait of the assertion monitor being lowered resumes.
+  /// The home of the assertion monitor being lowered, and where its waits
+  /// resume.
+  sim::EventRegion monitorHomeRegion = sim::EventRegion::Observed;
   sim::EventRegion monitorResumeRegion = sim::EventRegion::Observed;
   /// The expressions being lowered run only on some ticks of the assertion
   /// clock.

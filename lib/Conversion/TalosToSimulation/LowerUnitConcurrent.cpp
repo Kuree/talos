@@ -2907,7 +2907,7 @@ UnitLowering::lowerSequenceEndpointMonitor(ArrayRef<Operation *> roots) {
   Location location = getSemanticLocation(instance);
   function->setAttr(
       "home_region",
-      sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion));
+      sim::EventRegionAttr::get(function.getContext(), monitorHomeRegion));
   Type stateType = builder.getI64Type();
   Value zero = arith::ConstantOp::create(builder, location, stateType,
                                          builder.getI64IntegerAttr(0));
@@ -3333,7 +3333,7 @@ LogicalResult UnitLowering::lowerGlobalFutureAssertionResolver(
       function, builder.getUnitAttr());
   function->setAttr(
       "home_region",
-      sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion));
+      sim::EventRegionAttr::get(function.getContext(), monitorHomeRegion));
   return success();
 }
 
@@ -3360,18 +3360,25 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
     semantic::SVConcurrentAssertionStatementOp op) {
   // IEEE 1800-2023 16.13.6, F.6.1: `.triggered` is true on the tick of the end
   // point, whichever order the monitors of one Observed region run in, and end
-  // points are detected there. Reading sampled values and reporting through
-  // action blocks, which the Reactive region runs anyway, a monitor loses
-  // nothing there.
+  // points are detected there. A reader wakes in the iteration of the Reactive
+  // region set after an Observed region, even when a program drives its clock.
+  // Reading sampled values and reporting through action blocks, which the
+  // Reactive region runs anyway, it loses nothing there. The method of a named
+  // event (15.5.3) has no end point to wait for.
   bool readsEndPoint = false;
   op->walk([&](semantic::SVCallExpressionOp call) {
-    readsEndPoint |= call.getIsSystemCall() &&
-                     call.getCalleeName() == "triggered" &&
-                     call.getArgumentCount() == 1;
+    if (!call.getIsSystemCall() || call.getCalleeName() != "triggered" ||
+        call.getArgumentCount() != 1)
+      return;
+    readsEndPoint |= isa<semantic::SVAssertionInstanceExpressionOp>(
+        getChildren(call).front());
   });
-  llvm::SaveAndRestore<sim::EventRegion> resumeRegion(
-      monitorResumeRegion,
+  llvm::SaveAndRestore<sim::EventRegion> homeRegion(
+      monitorHomeRegion,
       readsEndPoint ? sim::EventRegion::Reactive : sim::EventRegion::Observed);
+  llvm::SaveAndRestore<sim::EventRegion> resumeRegion(
+      monitorResumeRegion, readsEndPoint ? sim::EventRegion::PostObserved
+                                         : sim::EventRegion::Observed);
   // The bounded monitor stays the first choice for every property it accepts,
   // so its cost and behavior do not change. A candidate it rejects, with nothing
   // of it kept, runs through the automaton. If that rejects it too, the monitor's
@@ -3810,7 +3817,7 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
       return failure();
     attempt->first->setAttr(
         "home_region",
-        sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion));
+        sim::EventRegionAttr::get(function.getContext(), monitorHomeRegion));
     attempt->first->setAttr(
         "domain", sim::ExecutionDomainAttr::get(function.getContext(),
                                                 sim::ExecutionDomain::Design));
@@ -4369,7 +4376,7 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
         resolver->first, builder.getUnitAttr());
     resolver->first->setAttr(
         "home_region",
-        sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion));
+        sim::EventRegionAttr::get(function.getContext(), monitorHomeRegion));
     sim::SimSpawnOp::create(builder, location, resolver->first.getSymNameAttr(),
                             resolver->second, ArrayAttr{}, ArrayAttr{});
     cf::BranchOp::create(builder, location, wait);
@@ -5535,7 +5542,7 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
 
     function->setAttr(
         "home_region",
-        sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion));
+        sim::EventRegionAttr::get(function.getContext(), monitorHomeRegion));
     function->setAttr(
         "domain", sim::ExecutionDomainAttr::get(function.getContext(),
                                                 sim::ExecutionDomain::Design));
@@ -6068,7 +6075,7 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
   // IEEE 1800 evaluates sampled predicates and monitor state in Observed.
   function->setAttr(
       "home_region",
-      sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion));
+      sim::EventRegionAttr::get(function.getContext(), monitorHomeRegion));
 
   auto isProceduralAge = [](const FixedSequenceAge &age) {
     return age.caseGuards.empty() && age.matchItems.empty();

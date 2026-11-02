@@ -6541,6 +6541,14 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
         // certificate. Export the enclosing eval captures before execution,
         // leaving this exact selected continuation and its frame intact.
         return TALOS_RT_TIER_UNAVAILABLE;
+      // A Reactive home follows what the same promotion returns to Active.
+      if (found->postObserved &&
+          found->queuedRegion == TALOS_RT_REGION_OBSERVED &&
+          found->homeRegion != TALOS_RT_REGION_ACTIVE) {
+        talos_rt_promote_post_observed_resumptions_unlocked(context);
+        *outProgress = true;
+        return TALOS_RT_OK;
+      }
       // A filtered selection primes a child inside its parent's cohort.
       if ((isInactiveSchedulerRegion(found->queuedRegion) ||
            context->schedulerCohortEnabled) &&

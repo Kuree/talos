@@ -5048,6 +5048,14 @@ talos_rt_status runScheduler(talos_rt_context *context,
       if (selected) {
         ScheduledProcess &candidate =
             context->scheduledProcesses[selectedIndex];
+        // A Reactive home follows what the same promotion returns to Active.
+        if (candidate.postObserved &&
+            candidate.queuedRegion == TALOS_RT_REGION_OBSERVED &&
+            candidate.homeRegion != TALOS_RT_REGION_ACTIVE) {
+          talos_rt_promote_post_observed_resumptions_unlocked(context);
+          clearCachedNativeReady();
+          continue;
+        }
         if ((isInactiveSchedulerRegion(candidate.queuedRegion) ||
              context->schedulerCohortEnabled) &&
             !(candidate.postObserved &&
