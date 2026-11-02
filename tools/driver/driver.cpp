@@ -1193,6 +1193,12 @@ static int executeCompilation(const InputArgList &args,
                     staticSpecialization + "'; expected auto, off, or on");
     valid = false;
   }
+  if (nativeScheduler == "aot" && vpiMode == "full" &&
+      staticSpecialization == "off") {
+    emitDriverError("native AOT scheduling with a writable VPI requires static "
+                    "specialization");
+    valid = false;
+  }
   StringRef forwardCopies = args.getLastArgValue(OPT_forward_copies_EQ, "on");
   if (forwardCopies != "on" && forwardCopies != "off" &&
       forwardCopies != "census") {

@@ -28,6 +28,13 @@ module attributes {
       %known = simulation.logic.constant 5 : i4, 0 : i4 : !simulation.logic<4>
       simulation.managed.store %known to %field
           : !simulation.logic<4>, !simulation.managed_ref<!simulation.logic<4>, @C>
+      %deferred = simulation.logic.constant 6 : i4, 0 : i4 : !simulation.logic<4>
+      simulation.managed.nba.enqueue %deferred to %field
+          : (!simulation.logic<4>, !simulation.managed_ref<!simulation.logic<4>, @C>) -> ()
+      %masked = simulation.logic.constant 7 : i4, 0 : i4 : !simulation.logic<4>
+      %mask = simulation.logic.constant 9 : i4, 0 : i4 : !simulation.logic<4>
+      simulation.managed.nba.enqueue_masked %masked to %field mask %mask
+          : (!simulation.logic<4>, !simulation.managed_ref<!simulation.logic<4>, @C>, !simulation.logic<4>) -> ()
       %other = simulation.logic.constant 3 : i4, 0 : i4 : !simulation.logic<4>
       %sum = simulation.logic.binary add %other, %other : !simulation.logic<4>
       simulation.return
@@ -38,7 +45,8 @@ module attributes {
 // A class field has a value and an unknown plane, so the known value written to it
 // keeps both (kind 2, size 16): one plane would leave a prior X or Z in the field
 // (IEEE 1800-2023 6.8). The unrelated local keeps compact one-plane bits (kind 1),
-// which shows that specialization is active.
+// which shows that specialization is active. Nonblocking writes, masked or not,
+// keep both planes too.
 // CHECK: function 0: id=1
-// CHECK-DAG: kind=2 flags=0 width=4
-// CHECK-DAG: kind=1 flags=0 width=4
+// CHECK-COUNT-3: kind=2 flags=0 width=4
+// CHECK: kind=1 flags=0 width=4

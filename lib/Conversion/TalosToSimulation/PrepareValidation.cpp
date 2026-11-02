@@ -786,8 +786,8 @@ validateSemanticDesign(ModuleOp module, bool pruneUnusedCoverage) {
       auto type = variable->getAttrOfType<TypeAttr>("semantic_type");
       if (!type || !getSemanticPackedWidth(type.getValue())) {
         emitError(getSemanticLocation(op))
-            << "IEEE 1800-2023 17.7.2 unpacked free checker variables are not "
-               "executable yet";
+            << "IEEE 1800-2023 17.7.2 free checker variables that are not "
+               "packed are not executable yet";
         invalid = true;
         return;
       }

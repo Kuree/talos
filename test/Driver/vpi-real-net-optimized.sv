@@ -36,17 +36,40 @@ module top;
   real source = 7.0;
   plain follows;
   assign follows = source;
+  nettype shortreal narrow;
+  narrow single;
+  shortreal narrow_source = 0.5;
+  assign single = narrow_source;
   import "DPI-C" context function void probe(string name);
   initial begin
     #1 probe("top.two");
     probe("top.one");
     probe("top.follows");
+    probe("top.single");
     source = -3.25;
+    narrow_source = 2.5;
     #1 probe("top.follows");
+    probe("top.single");
+    // IEEE 1800-2023 10.6.2: a forced variable keeps the forced value until
+    // released, whatever is stored to it in between.
+    force source = 8.0;
+    source = 1.0;
+    #1 probe("top.follows");
+    probe("top.source");
+    release source;
+    source = 2.0;
+    #1 probe("top.follows");
+    probe("top.source");
     $finish;
   end
 endmodule
 // CHECK: top.two=4
 // CHECK: top.one=4
 // CHECK: top.follows=7
+// CHECK: top.single=0.5
 // CHECK: top.follows=-3.25
+// CHECK: top.single=2.5
+// CHECK: top.follows=8
+// CHECK: top.source=8
+// CHECK: top.follows=2
+// CHECK: top.source=2

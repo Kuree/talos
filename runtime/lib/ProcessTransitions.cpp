@@ -3167,7 +3167,7 @@ static void commitRealToCanonicalPlaneUnlocked(talos_rt_context *context,
   if (absolute + bitWidth > size ||
       absolute + bitWidth > context->stateUnknown.size() * uint64_t{64})
     return;
-  // IEEE 1800-2017 10.6.2: an overridden target keeps the override's value.
+  // IEEE 1800-2023 10.6.2: an overridden target keeps the override's value.
   if (nativeMaskIntersectsRange(context->forceMask, absolute, bitWidth) ||
       nativeMaskIntersectsRange(context->assignMask, absolute, bitWidth))
     return;

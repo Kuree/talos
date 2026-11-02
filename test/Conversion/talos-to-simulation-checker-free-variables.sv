@@ -12,7 +12,7 @@ checker c(input bit clk, input bit [7:0] state);
   rand const bit [7:0] fixed;
   rand bit [7:0] assigned;
 `ifdef UNPACKED
-  // UNPACKED: error: IEEE 1800-2023 17.7.2 unpacked free checker variables are not executable yet
+  // UNPACKED: error: IEEE 1800-2023 17.7.2 free checker variables that are not packed are not executable yet
   rand bit elements[2];
 `endif
   always_ff @(posedge clk) assigned <= state;
