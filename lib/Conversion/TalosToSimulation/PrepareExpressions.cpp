@@ -1549,6 +1549,7 @@ LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
       // variable of a child checker that these constraints read is solved
       // jointly with this checker's, so the order of the two solves does not
       // matter.
+      std::string descendants = (*body.getHierarchicalName() + ".").str();
       llvm::MapVector<StringRef, Operation *> targets;
       for (StringRef path : own->second)
         if (Operation *read = activeReads.lookup(path))
@@ -1559,8 +1560,11 @@ LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
         for (Operation *side : {constraint.antecedent, constraint.consequent})
           if (side)
             side->walk([&](semantic::SVNamedValueExpressionOp read) {
-              if (active.contains(read.getReferencedPath()))
-                targets.try_emplace(read.getReferencedPath(), read);
+              // A parent's variable is an input here: the parent solves it with
+              // the assumptions this checker does not see.
+              StringRef path = read.getReferencedPath();
+              if (active.contains(path) && path.starts_with(descendants))
+                targets.try_emplace(path, read);
             });
         Operation *consequent = makeNode(
             location, semantic::SVExpressionConstraintOp::getOperationName(),
