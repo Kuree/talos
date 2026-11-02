@@ -1269,12 +1269,7 @@ void synthesizeProceduralCheckers(semantic::SVRootSymbolOp root,
           if (!statement->hasAttr("starts_on_current_clock") || clocks.empty())
             return;
           SmallVector<Operation *> children = getChildren(assertion);
-          size_t index =
-              static_cast<size_t>(assertion.getHasDefaultDisable()) +
-              static_cast<size_t>(
-                  assertion.getHasContextualClock().value_or(false)) +
-              static_cast<size_t>(
-                  static_cast<bool>(assertion.getDefaultClockingSymbolAttr()));
+          size_t index = assertionPropertyIndex(assertion);
           if (index >= children.size())
             return;
           Operation *leading =
@@ -1382,12 +1377,15 @@ LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
   // values unless explicitly initialized in their declaration"; those that are
   // not const and not on the left-hand side of an assignment are active.
   llvm::StringSet<> active;
+  llvm::StringSet<> initialized;
   DenseMap<Operation *, SmallVector<StringRef>> bodyActive;
   for (semantic::SVCheckerInstanceBodySymbolOp body : bodies)
     for (Operation *member : getChildren(body)) {
       auto variable = dyn_cast<semantic::SVVariableSymbolOp>(member);
       if (!variable || !variable.getIsCheckerFreeVariable())
         continue;
+      StringRef path =
+          variable->getAttrOfType<StringAttr>("hierarchical_name").getValue();
       if (getChildren(variable).empty()) {
         Region &initializer = variable->getRegion(0);
         if (initializer.empty())
@@ -1395,9 +1393,9 @@ LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
         initializer.front().push_back(makeCall(
             variable.getLoc(), "$talos_free_random",
             variable->getAttrOfType<TypeAttr>("semantic_type").getValue(), {}));
+      } else {
+        initialized.insert(path);
       }
-      StringRef path =
-          variable->getAttrOfType<StringAttr>("hierarchical_name").getValue();
       if (!assigned.contains(path) && !variable->hasAttr("is_const") &&
           active.insert(path).second)
         bodyActive[body].push_back(path);
@@ -1426,26 +1424,47 @@ LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
 
   // Formals of a property instance and local variables have no value outside
   // the assertion, and the constraint language has no sampled value functions,
-  // so only plain operators over design state reach the solver.
+  // and the runtime solver no X or Z constants, so only plain operators over
+  // design state reach the solver.
   auto solvable = [](Operation *expression) {
     return !expression
                 ->walk([](Operation *nested) {
-                  return isa<semantic::SVNamedValueExpressionOp,
-                             semantic::SVIntegerLiteralOp,
-                             semantic::SVUnbasedUnsizedIntegerLiteralOp,
-                             semantic::SVUnaryExpressionOp,
-                             semantic::SVBinaryExpressionOp,
-                             semantic::SVConditionalExpressionOp,
-                             semantic::SVInsideExpressionOp,
-                             semantic::SVConcatenationExpressionOp,
-                             semantic::SVReplicationExpressionOp,
-                             semantic::SVElementSelectExpressionOp,
-                             semantic::SVRangeSelectExpressionOp,
-                             semantic::SVMemberAccessExpressionOp,
-                             semantic::SVConversionExpressionOp,
-                             semantic::SVValueRangeExpressionOp>(nested)
-                             ? WalkResult::advance()
-                             : WalkResult::interrupt();
+                  bool supported =
+                      isa<semantic::SVNamedValueExpressionOp,
+                          semantic::SVHierarchicalValueExpressionOp,
+                          semantic::SVIntegerLiteralOp,
+                          semantic::SVUnbasedUnsizedIntegerLiteralOp,
+                          semantic::SVUnaryExpressionOp,
+                          semantic::SVBinaryExpressionOp,
+                          semantic::SVConditionalExpressionOp,
+                          semantic::SVInsideExpressionOp,
+                          semantic::SVConcatenationExpressionOp,
+                          semantic::SVReplicationExpressionOp,
+                          semantic::SVElementSelectExpressionOp,
+                          semantic::SVRangeSelectExpressionOp,
+                          semantic::SVMemberAccessExpressionOp,
+                          semantic::SVConversionExpressionOp,
+                          semantic::SVValueRangeExpressionOp>(nested);
+                  if (std::optional<StringRef> spelling =
+                          getConstantSpelling(nested);
+                      spelling &&
+                      spelling->find_first_of("xXzZ?") != StringRef::npos)
+                    supported = false;
+                  if (isa<semantic::SVInsideExpressionOp>(nested))
+                    for (Operation *operand : getChildren(nested)) {
+                      auto type =
+                          operand->getAttrOfType<TypeAttr>("semantic_type");
+                      auto aggregate =
+                          type ? dyn_cast<semantic::SourceAggregateType>(
+                                     type.getValue())
+                               : semantic::SourceAggregateType{};
+                      if (type && (isa<semantic::RangedUnpackedArrayType,
+                                       semantic::QueueType>(type.getValue()) ||
+                                   (aggregate && !aggregate.getIsPacked())))
+                        supported = false;
+                    }
+                  return supported ? WalkResult::advance()
+                                   : WalkResult::interrupt();
                 })
                 .wasInterrupted();
   };
@@ -1483,46 +1502,46 @@ LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
     for (StringRef path : own->second)
       ownActive.insert(path);
 
-    // The assume set: assume statements of this checker and its children that
-    // reference an active variable of this checker, without a const cast or
-    // automatic value among the actual arguments. Any
-    // other form is still checked, as there is "no requirement that a solution
-    // be found if it exists".
+    // The candidates for the assume set: assume statements of this checker and
+    // its children without a const cast or automatic value among the actual
+    // arguments. Any other form is still checked, as there is "no requirement
+    // that a solution be found if it exists".
     struct Constraint {
       Operation *antecedent;
       Operation *consequent;
       bool previousTick;
+      // A disable iff condition turns the constraint off while it holds
+      // (16.12).
+      SmallVector<Operation *> disables;
     };
     struct ClockGroup {
       Operation *clock;
       SmallVector<Constraint> constraints;
+      // What the assumptions the solver cannot read refer to.
+      llvm::StringSet<> checkedOnly;
     };
     SmallVector<ClockGroup> groups;
     body->walk([&](semantic::SVConcurrentAssertionStatementOp assertion) {
       if (assertion.getAssertionKind() != semantic::SVAssertionKind::Assume)
         return;
       bool constCast = false;
-      bool readsActive = false;
       assertion->walk([&](Operation *nested) {
         if (auto cast = nested->getAttrOfType<BoolAttr>("is_const_cast");
             cast && cast.getValue())
           constCast = true;
         auto read = dyn_cast<semantic::SVNamedValueExpressionOp>(nested);
-        if (read && ownActive.contains(read.getReferencedPath()))
-          readsActive = true;
         if (read && automaticVariables.contains(read.getReferencedPath()))
           constCast = true;
       });
-      if (constCast || !readsActive)
+      if (constCast)
         return;
       SmallVector<Operation *> children = getChildren(assertion);
-      size_t index = static_cast<size_t>(assertion.getHasDefaultDisable()) +
-                     static_cast<size_t>(
-                         assertion.getHasContextualClock().value_or(false)) +
-                     static_cast<size_t>(static_cast<bool>(
-                         assertion.getDefaultClockingSymbolAttr()));
+      size_t index = assertionPropertyIndex(assertion);
       if (index >= children.size())
         return;
+      SmallVector<Operation *> disables;
+      if (assertion.getHasDefaultDisable())
+        disables.push_back(children.front());
       Operation *property = children[index];
       while (true) {
         if (auto instance =
@@ -1532,8 +1551,10 @@ LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
               instance.getLocalVariableCount() != 0)
             break;
           property = getChildren(instance).front();
-        } else if (isa<semantic::SVClockingAssertionExprOp,
-                       semantic::SVDisableIffAssertionExprOp>(property)) {
+        } else if (isa<semantic::SVClockingAssertionExprOp>(property)) {
+          property = getChildren(property).back();
+        } else if (isa<semantic::SVDisableIffAssertionExprOp>(property)) {
+          disables.push_back(getChildren(property).front());
           property = getChildren(property).back();
         } else if (auto simple =
                        dyn_cast<semantic::SVSimpleAssertionExprOp>(property);
@@ -1546,6 +1567,8 @@ LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
           break;
         }
       }
+      if (!llvm::all_of(disables, solvable))
+        return;
       Operation *clock = findAssertionClockFlow(property, assertion);
       if (!clock)
         return;
@@ -1558,7 +1581,7 @@ LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
         group = &groups.back();
       }
       if (Operation *boolean = booleanOf(property)) {
-        group->constraints.push_back({nullptr, boolean, false});
+        group->constraints.push_back({nullptr, boolean, false, disables});
       } else if (auto binary =
                      dyn_cast<semantic::SVBinaryAssertionExprOp>(property)) {
         SmallVector<Operation *> operands = getChildren(binary);
@@ -1572,8 +1595,18 @@ LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
             operands.size() == 2 ? booleanOf(operands.front()) : nullptr;
         Operation *consequent =
             operands.size() == 2 ? booleanOf(operands.back()) : nullptr;
-        if ((overlapped || nonoverlapped) && antecedent && consequent)
-          group->constraints.push_back({antecedent, consequent, nonoverlapped});
+        if ((overlapped || nonoverlapped) && antecedent && consequent) {
+          group->constraints.push_back(
+              {antecedent, consequent, nonoverlapped, disables});
+          return;
+        }
+        property->walk([&](semantic::SVNamedValueExpressionOp read) {
+          group->checkedOnly.insert(read.getReferencedPath());
+        });
+      } else {
+        property->walk([&](semantic::SVNamedValueExpressionOp read) {
+          group->checkedOnly.insert(read.getReferencedPath());
+        });
       }
     });
 
@@ -1586,111 +1619,181 @@ LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
              "instance";
       return failure();
     }
+    std::string descendants = (*body.getHierarchicalName() + ".").str();
     for (ClockGroup &group : groups) {
-      // A variable only assumptions the solver cannot read constrain "may be
-      // updated", and keeping it holds them more often than a random draw
-      // would.
-      if (group.constraints.empty())
+      // The assume set of this solve: what reads a variable it solves, where a
+      // variable of a child checker read by such an assumption is solved
+      // jointly. Every assumption on that variable has to be among them, or
+      // this solve would break the ones it does not see. A parent's variable is
+      // an input here: the parent solves it with the assumptions this checker
+      // does not see.
+      llvm::StringSet<> solved = ownActive;
+      SmallVector<Constraint *> selected;
+      llvm::SmallPtrSet<Constraint *, 8> included;
+      auto forEachRead = [](Constraint &constraint,
+                            function_ref<void(StringRef)> callback) {
+        auto visit = [&](Operation *side) {
+          side->walk([&](semantic::SVNamedValueExpressionOp read) {
+            callback(read.getReferencedPath());
+          });
+        };
+        if (constraint.antecedent)
+          visit(constraint.antecedent);
+        visit(constraint.consequent);
+        for (Operation *disable : constraint.disables)
+          visit(disable);
+      };
+      for (bool grew = true; grew;) {
+        grew = false;
+        for (Constraint &constraint : group.constraints) {
+          if (included.contains(&constraint))
+            continue;
+          bool reads = false;
+          forEachRead(constraint,
+                      [&](StringRef path) { reads |= solved.contains(path); });
+          if (!reads)
+            continue;
+          included.insert(&constraint);
+          grew = true;
+          forEachRead(constraint, [&](StringRef path) {
+            if (active.contains(path) && path.starts_with(descendants))
+              solved.insert(path);
+          });
+        }
+      }
+      for (Constraint &constraint : group.constraints)
+        if (included.contains(&constraint))
+          selected.push_back(&constraint);
+      if (selected.empty())
         continue;
       Location location = group.clock->getLoc();
       unsigned solveIndex = nextSolve++;
       // A clocking block's event fires in the Observed region, where its inputs
-      // are sampled (14.13), too late for a solve: wait on the signal behind
-      // it.
+      // are sampled (14.13), too late for a solve: wait on its event expression
+      // instead.
       Operation *clock = cloneWithFreshNodes(group.clock);
       SmallVector<Operation *> clockChildren = getChildren(clock);
       if (auto signal = dyn_cast<semantic::SVSignalEventControlOp>(clock);
           signal && clockChildren.size() == 1 &&
           clockChildren.front()->hasAttr("clocking_block_event")) {
-        Operation *event = clockChildren.front();
-        auto path = event->getAttrOfType<StringAttr>("clocking_event_path");
-        auto symbol =
-            event->getAttrOfType<SymbolRefAttr>("clocking_event_symbol");
-        auto edge = event->getAttrOfType<IntegerAttr>("clocking_event_edge");
-        Attribute type;
-        if (path && symbol && edge)
-          root->walk([&](Operation *candidate) {
-            if (!isa<semantic::SVVariableSymbolOp, semantic::SVNetSymbolOp>(
-                    candidate) ||
-                candidate->getAttr("hierarchical_name") != path)
+        auto reference =
+            clockChildren.front()->getAttrOfType<StringAttr>("referenced_path");
+        Operation *event = nullptr;
+        if (reference)
+          root->walk([&](semantic::SVClockingBlockSymbolOp block) {
+            if (block.getHierarchicalName() != reference.getValue())
               return WalkResult::advance();
-            type = candidate->getAttr("semantic_type");
+            event = getChildren(block).front();
             return WalkResult::interrupt();
           });
-        if (type) {
-          signal->setAttr("edge_kind", edge);
-          event->getBlock()->push_back(makeNode(
-              location, semantic::SVNamedValueExpressionOp::getOperationName(),
-              {builder.getNamedAttr("is_signed", builder.getBoolAttr(false)),
-               builder.getNamedAttr("referenced_path", path),
-               builder.getNamedAttr("referenced_symbol", symbol),
-               builder.getNamedAttr("semantic_type", type)},
-              {}));
-          event->erase();
+        if (event) {
+          clock->erase();
+          clock = cloneWithFreshNodes(event);
         }
       }
       // std::randomize(v...) with {c; a -> c; prior -> c;}, then prior = a: `a
-      // |=> c` constrains this tick only if `a` held at the previous one. A
-      // variable of a child checker that these constraints read is solved
-      // jointly with this checker's, so the order of the two solves does not
-      // matter.
-      std::string descendants = (*body.getHierarchicalName() + ".").str();
+      // |=> c` constrains this tick only if `a` held at the previous one, in an
+      // attempt that was not disabled there.
+      // A variable only assumptions the solver cannot read constrain "may be
+      // updated", and keeping it holds them more often than a random draw
+      // would.
       llvm::MapVector<StringRef, Operation *> targets;
       for (StringRef path : own->second)
-        if (Operation *read = activeReads.lookup(path))
+        if (Operation *read = activeReads.lookup(path);
+            read && !group.checkedOnly.contains(path))
           targets.try_emplace(path, read);
+      Type oneBit = semantic::IntegralType::get(
+          context, 1, false, true, 0, 0, semantic::SVIntegralFlavor::Logic);
+      auto expressionAttributes = [&](Type type) {
+        return SmallVector<NamedAttribute>{
+            builder.getNamedAttr("is_signed", builder.getBoolAttr(false)),
+            builder.getNamedAttr("semantic_type", TypeAttr::get(type))};
+      };
+      // Evaluated with current values, as a disable condition is (16.12).
+      auto enabled = [&](ArrayRef<Operation *> disables, unsigned index) {
+        Operation *condition = cloneWithFreshNodes(disables[index]);
+        condition->walk([&](Operation *read) {
+          if (isa<semantic::SVNamedValueExpressionOp>(read))
+            read->setAttr("talos.current_sampled_value", builder.getUnitAttr());
+        });
+        SmallVector<NamedAttribute> attributes = expressionAttributes(oneBit);
+        attributes.push_back(builder.getNamedAttr(
+            "operator_kind", builder.getI32IntegerAttr(static_cast<int32_t>(
+                                 semantic::SVUnaryOperator::LogicalNot))));
+        return makeNode(location,
+                        semantic::SVUnaryExpressionOp::getOperationName(),
+                        attributes, {condition});
+      };
       SmallVector<Operation *> items;
       SmallVector<Operation *> updates;
-      for (auto [index, constraint] : llvm::enumerate(group.constraints)) {
-        for (Operation *side : {constraint.antecedent, constraint.consequent})
-          if (side)
-            side->walk([&](semantic::SVNamedValueExpressionOp read) {
-              // A parent's variable is an input here: the parent solves it with
-              // the assumptions this checker does not see.
-              StringRef path = read.getReferencedPath();
-              if (active.contains(path) && path.starts_with(descendants))
-                targets.try_emplace(path, read);
-            });
-        Operation *consequent = makeNode(
+      for (auto [index, constraintPointer] : llvm::enumerate(selected)) {
+        Constraint &constraint = *constraintPointer;
+        forEachRead(constraint, [&](StringRef path) {
+          if (solved.contains(path) && !targets.contains(path))
+            if (Operation *read = activeReads.lookup(path))
+              targets.try_emplace(path, read);
+        });
+        Operation *item = makeNode(
             location, semantic::SVExpressionConstraintOp::getOperationName(),
             {builder.getNamedAttr("is_soft", builder.getBoolAttr(false))},
             {cloneWithFreshNodes(constraint.consequent)});
-        if (!constraint.antecedent) {
-          items.push_back(consequent);
-          continue;
+        if (constraint.antecedent) {
+          Operation *guard = cloneWithFreshNodes(constraint.antecedent);
+          if (constraint.previousTick) {
+            // Process-local state, bound by the lowering of
+            // `$talos_free_solve`: it is no object of the design, so no dump or
+            // VPI scan may list it.
+            Type type =
+                cast<TypeAttr>(constraint.antecedent->getAttr("semantic_type"))
+                    .getValue();
+            Operation *attempt = guard;
+            for (unsigned disable = 0; disable < constraint.disables.size();
+                 ++disable) {
+              SmallVector<NamedAttribute> attributes =
+                  expressionAttributes(oneBit);
+              attributes.push_back(builder.getNamedAttr(
+                  "operator_kind",
+                  builder.getI32IntegerAttr(static_cast<int32_t>(
+                      semantic::SVBinaryOperator::LogicalAnd))));
+              attempt = makeNode(
+                  location, semantic::SVBinaryExpressionOp::getOperationName(),
+                  attributes, {enabled(constraint.disables, disable), attempt});
+              type = oneBit;
+            }
+            std::string path = (Twine("$talos_free_prior.") +
+                                Twine(solveIndex) + "." + Twine(index))
+                                   .str();
+            auto makePriorRead = [&]() {
+              SmallVector<NamedAttribute> attributes =
+                  expressionAttributes(type);
+              attributes.push_back(builder.getNamedAttr(
+                  "referenced_path", builder.getStringAttr(path)));
+              attributes.push_back(builder.getNamedAttr(
+                  "referenced_symbol", FlatSymbolRefAttr::get(context, path)));
+              return makeNode(
+                  location,
+                  semantic::SVNamedValueExpressionOp::getOperationName(),
+                  attributes, {});
+            };
+            SmallVector<NamedAttribute> attributes = expressionAttributes(type);
+            attributes.push_back(builder.getNamedAttr(
+                "assignment_kind", builder.getI32IntegerAttr(0)));
+            updates.push_back(
+                makeNode(location,
+                         semantic::SVAssignmentExpressionOp::getOperationName(),
+                         attributes, {makePriorRead(), attempt}));
+            guard = makePriorRead();
+          }
+          item = makeNode(
+              location, semantic::SVImplicationConstraintOp::getOperationName(),
+              {}, {guard, item});
         }
-        Operation *guard = cloneWithFreshNodes(constraint.antecedent);
-        if (constraint.previousTick) {
-          // Process-local state, bound by the lowering of `$talos_free_solve`:
-          // it is no object of the design, so no dump or VPI scan may list it.
-          Attribute type = constraint.antecedent->getAttr("semantic_type");
-          std::string path = (Twine("$talos_free_prior.") + Twine(solveIndex) +
-                              "." + Twine(index))
-                                 .str();
-          auto makePriorRead = [&]() {
-            return makeNode(
-                location,
-                semantic::SVNamedValueExpressionOp::getOperationName(),
-                {builder.getNamedAttr("is_signed", builder.getBoolAttr(false)),
-                 builder.getNamedAttr("referenced_path",
-                                      builder.getStringAttr(path)),
-                 builder.getNamedAttr("referenced_symbol",
-                                      FlatSymbolRefAttr::get(context, path)),
-                 builder.getNamedAttr("semantic_type", type)},
-                {});
-          };
-          updates.push_back(makeNode(
-              location, semantic::SVAssignmentExpressionOp::getOperationName(),
-              {builder.getNamedAttr("assignment_kind",
-                                    builder.getI32IntegerAttr(0)),
-               builder.getNamedAttr("is_signed", builder.getBoolAttr(false)),
-               builder.getNamedAttr("semantic_type", type)},
-              {makePriorRead(), guard}));
-          guard = makePriorRead();
-        }
-        items.push_back(makeNode(
-            location, semantic::SVImplicationConstraintOp::getOperationName(),
-            {}, {guard, consequent}));
+        for (unsigned disable = 0; disable < constraint.disables.size();
+             ++disable)
+          item = makeNode(
+              location, semantic::SVImplicationConstraintOp::getOperationName(),
+              {}, {enabled(constraint.disables, disable), item});
+        items.push_back(item);
       }
       SmallVector<Operation *> randomizeChildren{
           makeNode(location, semantic::SVConstraintListOp::getOperationName(),
@@ -1730,6 +1833,13 @@ LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
       llvm::append_range(arguments, updates);
       Operation *solve = makeCall(location, "$talos_free_solve",
                                   semantic::VoidType::get(context), arguments);
+      // 17.7: an initialized variable has the value of its initialization in
+      // the first time step. A later one is free to change it.
+      if (llvm::any_of(targets, [&](const auto &entry) {
+            return initialized.contains(entry.first);
+          }))
+        solve->setAttr("talos.free_solve_skips_first_step",
+                       builder.getUnitAttr());
       Operation *statement = makeNode(
           location, semantic::SVExpressionStatementOp::getOperationName(), {},
           {solve});
@@ -1743,7 +1853,9 @@ LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
                   (Twine("__talos_free_solve_") + Twine(solveIndex)).str())),
           builder.getNamedAttr("procedure_kind",
                                builder.getI32IntegerAttr(static_cast<int32_t>(
-                                   semantic::SVProceduralBlockKind::Always)))};
+                                   semantic::SVProceduralBlockKind::Always))),
+          builder.getNamedAttr("talos.free_solve_process",
+                               builder.getUnitAttr())};
       for (StringRef name :
            {"hierarchical_name", "time_precision_fs", "time_unit_fs"})
         if (Attribute value = owner->getAttr(name))
@@ -1936,6 +2048,7 @@ void rewriteTriggeredLocalOutputs(semantic::SVRootSymbolOp root,
         Operation *past = cast<semantic::SVCallExpressionOp>(call->clone());
         for (Operation *child : getChildren(past))
           child->erase();
+        past->removeAttr("is_builtin_method");
         past->setAttr("callee_name", builder.getStringAttr("$past"));
         past->setAttr("argument_count", builder.getI64IntegerAttr(2));
         past->setAttr("defaulted_arguments",

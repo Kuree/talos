@@ -11419,8 +11419,11 @@ void TalosSimPreparePass::runOnOperation() {
     // Clocking inputs must be sampled before program-domain Reactive work.
     // Keep the shared event-list monitor in the design domain even when the
     // clocking block is declared lexically inside a program.
+    // A checker's solve has to precede the Observed region and the checker's
+    // Reactive processes wherever the checker is instantiated (17.7.2, 17.7.3).
     bool programCodeUnit =
         !clockingEventMonitor &&
+        !unit.source->hasAttr("talos.free_solve_process") &&
         isProgramCodeUnit(unit.source, programDefinitionsByName,
                           programInstances);
     bool invariantAssertionMonitor = false;

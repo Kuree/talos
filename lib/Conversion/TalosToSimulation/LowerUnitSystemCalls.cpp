@@ -2673,6 +2673,7 @@ UnitLowering::lowerSystemCall(semantic::SVCallExpressionOp op) {
     // The solve reads sampled values, while what it assigns is current
     // (17.7.2). An unsuccessful solution attempt leaves any values, and its
     // failures are reported by the assume statements in the Observed region.
+    // In the first time step an initialized target keeps its value (17.7).
     // Each child after the randomize call records an antecedent of `|=>` for
     // the next tick, in state of the process: `prior = antecedent`.
     OpBuilder entryBuilder =
@@ -2691,7 +2692,25 @@ UnitLowering::lowerSystemCall(semantic::SVCallExpressionOp op) {
       lvalues[path] = record;
     }
     llvm::SaveAndRestore<bool> sampling(sampleAssertionValues, true);
-    for (Operation *child : children)
+    Block *join = nullptr;
+    if (op->hasAttr("talos.free_solve_skips_first_step")) {
+      IntegerType i64 = builder.getI64Type();
+      Value now = sim::SimTimeNowOp::create(
+          builder, location, i64, function.getBody().front().getArgument(0));
+      Value later = arith::CmpIOp::create(
+          builder, location, arith::CmpIPredicate::ne, now, constant(i64, 0));
+      Block *solve = addBlock();
+      join = addBlock();
+      cf::CondBranchOp::create(builder, location, later, solve, join);
+      setCurrent(solve);
+    }
+    if (failed(lowerExpression(children.front())))
+      return failure();
+    if (join) {
+      cf::BranchOp::create(builder, location, join);
+      setCurrent(join);
+    }
+    for (Operation *child : ArrayRef(children).drop_front())
       if (failed(lowerExpression(child)))
         return failure();
     return dummyTaskResult();
