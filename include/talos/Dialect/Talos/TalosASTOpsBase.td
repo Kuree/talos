@@ -81,6 +81,14 @@ class TalosASTNodeOp<string mnemonic, list<Trait> traits = [],
          !listconcat([NoTerminator, SingleBlock, TalosSemanticASTNode],
                      traits)> {
   let summary = "Concrete high-level elaborated SystemVerilog operation";
+  let description = [{
+    Represents one elaborated SystemVerilog AST node translated from `slang`.
+    Attributes carry its semantic fields and source provenance; the
+    single-block body contains its child nodes. Expressions and references
+    remain in the AST rather than producing SSA values. `node_id` preserves
+    source identity, and resolved references use Talos symbols and types.
+    Talos-to-Simulation lowering consumes this tree to build executable SSA.
+  }];
   let arguments = !con((ins
     I64Attr:$node_id,
     OptionalAttr<TypeAttr>:$source_range,
@@ -657,7 +665,7 @@ class TalosCallExpressionASTNodeOp<string mnemonic>
         OptionalAttr<StrAttr>:$typename_spelling,
         OptionalAttr<StrArrayAttr>:$readmem_enum_key_values,
         OptionalAttr<StrArrayAttr>:$readmem_enum_element_values,
-        // IEEE 1800-2017 13.4.1: casting a call to the void type uses the
+        // IEEE 1800 13.4.1: casting a call to the void type uses the
         // function as a statement and discards its return value. The call
         // keeps its function semantics there, which 6.24.2 makes observable
         // for $cast: the function form reports a failed cast through its 0
@@ -1211,7 +1219,7 @@ def SVSourceTypeParameterSymbolOp
   let summary = "unresolved lexical type parameter of a generic class";
   let description = [{
     The direct parent is a lexical class definition. semantic_type is absent;
-    the symbol itself is the unresolved typespec (IEEE 1800-2023 37.25 detail
+    the symbol itself is the unresolved typespec (IEEE 1800 37.25 detail
     11). Its body contains zero or one original type default. An empty body
     means there was no default, while an unsupported-default child preserves
     the distinct case where a source default has no structural import yet.

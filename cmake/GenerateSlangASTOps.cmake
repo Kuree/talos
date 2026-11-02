@@ -320,9 +320,13 @@ function(talos_generate_slang_ast_ops dialect output)
       set(op_base "${ir_prefix}RandSeqASTNodeOp")
     endif()
 
+    string(REPLACE "_" " " category_label "${category_name}")
+    string(REPLACE "_" " " kind_label "${kind_name}")
     string(APPEND text
       "def ${prefix}${cpp_type}Op : ${op_base}<\"${namespace_prefix}"
-      "${category_name}.${kind_name}\">;\n")
+      "${category_name}.${kind_name}\"> {\n"
+      "  let summary = \"elaborated ${kind_label} ${category_label}\";\n"
+      "}\n")
     math(EXPR count "${count} + 1")
   endforeach()
 

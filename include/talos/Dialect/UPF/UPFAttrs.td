@@ -8,14 +8,14 @@ class UPFAttr<string name, string attrMnemonic> : AttrDef<UPFDialect, name> {
   let mnemonic = attrMnemonic;
 }
 def UPFPartialOnTranslationAttr : UPFAttr<"PartialOnTranslation", "partial_on_translation"> {
-  let summary = "global PARTIAL_ON interpretation (IEEE 1801-2018 6.47)";
+  let summary = "global PARTIAL_ON interpretation (IEEE 1801 6.47)";
   let parameters = (ins EnumParameter<UPFPartialOnTranslation>:$value);
   let assemblyFormat = "`<` $value `>`";
   let genVerifyDecl = 1;
 }
 def UPFExpressionTokenAttr : UPFAttr<"ExpressionToken", "token"> {
   let summary = "resolved operand or operator in a UPF Boolean expression";
-  // IEEE 1801-2018 5.4: sourceWidth identifies the whole HDL object; width
+  // IEEE 1801 5.4: sourceWidth identifies the whole HDL object; width
   // and offset describe the selected packed part before context sizing.
   let parameters = (ins EnumParameter<UPFExpressionOpcode>:$opcode,
       OptionalParameter<"::mlir::StringAttr">:$control,
@@ -30,13 +30,13 @@ def UPFExpressionTokenAttr : UPFAttr<"ExpressionToken", "token"> {
   let genVerifyDecl = 1;
 }
 def UPFExpressionAttr : UPFAttr<"Expression", "expression"> {
-  let summary = "bounded typed postfix UPF Boolean expression (1801-2018 5.4)";
+  let summary = "bounded typed postfix UPF Boolean expression (1801 5.4)";
   let parameters = (ins "::mlir::ArrayAttr":$tokens);
   let assemblyFormat = "`<` $tokens `>`";
   let genVerifyDecl = 1;
 }
 def UPFRetentionElementAttr : UPFAttr<"RetentionElement", "retention_element"> {
-  let summary = "resolved retention selector with precedence provenance (1801-2018 5.7.3)";
+  let summary = "resolved retention selector with precedence provenance (1801 5.7.3)";
   let parameters = (ins "::mlir::StringAttr":$path,
       EnumParameter<UPFRetentionElementKind>:$kind);
   let assemblyFormat = "`<` struct(params) `>`";
@@ -51,7 +51,7 @@ def UPFRetentionTriggerAttr : UPFAttr<"RetentionTrigger", "retention_trigger"> {
   let genVerifyDecl = 1;
 }
 def UPFRetentionAttr : UPFAttr<"Retention", "retention"> {
-  let summary = "resolved retention strategy (1801-2018 6.50/9.7)";
+  let summary = "resolved retention strategy (1801 6.50/9.7)";
   // 8.3.2: combine explicit updates before supplying defaults. domainDefault
   // means no -elements was supplied, including during any -update call.
   let parameters = (ins "::mlir::StringAttr":$name,
@@ -78,7 +78,7 @@ def UPFRetentionArrayAttr
   let constBuilderCall = "$_builder.getArrayAttr($0)";
 }
 def UPFSwitchStateAttr : UPFAttr<"SwitchState", "state"> {
-  let summary = "named abstract power-switch condition (1801-2018 6.22)";
+  let summary = "named abstract power-switch condition (1801 6.22)";
   let parameters = (ins "::mlir::StringAttr":$name, UPFExpressionAttr:$condition);
   let assemblyFormat = "`<` struct(params) `>`";
   let genVerifyDecl = 1;
@@ -88,7 +88,7 @@ def UPFSwitchStateArrayAttr
   let constBuilderCall = "$_builder.getArrayAttr($0)";
 }
 def UPFSupplyExpressionTokenAttr : UPFAttr<"SupplyExpressionToken", "supply_token"> {
-  let summary = "typed supply predicate operand/operator (1801-2018 6.5.4)";
+  let summary = "typed supply predicate operand/operator (1801 6.5.4)";
   let parameters = (ins EnumParameter<UPFSupplyExpressionOpcode>:$opcode,
       OptionalParameter<"::mlir::FlatSymbolRefAttr">:$supply,
       OptionalParameter<"::mlir::StringAttr">:$function,
@@ -103,7 +103,7 @@ def UPFSupplyExpressionAttr : UPFAttr<"SupplyExpression", "supply_expression"> {
   let genVerifyDecl = 1;
 }
 def UPFPowerStateAttr : UPFAttr<"PowerState", "power_state"> {
-  let summary = "deferred supply-set power state (1801-2018 6.5/9.3.2)";
+  let summary = "deferred supply-set power state (1801 6.5/9.3.2)";
   let parameters = (ins "::mlir::StringAttr":$name,
       OptionalParameter<"::talos::upf::SupplyExpressionAttr">:$condition,
       EnumParameter<UPFSimstate>:$simstate,

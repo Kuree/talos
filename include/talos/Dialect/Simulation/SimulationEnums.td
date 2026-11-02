@@ -219,7 +219,7 @@ def SimVPITypeKind : I32EnumAttr<
   let cppNamespace = "::talos::sim";
 }
 
-// Condition of a module path (IEEE 1800-2023 30.4.4).
+// Condition of a module path (IEEE 1800 30.4.4).
 def SimTimingPathUnconditional : I32EnumAttrCase<"Unconditional", 0, "none">;
 def SimTimingPathIf : I32EnumAttrCase<"If", 1, "if">;
 def SimTimingPathIfNone : I32EnumAttrCase<"IfNone", 2, "ifnone">;
@@ -230,7 +230,7 @@ def SimTimingPathConditionKind
   let cppNamespace = "::talos::sim";
 }
 
-// Direction of a subroutine formal argument (IEEE 1800-2023 13.5).
+// Direction of a subroutine formal argument (IEEE 1800 13.5).
 def SimFormalIn : I32EnumAttrCase<"In", 0, "in">;
 def SimFormalOut : I32EnumAttrCase<"Out", 1, "out">;
 def SimFormalInOut : I32EnumAttrCase<"InOut", 2, "inout">;
@@ -314,7 +314,7 @@ def SimRandomValueReferenceKind
 
 // Non-static constraint_mode state belongs to the active object. A static
 // constraint block instead uses one design-storage bit shared by every
-// instance (IEEE 1800-2017 18.5.11).
+// instance (IEEE 1800 18.5.11).
 def SimRandomConstraintObjectBlock
     : I32EnumAttrCase<"ObjectBlock", 0, "object_block">;
 def SimRandomConstraintStorage
@@ -327,7 +327,7 @@ def SimRandomConstraintBlockReferenceKind
   let cppNamespace = "::talos::sim";
 }
 
-// IEEE 1800-2023 event regions in their normative scheduling order. These
+// IEEE 1800 event regions in their normative scheduling order. These
 // remain distinct from schedule::ComputeRegionKind: the latter is a coarse graph
 // partition and is not an executable scheduler queue.
 def SimRegionPreponed
@@ -445,7 +445,7 @@ def SimNetResolutionKind
   let cppNamespace = "::talos::sim";
 }
 
-// Numeric values are the positions on the IEEE 1800-2017 Figure 28-2
+// Numeric values are the positions on the IEEE 1800 Figure 28-2
 // strength scale. Charge-only positions are retained so runtime resolution
 // can use one representation for all strength ranges.
 def SimStrengthHighZ : I32EnumAttrCase<"HighZ", 0, "highz">;
@@ -723,7 +723,7 @@ def SimAssocKeyKindString : I32EnumAttrCase<"String", 3, "string">;
 def SimAssocKeyKindClass : I32EnumAttrCase<"Class", 4, "class">;
 def SimAssocKeyKindProcess : I32EnumAttrCase<"Process", 5, "process">;
 def SimAssocKeyKindWildcard : I32EnumAttrCase<"Wildcard", 6, "wildcard">;
-// Any other index type with an equality operator (IEEE 1800-2023 7.8.5),
+// Any other index type with an equality operator (IEEE 1800 7.8.5),
 // compared through its equality plan (sim::getAssocKeyPlan).
 def SimAssocKeyKindElement : I32EnumAttrCase<"Element", 7, "element">;
 def SimAssocKeyKind : I32EnumAttr<"AssocKeyKind", "simulation assoc key kind", [

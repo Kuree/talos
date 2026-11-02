@@ -83,6 +83,13 @@ class SlangASTNodeOp<string mnemonic, list<Trait> traits = [],
          !listconcat([NoTerminator, SingleBlock, SlangSemanticASTNode],
                      traits)> {
   let summary = "Concrete elaborated slang semantic AST node";
+  let description = [{
+    Represents one elaborated slang AST node. Attributes carry its semantic
+    fields and source provenance; the single-block body contains its child
+    nodes. Expressions and references remain in the AST rather than producing
+    SSA values. `node_id` identifies the source node, while symbol attributes
+    and symbol tables preserve resolved references and scope ownership.
+  }];
   let arguments = !con((ins
     I64Attr:$node_id,
     OptionalAttr<TypeAttr>:$source_range,
@@ -684,7 +691,7 @@ class SlangCallExpressionASTNodeOp<string mnemonic>
         OptionalAttr<StrAttr>:$typename_spelling,
         OptionalAttr<StrArrayAttr>:$readmem_enum_key_values,
         OptionalAttr<StrArrayAttr>:$readmem_enum_element_values,
-        // IEEE 1800-2017 13.4.1: casting a call to the void type uses the
+        // IEEE 1800 13.4.1: casting a call to the void type uses the
         // function as a statement and discards its return value. The call
         // keeps its function semantics there, which 6.24.2 makes observable
         // for $cast: the function form reports a failed cast through its 0
@@ -1217,7 +1224,7 @@ def SourceTypeParameterSymbolOp
   let summary = "unresolved lexical type parameter of a generic class";
   let description = [{
     The direct parent is a lexical class definition. semantic_type is absent;
-    the symbol itself is the unresolved typespec (IEEE 1800-2023 37.25 detail
+    the symbol itself is the unresolved typespec (IEEE 1800 37.25 detail
     11). Its body contains zero or one original type default. An empty body
     means there was no default, while an unsupported-default child preserves
     the distinct case where a source default has no structural import yet.

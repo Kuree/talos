@@ -34,7 +34,7 @@ std::optional<unsigned> getPackedWidth(::mlir::Type type);
 
 /// Whether two normalized types can share an argument-reference alias. Exact
 /// types always can. Distinct packed types can when source signedness was
-/// checked before normalization and the remaining IEEE 1800-2017 6.22.2(c)
+/// checked before normalization and the remaining IEEE 1800 6.22.2(c)
 /// requirements -- total width and state domain -- match.
 bool haveCompatibleArgumentRefLayout(::mlir::Type lhs, ::mlir::Type rhs);
 
@@ -201,7 +201,7 @@ std::optional<ElementDescriptor> getElementDescriptor(::mlir::Type type);
 
 /// Build the runtime equality plan (TALOS_RT_ASSOC_KEY_PLAN_*) of an
 /// associative-array index type that is none of the string, class, process,
-/// wildcard and integral key kinds (IEEE 1800-2023 7.8.5). Returns
+/// wildcard and integral key kinds (IEEE 1800 7.8.5). Returns
 /// std::nullopt when part of the type has no such equality, such as a real.
 std::optional<::llvm::SmallVector<uint64_t>> getAssocKeyPlan(::mlir::Type type);
 

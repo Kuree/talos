@@ -5,12 +5,17 @@ def ScheduleDialect : Dialect {
   let name = "schedule";
   let usePropertiesForAttributes = 0;
   let cppNamespace = "::talos::schedule";
-  let summary = "Verified simulation execution plans";
+  let summary = "Simulation execution plans and native scheduler actions";
   let description = [{
-    Describes effects, activation and ordering dependencies, continuation and
-    timing sites, commit groups, convergence, kernel ownership and execution
-    specialization. Simulation-to-schedule derives these plans; scheduling
-    transforms optimize them; executor conversions consume them.
+    `schedule` records effects, activation and ordering dependencies,
+    continuation and timing sites, commit groups, convergence, and kernel
+    ownership. Simulation-to-schedule derives these plans, scheduling
+    transforms specialize them, and executor conversions consume them.
+
+    Its operations represent native packed computations, continuous-transfer
+    activations, pending activation sets, NBA commits, process controls, and
+    suspension continuations. They retain the semantic facts needed by native
+    lowering after simulation values and handles acquire physical layouts.
   }];
   let useDefaultAttributePrinterParser = 1;
   // Canonicalization of native predicates materializes arith constants.

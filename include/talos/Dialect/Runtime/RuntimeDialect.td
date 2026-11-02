@@ -10,10 +10,16 @@ def TalosRuntimeDialect : Dialect {
   let cppNamespace = "::talos::runtime";
   let summary = "typed compiler boundary for the Talos runtime C ABI";
   let description = [{
-    `runtime` preserves runtime concepts and ownership until the final
-    native-call or bytecode encoding step. Its operations mirror the Runtime.h
-    schema from the same build; C out-parameters are represented as additional
-    SSA results. Cross-revision compatibility is deliberately unsupported.
+    `runtime` represents typed calls to the Talos runtime and the compiler
+    materializers that prepare their arguments. It covers contexts, status
+    values, byte spans and owned buffers, formatting and file services,
+    waveform controls, fragment dispatch, and process-instance lifetime.
+
+    Runtime calls follow `talos/Runtime/Runtime.h` and the compiler's
+    `RuntimeABI.def` mapping from the same build. C out-parameters become
+    additional SSA results. Runtime-to-LLVM lowering materializes target C
+    layouts and calls; bytecode encoding uses the supported runtime services.
+    Owned buffers must be released with `runtime.buffer.release`.
   }];
   let useDefaultAttributePrinterParser = 1;
   let useDefaultTypePrinterParser = 1;

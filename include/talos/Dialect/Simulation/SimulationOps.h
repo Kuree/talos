@@ -105,7 +105,7 @@ bool isSuspensionOp(::mlir::Operation *operation);
 bool returnsToScheduler(::mlir::Operation *operation);
 
 /// Whether a spawn starts the evaluator of a pending deferred assertion
-/// report: it carries the ticket of a deferred enqueue (IEEE 1800-2023
+/// report: it carries the ticket of a deferred enqueue (IEEE 1800
 /// 16.4.1).
 bool isDeferredReportSpawn(SimSpawnOp spawn);
 
@@ -134,7 +134,7 @@ bool isVPIVisibleEntryKind(EntryKind kind);
 
 /// Marks a process of a startup entry kind that nonetheless begins by running
 /// rather than by waiting, so the prepare pass spawns it among the initial
-/// procedures instead of ahead of them. IEEE 1800-2017 9.2.2.1 leaves an
+/// procedures instead of ahead of them. IEEE 1800 9.2.2.1 leaves an
 /// always procedure with no timing control no suspension to reach.
 inline constexpr auto startupWithoutSuspensionAttrName =
     ::talos::schedule::Field::StartsWithoutWaiting;

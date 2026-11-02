@@ -65,13 +65,12 @@ The dialect also defines first-class lower-level operations for:
 7. assertions, coverage sampling, DPI tasks, VPI access and callbacks,
    diagnostics, termination, and tracing.
 
-Rewriting a high-level operation to these runtime-oriented operations is a
-separate, semantics-preserving lowering step.
-
-The operation inventory above is a representation contract, not a claim that
-every family is executable today. The current source-to-simulator boundary and
-its intentional diagnostics are summarized in `DESIGN.md` and the focused
-documents under `docs/`.
+Talos-to-Simulation lowering consumes the `talos.sv.*` tree and builds
+isolated `simulation.func` code units and flattened design descriptors.
+Executable operations in the `simulation` dialect make storage effects,
+runtime services, and suspension continuations explicit. Scheduling plans and
+native scheduler actions use the `schedule` dialect; typed runtime ABI calls
+use the `runtime` dialect.
 
 ## Verification
 

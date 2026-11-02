@@ -150,7 +150,7 @@ def SimArgumentBindingAttr : SimAttr<"ArgumentBinding", "argument_binding"> {
   let parameters = (ins "::mlir::StringAttr":$path, "uint64_t":$argument,
       EnumParameter<SimUnitArgumentKind>:$kind, "bool":$copyOut,
       OptionalParameter<"::mlir::IntegerAttr">:$lvalueNode,
-      // IEEE 1800-2017 13.5.1: an input or inout formal takes the caller's
+      // IEEE 1800 13.5.1: an input or inout formal takes the caller's
       // value at the call. An output formal does not, which a static subroutine
       // can tell apart: its formal keeps what the previous call left in it.
       DefaultValuedParameter<"bool", "true">:$copyIn,
@@ -207,7 +207,7 @@ def SimEnumFormatAttr : SimAttr<"EnumFormat", "enum_format"> {
   let description = [{
     The `values` (`#simulation.frozen_constant`) and `names` of the
     enumerators of the source enum type `type`, in declaration order. An
-    assignment pattern prints an enum element by its name (IEEE 1800-2023
+    assignment pattern prints an enum element by its name (IEEE 1800
     21.2.1.6).
   }];
   let parameters = (ins "::mlir::Type":$type, "::mlir::ArrayAttr":$values,
@@ -219,7 +219,7 @@ def SimFieldAttr : SimAttr<"Field", "field"> {
   let summary = "ordered aggregate field metadata";
   let description = [{
     `initializer` is the constant default member value an unpacked struct
-    field declares (IEEE 1800-2023 7.2.2), as a `#simulation.frozen_constant`
+    field declares (IEEE 1800 7.2.2), as a `#simulation.frozen_constant`
     of the field type. It is part of the struct type's default value, so every
     default of the type -- a variable without an initializer, a new array
     element, or a read of a nonexistent entry (Table 7-1) -- carries it.
@@ -366,7 +366,7 @@ def SimBooleanMinimizationAttr
   }];
 }
 
-// Randomization plans frozen onto `randomize()` calls (IEEE 1800-2023 18.5.9,
+// Randomization plans frozen onto `randomize()` calls (IEEE 1800 18.5.9,
 // 18.6.2, 18.8). They are compile-time hand-offs from preparation to unit
 // lowering and vanish with the semantic call.
 
@@ -482,7 +482,7 @@ def SimRandomDomainAttr : SimAttr<"RandomDomain", "random_domain"> {
   let description = [{
     Bits `offset` to `offset + width - 1` of the property take only values
     matched by one of the disjoint `#simulation.random_pattern`s of
-    `patterns` (an enum type's values, IEEE 1800-2023 18.4).
+    `patterns` (an enum type's values, IEEE 1800 18.4).
   }];
   let parameters = (ins "uint64_t":$offset, "uint64_t":$width,
       "::mlir::ArrayAttr":$patterns);
@@ -495,7 +495,7 @@ def SimRandomCycleStateAttr
   let summary = "the permutation state of a randc variable";
   let description = [{
     The permutation `key`, the `position` in the current cycle, and the cycle
-    `domain` of a randc variable (IEEE 1800-2023 18.4.2). Instance state
+    `domain` of a randc variable (IEEE 1800 18.4.2). Instance state
     names three class fields; static state names three storage paths.
   }];
   let parameters = (ins "::mlir::Attribute":$key,
@@ -660,7 +660,7 @@ def SimVirtualInterfaceCalleeAttr
   let genVerifyDecl = 1;
 }
 
-// Module path delays (IEEE 1800-2023 30.4). Preparation keeps delays and
+// Module path delays (IEEE 1800 30.4). Preparation keeps delays and
 // pulse limits in femtoseconds; the simulation attributes hold design
 // precision ticks.
 
@@ -708,7 +708,7 @@ def SimTimingPathEdgeAttr : SimAttr<"TimingPathEdge", "timing_path_edge"> {
   let description = [{
     `identifier` is the source edge (0 any change, 1 posedge, 2 negedge,
     3 edge) and `polarity` the data path polarity (0 none, 1 `+`, 2 `-`),
-    IEEE 1800-2023 30.4.3. Storage at `pending` and `epoch` holds the
+    IEEE 1800 30.4.3. Storage at `pending` and `epoch` holds the
     qualified destination bits and their qualification time.
   }];
   let parameters = (ins "uint32_t":$identifier,
@@ -739,7 +739,7 @@ def SimTimingPathRuleAttr : SimAttr<"TimingPathRule", "timing_path_rule"> {
     values in `snapshots`, schedule the destination after `delays` (1, 2, 3,
     6 or 12 transition delays) with path `polarity` (0 none, 1 `+`, 2 `-`).
     Pulses shorter than `pulseReject` are filtered and shorter than
-    `pulseError` produce X (IEEE 1800-2023 30.7), as configured by
+    `pulseError` produce X (IEEE 1800 30.7), as configured by
     `pulseOnDetect` and `pulseShowCancelled`.
   }];
   let parameters = (ins "::mlir::ArrayAttr":$inputs,
@@ -794,7 +794,7 @@ def SimUdpRowAttr : SimAttr<"UdpRow", "udp_row"> {
   let description = [{
     The input field `inputs` (levels, edges and `(vw)` transitions), the
     current `state` symbol of a sequential primitive (empty for a
-    combinational one) and the `output` symbol (IEEE 1800-2023 29.3.6).
+    combinational one) and the `output` symbol (IEEE 1800 29.3.6).
     `edge` marks a row with an edge.
   }];
   let parameters = (ins "::mlir::StringAttr":$inputs,
@@ -808,7 +808,7 @@ def SimUdpAttr : SimAttr<"Udp", "udp"> {
   let summary = "the declaration of a user-defined primitive";
   let description = [{
     Primitive `name` with `ports` listed output first, their frontend
-    `portDirections`, and its table `rows` (IEEE 1800-2023 29). A sequential
+    `portDirections`, and its table `rows` (IEEE 1800 29). A sequential
     primitive may declare its initial output `initValue`.
   }];
   let parameters = (ins "::mlir::StringAttr":$name, "::mlir::ArrayAttr":$ports,
@@ -825,7 +825,7 @@ def SimInterconnectLeafAttr
   let description = [{
     The leaf at element `indices` of a fixed unpacked `interconnect` array
     acquires the data `type`, VPI type `vpiType` and `nettype` of the nets it
-    connects (IEEE 1800-2023 6.6.8); its descriptor has hierarchical `path`.
+    connects (IEEE 1800 6.6.8); its descriptor has hierarchical `path`.
     `typeIdentity` is the frontend identity of an anonymous enum type.
   }];
   let parameters = (ins "::mlir::StringAttr":$path,

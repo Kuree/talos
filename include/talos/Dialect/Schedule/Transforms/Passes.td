@@ -126,7 +126,7 @@ def TalosSimFuseClockedKernelsPass
 
     With `defer`, a kernel's wait may instead resume it in the Inactive
     region (`resume_region = inactive`, as `@(edge) #0` would), after every
-    Active event of its pass (IEEE 1800-2023 4.4.2.3, 4.5). Then only what
+    Active event of its pass (IEEE 1800 4.4.2.3, 4.5). Then only what
     its own updates wake, other kernels and other Inactive events of its
     phase can observe its stores, so same-edge readers, testbench delays and
     their `$finish` no longer keep NBAs. The driver pipeline enables it
@@ -383,7 +383,7 @@ def ThinNativeGCCollectionsPass
     keeps only the point after the rising edge of the clock with the shortest
     period; every other point of that function, including those at slot
     ends, is removed and reports success. The heap then reclaims deferred
-    allocation pressure once per cycle (IEEE 1800-2023 8.29 leaves the timing
+    allocation pressure once per cycle (IEEE 1800 8.29 leaves the timing
     of reclamation to the implementation). Functions without periodic points
     keep all of theirs.
   }];
@@ -416,7 +416,7 @@ def VersionKnownActivationsPass
     plane, and a value the bit-precise analysis proves known although its
     operands may hold X/Z elsewhere takes its two-state view; every other
     read and store keeps both planes, so the copy performs the same effects
-    with the same values (IEEE 1800-2023 4.3, 6.3.1, 11.4). A failed check
+    with the same values (IEEE 1800 4.3, 6.3.1, 11.4). A failed check
     runs the original four-state body. A copy of an already guarded variant
     uses a static profitability estimate: residual unknown-plane savings must
     exceed twice the estimated guard work plus copied executable work of
@@ -458,7 +458,7 @@ def VersionKnownRegionsPass
     logic live-ins and the locations its reads observe. A loop switches copies
     at every header visit, so four-state iterations last only while an X/Z
     input is live. Copies preserve every effect and its order, and an X/Z input
-    keeps the canonical four-state code (IEEE 1800-2023 6.3.1, 11.4).
+    keeps the canonical four-state code (IEEE 1800 6.3.1, 11.4).
   }];
   let dependentDialects = ["talos::sim::TalosSimulationDialect",
                            "talos::schedule::ScheduleDialect",

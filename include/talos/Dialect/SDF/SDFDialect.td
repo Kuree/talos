@@ -10,11 +10,15 @@ def TalosSDFDialect : Dialect {
   let cppNamespace = "::talos::sdf";
   let summary = "transient normalized IEEE 1800 Clause 32 data";
   let description = [{
-    `sdf` is a frontend-only interchange form for parsed Standard
-    Delay Format. It deliberately has no executable semantics or lowering to
-    Simulation IR: the SystemVerilog frontend must resolve every record into
-    elaborated Clause 30/31 metadata and erase this dialect before semantic
-    simulation IR is returned.
+    `sdf` represents parsed Standard Delay Format records from IEEE 1800
+    Clause 32. A delay file contains cells with ordered path delays,
+    interconnect and terminal delays, timing checks, labels, and pulse limits.
+    Typed attributes preserve decimal values, min/typ/max alternatives,
+    timescales, ports, and conditions until annotation resolves them.
+
+    The SystemVerilog frontend applies these records to elaborated Clause 30
+    and 31 timing metadata and erases the SDF operations before returning
+    executable simulation IR.
   }];
   let useDefaultAttributePrinterParser = 1;
   let usePropertiesForAttributes = 0;

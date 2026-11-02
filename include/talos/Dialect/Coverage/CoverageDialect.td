@@ -9,14 +9,14 @@ def CoverageDialect : Dialect {
   let name = "coverage";
   // `talos::coverage` is the coverage database library.
   let cppNamespace = "::talos::cov";
-  let summary = "code and functional coverage metadata (IEEE 1800-2023 19)";
+  let summary = "code and functional coverage metadata (IEEE 1800 19)";
   let description = [{
     `coverage` names the facts coverage elaboration attaches to the design:
-    the requested metrics and configuration on the module, line and toggle
-    point inventories on declarations, and the identities of covergroup
-    expressions, items and formals that lowering threads into the runtime
-    coverage schema. It has no operations; its attributes annotate
-    operations of other dialects.
+    requested metrics and configuration on the module, line and assertion
+    counters, toggle and FSM bindings on declarations, and identities of
+    covergroup expressions, items, and formals. Lowering carries these facts
+    into the runtime coverage schema. The dialect defines attributes that
+    annotate operations of other dialects.
   }];
   let useDefaultAttributePrinterParser = 1;
   let usePropertiesForAttributes = 0;
@@ -47,7 +47,7 @@ def CoverageDialect : Dialect {
     // `#coverage.toggle_binding` ranges. Aliases may bind several ranges to
     // one canonical state range.
     "::mlir::ArrayAttr":$toggle_bindings,
-    // IEEE 1800-2023 40.4: `#coverage.fsm_binding` ranges of FSM state
+    // IEEE 1800 40.4: `#coverage.fsm_binding` ranges of FSM state
     // vectors a source-visible declaration holds.
     "::mlir::ArrayAttr":$fsm_bindings,
     // Module: the flattened toggle shadow, value and unknown planes, at the

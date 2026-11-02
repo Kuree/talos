@@ -16,21 +16,30 @@ def TalosSimulationDialect : Dialect {
                            "::talos::native::NativeDialect"];
   let summary = "Target-independent executable SystemVerilog simulation IR";
   let description = [{
-    `simulation` is the SSA and explicit-effect boundary after elaborated
-    SystemVerilog semantic IR.  Hierarchy and mutable design objects are
-    identified by deterministic numeric descriptors; code is isolated into
-    function-like SSACFG regions whose only symbolic references are direct
-    sibling calls and process spawns.
+    `simulation` represents executable SystemVerilog after semantic lowering.
+    A `simulation.design` owns flattened declarations, reflection metadata,
+    and isolated SSA code units. Numeric descriptors identify design storage,
+    nets, drivers, events, and processes; symbol references connect code units,
+    class declarations, and other retained semantic inventories.
 
-    Packed builtin integers are exact two-state values and `logic` values are
-    exact four-state values. Operations preserve the four-state plane unless
+    Packed builtin integers are exact two-state values and
+    `!simulation.logic<W>` values carry exact value and unknown planes.
+    Operations preserve four-state symbols unless
     their contract explicitly performs truth evaluation, conversion to a
     two-state result, or dynamic-selection fallback. Dynamic selections accept
     integer and four-state indices: an unknown index reads as X in the logic
     domain and zero in the bits domain, and suppresses writes and drives.
     Partially out-of-range selections preserve or update valid positions while
     reads fill invalid positions with X or zero according to the result domain
-    and writes ignore invalid positions.
+    and writes ignore invalid positions. Fixed unpacked-array selections use
+    the preserved declared range; an invalid index reads the recursive element
+    default and suppresses writes.
+
+    Memory effects distinguish storage, heap, scheduler, process, and external
+    services. Suspension terminators name continuation blocks and forward the
+    values that must survive a wait. Scheduling plans and native scheduler
+    actions are represented in the `schedule` dialect; runtime ABI services
+    are represented in the `runtime` dialect.
   }];
   let useDefaultAttributePrinterParser = 1;
   let useDefaultTypePrinterParser = 1;
@@ -52,19 +61,19 @@ def TalosSimulationDialect : Dialect {
     // calls that may reach one.
     "::mlir::UnitAttr":$gc_polled,
     // Module: event-time state snapshots require publication barriers before
-    // optimization (IEEE 1801-2018 6.50). Retain after UPF intent is erased.
+    // optimization (IEEE 1801 6.50). Retain after UPF intent is erased.
     "::mlir::UnitAttr":$snapshot_publications,
     // Function: the inliner's cached callee-invariant `InlineLegality`.
     "::mlir::IntegerAttr":$inline_legality,
-    // Module: driver pulse controls for path delays (IEEE 1800-2023 30.7).
+    // Module: driver pulse controls for path delays (IEEE 1800 30.7).
     "::mlir::IntegerAttr":$pulse_reject_percent,
     "::mlir::IntegerAttr":$pulse_error_percent,
     "::mlir::BoolAttr":$pulse_on_detect,
     "::mlir::BoolAttr":$pulse_show_cancelled,
-    // Module: driver option turning negative timing checks off (IEEE 1800-2023
+    // Module: driver option turning negative timing checks off (IEEE 1800
     // 31.9.4).
     "::mlir::UnitAttr":$no_negative_timing_checks,
-    // Constrained randomization (IEEE 1800-2023 18): class metadata and the
+    // Constrained randomization (IEEE 1800 18): class metadata and the
     // randomize(), rand_mode() and constraint_mode() protocols between
     // preparation and unit lowering, and constraint-tree annotations.
     "::mlir::UnitAttr":$constraint_mode,
@@ -104,7 +113,7 @@ def TalosSimulationDialect : Dialect {
     "::mlir::IntegerAttr":$random_evaluation_inputs,
     // Bits of a randomize call's effective constraint blocks that no
     // constraint_mode() call in the design can disable, so they are always
-    // enabled (IEEE 1800-2023 18.9).
+    // enabled (IEEE 1800 18.9).
     "::mlir::IntegerAttr":$random_fixed_constraint_modes,
     "::mlir::IntegerAttr":$random_function_case_condition,
     "::mlir::UnitAttr":$random_function_conditional,
@@ -172,7 +181,7 @@ def TalosSimulationDialect : Dialect {
     "::mlir::IntegerAttr":$static_random_array_mode_storage,
     "::mlir::IntegerAttr":$static_random_mode_storage,
 
-    // Assertions (IEEE 1800-2023 16): concurrent monitor construction and the
+    // Assertions (IEEE 1800 16): concurrent monitor construction and the
     // markers that record it, deferred and procedural assertions, and
     // sampled-value defaults.
     "::mlir::UnitAttr":$assertion_action_controlled,
@@ -263,7 +272,7 @@ def TalosSimulationDialect : Dialect {
     "::mlir::UnitAttr":$assertion_coverage_report,
     "::mlir::UnitAttr":$default_assertion_failure,
     // Storage of the activation epoch that a process advances at each
-    // deferred assertion flush point (IEEE 1800-2023 16.4.2). On a deferred
+    // deferred assertion flush point (IEEE 1800 16.4.2). On a deferred
     // assertion and on the enqueue of its pending report.
     "::mlir::IntegerAttr":$deferred_epoch_storage,
     "::mlir::UnitAttr":$deferred_evaluator,
@@ -364,7 +373,7 @@ def TalosSimulationDialect : Dialect {
     // while the root's unknown plane matches it exactly.
     "::mlir::DenseI64ArrayAttr":$steady_unknown,
 
-    // Timing, specify paths, nets and UDPs (IEEE 1800-2023 28-32).
+    // Timing, specify paths, nets and UDPs (IEEE 1800 28-32).
     "::mlir::UnitAttr":$continuous_store,
     // Compiler-generated power-state transition process. Its corruption
     // writes affect scheduling/dataflow, but are not HDL assignment drivers.
@@ -372,7 +381,7 @@ def TalosSimulationDialect : Dialect {
     // Immutable code-unit provenance: an input connection computes an actual
     // expression rather than routing an addressable object. UPF needs its
     // parent scope even after port projection/inlining removes the function
-    // (IEEE 1801-2018 6.20 and 9.5.3).
+    // (IEEE 1801 6.20 and 9.5.3).
     "::mlir::UnitAttr":$computed_port_input,
     // Time scaling preparation freezes onto each code unit for unit lowering;
     // finalization removes it with the unit's bindings.
@@ -381,7 +390,7 @@ def TalosSimulationDialect : Dialect {
     "::mlir::UnitAttr":$delayed_net,
     "::mlir::UnitAttr":$initial_driver_x,
     // A fixed unpacked `interconnect` can acquire a distinct data/net type for
-    // every leaf (IEEE 1800-2017 6.6.8). Prepare represents those typeless
+    // every leaf (IEEE 1800 6.6.8). Prepare represents those typeless
     // structural aggregates as independent typed descriptors and freezes the
     // selected descriptor path directly on each semantic leaf expression.
     "::mlir::StringAttr":$interconnect_leaf_path,
@@ -447,10 +456,10 @@ def TalosSimulationDialect : Dialect {
     // from the object bit-stream inventory.
     "::mlir::UnitAttr":$class_bitstream_member,
     // Marks the instance field holding an embedded covergroup's handle. A
-    // shallow copy sets it to null in the new object (IEEE 1800-2023 8.12).
+    // shallow copy sets it to null in the new object (IEEE 1800 8.12).
     "::mlir::UnitAttr":$embedded_covergroup,
     // Marks a code unit for a checker procedure or continuous assignment
-    // (IEEE 1800-2023 17.5, 17.7.3). It runs in Reactive, and a checker
+    // (IEEE 1800 17.5, 17.7.3). It runs in Reactive, and a checker
     // always_ff reads sampled values outside its event control.
     "::mlir::UnitAttr":$checker_procedure,
     // Module marker set by preparation when source classes may be bitstreamed;
@@ -475,7 +484,7 @@ def TalosSimulationDialect : Dialect {
     "::mlir::UnitAttr":$covergroup_strobe_sample_evaluator,
     // Marks an event storage cell whose declaration initializer supplies the
     // initial handle. The root initializer must not first create an unused
-    // synchronization object for such a cell (IEEE 1800-2017 6.17).
+    // synchronization object for such a cell (IEEE 1800 6.17).
     "::mlir::UnitAttr":$event_explicit_initializer,
     // Marks a foreach iterator that must remain addressable while an outlined
     // observer reevaluates an expression from the loop body.
@@ -605,7 +614,7 @@ def TalosSimulationDialect : Dialect {
     "::mlir::ArrayAttr":$enum_format_names,
     "::mlir::ArrayAttr":$enum_format_values,
     // `#simulation.enum_format` inventories of the enum types an output
-    // operand's assignment pattern can reach (IEEE 1800-2023 21.2.1.6).
+    // operand's assignment pattern can reach (IEEE 1800 21.2.1.6).
     "::mlir::ArrayAttr":$enum_formats,
     "::mlir::ArrayAttr":$enum_method_names,
     "::mlir::ArrayAttr":$enum_method_values,

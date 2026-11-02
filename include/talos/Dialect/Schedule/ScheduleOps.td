@@ -43,6 +43,7 @@ def NativeWordRegionOp : ScheduleNativeOp<"word.region", [
 def NativeWordYieldOp : ScheduleNativeOp<"word.yield",
     [Terminator, HasParent<"NativeWordRegionOp">, Pure,
      DeclareOpInterfaceMethods<RegionBranchTerminatorOpInterface>]> {
+  let summary = "finish a native packed computation region";
   let assemblyFormat = "attr-dict";
 }
 def NativeWordTableOp : ScheduleNativeOp<"word.table", [Pure]> {
@@ -121,7 +122,7 @@ def TransferActivationOp : ScheduleNativeOp<"transfer.activation",
     [DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
   let summary = "one ordered continuous copy activation and its source wait";
   let description = [{
-    IEEE 1800-2023 4.9.1, 4.9.6, 9.4.2 and 10.6.2.
+    IEEE 1800 4.9.1, 4.9.6, 9.4.2 and 10.6.2.
     Binds an original process to a continuous transfer between entry storage
     captures. The process executes initially and on each source change, in
     Active, retaining its identity, canonical frame, wait and publication.
@@ -145,7 +146,7 @@ def TransferActivationOp : ScheduleNativeOp<"transfer.activation",
 def TransferKernelOp : ScheduleNativeOp<"transfer.kernel", [Symbol]> {
   let summary = "shared implementation of ordered continuous transfers";
   let description = [{
-    IEEE 1800-2023 4.9.1 and 10.3.2: code sharing preserves separate updates.
+    IEEE 1800 4.9.1 and 10.3.2: code sharing preserves separate updates.
     Implements the transfer semantics of transfer.activation using the
     executing instance's context and canonical storage captures. No storage
     identity, source owner, continuation ID or wait record is baked into this
@@ -173,7 +174,7 @@ def NativeKnownValueOp : ScheduleNativeOp<"known.value", [Pure]> {
   let hasCanonicalizer = 1;
 }
 def NativeKnownRootsOp : ScheduleNativeOp<"known.roots"> {
-  let summary = "test that whole storage roots hold no X or Z";
+  let summary = "test that whole storage roots match their steady unknown planes";
   let description = [{
     True when every referenced storage root holds X or Z exactly in the bits
     of its steady pattern (`simulation.steady_unknown`, none without one) and
@@ -292,7 +293,7 @@ def NativeReadyRegionOp : ScheduleNativeOp<"ready.region", [RecursiveMemoryEffec
     observers and region exit. Disjoint ordinary storage accesses do not
     inspect readiness. Signal transitions and NBA actions retain their order
     and are observation boundaries. This changes pending-set representation,
-    never event history or activation eligibility (IEEE 1800-2023 4.3--4.7).
+    never event history or activation eligibility (IEEE 1800 4.3--4.7).
     ready.read observes the current local pending word without a flush.
     The region has no entry arguments; exits use ready.yield, whose operands
     become the region's results, so a function that returns a value keeps
@@ -317,7 +318,7 @@ def NativeNBABatchOp : ScheduleNativeOp<"nba.batch", [SingleBlock,
       MemWrite<SimSchedulerResource>, MemRead<SimExternalResource>]>]> {
   let summary = "commit a certified private set of NBA roots at one barrier";
   let description = [{
-    IEEE 1800-2023 4.3, 4.5, 4.6, 4.9.4 and 10.4.2.
+    IEEE 1800 4.3, 4.5, 4.6, 4.9.4 and 10.4.2.
     Executes the commit actions in body at the current NBA barrier. Each root
     has already captured its RHS, destination and write mask during staging.
     Admission proves that intermediate values have no observers, except direct
@@ -366,6 +367,13 @@ class ScheduleNativeSuspendOp<string mnemonic, dag extraArgs = (ins),
                   ]>
                 ],
                 extraTraits)> {
+  let description = [{
+    Registers a scheduler wait using physical handles and resumes at
+    `continuation` with the captured `continuation_operands` as block arguments.
+    `site` retains continuation identity and `resume_region` optionally selects
+    the resumption region. Lowering preserves the selected wait and its
+    continuation ABI.
+  }];
   let arguments = !con(extraArgs, (ins Variadic<AnyType>:$continuation_operands,
                                       OptionalAttr<SimContinuationSiteAttr>:$site,
                                       OptionalAttr<SimEventRegion>:$resume_region));
@@ -374,17 +382,20 @@ class ScheduleNativeSuspendOp<string mnemonic, dag extraArgs = (ins),
 }
 def NativeSuspendDelayOp : ScheduleNativeSuspendOp<"suspend.delay", (ins SimTimeType:$delay,
     OptionalAttr<SimTimingSiteAttr>:$timing)> {
+  let summary = "suspend for a delay in design-precision ticks";
   let assemblyFormat = [{$delay `to` $continuation
     (`(` $continuation_operands^ `:` type($continuation_operands) `)`)? attr-dict}];
 }
 
 def NativeSuspendChangeOp : ScheduleNativeSuspendOp<"suspend.change", (ins I64:$watched)> {
+  let summary = "suspend until the value at a physical handle changes";
   let assemblyFormat = [{$watched `to` $continuation
     (`(` $continuation_operands^ `:` type($continuation_operands) `)`)? attr-dict `:` type($watched)}];
 }
 
 def NativeSuspendEdgeOp : ScheduleNativeSuspendOp<"suspend.edge", (ins
     SimEdgeKind:$edge, I64:$watched)> {
+  let summary = "suspend until a physical handle observes the requested edge";
   let assemblyFormat = [{$edge $watched `to` $continuation
     (`(` $continuation_operands^ `:` type($continuation_operands) `)`)?
     attr-dict `:` type($watched)}];
@@ -397,7 +408,7 @@ def NativeSuspendEdgeIffOp : ScheduleNativeSuspendOp<"suspend.edge_iff", (ins
     The condition is a directly addressable packed object. The scheduler
     samples its complete four-state value when the primary event occurs and
     latches a successful occurrence for the waiting process. Changes to the
-    condition alone never resume the process. IEEE 1800-2017 9.4.2.3 writes
+    condition alone never resume the process. IEEE 1800 9.4.2.3 writes
     the primary event with an optional edge identifier -- its `always @(a iff
     enable == 1)` example qualifies a plain value change -- so a `change` edge
     is as ordinary here as a directed one.
@@ -488,6 +499,7 @@ def NativeSuspendClockSetOp : ScheduleNativeOp<"suspend.clock_set", [
 }
 
 def NativeSuspendEventOp : ScheduleNativeSuspendOp<"suspend.event", (ins I64:$event)> {
+  let summary = "suspend until a physical named-event handle is triggered";
   let assemblyFormat = [{$event `to` $continuation
     (`(` $continuation_operands^ `:` type($continuation_operands) `)`)? attr-dict}];
 }
@@ -675,11 +687,13 @@ def NativeSpawnOp : ScheduleNativeOp<"spawn", [
 
 // Explicit projection at the semantic-context/native-ABI boundary.
 def NativeContextOp : ScheduleNativeOp<"context", [Pure]> {
+  let summary = "project a simulation context to its native runtime pointer";
   let arguments = (ins SimContextType:$context);
   let results = (outs LLVM_AnyPointer:$result);
   let assemblyFormat = "$context attr-dict `:` type($result)";
 }
 def NativeTimeOp : ScheduleNativeOp<"time", [Pure]> {
+  let summary = "convert a simulation time value to native tick bits";
   let arguments = (ins SimTimeType:$time);
   let results = (outs I64:$result);
   let assemblyFormat = "$time attr-dict";
@@ -883,6 +897,13 @@ def NativeManagedRootPushOp : ScheduleNativeOp<"gc.root_range.push", [
     MemoryEffects<[MemRead, MemWrite, MemRead<SimProcessResource>,
                    MemWrite<SimHeapResource>]>
   ]> {
+  let summary = "register an activation-local managed root range";
+  let description = [{
+    Registers the activation's root record and slot range with the runtime.
+    With `lazy`, a record whose runtime cookie is already nonzero remains
+    registered and the operation reports success. Registration is paired with
+    `schedule.gc.root_range.pop` before the activation releases its storage.
+  }];
   let arguments = (ins LLVM_AnyPointer:$record, LLVM_AnyPointer:$slots,
                        I64:$count, UnitAttr:$lazy);
   let results = (outs I32:$status);
@@ -894,7 +915,7 @@ def NativeManagedRootPushOp : ScheduleNativeOp<"gc.root_range.push", [
 // A designated managed-heap collection point. Generated schedules place
 // these where no activation is running, such as between time slots, and the
 // runtime then reclaims deferred allocation pressure only here (IEEE
-// 1800-2023 8.29 leaves the timing of reclamation to the implementation).
+// 1800 8.29 leaves the timing of reclamation to the implementation).
 // Points that follow an edge of a proven periodic clock record the clock, its
 // period and the edge, so they can be thinned to one collection per cycle;
 // `edge` then holds whether that edge occurred in the current slot. A point
@@ -904,6 +925,13 @@ def NativeGCCollectOp : ScheduleNativeOp<"gc.collect", [
                    MemWrite<SimHeapResource>]>
   ]> {
   let summary = "designated managed-heap collection point";
+  let description = [{
+    Collects deferred allocation pressure at a designated scheduler boundary
+    where no activation is executing. An optional edge predicate gates the
+    collection. Periodic-clock metadata allows scheduling passes to retain
+    one collection per proven clock cycle. A skipped collection reports
+    success. IEEE 1800 8.29 leaves reclamation timing to the implementation.
+  }];
   let arguments = (ins LLVM_AnyPointer:$runtime_context, Optional<I1>:$edge,
                        OptionalAttr<I32Attr>:$periodic_clock,
                        OptionalAttr<I64Attr>:$period,
@@ -920,6 +948,11 @@ def NativeManagedRootPopOp : ScheduleNativeOp<"gc.root_range.pop", [
     MemoryEffects<[MemRead, MemWrite, MemRead<SimProcessResource>,
                    MemWrite<SimHeapResource>]>
   ]> {
+  let summary = "unregister an activation-local managed root range";
+  let description = [{
+    Unregisters the record if it is registered. This also accepts a record
+    whose lazy push never ran, so cleanup can follow a common activation exit.
+  }];
   let arguments = (ins LLVM_AnyPointer:$record);
   let assemblyFormat = "$record attr-dict `:` qualified(type($record))";
 }

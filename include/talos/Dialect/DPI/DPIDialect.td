@@ -8,13 +8,13 @@ include "mlir/IR/DialectBase.td"
 def DPIDialect : Dialect {
   let name = "dpi";
   let cppNamespace = "::talos::dpi";
-  let summary = "SystemVerilog DPI-C boundary metadata (IEEE 1800-2023 35)";
+  let summary = "SystemVerilog DPI-C boundary metadata (IEEE 1800 35)";
   let description = [{
     `dpi` describes the C ABI of imported and exported subroutines: one
-    `#dpi.abi` entry per logical value, exact C layouts for unpacked
-    aggregates and open arrays, and the identity metadata that elaboration
-    attaches to DPI calls, simulation functions and native thunks. It has no
-    operations; its attributes annotate operations of other dialects.
+    `#dpi.abi` entry per logical value, exact C layouts for sized unpacked
+    aggregates, concrete actual-shape bindings for open arrays, and identity
+    metadata on DPI calls, simulation functions, and native thunks. The
+    dialect defines attributes that annotate operations of other dialects.
   }];
   let useDefaultAttributePrinterParser = 1;
   let usePropertiesForAttributes = 0;

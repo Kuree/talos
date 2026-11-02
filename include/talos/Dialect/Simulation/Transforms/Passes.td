@@ -51,7 +51,7 @@ def TalosSimMarkBoundedLoopsPass
     their trip count or body size exceeded its budget. The mark carries no
     iteration count and changes no IR; it lets schedule-group classification
     distinguish such a loop from an unbounded control loop, which IEEE
-    1800-2023 12.7.6 describes as able to hang the event scheduler.
+    1800 12.7.6 describes as able to hang the event scheduler.
   }];
   let dependentDialects = ["mlir::arith::ArithDialect",
                            "mlir::cf::ControlFlowDialect"];
@@ -63,7 +63,7 @@ def TalosSimAnnotateSteadyUnknownPass
   let description = [{
     Sets `simulation.steady_unknown` on each storage declaration with bits
     that hold X/Z once the design runs (SteadyUnknownAnalysis; IEEE
-    1800-2023 6.8, Table 6-7): fields a design never assigns, and bits that
+    1800 6.8, Table 6-7): fields a design never assigns, and bits that
     the repeating writes fill only with such bits or X/Z. The fact is a
     guess the generated unknown summary validates at run time: a root whose
     unknown plane matches it exactly lets gated copies load those bits as a
@@ -87,7 +87,7 @@ def TalosSimInsertGCPollsPass
     collector only at `simulation.gc.safepoint` polls and at calls that may
     reach one. Allocation records pressure but never collects; the heap
     reclaims at polls, between activations, and at designated schedule points.
-    IEEE 1800-2023 8.29 leaves the timing of reclamation to the
+    IEEE 1800 8.29 leaves the timing of reclamation to the
     implementation.
 
     The pass places a poll before the first allocation of every block on a
@@ -112,7 +112,7 @@ def TalosSimRefineContinuousSensitivityPass
   let summary = "Refine pure continuous RHS wakeups with sparse storage ranges";
   let description = [{
     Narrow change watches for stateless, single-writer continuous assignments
-    under IEEE 1800-2023 10.3.2. Sparse handle provenance bounds every RHS load;
+    under IEEE 1800 10.3.2. Sparse handle provenance bounds every RHS load;
     dense must-definition analysis proves the store executes before suspension.
     Dynamic selections retain their entire static parent range. Procedural
     implicit sensitivity and port-copy cohorts retain their existing watches.
@@ -215,7 +215,7 @@ def TalosSimForwardCopyProcessesPass
     A pure continuous assignment (or port copy) to a net or design-lifetime
     variable with no other writer, no dynamic access and no observer of its
     own is evaluated by its
-    readers instead (IEEE 1800-2023 10.3.2, 4.9.1, 4.7, 4.3, 6.6.1,
+    readers instead (IEEE 1800 10.3.2, 4.9.1, 4.7, 4.3, 6.6.1,
     9.2.2.2.1, 9.4.2): reads become views of the operands or clones of the
     expression, waits watch the operands, and the assignment process becomes
     dead. A variable's copy must start unconditionally once during root

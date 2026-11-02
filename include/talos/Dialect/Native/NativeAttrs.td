@@ -33,7 +33,7 @@ def NativeElementDefaultAttr
   let summary = "the default value of one container element type";
   let description = [{
     Element type `typeId` defaults to `image` rather than to the type default
-    of IEEE 1800-2023 Table 6-7, as an unpacked struct with member
+    of IEEE 1800 Table 6-7, as an unpacked struct with member
     initializers does (7.2.2). `image` is the element's value plane followed,
     for a four-state element, by its unknown plane, in the runtime's
     `default_image` layout.

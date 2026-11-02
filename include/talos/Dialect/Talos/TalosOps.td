@@ -969,9 +969,10 @@ def CoverSampleOp : TalosOp<"cover.sample"> {
 def DPITaskCallOp : TalosOp<"dpi.task_call"> {
   let summary = "call a potentially time-consuming imported DPI task";
   let description = [{
-    Pure/non-suspending DPI functions use the ordinary typed call path. This op
-    exists for exported or context tasks which may interact with scheduler time
-    and therefore cannot be modeled as an ordinary call.
+    Represents an imported DPI task with explicit arguments and results.
+    A context import can call exported SystemVerilog tasks and reenter the
+    scheduler, so the call retains task semantics. DPI functions use the
+    ordinary typed function-call path.
   }];
   let arguments =
       (ins FlatSymbolRefAttr:$callee, Variadic<AnyType>:$arguments);
@@ -1042,7 +1043,7 @@ def FinishOp : TalosOp<"finish"> {
 }
 
 def StopOp : TalosOp<"stop"> {
-  let summary = "request interactive simulation suspension";
+  let summary = "request simulation suspension";
   let arguments = (ins I32Attr:$verbosity);
   let assemblyFormat = "$verbosity attr-dict";
 }

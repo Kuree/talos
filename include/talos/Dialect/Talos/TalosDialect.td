@@ -1,10 +1,8 @@
 //===- TalosDialect.td - Talos semantic dialect -------*- tablegen -*-===//
 //
-// Talos's semantic IR sits between elaborated Slang IR and LLVM dialects. It
-// preserves the SystemVerilog concepts which cannot be represented faithfully
-// as ordinary two-state SSA dataflow: four-state values, scheduler regions,
-// mutable variables and nets, processes, objects, randomization, and runtime
-// services.
+// Talos's semantic IR preserves the elaborated Slang AST and provides typed
+// operations for SystemVerilog values, storage, processes and runtime services.
+// Talos-to-Simulation lowering makes execution and scheduling effects explicit.
 //
 //===----------------------------------------------------------------------===//
 
@@ -17,13 +15,17 @@ def TalosDialect : Dialect {
   let name = "talos";
   let cppNamespace = "::talos::ir";
 
-  let summary = "Elaborated SystemVerilog semantic AST";
+  let summary = "Elaborated SystemVerilog semantics";
   let description = [{
-    The Talos dialect is the complete semantic landing boundary for the
-    elaborated Slang frontend. Its concrete AST operations preserve source
-    identity, resolved references, declared types, and the full elaborated
-    hierarchy. Executable SSA, explicit scheduler effects, and flattened
-    numeric descriptors belong to the separate `simulation` dialect.
+    `talos` receives the elaborated `slang` dialect. Its `talos.sv.*`
+    operations preserve source identity, resolved references, declared types,
+    and hierarchy as an attribute-and-region tree. It also defines typed
+    semantic operations for four-state values, references and nets, processes,
+    classes, containers, randomization, and runtime services.
+
+    Talos-to-Simulation lowering produces the executable `simulation`
+    dialect, with isolated SSA code units, explicit effects, and flattened
+    design descriptors. Source AST operations are eliminated at that boundary.
   }];
 
   // Enum attributes are specialized builtin IntegerAttr wrappers, so the

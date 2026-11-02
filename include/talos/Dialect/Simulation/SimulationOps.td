@@ -492,7 +492,7 @@ def SimVPIInterfaceCallDispatchOp : SimOp<"vpi_interface_call.dispatch", [
     set. Access is 0 for an unrestricted interface, 1 for a modport import, and
     2 for a modport export. All elaborated instances of the exact nominal
     interface type participate, including instances under another top module
-    (IEEE 1800-2023 25.9). Empty target sets remain explicit contracts. Implementations are derived only
+    (IEEE 1800 25.9). Empty target sets remain explicit contracts. Implementations are derived only
     from declaration-owned interface membership and exports.
   }];
   let arguments = (ins FlatSymbolRefAttr:$call,
@@ -939,7 +939,7 @@ def SimVPIUnresolvedTypeAliasDeclOp
   let summary = "lexical typedef of an unresolved class type parameter";
   let description = [{
     Preserves a distinct named typespec identity when its underlying type
-    parameter has no effective type (IEEE 1800-2023 37.25 details 6 and 11).
+    parameter has no effective type (IEEE 1800 37.25 details 6 and 11).
     The exact target is an unresolved type parameter in the same lexical class,
     or a preceding alias of such a parameter. The object has public kind
     TypeParameter, but is a typedef, not a parameter declaration: it has no
@@ -1073,7 +1073,7 @@ def SimPassSwitchControlOp : SimOp<"net.pass.control", [
   let description = [{
     Updates one frozen pass-switch run. The control is normalized to active
     high: 1 enables the channel, 0 disables it, and x/z makes connectivity
-    uncertain according to IEEE 1800-2017 28.12.2.
+    uncertain according to IEEE 1800 28.12.2.
   }];
   let arguments = (ins SimLogic1Type:$control, I64Attr:$pass_switch_id);
   let assemblyFormat = "$pass_switch_id `=` $control attr-dict `:` qualified(type($control))";
@@ -2446,7 +2446,7 @@ def SimRandomInitializationLeaveOp : SimOp<"random.initialization_leave", [
   let description = [{
     A binding that encloses no operation with memory effects neither draws
     from the stream nor creates a process or object, so it consumes no value
-    of the initialization RNG (IEEE 1800-2023 18.14.1) and the enter/leave
+    of the initialization RNG (IEEE 1800 18.14.1) and the enter/leave
     pair folds away.
   }];
   let arguments = (ins SimContextType:$context, I64:$activation);
@@ -2521,7 +2521,7 @@ def SimStochasticQueueOp : SimOp<"stochastic_queue", [
                    MemWrite<SimStochasticQueueResource>,
                    MemRead<SimSchedulerResource>]>
   ]> {
-  let summary = "execute one IEEE 1800-2017 20.16 queue operation";
+  let summary = "execute one IEEE 1800 20.16 queue operation";
   let description = [{
     `action` selects initialize, add, remove, full, or exam. The three inputs
     are exact 32-bit four-state values. Two 64-bit four-state results carry
@@ -2962,7 +2962,7 @@ def SimStringParseRealConstantOp
     : SimOp<"string.parse_real_constant", [Pure]> {
   let summary = "convert the real-constant prefix of a managed string";
   let description = [{
-    Implements `str.atoreal()` (IEEE 1800-2023 6.16.10): converts the longest
+    Implements `str.atoreal()` (IEEE 1800 6.16.10): converts the longest
     prefix of the string that is real-constant syntax (5.7.2), and yields zero
     when the string starts with no digit. Unlike `string.parse_real`, the
     scan accepts no white space, sign or bare decimal point.
@@ -3206,7 +3206,7 @@ def SimManagedNBAEnqueueMaskedOp : SimOp<"managed.nba.enqueue_masked", [
   ]> {
   let summary = "schedule a nonblocking partial update of class-backed storage";
   let description = [{
-    IEEE 1800-2023 10.4.2: a nonblocking assignment to a fixed selection of a
+    IEEE 1800 10.4.2: a nonblocking assignment to a fixed selection of a
     class property, or of an element of an unpacked-array property reached
     through a reference path. `mask` has the destination's type; the storage
     bits under its known bits take their values (and unknown bits) from
@@ -3756,11 +3756,13 @@ def SimDPICallOp : SimOp<"dpi.call", [
   DeclareOpInterfaceMethods<SymbolUserOpInterface>,
   DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
 ]> {
-  let summary = "shared zero-time DPI-C import boundary";
+  let summary = "typed SystemVerilog DPI-C import boundary";
   let description = [{
-    Carries stable call-site metadata and normalized value operands. Results
-    contain a function return first (when present), followed by output and
-    inout copy-outs. Imported task C status is not an SV result.
+    Carries stable call-site metadata, a typed ABI signature, normalized value
+    operands, and concrete open-array or aggregate layouts where required.
+    Results contain a function return first (when present), followed by output
+    and inout copy-outs, then a mandatory `!runtime.status` result. An imported
+    task's C status is control information rather than a SystemVerilog result.
   }];
   let arguments = (ins
     I32Attr:$import_id,
@@ -3849,7 +3851,7 @@ def SimProgramExitOp : SimOp<"program.exit", [
 ]> {
   let summary = "terminate the current program instance";
   let description = [{
-    Implements IEEE 1800-2017 24.7 `$exit`. The runtime identifies the
+    Implements IEEE 1800 24.7 `$exit`. The runtime identifies the
     program instance from the current logical process, terminates every
     process in that instance, and finishes the simulation only after every
     program instance has completed.
@@ -3887,7 +3889,7 @@ def SimSupplyControlOp : SimOp<"supply.control", [
 ]> {
   let summary = "control an elaborated UPF root supply by dynamic handle name";
   let description = [{
-    IEEE 1801-2018 11.2.3.3.4/.5: changes the root supply immediately and returns
+    IEEE 1801 11.2.3.3.4/.5: changes the root supply immediately and returns
     success. UPF elaboration replaces this operation with effectful simulation
     storage accesses and validated name dispatch before target lowering.
   }];
@@ -3903,7 +3905,7 @@ def SimSupplyReadOp : SimOp<"supply.read", [
 ]> {
   let summary = "read an elaborated UPF supply by dynamic handle name";
   let description = [{
-    IEEE 1801-2018 11.2.3.2.6: sample the current state/voltage pair, including
+    IEEE 1801 11.2.3.2.6: sample the current state/voltage pair, including
     computed roots protected from HDL writes. The result uses the private root
     layout: state in bits [1:0], signed32 microvolt bits in [33:2], other bits
     zero. Package UPF converts it to the public upfSupplyTypeT layout (11.2.4).
@@ -3948,7 +3950,7 @@ def SimPublicationBatchBeginOp
   let summary = "begin executing one statement as one event";
   let description = [{
     Brackets, with `sim.publication.batch_end`, a statement that the process
-    executes as one event (IEEE 1800-2023 4.7): in between there is no time
+    executes as one event (IEEE 1800 4.7): in between there is no time
     control and no operation that may observe signal values or run another
     process. The runtime may then deliver the update events of the stores in
     between together, with the OR of every store's change and edge masks. That
@@ -3968,7 +3970,7 @@ def SimProgramOwnedOp : SimOp<"program.owned", [
 ]> {
   let summary = "test whether the executing thread belongs to a program";
   let description = [{
-    IEEE 1800-2023 24.7: true when the executing thread, or the thread it
+    IEEE 1800 24.7: true when the executing thread, or the thread it
     descends from, originates in an initial procedure of a program block.
     `$exit` terminates that program; any other thread ignores it.
   }];
@@ -3991,15 +3993,30 @@ def SimDisplayOp : SimOp<"display", [
 ]> {
   let summary = "formatted display or write to a SystemVerilog descriptor";
   let description = [{
-    `item_flags` describes the logical argument sequence. Bit 0 marks a
-    nonempty packed operand signed; bit 1 represents an omitted argument and
-    consumes no entry from `items`; bit 2 marks an f64 real operand; bit 3
-    marks a managed string; bit 4 marks a managed container. Bit 5 designates
-    the literal or managed-string format that owns all remaining items on
-    `string.output_format`; bit 6 marks a managed class handle; bit 7 marks a
-    managed string as a non-designated output-list format; bit 8 marks a
-    virtual-interface handle. `scope` and `library_cell` carry the elaborated call-site
-    information used by `%m` and `%l`. `time_multiplier` converts a numeric
+    `item_flags` has one entry per logical output item, using the shared
+    `talos/Runtime/OutputItemFlags.h` encoding. Most items consume one operand
+    from `items`; omitted items consume none, enum and net items consume two,
+    and raw aggregate items consume three.
+
+    | Bit | Meaning |
+    | --- | --- |
+    | 0 | Signed packed value. |
+    | 1 | Omitted argument. |
+    | 2 | `f64` real value. |
+    | 3 | Managed string. |
+    | 4 | Managed container. |
+    | 5 | Designated format for `string.output_format`. |
+    | 6 | Managed class handle. |
+    | 7 | Managed string used as an output-list format. |
+    | 8 | Virtual-interface handle. |
+    | 9 | Process handle. |
+    | 10 | Packed enum value followed by its mnemonic string. |
+    | 11 | Packed net value followed by its net handle for `%v`. |
+    | 12 | Three managed strings: assignment pattern, two-state raw bytes, and four-state raw bytes. |
+    | 13 | Direct `$realtime` result, retaining call-site precision. |
+
+    `scope` and `library_cell` carry the elaborated call-site information used
+    by `%m` and `%l`. `time_multiplier` converts a numeric
     `%t` argument from the invoking scope's time unit to the design precision
     used by the runtime clock.
   }];
@@ -4153,36 +4170,52 @@ class SimFileOp<string mnemonic, dag fileArgs, dag fileResults,
 
 def SimFileOpenMCDOp : SimFileOp<"file.open_mcd",
     (ins SimContextType:$context, SimBytesType:$path),
-    (outs I32:$descriptor)>;
+    (outs I32:$descriptor)> {
+  let summary = "open a literal file path as a multichannel descriptor";
+}
 
 def SimFileOpenOp : SimFileOp<"file.open",
     (ins SimContextType:$context, SimBytesType:$path, SimBytesType:$mode),
-    (outs I32:$descriptor)>;
+    (outs I32:$descriptor)> {
+  let summary = "open a literal file path with an explicit mode";
+}
 
 def SimFileOpenStringMCDOp : SimFileOp<"file.open_string_mcd",
     (ins SimContextType:$context, SimStringType:$path),
     (outs I32:$descriptor),
     [MemRead<SimIOResource>, MemWrite<SimIOResource>,
-     MemRead<SimHeapResource>]>;
+     MemRead<SimHeapResource>]> {
+  let summary = "open a string-valued path as a multichannel descriptor";
+}
 
 def SimFileOpenStringOp : SimFileOp<"file.open_string",
     (ins SimContextType:$context, SimStringType:$path, SimStringType:$mode),
     (outs I32:$descriptor),
     [MemRead<SimIOResource>, MemWrite<SimIOResource>,
-     MemRead<SimHeapResource>]>;
+     MemRead<SimHeapResource>]> {
+  let summary = "open a string-valued path with an explicit mode";
+}
 
 def SimFileCloseOp : SimFileOp<"file.close",
-    (ins SimContextType:$context, I32:$descriptor), (outs)>;
+    (ins SimContextType:$context, I32:$descriptor), (outs)> {
+  let summary = "close the streams selected by a file descriptor";
+}
 
 def SimFileFlushOp : SimFileOp<"file.flush",
-    (ins SimContextType:$context, I32:$descriptor), (outs)>;
+    (ins SimContextType:$context, I32:$descriptor), (outs)> {
+  let summary = "flush the streams selected by a file descriptor";
+}
 
 def SimFileGetcOp : SimFileOp<"file.getc",
-    (ins SimContextType:$context, I32:$descriptor), (outs I32:$result)>;
+    (ins SimContextType:$context, I32:$descriptor), (outs I32:$result)> {
+  let summary = "read one character or the end-of-file result";
+}
 
 def SimFileUngetcOp : SimFileOp<"file.ungetc",
     (ins SimContextType:$context, I32:$byte, I32:$descriptor),
-    (outs I32:$result)>;
+    (outs I32:$result)> {
+  let summary = "push one character back onto a file stream";
+}
 
 def SimFileGetlineOp : SimFileOp<"file.getline",
     (ins SimContextType:$context, I32:$descriptor),
@@ -4324,18 +4357,26 @@ def SimFileReadMemTokenOp : SimFileOp<"file.readmem_token",
 
 def SimFileEofOp : SimFileOp<"file.eof",
     (ins SimContextType:$context, I32:$descriptor), (outs I32:$result),
-    [MemRead<SimIOResource>]>;
+    [MemRead<SimIOResource>]> {
+  let summary = "query the end-of-file indicator";
+}
 
 def SimFileSeekOp : SimFileOp<"file.seek",
     (ins SimContextType:$context, I32:$descriptor, I64:$offset, I32:$origin),
-    (outs I32:$result)>;
+    (outs I32:$result)> {
+  let summary = "seek relative to a specified file origin";
+}
 
 def SimFileTellOp : SimFileOp<"file.tell",
     (ins SimContextType:$context, I32:$descriptor), (outs I64:$result),
-    [MemRead<SimIOResource>]>;
+    [MemRead<SimIOResource>]> {
+  let summary = "read the current file position";
+}
 
 def SimFileRewindOp : SimFileOp<"file.rewind",
-    (ins SimContextType:$context, I32:$descriptor), (outs I32:$result)>;
+    (ins SimContextType:$context, I32:$descriptor), (outs I32:$result)> {
+  let summary = "rewind a file and clear its error indicators";
+}
 
 def SimSpawnOp : SimOp<"spawn", [
     CallOpInterface, DeclareOpInterfaceMethods<SymbolUserOpInterface>,
@@ -4418,7 +4459,7 @@ def SimProcessEventPendingOp : SimOp<"process.event_pending", [
   ]> {
   let summary = "inspect a latched signal event without consuming it";
   let description = [{
-    IEEE 1801-2018 9.7.3: a retained update must observe a power/RTC event
+    IEEE 1801 9.7.3: a retained update must observe a power/RTC event
     already latched during NBA processing, even before its Active handler
     executes and even if the source recovered. This query only reads the
     existing event flag. It never evaluates sensitivity or tests scheduler
@@ -4984,6 +5025,7 @@ def SimDisableChildrenOp : SimOp<"children.disable", [
 //===----------------------------------------------------------------------===//
 
 def SimContextStorageOp : SimOp<"context.storage", [Pure]> {
+  let summary = "resolve a storage descriptor to a variable reference";
   let arguments = (ins SimContextType:$context, I64Attr:$id);
   let results = (outs SimRefType:$result);
   let assemblyFormat = "$context `[` $id `]` attr-dict `:` qualified(type($result))";
@@ -4991,6 +5033,7 @@ def SimContextStorageOp : SimOp<"context.storage", [Pure]> {
 }
 
 def SimContextNetOp : SimOp<"context.net", [Pure]> {
+  let summary = "resolve a net descriptor to a resolved-net handle";
   let arguments = (ins SimContextType:$context, I64Attr:$id);
   let results = (outs SimNetType:$result);
   let assemblyFormat = "$context `[` $id `]` attr-dict `:` qualified(type($result))";
@@ -4998,6 +5041,7 @@ def SimContextNetOp : SimOp<"context.net", [Pure]> {
 }
 
 def SimContextDriverOp : SimOp<"context.driver", [Pure]> {
+  let summary = "resolve a driver descriptor to a contribution handle";
   let arguments = (ins SimContextType:$context, I64Attr:$id);
   let results = (outs SimDriverType:$result);
   let assemblyFormat = "$context `[` $id `]` attr-dict `:` qualified(type($result))";
@@ -5005,6 +5049,7 @@ def SimContextDriverOp : SimOp<"context.driver", [Pure]> {
 }
 
 def SimContextEventOp : SimOp<"context.event", [Pure]> {
+  let summary = "resolve an event descriptor to a named-event handle";
   let arguments = (ins SimContextType:$context, I64Attr:$id);
   let results = (outs SimEventType:$result);
   let assemblyFormat = "$context `[` $id `]` attr-dict `:` qualified(type($result))";
@@ -5128,7 +5173,7 @@ def SimArrayDynInsertOp : SimOp<"array.insert_dynamic", [Pure]> {
   let summary = "replace an element of a fixed array using a declared-range index";
   let description = [{
     The index is interpreted in the array's preserved source range. IEEE
-    1800-2017 7.4.6 makes an unknown or out-of-range index invalid, and
+    1800 7.4.6 makes an unknown or out-of-range index invalid, and
     "writing to an array with an invalid index shall perform no operation", so
     such an index yields the input array unchanged.
   }];
@@ -5200,6 +5245,7 @@ def SimRefLoadOp : SimOp<"ref.load", [
     DeclareOpInterfaceMethods<SafeMemorySlotAccessOpInterface>,
     SimRefElementMatches<"reference", "result">
   ]> {
+  let summary = "load a value through a variable reference";
   let arguments = (ins Arg<SimRefType, "", [MemRead<SimStorageResource>]>:$reference);
   let results = (outs AnyType:$result);
   let assemblyFormat = "$reference attr-dict `:` qualified(type($reference)) `->` type($result)";
@@ -5211,6 +5257,7 @@ def SimRefStoreOp : SimOp<"ref.store", [
     DeclareOpInterfaceMethods<SafeMemorySlotAccessOpInterface>,
     SimRefElementMatches<"reference", "value">
   ]> {
+  let summary = "perform a blocking store through a variable reference";
   let arguments = (ins AnyType:$value,
                        Arg<SimRefType, "", [MemWrite<SimStorageResource>]>:$reference);
   let assemblyFormat = "$value `to` $reference attr-dict `:` type($value) `,` qualified(type($reference))";
@@ -5294,6 +5341,7 @@ def SimRefExtractOp : SimOp<"ref.extract", [
     Pure, ViewLikeOpInterface,
     DeclareOpInterfaceMethods<SafeMemorySlotAccessOpInterface>
   ]> {
+  let summary = "select a constant packed slice of a variable reference";
   let arguments = (ins SimRefType:$input, I64Attr:$low_bit);
   let results = (outs SimRefType:$result);
   let assemblyFormat = "$input `from` $low_bit attr-dict `:` qualified(type($input)) `->` qualified(type($result))";
@@ -5365,6 +5413,7 @@ def SimNetReadOp : SimOp<"net.read", [
     MemoryEffects<[MemRead<SimNetResource>]>,
     SimNetElementMatches<"net", "result">
   ]> {
+  let summary = "read the resolved value of a net";
   let arguments = (ins SimNetType:$net);
   let results = (outs AnyType:$result);
   let assemblyFormat = "$net attr-dict `:` qualified(type($net)) `->` type($result)";
@@ -5375,7 +5424,7 @@ def SimNetCountDriversOp : SimOp<"net.count_drivers", [
   ]> {
   let summary = "count active scalar-net driver contributions";
   let description = [{
-    Implements the state query underlying IEEE 1800-2017 Annex D.2. The net
+    Implements the state query underlying IEEE 1800 Annex D.2. The net
     operand must denote one scalar net bit. Results report whether that bit is
     forced, followed by the counts of non-Z drivers in total, 0, 1, and x
     states. Collapsed net components and paired conditional-primitive strength
@@ -5411,6 +5460,7 @@ def SimDriverDriveOp : SimOp<"driver.drive", [
     MemoryEffects<[MemWrite<SimNetResource>]>,
     SimDriverElementMatches<"driver", "value">
   ]> {
+  let summary = "update one driver contribution and resolve its net";
   let arguments = (ins SimDriverType:$driver, AnyType:$value);
   let assemblyFormat = "$driver `=` $value attr-dict `:` qualified(type($driver)) `,` type($value)";
 }
@@ -5624,6 +5674,7 @@ def SimDriverDriveChangedOp : SimOp<"driver.drive_changed", [
 }
 
 def SimDriverExtractOp : SimOp<"driver.extract", [Pure, ViewLikeOpInterface]> {
+  let summary = "select a constant packed slice of a driver contribution";
   let arguments = (ins SimDriverType:$input, I64Attr:$low_bit);
   let results = (outs SimDriverType:$result);
   let assemblyFormat = "$input `from` $low_bit attr-dict `:` qualified(type($input)) `->` qualified(type($result))";
@@ -5692,14 +5743,14 @@ def SimPowerNBAOp : SimOp<"power.nba.enqueue", [
   ]> {
   let summary = "enqueue one retained register update with a commit-time guard";
   let description = [{
-    IEEE 1801-2018 9.7.3: the capture-free i1 observer and both captured
+    IEEE 1801 9.7.3: the capture-free i1 observer and both captured
     epochs qualify this atomic backing/output update at actual NBA commit.
     Suppression publishes no transition, including to edge/iff observers.
     Targets and epochs are whole design/static storage references. Projected
     views and automatic storage require separate bounds and lifetime handling.
     An optional delay schedules the transaction directly at this statement,
     preserving NBA source order even when a dynamic delay evaluates to zero
-    (IEEE 1800-2023 4.6(b), 10.4.2).
+    (IEEE 1800 4.6(b), 10.4.2).
   }];
   let arguments = (ins SimContextType:$context, AnyType:$value,
       SimRefType:$backing, SimRefType:$visible, SimObserverType:$guard,
@@ -5720,7 +5771,7 @@ def SimPowerNBAViewOp : SimOp<"power.nba.enqueue_view", [
   ]> {
   let summary = "enqueue one bounded storage write with a commit-time power guard";
   let description = [{
-    IEEE 1801-2018 9.5.3 and IEEE 1800-2023 11.5.1/7.4.5: the whole
+    IEEE 1801 9.5.3 and IEEE 1800 11.5.1/7.4.5: the whole
     persistent root and signed half-open window [lower, upper) preserve every
     enclosing view boundary. RHS bit zero is at start, relative to the root.
     Intersect the RHS range, window and root bounds before enqueueing. Invalid
@@ -5729,7 +5780,7 @@ def SimPowerNBAViewOp : SimOp<"power.nba.enqueue_view", [
     Window values, payload and epoch snapshots are captured at this statement
     and survive CFG forwarding and suspension as ordinary SSA values. The
     capture-free i1 observer and epochs qualify the one publication at actual
-    due-time NBA commit, preserving source order (1800-2023 4.6(b)/10.4.2).
+    due-time NBA commit, preserving source order (1800 4.6(b)/10.4.2).
     Epochs and root must be whole design/static storage references.
   }];
   let arguments = (ins SimContextType:$context, AnyType:$value,
@@ -5748,6 +5799,15 @@ def SimPowerNBAViewOp : SimOp<"power.nba.enqueue_view", [
 def SimNBAEnqueueOp : SimOp<"nba.enqueue", [
     MemoryEffects<[MemWrite<SimSchedulerResource>]>
   ]> {
+  let summary = "capture and enqueue a nonblocking storage or driver update";
+  let description = [{
+    Captures the value and destination when the statement executes, then
+    enqueues the update in the appropriate nonblocking assignment region.
+    An optional delay is measured in design-precision ticks; a zero delay
+    still enqueues an NBA update. The destination is a variable reference or
+    driver whose element type matches the value. `site` carries scheduling
+    metadata, and `clocking_output` identifies a clocking-output transaction.
+  }];
   let arguments = (ins AnyType:$value, AnyType:$destination,
                        Optional<SimTimeType>:$delay,
                        OptionalAttr<SimNBASiteAttr>:$site,
@@ -5764,8 +5824,11 @@ def SimNBAEnqueueOp : SimOp<"nba.enqueue", [
 def SimLogicConstantOp : SimOp<"logic.constant", [Pure, ConstantLike]> {
   let summary = "constant four-state value given as a value and unknown plane";
   let description = [{
-    Folds to a two-element `ArrayAttr` holding the value and unknown planes,
-    which the dialect constant materializer turns back into this operation.
+    Constructs `!simulation.logic<W>` from two W-bit integer attributes.
+    Where the unknown plane is zero, the value plane holds the known bit.
+    Where the unknown plane is one, a zero value bit encodes X and a one value
+    bit encodes Z. Folding uses a two-element `ArrayAttr` containing these
+    planes, which the dialect constant materializer reconstructs.
   }];
   let arguments = (ins APIntAttr:$value, APIntAttr:$unknown);
   let results = (outs SimLogicType:$result);
@@ -5776,6 +5839,7 @@ def SimLogicConstantOp : SimOp<"logic.constant", [Pure, ConstantLike]> {
 
 def SimLogicFromBitsOp : SimOp<"logic.from_bits", [
     Pure, DeclareOpInterfaceMethods<CastOpInterface>]> {
+  let summary = "convert two-state bits to logic with a zero unknown plane";
   let arguments = (ins AnyInteger:$input);
   let results = (outs SimLogicType:$result);
   let assemblyFormat = "$input attr-dict `:` type($input) `->` qualified(type($result))";
@@ -5819,7 +5883,7 @@ def SimLogicMuxOp : SimOp<"logic.mux", [
   let description = [{
     A known condition selects one operand. For an X or Z condition, each
     result bit is preserved only when both operands contain the same known 0
-    or 1; every other combination becomes X, as required by IEEE 1800-2017
+    or 1; every other combination becomes X, as required by IEEE 1800
     Table 11-20.
   }];
   let arguments = (ins SimLogic1Type:$condition, SimLogicType:$true_value,
@@ -5879,13 +5943,14 @@ def SimLogicResizeOp : SimOp<"logic.resize", [
 }
 
 def SimLogicUnaryOp : SimOp<"logic.unary", [Pure]> {
+  let summary = "evaluate a four-state unary operation";
   let arguments = (ins SimUnaryKind:$kind, SimLogicType:$input);
   let results = (outs SimLogicType:$result);
   let assemblyFormat =
       "$kind $input attr-dict `:` functional-type(operands, results)";
   let extraClassDeclaration = [{
     /// Bitwise negation. A one-bit logical negation maps 0, 1, X and Z
-    /// exactly as bitwise negation does (IEEE 1800-2023 11.4.7, Table
+    /// exactly as bitwise negation does (IEEE 1800 11.4.7, Table
     /// 11-15), and canonicalization spells the one-bit case that way, so
     /// analyses must accept both forms.
     bool isBitwiseNegation() {
@@ -5911,6 +5976,7 @@ def SimLogicReductionOp : SimOp<"logic.reduction", [Pure]> {
 
 def SimLogicBinaryOp
     : SimOp<"logic.binary", [Pure, SameOperandsAndResultType]> {
+  let summary = "evaluate four-state arithmetic or bitwise logic";
   let arguments = (ins SimBinaryKind:$kind, SimLogicType:$lhs,
                        SimLogicType:$rhs);
   let results = (outs SimLogicType : $result);
@@ -5966,6 +6032,12 @@ def SimLogicShiftOp
 
 def SimLogicCompareOp
     : SimOp<"logic.compare", [Pure, SameTypeOperands]> {
+  let summary = "evaluate a logical, case, wildcard, or relational comparison";
+  let description = [{
+    Operands have the same four-state packed type. Case comparisons, including
+    `casez_eq` and `casexz_eq`, return `i1`. Logical, wildcard, and relational
+    comparisons return `!simulation.logic<1>` so an unknown result is retained.
+  }];
   let arguments = (ins SimCompareKind
                    : $kind, SimLogicType
                    : $lhs, SimLogicType
@@ -5996,6 +6068,7 @@ def SimLogicCaseDifferenceMaskOp
 }
 
 def SimLogicConcatOp : SimOp<"logic.concat", [Pure]> {
+  let summary = "concatenate packed values while preserving X and Z";
   let arguments = (ins Variadic<SimLogicType> : $inputs);
   let results = (outs SimLogicType : $result);
   let assemblyFormat =
@@ -6006,6 +6079,7 @@ def SimLogicConcatOp : SimOp<"logic.concat", [Pure]> {
 }
 
 def SimLogicReplicateOp : SimOp<"logic.replicate", [Pure]> {
+  let summary = "repeat a packed value while preserving X and Z";
   let arguments = (ins SimLogicType : $input, I64Attr : $count);
   let results = (outs SimLogicType : $result);
   let assemblyFormat = "$input `times` $count attr-dict `:` "
@@ -6016,6 +6090,7 @@ def SimLogicReplicateOp : SimOp<"logic.replicate", [Pure]> {
 }
 
 def SimLogicExtractOp : SimOp<"logic.extract", [Pure]> {
+  let summary = "extract a constant packed slice while preserving X and Z";
   let arguments = (ins SimLogicType : $input, I64Attr : $low_bit);
   let results = (outs SimLogicType : $result);
   let assemblyFormat = "$input `from` $low_bit attr-dict `:` "
@@ -6106,6 +6181,7 @@ def SimBitsDynInsertOp
 
 def SimLogicInsertOp
     : SimOp<"logic.insert", [Pure, AllTypesMatch<["input", "result"]>]> {
+  let summary = "replace a constant packed slice while preserving X and Z";
   let arguments = (ins SimLogicType
                    : $input, SimLogicType
                    : $replacement, I64Attr
@@ -6146,7 +6222,7 @@ def SimSchedulerCohortOp : SimOp<"scheduler.cohort", [
     Merely reentering the scheduler or priming a child does not change it.
     Tokens are opaque: only equality/inequality is meaningful, and numeric
     identities may differ across optimizations and execution tiers.
-    IEEE 1801-2018 6.50/9.7 uses this distinction to give a level-restore
+    IEEE 1801 6.50/9.7 uses this distinction to give a level-restore
     event priority over concurrent register operations without suppressing
     an explicitly later zero-delay clock at the same numeric timestamp.
   }];
@@ -6218,6 +6294,7 @@ def SimTimeScaleOp : SimOp<"time.scale", [Pure]> {
 
 def SimTimeAddOp
     : SimOp<"time.add", [Pure, SameOperandsAndResultType, Commutative]> {
+  let summary = "add two delays in design-precision ticks";
   let arguments = (ins SimTimeType : $lhs, SimTimeType : $rhs);
   let results = (outs SimTimeType : $result);
   let assemblyFormat = "$lhs `,` $rhs attr-dict";
@@ -6231,6 +6308,7 @@ def SimTimeAddOp
 def SimEventTriggerOp
     : SimOp<"event.trigger",
             [MemoryEffects<[MemWrite<SimSchedulerResource>]>]> {
+  let summary = "trigger a named event immediately or schedule its occurrence";
   let arguments = (ins SimEventType : $event, Optional<SimTimeType>:$delay,
                        BoolAttr : $nonblocking,
                        OptionalAttr<SimEventSiteAttr>:$site,
@@ -6369,7 +6447,7 @@ def SimEventSnapshotRegisterOp : SimOp<"event.snapshot.register", [
   ]> {
   let summary = "retain a pure event-time state snapshot sampler";
   let description = [{
-    IEEE 1801-2018 6.50 requires retention data and conditions at the control
+    IEEE 1801 6.50 requires retention data and conditions at the control
     event. Values contain primaries, encounter-time initial results, optional
     iff observers and one pure sampler, in that order. The sampler returns
     the concatenated target payload, with the first target in the low bits.
@@ -6420,7 +6498,7 @@ def SimEventSnapshotFlushOp : SimOp<"event.snapshot.flush", [
   ]> {
   let summary = "commit pending event snapshots after a complete publication";
   let description = [{
-    A memory and scheduling barrier for IEEE 1801-2018 6.50 event-time state
+    A memory and scheduling barrier for IEEE 1801 6.50 event-time state
     transfers. It may read and write any retained destination, including a
     registration installed by another activation. Keep the broad effects
     through optimization and lower to the explicit runtime flush service.
@@ -6442,6 +6520,12 @@ class SimSuspendOp<string mnemonic, dag extraArgs = (ins),
                   ]>
                 ],
                 extraTraits)> {
+  let description = [{
+    Ends the current activation and registers a scheduler wait. When that wait
+    completes, execution resumes at `continuation` with the captured
+    `continuation_operands` as block arguments. `site` preserves continuation
+    identity and `resume_region` optionally selects the resumption region.
+  }];
   let arguments = !con(extraArgs, (ins Variadic<AnyType>:$continuation_operands,
                                       OptionalAttr<SimContinuationSiteAttr>:$site,
                                       OptionalAttr<SimEventRegion>:$resume_region));
@@ -6451,17 +6535,20 @@ class SimSuspendOp<string mnemonic, dag extraArgs = (ins),
 
 def SimSuspendDelayOp : SimSuspendOp<"suspend.delay", (ins SimTimeType:$delay,
     OptionalAttr<SimTimingSiteAttr>:$timing)> {
+  let summary = "suspend for a delay in design-precision ticks";
   let assemblyFormat = [{$delay `to` $continuation
     (`(` $continuation_operands^ `:` type($continuation_operands) `)`)? attr-dict}];
 }
 
 def SimSuspendChangeOp : SimSuspendOp<"suspend.change", (ins AnyType:$watched)> {
+  let summary = "suspend until a watched value changes";
   let assemblyFormat = [{$watched `to` $continuation
     (`(` $continuation_operands^ `:` type($continuation_operands) `)`)? attr-dict `:` type($watched)}];
 }
 
 def SimSuspendEdgeOp : SimSuspendOp<"suspend.edge", (ins
     SimEdgeKind:$edge, AnyType:$watched)> {
+  let summary = "suspend until a watched value observes the requested edge";
   let assemblyFormat = [{$edge $watched `to` $continuation
     (`(` $continuation_operands^ `:` type($continuation_operands) `)`)?
     attr-dict `:` type($watched)}];
@@ -6474,7 +6561,7 @@ def SimSuspendEdgeIffOp : SimSuspendOp<"suspend.edge_iff", (ins
     The condition is a directly addressable packed object. The scheduler
     samples its complete four-state value when the primary event occurs and
     latches a successful occurrence for the waiting process. Changes to the
-    condition alone never resume the process. IEEE 1800-2017 9.4.2.3 writes
+    condition alone never resume the process. IEEE 1800 9.4.2.3 writes
     the primary event with an optional edge identifier -- its `always @(a iff
     enable == 1)` example qualifies a plain value change -- so a `change` edge
     is as ordinary here as a directed one.
@@ -6565,6 +6652,7 @@ def SimSuspendClockSetOp : SimOp<"suspend.clock_set", [
 }
 
 def SimSuspendEventOp : SimSuspendOp<"suspend.event", (ins SimEventType:$event)> {
+  let summary = "suspend until a named event is triggered";
   let assemblyFormat = [{$event `to` $continuation
     (`(` $continuation_operands^ `:` type($continuation_operands) `)`)? attr-dict}];
 }

@@ -7,7 +7,7 @@ include "mlir/IR/EnumAttr.td"
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/BuiltinAttributes.td"
 
-// IEEE 1800-2023 event regions, in scheduling order.  We keep every region
+// IEEE 1800 event regions, in scheduling order.  We keep every region
 // distinct even when an optimization later proves that adjacent queues may be
 // coalesced.
 def TalosRegion_Preponed     : I32EnumAttrCase<"Preponed",     0,  "preponed">;
