@@ -24,6 +24,7 @@ cmake.build-type = "Release"
 cmake.define.TALOS_INCLUDE_TESTS = "OFF"
 build.targets = ["talos", "talos-cov"]
 install.components = ["talos"]
+install.strip = true
 wheel.packages = ["python/talos_sv"]
 wheel.install-dir = "talos_sv"
 wheel.py-api = "py2.py3"

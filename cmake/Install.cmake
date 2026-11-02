@@ -9,16 +9,15 @@ install(TARGETS talos talos-cov
 install(TARGETS talos-opt talos-translate
   RUNTIME DESTINATION bin COMPONENT talos-dev)
 if(WIN32)
-  # The build already stages SDK DLLs beside each tool. Resolve them at install
-  # time, after the build, and preserve the same executable-relative lookup.
-  file(GENERATE OUTPUT "${PROJECT_BINARY_DIR}/InstallTalosDLLs.cmake" CONTENT "
-    file(GLOB dlls \"$<TARGET_FILE_DIR:talos>/*.dll\")
-    if(dlls)
-      file(INSTALL DESTINATION \"\${CMAKE_INSTALL_PREFIX}/bin\"
-        TYPE FILE FILES \${dlls})
-    endif()
-  ")
-  install(SCRIPT "${PROJECT_BINARY_DIR}/InstallTalosDLLs.cmake" COMPONENT talos)
+  # Stage the selected dependencies directly. An existing build directory may
+  # still have obsolete ICU DLLs beside its tools.
+  install(CODE "
+    execute_process(COMMAND \"${CMAKE_COMMAND}\"
+      \"-DSDK=${TALOS_LLVM_DIST_DIR}\"
+      \"-DDIRECTORIES=\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/bin\"
+      -P \"${PROJECT_SOURCE_DIR}/cmake/StageWindowsDLLs.cmake\"
+      COMMAND_ERROR_IS_FATAL ANY)
+  " COMPONENT talos)
 endif()
 install(DIRECTORY "${PROJECT_BINARY_DIR}/lib/talos/include"
   DESTINATION lib/talos COMPONENT talos)

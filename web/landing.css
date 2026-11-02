@@ -1,6 +1,6 @@
 /* Dracula backgrounds and accents: https://draculatheme.com/contribute
  * Secondary text is brighter to meet text contrast requirements.
- * Static HTML and SVG: no JavaScript, SMIL, foreignObject, or motion paths.
+ * HTML/CSS/SVG animation: no SMIL, foreignObject, or motion paths.
  * Four clock cycles (0–40 ns) share one 28.125-second loop.
  * Each 10 ns cycle takes 7.03125s: two successive 0.8× slowdowns.
  * The local phase schedule below repeats once per clock cycle:
@@ -41,7 +41,7 @@ html, body { margin: 0; min-width: 320px; background: var(--background); }
 body { color: var(--text); font-family: var(--sans); -webkit-font-smoothing: antialiased; }
 a { color: inherit; text-decoration: none; }
 svg { display: block; }
-a:focus-visible, .motion-input:focus-visible ~ .landing .motion-toggle { outline: 2px solid var(--active); outline-offset: 5px; border-radius: 4px; }
+a:focus-visible, summary:focus-visible, button:focus-visible, code:focus-visible, .motion-input:focus-visible ~ .landing .motion-toggle { outline: 2px solid var(--active); outline-offset: 5px; border-radius: 4px; }
 .sr-only, .motion-input { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .landing { min-height: 100vh; min-height: 100svh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px clamp(20px, 4.2vw, 80px); }
 .site-header { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-bottom: 24px; flex: none; }
@@ -101,8 +101,8 @@ main { width: 100%; display: flex; justify-content: center; flex: none; }
 .pause-label { display: inline-flex; }
 .play-label { display: none; }
 .trace-progress { position: absolute; height: 1px; inset: auto 0 0; background: #bd93f95c; transform-origin: left; }
-.site-footer { padding: 16px 0 0; text-align: center; flex: none; }
-.destination-links { display: flex; gap: 12px; justify-content: center; }
+.site-footer { position: relative; padding: 16px 0 0; text-align: center; flex: none; }
+.destination-links { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
 .button { display: inline-flex; justify-content: center; align-items: center; gap: 10px; height: 42px; min-width: 165px; padding: 0 16px; border-radius: 6px; font-size: 12px; font-weight: 500; transition: background-color .15s, border-color .15s; }
 .button-primary { background: #bd93f9; border: 1px solid #bd93f9; color: #282a36; }
 .button-primary:hover { background: #bd93f9; border-color: #bd93f9; }
@@ -110,6 +110,20 @@ main { width: 100%; display: flex; justify-content: center; flex: none; }
 .button-secondary { background: #21222c; border: 1px solid #44475a; color: #f8f8f2; }
 .button-secondary:hover { background: #44475a; border-color: #6272a4; }
 .button-arrow { font-size: 15px; margin-left: auto; padding-left: 13px; }
+.download-menu summary { list-style: none; cursor: pointer; user-select: none; }
+.download-menu summary::-webkit-details-marker { display: none; }
+.download-chevron { margin-left: auto; }
+.download-menu[open] .download-chevron { transform: rotate(180deg); }
+.download-options { position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); z-index: 2; width: min(760px, calc(100vw - 36px)); padding: 6px; border: 1px solid var(--rule); border-radius: 8px; background: var(--panel); box-shadow: 0 12px 36px #0008; text-align: left; }
+.download-command { min-width: 0; padding: 10px 12px 12px; }
+.download-command + .download-command { border-top: 1px solid var(--rule); }
+.download-command-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; font-size: 12px; font-weight: 500; }
+.download-command pre { margin: 0; padding: 12px; border: 1px solid var(--rule); border-radius: 5px; background: var(--background); white-space: pre-wrap; overflow-wrap: anywhere; }
+.download-command code { display: block; min-width: 0; white-space: inherit; overflow-wrap: inherit; user-select: all; font-family: var(--mono); font-size: 13px; line-height: 1.7; }
+.copy-command { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border: 1px solid var(--rule); border-radius: 5px; background: var(--background); color: var(--dim); cursor: pointer; }
+.copy-command:hover { background: var(--rule); color: var(--text); }
+.copy-check, .copy-command.copied .copy-icon { display: none; }
+.copy-command.copied .copy-check { display: block; color: var(--observed); }
 .phase { opacity: 0; animation-duration: var(--cycle); animation-delay: var(--offset); animation-timing-function: steps(1, end); animation-iteration-count: infinite; }
 .loop { animation-duration: var(--cycle); animation-delay: var(--offset); animation-iteration-count: infinite; }
 .region-preponed { color: var(--preponed); }
@@ -1020,6 +1034,12 @@ main { width: 100%; display: flex; justify-content: center; flex: none; }
   .button { min-width: 0; height: 40px; padding: 0 13px; font-size: 11px; gap: 8px; }
   .button-arrow { display: none; }
   .destination-links { gap: 10px; }
+}
+@media (max-width: 500px) {
+  .site-footer { width: 100%; }
+  .destination-links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .destination-links .button { width: 100%; }
+  .download-command { padding: 10px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .simulation-frame * { animation-play-state: paused; }

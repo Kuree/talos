@@ -2,7 +2,7 @@ file(GLOB runtime_dlls
   "${SDK}/bin/zlib*.dll" "${SDK}/bin/zstd*.dll" "${SDK}/bin/libzstd*.dll"
   "${SDK}/bin/libxml*.dll" "${SDK}/bin/iconv*.dll" "${SDK}/bin/charset*.dll"
   "${SDK}/bin/liblzma*.dll"
-  "${SDK}/bin/icu*.dll" "${SDK}/bin/msvcp*.dll" "${SDK}/bin/vcruntime*.dll")
+  "${SDK}/bin/msvcp*.dll" "${SDK}/bin/vcruntime*.dll")
 if(NOT runtime_dlls)
   return()
 endif()

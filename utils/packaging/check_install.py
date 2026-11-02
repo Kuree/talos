@@ -4,8 +4,30 @@
 import argparse
 import os
 from pathlib import Path
+import struct
 import subprocess
 import tempfile
+
+
+def check_windows_binary(stream, machine=None):
+    header = stream.read(64)
+    if header[:2] != b"MZ":
+        raise ValueError("Expected a Windows executable")
+    stream.seek(struct.unpack_from("<I", header, 0x3C)[0])
+    pe = stream.read(24)
+    if pe[:4] != b"PE\0\0" or (machine is not None and
+                                struct.unpack_from("<H", pe, 4)[0] != machine):
+        raise ValueError("Windows executable architecture disagrees with wheel tag")
+    if struct.unpack_from("<II", pe, 12) != (0, 0):
+        raise ValueError("Windows executable must be stripped before packaging")
+
+
+def check_windows_dlls(paths):
+    for path in paths:
+        name = Path(path).name.lower()
+        if name.startswith("icu") and name.endswith(".dll"):
+            raise ValueError("Windows packages must use the libxml2 build without ICU")
+
 
 def run(*command, cwd=None):
     result = subprocess.run(command, check=True, text=True, capture_output=True, cwd=cwd)
@@ -30,6 +52,13 @@ def main():
         package = Path(talos_sv.__file__).resolve().parent
         expected = version("talos-sv")
         driver, coverage = "talos", "talos-cov"
+    if os.name == "nt":
+        check_windows_dlls((package / "bin").glob("*.dll"))
+        binaries = [*(package / "bin").glob("talos*.exe"),
+                    *(package / "bin").glob("*.dll")]
+        for binary in binaries:
+            with binary.open("rb") as stream:
+                check_windows_binary(stream)
     # An installed compiler must find its own headers rather than succeeding
     # accidentally through the absolute resource path in the build tree.
     with tempfile.TemporaryDirectory(prefix="talos-wheel-check-") as temporary:

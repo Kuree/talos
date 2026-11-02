@@ -3,11 +3,13 @@ from io import BytesIO
 from pathlib import Path
 import struct
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
 from utils.packaging.dev_version import development_version
 from utils.packaging.check_wheels import check_binary
+from utils.packaging.check_install import check_windows_dlls
 from utils.packaging.publish_dev import publish, validate_archives, validate_wheels
 
 
@@ -30,8 +32,32 @@ class VersionTest(unittest.TestCase):
 
 
 class ReleaseTest(unittest.TestCase):
+    def test_windows_packages_reject_icu_dlls(self):
+        check_windows_dlls(["bin/libxml2.dll", "bin/iconv.dll", "bin/vcruntime140.dll"])
+        for name in ("talos_sv/bin/icudt78.dll", "bin/ICUUC78.DLL"):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "without ICU"):
+                check_windows_dlls([name])
+
+    def test_windows_staging_uses_sdk_xml_without_icu(self):
+        script = Path(__file__).resolve().parents[2] / "cmake/StageWindowsDLLs.cmake"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sdk = root / "sdk"
+            (sdk / "bin").mkdir(parents=True)
+            for name in ("libxml2.dll", "icudt78.dll", "icuuc78.dll",
+                         "iconv.dll", "charset.dll", "vcruntime140.dll", "zstd.dll"):
+                (sdk / "bin" / name).write_text("SDK " + name)
+            output = root / "package/bin"
+            subprocess.run(["cmake", "-DSDK=" + sdk.as_posix(),
+                            "-DDIRECTORIES=" + output.as_posix(), "-P", str(script)],
+                           check=True, capture_output=True, text=True)
+            self.assertEqual({path.name for path in output.iterdir()},
+                             {"libxml2.dll", "iconv.dll", "charset.dll",
+                              "vcruntime140.dll", "zstd.dll"})
+            self.assertEqual((output / "libxml2.dll").read_text(), "SDK libxml2.dll")
+
     def test_native_windows_architecture_must_match_tag(self):
-        executable = bytearray(134)
+        executable = bytearray(152)
         executable[:2] = b"MZ"
         struct.pack_into("<I", executable, 0x3C, 128)
         executable[128:132] = b"PE\0\0"
@@ -39,6 +65,20 @@ class ReleaseTest(unittest.TestCase):
         check_binary(BytesIO(executable), "win_arm64")
         with self.assertRaises(ValueError):
             check_binary(BytesIO(executable), "win_amd64")
+
+    def test_windows_wheels_reject_unstripped_executables(self):
+        for machine, platform in ((0x8664, "win_amd64"), (0xAA64, "win_arm64")):
+            with self.subTest(platform=platform):
+                executable = bytearray(152)
+                executable[:2] = b"MZ"
+                struct.pack_into("<I", executable, 0x3C, 128)
+                executable[128:132] = b"PE\0\0"
+                struct.pack_into("<H", executable, 132, machine)
+                struct.pack_into("<II", executable, 140, 152, 1)
+                with self.assertRaisesRegex(ValueError, "must be stripped"):
+                    check_binary(BytesIO(executable), platform)
+                struct.pack_into("<II", executable, 140, 0, 0)
+                check_binary(BytesIO(executable), platform)
 
     def test_old_rerun_cannot_roll_back_newer_release(self):
         current = {"tag_name": "dev", "prerelease": True,

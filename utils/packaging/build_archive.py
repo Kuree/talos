@@ -74,9 +74,7 @@ def main():
         root = Path(temporary) / name
         for component in ("talos", "talos-dev"):
             command = ["cmake", "--install", str(build), "--prefix", str(root),
-                       "--config", "Release", "--component", component]
-            if sys.platform != "win32":
-                command.append("--strip")
+                       "--config", "Release", "--component", component, "--strip"]
             subprocess.run(command, check=True)
         bundle_dependencies(build, root)
         archive = Path(shutil.make_archive(str(output), archive_format, temporary, name))
