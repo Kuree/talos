@@ -13,6 +13,7 @@
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/Support/SaveAndRestore.h"
 
 #include <optional>
 
@@ -2643,6 +2644,55 @@ UnitLowering::lowerSystemCall(semantic::SVCallExpressionOp op) {
       rounded =
           arith::TruncIOp::create(builder, location, i32, *rounded).getResult();
     return convertResult(*rounded);
+  }
+
+  // IEEE 1800-2023 17.7.2: see synthesizeFreeCheckerVariables.
+  if (name == "$talos_free_random") {
+    std::optional<uint64_t> packed = getSemanticPackedWidth(
+        op->getAttrOfType<TypeAttr>("semantic_type").getValue());
+    unsigned width = packed.value_or(0);
+    IntegerType wide = builder.getIntegerType(width);
+    Value value = constant(wide, 0);
+    for (unsigned low = 0; low < width; low += 64) {
+      Value word = sim::SimRandomNextOp::create(builder, location,
+                                                builder.getI64Type(), context);
+      Value part = word;
+      if (width > 64)
+        part = arith::ExtUIOp::create(builder, location, wide, word);
+      else if (width < 64)
+        part = arith::TruncIOp::create(builder, location, wide, word);
+      value = arith::OrIOp::create(
+          builder, location, value,
+          arith::ShLIOp::create(builder, location, part, constant(wide, low)));
+    }
+    return convertResult(value);
+  }
+  if (name == "$talos_free_solve") {
+    // The solve reads sampled values, while what it assigns is current
+    // (17.7.2). An unsuccessful solution attempt leaves any values, and its
+    // failures are reported by the assume statements in the Observed region.
+    // Each child after the randomize call records an antecedent of `|=>` for
+    // the next tick, in state of the process: `prior = antecedent`.
+    OpBuilder entryBuilder =
+        OpBuilder::atBlockBegin(&function.getBody().front());
+    for (Operation *update : ArrayRef(children).drop_front()) {
+      Operation *prior = getChildren(update).front();
+      FailureOr<Type> type = getNormalizedSemanticType(prior);
+      if (failed(type))
+        return failure();
+      Value initial = createDefaultValue(entryBuilder, location, *type);
+      Value record = sim::SimRefAllocOp::create(
+          entryBuilder, location,
+          sim::RefType::get(function.getContext(), *type), initial);
+      StringRef path = prior->getAttrOfType<StringAttr>("referenced_path");
+      values[path] = record;
+      lvalues[path] = record;
+    }
+    llvm::SaveAndRestore<bool> sampling(sampleAssertionValues, true);
+    for (Operation *child : children)
+      if (failed(lowerExpression(child)))
+        return failure();
+    return dummyTaskResult();
   }
 
   // IEEE 1800-2023 16.13.5: see synthesizeMatchedTrackers. Each record holds

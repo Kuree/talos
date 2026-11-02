@@ -6,6 +6,8 @@
 #include "talos/Dialect/Simulation/SimulationVPIConstantValues.h"
 #include "talos/Reflection/VPIObjectModel.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/StringSet.h"
 
 using namespace mlir;
 
@@ -1013,6 +1015,475 @@ findAssertionClockFlow(Operation *operation,
   if (assertion.getDefaultClockingSymbolAttr() && prefix < children.size())
     return children[prefix];
   return nullptr;
+}
+
+LogicalResult synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
+                                             Builder &builder) {
+  SmallVector<semantic::SVCheckerInstanceBodySymbolOp> bodies;
+  int64_t nextNodeId = 0;
+  root->walk([&](Operation *op) {
+    if (auto id = op->getAttrOfType<IntegerAttr>("node_id"))
+      nextNodeId = std::max(nextNodeId, id.getInt() + 1);
+    if (auto body = dyn_cast<semantic::SVCheckerInstanceBodySymbolOp>(op))
+      bodies.push_back(body);
+  });
+  auto cloneWithFreshNodes = [&](Operation *source) {
+    Operation *copy = source->clone();
+    copy->walk([&](Operation *nested) {
+      if (nested->hasAttr("node_id"))
+        nested->setAttr("node_id", builder.getI64IntegerAttr(nextNodeId++));
+    });
+    return copy;
+  };
+  MLIRContext *context = root.getContext();
+  auto makeCall = [&](Location location, StringRef name, Type type,
+                      ArrayRef<Operation *> children) {
+    OperationState state(location,
+                         semantic::SVCallExpressionOp::getOperationName());
+    state.addAttribute("argument_count",
+                       builder.getI64IntegerAttr(children.size()));
+    state.addAttribute("callee_name", builder.getStringAttr(name));
+    state.addAttribute("constraint_restrictions", builder.getArrayAttr({}));
+    state.addAttribute(
+        "defaulted_arguments",
+        builder.getDenseI64ArrayAttr(SmallVector<int64_t>(children.size(), 0)));
+    for (StringRef flag : {"has_inline_constraints", "has_iterator_expression",
+                           "has_output_arguments", "has_this_class",
+                           "is_signed", "is_super_class"})
+      state.addAttribute(flag, builder.getBoolAttr(false));
+    state.addAttribute("is_system_call", builder.getBoolAttr(true));
+    state.addAttribute("node_id", builder.getI64IntegerAttr(nextNodeId++));
+    state.addAttribute("semantic_type", TypeAttr::get(type));
+    state.addAttribute("subroutine_kind",
+                       builder.getI32IntegerAttr(static_cast<int32_t>(
+                           semantic::SVSubroutineKind::Task)));
+    Block *body = new Block();
+    state.addRegion()->push_back(body);
+    for (Operation *child : children)
+      body->push_back(child);
+    return Operation::create(state);
+  };
+  auto makeNode = [&](Location location, StringRef name,
+                      ArrayRef<NamedAttribute> attributes,
+                      ArrayRef<Operation *> children) {
+    OperationState state(location, name);
+    state.addAttribute("node_id", builder.getI64IntegerAttr(nextNodeId++));
+    state.addAttributes(attributes);
+    Block *body = new Block();
+    state.addRegion()->push_back(body);
+    for (Operation *child : children)
+      body->push_back(child);
+    return Operation::create(state);
+  };
+
+  // Activity belongs to the variable, wherever it is assigned or read: an
+  // assume statement of a child checker can read a variable of its parent
+  // through a formal's actual argument (17.7.2).
+  SmallVector<semantic::SVCheckerInstanceBodySymbolOp> staticBodies;
+  for (semantic::SVCheckerInstanceBodySymbolOp body : bodies)
+    if (!body.getIsProcedural())
+      staticBodies.push_back(body);
+  llvm::StringSet<> assigned;
+  std::function<void(Operation *)> collectTargets = [&](Operation *target) {
+    if (auto path = target->getAttrOfType<StringAttr>("referenced_path")) {
+      assigned.insert(path.getValue());
+      return;
+    }
+    SmallVector<Operation *> nested = getChildren(target);
+    if (isa<semantic::SVConcatenationExpressionOp,
+            semantic::SVStreamingConcatenationExpressionOp>(target)) {
+      for (Operation *part : nested)
+        collectTargets(part);
+    } else if (!nested.empty()) {
+      collectTargets(nested.front());
+    }
+  };
+  for (semantic::SVCheckerInstanceBodySymbolOp body : staticBodies)
+    body->walk([&](semantic::SVAssignmentExpressionOp assignment) {
+      SmallVector<Operation *> sides = getChildren(assignment);
+      if (!sides.empty())
+        collectTargets(sides.front());
+    });
+  // "All free checker variables ... are initialized with unconstrained random
+  // values unless explicitly initialized in their declaration"; those that are
+  // not const and not on the left-hand side of an assignment are active.
+  llvm::StringSet<> active;
+  DenseMap<Operation *, SmallVector<StringRef>> bodyActive;
+  for (semantic::SVCheckerInstanceBodySymbolOp body : staticBodies)
+    for (Operation *member : getChildren(body)) {
+      auto variable = dyn_cast<semantic::SVVariableSymbolOp>(member);
+      if (!variable || !variable.getIsCheckerFreeVariable())
+        continue;
+      if (getChildren(variable).empty()) {
+        Region &initializer = variable->getRegion(0);
+        if (initializer.empty())
+          initializer.emplaceBlock();
+        initializer.front().push_back(makeCall(
+            variable.getLoc(), "$talos_free_random",
+            variable->getAttrOfType<TypeAttr>("semantic_type").getValue(), {}));
+      }
+      StringRef path =
+          variable->getAttrOfType<StringAttr>("hierarchical_name").getValue();
+      if (!assigned.contains(path) && !variable->hasAttr("is_const") &&
+          active.insert(path).second)
+        bodyActive[body].push_back(path);
+    }
+  if (active.empty())
+    return success();
+
+  // "A sampled value of an active checker variable is defined as its current
+  // value", so what a solve chooses is what assertions read.
+  llvm::StringMap<Operation *> activeReads;
+  for (semantic::SVCheckerInstanceBodySymbolOp body : staticBodies)
+    body->walk([&](semantic::SVNamedValueExpressionOp read) {
+      if (active.contains(read.getReferencedPath())) {
+        read->setAttr("talos.current_sampled_value", builder.getUnitAttr());
+        activeReads.try_emplace(read.getReferencedPath(), read);
+      }
+    });
+
+  // Formals of a property instance and local variables have no value outside
+  // the assertion, and the constraint language has no sampled value functions,
+  // so only plain operators over design state reach the solver.
+  auto solvable = [](Operation *expression) {
+    return !expression
+                ->walk([](Operation *nested) {
+                  return isa<semantic::SVNamedValueExpressionOp,
+                             semantic::SVIntegerLiteralOp,
+                             semantic::SVUnbasedUnsizedIntegerLiteralOp,
+                             semantic::SVUnaryExpressionOp,
+                             semantic::SVBinaryExpressionOp,
+                             semantic::SVConditionalExpressionOp,
+                             semantic::SVInsideExpressionOp,
+                             semantic::SVConcatenationExpressionOp,
+                             semantic::SVReplicationExpressionOp,
+                             semantic::SVElementSelectExpressionOp,
+                             semantic::SVRangeSelectExpressionOp,
+                             semantic::SVMemberAccessExpressionOp,
+                             semantic::SVConversionExpressionOp,
+                             semantic::SVValueRangeExpressionOp>(nested)
+                             ? WalkResult::advance()
+                             : WalkResult::interrupt();
+                })
+                .wasInterrupted();
+  };
+  auto booleanOf = [&](Operation *operation) -> Operation * {
+    while (true) {
+      if (auto instance =
+              dyn_cast<semantic::SVAssertionInstanceExpressionOp>(operation)) {
+        if (!instance.getHasExpandedBody() ||
+            instance.getArgumentCount() != 0 ||
+            instance.getLocalVariableCount() != 0)
+          return nullptr;
+        operation = getChildren(instance).front();
+        continue;
+      }
+      auto simple = dyn_cast<semantic::SVSimpleAssertionExprOp>(operation);
+      if (!simple || simple.getHasRepetition())
+        return nullptr;
+      SmallVector<Operation *> children = getChildren(simple);
+      if (children.size() != 1)
+        return nullptr;
+      if (isa<semantic::SVAssertionInstanceExpressionOp>(children.front())) {
+        operation = children.front();
+        continue;
+      }
+      return solvable(children.front()) ? children.front() : nullptr;
+    }
+  };
+  std::function<bool(Operation *, Operation *)> sameClock =
+      [&](Operation *left, Operation *right) {
+        if (left->getName() != right->getName())
+          return false;
+        for (StringRef name :
+             {"referenced_path", "edge_kind", "has_iff", "operator_kind",
+              "constant_value", "callee_name"})
+          if (left->getAttr(name) != right->getAttr(name))
+            return false;
+        SmallVector<Operation *> leftChildren = getChildren(left);
+        SmallVector<Operation *> rightChildren = getChildren(right);
+        if (leftChildren.size() != rightChildren.size())
+          return false;
+        for (auto [leftChild, rightChild] :
+             llvm::zip_equal(leftChildren, rightChildren))
+          if (!sameClock(leftChild, rightChild))
+            return false;
+        return true;
+      };
+
+  unsigned nextSolve = 0;
+  for (semantic::SVCheckerInstanceBodySymbolOp body : staticBodies) {
+    auto own = bodyActive.find(body);
+    if (own == bodyActive.end())
+      continue;
+    llvm::StringSet<> ownActive;
+    for (StringRef path : own->second)
+      ownActive.insert(path);
+
+    // The assume set: assume statements of this checker and its children that
+    // reference an active variable of this checker, without a const cast. Any
+    // other form is still checked, as there is "no requirement that a solution
+    // be found if it exists".
+    struct Constraint {
+      Operation *antecedent;
+      Operation *consequent;
+      bool previousTick;
+    };
+    struct ClockGroup {
+      Operation *clock;
+      SmallVector<Constraint> constraints;
+    };
+    SmallVector<ClockGroup> groups;
+    body->walk([&](semantic::SVConcurrentAssertionStatementOp assertion) {
+      if (assertion.getAssertionKind() != semantic::SVAssertionKind::Assume)
+        return;
+      bool constCast = false;
+      bool readsActive = false;
+      assertion->walk([&](Operation *nested) {
+        if (auto cast = nested->getAttrOfType<BoolAttr>("is_const_cast");
+            cast && cast.getValue())
+          constCast = true;
+        if (auto read = dyn_cast<semantic::SVNamedValueExpressionOp>(nested);
+            read && ownActive.contains(read.getReferencedPath()))
+          readsActive = true;
+      });
+      if (constCast || !readsActive)
+        return;
+      SmallVector<Operation *> children = getChildren(assertion);
+      size_t index = static_cast<size_t>(assertion.getHasDefaultDisable()) +
+                     static_cast<size_t>(
+                         assertion.getHasContextualClock().value_or(false)) +
+                     static_cast<size_t>(static_cast<bool>(
+                         assertion.getDefaultClockingSymbolAttr()));
+      if (index >= children.size())
+        return;
+      Operation *property = children[index];
+      while (true) {
+        if (auto instance =
+                dyn_cast<semantic::SVAssertionInstanceExpressionOp>(property)) {
+          if (!instance.getHasExpandedBody() ||
+              instance.getArgumentCount() != 0 ||
+              instance.getLocalVariableCount() != 0)
+            break;
+          property = getChildren(instance).front();
+        } else if (isa<semantic::SVClockingAssertionExprOp,
+                       semantic::SVDisableIffAssertionExprOp>(property)) {
+          property = getChildren(property).back();
+        } else if (auto simple =
+                       dyn_cast<semantic::SVSimpleAssertionExprOp>(property);
+                   simple && !simple.getHasRepetition() &&
+                   getChildren(simple).size() == 1 &&
+                   isa<semantic::SVAssertionInstanceExpressionOp>(
+                       getChildren(simple).front())) {
+          property = getChildren(simple).front();
+        } else {
+          break;
+        }
+      }
+      Operation *clock = findAssertionClockFlow(property, assertion);
+      if (!clock)
+        return;
+      ClockGroup *group = nullptr;
+      for (ClockGroup &candidate : groups)
+        if (sameClock(candidate.clock, clock))
+          group = &candidate;
+      if (!group) {
+        groups.push_back({clock, {}});
+        group = &groups.back();
+      }
+      if (Operation *boolean = booleanOf(property)) {
+        group->constraints.push_back({nullptr, boolean, false});
+      } else if (auto binary =
+                     dyn_cast<semantic::SVBinaryAssertionExprOp>(property)) {
+        SmallVector<Operation *> operands = getChildren(binary);
+        bool overlapped =
+            binary.getOperatorKind() ==
+            semantic::SVAssertionBinaryOperator::OverlappedImplication;
+        bool nonoverlapped =
+            binary.getOperatorKind() ==
+            semantic::SVAssertionBinaryOperator::NonOverlappedImplication;
+        Operation *antecedent =
+            operands.size() == 2 ? booleanOf(operands.front()) : nullptr;
+        Operation *consequent =
+            operands.size() == 2 ? booleanOf(operands.back()) : nullptr;
+        if ((overlapped || nonoverlapped) && antecedent && consequent)
+          group->constraints.push_back({antecedent, consequent, nonoverlapped});
+      }
+    });
+
+    // The solve runs from the enclosing module, ahead of the checker's Reactive
+    // processes and of the Observed region (17.7.2, 17.7.3).
+    auto owner = body->getParentOfType<semantic::SVInstanceBodySymbolOp>();
+    if (!owner) {
+      emitError(getSemanticLocation(body))
+          << "IEEE 1800-2023 17.7.2 free checker variables need an enclosing "
+             "instance";
+      return failure();
+    }
+    for (ClockGroup &group : groups) {
+      // A variable only assumptions the solver cannot read constrain "may be
+      // updated", and keeping it holds them more often than a random draw
+      // would.
+      if (group.constraints.empty())
+        continue;
+      Location location = group.clock->getLoc();
+      unsigned solveIndex = nextSolve++;
+      // A clocking block's event fires in the Observed region, where its inputs
+      // are sampled (14.13), too late for a solve: wait on the signal behind
+      // it.
+      Operation *clock = cloneWithFreshNodes(group.clock);
+      SmallVector<Operation *> clockChildren = getChildren(clock);
+      if (auto signal = dyn_cast<semantic::SVSignalEventControlOp>(clock);
+          signal && clockChildren.size() == 1 &&
+          clockChildren.front()->hasAttr("clocking_block_event")) {
+        Operation *event = clockChildren.front();
+        auto path = event->getAttrOfType<StringAttr>("clocking_event_path");
+        auto symbol =
+            event->getAttrOfType<SymbolRefAttr>("clocking_event_symbol");
+        auto edge = event->getAttrOfType<IntegerAttr>("clocking_event_edge");
+        Attribute type;
+        if (path && symbol && edge)
+          root->walk([&](Operation *candidate) {
+            if (!isa<semantic::SVVariableSymbolOp, semantic::SVNetSymbolOp>(
+                    candidate) ||
+                candidate->getAttr("hierarchical_name") != path)
+              return WalkResult::advance();
+            type = candidate->getAttr("semantic_type");
+            return WalkResult::interrupt();
+          });
+        if (type) {
+          signal->setAttr("edge_kind", edge);
+          event->getBlock()->push_back(makeNode(
+              location, semantic::SVNamedValueExpressionOp::getOperationName(),
+              {builder.getNamedAttr("is_signed", builder.getBoolAttr(false)),
+               builder.getNamedAttr("referenced_path", path),
+               builder.getNamedAttr("referenced_symbol", symbol),
+               builder.getNamedAttr("semantic_type", type)},
+              {}));
+          event->erase();
+        }
+      }
+      // std::randomize(v...) with {c; a -> c; prior -> c;}, then prior = a: `a
+      // |=> c` constrains this tick only if `a` held at the previous one. A
+      // variable of a child checker that these constraints read is solved
+      // jointly with this checker's, so the order of the two solves does not
+      // matter.
+      llvm::MapVector<StringRef, Operation *> targets;
+      for (StringRef path : own->second)
+        if (Operation *read = activeReads.lookup(path))
+          targets.try_emplace(path, read);
+      SmallVector<Operation *> items;
+      SmallVector<Operation *> updates;
+      for (auto [index, constraint] : llvm::enumerate(group.constraints)) {
+        for (Operation *side : {constraint.antecedent, constraint.consequent})
+          if (side)
+            side->walk([&](semantic::SVNamedValueExpressionOp read) {
+              if (active.contains(read.getReferencedPath()))
+                targets.try_emplace(read.getReferencedPath(), read);
+            });
+        Operation *consequent = makeNode(
+            location, semantic::SVExpressionConstraintOp::getOperationName(),
+            {builder.getNamedAttr("is_soft", builder.getBoolAttr(false))},
+            {cloneWithFreshNodes(constraint.consequent)});
+        if (!constraint.antecedent) {
+          items.push_back(consequent);
+          continue;
+        }
+        Operation *guard = cloneWithFreshNodes(constraint.antecedent);
+        if (constraint.previousTick) {
+          // Process-local state, bound by the lowering of `$talos_free_solve`:
+          // it is no object of the design, so no dump or VPI scan may list it.
+          Attribute type = constraint.antecedent->getAttr("semantic_type");
+          std::string path = (Twine("$talos_free_prior.") + Twine(solveIndex) +
+                              "." + Twine(index))
+                                 .str();
+          auto makePriorRead = [&]() {
+            return makeNode(
+                location,
+                semantic::SVNamedValueExpressionOp::getOperationName(),
+                {builder.getNamedAttr("is_signed", builder.getBoolAttr(false)),
+                 builder.getNamedAttr("referenced_path",
+                                      builder.getStringAttr(path)),
+                 builder.getNamedAttr("referenced_symbol",
+                                      FlatSymbolRefAttr::get(context, path)),
+                 builder.getNamedAttr("semantic_type", type)},
+                {});
+          };
+          updates.push_back(makeNode(
+              location, semantic::SVAssignmentExpressionOp::getOperationName(),
+              {builder.getNamedAttr("assignment_kind",
+                                    builder.getI32IntegerAttr(0)),
+               builder.getNamedAttr("is_signed", builder.getBoolAttr(false)),
+               builder.getNamedAttr("semantic_type", type)},
+              {makePriorRead(), guard}));
+          guard = makePriorRead();
+        }
+        items.push_back(makeNode(
+            location, semantic::SVImplicationConstraintOp::getOperationName(),
+            {}, {guard, consequent}));
+      }
+      SmallVector<Operation *> randomizeChildren{
+          makeNode(location, semantic::SVConstraintListOp::getOperationName(),
+                   {builder.getNamedAttr(
+                       "item_count", builder.getI64IntegerAttr(items.size()))},
+                   items)};
+      for (const auto &entry : targets) {
+        Operation *target = cloneWithFreshNodes(entry.second);
+        Attribute type = target->getAttr("semantic_type");
+        randomizeChildren.push_back(makeNode(
+            location, semantic::SVAssignmentExpressionOp::getOperationName(),
+            {builder.getNamedAttr("assignment_kind",
+                                  builder.getI32IntegerAttr(0)),
+             builder.getNamedAttr("is_signed", builder.getBoolAttr(false)),
+             builder.getNamedAttr("semantic_type", type)},
+            {target,
+             makeNode(
+                 location,
+                 semantic::SVEmptyArgumentExpressionOp::getOperationName(),
+                 {builder.getNamedAttr("is_signed", builder.getBoolAttr(false)),
+                  builder.getNamedAttr("semantic_type", type)},
+                 {})}));
+      }
+      Operation *randomize =
+          makeCall(location, "randomize",
+                   semantic::IntegralType::get(context, 32, true, false, 31, 0,
+                                               semantic::SVIntegralFlavor::Int),
+                   randomizeChildren);
+      randomize->setAttr("argument_count",
+                         builder.getI64IntegerAttr(targets.size()));
+      randomize->setAttr("defaulted_arguments",
+                         builder.getDenseI64ArrayAttr(
+                             SmallVector<int64_t>(targets.size(), 0)));
+      randomize->setAttr("has_inline_constraints", builder.getBoolAttr(true));
+      randomize->setAttr("subroutine_kind", builder.getI32IntegerAttr(0));
+      SmallVector<Operation *> arguments{randomize};
+      llvm::append_range(arguments, updates);
+      Operation *solve = makeCall(location, "$talos_free_solve",
+                                  semantic::VoidType::get(context), arguments);
+      Operation *statement = makeNode(
+          location, semantic::SVExpressionStatementOp::getOperationName(), {},
+          {solve});
+      Operation *timed =
+          makeNode(location, semantic::SVTimedStatementOp::getOperationName(),
+                   {}, {clock, statement});
+      SmallVector<NamedAttribute> blockAttributes{
+          builder.getNamedAttr(
+              SymbolTable::getSymbolAttrName(),
+              builder.getStringAttr(
+                  (Twine("__talos_free_solve_") + Twine(solveIndex)).str())),
+          builder.getNamedAttr("procedure_kind",
+                               builder.getI32IntegerAttr(static_cast<int32_t>(
+                                   semantic::SVProceduralBlockKind::Always)))};
+      for (StringRef name :
+           {"hierarchical_name", "time_precision_fs", "time_unit_fs"})
+        if (Attribute value = owner->getAttr(name))
+          blockAttributes.push_back(builder.getNamedAttr(name, value));
+      owner->getRegion(0).front().push_back(makeNode(
+          location, semantic::SVProceduralBlockSymbolOp::getOperationName(),
+          blockAttributes, {timed}));
+    }
+  }
+  return success();
 }
 
 LogicalResult synthesizeMatchedTrackers(semantic::SVRootSymbolOp root,

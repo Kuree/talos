@@ -919,7 +919,8 @@ bool UnitLowering::isSampledReference(Value reference) {
       break;
     root = view->getOperand(0);
   }
-  if (root.getDefiningOp<sim::SimRefAllocOp>())
+  if (currentValueReferences.contains(root) ||
+      root.getDefiningOp<sim::SimRefAllocOp>())
     return false;
   if (auto argument = dyn_cast<BlockArgument>(root);
       argument && argument.getOwner() == &function.getBody().front())
@@ -3020,7 +3021,11 @@ FailureOr<Value> UnitLowering::lowerExpression(Operation *op, bool lvalue) {
   }
   if (auto variable = sim::get<sim::metadata::RandomVariable>(op)) {
     const APInt &indexValue = variable.getValue();
-    if (lvalue || indexValue.isNegative() || indexValue.getActiveBits() > 64 ||
+    // Assertion sampling requests an addressable base even for an rvalue
+    // select, and a candidate of the solve for a free checker variable has only
+    // a value.
+    if ((lvalue && !sampleAssertionValues) || indexValue.isNegative() ||
+        indexValue.getActiveBits() > 64 ||
         indexValue.getZExtValue() >= randomizeCandidateValues.size()) {
       emitError(getSemanticLocation(op))
           << "randomization candidate binding is invalid";

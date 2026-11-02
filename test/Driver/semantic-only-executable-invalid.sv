@@ -1,11 +1,12 @@
 // RUN: not talos -emit-sim %s -o /dev/null 2>&1 | FileCheck %s
 
 // IEEE 1800-2023 17.7.2 randomizes a free checker variable under the
-// checker's assumptions. Until that lands, the source pipeline must reject it
+// checker's assumptions. For an unpacked variable, whose elements are separately
+// active or inactive, that has not landed, so the source pipeline must reject it
 // rather than silently producing an incomplete simulator.
 
 checker activity_checker(input logic activity);
-  rand bit free;
+  rand bit free[2];
 endchecker
 
 module semantic_only_executable_invalid(
@@ -23,4 +24,4 @@ module semantic_only_executable_invalid(
   endspecify
 endmodule
 
-// CHECK: error: IEEE 1800-2023 17.7 free checker variables are not executable yet
+// CHECK: error: IEEE 1800-2023 17.7.2 unpacked free checker variables are not executable yet

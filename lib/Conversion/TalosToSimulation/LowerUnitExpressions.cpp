@@ -669,6 +669,10 @@ UnitLowering::lowerReferencedValue(Operation *op, StringRef path, bool lvalue) {
                         << path;
     return failure();
   }
+  // IEEE 1800-2023 17.7.2: the sampled value of an active free checker variable
+  // is its current value, through any selection of it too.
+  if (sampleAssertionValues && op->hasAttr("talos.current_sampled_value"))
+    currentValueReferences.insert(value);
   if (lvalue)
     return value;
 

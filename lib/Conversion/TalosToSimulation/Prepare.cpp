@@ -398,13 +398,14 @@ static bool isStatefulResolutionSystemCall(StringRef name) {
       .Case("$ferror", true)
       // These calls mutate simulator or design state independently of their
       // apparent expression result.
-      .Cases({"$readmemb", "$readmemh", "$sreadmemb", "$sreadmemh", "$writememb",
-              "$writememh", "$key", "$nokey"},
+      .Cases({"$readmemb", "$readmemh", "$sreadmemb", "$sreadmemh",
+              "$writememb", "$writememh", "$key", "$nokey"},
              true)
       .Cases({"$q_initialize", "$q_add", "$q_remove", "$q_full", "$q_exam"},
              true)
       .Cases({"$timeformat", "$system", "$stop", "$finish"}, true)
       .Cases({"$talos_matched_source", "$talos_matched_tick"}, true)
+      .Cases({"$talos_free_random", "$talos_free_solve"}, true)
       .Cases({"$log", "$nolog", "$reset", "$reset_count", "$reset_value",
               "$input", "$scope", "$showscopes", "$showvars", "$list"},
              true)
@@ -758,6 +759,11 @@ void TalosSimPreparePass::runOnOperation() {
   if (failed(resolveInferredAssertionQueries(semanticRoot, coveragePlanBuilder)) ||
       failed(rebindVirtualInterfaceCallDefaults(semanticRoot, semanticSymbols,
                                                 coveragePlanBuilder))) {
+    signalPassFailure();
+    return;
+  }
+  if (failed(
+          synthesizeFreeCheckerVariables(semanticRoot, coveragePlanBuilder))) {
     signalPassFailure();
     return;
   }

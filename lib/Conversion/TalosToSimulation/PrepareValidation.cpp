@@ -789,11 +789,16 @@ validateSemanticDesign(ModuleOp module, bool pruneUnusedCoverage) {
     }
     if (auto variable = dyn_cast<semantic::SVVariableSymbolOp>(op);
         variable && variable.getIsCheckerFreeVariable()) {
-      emitError(getSemanticLocation(op))
-          << "IEEE 1800-2023 17.7 free checker variables are not "
-             "executable yet";
-      invalid = true;
-      return;
+      // Preparation solves packed variables, which are active or inactive
+      // monolithically. An unpacked one is so per element (17.7.2).
+      auto type = variable->getAttrOfType<TypeAttr>("semantic_type");
+      if (!type || !getSemanticPackedWidth(type.getValue())) {
+        emitError(getSemanticLocation(op))
+            << "IEEE 1800-2023 17.7.2 unpacked free checker variables are not "
+               "executable yet";
+        invalid = true;
+        return;
+      }
     }
     if (auto formal = dyn_cast<semantic::SVFormalArgumentSymbolOp>(op);
         formal && formal.getDirection() != semantic::SVArgumentDirection::In &&

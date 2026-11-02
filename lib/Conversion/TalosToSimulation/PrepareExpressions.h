@@ -92,6 +92,13 @@ synthesizeExplicitDelayedDrivers(semantic::SVRootSymbolOp root,
                                  mlir::Builder &builder,
                                  llvm::StringSet<> &delayedSources);
 
+/// IEEE 1800-2023 17.7.2: give each free variable of a static checker its
+/// initial random value, and for each assume set clock event add a process that
+/// solves the active variables before the Observed region.
+mlir::LogicalResult
+synthesizeFreeCheckerVariables(semantic::SVRootSymbolOp root,
+                               mlir::Builder &builder);
+
 /// IEEE 1800-2023 16.13.5, F.6.1: `@(c)(T.matched)` is true at the first tick of
 /// c after an end point of T. For each use add a process recording the end
 /// points of T and one recording the ticks of c, numbered by `trackers`, and drop
