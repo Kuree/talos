@@ -1,6 +1,4 @@
-// RUN: rm -rf %t && mkdir -p %t
-// RUN: cd %t && talos -O0 --execution-tier=native %s -o native && ./native | FileCheck %s
-// RUN: cd %t && talos -O0 --execution-tier=bytecode %s -o bytecode && ./bytecode | FileCheck %s
+// RUN: talos %s -o %t.exe && %t.exe | FileCheck %s
 
 // IEEE 1800-2023 F.5 on nested properties, tick by tick. Ticks 0 to 5 have
 // a=110100, b=011010, c=001100. Each line counts results per tick.
