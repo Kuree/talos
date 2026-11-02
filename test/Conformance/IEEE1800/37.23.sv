@@ -1,6 +1,5 @@
 // CLAUSE: Nettype declaration: a nettype reports its name, data type and vpiWith resolution function, an alias reports vpiNetTypedefAlias, and a net of it resolves through the function
-// XFAIL: native
-// vpi_get_value on a net of a user-defined real nettype returns 0 in native code while $display and bytecode see the resolved 4.
+// SINCE: 0.1.0
 // RUN: %clang -c -fPIC %S/Inputs/37.23/probe.c -I%resource_dir/include -o %t.helper0.o
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top --vpi=full -O3 --execution-tier=%tier %s %t.helper0.o -o %t.exe
 // RUN: %t.exe

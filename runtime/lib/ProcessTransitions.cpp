@@ -3143,6 +3143,38 @@ extern "C" void talos_rt_v1_scheduler_activate_static_nodes(
     context->schedulerEpoch = 1;
 }
 
+static void commitRealToCanonicalPlaneUnlocked(talos_rt_context *context,
+                                               uint64_t bitOffset,
+                                               uint32_t bitWidth,
+                                               uint64_t newBits) {
+  if (context->stateValue.shared())
+    return;
+  uint32_t staticID = 0;
+  int64_t offset = 0;
+  uint64_t absolute = 0;
+  if (decodeNativeStatic(bitOffset, staticID, offset)) {
+    const NativeStaticState *state = findNativeStaticState(context, staticID);
+    if (!state || offset < 0 ||
+        static_cast<uint64_t>(offset) + bitWidth > state->bitWidth)
+      return;
+    absolute = state->bitOffset + static_cast<uint64_t>(offset);
+  } else if (decodeNativeGlobal(bitOffset, offset) && offset >= 0) {
+    absolute = static_cast<uint64_t>(offset);
+  } else {
+    return;
+  }
+  uint64_t size = context->stateValue.size() * uint64_t{64};
+  if (absolute + bitWidth > size ||
+      absolute + bitWidth > context->stateUnknown.size() * uint64_t{64})
+    return;
+  // IEEE 1800-2017 10.6.2: an overridden target keeps the override's value.
+  if (nativeMaskIntersectsRange(context->forceMask, absolute, bitWidth) ||
+      nativeMaskIntersectsRange(context->assignMask, absolute, bitWidth))
+    return;
+  storePackedBits(context->stateValue, absolute, bitWidth, newBits);
+  storePackedBits(context->stateUnknown, absolute, bitWidth, 0);
+}
+
 extern "C" void talos_rt_v1_scheduler_real_transition(talos_rt_context *context,
                                                       uint64_t bitOffset,
                                                       uint32_t bitWidth,
@@ -3151,6 +3183,17 @@ extern "C" void talos_rt_v1_scheduler_real_transition(talos_rt_context *context,
   if (!context || bitOffset == UINT64_MAX ||
       (bitWidth != 32 && bitWidth != 64) || !oldValue || !newValue)
     return;
+  // A guarded generated store reaches only its own plane, and observers read the
+  // canonical one, so advance that as the integer publication path does. Bits are
+  // compared because -0.0 and 0.0 are no value change but are different values.
+  uint64_t oldBits = 0;
+  uint64_t newBits = 0;
+  std::memcpy(&oldBits, oldValue, bitWidth / 8);
+  std::memcpy(&newBits, newValue, bitWidth / 8);
+  if (oldBits != newBits) {
+    ContextMutexLock lock(context);
+    commitRealToCanonicalPlaneUnlocked(context, bitOffset, bitWidth, newBits);
+  }
   bool changed = false;
   if (bitWidth == 32) {
     float oldReal = 0.0f;
