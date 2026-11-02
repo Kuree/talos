@@ -26,6 +26,7 @@ DIALECTS = {
     "schedule": ["Schedule/ScheduleOps.td"],
     "runtime": ["Runtime/RuntimeOps.td"],
     "sdf": ["SDF/SDFOps.td"],
+    "upf": ["UPF/UPFOps.td"],
     "coverage": ["Coverage/CoverageAttrs.td"],
     "dpi": ["DPI/DPIAttrs.td"],
     "native": ["Native/NativeAttrs.td"],
