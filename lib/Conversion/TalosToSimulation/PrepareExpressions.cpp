@@ -1263,7 +1263,7 @@ void synthesizeProceduralCheckers(semantic::SVRootSymbolOp root,
         Operation *moved = getChildren(procedure).front();
         moved->walk([&](semantic::SVConcurrentAssertionStatementOp assertion) {
           assertion->setAttr("is_procedural", builder.getBoolAttr(true));
-          // 16.14.6.2: an assertion on the clock that resumed its process
+          // 16.14.6: an assertion on the clock that resumed its process
           // starts on this tick. The clock here is the one bound above, unless
           // the assertion's own leading clock differs.
           if (!statement->hasAttr("starts_on_current_clock") || clocks.empty())
@@ -2285,7 +2285,11 @@ LogicalResult resolveInferredAssertionQueries(semantic::SVRootSymbolOp root,
     for (semantic::SVCallExpressionOp query : queries) {
       if (query.getCalleeName() == "$inferred_disable") {
         Operation *replacement = nullptr;
-        if (disable) {
+        SmallVector<Operation *> instantiation = getChildren(query);
+        if (!instantiation.empty()) {
+          replacement = instantiation.front();
+          replacement->remove();
+        } else if (disable) {
           replacement = cloneWithFreshNodes(disable);
         } else {
           OperationState literal(

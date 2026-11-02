@@ -2421,6 +2421,27 @@ FailureOr<Value> UnitLowering::lowerInside(semantic::SVInsideExpressionOp op) {
   };
   std::function<LogicalResult(Value, Location)> addCandidate =
       [&](Value candidate, Location itemLocation) -> LogicalResult {
+    // An assertion samples an array of state element by element.
+    if (auto reference = dyn_cast<sim::RefType>(candidate.getType()))
+      if (auto array =
+              dyn_cast<sim::UnpackedArrayType>(reference.getElementType())) {
+        unsigned count = sim::getAggregateNumElements(array);
+        Type element =
+            sim::RefType::get(function.getContext(), array.getElementType());
+        for (unsigned index = 0; index < count; ++index) {
+          Value position = arith::ConstantOp::create(
+              builder, itemLocation, builder.getI64Type(),
+              builder.getI64IntegerAttr(
+                  std::min(array.getLeft(), array.getRight()) + index));
+          FailureOr<Value> loaded = loadReference(
+              sim::SimRefArrayElementOp::create(builder, itemLocation, element,
+                                                candidate, position),
+              itemLocation);
+          if (failed(loaded) || failed(addCandidate(*loaded, itemLocation)))
+            return failure();
+        }
+        return success();
+      }
     if (auto array = dyn_cast<sim::UnpackedArrayType>(candidate.getType())) {
       unsigned count = sim::getAggregateNumElements(array);
       for (unsigned index = 0; index < count; ++index) {

@@ -2609,6 +2609,8 @@ FailureOr<llvm::StringMap<DescriptorInfo>> materializeDesignDescriptors(
           path[index + 1]->getParentOp() == current &&
           ((isa<semantic::SVInstanceSymbolOp>(current) &&
             isa<semantic::SVInstanceBodySymbolOp>(path[index + 1])) ||
+           (isa<semantic::SVCheckerInstanceSymbolOp>(current) &&
+            isa<semantic::SVCheckerInstanceBodySymbolOp>(path[index + 1])) ||
            (isa<semantic::SVGenericClassDefSymbolOp>(current) &&
             isa<semantic::SVClassTypeOp>(path[index + 1]))))
         continue;

@@ -2870,11 +2870,11 @@ UnitLowering::lowerSequenceEndpointMonitor(ArrayRef<Operation *> roots) {
            failure();
   }
   auto clock = dyn_cast<semantic::SVSignalEventControlOp>(resolvedClock);
-  if (!clock || clock.getHasIff() || getChildren(clock).size() != 1 ||
+  if (!clock || getChildren(clock).size() != (clock.getHasIff() ? 2u : 1u) ||
       !isAddressableExpression(getChildren(clock).front()))
     return emitError(getSemanticLocation(resolvedClock))
                << "sequence endpoint monitor requires one direct signal "
-                  "edge clock without iff",
+                  "edge clock",
            failure();
   FailureOr<FixedSequenceAlternatives> compiled =
       compileFixedSequenceAlternatives(sequence, resolvedClock);
@@ -2925,11 +2925,18 @@ UnitLowering::lowerSequenceEndpointMonitor(ArrayRef<Operation *> roots) {
   Block *sample = addBlock();
   emitBranch(wait);
   setCurrent(wait);
+  llvm::SmallPtrSet<Block *, 8> existing;
+  for (Block &block : function.getBody())
+    existing.insert(&block);
   if (failed(emitEventSuspend(clock, sample)))
     return failure();
-  wait->getTerminator()->setAttr(
-      "resume_region",
-      sim::EventRegionAttr::get(function.getContext(), monitorResumeRegion));
+  // An `iff` condition can add blocks of its own to the wait.
+  for (Block &block : function.getBody())
+    if ((&block == wait || !existing.contains(&block)) && !block.empty() &&
+        sim::isSuspensionOp(&block.back()))
+      block.back().setAttr("resume_region",
+                           sim::EventRegionAttr::get(function.getContext(),
+                                                     monitorResumeRegion));
   setCurrent(sample);
 
   bool savedSampleAssertionValues = sampleAssertionValues;
@@ -3372,6 +3379,30 @@ LogicalResult UnitLowering::lowerConcurrentAssertion(
       return;
     readsEndPoint |= isa<semantic::SVAssertionInstanceExpressionOp>(
         getChildren(call).front());
+  });
+  // A checker formal or a property formal of type `logic` reads a `bit` actual
+  // through a conversion, whose edges are the edges of the actual (9.4.2).
+  op->walk([](semantic::SVSignalEventControlOp event) {
+    SmallVector<Operation *> children = getChildren(event);
+    auto conversion =
+        children.empty()
+            ? semantic::SVConversionExpressionOp{}
+            : dyn_cast<semantic::SVConversionExpressionOp>(children.front());
+    if (!conversion)
+      return;
+    Operation *operand = getChildren(conversion).front();
+    auto integralType = [](Operation *expression) {
+      auto type = expression->getAttrOfType<TypeAttr>("semantic_type");
+      return type ? dyn_cast<semantic::IntegralType>(type.getValue())
+                  : semantic::IntegralType{};
+    };
+    auto to = integralType(conversion);
+    auto from = integralType(operand);
+    if (!to || !from || to.getWidth() != from.getWidth() ||
+        (from.getIsFourState() && !to.getIsFourState()))
+      return;
+    operand->moveBefore(conversion);
+    conversion.erase();
   });
   llvm::SaveAndRestore<sim::EventRegion> homeRegion(
       monitorHomeRegion,
@@ -6682,37 +6713,42 @@ LogicalResult UnitLowering::lowerConcurrentAssertionImpl(
     // next occurrence. A procedure whose own event is that clock reaches the
     // assertion only in such a time step.
     if (!op.getStartsOnCurrentClock().value_or(false)) {
-      if (clockEventList)
-        return emitError(getSemanticLocation(clock))
-                   << "a procedural concurrent assertion whose leading clock "
-                      "differs from the current procedural event requires a "
-                      "static signal clock without iff",
-               failure();
-      Operation *source = clockChildren.front();
-      auto path = source->getAttrOfType<StringAttr>("referenced_path");
-      auto descriptor =
-          path ? descriptorIDs.find(path.getValue()) : descriptorIDs.end();
-      FailureOr<Value> clockReference = lowerExpression(source, true);
-      if (failed(clockReference))
-        return failure();
-      Type element;
-      if (auto reference = dyn_cast<sim::RefType>(clockReference->getType()))
-        element = reference.getElementType();
-      else if (auto net = dyn_cast<sim::NetType>(clockReference->getType()))
-        element = net.getElementType();
-      std::optional<unsigned> width =
-          element ? sim::getPackedWidth(element) : std::nullopt;
-      if (clockEvent.getHasIff() || descriptor == descriptorIDs.end() ||
-          !width || *width == 0)
-        return emitError(getSemanticLocation(clock))
-                   << "a procedural concurrent assertion whose leading clock "
-                      "differs from the current procedural event requires a "
-                      "static signal clock without iff",
-               failure();
-      Value current = sim::SimClockingOutputCurrentOp::create(
-          builder, location, *clockReference,
-          static_cast<sim::EdgeKind>(clockEvent.getEdgeKind()), *width,
-          descriptor->second);
+      // Any member of an event list is an occurrence of the clock (F.3.1).
+      SmallVector<Operation *> members =
+          clockEventList ? getChildren(clock) : SmallVector<Operation *>{clock};
+      Value current;
+      for (Operation *member : members) {
+        auto event = cast<semantic::SVSignalEventControlOp>(member);
+        Operation *source = getChildren(event).front();
+        auto path = source->getAttrOfType<StringAttr>("referenced_path");
+        auto descriptor =
+            path ? descriptorIDs.find(path.getValue()) : descriptorIDs.end();
+        FailureOr<Value> clockReference = lowerExpression(source, true);
+        if (failed(clockReference))
+          return failure();
+        Type element;
+        if (auto reference = dyn_cast<sim::RefType>(clockReference->getType()))
+          element = reference.getElementType();
+        else if (auto net = dyn_cast<sim::NetType>(clockReference->getType()))
+          element = net.getElementType();
+        std::optional<unsigned> width =
+            element ? sim::getPackedWidth(element) : std::nullopt;
+        if (event.getHasIff() || descriptor == descriptorIDs.end() || !width ||
+            *width == 0)
+          return emitError(getSemanticLocation(member))
+                     << "a procedural concurrent assertion whose leading clock "
+                        "differs from the current procedural event requires a "
+                        "static signal clock without iff",
+                 failure();
+        Value occurred = sim::SimClockingOutputCurrentOp::create(
+            builder, location, *clockReference,
+            static_cast<sim::EdgeKind>(event.getEdgeKind()), *width,
+            descriptor->second);
+        current =
+            current ? arith::OrIOp::create(builder, location, current, occurred)
+                          .getResult()
+                    : occurred;
+      }
       Block *wait = addBlock();
       Block *start = addBlock();
       cf::CondBranchOp::create(builder, location, current, start, ValueRange{},

@@ -2234,6 +2234,29 @@ private:
     return nullptr;
   }
 
+  /// The default disable a checker without its own takes from the context of
+  /// its instantiation, for a formal defaulted to $inferred_disable (16.14.7,
+  /// 17.2). A nested checker can take it from further out.
+  const slang::ast::Expression *getInstantiationDefaultDisable() const {
+    const slang::ast::Scope *scope = getCurrentScope();
+    while (scope) {
+      if (const slang::ast::Expression *disable =
+              compilation.getDefaultDisable(*scope))
+        return scope == getCurrentScope() ? nullptr : disable;
+      const slang::ast::Symbol &symbol = scope->asSymbol();
+      if (symbol.kind == slang::ast::SymbolKind::GenerateBlock ||
+          symbol.kind == slang::ast::SymbolKind::GenerateBlockArray) {
+        scope = symbol.getParentScope();
+        continue;
+      }
+      const auto *body = symbol.as_if<slang::ast::CheckerInstanceBodySymbol>();
+      if (!body || !body->parentInstance)
+        return nullptr;
+      scope = body->parentInstance->getParentScope();
+    }
+    return nullptr;
+  }
+
   template <typename Op>
   void addDefaultClocking(NamedAttrList &attrs,
                           const slang::ast::Scope *scope) {
@@ -7915,6 +7938,11 @@ private:
       }
     } else if constexpr (std::same_as<T, slang::ast::CallExpression>) {
       this->visitDefault(node);
+      if (node.isSystemCall() &&
+          node.getSubroutineName() == "$inferred_disable")
+        if (const slang::ast::Expression *disable =
+                getInstantiationDefaultDisable())
+          disable->visit(*this);
       if (const slang::ast::ClockingBlockSymbol *clocking =
               getGlobalClocking(node)) {
         if (const auto *event =
