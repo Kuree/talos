@@ -1066,7 +1066,8 @@ buildFrontendOptions(const InputArgList &args, bool &valid,
 
 static int
 executeCompilation(const InputArgList &args,
-                   const talos::driver::DriverConfiguration &config) {
+                   const talos::driver::DriverConfiguration &config,
+                   bool genericSchedulerRetry = false) {
   SmallVector<std::string> inputs;
   for (const Arg *arg : args.filtered(OPT_INPUT))
     inputs.emplace_back(arg->getValue());
@@ -1168,7 +1169,9 @@ executeCompilation(const InputArgList &args,
     valid = false;
   }
   StringRef nativeScheduler =
-      args.getLastArgValue(OPT_native_scheduler_EQ, "auto");
+      genericSchedulerRetry
+          ? StringRef("generic")
+          : args.getLastArgValue(OPT_native_scheduler_EQ, "auto");
   if (!talos::schedule::symbolizeNativeSchedulerMode(nativeScheduler)) {
     emitDriverError(Twine("unsupported native scheduler '") + nativeScheduler +
                     "'; expected auto, generic, aot, or eval");
@@ -1576,9 +1579,17 @@ executeCompilation(const InputArgList &args,
     nativeOptions.target = targetName == "wasm32"
                                ? talos::driver::TargetKind::Wasm
                                : talos::driver::TargetKind::Native;
-    return succeeded(talos::driver::emitTargetOutput(*module, nativeOptions))
-               ? 0
-               : 1;
+    // A design the automatic scheduler planned for eval can still need a runtime
+    // call in the eval closure, which only final lowering sees. That is no reason
+    // to reject the design: the generic scheduler runs it.
+    if (nativeScheduler == "auto")
+      (*module)->setAttr("talos.eval_closure_retry_allowed",
+                        UnitAttr::get(&context));
+    if (succeeded(talos::driver::emitTargetOutput(*module, nativeOptions)))
+      return 0;
+    if ((*module)->hasAttr("talos.eval_closure_rejected"))
+      return executeCompilation(args, config, /*genericSchedulerRetry=*/true);
+    return 1;
   }
 
   std::string outputFilename = args.getLastArgValue(OPT_o, "-").str();

@@ -1,6 +1,6 @@
 // RUN: talos -O0 --vpi=off %s -o %t.o0
 // RUN: %t.o0 | FileCheck %s
-// RUN: talos -O3 --vpi=off --native-scheduler=generic %s -o %t.o3
+// RUN: talos -O3 --vpi=off %s -o %t.o3
 // RUN: %t.o3 | FileCheck %s
 // RUN: talos -O3 --vpi=off --execution-tier=bytecode %s -o %t.bc
 // RUN: %t.bc | FileCheck %s

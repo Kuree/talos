@@ -303,7 +303,8 @@ bool isEvalClosureRuntimeCall(LLVM::CallOp call, LLVM::LLVMFuncOp function,
   return false;
 }
 
-LogicalResult verifyGeneratedEvalCallClosures(ModuleOp module) {
+LogicalResult verifyGeneratedEvalCallClosures(ModuleOp module,
+                                              bool retryWithGenericScheduler) {
   if (!::talos::schedule::has<::talos::schedule::Field::EvalGenerated>(module))
     return success();
   // Verification does not mutate symbols. Build the index once instead of
@@ -360,6 +361,12 @@ LogicalResult verifyGeneratedEvalCallClosures(ModuleOp module) {
         if (callee->starts_with("talos_rt_")) {
           if (isEvalClosureRuntimeCall(call, function, module))
             return WalkResult::advance();
+          // The automatic scheduler has another choice left: see the driver.
+          if (retryWithGenericScheduler) {
+            module->setAttr("talos.eval_closure_rejected",
+                            UnitAttr::get(module.getContext()));
+            return WalkResult::interrupt();
+          }
           call.emitError("generated eval hot closure calls runtime symbol ")
               << *callee << " in " << function.getSymName();
           return WalkResult::interrupt();
@@ -4299,10 +4306,12 @@ public:
     markTiming("native activation group materialization");
     if (failed(lowerNativeScheduleActionsToLLVM(module)))
       return signalPassFailure();
-    if (failed(verifyGeneratedEvalCallClosures(module))) {
+    if (failed(verifyGeneratedEvalCallClosures(
+            module, module->hasAttr("talos.eval_closure_retry_allowed")))) {
       signalPassFailure();
       return;
     }
+    module->removeAttr("talos.eval_closure_retry_allowed");
     markTiming("eval call closure verification");
     if (!(*groupPromotions)->diagnostics.empty()) {
       OpPassManager promotion(ModuleOp::getOperationName());
