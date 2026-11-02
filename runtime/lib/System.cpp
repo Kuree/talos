@@ -11,8 +11,11 @@
 #include <vector>
 
 #if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #include <process.h>
 #include <stdlib.h>
+#include <windows.h>
 #else
 #include <sys/wait.h>
 #include <unistd.h>
@@ -53,7 +56,9 @@ int32_t environmentInteger(const char *name) {
 
 void setEnvironment(const char *name, const std::string &value) {
 #if defined(_WIN32)
+  // The C runtime's copy for getenv, and the process's for a child it creates.
   _putenv_s(name, value.c_str());
+  SetEnvironmentVariableA(name, value.c_str());
 #else
   setenv(name, value.c_str(), 1);
 #endif
@@ -74,7 +79,35 @@ talos_rt_status resetToTimeZero(talos_rt_context *context, std::string_view valu
   setLastError(context, "$reset is not available on this platform");
   return TALOS_RT_INVALID_ARGUMENT;
 #elif defined(_WIN32)
-  _execv(__argv[0], __argv);
+  // Windows has no exec that keeps the process: _execv ends this one at once,
+  // so a shell or pipe waiting on it would move on without the restarted run.
+  // Run the executable again with its own command line, wait for it, and end
+  // with its status.
+  std::wstring path(MAX_PATH, L'\0');
+  DWORD length = 0;
+  while ((length = GetModuleFileNameW(nullptr, path.data(),
+                                      static_cast<DWORD>(path.size()))) ==
+         path.size())
+    path.resize(path.size() * 2);
+  path.resize(length);
+  std::wstring commandLine = GetCommandLineW();
+  STARTUPINFOW startup{};
+  startup.cb = sizeof(startup);
+  startup.dwFlags = STARTF_USESTDHANDLES;
+  startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+  startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+  startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+  PROCESS_INFORMATION process{};
+  if (length != 0 &&
+      CreateProcessW(path.c_str(), commandLine.data(), nullptr, nullptr, TRUE,
+                     0, nullptr, nullptr, &startup, &process)) {
+    CloseHandle(process.hThread);
+    WaitForSingleObject(process.hProcess, INFINITE);
+    DWORD status = 1;
+    GetExitCodeProcess(process.hProcess, &status);
+    CloseHandle(process.hProcess);
+    _exit(static_cast<int>(status));
+  }
 #elif defined(__APPLE__)
   char path[4096];
   uint32_t size = sizeof(path);
