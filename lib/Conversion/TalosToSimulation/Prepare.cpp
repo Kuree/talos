@@ -3689,9 +3689,12 @@ void TalosSimPreparePass::runOnOperation() {
     // as the global percentages above do.
     auto scaledLimits = [&](IntegerAttr millipercent,
                             SmallVectorImpl<int64_t> &limits) {
+      // In two parts, as a 128-bit division needs a compiler runtime helper
+      // that not every tool links on Windows.
       for (auto [limit, delay] : llvm::zip_equal(limits, normalizedDelays))
-        limit = roundToPrecision(static_cast<int64_t>(
-            static_cast<__int128>(delay) * millipercent.getInt() / 100000));
+        limit =
+            roundToPrecision(delay / 100000 * millipercent.getInt() +
+                             delay % 100000 * millipercent.getInt() / 100000);
     };
     auto sdfRejectPercent =
         path->getAttrOfType<IntegerAttr>("sdf_pulse_reject_millipercent");
