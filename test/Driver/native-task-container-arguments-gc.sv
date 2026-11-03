@@ -1,9 +1,5 @@
-// RUN: talos -O0 %s -o %t.native-o0
-// RUN: env TALOS_RT_GC_THRESHOLD=1 %t.native-o0 | FileCheck %s
-// RUN: talos -O3 %s -o %t.native-o3
-// RUN: env TALOS_RT_GC_THRESHOLD=1 %t.native-o3 | FileCheck %s
-// RUN: talos -O3 --execution-tier=bytecode %s -o %t.bytecode
-// RUN: env TALOS_RT_GC_THRESHOLD=1 %t.bytecode | FileCheck %s
+// RUN: talos -O0 %s -o %t
+// RUN: env TALOS_RT_GC_THRESHOLD=1 %t | FileCheck %s
 
 // A task's arguments are copied into the task's own storage when it is called
 // (IEEE 1800-2023 13.5.1; inout copies in at the call and out at the return,

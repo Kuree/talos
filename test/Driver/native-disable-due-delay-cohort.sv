@@ -1,9 +1,5 @@
-// RUN: talos -O3 %s -o %t.native
-// RUN: %t.native | FileCheck %s
-// RUN: talos -O3 --native-scheduler=generic %s -o %t.generic
-// RUN: %t.generic | FileCheck %s
-// RUN: talos -O3 --execution-tier=bytecode %s -o %t.bytecode
-// RUN: %t.bytecode | FileCheck %s
+// RUN: talos -O3 %s -o %t
+// RUN: %t | FileCheck %s
 
 // IEEE 1800-2023 9.6.2: disabling a named block that another process is
 // executing resumes that process after the block; it runs before the

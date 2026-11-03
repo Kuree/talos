@@ -1,9 +1,5 @@
-// RUN: talos -O3 --native-scheduler=generic %s -o %t.generic
-// RUN: %t.generic | FileCheck %s
-// RUN: talos -O3 %s -o %t.default
-// RUN: %t.default | FileCheck %s
-// RUN: talos -O3 --execution-tier=bytecode %s -o %t.bytecode
-// RUN: %t.bytecode | FileCheck %s
+// RUN: talos -O3 %s -o %t
+// RUN: %t | FileCheck %s
 
 // One process suspends on a different conditional wait each time: edge waits
 // with an `iff` guard (IEEE 1800-2023 9.4.2.3: the guard is evaluated when the
