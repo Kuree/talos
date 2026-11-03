@@ -2128,6 +2128,23 @@ extern "C" void talos_rt_v1_scheduler_signal(talos_rt_context *context,
   }
 }
 
+bool talos_rt_transition_unconsumed_unlocked(const talos_rt_context *context,
+                                             uint64_t stableID) {
+  uint32_t staticID = 0;
+  int64_t offset = 0;
+  return decodeNativeStatic(stableID, staticID, offset) && !context->coverage &&
+         !context->clockOccurrences && !context->exactEvents &&
+         !context->vpiObservationDemand && !context->observerDepth &&
+         !context->observerForcesCanonicalPlane &&
+         context->signalValueSnapshots.empty() &&
+         context->pendingNativeComputedWaiters.empty() &&
+         context->pendingDesignComputedWaiters.empty() &&
+         !talos_rt_has_conditional_signal_waiters(context) &&
+         context->signalSubscriptionObjectFilter
+                 [signalSubscriptionObjectFilterIndex(
+                     TALOS_RT_STABLE_HANDLE_STATIC, staticID)] == 0;
+}
+
 bool publishNativeSignalTransitionUnlocked(
     talos_rt_context *context, uint64_t bitOffset, uint64_t bitWidth,
     const uint8_t *changed, const uint8_t *posedge, const uint8_t *negedge,
@@ -2148,19 +2165,14 @@ bool publishNativeSignalTransitionUnlocked(
   // only needs to activate its exact fanout. In particular, startup functions
   // need not enter snapshot/observer bookkeeping for every initialized word.
   // Keep the normal path whenever any publication-time side effect is live.
-  if (publishedStatic && context->stateValue.shared() &&
-      context->stateUnknown.shared() && !establishesOverride &&
-      context->forceMask.empty() && context->assignMask.empty() &&
-      !context->coverage && !context->clockOccurrences &&
-      !context->exactEvents && !context->vpiObservationDemand &&
-      !context->observerDepth && !context->observerForcesCanonicalPlane &&
-      context->signalValueSnapshots.empty() &&
-      context->pendingNativeComputedWaiters.empty() &&
-      context->pendingDesignComputedWaiters.empty() &&
-      !talos_rt_has_conditional_signal_waiters(context) &&
-      context->signalSubscriptionObjectFilter
-              [signalSubscriptionObjectFilterIndex(
-                  TALOS_RT_STABLE_HANDLE_STATIC, publishedStaticID)] == 0 &&
+  // Either fast path below needs a static object nobody consumes; evaluate
+  // that only when one of them can apply.
+  bool unconsumed =
+      publishedStatic && !establishesOverride &&
+      (!context->nativeSchedulePlan || context->stateValue.shared()) &&
+      talos_rt_transition_unconsumed_unlocked(context, bitOffset);
+  if (unconsumed && context->forceMask.empty() && context->assignMask.empty() &&
+      context->stateValue.shared() && context->stateUnknown.shared() &&
       publishStaticAOTSignalTransitionUnlocked(context, bitOffset, bitWidth,
                                                changed, posedge, negedge,
                                                nullptr, false)) {
@@ -2282,6 +2294,19 @@ bool publishNativeSignalTransitionUnlocked(
                         ? unknownLimb | mask
                         : unknownLimb & ~mask;
     }
+  // With no generated fanout either (no native schedule plan), an unconsumed
+  // transition is only its change of state, now in the canonical plane (IEEE
+  // 1800-2023 4.3: executing an update event considers the processes
+  // sensitive to it for evaluation; here there are none; two-tier B2 Q4).
+  // Overridden bits were dropped above and the rest is in the canonical
+  // plane, so force and assign masks do not matter here. Signal diagnostics
+  // count publications, so they keep the full path.
+  if (unconsumed && !context->nativeSchedulePlan &&
+      !context->signalDiagnosticsEnabled) {
+    if (++context->schedulerEpoch == 0)
+      context->schedulerEpoch = 1;
+    return context->schedulerStatus == TALOS_RT_OK;
+  }
   // IEEE 1800-2023 4.6(a), 4.9.3: commit the complete publication image
   // before enabling its synchronous observers. A nested publication from a
   // sampler must not be overwritten by replaying this older update afterward.

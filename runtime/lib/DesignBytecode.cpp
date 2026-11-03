@@ -1366,7 +1366,15 @@ inline bool executeFastOp(const FastOp &op, uint8_t *data,
     storePackedBits(context->stateUnknown, at, op.width, newUnknown);
     talos_rt_sync_native_state_range_unlocked(context, at, op.width);
     uint64_t differs = (oldValue ^ newValue) | (oldUnknown ^ newUnknown);
-    if (differs != 0) {
+    // A change nothing consumes is only its new value, already stored (IEEE
+    // 1800-2023 4.3; two-tier B2 Q4). The masks were checked above.
+    // Signal diagnostics count publications, so they keep the full path.
+    if (differs != 0 && !context->nativeSchedulePlan &&
+        !context->signalDiagnosticsEnabled &&
+        talos_rt_transition_unconsumed_unlocked(context, published)) {
+      if (++context->schedulerEpoch == 0)
+        context->schedulerEpoch = 1;
+    } else if (differs != 0) {
       // transitionEdges, a word at a time.
       uint64_t oldZero = ~oldUnknown & ~oldValue;
       uint64_t oldOne = ~oldUnknown & oldValue;

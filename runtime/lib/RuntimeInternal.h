@@ -3357,6 +3357,15 @@ inline bool talos_rt_unstarted_actor_pending(talos_rt_context *context,
 /// (two-tier B2 S6). Each waiter's latch also tests this overlap itself.
 bool talos_rt_conditional_event_relevant(const talos_rt_context *context,
                                          uint64_t bitOffset, uint64_t bitWidth);
+/// Whether no runtime consumer can observe a value change of the static
+/// object `stableID` names: nothing subscribes to it (the counting filter has
+/// false positives, never false negatives) and no publication-time side
+/// effect (coverage, clock occurrences, exact events, VPI observation,
+/// observer evaluation, snapshots, pending computed or conditional waiters)
+/// is live (two-tier B2 Q4). Force/assign masks and generated fanout (a
+/// native schedule plan) are the caller's to check.
+bool talos_rt_transition_unconsumed_unlocked(const talos_rt_context *context,
+                                             uint64_t stableID);
 
 /// Whether `waiter` holds a registered conditional (`iff` or level) wait. Such
 /// a wait registers no signal subscription, so ending it must check this as
