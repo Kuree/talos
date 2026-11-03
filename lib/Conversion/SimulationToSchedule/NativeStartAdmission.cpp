@@ -250,14 +250,6 @@ LogicalResult NativePipelineAnalysis::admitStartedOwners() {
     if (!runsContinuation)
       return reject("entry-prefix");
     initial = *runsContinuation;
-    // A time-zero activation must share the route of every wake that can
-    // precede it: an input change before it schedules no second evaluation,
-    // since the process is not yet suspended at its event control (9.2.2.2,
-    // 9.4.2, 4.3). Only a static eval island keeps runtime writers'
-    // transitions off the runtime nodes of generated owners; elsewhere such
-    // an owner keeps its ordinary first activation.
-    if (initial && !staticEvalIsland)
-      return reject("time-zero-route");
     if (runtimeCheckpointContinuations.contains(
             {codeUnit.getUInt(), continuation}))
       return reject("checkpoint");

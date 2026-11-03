@@ -7339,8 +7339,24 @@ FailureOr<bool> makeNativeEvalPlan(
           bridge =
               LLVM::AddressOfOp::create(initializerBuilder, location, pointer,
                                         "__talos_eval_nba_runtime_bridge_v1");
-        return insertValue(initializerBuilder, location, value, bridge,
-                           NativeSchedulePlanField::NBAOrderedBridge);
+        value = insertValue(initializerBuilder, location, value, bridge,
+                            NativeSchedulePlanField::NBAOrderedBridge);
+        // Only a coordinator that checks the word at its NBA cut defines it
+        // (materializeNativeEvalDispatch, which has run by now: the plan
+        // names its coordinator); runtime-calendar coordinators already drain
+        // runtime work there through prepare_eval_nba.
+        assert(
+            (clockKernels.empty() || module.lookupSymbol(evalDispatchName)) &&
+            "plan built before its coordinator");
+        Value yield =
+            module.lookupSymbol(evalRuntimeYieldName)
+                ? LLVM::AddressOfOp::create(initializerBuilder, location,
+                                            pointer, evalRuntimeYieldName)
+                      .getResult()
+                : LLVM::ZeroOp::create(initializerBuilder, location, pointer)
+                      .getResult();
+        return insertValue(initializerBuilder, location, value, yield,
+                           NativeSchedulePlanField::RuntimeYield);
       });
   getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_snapshot_aot", i32,
                            {pointer, pointer});

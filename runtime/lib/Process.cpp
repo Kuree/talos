@@ -168,6 +168,11 @@ struct ProcessAllocationMetadata {
   // A process created at its wait (TALOS_RT_SPAWN_STARTED) whose body has not
   // run yet: the first execution through this instance replays its entry.
   const talos_rt_process_start_v1 *pendingStart = nullptr;
+  // Created at its wait: an admitted generated owner, which should only ever
+  // run through the coordinator (counted under signal diagnostics).
+  bool startedOwner = false;
+  // replayPendingProcessStart is running the skipped entry.
+  bool replayingStart = false;
 };
 
 constexpr size_t kProcessAllocationMetadataOffset =
@@ -216,6 +221,18 @@ bool hasPendingProcessStart(talos_rt_process_instance_v1 *instance) {
   return processMetadata(instance)->pendingStart != nullptr;
 }
 
+void countStartedOwnerBodyActivation(talos_rt_process_instance_v1 *instance,
+                                     talos_rt_context *context) {
+  if (!context || !context->signalDiagnosticsEnabled)
+    return;
+  const ProcessAllocationMetadata *metadata = processMetadata(instance);
+  if (!metadata->startedOwner || metadata->replayingStart)
+    return;
+  ++context->startedOwnerDiagnostics.bodyActivations;
+  if (context->schedulerTime != 0)
+    ++context->startedOwnerDiagnostics.bodyActivationsAfterTimeZero;
+}
+
 talos_rt_status replayPendingProcessStart(talos_rt_process_instance_v1 *instance,
                                           talos_rt_context *context,
                                           talos_rt_execution_tier tier) {
@@ -242,8 +259,10 @@ talos_rt_status replayPendingProcessStart(talos_rt_process_instance_v1 *instance
   if (start->flags & TALOS_RT_PROCESS_START_TIME_ZERO)
     return TALOS_RT_OK;
   talos_rt_fragment_action_v1 action{};
+  metadata->replayingStart = true;
   talos_rt_status status =
       talos_rt_v1_process_instance_execute(instance, context, tier, &action);
+  metadata->replayingStart = false;
   if (status != TALOS_RT_OK)
     return status;
   if (action.kind != TALOS_RT_FRAGMENT_SUSPEND ||
@@ -1512,6 +1531,7 @@ talos_rt_v1_process_instance_execute(talos_rt_process_instance_v1 *instance,
             replayPendingProcessStart(instance, context, requestedTier);
         status != TALOS_RT_OK)
       return status;
+  countStartedOwnerBodyActivation(instance, context);
 
   // `tier` records the executor that owns the shared frame tail, not a future
   // scheduling preference. Perform every transition here so native coroutine
@@ -1848,6 +1868,7 @@ talos_rt_v1_process_spawn(talos_rt_context *context,
     instance->continuation = plan->start->continuation;
     instance->lifecycle = TALOS_RT_PROCESS_SUSPENDED;
     processMetadata(instance)->pendingStart = plan->start;
+    processMetadata(instance)->startedOwner = true;
   }
   if (plan->actor_slot == UINT32_MAX)
     status = talos_rt_v1_scheduler_add_planned(
@@ -2056,6 +2077,28 @@ talos_rt_v1_scheduler_priority_signal_pending(talos_rt_context *context) {
       return 1;
   context->prioritySignalPending = false;
   return 0;
+}
+
+extern "C" uint32_t
+talos_rt_v1_scheduler_runtime_work_pending(talos_rt_context *context,
+                                           uint32_t region) {
+  if (!context)
+    return 1;
+  ContextMutexLock lock(context);
+  // Conservative: any process or design task that may be runnable (their
+  // regions are not indexed here), or an update event of this slot due below
+  // `region` (continuous, gate and path delays; not the coordinator's own
+  // staging). A false positive costs one more coordinator call: the runtime
+  // then finds nothing to run and passes FIRST_CUT (runScheduler).
+  return !context->nativePollCandidates.empty() ||
+                 !context->designPollCandidates.empty() ||
+                 (context->designReadyCohort &&
+                  context->designReadyCohort->valid) ||
+                 nextDueNBABarrierRegionUnlocked(context,
+                                                 /*includeGenerated=*/false) <
+                     region
+             ? 1
+             : 0;
 }
 
 extern "C" uint32_t
@@ -4069,6 +4112,44 @@ adoptScheduledSuspendUnlocked(talos_rt_context *context,
 }
 
 namespace {
+/// Calls the plan's coordinator from the runtime scheduler loop with yield
+/// word `word` (talos_rt_native_schedule_plan.runtime_yield). A coordinator
+/// that stopped at a cut for runtime work is owed a call once the runtime has
+/// nothing left below that cut's region, or earlier for new ingress.
+static talos_rt_status
+callNativeCoordinatorUnlocked(talos_rt_context *context,
+                              const talos_rt_native_schedule_plan *plan,
+                              uint32_t word) {
+  uint32_t *yield = plan->runtime_yield;
+  if (yield)
+    *yield = word;
+  talos_rt_status status =
+      plan->timeslot_coordinator(plan->mutable_state, context);
+  if (yield) {
+    // A coordinator that did not yield ran its deferred owners and committed
+    // its NBA staging.
+    uint32_t result = *yield;
+    context->nativeScheduleCoordinatorYielded =
+        result == TALOS_RT_RUNTIME_YIELD_STAGED ||
+        result == TALOS_RT_RUNTIME_YIELD_DEFERRED;
+    context->nativeScheduleCoordinatorYieldRegion =
+        result == TALOS_RT_RUNTIME_YIELD_DEFERRED ? TALOS_RT_REGION_INACTIVE
+                                                  : TALOS_RT_REGION_OBSERVED;
+    context->nativeScheduleCoordinatorYieldProgress =
+        context->schedulerSlotProgress;
+    *yield = TALOS_RT_RUNTIME_YIELD_COMMIT;
+  }
+  return status;
+}
+
+/// Whether a yielded coordinator waits for runtime work below its cut: it
+/// does until new ingress, Active work that precedes the Inactive region
+/// (IEEE 1800-2023 4.4.2.3, 4.5), needs it.
+static bool coordinatorAwaitsRuntime(const talos_rt_context *context) {
+  return context->nativeScheduleCoordinatorYielded &&
+         !context->nativeScheduleClockIngressPending;
+}
+
 /// Whether the current time slot holds runtime work or bookkeeping that the
 /// loop in runScheduler must perform: every queue, latch and pending flag it
 /// consults before it selects an activation, region or barrier. A new source
@@ -4104,6 +4185,7 @@ bool runtimeSlotWorkPendingUnlocked(const talos_rt_context *context) {
          context->staticNBAAccumulatorsPending ||
          context->staticNBASlowRootsPresent ||
          context->nativeScheduleExternalWritePending ||
+         context->nativeScheduleCoordinatorYielded ||
          !context->nativeScheduleTransientDirtyRoots.empty() ||
          !context->nativeSchedulePersistentDirtyRoots.empty() ||
          talos_rt_covergroup_strobes_pending_unlocked(context) ||
@@ -4530,6 +4612,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
           return TALOS_RT_LAYOUT_MISMATCH;
       }
       if ((context->nativeScheduleClockIngressPending ||
+           context->nativeScheduleCoordinatorYielded ||
            options.stopBeforeNBA) &&
           options.completeNBABarrier == UINT32_MAX &&
           !context->vpiTimeCallbackActive && !context->schedulerRunningFinals &&
@@ -4545,10 +4628,13 @@ talos_rt_status runScheduler(talos_rt_context *context,
         // an owner whose first activation has not yet reached its wait could
         // run as if resumed. Let every never-started actor take that first
         // activation (a legal Active order) before the coordinator runs.
+        // A coordinator that yielded at a cut waits for the runtime's work
+        // below it (4.4.2.3-4.4.2.4, 4.5).
         deferredEvalIngress =
             options.returnGeneratedIngress || options.stopBeforeNBA ||
             ((plan->flags & TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL) &&
              !context->nativeStaticEvalIslandCertified) ||
+            coordinatorAwaitsRuntime(context) ||
             talos_rt_unstarted_actor_pending(context, 0);
         if (!deferredEvalIngress) {
           auto coordinator = plan->timeslot_coordinator;
@@ -4559,7 +4645,14 @@ talos_rt_status runScheduler(talos_rt_context *context,
           NativeAOTMutexScope mutexScope(context);
           if (context->signalDiagnosticsEnabled)
             ++context->signalDiagnostics.evalDispatches;
-          talos_rt_status status = coordinator(plan->mutable_state, context);
+          // Runtime work may still be pending: the coordinator asks at its
+          // cuts (runtime_yield). A single-step caller resumes the generated
+          // driver next, which takes no yield.
+          talos_rt_status status = callNativeCoordinatorUnlocked(
+              context, plan,
+              context->nativeScheduleSingleStep
+                  ? TALOS_RT_RUNTIME_YIELD_COMMIT
+                  : TALOS_RT_RUNTIME_YIELD_ALLOWED);
           if (status != TALOS_RT_OK)
             return status;
           continue;
@@ -5006,9 +5099,17 @@ talos_rt_status runScheduler(talos_rt_context *context,
     limitToKey(vpiPreNBASyncPending, vpiPreNBASyncKey);
     limitToKey(vpiReadOnlySyncPending, covergroupStrobeKey);
     bool designProgress = false;
-    if (deferredEvalIngress && maximumRegion > TALOS_RT_REGION_ACTIVE) {
-      maximumRegion = options.stopBeforeNBA ? TALOS_RT_REGION_NBA
-                                            : TALOS_RT_REGION_INACTIVE;
+    // Pending generated Active work precedes runtime Inactive work; a
+    // coordinator that yielded at a cut waits for runtime work below it.
+    uint32_t evalCutRegion = options.stopBeforeNBA
+                                 ? uint32_t{TALOS_RT_REGION_NBA}
+                             : coordinatorAwaitsRuntime(context)
+                                 ? context->nativeScheduleCoordinatorYieldRegion
+                                 : uint32_t{TALOS_RT_REGION_INACTIVE};
+    if (deferredEvalIngress &&
+        std::tuple{maximumRegion, maximumRank, maximumInsertionSequence} >
+            std::tuple{evalCutRegion, uint32_t{0}, uint64_t{0}}) {
+      maximumRegion = evalCutRegion;
       maximumRank = 0;
       maximumInsertionSequence = 0;
     }
@@ -5047,8 +5148,6 @@ talos_rt_status runScheduler(talos_rt_context *context,
       setSchedulerDrainingReactive(context, false);
       continue;
     }
-    uint32_t evalCutRegion =
-        options.stopBeforeNBA ? TALOS_RT_REGION_NBA : TALOS_RT_REGION_INACTIVE;
     if ((deferredEvalIngress ||
          (options.stopBeforeNBA && !context->schedulerRunningFinals)) &&
         nativeRegion >= evalCutRegion && barrierRegion >= evalCutRegion) {
@@ -5072,8 +5171,20 @@ talos_rt_status runScheduler(talos_rt_context *context,
       NativeAOTMutexScope mutexScope(context);
       if (context->signalDiagnosticsEnabled)
         ++context->signalDiagnostics.evalDispatches;
-      talos_rt_status status =
-          plan->timeslot_coordinator(plan->mutable_state, context);
+      // The coordinator asks again at each cut. If it waited for the runtime
+      // at a cut, this cut is that cut's region (nothing runnable below it),
+      // and the runtime has run nothing since, its query over-reported (it
+      // cannot see regions or runnability): let it pass that first cut.
+      bool firstCut =
+          context->nativeScheduleCoordinatorYielded &&
+          evalCutRegion >= context->nativeScheduleCoordinatorYieldRegion &&
+          context->nativeScheduleCoordinatorYieldProgress ==
+              context->schedulerSlotProgress;
+      talos_rt_status status = callNativeCoordinatorUnlocked(
+          context, plan,
+          context->nativeScheduleSingleStep ? TALOS_RT_RUNTIME_YIELD_COMMIT
+          : firstCut                        ? TALOS_RT_RUNTIME_YIELD_FIRST_CUT
+                                            : TALOS_RT_RUNTIME_YIELD_ALLOWED);
       if (status != TALOS_RT_OK)
         return status;
       continue;

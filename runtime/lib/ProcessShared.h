@@ -78,6 +78,10 @@ void unregisterManagedFrameRoots(talos_rt_process_instance_v1 *instance);
 /// Whether `instance` was created at its wait (TALOS_RT_SPAWN_STARTED) and
 /// its body has not run yet.
 bool hasPendingProcessStart(talos_rt_process_instance_v1 *instance);
+/// Under signal diagnostics, counts an execution of a started (admitted)
+/// owner's process body; an entry replay is not an activation.
+void countStartedOwnerBodyActivation(talos_rt_process_instance_v1 *instance,
+                                     talos_rt_context *context);
 /// Before such an instance first executes in `tier`, runs the entry its
 /// creation skipped. Afterwards the instance is exactly where its first
 /// activation would have left it, or (TIME_ZERO) at its entry.

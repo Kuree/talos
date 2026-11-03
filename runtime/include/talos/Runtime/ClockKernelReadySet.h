@@ -30,5 +30,15 @@ inline void publishClockKernelReady(const talos_rt_native_clock_kernel &kernel,
   }
 }
 
+inline bool clockKernelReadyPending(const talos_rt_native_clock_kernel &kernel,
+                                    uint32_t bit) {
+  if (kernel.reserved & indexedClockKernelReadySet) {
+    const ReadySetLayout layout =
+        clockKernelReadySetLayout(kernel.ingress_word_count);
+    return ReadySetView(kernel.ingress_mask, layout).test(bit);
+  }
+  return (kernel.ingress_mask[bit / 64] >> (bit % 64)) & 1;
+}
+
 } // namespace talos::runtime
 #endif

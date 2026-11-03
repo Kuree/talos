@@ -3850,6 +3850,13 @@ void talos_rt_v1_native_promotion_recheck_buckets(
     talos_rt_native_promotion_invalidate request_recheck, uint64_t bit_offset,
     uint64_t bit_width);
 
+// Values of talos_rt_native_schedule_plan.runtime_yield.
+#define TALOS_RT_RUNTIME_YIELD_COMMIT UINT32_C(0)
+#define TALOS_RT_RUNTIME_YIELD_ALLOWED UINT32_C(1)
+#define TALOS_RT_RUNTIME_YIELD_STAGED UINT32_C(2)
+#define TALOS_RT_RUNTIME_YIELD_FIRST_CUT UINT32_C(3)
+#define TALOS_RT_RUNTIME_YIELD_DEFERRED UINT32_C(4)
+
 typedef struct talos_rt_native_schedule_plan {
   uint32_t size;
   uint64_t graph_layout_checksum;
@@ -3913,6 +3920,24 @@ typedef struct talos_rt_native_schedule_plan {
   // makes their pending work visible without allocating scheduler events.
   const uint32_t *nba_ordered_count;
   const talos_rt_native_ordered_nba_bridge *nba_ordered_bridge;
+  // Generated coordinator yield word (TALOS_RT_RUNTIME_YIELD_*). COMMIT: the
+  // coordinator runs its Inactive owners and commits its NBA staging at its
+  // own quiescence (generated drivers). The runtime scheduler stores ALLOWED
+  // before it calls the coordinator; at each cut the coordinator then asks
+  // talos_rt_v1_scheduler_runtime_work_pending for runtime work that must
+  // precede it and, if any may remain, returns with its ready bits and NBA
+  // staging intact: before its deferred (#0) owners, work below Inactive
+  // (DEFERRED; IEEE 1800-2023 4.4.2.3); before each NBA commit, work below
+  // Observed (STAGED). The runtime's own NBA events count there: they join
+  // the same NBA batch, which the runtime's NBA barrier then performs whole,
+  // this staging included (nba_commit); a later round's NBA events wait until
+  // that batch's Active work is done (4.4.2.4, 4.5).
+  // FIRST_CUT: the runtime
+  // has nothing runnable below the cut it last yielded at; take the first
+  // cut without asking, then ask again (ALLOWED). Null exactly when the
+  // coordinator has no such check (no coordinator, or a runtime-calendar
+  // coordinator, whose prepare_eval_nba already drains runtime work).
+  uint32_t *runtime_yield;
 } talos_rt_native_schedule_plan;
 
 // Serial generated-simulator scheduler. The scheduler owns an instance after
@@ -3995,6 +4020,12 @@ talos_rt_v1_scheduler_priority_signal_pending(talos_rt_context *context);
 // the runtime after closing the current Active/NBA step. This includes a
 // runtime error and pending Postponed coverage work.
 uint32_t talos_rt_v1_scheduler_handoff_pending(talos_rt_context *context);
+// Whether the runtime may still have work of the current time slot in a region
+// below `region` (TALOS_RT_REGION_INACTIVE or TALOS_RT_REGION_OBSERVED). It
+// may over-report, never under-report. Called by a generated coordinator at a
+// cut when runtime_yield is ALLOWED.
+uint32_t talos_rt_v1_scheduler_runtime_work_pending(talos_rt_context *context,
+                                                    uint32_t region);
 // Publish one exact cold continuation after the generated coordinator
 // returns. The callback is invoked outside the hot Tier-1/Tier-2 call graph;
 // its generated thunk resumes the same slot's ready-mask/NBA transaction.

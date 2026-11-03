@@ -3040,6 +3040,35 @@ extern "C" void talos_rt_v1_scheduler_static_transition(
         ++context->signalDiagnostics.publications;
       published = true;
     }
+    // A generated owner's wake is its generated ready bit whoever writes, as
+    // for any other runtime publication: the coordinator runs the owner, not
+    // its process body, at the scheduler's next iteration (Active events in
+    // any order, IEEE 1800-2023 4.7) and stops at its cuts while runtime
+    // work below them remains (4.4.2.3, 4.4.2.4, 4.5). A periodic checkpoint
+    // drain returns generated ingress to its trampoline instead of calling
+    // the coordinator, so there the owner keeps its node and the generic rank
+    // order among the drained work, unless its bit is already pending (for
+    // example its time-zero activation): an owner that has not run yet is not
+    // waiting at its event control, so a second wake adds no activation
+    // (9.2.2.2, 9.4.2).
+    if ((context->nativeSchedulePlan->flags & TALOS_RT_NATIVE_SCHEDULE_EVAL) &&
+        (entry->reserved & TALOS_RT_FANOUT_ROUTE_MASK) ==
+            TALOS_RT_FANOUT_DIRECT &&
+        entry->kernel < context->nativeSchedulePlan->clock_kernel_count) {
+      const talos_rt_native_clock_kernel &kernel =
+          context->nativeSchedulePlan->clock_kernels[entry->kernel];
+      if (entry->merged_bit / 64 >= kernel.ingress_word_count) {
+        context->schedulerStatus = TALOS_RT_INVALID_CONTINUATION;
+        return;
+      }
+      if (!context->nativeScheduleCheckpointDrain) {
+        talos::runtime::publishClockKernelReady(kernel, entry->merged_bit);
+        context->nativeScheduleClockIngressPending = true;
+        continue;
+      }
+      if (talos::runtime::clockKernelReadyPending(kernel, entry->merged_bit))
+        continue;
+    }
     scheduled.signalTriggered = true;
     uint32_t node = entry->compute_node;
     if (node >= context->nativeScheduleNodes.size() ||

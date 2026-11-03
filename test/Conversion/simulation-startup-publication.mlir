@@ -1,5 +1,6 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-suspension),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.llvm.mlir
 // RUN: FileCheck %s --check-prefix=PLAN < %t.llvm.mlir
+// RUN: FileCheck %s --check-prefix=NOYIELD < %t.llvm.mlir
 
 // LRM 9.4.2: pending generated readiness can coalesce, but a newly registered
 // runtime observer must still receive a transient posedge. Three bursts run
@@ -7,6 +8,15 @@
 // at zero; looking only at its final value would miss the observer's wakeup.
 // The generated inverter chain must see each burst's final canonical state.
 // PLAN: __talos_periodic_clock_plan_v1
+// A runtime-calendar coordinator drains runtime work at its NBA cut through
+// prepare_eval_nba, so its plan has no yield word (the last field is null).
+// NOYIELD-NOT: @__talos_eval_runtime_yield_v1
+// NOYIELD-LABEL: llvm.mlir.global internal constant @__talos_aot_schedule_plan_v1()
+// NOYIELD: llvm.insertvalue %{{.+}}, %{{.+}}[40]
+// NOYIELD-NEXT: %[[NO_YIELD:.+]] = llvm.mlir.zero : !llvm.ptr
+// NOYIELD-NEXT: %[[FILLED:.+]] = llvm.insertvalue %[[NO_YIELD]], %{{.+}}[41]
+// NOYIELD-NEXT: llvm.return %[[FILLED]]
+// NOYIELD-NOT: @__talos_eval_runtime_yield_v1
 
 module attributes {
   llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128",

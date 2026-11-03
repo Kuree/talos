@@ -592,6 +592,7 @@ talos_rt_native_schedule_plan makeAOTPlan(AOTTestState &state,
           0,
           0,
           nullptr,
+          nullptr,
           nullptr};
 }
 
@@ -14546,6 +14547,442 @@ TEST(ProcessSpawn, StartedPlanValidationAndReplayMismatch) {
       talos_rt_v1_scheduler_run_aot_nodes(context, nodes, std::size(nodes)),
       TALOS_RT_OK);
   talos_rt_v1_context_destroy(context);
+}
+
+// A generated coordinator in miniature: it runs its ready owner (900),
+// optionally that owner's #0 continuation as a deferred owner (902), stages
+// the owner's NBA and commits it (901), following the runtime_yield protocol
+// at its two cuts as the generated dispatcher does.
+uint32_t *yieldTestWord;
+bool yieldTestStaged;
+bool yieldTestDeferredOwner;
+bool yieldTestDeferredPending;
+bool yieldTestSecondWrite;
+uint64_t yieldTestHandle;
+
+bool yieldTestPassCut(talos_rt_context *context, uint32_t region,
+                      uint32_t yielded) {
+  uint32_t &word = *yieldTestWord;
+  if (word == TALOS_RT_RUNTIME_YIELD_FIRST_CUT) {
+    word = TALOS_RT_RUNTIME_YIELD_ALLOWED;
+    return true;
+  }
+  if (word == TALOS_RT_RUNTIME_YIELD_ALLOWED &&
+      talos_rt_v1_scheduler_runtime_work_pending(context, region)) {
+    word = yielded;
+    return false;
+  }
+  return true;
+}
+
+talos_rt_status yieldTestCoordinator(void *, talos_rt_context *context) {
+  if (!context || !clockCoordinatorIngress || !yieldTestWord)
+    return TALOS_RT_INVALID_ARGUMENT;
+  ++clockCoordinatorCalls;
+  if (*clockCoordinatorIngress) {
+    *clockCoordinatorIngress = 0;
+    schedulerOrder.push_back(900);
+    (yieldTestDeferredOwner ? yieldTestDeferredPending : yieldTestStaged) =
+        true;
+  }
+  if (yieldTestDeferredPending) {
+    if (!yieldTestPassCut(context, TALOS_RT_REGION_INACTIVE,
+                          TALOS_RT_RUNTIME_YIELD_DEFERRED))
+      return TALOS_RT_OK;
+    yieldTestDeferredPending = false;
+    schedulerOrder.push_back(902);
+    yieldTestStaged = true;
+  }
+  if (!yieldTestStaged || !yieldTestPassCut(context, TALOS_RT_REGION_OBSERVED,
+                                            TALOS_RT_RUNTIME_YIELD_STAGED))
+    return TALOS_RT_OK;
+  yieldTestStaged = false;
+  schedulerOrder.push_back(901);
+  return TALOS_RT_OK;
+}
+
+// A testbench process: a blocking write the owner observes (10), then `#0`
+// and, resumed in the Inactive region, optionally a second write (11).
+talos_rt_status yieldTestWriterExecute(talos_rt_process_instance_v1 *instance) {
+  if (!instance || !instance->action || !instance->context)
+    return TALOS_RT_INVALID_ARGUMENT;
+  instance->native_handle = instance;
+  bool first = instance->continuation == 0;
+  if (first || yieldTestSecondWrite) {
+    uint8_t before = first ? 0 : 1;
+    uint8_t after = first ? 1 : 0;
+    talos_rt_v1_scheduler_signal_transition(instance->context, yieldTestHandle,
+                                            1, &before, nullptr, &after,
+                                            nullptr);
+  }
+  schedulerOrder.push_back(first ? 10 : 11);
+  if (!first) {
+    *instance->action = {
+        TALOS_RT_FRAGMENT_TERMINATE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
+    return TALOS_RT_OK;
+  }
+  auto *wait = reinterpret_cast<talos_rt_wait_record_v1 *>(instance->frame);
+  *wait = {TALOS_RT_VERSION, TALOS_RT_SUSPEND_DELAY, 0, 0, 0, 0};
+  *instance->action = {TALOS_RT_FRAGMENT_SUSPEND,
+                       TALOS_RT_SUSPEND_DELAY,
+                       1,
+                       TALOS_RT_ACTION_FRAME_WAIT_RECORD,
+                       0,
+                       48};
+  return TALOS_RT_OK;
+}
+
+// A testbench process that stays in the Active region for a second
+// activation (21) after its first.
+talos_rt_status yieldTestReaderExecute(talos_rt_process_instance_v1 *instance) {
+  if (!instance || !instance->action)
+    return TALOS_RT_INVALID_ARGUMENT;
+  instance->native_handle = instance;
+  if (instance->continuation == 0) {
+    *instance->action = {
+        TALOS_RT_FRAGMENT_CONTINUE, TALOS_RT_SUSPEND_NONE, 1, 0, 0, 0};
+    return TALOS_RT_OK;
+  }
+  schedulerOrder.push_back(21);
+  *instance->action = {
+      TALOS_RT_FRAGMENT_TERMINATE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
+  return TALOS_RT_OK;
+}
+
+// A clean-superstep eval plan (not a static eval island) whose one generated
+// owner waits for any change of state 1 at continuation 1, created already
+// waiting there.
+struct YieldTestDesign {
+  AOTTestState state;
+  uint64_t ingress = 0;
+  uint64_t active = 1;
+  uint32_t yield = 0;
+  talos_rt_native_clock_kernel clocks[1] = {
+      {1, TALOS_RT_WAIT_EDGE_CHANGE, 0, 1, &ingress, 1, 0, &active}};
+  talos_rt_native_merged_fragment merged[1] = {
+      {0, 1, 0, 0, 0, 0, generatedCheckpointCallback}};
+  // State 2 reaches the same owner through a runtime-routed entry.
+  talos_rt_static_fanout_entry fanout[2] = {
+      {1, 0, 1, TALOS_RT_WAIT_EDGE_CHANGE, 1, TALOS_RT_FANOUT_DIRECT, 0, 1, 0,
+       0},
+      {2, 0, 1, TALOS_RT_WAIT_EDGE_CHANGE, 1, TALOS_RT_FANOUT_RUNTIME, 0, 1, 0,
+       0}};
+  talos_rt_native_schedule_plan plan;
+  talos_rt_execution_descriptor_v1 execution{};
+  talos_rt_context *context = nullptr;
+  SchedulerFixture owner{48};
+  StartedOwnerRecord record;
+  talos_rt_process_start_v1 start;
+  talos_rt_process_spawn_plan_v1 spawn;
+  talos_rt_status status = TALOS_RT_INVALID_LIFECYCLE;
+
+  explicit YieldTestDesign(bool timeZero) : plan(makeAOTPlan(state, 1)) {
+    plan.clock_kernels = clocks;
+    plan.clock_kernel_count = 1;
+    plan.merged_fragments = merged;
+    plan.merged_fragment_count = 1;
+    plan.fanout_entries = fanout;
+    plan.fanout_entry_count = std::size(fanout);
+    plan.timeslot_coordinator = yieldTestCoordinator;
+    plan.promotion_invalidate = schedulerInvalidatePromotion;
+    plan.promotion_ready = schedulerPromotionReady;
+    plan.runtime_yield = &yield;
+    plan.flags = TALOS_RT_NATIVE_SCHEDULE_FULLY_STATIC |
+                 TALOS_RT_NATIVE_SCHEDULE_CLEAN_SUPERSTEP |
+                 TALOS_RT_NATIVE_SCHEDULE_EVAL |
+                 TALOS_RT_NATIVE_SCHEDULE_STATIC_CONTROL |
+                 TALOS_RT_NATIVE_SCHEDULE_GENERATED_ACTIONS |
+                 TALOS_RT_NATIVE_SCHEDULE_STATIC_FANOUT;
+    execution.version = TALOS_RT_VERSION;
+    execution.state_bit_count = 2;
+    clockCoordinatorIngress = &ingress;
+    clockCoordinatorWords = 1;
+    clockCoordinatorCalls = 0;
+    yieldTestWord = &yield;
+    yieldTestStaged = false;
+    yieldTestDeferredOwner = false;
+    yieldTestDeferredPending = false;
+    yieldTestSecondWrite = false;
+    schedulerOrder.clear();
+    startedOwnerContinuations.clear();
+    owner.descriptor.native_execute = startedOwnerExecute;
+    owner.descriptor.execution = &execution;
+    if ((status = talos_rt_v1_context_create_for_design(
+             &execution, &context)) != TALOS_RT_OK ||
+        (status = talos_rt_v1_native_state_register_static(context, 1, 0, 1)) !=
+            TALOS_RT_OK ||
+        (status = talos_rt_v1_native_state_register_static(context, 2, 1, 1)) !=
+            TALOS_RT_OK ||
+        (status = talos_rt_v1_scheduler_install_aot(context, &plan)) !=
+            TALOS_RT_OK)
+      return;
+    schedulerWaitHandle = yieldTestHandle =
+        talos_rt_v1_native_state_static_handle(1);
+    schedulerWaitWidth = 1;
+    record = startedOwnerChangeRecord();
+    start = {1,
+             TALOS_RT_ACTION_FRAME_WAIT_RECORD,
+             0,
+             48,
+             &record.header,
+             timeZero ? TALOS_RT_PROCESS_START_TIME_ZERO : 0u,
+             0};
+    spawn = startedOwnerPlan(owner, start);
+    if (talos_rt_v1_process_spawn(context, &spawn, nullptr) == 0) {
+      status = context->schedulerStatus;
+      return;
+    }
+    ContextMutexLock lock(context);
+    status = armStartedNativeAOTActorsUnlocked(context);
+  }
+  ~YieldTestDesign() {
+    if (context)
+      talos_rt_v1_context_destroy(context);
+  }
+};
+
+// IEEE 1800-2023 4.4.2.4, 4.5, 4.7: a runtime writer's change raises the
+// generated owner's ready bit; the coordinator runs the owner at the next
+// scheduler iteration (Active events in any order) but stops at its NBA cut
+// while runtime Active or Inactive work remains, so the NBA region starts
+// only once both are empty. These are the two shapes that failed when the
+// coordinator committed at quiescence: NBA ahead of a pending #0
+// continuation, and an owner activation between two testbench writes.
+TEST(Scheduler, CoordinatorYieldsItsNBACutToRuntimeActiveAndInactiveWork) {
+  for (bool secondWrite : {false, true}) {
+    YieldTestDesign design(/*timeZero=*/false);
+    ASSERT_EQ(design.status, TALOS_RT_OK);
+    talos_rt_context *context = design.context;
+    ASSERT_EQ(context->startedOwnerDiagnostics.staticWaits, 1u);
+    yieldTestSecondWrite = secondWrite;
+    SchedulerFixture writer(7);
+    writer.descriptor.native_execute = yieldTestWriterExecute;
+    ASSERT_EQ(
+        talos_rt_v1_scheduler_add(context, makeSchedulerInstance(writer), 0),
+        TALOS_RT_OK);
+    constexpr talos_rt_native_schedule_node nodes[] = {
+        {0, 0, UINT32_MAX},
+        {0, 1, UINT32_MAX},
+    };
+    ASSERT_EQ(
+        talos_rt_v1_scheduler_run_aot_nodes(context, nodes, std::size(nodes)),
+        TALOS_RT_OK);
+    // The owner ran through the coordinator, never through its body.
+    EXPECT_TRUE(startedOwnerContinuations.empty());
+    EXPECT_EQ(schedulerOrder,
+              secondWrite ? (std::vector<uint64_t>{10, 900, 11, 900, 901})
+                          : (std::vector<uint64_t>{10, 900, 11, 901}));
+    EXPECT_FALSE(context->nativeScheduleCoordinatorYielded);
+    EXPECT_EQ(design.yield, 0u);
+  }
+}
+
+// Without runtime work the coordinator commits at once, and a call from a
+// generated driver (yield word zero) never asks the runtime.
+TEST(Scheduler, CoordinatorCommitsAtOnceWithoutRuntimeWork) {
+  YieldTestDesign design(/*timeZero=*/false);
+  ASSERT_EQ(design.status, TALOS_RT_OK);
+  talos_rt_context *context = design.context;
+  uint8_t before = 0;
+  uint8_t after = 1;
+  talos_rt_v1_scheduler_signal_transition(context, yieldTestHandle, 1, &before,
+                                          nullptr, &after, nullptr);
+  EXPECT_EQ(design.ingress, 1u);
+  constexpr talos_rt_native_schedule_node nodes[] = {
+      {0, 0, UINT32_MAX},
+      {0, 1, UINT32_MAX},
+  };
+  ASSERT_EQ(
+      talos_rt_v1_scheduler_run_aot_nodes(context, nodes, std::size(nodes)),
+      TALOS_RT_OK);
+  EXPECT_EQ(schedulerOrder, (std::vector<uint64_t>{900, 901}));
+  EXPECT_EQ(clockCoordinatorCalls, 1u);
+  EXPECT_FALSE(context->nativeScheduleCoordinatorYielded);
+  // The query is conservative: any runnable runtime process or design task,
+  // or a due update event below the cut. The runtime's own NBA events count
+  // before an NBA commit (Observed), not before deferred owners (Inactive).
+  auto pending = [&](uint32_t region) {
+    return talos_rt_v1_scheduler_runtime_work_pending(context, region);
+  };
+  EXPECT_EQ(pending(TALOS_RT_REGION_OBSERVED), 0u);
+  context->nativePollCandidates.insert(1);
+  EXPECT_EQ(pending(TALOS_RT_REGION_INACTIVE), 1u);
+  context->nativePollCandidates.clear();
+  context->designPollCandidates.insert(1);
+  EXPECT_EQ(pending(TALOS_RT_REGION_INACTIVE), 1u);
+  context->designPollCandidates.clear();
+  ScheduledNBA update;
+  update.dueTime = context->schedulerTime;
+  update.execRegion = TALOS_RT_REGION_NBA;
+  context->scheduledNBAs.push_back(update);
+  EXPECT_EQ(pending(TALOS_RT_REGION_INACTIVE), 0u);
+  EXPECT_EQ(pending(TALOS_RT_REGION_OBSERVED), 1u);
+  context->scheduledNBAs.back().dueTime = context->schedulerTime + 1;
+  EXPECT_EQ(pending(TALOS_RT_REGION_OBSERVED), 0u);
+  context->scheduledNBAs.back().dueTime = context->schedulerTime;
+  context->scheduledNBAs.back().execRegion = TALOS_RT_REGION_ACTIVE;
+  EXPECT_EQ(pending(TALOS_RT_REGION_INACTIVE), 1u);
+  context->scheduledNBAs.clear();
+  EXPECT_EQ(talos_rt_v1_scheduler_runtime_work_pending(
+                nullptr, TALOS_RT_REGION_OBSERVED),
+            1u);
+  // Releasing the plan forgets a yield; its staging went with the plan.
+  context->nativeScheduleCoordinatorYielded = true;
+  talos_rt_release_native_schedule_plan(context);
+  EXPECT_FALSE(context->nativeScheduleCoordinatorYielded);
+}
+
+// Runtime work that follows the NBA region (a Reactive program process) makes
+// the coordinator yield too, since the query cannot tell regions apart. The
+// runtime then finds its Active and Inactive regions empty, has run nothing
+// since, and lets the coordinator pass its cut, so it commits before the
+// Reactive work.
+TEST(Scheduler, CoordinatorCommitsAtTheNBABoundaryDespiteLaterRuntimeWork) {
+  YieldTestDesign design(/*timeZero=*/false);
+  ASSERT_EQ(design.status, TALOS_RT_OK);
+  talos_rt_context *context = design.context;
+  SchedulerFixture program(150);
+  ASSERT_EQ(talos_rt_v1_scheduler_add(context, makeSchedulerInstance(program),
+                                      TALOS_RT_REGION_REACTIVE << 1),
+            TALOS_RT_OK);
+  uint8_t before = 0;
+  uint8_t after = 1;
+  talos_rt_v1_scheduler_signal_transition(context, yieldTestHandle, 1, &before,
+                                          nullptr, &after, nullptr);
+  constexpr talos_rt_native_schedule_node nodes[] = {
+      {0, 0, UINT32_MAX},
+      {0, 1, UINT32_MAX},
+  };
+  ASSERT_EQ(
+      talos_rt_v1_scheduler_run_aot_nodes(context, nodes, std::size(nodes)),
+      TALOS_RT_OK);
+  EXPECT_EQ(schedulerOrder, (std::vector<uint64_t>{900, 901, 150}));
+  EXPECT_EQ(clockCoordinatorCalls, 2u);
+  EXPECT_FALSE(context->nativeScheduleCoordinatorYielded);
+}
+
+// IEEE 1800-2023 4.4.2.3, 4.5: an owner's #0 continuation (a deferred owner
+// in the coordinator) runs only once the Active region is empty, runtime
+// processes included, and before the NBA region. The runtime's own #0 work
+// and the deferred owner are both Inactive events, in either order (4.7).
+TEST(Scheduler, CoordinatorYieldsItsInactiveCutToRuntimeActiveWork) {
+  YieldTestDesign design(/*timeZero=*/false);
+  ASSERT_EQ(design.status, TALOS_RT_OK);
+  talos_rt_context *context = design.context;
+  yieldTestDeferredOwner = true;
+  SchedulerFixture writer(7);
+  writer.descriptor.native_execute = yieldTestWriterExecute;
+  // A testbench process still has Active work (21) when the coordinator
+  // first runs.
+  SchedulerFixture reader(21);
+  reader.descriptor.native_execute = yieldTestReaderExecute;
+  ASSERT_EQ(talos_rt_v1_scheduler_add_ranked(
+                context, makeSchedulerInstance(writer), 0, 0),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add_ranked(
+                context, makeSchedulerInstance(reader), 0, 1),
+            TALOS_RT_OK);
+  constexpr talos_rt_native_schedule_node nodes[] = {
+      {0, 0, UINT32_MAX},
+      {0, 1, UINT32_MAX},
+  };
+  ASSERT_EQ(
+      talos_rt_v1_scheduler_run_aot_nodes(context, nodes, std::size(nodes)),
+      TALOS_RT_OK);
+  EXPECT_EQ(schedulerOrder, (std::vector<uint64_t>{10, 900, 21, 902, 11, 901}));
+  EXPECT_FALSE(context->nativeScheduleCoordinatorYielded);
+  EXPECT_EQ(design.yield, TALOS_RT_RUNTIME_YIELD_COMMIT);
+}
+
+// A runtime-routed entry still wakes the owner's node: it is how generated
+// state reaches runtime waiters, and it raises no generated ready bit.
+TEST(Scheduler, RuntimeRoutedEntryStillWakesItsNode) {
+  YieldTestDesign design(/*timeZero=*/false);
+  ASSERT_EQ(design.status, TALOS_RT_OK);
+  talos_rt_context *context = design.context;
+  constexpr talos_rt_native_schedule_node nodes[] = {
+      {0, 0, UINT32_MAX},
+      {0, 1, UINT32_MAX},
+  };
+  {
+    ContextMutexLock lock(context);
+    ASSERT_EQ(
+        initializeNativeAOTNodesUnlocked(context, nodes, std::size(nodes)),
+        TALOS_RT_OK);
+  }
+  {
+    NativeAOTContextScope active(context);
+    NativeAOTMutexScope locked(context);
+    talos_rt_v1_scheduler_static_transition(context, 2, 0, 1, 0, 0, 1, 0);
+  }
+  EXPECT_EQ(design.ingress, 0u);
+  EXPECT_TRUE(context->scheduledProcesses.front().signalTriggered);
+  EXPECT_TRUE(context->nativeScheduleReadyNodes.test(1));
+  EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);
+}
+
+// IEEE 1800-2023 9.2.2.2, 9.4.2: outside a static eval island too, a
+// time-zero owner's activation is its generated ready bit, which a runtime
+// writer's transition raises again rather than enqueueing the owner's node.
+// A periodic checkpoint drain cannot call the coordinator, so it wakes the
+// node instead, except while the bit is pending: the owner has not run, so it
+// is not waiting at its event control and the wake adds no activation.
+TEST(ProcessSpawn, RuntimeWriterSharesTheTimeZeroOwnersReadyBit) {
+  YieldTestDesign design(/*timeZero=*/true);
+  ASSERT_EQ(design.status, TALOS_RT_OK);
+  talos_rt_context *context = design.context;
+  context->signalDiagnosticsEnabled = true;
+  const auto &counts = context->startedOwnerDiagnostics;
+  EXPECT_EQ(counts.timeZeroReadyBits, 1u);
+  EXPECT_EQ(counts.timeZeroNodes, 0u);
+  EXPECT_EQ(design.ingress, 1u);
+  constexpr talos_rt_native_schedule_node nodes[] = {
+      {0, 0, UINT32_MAX},
+      {0, 1, UINT32_MAX},
+  };
+  {
+    ContextMutexLock lock(context);
+    ASSERT_EQ(
+        initializeNativeAOTNodesUnlocked(context, nodes, std::size(nodes)),
+        TALOS_RT_OK);
+  }
+  const ScheduledProcess &owner = context->scheduledProcesses.front();
+  auto writeFromTier2 = [&](uint8_t before, uint8_t after) {
+    NativeAOTContextScope active(context);
+    NativeAOTMutexScope locked(context);
+    talos_rt_v1_scheduler_static_transition(context, 1, 0, 1, before, 0, after,
+                                            0);
+  };
+  context->nativeScheduleCheckpointDrain = true;
+  writeFromTier2(0, 1);
+  EXPECT_FALSE(owner.signalTriggered);
+  EXPECT_FALSE(context->nativeScheduleReadyNodes.test(1));
+  context->nativeScheduleCheckpointDrain = false;
+  writeFromTier2(1, 0);
+  EXPECT_EQ(design.ingress, 1u);
+  EXPECT_FALSE(owner.signalTriggered);
+  EXPECT_FALSE(context->nativeScheduleReadyNodes.test(1));
+  EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);
+
+  // Once the coordinator has taken the bit, a drain's wake is the node's.
+  design.ingress = 0;
+  context->nativeScheduleCheckpointDrain = true;
+  writeFromTier2(0, 1);
+  context->nativeScheduleCheckpointDrain = false;
+  EXPECT_EQ(design.ingress, 0u);
+  EXPECT_TRUE(owner.signalTriggered);
+  EXPECT_TRUE(context->nativeScheduleReadyNodes.test(1));
+  EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);
+  EXPECT_TRUE(startedOwnerContinuations.empty());
+  // That node runs the process body: its entry is the time-zero activation
+  // (a replay, not counted separately), counted as one body activation.
+  ASSERT_EQ(
+      talos_rt_v1_scheduler_run_aot_nodes(context, nodes, std::size(nodes)),
+      TALOS_RT_OK);
+  EXPECT_EQ(startedOwnerContinuations, std::vector<uint32_t>{0});
+  EXPECT_EQ(counts.timeZeroEntryReplays, 1u);
+  EXPECT_EQ(counts.bodyActivations, 1u);
+  EXPECT_EQ(counts.bodyActivationsAfterTimeZero, 0u);
 }
 
 TEST(ProcessInstance, InitializesOutputRecordsOnFailure) {

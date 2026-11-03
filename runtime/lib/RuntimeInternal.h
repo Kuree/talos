@@ -2550,6 +2550,16 @@ struct talos_rt_context {
   // initializer's completion has not armed yet.
   std::vector<std::pair<uint32_t, const talos_rt_process_start_v1 *>>
       nativeScheduleStartedPending;
+  // A periodic checkpoint drain (returnGeneratedIngress) is running: it cannot
+  // call the coordinator, so runtime writers wake generated owners' nodes.
+  bool nativeScheduleCheckpointDrain = false;
+  // The coordinator stopped at a cut for runtime work (runtime_yield): the
+  // scheduler loop owes it a call once the runtime has nothing below the
+  // cut's region (Inactive: deferred owners; Observed: staging), or earlier for
+  // new ingress. Progress is schedulerSlotProgress at the yield.
+  bool nativeScheduleCoordinatorYielded = false;
+  uint32_t nativeScheduleCoordinatorYieldRegion = 0;
+  uint64_t nativeScheduleCoordinatorYieldProgress = 0;
   std::vector<talos_rt_native_schedule_node> nativeScheduleNodes;
   const talos_rt_native_schedule_node *nativeScheduleNodeSource = nullptr;
   std::vector<std::vector<std::pair<uint32_t, uint32_t>>>
@@ -2667,6 +2677,10 @@ struct talos_rt_context {
     uint64_t timeZeroNodes = 0;
     uint64_t entryReplays = 0;
     uint64_t timeZeroEntryReplays = 0;
+    // Activations of those owners through their process bodies (runtime
+    // nodes, checkpoint drains, fallback), all and after time zero.
+    uint64_t bodyActivations = 0;
+    uint64_t bodyActivationsAfterTimeZero = 0;
   } startedOwnerDiagnostics;
   std::vector<ScheduledNBA> scheduledNBAs;
   // Path-delay events have one live entry per destination bit. Keeping them

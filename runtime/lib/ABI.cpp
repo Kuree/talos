@@ -708,7 +708,7 @@ ABI_SIZE_ALIGN(talos_rt_native_ordered_nba_bridge, ABI_PTR(16, 8),
                ABI_PTR(8, 4));
 ABI_OFFSET(talos_rt_native_ordered_nba_bridge, queue, 0);
 ABI_OFFSET(talos_rt_native_ordered_nba_bridge, roots, ABI_PTR(8, 4));
-ABI_SIZE_ALIGN(talos_rt_native_schedule_plan, ABI_PTR(288, 216), 8);
+ABI_SIZE_ALIGN(talos_rt_native_schedule_plan, ABI_PTR(296, 216), 8);
 ABI_OFFSET(talos_rt_native_schedule_plan, size, 0);
 ABI_OFFSET(talos_rt_native_schedule_plan, graph_layout_checksum, 8);
 ABI_OFFSET(talos_rt_native_schedule_plan, mutable_state, 16);
@@ -764,6 +764,7 @@ ABI_OFFSET(talos_rt_native_schedule_plan, promotion_recheck_range,
 ABI_OFFSET(talos_rt_native_schedule_plan, nba_ordered_count, ABI_PTR(272, 204));
 ABI_OFFSET(talos_rt_native_schedule_plan, nba_ordered_bridge,
            ABI_PTR(280, 208));
+ABI_OFFSET(talos_rt_native_schedule_plan, runtime_yield, ABI_PTR(288, 212));
 
 static_assert(TALOS_RT_VERSION == 1);
 static_assert(TALOS_RT_BYTECODE_INSTRUCTION_SIZE == 16);
@@ -1631,6 +1632,8 @@ ABI_FUNCTION(talos_rt_v1_scheduler_priority_signal_pending,
              uint32_t (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_scheduler_handoff_pending,
              uint32_t (*)(talos_rt_context *));
+ABI_FUNCTION(talos_rt_v1_scheduler_runtime_work_pending,
+             uint32_t (*)(talos_rt_context *, uint32_t));
 ABI_FUNCTION(talos_rt_v1_scheduler_queue_aot_checkpoint,
              talos_rt_status (*)(talos_rt_context *, uint32_t, uint32_t,
                                  talos_rt_native_checkpoint_callback));

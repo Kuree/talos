@@ -601,20 +601,24 @@ talos_rt_status armStartedNativeAOTActorsUnlocked(talos_rt_context *context) {
                       : context->startedOwnerDiagnostics.subscribedWaits);
     if ((start->flags & TALOS_RT_PROCESS_START_TIME_ZERO) == 0)
       continue;
-    // IEEE 1800-2023 9.2.2.2, 9.2.2.3, 4.9.1: evaluated once at time zero,
-    // after all initial and always procedures have been started. A change of
-    // an input before that evaluation does not schedule a second one: the
-    // process is not yet suspended at its event control (9.4.2, 4.3). So the
-    // activation must share the route of every wake that can precede it. In a certified static eval island every wake of a
-    // direct owner is its generated ready bit (runtime writers' static
-    // transitions do not enqueue nodes there), and the coordinator runs no
-    // owner while a procedure is unstarted. Otherwise the runtime node takes
-    // the activation, marked triggered as a wake would be; executing it
-    // replays the entry, which is the activation.
+    // IEEE 1800-2023 9.2.2.2 (9.2.2.3 for always_latch): evaluated once at
+    // time zero, after all initial and always procedures have been started;
+    // a continuous assignment is evaluated at time zero too (4.9.1). A
+    // change of an input before that evaluation does not schedule a second
+    // one: the process is not yet suspended at its event control (9.4.2,
+    // 4.3). So the activation must share the route of every wake that can
+    // precede it. In
+    // an eval plan every wake of a direct owner with a static wait is its
+    // generated ready bit (runtime writers' static transitions raise it, and
+    // a checkpoint drain skips an owner whose bit is pending), and the
+    // coordinator runs no owner while a procedure is unstarted. External
+    // writes, which restore subscriptions (disturbNativeScheduleUnlocked),
+    // come only from VPI and force/assign, which admission excludes
+    // (NativeStartAdmission.cpp, 38.34, 10.6). Otherwise the
+    // runtime node takes the activation, marked triggered as a wake would be;
+    // executing it replays the entry, which is the activation.
     bool raised = false;
-    if (ownsStaticWait &&
-        (plan->flags & TALOS_RT_NATIVE_SCHEDULE_EVAL) &&
-        (plan->flags & TALOS_RT_NATIVE_SCHEDULE_STATIC_EVAL_ISLAND) &&
+    if (ownsStaticWait && (plan->flags & TALOS_RT_NATIVE_SCHEDULE_EVAL) &&
         !context->nativeScheduleDeoptimized)
       for (uint64_t fragment = 0; fragment != plan->merged_fragment_count;
            ++fragment) {
@@ -934,6 +938,7 @@ __attribute__((always_inline)) inline talos_rt_status executeStaticNativeAOT(
             instance, context, TALOS_RT_TIER_NATIVE);
         status != TALOS_RT_OK)
       return status;
+  countStartedOwnerBodyActivation(instance, context);
   instance->ownership_context = context;
   instance->tier = TALOS_RT_TIER_NATIVE;
   instance->context = context;
@@ -1652,9 +1657,14 @@ drainNativeAOTCurrentSlotUnlocked(talos_rt_context *context,
   if (!context || activeNativeAOTContext != context ||
       lockedNativeAOTContext != context || !context->nativeSchedulePlan)
     return TALOS_RT_INVALID_LIFECYCLE;
-  return runScheduler(context,
-                      {/*nativePlan=*/true,
-                       /*currentSlotOnly=*/true, returnGeneratedIngress});
+  struct DrainScope {
+    talos_rt_context *context;
+    bool outer;
+    ~DrainScope() { context->nativeScheduleCheckpointDrain = outer; }
+  } scope{context, context->nativeScheduleCheckpointDrain};
+  context->nativeScheduleCheckpointDrain = returnGeneratedIngress;
+  return runScheduler(context, {/*nativePlan=*/true, /*currentSlotOnly=*/true,
+                                returnGeneratedIngress});
 }
 
 } // namespace
@@ -3365,6 +3375,8 @@ void talos_rt_release_native_schedule_plan(talos_rt_context *context) noexcept {
   context->nativePeriodicRuntimeDeadline = UINT64_MAX;
   context->nativePeriodicClockActorSlots.clear();
   context->nativeScheduleClockIngressPending = false;
+  context->nativeScheduleCoordinatorYielded = false;
+  context->nativeScheduleCheckpointDrain = false;
   context->nativeScheduleDirectActorSlot = UINT32_MAX;
   context->nativeScheduleCheckpointActorSlot = UINT32_MAX;
   context->nativeScheduleCheckpointContinuation = 0;

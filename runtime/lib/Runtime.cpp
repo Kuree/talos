@@ -383,7 +383,8 @@ void talos_rt_report_signal_diagnostics_unlocked(talos_rt_context *context) {
         "talos-started-owners armed=%llu static_waits=%llu "
         "subscribed_waits=%llu time_zero_ready_bits=%llu "
         "time_zero_nodes=%llu entry_replays=%llu "
-        "time_zero_entry_replays=%llu\n",
+        "time_zero_entry_replays=%llu body_activations=%llu "
+        "body_activations_after_time_zero=%llu\n",
         static_cast<unsigned long long>(context->startedOwnerDiagnostics.armed),
         static_cast<unsigned long long>(
             context->startedOwnerDiagnostics.staticWaits),
@@ -396,7 +397,11 @@ void talos_rt_report_signal_diagnostics_unlocked(talos_rt_context *context) {
         static_cast<unsigned long long>(
             context->startedOwnerDiagnostics.entryReplays),
         static_cast<unsigned long long>(
-            context->startedOwnerDiagnostics.timeZeroEntryReplays));
+            context->startedOwnerDiagnostics.timeZeroEntryReplays),
+        static_cast<unsigned long long>(
+            context->startedOwnerDiagnostics.bodyActivations),
+        static_cast<unsigned long long>(
+            context->startedOwnerDiagnostics.bodyActivationsAfterTimeZero));
 }
 
 talos_rt_context::~talos_rt_context() {

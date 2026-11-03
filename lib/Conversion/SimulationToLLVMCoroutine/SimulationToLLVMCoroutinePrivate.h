@@ -101,6 +101,12 @@ inline constexpr llvm::StringLiteral evalCheckpointMutableStateName =
     "__talos_eval_checkpoint_mutable_state_v1";
 inline constexpr llvm::StringLiteral evalDispatchName =
     "__talos_eval_dispatch_v1";
+/// The coordinator's yield word (talos_rt_native_schedule_plan.runtime_yield)
+/// and the runtime query it makes at its NBA cut.
+inline constexpr llvm::StringLiteral evalRuntimeYieldName =
+    "__talos_eval_runtime_yield_v1";
+inline constexpr llvm::StringLiteral runtimeWorkPendingName =
+    "talos_rt_v1_scheduler_runtime_work_pending";
 // Per-step evidence that an activation staged four-state NBA data: the byte
 // selects the four-state commit, the bit array names the staged roots.
 inline constexpr llvm::StringLiteral evalStepFourStateFallbackName =
@@ -267,6 +273,7 @@ enum class NativeSchedulePlanField : int64_t {
   PromotionRecheckRange,
   NBAOrderedCount,
   NBAOrderedBridge,
+  RuntimeYield,
   Count,
 };
 

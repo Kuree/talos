@@ -276,7 +276,9 @@ bool isEvalClosureRuntimeCall(LLVM::CallOp call, LLVM::LLVMFuncOp function,
       // plane and clears summary bits; marking only sets them.
       // Neither executes actors, publishes, or re-enters scheduling.
       *callee == "talos_rt_v1_native_state_refresh_unknown_summary" ||
-      *callee == "talos_rt_v1_native_state_mark_unknown")
+      *callee == "talos_rt_v1_native_state_mark_unknown" ||
+      // The yield query only reads runtime queues (IEEE 1800-2023 4.5).
+      *callee == detail::runtimeWorkPendingName)
     return true;
   // LRM 4.6(a), 9.4.2: the hybrid calendar's bounded publication
   // bridge preserves the source actor identity and delivers waits

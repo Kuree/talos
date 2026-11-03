@@ -34,7 +34,27 @@
 // LOWER-NEXT: %[[LATCH:.*]] = llvm.call @talos_rt_v1_scheduler_termination_requested(%arg1)
 // LOWER-NEXT: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
 // LOWER-NEXT: %[[FINISHED:.*]] = llvm.icmp "ne" %[[LATCH]], %[[ZERO]]
-// LOWER-NEXT: llvm.cond_br %[[FINISHED]], ^[[STOPPED]], ^[[SWITCH]](%[[BIT]] : i64)
+// LOWER-NEXT: llvm.cond_br %[[FINISHED]], ^[[STOPPED]], ^[[CUT:bb[0-9]+]]{{$}}
+// A runtime scheduler call first asks whether runtime work below the Inactive
+// region (1) remains; if so the coordinator returns with the deferred bit
+// still pending (DEFERRED, 4). A generated driver (word 0) runs it at once.
+// LOWER: ^[[CUT]]:
+// LOWER-NEXT: %[[YIELD:.*]] = llvm.mlir.addressof @__talos_eval_runtime_yield_v1
+// LOWER-NEXT: %[[WORD:.*]] = llvm.load %[[YIELD]]
+// LOWER-NEXT: %[[COMMIT_WORD:.*]] = llvm.mlir.constant(0 : i32)
+// LOWER-NEXT: %[[GENERATED:.*]] = llvm.icmp "eq" %[[WORD]], %[[COMMIT_WORD]]
+// LOWER-NEXT: llvm.cond_br %[[GENERATED]], ^[[SWITCH]](%[[BIT]] : i64), ^[[DRIVEN:bb[0-9]+]]{{$}}
+// LOWER: ^[[DRIVEN]]:
+// LOWER-NEXT: %[[FIRST_CUT:.*]] = llvm.mlir.constant(3 : i32)
+// LOWER-NEXT: %[[IS_FIRST:.*]] = llvm.icmp "eq" %[[WORD]], %[[FIRST_CUT]]
+// LOWER-NEXT: llvm.cond_br %[[IS_FIRST]], ^{{bb[0-9]+}}, ^[[ASK:bb[0-9]+]]{{$}}
+// LOWER: ^[[ASK]]:
+// LOWER-NEXT: %[[INACTIVE:.*]] = llvm.mlir.constant(1 : i32)
+// LOWER-NEXT: %[[PENDING:.*]] = llvm.call @talos_rt_v1_scheduler_runtime_work_pending(%arg1, %[[INACTIVE]])
+// LOWER: llvm.cond_br %{{.*}}, ^[[YIELDED:bb[0-9]+]], ^[[SWITCH]](%[[BIT]] : i64)
+// LOWER: ^[[YIELDED]]:
+// LOWER: %[[DEFERRED_WORD:.*]] = llvm.mlir.constant(4 : i32)
+// LOWER-NEXT: llvm.store %[[DEFERRED_WORD]], %[[YIELD]]
 
 !clk = !simulation.ref<i1>
 !int = !simulation.ref<i32>

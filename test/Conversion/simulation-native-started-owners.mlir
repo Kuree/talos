@@ -9,14 +9,15 @@
 // created already waiting there (IEEE 1800-2023 9.2: no implied order between
 // initial and always procedures). An always_ff owner
 // takes no time-zero activation; always_comb and continuous owners take theirs
-// as a generated ready bit after all procedures have started (9.2.2.2), which
-// the static eval island guarantees reaches the same bit as their wakes.
+// as a generated ready bit after all procedures have started (9.2.2.2), the
+// same bit every wake of a direct owner raises, whoever the writer is.
 // The suspending task call keeps the `stim` initial out of the generated
-// schedule, so the first two designs are static eval islands. The clock's
-// delay wait and the initial procedures are not admitted.
+// schedule, so the first two designs are static eval islands; the third is
+// fully generated. The clock's delay wait and the initial procedures are not
+// admitted.
 // TRACE: talos started owners: admitted=4 time_zero=2 entry-kind=1 wait=1
 // TRACE: talos started owners: admitted=0 time_zero=0 entry-kind=1 entry-prefix=1 thread=4 wait=1
-// TRACE: talos started owners: admitted=1 time_zero=0 entry-kind=2 time-zero-route=1 wait=1
+// TRACE: talos started owners: admitted=2 time_zero=1 entry-kind=2 wait=1
 //
 // Each spawn plan sets TALOS_RT_SPAWN_STARTED (4) and names its start record,
 // whose last field is TALOS_RT_PROCESS_START_TIME_ZERO. The always_ff wait
@@ -54,6 +55,12 @@
 // COMB: llvm.insertvalue %{{.*}}, %{{.*}}[6, 0, 2]
 // COMB-NOT: [6, 1,
 // COMB: llvm.return
+// Outside a static eval island too (third design).
+// COMB-LABEL: llvm.mlir.global internal constant @gate.__talos_start(
+// COMB: llvm.mlir.addressof @gate.__talos_start_wait
+// COMB-NEXT: llvm.insertvalue %{{.*}}, %{{.*}}[4]
+// COMB-NEXT: %[[GATE_TIME_ZERO:.*]] = llvm.mlir.constant(1 : i32) : i32
+// COMB-NEXT: llvm.insertvalue %[[GATE_TIME_ZERO]], %{{.*}}[5]
 //
 // `always @(posedge clk or d)` written as a procedural event control: two
 // entries (posedge, change) of an edge wait, and the active-self suppression
@@ -80,7 +87,6 @@
 // NONE-NOT: @prefix.__talos_start
 // NONE-NOT: @calls.__talos_start
 // NONE-NOT: @recurses.__talos_start
-// NONE-NOT: @gate.__talos_start
 !ref = !simulation.ref<i1>
 !vref = !simulation.ref<i8>
 module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", schedule.native_scheduler = 3 : i32, native.debug_timing} {
@@ -375,10 +381,10 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // -----
 
 // Without the runtime-only process, the design is fully generated and not a
-// static eval island: a runtime writer's transition can wake an owner through
-// its runtime node, so the always_comb owner keeps its ordinary first
-// activation (third TRACE line) while the always_ff owner is still created at
-// its wait.
+// static eval island. A runtime writer's transition still raises a direct
+// owner's generated ready bit, so both owners are created at their waits and
+// the always_comb owner's time-zero activation is that bit (third TRACE line,
+// last COMB lines).
 !ref = !simulation.ref<i1>
 !vref = !simulation.ref<i8>
 module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", schedule.native_scheduler = 3 : i32, native.debug_timing} {

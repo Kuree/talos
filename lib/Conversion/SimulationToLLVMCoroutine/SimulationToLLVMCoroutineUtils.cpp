@@ -20,41 +20,63 @@
 #include "llvm/Support/MathExtras.h"
 
 #include <cassert>
+#include <iterator>
 #include <limits>
 
 using namespace mlir;
 
 namespace talos::detail {
 
+namespace {
+enum class PlanFieldKind : uint8_t { I32, I64, Pointer };
+// The fields of talos_rt_native_schedule_plan, in order (runtime ABI.cpp
+// asserts the runtime's layout). The dialect type and the byte size are both
+// built from this one list.
+constexpr PlanFieldKind nativeSchedulePlanFields[] = {
+    PlanFieldKind::I32,     PlanFieldKind::I64,     PlanFieldKind::Pointer,
+    PlanFieldKind::I64,     PlanFieldKind::I32,     PlanFieldKind::I32,
+    PlanFieldKind::Pointer, PlanFieldKind::Pointer, PlanFieldKind::I64,
+    PlanFieldKind::Pointer, PlanFieldKind::Pointer, PlanFieldKind::Pointer,
+    PlanFieldKind::Pointer, PlanFieldKind::I32,     PlanFieldKind::I32,
+    PlanFieldKind::Pointer, PlanFieldKind::I64,     PlanFieldKind::Pointer,
+    PlanFieldKind::I64,     PlanFieldKind::Pointer, PlanFieldKind::I64,
+    PlanFieldKind::Pointer, PlanFieldKind::Pointer, PlanFieldKind::Pointer,
+    PlanFieldKind::I32,     PlanFieldKind::I32,     PlanFieldKind::Pointer,
+    PlanFieldKind::I32,     PlanFieldKind::I32,     PlanFieldKind::Pointer,
+    PlanFieldKind::I32,     PlanFieldKind::I32,     PlanFieldKind::Pointer,
+    PlanFieldKind::I64,     PlanFieldKind::Pointer, PlanFieldKind::Pointer,
+    PlanFieldKind::Pointer, PlanFieldKind::Pointer, PlanFieldKind::Pointer,
+    PlanFieldKind::Pointer, PlanFieldKind::Pointer, PlanFieldKind::Pointer};
+static_assert(std::size(nativeSchedulePlanFields) ==
+              static_cast<size_t>(NativeSchedulePlanField::Count));
+
+template <typename TypeT>
+SmallVector<TypeT> nativeSchedulePlanFieldTypes(TypeT i32, TypeT i64,
+                                                TypeT pointer) {
+  SmallVector<TypeT> fields;
+  for (PlanFieldKind kind : nativeSchedulePlanFields)
+    fields.push_back(kind == PlanFieldKind::I32   ? i32
+                     : kind == PlanFieldKind::I64 ? i64
+                                                  : pointer);
+  return fields;
+}
+} // namespace
+
 LLVM::LLVMStructType getNativeSchedulePlanLLVMType(MLIRContext *context) {
   OpBuilder builder(context);
-  Type pointer = LLVM::LLVMPointerType::get(context);
-  Type i32 = builder.getI32Type();
-  Type i64 = builder.getI64Type();
-  SmallVector<Type> fields{i32,     i64,     pointer, i64,     i32,     i32,
-                           pointer, pointer, i64,     pointer, pointer, pointer,
-                           pointer, i32,     i32,     pointer, i64,     pointer,
-                           i64,     pointer, i64,     pointer, pointer, pointer,
-                           i32,     i32,     pointer, i32,     i32,     pointer,
-                           i32,     i32,     pointer, i64,     pointer, pointer,
-                           pointer, pointer, pointer, pointer, pointer};
-  assert(fields.size() == static_cast<size_t>(NativeSchedulePlanField::Count));
-  return LLVM::LLVMStructType::getLiteral(context, fields);
+  return LLVM::LLVMStructType::getLiteral(
+      context, nativeSchedulePlanFieldTypes<Type>(
+                   builder.getI32Type(), builder.getI64Type(),
+                   LLVM::LLVMPointerType::get(context)));
 }
 
 uint64_t getNativeSchedulePlanSize(const llvm::DataLayout &dataLayout) {
   llvm::LLVMContext context;
-  llvm::Type *pointer = llvm::PointerType::get(context, 0);
-  llvm::Type *i32 = llvm::Type::getInt32Ty(context);
-  llvm::Type *i64 = llvm::Type::getInt64Ty(context);
-  SmallVector<llvm::Type *> fields{
-      i32,     i64,     pointer, i64,     i32,     i32,     pointer,
-      pointer, i64,     pointer, pointer, pointer, pointer, i32,
-      i32,     pointer, i64,     pointer, i64,     pointer, i64,
-      pointer, pointer, pointer, i32,     i32,     pointer, i32,
-      i32,     pointer, i32,     i32,     pointer, i64,     pointer,
-      pointer, pointer, pointer, pointer, pointer, pointer};
-  auto *type = llvm::StructType::get(context, fields);
+  auto *type =
+      llvm::StructType::get(context, nativeSchedulePlanFieldTypes<llvm::Type *>(
+                                         llvm::Type::getInt32Ty(context),
+                                         llvm::Type::getInt64Ty(context),
+                                         llvm::PointerType::get(context, 0)));
   return dataLayout.getTypeAllocSize(type).getFixedValue();
 }
 

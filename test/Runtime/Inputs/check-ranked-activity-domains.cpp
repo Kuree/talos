@@ -13,11 +13,12 @@ extern "C" void __talos_eval_promotion_invalidate_v1();
 
 int main(int argc, char **argv) {
   int status = model_main(argc, argv);
-  // Startup retains the original actor entries. For two later input changes,
-  // the small SCC needs two finite
-  // sweeps for each change. Its 32 siblings must execute only once per
-  // change, even though they share the source and its dependency island.
-  const uint64_t expected[] = {0, 4, 2, 2};
+  // Continuous owners created at their wait take their time-zero activation
+  // as a generated ready bit (IEEE 1800-2023 9.2.2.2, 4.9.1), so blocks 2 and
+  // 3 run once at startup. For two later input changes, the small SCC needs
+  // two finite sweeps for each change. Its 32 siblings must execute only once
+  // per change, even though they share the source and its dependency island.
+  const uint64_t expected[] = {0, 4, 3, 3};
   for (unsigned block = 0; block != 4; ++block)
     if (__talos_test_ranked_executions[block] != expected[block]) {
       std::fprintf(stderr, "block %u: executions=%llu expected=%llu\n", block,

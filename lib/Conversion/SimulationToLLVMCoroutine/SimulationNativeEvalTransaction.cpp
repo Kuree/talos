@@ -408,6 +408,7 @@ bool pendingRuntimeTransparent(LLVM::CallOp call,
       *callee == "talos_rt_v1_static_nba_batch_finish" ||
       *callee == "talos_rt_v1_scheduler_priority_signal_pending" ||
       *callee == "talos_rt_v1_scheduler_handoff_pending" ||
+      *callee == runtimeWorkPendingName ||
       *callee == "talos_rt_v1_scheduler_termination_requested" ||
       *callee == "talos_rt_v1_scheduler_time" ||
       *callee == "talos_rt_v1_scheduler_fail" ||

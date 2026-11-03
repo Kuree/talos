@@ -189,6 +189,93 @@ materializeNativeEvalDispatch(ModuleOp module,
           llvmConstant(builder, location, builder.getI8Type(), 0))
           .getResult(),
       fourStateFallback, 1);
+  // IEEE 1800-2023 4.4.2.3-4.4.2.4, 4.5: deferred (#0) owners run only once
+  // the Active region is empty and NBA events only once Active and Inactive
+  // are, runtime processes included; the runtime's own NBA events join the
+  // same batch, so a commit also waits for them (talos_rt_native_schedule_plan
+  // .runtime_yield). At such a cut a runtime scheduler call (yield word
+  // ALLOWED) asks whether runtime work below `cutRegion` remains and, if so,
+  // returns with its ready bits and NBA staging intact, storing
+  // `yieldedWord`; the runtime calls again once that work is done. FIRST_CUT
+  // passes one cut without asking. Generated drivers leave the word at
+  // COMMIT and pay one load and branch here. The plan's runtime_yield field
+  // points at this word (makeNativeEvalPlan).
+  auto emitRuntimeCut = [&](uint32_t cutRegion, uint32_t yieldedWord,
+                            Block *proceed, ValueRange proceedOperands) {
+    constexpr unsigned wordAlignment = alignof(uint32_t);
+    if (!module.lookupSymbol(evalRuntimeYieldName)) {
+      OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      LLVM::GlobalOp::create(
+          builder, location, i32, /*isConstant=*/false, LLVM::Linkage::Internal,
+          evalRuntimeYieldName,
+          builder.getI32IntegerAttr(TALOS_RT_RUNTIME_YIELD_COMMIT),
+          wordAlignment);
+    }
+    LLVM::LLVMFuncOp runtimeWorkPending = getOrDeclareLLVMFunction(
+        module, runtimeWorkPendingName, i32, {pointer, i32});
+    Value runtimeContext = fastEntry->getArgument(1);
+    Value yieldWord = LLVM::AddressOfOp::create(builder, location, pointer,
+                                                evalRuntimeYieldName);
+    Value word =
+        LLVM::LoadOp::create(builder, location, i32, yieldWord, wordAlignment);
+    auto wordIs = [&](uint32_t value) -> Value {
+      return arith::CmpIOp::create(builder, location, arith::CmpIPredicate::eq,
+                                   word,
+                                   llvmConstant(builder, location, i32, value));
+    };
+    Block *runtimeDriven = new Block, *firstCut = new Block,
+          *askRuntime = new Block, *yield = new Block;
+    for (Block *block : {runtimeDriven, firstCut, askRuntime, yield})
+      fastCoordinator.getBody().push_back(block);
+    cf::CondBranchOp::create(builder, location,
+                             wordIs(TALOS_RT_RUNTIME_YIELD_COMMIT), proceed,
+                             proceedOperands, runtimeDriven, ValueRange{});
+    builder.setInsertionPointToStart(runtimeDriven);
+    cf::CondBranchOp::create(builder, location,
+                             wordIs(TALOS_RT_RUNTIME_YIELD_FIRST_CUT), firstCut,
+                             ValueRange{}, askRuntime, ValueRange{});
+    builder.setInsertionPointToStart(firstCut);
+    LLVM::StoreOp::create(
+        builder, location,
+        llvmConstant(builder, location, i32, TALOS_RT_RUNTIME_YIELD_ALLOWED),
+        yieldWord, wordAlignment);
+    cf::BranchOp::create(builder, location, proceed, proceedOperands);
+    builder.setInsertionPointToStart(askRuntime);
+    Value pending =
+        LLVM::CallOp::create(
+            builder, location, runtimeWorkPending,
+            ValueRange{runtimeContext,
+                       llvmConstant(builder, location, i32, cutRegion)})
+            .getResult();
+    cf::CondBranchOp::create(
+        builder, location,
+        arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ne,
+                              pending, llvmConstant(builder, location, i32, 0)),
+        yield, ValueRange{}, proceed, proceedOperands);
+    builder.setInsertionPointToStart(yield);
+    // The call that commits starts from the step's four-state evidence:
+    // keep what this call's owners staged (it selects the commit path).
+    Value stepFallback = LLVM::AddressOfOp::create(
+        builder, location, pointer, evalStepFourStateFallbackName);
+    LLVM::StoreOp::create(
+        builder, location,
+        arith::OrIOp::create(
+            builder, location,
+            LLVM::LoadOp::create(builder, location, builder.getI8Type(),
+                                 stepFallback, 1),
+            arith::ExtUIOp::create(builder, location, builder.getI8Type(),
+                                   LLVM::LoadOp::create(builder, location,
+                                                        builder.getI1Type(),
+                                                        fourStateFallback, 1))),
+        stepFallback, 1);
+    LLVM::StoreOp::create(builder, location,
+                          llvmConstant(builder, location, i32, yieldedWord),
+                          yieldWord, wordAlignment);
+    cf::BranchOp::create(
+        builder, location, complete,
+        ValueRange{llvmConstant(builder, location, i32, TALOS_RT_OK)});
+  };
   auto ingressAddress = [&] {
     return LLVM::AddressOfOp::create(builder, location, pointer,
                                      evalModelIngressName)
@@ -346,9 +433,14 @@ materializeNativeEvalDispatch(ModuleOp module,
                                ValueRange{}, switchBlock,
                                ValueRange{selectedBit});
       builder.setInsertionPointToStart(checkTermination);
+      Block *inactiveCut = new Block;
+      fastCoordinator.getBody().push_back(inactiveCut);
       cf::CondBranchOp::create(builder, location, terminationRequested(),
-                               stopped, ValueRange{}, switchBlock,
-                               ValueRange{selectedBit});
+                               stopped, ValueRange{}, inactiveCut,
+                               ValueRange{});
+      builder.setInsertionPointToStart(inactiveCut);
+      emitRuntimeCut(TALOS_RT_REGION_INACTIVE, TALOS_RT_RUNTIME_YIELD_DEFERRED,
+                     switchBlock, ValueRange{selectedBit});
     }
   }
   SmallVector<APInt> cases;
@@ -1074,6 +1166,14 @@ materializeNativeEvalDispatch(ModuleOp module,
       performCommit, ValueRange{});
 
   builder.setInsertionPointToStart(performCommit);
+  {
+    Block *commitBody = new Block;
+    fastCoordinator.getBody().push_back(commitBody);
+    emitRuntimeCut(TALOS_RT_REGION_OBSERVED, TALOS_RT_RUNTIME_YIELD_STAGED,
+                   commitBody, ValueRange{});
+    // The commit below continues in commitBody.
+    builder.setInsertionPointToStart(commitBody);
+  }
   {
     // A path dispatcher can reject after coordinator entry.  Observe that
     // rejection at the barrier so its four-state staging is never committed

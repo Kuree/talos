@@ -90,13 +90,33 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // REUSE: llvm.call @update.__talos_eval_body_0.__talos_two_state_0
 // REUSE: llvm.return
 
+// The plan exposes the coordinator's yield word (its last field, 41) to the
+// runtime scheduler.
+// CHECK-LABEL: llvm.mlir.global internal constant @__talos_aot_schedule_plan_v1()
+// CHECK: %[[PLAN_YIELD:.+]] = llvm.mlir.addressof @__talos_eval_runtime_yield_v1
+// CHECK-NEXT: %[[PLAN:.+]] = llvm.insertvalue %[[PLAN_YIELD]], %{{.+}}[41]
+// CHECK-NEXT: llvm.return %[[PLAN]]
+// CHECK: llvm.mlir.global internal @__talos_eval_runtime_yield_v1(0 : i32)
+
 // One clock-sensitive activation owns the group. The shared dispatcher
 // selects either value-domain executor without entering the runtime.
 // CHECK-LABEL: llvm.func @__talos_direct_fragment_1_1.__talos_execute(
 // CHECK-SAME: attributes {passthrough = ["alwaysinline"], schedule.eval.infallible}
 // CHECK-LABEL: llvm.func @__talos_direct_fragment_1_1.__talos_execute.two_state(
 // CHECK-SAME: attributes {passthrough = ["alwaysinline"], schedule.eval.infallible, schedule.eval.two_state_wrapper}
+// At the NBA cut a generated driver (yield word COMMIT, 0) commits at once. A
+// runtime scheduler call passes one cut without asking (FIRST_CUT, 3, then
+// ALLOWED, 1) or asks whether runtime work below the Observed region (3:
+// Active, Inactive and the runtime's own NBA events) remains; if so it keeps
+// this call's four-state evidence, stores STAGED (2) and returns OK without
+// committing (IEEE 1800-2023 4.4.2.4, 4.5).
 // CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1(
+// CHECK-NOT: llvm.call @talos_rt_
+// CHECK: %[[YIELD:.+]] = llvm.mlir.addressof @__talos_eval_runtime_yield_v1
+// CHECK: %[[WORD:.+]] = llvm.load %[[YIELD]]
+// CHECK: %[[COMMIT_WORD:.+]] = llvm.mlir.constant(0 : i32)
+// CHECK: %[[GENERATED:.+]] = llvm.icmp "eq" %[[WORD]], %[[COMMIT_WORD]]
+// CHECK: llvm.cond_br %[[GENERATED]], ^[[COMMIT:[^,]+]], ^[[DRIVEN:[^ ]+]]{{$}}
 // CHECK-NOT: llvm.call @talos_rt_
 // CHECK: llvm.mlir.addressof @__talos_eval_promotion_pending_mask_v1
 // CHECK: llvm.call @__talos_direct_fragment_1_1.__talos_execute(
@@ -104,7 +124,29 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // the selected two-state body directly.
 // CHECK: llvm.call @update.__talos_eval_body_0.__talos_two_state_0(%arg1) {schedule.eval.direct_call}
 // CHECK-NOT: llvm.call @talos_rt_
-// CHECK: llvm.return
+// CHECK: ^[[COMMIT]]:
+// CHECK-NOT: llvm.call @talos_rt_
+// CHECK: ^[[DRIVEN]]:
+// CHECK: %[[FIRST:.+]] = llvm.mlir.constant(3 : i32)
+// CHECK: %[[IS_FIRST:.+]] = llvm.icmp "eq" %[[WORD]], %[[FIRST]]
+// CHECK: llvm.cond_br %[[IS_FIRST]], ^[[FIRST_CUT:[^,]+]], ^[[ASK:[^ ]+]]{{$}}
+// CHECK: ^[[FIRST_CUT]]:
+// CHECK: %[[ALLOWED:.+]] = llvm.mlir.constant(1 : i32)
+// CHECK: llvm.store %[[ALLOWED]], %[[YIELD]]
+// CHECK: llvm.br ^[[COMMIT]]{{$}}
+// CHECK: ^[[ASK]]:
+// CHECK: %[[OBSERVED:.+]] = llvm.mlir.constant(3 : i32)
+// CHECK: %[[PENDING:.+]] = llvm.call @talos_rt_v1_scheduler_runtime_work_pending(%arg1, %[[OBSERVED]])
+// CHECK: %[[YIELD_NOW:.+]] = llvm.icmp "ne" %[[PENDING]]
+// CHECK: llvm.cond_br %[[YIELD_NOW]], ^[[YIELDED:[^,]+]], ^[[COMMIT]]{{$}}
+// CHECK: ^[[YIELDED]]:
+// CHECK: %[[STEP:.+]] = llvm.mlir.addressof @__talos_eval_step_four_state_fallback_v1
+// CHECK: %[[KEPT:.+]] = llvm.or
+// CHECK: llvm.store %[[KEPT]], %[[STEP]]
+// CHECK: %[[STAGED:.+]] = llvm.mlir.constant(2 : i32)
+// CHECK: llvm.store %[[STAGED]], %[[YIELD]]
+// CHECK: %[[OK:.+]] = llvm.mlir.constant(0 : i32)
+// CHECK-NEXT: llvm.br ^{{.+}}(%[[OK]] : i32)
 // The selected call carries the owner proof; no enclosing controller variant
 // is required to preserve a direct two-state computation edge.
 // CHECK-LABEL: llvm.func @__talos_direct_fragment_1_1.__talos_execute.two_state.__talos_trusted(
