@@ -2131,7 +2131,16 @@ LogicalResult NativePipelineAnalysis::materialize() {
   SmallVector<PreparedPlainNativeProcess> plainProcesses;
   SmallVector<PreparedSuspendableProcess> suspendableProcesses;
   SmallVector<PreparedSuspendableProcess> transferProcesses;
+  // Two-tier P1d: a virtual owner (native.virtual_owner) runs in the
+  // generated coordinator, and outside it only in its bytecode body, so it
+  // gets no native body: only its bytecode-only descriptor and frame layout.
+  SmallVector<std::pair<sim::SimFuncOp, SimulationProcessFrameAnalysis *>>
+      virtualOwners;
   for (auto [function, analysis] : processFunctions) {
+    if (native::has<native::VirtualOwner>(function)) {
+      virtualOwners.emplace_back(function, analysis);
+      continue;
+    }
     if (analysis->getSuspensions().empty()) {
       FailureOr<PreparedPlainNativeProcess> prepared =
           preparePlainNativeProcess(function, *analysis);
@@ -2231,7 +2240,26 @@ LogicalResult NativePipelineAnalysis::materialize() {
   for (PreparedSuspendableProcess &process : transferProcesses)
     if (failed(finishPreparedSuspendableProcess(process, embeddedSymbols)))
       return failure();
+  for (auto [function, analysis] : virtualOwners) {
+    std::string baseName = function.getSymName().str();
+    uint64_t stableID = function.getCodeUnitId().value_or(
+        detail::stableProcessID(baseName) &
+        static_cast<uint64_t>(std::numeric_limits<int64_t>::max()));
+    if (failed(makeProcessDescriptor(
+            module, embeddedSymbols, function.getLoc(), baseName, stableID,
+            *analysis, native::has<native::Unmanaged>(function),
+            /*usesCoroutine=*/false, /*tableProcess=*/false,
+            /*virtualOwner=*/true)))
+      return failure();
+    if (embeddedSymbols.lookup(function.getSymName()) == function)
+      embeddedSymbols.erase(function);
+    else
+      function.erase();
+  }
   markTiming("suspendable process finalization");
+  if (detailedTiming)
+    llvm::errs() << "talos virtual owners without native bodies: "
+                 << virtualOwners.size() << '\n';
 
   SmallVector<sim::SimDesignOp> designs =
       analysis::collectInWalkOrder<sim::SimDesignOp>(module);

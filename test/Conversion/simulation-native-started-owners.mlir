@@ -4,6 +4,7 @@
 // RUN: FileCheck %s --check-prefix=COMB < %t.mlir
 // RUN: FileCheck %s --check-prefix=BOTH < %t.mlir
 // RUN: FileCheck %s --check-prefix=NONE < %t.mlir
+// RUN: FileCheck %s --check-prefix=BODY < %t.mlir
 
 // Eval owners that wait at one signal event control for their whole life are
 // created already waiting there (IEEE 1800-2023 9.2: no implied order between
@@ -30,6 +31,14 @@
 // FLOP-NEXT: llvm.insertvalue %[[TIERS]], %{{.*}}[3]
 // FLOP-NOT: __talos_native_execute
 // FLOP: llvm.mlir.addressof @flop.__talos_bytecode_entry
+// It also gets no native body or wrapper (two-tier P1d), while a process
+// that is not admitted, such as the clock, keeps its coroutine.
+// NONE-NOT: @flop.__talos_coro_ramp
+// NONE-NOT: @flop.__talos_table_body
+// NONE-NOT: @flop.__talos_group_body
+// NONE-NOT: @flop.__talos_native_execute
+// NONE-NOT: @flop.__talos_table.plan
+// BODY: llvm.func @clock.__talos_coro_ramp(
 // FLOP-LABEL: llvm.mlir.global internal constant @flop.__talos_spawn_plan(
 // FLOP: llvm.insertvalue %{{.*}}, %{{.*}}[10]
 // FLOP-NEXT: %[[STARTED:.*]] = llvm.mlir.constant(12 : i32) : i32
