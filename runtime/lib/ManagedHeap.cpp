@@ -1188,9 +1188,17 @@ public:
       return TALOS_RT_INVALID_ARGUMENT;
     LaneState expected = LaneState::Inactive;
     if (!lane->state.compare_exchange_strong(expected, LaneState::Active,
-                                             std::memory_order_acq_rel))
+                                             std::memory_order_seq_cst))
       return TALOS_RT_INVALID_LIFECYCLE;
     lane->owner.store(currentLaneOwnerToken(), std::memory_order_release);
+    // The same pairing as leave(): with the Active store and this load
+    // sequentially consistent against the collector's request store and its
+    // lane-state loads, either the collector sees this lane active (and
+    // waits for it to park) or this load sees the request and parks. Weaker
+    // orders let both miss each other on targets whose acquire loads may pass
+    // earlier stores.
+    if (!collectionRequested.load(std::memory_order_seq_cst))
+      return TALOS_RT_OK;
     return safepoint(lane);
   }
 
@@ -1206,16 +1214,22 @@ public:
         lane->managedRootRanges.load(std::memory_order_acquire) ||
         lane->providers.load(std::memory_order_acquire))
       return TALOS_RT_INVALID_LIFECYCLE;
-    {
-      // A collector evaluates lane states under worldMutex before waiting.
-      // Publish the transition under that mutex too; otherwise it can land
-      // between the collector's predicate check and its wait, and the
-      // notification below is lost.
-      std::lock_guard<std::mutex> lock(worldMutex);
-      lane->owner.store(0, std::memory_order_release);
-      lane->state.store(LaneState::Inactive, std::memory_order_release);
+    // A collector requests the world (collectionRequested, sequentially
+    // consistent) and then evaluates lane states under worldMutex until none
+    // is active. Publishing this lane's state before reading the request,
+    // both sequentially consistent, means either the collector's evaluation
+    // sees the lane inactive or this load sees the request; only then can a
+    // collector be waiting, and the notification is sent under worldMutex so
+    // it cannot fall between the collector's evaluation and its wait. Leaving
+    // with no collection requested takes no lock (two-tier B2 Q3).
+    lane->owner.store(0, std::memory_order_release);
+    lane->state.store(LaneState::Inactive, std::memory_order_seq_cst);
+    if (collectionRequested.load(std::memory_order_seq_cst)) {
+      {
+        std::lock_guard<std::mutex> lock(worldMutex);
+      }
+      worldCondition.notify_all();
     }
-    worldCondition.notify_all();
     return TALOS_RT_OK;
   }
 
@@ -1689,14 +1703,17 @@ public:
     }
     std::unique_lock<std::mutex> collectorLock(collectorMutex, std::adopt_lock);
     std::unique_lock<std::mutex> worldLock(worldMutex);
-    collectionRequested.store(true, std::memory_order_release);
+    // Sequentially consistent with the lane-state store and request load in
+    // leave(): a lane leaving concurrently either is seen inactive here or
+    // sees the request and notifies under worldMutex.
+    collectionRequested.store(true, std::memory_order_seq_cst);
     requester->state.store(LaneState::Collecting, std::memory_order_release);
     worldCondition.notify_all();
     worldCondition.wait(worldLock, [&] {
       for (talos_rt_gc_lane_v1 *lane : lanes) {
         if (lane == requester)
           continue;
-        LaneState state = lane->state.load(std::memory_order_acquire);
+        LaneState state = lane->state.load(std::memory_order_seq_cst);
         if (state == LaneState::Active || state == LaneState::Collecting)
           return false;
       }

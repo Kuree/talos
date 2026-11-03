@@ -6734,6 +6734,111 @@ TEST(ManagedHeap, SerializesConcurrentCollectionRequestsWithoutDeadlock) {
   talos_rt_v1_context_destroy(context);
 }
 
+// Two-tier B2 Q3: a lane leaving with no collection requested takes no lock;
+// a collector waiting on lane states must still be woken by every leave that
+// can race its request. Mutator lanes enter and leave in a loop while another
+// lane collects repeatedly, then gated rounds in which only the leaving lane
+// can wake the collector (the watchdog aborts instead of hanging).
+TEST(ManagedHeap, LeavingLanesWakeAWaitingCollector) {
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  constexpr size_t mutatorCount = 3;
+  constexpr unsigned rounds = 20000;
+  std::array<talos_rt_gc_lane_v1 *, mutatorCount + 1> lanes{};
+  for (auto &lane : lanes)
+    ASSERT_EQ(talos_rt_v1_gc_lane_create(context, &lane), TALOS_RT_OK);
+  std::atomic<bool> finished{false};
+  std::thread watchdog([&] {
+    for (unsigned tick = 0; tick != 12000 && !finished.load(); ++tick)
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    if (!finished.load()) {
+      std::fprintf(stderr, "LeavingLanesWakeAWaitingCollector: hang\n");
+      std::abort();
+    }
+  });
+  std::array<talos_rt_status, mutatorCount + 1> statuses{};
+  std::atomic<size_t> mutatorsDone{0};
+  std::vector<std::thread> workers;
+  for (size_t index = 0; index != mutatorCount; ++index)
+    workers.emplace_back([&, index] {
+      for (unsigned round = 0; round != rounds && statuses[index] == 0;
+           ++round) {
+        statuses[index] = talos_rt_v1_gc_lane_enter(lanes[index]);
+        if (statuses[index] == TALOS_RT_OK)
+          statuses[index] = talos_rt_v1_gc_lane_leave(lanes[index]);
+      }
+      mutatorsDone.fetch_add(1);
+    });
+  workers.emplace_back([&] {
+    talos_rt_gc_lane_v1 *lane = lanes[mutatorCount];
+    talos_rt_status &status = statuses[mutatorCount];
+    status = talos_rt_v1_gc_lane_enter(lane);
+    unsigned collections = 0;
+    // Keep collecting while mutators run, and once more after they finish.
+    while (status == TALOS_RT_OK &&
+           (mutatorsDone.load() != mutatorCount || collections < 2)) {
+      status = talos_rt_v1_gc_collect(lane);
+      ++collections;
+    }
+    if (status == TALOS_RT_OK)
+      status = talos_rt_v1_gc_lane_leave(lane);
+  });
+  for (std::thread &worker : workers)
+    worker.join();
+  // Gated rounds: one lane enters and leaves while another collects in a
+  // loop; each round waits for a collection to finish after the leave.
+  // Nothing else can wake a collector blocked on this lane, so a lost wakeup
+  // fails the round (back-to-back requests often land between the leaving
+  // lane's safepoint check and its state store).
+  {
+    std::atomic<uint64_t> completed{0};
+    std::atomic<bool> stop{false};
+    std::atomic<talos_rt_status> collectorStatus{TALOS_RT_OK};
+    std::thread collector([&] {
+      talos_rt_gc_lane_v1 *lane = lanes[mutatorCount];
+      talos_rt_status status = talos_rt_v1_gc_lane_enter(lane);
+      while (status == TALOS_RT_OK && !stop.load()) {
+        status = talos_rt_v1_gc_collect(lane);
+        completed.fetch_add(1);
+      }
+      if (status == TALOS_RT_OK)
+        status = talos_rt_v1_gc_lane_leave(lane);
+      collectorStatus.store(status);
+    });
+    bool lost = false;
+    for (unsigned round = 0; round != 2000 && !lost; ++round) {
+      uint64_t before = completed.load();
+      ASSERT_EQ(talos_rt_v1_gc_lane_enter(lanes[0]), TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_gc_lane_leave(lanes[0]), TALOS_RT_OK);
+      auto deadline =
+          std::chrono::steady_clock::now() + std::chrono::seconds(5);
+      while (completed.load() <= before + 1 &&
+             collectorStatus.load() == TALOS_RT_OK)
+        if (std::chrono::steady_clock::now() > deadline) {
+          lost = true;
+          break;
+        } else
+          std::this_thread::yield();
+    }
+    EXPECT_FALSE(lost) << "a collector waited on a lane that had left";
+    stop.store(true);
+    if (lost) {
+      // Release the blocked collector so the test can finish.
+      ASSERT_EQ(talos_rt_v1_gc_lane_enter(lanes[0]), TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_gc_lane_leave(lanes[0]), TALOS_RT_OK);
+    }
+    collector.join();
+    EXPECT_EQ(collectorStatus.load(), TALOS_RT_OK);
+  }
+  finished.store(true);
+  watchdog.join();
+  for (talos_rt_status status : statuses)
+    EXPECT_EQ(status, TALOS_RT_OK);
+  for (auto *lane : lanes)
+    EXPECT_EQ(talos_rt_v1_gc_lane_destroy(lane), TALOS_RT_OK);
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(ManagedHeap, RejectsMalformedClassLayouts) {
   talos_rt_method_descriptor_v1 sparseMethods[]{nodeMethods[0], nodeMethods[0]};
   sparseMethods[1].slot = UINT64_C(1) << 20;
