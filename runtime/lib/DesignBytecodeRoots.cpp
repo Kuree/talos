@@ -51,12 +51,31 @@ ScopedBytecodeFrameRoots::ScopedBytecodeFrameRoots(const Image &image,
                                                    Frame &frame,
                                                    talos_rt_context *context)
     : roots{&image, &frame} {
+  auto scan = [&] {
+    for (uint32_t index = 0; index != frame.function.layoutCount; ++index) {
+      uint8_t kind = layoutAt(image, frame.function, index).kind;
+      if (kind == TALOS_RT_DBREG_MANAGED ||
+          kind == TALOS_RT_DBREG_MANAGED_REF ||
+          kind == TALOS_RT_DBREG_ARGUMENT_REF || kind == TALOS_RT_DBREG_STRING)
+        return true;
+    }
+    return false;
+  };
   bool hasManaged = false;
-  for (uint32_t index = 0; index != frame.function.layoutCount; ++index) {
-    uint8_t kind = layoutAt(image, frame.function, index).kind;
-    hasManaged |=
-        kind == TALOS_RT_DBREG_MANAGED || kind == TALOS_RT_DBREG_MANAGED_REF ||
-        kind == TALOS_RT_DBREG_ARGUMENT_REF || kind == TALOS_RT_DBREG_STRING;
+  // The context's validated image caches the answer per function.
+  if (context && context->designBytecodeImageValidated &&
+      context->designBytecodeImage.data == image.data &&
+      frame.functionIndex < image.functionCount) {
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
+    auto &flags = context->designBytecodeManagedFrames;
+    if (flags.size() != image.functionCount)
+      flags.assign(static_cast<size_t>(image.functionCount), 0);
+    uint8_t &flag = flags[frame.functionIndex];
+    if (flag == 0)
+      flag = scan() ? 2 : 1;
+    hasManaged = flag == 2;
+  } else {
+    hasManaged = scan();
   }
   if (!hasManaged)
     return;

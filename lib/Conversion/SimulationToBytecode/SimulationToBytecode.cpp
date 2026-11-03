@@ -25,6 +25,7 @@
 #include "llvm/ADT/SparseBitVector.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/xxhash.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -293,7 +294,7 @@ uint64_t Encoder::addConstant(const Layout &layout, const APInt &value,
     else
       constants.resize(constants.size() + limbs * 8, 0);
   }
-  return offset;
+  return internConstant(offset);
 }
 
 uint64_t Encoder::addZeroConstant(const Layout &layout) {
@@ -302,6 +303,7 @@ uint64_t Encoder::addZeroConstant(const Layout &layout) {
     return found->second;
   uint64_t offset = constants.size();
   constants.resize(constants.size() + layout.size, 0);
+  offset = internConstant(offset);
   zeroConstants.try_emplace(layout.size, offset);
   return offset;
 }
@@ -309,16 +311,66 @@ uint64_t Encoder::addZeroConstant(const Layout &layout) {
 uint64_t Encoder::addRawConstant(ArrayRef<uint8_t> bytes) {
   uint64_t offset = constants.size();
   llvm::append_range(constants, bytes);
-  return offset;
+  return internConstant(offset);
 }
 
 uint64_t Encoder::addBytesConstant(ArrayRef<uint8_t> bytes) {
   uint64_t dataOffset = constants.size();
   llvm::append_range(constants, bytes);
+  dataOffset = internConstant(dataOffset);
   uint64_t descriptorOffset = constants.size();
   append64(constants, dataOffset);
   append64(constants, bytes.size());
-  return descriptorOffset;
+  return internConstant(descriptorOffset);
+}
+
+// Readers copy constants with unaligned loads, so any equal run serves.
+uint64_t Encoder::internConstant(uint64_t first) {
+  ArrayRef<uint8_t> run(constants.data() + first, constants.size() - first);
+  if (run.empty())
+    return first;
+  auto &candidates = constantRuns[llvm::xxh3_64bits(run)];
+  for (auto [start, size] : candidates)
+    if (size == run.size() &&
+        std::equal(run.begin(), run.end(), constants.begin() + start)) {
+      constants.resize(first);
+      return start;
+    }
+  candidates.push_back({first, run.size()});
+  return first;
+}
+
+// An empty run is canonically 0, a valid start for a zero-length map.
+uint32_t Encoder::internOperandRun(uint64_t first) {
+  ArrayRef<OperandMap> run(operandMaps.data() + first,
+                           operandMaps.size() - first);
+  if (run.empty())
+    return 0;
+  ArrayRef<uint8_t> bytes(reinterpret_cast<const uint8_t *>(run.data()),
+                          run.size() * sizeof(OperandMap));
+  auto equal = [](const OperandMap &lhs, const OperandMap &rhs) {
+    return lhs.destination == rhs.destination && lhs.source == rhs.source;
+  };
+  auto &candidates = operandRuns[llvm::xxh3_64bits(bytes)];
+  for (auto [start, size] : candidates)
+    if (size == run.size() && std::equal(run.begin(), run.end(),
+                                         operandMaps.begin() + start, equal)) {
+      operandMaps.resize(first);
+      return static_cast<uint32_t>(start);
+    }
+  candidates.push_back({first, run.size()});
+  return static_cast<uint32_t>(first);
+}
+
+uint32_t Encoder::addIntrinsicSite(const IntrinsicSite &site) {
+  std::pair<uint64_t, uint64_t> key{
+      (uint64_t{site.intrinsic} << 32) | site.firstOperand,
+      (uint64_t{site.inputCount} << 32) | site.outputCount};
+  auto [found, inserted] = siteIndices.try_emplace(
+      key, static_cast<uint32_t>(intrinsicSites.size()));
+  if (inserted)
+    intrinsicSites.push_back(site);
+  return found->second;
 }
 
 uint32_t Encoder::addIntrinsicSignature(uint32_t id, uint32_t inputCount,
@@ -353,13 +405,21 @@ LogicalResult Encoder::emitIntrinsicRegisters(FunctionPlan &plan, uint32_t id,
       return plan.function.emitOpError("bytecode intrinsic output is unmapped");
     operandMaps.push_back({output, 0});
   }
+  firstOperand = internOperandRun(firstOperand);
   uint32_t signature =
       addIntrinsicSignature(id, static_cast<uint32_t>(inputs.size()),
                             static_cast<uint32_t>(outputs.size()), flags);
-  uint32_t site = intrinsicSites.size();
-  intrinsicSites.push_back({signature, firstOperand,
-                            static_cast<uint32_t>(inputs.size()),
-                            static_cast<uint32_t>(outputs.size())});
+  IntrinsicSite record{signature, firstOperand,
+                       static_cast<uint32_t>(inputs.size()),
+                       static_cast<uint32_t>(outputs.size())};
+  // A class bit-stream export is bound to its one (function, site) pair by
+  // the class bit-stream plan, so its site stays unique (and a body holding
+  // it is never shared).
+  uint32_t site = static_cast<uint32_t>(intrinsicSites.size());
+  if (id == kIntrinsicContainerExportBitstream)
+    intrinsicSites.push_back(record);
+  else
+    site = addIntrinsicSite(record);
   emit({Intrinsic, 0, 0, 0, 0, 0, 0, site});
   return success();
 }
@@ -456,7 +516,7 @@ std::pair<uint64_t, uint64_t> Encoder::addMap(FunctionPlan &destinationPlan,
        llvm::zip_equal(destination, source))
     operandMaps.push_back(
         {reg(destinationPlan, destinationValue), reg(sourcePlan, sourceValue)});
-  return {first, destination.size()};
+  return {internOperandRun(first), destination.size()};
 }
 
 std::pair<uint64_t, uint64_t>
@@ -465,7 +525,7 @@ Encoder::addRegistersMap(ArrayRef<uint32_t> destinations,
   uint64_t first = operandMaps.size();
   for (auto [destination, sourceValue] : llvm::zip_equal(destinations, source))
     operandMaps.push_back({destination, reg(sourcePlan, sourceValue)});
-  return {first, destinations.size()};
+  return {internOperandRun(first), destinations.size()};
 }
 
 LogicalResult Encoder::encodeFunctions() {
@@ -680,8 +740,52 @@ LogicalResult Encoder::encodeFunctions() {
     }
     if (failed(emitContinuationEntries(plan)))
       return failure();
+    if (failed(encodeContinuationOrdinals(plan)))
+      return failure();
     plan.instructionCount = instructions.size() - plan.firstInstruction;
     plan.scratchSize = llvm::alignTo(plan.scratchSize, uint64_t{8});
+  }
+  return success();
+}
+
+// Instructions name a continuation by its ordinal among the function's
+// continuation records, not by its id: ids are the cross-tier ABI and differ
+// between instances of one definition, ordinals do not, so equal instances
+// encode equal bodies that the image can share (two-tier B4).
+LogicalResult Encoder::encodeContinuationOrdinals(FunctionPlan &plan) {
+  llvm::DenseMap<uint64_t, uint32_t> ordinals;
+  for (auto [ordinal, continuation] : llvm::enumerate(plan.continuations))
+    ordinals.try_emplace(continuation.id, static_cast<uint32_t>(ordinal));
+  auto ordinal = [&](uint64_t id) -> std::optional<uint32_t> {
+    auto found = ordinals.find(id);
+    if (found == ordinals.end())
+      return std::nullopt;
+    return found->second;
+  };
+  for (uint64_t pc = plan.firstInstruction; pc != instructions.size(); ++pc) {
+    Instruction &instruction = instructions[pc];
+    switch (instruction.opcode) {
+    case Suspend:
+    case Continue:
+    case ProcessControl:
+    case TaskCall:
+      if (std::optional<uint32_t> found = ordinal(instruction.immediate))
+        instruction.immediate = *found;
+      else
+        return plan.function.emitOpError(
+            "bytecode instruction names a missing continuation");
+      break;
+    case VirtualTaskCall:
+    case InterfaceTaskCall:
+      if (std::optional<uint32_t> found = ordinal(instruction.auxiliary))
+        instruction.auxiliary = *found;
+      else
+        return plan.function.emitOpError(
+            "bytecode instruction names a missing continuation");
+      break;
+    default:
+      break;
+    }
   }
   return success();
 }

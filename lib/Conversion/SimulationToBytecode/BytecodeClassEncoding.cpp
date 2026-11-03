@@ -147,6 +147,7 @@ LogicalResult Encoder::encodeClassDirectCall(FunctionPlan &plan,
   for (auto [destination, source] :
        llvm::zip_equal(call.getResults(), callee.resultRegisters))
     operandMaps.push_back({reg(plan, destination), source});
+  firstOutputs = internOperandRun(firstOutputs);
   emit({Call, 0, 0, callee.index, static_cast<uint32_t>(inputs.first),
         static_cast<uint32_t>(inputs.second),
         static_cast<uint32_t>(firstOutputs), call.getNumResults()});
@@ -174,6 +175,7 @@ LogicalResult Encoder::encodeClassVirtualCall(FunctionPlan &plan,
     operandMaps.push_back(
         {static_cast<uint32_t>(method->second.ownerID),
          static_cast<uint32_t>(method->second.interfaceOrdinal)});
+    dispatch = internOperandRun(dispatch);
   }
   SmallVector<Value> arguments{plan.function.getBody().front().getArgument(0),
                                call.getReceiver()};
@@ -183,10 +185,12 @@ LogicalResult Encoder::encodeClassVirtualCall(FunctionPlan &plan,
   uint32_t firstInputs = operandMaps.size();
   for (auto [index, argument] : llvm::enumerate(arguments))
     operandMaps.push_back({static_cast<uint32_t>(index), reg(plan, argument)});
+  firstInputs = internOperandRun(firstInputs);
   uint32_t firstOutputs = operandMaps.size();
   for (auto [index, result] : llvm::enumerate(call.getResults()))
     operandMaps.push_back(
         {reg(plan, result), static_cast<uint32_t>(arguments.size() + index)});
+  firstOutputs = internOperandRun(firstOutputs);
   emit({opcode, static_cast<uint16_t>(call.getNumResults()), dispatch,
         reg(plan, call.getReceiver()), firstInputs,
         static_cast<uint32_t>(arguments.size()), firstOutputs,
@@ -240,6 +244,7 @@ Encoder::encodeClassVirtualTaskCall(FunctionPlan &plan,
     operandMaps.push_back(
         {static_cast<uint32_t>(method->second.ownerID),
          static_cast<uint32_t>(method->second.interfaceOrdinal)});
+    dispatch = internOperandRun(dispatch);
   }
   SmallVector<Value> arguments{plan.function.getBody().front().getArgument(0),
                                call.getReceiver()};
@@ -250,6 +255,7 @@ Encoder::encodeClassVirtualTaskCall(FunctionPlan &plan,
   uint32_t firstInputs = operandMaps.size();
   for (auto [index, argument] : llvm::enumerate(arguments))
     operandMaps.push_back({static_cast<uint32_t>(index), reg(plan, argument)});
+  firstInputs = internOperandRun(firstInputs);
   emit({opcode, 0, dispatch, reg(plan, call.getReceiver()), firstInputs,
         static_cast<uint32_t>(arguments.size()), suspension->continuationID,
         call.getSignatureId()});

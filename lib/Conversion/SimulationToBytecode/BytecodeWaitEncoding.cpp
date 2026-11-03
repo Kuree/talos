@@ -213,9 +213,7 @@ LogicalResult Encoder::encodeObserverWait(FunctionPlan &plan,
   record.offset = llvm::alignTo(plan.scratchSize, uint64_t{8});
   plan.scratchSize = record.offset + record.size;
   plan.layouts.push_back(record);
-  uint64_t constantOffset = constants.size();
-  llvm::append_range(constants, bytes);
-  emit({Constant, 0, recordRegister, 0, 0, 0, 0, constantOffset});
+  emit({Constant, 0, recordRegister, 0, 0, 0, 0, addRawConstant(bytes)});
   emit({StoreFrame, 0, 0, recordRegister, 0, 0, 0, suspension->waitOffset});
   // Dynamic captures and dependencies overwrite their zeroed record slots
   // after the constant header has been copied.
@@ -381,9 +379,7 @@ LogicalResult Encoder::encodeWait(FunctionPlan &plan, Operation *operation,
       write32(bytes, 32 + index * 16 + 12, *width);
     }
   }
-  uint64_t constantOffset = constants.size();
-  llvm::append_range(constants, bytes);
-  emit({Constant, 0, recordRegister, 0, 0, 0, 0, constantOffset});
+  emit({Constant, 0, recordRegister, 0, 0, 0, 0, addRawConstant(bytes)});
   emit({StoreFrame, 0, 0, recordRegister, 0, 0, 0, suspension->waitOffset});
   uint64_t captureCursor = 0;
   uint64_t capturesOffset =

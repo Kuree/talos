@@ -3796,6 +3796,184 @@ struct Fixture {
   }
 };
 
+// Two-tier B4: two process functions share one instruction range (as the
+// encoder emits for equal instances) and name their suspension (or CONTINUE)
+// continuation by ordinal 1; each function's own record gives the cross-tier
+// id it suspends at (5 for the first, 9 for the second).
+std::vector<uint8_t>
+makeSharedSuspendBytecode(uint16_t opcode = TALOS_RT_DB_SUSPEND) {
+  constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
+  constexpr size_t layoutOffset = functionOffset + 2 * 96;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(1);
+  constexpr size_t constantOffset = codeOffset + 3 * 32;
+  constexpr size_t continuationOffset = constantOffset + 8;
+  std::vector<uint8_t> bytes(continuationOffset + 4 * 24, 0);
+  std::memcpy(bytes.data(), "OBBCDS1\0", 8);
+  put32(bytes, 8, TALOS_RT_VERSION);
+  put32(bytes, 16, TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE);
+  put64(bytes, 24, bytes.size());
+  put64(bytes, 40, functionOffset);
+  put64(bytes, 48, 2);
+  put64(bytes, 56, layoutOffset);
+  put64(bytes, 64, 1);
+  putShapeTable(bytes, layoutOffset, 1);
+  put64(bytes, 72, codeOffset);
+  put64(bytes, 80, 3);
+  put64(bytes, 88, constantOffset);
+  put64(bytes, 104, constantOffset);
+  put64(bytes, 112, 8);
+  put64(bytes, 120, continuationOffset);
+  put64(bytes, 128, 4);
+  for (size_t offset = 136; offset < 200; offset += 16)
+    put64(bytes, offset, bytes.size());
+  for (uint32_t function = 0; function != 2; ++function) {
+    size_t record = functionOffset + function * 96;
+    put64(bytes, record, function + 1);
+    put64(bytes, record + 8, function);
+    put64(bytes, record + 16, 0); // shared instruction range
+    put64(bytes, record + 24, 3);
+    put64(bytes, record + 32, 0); // shared layout range
+    put64(bytes, record + 40, 1);
+    put64(bytes, record + 56, 8);
+    put64(bytes, record + 64, 8);
+    put64(bytes, record + 72, function * 2);
+    put64(bytes, record + 80, 2);
+    put64(bytes, record + 88, 1);
+    size_t entry = continuationOffset + function * 2 * 24;
+    put32(bytes, entry, function);
+    put32(bytes, entry + 24, function);
+    put32(bytes, entry + 24 + 4, function ? 9 : 5);
+    put64(bytes, entry + 24 + 8, 2);
+  }
+  putLayout(bytes, layoutOffset, 1, 0, TALOS_RT_DBREG_BITS, 64, 0, 8);
+  instruction(bytes, codeOffset, 0, TALOS_RT_DB_CONSTANT, 0, 0, 0, 0, 0, 0, 0);
+  if (opcode == TALOS_RT_DB_SUSPEND)
+    instruction(bytes, codeOffset, 1, TALOS_RT_DB_SUSPEND,
+                TALOS_RT_SUSPEND_DELAY, 0, 0, 0, 0, 0, 1);
+  else
+    instruction(bytes, codeOffset, 1, opcode, 0, 0, 0, 0, 0, 0, 1);
+  instruction(bytes, codeOffset, 2, TALOS_RT_DB_TERMINATE);
+  put64(bytes, constantOffset, 3);
+  put64(bytes, 32, imageChecksum(bytes));
+  return bytes;
+}
+
+TEST(DesignBytecode, SharedBodiesSuspendAtTheirOwnContinuationIds) {
+  // CONTINUE names its continuation the same way.
+  for (uint32_t function : {0u, 1u}) {
+    std::vector<uint8_t> continued =
+        makeSharedSuspendBytecode(TALOS_RT_DB_CONTINUE);
+    talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
+                                               TALOS_RT_EXECUTION_HAS_BYTECODE,
+                                               0,
+                                               continued.data(),
+                                               continued.size(),
+                                               nullptr,
+                                               0,
+                                               1,
+                                               imageChecksum(continued),
+                                               nullptr,
+                                               0,
+                                               0,
+                                               0,
+                                               nullptr,
+                                               0,
+                                               nullptr,
+                                               0};
+    talos_rt_design_bytecode_entry_v1 entry{&execution, function, 0};
+    talos_rt_context *context = nullptr;
+    ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+              TALOS_RT_OK);
+    std::array<uint64_t, 1> frame{};
+    talos_rt_fragment_action_v1 action{};
+    ASSERT_EQ(talos_rt_execute_design_bytecode(entry, context, frame.data(),
+                                               sizeof(frame), 0, 8, 0, 0,
+                                               &action),
+              TALOS_RT_OK);
+    EXPECT_EQ(action.kind, TALOS_RT_FRAGMENT_CONTINUE);
+    EXPECT_EQ(action.continuation, function ? 9u : 5u);
+    talos_rt_v1_context_destroy(context);
+  }
+
+  std::vector<uint8_t> bytecode = makeSharedSuspendBytecode();
+  for (uint32_t function : {0u, 1u}) {
+    SCOPED_TRACE(function);
+    uint32_t id = function ? 9 : 5;
+    talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
+                                               TALOS_RT_EXECUTION_HAS_BYTECODE,
+                                               0,
+                                               bytecode.data(),
+                                               bytecode.size(),
+                                               nullptr,
+                                               0,
+                                               1,
+                                               imageChecksum(bytecode),
+                                               nullptr,
+                                               0,
+                                               0,
+                                               0,
+                                               nullptr,
+                                               0,
+                                               nullptr,
+                                               0};
+    talos_rt_design_bytecode_entry_v1 entry{&execution, function, 0};
+    talos_rt_context *context = nullptr;
+    ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+              TALOS_RT_OK);
+    std::array<uint64_t, 1> frame{};
+    talos_rt_fragment_action_v1 action{};
+    ASSERT_EQ(talos_rt_execute_design_bytecode(entry, context, frame.data(),
+                                               sizeof(frame), 0, 8, 0, 0,
+                                               &action),
+              TALOS_RT_OK);
+    EXPECT_EQ(action.kind, TALOS_RT_FRAGMENT_SUSPEND);
+    EXPECT_EQ(action.suspend_kind, TALOS_RT_SUSPEND_DELAY);
+    EXPECT_EQ(action.continuation, id);
+    EXPECT_EQ(action.payload, 3u);
+    // Resuming at the function's own id enters the shared range at the
+    // record's position.
+    action = {};
+    ASSERT_EQ(talos_rt_execute_design_bytecode(entry, context, frame.data(),
+                                               sizeof(frame), 0, 8, id, 0,
+                                               &action),
+              TALOS_RT_OK);
+    EXPECT_EQ(action.kind, TALOS_RT_FRAGMENT_TERMINATE);
+    EXPECT_EQ(talos_rt_execute_design_bytecode(entry, context, frame.data(),
+                                               sizeof(frame), 0, 8,
+                                               function ? 5 : 9, 0, &action),
+              TALOS_RT_INVALID_CONTINUATION);
+    talos_rt_v1_context_destroy(context);
+  }
+
+  // An ordinal past the function's records is rejected.
+  std::vector<uint8_t> missing = bytecode;
+  size_t suspend = get64(missing, 72) + 32;
+  put64(missing, suspend + 24, 2);
+  put64(missing, 32, imageChecksum(missing));
+  talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
+                                             TALOS_RT_EXECUTION_HAS_BYTECODE,
+                                             0,
+                                             missing.data(),
+                                             missing.size(),
+                                             nullptr,
+                                             0,
+                                             1,
+                                             imageChecksum(missing),
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
+  talos_rt_design_bytecode_entry_v1 entry{&execution, 0, 0};
+  uint64_t scratchSize = 0, scratchAlignment = 0;
+  EXPECT_EQ(talos_rt_validate_design_bytecode(entry, nullptr, &scratchSize,
+                                              &scratchAlignment),
+            TALOS_RT_INVALID_BYTECODE);
+}
+
 TEST(DesignBytecode, MetadataOnlyImageHasNoExecutableEntry) {
   std::vector<uint8_t> bytes(TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE, 0);
   std::memcpy(bytes.data(), "OBBCDS1\0", 8);

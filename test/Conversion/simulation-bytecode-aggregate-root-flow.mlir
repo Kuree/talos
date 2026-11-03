@@ -61,4 +61,4 @@ module attributes {
 // CHECK: intrinsic {{.*}}id=0x00010411 inputs=2 outputs=1 flags=0
 // CHECK: site 1: {{.*}} id=0x00010411 {{.*}} outputs=[8]
 // CHECK: site 3: {{.*}} id=0x00010411 {{.*}} outputs=[9]
-// CHECK: site 5: {{.*}} id=0x00010411 {{.*}} outputs=[10]
+// CHECK: site 4: {{.*}} id=0x00010411 {{.*}} outputs=[10]

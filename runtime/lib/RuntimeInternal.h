@@ -2982,6 +2982,14 @@ struct talos_rt_context {
   // Fast-path plans of designBytecodeImage's functions, indexed by function
   // and decoded on first execution (empty: not decoded yet).
   std::vector<std::vector<talos::designbytecode::FastOp>> designBytecodePlans;
+  // Whether a frame of each of designBytecodeImage's functions can hold
+  // managed values (0 not computed, 1 no, 2 yes): activations push frame
+  // roots only then, without rescanning the register layouts each time.
+  std::vector<uint8_t> designBytecodeManagedFrames;
+  // Decoded register layouts of designBytecodeImage's functions for the
+  // interpreter's general path (a layout record is a shape index and an
+  // offset), decoded with the function's fast plan.
+  std::vector<std::vector<talos::designbytecode::Layout>> designBytecodeLayouts;
   void *vpiState = nullptr;
   // Waveform dump plan, shadow planes, and output buffer. Allocated on the
   // first $dumpfile/$dumpvars and owned by the context.

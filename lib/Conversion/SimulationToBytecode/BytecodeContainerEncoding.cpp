@@ -141,7 +141,6 @@ Encoder::encodeContainerOperation(FunctionPlan &plan, Operation *operation) {
     if (op.getClassSiteId()) {
       if (intrinsicSites.size() >= UINT32_MAX || plan.index == UINT32_MAX)
         return op.emitOpError("class bit-stream intrinsic table is too large");
-      uint32_t site = intrinsicSites.size();
       LogicalResult emitted = emitIntrinsicRegisters(
           plan, kIntrinsicContainerExportBitstream, {reg(plan, op.getInput())},
           {reg(plan, op.getResult()), reg(plan, op.getMatched()),
@@ -149,6 +148,8 @@ Encoder::encodeContainerOperation(FunctionPlan &plan, Operation *operation) {
           op.getObserve() ? 4 : 3);
       if (failed(emitted))
         return emitted;
+      // Sites are interned: the emitted instruction names the canonical one.
+      uint32_t site = static_cast<uint32_t>(instructions.back().immediate);
       if (options.requireBytecode) {
         requiresContainerBitstreamFeature = true;
         sim::set<sim::metadata::ClassBitstreamBytecodeFunction>(

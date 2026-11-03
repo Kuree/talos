@@ -66,6 +66,14 @@ private:
   uint64_t addZeroConstant(const Layout &layout);
   uint64_t addRawConstant(llvm::ArrayRef<uint8_t> bytes);
   uint64_t addBytesConstant(llvm::ArrayRef<uint8_t> bytes);
+  // Content interning (two-tier B4): the constants, operand runs and sites
+  // that instances of one definition use are equal, so interning them makes
+  // equal instances encode byte-identical bodies the image shares. Each takes
+  // the start of the run just appended and returns the canonical start,
+  // dropping the new copy when an equal run exists.
+  uint64_t internConstant(uint64_t first);
+  uint32_t internOperandRun(uint64_t first);
+  uint32_t addIntrinsicSite(const IntrinsicSite &site);
 
   uint32_t addIntrinsicSignature(uint32_t id, uint32_t inputCount,
                                  uint32_t outputCount, uint32_t flags = 0);
@@ -108,6 +116,7 @@ private:
   void emitDeadManagedClears(FunctionPlan &plan,
                              llvm::ArrayRef<uint32_t> registers);
   mlir::LogicalResult emitContinuationEntries(FunctionPlan &plan);
+  mlir::LogicalResult encodeContinuationOrdinals(FunctionPlan &plan);
   mlir::LogicalResult emitConstant(FunctionPlan &plan, mlir::Value result,
                                    const llvm::APInt &value,
                                    const llvm::APInt *unknown = nullptr);
@@ -223,6 +232,10 @@ private:
   llvm::DenseMap<std::pair<uint64_t, uint64_t>, uint32_t>
       intrinsicSignatureIndices;
   llvm::SmallVector<IntrinsicSite> intrinsicSites;
+  // Interning indices: content hash -> {start, size} of each distinct run.
+  llvm::DenseMap<uint64_t, llvm::SmallVector<std::pair<uint64_t, uint64_t>, 1>>
+      constantRuns, operandRuns;
+  llvm::DenseMap<std::pair<uint64_t, uint64_t>, uint32_t> siteIndices;
   llvm::SmallVector<CaptureRecord> captureRecords;
   bool requiresDynamicScanFeature = false;
   bool requiresEventSnapshotFeature = false;

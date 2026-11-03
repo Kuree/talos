@@ -1451,13 +1451,44 @@ const FastOp *fastPlan(const Image &image, const Frame &frame,
       plan.push_back(decodeFastOp(
           image, frame.function,
           instructionAt(image, frame.function.firstInstruction + index)));
+    auto &layouts = context->designBytecodeLayouts;
+    if (layouts.size() != image.functionCount)
+      layouts.assign(static_cast<size_t>(image.functionCount), {});
+    std::vector<Layout> &decoded = layouts[frame.functionIndex];
+    decoded.reserve(frame.function.layoutCount);
+    for (uint32_t index = 0; index != frame.function.layoutCount; ++index)
+      decoded.push_back(layoutAt(image, frame.function, index));
   }
   return plan.data();
+}
+
+/// The decoded register layouts of `frame`'s function, available once its
+/// fast plan exists, or null.
+static const Layout *decodedLayouts(const Image &image, const Frame &frame,
+                                    talos_rt_context *context) {
+  if (!context || !context->designBytecodeImageValidated ||
+      context->designBytecodeImage.data != image.data ||
+      frame.functionIndex >= context->designBytecodeLayouts.size())
+    return nullptr;
+  const std::vector<Layout> &decoded =
+      context->designBytecodeLayouts[frame.functionIndex];
+  return decoded.size() == frame.function.layoutCount && !decoded.empty()
+             ? decoded.data()
+             : nullptr;
 }
 
 std::optional<uint64_t> continuationPC(const Image &image,
                                        const Function &function,
                                        uint32_t continuation);
+
+/// The continuation id an instruction names by its ordinal among `function`'s
+/// continuation records (two-tier B4: ordinals keep bodies position
+/// independent, so instances with equal bodies share one; ids are the
+/// cross-tier ABI). Code validation proves the ordinal in range.
+static uint32_t continuationIdAt(const Image &image, const Function &function,
+                                 uint64_t ordinal) {
+  return continuationAt(image, function.firstContinuation + ordinal).id;
+}
 
 talos_rt_status
 executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
@@ -1477,6 +1508,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
   const FastOp *plan = fastPlan(image, frame, context, invalidCode);
   if (invalidCode)
     return TALOS_RT_INVALID_BYTECODE;
+  const Layout *layouts = decodedLayouts(image, frame, context);
   while (pc >= begin && pc < end) {
     if (!budget.consume())
       return TALOS_RT_STEP_LIMIT;
@@ -1489,7 +1521,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
     }
     Instruction instruction = instructionAt(image, pc++);
     auto layout = [&](uint32_t reg) {
-      return layoutAt(image, frame.function, reg);
+      return layouts ? layouts[reg] : layoutAt(image, frame.function, reg);
     };
     auto read = [&](uint32_t reg) {
       return readLogic(frame.data, layout(reg));
@@ -3784,7 +3816,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
     case TALOS_RT_DB_CONTINUE:
       *action = {TALOS_RT_FRAGMENT_CONTINUE,
                  TALOS_RT_SUSPEND_NONE,
-                 static_cast<uint32_t>(instruction.immediate),
+                 continuationIdAt(image, frame.function, instruction.immediate),
                  0,
                  0,
                  0};
@@ -3800,22 +3832,19 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
       if (status != TALOS_RT_OK)
         return status;
       switch (disposition) {
-      case TALOS_RT_PROCESS_CONTROL_CONTINUE: {
-        std::optional<uint64_t> continuation =
-            continuationPC(image, frame.function,
-                           static_cast<uint32_t>(instruction.immediate));
-        if (!continuation)
-          return TALOS_RT_INVALID_CONTINUATION;
-        pc = *continuation;
+      case TALOS_RT_PROCESS_CONTROL_CONTINUE:
+        pc = continuationAt(image, frame.function.firstContinuation +
+                                       instruction.immediate)
+                 .instruction;
         continue;
-      }
       case TALOS_RT_PROCESS_CONTROL_SUSPEND_CURRENT:
-        *action = {TALOS_RT_FRAGMENT_PROCESS_SUSPEND,
-                   TALOS_RT_SUSPEND_NONE,
-                   static_cast<uint32_t>(instruction.immediate),
-                   0,
-                   0,
-                   0};
+        *action = {
+            TALOS_RT_FRAGMENT_PROCESS_SUSPEND,
+            TALOS_RT_SUSPEND_NONE,
+            continuationIdAt(image, frame.function, instruction.immediate),
+            0,
+            0,
+            0};
         break;
       case TALOS_RT_PROCESS_CONTROL_KILL_CURRENT:
         *action = {
@@ -3836,7 +3865,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
       }
       *action = {TALOS_RT_FRAGMENT_SUSPEND,
                  static_cast<uint32_t>(instruction.flags),
-                 static_cast<uint32_t>(instruction.immediate),
+                 continuationIdAt(image, frame.function, instruction.immediate),
                  instruction.auxiliary,
                  payload,
                  0};
@@ -3850,7 +3879,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
         return status;
       *action = {TALOS_RT_FRAGMENT_TASK_CALL,
                  TALOS_RT_SUSPEND_NONE,
-                 static_cast<uint32_t>(instruction.immediate),
+                 continuationIdAt(image, frame.function, instruction.immediate),
                  0,
                  0,
                  0};
@@ -3890,7 +3919,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
         return status;
       *action = {TALOS_RT_FRAGMENT_TASK_CALL,
                  TALOS_RT_SUSPEND_NONE,
-                 instruction.auxiliary,
+                 continuationIdAt(image, frame.function, instruction.auxiliary),
                  0,
                  0,
                  0};

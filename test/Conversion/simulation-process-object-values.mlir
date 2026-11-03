@@ -77,18 +77,19 @@ module attributes {
 // BYTECODE-SAME: 17, 0, 0, 0, 4, 0, 0, 0, 3, 0, 0, 0, 2, 0, 0, 0
 // Await stores the spawned process token directly into stable_id at offset 40.
 // BYTECODE-SAME: 24, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 40, 0, 0, 0, 0, 0, 0, 0
-// The task continuation stores current at frame offset 0, then calls function
-// 3 with continuation 2. Status is intrinsic site 3 after resumption.
+// The task continuation stores current at frame offset 0, then calls
+// function 3 with the interned argument run at 3 and continuation ordinal 2. Status is intrinsic site 3 after resumption.
 // BYTECODE-SAME: 24, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-// BYTECODE-SAME: 40, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 5, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0
+// BYTECODE-SAME: 40, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0
 // BYTECODE-SAME: 36, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0
 // BYTECODE-SAME: 23, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 // Intrinsic signatures: process.current 0x1022c and process.status 0x1022d.
 // BYTECODE-SAME: 44, 2, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0
 // BYTECODE-SAME: 45, 2, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0
-// Sites map current output to register 3, and status register 3 to output 5.
-// BYTECODE-SAME: 2, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0
-// BYTECODE-SAME: 3, 0, 0, 0, 6, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0
+// Sites map current output to register 3, and status register 3 to output 5
+// (operand runs are interned, so they start at 2 and 4).
+// BYTECODE-SAME: 2, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0
+// BYTECODE-SAME: 3, 0, 0, 0, 4, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0
 // BYTECODE: runtime.bytecode_function = 1 : i32
 // BYTECODE: runtime.bytecode_scratch_size = 136 : i64
 // BYTECODE: runtime.bytecode_function = 2 : i32

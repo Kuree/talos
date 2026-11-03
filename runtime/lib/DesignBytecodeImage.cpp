@@ -1830,7 +1830,7 @@ bool validateInitialization(const Image &image, const Function &function,
       if (!setInitialized(seed, argument))
         return false;
   for (uint64_t index = 0; index != function.continuationCount; ++index) {
-    // Callable continuation IDs are internal synchronous branch targets, not
+    // Callable continuations are internal synchronous branch targets, not
     // independent scheduler entries. Their incoming state is propagated from
     // process.control below. Process continuations are true resumptions and
     // begin with only the registers reconstructed by their entry shim.
@@ -1957,21 +1957,14 @@ bool validateInitialization(const Image &image, const Function &function,
       fallthrough = false;
       break;
     case TALOS_RT_DB_PROCESS_CONTROL:
-      if (!process) {
-        bool found = false;
-        for (uint64_t index = 0; index != function.continuationCount; ++index) {
-          Continuation continuation =
-              continuationAt(image, function.firstContinuation + index);
-          if (continuation.id != instruction.immediate)
-            continue;
-          if (!merge(continuation.instruction, state))
-            return false;
-          found = true;
-          break;
-        }
-        if (!found)
-          return false;
-      }
+      // The immediate is the continuation's ordinal among the function's
+      // records (the code checks bound it), as the interpreter resolves it.
+      if (!process && (instruction.immediate >= function.continuationCount ||
+                       !merge(continuationAt(image, function.firstContinuation +
+                                                        instruction.immediate)
+                                  .instruction,
+                              state)))
+        return false;
       fallthrough = false;
       break;
     default:
@@ -2147,14 +2140,11 @@ bool validateFunctionCode(const Image &image, uint32_t functionIndex) {
     return reject(__LINE__, "bytecode function index is out of range");
   Function function = functionAt(image, functionIndex);
   uint64_t codeEnd = function.firstInstruction + function.instructionCount;
-  auto hasContinuation = [&](uint64_t id) {
-    if (id > UINT32_MAX)
-      return false;
-    for (uint64_t index = 0; index != function.continuationCount; ++index) {
-      if (continuationAt(image, function.firstContinuation + index).id == id)
-        return true;
-    }
-    return false;
+  // Instructions name a continuation by its ordinal among the function's
+  // records (two-tier B4: position-independent bodies); the record holds the
+  // cross-tier id.
+  auto hasContinuation = [&](uint64_t ordinal) {
+    return ordinal < function.continuationCount;
   };
   for (uint64_t pc = function.firstInstruction; pc != codeEnd; ++pc) {
     Instruction instruction = instructionAt(image, pc);

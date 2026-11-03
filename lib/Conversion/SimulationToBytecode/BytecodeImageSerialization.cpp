@@ -5,6 +5,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "BytecodeEncoding.h"
 #include "BytecodePlan.h"
 #include "BytecodeSerialization.h"
 
@@ -12,6 +13,7 @@
 #include "talos/Runtime/Runtime.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/STLExtras.h"
 
 #include <algorithm>
@@ -87,16 +89,103 @@ SmallVector<uint8_t> serializeBytecodeImage(
   write32(output, offsetof(Header, header_size),
           TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE);
 
+  // Functions with equal bodies share one instruction range and one layout
+  // range (two-tier B4: instances of one definition). Interned constants,
+  // operand runs and sites and ordinal continuations make equal instances
+  // encode equal bytes; only JUMP/BRANCH targets are absolute, so bodies are
+  // compared with those relative to their start and the kept range is
+  // rebased. Continuation records stay per function (ids are the cross-tier
+  // ABI) and point into the shared range at the same relative positions.
+  SmallVector<uint64_t> sharedWith(plans.size());
+  SmallVector<uint64_t> bodyFirst(plans.size()), layoutFirst(plans.size());
+  SmallVector<Instruction> code;
+  uint64_t layoutCursor = 0;
+  {
+    auto relative = [&](const Instruction &instruction, uint64_t first) {
+      Instruction copy = instruction;
+      if (copy.opcode == Jump || copy.opcode == Branch)
+        copy.immediate -= first;
+      return copy;
+    };
+    auto sameInstruction = [](const Instruction &lhs, const Instruction &rhs) {
+      return lhs.opcode == rhs.opcode && lhs.flags == rhs.flags &&
+             lhs.destination == rhs.destination && lhs.source0 == rhs.source0 &&
+             lhs.source1 == rhs.source1 && lhs.source2 == rhs.source2 &&
+             lhs.auxiliary == rhs.auxiliary && lhs.immediate == rhs.immediate;
+    };
+    auto sameLayout = [](const Layout &lhs, const Layout &rhs) {
+      return lhs.kind == rhs.kind && lhs.flags == rhs.flags &&
+             lhs.width == rhs.width && lhs.offset == rhs.offset &&
+             lhs.size == rhs.size && lhs.auxiliary == rhs.auxiliary;
+    };
+    auto sameBody = [&](const FunctionPlan &lhs, const FunctionPlan &rhs) {
+      if (lhs.instructionCount != rhs.instructionCount ||
+          lhs.layouts.size() != rhs.layouts.size())
+        return false;
+      for (uint64_t index = 0; index != lhs.instructionCount; ++index)
+        if (!sameInstruction(
+                relative(instructions[lhs.firstInstruction + index],
+                         lhs.firstInstruction),
+                relative(instructions[rhs.firstInstruction + index],
+                         rhs.firstInstruction)))
+          return false;
+      return std::equal(lhs.layouts.begin(), lhs.layouts.end(),
+                        rhs.layouts.begin(), sameLayout);
+    };
+    auto bodyHash = [&](const FunctionPlan &plan) {
+      llvm::hash_code hash =
+          llvm::hash_combine(plan.instructionCount, plan.layouts.size());
+      for (uint64_t index = 0; index != plan.instructionCount; ++index) {
+        Instruction instruction = relative(
+            instructions[plan.firstInstruction + index], plan.firstInstruction);
+        hash = llvm::hash_combine(hash, instruction.opcode, instruction.flags,
+                                  instruction.destination, instruction.source0,
+                                  instruction.source1, instruction.source2,
+                                  instruction.auxiliary, instruction.immediate);
+      }
+      for (const Layout &layout : plan.layouts)
+        hash = llvm::hash_combine(hash, layout.kind, layout.flags, layout.width,
+                                  layout.offset, layout.size, layout.auxiliary);
+      return static_cast<uint64_t>(hash);
+    };
+    llvm::DenseMap<uint64_t, SmallVector<uint64_t, 1>> bodies;
+    for (auto [index, plan] : llvm::enumerate(plans)) {
+      sharedWith[index] = index;
+      auto &candidates = bodies[bodyHash(plan)];
+      for (uint64_t candidate : candidates)
+        if (sameBody(plans[candidate], plan)) {
+          sharedWith[index] = candidate;
+          break;
+        }
+      if (sharedWith[index] != index) {
+        bodyFirst[index] = bodyFirst[sharedWith[index]];
+        layoutFirst[index] = layoutFirst[sharedWith[index]];
+        continue;
+      }
+      candidates.push_back(index);
+      bodyFirst[index] = code.size();
+      layoutFirst[index] = layoutCursor;
+      layoutCursor += plan.layouts.size();
+      for (uint64_t offset = 0; offset != plan.instructionCount; ++offset) {
+        Instruction instruction =
+            relative(instructions[plan.firstInstruction + offset],
+                     plan.firstInstruction);
+        if (instruction.opcode == Jump || instruction.opcode == Branch)
+          instruction.immediate += bodyFirst[index];
+        code.push_back(instruction);
+      }
+    }
+  }
+
   alignTo(output, 8);
   uint64_t functionOffset = output.size();
-  uint64_t layoutCursor = 0;
   uint64_t continuationCursor = 0;
-  for (FunctionPlan &plan : plans) {
+  for (auto [index, plan] : llvm::enumerate(plans)) {
     append64(output, plan.stableID);
     append64(output, plan.initialScheduleRank);
-    append64(output, plan.firstInstruction);
+    append64(output, bodyFirst[index]);
     append64(output, plan.instructionCount);
-    append64(output, layoutCursor);
+    append64(output, layoutFirst[index]);
     append64(output, plan.layouts.size());
     append32(output, plan.function.getFunctionType().getNumInputs());
     append32(output, plan.function.getFunctionType().getNumResults());
@@ -122,7 +211,6 @@ SmallVector<uint8_t> serializeBytecodeImage(
       functionFlags |= TALOS_RT_DESIGN_FUNCTION_HOME(homeRegion);
     }
     append64(output, functionFlags);
-    layoutCursor += plan.layouts.size();
     continuationCursor += plan.continuations.size();
   }
   // A register's layout record is its shape index and frame offset; the
@@ -133,7 +221,9 @@ SmallVector<uint8_t> serializeBytecodeImage(
   SmallVector<ShapeKey> shapes;
   alignTo(output, 8);
   uint64_t layoutOffset = output.size();
-  for (FunctionPlan &plan : plans)
+  for (auto [index, plan] : llvm::enumerate(plans)) {
+    if (sharedWith[index] != index)
+      continue;
     for (const Layout &layout : plan.layouts) {
       if (layout.offset > UINT32_MAX) {
         plan.function.emitOpError(
@@ -149,6 +239,7 @@ SmallVector<uint8_t> serializeBytecodeImage(
       append32(output, found->second);
       append32(output, static_cast<uint32_t>(layout.offset));
     }
+  }
   alignTo(output, 8);
   uint64_t shapeOffset = output.size();
   for (const auto &[kind, flags, width, size, auxiliary] : shapes) {
@@ -161,7 +252,7 @@ SmallVector<uint8_t> serializeBytecodeImage(
   }
   alignTo(output, 8);
   uint64_t codeOffset = output.size();
-  for (const Instruction &instruction : instructions) {
+  for (const Instruction &instruction : code) {
     append16(output, instruction.opcode);
     append16(output, instruction.flags);
     append32(output, instruction.destination);
@@ -182,11 +273,13 @@ SmallVector<uint8_t> serializeBytecodeImage(
   llvm::append_range(output, serializedConstants);
   alignTo(output, 8);
   uint64_t continuationOffset = output.size();
-  for (const FunctionPlan &plan : plans)
+  for (auto [index, plan] : llvm::enumerate(plans))
     for (const Continuation &continuation : plan.continuations) {
       append32(output, continuation.function);
       append32(output, continuation.id);
-      append64(output, continuation.instruction);
+      // The same relative position in the (possibly shared) kept range.
+      append64(output, continuation.instruction - plan.firstInstruction +
+                           bodyFirst[index]);
       append32(output, continuation.scheduleRank);
       append32(output, 0);
     }
@@ -275,7 +368,7 @@ SmallVector<uint8_t> serializeBytecodeImage(
   write64(output, offsetof(Header, layout_offset), layoutOffset);
   write64(output, offsetof(Header, layout_count), layoutCursor);
   write64(output, offsetof(Header, code_offset), codeOffset);
-  write64(output, offsetof(Header, instruction_count), instructions.size());
+  write64(output, offsetof(Header, instruction_count), code.size());
   write64(output, offsetof(Header, operand_offset), operandOffset);
   write64(output, offsetof(Header, operand_count), operandMaps.size());
   write64(output, offsetof(Header, constant_offset), constantOffset);

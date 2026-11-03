@@ -66,6 +66,7 @@ LogicalResult Encoder::encodeCall(FunctionPlan &plan, sim::SimCallOp call) {
   for (auto [destination, source] :
        llvm::zip_equal(call.getResults(), callee.resultRegisters))
     operandMaps.push_back({reg(plan, destination), source});
+  firstOutputs = internOperandRun(firstOutputs);
   emit({Call, 0, 0, callee.index, static_cast<uint32_t>(inputs.first),
         static_cast<uint32_t>(inputs.second),
         static_cast<uint32_t>(firstOutputs), call.getNumResults()});

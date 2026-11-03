@@ -986,6 +986,10 @@ enum {
   TALOS_RT_DB_BRANCH = 30,
   TALOS_RT_DB_CALL = 31,
   TALOS_RT_DB_RETURN = 32,
+  // CONTINUE, SUSPEND and TASK_CALL immediates (and the VIRTUAL_TASK_CALL /
+  // INTERFACE_TASK_CALL auxiliary) name a continuation by its ordinal among
+  // the function's continuation records, which hold the cross-tier ids; equal
+  // instances then encode equal bodies that share one range.
   TALOS_RT_DB_CONTINUE = 33,
   TALOS_RT_DB_SUSPEND = 34,
   TALOS_RT_DB_TERMINATE = 35,
@@ -1018,7 +1022,9 @@ enum {
   TALOS_RT_DB_INTERFACE_CALL = 56,
   TALOS_RT_DB_INTERFACE_TASK_CALL = 57,
   // Terminator for IEEE process-object kill/suspend/resume. The target is a
-  // shared tagged process identity and immediate is the resume continuation.
+  // shared tagged process identity and immediate is the resume continuation's
+  // ordinal among the function's continuation records (as for SUSPEND,
+  // CONTINUE and the task calls; the record holds the cross-tier id).
   TALOS_RT_DB_PROCESS_CONTROL = 58,
   // Reinterpret the payload of an IEEE real as an equal-width two-state
   // integer, or vice versa. Integer register padding is not part of the

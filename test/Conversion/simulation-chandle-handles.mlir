@@ -40,7 +40,8 @@ module attributes {
 // BYTECODE: runtime.bytecode_image = array<i8:
 // BYTECODE: runtime.state_bits = 64 : i64
 
+// The two null chandles are equal constants: interned, both load offset 0.
 // INSTRUCTIONS: constants: 00000000000000000000000000000000
 // INSTRUCTIONS-NEXT: 0: opcode=1 flags=0 dst=1 {{.*}} imm=0
-// INSTRUCTIONS-NEXT: 1: opcode=1 flags=0 dst=2 {{.*}} imm=8
+// INSTRUCTIONS-NEXT: 1: opcode=1 flags=0 dst=2 {{.*}} imm=0
 // INSTRUCTIONS-NEXT: 2: opcode=17 flags=0 dst=3 src0=1 src1=2
