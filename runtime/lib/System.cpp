@@ -48,13 +48,15 @@ talos_rt_status printText(talos_rt_context *context, std::string_view text) {
 
 const char *const kResetCountVariable = "TALOS_RESET_COUNT";
 const char *const kResetValueVariable = "TALOS_RESET_VALUE";
+const char *const kResetInteractiveVariable = "TALOS_RESET_INTERACTIVE";
 
 int32_t environmentInteger(const char *name) {
   const char *value = std::getenv(name);
   return value ? static_cast<int32_t>(std::strtol(value, nullptr, 10)) : 0;
 }
 
-void setEnvironment(const char *name, const std::string &value) {
+[[maybe_unused]] void setEnvironment(const char *name,
+                                     const std::string &value) {
 #if defined(_WIN32)
   // The C runtime's copy for getenv, and the process's for a child it creates.
   _putenv_s(name, value.c_str());
@@ -64,21 +66,68 @@ void setEnvironment(const char *name, const std::string &value) {
 #endif
 }
 
+void clearEnvironment(const char *name) {
+#if defined(_WIN32)
+  _putenv_s(name, "");
+  SetEnvironmentVariableA(name, nullptr);
+#else
+  unsetenv(name);
+#endif
+}
+
+// IEEE 1800-2023 D.8: what crosses a $reset into the run it starts. Read once
+// when the executable starts and removed from the environment, so a program
+// that $system runs (20.18) sees no reset of its own.
+struct ResetCarry {
+  int32_t count = 0;
+  int32_t value = 0;
+  bool interactive = false;
+};
+
+const ResetCarry &resetCarry() {
+  static const ResetCarry carry = [] {
+    ResetCarry read;
+    read.count = environmentInteger(kResetCountVariable);
+    read.value = environmentInteger(kResetValueVariable);
+    read.interactive = environmentInteger(kResetInteractiveVariable) != 0;
+    clearEnvironment(kResetCountVariable);
+    clearEnvironment(kResetValueVariable);
+    clearEnvironment(kResetInteractiveVariable);
+    return read;
+  }();
+  return carry;
+}
+
+// Before main, so ahead of any $system.
+[[maybe_unused]] const ResetCarry &resetCarryAtStartup = resetCarry();
+
 // IEEE 1800-2023 D.8: "The simulation time is 0. All variables and nets contain
 // their initial values" and every procedure starts again, which running the
 // executable again with its own arguments provides exactly. A compiled
-// simulation has no interactive mode for a stop_value of 0 to enter, so
-// processing always begins again at once. Only the reset count and value cross
-// the reset.
-talos_rt_status resetToTimeZero(talos_rt_context *context, std::string_view value) {
-  setEnvironment(kResetCountVariable,
-                 std::to_string(environmentInteger(kResetCountVariable) + 1));
-  setEnvironment(kResetValueVariable, std::string(value));
-  std::fflush(nullptr);
+// simulation has no interactive mode, so after a stop_value of 0 it enters and
+// leaves it at once (VPI cbEnterInteractive, cbExitInteractive) and processing
+// begins again. Only the reset count, the value and that choice cross the
+// reset.
+talos_rt_status resetToTimeZero(talos_rt_context *context, std::string_view value,
+                                bool interactive) {
 #if defined(__EMSCRIPTEN__)
+  (void)value;
+  (void)interactive;
   setLastError(context, "$reset is not available on this platform");
   return TALOS_RT_INVALID_ARGUMENT;
-#elif defined(_WIN32)
+#else
+  // IEEE 1800-2023 38.36.3: cbStartOfReset, before time returns to 0.
+  if (context->vpiState)
+    talos_rt_vpi_reset_starting(context);
+  setEnvironment(kResetCountVariable, std::to_string(resetCarry().count + 1));
+  setEnvironment(kResetValueVariable, std::string(value));
+  if (interactive)
+    setEnvironment(kResetInteractiveVariable, "1");
+  else
+    clearEnvironment(kResetInteractiveVariable);
+  std::fflush(nullptr);
+#endif
+#if defined(_WIN32)
   // Windows has no exec that keeps the process: _execv ends this one at once,
   // so a shell or pipe waiting on it would move on without the restarted run.
   // Run the executable again with its own command line, wait for it, and end
@@ -113,10 +162,15 @@ talos_rt_status resetToTimeZero(talos_rt_context *context, std::string_view valu
   uint32_t size = sizeof(path);
   if (_NSGetExecutablePath(path, &size) == 0)
     execv(path, *_NSGetArgv());
-#else
-  std::ifstream commandLine("/proc/self/cmdline", std::ios::binary);
-  std::string arguments((std::istreambuf_iterator<char>(commandLine)),
-                        std::istreambuf_iterator<char>());
+#elif !defined(__EMSCRIPTEN__)
+  std::string arguments;
+  {
+    // Closed before execv, which would otherwise keep the descriptor open in
+    // every later run.
+    std::ifstream commandLine("/proc/self/cmdline", std::ios::binary);
+    arguments.assign(std::istreambuf_iterator<char>(commandLine),
+                     std::istreambuf_iterator<char>());
+  }
   std::vector<char *> argv;
   for (size_t offset = 0; offset < arguments.size();
        offset += std::strlen(arguments.data() + offset) + 1)
@@ -124,8 +178,14 @@ talos_rt_status resetToTimeZero(talos_rt_context *context, std::string_view valu
   argv.push_back(nullptr);
   execv("/proc/self/exe", argv.data());
 #endif
+#if !defined(__EMSCRIPTEN__)
+  // The run goes on: a program $system starts later sees no reset.
+  clearEnvironment(kResetCountVariable);
+  clearEnvironment(kResetValueVariable);
+  clearEnvironment(kResetInteractiveVariable);
   setLastError(context, "$reset could not restart the executable");
   return TALOS_RT_IO_ERROR;
+#endif
 }
 
 // IEEE 1800-2023 D.7: "An optional file name argument for $log causes the old
@@ -138,6 +198,7 @@ talos_rt_status controlLog(talos_rt_context *context, std::string_view path) {
   if (context->logFile)
     std::fclose(context->logFile);
   context->logFile = std::fopen(std::string(path).c_str(), "w");
+  talos_rt_close_on_exec(context->logFile);
   if (context->logFile)
     return TALOS_RT_OK;
   setLastError(context, "$log could not create its file");
@@ -245,6 +306,21 @@ talos_rt_status showScopes(talos_rt_context *context, bool below,
   return printText(context, listing);
 }
 
+} // namespace
+
+talos_rt_status talos_rt_reset_to_time_zero(talos_rt_context *context,
+                                            std::string_view value,
+                                            bool interactive) {
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
+  return resetToTimeZero(context, value, interactive);
+}
+
+int32_t talos_rt_reset_count() noexcept { return resetCarry().count; }
+
+bool talos_rt_reset_interactive() noexcept { return resetCarry().interactive; }
+
+namespace {
+
 talos_rt_status runControl(talos_rt_context *context, std::string_view control,
                            int32_t &result) {
   std::vector<std::string_view> parts = splitControl(control);
@@ -260,20 +336,29 @@ talos_rt_status runControl(talos_rt_context *context, std::string_view control,
     context->logPaused = true;
     return TALOS_RT_OK;
   }
-  if (task == "reset")
-    return resetToTimeZero(context, argument(1));
+  if (task == "reset") {
+    // D.8: "A value of 0 or no argument causes interactive mode to be entered
+    // after resetting the tool."
+    std::string stop(argument(2));
+    return resetToTimeZero(context, argument(1),
+                           std::strtol(stop.c_str(), nullptr, 10) == 0);
+  }
   if (task == "reset_count") {
-    result = environmentInteger(kResetCountVariable);
+    result = resetCarry().count;
     return TALOS_RT_OK;
   }
   if (task == "reset_value") {
-    result = environmentInteger(kResetValueVariable);
+    result = resetCarry().value;
     return TALOS_RT_OK;
   }
   if (task == "input")
     return runCommandFile(context, std::string(argument(1)), 0);
   if (task == "scope") {
     context->interactiveScope = std::string(argument(1));
+    // IEEE 1800-2023 38.36.3: $scope (D.11) is the command that changes the
+    // interactive scope.
+    if (context->vpiState)
+      talos_rt_vpi_interactive_scope_changed(context, context->interactiveScope);
     return TALOS_RT_OK;
   }
   if (task == "showscopes")

@@ -412,6 +412,28 @@ struct VPIState {
   uint32_t runTimeErrorCallbacks = 0;
   uint32_t pliErrorCallbacks = 0;
   bool deliveringErrorCallbacks = false;
+  // Registered cbInteractiveScopeChange callbacks: $scope looks its scope up
+  // only for them, through announceInteractiveScope (set at startup), and a
+  // scope change made during their delivery delivers none.
+  uint32_t scopeChangeCallbacks = 0;
+  void (*announceInteractiveScope)(VPIState *, const std::string &) noexcept =
+      nullptr;
+  bool deliveringScopeChange = false;
+  // vpi_control(vpiReset) runs $reset "upon return of the application
+  // routine" (IEEE 1800-2023 38.4): the outermost callback it is called from,
+  // or else the imported task or function, whose process the termination
+  // latch ends when it returns. resetStarting marks cbStartOfReset delivery.
+  struct PendingReset {
+    PLI_INT32 value = 0;
+    bool interactive = false;
+    bool fromCallback = false;
+  };
+  std::optional<PendingReset> pendingReset;
+  bool resetStarting = false;
+  // $stop delivers cbEnterInteractive and cbExitInteractive once the
+  // scheduler stops; interactive while they are delivered.
+  bool interactivePending = false;
+  bool interactive = false;
   uint64_t nextSystemTfId = 1;
   uint32_t callbackDepth = 0;
   uint32_t callDepth = 0;
@@ -1172,10 +1194,41 @@ bool isErrorActionReason(PLI_INT32 reason) {
   return reason == cbError || reason == cbPLIError;
 }
 
-void noteErrorActionCallback(VPIState *state, PLI_INT32 reason, bool added) {
+/// IEEE 1800-2023 38.36.3 feature reasons. Reset callbacks bracket $reset (the
+/// executable runs again: cbStartOfReset before, cbEndOfReset in the new run);
+/// interactive callbacks bracket $stop, which ends a batch simulation, and a
+/// $reset with a zero stop_value; cbInteractiveScopeChange follows $scope and
+/// vpi_control(vpiSetInteractiveScope). Without $save/$restart or runtime
+/// calls of user system tasks, the save, restart and cbUnresolvedSystf
+/// callbacks are accepted and never occur. Deviation: since $reset runs the
+/// executable again, the new run has only the callbacks its startup routines
+/// register, and application state starts over too.
+bool isFeatureReason(PLI_INT32 reason) {
+  switch (reason) {
+  case cbStartOfSave:
+  case cbEndOfSave:
+  case cbStartOfRestart:
+  case cbEndOfRestart:
+  case cbStartOfReset:
+  case cbEndOfReset:
+  case cbEnterInteractive:
+  case cbExitInteractive:
+  case cbInteractiveScopeChange:
+  case cbUnresolvedSystf:
+    return true;
+  default:
+    return false;
+  }
+}
+
+/// Keeps the per-reason counts that let cold runtime hooks skip work when no
+/// callback of their reason is registered.
+void noteCountedCallback(VPIState *state, PLI_INT32 reason, bool added) {
   uint32_t *count = reason == cbError      ? &state->runTimeErrorCallbacks
                     : reason == cbPLIError ? &state->pliErrorCallbacks
-                                           : nullptr;
+                    : reason == cbInteractiveScopeChange
+                        ? &state->scopeChangeCallbacks
+                        : nullptr;
   if (count && (added || *count != 0))
     *count = added ? *count + 1 : *count - 1;
 }
@@ -1247,7 +1300,36 @@ void releaseObservationDemand(VPIState *state, PLI_INT32 reason) {
   talos_rt_aot_observation_demand_changed_unlocked(state->context, false);
 }
 
-talos_rt_status dispatchLifecycle(VPIState *state, PLI_INT32 reason) {
+/// Runs the reset vpi_control(vpiReset) requested (IEEE 1800-2023 38.4). On
+/// success the executable runs again and this does not return.
+void performPendingReset(VPIState *state) noexcept {
+  VPIState::PendingReset reset = *state->pendingReset;
+  state->pendingReset.reset();
+  TALOS_RT_TRY {
+    (void)talos_rt_reset_to_time_zero(
+        state->context, std::to_string(reset.value), reset.interactive);
+  }
+  TALOS_RT_CATCH_ALL {}
+  // Only an executable that cannot run again gets here: the run carries on
+  // or ends with a run-time error (20.10), not as if it had finished.
+  setError(state, "VPI reset could not restart the simulation");
+  std::fputs("error: vpi_control(vpiReset) could not restart the simulation\n",
+             stderr);
+  (void)talos_rt_v1_scheduler_error(state->context);
+}
+
+/// A reset requested from a callback runs once the outermost callback
+/// returns; one requested from an imported task or function waits for the
+/// scheduler (talos_rt_vpi_termination_reached), even if a callback that the
+/// same call triggered returns first.
+void runPendingReset(VPIState *state) noexcept {
+  if (state->pendingReset && state->pendingReset->fromCallback &&
+      state->callbackDepth == 1)
+    performPendingReset(state);
+}
+
+talos_rt_status dispatchLifecycle(VPIState *state, PLI_INT32 reason,
+                                  vpiHandle object = nullptr) {
   // A fixed frontier makes registration from a callback eligible only for a
   // later event. Each record is looked up again immediately before invocation
   // so removing a callback that has not run yet suppresses it safely.
@@ -1268,6 +1350,7 @@ talos_rt_status dispatchLifecycle(VPIState *state, PLI_INT32 reason) {
     s_cb_data invocation{};
     invocation.reason = reason;
     invocation.cb_rtn = routine;
+    invocation.obj = object;
     invocation.user_data = userData;
     ManagedRunHoldPause pause;
     TALOS_RT_TRY { (void)routine(&invocation); }
@@ -1275,9 +1358,43 @@ talos_rt_status dispatchLifecycle(VPIState *state, PLI_INT32 reason) {
       setError(state, "VPI callback raised an exception", vpiInternal);
       status = TALOS_RT_FATAL;
     }
+    runPendingReset(state);
   }
   --state->callbackDepth;
   return status;
+}
+
+/// Delivers feature callbacks (38.36.3) as if no application VPI call were
+/// active, also when an application's vpi_control causes them: their own VPI
+/// calls report their own errors (and deliver cbPLIError when they fail), and
+/// the error status of the call in progress is the same afterwards.
+talos_rt_status dispatchOutsideCall(VPIState *state, PLI_INT32 reason,
+                                    vpiHandle object = nullptr) noexcept {
+  const uint32_t depth = state->callDepth;
+  const int level = state->errorLevel;
+  std::string message;
+  std::string code;
+  TALOS_RT_TRY {
+    message = state->errorMessage;
+    code = state->errorCode;
+  }
+  TALOS_RT_CATCH_ALL {}
+  state->callDepth = 0;
+  talos_rt_status status = dispatchLifecycle(state, reason, object);
+  state->callDepth = depth;
+  state->errorLevel = level;
+  state->errorMessage = std::move(message);
+  state->errorCode = std::move(code);
+  return status;
+}
+
+/// D.8 and 20.2 in a batch run: interactive mode is entered and left at once.
+/// A $stop during that delivery does not enter it again.
+void deliverInteractive(VPIState *state) noexcept {
+  state->interactive = true;
+  (void)dispatchOutsideCall(state, cbEnterInteractive);
+  (void)dispatchOutsideCall(state, cbExitInteractive);
+  state->interactive = false;
 }
 
 /// Delivers the cbError or cbPLIError callbacks registered before delivery
@@ -1316,6 +1433,7 @@ void deliverErrorCallbacks(VPIState *state, PLI_INT32 reason) noexcept {
       ManagedRunHoldPause pause;
       TALOS_RT_TRY { (void)invocation.cb_rtn(&invocation); }
       TALOS_RT_CATCH_ALL {}
+      runPendingReset(state);
     }
     state->errorMessage = message;
     state->errorCode = code;
@@ -1350,7 +1468,7 @@ void eraseCallback(VPIState *state, uint64_t id) {
       ++entry;
   }
   releaseObservationDemand(state, reason);
-  noteErrorActionCallback(state, reason, false);
+  noteCountedCallback(state, reason, false);
 }
 
 PLI_INT32 removeCallbackHandle(VPIState *state, __vpiHandle *handle) {
@@ -8884,6 +9002,7 @@ talos_rt_vpi_dispatch_time_callbacks_unlocked(talos_rt_context *context) {
       status = TALOS_RT_FATAL;
     }
     context->vpiTimeCallbackActive = false;
+    runPendingReset(state);
     --state->callbackDepth;
     // The callback may remove itself, release its handle, or cancel a peer.
     eraseCallback(state, id);
@@ -8958,6 +9077,7 @@ talos_rt_vpi_dispatch_sync_callbacks_unlocked(talos_rt_context *context,
       status = TALOS_RT_FATAL;
     }
     context->vpiTimeCallbackActive = false;
+    runPendingReset(state);
     --state->callbackDepth;
     eraseCallback(state, id);
     if (status != TALOS_RT_OK || context->destroyPending ||
@@ -9706,6 +9826,55 @@ talos_rt_v1_vpi_frame_leave(talos_rt_context *context, uint64_t activation) {
       context, process, state->frameStacks.at(process).size() - 1);
 }
 
+/// Delivers cbInteractiveScopeChange for a $scope (D.11). Reached only through
+/// VPIState::announceInteractiveScope, so a build that never starts VPI does
+/// not link the name lookup and what it reaches.
+static void announceInteractiveScope(VPIState *state,
+                                     const std::string &path) noexcept {
+  // IEEE 1800-2023 38.36.3: obj is a handle to the new scope. The lookup is
+  // the runtime's, not an application call: it neither changes the error
+  // status vpi_chk_error reports nor delivers cbPLIError.
+  struct RuntimeLookup {
+    VPIState *state;
+    const int level;
+    const std::string message;
+    const std::string code;
+    explicit RuntimeLookup(VPIState *state)
+        : state(state), level(state->errorLevel), message(state->errorMessage),
+          code(state->errorCode) {
+      ++state->callDepth;
+    }
+    ~RuntimeLookup() {
+      --state->callDepth;
+      state->errorLevel = level;
+      state->errorMessage = message;
+      state->errorCode = code;
+    }
+  };
+  if (state->scopeChangeCallbacks == 0 || state->deliveringScopeChange)
+    return;
+  TALOS_RT_TRY {
+    std::string name = path;
+    vpiHandle scope = nullptr;
+    {
+      RuntimeLookup lookup(state);
+      scope = vpi_handle_by_name(name.data(), nullptr);
+    }
+    // The handle is valid during the callbacks. A scope vpi_handle_by_name
+    // cannot find (D.11 allows any named block, but blocks inside procedures
+    // are reached only through their statements) still changes: obj is then
+    // NULL.
+    state->deliveringScopeChange = true;
+    (void)dispatchOutsideCall(state, cbInteractiveScopeChange, scope);
+    state->deliveringScopeChange = false;
+    if (scope) {
+      RuntimeLookup release(state);
+      (void)vpi_release_handle(scope);
+    }
+  }
+  TALOS_RT_CATCH_ALL { state->deliveringScopeChange = false; }
+}
+
 extern "C" TALOS_VPI_EXPORT talos_rt_status
 talos_rt_v1_vpi_startup(talos_rt_context *context, const char *const *modules,
                         uint64_t moduleCount) {
@@ -9724,6 +9893,7 @@ talos_rt_v1_vpi_startup(talos_rt_context *context, const char *const *modules,
   TALOS_RT_CATCH_ALL { return TALOS_RT_OUT_OF_MEMORY; }
   state->context = context;
   state->ownerSlot = activeSlot;
+  state->announceInteractiveScope = announceInteractiveScope;
   activeSlot->state.store(state.get(), std::memory_order_release);
   ActiveStateGuard bindingGuard(state.get());
   for (uint64_t moduleIndex = 0; moduleIndex != moduleCount; ++moduleIndex) {
@@ -9878,7 +10048,19 @@ talos_rt_v1_vpi_start_simulation(talos_rt_context *context) {
   if (state->phase != VPIPhase::BeforeStartSimulation)
     return TALOS_RT_INVALID_ARGUMENT;
   state->phase = VPIPhase::StartSimulation;
-  talos_rt_status status = dispatchLifecycle(state, cbStartOfSimulation);
+  // IEEE 1800-2023 38.36.3: a run that $reset started ends the reset once the
+  // initial values are in place, before any procedure runs.
+  talos_rt_status status = TALOS_RT_OK;
+  if (talos_rt_reset_count() > 0) {
+    status = dispatchLifecycle(state, cbEndOfReset);
+    // D.8: a zero or omitted stop_value enters interactive mode after the
+    // reset, which a batch run leaves at once.
+    if (talos_rt_reset_interactive())
+      deliverInteractive(state);
+  }
+  talos_rt_status startStatus = dispatchLifecycle(state, cbStartOfSimulation);
+  if (status == TALOS_RT_OK)
+    status = startStatus;
   state->phase = VPIPhase::Running;
   return status;
 }
@@ -14541,7 +14723,8 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_register_cb(p_cb_data callbackData) {
   const std::optional<uint32_t> sync = syncCallbackStage(callbackData->reason);
   const bool timer = callbackData->reason == cbAfterDelay || sync;
   if (!isLifecycleReason(callbackData->reason) &&
-      !isErrorActionReason(callbackData->reason) && !timer) {
+      !isErrorActionReason(callbackData->reason) &&
+      !isFeatureReason(callbackData->reason) && !timer) {
     if (state->phase == VPIPhase::StartupRestricted)
       state->unsupportedStartup = true;
     setError(state, "VPI callback reason is not implemented");
@@ -14619,7 +14802,7 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_register_cb(p_cb_data callbackData) {
       return nullptr;
     }
     // Counted with the record, so every eraseCallback has a match.
-    noteErrorActionCallback(state, callbackData->reason, true);
+    noteCountedCallback(state, callbackData->reason, true);
     TALOS_RT_TRY {
       state->callbackOrder.push_back(id);
       if (sync)
@@ -15724,6 +15907,58 @@ void talos_rt_vpi_run_time_error(talos_rt_context *context,
   TALOS_RT_CATCH_ALL {}
 }
 
+void talos_rt_vpi_reset_starting(talos_rt_context *context) noexcept {
+  auto *state = context ? static_cast<VPIState *>(context->vpiState) : nullptr;
+  if (!state || state != currentState() || state->resetStarting)
+    return;
+  state->resetStarting = true;
+  (void)dispatchOutsideCall(state, cbStartOfReset);
+  state->resetStarting = false;
+}
+
+void talos_rt_vpi_interactive_scope_changed(talos_rt_context *context,
+                                            const std::string &path) noexcept {
+  auto *state = context ? static_cast<VPIState *>(context->vpiState) : nullptr;
+  if (state && state == currentState() && state->announceInteractiveScope)
+    state->announceInteractiveScope(state, path);
+}
+
+void talos_rt_vpi_termination_reached(talos_rt_context *context) noexcept {
+  auto *state = context ? static_cast<VPIState *>(context->vpiState) : nullptr;
+  if (!state || state != currentState() || state->callbackDepth != 0)
+    return;
+  if (state->interactivePending) {
+    state->interactivePending = false;
+    deliverInteractive(state);
+  }
+  if (state->pendingReset)
+    performPendingReset(state);
+}
+
+bool talos_rt_vpi_termination_pending(
+    const talos_rt_context *context) noexcept {
+  const auto *state =
+      context ? static_cast<const VPIState *>(context->vpiState) : nullptr;
+  return state && (state->interactivePending || state->pendingReset);
+}
+
+void talos_rt_vpi_stop_requested(talos_rt_context *context) noexcept {
+  auto *state = context ? static_cast<VPIState *>(context->vpiState) : nullptr;
+  if (!state || state != currentState() || state->interactive)
+    return;
+  // IEEE 1800-2023 38.4: vpiStop executes $stop upon return of the
+  // application routine; $stop itself ends its process first (20.2). Both
+  // reach the scheduler's stop through the termination latch; final
+  // procedures and cbEndOfSimulation are already past it.
+  if (state->context->schedulerRunningFinals ||
+      state->phase == VPIPhase::EndSimulation ||
+      state->phase == VPIPhase::Ended) {
+    deliverInteractive(state);
+    return;
+  }
+  state->interactivePending = true;
+}
+
 extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_control(PLI_INT32 operation, ...) {
   VPICallScope vpiCallScope;
   VPIState *state = requireState();
@@ -15763,6 +15998,94 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_control(PLI_INT32 operation, ...) {
     PLI_INT32 type = va_arg(arguments, PLI_INT32);
     const char *name = va_arg(arguments, const char *);
     result = persistCoverage(state, operation == vpiCoverageSave, type, name);
+    break;
+  }
+  case vpiReset: {
+    // IEEE 1800-2023 38.4: $reset (D.8) runs with the stop, reset and
+    // diagnostic values "upon return of the application routine". As for
+    // $reset itself, a zero stop_value enters (and at once leaves) the
+    // interactive mode after the reset; no diagnostics are displayed.
+    PLI_INT32 stopValue = va_arg(arguments, PLI_INT32);
+    PLI_INT32 resetValue = va_arg(arguments, PLI_INT32);
+    PLI_INT32 diagnostics = va_arg(arguments, PLI_INT32);
+    (void)diagnostics;
+#if defined(__EMSCRIPTEN__)
+    (void)stopValue;
+    (void)resetValue;
+    setError(state, "VPI reset is not available on this platform");
+    break;
+#else
+    if (state->resetStarting || state->pendingReset) {
+      setError(state, "VPI reset is already in progress");
+      break;
+    }
+    state->pendingReset = VPIState::PendingReset{
+        resetValue, stopValue == 0, state->callbackDepth != 0};
+    result = 1;
+    // From an imported task or function, the termination latch ends the
+    // calling process once the call returns (20.2), and the scheduler then
+    // resets instead of running final procedures. Final procedures and
+    // cbEndOfSimulation are already past the latch, so a reset requested from
+    // there (or before the simulation starts) runs now.
+    if (state->pendingReset->fromCallback)
+      break;
+    if (state->phase == VPIPhase::Running &&
+        !state->context->schedulerRunningFinals &&
+        talos_rt_v1_scheduler_finish(state->context, 0) == TALOS_RT_OK)
+      break;
+    performPendingReset(state);
+    result = 0;
+    break;
+#endif
+  }
+  case vpiSetInteractiveScope: {
+    // IEEE 1800-2023 38.4: the interactive scope changes at once to a scope
+    // (37.12) with a hierarchical name, the one $scope (D.11) sets and
+    // $showscopes and $showvars (D.12, D.13) list.
+    vpiHandle scope = va_arg(arguments, vpiHandle);
+    __vpiHandle *handle = scope ? validate(scope) : nullptr;
+    PLI_INT32 type = handle ? vpi_get(vpiType, scope) : 0;
+    bool isScope = false;
+    switch (type) {
+    case vpiModule:
+    case vpiInterface:
+    case vpiProgram:
+    case vpiPackage:
+    case vpiTask:
+    case vpiFunction:
+    case vpiNamedBegin:
+    case vpiNamedFork:
+    case vpiGenScope:
+    case vpiClockingBlock:
+    case vpiClassDefn:
+      isScope = true;
+      break;
+    default:
+      // An unnamed begin, fork, for or foreach may be a scope too (37.12
+      // details 1-2), but has no hierarchical name for $showscopes to use.
+      break;
+    }
+    const char *name = isScope ? vpi_get_str(vpiFullName, scope) : nullptr;
+    if (!name) {
+      setError(state, "VPI interactive scope must be a named scope handle");
+      break;
+    }
+    TALOS_RT_TRY {
+      ContextMutexLock lock(state->context);
+      state->context->interactiveScope = name;
+      result = 1;
+    }
+    TALOS_RT_CATCH_ALL {
+      setError(state, "VPI interactive scope is out of memory", vpiSystem);
+      break;
+    }
+    // obj is the application's own handle. A change made from such a callback
+    // delivers none.
+    if (state->scopeChangeCallbacks != 0 && !state->deliveringScopeChange) {
+      state->deliveringScopeChange = true;
+      (void)dispatchOutsideCall(state, cbInteractiveScopeChange, scope);
+      state->deliveringScopeChange = false;
+    }
     break;
   }
   default:

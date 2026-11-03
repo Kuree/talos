@@ -1120,6 +1120,7 @@ talos_rt_status openFile(talos_rt_context *context, State &state,
                          const std::string &path) {
   closeFile(state);
   state.file = std::fopen(path.c_str(), "wb");
+  talos_rt_close_on_exec(state.file);
   if (!state.file)
     return TALOS_RT_IO_ERROR;
   state.path = path;

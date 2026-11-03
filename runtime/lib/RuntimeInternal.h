@@ -41,6 +41,9 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#if !defined(_WIN32)
+#include <fcntl.h>
+#endif
 
 // Named feature sections are an ELF optimization. Mach-O and COFF use
 // different section naming rules, while WebAssembly has a single code section.
@@ -4435,6 +4438,45 @@ talos_rt_vpi_export_begin(talos_rt_context *context,
 // Cold; returns at once without registered cbError callbacks.
 void talos_rt_vpi_run_time_error(talos_rt_context *context,
                                  const char *message) noexcept;
+// IEEE 1800-2023 38.36.3 feature callbacks: cbStartOfReset at the start of
+// $reset (D.8), before the executable runs again; cbEnterInteractive and
+// cbExitInteractive around $stop, which ends a batch simulation instead of
+// entering an interactive mode. Cold; only with VPI state.
+void talos_rt_vpi_reset_starting(talos_rt_context *context) noexcept;
+void talos_rt_vpi_stop_requested(talos_rt_context *context) noexcept;
+/// The scheduler reached the final phase: $stop's cbEnterInteractive and
+/// cbExitInteractive run, then a reset vpi_control(vpiReset) requested from
+/// an imported task or function runs instead of the final procedures (38.4).
+/// Pending says whether either is due.
+void talos_rt_vpi_termination_reached(talos_rt_context *context) noexcept;
+bool talos_rt_vpi_termination_pending(const talos_rt_context *context) noexcept;
+void talos_rt_vpi_interactive_scope_changed(talos_rt_context *context,
+                                            const std::string &path) noexcept;
+// $reset (D.8) with `value` for $reset_value, entering interactive mode
+// after it (a zero stop_value) when `interactive`; on success it does not
+// return.
+talos_rt_status talos_rt_reset_to_time_zero(talos_rt_context *context,
+                                            std::string_view value,
+                                            bool interactive);
+// $reset_count (D.8): resets that led to this run; whether the last one
+// enters interactive mode.
+int32_t talos_rt_reset_count() noexcept;
+bool talos_rt_reset_interactive() noexcept;
+// A descriptor the runtime opens for the design ($fopen, $log, $dumpfile)
+// closes when $reset runs the executable again (D.8) or $system starts a
+// program, so none accumulates across resets.
+inline void talos_rt_close_on_exec(std::FILE *file) noexcept {
+#if !defined(_WIN32)
+  if (!file)
+    return;
+  int descriptor = fileno(file);
+  int flags = descriptor < 0 ? -1 : fcntl(descriptor, F_GETFD);
+  if (flags >= 0)
+    (void)fcntl(descriptor, F_SETFD, flags | FD_CLOEXEC);
+#else
+  (void)file;
+#endif
+}
 talos_rt_status talos_rt_vpi_export_task_enter(talos_rt_context *context,
                                                uint64_t executor);
 talos_rt_status talos_rt_vpi_export_end(talos_rt_context *context,

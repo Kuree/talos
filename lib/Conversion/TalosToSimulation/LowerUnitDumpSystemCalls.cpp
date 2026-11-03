@@ -121,10 +121,15 @@ UnitLowering::lowerDumpSystemCall(semantic::SVCallExpressionOp op) {
     return dummyTaskResult();
   }
   if (name == "$reset") {
-    // Only the reset_value crosses the reset; see D.8 in the runtime.
-    SmallVector<Value, 1> arguments;
-    if (children.size() > 1) {
-      FailureOr<Value> value = integerArgument(children[1]);
+    // The reset_value and whether the stop_value enters interactive mode
+    // cross the reset (D.8, with an omitted argument 0); see the runtime.
+    SmallVector<Value, 2> arguments;
+    for (size_t index : {size_t(1), size_t(0)}) {
+      if (children.size() <= index) {
+        arguments.push_back(stringConstant("0"));
+        continue;
+      }
+      FailureOr<Value> value = integerArgument(children[index]);
       if (failed(value))
         return failure();
       arguments.push_back(*value);

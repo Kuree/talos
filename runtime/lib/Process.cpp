@@ -3719,6 +3719,8 @@ midSimulationStatusUnlocked(const talos_rt_context *context) noexcept {
 }
 
 void enterFinalPhaseUnlocked(talos_rt_context *context) noexcept {
+  if (context->vpiState)
+    talos_rt_vpi_termination_reached(context);
   // Exhaustion latches schedulerStatus, which the scheduler returns next.
   if (context->schedulerCohortEnabled && !context->schedulerRunningFinals &&
       nextSchedulerCohortUnlocked(context, TALOS_RT_REGION_ACTIVE) !=
@@ -3819,6 +3821,11 @@ talos_rt_v1_scheduler_program_exit(talos_rt_context *context) {
 
 extern "C" talos_rt_status talos_rt_v1_scheduler_stop(talos_rt_context *context,
                                                       uint32_t verbosity) {
+  // IEEE 1800-2023 38.36.3: $stop enters and at once leaves the interactive
+  // mode a batch simulation does not have; VPI delivers cbEnterInteractive and
+  // cbExitInteractive once the stopping process returns to the scheduler.
+  if (context && context->vpiState)
+    talos_rt_vpi_stop_requested(context);
   // Standalone executables have no interactive command loop in which a
   // stopped design can remain suspended. Keep the request distinct at the ABI
   // boundary, but use the documented batch-mode termination policy.
@@ -4846,6 +4853,12 @@ talos_rt_status runScheduler(talos_rt_context *context,
             context->schedulerDeadProcessCount != 0;
       }
       if (context->schedulerFinishRequested.load(std::memory_order_relaxed)) {
+        // VPI work due at the stop ($stop's interactive callbacks, a reset
+        // vpi_control asked for) runs foreign code: as for timed callbacks,
+        // the eval continuation exports its captured NBAs first.
+        if (options.stopBeforeNBA && context->vpiState &&
+            talos_rt_vpi_termination_pending(context))
+          return TALOS_RT_TIER_UNAVAILABLE;
         enterFinalPhaseUnlocked(context);
         if (context->schedulerStatus != TALOS_RT_OK)
           return context->schedulerStatus;

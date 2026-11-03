@@ -12,6 +12,7 @@ module top;
     $nolog;
     $input("c.txt");
     $reset(1, 42);
+    $reset;
     n = $reset_count + $reset_value;
     $scope(top.k);
     $showscopes(1);
@@ -28,9 +29,15 @@ endmodule
 // CHECK: simulation.system
 // CHECK: simulation.string.literal "c.txt"
 // CHECK: simulation.string.literal "\00input"
-// The reset_value alone crosses the reset.
-// CHECK: simulation.string.format_integer
-// CHECK: simulation.string.literal "\00reset"
+// The reset_value, then the stop_value (whether interactive mode follows),
+// cross the reset.
+// CHECK: simulation.string.format_integer %c42_i64
+// CHECK-NEXT: simulation.string.format_integer %c1_i64
+// CHECK-NEXT: simulation.string.literal "\00reset"
+// Omitted, both are 0: interactive mode follows (D.8).
+// CHECK: simulation.string.literal "0"
+// CHECK-NEXT: simulation.string.literal "0"
+// CHECK-NEXT: simulation.string.literal "\00reset"
 // CHECK: simulation.string.literal "\00reset_count"
 // CHECK: simulation.string.literal "\00reset_value"
 // $scope and $showvars read the design database that a dump operation retains.

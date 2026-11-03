@@ -556,6 +556,7 @@ extern "C" talos_rt_status talos_rt_v1_file_open_mcd(talos_rt_context *context,
     }
     errno = 0;
     FILE *stream = std::fopen(pathString->c_str(), "wb");
+    talos_rt_close_on_exec(stream);
     if (!stream) {
       int error = errno ? errno : EIO;
       setLastErrorUnlocked(context, "fopen failed: " + hostErrorMessage(error));
@@ -611,6 +612,7 @@ talos_rt_v1_file_open(talos_rt_context *context, const char *path,
       pathString = "<string>";
     } else {
       stream.reset(std::fopen(pathString->c_str(), normalized.c_str()));
+      talos_rt_close_on_exec(stream.get());
     }
     if (!stream) {
       int error = errno ? errno : EIO;
