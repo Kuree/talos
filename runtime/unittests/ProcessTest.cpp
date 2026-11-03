@@ -7203,12 +7203,16 @@ TEST(Scheduler, FutureDelaysLeavePollCandidatesUntilTheirTimeSlot) {
     process.suspendKind = TALOS_RT_SUSPEND_DELAY;
     process.wakeTime = wakeTimes[index];
   }
+  auto pollSet = [](talos_rt_context *context) {
+    return std::unordered_set<uint64_t>(context->nativePollCandidates.begin(),
+                                        context->nativePollCandidates.end());
+  };
   // Final-phase delays are not in the calendar and stay polled.
   context->scheduledProcesses[3].phase = 1;
   context->scheduledProcesses[3].wakeTime = 7;
   rebuildNativeSchedulerIndexUnlocked(context);
   ASSERT_EQ(enterSchedulerTimeSlotUnlocked(context), TALOS_RT_OK);
-  EXPECT_EQ(context->nativePollCandidates, (std::unordered_set<uint64_t>{4}));
+  EXPECT_EQ(pollSet(context), (std::unordered_set<uint64_t>{4}));
 
   // Re-suspending replaces the calendar entry; the stale one admits nothing.
   auto &moved = context->scheduledProcesses[1];
@@ -7216,17 +7220,14 @@ TEST(Scheduler, FutureDelaysLeavePollCandidatesUntilTheirTimeSlot) {
   indexScheduledProcessDelayUnlocked(context, moved);
   context->schedulerTime = 5;
   ASSERT_EQ(enterSchedulerTimeSlotUnlocked(context), TALOS_RT_OK);
-  EXPECT_EQ(context->nativePollCandidates,
-            (std::unordered_set<uint64_t>{1, 4}));
+  EXPECT_EQ(pollSet(context), (std::unordered_set<uint64_t>{1, 4}));
   context->schedulerTime = 10;
   ASSERT_EQ(enterSchedulerTimeSlotUnlocked(context), TALOS_RT_OK);
-  EXPECT_EQ(context->nativePollCandidates,
-            (std::unordered_set<uint64_t>{1, 4}));
+  EXPECT_EQ(pollSet(context), (std::unordered_set<uint64_t>{1, 4}));
   // A slot past the wake time admits it as well.
   context->schedulerTime = 25;
   ASSERT_EQ(enterSchedulerTimeSlotUnlocked(context), TALOS_RT_OK);
-  EXPECT_EQ(context->nativePollCandidates,
-            (std::unordered_set<uint64_t>{1, 2, 4}));
+  EXPECT_EQ(pollSet(context), (std::unordered_set<uint64_t>{1, 2, 4}));
   EXPECT_EQ(nextScheduledProcessDelayUnlocked(context),
             std::optional<uint64_t>{1000});
   context->scheduledProcesses.clear();

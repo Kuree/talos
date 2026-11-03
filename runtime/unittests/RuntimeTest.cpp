@@ -6,6 +6,7 @@
 
 #include "gtest/gtest.h"
 
+#include "../lib/FlatU64Table.h"
 #include "../lib/RuntimeInternal.h"
 #include "../lib/StrengthFormat.h"
 
@@ -24,6 +25,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -7352,6 +7354,122 @@ TEST_F(ManagedHeapTest, RegistersGrowingInterfaceParentsAndRepairsFailedMerge) {
 }
 
 } // namespace
+
+// Two-tier B2 Q8: the scheduler's open-addressing tables behave as the
+// standard containers they replace under a random mix of inserts, updates,
+// erases (tombstones, slot reuse), clears and rehashes, and iterate over
+// exactly their live elements.
+TEST(FlatU64Table, MatchesStandardContainers) {
+  using talos::runtime::FlatU64Map;
+  using talos::runtime::FlatU64Set;
+  FlatU64Map<size_t> map;
+  FlatU64Set set;
+  std::unordered_map<uint64_t, size_t> mapReference;
+  std::unordered_set<uint64_t> setReference;
+  EXPECT_EQ(map.find(1), map.end());
+  EXPECT_EQ(set.begin(), set.end());
+  uint64_t state = 12345;
+  auto next = [&] {
+    state = state * 6364136223846793005ull + 1442695040888963407ull;
+    return state >> 33;
+  };
+  for (unsigned step = 0; step != 200000; ++step) {
+    // Mostly a sliding window of sequential tokens, like the scheduler's.
+    uint64_t key = step / 4 + next() % 64;
+    switch (next() % 8) {
+    case 0:
+    case 1:
+      map.emplace(key, step);
+      mapReference.emplace(key, step);
+      set.insert(key);
+      setReference.insert(key);
+      break;
+    case 2:
+      map[key] = step;
+      mapReference[key] = step;
+      break;
+    case 3:
+    case 4:
+    case 5:
+      EXPECT_EQ(map.erase(key), mapReference.erase(key));
+      EXPECT_EQ(set.erase(key), setReference.erase(key));
+      break;
+    case 6:
+      if (next() % 4096 == 0) {
+        map.clear();
+        mapReference.clear();
+        set.clear();
+        setReference.clear();
+      } else if (next() % 1024 == 0) {
+        map.reserve(mapReference.size() * 4);
+        set.reserve(setReference.size() * 4);
+      }
+      break;
+    default: {
+      auto found = map.find(key);
+      auto expected = mapReference.find(key);
+      ASSERT_EQ(found == map.end(), expected == mapReference.end());
+      if (found != map.end())
+        EXPECT_EQ(found->second, expected->second);
+      EXPECT_EQ(set.count(key), setReference.count(key));
+      break;
+    }
+    }
+    ASSERT_EQ(map.size(), mapReference.size());
+    ASSERT_EQ(set.size(), setReference.size());
+    if (step % 9973 == 0) {
+      std::unordered_map<uint64_t, size_t> iterated;
+      for (const auto &[token, index] : map)
+        EXPECT_TRUE(iterated.emplace(token, index).second);
+      EXPECT_EQ(iterated, mapReference);
+      EXPECT_EQ(std::unordered_set<uint64_t>(set.begin(), set.end()),
+                setReference);
+    }
+  }
+  // An existing key never rehashes: at the load threshold, emplacing or
+  // indexing a present key keeps every element where it is (and its value).
+  {
+    FlatU64Map<size_t> full;
+    // Twelve keys fill a 16-slot table to its load threshold.
+    for (uint64_t key = 1; key != 13; ++key)
+      full.emplace(key, key);
+    auto order = [&] {
+      std::vector<uint64_t> keys;
+      for (const auto &entry : full)
+        keys.push_back(entry.first);
+      return keys;
+    };
+    std::vector<uint64_t> before = order();
+    auto one = full.find(1);
+    auto [same, inserted] = full.emplace(1, 7);
+    EXPECT_EQ(order(), before);
+    EXPECT_FALSE(inserted);
+    EXPECT_EQ(same, one);
+    EXPECT_EQ(one->second, 1u);
+    full[2] = 9;
+    EXPECT_EQ(full.find(1), one);
+    EXPECT_EQ(full.find(2)->second, 9u);
+    FlatU64Set keys;
+    keys.insert(5);
+    keys.insert(6);
+    auto [present, added] = keys.insert(5);
+    EXPECT_FALSE(added);
+    EXPECT_EQ(*present, 5u);
+  }
+  // Erasing from a set keeps its keys dense: after erasing every even key the
+  // iteration visits exactly the odd ones, once each.
+  FlatU64Set erasing;
+  std::unordered_set<uint64_t> kept;
+  for (uint64_t key = 1; key != 1000; ++key) {
+    erasing.insert(key);
+    if (key % 2)
+      kept.insert(key);
+  }
+  for (uint64_t key = 2; key < 1000; key += 2)
+    EXPECT_EQ(erasing.erase(key), 1u);
+  EXPECT_EQ(erasing.size(), kept.size());
+  EXPECT_EQ(std::unordered_set<uint64_t>(erasing.begin(), erasing.end()), kept);
+}
 
 // Two-tier B2 Q1: the context lock re-enters inline on its owning thread and
 // still excludes every other thread until the outermost unlock.

@@ -9,6 +9,7 @@
 #include "ContextMutex.h"
 #include "DesignBytecodeImage.h"
 #include "ExceptionSupport.h"
+#include "FlatU64Table.h"
 #include "NetBitTables.h"
 #include "StrengthFormat.h"
 #include "TimedUpdateQueue.h"
@@ -2638,12 +2639,12 @@ struct talos_rt_context {
   // Derived solely from immutable installed-plan tables. Live subscriptions
   // and external overrides are still checked at every periodic re-entry.
   std::unordered_set<uint32_t> nativePeriodicGeneratedWritableStates;
-  std::unordered_map<uint64_t, size_t> scheduledProcessIndices;
+  talos::runtime::FlatU64Map<size_t> scheduledProcessIndices;
   // Active instances only: suspended task callers are reindexed on return.
   // Multiple registration retains the earliest scheduler token semantics.
   std::unordered_multimap<talos_rt_process_instance_v1 *, uint64_t>
       scheduledProcessTokens;
-  std::unordered_set<uint64_t> nativePollCandidates;
+  talos::runtime::FlatU64Set nativePollCandidates;
   NativeReadyPublicationBatch *nativeReadyPublicationBatch = nullptr;
   // Lazy min-heap of (wake time, process token). Stale entries are discarded
   // when queried after a process resumes, changes wait kind, or terminates.
@@ -2740,8 +2741,8 @@ struct talos_rt_context {
   std::unordered_map<uint32_t, DelayedMosControl> delayedMosControls;
   std::unordered_map<uint64_t, uint16_t> delayedMosContributions;
   std::vector<ScheduledDesignTask> scheduledDesignTasks;
-  std::unordered_map<uint64_t, size_t> scheduledDesignTaskIndices;
-  std::unordered_set<uint64_t> designPollCandidates;
+  talos::runtime::FlatU64Map<size_t> scheduledDesignTaskIndices;
+  talos::runtime::FlatU64Set designPollCandidates;
   // Logical processes that suspended for a post-Observed resumption, native
   // tokens tagged with TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG. Promotion keeps
   // the entries still waiting and drops the rest.
