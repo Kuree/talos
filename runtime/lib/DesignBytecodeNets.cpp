@@ -222,8 +222,10 @@ NetAliasCache *getNetAliasCache(const Image &image, talos_rt_context *context) {
 
   // Net records are sorted and disjoint (validateImage), so every net bit
   // has a dense index; the component tables below are vectors over it.
-  auto netIndex = std::make_shared<NetBitIndex>();
-  netIndex->assign(cache.nets);
+  auto components = std::make_shared<NetComponentIndex>();
+  const NetBitIndex *netIndex = &components->bits;
+  components->bits.assign(cache.nets);
+  cache.components = components;
   uint64_t netBits = netIndex->size();
   if (netBits > std::numeric_limits<size_t>::max() / sizeof(uint64_t))
     talos_rt_out_of_memory();
@@ -275,11 +277,25 @@ NetAliasCache *getNetAliasCache(const Image &image, talos_rt_context *context) {
                                      : std::pair{rhs, lhs});
     }
   }
-  std::vector<uint64_t> rootByIndex(netBits);
-  for (uint64_t index = 0; index != netBits; ++index)
-    rootByIndex[index] = bitByIndex[findIndexRoot(index)];
-  cache.rootByBit.assign(netIndex, rootByIndex);
-  cache.members.assign(netIndex, rootByIndex, bitByIndex);
+  // The union-find root of an index is its component root's index.
+  std::vector<std::pair<uint64_t, uint64_t>> memberEntries(netBits);
+  std::vector<uint64_t> &rootByIndex = components->rootByIndex;
+  rootByIndex.resize(netBits);
+  for (uint64_t index = 0; index != netBits; ++index) {
+    uint64_t rootIndex = findIndexRoot(index);
+    rootByIndex[index] = bitByIndex[rootIndex];
+    memberEntries[index] = {rootIndex, bitByIndex[index]};
+  }
+  cache.rootByBit.assign(components);
+  cache.members.assign(components, memberEntries);
+  memberEntries = {};
+  // The dense index of `bit`'s component root.
+  auto rootIndexOf = [&](uint64_t bit) {
+    uint64_t index = netIndex->find(bit);
+    if (index == UINT64_MAX)
+      talosNetTableMissing();
+    return findIndexRoot(index);
+  };
   auto findRoot = [&](uint64_t bit) { return cache.rootByBit.at(bit); };
   for (uint64_t index = 0; index != image.connectivityCount; ++index) {
     ConnectivityRecord connection = connectivityAt(image, index);
@@ -393,12 +409,21 @@ NetAliasCache *getNetAliasCache(const Image &image, talos_rt_context *context) {
     if (!rebuildPassComponent(passComponent))
       return nullptr;
   }
-  for (const CaptureRecord &driver : drivers) {
-    uint8_t strength0 = decodeDriverStrength(driver.argument, 3);
-    uint8_t strength1 = decodeDriverStrength(driver.argument, 7);
-    for (uint64_t bit = 0; bit != driver.planeSize; ++bit)
-      cache.driverBits[findRoot(driver.unknownOffset + bit)].push_back(
-          {driver.valueOffset + bit, strength0, strength1});
+  {
+    uint64_t driverBitCount = 0;
+    for (const CaptureRecord &driver : drivers)
+      driverBitCount += driver.planeSize;
+    std::vector<std::pair<uint64_t, NetDriverBit>> driverEntries;
+    driverEntries.reserve(driverBitCount);
+    for (const CaptureRecord &driver : drivers) {
+      uint8_t strength0 = decodeDriverStrength(driver.argument, 3);
+      uint8_t strength1 = decodeDriverStrength(driver.argument, 7);
+      for (uint64_t bit = 0; bit != driver.planeSize; ++bit)
+        driverEntries.emplace_back(
+            rootIndexOf(driver.unknownOffset + bit),
+            NetDriverBit{driver.valueOffset + bit, strength0, strength1});
+    }
+    cache.driverBits.assign(components, driverEntries);
   }
   for (const NetAliasRange &net : cache.nets) {
     if (net.bitwiseDelay || net.propagationDelays.empty() ||
@@ -431,7 +456,7 @@ NetAliasCache *getNetAliasCache(const Image &image, talos_rt_context *context) {
     if (rootByIndex[index] != bitByIndex[index])
       continue;
     uint64_t root = bitByIndex[index];
-    NetComponentMembers::Members component = cache.members.at(root);
+    NetComponentMembers::Items component = cache.members.at(root);
     uint8_t resolution = resolutionOf(component.front());
     bool mixed =
         std::any_of(component.begin(), component.end(), [&](uint64_t member) {
@@ -454,7 +479,7 @@ NetAliasCache *getNetAliasCache(const Image &image, talos_rt_context *context) {
     }
     rootResolution[index] = resolution;
   }
-  cache.resolutionByRoot.assign(netIndex, std::move(rootByIndex), bitByIndex,
+  cache.resolutionByRoot.assign(std::move(components), bitByIndex,
                                 std::move(rootResolution));
   context->netAliases = std::move(cache);
   return &context->netAliases;
@@ -533,13 +558,11 @@ bool publishNetBits(talos_rt_context *context, const NetAliasCache &cache,
       publicationHandle = encodeStaticHandle(staticID, 0);
       publicationWidth = state->second.bitWidth;
     } else {
-      for (const NetAliasRange &net : cache.nets)
-        if (publication.destination >= net.valueOffset &&
-            publication.destination < net.valueOffset + net.width) {
-          publicationHandle = net.valueOffset;
-          publicationWidth = net.width;
-          break;
-        }
+      if (const NetAliasRange *net =
+              cache.netContaining(publication.destination)) {
+        publicationHandle = net->valueOffset;
+        publicationWidth = net->width;
+      }
     }
     talos_rt_invalidate_signal_snapshots_unlocked(context, signalHandle, 1);
     routed.push_back({publicationHandle, publicationWidth, signalHandle, index,
@@ -1146,13 +1169,7 @@ bool resolveNetRoots(const NetAliasCache &cache, talos_rt_context *context,
       chargeValue = !charge.unknown && charge.value;
     }
     for (uint64_t destination : members->second) {
-      const NetAliasRange *net = nullptr;
-      for (const NetAliasRange &candidate : cache.nets)
-        if (destination >= candidate.valueOffset &&
-            destination < candidate.valueOffset + candidate.width) {
-          net = &candidate;
-          break;
-        }
+      const NetAliasRange *net = cache.netContaining(destination);
       if (!net)
         return false;
       bool publishUnknown = net->fourState && resolvedUnknown;
@@ -2112,13 +2129,8 @@ talos_rt_status talos_rt_force_design_nets(talos_rt_context *context,
       if (members == cache->members.end())
         return TALOS_RT_INVALID_HANDLE;
       for (uint64_t destination : members->second) {
-        bool fourState = false;
-        for (const NetAliasRange &net : cache->nets)
-          if (destination >= net.valueOffset &&
-              destination < net.valueOffset + net.width) {
-            fourState = net.fourState;
-            break;
-          }
+        const NetAliasRange *net = cache->netContaining(destination);
+        bool fourState = net && net->fourState;
         bool nextValue = forced.first;
         bool nextUnknown = fourState && forced.second;
         if (!fourState && forced.second)

@@ -8,8 +8,8 @@
 // one binary search, and these tables are vectors over that index.
 //
 // Each table keeps the map interface its callers use (find/end/at, an entry
-// with `first` and `second`). Tables share one index through a shared_ptr so
-// the cache stays movable.
+// with `first` and `second`). Tables share one index and root vector through
+// a shared_ptr so the cache stays movable.
 //
 //===----------------------------------------------------------------------===//
 
@@ -55,14 +55,20 @@ public:
     }
   }
 
-  /// The dense index of `bit`, or UINT64_MAX when no net holds it.
-  uint64_t find(uint64_t bit) const {
+  /// The position in the assigned ranges of the one holding `bit`, or
+  /// SIZE_MAX when none does.
+  size_t range(uint64_t bit) const {
     auto after = std::upper_bound(offsets.begin(), offsets.end(), bit);
     if (after == offsets.begin())
-      return UINT64_MAX;
+      return SIZE_MAX;
     size_t net = static_cast<size_t>(after - offsets.begin()) - 1;
-    uint64_t local = bit - offsets[net];
-    return local < widths[net] ? bases[net] + local : UINT64_MAX;
+    return bit - offsets[net] < widths[net] ? net : SIZE_MAX;
+  }
+
+  /// The dense index of `bit`, or UINT64_MAX when no net holds it.
+  uint64_t find(uint64_t bit) const {
+    size_t net = range(bit);
+    return net == SIZE_MAX ? UINT64_MAX : bases[net] + (bit - offsets[net]);
   }
 
   uint64_t size() const { return total; }
@@ -70,6 +76,21 @@ public:
 private:
   std::vector<uint64_t> offsets, bases, widths;
   uint64_t total = 0;
+};
+
+/// The dense net-bit index plus each bit's connectivity root, built once and
+/// shared by every table keyed by bit or by root.
+struct NetComponentIndex {
+  NetBitIndex bits;
+  /// `rootByIndex[i]` is the root bit of dense index i's component; a root is
+  /// its component's lowest member bit.
+  std::vector<uint64_t> rootByIndex;
+
+  /// The dense index of `root` when it is a component root, else UINT64_MAX.
+  uint64_t rootIndex(uint64_t root) const {
+    uint64_t at = bits.find(root);
+    return at != UINT64_MAX && rootByIndex[at] == root ? at : UINT64_MAX;
+  }
 };
 
 /// Root of every net bit's connectivity component.
@@ -97,14 +118,14 @@ public:
     bool valid = false;
   };
 
-  void assign(std::shared_ptr<const NetBitIndex> netIndex,
-              std::vector<uint64_t> rootByIndex) {
-    index = std::move(netIndex);
-    roots = std::move(rootByIndex);
+  void assign(std::shared_ptr<const NetComponentIndex> componentIndex) {
+    components = std::move(componentIndex);
   }
   const_iterator find(uint64_t bit) const {
-    uint64_t at = index ? index->find(bit) : UINT64_MAX;
-    return at == UINT64_MAX ? end() : const_iterator({bit, roots[at]});
+    uint64_t at = components ? components->bits.find(bit) : UINT64_MAX;
+    return at == UINT64_MAX
+               ? end()
+               : const_iterator({bit, components->rootByIndex[at]});
   }
   const_iterator end() const { return {}; }
   uint64_t at(uint64_t bit) const {
@@ -115,25 +136,24 @@ public:
   }
 
 private:
-  std::shared_ptr<const NetBitIndex> index;
-  std::vector<uint64_t> roots;
+  std::shared_ptr<const NetComponentIndex> components;
 };
 
-/// The member bits of each connectivity component, keyed by its root, in
-/// ascending order.
-class NetComponentMembers {
+/// A list of `T` per connectivity component, keyed by its root, stored as one
+/// array sliced by root index.
+template <typename T> class NetRootLists {
 public:
-  struct Members {
-    const uint64_t *first = nullptr, *last = nullptr;
-    const uint64_t *begin() const { return first; }
-    const uint64_t *end() const { return last; }
+  struct Items {
+    const T *first = nullptr, *last = nullptr;
+    const T *begin() const { return first; }
+    const T *end() const { return last; }
     bool empty() const { return first == last; }
     size_t size() const { return static_cast<size_t>(last - first); }
-    uint64_t front() const { return *first; }
+    const T &front() const { return *first; }
   };
   struct value_type {
     uint64_t first = 0;
-    Members second;
+    Items second;
   };
   class const_iterator {
   public:
@@ -154,38 +174,32 @@ public:
     bool valid = false;
   };
 
-  /// `rootByIndex[i]` is the root bit of dense index i's component and
-  /// `bitByIndex[i]` its bit; a root is its own component's member.
-  void assign(std::shared_ptr<const NetBitIndex> netIndex,
-              const std::vector<uint64_t> &rootByIndex,
-              const std::vector<uint64_t> &bitByIndex) {
-    index = std::move(netIndex);
-    uint64_t total = rootByIndex.size();
-    roots = rootByIndex;
+  /// `entries` pairs a component's root index (the dense index of its root
+  /// bit) with an item; each root's items keep their order in `entries`.
+  void assign(std::shared_ptr<const NetComponentIndex> componentIndex,
+              const std::vector<std::pair<uint64_t, T>> &entries) {
+    components = std::move(componentIndex);
+    uint64_t total = components->bits.size();
     starts.assign(total + 1, 0);
-    // Count members per root index, then place bits in ascending index (and
-    // so ascending bit) order.
-    std::vector<uint64_t> rootIndex(total);
-    for (uint64_t member = 0; member != total; ++member) {
-      rootIndex[member] = index->find(rootByIndex[member]);
-      ++starts[rootIndex[member] + 1];
-    }
+    for (const auto &entry : entries)
+      ++starts[entry.first + 1];
     for (uint64_t at = 0; at != total; ++at)
       starts[at + 1] += starts[at];
-    bits.assign(total, 0);
+    items.assign(entries.size(), T{});
     std::vector<uint64_t> next(starts.begin(), starts.end() - 1);
-    for (uint64_t member = 0; member != total; ++member)
-      bits[next[rootIndex[member]]++] = bitByIndex[member];
+    for (const auto &entry : entries)
+      items[next[entry.first]++] = entry.second;
   }
+  /// The root's items; a component without items is found and empty.
   const_iterator find(uint64_t root) const {
-    uint64_t at = index ? index->find(root) : UINT64_MAX;
-    if (at == UINT64_MAX || roots[at] != root)
+    uint64_t at = components ? components->rootIndex(root) : UINT64_MAX;
+    if (at == UINT64_MAX)
       return end();
-    return const_iterator({root, Members{bits.data() + starts[at],
-                                         bits.data() + starts[at + 1]}});
+    return const_iterator({root, Items{items.data() + starts[at],
+                                       items.data() + starts[at + 1]}});
   }
   const_iterator end() const { return {}; }
-  Members at(uint64_t root) const {
+  Items at(uint64_t root) const {
     const_iterator found = find(root);
     if (found == end())
       talosNetTableMissing();
@@ -193,27 +207,29 @@ public:
   }
 
 private:
-  std::shared_ptr<const NetBitIndex> index;
-  std::vector<uint64_t> roots, starts, bits;
+  std::shared_ptr<const NetComponentIndex> components;
+  std::vector<uint64_t> starts;
+  std::vector<T> items;
 };
+
+/// The member bits of each connectivity component, keyed by its root, in
+/// ascending order.
+using NetComponentMembers = NetRootLists<uint64_t>;
 
 /// The effective resolution kind of each connectivity component, keyed by
 /// its root.
 class NetResolutionByRoot {
 public:
-  /// `resolutionByIndex` is meaningful at each root's own index, where
-  /// `rootByIndex[i] == bitByIndex[i]`.
-  void assign(std::shared_ptr<const NetBitIndex> netIndex,
-              std::vector<uint64_t> rootByIndex,
+  /// `resolutionByIndex` is meaningful at each root's own index.
+  void assign(std::shared_ptr<const NetComponentIndex> componentIndex,
               const std::vector<uint64_t> &bitByIndex,
               std::vector<uint8_t> resolutionByIndex) {
-    index = std::move(netIndex);
-    roots = std::move(rootByIndex);
+    components = std::move(componentIndex);
     resolutions = std::move(resolutionByIndex);
     entries.clear();
-    for (size_t at = 0; at != roots.size(); ++at)
-      if (roots[at] == bitByIndex[at])
-        entries.emplace_back(roots[at], resolutions[at]);
+    for (size_t at = 0; at != resolutions.size(); ++at)
+      if (components->rootByIndex[at] == bitByIndex[at])
+        entries.emplace_back(bitByIndex[at], resolutions[at]);
   }
   /// Every component root with its resolution, in ascending root order.
   std::vector<std::pair<uint64_t, uint8_t>>::const_iterator begin() const {
@@ -223,15 +239,14 @@ public:
     return entries.end();
   }
   uint8_t at(uint64_t root) const {
-    uint64_t at = index ? index->find(root) : UINT64_MAX;
-    if (at == UINT64_MAX || roots[at] != root)
+    uint64_t at = components ? components->rootIndex(root) : UINT64_MAX;
+    if (at == UINT64_MAX)
       talosNetTableMissing();
     return resolutions[at];
   }
 
 private:
-  std::shared_ptr<const NetBitIndex> index;
-  std::vector<uint64_t> roots;
+  std::shared_ptr<const NetComponentIndex> components;
   std::vector<uint8_t> resolutions;
   std::vector<std::pair<uint64_t, uint8_t>> entries;
 };

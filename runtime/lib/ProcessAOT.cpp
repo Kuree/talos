@@ -558,14 +558,59 @@ bool markNativeAOTActorReadyUnlocked(talos_rt_context *context,
   return true;
 }
 
+// Groups the installed plan's merged fragments by actor slot, in plan order.
+// Arming visits each started actor once, and a plan has one fragment per
+// kernel bit, so scanning the table per actor is quadratic (two-tier B4: 602M
+// of BP hello's 3.1G insns). Built once per installation; plan release and
+// installation clear it.
+static bool
+indexMergedFragmentsByActorUnlocked(talos_rt_context *context,
+                                    const talos_rt_native_schedule_plan *plan) {
+  if (context->nativeScheduleMergedByActorSource == plan->merged_fragments &&
+      context->nativeScheduleMergedByActorStarts.size() ==
+          size_t{plan->actor_capacity} + 1 &&
+      context->nativeScheduleMergedByActor.size() ==
+          plan->merged_fragment_count)
+    return true;
+  TALOS_RT_TRY {
+    // Plan installation validated every actor_slot < actor_capacity.
+    std::vector<uint64_t> starts(size_t{plan->actor_capacity} + 1, 0);
+    for (uint64_t fragment = 0; fragment != plan->merged_fragment_count;
+         ++fragment)
+      ++starts[plan->merged_fragments[fragment].actor_slot + 1];
+    for (size_t at = 0; at + 1 < starts.size(); ++at)
+      starts[at + 1] += starts[at];
+    std::vector<uint64_t> fragments(plan->merged_fragment_count);
+    std::vector<uint64_t> next(starts.begin(), starts.end() - 1);
+    for (uint64_t fragment = 0; fragment != plan->merged_fragment_count;
+         ++fragment)
+      fragments[next[plan->merged_fragments[fragment].actor_slot]++] = fragment;
+    context->nativeScheduleMergedByActorStarts = std::move(starts);
+    context->nativeScheduleMergedByActor = std::move(fragments);
+    context->nativeScheduleMergedByActorSource = plan->merged_fragments;
+    return true;
+  }
+  TALOS_RT_CATCH(const std::bad_alloc &) { return false; }
+}
+
+void clearNativeAOTMergedFragmentIndexUnlocked(talos_rt_context *context) {
+  context->nativeScheduleMergedByActorSource = nullptr;
+  context->nativeScheduleMergedByActorStarts = {};
+  context->nativeScheduleMergedByActor = {};
+}
+
 talos_rt_status armStartedNativeAOTActorsUnlocked(talos_rt_context *context) {
   if (context->nativeScheduleStartedPending.empty())
     return TALOS_RT_OK;
-  auto pending = std::move(context->nativeScheduleStartedPending);
-  context->nativeScheduleStartedPending.clear();
   const talos_rt_native_schedule_plan *plan = context->nativeSchedulePlan;
   if (!plan)
     return TALOS_RT_INVALID_LIFECYCLE;
+  // Index before arming anything, so an allocation failure arms no actor.
+  if ((plan->flags & TALOS_RT_NATIVE_SCHEDULE_EVAL) &&
+      !indexMergedFragmentsByActorUnlocked(context, plan))
+    return TALOS_RT_OUT_OF_MEMORY;
+  auto pending = std::move(context->nativeScheduleStartedPending);
+  context->nativeScheduleStartedPending.clear();
   for (auto [slot, start] : pending) {
     if (slot >= context->nativeScheduleActors.size())
       return TALOS_RT_INVALID_LIFECYCLE;
@@ -619,13 +664,16 @@ talos_rt_status armStartedNativeAOTActorsUnlocked(talos_rt_context *context) {
     // executing it replays the entry, which is the activation.
     bool raised = false;
     if (ownsStaticWait && (plan->flags & TALOS_RT_NATIVE_SCHEDULE_EVAL) &&
-        !context->nativeScheduleDeoptimized)
-      for (uint64_t fragment = 0; fragment != plan->merged_fragment_count;
-           ++fragment) {
+        !context->nativeScheduleDeoptimized) {
+      const uint64_t *fragments = context->nativeScheduleMergedByActor.data();
+      const std::vector<uint64_t> &starts =
+          context->nativeScheduleMergedByActorStarts;
+      for (const uint64_t *fragment = fragments + starts[slot],
+                          *last = fragments + starts[slot + 1];
+           fragment != last; ++fragment) {
         const talos_rt_native_merged_fragment &merged =
-            plan->merged_fragments[fragment];
-        if (merged.actor_slot != slot ||
-            merged.continuation != start->continuation ||
+            plan->merged_fragments[*fragment];
+        if (merged.continuation != start->continuation ||
             merged.kernel >= plan->clock_kernel_count)
           continue;
         talos::runtime::publishClockKernelReady(
@@ -633,6 +681,7 @@ talos_rt_status armStartedNativeAOTActorsUnlocked(talos_rt_context *context) {
         context->nativeScheduleClockIngressPending = true;
         raised = true;
       }
+    }
     if (raised) {
       ++context->startedOwnerDiagnostics.timeZeroReadyBits;
       continue;
@@ -3345,6 +3394,7 @@ void talos_rt_release_native_schedule_plan(talos_rt_context *context) noexcept {
   context->nativeScheduleActorTokens.clear();
   context->nativeScheduleActorIndices.clear();
   context->nativeScheduleStartedPending.clear();
+  clearNativeAOTMergedFragmentIndexUnlocked(context);
   context->nativeScheduleNodes.clear();
   context->nativeScheduleNodeSource = nullptr;
   context->nativeScheduleActorNodes.clear();

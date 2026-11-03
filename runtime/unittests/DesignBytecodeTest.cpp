@@ -6031,8 +6031,76 @@ TEST(DesignBytecode, SupplyDominanceDisablesCollapsedUWireDriverLimit) {
   talos_rt_v1_context_destroy(context);
 }
 
+// The net alias cache's tables share one dense index over the sorted net
+// ranges and one root vector (two-tier B4). Lists keep each root's entries in
+// insertion order, a root without entries is found and empty, a non-root
+// member or a bit outside every net is not a key, and the containing-net
+// lookup returns the net holding a bit, none in a gap.
+TEST(DesignBytecode, NetBitTablesShareOneComponentIndex) {
+  struct Range {
+    uint64_t valueOffset, width;
+  };
+  auto components = std::make_shared<NetComponentIndex>();
+  // Nets [10, 13) and [20, 22): dense indices 0-2 and 3-4. Components
+  // {10, 12, 20}, {11}, {21}; a root is the lowest member bit.
+  components->bits.assign(std::vector<Range>{{10, 3}, {20, 2}});
+  components->rootByIndex = {10, 11, 10, 10, 21};
+  EXPECT_EQ(components->bits.size(), 5u);
+  EXPECT_EQ(components->bits.find(9), UINT64_MAX);
+  EXPECT_EQ(components->bits.find(13), UINT64_MAX);
+  EXPECT_EQ(components->bits.find(21), 4u);
+  EXPECT_EQ(components->bits.range(12), 0u);
+  EXPECT_EQ(components->bits.range(20), 1u);
+  EXPECT_EQ(components->bits.range(22), SIZE_MAX);
+  EXPECT_EQ(components->bits.range(15), SIZE_MAX);
+  EXPECT_EQ(components->rootIndex(10), 0u);
+  EXPECT_EQ(components->rootIndex(12), UINT64_MAX);
+
+  NetRootByBit roots;
+  roots.assign(components);
+  EXPECT_EQ(roots.at(20), 10u);
+  EXPECT_EQ(roots.find(15), roots.end());
+
+  NetRootLists<int> lists;
+  lists.assign(components, {{0, 7}, {4, 1}, {0, 3}, {0, 5}});
+  auto ten = lists.find(10);
+  ASSERT_NE(ten, lists.end());
+  EXPECT_EQ(std::vector<int>(ten->second.begin(), ten->second.end()),
+            (std::vector<int>{7, 3, 5}));
+  ASSERT_NE(lists.find(11), lists.end());
+  EXPECT_TRUE(lists.find(11)->second.empty());
+  EXPECT_EQ(lists.at(21).front(), 1);
+  EXPECT_EQ(lists.find(12), lists.end());
+  EXPECT_EQ(lists.find(30), lists.end());
+
+  NetRootLists<int> none;
+  none.assign(components, {});
+  ASSERT_NE(none.find(21), none.end());
+  EXPECT_TRUE(none.find(21)->second.empty());
+
+  NetAliasCache cache;
+  cache.nets = {{10, 10, 3, true, false, {}}, {20, 20, 2, false, false, {}}};
+  cache.components = components;
+  ASSERT_EQ(cache.netContaining(21), &cache.nets[1]);
+  EXPECT_EQ(cache.netContaining(10), &cache.nets[0]);
+  EXPECT_EQ(cache.netContaining(15), nullptr);
+  EXPECT_EQ(cache.netContaining(22), nullptr);
+
+  NetResolutionByRoot resolutions;
+  resolutions.assign(components, {10, 11, 12, 20, 21}, {4, 2, 0, 0, 7});
+  EXPECT_EQ(resolutions.at(11), 2);
+  using RootResolutions = std::vector<std::pair<uint64_t, uint8_t>>;
+  EXPECT_EQ(RootResolutions(resolutions.begin(), resolutions.end()),
+            (RootResolutions{{10, 4}, {11, 2}, {21, 7}}));
+#if defined(__cpp_exceptions)
+  EXPECT_THROW(resolutions.at(20), std::out_of_range);
+  EXPECT_THROW(lists.at(12), std::out_of_range);
+#endif
+}
+
 // Two-tier B4: the net-component checks run over dense net-bit indices. Each
 // case changes one field of an accepted image and must be rejected.
+
 TEST(DesignBytecode, RejectsInvalidCollapsedNetComponents) {
   auto accepted = [](std::vector<uint8_t> bytes, uint64_t stateBits = 195) {
     put64(bytes, 32, imageChecksum(bytes));

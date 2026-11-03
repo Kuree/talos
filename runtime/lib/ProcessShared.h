@@ -360,6 +360,8 @@ bool markNativeAOTActorReadyUnlocked(talos_rt_context *context,
 /// Arms the actors created at their wait once the root initializer has
 /// finished, and raises the time-zero ready bit of each TIME_ZERO owner.
 talos_rt_status armStartedNativeAOTActorsUnlocked(talos_rt_context *context);
+/// Drops the arming index of the merged fragments (plan release/install).
+void clearNativeAOTMergedFragmentIndexUnlocked(talos_rt_context *context);
 talos_rt_status suspendNativeAOTTaskCallerUnlocked(talos_rt_context *context,
                                                    ScheduledProcess &scheduled);
 void clearNativeAOTNodeReadyUnlocked(talos_rt_context *context, uint32_t node);

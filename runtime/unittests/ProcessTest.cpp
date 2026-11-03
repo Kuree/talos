@@ -14508,6 +14508,93 @@ TEST(ProcessSpawn, StartedTimeZeroOwnerSharesItsWakeRoute) {
   }
 }
 
+// Arming finds a time-zero owner's ready bits through a per-plan index of
+// the merged fragments by actor slot (two-tier B4): it raises every fragment
+// of the owner's started continuation and none of another continuation or
+// another actor, wherever they sit in the table.
+TEST(ProcessSpawn, StartedTimeZeroOwnerRaisesOnlyItsOwnFragments) {
+  AOTTestState state;
+  uint64_t ingress = 0;
+  uint64_t active = 1;
+  const talos_rt_native_clock_kernel clocks[] = {
+      {1, TALOS_RT_WAIT_EDGE_CHANGE, 0, 1, &ingress, 1, 0, &active},
+  };
+  const talos_rt_native_merged_fragment merged[] = {
+      {1, 1, 0, 1, 0, 0, generatedCheckpointCallback},
+      {0, 2, 0, 2, 0, 0, generatedCheckpointCallback},
+      {0, 1, 0, 0, 0, 0, generatedCheckpointCallback},
+      {1, 2, 0, 4, 0, 0, generatedCheckpointCallback},
+      {0, 1, 0, 3, 0, 0, generatedCheckpointCallback},
+  };
+  const talos_rt_static_fanout_entry fanout[] = {
+      {1, 0, 1, TALOS_RT_WAIT_EDGE_CHANGE, 1, TALOS_RT_FANOUT_DIRECT, 0, 1, 0,
+       0},
+  };
+  talos_rt_native_schedule_plan plan = makeAOTPlan(state, 2);
+  plan.clock_kernels = clocks;
+  plan.clock_kernel_count = std::size(clocks);
+  plan.merged_fragments = merged;
+  plan.merged_fragment_count = std::size(merged);
+  plan.fanout_entries = fanout;
+  plan.fanout_entry_count = std::size(fanout);
+  plan.timeslot_coordinator = clockCoordinator;
+  plan.promotion_invalidate = schedulerInvalidatePromotion;
+  plan.promotion_ready = schedulerPromotionReady;
+  plan.flags = TALOS_RT_NATIVE_SCHEDULE_EVAL |
+               TALOS_RT_NATIVE_SCHEDULE_STATIC_EVAL_ISLAND |
+               TALOS_RT_NATIVE_SCHEDULE_STATIC_CONTROL |
+               TALOS_RT_NATIVE_SCHEDULE_GENERATED_ACTIONS |
+               TALOS_RT_NATIVE_SCHEDULE_STATIC_FANOUT;
+  talos_rt_execution_descriptor_v1 execution{};
+  execution.version = TALOS_RT_VERSION;
+  execution.state_bit_count = 1;
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 0, 1),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
+  context->nativeStaticEvalIslandCertified = true;
+
+  SchedulerFixture fixture(47);
+  fixture.descriptor.execution = &execution;
+  fixture.descriptor.native_execute = startedOwnerExecute;
+  schedulerWaitHandle = talos_rt_v1_native_state_static_handle(1);
+  schedulerWaitWidth = 1;
+  startedOwnerContinuations.clear();
+  StartedOwnerRecord record = startedOwnerChangeRecord();
+  talos_rt_process_start_v1 start{1,
+                                  TALOS_RT_ACTION_FRAME_WAIT_RECORD,
+                                  0,
+                                  48,
+                                  &record.header,
+                                  TALOS_RT_PROCESS_START_TIME_ZERO,
+                                  0};
+  auto spawn = startedOwnerPlan(fixture, start);
+  ASSERT_NE(talos_rt_v1_process_spawn(context, &spawn, nullptr), 0u);
+  {
+    ContextMutexLock lock(context);
+    ASSERT_EQ(armStartedNativeAOTActorsUnlocked(context), TALOS_RT_OK);
+  }
+  const auto &counts = context->startedOwnerDiagnostics;
+  EXPECT_EQ(counts.armed, 1u);
+  EXPECT_EQ(counts.staticWaits, 1u);
+  EXPECT_EQ(counts.timeZeroReadyBits, 1u);
+  EXPECT_EQ(counts.timeZeroNodes, 0u);
+  EXPECT_EQ(ingress, (uint64_t{1} << 0) | (uint64_t{1} << 3));
+  // The index belongs to the installation: release drops it, so a table
+  // reused with new ownership after release is indexed afresh.
+  EXPECT_EQ(context->nativeScheduleMergedByActorSource, merged);
+  {
+    ContextMutexLock lock(context);
+    talos_rt_release_native_schedule_plan(context);
+  }
+  EXPECT_EQ(context->nativeScheduleMergedByActorSource, nullptr);
+  EXPECT_TRUE(context->nativeScheduleMergedByActorStarts.empty());
+  EXPECT_TRUE(context->nativeScheduleMergedByActor.empty());
+  talos_rt_v1_context_destroy(context);
+}
+
 // Without static fanout the first suspension would have subscribed to its
 // signals; a started process subscribes when it is armed, and its first wake
 // replays the entry once before the activation.

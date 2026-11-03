@@ -1756,9 +1756,12 @@ struct NetPassComponent {
 
 struct NetAliasCache {
   const talos_rt_execution_descriptor_v1 *execution = nullptr;
+  // Dense net-bit indices over `nets` and each bit's component root.
+  std::shared_ptr<const NetComponentIndex> components;
   NetRootByBit rootByBit;
   NetComponentMembers members;
-  std::unordered_map<uint64_t, std::vector<NetDriverBit>> driverBits;
+  // Each component's drivers, keyed by root, in driver-record then bit order.
+  NetRootLists<NetDriverBit> driverBits;
   std::unordered_map<uint64_t, std::vector<NetPassNeighbor>> passNeighbors;
   std::unordered_map<uint64_t, uint64_t> passComponentByRoot;
   std::unordered_map<uint64_t, NetPassComponent> passComponents;
@@ -1778,6 +1781,12 @@ struct NetAliasCache {
   std::vector<NetAliasRange> nets;
   std::vector<NetAliasRange> drivers;
   std::vector<NetStrengthDriverPairRange> strengthDriverPairs;
+
+  /// The net holding state bit `bit`, or null.
+  const NetAliasRange *netContaining(uint64_t bit) const {
+    size_t at = components ? components->bits.range(bit) : SIZE_MAX;
+    return at == SIZE_MAX ? nullptr : &nets[at];
+  }
 };
 
 // Decoded view of the immutable reflection image. Context creation validates
@@ -2552,6 +2561,13 @@ struct talos_rt_context {
   // initializer's completion has not armed yet.
   std::vector<std::pair<uint32_t, const talos_rt_process_start_v1 *>>
       nativeScheduleStartedPending;
+  // The plan's merged fragments grouped by actor slot (CSR: fragment indices
+  // of slot s are [starts[s], starts[s + 1]) in plan order), built on the
+  // first time-zero arming of the plan it names.
+  const talos_rt_native_merged_fragment *nativeScheduleMergedByActorSource =
+      nullptr;
+  std::vector<uint64_t> nativeScheduleMergedByActorStarts;
+  std::vector<uint64_t> nativeScheduleMergedByActor;
   // The coordinator stopped at a cut for runtime work (runtime_yield): the
   // scheduler loop owes it a call once the runtime has nothing below the
   // cut's region (Inactive: deferred owners; Observed: staging), or earlier for

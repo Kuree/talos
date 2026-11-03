@@ -2697,6 +2697,7 @@ talos_rt_v1_scheduler_install_aot(talos_rt_context *context,
       }
       for (uint32_t index = 0; index != nbaRootCount; ++index)
         generatedWrites.insert(nbaRoots[index].static_state);
+      clearNativeAOTMergedFragmentIndexUnlocked(context);
       context->nativeScheduleNodes.clear();
       context->nativeScheduleNodeSource = nullptr;
       context->nativeScheduleActorNodes.clear();
