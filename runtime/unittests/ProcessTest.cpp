@@ -14943,6 +14943,52 @@ TEST(Scheduler, CheckpointDrainReturnsGeneratedIngressToThePlanEntry) {
   EXPECT_FALSE(context->nativeScheduleCoordinatorYielded);
 }
 
+// A checkpoint drain entered while the coordinator waits at a cut for runtime
+// work (it yielded with NBA staging, and no new ingress is pending) runs that
+// runtime work and returns at the eval cut without calling the coordinator,
+// so no NBA commit happens inside the drain (IEEE 1800-2023 4.4.2.4, 4.5).
+// The next ordinary drain calls it back and it commits.
+TEST(Scheduler, CheckpointDrainLeavesAYieldedCoordinatorToThePlanEntry) {
+  YieldTestDesign design(/*timeZero=*/false);
+  ASSERT_EQ(design.status, TALOS_RT_OK);
+  talos_rt_context *context = design.context;
+  SchedulerFixture reader(21);
+  reader.descriptor.native_execute = yieldTestReaderExecute;
+  ASSERT_EQ(
+      talos_rt_v1_scheduler_add(context, makeSchedulerInstance(reader), 0),
+      TALOS_RT_OK);
+  constexpr talos_rt_native_schedule_node nodes[] = {
+      {0, 0, UINT32_MAX},
+      {0, 1, UINT32_MAX},
+  };
+  {
+    ContextMutexLock lock(context);
+    ASSERT_EQ(
+        initializeNativeAOTNodesUnlocked(context, nodes, std::size(nodes)),
+        TALOS_RT_OK);
+    // The state callNativeCoordinatorUnlocked records for a STAGED yield.
+    yieldTestStaged = true;
+    context->nativeScheduleCoordinatorYielded = true;
+    context->nativeScheduleCoordinatorYieldRegion = TALOS_RT_REGION_OBSERVED;
+    context->nativeScheduleCoordinatorYieldProgress =
+        context->schedulerSlotProgress;
+  }
+  auto drain = [&](bool checkpoint) {
+    NativeAOTContextScope active(context);
+    NativeAOTMutexScope locked(context);
+    return runScheduler(context, {/*nativePlan=*/true,
+                                  /*currentSlotOnly=*/true, checkpoint});
+  };
+  ASSERT_EQ(drain(/*checkpoint=*/true), TALOS_RT_OK);
+  EXPECT_EQ(schedulerOrder, std::vector<uint64_t>{21});
+  EXPECT_EQ(clockCoordinatorCalls, 0u);
+  EXPECT_TRUE(context->nativeScheduleCoordinatorYielded);
+  ASSERT_EQ(drain(/*checkpoint=*/false), TALOS_RT_OK);
+  EXPECT_EQ(schedulerOrder, (std::vector<uint64_t>{21, 901}));
+  EXPECT_EQ(clockCoordinatorCalls, 1u);
+  EXPECT_FALSE(context->nativeScheduleCoordinatorYielded);
+}
+
 // A runtime-routed entry still wakes the owner's node: it is how generated
 // state reaches runtime waiters, and it raises no generated ready bit.
 TEST(Scheduler, RuntimeRoutedEntryStillWakesItsNode) {
@@ -15008,10 +15054,13 @@ TEST(ProcessSpawn, RuntimeWriterSharesTheTimeZeroOwnersReadyBit) {
   EXPECT_FALSE(context->nativeScheduleReadyNodes.test(1));
   EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);
 
-  // Once the coordinator has taken the bit, the next write raises it again.
+  // With the bit clear (as after the coordinator consumed it), the next
+  // write raises it again.
   design.ingress = 0;
+  context->nativeScheduleClockIngressPending = false;
   writeFromTier2(1, 0);
   EXPECT_EQ(design.ingress, 1u);
+  EXPECT_TRUE(context->nativeScheduleClockIngressPending);
   EXPECT_FALSE(owner.signalTriggered);
   EXPECT_FALSE(context->nativeScheduleReadyNodes.test(1));
   EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);

@@ -2997,9 +2997,13 @@ nativeCheckpoint:
           // primary publication, and a delayed transport child created by a
           // source monitor, to enter the same time-slot ordering cohort. The
           // checkpoint callback is intentionally only one actor activation;
-          // drain the newly enabled runtime work before the generated island
-          // can advance to another periodic edge. Generated owners it readies
-          // run first at the next preparation drain (Active order, 4.7).
+          // the newly enabled runtime work runs before the generated island
+          // can advance to another periodic edge. With a coordinator the
+          // ingress raised above makes this drain return at once: every plan
+          // entry, which retryNativeSchedule re-invokes, starts with an
+          // ordinary current-slot drain (prepare_periodic_aot or
+          // run_aot_nodes) that runs the coordinator, then this work, before
+          // run_until resumes (any Active order, 4.7).
           status = drainNativeAOTCurrentSlotUnlocked(
               context, /*returnGeneratedIngress=*/true);
           if (status != TALOS_RT_OK)
@@ -3048,8 +3052,9 @@ nativeCheckpoint:
           return TALOS_RT_INVALID_CONTINUATION;
       }
       // Drain the checkpoint slot's runtime work with generic ordering
-      // arbitration; generated owners run through the coordinator at the
-      // next preparation drain. Future calendar entries remain owned by
+      // arbitration. Once generated ingress is pending the drain returns and
+      // the plan entry's opening current-slot drain runs the coordinator and
+      // the rest of the slot. Future calendar entries remain owned by
       // run_until.
       status = drainNativeAOTCurrentSlotUnlocked(
           context, /*returnGeneratedIngress=*/true);
