@@ -9,6 +9,7 @@
 #include "ContextMutex.h"
 #include "DesignBytecodeImage.h"
 #include "ExceptionSupport.h"
+#include "NetBitTables.h"
 #include "StrengthFormat.h"
 #include "TimedUpdateQueue.h"
 #include "talos/Coverage/CoverageDatabase.h"
@@ -1755,8 +1756,8 @@ struct NetPassComponent {
 
 struct NetAliasCache {
   const talos_rt_execution_descriptor_v1 *execution = nullptr;
-  std::unordered_map<uint64_t, uint64_t> rootByBit;
-  std::unordered_map<uint64_t, std::vector<uint64_t>> members;
+  NetRootByBit rootByBit;
+  NetComponentMembers members;
   std::unordered_map<uint64_t, std::vector<NetDriverBit>> driverBits;
   std::unordered_map<uint64_t, std::vector<NetPassNeighbor>> passNeighbors;
   std::unordered_map<uint64_t, uint64_t> passComponentByRoot;
@@ -1769,7 +1770,7 @@ struct NetAliasCache {
   std::unordered_map<uint64_t, std::vector<uint64_t>> delayedMosBySource;
   std::unordered_map<uint64_t, std::vector<uint64_t>> delayedMosByDestination;
   std::unordered_map<uint64_t, std::vector<uint64_t>> uniformDelayedRootsByRoot;
-  std::unordered_map<uint64_t, uint8_t> resolutionByRoot;
+  NetResolutionByRoot resolutionByRoot;
   std::unordered_map<uint64_t, uint8_t> chargeStrengthByBit;
   // The `default_trireg_strength of each trireg bit that has one (IEEE 1800-2023
   // E.3).

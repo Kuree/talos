@@ -13,6 +13,7 @@
 #include <deque>
 #include <map>
 #include <new>
+#include <numeric>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -167,15 +168,16 @@ NetAliasCache *getNetAliasCache(const Image &image, talos_rt_context *context) {
   cache.execution = context->execution;
   std::vector<CaptureRecord> nets;
   std::vector<CaptureRecord> drivers;
-  std::unordered_map<uint64_t, uint8_t> resolutionByBit;
+  std::vector<uint8_t> netResolution;
   for (uint64_t index = 0; index != image.stateDescriptorCount; ++index) {
     CaptureRecord record = captureAt(image, index);
     if (record.function == kNetStateDescriptor) {
       nets.push_back(record);
-      std::vector<std::optional<std::array<uint64_t, 3>>> propagationDelays(
-          record.planeSize);
+      // Only a delayed net carries per-bit delays (empty: no delay).
+      std::vector<std::optional<std::array<uint64_t, 3>>> propagationDelays;
       bool bitwiseDelay = (record.argument & (uint32_t{1} << 4)) != 0;
       if ((record.argument & (uint32_t{1} << 3)) != 0) {
+        propagationDelays.resize(record.planeSize);
         const uint8_t *encoded =
             image.data + image.constants + record.unknownOffset;
         for (uint64_t bit = 0; bit != record.planeSize; ++bit) {
@@ -193,16 +195,15 @@ NetAliasCache *getNetAliasCache(const Image &image, talos_rt_context *context) {
       uint8_t resolution = decodeNetResolution(record.argument);
       if (resolution == 1)
         resolution = 0; // tri and wire have identical resolution.
-      for (uint64_t bit = 0; bit != record.planeSize; ++bit) {
-        resolutionByBit.emplace(record.valueOffset + bit, resolution);
-        if (resolution == 9) {
+      netResolution.push_back(resolution);
+      if (resolution == 9)
+        for (uint64_t bit = 0; bit != record.planeSize; ++bit) {
           cache.chargeStrengthByBit.emplace(
               record.valueOffset + bit, decodeChargeStrength(record.argument));
           if (uint32_t capacity = (record.argument >> 16) & 0x1ff)
             cache.chargeCapacityByBit.emplace(
                 record.valueOffset + bit, static_cast<uint8_t>(capacity - 1));
         }
-      }
     } else if (record.function == kDriverStateDescriptor) {
       if ((record.argument & (uint32_t{1} << 11)) != 0 && !drivers.empty()) {
         const CaptureRecord &low = drivers.back();
@@ -219,22 +220,38 @@ NetAliasCache *getNetAliasCache(const Image &image, talos_rt_context *context) {
     }
   }
 
-  std::unordered_map<uint64_t, uint64_t> parents;
-  auto findRoot = [&](uint64_t value) {
-    parents.try_emplace(value, value);
-    uint64_t root = value;
+  // Net records are sorted and disjoint (validateImage), so every net bit
+  // has a dense index; the component tables below are vectors over it.
+  auto netIndex = std::make_shared<NetBitIndex>();
+  netIndex->assign(cache.nets);
+  uint64_t netBits = netIndex->size();
+  if (netBits > std::numeric_limits<size_t>::max() / sizeof(uint64_t))
+    talos_rt_out_of_memory();
+  std::vector<uint64_t> bitByIndex(netBits);
+  std::vector<uint8_t> resolutionByIndex(netBits);
+  {
+    uint64_t at = 0;
+    for (size_t net = 0; net != nets.size(); ++net)
+      for (uint64_t bit = 0; bit != nets[net].planeSize; ++bit, ++at) {
+        bitByIndex[at] = nets[net].valueOffset + bit;
+        resolutionByIndex[at] = netResolution[net];
+      }
+  }
+  // Union by smallest index, which is also the smallest bit: a component's
+  // root is its lowest member bit.
+  std::vector<uint64_t> parents(netBits);
+  std::iota(parents.begin(), parents.end(), uint64_t{0});
+  auto findIndexRoot = [&](uint64_t index) {
+    uint64_t root = index;
     while (parents[root] != root)
       root = parents[root];
-    while (parents[value] != value) {
-      uint64_t next = parents[value];
-      parents[value] = root;
-      value = next;
+    while (parents[index] != index) {
+      uint64_t next = parents[index];
+      parents[index] = root;
+      index = next;
     }
     return root;
   };
-  for (const CaptureRecord &net : nets)
-    for (uint64_t bit = 0; bit != net.planeSize; ++bit)
-      parents.try_emplace(net.valueOffset + bit, net.valueOffset + bit);
   std::vector<std::pair<uint64_t, uint64_t>> dominanceEdges;
   for (uint64_t index = 0; index != image.connectivityCount; ++index) {
     ConnectivityRecord connection = connectivityAt(image, index);
@@ -244,8 +261,12 @@ NetAliasCache *getNetAliasCache(const Image &image, talos_rt_context *context) {
       uint64_t lhs = connection.lhsOffset + bitIndex;
       uint64_t rhs = (connection.flags & 1) ? connection.rhsOffset - bitIndex
                                             : connection.rhsOffset + bitIndex;
-      uint64_t lhsRoot = findRoot(lhs);
-      uint64_t rhsRoot = findRoot(rhs);
+      uint64_t lhsIndex = netIndex->find(lhs);
+      uint64_t rhsIndex = netIndex->find(rhs);
+      if (lhsIndex == UINT64_MAX || rhsIndex == UINT64_MAX)
+        return nullptr;
+      uint64_t lhsRoot = findIndexRoot(lhsIndex);
+      uint64_t rhsRoot = findIndexRoot(rhsIndex);
       if (lhsRoot != rhsRoot)
         parents[std::max(lhsRoot, rhsRoot)] = std::min(lhsRoot, rhsRoot);
       if ((connection.flags & 2) != 0)
@@ -254,14 +275,12 @@ NetAliasCache *getNetAliasCache(const Image &image, talos_rt_context *context) {
                                      : std::pair{rhs, lhs});
     }
   }
-
-  for (const CaptureRecord &net : nets)
-    for (uint64_t bit = 0; bit != net.planeSize; ++bit) {
-      uint64_t logicalBit = net.valueOffset + bit;
-      uint64_t root = findRoot(logicalBit);
-      cache.rootByBit.emplace(logicalBit, root);
-      cache.members[root].push_back(logicalBit);
-    }
+  std::vector<uint64_t> rootByIndex(netBits);
+  for (uint64_t index = 0; index != netBits; ++index)
+    rootByIndex[index] = bitByIndex[findIndexRoot(index)];
+  cache.rootByBit.assign(netIndex, rootByIndex);
+  cache.members.assign(netIndex, rootByIndex, bitByIndex);
+  auto findRoot = [&](uint64_t bit) { return cache.rootByBit.at(bit); };
   for (uint64_t index = 0; index != image.connectivityCount; ++index) {
     ConnectivityRecord connection = connectivityAt(image, index);
     if ((connection.flags & 8) == 0)
@@ -404,21 +423,26 @@ NetAliasCache *getNetAliasCache(const Image &image, talos_rt_context *context) {
   std::unordered_map<uint64_t, std::unordered_set<uint64_t>> dominatedByRoot;
   for (const auto &edge : dominanceEdges)
     dominatedByRoot[findRoot(edge.first)].insert(edge.first);
-  for (auto &[root, component] : cache.members) {
-    std::sort(component.begin(), component.end());
-    component.erase(std::unique(component.begin(), component.end()),
-                    component.end());
-    uint8_t resolution = resolutionByBit.at(component.front());
+  auto resolutionOf = [&](uint64_t member) {
+    return resolutionByIndex[netIndex->find(member)];
+  };
+  std::vector<uint8_t> rootResolution(netBits);
+  for (uint64_t index = 0; index != netBits; ++index) {
+    if (rootByIndex[index] != bitByIndex[index])
+      continue;
+    uint64_t root = bitByIndex[index];
+    NetComponentMembers::Members component = cache.members.at(root);
+    uint8_t resolution = resolutionOf(component.front());
     bool mixed =
         std::any_of(component.begin(), component.end(), [&](uint64_t member) {
-          return resolutionByBit.at(member) != resolution;
+          return resolutionOf(member) != resolution;
         });
     if (mixed) {
       // Legacy images omitted port dominance for their only supported mixed
       // topology. Uwire is intrinsically dominant over wire/tri.
       auto uwire = std::find_if(
           component.begin(), component.end(),
-          [&](uint64_t member) { return resolutionByBit.at(member) == 2; });
+          [&](uint64_t member) { return resolutionOf(member) == 2; });
       if (uwire != component.end())
         resolution = 2;
       const auto &dominated = dominatedByRoot[root];
@@ -426,10 +450,12 @@ NetAliasCache *getNetAliasCache(const Image &image, talos_rt_context *context) {
           component.begin(), component.end(),
           [&](uint64_t member) { return !dominated.count(member); });
       if (!dominated.empty() && winner != component.end())
-        resolution = resolutionByBit.at(*winner);
+        resolution = resolutionOf(*winner);
     }
-    cache.resolutionByRoot.emplace(root, resolution);
+    rootResolution[index] = resolution;
   }
+  cache.resolutionByRoot.assign(netIndex, std::move(rootByIndex), bitByIndex,
+                                std::move(rootResolution));
   context->netAliases = std::move(cache);
   return &context->netAliases;
 }
@@ -1150,8 +1176,11 @@ bool resolveNetRoots(const NetAliasCache &cache, talos_rt_context *context,
                                  bit(context->stateValue, destination),
                                  bit(context->stateUnknown, destination),
                                  publishValue, publishUnknown};
+      static const std::optional<std::array<uint64_t, 3>> noDelay;
       const auto &delays =
-          net->propagationDelays[destination - net->valueOffset];
+          net->propagationDelays.empty()
+              ? noDelay
+              : net->propagationDelays[destination - net->valueOffset];
       if (delays) {
         bool decay = resolution == 9 && resolvedZ && !forced && !assigned &&
                      !publishUnknown && (*delays)[2] != UINT64_MAX;
