@@ -2862,6 +2862,11 @@ struct talos_rt_context {
   std::vector<NativeStaticState> nativeScheduleStaticStateIndex;
   std::vector<uint8_t> nativeScheduleStaticStateFanoutEdges;
   std::unordered_map<uint32_t, NativeAutomaticState> nativeAutomaticStates;
+  // Ids of the automatic states each design task owns, so its termination
+  // releases them without walking every automatic state (two-tier B5). An
+  // entry may be stale (state released early, or a failed publication whose id
+  // a later state reuses); release skips states not owned by the task.
+  std::unordered_map<uint64_t, std::vector<uint32_t>> designTaskAutomaticStates;
   std::map<uint64_t, EventState> events;
   std::unordered_map<uint32_t, ImportBinding> imports;
   std::vector<std::unique_ptr<DpiScopeHandle>> dpiScopes;
@@ -4209,6 +4214,10 @@ bool talos_rt_evaluate_design_bound_observer_unlocked(
     uint64_t *value, uint64_t *unknown, uint32_t limbCapacity);
 void talos_rt_erase_automatic_bookkeeping_unlocked(talos_rt_context *context,
                                                    uint32_t automaticID);
+// Drops a finished design task's ownership of its automatic states (releasing
+// those only it held); the caller holds the context mutex.
+void talos_rt_release_design_task_states_unlocked(talos_rt_context *context,
+                                                  uint64_t taskID);
 talos_rt_status talos_rt_native_state_alloc_with_root_offsets(
     talos_rt_context *context, uint64_t bitWidth, const uint8_t *value,
     const uint8_t *unknown, std::vector<uint64_t> bitOffsets,

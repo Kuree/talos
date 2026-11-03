@@ -6641,6 +6641,67 @@ TEST(NativeState, AutomaticViewsCopyWholeWordsInBoundsAndBitsOutside) {
   talos_rt_v1_context_destroy(context);
 }
 
+TEST(NativeState, FinishedDesignTasksReleaseOnlyTheStatesTheyOwn) {
+  // Two-tier B5: a design task's automatic states are indexed by owner, so
+  // its termination visits only them: states another task owns stay, a state
+  // still retained elsewhere survives without an owner, and a state released
+  // before the task finished leaves a stale index entry that is skipped.
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  uint8_t initial = 0;
+  auto alloc = [&](uint64_t task) {
+    context->activeDesignTaskID = task;
+    uint64_t handle = UINT64_MAX;
+    EXPECT_EQ(
+        talos_rt_v1_native_state_alloc(context, 8, &initial, nullptr, &handle),
+        TALOS_RT_OK);
+    context->activeDesignTaskID = 0;
+    return handle;
+  };
+  uint64_t first = alloc(7), retained = alloc(7), released = alloc(7);
+  uint64_t other = alloc(9), another = alloc(9);
+  (void)first;
+  (void)other;
+  (void)another;
+  ASSERT_EQ(context->nativeAutomaticStates.size(), 5u);
+  ASSERT_EQ(talos_rt_v1_native_state_retain(context, retained), TALOS_RT_OK);
+  context->activeDesignTaskID = 7;
+  ASSERT_EQ(talos_rt_v1_native_state_release(context, released, 1),
+            TALOS_RT_OK);
+  context->activeDesignTaskID = 0;
+  ASSERT_EQ(context->nativeAutomaticStates.size(), 4u);
+  // The last-published state released by its owner leaves no index entry.
+  EXPECT_EQ(context->designTaskAutomaticStates[7].size(), 2u);
+  {
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
+    talos_rt_release_design_task_states_unlocked(context, 7);
+  }
+  EXPECT_EQ(context->nativeAutomaticStates.size(), 3u);
+  EXPECT_EQ(context->designTaskAutomaticStates.count(7), 0u);
+  ASSERT_EQ(context->designTaskAutomaticStates.count(9), 1u);
+  EXPECT_EQ(context->designTaskAutomaticStates[9].size(), 2u);
+  // The retained state is the only one left without an owner.
+  unsigned unowned = 0;
+  for (const auto &[id, state] : context->nativeAutomaticStates)
+    if (state.designOwner == 0) {
+      ++unowned;
+      EXPECT_EQ(state.referenceCount, 1u);
+    } else {
+      EXPECT_EQ(state.designOwner, 9u);
+    }
+  EXPECT_EQ(unowned, 1u);
+  {
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
+    talos_rt_release_design_task_states_unlocked(context, 9);
+  }
+  EXPECT_EQ(context->nativeAutomaticStates.size(), 1u);
+  ASSERT_EQ(talos_rt_v1_native_state_release(context, retained, 0),
+            TALOS_RT_OK);
+  EXPECT_TRUE(context->nativeAutomaticStates.empty());
+  EXPECT_TRUE(context->designTaskAutomaticStates.empty());
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(ManagedHeap, LookupsOfFreedObjectsMissAfterCollection) {
   // Two-tier B5: handle lookups are cached per thread. A collection that
   // frees an object makes a cached lookup of it stale, so the freed handle

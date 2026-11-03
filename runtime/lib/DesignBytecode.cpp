@@ -201,13 +201,23 @@ talos_rt_status releaseCapturedAutomaticStates(const Image &image,
     }
     --found->second.referenceCount;
   }
-  for (auto state = context->nativeAutomaticStates.begin();
-       state != context->nativeAutomaticStates.end();)
-    if (state->second.referenceCount == 0) {
-      talos_rt_erase_automatic_bookkeeping_unlocked(context, state->first);
-      state = context->nativeAutomaticStates.erase(state);
-    } else
-      ++state;
+  // Only the states decremented above can have reached zero: every other
+  // release erases at zero itself.
+  for (uint64_t index = 0; index != image.stateDescriptorCount; ++index) {
+    uint64_t stable = UINT64_MAX;
+    bool hasHandle = false;
+    (void)stableAt(index, stable, hasHandle);
+    uint32_t id = 0;
+    int64_t offset = 0;
+    if (!hasHandle || !decodeAutomaticHandle(stable, id, offset))
+      continue;
+    auto found = context->nativeAutomaticStates.find(id);
+    if (found != context->nativeAutomaticStates.end() &&
+        found->second.referenceCount == 0) {
+      talos_rt_erase_automatic_bookkeeping_unlocked(context, id);
+      context->nativeAutomaticStates.erase(found);
+    }
+  }
   return TALOS_RT_OK;
 }
 
@@ -224,14 +234,16 @@ PendingDesignActivation::~PendingDesignActivation() noexcept {
         if (count <= found->second.referenceCount)
           found->second.referenceCount -= count;
       }
-      for (auto state = context->nativeAutomaticStates.begin();
-           state != context->nativeAutomaticStates.end();)
-        if (state->second.referenceCount == 0) {
-          talos_rt_erase_automatic_bookkeeping_unlocked(context, state->first);
-          state = context->nativeAutomaticStates.erase(state);
-        } else {
-          ++state;
+      // Only the states decremented above can have reached zero.
+      for (const auto &[id, count] : retainedAutomaticStates) {
+        (void)count;
+        auto found = context->nativeAutomaticStates.find(id);
+        if (found != context->nativeAutomaticStates.end() &&
+            found->second.referenceCount == 0) {
+          talos_rt_erase_automatic_bookkeeping_unlocked(context, id);
+          context->nativeAutomaticStates.erase(found);
         }
+      }
     }
     TALOS_RT_CATCH_ALL {
       // Destructors on error paths must not obscure the scheduler failure.
@@ -242,19 +254,22 @@ PendingDesignActivation::~PendingDesignActivation() noexcept {
 
 void releaseDesignTaskOwnedStatesUnlocked(talos_rt_context *context,
                                           uint64_t taskID) {
-  for (auto state = context->nativeAutomaticStates.begin();
-       state != context->nativeAutomaticStates.end();) {
-    if (state->second.designOwner != taskID) {
-      ++state;
+  auto owned = context->designTaskAutomaticStates.find(taskID);
+  if (owned == context->designTaskAutomaticStates.end())
+    return;
+  std::vector<uint32_t> ids = std::move(owned->second);
+  context->designTaskAutomaticStates.erase(owned);
+  for (uint32_t id : ids) {
+    auto state = context->nativeAutomaticStates.find(id);
+    if (state == context->nativeAutomaticStates.end() ||
+        state->second.designOwner != taskID)
       continue;
-    }
     state->second.designOwner = 0;
     if (state->second.referenceCount <= 1) {
       talos_rt_erase_automatic_bookkeeping_unlocked(context, state->first);
-      state = context->nativeAutomaticStates.erase(state);
+      context->nativeAutomaticStates.erase(state);
     } else {
       --state->second.referenceCount;
-      ++state;
     }
   }
 }
@@ -4468,6 +4483,11 @@ void rebuildDesignSchedulerIndexUnlocked(talos_rt_context *context) {
 }
 
 } // namespace
+
+void talos_rt_release_design_task_states_unlocked(talos_rt_context *context,
+                                                  uint64_t taskID) {
+  releaseDesignTaskOwnedStatesUnlocked(context, taskID);
+}
 
 talos_rt_status talos_rt_execute_design_observer(
     const talos_rt_execution_descriptor_v1 &execution,

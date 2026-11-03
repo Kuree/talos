@@ -94,6 +94,9 @@ talos_rt_status publishNativeAutomaticState(talos_rt_context *context,
       context->schedulerStatus = TALOS_RT_OUT_OF_RESOURCES;
       return TALOS_RT_OUT_OF_RESOURCES;
     }
+    // Index before publishing: a failed publication leaves a stale entry only.
+    if (state.designOwner != 0)
+      context->designTaskAutomaticStates[state.designOwner].push_back(id);
     if (!context->nativeAutomaticStates.emplace(id, std::move(state)).second)
       return TALOS_RT_INVALID_LIFECYCLE;
     ++context->nextNativeAutomaticID;
@@ -508,6 +511,14 @@ talos_rt_v1_native_state_release(talos_rt_context *context, uint64_t handle,
           found->second.designOwner == context->activeDesignTaskID;
       if (!nativeOwner && !designOwner)
         return TALOS_RT_INVALID_LIFECYCLE;
+      if (designOwner) {
+        // Keep alloc/release loops from growing the owner's index.
+        auto owned =
+            context->designTaskAutomaticStates.find(found->second.designOwner);
+        if (owned != context->designTaskAutomaticStates.end() &&
+            !owned->second.empty() && owned->second.back() == id)
+          owned->second.pop_back();
+      }
       found->second.owner = nullptr;
       found->second.designOwner = 0;
     }
