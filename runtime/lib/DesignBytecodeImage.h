@@ -149,6 +149,11 @@ struct Image {
   uint64_t connectivity = 0, connectivityCount = 0;
   uint64_t shapes = 0, shapeCount = 0;
   uint64_t stateBitCount = 0;
+  // Compact code (TALOS_RT_DESIGN_BYTECODE_COMPACT_CODE): `code` holds
+  // instructionCount u32 offsets, then codeSize - 4 * instructionCount bytes
+  // of encoded instructions.
+  bool compactCode = false;
+  uint64_t codeSize = 0;
 };
 
 struct Function {
@@ -266,7 +271,15 @@ inline Layout layoutAt(const Image &image, const Function &function,
           read32(record + 4), read64(shape + 8), read64(shape + 16)};
 }
 
+/// Decodes compact instruction `index`. A malformed encoding (bytes out of
+/// its range, overlong or out-of-range fields, reserved mask bits, bytes left
+/// over) decodes to opcode UINT16_MAX, which code validation rejects before
+/// anything runs it.
+Instruction compactInstructionAt(const Image &image, uint64_t index);
+
 inline Instruction instructionAt(const Image &image, uint64_t index) {
+  if (image.compactCode)
+    return compactInstructionAt(image, index);
   const uint8_t *data = image.data + image.code + index * kInstructionSize;
   return {read16(data),      read16(data + 2),  read32(data + 4),
           read32(data + 8),  read32(data + 12), read32(data + 16),

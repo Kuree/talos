@@ -156,14 +156,26 @@ bool parseImage(const talos_rt_design_bytecode_entry_v1 &entry, Image &image,
           imageChecksum(data, execution->bytecode_size))
     return rejectImage(__LINE__,
                        "invalid bytecode header identity, size, or checksum");
-  if (read32(data + offsetof(BytecodeHeader, flags)) != 0 ||
-      read64(data + offsetof(BytecodeHeader, tail_reserved)) != 0 ||
+  uint32_t headerFlags = read32(data + offsetof(BytecodeHeader, flags));
+  image.compactCode =
+      (headerFlags & TALOS_RT_DESIGN_BYTECODE_COMPACT_CODE) != 0;
+  image.codeSize = image.compactCode
+                       ? read64(data + offsetof(BytecodeHeader, code_size))
+                       : image.instructionCount * kInstructionSize;
+  if ((headerFlags & ~TALOS_RT_DESIGN_BYTECODE_COMPACT_CODE) != 0 ||
+      (!image.compactCode &&
+       read64(data + offsetof(BytecodeHeader, code_size)) != 0) ||
+      (!image.compactCode &&
+       image.instructionCount > UINT64_MAX / kInstructionSize) ||
+      (image.compactCode &&
+       (image.instructionCount > UINT32_MAX ||
+        image.codeSize < image.instructionCount * 4 ||
+        image.codeSize - image.instructionCount * 4 > UINT32_MAX)) ||
       !validRange(image.functions, image.functionCount, kFunctionSize,
                   image.size) ||
       !validRange(image.layouts, image.layoutCount, kLayoutSize, image.size) ||
       !validRange(image.shapes, image.shapeCount, kShapeSize, image.size) ||
-      !validRange(image.code, image.instructionCount, kInstructionSize,
-                  image.size) ||
+      !validRange(image.code, image.codeSize, 1, image.size) ||
       !validRange(image.operands, image.operandCount, kOperandSize,
                   image.size) ||
       !validRange(image.constants, image.constantSize, 1, image.size) ||
@@ -178,6 +190,12 @@ bool parseImage(const talos_rt_design_bytecode_entry_v1 &entry, Image &image,
                   kConnectivitySize, image.size))
     return rejectImage(
         __LINE__, "invalid bytecode header flags, ranges, or reserved data");
+  // Compact code is canonical: the first instruction starts its byte area
+  // (no unused bytes before it), and an empty table has no bytes.
+  if (image.compactCode &&
+      (image.instructionCount == 0 ? image.codeSize != 0
+                                   : read32(data + image.code) != 0))
+    return rejectImage(__LINE__, "noncanonical compact code table");
   uint64_t cursor = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   auto canonicalTable = [&](uint64_t offset, uint64_t count, uint64_t stride) {
     if (cursor > UINT64_MAX - 7)
@@ -194,7 +212,7 @@ bool parseImage(const talos_rt_design_bytecode_entry_v1 &entry, Image &image,
   if (!canonicalTable(image.functions, image.functionCount, kFunctionSize) ||
       !canonicalTable(image.layouts, image.layoutCount, kLayoutSize) ||
       !canonicalTable(image.shapes, image.shapeCount, kShapeSize) ||
-      !canonicalTable(image.code, image.instructionCount, kInstructionSize) ||
+      !canonicalTable(image.code, image.codeSize, 1) ||
       !canonicalTable(image.operands, image.operandCount, kOperandSize) ||
       !canonicalTable(image.constants, image.constantSize, 1) ||
       !canonicalTable(image.continuations, image.continuationCount,
@@ -207,6 +225,58 @@ bool parseImage(const talos_rt_design_bytecode_entry_v1 &entry, Image &image,
       cursor != image.size)
     return rejectImage(__LINE__, "noncanonical bytecode table layout");
   return true;
+}
+
+Instruction compactInstructionAt(const Image &image, uint64_t index) {
+  constexpr Instruction invalid{UINT16_MAX, 0, 0, 0, 0, 0, 0, 0};
+  if (index >= image.instructionCount)
+    return invalid;
+  const uint8_t *offsets = image.data + image.code;
+  const uint8_t *bytes = offsets + image.instructionCount * 4;
+  uint64_t byteCount = image.codeSize - image.instructionCount * 4;
+  uint64_t begin = read32(offsets + index * 4);
+  uint64_t end = index + 1 == image.instructionCount
+                     ? byteCount
+                     : read32(offsets + (index + 1) * 4);
+  if (begin >= end || end > byteCount || end - begin < 2)
+    return invalid;
+  const uint8_t *cursor = bytes + begin;
+  const uint8_t *limit = bytes + end;
+  Instruction instruction;
+  instruction.opcode = *cursor++;
+  uint8_t mask = *cursor++;
+  if (mask & 0x80)
+    return invalid;
+  // A present field is nonzero and minimally encoded.
+  auto field = [&](uint64_t maximum, uint64_t &value) {
+    value = 0;
+    for (unsigned shift = 0;; shift += 7) {
+      if (cursor == limit || shift > 63)
+        return false;
+      uint8_t byte = *cursor++;
+      if (shift == 63 && (byte & 0x7e))
+        return false;
+      value |= uint64_t{byte & 0x7fu} << shift;
+      if ((byte & 0x80) == 0)
+        return (byte != 0 || shift == 0) && value != 0 && value <= maximum;
+    }
+  };
+  uint64_t values[7] = {};
+  const uint64_t maxima[7] = {UINT16_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX,
+                              UINT32_MAX, UINT32_MAX, UINT64_MAX};
+  for (unsigned bit = 0; bit != 7; ++bit)
+    if ((mask & (1u << bit)) && !field(maxima[bit], values[bit]))
+      return invalid;
+  if (cursor != limit)
+    return invalid;
+  instruction.flags = static_cast<uint16_t>(values[0]);
+  instruction.destination = static_cast<uint32_t>(values[1]);
+  instruction.source0 = static_cast<uint32_t>(values[2]);
+  instruction.source1 = static_cast<uint32_t>(values[3]);
+  instruction.source2 = static_cast<uint32_t>(values[4]);
+  instruction.auxiliary = static_cast<uint32_t>(values[5]);
+  instruction.immediate = values[6];
+  return instruction;
 }
 
 Function functionAt(const Image &image, uint32_t index) {
@@ -2871,6 +2941,9 @@ bool validateFunctionCode(const Image &image, uint32_t functionIndex) {
                       functionIndex, pc, instruction.opcode);
       break;
     default:
+      if (image.compactCode && instruction.opcode == UINT16_MAX)
+        return reject(__LINE__, "malformed compact instruction encoding",
+                      functionIndex, pc);
       return reject(__LINE__, "unknown bytecode opcode", functionIndex, pc,
                     instruction.opcode);
     }

@@ -1,5 +1,8 @@
 // RUN: talos-opt %s --encode-talos-sim-to-bytecode='vpi=off' | FileCheck %s
 // RUN: talos-opt %s --encode-talos-sim-to-bytecode='vpi=off' \
+// RUN:   --test-talos-print-bytecode='metadata=true' -o /dev/null 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=PRINT
+// RUN: talos-opt %s --encode-talos-sim-to-bytecode='vpi=off' \
 // RUN:   --convert-talos-sim-processes-to-llvm-coroutines -o /dev/null
 
 module attributes {
@@ -86,6 +89,6 @@ module attributes {
 // opcode 56 and indexes operand record 4 containing interface ID 3/ordinal 1;
 // neither instruction carries the transitional UINT32_MAX sentinel.
 // CHECK: runtime.bytecode_image = array<i8:
-// CHECK-SAME: 41, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 17, 0, 0, 0, 0, 0, 0, 0
-// CHECK-SAME: 56, 0, 1, 0, 4, 0, 0, 0, 2, 0, 0, 0, 5, 0, 0, 0, 2, 0, 0, 0, 7, 0, 0, 0, 17, 0, 0, 0, 0, 0, 0, 0
-// CHECK-SAME: 3, 0, 0, 0, 1, 0, 0, 0
+// PRINT: operand 4: dst=3 src=1
+// PRINT: opcode=41 flags=1 dst=0 src0=1 src1=1 src2=2 aux=3 imm=17
+// PRINT: opcode=56 flags=1 dst=4 src0=2 src1=5 src2=2 aux=7 imm=17

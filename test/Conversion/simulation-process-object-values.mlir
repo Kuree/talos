@@ -1,5 +1,8 @@
 // RUN: talos-opt %s --convert-talos-sim-processes-to-llvm-coroutines | FileCheck %s --check-prefix=NATIVE
 // RUN: talos-opt %s --encode-talos-sim-to-bytecode='vpi=off' | FileCheck %s --check-prefix=BYTECODE
+// RUN: talos-opt %s --encode-talos-sim-to-bytecode='vpi=off' \
+// RUN:   --test-talos-print-bytecode -o /dev/null 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=PRINT
 
 module attributes {
   llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128",
@@ -71,18 +74,19 @@ module attributes {
 // have flags 0 and size 8; descriptor-process transfers used flags 6.
 // BYTECODE: runtime.bytecode_image = array<i8:
 // Spawn child (intrinsic site 1), null token, current (site 2), and equality.
-// BYTECODE-SAME: 36, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0
-// BYTECODE-SAME: 1, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0, 0, 0, 0, 0, 0
-// BYTECODE-SAME: 36, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0
-// BYTECODE-SAME: 17, 0, 0, 0, 4, 0, 0, 0, 3, 0, 0, 0, 2, 0, 0, 0
+// PRINT: opcode=36 flags=0 dst=0 src0=0 src1=0 src2=0 aux=0 imm=1
+// PRINT-NEXT: opcode=1 flags=0 dst=2 src0=0 src1=0 src2=0 aux=0 imm=32
+// PRINT-NEXT: opcode=36 flags=0 dst=0 src0=0 src1=0 src2=0 aux=0 imm=2
+// PRINT-NEXT: opcode=17 flags=0 dst=4 src0=3 src1=2
 // Await stores the spawned process token directly into stable_id at offset 40.
-// BYTECODE-SAME: 24, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 40, 0, 0, 0, 0, 0, 0, 0
+// PRINT: opcode=24 flags=0 dst=0 src0=1 src1=0 src2=0 aux=0 imm=40
 // The task continuation stores current at frame offset 0, then calls
-// function 3 with the interned argument run at 3 and continuation ordinal 2. Status is intrinsic site 3 after resumption.
-// BYTECODE-SAME: 24, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-// BYTECODE-SAME: 40, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0
-// BYTECODE-SAME: 36, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0
-// BYTECODE-SAME: 23, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+// function 3 with the interned argument run at 3 and continuation ordinal 2.
+// Status is intrinsic site 3 after resumption.
+// PRINT: opcode=24 flags=0 dst=0 src0=3 src1=0 src2=0 aux=8 imm=0
+// PRINT-NEXT: opcode=40 flags=0 dst=0 src0=3 src1=3 src2=1 aux=0 imm=2
+// PRINT-NEXT: opcode=36 flags=0 dst=0 src0=0 src1=0 src2=0 aux=0 imm=3
+// PRINT: opcode=23 flags=0 dst=5 src0=0 src1=0 src2=0 aux=8 imm=0
 // Intrinsic signatures: process.current 0x1022c and process.status 0x1022d.
 // BYTECODE-SAME: 44, 2, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0
 // BYTECODE-SAME: 45, 2, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0

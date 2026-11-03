@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <mutex>
 #include <string>
@@ -70,6 +71,10 @@ uint64_t get64(const std::vector<uint8_t> &bytes, size_t offset) {
   for (unsigned index = 0; index != 8; ++index)
     value |= uint64_t{bytes[offset + index]} << (index * 8);
   return value;
+}
+
+uint16_t get16(const std::vector<uint8_t> &bytes, size_t offset) {
+  return static_cast<uint16_t>(bytes[offset] | (bytes[offset + 1] << 8));
 }
 
 uint32_t get32(const std::vector<uint8_t> &bytes, size_t offset) {
@@ -3972,6 +3977,311 @@ TEST(DesignBytecode, SharedBodiesSuspendAtTheirOwnContinuationIds) {
   EXPECT_EQ(talos_rt_validate_design_bytecode(entry, nullptr, &scratchSize,
                                               &scratchAlignment),
             TALOS_RT_INVALID_BYTECODE);
+}
+
+// Two-tier B4: rewrites a fixed-width test image's code table in the compact
+// encoding (u32 offsets, then opcode, field mask and minimal LEB128 fields),
+// shifting the later tables and header offsets. `mutate` may edit the
+// encoded bytes (offsets included) before the checksum is set.
+std::vector<uint8_t> compactCode(
+    const std::vector<uint8_t> &fixed,
+    const std::function<void(std::vector<uint8_t> &, size_t)> &mutate = {}) {
+  size_t codeOffset = get64(fixed, 72);
+  size_t count = get64(fixed, 80);
+  std::vector<uint8_t> code(count * 4, 0);
+  for (size_t index = 0; index != count; ++index) {
+    put32(code, index * 4, static_cast<uint32_t>(code.size() - count * 4));
+    const uint8_t *record = fixed.data() + codeOffset + index * 32;
+    uint64_t fields[7] = {
+        get16(fixed, codeOffset + index * 32 + 2), 0, 0, 0, 0, 0, 0};
+    for (unsigned field = 1; field != 6; ++field)
+      fields[field] = get32(fixed, codeOffset + index * 32 + field * 4);
+    fields[6] = get64(fixed, codeOffset + index * 32 + 24);
+    code.push_back(record[0]);
+    uint8_t mask = 0;
+    for (unsigned bit = 0; bit != 7; ++bit)
+      if (fields[bit])
+        mask |= uint8_t{1} << bit;
+    code.push_back(mask);
+    for (uint64_t value : fields)
+      for (; value; value >>= 7)
+        code.push_back((value & 0x7f) | (value > 0x7f ? 0x80 : 0));
+  }
+  if (mutate)
+    mutate(code, count);
+  size_t oldEnd = codeOffset + count * 32;
+  size_t newEnd = codeOffset + code.size();
+  size_t delta = ((newEnd + 7) & ~size_t{7}) - oldEnd;
+  std::vector<uint8_t> bytes(fixed.begin(), fixed.begin() + codeOffset);
+  bytes.insert(bytes.end(), code.begin(), code.end());
+  bytes.resize((newEnd + 7) & ~size_t{7}, 0);
+  bytes.insert(bytes.end(), fixed.begin() + oldEnd, fixed.end());
+  for (size_t field = 40; field < 216; field += 16)
+    if (field != 72 && get64(bytes, field) >= oldEnd)
+      put64(bytes, field, get64(bytes, field) + delta);
+  put64(bytes, 24, bytes.size());
+  put32(bytes, 20, TALOS_RT_DESIGN_BYTECODE_COMPACT_CODE);
+  put64(bytes, 216, code.size());
+  put64(bytes, 32, imageChecksum(bytes));
+  return bytes;
+}
+
+talos_rt_status validateStandalone(std::vector<uint8_t> &bytes,
+                                   uint32_t function = 0) {
+  talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
+                                             TALOS_RT_EXECUTION_HAS_BYTECODE,
+                                             0,
+                                             bytes.data(),
+                                             bytes.size(),
+                                             nullptr,
+                                             0,
+                                             65,
+                                             imageChecksum(bytes),
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
+  talos_rt_design_bytecode_entry_v1 entry{&execution, function, 0};
+  uint64_t scratchSize = 0, scratchAlignment = 0;
+  return talos_rt_validate_design_bytecode(entry, nullptr, &scratchSize,
+                                           &scratchAlignment);
+}
+
+// Compact code decodes to the same instructions as the fixed-width table,
+// and runs the same; a malformed encoding fails code validation, and a
+// malformed table header fails parsing.
+TEST(DesignBytecode, CompactCodeDecodesLikeFixedCode) {
+  for (std::vector<uint8_t> fixed :
+       {makeBytecode(), makeSchedulerBytecode(), makeVPIBytecode(),
+        makeSharedSuspendBytecode()}) {
+    std::vector<uint8_t> compact = compactCode(fixed);
+    ASSERT_EQ(validateStandalone(fixed), TALOS_RT_OK);
+    ASSERT_EQ(validateStandalone(compact), TALOS_RT_OK);
+    using namespace talos::designbytecode;
+    talos_rt_execution_descriptor_v1 fixedExecution{}, compactExecution{};
+    for (auto [execution, bytes] : {std::pair{&fixedExecution, &fixed},
+                                    std::pair{&compactExecution, &compact}}) {
+      execution->version = TALOS_RT_VERSION;
+      execution->flags = TALOS_RT_EXECUTION_HAS_BYTECODE;
+      execution->bytecode = bytes->data();
+      execution->bytecode_size = bytes->size();
+      execution->state_bit_count = 65;
+      execution->checksum = imageChecksum(*bytes);
+    }
+    Image fixedImage, compactImage;
+    ASSERT_TRUE(
+        loadValidatedImage({&fixedExecution, 0, 0}, nullptr, fixedImage, true));
+    ASSERT_TRUE(loadValidatedImage({&compactExecution, 0, 0}, nullptr,
+                                   compactImage, true));
+    ASSERT_TRUE(compactImage.compactCode);
+    ASSERT_EQ(fixedImage.instructionCount, compactImage.instructionCount);
+    for (uint64_t index = 0; index != fixedImage.instructionCount; ++index) {
+      Instruction lhs = instructionAt(fixedImage, index);
+      Instruction rhs = instructionAt(compactImage, index);
+      EXPECT_EQ(
+          std::tie(lhs.opcode, lhs.flags, lhs.destination, lhs.source0,
+                   lhs.source1, lhs.source2, lhs.auxiliary, lhs.immediate),
+          std::tie(rhs.opcode, rhs.flags, rhs.destination, rhs.source0,
+                   rhs.source1, rhs.source2, rhs.auxiliary, rhs.immediate))
+          << index;
+    }
+  }
+
+  // The compact suspend image runs: its first function suspends at id 5.
+  {
+    std::vector<uint8_t> compact = compactCode(makeSharedSuspendBytecode());
+    talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
+                                               TALOS_RT_EXECUTION_HAS_BYTECODE,
+                                               0,
+                                               compact.data(),
+                                               compact.size(),
+                                               nullptr,
+                                               0,
+                                               1,
+                                               imageChecksum(compact),
+                                               nullptr,
+                                               0,
+                                               0,
+                                               0,
+                                               nullptr,
+                                               0,
+                                               nullptr,
+                                               0};
+    talos_rt_design_bytecode_entry_v1 entry{&execution, 0, 0};
+    talos_rt_context *context = nullptr;
+    ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+              TALOS_RT_OK);
+    std::array<uint64_t, 1> frame{};
+    talos_rt_fragment_action_v1 action{};
+    ASSERT_EQ(talos_rt_execute_design_bytecode(entry, context, frame.data(),
+                                               sizeof(frame), 0, 8, 0, 0,
+                                               &action),
+              TALOS_RT_OK);
+    EXPECT_EQ(action.kind, TALOS_RT_FRAGMENT_SUSPEND);
+    EXPECT_EQ(action.continuation, 5u);
+    talos_rt_v1_context_destroy(context);
+  }
+
+  // makeBytecode: 0 CONSTANT (flags 0, dst 0, imm 0) is "01 00"; 1
+  // STORE_FRAME dst 0 src0 0 src1 0 is "18 00"; 2 TERMINATE is "23 00".
+  std::vector<uint8_t> fixed = makeBytecode();
+  auto rejected =
+      [&](std::function<void(std::vector<uint8_t> &, size_t)> mutate) {
+        std::vector<uint8_t> compact = compactCode(fixed, mutate);
+        return validateStandalone(compact);
+      };
+  ASSERT_EQ(rejected({}), TALOS_RT_OK);
+  // An empty range (instruction 1 starts where instruction 0 does), a range
+  // too short for the opcode and mask, and a range past the byte area.
+  for (uint32_t offset : {0u, 1u})
+    EXPECT_EQ(rejected([offset](std::vector<uint8_t> &code, size_t) {
+                put32(code, 4, offset);
+              }),
+              TALOS_RT_INVALID_BYTECODE)
+        << offset;
+  EXPECT_EQ(rejected([](std::vector<uint8_t> &code, size_t) {
+              put32(code, 8, 0xffff);
+            }),
+            TALOS_RT_INVALID_BYTECODE);
+  // A reserved mask bit.
+  EXPECT_EQ(rejected([](std::vector<uint8_t> &code, size_t count) {
+              code[count * 4 + 1] = 0x80;
+            }),
+            TALOS_RT_INVALID_BYTECODE);
+  // A present field that is zero, then an overlong (non-minimal) field.
+  EXPECT_EQ(rejected([](std::vector<uint8_t> &code, size_t count) {
+              code[count * 4 + 1] = 0x02;
+              code.insert(code.begin() + count * 4 + 2, 0x00);
+              for (size_t index = 1; index != count; ++index)
+                put32(code, index * 4, get32(code, index * 4) + 1);
+            }),
+            TALOS_RT_INVALID_BYTECODE);
+  EXPECT_EQ(rejected([](std::vector<uint8_t> &code, size_t count) {
+              code[count * 4 + 1] = 0x02;
+              code.insert(code.begin() + count * 4 + 2, {0x81, 0x00});
+              for (size_t index = 1; index != count; ++index)
+                put32(code, index * 4, get32(code, index * 4) + 2);
+            }),
+            TALOS_RT_INVALID_BYTECODE);
+  // The last instruction (TERMINATE, "23 00") with a truncated field, a
+  // field longer than 10 bytes, bits past 64 in the 10th byte, and a 32-bit
+  // field of 2^32.
+  auto lastFields = [&](std::vector<uint8_t> fields) {
+    return rejected([fields](std::vector<uint8_t> &code, size_t count) {
+      size_t last = count * 4 + get32(code, (count - 1) * 4);
+      code.resize(last + 1);
+      code.insert(code.end(), fields.begin(), fields.end());
+    });
+  };
+  EXPECT_EQ(lastFields({0x02, 0x80}), TALOS_RT_INVALID_BYTECODE);
+  EXPECT_EQ(lastFields({0x40, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
+                        0x80, 0x80, 0x01}),
+            TALOS_RT_INVALID_BYTECODE);
+  EXPECT_EQ(lastFields({0x40, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                        0xff, 0x02}),
+            TALOS_RT_INVALID_BYTECODE);
+  EXPECT_EQ(lastFields({0x02, 0x80, 0x80, 0x80, 0x80, 0x10}),
+            TALOS_RT_INVALID_BYTECODE);
+  // A 10-byte immediate of UINT64_MAX is valid (TERMINATE ignores it) and
+  // decodes exactly.
+  {
+    std::vector<uint8_t> wide =
+        compactCode(fixed, [](std::vector<uint8_t> &code, size_t count) {
+          size_t last = count * 4 + get32(code, (count - 1) * 4);
+          code.resize(last + 1);
+          code.insert(code.end(), {0x40, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                                   0xff, 0xff, 0xff, 0x01});
+        });
+    ASSERT_EQ(validateStandalone(wide), TALOS_RT_OK);
+    talos_rt_execution_descriptor_v1 execution{};
+    execution.version = TALOS_RT_VERSION;
+    execution.flags = TALOS_RT_EXECUTION_HAS_BYTECODE;
+    execution.bytecode = wide.data();
+    execution.bytecode_size = wide.size();
+    execution.state_bit_count = 65;
+    execution.checksum = imageChecksum(wide);
+    talos::designbytecode::Image image;
+    ASSERT_TRUE(talos::designbytecode::loadValidatedImage(
+        {&execution, 0, 0}, nullptr, image, true));
+    EXPECT_EQ(talos::designbytecode::instructionAt(image, 2).immediate,
+              UINT64_MAX);
+  }
+  // Bytes left over after the last instruction's fields.
+  EXPECT_EQ(
+      rejected([](std::vector<uint8_t> &code, size_t) { code.push_back(0); }),
+      TALOS_RT_INVALID_BYTECODE);
+  // Flags wider than 16 bits.
+  EXPECT_EQ(rejected([](std::vector<uint8_t> &code, size_t count) {
+              code[count * 4 + 1] = 0x01;
+              code.insert(code.begin() + count * 4 + 2, {0x80, 0x80, 0x04});
+              for (size_t index = 1; index != count; ++index)
+                put32(code, index * 4, get32(code, index * 4) + 3);
+            }),
+            TALOS_RT_INVALID_BYTECODE);
+  // Header: unused bytes before the first instruction, a code size smaller
+  // than the offset table, a code size that disagrees with the tables, an
+  // unknown flag, and a code size on fixed-width code.
+  EXPECT_EQ(rejected([](std::vector<uint8_t> &code, size_t count) {
+              code.insert(code.begin() + count * 4, 4, 0);
+              for (size_t index = 0; index != count; ++index)
+                put32(code, index * 4, get32(code, index * 4) + 4);
+            }),
+            TALOS_RT_INVALID_BYTECODE);
+  std::vector<uint8_t> small = compactCode(fixed);
+  put64(small, 216, 4);
+  put64(small, 32, imageChecksum(small));
+  EXPECT_EQ(validateStandalone(small), TALOS_RT_INVALID_BYTECODE);
+  std::vector<uint8_t> size = compactCode(fixed);
+  put64(size, 216, get64(size, 216) + 8);
+  put64(size, 32, imageChecksum(size));
+  EXPECT_EQ(validateStandalone(size), TALOS_RT_INVALID_BYTECODE);
+  std::vector<uint8_t> flag = compactCode(fixed);
+  put32(flag, 20, TALOS_RT_DESIGN_BYTECODE_COMPACT_CODE | 2);
+  put64(flag, 32, imageChecksum(flag));
+  EXPECT_EQ(validateStandalone(flag), TALOS_RT_INVALID_BYTECODE);
+  std::vector<uint8_t> fixedSize = fixed;
+  put64(fixedSize, 216, 8);
+  put64(fixedSize, 32, imageChecksum(fixedSize));
+  EXPECT_EQ(validateStandalone(fixedSize), TALOS_RT_INVALID_BYTECODE);
+
+  // A context validates code lazily: it accepts a compact image whose
+  // instruction 1 is malformed and rejects the function on first execution.
+  std::vector<uint8_t> lazy =
+      compactCode(fixed, [](std::vector<uint8_t> &code, size_t count) {
+        code[count * 4 + get32(code, 4) + 1] |= 0x80;
+      });
+  talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
+                                             TALOS_RT_EXECUTION_HAS_BYTECODE,
+                                             0,
+                                             lazy.data(),
+                                             lazy.size(),
+                                             nullptr,
+                                             0,
+                                             65,
+                                             imageChecksum(lazy),
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
+  talos_rt_design_bytecode_entry_v1 entry{&execution, 0, 0};
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+            TALOS_RT_OK);
+  std::array<uint64_t, 4> frame{};
+  talos_rt_fragment_action_v1 action{};
+  EXPECT_EQ(talos_rt_execute_design_bytecode(entry, context, frame.data(),
+                                             sizeof(frame), 0, 32, 0, 0,
+                                             &action),
+            TALOS_RT_INVALID_BYTECODE);
+  talos_rt_v1_context_destroy(context);
 }
 
 TEST(DesignBytecode, MetadataOnlyImageHasNoExecutableEntry) {

@@ -1446,11 +1446,17 @@ const FastOp *fastPlan(const Image &image, const Frame &frame,
     plans.assign(static_cast<size_t>(image.functionCount), {});
   std::vector<FastOp> &plan = plans[frame.functionIndex];
   if (plan.empty()) {
-    plan.reserve(static_cast<size_t>(frame.function.instructionCount));
+    auto &instructions = context->designBytecodeInstructions;
+    if (instructions.size() != image.functionCount)
+      instructions.assign(static_cast<size_t>(image.functionCount), {});
+    std::vector<Instruction> &decodedCode = instructions[frame.functionIndex];
+    decodedCode.reserve(static_cast<size_t>(frame.function.instructionCount));
     for (uint64_t index = 0; index != frame.function.instructionCount; ++index)
-      plan.push_back(decodeFastOp(
-          image, frame.function,
-          instructionAt(image, frame.function.firstInstruction + index)));
+      decodedCode.push_back(
+          instructionAt(image, frame.function.firstInstruction + index));
+    plan.reserve(static_cast<size_t>(frame.function.instructionCount));
+    for (const Instruction &instruction : decodedCode)
+      plan.push_back(decodeFastOp(image, frame.function, instruction));
     auto &layouts = context->designBytecodeLayouts;
     if (layouts.size() != image.functionCount)
       layouts.assign(static_cast<size_t>(image.functionCount), {});
@@ -1460,6 +1466,22 @@ const FastOp *fastPlan(const Image &image, const Frame &frame,
       decoded.push_back(layoutAt(image, frame.function, index));
   }
   return plan.data();
+}
+
+/// The decoded instructions of `frame`'s function, available once its fast
+/// plan exists, or null.
+static const Instruction *decodedInstructions(const Image &image,
+                                              const Frame &frame,
+                                              talos_rt_context *context) {
+  if (!context || !context->designBytecodeImageValidated ||
+      context->designBytecodeImage.data != image.data ||
+      frame.functionIndex >= context->designBytecodeInstructions.size())
+    return nullptr;
+  const std::vector<Instruction> &decoded =
+      context->designBytecodeInstructions[frame.functionIndex];
+  return decoded.size() == frame.function.instructionCount && !decoded.empty()
+             ? decoded.data()
+             : nullptr;
 }
 
 /// The decoded register layouts of `frame`'s function, available once its
@@ -1509,6 +1531,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
   if (invalidCode)
     return TALOS_RT_INVALID_BYTECODE;
   const Layout *layouts = decodedLayouts(image, frame, context);
+  const Instruction *instructions = decodedInstructions(image, frame, context);
   while (pc >= begin && pc < end) {
     if (!budget.consume())
       return TALOS_RT_STEP_LIMIT;
@@ -1519,7 +1542,9 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
         return fastStatus;
       continue;
     }
-    Instruction instruction = instructionAt(image, pc++);
+    Instruction instruction =
+        instructions ? instructions[pc - begin] : instructionAt(image, pc);
+    ++pc;
     auto layout = [&](uint32_t reg) {
       return layouts ? layouts[reg] : layoutAt(image, frame.function, reg);
     };

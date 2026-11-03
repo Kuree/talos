@@ -342,7 +342,7 @@ ABI_OFFSET(talos_rt_design_bytecode_header_v1, connectivity_offset, 184);
 ABI_OFFSET(talos_rt_design_bytecode_header_v1, connectivity_count, 192);
 ABI_OFFSET(talos_rt_design_bytecode_header_v1, shape_offset, 200);
 ABI_OFFSET(talos_rt_design_bytecode_header_v1, shape_count, 208);
-ABI_OFFSET(talos_rt_design_bytecode_header_v1, tail_reserved, 216);
+ABI_OFFSET(talos_rt_design_bytecode_header_v1, code_size, 216);
 ABI_SIZE_ALIGN(talos_rt_design_database_header_v1, 176, 8);
 ABI_OFFSET(talos_rt_design_database_header_v1, magic, 0);
 ABI_OFFSET(talos_rt_design_database_header_v1, version, 8);

@@ -2990,6 +2990,10 @@ struct talos_rt_context {
   // interpreter's general path (a layout record is a shape index and an
   // offset), decoded with the function's fast plan.
   std::vector<std::vector<talos::designbytecode::Layout>> designBytecodeLayouts;
+  // Decoded instructions of the same functions (compact code is varint
+  // encoded), for the general path and the frame-root scan.
+  std::vector<std::vector<talos::designbytecode::Instruction>>
+      designBytecodeInstructions;
   void *vpiState = nullptr;
   // Waveform dump plan, shadow planes, and output buffer. Allocated on the
   // first $dumpfile/$dumpvars and owned by the context.

@@ -1,5 +1,8 @@
 // RUN: talos-opt %s --convert-talos-sim-processes-to-llvm-coroutines | FileCheck %s --check-prefix=NATIVE
 // RUN: talos-opt %s --encode-talos-sim-to-bytecode='vpi=off' | FileCheck %s --check-prefix=BYTECODE
+// RUN: talos-opt %s --encode-talos-sim-to-bytecode='vpi=off' \
+// RUN:   --test-talos-print-bytecode -o /dev/null 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=PRINT
 // RUN: not talos-opt %s --pass-pipeline='builtin.module(test-talos-set-module-attributes{attrs="{schedule.native_scheduler = 2 : i32}"},simulation.design(talos-sim-build-compute-graph,talos-sim-verify-compute-graph),convert-talos-sim-processes-to-llvm-coroutines)' 2>&1 | FileCheck %s --check-prefix=AOT-REJECT
 
 module attributes {
@@ -58,13 +61,14 @@ module attributes {
 
 // Bytecode opcode 58 is append-only. Its flags are the proper ProcessControl
 // enum encodings: resume=2, suspend=1, kill=0. Source0 is the initialized
-// BITS64 shared process token; each immediate is a nonzero continuation ID.
+// BITS64 shared process token; each immediate is the continuation's ordinal
+// among the function's records (here ids 1-3 at ordinals 1-3).
 // CONTINUE stays in the interpreter and jumps directly to the continuation PC;
 // the explicit process continuation operands exercise frame store/reload.
 // BYTECODE: runtime.bytecode_image = array<i8:
-// BYTECODE-SAME: 58, 0, 2, 0
-// BYTECODE-SAME: 58, 0, 1, 0
-// BYTECODE-SAME: 58, 0, 0, 0
+// PRINT: opcode=58 flags=2 dst=0 src0=1 {{.*}} imm=1
+// PRINT: opcode=58 flags=1 dst=0 src0=2 {{.*}} imm=2
+// PRINT: opcode=58 flags=0 dst=0 src0=3 {{.*}} imm=3
 
 // Generated AOT actor tables do not expose a transactional dynamic
 // suspend/resume/kill protocol, so the controlling process (here also its own

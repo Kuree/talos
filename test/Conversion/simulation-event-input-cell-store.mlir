@@ -1,4 +1,7 @@
 // RUN: talos-opt %s --encode-talos-sim-to-bytecode='vpi=off' | FileCheck %s
+// RUN: talos-opt %s --encode-talos-sim-to-bytecode='vpi=off' \
+// RUN:   --test-talos-print-bytecode -o /dev/null 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=PRINT
 // RUN: talos-opt %s --convert-talos-sim-processes-to-llvm-coroutines | FileCheck %s --check-prefix=NATIVE
 
 module attributes {
@@ -28,6 +31,6 @@ module attributes {
 // StoreState is opcode 28. Event-handle publication uses flags 0, not the
 // packed continuous-driver flag 2.
 // CHECK: runtime.bytecode_image = array<i8:
-// CHECK-SAME: {{.*}}28, 0, 0, 0, 0, 0, 0, 0
+// PRINT: opcode=28 flags=0 dst=0 src0=2 src1=1
 // NATIVE: llvm.call @talos_rt_v1_native_state_store_plane
 // NATIVE-NOT: llvm.call @talos_rt_v1_native_state_store_continuous_plane

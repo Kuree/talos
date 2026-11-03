@@ -252,16 +252,47 @@ SmallVector<uint8_t> serializeBytecodeImage(
   }
   alignTo(output, 8);
   uint64_t codeOffset = output.size();
-  for (const Instruction &instruction : code) {
-    append16(output, instruction.opcode);
-    append16(output, instruction.flags);
-    append32(output, instruction.destination);
-    append32(output, instruction.source0);
-    append32(output, instruction.source1);
-    append32(output, instruction.source2);
-    append32(output, instruction.auxiliary);
-    append64(output, instruction.immediate);
+  // Compact code (two-tier B4): u32 byte offsets, then per instruction its
+  // opcode byte, a mask of its nonzero fields and those fields as minimal
+  // LEB128 (TALOS_RT_DESIGN_BYTECODE_COMPACT_CODE); 7 bytes on average
+  // instead of 32.
+  SmallVector<uint8_t> encoded;
+  output.resize(output.size() + code.size() * 4, 0);
+  for (auto [index, instruction] : llvm::enumerate(code)) {
+    if (instruction.opcode > UINT8_MAX || encoded.size() > UINT32_MAX) {
+      plans.front().function.emitOpError(
+          "bytecode code table exceeds the compact encoding");
+      return {};
+    }
+    write32(output, codeOffset + index * 4,
+            static_cast<uint32_t>(encoded.size()));
+    encoded.push_back(static_cast<uint8_t>(instruction.opcode));
+    const uint64_t fields[7] = {instruction.flags,    instruction.destination,
+                                instruction.source0,  instruction.source1,
+                                instruction.source2,  instruction.auxiliary,
+                                instruction.immediate};
+    uint8_t mask = 0;
+    for (unsigned bit = 0; bit != 7; ++bit)
+      if (fields[bit])
+        mask |= uint8_t{1} << bit;
+    encoded.push_back(mask);
+    for (uint64_t value : fields) {
+      if (!value)
+        continue;
+      do {
+        uint8_t byte = value & 0x7f;
+        value >>= 7;
+        encoded.push_back(value ? byte | 0x80 : byte);
+      } while (value);
+    }
   }
+  if (encoded.size() > UINT32_MAX) {
+    plans.front().function.emitOpError(
+        "bytecode code table exceeds the compact encoding");
+    return {};
+  }
+  llvm::append_range(output, encoded);
+  uint64_t codeSize = output.size() - codeOffset;
   alignTo(output, 8);
   uint64_t operandOffset = output.size();
   for (const OperandMap &operand : operandMaps) {
@@ -369,6 +400,8 @@ SmallVector<uint8_t> serializeBytecodeImage(
   write64(output, offsetof(Header, layout_count), layoutCursor);
   write64(output, offsetof(Header, code_offset), codeOffset);
   write64(output, offsetof(Header, instruction_count), code.size());
+  write32(output, offsetof(Header, flags),
+          TALOS_RT_DESIGN_BYTECODE_COMPACT_CODE);
   write64(output, offsetof(Header, operand_offset), operandOffset);
   write64(output, offsetof(Header, operand_count), operandMaps.size());
   write64(output, offsetof(Header, constant_offset), constantOffset);
@@ -389,7 +422,7 @@ SmallVector<uint8_t> serializeBytecodeImage(
           state.connections.size());
   write64(output, offsetof(Header, shape_offset), shapeOffset);
   write64(output, offsetof(Header, shape_count), shapes.size());
-  write64(output, offsetof(Header, tail_reserved), 0);
+  write64(output, offsetof(Header, code_size), codeSize);
   write64(output, offsetof(Header, checksum),
           checksum(output, offsetof(Header, checksum)));
   return output;

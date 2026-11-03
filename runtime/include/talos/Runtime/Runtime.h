@@ -862,7 +862,9 @@ typedef struct talos_rt_design_bytecode_header_v1 {
      registers share. */
   uint64_t shape_offset;
   uint64_t shape_count;
-  uint64_t tail_reserved;
+  /* With TALOS_RT_DESIGN_BYTECODE_COMPACT_CODE, the byte size of the code
+     table; zero for fixed-width code. */
+  uint64_t code_size;
 } talos_rt_design_bytecode_header_v1;
 
 typedef struct talos_rt_design_database_header_v1 {
@@ -895,6 +897,13 @@ typedef struct talos_rt_design_database_header_v1 {
 #define TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE 224u
 #define TALOS_RT_DESIGN_DATABASE_HEADER_SIZE 176u
 #define TALOS_RT_DESIGN_BYTECODE_INSTRUCTION_SIZE 32u
+/* Header flag: the code table holds instruction_count u32 byte offsets into
+   the encoded instructions that follow them. An encoded instruction is its
+   opcode byte, a byte whose bits 0-6 mark the nonzero fields (flags,
+   destination, source0, source1, source2, auxiliary, immediate), and those
+   fields as minimal unsigned LEB128 values. Without the flag, each
+   instruction is a fixed TALOS_RT_DESIGN_BYTECODE_INSTRUCTION_SIZE record. */
+#define TALOS_RT_DESIGN_BYTECODE_COMPACT_CODE 1u
 #define TALOS_RT_DESIGN_BYTECODE_MAGIC "OBBCDS1"
 #define TALOS_RT_DESIGN_DATABASE_MAGIC "OBDSGN1"
 

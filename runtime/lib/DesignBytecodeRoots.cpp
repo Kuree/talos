@@ -354,9 +354,20 @@ void talos_rt_enumerate_design_managed_roots(
                      kind == TALOS_RT_DBREG_ARGUMENT_REF)
             visitOffset(capture.valueOffset);
         }
+        // Executed functions keep their decoded instructions.
+        const std::vector<Instruction> *decoded =
+            context->designBytecodeImage.data == image.data &&
+                    functionIndex <
+                        context->designBytecodeInstructions.size() &&
+                    context->designBytecodeInstructions[functionIndex].size() ==
+                        function.instructionCount
+                ? &context->designBytecodeInstructions[functionIndex]
+                : nullptr;
         uint64_t end = function.firstInstruction + function.instructionCount;
         for (uint64_t pc = function.firstInstruction; pc != end; ++pc) {
-          Instruction instruction = instructionAt(image, pc);
+          Instruction instruction =
+              decoded ? (*decoded)[pc - function.firstInstruction]
+                      : instructionAt(image, pc);
           if (instruction.opcode == TALOS_RT_DB_FRAME_ROOT ||
               instruction.opcode == TALOS_RT_DB_CLEAR_FRAME_ROOT) {
             if (instruction.immediate <= canonicalSize &&

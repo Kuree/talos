@@ -18,6 +18,7 @@
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <array>
 #include <cstddef>
 
 using namespace mlir;
@@ -150,9 +151,60 @@ private:
     uint64_t codeOffset = reader.header(offsetof(Header, code_offset));
     uint64_t instructionCount =
         reader.header(offsetof(Header, instruction_count));
-    if (!reader.fits(codeOffset, instructionCount,
-                     TALOS_RT_DESIGN_BYTECODE_INSTRUCTION_SIZE))
+    bool compact = (reader.read<uint32_t>(offsetof(Header, flags)) &
+                    TALOS_RT_DESIGN_BYTECODE_COMPACT_CODE) != 0;
+    uint64_t codeSize =
+        compact ? reader.header(offsetof(Header, code_size))
+                : instructionCount * TALOS_RT_DESIGN_BYTECODE_INSTRUCTION_SIZE;
+    if ((!compact && !reader.fits(codeOffset, instructionCount,
+                                  TALOS_RT_DESIGN_BYTECODE_INSTRUCTION_SIZE)) ||
+        !reader.fits(codeOffset, codeSize, 1) ||
+        (compact && codeSize / 4 < instructionCount))
       return failure();
+    // Fields: opcode, flags, destination, source0..2, auxiliary, immediate.
+    auto decode = [&](uint64_t index,
+                      std::array<uint64_t, 8> &fields) -> LogicalResult {
+      fields = {};
+      if (!compact) {
+        uint64_t record =
+            codeOffset + index * TALOS_RT_DESIGN_BYTECODE_INSTRUCTION_SIZE;
+        fields = {reader.read<uint16_t>(record),
+                  reader.read<uint16_t>(record + 2),
+                  reader.read<uint32_t>(record + 4),
+                  reader.read<uint32_t>(record + 8),
+                  reader.read<uint32_t>(record + 12),
+                  reader.read<uint32_t>(record + 16),
+                  reader.read<uint32_t>(record + 20),
+                  reader.read<uint64_t>(record + 24)};
+        return success();
+      }
+      uint64_t bytes = codeOffset + instructionCount * 4;
+      uint64_t byteCount = codeSize - instructionCount * 4;
+      uint64_t begin = reader.read<uint32_t>(codeOffset + index * 4);
+      uint64_t end = index + 1 == instructionCount
+                         ? byteCount
+                         : reader.read<uint32_t>(codeOffset + (index + 1) * 4);
+      if (begin + 2 > end || end > byteCount)
+        return failure();
+      uint64_t cursor = bytes + begin;
+      fields[0] = reader.read<uint8_t>(cursor++);
+      uint8_t mask = reader.read<uint8_t>(cursor++);
+      for (unsigned bit = 0; bit != 7; ++bit) {
+        if ((mask & (1u << bit)) == 0)
+          continue;
+        uint64_t value = 0;
+        for (unsigned shift = 0;; shift += 7) {
+          if (cursor == bytes + end || shift > 63)
+            return failure();
+          uint8_t byte = reader.read<uint8_t>(cursor++);
+          value |= uint64_t{byte & 0x7fu} << shift;
+          if ((byte & 0x80) == 0)
+            break;
+        }
+        fields[bit + 1] = value;
+      }
+      return success(cursor == bytes + end);
+    };
 
     uint64_t constantOffset = reader.header(offsetof(Header, constant_offset));
     uint64_t constantSize = reader.header(offsetof(Header, constant_size));
@@ -221,16 +273,13 @@ private:
     }
 
     for (uint64_t index = 0; index < instructionCount; ++index) {
-      uint64_t record =
-          codeOffset + index * TALOS_RT_DESIGN_BYTECODE_INSTRUCTION_SIZE;
-      os << index << ": opcode=" << reader.read<uint16_t>(record)
-         << " flags=" << reader.read<uint16_t>(record + 2)
-         << " dst=" << reader.read<uint32_t>(record + 4)
-         << " src0=" << reader.read<uint32_t>(record + 8)
-         << " src1=" << reader.read<uint32_t>(record + 12)
-         << " src2=" << reader.read<uint32_t>(record + 16)
-         << " aux=" << reader.read<uint32_t>(record + 20)
-         << " imm=" << reader.read<uint64_t>(record + 24) << '\n';
+      std::array<uint64_t, 8> fields;
+      if (failed(decode(index, fields)))
+        return failure();
+      os << index << ": opcode=" << fields[0] << " flags=" << fields[1]
+         << " dst=" << fields[2] << " src0=" << fields[3]
+         << " src1=" << fields[4] << " src2=" << fields[5]
+         << " aux=" << fields[6] << " imm=" << fields[7] << '\n';
     }
 
     uint64_t continuationOffset =

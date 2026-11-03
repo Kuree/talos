@@ -1,5 +1,8 @@
 // RUN: talos-opt %s --encode-talos-sim-to-bytecode='vpi=off' | FileCheck %s
 // RUN: talos-opt %s --encode-talos-sim-to-bytecode='vpi=off' \
+// RUN:   --test-talos-print-bytecode='metadata=true' -o /dev/null 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=PRINT
+// RUN: talos-opt %s --encode-talos-sim-to-bytecode='vpi=off' \
 // RUN:   --convert-talos-sim-processes-to-llvm-coroutines -o /dev/null
 
 !bundle = !simulation.unpacked_struct<[
@@ -88,16 +91,17 @@ module attributes {
 }
 
 // Opcode 57 carries interface-dispatch record 8, receiver register 2,
-// argument-map offset 9/count 4, continuation 1, and signature ID 17. The
-// dispatch record stores interface ID 1 and ordinal 0.
+// argument-map offset 9/count 4, continuation ordinal 1, and signature ID
+// 17. The dispatch record stores interface ID 1 and ordinal 0.
 // The managed continuation is stored before dispatch, restored on resume, and
 // then removed from the canonical frame's precise root inventory.
 // CHECK: runtime.bytecode_image = array<i8:
-// CHECK-SAME: 24, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-// CHECK-SAME: 57, 0, 0, 0, 8, 0, 0, 0, 2, 0, 0, 0, 9, 0, 0, 0, 4, 0, 0, 0, 1, 0, 0, 0, 17, 0, 0, 0, 0, 0, 0, 0
-// CHECK-SAME: 23, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-// CHECK-SAME: 42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-// CHECK-SAME: 55, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0
-// CHECK-SAME: 54, 0, 0, 0, 0, 0, 0, 0
+// PRINT: operand 8: dst=1 src=0
+// PRINT: opcode=24 flags=0 dst=0 src0=5 src1=0 src2=0 aux=8 imm=0
+// PRINT-NEXT: opcode=57 flags=0 dst=8 src0=2 src1=9 src2=4 aux=1 imm=17
+// PRINT: opcode=23 flags=0 dst=6 src0=0 src1=0 src2=0 aux=8 imm=0
+// PRINT-NEXT: opcode=42 flags=0 dst=0 src0=0 src1=0 src2=0 aux=0 imm=0
+// PRINT: opcode=55 flags=0 dst=0 src0=0 src1=0 src2=0 aux=0 imm=16
+// PRINT: opcode=54 flags=0 dst=0
 // CHECK: runtime.bytecode_function = 1 : i32
 // CHECK: runtime.bytecode_function = 0 : i32
