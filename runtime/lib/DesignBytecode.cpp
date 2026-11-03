@@ -1572,12 +1572,27 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
   while (pc >= begin && pc < end) {
     if (!budget.consume())
       return TALOS_RT_STEP_LIMIT;
-    talos_rt_status fastStatus = TALOS_RT_OK;
-    if (plan && executeFastOp(plan[pc - begin], frame.data, canonicalFrame,
-                              canonicalFrameSize, context, pc, fastStatus)) {
-      if (fastStatus != TALOS_RT_OK)
-        return fastStatus;
-      continue;
+    if (plan) {
+      // Run consecutive fast ops in one tight loop (two-tier B3); each step
+      // still counts against a step limit. An op the fast path declines
+      // falls through to the general path below with its step consumed.
+      bool declined = false;
+      for (;;) {
+        talos_rt_status fastStatus = TALOS_RT_OK;
+        if (!executeFastOp(plan[pc - begin], frame.data, canonicalFrame,
+                           canonicalFrameSize, context, pc, fastStatus)) {
+          declined = true;
+          break;
+        }
+        if (fastStatus != TALOS_RT_OK)
+          return fastStatus;
+        if (pc < begin || pc >= end)
+          break;
+        if (!budget.consume())
+          return TALOS_RT_STEP_LIMIT;
+      }
+      if (!declined)
+        continue;
     }
     Instruction instruction =
         instructions ? instructions[pc - begin] : instructionAt(image, pc);
