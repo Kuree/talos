@@ -6487,6 +6487,51 @@ TEST(ManagedHeap, DesignatedCollectionReclaimsOnlyAtQuiescentPoints) {
   talos_rt_v1_context_destroy(context);
 }
 
+TEST(ManagedHeap, LookupsOfFreedObjectsMissAfterCollection) {
+  // Two-tier B5: handle lookups are cached per thread. A collection that
+  // frees an object makes a cached lookup of it stale, so the freed handle
+  // resolves to nothing, and an allocation reusing its address resolves to
+  // the new object.
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_set_threshold(context, UINT64_MAX), TALOS_RT_OK);
+  talos_rt_gc_lane_v1 *lane = nullptr;
+  bool entered = false;
+  ASSERT_EQ(talos_rt_managed_execution_enter(context, &lane, &entered),
+            TALOS_RT_OK);
+  std::vector<talos_rt_object_v1 *> freed;
+  std::vector<uint64_t> freedIDs;
+  for (unsigned index = 0; index != 16; ++index) {
+    talos_rt_object_v1 *object = nullptr;
+    ASSERT_EQ(talos_rt_v1_object_allocate(lane, &nodeDescriptor, &object),
+              TALOS_RT_OK);
+    freed.push_back(object);
+    freedIDs.push_back(talos_rt_v1_object_id(object));
+    ASSERT_NE(freedIDs.back(), 0u);
+    // A second lookup hits the cache.
+    ASSERT_EQ(talos_rt_v1_object_id(object), freedIDs.back());
+  }
+  ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);
+  for (talos_rt_object_v1 *object : freed)
+    EXPECT_EQ(talos_rt_v1_object_id(object), 0u);
+  unsigned reused = 0;
+  for (unsigned index = 0; index != 64; ++index) {
+    talos_rt_object_v1 *object = nullptr;
+    ASSERT_EQ(talos_rt_v1_object_allocate(lane, &nodeDescriptor, &object),
+              TALOS_RT_OK);
+    auto found = std::find(freed.begin(), freed.end(), object);
+    if (found == freed.end())
+      continue;
+    ++reused;
+    uint64_t id = talos_rt_v1_object_id(object);
+    EXPECT_NE(id, 0u);
+    EXPECT_NE(id, freedIDs[static_cast<size_t>(found - freed.begin())]);
+  }
+  EXPECT_GT(reused, 0u);
+  talos_rt_managed_execution_leave(lane, entered);
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(ManagedHeap, PolledCollectionReclaimsOnlyAtPollsAndBetweenActivations) {
   // Under TALOS_RT_EXECUTION_POLLED_COLLECTION compiled code registers its
   // managed values only at polls, so allocation must neither collect nor

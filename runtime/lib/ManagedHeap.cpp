@@ -167,6 +167,11 @@ std::shared_mutex metadataRegistryMutex;
 std::unordered_map<const talos_rt_object_v1 *, ObjectMetadata *>
     metadataRegistry;
 
+// Advances whenever an object leaves the registry. Metadata storage (span
+// metadata arrays, large allocations) is released only after its objects are
+// unregistered, so a lookup cached in the current epoch names live metadata.
+std::atomic<uint64_t> metadataEpoch{1};
+
 void registerMetadata(ObjectMetadata *metadata) {
   std::unique_lock<std::shared_mutex> lock(metadataRegistryMutex);
   metadataRegistry.emplace(
@@ -175,18 +180,46 @@ void registerMetadata(ObjectMetadata *metadata) {
 
 void unregisterMetadata(ObjectMetadata *metadata) {
   std::unique_lock<std::shared_mutex> lock(metadataRegistryMutex);
+  metadataEpoch.fetch_add(1, std::memory_order_acq_rel);
   metadataRegistry.erase(
       static_cast<const talos_rt_object_v1 *>(metadata->object));
+}
+
+/// A per-thread direct-mapped cache of registry lookups (two-tier B5): every
+/// container, mailbox and object access resolves its handle here, and the
+/// registry's shared mutex costs two pthread mutex round trips per lookup.
+struct MetadataCacheEntry {
+  const talos_rt_object_v1 *object;
+  ObjectMetadata *metadata;
+  uint64_t epoch;
+};
+constexpr size_t kMetadataCacheEntries = 64;
+
+MetadataCacheEntry &metadataCacheEntry(const talos_rt_object_v1 *object) {
+  static thread_local MetadataCacheEntry cache[kMetadataCacheEntries];
+  uintptr_t address = reinterpret_cast<uintptr_t>(object);
+  return cache[((address >> 5) ^ (address >> 12)) &
+               (kMetadataCacheEntries - 1)];
 }
 
 ObjectMetadata *metadataFor(const talos_rt_object_v1 *object) {
   if (!object)
     return nullptr;
-  std::shared_lock<std::shared_mutex> lock(metadataRegistryMutex);
-  auto found = metadataRegistry.find(object);
-  if (found == metadataRegistry.end())
-    return nullptr;
-  ObjectMetadata *metadata = found->second;
+  // Read the epoch before the registry: an unregistration racing with this
+  // lookup leaves the entry stale rather than current.
+  uint64_t epoch = metadataEpoch.load(std::memory_order_acquire);
+  MetadataCacheEntry &entry = metadataCacheEntry(object);
+  ObjectMetadata *metadata = nullptr;
+  if (entry.object == object && entry.epoch == epoch) {
+    metadata = entry.metadata;
+  } else {
+    std::shared_lock<std::shared_mutex> lock(metadataRegistryMutex);
+    auto found = metadataRegistry.find(object);
+    if (found == metadataRegistry.end())
+      return nullptr;
+    metadata = found->second;
+    entry = {object, metadata, epoch};
+  }
   if (metadata->object != object ||
       !metadata->allocated.load(std::memory_order_acquire))
     return nullptr;
