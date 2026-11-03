@@ -6854,7 +6854,8 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
       switch (action.kind) {
       case TALOS_RT_FRAGMENT_CONTINUE:
         if (!task.signalSubscriptions.empty() ||
-            task.computedObserverWaitRegistered)
+            task.computedObserverWaitRegistered ||
+            talos_rt_conditional_waiter_registered(context, task.id, true))
           talos_rt_unregister_signal_wait_unlocked(
               context, task.signalSubscriptions, task.id, true);
         task.suspendKind = TALOS_RT_SUSPEND_NONE;
@@ -6899,7 +6900,8 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
           if (task.postObserved)
             context->postObservedResumptions.push_back(task.id);
           if (!task.signalSubscriptions.empty() ||
-              task.computedObserverWaitRegistered)
+              task.computedObserverWaitRegistered ||
+              talos_rt_conditional_waiter_registered(context, task.id, true))
             talos_rt_unregister_signal_wait_unlocked(
                 context, task.signalSubscriptions, task.id, true);
           if (!talos_rt_register_computed_signal_wait_unlocked(
@@ -7077,8 +7079,10 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
                                ? talos_rt_same_clock_occurrence_wait_unlocked(
                                      context, wait, task.id, true)
                                : hasSameDirectSignalWait(task, wait));
-        if (!signalWait && (!task.signalSubscriptions.empty() ||
-                            task.computedObserverWaitRegistered))
+        if (!signalWait &&
+            (!task.signalSubscriptions.empty() ||
+             task.computedObserverWaitRegistered ||
+             talos_rt_conditional_waiter_registered(context, task.id, true)))
           talos_rt_unregister_signal_wait_unlocked(
               context, task.signalSubscriptions, task.id, true);
         task.suspendKind = action.suspend_kind;
@@ -7136,7 +7140,8 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
       }
       case TALOS_RT_FRAGMENT_PROCESS_SUSPEND:
         if (!task.signalSubscriptions.empty() ||
-            task.computedObserverWaitRegistered)
+            task.computedObserverWaitRegistered ||
+            talos_rt_conditional_waiter_registered(context, task.id, true))
           talos_rt_unregister_signal_wait_unlocked(
               context, task.signalSubscriptions, task.id, true);
         task.suspendKind = TALOS_RT_SUSPEND_NONE;
@@ -7162,7 +7167,8 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
         }
         task.callers.reserve(checkedSizeSum(task.callers.size(), 1));
         if (!task.signalSubscriptions.empty() ||
-            task.computedObserverWaitRegistered)
+            task.computedObserverWaitRegistered ||
+            talos_rt_conditional_waiter_registered(context, task.id, true))
           talos_rt_unregister_signal_wait_unlocked(
               context, task.signalSubscriptions, task.id, true);
         task.callers.push_back(
@@ -7189,7 +7195,8 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
       }
       case TALOS_RT_FRAGMENT_TERMINATE:
         if (!task.signalSubscriptions.empty() ||
-            task.computedObserverWaitRegistered)
+            task.computedObserverWaitRegistered ||
+            talos_rt_conditional_waiter_registered(context, task.id, true))
           talos_rt_unregister_signal_wait_unlocked(
               context, task.signalSubscriptions, task.id, true);
         if (!task.callers.empty()) {

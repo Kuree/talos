@@ -4302,6 +4302,89 @@ TEST(Scheduler, RunHoldsItsManagedLaneAcrossActivations) {
   talos_rt_v1_context_destroy(context);
 }
 
+uint64_t levelWaitHandle = 0;
+bool levelWaiterRegisteredInDelay = false;
+unsigned levelWaitResumes = 0;
+
+// wait(level); #5; end
+talos_rt_status levelWaitExecute(talos_rt_process_instance_v1 *instance) {
+  if (!instance || !instance->action)
+    return TALOS_RT_INVALID_ARGUMENT;
+  instance->native_handle = instance;
+  if (instance->continuation == 1 && levelWaitResumes++ == 0) {
+    auto *wait = reinterpret_cast<talos_rt_wait_record_v1 *>(instance->frame);
+    *wait = {TALOS_RT_VERSION, TALOS_RT_SUSPEND_DELAY, 0, 0, 5, 0};
+    *instance->action = {TALOS_RT_FRAGMENT_SUSPEND,
+                         TALOS_RT_SUSPEND_DELAY,
+                         1,
+                         TALOS_RT_ACTION_FRAME_WAIT_RECORD,
+                         0,
+                         48};
+    return TALOS_RT_OK;
+  }
+  if (instance->continuation == 1) {
+    levelWaiterRegisteredInDelay =
+        !instance->context->nativeConditionalSignalWaiters.empty() ||
+        !instance->context->conditionalEventRanges.empty();
+    *instance->action = {
+        TALOS_RT_FRAGMENT_TERMINATE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
+    return TALOS_RT_OK;
+  }
+  auto *wait = reinterpret_cast<talos_rt_wait_record_v1 *>(instance->frame);
+  auto *entry = reinterpret_cast<talos_rt_wait_entry_v1 *>(wait + 1);
+  *wait = {TALOS_RT_VERSION,
+           TALOS_RT_SUSPEND_CHANGE,
+           TALOS_RT_WAIT_LEVEL_TRUE,
+           1,
+           0,
+           0};
+  *entry = {levelWaitHandle, TALOS_RT_WAIT_EDGE_CHANGE, 1};
+  *instance->action = {TALOS_RT_FRAGMENT_SUSPEND,
+                       TALOS_RT_SUSPEND_CHANGE,
+                       1,
+                       TALOS_RT_ACTION_FRAME_WAIT_RECORD,
+                       0,
+                       48};
+  return TALOS_RT_OK;
+}
+
+TEST(Scheduler, FinishedConditionalWaitersLeaveTheConditionalSet) {
+  // A level wait (IEEE 1800-2023 9.4.3) registers as a conditional waiter
+  // with no signal subscription. When the process resumes and waits on
+  // something else (here a delay) or ends, the waiter and its event range
+  // must go too; otherwise every later publication keeps paying the
+  // conditional-waiter path.
+  levelWaiterRegisteredInDelay = true;
+  levelWaitResumes = 0;
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  context->stateValue.assign(1, 0);
+  context->stateUnknown.assign(1, 0);
+  levelWaitHandle =
+      talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_GLOBAL, 0, 0);
+  SchedulerFixture fixture(21);
+  fixture.descriptor.native_execute = levelWaitExecute;
+  ASSERT_EQ(
+      talos_rt_v1_scheduler_add(context, makeSchedulerInstance(fixture), 0),
+      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  EXPECT_EQ(context->nativeConditionalSignalWaiters.size(), 1u);
+  EXPECT_EQ(context->conditionalEventRanges.size(), 1u);
+
+  context->stateValue[0] = 1;
+  talos_rt_v1_scheduler_signal(context, levelWaitHandle, 1,
+                               TALOS_RT_SIGNAL_CHANGE |
+                                   TALOS_RT_SIGNAL_POSEDGE);
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  EXPECT_FALSE(levelWaiterRegisteredInDelay);
+  EXPECT_TRUE(context->scheduledProcesses.empty() ||
+              !context->scheduledProcesses.front().instance);
+  EXPECT_TRUE(context->nativeConditionalSignalWaiters.empty());
+  EXPECT_TRUE(context->conditionalEventRanges.empty());
+  EXPECT_FALSE(talos_rt_has_conditional_signal_waiters(context));
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(Scheduler, TriggeringNullEventHasNoEffect) {
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);

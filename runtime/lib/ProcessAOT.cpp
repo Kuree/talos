@@ -1379,7 +1379,9 @@ talos_rt_status executeAOTNode(talos_rt_context *context, uint32_t actorSlot,
         scheduled.callers.pop_back();
         scheduled.callerDepths.pop_back();
         if (!scheduled.signalSubscriptions.empty() ||
-            scheduled.computedObserverWaitRegistered)
+            scheduled.computedObserverWaitRegistered ||
+            talos_rt_conditional_waiter_registered(context, scheduled.token,
+                                                   false))
           talos_rt_unregister_signal_wait_unlocked(
               context, scheduled.signalSubscriptions, scheduled.token, false);
         updateScheduledProcessInstance(context, scheduled, caller);
@@ -1479,7 +1481,9 @@ talos_rt_status executeAOTNode(talos_rt_context *context, uint32_t actorSlot,
                                                    scheduled.token);
       if (action.suspend_kind == TALOS_RT_SUSPEND_DELAY) {
         if (!scheduled.signalSubscriptions.empty() ||
-            scheduled.computedObserverWaitRegistered)
+            scheduled.computedObserverWaitRegistered ||
+            talos_rt_conditional_waiter_registered(context, scheduled.token,
+                                                   false))
           talos_rt_unregister_signal_wait_unlocked(
               context, scheduled.signalSubscriptions, scheduled.token, false);
         scheduled.wakeTime = wait->payload > UINT64_MAX - context->schedulerTime
@@ -1501,7 +1505,9 @@ talos_rt_status executeAOTNode(talos_rt_context *context, uint32_t actorSlot,
         // writers even while static fanout is active for unrelated actors.
         if (ownsStaticSignalWait(action.continuation)) {
           if (!scheduled.signalSubscriptions.empty() ||
-              scheduled.computedObserverWaitRegistered)
+              scheduled.computedObserverWaitRegistered ||
+              talos_rt_conditional_waiter_registered(context, scheduled.token,
+                                                     false))
             talos_rt_unregister_signal_wait_unlocked(
                 context, scheduled.signalSubscriptions, scheduled.token, false);
           scheduled.signalLatch.reset();
@@ -1526,7 +1532,9 @@ talos_rt_status executeAOTNode(talos_rt_context *context, uint32_t actorSlot,
     }
     case TALOS_RT_FRAGMENT_CONTINUE:
       if (!scheduled.signalSubscriptions.empty() ||
-          scheduled.computedObserverWaitRegistered)
+          scheduled.computedObserverWaitRegistered ||
+          talos_rt_conditional_waiter_registered(context, scheduled.token,
+                                                 false))
         talos_rt_unregister_signal_wait_unlocked(
             context, scheduled.signalSubscriptions, scheduled.token, false);
       scheduled.suspendKind = TALOS_RT_SUSPEND_NONE;
@@ -1539,7 +1547,9 @@ talos_rt_status executeAOTNode(talos_rt_context *context, uint32_t actorSlot,
       break;
     case TALOS_RT_FRAGMENT_PROCESS_SUSPEND:
       if (!scheduled.signalSubscriptions.empty() ||
-          scheduled.computedObserverWaitRegistered)
+          scheduled.computedObserverWaitRegistered ||
+          talos_rt_conditional_waiter_registered(context, scheduled.token,
+                                                 false))
         talos_rt_unregister_signal_wait_unlocked(
             context, scheduled.signalSubscriptions, scheduled.token, false);
       scheduled.suspendKind = TALOS_RT_SUSPEND_NONE;
@@ -1568,7 +1578,9 @@ talos_rt_status executeAOTNode(talos_rt_context *context, uint32_t actorSlot,
       scheduled.callers.reserve(scheduled.callers.size() + 1);
       scheduled.callerDepths.reserve(scheduled.callerDepths.size() + 1);
       if (!scheduled.signalSubscriptions.empty() ||
-          scheduled.computedObserverWaitRegistered)
+          scheduled.computedObserverWaitRegistered ||
+          talos_rt_conditional_waiter_registered(context, scheduled.token,
+                                                 false))
         talos_rt_unregister_signal_wait_unlocked(
             context, scheduled.signalSubscriptions, scheduled.token, false);
       status = suspendNativeAOTTaskCallerUnlocked(context, scheduled);

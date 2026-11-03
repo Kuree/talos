@@ -4293,7 +4293,9 @@ adoptScheduledSuspendUnlocked(talos_rt_context *context,
   bool directSignalSuspend = action.suspend_kind == TALOS_RT_SUSPEND_CHANGE ||
                              action.suspend_kind == TALOS_RT_SUSPEND_EDGE;
   if (scheduled.computedObserverWaitRegistered ||
-      (!directSignalSuspend && !scheduled.signalSubscriptions.empty()))
+      (!directSignalSuspend && (!scheduled.signalSubscriptions.empty() ||
+                                talos_rt_conditional_waiter_registered(
+                                    context, scheduled.token, false))))
     talos_rt_unregister_signal_wait_unlocked(
         context, scheduled.signalSubscriptions, scheduled.token, false);
   uint64_t delayPayload =
@@ -7151,7 +7153,9 @@ talos_rt_status runScheduler(talos_rt_context *context,
       ScheduledProcess &scheduled = context->scheduledProcesses[selectedIndex];
       if (action.kind == TALOS_RT_FRAGMENT_TERMINATE) {
         if (!scheduled.signalSubscriptions.empty() ||
-            scheduled.computedObserverWaitRegistered)
+            scheduled.computedObserverWaitRegistered ||
+            talos_rt_conditional_waiter_registered(context, scheduled.token,
+                                                   false))
           talos_rt_unregister_signal_wait_unlocked(
               context, scheduled.signalSubscriptions, scheduled.token, false);
         if (!scheduled.callers.empty() &&
@@ -7224,7 +7228,9 @@ talos_rt_status runScheduler(talos_rt_context *context,
           return status;
       } else if (action.kind == TALOS_RT_FRAGMENT_PROCESS_SUSPEND) {
         if (!scheduled.signalSubscriptions.empty() ||
-            scheduled.computedObserverWaitRegistered)
+            scheduled.computedObserverWaitRegistered ||
+            talos_rt_conditional_waiter_registered(context, scheduled.token,
+                                                   false))
           talos_rt_unregister_signal_wait_unlocked(
               context, scheduled.signalSubscriptions, scheduled.token, false);
         scheduled.suspendKind = TALOS_RT_SUSPEND_NONE;
@@ -7251,7 +7257,9 @@ talos_rt_status runScheduler(talos_rt_context *context,
         scheduled.callers.reserve(scheduled.callers.size() + 1);
         scheduled.callerDepths.reserve(scheduled.callerDepths.size() + 1);
         if (!scheduled.signalSubscriptions.empty() ||
-            scheduled.computedObserverWaitRegistered)
+            scheduled.computedObserverWaitRegistered ||
+            talos_rt_conditional_waiter_registered(context, scheduled.token,
+                                                   false))
           talos_rt_unregister_signal_wait_unlocked(
               context, scheduled.signalSubscriptions, scheduled.token, false);
         status = suspendNativeAOTTaskCallerUnlocked(context, scheduled);
@@ -7271,7 +7279,9 @@ talos_rt_status runScheduler(talos_rt_context *context,
         pendingCallee.release();
       } else {
         if (!scheduled.signalSubscriptions.empty() ||
-            scheduled.computedObserverWaitRegistered)
+            scheduled.computedObserverWaitRegistered ||
+            talos_rt_conditional_waiter_registered(context, scheduled.token,
+                                                   false))
           talos_rt_unregister_signal_wait_unlocked(
               context, scheduled.signalSubscriptions, scheduled.token, false);
         scheduled.suspendKind = TALOS_RT_SUSPEND_NONE;

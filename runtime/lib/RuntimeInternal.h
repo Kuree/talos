@@ -3358,6 +3358,17 @@ inline bool talos_rt_unstarted_actor_pending(talos_rt_context *context,
 bool talos_rt_conditional_event_relevant(const talos_rt_context *context,
                                          uint64_t bitOffset, uint64_t bitWidth);
 
+/// Whether `waiter` holds a registered conditional (`iff` or level) wait. Such
+/// a wait registers no signal subscription, so ending it must check this as
+/// well as the subscriptions, or the waiter stays registered for good.
+inline bool
+talos_rt_conditional_waiter_registered(const talos_rt_context *context,
+                                       uint64_t waiter, bool designWaiter) {
+  const auto &waiters = designWaiter ? context->designConditionalSignalWaiters
+                                     : context->nativeConditionalSignalWaiters;
+  return !waiters.empty() && waiters.count(waiter) != 0;
+}
+
 inline bool
 talos_rt_has_conditional_signal_waiters(const talos_rt_context *context) {
   return context && (!context->nativeConditionalSignalWaiters.empty() ||
