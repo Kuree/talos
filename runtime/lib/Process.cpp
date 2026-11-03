@@ -187,6 +187,9 @@ struct ProcessAllocationMetadata {
     }
   };
   std::unique_ptr<VirtualOwner> virtualOwner;
+  // The last suspension validateAction accepted (two-tier B2 Q6), allocated
+  // on the first cacheable suspension.
+  std::unique_ptr<talos::process::ValidatedSuspension> validatedSuspension;
 };
 
 constexpr size_t kProcessAllocationMetadataOffset =
@@ -230,6 +233,11 @@ registerManagedFrameRoots(talos_rt_process_instance_v1 *instance,
 }
 
 } // namespace
+
+std::unique_ptr<talos::process::ValidatedSuspension> *
+processValidatedSuspension(talos_rt_process_instance_v1 *instance) {
+  return &processMetadata(instance)->validatedSuspension;
+}
 
 bool hasPendingProcessStart(talos_rt_process_instance_v1 *instance) {
   return processMetadata(instance)->pendingStart != nullptr;
@@ -1789,7 +1797,8 @@ talos_rt_v1_process_instance_execute(talos_rt_process_instance_v1 *instance,
   instance->action = nullptr;
   if (status == TALOS_RT_OK)
     status = validateAction(*instance, *outAction,
-                            requestedTier == TALOS_RT_TIER_BYTECODE);
+                            requestedTier == TALOS_RT_TIER_BYTECODE,
+                            &processMetadata(instance)->validatedSuspension);
   instance->status = status;
   if (status != TALOS_RT_OK) {
     if (requestedTier == TALOS_RT_TIER_NATIVE && instance->native_handle) {

@@ -7186,6 +7186,94 @@ TEST(Scheduler, AOTDelayIndexStaysBoundedWithoutGenericCalendarQueries) {
   talos_rt_v1_context_destroy(context);
 }
 
+// Two-tier B2 Q6: a process that suspends again at the same wait with a
+// byte-identical record reuses its last validation; any change to the record
+// bytes or to the action's fields validates in full again, and the legacy
+// bytecode rewrite of the action is reproduced on a reuse.
+TEST(Scheduler, RepeatedSuspensionsReuseValidationOnlyForIdenticalWaits) {
+  Fixture fixture;
+  talos_rt_process_instance_v1 *instance = nullptr;
+  ASSERT_EQ(talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+            TALOS_RT_OK);
+  auto *wait = reinterpret_cast<talos_rt_wait_record_v1 *>(
+      static_cast<uint8_t *>(instance->frame) + 8);
+  *wait = {TALOS_RT_VERSION, TALOS_RT_SUSPEND_DELAY, 0, 0, 0, 0};
+  std::unique_ptr<talos::process::ValidatedSuspension> cache;
+  auto validate = [&](talos_rt_fragment_action_v1 action, bool bytecode,
+                      talos_rt_fragment_action_v1 *out = nullptr) {
+    talos_rt_status status =
+        talos::process::validateAction(*instance, action, bytecode, &cache);
+    if (out)
+      *out = action;
+    return status;
+  };
+  const talos_rt_fragment_action_v1 suspend{TALOS_RT_FRAGMENT_SUSPEND,
+                                            TALOS_RT_SUSPEND_DELAY,
+                                            1,
+                                            TALOS_RT_ACTION_FRAME_WAIT_RECORD,
+                                            8,
+                                            32};
+  EXPECT_EQ(validate(suspend, false), TALOS_RT_OK);
+  ASSERT_TRUE(cache && cache->valid);
+  EXPECT_EQ(validate(suspend, false), TALOS_RT_OK);
+  // A reuse skips validation entirely: with the cached key pointing at a
+  // continuation outside the layout, the same suspension is still accepted.
+  talos_rt_fragment_action_v1 elsewhere = suspend;
+  elsewhere.continuation = 7;
+  cache->continuation = 7;
+  EXPECT_EQ(validate(elsewhere, false), TALOS_RT_OK);
+  cache->continuation = 1;
+  // A delay wait has no entries: a changed count is invalid, also after a
+  // validation of the same action was cached.
+  wait->count = 1;
+  EXPECT_EQ(validate(suspend, false), TALOS_RT_INVALID_FRAME);
+  EXPECT_FALSE(cache->valid);
+  wait->count = 0;
+  EXPECT_EQ(validate(suspend, false), TALOS_RT_OK);
+  // Same bytes, another continuation (not in the layout).
+  EXPECT_EQ(validate(elsewhere, false), TALOS_RT_INVALID_CONTINUATION);
+  EXPECT_FALSE(cache->valid);
+  // Same bytes, another kind than the record's.
+  talos_rt_fragment_action_v1 changeKind = suspend;
+  changeKind.suspend_kind = TALOS_RT_SUSPEND_CHANGE;
+  EXPECT_EQ(validate(suspend, false), TALOS_RT_OK);
+  EXPECT_EQ(validate(changeKind, false), TALOS_RT_INVALID_FRAME);
+  // A legacy bytecode suspension (no record flag) is rewritten to the frame
+  // record form, by the full validation and by a reuse alike.
+  talos_rt_fragment_action_v1 legacy = suspend;
+  legacy.flags = 0;
+  legacy.auxiliary = 0;
+  talos_rt_fragment_action_v1 rewritten{};
+  EXPECT_EQ(validate(legacy, true, &rewritten), TALOS_RT_OK);
+  EXPECT_EQ(rewritten.flags, uint32_t{TALOS_RT_ACTION_FRAME_WAIT_RECORD});
+  EXPECT_EQ(rewritten.auxiliary, 32u);
+  rewritten = {};
+  EXPECT_EQ(validate(legacy, true, &rewritten), TALOS_RT_OK);
+  EXPECT_EQ(rewritten.flags, uint32_t{TALOS_RT_ACTION_FRAME_WAIT_RECORD});
+  EXPECT_EQ(rewritten.auxiliary, 32u);
+  // The same action outside the legacy tier is not the cached one.
+  EXPECT_EQ(validate(legacy, false), TALOS_RT_INVALID_FRAME);
+  // A valid change of the record's bytes (a delay record's payload is not
+  // checked) misses and refills the copy.
+  EXPECT_EQ(validate(suspend, false), TALOS_RT_OK);
+  wait->payload = 5;
+  EXPECT_EQ(validate(suspend, false), TALOS_RT_OK);
+  EXPECT_EQ(std::memcmp(cache->record, wait, sizeof(*wait)), 0);
+  // A process whose record changes at every suspension stops filling after
+  // kMissLimit fills in a row and validates in full from then on.
+  for (uint64_t round = 0;
+       round != talos::process::ValidatedSuspension::kMissLimit + 1; ++round) {
+    wait->payload = 100 + round;
+    EXPECT_EQ(validate(suspend, false), TALOS_RT_OK);
+  }
+  EXPECT_TRUE(cache->disabled);
+  EXPECT_FALSE(cache->valid);
+  EXPECT_EQ(validate(suspend, false), TALOS_RT_OK);
+  wait->count = 1;
+  EXPECT_EQ(validate(suspend, false), TALOS_RT_INVALID_FRAME);
+  EXPECT_EQ(talos_rt_v1_process_instance_destroy(instance), TALOS_RT_OK);
+}
+
 TEST(Scheduler, FutureDelaysLeavePollCandidatesUntilTheirTimeSlot) {
   // IEEE 1800-2023 4.4-4.5: a delayed process becomes runnable only in the
   // time slot of its wake time. The delay calendar admits it there, so no

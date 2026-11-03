@@ -14,6 +14,7 @@
 #include "RuntimeInternal.h"
 
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <unordered_set>
@@ -405,5 +406,13 @@ talos_rt_status resolveClockingDriveConflictsUnlocked(talos_rt_context *context,
                                                       uint32_t barrierRegion);
 talos_rt_status materializeGeneratedNBAAccumulatorUnlocked(
     talos_rt_context *context, uint32_t rootIndex, uint32_t execRegion);
+
+namespace talos::process {
+struct ValidatedSuspension;
+}
+/// The validated-suspension cache slot of a runtime-allocated process
+/// instance (two-tier B2 Q6).
+std::unique_ptr<talos::process::ValidatedSuspension> *
+processValidatedSuspension(talos_rt_process_instance_v1 *instance);
 
 #endif // TALOS_RUNTIME_LIB_PROCESSSHARED_H

@@ -1014,7 +1014,8 @@ __attribute__((always_inline)) inline talos_rt_status executeStaticNativeAOT(
   instance->context = nullptr;
   instance->action = nullptr;
   if (status == TALOS_RT_OK && !generatedActions)
-    status = validateAction(*instance, action, false);
+    status = validateAction(*instance, action, false,
+                            processValidatedSuspension(instance));
   instance->status = status;
   if (status != TALOS_RT_OK) {
     if (status == TALOS_RT_AOT_CHECKPOINT) {

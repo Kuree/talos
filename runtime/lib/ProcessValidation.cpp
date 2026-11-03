@@ -6,6 +6,7 @@
 #include "talos/Runtime/StableHash.h"
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
 #include <vector>
 
@@ -481,8 +482,26 @@ talos_rt_status validateWait(talos_rt_process_instance_v1 &instance,
 
 talos_rt_status validateAction(talos_rt_process_instance_v1 &instance,
                                talos_rt_fragment_action_v1 &action,
-                               bool bytecode) {
+                               bool bytecode,
+                               std::unique_ptr<ValidatedSuspension> *cache) {
   const talos_rt_frame_layout_v1 &layout = *instance.descriptor->frame_layout;
+  ValidatedSuspension *entry = cache ? cache->get() : nullptr;
+  if (entry && entry->valid && instance.frame &&
+      action.kind == TALOS_RT_FRAGMENT_SUSPEND &&
+      action.suspend_kind == entry->kind &&
+      action.continuation == entry->continuation &&
+      action.flags == entry->flags && action.payload == entry->payload &&
+      action.auxiliary == entry->auxiliary && bytecode == entry->bytecode &&
+      entry->validatedAuxiliary <= instance.frame_size &&
+      action.payload <= instance.frame_size - entry->validatedAuxiliary &&
+      std::memcmp(entry->record,
+                  static_cast<const uint8_t *>(instance.frame) + action.payload,
+                  static_cast<size_t>(entry->validatedAuxiliary)) == 0) {
+    entry->fillsWithoutHit = 0;
+    action.flags = entry->validatedFlags;
+    action.auxiliary = entry->validatedAuxiliary;
+    return TALOS_RT_OK;
+  }
   switch (action.kind) {
   case TALOS_RT_FRAGMENT_CONTINUE:
     if (action.flags != 0 || action.suspend_kind != TALOS_RT_SUSPEND_NONE ||
@@ -493,10 +512,44 @@ talos_rt_status validateAction(talos_rt_process_instance_v1 &instance,
     if (action.suspend_kind < TALOS_RT_SUSPEND_DELAY ||
         action.suspend_kind > TALOS_RT_SUSPEND_EVENT_ORDER)
       return TALOS_RT_INVALID_ARGUMENT;
+    uint32_t inputFlags = action.flags;
+    uint64_t inputAuxiliary = action.auxiliary;
+    if (entry)
+      entry->valid = false;
     talos_rt_status status = validateWait(instance, action, bytecode);
     if (status != TALOS_RT_OK)
       return status;
-    break;
+    if (!validContinuation(layout, action.continuation))
+      return TALOS_RT_INVALID_CONTINUATION;
+    // validateWait proved [payload, payload + auxiliary) inside the frame.
+    if (cache && action.suspend_kind != TALOS_RT_SUSPEND_OBSERVER &&
+        action.auxiliary <= ValidatedSuspension::kMaxBytes &&
+        (!entry || !entry->disabled)) {
+      if (!entry) {
+        TALOS_RT_TRY { *cache = std::make_unique<ValidatedSuspension>(); }
+        TALOS_RT_CATCH_ALL {}
+        entry = cache->get();
+      } else if (++entry->fillsWithoutHit >= ValidatedSuspension::kMissLimit) {
+        entry->disabled = true;
+        entry = nullptr;
+      }
+      if (entry) {
+        std::memcpy(entry->record,
+                    static_cast<const uint8_t *>(instance.frame) +
+                        action.payload,
+                    static_cast<size_t>(action.auxiliary));
+        entry->valid = true;
+        entry->bytecode = bytecode;
+        entry->kind = action.suspend_kind;
+        entry->continuation = action.continuation;
+        entry->flags = inputFlags;
+        entry->auxiliary = inputAuxiliary;
+        entry->payload = action.payload;
+        entry->validatedFlags = action.flags;
+        entry->validatedAuxiliary = action.auxiliary;
+      }
+    }
+    return TALOS_RT_OK;
   }
   case TALOS_RT_FRAGMENT_TERMINATE:
     if (action.flags != 0 || action.suspend_kind != TALOS_RT_SUSPEND_NONE ||
