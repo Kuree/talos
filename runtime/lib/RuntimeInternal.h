@@ -3816,6 +3816,11 @@ void setLastError(talos_rt_context *context, std::string message);
 void talos_rt_report_signal_diagnostics_unlocked(talos_rt_context *context);
 void talos_rt_release_native_schedule_plan(talos_rt_context *context) noexcept;
 void talos_rt_release_eval_nba_queues(talos_rt_context *context) noexcept;
+/// Before a context is freed: process instances still tracing their frames'
+/// managed fields for it (instances a host keeps) forget it, so destroying
+/// them later does not touch the freed context.
+void talos_rt_detach_managed_frame_roots_unlocked(
+    talos_rt_context *context) noexcept;
 void talos_rt_aot_external_write_unlocked(talos_rt_context *context);
 void talos_rt_aot_observation_demand_changed_unlocked(talos_rt_context *context,
                                                       bool active);

@@ -1712,6 +1712,93 @@ TEST(RuntimeInternals, ReplacedAndReenabledMonitorsAreWokenInPostponed) {
   talos_rt_v1_context_destroy(context);
 }
 
+TEST(Scheduler, ScheduledFramesStayRootedBeforeTheirFirstActivation) {
+  // A task's caller writes the task's arguments into its frame when it
+  // spawns it. Collection points can come before the task's first activation
+  // (another process's activation boundary, a time-slot boundary), so a
+  // scheduled frame's managed fields are traced from the moment it is
+  // scheduled, not only once it first runs.
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  talos_rt_gc_lane_v1 *lane = nullptr;
+  ASSERT_EQ(talos_rt_v1_gc_lane_create(context, &lane), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_lane_enter(lane), TALOS_RT_OK);
+  talos_rt_string_v1 argument = 0;
+  ASSERT_EQ(talos_rt_v1_string_create(lane, "task argument", 13, &argument),
+            TALOS_RT_OK);
+  const talos_rt_string_v1 stableID = argument;
+
+  SchedulerFixture fixture(18);
+  fixture.fields[0] = {
+      TALOS_RT_FRAME_CAPTURE, TALOS_RT_FRAME_MANAGED_ROOT, 0, 8, 8, 0};
+  fixture.layout.checksum = checksum(fixture.layout);
+  talos_rt_process_instance_v1 *instance = makeSchedulerInstance(fixture);
+  ASSERT_NE(instance, nullptr);
+  std::memcpy(instance->frame, &argument, sizeof(argument));
+  argument = 0;
+  ASSERT_EQ(talos_rt_v1_scheduler_add(context, instance, 0), TALOS_RT_OK);
+
+  ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);
+  char inlineBytes[8]{};
+  const char *bytes = nullptr;
+  uint64_t size = 0;
+  ASSERT_EQ(talos_rt_v1_string_view(stableID, inlineBytes, &bytes, &size),
+            TALOS_RT_OK);
+  EXPECT_EQ(std::string_view(bytes, size), "task argument");
+
+  // A task call's callee is created for the context and never goes through
+  // scheduler_add: the caller fills its frame and the scheduler installs it
+  // later, possibly after other activations' collection points.
+  talos_rt_string_v1 calleeArgument = 0;
+  ASSERT_EQ(
+      talos_rt_v1_string_create(lane, "callee argument", 15, &calleeArgument),
+      TALOS_RT_OK);
+  const talos_rt_string_v1 calleeID = calleeArgument;
+  talos_rt_process_instance_v1 *callee = nullptr;
+  ASSERT_EQ(talos_rt_v1_process_instance_create_for_context(
+                context, &fixture.descriptor, &callee),
+            TALOS_RT_OK);
+  std::memcpy(callee->frame, &calleeArgument, sizeof(calleeArgument));
+  calleeArgument = 0;
+  ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_string_view(calleeID, inlineBytes, &bytes, &size),
+            TALOS_RT_OK);
+  EXPECT_EQ(std::string_view(bytes, size), "callee argument");
+  // Destroying the callee stops tracing its frame.
+  ASSERT_EQ(talos_rt_v1_process_instance_destroy(callee), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_collect(lane), TALOS_RT_OK);
+  EXPECT_NE(talos_rt_v1_string_view(calleeID, inlineBytes, &bytes, &size),
+            TALOS_RT_OK);
+
+  EXPECT_EQ(talos_rt_v1_gc_lane_leave(lane), TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_gc_lane_destroy(lane), TALOS_RT_OK);
+  talos_rt_v1_context_destroy(context);
+}
+
+TEST(Scheduler, InstancesOutlivingTheirContextForgetIt) {
+  // A host may keep an instance it created for a context past the context's
+  // destruction; destroying the instance afterwards must not touch the freed
+  // context (its frame-root registration is detached with the context).
+  for (bool managedFrame : {false, true}) {
+    SCOPED_TRACE(managedFrame);
+    talos_rt_context *context = nullptr;
+    ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+    SchedulerFixture fixture(19);
+    if (managedFrame) {
+      fixture.fields[0] = {
+          TALOS_RT_FRAME_CAPTURE, TALOS_RT_FRAME_MANAGED_ROOT, 0, 8, 8, 0};
+      fixture.layout.checksum = checksum(fixture.layout);
+    }
+    talos_rt_process_instance_v1 *instance = nullptr;
+    ASSERT_EQ(talos_rt_v1_process_instance_create_for_context(
+                  context, &fixture.descriptor, &instance),
+              TALOS_RT_OK);
+    EXPECT_EQ(context->managedRootProcesses.size(), managedFrame ? 1u : 0u);
+    talos_rt_v1_context_destroy(context);
+    EXPECT_EQ(talos_rt_v1_process_instance_destroy(instance), TALOS_RT_OK);
+  }
+}
+
 TEST(RuntimeInternals, ManagedObjectWaitsRemainRootsAcrossCollection) {
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);

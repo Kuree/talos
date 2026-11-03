@@ -163,7 +163,12 @@ struct ProcessAllocationMetadata {
   uint64_t magic;
   size_t size;
   size_t alignment;
+  // The context tracing this frame's managed fields, set only for a frame
+  // that has them (frameRoots == 2).
   talos_rt_context *managedRootContext = nullptr;
+  // Whether the frame layout has managed fields: 0 not checked yet, 1 none,
+  // 2 some. A property of the descriptor, cached on first registration.
+  uint8_t frameRoots = 0;
   uint64_t vpiSourceCallID = 0;
   // A process created at its wait (TALOS_RT_SPAWN_STARTED) whose body has not
   // run yet: the first execution through this instance replays its entry.
@@ -211,17 +216,20 @@ registerManagedFrameRoots(talos_rt_process_instance_v1 *instance,
   if (metadata->managedRootContext)
     return metadata->managedRootContext == context ? TALOS_RT_OK
                                                    : TALOS_RT_INVALID_LIFECYCLE;
-
-  const talos_rt_frame_layout_v1 &layout = *instance->descriptor->frame_layout;
-  bool hasManagedRoots = false;
-  for (uint32_t index = 0; index != layout.field_count; ++index)
-    hasManagedRoots |=
-        layout.fields[index].flags == TALOS_RT_FRAME_MANAGED_ROOT ||
-        layout.fields[index].flags == TALOS_RT_FRAME_CANDIDATE_ROOT;
-  if (!hasManagedRoots) {
-    metadata->managedRootContext = context;
-    return TALOS_RT_OK;
+  if (metadata->frameRoots == 0) {
+    const talos_rt_frame_layout_v1 &layout =
+        *instance->descriptor->frame_layout;
+    bool hasManagedRoots = false;
+    for (uint32_t index = 0; index != layout.field_count; ++index)
+      hasManagedRoots |=
+          layout.fields[index].flags == TALOS_RT_FRAME_MANAGED_ROOT ||
+          layout.fields[index].flags == TALOS_RT_FRAME_CANDIDATE_ROOT;
+    metadata->frameRoots = hasManagedRoots ? 2 : 1;
   }
+  // A frame without managed fields records no context, so nothing refers to
+  // the context once it is gone.
+  if (metadata->frameRoots == 1)
+    return TALOS_RT_OK;
   ContextMutexLock lock(context);
   if (std::find(context->managedRootProcesses.begin(),
                 context->managedRootProcesses.end(),
@@ -357,6 +365,14 @@ talos_rt_status replayPendingProcessStart(talos_rt_process_instance_v1 *instance
       instance->continuation != start->continuation)
     return TALOS_RT_INVALID_LIFECYCLE;
   return TALOS_RT_OK;
+}
+
+void talos_rt_detach_managed_frame_roots_unlocked(
+    talos_rt_context *context) noexcept {
+  for (talos_rt_process_instance_v1 *instance : context->managedRootProcesses)
+    if (processMetadata(instance)->managedRootContext == context)
+      processMetadata(instance)->managedRootContext = nullptr;
+  context->managedRootProcesses.clear();
 }
 
 void unregisterManagedFrameRoots(talos_rt_process_instance_v1 *instance) {
@@ -1536,6 +1552,18 @@ createProcessInstance(talos_rt_context *context,
       ProcessAllocationMetadata{
           kProcessAllocationMagic, static_cast<size_t>(totalSize),
           static_cast<size_t>(allocationAlignment), nullptr};
+  // An instance created for a context (a task call's callee, a spawned
+  // child) gets its arguments written into its zeroed frame before it first
+  // runs, and other activations' collection points can come first; trace its
+  // managed fields from creation (IEEE 1800-2023 13.5.1, 8.29).
+  if (context) {
+    talos_rt_status status = guarded(
+        context, [&] { return registerManagedFrameRoots(instance, context); });
+    if (status != TALOS_RT_OK) {
+      (void)talos_rt_v1_process_instance_destroy(instance);
+      return status;
+    }
+  }
   *outInstance = instance;
   return TALOS_RT_OK;
 }
@@ -1708,8 +1736,20 @@ talos_rt_v1_process_instance_execute(talos_rt_process_instance_v1 *instance,
   }
   // Unless this activation is nested in another one, nothing on this thread
   // holds an unregistered managed value before it starts, so pressure that
-  // suspensions carried here without reaching a poll is reclaimable.
+  // suspensions carried here without reaching a poll is reclaimable. This
+  // activation's own frame may already hold managed captures (a task's
+  // arguments, written by its caller), so trace it from here on.
   if (context) {
+    ProcessAllocationMetadata *metadata = processMetadata(instance);
+    if (metadata->frameRoots != 1 && metadata->managedRootContext != context &&
+        (!instance->ownership_context ||
+         instance->ownership_context == context)) {
+      talos_rt_status rootStatus = guarded(context, [&] {
+        return registerManagedFrameRoots(instance, context);
+      });
+      if (rootStatus != TALOS_RT_OK)
+        return rootStatus;
+    }
     talos_rt_status collected =
         talos_rt_managed_heap_collect_between_activations(context);
     if (collected != TALOS_RT_OK)
@@ -1719,7 +1759,6 @@ talos_rt_v1_process_instance_execute(talos_rt_process_instance_v1 *instance,
   if (managedExecution.getStatus() != TALOS_RT_OK)
     return managedExecution.getStatus();
   bool installedActiveProcess = false;
-  bool installedOwnership = false;
   if (context) {
     ContextMutexLock lock(context);
     if (context->activeNativeProcess &&
@@ -1731,20 +1770,7 @@ talos_rt_v1_process_instance_execute(talos_rt_process_instance_v1 *instance,
       context->activeNativeProcess = instance;
       installedActiveProcess = true;
     }
-    installedOwnership = !instance->ownership_context;
     instance->ownership_context = context;
-  }
-  talos_rt_status rootStatus = guarded(
-      context, [&] { return registerManagedFrameRoots(instance, context); });
-  if (rootStatus != TALOS_RT_OK) {
-    if (installedActiveProcess) {
-      ContextMutexLock lock(context);
-      if (context->activeNativeProcess == instance)
-        context->activeNativeProcess = nullptr;
-    }
-    if (installedOwnership)
-      instance->ownership_context = nullptr;
-    return rootStatus;
   }
   instance->tier = requestedTier;
   instance->context = context;
@@ -2154,6 +2180,14 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_add_planned(
           phase = active.phase;
       }
     }
+    // Instances created for a context are traced from creation; one created
+    // without a context (by a host) is traced from when it is scheduled, as
+    // collection points can come before its first activation. Frames start
+    // zeroed, so fields not yet written trace as null.
+    if (processMetadata(instance)->magic == kProcessAllocationMagic)
+      if (talos_rt_status status = registerManagedFrameRoots(instance, context);
+          status != TALOS_RT_OK)
+        return status;
     ScheduledProcess process;
     process.instance = instance;
     if (context->nextNativeProcessToken == 0 ||

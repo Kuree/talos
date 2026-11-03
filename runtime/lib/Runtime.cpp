@@ -478,6 +478,8 @@ void destroyContextNow(talos_rt_context *context) noexcept {
       std::fclose(context->logFile);
   }
   TALOS_RT_CATCH_ALL {}
+  // Even when teardown above failed part way.
+  talos_rt_detach_managed_frame_roots_unlocked(context);
   if (context->nativeStateSpecializationFast)
     *context->nativeStateSpecializationFast = 0;
   delete context;
