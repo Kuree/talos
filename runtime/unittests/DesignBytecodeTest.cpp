@@ -137,10 +137,47 @@ void instruction(std::vector<uint8_t> &bytes, size_t code, size_t index,
   put64(bytes, offset + 24, immediate);
 }
 
+// Layout tables (two-tier B4): a register's layout record is {u32 shape,
+// u32 frame offset}, and shapes {u8 kind, u8 flags, u16 0, u32 width, u64 size,
+// u64 auxiliary} follow the records. Test images give register i its own
+// shape i, so a test can change one register's shape alone.
+constexpr size_t layoutTableSize(size_t registers) { return registers * 32; }
+
+/// Points the header at the shapes after `registers` layout records at
+/// `layouts`.
+void putShapeTable(std::vector<uint8_t> &bytes, size_t layouts,
+                   size_t registers) {
+  put64(bytes, 200, layouts + registers * 8);
+  put64(bytes, 208, registers);
+}
+
+/// Writes register `index` of a table of `registers` records at `layouts`.
+void putLayout(std::vector<uint8_t> &bytes, size_t layouts, size_t registers,
+               size_t index, uint8_t kind, uint32_t width, uint64_t offset,
+               uint64_t size, uint8_t flags = 0, uint64_t auxiliary = 0) {
+  put32(bytes, layouts + index * 8, static_cast<uint32_t>(index));
+  put32(bytes, layouts + index * 8 + 4, static_cast<uint32_t>(offset));
+  size_t shape = layouts + registers * 8 + index * 24;
+  bytes[shape] = kind;
+  bytes[shape + 1] = flags;
+  put32(bytes, shape + 4, width);
+  put64(bytes, shape + 8, size);
+  put64(bytes, shape + 16, auxiliary);
+}
+
+/// The shape and the layout record of register `index` in an image built
+/// with one shape per register.
+size_t shapeAt(const std::vector<uint8_t> &bytes, size_t index) {
+  return get64(bytes, 200) + index * 24;
+}
+size_t layoutRecordAt(const std::vector<uint8_t> &bytes, size_t index) {
+  return get64(bytes, 56) + index * 8;
+}
+
 std::vector<uint8_t> makeBytecode() {
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 96;
-  constexpr size_t codeOffset = layoutOffset + 40;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(1);
   constexpr size_t constantOffset = codeOffset + 3 * 32;
   constexpr size_t continuationOffset = constantOffset + 32;
   std::vector<uint8_t> bytes(continuationOffset + 24, 0);
@@ -179,10 +216,8 @@ std::vector<uint8_t> makeBytecode() {
   put64(bytes, functionOffset + 80, 1);
   put64(bytes, functionOffset + 88, 1);
 
-  bytes[layoutOffset] = TALOS_RT_DBREG_LOGIC;
-  put32(bytes, layoutOffset + 4, 65);
-  put64(bytes, layoutOffset + 8, 0);
-  put64(bytes, layoutOffset + 16, 32);
+  putShapeTable(bytes, layoutOffset, 1);
+  putLayout(bytes, layoutOffset, 1, 0, TALOS_RT_DBREG_LOGIC, 65, 0, 32);
 
   instruction(bytes, codeOffset, 0, TALOS_RT_DB_CONSTANT);
   instruction(bytes, codeOffset, 1, TALOS_RT_DB_STORE_FRAME, 0, 0, 0);
@@ -201,7 +236,7 @@ std::vector<uint8_t> makeBytecode() {
 std::vector<uint8_t> makeDynamicScanIntrinsicBytecode(uint32_t intrinsicID) {
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 96;
-  constexpr size_t codeOffset = layoutOffset + 3 * 40;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(3);
   constexpr size_t operandOffset = codeOffset + 2 * 32;
   constexpr size_t continuationOffset = operandOffset + 14 * 8;
   constexpr size_t intrinsicOffset = continuationOffset + 24;
@@ -238,13 +273,10 @@ std::vector<uint8_t> makeDynamicScanIntrinsicBytecode(uint32_t intrinsicID) {
   put64(bytes, functionOffset + 64, 8);
   put64(bytes, functionOffset + 80, 1);
   put64(bytes, functionOffset + 88, 0);
+  putShapeTable(bytes, layoutOffset, 3);
   auto layout = [&](size_t index, uint8_t kind, uint32_t width,
                     uint64_t offset) {
-    size_t record = layoutOffset + index * 40;
-    bytes[record] = kind;
-    put32(bytes, record + 4, width);
-    put64(bytes, record + 8, offset);
-    put64(bytes, record + 16, 8);
+    putLayout(bytes, layoutOffset, 3, index, kind, width, offset, 8);
   };
   layout(0, TALOS_RT_DBREG_STRING, 64, 0);
   layout(1, TALOS_RT_DBREG_BITS, 32, 8);
@@ -285,7 +317,7 @@ std::vector<uint8_t> makeComparisonBytecode(uint8_t resultKind,
                                             uint16_t comparisonKind) {
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 96;
-  constexpr size_t codeOffset = layoutOffset + 3 * 40;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(3);
   constexpr size_t continuationOffset = codeOffset + 2 * 32;
   std::vector<uint8_t> bytes(continuationOffset + 24, 0);
   std::memcpy(bytes.data(), "OBBCDS1\0", 8);
@@ -321,17 +353,11 @@ std::vector<uint8_t> makeComparisonBytecode(uint8_t resultKind,
   put64(bytes, functionOffset + 72, 0);
   put64(bytes, functionOffset + 80, 1);
 
-  for (unsigned index = 0; index != 2; ++index) {
-    size_t layout = layoutOffset + index * 40;
-    bytes[layout] = TALOS_RT_DBREG_LOGIC;
-    put32(bytes, layout + 4, 1);
-    put64(bytes, layout + 8, index * 16);
-    put64(bytes, layout + 16, 16);
-  }
-  bytes[layoutOffset + 80] = resultKind;
-  put32(bytes, layoutOffset + 84, 1);
-  put64(bytes, layoutOffset + 88, 32);
-  put64(bytes, layoutOffset + 96, resultSize);
+  putShapeTable(bytes, layoutOffset, 3);
+  for (unsigned index = 0; index != 2; ++index)
+    putLayout(bytes, layoutOffset, 3, index, TALOS_RT_DBREG_LOGIC, 1,
+              index * 16, 16);
+  putLayout(bytes, layoutOffset, 3, 2, resultKind, 1, 32, resultSize);
 
   instruction(bytes, codeOffset, 0, TALOS_RT_DB_COMPARE, comparisonKind, 2, 0,
               1);
@@ -347,7 +373,7 @@ std::vector<uint8_t> makeInitializationBoundaryBytecode(bool invalidJoin) {
   constexpr uint64_t registerCount = 66;
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 96;
-  constexpr size_t layoutSize = registerCount * 40;
+  constexpr size_t layoutSize = layoutTableSize(registerCount);
   constexpr size_t codeOffset = layoutOffset + layoutSize;
   const size_t instructionCount = invalidJoin ? 6 : 4;
   const size_t operandOffset = codeOffset + instructionCount * 32;
@@ -388,13 +414,10 @@ std::vector<uint8_t> makeInitializationBoundaryBytecode(bool invalidJoin) {
   put64(bytes, functionOffset + 72, 0);
   put64(bytes, functionOffset + 80, 1);
 
-  for (uint64_t index = 0; index != registerCount; ++index) {
-    size_t layout = layoutOffset + index * 40;
-    bytes[layout] = TALOS_RT_DBREG_BITS;
-    put32(bytes, layout + 4, 1);
-    put64(bytes, layout + 8, index * 8);
-    put64(bytes, layout + 16, 8);
-  }
+  putShapeTable(bytes, layoutOffset, registerCount);
+  for (uint64_t index = 0; index != registerCount; ++index)
+    putLayout(bytes, layoutOffset, registerCount, index, TALOS_RT_DBREG_BITS, 1,
+              index * 8, 8);
 
   if (invalidJoin) {
     instruction(bytes, codeOffset, 0, TALOS_RT_DB_CONSTANT, 0, 63);
@@ -425,7 +448,7 @@ std::vector<uint8_t> makeInitializationBoundaryBytecode(bool invalidJoin) {
 std::vector<uint8_t> makeObserverBytecode(uint8_t resultKind) {
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 96;
-  constexpr size_t codeOffset = layoutOffset + 2 * 40;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(2);
   constexpr size_t operandOffset = codeOffset + 2 * 32;
   constexpr size_t constantOffset = operandOffset + 8;
   constexpr size_t continuationOffset = constantOffset + 32;
@@ -439,6 +462,7 @@ std::vector<uint8_t> makeObserverBytecode(uint8_t resultKind) {
   put64(bytes, 48, 1);
   put64(bytes, 56, layoutOffset);
   put64(bytes, 64, 2);
+  putShapeTable(bytes, layoutOffset, 2);
   put64(bytes, 72, codeOffset);
   put64(bytes, 80, 2);
   put64(bytes, 88, operandOffset);
@@ -465,14 +489,8 @@ std::vector<uint8_t> makeObserverBytecode(uint8_t resultKind) {
   put64(bytes, functionOffset + 80, 1);
   put64(bytes, functionOffset + 88, 0);
 
-  bytes[layoutOffset] = TALOS_RT_DBREG_HANDLE;
-  put32(bytes, layoutOffset + 4, 256);
-  put64(bytes, layoutOffset + 8, 0);
-  put64(bytes, layoutOffset + 16, 32);
-  bytes[layoutOffset + 40] = resultKind;
-  put32(bytes, layoutOffset + 44, 256);
-  put64(bytes, layoutOffset + 48, 32);
-  put64(bytes, layoutOffset + 56, 32);
+  putLayout(bytes, layoutOffset, 2, 0, TALOS_RT_DBREG_HANDLE, 256, 0, 32);
+  putLayout(bytes, layoutOffset, 2, 1, resultKind, 256, 32, 32);
 
   instruction(bytes, codeOffset, 0, TALOS_RT_DB_CONSTANT, 0, 1);
   instruction(bytes, codeOffset, 1, TALOS_RT_DB_RETURN, 0, 0, 0, 1);
@@ -488,7 +506,7 @@ std::vector<uint8_t> makeObserverBytecode(uint8_t resultKind) {
 std::vector<uint8_t> makeImportBytecode(uint32_t importID) {
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 96;
-  constexpr size_t codeOffset = layoutOffset + 2 * 40;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(2);
   constexpr size_t operandOffset = codeOffset + 4 * 32;
   constexpr size_t constantOffset = operandOffset + 2 * 8;
   constexpr size_t continuationOffset = constantOffset + 32;
@@ -504,6 +522,7 @@ std::vector<uint8_t> makeImportBytecode(uint32_t importID) {
   put64(bytes, 48, 1);
   put64(bytes, 56, layoutOffset);
   put64(bytes, 64, 2);
+  putShapeTable(bytes, layoutOffset, 2);
   put64(bytes, 72, codeOffset);
   put64(bytes, 80, 4);
   put64(bytes, 88, operandOffset);
@@ -531,11 +550,8 @@ std::vector<uint8_t> makeImportBytecode(uint32_t importID) {
   put64(bytes, functionOffset + 88, 1);
 
   for (size_t index = 0; index != 2; ++index) {
-    size_t layout = layoutOffset + index * 40;
-    bytes[layout] = TALOS_RT_DBREG_LOGIC;
-    put32(bytes, layout + 4, 65);
-    put64(bytes, layout + 8, index * 32);
-    put64(bytes, layout + 16, 32);
+    putLayout(bytes, layoutOffset, 2, index, TALOS_RT_DBREG_LOGIC, 65,
+              index * 32, 32);
   }
   instruction(bytes, codeOffset, 0, TALOS_RT_DB_CONSTANT, 0, 0);
   instruction(bytes, codeOffset, 1, TALOS_RT_DB_INTRINSIC, 0, 0, 0, 0, 0, 0, 0);
@@ -611,7 +627,7 @@ std::vector<uint8_t> makeRandomSolveBytecode(bool stateful, uint64_t rngState,
 
   size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   size_t layoutOffset = functionOffset + 96;
-  size_t codeOffset = layoutOffset + registerCount * 40;
+  size_t codeOffset = layoutOffset + layoutTableSize(registerCount);
   size_t operandOffset = codeOffset + instructionCount * 32;
   size_t constantOffset = operandOffset + operandCount * 8;
   size_t programOffset = 16 + (inputCount - 1) * 8;
@@ -629,6 +645,7 @@ std::vector<uint8_t> makeRandomSolveBytecode(bool stateful, uint64_t rngState,
   put64(bytes, 48, 1);
   put64(bytes, 56, layoutOffset);
   put64(bytes, 64, registerCount);
+  putShapeTable(bytes, layoutOffset, registerCount);
   put64(bytes, 72, codeOffset);
   put64(bytes, 80, instructionCount);
   put64(bytes, 88, operandOffset);
@@ -652,16 +669,12 @@ std::vector<uint8_t> makeRandomSolveBytecode(bool stateful, uint64_t rngState,
   put64(bytes, functionOffset + 80, 1);
   put64(bytes, functionOffset + 88, 1);
 
-  bytes[layoutOffset] = TALOS_RT_DBREG_BYTES;
-  put32(bytes, layoutOffset + 4, 128);
-  put64(bytes, layoutOffset + 16, 16);
+  putLayout(bytes, layoutOffset, registerCount, 0, TALOS_RT_DBREG_BYTES, 128, 0,
+            16);
   uint32_t successRegister = inputCount + 1;
   for (uint32_t reg = 1; reg != registerCount; ++reg) {
-    size_t layout = layoutOffset + reg * 40;
-    bytes[layout] = TALOS_RT_DBREG_BITS;
-    put32(bytes, layout + 4, reg == successRegister ? 1 : 64);
-    put64(bytes, layout + 8, 16 + (reg - 1) * 8);
-    put64(bytes, layout + 16, 8);
+    putLayout(bytes, layoutOffset, registerCount, reg, TALOS_RT_DBREG_BITS,
+              reg == successRegister ? 1 : 64, 16 + (reg - 1) * 8, 8);
   }
 
   for (uint32_t reg = 0; reg != inputCount; ++reg) {
@@ -748,7 +761,7 @@ std::vector<uint8_t> makeRandomSolveWideBytecode() {
 
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 96;
-  constexpr size_t codeOffset = layoutOffset + registerCount * 40;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(registerCount);
   constexpr size_t operandOffset = codeOffset + instructionCount * 32;
   constexpr size_t constantOffset = operandOffset + operandCount * 8;
   constexpr size_t programOffset = 80;
@@ -766,6 +779,7 @@ std::vector<uint8_t> makeRandomSolveWideBytecode() {
   put64(bytes, 48, 1);
   put64(bytes, 56, layoutOffset);
   put64(bytes, 64, registerCount);
+  putShapeTable(bytes, layoutOffset, registerCount);
   put64(bytes, 72, codeOffset);
   put64(bytes, 80, instructionCount);
   put64(bytes, 88, operandOffset);
@@ -796,11 +810,9 @@ std::vector<uint8_t> makeRandomSolveWideBytecode() {
   constexpr std::array<uint64_t, registerCount> extents{16, 16, 16, 8, 8,
                                                         8,  8,  16, 8, 8};
   for (uint32_t reg = 0; reg != registerCount; ++reg) {
-    size_t layout = layoutOffset + reg * 40;
-    bytes[layout] = reg == 0 ? TALOS_RT_DBREG_BYTES : TALOS_RT_DBREG_BITS;
-    put32(bytes, layout + 4, widths[reg]);
-    put64(bytes, layout + 8, offsets[reg]);
-    put64(bytes, layout + 16, extents[reg]);
+    putLayout(bytes, layoutOffset, registerCount, reg,
+              reg == 0 ? TALOS_RT_DBREG_BYTES : TALOS_RT_DBREG_BITS,
+              widths[reg], offsets[reg], extents[reg]);
   }
 
   constexpr std::array<uint64_t, inputCount> constants{0,  16, 32, 48,
@@ -858,7 +870,7 @@ std::vector<uint8_t> makeRandomCycleBytecode(uint64_t key, uint64_t position,
   constexpr uint32_t operandCount = inputCount + outputCount;
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 96;
-  constexpr size_t codeOffset = layoutOffset + registerCount * 40;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(registerCount);
   constexpr size_t operandOffset = codeOffset + instructionCount * 32;
   constexpr size_t constantOffset = operandOffset + operandCount * 8;
   constexpr size_t constantSize = inputCount * 8;
@@ -875,6 +887,7 @@ std::vector<uint8_t> makeRandomCycleBytecode(uint64_t key, uint64_t position,
   put64(bytes, 48, 1);
   put64(bytes, 56, layoutOffset);
   put64(bytes, 64, registerCount);
+  putShapeTable(bytes, layoutOffset, registerCount);
   put64(bytes, 72, codeOffset);
   put64(bytes, 80, instructionCount);
   put64(bytes, 88, operandOffset);
@@ -899,11 +912,8 @@ std::vector<uint8_t> makeRandomCycleBytecode(uint64_t key, uint64_t position,
   put64(bytes, functionOffset + 88, 1);
 
   for (uint32_t reg = 0; reg != registerCount; ++reg) {
-    size_t layout = layoutOffset + reg * 40;
-    bytes[layout] = TALOS_RT_DBREG_BITS;
-    put32(bytes, layout + 4, 64);
-    put64(bytes, layout + 8, reg * 8);
-    put64(bytes, layout + 16, 8);
+    putLayout(bytes, layoutOffset, registerCount, reg, TALOS_RT_DBREG_BITS, 64,
+              reg * 8, 8);
   }
 
   for (uint32_t reg = 0; reg != inputCount; ++reg)
@@ -969,7 +979,7 @@ std::vector<uint8_t> makeSchedulerBytecode(uint64_t stateHandle = 0,
                                            uint64_t eventHandle = 7) {
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 96;
-  constexpr size_t codeOffset = layoutOffset + 4 * 40;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(4);
   constexpr size_t operandOffset = codeOffset + 7 * 32;
   constexpr size_t constantOffset = operandOffset + 4 * 8;
   constexpr size_t continuationOffset = constantOffset + 56;
@@ -986,6 +996,7 @@ std::vector<uint8_t> makeSchedulerBytecode(uint64_t stateHandle = 0,
   put64(bytes, 48, 1);
   put64(bytes, 56, layoutOffset);
   put64(bytes, 64, 4);
+  putShapeTable(bytes, layoutOffset, 4);
   put64(bytes, 72, codeOffset);
   put64(bytes, 80, 7);
   put64(bytes, 88, operandOffset);
@@ -1017,11 +1028,7 @@ std::vector<uint8_t> makeSchedulerBytecode(uint64_t stateHandle = 0,
 
   auto layout = [&](size_t index, uint8_t kind, uint32_t width, uint64_t offset,
                     uint64_t size) {
-    size_t record = layoutOffset + index * 40;
-    bytes[record] = kind;
-    put32(bytes, record + 4, width);
-    put64(bytes, record + 8, offset);
-    put64(bytes, record + 16, size);
+    putLayout(bytes, layoutOffset, 4, index, kind, width, offset, size);
   };
   layout(0, TALOS_RT_DBREG_LOGIC, 8, 0, 16);
   layout(1, TALOS_RT_DBREG_HANDLE, 256, 16, 32);
@@ -1074,7 +1081,7 @@ std::vector<uint8_t> makeSchedulerBytecode(uint64_t stateHandle = 0,
 std::vector<uint8_t> makeDriverBytecode() {
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 96;
-  constexpr size_t codeOffset = layoutOffset + 4 * 40;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(4);
   std::vector<uint8_t> bytes = makeSchedulerBytecode();
   size_t stateOffset = bytes.size();
   bytes.resize(stateOffset + 2 * 32, 0);
@@ -1115,7 +1122,7 @@ uint32_t resolutionFlags(uint8_t resolution, bool driver) {
 std::vector<uint8_t> makeStrengthDriverBytecode(uint8_t resolution = 0) {
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 96;
-  constexpr size_t codeOffset = layoutOffset + 4 * 40;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(4);
   std::vector<uint8_t> bytes = makeDriverBytecode();
   size_t stateOffset = get64(bytes, 168);
   size_t constantOffset = get64(bytes, 104);
@@ -1148,7 +1155,7 @@ std::vector<uint8_t> makeStrengthDriverBytecode(uint8_t resolution = 0) {
   // branch also proves that a deferred changed-store reports no logical net
   // transition. Both handles are scalar views even though the descriptors are
   // wide.
-  put32(bytes, layoutOffset + 2 * 40 + 4, 1);
+  put32(bytes, shapeAt(bytes, 2) + 4, 1);
   put32(bytes, codeOffset + 1 * 32 + 12, 1);
   instruction(bytes, codeOffset, 3, TALOS_RT_DB_STORE_STATE,
               TALOS_RT_DB_STORE_STATE_CHANGED |
@@ -1171,7 +1178,7 @@ std::vector<uint8_t> makeStrengthDriverBytecode(uint8_t resolution = 0) {
 std::vector<uint8_t> makeConnectedDriverBytecode() {
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 96;
-  constexpr size_t codeOffset = layoutOffset + 4 * 40;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(4);
   std::vector<uint8_t> bytes = makeSchedulerBytecode();
   size_t stateOffset = bytes.size();
   size_t connectivityOffset = stateOffset + 3 * 32;
@@ -1271,7 +1278,7 @@ std::vector<uint8_t> makeMixedWiredDriverBytecode(bool rhsDominates) {
 std::vector<uint8_t> makeMultiSinkWiredDriverBytecode() {
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 96;
-  constexpr size_t codeOffset = layoutOffset + 4 * 40;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(4);
   std::vector<uint8_t> bytes = makeConnectedDriverBytecode();
   size_t stateOffset = get64(bytes, 168);
   size_t oldConnectivity = get64(bytes, 184);
@@ -1317,7 +1324,7 @@ std::vector<uint8_t> makeMultiSinkWiredDriverBytecode() {
 std::vector<uint8_t> makeVPIBytecode() {
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 96;
-  constexpr size_t codeOffset = layoutOffset + 10 * 40;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(10);
   constexpr size_t operandOffset = codeOffset + 11 * 32;
   constexpr size_t constantOffset = operandOffset + 13 * 8;
   constexpr size_t continuationOffset = constantOffset + 32;
@@ -1334,6 +1341,7 @@ std::vector<uint8_t> makeVPIBytecode() {
   put64(bytes, 48, 1);
   put64(bytes, 56, layoutOffset);
   put64(bytes, 64, 10);
+  putShapeTable(bytes, layoutOffset, 10);
   put64(bytes, 72, codeOffset);
   put64(bytes, 80, 11);
   put64(bytes, 88, operandOffset);
@@ -1363,11 +1371,7 @@ std::vector<uint8_t> makeVPIBytecode() {
 
   auto layout = [&](size_t index, uint8_t kind, uint32_t width, uint64_t offset,
                     uint64_t size) {
-    size_t record = layoutOffset + index * 40;
-    bytes[record] = kind;
-    put32(bytes, record + 4, width);
-    put64(bytes, record + 8, offset);
-    put64(bytes, record + 16, size);
+    putLayout(bytes, layoutOffset, 10, index, kind, width, offset, size);
   };
   layout(0, TALOS_RT_DBREG_BITS, 64, 0, 8);
   layout(1, TALOS_RT_DBREG_STATUS, 64, 8, 8);
@@ -1450,7 +1454,7 @@ std::vector<uint8_t> makeVPIBytecode() {
 std::vector<uint8_t> makePartialAutomaticBytecode(bool nba) {
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 96;
-  constexpr size_t codeOffset = layoutOffset + 10 * 40;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(10);
   constexpr size_t operandOffset = codeOffset + 11 * 32;
   constexpr size_t constantOffset = operandOffset + 13 * 8;
   constexpr size_t continuationOffset = constantOffset + 32;
@@ -1493,7 +1497,7 @@ std::vector<uint8_t> makePartialAutomaticBytecode(bool nba) {
 std::vector<uint8_t> makeAutomaticFrameLoadBytecode() {
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 96;
-  constexpr size_t codeOffset = layoutOffset + 10 * 40;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(10);
   std::vector<uint8_t> bytes = makeVPIBytecode();
   put64(bytes, functionOffset + 24, 4);
   instruction(bytes, codeOffset, 0, TALOS_RT_DB_LOAD_FRAME,
@@ -1508,7 +1512,7 @@ std::vector<uint8_t> makeAutomaticFrameLoadBytecode() {
 std::vector<uint8_t> makeStaticHandleRoundTripBytecode() {
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 96;
-  constexpr size_t codeOffset = layoutOffset + 10 * 40;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(10);
   std::vector<uint8_t> bytes = makeVPIBytecode();
   put64(bytes, functionOffset + 24, 8);
   instruction(bytes, codeOffset, 0, TALOS_RT_DB_LOAD_FRAME,
@@ -1530,7 +1534,7 @@ std::vector<uint8_t> makeStaticHandleRoundTripBytecode() {
 std::vector<uint8_t> makeStaticNBABytecode() {
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 96;
-  constexpr size_t codeOffset = layoutOffset + 10 * 40;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(10);
   constexpr size_t operandOffset = codeOffset + 11 * 32;
   constexpr size_t constantOffset = operandOffset + 13 * 8;
   constexpr size_t continuationOffset = constantOffset + 32;
@@ -1562,7 +1566,7 @@ std::vector<uint8_t> makeStaticNBABytecode() {
 std::vector<uint8_t> makeAutomaticSpawnBytecode(uint32_t childRank = 0) {
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 2 * 96;
-  constexpr size_t codeOffset = layoutOffset + 5 * 40;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(5);
   constexpr size_t operandOffset = codeOffset + 8 * 32;
   constexpr size_t constantOffset = operandOffset + 4 * 8;
   constexpr size_t continuationOffset = constantOffset + 32;
@@ -1579,6 +1583,7 @@ std::vector<uint8_t> makeAutomaticSpawnBytecode(uint32_t childRank = 0) {
   put64(bytes, 48, 2);
   put64(bytes, 56, layoutOffset);
   put64(bytes, 64, 5);
+  putShapeTable(bytes, layoutOffset, 5);
   put64(bytes, 72, codeOffset);
   put64(bytes, 80, 8);
   put64(bytes, 88, operandOffset);
@@ -1619,11 +1624,7 @@ std::vector<uint8_t> makeAutomaticSpawnBytecode(uint32_t childRank = 0) {
 
   auto layout = [&](size_t index, uint8_t kind, uint32_t width, uint64_t offset,
                     uint64_t size) {
-    size_t record = layoutOffset + index * 40;
-    bytes[record] = kind;
-    put32(bytes, record + 4, width);
-    put64(bytes, record + 8, offset);
-    put64(bytes, record + 16, size);
+    putLayout(bytes, layoutOffset, 5, index, kind, width, offset, size);
   };
   layout(0, TALOS_RT_DBREG_HANDLE, 256, 0, 32);
   layout(1, TALOS_RT_DBREG_HANDLE, 256, 32, 32);
@@ -1704,7 +1705,7 @@ std::vector<uint8_t> makePreponedEventSpawnBytecode() {
 std::vector<uint8_t> makeSignalWaitSpawnBytecode() {
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 2 * 96;
-  constexpr size_t codeOffset = layoutOffset + 5 * 40;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(5);
   constexpr size_t operandOffset = codeOffset + 8 * 32;
   constexpr size_t constantOffset = operandOffset + 4 * 8;
   constexpr size_t continuationOffset = constantOffset + 32;
@@ -1724,9 +1725,9 @@ std::vector<uint8_t> makeSignalWaitSpawnBytecode() {
   put64(bytes, 184, bytes.size());
   put64(bytes, functionOffset + 96 + 80, 3);
   put64(bytes, functionOffset + 96 + 88, 129);
-  bytes[layoutOffset + 3 * 40] = TALOS_RT_DBREG_LOGIC;
-  put32(bytes, layoutOffset + 3 * 40 + 4, 64);
-  put64(bytes, layoutOffset + 3 * 40 + 16, 16);
+  bytes[shapeAt(bytes, 3)] = TALOS_RT_DBREG_LOGIC;
+  put32(bytes, shapeAt(bytes, 3) + 4, 64);
+  put64(bytes, shapeAt(bytes, 3) + 8, 16);
   instruction(bytes, codeOffset, 3, TALOS_RT_DB_CONSTANT, 0, 1);
   instruction(bytes, codeOffset, 4, TALOS_RT_DB_SUSPEND, TALOS_RT_SUSPEND_EDGE,
               0, 1, 0, 0, 0, 1);
@@ -1775,11 +1776,16 @@ std::vector<uint8_t> makeEventOnlyComputedWaitBytecode() {
   operandOffset += 96;
   constantOffset += 96;
   continuationOffset += 96;
-  bytes.insert(bytes.begin() + codeOffset, 40, 0);
-  codeOffset += 40;
-  operandOffset += 40;
-  constantOffset += 40;
-  continuationOffset += 40;
+  // A third register: the layout area grows from two records and shapes to
+  // three and is rewritten below.
+  constexpr size_t layoutGrowth = layoutTableSize(3) - layoutTableSize(2);
+  bytes.insert(bytes.begin() + codeOffset, layoutGrowth, 0);
+  std::fill(bytes.begin() + layoutOffset,
+            bytes.begin() + layoutOffset + layoutTableSize(3), 0);
+  codeOffset += layoutGrowth;
+  operandOffset += layoutGrowth;
+  constantOffset += layoutGrowth;
+  continuationOffset += layoutGrowth;
   bytes.insert(bytes.begin() + operandOffset, 3 * 32, 0);
   operandOffset += 3 * 32;
   constantOffset += 3 * 32;
@@ -1790,6 +1796,7 @@ std::vector<uint8_t> makeEventOnlyComputedWaitBytecode() {
   put64(bytes, 48, 2);
   put64(bytes, 56, layoutOffset);
   put64(bytes, 64, 3);
+  putShapeTable(bytes, layoutOffset, 3);
   put64(bytes, 72, codeOffset);
   put64(bytes, 80, 5);
   put64(bytes, 88, operandOffset);
@@ -1817,14 +1824,11 @@ std::vector<uint8_t> makeEventOnlyComputedWaitBytecode() {
   put64(bytes, processFunction + 88,
         sizeof(DesignEventOnlyComputedWait) * 2 + 1);
 
-  size_t processLayout = layoutOffset + 2 * 40;
-  bytes[processLayout] = TALOS_RT_DBREG_BITS;
-  put32(bytes, processLayout + 4, 64);
-  put64(bytes, processLayout + 8, 0);
-  put64(bytes, processLayout + 16, 8);
-  // The observer result is scalar for this event-primary wait.
-  put32(bytes, layoutOffset + 40 + 4, 1);
-  put64(bytes, layoutOffset + 40 + 16, 8);
+  // The observer's handle and result registers (its result is scalar for
+  // this event-primary wait), then the process's register.
+  putLayout(bytes, layoutOffset, 3, 0, TALOS_RT_DBREG_HANDLE, 256, 0, 32);
+  putLayout(bytes, layoutOffset, 3, 1, TALOS_RT_DBREG_BITS, 1, 32, 8);
+  putLayout(bytes, layoutOffset, 3, 2, TALOS_RT_DBREG_BITS, 64, 0, 8);
 
   instruction(bytes, codeOffset, 2, TALOS_RT_DB_CONSTANT, 0, 0);
   instruction(bytes, codeOffset, 3, TALOS_RT_DB_SUSPEND,
@@ -3798,7 +3802,7 @@ TEST(DesignBytecode, MetadataOnlyImageHasNoExecutableEntry) {
   put32(bytes, 8, TALOS_RT_VERSION);
   put32(bytes, 16, bytes.size());
   put64(bytes, 24, bytes.size());
-  for (size_t offset = 40; offset < 200; offset += 16)
+  for (size_t offset = 40; offset < 216; offset += 16)
     put64(bytes, offset, bytes.size());
   put64(bytes, 32, imageChecksum(bytes));
   talos_rt_execution_descriptor_v1 execution{};
@@ -3855,7 +3859,8 @@ TEST(StableHash, ImageChecksumExcludesItsFieldAndHashesTheTail) {
 // use. The corrupt function is rejected before any of its instructions run.
 TEST(DesignBytecode, ContextValidatesFunctionCodeOnFirstExecution) {
   Fixture fixture;
-  constexpr size_t codeOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE + 96 + 40;
+  constexpr size_t codeOffset =
+      TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE + 96 + layoutTableSize(1);
   put16(fixture.bytecode,
         codeOffset + 2 * TALOS_RT_DESIGN_BYTECODE_INSTRUCTION_SIZE, 0xffff);
   put64(fixture.bytecode, 32, imageChecksum(fixture.bytecode));
@@ -3954,12 +3959,12 @@ TEST(DesignBytecode, ContextBoundProcessCreationReusesValidatedDesign) {
 
 TEST(DesignBytecode, FailInstructionAcceptsFatalStatus) {
   Fixture fixture;
-  const size_t layoutOffset = get64(fixture.bytecode, 56);
   const size_t codeOffset = get64(fixture.bytecode, 72);
   const size_t constantOffset = get64(fixture.bytecode, 104);
-  fixture.bytecode[layoutOffset] = TALOS_RT_DBREG_STATUS;
-  put32(fixture.bytecode, layoutOffset + 4, 64);
-  put64(fixture.bytecode, layoutOffset + 16, 8);
+  const size_t shape = shapeAt(fixture.bytecode, 0);
+  fixture.bytecode[shape] = TALOS_RT_DBREG_STATUS;
+  put32(fixture.bytecode, shape + 4, 64);
+  put64(fixture.bytecode, shape + 8, 8);
   instruction(fixture.bytecode, codeOffset, 1, TALOS_RT_DB_FAIL, 0, 0, 0);
   put64(fixture.bytecode, constantOffset, TALOS_RT_FATAL);
   put64(fixture.bytecode, 32, imageChecksum(fixture.bytecode));
@@ -4722,7 +4727,7 @@ TEST(DesignBytecode, SharedPlaneActivationMarksOnlyWrittenRoots) {
   {
     constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
     constexpr size_t layoutOffset = functionOffset + 96;
-    constexpr size_t codeOffset = layoutOffset + 4 * 40;
+    constexpr size_t codeOffset = layoutOffset + layoutTableSize(4);
     // Store 0xa5 with X in bit 2 to state bits [0, 8) immediately.
     instruction(fixture.bytecode, codeOffset, 3, TALOS_RT_DB_STORE_STATE, 0, 0,
                 1, 0);
@@ -4806,7 +4811,7 @@ TEST(DesignBytecode, SharedPlaneAOTNodeInvalidatesOnlyWrittenRanges) {
   {
     constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
     constexpr size_t layoutOffset = functionOffset + 96;
-    constexpr size_t codeOffset = layoutOffset + 4 * 40;
+    constexpr size_t codeOffset = layoutOffset + layoutTableSize(4);
     instruction(fixture.bytecode, codeOffset, 3, TALOS_RT_DB_STORE_STATE, 0, 0,
                 1, 0);
     put64(fixture.bytecode, 32, imageChecksum(fixture.bytecode));
@@ -4914,18 +4919,14 @@ TEST(DesignBytecode, ReleaseRevealsAssignValueInBoundPlanes) {
   {
     constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
     constexpr size_t layoutOffset = functionOffset + 96;
-    constexpr size_t codeOffset = layoutOffset + 4 * 40;
+    constexpr size_t codeOffset = layoutOffset + layoutTableSize(4);
     constexpr size_t operandOffset = codeOffset + 7 * 32;
     constexpr size_t constantOffset = operandOffset + 4 * 8;
     auto &bytes = fixture.bytecode;
     // Register 2 becomes an 8-bit logic holding a known 5; the event handle
     // register moves up to keep the layouts in order.
-    size_t record = layoutOffset + 2 * 40;
-    bytes[record] = TALOS_RT_DBREG_LOGIC;
-    put32(bytes, record + 4, 8);
-    put64(bytes, record + 8, 56);
-    put64(bytes, record + 16, 16);
-    put64(bytes, layoutOffset + 3 * 40 + 8, 72);
+    putLayout(bytes, layoutOffset, 4, 2, TALOS_RT_DBREG_LOGIC, 8, 56, 16);
+    put32(bytes, layoutRecordAt(bytes, 3) + 4, 72);
     put64(bytes, functionOffset + 56, 104);
     put64(bytes, constantOffset + 16, 5);
     put64(bytes, constantOffset + 24, 0);
@@ -13187,7 +13188,7 @@ TEST(DesignBytecode, NativeStaticHandlesRemainBoundedAcrossBytecodeFrames) {
 TEST(DesignBytecode, PackedCanonicalLoadsMatchBitwiseBoundsAndPublication) {
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 96;
-  constexpr size_t codeOffset = layoutOffset + 10 * 40;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(10);
   for (bool boundedStatic : {false, true}) {
     SCOPED_TRACE(boundedStatic);
     for (bool fourState : {false, true}) {
@@ -13199,10 +13200,10 @@ TEST(DesignBytecode, PackedCanonicalLoadsMatchBitwiseBoundsAndPublication) {
         size_t limbs = (width + 63) / 64;
         size_t resultSize = limbs * 8 * (fourState ? 2 : 1);
         auto &bytes = fixture.bytecode;
-        bytes[layoutOffset + 9 * 40] =
+        bytes[shapeAt(bytes, 9)] =
             fourState ? TALOS_RT_DBREG_LOGIC : TALOS_RT_DBREG_BITS;
-        put32(bytes, layoutOffset + 9 * 40 + 4, width);
-        put64(bytes, layoutOffset + 9 * 40 + 16, resultSize);
+        put32(bytes, shapeAt(bytes, 9) + 4, width);
+        put64(bytes, shapeAt(bytes, 9) + 8, resultSize);
         put64(bytes, functionOffset + 56, 144 + resultSize);
         instruction(bytes, codeOffset, 0, TALOS_RT_DB_LOAD_FRAME,
                     TALOS_RT_DESCRIPTOR_STORAGE, 8, 0, 0, 0, 130, 0);
@@ -14704,7 +14705,7 @@ makeBuiltinUpcastBytecode(uint8_t sourceFlags, uint8_t destinationFlags,
                           uint16_t opcode = TALOS_RT_DB_BITCAST) {
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 96;
-  constexpr size_t codeOffset = layoutOffset + 2 * 40;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(2);
   constexpr size_t continuationOffset = codeOffset + 4 * 32;
   std::vector<uint8_t> bytes(continuationOffset + 24, 0);
   std::memcpy(bytes.data(), "OBBCDS1\0", 8);
@@ -14731,14 +14732,10 @@ makeBuiltinUpcastBytecode(uint8_t sourceFlags, uint8_t destinationFlags,
   put64(bytes, functionOffset + 80, 1);
   put64(bytes, functionOffset + 88,
         TALOS_RT_DESIGN_FUNCTION_PROCESS | (uint64_t{16} << 1));
-  for (unsigned index = 0; index != 2; ++index) {
-    size_t record = layoutOffset + index * 40;
-    bytes[record] = TALOS_RT_DBREG_MANAGED;
-    bytes[record + 1] = index ? destinationFlags : sourceFlags;
-    put32(bytes, record + 4, 64);
-    put64(bytes, record + 8, index * 8);
-    put64(bytes, record + 16, 8);
-  }
+  putShapeTable(bytes, layoutOffset, 2);
+  for (unsigned index = 0; index != 2; ++index)
+    putLayout(bytes, layoutOffset, 2, index, TALOS_RT_DBREG_MANAGED, 64,
+              index * 8, 8, index ? destinationFlags : sourceFlags);
   instruction(bytes, codeOffset, 0, TALOS_RT_DB_LOAD_FRAME);
   instruction(bytes, codeOffset, 1, opcode, 0, 1, 0);
   instruction(bytes, codeOffset, 2, TALOS_RT_DB_STORE_FRAME, 0, 0, 1, 0, 0, 0,
@@ -14859,6 +14856,59 @@ TEST(DesignBytecode, RejectsInvalidManagedBitcastsAndInexactMoves) {
             TALOS_RT_INVALID_BYTECODE);
 }
 
+// Two-tier B4: a layout record is {shape index, frame offset} and registers
+// share shapes. Registers 0 and 1 of the comparison image have equal shapes,
+// so register 1 may name shape 0 (shape 1 stays valid but unreferenced). A
+// shape index past the table, a shape with nonzero reserved bits, and a frame
+// offset that is misaligned or overlaps the previous register are rejected.
+TEST(DesignBytecode, LayoutRecordsShareShapes) {
+  auto validate = [](std::vector<uint8_t> bytes) {
+    Fixture fixture;
+    put64(bytes, 32, imageChecksum(bytes));
+    fixture.bytecode = std::move(bytes);
+    fixture.execution.bytecode = fixture.bytecode.data();
+    fixture.execution.bytecode_size = fixture.bytecode.size();
+    fixture.execution.checksum = imageChecksum(fixture.bytecode);
+    uint64_t scratchSize = 0;
+    uint64_t scratchAlignment = 0;
+    return talos_rt_validate_design_bytecode(fixture.entry, nullptr,
+                                             &scratchSize, &scratchAlignment);
+  };
+  std::vector<uint8_t> valid =
+      makeComparisonBytecode(TALOS_RT_DBREG_LOGIC, TALOS_RT_DB_CMP_EQ);
+  ASSERT_EQ(get64(valid, 208), 3u);
+  EXPECT_EQ(validate(valid), TALOS_RT_OK);
+
+  std::vector<uint8_t> shared = valid;
+  put32(shared, layoutRecordAt(shared, 1), 0);
+  EXPECT_EQ(validate(shared), TALOS_RT_OK);
+
+  std::vector<uint8_t> missing = valid;
+  put32(missing, layoutRecordAt(missing, 1), 3);
+  EXPECT_EQ(validate(std::move(missing)), TALOS_RT_INVALID_BYTECODE);
+
+  std::vector<uint8_t> reserved = valid;
+  put16(reserved, shapeAt(reserved, 1) + 2, 1);
+  EXPECT_EQ(validate(std::move(reserved)), TALOS_RT_INVALID_BYTECODE);
+
+  std::vector<uint8_t> unreferenced = shared;
+  put32(unreferenced, shapeAt(unreferenced, 1) + 4, 0);
+  EXPECT_EQ(validate(std::move(unreferenced)), TALOS_RT_INVALID_BYTECODE);
+
+  std::vector<uint8_t> misaligned = valid;
+  put32(misaligned, layoutRecordAt(misaligned, 1) + 4, 20);
+  EXPECT_EQ(validate(std::move(misaligned)), TALOS_RT_INVALID_BYTECODE);
+
+  std::vector<uint8_t> overlapping = valid;
+  put32(overlapping, layoutRecordAt(overlapping, 1) + 4, 8);
+  EXPECT_EQ(validate(std::move(overlapping)), TALOS_RT_INVALID_BYTECODE);
+
+  // The shape table follows the layout records exactly (canonical tables).
+  std::vector<uint8_t> displaced = valid;
+  put64(displaced, 200, get64(valid, 200) + 8);
+  EXPECT_EQ(validate(std::move(displaced)), TALOS_RT_INVALID_BYTECODE);
+}
+
 TEST(DesignBytecode, OpaqueHandleRegistersRequireCanonicalGeometry) {
   struct Case {
     uint8_t kind, flags;
@@ -14943,11 +14993,11 @@ TEST(DesignBytecode, OpaqueHandleRegistersRequireCanonicalGeometry) {
        32, TALOS_RT_INVALID_DESIGN}};
   for (const auto &test : cases) {
     Fixture fixture;
-    size_t record = get64(fixture.bytecode, 56);
-    fixture.bytecode[record] = test.kind;
-    fixture.bytecode[record + 1] = test.flags;
-    put32(fixture.bytecode, record + 4, test.width);
-    put64(fixture.bytecode, record + 16, test.size);
+    size_t shape = shapeAt(fixture.bytecode, 0);
+    fixture.bytecode[shape] = test.kind;
+    fixture.bytecode[shape + 1] = test.flags;
+    put32(fixture.bytecode, shape + 4, test.width);
+    put64(fixture.bytecode, shape + 8, test.size);
     if (test.kind == TALOS_RT_DBREG_HANDLE)
       put16(fixture.bytecode, get64(fixture.bytecode, 72) + 32 + 2,
             TALOS_RT_DESCRIPTOR_EVENT);
@@ -14999,8 +15049,8 @@ TEST(DesignBytecode, RejectsNonCanonicalTablesAndUncallableFunctions) {
   rejected(noEntryContinuation);
 
   Fixture reservedLayout;
-  put16(reservedLayout.bytecode, TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE + 96 + 2,
-        1);
+  // The reserved bits of register 0's shape.
+  put16(reservedLayout.bytecode, shapeAt(reservedLayout.bytecode, 0) + 2, 1);
   rejected(reservedLayout);
 
   Fixture oversizedScheduleRank;
@@ -15255,7 +15305,7 @@ TEST(DesignBytecode, ValidatesComparisonResultDomains) {
 TEST(DesignBytecode, RejectsCorruptDynamicScanIntrinsicSignatures) {
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 96;
-  constexpr size_t codeOffset = layoutOffset + 3 * 40;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(3);
   constexpr size_t operandOffset = codeOffset + 2 * 32;
   constexpr size_t continuationOffset = operandOffset + 14 * 8;
   constexpr size_t intrinsicOffset = continuationOffset + 24;
@@ -15289,11 +15339,11 @@ TEST(DesignBytecode, RejectsCorruptDynamicScanIntrinsicSignatures) {
     EXPECT_EQ(validate(std::move(flags)), TALOS_RT_INVALID_BYTECODE) << id;
 
     std::vector<uint8_t> stringKind = valid;
-    stringKind[layoutOffset] = TALOS_RT_DBREG_BITS;
+    stringKind[shapeAt(valid, 0)] = TALOS_RT_DBREG_BITS;
     EXPECT_EQ(validate(std::move(stringKind)), TALOS_RT_INVALID_BYTECODE) << id;
 
     std::vector<uint8_t> scalarKind = valid;
-    scalarKind[layoutOffset + 40] = TALOS_RT_DBREG_STRING;
+    scalarKind[shapeAt(valid, 1)] = TALOS_RT_DBREG_STRING;
     EXPECT_EQ(validate(std::move(scalarKind)), TALOS_RT_INVALID_BYTECODE) << id;
   }
 }
@@ -15302,16 +15352,13 @@ TEST(DesignBytecode, RejectsTruncatedCoverageClockEventOperandsAtExecution) {
   using namespace talos::designbytecode;
   constexpr uint32_t inputCount = 5;
   constexpr size_t layoutOffset = 0;
-  constexpr size_t intrinsicOffset = inputCount * 40;
+  constexpr size_t intrinsicOffset = layoutTableSize(inputCount);
   constexpr size_t siteOffset = intrinsicOffset + 16;
   constexpr size_t operandOffset = siteOffset + 16;
   std::vector<uint8_t> bytes(operandOffset + inputCount * 8, 0);
   for (uint32_t index = 0; index != inputCount; ++index) {
-    size_t layout = layoutOffset + uint64_t{index} * 40;
-    bytes[layout] = TALOS_RT_DBREG_BITS;
-    put32(bytes, layout + 4, 64);
-    put64(bytes, layout + 8, uint64_t{index} * 8);
-    put64(bytes, layout + 16, 8);
+    putLayout(bytes, layoutOffset, inputCount, index, TALOS_RT_DBREG_BITS, 64,
+              uint64_t{index} * 8, 8);
     put32(bytes, operandOffset + uint64_t{index} * 8 + 4, index);
   }
   put32(bytes, intrinsicOffset,
@@ -15324,6 +15371,8 @@ TEST(DesignBytecode, RejectsTruncatedCoverageClockEventOperandsAtExecution) {
   image.size = bytes.size();
   image.layouts = layoutOffset;
   image.layoutCount = inputCount;
+  image.shapes = layoutOffset + uint64_t{inputCount} * 8;
+  image.shapeCount = inputCount;
   image.intrinsics = intrinsicOffset;
   image.intrinsicCount = 1;
   image.sites = siteOffset;
@@ -15344,16 +15393,13 @@ TEST(DesignBytecode, RejectsMalformedEventSnapshotOperands) {
   // advertised target triples. Malformed bytecode must fail before retaining
   // any state. The valid control reaches the process-owner lifecycle check.
   constexpr uint32_t registerCount = 17;
-  constexpr size_t intrinsicOffset = registerCount * 40;
+  constexpr size_t intrinsicOffset = layoutTableSize(registerCount);
   constexpr size_t siteOffset = intrinsicOffset + 16;
   constexpr size_t operandOffset = siteOffset + 16;
   std::vector<uint8_t> bytes(operandOffset + registerCount * 8, 0);
   for (uint32_t index = 0; index != registerCount; ++index) {
-    size_t layout = uint64_t{index} * 40;
-    bytes[layout] = TALOS_RT_DBREG_BITS;
-    put32(bytes, layout + 4, index == 12 ? 1 : 64);
-    put64(bytes, layout + 8, uint64_t{index} * 8);
-    put64(bytes, layout + 16, 8);
+    putLayout(bytes, 0, registerCount, index, TALOS_RT_DBREG_BITS,
+              index == 12 ? 1 : 64, uint64_t{index} * 8, 8);
     put32(bytes, operandOffset + uint64_t{index} * 8 + 4, index);
   }
   put32(bytes, intrinsicOffset, TALOS_RT_INTRINSIC_V1_EVENT_SNAPSHOT_REGISTER);
@@ -15369,6 +15415,8 @@ TEST(DesignBytecode, RejectsMalformedEventSnapshotOperands) {
   image.size = bytes.size();
   image.layouts = 0;
   image.layoutCount = registerCount;
+  image.shapes = 0 + uint64_t{registerCount} * 8;
+  image.shapeCount = registerCount;
   image.intrinsics = intrinsicOffset;
   image.intrinsicCount = 1;
   image.sites = siteOffset;
@@ -15429,9 +15477,9 @@ TEST(DesignBytecode, RejectsMalformedEventSnapshotOperands) {
             TALOS_RT_INVALID_LIFECYCLE);
   EXPECT_EQ(invokeIntrinsic(image, frame, context, 0),
             TALOS_RT_INVALID_LIFECYCLE);
-  put32(bytes, 4, 32);
+  put32(bytes, registerCount * 8 + 4, 32);
   EXPECT_FALSE(validIntrinsic(image, function, 0));
-  put32(bytes, 4, 64);
+  put32(bytes, registerCount * 8 + 4, 64);
   arity(1, 1);
   EXPECT_FALSE(validIntrinsic(image, function, 0));
 
@@ -15447,14 +15495,12 @@ TEST(DesignBytecode, RejectsMalformedEventSnapshotOperands) {
 
 TEST(DesignBytecode, ValidatesContainerCreatePatternSignature) {
   constexpr uint64_t layoutOffset = 0;
-  constexpr uint64_t intrinsicOffset = 12 * 40;
+  constexpr uint64_t intrinsicOffset = layoutTableSize(12);
   constexpr uint64_t siteOffset = intrinsicOffset + 16;
   constexpr uint64_t operandOffset = siteOffset + 16;
   std::vector<uint8_t> bytes(operandOffset + 12 * 8, 0);
   auto layout = [&](uint32_t index, uint8_t kind, uint32_t width = 0) {
-    uint64_t record = layoutOffset + uint64_t{index} * 40;
-    bytes[record] = kind;
-    put32(bytes, record + 4, width);
+    putLayout(bytes, layoutOffset, 12, index, kind, width, 0, 0);
   };
   for (uint32_t index = 0; index != 7; ++index)
     layout(index, TALOS_RT_DBREG_BITS, 64);
@@ -15477,6 +15523,8 @@ TEST(DesignBytecode, ValidatesContainerCreatePatternSignature) {
   image.size = bytes.size();
   image.layouts = layoutOffset;
   image.layoutCount = 12;
+  image.shapes = layoutOffset + 12 * 8;
+  image.shapeCount = 12;
   image.intrinsics = intrinsicOffset;
   image.intrinsicCount = 1;
   image.sites = siteOffset;
@@ -15487,7 +15535,7 @@ TEST(DesignBytecode, ValidatesContainerCreatePatternSignature) {
   function.layoutCount = 12;
 
   EXPECT_TRUE(talos::designbytecode::validIntrinsic(image, function, 0));
-  bytes[8 * 40] = TALOS_RT_DBREG_BITS;
+  bytes[layoutOffset + 12 * 8 + 8 * 24] = TALOS_RT_DBREG_BITS;
   EXPECT_FALSE(talos::designbytecode::validIntrinsic(image, function, 0));
 }
 
@@ -15497,14 +15545,15 @@ TEST(DesignBytecode, ValidatesManagedAggregateExtractionBounds) {
     fixture.bytecode =
         makeComparisonBytecode(TALOS_RT_DBREG_MANAGED, TALOS_RT_DB_CMP_EQ);
     size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
-    size_t layoutOffset = get64(fixture.bytecode, 56);
     size_t codeOffset = get64(fixture.bytecode, 72);
-    fixture.bytecode[layoutOffset] = TALOS_RT_DBREG_BITS;
-    put32(fixture.bytecode, layoutOffset + 4, 128);
-    put64(fixture.bytecode, layoutOffset + 16, 16);
-    fixture.bytecode[layoutOffset + 80] = TALOS_RT_DBREG_MANAGED;
-    put32(fixture.bytecode, layoutOffset + 84, 64);
-    put64(fixture.bytecode, layoutOffset + 96, 8);
+    size_t source = shapeAt(fixture.bytecode, 0);
+    size_t result = shapeAt(fixture.bytecode, 2);
+    fixture.bytecode[source] = TALOS_RT_DBREG_BITS;
+    put32(fixture.bytecode, source + 4, 128);
+    put64(fixture.bytecode, source + 8, 16);
+    fixture.bytecode[result] = TALOS_RT_DBREG_MANAGED;
+    put32(fixture.bytecode, result + 4, 64);
+    put64(fixture.bytecode, result + 8, 8);
     put32(fixture.bytecode, functionOffset + 48, 2);
     instruction(fixture.bytecode, codeOffset, 0, TALOS_RT_DB_EXTRACT,
                 TALOS_RT_DB_AGGREGATE_MANAGED, 2, 0, UINT32_MAX, 0, 0,

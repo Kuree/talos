@@ -17,7 +17,9 @@ inline uint64_t snapshotImageChecksum(const std::vector<uint8_t> &bytes) {
 inline std::vector<uint8_t> snapshotObserverBytecode() {
   constexpr size_t functions = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layouts = functions + 2 * 96;
-  constexpr size_t code = layouts + 6 * 40;
+  // Six layout records {shape, offset}, then one shape per register.
+  constexpr size_t shapes = layouts + 6 * 8;
+  constexpr size_t code = shapes + 6 * 24;
   constexpr size_t operands = code + 4 * 32;
   constexpr size_t continuations = operands + 8;
   std::vector<uint8_t> bytes(continuations + 2 * 24, 0);
@@ -33,6 +35,8 @@ inline std::vector<uint8_t> snapshotObserverBytecode() {
   put(48, 2);
   put(56, layouts);
   put(64, 6);
+  put(200, shapes);
+  put(208, 6);
   put(72, code);
   put(80, 4);
   put(88, operands);
@@ -57,11 +61,13 @@ inline std::vector<uint8_t> snapshotObserverBytecode() {
     put(f + 72, function);
     put(f + 80, 1);
     for (uint32_t index = 0; index != 3; ++index) {
-      size_t l = layouts + (function * 3 + index) * 40;
-      bytes[l] = index == 2 ? TALOS_RT_DBREG_LOGIC : TALOS_RT_DBREG_HANDLE;
-      put(l + 4, index == 2 ? (function ? 65 : 1) : 256, 4);
-      put(l + 8, index * 32);
-      put(l + 16, index == 2 ? (function ? 32 : 16) : 32);
+      uint32_t reg = function * 3 + index;
+      put(layouts + reg * 8, reg, 4);
+      put(layouts + reg * 8 + 4, index * 32, 4);
+      size_t shape = shapes + reg * 24;
+      bytes[shape] = index == 2 ? TALOS_RT_DBREG_LOGIC : TALOS_RT_DBREG_HANDLE;
+      put(shape + 4, index == 2 ? (function ? 65 : 1) : 256, 4);
+      put(shape + 8, index == 2 ? (function ? 32 : 16) : 32);
     }
     size_t load = code + function * 64;
     put(load, TALOS_RT_DB_LOAD_STATE, 2);

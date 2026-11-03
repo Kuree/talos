@@ -183,7 +183,9 @@ TEST(GeneratedDesignDatabase, FrameProbeSignaturesRejectNonIdentityLayouts) {
   for (const auto &signature : signatures) {
     SCOPED_TRACE(signature.id);
     const uint32_t count = signature.inputs + signature.outputs;
-    const uint64_t intrinsicOffset = uint64_t{count} * 40;
+    // Layout records {shape, offset}, then one shape per register.
+    const uint64_t shapeOffset = uint64_t{count} * 8;
+    const uint64_t intrinsicOffset = shapeOffset + uint64_t{count} * 24;
     const uint64_t siteOffset = intrinsicOffset + 16;
     const uint64_t operandOffset = siteOffset + 16;
     std::vector<uint8_t> bytes(operandOffset + uint64_t{count} * 8);
@@ -192,11 +194,12 @@ TEST(GeneratedDesignDatabase, FrameProbeSignaturesRejectNonIdentityLayouts) {
         bytes[offset + byte] = static_cast<uint8_t>(value >> (byte * 8));
     };
     for (uint32_t index = 0; index != count; ++index) {
-      const uint64_t layout = uint64_t{index} * 40;
+      const uint64_t layout = shapeOffset + uint64_t{index} * 24;
+      put(uint64_t{index} * 8, index, 4);
+      put(uint64_t{index} * 8 + 4, uint64_t{index} * 8, 4);
       bytes[layout] = TALOS_RT_DBREG_BITS;
       put(layout + 4, 64, 4);
-      put(layout + 8, uint64_t{index} * 8, 8);
-      put(layout + 16, 8, 8);
+      put(layout + 8, 8, 8);
       put(operandOffset + uint64_t{index} * 8 +
               (index < signature.inputs ? 4 : 0),
           index, 4);
@@ -211,6 +214,8 @@ TEST(GeneratedDesignDatabase, FrameProbeSignaturesRejectNonIdentityLayouts) {
     image.size = bytes.size();
     image.layouts = 0;
     image.layoutCount = count;
+    image.shapes = shapeOffset;
+    image.shapeCount = count;
     image.intrinsics = intrinsicOffset;
     image.intrinsicCount = 1;
     image.sites = siteOffset;
@@ -222,16 +227,16 @@ TEST(GeneratedDesignDatabase, FrameProbeSignaturesRejectNonIdentityLayouts) {
     ASSERT_TRUE(validIntrinsic(image, function, 0));
     for (uint32_t index = 0; index != count; ++index) {
       SCOPED_TRACE(index);
-      const uint64_t layout = uint64_t{index} * 40;
+      const uint64_t layout = shapeOffset + uint64_t{index} * 24;
       bytes[layout] = TALOS_RT_DBREG_LOGIC;
       EXPECT_FALSE(validIntrinsic(image, function, 0));
       bytes[layout] = TALOS_RT_DBREG_BITS;
       bytes[layout + 1] = 1;
       EXPECT_FALSE(validIntrinsic(image, function, 0));
       bytes[layout + 1] = 0;
-      put(layout + 16, 16, 8);
+      put(layout + 8, 16, 8);
       EXPECT_FALSE(validIntrinsic(image, function, 0));
-      put(layout + 16, 8, 8);
+      put(layout + 8, 8, 8);
       put(layout + 4, 32, 4);
       EXPECT_FALSE(validIntrinsic(image, function, 0));
       put(layout + 4, 64, 4);

@@ -124,6 +124,8 @@ bool decodeImageHeader(const talos_rt_design_bytecode_entry_v1 &entry,
            read64(data + offsetof(BytecodeHeader, state_count)),
            read64(data + offsetof(BytecodeHeader, connectivity_offset)),
            read64(data + offsetof(BytecodeHeader, connectivity_count)),
+           read64(data + offsetof(BytecodeHeader, shape_offset)),
+           read64(data + offsetof(BytecodeHeader, shape_count)),
            execution->state_bit_count};
   if (image.functionCount > UINT32_MAX ||
       (!inventoryOnly && entry.function >= image.functionCount) ||
@@ -159,6 +161,7 @@ bool parseImage(const talos_rt_design_bytecode_entry_v1 &entry, Image &image,
       !validRange(image.functions, image.functionCount, kFunctionSize,
                   image.size) ||
       !validRange(image.layouts, image.layoutCount, kLayoutSize, image.size) ||
+      !validRange(image.shapes, image.shapeCount, kShapeSize, image.size) ||
       !validRange(image.code, image.instructionCount, kInstructionSize,
                   image.size) ||
       !validRange(image.operands, image.operandCount, kOperandSize,
@@ -190,6 +193,7 @@ bool parseImage(const talos_rt_design_bytecode_entry_v1 &entry, Image &image,
   };
   if (!canonicalTable(image.functions, image.functionCount, kFunctionSize) ||
       !canonicalTable(image.layouts, image.layoutCount, kLayoutSize) ||
+      !canonicalTable(image.shapes, image.shapeCount, kShapeSize) ||
       !canonicalTable(image.code, image.instructionCount, kInstructionSize) ||
       !canonicalTable(image.operands, image.operandCount, kOperandSize) ||
       !canonicalTable(image.constants, image.constantSize, 1) ||
@@ -2897,6 +2901,41 @@ bool validateImage(const Image &image, bool validateCode) {
     return rejectImage(line, reason, functionIndex, pc, opcode);
   };
 
+  // Every layout record names a valid shape, so layoutAt is safe below.
+  for (uint64_t shapeIndex = 0; shapeIndex != image.shapeCount; ++shapeIndex) {
+    const uint8_t *shape = image.data + image.shapes + shapeIndex * kShapeSize;
+    Layout layout{shape[0], shape[1],          read32(shape + 4),
+                  0,        read64(shape + 8), read64(shape + 16)};
+    uint64_t expected = layoutSize(layout.kind, layout.width);
+    constexpr uint8_t opaqueMask =
+        TALOS_RT_DBREG_CHANDLE | TALOS_RT_DBREG_COVERGROUP |
+        TALOS_RT_DBREG_PROCESS | TALOS_RT_DBREG_VIRTUAL_INTERFACE;
+    uint8_t opaqueFlags = layout.flags & opaqueMask;
+    uint8_t allowedFlags =
+        layout.kind == TALOS_RT_DBREG_MANAGED && layout.width == 64
+            ? TALOS_RT_DBREG_CLASS_HANDLE | TALOS_RT_DBREG_SEMAPHORE |
+                  TALOS_RT_DBREG_MAILBOX
+        : layout.kind == TALOS_RT_DBREG_BITS
+            ? TALOS_RT_DBREG_SIGNED | (layout.width == 64 ? opaqueMask : 0)
+        : layout.kind == TALOS_RT_DBREG_HANDLE && layout.width == 256
+            ? TALOS_RT_DBREG_EVENT
+        : layout.kind == TALOS_RT_DBREG_LOGIC ? TALOS_RT_DBREG_SIGNED
+                                              : 0;
+    if (layout.width == 0 || expected == 0 || layout.size != expected ||
+        (layout.kind == TALOS_RT_DBREG_REAL32 && layout.width != 32) ||
+        (layout.kind == TALOS_RT_DBREG_REAL64 && layout.width != 64) ||
+        (layout.kind == TALOS_RT_DBREG_STRING && layout.width != 64) ||
+        read16(shape + 2) != 0 || (layout.flags & ~allowedFlags) != 0 ||
+        (layout.kind == TALOS_RT_DBREG_MANAGED && layout.flags &&
+         (layout.flags & (layout.flags - 1))) ||
+        (opaqueFlags && (layout.flags & TALOS_RT_DBREG_SIGNED)) ||
+        (opaqueFlags && (opaqueFlags & (opaqueFlags - 1))))
+      return reject(__LINE__, "invalid register shape");
+  }
+  for (uint64_t index = 0; index != image.layoutCount; ++index)
+    if (read32(image.data + image.layouts + index * kLayoutSize) >=
+        image.shapeCount)
+      return reject(__LINE__, "register layout names no shape");
   // State capture validation indexes argument layouts. Prove those ranges
   // before following any function-owned offsets from an untrusted image.
   for (uint32_t functionIndex = 0; functionIndex != image.functionCount;
@@ -3496,36 +3535,9 @@ bool validateImage(const Image &image, bool validateCode) {
     uint64_t previousEnd = 0;
     for (uint32_t registerIndex = 0; registerIndex != function.layoutCount;
          ++registerIndex) {
+      // Shapes were validated up front; the record adds the frame offset.
       Layout layout = layoutAt(image, function, registerIndex);
-      const uint8_t *layoutRecord =
-          image.data + image.layouts +
-          (function.firstLayout + registerIndex) * kLayoutSize;
-      uint64_t expected = layoutSize(layout.kind, layout.width);
-      constexpr uint8_t opaqueMask =
-          TALOS_RT_DBREG_CHANDLE | TALOS_RT_DBREG_COVERGROUP |
-          TALOS_RT_DBREG_PROCESS | TALOS_RT_DBREG_VIRTUAL_INTERFACE;
-      uint8_t opaqueFlags = layout.flags & opaqueMask;
-      uint8_t allowedFlags =
-          layout.kind == TALOS_RT_DBREG_MANAGED && layout.width == 64
-              ? TALOS_RT_DBREG_CLASS_HANDLE | TALOS_RT_DBREG_SEMAPHORE |
-                    TALOS_RT_DBREG_MAILBOX
-          : layout.kind == TALOS_RT_DBREG_BITS
-              ? TALOS_RT_DBREG_SIGNED | (layout.width == 64 ? opaqueMask : 0)
-          : layout.kind == TALOS_RT_DBREG_HANDLE && layout.width == 256
-              ? TALOS_RT_DBREG_EVENT
-          : layout.kind == TALOS_RT_DBREG_LOGIC ? TALOS_RT_DBREG_SIGNED
-                                                : 0;
-      if (layout.width == 0 || expected == 0 || layout.size != expected ||
-          (layout.kind == TALOS_RT_DBREG_REAL32 && layout.width != 32) ||
-          (layout.kind == TALOS_RT_DBREG_REAL64 && layout.width != 64) ||
-          (layout.kind == TALOS_RT_DBREG_STRING && layout.width != 64) ||
-          read16(layoutRecord + 2) != 0 || read64(layoutRecord + 32) != 0 ||
-          (layout.flags & ~allowedFlags) != 0 ||
-          (layout.kind == TALOS_RT_DBREG_MANAGED && layout.flags &&
-           (layout.flags & (layout.flags - 1))) ||
-          (opaqueFlags && (layout.flags & TALOS_RT_DBREG_SIGNED)) ||
-          (opaqueFlags && (opaqueFlags & (opaqueFlags - 1))) ||
-          layout.offset % 8 != 0 || layout.offset < previousEnd ||
+      if (layout.offset % 8 != 0 || layout.offset < previousEnd ||
           layout.offset > function.scratchSize ||
           layout.size > function.scratchSize - layout.offset)
         return reject(__LINE__, "invalid or overlapping register layout",

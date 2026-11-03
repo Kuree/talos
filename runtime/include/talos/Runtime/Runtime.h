@@ -857,6 +857,11 @@ typedef struct talos_rt_design_bytecode_header_v1 {
   uint64_t state_count;
   uint64_t connectivity_offset;
   uint64_t connectivity_count;
+  /* Register shapes. A layout record is {shape index, frame offset}; the
+     shape holds the kind, flags, width, size and auxiliary word that many
+     registers share. */
+  uint64_t shape_offset;
+  uint64_t shape_count;
   uint64_t tail_reserved;
 } talos_rt_design_bytecode_header_v1;
 
@@ -887,7 +892,7 @@ typedef struct talos_rt_design_database_header_v1 {
   uint64_t relation_count;
 } talos_rt_design_database_header_v1;
 
-#define TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE 208u
+#define TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE 224u
 #define TALOS_RT_DESIGN_DATABASE_HEADER_SIZE 176u
 #define TALOS_RT_DESIGN_BYTECODE_INSTRUCTION_SIZE 32u
 #define TALOS_RT_DESIGN_BYTECODE_MAGIC "OBBCDS1"

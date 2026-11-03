@@ -11,10 +11,12 @@
 #include "talos/Conversion/SimulationRuntime.h"
 #include "talos/Runtime/Runtime.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 
 #include <algorithm>
 #include <cstddef>
+#include <tuple>
 
 using namespace mlir;
 
@@ -123,19 +125,40 @@ SmallVector<uint8_t> serializeBytecodeImage(
     layoutCursor += plan.layouts.size();
     continuationCursor += plan.continuations.size();
   }
+  // A register's layout record is its shape index and frame offset; the
+  // shapes (kind, flags, width, size, auxiliary) are shared, in first-use
+  // order (two-tier B4: BP's 637,587 registers have 507 shapes).
+  using ShapeKey = std::tuple<uint8_t, uint8_t, uint32_t, uint64_t, uint64_t>;
+  llvm::DenseMap<ShapeKey, uint32_t> shapeIndices;
+  SmallVector<ShapeKey> shapes;
   alignTo(output, 8);
   uint64_t layoutOffset = output.size();
-  for (const FunctionPlan &plan : plans)
+  for (FunctionPlan &plan : plans)
     for (const Layout &layout : plan.layouts) {
-      output.push_back(layout.kind);
-      output.push_back(layout.flags);
-      append16(output, 0);
-      append32(output, layout.width);
-      append64(output, layout.offset);
-      append64(output, layout.size);
-      append64(output, layout.auxiliary);
-      append64(output, 0);
+      if (layout.offset > UINT32_MAX) {
+        plan.function.emitOpError(
+            "has a bytecode register beyond the 4 GiB frame-offset limit");
+        return {};
+      }
+      ShapeKey key{layout.kind, layout.flags, layout.width, layout.size,
+                   layout.auxiliary};
+      auto [found, inserted] =
+          shapeIndices.try_emplace(key, static_cast<uint32_t>(shapes.size()));
+      if (inserted)
+        shapes.push_back(key);
+      append32(output, found->second);
+      append32(output, static_cast<uint32_t>(layout.offset));
     }
+  alignTo(output, 8);
+  uint64_t shapeOffset = output.size();
+  for (const auto &[kind, flags, width, size, auxiliary] : shapes) {
+    output.push_back(kind);
+    output.push_back(flags);
+    append16(output, 0);
+    append32(output, width);
+    append64(output, size);
+    append64(output, auxiliary);
+  }
   alignTo(output, 8);
   uint64_t codeOffset = output.size();
   for (const Instruction &instruction : instructions) {
@@ -271,6 +294,8 @@ SmallVector<uint8_t> serializeBytecodeImage(
   write64(output, offsetof(Header, connectivity_offset), connectivityOffset);
   write64(output, offsetof(Header, connectivity_count),
           state.connections.size());
+  write64(output, offsetof(Header, shape_offset), shapeOffset);
+  write64(output, offsetof(Header, shape_count), shapes.size());
   write64(output, offsetof(Header, tail_reserved), 0);
   write64(output, offsetof(Header, checksum),
           checksum(output, offsetof(Header, checksum)));

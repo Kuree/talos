@@ -63,6 +63,9 @@ public:
                         llvm::cl::desc("print function, register-layout, and "
                                        "operand-map metadata"),
                         llvm::cl::init(false)};
+  Option<bool> shapes{*this, "shapes",
+                      llvm::cl::desc("print the shared register shape table"),
+                      llvm::cl::init(false)};
   Option<bool> state{*this, "state",
                      llvm::cl::desc("print static net and driver state "
                                     "descriptors"),
@@ -95,6 +98,23 @@ public:
 
 private:
   LogicalResult print(const ImageReader &reader, raw_ostream &os) const {
+    if (shapes) {
+      uint64_t offset = reader.header(offsetof(Header, shape_offset));
+      uint64_t count = reader.header(offsetof(Header, shape_count));
+      uint64_t registers = reader.header(offsetof(Header, layout_count));
+      if (!reader.fits(offset, count, 24))
+        return failure();
+      os << "shapes " << count << " registers " << registers << '\n';
+      for (uint64_t index = 0; index < count; ++index) {
+        uint64_t shape = offset + index * 24;
+        os << "shape " << index
+           << ": kind=" << unsigned(reader.read<uint8_t>(shape))
+           << " flags=" << unsigned(reader.read<uint8_t>(shape + 1))
+           << " width=" << reader.read<uint32_t>(shape + 4)
+           << " size=" << reader.read<uint64_t>(shape + 8)
+           << " auxiliary=" << reader.read<uint64_t>(shape + 16) << '\n';
+      }
+    }
     if (state) {
       uint64_t offset = reader.header(offsetof(Header, state_offset));
       uint64_t count = reader.header(offsetof(Header, state_count));
@@ -160,8 +180,11 @@ private:
       uint64_t functionCount = reader.header(offsetof(Header, function_count));
       uint64_t layoutOffset = reader.header(offsetof(Header, layout_offset));
       uint64_t layoutCount = reader.header(offsetof(Header, layout_count));
+      uint64_t shapeOffset = reader.header(offsetof(Header, shape_offset));
+      uint64_t shapeCount = reader.header(offsetof(Header, shape_count));
       if (!reader.fits(functionOffset, functionCount, 96) ||
-          !reader.fits(layoutOffset, layoutCount, 40))
+          !reader.fits(layoutOffset, layoutCount, 8) ||
+          !reader.fits(shapeOffset, shapeCount, 24))
         return failure();
       for (uint64_t index = 0; index < functionCount; ++index) {
         uint64_t record = functionOffset + index * 96;
@@ -177,14 +200,19 @@ private:
            << " arguments=" << reader.read<uint32_t>(record + 48)
            << " results=" << reader.read<uint32_t>(record + 52) << '\n';
         for (uint64_t reg = 0; reg < functionLayoutCount; ++reg) {
-          uint64_t layout = layoutOffset + (firstLayout + reg) * 40;
+          // A layout record is {shape index, frame offset}.
+          uint64_t layout = layoutOffset + (firstLayout + reg) * 8;
+          uint32_t shapeIndex = reader.read<uint32_t>(layout);
+          if (shapeIndex >= shapeCount)
+            return failure();
+          uint64_t shape = shapeOffset + uint64_t{shapeIndex} * 24;
           os << "layout function=" << index << " register=" << reg
-             << " kind=" << unsigned(reader.read<uint8_t>(layout))
-             << " flags=" << unsigned(reader.read<uint8_t>(layout + 1))
-             << " width=" << reader.read<uint32_t>(layout + 4)
-             << " offset=" << reader.read<uint64_t>(layout + 8)
-             << " size=" << reader.read<uint64_t>(layout + 16)
-             << " auxiliary=" << reader.read<uint64_t>(layout + 24) << '\n';
+             << " kind=" << unsigned(reader.read<uint8_t>(shape))
+             << " flags=" << unsigned(reader.read<uint8_t>(shape + 1))
+             << " width=" << reader.read<uint32_t>(shape + 4)
+             << " offset=" << reader.read<uint32_t>(layout + 4)
+             << " size=" << reader.read<uint64_t>(shape + 8)
+             << " auxiliary=" << reader.read<uint64_t>(shape + 16) << '\n';
         }
       }
       for (uint64_t index = 0; index < operandCount; ++index)

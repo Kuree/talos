@@ -13015,7 +13015,8 @@ TEST(Scheduler, BytecodeInertialDriversClipAndSuppressDynamicViews) {
   // intrinsic directly. This executes descriptor decoding rather than merely
   // checking the compiler's bytecode encoding.
   constexpr uint64_t layoutOffset = 0;
-  constexpr uint64_t intrinsicOffset = 8 * 40;
+  constexpr uint64_t shapeOffset = layoutOffset + 8 * 8;
+  constexpr uint64_t intrinsicOffset = shapeOffset + 8 * 24;
   constexpr uint64_t siteOffset = intrinsicOffset + 16;
   constexpr uint64_t operandOffset = siteOffset + 16;
   std::vector<uint8_t> bytes(operandOffset + 8 * 8, 0);
@@ -13025,16 +13026,19 @@ TEST(Scheduler, BytecodeInertialDriversClipAndSuppressDynamicViews) {
   auto write64 = [&](uint64_t offset, uint64_t value) {
     std::memcpy(bytes.data() + offset, &value, sizeof(value));
   };
+  // Layout records {shape, offset}, then one shape per register (two-tier B4).
   auto writeLayout = [&](uint32_t index, uint8_t kind, uint32_t width,
                          uint64_t offset, uint64_t size) {
-    uint64_t record = layoutOffset + uint64_t{index} * 40;
-    bytes[record] = kind;
-    write32(record + 4, width);
-    write64(record + 8, offset);
-    write64(record + 16, size);
+    uint64_t record = layoutOffset + uint64_t{index} * 8;
+    write32(record, index);
+    write32(record + 4, static_cast<uint32_t>(offset));
+    uint64_t shape = shapeOffset + uint64_t{index} * 24;
+    bytes[shape] = kind;
+    write32(shape + 4, width);
+    write64(shape + 8, size);
   };
   writeLayout(0, TALOS_RT_DBREG_LOGIC, 4, 0, 16);
-  writeLayout(1, TALOS_RT_DBREG_HANDLE, 0, 16, 32);
+  writeLayout(1, TALOS_RT_DBREG_HANDLE, 256, 16, 32);
   for (uint32_t index = 2; index != 8; ++index)
     writeLayout(index, TALOS_RT_DBREG_BITS, 64, 48 + uint64_t{index - 2} * 8,
                 8);
@@ -13049,6 +13053,8 @@ TEST(Scheduler, BytecodeInertialDriversClipAndSuppressDynamicViews) {
   image.size = bytes.size();
   image.layouts = layoutOffset;
   image.layoutCount = 8;
+  image.shapes = shapeOffset;
+  image.shapeCount = 8;
   image.intrinsics = intrinsicOffset;
   image.intrinsicCount = 1;
   image.sites = siteOffset;
@@ -13123,7 +13129,8 @@ TEST(Scheduler, BytecodeInertialDriversClipAndSuppressDynamicViews) {
 
 TEST(Scheduler, BytecodeInertialStrengthPairsUseLogicalTransitionDelay) {
   constexpr uint64_t layoutOffset = 0;
-  constexpr uint64_t intrinsicOffset = 10 * 40;
+  constexpr uint64_t shapeOffset = layoutOffset + 10 * 8;
+  constexpr uint64_t intrinsicOffset = shapeOffset + 10 * 24;
   constexpr uint64_t siteOffset = intrinsicOffset + 16;
   constexpr uint64_t operandOffset = siteOffset + 16;
   constexpr uint64_t descriptorOffset = operandOffset + 10 * 8;
@@ -13134,18 +13141,22 @@ TEST(Scheduler, BytecodeInertialStrengthPairsUseLogicalTransitionDelay) {
   auto write64 = [&](uint64_t offset, uint64_t value) {
     std::memcpy(bytes.data() + offset, &value, sizeof(value));
   };
+  // Layout records {shape, offset}, then one shape per register (two-tier B4).
   auto writeLayout = [&](uint32_t index, uint8_t kind, uint32_t width,
                          uint64_t offset, uint64_t size) {
-    uint64_t record = layoutOffset + uint64_t{index} * 40;
-    bytes[record] = kind;
-    write32(record + 4, width);
-    write64(record + 8, offset);
-    write64(record + 16, size);
+    uint64_t record = layoutOffset + uint64_t{index} * 8;
+    write32(record, index);
+    write32(record + 4, static_cast<uint32_t>(offset));
+    uint64_t shape = shapeOffset + uint64_t{index} * 24;
+    bytes[shape] = kind;
+    write32(shape + 4, width);
+    write64(shape + 8, size);
   };
   writeLayout(0, TALOS_RT_DBREG_LOGIC, 1, 0, 16);
-  writeLayout(1, TALOS_RT_DBREG_HANDLE, 0, 16, 32);
+  // Whole-image validation checks every shape, so handles are canonical.
+  writeLayout(1, TALOS_RT_DBREG_HANDLE, 256, 16, 32);
   writeLayout(2, TALOS_RT_DBREG_LOGIC, 1, 48, 16);
-  writeLayout(3, TALOS_RT_DBREG_HANDLE, 0, 64, 32);
+  writeLayout(3, TALOS_RT_DBREG_HANDLE, 256, 64, 32);
   writeLayout(4, TALOS_RT_DBREG_LOGIC, 1, 96, 16);
   for (uint32_t index = 5; index != 10; ++index)
     writeLayout(index, TALOS_RT_DBREG_BITS, 64, 112 + uint64_t{index - 5} * 8,
@@ -13175,6 +13186,8 @@ TEST(Scheduler, BytecodeInertialStrengthPairsUseLogicalTransitionDelay) {
   image.size = bytes.size();
   image.layouts = layoutOffset;
   image.layoutCount = 10;
+  image.shapes = shapeOffset;
+  image.shapeCount = 10;
   image.intrinsics = intrinsicOffset;
   image.intrinsicCount = 1;
   image.sites = siteOffset;

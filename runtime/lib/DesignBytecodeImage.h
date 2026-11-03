@@ -147,6 +147,7 @@ struct Image {
   uint64_t sites = 0, siteCount = 0;
   uint64_t stateDescriptors = 0, stateDescriptorCount = 0;
   uint64_t connectivity = 0, connectivityCount = 0;
+  uint64_t shapes = 0, shapeCount = 0;
   uint64_t stateBitCount = 0;
 };
 
@@ -245,15 +246,24 @@ inline uint64_t read64(const uint8_t *data) {
   return value;
 }
 
-constexpr uint64_t kLayoutSize = 40;
+/// A register's layout record: {u32 shape index, u32 frame offset}.
+constexpr uint64_t kLayoutSize = 8;
+/// A register shape: {u8 kind, u8 flags, u16 reserved, u32 width, u64 size,
+/// u64 auxiliary}. Registers share shapes (two-tier B4: BP's 637,587 registers
+/// have 507 shapes), so only the frame offset is per register.
+constexpr uint64_t kShapeSize = 24;
 constexpr uint64_t kInstructionSize = TALOS_RT_DESIGN_BYTECODE_INSTRUCTION_SIZE;
 
+/// The layout of `function`'s register `index`. Image validation proves every
+/// layout record names an existing shape.
 inline Layout layoutAt(const Image &image, const Function &function,
                        uint32_t index) {
-  const uint8_t *data =
+  const uint8_t *record =
       image.data + image.layouts + (function.firstLayout + index) * kLayoutSize;
-  return {data[0],          data[1],           read32(data + 4),
-          read64(data + 8), read64(data + 16), read64(data + 24)};
+  const uint8_t *shape =
+      image.data + image.shapes + uint64_t{read32(record)} * kShapeSize;
+  return {shape[0],           shape[1],          read32(shape + 4),
+          read32(record + 4), read64(shape + 8), read64(shape + 16)};
 }
 
 inline Instruction instructionAt(const Image &image, uint64_t index) {
