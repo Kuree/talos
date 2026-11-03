@@ -4620,9 +4620,13 @@ talos_rt_status runScheduler(talos_rt_context *context,
         const auto *plan = context->nativeSchedulePlan;
         if (!plan)
           return TALOS_RT_INVALID_LIFECYCLE;
-        // A periodic checkpoint can leave other coincident owners pending,
-        // too. Its drain must return to the generated checkpoint trampoline
-        // before executing those owners, regardless of calendar ownership.
+        // A checkpoint drain returns pending generated ingress to the plan
+        // entry, whose preparation drain runs the coordinator before the
+        // remaining runtime Active work (any Active order, IEEE 1800-2023
+        // 4.7), as this loop does elsewhere.
+        if (options.returnGeneratedIngress &&
+            context->nativeScheduleClockIngressPending)
+          return TALOS_RT_OK;
         // IEEE 1800-2023 4.7, 9.2.2.2, 9.4.2: generated fanout inside the
         // coordinator wakes owners without inspecting their coroutines, so
         // an owner whose first activation has not yet reached its wait could
@@ -4631,7 +4635,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
         // A coordinator that yielded at a cut waits for the runtime's work
         // below it (4.4.2.3-4.4.2.4, 4.5).
         deferredEvalIngress =
-            options.returnGeneratedIngress || options.stopBeforeNBA ||
+            options.stopBeforeNBA ||
             ((plan->flags & TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL) &&
              !context->nativeStaticEvalIslandCertified) ||
             coordinatorAwaitsRuntime(context) ||
@@ -5158,10 +5162,9 @@ talos_rt_status runScheduler(talos_rt_context *context,
         pushCachedNativeReady(*cachedNativeSelection);
         cachedNativeUrgentCount += cachedNativeSelection->urgent;
       }
-      // A checkpoint's current-slot drain has no generated continuation
-      // trampoline. Leave ingress pending for the outer plan entry, which
-      // can queue the next exact checkpoint before resuming the closure.
-      // Do not cross the NBA barrier in between (LRM 4.4-4.5, 10.4.2).
+      // A generated eval continuation on the stack, or a checkpoint drain's
+      // plan entry, resumes the closure; do not cross the NBA barrier in
+      // between (LRM 4.4-4.5, 10.4.2).
       if (options.returnGeneratedIngress || options.stopBeforeNBA)
         return TALOS_RT_OK;
       ContextMutexLock lock(context);

@@ -239,8 +239,12 @@ struct SchedulerRunOptions {
   // A generated boundary may retain future clock deadlines. This restricts
   // time advancement, not which runnable regions the shared loop drains.
   bool currentSlotOnly = false;
-  // Return checkpoint-generated ingress to the plan's continuation trampoline.
-  // Bootstrap drains must still settle that ingress before clock admission.
+  // A periodic checkpoint drain: the scheduler cannot call the coordinator,
+  // because a coordinator that reaches another cold branch publishes its
+  // checkpoint for a generated trampoline to queue. Return as soon as
+  // generated ingress is pending, or at the eval cut that a yielded
+  // coordinator waits for; the plan entry's next preparation drain calls the
+  // coordinator, before other runtime work.
   bool returnGeneratedIngress = false;
   // A generated eval continuation stays on the stack. Drain Active/Inactive
   // work and return before the common NBA barrier instead of reentering it.

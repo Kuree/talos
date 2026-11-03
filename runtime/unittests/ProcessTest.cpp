@@ -14894,6 +14894,55 @@ TEST(Scheduler, CoordinatorYieldsItsInactiveCutToRuntimeActiveWork) {
   EXPECT_EQ(design.yield, TALOS_RT_RUNTIME_YIELD_COMMIT);
 }
 
+// A periodic checkpoint drain cannot call the coordinator (a coordinator that
+// reaches a cold branch needs a generated trampoline to queue it), so a
+// runtime writer's change still raises the owner's ready bit and the drain
+// returns at once, before other runtime Active work. The plan entry's next
+// preparation drain then runs the coordinator first, as any scheduler
+// iteration does (Active events in any order, IEEE 1800-2023 4.7), and the
+// owner never runs through its body.
+TEST(Scheduler, CheckpointDrainReturnsGeneratedIngressToThePlanEntry) {
+  YieldTestDesign design(/*timeZero=*/false);
+  ASSERT_EQ(design.status, TALOS_RT_OK);
+  talos_rt_context *context = design.context;
+  SchedulerFixture writer(7);
+  writer.descriptor.native_execute = yieldTestWriterExecute;
+  SchedulerFixture reader(21);
+  reader.descriptor.native_execute = yieldTestReaderExecute;
+  ASSERT_EQ(talos_rt_v1_scheduler_add_ranked(
+                context, makeSchedulerInstance(writer), 0, 0),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add_ranked(
+                context, makeSchedulerInstance(reader), 0, 1),
+            TALOS_RT_OK);
+  constexpr talos_rt_native_schedule_node nodes[] = {
+      {0, 0, UINT32_MAX},
+      {0, 1, UINT32_MAX},
+  };
+  {
+    ContextMutexLock lock(context);
+    ASSERT_EQ(
+        initializeNativeAOTNodesUnlocked(context, nodes, std::size(nodes)),
+        TALOS_RT_OK);
+  }
+  auto drain = [&](bool checkpoint) {
+    NativeAOTContextScope active(context);
+    NativeAOTMutexScope locked(context);
+    return runScheduler(context, {/*nativePlan=*/true,
+                                  /*currentSlotOnly=*/true, checkpoint});
+  };
+  ASSERT_EQ(drain(/*checkpoint=*/true), TALOS_RT_OK);
+  EXPECT_EQ(schedulerOrder, std::vector<uint64_t>{10});
+  EXPECT_EQ(clockCoordinatorCalls, 0u);
+  EXPECT_EQ(design.ingress, 1u);
+  EXPECT_FALSE(context->nativeScheduleReadyNodes.test(1));
+  EXPECT_TRUE(context->nativeScheduleClockIngressPending);
+  ASSERT_EQ(drain(/*checkpoint=*/false), TALOS_RT_OK);
+  EXPECT_TRUE(startedOwnerContinuations.empty());
+  EXPECT_EQ(schedulerOrder, (std::vector<uint64_t>{10, 900, 21, 11, 901}));
+  EXPECT_FALSE(context->nativeScheduleCoordinatorYielded);
+}
+
 // A runtime-routed entry still wakes the owner's node: it is how generated
 // state reaches runtime waiters, and it raises no generated ready bit.
 TEST(Scheduler, RuntimeRoutedEntryStillWakesItsNode) {
@@ -14923,10 +14972,10 @@ TEST(Scheduler, RuntimeRoutedEntryStillWakesItsNode) {
 
 // IEEE 1800-2023 9.2.2.2, 9.4.2: outside a static eval island too, a
 // time-zero owner's activation is its generated ready bit, which a runtime
-// writer's transition raises again rather than enqueueing the owner's node.
-// A periodic checkpoint drain cannot call the coordinator, so it wakes the
-// node instead, except while the bit is pending: the owner has not run, so it
-// is not waiting at its event control and the wake adds no activation.
+// writer's transition raises again rather than enqueueing the owner's node:
+// while the bit is pending the owner has not run, so it is not waiting at its
+// event control and the wake adds no activation. Periodic checkpoint drains
+// raise the bit too (and return it to the plan entry), so none wakes the node.
 TEST(ProcessSpawn, RuntimeWriterSharesTheTimeZeroOwnersReadyBit) {
   YieldTestDesign design(/*timeZero=*/true);
   ASSERT_EQ(design.status, TALOS_RT_OK);
@@ -14953,29 +15002,34 @@ TEST(ProcessSpawn, RuntimeWriterSharesTheTimeZeroOwnersReadyBit) {
     talos_rt_v1_scheduler_static_transition(context, 1, 0, 1, before, 0, after,
                                             0);
   };
-  context->nativeScheduleCheckpointDrain = true;
   writeFromTier2(0, 1);
+  EXPECT_EQ(design.ingress, 1u);
   EXPECT_FALSE(owner.signalTriggered);
   EXPECT_FALSE(context->nativeScheduleReadyNodes.test(1));
-  context->nativeScheduleCheckpointDrain = false;
+  EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);
+
+  // Once the coordinator has taken the bit, the next write raises it again.
+  design.ingress = 0;
   writeFromTier2(1, 0);
   EXPECT_EQ(design.ingress, 1u);
   EXPECT_FALSE(owner.signalTriggered);
   EXPECT_FALSE(context->nativeScheduleReadyNodes.test(1));
   EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);
 
-  // Once the coordinator has taken the bit, a drain's wake is the node's.
+  // A runtime-routed entry (state 2) still wakes the node, which runs the
+  // process body: its entry is the time-zero activation (a replay, not
+  // counted separately), counted as one body activation.
   design.ingress = 0;
-  context->nativeScheduleCheckpointDrain = true;
-  writeFromTier2(0, 1);
-  context->nativeScheduleCheckpointDrain = false;
+  {
+    NativeAOTContextScope active(context);
+    NativeAOTMutexScope locked(context);
+    talos_rt_v1_scheduler_static_transition(context, 2, 0, 1, 0, 0, 1, 0);
+  }
   EXPECT_EQ(design.ingress, 0u);
   EXPECT_TRUE(owner.signalTriggered);
   EXPECT_TRUE(context->nativeScheduleReadyNodes.test(1));
   EXPECT_EQ(context->schedulerStatus, TALOS_RT_OK);
   EXPECT_TRUE(startedOwnerContinuations.empty());
-  // That node runs the process body: its entry is the time-zero activation
-  // (a replay, not counted separately), counted as one body activation.
   ASSERT_EQ(
       talos_rt_v1_scheduler_run_aot_nodes(context, nodes, std::size(nodes)),
       TALOS_RT_OK);

@@ -2550,9 +2550,6 @@ struct talos_rt_context {
   // initializer's completion has not armed yet.
   std::vector<std::pair<uint32_t, const talos_rt_process_start_v1 *>>
       nativeScheduleStartedPending;
-  // A periodic checkpoint drain (returnGeneratedIngress) is running: it cannot
-  // call the coordinator, so runtime writers wake generated owners' nodes.
-  bool nativeScheduleCheckpointDrain = false;
   // The coordinator stopped at a cut for runtime work (runtime_yield): the
   // scheduler loop owes it a call once the runtime has nothing below the
   // cut's region (Inactive: deferred owners; Observed: staging), or earlier for

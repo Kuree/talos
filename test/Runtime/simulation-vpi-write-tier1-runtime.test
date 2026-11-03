@@ -12,8 +12,10 @@
 
 // TIERS: scheduler_iterations=48
 // The net force also fractures its driver owner; storage-only dependencies
-// previously left that owner on the clean path (LRM 38.34, 10.6.2).
-// TIERS-SAME: aot_node_executions=19
+// previously left that owner on the clean path (LRM 38.34, 10.6.2). A
+// checkpoint drain returns generated ingress to the plan entry, so the clock
+// edge it used to run as a node runs in the generated loop.
+// TIERS-SAME: aot_node_executions=18
 // CHECK: before 0 000001f4
 // CHECK-NEXT: after 0 00000029
 // CHECK-NEXT: before 1 0000002a

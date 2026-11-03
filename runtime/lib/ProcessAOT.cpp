@@ -609,9 +609,9 @@ talos_rt_status armStartedNativeAOTActorsUnlocked(talos_rt_context *context) {
     // 4.3). So the activation must share the route of every wake that can
     // precede it. In
     // an eval plan every wake of a direct owner with a static wait is its
-    // generated ready bit (runtime writers' static transitions raise it, and
-    // a checkpoint drain skips an owner whose bit is pending), and the
-    // coordinator runs no owner while a procedure is unstarted. External
+    // generated ready bit (runtime writers' static transitions raise it, in
+    // checkpoint drains too), and the coordinator runs no owner while a
+    // procedure is unstarted. External
     // writes, which restore subscriptions (disturbNativeScheduleUnlocked),
     // come only from VPI and force/assign, which admission excludes
     // (NativeStartAdmission.cpp, 38.34, 10.6). Otherwise the
@@ -1651,18 +1651,14 @@ uint64_t nextPeriodicRuntimeDeadlineUnlocked(talos_rt_context *context) {
 
 // Bootstrap and checkpoint work use the same actor/region arbitration as
 // ordinary execution. Restrict only calendar advancement, not executor tiers.
+// Generated owners run only through the coordinator, which a checkpoint
+// drain (returnGeneratedIngress) leaves to the plan entry's next preparation.
 talos_rt_status
 drainNativeAOTCurrentSlotUnlocked(talos_rt_context *context,
                                   bool returnGeneratedIngress = false) {
   if (!context || activeNativeAOTContext != context ||
       lockedNativeAOTContext != context || !context->nativeSchedulePlan)
     return TALOS_RT_INVALID_LIFECYCLE;
-  struct DrainScope {
-    talos_rt_context *context;
-    bool outer;
-    ~DrainScope() { context->nativeScheduleCheckpointDrain = outer; }
-  } scope{context, context->nativeScheduleCheckpointDrain};
-  context->nativeScheduleCheckpointDrain = returnGeneratedIngress;
   return runScheduler(context, {/*nativePlan=*/true, /*currentSlotOnly=*/true,
                                 returnGeneratedIngress});
 }
@@ -3002,7 +2998,8 @@ nativeCheckpoint:
           // source monitor, to enter the same time-slot ordering cohort. The
           // checkpoint callback is intentionally only one actor activation;
           // drain the newly enabled runtime work before the generated island
-          // can advance to another periodic edge.
+          // can advance to another periodic edge. Generated owners it readies
+          // run first at the next preparation drain (Active order, 4.7).
           status = drainNativeAOTCurrentSlotUnlocked(
               context, /*returnGeneratedIngress=*/true);
           if (status != TALOS_RT_OK)
@@ -3050,9 +3047,10 @@ nativeCheckpoint:
         if (!markDueNativeAOTDeadlinesUnlocked(context))
           return TALOS_RT_INVALID_CONTINUATION;
       }
-      // Drain the checkpoint slot with generic ordering arbitration around
-      // direct generated Tier-2 nodes. Future calendar entries remain owned
-      // by run_until.
+      // Drain the checkpoint slot's runtime work with generic ordering
+      // arbitration; generated owners run through the coordinator at the
+      // next preparation drain. Future calendar entries remain owned by
+      // run_until.
       status = drainNativeAOTCurrentSlotUnlocked(
           context, /*returnGeneratedIngress=*/true);
       if (status == TALOS_RT_AOT_GENERATED_CHECKPOINT)
@@ -3376,7 +3374,6 @@ void talos_rt_release_native_schedule_plan(talos_rt_context *context) noexcept {
   context->nativePeriodicClockActorSlots.clear();
   context->nativeScheduleClockIngressPending = false;
   context->nativeScheduleCoordinatorYielded = false;
-  context->nativeScheduleCheckpointDrain = false;
   context->nativeScheduleDirectActorSlot = UINT32_MAX;
   context->nativeScheduleCheckpointActorSlot = UINT32_MAX;
   context->nativeScheduleCheckpointContinuation = 0;
