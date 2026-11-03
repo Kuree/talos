@@ -3004,6 +3004,9 @@ struct talos_rt_context {
   // encoded), for the general path and the frame-root scan.
   std::vector<std::vector<talos::designbytecode::Instruction>>
       designBytecodeInstructions;
+  // Block-argument copy runs of the same functions' fast jumps and branches:
+  // {destination offset, source offset, size} per copy, built with the plan.
+  std::vector<std::vector<uint32_t>> designBytecodeCopyRuns;
   void *vpiState = nullptr;
   // Waveform dump plan, shadow planes, and output buffer. Allocated on the
   // first $dumpfile/$dumpvars and owned by the context.

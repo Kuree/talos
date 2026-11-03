@@ -519,8 +519,11 @@ enum FastKind : uint8_t {
   kFastGeneric = 0,
   kFastConstant,
   kFastMove,
+  // Control transfers stay contiguous (fastTransfersControl).
   kFastJump,
   kFastBranch,
+  kFastJumpMap,
+  kFastBranchMap,
   kFastNot,
   kFastAnd,
   kFastOr,
@@ -597,6 +600,29 @@ inline void fastCopyBytes(uint8_t *to, const uint8_t *from, uint64_t size) {
     std::memcpy(to, from, 8);
   for (; size != 0; --size)
     *to++ = *from++;
+}
+
+/// Runs a resolved block-argument copy run: sources are snapshot first, so
+/// the assignment is parallel (copyMap).
+__attribute__((noinline)) void fastCopyRun(uint8_t *data, const FastOp &op) {
+  const uint32_t *run = reinterpret_cast<const uint32_t *>(op.immediate2);
+  if (op.source1 == 1) {
+    // Registers never partially overlap.
+    fastCopyBytes(data + run[0], data + run[1], run[2]);
+    return;
+  }
+  alignas(8) uint8_t values[kFastWideBytes];
+  uint64_t offset = 0;
+  for (uint32_t index = 0; index != op.source1; ++index) {
+    fastCopyBytes(values + offset, data + run[3 * index + 1],
+                  run[3 * index + 2]);
+    offset += run[3 * index + 2];
+  }
+  offset = 0;
+  for (uint32_t index = 0; index != op.source1; ++index) {
+    fastCopyBytes(data + run[3 * index], values + offset, run[3 * index + 2]);
+    offset += run[3 * index + 2];
+  }
 }
 
 /// A frame transfer of 1 to 8 bytes; larger transfers stay generic.
@@ -695,18 +721,22 @@ FastOp decodeFastOp(const Image &image, const Function &function,
       unary(kFastMove);
     break;
   case TALOS_RT_DB_JUMP:
-    // Block arguments (source1 != 0) keep copyMap's parallel assignment.
-    if (instruction.source1 == 0 && instruction.source0 <= image.operandCount) {
-      op.kind = kFastJump;
+    // Block arguments (source1 != 0) are copied in parallel like copyMap;
+    // fastPlan resolves the copy run or falls back to the general path.
+    if (instruction.source0 <= image.operandCount) {
+      op.kind = instruction.source1 == 0 ? kFastJump : kFastJumpMap;
       op.immediate = instruction.immediate;
+      op.source0 = instruction.source0;
+      op.source1 = instruction.source1;
     }
     break;
   case TALOS_RT_DB_BRANCH:
-    if (instruction.source1 == 0 && instruction.source0 <= image.operandCount &&
-        destination.valid) {
-      op.kind = kFastBranch;
+    if (instruction.source0 <= image.operandCount && destination.valid) {
+      op.kind = instruction.source1 == 0 ? kFastBranch : kFastBranchMap;
       use(destination, op.destination, kFastDestinationFourState);
       op.immediate = instruction.immediate;
+      op.source0 = instruction.source0;
+      op.source1 = instruction.source1;
     }
     break;
   case TALOS_RT_DB_NOT:
@@ -1055,12 +1085,19 @@ inline bool executeFastOp(const FastOp &op, uint8_t *data,
   case kFastJump:
     pc = op.immediate;
     return true;
-  case kFastBranch: {
+  case kFastJumpMap:
+    fastCopyRun(data, op);
+    pc = op.immediate;
+    return true;
+  case kFastBranch:
+  case kFastBranchMap: {
     uint64_t value, unknown;
     fastRead(data, op.destination,
              (op.fourState & kFastDestinationFourState) != 0, op.width, value,
              unknown);
     if (unknown != 0 || value != 0) {
+      if (op.kind == kFastBranchMap)
+        fastCopyRun(data, op);
       pc = op.immediate;
       return true;
     }
@@ -1551,7 +1588,65 @@ inline bool executeFastOp(const FastOp &op, uint8_t *data,
 /// keeps every other fast op off a function's last instruction, so such an op
 /// leaves pc inside the function (two-tier B3).
 inline bool fastTransfersControl(uint8_t kind) {
-  return kind == kFastJump || kind == kFastBranch;
+  return static_cast<uint8_t>(kind - kFastJump) <= kFastBranchMap - kFastJump;
+}
+
+/// Resolves the copy runs of `plan`'s jumps and branches with block arguments
+/// into `runs` ({destination offset, source offset, size} per copy), with
+/// copyMap's checks; an op whose run copyMap would reject, or whose sources
+/// exceed the fast snapshot, runs on the general path.
+void resolveFastCopyRuns(const Image &image, const Function &function,
+                         std::vector<FastOp> &plan,
+                         std::vector<uint32_t> &runs) {
+  std::vector<std::pair<size_t, size_t>> starts;
+  for (size_t index = 0; index != plan.size(); ++index) {
+    FastOp &op = plan[index];
+    if (op.kind != kFastJumpMap && op.kind != kFastBranchMap)
+      continue;
+    uint64_t first = op.source0, count = op.source1;
+    bool valid = first <= image.operandCount &&
+                 count <= image.operandCount - first && count <= kFastWideBytes;
+    size_t start = runs.size();
+    uint64_t total = 0, kept = 0;
+    for (uint64_t copy = 0; valid && copy != count; ++copy) {
+      auto [destinationRegister, sourceRegister] =
+          operandAt(image, first + copy);
+      if (!validRegister(function, destinationRegister) ||
+          !validRegister(function, sourceRegister)) {
+        valid = false;
+        break;
+      }
+      Layout destination = layoutAt(image, function, destinationRegister);
+      Layout source = layoutAt(image, function, sourceRegister);
+      total += source.size;
+      if (destination.size != source.size || total > kFastWideBytes ||
+          destination.offset > UINT32_MAX || source.offset > UINT32_MAX) {
+        valid = false;
+        break;
+      }
+      // A register copied to itself keeps its value (the snapshot holds it
+      // for the other copies).
+      if (destination.offset == source.offset)
+        continue;
+      runs.push_back(static_cast<uint32_t>(destination.offset));
+      runs.push_back(static_cast<uint32_t>(source.offset));
+      runs.push_back(static_cast<uint32_t>(source.size));
+      ++kept;
+    }
+    if (!valid) {
+      runs.resize(start);
+      op = FastOp{};
+      continue;
+    }
+    op.source1 = static_cast<uint32_t>(kept);
+    if (kept == 0) {
+      op.kind = op.kind == kFastJumpMap ? kFastJump : kFastBranch;
+      continue;
+    }
+    starts.emplace_back(index, start);
+  }
+  for (auto [index, start] : starts)
+    plan[index].immediate2 = reinterpret_cast<uintptr_t>(runs.data() + start);
 }
 
 /// The fast-path plan of `frame`'s function, decoded on its first execution,
@@ -1601,6 +1696,11 @@ const FastOp *fastPlan(const Image &image, const Frame &frame,
     plan.reserve(static_cast<size_t>(frame.function.instructionCount));
     for (const Instruction &instruction : decodedCode)
       plan.push_back(decodeFastOp(image, frame.function, instruction));
+    auto &copyRuns = context->designBytecodeCopyRuns;
+    if (copyRuns.size() != image.functionCount)
+      copyRuns.assign(static_cast<size_t>(image.functionCount), {});
+    resolveFastCopyRuns(image, frame.function, plan,
+                        copyRuns[frame.functionIndex]);
     // The fast loop checks pc only after control transfers; every other fast
     // op must have a successor in the function. Code validation guarantees
     // that only for functions whose initialization it analyzes, so a last

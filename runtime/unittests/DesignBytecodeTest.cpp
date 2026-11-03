@@ -463,6 +463,110 @@ std::vector<uint8_t> makeFallOffBytecode() {
   return bytes;
 }
 
+/// Block-argument copies on jumps and branches (two-tier B3): a branch not
+/// taken (no copies), a taken branch swapping two registers, a jump with a
+/// three-copy run reading a register it also writes, and a jump rotating three
+/// 96-byte registers (288 bytes, beyond the fast snapshot).
+std::vector<uint8_t> makeBlockCopyBytecode() {
+  constexpr size_t count = 16;
+  constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
+  constexpr size_t layoutOffset = functionOffset + 96;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(9);
+  constexpr size_t operandOffset = codeOffset + count * 32;
+  constexpr size_t constantOffset = operandOffset + 12 * 8;
+  constexpr size_t continuationOffset = constantOffset + 352;
+  std::vector<uint8_t> bytes(continuationOffset + 24, 0);
+  std::memcpy(bytes.data(), "OBBCDS1\0", 8);
+  put32(bytes, 8, TALOS_RT_VERSION);
+  put32(bytes, 12, 0);
+  put32(bytes, 16, TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE);
+  put64(bytes, 24, bytes.size());
+  put64(bytes, 40, functionOffset);
+  put64(bytes, 48, 1);
+  put64(bytes, 56, layoutOffset);
+  put64(bytes, 64, 9);
+  put64(bytes, 72, codeOffset);
+  put64(bytes, 80, count);
+  put64(bytes, 88, operandOffset);
+  put64(bytes, 96, 12);
+  put64(bytes, 104, constantOffset);
+  put64(bytes, 112, 352);
+  put64(bytes, 120, continuationOffset);
+  put64(bytes, 128, 1);
+  put64(bytes, 136, bytes.size());
+  put64(bytes, 152, bytes.size());
+  put64(bytes, 168, bytes.size());
+  put64(bytes, 184, bytes.size());
+
+  put64(bytes, functionOffset, 1);
+  put64(bytes, functionOffset + 16, 0);
+  put64(bytes, functionOffset + 24, count);
+  put64(bytes, functionOffset + 32, 0);
+  put64(bytes, functionOffset + 40, 9);
+  put32(bytes, functionOffset + 48, 0);
+  put32(bytes, functionOffset + 52, 0);
+  put64(bytes, functionOffset + 56, 368);
+  put64(bytes, functionOffset + 64, 8);
+  put64(bytes, functionOffset + 72, 0);
+  put64(bytes, functionOffset + 80, 1);
+  put64(bytes, functionOffset + 88, 1);
+
+  putShapeTable(bytes, layoutOffset, 9);
+  putLayout(bytes, layoutOffset, 9, 0, TALOS_RT_DBREG_LOGIC, 32, 0, 16);
+  putLayout(bytes, layoutOffset, 9, 1, TALOS_RT_DBREG_LOGIC, 32, 16, 16);
+  putLayout(bytes, layoutOffset, 9, 2, TALOS_RT_DBREG_BITS, 1, 32, 8);
+  putLayout(bytes, layoutOffset, 9, 3, TALOS_RT_DBREG_BITS, 1, 40, 8);
+  putLayout(bytes, layoutOffset, 9, 4, TALOS_RT_DBREG_LOGIC, 32, 48, 16);
+  putLayout(bytes, layoutOffset, 9, 5, TALOS_RT_DBREG_BITS, 768, 64, 96);
+  putLayout(bytes, layoutOffset, 9, 6, TALOS_RT_DBREG_BITS, 768, 160, 96);
+  putLayout(bytes, layoutOffset, 9, 7, TALOS_RT_DBREG_BITS, 768, 256, 96);
+
+  putLayout(bytes, layoutOffset, 9, 8, TALOS_RT_DBREG_LOGIC, 1, 352, 16);
+
+  const uint32_t pairs[12][2] = {{0, 1}, {1, 1}, {0, 1}, {1, 0},
+                                 {0, 1}, {1, 0}, {4, 0}, {5, 6},
+                                 {6, 7}, {7, 5}, {4, 0}, {0, 0}};
+  for (size_t index = 0; index != 12; ++index) {
+    put32(bytes, operandOffset + index * 8, pairs[index][0]);
+    put32(bytes, operandOffset + index * 8 + 4, pairs[index][1]);
+  }
+  instruction(bytes, codeOffset, 0, TALOS_RT_DB_CONSTANT, 0, 0, 0, 0, 0, 0, 0);
+  instruction(bytes, codeOffset, 1, TALOS_RT_DB_CONSTANT, 0, 1, 0, 0, 0, 0, 16);
+  instruction(bytes, codeOffset, 2, TALOS_RT_DB_CONSTANT, 0, 2, 0, 0, 0, 0, 32);
+  instruction(bytes, codeOffset, 3, TALOS_RT_DB_CONSTANT, 0, 3, 0, 0, 0, 0, 40);
+  instruction(bytes, codeOffset, 4, TALOS_RT_DB_CONSTANT, 0, 5, 0, 0, 0, 0, 48);
+  instruction(bytes, codeOffset, 5, TALOS_RT_DB_CONSTANT, 0, 6, 0, 0, 0, 0,
+              144);
+  instruction(bytes, codeOffset, 6, TALOS_RT_DB_CONSTANT, 0, 7, 0, 0, 0, 0,
+              240);
+  instruction(bytes, codeOffset, 7, TALOS_RT_DB_CONSTANT, 0, 8, 0, 0, 0, 0,
+              336);
+  // Not taken: no copy, no jump to the early TERMINATE.
+  instruction(bytes, codeOffset, 8, TALOS_RT_DB_BRANCH, 0, 3, 0, 2, 0, 0, 15);
+  instruction(bytes, codeOffset, 9, TALOS_RT_DB_BRANCH, 0, 2, 2, 2, 0, 0, 10);
+  instruction(bytes, codeOffset, 10, TALOS_RT_DB_JUMP, 0, 0, 4, 3, 0, 0, 11);
+  instruction(bytes, codeOffset, 11, TALOS_RT_DB_JUMP, 0, 0, 7, 3, 0, 0, 12);
+  // An X condition is taken (one copy); a run of only a self-copy.
+  instruction(bytes, codeOffset, 12, TALOS_RT_DB_BRANCH, 0, 8, 10, 1, 0, 0, 13);
+  instruction(bytes, codeOffset, 13, TALOS_RT_DB_JUMP, 0, 0, 11, 1, 0, 0, 14);
+  instruction(bytes, codeOffset, 14, TALOS_RT_DB_TERMINATE);
+  instruction(bytes, codeOffset, 15, TALOS_RT_DB_TERMINATE);
+  put64(bytes, constantOffset, 0x11);
+  put64(bytes, constantOffset + 16, 0x22);
+  put64(bytes, constantOffset + 32, 1);
+  for (uint64_t limb = 0; limb != 12; ++limb) {
+    put64(bytes, constantOffset + 48 + limb * 8, 0x0500 + limb);
+    put64(bytes, constantOffset + 144 + limb * 8, 0x0600 + limb);
+    put64(bytes, constantOffset + 240 + limb * 8, 0x0700 + limb);
+  }
+  put64(bytes, constantOffset + 344, 1);
+  put32(bytes, continuationOffset, 0);
+  put32(bytes, continuationOffset + 4, 0);
+  put64(bytes, continuationOffset + 8, 0);
+  put64(bytes, 32, imageChecksum(bytes));
+  return bytes;
+}
+
 std::vector<uint8_t> makeDynamicScanIntrinsicBytecode(uint32_t intrinsicID) {
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 96;
@@ -4251,6 +4355,64 @@ TEST(DesignBytecode, CodeFallingOffAFunctionsEndIsRejected) {
                                                0, limit, &action),
               TALOS_RT_INVALID_BYTECODE);
     EXPECT_EQ(frame[0], 0x12345678u);
+  }
+  talos_rt_v1_context_destroy(context);
+}
+
+TEST(DesignBytecode, BlockArgumentCopiesAreParallelOnEitherPath) {
+  // Two-tier B3: jumps and branches with block arguments copy through a
+  // resolved run on the fast path (the context's image) and through copyMap
+  // on the general path (a byte copy of the image): both assign in parallel,
+  // and a branch not taken copies nothing.
+  std::vector<uint8_t> bytecode = makeBlockCopyBytecode();
+  std::vector<uint8_t> copy = bytecode;
+  talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
+                                             TALOS_RT_EXECUTION_HAS_BYTECODE,
+                                             0,
+                                             bytecode.data(),
+                                             bytecode.size(),
+                                             nullptr,
+                                             0,
+                                             1,
+                                             imageChecksum(bytecode),
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
+  talos_rt_execution_descriptor_v1 other = execution;
+  other.bytecode = copy.data();
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+            TALOS_RT_OK);
+  using Frame = std::array<uint64_t, 46>;
+  auto run = [&](const talos_rt_execution_descriptor_v1 &descriptor,
+                 Frame &frame) {
+    talos_rt_fragment_action_v1 action{};
+    talos_rt_design_bytecode_entry_v1 entry{&descriptor, 0, 0};
+    talos_rt_status status = talos_rt_execute_design_bytecode(
+        entry, context, frame.data(), sizeof(frame), 0, sizeof(frame), 0, 0,
+        &action);
+    EXPECT_EQ(action.kind, TALOS_RT_FRAGMENT_TERMINATE);
+    return status;
+  };
+  Frame fast{}, general{};
+  ASSERT_EQ(run(execution, fast), TALOS_RT_OK);
+  ASSERT_EQ(run(other, general), TALOS_RT_OK);
+  EXPECT_EQ(fast, general);
+  // Swapped by the branch, swapped back by the jump, which also copied the
+  // swapped r0 into r4; the X branch then copied r0 into r4.
+  EXPECT_EQ(fast[0], 0x11u);
+  EXPECT_EQ(fast[2], 0x22u);
+  EXPECT_EQ(fast[6], 0x11u);
+  // r5 <- r6, r6 <- r7, r7 <- r5.
+  for (uint64_t limb = 0; limb != 12; ++limb) {
+    EXPECT_EQ(fast[8 + limb], 0x0600 + limb);
+    EXPECT_EQ(fast[20 + limb], 0x0700 + limb);
+    EXPECT_EQ(fast[32 + limb], 0x0500 + limb);
   }
   talos_rt_v1_context_destroy(context);
 }
