@@ -496,13 +496,12 @@ talos_rt_status writeUnlocked(talos_rt_context *context, uint32_t descriptor,
 
 namespace {
 
-talos_rt_status
-checkFileArguments(talos_rt_context *context, uint32_t descriptor,
-                   FileEntry *&entry,
-                   std::unique_lock<std::recursive_mutex> &lock) {
+talos_rt_status checkFileArguments(talos_rt_context *context,
+                                   uint32_t descriptor, FileEntry *&entry,
+                                   std::unique_lock<TalosContextMutex> &lock) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
-  lock = std::unique_lock<std::recursive_mutex>(context->mutex);
+  lock = std::unique_lock<TalosContextMutex>(context->mutex);
   entry = getFileUnlocked(context, descriptor);
   if (!entry) {
     setLastErrorUnlocked(context, "invalid file descriptor");
@@ -550,7 +549,7 @@ extern "C" talos_rt_status talos_rt_v1_file_open_mcd(talos_rt_context *context,
       setLastError(context, "file path is invalid or contains a NUL byte");
       return TALOS_RT_INVALID_ARGUMENT;
     }
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     if (context->freeMCDs.empty()) {
       setLastErrorUnlocked(context, "no multichannel descriptor bits remain");
       return TALOS_RT_OUT_OF_RESOURCES;
@@ -623,7 +622,7 @@ talos_rt_v1_file_open(talos_rt_context *context, const char *path,
     bool updating = normalized.find('+') != std::string::npos;
     bool writable = normalized.front() != 'r' || updating;
     bool readable = normalized.front() == 'r' || updating;
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     uint32_t index;
     if (!context->freeFiles.empty()) {
       index = context->freeFiles.back();
@@ -684,7 +683,7 @@ extern "C" talos_rt_status talos_rt_v1_file_close(talos_rt_context *context,
   if (!context || descriptor == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     if (descriptor & kFDTag) {
       uint32_t index = descriptor & kFDIndexMask;
       if (index < 3) {
@@ -737,7 +736,7 @@ extern "C" talos_rt_status talos_rt_v1_file_flush(talos_rt_context *context,
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     std::vector<FileEntry *> outputs;
     if (descriptor == 0) {
       outputs.push_back(&context->mcd[0]);
@@ -772,7 +771,7 @@ talos_rt_v1_file_write(talos_rt_context *context, uint32_t descriptor,
   if (outWritten)
     *outWritten = 0;
   return guarded(context, [&] {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     return writeUnlocked(context, descriptor, data, size, outWritten);
   });
 }
@@ -787,7 +786,7 @@ extern "C" talos_rt_status talos_rt_v1_file_read(talos_rt_context *context,
   *outRead = 0;
   return guarded(context, [&] {
     FileEntry *entry;
-    std::unique_lock<std::recursive_mutex> lock;
+    std::unique_lock<TalosContextMutex> lock;
     talos_rt_status status =
         checkFileArguments(context, descriptor, entry, lock);
     if (status != TALOS_RT_OK)
@@ -830,7 +829,7 @@ extern "C" talos_rt_status talos_rt_v1_file_readmem_token(
   *outAddress = 0;
   return guarded(context, [&] {
     FileEntry *entry;
-    std::unique_lock<std::recursive_mutex> lock;
+    std::unique_lock<TalosContextMutex> lock;
     talos_rt_status status =
         checkFileArguments(context, descriptor, entry, lock);
     if (status != TALOS_RT_OK)
@@ -1066,7 +1065,7 @@ extern "C" talos_rt_status talos_rt_v1_file_getc(talos_rt_context *context,
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
     FileEntry *entry;
-    std::unique_lock<std::recursive_mutex> lock;
+    std::unique_lock<TalosContextMutex> lock;
     talos_rt_status status =
         checkFileArguments(context, descriptor, entry, lock);
     if (status != TALOS_RT_OK)
@@ -1099,7 +1098,7 @@ extern "C" talos_rt_status talos_rt_v1_file_ungetc(talos_rt_context *context,
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
     FileEntry *entry;
-    std::unique_lock<std::recursive_mutex> lock;
+    std::unique_lock<TalosContextMutex> lock;
     talos_rt_status status =
         checkFileArguments(context, descriptor, entry, lock);
     if (status != TALOS_RT_OK)
@@ -1128,7 +1127,7 @@ talos_rt_v1_file_getline(talos_rt_context *context, uint32_t descriptor,
   outLine->size = 0;
   return guarded(context, [&] {
     FileEntry *entry;
-    std::unique_lock<std::recursive_mutex> lock;
+    std::unique_lock<TalosContextMutex> lock;
     talos_rt_status status =
         checkFileArguments(context, descriptor, entry, lock);
     if (status != TALOS_RT_OK)
@@ -1202,7 +1201,7 @@ extern "C" talos_rt_status talos_rt_v1_file_scan_field(
     return TALOS_RT_OK;
   return guarded(context, [&] {
     FileEntry *entry;
-    std::unique_lock<std::recursive_mutex> lock;
+    std::unique_lock<TalosContextMutex> lock;
     talos_rt_status status =
         checkFileArguments(context, descriptor, entry, lock);
     // IEEE 1800-2017 21.3.4.3 ends $fscanf with EOF when the input ends before
@@ -1288,7 +1287,7 @@ extern "C" TALOS_RT_FEATURE_TEXT talos_rt_status talos_rt_v1_file_scan_dynamic(
 
   return talos_rt_feature_guarded(context, [&]() {
     FileEntry *entry;
-    std::unique_lock<std::recursive_mutex> lock;
+    std::unique_lock<TalosContextMutex> lock;
     talos_rt_status checked =
         checkFileArguments(context, descriptor, entry, lock);
     if (checked == TALOS_RT_INVALID_HANDLE) {
@@ -1461,7 +1460,7 @@ extern "C" talos_rt_status talos_rt_v1_file_scan_raw(
     return TALOS_RT_OK;
   return guarded(context, [&] {
     FileEntry *entry;
-    std::unique_lock<std::recursive_mutex> lock;
+    std::unique_lock<TalosContextMutex> lock;
     talos_rt_status status =
         checkFileArguments(context, descriptor, entry, lock);
     if (status == TALOS_RT_INVALID_HANDLE) {
@@ -1505,7 +1504,7 @@ extern "C" talos_rt_status talos_rt_v1_file_eof(talos_rt_context *context,
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
     FileEntry *entry;
-    std::unique_lock<std::recursive_mutex> lock;
+    std::unique_lock<TalosContextMutex> lock;
     talos_rt_status status =
         checkFileArguments(context, descriptor, entry, lock);
     if (status != TALOS_RT_OK)
@@ -1529,7 +1528,7 @@ talos_rt_v1_file_error(talos_rt_context *context, uint32_t descriptor,
   outMessage->size = 0;
   return guarded(context, [&] {
     FileEntry *entry;
-    std::unique_lock<std::recursive_mutex> lock;
+    std::unique_lock<TalosContextMutex> lock;
     talos_rt_status status =
         checkFileArguments(context, descriptor, entry, lock);
     if (status != TALOS_RT_OK)
@@ -1577,7 +1576,7 @@ extern "C" talos_rt_status talos_rt_v1_file_seek(talos_rt_context *context,
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
     FileEntry *entry;
-    std::unique_lock<std::recursive_mutex> lock;
+    std::unique_lock<TalosContextMutex> lock;
     talos_rt_status status =
         checkFileArguments(context, descriptor, entry, lock);
     if (status != TALOS_RT_OK)
@@ -1599,7 +1598,7 @@ extern "C" talos_rt_status talos_rt_v1_file_tell(talos_rt_context *context,
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
     FileEntry *entry;
-    std::unique_lock<std::recursive_mutex> lock;
+    std::unique_lock<TalosContextMutex> lock;
     talos_rt_status status =
         checkFileArguments(context, descriptor, entry, lock);
     if (status != TALOS_RT_OK)

@@ -404,7 +404,7 @@ extern "C" talos_rt_status talos_rt_v1_plusarg_test(talos_rt_context *context,
   if (status != TALOS_RT_OK)
     return status;
   return guarded(context, [&] {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     const std::string *match = nullptr;
     talos_rt_status findStatus =
         findPlusarg(context, std::string_view(bytes, size), match);
@@ -430,7 +430,7 @@ talos_rt_v1_plusarg_value(talos_rt_context *context, talos_rt_gc_lane_v1 *lane,
     return status;
   std::string tail;
   status = guarded(context, [&] {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     const std::string *match = nullptr;
     talos_rt_status findStatus =
         findPlusarg(context, std::string_view(bytes, size), match);
@@ -469,7 +469,7 @@ talos_rt_v1_plusarg_scan(talos_rt_context *context, talos_rt_gc_lane_v1 *lane,
 
   std::string tail;
   status = guarded(context, [&] {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     const std::string *match = nullptr;
     talos_rt_status findStatus = findPlusarg(context, prefix, match);
     if (findStatus != TALOS_RT_OK)

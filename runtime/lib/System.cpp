@@ -253,7 +253,7 @@ talos_rt_status runControl(talos_rt_context *context, std::string_view control,
     return index < parts.size() ? parts[index] : std::string_view{};
   };
   result = 0;
-  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
   if (task == "log")
     return controlLog(context, argument(1));
   if (task == "nolog") {

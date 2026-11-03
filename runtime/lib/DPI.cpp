@@ -217,7 +217,7 @@ importCallImpl(talos_rt_context *context, const talos_rt_import_site_v1 *site,
   DpiScopeHandle *scope = nullptr;
   ImportBinding binding;
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     if (exposeContext && site->scope_id != UINT64_MAX) {
       scope = talos_rt_find_dpi_scope(context, site->scope_id);
       if (!scope)
@@ -605,7 +605,7 @@ extern "C" int svPutUserData(const svScope scope, void *userKey,
   DpiScopeHandle *handle = scopeFromOpaque(activeDpiCall, scope);
   if (!handle || !userKey || !userData)
     return -1;
-  std::lock_guard<std::recursive_mutex> lock(handle->context->mutex);
+  std::lock_guard<TalosContextMutex> lock(handle->context->mutex);
   handle->userData[userKey] = userData;
   return 0;
 }
@@ -614,7 +614,7 @@ extern "C" void *svGetUserData(const svScope scope, void *userKey) {
   DpiScopeHandle *handle = scopeFromOpaque(activeDpiCall, scope);
   if (!handle || !userKey)
     return nullptr;
-  std::lock_guard<std::recursive_mutex> lock(handle->context->mutex);
+  std::lock_guard<TalosContextMutex> lock(handle->context->mutex);
   auto found = handle->userData.find(userKey);
   return found == handle->userData.end() ? nullptr : found->second;
 }

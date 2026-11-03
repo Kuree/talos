@@ -552,7 +552,7 @@ std::string scalarPattern(const talos_rt_arg_v1 &argument) {
 
 TimeOverride snapshotTimeFormat(talos_rt_context *context) {
   TimeOverride result;
-  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
   if (!context->timeFormat.active)
     return result;
   result.active = true;
@@ -1209,7 +1209,7 @@ void reportFormatWarnings(talos_rt_context *context,
                           const std::vector<std::string> &warnings) {
   if (warnings.empty())
     return;
-  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
   for (const std::string &warning : warnings)
     std::fprintf(stderr, "warning: %s\n", warning.c_str());
 }
@@ -1257,7 +1257,7 @@ talos_rt_v1_time_format(talos_rt_context *context, int32_t units,
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
     std::string text(suffix ? suffix : "", static_cast<size_t>(suffixSize));
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     context->timeFormat.active = true;
     context->timeFormat.units = units;
     context->timeFormat.fractionDigits = fractionDigits;
@@ -1277,7 +1277,7 @@ extern "C" double talos_rt_v1_time_scan_scale(talos_rt_context *context,
   int32_t units = timePrecision;
   uint32_t fractionDigits = 0;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     if (context->timeFormat.active) {
       units = context->timeFormat.units;
       fractionDigits = context->timeFormat.fractionDigits;
@@ -1355,7 +1355,7 @@ talos_rt_v1_eval_display(talos_rt_context *context, uint32_t descriptor,
     reportFormatWarnings(context, warnings);
     if (appendNewline)
       output.push_back('\n');
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     return writeUnlocked(context, descriptor, output.data(), output.size(),
                          nullptr);
   });
@@ -1370,7 +1370,7 @@ talos_rt_v1_display(talos_rt_context *context, uint32_t descriptor,
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
     {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       // A monitor callback is the only display executed by the registered
       // monitor process. Suppress it while monitoring is disabled without
       // stealing a bit from the descriptor: all 30 MCD bits are public ABI.
@@ -1397,7 +1397,7 @@ talos_rt_v1_display(talos_rt_context *context, uint32_t descriptor,
     // evaluation still occur, but the void display task succeeds.
     if (descriptor == 0)
       return TALOS_RT_OK;
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     bool monitorReport = context->activeLogicalProcessToken != 0 &&
                          context->activeLogicalProcessToken ==
                              context->monitorLogicalProcessToken;

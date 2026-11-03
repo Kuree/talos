@@ -47,7 +47,7 @@ public:
 
 private:
   talos_rt_context *previous;
-  std::unique_lock<std::recursive_mutex> lock;
+  std::unique_lock<TalosContextMutex> lock;
 };
 
 class NativeAOTContextScope {

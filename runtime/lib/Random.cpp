@@ -178,7 +178,7 @@ extern "C" talos_rt_status talos_rt_v1_random_initialization_enter(
   if (!context || scope == 0 || !outActivation)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     if (!context->initializationRandomScopes)
       context->initializationRandomScopes =
           std::make_unique<InitializationRandomScopes>();
@@ -211,7 +211,7 @@ talos_rt_v1_random_initialization_leave(talos_rt_context *context,
   if (!context || activation == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     if (!context->initializationRandomScopes)
       return TALOS_RT_INVALID_LIFECYCLE;
     auto &scopes = *context->initializationRandomScopes;
@@ -240,7 +240,7 @@ extern "C" talos_rt_status talos_rt_v1_random_next(talos_rt_context *context,
   if (!context || !outValue)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     *outValue = next64(*talos_rt_random_active_state_unlocked(context));
     return TALOS_RT_OK;
   }
@@ -252,7 +252,7 @@ extern "C" talos_rt_status talos_rt_v1_random_seed(talos_rt_context *context,
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     talos_rt_random_state_v1 *state =
         talos_rt_random_active_state_unlocked(context);
     // IEEE 1800-2023 18.13.1 makes an explicit seed determine the complete
@@ -270,7 +270,7 @@ extern "C" talos_rt_status talos_rt_v1_random_bounded(talos_rt_context *context,
   if (!context || !outValue || bound == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     return talos_rt_v1_random_state_bounded(
         talos_rt_random_active_state_unlocked(context), bound, outValue);
   }
@@ -399,7 +399,7 @@ extern "C" talos_rt_status talos_rt_v1_random_distribution(
   if (!context || !outValue || !outNextSeed)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     double value = 0.0;
     switch (distribution) {
     case TALOS_RT_DISTRIBUTION_UNIFORM:
@@ -440,7 +440,7 @@ extern "C" talos_rt_status talos_rt_v1_random_legacy(talos_rt_context *context,
   if (!context || !outValue)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     *outValue = annexDistUniform(context->legacyRandomSeed,
                                  std::numeric_limits<int32_t>::min(),
                                  std::numeric_limits<int32_t>::max());
@@ -455,7 +455,7 @@ talos_rt_v1_random_get_state(talos_rt_context *context,
   if (!context || !outState)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     *outState = *talos_rt_random_active_state_unlocked(context);
     return TALOS_RT_OK;
   }
@@ -468,7 +468,7 @@ talos_rt_v1_random_set_state(talos_rt_context *context,
   if (!context || !state || (state->increment & 1) == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     *talos_rt_random_active_state_unlocked(context) = *state;
     return TALOS_RT_OK;
   }
@@ -482,7 +482,7 @@ talos_rt_v1_process_random_get(talos_rt_context *context,
   if (!context || logicalProcess == 0 || !outState)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     talos_rt_random_state_v1 *state =
         processRandomStateUnlocked(context, logicalProcess);
     if (!state)
@@ -500,7 +500,7 @@ talos_rt_v1_process_random_set(talos_rt_context *context,
   if (!context || logicalProcess == 0 || !state || (state->increment & 1) == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     talos_rt_random_state_v1 *target =
         processRandomStateUnlocked(context, logicalProcess);
     if (!target)

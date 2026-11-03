@@ -13852,7 +13852,7 @@ static talos_rt_status accessState(talos_rt_context *context,
   bool stateChanged = false;
   bool runClockCoordinator = false;
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     uint64_t signalBase = UINT64_MAX;
     if (write) {
       signalBase =
@@ -14116,7 +14116,7 @@ talos_rt_status talos_rt_read_design_slice(talos_rt_context *context,
       ((read32(typeRecord + 4) >> 8) & TALOS_RT_DESIGN_TYPE_FOUR_STATE) != 0;
   uint64_t selectedOffset = stateOffset + bitOffset;
 
-  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
   const uint8_t *canonicalValuePlane = nullptr;
   const uint8_t *canonicalUnknownPlane = nullptr;
   const talos_rt_native_schedule_plan *plan = context->nativeSchedulePlan;
@@ -14204,7 +14204,7 @@ extern "C" talos_rt_status talos_rt_v1_design_force(
         reinterpret_cast<const uint8_t *>(unknown));
   TALOS_RT_TRY {
     {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       if (context->forceMask.empty())
         context->forceMask.assign(context->stateValue.size(), 0);
       for (uint64_t bit = 0; bit != bitWidth; ++bit) {
@@ -14216,7 +14216,7 @@ extern "C" talos_rt_status talos_rt_v1_design_force(
         accessState(context, cursor, const_cast<uint64_t *>(value),
                     const_cast<uint64_t *>(unknown), bitWidth, true, true);
     if (status == TALOS_RT_OK) {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       talos_rt_aot_external_write_range_unlocked(context, stateOffset, bitWidth,
                                                  true);
     }
@@ -14262,7 +14262,7 @@ talos_rt_v1_design_release(talos_rt_context *context,
   uint64_t signalBase = UINT64_MAX;
   bool stateChanged = false;
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     signalBase = talos_rt_canonical_state_handle_unlocked(context, stateOffset,
                                                           bitWidth);
     if (signalBase == UINT64_MAX)
@@ -14316,7 +14316,7 @@ talos_rt_v1_design_release(talos_rt_context *context,
     publishOverrideTransition(context, signalBase, bitWidth, oldValue.data(),
                               oldUnknown.data(), newValue.data(),
                               newUnknown.data());
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     if (context->schedulerStatus != TALOS_RT_OK)
       return context->schedulerStatus;
   }

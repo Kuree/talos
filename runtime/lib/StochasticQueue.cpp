@@ -54,7 +54,7 @@ extern "C" talos_rt_status talos_rt_v1_stochastic_queue(
   *outQueueStatus = TALOS_RT_STOCHASTIC_QUEUE_OK;
 
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     if (idUnknown) {
       *outQueueStatus = TALOS_RT_STOCHASTIC_QUEUE_UNDEFINED_ID;
       return TALOS_RT_OK;

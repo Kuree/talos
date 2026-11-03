@@ -7352,3 +7352,30 @@ TEST_F(ManagedHeapTest, RegistersGrowingInterfaceParentsAndRepairsFailedMerge) {
 }
 
 } // namespace
+
+// Two-tier B2 Q1: the context lock re-enters inline on its owning thread and
+// still excludes every other thread until the outermost unlock.
+TEST(ContextMutex, ReentersOnOwnerAndExcludesOtherThreads) {
+  TalosContextMutex mutex;
+  mutex.lock();
+  mutex.lock();
+  EXPECT_TRUE(mutex.try_lock());
+  std::atomic<bool> acquired{false};
+  std::thread other([&] {
+    EXPECT_FALSE(mutex.try_lock());
+    mutex.lock();
+    acquired = true;
+    mutex.unlock();
+  });
+  // Two of three levels released: still held.
+  mutex.unlock();
+  mutex.unlock();
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  EXPECT_FALSE(acquired.load());
+  mutex.unlock();
+  other.join();
+  EXPECT_TRUE(acquired.load());
+  // Free again: this thread re-acquires through try_lock.
+  EXPECT_TRUE(mutex.try_lock());
+  mutex.unlock();
+}

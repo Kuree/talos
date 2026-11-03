@@ -13086,7 +13086,7 @@ talos_rt_status talos_rt_coverage_prepare_construction(
   if (!context || !typeID || !outToken || (expressionCount && !expressions))
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, true);
     if (!coverage->schema)
       return TALOS_RT_INVALID_DESIGN;
@@ -13169,7 +13169,7 @@ talos_rt_status talos_rt_coverage_prepared_candidates(
       maximumCandidates > talos::coverage::MaxFunctionalCrossWithCandidates)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, false);
     uint32_t slot = static_cast<uint32_t>(token) - 1;
     if (!coverage || slot >= coverage->preparations.size() ||
@@ -13216,7 +13216,7 @@ talos_rt_status talos_rt_coverage_release_preparation(talos_rt_context *context,
   if (!context || !token || !static_cast<uint32_t>(token))
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, false);
     uint32_t slot = static_cast<uint32_t>(token) - 1;
     if (!coverage || slot >= coverage->preparations.size() ||
@@ -13249,7 +13249,7 @@ talos_rt_v1_covergroup_bind_with(talos_rt_context *context, uint64_t token,
       !queue)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, false);
     uint32_t slot = static_cast<uint32_t>(token) - 1;
     if (!coverage || slot >= coverage->preparations.size() ||
@@ -13312,7 +13312,7 @@ talos_rt_v1_covergroup_candidates(talos_rt_context *context, uint64_t token,
       maximumCandidates > talos::coverage::MaxFunctionalCrossWithCandidates)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, false);
     uint32_t slot = static_cast<uint32_t>(token) - 1;
     if (!coverage || slot >= coverage->preparations.size() ||
@@ -13462,7 +13462,7 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_create(
       (expressionCount && !expressions))
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, true);
     if (!coverage->schema)
       return TALOS_RT_INVALID_DESIGN;
@@ -13668,7 +13668,7 @@ talos_rt_v1_covergroup_set_enabled(talos_rt_context *context,
   if (!context || enabled > 1)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, false);
     if (!coverage)
       return TALOS_RT_INVALID_HANDLE;
@@ -13718,7 +13718,7 @@ talos_rt_v1_covergroup_set_name(talos_rt_context *context,
       return status;
     if (!talos::coverage::isValidUtf8(copied))
       return TALOS_RT_INVALID_ARGUMENT;
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, false);
     if (!coverage)
       return TALOS_RT_INVALID_HANDLE;
@@ -13741,7 +13741,7 @@ talos_rt_status talos_rt_covergroup_validate_option_reference(
   if (!context || ((handle == 0) == (typeID == 0)))
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, false);
     if (!coverage || !coverage->schema)
       return TALOS_RT_INVALID_HANDLE;
@@ -13796,7 +13796,7 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_set_integer_option(
        value > INT32_MAX))
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, false);
     if (!coverage || !coverage->schema)
       return TALOS_RT_INVALID_HANDLE;
@@ -13902,7 +13902,7 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_get_integer_option(
        !(option >= TALOS_RT_COVERGROUP_OPTION_AUTO_BIN_MAX &&
          option <= TALOS_RT_COVERGROUP_OPTION_CROSS_RETAIN_AUTO_BINS)))
     return TALOS_RT_INVALID_ARGUMENT;
-  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
   CoverageState *coverage = coverageState(context, false);
   if (!coverage || !coverage->schema)
     return TALOS_RT_INVALID_HANDLE;
@@ -14014,7 +14014,7 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_set_string_option(
       return status;
     if (!talos::coverage::isValidUtf8(copied))
       return TALOS_RT_INVALID_ARGUMENT;
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, false);
     if (!coverage || !coverage->schema)
       return TALOS_RT_INVALID_HANDLE;
@@ -14048,7 +14048,7 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_get_string_option(
        (option != TALOS_RT_COVERGROUP_OPTION_NAME || itemID)))
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, false);
     if (!coverage || !coverage->schema)
       return TALOS_RT_INVALID_HANDLE;
@@ -14095,7 +14095,7 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_set_type_integer_option(
        (itemID || value > 1)))
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, false);
     if (!coverage || !coverage->schema)
       return TALOS_RT_INVALID_HANDLE;
@@ -14179,7 +14179,7 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_set_type_string_option(
       return status;
     if (!talos::coverage::isValidUtf8(copied))
       return TALOS_RT_INVALID_ARGUMENT;
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, false);
     if (!coverage || !coverage->schema)
       return TALOS_RT_INVALID_HANDLE;
@@ -14201,7 +14201,7 @@ talos_rt_v1_covergroup_sample_enabled(talos_rt_context *context,
                                       uint32_t *outEnabled) {
   if (!context || !outEnabled)
     return TALOS_RT_INVALID_ARGUMENT;
-  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
   CoverageState *coverage = coverageState(context, false);
   if (!coverage)
     return TALOS_RT_INVALID_HANDLE;
@@ -14233,7 +14233,7 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_sample(
   if (!context || (expressionCount && !expressions))
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, false);
     if (!coverage || !coverage->schema)
       return TALOS_RT_INVALID_HANDLE;
@@ -14870,7 +14870,7 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_formal_read(
   if (!context || !formalID || !outValue)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, false);
     if (!coverage || !coverage->schema)
       return TALOS_RT_INVALID_HANDLE;
@@ -15079,7 +15079,7 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_instance_query(
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, false);
     if (!coverage)
       return TALOS_RT_INVALID_HANDLE;
@@ -15135,7 +15135,7 @@ talos_rt_v1_covergroup_type_query(talos_rt_context *context, uint64_t typeID,
   if (!context || !typeID || !outPercentage || !outCovered || !outTotal)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, true);
     CoverageResult result;
     if (itemID) {
@@ -15164,7 +15164,7 @@ talos_rt_v1_functional_coverage_get(talos_rt_context *context,
   if (!context || !outPercentage)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, true);
     std::set<uint64_t> typeIDs;
     for (const auto &[key, type] : coverage->types) {
@@ -15221,7 +15221,7 @@ talos_rt_v1_functional_coverage_set_db_name(talos_rt_context *context,
     std::string path(bytes, static_cast<size_t>(size));
     if (path.empty())
       return TALOS_RT_INVALID_ARGUMENT;
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, true);
     coverage->outputPath = std::move(path);
     coverage->outputExplicit = true;
@@ -15263,7 +15263,7 @@ extern "C" talos_rt_status talos_rt_v1_coverage_finalize(
       toggleBitCount > (UINT64_MAX - 7) / 8 || toggleBitCount > maxToggleBits)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, true);
     if (coverage->finalized)
       return TALOS_RT_INVALID_LIFECYCLE;
@@ -15447,7 +15447,7 @@ extern "C" talos_rt_status talos_rt_v1_coverage_toggle_transition(
     const uint8_t *value, const uint8_t *unknown) {
   if (!context || (bitCount && (!value || !unknown)))
     return TALOS_RT_INVALID_ARGUMENT;
-  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
   CoverageState *coverage = coverageState(context, false);
   if (!coverage || !coverage->finalized)
     return TALOS_RT_INVALID_LIFECYCLE;
@@ -15467,7 +15467,7 @@ extern "C" talos_rt_status
 talos_rt_v1_coverage_toggle_seal(talos_rt_context *context) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
-  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
   CoverageState *coverage = coverageState(context, false);
   if (!coverage || !coverage->finalized || coverage->toggleBindingsSealed)
     return TALOS_RT_INVALID_LIFECYCLE;
@@ -15490,7 +15490,7 @@ talos_rt_v1_coverage_fsm_bind(talos_rt_context *context, uint64_t machineKey,
   if (!context || bitCount == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, false);
     if (!coverage || !coverage->finalized || coverage->toggleBindingsSealed)
       return TALOS_RT_INVALID_LIFECYCLE;
@@ -15523,7 +15523,7 @@ talos_rt_v1_coverage_toggle_bind(talos_rt_context *context, uint64_t firstBit,
                                  uint64_t bitCount, uint64_t stateHandle) {
   if (!context || bitCount == 0)
     return TALOS_RT_INVALID_ARGUMENT;
-  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
   CoverageState *coverage = coverageState(context, false);
   if (!coverage || !coverage->finalized)
     return TALOS_RT_INVALID_LIFECYCLE;
@@ -15559,7 +15559,7 @@ talos_rt_v1_coverage_reset(talos_rt_context *context, uint32_t metric,
                    metric != TALOS_RT_COVERAGE_ASSERTION &&
                    metric != TALOS_RT_COVERAGE_FSM))
     return TALOS_RT_INVALID_ARGUMENT;
-  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
   CoverageState *coverage = coverageState(context, false);
   if (!coverage || !coverage->finalized)
     return TALOS_RT_INVALID_LIFECYCLE;
@@ -15613,7 +15613,7 @@ extern "C" talos_rt_status talos_rt_v1_coverage_query(talos_rt_context *context,
        metric != TALOS_RT_COVERAGE_ASSERTION &&
        metric != TALOS_RT_COVERAGE_FSM))
     return TALOS_RT_INVALID_ARGUMENT;
-  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
   CoverageState *coverage = coverageState(context, false);
   if (!coverage || !coverage->finalized)
     return TALOS_RT_INVALID_LIFECYCLE;
@@ -15716,7 +15716,7 @@ extern "C" talos_rt_status talos_rt_v1_coverage_control_definition(
   TALOS_RT_TRY {
     std::string name =
         size ? std::string(bytes, static_cast<size_t>(size)) : std::string();
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, false);
     if (!coverage || !coverage->finalized)
       return TALOS_RT_INVALID_LIFECYCLE;
@@ -15740,7 +15740,7 @@ talos_rt_status talos_rt_coverage_scope_for_path(talos_rt_context *context,
                                                  uint64_t &scopeID) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
-  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
   CoverageState *coverage = coverageState(context, false);
   if (!coverage || !coverage->finalized || !coverage->schema)
     return TALOS_RT_INVALID_LIFECYCLE;
@@ -15758,7 +15758,7 @@ extern "C" talos_rt_status talos_rt_v1_coverage_control_instance(
   if (!context || !outStatus || !coverageScopeID)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, false);
     if (!coverage || !coverage->finalized)
       return TALOS_RT_INVALID_LIFECYCLE;
@@ -15794,7 +15794,7 @@ extern "C" talos_rt_status talos_rt_v1_coverage_query_definition(
   TALOS_RT_TRY {
     std::string name =
         size ? std::string(bytes, static_cast<size_t>(size)) : std::string();
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, false);
     if (!coverage || !coverage->finalized)
       return TALOS_RT_INVALID_LIFECYCLE;
@@ -15819,7 +15819,7 @@ extern "C" talos_rt_status talos_rt_v1_coverage_query_instance(
   if (!context || !outValue || !coverageScopeID || maximum > 1)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, false);
     if (!coverage || !coverage->finalized)
       return TALOS_RT_INVALID_LIFECYCLE;
@@ -15866,7 +15866,7 @@ extern "C" talos_rt_status talos_rt_v1_coverage_database_save(
 
     talos::coverage::Database snapshot;
     {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       CoverageState *coverage = coverageState(context, false);
       if (!coverage || !coverage->finalized)
         return TALOS_RT_INVALID_LIFECYCLE;
@@ -15922,7 +15922,7 @@ extern "C" talos_rt_status talos_rt_v1_coverage_database_merge(
     if (readStatus != talos::coverage::Status::Ok)
       return TALOS_RT_OK;
 
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, false);
     if (!coverage || !coverage->schema || !coverage->finalized)
       return TALOS_RT_INVALID_LIFECYCLE;
@@ -16001,7 +16001,7 @@ extern "C" talos_rt_status talos_rt_v1_coverage_load(talos_rt_context *context,
         talos::coverage::readFile(pathText, incoming, {}, &diagnostic);
     if (status != talos::coverage::Status::Ok)
       return mapCoverageStatus(status);
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *coverage = coverageState(context, true);
     if (coverage->finalized) {
       uint64_t incomingLines = 0, incomingToggleBits = 0;
@@ -16065,7 +16065,7 @@ extern "C" talos_rt_status talos_rt_v1_coverage_save(talos_rt_context *context,
     std::string pathText(path, static_cast<size_t>(pathSize));
     talos::coverage::Database snapshot;
     {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       CoverageState *coverage = coverageState(context, false);
       if (!coverage) {
         setLastErrorUnlocked(
@@ -16130,7 +16130,7 @@ talos_rt_v1_coverage_snapshot(talos_rt_context *context, uint32_t runStatus,
   TALOS_RT_TRY {
     std::string output;
     {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       CoverageState *coverage = coverageState(context, false);
       if (!coverage || coverage->dumpSuppressed)
         return TALOS_RT_OK;

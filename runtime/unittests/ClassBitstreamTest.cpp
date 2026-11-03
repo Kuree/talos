@@ -385,7 +385,7 @@ TEST(ClassBitstreamTest, ExportsFourStateFieldAndRejectsStaticCycles) {
   std::vector<std::unique_ptr<SignalSubscription>> subscriptions;
   std::unique_ptr<SignalWaitLatch> latch;
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     ASSERT_TRUE(talos_rt_register_signal_wait_unlocked(context, &record.wait,
                                                        subscriptions, latch));
   }
@@ -394,7 +394,7 @@ TEST(ClassBitstreamTest, ExportsFourStateFieldAndRejectsStaticCycles) {
             TALOS_RT_OK);
   EXPECT_TRUE(latch->triggered);
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     talos_rt_unregister_signal_wait_unlocked(context, subscriptions);
   }
   EXPECT_EQ(talos_rt_v1_gc_lane_leave(lane), TALOS_RT_OK);

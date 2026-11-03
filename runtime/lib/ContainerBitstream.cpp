@@ -1029,7 +1029,7 @@ TALOS_RT_RECURSIVE_BITSTREAM_HELPER talos_rt_status createRecursiveWatchGroup(
         });
     if (status != TALOS_RT_OK)
       return status;
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     auto *state = static_cast<RecursiveWatchGroupStateImpl *>(
         context->recursiveWatchGroups);
     if (!state) {
@@ -1052,7 +1052,7 @@ TALOS_RT_RECURSIVE_BITSTREAM_HELPER void
 discardRecursiveWatchGroup(talos_rt_context *context, uint64_t token) {
   if (!context || token == 0)
     return;
-  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
   auto *state = static_cast<RecursiveWatchGroupStateImpl *>(
       context->recursiveWatchGroups);
   if (state)
@@ -1067,7 +1067,7 @@ talos_rt_expand_recursive_watch_group(talos_rt_context *context, uint64_t token,
                                       void *environment) {
   if (!context || (token & kRecursiveWatchGroupBit) == 0 || !visit)
     return false;
-  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
   auto *state = static_cast<RecursiveWatchGroupStateImpl *>(
       context->recursiveWatchGroups);
   if (!state)

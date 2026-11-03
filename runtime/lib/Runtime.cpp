@@ -36,7 +36,7 @@ namespace {
 thread_local talos_rt_context *threadTransactionContext = nullptr;
 thread_local uint32_t threadTransactionDepth = 0;
 
-std::recursive_mutex hostErrorMutex;
+TalosContextMutex hostErrorMutex;
 
 struct ThreadError {
   std::weak_ptr<const uint8_t> contextLifetime;
@@ -448,7 +448,7 @@ void destroyContextNow(talos_rt_context *context) noexcept {
     if (context->vpiState)
       talos_rt_v1_vpi_shutdown(context);
     {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       for (ScheduledProcess &scheduled : context->scheduledProcesses)
         talos_rt_unregister_signal_wait_unlocked(context,
                                                  scheduled.signalSubscriptions);
@@ -464,7 +464,7 @@ void destroyContextNow(talos_rt_context *context) noexcept {
       for (talos_rt_process_instance_v1 *caller : scheduled.callers)
         (void)talos_rt_v1_process_instance_destroy(caller);
     }
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     for (uint32_t bit = 1; bit < context->mcd.size(); ++bit) {
       if (context->mcd[bit].stream)
         std::fclose(context->mcd[bit].stream);
@@ -497,8 +497,8 @@ ContextTransaction::ContextTransaction(talos_rt_context *context)
   previousThreadContext = threadTransactionContext;
   previousThreadDepth = threadTransactionDepth;
   transactionLock =
-      std::unique_lock<std::recursive_mutex>(context->transactionMutex);
-  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::unique_lock<TalosContextMutex>(context->transactionMutex);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
   if (context->transactionDepth++ == 0)
     context->transactionOwner = std::this_thread::get_id();
   threadTransactionContext = context;
@@ -518,7 +518,7 @@ ContextTransaction::~ContextTransaction() noexcept {
   bool destroy = false;
   TALOS_RT_TRY {
     {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       if (context->transactionDepth != 0 && --context->transactionDepth == 0) {
         context->transactionOwner = {};
         destroy = context->destroyPending;
@@ -547,7 +547,7 @@ void setLastError(talos_rt_context *context, std::string message) {
   if (!context)
     return;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     setLastErrorUnlocked(context, std::move(message));
   }
   TALOS_RT_CATCH_ALL {}
@@ -585,7 +585,7 @@ extern "C" talos_rt_status talos_rt_v1_control_enter(talos_rt_context *context,
     return TALOS_RT_INVALID_ARGUMENT;
   *outActivation = 0;
   return guarded(context, [&] {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     if (context->activeLogicalProcessToken == 0 ||
         context->nextControlActivation == 0)
       return TALOS_RT_INVALID_LIFECYCLE;
@@ -617,7 +617,7 @@ talos_rt_v1_control_boundary(talos_rt_context *context, uint64_t activation,
   if (!context || activation == 0 || continuation == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     if (context->activeLogicalProcessToken == 0)
       return TALOS_RT_INVALID_LIFECYCLE;
     auto found = context->controlActivations.find(activation);
@@ -636,7 +636,7 @@ extern "C" talos_rt_status talos_rt_v1_control_leave(talos_rt_context *context,
   if (!context || activation == 0)
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     if (context->activeLogicalProcessToken == 0 ||
         context->activeControls.empty() ||
         context->activeControls.back() != activation)
@@ -652,7 +652,7 @@ talos_rt_v1_control_escape_pending(talos_rt_context *context) {
   if (!context)
     return 0;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     if (context->activeLogicalProcessToken == 0)
       return 0;
     bool pending = context->controlEscapePending;
@@ -667,7 +667,7 @@ extern "C" uint32_t talos_rt_v1_static_once(talos_rt_context *context,
   if (!context || siteID == 0)
     return 0;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     return context->initializedStaticSites.insert(siteID).second ? 1u : 0u;
   }
   TALOS_RT_CATCH_ALL {
@@ -682,7 +682,7 @@ extern "C" uint32_t talos_rt_v1_deferred_once(talos_rt_context *context,
   if (!context || siteID == 0)
     return 0;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     if (context->activeLogicalProcessToken == 0)
       return 0;
     if (context->deferredImmediateTime != context->schedulerTime) {
@@ -798,7 +798,7 @@ talos_rt_v1_assertion_control(talos_rt_context *context, uint32_t action,
   if (!context || assertionID == 0 || action < 1 || action > 11)
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     auto found = context->assertionControlStates.find(assertionID);
     uint8_t state =
         found == context->assertionControlStates.end() ? 0 : found->second;
@@ -868,7 +868,7 @@ extern "C" uint32_t talos_rt_v1_assertion_enabled(talos_rt_context *context,
   if (!context || assertionID == 0)
     return 0;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     auto found = context->assertionControlStates.find(assertionID);
     return found == context->assertionControlStates.end() ||
                    (found->second & kAssertionDisabled) == 0
@@ -887,7 +887,7 @@ talos_rt_v1_assertion_action_state(talos_rt_context *context,
   if (!context || assertionID == 0)
     return 0;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     auto found = context->assertionControlStates.find(assertionID);
     uint8_t state =
         found == context->assertionControlStates.end() ? 0 : found->second;
@@ -911,7 +911,7 @@ extern "C" uint64_t talos_rt_v1_assertion_kill_epoch(talos_rt_context *context,
   if (!context || assertionID == 0)
     return 0;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     auto found = context->assertionKillEpochs.find(assertionID);
     return found == context->assertionKillEpochs.end() ? 0 : found->second;
   }
@@ -926,7 +926,7 @@ extern "C" uint64_t talos_rt_v1_deferred_enqueue_for_assertion(
   if (!context || siteID == 0)
     return 0;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     // IEEE 1800-2023 16.4.1: the report belongs to the executing process. A
     // generated activation runs outside any runtime process; its report
     // carries a compiler-maintained flush epoch instead (16.4.2), so it is
@@ -963,7 +963,7 @@ extern "C" uint32_t talos_rt_v1_deferred_mature(talos_rt_context *context,
   if (!context || ticket == 0)
     return 0;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     resetDeferredImmediateReportsForTime(context);
     auto report = context->deferredImmediateReports.find(ticket);
     if (report == context->deferredImmediateReports.end())
@@ -1008,7 +1008,7 @@ bool validBytes(const void *data, uint64_t size) {
 }
 
 std::string hostErrorMessage(int error) {
-  std::lock_guard<std::recursive_mutex> lock(hostErrorMutex);
+  std::lock_guard<TalosContextMutex> lock(hostErrorMutex);
   const char *message = std::strerror(error);
   return message ? message : "unknown host error";
 }
@@ -1023,7 +1023,7 @@ extern "C" talos_rt_status talos_rt_v1_context_seed(talos_rt_context *context,
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     // Generated executables configure argv after elaboration has registered
     // root processes. Re-split those dormant roots in their common lexical
     // insertion order so --seed governs their streams and native/bytecode
@@ -1152,7 +1152,7 @@ talos_rt_v1_context_configure_argv(talos_rt_context *context, int argc,
       loadedDatabases.push_back(std::move(incoming));
     }
 
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     CoverageState *liveCoverage = context->coverage.get();
     std::unique_ptr<talos::coverage::Database> stagedSchema;
     if (!loadedDatabases.empty()) {
@@ -1240,7 +1240,7 @@ extern "C" talos_rt_status talos_rt_v1_context_register_import_signature(
   if (!context || importID == 0 || !callback)
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     context->imports[importID] = {callback, userData, abiSignature};
     return TALOS_RT_OK;
   });
@@ -1378,9 +1378,9 @@ extern "C" talos_rt_status talos_rt_v1_context_create_for_design(
 extern "C" void talos_rt_v1_context_destroy(talos_rt_context *context) {
   if (!context)
     return;
-  std::unique_lock<std::recursive_mutex> transaction(context->transactionMutex);
+  std::unique_lock<TalosContextMutex> transaction(context->transactionMutex);
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     if (context->transactionDepth != 0 &&
         context->transactionOwner == std::this_thread::get_id()) {
       context->destroyPending = true;
@@ -1458,7 +1458,7 @@ talos_rt_v1_last_error(talos_rt_context *context,
   if (!context || !outMessage)
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     auto error = threadErrors.find(context);
     if (error == threadErrors.end() ||
         error->second.contextLifetime.lock() != context->errorLifetime)
@@ -1475,7 +1475,7 @@ extern "C" void talos_rt_v1_scheduler_report_status(talos_rt_context *context,
   if (!context || status == TALOS_RT_OK || status == TALOS_RT_FATAL)
     return;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     auto error = threadErrors.find(context);
     bool described =
         error != threadErrors.end() &&

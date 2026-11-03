@@ -4259,7 +4259,7 @@ talos_rt_status talos_rt_container_pattern(talos_rt_object_v1 *container,
     talos_rt_context *context = talos_rt_managed_object_context(container);
     if (!context)
       return TALOS_RT_INVALID_HANDLE;
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     auto found =
         context->managedOwnedElementTypes.find(snapshot.element->type_id);
     if (found != context->managedOwnedElementTypes.end())
@@ -4857,7 +4857,7 @@ static talos_rt_status internElementType(
   talos_rt_context *context = talos_rt_managed_lane_context(lane);
   const talos_rt_element_type_v1 *element = nullptr;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     if (auto image = context->elementDefaultImages.find(typeID);
         image != context->elementDefaultImages.end()) {
       if (image->second->size() !=
@@ -4919,7 +4919,7 @@ talos_rt_v1_element_type_define_default(talos_rt_context *context,
   TALOS_RT_TRY {
     auto bytes =
         std::make_shared<const std::vector<uint8_t>>(image, image + imageSize);
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     // A container interned before its default was declared would already
     // have created elements without it.
     if (context->managedElementTypes.count(typeID))
@@ -5486,7 +5486,7 @@ static talos_rt_status internAssocKeyPlan(
                             false, 0))
     return TALOS_RT_INVALID_ARGUMENT;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     auto [found, inserted] =
         context->assocKeyPlans.try_emplace(element->type_id, nullptr);
     if (inserted)

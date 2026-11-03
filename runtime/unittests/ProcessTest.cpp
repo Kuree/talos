@@ -5634,7 +5634,7 @@ TEST(Scheduler, StaticSpecializationGuardsIntersectOnlyDirtyRoots) {
             1u);
   EXPECT_EQ(cleanActor->tier, 0u);
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     talos_rt_aot_external_write_range_unlocked(context, 0, 8, false);
   }
   EXPECT_EQ(talos_rt_v1_static_specialization_guard(context, 0, 1,
@@ -5651,14 +5651,14 @@ TEST(Scheduler, StaticSpecializationGuardsIntersectOnlyDirtyRoots) {
             context->nativeScheduleTransientDirtySummary.end(), uint64_t{0});
   context->nativeScheduleDirtyRootsPresent = false;
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     talos_rt_aot_external_write_range_unlocked(context, 8, 8, true);
   }
   EXPECT_EQ(talos_rt_v1_static_specialization_guard(context, 1, 2,
                                                     TALOS_RT_STATIC_ROOT_WRITE),
             0u);
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     talos_rt_aot_release_range_unlocked(context, 8, 8);
   }
   EXPECT_EQ(talos_rt_v1_static_specialization_guard(context, 1, 2,
@@ -5733,7 +5733,7 @@ TEST(Scheduler, ExternalDirtyRootIndexSummarizesLeafPages) {
   ASSERT_NE(root, UINT64_MAX);
 
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     talos_rt_aot_external_write_handle_unlocked(context, root, 1, 1, true);
   }
   ASSERT_EQ(context->nativeSchedulePersistentDirtyMask.size(), 2u);
@@ -5746,7 +5746,7 @@ TEST(Scheduler, ExternalDirtyRootIndexSummarizesLeafPages) {
             0u);
 
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     talos_rt_aot_release_range_unlocked(context, 1, 1);
   }
   EXPECT_EQ(context->nativeSchedulePersistentDirtyMask[1], 0u);
@@ -6134,7 +6134,7 @@ TEST(Scheduler, AOTSpecializationFastFlagIsScopedAndInvalidated) {
 
   specializationFast = 1;
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     talos_rt_aot_external_write_unlocked(context);
   }
   EXPECT_EQ(specializationFast, 0u);
@@ -6249,7 +6249,7 @@ TEST(Scheduler, VPIObservationDemandIsAColdReversibleAOTHandoff) {
   specializationFast = 1;
 
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     talos_rt_aot_observation_demand_changed_unlocked(context, true);
   }
   EXPECT_TRUE(context->vpiObservationDemand);
@@ -6269,7 +6269,7 @@ TEST(Scheduler, VPIObservationDemandIsAColdReversibleAOTHandoff) {
   // Duplicate notification is idempotent; the VPI registry owns the actual
   // registration count and calls this only for first/last transitions.
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     talos_rt_aot_observation_demand_changed_unlocked(context, true);
     talos_rt_aot_observation_demand_changed_unlocked(context, false);
     refreshNativeStaticSpecializationFastUnlocked(context);
@@ -6298,7 +6298,7 @@ TEST(Scheduler, VPIObservationDemandRoutesAroundTier1UntilReleased) {
   ASSERT_EQ(talos_rt_v1_scheduler_run_aot(context), TALOS_RT_OK);
   EXPECT_EQ(state.runCalls, 1u);
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     talos_rt_aot_observation_demand_changed_unlocked(context, true);
   }
   ASSERT_EQ(talos_rt_v1_scheduler_run_aot(context), TALOS_RT_OK);
@@ -6306,7 +6306,7 @@ TEST(Scheduler, VPIObservationDemandRoutesAroundTier1UntilReleased) {
   EXPECT_FALSE(context->nativeScheduleDeoptimized);
 
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     talos_rt_aot_observation_demand_changed_unlocked(context, false);
   }
   ASSERT_EQ(talos_rt_v1_scheduler_run_aot(context), TALOS_RT_OK);
@@ -7708,7 +7708,7 @@ TEST(Scheduler, AOTExternalWriteUsesNativeFineSchedulerUntilCleanBoundary) {
             TALOS_RT_OK);
   EXPECT_EQ(instance->tier, 0u);
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     talos_rt_aot_external_write_unlocked(context);
   }
   EXPECT_TRUE(context->nativeScheduleExternalWritePending);
@@ -7741,7 +7741,7 @@ TEST(Scheduler, AOTExternalWriteReturnsToFourStateAtCleanBoundary) {
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
   ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     talos_rt_aot_external_write_unlocked(context);
   }
 
@@ -7759,7 +7759,7 @@ TEST(Scheduler, AOTExternalWriteReturnsToFourStateAtCleanBoundary) {
   EXPECT_EQ(schedulerPromotionReadyCount, 1u);
 
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     talos_rt_aot_external_write_unlocked(context);
   }
   ASSERT_EQ(talos_rt_v1_scheduler_run_aot(context), TALOS_RT_OK);
@@ -7818,7 +7818,7 @@ TEST(Scheduler, AOTExternalWriteExecutesNativeActorAtCleanBoundary) {
             TALOS_RT_OK);
 
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     talos_rt_aot_external_write_unlocked(context);
   }
   EXPECT_EQ(instance->tier, TALOS_RT_TIER_NATIVE);
@@ -8375,7 +8375,7 @@ TEST(Scheduler, CompletedProcessStorageStaysCompactAcrossChurn) {
   }
 
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     EXPECT_TRUE(context->scheduledProcesses.empty());
     EXPECT_EQ(context->terminatedNativeProcesses.rangeCount(), 1u);
     EXPECT_EQ(context->terminatedNativeProcesses.count(1), 1u);

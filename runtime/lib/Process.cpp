@@ -364,10 +364,15 @@ void unregisterManagedFrameRoots(talos_rt_process_instance_v1 *instance) {
   metadata->managedRootContext = nullptr;
 }
 
-void initializeProcessContextLock(
-    talos_rt_context *context, std::unique_lock<std::recursive_mutex> &lock) {
+void initializeProcessContextLock(talos_rt_context *context,
+                                  std::unique_lock<TalosContextMutex> &lock) {
   if (lockedNativeAOTContext != context)
-    lock = std::unique_lock<std::recursive_mutex>(context->mutex);
+    lock = std::unique_lock<TalosContextMutex>(context->mutex);
+}
+
+TalosContextMutex *lockProcessContext(talos_rt_context *context) {
+  context->mutex.lock();
+  return &context->mutex;
 }
 
 static bool semaphoreWaitTargets(const talos_rt_wait_record_v1 *wait,
@@ -5296,7 +5301,11 @@ talos_rt_status runScheduler(talos_rt_context *context,
       maximumInsertionSequence = 0;
     }
     talos_rt_status designStatus = TALOS_RT_OK;
-    if (options.completeNBABarrier == UINT32_MAX)
+    // A design task waits or is ready in scheduledDesignTasks whenever it is
+    // not executing, so with none there and no cached ready cohort to retire
+    // the poll cannot make progress (two-tier B2 Q2).
+    if (options.completeNBABarrier == UINT32_MAX &&
+        (!context->scheduledDesignTasks.empty() || context->designReadyCohort))
       designStatus = talos_rt_run_one_design_task(
           context, maximumRegion, maximumRank, maximumInsertionSequence,
           &designProgress,

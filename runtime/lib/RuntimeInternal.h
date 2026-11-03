@@ -6,6 +6,7 @@
 
 #include "../../lib/Coverage/CoverageIndex.h"
 #include "CanonicalPlane.h"
+#include "ContextMutex.h"
 #include "DesignBytecodeImage.h"
 #include "ExceptionSupport.h"
 #include "StrengthFormat.h"
@@ -2479,8 +2480,8 @@ struct talos_rt_context {
   // callbacks release `mutex` while arbitrary user code runs, but retain the
   // recursive transaction lock so another thread cannot interleave a state or
   // scheduler mutation. Nested calls on the evaluator thread re-enter both.
-  std::recursive_mutex mutex;
-  std::recursive_mutex transactionMutex;
+  TalosContextMutex mutex;
+  TalosContextMutex transactionMutex;
   std::thread::id transactionOwner;
   uint32_t transactionDepth = 0;
   bool destroyPending = false;
@@ -3671,7 +3672,7 @@ public:
 
 private:
   talos_rt_context *context = nullptr;
-  std::unique_lock<std::recursive_mutex> transactionLock;
+  std::unique_lock<TalosContextMutex> transactionLock;
   talos_rt_context *previousThreadContext = nullptr;
   uint32_t previousThreadDepth = 0;
   bool nested = false;

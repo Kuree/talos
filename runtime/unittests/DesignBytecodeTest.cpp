@@ -4375,7 +4375,7 @@ TEST(DesignBytecode, BytecodeComputedObserverWakesOnlyForAffectedSignal) {
   context->pendingDesignComputedWaiters.push_back(taskID);
 
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     ASSERT_TRUE(talos_rt_evaluate_design_observers_unlocked(
         context, TALOS_RT_OBSERVER_DEPENDENCY_SIGNAL, 128, 1));
     EXPECT_EQ(context->pendingDesignComputedWaiters,
@@ -6522,7 +6522,7 @@ TEST(VPI, LifecycleCallbacksAreColdAndCanRegisterLaterPhases) {
   EXPECT_FALSE(context->vpiObservationDemand);
   context->nativeScheduleRunning = true;
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     refreshNativeStaticSpecializationFastUnlocked(context);
   }
   EXPECT_EQ(specializationFast, 1u);
@@ -11916,7 +11916,7 @@ TEST(VPI, ForceReleaseContinuouslyDrivenStorageRecordsCoveredPlanes) {
   ASSERT_EQ(talos_rt_v1_coverage_toggle_seal(context), TALOS_RT_OK);
 
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     size_t limbs = context->stateValue.size();
     context->continuousMask.assign(limbs, 0);
     context->continuousValue.assign(limbs, 0);
@@ -11947,7 +11947,7 @@ TEST(VPI, ForceReleaseContinuouslyDrivenStorageRecordsCoveredPlanes) {
   // Z to one. These are diagnostic unknown-domain transitions only.
   EXPECT_EQ(vpi_put_value(object, &value, nullptr, vpiForceFlag), nullptr);
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     context->continuousValue[0] = 1;
     context->continuousUnknown[0] = 0;
   }

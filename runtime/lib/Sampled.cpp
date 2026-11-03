@@ -190,7 +190,7 @@ extern "C" talos_rt_status talos_rt_v1_sampled_read(talos_rt_context *context,
   }
   ContextTransaction transaction(context);
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     uint64_t canonicalStart = 0, snapshotStart = 0;
     if (!resolveCanonicalRange(context, stableID, bitWidth, canonicalStart) ||
         !resolveSnapshotRange(context, canonicalStart, bitWidth,
@@ -226,7 +226,7 @@ extern "C" talos_rt_status talos_rt_v1_sampled_history(
     return TALOS_RT_INVALID_ARGUMENT;
   ContextTransaction transaction(context);
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     if (context->activeLogicalProcessToken == 0)
       return TALOS_RT_INVALID_LIFECYCLE;
     SampledHistoryState &history =
@@ -280,7 +280,7 @@ extern "C" talos_rt_status talos_rt_v1_clocked_sample_update(
     return TALOS_RT_INVALID_ARGUMENT;
   ContextTransaction transaction(context);
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     uint64_t capacity = depth + 1;
     SampledHistoryState &history = context->clockedSampleHistories[siteID];
     if (history.bitWidth == 0) {
@@ -325,7 +325,7 @@ talos_rt_v1_clocked_sample_read(talos_rt_context *context, uint64_t siteID,
     return TALOS_RT_INVALID_ARGUMENT;
   ContextTransaction transaction(context);
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     std::memset(outValue, 0, bytes);
     std::memset(outUnknown, fourState ? UINT8_MAX : 0, bytes);
     if (bitWidth % 8 != 0 && fourState)

@@ -543,7 +543,7 @@ TEST(GeneratedVPITraversal, RefObjectValuesUseActualSemanticKindsAndStorage) {
               TALOS_RT_OK);
     ASSERT_LE(stateOffset + width,
               static_cast<uint64_t>(context->stateValue.size()) * 64);
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     for (uint64_t bit = 0; bit != width; ++bit) {
       const uint64_t absolute = stateOffset + bit;
       const uint64_t mask = uint64_t{1} << (absolute % 64);

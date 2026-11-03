@@ -827,7 +827,7 @@ TALOS_RT_FEATURE_TEXT uint64_t talos_rt_managed_watch_range(
         context ? context->classBitstreamState : nullptr);
     if (!state)
       return 0;
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     uint64_t identity = talos_rt_v1_object_id(object);
     if (identity == 0)
       return 0;
@@ -1379,7 +1379,7 @@ TALOS_RT_FEATURE_HELPER talos_rt_status createWatchGroup(
   TALOS_RT_TRY { members.assign(tokens.begin(), tokens.end()); }
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
   std::sort(members.begin(), members.end());
-  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
   if (state.nextWatchGroup == 0 || state.nextWatchGroup >= kClassWatchGroupBit)
     return TALOS_RT_OUT_OF_RESOURCES;
   uint64_t token = kClassWatchGroupBit | state.nextWatchGroup++;
@@ -1586,7 +1586,7 @@ talos_rt_expand_class_watch_group(talos_rt_context *context, uint64_t token,
       static_cast<ClassBitstreamStateImpl *>(context->classBitstreamState);
   if (!state)
     return false;
-  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
   auto found = state->watchGroups.find(token);
   if (found == state->watchGroups.end())
     return false;

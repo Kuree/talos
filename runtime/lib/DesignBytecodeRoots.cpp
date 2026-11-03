@@ -91,7 +91,7 @@ void talos_rt_enumerate_design_managed_roots(
       hasBytecode =
           loadValidatedImage(entry, context, image, /*inventoryOnly=*/true);
     }
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     for (auto &[id, state] : context->nativeAutomaticStates) {
       (void)id;
       if (state.managedRootRegistered)

@@ -167,7 +167,7 @@ talos_rt_status releaseCapturedAutomaticStates(const Image &image,
 
   // Decrement in place without allocating. If a duplicate capture exceeds
   // the available count, restore all earlier decrements before failing.
-  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
   auto rollback = [&](uint64_t end) {
     for (uint64_t index = 0; index != end; ++index) {
       uint64_t stable = UINT64_MAX;
@@ -216,7 +216,7 @@ PendingDesignActivation::~PendingDesignActivation() noexcept {
     return;
   if (ownsRetainedAutomaticStates) {
     TALOS_RT_TRY {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       for (const auto &[id, count] : retainedAutomaticStates) {
         auto found = context->nativeAutomaticStates.find(id);
         if (found == context->nativeAutomaticStates.end())
@@ -491,7 +491,7 @@ talos_rt_status prepareTaskActivation(
   for (const auto &[automaticID, count] : retainedAutomaticStates)
     pending->retainedAutomaticStates.emplace_back(automaticID, count);
   {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     for (const auto &[automaticID, count] : pending->retainedAutomaticStates) {
       auto found = context->nativeAutomaticStates.find(automaticID);
       if (found == context->nativeAutomaticStates.end())
@@ -1211,7 +1211,7 @@ inline bool executeFastOp(const FastOp &op, uint8_t *data,
         return false;
       {
         // Registration rejects ID zero, so it never names a cached state.
-        std::lock_guard<std::recursive_mutex> lock(context->mutex);
+        std::lock_guard<TalosContextMutex> lock(context->mutex);
         if (op.staticID != id || id == 0) {
           auto found = context->nativeStaticStates.find(id);
           if (found == context->nativeStaticStates.end())
@@ -1313,7 +1313,7 @@ inline bool executeFastOp(const FastOp &op, uint8_t *data,
     if (!context || handle.kind < TALOS_RT_DESCRIPTOR_STORAGE ||
         handle.kind > TALOS_RT_DESCRIPTOR_DRIVER)
       return false;
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     uint64_t storageBit = 0, published = 0;
     // Clock-condition publications overlay canonical reads per bit.
     if ((context->observerForcesCanonicalPlane &&
@@ -1334,7 +1334,7 @@ inline bool executeFastOp(const FastOp &op, uint8_t *data,
     uint64_t newValue, newUnknown;
     fastRead(data, op.source1, source1FourState, op.width, newValue,
              newUnknown);
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     uint64_t at = 0, published = 0;
     if (talos_rt_has_conditional_signal_waiters(context) ||
         !fastCanonicalView(op, context, handle, op.width, at, published))
@@ -1430,7 +1430,7 @@ const FastOp *fastPlan(const Image &image, const Frame &frame,
     invalid = true;
     return nullptr;
   }
-  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
   auto &states = context->designBytecodeFunctionState;
   if (states.size() != image.functionCount)
     states.assign(static_cast<size_t>(image.functionCount), 0);
@@ -2113,7 +2113,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
       if (!preponedEvent && decoded.kind == TALOS_RT_STABLE_HANDLE_STATIC) {
         if (!context || kind > TALOS_RT_DESCRIPTOR_DRIVER)
           return TALOS_RT_INVALID_HANDLE;
-        std::lock_guard<std::recursive_mutex> lock(context->mutex);
+        std::lock_guard<TalosContextMutex> lock(context->mutex);
         auto state = context->nativeStaticStates.find(decoded.id);
         if (state == context->nativeStaticStates.end() ||
             static_cast<uint64_t>(begin) > state->second.bitWidth ||
@@ -2128,7 +2128,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
         // directly without scheduler-main registration. Once native static
         // state is registered, use its stable identity so mixed-tier waits and
         // publications name the same object.
-        std::lock_guard<std::recursive_mutex> lock(context->mutex);
+        std::lock_guard<TalosContextMutex> lock(context->mutex);
         uint64_t canonical = talos_rt_canonical_state_handle_unlocked(
             context, static_cast<uint64_t>(begin), width);
         uint32_t id = 0;
@@ -2453,7 +2453,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
                                          automaticOffset)) {
           if (!context || kind != TALOS_RT_DESCRIPTOR_STORAGE)
             return TALOS_RT_INVALID_HANDLE;
-          std::lock_guard<std::recursive_mutex> lock(context->mutex);
+          std::lock_guard<TalosContextMutex> lock(context->mutex);
           auto found = context->nativeAutomaticStates.find(automaticID);
           int64_t width = static_cast<int64_t>(instruction.auxiliary);
           if (found == context->nativeAutomaticStates.end() || width <= 0 ||
@@ -2479,7 +2479,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
         } else if (decodeStaticHandle(stable, automaticID, automaticOffset)) {
           if (!context || kind > TALOS_RT_DESCRIPTOR_DRIVER)
             return TALOS_RT_INVALID_HANDLE;
-          std::lock_guard<std::recursive_mutex> lock(context->mutex);
+          std::lock_guard<TalosContextMutex> lock(context->mutex);
           auto found = context->nativeStaticStates.find(automaticID);
           int64_t width = static_cast<int64_t>(instruction.auxiliary);
           if (found == context->nativeStaticStates.end() || width <= 0 ||
@@ -2666,7 +2666,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
         uint64_t offset = 0;
         while (offset != value.width) {
           if (dynamicOverride && !overrideClaim) {
-            std::lock_guard<std::recursive_mutex> lock(context->mutex);
+            std::lock_guard<TalosContextMutex> lock(context->mutex);
             while (offset != value.width &&
                    !talos_rt_override_owner_matches_unlocked(
                        context,
@@ -2679,7 +2679,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
             break;
           uint64_t runBegin = offset;
           if (dynamicOverride && !overrideClaim) {
-            std::lock_guard<std::recursive_mutex> lock(context->mutex);
+            std::lock_guard<TalosContextMutex> lock(context->mutex);
             while (offset != value.width &&
                    talos_rt_override_owner_matches_unlocked(
                        context,
@@ -2710,7 +2710,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
             break;
         }
         if (status == TALOS_RT_OK && (!dynamicOverride || overrideClaim)) {
-          std::lock_guard<std::recursive_mutex> lock(context->mutex);
+          std::lock_guard<TalosContextMutex> lock(context->mutex);
           for (uint64_t offset = 0; offset != value.width; ++offset)
             talos_rt_claim_override_range_unlocked(
                 context,
@@ -2753,7 +2753,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
                              talos_rt_object_from_managed_word(managed)))
             return TALOS_RT_INVALID_HANDLE;
         }
-        std::lock_guard<std::recursive_mutex> lock(context->mutex);
+        std::lock_guard<TalosContextMutex> lock(context->mutex);
         if (automatic) {
           uint32_t id = 0;
           int64_t baseOffset = 0;
@@ -2872,9 +2872,9 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
       }
       bool changed = false;
       {
-        std::unique_lock<std::recursive_mutex> lock;
+        std::unique_lock<TalosContextMutex> lock;
         if (!local)
-          lock = std::unique_lock<std::recursive_mutex>(context->mutex);
+          lock = std::unique_lock<TalosContextMutex>(context->mutex);
         if (automatic) {
           uint32_t id = 0;
           int64_t baseOffset = 0;
@@ -3538,7 +3538,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
       transitions.reserve(static_cast<size_t>(
           std::min<uint64_t>(width, std::numeric_limits<size_t>::max())));
       {
-        std::lock_guard<std::recursive_mutex> lock(context->mutex);
+        std::lock_guard<TalosContextMutex> lock(context->mutex);
         if (descriptorKind == TALOS_RT_DESCRIPTOR_NET) {
           for (uint64_t offset = 0; offset != width; ++offset)
             talos_rt_release_override_range_unlocked(
@@ -4174,7 +4174,7 @@ talos_rt_status talos_rt_execute_design_observer(
                                      static_cast<size_t>(function.scratchSize));
     Frame frame{function, functionIndex, storage.data(), 1};
     {
-      std::lock_guard<std::recursive_mutex> captureLock(context->mutex);
+      std::lock_guard<TalosContextMutex> captureLock(context->mutex);
       for (uint32_t index = 0; index != captureCount; ++index) {
         Layout layout = layoutAt(image, function, index + 1);
         uint8_t *address = frame.data + layout.offset;
@@ -4655,7 +4655,7 @@ talos_rt_status talos_rt_execute_design_export_task(
 
     uint64_t id = 0;
     {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       if (context->nextDesignTaskID == 0 ||
           context->nextDesignTaskID > uint64_t{INT64_MAX} ||
           context->nextProcessInsertionSequence == 0 ||
@@ -4787,7 +4787,7 @@ talos_rt_status cancelLogicalProcessTree(talos_rt_context *context,
     std::vector<CancelledLogicalDesignActivation> designActivations;
     std::vector<std::pair<uint64_t, uint64_t>> killedParents;
     {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       invalidateDesignReadyCohort(context);
       bool foundRoot = false;
       targets =
@@ -4937,7 +4937,7 @@ talos_rt_status cancelLogicalProcessTree(talos_rt_context *context,
               result = status;
           }
       }
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       uint64_t previous = 0;
       for (const auto &activation : designActivations)
         if (activation.id != previous) {
@@ -4972,7 +4972,7 @@ extern "C" talos_rt_status talos_rt_v1_process_control(
   TALOS_RT_TRY {
     uint64_t activeProcess = 0;
     {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       invalidateDesignReadyCohort(context);
       bool native = (logicalProcess & TALOS_RT_LOGICAL_PROCESS_NATIVE_TAG) != 0;
       uint64_t nativeToken =
@@ -5092,7 +5092,7 @@ talos_rt_v1_scheduler_disable_children(talos_rt_context *context) {
     std::vector<uint64_t> insertedDesignKills;
     std::vector<std::pair<uint64_t, uint64_t>> killedParents;
     {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       invalidateDesignReadyCohort(context);
       uint64_t root = context->activeLogicalProcessToken;
       if (root == 0)
@@ -5257,7 +5257,7 @@ talos_rt_v1_scheduler_disable_children(talos_rt_context *context) {
               result = status;
           }
       }
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       uint64_t last = 0;
       for (const CancelledDesignTask &task : designTasks)
         if (task.id != last) {
@@ -5306,7 +5306,7 @@ static talos_rt_status controlDisable(talos_rt_context *context,
     std::vector<std::pair<uint64_t, uint64_t>> killedParents;
     bool resumedControl = false;
     {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       invalidateDesignReadyCohort(context);
       uint64_t current = context->activeLogicalProcessToken;
       if (current == 0)
@@ -6014,7 +6014,7 @@ static talos_rt_status controlDisable(talos_rt_context *context,
               result = status;
           }
       }
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       uint64_t last = 0;
       for (const CancelledDesignTask &task : designTasks)
         if (task.releaseOwnedStates && task.id != last) {
@@ -6298,7 +6298,7 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
     }
     TALOS_RT_CATCH_ALL {}
     TALOS_RT_TRY {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       talos_rt_unregister_signal_wait_unlocked(
           context, task.signalSubscriptions, task.id, true);
       if (taskDequeued) {
@@ -6331,7 +6331,7 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
   };
   TALOS_RT_TRY {
     {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       if (context->designTaskExecuting)
         return TALOS_RT_OK;
       if (context->scheduledDesignTaskIndices.size() !=
@@ -6705,7 +6705,7 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
         context->schedulerFinishRequested.load(std::memory_order_relaxed) != 0;
     bool killRequested = false;
     {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       killRequested |= context->killedDesignTasks.count(task.id) != 0;
     }
     if (status != TALOS_RT_OK) [[unlikely]] {
@@ -6753,7 +6753,7 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
     }
     talos_rt_status finalizeStatus = TALOS_RT_OK;
     {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       task.controls = std::move(context->activeControls);
       task.started = true;
       task.continuation = action.continuation;

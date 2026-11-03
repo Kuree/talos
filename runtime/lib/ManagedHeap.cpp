@@ -1492,7 +1492,7 @@ public:
                     descriptor) == validationCache.validatedDescriptors.end()) {
         bool registered = false;
         {
-          std::lock_guard<std::recursive_mutex> lock(context->mutex);
+          std::lock_guard<TalosContextMutex> lock(context->mutex);
           if (context->managedClassValidation) {
             const auto &classes = context->managedClassValidation->classes;
             auto found = classes.find(descriptor->class_id);
@@ -2109,7 +2109,7 @@ private:
     auto eraseManagedOverrides = [&](const ObjectMetadata &metadata) {
       if (!context || metadata.identity == 0)
         return;
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       context->managedOverrides.erase(metadata.identity);
     };
     for (auto &pool : availableSpans)
@@ -2490,7 +2490,7 @@ const talos_rt_class_descriptor_v1 *
 talos_rt_managed_class_lookup(talos_rt_context *context, uint64_t classID) {
   if (!context || classID == 0)
     return nullptr;
-  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
   auto found = context->managedClasses.find(classID);
   return found == context->managedClasses.end() ? nullptr : found->second;
 }
@@ -2514,7 +2514,7 @@ talos_rt_managed_element_type_lookup(talos_rt_context *context,
                                      uint64_t typeID) {
   if (!context || typeID == 0)
     return nullptr;
-  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
   auto found = context->managedElementTypes.find(typeID);
   return found == context->managedElementTypes.end() ? nullptr : found->second;
 }
@@ -3059,7 +3059,7 @@ talos_rt_v1_class_register(talos_rt_context *context,
   if (!context || !descriptor)
     return TALOS_RT_INVALID_ARGUMENT;
   return guarded(context, [&] {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     auto found = context->managedClasses.find(descriptor->class_id);
     if (found != context->managedClasses.end())
       return found->second == descriptor ? TALOS_RT_OK
@@ -3485,7 +3485,7 @@ talos_rt_v1_element_type_register(talos_rt_context *context,
     return status == TALOS_RT_INVALID_DESIGN ? TALOS_RT_INVALID_ARGUMENT
                                              : status;
   return guarded(context, [&] {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     auto [found, inserted] = context->managedElementTypes.try_emplace(
         descriptor->type_id, descriptor);
     return inserted || elementTypesEquivalent(found->second, descriptor)
@@ -3608,7 +3608,7 @@ bool managedOverrideActive(ObjectMetadata *metadata, uint64_t offset,
   if (!context ||
       !context->managedValueOverridePossible.load(std::memory_order_relaxed))
     return false;
-  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
   auto object = context->managedOverrides.find(metadata->identity);
   if (object == context->managedOverrides.end() || size == 0 ||
       offset > UINT64_MAX - size)
@@ -3648,7 +3648,7 @@ bool talos_rt_managed_value_mutation_masked(
       !context->managedValueOverridePossible.load(std::memory_order_relaxed))
     return false;
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     for (const auto &[identity, fields] : context->managedOverrides) {
       (void)identity;
       for (const auto &[offset, state] : fields) {
@@ -3904,7 +3904,7 @@ talos_rt_v1_object_override(talos_rt_object_v1 *object, uint64_t offset,
     std::vector<uint8_t> publishedUnknown;
     bool publish = false;
     {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       auto &state = context->managedOverrides[metadata->identity][offset];
       if (state.planeSize != 0 &&
           (state.planeSize != planeSize || state.fourState != (fourState != 0)))
@@ -3978,7 +3978,7 @@ talos_rt_v1_object_release_override(talos_rt_object_v1 *object, uint64_t offset,
     bool publish = false;
     bool erase = false;
     {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       auto objectState = context->managedOverrides.find(metadata->identity);
       if (objectState == context->managedOverrides.end())
         return TALOS_RT_OK;
@@ -4136,7 +4136,7 @@ static talos_rt_status scheduleManagedNBA(talos_rt_context *context,
     // rollback can release every scheduled root.
     update.managedValues = referents;
     ContextTransaction transaction(context);
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     if (context->activeExecRegion == TALOS_RT_REGION_POSTPONED) {
       rollback();
       context->schedulerStatus = TALOS_RT_INVALID_LIFECYCLE;
@@ -4378,7 +4378,7 @@ uint32_t objectIsInstanceUncached(const talos_rt_object_v1 *object,
     return 0;
   if (auto *context = talos_rt_managed_object_context(object)) {
     TALOS_RT_TRY {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       // The lock keeps the cache alive; copying its owner would add two
       // atomic updates to every check.
       if (const auto *cache = context->managedClassValidation.get())
@@ -4468,7 +4468,7 @@ extern "C" uint64_t talos_rt_v1_managed_watch(talos_rt_object_v1 *object,
   talos_rt_context *context = metadata->heap->ownerContext();
   if (!context || metadata->identity == 0)
     return 0;
-  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
   auto &token = context->managedWatchTokens[metadata->identity][*key];
   if (token != 0)
     return token;
@@ -4489,8 +4489,8 @@ void talos_rt_notify_managed_watch(talos_rt_object_v1 *object,
   talos_rt_context *context = metadata->heap->ownerContext();
   if (!context)
     return;
-  std::lock_guard<std::recursive_mutex> transaction(context->transactionMutex);
-  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  std::lock_guard<TalosContextMutex> transaction(context->transactionMutex);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
   if (kind == TALOS_RT_MANAGED_WATCH_FIELD && size != 0 &&
       context->classBitstreamState && context->classBitstreamState->notifyRange)
     context->classBitstreamState->notifyRange(context->classBitstreamState,
@@ -4557,7 +4557,7 @@ resolveMethodUncached(talos_rt_object_v1 *receiver, uint64_t slot,
     return TALOS_RT_INVALID_HANDLE;
   const talos_rt_method_descriptor_v1 *method = nullptr;
   if (auto *context = talos_rt_managed_object_context(receiver)) {
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     if (const auto *cache = context->managedClassValidation.get())
       if (const auto *inventory = cache->methods.lookup(descriptor)) {
         const auto *entry = slot == UINT32_MAX
@@ -4607,7 +4607,7 @@ talos_rt_status resolveInterfaceMethodUncached(
   return guarded(talos_rt_managed_object_context(receiver), [&] {
     const talos_rt_interface_descriptor_v1 *interface = nullptr;
     if (auto *context = talos_rt_managed_object_context(receiver)) {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       if (const auto *cache = context->managedClassValidation.get())
         if (const auto *inventory = cache->methods.lookup(descriptor)) {
           if (const auto *entry = inventory->interfaces.find(interfaceID))

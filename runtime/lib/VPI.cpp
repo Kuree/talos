@@ -14738,7 +14738,7 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_get_vlog_info(p_vpi_vlog_info info) {
     return 0;
   *info = {};
   TALOS_RT_TRY {
-    std::lock_guard<std::recursive_mutex> lock(state->context->mutex);
+    std::lock_guard<TalosContextMutex> lock(state->context->mutex);
     state->vlogArgumentScratch = state->context->vpiArguments;
     if (state->vlogArgumentScratch.empty())
       state->vlogArgumentScratch.emplace_back("talos");

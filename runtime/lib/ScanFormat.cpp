@@ -91,7 +91,7 @@ TALOS_RT_FEATURE_TEXT talos_rt_status talos_rt_dynamic_scan_plan(
 
     DynamicScanState *state = nullptr;
     {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       if (!context->dynamicScanState) {
         context->dynamicScanState = new (std::nothrow) DynamicScanState();
         if (!context->dynamicScanState)

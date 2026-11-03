@@ -1328,7 +1328,7 @@ talos_rt_status talos_rt_design_net_strength(talos_rt_context *context,
     if (!loadValidatedImage(entry, context, image, /*inventoryOnly=*/true))
       return TALOS_RT_INVALID_BYTECODE;
     ContextTransaction transaction(context);
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
 
     int64_t coordinate = 0;
     uint64_t absolute = 0;
@@ -1383,7 +1383,7 @@ talos_rt_status talos_rt_design_net_drivers(
     if (!loadValidatedImage(entry, context, image, /*inventoryOnly=*/true))
       return TALOS_RT_INVALID_BYTECODE;
     ContextTransaction transaction(context);
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     NetAliasCache *cache = getNetAliasCache(image, context);
     if (!cache)
       return TALOS_RT_INVALID_BYTECODE;
@@ -1417,7 +1417,7 @@ talos_rt_status talos_rt_design_driver_strength(talos_rt_context *context,
     if (!loadValidatedImage(entry, context, image, /*inventoryOnly=*/true))
       return TALOS_RT_INVALID_BYTECODE;
     ContextTransaction transaction(context);
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
 
     // Validated state descriptors contain net records followed by drivers in
     // nonoverlapping state order. Find the driver containing the selected bit.
@@ -1484,7 +1484,7 @@ talos_rt_status talos_rt_count_design_drivers(
     if (!loadValidatedImage(entry, context, image, /*inventoryOnly=*/true))
       return TALOS_RT_INVALID_BYTECODE;
     ContextTransaction transaction(context);
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
 
     int64_t coordinate = 0;
     uint64_t absolute = 0;
@@ -1755,7 +1755,7 @@ talos_rt_v1_pass_switch_control(talos_rt_context *context,
     if (!talos::designbytecode::loadValidatedImage(entry, context, image,
                                                    /*inventoryOnly=*/true))
       return TALOS_RT_INVALID_BYTECODE;
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     bool changed = false;
     talos_rt_status status = talos::designbytecode::applyPassSwitchControl(
         context, passSwitchId, unknown ? 2 : static_cast<uint8_t>(value),
@@ -1784,7 +1784,7 @@ extern "C" talos_rt_status talos_rt_v1_pass_switch_control_delayed(
     if (!talos::designbytecode::loadValidatedImage(entry, context, image,
                                                    /*inventoryOnly=*/true))
       return TALOS_RT_INVALID_BYTECODE;
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     NetAliasCache *cache =
         talos::designbytecode::getNetAliasCache(image, context);
     if (!cache)
@@ -1877,7 +1877,7 @@ talos_rt_v1_mos_drive_delayed(talos_rt_context *context, uint32_t passSwitchId,
     Image image;
     if (!loadValidatedImage(entry, context, image, /*inventoryOnly=*/true))
       return TALOS_RT_INVALID_BYTECODE;
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     NetAliasCache *cache = getNetAliasCache(image, context);
     if (!cache)
       return TALOS_RT_INVALID_DESIGN;
@@ -1987,7 +1987,7 @@ talos_rt_status talos_rt_resolve_design_drivers(talos_rt_context *context,
     Image image;
     if (!loadValidatedImage(entry, context, image, /*inventoryOnly=*/true))
       return TALOS_RT_INVALID_BYTECODE;
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     bool changed = false;
     if (!resolveDrivenNets(image, context, static_cast<int64_t>(begin),
                            static_cast<int64_t>(end), changed, true))
@@ -2017,7 +2017,7 @@ talos_rt_v1_scheduler_resolve_initial_drivers(talos_rt_context *context) {
     Image image;
     if (!loadValidatedImage(entry, context, image, /*inventoryOnly=*/true))
       return TALOS_RT_INVALID_BYTECODE;
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     bool changed = false;
     bool useNativeState = context->nativeStateValue != nullptr &&
                           context->nativeStateUnknown != nullptr;
@@ -2059,7 +2059,7 @@ talos_rt_status talos_rt_force_design_nets(talos_rt_context *context,
     Image image;
     if (!loadValidatedImage(entry, context, image, /*inventoryOnly=*/true))
       return TALOS_RT_INVALID_BYTECODE;
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     if (!synchronizeNativeNetOverrideStateUnlocked(context))
       return TALOS_RT_INVALID_DESIGN;
     NetAliasCache *cache = getNetAliasCache(image, context);
@@ -2147,7 +2147,7 @@ talos_rt_status talos_rt_release_design_nets(talos_rt_context *context,
     Image image;
     if (!loadValidatedImage(entry, context, image, /*inventoryOnly=*/true))
       return TALOS_RT_INVALID_BYTECODE;
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     if (!synchronizeNativeNetOverrideStateUnlocked(context))
       return TALOS_RT_INVALID_DESIGN;
     NetAliasCache *cache = getNetAliasCache(image, context);
@@ -2201,7 +2201,7 @@ talos_rt_status talos_rt_design_net_is_connected(talos_rt_context *context,
     Image image;
     if (!loadValidatedImage(entry, context, image, /*inventoryOnly=*/true))
       return TALOS_RT_INVALID_BYTECODE;
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     NetAliasCache *cache = getNetAliasCache(image, context);
     *outConnected = false;
     for (uint64_t bitIndex = begin; bitIndex != end; ++bitIndex) {

@@ -3426,7 +3426,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
       return TALOS_RT_INVALID_BYTECODE;
     uint64_t id = 0;
     {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       if (context->nextDesignTaskID == 0 ||
           context->nextDesignTaskID > uint64_t{INT64_MAX} ||
           context->nextProcessInsertionSequence == 0 ||
@@ -4294,7 +4294,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
             update.value.data(),
             value.fourState ? update.unknown.data() : nullptr);
       }
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       if (context->nextSchedulerSequence == 0)
         return TALOS_RT_OUT_OF_RESOURCES;
       update.execRegion = talos_rt_commit_region(
@@ -4336,7 +4336,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     update.value = std::move(value.value).takeVector();
     update.unknown = std::move(value.unknown).takeVector();
     {
-      std::lock_guard<std::recursive_mutex> lock(context->mutex);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
       if (context->nextSchedulerSequence == 0)
         return TALOS_RT_OUT_OF_RESOURCES;
       update.execRegion = talos_rt_commit_region(
@@ -4379,7 +4379,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
         return TALOS_RT_INVALID_BYTECODE;
       delay = *encodedDelay;
     }
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     uint32_t retainedAutomaticID = 0;
     int64_t automaticOffset = 0;
     if (decodeAutomaticHandle(stableID, retainedAutomaticID, automaticOffset)) {
@@ -4451,7 +4451,7 @@ talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
     talos_rt_v1_scheduler_event_replace_after(
         context, static_cast<uint64_t>(start), site.inputCount == 2 ? 1u : 0u,
         delay);
-    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
     return context->schedulerStatus;
   }
   case TALOS_RT_INTRINSIC_V1_EVENT_TRIGGERED: {
