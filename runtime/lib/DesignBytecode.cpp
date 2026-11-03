@@ -5122,6 +5122,10 @@ extern "C" talos_rt_status talos_rt_v1_process_control(
             talos_rt_resensitize_process_unlocked(context, *found);
           found->explicitlySuspended = kind == TALOS_RT_PROCESS_CONTROL_SUSPEND;
           context->nativePollCandidates.insert(nativeToken);
+          // As for a design task (invalidateDesignReadyCohort): readiness
+          // changed outside the process's own activation.
+          if (++context->schedulerSelectionGeneration == 0)
+            context->schedulerSelectionGeneration = 1;
         } else {
           if (context->scheduledDesignTaskIndices.size() !=
               context->scheduledDesignTasks.size())
@@ -5887,6 +5891,11 @@ static talos_rt_status controlDisable(talos_rt_context *context,
           process.urgent = true;
           process.queuedRegion = process.homeRegion;
           context->nativePollCandidates.insert(process.token);
+          // Its readiness and key changed outside its own activation: a cached
+          // ready cohort holding it must not survive (IEEE
+          // 1800-2023 4.5, 9.6.2).
+          if (++context->schedulerSelectionGeneration == 0)
+            context->schedulerSelectionGeneration = 1;
           continue;
         }
         talos_rt_flush_deferred_immediate_reports_unlocked(context, token);
@@ -5932,6 +5941,11 @@ static talos_rt_status controlDisable(talos_rt_context *context,
           process.urgent = true;
           process.queuedRegion = process.homeRegion;
           context->nativePollCandidates.insert(process.token);
+          // Its readiness and key changed outside its own activation: a cached
+          // ready cohort holding it must not survive (IEEE
+          // 1800-2023 4.5, 9.6.2).
+          if (++context->schedulerSelectionGeneration == 0)
+            context->schedulerSelectionGeneration = 1;
           continue;
         }
         nativeInstances.push_back(process.instance);

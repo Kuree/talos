@@ -4385,6 +4385,41 @@ TEST(Scheduler, FinishedConditionalWaitersLeaveTheConditionalSet) {
   talos_rt_v1_context_destroy(context);
 }
 
+TEST(Scheduler, DueDelaysJoinTheReadyCohortInKeyOrder) {
+  // Two-tier B2 S2: delays that wake in the same time slot join the cached
+  // ready cohort (well over its 16-candidate threshold here) instead of being
+  // rescanned at every selection, and still run in the complete scheduler key
+  // order, which for equal regions and ranks is insertion order (IEEE
+  // 1800-2023 4.4-4.5).
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  std::vector<std::unique_ptr<SchedulerFixture>> fixtures;
+  schedulerOrder.clear();
+  schedulerWaitKind = TALOS_RT_SUSPEND_DELAY;
+  schedulerWaitDelay = 17;
+  schedulerResumeCount = 0;
+  context->signalDiagnosticsEnabled = true;
+  constexpr uint64_t processCount = 64;
+  for (uint64_t id = 1; id <= processCount; ++id) {
+    fixtures.push_back(std::make_unique<SchedulerFixture>(id));
+    ASSERT_EQ(talos_rt_v1_scheduler_add(
+                  context, makeSchedulerInstance(*fixtures.back()), 0),
+              TALOS_RT_OK);
+  }
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  EXPECT_EQ(context->schedulerTime, 17u);
+  EXPECT_EQ(schedulerResumeCount, processCount);
+  std::vector<uint64_t> expected;
+  for (uint64_t id = 1; id <= processCount; ++id)
+    expected.push_back(id);
+  EXPECT_EQ(schedulerOrder, expected);
+  // Linear in the waiters (startup cohort plus one classification per
+  // cohort entry and pop), not quadratic as when every due delay was a slow
+  // candidate rescanned at each selection (2,208 here before).
+  EXPECT_LE(context->signalDiagnostics.candidateScans, 10 * processCount);
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(Scheduler, TriggeringNullEventHasNoEffect) {
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);

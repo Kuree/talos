@@ -4540,7 +4540,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
   // A signal publication commonly makes a large cohort ready at once. The
   // generic scheduler used to rescan the remaining unordered candidate set
   // after every member, making one edge cost N + (N-1) + ... readiness tests.
-  // Cache startup and signal-ready batches in exact
+  // Cache startup, signal-ready and due-delay batches in exact
   // scheduler-key order. Any other readiness source or selection-generation
   // change falls back to the fully general scan below.
   struct CachedNativeReady {
@@ -5130,11 +5130,18 @@ talos_rt_status runScheduler(talos_rt_context *context,
               auto ready = classifyNativeToken(token, signalResume, index);
               if (ready)
                 considerNativeReady(*ready, index);
-              auto indexed = context->scheduledProcessIndices.find(token);
-              bool startup =
-                  ready && indexed != context->scheduledProcessIndices.end() &&
-                  !context->scheduledProcesses[indexed->second].started;
-              if (ready && (signalResume || startup))
+              const ScheduledProcess *scheduled =
+                  ready ? &context->scheduledProcesses[index] : nullptr;
+              bool startup = scheduled && !scheduled->started;
+              // A delay due in this time slot (ready implies its wake time
+              // has come) stays ready until it runs, like a latched signal
+              // wake, so it joins the cohort with the same complete key
+              // instead of being rescanned at every selection (two-tier B2
+              // S2; IEEE 1800-2023 4.4-4.5). Process control that changes it
+              // from outside invalidates the cohort.
+              bool dueDelay = scheduled && scheduled->started &&
+                              scheduled->suspendKind == TALOS_RT_SUSPEND_DELAY;
+              if (ready && (signalResume || startup || dueDelay))
                 batch.push_back(*ready);
               else
                 pushCachedNativeSlowCandidate(token);
@@ -5239,15 +5246,20 @@ talos_rt_status runScheduler(talos_rt_context *context,
           if (!same) {
             popCachedNativeReady(dynamicReady);
             cachedNativeUrgentCount -= ready.urgent;
-            // Cached signal/startup readiness is normally monotonic until
-            // selection. Preserve any live pollable token whose state was
-            // changed by a rarer reentrant operation in the exact slow set;
-            // it may become ready again without another generation change.
+            // Cached signal, startup and due-delay readiness is normally
+            // monotonic until selection. Preserve any live pollable token
+            // whose state was changed by a rarer reentrant operation in the
+            // exact slow set; it may become ready again without another
+            // generation change. A token still ready under a changed key
+            // competes in this selection too, so it is never skipped.
             if (indexed != context->scheduledProcessIndices.end() &&
                 context->nativePollCandidates.count(ready.token) &&
                 indexed->second < context->scheduledProcesses.size() &&
-                context->scheduledProcesses[indexed->second].instance)
+                context->scheduledProcesses[indexed->second].instance) {
               pushCachedNativeSlowCandidate(ready.token);
+              if (current)
+                considerNativeReady(*current, index);
+            }
             continue;
           }
           considerNativeReady(*current, index);
