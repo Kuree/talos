@@ -1039,8 +1039,9 @@ inline bool executeFastOp(const FastOp &op, uint8_t *data,
                           talos_rt_status &status) {
   bool source0FourState = (op.fourState & kFastSource0FourState) != 0;
   bool source1FourState = (op.fourState & kFastSource1FourState) != 0;
-  uint64_t mask = fastMask(op.width);
   switch (op.kind) {
+  case kFastGeneric:
+    return false;
   case kFastConstant:
     fastStoreWord(data, op.destination, op.immediate);
     if (op.fourState & kFastDestinationFourState)
@@ -1119,6 +1120,7 @@ inline bool executeFastOp(const FastOp &op, uint8_t *data,
                 oversized ? 0 : unknown << amount);
     } else {
       bool arithmetic = op.kind == kFastAshr;
+      uint64_t mask = fastMask(op.width);
       uint64_t fill = oversized ? mask : mask & ~(mask >> amount);
       uint64_t signValue =
           arithmetic && ((value >> (op.width - 1)) & 1) ? fill : 0;
@@ -1140,7 +1142,7 @@ inline bool executeFastOp(const FastOp &op, uint8_t *data,
     uint64_t kept = fastMask(static_cast<uint32_t>(count));
     // A static resize may sign extend; its padding is never X otherwise.
     bool signExtend = (op.flags & 1) != 0;
-    uint64_t pad = mask & ~kept;
+    uint64_t pad = fastMask(op.width) & ~kept;
     uint64_t padValue =
         signExtend && ((value >> (op.sourceWidth - 1)) & 1) ? pad : 0;
     uint64_t padUnknown =
@@ -1538,10 +1540,18 @@ inline bool executeFastOp(const FastOp &op, uint8_t *data,
     break;
   }
   default:
-    return false;
+    // decodeFastOp produces only the kinds above.
+    __builtin_unreachable();
   }
   ++pc;
   return true;
+}
+
+/// Whether a fast op may move pc anywhere but the next instruction. fastPlan
+/// keeps every other fast op off a function's last instruction, so such an op
+/// leaves pc inside the function (two-tier B3).
+inline bool fastTransfersControl(uint8_t kind) {
+  return kind == kFastJump || kind == kFastBranch;
 }
 
 /// The fast-path plan of `frame`'s function, decoded on its first execution,
@@ -1591,6 +1601,13 @@ const FastOp *fastPlan(const Image &image, const Frame &frame,
     plan.reserve(static_cast<size_t>(frame.function.instructionCount));
     for (const Instruction &instruction : decodedCode)
       plan.push_back(decodeFastOp(image, frame.function, instruction));
+    // The fast loop checks pc only after control transfers; every other fast
+    // op must have a successor in the function. Code validation guarantees
+    // that only for functions whose initialization it analyzes, so a last
+    // instruction that would fall off the end runs on the general path, whose
+    // loop guard rejects the fall-off.
+    if (!fastTransfersControl(plan.back().kind))
+      plan.back() = FastOp{};
     auto &layouts = context->designBytecodeLayouts;
     if (layouts.size() != image.functionCount)
       layouts.assign(static_cast<size_t>(image.functionCount), {});
@@ -1688,21 +1705,33 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
       // Run consecutive fast ops in one tight loop (two-tier B3); each step
       // still counts against a step limit. An op the fast path declines
       // falls through to the general path below with its step consumed.
+      // The loop's state stays in locals: no fast op moves the frame data
+      // or touches the budget.
+      uint8_t *const data = frame.data;
+      const uint64_t limit = budget.limit;
+      uint64_t used = budget.used;
       bool declined = false;
       for (;;) {
         talos_rt_status fastStatus = TALOS_RT_OK;
-        if (!executeFastOp(plan[pc - begin], frame.data, canonicalFrame,
-                           canonicalFrameSize, context, pc, fastStatus)) {
+        const FastOp &op = plan[pc - begin];
+        if (!executeFastOp(op, data, canonicalFrame, canonicalFrameSize,
+                           context, pc, fastStatus)) {
           declined = true;
           break;
         }
-        if (fastStatus != TALOS_RT_OK)
+        if (fastStatus != TALOS_RT_OK) {
+          budget.used = used;
           return fastStatus;
-        if (pc < begin || pc >= end)
+        }
+        if (fastTransfersControl(op.kind) && (pc < begin || pc >= end))
           break;
-        if (!budget.consume())
+        // StepBudget::consume.
+        if (limit != 0 && ++used > limit) {
+          budget.used = used;
           return TALOS_RT_STEP_LIMIT;
+        }
       }
+      budget.used = used;
       if (!declined)
         continue;
     }

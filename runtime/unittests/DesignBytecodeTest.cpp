@@ -403,6 +403,66 @@ std::vector<uint8_t> makeWideTransferBytecode() {
   return bytes;
 }
 
+/// A function above the initialization analysis's 2,000-instruction bound
+/// whose last instruction, a scalar CONSTANT, falls off its end: NOPs, then
+/// the CONSTANT.
+std::vector<uint8_t> makeFallOffBytecode() {
+  constexpr size_t count = 2001;
+  constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
+  constexpr size_t layoutOffset = functionOffset + 96;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(1);
+  constexpr size_t constantOffset = codeOffset + count * 32;
+  constexpr size_t continuationOffset = constantOffset + 16;
+  std::vector<uint8_t> bytes(continuationOffset + 24, 0);
+  std::memcpy(bytes.data(), "OBBCDS1\0", 8);
+  put32(bytes, 8, TALOS_RT_VERSION);
+  put32(bytes, 12, 0);
+  put32(bytes, 16, TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE);
+  put64(bytes, 24, bytes.size());
+  put64(bytes, 40, functionOffset);
+  put64(bytes, 48, 1);
+  put64(bytes, 56, layoutOffset);
+  put64(bytes, 64, 1);
+  put64(bytes, 72, codeOffset);
+  put64(bytes, 80, count);
+  put64(bytes, 88, constantOffset);
+  put64(bytes, 96, 0);
+  put64(bytes, 104, constantOffset);
+  put64(bytes, 112, 16);
+  put64(bytes, 120, continuationOffset);
+  put64(bytes, 128, 1);
+  put64(bytes, 136, bytes.size());
+  put64(bytes, 152, bytes.size());
+  put64(bytes, 168, bytes.size());
+  put64(bytes, 184, bytes.size());
+
+  put64(bytes, functionOffset, 1);
+  put64(bytes, functionOffset + 16, 0);
+  put64(bytes, functionOffset + 24, count);
+  put64(bytes, functionOffset + 32, 0);
+  put64(bytes, functionOffset + 40, 1);
+  put32(bytes, functionOffset + 48, 0);
+  put32(bytes, functionOffset + 52, 0);
+  put64(bytes, functionOffset + 56, 16);
+  put64(bytes, functionOffset + 64, 8);
+  put64(bytes, functionOffset + 72, 0);
+  put64(bytes, functionOffset + 80, 1);
+  put64(bytes, functionOffset + 88, 1);
+
+  putShapeTable(bytes, layoutOffset, 1);
+  putLayout(bytes, layoutOffset, 1, 0, TALOS_RT_DBREG_LOGIC, 32, 0, 16);
+  for (size_t index = 0; index + 1 != count; ++index)
+    instruction(bytes, codeOffset, index, TALOS_RT_DB_NOP);
+  instruction(bytes, codeOffset, count - 1, TALOS_RT_DB_CONSTANT, 0, 0, 0, 0, 0,
+              0, 0);
+  put64(bytes, constantOffset, UINT64_C(0x12345678));
+  put32(bytes, continuationOffset, 0);
+  put32(bytes, continuationOffset + 4, 0);
+  put64(bytes, continuationOffset + 8, 0);
+  put64(bytes, 32, imageChecksum(bytes));
+  return bytes;
+}
+
 std::vector<uint8_t> makeDynamicScanIntrinsicBytecode(uint32_t intrinsicID) {
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 96;
@@ -4152,6 +4212,46 @@ TEST(DesignBytecode, WideConstantsAndFrameTransfersMatchTheGeneralPath) {
   // The 384-bit store needs 80 canonical bytes.
   EXPECT_EQ(run(execution, 72, fast), TALOS_RT_INVALID_FRAME);
   EXPECT_EQ(run(other, 72, general), TALOS_RT_INVALID_FRAME);
+  talos_rt_v1_context_destroy(context);
+}
+
+TEST(DesignBytecode, CodeFallingOffAFunctionsEndIsRejected) {
+  // Two-tier B3: the fast loop checks pc only after control transfers. Code
+  // validation skips the initialization analysis (and with it the fall-off
+  // check) above 2,000 instructions, so a last instruction that falls off
+  // must still be rejected after it ran, not read past the plan.
+  std::vector<uint8_t> bytecode = makeFallOffBytecode();
+  talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
+                                             TALOS_RT_EXECUTION_HAS_BYTECODE,
+                                             0,
+                                             bytecode.data(),
+                                             bytecode.size(),
+                                             nullptr,
+                                             0,
+                                             1,
+                                             imageChecksum(bytecode),
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+            TALOS_RT_OK);
+  talos_rt_design_bytecode_entry_v1 entry{&execution, 0, 0};
+  for (uint64_t limit : {uint64_t{0}, uint64_t{2001}, uint64_t{2002}}) {
+    SCOPED_TRACE(limit);
+    std::array<uint64_t, 2> frame{};
+    talos_rt_fragment_action_v1 action{};
+    EXPECT_EQ(talos_rt_execute_design_bytecode(entry, context, frame.data(),
+                                               sizeof(frame), 0, sizeof(frame),
+                                               0, limit, &action),
+              TALOS_RT_INVALID_BYTECODE);
+    EXPECT_EQ(frame[0], 0x12345678u);
+  }
   talos_rt_v1_context_destroy(context);
 }
 
