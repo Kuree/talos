@@ -1244,6 +1244,7 @@ talos_rt_status dispatchLifecycle(VPIState *state, PLI_INT32 reason) {
     invocation.reason = reason;
     invocation.cb_rtn = routine;
     invocation.user_data = userData;
+    ManagedRunHoldPause pause;
     TALOS_RT_TRY { (void)routine(&invocation); }
     TALOS_RT_CATCH_ALL {
       setError(state, "VPI callback raised an exception", vpiInternal);
@@ -8806,6 +8807,7 @@ talos_rt_vpi_dispatch_time_callbacks_unlocked(talos_rt_context *context) {
     ++state->callbackDepth;
     context->vpiTimeCallbackActive = true;
     talos_rt_status status = TALOS_RT_OK;
+    ManagedRunHoldPause pause;
     TALOS_RT_TRY { (void)callback.routine(&invocation); }
     TALOS_RT_CATCH_ALL {
       setError(state, "VPI callback raised an exception", vpiInternal);
@@ -8879,6 +8881,7 @@ talos_rt_vpi_dispatch_sync_callbacks_unlocked(talos_rt_context *context,
     ++state->callbackDepth;
     context->vpiTimeCallbackActive = true;
     talos_rt_status status = TALOS_RT_OK;
+    ManagedRunHoldPause pause;
     TALOS_RT_TRY { (void)callback.routine(&invocation); }
     TALOS_RT_CATCH_ALL {
       setError(state, "VPI callback raised an exception", vpiInternal);

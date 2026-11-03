@@ -3421,6 +3421,29 @@ talos_rt_status talos_rt_managed_execution_enter(talos_rt_context *context,
                                                  talos_rt_gc_lane_v1 **outLane,
                                                  bool *outEntered);
 void talos_rt_managed_execution_leave(talos_rt_gc_lane_v1 *lane, bool entered);
+/// A scheduler run's claim on this thread's managed lane (two-tier B2 Q3).
+/// The outermost run on a thread arms it; the run's first execution scope
+/// enters the lane and the lane stays entered until the run ends, so the
+/// run's later scopes reuse it. Collection points reached with no scope open
+/// still collect with the held lane, and a scope opened there first serves a
+/// collector another thread requested.
+struct ManagedRunHold;
+/// The outermost run armed on this thread. A function-local thread_local of
+/// trivial type needs no initialization guard, so the run's arm and release
+/// stay a few inline instructions (see ContextMutex.h for the one-instance
+/// assumption).
+inline ManagedRunHold *&armedManagedRunHold() {
+  static thread_local ManagedRunHold *armed = nullptr;
+  return armed;
+}
+/// Leaves the lane a run's first scope entered.
+void talos_rt_managed_run_hold_release(ManagedRunHold *hold);
+/// Leaves a lane the run holds between scopes; the run's next scope enters it
+/// again.
+void talos_rt_managed_run_hold_pause(ManagedRunHold *hold);
+/// Serves a collector another thread requested while the run holds its lane
+/// between scopes.
+void talos_rt_managed_run_hold_serve(ManagedRunHold *hold);
 using ManagedRootVisit = void (*)(void *, talos_rt_object_v1 **);
 using ManagedRootEnumerate = void (*)(void *, ManagedRootVisit, void *);
 
@@ -3690,6 +3713,64 @@ private:
   talos_rt_status status = TALOS_RT_OK;
 };
 
+struct ManagedRunHold {
+  explicit ManagedRunHold(talos_rt_context *context) {
+    ManagedRunHold *&slot = armedManagedRunHold();
+    if (slot || !context->managedHeap)
+      return;
+    heap = context->managedHeap;
+    armed = true;
+    slot = this;
+  }
+  ManagedRunHold(const ManagedRunHold &) = delete;
+  ManagedRunHold &operator=(const ManagedRunHold &) = delete;
+  ~ManagedRunHold() {
+    if (!armed)
+      return;
+    armedManagedRunHold() = nullptr;
+    armed = false;
+    if (lane)
+      talos_rt_managed_run_hold_release(this);
+  }
+
+  ManagedHeap *heap = nullptr;
+  /// The lane the run's first scope entered, if any.
+  talos_rt_gc_lane_v1 *lane = nullptr;
+  /// Whether this is the thread's outermost run (nested runs do nothing).
+  bool armed = false;
+};
+
+/// While user code runs (VPI callbacks, observer evaluators), the run holds
+/// no lane: a lane it holds between scopes is left, and the run is disarmed
+/// so scopes inside the callback enter and leave the lane themselves instead
+/// of handing it back. The lane is then as it was before runs held lanes.
+class ManagedRunHoldPause {
+public:
+  ManagedRunHoldPause() : run(armedManagedRunHold()) {
+    if (!run)
+      return;
+    if (run->lane)
+      talos_rt_managed_run_hold_pause(run);
+    armedManagedRunHold() = nullptr;
+  }
+  ManagedRunHoldPause(const ManagedRunHoldPause &) = delete;
+  ManagedRunHoldPause &operator=(const ManagedRunHoldPause &) = delete;
+  ~ManagedRunHoldPause() {
+    if (run)
+      armedManagedRunHold() = run;
+  }
+
+private:
+  ManagedRunHold *run;
+};
+
+/// At a time-slot boundary, serve a collector another thread requested while
+/// the run holds its lane between scopes.
+inline void serveManagedRunHold() {
+  if (ManagedRunHold *run = armedManagedRunHold(); run && run->lane)
+    talos_rt_managed_run_hold_serve(run);
+}
+
 // Serialize a complete external mutation or scheduler fragment across any
 // recursively invoked observer callbacks. If a callback destroys its active
 // context, final cleanup is deferred until the outermost transaction returns.
@@ -3718,6 +3799,8 @@ public:
   ~ContextCallbackUnlock() { context->mutex.lock(); }
 
 private:
+  // Paused before the mutex is released and resumed after it is retaken.
+  ManagedRunHoldPause pause;
   talos_rt_context *context;
 };
 

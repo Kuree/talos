@@ -6565,6 +6565,291 @@ TEST(ManagedHeap, PolledCollectionReclaimsOnlyAtPollsAndBetweenActivations) {
   run(/*designate=*/true);
 }
 
+TEST(ManagedHeap, HeldLaneCollectsOnlyWithNoScopeOpen) {
+  // A scheduler run holds its lane from its first execution scope to its end
+  // (two-tier B2 Q3); a run that opens no scope leaves the lane alone.
+  // Collection points reached under the hold with no execution scope open
+  // still collect; inside a scope they defer. Between scopes the held lane is
+  // not current, and opening a scope or serving at a slot boundary serves a
+  // collector another thread requested, as entering would.
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  talos_rt_managed_heap_poll_collections(context->managedHeap);
+  ASSERT_EQ(talos_rt_v1_gc_set_threshold(context, UINT64_MAX), TALOS_RT_OK);
+  auto statistics = [&] {
+    talos_rt_gc_statistics_v1 result{};
+    EXPECT_EQ(talos_rt_v1_gc_statistics(context, &result), TALOS_RT_OK);
+    return result;
+  };
+  auto allocateGarbage = [&](talos_rt_gc_lane_v1 *lane, unsigned count) {
+    for (unsigned index = 0; index != count; ++index) {
+      talos_rt_object_v1 *garbage = nullptr;
+      ASSERT_EQ(talos_rt_v1_object_allocate(lane, &nodeDescriptor, &garbage),
+                TALOS_RT_OK);
+    }
+  };
+  auto waitFor = [](auto condition) {
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!condition() && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::yield();
+    return condition();
+  };
+  // Another thread requests a collection and waits for this thread's lanes.
+  std::atomic<bool> collected{false};
+  std::atomic<talos_rt_status> otherStatus{TALOS_RT_OK};
+  auto collectElsewhere = [&] {
+    collected.store(false);
+    return std::thread([&] {
+      talos_rt_gc_lane_v1 *lane = nullptr;
+      talos_rt_status status = talos_rt_v1_gc_lane_create(context, &lane);
+      if (status == TALOS_RT_OK)
+        status = talos_rt_v1_gc_lane_enter(lane);
+      if (status == TALOS_RT_OK)
+        status = talos_rt_v1_gc_collect(lane);
+      if (status == TALOS_RT_OK)
+        status = talos_rt_v1_gc_lane_leave(lane);
+      if (lane)
+        (void)talos_rt_v1_gc_lane_destroy(lane);
+      otherStatus.store(status);
+      collected.store(true);
+    });
+  };
+  auto requested = [&] {
+    return talos_rt_managed_heap_collection_requested(context->managedHeap);
+  };
+
+  talos_rt_object_v1 *kept = nullptr;
+  {
+    ManagedExecutionScope scope(context);
+    ASSERT_EQ(scope.getStatus(), TALOS_RT_OK);
+    ASSERT_EQ(
+        talos_rt_v1_object_allocate(scope.getLane(), &nodeDescriptor, &kept),
+        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_gc_static_root_register(context, &kept), TALOS_RT_OK);
+  }
+  uint64_t keptID = talos_rt_v1_object_id(kept);
+  ASSERT_EQ(talos_rt_v1_gc_set_threshold(context, statistics().live_bytes * 16),
+            TALOS_RT_OK);
+  {
+    ManagedRunHold idle(context);
+    EXPECT_TRUE(idle.armed);
+  }
+  EXPECT_EQ(talos_rt_v1_gc_current_lane(context), nullptr);
+
+  {
+    ManagedExecutionScope scope(context);
+    allocateGarbage(scope.getLane(), 32);
+  }
+  std::thread other;
+  {
+    ManagedRunHold run(context);
+    ASSERT_TRUE(run.armed);
+    // A quiescent point before the run's first scope collects with a lane it
+    // enters and leaves itself.
+    EXPECT_EQ(talos_rt_managed_heap_collect_between_activations(context),
+              TALOS_RT_OK);
+    EXPECT_EQ(statistics().collection_count, 1u);
+    EXPECT_EQ(statistics().reclaimed_objects, 32u);
+    EXPECT_EQ(run.lane, nullptr);
+    EXPECT_EQ(talos_rt_v1_gc_current_lane(context), nullptr);
+    // The run's first scope hands its lane to the run.
+    {
+      ManagedExecutionScope first(context);
+      ASSERT_EQ(first.getStatus(), TALOS_RT_OK);
+      EXPECT_EQ(run.lane, first.getLane());
+    }
+    talos_rt_gc_lane_v1 *held = run.lane;
+    ASSERT_NE(held, nullptr);
+    // Between scopes the held lane is not current.
+    EXPECT_EQ(talos_rt_v1_gc_current_lane(context), nullptr);
+    {
+      ManagedExecutionScope scope(context);
+      ASSERT_EQ(scope.getStatus(), TALOS_RT_OK);
+      EXPECT_EQ(scope.getLane(), held);
+      EXPECT_EQ(talos_rt_v1_gc_current_lane(context), held);
+      {
+        // Nested scopes and nested runs reuse the lane and defer too.
+        ManagedExecutionScope nested(context);
+        EXPECT_EQ(nested.getLane(), held);
+        ManagedRunHold nestedRun(context);
+        EXPECT_FALSE(nestedRun.armed);
+      }
+      allocateGarbage(held, 32);
+      EXPECT_EQ(talos_rt_managed_heap_collect_between_activations(context),
+                TALOS_RT_OK);
+      EXPECT_EQ(talos_rt_v1_gc_collect_pending(context), TALOS_RT_OK);
+      EXPECT_EQ(statistics().collection_count, 1u);
+      // Pausing inside a scope keeps the lane and disarms the run until the
+      // pause ends.
+      {
+        ManagedRunHoldPause pause;
+        EXPECT_EQ(run.lane, held);
+        EXPECT_EQ(armedManagedRunHold(), nullptr);
+        EXPECT_EQ(talos_rt_v1_gc_current_lane(context), held);
+      }
+      EXPECT_EQ(armedManagedRunHold(), &run);
+    }
+    EXPECT_EQ(talos_rt_managed_heap_collect_between_activations(context),
+              TALOS_RT_OK);
+    EXPECT_EQ(statistics().collection_count, 2u);
+    EXPECT_EQ(statistics().reclaimed_objects, 64u);
+    EXPECT_EQ(talos_rt_v1_object_id(kept), keptID);
+
+    // A scope for another heap enters and leaves that heap's lane itself.
+    {
+      talos_rt_context *second = nullptr;
+      ASSERT_EQ(talos_rt_v1_context_create(&second), TALOS_RT_OK);
+      {
+        ManagedExecutionScope scope(second);
+        ASSERT_EQ(scope.getStatus(), TALOS_RT_OK);
+        EXPECT_NE(scope.getLane(), held);
+      }
+      EXPECT_EQ(talos_rt_v1_gc_current_lane(second), nullptr);
+      EXPECT_EQ(run.lane, held);
+      talos_rt_v1_context_destroy(second);
+    }
+
+    // Another thread's collector is served by the next scope...
+    other = collectElsewhere();
+    EXPECT_TRUE(waitFor(requested));
+    EXPECT_FALSE(collected.load());
+    {
+      ManagedExecutionScope scope(context);
+      EXPECT_EQ(scope.getStatus(), TALOS_RT_OK);
+    }
+    // A pause leaves the lane at depth 0, so a failure here does not hang
+    // the join.
+    auto joinCollector = [&] {
+      if (!collected.load())
+        ManagedRunHoldPause release;
+      other.join();
+    };
+    EXPECT_TRUE(waitFor([&] { return collected.load(); }))
+        << "opening a scope under the hold did not serve the collector";
+    joinCollector();
+    EXPECT_EQ(otherStatus.load(), TALOS_RT_OK);
+    // ...or at a slot boundary.
+    other = collectElsewhere();
+    EXPECT_TRUE(waitFor(requested));
+    serveManagedRunHold();
+    EXPECT_TRUE(waitFor([&] { return collected.load(); }))
+        << "serving at a slot boundary did not serve the collector";
+    joinCollector();
+    EXPECT_EQ(otherStatus.load(), TALOS_RT_OK);
+    EXPECT_EQ(run.lane, held);
+
+    // A pause around user code leaves the lane for the whole callback:
+    // scopes inside it enter and leave the lane themselves, and another
+    // thread's collector runs while none is open.
+    {
+      ManagedRunHoldPause pause;
+      EXPECT_EQ(run.lane, nullptr);
+      EXPECT_EQ(armedManagedRunHold(), nullptr);
+      EXPECT_EQ(talos_rt_v1_gc_current_lane(context), nullptr);
+      {
+        ManagedExecutionScope scope(context);
+        EXPECT_EQ(scope.getLane(), held);
+      }
+      EXPECT_EQ(run.lane, nullptr);
+      EXPECT_EQ(talos_rt_v1_gc_current_lane(context), nullptr);
+      other = collectElsewhere();
+      EXPECT_TRUE(waitFor([&] { return collected.load(); }))
+          << "a paused run still held its lane";
+      {
+        // A scope opened while the collector waits serves it, so the join
+        // below cannot hang.
+        ManagedExecutionScope scope(context);
+      }
+      other.join();
+      EXPECT_EQ(otherStatus.load(), TALOS_RT_OK);
+    }
+    EXPECT_EQ(armedManagedRunHold(), &run);
+    // The run's next scope takes the lane back.
+    {
+      ManagedExecutionScope scope(context);
+      EXPECT_EQ(scope.getLane(), held);
+    }
+    EXPECT_EQ(run.lane, held);
+    // The callback unlock window pauses the same way.
+    {
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
+      ContextCallbackUnlock unlock(context);
+      EXPECT_EQ(run.lane, nullptr);
+      EXPECT_EQ(armedManagedRunHold(), nullptr);
+    }
+    EXPECT_EQ(armedManagedRunHold(), &run);
+    {
+      ManagedExecutionScope scope(context);
+    }
+    EXPECT_EQ(run.lane, held);
+  }
+  if (other.joinable())
+    other.join();
+  EXPECT_EQ(talos_rt_v1_gc_current_lane(context), nullptr);
+  {
+    // A run inside an outer scope reuses the outer lane and hands nothing
+    // off; the lane stays entered until the outer scope closes.
+    ManagedExecutionScope outer(context);
+    {
+      ManagedRunHold run(context);
+      ASSERT_TRUE(run.armed);
+      ManagedExecutionScope inner(context);
+      EXPECT_EQ(inner.getLane(), outer.getLane());
+      EXPECT_EQ(run.lane, nullptr);
+    }
+    EXPECT_EQ(talos_rt_v1_gc_current_lane(context), outer.getLane());
+  }
+  EXPECT_EQ(talos_rt_v1_gc_current_lane(context), nullptr);
+  ASSERT_EQ(talos_rt_v1_gc_static_root_unregister(context, &kept), TALOS_RT_OK);
+  talos_rt_v1_context_destroy(context);
+}
+
+TEST(ManagedHeap, RunLaneLeftWithRootsNeverCollectsAtQuiescentPoints) {
+  // A run whose lane still has a registered root when it ends cannot leave
+  // the lane: it stays active and counts as inside a scope, so quiescent
+  // points do not collect with it and it stays current, as a leaked lane did
+  // before runs held lanes.
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  talos_rt_managed_heap_poll_collections(context->managedHeap);
+  ASSERT_EQ(talos_rt_v1_gc_set_threshold(context, 1), TALOS_RT_OK);
+  talos_rt_gc_statistics_v1 statistics{};
+  talos_rt_gc_root_v1 root{};
+  talos_rt_object_v1 *rooted = nullptr;
+  talos_rt_gc_lane_v1 *lane = nullptr;
+  {
+    ManagedRunHold run(context);
+    ManagedExecutionScope scope(context);
+    ASSERT_EQ(scope.getStatus(), TALOS_RT_OK);
+    lane = scope.getLane();
+    ASSERT_EQ(talos_rt_v1_object_allocate(lane, &nodeDescriptor, &rooted),
+              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &root, &rooted), TALOS_RT_OK);
+  }
+  EXPECT_EQ(talos_rt_v1_gc_current_lane(context), lane);
+  talos_rt_object_v1 *garbage = nullptr;
+  ASSERT_EQ(talos_rt_v1_object_allocate(lane, &nodeDescriptor, &garbage),
+            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_managed_heap_collect_between_activations(context),
+            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_gc_collect_pending(context), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_statistics(context, &statistics), TALOS_RT_OK);
+  EXPECT_EQ(statistics.collection_count, 0u);
+  ASSERT_EQ(talos_rt_v1_gc_root_pop(lane, &root), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_lane_leave(lane), TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_gc_current_lane(context), nullptr);
+  // The lane works normally afterwards.
+  {
+    ManagedExecutionScope scope(context);
+    EXPECT_EQ(scope.getLane(), lane);
+  }
+  EXPECT_EQ(talos_rt_managed_heap_collect_between_activations(context),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_statistics(context, &statistics), TALOS_RT_OK);
+  EXPECT_EQ(statistics.collection_count, 1u);
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(ManagedHeap, PolledAllocationLeavesCollectorsWaitingForAPoll) {
   // Another thread requests a collection while this thread's activation
   // allocates. Under polled collection the activation registers its managed

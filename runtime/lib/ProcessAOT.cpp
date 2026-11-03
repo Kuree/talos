@@ -1000,9 +1000,10 @@ __attribute__((always_inline)) inline talos_rt_status executeStaticNativeAOT(
     if (instance->descriptor->flags & TALOS_RT_PROCESS_UNMANAGED_NATIVE) {
       status = instance->descriptor->native_execute(instance);
     } else {
-      // Transient plusarg strings still need a live GC lane. Acquire it only
-      // for entries that may use managed state, and release it at the fragment
-      // boundary so an unrelated collector is not held behind the hot loop.
+      // Transient plusarg strings still need a live GC lane. Open a scope
+      // only for entries that may use managed state. Outside a scheduler run
+      // the lane is released at the fragment boundary; under a run's hold
+      // the scope's entry serves a collector another thread requested.
       managedExecution.emplace(context);
       status = managedExecution->getStatus();
       if (status == TALOS_RT_OK)

@@ -4457,6 +4457,12 @@ talos_rt_status runScheduler(talos_rt_context *context,
   if (std::optional<talos_rt_status> idle =
           idleCurrentSlotResult(context, options))
     return *idle;
+  // Keep this thread's managed lane entered from the run's first activation
+  // to its end rather than entering it around every activation (two-tier B2
+  // Q3). Collection points between activations still collect with the held
+  // lane, and each activation's scope first serves a collector another
+  // thread requested.
+  ManagedRunHold managedRun(context);
   NativeReadyPublicationBatch publications;
   struct PublicationBatchScope {
     talos_rt_context *context;
@@ -6922,6 +6928,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
             if (collected != TALOS_RT_OK)
               return collected;
           }
+          serveManagedRunHold();
           context->schedulerTime = *nextTime;
           if (context->nativeScheduleSingleStep)
             return TALOS_RT_OK;

@@ -1055,6 +1055,14 @@ struct ManagedClassValidationCache {
   ClassMethodValidation methods;
 };
 
+#if defined(__GNUC__) || defined(__clang__)
+#define TALOS_MANAGED_HEAP_NOINLINE __attribute__((noinline))
+#elif defined(_MSC_VER)
+#define TALOS_MANAGED_HEAP_NOINLINE __declspec(noinline)
+#else
+#define TALOS_MANAGED_HEAP_NOINLINE
+#endif
+
 struct talos_rt_gc_lane_v1 {
   ManagedHeap *heap = nullptr;
   talos_rt_context *context = nullptr;
@@ -1065,6 +1073,11 @@ struct talos_rt_gc_lane_v1 {
   std::atomic<talos_rt_gc_managed_root_v1 *> managedRoots{nullptr};
   std::atomic<talos_rt_gc_managed_root_range_v1 *> managedRootRanges{nullptr};
   std::atomic<ManagedRootProvider *> providers{nullptr};
+  /// Open execution scopes (activations and runtime entries) on the owning
+  /// thread; only that thread reads or writes it. An active lane with no open
+  /// scope is held across a scheduler run between activations, where this
+  /// thread holds no unregistered managed value.
+  uint32_t scopeDepth = 0;
 };
 
 namespace {
@@ -1199,15 +1212,15 @@ public:
     // earlier stores.
     if (!collectionRequested.load(std::memory_order_seq_cst))
       return TALOS_RT_OK;
-    return safepoint(lane);
+    parkForCollection(lane);
+    return TALOS_RT_OK;
   }
 
   talos_rt_status leave(talos_rt_gc_lane_v1 *lane) {
     if (!activeOwner(lane))
       return TALOS_RT_INVALID_LIFECYCLE;
-    talos_rt_status status = safepoint(lane);
-    if (status != TALOS_RT_OK)
-      return status;
+    if (collectionRequested.load(std::memory_order_acquire))
+      parkForCollection(lane);
     if (lane->roots.load(std::memory_order_acquire) ||
         lane->rootRanges.load(std::memory_order_acquire) ||
         lane->managedRoots.load(std::memory_order_acquire) ||
@@ -1236,18 +1249,25 @@ public:
   talos_rt_status safepoint(talos_rt_gc_lane_v1 *lane) {
     if (!activeOwner(lane))
       return TALOS_RT_INVALID_LIFECYCLE;
-    if (!collectionRequested.load(std::memory_order_acquire))
-      return TALOS_RT_OK;
+    if (collectionRequested.load(std::memory_order_acquire))
+      parkForCollection(lane);
+    return TALOS_RT_OK;
+  }
+
+  /// Parks `lane`, active and owned by this thread, until a requested
+  /// collection finishes. Out of line so that enter, leave and safepoint keep
+  /// a small inline body.
+  TALOS_MANAGED_HEAP_NOINLINE void
+  parkForCollection(talos_rt_gc_lane_v1 *lane) {
     std::unique_lock<std::mutex> lock(worldMutex);
     if (!collectionRequested.load(std::memory_order_acquire))
-      return TALOS_RT_OK;
+      return;
     lane->state.store(LaneState::Parked, std::memory_order_release);
     worldCondition.notify_all();
     worldCondition.wait(lock, [&] {
       return !collectionRequested.load(std::memory_order_acquire);
     });
     lane->state.store(LaneState::Active, std::memory_order_release);
-    return TALOS_RT_OK;
   }
 
   talos_rt_status pushRoot(talos_rt_gc_lane_v1 *lane, talos_rt_gc_root_v1 *root,
@@ -2397,20 +2417,22 @@ struct ThreadExecutionLane {
 };
 
 thread_local std::vector<ThreadExecutionLane> executionLanes;
+/// The entry of executionLanes this thread used last. Constant-initialized,
+/// so the common lookup needs neither the vector's thread-local guard nor a
+/// scan (two-tier B2 Q3).
+thread_local ThreadExecutionLane lastExecutionLane;
 
 ManagedHeap *heapFor(talos_rt_context *context) {
   return context ? context->managedHeap : nullptr;
 }
 
-talos_rt_status threadExecutionLane(ManagedHeap *heap,
-                                    talos_rt_gc_lane_v1 **outLane) {
-  if (!heap || !outLane)
-    return TALOS_RT_INVALID_ARGUMENT;
-  *outLane = nullptr;
+TALOS_MANAGED_HEAP_NOINLINE talos_rt_status
+findThreadExecutionLane(ManagedHeap *heap, talos_rt_gc_lane_v1 **outLane) {
   for (ThreadExecutionLane &entry : executionLanes) {
     // The id prevents a stale TLS entry from matching if an allocator reuses
     // the address of a context that was destroyed on another thread.
     if (entry.heap == heap && entry.heapID == heap->identity()) {
+      lastExecutionLane = entry;
       *outLane = entry.lane;
       return TALOS_RT_OK;
     }
@@ -2425,8 +2447,22 @@ talos_rt_status threadExecutionLane(ManagedHeap *heap,
     (void)heap->destroyLane(lane);
     TALOS_RT_RETHROW;
   }
+  lastExecutionLane = executionLanes.back();
   *outLane = lane;
   return TALOS_RT_OK;
+}
+
+talos_rt_status threadExecutionLane(ManagedHeap *heap,
+                                    talos_rt_gc_lane_v1 **outLane) {
+  if (!heap || !outLane)
+    return TALOS_RT_INVALID_ARGUMENT;
+  *outLane = nullptr;
+  if (lastExecutionLane.heap == heap &&
+      lastExecutionLane.heapID == heap->identity()) {
+    *outLane = lastExecutionLane.lane;
+    return TALOS_RT_OK;
+  }
+  return findThreadExecutionLane(heap, outLane);
 }
 
 const talos_rt_class_descriptor_v1 *
@@ -2465,27 +2501,83 @@ talos_rt_status talos_rt_managed_execution_enter(talos_rt_context *context,
   ManagedHeap *heap = heapFor(context);
   if (!heap)
     return TALOS_RT_INVALID_ARGUMENT;
+  // A scope opened under this thread's hold reuses the held lane.
+  auto reuse = [&](talos_rt_gc_lane_v1 *lane) -> talos_rt_status {
+    // At no open scope the held lane reaches an activation boundary. Serve
+    // a collector another thread requested, as entering an inactive lane
+    // would: the held lane registers nothing between scopes.
+    if (lane->scopeDepth == 0 && heap->collectionIsRequested())
+      if (talos_rt_status status = heap->safepoint(lane); status != TALOS_RT_OK)
+        return status;
+    ++lane->scopeDepth;
+    *outLane = lane;
+    return TALOS_RT_OK;
+  };
+  ManagedRunHold *run = armedManagedRunHold();
+  if (run && run->heap == heap && run->lane &&
+      run->lane->state.load(std::memory_order_relaxed) == LaneState::Active)
+    return reuse(run->lane);
   return guarded(context, [&] {
     talos_rt_gc_lane_v1 *lane = nullptr;
     talos_rt_status status = threadExecutionLane(heap, &lane);
     if (status != TALOS_RT_OK)
       return status;
-    if (heap->activeOwner(lane)) {
-      *outLane = lane;
-      return TALOS_RT_OK;
-    }
+    if (heap->activeOwner(lane))
+      return reuse(lane);
     status = heap->enter(lane);
     if (status != TALOS_RT_OK)
       return status;
+    lane->scopeDepth = 1;
     *outLane = lane;
-    *outEntered = true;
+    // The first scope of an armed run enters the lane for the rest of the
+    // run; the run leaves it.
+    if (run && run->heap == heap && !run->lane)
+      run->lane = lane;
+    else
+      *outEntered = true;
     return TALOS_RT_OK;
   });
 }
 
+namespace {
+/// Leaves `lane` for the scope or run that entered it. A lane that still has
+/// registered roots cannot be left: it then stays active and counts as inside
+/// a scope, so quiescent points never collect with it, as with such a leaked
+/// lane before runs held lanes (which was not reported either).
+void leaveExecutionLane(talos_rt_gc_lane_v1 *lane) {
+  if (lane->heap->leave(lane) != TALOS_RT_OK)
+    lane->scopeDepth = 1;
+}
+} // namespace
+
 void talos_rt_managed_execution_leave(talos_rt_gc_lane_v1 *lane, bool entered) {
-  if (entered && lane && lane->heap)
-    (void)lane->heap->leave(lane);
+  if (!lane || !lane->heap)
+    return;
+  if (lane->scopeDepth != 0)
+    --lane->scopeDepth;
+  if (entered)
+    leaveExecutionLane(lane);
+}
+
+void talos_rt_managed_run_hold_release(ManagedRunHold *hold) {
+  talos_rt_gc_lane_v1 *lane = hold->lane;
+  hold->lane = nullptr;
+  leaveExecutionLane(lane);
+}
+
+void talos_rt_managed_run_hold_pause(ManagedRunHold *hold) {
+  talos_rt_gc_lane_v1 *lane = hold->lane;
+  // Inside a scope the lane stays entered, as it did before runs held lanes.
+  if (!lane || lane->scopeDepth != 0)
+    return;
+  hold->lane = nullptr;
+  leaveExecutionLane(lane);
+}
+
+void talos_rt_managed_run_hold_serve(ManagedRunHold *hold) {
+  talos_rt_gc_lane_v1 *lane = hold->lane;
+  if (lane && lane->scopeDepth == 0 && lane->heap->collectionIsRequested())
+    (void)lane->heap->safepoint(lane);
 }
 
 talos_rt_status talos_rt_managed_roots_push(talos_rt_gc_lane_v1 *lane,
@@ -2852,12 +2944,18 @@ talos_rt_v1_gc_current_lane(talos_rt_context *context) {
   ManagedHeap *heap = heapFor(context);
   if (!heap)
     return nullptr;
-  for (ThreadExecutionLane &entry : executionLanes) {
-    if (entry.heap == heap && entry.heapID == heap->identity() &&
-        heap->activeOwner(entry.lane))
-      return entry.lane;
-  }
-  return nullptr;
+  // A lane a scheduler run holds between scopes is not current: callers
+  // between activations get no lane, as when the run does not hold one.
+  talos_rt_gc_lane_v1 *lane = nullptr;
+  if (lastExecutionLane.heap == heap &&
+      lastExecutionLane.heapID == heap->identity())
+    lane = lastExecutionLane.lane;
+  else
+    for (ThreadExecutionLane &entry : executionLanes)
+      if (entry.heap == heap && entry.heapID == heap->identity())
+        lane = entry.lane;
+  return lane && heap->activeOwner(lane) && lane->scopeDepth != 0 ? lane
+                                                                  : nullptr;
 }
 
 extern "C" talos_rt_status talos_rt_v1_gc_root_push(talos_rt_gc_lane_v1 *lane,
@@ -2984,28 +3082,39 @@ extern "C" talos_rt_status talos_rt_v1_gc_collect(talos_rt_gc_lane_v1 *lane) {
 namespace {
 /// Collect deferred pressure where this thread runs no managed activation:
 /// every live value is then in a static root, a process frame or another
-/// runtime root, never in an unregistered activation. A call from inside an
-/// activation leaves the work to the next collection point. A point the
-/// schedule did not designate reclaims only pressure that is due there.
+/// runtime root, never in an unregistered activation. That holds when this
+/// thread's lane is inactive or held across a scheduler run with no execution
+/// scope open. A call from inside an activation leaves the work to the next
+/// collection point. A point the schedule did not designate reclaims only
+/// pressure that is due there.
 talos_rt_status collectPendingAtQuiescentPoint(talos_rt_context *context,
                                                ManagedHeap *heap,
                                                bool designatedPoint) {
   if (designatedPoint ? !heap->collectionIsPending()
                       : !heap->undesignatedCollectionDue())
     return TALOS_RT_OK;
-  talos_rt_gc_lane_v1 *lane = nullptr;
-  bool entered = false;
-  talos_rt_status status =
-      talos_rt_managed_execution_enter(context, &lane, &entered);
-  if (status != TALOS_RT_OK)
-    return status;
-  if (entered) {
+  return guarded(context, [&] {
+    talos_rt_gc_lane_v1 *lane = nullptr;
+    talos_rt_status status = threadExecutionLane(heap, &lane);
+    if (status != TALOS_RT_OK)
+      return status;
+    bool entered = false;
+    if (heap->activeOwner(lane)) {
+      if (lane->scopeDepth != 0)
+        return TALOS_RT_OK;
+    } else {
+      status = heap->enter(lane);
+      if (status != TALOS_RT_OK)
+        return status;
+      entered = true;
+    }
     status = heap->collect(lane);
     if (status == TALOS_RT_OK && designatedPoint)
       heap->designatedCollections.fetch_add(1, std::memory_order_relaxed);
-  }
-  talos_rt_managed_execution_leave(lane, entered);
-  return status;
+    if (entered)
+      leaveExecutionLane(lane);
+    return status;
+  });
 }
 } // namespace
 

@@ -4133,6 +4133,65 @@ TEST(Scheduler, EventTriggeredSpansExactlyOneTimeSlot) {
   talos_rt_v1_context_destroy(context);
 }
 
+struct RunHoldObservation {
+  ManagedRunHold *armed = nullptr;
+  talos_rt_gc_lane_v1 *runLane = nullptr;
+  talos_rt_gc_lane_v1 *current = nullptr;
+};
+std::vector<RunHoldObservation> runHoldObservations;
+
+talos_rt_status runHoldExecute(talos_rt_process_instance_v1 *instance) {
+  if (!instance || !instance->context || !instance->action)
+    return TALOS_RT_INVALID_ARGUMENT;
+  instance->native_handle = instance;
+  ManagedRunHold *armed = armedManagedRunHold();
+  runHoldObservations.push_back(
+      {armed, armed ? armed->lane : nullptr,
+       talos_rt_v1_gc_current_lane(instance->context)});
+  if (instance->continuation == 0) {
+    auto *wait = reinterpret_cast<talos_rt_wait_record_v1 *>(instance->frame);
+    *wait = {TALOS_RT_VERSION, TALOS_RT_SUSPEND_DELAY, 0, 0, 5, 0};
+    *instance->action = {TALOS_RT_FRAGMENT_SUSPEND,
+                         TALOS_RT_SUSPEND_DELAY,
+                         1,
+                         TALOS_RT_ACTION_FRAME_WAIT_RECORD,
+                         0,
+                         48};
+    return TALOS_RT_OK;
+  }
+  *instance->action = {
+      TALOS_RT_FRAGMENT_TERMINATE, TALOS_RT_SUSPEND_NONE, 0, 0, 0, 0};
+  return TALOS_RT_OK;
+}
+
+TEST(Scheduler, RunHoldsItsManagedLaneAcrossActivations) {
+  // Two-tier B2 Q3: a scheduler run arms a hold on this thread's managed
+  // lane. The first activation's scope hands the lane to the run, an
+  // activation in a later time slot of the same run reuses it, and the run
+  // leaves it when it returns.
+  runHoldObservations.clear();
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  SchedulerFixture fixture(16);
+  fixture.descriptor.native_execute = runHoldExecute;
+  ASSERT_EQ(
+      talos_rt_v1_scheduler_add(context, makeSchedulerInstance(fixture), 0),
+      TALOS_RT_OK);
+  EXPECT_EQ(armedManagedRunHold(), nullptr);
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  ASSERT_EQ(runHoldObservations.size(), 2u);
+  for (const RunHoldObservation &observation : runHoldObservations) {
+    EXPECT_NE(observation.armed, nullptr);
+    EXPECT_NE(observation.current, nullptr);
+    EXPECT_EQ(observation.runLane, observation.current);
+  }
+  EXPECT_EQ(runHoldObservations[0].armed, runHoldObservations[1].armed);
+  EXPECT_EQ(runHoldObservations[0].current, runHoldObservations[1].current);
+  EXPECT_EQ(armedManagedRunHold(), nullptr);
+  EXPECT_EQ(talos_rt_v1_gc_current_lane(context), nullptr);
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(Scheduler, TriggeringNullEventHasNoEffect) {
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
