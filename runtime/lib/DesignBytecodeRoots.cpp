@@ -47,25 +47,29 @@ void ScopedBytecodeFrameRoots::enumerate(void *environment,
   }
 }
 
+bool frameCanHoldManaged(const Image &image, const Function &function) {
+  for (uint32_t index = 0; index != function.layoutCount; ++index) {
+    uint8_t kind = layoutAt(image, function, index).kind;
+    if (kind == TALOS_RT_DBREG_MANAGED || kind == TALOS_RT_DBREG_MANAGED_REF ||
+        kind == TALOS_RT_DBREG_ARGUMENT_REF || kind == TALOS_RT_DBREG_STRING)
+      return true;
+  }
+  return false;
+}
+
 ScopedBytecodeFrameRoots::ScopedBytecodeFrameRoots(const Image &image,
                                                    Frame &frame,
-                                                   talos_rt_context *context)
+                                                   talos_rt_context *context,
+                                                   int knownManaged)
     : roots{&image, &frame} {
-  auto scan = [&] {
-    for (uint32_t index = 0; index != frame.function.layoutCount; ++index) {
-      uint8_t kind = layoutAt(image, frame.function, index).kind;
-      if (kind == TALOS_RT_DBREG_MANAGED ||
-          kind == TALOS_RT_DBREG_MANAGED_REF ||
-          kind == TALOS_RT_DBREG_ARGUMENT_REF || kind == TALOS_RT_DBREG_STRING)
-        return true;
-    }
-    return false;
-  };
+  auto scan = [&] { return frameCanHoldManaged(image, frame.function); };
   bool hasManaged = false;
   // The context's validated image caches the answer per function.
-  if (context && context->designBytecodeImageValidated &&
-      context->designBytecodeImage.data == image.data &&
-      frame.functionIndex < image.functionCount) {
+  if (knownManaged >= 0) {
+    hasManaged = knownManaged != 0;
+  } else if (context && context->designBytecodeImageValidated &&
+             context->designBytecodeImage.data == image.data &&
+             frame.functionIndex < image.functionCount) {
     std::lock_guard<TalosContextMutex> lock(context->mutex);
     auto &flags = context->designBytecodeManagedFrames;
     if (flags.size() != image.functionCount)

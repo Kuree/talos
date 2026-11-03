@@ -1420,7 +1420,8 @@ inline bool executeFastOp(const FastOp &op, uint8_t *data,
 /// reports malformed code before any of it runs. Standalone images were
 /// validated whole when loaded.
 const FastOp *fastPlan(const Image &image, const Frame &frame,
-                       talos_rt_context *context, bool &invalid) {
+                       talos_rt_context *context, bool &invalid,
+                       int *managedFrame = nullptr) {
   invalid = false;
   if (!context || !context->designBytecodeImageValidated ||
       context->designBytecodeImage.data != image.data)
@@ -1465,6 +1466,18 @@ const FastOp *fastPlan(const Image &image, const Frame &frame,
     for (uint32_t index = 0; index != frame.function.layoutCount; ++index)
       decoded.push_back(layoutAt(image, frame.function, index));
   }
+  // Answer the frame-roots question under the lock this lookup already
+  // holds, so the activation's ScopedBytecodeFrameRoots need not take it
+  // again (two-tier B2 Q7).
+  if (managedFrame) {
+    auto &flags = context->designBytecodeManagedFrames;
+    if (flags.size() != image.functionCount)
+      flags.assign(static_cast<size_t>(image.functionCount), 0);
+    uint8_t &flag = flags[frame.functionIndex];
+    if (flag == 0)
+      flag = frameCanHoldManaged(image, frame.function) ? 2 : 1;
+    *managedFrame = flag == 2;
+  }
   return plan.data();
 }
 
@@ -1503,6 +1516,20 @@ std::optional<uint64_t> continuationPC(const Image &image,
                                        const Function &function,
                                        uint32_t continuation);
 
+/// The context's validated image when `entry` names one of its functions,
+/// without validatedImage's consistency checks: context creation validated
+/// that image against this same, immutable execution descriptor. Otherwise
+/// the checked lookup (two-tier B2 Q7).
+static inline const Image *
+activationImage(const talos_rt_design_bytecode_entry_v1 &entry,
+                talos_rt_context *context, Image &storage) {
+  if (context && context->designBytecodeImageValidated &&
+      context->execution == entry.execution && entry.reserved == 0 &&
+      entry.function < context->designBytecodeImage.functionCount)
+    return &context->designBytecodeImage;
+  return validatedImage(entry, context, storage);
+}
+
 /// The continuation id an instruction names by its ordinal among `function`'s
 /// continuation records (two-tier B4: ordinals keep bodies position
 /// independent, so instances with equal bodies share one; ids are the
@@ -1520,14 +1547,16 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
                 std::unique_ptr<PendingDesignActivation> *pendingActivation,
                 uint64_t returnFirst = 0, uint64_t returnCount = 0,
                 Frame *caller = nullptr) {
-  ScopedBytecodeFrameRoots managedRoots(image, frame, context);
+  bool invalidCode = false;
+  int managedFrame = -1;
+  const FastOp *plan =
+      fastPlan(image, frame, context, invalidCode, &managedFrame);
+  ScopedBytecodeFrameRoots managedRoots(image, frame, context, managedFrame);
   if (managedRoots.getStatus() != TALOS_RT_OK)
     return managedRoots.getStatus();
   uint64_t begin = frame.function.firstInstruction;
   uint64_t end = begin + frame.function.instructionCount;
   uint64_t pc = startPC;
-  bool invalidCode = false;
-  const FastOp *plan = fastPlan(image, frame, context, invalidCode);
   if (invalidCode)
     return TALOS_RT_INVALID_BYTECODE;
   const Layout *layouts = decodedLayouts(image, frame, context);
@@ -4188,10 +4217,11 @@ talos_rt_status talos_rt_execute_design_observer(
     if (managedExecution.getStatus() != TALOS_RT_OK)
       return managedExecution.getStatus();
     talos_rt_design_bytecode_entry_v1 entry{&execution, functionIndex, 0};
-    Image image;
-    if (!loadValidatedImage(entry, context, image) ||
-        functionIndex >= image.functionCount)
+    Image imageStorage;
+    const Image *validated = activationImage(entry, context, imageStorage);
+    if (!validated || functionIndex >= validated->functionCount)
       return TALOS_RT_INVALID_BYTECODE;
+    const Image &image = *validated;
     const talos_rt_observer_descriptor_v1 *descriptor = nullptr;
     for (uint64_t index = 0; index != execution.observer_count; ++index)
       if (execution.observers[index].bytecode_function == functionIndex) {
@@ -4779,9 +4809,11 @@ static talos_rt_status executeDesignBytecode(
     ManagedExecutionScope managedExecution(context);
     if (managedExecution.getStatus() != TALOS_RT_OK)
       return managedExecution.getStatus();
-    Image image;
-    if (!loadValidatedImage(entry, context, image))
+    Image storage;
+    const Image *validated = activationImage(entry, context, storage);
+    if (!validated)
       return TALOS_RT_INVALID_BYTECODE;
+    const Image &image = *validated;
     Function function = functionAt(image, entry.function);
     if (function.scratchSize > scratchSize || scratchOffset > frameSize ||
         scratchSize > frameSize - scratchOffset)
@@ -6797,11 +6829,12 @@ runOneDesignTaskImpl(talos_rt_context *context, uint32_t maximumRegion,
     }
     std::optional<uint32_t> nextScheduleRank;
     if (action.kind != TALOS_RT_FRAGMENT_TERMINATE) {
-      Image image;
-      if (!loadValidatedImage(entry, context, image))
+      Image storage;
+      const Image *image = activationImage(entry, context, storage);
+      if (!image)
         return abandonTask(TALOS_RT_INVALID_BYTECODE);
       nextScheduleRank = continuationScheduleRank(
-          image, functionAt(image, task.function), action.continuation);
+          *image, functionAt(*image, task.function), action.continuation);
       if (!nextScheduleRank)
         return abandonTask(TALOS_RT_INVALID_CONTINUATION);
     }

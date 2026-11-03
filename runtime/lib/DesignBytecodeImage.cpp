@@ -3637,11 +3637,13 @@ bool validateImage(const Image &image, bool validateCode) {
   return true;
 }
 
-bool loadValidatedImage(const talos_rt_design_bytecode_entry_v1 &entry,
-                        talos_rt_context *context, Image &image,
-                        bool inventoryOnly) {
-  if (entry.reserved != 0)
-    return rejectImage(__LINE__, "bytecode entry reserved field is nonzero");
+const Image *validatedImage(const talos_rt_design_bytecode_entry_v1 &entry,
+                            talos_rt_context *context, Image &storage,
+                            bool inventoryOnly) {
+  if (entry.reserved != 0) {
+    rejectImage(__LINE__, "bytecode entry reserved field is nonzero");
+    return nullptr;
+  }
   // Context creation validates the complete inventory and immutable bytecode
   // image before publishing the context. Standalone entries retain full
   // checksum and structural validation.
@@ -3651,13 +3653,24 @@ bool loadValidatedImage(const talos_rt_design_bytecode_entry_v1 &entry,
     if (cached.data != entry.execution->bytecode ||
         cached.size != entry.execution->bytecode_size ||
         cached.stateBitCount != entry.execution->state_bit_count ||
-        (!inventoryOnly && entry.function >= cached.functionCount))
-      return rejectImage(__LINE__,
-                         "cached bytecode image does not match entry");
-    image = cached;
-    return true;
+        (!inventoryOnly && entry.function >= cached.functionCount)) {
+      rejectImage(__LINE__, "cached bytecode image does not match entry");
+      return nullptr;
+    }
+    return &cached;
   }
-  return parseImage(entry, image, inventoryOnly) && validateImage(image);
+  return parseImage(entry, storage, inventoryOnly) && validateImage(storage)
+             ? &storage
+             : nullptr;
+}
+
+bool loadValidatedImage(const talos_rt_design_bytecode_entry_v1 &entry,
+                        talos_rt_context *context, Image &image,
+                        bool inventoryOnly) {
+  const Image *validated = validatedImage(entry, context, image, inventoryOnly);
+  if (validated && validated != &image)
+    image = *validated;
+  return validated != nullptr;
 }
 
 } // namespace talos::designbytecode

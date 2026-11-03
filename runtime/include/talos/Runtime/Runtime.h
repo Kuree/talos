@@ -2606,7 +2606,9 @@ talos_rt_status talos_rt_v1_dpi_export_task_bytecode_run(
 
 // Construct a context bound to a generated design. The legacy constructor is
 // equivalent to passing a null execution descriptor and remains useful for
-// formatting/file-only clients.
+// formatting/file-only clients. The execution descriptor and everything it
+// points to must stay unchanged and alive until the context is destroyed: the
+// context validates them once, here.
 talos_rt_status talos_rt_v1_context_create_for_design(
     const talos_rt_execution_descriptor_v1 *execution,
     talos_rt_context **out_context);

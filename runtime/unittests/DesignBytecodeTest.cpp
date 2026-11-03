@@ -3863,6 +3863,51 @@ makeSharedSuspendBytecode(uint16_t opcode = TALOS_RT_DB_SUSPEND) {
   return bytes;
 }
 
+TEST(DesignBytecode, ActivationsUseTheContextImageOnlyForItsOwnEntries) {
+  // Two-tier B2 Q7: an activation of the context's own execution uses the
+  // image validated at context creation without copying or re-checking it;
+  // an entry naming a function out of range or a nonzero reserved field is
+  // still rejected, and an entry of another execution descriptor is checked
+  // and validated on its own.
+  std::vector<uint8_t> bytecode = makeSharedSuspendBytecode();
+  talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
+                                             TALOS_RT_EXECUTION_HAS_BYTECODE,
+                                             0,
+                                             bytecode.data(),
+                                             bytecode.size(),
+                                             nullptr,
+                                             0,
+                                             1,
+                                             imageChecksum(bytecode),
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+            TALOS_RT_OK);
+  auto run = [&](const talos_rt_design_bytecode_entry_v1 &entry) {
+    std::array<uint64_t, 1> frame{};
+    talos_rt_fragment_action_v1 action{};
+    return talos_rt_execute_design_bytecode(entry, context, frame.data(),
+                                            sizeof(frame), 0, 8, 0, 0, &action);
+  };
+  EXPECT_EQ(run({&execution, 1, 0}), TALOS_RT_OK);
+  EXPECT_EQ(run({&execution, 2, 0}), TALOS_RT_INVALID_BYTECODE);
+  EXPECT_EQ(run({&execution, 0, 1}), TALOS_RT_INVALID_BYTECODE);
+  talos_rt_execution_descriptor_v1 other = execution;
+  EXPECT_EQ(run({&other, 1, 0}), TALOS_RT_OK);
+  std::vector<uint8_t> corrupt = bytecode;
+  corrupt.back() ^= 1;
+  other.bytecode = corrupt.data();
+  EXPECT_EQ(run({&other, 1, 0}), TALOS_RT_INVALID_BYTECODE);
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(DesignBytecode, SharedBodiesSuspendAtTheirOwnContinuationIds) {
   // CONTINUE names its continuation the same way.
   for (uint32_t function : {0u, 1u}) {

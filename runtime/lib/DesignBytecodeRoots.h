@@ -8,10 +8,16 @@
 
 namespace talos::designbytecode {
 
+/// Whether a frame of `function` can hold managed values (a managed,
+/// reference, argument-reference or string register).
+bool frameCanHoldManaged(const Image &image, const Function &function);
+
 class ScopedBytecodeFrameRoots {
 public:
+  /// `knownManaged` is whether the frame can hold managed values when the
+  /// caller already knows (0 or 1), or -1 to work it out here.
   ScopedBytecodeFrameRoots(const Image &image, Frame &frame,
-                           talos_rt_context *context);
+                           talos_rt_context *context, int knownManaged = -1);
   ScopedBytecodeFrameRoots(const ScopedBytecodeFrameRoots &) = delete;
   ScopedBytecodeFrameRoots &
   operator=(const ScopedBytecodeFrameRoots &) = delete;

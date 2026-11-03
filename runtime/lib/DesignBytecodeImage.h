@@ -311,6 +311,12 @@ bool validIntrinsic(const Image &image, const Function &function,
 bool loadValidatedImage(const talos_rt_design_bytecode_entry_v1 &entry,
                         talos_rt_context *context, Image &image,
                         bool inventoryOnly = false);
+/// The validated image for `entry` without copying it: the context's cached
+/// image when the entry names it, otherwise `storage` parsed and validated
+/// (two-tier B2 Q7). Null when the image is invalid.
+const Image *validatedImage(const talos_rt_design_bytecode_entry_v1 &entry,
+                            talos_rt_context *context, Image &storage,
+                            bool inventoryOnly = false);
 
 } // namespace talos::designbytecode
 
