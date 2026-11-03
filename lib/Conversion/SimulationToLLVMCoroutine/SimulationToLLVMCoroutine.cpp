@@ -247,6 +247,8 @@ bool isEvalClosureRuntimeCall(LLVM::CallOp call, LLVM::LLVMFuncOp function,
       // $error only latches the final exit status and lets simulation
       // continue (IEEE 1800-2023 20.10). It never schedules or executes an
       // actor, so its report stays inline like the direct display above.
+      // In VPI builds it also delivers cbError callbacks (38.36.3), whose VPI
+      // accesses are those of a context DPI call (two-tier V11).
       *callee == "talos_rt_v1_scheduler_error" ||
       // $random and $dist_* (IEEE 1800-2023 20.14, Annex N) only run the
       // normative algorithm on a context-global or explicit seed. Random

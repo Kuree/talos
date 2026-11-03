@@ -407,6 +407,11 @@ struct VPIState {
   bool unsupportedStartup = false;
   VPIPhase phase = VPIPhase::StartupRestricted;
   uint64_t nextCallbackId = 1;
+  // Registered cbError and cbPLIError callbacks (38.36.3), and whether either
+  // is being delivered (an error inside such a callback does not recurse).
+  uint32_t runTimeErrorCallbacks = 0;
+  uint32_t pliErrorCallbacks = 0;
+  bool deliveringErrorCallbacks = false;
   uint64_t nextSystemTfId = 1;
   uint32_t callbackDepth = 0;
   uint32_t callDepth = 0;
@@ -637,6 +642,8 @@ void pruneFrameHandles(VPIState *state) {
   state->lastPrunedFrameGeneration = state->frameGeneration;
 }
 
+void deliverErrorCallbacks(VPIState *state, PLI_INT32 reason) noexcept;
+
 class VPICallScope {
 public:
   VPICallScope() : state(currentState()) {
@@ -649,8 +656,13 @@ public:
     }
   }
   ~VPICallScope() {
-    if (state && currentState() == state)
-      --state->callDepth;
+    if (state && currentState() == state) {
+      // IEEE 1800-2023 38.36.3: an error in a PLI call delivers cbPLIError
+      // once the application's outermost VPI call returns.
+      if (--state->callDepth == 0 && state->errorLevel >= vpiError &&
+          state->pliErrorCallbacks != 0 && !state->deliveringErrorCallbacks)
+        deliverErrorCallbacks(state, cbPLIError);
+    }
   }
   VPICallScope(const VPICallScope &) = delete;
   VPICallScope &operator=(const VPICallScope &) = delete;
@@ -1155,6 +1167,19 @@ bool isLifecycleReason(PLI_INT32 reason) {
          reason == cbEndOfSimulation;
 }
 
+/// IEEE 1800-2023 38.36.3 action reasons delivered when an error occurs.
+bool isErrorActionReason(PLI_INT32 reason) {
+  return reason == cbError || reason == cbPLIError;
+}
+
+void noteErrorActionCallback(VPIState *state, PLI_INT32 reason, bool added) {
+  uint32_t *count = reason == cbError      ? &state->runTimeErrorCallbacks
+                    : reason == cbPLIError ? &state->pliErrorCallbacks
+                                           : nullptr;
+  if (count && (added || *count != 0))
+    *count = added ? *count + 1 : *count - 1;
+}
+
 bool observesRunningState(PLI_INT32 reason) {
   // Keep the complete live-observation classification here so enabling
   // statement, value, or synchronization registration cannot accidentally
@@ -1255,6 +1280,50 @@ talos_rt_status dispatchLifecycle(VPIState *state, PLI_INT32 reason) {
   return status;
 }
 
+/// Delivers the cbError or cbPLIError callbacks registered before delivery
+/// starts. Each sees the error through vpi_chk_error (restored before every
+/// callback, since a callback's own VPI calls reset it), and the error stays
+/// current afterwards for the application that made the failing call.
+void deliverErrorCallbacks(VPIState *state, PLI_INT32 reason) noexcept {
+  struct Delivery {
+    VPIState *state;
+    explicit Delivery(VPIState *state) : state(state) {
+      state->deliveringErrorCallbacks = true;
+      ++state->callbackDepth;
+    }
+    ~Delivery() {
+      --state->callbackDepth;
+      state->deliveringErrorCallbacks = false;
+    }
+  };
+  TALOS_RT_TRY {
+    std::vector<uint64_t> scheduled = state->callbackOrder;
+    const std::string message = state->errorMessage;
+    const std::string code = state->errorCode;
+    const int level = state->errorLevel;
+    Delivery delivery(state);
+    for (uint64_t id : scheduled) {
+      auto found = state->callbacks.find(id);
+      if (found == state->callbacks.end() || found->second.reason != reason)
+        continue;
+      state->errorMessage = message;
+      state->errorCode = code;
+      state->errorLevel = level;
+      s_cb_data invocation{};
+      invocation.reason = reason;
+      invocation.cb_rtn = found->second.routine;
+      invocation.user_data = found->second.userData;
+      ManagedRunHoldPause pause;
+      TALOS_RT_TRY { (void)invocation.cb_rtn(&invocation); }
+      TALOS_RT_CATCH_ALL {}
+    }
+    state->errorMessage = message;
+    state->errorCode = code;
+    state->errorLevel = level;
+  }
+  TALOS_RT_CATCH_ALL {}
+}
+
 void eraseCallback(VPIState *state, uint64_t id) {
   auto found = state->callbacks.find(id);
   if (found == state->callbacks.end())
@@ -1281,6 +1350,7 @@ void eraseCallback(VPIState *state, uint64_t id) {
       ++entry;
   }
   releaseObservationDemand(state, reason);
+  noteErrorActionCallback(state, reason, false);
 }
 
 PLI_INT32 removeCallbackHandle(VPIState *state, __vpiHandle *handle) {
@@ -14470,7 +14540,8 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_register_cb(p_cb_data callbackData) {
   }
   const std::optional<uint32_t> sync = syncCallbackStage(callbackData->reason);
   const bool timer = callbackData->reason == cbAfterDelay || sync;
-  if (!isLifecycleReason(callbackData->reason) && !timer) {
+  if (!isLifecycleReason(callbackData->reason) &&
+      !isErrorActionReason(callbackData->reason) && !timer) {
     if (state->phase == VPIPhase::StartupRestricted)
       state->unsupportedStartup = true;
     setError(state, "VPI callback reason is not implemented");
@@ -14547,6 +14618,8 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_register_cb(p_cb_data callbackData) {
       setError(state, "VPI callback identifier collision", vpiInternal);
       return nullptr;
     }
+    // Counted with the record, so every eraseCallback has a match.
+    noteErrorActionCallback(state, callbackData->reason, true);
     TALOS_RT_TRY {
       state->callbackOrder.push_back(id);
       if (sync)
@@ -15630,6 +15703,26 @@ PLI_INT32 persistCoverage(VPIState *state, bool save, PLI_INT32 type,
 }
 
 } // namespace
+
+void talos_rt_vpi_run_time_error(talos_rt_context *context,
+                                 const char *message) noexcept {
+  auto *state = context ? static_cast<VPIState *>(context->vpiState) : nullptr;
+  // Callbacks run only on the thread that owns the VPI binding.
+  if (!state || state != currentState() || state->runTimeErrorCallbacks == 0 ||
+      state->deliveringErrorCallbacks)
+    return;
+  TALOS_RT_TRY {
+    const std::string previousMessage = state->errorMessage;
+    const std::string previousCode = state->errorCode;
+    const int previousLevel = state->errorLevel;
+    setError(state, message, vpiError, "TALOS_SIM");
+    deliverErrorCallbacks(state, cbError);
+    state->errorMessage = previousMessage;
+    state->errorCode = previousCode;
+    state->errorLevel = previousLevel;
+  }
+  TALOS_RT_CATCH_ALL {}
+}
 
 extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_control(PLI_INT32 operation, ...) {
   VPICallScope vpiCallScope;

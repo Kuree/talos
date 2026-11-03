@@ -3829,6 +3829,8 @@ extern "C" talos_rt_status
 talos_rt_v1_scheduler_fatal(talos_rt_context *context, uint32_t verbosity) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
+  if (context->vpiState)
+    talos_rt_vpi_run_time_error(context, "run-time fatal error");
   ContextTransaction transaction(context);
   TALOS_RT_TRY {
     ContextMutexLock lock(context);
@@ -3843,6 +3845,8 @@ extern "C" talos_rt_status
 talos_rt_v1_scheduler_error(talos_rt_context *context) {
   if (!context)
     return TALOS_RT_INVALID_ARGUMENT;
+  if (context->vpiState)
+    talos_rt_vpi_run_time_error(context, "run-time error");
   ContextTransaction transaction(context);
   TALOS_RT_TRY {
     ContextMutexLock lock(context);

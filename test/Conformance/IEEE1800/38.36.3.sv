@@ -1,6 +1,5 @@
 // CLAUSE: Action callbacks: cbEndOfCompile, cbStartOfSimulation and cbEndOfSimulation fire in order, on $finish or an empty queue, and cbPLIError on a failed VPI call
-// XFAIL: *
-// The three lifecycle callbacks work, but vpi_register_cb rejects the other required actions such as cbPLIError (docs/vpi.md: other callback reasons are not implemented).
+// SINCE: 0.2.0
 // RUN: %clang -shared -fPIC %S/Inputs/38.36.3/probe.c -I%resource_dir/include -o %t.helper0.so
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top --vpi=full -O3 --execution-tier=%tier %s %t.helper0.so -o %t.exe
 // RUN: %t.exe

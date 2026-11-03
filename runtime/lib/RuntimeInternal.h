@@ -4430,6 +4430,11 @@ talos_rt_status
 talos_rt_vpi_export_begin(talos_rt_context *context,
                           const talos_rt_export_descriptor_v1 *descriptor,
                           uint64_t *outToken);
+// IEEE 1800-2023 38.36.3: a simulation run-time error ($error, $fatal; 20.10)
+// delivers cbError callbacks, during which vpi_chk_error reports `message`.
+// Cold; returns at once without registered cbError callbacks.
+void talos_rt_vpi_run_time_error(talos_rt_context *context,
+                                 const char *message) noexcept;
 talos_rt_status talos_rt_vpi_export_task_enter(talos_rt_context *context,
                                                uint64_t executor);
 talos_rt_status talos_rt_vpi_export_end(talos_rt_context *context,
