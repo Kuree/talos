@@ -1102,8 +1102,11 @@ talos_rt_status executeAOTNode(talos_rt_context *context, uint32_t actorSlot,
     // Tier 3 may introduce X/Z through operations that do not cross the
     // external-write hook. Invalidate before executing it so the next
     // quiescent generated dispatch rescans canonical unknown planes instead
-    // of reusing a stale two-state selection.
-    if (!(selected->descriptor->flags & TALOS_RT_PROCESS_BYTECODE_READ_ONLY))
+    // of reusing a stale two-state selection, unless the design interpreter
+    // reports each write's range itself (shared planes, B1).
+    if (!(selected->descriptor->flags & TALOS_RT_PROCESS_BYTECODE_READ_ONLY) &&
+        (!selected->descriptor->design_bytecode ||
+         !designBytecodeReportsWritesUnlocked(context)))
       invalidateNativeTwoStatePromotionUnlocked(context);
     const talos_rt_native_schedule_plan *plan = context->nativeSchedulePlan;
     bool synchronized = plan && plan->state_bit_count == 0;
@@ -1147,7 +1150,9 @@ talos_rt_status executeAOTNode(talos_rt_context *context, uint32_t actorSlot,
       {
         ContextMutexLock lock(context);
         if (!(selected->descriptor->flags &
-              TALOS_RT_PROCESS_BYTECODE_READ_ONLY))
+              TALOS_RT_PROCESS_BYTECODE_READ_ONLY) &&
+            (!selected->descriptor->design_bytecode ||
+             !designBytecodeReportsWritesUnlocked(context)))
           invalidateNativeTwoStatePromotionUnlocked(context);
       }
       tier = TALOS_RT_TIER_BYTECODE;
@@ -1158,8 +1163,12 @@ talos_rt_status executeAOTNode(talos_rt_context *context, uint32_t actorSlot,
   }
   if (tier == TALOS_RT_TIER_BYTECODE) {
     ContextMutexLock lock(context);
-    // Tier 3 writes shared planes in place without reporting its footprint.
-    if (!(selected->descriptor->flags & TALOS_RT_PROCESS_BYTECODE_READ_ONLY))
+    // The legacy fragment interpreter writes shared planes in place without
+    // reporting its footprint; the design interpreter reports each write
+    // when the planes are shared (B1).
+    if (!(selected->descriptor->flags & TALOS_RT_PROCESS_BYTECODE_READ_ONLY) &&
+        (!selected->descriptor->design_bytecode ||
+         !designBytecodeReportsWritesUnlocked(context)))
       markNativeUnknownAllUnlocked(context);
     const talos_rt_native_schedule_plan *plan = context->nativeSchedulePlan;
     if ((!plan || (plan->state_bit_count != 0 &&

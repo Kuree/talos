@@ -27,7 +27,10 @@ config.excludes = [
     "lit.site.cfg.py.in",
 ]
 
-llvm_config.with_system_environment(["HOME", "TMP", "TEMP"])
+# TALOS_RT_VERIFY_UNKNOWN_SUMMARY=1 checks every generated unknown-summary
+# refresh against the planes (catches a state writer that skipped its report).
+llvm_config.with_system_environment(
+    ["HOME", "TMP", "TEMP", "TALOS_RT_VERIFY_UNKNOWN_SUMMARY"])
 llvm_config.with_environment(
     "PATH", os.path.join(config.talos_llvm_dist, "bin"), append_path=True
 )

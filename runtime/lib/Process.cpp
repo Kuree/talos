@@ -1762,12 +1762,15 @@ talos_rt_v1_process_instance_execute(talos_rt_process_instance_v1 *instance,
           instance->scratch_offset + instance->scratch_size,
           instance->continuation, outAction);
     }
-    // The interpreter writes shared planes in place without reporting its
-    // footprint to the generated unknown summary.
+    // The legacy fragment interpreter writes shared planes in place without
+    // reporting its footprint to the generated unknown summary; the design
+    // interpreter reports every write when the planes are shared (B1).
     if (context &&
         !(instance->descriptor->flags & TALOS_RT_PROCESS_BYTECODE_READ_ONLY)) {
       ContextMutexLock lock(context);
-      markNativeUnknownAllUnlocked(context);
+      if (!instance->descriptor->design_bytecode ||
+          !designBytecodeReportsWritesUnlocked(context))
+        markNativeUnknownAllUnlocked(context);
     }
   }
 

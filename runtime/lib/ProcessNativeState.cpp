@@ -390,6 +390,18 @@ void markNativeUnknownBitsUnlocked(const talos_rt_context *context,
   });
 }
 
+bool designBytecodeReportsWritesUnlocked(const talos_rt_context *context) {
+  if (!context || !context->stateValue.shared() ||
+      !(context->stateUnknown.shared() || context->twoState()))
+    return false;
+  // Per-write reports reach a plan's promotion certificates only through
+  // the planes it shares (talos_rt_sync_native_state_range_unlocked).
+  const talos_rt_native_schedule_plan *plan = context->nativeSchedulePlan;
+  return !plan || (plan->state_value == reinterpret_cast<const uint8_t *>(
+                                            context->stateValue.data()) &&
+                   plan->state_unknown == context->nativeStateUnknown);
+}
+
 void markNativeUnknownAllUnlocked(const talos_rt_context *context) {
   NativeUnknownSummary *summary =
       context ? context->nativeUnknownSummary.get() : nullptr;

@@ -4713,6 +4713,262 @@ TEST(DesignBytecode, ExecutesRandomCycleIntrinsic) {
   talos_rt_v1_context_destroy(context);
 }
 
+// Two-tier B1: when the canonical planes are the generated planes, a design
+// bytecode activation reports exactly the roots it wrote to the generated
+// unknown summary instead of marking every root afterwards.
+TEST(DesignBytecode, SharedPlaneActivationMarksOnlyWrittenRoots) {
+  Fixture fixture;
+  fixture.bytecode = makeSchedulerBytecode();
+  {
+    constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
+    constexpr size_t layoutOffset = functionOffset + 96;
+    constexpr size_t codeOffset = layoutOffset + 4 * 40;
+    // Store 0xa5 with X in bit 2 to state bits [0, 8) immediately.
+    instruction(fixture.bytecode, codeOffset, 3, TALOS_RT_DB_STORE_STATE, 0, 0,
+                1, 0);
+    put64(fixture.bytecode, 32, imageChecksum(fixture.bytecode));
+  }
+  fixture.execution.bytecode = fixture.bytecode.data();
+  fixture.execution.bytecode_size = fixture.bytecode.size();
+  fixture.execution.checksum = imageChecksum(fixture.bytecode);
+  fixture.entry = {&fixture.execution, 0, 0};
+  fixture.layout.frame_size = 0;
+  fixture.layout.checksum = frameChecksum(fixture.layout);
+  fixture.descriptor.frame_layout = &fixture.layout;
+  fixture.descriptor.execution = &fixture.execution;
+  fixture.descriptor.design_bytecode = &fixture.entry;
+
+  for (bool shared : {true, false}) {
+    SCOPED_TRACE(shared ? "shared planes" : "imported planes");
+    talos_rt_context *context = nullptr;
+    ASSERT_EQ(
+        talos_rt_v1_context_create_for_design(&fixture.execution, &context),
+        TALOS_RT_OK);
+    alignas(8) std::array<uint64_t, 2> value{}, unknown{};
+    auto *v = reinterpret_cast<uint8_t *>(value.data());
+    auto *u = reinterpret_cast<uint8_t *>(unknown.data());
+    ASSERT_EQ(shared ? talos_rt_v1_native_state_bind_shared(context, v, u, 65)
+                     : talos_rt_v1_native_state_sync(context, v, u, 65),
+              TALOS_RT_OK);
+    // Root 0 is the written bits [0, 8), root 1 the rest of the state.
+    const talos_rt_native_unknown_root_v1 roots[] = {{0, 8, 0, 0},
+                                                     {8, 57, 0, 0}};
+    uint64_t summary = 0;
+    ASSERT_EQ(talos_rt_v1_native_state_bind_unknown_summary(
+                  context, u, 65, &summary, roots, 2, nullptr, 0),
+              TALOS_RT_OK);
+    const uint64_t all[] = {0, 0b11};
+    ASSERT_EQ(talos_rt_v1_native_state_refresh_unknown_summary(context, all, 1,
+                                                               nullptr),
+              1u);
+    ASSERT_EQ(summary, 0u);
+    const uint64_t markedAll = context->nativeUnknownSummary->markedAll;
+
+    talos_rt_process_instance_v1 *instance = nullptr;
+    ASSERT_EQ(
+        talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_scheduler_add(context, instance, 0), TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+
+    EXPECT_EQ(value[0] & UINT64_C(0xff), UINT64_C(0xa5));
+    EXPECT_EQ(unknown[0] & UINT64_C(0xff), UINT64_C(0x04));
+    if (shared) {
+      // Only the written root holds new X/Z; nothing marked every root.
+      EXPECT_EQ(summary, 0b01u);
+      EXPECT_EQ(context->nativeUnknownSummary->markedAll, markedAll);
+    } else {
+      // Without shared planes the activation still invalidates every root.
+      EXPECT_EQ(summary, 0b11u);
+      EXPECT_GT(context->nativeUnknownSummary->markedAll, markedAll);
+    }
+    talos_rt_v1_context_destroy(context);
+  }
+}
+
+namespace {
+uint64_t sharedPlanePromotionInvalidations = 0;
+std::vector<std::pair<uint64_t, uint64_t>> sharedPlanePromotionRanges;
+void countSharedPlanePromotionInvalidation() {
+  ++sharedPlanePromotionInvalidations;
+}
+void recordSharedPlanePromotionRange(uint64_t offset, uint64_t width) {
+  sharedPlanePromotionRanges.emplace_back(offset, width);
+}
+} // namespace
+
+// Two-tier B1: an AOT node executed in bytecode over shared planes reports
+// only its stored range to the plan's promotion certificates and the unknown
+// summary; with imported planes it still invalidates every proof.
+TEST(DesignBytecode, SharedPlaneAOTNodeInvalidatesOnlyWrittenRanges) {
+  Fixture fixture;
+  fixture.bytecode = makeSchedulerBytecode();
+  {
+    constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
+    constexpr size_t layoutOffset = functionOffset + 96;
+    constexpr size_t codeOffset = layoutOffset + 4 * 40;
+    instruction(fixture.bytecode, codeOffset, 3, TALOS_RT_DB_STORE_STATE, 0, 0,
+                1, 0);
+    put64(fixture.bytecode, 32, imageChecksum(fixture.bytecode));
+  }
+  fixture.execution.bytecode = fixture.bytecode.data();
+  fixture.execution.bytecode_size = fixture.bytecode.size();
+  fixture.execution.checksum = imageChecksum(fixture.bytecode);
+  fixture.entry = {&fixture.execution, 0, 0};
+  fixture.layout.frame_size = 0;
+  fixture.layout.checksum = frameChecksum(fixture.layout);
+  fixture.descriptor.frame_layout = &fixture.layout;
+  fixture.descriptor.execution = &fixture.execution;
+  fixture.descriptor.design_bytecode = &fixture.entry;
+
+  for (bool shared : {true, false}) {
+    SCOPED_TRACE(shared ? "shared planes" : "imported planes");
+    talos_rt_context *context = nullptr;
+    ASSERT_EQ(
+        talos_rt_v1_context_create_for_design(&fixture.execution, &context),
+        TALOS_RT_OK);
+    alignas(8) std::array<uint64_t, 2> value{}, unknown{};
+    auto *v = reinterpret_cast<uint8_t *>(value.data());
+    auto *u = reinterpret_cast<uint8_t *>(unknown.data());
+    ASSERT_EQ(shared ? talos_rt_v1_native_state_bind_shared(context, v, u, 65)
+                     : talos_rt_v1_native_state_sync(context, v, u, 65),
+              TALOS_RT_OK);
+    const talos_rt_native_unknown_root_v1 roots[] = {{0, 8, 0, 0},
+                                                     {8, 57, 0, 0}};
+    uint64_t summary = 0;
+    ASSERT_EQ(talos_rt_v1_native_state_bind_unknown_summary(
+                  context, u, 65, &summary, roots, 2, nullptr, 0),
+              TALOS_RT_OK);
+    const uint64_t all[] = {0, 0b11};
+    ASSERT_EQ(talos_rt_v1_native_state_refresh_unknown_summary(context, all, 1,
+                                                               nullptr),
+              1u);
+
+    talos_rt_process_instance_v1 *actor = nullptr;
+    talos_rt_native_schedule_plan plan{};
+    plan.size = sizeof(plan);
+    plan.graph_layout_checksum = fixture.execution.checksum;
+    plan.flags = TALOS_RT_NATIVE_SCHEDULE_FULLY_STATIC;
+    plan.mutable_state = &actor;
+    plan.mutable_state_size = sizeof(actor);
+    plan.actor_capacity = 1;
+    plan.bind = [](void *state, talos_rt_context *, uint32_t slot,
+                   talos_rt_process_instance_v1 *instance) {
+      if (slot != 0)
+        return TALOS_RT_INVALID_ARGUMENT;
+      *static_cast<talos_rt_process_instance_v1 **>(state) = instance;
+      return TALOS_RT_OK;
+    };
+    plan.run = [](void *, talos_rt_context *ctx) {
+      constexpr talos_rt_native_schedule_node nodes[] = {{0, 0, UINT32_MAX}};
+      return talos_rt_v1_scheduler_run_aot_nodes(ctx, nodes, std::size(nodes));
+    };
+    plan.fallback_snapshot = [](void *, talos_rt_context *ctx,
+                                talos_rt_aot_deopt_snapshot *snapshot) {
+      return talos_rt_v1_scheduler_snapshot_aot(ctx, snapshot);
+    };
+    plan.state_value = v;
+    plan.state_unknown = u;
+    plan.state_bit_count = 65;
+    plan.promotion_invalidate = countSharedPlanePromotionInvalidation;
+    plan.promotion_invalidate_range = recordSharedPlanePromotionRange;
+    plan.promotion_recheck_range = recordSharedPlanePromotionRange;
+    ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
+    talos_rt_process_instance_v1 *instance = nullptr;
+    ASSERT_EQ(
+        talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+        TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context, instance, 0, 0, 0, nullptr,
+                                            nullptr, 0, nullptr, 0),
+              TALOS_RT_OK);
+    const uint64_t markedAll = context->nativeUnknownSummary->markedAll;
+    sharedPlanePromotionInvalidations = 0;
+    sharedPlanePromotionRanges.clear();
+    ASSERT_EQ(talos_rt_v1_scheduler_run_aot(context), TALOS_RT_OK);
+
+    EXPECT_EQ(context->signalDiagnostics.aotNodeExecutions, 1u);
+    EXPECT_FALSE(context->nativeScheduleDeoptimized);
+    EXPECT_EQ(value[0] & UINT64_C(0xff), UINT64_C(0xa5));
+    EXPECT_EQ(unknown[0] & UINT64_C(0xff), UINT64_C(0x04));
+    if (shared) {
+      EXPECT_EQ(sharedPlanePromotionInvalidations, 0u);
+      ASSERT_FALSE(sharedPlanePromotionRanges.empty());
+      for (auto [offset, width] : sharedPlanePromotionRanges)
+        EXPECT_LE(offset + width, 8u);
+      EXPECT_EQ(summary, 0b01u);
+      EXPECT_EQ(context->nativeUnknownSummary->markedAll, markedAll);
+    } else {
+      EXPECT_GE(sharedPlanePromotionInvalidations, 1u);
+      EXPECT_GT(context->nativeUnknownSummary->markedAll, markedAll);
+    }
+    talos_rt_v1_context_destroy(context);
+  }
+}
+
+// IEEE 1800-2023 10.6.2: releasing a forced variable reveals its procedural
+// assign value. The bytecode release reports that write like any store, so a
+// bound native plane and the generated unknown summary see it (two-tier B1).
+TEST(DesignBytecode, ReleaseRevealsAssignValueInBoundPlanes) {
+  Fixture fixture;
+  fixture.bytecode = makeSchedulerBytecode();
+  {
+    constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
+    constexpr size_t layoutOffset = functionOffset + 96;
+    constexpr size_t codeOffset = layoutOffset + 4 * 40;
+    constexpr size_t operandOffset = codeOffset + 7 * 32;
+    constexpr size_t constantOffset = operandOffset + 4 * 8;
+    auto &bytes = fixture.bytecode;
+    // Register 2 becomes an 8-bit logic holding a known 5; the event handle
+    // register moves up to keep the layouts in order.
+    size_t record = layoutOffset + 2 * 40;
+    bytes[record] = TALOS_RT_DBREG_LOGIC;
+    put32(bytes, record + 4, 8);
+    put64(bytes, record + 8, 56);
+    put64(bytes, record + 16, 16);
+    put64(bytes, layoutOffset + 3 * 40 + 8, 72);
+    put64(bytes, functionOffset + 56, 104);
+    put64(bytes, constantOffset + 16, 5);
+    put64(bytes, constantOffset + 24, 0);
+    // assign r = 8'ha5 with X in bit 2; force r = 5; release r.
+    instruction(bytes, codeOffset, 3, TALOS_RT_DB_OVERRIDE_STATE,
+                TALOS_RT_DB_OVERRIDE_ASSIGN, 0, 1, 0);
+    instruction(bytes, codeOffset, 4, TALOS_RT_DB_OVERRIDE_STATE,
+                TALOS_RT_DB_OVERRIDE_FORCE, 0, 1, 2);
+    instruction(bytes, codeOffset, 5, TALOS_RT_DB_RELEASE_STATE,
+                TALOS_RT_DB_OVERRIDE_FORCE, 0, 1);
+    put64(bytes, 32, imageChecksum(bytes));
+  }
+  fixture.execution.bytecode = fixture.bytecode.data();
+  fixture.execution.bytecode_size = fixture.bytecode.size();
+  fixture.execution.checksum = imageChecksum(fixture.bytecode);
+  fixture.entry = {&fixture.execution, 0, 0};
+  fixture.layout.frame_size = 0;
+  fixture.layout.checksum = frameChecksum(fixture.layout);
+  fixture.descriptor.frame_layout = &fixture.layout;
+  fixture.descriptor.execution = &fixture.execution;
+  fixture.descriptor.design_bytecode = &fixture.entry;
+
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&fixture.execution, &context),
+            TALOS_RT_OK);
+  alignas(8) std::array<uint64_t, 2> value{}, unknown{};
+  ASSERT_EQ(talos_rt_v1_native_state_sync(
+                context, reinterpret_cast<uint8_t *>(value.data()),
+                reinterpret_cast<uint8_t *>(unknown.data()), 65),
+            TALOS_RT_OK);
+  talos_rt_process_instance_v1 *instance = nullptr;
+  ASSERT_EQ(talos_rt_v1_process_instance_create(&fixture.descriptor, &instance),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_add(context, instance, 0), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  // The canonical state and the bound native plane both hold the assign.
+  EXPECT_EQ(context->stateValue[0] & UINT64_C(0xff), UINT64_C(0xa5));
+  EXPECT_EQ(context->stateUnknown[0] & UINT64_C(0xff), UINT64_C(0x04));
+  EXPECT_EQ(value[0] & UINT64_C(0xff), UINT64_C(0xa5));
+  EXPECT_EQ(unknown[0] & UINT64_C(0xff), UINT64_C(0x04));
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(DesignBytecode, SchedulerCommitsDelayedNBAAndDeferredEvent) {
   Fixture fixture;
   fixture.bytecode = makeSchedulerBytecode();

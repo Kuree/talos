@@ -156,6 +156,13 @@ void markNativeUnknownBitsUnlocked(const talos_rt_context *context,
                                    uint64_t unknown,
                                    uint64_t written = UINT64_MAX);
 void markNativeUnknownAllUnlocked(const talos_rt_context *context);
+/// Whether every write the design-bytecode interpreter makes to design state
+/// reports its own bit range to the generated unknown summary and promotion
+/// certificates (talos_rt_sync_native_state_range_unlocked and the commit
+/// helpers). True when the canonical planes are the generated planes: no
+/// copy separates them, so the per-write reports are complete and a bytecode
+/// activation needs no whole-plane invalidation (two-tier B1).
+bool designBytecodeReportsWritesUnlocked(const talos_rt_context *context);
 void verifyNativeUnknownSummaryUnlocked(const talos_rt_context *context);
 void refreshNativeStaticSpecializationFastUnlocked(talos_rt_context *context);
 bool storeNativeScheduleStateUnlocked(

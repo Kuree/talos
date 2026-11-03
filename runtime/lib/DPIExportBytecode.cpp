@@ -7,13 +7,14 @@
 #include <limits>
 
 namespace {
-// An exported function runs in the interpreter, which writes shared planes in
-// place without reporting its footprint to the generated unknown summary.
+// An exported function runs in the design interpreter, which reports each
+// write's range itself only when the planes are shared (B1).
 talos_rt_status reportExportWrites(talos_rt_context *context,
                                    talos_rt_status status) {
   if (context) {
     ContextMutexLock lock(context);
-    markNativeUnknownAllUnlocked(context);
+    if (!designBytecodeReportsWritesUnlocked(context))
+      markNativeUnknownAllUnlocked(context);
   }
   return status;
 }

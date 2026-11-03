@@ -3593,6 +3593,15 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
                  oldValue, oldUnknown, newValue, newUnknown});
           }
         }
+        // IEEE 1800-2023 10.6.2: the released variable reveals its procedural
+        // assign or retained continuous value. Report the range to the bound
+        // native planes, the generated unknown summary and promotion
+        // certificates, as talos_rt_v1_design_release does (two-tier B1).
+        if (descriptorKind == TALOS_RT_DESCRIPTOR_STORAGE) {
+          talos_rt_sync_native_state_range_unlocked(context, storageBegin,
+                                                    width);
+          talos_rt_aot_release_range_unlocked(context, storageBegin, width);
+        }
         if (!transitions.empty()) {
           PackedSignalTransitionBuffer packed(width);
           for (const PendingTransition &transition : transitions)
