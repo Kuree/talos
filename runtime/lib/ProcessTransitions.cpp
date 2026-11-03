@@ -2316,7 +2316,9 @@ bool publishCommittedSignalTransitionUnlocked(
           sequence, byteBit(newValue, bit),
           newUnknown && byteBit(newUnknown, bit)};
     }
-    for (uint64_t bit = 0; bit != bitWidth; ++bit) {
+    bool latchable =
+        talos_rt_conditional_event_relevant(context, bitOffset, bitWidth);
+    for (uint64_t bit = 0; latchable && bit != bitWidth; ++bit) {
       if (!byteBit(changed, bit) || bit > static_cast<uint64_t>(INT64_MAX))
         continue;
       uint64_t eventHandle =

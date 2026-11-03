@@ -2652,7 +2652,7 @@ struct talos_rt_context {
   bool scheduledFinalProcessPresent = false;
   std::unordered_set<uint64_t> unstartedActiveActors;
   std::unordered_set<uint64_t> unstartedFinalActors;
-  std::unordered_map<uint64_t, SignalValueSnapshot> signalValueSnapshots;
+  talos::runtime::FlatU64Map<SignalValueSnapshot> signalValueSnapshots;
   using SignalSubscriptionBucketMap =
       std::unordered_map<SignalSubscriptionBucketKey,
                          std::vector<SignalSubscriptionBucketEntry>,
@@ -2678,6 +2678,15 @@ struct talos_rt_context {
   std::vector<uint64_t> pendingDesignComputedWaiters;
   std::unordered_set<uint64_t> nativeConditionalSignalWaiters;
   std::unordered_set<uint64_t> designConditionalSignalWaiters;
+  // The event operand of each conditional waiter above (the first wait entry
+  // of an `iff` or level wait). A published bit outside all of them cannot
+  // latch any conditional waiter (two-tier B2 S6).
+  struct ConditionalEventRange {
+    uint64_t waiter = 0;
+    bool designWaiter = false;
+    uint64_t stableID = 0, width = 0;
+  };
+  std::vector<ConditionalEventRange> conditionalEventRanges;
   uint64_t schedulerSelectionGeneration = 1;
   bool signalDiagnosticsEnabled = false;
   bool signalDiagnosticsReport = false;
@@ -3342,6 +3351,12 @@ inline bool talos_rt_unstarted_actor_pending(talos_rt_context *context,
   return !talos_rt_unstarted_actors(context, phase).empty() &&
          talos_rt_unstarted_actor_region(context, phase) != UINT32_MAX;
 }
+
+/// Whether a publication of [bitOffset, bitOffset + bitWidth) touches the
+/// event operand of some `iff` or level waiter; only then can it latch one
+/// (two-tier B2 S6). Each waiter's latch also tests this overlap itself.
+bool talos_rt_conditional_event_relevant(const talos_rt_context *context,
+                                         uint64_t bitOffset, uint64_t bitWidth);
 
 inline bool
 talos_rt_has_conditional_signal_waiters(const talos_rt_context *context) {

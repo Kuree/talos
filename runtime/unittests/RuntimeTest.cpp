@@ -7749,6 +7749,36 @@ TEST_F(ManagedHeapTest, RegistersGrowingInterfaceParentsAndRepairsFailedMerge) {
 // standard containers they replace under a random mix of inserts, updates,
 // erases (tombstones, slot reuse), clears and rehashes, and iterate over
 // exactly their live elements.
+TEST(FlatU64Table, ShrinksAfterABurstOfErasures) {
+  // Iteration walks every slot, so a table that held many keys once is
+  // rebuilt for its live keys when it becomes sparse (two-tier B2 S6).
+  talos::runtime::FlatU64Map<uint64_t> map;
+  for (uint64_t key = 1; key <= 4096; ++key)
+    map[key] = key * 3;
+  for (uint64_t key = 1; key <= 4096; ++key)
+    if (key % 512 != 0)
+      map.erase(key);
+  ASSERT_EQ(map.size(), 8u);
+  EXPECT_GE(map.capacity(), 4096u);
+  map.shrinkIfSparse();
+  EXPECT_LE(map.capacity(), 64u);
+  size_t walked = 0;
+  for (auto it = map.begin(); it != map.end(); ++it)
+    ++walked;
+  EXPECT_EQ(walked, 8u);
+  for (uint64_t key = 512; key <= 4096; key += 512) {
+    auto found = map.find(key);
+    ASSERT_NE(found, map.end());
+    EXPECT_EQ(found->second, key * 3);
+  }
+  // The rebuilt table keeps working: new keys, erasures, lookups.
+  map[7] = 70;
+  map.erase(512);
+  EXPECT_EQ(map.count(512), 0u);
+  EXPECT_EQ(map.find(7)->second, 70u);
+  EXPECT_EQ(map.size(), 8u);
+}
+
 TEST(FlatU64Table, MatchesStandardContainers) {
   using talos::runtime::FlatU64Map;
   using talos::runtime::FlatU64Set;

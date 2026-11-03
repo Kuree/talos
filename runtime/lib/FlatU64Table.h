@@ -60,6 +60,15 @@ public:
       rehash(elements);
   }
 
+  /// Rebuilds for the live keys when at most an eighth of the slots hold one,
+  /// so iteration (which walks every slot) costs the size again after a
+  /// burst of erasures. Invalidates iterators; may throw bad_alloc and then
+  /// changes nothing.
+  void shrinkIfSparse() {
+    if (capacity() > 64 && count * 8 <= capacity())
+      rehash(count);
+  }
+
 protected:
   size_t capacity() const { return control.size(); }
 
@@ -239,6 +248,10 @@ public:
   size_t erase(uint64_t key) { return storage.eraseKey(key); }
   /// Erases the element `at` points to (a valid, dereferenceable iterator).
   void erase(iterator at) { storage.eraseSlot(at.at); }
+  /// See flat_detail::Table::shrinkIfSparse.
+  void shrinkIfSparse() { storage.shrinkIfSparse(); }
+  /// The slot count, which iteration walks.
+  size_t capacity() const { return storage.capacity(); }
 
   size_t size() const { return storage.size(); }
   bool empty() const { return storage.empty(); }

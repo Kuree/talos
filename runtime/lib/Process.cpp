@@ -1437,14 +1437,17 @@ void talos_rt_erase_automatic_bookkeeping_unlocked(talos_rt_context *context,
       !state->second.managedRootByteOffsets.empty()) {
     state->second.managedRootByteOffsets.clear();
   }
-  for (auto snapshot = context->signalValueSnapshots.begin();
-       snapshot != context->signalValueSnapshots.end();) {
-    uint32_t id = 0;
-    int64_t offset = 0;
-    if (decodeNativeAutomatic(snapshot->first, id, offset) && id == automaticID)
-      snapshot = context->signalValueSnapshots.erase(snapshot);
-    else
-      ++snapshot;
+  if (!context->signalValueSnapshots.empty()) {
+    for (auto snapshot = context->signalValueSnapshots.begin();
+         snapshot != context->signalValueSnapshots.end(); ++snapshot) {
+      uint32_t id = 0;
+      int64_t offset = 0;
+      if (decodeNativeAutomatic(snapshot->first, id, offset) &&
+          id == automaticID)
+        context->signalValueSnapshots.erase(snapshot);
+    }
+    TALOS_RT_TRY { context->signalValueSnapshots.shrinkIfSparse(); }
+    TALOS_RT_CATCH_ALL {}
   }
 
   uint64_t first = talos_rt_stable_handle_encode(
@@ -1459,8 +1462,17 @@ void talos_rt_erase_automatic_bookkeeping_unlocked(talos_rt_context *context,
 void talos_rt_invalidate_signal_snapshots_unlocked(talos_rt_context *context,
                                                    uint64_t bitOffset,
                                                    uint64_t bitWidth) {
-  if (!context || bitWidth == 0)
+  if (!context || bitWidth == 0 || context->signalValueSnapshots.empty())
     return;
+  // Iterating walks every slot, so keep the table sized to its live
+  // snapshots after a burst of them has been erased.
+  struct Shrink {
+    talos_rt_context *context;
+    ~Shrink() {
+      TALOS_RT_TRY { context->signalValueSnapshots.shrinkIfSparse(); }
+      TALOS_RT_CATCH_ALL {}
+    }
+  } shrink{context};
   // Snapshots are stored per canonical stable bit handle. For the common
   // scalar and narrow-write cases, erase the affected handles directly
   // instead of walking every snapshot retained by unrelated signals. Retain
@@ -1477,12 +1489,11 @@ void talos_rt_invalidate_signal_snapshots_unlocked(talos_rt_context *context,
     }
     return;
   }
+  // Erasing leaves the other elements in place, so the walk continues.
   for (auto snapshot = context->signalValueSnapshots.begin();
-       snapshot != context->signalValueSnapshots.end();)
+       snapshot != context->signalValueSnapshots.end(); ++snapshot)
     if (rangesOverlap(snapshot->first, 1, bitOffset, bitWidth))
-      snapshot = context->signalValueSnapshots.erase(snapshot);
-    else
-      ++snapshot;
+      context->signalValueSnapshots.erase(snapshot);
 }
 
 static talos_rt_status

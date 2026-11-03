@@ -2965,16 +2965,39 @@ TEST(RuntimeInternals, ConditionalWakeUpdatesSchedulerSelectionGeneration) {
   auto *entries = reinterpret_cast<talos_rt_wait_entry_v1 *>(wait + 1);
   entries[0] = {watched, TALOS_RT_WAIT_EDGE_POSEDGE, 1};
   entries[1] = {condition, TALOS_RT_WAIT_EDGE_NONE, 1};
+  // Register the wait as the scheduler does when the task suspends: that
+  // records the waiter and its event operand's range.
+  std::vector<std::unique_ptr<SignalSubscription>> subscriptions;
+  std::unique_ptr<SignalWaitLatch> latch;
+  ASSERT_TRUE(talos_rt_register_signal_wait_unlocked(
+      context, wait, subscriptions, latch, 11, /*designWaiter=*/true));
   context->scheduledDesignTasks.push_back(std::move(task));
   context->scheduledDesignTaskIndices[11] = 0;
-  context->designConditionalSignalWaiters.insert(11);
+  EXPECT_EQ(context->designConditionalSignalWaiters.count(11), 1u);
 
+  // Two-tier B2 S6: a publication outside every conditional waiter's event
+  // operand latches nothing (here the `iff` operand itself).
+  EXPECT_TRUE(talos_rt_conditional_event_relevant(context, watched, 1));
+  EXPECT_FALSE(talos_rt_conditional_event_relevant(context, condition, 1));
+  EXPECT_TRUE(talos_rt_conditional_event_relevant(context, condition - 1, 2));
   uint64_t selectionGeneration = context->schedulerSelectionGeneration;
+  ASSERT_TRUE(talos_rt_latch_conditional_signal_waiters_unlocked(
+      context, condition, TALOS_RT_SIGNAL_CHANGE | TALOS_RT_SIGNAL_POSEDGE));
+  EXPECT_FALSE(context->scheduledDesignTasks.front().signalTriggered);
+  EXPECT_EQ(context->schedulerSelectionGeneration, selectionGeneration);
+
   ASSERT_TRUE(talos_rt_latch_conditional_signal_waiters_unlocked(
       context, watched, TALOS_RT_SIGNAL_CHANGE | TALOS_RT_SIGNAL_POSEDGE));
   EXPECT_TRUE(context->scheduledDesignTasks.front().signalTriggered);
   EXPECT_EQ(context->designPollCandidates.count(11), 1u);
   EXPECT_NE(context->schedulerSelectionGeneration, selectionGeneration);
+
+  // Unregistering the wait drops its event range with it.
+  talos_rt_unregister_signal_wait_unlocked(context, subscriptions, 11,
+                                           /*designWaiter=*/true);
+  EXPECT_EQ(context->designConditionalSignalWaiters.count(11), 0u);
+  EXPECT_FALSE(talos_rt_conditional_event_relevant(context, watched, 1));
+  EXPECT_TRUE(context->conditionalEventRanges.empty());
 
   talos_rt_v1_context_destroy(context);
 }

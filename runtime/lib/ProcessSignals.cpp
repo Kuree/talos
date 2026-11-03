@@ -1335,10 +1335,20 @@ void talos_rt_unregister_signal_wait_unlocked(
     return;
   }
   if (waiterToken != 0) {
-    if (designWaiter)
-      context->designConditionalSignalWaiters.erase(waiterToken);
-    else
-      context->nativeConditionalSignalWaiters.erase(waiterToken);
+    size_t conditional =
+        designWaiter
+            ? context->designConditionalSignalWaiters.erase(waiterToken)
+            : context->nativeConditionalSignalWaiters.erase(waiterToken);
+    // A waiter's event range is recorded only while it is in the set.
+    auto &ranges = context->conditionalEventRanges;
+    for (size_t index = 0; conditional != 0 && index != ranges.size();)
+      if (ranges[index].waiter == waiterToken &&
+          ranges[index].designWaiter == designWaiter) {
+        ranges[index] = ranges.back();
+        ranges.pop_back();
+      } else {
+        ++index;
+      }
     bool *computedRegistered = nullptr;
     if (designWaiter) {
       // Generic computed waits may depend only on events or managed objects.
@@ -1589,6 +1599,11 @@ bool talos_rt_register_signal_wait_unlocked(
           context->designConditionalSignalWaiters.insert(waiterToken);
         else
           context->nativeConditionalSignalWaiters.insert(waiterToken);
+        if (wait->count != 0) {
+          const talos_rt_wait_entry_v1 &event = waitEntries(wait)[0];
+          context->conditionalEventRanges.push_back(
+              {waiterToken, designWaiter, event.stable_id, event.reserved});
+        }
       }
       TALOS_RT_CATCH(const std::bad_alloc &) {
         context->schedulerStatus = TALOS_RT_OUT_OF_MEMORY;
@@ -1939,11 +1954,21 @@ bool talos_rt_level_wait_entry_true_unlocked(
   return false;
 }
 
+bool talos_rt_conditional_event_relevant(const talos_rt_context *context,
+                                         uint64_t bitOffset,
+                                         uint64_t bitWidth) {
+  for (const auto &range : context->conditionalEventRanges)
+    if (rangesOverlap(range.stableID, range.width, bitOffset, bitWidth))
+      return true;
+  return false;
+}
+
 namespace {
 
 bool latchConditionalSignalWaitersImpl(talos_rt_context *context,
                                        uint64_t bitOffset, uint32_t edges) {
-  if (!talos_rt_has_conditional_signal_waiters(context))
+  if (!talos_rt_has_conditional_signal_waiters(context) ||
+      !talos_rt_conditional_event_relevant(context, bitOffset, 1))
     return true;
   auto levelTrue = [&](const talos_rt_wait_entry_v1 &entry) {
     return talos_rt_level_wait_entry_true_unlocked(context, entry);
