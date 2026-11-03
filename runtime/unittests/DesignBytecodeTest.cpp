@@ -303,6 +303,106 @@ std::vector<uint8_t> makeMixedPathBytecode() {
   return bytes;
 }
 
+/// Wide constants and canonical-frame transfers (two-tier B3): a masked
+/// 65-bit four-state constant and a 384-bit two-state constant stored to the
+/// canonical frame and loaded back (the two-state load narrower than its
+/// register), a 65-bit constant whose final limbs carry bits above its width,
+/// which only the general path masks, and a 20-byte four-state transfer with
+/// a 24-byte plane displacement loaded into a pre-filled 128-bit register.
+std::vector<uint8_t> makeWideTransferBytecode() {
+  constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
+  constexpr size_t layoutOffset = functionOffset + 96;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(6);
+  constexpr size_t constantOffset = codeOffset + 12 * 32;
+  constexpr size_t continuationOffset = constantOffset + 144;
+  std::vector<uint8_t> bytes(continuationOffset + 24, 0);
+  std::memcpy(bytes.data(), "OBBCDS1\0", 8);
+  put32(bytes, 8, TALOS_RT_VERSION);
+  put32(bytes, 12, 0);
+  put32(bytes, 16, TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE);
+  put64(bytes, 24, bytes.size());
+  put64(bytes, 40, functionOffset);
+  put64(bytes, 48, 1);
+  put64(bytes, 56, layoutOffset);
+  put64(bytes, 64, 6);
+  put64(bytes, 72, codeOffset);
+  put64(bytes, 80, 12);
+  put64(bytes, 88, constantOffset);
+  put64(bytes, 96, 0);
+  put64(bytes, 104, constantOffset);
+  put64(bytes, 112, 144);
+  put64(bytes, 120, continuationOffset);
+  put64(bytes, 128, 1);
+  put64(bytes, 136, bytes.size());
+  put64(bytes, 152, bytes.size());
+  put64(bytes, 168, bytes.size());
+  put64(bytes, 184, bytes.size());
+
+  put64(bytes, functionOffset, 1);
+  put64(bytes, functionOffset + 16, 0);
+  put64(bytes, functionOffset + 24, 12);
+  put64(bytes, functionOffset + 32, 0);
+  put64(bytes, functionOffset + 40, 6);
+  put32(bytes, functionOffset + 48, 0);
+  put32(bytes, functionOffset + 52, 0);
+  put64(bytes, functionOffset + 56, 224);
+  put64(bytes, functionOffset + 64, 8);
+  put64(bytes, functionOffset + 72, 0);
+  put64(bytes, functionOffset + 80, 1);
+  put64(bytes, functionOffset + 88, 1);
+
+  putShapeTable(bytes, layoutOffset, 6);
+  putLayout(bytes, layoutOffset, 6, 0, TALOS_RT_DBREG_LOGIC, 65, 0, 32);
+  putLayout(bytes, layoutOffset, 6, 1, TALOS_RT_DBREG_BITS, 384, 32, 48);
+  putLayout(bytes, layoutOffset, 6, 2, TALOS_RT_DBREG_LOGIC, 65, 80, 32);
+  putLayout(bytes, layoutOffset, 6, 3, TALOS_RT_DBREG_BITS, 384, 112, 48);
+  putLayout(bytes, layoutOffset, 6, 4, TALOS_RT_DBREG_LOGIC, 65, 160, 32);
+  putLayout(bytes, layoutOffset, 6, 5, TALOS_RT_DBREG_LOGIC, 128, 192, 32);
+
+  instruction(bytes, codeOffset, 0, TALOS_RT_DB_CONSTANT, 0, 0, 0, 0, 0, 0, 0);
+  instruction(bytes, codeOffset, 1, TALOS_RT_DB_CONSTANT, 0, 1, 0, 0, 0, 0, 32);
+  instruction(bytes, codeOffset, 2, TALOS_RT_DB_STORE_FRAME, 0, 0, 0, 0, 0, 0,
+              0);
+  instruction(bytes, codeOffset, 3, TALOS_RT_DB_STORE_FRAME, 0, 0, 1, 0, 0, 0,
+              32);
+  instruction(bytes, codeOffset, 4, TALOS_RT_DB_LOAD_FRAME, 0, 2, 0, 0, 0, 0,
+              0);
+  // r3 holds the 384-bit constant before the narrower load must zero it.
+  instruction(bytes, codeOffset, 5, TALOS_RT_DB_CONSTANT, 0, 3, 0, 0, 0, 0, 32);
+  instruction(bytes, codeOffset, 6, TALOS_RT_DB_LOAD_FRAME, 0, 3, 0, 0, 0, 40,
+              32);
+  instruction(bytes, codeOffset, 7, TALOS_RT_DB_CONSTANT, 0, 4, 0, 0, 0, 0, 80);
+  // 10 bytes per plane, the unknown plane 24 bytes after the value plane.
+  instruction(bytes, codeOffset, 8, TALOS_RT_DB_STORE_FRAME, 0, 0, 0, 24, 0, 20,
+              80);
+  instruction(bytes, codeOffset, 9, TALOS_RT_DB_CONSTANT, 0, 5, 0, 0, 0, 0,
+              112);
+  instruction(bytes, codeOffset, 10, TALOS_RT_DB_LOAD_FRAME, 0, 5, 0, 24, 0, 20,
+              80);
+  instruction(bytes, codeOffset, 11, TALOS_RT_DB_TERMINATE);
+  // 65-bit four-state: value {lo, 1}, unknown {0xf0, 1}.
+  put64(bytes, constantOffset, UINT64_C(0xfedcba9876543210));
+  put64(bytes, constantOffset + 8, 1);
+  put64(bytes, constantOffset + 16, 0xf0);
+  put64(bytes, constantOffset + 24, 1);
+  for (uint64_t limb = 0; limb != 6; ++limb)
+    put64(bytes, constantOffset + 32 + limb * 8,
+          UINT64_C(0x0101010101010101) * (limb + 1));
+  // Bits above 65 in both planes' final limbs.
+  put64(bytes, constantOffset + 80, 7);
+  put64(bytes, constantOffset + 88, UINT64_C(0xff03));
+  put64(bytes, constantOffset + 96, 9);
+  put64(bytes, constantOffset + 104, UINT64_C(0xff02));
+  // 128-bit all-ones four-state fill.
+  for (uint64_t limb = 0; limb != 4; ++limb)
+    put64(bytes, constantOffset + 112 + limb * 8, UINT64_MAX);
+  put32(bytes, continuationOffset, 0);
+  put32(bytes, continuationOffset + 4, 0);
+  put64(bytes, continuationOffset + 8, 0);
+  put64(bytes, 32, imageChecksum(bytes));
+  return bytes;
+}
+
 std::vector<uint8_t> makeDynamicScanIntrinsicBytecode(uint32_t intrinsicID) {
   constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
   constexpr size_t layoutOffset = functionOffset + 96;
@@ -3970,6 +4070,88 @@ TEST(DesignBytecode, StepLimitCountsEachInstructionOnceOnEitherPath) {
     EXPECT_EQ(frame[0] & 0xffffffffu, 0x12345678u);
     EXPECT_EQ(frame[2], UINT64_C(0xfedcba9876543210));
   }
+  talos_rt_v1_context_destroy(context);
+}
+
+TEST(DesignBytecode, WideConstantsAndFrameTransfersMatchTheGeneralPath) {
+  // Two-tier B3: the context's own image runs wide constants and canonical
+  // frame transfers as byte-copy fast ops; a copy of the image (another
+  // descriptor) runs the general implementation. Both leave the same frame,
+  // and a canonical frame too small for a transfer fails the same way.
+  std::vector<uint8_t> bytecode = makeWideTransferBytecode();
+  std::vector<uint8_t> copy = bytecode;
+  talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
+                                             TALOS_RT_EXECUTION_HAS_BYTECODE,
+                                             0,
+                                             bytecode.data(),
+                                             bytecode.size(),
+                                             nullptr,
+                                             0,
+                                             1,
+                                             imageChecksum(bytecode),
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
+  talos_rt_execution_descriptor_v1 other = execution;
+  other.bytecode = copy.data();
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+            TALOS_RT_OK);
+  // 120 canonical bytes, then 224 scratch bytes.
+  using Frame = std::array<uint64_t, 43>;
+  auto run = [&](const talos_rt_execution_descriptor_v1 &descriptor,
+                 uint64_t canonicalSize, Frame &frame) {
+    frame.fill(UINT64_C(0xaaaaaaaaaaaaaaaa));
+    talos_rt_fragment_action_v1 action{};
+    talos_rt_design_bytecode_entry_v1 entry{&descriptor, 0, 0};
+    uint8_t *base =
+        reinterpret_cast<uint8_t *>(frame.data()) + 120 - canonicalSize;
+    return talos_rt_execute_design_bytecode(entry, context, base,
+                                            canonicalSize + 224, canonicalSize,
+                                            224, 0, 0, &action);
+  };
+  Frame fast{}, general{};
+  ASSERT_EQ(run(execution, 120, fast), TALOS_RT_OK);
+  ASSERT_EQ(run(other, 120, general), TALOS_RT_OK);
+  EXPECT_EQ(fast, general);
+  // Canonical frame: the 65-bit planes at 0 and 16, the 384 bits at 32.
+  EXPECT_EQ(fast[0], UINT64_C(0xfedcba9876543210));
+  EXPECT_EQ(fast[1], 1u);
+  EXPECT_EQ(fast[2], 0xf0u);
+  EXPECT_EQ(fast[3], 1u);
+  for (size_t limb = 0; limb != 6; ++limb)
+    EXPECT_EQ(fast[4 + limb], UINT64_C(0x0101010101010101) * (limb + 1));
+  // The 20-byte transfer: 10 bytes per plane at 80 and 104.
+  EXPECT_EQ(fast[10], UINT64_C(0xfedcba9876543210));
+  EXPECT_EQ(fast[11] & 0xffff, 1u);
+  EXPECT_EQ(fast[13], 0xf0u);
+  EXPECT_EQ(fast[14] & 0xffff, 1u);
+  // Scratch starts at word 15: r2 (word 25) reloaded the 65-bit value; r3
+  // (word 29) reloaded 40 bytes and zeroed the rest of its 48.
+  for (size_t word = 0; word != 4; ++word)
+    EXPECT_EQ(fast[25 + word], fast[word]);
+  for (size_t limb = 0; limb != 5; ++limb)
+    EXPECT_EQ(fast[29 + limb], fast[4 + limb]);
+  EXPECT_EQ(fast[34], 0u);
+  // r4 (word 35) is masked to 65 bits in both planes.
+  EXPECT_EQ(fast[35], 7u);
+  EXPECT_EQ(fast[36], 1u);
+  EXPECT_EQ(fast[37], 9u);
+  EXPECT_EQ(fast[38], 0u);
+  // r5 (word 39, planes 16 bytes apart) was all ones; the 20-byte load
+  // zeroed it and filled 10 bytes of each plane.
+  EXPECT_EQ(fast[39], UINT64_C(0xfedcba9876543210));
+  EXPECT_EQ(fast[40], 1u);
+  EXPECT_EQ(fast[41], 0xf0u);
+  EXPECT_EQ(fast[42], 1u);
+  // The 384-bit store needs 80 canonical bytes.
+  EXPECT_EQ(run(execution, 72, fast), TALOS_RT_INVALID_FRAME);
+  EXPECT_EQ(run(other, 72, general), TALOS_RT_INVALID_FRAME);
   talos_rt_v1_context_destroy(context);
 }
 

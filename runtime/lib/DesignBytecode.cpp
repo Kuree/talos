@@ -541,7 +541,13 @@ enum FastKind : uint8_t {
   kFastHandleID,
   kFastLoadState,
   kFastStoreState,
+  kFastConstantBytes,
+  kFastLoadFrameBytes,
+  kFastStoreFrameBytes,
 };
+
+/// The largest register or transfer the byte-copy fast ops handle.
+constexpr uint64_t kFastWideBytes = 256;
 
 constexpr uint8_t kFastDestinationFourState = 1;
 constexpr uint8_t kFastSource0FourState = 2;
@@ -583,6 +589,14 @@ inline void fastWrite(uint8_t *data, const FastOp &op, uint64_t value,
   } else {
     fastStoreWord(data, op.destination, value & ~unknown);
   }
+}
+
+/// Copies `size` bytes in words, then the tail.
+inline void fastCopyBytes(uint8_t *to, const uint8_t *from, uint64_t size) {
+  for (; size >= 8; size -= 8, to += 8, from += 8)
+    std::memcpy(to, from, 8);
+  for (; size != 0; --size)
+    *to++ = *from++;
 }
 
 /// A frame transfer of 1 to 8 bytes; larger transfers stay generic.
@@ -858,6 +872,89 @@ FastOp decodeFastOp(const Image &image, const Function &function,
         op.sourceWidth = static_cast<uint8_t>(destination.width);
       }
     }
+    break;
+  }
+  default:
+    break;
+  }
+  if (op.kind != kFastGeneric)
+    return op;
+  // Wide value registers: constants and canonical-frame transfers are byte
+  // copies of a size fixed at decode (wait records, wide constants, handles
+  // built from constants). Each reproduces the general implementation.
+  auto wide = [&](uint32_t reg, bool allowHandle, Layout &layout) {
+    if (!validRegister(function, reg))
+      return false;
+    layout = layoutAt(image, function, reg);
+    bool valueKind = layout.kind == TALOS_RT_DBREG_BITS ||
+                     layout.kind == TALOS_RT_DBREG_LOGIC ||
+                     layout.kind == TALOS_RT_DBREG_BYTES;
+    return (valueKind ||
+            (allowHandle && layout.kind == TALOS_RT_DBREG_HANDLE)) &&
+           layout.size != 0 && layout.size % 8 == 0 &&
+           layout.size <= kFastWideBytes && layout.offset <= UINT32_MAX - 256;
+  };
+  Layout layout;
+  switch (instruction.opcode) {
+  case TALOS_RT_DB_CONSTANT: {
+    if (!wide(instruction.destination, /*allowHandle=*/true, layout) ||
+        instruction.immediate > image.constantSize ||
+        layout.size > image.constantSize - instruction.immediate)
+      break;
+    const uint8_t *constant =
+        image.data + image.constants + instruction.immediate;
+    // The general path masks the final limb of each plane of a partial-limb
+    // value; a constant already masked there needs no masking.
+    if ((layout.kind == TALOS_RT_DBREG_BITS ||
+         layout.kind == TALOS_RT_DBREG_LOGIC) &&
+        layout.width % 64 != 0) {
+      uint64_t limbs = limbCount(layout.width);
+      uint64_t outside = ~finalMask(layout.width);
+      uint64_t planes = layout.kind == TALOS_RT_DBREG_LOGIC ? 2 : 1;
+      if (planes * limbs * 8 > layout.size)
+        break;
+      bool masked = true;
+      for (uint64_t plane = 0; plane != planes; ++plane)
+        masked &= (fastLoad(constant, (plane * limbs + limbs - 1) * 8) &
+                   outside) == 0;
+      if (!masked)
+        break;
+    }
+    op.kind = kFastConstantBytes;
+    op.destination = static_cast<uint32_t>(layout.offset);
+    op.immediate = reinterpret_cast<uintptr_t>(constant);
+    op.immediate2 = layout.size;
+    break;
+  }
+  case TALOS_RT_DB_LOAD_FRAME:
+  case TALOS_RT_DB_STORE_FRAME: {
+    bool load = instruction.opcode == TALOS_RT_DB_LOAD_FRAME;
+    if (!wide(load ? instruction.destination : instruction.source0,
+              /*allowHandle=*/false, layout))
+      break;
+    uint64_t transfer =
+        instruction.auxiliary != 0 ? instruction.auxiliary : layout.size;
+    uint64_t registerPlane = layout.kind == TALOS_RT_DBREG_LOGIC
+                                 ? limbCount(layout.width) * sizeof(uint64_t)
+                                 : 0;
+    uint64_t framePlane = registerPlane != 0 ? transfer / 2 : transfer;
+    uint64_t displacement =
+        instruction.source1 != 0 ? instruction.source1 : framePlane;
+    // Malformed plane geometry keeps the general path's error.
+    if (transfer > kFastWideBytes || displacement > UINT32_MAX ||
+        (registerPlane != 0 &&
+         (transfer % 2 != 0 || framePlane > registerPlane)))
+      break;
+    op.kind = load ? kFastLoadFrameBytes : kFastStoreFrameBytes;
+    op.destination = static_cast<uint32_t>(layout.offset);
+    op.source0 = static_cast<uint32_t>(framePlane);
+    op.source1 = static_cast<uint32_t>(displacement);
+    op.source2 = static_cast<uint32_t>(registerPlane);
+    op.reserved = load && transfer != layout.size
+                      ? static_cast<uint16_t>(layout.size)
+                      : 0;
+    op.immediate = instruction.immediate;
+    op.immediate2 = transfer;
     break;
   }
   default:
@@ -1414,6 +1511,32 @@ inline bool executeFastOp(const FastOp &op, uint8_t *data,
     }
     break;
   }
+  case kFastConstantBytes:
+    fastCopyBytes(data + op.destination,
+                  reinterpret_cast<const uint8_t *>(op.immediate),
+                  op.immediate2);
+    break;
+  case kFastLoadFrameBytes:
+  case kFastStoreFrameBytes: {
+    // The general path's bounds failure is an error it reports itself.
+    if (!canonicalFrame || op.immediate > canonicalFrameSize ||
+        op.immediate2 > canonicalFrameSize - op.immediate)
+      return false;
+    uint8_t *slot = canonicalFrame + op.immediate;
+    uint8_t *value = data + op.destination;
+    if (op.kind == kFastStoreFrameBytes) {
+      fastCopyBytes(slot, value, op.source0);
+      if (op.source2 != 0)
+        fastCopyBytes(slot + op.source1, value + op.source2, op.source0);
+    } else {
+      if (op.reserved != 0)
+        std::memset(value, 0, op.reserved);
+      fastCopyBytes(value, slot, op.source0);
+      if (op.source2 != 0)
+        fastCopyBytes(value + op.source2, slot + op.source1, op.source0);
+    }
+    break;
+  }
   default:
     return false;
   }
@@ -1429,7 +1552,9 @@ inline bool executeFastOp(const FastOp &op, uint8_t *data,
 /// validated whole when loaded.
 const FastOp *fastPlan(const Image &image, const Frame &frame,
                        talos_rt_context *context, bool &invalid,
-                       int *managedFrame = nullptr) {
+                       int *managedFrame = nullptr,
+                       const Layout **decodedLayouts = nullptr,
+                       const Instruction **decodedInstructions = nullptr) {
   invalid = false;
   if (!context || !context->designBytecodeImageValidated ||
       context->designBytecodeImage.data != image.data)
@@ -1486,38 +1611,25 @@ const FastOp *fastPlan(const Image &image, const Frame &frame,
       flag = frameCanHoldManaged(image, frame.function) ? 2 : 1;
     *managedFrame = flag == 2;
   }
+  // The function's decoded layouts and instructions exist with its plan; hand
+  // them out under the same lock (two-tier B3).
+  if (decodedLayouts) {
+    const std::vector<Layout> &decoded =
+        context->designBytecodeLayouts[frame.functionIndex];
+    *decodedLayouts =
+        decoded.size() == frame.function.layoutCount && !decoded.empty()
+            ? decoded.data()
+            : nullptr;
+  }
+  if (decodedInstructions) {
+    const std::vector<Instruction> &decoded =
+        context->designBytecodeInstructions[frame.functionIndex];
+    *decodedInstructions =
+        decoded.size() == frame.function.instructionCount && !decoded.empty()
+            ? decoded.data()
+            : nullptr;
+  }
   return plan.data();
-}
-
-/// The decoded instructions of `frame`'s function, available once its fast
-/// plan exists, or null.
-static const Instruction *decodedInstructions(const Image &image,
-                                              const Frame &frame,
-                                              talos_rt_context *context) {
-  if (!context || !context->designBytecodeImageValidated ||
-      context->designBytecodeImage.data != image.data ||
-      frame.functionIndex >= context->designBytecodeInstructions.size())
-    return nullptr;
-  const std::vector<Instruction> &decoded =
-      context->designBytecodeInstructions[frame.functionIndex];
-  return decoded.size() == frame.function.instructionCount && !decoded.empty()
-             ? decoded.data()
-             : nullptr;
-}
-
-/// The decoded register layouts of `frame`'s function, available once its
-/// fast plan exists, or null.
-static const Layout *decodedLayouts(const Image &image, const Frame &frame,
-                                    talos_rt_context *context) {
-  if (!context || !context->designBytecodeImageValidated ||
-      context->designBytecodeImage.data != image.data ||
-      frame.functionIndex >= context->designBytecodeLayouts.size())
-    return nullptr;
-  const std::vector<Layout> &decoded =
-      context->designBytecodeLayouts[frame.functionIndex];
-  return decoded.size() == frame.function.layoutCount && !decoded.empty()
-             ? decoded.data()
-             : nullptr;
 }
 
 std::optional<uint64_t> continuationPC(const Image &image,
@@ -1557,8 +1669,10 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
                 Frame *caller = nullptr) {
   bool invalidCode = false;
   int managedFrame = -1;
-  const FastOp *plan =
-      fastPlan(image, frame, context, invalidCode, &managedFrame);
+  const Layout *layouts = nullptr;
+  const Instruction *instructions = nullptr;
+  const FastOp *plan = fastPlan(image, frame, context, invalidCode,
+                                &managedFrame, &layouts, &instructions);
   ScopedBytecodeFrameRoots managedRoots(image, frame, context, managedFrame);
   if (managedRoots.getStatus() != TALOS_RT_OK)
     return managedRoots.getStatus();
@@ -1567,8 +1681,6 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
   uint64_t pc = startPC;
   if (invalidCode)
     return TALOS_RT_INVALID_BYTECODE;
-  const Layout *layouts = decodedLayouts(image, frame, context);
-  const Instruction *instructions = decodedInstructions(image, frame, context);
   while (pc >= begin && pc < end) {
     if (!budget.consume())
       return TALOS_RT_STEP_LIMIT;
