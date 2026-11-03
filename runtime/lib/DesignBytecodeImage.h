@@ -265,7 +265,12 @@ inline Instruction instructionAt(const Image &image, uint64_t index) {
 
 bool parseImage(const talos_rt_design_bytecode_entry_v1 &entry, Image &image,
                 bool inventoryOnly = false);
-bool validateImage(const Image &image);
+/// Validates the image tables and every function's metadata, layouts and
+/// continuations; with `validateCode`, also every function's instructions.
+/// A context validates instructions per function on first execution instead
+/// (validateFunctionCode, through fastPlan in the interpreter).
+bool validateImage(const Image &image, bool validateCode = true);
+bool validateFunctionCode(const Image &image, uint32_t functionIndex);
 Function functionAt(const Image &image, uint32_t index);
 Continuation continuationAt(const Image &image, uint64_t index);
 IntrinsicSignature intrinsicAt(const Image &image, uint32_t index);

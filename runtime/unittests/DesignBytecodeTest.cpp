@@ -9,6 +9,7 @@
 #include "talos/Reflection/DesignReflection.h"
 #include "talos/Reflection/VPIObjectModel.h"
 #include "talos/Runtime/Runtime.h"
+#include "talos/Runtime/StableHash.h"
 #include "talos/Version.h"
 
 #include "sv_vpi_user.h"
@@ -79,12 +80,7 @@ uint32_t get32(const std::vector<uint8_t> &bytes, size_t offset) {
 }
 
 uint64_t imageChecksum(const std::vector<uint8_t> &bytes) {
-  uint64_t hash = UINT64_C(14695981039346656037);
-  for (size_t index = 0; index != bytes.size(); ++index) {
-    uint8_t value = index >= 32 && index < 40 ? 0 : bytes[index];
-    hash ^= value;
-    hash *= UINT64_C(1099511628211);
-  }
+  uint64_t hash = talos_stable_image_checksum(bytes.data(), bytes.size(), 32);
   return hash;
 }
 
@@ -3825,6 +3821,91 @@ TEST(DesignBytecode, MetadataOnlyImageHasNoExecutableEntry) {
   EXPECT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
             TALOS_RT_INVALID_DESIGN);
   EXPECT_EQ(context, nullptr);
+}
+
+// The image checksum is a serialization contract between the compiler and
+// the runtime: pin its values, its excluded 8-byte field (also unaligned or
+// running past the end) and its trailing partial word.
+TEST(StableHash, ImageChecksumExcludesItsFieldAndHashesTheTail) {
+  std::vector<uint8_t> data(43);
+  for (size_t index = 0; index != data.size(); ++index)
+    data[index] = static_cast<uint8_t>(index * 7 + 1);
+  auto hash = [&](const std::vector<uint8_t> &bytes, size_t offset) {
+    return talos_stable_image_checksum(bytes.data(), bytes.size(), offset);
+  };
+  EXPECT_EQ(hash(data, 32), UINT64_C(0x4bd26bd406ae7da3));
+  EXPECT_EQ(hash(data, 5), UINT64_C(0x56ffa3f553da2aba));
+  EXPECT_EQ(hash(data, 38), UINT64_C(0x44506bdbcb50466a));
+  for (size_t offset : {size_t{32}, size_t{5}, size_t{38}}) {
+    uint64_t expected = hash(data, offset);
+    for (size_t index = 0; index != data.size(); ++index) {
+      std::vector<uint8_t> mutated = data;
+      mutated[index] ^= 0x80;
+      bool excluded = index >= offset && index - offset < 8;
+      EXPECT_EQ(hash(mutated, offset) == expected, excluded)
+          << offset << ' ' << index;
+    }
+  }
+}
+
+// A context validates the image's tables, function metadata, layouts and
+// continuations when it is created, and each function's instructions only
+// when that function first executes, so retained bodies that never run cost
+// no startup work. A standalone entry still validates every function before
+// use. The corrupt function is rejected before any of its instructions run.
+TEST(DesignBytecode, ContextValidatesFunctionCodeOnFirstExecution) {
+  Fixture fixture;
+  constexpr size_t codeOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE + 96 + 40;
+  put16(fixture.bytecode,
+        codeOffset + 2 * TALOS_RT_DESIGN_BYTECODE_INSTRUCTION_SIZE, 0xffff);
+  put64(fixture.bytecode, 32, imageChecksum(fixture.bytecode));
+  fixture.execution.bytecode = fixture.bytecode.data();
+  fixture.execution.checksum = imageChecksum(fixture.bytecode);
+
+  uint64_t scratchSize = 0;
+  uint64_t scratchAlignment = 0;
+  EXPECT_EQ(talos_rt_validate_design_bytecode(fixture.entry, nullptr,
+                                              &scratchSize, &scratchAlignment),
+            TALOS_RT_INVALID_BYTECODE);
+
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&fixture.execution, &context),
+            TALOS_RT_OK);
+  talos_rt_process_instance_v1 *instance = nullptr;
+  ASSERT_EQ(talos_rt_v1_process_instance_create_for_context(
+                context, &fixture.descriptor, &instance),
+            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_process_instance_destroy(instance), TALOS_RT_OK);
+
+  for (int attempt = 0; attempt != 2; ++attempt) {
+    std::array<uint64_t, 8> frame;
+    frame.fill(UINT64_C(0x5a5a5a5a5a5a5a5a));
+    talos_rt_fragment_action_v1 action{};
+    EXPECT_EQ(talos_rt_execute_design_bytecode(fixture.entry, context,
+                                               frame.data(), sizeof(frame), 32,
+                                               32, 0, 0, &action),
+              TALOS_RT_INVALID_BYTECODE)
+        << attempt;
+    // The canonical frame (below the scratch offset) is untouched: no
+    // instruction ran. The interpreter clears the scratch before entry.
+    for (size_t word = 0; word != 4; ++word)
+      EXPECT_EQ(frame[word], UINT64_C(0x5a5a5a5a5a5a5a5a)) << attempt;
+  }
+  talos_rt_v1_context_destroy(context);
+
+  // The unmodified image creates a context and runs its function.
+  Fixture valid;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&valid.execution, &context),
+            TALOS_RT_OK);
+  std::array<uint64_t, 8> frame{};
+  talos_rt_fragment_action_v1 action{};
+  EXPECT_EQ(talos_rt_execute_design_bytecode(valid.entry, context, frame.data(),
+                                             sizeof(frame), 32, 32, 0, 0,
+                                             &action),
+            TALOS_RT_OK);
+  EXPECT_EQ(action.kind, TALOS_RT_FRAGMENT_TERMINATE);
+  EXPECT_EQ(frame[0], UINT64_C(0xfedcba9876543210));
+  talos_rt_v1_context_destroy(context);
 }
 
 TEST(DesignBytecode, ContextBoundProcessCreationReusesValidatedDesign) {

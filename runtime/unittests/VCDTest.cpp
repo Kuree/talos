@@ -43,10 +43,7 @@ uint64_t nameHash(const std::string &name) {
 }
 
 uint64_t imageChecksum(const std::vector<uint8_t> &bytes) {
-  uint64_t hash = TALOS_STABLE_HASH_OFFSET_BASIS;
-  for (size_t index = 0; index != bytes.size(); ++index)
-    hash = talos_stable_hash_append_byte(
-        hash, index >= 32 && index < 40 ? uint8_t{0} : bytes[index]);
+  uint64_t hash = talos_stable_image_checksum(bytes.data(), bytes.size(), 32);
   return hash;
 }
 

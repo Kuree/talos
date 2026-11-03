@@ -10,6 +10,7 @@
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
 #include "talos/Runtime/Runtime.h"
+#include "talos/Runtime/StableHash.h"
 
 // After the MLIR headers: vpi_user.h defines macros such as vpiType.
 #include "sv_vpi_user.h"
@@ -186,13 +187,8 @@ TEST(GeneratedDesignDatabase, SharedParameterDefaults) {
                                encoded->designDatabase.end());
     mutate(bytes);
     HeaderWriter writer(bytes.data());
-    writer.setChecksum(0);
-    uint64_t hash = UINT64_C(14695981039346656037);
-    for (uint8_t byte : bytes) {
-      hash ^= byte;
-      hash *= UINT64_C(1099511628211);
-    }
-    writer.setChecksum(hash);
+    writer.setChecksum(talos_stable_image_checksum(bytes.data(), bytes.size(),
+                                                   field::HeaderChecksum));
     auto malformed = execution;
     malformed.design_database = bytes.data();
     malformed.design_database_size = bytes.size();

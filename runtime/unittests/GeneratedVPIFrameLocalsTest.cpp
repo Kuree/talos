@@ -12,6 +12,7 @@
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
+#include "talos/Runtime/StableHash.h"
 
 // After the MLIR headers: vpi_user.h defines macros such as vpiType.
 #include "sv_vpi_user.h"
@@ -27,11 +28,7 @@ extern "C" void talos_rt_v1_dpi_import_bytecode_link_anchor(void);
 namespace {
 using namespace talos::reflection;
 template <typename Bytes> uint64_t imageChecksum(const Bytes &bytes) {
-  uint64_t hash = UINT64_C(14695981039346656037);
-  for (size_t index = 0; index != bytes.size(); ++index) {
-    hash ^= index >= 32 && index < 40 ? uint8_t{0} : bytes[index];
-    hash *= UINT64_C(1099511628211);
-  }
+  uint64_t hash = talos_stable_image_checksum(bytes.data(), bytes.size(), 32);
   return hash;
 }
 struct LocalProbe {

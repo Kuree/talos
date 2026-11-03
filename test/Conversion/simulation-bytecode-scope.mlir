@@ -5,9 +5,14 @@
 
 // IEEE 1800-2023 4.5, 4.6, 6.8: state metadata survives omission of native
 // bodies, including a native bootstrap excluded from AOT by managed captures.
+// Every spawned process keeps its bytecode body (the exact fallback executor);
+// the root initializer, which never suspends, runs once natively.
 // PRUNED: runtime.bytecode_image
 // PRUNED-SAME: runtime.design_database
+// PRUNED: simulation.func @root
 // PRUNED-NOT: runtime.bytecode_function
+// PRUNED: simulation.func @process
+// PRUNED-SAME: runtime.bytecode_function
 // ALL: simulation.func @root
 // ALL-SAME: runtime.bytecode_function
 // ALL: simulation.func @process

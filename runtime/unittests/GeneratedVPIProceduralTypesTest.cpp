@@ -7,6 +7,7 @@
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
+#include "talos/Runtime/StableHash.h"
 
 // After the MLIR headers: vpi_user.h defines macros such as vpiType.
 #include "sv_vpi_user.h"
@@ -154,11 +155,7 @@ TEST(GeneratedDesignDatabase, ProceduralTypes) {
   writer.setFlags(StatementView(malformed.data() + statementOffset).getFlags() &
                   ~TALOS_RT_DESIGN_STATEMENT_SCOPE);
   auto rehash = [](auto &image) {
-    uint64_t hash = UINT64_C(14695981039346656037);
-    for (size_t i = 0; i != image.size(); ++i) {
-      hash ^= i >= 32 && i < 40 ? 0 : image[i];
-      hash *= UINT64_C(1099511628211);
-    }
+    uint64_t hash = talos_stable_image_checksum(image.data(), image.size(), 32);
     HeaderWriter(image.data()).setChecksum(hash);
   };
   rehash(malformed);

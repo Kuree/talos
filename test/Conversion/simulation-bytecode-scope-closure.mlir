@@ -1,13 +1,15 @@
 // RUN: talos-opt %s --split-input-file --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph),encode-talos-sim-to-bytecode{prune-native=true vpi=full})' | FileCheck %s
 
+// Every spawned process keeps its bytecode body, natively covered or not; a
+// root initializer that never suspends runs once natively and does not.
 // CHECK-LABEL: simulation.func @root
 // CHECK-NOT: runtime.bytecode_function
 // CHECK-LABEL: simulation.func @process
-// CHECK-NOT: runtime.bytecode_function
-// CHECK-LABEL: simulation.func @checkpoint
 // CHECK-SAME: runtime.bytecode_function = 0
-// CHECK-LABEL: simulation.func private @helper
+// CHECK-LABEL: simulation.func @checkpoint
 // CHECK-SAME: runtime.bytecode_function = 1
+// CHECK-LABEL: simulation.func private @helper
+// CHECK-SAME: runtime.bytecode_function = 2
 
 module attributes {
   llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128",

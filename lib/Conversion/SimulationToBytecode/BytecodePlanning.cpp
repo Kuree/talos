@@ -66,12 +66,25 @@ void pruneNativeFunctions(sim::SimDesignOp design,
     return;
 
   llvm::StringMap<sim::SimFuncOp> symbols;
-  llvm::DenseMap<Operation *, SmallVector<Operation *>> dependencies, callers;
-  llvm::DenseSet<Operation *> fallback, retained;
+  llvm::DenseMap<Operation *, SmallVector<Operation *>> dependencies,
+      bodyDependencies, callers;
+  llvm::DenseSet<Operation *> fallback, retained, processOnly;
   SmallVector<Operation *> pendingFallback, worklist;
+  // `retain` follows every symbol the function references, its metadata
+  // included; `retainProcess` follows only what its body's operations
+  // reference (calls, spawns, other operands the encoder resolves), so a
+  // process kept as a fallback does not pull in the generated eval bodies and
+  // variants its schedule metadata names.
   auto retain = [&](Operation *function) {
-    if (retained.insert(function).second)
+    bool added = retained.insert(function).second;
+    if (added || processOnly.erase(function))
       worklist.push_back(function);
+  };
+  auto retainProcess = [&](Operation *function) {
+    if (retained.insert(function).second) {
+      processOnly.insert(function);
+      worklist.push_back(function);
+    }
   };
   llvm::DenseSet<Operation *> nativeBootstraps;
   for (auto function : functions) {
@@ -97,6 +110,23 @@ void pruneNativeFunctions(sim::SimDesignOp design,
   };
   for (auto function : functions)
     symbols[function.getSymName()] = function;
+  // Every spawned process keeps its bytecode body: it is the exact fallback
+  // executor when the runtime must run the process outside tier 1 (whole-plan
+  // deopt, islands, uncertified static eval islands), IEEE 1800-2023 4.5 and
+  // 4.6 (the continuation and its scheduled effects are preserved across
+  // tiers). A fused kernel is itself the spawned process, so it keeps its own
+  // body. Generated eval bodies are not processes, and a root initializer
+  // that never suspends runs once natively at time 0 (6.8).
+  llvm::DenseSet<StringRef> spawned;
+  design.walk(
+      [&](sim::SimSpawnOp spawn) { spawned.insert(spawn.getCallee()); });
+  auto isRetainedProcess = [&](sim::SimFuncOp function) {
+    return (spawned.contains(function.getSymName()) ||
+            native.getActorSlots().contains(function)) &&
+           !nativeBootstraps.contains(function) &&
+           !::talos::schedule::has<::talos::schedule::Field::EvalContinuation>(
+               function);
+  };
   for (auto function : functions) {
     auto uses = SymbolTable::getSymbolUses(function);
     if (!uses)
@@ -104,6 +134,8 @@ void pruneNativeFunctions(sim::SimDesignOp design,
     for (const auto &use : *uses)
       if (auto target = symbols.lookup(use.getSymbolRef().getRootReference())) {
         dependencies[function].push_back(target);
+        if (use.getUser() != function.getOperation())
+          bodyDependencies[function].push_back(target);
         if (isa<sim::SimCallOp, sim::SimTaskCallOp>(use.getUser()))
           callers[target].push_back(function);
       }
@@ -118,6 +150,8 @@ void pruneNativeFunctions(sim::SimDesignOp design,
         !::talos::schedule::has<::talos::schedule::Field::EvalContinuation>(
             function))
       retain(function);
+    else if (isRetainedProcess(function))
+      retainProcess(function);
     bool needsFallback = native.getBytecodeFragments().contains(function) ||
                          native.getRuntimeCheckpointActors().contains(function);
     function.walk([&](Operation *op) {
@@ -135,9 +169,19 @@ void pruneNativeFunctions(sim::SimDesignOp design,
     for (Operation *caller : callers[function])
       requireFallback(caller);
   }
-  while (!worklist.empty())
-    for (Operation *callee : dependencies[worklist.pop_back_val()])
-      retain(callee);
+  while (!worklist.empty()) {
+    Operation *function = worklist.pop_back_val();
+    bool fromProcess = processOnly.contains(function);
+    for (Operation *callee :
+         fromProcess ? bodyDependencies[function] : dependencies[function]) {
+      // A process that a fallback-only process spawns is kept as a fallback
+      // too, not upgraded to follow its metadata.
+      if (fromProcess && isRetainedProcess(cast<sim::SimFuncOp>(callee)))
+        retainProcess(callee);
+      else
+        retain(callee);
+    }
+  }
   if (native::has<native::DebugTiming>(module))
     llvm::errs() << "talos bytecode retention: " << retained.size() << "/"
                  << functions.size() << " functions\n";

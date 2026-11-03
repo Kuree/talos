@@ -1414,15 +1414,33 @@ inline bool executeFastOp(const FastOp &op, uint8_t *data,
 }
 
 /// The fast-path plan of `frame`'s function, decoded on its first execution,
-/// or null when the image is not the context's validated image.
+/// or null when the image is not the context's validated image. A context
+/// validates its image without instructions (validateImage), so the first
+/// execution of a function also validates its instructions; `invalid` then
+/// reports malformed code before any of it runs. Standalone images were
+/// validated whole when loaded.
 const FastOp *fastPlan(const Image &image, const Frame &frame,
-                       talos_rt_context *context) {
+                       talos_rt_context *context, bool &invalid) {
+  invalid = false;
   if (!context || !context->designBytecodeImageValidated ||
-      context->designBytecodeImage.data != image.data ||
-      frame.function.instructionCount == 0 ||
-      frame.functionIndex >= image.functionCount)
+      context->designBytecodeImage.data != image.data)
     return nullptr;
+  if (frame.functionIndex >= image.functionCount ||
+      frame.function.instructionCount == 0) {
+    invalid = true;
+    return nullptr;
+  }
   std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  auto &states = context->designBytecodeFunctionState;
+  if (states.size() != image.functionCount)
+    states.assign(static_cast<size_t>(image.functionCount), 0);
+  uint8_t &state = states[frame.functionIndex];
+  if (state == 0)
+    state = validateFunctionCode(image, frame.functionIndex) ? 1 : 2;
+  if (state != 1) {
+    invalid = true;
+    return nullptr;
+  }
   auto &plans = context->designBytecodePlans;
   if (plans.size() != image.functionCount)
     plans.assign(static_cast<size_t>(image.functionCount), {});
@@ -1455,7 +1473,10 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
   uint64_t begin = frame.function.firstInstruction;
   uint64_t end = begin + frame.function.instructionCount;
   uint64_t pc = startPC;
-  const FastOp *plan = fastPlan(image, frame, context);
+  bool invalidCode = false;
+  const FastOp *plan = fastPlan(image, frame, context, invalidCode);
+  if (invalidCode)
+    return TALOS_RT_INVALID_BYTECODE;
   while (pc >= begin && pc < end) {
     if (!budget.consume())
       return TALOS_RT_STEP_LIMIT;

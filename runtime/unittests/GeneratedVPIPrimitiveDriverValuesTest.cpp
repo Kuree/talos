@@ -8,6 +8,7 @@
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
+#include "talos/Runtime/StableHash.h"
 
 // After the MLIR headers: vpi_user.h defines macros such as vpiType.
 #include "sv_vpi_user.h"
@@ -78,14 +79,8 @@ TEST(GeneratedDesignDatabase, PrimitiveDriverValues) {
   ASSERT_NE(foreignHigh, UINT32_MAX);
   ASSERT_NE(netObject, UINT32_MAX);
   auto checksum = [](auto &bytes) {
-    uint64_t hash = UINT64_C(14695981039346656037);
-    for (size_t index = 0; index != bytes.size(); ++index) {
-      hash ^=
-          index >= field::HeaderChecksum && index < field::HeaderChecksum + 8
-              ? 0
-              : bytes[index];
-      hash *= UINT64_C(1099511628211);
-    }
+    uint64_t hash = talos_stable_image_checksum(bytes.data(), bytes.size(),
+                                                field::HeaderChecksum);
     HeaderWriter(bytes.data()).setChecksum(hash);
   };
   auto mutate = [&](uint32_t row, auto change) {

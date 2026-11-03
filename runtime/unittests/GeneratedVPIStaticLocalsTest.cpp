@@ -7,6 +7,7 @@
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
+#include "talos/Runtime/StableHash.h"
 
 // After the MLIR headers: vpi_user.h defines macros such as vpiType.
 #include "sv_vpi_user.h"
@@ -170,13 +171,8 @@ void checkStaticLocals(bool sourceTypes) {
     auto rejects = [&](auto mutate) {
       std::vector<uint8_t> bytes(image.begin(), image.end());
       mutate(bytes);
-      uint64_t hash = UINT64_C(14695981039346656037);
-      for (size_t i = 0; i != bytes.size(); ++i) {
-        hash ^= i >= field::HeaderChecksum && i < field::HeaderChecksum + 8
-                    ? 0
-                    : bytes[i];
-        hash *= UINT64_C(1099511628211);
-      }
+      uint64_t hash = talos_stable_image_checksum(bytes.data(), bytes.size(),
+                                                  field::HeaderChecksum);
       HeaderWriter(bytes.data()).setChecksum(hash);
       auto invalid = execution;
       invalid.design_database = bytes.data();

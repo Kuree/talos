@@ -7,6 +7,7 @@
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
 #include "talos/Runtime/Runtime.h"
+#include "talos/Runtime/StableHash.h"
 
 // After the MLIR headers: vpi_user.h defines macros such as vpiType.
 #include "sv_vpi_user.h"
@@ -157,14 +158,8 @@ TEST(GeneratedDesignDatabase, SharedTypeDefaults) {
         uint64_t{index} * ExpressionRootBindingLayout.size);
   };
   auto reject = [&](std::vector<uint8_t> bytes) {
-    uint64_t checksum = UINT64_C(14695981039346656037);
-    for (size_t index = 0; index != bytes.size(); ++index) {
-      checksum ^=
-          index >= field::HeaderChecksum && index < field::HeaderChecksum + 8
-              ? 0
-              : bytes[index];
-      checksum *= UINT64_C(1099511628211);
-    }
+    uint64_t checksum = talos_stable_image_checksum(bytes.data(), bytes.size(),
+                                                    field::HeaderChecksum);
     HeaderWriter(bytes.data()).setChecksum(checksum);
     auto malformed = execution;
     malformed.design_database = bytes.data();

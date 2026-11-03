@@ -56,13 +56,7 @@ inline void alignTo(llvm::SmallVectorImpl<uint8_t> &output,
 
 inline uint64_t checksum(llvm::ArrayRef<uint8_t> data,
                          uint64_t checksumOffset) {
-  uint64_t hash = TALOS_STABLE_HASH_OFFSET_BASIS;
-  for (auto [index, byte] : llvm::enumerate(data)) {
-    uint8_t hashed =
-        index >= checksumOffset && index < checksumOffset + 8 ? 0 : byte;
-    hash = talos_stable_hash_append_byte(hash, hashed);
-  }
-  return hash;
+  return talos_stable_image_checksum(data.data(), data.size(), checksumOffset);
 }
 
 inline uint64_t stableHash(llvm::StringRef text) {

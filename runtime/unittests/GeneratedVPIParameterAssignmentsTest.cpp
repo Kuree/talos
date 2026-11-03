@@ -8,6 +8,7 @@
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
 #include "talos/Runtime/Runtime.h"
+#include "talos/Runtime/StableHash.h"
 
 // After the MLIR headers: vpi_user.h defines macros such as vpiType.
 #include "sv_vpi_user.h"
@@ -150,13 +151,8 @@ TEST(GeneratedDesignDatabase, SharedParameterAssignments) {
   auto reject = [&](auto mutate) {
     auto bytes = encoded->designDatabase;
     mutate(bytes);
-    uint64_t hash = UINT64_C(14695981039346656037);
-    for (size_t i = 0; i != bytes.size(); ++i) {
-      hash ^= i >= field::HeaderChecksum && i < field::HeaderChecksum + 8
-                  ? 0
-                  : bytes[i];
-      hash *= UINT64_C(1099511628211);
-    }
+    uint64_t hash = talos_stable_image_checksum(bytes.data(), bytes.size(),
+                                                field::HeaderChecksum);
     HeaderWriter(bytes.data()).setChecksum(hash);
     auto invalid = execution;
     invalid.design_database = bytes.data();
@@ -638,13 +634,8 @@ TEST(GeneratedDesignDatabase, ParameterAssignmentsInInstanceScopes) {
   }
   ASSERT_TRUE(mutated);
   {
-    uint64_t hash = UINT64_C(14695981039346656037);
-    for (size_t i = 0; i != bytes.size(); ++i) {
-      uint8_t byte = i >= field::HeaderChecksum && i < field::HeaderChecksum + 8
-                         ? 0
-                         : bytes[i];
-      hash = (hash ^ byte) * UINT64_C(1099511628211);
-    }
+    uint64_t hash = talos_stable_image_checksum(bytes.data(), bytes.size(),
+                                                field::HeaderChecksum);
     HeaderWriter(bytes.data()).setChecksum(hash);
     auto invalid = execution;
     invalid.design_database = bytes.data();

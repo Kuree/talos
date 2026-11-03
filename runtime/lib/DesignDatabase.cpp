@@ -277,13 +277,8 @@ bool rangesDisjoint(uint64_t leftOffset, uint64_t leftCount,
 uint64_t nameHash(const uint8_t *name, uint64_t size);
 
 uint64_t checksum(const uint8_t *data, uint64_t size) {
-  uint64_t hash = TALOS_STABLE_HASH_OFFSET_BASIS;
-  for (uint64_t index = 0; index != size; ++index) {
-    // The checksum field is treated as zero while hashing.
-    uint8_t byte = index >= 32 && index < 40 ? 0 : data[index];
-    hash = talos_stable_hash_append_byte(hash, byte);
-  }
-  return hash;
+  // The checksum field is treated as zero while hashing.
+  return talos_stable_image_checksum(data, static_cast<size_t>(size), 32);
 }
 
 using Database = DesignDatabaseCache;

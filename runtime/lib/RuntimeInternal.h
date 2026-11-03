@@ -2952,6 +2952,12 @@ struct talos_rt_context {
   bool designDatabaseRegistered = false;
   talos::designbytecode::Image designBytecodeImage;
   bool designBytecodeImageValidated = false;
+  // Instruction validation state of designBytecodeImage's functions, indexed
+  // by function and checked on first execution: 0 not checked, 1 valid,
+  // 2 invalid. Context creation validates only tables, metadata, layouts and
+  // continuations, so unused bodies cost no instruction validation at
+  // startup.
+  std::vector<uint8_t> designBytecodeFunctionState;
   // Fast-path plans of designBytecodeImage's functions, indexed by function
   // and decoded on first execution (empty: not decoded yet).
   std::vector<std::vector<talos::designbytecode::FastOp>> designBytecodePlans;

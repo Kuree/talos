@@ -8,6 +8,7 @@
 #include "talos/Conversion/SimulationToBytecode.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
+#include "talos/Runtime/StableHash.h"
 #include "gtest/gtest.h"
 #include <algorithm>
 #include <array>
@@ -144,14 +145,8 @@ TEST(GeneratedDesignDatabase, BoxTypeLayouts) {
                                 encoded->designDatabase.end());
   };
   auto rejected = [&](std::vector<uint8_t> image) {
-    uint64_t hash = UINT64_C(14695981039346656037);
-    for (size_t index = 0; index != image.size(); ++index) {
-      hash ^=
-          index >= field::HeaderChecksum && index < field::HeaderChecksum + 8
-              ? 0
-              : image[index];
-      hash *= UINT64_C(1099511628211);
-    }
+    uint64_t hash = talos_stable_image_checksum(image.data(), image.size(),
+                                                field::HeaderChecksum);
     HeaderWriter(image.data()).setChecksum(hash);
     execution.design_database = image.data();
     execution.design_database_size = image.size();

@@ -72,12 +72,7 @@ bool validRange(uint64_t offset, uint64_t count, uint64_t stride,
 }
 
 uint64_t imageChecksum(const uint8_t *data, uint64_t size) {
-  uint64_t hash = TALOS_STABLE_HASH_OFFSET_BASIS;
-  for (uint64_t index = 0; index != size; ++index) {
-    uint8_t byte = index >= 32 && index < 40 ? 0 : data[index];
-    hash = talos_stable_hash_append_byte(hash, byte);
-  }
-  return hash;
+  return talos_stable_image_checksum(data, static_cast<size_t>(size), 32);
 }
 
 uint32_t functionHomeRegion(const Function &function) {
@@ -2131,7 +2126,769 @@ bool validateInitialization(const Image &image, const Function &function,
   return true;
 }
 
-bool validateImage(const Image &image) {
+// Validates one function's instructions and its forward initialization
+// against the function's layouts, continuations and the image tables, which
+// validateImage has already checked. Contexts run it on a function's first
+// execution (fastPlan in DesignBytecode.cpp); standalone entries
+// validate every function up front.
+bool validateFunctionCode(const Image &image, uint32_t functionIndex) {
+  auto reject = [](unsigned line, const char *reason,
+                   uint64_t functionIndex = UINT64_MAX,
+                   uint64_t pc = UINT64_MAX, uint32_t opcode = UINT32_MAX) {
+    return rejectImage(line, reason, functionIndex, pc, opcode);
+  };
+  if (functionIndex >= image.functionCount)
+    return reject(__LINE__, "bytecode function index is out of range");
+  Function function = functionAt(image, functionIndex);
+  uint64_t codeEnd = function.firstInstruction + function.instructionCount;
+  auto hasContinuation = [&](uint64_t id) {
+    if (id > UINT32_MAX)
+      return false;
+    for (uint64_t index = 0; index != function.continuationCount; ++index) {
+      if (continuationAt(image, function.firstContinuation + index).id == id)
+        return true;
+    }
+    return false;
+  };
+  for (uint64_t pc = function.firstInstruction; pc != codeEnd; ++pc) {
+    Instruction instruction = instructionAt(image, pc);
+    auto reg = [&](uint32_t index) { return validRegister(function, index); };
+    auto numeric = [&](uint32_t index) {
+      if (!reg(index))
+        return false;
+      uint8_t kind = layoutAt(image, function, index).kind;
+      return kind == TALOS_RT_DBREG_BITS || kind == TALOS_RT_DBREG_LOGIC;
+    };
+    auto floating = [&](uint32_t index) {
+      if (!reg(index))
+        return false;
+      uint8_t kind = layoutAt(image, function, index).kind;
+      return kind == TALOS_RT_DBREG_REAL32 || kind == TALOS_RT_DBREG_REAL64;
+    };
+    auto binary = [&] {
+      return reg(instruction.destination) && reg(instruction.source0) &&
+             reg(instruction.source1) &&
+             compatible(layoutAt(image, function, instruction.destination),
+                        layoutAt(image, function, instruction.source0)) &&
+             compatible(layoutAt(image, function, instruction.destination),
+                        layoutAt(image, function, instruction.source1));
+    };
+    switch (instruction.opcode) {
+    case TALOS_RT_DB_NOP:
+      if (instruction.flags || instruction.destination || instruction.source0 ||
+          instruction.source1 || instruction.source2 || instruction.auxiliary ||
+          instruction.immediate)
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_CONSTANT: {
+      if (!reg(instruction.destination) || instruction.flags ||
+          instruction.source0 || instruction.source1 || instruction.source2 ||
+          instruction.auxiliary)
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      Layout layout = layoutAt(image, function, instruction.destination);
+      if (instruction.immediate > image.constantSize ||
+          layout.size > image.constantSize - instruction.immediate)
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    }
+    case TALOS_RT_DB_MOVE:
+      if (instruction.flags || instruction.source1 || instruction.source2 ||
+          instruction.auxiliary || instruction.immediate ||
+          !reg(instruction.destination) || !reg(instruction.source0) ||
+          !compatible(layoutAt(image, function, instruction.destination),
+                      layoutAt(image, function, instruction.source0)))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_BITCAST:
+      if (instruction.flags || instruction.source1 || instruction.source2 ||
+          instruction.auxiliary || instruction.immediate ||
+          !reg(instruction.destination) || !reg(instruction.source0) ||
+          !bitcastCompatible(layoutAt(image, function, instruction.destination),
+                             layoutAt(image, function, instruction.source0)))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_NOT:
+      if (instruction.flags || instruction.source1 || instruction.source2 ||
+          instruction.auxiliary || instruction.immediate ||
+          !reg(instruction.destination) || !reg(instruction.source0) ||
+          !compatible(layoutAt(image, function, instruction.destination),
+                      layoutAt(image, function, instruction.source0)))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_POPCOUNT: {
+      if (instruction.flags || instruction.source1 || instruction.source2 ||
+          instruction.auxiliary || instruction.immediate ||
+          !reg(instruction.destination) || !reg(instruction.source0))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      Layout destination = layoutAt(image, function, instruction.destination);
+      Layout source = layoutAt(image, function, instruction.source0);
+      if (destination.kind != TALOS_RT_DBREG_BITS ||
+          source.kind != TALOS_RT_DBREG_BITS ||
+          destination.width != source.width)
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    }
+    case TALOS_RT_DB_POWER:
+      if (instruction.flags || instruction.source2 || instruction.auxiliary ||
+          instruction.immediate || !numeric(instruction.destination) ||
+          !numeric(instruction.source0) || !numeric(instruction.source1) ||
+          !compatible(layoutAt(image, function, instruction.destination),
+                      layoutAt(image, function, instruction.source0)))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_REPLICATE: {
+      if (instruction.flags || instruction.source1 || instruction.source2 ||
+          instruction.auxiliary || instruction.immediate == 0 ||
+          !numeric(instruction.destination) || !numeric(instruction.source0))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      Layout destination = layoutAt(image, function, instruction.destination);
+      Layout source = layoutAt(image, function, instruction.source0);
+      if (destination.kind != source.kind || source.width == 0 ||
+          instruction.immediate > UINT32_MAX / source.width ||
+          uint64_t{source.width} * instruction.immediate != destination.width)
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    }
+    case TALOS_RT_DB_REDUCE:
+      if (instruction.source1 || instruction.source2 || instruction.auxiliary ||
+          instruction.immediate || !numeric(instruction.destination) ||
+          !numeric(instruction.source0) ||
+          instruction.flags > TALOS_RT_DB_REDUCE_LOGICAL_VALUE ||
+          layoutAt(image, function, instruction.destination).width != 1)
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_EXTRACT:
+      if (instruction.source2 || instruction.auxiliary ||
+          (instruction.source1 != kInvalidRegister &&
+           !numeric(instruction.source1)))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      if (instruction.flags == TALOS_RT_DB_AGGREGATE_MANAGED) {
+        if (!reg(instruction.destination) || !reg(instruction.source0))
+          return reject(__LINE__, "invalid instruction encoding or operands",
+                        functionIndex, pc, instruction.opcode);
+        Layout destination = layoutAt(image, function, instruction.destination);
+        Layout source = layoutAt(image, function, instruction.source0);
+        bool extractHandle = (destination.kind == TALOS_RT_DBREG_MANAGED ||
+                              destination.kind == TALOS_RT_DBREG_STRING) &&
+                             destination.width == 64 &&
+                             numeric(instruction.source0);
+        bool insertHandle =
+            numeric(instruction.destination) &&
+            (source.kind == TALOS_RT_DBREG_MANAGED ||
+             source.kind == TALOS_RT_DBREG_STRING) &&
+            source.width == 64 && instruction.source1 == kInvalidRegister &&
+            instruction.immediate == 0 && destination.width >= 64;
+        if (extractHandle && instruction.source1 == kInvalidRegister &&
+            ((instruction.immediate & 63) != 0 ||
+             instruction.immediate > source.width ||
+             uint64_t{64} > source.width - instruction.immediate))
+          return reject(__LINE__, "invalid instruction encoding or operands",
+                        functionIndex, pc, instruction.opcode);
+        if (!extractHandle && !insertHandle)
+          return reject(__LINE__, "invalid instruction encoding or operands",
+                        functionIndex, pc, instruction.opcode);
+      } else if (instruction.flags > TALOS_RT_DB_EXTRACT_SIGN_EXTEND ||
+                 !numeric(instruction.destination) ||
+                 !numeric(instruction.source0)) {
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      }
+      break;
+    case TALOS_RT_DB_AND:
+    case TALOS_RT_DB_OR:
+    case TALOS_RT_DB_XOR:
+    case TALOS_RT_DB_ADD:
+    case TALOS_RT_DB_SUB:
+    case TALOS_RT_DB_MUL:
+    case TALOS_RT_DB_UDIV:
+    case TALOS_RT_DB_SDIV:
+    case TALOS_RT_DB_UREM:
+    case TALOS_RT_DB_SREM:
+      if (instruction.flags || instruction.source2 || instruction.auxiliary ||
+          instruction.immediate || !binary())
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_FADD:
+    case TALOS_RT_DB_FSUB:
+    case TALOS_RT_DB_FMUL:
+    case TALOS_RT_DB_FDIV:
+    case TALOS_RT_DB_FPOW:
+      if (instruction.flags || instruction.source2 || instruction.auxiliary ||
+          instruction.immediate || !binary() ||
+          !floating(instruction.destination))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_FNEG:
+      if (instruction.flags || instruction.source1 || instruction.source2 ||
+          instruction.auxiliary || instruction.immediate ||
+          !reg(instruction.destination) || !reg(instruction.source0) ||
+          !floating(instruction.destination) ||
+          !compatible(layoutAt(image, function, instruction.destination),
+                      layoutAt(image, function, instruction.source0)))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_FCOMPARE: {
+      if (instruction.flags > TALOS_RT_DB_FCMP_GE || instruction.source2 ||
+          instruction.auxiliary || instruction.immediate ||
+          !reg(instruction.destination) || !numeric(instruction.destination) ||
+          layoutAt(image, function, instruction.destination).kind !=
+              TALOS_RT_DBREG_BITS ||
+          layoutAt(image, function, instruction.destination).width != 1 ||
+          !floating(instruction.source0) || !floating(instruction.source1) ||
+          !compatible(layoutAt(image, function, instruction.source0),
+                      layoutAt(image, function, instruction.source1)))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    }
+    case TALOS_RT_DB_FEXT:
+      if (instruction.flags || instruction.source1 || instruction.source2 ||
+          instruction.auxiliary || instruction.immediate ||
+          !reg(instruction.destination) || !reg(instruction.source0) ||
+          layoutAt(image, function, instruction.destination).kind !=
+              TALOS_RT_DBREG_REAL64 ||
+          layoutAt(image, function, instruction.source0).kind !=
+              TALOS_RT_DBREG_REAL32)
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_FTRUNC:
+      if (instruction.flags || instruction.source1 || instruction.source2 ||
+          instruction.auxiliary || instruction.immediate ||
+          !reg(instruction.destination) || !reg(instruction.source0) ||
+          layoutAt(image, function, instruction.destination).kind !=
+              TALOS_RT_DBREG_REAL32 ||
+          layoutAt(image, function, instruction.source0).kind !=
+              TALOS_RT_DBREG_REAL64)
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_SHL:
+    case TALOS_RT_DB_LSHR:
+    case TALOS_RT_DB_ASHR:
+      if (instruction.flags || instruction.source2 || instruction.auxiliary ||
+          instruction.immediate || !reg(instruction.destination) ||
+          !reg(instruction.source0) || !numeric(instruction.source1) ||
+          !compatible(layoutAt(image, function, instruction.destination),
+                      layoutAt(image, function, instruction.source0)))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_COMPARE: {
+      bool deterministic = instruction.flags == TALOS_RT_DB_CMP_CASE_EQ ||
+                           instruction.flags == TALOS_RT_DB_CMP_CASE_NE ||
+                           instruction.flags == TALOS_RT_DB_CMP_CASEZ_EQ ||
+                           instruction.flags == TALOS_RT_DB_CMP_CASEXZ_EQ;
+      if (instruction.source2 || instruction.auxiliary ||
+          instruction.immediate || !reg(instruction.destination) ||
+          !reg(instruction.source0) || !reg(instruction.source1) ||
+          instruction.flags > TALOS_RT_DB_CMP_CASEXZ_EQ ||
+          !compatible(layoutAt(image, function, instruction.source0),
+                      layoutAt(image, function, instruction.source1)) ||
+          !numeric(instruction.destination) ||
+          layoutAt(image, function, instruction.destination).width != 1 ||
+          (deterministic &&
+           layoutAt(image, function, instruction.destination).kind !=
+               TALOS_RT_DBREG_BITS))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    }
+    case TALOS_RT_DB_SELECT:
+      if (instruction.flags > TALOS_RT_DB_SELECT_FOUR_STATE ||
+          instruction.auxiliary || instruction.immediate || !binary() ||
+          !numeric(instruction.source2) ||
+          layoutAt(image, function, instruction.source2).width != 1 ||
+          (instruction.flags == TALOS_RT_DB_SELECT_FOUR_STATE &&
+           (layoutAt(image, function, instruction.destination).kind !=
+                TALOS_RT_DBREG_LOGIC ||
+            layoutAt(image, function, instruction.source0).kind !=
+                TALOS_RT_DBREG_LOGIC ||
+            layoutAt(image, function, instruction.source1).kind !=
+                TALOS_RT_DBREG_LOGIC ||
+            layoutAt(image, function, instruction.source2).kind !=
+                TALOS_RT_DBREG_LOGIC)))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_CONCAT: {
+      if (instruction.flags || instruction.source2 || instruction.auxiliary ||
+          instruction.immediate || !reg(instruction.destination) ||
+          !reg(instruction.source0) || !reg(instruction.source1))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      Layout destination = layoutAt(image, function, instruction.destination);
+      Layout left = layoutAt(image, function, instruction.source0);
+      Layout right = layoutAt(image, function, instruction.source1);
+      if (destination.kind != left.kind || left.kind != right.kind ||
+          uint64_t{left.width} + right.width != destination.width)
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    }
+    case TALOS_RT_DB_INSERT: {
+      if (instruction.auxiliary || !numeric(instruction.destination) ||
+          !numeric(instruction.source0) ||
+          !compatible(layoutAt(image, function, instruction.destination),
+                      layoutAt(image, function, instruction.source0)))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      Layout destination = layoutAt(image, function, instruction.destination);
+      Layout inserted = layoutAt(image, function, instruction.source1);
+      bool dynamic = (instruction.flags & TALOS_RT_DB_INSERT_DYNAMIC) != 0;
+      bool managedWord =
+          (instruction.flags & TALOS_RT_DB_AGGREGATE_MANAGED) != 0;
+      if (instruction.flags &
+          ~uint16_t(TALOS_RT_DB_INSERT_DYNAMIC | TALOS_RT_DB_AGGREGATE_MANAGED))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      if (dynamic &&
+          (instruction.immediate != 0 || !numeric(instruction.source2)))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      if (managedWord) {
+        // A managed word carries a handle, not a numeric value. Its lane is
+        // 64 bits wide and 64-bit aligned; a dynamic offset is a multiple of
+        // the element span, which the compiler keeps aligned, so only the
+        // static form can check the position here.
+        if ((inserted.kind != TALOS_RT_DBREG_MANAGED &&
+             inserted.kind != TALOS_RT_DBREG_STRING) ||
+            inserted.width != 64 ||
+            (!dynamic && (instruction.immediate & 63) != 0))
+          return reject(__LINE__, "invalid instruction encoding or operands",
+                        functionIndex, pc, instruction.opcode);
+      } else if (!numeric(instruction.source1)) {
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      }
+      if (!dynamic &&
+          (instruction.immediate > destination.width ||
+           inserted.width > destination.width - instruction.immediate))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    }
+    case TALOS_RT_DB_LOAD_FRAME:
+    case TALOS_RT_DB_STORE_FRAME: {
+      if (instruction.source2 || (instruction.opcode == TALOS_RT_DB_LOAD_FRAME
+                                      ? instruction.source0 != 0
+                                      : instruction.destination != 0))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      uint32_t valueRegister = instruction.opcode == TALOS_RT_DB_LOAD_FRAME
+                                   ? instruction.destination
+                                   : instruction.source0;
+      if (!reg(valueRegister))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      Layout value = layoutAt(image, function, valueRegister);
+      if (value.kind == TALOS_RT_DBREG_HANDLE) {
+        if (instruction.flags < TALOS_RT_DESCRIPTOR_STORAGE ||
+            instruction.flags > TALOS_RT_DESCRIPTOR_PROCESS ||
+            (instruction.flags <= TALOS_RT_DESCRIPTOR_DRIVER
+                 ? instruction.auxiliary == 0
+                 : instruction.auxiliary != 0))
+          return reject(__LINE__, "invalid instruction encoding or operands",
+                        functionIndex, pc, instruction.opcode);
+      } else if (instruction.flags != 0 || instruction.auxiliary > value.size) {
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      } else if (value.kind == TALOS_RT_DBREG_LOGIC &&
+                 (instruction.auxiliary % 2 != 0 ||
+                  (instruction.source1 != 0 &&
+                   instruction.source1 < instruction.auxiliary / 2))) {
+        // A four-state transfer always names both canonical frame planes,
+        // so its size is the value plane size doubled. An odd size cannot
+        // describe one, and would truncate the unknown plane.
+        return reject(__LINE__, "four-state frame transfer is not a plane pair",
+                      functionIndex, pc, instruction.opcode);
+      } else if (value.kind != TALOS_RT_DBREG_LOGIC &&
+                 instruction.source1 != 0) {
+        return reject(__LINE__, "secondary frame offset on two-state value",
+                      functionIndex, pc, instruction.opcode);
+      }
+      break;
+    }
+    case TALOS_RT_DB_CLEAR_FRAME_ROOT:
+    case TALOS_RT_DB_FRAME_ROOT: {
+      uint64_t canonicalSize =
+          (function.flags & TALOS_RT_DESIGN_FUNCTION_FRAME_SIZE_MASK) >> 1;
+      bool candidate = instruction.flags == 1;
+      if (instruction.flags > 1 ||
+          (candidate ? instruction.destination == 0 ||
+                           (instruction.destination &
+                            ~TALOS_RT_MANAGED_ROOT_KIND_ALL) != 0
+                     : instruction.destination != 0) ||
+          instruction.source0 || instruction.source1 || instruction.source2 ||
+          instruction.auxiliary ||
+          (function.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) == 0 ||
+          instruction.immediate > canonicalSize ||
+          sizeof(talos_rt_managed_word_v1) >
+              canonicalSize - instruction.immediate)
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    }
+    case TALOS_RT_DB_MAKE_HANDLE:
+      if (instruction.flags || !reg(instruction.destination) ||
+          layoutAt(image, function, instruction.destination).kind !=
+              TALOS_RT_DBREG_HANDLE ||
+          instruction.source0 < TALOS_RT_DESCRIPTOR_STORAGE ||
+          instruction.source0 > TALOS_RT_DESCRIPTOR_EVENT ||
+          instruction.source2 || instruction.auxiliary)
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_MAKE_LOCAL_HANDLE:
+      if (instruction.flags || instruction.source1 || instruction.source2 ||
+          instruction.auxiliary || instruction.immediate ||
+          !reg(instruction.destination) ||
+          layoutAt(image, function, instruction.destination).kind !=
+              TALOS_RT_DBREG_HANDLE ||
+          (!numeric(instruction.source0) && !floating(instruction.source0)) ||
+          instruction.source0 > UINT16_MAX)
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_HANDLE_OFFSET:
+      if (instruction.flags || instruction.source2 ||
+          !reg(instruction.destination) || !reg(instruction.source0) ||
+          layoutAt(image, function, instruction.destination).kind !=
+              TALOS_RT_DBREG_HANDLE ||
+          layoutAt(image, function, instruction.source0).kind !=
+              TALOS_RT_DBREG_HANDLE ||
+          instruction.auxiliary == 0 ||
+          (instruction.source1 != kInvalidRegister &&
+           !numeric(instruction.source1)))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_HANDLE_ID:
+      if (instruction.flags || instruction.source1 || instruction.source2 ||
+          instruction.auxiliary || instruction.immediate ||
+          !numeric(instruction.destination) ||
+          layoutAt(image, function, instruction.destination).width != 64 ||
+          !reg(instruction.source0) ||
+          layoutAt(image, function, instruction.source0).kind !=
+              TALOS_RT_DBREG_HANDLE)
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_LOAD_STATE:
+      if (instruction.flags || instruction.source1 || instruction.source2 ||
+          instruction.auxiliary || instruction.immediate ||
+          (!numeric(instruction.destination) &&
+           !floating(instruction.destination) &&
+           (!reg(instruction.destination) ||
+            (layoutAt(image, function, instruction.destination).kind !=
+                 TALOS_RT_DBREG_MANAGED &&
+             layoutAt(image, function, instruction.destination).kind !=
+                 TALOS_RT_DBREG_STRING &&
+             layoutAt(image, function, instruction.destination).kind !=
+                 TALOS_RT_DBREG_HANDLE))) ||
+          !reg(instruction.source0) ||
+          layoutAt(image, function, instruction.source0).kind !=
+              TALOS_RT_DBREG_HANDLE)
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_STORE_STATE:
+      if ((instruction.flags &
+           ~(TALOS_RT_DB_STORE_STATE_CHANGED |
+             TALOS_RT_DB_STORE_STATE_CONTINUOUS |
+             TALOS_RT_DB_STORE_STATE_DEFER_NET_RESOLUTION)) != 0 ||
+          ((instruction.flags & TALOS_RT_DB_STORE_STATE_CHANGED) != 0
+               ? (!reg(instruction.destination) ||
+                  layoutAt(image, function, instruction.destination).width != 1)
+               : instruction.destination != 0) ||
+          ((instruction.flags & TALOS_RT_DB_STORE_STATE_CONTINUOUS) != 0 &&
+           !numeric(instruction.source1) && !floating(instruction.source1) &&
+           (!reg(instruction.source1) ||
+            layoutAt(image, function, instruction.source1).kind !=
+                TALOS_RT_DBREG_STRING)) ||
+          instruction.source2 || instruction.auxiliary ||
+          instruction.immediate || !reg(instruction.source0) ||
+          (!numeric(instruction.source1) && !floating(instruction.source1) &&
+           (!reg(instruction.source1) ||
+            (layoutAt(image, function, instruction.source1).kind !=
+                 TALOS_RT_DBREG_MANAGED &&
+             layoutAt(image, function, instruction.source1).kind !=
+                 TALOS_RT_DBREG_STRING &&
+             layoutAt(image, function, instruction.source1).kind !=
+                 TALOS_RT_DBREG_HANDLE))) ||
+          (reg(instruction.source1) &&
+           layoutAt(image, function, instruction.source1).kind ==
+               TALOS_RT_DBREG_HANDLE &&
+           instruction.flags != 0) ||
+          layoutAt(image, function, instruction.source0).kind !=
+              TALOS_RT_DBREG_HANDLE)
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_OVERRIDE_STATE:
+      if ((instruction.flags & ~TALOS_RT_DB_OVERRIDE_FLAG_MASK) != 0 ||
+          ((instruction.flags & TALOS_RT_DB_OVERRIDE_CLAIM) != 0 &&
+           (instruction.flags & TALOS_RT_DB_OVERRIDE_DYNAMIC) == 0) ||
+          instruction.destination || instruction.auxiliary ||
+          instruction.immediate || !reg(instruction.source0) ||
+          (!numeric(instruction.source1) && !floating(instruction.source1) &&
+           layoutAt(image, function, instruction.source1).kind !=
+               TALOS_RT_DBREG_MANAGED &&
+           layoutAt(image, function, instruction.source1).kind !=
+               TALOS_RT_DBREG_STRING) ||
+          ((instruction.flags & TALOS_RT_DB_OVERRIDE_DYNAMIC) != 0
+               ? (!reg(instruction.source2) ||
+                  layoutAt(image, function, instruction.source2).kind !=
+                      TALOS_RT_DBREG_BITS ||
+                  layoutAt(image, function, instruction.source2).width != 64)
+               : instruction.source2 != 0) ||
+          layoutAt(image, function, instruction.source0).kind !=
+              TALOS_RT_DBREG_HANDLE)
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_RELEASE_STATE:
+      if (instruction.flags > TALOS_RT_DB_OVERRIDE_ASSIGN ||
+          instruction.destination || instruction.source1 ||
+          instruction.source2 || instruction.auxiliary ||
+          instruction.immediate || !reg(instruction.source0) ||
+          layoutAt(image, function, instruction.source0).kind !=
+              TALOS_RT_DBREG_HANDLE)
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_JUMP:
+    case TALOS_RT_DB_BRANCH:
+      if (instruction.flags || instruction.source2 || instruction.auxiliary ||
+          (instruction.opcode == TALOS_RT_DB_JUMP ? instruction.destination != 0
+                                                  : false) ||
+          instruction.immediate < function.firstInstruction ||
+          instruction.immediate >= codeEnd ||
+          (instruction.opcode == TALOS_RT_DB_BRANCH &&
+           (!numeric(instruction.destination) ||
+            layoutAt(image, function, instruction.destination).width != 1)) ||
+          !validMap(image, function, function, instruction.source0,
+                    instruction.source1))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_CALL: {
+      if (instruction.flags || instruction.destination ||
+          instruction.source0 >= image.functionCount)
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      Function callee = functionAt(image, instruction.source0);
+      if ((callee.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) != 0 ||
+          instruction.source2 != callee.argumentCount ||
+          instruction.immediate != callee.resultCount ||
+          !validMap(image, function, callee, instruction.source1,
+                    instruction.source2) ||
+          !validMap(image, callee, function, instruction.auxiliary,
+                    instruction.immediate))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      for (uint32_t index = 0; index != callee.argumentCount; ++index)
+        if (operandAt(image, instruction.source1 + index).first != index)
+          return reject(__LINE__, "invalid instruction encoding or operands",
+                        functionIndex, pc, instruction.opcode);
+      for (uint32_t index = 0; index != callee.resultCount; ++index)
+        if (operandAt(image, instruction.auxiliary + index).second !=
+            callee.argumentCount + index)
+          return reject(__LINE__, "invalid instruction encoding or operands",
+                        functionIndex, pc, instruction.opcode);
+      break;
+    }
+    case TALOS_RT_DB_TASK_CALL: {
+      if (instruction.flags || instruction.destination ||
+          instruction.source0 >= image.functionCount || instruction.auxiliary ||
+          (function.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) == 0 ||
+          !hasContinuation(instruction.immediate))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      Function callee = functionAt(image, instruction.source0);
+      if ((callee.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) == 0 ||
+          callee.resultCount != 0 ||
+          instruction.source2 != callee.argumentCount ||
+          !validMap(image, function, callee, instruction.source1,
+                    instruction.source2))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      for (uint32_t index = 0; index != callee.argumentCount; ++index)
+        if (operandAt(image, instruction.source1 + index).first != index)
+          return reject(__LINE__, "invalid instruction encoding or operands",
+                        functionIndex, pc, instruction.opcode);
+      break;
+    }
+    case TALOS_RT_DB_VIRTUAL_CALL:
+    case TALOS_RT_DB_INTERFACE_CALL: {
+      bool interfaceDispatch = instruction.opcode == TALOS_RT_DB_INTERFACE_CALL;
+      if (instruction.flags > function.layoutCount ||
+          instruction.immediate == 0 || instruction.source2 < 2 ||
+          !reg(instruction.source0) ||
+          layoutAt(image, function, instruction.source0).kind !=
+              TALOS_RT_DBREG_MANAGED ||
+          instruction.source1 > image.operandCount ||
+          instruction.source2 > image.operandCount - instruction.source1 ||
+          instruction.auxiliary > image.operandCount ||
+          instruction.flags > image.operandCount - instruction.auxiliary ||
+          (interfaceDispatch &&
+           (instruction.destination >= image.operandCount ||
+            operandAt(image, instruction.destination).first == 0)))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      for (uint32_t index = 0; index != instruction.source2; ++index) {
+        auto [destination, source] =
+            operandAt(image, instruction.source1 + index);
+        if (destination != index || !reg(source) ||
+            (index == 1 && source != instruction.source0))
+          return reject(__LINE__, "invalid instruction encoding or operands",
+                        functionIndex, pc, instruction.opcode);
+      }
+      for (uint32_t index = 0; index != instruction.flags; ++index) {
+        auto [destination, source] =
+            operandAt(image, instruction.auxiliary + index);
+        if (!reg(destination) || source != instruction.source2 + index)
+          return reject(__LINE__, "invalid instruction encoding or operands",
+                        functionIndex, pc, instruction.opcode);
+      }
+      break;
+    }
+    case TALOS_RT_DB_VIRTUAL_TASK_CALL:
+    case TALOS_RT_DB_INTERFACE_TASK_CALL: {
+      bool interfaceDispatch =
+          instruction.opcode == TALOS_RT_DB_INTERFACE_TASK_CALL;
+      if (instruction.flags || instruction.immediate == 0 ||
+          instruction.source2 < 2 ||
+          (function.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) == 0 ||
+          !hasContinuation(instruction.auxiliary) ||
+          !reg(instruction.source0) ||
+          layoutAt(image, function, instruction.source0).kind !=
+              TALOS_RT_DBREG_MANAGED ||
+          instruction.source1 > image.operandCount ||
+          instruction.source2 > image.operandCount - instruction.source1 ||
+          (interfaceDispatch &&
+           (instruction.destination >= image.operandCount ||
+            operandAt(image, instruction.destination).first == 0)))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      for (uint32_t index = 0; index != instruction.source2; ++index) {
+        auto [destination, source] =
+            operandAt(image, instruction.source1 + index);
+        if (destination != index || !reg(source) ||
+            (index == 1 && source != instruction.source0))
+          return reject(__LINE__, "invalid instruction encoding or operands",
+                        functionIndex, pc, instruction.opcode);
+      }
+      break;
+    }
+    case TALOS_RT_DB_RETURN:
+      if (instruction.flags || instruction.destination || instruction.source2 ||
+          instruction.auxiliary || instruction.immediate ||
+          (function.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) != 0 ||
+          instruction.source1 != function.resultCount ||
+          !validMap(image, function, function, instruction.source0,
+                    instruction.source1))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      for (uint32_t index = 0; index != function.resultCount; ++index)
+        if (operandAt(image, instruction.source0 + index).first !=
+            function.argumentCount + index)
+          return reject(__LINE__, "invalid instruction encoding or operands",
+                        functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_CONTINUE:
+      if (instruction.flags || instruction.destination || instruction.source0 ||
+          instruction.source1 || instruction.source2 || instruction.auxiliary ||
+          (function.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) == 0 ||
+          !hasContinuation(instruction.immediate))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_PROCESS_CONTROL:
+      if (instruction.flags > TALOS_RT_PROCESS_CONTROL_RESUME ||
+          instruction.destination || instruction.source1 ||
+          instruction.source2 || instruction.auxiliary ||
+          ((function.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) == 0 &&
+           instruction.flags == TALOS_RT_PROCESS_CONTROL_SUSPEND) ||
+          !hasContinuation(instruction.immediate) ||
+          !reg(instruction.source0) ||
+          layoutAt(image, function, instruction.source0).kind !=
+              TALOS_RT_DBREG_BITS ||
+          layoutAt(image, function, instruction.source0).width != 64)
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_SUSPEND: {
+      if (instruction.flags < TALOS_RT_SUSPEND_DELAY ||
+          instruction.flags > TALOS_RT_SUSPEND_EVENT_ORDER ||
+          instruction.destination || instruction.source1 ||
+          instruction.source2 ||
+          (instruction.auxiliary & ~kResumeActionFlags) != 0 ||
+          !talos_rt_valid_resume_action_flags(instruction.auxiliary) ||
+          !numeric(instruction.source0) ||
+          layoutAt(image, function, instruction.source0).width != 64 ||
+          (function.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) == 0 ||
+          !hasContinuation(instruction.immediate))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    }
+    case TALOS_RT_DB_TERMINATE:
+      if (instruction.flags || instruction.destination || instruction.source0 ||
+          instruction.source1 || instruction.source2 || instruction.auxiliary ||
+          (function.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) == 0)
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_FAIL:
+      if (instruction.flags || instruction.destination || instruction.source1 ||
+          instruction.source2 || instruction.auxiliary ||
+          instruction.immediate || !reg(instruction.source0) ||
+          layoutAt(image, function, instruction.source0).kind !=
+              TALOS_RT_DBREG_STATUS)
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    case TALOS_RT_DB_INTRINSIC:
+      if (instruction.flags || instruction.destination || instruction.source0 ||
+          instruction.source1 || instruction.source2 || instruction.auxiliary ||
+          instruction.immediate > UINT32_MAX ||
+          !validIntrinsic(image, function,
+                          static_cast<uint32_t>(instruction.immediate)))
+        return reject(__LINE__, "invalid instruction encoding or operands",
+                      functionIndex, pc, instruction.opcode);
+      break;
+    default:
+      return reject(__LINE__, "unknown bytecode opcode", functionIndex, pc,
+                    instruction.opcode);
+    }
+  }
+  // Bound the forward initialization analysis. Large generated eval
+  // coordinators can have irreducible CFGs beyond this model; instruction
+  // encodings and operands are still validated above.
+  if (function.instructionCount <= 2000 &&
+      !validateInitialization(image, function, functionIndex))
+    return false;
+  return true;
+}
+
+bool validateImage(const Image &image, bool validateCode) {
   auto reject = [](unsigned line, const char *reason,
                    uint64_t functionIndex = UINT64_MAX,
                    uint64_t pc = UINT64_MAX, uint32_t opcode = UINT32_MAX) {
@@ -2741,766 +3498,14 @@ bool validateImage(const Image &image) {
       return reject(__LINE__,
                     "zero-time function entry continuation is invalid",
                     functionIndex);
-    uint64_t codeEnd = function.firstInstruction + function.instructionCount;
-    auto hasContinuation = [&](uint64_t id) {
-      if (id > UINT32_MAX)
-        return false;
-      for (uint64_t index = 0; index != function.continuationCount; ++index) {
-        if (continuationAt(image, function.firstContinuation + index).id == id)
-          return true;
-      }
-      return false;
-    };
-    for (uint64_t pc = function.firstInstruction; pc != codeEnd; ++pc) {
-      Instruction instruction = instructionAt(image, pc);
-      auto reg = [&](uint32_t index) { return validRegister(function, index); };
-      auto numeric = [&](uint32_t index) {
-        if (!reg(index))
-          return false;
-        uint8_t kind = layoutAt(image, function, index).kind;
-        return kind == TALOS_RT_DBREG_BITS || kind == TALOS_RT_DBREG_LOGIC;
-      };
-      auto floating = [&](uint32_t index) {
-        if (!reg(index))
-          return false;
-        uint8_t kind = layoutAt(image, function, index).kind;
-        return kind == TALOS_RT_DBREG_REAL32 || kind == TALOS_RT_DBREG_REAL64;
-      };
-      auto binary = [&] {
-        return reg(instruction.destination) && reg(instruction.source0) &&
-               reg(instruction.source1) &&
-               compatible(layoutAt(image, function, instruction.destination),
-                          layoutAt(image, function, instruction.source0)) &&
-               compatible(layoutAt(image, function, instruction.destination),
-                          layoutAt(image, function, instruction.source1));
-      };
-      switch (instruction.opcode) {
-      case TALOS_RT_DB_NOP:
-        if (instruction.flags || instruction.destination ||
-            instruction.source0 || instruction.source1 || instruction.source2 ||
-            instruction.auxiliary || instruction.immediate)
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_CONSTANT: {
-        if (!reg(instruction.destination) || instruction.flags ||
-            instruction.source0 || instruction.source1 || instruction.source2 ||
-            instruction.auxiliary)
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        Layout layout = layoutAt(image, function, instruction.destination);
-        if (instruction.immediate > image.constantSize ||
-            layout.size > image.constantSize - instruction.immediate)
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      }
-      case TALOS_RT_DB_MOVE:
-        if (instruction.flags || instruction.source1 || instruction.source2 ||
-            instruction.auxiliary || instruction.immediate ||
-            !reg(instruction.destination) || !reg(instruction.source0) ||
-            !compatible(layoutAt(image, function, instruction.destination),
-                        layoutAt(image, function, instruction.source0)))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_BITCAST:
-        if (instruction.flags || instruction.source1 || instruction.source2 ||
-            instruction.auxiliary || instruction.immediate ||
-            !reg(instruction.destination) || !reg(instruction.source0) ||
-            !bitcastCompatible(
-                layoutAt(image, function, instruction.destination),
-                layoutAt(image, function, instruction.source0)))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_NOT:
-        if (instruction.flags || instruction.source1 || instruction.source2 ||
-            instruction.auxiliary || instruction.immediate ||
-            !reg(instruction.destination) || !reg(instruction.source0) ||
-            !compatible(layoutAt(image, function, instruction.destination),
-                        layoutAt(image, function, instruction.source0)))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_POPCOUNT: {
-        if (instruction.flags || instruction.source1 || instruction.source2 ||
-            instruction.auxiliary || instruction.immediate ||
-            !reg(instruction.destination) || !reg(instruction.source0))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        Layout destination = layoutAt(image, function, instruction.destination);
-        Layout source = layoutAt(image, function, instruction.source0);
-        if (destination.kind != TALOS_RT_DBREG_BITS ||
-            source.kind != TALOS_RT_DBREG_BITS ||
-            destination.width != source.width)
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      }
-      case TALOS_RT_DB_POWER:
-        if (instruction.flags || instruction.source2 || instruction.auxiliary ||
-            instruction.immediate || !numeric(instruction.destination) ||
-            !numeric(instruction.source0) || !numeric(instruction.source1) ||
-            !compatible(layoutAt(image, function, instruction.destination),
-                        layoutAt(image, function, instruction.source0)))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_REPLICATE: {
-        if (instruction.flags || instruction.source1 || instruction.source2 ||
-            instruction.auxiliary || instruction.immediate == 0 ||
-            !numeric(instruction.destination) || !numeric(instruction.source0))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        Layout destination = layoutAt(image, function, instruction.destination);
-        Layout source = layoutAt(image, function, instruction.source0);
-        if (destination.kind != source.kind || source.width == 0 ||
-            instruction.immediate > UINT32_MAX / source.width ||
-            uint64_t{source.width} * instruction.immediate != destination.width)
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      }
-      case TALOS_RT_DB_REDUCE:
-        if (instruction.source1 || instruction.source2 ||
-            instruction.auxiliary || instruction.immediate ||
-            !numeric(instruction.destination) ||
-            !numeric(instruction.source0) ||
-            instruction.flags > TALOS_RT_DB_REDUCE_LOGICAL_VALUE ||
-            layoutAt(image, function, instruction.destination).width != 1)
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_EXTRACT:
-        if (instruction.source2 || instruction.auxiliary ||
-            (instruction.source1 != kInvalidRegister &&
-             !numeric(instruction.source1)))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        if (instruction.flags == TALOS_RT_DB_AGGREGATE_MANAGED) {
-          if (!reg(instruction.destination) || !reg(instruction.source0))
-            return reject(__LINE__, "invalid instruction encoding or operands",
-                          functionIndex, pc, instruction.opcode);
-          Layout destination =
-              layoutAt(image, function, instruction.destination);
-          Layout source = layoutAt(image, function, instruction.source0);
-          bool extractHandle = (destination.kind == TALOS_RT_DBREG_MANAGED ||
-                                destination.kind == TALOS_RT_DBREG_STRING) &&
-                               destination.width == 64 &&
-                               numeric(instruction.source0);
-          bool insertHandle =
-              numeric(instruction.destination) &&
-              (source.kind == TALOS_RT_DBREG_MANAGED ||
-               source.kind == TALOS_RT_DBREG_STRING) &&
-              source.width == 64 && instruction.source1 == kInvalidRegister &&
-              instruction.immediate == 0 && destination.width >= 64;
-          if (extractHandle && instruction.source1 == kInvalidRegister &&
-              ((instruction.immediate & 63) != 0 ||
-               instruction.immediate > source.width ||
-               uint64_t{64} > source.width - instruction.immediate))
-            return reject(__LINE__, "invalid instruction encoding or operands",
-                          functionIndex, pc, instruction.opcode);
-          if (!extractHandle && !insertHandle)
-            return reject(__LINE__, "invalid instruction encoding or operands",
-                          functionIndex, pc, instruction.opcode);
-        } else if (instruction.flags > TALOS_RT_DB_EXTRACT_SIGN_EXTEND ||
-                   !numeric(instruction.destination) ||
-                   !numeric(instruction.source0)) {
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        }
-        break;
-      case TALOS_RT_DB_AND:
-      case TALOS_RT_DB_OR:
-      case TALOS_RT_DB_XOR:
-      case TALOS_RT_DB_ADD:
-      case TALOS_RT_DB_SUB:
-      case TALOS_RT_DB_MUL:
-      case TALOS_RT_DB_UDIV:
-      case TALOS_RT_DB_SDIV:
-      case TALOS_RT_DB_UREM:
-      case TALOS_RT_DB_SREM:
-        if (instruction.flags || instruction.source2 || instruction.auxiliary ||
-            instruction.immediate || !binary())
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_FADD:
-      case TALOS_RT_DB_FSUB:
-      case TALOS_RT_DB_FMUL:
-      case TALOS_RT_DB_FDIV:
-      case TALOS_RT_DB_FPOW:
-        if (instruction.flags || instruction.source2 || instruction.auxiliary ||
-            instruction.immediate || !binary() ||
-            !floating(instruction.destination))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_FNEG:
-        if (instruction.flags || instruction.source1 || instruction.source2 ||
-            instruction.auxiliary || instruction.immediate ||
-            !reg(instruction.destination) || !reg(instruction.source0) ||
-            !floating(instruction.destination) ||
-            !compatible(layoutAt(image, function, instruction.destination),
-                        layoutAt(image, function, instruction.source0)))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_FCOMPARE: {
-        if (instruction.flags > TALOS_RT_DB_FCMP_GE || instruction.source2 ||
-            instruction.auxiliary || instruction.immediate ||
-            !reg(instruction.destination) ||
-            !numeric(instruction.destination) ||
-            layoutAt(image, function, instruction.destination).kind !=
-                TALOS_RT_DBREG_BITS ||
-            layoutAt(image, function, instruction.destination).width != 1 ||
-            !floating(instruction.source0) || !floating(instruction.source1) ||
-            !compatible(layoutAt(image, function, instruction.source0),
-                        layoutAt(image, function, instruction.source1)))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      }
-      case TALOS_RT_DB_FEXT:
-        if (instruction.flags || instruction.source1 || instruction.source2 ||
-            instruction.auxiliary || instruction.immediate ||
-            !reg(instruction.destination) || !reg(instruction.source0) ||
-            layoutAt(image, function, instruction.destination).kind !=
-                TALOS_RT_DBREG_REAL64 ||
-            layoutAt(image, function, instruction.source0).kind !=
-                TALOS_RT_DBREG_REAL32)
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_FTRUNC:
-        if (instruction.flags || instruction.source1 || instruction.source2 ||
-            instruction.auxiliary || instruction.immediate ||
-            !reg(instruction.destination) || !reg(instruction.source0) ||
-            layoutAt(image, function, instruction.destination).kind !=
-                TALOS_RT_DBREG_REAL32 ||
-            layoutAt(image, function, instruction.source0).kind !=
-                TALOS_RT_DBREG_REAL64)
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_SHL:
-      case TALOS_RT_DB_LSHR:
-      case TALOS_RT_DB_ASHR:
-        if (instruction.flags || instruction.source2 || instruction.auxiliary ||
-            instruction.immediate || !reg(instruction.destination) ||
-            !reg(instruction.source0) || !numeric(instruction.source1) ||
-            !compatible(layoutAt(image, function, instruction.destination),
-                        layoutAt(image, function, instruction.source0)))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_COMPARE: {
-        bool deterministic = instruction.flags == TALOS_RT_DB_CMP_CASE_EQ ||
-                             instruction.flags == TALOS_RT_DB_CMP_CASE_NE ||
-                             instruction.flags == TALOS_RT_DB_CMP_CASEZ_EQ ||
-                             instruction.flags == TALOS_RT_DB_CMP_CASEXZ_EQ;
-        if (instruction.source2 || instruction.auxiliary ||
-            instruction.immediate || !reg(instruction.destination) ||
-            !reg(instruction.source0) || !reg(instruction.source1) ||
-            instruction.flags > TALOS_RT_DB_CMP_CASEXZ_EQ ||
-            !compatible(layoutAt(image, function, instruction.source0),
-                        layoutAt(image, function, instruction.source1)) ||
-            !numeric(instruction.destination) ||
-            layoutAt(image, function, instruction.destination).width != 1 ||
-            (deterministic &&
-             layoutAt(image, function, instruction.destination).kind !=
-                 TALOS_RT_DBREG_BITS))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      }
-      case TALOS_RT_DB_SELECT:
-        if (instruction.flags > TALOS_RT_DB_SELECT_FOUR_STATE ||
-            instruction.auxiliary || instruction.immediate || !binary() ||
-            !numeric(instruction.source2) ||
-            layoutAt(image, function, instruction.source2).width != 1 ||
-            (instruction.flags == TALOS_RT_DB_SELECT_FOUR_STATE &&
-             (layoutAt(image, function, instruction.destination).kind !=
-                  TALOS_RT_DBREG_LOGIC ||
-              layoutAt(image, function, instruction.source0).kind !=
-                  TALOS_RT_DBREG_LOGIC ||
-              layoutAt(image, function, instruction.source1).kind !=
-                  TALOS_RT_DBREG_LOGIC ||
-              layoutAt(image, function, instruction.source2).kind !=
-                  TALOS_RT_DBREG_LOGIC)))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_CONCAT: {
-        if (instruction.flags || instruction.source2 || instruction.auxiliary ||
-            instruction.immediate || !reg(instruction.destination) ||
-            !reg(instruction.source0) || !reg(instruction.source1))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        Layout destination = layoutAt(image, function, instruction.destination);
-        Layout left = layoutAt(image, function, instruction.source0);
-        Layout right = layoutAt(image, function, instruction.source1);
-        if (destination.kind != left.kind || left.kind != right.kind ||
-            uint64_t{left.width} + right.width != destination.width)
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      }
-      case TALOS_RT_DB_INSERT: {
-        if (instruction.auxiliary || !numeric(instruction.destination) ||
-            !numeric(instruction.source0) ||
-            !compatible(layoutAt(image, function, instruction.destination),
-                        layoutAt(image, function, instruction.source0)))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        Layout destination = layoutAt(image, function, instruction.destination);
-        Layout inserted = layoutAt(image, function, instruction.source1);
-        bool dynamic = (instruction.flags & TALOS_RT_DB_INSERT_DYNAMIC) != 0;
-        bool managedWord =
-            (instruction.flags & TALOS_RT_DB_AGGREGATE_MANAGED) != 0;
-        if (instruction.flags & ~uint16_t(TALOS_RT_DB_INSERT_DYNAMIC |
-                                          TALOS_RT_DB_AGGREGATE_MANAGED))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        if (dynamic &&
-            (instruction.immediate != 0 || !numeric(instruction.source2)))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        if (managedWord) {
-          // A managed word carries a handle, not a numeric value. Its lane is
-          // 64 bits wide and 64-bit aligned; a dynamic offset is a multiple of
-          // the element span, which the compiler keeps aligned, so only the
-          // static form can check the position here.
-          if ((inserted.kind != TALOS_RT_DBREG_MANAGED &&
-               inserted.kind != TALOS_RT_DBREG_STRING) ||
-              inserted.width != 64 ||
-              (!dynamic && (instruction.immediate & 63) != 0))
-            return reject(__LINE__, "invalid instruction encoding or operands",
-                          functionIndex, pc, instruction.opcode);
-        } else if (!numeric(instruction.source1)) {
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        }
-        if (!dynamic &&
-            (instruction.immediate > destination.width ||
-             inserted.width > destination.width - instruction.immediate))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      }
-      case TALOS_RT_DB_LOAD_FRAME:
-      case TALOS_RT_DB_STORE_FRAME: {
-        if (instruction.source2 || (instruction.opcode == TALOS_RT_DB_LOAD_FRAME
-                                        ? instruction.source0 != 0
-                                        : instruction.destination != 0))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        uint32_t valueRegister = instruction.opcode == TALOS_RT_DB_LOAD_FRAME
-                                     ? instruction.destination
-                                     : instruction.source0;
-        if (!reg(valueRegister))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        Layout value = layoutAt(image, function, valueRegister);
-        if (value.kind == TALOS_RT_DBREG_HANDLE) {
-          if (instruction.flags < TALOS_RT_DESCRIPTOR_STORAGE ||
-              instruction.flags > TALOS_RT_DESCRIPTOR_PROCESS ||
-              (instruction.flags <= TALOS_RT_DESCRIPTOR_DRIVER
-                   ? instruction.auxiliary == 0
-                   : instruction.auxiliary != 0))
-            return reject(__LINE__, "invalid instruction encoding or operands",
-                          functionIndex, pc, instruction.opcode);
-        } else if (instruction.flags != 0 ||
-                   instruction.auxiliary > value.size) {
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        } else if (value.kind == TALOS_RT_DBREG_LOGIC &&
-                   (instruction.auxiliary % 2 != 0 ||
-                    (instruction.source1 != 0 &&
-                     instruction.source1 < instruction.auxiliary / 2))) {
-          // A four-state transfer always names both canonical frame planes,
-          // so its size is the value plane size doubled. An odd size cannot
-          // describe one, and would truncate the unknown plane.
-          return reject(__LINE__,
-                        "four-state frame transfer is not a plane pair",
-                        functionIndex, pc, instruction.opcode);
-        } else if (value.kind != TALOS_RT_DBREG_LOGIC &&
-                   instruction.source1 != 0) {
-          return reject(__LINE__, "secondary frame offset on two-state value",
-                        functionIndex, pc, instruction.opcode);
-        }
-        break;
-      }
-      case TALOS_RT_DB_CLEAR_FRAME_ROOT:
-      case TALOS_RT_DB_FRAME_ROOT: {
-        uint64_t canonicalSize =
-            (function.flags & TALOS_RT_DESIGN_FUNCTION_FRAME_SIZE_MASK) >> 1;
-        bool candidate = instruction.flags == 1;
-        if (instruction.flags > 1 ||
-            (candidate ? instruction.destination == 0 ||
-                             (instruction.destination &
-                              ~TALOS_RT_MANAGED_ROOT_KIND_ALL) != 0
-                       : instruction.destination != 0) ||
-            instruction.source0 || instruction.source1 || instruction.source2 ||
-            instruction.auxiliary ||
-            (function.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) == 0 ||
-            instruction.immediate > canonicalSize ||
-            sizeof(talos_rt_managed_word_v1) >
-                canonicalSize - instruction.immediate)
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      }
-      case TALOS_RT_DB_MAKE_HANDLE:
-        if (instruction.flags || !reg(instruction.destination) ||
-            layoutAt(image, function, instruction.destination).kind !=
-                TALOS_RT_DBREG_HANDLE ||
-            instruction.source0 < TALOS_RT_DESCRIPTOR_STORAGE ||
-            instruction.source0 > TALOS_RT_DESCRIPTOR_EVENT ||
-            instruction.source2 || instruction.auxiliary)
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_MAKE_LOCAL_HANDLE:
-        if (instruction.flags || instruction.source1 || instruction.source2 ||
-            instruction.auxiliary || instruction.immediate ||
-            !reg(instruction.destination) ||
-            layoutAt(image, function, instruction.destination).kind !=
-                TALOS_RT_DBREG_HANDLE ||
-            (!numeric(instruction.source0) && !floating(instruction.source0)) ||
-            instruction.source0 > UINT16_MAX)
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_HANDLE_OFFSET:
-        if (instruction.flags || instruction.source2 ||
-            !reg(instruction.destination) || !reg(instruction.source0) ||
-            layoutAt(image, function, instruction.destination).kind !=
-                TALOS_RT_DBREG_HANDLE ||
-            layoutAt(image, function, instruction.source0).kind !=
-                TALOS_RT_DBREG_HANDLE ||
-            instruction.auxiliary == 0 ||
-            (instruction.source1 != kInvalidRegister &&
-             !numeric(instruction.source1)))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_HANDLE_ID:
-        if (instruction.flags || instruction.source1 || instruction.source2 ||
-            instruction.auxiliary || instruction.immediate ||
-            !numeric(instruction.destination) ||
-            layoutAt(image, function, instruction.destination).width != 64 ||
-            !reg(instruction.source0) ||
-            layoutAt(image, function, instruction.source0).kind !=
-                TALOS_RT_DBREG_HANDLE)
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_LOAD_STATE:
-        if (instruction.flags || instruction.source1 || instruction.source2 ||
-            instruction.auxiliary || instruction.immediate ||
-            (!numeric(instruction.destination) &&
-             !floating(instruction.destination) &&
-             (!reg(instruction.destination) ||
-              (layoutAt(image, function, instruction.destination).kind !=
-                   TALOS_RT_DBREG_MANAGED &&
-               layoutAt(image, function, instruction.destination).kind !=
-                   TALOS_RT_DBREG_STRING &&
-               layoutAt(image, function, instruction.destination).kind !=
-                   TALOS_RT_DBREG_HANDLE))) ||
-            !reg(instruction.source0) ||
-            layoutAt(image, function, instruction.source0).kind !=
-                TALOS_RT_DBREG_HANDLE)
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_STORE_STATE:
-        if ((instruction.flags &
-             ~(TALOS_RT_DB_STORE_STATE_CHANGED |
-               TALOS_RT_DB_STORE_STATE_CONTINUOUS |
-               TALOS_RT_DB_STORE_STATE_DEFER_NET_RESOLUTION)) != 0 ||
-            ((instruction.flags & TALOS_RT_DB_STORE_STATE_CHANGED) != 0
-                 ? (!reg(instruction.destination) ||
-                    layoutAt(image, function, instruction.destination).width !=
-                        1)
-                 : instruction.destination != 0) ||
-            ((instruction.flags & TALOS_RT_DB_STORE_STATE_CONTINUOUS) != 0 &&
-             !numeric(instruction.source1) && !floating(instruction.source1) &&
-             (!reg(instruction.source1) ||
-              layoutAt(image, function, instruction.source1).kind !=
-                  TALOS_RT_DBREG_STRING)) ||
-            instruction.source2 || instruction.auxiliary ||
-            instruction.immediate || !reg(instruction.source0) ||
-            (!numeric(instruction.source1) && !floating(instruction.source1) &&
-             (!reg(instruction.source1) ||
-              (layoutAt(image, function, instruction.source1).kind !=
-                   TALOS_RT_DBREG_MANAGED &&
-               layoutAt(image, function, instruction.source1).kind !=
-                   TALOS_RT_DBREG_STRING &&
-               layoutAt(image, function, instruction.source1).kind !=
-                   TALOS_RT_DBREG_HANDLE))) ||
-            (reg(instruction.source1) &&
-             layoutAt(image, function, instruction.source1).kind ==
-                 TALOS_RT_DBREG_HANDLE &&
-             instruction.flags != 0) ||
-            layoutAt(image, function, instruction.source0).kind !=
-                TALOS_RT_DBREG_HANDLE)
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_OVERRIDE_STATE:
-        if ((instruction.flags & ~TALOS_RT_DB_OVERRIDE_FLAG_MASK) != 0 ||
-            ((instruction.flags & TALOS_RT_DB_OVERRIDE_CLAIM) != 0 &&
-             (instruction.flags & TALOS_RT_DB_OVERRIDE_DYNAMIC) == 0) ||
-            instruction.destination || instruction.auxiliary ||
-            instruction.immediate || !reg(instruction.source0) ||
-            (!numeric(instruction.source1) && !floating(instruction.source1) &&
-             layoutAt(image, function, instruction.source1).kind !=
-                 TALOS_RT_DBREG_MANAGED &&
-             layoutAt(image, function, instruction.source1).kind !=
-                 TALOS_RT_DBREG_STRING) ||
-            ((instruction.flags & TALOS_RT_DB_OVERRIDE_DYNAMIC) != 0
-                 ? (!reg(instruction.source2) ||
-                    layoutAt(image, function, instruction.source2).kind !=
-                        TALOS_RT_DBREG_BITS ||
-                    layoutAt(image, function, instruction.source2).width != 64)
-                 : instruction.source2 != 0) ||
-            layoutAt(image, function, instruction.source0).kind !=
-                TALOS_RT_DBREG_HANDLE)
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_RELEASE_STATE:
-        if (instruction.flags > TALOS_RT_DB_OVERRIDE_ASSIGN ||
-            instruction.destination || instruction.source1 ||
-            instruction.source2 || instruction.auxiliary ||
-            instruction.immediate || !reg(instruction.source0) ||
-            layoutAt(image, function, instruction.source0).kind !=
-                TALOS_RT_DBREG_HANDLE)
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_JUMP:
-      case TALOS_RT_DB_BRANCH:
-        if (instruction.flags || instruction.source2 || instruction.auxiliary ||
-            (instruction.opcode == TALOS_RT_DB_JUMP
-                 ? instruction.destination != 0
-                 : false) ||
-            instruction.immediate < function.firstInstruction ||
-            instruction.immediate >= codeEnd ||
-            (instruction.opcode == TALOS_RT_DB_BRANCH &&
-             (!numeric(instruction.destination) ||
-              layoutAt(image, function, instruction.destination).width != 1)) ||
-            !validMap(image, function, function, instruction.source0,
-                      instruction.source1))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_CALL: {
-        if (instruction.flags || instruction.destination ||
-            instruction.source0 >= image.functionCount)
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        Function callee = functionAt(image, instruction.source0);
-        if ((callee.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) != 0 ||
-            instruction.source2 != callee.argumentCount ||
-            instruction.immediate != callee.resultCount ||
-            !validMap(image, function, callee, instruction.source1,
-                      instruction.source2) ||
-            !validMap(image, callee, function, instruction.auxiliary,
-                      instruction.immediate))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        for (uint32_t index = 0; index != callee.argumentCount; ++index)
-          if (operandAt(image, instruction.source1 + index).first != index)
-            return reject(__LINE__, "invalid instruction encoding or operands",
-                          functionIndex, pc, instruction.opcode);
-        for (uint32_t index = 0; index != callee.resultCount; ++index)
-          if (operandAt(image, instruction.auxiliary + index).second !=
-              callee.argumentCount + index)
-            return reject(__LINE__, "invalid instruction encoding or operands",
-                          functionIndex, pc, instruction.opcode);
-        break;
-      }
-      case TALOS_RT_DB_TASK_CALL: {
-        if (instruction.flags || instruction.destination ||
-            instruction.source0 >= image.functionCount ||
-            instruction.auxiliary ||
-            (function.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) == 0 ||
-            !hasContinuation(instruction.immediate))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        Function callee = functionAt(image, instruction.source0);
-        if ((callee.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) == 0 ||
-            callee.resultCount != 0 ||
-            instruction.source2 != callee.argumentCount ||
-            !validMap(image, function, callee, instruction.source1,
-                      instruction.source2))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        for (uint32_t index = 0; index != callee.argumentCount; ++index)
-          if (operandAt(image, instruction.source1 + index).first != index)
-            return reject(__LINE__, "invalid instruction encoding or operands",
-                          functionIndex, pc, instruction.opcode);
-        break;
-      }
-      case TALOS_RT_DB_VIRTUAL_CALL:
-      case TALOS_RT_DB_INTERFACE_CALL: {
-        bool interfaceDispatch =
-            instruction.opcode == TALOS_RT_DB_INTERFACE_CALL;
-        if (instruction.flags > function.layoutCount ||
-            instruction.immediate == 0 || instruction.source2 < 2 ||
-            !reg(instruction.source0) ||
-            layoutAt(image, function, instruction.source0).kind !=
-                TALOS_RT_DBREG_MANAGED ||
-            instruction.source1 > image.operandCount ||
-            instruction.source2 > image.operandCount - instruction.source1 ||
-            instruction.auxiliary > image.operandCount ||
-            instruction.flags > image.operandCount - instruction.auxiliary ||
-            (interfaceDispatch &&
-             (instruction.destination >= image.operandCount ||
-              operandAt(image, instruction.destination).first == 0)))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        for (uint32_t index = 0; index != instruction.source2; ++index) {
-          auto [destination, source] =
-              operandAt(image, instruction.source1 + index);
-          if (destination != index || !reg(source) ||
-              (index == 1 && source != instruction.source0))
-            return reject(__LINE__, "invalid instruction encoding or operands",
-                          functionIndex, pc, instruction.opcode);
-        }
-        for (uint32_t index = 0; index != instruction.flags; ++index) {
-          auto [destination, source] =
-              operandAt(image, instruction.auxiliary + index);
-          if (!reg(destination) || source != instruction.source2 + index)
-            return reject(__LINE__, "invalid instruction encoding or operands",
-                          functionIndex, pc, instruction.opcode);
-        }
-        break;
-      }
-      case TALOS_RT_DB_VIRTUAL_TASK_CALL:
-      case TALOS_RT_DB_INTERFACE_TASK_CALL: {
-        bool interfaceDispatch =
-            instruction.opcode == TALOS_RT_DB_INTERFACE_TASK_CALL;
-        if (instruction.flags || instruction.immediate == 0 ||
-            instruction.source2 < 2 ||
-            (function.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) == 0 ||
-            !hasContinuation(instruction.auxiliary) ||
-            !reg(instruction.source0) ||
-            layoutAt(image, function, instruction.source0).kind !=
-                TALOS_RT_DBREG_MANAGED ||
-            instruction.source1 > image.operandCount ||
-            instruction.source2 > image.operandCount - instruction.source1 ||
-            (interfaceDispatch &&
-             (instruction.destination >= image.operandCount ||
-              operandAt(image, instruction.destination).first == 0)))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        for (uint32_t index = 0; index != instruction.source2; ++index) {
-          auto [destination, source] =
-              operandAt(image, instruction.source1 + index);
-          if (destination != index || !reg(source) ||
-              (index == 1 && source != instruction.source0))
-            return reject(__LINE__, "invalid instruction encoding or operands",
-                          functionIndex, pc, instruction.opcode);
-        }
-        break;
-      }
-      case TALOS_RT_DB_RETURN:
-        if (instruction.flags || instruction.destination ||
-            instruction.source2 || instruction.auxiliary ||
-            instruction.immediate ||
-            (function.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) != 0 ||
-            instruction.source1 != function.resultCount ||
-            !validMap(image, function, function, instruction.source0,
-                      instruction.source1))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        for (uint32_t index = 0; index != function.resultCount; ++index)
-          if (operandAt(image, instruction.source0 + index).first !=
-              function.argumentCount + index)
-            return reject(__LINE__, "invalid instruction encoding or operands",
-                          functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_CONTINUE:
-        if (instruction.flags || instruction.destination ||
-            instruction.source0 || instruction.source1 || instruction.source2 ||
-            instruction.auxiliary ||
-            (function.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) == 0 ||
-            !hasContinuation(instruction.immediate))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_PROCESS_CONTROL:
-        if (instruction.flags > TALOS_RT_PROCESS_CONTROL_RESUME ||
-            instruction.destination || instruction.source1 ||
-            instruction.source2 || instruction.auxiliary ||
-            ((function.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) == 0 &&
-             instruction.flags == TALOS_RT_PROCESS_CONTROL_SUSPEND) ||
-            !hasContinuation(instruction.immediate) ||
-            !reg(instruction.source0) ||
-            layoutAt(image, function, instruction.source0).kind !=
-                TALOS_RT_DBREG_BITS ||
-            layoutAt(image, function, instruction.source0).width != 64)
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_SUSPEND: {
-        if (instruction.flags < TALOS_RT_SUSPEND_DELAY ||
-            instruction.flags > TALOS_RT_SUSPEND_EVENT_ORDER ||
-            instruction.destination || instruction.source1 ||
-            instruction.source2 ||
-            (instruction.auxiliary & ~kResumeActionFlags) != 0 ||
-            !talos_rt_valid_resume_action_flags(instruction.auxiliary) ||
-            !numeric(instruction.source0) ||
-            layoutAt(image, function, instruction.source0).width != 64 ||
-            (function.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) == 0 ||
-            !hasContinuation(instruction.immediate))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      }
-      case TALOS_RT_DB_TERMINATE:
-        if (instruction.flags || instruction.destination ||
-            instruction.source0 || instruction.source1 || instruction.source2 ||
-            instruction.auxiliary ||
-            (function.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) == 0)
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_FAIL:
-        if (instruction.flags || instruction.destination ||
-            instruction.source1 || instruction.source2 ||
-            instruction.auxiliary || instruction.immediate ||
-            !reg(instruction.source0) ||
-            layoutAt(image, function, instruction.source0).kind !=
-                TALOS_RT_DBREG_STATUS)
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      case TALOS_RT_DB_INTRINSIC:
-        if (instruction.flags || instruction.destination ||
-            instruction.source0 || instruction.source1 || instruction.source2 ||
-            instruction.auxiliary || instruction.immediate > UINT32_MAX ||
-            !validIntrinsic(image, function,
-                            static_cast<uint32_t>(instruction.immediate)))
-          return reject(__LINE__, "invalid instruction encoding or operands",
-                        functionIndex, pc, instruction.opcode);
-        break;
-      default:
-        return reject(__LINE__, "unknown bytecode opcode", functionIndex, pc,
-                      instruction.opcode);
-      }
-    }
-    // Bound the forward initialization analysis. Large generated eval
-    // coordinators can have irreducible CFGs beyond this model; instruction
-    // encodings and operands are still validated above.
-    if (function.instructionCount <= 2000 &&
-        !validateInitialization(image, function, functionIndex))
-      return false;
   }
+  // Instructions are checked against every function's metadata and layouts
+  // (callees included), so check them only once all of those are validated.
+  if (validateCode)
+    for (uint32_t functionIndex = 0; functionIndex != image.functionCount;
+         ++functionIndex)
+      if (!validateFunctionCode(image, functionIndex))
+        return false;
   return true;
 }
 
@@ -3621,7 +3626,7 @@ talos_rt_status talos_rt_initialize_design_bytecode_image(
     talos_rt_design_bytecode_entry_v1 entry{&execution, 0, 0};
     Image image;
     if (!parseImage(entry, image, /*inventoryOnly=*/true) ||
-        !validateImage(image) ||
+        !validateImage(image, /*validateCode=*/false) ||
         !matchesActivationBytecodeInventory(execution, image))
       return TALOS_RT_INVALID_DESIGN;
     outImage = image;

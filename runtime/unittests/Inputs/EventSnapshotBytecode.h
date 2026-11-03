@@ -3,17 +3,14 @@
 #define TALOS_TEST_EVENTSNAPSHOTBYTECODE_H
 
 #include "talos/Runtime/Runtime.h"
+#include "talos/Runtime/StableHash.h"
 #include <cstdint>
 #include <cstring>
 #include <vector>
 
 namespace talos::test {
 inline uint64_t snapshotImageChecksum(const std::vector<uint8_t> &bytes) {
-  uint64_t hash = UINT64_C(14695981039346656037);
-  for (size_t index = 0; index < bytes.size(); ++index) {
-    hash ^= index >= 32 && index < 40 ? 0 : bytes[index];
-    hash *= UINT64_C(1099511628211);
-  }
+  uint64_t hash = talos_stable_image_checksum(bytes.data(), bytes.size(), 32);
   return hash;
 }
 

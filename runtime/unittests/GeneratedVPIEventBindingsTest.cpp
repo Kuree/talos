@@ -11,6 +11,7 @@
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Reflection/DesignReflection.h"
 #include "talos/Runtime/Runtime.h"
+#include "talos/Runtime/StableHash.h"
 #include "vpi_user.h"
 #include "llvm/IR/DataLayout.h"
 
@@ -30,11 +31,7 @@ namespace {
 using namespace talos::reflection;
 
 uint64_t imageChecksum(const std::vector<uint8_t> &bytes) {
-  uint64_t hash = UINT64_C(14695981039346656037);
-  for (size_t index = 0; index != bytes.size(); ++index) {
-    hash ^= index >= 32 && index < 40 ? uint8_t{0} : bytes[index];
-    hash *= UINT64_C(1099511628211);
-  }
+  uint64_t hash = talos_stable_image_checksum(bytes.data(), bytes.size(), 32);
   return hash;
 }
 
