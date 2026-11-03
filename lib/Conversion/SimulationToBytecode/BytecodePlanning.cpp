@@ -160,12 +160,23 @@ void pruneNativeFunctions(sim::SimDesignOp design,
       if (auto call = dyn_cast<sim::SimCallOp>(op))
         needsFallback |= !symbols.contains(call.getCallee());
     });
-    if (needsFallback)
+    // A generated eval body clones its owner's operations, checkpoints
+    // included, but never needs a fallback of its own: only the native
+    // dispatch calls it, and a checkpoint there resumes the owning actor's
+    // continuation (two-tier B4: BP encoded 112 such eval bodies, 7.2 MB).
+    if (needsFallback &&
+        !::talos::schedule::has<::talos::schedule::Field::EvalContinuation>(
+            function))
       requireFallback(function);
   }
   while (!pendingFallback.empty()) {
     Operation *function = pendingFallback.pop_back_val();
-    retain(function);
+    // A spawned process that needs a fallback (a runtime checkpoint, a task
+    // call) stays as the first loop kept it: through what its body
+    // references. Its checkpoints resume its own continuation, never the
+    // generated eval body its schedule metadata names.
+    if (!isRetainedProcess(cast<sim::SimFuncOp>(function)))
+      retain(function);
     for (Operation *caller : callers[function])
       requireFallback(caller);
   }
