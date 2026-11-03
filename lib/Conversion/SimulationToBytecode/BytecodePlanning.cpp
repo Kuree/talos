@@ -300,6 +300,35 @@ LogicalResult Encoder::planFunctions() {
         }
       for (Operation &operation : block)
         for (Value result : operation.getResults()) {
+          // A representation change between equal register layouts is the
+          // identity on the register, so its result shares the operand's
+          // register and encodes no instruction (two-tier B3). SSA keeps the
+          // sharing exact: every use of the result is dominated by its
+          // definition, so no use can observe the operand's register after a
+          // later redefinition of the operand without that redefinition
+          // having re-executed the conversion first.
+          if (isa<sim::SimLogicFromBitsOp, sim::SimLogicToBitsOp,
+                  sim::SimPackedFlattenOp, sim::SimPackedUnflattenOp,
+                  sim::SimLogicResizeOp>(operation)) {
+            auto source = plan.registers.find(operation.getOperand(0));
+            FailureOr<Layout> layout = getValueLayout(result);
+            if (source != plan.registers.end() && succeeded(layout)) {
+              const Layout &existing = plan.layouts[source->second];
+              if ((layout->kind == Bits || layout->kind == Logic) &&
+                  existing.kind == layout->kind &&
+                  existing.flags == layout->flags &&
+                  existing.width == layout->width &&
+                  existing.size == layout->size &&
+                  existing.auxiliary == layout->auxiliary) {
+                // The count reports narrowed logic values, shared or not.
+                if (layout->kind == Bits &&
+                    isa<sim::LogicType>(result.getType()))
+                  ++plan.twoStateLogicRegisters;
+                plan.registers.insert({result, source->second});
+                continue;
+              }
+            }
+          }
           FailureOr<uint32_t> reg = allocateValue(result);
           if (failed(reg))
             return operation.emitOpError()

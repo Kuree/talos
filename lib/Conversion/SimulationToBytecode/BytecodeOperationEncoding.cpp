@@ -33,7 +33,15 @@ LogicalResult Encoder::encodeOperation(FunctionPlan &plan,
     emit({opcode, 0, reg(plan, result), reg(plan, left), reg(plan, right)});
     return success();
   };
+  // A jump without block arguments to the block encoded next is a fall
+  // through: that block's first instruction follows this one (two-tier B3).
+  auto fallsThrough = [&](Block *destination) {
+    return destination->getArguments().empty() &&
+           operation->getBlock()->getNextNode() == destination;
+  };
   if (auto branch = dyn_cast<cf::BranchOp>(operation)) {
+    if (fallsThrough(branch.getDest()))
+      return success();
     auto mapping = addMap(plan, branch.getDest()->getArguments(), plan,
                           branch.getDestOperands());
     uint64_t encoded = emit({Jump, 0, 0, static_cast<uint32_t>(mapping.first),
@@ -48,6 +56,8 @@ LogicalResult Encoder::encodeOperation(FunctionPlan &plan,
                                  static_cast<uint32_t>(trueMap.first),
                                  static_cast<uint32_t>(trueMap.second)});
     plan.branches.push_back({conditional, branch.getTrueDest()});
+    if (fallsThrough(branch.getFalseDest()))
+      return success();
     auto falseMap = addMap(plan, branch.getFalseDest()->getArguments(), plan,
                            branch.getFalseDestOperands());
     uint64_t fallback = emit({Jump, 0, 0, static_cast<uint32_t>(falseMap.first),
@@ -804,6 +814,12 @@ LogicalResult Encoder::encodeOperation(FunctionPlan &plan,
           multiplier});
     return success();
   }
+  if (isa<sim::SimLogicFromBitsOp, sim::SimLogicToBitsOp,
+          sim::SimPackedFlattenOp, sim::SimPackedUnflattenOp,
+          sim::SimLogicResizeOp>(operation) &&
+      reg(plan, operation->getResult(0)) == reg(plan, operation->getOperand(0)))
+    // The planner gave the result its operand's register (equal layouts).
+    return success();
   if (isa<sim::SimLogicFromBitsOp, sim::SimLogicToBitsOp,
           sim::SimPackedFlattenOp, sim::SimPackedUnflattenOp>(operation)) {
     emit({Extract, TALOS_RT_DB_EXTRACT_ZERO_EXTEND,
