@@ -59,10 +59,11 @@ module attributes {
     // CHECK: simulation.suspend.edge posedge %{{.*}} to ^[[START:bb[0-9]+]]
     // CHECK: ^[[START]]:
     // CHECK-NEXT: %[[OLD:.*]] = simulation.ref.load %[[R:arg[0-9]+]]
-    // CHECK-NEXT: %[[SNAP:.*]] = simulation.ref.alloc %[[OLD]]
+    // A whole read of the snapshot is the value it copied, so no automatic
+    // cell is allocated (a bytecode activation would allocate one per run).
     // CHECK-NEXT: cf.br ^[[LOOP:bb[0-9]+]]
     // CHECK: ^[[LOOP]]:
-    // CHECK: simulation.ref.load %[[SNAP]]
+    // CHECK: simulation.logic.binary add %[[OLD]]
     // CHECK: simulation.ref.store %{{.*}} to %[[R]]
     // Nothing reads `unread`; unread-NBA elimination removes it later.
     // CHECK-NEXT: simulation.nba.enqueue

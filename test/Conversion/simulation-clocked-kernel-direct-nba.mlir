@@ -88,13 +88,12 @@ module attributes {
     // CHECK-LABEL: simulation.func private @__talos_clocked_0_1_0
     // CHECK: simulation.suspend.edge posedge
     // CHECK: %[[OLD:.*]] = simulation.ref.load %[[A:arg[0-9]+]] : !simulation.ref<!simulation.logic<8>>
-    // CHECK-NEXT: %[[SNAP:.*]] = simulation.ref.alloc %[[OLD]]
+    // CHECK-NEXT: cf.br
     // CHECK: simulation.logic.extract
     // CHECK-NEXT: simulation.nba.enqueue
     // CHECK: simulation.ref.store %{{.*}} to %{{.*}} : !simulation.logic<8>
     // CHECK: simulation.ref.store %{{.*}} to %[[A]] : !simulation.logic<8>
-    // CHECK-NEXT: %[[PREV:.*]] = simulation.ref.load %[[SNAP]]
-    // CHECK-NEXT: simulation.ref.store %[[PREV]] to %{{.*}} : !simulation.logic<8>
+    // CHECK-NEXT: simulation.ref.store %[[OLD]] to %{{.*}} : !simulation.logic<8>
     // CHECK-NOT: simulation.nba.enqueue
     // CHECK: }
     // MEMBERS-NOT: simulation.func private @swap

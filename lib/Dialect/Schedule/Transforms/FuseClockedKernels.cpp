@@ -2395,8 +2395,22 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
       auto type = cast<sim::RefType>(base.getType());
       Value old = sim::SimRefLoadOp::create(builder, location,
                                             type.getElementType(), base);
-      Value copy = sim::SimRefAllocOp::create(builder, location, type, old);
+      // The copy is never stored to, so a whole read of it is `old` of the same
+      // activation. Only reads through views need the copy: a bytecode
+      // activation allocates an automatic cell for it each time it runs
+      // (two-tier B2 Q5).
+      Value copy;
       for (auto &[read, chain] : snapshot.reads) {
+        if (auto load = dyn_cast<sim::SimRefLoadOp>(read);
+            load && chain.empty()) {
+          // Every read's root reference has the type of `base`.
+          assert(load.getType() == old.getType() && "snapshot read type");
+          load.getResult().replaceAllUsesWith(old);
+          load.erase();
+          continue;
+        }
+        if (!copy)
+          copy = sim::SimRefAllocOp::create(builder, location, type, old);
         OpBuilder viewBuilder(read);
         Value current = copy;
         for (Operation *view : llvm::reverse(chain)) {
