@@ -16435,6 +16435,61 @@ TEST(DesignBytecode, RejectsCorruptDynamicScanIntrinsicSignatures) {
   }
 }
 
+TEST(DesignBytecode, MalformedIntrinsicSitesNeverReachTheirHandler) {
+  // Two-tier B5: invokeIntrinsic does not re-validate its site; every path that
+  // runs a function validates its code first. A context validates its own
+  // image's functions on first execution, and another descriptor's image is
+  // validated whole, so a site whose arity disagrees with its signature fails
+  // as invalid bytecode either way.
+  constexpr size_t functionOffset = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
+  constexpr size_t layoutOffset = functionOffset + 96;
+  constexpr size_t codeOffset = layoutOffset + layoutTableSize(3);
+  constexpr size_t operandOffset = codeOffset + 2 * 32;
+  constexpr size_t continuationOffset = operandOffset + 14 * 8;
+  constexpr size_t intrinsicOffset = continuationOffset + 24;
+  std::vector<uint8_t> bytecode = makeDynamicScanIntrinsicBytecode(
+      TALOS_RT_INTRINSIC_V1_STRING_SCAN_DYNAMIC);
+  put32(bytecode, intrinsicOffset + 4, 1);
+  put64(bytecode, 32, imageChecksum(bytecode));
+  std::vector<uint8_t> copy = bytecode;
+  talos_rt_execution_descriptor_v1 execution{TALOS_RT_VERSION,
+                                             TALOS_RT_EXECUTION_HAS_BYTECODE,
+                                             0,
+                                             bytecode.data(),
+                                             bytecode.size(),
+                                             nullptr,
+                                             0,
+                                             1,
+                                             imageChecksum(bytecode),
+                                             nullptr,
+                                             0,
+                                             0,
+                                             0,
+                                             nullptr,
+                                             0,
+                                             nullptr,
+                                             0};
+  talos_rt_execution_descriptor_v1 other = execution;
+  other.bytecode = copy.data();
+  talos_rt_context *context = nullptr;
+  if (talos_rt_v1_context_create_for_design(&execution, &context) !=
+      TALOS_RT_OK) {
+    SUCCEED() << "rejected at context creation";
+    return;
+  }
+  for (const talos_rt_execution_descriptor_v1 *descriptor :
+       {&execution, &other}) {
+    std::array<uint64_t, 64> frame{};
+    talos_rt_fragment_action_v1 action{};
+    talos_rt_design_bytecode_entry_v1 entry{descriptor, 0, 0};
+    EXPECT_EQ(talos_rt_execute_design_bytecode(entry, context, frame.data(),
+                                               sizeof(frame), 0, sizeof(frame),
+                                               0, 0, &action),
+              TALOS_RT_INVALID_BYTECODE);
+  }
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(DesignBytecode, RejectsTruncatedCoverageClockEventOperandsAtExecution) {
   using namespace talos::designbytecode;
   constexpr uint32_t inputCount = 5;

@@ -141,8 +141,10 @@ static uint64_t managedScratchPlaneSize(const Layout &layout) {
 
 talos_rt_status invokeIntrinsic(const Image &image, Frame &frame,
                                 talos_rt_context *context, uint32_t siteIndex) {
-  if (!validIntrinsic(image, frame.function, siteIndex))
-    return TALOS_RT_INVALID_BYTECODE;
+  // The only caller is an INTRINSIC instruction of a function whose code was
+  // validated before it ran (validateFunctionCode checks validIntrinsic for
+  // every site: lazily per function for a context's image, whole for
+  // standalone images), so the site is not re-validated per call (two-tier B5).
   IntrinsicSite site = siteAt(image, siteIndex);
   IntrinsicSignature signature = intrinsicAt(image, site.intrinsic);
   auto inputRegister = [&](uint32_t index) {
