@@ -19,6 +19,8 @@ struct PreparedSuspendableProcess {
   bool unmanagedNative;
   bool directActivation;
   std::optional<NativeTableProcess> tableProcess;
+  // native.virtual_owner: the descriptor offers only the bytecode body.
+  bool virtualOwner = false;
 };
 
 mlir::FailureOr<PreparedSuspendableProcess>

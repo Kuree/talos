@@ -14234,6 +14234,130 @@ startedOwnerPlan(SchedulerFixture &fixture,
           0,                   TALOS_RT_SPAWN_STARTED, &start};
 }
 
+// Two-tier P1c: a virtual owner is spawned as a frameless record (its
+// identity, continuation and wait come from the spawn) and gets the frame of
+// its bytecode body, with the spawn's captures and its started wait record,
+// only when something runs it outside the generated coordinator. A time-zero
+// owner's first execution is its entry, which is the activation (9.2.2.2).
+TEST(ProcessSpawn, VirtualOwnerHasNoFrameUntilItRuns) {
+  AOTTestState state;
+  talos_rt_native_schedule_plan plan = makeAOTPlan(state, 1);
+  plan.flags = TALOS_RT_NATIVE_SCHEDULE_FULLY_STATIC |
+               TALOS_RT_NATIVE_SCHEDULE_STATIC_FANOUT;
+  const talos_rt_static_fanout_entry fanout[] = {
+      {1, 0, 1, TALOS_RT_WAIT_EDGE_CHANGE, 1, 0, 0, 1, 0, 0},
+  };
+  plan.fanout_entries = fanout;
+  plan.fanout_entry_count = std::size(fanout);
+  talos_rt_execution_descriptor_v1 execution{};
+  execution.version = TALOS_RT_VERSION;
+  execution.state_bit_count = 1;
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 0, 1),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
+  context->signalDiagnosticsEnabled = true;
+  schedulerWaitHandle = talos_rt_v1_native_state_static_handle(1);
+  schedulerWaitWidth = 1;
+
+  // Entry: suspend on a delay at continuation 1; continuation 1 terminates.
+  std::vector<uint8_t> code;
+  appendInstruction(code, TALOS_RT_BC_CONST, TALOS_RT_BC_TYPE_U64, 0, 0, 0, 0);
+  appendInstruction(code, TALOS_RT_BC_SUSPEND, TALOS_RT_BC_TYPE_NONE, 0,
+                    TALOS_RT_SUSPEND_DELAY, 0, 1);
+  appendInstruction(code, TALOS_RT_BC_TERMINATE, TALOS_RT_BC_TYPE_NONE, 0, 0, 0,
+                    0);
+  std::array<talos_rt_bytecode_entry_v1, 2> entries{{{0, 0}, {1, 2}}};
+  SchedulerFixture fixture(51);
+  talos_rt_bytecode_v1 bytecode{};
+  bytecode.code = code.data();
+  bytecode.code_size = code.size();
+  bytecode.entries = entries.data();
+  bytecode.entry_count = entries.size();
+  bytecode.register_count = 1;
+  bytecode.register_offset = fixture.layout.frame_size;
+  fixture.descriptor.available_tiers = TALOS_RT_TIER_MASK_BYTECODE;
+  fixture.descriptor.native_requirements = nullptr;
+  fixture.descriptor.native_execute = nullptr;
+  fixture.descriptor.native_destroy = nullptr;
+  fixture.descriptor.bytecode = &bytecode;
+  fixture.descriptor.execution = &execution;
+
+  StartedOwnerRecord record = startedOwnerChangeRecord();
+  talos_rt_process_start_v1 start{1,
+                                  TALOS_RT_ACTION_FRAME_WAIT_RECORD,
+                                  48,
+                                  48,
+                                  &record.header,
+                                  TALOS_RT_PROCESS_START_TIME_ZERO,
+                                  0};
+  // The captures are the frame prefix; here they hold the delay wait record
+  // the legacy bytecode body suspends on at offset 0.
+  const talos_rt_wait_record_v1 delay{
+      TALOS_RT_VERSION, TALOS_RT_SUSPEND_DELAY, 0, 0, 17, 0};
+  std::array<uint8_t, sizeof(delay)> captures;
+  std::memcpy(captures.data(), &delay, sizeof(delay));
+  auto spawn = startedOwnerPlan(fixture, start);
+  spawn.options |= TALOS_RT_SPAWN_VIRTUAL;
+  spawn.capture_size = captures.size();
+  ASSERT_NE(talos_rt_v1_process_spawn(context, &spawn, captures.data()), 0u);
+  ASSERT_EQ(context->schedulerStatus, TALOS_RT_OK);
+  ASSERT_EQ(context->scheduledProcesses.size(), 1u);
+  const ScheduledProcess &owner = context->scheduledProcesses.front();
+  talos_rt_process_instance_v1 *instance = owner.instance;
+  ASSERT_NE(instance, nullptr);
+  EXPECT_EQ(instance->frame, nullptr);
+  EXPECT_EQ(instance->continuation, 1u);
+  EXPECT_EQ(instance->lifecycle, TALOS_RT_PROCESS_SUSPENDED);
+  EXPECT_EQ(talos::process::virtualOwnerStart(instance), &start);
+  EXPECT_EQ(talos::process::currentWait(owner), &record.header);
+  EXPECT_EQ(context->startedOwnerDiagnostics.virtualMaterializations, 0u);
+  void *noFrame = reinterpret_cast<void *>(uintptr_t{1});
+  uint64_t noFrameSize = 1;
+  EXPECT_EQ(
+      talos_rt_v1_process_instance_frame(instance, &noFrame, &noFrameSize),
+      TALOS_RT_INVALID_LIFECYCLE);
+  EXPECT_EQ(noFrame, nullptr);
+  EXPECT_EQ(noFrameSize, 0u);
+
+  // Run outside the coordinator: the frame appears with the captures and the
+  // wait record, and the body runs in bytecode whatever tier is requested.
+  talos_rt_fragment_action_v1 action{};
+  ASSERT_EQ(talos_rt_v1_process_instance_execute(instance, context,
+                                                 TALOS_RT_TIER_NATIVE, &action),
+            TALOS_RT_OK);
+  EXPECT_EQ(action.kind, TALOS_RT_FRAGMENT_SUSPEND);
+  EXPECT_EQ(action.continuation, 1u);
+  ASSERT_NE(instance->frame, nullptr);
+  void *frame = instance->frame;
+  EXPECT_EQ(instance->frame_size, fixture.layout.frame_size);
+  EXPECT_EQ(std::memcmp(frame, captures.data(), captures.size()), 0);
+  EXPECT_EQ(
+      std::memcmp(static_cast<uint8_t *>(frame) + 48, &record, sizeof(record)),
+      0);
+  EXPECT_EQ(talos::process::virtualOwnerStart(instance), nullptr);
+  EXPECT_EQ(context->startedOwnerDiagnostics.virtualMaterializations, 1u);
+  EXPECT_EQ(context->startedOwnerDiagnostics.timeZeroEntryReplays, 1u);
+  void *reported = nullptr;
+  uint64_t reportedSize = 0;
+  EXPECT_EQ(
+      talos_rt_v1_process_instance_frame(instance, &reported, &reportedSize),
+      TALOS_RT_OK);
+  EXPECT_EQ(reported, frame);
+  EXPECT_EQ(reportedSize, fixture.layout.frame_size);
+
+  // Later executions reuse that frame.
+  ASSERT_EQ(talos_rt_v1_process_instance_execute(instance, context,
+                                                 TALOS_RT_TIER_NATIVE, &action),
+            TALOS_RT_OK);
+  EXPECT_EQ(action.kind, TALOS_RT_FRAGMENT_TERMINATE);
+  EXPECT_EQ(instance->frame, frame);
+  EXPECT_EQ(context->startedOwnerDiagnostics.virtualMaterializations, 1u);
+  talos_rt_v1_context_destroy(context);
+}
+
 // IEEE 1800-2023 9.2.2.2, 9.4.2: in a certified static eval island every wake
 // of a direct owner is its generated ready bit, so the time-zero activation
 // is that bit; an input change before the coordinator runs sets the same bit
@@ -14508,6 +14632,10 @@ TEST(ProcessSpawn, StartedPlanValidationAndReplayMismatch) {
         record.entry.edge = TALOS_RT_WAIT_EDGE_POSEDGE;
       },
       [](auto &, auto &record, auto &) { record.entry.reserved = 0; },
+      // A virtual owner's descriptor offers only its bytecode body.
+      [](auto &, auto &, auto &plan) {
+        plan.options |= TALOS_RT_SPAWN_VIRTUAL;
+      },
   };
   for (Mutation mutate : mutations) {
     StartedOwnerRecord record = valid;
@@ -14520,6 +14648,14 @@ TEST(ProcessSpawn, StartedPlanValidationAndReplayMismatch) {
     EXPECT_TRUE(context->scheduledProcesses.empty());
     context->schedulerStatus = TALOS_RT_OK;
   }
+  // A virtual owner is always a started one.
+  auto virtualOnly = startedOwnerPlan(fixture, validStart);
+  virtualOnly.options = TALOS_RT_SPAWN_VIRTUAL;
+  virtualOnly.start = nullptr;
+  EXPECT_EQ(talos_rt_v1_process_spawn(context, &virtualOnly, nullptr), 0u);
+  EXPECT_EQ(context->schedulerStatus, TALOS_RT_INVALID_ARGUMENT);
+  EXPECT_TRUE(context->scheduledProcesses.empty());
+  context->schedulerStatus = TALOS_RT_OK;
   // The flag without a record is refused the same way.
   auto missing = startedOwnerPlan(fixture, validStart);
   missing.options = 0;

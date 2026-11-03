@@ -1042,7 +1042,12 @@ talos_rt_status executeAOTNode(talos_rt_context *context, uint32_t actorSlot,
     // access and NBA publication; only an unmapped continuation or explicit
     // required-bytecode policy selects Tier 3. Unaffected fragments retain
     // their native execution and indexed publication routes.
-    if (requireBytecode || (bytecodeFragment && !nativeRootBootstrap)) {
+    // A virtual owner (TALOS_RT_SPAWN_VIRTUAL) has only its bytecode body
+    // outside the generated coordinator (two-tier P1c).
+    bool nativeless = (selected->descriptor->available_tiers &
+                       TALOS_RT_TIER_MASK_NATIVE) == 0;
+    if (requireBytecode || nativeless ||
+        (bytecodeFragment && !nativeRootBootstrap)) {
       if ((selected->descriptor->available_tiers &
            TALOS_RT_TIER_MASK_BYTECODE) == 0)
         return TALOS_RT_TIER_UNAVAILABLE;

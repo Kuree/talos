@@ -173,6 +173,20 @@ struct ProcessAllocationMetadata {
   bool startedOwner = false;
   // replayPendingProcessStart is running the skipped entry.
   bool replayingStart = false;
+  // A virtual owner (TALOS_RT_SPAWN_VIRTUAL): the instance header only, until
+  // materializeVirtualOwner gives it a frame of its own allocation.
+  struct VirtualOwner {
+    const talos_rt_process_start_v1 *start = nullptr;
+    std::vector<uint8_t> captures;
+    void *frame = nullptr;
+    size_t frameSize = 0;
+    size_t frameAlignment = 0;
+    ~VirtualOwner() {
+      if (frame)
+        releaseProcessMemory(frame, frameSize, frameAlignment);
+    }
+  };
+  std::unique_ptr<VirtualOwner> virtualOwner;
 };
 
 constexpr size_t kProcessAllocationMetadataOffset =
@@ -220,6 +234,70 @@ registerManagedFrameRoots(talos_rt_process_instance_v1 *instance,
 bool hasPendingProcessStart(talos_rt_process_instance_v1 *instance) {
   return processMetadata(instance)->pendingStart != nullptr;
 }
+
+const talos_rt_process_start_v1 *talos::process::virtualOwnerStart(
+    const talos_rt_process_instance_v1 *instance) {
+  // Only createVirtualOwnerRecord makes a frameless instance whose allocation
+  // is the instance itself; read the allocation metadata only then (callers
+  // may hold instances the runtime did not allocate).
+  if (!instance || instance->frame || instance->allocation != instance)
+    return nullptr;
+  const auto &owner =
+      processMetadata(const_cast<talos_rt_process_instance_v1 *>(instance))
+          ->virtualOwner;
+  return owner ? owner->start : nullptr;
+}
+
+namespace {
+// Gives a virtual owner's record the frame its bytecode body runs in: the
+// canonical frame with the spawn's captures and the wait record its started
+// suspension holds, then the bytecode scratch tail. The instance keeps its
+// address, so its slot, token and scheduler entries stay valid.
+talos_rt_status materializeVirtualOwner(talos_rt_process_instance_v1 *instance,
+                                        talos_rt_context *context) {
+  ProcessAllocationMetadata::VirtualOwner *owner =
+      processMetadata(instance)->virtualOwner.get();
+  if (!owner || instance->frame)
+    return TALOS_RT_OK;
+  const talos_rt_process_start_v1 *start = owner->start;
+  uint64_t nativeSize = 0, nativeAlignment = 1, scratchOffset = 0,
+           scratchSize = 0;
+  talos_rt_status status =
+      validateDescriptor(*instance->descriptor, context, nativeSize,
+                         nativeAlignment, scratchOffset, scratchSize);
+  if (status != TALOS_RT_OK)
+    return status;
+  uint64_t alignment =
+      std::max<uint64_t>({instance->descriptor->frame_layout->frame_alignment,
+                          nativeAlignment, uint64_t{16}});
+  uint64_t size = 0;
+  if (addOverflow(scratchOffset, scratchSize, size) ||
+      alignUp(std::max<uint64_t>(size, 1), alignment, size) ||
+      size > std::numeric_limits<size_t>::max())
+    return TALOS_RT_OUT_OF_MEMORY;
+  void *frame = allocateProcessMemory(static_cast<size_t>(size),
+                                      static_cast<size_t>(alignment));
+  if (!frame)
+    return TALOS_RT_OUT_OF_MEMORY;
+  std::memset(frame, 0, static_cast<size_t>(size));
+  if (!owner->captures.empty())
+    std::memcpy(frame, owner->captures.data(), owner->captures.size());
+  const talos_rt_wait_record_v1 &record = *start->wait_record;
+  std::memcpy(static_cast<uint8_t *>(frame) + start->wait_offset, &record,
+              sizeof(record) +
+                  uint64_t{record.count} * sizeof(talos_rt_wait_entry_v1));
+  owner->frame = frame;
+  owner->frameSize = static_cast<size_t>(size);
+  owner->frameAlignment = static_cast<size_t>(alignment);
+  instance->frame = frame;
+  instance->frame_size = instance->descriptor->frame_layout->frame_size;
+  instance->scratch_offset = scratchOffset;
+  instance->scratch_size = scratchSize;
+  if (context && context->signalDiagnosticsEnabled)
+    ++context->startedOwnerDiagnostics.virtualMaterializations;
+  return TALOS_RT_OK;
+}
+} // namespace
 
 void countStartedOwnerBodyActivation(talos_rt_process_instance_v1 *instance,
                                      talos_rt_context *context) {
@@ -1455,6 +1533,67 @@ extern "C" talos_rt_status talos_rt_v1_process_instance_create(
   return createProcessInstance(nullptr, descriptor, outInstance);
 }
 
+// The record of a virtual owner: the instance header and allocation metadata,
+// no frame, plus a copy of the spawn's captures for materializeVirtualOwner.
+static talos_rt_status createVirtualOwnerRecord(
+    talos_rt_context *context, const talos_rt_process_descriptor_v1 *descriptor,
+    const talos_rt_process_start_v1 *start, const void *captures,
+    uint64_t captureSize, talos_rt_process_instance_v1 **outInstance) {
+  *outInstance = nullptr;
+  if (!context || !descriptor || !start ||
+      (descriptor->execution && context->execution != descriptor->execution))
+    return TALOS_RT_INVALID_DESIGN;
+  uint64_t nativeSize = 0, nativeAlignment = 1, scratchOffset = 0,
+           scratchSize = 0;
+  talos_rt_status status =
+      validateDescriptor(*descriptor, context, nativeSize, nativeAlignment,
+                         scratchOffset, scratchSize);
+  if (status != TALOS_RT_OK)
+    return status;
+  if (captureSize > descriptor->frame_layout->frame_size)
+    return TALOS_RT_INVALID_ARGUMENT;
+  constexpr size_t size =
+      kProcessAllocationMetadataOffset + sizeof(ProcessAllocationMetadata);
+  constexpr size_t alignment =
+      std::max({alignof(talos_rt_process_instance_v1),
+                alignof(ProcessAllocationMetadata), size_t{16}});
+  constexpr size_t allocationSize = (size + alignment - 1) & ~(alignment - 1);
+  void *allocation = allocateProcessMemory(allocationSize, alignment);
+  if (!allocation)
+    return TALOS_RT_OUT_OF_MEMORY;
+  std::memset(allocation, 0, allocationSize);
+  auto *instance = ::new (allocation)
+      talos_rt_process_instance_v1{descriptor,  allocation,
+                                   nullptr,     0,
+                                   0,           0,
+                                   nullptr,     0,
+                                   0,           TALOS_RT_PROCESS_READY,
+                                   TALOS_RT_OK, nullptr,
+                                   nullptr,     nullptr,
+                                   0,           0};
+  auto *metadata = ::new (static_cast<uint8_t *>(allocation) +
+                          kProcessAllocationMetadataOffset)
+      ProcessAllocationMetadata{kProcessAllocationMagic, allocationSize,
+                                alignment, nullptr};
+  TALOS_RT_TRY {
+    metadata->virtualOwner =
+        std::make_unique<ProcessAllocationMetadata::VirtualOwner>();
+    metadata->virtualOwner->start = start;
+    const auto *bytes = static_cast<const uint8_t *>(captures);
+    if (captureSize)
+      metadata->virtualOwner->captures.assign(bytes, bytes + captureSize);
+  }
+  TALOS_RT_CATCH(const std::bad_alloc &) {
+    metadata->magic = 0;
+    std::destroy_at(metadata);
+    std::destroy_at(instance);
+    releaseProcessMemory(allocation, allocationSize, alignment);
+    return TALOS_RT_OUT_OF_MEMORY;
+  }
+  *outInstance = instance;
+  return TALOS_RT_OK;
+}
+
 extern "C" talos_rt_status talos_rt_v1_process_instance_create_for_context(
     talos_rt_context *context, const talos_rt_process_descriptor_v1 *descriptor,
     talos_rt_process_instance_v1 **outInstance) {
@@ -1477,6 +1616,10 @@ talos_rt_v1_process_instance_frame(talos_rt_process_instance_v1 *instance,
     return TALOS_RT_INVALID_ARGUMENT;
   if (instance->lifecycle == TALOS_RT_PROCESS_EXECUTING)
     return TALOS_RT_INVALID_LIFECYCLE;
+  // A virtual owner's record has no frame until it runs outside the
+  // generated coordinator.
+  if (talos::process::virtualOwnerStart(instance))
+    return TALOS_RT_INVALID_LIFECYCLE;
   *outFrame = instance->frame;
   *outSize = instance->frame_size;
   return TALOS_RT_OK;
@@ -1497,6 +1640,14 @@ talos_rt_v1_process_instance_execute(talos_rt_process_instance_v1 *instance,
   if (instance->lifecycle == TALOS_RT_PROCESS_EXECUTING ||
       instance->lifecycle == TALOS_RT_PROCESS_TERMINATED)
     return TALOS_RT_INVALID_LIFECYCLE;
+  // A virtual owner runs outside the generated coordinator only in its
+  // bytecode body, in a frame created now (two-tier P1c).
+  if (processMetadata(instance)->virtualOwner) {
+    if (talos_rt_status status = materializeVirtualOwner(instance, context);
+        status != TALOS_RT_OK)
+      return status;
+    requestedTier = TALOS_RT_TIER_BYTECODE;
+  }
   uint32_t mask = requestedTier == TALOS_RT_TIER_NATIVE
                       ? TALOS_RT_TIER_MASK_NATIVE
                       : TALOS_RT_TIER_MASK_BYTECODE;
@@ -1842,21 +1993,35 @@ talos_rt_v1_process_spawn(talos_rt_context *context,
       plan->capture_size > plan->descriptor->frame_layout->frame_size ||
       (plan->capture_size && !captures) ||
       (plan->options & ~(TALOS_RT_SPAWN_PRIME | TALOS_RT_SPAWN_PROGRAM_OWNER |
-                         TALOS_RT_SPAWN_STARTED)) ||
+                         TALOS_RT_SPAWN_STARTED | TALOS_RT_SPAWN_VIRTUAL)) ||
       started != (plan->start != nullptr) ||
+      ((plan->options & TALOS_RT_SPAWN_VIRTUAL) &&
+       (!started ||
+        plan->descriptor->available_tiers != TALOS_RT_TIER_MASK_BYTECODE)) ||
       (started &&
        ((plan->options & TALOS_RT_SPAWN_PRIME) ||
         plan->actor_slot == UINT32_MAX ||
         !validProcessStart(*plan->descriptor->frame_layout, *plan->start))))
     return fail(TALOS_RT_INVALID_ARGUMENT);
   talos_rt_process_instance_v1 *instance = nullptr;
-  talos_rt_status status = talos_rt_v1_process_instance_create_for_context(
-      context, plan->descriptor, &instance);
+  bool virtualOwner = (plan->options & TALOS_RT_SPAWN_VIRTUAL) != 0;
+  talos_rt_status status =
+      virtualOwner
+          ? createVirtualOwnerRecord(context, plan->descriptor, plan->start,
+                                     captures, plan->capture_size, &instance)
+          : talos_rt_v1_process_instance_create_for_context(
+                context, plan->descriptor, &instance);
   if (status != TALOS_RT_OK)
     return fail(status);
-  if (plan->capture_size)
+  if (plan->capture_size && !virtualOwner)
     std::memcpy(instance->frame, captures, plan->capture_size);
-  if (started) {
+  if (virtualOwner) {
+    // The frame and its wait record exist only once materialized.
+    instance->continuation = plan->start->continuation;
+    instance->lifecycle = TALOS_RT_PROCESS_SUSPENDED;
+    processMetadata(instance)->pendingStart = plan->start;
+    processMetadata(instance)->startedOwner = true;
+  } else if (started) {
     // The instance is created suspended at its wait, with the record its
     // suspension would have stored.
     const talos_rt_wait_record_v1 &record = *plan->start->wait_record;
@@ -2792,6 +2957,10 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_direct_fragment_enter(
   if (!actor || actor->continuation != continuation ||
       index >= context->scheduledProcesses.size())
     return TALOS_RT_INVALID_CONTINUATION;
+  // A wrapper that is not raw-capture loads captures from the frame.
+  if (talos_rt_status status = materializeVirtualOwner(actor, context);
+      status != TALOS_RT_OK)
+    return status;
   ScheduledProcess &scheduled = context->scheduledProcesses[index];
   if (scheduled.instance != actor || !scheduled.started ||
       scheduled.aotActorSlot != actorSlot || scheduled.signalTriggered ||

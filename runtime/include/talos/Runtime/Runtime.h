@@ -2452,6 +2452,13 @@ talos_rt_v1_table_process_execute(talos_rt_process_instance_v1 *instance);
 // it once it exists; the root initializer's completion adds any runtime
 // subscription and the time-zero activation.
 #define TALOS_RT_SPAWN_STARTED UINT32_C(4)
+// With STARTED: a virtual generated owner (two-tier P1c). The generated
+// coordinator runs its activations, so the runtime keeps only a frameless
+// record (identity, slot, continuation, wait, a copy of the captures) and
+// creates the frame of its bytecode body only when it must run the owner
+// outside the coordinator (whole-plan deopt, an uncertified static eval
+// island). `descriptor` offers only the bytecode tier.
+#define TALOS_RT_SPAWN_VIRTUAL UINT32_C(8)
 // A started process whose first activation is its continuation's activation
 // (always_comb, always_latch, continuous assignment): the runtime activates it
 // once at time zero, after all procedures have started (9.2.2.2, 9.2.2.3,

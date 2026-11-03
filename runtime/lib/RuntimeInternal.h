@@ -2678,6 +2678,9 @@ struct talos_rt_context {
     // nodes, checkpoint drains, fallback), all and after time zero.
     uint64_t bodyActivations = 0;
     uint64_t bodyActivationsAfterTimeZero = 0;
+    // Virtual owners (TALOS_RT_SPAWN_VIRTUAL) given a frame to run outside
+    // the generated coordinator.
+    uint64_t virtualMaterializations = 0;
   } startedOwnerDiagnostics;
   std::vector<ScheduledNBA> scheduledNBAs;
   // Path-delay events have one live entry per destination bit. Keeping them

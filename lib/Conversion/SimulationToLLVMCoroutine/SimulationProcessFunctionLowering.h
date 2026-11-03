@@ -17,6 +17,8 @@ struct PreparedPlainNativeProcess {
   uint64_t stableID;
   const SimulationProcessFrameAnalysis *analysis;
   bool unmanagedNative;
+  // native.virtual_owner: the descriptor offers only the bytecode body.
+  bool virtualOwner = false;
 };
 
 struct PreparedOrdinaryNativeFunction {

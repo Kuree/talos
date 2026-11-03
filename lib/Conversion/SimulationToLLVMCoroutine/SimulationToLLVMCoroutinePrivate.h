@@ -643,7 +643,7 @@ makeProcessDescriptor(mlir::ModuleOp module, mlir::SymbolTable &embeddedSymbols,
                       uint64_t stableID,
                       const SimulationProcessFrameAnalysis &analysis,
                       bool unmanagedNative = false, bool usesCoroutine = true,
-                      bool tableProcess = false);
+                      bool tableProcess = false, bool virtualOwner = false);
 mlir::LogicalResult prepareManagedLowering(mlir::ModuleOp module,
                                            const llvm::DataLayout &dataLayout);
 mlir::LogicalResult makeSchedulerMain(mlir::ModuleOp module,

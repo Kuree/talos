@@ -20,12 +20,19 @@
 // TRACE: talos started owners: admitted=2 time_zero=1 entry-kind=2 wait=1
 //
 // Each spawn plan sets TALOS_RT_SPAWN_STARTED (4) and names its start record,
-// whose last field is TALOS_RT_PROCESS_START_TIME_ZERO. The always_ff wait
-// record is the one posedge (1) entry of an edge (3) wait its suspension
-// would store.
+// whose last field is TALOS_RT_PROCESS_START_TIME_ZERO. An owner with a
+// retained bytecode body is also TALOS_RT_SPAWN_VIRTUAL (8): the runtime keeps
+// a frameless record, and its descriptor offers only the bytecode tier (2)
+// and names no native executor (two-tier P1c). The always_ff wait record is
+// the one posedge (1) entry of an edge (3) wait its suspension would store.
+// FLOP-LABEL: llvm.mlir.global external constant @flop.__talos_process_descriptor(
+// FLOP: %[[TIERS:.*]] = llvm.mlir.constant(2 : i32) : i32
+// FLOP-NEXT: llvm.insertvalue %[[TIERS]], %{{.*}}[3]
+// FLOP-NOT: __talos_native_execute
+// FLOP: llvm.mlir.addressof @flop.__talos_bytecode_entry
 // FLOP-LABEL: llvm.mlir.global internal constant @flop.__talos_spawn_plan(
 // FLOP: llvm.insertvalue %{{.*}}, %{{.*}}[10]
-// FLOP-NEXT: %[[STARTED:.*]] = llvm.mlir.constant(4 : i32) : i32
+// FLOP-NEXT: %[[STARTED:.*]] = llvm.mlir.constant(12 : i32) : i32
 // FLOP-NEXT: llvm.insertvalue %[[STARTED]], %{{.*}}[11]
 // FLOP-NEXT: llvm.mlir.addressof @flop.__talos_start :
 // FLOP-LABEL: llvm.mlir.global internal constant @flop.__talos_start(

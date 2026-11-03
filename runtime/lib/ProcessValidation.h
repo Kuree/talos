@@ -34,6 +34,10 @@ talos_rt_status validateAction(talos_rt_process_instance_v1 &instance,
                                talos_rt_fragment_action_v1 &action,
                                bool bytecode);
 const talos_rt_wait_record_v1 *currentWait(const ScheduledProcess &process);
+// The start record of a virtual owner (TALOS_RT_SPAWN_VIRTUAL) that has no
+// frame yet, else null.
+const talos_rt_process_start_v1 *
+virtualOwnerStart(const talos_rt_process_instance_v1 *instance);
 const talos_rt_wait_entry_v1 *waitEntries(const talos_rt_wait_record_v1 *wait);
 const talos_rt_observer_descriptor_v1 *
 findObserverDescriptor(const talos_rt_execution_descriptor_v1 *execution,

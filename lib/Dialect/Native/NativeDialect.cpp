@@ -37,18 +37,18 @@ NativeDialect::verifyOperationAttribute(Operation *operation,
              ElementDefaults, PhysicalPartitionManifest, Frame, FrameInputs,
              FrameCheckpoint, EntryKind, ScratchSize, ObserverWidth,
              ObserverFourState, SpawnCaptureOffsets, SpawnCaptureSize,
-             InitializationScope, MethodArgumentSizes, MethodArgumentRoots,
-             TableWait, Unmanaged, SharedCallback, RuntimePublicationCertified,
-             OwnerReleaseInstrumented, TwoStateBlockUnknowns, DriverId,
-             DriverLow, NetId, ExactDriverRange, WholeDriver, GuardedBulkDrive,
-             CleanBulkDrive, BulkCopySourceAssumeClean, GuardedRefStore,
-             InBoundsHandleOffset, ManagedRootRangeRecord,
-             ManagedRootRangePushCheck, ManagedRootActivationPrologue,
-             TransferredReferences, NoTransitionRoots, StringGlobal,
-             ScanPrefixGlobal, FileScanPrefixGlobal,
-             AggregateBitstreamPlanGlobal, ContainerPatternPlanGlobal,
-             ContainerPatternPlanSize, BoxTypeId, VpiCallId, VpiLocalId>(
-          operation, attribute)))
+             VirtualOwner, InitializationScope, MethodArgumentSizes,
+             MethodArgumentRoots, TableWait, Unmanaged, SharedCallback,
+             RuntimePublicationCertified, OwnerReleaseInstrumented,
+             TwoStateBlockUnknowns, DriverId, DriverLow, NetId,
+             ExactDriverRange, WholeDriver, GuardedBulkDrive, CleanBulkDrive,
+             BulkCopySourceAssumeClean, GuardedRefStore, InBoundsHandleOffset,
+             ManagedRootRangeRecord, ManagedRootRangePushCheck,
+             ManagedRootActivationPrologue, TransferredReferences,
+             NoTransitionRoots, StringGlobal, ScanPrefixGlobal,
+             FileScanPrefixGlobal, AggregateBitstreamPlanGlobal,
+             ContainerPatternPlanGlobal, ContainerPatternPlanSize, BoxTypeId,
+             VpiCallId, VpiLocalId>(operation, attribute)))
     return failure();
   StringRef name = attribute.getName().strref();
   Attribute value = attribute.getValue();

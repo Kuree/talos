@@ -529,6 +529,14 @@ talos_rt_status validateAction(talos_rt_process_instance_v1 &instance,
 }
 
 const talos_rt_wait_record_v1 *currentWait(const ScheduledProcess &process) {
+  // A virtual owner without a frame waits at its started continuation with
+  // the static wait record its spawn describes.
+  if (const talos_rt_process_start_v1 *start =
+          virtualOwnerStart(process.instance))
+    return process.waitSize != 0 && process.waitOffset == start->wait_offset &&
+                   process.instance->continuation == start->continuation
+               ? start->wait_record
+               : nullptr;
   if (!process.instance || !process.instance->descriptor ||
       !process.instance->descriptor->frame_layout || !process.instance->frame)
     return nullptr;

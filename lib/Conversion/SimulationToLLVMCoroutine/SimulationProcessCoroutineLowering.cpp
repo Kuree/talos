@@ -734,6 +734,7 @@ FailureOr<PreparedSuspendableProcess> prepareSuspendableProcess(
         builder.getArrayAttr({builder.getStringAttr("presplitcoroutine")}));
   copyNativePartition(function, ramp);
   addFrameAttributes(ramp, analysis, builder);
+  bool virtualOwner = native::has<native::VirtualOwner>(function);
   ramp.getBody().takeBody(function.getBody());
   function.erase();
 
@@ -748,7 +749,8 @@ FailureOr<PreparedSuspendableProcess> prepareSuspendableProcess(
                                     &analysis,
                                     unmanagedNative,
                                     directActivation,
-                                    std::move(tableProcess)};
+                                    std::move(tableProcess),
+                                    virtualOwner};
 }
 
 LogicalResult
@@ -1237,7 +1239,8 @@ finishPreparedSuspendableProcess(PreparedSuspendableProcess &process,
   return makeProcessDescriptor(
       process.module, embeddedSymbols, process.location, process.baseName,
       process.stableID, *process.analysis, process.unmanagedNative,
-      !process.directActivation, process.tableProcess.has_value());
+      !process.directActivation, process.tableProcess.has_value(),
+      process.virtualOwner);
 }
 
 LogicalResult
