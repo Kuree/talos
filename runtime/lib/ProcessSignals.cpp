@@ -1839,7 +1839,7 @@ bool talos_rt_register_computed_signal_wait_unlocked(
       const talos_rt_computed_dependency_v1 &dependency = dependencies[index];
       if (dependency.kind == TALOS_RT_OBSERVER_DEPENDENCY_EVENT &&
           dependency.stable_id == TALOS_RT_STABLE_HANDLE_PREPONED_EVENT)
-        context->preponedObserverPresent = true;
+        context->preponedSlotHooks |= kPreponedObserverSlotHook;
       if (dependency.kind != TALOS_RT_OBSERVER_DEPENDENCY_SIGNAL)
         continue;
       if (!appendSignalSubscriptionUnlocked(

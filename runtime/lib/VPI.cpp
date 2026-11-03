@@ -37,6 +37,12 @@
 #include <windows.h>
 #endif
 
+// IEEE 1800-2023 38.36.3 cbSignal needs POSIX signal actions.
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+#define TALOS_RT_VPI_SIGNALS 1
+#include <signal.h>
+#endif
+
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -331,6 +337,8 @@ enum class VPIPhase : uint8_t {
 struct VPICallback {
   uint64_t id = 0;
   PLI_INT32 reason = 0;
+  // The signal of a cbSignal callback.
+  PLI_INT32 index = 0;
   PLI_INT32 (*routine)(p_cb_data) = nullptr;
   PLI_BYTE8 *userData = nullptr;
   s_vpi_time time{};
@@ -434,6 +442,16 @@ struct VPIState {
   // scheduler stops; interactive while they are delivered.
   bool interactivePending = false;
   bool interactive = false;
+#if TALOS_RT_VPI_SIGNALS
+  // cbSignal callbacks per signal, and the action each signal had before the
+  // first of them, restored when the last goes (38.36.3).
+  struct SignalWatch {
+    uint32_t callbacks = 0;
+    struct sigaction previous {};
+  };
+  std::array<SignalWatch, 65> signalWatches{};
+  uint32_t watchedSignals = 0;
+#endif
   uint64_t nextSystemTfId = 1;
   uint32_t callbackDepth = 0;
   uint32_t callDepth = 0;
@@ -1253,12 +1271,159 @@ bool observesRunningState(PLI_INT32 reason) {
   }
 }
 
+#if TALOS_RT_VPI_SIGNALS
+// Signals that arrived for cbSignal callbacks, bit `signal - 1` per signal.
+// The handler only sets bits, which is async-signal-safe for a lock-free atomic;
+// the callbacks run later on the simulation thread at the start of the next
+// time slot the scheduler processes (38.36.3: "proceed to a safe point (if
+// possible)"); a native clock loop hands control back for them
+// (talos_rt_v1_scheduler_handoff_pending), and the end of the simulation is
+// the last such point. A zero-delay loop that never ends its slot never
+// reaches one.
+std::atomic<uint64_t> pendingVPISignals{0};
+static_assert(std::atomic<uint64_t>::is_always_lock_free);
+// Signal actions are per process: one VPI state at a time may watch them.
+std::atomic<VPIState *> signalOwner{nullptr};
+
+constexpr uint64_t signalBit(int signal) { return uint64_t{1} << (signal - 1); }
+
+extern "C" void talosVPISignalHandler(int signal) {
+  if (signal >= 1 && signal <= 64)
+    pendingVPISignals.fetch_or(signalBit(signal), std::memory_order_relaxed);
+}
+#endif
+
 void refreshTimeCallbackDeadline(VPIState *state) {
   state->context->nextVPITimeCallback =
       state->timeCallbacks.empty()
           ? std::nullopt
           : std::optional<uint64_t>(state->timeCallbacks.begin()->first);
+#if TALOS_RT_VPI_SIGNALS
+  // Signals still to deliver keep the current slot's dispatch due.
+  if (state->watchedSignals != 0 &&
+      pendingVPISignals.load(std::memory_order_relaxed) != 0)
+    state->context->nextVPITimeCallback = state->context->schedulerTime;
+#endif
 }
+
+#if TALOS_RT_VPI_SIGNALS
+/// Installs the handler for the first cbSignal callback on a signal.
+bool watchSignal(VPIState *state, int signal) {
+  VPIState::SignalWatch &watch = state->signalWatches[signal];
+  if (watch.callbacks == 0) {
+    VPIState *owner = nullptr;
+    if (state->watchedSignals == 0 &&
+        !signalOwner.compare_exchange_strong(owner, state))
+      return false;
+    struct sigaction action {};
+    action.sa_handler = talosVPISignalHandler;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = SA_RESTART;
+    if (sigaction(signal, &action, &watch.previous) != 0) {
+      if (state->watchedSignals == 0)
+        signalOwner.store(nullptr);
+      return false;
+    }
+    if (state->watchedSignals++ == 0) {
+      ContextMutexLock lock(state->context);
+      state->context->preponedSlotHooks |= kVPISignalSlotHook;
+    }
+  }
+  ++watch.callbacks;
+  return true;
+}
+
+/// Puts back (or reinstalls) the actions of every watched signal, around a
+/// $reset that runs the executable again: exec would turn the handler into
+/// the default action and lose an inherited "ignore" (D.8).
+void setWatchedSignalActions(VPIState *state, bool watching) {
+  for (int signal = 1; signal <= 64; ++signal) {
+    VPIState::SignalWatch &watch = state->signalWatches[signal];
+    if (watch.callbacks == 0)
+      continue;
+    if (!watching) {
+      (void)sigaction(signal, &watch.previous, nullptr);
+      continue;
+    }
+    struct sigaction action {};
+    action.sa_handler = talosVPISignalHandler;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = SA_RESTART;
+    (void)sigaction(signal, &action, nullptr);
+  }
+}
+
+/// Restores the signal's earlier action once its last callback goes.
+void unwatchSignal(VPIState *state, int signal) {
+  if (signal < 1 || signal > 64)
+    return;
+  VPIState::SignalWatch &watch = state->signalWatches[signal];
+  if (watch.callbacks == 0 || --watch.callbacks != 0)
+    return;
+  (void)sigaction(signal, &watch.previous, nullptr);
+  pendingVPISignals.fetch_and(~signalBit(signal), std::memory_order_relaxed);
+  if (--state->watchedSignals == 0) {
+    {
+      ContextMutexLock lock(state->context);
+      state->context->preponedSlotHooks &= ~kVPISignalSlotHook;
+    }
+    signalOwner.store(nullptr);
+  }
+}
+
+void runPendingReset(VPIState *state) noexcept;
+
+/// Delivers the cbSignal callbacks of the signals that arrived (38.36.3), in
+/// signal order and then registration order. Callbacks registered during the
+/// delivery wait for a later one. A callback that ends the simulation does not
+/// end the delivery: the signals already taken have no later safe point.
+talos_rt_status deliverPendingSignals(VPIState *state) {
+  talos_rt_context *context = state->context;
+  if (state->watchedSignals == 0 ||
+      pendingVPISignals.load(std::memory_order_relaxed) == 0)
+    return TALOS_RT_OK;
+  std::vector<uint64_t> scheduled;
+  TALOS_RT_TRY { scheduled = state->callbackOrder; }
+  TALOS_RT_CATCH_ALL {
+    setError(state, "could not snapshot VPI callbacks", vpiSystem);
+    return TALOS_RT_OUT_OF_MEMORY;
+  }
+  uint64_t signals = pendingVPISignals.exchange(0, std::memory_order_acq_rel);
+  refreshTimeCallbackDeadline(state);
+  for (int signal = 1; signal <= 64; ++signal) {
+    if ((signals & signalBit(signal)) == 0)
+      continue;
+    for (uint64_t id : scheduled) {
+      auto found = state->callbacks.find(id);
+      if (found == state->callbacks.end() ||
+          found->second.reason != cbSignal || found->second.index != signal)
+        continue;
+      s_cb_data invocation{};
+      invocation.reason = cbSignal;
+      invocation.cb_rtn = found->second.routine;
+      invocation.user_data = found->second.userData;
+      invocation.index = signal;
+      ++state->callbackDepth;
+      context->vpiTimeCallbackActive = true;
+      talos_rt_status status = TALOS_RT_OK;
+      {
+        ManagedRunHoldPause pause;
+        TALOS_RT_TRY { (void)invocation.cb_rtn(&invocation); }
+        TALOS_RT_CATCH_ALL {
+          setError(state, "VPI callback raised an exception", vpiInternal);
+          status = TALOS_RT_FATAL;
+        }
+      }
+      context->vpiTimeCallbackActive = false;
+      runPendingReset(state);
+      --state->callbackDepth;
+      if (status != TALOS_RT_OK || context->destroyPending)
+        return status;
+    }
+  }
+  return TALOS_RT_OK;
+}
+#endif
 
 /// IEEE 1800-2023 4.10 Table 4-1: cbNBASynch runs in Pre-NBA, cbReadWriteSynch
 /// in Pre-NBA or Post-NBA (Pre-NBA here), and cbReadOnlySynch in Postponed.
@@ -1447,6 +1612,10 @@ void eraseCallback(VPIState *state, uint64_t id) {
   if (found == state->callbacks.end())
     return;
   const PLI_INT32 reason = found->second.reason;
+#if TALOS_RT_VPI_SIGNALS
+  if (reason == cbSignal)
+    unwatchSignal(state, found->second.index);
+#endif
   if (reason == cbAfterDelay) {
     state->timeCallbacks.erase({found->second.dueTime, id});
     refreshTimeCallbackDeadline(state);
@@ -8966,6 +9135,14 @@ talos_rt_vpi_dispatch_time_callbacks_unlocked(talos_rt_context *context) {
   auto *state = static_cast<VPIState *>(context->vpiState);
   if (!state || state != currentState() || context->vpiTimeCallbackActive)
     return TALOS_RT_INVALID_LIFECYCLE;
+#if TALOS_RT_VPI_SIGNALS
+  // IEEE 1800-2023 38.36.3: the callbacks of signals that arrived run at this
+  // safe point, ahead of timers.
+  if (talos_rt_status status = deliverPendingSignals(state);
+      status != TALOS_RT_OK || context->destroyPending ||
+      context->schedulerFinishRequested.load(std::memory_order_relaxed))
+    return status;
+#endif
   // IEEE 1800-2023 38.36.2: cbAfterDelay runs before execution events at
   // the selected time. This is boundary work owned by the common driver,
   // including timers registered by another timer and canceled peers.
@@ -10074,7 +10251,17 @@ talos_rt_v1_vpi_end_simulation(talos_rt_context *context) {
   if (state->phase != VPIPhase::Running)
     return TALOS_RT_INVALID_ARGUMENT;
   state->phase = VPIPhase::EndSimulation;
+#if TALOS_RT_VPI_SIGNALS
+  // The end of the simulation is the last safe point for a signal that
+  // arrived after the last time slot started (38.36.3); timers registered
+  // there are refused, as in cbEndOfSimulation.
+  talos_rt_status signalStatus = deliverPendingSignals(state);
+#endif
   talos_rt_status status = dispatchLifecycle(state, cbEndOfSimulation);
+#if TALOS_RT_VPI_SIGNALS
+  if (signalStatus != TALOS_RT_OK)
+    status = signalStatus;
+#endif
   state->phase = VPIPhase::Ended;
   return status;
 }
@@ -10093,6 +10280,12 @@ talos_rt_v1_vpi_shutdown(talos_rt_context *context) {
     ContextMutexLock lock(context);
     talos_rt_aot_observation_demand_changed_unlocked(context, false);
   }
+#if TALOS_RT_VPI_SIGNALS
+  // Signals go back to the actions they had before VPI watched them.
+  for (int signal = 1; signal <= 64; ++signal)
+    while (state->signalWatches[signal].callbacks != 0)
+      unwatchSignal(state, signal);
+#endif
   context->vpiState = nullptr;
   context->nextVPITimeCallback.reset();
   context->nextVPISyncCallback.reset();
@@ -14722,9 +14915,10 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_register_cb(p_cb_data callbackData) {
   }
   const std::optional<uint32_t> sync = syncCallbackStage(callbackData->reason);
   const bool timer = callbackData->reason == cbAfterDelay || sync;
+  const bool signal = callbackData->reason == cbSignal;
   if (!isLifecycleReason(callbackData->reason) &&
       !isErrorActionReason(callbackData->reason) &&
-      !isFeatureReason(callbackData->reason) && !timer) {
+      !isFeatureReason(callbackData->reason) && !timer && !signal) {
     if (state->phase == VPIPhase::StartupRestricted)
       state->unsupportedStartup = true;
     setError(state, "VPI callback reason is not implemented");
@@ -14788,7 +14982,30 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_register_cb(p_cb_data callbackData) {
     }
     callback.dueTime = state->context->schedulerTime + delay;
   }
+  if (signal) {
+#if TALOS_RT_VPI_SIGNALS
+    // 38.36.3: "set the index field to one of the legal signals specified by
+    // the operating system"; one a handler can catch.
+    // A fault signal (a bad access, an illegal instruction, a trap) would
+    // run the faulting instruction again after a handler that only records
+    // it, so those keep their own action.
+    const PLI_INT32 number = callbackData->index;
+    if (number < 1 || number > 64 || number == SIGKILL || number == SIGSTOP ||
+        number == SIGSEGV || number == SIGBUS || number == SIGFPE ||
+        number == SIGILL || number == SIGTRAP || number == SIGSYS) {
+      setError(state, "VPI signal callback needs a signal a handler can catch "
+                      "and return from");
+      return nullptr;
+    }
+    callback.index = number;
+#else
+    setError(state, "VPI signal callbacks are not available on this platform");
+    return nullptr;
+#endif
+  }
   // Lifecycle callbacks ignore obj, time, value and index (38.36.3).
+  // A signal watch the record does not hold yet is undone on failure.
+  bool unheldWatch = false;
   TALOS_RT_TRY {
     if (state->nextCallbackId == std::numeric_limits<uint64_t>::max()) {
       setError(state, "VPI callback identifier space is exhausted", vpiSystem);
@@ -14796,11 +15013,30 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_register_cb(p_cb_data callbackData) {
     }
     const uint64_t id = state->nextCallbackId++;
     callback.id = id;
+#if TALOS_RT_VPI_SIGNALS
+    // Watched with the record, so every eraseCallback has a match.
+    if (signal) {
+      if (!watchSignal(state, callback.index)) {
+        setError(state,
+                 signalOwner.load() != state && signalOwner.load()
+                     ? "VPI signals are watched by another simulation"
+                     : "VPI signal handler could not be installed",
+                 vpiSystem);
+        return nullptr;
+      }
+      unheldWatch = true;
+    }
+#endif
     auto inserted = state->callbacks.try_emplace(id, callback);
     if (!inserted.second) {
+#if TALOS_RT_VPI_SIGNALS
+      if (unheldWatch)
+        unwatchSignal(state, callback.index);
+#endif
       setError(state, "VPI callback identifier collision", vpiInternal);
       return nullptr;
     }
+    unheldWatch = false;
     // Counted with the record, so every eraseCallback has a match.
     noteCountedCallback(state, callbackData->reason, true);
     TALOS_RT_TRY {
@@ -14827,10 +15063,18 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_register_cb(p_cb_data callbackData) {
     return result;
   }
   TALOS_RT_CATCH(const std::bad_alloc &) {
+#if TALOS_RT_VPI_SIGNALS
+    if (unheldWatch)
+      unwatchSignal(state, callback.index);
+#endif
     setError(state, "VPI callback registry is out of memory", vpiSystem);
     return nullptr;
   }
   TALOS_RT_CATCH_ALL {
+#if TALOS_RT_VPI_SIGNALS
+    if (unheldWatch)
+      unwatchSignal(state, callback.index);
+#endif
     setError(state, "could not register VPI callback", vpiInternal);
     return nullptr;
   }
@@ -14863,6 +15107,8 @@ extern "C" TALOS_VPI_EXPORT void vpi_get_cb_info(vpiHandle opaque,
   destination->reason = callback->reason;
   destination->cb_rtn = callback->routine;
   destination->user_data = callback->userData;
+  if (callback->reason == cbSignal)
+    destination->index = callback->index;
   if (callback->reason == cbAfterDelay) {
     handle->owner->timeScratch = callback->time;
     destination->time = &handle->owner->timeScratch;
@@ -15907,6 +16153,18 @@ void talos_rt_vpi_run_time_error(talos_rt_context *context,
   TALOS_RT_CATCH_ALL {}
 }
 
+void talos_rt_vpi_signal_poll_unlocked(talos_rt_context *context) noexcept {
+#if TALOS_RT_VPI_SIGNALS
+  if (pendingVPISignals.load(std::memory_order_relaxed) == 0)
+    return;
+  if (!context->nextVPITimeCallback ||
+      *context->nextVPITimeCallback > context->schedulerTime)
+    context->nextVPITimeCallback = context->schedulerTime;
+#else
+  (void)context;
+#endif
+}
+
 void talos_rt_vpi_reset_starting(talos_rt_context *context) noexcept {
   auto *state = context ? static_cast<VPIState *>(context->vpiState) : nullptr;
   if (!state || state != currentState() || state->resetStarting)
@@ -15914,6 +16172,28 @@ void talos_rt_vpi_reset_starting(talos_rt_context *context) noexcept {
   state->resetStarting = true;
   (void)dispatchOutsideCall(state, cbStartOfReset);
   state->resetStarting = false;
+#if TALOS_RT_VPI_SIGNALS
+  // The next run starts from the actions this one inherited.
+  setWatchedSignalActions(state, false);
+#endif
+}
+
+void talos_rt_vpi_reset_failed(talos_rt_context *context) noexcept {
+#if TALOS_RT_VPI_SIGNALS
+  auto *state = context ? static_cast<VPIState *>(context->vpiState) : nullptr;
+  if (state && state == currentState())
+    setWatchedSignalActions(state, true);
+#else
+  (void)context;
+#endif
+}
+
+bool talos_rt_vpi_signals_pending() noexcept {
+#if TALOS_RT_VPI_SIGNALS
+  return pendingVPISignals.load(std::memory_order_relaxed) != 0;
+#else
+  return false;
+#endif
 }
 
 void talos_rt_vpi_interactive_scope_changed(talos_rt_context *context,

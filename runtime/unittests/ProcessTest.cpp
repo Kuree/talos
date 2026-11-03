@@ -10055,7 +10055,7 @@ TEST(Scheduler, GeneratedNBADirtyHierarchySkipsEmptyLeafPages) {
 TEST(Scheduler, SlotEntryPreservesProgressAndSamplesAcrossTierBoundaries) {
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
-  context->preponedObserverPresent = true;
+  context->preponedSlotHooks |= kPreponedObserverSlotHook;
   context->schedulerTime = 37;
   context->schedulerSlotProgress = 9;
   context->staticNBASlowRoots = {1};
@@ -18344,7 +18344,7 @@ TEST(SampledValues, PreponedObserverRunsOncePerTimeSlot) {
   ASSERT_TRUE(talos_rt_register_computed_signal_wait_unlocked(
       context, &record.wait, scheduled.token, false,
       scheduled.signalSubscriptions, scheduled.signalLatch));
-  ASSERT_TRUE(context->preponedObserverPresent);
+  ASSERT_TRUE(context->preponedSlotHooks & kPreponedObserverSlotHook);
 
   preponedObserverSamples.clear();
   context->stateValue[0] = 0;

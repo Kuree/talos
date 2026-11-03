@@ -2884,11 +2884,12 @@ struct talos_rt_context {
   uint64_t schedulerEpoch = 1;
   uint64_t schedulerTime = 0;
   uint64_t schedulerPreponedTime = UINT64_MAX;
-  // Set once a computed observer registers the compiler-reserved Preponed
-  // event dependency. It remains sticky because those detached observers are
-  // design-lifetime services and the branch keeps unrelated designs free of
-  // per-slot observer scans.
-  bool preponedObserverPresent = false;
+  // Per-slot work at the start of a time slot, one byte so designs without any
+  // test it once. The observer bit is set once a computed observer registers
+  // the compiler-reserved Preponed event dependency; it stays set because
+  // those detached observers are design-lifetime services. The VPI signal bit
+  // is set while a cbSignal callback is registered (IEEE 1800-2023 38.36.3).
+  uint8_t preponedSlotHooks = 0;
   uint64_t schedulerSlotProgress = 0;
   bool schedulerRunningFinals = false;
   // IEEE 1800-2023 4.5: finish the Reactive through Re-NBA iteration
@@ -4444,6 +4445,18 @@ void talos_rt_vpi_run_time_error(talos_rt_context *context,
 // entering an interactive mode. Cold; only with VPI state.
 void talos_rt_vpi_reset_starting(talos_rt_context *context) noexcept;
 void talos_rt_vpi_stop_requested(talos_rt_context *context) noexcept;
+inline constexpr uint8_t kPreponedObserverSlotHook = 1;
+inline constexpr uint8_t kVPISignalSlotHook = 2;
+// A signal a cbSignal callback watches arrived: its callbacks run at the start
+// of the current slot, with the timed callbacks (38.36.3 "proceed to a safe
+// point").
+void talos_rt_vpi_signal_poll_unlocked(talos_rt_context *context) noexcept;
+// Whether a watched signal waits for delivery: a closed native clock loop
+// hands control back for it (talos_rt_v1_scheduler_handoff_pending).
+bool talos_rt_vpi_signals_pending() noexcept;
+// $reset could not run the executable again: watched signals get their
+// handler back (talos_rt_vpi_reset_starting put the earlier actions back).
+void talos_rt_vpi_reset_failed(talos_rt_context *context) noexcept;
 /// The scheduler reached the final phase: $stop's cbEnterInteractive and
 /// cbExitInteractive run, then a reset vpi_control(vpiReset) requested from
 /// an imported task or function runs instead of the final procedures (38.4).

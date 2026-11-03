@@ -179,7 +179,10 @@ talos_rt_status resetToTimeZero(talos_rt_context *context, std::string_view valu
   execv("/proc/self/exe", argv.data());
 #endif
 #if !defined(__EMSCRIPTEN__)
-  // The run goes on: a program $system starts later sees no reset.
+  // The run goes on: a program $system starts later sees no reset, and VPI
+  // watches its signals again.
+  if (context->vpiState)
+    talos_rt_vpi_reset_failed(context);
   clearEnvironment(kResetCountVariable);
   clearEnvironment(kResetValueVariable);
   clearEnvironment(kResetInteractiveVariable);

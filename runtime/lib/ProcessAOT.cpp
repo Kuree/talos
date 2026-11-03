@@ -2804,6 +2804,8 @@ talos_rt_v1_scheduler_run_aot(talos_rt_context *context) {
            context->nativeScheduleDirtyRootsPresent ||
            talos_rt_covergroup_strobes_pending_unlocked(context) ||
            talos_rt_generated_deferred_reports_pending(context) ||
+           ((context->preponedSlotHooks & kVPISignalSlotHook) &&
+            talos_rt_vpi_signals_pending()) ||
            context->vpiObservationDemand || anyOverride(context->forceMask) ||
            anyOverride(context->assignMask);
   };

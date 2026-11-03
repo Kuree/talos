@@ -2343,9 +2343,13 @@ talos_rt_v1_scheduler_handoff_pending(talos_rt_context *context) {
   if (!context)
     return 1;
   ContextMutexLock lock(context);
+  // A watched signal hands control back so its cbSignal callbacks run at the
+  // next slot (IEEE 1800-2023 38.36.3); one byte test without any.
   return context->schedulerStatus != TALOS_RT_OK ||
                  talos_rt_covergroup_strobes_pending_unlocked(context) ||
-                 talos_rt_generated_deferred_reports_pending(context)
+                 talos_rt_generated_deferred_reports_pending(context) ||
+                 ((context->preponedSlotHooks & kVPISignalSlotHook) &&
+                  talos_rt_vpi_signals_pending())
              ? 1
              : 0;
 }
@@ -3947,7 +3951,11 @@ __attribute__((noinline, cold)) talos_rt_status admitSchedulerRegionUnlocked(
 // sampled conditions pay no per-slot observer-scan cost.
 talos_rt_status runPreponedHooks(talos_rt_context *context) {
   talos_rt_status status = talos_rt_capture_preponed_unlocked(context);
-  if (status != TALOS_RT_OK || !context->preponedObserverPresent)
+  if (status != TALOS_RT_OK || !context->preponedSlotHooks)
+    return status;
+  if (context->preponedSlotHooks & kVPISignalSlotHook)
+    talos_rt_vpi_signal_poll_unlocked(context);
+  if (!(context->preponedSlotHooks & kPreponedObserverSlotHook))
     return status;
   TALOS_RT_TRY {
     EventState &event = context->events[TALOS_RT_STABLE_HANDLE_PREPONED_EVENT];
