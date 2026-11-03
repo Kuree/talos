@@ -6487,6 +6487,160 @@ TEST(ManagedHeap, DesignatedCollectionReclaimsOnlyAtQuiescentPoints) {
   talos_rt_v1_context_destroy(context);
 }
 
+TEST(NativeState, ScalarAccessesWithoutCanonicalStateUseWholeWords) {
+  // Two-tier B5: without a canonical image (no execution, no bound planes) a
+  // scalar handle access reads and writes the caller's plane as one word; the
+  // result is the per-bit path's: only the view's bits change, the change
+  // flag reports whether any of them did, and a load returns them.
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 5, 32),
+            TALOS_RT_OK);
+  uint64_t handle = talos_rt_v1_native_state_static_handle(1);
+  std::array<uint8_t, 24> plane;
+  plane.fill(0xaa);
+  const std::array<uint8_t, 24> before = plane;
+  uint32_t value = 0x12345678;
+  uint8_t changed = 0;
+  ASSERT_EQ(talos_rt_v1_native_state_store_plane(
+                context, plane.data(), 128, handle, 32, 0,
+                reinterpret_cast<const uint8_t *>(&value), &changed),
+            TALOS_RT_OK);
+  EXPECT_EQ(changed, 1u);
+  for (uint64_t bit = 0; bit != 128; ++bit) {
+    bool expected = bit >= 5 && bit < 37
+                        ? ((value >> (bit - 5)) & 1) != 0
+                        : ((before[bit / 8] >> (bit % 8)) & 1) != 0;
+    EXPECT_EQ(((plane[bit / 8] >> (bit % 8)) & 1) != 0, expected) << bit;
+  }
+  ASSERT_EQ(talos_rt_v1_native_state_store_plane(
+                context, plane.data(), 128, handle, 32, 0,
+                reinterpret_cast<const uint8_t *>(&value), &changed),
+            TALOS_RT_OK);
+  EXPECT_EQ(changed, 0u);
+  uint32_t loaded = 0;
+  ASSERT_EQ(talos_rt_v1_native_state_load_plane(
+                context, plane.data(), 128, handle, 32, 0, 0,
+                reinterpret_cast<uint8_t *>(&loaded)),
+            TALOS_RT_OK);
+  EXPECT_EQ(loaded, value);
+  // A 12-bit view keeps its padding bits clear, also over a one-filled
+  // fallback.
+  for (uint32_t fallback : {0u, 1u}) {
+    uint16_t narrow = 0xffff;
+    ASSERT_EQ(talos_rt_v1_native_state_load_plane(
+                  context, plane.data(), 128, handle, 12, 0, fallback,
+                  reinterpret_cast<uint8_t *>(&narrow)),
+              TALOS_RT_OK);
+    EXPECT_EQ(narrow, value & 0xfffu);
+  }
+  talos_rt_v1_context_destroy(context);
+}
+
+TEST(NativeState, AutomaticViewsCopyWholeWordsInBoundsAndBitsOutside) {
+  // Two-tier B5: an in-bounds view of an automatic state (task arguments,
+  // fork locals) loads and stores whole words; a view reaching past the state
+  // keeps the per-bit path (out-of-range bits read as the fallback and are
+  // never written).
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  std::array<uint8_t, 10> initial{};
+  for (size_t byte = 0; byte != initial.size(); ++byte)
+    initial[byte] = static_cast<uint8_t>(0x35 * (byte + 1));
+  uint64_t handle = UINT64_MAX;
+  ASSERT_EQ(talos_rt_v1_native_state_alloc(context, 80, initial.data(), nullptr,
+                                           &handle),
+            TALOS_RT_OK);
+  auto bitOf = [](const uint8_t *bytes, uint64_t bit) {
+    return ((bytes[bit / 8] >> (bit % 8)) & 1) != 0;
+  };
+  std::array<uint8_t, 16> dummy{};
+  auto load = [&](int64_t offset, uint64_t width, uint32_t fallback) {
+    std::array<uint8_t, 16> out{};
+    EXPECT_EQ(talos_rt_v1_native_state_load_plane(
+                  context, dummy.data(), 0,
+                  talos_rt_v1_native_handle_offset(handle, offset), width, 0,
+                  fallback, out.data()),
+              TALOS_RT_OK);
+    return out;
+  };
+  // Bits 7..76 straddle a 64-bit chunk boundary.
+  std::array<uint8_t, 16> view = load(7, 70, 0);
+  for (uint64_t bit = 0; bit != 70; ++bit)
+    EXPECT_EQ(bitOf(view.data(), bit), bitOf(initial.data(), 7 + bit)) << bit;
+  EXPECT_EQ(view[8] >> 6, 0);
+  std::array<uint8_t, 9> next{};
+  for (size_t byte = 0; byte != next.size(); ++byte)
+    next[byte] = static_cast<uint8_t>(0xc3 ^ byte);
+  uint8_t changed = 0;
+  ASSERT_EQ(talos_rt_v1_native_state_store_plane(
+                context, dummy.data(), 0,
+                talos_rt_v1_native_handle_offset(handle, 7), 70, 0, next.data(),
+                &changed),
+            TALOS_RT_OK);
+  EXPECT_EQ(changed, 1u);
+  std::array<uint8_t, 16> whole = load(0, 80, 0);
+  for (uint64_t bit = 0; bit != 80; ++bit)
+    EXPECT_EQ(bitOf(whole.data(), bit), bit >= 7 && bit < 77
+                                            ? bitOf(next.data(), bit - 7)
+                                            : bitOf(initial.data(), bit))
+        << bit;
+  ASSERT_EQ(talos_rt_v1_native_state_store_plane(
+                context, dummy.data(), 0,
+                talos_rt_v1_native_handle_offset(handle, 7), 70, 0, next.data(),
+                &changed),
+            TALOS_RT_OK);
+  EXPECT_EQ(changed, 0u);
+  // An in-bounds 12-bit view over a one-filled fallback clears its padding.
+  std::array<uint8_t, 16> narrow = load(3, 12, 1);
+  for (uint64_t bit = 0; bit != 16; ++bit)
+    EXPECT_EQ(bitOf(narrow.data(), bit),
+              bit < 12 ? bitOf(whole.data(), 3 + bit) : false)
+        << bit;
+  // The unknown plane of a four-state automatic state.
+  std::array<uint8_t, 10> unknown{};
+  for (size_t byte = 0; byte != unknown.size(); ++byte)
+    unknown[byte] = static_cast<uint8_t>(0x0f << (byte % 5));
+  uint64_t fourState = UINT64_MAX;
+  ASSERT_EQ(talos_rt_v1_native_state_alloc(context, 80, initial.data(),
+                                           unknown.data(), &fourState),
+            TALOS_RT_OK);
+  std::array<uint8_t, 16> unknownView{};
+  ASSERT_EQ(talos_rt_v1_native_state_load_plane(
+                context, dummy.data(), 0,
+                talos_rt_v1_native_handle_offset(fourState, 9), 66, 1, 0,
+                unknownView.data()),
+            TALOS_RT_OK);
+  for (uint64_t bit = 0; bit != 66; ++bit)
+    EXPECT_EQ(bitOf(unknownView.data(), bit), bitOf(unknown.data(), 9 + bit))
+        << bit;
+  std::array<uint8_t, 9> cleared{};
+  ASSERT_EQ(talos_rt_v1_native_state_store_plane(
+                context, dummy.data(), 0,
+                talos_rt_v1_native_handle_offset(fourState, 9), 66, 1,
+                cleared.data(), &changed),
+            TALOS_RT_OK);
+  EXPECT_EQ(changed, 1u);
+  ASSERT_EQ(talos_rt_v1_native_state_load_plane(context, dummy.data(), 0,
+                                                fourState, 80, 1, 0,
+                                                unknownView.data()),
+            TALOS_RT_OK);
+  for (uint64_t bit = 0; bit != 80; ++bit)
+    EXPECT_EQ(bitOf(unknownView.data(), bit),
+              bit >= 9 && bit < 75 ? false : bitOf(unknown.data(), bit))
+        << bit;
+  EXPECT_EQ(talos_rt_v1_native_state_release(context, fourState, 0),
+            TALOS_RT_OK);
+  // Bits 70..89: the last ten are outside the state.
+  std::array<uint8_t, 16> tail = load(70, 20, 1);
+  for (uint64_t bit = 0; bit != 20; ++bit)
+    EXPECT_EQ(bitOf(tail.data(), bit),
+              bit < 10 ? bitOf(whole.data(), 70 + bit) : true)
+        << bit;
+  EXPECT_EQ(talos_rt_v1_native_state_release(context, handle, 0), TALOS_RT_OK);
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(ManagedHeap, LookupsOfFreedObjectsMissAfterCollection) {
   // Two-tier B5: handle lookups are cached per thread. A collection that
   // frees an object makes a cached lookup of it stale, so the freed handle

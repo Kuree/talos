@@ -1288,6 +1288,22 @@ extern "C" talos_rt_status talos_rt_v1_native_state_load_plane(
       }
       const std::vector<uint8_t> &plane =
           unknownPlane ? state.unknown : state.value;
+      // In-bounds views copy whole words (two-tier B5): task arguments and
+      // fork locals are automatic states read on every access.
+      if (offset >= 0 && static_cast<uint64_t>(offset) <= state.bitWidth &&
+          bitWidth <= state.bitWidth - static_cast<uint64_t>(offset) &&
+          !plane.empty() &&
+          (static_cast<uint64_t>(offset) + bitWidth + 7) / 8 <= plane.size()) {
+        for (uint64_t bit = 0; bit < bitWidth; bit += 64) {
+          uint64_t width = std::min<uint64_t>(64, bitWidth - bit);
+          storePackedBytes(outValue, bit, width,
+                           loadPackedBytes(plane.data(),
+                                           static_cast<uint64_t>(offset) + bit,
+                                           width));
+        }
+        maskPadding();
+        return TALOS_RT_OK;
+      }
       for (uint64_t bit = 0; bit != bitWidth; ++bit) {
         int64_t source = 0;
         if (addHandleOffset(offset, bit, source) && source >= 0 &&
@@ -1364,7 +1380,11 @@ extern "C" talos_rt_status talos_rt_v1_native_state_load_plane(
       maskPadding();
       return TALOS_RT_OK;
     }
-    if (canonical && bitWidth <= 64 && globalOffset >= 0 &&
+    // Scalar in-bounds reads take one word (two-tier B5): from the global
+    // plane, or from the canonical plane with the override overlay. Without
+    // canonical state readGlobalPlane holds, which is all the bit loop below
+    // would read.
+    if (bitWidth <= 64 && globalOffset >= 0 &&
         static_cast<uint64_t>(globalOffset) <= rootWidth &&
         bitWidth <= rootWidth - static_cast<uint64_t>(globalOffset)) {
       uint64_t source = rootOffset + static_cast<uint64_t>(globalOffset);
@@ -1475,6 +1495,20 @@ static talos_rt_status nativeStateStorePlane(
       std::vector<uint8_t> &plane = unknownPlane ? state.unknown : state.value;
       if (plane.empty())
         return TALOS_RT_INVALID_HANDLE;
+      // In-bounds views write whole words (two-tier B5).
+      if (offset >= 0 && static_cast<uint64_t>(offset) <= state.bitWidth &&
+          bitWidth <= state.bitWidth - static_cast<uint64_t>(offset) &&
+          (static_cast<uint64_t>(offset) + bitWidth + 7) / 8 <= plane.size()) {
+        for (uint64_t bit = 0; bit < bitWidth; bit += 64) {
+          uint64_t width = std::min<uint64_t>(64, bitWidth - bit);
+          uint64_t destination = static_cast<uint64_t>(offset) + bit;
+          uint64_t next = loadPackedBytes(value, bit, width);
+          *outChanged |=
+              loadPackedBytes(plane.data(), destination, width) != next;
+          storePackedBytes(plane.data(), destination, width, next);
+        }
+        return TALOS_RT_OK;
+      }
       for (uint64_t bit = 0; bit != bitWidth; ++bit) {
         int64_t coordinate = 0;
         if (!addHandleOffset(offset, bit, coordinate) || coordinate < 0 ||
@@ -1541,10 +1575,13 @@ static talos_rt_status nativeStateStorePlane(
     // value. Keep one changed result for the complete write: its caller
     // publishes one transition, even for a multi-word payload. This changes
     // neither statement order (4.6(a)) nor NBA execution order (4.6(b)).
-    if (bitWidth > 64 && globalOffset >= 0 &&
-        static_cast<uint64_t>(globalOffset) <= rootWidth &&
+    // In-bounds wide writes, and every in-bounds write without canonical
+    // state (whose bit loop below neither retains continuous values nor skips
+    // overridden bits), take whole words (two-tier B5).
+    if (globalOffset >= 0 && static_cast<uint64_t>(globalOffset) <= rootWidth &&
         bitWidth <= rootWidth - static_cast<uint64_t>(globalOffset) &&
-        context->forceMask.empty() && context->assignMask.empty()) {
+        (!canonical || (bitWidth > 64 && context->forceMask.empty() &&
+                        context->assignMask.empty()))) {
       uint64_t destination = rootOffset + static_cast<uint64_t>(globalOffset);
       for (uint64_t bit = 0; bit < bitWidth; bit += 64) {
         uint64_t width = std::min<uint64_t>(64, bitWidth - bit);
