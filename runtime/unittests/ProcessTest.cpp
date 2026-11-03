@@ -4394,6 +4394,56 @@ TEST(Scheduler, AOTPlanInstallBindRunAndExclusiveMutableState) {
   EXPECT_EQ(schedulerPromotionReadyCount, 0u);
 }
 
+// Two-tier P1e: a design with process control keeps only the processes a
+// handle can name out of the generated plan (IEEE 1800-2023 9.7). Under a live
+// plan, control of a runtime process proceeds; control of an actor the plan
+// owns is refused without touching its binding.
+TEST(Scheduler, AOTPlanRefusesProcessControlOnlyForItsActors) {
+  AOTTestState state;
+  talos_rt_native_schedule_plan plan = makeAOTPlan(state);
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
+  SchedulerFixture fixture(100);
+  talos_rt_process_instance_v1 *slotted = makeSchedulerInstance(fixture);
+  ASSERT_EQ(talos_rt_v1_scheduler_add_aot(context, slotted, 0, 0, 7, nullptr,
+                                          nullptr, 0, nullptr, 0),
+            TALOS_RT_OK);
+  talos_rt_process_instance_v1 *runtimeOwned = makeSchedulerInstance(fixture);
+  ASSERT_EQ(talos_rt_v1_scheduler_add(context, runtimeOwned, 0), TALOS_RT_OK);
+  const uint64_t slottedToken =
+      talos_rt_v1_scheduler_process_token(context, slotted);
+  const uint64_t runtimeToken =
+      talos_rt_v1_scheduler_process_token(context, runtimeOwned);
+  ASSERT_NE(slottedToken, 0u);
+  ASSERT_NE(runtimeToken, 0u);
+
+  for (auto kind :
+       {TALOS_RT_PROCESS_CONTROL_SUSPEND, TALOS_RT_PROCESS_CONTROL_RESUME,
+        TALOS_RT_PROCESS_CONTROL_KILL}) {
+    talos_rt_process_control_disposition disposition{};
+    EXPECT_EQ(talos_rt_v1_process_control(context, slottedToken, kind,
+                                          &disposition),
+              TALOS_RT_TIER_UNAVAILABLE);
+    EXPECT_EQ(disposition, TALOS_RT_PROCESS_CONTROL_CONTINUE);
+  }
+  EXPECT_EQ(state.actors[0], slotted);
+  EXPECT_EQ(context->nativeSchedulePlan, &plan);
+
+  talos_rt_process_control_disposition disposition{};
+  EXPECT_EQ(talos_rt_v1_process_control(context, runtimeToken,
+                                        TALOS_RT_PROCESS_CONTROL_SUSPEND,
+                                        &disposition),
+            TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_process_control(context, runtimeToken,
+                                        TALOS_RT_PROCESS_CONTROL_KILL,
+                                        &disposition),
+            TALOS_RT_OK);
+  EXPECT_EQ(state.actors[0], slotted);
+  EXPECT_EQ(context->nativeSchedulePlan, &plan);
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(Scheduler, ScopedRootInventoryRequiresEveryActorExactlyOnce) {
   AOTTestState state;
   auto plan = makeAOTPlan(state);

@@ -1779,9 +1779,19 @@ LogicalResult NativePipelineAnalysis::prepareFragments(
   // operation-local certificate when they are created above.
 
   bool enableDirectStaticState = directStaticState;
+  // Without direct static state, state reads use the runtime ABI, which reads
+  // the canonical image whenever the executable has bytecode state or a
+  // standalone state plan and no generated plan owns the native planes. A
+  // driver contribution stored only into the native planes would then read
+  // back stale (for example a level-sensitive UDP's hold row, IEEE 1800-2023
+  // 29.5), so such stores take the ABI too.
+  bool directDriverStores = enableDirectStaticState || useAOT ||
+                            (!runtime::has<runtime::BytecodeImage>(module) &&
+                             !runtime::has<runtime::SampledRanges>(module));
   if (failed(lowerPackedSimulationOperations(
           module, dataLayout, *stateLayout, enableDirectStaticState,
-          staticNBA ? &staticNBAPlan : nullptr, vpi.allowsWrite(),
+          directDriverStores, staticNBA ? &staticNBAPlan : nullptr,
+          vpi.allowsWrite(),
           /*experimentalTwoState=*/false, threadStatuses)))
     return failure();
   // Constructor edges were consumed when class allocation was lowered.

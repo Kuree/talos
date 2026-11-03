@@ -47,4 +47,6 @@ module sdf_iopath_absolute;
 endmodule
 
 // OUTPUT: SDF PASSED
-// AOT: design is ineligible for native AOT scheduling: delayed continuous assignment requires generic ordering
+// Strict AOT still refuses the design: its delayed continuous assignment is a
+// runtime-owned actor, which only the hybrid schedulers accept.
+// AOT: design is ineligible for native AOT scheduling: delayed continuous assignment is runtime-owned

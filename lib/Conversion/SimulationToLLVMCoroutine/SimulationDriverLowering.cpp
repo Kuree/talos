@@ -470,11 +470,12 @@ public:
       std::shared_ptr<const DriverLookupIndex> index,
       std::shared_ptr<const NativeStateLayout> cleanLayout,
       std::shared_ptr<const DriverLookupIndex> cleanIndex,
-      std::shared_ptr<const DriverLookupIndex> resolutionIndex)
+      std::shared_ptr<const DriverLookupIndex> resolutionIndex,
+      bool directState)
       : Base(converter, context), layout(layout),
         originalLayout(originalLayout), index(std::move(index)),
         cleanLayout(std::move(cleanLayout)), cleanIndex(std::move(cleanIndex)),
-        resolutionIndex(std::move(resolutionIndex)) {
+        resolutionIndex(std::move(resolutionIndex)), directState(directState) {
     // Guard materialization creates two marked drives, each lowered once.
     this->setHasBoundedRewriteRecursion();
   }
@@ -604,7 +605,9 @@ public:
     // planes. Route these driver stores through the generic state ABI so the
     // native globals and canonical image are updated together before the
     // resolver reads the contribution.
-    const NativeStateLayout *storeLayout = &layout;
+    // Without direct state the canonical image may be authoritative for
+    // reads (see the caller of lowerPackedSimulationOperations).
+    const NativeStateLayout *storeLayout = directState ? &layout : nullptr;
     if constexpr (std::is_same_v<DriveOp, sim::SimDriverDriveDelayedNetOp>)
       storeLayout = nullptr;
     bool userRaw = sim::has<sim::metadata::UserNetRawDrive>(op);
@@ -1680,6 +1683,7 @@ private:
   // Indexes the unspecialized layout for run resolution even when no driver
   // qualifies for a bulk drive.
   std::shared_ptr<const DriverLookupIndex> resolutionIndex;
+  bool directState;
 };
 
 } // namespace
@@ -1743,10 +1747,13 @@ void annotateStaticDriverNets(ModuleOp module,
 
 void populateDriverToLLVMConversionPatterns(
     RewritePatternSet &patterns, TypeConverter &converter,
-    const NativeStateLayout &layout, const NativeStateLayout &originalLayout) {
+    const NativeStateLayout &layout, const NativeStateLayout &originalLayout,
+    bool directState) {
   std::shared_ptr<const DriverLookupIndex> index;
+  // The bulk and clean-boundary forms access net planes directly.
   bool hasBulkCandidate =
-      !layout.hasPassSwitch && llvm::any_of(layout.driverLayouts, [&](auto &d) {
+      directState && !layout.hasPassSwitch &&
+      llvm::any_of(layout.driverLayouts, [&](auto &d) {
         return d.width >= bulkConnectedDriverMinWidth && d.drivenLow == 0 &&
                d.drivenWidth == d.width &&
                d.strength0 == sim::Strength::Strong &&
@@ -1758,7 +1765,7 @@ void populateDriverToLLVMConversionPatterns(
     index = std::make_shared<DriverLookupIndex>(layout);
   std::shared_ptr<const NativeStateLayout> cleanLayout;
   std::shared_ptr<const DriverLookupIndex> cleanIndex;
-  if (llvm::any_of(layout.netLayouts, [&](const auto &net) {
+  if (directState && llvm::any_of(layout.netLayouts, [&](const auto &net) {
         return layout.guardedHandles.contains(net.handleID);
       })) {
     cleanLayout =
@@ -1771,7 +1778,7 @@ void populateDriverToLLVMConversionPatterns(
                DriverDriveConversion<sim::SimDriverDriveDelayedNetOp>,
                DriverDriveConversion<sim::SimDriverDriveChangedOp>>(
       converter, patterns.getContext(), layout, originalLayout, index,
-      cleanLayout, cleanIndex, resolutionIndex);
+      cleanLayout, cleanIndex, resolutionIndex, directState);
 }
 
 } // namespace talos::detail

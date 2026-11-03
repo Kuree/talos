@@ -10,6 +10,7 @@
 
 #include "talos/Analysis/DPIEffectAnalysis.h"
 #include "talos/Analysis/SimulationScheduleAnalysis.h"
+#include "talos/Dialect/DPI/DPIDialect.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 
@@ -19,6 +20,7 @@
 
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/StringMap.h"
 
 #include <algorithm>
@@ -1168,28 +1170,53 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
            llvm::any_of(operation->getResultTypes(),
                         [](Type type) { return isa<FloatType>(type); });
   };
+  bool processControlPresent = false, programExitPresent = false;
+  llvm::SetVector<Operation *> netResolutionFunctions;
+  // Generated eval owners call only scheduler-free code, so a net whose value
+  // the runtime resolves (NativeEvalSpecialization's runtime driver
+  // resolution: delayed nets, and every driven net once pass switches
+  // connect components) keeps its drivers runtime-owned in the plans that
+  // may become eval plans.
+  auto schedulerMode = schedule::get<schedule::Field::NativeScheduler>(module);
+  bool evalCandidate =
+      schedulerMode &&
+      (schedulerMode.getValue() == schedule::NativeSchedulerMode::Eval ||
+       schedulerMode.getValue() == schedule::NativeSchedulerMode::Auto);
+  bool hasPassSwitch = anyNested<Operation *>(module, [](Operation *operation) {
+    return isa<sim::SimPassSwitchDeclOp>(operation);
+  });
+  auto resolvesNetInRuntime = [&](Operation *operation) {
+    return evalCandidate &&
+           (isa<sim::SimDriverDriveDelayedNetOp>(operation) ||
+            (hasPassSwitch &&
+             isa<sim::SimDriverDriveOp, sim::SimDriverDriveInertialOp,
+                 sim::SimDriverDriveInertialPathOp,
+                 sim::SimDriverDriveInertialStrengthPairOp,
+                 sim::SimDriverDriveInertialPathStrengthPairOp,
+                 sim::SimDriverDriveChangedOp>(operation)));
+  };
   // Only these operations reach a check below.
-  SmallVector<Operation *> restricted = collectInWalkOrder<Operation *>(
-      module, [&](Operation *operation) {
-        return usesReal(operation) || sim::isSuspensionOp(operation) ||
-               isa<sim::SimProcessControlOp, sim::SimProgramExitOp,
-                   sim::SimPowerCancelNBAOp, sim::SimEventSnapshotRegisterOp,
-                   sim::SimEventSnapshotMaskOp, sim::SimEventSnapshotFlushOp,
-                   sim::SimPowerNBAOp, sim::SimPowerNBAViewOp,
-                   sim::SimProcessEventPendingOp, sim::SimSchedulerCohortOp,
-                   sim::SimDPICallOp, sim::SimDynamicOverrideOp,
-                   sim::SimRefStoreInertialPathOp, sim::SimDriverDriveInertialOp,
-                   sim::SimDriverDriveInertialPathOp,
-                   sim::SimDriverDriveInertialStrengthPairOp,
-                   sim::SimDriverDriveInertialPathStrengthPairOp,
-                   sim::SimPassSwitchControlOp,
-                   sim::SimPassSwitchControlDelayedOp, sim::SimMosDriveDelayedOp,
-                   sim::SimOverrideOp, sim::SimReleaseOverrideOp,
-                   sim::SimManagedNBAEnqueueOp, sim::SimManagedNBAEnqueueMaskedOp,
-                   sim::SimReferencePathNBAEnqueueOp, sim::SimTaskCallOp,
-                   sim::SimClassVirtualTaskCallOp, sim::SimNBAEnqueueOp>(
-                   operation);
-      });
+  SmallVector<Operation *> restricted = collectInWalkOrder<
+      Operation *>(module, [&](Operation *operation) {
+    return usesReal(operation) || sim::isSuspensionOp(operation) ||
+           resolvesNetInRuntime(operation) ||
+           isa<sim::SimProcessControlOp, sim::SimProgramExitOp,
+               sim::SimPowerCancelNBAOp, sim::SimEventSnapshotRegisterOp,
+               sim::SimEventSnapshotMaskOp, sim::SimEventSnapshotFlushOp,
+               sim::SimPowerNBAOp, sim::SimPowerNBAViewOp,
+               sim::SimProcessEventPendingOp, sim::SimSchedulerCohortOp,
+               sim::SimDPICallOp, sim::SimDynamicOverrideOp,
+               sim::SimRefStoreInertialPathOp, sim::SimDriverDriveInertialOp,
+               sim::SimDriverDriveInertialPathOp,
+               sim::SimDriverDriveInertialStrengthPairOp,
+               sim::SimDriverDriveInertialPathStrengthPairOp,
+               sim::SimPassSwitchControlOp, sim::SimPassSwitchControlDelayedOp,
+               sim::SimMosDriveDelayedOp, sim::SimOverrideOp,
+               sim::SimReleaseOverrideOp, sim::SimManagedNBAEnqueueOp,
+               sim::SimManagedNBAEnqueueMaskedOp,
+               sim::SimReferencePathNBAEnqueueOp, sim::SimTaskCallOp,
+               sim::SimClassVirtualTaskCallOp, sim::SimNBAEnqueueOp>(operation);
+  });
   for (Operation *operation : restricted) {
     bool hasRealValue = usesReal(operation);
     // IEEE 1800-2023 20.10 makes $fatal an implicit $finish. Both native
@@ -1198,11 +1225,21 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
     // checkpoint transaction. An untaken fatal/stop must not disable the
     // entire native schedule. Batch-mode $stop uses the same runtime policy.
     if (isa<sim::SimProcessControlOp, sim::SimProgramExitOp>(operation)) {
-      // A process object can dynamically name any native or bytecode actor,
-      // including an ancestor of the current activation. Keep the complete
-      // scheduler under runtime ownership until generated AOT plans have a
-      // transactional actor suspend/resume/kill protocol.
-      rejectPlan("process control requires generic ordering");
+      // A process handle names only a process that executed process::self()
+      // (IEEE 1800-2023 9.7), and $exit kills the processes of its program
+      // (24.7). Generated plans have no transactional actor
+      // suspend/resume/kill protocol, and the runtime refuses control of an
+      // actor a live plan owns, so the controller and every process it can
+      // name (handle sources and their subprocesses, or the program's
+      // processes; below) are runtime-owned. Other processes keep the plan
+      // (two-tier P1e).
+      requireBytecodeFragment(operation,
+                              isa<sim::SimProgramExitOp>(operation)
+                                  ? "program exit is runtime-owned"
+                                  : "process control is runtime-owned");
+      excludeBytecodeActor(operation);
+      processControlPresent |= isa<sim::SimProcessControlOp>(operation);
+      programExitPresent |= isa<sim::SimProgramExitOp>(operation);
     } else if (isa<sim::SimPowerCancelNBAOp>(operation)) {
       // IEEE 1801-2018 9.5.3: cancellation must see every pending update,
       // including one enqueued earlier in the same Active region. Generated
@@ -1233,9 +1270,13 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
         excludeBytecodeActor(operation);
       }
     } else if (isa<sim::SimDynamicOverrideOp>(operation)) {
-      // Dynamic override ownership can retire a detached evaluator process.
-      // Keep the scheduler fully runtime-owned until generated plans expose a
-      // transactional actor-removal protocol.
+      // Dynamic override ownership (IEEE 1800-2023 10.6, an evaluator per
+      // force or procedural assign with a variable expression) is outside
+      // the static root inventory, so its targets have no guarded root
+      // policy, and with a generated plan the native net resolver writes
+      // resolved nets directly. Keep the scheduler runtime-owned until
+      // force/release is reworked (two-tier V7); scoping it to the evaluator
+      // alone would not protect a dynamically forced net (two-tier P1e).
       rejectPlan("dynamic override ownership requires generic ordering");
     } else if (isa<sim::SimRefStoreInertialPathOp>(operation)) {
       hasRuntimePathPublication = true;
@@ -1256,26 +1297,35 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
                operation->getParentOfType<sim::SimFuncOp>().getEntryKind() ==
                    sim::EntryKind::Continuous) {
       // An explicit delayed continuous assignment evaluates once at time
-      // zero, before it becomes event-driven. The generated ready-node plan
-      // currently models only later sensitivity activations and can therefore
-      // omit that initial inertial publication when a source is initialized
-      // procedurally in the same slot. Keep this uncommon calendar-event shape
-      // in the compact generic scheduler until the AOT graph has an explicit
-      // bootstrap edge for the post-evaluation wait continuation.
-      rejectPlan("delayed continuous assignment requires generic ordering");
+      // zero, before it becomes event-driven (IEEE 1800-2023 10.3.3, 4.9.1),
+      // and its update is an inertial calendar event on the net. Keep only
+      // that continuous process runtime-owned: the runtime runs its time-zero
+      // evaluation and every later one, and its delayed update reaches tier-1
+      // readers as an ordinary publication (ready bits). The rest of the
+      // design keeps its generated plan (two-tier P1e).
+      requireBytecodeFragment(operation,
+                              "delayed continuous assignment is runtime-owned");
+      excludeBytecodeActor(operation);
     } else if (isa<sim::SimPassSwitchControlOp>(operation)) {
-      // IEEE 1800-2023 4.9.5: a control change re-resolves the channel's
-      // connected nets. The runtime applies that topology change and advances
-      // the scheduler epoch; a generated hot closure can neither make that
-      // call nor observe the epoch, so the generic scheduler owns it.
-      rejectPlan("switch control requires generic ordering");
+      // IEEE 1800-2023 4.9.5, 28.8: a control change re-resolves the
+      // channel's connected nets. The runtime applies that topology change,
+      // resolves the nets and publishes their values like any runtime net
+      // driver; a generated closure can neither make that call nor observe
+      // the scheduler epoch, so only the controlling process is
+      // runtime-owned. Readers of the nets keep the plan and are woken by
+      // the publication (two-tier P1e).
+      requireBytecodeFragment(operation, "switch control is runtime-owned");
+      excludeBytecodeActor(operation);
     } else if (isa<sim::SimPassSwitchControlDelayedOp,
                    sim::SimMosDriveDelayedOp>(operation)) {
-      // A delayed control publication changes frozen connectivity from a
-      // runtime calendar event. The generic scheduler owns that topology
-      // barrier and its ordered net notifications; generated AOT plans do not
-      // yet contain an equivalent topology-event commit node.
-      rejectPlan("delayed switch contribution requires generic ordering");
+      // A delayed control or MOS contribution changes connectivity from a
+      // runtime calendar event (IEEE 1800-2023 28.16): the runtime owns that
+      // event, re-resolves the nets and publishes their values. Only the
+      // process that schedules it is runtime-owned; readers keep the plan
+      // and are woken by the publication (two-tier P1e).
+      requireBytecodeFragment(operation,
+                              "delayed switch contribution is runtime-owned");
+      excludeBytecodeActor(operation);
     } else if (isa<sim::SimOverrideOp, sim::SimReleaseOverrideOp>(operation)) {
       requireBytecodeFragment(operation, "force/release state is present");
       excludeBytecodeActor(operation);
@@ -1386,6 +1436,17 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
                               "real-valued reactive state requires bytecode");
       excludeBytecodeActor(operation);
     }
+    // IEEE 1800-2023 28.8 and 28.13 resolve a pass-connected net over its
+    // whole component after every publication, and a delayed net (6.7)
+    // schedules its own calendar update; the runtime does both. Only the
+    // driving process leaves the plan; readers are woken by the runtime's
+    // publication (two-tier P1e).
+    if (resolvesNetInRuntime(operation)) {
+      requireBytecodeFragment(operation, "net resolution is runtime-owned");
+      excludeBytecodeActor(operation);
+      if (auto function = operation->getParentOfType<sim::SimFuncOp>())
+        netResolutionFunctions.insert(function.getOperation());
+    }
     // IEEE 1800-2023 13.4: an ordinary class function returns without
     // suspending its caller. Managed values within an activation use native
     // root instrumentation; their presence does not require bytecode. The
@@ -1396,6 +1457,163 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
       requireBytecodeFragment(operation, "suspension retains managed state");
       excludeBytecodeActor(operation);
     }
+  }
+  // A construct that makes its process runtime-owned does so also from a
+  // subroutine the process calls (a call runs in the caller's process, IEEE
+  // 1800-2023 13.3, 13.4), unless inlining already moved it into the caller.
+  // callerClosure returns the functions that may execute a seed function for
+  // their caller and the call operations that reach one: direct and method
+  // calls follow their callee, a virtual call every implementation of its
+  // signature family (overrides share it, as Finalize resolves dispatch), and
+  // a reentrant DPI import every export. Linear in the number of calls.
+  DenseMap<Operation *, SmallVector<Operation *>> callersOf;
+  bool callGraphBuilt = false;
+  auto buildCallGraph = [&] {
+    if (callGraphBuilt)
+      return;
+    callGraphBuilt = true;
+    DenseMap<uint64_t, SmallVector<Operation *>> families;
+    module.walk([&](sim::SimClassMethodDeclOp method) {
+      if (!method.getSignatureId() || !method.getImplementation())
+        return;
+      if (sim::SimFuncOp function = lookupFunction(*method.getImplementation()))
+        families[*method.getSignatureId()].push_back(function.getOperation());
+    });
+    SmallVector<Operation *> exports;
+    module.walk([&](sim::SimFuncOp function) {
+      if (dpi::has<dpi::Export>(function))
+        exports.push_back(function.getOperation());
+    });
+    module.walk([&](Operation *call) {
+      if (!call->getParentOfType<sim::SimFuncOp>())
+        return;
+      auto add = [&](Operation *callee) { callersOf[callee].push_back(call); };
+      if (auto virtualCall = dyn_cast<sim::SimClassVirtualCallOp>(call)) {
+        llvm::for_each(families.lookup(virtualCall.getSignatureId()), add);
+      } else if (auto virtualTask =
+                     dyn_cast<sim::SimClassVirtualTaskCallOp>(call)) {
+        llvm::for_each(families.lookup(virtualTask.getSignatureId()), add);
+      } else if (auto dpiCall = dyn_cast<sim::SimDPICallOp>(call)) {
+        if (dpiCallMayReenter(dpiCall))
+          llvm::for_each(exports, add);
+      } else if (isa<sim::SimCallOp, sim::SimTaskCallOp,
+                     sim::SimClassDirectCallOp>(call)) {
+        auto callee = call->getAttrOfType<FlatSymbolRefAttr>("callee");
+        if (sim::SimFuncOp function =
+                callee ? lookupFunction(callee.getValue()) : sim::SimFuncOp{})
+          add(function.getOperation());
+      }
+    });
+  };
+  auto callerClosure = [&](ArrayRef<Operation *> seeds,
+                           llvm::SmallDenseSet<Operation *> &closure,
+                           SmallVectorImpl<Operation *> &reachingCalls,
+                           bool includeRoot) {
+    buildCallGraph();
+    SmallVector<Operation *> worklist;
+    for (Operation *seed : seeds)
+      if (closure.insert(seed).second)
+        worklist.push_back(seed);
+    while (!worklist.empty()) {
+      Operation *function = worklist.pop_back_val();
+      for (Operation *call : callersOf.lookup(function)) {
+        Operation *owner =
+            call->getParentOfType<sim::SimFuncOp>().getOperation();
+        if (!includeRoot && owner == root.getOperation())
+          continue;
+        reachingCalls.push_back(call);
+        if (closure.insert(owner).second)
+          worklist.push_back(owner);
+      }
+    }
+  };
+  auto excludeCallers = [&](ArrayRef<Operation *> seeds, StringRef reason,
+                            bool includeRoot,
+                            llvm::SmallDenseSet<Operation *> &closure) {
+    SmallVector<Operation *> reachingCalls;
+    callerClosure(seeds, closure, reachingCalls, includeRoot);
+    for (Operation *call : reachingCalls) {
+      requireBytecodeFragment(call, reason);
+      excludeBytecodeActor(call);
+    }
+  };
+  // kill() ends a process's fork descendants (9.7) and $exit every thread of
+  // its program (24.7). A $monitor evaluator is the only static process a
+  // non-root process spawns, and the runtime links every process spawned
+  // during the root initializer (the static processes) to it, so all spawn
+  // targets of a process that can be killed this way are runtime-owned.
+  auto excludeSpawnTargets = [&](const llvm::SmallDenseSet<Operation *> &owners,
+                                 StringRef reason) {
+    for (Operation *owner : owners)
+      owner->walk([&](sim::SimSpawnOp spawn) {
+        if (sim::SimFuncOp target = lookupFunction(spawn.getCallee()))
+          if (bytecodeActors.insert(target.getOperation()).second)
+            noteReason(actorReasons[target.getOperation()],
+                       internReason(reason));
+      });
+  };
+  // Controllers: the process executing process control or $exit, also from a
+  // called function or task.
+  if (processControlPresent || programExitPresent) {
+    SmallVector<Operation *> controlSeeds, exitSeeds;
+    module.walk([&](Operation *operation) {
+      auto function = operation->getParentOfType<sim::SimFuncOp>();
+      if (!function)
+        return;
+      if (isa<sim::SimProcessControlOp>(operation))
+        controlSeeds.push_back(function.getOperation());
+      else if (isa<sim::SimProgramExitOp>(operation))
+        exitSeeds.push_back(function.getOperation());
+    });
+    llvm::SmallDenseSet<Operation *> controllers, exiters;
+    excludeCallers(controlSeeds, "process control is runtime-owned",
+                   /*includeRoot=*/true, controllers);
+    excludeCallers(exitSeeds, "program exit is runtime-owned",
+                   /*includeRoot=*/true, exiters);
+  }
+  // With process control present, every process a handle can name is
+  // runtime-owned: handles come only from process::self() (9.7), which names
+  // the process that executes it, so every function that may execute it for
+  // its caller is a handle source, and what a handle source spawns is
+  // excluded too (kill above).
+  if (processControlPresent) {
+    SmallVector<Operation *> seeds;
+    module.walk([&](sim::SimProcessCurrentOp current) {
+      requireBytecodeFragment(current,
+                              "process handle source is runtime-owned");
+      excludeBytecodeActor(current);
+      if (auto function = current->getParentOfType<sim::SimFuncOp>())
+        seeds.push_back(function.getOperation());
+    });
+    llvm::SmallDenseSet<Operation *> sources;
+    excludeCallers(seeds, "process handle source is runtime-owned",
+                   /*includeRoot=*/true, sources);
+    excludeSpawnTargets(sources, "subprocess of a process handle source is "
+                                 "runtime-owned");
+  }
+  // $exit kills every process of the calling program instance (24.7), so
+  // every program-owned actor and what it spawns is runtime-owned.
+  if (programExitPresent) {
+    llvm::SmallDenseSet<Operation *> programProcesses;
+    module.walk([&](sim::SimFuncOp function) {
+      if (!schedule::get<schedule::Field::ProgramOwnerId>(function) ||
+          function.getBody().empty())
+        return;
+      programProcesses.insert(function.getOperation());
+      requireBytecodeFragment(function.getBody().front().getTerminator(),
+                              "program exit is runtime-owned");
+      excludeBytecodeActor(function.getBody().front().getTerminator());
+    });
+    excludeSpawnTargets(programProcesses, "program exit is runtime-owned");
+  }
+  // Net resolution also from a called function (NativeEvalSpecialization
+  // checks an owner's whole call closure). The root initializer is not an
+  // eval owner.
+  if (!netResolutionFunctions.empty()) {
+    llvm::SmallDenseSet<Operation *> resolvers;
+    excludeCallers(netResolutionFunctions.getArrayRef(),
+                   "net resolution is runtime-owned", /*includeRoot=*/false,
+                   resolvers);
   }
 
   llvm::sort(result.reasons);

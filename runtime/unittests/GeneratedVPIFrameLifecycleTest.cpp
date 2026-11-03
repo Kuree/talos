@@ -450,7 +450,8 @@ TEST(GeneratedDesignDatabase, FrameSchedulerLifecycle) {
                                                   TALOS_RT_PROCESS_CONTROL_KILL,
                                                   &disposition);
         if (engine == Engine::AOT) {
-          // process.control is deliberately excluded from installed AOT plans.
+          // The plan owns this actor (its slot is parked while it waits in the
+          // called task), so process control of it is refused (two-tier P1e).
           // Rejection must retain the suspended activation; resume normally.
           EXPECT_EQ(status, TALOS_RT_TIER_UNAVAILABLE);
           EXPECT_EQ(disposition, TALOS_RT_PROCESS_CONTROL_CONTINUE);

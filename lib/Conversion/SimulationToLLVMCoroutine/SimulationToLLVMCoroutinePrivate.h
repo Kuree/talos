@@ -539,9 +539,13 @@ void populateStateReadWriteToLLVMConversionPatterns(
     const NativeStateLayout *layout = nullptr);
 void annotateStaticDriverNets(mlir::ModuleOp module,
                               const NativeStateLayout &layout);
+/// Without `directState`, driver contributions go through the runtime state
+/// ABI even when capture specialization made the handle a constant (see the
+/// caller of lowerPackedSimulationOperations).
 void populateDriverToLLVMConversionPatterns(
     mlir::RewritePatternSet &patterns, mlir::TypeConverter &converter,
-    const NativeStateLayout &layout, const NativeStateLayout &originalLayout);
+    const NativeStateLayout &layout, const NativeStateLayout &originalLayout,
+    bool directState);
 void materializeNativeSchedulerGlobals(mlir::ModuleOp module);
 void markLikelyTrue(mlir::cf::CondBranchOp branch);
 void recordStaticSpecializationCFGBlocks(

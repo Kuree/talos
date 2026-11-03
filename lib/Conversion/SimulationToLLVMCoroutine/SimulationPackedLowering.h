@@ -25,8 +25,8 @@ prepareNativeFunctionFinalizationInputs(mlir::ModuleOp module,
 mlir::LogicalResult lowerPackedSimulationOperations(
     mlir::ModuleOp module, const llvm::DataLayout &dataLayout,
     const NativeStateLayout &stateLayout, bool enableDirectStaticState,
-    const NativeStaticNBAPlan *staticNBAPlan, bool vpiAllowsWrite,
-    bool experimentalTwoState,
+    bool directDriverStores, const NativeStaticNBAPlan *staticNBAPlan,
+    bool vpiAllowsWrite, bool experimentalTwoState,
     llvm::function_ref<mlir::LogicalResult()> threadStatuses);
 
 } // namespace talos::detail

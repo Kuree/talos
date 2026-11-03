@@ -251,8 +251,8 @@ NativeStateLayout makeCleanEvalStateLayout(const NativeStateLayout &layout) {
 LogicalResult lowerPackedSimulationOperations(
     ModuleOp module, const llvm::DataLayout &dataLayout,
     const NativeStateLayout &stateLayout, bool enableDirectStaticState,
-    const NativeStaticNBAPlan *staticNBAPlan, bool vpiAllowsWrite,
-    bool experimentalTwoState,
+    bool directDriverStores, const NativeStaticNBAPlan *staticNBAPlan,
+    bool vpiAllowsWrite, bool experimentalTwoState,
     llvm::function_ref<LogicalResult()> threadStatuses) {
   MLIRContext *context = module.getContext();
   if (stateLayout.directContinuous) {
@@ -1100,7 +1100,7 @@ LogicalResult lowerPackedSimulationOperations(
     populateManagedToLLVMConversionPatterns(
         patterns, c, dataLayout, stateLayout.bitCount, *classLowering);
     populateDriverToLLVMConversionPatterns(patterns, c, selectedLayout,
-                                           stateLayout);
+                                           stateLayout, directDriverStores);
     populateNBAToLLVMConversionPatterns(
         patterns, c, stateLayout.bitCount, staticNBAPlan, &selectedLayout,
         staticNBAPlan != nullptr, vpiAllowsWrite && !cleanEval,

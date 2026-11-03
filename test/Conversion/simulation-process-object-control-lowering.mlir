@@ -66,7 +66,8 @@ module attributes {
 // BYTECODE-SAME: 58, 0, 1, 0
 // BYTECODE-SAME: 58, 0, 0, 0
 
-// Generated AOT actor tables do not yet expose a transactional dynamic
-// suspend/resume/kill protocol. Auto safely selects the generic scheduler;
-// an explicit AOT request is rejected rather than leaving stale actor state.
-// AOT-REJECT: process control requires generic ordering
+// Generated AOT actor tables do not expose a transactional dynamic
+// suspend/resume/kill protocol, so the controlling process (here also its own
+// handle source) is runtime-owned. Strict AOT accepts no runtime-owned actor
+// and rejects the design rather than leaving stale actor state.
+// AOT-REJECT: design is ineligible for native AOT scheduling: process control is runtime-owned, process handle source is runtime-owned

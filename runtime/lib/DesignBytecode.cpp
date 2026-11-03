@@ -4965,15 +4965,40 @@ extern "C" talos_rt_status talos_rt_v1_process_control(
     {
       std::lock_guard<std::recursive_mutex> lock(context->mutex);
       invalidateDesignReadyCohort(context);
-      // Compiled designs containing process.control are excluded from AOT.
-      // Keep the public ABI safe for external callers too: mutating or
-      // destroying actors still owned by a live generated plan would leave
-      // its ready/deadline inventory stale.
-      if (context->nativeSchedulePlan)
-        return TALOS_RT_TIER_UNAVAILABLE;
       bool native = (logicalProcess & TALOS_RT_LOGICAL_PROCESS_NATIVE_TAG) != 0;
       uint64_t nativeToken =
           logicalProcess & ~TALOS_RT_LOGICAL_PROCESS_NATIVE_TAG;
+      // The compiler keeps every process a handle can name (process::self()
+      // callers, IEEE 1800-2023 9.7) and every controller out of the
+      // generated plan (two-tier P1e), so control targets runtime processes
+      // and their descendants (fork children). Mutating an actor still owned
+      // by a live generated plan, including one whose slot is parked while it
+      // waits in a called task (13.3), would leave the plan's
+      // ready/deadline inventory or slot binding stale: refuse that, also for
+      // external callers of this ABI.
+      // kill() also ends the target's descendants (9.7), so check the whole
+      // tree it would cancel.
+      if (context->nativeSchedulePlan) {
+        auto planOwned = [](const ScheduledProcess &process) {
+          return process.aotActorSlot != UINT32_MAX ||
+                 process.suspendedAOTActorSlot != UINT32_MAX;
+        };
+        if (native)
+          if (const ScheduledProcess *target =
+                  findScheduledProcess(context, nativeToken);
+              target && planOwned(*target))
+            return TALOS_RT_TIER_UNAVAILABLE;
+        if (kind == TALOS_RT_PROCESS_CONTROL_KILL) {
+          bool foundRoot = false;
+          std::unordered_set<uint64_t> tree =
+              talos_rt_collect_process_tree_unlocked(context, logicalProcess,
+                                                     foundRoot);
+          for (const ScheduledProcess &process : context->scheduledProcesses)
+            if (process.instance && planOwned(process) &&
+                tree.count(TALOS_RT_LOGICAL_PROCESS_NATIVE_TAG | process.token))
+              return TALOS_RT_TIER_UNAVAILABLE;
+        }
+      }
       bool terminated =
           native ? context->terminatedNativeProcesses.count(nativeToken) != 0
                  : context->terminatedDesignTasks.count(logicalProcess) != 0;
