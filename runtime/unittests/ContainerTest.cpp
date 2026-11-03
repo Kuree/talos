@@ -1395,6 +1395,56 @@ TEST_F(ManagedValueTest,
   EXPECT_EQ(talos_rt_v1_gc_root_pop(lane, &outerRoot), TALOS_RT_OK);
 }
 
+TEST_F(ManagedValueTest, QueueGrowsAcrossCapacitiesOnEveryInsertPath) {
+  // Two-tier B5: appends, front and back pushes and inserts grow the queue
+  // only when the snapshot shows no spare slot; the element order matches a
+  // reference deque across several capacity doublings. (Bounded queues:
+  // QueueBoundsAreMaximumLegalIndices.)
+  talos_rt_object_v1 *queue = nullptr;
+  ASSERT_EQ(talos_rt_v1_queue_create(lane, &wordElement, UINT64_MAX, &queue),
+            TALOS_RT_OK);
+  talos_rt_gc_root_v1 queueRoot{};
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &queueRoot, &queue), TALOS_RT_OK);
+  std::vector<uint64_t> reference;
+  // Growth happens at sizes 4, 8, 16, 32 and 64 (size == value here); the
+  // selector puts append, front push, insert, back push and append there.
+  for (uint64_t value = 0; value != 70; ++value) {
+    switch ((value / 5) % 4) {
+    case 0:
+      ASSERT_EQ(talos_rt_v1_container_write(lane, queue, reference.size(),
+                                            &value, nullptr),
+                TALOS_RT_OK);
+      reference.push_back(value);
+      break;
+    case 1:
+      ASSERT_EQ(talos_rt_v1_queue_push(lane, queue, 1, &value, nullptr),
+                TALOS_RT_OK);
+      reference.insert(reference.begin(), value);
+      break;
+    case 2:
+      ASSERT_EQ(talos_rt_v1_queue_push(lane, queue, 0, &value, nullptr),
+                TALOS_RT_OK);
+      reference.push_back(value);
+      break;
+    default: {
+      int64_t index = static_cast<int64_t>(reference.size() / 2);
+      ASSERT_EQ(talos_rt_v1_queue_insert(lane, queue, index, &value, nullptr),
+                TALOS_RT_OK);
+      reference.insert(reference.begin() + index, value);
+      break;
+    }
+    }
+    ASSERT_EQ(talos_rt_v1_container_size(queue), reference.size());
+  }
+  for (uint64_t index = 0; index != reference.size(); ++index) {
+    uint64_t value = UINT64_MAX;
+    ASSERT_EQ(talos_rt_v1_container_read(queue, index, &value, nullptr),
+              TALOS_RT_OK);
+    EXPECT_EQ(value, reference[index]) << index;
+  }
+  EXPECT_EQ(talos_rt_v1_gc_root_pop(lane, &queueRoot), TALOS_RT_OK);
+}
+
 TEST_F(ManagedValueTest, QueueRingOperationsPreserveLogicalOrder) {
   talos_rt_object_v1 *queue = nullptr;
   ASSERT_EQ(talos_rt_v1_queue_create(lane, &wordElement, UINT64_MAX, &queue),

@@ -5727,9 +5727,13 @@ talos_rt_v1_container_write(talos_rt_gc_lane_v1 *lane,
       warnIgnoredQueueWrite(true);
       return TALOS_RT_OK;
     }
-    status = ensureCapacity(lane, container, snapshot.size + 1);
-    if (status != TALOS_RT_OK)
-      return status;
+    // Grow only when the snapshot has no spare slot; the write below
+    // rechecks the capacity under the object lock either way (two-tier B5).
+    if (snapshot.capacity <= snapshot.size) {
+      status = ensureCapacity(lane, container, snapshot.size + 1);
+      if (status != TALOS_RT_OK)
+        return status;
+    }
   }
   std::vector<uint8_t> prepared;
   status = prepareElementValue(lane, talos_rt_managed_object_context(container),
@@ -6008,9 +6012,12 @@ static talos_rt_status queuePushImpl(talos_rt_gc_lane_v1 *lane,
     return status == TALOS_RT_OK ? TALOS_RT_INVALID_ARGUMENT : status;
   if (queueIsFull(snapshot))
     return TALOS_RT_OK;
-  status = ensureCapacity(lane, queue, snapshot.size + 1);
-  if (status != TALOS_RT_OK)
-    return status;
+  // The access below rechecks the capacity under the object lock.
+  if (snapshot.capacity <= snapshot.size) {
+    status = ensureCapacity(lane, queue, snapshot.size + 1);
+    if (status != TALOS_RT_OK)
+      return status;
+  }
   std::vector<uint8_t> prepared;
   status = prepareElementValue(lane, talos_rt_managed_object_context(queue),
                                snapshot.element, value, unknown, prepared);
@@ -6361,9 +6368,12 @@ extern "C" talos_rt_status talos_rt_v1_queue_insert(talos_rt_gc_lane_v1 *lane,
     return status == TALOS_RT_OK ? TALOS_RT_INVALID_ARGUMENT : status;
   if (static_cast<uint64_t>(index) > snapshot.size || queueIsFull(snapshot))
     return TALOS_RT_OK;
-  status = ensureCapacity(lane, queue, snapshot.size + 1);
-  if (status != TALOS_RT_OK)
-    return status;
+  // The access below rechecks the capacity under the object lock.
+  if (snapshot.capacity <= snapshot.size) {
+    status = ensureCapacity(lane, queue, snapshot.size + 1);
+    if (status != TALOS_RT_OK)
+      return status;
+  }
   std::vector<uint8_t> prepared;
   status = prepareElementValue(lane, talos_rt_managed_object_context(queue),
                                snapshot.element, value, unknown, prepared);
