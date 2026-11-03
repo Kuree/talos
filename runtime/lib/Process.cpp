@@ -949,13 +949,23 @@ nativeWaitReadyImpl(talos_rt_context &context,
   case TALOS_RT_SUSPEND_MAILBOX: {
     if (wait->count != 1)
       return false;
+    uint64_t generation = talos_rt_mailbox_generation(context);
+    if (talos_rt_mailbox_wait_unchanged(generation, process.waitGenerations))
+      return false;
+    talos_rt_object_v1 *mailbox =
+        talos_rt_object_from_managed_word(entries[0].stable_id);
     bool ready = false;
-    talos_rt_status status = talos_rt_mailbox_wait_ready(
-        talos_rt_object_from_managed_word(entries[0].stable_id), wait->flags,
-        ready);
-    if constexpr (RecordSchedulerEffects)
+    talos_rt_status status =
+        talos_rt_mailbox_wait_ready(mailbox, wait->flags, ready);
+    if constexpr (RecordSchedulerEffects) {
       if (status != TALOS_RT_OK)
         context.schedulerStatus = status;
+      else if (!ready)
+        // The scheduler's own record (the inventory is not const).
+        talos_rt_mailbox_wait_note_unready(
+            context, mailbox, generation,
+            const_cast<std::vector<uint64_t> &>(process.waitGenerations));
+    }
     return status == TALOS_RT_OK && ready;
   }
   case TALOS_RT_SUSPEND_SEMAPHORE: {

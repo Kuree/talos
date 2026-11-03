@@ -18611,6 +18611,146 @@ TEST(SampledValues, UsesBoundedGatedPerProcessHistory) {
   talos_rt_v1_context_destroy(context);
 }
 
+TEST(RuntimeInternals, MailboxWaitsRepollOnlyAfterAMailboxPutOrGet) {
+  // Two-tier B5: a mailbox wait found not ready records the mailbox
+  // generation and is not polled again until a successful put or get moves
+  // it; then native processes and design tasks see the new state.
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  talos_rt_gc_lane_v1 *lane = nullptr;
+  ASSERT_EQ(talos_rt_v1_gc_lane_create(context, &lane), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_gc_lane_enter(lane), TALOS_RT_OK);
+  talos_rt_object_v1 *mailbox = nullptr;
+  ASSERT_EQ(talos_rt_v1_mailbox_create_typed(
+                lane, 1, TALOS_RT_ELEMENT_BITS, 0, sizeof(uint32_t),
+                alignof(uint32_t), 32, nullptr, 0, 1, &mailbox),
+            TALOS_RT_OK);
+  talos_rt_gc_root_v1 mailboxRoot{};
+  ASSERT_EQ(talos_rt_v1_gc_root_push(lane, &mailboxRoot, &mailbox),
+            TALOS_RT_OK);
+  struct WaitRecord {
+    talos_rt_wait_record_v1 header;
+    talos_rt_wait_entry_v1 entry;
+  };
+  auto makeWait = [&](uint32_t predicate) {
+    return WaitRecord{
+        {TALOS_RT_VERSION, TALOS_RT_SUSPEND_MAILBOX, predicate, 1, 0, 0},
+        {talos_rt_managed_word_from_object(mailbox), TALOS_RT_WAIT_EDGE_NONE,
+         0}};
+  };
+  std::array<WaitRecord, 2> nativeWaits{
+      makeWait(TALOS_RT_WAIT_MAILBOX_NOT_EMPTY),
+      makeWait(TALOS_RT_WAIT_MAILBOX_NOT_FULL)};
+  const talos_rt_frame_field_v1 field{TALOS_RT_FRAME_WAIT,
+                                      TALOS_RT_FRAME_FIELD_FLAGS_NONE,
+                                      0,
+                                      sizeof(WaitRecord),
+                                      alignof(WaitRecord),
+                                      0};
+  const talos_rt_frame_layout_v1 layout{TALOS_RT_VERSION,
+                                        0,
+                                        sizeof(WaitRecord),
+                                        alignof(WaitRecord),
+                                        &field,
+                                        1,
+                                        0,
+                                        nullptr,
+                                        0};
+  talos_rt_process_descriptor_v1 descriptor{};
+  descriptor.frame_layout = &layout;
+  std::array<talos_rt_process_instance_v1, 2> instances{};
+  for (size_t index = 0; index != instances.size(); ++index) {
+    instances[index].descriptor = &descriptor;
+    instances[index].frame = &nativeWaits[index];
+    instances[index].frame_size = sizeof(WaitRecord);
+    ScheduledProcess process;
+    process.token = 21 + index;
+    process.started = true;
+    process.instance = &instances[index];
+    process.suspendKind = TALOS_RT_SUSPEND_MAILBOX;
+    process.queuedRegion = TALOS_RT_REGION_ACTIVE;
+    process.waitSize = sizeof(WaitRecord);
+    context->scheduledProcesses.push_back(std::move(process));
+  }
+  auto addDesign = [&](uint64_t id, uint32_t predicate) {
+    WaitRecord wait = makeWait(predicate);
+    ScheduledDesignTask task;
+    task.id = id;
+    task.started = true;
+    task.suspendKind = TALOS_RT_SUSPEND_MAILBOX;
+    task.queuedRegion = TALOS_RT_REGION_ACTIVE;
+    task.waitSize = sizeof(wait);
+    task.scratchOffset = sizeof(wait);
+    task.frame.resize(sizeof(wait));
+    std::memcpy(task.frame.data(), &wait, sizeof(wait));
+    context->scheduledDesignTaskIndices[id] =
+        context->scheduledDesignTasks.size();
+    context->designPollCandidates.insert(id);
+    context->scheduledDesignTasks.push_back(std::move(task));
+  };
+  // A selected (ready) design task stops the probe before execution.
+  auto designReady = [&] {
+    bool progress = false;
+    return talos_rt_run_one_design_task(context, UINT32_MAX, UINT32_MAX,
+                                        UINT64_MAX, &progress,
+                                        true) == TALOS_RT_TIER_UNAVAILABLE;
+  };
+  ScheduledProcess &notEmpty = context->scheduledProcesses[0];
+  ScheduledProcess &notFull = context->scheduledProcesses[1];
+
+  // Empty: the not-empty waits record the generation they saw.
+  addDesign(1, TALOS_RT_WAIT_MAILBOX_NOT_EMPTY);
+  EXPECT_FALSE(nativeProcessReady(*context, notEmpty));
+  EXPECT_EQ(notEmpty.waitGenerations.size(), 1u);
+  EXPECT_FALSE(designReady());
+  EXPECT_EQ(context->scheduledDesignTasks[0].waitGenerations.size(), 1u);
+  EXPECT_TRUE(nativeProcessReady(*context, notFull));
+  // A put moves the generation; both see the message.
+  uint32_t value = 7, success = 0;
+  ASSERT_EQ(
+      talos_rt_v1_mailbox_try_put(lane, mailbox, &value, nullptr, &success),
+      TALOS_RT_OK);
+  ASSERT_EQ(success, 1u);
+  EXPECT_TRUE(nativeProcessReady(*context, notEmpty));
+  EXPECT_TRUE(designReady());
+
+  // Full (bound 1): the not-full waits record; a get wakes them.
+  context->scheduledDesignTasks[0].terminated = true;
+  addDesign(2, TALOS_RT_WAIT_MAILBOX_NOT_FULL);
+  EXPECT_FALSE(nativeProcessReady(*context, notFull));
+  EXPECT_EQ(notFull.waitGenerations.size(), 1u);
+  EXPECT_FALSE(designReady());
+  uint32_t got = 0, present = 0;
+  ASSERT_EQ(talos_rt_v1_mailbox_try_get(mailbox, &got, nullptr, &present),
+            TALOS_RT_OK);
+  ASSERT_EQ(present, 1u);
+  EXPECT_EQ(got, value);
+  EXPECT_TRUE(nativeProcessReady(*context, notFull));
+  EXPECT_TRUE(designReady());
+
+  // Any mutation of the mailbox's queue moves the generation, also a direct
+  // queue push on its payload (no mailbox entry point).
+  context->scheduledDesignTasks[1].terminated = true;
+  EXPECT_FALSE(nativeProcessReady(*context, notEmpty));
+  EXPECT_EQ(notEmpty.waitGenerations.size(), 1u);
+  talos_rt_object_v1 *payload = nullptr;
+  ASSERT_EQ(talos_rt_builtin_class_payload(mailbox, BuiltinClassKind::Mailbox,
+                                           &payload),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_queue_push(lane, payload, 0, &value, nullptr),
+            TALOS_RT_OK);
+  EXPECT_TRUE(nativeProcessReady(*context, notEmpty));
+
+  context->scheduledProcesses.clear();
+  context->scheduledDesignTasks.clear();
+  context->scheduledDesignTaskIndices.clear();
+  context->designPollCandidates.clear();
+  EXPECT_EQ(talos_rt_v1_gc_root_pop(lane, &mailboxRoot), TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_gc_lane_leave(lane), TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_gc_lane_destroy(lane), TALOS_RT_OK);
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(RuntimeInternals, BuiltinClassWaitersSelectExactNativeAndDesignObjects) {
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);

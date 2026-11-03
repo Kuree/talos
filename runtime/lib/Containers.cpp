@@ -558,6 +558,18 @@ talos_rt_status finishContainerMutation(talos_rt_object_v1 *container,
   return status;
 }
 
+/// A queue mutation that may change a mailbox's readiness: also advances the
+/// owning context's mailbox generation, so its blocked puts and gets poll
+/// again (two-tier B5). Advancing without a change only costs a poll.
+talos_rt_status finishQueueMutation(talos_rt_object_v1 *container,
+                                    const ContainerHeader &snapshot,
+                                    talos_rt_status status) {
+  if (status == TALOS_RT_OK && snapshot.isMailbox)
+    if (talos_rt_context *context = talos_rt_managed_object_context(container))
+      context->mailboxGeneration.fetch_add(1, std::memory_order_acq_rel);
+  return finishContainerMutation(container, status);
+}
+
 template <typename Access>
 talos_rt_status accessBuffer(talos_rt_object_v1 *buffer, Access &&access) {
   if (!buffer)
@@ -5778,7 +5790,7 @@ talos_rt_v1_container_write(talos_rt_gc_lane_v1 *lane,
         return status;
       },
       &write);
-  return finishContainerMutation(container, status);
+  return finishQueueMutation(container, snapshot, status);
 }
 
 extern "C" talos_rt_status talos_rt_v1_container_write_checked(
@@ -5987,7 +5999,7 @@ talos_rt_v1_container_delete(talos_rt_object_v1 *container) {
         return TALOS_RT_OK;
       },
       nullptr);
-  return finishContainerMutation(container, status);
+  return finishQueueMutation(container, snapshot, status);
 }
 
 static talos_rt_status queuePushImpl(talos_rt_gc_lane_v1 *lane,
@@ -6073,7 +6085,7 @@ static talos_rt_status queuePushImpl(talos_rt_gc_lane_v1 *lane,
         return status;
       },
       &push);
-  return finishContainerMutation(queue, status);
+  return finishQueueMutation(queue, snapshot, status);
 }
 
 extern "C" talos_rt_status
@@ -6232,7 +6244,7 @@ extern "C" talos_rt_status talos_rt_v1_queue_pop(talos_rt_object_v1 *queue,
         return status;
       },
       &pop);
-  return finishContainerMutation(queue, status);
+  return finishQueueMutation(queue, snapshot, status);
 }
 
 extern "C" talos_rt_status
@@ -6419,7 +6431,7 @@ extern "C" talos_rt_status talos_rt_v1_queue_insert(talos_rt_gc_lane_v1 *lane,
         return status;
       },
       &insert);
-  return finishContainerMutation(queue, status);
+  return finishQueueMutation(queue, snapshot, status);
 }
 
 extern "C" talos_rt_status
@@ -6473,7 +6485,7 @@ talos_rt_v1_queue_delete_index(talos_rt_object_v1 *queue, int64_t index) {
         return status;
       },
       &remove);
-  return finishContainerMutation(queue, status);
+  return finishQueueMutation(queue, snapshot, status);
 }
 
 extern "C" talos_rt_status

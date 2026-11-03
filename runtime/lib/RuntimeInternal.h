@@ -2768,6 +2768,12 @@ struct talos_rt_context {
   std::unordered_map<uint64_t, uint64_t> processObjectIdentities;
   uint64_t nextProcessInsertionSequence = 1;
   uint64_t nextWaitSequence = 1;
+  // Advances with every successful mutation of a mailbox's queue, the only
+  // events that change a mailbox's readiness. A mailbox wait found not ready
+  // keeps the generation read before it polled (in its waitGenerations, which
+  // every wait arm clears) and is not polled again until this moves
+  // (two-tier B5).
+  std::atomic<uint64_t> mailboxGeneration{1};
   uint64_t activeDesignTaskID = 0;
   ScheduledDesignTask *activeDesignTask = nullptr;
   uint32_t activeDesignTaskPhase = 0;
@@ -3693,6 +3699,33 @@ uint64_t
 talos_rt_managed_object_extent(const talos_rt_object_v1 *object) noexcept;
 talos_rt_context *
 talos_rt_managed_object_context(const talos_rt_object_v1 *object) noexcept;
+
+/// The mailbox generation a readiness poll starts from: read it before the
+/// poll, so a mutation racing with the poll moves it past the record.
+inline uint64_t
+talos_rt_mailbox_generation(const talos_rt_context &context) noexcept {
+  return context.mailboxGeneration.load(std::memory_order_acquire);
+}
+/// Whether a mailbox wait found not ready at `generation`'s predecessor polls
+/// has seen no mailbox mutation since (its waitGenerations holds the
+/// generation read before that poll).
+inline bool
+talos_rt_mailbox_wait_unchanged(uint64_t generation,
+                                const std::vector<uint64_t> &generations) {
+  return generations.size() == 1 && generations.front() == generation;
+}
+/// Records that a mailbox wait polled at `generation` was not ready. Only a
+/// mailbox of the waiter's own context bumps that context's generation, so
+/// another context's mailbox keeps being polled; without memory for the
+/// record the wait keeps being polled too.
+inline void talos_rt_mailbox_wait_note_unready(
+    const talos_rt_context &context, talos_rt_object_v1 *mailbox,
+    uint64_t generation, std::vector<uint64_t> &generations) noexcept {
+  if (talos_rt_managed_object_context(mailbox) != &context)
+    return;
+  TALOS_RT_TRY { generations.assign(1, generation); }
+  TALOS_RT_CATCH_ALL { generations.clear(); }
+}
 /// Invalidates every thread's class dispatch memo. A destroyed context's
 /// descriptors may be freed and their addresses reused.
 void talos_rt_retire_dispatch_memos() noexcept;

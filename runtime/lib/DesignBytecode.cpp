@@ -6497,15 +6497,23 @@ inspectDesignTaskReadiness(talos_rt_context *context,
     } else if (task.suspendKind == TALOS_RT_SUSPEND_EVENT_ORDER) {
       eventOrderReady = task.waitOrderReady;
     } else if (task.suspendKind == TALOS_RT_SUSPEND_MAILBOX) {
-      if (wait->count == 1) {
-        talos_rt_status status = talos_rt_mailbox_wait_ready(
-            talos_rt_object_from_managed_word(entries[0].stable_id),
-            wait->flags, mailboxReady);
+      uint64_t generation = talos_rt_mailbox_generation(*context);
+      if (wait->count == 1 &&
+          !talos_rt_mailbox_wait_unchanged(generation, task.waitGenerations)) {
+        talos_rt_object_v1 *mailbox =
+            talos_rt_object_from_managed_word(entries[0].stable_id);
+        talos_rt_status status =
+            talos_rt_mailbox_wait_ready(mailbox, wait->flags, mailboxReady);
         if (status != TALOS_RT_OK) {
           if (recordSchedulerEffects)
             context->schedulerStatus = status;
           return status;
         }
+        if (recordSchedulerEffects && !mailboxReady)
+          // The scheduler's own record (the inventory is not const).
+          talos_rt_mailbox_wait_note_unready(
+              *context, mailbox, generation,
+              const_cast<std::vector<uint64_t> &>(task.waitGenerations));
       }
     } else if (task.suspendKind == TALOS_RT_SUSPEND_SEMAPHORE) {
       if (wait->count == 1 && wait->payload <= UINT32_MAX) {
