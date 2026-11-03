@@ -12,8 +12,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <iterator>
 #include <limits>
 #include <new>
+#include <numeric>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -3020,20 +3022,22 @@ bool validateImage(const Image &image, bool validateCode) {
     netRecords.push_back(net);
     previousNetEnd = net.valueOffset + net.planeSize;
   }
+  // Net records are sorted by offset and disjoint (checked above), so the
+  // only net that can hold `bit` is the last one starting at or below it.
   auto containingNet = [&](uint64_t bit, uint64_t width,
                            bool reversed) -> const CaptureRecord * {
-    for (const CaptureRecord &net : netRecords) {
-      if (bit < net.valueOffset || bit >= net.valueOffset + net.planeSize)
-        continue;
-      if (reversed) {
-        if (width <= bit - net.valueOffset + 1)
-          return &net;
-      } else if (width <= net.valueOffset + net.planeSize - bit) {
-        return &net;
-      }
+    auto after = std::upper_bound(netRecords.begin(), netRecords.end(), bit,
+                                  [](uint64_t value, const CaptureRecord &net) {
+                                    return value < net.valueOffset;
+                                  });
+    if (after == netRecords.begin())
       return nullptr;
-    }
-    return nullptr;
+    const CaptureRecord &net = *std::prev(after);
+    if (bit >= net.valueOffset + net.planeSize)
+      return nullptr;
+    if (reversed)
+      return width <= bit - net.valueOffset + 1 ? &net : nullptr;
+    return width <= net.valueOffset + net.planeSize - bit ? &net : nullptr;
   };
   uint64_t previousDriverEnd = 0;
   std::vector<CaptureRecord> driverRecords;
@@ -3097,18 +3101,47 @@ bool validateImage(const Image &image, bool validateCode) {
   };
   std::vector<ConnectivityRecord> connectionRecords;
   std::vector<ScalarConnection> scalarConnections;
-  std::unordered_map<uint64_t, uint64_t> connectivityParents;
-  auto findConnectivity = [&](uint64_t bit) {
-    connectivityParents.try_emplace(bit, bit);
-    uint64_t root = bit;
+  // Connectivity and net-kind checks run over every net bit, so they use
+  // dense net-bit indices (net k holds [netBase[k], netBase[k] + planeSize)):
+  // the records are sorted and disjoint, so the index is monotonic in the
+  // state bit and a component's root, its smallest index, is its smallest bit.
+  std::vector<uint64_t> netBase;
+  netBase.reserve(netRecords.size());
+  uint64_t totalNetBits = 0;
+  for (const CaptureRecord &net : netRecords) {
+    netBase.push_back(totalNetBits);
+    totalNetBits += net.planeSize;
+  }
+  // Nets are disjoint within the state, so the sum cannot overflow; a 32-bit
+  // host still cannot index more than SIZE_MAX words (the per-bit hash maps
+  // these vectors replace failed allocation the same way).
+  if (totalNetBits > std::numeric_limits<size_t>::max() / sizeof(uint64_t))
+    talos_rt_out_of_memory();
+  // Callers pass only bits already proven to lie in a net record.
+  auto netBitIndex = [&](uint64_t bit) {
+    auto after = std::upper_bound(netRecords.begin(), netRecords.end(), bit,
+                                  [](uint64_t value, const CaptureRecord &net) {
+                                    return value < net.valueOffset;
+                                  });
+    size_t net = static_cast<size_t>(std::prev(after) - netRecords.begin());
+    return netBase[net] + (bit - netRecords[net].valueOffset);
+  };
+  std::vector<uint64_t> connectivityParents(totalNetBits);
+  std::iota(connectivityParents.begin(), connectivityParents.end(),
+            uint64_t{0});
+  auto findRoot = [&](uint64_t index) {
+    uint64_t root = index;
     while (connectivityParents[root] != root)
       root = connectivityParents[root];
-    while (connectivityParents[bit] != bit) {
-      uint64_t next = connectivityParents[bit];
-      connectivityParents[bit] = root;
-      bit = next;
+    while (connectivityParents[index] != index) {
+      uint64_t next = connectivityParents[index];
+      connectivityParents[index] = root;
+      index = next;
     }
     return root;
+  };
+  auto findConnectivity = [&](uint64_t bit) {
+    return findRoot(netBitIndex(bit));
   };
   for (uint64_t index = 0; index != image.connectivityCount; ++index) {
     ConnectivityRecord connection = connectivityAt(image, index);
@@ -3247,26 +3280,35 @@ bool validateImage(const Image &image, bool validateCode) {
   // Mixed collapsed nets must retain the unique dominating scalar endpoint.
   // This is both the source of the simulated net's resolution kind (23.3.3.7)
   // and a trust-boundary check on the serialized dominance flags.
-  std::unordered_map<uint64_t, uint8_t> resolutionByBit;
-  for (const CaptureRecord &net : netRecords) {
-    uint8_t resolution = decodeNetResolution(net.argument);
+  std::vector<uint8_t> resolutionByIndex(totalNetBits);
+  for (size_t net = 0; net != netRecords.size(); ++net) {
+    uint8_t resolution = decodeNetResolution(netRecords[net].argument);
     if (resolution == 1)
       resolution = 0;
-    for (uint64_t bit = 0; bit != net.planeSize; ++bit)
-      resolutionByBit.emplace(net.valueOffset + bit, resolution);
+    std::fill_n(resolutionByIndex.begin() + netBase[net],
+                netRecords[net].planeSize, resolution);
   }
-  std::unordered_map<uint64_t, std::unordered_set<uint8_t>> componentKinds;
+  // Per component root: the set of resolution kinds (bit per kind, kinds are
+  // at most 9) and whether some edge lacks or carries serialized dominance.
+  std::vector<uint16_t> componentKinds(totalNetBits);
+  for (uint64_t index = 0; index != totalNetBits; ++index)
+    componentKinds[findRoot(index)] |=
+        static_cast<uint16_t>(1u << resolutionByIndex[index]);
+  auto mixed = [&](uint64_t root) {
+    return (componentKinds[root] & (componentKinds[root] - 1)) != 0;
+  };
+  constexpr uint8_t kIncompleteComponent = 1, kDirectedComponent = 2;
+  std::vector<uint8_t> componentFlags(totalNetBits);
+  // Dominance structure is consulted only for mixed components.
   std::unordered_map<uint64_t, std::vector<uint64_t>> componentBits;
   std::unordered_map<uint64_t, std::unordered_set<uint64_t>> dominatedBits;
   std::unordered_map<uint64_t,
                      std::unordered_map<uint64_t, std::vector<uint64_t>>>
       dominanceOutgoingByRoot;
-  std::unordered_set<uint64_t> incompleteComponents;
-  std::unordered_set<uint64_t> directedComponents;
-  for (const auto &[bit, resolution] : resolutionByBit) {
-    uint64_t root = findConnectivity(bit);
-    componentKinds[root].insert(resolution);
-    componentBits[root].push_back(bit);
+  for (uint64_t index = 0; index != totalNetBits; ++index) {
+    uint64_t root = findRoot(index);
+    if (mixed(root))
+      componentBits[root].push_back(index);
   }
   for (const ScalarConnection &connection : scalarConnections) {
     if (connection.passSwitchId)
@@ -3278,12 +3320,13 @@ bool validateImage(const Image &image, bool validateCode) {
     bool hasDominance = (connection.dominanceFlags & 2) != 0;
     bool rhsDominates = (connection.dominanceFlags & 4) != 0;
     uint64_t root = findConnectivity(connection.lhs);
-    if (!hasDominance)
-      incompleteComponents.insert(root);
-    if (hasDominance) {
-      directedComponents.insert(root);
-      uint64_t dominated = rhsDominates ? connection.lhs : connection.rhs;
-      uint64_t dominating = rhsDominates ? connection.rhs : connection.lhs;
+    componentFlags[root] |=
+        hasDominance ? kDirectedComponent : kIncompleteComponent;
+    if (hasDominance && mixed(root)) {
+      uint64_t dominated =
+          netBitIndex(rhsDominates ? connection.lhs : connection.rhs);
+      uint64_t dominating =
+          netBitIndex(rhsDominates ? connection.rhs : connection.lhs);
       dominatedBits[root].insert(dominated);
       dominanceOutgoingByRoot[root][dominated].push_back(dominating);
     }
@@ -3308,25 +3351,30 @@ bool validateImage(const Image &image, bool validateCode) {
     if (invalidWinner)
       return reject(__LINE__, "connectivity has an invalid dominant net type");
   }
-  std::unordered_map<uint64_t, uint8_t> effectiveResolutionByRoot;
-  for (const auto &[root, kinds] : componentKinds) {
-    if (kinds.size() <= 1) {
-      effectiveResolutionByRoot.emplace(root, *kinds.begin());
+  std::vector<uint8_t> effectiveResolutionByRoot(totalNetBits);
+  for (uint64_t root = 0; root != totalNetBits; ++root) {
+    if (connectivityParents[root] != root)
+      continue;
+    uint16_t kinds = componentKinds[root];
+    if (!mixed(root)) {
+      effectiveResolutionByRoot[root] =
+          static_cast<uint8_t>(__builtin_ctz(kinds));
       continue;
     }
     // Older images could only contain mixed wire/tri and uwire topology, and
     // did not serialize dominance. Uwire is intrinsically dominant over the
     // other supported kinds, so accepting those images is unambiguous.
-    bool legacyUWire = kinds.size() == 2 && kinds.count(0) && kinds.count(2);
-    if (incompleteComponents.count(root)) {
-      if (legacyUWire && !directedComponents.count(root)) {
-        effectiveResolutionByRoot.emplace(root, 2);
+    bool legacyUWire = kinds == ((1u << 0) | (1u << 2));
+    if (componentFlags[root] & kIncompleteComponent) {
+      if (legacyUWire && !(componentFlags[root] & kDirectedComponent)) {
+        effectiveResolutionByRoot[root] = 2;
         continue;
       }
       return reject(__LINE__, "mixed connectivity is missing port dominance");
     }
+    const std::vector<uint64_t> &bits = componentBits[root];
     std::unordered_map<uint64_t, uint64_t> incomingCount;
-    for (uint64_t bit : componentBits[root])
+    for (uint64_t bit : bits)
       incomingCount.emplace(bit, 0);
     const auto &dominanceOutgoing = dominanceOutgoingByRoot[root];
     for (const auto &[from, targets] : dominanceOutgoing)
@@ -3350,10 +3398,11 @@ bool validateImage(const Image &image, bool validateCode) {
     if (visited != incomingCount.size())
       return reject(__LINE__, "mixed connectivity has cyclic port dominance");
     std::optional<uint8_t> dominantKind;
-    for (uint64_t bit : componentBits[root]) {
-      if (dominatedBits[root].count(bit))
+    const std::unordered_set<uint64_t> &dominated = dominatedBits[root];
+    for (uint64_t bit : bits) {
+      if (dominated.count(bit))
         continue;
-      uint8_t kind = resolutionByBit.at(bit);
+      uint8_t kind = resolutionByIndex[bit];
       if (dominantKind && *dominantKind != kind)
         return reject(
             __LINE__,
@@ -3363,52 +3412,56 @@ bool validateImage(const Image &image, bool validateCode) {
     if (!dominantKind)
       return reject(__LINE__,
                     "mixed connectivity has ambiguous port dominance");
-    effectiveResolutionByRoot.emplace(root, *dominantKind);
+    effectiveResolutionByRoot[root] = *dominantKind;
   }
   // Every logical alias of one simulated-net bit must mature together. The
   // compiler normalizes each member to the dominating net's delay; enforce
-  // the same invariant at the bytecode trust boundary.
-  std::unordered_map<uint64_t, std::optional<std::array<uint64_t, 3>>>
-      componentDelays;
-  for (const CaptureRecord &net : netRecords) {
-    bool delayed = (net.argument & (uint32_t{1} << 3)) != 0;
-    bool bitwise = (net.argument & (uint32_t{1} << 4)) != 0;
-    for (uint64_t bit = 0; bit != net.planeSize; ++bit) {
-      std::optional<std::array<uint64_t, 3>> delay;
-      if (delayed) {
-        const uint8_t *triple = image.data + image.constants +
-                                net.unknownOffset + (bitwise ? bit * 24 : 0);
-        uint64_t rise = read64(triple);
-        if (!bitwise || rise != UINT64_MAX) {
-          delay = std::array<uint64_t, 3>{rise, read64(triple + 8),
-                                          read64(triple + 16)};
-          if ((*delay)[2] == UINT64_MAX &&
-              effectiveResolutionByRoot.at(
-                  findConnectivity(net.valueOffset + bit)) != 9)
-            return reject(__LINE__,
-                          "omitted charge decay requires an effective trireg");
+  // the same invariant at the bytecode trust boundary. Without delayed nets
+  // every member has the same (absent) delay.
+  if (std::any_of(netRecords.begin(), netRecords.end(),
+                  [](const CaptureRecord &net) {
+                    return (net.argument & (uint32_t{1} << 3)) != 0;
+                  })) {
+    std::unordered_map<uint64_t, std::optional<std::array<uint64_t, 3>>>
+        componentDelays;
+    for (size_t index = 0; index != netRecords.size(); ++index) {
+      const CaptureRecord &net = netRecords[index];
+      bool delayed = (net.argument & (uint32_t{1} << 3)) != 0;
+      bool bitwise = (net.argument & (uint32_t{1} << 4)) != 0;
+      for (uint64_t bit = 0; bit != net.planeSize; ++bit) {
+        uint64_t root = findRoot(netBase[index] + bit);
+        std::optional<std::array<uint64_t, 3>> delay;
+        if (delayed) {
+          const uint8_t *triple = image.data + image.constants +
+                                  net.unknownOffset + (bitwise ? bit * 24 : 0);
+          uint64_t rise = read64(triple);
+          if (!bitwise || rise != UINT64_MAX) {
+            delay = std::array<uint64_t, 3>{rise, read64(triple + 8),
+                                            read64(triple + 16)};
+            if ((*delay)[2] == UINT64_MAX &&
+                effectiveResolutionByRoot[root] != 9)
+              return reject(
+                  __LINE__,
+                  "omitted charge decay requires an effective trireg");
+          }
         }
+        auto [found, inserted] = componentDelays.try_emplace(root, delay);
+        if (!inserted && found->second != delay)
+          return reject(
+              __LINE__,
+              "collapsed net members have unequal propagation delays");
       }
-      uint64_t root = findConnectivity(net.valueOffset + bit);
-      auto [found, inserted] = componentDelays.try_emplace(root, delay);
-      if (!inserted && found->second != delay)
-        return reject(__LINE__,
-                      "collapsed net members have unequal propagation delays");
     }
   }
   // A uwire component has at most one design-lifetime driver for every
   // connected scalar equivalence class, including aliases of its target.
-  std::unordered_set<uint64_t> uwireComponents;
-  for (const auto &[root, resolution] : effectiveResolutionByRoot)
-    if (resolution == 2)
-      uwireComponents.insert(root);
   std::unordered_map<uint64_t, uint32_t> uwireDrivers;
   for (const CaptureRecord &driver : driverRecords) {
     if ((driver.argument & (uint32_t{1} << 11)) != 0)
       continue;
     for (uint64_t bit = 0; bit != driver.planeSize; ++bit) {
       uint64_t root = findConnectivity(driver.unknownOffset + bit);
-      if (!uwireComponents.count(root))
+      if (effectiveResolutionByRoot[root] != 2)
         continue;
       if (++uwireDrivers[root] > 1)
         return reject(__LINE__,

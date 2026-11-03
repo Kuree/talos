@@ -6031,6 +6031,49 @@ TEST(DesignBytecode, SupplyDominanceDisablesCollapsedUWireDriverLimit) {
   talos_rt_v1_context_destroy(context);
 }
 
+// Two-tier B4: the net-component checks run over dense net-bit indices. Each
+// case changes one field of an accepted image and must be rejected.
+TEST(DesignBytecode, RejectsInvalidCollapsedNetComponents) {
+  auto accepted = [](std::vector<uint8_t> bytes, uint64_t stateBits = 195) {
+    put64(bytes, 32, imageChecksum(bytes));
+    Fixture fixture;
+    fixture.bytecode = std::move(bytes);
+    fixture.execution.bytecode = fixture.bytecode.data();
+    fixture.execution.bytecode_size = fixture.bytecode.size();
+    fixture.execution.state_bit_count = stateBits;
+    fixture.execution.checksum = imageChecksum(fixture.bytecode);
+    talos_rt_context *context = nullptr;
+    talos_rt_status status =
+        talos_rt_v1_context_create_for_design(&fixture.execution, &context);
+    if (status == TALOS_RT_OK)
+      talos_rt_v1_context_destroy(context);
+    return status == TALOS_RT_OK;
+  };
+  // Both drivers reach one effective uwire component (IEEE 1800-2023 6.6.2).
+  EXPECT_TRUE(accepted(makeMixedUWireDriverBytecode(false)));
+  EXPECT_FALSE(accepted(makeMixedUWireDriverBytecode(true)));
+
+  // Mixed wand/wor aliases must carry the port dominance that selects the
+  // collapsed net's kind (23.3.3.7).
+  std::vector<uint8_t> wired = makeMixedWiredDriverBytecode(false);
+  EXPECT_TRUE(accepted(wired, 260));
+  wired[wired.size() - 32 + 26] = 0;
+  EXPECT_FALSE(accepted(wired, 260));
+
+  // A wire endpoint cannot dominate a wand endpoint.
+  std::vector<uint8_t> wand = makeConnectedDriverBytecode();
+  size_t state = get64(wand, 168);
+  size_t connectivity = get64(wand, 184);
+  put32(wand, state + 32 + 4, 1u | resolutionFlags(3, false));
+  put32(wand, state + 64 + 4, driverFlags(6, 6) | resolutionFlags(3, true));
+  wand[connectivity + 24] = 0;
+  wand[connectivity + 25] = 3;
+  wand[connectivity + 26] = 6;
+  EXPECT_TRUE(accepted(wand));
+  wand[connectivity + 26] = 2;
+  EXPECT_FALSE(accepted(wand));
+}
+
 struct VPILifecycleProbe {
   int calls = 0;
   int lastReason = 0;
