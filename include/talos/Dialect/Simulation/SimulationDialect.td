@@ -328,6 +328,11 @@ def TalosSimulationDialect : Dialect {
     // region (IEEE 1800-2023 21.2.2): fire-and-forget, a cold runtime leaf of
     // the spawning activation.
     "::mlir::UnitAttr":$postponed_display,
+    // A net or storage whose continuous copy was forwarded into its readers
+    // while a waveform dump may name it (IEEE 1800-2023 21.7): its value at the
+    // end of every time slot is the bits [low, low + width) of the source root
+    // [is_net, source_id, low]. The design database points its name there.
+    "::mlir::DenseI64ArrayAttr":$waveform_source,
     "::mlir::UnitAttr":$persistent_repetition_all_matches,
     "::mlir::UnitAttr":$persistent_repetition_antecedent,
     "::mlir::UnitAttr":$persistent_repetition_dfa,

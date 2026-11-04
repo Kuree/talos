@@ -424,6 +424,7 @@ using PersistentImplicationHandoff =
     TalosSimulationDialect::PersistentImplicationHandoffAttrHelper;
 using PersistentMonitor = TalosSimulationDialect::PersistentMonitorAttrHelper;
 using PostponedDisplay = TalosSimulationDialect::PostponedDisplayAttrHelper;
+using WaveformSource = TalosSimulationDialect::WaveformSourceAttrHelper;
 using PersistentRepetitionAllMatches =
     TalosSimulationDialect::PersistentRepetitionAllMatchesAttrHelper;
 using PersistentRepetitionAntecedent =

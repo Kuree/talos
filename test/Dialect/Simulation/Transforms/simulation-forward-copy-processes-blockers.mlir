@@ -455,11 +455,14 @@ module {
 
 // -----
 
-// $dumpvars selects nets by scope and depth, so any net may be dumped (21.7).
-// CENSUS-LABEL: talos forward-copies: processes=4 copies=1 sinks=1 eligible=0
-// CENSUS: blocked: count=1 reason=waveform dump
+// $dumpvars may name any net (21.7) and records its value at the end of each
+// time slot (4.4.2.9). A copy of one whole source range is forwarded anyway:
+// the net keeps a waveform_source naming those bits [is_net, id, low], which
+// the design database follows.
+// CENSUS-LABEL: talos forward-copies: processes=4 copies=1 sinks=1 eligible=1 ready=1
 // KEEP-LABEL: simulation.design @waveform
-// KEEP: simulation.spawn @copy
+// KEEP: simulation.net.decl 0 {{.*}}simulation.waveform_source = array<i64: 0, 0, 0>
+// KEEP-NOT: simulation.spawn @copy
 module {
   simulation.design @waveform {
     simulation.scope.decl 0
@@ -501,6 +504,119 @@ module {
       %levels = arith.constant 0 : i64
       %scope = simulation.bytes.constant ""
       simulation.dump.vars %ctx, %levels, %scope : (!simulation.context, i64, !simulation.bytes) -> ()
+      simulation.return
+    }
+  }
+}
+
+// -----
+
+// A dumped net driven by an expression keeps its process: its value at a slot
+// end is no range of the source.
+// CENSUS-LABEL: talos forward-copies: processes=4 copies=1 sinks=1 eligible=0
+// CENSUS: blocked: count=1 reason=waveform dump
+// KEEP-LABEL: simulation.design @waveform_expression
+// KEEP-NOT: waveform_source
+// KEEP: simulation.spawn @copy
+module {
+  simulation.design @waveform_expression {
+    simulation.scope.decl 0
+    simulation.code_unit.decl 1 in 0 root_initializer hierarchy "root"
+    simulation.code_unit.decl 2 in 0 continuous hierarchy "copy"
+    simulation.code_unit.decl 3 in 0 always_comb hierarchy "reader"
+    simulation.code_unit.decl 4 in 0 initial hierarchy "writer"
+    simulation.storage.decl 0 in 0 : !simulation.logic<4> design
+    simulation.storage.decl 1 in 0 : !simulation.logic<4> design
+    simulation.net.decl 0 in 0 : !simulation.logic<4> design
+    simulation.driver.decl 0 in 0 drives 0 : !simulation.logic<4> design {driven_low = 0 : i64, driven_width = 4 : i64}
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
+      %s = simulation.context.storage %ctx[0] : !simulation.ref<!simulation.logic<4>>
+      %d = simulation.context.storage %ctx[1] : !simulation.ref<!simulation.logic<4>>
+      %n = simulation.context.net %ctx[0] : !simulation.net<!simulation.logic<4>>
+      %drv = simulation.context.driver %ctx[0] : !simulation.driver<!simulation.logic<4>>
+      %p0 = simulation.spawn @copy(%ctx, %s, %drv) : !simulation.context, !simulation.ref<!simulation.logic<4>>, !simulation.driver<!simulation.logic<4>> -> !simulation.process
+      %p1 = simulation.spawn @reader(%ctx, %n, %d) : !simulation.context, !simulation.net<!simulation.logic<4>>, !simulation.ref<!simulation.logic<4>> -> !simulation.process
+      %p2 = simulation.spawn @writer(%ctx, %s) : !simulation.context, !simulation.ref<!simulation.logic<4>> -> !simulation.process
+      simulation.return
+    }
+    simulation.func private @copy(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %src: !simulation.ref<!simulation.logic<4>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}, %drv: !simulation.driver<!simulation.logic<4>> {simulation.capture_kind = 5 : i32, simulation.descriptor_id = 0 : i64}) attributes {entry_kind = 7 : i32, code_unit_id = 2 : i64} {
+      cf.br ^body
+    ^body:
+      %v = simulation.ref.load %src : !simulation.ref<!simulation.logic<4>> -> !simulation.logic<4>
+      %n = simulation.logic.unary bit_not %v : (!simulation.logic<4>) -> !simulation.logic<4>
+      simulation.driver.drive %drv = %n : !simulation.driver<!simulation.logic<4>>, !simulation.logic<4>
+      simulation.suspend.change %src to ^body : !simulation.ref<!simulation.logic<4>>
+    }
+    simulation.func private @reader(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %in: !simulation.net<!simulation.logic<4>> {simulation.capture_kind = 4 : i32, simulation.descriptor_id = 0 : i64}, %out: !simulation.ref<!simulation.logic<4>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 1 : i64}) attributes {entry_kind = 4 : i32, code_unit_id = 3 : i64} {
+      cf.br ^body
+    ^body:
+      %v = simulation.net.read %in : !simulation.net<!simulation.logic<4>> -> !simulation.logic<4>
+      simulation.ref.store %v to %out : !simulation.logic<4>, !simulation.ref<!simulation.logic<4>>
+      simulation.suspend.change %in to ^body : !simulation.net<!simulation.logic<4>>
+    }
+    simulation.func private @writer(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %out: !simulation.ref<!simulation.logic<4>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}) attributes {entry_kind = 1 : i32, code_unit_id = 4 : i64} {
+      %c = simulation.logic.constant 5 : i4, 0 : i4 : !simulation.logic<4>
+      simulation.ref.store %c to %out : !simulation.logic<4>, !simulation.ref<!simulation.logic<4>>
+      %levels = arith.constant 0 : i64
+      %scope = simulation.bytes.constant ""
+      simulation.dump.vars %ctx, %levels, %scope : (!simulation.context, i64, !simulation.bytes) -> ()
+      simulation.return
+    }
+  }
+}
+
+// -----
+
+// Extended VCD shows a port net's own drivers and strengths (21.7.4), which a
+// forwarded copy no longer has: $dumpports keeps every dumped copy.
+// CENSUS-LABEL: talos forward-copies: processes=4 copies=1 sinks=1 eligible=0
+// CENSUS: blocked: count=1 reason=waveform dump
+// KEEP-LABEL: simulation.design @waveform_ports
+// KEEP-NOT: waveform_source
+// KEEP: simulation.spawn @copy
+module {
+  simulation.design @waveform_ports {
+    simulation.scope.decl 0
+    simulation.code_unit.decl 1 in 0 root_initializer hierarchy "root"
+    simulation.code_unit.decl 2 in 0 continuous hierarchy "copy"
+    simulation.code_unit.decl 3 in 0 always_comb hierarchy "reader"
+    simulation.code_unit.decl 4 in 0 initial hierarchy "writer"
+    simulation.storage.decl 0 in 0 : !simulation.logic<4> design
+    simulation.storage.decl 1 in 0 : !simulation.logic<4> design
+    simulation.net.decl 0 in 0 : !simulation.logic<4> design
+    simulation.driver.decl 0 in 0 drives 0 : !simulation.logic<4> design {driven_low = 0 : i64, driven_width = 4 : i64}
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
+      %s = simulation.context.storage %ctx[0] : !simulation.ref<!simulation.logic<4>>
+      %d = simulation.context.storage %ctx[1] : !simulation.ref<!simulation.logic<4>>
+      %n = simulation.context.net %ctx[0] : !simulation.net<!simulation.logic<4>>
+      %drv = simulation.context.driver %ctx[0] : !simulation.driver<!simulation.logic<4>>
+      %p0 = simulation.spawn @copy(%ctx, %s, %drv) : !simulation.context, !simulation.ref<!simulation.logic<4>>, !simulation.driver<!simulation.logic<4>> -> !simulation.process
+      %p1 = simulation.spawn @reader(%ctx, %n, %d) : !simulation.context, !simulation.net<!simulation.logic<4>>, !simulation.ref<!simulation.logic<4>> -> !simulation.process
+      %p2 = simulation.spawn @writer(%ctx, %s) : !simulation.context, !simulation.ref<!simulation.logic<4>> -> !simulation.process
+      simulation.return
+    }
+    simulation.func private @copy(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %src: !simulation.ref<!simulation.logic<4>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}, %drv: !simulation.driver<!simulation.logic<4>> {simulation.capture_kind = 5 : i32, simulation.descriptor_id = 0 : i64}) attributes {entry_kind = 7 : i32, code_unit_id = 2 : i64} {
+      cf.br ^body
+    ^body:
+      %v = simulation.ref.load %src : !simulation.ref<!simulation.logic<4>> -> !simulation.logic<4>
+      simulation.driver.drive %drv = %v : !simulation.driver<!simulation.logic<4>>, !simulation.logic<4>
+      simulation.suspend.change %src to ^body : !simulation.ref<!simulation.logic<4>>
+    }
+    simulation.func private @reader(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %in: !simulation.net<!simulation.logic<4>> {simulation.capture_kind = 4 : i32, simulation.descriptor_id = 0 : i64}, %out: !simulation.ref<!simulation.logic<4>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 1 : i64}) attributes {entry_kind = 4 : i32, code_unit_id = 3 : i64} {
+      cf.br ^body
+    ^body:
+      %v = simulation.net.read %in : !simulation.net<!simulation.logic<4>> -> !simulation.logic<4>
+      simulation.ref.store %v to %out : !simulation.logic<4>, !simulation.ref<!simulation.logic<4>>
+      simulation.suspend.change %in to ^body : !simulation.net<!simulation.logic<4>>
+    }
+    simulation.func private @writer(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %out: !simulation.ref<!simulation.logic<4>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}) attributes {entry_kind = 1 : i32, code_unit_id = 4 : i64} {
+      %c = simulation.logic.constant 5 : i4, 0 : i4 : !simulation.logic<4>
+      simulation.ref.store %c to %out : !simulation.logic<4>, !simulation.ref<!simulation.logic<4>>
+      %path = simulation.string.literal "ports.evcd"
+      %scope = simulation.string.literal ""
+      %scale = arith.constant -9 : i32
+      simulation.dump.ports %ctx, %path, %scope, %scale :
+          (!simulation.context, !simulation.string, !simulation.string, i32) -> ()
       simulation.return
     }
   }

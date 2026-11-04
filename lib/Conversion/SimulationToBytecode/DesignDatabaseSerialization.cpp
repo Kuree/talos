@@ -749,6 +749,59 @@ SmallVector<uint8_t> serializeDesignDatabase(
     return id * 4 + tag;
   };
 
+  // IEEE 1800-2023 21.7: a net or variable whose continuous copy was
+  // forwarded into its readers is never written again; at the end of each
+  // time slot its value is bits of its source (sim::metadata::WaveformSource,
+  // possibly through further forwarded copies), so its record names those
+  // canonical bits.
+  DenseMap<uint64_t, Operation *> forwardedStorage, forwardedNets;
+  for (Operation &operation : design.getBody().front()) {
+    if (!sim::has<sim::metadata::WaveformSource>(&operation))
+      continue;
+    if (auto storage = dyn_cast<sim::SimStorageDeclOp>(operation))
+      forwardedStorage[storage.getId()] = &operation;
+    else if (auto net = dyn_cast<sim::SimNetDeclOp>(operation))
+      forwardedNets[net.getId()] = &operation;
+  }
+  // Each forwarded copy names the source it read when it was forwarded, so
+  // the chain is acyclic and as long as the forwarding rounds that built it.
+  // A chain that does not end at a laid-out root is a compiler bug: report
+  // it rather than dump a stale or wrong range.
+  bool invalidWaveformSource = false;
+  auto stateOffsetOf = [&](bool isNet, uint64_t id) -> uint64_t {
+    uint64_t offset = 0;
+    Operation *forwarded = nullptr;
+    for (unsigned depth = 0;; ++depth) {
+      Operation *declaration =
+          (isNet ? forwardedNets : forwardedStorage).lookup(id);
+      if (!declaration)
+        break;
+      DenseI64ArrayAttr source =
+          sim::get<sim::metadata::WaveformSource>(declaration);
+      if (source.size() != 3 || source[1] < 0 || source[2] < 0 ||
+          depth == forwardedNets.size() + forwardedStorage.size()) {
+        declaration->emitOpError("has a malformed or cyclic waveform source");
+        invalidWaveformSource = true;
+        return 0;
+      }
+      forwarded = declaration;
+      isNet = source[0] != 0;
+      id = static_cast<uint64_t>(source[1]);
+      offset += static_cast<uint64_t>(source[2]);
+    }
+    const llvm::DenseMap<uint64_t, uint64_t> &offsets =
+        isNet ? netOffsets : storageOffsets;
+    auto found = offsets.find(id);
+    if (found == offsets.end()) {
+      if (forwarded) {
+        forwarded->emitOpError("waveform source has no state layout");
+        invalidWaveformSource = true;
+      }
+      return 0;
+    }
+    return found->second + offset;
+  };
+
   for (Operation &operation : design.getBody().front()) {
     if (auto scope = dyn_cast<sim::SimScopeDeclOp>(operation))
       scopes.push_back(scope);
@@ -805,7 +858,8 @@ SmallVector<uint8_t> serializeDesignDatabase(
           {TALOS_RT_DESIGN_RECORD_NET,
            sim::vpiKindForNet(identity.getVpiTypeAttr()), caps, stableID,
            identity.getScopeId(), identity.getHierarchicalName().str(),
-           identity.getType(), netOffsets.lookup(identity.getBackingNetId()),
+           identity.getType(),
+           stateOffsetOf(true, identity.getBackingNetId()),
            sourceFor(identity), true, identity});
     } else if (auto anchor = dyn_cast<sim::SimVPIObjectAnchorOp>(operation)) {
       if (!includeStatements)
@@ -1048,7 +1102,7 @@ SmallVector<uint8_t> serializeDesignDatabase(
                                  fallbackName("storage", storage.getId())))
                              .str(),
                          storage.getType(),
-                         storageOffsets.lookup(storage.getId()),
+                         stateOffsetOf(false, storage.getId()),
                          sourceFor(storage), true, storage});
     } else if (auto net = dyn_cast<sim::SimNetDeclOp>(operation)) {
       if (!isReflectableType(net.getType())) {
@@ -1069,7 +1123,7 @@ SmallVector<uint8_t> serializeDesignDatabase(
                              .value_or(net.getDebugName().value_or(
                                  fallbackName("net", net.getId())))
                              .str(),
-                         net.getType(), netOffsets.lookup(net.getId()),
+                         net.getType(), stateOffsetOf(true, net.getId()),
                          sourceFor(net), true, net});
     } else if (auto driver = dyn_cast<sim::SimDriverDeclOp>(operation)) {
       if (!isReflectableType(driver.getType()))
@@ -1106,9 +1160,8 @@ SmallVector<uint8_t> serializeDesignDatabase(
       bool wholeSource = wholePortConnections.count(port.getId()) != 0;
       if (wholeSource)
         caps |= TALOS_RT_DESIGN_CAP_PORT_WHOLE_SOURCE;
-      uint64_t sourceOffset = port.getSourceIsNet()
-                                  ? netOffsets.lookup(port.getSourceId())
-                                  : storageOffsets.lookup(port.getSourceId());
+      uint64_t sourceOffset =
+          stateOffsetOf(port.getSourceIsNet(), port.getSourceId());
       objects.push_back({TALOS_RT_DESIGN_RECORD_PORT,
                          static_cast<uint16_t>(VPIObjectKind::Port), caps,
                          port.getId(), port.getScopeId(),
@@ -1129,6 +1182,8 @@ SmallVector<uint8_t> serializeDesignDatabase(
            !internal, codeUnit});
     }
   }
+  if (invalidWaveformSource)
+    return {};
   if (scopes.empty())
     return {};
   // A nested call is an expression occurrence, not an invented statement.

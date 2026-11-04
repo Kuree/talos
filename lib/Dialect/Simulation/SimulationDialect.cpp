@@ -721,7 +721,7 @@ static const llvm::StringMap<discardable::PayloadCheck> &declarations() {
       metadata::PersistentImplicationActivation,
       metadata::PersistentImplicationAntecedentResult,
       metadata::PersistentImplicationHandoff, metadata::PersistentMonitor,
-      metadata::PostponedDisplay,
+      metadata::PostponedDisplay, metadata::WaveformSource,
       metadata::PersistentRepetitionAllMatches,
       metadata::PersistentRepetitionAntecedent,
       metadata::PersistentRepetitionDfa,

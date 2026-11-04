@@ -795,6 +795,9 @@ struct DesignState {
   std::map<Root, Type> types; // declared element types
   std::shared_ptr<const analysis::IsolatedWireDriverTopology> topology;
   bool waveforms = false;
+  /// $dumpports is present: its extended VCD shows each port's direction and
+  /// driving strengths (21.7.4), which a forwarded copy no longer has.
+  bool dumpPorts = false;
   /// Roots whose own update events are observed outside the processes:
   /// visible to VPI, toggle coverage.
   DenseSet<uint64_t> observed;
@@ -1023,7 +1026,7 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
       sink.block("nonpermanent storage");
     if (!copy->sink.net && state.observed.contains(keyOf(copy->sink)))
       sink.block("observable storage");
-    if (!copy->sink.net && state.waveforms)
+    if (!copy->sink.net && state.dumpPorts)
       sink.block("waveform dump");
     sink.pieces.push_back({copy->sinkLow, copy->width, copy});
     for (const SourceRead &read : copy->reads) {
@@ -1064,11 +1067,25 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
                 isa<sim::LogicType>(sim::getPackedScalarType(types[read.root])))
           sink.block("domain");
   }
+  // IEEE 1800-2023 21.7: a waveform dump may name any sink, and records its
+  // value at the end of each time slot (4.4.2.9). A copy of one whole source
+  // range holds that range's bits there, so the dumped name reads the source
+  // instead (waveform_source, which the design database follows). Any other
+  // sink keeps its process.
+  if (state.waveforms)
+    for (auto &[root, sink] : sinks) {
+      if (sink.blocked)
+        continue;
+      const Piece *piece = sink.pieces.size() == 1 ? &sink.pieces[0] : nullptr;
+      if (!piece || piece->low != 0 || piece->width != sink.width ||
+          !piece->copy->relocation || piece->copy->reads.size() != 1)
+        sink.block("waveform dump");
+    }
   // The net's value must be its drivers' (IEEE 1800-2023 6.6.1): a plain,
   // undelayed wire whose strong drivers partition it, with no collapsed
   // connection, user resolution or pass switch (the shared single-driver
-  // topology). Its own observers keep it: VPI, toggle coverage, and waveform
-  // dumps, whose scope/depth selections may name any net (21.7).
+  // topology). Its own observers keep it: VPI, toggle coverage, and extended
+  // VCD (21.7.4), whose port view needs the net's own drivers.
   for (sim::SimNetDeclOp decl : state.nets) {
     auto found = sinks.find(Root{true, uint64_t(decl.getId())});
     if (found == sinks.end())
@@ -1083,7 +1100,7 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
       sink.block("observable net");
     else if (cov::has<cov::ToggleObservable>(decl))
       sink.block("toggle coverage");
-    else if (state.waveforms)
+    else if (state.dumpPorts)
       sink.block("waveform dump");
   }
   // Declarations and operations that name a sink net by id: a driver that is
@@ -1597,7 +1614,12 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
   // only while it exists: once forwarded, its waiters watch these bits, so a
   // copy passes them on to the waiters of its own sink.
   transientsInvisible = [&](Root root, uint64_t low, uint64_t width) {
-    if (state.waveforms || state.observed.contains(keyOf(root)))
+    // A waveform dump samples each slot's final values (21.7, 4.4.2.9), so
+    // it sees no transient within a slot; extended VCD keeps its port view.
+    // $dumpall, $dumpon and $dumpoff record current values mid-slot (21.7.1);
+    // there a forwarded name may already show its source's new value where
+    // its copy would not have run yet, an order 4.7 permits.
+    if (state.dumpPorts || state.observed.contains(keyOf(root)))
       return false;
     for (const Watcher &watcher : watchersOf.lookup(keyOf(root))) {
       if (!overlaps(watcher.low, watcher.width, low, width))
@@ -2063,6 +2085,28 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
     }
     ++rewrittenWaits;
   }
+  // A dumped sink reads its source from now on (see waveform_source).
+  if (state.waveforms) {
+    DenseMap<uint64_t, Operation *> declarations;
+    for (Operation &op : design.getBody().front())
+      if (auto net = dyn_cast<sim::SimNetDeclOp>(op))
+        declarations[keyOf(Root{true, uint64_t(net.getId())})] = &op;
+      else if (auto storage = dyn_cast<sim::SimStorageDeclOp>(op))
+        declarations[keyOf(Root{false, uint64_t(storage.getId())})] = &op;
+    for (const Copy *copy : copies) {
+      if (!ready.count(copy->sink))
+        continue;
+      Operation *declaration = declarations.lookup(keyOf(copy->sink));
+      assert(declaration && copy->relocation && copy->reads.size() == 1 &&
+             "a forwarded dumped sink is one whole relocation");
+      const SourceRead &read = copy->reads.front();
+      sim::set<sim::metadata::WaveformSource>(
+          declaration,
+          DenseI64ArrayAttr::get(design.getContext(),
+                                 {int64_t(read.root.net), int64_t(read.root.id),
+                                  int64_t(copy->sourceLow)}));
+    }
+  }
   // The copies are dead: erase their spawns and bodies.
   SmallVector<sim::SimFuncOp> dead;
   for (const Copy *copy : copies) {
@@ -2135,6 +2179,8 @@ void TalosSimForwardCopyProcessesPass::runOnOperation() {
             sim::SimDumpFlushOp, sim::SimDumpPortsOp,
             sim::SimDumpPortsControlOp>(op))
       state.waveforms = true;
+    if (isa<sim::SimDumpPortsOp, sim::SimDumpPortsControlOp>(op))
+      state.dumpPorts = true;
     if (isa<sim::SimNetDeclOp, sim::SimStorageDeclOp, sim::SimPortDeclOp,
             sim::SimVPINetIdentityDeclOp>(op))
       return WalkResult::advance();
@@ -2151,16 +2197,14 @@ void TalosSimForwardCopyProcessesPass::runOnOperation() {
   });
   for (auto function : designBlock.getOps<sim::SimFuncOp>())
     if (!function.isExternal())
-      state.waveforms |=
-          function
-              .walk([](Operation *op) {
-                return isa<sim::SimDumpVarsOp, sim::SimDumpAllOp,
-                           sim::SimDumpControlOp, sim::SimDumpFlushOp,
-                           sim::SimDumpPortsOp, sim::SimDumpPortsControlOp>(op)
-                           ? WalkResult::interrupt()
-                           : WalkResult::advance();
-              })
-              .wasInterrupted();
+      function.walk([&](Operation *op) {
+        if (isa<sim::SimDumpVarsOp, sim::SimDumpAllOp, sim::SimDumpControlOp,
+                sim::SimDumpFlushOp, sim::SimDumpPortsOp,
+                sim::SimDumpPortsControlOp>(op))
+          state.waveforms = true;
+        if (isa<sim::SimDumpPortsOp, sim::SimDumpPortsControlOp>(op))
+          state.dumpPorts = true;
+      });
   // Normalize before indexing symbol users: even a branch can carry a
   // discardable symbol reference, and normalization can erase that branch.
   // Census mode uses the same normalized shapes, then restores the bodies so
