@@ -19,6 +19,7 @@
 #include <cstring>
 #include <ctime>
 #include <functional>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <memory>
@@ -296,6 +297,8 @@ struct EVCDSession {
   bool haveEmittedTime = false;
   uint64_t emittedTime = 0;
   std::string scratch;
+  // The output so far ends a line: a limit comment needs no line break.
+  bool atLineStart = true;
 };
 
 } // namespace
@@ -336,6 +339,8 @@ struct VCDTraceState {
 
   // Reused across records so emission never allocates in steady state.
   std::string scratch;
+  // The output so far ends a line: a limit comment needs no line break.
+  bool atLineStart = true;
 };
 
 struct EVCDTraceState {
@@ -356,6 +361,8 @@ void appendRaw(State &state, const char *data, size_t size) {
   if (!state.file)
     return;
   state.buffer.append(data, size);
+  if (size != 0)
+    state.atLineStart = data[size - 1] == '\n';
   if (state.buffer.size() >= kFlushThreshold) {
     std::fwrite(state.buffer.data(), 1, state.buffer.size(), state.file);
     state.buffer.clear();
@@ -373,6 +380,18 @@ template <typename State> void append(State &state, std::string_view text) {
   }
   state.writtenBytes += text.size();
   appendRaw(state, text.data(), text.size());
+}
+
+/// Appends one record built from `parts` at once, so a $dumplimit stops before
+/// the whole record or after it, never inside it (21.7.1.5, Syntax 21-20).
+/// The record is built in `state.scratch`: no part may view that buffer.
+template <typename State>
+void appendRecord(State &state, std::initializer_list<std::string_view> parts) {
+  std::string &record = state.scratch;
+  record.clear();
+  for (std::string_view part : parts)
+    record.append(part);
+  append(state, std::string_view(record));
 }
 
 template <typename State> void appendUnsigned(State &state, uint64_t value) {
@@ -419,9 +438,9 @@ void finishLimit(VCDTraceState &state) {
       (!state.limitReached && state.writtenBytes < state.limitBytes))
     return;
   state.limitReached = true;
-  std::string comment = "\n$comment dump limit of " +
-                        std::to_string(state.limitBytes) +
-                        " bytes reached $end\n";
+  std::string comment =
+      std::string(state.atLineStart ? "" : "\n") + "$comment dump limit of " +
+      std::to_string(state.limitBytes) + " bytes reached $end\n";
   appendRaw(state, comment.data(), comment.size());
   closeFile(state);
 }
@@ -949,14 +968,77 @@ void buildRanges(State &state, uint64_t stateBitCount, bool twoState) {
 // Emission
 //===----------------------------------------------------------------------===//
 
+/// Writes `value` in decimal ending just before `end`; returns its start.
+char *formatDecimal(uint64_t value, char *end) {
+  do {
+    *--end = static_cast<char>('0' + value % 10);
+    value /= 10;
+  } while (value != 0);
+  return end;
+}
+
 template <typename State> void emitTime(State &state, uint64_t time) {
   if (state.haveEmittedTime && state.emittedTime == time)
     return;
-  append(state, "#");
-  appendUnsigned(state, time);
-  append(state, "\n");
+  // `#`, at most 20 digits and a newline, as one record.
+  char text[24];
+  char *end = text + sizeof(text);
+  *--end = '\n';
+  char *begin = formatDecimal(time, end);
+  *--begin = '#';
+  append(state, std::string_view(
+                    begin, static_cast<size_t>(text + sizeof(text) - begin)));
   state.haveEmittedTime = true;
   state.emittedTime = time;
+}
+
+/// The eight binary digits of each byte value, most significant first.
+struct ByteDigits {
+  char digits[256][8];
+  constexpr ByteDigits() : digits() {
+    for (unsigned value = 0; value != 256; ++value)
+      for (unsigned bit = 0; bit != 8; ++bit)
+        digits[value][bit] =
+            static_cast<char>('0' + ((value >> (7 - bit)) & 1));
+  }
+};
+constexpr ByteDigits kByteDigits;
+
+/// Writes the binary digits of a known `value` without leading zeros (a zero
+/// value is "0", 21.7.2.2) to `out`; returns the end.
+char *formatKnownBinary(uint64_t value, char *out) {
+  if (value == 0) {
+    *out++ = '0';
+    return out;
+  }
+  unsigned digits = 64 - static_cast<unsigned>(__builtin_clzll(value));
+  unsigned head = (digits - 1) % 8 + 1;
+  unsigned shift = digits - head;
+  std::memcpy(out, kByteDigits.digits[(value >> shift) & 0xff] + (8 - head),
+              head);
+  out += head;
+  while (shift != 0) {
+    shift -= 8;
+    std::memcpy(out, kByteDigits.digits[(value >> shift) & 0xff], 8);
+    out += 8;
+  }
+  return out;
+}
+
+/// The `width` (at most 64) bits of `plane` starting at `bit`, bit 0 lowest.
+uint64_t loadBits(const uint8_t *plane, uint64_t bit, uint64_t width) {
+  const uint8_t *base = plane + bit / 8;
+  unsigned shift = static_cast<unsigned>(bit % 8);
+  size_t bytes = static_cast<size_t>((shift + width + 7) / 8);
+  uint64_t low = 0;
+  for (size_t index = 0; index != bytes && index != 8; ++index)
+    low |= uint64_t{base[index]} << (8 * index);
+  uint64_t value = low >> shift;
+  if (bytes > 8)
+    value |= uint64_t{base[8]} << (64 - shift);
+  if (width < 64)
+    value &= (uint64_t{1} << width) - 1;
+  return value;
 }
 
 // Emit one value record. Vectors drop redundant leading characters under the
@@ -980,48 +1062,83 @@ void emitValue(VCDTraceState &state, const TraceVariable &variable,
     }
     char text[40];
     int length = std::snprintf(text, sizeof(text), "r%.16g", value);
-    if (length > 0)
-      append(state, std::string_view(text, static_cast<size_t>(length)));
-    append(state, " ");
-    append(state, state.codeText[variable.code]);
-    append(state, "\n");
+    appendRecord(
+        state,
+        {std::string_view(text, length > 0 ? static_cast<size_t>(length) : 0),
+         " ", state.codeText[variable.code], "\n"});
     return;
   }
   if (variable.width == 1) {
-    char text[2] = {fourStateChar(bitAt(valuePlane, variable.sourceBit),
-                                  variable.fourState &&
-                                      bitAt(unknownPlane, variable.sourceBit)),
-                    '\0'};
-    append(state, std::string_view(text, 1));
-    append(state, state.codeText[variable.code]);
-    append(state, "\n");
+    const std::string &code = state.codeText[variable.code];
+    std::string &record = state.scratch;
+    record.resize(code.size() + 2);
+    record[0] = fourStateChar(bitAt(valuePlane, variable.sourceBit),
+                              variable.fourState &&
+                                  bitAt(unknownPlane, variable.sourceBit));
+    std::memcpy(record.data() + 1, code.data(), code.size());
+    record[code.size() + 1] = '\n';
+    append(state, std::string_view(record));
     return;
   }
-  std::string &bits = state.scratch;
-  bits.clear();
-  bits.reserve(static_cast<size_t>(variable.width));
-  for (uint64_t index = variable.width; index-- != 0;) {
-    uint64_t bit = variable.sourceBit + index;
-    bits.push_back(
-        fourStateChar(bitAt(valuePlane, bit),
-                      variable.fourState && bitAt(unknownPlane, bit)));
+  // The whole record `b<bits> <code>\n` is built in the scratch buffer and
+  // appended once. Up to 64 bits load as words rather than bit by bit.
+  const std::string &code = state.codeText[variable.code];
+  std::string &record = state.scratch;
+  record.resize(static_cast<size_t>(variable.width) + code.size() + 3);
+  char *text = record.data();
+  char *bits = text + 1;
+  size_t width = static_cast<size_t>(variable.width);
+  if (variable.width <= 64) {
+    uint64_t value = loadBits(valuePlane, variable.sourceBit, variable.width);
+    uint64_t unknown =
+        variable.fourState
+            ? loadBits(unknownPlane, variable.sourceBit, variable.width)
+            : 0;
+    if (unknown == 0) {
+      // A known value keeps no leading zero, or just "0" (Tables 21-8, 21-9).
+      text[0] = 'b';
+      char *out = formatKnownBinary(value, text + 1);
+      *out++ = ' ';
+      std::memcpy(out, code.data(), code.size());
+      out += code.size();
+      *out++ = '\n';
+      append(state, std::string_view(text, static_cast<size_t>(out - text)));
+      return;
+    }
+    for (size_t index = 0; index != width; ++index) {
+      unsigned bit = static_cast<unsigned>(width - 1 - index);
+      bits[index] = fourStateChar((value >> bit) & 1, (unknown >> bit) & 1);
+    }
+  } else {
+    for (size_t index = 0; index != width; ++index) {
+      uint64_t bit = variable.sourceBit + (width - 1 - index);
+      bits[index] =
+          fourStateChar(bitAt(valuePlane, bit),
+                        variable.fourState && bitAt(unknownPlane, bit));
+    }
   }
   size_t first = 0;
   char lead = bits[0];
   if (lead != '1') {
-    while (first + 1 < bits.size() && bits[first + 1] == lead)
+    while (first + 1 < width && bits[first + 1] == lead)
       ++first;
     // A known zero before X/Z is not redundant: dropping it would make the
-    // shorter value left-extend with X/Z instead of zero (Table 21-10's
+    // shorter value left-extend with X/Z instead of zero (Table 21-9's
     // `0X10` case). The last leading zero may be dropped only before a one.
-    if (lead == '0' && first + 1 < bits.size() && bits[first + 1] == '1')
+    if (lead == '0' && first + 1 < width && bits[first + 1] == '1')
       ++first;
   }
-  append(state, "b");
-  append(state, std::string_view(bits).substr(first));
-  append(state, " ");
-  append(state, state.codeText[variable.code]);
-  append(state, "\n");
+  // Shift the kept bits left over the dropped ones, behind the `b`.
+  char *out = text;
+  *out++ = 'b';
+  if (first != 0)
+    std::memmove(out, bits + first, width - first);
+  out += width - first;
+  *out++ = ' ';
+  std::memcpy(out, code.data(), code.size());
+  out += code.size();
+  *out++ = '\n';
+  append(state, std::string_view(text, static_cast<size_t>(out - text)));
 }
 
 // `$dumpoff` records every variable as X without disturbing the shadow, so the
@@ -1034,14 +1151,10 @@ void emitAllX(VCDTraceState &state) {
     if (variable.isReal)
       continue;
     if (variable.width == 1) {
-      append(state, "x");
-      append(state, state.codeText[variable.code]);
-      append(state, "\n");
+      appendRecord(state, {"x", state.codeText[variable.code], "\n"});
       continue;
     }
-    append(state, "bx ");
-    append(state, state.codeText[variable.code]);
-    append(state, "\n");
+    appendRecord(state, {"bx ", state.codeText[variable.code], "\n"});
   }
 }
 
@@ -1135,6 +1248,7 @@ talos_rt_status openFile(talos_rt_context *context, State &state,
   state.writtenBytes = 0;
   state.limitReached = false;
   state.buffer.clear();
+  state.atLineStart = true;
   // A $dumpfile after selections (one that replaces a closed file) dumps them.
   if (!state.selections.empty())
     armDumpSlotHook(context);
@@ -1624,7 +1738,8 @@ void closeEVCDFile(EVCDSession &state, uint64_t time) {
 void finishEVCDLimit(EVCDSession &state, uint64_t time) {
   if (!state.file || !state.limitReached)
     return;
-  std::string comment = "\n$comment dumpports limit of " +
+  std::string comment = std::string(state.atLineStart ? "" : "\n") +
+                        "$comment dumpports limit of " +
                         std::to_string(state.limitBytes) +
                         " bytes reached $end\n";
   appendRaw(state, comment.data(), comment.size());
@@ -1660,8 +1775,7 @@ talos_rt_status emitEVCDSlot(talos_rt_context *context, EVCDSession &state,
     return TALOS_RT_OK;
   } else if (!checkpoint.empty()) {
     emitTime(state, context->schedulerTime);
-    append(state, checkpoint);
-    append(state, "\n");
+    appendRecord(state, {checkpoint, "\n"});
     for (const TraceVariable &variable : state.variables)
       emitEVCDValue(state, variable, valuePlane, unknownPlane);
     append(state, "$end\n");

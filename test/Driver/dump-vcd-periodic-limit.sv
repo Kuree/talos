@@ -44,7 +44,9 @@ endmodule
 // SECOND-NEXT: #25
 // SECOND-NEXT: 1[[CLK]]
 // SECOND-NEXT: b11 [[CNT]]
-// SECOND-NEXT: #30
+// Value and time records are written whole: the #30 time stamp that would
+// pass the limit is dropped entirely, so the comment follows the last
+// complete record.
 // SECOND-NEXT: $comment dump limit of 250 bytes reached $end
 // SECOND-NOT: #
 

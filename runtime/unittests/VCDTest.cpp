@@ -1200,6 +1200,9 @@ TEST(VCD, HeaderLimitClosesImmediatelyAndDoesNotRetryPerSlot) {
 
   EXPECT_EQ(countOccurrences(text, "$comment dump limit of 8 bytes reached"),
             1u);
+  // The cut fell inside the header's `$date` line, so the comment starts a
+  // line of its own; a cut at a line end adds no blank line.
+  EXPECT_EQ(text, "$date\n\t\n$comment dump limit of 8 bytes reached $end\n");
   EXPECT_FALSE(talos_rt_dump_active_unlocked(fixture.context));
 }
 
