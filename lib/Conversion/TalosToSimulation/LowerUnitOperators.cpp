@@ -1153,10 +1153,12 @@ FailureOr<Value> UnitLowering::lowerBinary(semantic::SVBinaryExpressionOp op) {
   }
 
   if (kind == Binary::WildcardEquality || kind == Binary::WildcardInequality) {
+    Value loweredPattern = *rhs;
     auto compared = lowerTwoStatePatternComparison(
         builder, *lhs, children[1],
         kind == Binary::WildcardEquality ? sim::CompareKind::WildEq
-                                         : sim::CompareKind::WildNe);
+                                         : sim::CompareKind::WildNe,
+        [&]() -> FailureOr<Value> { return loweredPattern; });
     if (failed(compared))
       return failure();
     if (*compared)
@@ -2288,45 +2290,61 @@ UnitLowering::lowerToleranceBounds(semantic::SVValueRangeExpressionOp range,
       arith::AddIOp::create(builder, location, *base, *offset));
 }
 
-FailureOr<std::optional<Value>>
-lowerTwoStatePatternComparison(OpBuilder &builder, Value value,
-                               Operation *pattern, sim::CompareKind kind) {
+FailureOr<std::optional<Value>> lowerTwoStatePatternComparison(
+    OpBuilder &builder, Value value, Operation *pattern, sim::CompareKind kind,
+    function_ref<FailureOr<Value>()> lowerPattern) {
   auto type = dyn_cast<IntegerType>(value.getType());
   if (!type ||
       (kind != sim::CompareKind::WildEq && kind != sim::CompareKind::WildNe &&
        kind != sim::CompareKind::CaseZEq && kind != sim::CompareKind::CaseXZEq))
     return std::optional<Value>{};
-  auto spelling = getTwoStatePatternSpelling(pattern);
-  if (!spelling)
-    return std::optional<Value>{};
-  Location location = getSemanticLocation(pattern);
-  auto parsed = parseSVInteger(*spelling, type.getWidth(), location);
+  FailureOr<std::optional<TwoStatePattern>> parsed =
+      getTwoStatePattern(pattern, type.getWidth());
   if (failed(parsed))
     return failure();
-  APInt wildcard = kind == sim::CompareKind::CaseZEq
-                       ? parsed->value & parsed->unknown
-                       : parsed->unknown;
+  if (!*parsed)
+    return std::optional<Value>{};
+  const TwoStatePattern &bits = **parsed;
+  Location location = getSemanticLocation(pattern);
+  APInt wildcard = kind == sim::CompareKind::CaseZEq ? bits.value & bits.unknown
+                                                     : bits.unknown;
   // IEEE 1800-2023 12.5.1: only z is a do-not-care in casez. An x item bit
   // compares literally, and no two-state selector bit equals x, so the item
   // never matches rather than matching a projected zero.
-  if (kind == sim::CompareKind::CaseZEq &&
-      !(parsed->unknown & ~wildcard).isZero())
+  if (kind == sim::CompareKind::CaseZEq && !(bits.unknown & ~wildcard).isZero())
     return std::optional<Value>{arith::ConstantOp::create(
         builder, location, builder.getI1Type(),
         builder.getIntegerAttr(builder.getI1Type(), 0))};
   if (wildcard.isZero())
     return std::optional<Value>{};
-  auto constant = [&](const APInt &bits) {
+  auto constant = [&](const APInt &planes) {
     return arith::ConstantOp::create(builder, location, type,
-                                     builder.getIntegerAttr(type, bits));
+                                     builder.getIntegerAttr(type, planes));
   };
   Value masked =
       arith::AndIOp::create(builder, location, value, constant(~wildcard));
+  Value expected;
+  if ((bits.dynamic & ~wildcard).isZero()) {
+    expected = constant(bits.value & ~bits.unknown & ~wildcard);
+  } else {
+    // A non-constant operand supplies its bits at run time (11.4.6): mask the
+    // retained wildcard positions out of its value as well.
+    FailureOr<Value> runtime = lowerPattern();
+    if (failed(runtime))
+      return failure();
+    if ((*runtime).getType() != type) {
+      emitError(location) << "wildcard pattern operand does not normalize to "
+                             "the compared type";
+      return failure();
+    }
+    expected =
+        arith::AndIOp::create(builder, location, *runtime, constant(~wildcard));
+  }
   Value compared = arith::CmpIOp::create(
       builder, location,
       kind == sim::CompareKind::WildNe ? arith::CmpIPredicate::ne
                                        : arith::CmpIPredicate::eq,
-      masked, constant(parsed->value & ~parsed->unknown & ~wildcard));
+      masked, expected);
   return std::optional<Value>{compared};
 }
 
@@ -2513,8 +2531,18 @@ FailureOr<Value> UnitLowering::lowerInside(semantic::SVInsideExpressionOp op) {
 
   for (Operation *item : ArrayRef<Operation *>(children).drop_front()) {
     Location itemLocation = getSemanticLocation(item);
-    auto pattern = lowerTwoStatePatternComparison(builder, selector, item,
-                                                  sim::CompareKind::WildEq);
+    auto pattern = lowerTwoStatePatternComparison(
+        builder, selector, item, sim::CompareKind::WildEq,
+        [&]() -> FailureOr<Value> {
+          FailureOr<Value> candidate = lowerExpression(item);
+          if (failed(candidate))
+            return failure();
+          FailureOr<Value> normalized = convert(
+              *candidate, (*loweredSelector).getType(), false, itemLocation);
+          if (failed(normalized))
+            return failure();
+          return toPackedScalar(*normalized, itemLocation);
+        });
     if (failed(pattern))
       return failure();
     if (*pattern) {

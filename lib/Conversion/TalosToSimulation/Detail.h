@@ -312,17 +312,29 @@ getElaboratedConstantSpelling(::mlir::Operation *operation);
 void copyConstantSymbolValue(::mlir::Operation *reference,
                              ::mlir::Operation *symbol);
 
-/// Original X/Z pattern retained when a literal was projected to two-state,
-/// or composed from such literals by a constant concatenation or replication.
-std::optional<std::string>
-getTwoStatePatternSpelling(::mlir::Operation *operation);
+/// A wildcard pattern operand at a comparison width under two-state
+/// execution: the X/Z bits its source literals spelled (`unknown`, with z/?
+/// also set in `value`), and the bits that come from non-constant operands
+/// (`dynamic`), which are known at run time.
+struct TwoStatePattern {
+  ::llvm::APInt value;
+  ::llvm::APInt unknown;
+  ::llvm::APInt dynamic;
+};
+
+/// The retained pattern of a wildcard operand at `width` bits, or no value
+/// when the operand spells no X/Z bit.
+::mlir::FailureOr<std::optional<TwoStatePattern>>
+getTwoStatePattern(::mlir::Operation *operation, unsigned width);
 
 /// Lower a retained wildcard pattern to an integer mask comparison. Returns
 /// no value when ordinary expression lowering should handle the comparison.
-::mlir::FailureOr<std::optional<::mlir::Value>>
-lowerTwoStatePatternComparison(::mlir::OpBuilder &builder, ::mlir::Value value,
-                               ::mlir::Operation *pattern,
-                               sim::CompareKind kind);
+/// `lowerPattern` yields the pattern operand's run-time value at `value`'s
+/// type; it is called, once, only when the pattern has non-constant bits.
+::mlir::FailureOr<std::optional<::mlir::Value>> lowerTwoStatePatternComparison(
+    ::mlir::OpBuilder &builder, ::mlir::Value value,
+    ::mlir::Operation *pattern, sim::CompareKind kind,
+    ::llvm::function_ref<::mlir::FailureOr<::mlir::Value>()> lowerPattern);
 
 /// Self-determined width of an unsized based literal whose most significant
 /// four-state bit is unknown, or nothing for any other node. IEEE 1800-2017

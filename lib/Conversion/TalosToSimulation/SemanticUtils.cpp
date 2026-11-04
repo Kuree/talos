@@ -344,6 +344,13 @@ std::optional<unsigned> packedSemanticWidth(Operation *expression) {
   return width;
 }
 
+bool isSignedExpression(Operation *expression) {
+  if (auto isSigned = expression->getAttrOfType<BoolAttr>("is_signed"))
+    return isSigned.getValue();
+  auto type = expression->getAttrOfType<TypeAttr>("semantic_type");
+  return type && isSignedSemanticType(type.getValue());
+}
+
 /// A replication whose count folded to zero: IEEE 1800-2023 11.4.12.1 gives it
 /// a size of zero and ignores it inside the enclosing concatenation.
 bool isZeroSizeReplication(Operation *operation) {
@@ -353,115 +360,153 @@ bool isZeroSizeReplication(Operation *operation) {
   return semanticType && isa<semantic::VoidType>(semanticType.getValue());
 }
 
-std::optional<ParsedConstant> composeSourceBits(Operation *operation);
-
-/// Source four-state bits of a constant operand at its self-determined width.
-std::optional<ParsedConstant> sourceOperandBits(Operation *operand) {
-  if (isa<semantic::SVConcatenationExpressionOp,
-          semantic::SVReplicationExpressionOp>(operand))
-    return composeSourceBits(operand);
-  std::optional<std::string> spelling = getTwoStatePatternSpelling(operand);
-  if (!spelling)
-    if (std::optional<StringRef> constant = getConstantSpelling(operand))
-      spelling = constant->str();
-  std::optional<unsigned> width = packedSemanticWidth(operand);
-  if (!spelling || !width)
-    return std::nullopt;
-  FailureOr<ParsedConstant> parsed =
-      parseSVInteger(*spelling, *width, getSemanticLocation(operand));
-  if (failed(parsed))
-    return std::nullopt;
-  return *parsed;
+/// Extend or truncate every plane; a signed operand replicates its most
+/// significant bit, X/Z and run-time bits included (IEEE 1800-2023 11.6.1).
+TwoStatePattern resizePattern(const TwoStatePattern &bits, unsigned width,
+                              bool isSigned) {
+  auto resize = [&](const APInt &plane) {
+    return isSigned ? plane.sextOrTrunc(width) : plane.zextOrTrunc(width);
+  };
+  return {resize(bits.value), resize(bits.unknown), resize(bits.dynamic)};
 }
 
-/// IEEE 1800-2023 11.4.12: the bits of a concatenation or replication of
-/// constant operands are its operands' bits, the first operand most
-/// significant. Returns no value when an operand is not constant.
-std::optional<ParsedConstant> composeSourceBits(Operation *operation) {
-  if (std::optional<StringRef> folded =
-          getElaboratedConstantSpelling(operation)) {
-    std::optional<unsigned> width = packedSemanticWidth(operation);
-    if (!width)
-      return std::nullopt;
-    FailureOr<ParsedConstant> parsed =
-        parseSVInteger(*folded, *width, getSemanticLocation(operation));
-    if (failed(parsed))
-      return std::nullopt;
-    return *parsed;
-  }
+using PatternResult = FailureOr<std::optional<TwoStatePattern>>;
+
+PatternResult patternBits(Operation *operation, unsigned width);
+
+/// IEEE 1800-2023 11.4.12: the bits of a concatenation or replication are its
+/// operands' bits, the first operand most significant, at the expression's
+/// self-determined width.
+PatternResult composeSourceBits(Operation *operation) {
   std::optional<unsigned> resultWidth = packedSemanticWidth(operation);
   if (!resultWidth)
-    return std::nullopt;
+    return std::optional<TwoStatePattern>{};
+  auto operandBits = [](Operation *operand) -> PatternResult {
+    std::optional<unsigned> width = packedSemanticWidth(operand);
+    if (!width)
+      return std::optional<TwoStatePattern>{};
+    return patternBits(operand, *width);
+  };
   SmallVector<Operation *> children = getChildren(operation);
-  SmallVector<ParsedConstant> pieces;
+  SmallVector<TwoStatePattern> pieces;
   if (isa<semantic::SVConcatenationExpressionOp>(operation)) {
     for (Operation *child : children) {
       if (isZeroSizeReplication(child))
         continue;
-      std::optional<ParsedConstant> bits = sourceOperandBits(child);
-      if (!bits)
-        return std::nullopt;
-      pieces.push_back(std::move(*bits));
+      PatternResult bits = operandBits(child);
+      if (failed(bits) || !*bits)
+        return bits;
+      pieces.push_back(std::move(**bits));
     }
   } else {
     if (children.size() != 2)
-      return std::nullopt;
+      return std::optional<TwoStatePattern>{};
     std::optional<StringRef> countSpelling =
         getElaboratedConstantSpelling(children.front());
-    std::optional<ParsedConstant> bits = sourceOperandBits(children[1]);
-    if (!countSpelling || !bits)
-      return std::nullopt;
+    if (!countSpelling)
+      return std::optional<TwoStatePattern>{};
     FailureOr<ParsedConstant> count = parseSVInteger(
         *countSpelling, 64, getSemanticLocation(children.front()));
-    if (failed(count) || !count->unknown.isZero() ||
-        count->value != *resultWidth / bits->value.getBitWidth())
-      return std::nullopt;
-    pieces.append(count->value.getZExtValue(), *bits);
+    if (failed(count))
+      return failure();
+    PatternResult bits = operandBits(children[1]);
+    if (failed(bits) || !*bits)
+      return bits;
+    if (!count->unknown.isZero() ||
+        count->value != *resultWidth / (**bits).value.getBitWidth())
+      return std::optional<TwoStatePattern>{};
+    pieces.append(count->value.getZExtValue(), **bits);
   }
   unsigned width = 0;
-  for (const ParsedConstant &piece : pieces)
+  for (const TwoStatePattern &piece : pieces)
     width += piece.value.getBitWidth();
   if (width != *resultWidth)
-    return std::nullopt;
-  APInt value(width, 0), unknown(width, 0);
+    return std::optional<TwoStatePattern>{};
+  TwoStatePattern result{APInt(width, 0), APInt(width, 0), APInt(width, 0)};
   unsigned low = width;
-  for (const ParsedConstant &piece : pieces) {
+  for (const TwoStatePattern &piece : pieces) {
     low -= piece.value.getBitWidth();
-    value.insertBits(piece.value, low);
-    unknown.insertBits(piece.unknown, low);
+    result.value.insertBits(piece.value, low);
+    result.unknown.insertBits(piece.unknown, low);
+    result.dynamic.insertBits(piece.dynamic, low);
   }
-  return ParsedConstant{std::move(value), std::move(unknown)};
+  return std::optional<TwoStatePattern>{std::move(result)};
+}
+
+/// The pattern bits of `operation` extended or truncated to `width`.
+PatternResult patternBits(Operation *operation, unsigned width) {
+  auto spelled = [&](StringRef spelling) -> PatternResult {
+    FailureOr<ParsedConstant> parsed =
+        parseSVInteger(spelling, width, getSemanticLocation(operation));
+    if (failed(parsed))
+      return failure();
+    return std::optional<TwoStatePattern>{
+        TwoStatePattern{parsed->value, parsed->unknown, APInt(width, 0)}};
+  };
+  // The frontend records these only for integral constants.
+  if (auto pattern = operation->getAttrOfType<StringAttr>("two_state_pattern"))
+    return spelled(pattern.getValue());
+  if (auto constant =
+          operation->getAttrOfType<StringAttr>(elaboratedConstantAttrName))
+    return spelled(constant.getValue());
+  auto isComposite = [](Operation *expression) {
+    return isa<semantic::SVConcatenationExpressionOp,
+               semantic::SVReplicationExpressionOp,
+               semantic::SVConversionExpressionOp>(expression);
+  };
+  if (auto conversion = dyn_cast<semantic::SVConversionExpressionOp>(operation)) {
+    SmallVector<Operation *> children = getChildren(conversion);
+    if (children.size() != 1)
+      return std::optional<TwoStatePattern>{};
+    Operation *operand = children.front();
+    // A literal operand keeps its own spelling, so its 5.7.1 extension rule
+    // applies at the comparison width.
+    if (!isComposite(operand))
+      return patternBits(operand, width);
+    std::optional<unsigned> ownWidth = packedSemanticWidth(conversion);
+    std::optional<unsigned> operandWidth = packedSemanticWidth(operand);
+    if (!ownWidth || !operandWidth)
+      return std::optional<TwoStatePattern>{};
+    PatternResult bits = patternBits(operand, *operandWidth);
+    if (failed(bits) || !*bits)
+      return bits;
+    // Resize exactly as the value of the conversion is resized: by the
+    // operand's signedness (IEEE 1800-2023 6.24.1, 11.8.2).
+    return std::optional<TwoStatePattern>{resizePattern(
+        resizePattern(**bits, *ownWidth, isSignedExpression(operand)), width,
+        /*isSigned=*/false)};
+  }
+  // Only packed integral operands carry pattern bits; a real, string or
+  // unpacked operand takes the ordinary comparison.
+  std::optional<unsigned> ownWidth = packedSemanticWidth(operation);
+  if (!ownWidth)
+    return std::optional<TwoStatePattern>{};
+  if (isComposite(operation)) {
+    // IEEE 1800-2023 11.8.1: a concatenation is unsigned.
+    PatternResult bits = composeSourceBits(operation);
+    if (failed(bits) || !*bits)
+      return bits;
+    return std::optional<TwoStatePattern>{
+        resizePattern(**bits, width, /*isSigned=*/false)};
+  }
+  if (std::optional<StringRef> constant = getConstantSpelling(operation))
+    return spelled(*constant);
+  // Any other packed operand is evaluated at run time: under two-state
+  // execution its bits are known but not constant.
+  TwoStatePattern runtime{APInt(*ownWidth, 0), APInt(*ownWidth, 0),
+                          APInt::getAllOnes(*ownWidth)};
+  return std::optional<TwoStatePattern>{
+      resizePattern(runtime, width, isSignedExpression(operation))};
 }
 } // namespace
 
-std::optional<std::string> getTwoStatePatternSpelling(Operation *operation) {
-  if (auto pattern = operation->getAttrOfType<StringAttr>("two_state_pattern"))
-    return pattern.getValue().str();
-  if (auto constant =
-          operation->getAttrOfType<StringAttr>(elaboratedConstantAttrName))
-    return constant.getValue().str();
-  if (isa<semantic::SVConversionExpressionOp>(operation)) {
-    auto children = getChildren(operation);
-    if (children.size() == 1)
-      return getTwoStatePatternSpelling(children.front());
-    return std::nullopt;
-  }
-  // Elaboration does not fold a concatenation or replication item, so compose
-  // the source spelling of its operands: their z (?) bits stay do-not-care
-  // bits of a casez or wildcard pattern (IEEE 1800-2023 12.5.1, 11.4.6).
-  if (!isa<semantic::SVConcatenationExpressionOp,
-           semantic::SVReplicationExpressionOp>(operation))
-    return std::nullopt;
-  std::optional<ParsedConstant> bits = composeSourceBits(operation);
-  if (!bits || bits->unknown.isZero())
-    return std::nullopt;
-  unsigned width = bits->value.getBitWidth();
-  std::string spelling = (Twine(width) + "'b").str();
-  spelling.reserve(spelling.size() + width);
-  for (unsigned bit = width; bit-- != 0;)
-    spelling.push_back(bits->unknown[bit] ? (bits->value[bit] ? 'z' : 'x')
-                                          : (bits->value[bit] ? '1' : '0'));
-  return spelling;
+FailureOr<std::optional<TwoStatePattern>>
+getTwoStatePattern(Operation *operation, unsigned width) {
+  PatternResult bits = patternBits(operation, width);
+  if (failed(bits) || !*bits || (**bits).unknown.isZero())
+    return failed(bits) ? PatternResult(failure())
+                        : PatternResult(std::optional<TwoStatePattern>{});
+  return bits;
 }
 
 void copyConstantSymbolValue(Operation *reference, Operation *symbol) {

@@ -1315,8 +1315,14 @@ UnitLowering::lowerCaseLabel(Value selector, Type selectorType,
       auto scalar = toPackedScalar(selector, location);
       if (failed(scalar))
         return failure();
-      auto pattern =
-          lowerTwoStatePatternComparison(builder, *scalar, label, logicKind);
+      auto pattern = lowerTwoStatePatternComparison(
+          builder, *scalar, label, logicKind, [&]() -> FailureOr<Value> {
+            FailureOr<Value> normalized =
+                convert(*candidate, selectorType, false, location);
+            if (failed(normalized))
+              return failure();
+            return toPackedScalar(*normalized, location);
+          });
       if (failed(pattern))
         return failure();
       if (*pattern)
@@ -1375,8 +1381,18 @@ UnitLowering::lowerCaseLabel(Value selector, Type selectorType,
       auto scalar = toPackedScalar(selector, location);
       if (failed(scalar))
         return failure();
-      auto pattern = lowerTwoStatePatternComparison(builder, *scalar, label,
-                                                    sim::CompareKind::WildEq);
+      auto pattern = lowerTwoStatePatternComparison(
+          builder, *scalar, label, sim::CompareKind::WildEq,
+          [&]() -> FailureOr<Value> {
+            FailureOr<Value> candidate = lowerExpression(label);
+            if (failed(candidate))
+              return failure();
+            FailureOr<Value> normalized =
+                convert(*candidate, selectorType, false, location);
+            if (failed(normalized))
+              return failure();
+            return toPackedScalar(*normalized, location);
+          });
       if (failed(pattern))
         return failure();
       if (*pattern)
