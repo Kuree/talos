@@ -90,6 +90,48 @@ module {
     }
   }
 
+  // While dumping, the eliminated element sink keeps its declaration and
+  // names the element's bits: element [1] of the 2-element array, low bit 1.
+  // DEFAULT-LABEL: simulation.design @source_element_dumped
+  // DEFAULT: simulation.spawn @copy
+  // CHECK-LABEL: simulation.design @source_element_dumped
+  // CHECK: simulation.storage.decl 1 {{.*}}simulation.waveform_source = array<i64: 0, 0, 1>
+  // CHECK-NOT: simulation.spawn @copy
+  simulation.design @source_element_dumped {
+    simulation.scope.decl 0
+    simulation.code_unit.decl 1 in 0 root_initializer hierarchy "root"
+    simulation.code_unit.decl 2 in 0 port_input hierarchy "copy"
+    simulation.code_unit.decl 3 in 0 always hierarchy "reader"
+    simulation.code_unit.decl 4 in 0 initial hierarchy "flusher"
+    simulation.storage.decl 0 in 0 : !simulation.unpacked_array<0 : 1 x !simulation.logic<1>> design {observability = 0 : i32}
+    simulation.storage.decl 1 in 0 : !simulation.logic<1> design {observability = 0 : i32}
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
+      %s = simulation.context.storage %ctx[0] : !simulation.ref<!simulation.unpacked_array<0 : 1 x !simulation.logic<1>>>
+      %d = simulation.context.storage %ctx[1] : !simulation.ref<!simulation.logic<1>>
+      %0 = simulation.spawn @copy(%ctx, %s, %d) : !simulation.context, !simulation.ref<!simulation.unpacked_array<0 : 1 x !simulation.logic<1>>>, !simulation.ref<!simulation.logic<1>> -> !simulation.process
+      %1 = simulation.spawn @reader(%ctx, %d) : !simulation.context, !simulation.ref<!simulation.logic<1>> -> !simulation.process
+      %2 = simulation.spawn @flusher(%ctx) : !simulation.context -> !simulation.process
+      simulation.return
+    }
+    simulation.func private @copy(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %src: !simulation.ref<!simulation.unpacked_array<0 : 1 x !simulation.logic<1>>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}, %dst: !simulation.ref<!simulation.logic<1>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 1 : i64}) attributes {entry_kind = 9 : i32, code_unit_id = 2 : i64} {
+      cf.br ^body
+    ^body:
+      %e = simulation.ref.subelement %src[[1]] : !simulation.ref<!simulation.unpacked_array<0 : 1 x !simulation.logic<1>>> -> !simulation.ref<!simulation.logic<1>>
+      %v = simulation.ref.load %e : !simulation.ref<!simulation.logic<1>> -> !simulation.logic<1>
+      simulation.ref.store %v to %dst : !simulation.logic<1>, !simulation.ref<!simulation.logic<1>>
+      simulation.suspend.change %src to ^body : !simulation.ref<!simulation.unpacked_array<0 : 1 x !simulation.logic<1>>>
+    }
+    simulation.func private @reader(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %clk: !simulation.ref<!simulation.logic<1>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 1 : i64}) attributes {entry_kind = 3 : i32, code_unit_id = 3 : i64} {
+      cf.br ^body
+    ^body:
+      simulation.suspend.edge posedge %clk to ^body : !simulation.ref<!simulation.logic<1>>
+    }
+    simulation.func private @flusher(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 1 : i32, code_unit_id = 4 : i64} {
+      simulation.dump.flush %ctx : (!simulation.context) -> ()
+      simulation.return
+    }
+  }
+
   // An output into an element of a parent array: the child's blocking writer
   // now stores the parent element directly.
   // DEFAULT-LABEL: simulation.design @destination_element
@@ -412,9 +454,12 @@ module {
     }
   }
 
-  // A waveform dump observes the sink storage itself.
+  // A waveform dump may name the sink (21.7): it is eliminated anyway, and
+  // its declaration names the source's bits [is_net, id, low]
+  // (waveform_source), which the design database follows.
   // CHECK-LABEL: simulation.design @dumped
-  // CHECK: simulation.spawn @copy
+  // CHECK: simulation.storage.decl 1 {{.*}}simulation.waveform_source = array<i64: 0, 0, 0>
+  // CHECK-NOT: simulation.spawn @copy
   simulation.design @dumped {
     simulation.scope.decl 0
     simulation.code_unit.decl 1 in 0 root_initializer hierarchy "root"
@@ -438,6 +483,42 @@ module {
     }
     simulation.func private @flusher(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 1 : i32, code_unit_id = 4 : i64} {
       simulation.dump.flush %ctx : (!simulation.context) -> ()
+      simulation.return
+    }
+  }
+
+  // Extended VCD shows a port's own driving view (21.7.4): $dumpports keeps
+  // the connection.
+  // CHECK-LABEL: simulation.design @dumped_ports
+  // CHECK-NOT: waveform_source
+  // CHECK: simulation.spawn @copy
+  simulation.design @dumped_ports {
+    simulation.scope.decl 0
+    simulation.code_unit.decl 1 in 0 root_initializer hierarchy "root"
+    simulation.code_unit.decl 2 in 0 port_input hierarchy "copy"
+    simulation.code_unit.decl 4 in 0 initial hierarchy "flusher"
+    simulation.storage.decl 0 in 0 : !simulation.logic<4> design {observability = 0 : i32}
+    simulation.storage.decl 1 in 0 : !simulation.logic<4> design {observability = 0 : i32}
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
+      %s = simulation.context.storage %ctx[0] : !simulation.ref<!simulation.logic<4>>
+      %d = simulation.context.storage %ctx[1] : !simulation.ref<!simulation.logic<4>>
+      %0 = simulation.spawn @copy(%ctx, %s, %d) : !simulation.context, !simulation.ref<!simulation.logic<4>>, !simulation.ref<!simulation.logic<4>> -> !simulation.process
+      %1 = simulation.spawn @flusher(%ctx) : !simulation.context -> !simulation.process
+      simulation.return
+    }
+    simulation.func private @copy(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %src: !simulation.ref<!simulation.logic<4>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}, %dst: !simulation.ref<!simulation.logic<4>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 1 : i64}) attributes {entry_kind = 9 : i32, code_unit_id = 2 : i64} {
+      cf.br ^body
+    ^body:
+      %v = simulation.ref.load %src : !simulation.ref<!simulation.logic<4>> -> !simulation.logic<4>
+      simulation.ref.store %v to %dst : !simulation.logic<4>, !simulation.ref<!simulation.logic<4>>
+      simulation.suspend.change %src to ^body : !simulation.ref<!simulation.logic<4>>
+    }
+    simulation.func private @flusher(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 1 : i32, code_unit_id = 4 : i64} {
+      %path = simulation.string.literal "ports.evcd"
+      %scope = simulation.string.literal ""
+      %scale = arith.constant -9 : i32
+      simulation.dump.ports %ctx, %path, %scope, %scale :
+          (!simulation.context, !simulation.string, !simulation.string, i32) -> ()
       simulation.return
     }
   }

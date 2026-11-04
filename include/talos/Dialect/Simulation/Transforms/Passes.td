@@ -187,9 +187,11 @@ def TalosSimAliasPortConnectionsPass
     everywhere by the other side: a plain connection redirects its sink to
     the source root. With `elements`, an input from an array element
     redirects its sink to that element, and an output into an array element
-    redirects the child's output storage. Requires VPI off, no waveform
-    dumping, no other writer of the eliminated sink or of the target element,
-    no force/release on either side, and identical types. Copies feeding a
+    redirects the child's output storage. Requires VPI off, no extended VCD
+    ($dumpports), no other writer of the eliminated sink or of the target element,
+    no force/release on either side, and identical types. While a waveform
+    dump may name it, an eliminated root keeps its declaration and names the
+    surviving bits (waveform_source). Copies feeding a
     self-settling process, and the first copies below delay-driven roots,
     are kept for generated-eval ownership and fanout.
   }];

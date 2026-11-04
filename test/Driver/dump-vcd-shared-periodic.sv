@@ -11,9 +11,9 @@
 // work is due at a silent fall: the slot ends once, after that work, so the
 // fall merges into the slot's single record and into the $dumpall checkpoint
 // (21.7.1.4), as the other tiers write them for this single-clock shape.
-// The port copies d.din and d.dout hold top.din and top.dout at every slot
-// end, so they share those identifier codes (21.7); the clock port keeps its
-// own.
+// The port copy d.din holds top.din at every slot end and shares its
+// identifier code (21.7), as d.dout shares acc's (its continuous assignment);
+// the clock port and top.dout keep their own.
 module dut(input logic clk, input logic [7:0] din, output logic [7:0] dout);
   logic [7:0] acc = 0;
   always_ff @(posedge clk) acc <= acc + din;
@@ -39,25 +39,25 @@ endmodule
 // VCD-NEXT: $var reg 8 [[ACC:[^ ]+]] acc [7:0] $end
 // VCD-NEXT: $var reg 1 [[DCLK:[^ ]+]] clk $end
 // VCD-NEXT: $var reg 8 [[DIN:[^ ]+]] din [7:0] $end
-// VCD-NEXT: $var reg 8 [[DOUT:[^ ]+]] dout [7:0] $end
+// VCD-NEXT: $var reg 8 [[ACC]] dout [7:0] $end
 // VCD-NEXT: $upscope $end
 // VCD-NEXT: $var reg 1 [[CLK:[^ ]+]] clk $end
 // VCD-NEXT: $var reg 8 [[DIN]] din [7:0] $end
-// VCD-NEXT: $var reg 8 [[DOUT]] dout [7:0] $end
+// VCD-NEXT: $var reg 8 [[DOUT:[^ ]+]] dout [7:0] $end
 // VCD: $enddefinitions $end
 // VCD-NEXT: #0
 // VCD-NEXT: $dumpvars
 // VCD-NEXT: 0[[CLK]]
 // VCD-NEXT: b1 [[DIN]]
-// VCD-NEXT: 0[[DCLK]]
 // VCD-NEXT: b0 [[DOUT]]
+// VCD-NEXT: 0[[DCLK]]
 // VCD-NEXT: b0 [[ACC]]
 // VCD-NEXT: $end
 // VCD-NEXT: #5
 // VCD-NEXT: 1[[CLK]]
 // VCD-NEXT: b100 [[DIN]]
-// VCD-NEXT: 1[[DCLK]]
 // VCD-NEXT: b1 [[DOUT]]
+// VCD-NEXT: 1[[DCLK]]
 // VCD-NEXT: b1 [[ACC]]
 // VCD-NEXT: #10
 // VCD-NEXT: 0[[CLK]]
@@ -65,8 +65,8 @@ endmodule
 // VCD-NEXT: #15
 // VCD-NEXT: 1[[CLK]]
 // VCD-NEXT: b111 [[DIN]]
-// VCD-NEXT: 1[[DCLK]]
 // VCD-NEXT: b101 [[DOUT]]
+// VCD-NEXT: 1[[DCLK]]
 // VCD-NEXT: b101 [[ACC]]
 // VCD-NEXT: #20
 // VCD-NEXT: 0[[CLK]]
@@ -74,16 +74,16 @@ endmodule
 // VCD-NEXT: #25
 // VCD-NEXT: 1[[CLK]]
 // VCD-NEXT: b1010 [[DIN]]
-// VCD-NEXT: 1[[DCLK]]
 // VCD-NEXT: b1100 [[DOUT]]
+// VCD-NEXT: 1[[DCLK]]
 // VCD-NEXT: b1100 [[ACC]]
 // VCD-NEXT: #30
 // VCD-NEXT: 0[[CLK]]
 // VCD-NEXT: 0[[DCLK]]
 // VCD-NEXT: #35
 // VCD-NEXT: 1[[CLK]]
-// VCD-NEXT: 1[[DCLK]]
 // VCD-NEXT: b10110 [[DOUT]]
+// VCD-NEXT: 1[[DCLK]]
 // VCD-NEXT: b10110 [[ACC]]
 // VCD-NEXT: #40
 // VCD-NEXT: 0[[CLK]]
@@ -91,29 +91,29 @@ endmodule
 // VCD-NEXT: 0[[DCLK]]
 // VCD-NEXT: #45
 // VCD-NEXT: 1[[CLK]]
-// VCD-NEXT: 1[[DCLK]]
 // VCD-NEXT: b11000 [[DOUT]]
+// VCD-NEXT: 1[[DCLK]]
 // VCD-NEXT: b11000 [[ACC]]
 // VCD-NEXT: #50
 // VCD-NEXT: 0[[CLK]]
 // VCD-NEXT: 0[[DCLK]]
 // VCD-NEXT: #55
 // VCD-NEXT: 1[[CLK]]
-// VCD-NEXT: 1[[DCLK]]
 // VCD-NEXT: b11010 [[DOUT]]
+// VCD-NEXT: 1[[DCLK]]
 // VCD-NEXT: b11010 [[ACC]]
 // VCD-NEXT: #60
 // VCD-NEXT: $dumpall
 // VCD-NEXT: 0[[CLK]]
 // VCD-NEXT: b10 [[DIN]]
-// VCD-NEXT: 0[[DCLK]]
 // VCD-NEXT: b11010 [[DOUT]]
+// VCD-NEXT: 0[[DCLK]]
 // VCD-NEXT: b11010 [[ACC]]
 // VCD-NEXT: $end
 // VCD-NEXT: #65
 // VCD-NEXT: 1[[CLK]]
-// VCD-NEXT: 1[[DCLK]]
 // VCD-NEXT: b11100 [[DOUT]]
+// VCD-NEXT: 1[[DCLK]]
 // VCD-NEXT: b11100 [[ACC]]
 // VCD-NEXT: #70
 // VCD-NEXT: 0[[CLK]]

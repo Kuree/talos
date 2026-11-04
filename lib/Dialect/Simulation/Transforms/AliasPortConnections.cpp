@@ -214,14 +214,20 @@ void TalosSimAliasPortConnectionsPass::runOnOperation() {
     return;
   Block &designBlock = design.getBody().front();
 
-  // Waveform dumps observe the sink storage itself, not just its value at
-  // assignment boundaries.
+  // IEEE 1800-2023 21.7: a waveform dump may name an eliminated sink; at
+  // every slot end it holds its source's bits, so its declaration stays and
+  // names them (waveform_source), which the design database follows. Extended
+  // VCD shows each port's own driving view (21.7.4), so $dumpports keeps the
+  // connections.
   bool dumps = false;
+  bool dumpPorts = false;
   design.walk([&](Operation *operation) {
     if (operation->getName().getStringRef().starts_with("simulation.dump."))
       dumps = true;
+    if (isa<sim::SimDumpPortsOp, sim::SimDumpPortsControlOp>(operation))
+      dumpPorts = true;
   });
-  if (dumps)
+  if (dumpPorts)
     return;
 
   DenseMap<uint64_t, sim::SimStorageDeclOp> storages;
@@ -860,6 +866,18 @@ void TalosSimAliasPortConnectionsPass::runOnOperation() {
     }
     function.setFunctionType(FunctionType::get(
         context, inputs, function.getFunctionType().getResults()));
+  }
+  // A dumped eliminated sink keeps its declaration and its port reflection;
+  // both read the surviving root's bits through waveform_source.
+  if (dumps) {
+    for (auto &[eliminated, view] : resolved) {
+      auto projected = projectPath(storages[view.root].getType(), view.path);
+      sim::set<sim::metadata::WaveformSource>(
+          storages[eliminated].getOperation(),
+          DenseI64ArrayAttr::get(context, {0, int64_t(view.root),
+                                           int64_t(projected->first)}));
+    }
+    return;
   }
   // Reflection must keep pointing at the live storage, including its offset.
   for (auto port : designBlock.getOps<sim::SimPortDeclOp>()) {
