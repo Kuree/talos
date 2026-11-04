@@ -115,6 +115,10 @@ module {
 // CHECK-SAME: radix = <decimal>
 // CHECK: simulation.return
 // CHECK-LABEL: simulation.func private @unit_0(
+// IEEE 1800-2023 21.2.2: each strobe display start is marked, so a generated
+// owner treats it as a cold runtime leaf instead of becoming runtime-owned.
 // CHECK: simulation.spawn @[[CALLBACK]]
+// CHECK-SAME: simulation.postponed_display
 // CHECK: simulation.spawn @[[STROBE]]
+// CHECK-SAME: simulation.postponed_display
 // CHECK-NOT: simulation.monitor.register

@@ -264,6 +264,10 @@ public:
         SymbolRefAttr::get(rewriter.getContext(),
                            (operation.getCallee() + ".__talos_spawn").str()),
         operation.getOperands());
+    // A $strobe display start stays a cold checkpoint leaf of a generated
+    // eval body (IEEE 1800-2023 21.2.2).
+    if (sim::has<sim::metadata::PostponedDisplay>(operation))
+      sim::mark<sim::metadata::PostponedDisplay>(call);
     rewriter.replaceOp(operation, call.getResults());
     return success();
   }

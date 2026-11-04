@@ -393,6 +393,9 @@ FailureOr<LLVM::LLVMFuncOp> makeDirectFragmentWrapper(
       if (auto call = dyn_cast<LLVM::CallOp>(operation))
         mayTerminate |= call.getCallee() && call.getCallee()->starts_with(
                                                 "talos_rt_v1_deferred_enqueue");
+      // So is the start of a $strobe display (21.2.2), a schedule.spawn or
+      // its call by now.
+      mayTerminate |= sim::has<sim::metadata::PostponedDisplay>(operation);
       if (auto call = dyn_cast<sim::SimCallOp>(operation))
         facts.callees.push_back(
             cache

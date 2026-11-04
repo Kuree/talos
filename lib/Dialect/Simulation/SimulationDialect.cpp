@@ -84,9 +84,13 @@ bool isDeferredReportSpawn(SimSpawnOp spawn) {
   });
 }
 
+bool isPostponedDisplaySpawn(SimSpawnOp spawn) {
+  return has<metadata::PostponedDisplay>(spawn);
+}
+
 bool isColdRuntimeCheckpoint(Operation *operation) {
   if (auto spawn = dyn_cast<SimSpawnOp>(operation))
-    return isDeferredReportSpawn(spawn);
+    return isDeferredReportSpawn(spawn) || isPostponedDisplaySpawn(spawn);
   return isa<SimFinishOp, SimStopOp, SimFatalOp, SimProgramExitOp, SimErrorOp,
              SimStatusCheckOp, SimDisplayOp, SimSampledReadOp,
              SimSampledHistoryOp, SimClockedSampleReadOp, SimDeferredEnqueueOp>(
@@ -717,6 +721,7 @@ static const llvm::StringMap<discardable::PayloadCheck> &declarations() {
       metadata::PersistentImplicationActivation,
       metadata::PersistentImplicationAntecedentResult,
       metadata::PersistentImplicationHandoff, metadata::PersistentMonitor,
+      metadata::PostponedDisplay,
       metadata::PersistentRepetitionAllMatches,
       metadata::PersistentRepetitionAntecedent,
       metadata::PersistentRepetitionDfa,

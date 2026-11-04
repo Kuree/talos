@@ -324,6 +324,10 @@ def TalosSimulationDialect : Dialect {
     "::mlir::UnitAttr":$persistent_implication_antecedent_result,
     "::mlir::UnitAttr":$persistent_implication_handoff,
     "::mlir::UnitAttr":$persistent_monitor,
+    // A spawn that starts a $strobe or $fstrobe display in the Postponed
+    // region (IEEE 1800-2023 21.2.2): fire-and-forget, a cold runtime leaf of
+    // the spawning activation.
+    "::mlir::UnitAttr":$postponed_display,
     "::mlir::UnitAttr":$persistent_repetition_all_matches,
     "::mlir::UnitAttr":$persistent_repetition_antecedent,
     "::mlir::UnitAttr":$persistent_repetition_dfa,

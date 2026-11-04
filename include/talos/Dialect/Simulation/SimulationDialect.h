@@ -423,6 +423,7 @@ using PersistentImplicationAntecedentResult =
 using PersistentImplicationHandoff =
     TalosSimulationDialect::PersistentImplicationHandoffAttrHelper;
 using PersistentMonitor = TalosSimulationDialect::PersistentMonitorAttrHelper;
+using PostponedDisplay = TalosSimulationDialect::PostponedDisplayAttrHelper;
 using PersistentRepetitionAllMatches =
     TalosSimulationDialect::PersistentRepetitionAllMatchesAttrHelper;
 using PersistentRepetitionAntecedent =

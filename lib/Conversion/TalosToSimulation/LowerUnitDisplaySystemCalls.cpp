@@ -1419,6 +1419,8 @@ UnitLowering::lowerDisplaySystemCall(semantic::SVCallExpressionOp op) {
     if (persistentMonitor)
       sim::SimMonitorRegisterOp::create(builder, location,
                                         spawned.getProcess());
+    else
+      sim::mark<sim::metadata::PostponedDisplay>(spawned);
     return dummyTaskResult();
   }
 

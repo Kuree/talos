@@ -57,6 +57,10 @@ struct RuntimeStatusInputs {
         if (auto call = dyn_cast<LLVM::CallOp>(operation))
           hasCheck |= call.getCallee() && call.getCallee()->starts_with(
                                               "talos_rt_v1_deferred_enqueue");
+        // A $strobe display (21.2.2) is started the same way, as a cold
+        // runtime exit of the activation. The spawn is a schedule.spawn by
+        // now and keeps its marker.
+        hasCheck |= sim::has<sim::metadata::PostponedDisplay>(operation);
         if (auto call = dyn_cast<sim::SimCallOp>(operation)) {
           calls.push_back(call);
           if (sim::SimFuncOp callee =

@@ -2732,10 +2732,12 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
     function.walk([&](LLVM::CallOp call) {
       // Keep every call the eval call closure admits, e.g. the unknown
       // summary refresh of a gated known-activation copy. Only the
-      // remaining runtime calls are checkpoint leaves.
+      // remaining runtime calls, and the start of a $strobe display
+      // (21.2.2), are checkpoint leaves.
       if (std::optional<StringRef> callee = call.getCallee();
-          callee && callee->starts_with("talos_rt_") &&
-          !isEvalClosureRuntimeCall(call, function, module))
+          (callee && callee->starts_with("talos_rt_") &&
+           !isEvalClosureRuntimeCall(call, function, module)) ||
+          sim::has<sim::metadata::PostponedDisplay>(call))
         checkpointBlocks.try_emplace(call->getBlock(), call.getOperation());
     });
     if (checkpointBlocks.empty())

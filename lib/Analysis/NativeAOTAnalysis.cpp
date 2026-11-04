@@ -1022,9 +1022,9 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
     ++totalSpawnCounts[spawn.getCallee()];
   SmallVector<sim::SimFuncOp> staticNestedActors;
   // Evaluators of epoch-guarded deferred reports (IEEE 1800-2023 16.4.1,
-  // 12.4.2.1). They run only when a report is queued, as runtime processes
-  // in the Observed or Postponed region, and leave the rest of the design
-  // eligible.
+  // 12.4.2.1) and $strobe displays (21.2.2). They run only when a report is
+  // queued or a strobe executed, as runtime processes in the Observed or
+  // Postponed region, and leave the rest of the design eligible.
   DenseSet<Operation *> reportEvaluators;
   auto isStaticPersistentMonitorSpawn = [&](sim::SimSpawnOp spawn,
                                             sim::SimFuncOp owner,
@@ -1066,6 +1066,17 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
         if (target) {
           excludeDynamicActor(target.getOperation(),
                               "deferred assertion report");
+          reportEvaluators.insert(target.getOperation());
+        }
+        return;
+      }
+      if (sim::isPostponedDisplaySpawn(spawn)) {
+        // IEEE 1800-2023 21.2.2: a $strobe display runs once, in the
+        // Postponed region, and nothing waits for it. Starting it is a cold
+        // runtime leaf of the spawning activation, like a deferred report
+        // above; the display itself stays a runtime process.
+        if (target) {
+          excludeDynamicActor(target.getOperation(), "postponed display");
           reportEvaluators.insert(target.getOperation());
         }
         return;

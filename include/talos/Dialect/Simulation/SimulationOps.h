@@ -109,9 +109,15 @@ bool returnsToScheduler(::mlir::Operation *operation);
 /// 16.4.1).
 bool isDeferredReportSpawn(SimSpawnOp spawn);
 
+/// Whether a spawn starts a $strobe or $fstrobe display, which runs once in
+/// the Postponed region and samples its arguments there (IEEE 1800-2023
+/// 21.2.2). Nothing waits for it.
+bool isPostponedDisplaySpawn(SimSpawnOp spawn);
+
 /// Whether an operation is a cold exit to the runtime from generated
 /// combinational evaluation: a status, termination, or output effect, a read
-/// of runtime-owned sampled history, or a pending deferred assertion report.
+/// of runtime-owned sampled history, a pending deferred assertion report, or a
+/// $strobe display.
 /// A generated eval closure takes a checkpoint before its block instead of
 /// calling the runtime.
 bool isColdRuntimeCheckpoint(::mlir::Operation *operation);
