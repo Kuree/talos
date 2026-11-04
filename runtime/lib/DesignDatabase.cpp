@@ -13787,6 +13787,46 @@ void setPackedByte(uint8_t *bytes, uint64_t bit, bool value) {
     bytes[bit / 8] &= static_cast<uint8_t>(~mask);
 }
 
+// The authoritative planes a read of [stateOffset, stateOffset + width) uses:
+// a generated plan's own planes while they are direct and clean for that
+// range, else the context's canonical store (both null). Caller holds the
+// context mutex.
+static void selectCanonicalReadPlanesUnlocked(const talos_rt_context *context,
+                                              uint64_t stateOffset,
+                                              uint64_t width,
+                                              const uint8_t *&valuePlane,
+                                              const uint8_t *&unknownPlane) {
+  valuePlane = nullptr;
+  unknownPlane = nullptr;
+  const talos_rt_native_schedule_plan *plan = context->nativeSchedulePlan;
+  if (plan && !context->vpiObservationDemand &&
+      (plan->flags & TALOS_RT_NATIVE_SCHEDULE_DIRECT_STATE) != 0 &&
+      !context->nativeScheduleDeoptimized &&
+      plan->state_bit_count == context->execution->state_bit_count &&
+      plan->state_value && plan->state_unknown) {
+    bool dirty = context->nativeScheduleDirtyRootsPresent;
+    if (dirty) {
+      dirty = false;
+      __int128 accessEnd = static_cast<__int128>(stateOffset) + width;
+      for (const auto &[id, state] : context->nativeStaticStates)
+        if (static_cast<__int128>(state.bitOffset) < accessEnd &&
+            static_cast<__int128>(stateOffset) <
+                static_cast<__int128>(state.bitOffset) + state.bitWidth &&
+            (context->nativeScheduleTransientDirtyRoots.find(id) !=
+                 context->nativeScheduleTransientDirtyRoots.end() ||
+             context->nativeSchedulePersistentDirtyRoots.find(id) !=
+                 context->nativeSchedulePersistentDirtyRoots.end())) {
+          dirty = true;
+          break;
+        }
+    }
+    if (!dirty) {
+      valuePlane = plan->state_value;
+      unknownPlane = plan->state_unknown;
+    }
+  }
+}
+
 static talos_rt_status accessState(talos_rt_context *context,
                                    talos_rt_design_cursor_v1 cursor,
                                    uint64_t *value, uint64_t *unknown,
@@ -13862,33 +13902,10 @@ static talos_rt_status accessState(talos_rt_context *context,
     }
     const uint8_t *canonicalValuePlane = nullptr;
     const uint8_t *canonicalUnknownPlane = nullptr;
-    const talos_rt_native_schedule_plan *plan = context->nativeSchedulePlan;
-    if (!write && plan && !context->vpiObservationDemand &&
-        (plan->flags & TALOS_RT_NATIVE_SCHEDULE_DIRECT_STATE) != 0 &&
-        !context->nativeScheduleDeoptimized &&
-        plan->state_bit_count == context->execution->state_bit_count &&
-        plan->state_value && plan->state_unknown) {
-      bool dirty = context->nativeScheduleDirtyRootsPresent;
-      if (dirty) {
-        dirty = false;
-        __int128 accessEnd = static_cast<__int128>(stateOffset) + width;
-        for (const auto &[id, state] : context->nativeStaticStates)
-          if (static_cast<__int128>(state.bitOffset) < accessEnd &&
-              static_cast<__int128>(stateOffset) <
-                  static_cast<__int128>(state.bitOffset) + state.bitWidth &&
-              (context->nativeScheduleTransientDirtyRoots.find(id) !=
-                   context->nativeScheduleTransientDirtyRoots.end() ||
-               context->nativeSchedulePersistentDirtyRoots.find(id) !=
-                   context->nativeSchedulePersistentDirtyRoots.end())) {
-            dirty = true;
-            break;
-          }
-      }
-      if (!dirty) {
-        canonicalValuePlane = plan->state_value;
-        canonicalUnknownPlane = plan->state_unknown;
-      }
-    }
+    if (!write)
+      selectCanonicalReadPlanesUnlocked(context, stateOffset, width,
+                                        canonicalValuePlane,
+                                        canonicalUnknownPlane);
     if (!write && width <= 64) {
       value[0] = canonicalValuePlane
                      ? loadPackedBytes(canonicalValuePlane, stateOffset, width)
@@ -14170,6 +14187,63 @@ talos_rt_v1_design_read(talos_rt_context *context,
                         talos_rt_design_cursor_v1 cursor, uint64_t *value,
                         uint64_t *unknown, uint64_t bitWidth) {
   return accessState(context, cursor, value, unknown, bitWidth, false);
+}
+
+talos_rt_status talos_rt_design_state_location(talos_rt_context *context,
+                                               talos_rt_design_cursor_v1 cursor,
+                                               uint64_t *stateOffset,
+                                               uint64_t *width,
+                                               bool *fourState) {
+  if (!context || !stateOffset || !width || !fourState || !context->execution)
+    return TALOS_RT_INVALID_ARGUMENT;
+  const Database *database = cachedDatabase(context);
+  const uint8_t *record;
+  uint32_t kind;
+  if (!database || !getRecord(*database, cursor.offset, record, kind) ||
+      (kind != TALOS_RT_DESIGN_RECORD_STORAGE &&
+       kind != TALOS_RT_DESIGN_RECORD_NET))
+    return TALOS_RT_INVALID_HANDLE;
+  if ((read32(record + 4) & TALOS_RT_DESIGN_CAP_READ) == 0)
+    return TALOS_RT_PERMISSION_DENIED;
+  uint64_t offset = read64(record + 80);
+  uint64_t bits = read64(record + 56);
+  if (bits == 0 || bits > 64 || offset > context->execution->state_bit_count ||
+      bits > context->execution->state_bit_count - offset)
+    return TALOS_RT_INVALID_HANDLE;
+  const uint8_t *typeRecord = database->data + read64(record + 48);
+  *stateOffset = offset;
+  *width = bits;
+  *fourState =
+      ((read32(typeRecord + 4) >> 8) & TALOS_RT_DESIGN_TYPE_FOUR_STATE) != 0;
+  return TALOS_RT_OK;
+}
+
+talos_rt_status talos_rt_read_state_word(talos_rt_context *context,
+                                         uint64_t stateOffset, uint64_t width,
+                                         bool fourState, uint64_t *value,
+                                         uint64_t *unknown) {
+  if (!context || !value || width == 0 || width > 64 || !context->execution)
+    return TALOS_RT_INVALID_ARGUMENT;
+  if (stateOffset > context->execution->state_bit_count ||
+      width > context->execution->state_bit_count - stateOffset)
+    return TALOS_RT_INVALID_HANDLE;
+  ContextTransaction transaction(context);
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
+  const uint8_t *valuePlane = nullptr;
+  const uint8_t *unknownPlane = nullptr;
+  selectCanonicalReadPlanesUnlocked(context, stateOffset, width, valuePlane,
+                                    unknownPlane);
+  *value = valuePlane
+               ? loadPackedBytes(valuePlane, stateOffset, width)
+               : loadPackedState(context->stateValue, stateOffset, width);
+  if (unknown)
+    *unknown =
+        fourState
+            ? (unknownPlane
+                   ? loadPackedBytes(unknownPlane, stateOffset, width)
+                   : loadPackedState(context->stateUnknown, stateOffset, width))
+            : 0;
+  return TALOS_RT_OK;
 }
 
 extern "C" talos_rt_status talos_rt_v1_design_write(

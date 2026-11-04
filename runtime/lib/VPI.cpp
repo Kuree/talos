@@ -244,6 +244,25 @@ struct __vpiHandle {
   // Source statements and expressions survive execution. This weak context
   // only selects automatic actuals during value and operand queries.
   uint64_t expressionFrameActivation = 0;
+  // vpi_get_value of a fixed integral design object, resolved once: its
+  // value policy, the source facts the conversion reads, and its state range
+  // (IEEE 1800-2023 38.15). Design objects never move, so the resolution
+  // holds for the handle's lifetime; every later read loads the bits.
+  struct ValueReadCache {
+    bool ready = false;
+    // The general path found the handle ineligible; that never changes.
+    bool uncacheable = false;
+    bool isSigned = false;
+    bool hasSemanticCursor = false;
+    bool fourState = false;
+    uint32_t exactType = 0;
+    uint32_t semanticKind = 0;
+    const talos::reflection::VPIValuePolicyDescriptor *policy = nullptr;
+    talos_rt_design_cursor_v1 semanticCursor{};
+    talos_rt_design_info_v1 info{};
+    uint64_t stateOffset = 0;
+    uint64_t stateWidth = 0;
+  } valueRead;
 
   uint32_t selectionRootType = 0;
   talos::reflection::VPIIndexedAccessKind selectionAccessKind =
@@ -14122,6 +14141,62 @@ extern "C" TALOS_VPI_EXPORT PLI_BYTE8 *vpi_get_str(PLI_INT32 property,
   return nullptr;
 }
 
+// Remember a successful general read of a fixed integral design object so the
+// next vpi_get_value of this handle loads its bits directly. Everything the
+// general path resolved for it is static: the object, its policy and type,
+// and its state range (IEEE 1800-2023 38.15). Anything that is not (automatic
+// frames, class objects, selections, expressions, frozen or managed values)
+// keeps the general path.
+void cacheValueRead(__vpiHandle *handle,
+                    const talos::reflection::VPIValuePolicyDescriptor &policy,
+                    const VPIValueSource &source, uint32_t semanticKind,
+                    bool isSigned) {
+  if (handle->kind != VPIHandleKind::Object ||
+      handle->form != VPIObjectForm::Design || handle->dynamicObject ||
+      handle->logicalProcess || handle->frameActivation ||
+      handle->localDeclarationID || handle->expressionFrameActivation ||
+      !handle->selectionSteps.empty() || source.form != VPIObjectForm::Design ||
+      source.cursor.offset != handle->cursor.offset ||
+      source.selectionBitOffset != 0 || source.primitiveValue ||
+      source.policy != &policy || source.exactType == vpiStringVar) {
+    handle->valueRead.uncacheable = true;
+    return;
+  }
+  talos_rt_context *context = handle->owner->context;
+  VPIExpressionInfo expression{};
+  VPIFrozenValue frozen{};
+  VPIClassMemberBinding member{};
+  if (talos_rt_cached_vpi_expression(context, source.cursor, &expression) ==
+          TALOS_RT_OK ||
+      talos_rt_cached_vpi_frozen_value(context, source.cursor, &frozen) ==
+          TALOS_RT_OK ||
+      talos_rt_cached_vpi_class_member(context, source.cursor, &member) ==
+          TALOS_RT_OK) {
+    handle->valueRead.uncacheable = true;
+    return;
+  }
+  uint64_t stateOffset = 0, stateWidth = 0;
+  bool fourState = false;
+  if (talos_rt_design_state_location(context, source.cursor, &stateOffset,
+                                     &stateWidth, &fourState) != TALOS_RT_OK ||
+      stateWidth != source.info.bit_width) {
+    handle->valueRead.uncacheable = true;
+    return;
+  }
+  auto &read = handle->valueRead;
+  read.policy = &policy;
+  read.semanticCursor = source.semanticCursor;
+  read.hasSemanticCursor = source.hasSemanticCursor;
+  read.info = source.info;
+  read.exactType = source.exactType;
+  read.semanticKind = semanticKind;
+  read.isSigned = isSigned;
+  read.stateOffset = stateOffset;
+  read.stateWidth = stateWidth;
+  read.fourState = fourState;
+  read.ready = true;
+}
+
 extern "C" TALOS_VPI_EXPORT void vpi_get_value(vpiHandle opaque,
                                                p_vpi_value destination) {
   VPICallScope vpiCallScope;
@@ -14132,38 +14207,53 @@ extern "C" TALOS_VPI_EXPORT void vpi_get_value(vpiHandle opaque,
     setError(handle->owner, "VPI value destination is null");
     return;
   }
-  if (!allowProtectedSource(handle, "vpi_get_value"))
-    return;
-  if (handle->form == VPIObjectForm::Design &&
-      vpiTypeForHandle(handle) == vpiFuncCall) {
-    setError(handle->owner,
-             "source function call has no retained invocation result",
-             vpiNotice);
-    return;
-  }
-  if (handle->form == VPIObjectForm::SnapshotValue &&
-      (!handle->snapshot->readable ||
-       (handle->snapshot->variableView && !handle->snapshot->integral &&
-        (handle->snapshot->exactType == vpiUnionVar ||
-         handle->snapshot->exactType == vpiStructVar ||
-         handle->snapshot->array)))) {
-    setError(handle->owner, "snapshot member has no whole readable value",
-             vpiNotice);
-    return;
-  }
-  if (handle->form == VPIObjectForm::SnapshotValue &&
-      handle->snapshot->opType) {
-    setError(handle->owner,
-             "aggregate snapshot values are available through operands",
-             vpiNotice);
-    return;
-  }
-  const auto *policy = valuePolicyFor(handle);
-  if (!policy)
-    return;
+  // A handle whose source was resolved once skips straight to its bits.
+  const bool cached = handle->valueRead.ready;
+  const talos::reflection::VPIValuePolicyDescriptor *policy = nullptr;
   VPIValueSource source{};
-  if (!valueSourceFor(handle, *policy, source))
-    return;
+  if (cached) {
+    const auto &read = handle->valueRead;
+    policy = read.policy;
+    source.form = VPIObjectForm::Design;
+    source.cursor = handle->cursor;
+    source.semanticCursor = read.semanticCursor;
+    source.info = read.info;
+    source.exactType = read.exactType;
+    source.hasSemanticCursor = read.hasSemanticCursor;
+    source.policy = policy;
+  } else {
+    if (!allowProtectedSource(handle, "vpi_get_value"))
+      return;
+    if (handle->form == VPIObjectForm::Design &&
+        vpiTypeForHandle(handle) == vpiFuncCall) {
+      setError(handle->owner,
+               "source function call has no retained invocation result",
+               vpiNotice);
+      return;
+    }
+    if (handle->form == VPIObjectForm::SnapshotValue &&
+        (!handle->snapshot->readable ||
+         (handle->snapshot->variableView && !handle->snapshot->integral &&
+          (handle->snapshot->exactType == vpiUnionVar ||
+           handle->snapshot->exactType == vpiStructVar ||
+           handle->snapshot->array)))) {
+      setError(handle->owner, "snapshot member has no whole readable value",
+               vpiNotice);
+      return;
+    }
+    if (handle->form == VPIObjectForm::SnapshotValue &&
+        handle->snapshot->opType) {
+      setError(handle->owner,
+               "aggregate snapshot values are available through operands",
+               vpiNotice);
+      return;
+    }
+    policy = valuePolicyFor(handle);
+    if (!policy)
+      return;
+    if (!valueSourceFor(handle, *policy, source))
+      return;
+  }
   if (destination->format == vpiObjTypeVal &&
       handle->form == VPIObjectForm::IntegralConstant)
     destination->format = vpiIntVal;
@@ -14184,9 +14274,10 @@ extern "C" TALOS_VPI_EXPORT void vpi_get_value(vpiHandle opaque,
              vpiNotice);
     return;
   }
-  if (!valueRequirementsSatisfied(handle, source, *policy) ||
-      (source.policy != policy &&
-       !valueRequirementsSatisfied(handle, source, *source.policy)))
+  if (!cached &&
+      (!valueRequirementsSatisfied(handle, source, *policy) ||
+       (source.policy != policy &&
+        !valueRequirementsSatisfied(handle, source, *source.policy))))
     return;
   const PLI_INT32 exactType = static_cast<PLI_INT32>(source.exactType);
   const bool managedStringSource =
@@ -14225,12 +14316,30 @@ extern "C" TALOS_VPI_EXPORT void vpi_get_value(vpiHandle opaque,
                vpiInternal);
       return;
     }
+  } else if (cached) {
+    const auto &read = handle->valueRead;
+    TALOS_RT_TRY {
+      value.resize(1);
+      unknown.resize(1);
+    }
+    TALOS_RT_CATCH_ALL {
+      setError(handle->owner, "VPI value buffer is out of memory", vpiSystem);
+      return;
+    }
+    if (talos_rt_read_state_word(handle->owner->context, read.stateOffset,
+                                 read.stateWidth, read.fourState, value.data(),
+                                 unknown.data()) != TALOS_RT_OK) {
+      setError(handle->owner, "VPI design read failed");
+      return;
+    }
   } else if (!readValue(handle, source, value, unknown)) {
     return;
   }
   uint64_t width = source.info.bit_width;
   uint32_t semanticKind = TALOS_RT_DESIGN_SEMANTIC_UNKNOWN;
-  if (source.hasSemanticCursor) {
+  if (cached) {
+    semanticKind = handle->valueRead.semanticKind;
+  } else if (source.hasSemanticCursor) {
     talos_rt_design_semantic_type_info_v1 semantic{};
     if (talos_rt_cached_design_semantic_type_info(handle->owner->context,
                                                   source.semanticCursor,
@@ -14342,7 +14451,11 @@ extern "C" TALOS_VPI_EXPORT void vpi_get_value(vpiHandle opaque,
       return;
     }
   }
-  const bool isSigned = valueSigned(handle, source) || realSource;
+  const bool isSigned = cached ? handle->valueRead.isSigned
+                               : valueSigned(handle, source) || realSource;
+  if (!cached && !handle->valueRead.uncacheable && !realSource &&
+      !stringSource)
+    cacheValueRead(handle, *policy, source, semanticKind, isSigned);
   TALOS_RT_TRY {
     switch (destination->format) {
     case vpiVectorVal: {

@@ -4282,6 +4282,20 @@ talos_rt_status talos_rt_native_state_alloc_with_root_offsets(
 talos_rt_status talos_rt_native_state_alloc_managed(talos_rt_context *context,
                                                     talos_rt_object_v1 *value,
                                                     uint64_t *outHandle);
+// The fixed state range of a readable storage or net record of at most 64
+// bits: where talos_rt_v1_design_read reads it. The state layout is fixed for
+// the run (an implementation invariant), so a VPI handle resolves it once.
+talos_rt_status talos_rt_design_state_location(talos_rt_context *context,
+                                               talos_rt_design_cursor_v1 cursor,
+                                               uint64_t *stateOffset,
+                                               uint64_t *width,
+                                               bool *fourState);
+// Read up to 64 state bits from the authoritative planes, exactly as
+// talos_rt_v1_design_read reads a record at that location.
+talos_rt_status talos_rt_read_state_word(talos_rt_context *context,
+                                         uint64_t stateOffset, uint64_t width,
+                                         bool fourState, uint64_t *value,
+                                         uint64_t *unknown);
 // Normalize a flat design-plane range to the stable identity used by native
 // waits and publications. The caller holds context->mutex.
 uint64_t
