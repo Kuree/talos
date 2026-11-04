@@ -7969,6 +7969,54 @@ TEST(VPI, EndOfSimulationCallbacksRemainColdUntilRemoved) {
   talos_rt_v1_context_destroy(context);
 }
 
+// IEEE 1800-2023 37.2.2: a released handle is invalid, also once the runtime
+// reuses its memory for a new handle. The released token was resolved (and so
+// remembered by the handle table's cache) right before the release.
+TEST(VPI, ReleasedHandleStaysInvalidAfterItsMemoryIsReused) {
+  Fixture fixture;
+  fixture.database = makeFixedPropertyDatabase(false);
+  fixture.execution.design_database = fixture.database.data();
+  fixture.execution.design_database_size = fixture.database.size();
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&fixture.execution, &context),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_vpi_startup(context, nullptr, 0), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_vpi_end_compile(context), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_vpi_start_simulation(context), TALOS_RT_OK);
+  char valueName[] = "$root.top.value";
+  for (int round = 0; round != 3; ++round) {
+    vpiHandle old = vpi_handle_by_name(valueName, nullptr);
+    ASSERT_NE(old, nullptr);
+    EXPECT_EQ(vpi_get(vpiType, old), vpiReg);
+    EXPECT_EQ(vpi_release_handle(old), 1);
+    vpiHandle fresh = vpi_handle_by_name(valueName, nullptr);
+    ASSERT_NE(fresh, nullptr);
+    EXPECT_NE(fresh, old);
+    EXPECT_EQ(vpi_get(vpiType, old), vpiUndefined);
+    EXPECT_EQ(vpi_chk_error(nullptr), vpiError);
+    EXPECT_EQ(vpi_get_str(vpiName, old), nullptr);
+    EXPECT_EQ(vpi_chk_error(nullptr), vpiError);
+    EXPECT_EQ(vpi_get(vpiType, fresh), vpiReg);
+    EXPECT_EQ(vpi_release_handle(fresh), 1);
+  }
+  // An exhausted iterator is freed by vpi_scan itself (38.38), by token.
+  char rootName[] = "$root";
+  vpiHandle root = vpi_handle_by_name(rootName, nullptr);
+  ASSERT_NE(root, nullptr);
+  vpiHandle exhausted = vpi_iterate(vpiReg, root);
+  ASSERT_NE(exhausted, nullptr);
+  vpiHandle item = vpi_scan(exhausted);
+  ASSERT_NE(item, nullptr);
+  EXPECT_EQ(vpi_scan(exhausted), nullptr);
+  vpiHandle live = vpi_iterate(vpiReg, root);
+  ASSERT_NE(live, nullptr);
+  EXPECT_EQ(vpi_scan(exhausted), nullptr);
+  EXPECT_EQ(vpi_chk_error(nullptr), vpiError);
+  EXPECT_EQ(vpi_release_handle(live), 1);
+  talos_rt_v1_vpi_shutdown(context);
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(VPI, TraversesReflectionAndTracksHandleState) {
   Fixture fixture;
   fixture.database = makeFixedPropertyDatabase(false);

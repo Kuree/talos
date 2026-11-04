@@ -44,6 +44,7 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <cmath>
@@ -51,6 +52,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <limits>
 #include <memory>
 #include <new>
@@ -422,12 +424,65 @@ struct VPIExportExecutor {
   uint64_t source, baseDepth, exportToken;
 };
 
+// Live handles by token. Every VPI routine resolves its handle arguments
+// here, so findHandle goes through a small direct-mapped cache of recent
+// tokens (tokens are sequential, so recent ones rarely collide). Every
+// mutation goes through this class and keeps the cache consistent.
+class VPIHandleTable {
+public:
+  using Map = std::unordered_map<uintptr_t, std::unique_ptr<__vpiHandle>>;
+  // Constant iterators: replacing or resetting a stored handle in place would
+  // bypass the cache, so callers can only erase through this class.
+  using iterator = Map::const_iterator;
+
+  iterator begin() const { return map.cbegin(); }
+  iterator end() const { return map.cend(); }
+  iterator find(uintptr_t token) const { return map.find(token); }
+  template <typename Value>
+  std::pair<iterator, bool> try_emplace(uintptr_t token, Value &&value) {
+    auto [entry, inserted] = map.try_emplace(token, std::forward<Value>(value));
+    return {entry, inserted};
+  }
+  size_t erase(uintptr_t token) {
+    forget(token);
+    return map.erase(token);
+  }
+  iterator erase(iterator entry) {
+    forget(entry->first);
+    return map.erase(entry);
+  }
+  // The live handle of `token`, or null.
+  __vpiHandle *lookup(uintptr_t token) {
+    Slot &slot = recent[token % recent.size()];
+    if (slot.token == token && token != 0)
+      return slot.handle;
+    auto found = map.find(token);
+    if (found == map.end())
+      return nullptr;
+    slot = {token, found->second.get()};
+    return slot.handle;
+  }
+
+private:
+  void forget(uintptr_t token) {
+    Slot &slot = recent[token % recent.size()];
+    if (slot.token == token)
+      slot = {};
+  }
+  struct Slot {
+    uintptr_t token = 0;
+    __vpiHandle *handle = nullptr;
+  };
+  std::array<Slot, 64> recent{};
+  Map map;
+};
+
 struct VPIState {
   talos_rt_context *context = nullptr;
   // Keep the simulation thread's binding slot alive even if that thread exits
   // before another thread destroys the context.
   std::shared_ptr<VPIActiveSlot> ownerSlot;
-  std::unordered_map<uintptr_t, std::unique_ptr<__vpiHandle>> handles;
+  VPIHandleTable handles;
   std::string errorMessage;
   std::string errorCode;
   int errorLevel = 0;
@@ -528,6 +583,13 @@ struct VPIState {
   // Unlike returned value buffers these never escape the active VPI call.
   std::vector<uint64_t> readValueScratch;
   std::vector<uint64_t> readUnknownScratch;
+  // Decoded vpi_put_value operands, one pair per active write. Callbacks and
+  // DPI never write again inside a write; only a deposit made outside the
+  // scheduler runs HDL (and so cbError) inside one. The pool gives each nested
+  // write its own pair, at any depth.
+  std::deque<std::pair<std::vector<uint64_t>, std::vector<uint64_t>>>
+      writeValueScratch;
+  size_t writeValueScratchInUse = 0;
 };
 
 // VPI is callable only from the simulation thread (startup, callbacks, and
@@ -751,12 +813,11 @@ __vpiHandle *findHandle(vpiHandle opaque) {
     setError(state, "invalid or released VPI handle");
     return nullptr;
   }
-  auto found = state->handles.find(token);
-  if (found == state->handles.end() || found->second->owner != state) {
+  __vpiHandle *handle = state->handles.lookup(token);
+  if (!handle || handle->owner != state) {
     setError(state, "invalid or released VPI handle");
     return nullptr;
   }
-  __vpiHandle *handle = found->second.get();
   if (hasThreadLifetime(*handle) &&
       !threadIsLive(state, handle->logicalProcess)) {
     setError(state, "invalid or finished VPI thread handle");
@@ -14453,8 +14514,7 @@ extern "C" TALOS_VPI_EXPORT void vpi_get_value(vpiHandle opaque,
   }
   const bool isSigned = cached ? handle->valueRead.isSigned
                                : valueSigned(handle, source) || realSource;
-  if (!cached && !handle->valueRead.uncacheable && !realSource &&
-      !stringSource)
+  if (!cached && !handle->valueRead.uncacheable && !realSource && !stringSource)
     cacheValueRead(handle, *policy, source, semanticKind, isSigned);
   TALOS_RT_TRY {
     switch (destination->format) {
@@ -14778,8 +14838,26 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_put_value(vpiHandle opaque,
     setError(handle->owner, "delayed VPI writes are not supported");
     return nullptr;
   }
-  std::vector<uint64_t> value;
-  std::vector<uint64_t> unknown;
+  // A pooled pair reuses its capacity: no allocation per write.
+  struct WriteScratchLease {
+    VPIState *state;
+    size_t index;
+    ~WriteScratchLease() { --state->writeValueScratchInUse; }
+  };
+  VPIState *writer = handle->owner;
+  TALOS_RT_TRY {
+    if (writer->writeValueScratchInUse == writer->writeValueScratch.size())
+      writer->writeValueScratch.emplace_back();
+  }
+  TALOS_RT_CATCH_ALL {
+    setError(writer, "VPI write buffer is out of memory", vpiSystem);
+    return nullptr;
+  }
+  WriteScratchLease scratchLease{writer, writer->writeValueScratchInUse++};
+  std::vector<uint64_t> &value =
+      writer->writeValueScratch[scratchLease.index].first;
+  std::vector<uint64_t> &unknown =
+      writer->writeValueScratch[scratchLease.index].second;
   if (!decodeValue(handle, source, info.bit_width, vpiTypeForHandle(handle),
                    value, unknown))
     return nullptr;
