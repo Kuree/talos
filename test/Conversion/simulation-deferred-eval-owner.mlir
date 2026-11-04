@@ -7,9 +7,9 @@
 // only once no Active owner is pending.
 //
 // IEEE 1800-2023 9.2.3 and 20.2: after `$finish` no remaining event of the
-// slot runs, including a deferred owner. Each coordinator reads the
-// termination latch before one. The calendar coordinator cannot use its NBA
-// cut for this: the cut reports "no barrier" with the same value.
+// slot runs, including a deferred owner. A coordinator without a runtime
+// calendar reads the termination latch before one; the calendar coordinator's
+// NBA cut reports the finish itself (TALOS_RT_EVAL_NBA_TERMINATED).
 
 // The finisher is a generated Active owner. The coordinator polls the latch
 // when the selected bit is deferred and stops on a finish.
@@ -134,22 +134,30 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 
 // The finisher is a runtime-owned `initial` loop, so the coordinator keeps a
 // runtime calendar. A deferred bit first takes the NBA cut, which drains
-// runtime Active and Inactive work. Once quiescent, the coordinator polls the
-// latch and only then runs the lowest pending deferred owner.
+// runtime Active and Inactive work. A cut that ran the `$finish` (and the
+// final procedures) reports TALOS_RT_EVAL_NBA_TERMINATED (-2): the coordinator
+// returns OK at once, running no owner and committing nothing. Otherwise,
+// once quiescent, it runs the lowest pending deferred owner without polling
+// the latch again: nothing has run since the cut.
 
 // PLAN: talos eval owner: bit=0 {{.*}} deferred{{$}}
 
 // LOWER-LABEL: llvm.func @__talos_eval_dispatch_v1(
-// LOWER: llvm.call @talos_rt_v1_scheduler_prepare_eval_nba(
+// LOWER: llvm.call @talos_rt_v1_scheduler_prepare_eval_nba(%arg1, %[[REGION:[0-9]+]])
 // LOWER: %[[EMPTY:.*]] = llvm.icmp "eq" %{{.*}}, %{{.*}} : i64
 // LOWER-NEXT: llvm.cond_br %[[EMPTY]], ^[[CUT:bb[0-9]+]], ^[[SELECT:bb[0-9]+]]
 // LOWER-NEXT: ^[[SELECT]]:
 // LOWER: %[[DEFERRED:.*]] = llvm.icmp "uge"
 // LOWER-NEXT: llvm.cond_br %[[DEFERRED]], ^[[CUT]], ^[[SWITCH:bb[0-9]+]](
-// LOWER: llvm.call @talos_rt_v1_scheduler_termination_requested(%arg1)
-// LOWER: llvm.cond_br %{{.*}}, ^{{bb[0-9]+}}, ^[[SCAN:bb[0-9]+]]
-// LOWER-NEXT: ^[[SCAN]]:
-// LOWER: llvm.mlir.addressof @__talos_aot_model_ingress_v1
+// LOWER: %[[CUT_REGION:.*]] = llvm.load %[[REGION]] {{.*}}: !llvm.ptr -> i32
+// LOWER-NEXT: %[[TERMINATED:.*]] = llvm.mlir.constant(-2 : i32)
+// LOWER-NEXT: %[[ENDED:.*]] = llvm.icmp "eq" %[[CUT_REGION]], %[[TERMINATED]]
+// LOWER-NEXT: %[[OK:.*]] = llvm.mlir.constant(0 : i32)
+// LOWER-NEXT: llvm.cond_br %[[ENDED]], ^{{bb[0-9]+}}(%[[OK]] : i32), ^[[RUNNING:bb[0-9]+]]
+// LOWER: ^[[RUNNING]]:
+// LOWER: llvm.cond_br %{{.*}}, ^{{bb[0-9]+}}, ^[[QUIESCENT:bb[0-9]+]]
+// LOWER-NEXT: ^[[QUIESCENT]]:
+// LOWER-NEXT: llvm.mlir.addressof @__talos_aot_model_ingress_v1
 // LOWER: "llvm.intr.cttz"
 // LOWER: llvm.br ^[[SWITCH]](
 

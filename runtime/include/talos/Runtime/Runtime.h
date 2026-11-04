@@ -4012,10 +4012,16 @@ talos_rt_status talos_rt_v1_scheduler_activate_clock_kernel(
 // coordinator owns the shared-kernel drain and the single NBA/fanout epilogue.
 talos_rt_status
 talos_rt_v1_scheduler_run_clock_coordinator(talos_rt_context *context);
+// The region a prepare_eval_nba* cut reports when the runtime work it ran
+// executed a $finish: final procedures have run (IEEE 1800-2023 9.2.3, 20.2),
+// so the continuation dispatches nothing more and commits nothing.
+#define TALOS_RT_EVAL_NBA_TERMINATED UINT32_C(0xfffffffe)
 // Keep a generated eval continuation active across the common NBA barrier.
 // Prepare drains runtime Active/Inactive work without reentering generated
-// eval or advancing time. UINT32_MAX means no barrier is pending. Generated
-// ingress must be checked again before running the compiled NBA prefix.
+// eval or advancing time. UINT32_MAX means no barrier is pending and
+// TALOS_RT_EVAL_NBA_TERMINATED that the work finished the simulation.
+// Generated ingress must be checked again before running the compiled NBA
+// prefix.
 talos_rt_status
 talos_rt_v1_scheduler_prepare_eval_nba(talos_rt_context *context,
                                        uint32_t *out_region);

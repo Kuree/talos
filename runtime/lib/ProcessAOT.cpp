@@ -2456,7 +2456,9 @@ static talos_rt_status prepareEvalNBALocal(talos_rt_context *context,
   if (context->nativeScheduleDeoptimized)
     return TALOS_RT_TIER_UNAVAILABLE;
   if (context->schedulerFinishRequested.load(std::memory_order_relaxed)) {
-    *outRegion = UINT32_MAX;
+    // The cut ran a $finish and the final procedures (IEEE 1800-2023 9.2.3):
+    // nothing of this slot may run or commit after them.
+    *outRegion = TALOS_RT_EVAL_NBA_TERMINATED;
     return TALOS_RT_OK;
   }
   // The continuation will consume every newly published fine ingress bit.

@@ -1143,8 +1143,8 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
                        call.getArgOperands()[1]});
         call.replaceAllUsesWith(replacement.getResults());
         call.erase();
-        // A successful MAX result cancels the transaction's pending NBA on
-        // finish; never export it again after final procedures have run.
+        // A successful TERMINATED result cancels the transaction's pending NBA
+        // on finish; never export it again after final procedures have run.
         // Do not read the out parameter on a handoff/error (LRM 4.5, 20.2).
         builder.setInsertionPointAfter(replacement);
         Value ok = LLVM::ICmpOp::create(
@@ -1163,7 +1163,8 @@ LogicalResult materializeNativeEvalTransactions(ModuleOp module) {
                                  replacement.getArgOperands()[2], 4);
         Value ended = LLVM::ICmpOp::create(
             builder, loc, LLVM::ICmpPredicate::eq, barrier,
-            llvmConstant(builder, loc, builder.getI32Type(), UINT32_MAX));
+            llvmConstant(builder, loc, builder.getI32Type(),
+                         TALOS_RT_EVAL_NBA_TERMINATED));
         for (const auto &word : words)
           store(builder, loc, frame, word.offset,
                 LLVM::SelectOp::create(builder, loc, ended,

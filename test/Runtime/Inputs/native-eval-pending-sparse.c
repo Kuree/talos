@@ -24,6 +24,7 @@ uint32_t talos_rt_v1_scheduler_execute_aot_actor(void *context, uint32_t slot) {
 }
 uint32_t talos_rt_v1_scheduler_prepare_eval_nba_local_write(
         void *context, uint32_t local, uint32_t *region) {
-  *region = UINT32_MAX;
+  /* TALOS_RT_EVAL_NBA_TERMINATED: the cut ran a $finish. */
+  *region = UINT32_C(0xfffffffe);
   return local == 2 ? 0 : 1;
 }

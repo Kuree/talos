@@ -10503,6 +10503,34 @@ TEST(Scheduler, CohortFinalEntryReportsExhaustion) {
   talos_rt_v1_context_destroy(context);
 }
 
+// IEEE 1800-2023 9.2.3, 20.2: an NBA cut whose runtime work finishes the
+// simulation runs the final procedures and reports that, distinct from an
+// idle cut, so the generated continuation runs and commits nothing more.
+TEST(Scheduler, EvalNBACutReportsAFinishAfterTheFinals) {
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  talos_rt_native_schedule_plan plan{};
+  plan.flags = TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL;
+  context->nativeSchedulePlan = &plan;
+  ASSERT_EQ(talos_rt_v1_scheduler_finish(context, 0), TALOS_RT_OK);
+  {
+    ContextMutexLock lock(context);
+    NativeAOTContextScope aot(context);
+    NativeAOTMutexScope mutex(context);
+    uint32_t region = 99;
+    ASSERT_EQ(talos_rt_v1_scheduler_prepare_eval_nba(context, &region),
+              TALOS_RT_OK);
+    EXPECT_EQ(region, TALOS_RT_EVAL_NBA_TERMINATED);
+    EXPECT_TRUE(context->schedulerRunningFinals);
+    region = 99;
+    ASSERT_EQ(talos_rt_v1_scheduler_prepare_eval_nba_local(
+                  context, TALOS_RT_REGION_NBA, &region),
+              TALOS_RT_OK);
+    EXPECT_EQ(region, TALOS_RT_EVAL_NBA_TERMINATED);
+  }
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(Scheduler, IdleCurrentSlotEntriesKeepLoopEffects) {
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);

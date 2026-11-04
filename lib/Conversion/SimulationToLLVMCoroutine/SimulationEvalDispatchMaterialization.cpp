@@ -399,8 +399,9 @@ materializeNativeEvalDispatch(ModuleOp module,
   if (hasDeferred)
     deferredOwnerMask.setBits(plan.firstDeferredBit, mergedFragments.size());
   // A finish request ends the simulation before any remaining scheduled
-  // event, deferred owners included (IEEE 1800-2023 9.2.3, 20.2). The NBA cut
-  // reports no barrier the same way, so read the termination latch itself.
+  // event, deferred owners included (IEEE 1800-2023 9.2.3, 20.2). A
+  // runtime-calendar coordinator learns it from its NBA cut
+  // (TALOS_RT_EVAL_NBA_TERMINATED); the others read the termination latch.
   auto terminationRequested = [&]() -> Value {
     getOrDeclareLLVMFunction(
         module, "talos_rt_v1_scheduler_termination_requested", i32, {pointer});
@@ -1039,6 +1040,19 @@ materializeNativeEvalDispatch(ModuleOp module,
     cf::CondBranchOp::create(builder, location, prepareOK, prepared,
                              ValueRange{}, failed, ValueRange{prepareStatus});
     builder.setInsertionPointToStart(prepared);
+    // The cut ran a $finish and the final procedures (IEEE 1800-2023 9.2.3):
+    // dispatch no further owner and commit nothing of this slot.
+    Value terminatedAtCut = arith::CmpIOp::create(
+        builder, location, arith::CmpIPredicate::eq,
+        LLVM::LoadOp::create(builder, location, i32, region, 4),
+        llvmConstant(builder, location, i32, TALOS_RT_EVAL_NBA_TERMINATED));
+    Block *running = new Block;
+    fastCoordinator.getBody().push_back(running);
+    cf::CondBranchOp::create(
+        builder, location, terminatedAtCut, complete,
+        ValueRange{llvmConstant(builder, location, i32, TALOS_RT_OK)}, running,
+        ValueRange{});
+    builder.setInsertionPointToStart(running);
     Value ingress = maskedOwnerWords(builder, location, ingressAddress(),
                                      allOwners & ~deferredOwnerMask);
     Value hasIngress = arith::CmpIOp::create(
@@ -1055,13 +1069,8 @@ materializeNativeEvalDispatch(ModuleOp module,
     cf::CondBranchOp::create(builder, location, hasIngress, dispatch,
                              ValueRange{}, quiescent, ValueRange{});
     if (hasDeferred) {
+      // The cut just above reported any finish, and nothing has run since.
       builder.setInsertionPointToStart(quiescent);
-      Block *runDeferred = new Block;
-      fastCoordinator.getBody().push_back(runDeferred);
-      cf::CondBranchOp::create(builder, location, terminationRequested(),
-                               performCommit, ValueRange{}, runDeferred,
-                               ValueRange{});
-      builder.setInsertionPointToStart(runDeferred);
       for (unsigned word = plan.firstDeferredBit / 64;
            word * 64 < mergedFragments.size(); ++word) {
         Value pending = arith::AndIOp::create(
