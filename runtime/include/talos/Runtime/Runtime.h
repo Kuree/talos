@@ -3893,6 +3893,36 @@ void talos_rt_v1_native_promotion_recheck_buckets(
     talos_rt_native_promotion_invalidate request_recheck, uint64_t bit_offset,
     uint64_t bit_width);
 
+// Promotion slices: compiler-built disjoint ranges of the canonical state that
+// wide (whole-memory) proofs depend on. counts[i] holds the number of X/Z bits
+// in slice i of the generated unknown plane; dependents[starts[i] ..
+// starts[i + 1]) are the certificates depending on it. Only a slice's change
+// between holding X/Z and holding none invalidates or rechecks them, so X/Z
+// moving inside a memory that already holds X/Z costs no proof work (IEEE
+// 1800-2023 6.3.1).
+typedef struct talos_rt_native_promotion_slices {
+  const uint64_t *ranges; // (begin, end) bit pairs, sorted and disjoint
+  uint64_t *counts;
+  const uint64_t *starts;
+  const uint64_t *dependents;
+  uint64_t count;
+  const uint8_t *unknown; // the generated unknown plane, for recounts
+} talos_rt_native_promotion_slices;
+
+// `bit_width` bits at `bit_offset` all became X/Z (became_unknown != 0) or all
+// became known; adjusts the overlapping slices and acts on their dependents
+// on transitions, then runs `aggregate` once when any certificate was touched.
+void talos_rt_v1_native_promotion_slices_adjust(
+    const talos_rt_native_promotion_slices *slices,
+    const talos_rt_native_promotion_certificate *certificates,
+    talos_rt_native_promotion_invalidate aggregate, uint64_t bit_offset,
+    uint64_t bit_width, uint32_t became_unknown);
+
+// Recomputes every slice count from the unknown plane, after the plane changed
+// without publication (plan install, global invalidation).
+void talos_rt_v1_native_promotion_slices_recount(
+    const talos_rt_native_promotion_slices *slices);
+
 // One canonical unknown-plane store window (64 bits) whose dependent proofs
 // the compiler resolved statically: records holds record_count (mask,
 // certificate ID) uint64_t pairs, mask being the window bits that the
@@ -3902,12 +3932,14 @@ void talos_rt_v1_native_promotion_recheck_buckets(
 // the invalidations. Each aggregate action runs once when any certificate was
 // touched. Equivalent to the range and bucket helpers above for the same
 // window.
+// A record whose certificate ID has bit 63 set names a promotion slice
+// (index in the low bits) instead, adjusted as by the slices helper above.
 void talos_rt_v1_native_promotion_publish_window(
     const uint64_t *records, uint64_t record_count,
     const talos_rt_native_promotion_certificate *certificates,
     talos_rt_native_promotion_invalidate invalidate_aggregate,
     talos_rt_native_promotion_invalidate request_recheck, uint64_t changed,
-    uint64_t unknown);
+    uint64_t unknown, const talos_rt_native_promotion_slices *slices);
 
 // Values of talos_rt_native_schedule_plan.runtime_yield.
 #define TALOS_RT_RUNTIME_YIELD_COMMIT UINT32_C(0)

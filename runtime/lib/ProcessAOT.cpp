@@ -351,33 +351,165 @@ extern "C" void talos_rt_v1_native_promotion_recheck_buckets(
     requestRecheck();
 }
 
+namespace {
+/// X/Z bits of the unknown plane in [begin, end).
+uint64_t countUnknownBits(const uint8_t *plane, uint64_t begin, uint64_t end) {
+  uint64_t count = 0;
+  while (begin < end && begin % 64) {
+    count += (plane[begin / 8] >> (begin % 8)) & 1;
+    ++begin;
+  }
+  for (; begin + 64 <= end; begin += 64) {
+    uint64_t word;
+    std::memcpy(&word, plane + begin / 8, sizeof(word));
+    count += static_cast<uint64_t>(__builtin_popcountll(word));
+  }
+  for (; begin < end; ++begin)
+    count += (plane[begin / 8] >> (begin % 8)) & 1;
+  return count;
+}
+
+/// With TALOS_RT_VERIFY_PROMOTION_SLICES, the plan's slice counts are checked
+/// against the unknown plane when the program exits, after every publication
+/// has run (a generated activation publishes its stores after the whole
+/// batch). Designs with conservative writers (VPI, force) may legitimately
+/// overcount; the check is for exact designs.
+void registerPromotionSliceCheck(
+    const talos_rt_native_promotion_slices *slices) {
+  static const talos_rt_native_promotion_slices *registered = nullptr;
+  if (registered || !std::getenv("TALOS_RT_VERIFY_PROMOTION_SLICES"))
+    return;
+  registered = slices;
+  std::atexit([] {
+    for (uint64_t slice = 0; slice != registered->count; ++slice) {
+      uint64_t expected =
+          countUnknownBits(registered->unknown, registered->ranges[2 * slice],
+                           registered->ranges[2 * slice + 1]);
+      if (registered->counts[slice] == expected)
+        continue;
+      std::fprintf(stderr,
+                   "talos: promotion slice %llu holds %llu X/Z bits, counted "
+                   "%llu\n",
+                   static_cast<unsigned long long>(slice),
+                   static_cast<unsigned long long>(expected),
+                   static_cast<unsigned long long>(registered->counts[slice]));
+      std::abort();
+    }
+  });
+}
+
+/// Adds `bits` X/Z bits to `slice` (or removes them) and acts on its
+/// dependents. Bits reported X/Z always invalidate them: some writers report
+/// a footprint that only may have become X/Z, and a recount can see stores
+/// not yet published, so a count can exceed the plane's. Counts therefore
+/// gate only the recheck: once a slice's count reaches zero, its failed
+/// dependents become eligible, and their readiness scans, which read the
+/// plane, decide. A wrong count can delay a recheck but never keep an
+/// invalid proof (IEEE 1800-2023 6.3.1). Returns whether any certificate
+/// was touched.
+bool adjustPromotionSlice(
+    const talos_rt_native_promotion_slices &slices, uint64_t slice,
+    const talos_rt_native_promotion_certificate *certificates, uint64_t bits,
+    bool becameUnknown) {
+  uint64_t &count = slices.counts[slice];
+  uint64_t old = count;
+  // Clamped: an overcount (see above) can meet exact removals.
+  count = becameUnknown ? old + bits : (old > bits ? old - bits : 0);
+  bool transition = becameUnknown ? bits != 0 : old != 0 && count == 0;
+  if (transition)
+    for (uint64_t index = slices.starts[slice];
+         index != slices.starts[slice + 1]; ++index) {
+      const auto &certificate = certificates[slices.dependents[index]];
+      if (becameUnknown)
+        invalidatePromotionCertificate(certificate);
+      else
+        recheckPromotionCertificate(certificate);
+    }
+  return transition && slices.starts[slice] != slices.starts[slice + 1];
+}
+} // namespace
+
+extern "C" void talos_rt_v1_native_promotion_slices_adjust(
+    const talos_rt_native_promotion_slices *slices,
+    const talos_rt_native_promotion_certificate *certificates,
+    talos_rt_native_promotion_invalidate aggregate, uint64_t bitOffset,
+    uint64_t bitWidth, uint32_t becameUnknown) {
+  uint64_t end =
+      bitOffset > UINT64_MAX - bitWidth ? UINT64_MAX : bitOffset + bitWidth;
+  // The first slice ending after bitOffset.
+  uint64_t low = 0, high = slices->count;
+  while (low != high) {
+    uint64_t middle = low + (high - low) / 2;
+    if (slices->ranges[2 * middle + 1] <= bitOffset)
+      low = middle + 1;
+    else
+      high = middle;
+  }
+  bool affected = false;
+  for (uint64_t slice = low;
+       slice != slices->count && slices->ranges[2 * slice] < end; ++slice) {
+    uint64_t first = std::max(slices->ranges[2 * slice], bitOffset);
+    uint64_t last = std::min(slices->ranges[2 * slice + 1], end);
+    affected |= adjustPromotionSlice(*slices, slice, certificates, last - first,
+                                     becameUnknown != 0);
+  }
+  if (affected)
+    aggregate();
+}
+
+extern "C" void talos_rt_v1_native_promotion_slices_recount(
+    const talos_rt_native_promotion_slices *slices) {
+  registerPromotionSliceCheck(slices);
+  for (uint64_t slice = 0; slice != slices->count; ++slice)
+    slices->counts[slice] =
+        countUnknownBits(slices->unknown, slices->ranges[2 * slice],
+                         slices->ranges[2 * slice + 1]);
+}
+
 extern "C" void talos_rt_v1_native_promotion_publish_window(
     const uint64_t *records, uint64_t recordCount,
     const talos_rt_native_promotion_certificate *certificates,
     talos_rt_native_promotion_invalidate invalidateAggregate,
     talos_rt_native_promotion_invalidate requestRecheck, uint64_t changed,
-    uint64_t unknown) {
+    uint64_t unknown, const talos_rt_native_promotion_slices *slices) {
+  constexpr uint64_t kSlice = uint64_t{1} << 63;
   // IEEE 1800-2023 6.3.1: a bit that became X/Z can break a two-state proof;
   // one that became known can only make a failed proof eligible again.
   uint64_t lost = changed & unknown;
   uint64_t gained = changed & ~unknown;
   if (lost) {
     bool affected = false;
-    for (uint64_t index = 0; index != recordCount; ++index)
-      if (records[2 * index] & lost) {
-        invalidatePromotionCertificate(certificates[records[2 * index + 1]]);
-        affected = true;
+    for (uint64_t index = 0; index != recordCount; ++index) {
+      uint64_t mask = records[2 * index] & lost, id = records[2 * index + 1];
+      if (!mask)
+        continue;
+      if (id & kSlice) {
+        affected |= adjustPromotionSlice(
+            *slices, id & ~kSlice, certificates,
+            static_cast<uint64_t>(__builtin_popcountll(mask)), true);
+        continue;
       }
+      invalidatePromotionCertificate(certificates[id]);
+      affected = true;
+    }
     if (affected)
       invalidateAggregate();
   }
   if (gained) {
     bool affected = false;
-    for (uint64_t index = 0; index != recordCount; ++index)
-      if (records[2 * index] & gained) {
-        recheckPromotionCertificate(certificates[records[2 * index + 1]]);
-        affected = true;
+    for (uint64_t index = 0; index != recordCount; ++index) {
+      uint64_t mask = records[2 * index] & gained, id = records[2 * index + 1];
+      if (!mask)
+        continue;
+      if (id & kSlice) {
+        affected |= adjustPromotionSlice(
+            *slices, id & ~kSlice, certificates,
+            static_cast<uint64_t>(__builtin_popcountll(mask)), false);
+        continue;
       }
+      recheckPromotionCertificate(certificates[id]);
+      affected = true;
+    }
     if (affected)
       requestRecheck();
   }

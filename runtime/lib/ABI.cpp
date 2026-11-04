@@ -706,6 +706,13 @@ ABI_OFFSET(talos_rt_native_promotion_certificate, word, ABI_PTR(8, 4));
 ABI_OFFSET(talos_rt_native_promotion_certificate, mask, ABI_PTR(16, 8));
 ABI_OFFSET(talos_rt_native_promotion_certificate, route_slot, ABI_PTR(24, 16));
 ABI_OFFSET(talos_rt_native_promotion_certificate, fallback, ABI_PTR(32, 20));
+ABI_SIZE_ALIGN(talos_rt_native_promotion_slices, ABI_PTR(48, 32), 8);
+ABI_OFFSET(talos_rt_native_promotion_slices, ranges, 0);
+ABI_OFFSET(talos_rt_native_promotion_slices, counts, ABI_PTR(8, 4));
+ABI_OFFSET(talos_rt_native_promotion_slices, starts, ABI_PTR(16, 8));
+ABI_OFFSET(talos_rt_native_promotion_slices, dependents, ABI_PTR(24, 12));
+ABI_OFFSET(talos_rt_native_promotion_slices, count, ABI_PTR(32, 16));
+ABI_OFFSET(talos_rt_native_promotion_slices, unknown, ABI_PTR(40, 24));
 ABI_SIZE_ALIGN(talos_rt_native_ordered_nba_bridge, ABI_PTR(16, 8),
                ABI_PTR(8, 4));
 ABI_OFFSET(talos_rt_native_ordered_nba_bridge, queue, 0);
@@ -1620,8 +1627,15 @@ ABI_FUNCTION(talos_rt_v1_native_promotion_publish_window,
              void (*)(const uint64_t *, uint64_t,
                       const talos_rt_native_promotion_certificate *,
                       talos_rt_native_promotion_invalidate,
-                      talos_rt_native_promotion_invalidate, uint64_t,
-                      uint64_t));
+                      talos_rt_native_promotion_invalidate, uint64_t, uint64_t,
+                      const talos_rt_native_promotion_slices *));
+ABI_FUNCTION(talos_rt_v1_native_promotion_slices_adjust,
+             void (*)(const talos_rt_native_promotion_slices *,
+                      const talos_rt_native_promotion_certificate *,
+                      talos_rt_native_promotion_invalidate, uint64_t, uint64_t,
+                      uint32_t));
+ABI_FUNCTION(talos_rt_v1_native_promotion_slices_recount,
+             void (*)(const talos_rt_native_promotion_slices *));
 ABI_FUNCTION(talos_rt_v1_scheduler_install_aot,
              talos_rt_status (*)(talos_rt_context *,
                                  const talos_rt_native_schedule_plan *));

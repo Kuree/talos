@@ -145,6 +145,8 @@ def EvalProofEntries : ScheduleField<"EvalProofEntries", "schedule.eval.proof_en
     "::mlir::DenseI64ArrayAttr">;
 def EvalUnknownSummaryReported : ScheduleField<"EvalUnknownSummaryReported", "schedule.eval.unknown_summary_reported",
     "::mlir::UnitAttr">;
+def EvalProofSlices : ScheduleField<"EvalProofSlices", "schedule.eval.proof_slices",
+    "::mlir::DenseI64ArrayAttr">;
 def EvalProvenTwoStateCall : ScheduleField<"EvalProvenTwoStateCall", "schedule.eval.proven_two_state_call",
     "::mlir::UnitAttr">;
 def EvalRankedMembers : ScheduleField<"EvalRankedMembers", "schedule.eval.ranked_members",

@@ -275,6 +275,8 @@ bool isEvalClosureRuntimeCall(LLVM::CallOp call, LLVM::LLVMFuncOp function,
       *callee == "talos_rt_v1_native_promotion_invalidate_buckets" ||
       *callee == "talos_rt_v1_native_promotion_recheck_buckets" ||
       *callee == "talos_rt_v1_native_promotion_publish_window" ||
+      *callee == "talos_rt_v1_native_promotion_slices_adjust" ||
+      *callee == "talos_rt_v1_native_promotion_slices_recount" ||
       // The unknown summary's rescan reads the generated unknown
       // plane and clears summary bits; marking only sets them.
       // Neither executes actors, publishes, or re-enters scheduling.

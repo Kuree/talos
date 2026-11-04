@@ -28,7 +28,7 @@
 // RANGE-DAG: llvm.mlir.global internal constant @__talos_eval_promotion_window_432_v1(dense<[255, 0, 65280, 1]> : tensor<4xi64>)
 // RANGE-DAG: llvm.mlir.global internal constant @__talos_eval_promotion_window_296_v1(dense<[-16777215, 3]> : tensor<2xi64>)
 // RANGE-DAG: llvm.func preserve_mostcc @__talos_eval_promotion_publish_window_v1({{.*}}passthrough = ["cold", "noinline"]
-// RANGE-DAG: llvm.call @talos_rt_v1_native_promotion_publish_window(%arg0, %arg1, %{{.*}}, %{{.*}}, %{{.*}}, %arg2, %arg3)
+// RANGE-DAG: llvm.call @talos_rt_v1_native_promotion_publish_window(%arg0, %arg1, %{{.*}}, %{{.*}}, %{{.*}}, %arg2, %arg3, %{{.*}})
 // RANGE-LABEL: llvm.func @__talos_eval_promotion_invalidate_range_v1
 // RANGE: llvm.call @talos_rt_v1_native_promotion_invalidate_ranges
 

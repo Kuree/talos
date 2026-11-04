@@ -337,7 +337,7 @@ TEST(PromotionWindow, PublishMatchesRunByRunRangeQueries) {
       if (variant) {
         talos_rt_v1_native_promotion_publish_window(
             records.data(), records.size() / 2, certificates,
-            invalidateAggregate, requestRecheck, changed, unknown);
+            invalidateAggregate, requestRecheck, changed, unknown, nullptr);
       } else {
         // Each maximal run of a mask, as __talos_eval_promotion_*_mask_v1.
         auto runs = [&](uint64_t mask, auto query,
@@ -372,6 +372,128 @@ TEST(PromotionWindow, PublishMatchesRunByRunRangeQueries) {
     ASSERT_LE(invalidations[1], 1u);
     ASSERT_EQ(rechecks[0] != 0, rechecks[1] == 1) << trial;
     ASSERT_LE(rechecks[1], 1u);
+  }
+}
+
+// Promotion slices count X/Z bits per slice; X/Z reports always invalidate
+// dependents and a count reaching zero rechecks them. Readiness scans are
+// simulated as they run: on the plane, not on the counts. Writers also report
+// footprints that only may have become X/Z, and recounts run at arbitrary
+// points, so counts can exceed the plane. Still, a latched certificate never
+// depends on a slice whose plane holds X/Z, and an exact count reaching zero
+// leaves every failed dependent pending (IEEE 1800-2023 6.3.1).
+TEST(PromotionSlices, CountsTrackThePlaneAndKeepProofsSound) {
+  std::mt19937_64 random(11);
+  for (unsigned trial = 0; trial != 200; ++trial) {
+    std::vector<uint8_t> plane(40, 0);
+    for (auto &byte : plane)
+      byte = static_cast<uint8_t>(random());
+    const uint64_t ranges[] = {16, 140, 140, 300};
+    uint64_t counts[2] = {};
+    const uint64_t starts[] = {0, 2, 3};
+    const uint64_t dependents[] = {0, 1, 1};
+    talos_rt_native_promotion_slices slices{ranges, counts, starts,
+                                            dependents, 2, plane.data()};
+    talos_rt_v1_native_promotion_slices_recount(&slices);
+    uint8_t latch[2] = {0, 0};
+    uint64_t pending = 3;
+    talos_rt_native_promotion_certificate certificates[] = {
+        {&latch[0], &pending, 1, nullptr, nullptr},
+        {&latch[1], &pending, 2, nullptr, nullptr}};
+    auto bit = [&](uint64_t index) {
+      return (plane[index / 8] >> (index % 8)) & 1;
+    };
+    auto count = [&](uint64_t begin, uint64_t end) {
+      uint64_t total = 0;
+      for (uint64_t index = begin; index != end; ++index)
+        total += bit(index);
+      return total;
+    };
+    // What a readiness scan sees: the plane.
+    auto known = [&](unsigned certificate) {
+      return certificate == 0 ? count(16, 140) == 0
+                              : count(16, 140) == 0 && count(140, 300) == 0;
+    };
+    auto countedKnown = [&](unsigned certificate) {
+      return certificate == 0 ? counts[0] == 0
+                              : counts[0] == 0 && counts[1] == 0;
+    };
+    bool exact = true;
+    for (unsigned step = 0; step != 60; ++step) {
+      // A conservative writer: its whole footprint may have become X/Z.
+      if (random() % 6 == 0) {
+        talos_rt_v1_native_promotion_slices_adjust(
+            &slices, certificates, invalidateAggregate, random() % 300,
+            1 + random() % 40, 1);
+        exact = false;
+      }
+      // A recount, e.g. from a global invalidation, at an arbitrary point.
+      if (random() % 9 == 0) {
+        talos_rt_v1_native_promotion_slices_recount(&slices);
+        exact = true;
+      }
+      uint64_t begin = random() % 320, width = 1 + random() % 64;
+      bool toUnknown = random() & 1;
+      uint64_t window = begin / 64 * 64;
+      uint64_t changed = 0, unknownWord = 0;
+      bool useWindow = random() & 1;
+      for (uint64_t index = begin; index != std::min<uint64_t>(begin + width, 320);
+           ++index) {
+        if (bit(index) == toUnknown)
+          continue;
+        plane[index / 8] = static_cast<uint8_t>(plane[index / 8] ^
+                                                (1u << (index % 8)));
+        if (useWindow && index < window + 64) {
+          changed |= uint64_t{1} << (index - window);
+          continue;
+        }
+        talos_rt_v1_native_promotion_slices_adjust(
+            &slices, certificates, invalidateAggregate, index, 1, toUnknown);
+      }
+      if (changed) {
+        for (uint64_t index = 0; index != 64; ++index)
+          if (bit(window + index))
+            unknownWord |= uint64_t{1} << index;
+        std::vector<uint64_t> records;
+        for (uint64_t slice = 0; slice != 2; ++slice) {
+          uint64_t first = std::max(ranges[2 * slice], window);
+          uint64_t last = std::min(ranges[2 * slice + 1], window + 64);
+          if (first >= last)
+            continue;
+          uint64_t span = last - first;
+          records.push_back(
+              (span == 64 ? UINT64_MAX : (uint64_t{1} << span) - 1)
+              << (first - window));
+          records.push_back(slice | (uint64_t{1} << 63));
+        }
+        talos_rt_v1_native_promotion_publish_window(
+            records.data(), records.size() / 2, certificates,
+            invalidateAggregate, requestRecheck, changed, unknownWord,
+            &slices);
+      }
+      if (exact) {
+        ASSERT_EQ(counts[0], count(16, 140)) << trial << ' ' << step;
+        ASSERT_EQ(counts[1], count(140, 300)) << trial << ' ' << step;
+      } else {
+        ASSERT_GE(counts[0], count(16, 140)) << trial << ' ' << step;
+        ASSERT_GE(counts[1], count(140, 300)) << trial << ' ' << step;
+      }
+      for (unsigned certificate = 0; certificate != 2; ++certificate) {
+        // Soundness, whatever the counts: no latched proof over X/Z.
+        if (latch[certificate])
+          ASSERT_TRUE(known(certificate)) << trial << ' ' << step;
+        // Liveness where the counts agree with the plane.
+        else if (known(certificate) && countedKnown(certificate))
+          ASSERT_TRUE(pending & (uint64_t{1} << certificate))
+              << trial << ' ' << step;
+      }
+      // The readiness scan: a pending, fully known certificate latches.
+      for (unsigned certificate = 0; certificate != 2; ++certificate)
+        if ((pending >> certificate & 1) && known(certificate)) {
+          latch[certificate] = 1;
+          pending &= ~(uint64_t{1} << certificate);
+        }
+    }
   }
 }
 

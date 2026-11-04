@@ -14,6 +14,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/STLExtras.h"
 
 using namespace mlir;
@@ -156,6 +157,71 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
                                          certificates.size()))
     return hook.emitError("could not verify canonical proof dependency index");
 
+  // Wide (whole-memory) dependencies of kernel proofs become promotion slices:
+  // the runtime counts each slice's X/Z bits and touches its dependents only
+  // when the slice changes between holding X/Z and holding none (IEEE
+  // 1800-2023 6.3.1). A kernel or group proof is re-validated only by its
+  // readiness scan, which reads every one of its ranges (the same merged
+  // promotion ranges, or the group domain's ranges), so no dependent can be
+  // valid while its slice holds X/Z. Route and NBA proofs keep
+  // per-publication actions. Slices need the global
+  // invalidator, which recounts them when the plane changed unpublished.
+  std::vector<talos_rt_native_promotion_dependency> coverageEntries = entries;
+  struct Slice {
+    uint64_t begin, end;
+    SmallVector<uint64_t> dependents;
+  };
+  SmallVector<Slice> slices;
+  auto globalInvalidate = module.lookupSymbol<LLVM::LLVMFuncOp>(
+      "__talos_eval_promotion_invalidate_v1");
+  {
+    constexpr uint64_t kSliceBits = 4096;
+    auto sliceable = [&](const talos_rt_native_promotion_dependency &entry) {
+      Certificate &certificate = certificates[entry.certificate];
+      return entry.end - entry.begin > kSliceBits && !certificate.nba &&
+             !certificate.route &&
+             (certificate.group ||
+              certificate.global.getSymName() ==
+                  "__talos_eval_kernel_promotion_latched_v1");
+    };
+    size_t wide = llvm::count_if(entries, sliceable);
+    // Slices keep at least one narrow entry: an empty range index takes the
+    // early path below that builds empty hooks.
+    if (globalInvalidate && !globalInvalidate.empty() && wide != 0 &&
+        wide != entries.size()) {
+      std::vector<uint64_t> points;
+      for (const auto &entry : entries)
+        if (sliceable(entry)) {
+          points.push_back(entry.begin);
+          points.push_back(entry.end);
+        }
+      llvm::sort(points);
+      points.erase(std::unique(points.begin(), points.end()), points.end());
+      for (size_t index = 0; index + 1 < points.size(); ++index) {
+        uint64_t low = points[index], high = points[index + 1];
+        SmallVector<uint64_t> dependents;
+        for (const auto &entry : entries)
+          if (sliceable(entry) && entry.begin <= low && entry.end >= high)
+            dependents.push_back(entry.certificate);
+        if (dependents.empty())
+          continue;
+        llvm::sort(dependents);
+        dependents.erase(std::unique(dependents.begin(), dependents.end()),
+                         dependents.end());
+        if (!slices.empty() && slices.back().end == low &&
+            slices.back().dependents == dependents)
+          slices.back().end = high;
+        else
+          slices.push_back({low, high, std::move(dependents)});
+      }
+      llvm::erase_if(entries, sliceable);
+      if (!runtime::buildPromotionRangeIndex(entries, stateBits.getUInt(),
+                                             certificates.size()))
+        return hook.emitError(
+            "could not verify canonical proof dependency index");
+    }
+  }
+
   MLIRContext *context = module.getContext();
   OpBuilder builder(context);
   Location location = hook.getLoc();
@@ -236,7 +302,7 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
   // It is coverage, not another ownership or alias inventory. Constant stores
   // outside it cannot change any certificate and need no runtime guard.
   SmallVector<int64_t> coverage;
-  for (const auto &dependency : entries) {
+  for (const auto &dependency : coverageEntries) {
     if (!coverage.empty() &&
         dependency.begin <= static_cast<uint64_t>(coverage.back())) {
       coverage.back() =
@@ -259,6 +325,14 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
                                          int64_t(dependency.certificate)});
   ::talos::schedule::set<::talos::schedule::Field::EvalProofEntries>(
       dependencies, builder.getDenseI64ArrayAttr(flatEntries));
+  if (!slices.empty()) {
+    SmallVector<int64_t> flatSlices;
+    for (const Slice &slice : slices)
+      llvm::append_range(flatSlices, ArrayRef<int64_t>{int64_t(slice.begin),
+                                                       int64_t(slice.end)});
+    ::talos::schedule::set<::talos::schedule::Field::EvalProofSlices>(
+        dependencies, builder.getDenseI64ArrayAttr(flatSlices));
+  }
 
   // Pointer fields use the target LLVM layout; only packed bit positions and
   // uint64_t pending words have fixed byte offsets across native and wasm32.
@@ -418,6 +492,99 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
     specialize(entry, reset, "talos_rt_v1_native_promotion_invalidate_buckets");
     specialize(recheckEntry, request,
                "talos_rt_v1_native_promotion_recheck_buckets");
+  }
+
+  if (!slices.empty()) {
+    builder.setInsertionPointToStart(module.getBody());
+    auto constantArray = [&](StringRef name, ArrayRef<uint64_t> words,
+                             bool constant) {
+      auto type = LLVM::LLVMArrayType::get(i64, words.size());
+      return LLVM::GlobalOp::create(
+          builder, location, type, constant, LLVM::Linkage::Internal, name,
+          DenseIntElementsAttr::get(
+              RankedTensorType::get({int64_t(words.size())}, i64), words),
+          8);
+    };
+    SmallVector<uint64_t> ranges, starts{0}, dependents;
+    for (const Slice &slice : slices) {
+      llvm::append_range(ranges, ArrayRef<uint64_t>{slice.begin, slice.end});
+      llvm::append_range(dependents, slice.dependents);
+      starts.push_back(dependents.size());
+    }
+    auto rangesGlobal =
+        constantArray("__talos_eval_promotion_slice_ranges_v1", ranges, true);
+    // Recounted from the plane by the global invalidator, which plan
+    // installation runs before any publication.
+    auto countsGlobal = constantArray(
+        "__talos_eval_promotion_slice_counts_v1",
+        SmallVector<uint64_t>(slices.size(), 0), false);
+    auto startsGlobal =
+        constantArray("__talos_eval_promotion_slice_starts_v1", starts, true);
+    auto dependentsGlobal = constantArray(
+        "__talos_eval_promotion_slice_dependents_v1", dependents, true);
+    Type slicesType = LLVM::LLVMStructType::getLiteral(
+        context, {pointer, pointer, pointer, pointer, i64, pointer});
+    makeConstantGlobal(
+        module, location, slicesType, "__talos_eval_promotion_slices_v1",
+        LLVM::Linkage::Internal, 8, [&](OpBuilder &b) {
+          Value record = LLVM::ZeroOp::create(b, location, slicesType);
+          auto put = [&](Value value, int64_t field) {
+            record = LLVM::InsertValueOp::create(b, location, record, value,
+                                                 ArrayRef<int64_t>{field});
+          };
+          auto addressOf = [&](StringRef name) -> Value {
+            return LLVM::AddressOfOp::create(b, location, pointer, name);
+          };
+          put(addressOf(rangesGlobal.getSymName()), 0);
+          put(addressOf(countsGlobal.getSymName()), 1);
+          put(addressOf(startsGlobal.getSymName()), 2);
+          put(addressOf(dependentsGlobal.getSymName()), 3);
+          put(llvmConstant(b, location, i64, slices.size()), 4);
+          put(addressOf("__talos_state_unknown"), 5);
+          return record;
+        });
+    auto adjust = getOrDeclareLLVMFunction(
+        module, "talos_rt_v1_native_promotion_slices_adjust", voidType,
+        {pointer, pointer, pointer, i64, i64, builder.getI32Type()});
+    auto recount = getOrDeclareLLVMFunction(
+        module, "talos_rt_v1_native_promotion_slices_recount", voidType,
+        {pointer});
+    auto beforeReturns = [&](LLVM::LLVMFuncOp function, auto emit) {
+      SmallVector<LLVM::ReturnOp> returns;
+      function.walk([&](LLVM::ReturnOp op) { returns.push_back(op); });
+      for (LLVM::ReturnOp op : returns) {
+        builder.setInsertionPoint(op);
+        emit(function);
+      }
+    };
+    auto adjustIn = [&](LLVM::LLVMFuncOp aggregate, bool becameUnknown) {
+      return [&, aggregate, becameUnknown](LLVM::LLVMFuncOp function) mutable {
+        Block &entryBlock = function.getBody().front();
+        LLVM::CallOp::create(
+            builder, location, adjust,
+            ValueRange{LLVM::AddressOfOp::create(
+                           builder, location, pointer,
+                           "__talos_eval_promotion_slices_v1"),
+                       LLVM::AddressOfOp::create(builder, location, pointer,
+                                                 actions.getSymName()),
+                       LLVM::AddressOfOp::create(builder, location, pointer,
+                                                 aggregate.getSymName()),
+                       entryBlock.getArgument(0), entryBlock.getArgument(1),
+                       llvmConstant(builder, location, builder.getI32Type(),
+                                    becameUnknown)});
+      };
+    };
+    beforeReturns(hook, adjustIn(reset, true));
+    beforeReturns(recheck, adjustIn(request, false));
+    beforeReturns(globalInvalidate, [&](LLVM::LLVMFuncOp) {
+      LLVM::CallOp::create(builder, location, recount,
+                           ValueRange{LLVM::AddressOfOp::create(
+                               builder, location, pointer,
+                               "__talos_eval_promotion_slices_v1")});
+    });
+    if (native::has<native::DebugTiming>(module))
+      llvm::errs() << "talos proof slices: slices=" << slices.size()
+                   << " dependents=" << dependents.size() << '\n';
   }
   return success();
 }
@@ -805,6 +972,12 @@ LogicalResult materializeNativePromotionWindows(ModuleOp module) {
     ::talos::schedule::remove<::talos::schedule::Field::EvalProofEntries>(
         dependencies);
   }
+  // Read below while resolving windows, removed at the end.
+  auto removeSlices = llvm::make_scope_exit([&] {
+    if (dependencies)
+      ::talos::schedule::remove<::talos::schedule::Field::EvalProofSlices>(
+          dependencies);
+  });
   if (!publishAt)
     return success();
   SmallVector<LLVM::CallOp> calls;
@@ -818,6 +991,12 @@ LogicalResult materializeNativePromotionWindows(ModuleOp module) {
   }
   if (!dependencies || !flat || flat.size() % 3)
     return publishAt.emitError("window publication without proof entries");
+  ArrayRef<int64_t> sliceRanges;
+  DenseI64ArrayAttr slicesAttr =
+      ::talos::schedule::get<::talos::schedule::Field::EvalProofSlices>(
+          dependencies);
+  if (slicesAttr)
+    sliceRanges = slicesAttr.asArrayRef();
 
   // Dependencies up to this width are found by their begin; wider ones
   // (whole memories) are few and checked one by one.
@@ -860,6 +1039,19 @@ LogicalResult materializeNativePromotionWindows(ModuleOp module) {
     SmallVector<uint64_t> records;
     for (auto [certificate, mask] : masks)
       llvm::append_range(records, ArrayRef<uint64_t>{mask, certificate});
+    // Overlapping promotion slices, named with bit 63 set.
+    for (size_t slice = 0; slice < sliceRanges.size() / 2; ++slice) {
+      uint64_t begin = uint64_t(sliceRanges[2 * slice]);
+      uint64_t end = uint64_t(sliceRanges[2 * slice + 1]);
+      uint64_t first = std::max(begin, low), last = std::min(end, low + 64);
+      if (first >= last)
+        continue;
+      uint64_t span = last - first;
+      uint64_t bits = (span == 64 ? UINT64_MAX : (uint64_t{1} << span) - 1)
+                      << (first - low);
+      llvm::append_range(records,
+                         ArrayRef<uint64_t>{bits, slice | (uint64_t{1} << 63)});
+    }
     return records;
   };
 
@@ -871,7 +1063,7 @@ LogicalResult materializeNativePromotionWindows(ModuleOp module) {
   Type voidType = LLVM::LLVMVoidType::get(context);
   auto runtimeWindow = getOrDeclareLLVMFunction(
       module, "talos_rt_v1_native_promotion_publish_window", voidType,
-      {pointer, i64, pointer, pointer, pointer, i64, i64});
+      {pointer, i64, pointer, pointer, pointer, i64, i64, pointer});
   auto window = getOrDeclareLLVMFunction(
       module, "__talos_eval_promotion_publish_window_v1", voidType,
       {pointer, i64, i64, i64});
@@ -895,7 +1087,10 @@ LogicalResult materializeNativePromotionWindows(ModuleOp module) {
                    address("__talos_eval_proof_certificates_v1"),
                    address("__talos_eval_proof_aggregate_invalidate_v1"),
                    address("__talos_eval_proof_aggregate_recheck_v1"),
-                   entry->getArgument(2), entry->getArgument(3)});
+                   entry->getArgument(2), entry->getArgument(3),
+                   slicesAttr ? address("__talos_eval_promotion_slices_v1")
+                              : LLVM::ZeroOp::create(builder, location, pointer)
+                                    .getResult()});
     LLVM::ReturnOp::create(builder, location, ValueRange{});
   }
 
