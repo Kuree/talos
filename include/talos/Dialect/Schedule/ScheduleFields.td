@@ -143,6 +143,8 @@ def EvalProofCoverage : ScheduleField<"EvalProofCoverage", "schedule.eval.proof_
     "::mlir::DenseI64ArrayAttr">;
 def EvalProofEntries : ScheduleField<"EvalProofEntries", "schedule.eval.proof_entries",
     "::mlir::DenseI64ArrayAttr">;
+def EvalUnknownSummaryReported : ScheduleField<"EvalUnknownSummaryReported", "schedule.eval.unknown_summary_reported",
+    "::mlir::UnitAttr">;
 def EvalProvenTwoStateCall : ScheduleField<"EvalProvenTwoStateCall", "schedule.eval.proven_two_state_call",
     "::mlir::UnitAttr">;
 def EvalRankedMembers : ScheduleField<"EvalRankedMembers", "schedule.eval.ranked_members",

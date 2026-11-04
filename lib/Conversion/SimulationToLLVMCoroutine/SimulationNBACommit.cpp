@@ -132,6 +132,56 @@ void emitScalarNBACommitLoop(OpBuilder &b, ModuleOp module,
       }
       ends[index] = watchMasks.size();
     }
+  // IEEE 1800-2023 6.3.1: a commit that leaves X/Z in a root reports it to
+  // the unknown summary. When each committed root lies in one pattern-free
+  // summary root, the loop sets that root's bit itself instead of asking the
+  // runtime to search for the roots of a dynamic address.
+  SmallVector<uint64_t> summaryWords(count), summaryMasks(count);
+  bool inlineSummary = false;
+  if (auto summaryRoots =
+          module.lookupSymbol<LLVM::GlobalOp>(unknownSummaryRootsName);
+      summaryRoots && module.lookupSymbol<LLVM::GlobalOp>(unknownSummaryName))
+    if (auto values = dyn_cast_or_null<DenseIntElementsAttr>(
+            summaryRoots.getValueOrNull())) {
+      SmallVector<uint64_t> records;
+      for (const APInt &value : values.getValues<APInt>())
+        records.push_back(value.getZExtValue());
+      // (begin, end, bit, has pattern), sorted by begin. The roots table is
+      // (offset, width, pattern slice) records whose index is the summary bit,
+      // as materializeUnknownSummary writes and UnknownSummaryWriteInputs
+      // reads it; the pattern count is the slice's upper 32 bits.
+      struct SummaryRoot {
+        uint64_t begin, end, bit;
+        bool pattern;
+      };
+      SmallVector<SummaryRoot> summary;
+      for (size_t index = 0; index + 2 < records.size(); index += 3)
+        summary.push_back({records[index], records[index] + records[index + 1],
+                           index / 3, (records[index + 2] >> 32) != 0});
+      llvm::sort(summary, [](const SummaryRoot &left, const SummaryRoot &right) {
+        return left.begin < right.begin;
+      });
+      inlineSummary = records.size() % 3 == 0;
+      for (const auto &roots : rootsByWord)
+        for (uint32_t index : roots) {
+          if (!inlineSummary)
+            break;
+          uint64_t begin = plan.generatedOffsets[index];
+          uint64_t end = begin + plan.roots[index].bit_width;
+          auto first = llvm::partition_point(
+              summary, [&](const SummaryRoot &root) { return root.end <= begin; });
+          unsigned overlapping = 0;
+          for (auto it = first; it != summary.end() && it->begin < end; ++it) {
+            ++overlapping;
+            if (it->pattern)
+              inlineSummary = false;
+            summaryWords[index] = it->bit / 64;
+            summaryMasks[index] = uint64_t{1} << (it->bit % 64);
+          }
+          if (overlapping > 1)
+            inlineSummary = false;
+        }
+    }
   auto maskTable = table("masks_v1", masks);
   auto offsetTable = table("offsets_v1", offsets);
   auto widthTable = table("widths_v1", widths);
@@ -147,6 +197,11 @@ void emitScalarNBACommitLoop(OpBuilder &b, ModuleOp module,
   auto edgeTable = table("edges_v1", edges);
   auto destinationTable = table("destinations_v1", destinations);
   auto directTable = table("direct_v1", direct);
+  std::optional<IntegerColumn> summaryWordTable, summaryMaskTable;
+  if (inlineSummary) {
+    summaryWordTable = table("summary_words_v1", summaryWords);
+    summaryMaskTable = table("summary_masks_v1", summaryMasks);
+  }
   // Accumulators are also consumed by runtime handoffs. Keep their ABI storage
   // and use a constant pointer column instead of introducing a shadow payload.
   std::string accumulatorTable = "__talos_eval_nba_commit_accumulators_v1";
@@ -301,11 +356,14 @@ void emitScalarNBACommitLoop(OpBuilder &b, ModuleOp module,
               b, loc, type, b.getIntegerAttr(type, APInt::getAllOnes(bits))));
       Value positioned =
           arith::ShLIOp::create(b, loc, resize(value, type), typedShift);
-      LLVM::StoreOp::create(
+      return LLVM::StoreOp::create(
           b, loc, bor(band(raw, keep), band(positioned, mask)), destination, 1);
     };
     store(oldRaw, newValue, valueAddress);
-    store(unknownRaw, newUnknown, unknownAddress);
+    auto unknownStore = store(unknownRaw, newUnknown, unknownAddress);
+    if (inlineSummary)
+      schedule::set<schedule::Field::EvalUnknownSummaryReported>(
+          unknownStore, b.getUnitAttr());
     cf::BranchOp::create(
         b, loc, publish,
         ValueRange{oldValue, oldUnknown, newValue, newUnknown});
@@ -315,6 +373,18 @@ void emitScalarNBACommitLoop(OpBuilder &b, ModuleOp module,
         oldUnknown = publish->getArgument(1),
         newValue = publish->getArgument(2),
         newUnknown = publish->getArgument(3);
+  if (inlineSummary) {
+    // Only bits of this root are written; unknown neighbors are preserved, so
+    // only this root can have become X/Z.
+    Value summaryWord = gep(address(unknownSummaryName), i64,
+                            load(*summaryWordTable, index));
+    Value reported = LLVM::LoadOp::create(b, loc, i64, summaryWord, 8);
+    Value hasUnknown = arith::CmpIOp::create(
+        b, loc, arith::CmpIPredicate::ne, newUnknown, c(0));
+    Value bit = arith::SelectOp::create(b, loc, hasUnknown,
+                                        load(*summaryMaskTable, index), c(0));
+    LLVM::StoreOp::create(b, loc, bor(reported, bit), summaryWord, 8);
+  }
   Value transientAddress =
       field(offsetof(talos_rt_generated_nba_accumulator_256, transient));
   Value transient = LLVM::LoadOp::create(b, loc, i64, transientAddress, 8);

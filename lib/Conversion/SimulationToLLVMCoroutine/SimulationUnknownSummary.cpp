@@ -357,6 +357,11 @@ private:
     Location location = write->getLoc();
     Type i64 = builder.getI64Type();
     if (auto store = dyn_cast<LLVM::StoreOp>(write)) {
+      // The writer already reported this store's roots itself.
+      if (schedule::has<schedule::Field::EvalUnknownSummaryReported>(store)) {
+        schedule::remove<schedule::Field::EvalUnknownSummaryReported>(store);
+        return;
+      }
       Value value = store.getValue();
       auto type = dyn_cast<IntegerType>(value.getType());
       builder.setInsertionPointAfter(store);
