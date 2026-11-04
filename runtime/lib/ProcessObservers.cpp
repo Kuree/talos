@@ -19,6 +19,9 @@ using namespace talos::runtime;
 namespace {
 
 constexpr uint32_t kMaximumObserverDepth = 256;
+// evaluateNativeComputedWaiters mode: the end-of-slot evaluation of the
+// postponed observer waits, every observer of which is treated as affected.
+constexpr uint32_t kPostponedEvaluation = UINT32_MAX;
 
 } // namespace
 
@@ -238,9 +241,11 @@ bool evaluateNativeComputedWaiters(talos_rt_context *context,
   if (context->schedulerStatus != TALOS_RT_OK)
     return true;
   std::vector<uint64_t> tokens;
+  // The postponed list is read in place: evaluation only marks waiters.
+  const bool postponed = dependencyKind == kPostponedEvaluation;
   if (dependencyKind == TALOS_RT_OBSERVER_DEPENDENCY_SIGNAL)
     tokens.swap(context->pendingNativeComputedWaiters);
-  else {
+  else if (!postponed) {
     tokens.reserve(context->scheduledProcesses.size());
     for (const ScheduledProcess &process : context->scheduledProcesses)
       if (process.instance && process.started &&
@@ -249,9 +254,35 @@ bool evaluateNativeComputedWaiters(talos_rt_context *context,
         tokens.push_back(process.token);
   }
 
-  for (uint64_t token : tokens) {
+  const std::vector<uint64_t> &tokenList =
+      postponed ? context->postponedObserverWaiters : tokens;
+  // Every signal publication calls this; most find nothing to evaluate.
+  if (tokenList.empty())
+    return true;
+  // Results reuse the context's buffers unless an evaluation nests.
+  std::vector<uint64_t> localValue, localUnknown;
+  const bool ownScratch = !context->observerScratchInUse;
+  struct ScratchRelease {
+    talos_rt_context *context;
+    bool own;
+    ~ScratchRelease() {
+      if (own)
+        context->observerScratchInUse = false;
+    }
+  } scratchRelease{context, ownScratch};
+  context->observerScratchInUse = true;
+  std::vector<uint64_t> &value =
+      ownScratch ? context->observerValueScratch : localValue;
+  std::vector<uint64_t> &unknown =
+      ownScratch ? context->observerUnknownScratch : localUnknown;
+  for (size_t tokenIndex = 0; tokenIndex < tokenList.size(); ++tokenIndex) {
+    uint64_t token = tokenList[tokenIndex];
     ScheduledProcess *process = findScheduledProcess(context, token);
     if (!process || process->signalTriggered)
+      continue;
+    // The monitor reports at most once per time step (21.2.3): after it ran
+    // in this slot's Postponed region, the slot is done for it.
+    if (postponed && process->postponedWakeTime == context->schedulerTime)
       continue;
     talos_rt_computed_wait_record_v1 *wait = computedWait(*process);
     if (!wait)
@@ -265,6 +296,8 @@ bool evaluateNativeComputedWaiters(talos_rt_context *context,
     if (!observers || !dependencies || !clauses)
       return false;
     auto primaryAffected = [&](const talos_rt_computed_observer_v1 &primary) {
+      if (dependencyKind == kPostponedEvaluation)
+        return true;
       for (uint32_t dependencyIndex = 0;
            dependencyIndex != primary.dependency_count; ++dependencyIndex) {
         const talos_rt_computed_dependency_v1 &dependency =
@@ -307,8 +340,6 @@ bool evaluateNativeComputedWaiters(talos_rt_context *context,
           observers[clause.primary_observer];
       if (!primaryAffected(primary))
         continue;
-      std::vector<uint64_t> value;
-      std::vector<uint64_t> unknown;
       if (!evaluateNativeObserver(context, token, wait, clause.primary_observer,
                                   value, unknown))
         return false;
@@ -327,18 +358,26 @@ bool evaluateNativeComputedWaiters(talos_rt_context *context,
           reinterpret_cast<uint8_t *>(wait) + primary.previous_offset);
       auto *previousUnknown = previousValue + limbs;
       bool changed = false;
+      // A write evaluation reports every NaN written; the postponed pass,
+      // run once per slot, compares a NaN with the previous slot's bits (else
+      // the same NaN would report again in every slot).
+      auto realChanged = [&](auto previous, auto current, uint64_t bitsMask) {
+        if (postponed && std::isnan(previous) && std::isnan(current))
+          return ((previousValue[0] ^ value[0]) & bitsMask) != 0;
+        return previous != current || (!postponed && std::isnan(current));
+      };
       if ((descriptor->flags & TALOS_RT_OBSERVER_REAL32) != 0) {
         float previous = 0.0f;
         float current = 0.0f;
         std::memcpy(&previous, previousValue, sizeof(previous));
         std::memcpy(&current, value.data(), sizeof(current));
-        changed = previous != current || std::isnan(current);
+        changed = realChanged(previous, current, UINT64_C(0xffffffff));
       } else if ((descriptor->flags & TALOS_RT_OBSERVER_REAL64) != 0) {
         double previous = 0.0;
         double current = 0.0;
         std::memcpy(&previous, previousValue, sizeof(previous));
         std::memcpy(&current, value.data(), sizeof(current));
-        changed = previous != current || std::isnan(current);
+        changed = realChanged(previous, current, ~UINT64_C(0));
       } else {
         for (uint32_t limb = 0; limb != limbs; ++limb)
           changed |= previousValue[limb] != value[limb] ||
@@ -379,6 +418,8 @@ bool evaluateNativeComputedWaiters(talos_rt_context *context,
         if (ScheduledProcess *updated = findScheduledProcess(context, token);
             updated && updated->instance) {
           updated->signalTriggered = true;
+          if (postponed)
+            updated->postponedWakeTime = context->schedulerTime;
           context->prioritySignalPending |= updated->prioritySignal;
           TALOS_RT_TRY { context->nativePollCandidates.insert(token); }
           TALOS_RT_CATCH(const std::bad_alloc &) {
@@ -499,4 +540,47 @@ bool talos_rt_notify_observer_managed_unlocked(talos_rt_context *context,
              context, TALOS_RT_OBSERVER_DEPENDENCY_MANAGED, token, 1) &&
          talos_rt_evaluate_covergroup_managed_clock_events_unlocked(context,
                                                                     token);
+}
+
+bool talos_rt_evaluate_postponed_observers_unlocked(talos_rt_context *context,
+                                                    bool &triggered) {
+  triggered = false;
+  if (!context)
+    return false;
+  auto &waiters = context->postponedObserverWaiters;
+  waiters.erase(std::remove_if(waiters.begin(), waiters.end(),
+                               [&](uint64_t token) {
+                                 ScheduledProcess *process =
+                                     findScheduledProcess(context, token);
+                                 return !process || !process->instance ||
+                                        !process->postponedObserverWait;
+                               }),
+                waiters.end());
+  if (waiters.empty()) {
+    // The monitor left (finished or replaced): a generated loop that read the
+    // hook byte on entry leaves once.
+    if (context->postponedSlotHooks & kMonitorSlotHook) {
+      context->postponedSlotHooks &= ~kMonitorSlotHook;
+      context->postponedHooksDisarmed = true;
+    }
+    return true;
+  }
+  // $monitoroff suspends reporting; $monitoron wakes the monitor itself.
+  if (!context->monitorEnabled)
+    return true;
+  // Report only waiters this evaluation woke: one woken earlier may wait for
+  // its region, and must not make the caller loop.
+  auto countTriggered = [&] {
+    size_t count = 0;
+    for (uint64_t token : waiters)
+      if (ScheduledProcess *process = findScheduledProcess(context, token);
+          process && process->signalTriggered)
+        ++count;
+    return count;
+  };
+  size_t before = countTriggered();
+  if (!evaluateNativeComputedWaiters(context, kPostponedEvaluation, 0, 0))
+    return false;
+  triggered = countTriggered() != before;
+  return context->schedulerStatus == TALOS_RT_OK;
 }

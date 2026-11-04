@@ -89,8 +89,9 @@ struct NativePipelineAnalysis {
   bool hasLanguageObserver = false;
   bool hasLanguageOverride = false;
   bool hasDynamicLanguageOverride = false;
-  /// The design contains value change dump tasks (IEEE 1800-2023 21.7).
-  bool mayDump = false;
+  /// The design contains tasks that act in the Postponed region of a time
+  /// slot: value change dump tasks (IEEE 1800-2023 21.7) or $monitor (21.2.3).
+  bool hasPostponedObservers = false;
   schedule::NativeSchedulerMode nativeScheduler =
       schedule::NativeSchedulerMode::Auto;
   analysis::NativeAOTAnalysis aotEligibility;

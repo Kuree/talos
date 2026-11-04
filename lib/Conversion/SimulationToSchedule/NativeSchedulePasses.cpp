@@ -44,15 +44,17 @@ LogicalResult NativePipelineAnalysis::planState() {
     if (auto function = dyn_cast<sim::SimFuncOp>(operation))
       hasLanguageObserver |=
           function.getEntryKind() == sim::EntryKind::Observer;
-    mayDump |=
+    hasPostponedObservers |=
         isa<sim::SimDumpOpenOp, sim::SimDumpOpenStringOp,
             sim::SimDumpTimescaleOp, sim::SimDumpVarsOp, sim::SimDumpAllOp,
             sim::SimDumpControlOp, sim::SimDumpLimitOp, sim::SimDumpFlushOp,
-            sim::SimDumpPortsOp, sim::SimDumpPortsControlOp>(operation);
+            sim::SimDumpPortsOp, sim::SimDumpPortsControlOp,
+            sim::SimMonitorRegisterOp>(operation);
   });
-  // Only design tasks open a dump file (IEEE 1800-2023 21.7, 21.7.3), so a
-  // generated periodic loop needs end-of-slot dump hooks only in such a design.
-  if (mayDump)
+  // A dump file is opened (IEEE 1800-2023 21.7, 21.7.3) and a $monitor started
+  // (21.2.3) only by these tasks, so a generated periodic loop needs
+  // end-of-slot postponed hooks only in a design that contains one.
+  if (hasPostponedObservers)
     ::talos::schedule::set<::talos::schedule::Field::EvalPostponedObservers>(
         module, UnitAttr::get(module.getContext()));
   if (!hasLanguageOverride && (!vpi.allowsWrite() || !hasLanguageObserver)) {

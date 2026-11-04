@@ -859,9 +859,19 @@ FailureOr<NativeStaticFanoutPlan> buildNativeStaticFanoutPlan(
     // covergroup registration has abstract graph watches and needs its
     // separate operand-based root reconstruction below.
     if ((actor == actorSlots.end() || bytecodeBlock) && certifiedStaticIsland) {
+      // IEEE 1800-2023 21.2.3: a $monitor's change test needs no conditional
+      // scheduling of its own: the runtime compares its arguments at the end
+      // of each time slot (through the generated loop's postponed hook) or on
+      // their transitions, so its exact watched roots only stay on the bridge.
+      bool postponedMonitor =
+          sim::has<sim::metadata::PersistentMonitor>(function) &&
+          ::talos::schedule::has<
+              ::talos::schedule::Field::EvalPostponedObservers>(module);
       bool hasConditionalWait = false;
       if (!runtimeOwnedFanoutActors.contains(function.getOperation()))
         function.walk([&](Operation *operation) {
+          if (isa<sim::SimSuspendObserveOp>(operation) && postponedMonitor)
+            return;
           if (isa<sim::SimSuspendEdgeIffOp, sim::SimSuspendLevelOp,
                   sim::SimSuspendClockSetOp, sim::SimSuspendObserveOp,
                   sim::SimSuspendEventOp, sim::SimSuspendEventOrderOp,

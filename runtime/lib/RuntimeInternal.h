@@ -699,6 +699,13 @@ struct ScheduledProcess {
   bool rootProcess = false;
   bool explicitlySuspended = false;
   bool computedObserverWaitRegistered = false;
+  // The process is the $monitor waiting in the Postponed region on a change of
+  // its arguments: the runtime evaluates its observer at the end of each time
+  // slot instead of subscribing to every dependency (IEEE 1800-2023 21.2.3).
+  bool postponedObserverWait = false;
+  // The slot in which the postponed pass last woke it (21.2.3: one report per
+  // time step).
+  uint64_t postponedWakeTime = UINT64_MAX;
 };
 
 talos_rt_status talos_rt_mailbox_wait_ready(talos_rt_object_v1 *mailbox,
@@ -2908,6 +2915,16 @@ struct talos_rt_context {
   // runtime re-enters it through a transient handoff (one slot), which then
   // reads zero. Cleared by that handoff.
   bool postponedHooksDisarmed = false;
+  // Processes with a postponed observer wait (postponedObserverWait), and
+  // whether the last end-of-slot evaluation woke one inside a generated loop
+  // (the loop then hands the slot to the runtime once to run it).
+  std::vector<uint64_t> postponedObserverWaiters;
+  bool postponedObserversPending = false;
+  // Observer results of evaluateNativeComputedWaiters, reused across calls;
+  // a nested evaluation uses its own buffers.
+  std::vector<uint64_t> observerValueScratch;
+  std::vector<uint64_t> observerUnknownScratch;
+  bool observerScratchInUse = false;
   uint64_t schedulerSlotProgress = 0;
   bool schedulerRunningFinals = false;
   // IEEE 1800-2023 4.5: finish the Reactive through Re-NBA iteration
@@ -4510,6 +4527,13 @@ inline constexpr uint8_t kVPISignalSlotHook = 2;
 // talos_rt_context::postponedSlotHooks: something is selected for a value
 // change dump whose file is open.
 inline constexpr uint8_t kDumpSlotHook = 1;
+// talos_rt_context::postponedSlotHooks: a $monitor waits on its arguments.
+inline constexpr uint8_t kMonitorSlotHook = 2;
+// End of the current time slot (IEEE 1800-2023 4.4.2.9, 21.2.3): evaluate every
+// postponed observer wait and wake the waiters whose observed value changed.
+// `triggered` reports whether any woke; they run in the Postponed region.
+bool talos_rt_evaluate_postponed_observers_unlocked(talos_rt_context *context,
+                                                    bool &triggered);
 // A signal a cbSignal callback watches arrived: its callbacks run at the start
 // of the current slot, with the timed callbacks (38.36.3 "proceed to a safe
 // point").

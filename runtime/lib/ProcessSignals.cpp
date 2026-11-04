@@ -1407,7 +1407,16 @@ void talos_rt_unregister_signal_wait_unlocked(
       }
     } else if (ScheduledProcess *process =
                    findScheduledProcess(context, waiterToken)) {
-      computedRegistered = &process->computedObserverWaitRegistered;
+      if (process->postponedObserverWait) {
+        // A postponed observer wait was never counted as a computed waiter.
+        process->postponedObserverWait = false;
+        process->computedObserverWaitRegistered = false;
+        auto &waiters = context->postponedObserverWaiters;
+        waiters.erase(std::remove(waiters.begin(), waiters.end(), waiterToken),
+                      waiters.end());
+      } else {
+        computedRegistered = &process->computedObserverWaitRegistered;
+      }
     }
     if (computedRegistered && *computedRegistered) {
       *computedRegistered = false;
@@ -1855,6 +1864,56 @@ bool talos_rt_register_computed_signal_wait_unlocked(
   if (!resolveArgumentRefDependenciesUnlocked(context, execution, wait)) {
     context->schedulerStatus = TALOS_RT_INVALID_DESIGN;
     return false;
+  }
+  // IEEE 1800-2023 21.2.3: the $monitor reports at the end of a time step in
+  // which one of its arguments changed value, from the Postponed region
+  // (4.4.2.9). Comparing the arguments there, once per slot, needs no
+  // subscription to every write of them. Only signal dependencies qualify, and
+  // only where every slot end reaches the runtime's postponed pass: the
+  // runtime's own scheduler, or a generated plan with postponed hooks.
+  if (!designWaiter) {
+    ScheduledProcess *process = findScheduledProcess(context, waiterToken);
+    const talos_rt_native_schedule_plan *plan = context->nativeSchedulePlan;
+    bool signalsOnly = true;
+    const auto *dependencies =
+        reinterpret_cast<const talos_rt_computed_dependency_v1 *>(
+            reinterpret_cast<const uint8_t *>(wait) +
+            wait->dependencies_offset);
+    for (uint32_t index = 0; index != wait->dependency_count; ++index)
+      signalsOnly &=
+          dependencies[index].kind == TALOS_RT_OBSERVER_DEPENDENCY_SIGNAL;
+    // An observer that reads time or calls out keeps its subscriptions: its
+    // value can change with no argument change (21.2.3).
+    const auto *observers =
+        reinterpret_cast<const talos_rt_computed_observer_v1 *>(
+            reinterpret_cast<const uint8_t *>(wait) + wait->observers_offset);
+    for (uint32_t index = 0; signalsOnly && index != wait->observer_count;
+         ++index) {
+      const talos_rt_observer_descriptor_v1 *descriptor =
+          execution ? findObserverDescriptor(execution,
+                                             observers[index].code_unit_id)
+                    : nullptr;
+      signalsOnly = descriptor &&
+                    (descriptor->flags & TALOS_RT_OBSERVER_IMPURE) == 0;
+    }
+    if (process && signalsOnly &&
+        process->homeRegion == TALOS_RT_REGION_POSTPONED &&
+        context->monitorLogicalProcessToken ==
+            (TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | waiterToken) &&
+        (!plan || (plan->flags & TALOS_RT_NATIVE_SCHEDULE_POSTPONED_HOOKS))) {
+      talos_rt_unregister_signal_wait_unlocked(context, subscriptions,
+                                               waiterToken, designWaiter);
+      TALOS_RT_TRY { context->postponedObserverWaiters.push_back(waiterToken); }
+      TALOS_RT_CATCH(const std::bad_alloc &) {
+        context->schedulerStatus = TALOS_RT_OUT_OF_MEMORY;
+        return false;
+      }
+      process->postponedObserverWait = true;
+      // Keeps every suspend, resume and termination path unregistering it.
+      process->computedObserverWaitRegistered = true;
+      context->postponedSlotHooks |= kMonitorSlotHook;
+      return true;
+    }
   }
   // A computed waiter is outside the exact generated fanout inventory. It can
   // be installed dynamically after AOT startup selected its guarded fast

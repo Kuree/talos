@@ -96,7 +96,7 @@ bool validObserverInventory(const talos_rt_execution_descriptor_v1 &execution) {
         observer.result_width == 0 ||
         (observer.flags &
          ~(TALOS_RT_OBSERVER_FOUR_STATE | TALOS_RT_OBSERVER_REAL32 |
-           TALOS_RT_OBSERVER_REAL64)) != 0 ||
+           TALOS_RT_OBSERVER_REAL64 | TALOS_RT_OBSERVER_IMPURE)) != 0 ||
         ((observer.flags & TALOS_RT_OBSERVER_REAL32) != 0 &&
          (observer.result_width != 32 ||
           (observer.flags &

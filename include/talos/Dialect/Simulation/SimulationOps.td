@@ -6430,7 +6430,7 @@ def SimObserverBindOp : SimOp<"observer.bind", [
                        I32Attr:$capture_count);
   let results = (outs SimObserverType:$result);
   let assemblyFormat = [{
-    $evaluator `values` `(` $values `:` type($values) `)`
+    $evaluator `values` `(` ($values^ `:` type($values))? `)`
     `captures` $capture_count
     attr-dict `:` qualified(type($result))
   }];

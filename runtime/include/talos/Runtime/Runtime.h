@@ -720,6 +720,12 @@ typedef struct talos_rt_observer_capture_abi_v1 {
 #define TALOS_RT_OBSERVER_FOUR_STATE (UINT32_C(1) << 0)
 #define TALOS_RT_OBSERVER_REAL32 (UINT32_C(1) << 1)
 #define TALOS_RT_OBSERVER_REAL64 (UINT32_C(1) << 2)
+// A $monitor argument observer that calls a function or task, reads the
+// simulation time or draws a random number: evaluating it again may give a
+// different value with no argument change, or have an effect. It is evaluated
+// only when one of its dependencies is published, never once per time slot.
+// Set only on the observers a $monitor's change wait binds.
+#define TALOS_RT_OBSERVER_IMPURE (UINT32_C(1) << 3)
 #define TALOS_RT_OBSERVER_NO_BYTECODE UINT32_MAX
 
 // `captures` addresses `capture_count` consecutive four-word computed-capture

@@ -13,6 +13,8 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/Interfaces/CallInterfaces.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/DenseMap.h"
@@ -583,11 +585,20 @@ materializeEmbeddedSimulationDesign(ModuleOp module,
     bool fourState;
     bool real32;
     bool real64;
+    bool impure;
     SmallVector<std::pair<uint32_t, uint32_t>> captures;
     std::string capturesSymbol;
   };
   SmallVector<ObserverInfo> observers;
   bool invalidObserver = false;
+  // The evaluators a persistent $monitor's change wait binds: only the
+  // runtime's monitor registration reads their purity.
+  llvm::DenseSet<StringAttr> monitorEvaluators;
+  module.walk([&](sim::SimObserverBindOp bind) {
+    auto owner = bind->getParentOfType<sim::SimFuncOp>();
+    if (owner && sim::has<sim::metadata::PersistentMonitor>(owner))
+      monitorEvaluators.insert(bind.getEvaluatorAttr().getAttr());
+  });
   module.walk([&](sim::SimFuncOp function) {
     if (function.getEntryKind() != sim::EntryKind::Observer ||
         ::talos::schedule::has<::talos::schedule::Field::OverrideEvaluator>(
@@ -611,8 +622,37 @@ materializeEmbeddedSimulationDesign(ModuleOp module,
                       isa<sim::LogicType>(resultType),
                       resultType.isF32(),
                       resultType.isF64(),
+                      false,
                       {},
                       {}};
+    // IEEE 1800-2023 21.2.3 compares the arguments' values. An observer that
+    // calls out, reads scheduler state (the time) or has any other effect
+    // than reading state (a random draw advances its stream, 18.13) can
+    // change value, or act, with no change of the state it reads.
+    info.impure =
+        monitorEvaluators.contains(function.getSymNameAttr()) &&
+        function
+            .walk([&](Operation *operation) {
+              if (isa<CallOpInterface>(operation))
+                return WalkResult::interrupt();
+              // Nested operations are visited on their own.
+              if (operation == function.getOperation() ||
+                  operation->hasTrait<OpTrait::IsTerminator>() ||
+                  operation->hasTrait<OpTrait::HasRecursiveMemoryEffects>())
+                return WalkResult::advance();
+              auto effects = dyn_cast<MemoryEffectOpInterface>(operation);
+              if (!effects)
+                return WalkResult::interrupt();
+              SmallVector<MemoryEffects::EffectInstance> instances;
+              effects.getEffects(instances);
+              for (const MemoryEffects::EffectInstance &instance : instances)
+                if (!isa<MemoryEffects::Read>(instance.getEffect()) ||
+                    isa<sim::SchedulerResource, sim::ProcessResource>(
+                        instance.getResource()))
+                  return WalkResult::interrupt();
+              return WalkResult::advance();
+            })
+            .wasInterrupted();
     if (auto bytecodeFunction =
             runtime::get<runtime::BytecodeFunction>(function))
       info.bytecodeFunction =
@@ -823,7 +863,8 @@ materializeEmbeddedSimulationDesign(ModuleOp module,
                     builder, module.getLoc(), i32,
                     (observer.fourState ? TALOS_RT_OBSERVER_FOUR_STATE : 0) |
                         (observer.real32 ? TALOS_RT_OBSERVER_REAL32 : 0) |
-                        (observer.real64 ? TALOS_RT_OBSERVER_REAL64 : 0)),
+                        (observer.real64 ? TALOS_RT_OBSERVER_REAL64 : 0) |
+                        (observer.impure ? TALOS_RT_OBSERVER_IMPURE : 0)),
                 4);
             record = insertValue(
                 builder, module.getLoc(), record,

@@ -6933,6 +6933,20 @@ talos_rt_status runScheduler(talos_rt_context *context,
         continue;
       }
       if (!selected && !context->schedulerRunningFinals) {
+        // IEEE 1800-2023 4.4.2.9, 21.2.3: the slot has no other work left;
+        // its Postponed region compares the $monitor's arguments and runs the
+        // monitor here when one of them changed, before the slot is left.
+        // An NBA cut or a single barrier completion is not the slot's end.
+        if ((context->postponedSlotHooks & kMonitorSlotHook) &&
+            !options.stopBeforeNBA &&
+            options.completeNBABarrier == UINT32_MAX) {
+          bool triggered = false;
+          if (!talos_rt_evaluate_postponed_observers_unlocked(context,
+                                                              triggered))
+            return context->schedulerStatus;
+          if (triggered)
+            continue;
+        }
         if (context->staticNBASlowRootsPresent) {
           std::fill(context->staticNBASlowRoots.begin(),
                     context->staticNBASlowRoots.end(), uint8_t{0});

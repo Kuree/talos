@@ -2399,6 +2399,7 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_prepare_periodic_aot(
     // The loop reads the postponed byte afresh after this; a disarm by the
     // bootstrap's own slot dumps above needs no transient handoff.
     context->postponedHooksDisarmed = false;
+    context->postponedObserversPending = false;
     context->nativePeriodicRuntimeDeadline = outControl->next_runtime_deadline;
     if (context->signalDiagnosticsEnabled) {
       ++context->signalDiagnostics.periodicPreparations;
@@ -2556,6 +2557,18 @@ talos_rt_v1_scheduler_postponed_slot_aot(talos_rt_context *context) {
   // untraceable selection) is reported once and never ends the run.
   TALOS_RT_TRY {
     (void)talos_rt_dump_slot_unlocked(context);
+    // IEEE 1800-2023 21.2.3: a $monitor argument changed in this slot. The
+    // monitor runs in the runtime's Postponed region: hand the slot over once
+    // (a transient handoff), then the loop resumes.
+    if (context->postponedSlotHooks & kMonitorSlotHook) {
+      bool triggered = false;
+      if (!talos_rt_evaluate_postponed_observers_unlocked(context, triggered))
+        return context->schedulerStatus;
+      if (triggered) {
+        context->postponedObserversPending = true;
+        return TALOS_RT_TIER_UNAVAILABLE;
+      }
+    }
     // A shared loop rereads the byte; only an exclusive one needs the
     // re-entry a disarm requests.
     if (context->nativeSchedulePlan->flags &
@@ -2864,12 +2877,15 @@ talos_rt_v1_scheduler_run_aot(talos_rt_context *context) {
            ((context->preponedSlotHooks & kVPISignalSlotHook) &&
             talos_rt_vpi_signals_pending()) ||
            context->vpiObservationDemand || anyOverride(context->forceMask) ||
-           anyOverride(context->assignMask) || context->postponedHooksDisarmed;
+           anyOverride(context->assignMask) ||
+           context->postponedHooksDisarmed ||
+           context->postponedObserversPending;
   };
   auto runTransientHandoff = [&](bool &reachedBoundary) {
     {
       ContextMutexLock lock(context);
       context->postponedHooksDisarmed = false;
+      context->postponedObserversPending = false;
       if (plan->state_bit_count != 0 &&
           (!reconcileNativeDirtyRootsToPlanesUnlocked(context, plan) ||
            !importNativeStatePlanesUnlocked(context, plan->state_value,
