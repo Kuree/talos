@@ -3,6 +3,7 @@
 #include "../lib/ProcessContext.h"
 #include "../lib/ProcessShared.h"
 #include "../lib/RuntimeInternal.h"
+#include "../lib/VCDFormat.h"
 #include "TestEnvironment.h"
 #include "talos/Runtime/Runtime.h"
 #include "talos/Runtime/StableHash.h"
@@ -1230,6 +1231,85 @@ TEST(VCD, DumpingWithoutAnOpenFileIsInert) {
   EXPECT_EQ(talos_rt_v1_dump_all(fixture.context), TALOS_RT_OK);
   EXPECT_FALSE(talos_rt_dump_active_unlocked(fixture.context));
   EXPECT_EQ(fixture.context->vcdState, nullptr);
+}
+
+// The word-at-a-time vector formatter against a bit-at-a-time reference:
+// every width up to five words, every bit alignment, planes that end right
+// after the value (loads near the end take the bounded path) or run on with
+// unrelated bits above it, and values made
+// of long runs, which exercise the leading-character rule across word
+// boundaries (21.7.2.2, Table 21-9).
+TEST(VCDFormat, VectorDigitsMatchABitwiseReference) {
+  uint64_t seed = 0x9e3779b97f4a7c15ull;
+  auto next = [&] {
+    seed ^= seed << 13;
+    seed ^= seed >> 7;
+    seed ^= seed << 17;
+    return seed;
+  };
+  auto reference = [](const std::vector<uint8_t> &value,
+                      const std::vector<uint8_t> *unknown, uint64_t low,
+                      uint64_t width) {
+    std::string digits;
+    for (uint64_t index = width; index-- != 0;) {
+      uint64_t bit = low + index;
+      bool v = (value[bit / 8] >> (bit % 8)) & 1;
+      bool u = unknown && (((*unknown)[bit / 8] >> (bit % 8)) & 1);
+      digits.push_back(u ? (v ? 'z' : 'x') : (v ? '1' : '0'));
+    }
+    size_t first = 0;
+    char lead = digits[0];
+    if (lead != '1') {
+      while (first + 1 < width && digits[first + 1] == lead)
+        ++first;
+      if (lead == '0' && first + 1 < width && digits[first + 1] == '1')
+        ++first;
+    }
+    return std::make_pair(digits, first);
+  };
+  // A run-structured bit stream: each run is one of 0, 1, x, z or random.
+  auto fill = [&](std::vector<uint8_t> &value, std::vector<uint8_t> &unknown) {
+    size_t bits = value.size() * 8;
+    for (size_t bit = 0; bit < bits;) {
+      size_t run = 1 + next() % 90;
+      unsigned kind = next() % 5;
+      for (size_t end = std::min(bits, bit + run); bit != end; ++bit) {
+        bool v = kind == 1 || kind == 3 || (kind == 4 && (next() & 1));
+        bool u = kind == 2 || kind == 3 || (kind == 4 && next() % 4 == 0);
+        value[bit / 8] = static_cast<uint8_t>(value[bit / 8] | (v << (bit % 8)));
+        unknown[bit / 8] =
+            static_cast<uint8_t>(unknown[bit / 8] | (u << (bit % 8)));
+      }
+    }
+  };
+  unsigned cases = 0;
+  for (uint64_t width = 1; width <= 320; ++width)
+    for (uint64_t low = 0; low < 72; low += (width % 7) + 1)
+      for (unsigned round = 0; round != 3; ++round) {
+        // Some planes end right after the value (bounded loads); others run
+        // on, so the top chunk's word loads see garbage above the value.
+        size_t planeBytes =
+            static_cast<size_t>((low + width + 7) / 8) + next() % 12;
+        std::vector<uint8_t> value(planeBytes), unknown(planeBytes);
+        fill(value, unknown);
+        for (bool twoState : {false, true}) {
+          auto [expected, drop] =
+              reference(value, twoState ? nullptr : &unknown, low, width);
+          std::string actual(static_cast<size_t>(width) + 8, '?');
+          char *end = talos::runtime::vcd::formatVectorDigits(
+              value.data(), twoState ? nullptr : unknown.data(), planeBytes,
+              low, width, actual.data());
+          ASSERT_EQ(end - actual.data(), static_cast<ptrdiff_t>(width));
+          actual.resize(static_cast<size_t>(width));
+          ASSERT_EQ(actual, expected) << "width " << width << " low " << low;
+          ASSERT_EQ(talos::runtime::vcd::droppableLeadingDigits(
+                        actual.data(), static_cast<size_t>(width)),
+                    drop)
+              << expected;
+          ++cases;
+        }
+      }
+  EXPECT_GT(cases, 10000u);
 }
 
 } // namespace

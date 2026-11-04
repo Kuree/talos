@@ -11,6 +11,7 @@
 #include "DesignBytecodeNets.h"
 #include "ProcessContext.h"
 #include "RuntimeInternal.h"
+#include "VCDFormat.h"
 #include "talos/Reflection/DesignReflection.h"
 
 #include <algorithm>
@@ -1139,6 +1140,48 @@ uint64_t loadWord(const uint8_t *plane, size_t planeBytes, uint64_t bit,
   return value;
 }
 
+/// The eight value characters of one plane byte, most significant bit first,
+/// as a little-endian word: `0`/`1` where `unknown` is clear, `x` (value 0) or
+/// `z` (value 1) where it is set. Each byte of the word is computed
+/// independently: no step carries or borrows across bytes.
+uint64_t byteCharacters(unsigned value, unsigned unknown) {
+  uint64_t digits;
+  std::memcpy(&digits, kByteDigits.digits[value], sizeof(digits));
+  if (unknown == 0)
+    return digits;
+  constexpr uint64_t kZeros = 0x3030303030303030ull; // '0' x 8
+  constexpr uint64_t kXs = 0x7878787878787878ull;    // 'x' x 8
+  uint64_t mask;
+  std::memcpy(&mask, kByteDigits.digits[unknown], sizeof(mask));
+  // Bytes of 0 or 1 become 0x00 or 0xff; the products do not overlap.
+  mask = (mask - kZeros) * 0xff;
+  uint64_t unknownCharacters = kXs + 2 * (digits - kZeros); // 'x' + 2 == 'z'
+  return (digits & ~mask) | (unknownCharacters & mask);
+}
+
+/// Writes the characters of the low `count` (1 to 64) bits of `value` and
+/// `unknown`, most significant first, at `out`, which has eight bytes of room
+/// past them; returns their end.
+char *formatWordDigits(uint64_t value, uint64_t unknown, unsigned count,
+                       char *out) {
+  unsigned head = (count - 1) % 8 + 1;
+  unsigned shift = count - head;
+  // The head byte's characters for bits above `count` lead the word.
+  uint64_t characters = byteCharacters((value >> shift) & 0xff,
+                                       (unknown >> shift) & 0xff) >>
+                        (8 * (8 - head));
+  std::memcpy(out, &characters, sizeof(characters));
+  out += head;
+  while (shift != 0) {
+    shift -= 8;
+    characters =
+        byteCharacters((value >> shift) & 0xff, (unknown >> shift) & 0xff);
+    std::memcpy(out, &characters, sizeof(characters));
+    out += 8;
+  }
+  return out;
+}
+
 // Emit one value record. Vectors drop redundant leading characters under the
 // IEEE left-extension rule: a leading `0` is always implied, a leading `x` or
 // `z` repeats, and a leading `1` never may be dropped.
@@ -1218,53 +1261,24 @@ void emitValue(VCDTraceState &state, const TraceVariable &variable,
       return;
     }
   }
-  // The whole record `b<bits> <code>\n` is built in the scratch buffer and
-  // appended once. Up to 64 bits load as words rather than bit by bit.
-  std::string &record = state.scratch;
-  record.resize(static_cast<size_t>(variable.width) + code.size() + 3);
-  char *text = record.data();
-  char *bits = text + 1;
+  // Unknown bits or more than 64: the record `b<bits> <code>\n` is formatted
+  // in place a plane word at a time, then the droppable leading characters
+  // are shifted out behind the `b`.
   size_t width = static_cast<size_t>(variable.width);
-  if (variable.width <= 64) {
-    uint64_t value = loadBits(valuePlane, variable.sourceBit, variable.width);
-    uint64_t unknown =
-        variable.fourState
-            ? loadBits(unknownPlane, variable.sourceBit, variable.width)
-            : 0;
-    for (size_t index = 0; index != width; ++index) {
-      unsigned bit = static_cast<unsigned>(width - 1 - index);
-      bits[index] = fourStateChar((value >> bit) & 1, (unknown >> bit) & 1);
-    }
-  } else {
-    for (size_t index = 0; index != width; ++index) {
-      uint64_t bit = variable.sourceBit + (width - 1 - index);
-      bits[index] =
-          fourStateChar(bitAt(valuePlane, bit),
-                        variable.fourState && bitAt(unknownPlane, bit));
-    }
-  }
-  size_t first = 0;
-  char lead = bits[0];
-  if (lead != '1') {
-    while (first + 1 < width && bits[first + 1] == lead)
-      ++first;
-    // A known zero before X/Z is not redundant: dropping it would make the
-    // shorter value left-extend with X/Z instead of zero (Table 21-9's
-    // `0X10` case). The last leading zero may be dropped only before a one.
-    if (lead == '0' && first + 1 < width && bits[first + 1] == '1')
-      ++first;
-  }
-  // Shift the kept bits left over the dropped ones, behind the `b`.
-  char *out = text;
-  *out++ = 'b';
+  char *text = beginRecord(state, width + code.size() + 3 + 16);
+  text[0] = 'b';
+  char *bits = text + 1;
+  talos::runtime::vcd::formatVectorDigits(
+      valuePlane, variable.fourState ? unknownPlane : nullptr,
+      state.shadowValue.size(), variable.sourceBit, variable.width, bits);
+  size_t first = talos::runtime::vcd::droppableLeadingDigits(bits, width);
   if (first != 0)
-    std::memmove(out, bits + first, width - first);
-  out += width - first;
+    std::memmove(bits, bits + first, width - first);
+  char *out = bits + (width - first);
   *out++ = ' ';
-  std::memcpy(out, code.data(), code.size());
-  out += code.size();
+  out = writeCode(out, variable, code);
   *out++ = '\n';
-  append(state, std::string_view(text, static_cast<size_t>(out - text)));
+  commitRecord(state, text, out);
 }
 
 // `$dumpoff` records every variable as X without disturbing the shadow, so the
@@ -2560,4 +2574,49 @@ talos_rt_v1_dump_ports_control(talos_rt_context *context,
   }
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
   TALOS_RT_CATCH_ALL { return TALOS_RT_IO_ERROR; }
+}
+
+char *talos::runtime::vcd::formatVectorDigits(const uint8_t *value,
+                                              const uint8_t *unknown,
+                                              size_t planeBytes,
+                                              uint64_t sourceBit,
+                                              uint64_t width, char *out) {
+  // The most significant chunk holds the bits above the last whole word.
+  uint64_t low = (width - 1) / 64 * 64;
+  auto count = static_cast<unsigned>(width - low);
+  for (;;) {
+    uint64_t chunkValue = loadWord(value, planeBytes, sourceBit + low, count);
+    uint64_t chunkUnknown =
+        unknown ? loadWord(unknown, planeBytes, sourceBit + low, count) : 0;
+    out = formatWordDigits(chunkValue, chunkUnknown, count, out);
+    if (low == 0)
+      return out;
+    low -= 64;
+    count = 64;
+  }
+}
+
+size_t talos::runtime::vcd::droppableLeadingDigits(const char *digits,
+                                                   size_t width) {
+  char lead = digits[0];
+  if (lead == '1')
+    return 0;
+  size_t first = 0;
+  // Skip whole words of the leading character, then single characters.
+  uint64_t leadWord = 0x0101010101010101ull * static_cast<uint8_t>(lead);
+  while (first + 9 <= width) {
+    uint64_t word;
+    std::memcpy(&word, digits + first + 1, sizeof(word));
+    if (word != leadWord)
+      break;
+    first += 8;
+  }
+  while (first + 1 < width && digits[first + 1] == lead)
+    ++first;
+  // A known zero before X/Z is not redundant: dropping it would make the
+  // shorter value left-extend with X/Z instead of zero (Table 21-9's `0X10`
+  // case). The last leading zero may be dropped only before a one.
+  if (lead == '0' && first + 1 < width && digits[first + 1] == '1')
+    ++first;
+  return first;
 }
