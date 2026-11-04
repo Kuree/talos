@@ -427,6 +427,27 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
                        runtime::ExecutionFlags::CoverageSchema);
     DenseMap<Operation *, bool> runtimeStateFunctions;
     DenseMap<Operation *, Operation *> runtimeStateOperations;
+    // Values with managed handles (strings, queues, mailboxes, semaphores,
+    // class objects, ...) and design storage roots holding one. Static
+    // specialization never makes such a root direct state (it admits fixed
+    // packed integer or logic roots only), so any access to one, also to its
+    // packed fields, is a runtime state access. An unknown layout counts as
+    // managed, as there.
+    DenseMap<Type, bool> managedTypes;
+    auto holdsManaged = [&](Type type) {
+      auto [entry, inserted] = managedTypes.try_emplace(type, false);
+      if (inserted) {
+        SmallVector<uint64_t, 2> offsets;
+        entry->second =
+            !sim::getManagedHandleOffsets(type, offsets) || !offsets.empty();
+      }
+      return entry->second;
+    };
+    DenseSet<uint64_t> managedRoots;
+    for (auto storage :
+         metadataDesign.getBody().front().getOps<sim::SimStorageDeclOp>())
+      if (holdsManaged(storage.getType()))
+        managedRoots.insert(storage.getId());
     DenseMap<Operation *, std::unique_ptr<analysis::NativeHotPathReachability>>
         hotPaths;
     auto hotFor =
@@ -555,8 +576,30 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
             // service checkpoint; it is not a bytecode or coroutine
             // requirement. This also preserves notifications from managed field
             // stores.
+            // A reference into design storage reaches a managed root when its
+            // provenance names one, or, without known provenance, when the
+            // value it carries holds a managed handle.
+            auto managedRootAccess = [&](Value reference, Type value) {
+              if (locals.lookup(reference))
+                return false;
+              auto found = provenance.find(reference);
+              if (found != provenance.end() && found->second.descriptor &&
+                  found->second.resource ==
+                      schedule::ComputeResourceKind::Storage)
+                return managedRoots.contains(*found->second.descriptor);
+              return holdsManaged(value);
+            };
             if (auto allocation = dyn_cast<sim::SimRefAllocOp>(operation))
-              requiresRuntime = !locals.lookup(allocation.getResult());
+              // A managed local still needs the actor's GC lane and roots.
+              requiresRuntime =
+                  !locals.lookup(allocation.getResult()) ||
+                  holdsManaged(cast<sim::RefType>(allocation.getType())
+                                   .getElementType());
+            else if (auto load = dyn_cast<sim::SimRefLoadOp>(operation))
+              requiresRuntime = managedRootAccess(load.getReference(),
+                                                  load.getResult().getType());
+            else if (auto load = dyn_cast<sim::SimArgumentRefLoadOp>(operation))
+              requiresRuntime = holdsManaged(load.getResult().getType());
             else if (isa<sim::SimClassAllocOp, sim::SimClassCopyOp,
                          sim::SimManagedLoadOp, sim::SimManagedStoreOp,
                          sim::SimManagedBitsDynStoreOp,
@@ -566,10 +609,17 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
             else if (auto store = dyn_cast<sim::SimRefStoreOp>(operation))
               requiresRuntime =
                   isa<sim::StringType>(store.getValue().getType()) ||
+                  managedRootAccess(store.getReference(),
+                                    store.getValue().getType()) ||
                   runtimeStore(store.getReference(), true, false, true);
-            else if (auto copy = dyn_cast<sim::SimRefCopyOp>(operation))
-              requiresRuntime = runtimeStore(copy.getDestination());
-            else if (auto store = dyn_cast<sim::SimNetWriteOp>(operation))
+            else if (auto copy = dyn_cast<sim::SimRefCopyOp>(operation)) {
+              Type copied = cast<sim::RefType>(copy.getDestination().getType())
+                                .getElementType();
+              requiresRuntime =
+                  managedRootAccess(copy.getDestination(), copied) ||
+                  managedRootAccess(copy.getSource(), copied) ||
+                  runtimeStore(copy.getDestination());
+            } else if (auto store = dyn_cast<sim::SimNetWriteOp>(operation))
               requiresRuntime = runtimeStore(store.getNet());
             else if (auto drive = dyn_cast<sim::SimDriverDriveOp>(operation))
               requiresRuntime = runtimeStore(drive.getDriver());
@@ -581,6 +631,20 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
                   staticEvalIsland &&
                   runtimeStore(enqueue.getDestination(), false, true);
             }
+            // A subroutine reference into a managed root reaches it too.
+            else if (auto alias =
+                         dyn_cast<sim::SimArgumentRefFromRefOp>(operation))
+              requiresRuntime = managedRootAccess(
+                  alias.getInput(),
+                  cast<sim::RefType>(alias.getInput().getType())
+                      .getElementType());
+            // Creating a managed value (a string literal or result, a
+            // container, ...) also uses the actor's GC lane. The runtime
+            // services classified above keep their checkpoint.
+            else
+              requiresRuntime =
+                  requiresRuntime ||
+                  llvm::any_of(operation->getResultTypes(), holdsManaged);
             classification->second |= requiresRuntime;
             if (requiresRuntime && detailedTiming)
               runtimeStateOperations.try_emplace(current, operation);

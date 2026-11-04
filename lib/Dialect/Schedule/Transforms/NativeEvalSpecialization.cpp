@@ -17,6 +17,7 @@
 #include "talos/Analysis/SimulationAnalysis.h"
 #include "talos/Analysis/StateDomainAnalysis.h"
 #include "talos/Analysis/StaticSpecializationAnalysis.h"
+#include "talos/Analysis/StorageWriteAnalysis.h"
 #include "talos/Conversion/SimulationToSchedule/Utils.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
@@ -26,7 +27,6 @@
 #include "talos/Dialect/Schedule/ScheduleOps.h"
 #include "talos/Dialect/Schedule/Transforms/NativeTransforms.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
-#include "talos/Runtime/OutputItemFlags.h"
 #include "talos/Runtime/StableHandle.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -35,62 +35,7 @@
 using namespace mlir;
 namespace talos::detail {
 namespace {
-// A private generated activation may print snapshots without scheduling a
-// process or consulting canonical design state. Keep dynamic formats, managed
-// values, user file channels and strength queries on the checkpoint route.
-bool isDirectOutput(sim::SimDisplayOp display) {
-  auto descriptor =
-      display.getDescriptor().getDefiningOp<arith::ConstantIntOp>();
-  if (!descriptor ||
-      (uint32_t(descriptor.value()) != 1 &&
-       uint32_t(descriptor.value()) != 0x80000002u) ||
-      !display.getScopeAttr())
-    return false;
-  constexpr uint32_t allowed =
-      TALOS_RT_OUTPUT_ITEM_SIGNED | TALOS_RT_OUTPUT_ITEM_OMITTED |
-      TALOS_RT_OUTPUT_ITEM_REAL | TALOS_RT_OUTPUT_ITEM_NET;
-  for (int32_t flags : display.getItemFlags())
-    if (uint32_t(flags) & ~allowed)
-      return false;
-  for (Value item : display.getItems()) {
-    if (isa<sim::BytesType>(item.getType())) {
-      auto literal = item.getDefiningOp<sim::SimBytesConstantOp>();
-      if (!literal)
-        return false;
-      // Over-accept format modifiers here only to reject possible strength
-      // queries conservatively. The formatter still validates the syntax.
-      // Escaped %% and literal text containing 'v' do not query strengths.
-      StringRef format = literal.getValue();
-      while (!format.empty()) {
-        size_t percent = format.find('%');
-        if (percent == StringRef::npos)
-          break;
-        format = format.drop_front(percent + 1);
-        if (format.consume_front("%"))
-          continue;
-        format = format.ltrim("0123456789-.");
-        if (format.starts_with_insensitive("v"))
-          return false;
-        if (!format.empty())
-          format = format.drop_front();
-      }
-    } else if (!isa<IntegerType, Float64Type, sim::LogicType, sim::NetType>(
-                   item.getType())) {
-      return false;
-    }
-  }
-  return true;
-}
-
-// A nonterminating error only latches the final exit status (IEEE 1800-2023
-// 20.10), so an immediate assertion's `$error` report stays inline with its
-// direct display rather than checkpointing the activation.
-bool isDirectOutput(Operation *operation) {
-  if (isa<sim::SimErrorOp>(operation))
-    return true;
-  auto display = dyn_cast<sim::SimDisplayOp>(operation);
-  return display && isDirectOutput(display);
-}
+using analysis::isDirectOutput;
 
 // Assertion control (IEEE 1800-2023 20.11) changes only through a control
 // task, which a dry-run probe never admits, so a probe reads the enablement

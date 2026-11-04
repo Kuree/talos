@@ -31,7 +31,9 @@ module eval_random_streams;
   always_ff @(posedge clk) void'(std::randomize(randomized));
   // TRACE-DAG: reason=runtime-state-access operation=simulation.random.state source=loc("{{.*}}":[[# @LINE - 1]]:
   always @(posedge clk) shuffled.shuffle();
-  // TRACE-DAG: reason=runtime-state-access operation=simulation.random.bounded source=loc("{{.*}}":[[# @LINE - 1]]:
+  // The trace names the first runtime access: the temporary container shuffle
+  // builds is a managed value too (its random stream is checked above).
+  // TRACE-DAG: reason=runtime-state-access operation=simulation.container.create source=loc("{{.*}}":[[# @LINE - 3]]:
   always @(posedge clk) holder = process::self();
   // TRACE-DAG: reason=runtime-state-access operation=simulation.process.current source=loc("{{.*}}":[[# @LINE - 1]]:
   always @(negedge clk) if (holder != null) state = holder.get_randstate();

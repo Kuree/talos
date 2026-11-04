@@ -24,6 +24,13 @@ struct StorageViewFact {
   void print(llvm::raw_ostream &os) const;
 };
 
+/// Whether a display or nonterminating error runs inline in a generated
+/// activation (a direct output) instead of at a runtime checkpoint: a fixed
+/// stdout/stderr descriptor with a scope, literal formats without strength
+/// queries and only integral, real or net items; `$error` latches the final
+/// status only (IEEE 1800-2023 20.10).
+bool isDirectOutput(mlir::Operation *operation);
+
 /// May-execute reachability before a cold checkpoint returns to the runtime.
 /// Dense CFG/region joins retain any hot incoming path. A checkpoint block
 /// kills that path; its successors become hot only through another hot edge.
