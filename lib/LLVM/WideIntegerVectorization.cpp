@@ -1,6 +1,7 @@
 //===- WideIntegerVectorization.cpp - Bound wide shift vectorization ------===//
 
 #include "talos/LLVM/WideIntegerVectorization.h"
+#include "talos/LLVM/ClockedKernelOutlining.h"
 
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/Constants.h"
@@ -193,6 +194,58 @@ LimitWideIntegerVectorizationPass::run(Function &function,
       addStringMetadataToLoop(loop, "llvm.loop.vectorize.enable", 0);
   }
   // Only hints change; every analysis of the CFG and values stays valid.
+  return PreservedAnalyses::all();
+}
+
+static bool hasIntegerVectorLanes(const Function &function,
+                                  function_ref<bool(unsigned)> matches) {
+  auto lanes = [&](Type *type) {
+    auto *vector = dyn_cast<VectorType>(type);
+    auto *lane =
+        vector ? dyn_cast<IntegerType>(vector->getElementType()) : nullptr;
+    return lane && matches(lane->getBitWidth());
+  };
+  for (const BasicBlock &block : function)
+    for (const Instruction &instruction : block) {
+      if (lanes(instruction.getType()))
+        return true;
+      for (const Value *operand : instruction.operands())
+        if (lanes(operand->getType()))
+          return true;
+    }
+  return false;
+}
+
+bool hasOddLaneIntegerVectors(const Function &function) {
+  return hasIntegerVectorLanes(function, [](unsigned width) {
+    return width != 1 && (width < 8 || width > 64 || !isPowerOf2_32(width));
+  });
+}
+
+bool hasSubByteLaneIntegerVectors(const Function &function) {
+  return hasIntegerVectorLanes(
+      function, [](unsigned width) { return width > 1 && width < 8; });
+}
+
+bool preferSelectionDAG(const Function &function) {
+  if (function.isDeclaration())
+    return false;
+  if (hasSubByteLaneIntegerVectors(function))
+    return true;
+  // Helper simplification and codegen preparation can grow a selected group.
+  // Keep the SelectionDAG bound even after those transformations.
+  return function.getInstructionCount() <= kClockedUpdateGroupMaxDAGSize &&
+         (function.hasFnAttribute(kClockedUpdateGroupAttr) ||
+          hasOddLaneIntegerVectors(function));
+}
+
+PreservedAnalyses
+PrintInstructionSelectionPass::run(Function &function,
+                                   FunctionAnalysisManager &) {
+  if (!function.isDeclaration())
+    errs() << "talos-isel: " << function.getName() << ' '
+           << (preferSelectionDAG(function) ? "selection-dag" : "global-isel")
+           << '\n';
   return PreservedAnalyses::all();
 }
 

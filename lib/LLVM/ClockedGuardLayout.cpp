@@ -86,6 +86,10 @@ void registerTalosLLVMPasses(PassBuilder &builder) {
   builder.registerPipelineParsingCallback(
       [](StringRef name, FunctionPassManager &passes,
          ArrayRef<PassBuilder::PipelineElement>) {
+        if (name == "talos-print-instruction-selection") {
+          passes.addPass(PrintInstructionSelectionPass());
+          return true;
+        }
         if (name == "talos-limit-wide-integer-vectorization") {
           passes.addPass(LimitWideIntegerVectorizationPass());
           return true;

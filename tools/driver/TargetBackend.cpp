@@ -1285,21 +1285,20 @@ addVPIStartupLifecycle(llvm::Module &module, StringRef vpi,
 namespace {
 
 // Large native kernels need GlobalISel to bound selection time. The outlined
-// groups have bounded size and benefit from SelectionDAG's code quality. Use
-// the backend's existing fallback before translating these functions.
+// groups and bounded functions on odd-lane integer vectors benefit from
+// SelectionDAG's code quality, and sub-byte-lane vector code needs it at any
+// size (talos::preferSelectionDAG). Use the backend's existing fallback before
+// translating these functions.
 class SelectOutlinedKernelsPass : public MachineFunctionPass {
 public:
   static char ID;
   SelectOutlinedKernelsPass() : MachineFunctionPass(ID) {}
   StringRef getPassName() const override {
-    return "Select outlined clocked kernels with SelectionDAG";
+    return "Select outlined clocked kernels and odd-lane vector code with "
+           "SelectionDAG";
   }
   bool runOnMachineFunction(MachineFunction &function) override {
-    const llvm::Function &ir = function.getFunction();
-    // Helper simplification and codegen preparation can grow a selected group.
-    // Keep the SelectionDAG bound even after those transformations.
-    if (!ir.hasFnAttribute(talos::kClockedUpdateGroupAttr) ||
-        ir.getInstructionCount() > talos::kClockedUpdateGroupMaxDAGSize)
+    if (!talos::preferSelectionDAG(function.getFunction()))
       return false;
     function.getProperties().set(
         MachineFunctionProperties::Property::FailedISel);
@@ -1310,14 +1309,15 @@ public:
 char SelectOutlinedKernelsPass::ID = 0;
 static RegisterPass<SelectOutlinedKernelsPass>
     selectOutlinedKernels("talos-select-outlined-kernels",
-                          "Select outlined clocked kernels with SelectionDAG",
+                          "Select outlined clocked kernels and odd-lane "
+                          "vector code with SelectionDAG",
                           false, false);
 
 class KernelCodegenPassManager : public legacy::PassManager {
 public:
   explicit KernelCodegenPassManager(const llvm::Module &module)
       : hasGroups(llvm::any_of(module, [](const llvm::Function &function) {
-          return function.hasFnAttribute(talos::kClockedUpdateGroupAttr);
+          return talos::preferSelectionDAG(function);
         })) {}
 
 private:
