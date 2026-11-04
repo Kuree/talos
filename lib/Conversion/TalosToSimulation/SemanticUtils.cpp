@@ -330,18 +330,138 @@ std::optional<StringRef> getElaboratedConstantSpelling(Operation *operation) {
   return getConstantSpelling(operation);
 }
 
-std::optional<StringRef> getTwoStatePatternSpelling(Operation *operation) {
+namespace {
+/// Self-determined packed width of a semantic expression, if it has one.
+std::optional<unsigned> packedSemanticWidth(Operation *expression) {
+  FailureOr<Type> type = getNormalizedSemanticType(expression);
+  if (failed(type))
+    return std::nullopt;
+  Type scalar = sim::getPackedScalarType(*type);
+  std::optional<unsigned> width =
+      scalar ? sim::getPackedWidth(scalar) : std::nullopt;
+  if (!width || *width == 0)
+    return std::nullopt;
+  return width;
+}
+
+/// A replication whose count folded to zero: IEEE 1800-2023 11.4.12.1 gives it
+/// a size of zero and ignores it inside the enclosing concatenation.
+bool isZeroSizeReplication(Operation *operation) {
+  if (!isa<semantic::SVReplicationExpressionOp>(operation))
+    return false;
+  auto semanticType = operation->getAttrOfType<TypeAttr>("semantic_type");
+  return semanticType && isa<semantic::VoidType>(semanticType.getValue());
+}
+
+std::optional<ParsedConstant> composeSourceBits(Operation *operation);
+
+/// Source four-state bits of a constant operand at its self-determined width.
+std::optional<ParsedConstant> sourceOperandBits(Operation *operand) {
+  if (isa<semantic::SVConcatenationExpressionOp,
+          semantic::SVReplicationExpressionOp>(operand))
+    return composeSourceBits(operand);
+  std::optional<std::string> spelling = getTwoStatePatternSpelling(operand);
+  if (!spelling)
+    if (std::optional<StringRef> constant = getConstantSpelling(operand))
+      spelling = constant->str();
+  std::optional<unsigned> width = packedSemanticWidth(operand);
+  if (!spelling || !width)
+    return std::nullopt;
+  FailureOr<ParsedConstant> parsed =
+      parseSVInteger(*spelling, *width, getSemanticLocation(operand));
+  if (failed(parsed))
+    return std::nullopt;
+  return *parsed;
+}
+
+/// IEEE 1800-2023 11.4.12: the bits of a concatenation or replication of
+/// constant operands are its operands' bits, the first operand most
+/// significant. Returns no value when an operand is not constant.
+std::optional<ParsedConstant> composeSourceBits(Operation *operation) {
+  if (std::optional<StringRef> folded =
+          getElaboratedConstantSpelling(operation)) {
+    std::optional<unsigned> width = packedSemanticWidth(operation);
+    if (!width)
+      return std::nullopt;
+    FailureOr<ParsedConstant> parsed =
+        parseSVInteger(*folded, *width, getSemanticLocation(operation));
+    if (failed(parsed))
+      return std::nullopt;
+    return *parsed;
+  }
+  std::optional<unsigned> resultWidth = packedSemanticWidth(operation);
+  if (!resultWidth)
+    return std::nullopt;
+  SmallVector<Operation *> children = getChildren(operation);
+  SmallVector<ParsedConstant> pieces;
+  if (isa<semantic::SVConcatenationExpressionOp>(operation)) {
+    for (Operation *child : children) {
+      if (isZeroSizeReplication(child))
+        continue;
+      std::optional<ParsedConstant> bits = sourceOperandBits(child);
+      if (!bits)
+        return std::nullopt;
+      pieces.push_back(std::move(*bits));
+    }
+  } else {
+    if (children.size() != 2)
+      return std::nullopt;
+    std::optional<StringRef> countSpelling =
+        getElaboratedConstantSpelling(children.front());
+    std::optional<ParsedConstant> bits = sourceOperandBits(children[1]);
+    if (!countSpelling || !bits)
+      return std::nullopt;
+    FailureOr<ParsedConstant> count = parseSVInteger(
+        *countSpelling, 64, getSemanticLocation(children.front()));
+    if (failed(count) || !count->unknown.isZero() ||
+        count->value != *resultWidth / bits->value.getBitWidth())
+      return std::nullopt;
+    pieces.append(count->value.getZExtValue(), *bits);
+  }
+  unsigned width = 0;
+  for (const ParsedConstant &piece : pieces)
+    width += piece.value.getBitWidth();
+  if (width != *resultWidth)
+    return std::nullopt;
+  APInt value(width, 0), unknown(width, 0);
+  unsigned low = width;
+  for (const ParsedConstant &piece : pieces) {
+    low -= piece.value.getBitWidth();
+    value.insertBits(piece.value, low);
+    unknown.insertBits(piece.unknown, low);
+  }
+  return ParsedConstant{std::move(value), std::move(unknown)};
+}
+} // namespace
+
+std::optional<std::string> getTwoStatePatternSpelling(Operation *operation) {
   if (auto pattern = operation->getAttrOfType<StringAttr>("two_state_pattern"))
-    return pattern.getValue();
+    return pattern.getValue().str();
   if (auto constant =
           operation->getAttrOfType<StringAttr>(elaboratedConstantAttrName))
-    return constant.getValue();
+    return constant.getValue().str();
   if (isa<semantic::SVConversionExpressionOp>(operation)) {
     auto children = getChildren(operation);
     if (children.size() == 1)
       return getTwoStatePatternSpelling(children.front());
+    return std::nullopt;
   }
-  return std::nullopt;
+  // Elaboration does not fold a concatenation or replication item, so compose
+  // the source spelling of its operands: their z (?) bits stay do-not-care
+  // bits of a casez or wildcard pattern (IEEE 1800-2023 12.5.1, 11.4.6).
+  if (!isa<semantic::SVConcatenationExpressionOp,
+           semantic::SVReplicationExpressionOp>(operation))
+    return std::nullopt;
+  std::optional<ParsedConstant> bits = composeSourceBits(operation);
+  if (!bits || bits->unknown.isZero())
+    return std::nullopt;
+  unsigned width = bits->value.getBitWidth();
+  std::string spelling = (Twine(width) + "'b").str();
+  spelling.reserve(spelling.size() + width);
+  for (unsigned bit = width; bit-- != 0;)
+    spelling.push_back(bits->unknown[bit] ? (bits->value[bit] ? 'z' : 'x')
+                                          : (bits->value[bit] ? '1' : '0'));
+  return spelling;
 }
 
 void copyConstantSymbolValue(Operation *reference, Operation *symbol) {

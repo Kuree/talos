@@ -312,8 +312,9 @@ getElaboratedConstantSpelling(::mlir::Operation *operation);
 void copyConstantSymbolValue(::mlir::Operation *reference,
                              ::mlir::Operation *symbol);
 
-/// Original X/Z pattern retained when a literal was projected to two-state.
-std::optional<::mlir::StringRef>
+/// Original X/Z pattern retained when a literal was projected to two-state,
+/// or composed from such literals by a constant concatenation or replication.
+std::optional<std::string>
 getTwoStatePatternSpelling(::mlir::Operation *operation);
 
 /// Lower a retained wildcard pattern to an integer mask comparison. Returns
