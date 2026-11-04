@@ -1027,7 +1027,7 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
     if (!copy->sink.net && state.observed.contains(keyOf(copy->sink)))
       sink.block("observable storage");
     if (!copy->sink.net && state.dumpPorts)
-      sink.block("waveform dump");
+      sink.block("waveform dump: extended VCD");
     sink.pieces.push_back({copy->sinkLow, copy->width, copy});
     for (const SourceRead &read : copy->reads) {
       auto source = types.find(read.root);
@@ -1076,10 +1076,14 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
     for (auto &[root, sink] : sinks) {
       if (sink.blocked)
         continue;
-      const Piece *piece = sink.pieces.size() == 1 ? &sink.pieces[0] : nullptr;
-      if (!piece || piece->low != 0 || piece->width != sink.width ||
-          !piece->copy->relocation || piece->copy->reads.size() != 1)
-        sink.block("waveform dump");
+      bool relocations = llvm::all_of(sink.pieces, [](const Piece &piece) {
+        return piece.copy->relocation && piece.copy->reads.size() == 1;
+      });
+      if (sink.pieces.size() != 1)
+        sink.block(relocations ? "waveform dump: relocation pieces"
+                               : "waveform dump: expression pieces");
+      else if (!relocations)
+        sink.block("waveform dump: expression");
     }
   // The net's value must be its drivers' (IEEE 1800-2023 6.6.1): a plain,
   // undelayed wire whose strong drivers partition it, with no collapsed
@@ -1101,7 +1105,7 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
     else if (cov::has<cov::ToggleObservable>(decl))
       sink.block("toggle coverage");
     else if (state.dumpPorts)
-      sink.block("waveform dump");
+      sink.block("waveform dump: extended VCD");
   }
   // Declarations and operations that name a sink net by id: a driver that is
   // not one of the copies (a gate, a specify path), a port collapse
