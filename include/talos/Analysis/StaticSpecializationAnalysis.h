@@ -51,6 +51,21 @@ private:
   mlir::SmallVector<schedule::ComputeNBACommitAttr> orderedNBACommits;
 };
 
+/// Site identities of the clocking-block output drives under `root`. Such a
+/// drive updates its signal in the Re-NBA region (IEEE 1800-2023 14.16), never
+/// at the NBA barrier that static NBA accumulators share.
+llvm::DenseSet<int64_t> collectClockingDriveSites(mlir::Operation *root);
+
+/// Whether `commit` names no single storage root yet has a site other than a
+/// clocking-block drive (`clockingDriveSites`). Such a commit, an NBA through
+/// a virtual interface for instance, may write any static NBA root, so none
+/// may commit from an accumulator ahead of it (IEEE 1800-2023 4.6(b),
+/// 10.4.2, 25.9): static specialization then plans no NBA root, and the
+/// native NBA plan rejects one beside it. Local and net commits count too,
+/// conservatively; nonblocking assignments to neither are legal (10.4.2).
+bool isUnrootedNBACommit(schedule::ComputeNBACommitAttr commit,
+                         const llvm::DenseSet<int64_t> &clockingDriveSites);
+
 } // namespace talos::analysis
 
 #endif // TALOS_ANALYSIS_STATICSPECIALIZATIONANALYSIS_H

@@ -97,7 +97,14 @@ StaticSpecializationAnalysis::compute(sim::SimDesignOp design) {
 
   llvm::DenseSet<uint64_t> foundRoots;
   for (schedule::ComputeNBACommitAttr commit : result.orderedNBACommits) {
-    uint64_t descriptor = commit.getEffect().getDescriptor();
+    // A commit without one fixed storage root carries a placeholder
+    // descriptor that may equal a planned root's; it is never that root.
+    schedule::ComputeEffectAttr effect = commit.getEffect();
+    if (effect.getResource() != schedule::ComputeResourceKind::Storage ||
+        effect.getTarget() != schedule::ComputeTargetKind::Descriptor ||
+        effect.getDynamic() || effect.getDeferred())
+      continue;
+    uint64_t descriptor = effect.getDescriptor();
     if (!plannedNBARoots.contains(descriptor))
       continue;
     if (!commit.getFrontierSites().empty() ||
@@ -124,6 +131,31 @@ StaticSpecializationAnalysis::compute(sim::SimDesignOp design) {
                "graph"),
            failure();
   return result;
+}
+
+llvm::DenseSet<int64_t> collectClockingDriveSites(Operation *root) {
+  llvm::DenseSet<int64_t> sites;
+  root->walk([&](sim::SimNBAEnqueueOp enqueue) {
+    if (enqueue.getClockingOutput() && enqueue.getSiteAttr())
+      sites.insert(static_cast<int64_t>(enqueue.getSiteAttr().getId()));
+  });
+  return sites;
+}
+
+bool isUnrootedNBACommit(schedule::ComputeNBACommitAttr commit,
+                         const llvm::DenseSet<int64_t> &clockingDriveSites) {
+  schedule::ComputeEffectAttr effect = commit.getEffect();
+  if (effect.getResource() == schedule::ComputeResourceKind::Storage &&
+      effect.getTarget() == schedule::ComputeTargetKind::Descriptor)
+    return false;
+  auto clocking = [&](DenseI64ArrayAttr sites) {
+    return llvm::all_of(sites.asArrayRef(), [&](int64_t site) {
+      return clockingDriveSites.contains(site);
+    });
+  };
+  return !clocking(commit.getSlots()) ||
+         !clocking(commit.getAccumulatorSites()) ||
+         !clocking(commit.getFrontierSites());
 }
 
 } // namespace talos::analysis

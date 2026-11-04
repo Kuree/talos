@@ -9,6 +9,7 @@
 #include "talos/Analysis/NBAInfluenceAnalysis.h"
 #include "talos/Analysis/ParallelWalk.h"
 #include "talos/Analysis/SimulationAnalysis.h"
+#include "talos/Analysis/StaticSpecializationAnalysis.h"
 #include "talos/Analysis/StorageWriteAnalysis.h"
 #include "talos/Conversion/SimulationRuntime.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
@@ -61,14 +62,27 @@ FailureOr<NativeStaticNBAPlan> buildNativeStaticNBAPlan(
   NativeStaticNBAPlan plan;
   if (!enabled)
     return plan;
+  llvm::DenseSet<int64_t> clockingDriveSites =
+      analysis::collectClockingDriveSites(module);
   for (schedule::ComputeNBACommitAttr commit : orderedCommits) {
     schedule::ComputeEffectAttr effect = commit.getEffect();
-    if (effect.getResource() != schedule::ComputeResourceKind::Storage ||
-        effect.getTarget() != schedule::ComputeTargetKind::Descriptor ||
-        effect.getDynamic() || effect.getDeferred())
+    // A commit with no single root stays on the generic frontier when every
+    // site is a clocking-block drive, which updates in the Re-NBA region (IEEE
+    // 1800-2023 14.16). Static specialization plans no root beside any other
+    // such commit, which could write a planned root out of order (4.6(b),
+    // 10.4.2).
+    if (analysis::isUnrootedNBACommit(commit, clockingDriveSites))
       return module.emitError(
                  "static NBA commit does not identify one fixed storage root"),
              failure();
+    if (effect.getResource() != schedule::ComputeResourceKind::Storage ||
+        effect.getTarget() != schedule::ComputeTargetKind::Descriptor)
+      continue;
+    // A dynamic or deferred commit of one root was never specialized for that
+    // root and writes no other: it stays on the generic frontier, as an
+    // unplanned root does below.
+    if (effect.getDynamic() || effect.getDeferred())
+      continue;
     auto handle = stateLayout.storage.find(effect.getDescriptor());
     if (handle == stateLayout.storage.end())
       return module.emitError(

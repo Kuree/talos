@@ -2,6 +2,7 @@
 
 #include "talos/Analysis/SimulationAnalysis.h"
 #include "talos/Analysis/SimulationVPIAnalysis.h"
+#include "talos/Analysis/StaticSpecializationAnalysis.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Schedule/ScheduleMetadata.h"
@@ -150,6 +151,14 @@ void TalosSimSpecializeStaticStateNBAPass::runOnOperation() {
                          "packed integer or logic root");
   }
 
+  // A commit with no single root other than a clocking-block drive may write
+  // any root out of order, so no root is planned beside it.
+  llvm::DenseSet<int64_t> clockingDriveSites =
+      analysis::collectClockingDriveSites(design);
+  bool unrootedNBACommit = llvm::any_of(graph.getNodes(), [&](Attribute node) {
+    auto commit = dyn_cast<schedule::ComputeNBACommitAttr>(node);
+    return commit && analysis::isUnrootedNBACommit(commit, clockingDriveSites);
+  });
   llvm::SmallDenseSet<uint64_t, 16> nbaEligible;
   SmallVector<int64_t> nbaRoots;
   for (Attribute node : graph.getNodes()) {
@@ -160,7 +169,7 @@ void TalosSimSpecializeStaticStateNBAPass::runOnOperation() {
     if (effect.getResource() != schedule::ComputeResourceKind::Storage ||
         effect.getTarget() != schedule::ComputeTargetKind::Descriptor ||
         effect.getDynamic() || effect.getDeferred() || unknownDelayedNBARoot ||
-        delayedNBARoots.contains(effect.getDescriptor()) ||
+        unrootedNBACommit || delayedNBARoots.contains(effect.getDescriptor()) ||
         !storageRootWidths.contains(effect.getDescriptor()) ||
         !commit.getFrontierSites().empty()) {
       if (missedRemarks)
