@@ -44,7 +44,17 @@ LogicalResult NativePipelineAnalysis::planState() {
     if (auto function = dyn_cast<sim::SimFuncOp>(operation))
       hasLanguageObserver |=
           function.getEntryKind() == sim::EntryKind::Observer;
+    mayDump |=
+        isa<sim::SimDumpOpenOp, sim::SimDumpOpenStringOp,
+            sim::SimDumpTimescaleOp, sim::SimDumpVarsOp, sim::SimDumpAllOp,
+            sim::SimDumpControlOp, sim::SimDumpLimitOp, sim::SimDumpFlushOp,
+            sim::SimDumpPortsOp, sim::SimDumpPortsControlOp>(operation);
   });
+  // Only design tasks open a dump file (IEEE 1800-2023 21.7, 21.7.3), so a
+  // generated periodic loop needs end-of-slot dump hooks only in such a design.
+  if (mayDump)
+    ::talos::schedule::set<::talos::schedule::Field::EvalPostponedObservers>(
+        module, UnitAttr::get(module.getContext()));
   if (!hasLanguageOverride && (!vpi.allowsWrite() || !hasLanguageObserver)) {
     auto authorizeFixedHandles = [&](const auto &descriptors) {
       for (const auto &[descriptor, handle] : descriptors) {
@@ -544,7 +554,10 @@ LogicalResult NativePipelineAnalysis::planSchedule() {
           current.walk([&, &classification =
                                classification](Operation *operation) {
             // File I/O (IEEE 1800-2023 21.3) and value change dumps (21.7)
-            // operate on runtime-owned descriptor tables and dump state. A
+            // operate on runtime-owned descriptor tables and dump state.
+            // The exclusive periodic loop relies on every dump task running
+            // at a runtime checkpoint (it reads the runtime's postponed-hook
+            // byte once per entry; SimulationAOTMaterialization.cpp). A
             // cold block of the body still runs inline on its four-state
             // route, so these need the runtime wherever they occur. So do the
             // thread-local random streams behind $urandom, $urandom_range,

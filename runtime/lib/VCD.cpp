@@ -1115,6 +1115,14 @@ talos_rt_status ensureState(talos_rt_context *context, VCDTraceState *&state) {
   return TALOS_RT_OK;
 }
 
+// Something is selected for dumping: a generated periodic loop now ends each
+// of its slots in the runtime (talos_rt_v1_scheduler_postponed_slot_aot).
+// talos_rt_dump_slot_unlocked clears the bit once no dump file is open. A
+// file alone ($dumpfile without $dumpvars) never dumps, so it arms nothing.
+void armDumpSlotHook(talos_rt_context *context) {
+  context->postponedSlotHooks |= kDumpSlotHook;
+}
+
 template <typename State>
 talos_rt_status openFile(talos_rt_context *context, State &state,
                          const std::string &path) {
@@ -1127,7 +1135,9 @@ talos_rt_status openFile(talos_rt_context *context, State &state,
   state.writtenBytes = 0;
   state.limitReached = false;
   state.buffer.clear();
-  (void)context;
+  // A $dumpfile after selections (one that replaces a closed file) dumps them.
+  if (!state.selections.empty())
+    armDumpSlotHook(context);
   return TALOS_RT_OK;
 }
 
@@ -1749,6 +1759,11 @@ talos_rt_status talos_rt_dump_slot_unlocked(talos_rt_context *context) {
       if (status != TALOS_RT_OK)
         return status;
     }
+  if (context && (context->postponedSlotHooks & kDumpSlotHook) &&
+      !talos_rt_dump_active_unlocked(context)) {
+    context->postponedSlotHooks &= ~kDumpSlotHook;
+    context->postponedHooksDisarmed = true;
+  }
   return TALOS_RT_OK;
 }
 
@@ -1896,6 +1911,7 @@ void talos_rt_dump_destroy(talos_rt_context *context) noexcept {
     delete context->evcdState;
     context->evcdState = nullptr;
   }
+  context->postponedSlotHooks &= ~kDumpSlotHook;
 }
 
 extern "C" talos_rt_status talos_rt_v1_dump_open(talos_rt_context *context,
@@ -1995,6 +2011,10 @@ extern "C" talos_rt_status talos_rt_v1_dump_vars(talos_rt_context *context,
       selection.scope.assign(reinterpret_cast<const char *>(scope),
                              static_cast<size_t>(scopeSize));
     state->selections.push_back(std::move(selection));
+    // A closed file ($dumplimit reached) dumps nothing; a later $dumpfile
+    // arms the hook for the pending selections (openFile).
+    if (state->file)
+      armDumpSlotHook(context);
     return TALOS_RT_OK;
   }
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
@@ -2117,6 +2137,8 @@ extern "C" talos_rt_status talos_rt_v1_dump_close(talos_rt_context *context) {
     if (state->file && state->planBuilt)
       (void)emitSlot(context, *state);
     closeFile(*state);
+    if (!talos_rt_dump_active_unlocked(context))
+      context->postponedSlotHooks &= ~kDumpSlotHook;
     return TALOS_RT_OK;
   }
   TALOS_RT_CATCH_ALL { return TALOS_RT_IO_ERROR; }
@@ -2193,6 +2215,7 @@ extern "C" talos_rt_status talos_rt_v1_dump_ports(talos_rt_context *context,
     if (session->planBuilt)
       return TALOS_RT_INVALID_LIFECYCLE;
     session->selections.push_back(std::move(scope));
+    armDumpSlotHook(context);
     return TALOS_RT_OK;
   }
   TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }

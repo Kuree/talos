@@ -1765,11 +1765,19 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_prepare_periodic_aot(
                                       TALOS_RT_NATIVE_SCHEDULE_SHARED_PERIODIC);
   if (staticEvalIsland)
     context->nativeStaticEvalIslandCertified = false;
-  // Generated run_until owns `schedulerTime` directly, so time slots complete
-  // without re-entering the runtime and the waveform difference would never
-  // run. Decline the tier while a dump is open rather than silently dropping
-  // slots.
-  if (talos_rt_dump_active_unlocked(context))
+  // Generated run_until owns `schedulerTime` directly, so its time slots
+  // complete without re-entering the runtime. A loop with postponed hooks ends
+  // each of them in talos_rt_v1_scheduler_postponed_slot_aot (or in the shared
+  // drain) while a dump is open, which records the slot's value changes at its
+  // own time (IEEE 1800-2023 21.7). Decline any other loop while a dump is
+  // open rather than silently dropping slots.
+  const bool postponedHooks =
+      context->nativeSchedulePlan && (context->nativeSchedulePlan->flags &
+                                      TALOS_RT_NATIVE_SCHEDULE_POSTPONED_HOOKS);
+  auto dumpBlocksLoop = [&] {
+    return !postponedHooks && talos_rt_dump_active_unlocked(context);
+  };
+  if (dumpBlocksLoop())
     return TALOS_RT_TIER_UNAVAILABLE;
   TALOS_RT_TRY {
     talos_rt_status status =
@@ -1788,7 +1796,7 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_prepare_periodic_aot(
       return TALOS_RT_TIER_UNAVAILABLE;
     // Startup actors can enable waveform collection during the drain above.
     // Recheck before the periodic loop takes ownership of the clock.
-    if (talos_rt_dump_active_unlocked(context))
+    if (dumpBlocksLoop())
       return TALOS_RT_TIER_UNAVAILABLE;
     // Tier-3 initialization and finite synchronous stimulus must reach a
     // quiescent handoff before generated run_until takes ownership of the
@@ -2235,7 +2243,7 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_prepare_periodic_aot(
     }
 
     // A finite clocked bootstrap prefix can also enable waveform collection.
-    if (talos_rt_dump_active_unlocked(context))
+    if (dumpBlocksLoop())
       return TALOS_RT_TIER_UNAVAILABLE;
 
     // Check cleanliness only after the finite Tier-3/bootstrap prefix has
@@ -2387,6 +2395,10 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_prepare_periodic_aot(
         &context->nativePeriodicTerminationRequested;
     outControl->next_runtime_deadline =
         nextPeriodicRuntimeDeadlineUnlocked(context);
+    outControl->postponed_slot_hooks = &context->postponedSlotHooks;
+    // The loop reads the postponed byte afresh after this; a disarm by the
+    // bootstrap's own slot dumps above needs no transient handoff.
+    context->postponedHooksDisarmed = false;
     context->nativePeriodicRuntimeDeadline = outControl->next_runtime_deadline;
     if (context->signalDiagnosticsEnabled) {
       ++context->signalDiagnostics.periodicPreparations;
@@ -2502,12 +2514,55 @@ extern "C" talos_rt_status talos_rt_v1_scheduler_drain_periodic_aot(
     ++context->signalDiagnostics.periodicSlotDrains;
   if (context->schedulerFinishRequested.load(std::memory_order_relaxed))
     return TALOS_RT_OK;
-  if (talos_rt_dump_active_unlocked(context) ||
-      !nativePeriodicAOTEnvironmentClean(context))
+  if (!nativePeriodicAOTEnvironmentClean(context))
     return TALOS_RT_TIER_UNAVAILABLE;
+  // The drain ended this slot. With postponed hooks the shared loop leaves its
+  // Postponed work here (IEEE 1800-2023 4.4.2.9, 21.7); any other loop
+  // returns the calendar to the runtime while a dump is open.
+  if (!(context->nativeSchedulePlan->flags &
+        TALOS_RT_NATIVE_SCHEDULE_POSTPONED_HOOKS)) {
+    if (talos_rt_dump_active_unlocked(context))
+      return TALOS_RT_TIER_UNAVAILABLE;
+  } else if (context->postponedSlotHooks & kDumpSlotHook) {
+    // As at every runtime slot end, a waveform the dump cannot write (an
+    // untraceable selection) is reported once and never ends the run. This
+    // loop rereads the byte, so a disarm needs no handoff.
+    TALOS_RT_TRY {
+      (void)talos_rt_dump_slot_unlocked(context);
+      context->postponedHooksDisarmed = false;
+    }
+    TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
+  }
   control->next_runtime_deadline = nextPeriodicRuntimeDeadlineUnlocked(context);
   context->nativePeriodicRuntimeDeadline = control->next_runtime_deadline;
   return TALOS_RT_OK;
+}
+
+extern "C" talos_rt_status
+talos_rt_v1_scheduler_postponed_slot_aot(talos_rt_context *context) {
+  if (!context)
+    return TALOS_RT_INVALID_ARGUMENT;
+  ContextMutexLock lock(context);
+  if (!context->nativeSchedulePlan ||
+      !(context->nativeSchedulePlan->flags &
+        TALOS_RT_NATIVE_SCHEDULE_POSTPONED_HOOKS))
+    return TALOS_RT_INVALID_LIFECYCLE;
+  // The generated loop closed this slot: no runtime work of it remains
+  // (talos_rt_v1_scheduler_handoff_pending), so its values are final and the
+  // dump records them at the slot's own time (IEEE 1800-2023 4.4.2.9, 21.7).
+  // As at every runtime slot end, a waveform the dump cannot write (an
+  // untraceable selection) is reported once and never ends the run.
+  TALOS_RT_TRY {
+    (void)talos_rt_dump_slot_unlocked(context);
+    // A shared loop rereads the byte; only an exclusive one needs the
+    // re-entry a disarm requests.
+    if (context->nativeSchedulePlan->flags &
+        TALOS_RT_NATIVE_SCHEDULE_SHARED_PERIODIC)
+      context->postponedHooksDisarmed = false;
+    return TALOS_RT_OK;
+  }
+  TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
+  TALOS_RT_CATCH_ALL { return TALOS_RT_IO_ERROR; }
 }
 
 extern "C" talos_rt_status talos_rt_v1_scheduler_handoff_periodic_aot(
@@ -2807,11 +2862,12 @@ talos_rt_v1_scheduler_run_aot(talos_rt_context *context) {
            ((context->preponedSlotHooks & kVPISignalSlotHook) &&
             talos_rt_vpi_signals_pending()) ||
            context->vpiObservationDemand || anyOverride(context->forceMask) ||
-           anyOverride(context->assignMask);
+           anyOverride(context->assignMask) || context->postponedHooksDisarmed;
   };
   auto runTransientHandoff = [&](bool &reachedBoundary) {
     {
       ContextMutexLock lock(context);
+      context->postponedHooksDisarmed = false;
       if (plan->state_bit_count != 0 &&
           (!reconcileNativeDirtyRootsToPlanesUnlocked(context, plan) ||
            !importNativeStatePlanesUnlocked(context, plan->state_value,

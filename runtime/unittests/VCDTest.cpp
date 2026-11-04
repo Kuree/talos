@@ -1,5 +1,7 @@
 //===- VCDTest.cpp - Waveform dump tests ---------------------------------===//
 
+#include "../lib/ProcessContext.h"
+#include "../lib/ProcessShared.h"
 #include "../lib/RuntimeInternal.h"
 #include "TestEnvironment.h"
 #include "talos/Runtime/Runtime.h"
@@ -467,6 +469,43 @@ TEST(VCD, HeaderDeclaresHierarchy) {
   EXPECT_NE(text.find("$enddefinitions $end"), std::string::npos);
   EXPECT_NE(text.find("$var wire 1 "), std::string::npos);
   EXPECT_NE(text.find("$var reg 4 "), std::string::npos);
+}
+
+// IEEE 1800-2023 21.7: a generated periodic loop ends its slots in the dump
+// only once something is selected; a file alone never dumps. A loop built
+// without postponed hooks keeps returning the calendar to the runtime.
+TEST(VCD, PostponedSlotHookFollowsDumpSelections) {
+  Fixture fixture;
+  ASSERT_EQ(fixture.create(), TALOS_RT_OK);
+  talos_rt_context *context = fixture.context;
+  ASSERT_EQ(fixture.openDump(), TALOS_RT_OK);
+  EXPECT_EQ(context->postponedSlotHooks & kDumpSlotHook, 0);
+  ASSERT_EQ(talos_rt_v1_dump_vars(context, 0, nullptr, 0), TALOS_RT_OK);
+  EXPECT_NE(context->postponedSlotHooks & kDumpSlotHook, 0);
+
+  talos_rt_native_schedule_plan plan{};
+  plan.flags = TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL |
+               TALOS_RT_NATIVE_SCHEDULE_SHARED_PERIODIC;
+  context->nativeSchedulePlan = &plan;
+  {
+    ContextMutexLock lock(context);
+    NativeAOTContextScope aot(context);
+    NativeAOTMutexScope mutex(context);
+    talos_rt_native_periodic_control_v1 control{};
+    EXPECT_EQ(talos_rt_v1_scheduler_postponed_slot_aot(context),
+              TALOS_RT_INVALID_LIFECYCLE);
+    EXPECT_EQ(talos_rt_v1_scheduler_drain_periodic_aot(context, &control),
+              TALOS_RT_TIER_UNAVAILABLE);
+    plan.flags |= TALOS_RT_NATIVE_SCHEDULE_POSTPONED_HOOKS;
+    EXPECT_EQ(talos_rt_v1_scheduler_drain_periodic_aot(context, &control),
+              TALOS_RT_OK);
+    EXPECT_EQ(talos_rt_v1_scheduler_postponed_slot_aot(context), TALOS_RT_OK);
+  }
+  context->nativeSchedulePlan = nullptr;
+  std::string text = fixture.read();
+  // Closing the file disarms the hook; the drain wrote the selecting slot.
+  EXPECT_EQ(context->postponedSlotHooks & kDumpSlotHook, 0);
+  EXPECT_EQ(countOccurrences(text, "#0\n$dumpvars\n"), 1u);
 }
 
 TEST(VCD, TimescaleFallsBackToTheDesignDefault) {

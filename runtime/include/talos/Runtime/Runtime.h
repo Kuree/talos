@@ -3589,6 +3589,11 @@ talos_rt_status talos_rt_v1_vpi_frame_unwind(talos_rt_context *context,
 // and at runtime deadlines, retaining its clock bindings across those drains.
 // Requires RUNTIME_CALENDAR_EVAL and its complete publication certificate.
 #define TALOS_RT_NATIVE_SCHEDULE_SHARED_PERIODIC UINT32_C(8192)
+// The generated periodic loop ends every time slot it owns, silent clock
+// edges included, with talos_rt_v1_scheduler_postponed_slot_aot while
+// `postponed_slot_hooks` is nonzero. An open value change dump then keeps the
+// loop (IEEE 1800-2023 21.7) instead of returning the calendar to the runtime.
+#define TALOS_RT_NATIVE_SCHEDULE_POSTPONED_HOOKS UINT32_C(16384)
 
 typedef struct talos_rt_aot_deopt_actor {
   uint32_t slot;
@@ -3662,6 +3667,9 @@ typedef struct talos_rt_native_periodic_control_v1 {
   uint64_t *scheduler_time;
   uint32_t *termination_requested;
   uint64_t next_runtime_deadline;
+  // Nonzero while end-of-slot (Postponed) runtime work is active, such as an
+  // open value change dump. Stable for the life of the context.
+  const uint8_t *postponed_slot_hooks;
 } talos_rt_native_periodic_control_v1;
 
 typedef uint32_t talos_rt_static_nba_storage;
@@ -4092,6 +4100,11 @@ talos_rt_status talos_rt_v1_scheduler_drain_periodic_aot(
 talos_rt_status
 talos_rt_v1_scheduler_enter_periodic_aot(talos_rt_context *context,
                                          uint64_t time);
+// End the current time slot of a generated periodic loop: run the
+// runtime's Postponed work for it (value change dumps, IEEE 1800-2023 4.4.2.9,
+// 21.7). The loop calls it only while `postponed_slot_hooks` is nonzero.
+talos_rt_status
+talos_rt_v1_scheduler_postponed_slot_aot(talos_rt_context *context);
 // Materialize the runtime-owned hybrid scheduler records at an AOT region
 // boundary. Returned pointers remain context-owned until scheduler mutation.
 talos_rt_status

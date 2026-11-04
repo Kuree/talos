@@ -121,6 +121,11 @@ def EvalPathKnownProbe : ScheduleField<"EvalPathKnownProbe", "schedule.eval.path
     "::mlir::FlatSymbolRefAttr">;
 def EvalPathProbeRoutes : ScheduleField<"EvalPathProbeRoutes", "schedule.eval.path_probe_routes",
     "::mlir::ArrayAttr">;
+// The design contains value change dump tasks (IEEE 1800-2023 21.7): the
+// generated periodic loop runs the runtime's end-of-slot dump hook whenever a
+// dump file is open.
+def EvalPostponedObservers : ScheduleField<"EvalPostponedObservers", "schedule.eval.postponed_observers",
+    "::mlir::UnitAttr">;
 def EvalPredicatedDataflow : ScheduleField<"EvalPredicatedDataflow", "schedule.eval.predicated_dataflow",
     "::mlir::UnitAttr">;
 // A closed group retaining its proved control flow and exact memory accesses.

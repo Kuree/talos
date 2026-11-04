@@ -9,8 +9,9 @@
 // RUN: cd %t && %t/eval.sim
 // RUN: FileCheck %s --check-prefix=VCD --implicit-check-not='$root' < %t/waves.vcd
 
-// Forcing the periodic plan, an active dump must hand off to native fragments
-// and canonical NBA publication instead of spinning at the first clock edge.
+// Under the periodic plan an active dump keeps the generated loop, which ends
+// every slot it owns in the runtime's dump hook (dump-vcd-periodic.sv,
+// dump-vcd-shared-periodic.sv) and writes the same file.
 // Other tiers and designs are in dump-vcd-{bytecode,scopes,computed,names}.test.
 
 //--- design.sv

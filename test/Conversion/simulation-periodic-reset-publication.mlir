@@ -1,5 +1,6 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.llvm.mlir
 // RUN: FileCheck %s --check-prefix=PLAN < %t.llvm.mlir
+// RUN: FileCheck %s --check-prefix=NOHOOK < %t.llvm.mlir
 
 // Reset changes in a finite startup process, outside the periodic clock's
 // dependency closure. Promoted two-state port bodies must still publish the
@@ -125,3 +126,7 @@ module attributes {
     }
   }
 }
+
+// A design without dump tasks never opens a dump file: its periodic loop
+// carries no end-of-slot hook (IEEE 1800-2023 21.7).
+// NOHOOK-NOT: llvm.call @talos_rt_v1_scheduler_postponed_slot_aot

@@ -3813,8 +3813,8 @@ FailureOr<bool> makeNativeEvalPlan(
 
     Value nextEdges =
         entryAlloca(builder, location, i64, periodicClocks.size(), 8);
-    Type controlType =
-        LLVM::LLVMStructType::getLiteral(context, {pointer, pointer, i64});
+    Type controlType = LLVM::LLVMStructType::getLiteral(
+        context, {pointer, pointer, i64, pointer});
     Value control = entryAlloca(builder, location, controlType, 1, 8);
     Value nodes =
         LLVM::AddressOfOp::create(builder, location, pointer, nodesName);
@@ -3912,6 +3912,8 @@ FailureOr<bool> makeNativeEvalPlan(
           return staticFanoutPlan.runtimeTransitionStates.contains(
               alias.getTargetStaticState());
         });
+    bool postponedHooks = ::talos::schedule::has<
+        ::talos::schedule::Field::EvalPostponedObservers>(module);
     bool canCompressSilentFall =
         !sharedPeriodic && periodicClocks.size() == 1 &&
         clockMasks.front().second == 0 &&
@@ -3963,6 +3965,138 @@ FailureOr<bool> makeNativeEvalPlan(
     Value preparedDeadline = LLVM::LoadOp::create(
         builder, location, i64,
         fieldGEP(builder, location, control, controlType, 2), 8);
+    // IEEE 1800-2023 4.4.2.9, 21.7: an open value change dump records each
+    // slot's changes at the slot's own time. While the runtime's postponed
+    // byte is set, every slot this loop owns ends in the runtime's hook; a
+    // design without dump tasks never opens a file and carries no hook.
+    Value postponedHooksAddress;
+    if (postponedHooks)
+      postponedHooksAddress = LLVM::LoadOp::create(
+          builder, location, pointer,
+          fieldGEP(builder, location, control, controlType, 3), 0);
+    auto loadPostponedHooks = [&] {
+      Value hooks = LLVM::LoadOp::create(builder, location, builder.getI8Type(),
+                                         postponedHooksAddress, 1);
+      return arith::CmpIOp::create(
+          builder, location, arith::CmpIPredicate::ne, hooks,
+          llvmConstant(builder, location, builder.getI8Type(), 0));
+    };
+    // Only design dump tasks arm the byte, and the exclusive loop runs no
+    // runtime work without returning first (every handoff and checkpoint
+    // leaves `run`; dump tasks always run at a runtime checkpoint, see
+    // NativeSchedulePasses.cpp admitActor), so it reads the byte once per
+    // entry: a loop-invariant test instead of a load at each slot end. Only the
+    // hook itself can clear the byte meanwhile (the last file closed); the loop
+    // then leaves, and the runtime re-enters it with a transient handoff. The
+    // shared loop drains runtime work, which may arm or clear it, every slot.
+    Value entryPostponedHooks;
+    if (postponedHooks && !sharedPeriodic)
+      entryPostponedHooks = loadPostponedHooks();
+    // Direct periodic forwarding elides checkpoint-only driver writes in the
+    // hot loop. Reconstruct both canonical planes before runtime callbacks,
+    // the end-of-slot dump or asynchronous Tier-2 intervention observe them.
+    auto reconstructAliasDrivers = [&] {
+      Value stateUnknown = LLVM::AddressOfOp::create(builder, location, pointer,
+                                                     "__talos_state_unknown");
+      Value handoffState = LLVM::AddressOfOp::create(builder, location, pointer,
+                                                     "__talos_state_value");
+      for (const NativePeriodicAlias &alias : periodicAliases) {
+        auto source = llvm::find_if(periodicClocks, [&](const auto &clock) {
+          return clock.getStaticState() == alias.getSourceStaticState() &&
+                 clock.getBitOffset() == alias.getSourceBitOffset();
+        });
+        if (source == periodicClocks.end())
+          continue;
+        Value sourceAddress = byteGEP(builder, location, handoffState,
+                                      source->getBitOffset() / 8);
+        Value sourceByte = LLVM::LoadOp::create(
+            builder, location, builder.getI8Type(), sourceAddress, 1);
+        uint8_t sourceMask = uint8_t{1} << (source->getBitOffset() % 8);
+        Value sourceSet = arith::CmpIOp::create(
+            builder, location, arith::CmpIPredicate::ne,
+            arith::AndIOp::create(builder, location, sourceByte,
+                                  llvmConstant(builder, location,
+                                               builder.getI8Type(),
+                                               sourceMask)),
+            llvmConstant(builder, location, builder.getI8Type(), 0));
+        Value driverAddress = byteGEP(builder, location, handoffState,
+                                      alias.getDriverBitOffset() / 8);
+        Value driverByte = LLVM::LoadOp::create(
+            builder, location, builder.getI8Type(), driverAddress, 1);
+        uint8_t driverMask = uint8_t{1} << (alias.getDriverBitOffset() % 8);
+        Value driverValue = arith::SelectOp::create(
+            builder, location, sourceSet,
+            arith::OrIOp::create(builder, location, driverByte,
+                                 llvmConstant(builder, location,
+                                              builder.getI8Type(), driverMask)),
+            arith::AndIOp::create(
+                builder, location, driverByte,
+                llvmConstant(builder, location, builder.getI8Type(),
+                             static_cast<uint8_t>(~driverMask))));
+        LLVM::StoreOp::create(builder, location, driverValue, driverAddress, 1);
+        Value driverUnknownAddress = byteGEP(builder, location, stateUnknown,
+                                             alias.getDriverBitOffset() / 8);
+        Value driverUnknown = LLVM::LoadOp::create(
+            builder, location, builder.getI8Type(), driverUnknownAddress, 1);
+        LLVM::StoreOp::create(
+            builder, location,
+            arith::AndIOp::create(
+                builder, location, driverUnknown,
+                llvmConstant(builder, location, builder.getI8Type(),
+                             static_cast<uint8_t>(~driverMask))),
+            driverUnknownAddress, 1);
+      }
+    };
+    auto postponedHooksActive = [&]() -> Value {
+      return entryPostponedHooks ? entryPostponedHooks : loadPostponedHooks();
+    };
+    // End the current slot, then continue at `next`. The shared loop keeps
+    // its forwarding drivers current; the exclusive one restores them first.
+    // `skip`, tested only once the byte is set, defers the slot's end.
+    auto emitPostponedSlot = [&](Block *next,
+                                 llvm::function_ref<Value()> skip = {}) {
+      Block *runHooks = new Block;
+      run.getBody().push_back(runHooks);
+      cf::CondBranchOp::create(builder, location, postponedHooksActive(),
+                               runHooks, ValueRange{}, next, ValueRange{});
+      builder.setInsertionPointToStart(runHooks);
+      if (skip) {
+        Block *endSlot = new Block;
+        run.getBody().push_back(endSlot);
+        cf::CondBranchOp::create(builder, location, skip(), next, ValueRange{},
+                                 endSlot, ValueRange{});
+        builder.setInsertionPointToStart(endSlot);
+      }
+      if (!sharedPeriodic)
+        reconstructAliasDrivers();
+      Value status =
+          LLVM::CallOp::create(
+              builder, location, TypeRange{i32},
+              SymbolRefAttr::get(context,
+                                 "talos_rt_v1_scheduler_postponed_slot_aot"),
+              ValueRange{runEntry->getArgument(1)})
+              .getResult();
+      Value ok = arith::CmpIOp::create(
+          builder, location, arith::CmpIPredicate::eq, status,
+          llvmConstant(builder, location, i32, TALOS_RT_OK));
+      if (sharedPeriodic) {
+        cf::CondBranchOp::create(builder, location, ok, next, ValueRange{},
+                                 afterStep, ValueRange{status});
+        return;
+      }
+      // The hook closed the last dump file: stop testing the stale entry
+      // value. Leave as a transient handoff; the next entry reads zero.
+      Block *stillArmed = new Block;
+      run.getBody().push_back(stillArmed);
+      cf::CondBranchOp::create(builder, location, ok, stillArmed, ValueRange{},
+                               afterStep, ValueRange{status});
+      builder.setInsertionPointToStart(stillArmed);
+      cf::CondBranchOp::create(
+          builder, location, loadPostponedHooks(), next, ValueRange{},
+          afterStep,
+          ValueRange{
+              llvmConstant(builder, location, i32, TALOS_RT_TIER_UNAVAILABLE)});
+    };
     Value terminationSlot = LLVM::AddressOfOp::create(
         builder, location, pointer, periodicTerminationName);
     LLVM::StoreOp::create(builder, location, preparedTerminationAddress,
@@ -3987,6 +4121,16 @@ FailureOr<bool> makeNativeEvalPlan(
                                                      TALOS_RT_AOT_CHECKPOINT)});
 
     builder.setInsertionPointToStart(promote);
+    // Close the handoff slot before the loop advances time; a shared loop
+    // seeding initial owners closes it in its drain instead.
+    Block *promoted = loop;
+    auto promotedSlotEnd = [&] {
+      if (postponedHooks && promoted == loop) {
+        promoted = new Block;
+        run.getBody().push_back(promoted);
+      }
+      return promoted;
+    };
     // Synthetic region kernels do not have a source coroutine whose initial
     // activation can run during bootstrap. Seed exactly those combinational
     // owners once; clocked and ordinary always-process bodies were already
@@ -4029,10 +4173,15 @@ FailureOr<bool> makeNativeEvalPlan(
           builder, location, arith::CmpIPredicate::eq, initialStatus,
           llvmConstant(builder, location, i32, TALOS_RT_OK));
       cf::CondBranchOp::create(builder, location, initialized,
-                               sharedPeriodic ? drainSlot : loop, ValueRange{},
-                               afterStep, ValueRange{initialStatus});
+                               sharedPeriodic ? drainSlot : promotedSlotEnd(),
+                               ValueRange{}, afterStep,
+                               ValueRange{initialStatus});
     } else {
-      cf::BranchOp::create(builder, location, loop);
+      cf::BranchOp::create(builder, location, promotedSlotEnd());
+    }
+    if (promoted != loop) {
+      builder.setInsertionPointToStart(promoted);
+      emitPostponedSlot(loop);
     }
 
     builder.setInsertionPointToStart(loop);
@@ -4365,11 +4514,38 @@ FailureOr<bool> makeNativeEvalPlan(
     // This also handles silent edges after checkpoint re-entry. All due
     // clocks and aliases have been updated before skipping dispatch, including
     // coincident edges; a later CDC consumer sees the correct physical levels.
-    if (canSkipSilentSlot)
+    if (canSkipSilentSlot) {
+      // A silent edge still changes its clock: it ends a slot of its own.
+      Block *silentSlotEnd = loop;
+      if (postponedHooks) {
+        silentSlotEnd = new Block;
+        run.getBody().push_back(silentSlotEnd);
+      }
       cf::CondBranchOp::create(builder, location, hasIngress, dispatchStep,
-                               ValueRange{}, loop, ValueRange{});
-    else
+                               ValueRange{}, silentSlotEnd, ValueRange{});
+      if (silentSlotEnd != loop) {
+        OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(silentSlotEnd);
+        // In the shared loop, runtime work due at this edge runs after it,
+        // in the runtime slot drain, which then ends the slot; dumping here
+        // would record a Postponed state before that slot's Active work
+        // (4.4.2.9).
+        auto runtimeAtEdge = [&]() -> Value {
+          Value deadline = LLVM::LoadOp::create(
+              builder, location, i64,
+              fieldGEP(builder, location, control, controlType, 2), 8);
+          return arith::CmpIOp::create(builder, location,
+                                       arith::CmpIPredicate::ule, deadline,
+                                       step->getArgument(0));
+        };
+        if (sharedPeriodic)
+          emitPostponedSlot(loop, runtimeAtEdge);
+        else
+          emitPostponedSlot(loop);
+      }
+    } else {
       cf::BranchOp::create(builder, location, dispatchStep);
+    }
 
     builder.setInsertionPointToStart(dispatchStep);
     Value stepFourStateFallback = LLVM::AddressOfOp::create(
@@ -4861,9 +5037,18 @@ FailureOr<bool> makeNativeEvalPlan(
           completedStatus);
       Block *collectSlot = new Block;
       run.getBody().push_back(collectSlot);
-      cf::CondBranchOp::create(builder, location, continueGenerated,
-                               collectSlot, ValueRange{}, afterStep,
+      Block *slotEnd = collectSlot;
+      if (postponedHooks) {
+        slotEnd = new Block;
+        run.getBody().push_back(slotEnd);
+      }
+      cf::CondBranchOp::create(builder, location, continueGenerated, slotEnd,
+                               ValueRange{}, afterStep,
                                ValueRange{runtimeHandoffStatus});
+      if (slotEnd != collectSlot) {
+        builder.setInsertionPointToStart(slotEnd);
+        emitPostponedSlot(collectSlot);
+      }
       builder.setInsertionPointToStart(collectSlot);
       emitCollection(canCompressSilentFall ? silentFall : loop, Value(),
                      std::nullopt, 0, /*posedge=*/false);
@@ -4874,6 +5059,16 @@ FailureOr<bool> makeNativeEvalPlan(
       // be compressed into the generated run_until loop provided no runtime
       // deadline occurs at or before that edge.
       builder.setInsertionPointToStart(silentFall);
+      if (postponedHooks) {
+        // While dumping, the fall is a slot of its own: take it through the
+        // loop, which ends it in the postponed hook.
+        Block *compressFall = new Block;
+        run.getBody().push_back(compressFall);
+        cf::CondBranchOp::create(builder, location, postponedHooksActive(),
+                                 loop, ValueRange{}, compressFall,
+                                 ValueRange{});
+        builder.setInsertionPointToStart(compressFall);
+      }
       Value fallTime =
           LLVM::LoadOp::create(builder, location, i64, nextEdges, 8);
       Value runtimeAtFall =
@@ -4941,58 +5136,7 @@ FailureOr<bool> makeNativeEvalPlan(
                          ValueRange{afterStep->getArgument(0)});
 
     builder.setInsertionPointToStart(handoff);
-    // Direct periodic forwarding elides checkpoint-only driver writes in the
-    // hot loop. Reconstruct both canonical planes before runtime callbacks or
-    // asynchronous Tier-2 intervention can observe them.
-    Value stateUnknown = LLVM::AddressOfOp::create(builder, location, pointer,
-                                                   "__talos_state_unknown");
-    Value handoffState = LLVM::AddressOfOp::create(builder, location, pointer,
-                                                   "__talos_state_value");
-    for (const NativePeriodicAlias &alias : periodicAliases) {
-      auto source = llvm::find_if(periodicClocks, [&](const auto &clock) {
-        return clock.getStaticState() == alias.getSourceStaticState() &&
-               clock.getBitOffset() == alias.getSourceBitOffset();
-      });
-      if (source == periodicClocks.end())
-        continue;
-      Value sourceAddress =
-          byteGEP(builder, location, handoffState, source->getBitOffset() / 8);
-      Value sourceByte = LLVM::LoadOp::create(
-          builder, location, builder.getI8Type(), sourceAddress, 1);
-      uint8_t sourceMask = uint8_t{1} << (source->getBitOffset() % 8);
-      Value sourceSet = arith::CmpIOp::create(
-          builder, location, arith::CmpIPredicate::ne,
-          arith::AndIOp::create(
-              builder, location, sourceByte,
-              llvmConstant(builder, location, builder.getI8Type(), sourceMask)),
-          llvmConstant(builder, location, builder.getI8Type(), 0));
-      Value driverAddress = byteGEP(builder, location, handoffState,
-                                    alias.getDriverBitOffset() / 8);
-      Value driverByte = LLVM::LoadOp::create(
-          builder, location, builder.getI8Type(), driverAddress, 1);
-      uint8_t driverMask = uint8_t{1} << (alias.getDriverBitOffset() % 8);
-      Value driverValue = arith::SelectOp::create(
-          builder, location, sourceSet,
-          arith::OrIOp::create(
-              builder, location, driverByte,
-              llvmConstant(builder, location, builder.getI8Type(), driverMask)),
-          arith::AndIOp::create(
-              builder, location, driverByte,
-              llvmConstant(builder, location, builder.getI8Type(),
-                           static_cast<uint8_t>(~driverMask))));
-      LLVM::StoreOp::create(builder, location, driverValue, driverAddress, 1);
-      Value driverUnknownAddress = byteGEP(builder, location, stateUnknown,
-                                           alias.getDriverBitOffset() / 8);
-      Value driverUnknown = LLVM::LoadOp::create(
-          builder, location, builder.getI8Type(), driverUnknownAddress, 1);
-      LLVM::StoreOp::create(
-          builder, location,
-          arith::AndIOp::create(
-              builder, location, driverUnknown,
-              llvmConstant(builder, location, builder.getI8Type(),
-                           static_cast<uint8_t>(~driverMask))),
-          driverUnknownAddress, 1);
-    }
+    reconstructAliasDrivers();
     Value handoffStatus =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},
@@ -7125,6 +7269,11 @@ FailureOr<bool> makeNativeEvalPlan(
                          : 0) |
                     (sharedPeriodic ? TALOS_RT_NATIVE_SCHEDULE_SHARED_PERIODIC
                                     : 0) |
+                    (::talos::schedule::has<
+                         ::talos::schedule::Field::EvalPostponedObservers>(
+                         module)
+                         ? TALOS_RT_NATIVE_SCHEDULE_POSTPONED_HOOKS
+                         : 0) |
                     TALOS_RT_NATIVE_SCHEDULE_EVAL),
             NativeSchedulePlanField::Flags);
         value = insertValue(initializerBuilder, location, value,
@@ -7372,6 +7521,8 @@ FailureOr<bool> makeNativeEvalPlan(
                            i32, {pointer, pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_enter_periodic_aot",
                            i32, {pointer, i64});
+  getOrDeclareLLVMFunction(module, "talos_rt_v1_scheduler_postponed_slot_aot",
+                           i32, {pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_commit_root", i32,
                            {pointer, i32, i32, pointer});
   getOrDeclareLLVMFunction(module, "talos_rt_v1_static_nba_commit_roots", i32,

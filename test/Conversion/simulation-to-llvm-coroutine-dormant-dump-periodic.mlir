@@ -8,8 +8,9 @@
 // WASM-SAME: llvm.target_triple = "wasm32-unknown-emscripten"
 
 // Optional dump operations remain cold checkpoints. Their mere presence must
-// not remove the periodic Tier-1 plan; the runtime rejects it when dumping
-// actually becomes active.
+// not remove the periodic Tier-1 plan. The loop reads the runtime's postponed
+// byte through its control and, while a dump is open, ends each slot in the
+// runtime's hook (IEEE 1800-2023 21.7), so dumping keeps the loop.
 module attributes {
   llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128",
   llvm.target_triple = "x86_64-unknown-linux-gnu",
@@ -133,15 +134,25 @@ module attributes {
 }
 
 // CHECK-LABEL: llvm.func @__talos_aot_schedule_run_v1(
-// CHECK: %[[CONTROL:.*]] = llvm.alloca {{.*}} x !llvm.struct<(ptr, ptr, i64)>
+// CHECK: %[[CONTROL:.*]] = llvm.alloca {{.*}} x !llvm.struct<(ptr, ptr, i64, ptr)>
 // CHECK: llvm.call @talos_rt_v1_scheduler_prepare_periodic_aot({{.*}}, %[[CONTROL]])
 // Pointer-sized control fields must use typed struct indices, not the host's
 // byte offsets. The extra RUN exercises this exact path with wasm32 layout.
-// CHECK: %[[TERMINATION:.*]] = llvm.getelementptr %[[CONTROL]][0, 1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(ptr, ptr, i64)>
+// CHECK: %[[TERMINATION:.*]] = llvm.getelementptr %[[CONTROL]][0, 1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(ptr, ptr, i64, ptr)>
 // CHECK-NEXT: %[[TERMINATION_PTR:.*]] = llvm.load %[[TERMINATION]] : !llvm.ptr -> !llvm.ptr
-// CHECK: %[[TIME:.*]] = llvm.getelementptr %[[CONTROL]][0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(ptr, ptr, i64)>
+// CHECK: %[[TIME:.*]] = llvm.getelementptr %[[CONTROL]][0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(ptr, ptr, i64, ptr)>
 // CHECK-NEXT: llvm.load %[[TIME]] : !llvm.ptr -> !llvm.ptr
-// CHECK: %[[DEADLINE:.*]] = llvm.getelementptr %[[CONTROL]][0, 2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(ptr, ptr, i64)>
+// CHECK: %[[DEADLINE:.*]] = llvm.getelementptr %[[CONTROL]][0, 2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(ptr, ptr, i64, ptr)>
 // CHECK-NEXT: llvm.load %[[DEADLINE]] {{.*}} : !llvm.ptr -> i64
+// CHECK: %[[HOOKS:.*]] = llvm.getelementptr %[[CONTROL]][0, 3] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(ptr, ptr, i64, ptr)>
+// CHECK-NEXT: %[[HOOKS_PTR:.*]] = llvm.load %[[HOOKS]] : !llvm.ptr -> !llvm.ptr
+// No runtime work runs inside the exclusive loop without leaving it, so it
+// reads the postponed byte once per entry and tests that value at slot ends.
+// CHECK-NEXT: %[[HOOK_BYTE:.*]] = llvm.load %[[HOOKS_PTR]] {{.*}}: !llvm.ptr -> i8
+// CHECK-NEXT: %[[ZERO:.*]] = llvm.mlir.constant(0 : i8) : i8
+// CHECK-NEXT: %[[ACTIVE:.*]] = llvm.icmp "ne" %[[HOOK_BYTE]], %[[ZERO]] : i8
 // CHECK: llvm.load %[[TERMINATION_PTR]] {{.*}} : !llvm.ptr -> i32
 // CHECK: llvm.call @talos_rt_v1_scheduler_handoff_periodic_aot
+// CHECK: llvm.cond_br %[[ACTIVE]], ^[[HOOKED:bb[0-9]+]], ^bb{{[0-9]+}}
+// CHECK-NEXT: ^[[HOOKED]]:
+// CHECK: llvm.call @talos_rt_v1_scheduler_postponed_slot_aot(

@@ -2899,6 +2899,15 @@ struct talos_rt_context {
   // those detached observers are design-lifetime services. The VPI signal bit
   // is set while a cbSignal callback is registered (IEEE 1800-2023 38.36.3).
   uint8_t preponedSlotHooks = 0;
+  // End-of-slot (Postponed) work a generated periodic loop must hand to the
+  // runtime: kDumpSlotHook while a VCD or extended VCD file is open (IEEE
+  // 1800-2023 21.7). The loop reads this byte through its periodic control.
+  uint8_t postponedSlotHooks = 0;
+  // The dump hook closed the last dump file while a generated exclusive loop
+  // still tests the byte it read on entry: that loop leaves at once and the
+  // runtime re-enters it through a transient handoff (one slot), which then
+  // reads zero. Cleared by that handoff.
+  bool postponedHooksDisarmed = false;
   uint64_t schedulerSlotProgress = 0;
   bool schedulerRunningFinals = false;
   // IEEE 1800-2023 4.5: finish the Reactive through Re-NBA iteration
@@ -3217,7 +3226,9 @@ talos_rt_recapture_initialized_preponed_unlocked(talos_rt_context *context);
 talos_rt_status talos_rt_dump_slot_unlocked(talos_rt_context *context);
 
 // Nonzero while a dump file is open. Execution tiers that advance time without
-// re-entering the runtime must not be selected while this holds.
+// re-entering the runtime must not be selected while this holds, unless they
+// end every slot with talos_rt_v1_scheduler_postponed_slot_aot while
+// postponedSlotHooks says so (TALOS_RT_NATIVE_SCHEDULE_POSTPONED_HOOKS).
 bool talos_rt_dump_active_unlocked(const talos_rt_context *context);
 
 // Number of distinct canonical ranges the dump differences per time slot.
@@ -4482,6 +4493,9 @@ void talos_rt_unindex_static_signal_bucket(
 
 inline constexpr uint8_t kPreponedObserverSlotHook = 1;
 inline constexpr uint8_t kVPISignalSlotHook = 2;
+// talos_rt_context::postponedSlotHooks: something is selected for a value
+// change dump whose file is open.
+inline constexpr uint8_t kDumpSlotHook = 1;
 // A signal a cbSignal callback watches arrived: its callbacks run at the start
 // of the current slot, with the timed callbacks (38.36.3 "proceed to a safe
 // point").

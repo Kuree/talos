@@ -2460,6 +2460,9 @@ talos_rt_v1_scheduler_install_aot(talos_rt_context *context,
        !plan->promotion_invalidate) ||
       !cleanSuperstepValid || !staticEvalIslandValid || !evalSchedulerValid ||
       !runtimeCalendarEvalValid ||
+      // Postponed hooks end the slots of a generated eval loop.
+      ((plan->flags & TALOS_RT_NATIVE_SCHEDULE_POSTPONED_HOOKS) &&
+       !(plan->flags & TALOS_RT_NATIVE_SCHEDULE_EVAL)) ||
       (plan->flags & ~(TALOS_RT_NATIVE_SCHEDULE_FULLY_STATIC |
                        TALOS_RT_NATIVE_SCHEDULE_ROOT_SLOT_ZERO |
                        TALOS_RT_NATIVE_SCHEDULE_STATIC_CONTROL |
@@ -2473,7 +2476,8 @@ talos_rt_v1_scheduler_install_aot(talos_rt_context *context,
                        TALOS_RT_NATIVE_SCHEDULE_EVAL |
                        TALOS_RT_NATIVE_SCHEDULE_STATIC_EVAL_ISLAND |
                        TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL |
-                       TALOS_RT_NATIVE_SCHEDULE_SHARED_PERIODIC)) != 0 ||
+                       TALOS_RT_NATIVE_SCHEDULE_SHARED_PERIODIC |
+                       TALOS_RT_NATIVE_SCHEDULE_POSTPONED_HOOKS)) != 0 ||
       !plan->bind || !plan->run || !plan->fallback_snapshot)
     return TALOS_RT_INVALID_ARGUMENT;
   const talos_rt_static_nba_root *nbaRoots = plan->nba_roots;

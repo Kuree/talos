@@ -37,8 +37,8 @@ FailureOr<SmallVector<NativePeriodicClock>> buildNativePeriodicClockPlan(
     const DenseMap<Operation *, uint32_t> &actorSlots) {
   SmallVector<NativePeriodicClock> clocks;
   // Dump operations may be in an untaken plusarg-controlled branch. Keep the
-  // periodic plan: runtime preparation/checkpoints reject it when waveform
-  // collection is actually active and needs once-per-slot publication.
+  // periodic plan: while waveform collection is active the generated loop ends
+  // each slot in the runtime's postponed hook (IEEE 1800-2023 21.7).
   WalkResult result = module.walk([&](sim::SimFuncOp function) {
     auto actor = actorSlots.find(function.getOperation());
     if (actor == actorSlots.end() || function.isExternal() ||

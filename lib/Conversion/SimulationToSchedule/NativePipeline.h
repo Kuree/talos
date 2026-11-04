@@ -89,6 +89,8 @@ struct NativePipelineAnalysis {
   bool hasLanguageObserver = false;
   bool hasLanguageOverride = false;
   bool hasDynamicLanguageOverride = false;
+  /// The design contains value change dump tasks (IEEE 1800-2023 21.7).
+  bool mayDump = false;
   schedule::NativeSchedulerMode nativeScheduler =
       schedule::NativeSchedulerMode::Auto;
   analysis::NativeAOTAnalysis aotEligibility;

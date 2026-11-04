@@ -1664,6 +1664,8 @@ ABI_FUNCTION(talos_rt_v1_scheduler_drain_periodic_aot,
                                  talos_rt_native_periodic_control_v1 *));
 ABI_FUNCTION(talos_rt_v1_scheduler_enter_periodic_aot,
              talos_rt_status (*)(talos_rt_context *, uint64_t));
+ABI_FUNCTION(talos_rt_v1_scheduler_postponed_slot_aot,
+             talos_rt_status (*)(talos_rt_context *));
 ABI_FUNCTION(talos_rt_v1_scheduler_snapshot_aot,
              talos_rt_status (*)(talos_rt_context *,
                                  talos_rt_aot_deopt_snapshot *));
