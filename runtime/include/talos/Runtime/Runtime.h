@@ -3893,6 +3893,22 @@ void talos_rt_v1_native_promotion_recheck_buckets(
     talos_rt_native_promotion_invalidate request_recheck, uint64_t bit_offset,
     uint64_t bit_width);
 
+// One canonical unknown-plane store window (64 bits) whose dependent proofs
+// the compiler resolved statically: records holds record_count (mask,
+// certificate ID) uint64_t pairs, mask being the window bits that the
+// certificate's dependencies cover. Bits of `changed` that are set in
+// `unknown` became X/Z and invalidate the certificates they touch; the others
+// became known and request a recheck of the certificates they touch, after
+// the invalidations. Each aggregate action runs once when any certificate was
+// touched. Equivalent to the range and bucket helpers above for the same
+// window.
+void talos_rt_v1_native_promotion_publish_window(
+    const uint64_t *records, uint64_t record_count,
+    const talos_rt_native_promotion_certificate *certificates,
+    talos_rt_native_promotion_invalidate invalidate_aggregate,
+    talos_rt_native_promotion_invalidate request_recheck, uint64_t changed,
+    uint64_t unknown);
+
 // Values of talos_rt_native_schedule_plan.runtime_yield.
 #define TALOS_RT_RUNTIME_YIELD_COMMIT UINT32_C(0)
 #define TALOS_RT_RUNTIME_YIELD_ALLOWED UINT32_C(1)

@@ -23,6 +23,12 @@
 // KERNEL-DAG: llvm.mlir.global internal @__talos_eval_kernel_promotion_hints_v1(dense<0> : tensor<4xi64>)
 // RANGE-DAG: llvm.mlir.global internal constant @__talos_eval_proof_dependencies_v1(dense<{{.*}}> : tensor<{{[0-9]+}}x4xi64>)
 // RANGE-DAG: llvm.mlir.global internal constant @__talos_eval_proof_certificates_v1
+// Constant-offset stores publish through windows resolved at compile time:
+// (mask, certificate) pairs, two dependencies of one certificate merged.
+// RANGE-DAG: llvm.mlir.global internal constant @__talos_eval_promotion_window_432_v1(dense<[255, 0, 65280, 1]> : tensor<4xi64>)
+// RANGE-DAG: llvm.mlir.global internal constant @__talos_eval_promotion_window_296_v1(dense<[-16777215, 3]> : tensor<2xi64>)
+// RANGE-DAG: llvm.func preserve_mostcc @__talos_eval_promotion_publish_window_v1({{.*}}passthrough = ["cold", "noinline"]
+// RANGE-DAG: llvm.call @talos_rt_v1_native_promotion_publish_window(%arg0, %arg1, %{{.*}}, %{{.*}}, %{{.*}}, %arg2, %arg3)
 // RANGE-LABEL: llvm.func @__talos_eval_promotion_invalidate_range_v1
 // RANGE: llvm.call @talos_rt_v1_native_promotion_invalidate_ranges
 
@@ -30,22 +36,22 @@
 // STORE: llvm.store
 // STORE: llvm.icmp "ne"
 // STORE: llvm.cond_br
-// STORE: llvm.call preserve_mostcc @__talos_eval_promotion_publish_unknown_v1
+// STORE: llvm.call preserve_mostcc @__talos_eval_promotion_publish_window_v1
 // STORE-LABEL: llvm.func @other_work.__talos_eval_body_0(
-// STORE: llvm.call preserve_mostcc @__talos_eval_promotion_publish_unknown_v1
+// STORE: llvm.call preserve_mostcc @__talos_eval_promotion_publish_window_v1
 // STORE-LABEL: llvm.func @work.__talos_eval_body_0.__talos_two_state_0(
-// STORE-NOT: __talos_eval_promotion_publish_unknown_v1
+// STORE-NOT: __talos_eval_promotion_publish_{{unknown|window}}_v1
 // STORE-LABEL: llvm.func @other_work.__talos_eval_body_0.__talos_two_state_0(
-// STORE-NOT: __talos_eval_promotion_publish_unknown_v1
+// STORE-NOT: __talos_eval_promotion_publish_{{unknown|window}}_v1
 // STORE: llvm.func
 
 // Four-state clocks have real unknown-plane accesses, but their bytes are
 // outside every value-domain certificate. Keep their canonical semantics
 // without emitting guards or proof publications in the generated clock loop.
 // CLOCK-LABEL: llvm.func @__talos_aot_schedule_run_v1(
-// CLOCK-NOT: llvm.call preserve_mostcc @__talos_eval_promotion_publish_unknown_v1
+// CLOCK-NOT: llvm.call preserve_mostcc @__talos_eval_promotion_publish_{{unknown|window}}_v1
 // CLOCK: llvm.mlir.addressof @__talos_state_unknown
-// CLOCK-NOT: llvm.call preserve_mostcc @__talos_eval_promotion_publish_unknown_v1
+// CLOCK-NOT: llvm.call preserve_mostcc @__talos_eval_promotion_publish_{{unknown|window}}_v1
 // CLOCK: llvm.func
 
 module attributes {

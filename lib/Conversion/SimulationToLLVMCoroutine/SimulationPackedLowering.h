@@ -13,6 +13,9 @@ class Pass;
 namespace talos::detail {
 
 std::unique_ptr<mlir::Pass> createNativeFunctionFinalizationPass();
+/// Resolves each constant-offset proof publication to its window's static
+/// certificate list, after the per-function publication passes.
+mlir::LogicalResult materializeNativePromotionWindows(mlir::ModuleOp module);
 std::unique_ptr<mlir::Pass> createPublishNativeFunctionProofsPass();
 mlir::LogicalResult
 prepareNativeProofPublicationInputs(mlir::ModuleOp module,

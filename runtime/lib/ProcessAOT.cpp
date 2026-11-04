@@ -351,6 +351,38 @@ extern "C" void talos_rt_v1_native_promotion_recheck_buckets(
     requestRecheck();
 }
 
+extern "C" void talos_rt_v1_native_promotion_publish_window(
+    const uint64_t *records, uint64_t recordCount,
+    const talos_rt_native_promotion_certificate *certificates,
+    talos_rt_native_promotion_invalidate invalidateAggregate,
+    talos_rt_native_promotion_invalidate requestRecheck, uint64_t changed,
+    uint64_t unknown) {
+  // IEEE 1800-2023 6.3.1: a bit that became X/Z can break a two-state proof;
+  // one that became known can only make a failed proof eligible again.
+  uint64_t lost = changed & unknown;
+  uint64_t gained = changed & ~unknown;
+  if (lost) {
+    bool affected = false;
+    for (uint64_t index = 0; index != recordCount; ++index)
+      if (records[2 * index] & lost) {
+        invalidatePromotionCertificate(certificates[records[2 * index + 1]]);
+        affected = true;
+      }
+    if (affected)
+      invalidateAggregate();
+  }
+  if (gained) {
+    bool affected = false;
+    for (uint64_t index = 0; index != recordCount; ++index)
+      if (records[2 * index] & gained) {
+        recheckPromotionCertificate(certificates[records[2 * index + 1]]);
+        affected = true;
+      }
+    if (affected)
+      requestRecheck();
+  }
+}
+
 void invalidateNativeTwoStatePromotionUnlocked(talos_rt_context *context) {
   markNativeUnknownAllUnlocked(context);
   const talos_rt_native_schedule_plan *plan =

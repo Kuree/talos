@@ -33,6 +33,7 @@ bool isReadinessTransparentCallee(StringRef callee) {
          callee == "talos_rt_v1_native_promotion_recheck_ranges" ||
          callee == "talos_rt_v1_native_promotion_invalidate_buckets" ||
          callee == "talos_rt_v1_native_promotion_recheck_buckets" ||
+         callee == "talos_rt_v1_native_promotion_publish_window" ||
          callee == "talos_rt_v1_native_state_mark_unknown" ||
          callee == "talos_rt_v1_native_state_refresh_unknown_summary" ||
          callee == kernelPromotionReadyName ||

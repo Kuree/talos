@@ -420,6 +420,7 @@ bool pendingRuntimeTransparent(LLVM::CallOp call,
       *callee == "talos_rt_v1_native_promotion_recheck_ranges" ||
       *callee == "talos_rt_v1_native_promotion_invalidate_buckets" ||
       *callee == "talos_rt_v1_native_promotion_recheck_buckets" ||
+      *callee == "talos_rt_v1_native_promotion_publish_window" ||
       // The unknown summary's rescan reads CURRENT unknown planes, which
       // pending NBAs do not touch, and only changes summary bits.
       *callee == "talos_rt_v1_native_state_refresh_unknown_summary" ||

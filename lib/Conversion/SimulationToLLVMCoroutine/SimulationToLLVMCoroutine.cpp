@@ -274,6 +274,7 @@ bool isEvalClosureRuntimeCall(LLVM::CallOp call, LLVM::LLVMFuncOp function,
       *callee == "talos_rt_v1_native_promotion_recheck_ranges" ||
       *callee == "talos_rt_v1_native_promotion_invalidate_buckets" ||
       *callee == "talos_rt_v1_native_promotion_recheck_buckets" ||
+      *callee == "talos_rt_v1_native_promotion_publish_window" ||
       // The unknown summary's rescan reads the generated unknown
       // plane and clears summary bits; marking only sets them.
       // Neither executes actors, publishes, or re-enters scheduling.
@@ -4331,7 +4332,8 @@ public:
         detail::createPublishNativeUnknownSummaryPass());
     publications.nest<LLVM::LLVMFuncOp>().addPass(
         detail::createPublishNativeFunctionProofsPass());
-    if (failed(runPipeline(publications, module))) {
+    if (failed(runPipeline(publications, module)) ||
+        failed(detail::materializeNativePromotionWindows(module))) {
       signalPassFailure();
       return;
     }

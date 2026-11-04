@@ -13,6 +13,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 
 using namespace mlir;
@@ -247,6 +248,17 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
   }
   ::talos::schedule::set<::talos::schedule::Field::EvalProofCoverage>(
       dependencies, builder.getDenseI64ArrayAttr(coverage));
+  // Every dependency as (begin, end, certificate), for the windows that
+  // constant-offset publications resolve at compile time.
+  SmallVector<int64_t> flatEntries;
+  flatEntries.reserve(entries.size() * 3);
+  for (const auto &dependency : entries)
+    llvm::append_range(flatEntries,
+                       ArrayRef<int64_t>{int64_t(dependency.begin),
+                                         int64_t(dependency.end),
+                                         int64_t(dependency.certificate)});
+  ::talos::schedule::set<::talos::schedule::Field::EvalProofEntries>(
+      dependencies, builder.getDenseI64ArrayAttr(flatEntries));
 
   // Pointer fields use the target LLVM layout; only packed bit positions and
   // uint64_t pending words have fixed byte offsets across native and wasm32.
@@ -573,6 +585,32 @@ public:
                       schedule::Field::EvalStateAccessBytes, footprint);
       Value delta =
           LLVM::XOrOp::create(builder, location, old, store.getValue());
+      // A store at a constant canonical offset publishes through a window
+      // whose dependent proofs are resolved at compile time.
+      std::optional<uint64_t> constantBytes = uint64_t{0};
+      for (Value address = store.getAddr();;) {
+        auto gep = address.getDefiningOp<LLVM::GEPOp>();
+        if (!gep)
+          break;
+        APInt constant;
+        bool known = gep.getElemType().isInteger(8) &&
+                     gep.getIndices().size() == 1;
+        if (known) {
+          auto index = gep.getIndices()[0];
+          if (auto integer = dyn_cast<IntegerAttr>(index))
+            constant = integer.getValue();
+          else
+            known = matchPattern(cast<Value>(index), m_ConstantInt(&constant));
+        }
+        // Bit offsets must stay representable after scaling by eight.
+        if (!known || constant.isNegative() || constant.getActiveBits() > 60 ||
+            constant.getZExtValue() > (UINT64_MAX >> 4) - *constantBytes) {
+          constantBytes.reset();
+          break;
+        }
+        *constantBytes += constant.getZExtValue();
+        address = gep.getBase();
+      }
       Value base = LLVM::AddressOfOp::create(builder, location, pointer,
                                              "__talos_state_unknown");
       Value bytes = LLVM::SubOp::create(
@@ -621,12 +659,22 @@ public:
           nextChunk = LLVM::TruncOp::create(builder, location, i64, nextChunk);
         else if (type.getWidth() < 64)
           nextChunk = LLVM::ZExtOp::create(builder, location, i64, nextChunk);
-        LLVM::CallOp::create(
-            builder, location, TypeRange{},
-            SymbolRefAttr::get(context,
-                               "__talos_eval_promotion_publish_unknown_v1"),
-            ValueRange{offset, chunk, nextChunk})
-            .setCConv(LLVM::cconv::CConv::PreserveMost);
+        if (constantBytes)
+          LLVM::CallOp::create(
+              builder, location, TypeRange{},
+              SymbolRefAttr::get(context,
+                                 "__talos_eval_promotion_publish_at_v1"),
+              ValueRange{llvmConstant(builder, location, i64,
+                                      *constantBytes * 8 + bit),
+                         chunk, nextChunk})
+              .setCConv(LLVM::cconv::CConv::PreserveMost);
+        else
+          LLVM::CallOp::create(
+              builder, location, TypeRange{},
+              SymbolRefAttr::get(context,
+                                 "__talos_eval_promotion_publish_unknown_v1"),
+              ValueRange{offset, chunk, nextChunk})
+              .setCConv(LLVM::cconv::CConv::PreserveMost);
         LLVM::BrOp::create(builder, location, ValueRange{}, continuation);
         builder.setInsertionPointToStart(continuation);
       }
@@ -721,6 +769,15 @@ LogicalResult materializeNativePromotionWrites(ModuleOp module) {
   // the cold block. This is a generated-code ABI choice; every call site above
   // uses the same convention.
   publish.setCConv(LLVM::cconv::CConv::PreserveMost);
+  // Constant-offset publications name their window; they are resolved to a
+  // static certificate list once every function has published
+  // (materializeNativePromotionWindows).
+  auto publishAt = getOrDeclareLLVMFunction(
+      module, "__talos_eval_promotion_publish_at_v1", voidType,
+      {i64, i64, i64});
+  schedule::set(publishAt, schedule::Field::EvalStateMetadataOnly,
+                builder.getUnitAttr());
+  publishAt.setCConv(LLVM::cconv::CConv::PreserveMost);
   Block *publication = publish.addEntryBlock(builder);
   builder.setInsertionPointToStart(publication);
   Value changedMask = publication->getArgument(1);
@@ -733,6 +790,158 @@ LogicalResult materializeNativePromotionWrites(ModuleOp module) {
                        ValueRange{publication->getArgument(0), gained});
   LLVM::ReturnOp::create(builder, location, ValueRange{});
 
+  return success();
+}
+
+LogicalResult materializeNativePromotionWindows(ModuleOp module) {
+  auto publishAt = module.lookupSymbol<LLVM::LLVMFuncOp>(
+      "__talos_eval_promotion_publish_at_v1");
+  auto dependencies =
+      module.lookupSymbol<LLVM::GlobalOp>("__talos_eval_proof_dependencies_v1");
+  DenseI64ArrayAttr flat;
+  if (dependencies) {
+    flat = ::talos::schedule::get<::talos::schedule::Field::EvalProofEntries>(
+        dependencies);
+    ::talos::schedule::remove<::talos::schedule::Field::EvalProofEntries>(
+        dependencies);
+  }
+  if (!publishAt)
+    return success();
+  SmallVector<LLVM::CallOp> calls;
+  module.walk([&](LLVM::CallOp call) {
+    if (call.getCallee() == publishAt.getSymName())
+      calls.push_back(call);
+  });
+  if (calls.empty()) {
+    publishAt.erase();
+    return success();
+  }
+  if (!dependencies || !flat || flat.size() % 3)
+    return publishAt.emitError("window publication without proof entries");
+
+  // Dependencies up to this width are found by their begin; wider ones
+  // (whole memories) are few and checked one by one.
+  constexpr uint64_t kNarrowBits = 4096;
+  struct Entry {
+    uint64_t begin, end, certificate;
+  };
+  std::vector<Entry> narrow, wide;
+  for (size_t index = 0; index < flat.size(); index += 3) {
+    Entry entry{uint64_t(flat[index]), uint64_t(flat[index + 1]),
+                uint64_t(flat[index + 2])};
+    (entry.end - entry.begin <= kNarrowBits ? narrow : wide).push_back(entry);
+  }
+  llvm::sort(narrow, [](const Entry &left, const Entry &right) {
+    return left.begin < right.begin;
+  });
+  // The window [low, low + 64)'s certificates and the bits each covers.
+  auto resolve = [&](uint64_t low) {
+    llvm::MapVector<uint64_t, uint64_t> masks;
+    auto add = [&](const Entry &entry) {
+      uint64_t high = low + 64;
+      if (entry.end <= low || entry.begin >= high)
+        return;
+      uint64_t first = std::max(entry.begin, low) - low;
+      uint64_t last = std::min(entry.end, high) - low;
+      uint64_t bits = last - first == 64 ? UINT64_MAX
+                                         : ((uint64_t{1} << (last - first)) - 1)
+                                               << first;
+      masks[entry.certificate] |= bits;
+    };
+    uint64_t from = low > kNarrowBits ? low - kNarrowBits : 0;
+    auto it = llvm::lower_bound(narrow, from, [](const Entry &entry,
+                                                 uint64_t value) {
+      return entry.begin < value;
+    });
+    for (; it != narrow.end() && it->begin < low + 64; ++it)
+      add(*it);
+    for (const Entry &entry : wide)
+      add(entry);
+    SmallVector<uint64_t> records;
+    for (auto [certificate, mask] : masks)
+      llvm::append_range(records, ArrayRef<uint64_t>{mask, certificate});
+    return records;
+  };
+
+  MLIRContext *context = module.getContext();
+  OpBuilder builder(context);
+  Location location = publishAt.getLoc();
+  Type pointer = LLVM::LLVMPointerType::get(context);
+  Type i64 = builder.getI64Type();
+  Type voidType = LLVM::LLVMVoidType::get(context);
+  auto runtimeWindow = getOrDeclareLLVMFunction(
+      module, "talos_rt_v1_native_promotion_publish_window", voidType,
+      {pointer, i64, pointer, pointer, pointer, i64, i64});
+  auto window = getOrDeclareLLVMFunction(
+      module, "__talos_eval_promotion_publish_window_v1", voidType,
+      {pointer, i64, i64, i64});
+  // Cold, like the range publication it replaces, and preserving the
+  // caller's scratch registers so the store's frame stays in its cold block.
+  window->setAttr("passthrough",
+                  builder.getArrayAttr({builder.getStringAttr("cold"),
+                                        builder.getStringAttr("noinline")}));
+  window.setCConv(LLVM::cconv::CConv::PreserveMost);
+  schedule::set(window, schedule::Field::EvalStateMetadataOnly,
+                builder.getUnitAttr());
+  {
+    Block *entry = window.addEntryBlock(builder);
+    builder.setInsertionPointToStart(entry);
+    auto address = [&](StringRef name) -> Value {
+      return LLVM::AddressOfOp::create(builder, location, pointer, name);
+    };
+    LLVM::CallOp::create(
+        builder, location, runtimeWindow,
+        ValueRange{entry->getArgument(0), entry->getArgument(1),
+                   address("__talos_eval_proof_certificates_v1"),
+                   address("__talos_eval_proof_aggregate_invalidate_v1"),
+                   address("__talos_eval_proof_aggregate_recheck_v1"),
+                   entry->getArgument(2), entry->getArgument(3)});
+    LLVM::ReturnOp::create(builder, location, ValueRange{});
+  }
+
+  llvm::DenseMap<uint64_t, std::pair<LLVM::GlobalOp, uint64_t>> windows;
+  for (LLVM::CallOp call : calls) {
+    APInt constant;
+    if (!matchPattern(call.getArgOperands()[0], m_ConstantInt(&constant)) ||
+        constant.getActiveBits() > 64)
+      return call.emitError("window publication needs a constant offset");
+    uint64_t low = constant.getZExtValue();
+    auto found = windows.find(low);
+    if (found == windows.end()) {
+      SmallVector<uint64_t> records = resolve(low);
+      LLVM::GlobalOp global;
+      if (!records.empty()) {
+        builder.setInsertionPointToStart(module.getBody());
+        auto type = LLVM::LLVMArrayType::get(i64, records.size());
+        global = LLVM::GlobalOp::create(
+            builder, location, type, true, LLVM::Linkage::Internal,
+            ("__talos_eval_promotion_window_" + llvm::Twine(low) + "_v1")
+                .str(),
+            DenseIntElementsAttr::get(
+                RankedTensorType::get({int64_t(records.size())}, i64),
+                ArrayRef<uint64_t>(records)),
+            8);
+      }
+      found = windows.try_emplace(low, global, records.size() / 2).first;
+    }
+    auto [global, count] = found->second;
+    builder.setInsertionPoint(call);
+    // No proof reads this window: its X/Z changes break no certificate.
+    if (global) {
+      Value records = LLVM::AddressOfOp::create(builder, call.getLoc(),
+                                                pointer, global.getSymName());
+      LLVM::CallOp::create(
+          builder, call.getLoc(), window,
+          ValueRange{records, llvmConstant(builder, call.getLoc(), i64, count),
+                     call.getArgOperands()[1], call.getArgOperands()[2]})
+          .setCConv(LLVM::cconv::CConv::PreserveMost);
+    }
+    call.erase();
+  }
+  publishAt.erase();
+  if (native::has<native::DebugTiming>(module))
+    llvm::errs() << "talos proof windows: calls=" << calls.size()
+                 << " windows=" << windows.size() << '\n';
   return success();
 }
 

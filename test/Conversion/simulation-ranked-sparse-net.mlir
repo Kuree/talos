@@ -27,11 +27,11 @@
 // LOWER-LABEL: llvm.func @source_low.__talos_eval_body_0.__talos_two_state_0(
 // LOWER: llvm.mlir.addressof @__talos_state_unknown
 // LOWER: llvm.store
-// LOWER: llvm.call preserve_mostcc @__talos_eval_promotion_publish_unknown_v1
+// LOWER: llvm.call preserve_mostcc @__talos_eval_promotion_publish_window_v1
 // LOWER-LABEL: llvm.func @source_high.__talos_eval_body_0.__talos_two_state_0(
 // LOWER: llvm.mlir.addressof @__talos_state_unknown
 // LOWER: llvm.store
-// LOWER: llvm.call preserve_mostcc @__talos_eval_promotion_publish_unknown_v1
+// LOWER: llvm.call preserve_mostcc @__talos_eval_promotion_publish_window_v1
 // LOWER-LABEL: llvm.func @__talos_eval_ranked_group_0(
 // LOWER-SAME: schedule.eval.ranked_members = array<i32: 0, 1, 2, 3>
 // LOWER: llvm.mlir.addressof @__talos_state_unknown

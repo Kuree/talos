@@ -1,6 +1,7 @@
 #include "talos/Runtime/PromotionRangeIndex.h"
 #include "gtest/gtest.h"
 
+#include <array>
 #include <random>
 #include <set>
 
@@ -272,6 +273,106 @@ TEST(PromotionBucketIndex, RuntimeActionsMatchIntervalIndex) {
         EXPECT_EQ(routes[0], routes[1]);
         EXPECT_EQ(aggregate[0], aggregate[1]);
       }
+}
+
+unsigned aggregateRechecks;
+void requestRecheck() { ++aggregateRechecks; }
+
+// A store window's statically resolved (mask, certificate) records give the
+// same proof state as publishing each changed run through the range helpers,
+// as the generated mask hooks do (lost bits first, then gained bits), and each
+// aggregate action runs exactly when some run touched a certificate.
+TEST(PromotionWindow, PublishMatchesRunByRunRangeQueries) {
+  std::mt19937_64 random(7);
+  for (unsigned trial = 0; trial != 3000; ++trial) {
+    std::vector<talos_rt_native_promotion_dependency> entries;
+    unsigned dependencyCount = 1 + random() % 8;
+    for (unsigned index = 0; index != dependencyCount; ++index) {
+      uint64_t begin = random() % 240;
+      uint64_t end = begin + 1 + random() % (256 - begin);
+      entries.push_back({begin, end, 0, random() % 4});
+    }
+    std::vector<talos_rt_native_promotion_dependency> indexed = entries;
+    ASSERT_TRUE(buildPromotionRangeIndex(indexed, 256, 4));
+    uint64_t low = random() % 192;
+    uint64_t changed = random(), unknown = random();
+    if (trial % 3 == 0)
+      changed &= random();
+    // The compiler's resolution: certificate -> covered window bits.
+    std::vector<uint64_t> masks(4, 0);
+    for (const auto &entry : entries) {
+      uint64_t first = std::max(entry.begin, low);
+      uint64_t last = std::min(entry.end, low + 64);
+      if (first >= last)
+        continue;
+      uint64_t span = last - first;
+      masks[entry.certificate] |=
+          (span == 64 ? UINT64_MAX : (uint64_t{1} << span) - 1)
+          << (first - low);
+    }
+    std::vector<uint64_t> records;
+    for (uint64_t certificate = 0; certificate != 4; ++certificate)
+      if (masks[certificate]) {
+        records.push_back(masks[certificate]);
+        records.push_back(certificate);
+      }
+    uint8_t latch[2][2];
+    uint64_t words[2][2];
+    auto routes = std::array<talos_rt_native_promotion_invalidate, 2>{};
+    unsigned invalidations[2], rechecks[2];
+    for (unsigned variant = 0; variant != 2; ++variant) {
+      // Start from a mixed state so both directions have work to do.
+      latch[variant][0] = trial & 1;
+      latch[variant][1] = 1;
+      words[variant][0] = 0;
+      words[variant][1] = 0;
+      routes[variant] = trial & 2 ? promotedRoute : fourStateRoute;
+      talos_rt_native_promotion_certificate certificates[] = {
+          {&latch[variant][0], &words[variant][0], 1, nullptr, nullptr},
+          {&latch[variant][1], &words[variant][1], 2, nullptr, nullptr},
+          {nullptr, &words[variant][1], 4, &routes[variant], fourStateRoute},
+          {nullptr, &words[variant][0], 8, nullptr, nullptr}};
+      aggregateInvalidations = 0;
+      aggregateRechecks = 0;
+      if (variant) {
+        talos_rt_v1_native_promotion_publish_window(
+            records.data(), records.size() / 2, certificates,
+            invalidateAggregate, requestRecheck, changed, unknown);
+      } else {
+        // Each maximal run of a mask, as __talos_eval_promotion_*_mask_v1.
+        auto runs = [&](uint64_t mask, auto query,
+                        talos_rt_native_promotion_invalidate aggregate) {
+          for (unsigned bit = 0; bit != 64;) {
+            if (!(mask >> bit & 1)) {
+              ++bit;
+              continue;
+            }
+            unsigned end = bit;
+            while (end != 64 && (mask >> end & 1))
+              ++end;
+            query(indexed.data(), indexed.size(), certificates, aggregate,
+                  low + bit, end - bit);
+            bit = end;
+          }
+        };
+        runs(changed & unknown, talos_rt_v1_native_promotion_invalidate_ranges,
+             invalidateAggregate);
+        runs(changed & ~unknown, talos_rt_v1_native_promotion_recheck_ranges,
+             requestRecheck);
+      }
+      invalidations[variant] = aggregateInvalidations;
+      rechecks[variant] = aggregateRechecks;
+    }
+    ASSERT_EQ(latch[0][0], latch[1][0]) << trial;
+    ASSERT_EQ(latch[0][1], latch[1][1]) << trial;
+    ASSERT_EQ(words[0][0], words[1][0]) << trial;
+    ASSERT_EQ(words[0][1], words[1][1]) << trial;
+    ASSERT_EQ(routes[0], routes[1]) << trial;
+    ASSERT_EQ(invalidations[0] != 0, invalidations[1] == 1) << trial;
+    ASSERT_LE(invalidations[1], 1u);
+    ASSERT_EQ(rechecks[0] != 0, rechecks[1] == 1) << trial;
+    ASSERT_LE(rechecks[1], 1u);
+  }
 }
 
 } // namespace

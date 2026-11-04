@@ -43,7 +43,7 @@
 // GROUP-NEXT: llvm.return
 // GROUP: llvm.call @__talos_eval_ranked_group_0.fallback
 // GROUP-LABEL: llvm.func @__talos_eval_ranked_group_0.fallback(
-// GROUP: llvm.call preserve_mostcc @__talos_eval_promotion_publish_unknown_v1
+// GROUP: llvm.call preserve_mostcc @__talos_eval_promotion_publish_window_v1
 // GROUP: llvm.return
 // Overlap, weak contributions, and delay fail the topology proof. Writable
 // VPI retains override-aware source boundaries (38.34). The sparse variant

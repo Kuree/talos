@@ -1616,6 +1616,12 @@ ABI_FUNCTION(talos_rt_v1_native_promotion_recheck_buckets,
                       const talos_rt_native_promotion_certificate *,
                       talos_rt_native_promotion_invalidate, uint64_t,
                       uint64_t));
+ABI_FUNCTION(talos_rt_v1_native_promotion_publish_window,
+             void (*)(const uint64_t *, uint64_t,
+                      const talos_rt_native_promotion_certificate *,
+                      talos_rt_native_promotion_invalidate,
+                      talos_rt_native_promotion_invalidate, uint64_t,
+                      uint64_t));
 ABI_FUNCTION(talos_rt_v1_scheduler_install_aot,
              talos_rt_status (*)(talos_rt_context *,
                                  const talos_rt_native_schedule_plan *));

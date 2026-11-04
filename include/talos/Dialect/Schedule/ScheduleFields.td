@@ -141,6 +141,8 @@ def EvalPrivateHelper : ScheduleField<"EvalPrivateHelper", "schedule.eval.privat
     "::mlir::UnitAttr">;
 def EvalProofCoverage : ScheduleField<"EvalProofCoverage", "schedule.eval.proof_coverage",
     "::mlir::DenseI64ArrayAttr">;
+def EvalProofEntries : ScheduleField<"EvalProofEntries", "schedule.eval.proof_entries",
+    "::mlir::DenseI64ArrayAttr">;
 def EvalProvenTwoStateCall : ScheduleField<"EvalProvenTwoStateCall", "schedule.eval.proven_two_state_call",
     "::mlir::UnitAttr">;
 def EvalRankedMembers : ScheduleField<"EvalRankedMembers", "schedule.eval.ranked_members",
