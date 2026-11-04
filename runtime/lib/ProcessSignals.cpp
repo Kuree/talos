@@ -1868,9 +1868,12 @@ bool talos_rt_register_computed_signal_wait_unlocked(
   // IEEE 1800-2023 21.2.3: the $monitor reports at the end of a time step in
   // which one of its arguments changed value, from the Postponed region
   // (4.4.2.9). Comparing the arguments there, once per slot, needs no
-  // subscription to every write of them. Only signal dependencies qualify, and
-  // only where every slot end reaches the runtime's postponed pass: the
-  // runtime's own scheduler, or a generated plan with postponed hooks.
+  // subscription to every write of them, which would keep a generated
+  // periodic loop from owning the clock. Only signal dependencies qualify, and
+  // only under a generated plan with postponed hooks, whose every slot end
+  // reaches the postponed pass. The runtime's own scheduler runs every slot
+  // anyway: there a subscription, paid per write, costs less than an
+  // evaluation per slot.
   if (!designWaiter) {
     ScheduledProcess *process = findScheduledProcess(context, waiterToken);
     const talos_rt_native_schedule_plan *plan = context->nativeSchedulePlan;
@@ -1900,7 +1903,7 @@ bool talos_rt_register_computed_signal_wait_unlocked(
         process->homeRegion == TALOS_RT_REGION_POSTPONED &&
         context->monitorLogicalProcessToken ==
             (TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | waiterToken) &&
-        (!plan || (plan->flags & TALOS_RT_NATIVE_SCHEDULE_POSTPONED_HOOKS))) {
+        plan && (plan->flags & TALOS_RT_NATIVE_SCHEDULE_POSTPONED_HOOKS)) {
       talos_rt_unregister_signal_wait_unlocked(context, subscriptions,
                                                waiterToken, designWaiter);
       TALOS_RT_TRY { context->postponedObserverWaiters.push_back(waiterToken); }

@@ -1,7 +1,9 @@
 // RUN: talos-opt %s '--lower-talos-to-sim=opt-level=0' | FileCheck %s
 
-// A direct $monitor argument changes exactly when its declaration changes.
-// Keep that fixed descriptor wait out of the computed-observer runtime path.
+// IEEE 1800-2023 21.2.3: a $monitor whose argument is a plain variable waits
+// on an observer of it like any other argument, so a generated periodic loop
+// can compare it at the end of each time slot (4.4.2.9) instead of the runtime
+// subscribing to the variable.
 module {
   talos.sv.symbol.definition @s0.top attributes {definition_kind = 0 : i32, hierarchical_name = "top", name = "top", node_id = 0 : i64} {
   }
@@ -27,9 +29,11 @@ module {
 
 // CHECK: simulation.func private @[[CALLBACK:unit_0[.][^(]+]](
 // CHECK-SAME: simulation.persistent_monitor
+// CHECK: simulation.observer.bind
 // CHECK: simulation.display
-// CHECK: simulation.suspend.change
-// CHECK-NOT: simulation.suspend.observe
+// CHECK-NOT: simulation.suspend.change
+// CHECK: simulation.suspend.observe
+// CHECK-SAME: resume_region = 16
 // CHECK-LABEL: simulation.func private @unit_0(
 // CHECK: %[[PROCESS:.*]] = simulation.spawn @[[CALLBACK]]
 // CHECK: simulation.monitor.register %[[PROCESS]]
