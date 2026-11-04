@@ -1264,135 +1264,134 @@ publishSignalOccurrenceUnlocked(talos_rt_context *context, uint64_t stableID,
     context->schedulerStatus = TALOS_RT_INVALID_HANDLE;
     return false;
   }
-  auto visitBucket = [&](int64_t page) {
-    SignalSubscriptionBucketKey key{kind, objectID, page};
-    auto bucket = context->signalSubscriptionBuckets.find(key);
-    if (bucket != context->signalSubscriptionBuckets.end()) {
-      for (const SignalSubscriptionBucketEntry &entry : bucket->second) {
-        SignalSubscription *subscription = entry.subscription;
-        if (!subscription || subscription->lastExaminedSequence == sequence)
+  auto visitEntries = [&](const std::vector<SignalSubscriptionBucketEntry>
+                              &bucket) {
+    for (const SignalSubscriptionBucketEntry &entry : bucket) {
+      SignalSubscription *subscription = entry.subscription;
+      if (!subscription || subscription->lastExaminedSequence == sequence)
+        continue;
+      subscription->lastExaminedSequence = sequence;
+      if (context->signalDiagnosticsEnabled)
+        ++context->signalDiagnostics.subscribersExamined;
+      bool overlaps = false;
+      if (fullyStaticAOT &&
+          subscription->target == SignalSubscription::NativeDirectWait) {
+        int64_t publishedOffset = static_cast<int32_t>(stableID);
+        int64_t subscribedOffset = static_cast<int32_t>(subscription->stableID);
+        overlaps =
+            static_cast<__int128>(publishedOffset) + bitWidth >
+                subscribedOffset &&
+            static_cast<__int128>(subscribedOffset) + subscription->bitWidth >
+                publishedOffset;
+      } else {
+        overlaps = rangesOverlap(subscription->stableID, subscription->bitWidth,
+                                 stableID, bitWidth);
+      }
+      if (!overlaps)
+        continue;
+      if (subscription->suppressActiveSelf && subscription->waiterToken != 0) {
+        uint64_t logicalToken =
+            subscription->target == SignalSubscription::NativeDirectWait
+                ? kNativeLogicalProcessTag | subscription->waiterToken
+                : subscription->waiterToken;
+        if (context->activeLogicalProcessToken == logicalToken)
           continue;
-        subscription->lastExaminedSequence = sequence;
-        if (context->signalDiagnosticsEnabled)
-          ++context->signalDiagnostics.subscribersExamined;
-        bool overlaps = false;
-        if (fullyStaticAOT &&
-            subscription->target == SignalSubscription::NativeDirectWait) {
-          int64_t publishedOffset = static_cast<int32_t>(stableID);
-          int64_t subscribedOffset =
-              static_cast<int32_t>(subscription->stableID);
-          overlaps =
-              static_cast<__int128>(publishedOffset) + bitWidth >
-                  subscribedOffset &&
-              static_cast<__int128>(subscribedOffset) + subscription->bitWidth >
-                  publishedOffset;
-        } else {
-          overlaps = rangesOverlap(subscription->stableID,
-                                   subscription->bitWidth, stableID, bitWidth);
-        }
-        if (!overlaps)
-          continue;
-        if (subscription->suppressActiveSelf &&
-            subscription->waiterToken != 0) {
-          uint64_t logicalToken =
-              subscription->target == SignalSubscription::NativeDirectWait
-                  ? kNativeLogicalProcessTag | subscription->waiterToken
-                  : subscription->waiterToken;
-          if (context->activeLogicalProcessToken == logicalToken)
+      }
+      if (!matches(*subscription))
+        continue;
+      if (subscription->target == SignalSubscription::NativeDirectWait &&
+          subscription->latch && !subscription->latch->triggered &&
+          context->nativeSchedulePlan &&
+          (context->nativeSchedulePlan->flags &
+           TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL) &&
+          canUseStaticAOTFanout(context)) {
+        // IEEE 1800-2023 9.4.2: deliver this publication to both generated
+        // and runtime waiters. Route only a certified native continuation
+        // into generated ingress; leave every other subscription below.
+        ScheduledProcess *scheduled =
+            findScheduledProcess(context, subscription->waiterToken);
+        uint32_t node =
+            scheduled && scheduled->instance
+                ? findNativeAOTNodeUnlocked(context, scheduled->aotActorSlot,
+                                            scheduled->instance->continuation)
+                : UINT32_MAX;
+        if (node < context->nativeScheduleNodeIngress.size()) {
+          uint64_t index = context->nativeScheduleNodeIngress[node];
+          if (index < context->nativeScheduleFanoutEntryCount) {
+            const auto &entry = context->nativeScheduleFanoutEntries[index];
+            const auto &kernel =
+                context->nativeSchedulePlan->clock_kernels[entry.kernel];
+            talos::runtime::publishClockKernelReady(kernel, entry.merged_bit);
+            context->nativeScheduleClockIngressPending = true;
             continue;
+          }
         }
-        if (!matches(*subscription))
+      }
+      if (subscription->target == SignalSubscription::NativeDirectWait ||
+          subscription->target == SignalSubscription::DesignDirectWait) {
+        if (!subscription->latch || subscription->latch->triggered)
           continue;
-        if (subscription->target == SignalSubscription::NativeDirectWait &&
-            subscription->latch && !subscription->latch->triggered &&
-            context->nativeSchedulePlan &&
-            (context->nativeSchedulePlan->flags &
-             TALOS_RT_NATIVE_SCHEDULE_RUNTIME_CALENDAR_EVAL) &&
-            canUseStaticAOTFanout(context)) {
-          // IEEE 1800-2023 9.4.2: deliver this publication to both generated
-          // and runtime waiters. Route only a certified native continuation
-          // into generated ingress; leave every other subscription below.
+        subscription->latch->triggered = true;
+        bool staticallyPolledNative =
+            fullyStaticAOT &&
+            subscription->target == SignalSubscription::NativeDirectWait &&
+            !subscription->outsideStaticFanout;
+        if (staticallyPolledNative) {
           ScheduledProcess *scheduled =
               findScheduledProcess(context, subscription->waiterToken);
-          uint32_t node =
-              scheduled && scheduled->instance
-                  ? findNativeAOTNodeUnlocked(context, scheduled->aotActorSlot,
-                                              scheduled->instance->continuation)
-                  : UINT32_MAX;
-          if (node < context->nativeScheduleNodeIngress.size()) {
-            uint64_t index = context->nativeScheduleNodeIngress[node];
-            if (index < context->nativeScheduleFanoutEntryCount) {
-              const auto &entry = context->nativeScheduleFanoutEntries[index];
-              const auto &kernel =
-                  context->nativeSchedulePlan->clock_kernels[entry.kernel];
-              talos::runtime::publishClockKernelReady(kernel, entry.merged_bit);
-              context->nativeScheduleClockIngressPending = true;
-              continue;
-            }
+          if (!scheduled || scheduled->aotActorSlot == UINT32_MAX ||
+              !markNativeAOTActorReadyUnlocked(context,
+                                               scheduled->aotActorSlot)) {
+            context->schedulerStatus = TALOS_RT_INVALID_CONTINUATION;
+            return false;
           }
         }
-        if (subscription->target == SignalSubscription::NativeDirectWait ||
-            subscription->target == SignalSubscription::DesignDirectWait) {
-          if (!subscription->latch || subscription->latch->triggered)
-            continue;
-          subscription->latch->triggered = true;
-          bool staticallyPolledNative =
-              fullyStaticAOT &&
-              subscription->target == SignalSubscription::NativeDirectWait &&
-              !subscription->outsideStaticFanout;
-          if (staticallyPolledNative) {
-            ScheduledProcess *scheduled =
-                findScheduledProcess(context, subscription->waiterToken);
-            if (!scheduled || scheduled->aotActorSlot == UINT32_MAX ||
-                !markNativeAOTActorReadyUnlocked(context,
-                                                 scheduled->aotActorSlot)) {
-              context->schedulerStatus = TALOS_RT_INVALID_CONTINUATION;
-              return false;
+        bool recordedNativePublication = false;
+        if (!staticallyPolledNative && subscription->waiterToken != 0) {
+          auto &candidates =
+              subscription->target == SignalSubscription::NativeDirectWait
+                  ? context->nativePollCandidates
+                  : context->designPollCandidates;
+          TALOS_RT_TRY {
+            bool inserted = candidates.insert(subscription->waiterToken).second;
+            if (subscription->target == SignalSubscription::NativeDirectWait) {
+              talos_rt_record_native_ready_publication_unlocked(
+                  context, subscription->waiterToken, inserted);
+              recordedNativePublication = true;
             }
           }
-          bool recordedNativePublication = false;
-          if (!staticallyPolledNative && subscription->waiterToken != 0) {
-            auto &candidates =
-                subscription->target == SignalSubscription::NativeDirectWait
-                    ? context->nativePollCandidates
-                    : context->designPollCandidates;
-            TALOS_RT_TRY {
-              bool inserted =
-                  candidates.insert(subscription->waiterToken).second;
-              if (subscription->target ==
-                  SignalSubscription::NativeDirectWait) {
-                talos_rt_record_native_ready_publication_unlocked(
-                    context, subscription->waiterToken, inserted);
-                recordedNativePublication = true;
-              }
-            }
-            TALOS_RT_CATCH(const std::bad_alloc &) {
-              context->schedulerStatus = TALOS_RT_OUT_OF_MEMORY;
-              return false;
-            }
+          TALOS_RT_CATCH(const std::bad_alloc &) {
+            context->schedulerStatus = TALOS_RT_OUT_OF_MEMORY;
+            return false;
           }
-          if (!staticallyPolledNative && !recordedNativePublication &&
-              ++context->schedulerSelectionGeneration == 0)
-            context->schedulerSelectionGeneration = 1;
-          continue;
         }
-        if (!subscription->latch || subscription->latch->affected)
-          continue;
-        TALOS_RT_TRY {
-          auto &pending =
-              subscription->target == SignalSubscription::NativeComputedWait
-                  ? context->pendingNativeComputedWaiters
-                  : context->pendingDesignComputedWaiters;
-          pending.push_back(subscription->waiterToken);
-          subscription->latch->affected = true;
-        }
-        TALOS_RT_CATCH(const std::bad_alloc &) {
-          context->schedulerStatus = TALOS_RT_OUT_OF_MEMORY;
-          return false;
-        }
+        if (!staticallyPolledNative && !recordedNativePublication &&
+            ++context->schedulerSelectionGeneration == 0)
+          context->schedulerSelectionGeneration = 1;
+        continue;
+      }
+      if (!subscription->latch || subscription->latch->affected)
+        continue;
+      TALOS_RT_TRY {
+        auto &pending =
+            subscription->target == SignalSubscription::NativeComputedWait
+                ? context->pendingNativeComputedWaiters
+                : context->pendingDesignComputedWaiters;
+        pending.push_back(subscription->waiterToken);
+        subscription->latch->affected = true;
+      }
+      TALOS_RT_CATCH(const std::bad_alloc &) {
+        context->schedulerStatus = TALOS_RT_OUT_OF_MEMORY;
+        return false;
       }
     }
     return true;
+  };
+  auto visitBucket = [&](int64_t page) {
+    auto bucket = context->signalSubscriptionBuckets.find(
+        SignalSubscriptionBucketKey{kind, objectID, page});
+    return bucket == context->signalSubscriptionBuckets.end() ||
+           visitEntries(bucket->second);
   };
   __int128 pageCount = static_cast<__int128>(lastPage) - firstPage + 1;
   // LRM 9.4.2: skip only the ordinary subscription lookup when the complete
@@ -1402,7 +1401,40 @@ publishSignalOccurrenceUnlocked(talos_rt_context *context, uint64_t stableID,
       context
           ->signalSubscriptionObjectFilter[signalSubscriptionObjectFilterIndex(
               kind, objectID)] != 0;
-  if (objectWatched && pageCount <= kMaximumIndexedSignalPages) {
+  // A static object's pages come from its index, in page order with the wide
+  // page first, as the probes below would visit them.
+  const auto *staticPages =
+      objectWatched
+          ? talos_rt_static_signal_bucket_pages(context, kind, objectID)
+          : nullptr;
+  // Nothing visited registers or removes a subscription, so the index does
+  // not change during the walk.
+  if (staticPages) {
+    const auto &pages = *staticPages;
+    size_t index = 0;
+    if (!pages.empty() && pages.front().page == kWideSignalSubscriptionPage) {
+      if (!visitEntries(*pages.front().bucket))
+        return false;
+      index = 1;
+    }
+    // A short page list is walked from its start; a long one from the first
+    // page at or after firstPage.
+    if (pages.size() - index > 8)
+      index = static_cast<size_t>(
+          std::lower_bound(
+              pages.begin() + static_cast<ptrdiff_t>(index), pages.end(),
+              firstPage,
+              [](const talos_rt_context::StaticSignalBucketPage &entry,
+                 int64_t page) { return entry.page < page; }) -
+          pages.begin());
+    for (; index < pages.size(); ++index) {
+      int64_t page = pages[index].page;
+      if (page > lastPage)
+        break;
+      if (page >= firstPage && !visitEntries(*pages[index].bucket))
+        return false;
+    }
+  } else if (objectWatched && pageCount <= kMaximumIndexedSignalPages) {
     if (!visitBucket(kWideSignalSubscriptionPage))
       return false;
     for (int64_t page = firstPage;; ++page) {

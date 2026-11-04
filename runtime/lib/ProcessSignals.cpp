@@ -125,8 +125,8 @@ bool appendSignalSubscriptionUnlocked(
     size_t slotIndex = stored.bucketSlots.size();
     TALOS_RT_TRY {
       auto found = context->signalSubscriptionBuckets.find(key);
-      if (found == context->signalSubscriptionBuckets.end() &&
-          !context->signalSubscriptionNodes.empty()) {
+      bool created = found == context->signalSubscriptionBuckets.end();
+      if (created && !context->signalSubscriptionNodes.empty()) {
         auto node = std::move(context->signalSubscriptionNodes.back());
         context->signalSubscriptionNodes.pop_back();
         node.key() = key;
@@ -136,6 +136,8 @@ bool appendSignalSubscriptionUnlocked(
       auto &bucket = found != context->signalSubscriptionBuckets.end()
                          ? found->second
                          : context->signalSubscriptionBuckets[key];
+      if (created)
+        talos_rt_index_static_signal_bucket(context, key, &bucket);
       bucket.push_back({&stored, slotIndex});
       bucketEntryAppended = true;
       ++context->signalSubscriptionObjectFilter
@@ -152,8 +154,10 @@ bool appendSignalSubscriptionUnlocked(
           --context->signalSubscriptionObjectFilter
                 [signalSubscriptionObjectFilterIndex(kind, objectID)];
         }
-        if (found->second.empty())
+        if (found->second.empty()) {
+          talos_rt_unindex_static_signal_bucket(context, key);
           context->signalSubscriptionBuckets.erase(found);
+        }
       }
       TALOS_RT_RETHROW;
     }
@@ -514,6 +518,41 @@ talos_rt_v1_clocking_output_current(talos_rt_context *context,
            found->second->lastClockingOutputTime == context->schedulerTime;
   }
   TALOS_RT_CATCH_ALL { return 0; }
+}
+
+void talos_rt_index_static_signal_bucket(
+    talos_rt_context *context, const SignalSubscriptionBucketKey &key,
+    std::vector<SignalSubscriptionBucketEntry> *bucket) {
+  if (key.kind != TALOS_RT_STABLE_HANDLE_STATIC ||
+      key.id >= kIndexedStaticSignalObjects)
+    return;
+  auto &objects = context->staticSignalBucketPages;
+  if (key.id >= objects.size())
+    objects.resize(static_cast<size_t>(key.id) + 1);
+  auto &pages = objects[key.id];
+  auto position =
+      std::lower_bound(pages.begin(), pages.end(), key.page,
+                       [](const talos_rt_context::StaticSignalBucketPage &entry,
+                          int64_t page) { return entry.page < page; });
+  if (position != pages.end() && position->page == key.page)
+    position->bucket = bucket;
+  else
+    pages.insert(position, {key.page, bucket});
+}
+
+void talos_rt_unindex_static_signal_bucket(
+    talos_rt_context *context,
+    const SignalSubscriptionBucketKey &key) noexcept {
+  if (key.kind != TALOS_RT_STABLE_HANDLE_STATIC ||
+      key.id >= context->staticSignalBucketPages.size())
+    return;
+  auto &pages = context->staticSignalBucketPages[key.id];
+  auto position =
+      std::lower_bound(pages.begin(), pages.end(), key.page,
+                       [](const talos_rt_context::StaticSignalBucketPage &entry,
+                          int64_t page) { return entry.page < page; });
+  if (position != pages.end() && position->page == key.page)
+    pages.erase(position);
 }
 
 bool signalSubscriptionBucketRange(uint64_t stableID, uint64_t bitWidth,
@@ -1454,6 +1493,7 @@ void talos_rt_unregister_signal_wait_unlocked(
         }
       }
       if (bucket->second.empty()) {
+        talos_rt_unindex_static_signal_bucket(context, slot.key);
         // Keep the emptied node for the next bucket when there is room; the
         // reservation makes the push below unable to throw.
         bool kept = false;

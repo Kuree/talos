@@ -1846,6 +1846,159 @@ TEST(RuntimeInternals, ManagedObjectWaitsRemainRootsAcrossCollection) {
   talos_rt_v1_context_destroy(context);
 }
 
+// Two-tier B2 S4: publication finds a static object's buckets through the
+// per-object page index instead of the bucket map. It must reach exactly the
+// buckets the map holds: the wide page and every page the publication covers,
+// none outside it; objects beyond the indexed ids keep the map path, and the
+// index follows bucket removal and the reuse of emptied bucket nodes.
+TEST(RuntimeInternals, StaticSignalBucketIndexReachesExactlyTheMapBuckets) {
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  context->signalDiagnosticsEnabled = true;
+  auto handle = [](uint32_t id, int64_t offset) {
+    return talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_STATIC, id,
+                                         offset);
+  };
+  // Every indexed bucket of the map has exactly one index entry pointing at
+  // it, and the index holds nothing else.
+  auto consistent = [&] {
+    size_t indexed = 0;
+    for (auto &[key, bucket] : context->signalSubscriptionBuckets) {
+      if (key.kind != TALOS_RT_STABLE_HANDLE_STATIC ||
+          key.id >= kIndexedStaticSignalObjects)
+        continue;
+      ++indexed;
+      const auto *pages = talos_rt_static_signal_bucket_pages(
+          context, TALOS_RT_STABLE_HANDLE_STATIC, key.id);
+      if (!pages ||
+          std::count_if(pages->begin(), pages->end(), [&](const auto &entry) {
+            return entry.page == key.page && entry.bucket == &bucket;
+          }) != 1)
+        return false;
+    }
+    size_t entries = 0;
+    for (const auto &pages : context->staticSignalBucketPages)
+      entries += pages.size();
+    return entries == indexed;
+  };
+  const uint32_t high = kIndexedStaticSignalObjects + 3;
+  struct {
+    talos_rt_wait_record_v1 wait;
+    std::array<talos_rt_wait_entry_v1, 6> entries;
+  } record{{TALOS_RT_VERSION, TALOS_RT_SUSPEND_EDGE, 0, 6, 0, 0},
+           {{{handle(5, 0), TALOS_RT_WAIT_EDGE_CHANGE, 8},
+             {handle(5, 600), TALOS_RT_WAIT_EDGE_CHANGE, 4},
+             // More than kMaximumIndexedSignalPages pages: the wide page.
+             {handle(5, 0), TALOS_RT_WAIT_EDGE_CHANGE, 70000},
+             {handle(6, 300), TALOS_RT_WAIT_EDGE_CHANGE, 1},
+             // A negative offset is on page -1.
+             {handle(7, -10), TALOS_RT_WAIT_EDGE_CHANGE, 4},
+             {handle(high, 0), TALOS_RT_WAIT_EDGE_CHANGE, 1}}}};
+  auto addWaiter = [&](uint64_t token) -> ScheduledProcess & {
+    ScheduledProcess process;
+    process.token = token;
+    process.instance = reinterpret_cast<talos_rt_process_instance_v1 *>(1);
+    process.started = true;
+    process.suspendKind = TALOS_RT_SUSPEND_EDGE;
+    context->scheduledProcesses.push_back(std::move(process));
+    return context->scheduledProcesses.back();
+  };
+  context->scheduledProcesses.reserve(2);
+  ScheduledProcess &waiter = addWaiter(7);
+  ASSERT_TRUE(talos_rt_register_signal_wait_unlocked(
+      context, &record.wait, waiter.signalSubscriptions, waiter.signalLatch, 7,
+      false));
+  EXPECT_TRUE(consistent());
+  auto pages = [&](uint32_t id) {
+    std::vector<int64_t> result;
+    if (const auto *index = talos_rt_static_signal_bucket_pages(
+            context, TALOS_RT_STABLE_HANDLE_STATIC, id))
+      for (const auto &entry : *index)
+        result.push_back(entry.page);
+    return result;
+  };
+  EXPECT_EQ(pages(5),
+            (std::vector<int64_t>{kWideSignalSubscriptionPage, 0, 2}));
+  EXPECT_EQ(pages(6), (std::vector<int64_t>{1}));
+  EXPECT_EQ(pages(7), (std::vector<int64_t>{-1}));
+  EXPECT_EQ(talos_rt_static_signal_bucket_pages(
+                context, TALOS_RT_STABLE_HANDLE_STATIC, high),
+            nullptr);
+  // An indexed id never subscribed has no buckets (not the map path).
+  ASSERT_NE(talos_rt_static_signal_bucket_pages(
+                context, TALOS_RT_STABLE_HANDLE_STATIC, 4000),
+            nullptr);
+  EXPECT_TRUE(pages(4000).empty());
+  auto examined = [&](uint64_t stableID, uint64_t width) {
+    uint64_t before = context->signalDiagnostics.subscribersExamined;
+    EXPECT_TRUE(talos_rt_publish_signal_occurrence_unlocked(
+        context, stableID, width, TALOS_RT_SIGNAL_CHANGE));
+    return context->signalDiagnostics.subscribersExamined - before;
+  };
+  // Page 3 has no bucket: the wide subscription alone.
+  EXPECT_EQ(examined(handle(5, 1000), 1), 1u);
+  // Page 2 and the wide page.
+  EXPECT_EQ(examined(handle(5, 601), 1), 2u);
+  // Pages 0..2 and the wide page, each subscription once.
+  EXPECT_EQ(examined(handle(5, 0), 700), 3u);
+  // More than 64 pages published: every bucket in range, once each.
+  EXPECT_EQ(examined(handle(5, 0), 70000), 3u);
+  EXPECT_EQ(examined(handle(6, 300), 1), 1u);
+  EXPECT_EQ(examined(handle(6, 0), 1), 0u);
+  EXPECT_EQ(examined(handle(7, -8), 1), 1u);
+  EXPECT_EQ(examined(handle(7, 0), 1), 0u);
+  // Beyond the indexed ids: the bucket map.
+  EXPECT_EQ(examined(handle(high, 0), 1), 1u);
+
+  // A second waiter shares page 2 of object 5; removing the first keeps that
+  // bucket, moved entry and all, reachable through the index.
+  struct {
+    talos_rt_wait_record_v1 wait;
+    std::array<talos_rt_wait_entry_v1, 1> entries;
+  } shared{{TALOS_RT_VERSION, TALOS_RT_SUSPEND_EDGE, 0, 1, 0, 0},
+           {{{handle(5, 520), TALOS_RT_WAIT_EDGE_CHANGE, 1}}}};
+  ScheduledProcess &other = addWaiter(8);
+  ASSERT_TRUE(talos_rt_register_signal_wait_unlocked(
+      context, &shared.wait, other.signalSubscriptions, other.signalLatch, 8,
+      false));
+  EXPECT_TRUE(consistent());
+  talos_rt_unregister_signal_wait_unlocked(
+      context, context->scheduledProcesses[0].signalSubscriptions);
+  EXPECT_TRUE(consistent());
+  EXPECT_EQ(pages(5), (std::vector<int64_t>{2}));
+  EXPECT_TRUE(pages(6).empty());
+  EXPECT_EQ(examined(handle(5, 520), 1), 1u);
+  EXPECT_TRUE(other.signalLatch->triggered);
+  talos_rt_unregister_signal_wait_unlocked(context, other.signalSubscriptions);
+  EXPECT_TRUE(context->signalSubscriptionBuckets.empty());
+  EXPECT_TRUE(consistent());
+  EXPECT_EQ(examined(handle(5, 0), 700), 0u);
+
+  // Emptied bucket nodes come back under other keys.
+  ASSERT_FALSE(context->signalSubscriptionNodes.empty());
+  struct {
+    talos_rt_wait_record_v1 wait;
+    std::array<talos_rt_wait_entry_v1, 2> entries;
+  } again{{TALOS_RT_VERSION, TALOS_RT_SUSPEND_EDGE, 0, 2, 0, 0},
+          {{{handle(6, 2), TALOS_RT_WAIT_EDGE_CHANGE, 1},
+            {handle(high, 300), TALOS_RT_WAIT_EDGE_CHANGE, 1}}}};
+  ScheduledProcess &first = context->scheduledProcesses[0];
+  ASSERT_TRUE(talos_rt_register_signal_wait_unlocked(
+      context, &again.wait, first.signalSubscriptions, first.signalLatch, 7,
+      false));
+  EXPECT_TRUE(consistent());
+  EXPECT_EQ(pages(6), (std::vector<int64_t>{0}));
+  EXPECT_EQ(examined(handle(6, 2), 1), 1u);
+  EXPECT_EQ(examined(handle(high, 300), 1), 1u);
+  EXPECT_TRUE(first.signalLatch->triggered);
+  talos_rt_unregister_signal_wait_unlocked(context, first.signalSubscriptions);
+  EXPECT_TRUE(consistent());
+  EXPECT_TRUE(pages(6).empty());
+  for (ScheduledProcess &process : context->scheduledProcesses)
+    process.instance = nullptr;
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(RuntimeInternals, SignalSubscriptionsAreRangeIndexedStableAndBounded) {
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);

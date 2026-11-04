@@ -2661,6 +2661,15 @@ struct talos_rt_context {
                          std::vector<SignalSubscriptionBucketEntry>,
                          SignalSubscriptionBucketKeyHash>;
   SignalSubscriptionBucketMap signalSubscriptionBuckets;
+  // The buckets of static-state objects again, by object id and sorted by
+  // page (the wide page first), so a publication reaches them without hashing
+  // (two-tier B2 S4). The map stays their owner; its node addresses are
+  // stable. Ids from kIndexedStaticSignalObjects on use the map alone.
+  struct StaticSignalBucketPage {
+    int64_t page = 0;
+    std::vector<SignalSubscriptionBucketEntry> *bucket = nullptr;
+  };
+  std::vector<std::vector<StaticSignalBucketPage>> staticSignalBucketPages;
   // Released subscriptions and emptied bucket nodes, reused by the next
   // signal wait. A process that re-arms the same wait every clock cycle then
   // allocates nothing.
@@ -4445,6 +4454,32 @@ void talos_rt_vpi_run_time_error(talos_rt_context *context,
 // entering an interactive mode. Cold; only with VPI state.
 void talos_rt_vpi_reset_starting(talos_rt_context *context) noexcept;
 void talos_rt_vpi_stop_requested(talos_rt_context *context) noexcept;
+inline constexpr uint32_t kIndexedStaticSignalObjects = UINT32_C(1) << 20;
+// An indexed id the index never reached has no bucket at all. Namespace
+// scope, so a lookup tests no initialization guard.
+inline const std::vector<talos_rt_context::StaticSignalBucketPage>
+    kNoStaticSignalBucketPages;
+/// The static-object bucket pages of (kind, id), or null when the object has
+/// no index (not static or beyond the indexed ids); then the bucket map
+/// answers. An indexed object's pages are every bucket it has.
+inline const std::vector<talos_rt_context::StaticSignalBucketPage> *
+talos_rt_static_signal_bucket_pages(const talos_rt_context *context,
+                                    uint32_t kind, uint32_t id) {
+  if (kind != TALOS_RT_STABLE_HANDLE_STATIC ||
+      id >= kIndexedStaticSignalObjects)
+    return nullptr;
+  return id < context->staticSignalBucketPages.size()
+             ? &context->staticSignalBucketPages[id]
+             : &kNoStaticSignalBucketPages;
+}
+// Keep the index in step with bucket creation and removal. Indexing may throw
+// bad_alloc; removal never throws.
+void talos_rt_index_static_signal_bucket(
+    talos_rt_context *context, const SignalSubscriptionBucketKey &key,
+    std::vector<SignalSubscriptionBucketEntry> *bucket);
+void talos_rt_unindex_static_signal_bucket(
+    talos_rt_context *context, const SignalSubscriptionBucketKey &key) noexcept;
+
 inline constexpr uint8_t kPreponedObserverSlotHook = 1;
 inline constexpr uint8_t kVPISignalSlotHook = 2;
 // A signal a cbSignal callback watches arrived: its callbacks run at the start
