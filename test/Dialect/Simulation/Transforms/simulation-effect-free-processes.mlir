@@ -16,13 +16,16 @@ module {
     simulation.code_unit.decl 3 in 0 always_comb hierarchy "copy"
     simulation.code_unit.decl 4 in 0 always hierarchy "reporter"
     simulation.code_unit.decl 5 in 0 always hierarchy "timed"
+    simulation.code_unit.decl 6 in 0 always_ff hierarchy "checker"
     // CHECK-LABEL: simulation.func @root
     // CHECK-NOT: simulation.spawn @waiter
     // CHECK: simulation.spawn @copy
     // CHECK: simulation.spawn @reporter
     // CHECK: simulation.spawn @timed
+    // CHECK-NOT: simulation.spawn @checker
     // READ-LABEL: simulation.func @root
     // READ: simulation.spawn @waiter
+    // READ: simulation.spawn @checker
     simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
       %a = simulation.context.storage %ctx[0] : !ref
       %b = simulation.context.storage %ctx[1] : !ref
@@ -30,6 +33,7 @@ module {
       %p1 = simulation.spawn @copy(%ctx, %a, %b) : !simulation.context, !ref, !ref -> !simulation.process
       %p2 = simulation.spawn @reporter(%ctx, %b) : !simulation.context, !ref -> !simulation.process
       %p3 = simulation.spawn @timed(%ctx, %a) : !simulation.context, !ref -> !simulation.process
+      %p4 = simulation.spawn @checker(%ctx, %a, %b) : !simulation.context, !ref, !ref -> !simulation.process
       simulation.return
     }
     // CHECK-NOT: simulation.func private @waiter
@@ -67,6 +71,18 @@ module {
     ^body:
       %v = simulation.ref.load %a : !ref -> !bit
       simulation.suspend.delay %delay to ^body
+    }
+    // An always_ff whose check folded away (here: a two-state immediate
+    // assertion that no input can fail) only waits for its clock edge.
+    // CHECK-NOT: simulation.func private @checker
+    // READ: simulation.func private @checker
+    simulation.func private @checker(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %clk: !ref {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}, %v: !ref {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 1 : i64}) attributes {entry_kind = 5 : i32, code_unit_id = 6 : i64} {
+      cf.br ^wait
+    ^wait:
+      simulation.suspend.edge negedge %clk to ^body : !ref
+    ^body:
+      %x = simulation.ref.load %v : !ref -> !bit
+      cf.br ^wait
     }
   }
 }

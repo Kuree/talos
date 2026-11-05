@@ -173,6 +173,7 @@ unsigned removeEffectFreeProcesses(sim::SimDesignOp design) {
   for (auto function : design.getBody().front().getOps<sim::SimFuncOp>()) {
     switch (function.getEntryKind()) {
     case sim::EntryKind::Always:
+    case sim::EntryKind::AlwaysFF:
     case sim::EntryKind::AlwaysComb:
     case sim::EntryKind::AlwaysLatch:
     case sim::EntryKind::Continuous:
