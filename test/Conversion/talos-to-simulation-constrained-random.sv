@@ -1,6 +1,6 @@
 // RUN: talos -emit-slang %s | talos-opt --convert-slang-to-talos '--test-talos-set-module-attributes=attrs="{llvm.data_layout = \"e-p:64:64-i64:64-i32:32-i16:16-i8:8\", llvm.target_triple = \"x86_64-unknown-linux-gnu\"}"' -o %t.talos.mlir
 // RUN: talos-opt %t.talos.mlir '--lower-talos-to-sim=opt-level=0' | FileCheck %s
-// RUN: talos-opt %t.talos.mlir '--lower-talos-to-sim=opt-level=0' --convert-talos-sim-processes-to-llvm-coroutines -o /dev/null
+// RUN: talos-opt %t.talos.mlir '--lower-talos-to-sim=opt-level=0' --convert-talos-sim-processes-to-llvm-coroutines --verify-diagnostics -o /dev/null
 // RUN: talos-opt %t.talos.mlir '--lower-talos-to-sim=opt-level=0' '--encode-talos-sim-to-bytecode=vpi=off' -o /dev/null
 
 // The object stream chooses the first assignment for a bounded generated

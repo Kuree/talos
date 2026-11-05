@@ -333,6 +333,12 @@ std::optional<StringRef> getElaboratedConstantSpelling(Operation *operation) {
 namespace {
 /// Self-determined packed width of a semantic expression, if it has one.
 std::optional<unsigned> packedSemanticWidth(Operation *expression) {
+  // A value range (IEEE 1800-2023 11.4.13) or a zero-size replication
+  // (11.4.12.1) is typed void and has no bits. Answer without asking the
+  // normalizer, which reports void as an unsupported type.
+  if (auto semanticType = expression->getAttrOfType<TypeAttr>("semantic_type");
+      semanticType && isa<semantic::VoidType>(semanticType.getValue()))
+    return std::nullopt;
   FailureOr<Type> type = getNormalizedSemanticType(expression);
   if (failed(type))
     return std::nullopt;
