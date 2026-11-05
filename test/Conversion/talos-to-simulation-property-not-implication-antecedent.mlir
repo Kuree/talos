@@ -26,7 +26,13 @@
 // BRANCHING-SAME: simulation.branching_antecedent_alternatives = 2 : i64
 // BRANCHING-SAME: simulation.branching_antecedent_result_coalescer
 // BRANCHING-SAME: simulation.temporal_property_negation
-// BRANCHING: simulation.branching_antecedent_universal_success
+// The implication succeeds without an antecedent match or without a failed
+// consequent: ~matched | (matched & ~failed) = ~(matched & failed).
+// BRANCHING: %[[MATCHED:.*]] = arith.ori
+// BRANCHING: %[[FAILED:.*]] = arith.ori
+// BRANCHING: %[[MATCHED_FAILED:.*]] = arith.andi %[[MATCHED]], %[[FAILED]]
+// BRANCHING: %[[SUCCESS:.*]] = arith.xori %[[MATCHED_FAILED]],
+// BRANCHING: cf.cond_br %[[SUCCESS]],
 // BRANCHING: simulation.spawn @unit_0.fork.14.0.2
 
 //--- multicycle-antecedent.mlir

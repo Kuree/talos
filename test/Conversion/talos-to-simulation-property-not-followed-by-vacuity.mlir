@@ -87,9 +87,12 @@ module {
 // CHECK: %[[BT:.*]] = simulation.logic.is_true %[[B]]
 // CHECK: %[[C:.*]] = simulation.assert.sampled_read {{.*}} from %arg4
 // CHECK: %[[CT:.*]] = simulation.logic.is_true %[[C]]
+// The attempt fails without an antecedent match or without a consequent
+// match: ~matched | (matched & ~triggered) = ~(matched & triggered).
 // CHECK: %[[MATCHED:.*]] = arith.ori %[[AT]], %[[BT]]
-// CHECK: %[[NOMATCH:.*]] = arith.xori %[[MATCHED]], {{%.*}}
-// CHECK: %[[FAILED:.*]] = arith.ori %[[NOMATCH]], {{%.*}} {simulation.branching_antecedent_existential_failure}
+// CHECK: %[[TRIGGERED:.*]] = arith.ori
+// CHECK: %[[SUCCEEDED:.*]] = arith.andi %[[MATCHED]], %[[TRIGGERED]]
+// CHECK: %[[FAILED:.*]] = arith.xori %[[SUCCEEDED]], {{%.*}}
 // CHECK: cf.cond_br %[[FAILED]],
 // CHECK: simulation.spawn @unit_0.fork.16.0.0
 // CHECK-NOT: simulation.spawn @unit_0.fork.16.0.0

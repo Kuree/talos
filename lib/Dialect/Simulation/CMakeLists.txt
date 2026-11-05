@@ -47,6 +47,7 @@ add_mlir_library(TalosSimulationIR
   MLIRControlFlowInterfaces
   MLIRFunctionInterfaces
   MLIRInferTypeOpInterface
+  MLIRInferIntRangeCommon
   MLIRInferIntRangeInterface
   MLIRIR
   MLIRMemorySlotInterfaces

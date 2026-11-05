@@ -59,13 +59,18 @@
 // CHECK: arith.muli
 // The creation guard has already excluded the all-frozen path, so the
 // optimized proposal needs only the live constraint-block check here.
+// The acceptance test conjoins the constraints: the implication is
+// `value != 1 || value < 2` (18.5.5), the if-else selects either branch's
+// constraint (18.5.6), and inside is a range test (11.4.13).
 // CHECK: cf.cond_br %[[ALL_BLOCKS_ENABLED]]
-// CHECK: arith.cmpi slt
-// CHECK: arith.ori
-// CHECK: arith.cmpi sgt
-// CHECK: arith.select
-// CHECK: arith.cmpi eq
-// CHECK: arith.cmpi eq
+// CHECK: %[[LT4:.*]] = arith.cmpi slt, %[[VALUE:.*]], %{{c4_i32.*}}
+// CHECK: %[[LT2:.*]] = arith.cmpi slt, %[[VALUE]], %{{c2_i32.*}}
+// CHECK: %[[NE1:.*]] = arith.cmpi ne, %[[VALUE]], %{{c1_i32.*}}
+// CHECK: %[[IMPLIED:.*]] = arith.ori %[[NE1]], %[[LT2]]
+// CHECK: arith.andi %[[LT4]], %[[IMPLIED]]
+// CHECK: %[[IS2:.*]] = arith.cmpi eq, %[[VALUE]], %{{c2_i32.*}}
+// CHECK: %[[GT0:.*]] = arith.cmpi sgt, %[[VALUE]], %{{c0_i32.*}}
+// CHECK: arith.select %[[IS2]], %[[LT4]], %[[GT0]]
 // CHECK: arith.cmpi sge
 // CHECK: arith.cmpi sle
 // CHECK: cf.cond_br
@@ -96,7 +101,7 @@ module unsupported_constraint;
     object.bounds.constraint_mode(1);
     void'(object.randomize() with {
       value < 4;
-      value == 1 -> value < 4;
+      value == 1 -> value < 2;
       if (value == 2) value < 4; else value > 0;
       value inside {[1:3]};
     });

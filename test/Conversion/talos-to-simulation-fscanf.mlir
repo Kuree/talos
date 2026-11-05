@@ -11,7 +11,7 @@
 // CHECK: %[[MATCHED:.*]] = arith.cmpi ne, %[[OK]]
 // CHECK: simulation.string.parse_logic %[[FIELD]] radix = <decimal> : !simulation.logic<32>
 // CHECK: %[[ASSIGNED:.*]] = arith.extui %[[MATCHED]] : i1 to i32
-// CHECK: %[[NONE:.*]] = arith.cmpi eq, %[[ASSIGNED]]
+// CHECK: %[[NONE:.*]] = arith.cmpi eq, %[[OK]]
 // CHECK: %[[INPUT_FAILURE:.*]] = arith.andi %[[NONE]], {{.*}} : i1
 // CHECK: arith.select %[[INPUT_FAILURE]], {{.*}}, %[[ASSIGNED]] : i32
 

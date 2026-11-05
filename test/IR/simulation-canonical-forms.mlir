@@ -147,6 +147,106 @@ func.func @mux(%c: !l1, %a: !l4, %b: !l4) -> (!l4, !l4, !l1, !l1, !l4, !l4) {
   return %m0, %m1, %m2, %m3, %m4, %m5 : !l4, !l4, !l1, !l1, !l4, !l4
 }
 
+// A one-bit constant arm against an arm that cannot hold Z (here a comparison
+// result) is logic for every condition, X and Z included: an ambiguous
+// condition yields an arm when the arms are == (11.4.11), else Table 11-20, so
+// c ? 1 : x is 1 or X exactly as c | x is (Tables 11-11, 11-12). An arm that
+// may hold Z would pass through a known condition unchanged, so it keeps the
+// mux.
+// CHECK-LABEL: func.func @mux_one_arm(
+// CHECK-NEXT: %[[ONE:.*]] = simulation.logic.constant true, false
+// CHECK-NEXT: %[[Z:.*]] = simulation.logic.compare eq %arg1, %arg2
+// CHECK-NEXT: %[[OR:.*]] = simulation.logic.binary or %arg0, %[[Z]]
+// CHECK-NEXT: %[[KEPT:.*]] = simulation.logic.mux %arg0 ? %[[ONE]] : %arg1
+// CHECK-NEXT: return %[[OR]], %[[KEPT]]
+func.func @mux_one_arm(%c: !l1, %a: !l1, %b: !l1) -> (!l1, !l1) {
+  %one = simulation.logic.constant 1 : i1, 0 : i1 : !l1
+  %z = simulation.logic.compare eq %a, %b : (!l1, !l1) -> !l1
+  %m = simulation.logic.mux %c ? %one : %z : (!l1, !l1, !l1) -> !l1
+  %k = simulation.logic.mux %c ? %one : %a : (!l1, !l1, !l1) -> !l1
+  return %m, %k : !l1, !l1
+}
+
+// CHECK-LABEL: func.func @mux_zero_arm(
+// CHECK-NEXT: %[[ZERO:.*]] = simulation.logic.constant false, false
+// CHECK-NEXT: %[[Z:.*]] = simulation.logic.compare eq %arg1, %arg2
+// CHECK-NEXT: %[[AND:.*]] = simulation.logic.binary and %arg0, %[[Z]]
+// CHECK-NEXT: %[[KEPT:.*]] = simulation.logic.mux %arg0 ? %arg1 : %[[ZERO]]
+// CHECK-NEXT: return %[[AND]], %[[KEPT]]
+func.func @mux_zero_arm(%c: !l1, %a: !l1, %b: !l1) -> (!l1, !l1) {
+  %zero = simulation.logic.constant 0 : i1, 0 : i1 : !l1
+  %z = simulation.logic.compare eq %a, %b : (!l1, !l1) -> !l1
+  %m = simulation.logic.mux %c ? %z : %zero : (!l1, !l1, !l1) -> !l1
+  %k = simulation.logic.mux %c ? %a : %zero : (!l1, !l1, !l1) -> !l1
+  return %m, %k : !l1, !l1
+}
+
+// CHECK-LABEL: func.func @mux_zero_true_arm(
+// CHECK-NEXT: %[[ZERO:.*]] = simulation.logic.constant false, false
+// CHECK-NEXT: %[[Z:.*]] = simulation.logic.compare eq %arg1, %arg2
+// CHECK-NEXT: %[[NOT:.*]] = simulation.logic.unary bit_not %arg0
+// CHECK-NEXT: %[[AND:.*]] = simulation.logic.binary and %[[NOT]], %[[Z]]
+// CHECK-NEXT: %[[KEPT:.*]] = simulation.logic.mux %arg0 ? %[[ZERO]] : %arg1
+// CHECK-NEXT: return %[[AND]], %[[KEPT]]
+func.func @mux_zero_true_arm(%c: !l1, %a: !l1, %b: !l1) -> (!l1, !l1) {
+  %zero = simulation.logic.constant 0 : i1, 0 : i1 : !l1
+  %z = simulation.logic.compare eq %a, %b : (!l1, !l1) -> !l1
+  %m = simulation.logic.mux %c ? %zero : %z : (!l1, !l1, !l1) -> !l1
+  %k = simulation.logic.mux %c ? %zero : %a : (!l1, !l1, !l1) -> !l1
+  return %m, %k : !l1, !l1
+}
+
+// CHECK-LABEL: func.func @mux_one_false_arm(
+// CHECK-NEXT: %[[ONE:.*]] = simulation.logic.constant true, false
+// CHECK-NEXT: %[[Z:.*]] = simulation.logic.compare eq %arg1, %arg2
+// CHECK-NEXT: %[[NOT:.*]] = simulation.logic.unary bit_not %arg0
+// CHECK-NEXT: %[[OR:.*]] = simulation.logic.binary or %[[NOT]], %[[Z]]
+// CHECK-NEXT: %[[KEPT:.*]] = simulation.logic.mux %arg0 ? %arg1 : %[[ONE]]
+// CHECK-NEXT: return %[[OR]], %[[KEPT]]
+func.func @mux_one_false_arm(%c: !l1, %a: !l1, %b: !l1) -> (!l1, !l1) {
+  %one = simulation.logic.constant 1 : i1, 0 : i1 : !l1
+  %z = simulation.logic.compare eq %a, %b : (!l1, !l1) -> !l1
+  %m = simulation.logic.mux %c ? %z : %one : (!l1, !l1, !l1) -> !l1
+  %k = simulation.logic.mux %c ? %a : %one : (!l1, !l1, !l1) -> !l1
+  return %m, %k : !l1, !l1
+}
+
+// A one-bit value compared with a known constant is 1, 0 or X as the value is
+// 1, 0 or unknown (11.4.4, 11.4.5): the truth of the value (|x maps Z to X)
+// or its negation. A comparison decided for both known values still yields X
+// for an unknown value and stays; |z of a comparison result z is z.
+// CHECK-LABEL: func.func @bit_compare(
+// CHECK-NEXT: %[[ONE:.*]] = simulation.logic.constant true, false
+// CHECK-NEXT: %[[EQ:.*]] = simulation.logic.reduction or %arg0
+// CHECK-NEXT: %[[NE:.*]] = simulation.logic.unary bit_not %arg0
+// CHECK-NEXT: %[[LT:.*]] = simulation.logic.unary bit_not %arg0
+// CHECK-NEXT: %[[GT:.*]] = simulation.logic.reduction or %arg0
+// CHECK-NEXT: %[[SLT:.*]] = simulation.logic.reduction or %arg0
+// CHECK-NEXT: %[[KEPT:.*]] = simulation.logic.compare ule %arg0, %[[ONE]]
+// CHECK-NEXT: %[[Z:.*]] = simulation.logic.compare eq %arg1, %arg2
+// CHECK-NEXT: %[[SGT:.*]] = simulation.logic.unary bit_not %arg0
+// CHECK-NEXT: %[[SGE:.*]] = simulation.logic.unary bit_not %arg0
+// CHECK-NEXT: %[[SLE:.*]] = simulation.logic.reduction or %arg0
+// CHECK-NEXT: return %[[EQ]], %[[NE]], %[[LT]], %[[GT]], %[[SLT]], %[[KEPT]], %[[Z]], %[[SGT]], %[[SGE]], %[[SLE]]
+func.func @bit_compare(%x: !l1, %a: !l1, %b: !l1) -> (!l1, !l1, !l1, !l1, !l1, !l1, !l1, !l1, !l1, !l1) {
+  %one = simulation.logic.constant 1 : i1, 0 : i1 : !l1
+  %zero = simulation.logic.constant 0 : i1, 0 : i1 : !l1
+  %0 = simulation.logic.compare eq %x, %one : (!l1, !l1) -> !l1
+  %1 = simulation.logic.compare ne %x, %one : (!l1, !l1) -> !l1
+  %2 = simulation.logic.compare ult %x, %one : (!l1, !l1) -> !l1
+  %3 = simulation.logic.compare ugt %x, %zero : (!l1, !l1) -> !l1
+  %4 = simulation.logic.compare slt %x, %zero : (!l1, !l1) -> !l1
+  %5 = simulation.logic.compare ule %x, %one : (!l1, !l1) -> !l1
+  %z = simulation.logic.compare eq %a, %b : (!l1, !l1) -> !l1
+  %6 = simulation.logic.compare eq %z, %one : (!l1, !l1) -> !l1
+  // A signed one-bit 1 is -1 (5.7.1): 0 > -1 and 0 >= 0 hold only for 0,
+  // -1 <= -1 only for 1.
+  %7 = simulation.logic.compare sgt %x, %one : (!l1, !l1) -> !l1
+  %8 = simulation.logic.compare sge %x, %zero : (!l1, !l1) -> !l1
+  %9 = simulation.logic.compare sle %x, %one : (!l1, !l1) -> !l1
+  return %0, %1, %2, %3, %4, %5, %6, %7, %8, %9 : !l1, !l1, !l1, !l1, !l1, !l1, !l1, !l1, !l1, !l1
+}
+
 // x ^ '1 is ~x. Other identities hold only for values that cannot hold Z
 // (bitwise) or whole-value arithmetic results (11.4.3); an arbitrary
 // four-state operand keeps the operation.

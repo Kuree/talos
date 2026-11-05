@@ -16,13 +16,14 @@
 // CHECK: [[A0:%.*]] = simulation.assert.sampled_read
 // CHECK: [[A:%.*]] = simulation.logic.is_true [[A0]]
 // CHECK: cf.cond_br [[A]],
-// `a iff b` expands to `(a && b) || (!a && !b)`.
+// `a iff b` expands to `(a && b) || (!a && !b)`, where !a && !b is !(a || b).
 // CHECK-LABEL: simulation.func private @unit_1(
 // CHECK-SAME: simulation.branching_sequence_alternatives = 2 : i64
 // CHECK-COUNT-2: simulation.assert.sampled_read
-// CHECK: arith.xori
-// CHECK: arith.xori
-// CHECK: arith.ori
+// CHECK: [[BOTH:%.*]] = arith.andi
+// CHECK: [[EITHER:%.*]] = arith.ori
+// CHECK: [[NEITHER:%.*]] = arith.xori [[EITHER]],
+// CHECK: arith.ori [[BOTH]], [[NEITHER]]
 // `a implies b` expands to `!a || b`.
 // CHECK-LABEL: simulation.func private @unit_2(
 // CHECK-SAME: simulation.branching_sequence_alternatives = 2 : i64
@@ -54,9 +55,9 @@
 // CHECK: [[B_TRUTH:%.*]] = simulation.logic.is_true [[B_BITS]]
 // CHECK: [[A_BITS:%.*]] = simulation.assert.sampled_read
 // CHECK: [[A_TRUTH:%.*]] = simulation.logic.is_true [[A_BITS]]
-// CHECK: [[NONVACUOUS_SUCCESS:%.*]] = arith.andi [[B_TRUTH]], [[A_TRUTH]]
+// Either success, (b && a) || !a, is !a || b.
 // CHECK: [[VACUOUS_SUCCESS:%.*]] = arith.xori [[A_TRUTH]],
-// CHECK: [[ANY_SUCCESS:%.*]] = arith.ori [[NONVACUOUS_SUCCESS]], [[VACUOUS_SUCCESS]]
+// CHECK: [[ANY_SUCCESS:%.*]] = arith.ori [[VACUOUS_SUCCESS]], [[B_TRUTH]]
 // CHECK: cf.cond_br [[ANY_SUCCESS]],
 // CHECK: simulation.spawn @[[IF_PASS]]
 // Negating a case with identical matching/default bodies flips both positive
@@ -76,19 +77,18 @@
 // CHECK-SAME: simulation.vacuous_sequence_alternatives = 1 : i64
 // CHECK: [[CASE_BODY:%.*]] = simulation.logic.is_true
 // CHECK: [[CASE_MATCH:%.*]] = simulation.logic.compare case_eq
-// CHECK: [[CASE_SUCCESS:%.*]] = arith.andi [[CASE_BODY]], [[CASE_MATCH]]
+// Either success, (body && match) || !match, is !match || body.
 // CHECK: [[NO_LABEL:%.*]] = arith.xori [[CASE_MATCH]],
-// CHECK: [[ANY_CASE_SUCCESS:%.*]] = arith.ori [[CASE_SUCCESS]], [[NO_LABEL]]
+// CHECK: [[ANY_CASE_SUCCESS:%.*]] = arith.ori [[NO_LABEL]], [[CASE_BODY]]
 // CHECK: cf.cond_br [[ANY_CASE_SUCCESS]],
 // CHECK: simulation.spawn @[[CASE_PASS]]
-// `not (a or b)` distributes into the single exact cube `!a && !b`.
+// `not (a or b)` distributes into the single exact cube `!a && !b`, whose
+// failure !(!a && !b) is a || b.
 // CHECK-LABEL: simulation.func private @unit_8(
 // CHECK: simulation.assert.sampled_read
-// CHECK: arith.xori
 // CHECK: simulation.assert.sampled_read
-// CHECK: arith.xori
-// CHECK: arith.andi
-// CHECK: arith.xori
+// CHECK: [[EITHER:%.*]] = arith.ori
+// CHECK: cf.cond_br [[EITHER]],
 // CHECK-NOT: simulation.branching_sequence_monitor
 // Negating `(!a && !b) || (a && !c) || (!b && !c)` in a cover property
 // produces the consensus DNF `(a && c) || (!a && b) || (b && c)`.

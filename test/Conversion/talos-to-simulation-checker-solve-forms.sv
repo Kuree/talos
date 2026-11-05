@@ -125,8 +125,9 @@ endmodule
 // DISABLE-NEXT: ^bb2(
 // DISABLE-NEXT: simulation.random.state
 // DISABLE-NEXT: %[[RESET:[0-9]+]] = simulation.ref.load %arg2
-// DISABLE-NEXT: arith.constant
-// DISABLE-NEXT: arith.xori %[[RESET]]
+// While disabled the check holds; otherwise it is whether the sampled
+// condition is known: `!reset ? known : 1` is `reset | known`.
+// DISABLE: arith.ori %[[RESET]], %{{[0-9]+}} : i1
 // DISABLE: simulation.random.solve
 // DISABLE: simulation.ref.store %{{[0-9]+}} to %arg3
 // DISABLE: simulation.ref.store %{{[0-9]+}} to %arg4

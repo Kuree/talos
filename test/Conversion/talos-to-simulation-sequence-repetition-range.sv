@@ -3,7 +3,7 @@
 // RUN: talos-opt %t.talos.mlir '--lower-talos-to-sim=opt-level=3' | FileCheck %s
 // RUN: talos-opt %t.talos.mlir '--lower-talos-to-sim=opt-level=3' '--encode-talos-sim-to-bytecode=vpi=off' -o /dev/null
 
-// (a or b) #-# a. Same-endpoint antecedent matches are distinct
+// (a or b) #-# c. Same-endpoint antecedent matches are distinct
 // existential obligations of one followed-by property attempt.
 // cover property ((a ##[1:2] b) |-> a). If simulation ends while an
 // antecedent endpoint is still possible, that path can no longer
@@ -133,20 +133,24 @@
 // CHECK: simulation.branching_antecedent_result_cancel
 // CHECK: cf.br {{.*}}simulation.branching_antecedent_backedge
 // Nested first_match scopes retain independent inner and outer priority
-// groups across all four exact endpoint combinations.
+// groups across all four exact endpoint combinations. A gate whose enabled
+// endpoint is itself the selected boundary is absorbed (s & (~m | s) = s).
 // CHECK-LABEL: simulation.func private @unit_6(
 // CHECK-SAME: simulation.branching_sequence_alternatives = 4 : i64
 // CHECK-SAME: simulation.first_match_monitor
 // CHECK-SAME: simulation.first_match_priority_groups = 2 : i64
-// CHECK-COUNT-10: simulation.first_match_priority}
+// CHECK-COUNT-6: simulation.first_match_priority}
+// CHECK-NOT: simulation.first_match_priority}
 // Two first_match terms concatenated at distinct syntax sites retain one
 // scope for the first and two independently activated scopes for the second.
-// Success in one activation cannot cancel another activation.
+// Success in one activation cannot cancel another activation. Gates whose
+// enabled endpoint is itself the selected boundary are absorbed, as above.
 // CHECK-LABEL: simulation.func private @unit_7(
 // CHECK-SAME: simulation.branching_sequence_alternatives = 4 : i64
 // CHECK-SAME: simulation.first_match_monitor
 // CHECK-SAME: simulation.first_match_priority_groups = 3 : i64
-// CHECK-COUNT-8: simulation.first_match_priority}
+// CHECK-COUNT-4: simulation.first_match_priority}
+// CHECK-NOT: simulation.first_match_priority}
 // A ranged prefix starts the same suffix first_match twice. Those activations
 // must have separate priority state so an early completion whose continuation
 // fails cannot suppress the later activation and its continuation.
@@ -199,9 +203,9 @@
 // Same-endpoint `or` alternatives feed one existential followed-by result.
 // Either successful consequent match executes the single pass callback; only
 // exhaustion without either success executes the single default failure.
-// CHECK: simulation.func private @[[FOLLOW_PASS:unit_12\.fork\.188\.0\.0]](
+// CHECK: simulation.func private @[[FOLLOW_PASS:unit_12\.fork\.189\.0\.0]](
 // CHECK: simulation.display
-// CHECK: simulation.func private @[[FOLLOW_FAIL:unit_12\.fork\.188\.1\.2]](
+// CHECK: simulation.func private @[[FOLLOW_FAIL:unit_12\.fork\.189\.1\.2]](
 // CHECK: simulation.bytes.constant "ERROR:
 // CHECK-LABEL: simulation.func private @unit_12(
 // CHECK-SAME: simulation.branching_antecedent_alternatives = 2 : i64
@@ -210,65 +214,73 @@
 // CHECK-SAME: simulation.branching_antecedent_result_coalescer
 // CHECK-SAME: simulation.branching_antecedent_result_horizon = 1 : i64
 // CHECK-SAME: simulation.followed_by_monitor
+// Each matched antecedent alternative triggers its own consequent channel.
+// The attempt passes when either triggered consequent matches and fails
+// without an antecedent match or without a consequent match:
+// ~matched | (matched & ~triggered) = ~(matched & triggered).
 // CHECK: [[A_SAMPLE:%.*]] = simulation.assert.sampled_read %arg0 from %arg2
 // CHECK: [[A_MATCH:%.*]] = simulation.logic.is_true [[A_SAMPLE]]
 // CHECK: [[B_SAMPLE:%.*]] = simulation.assert.sampled_read %arg0 from %arg3
 // CHECK: [[B_MATCH:%.*]] = simulation.logic.is_true [[B_SAMPLE]]
+// CHECK: [[C_SAMPLE:%.*]] = simulation.assert.sampled_read %arg0 from %arg4
+// CHECK: [[C_MATCH:%.*]] = simulation.logic.is_true [[C_SAMPLE]]
+// CHECK: [[A_TRIGGER:%.*]] = arith.andi [[A_MATCH]], [[C_MATCH]] {simulation.branching_antecedent_channel = 0 : i64, simulation.branching_antecedent_consequent_trigger
 // CHECK: [[ANTECEDENT_ANY:%.*]] = arith.ori [[A_MATCH]], [[B_MATCH]]
-// CHECK: arith.andi {{.*}}simulation.branching_antecedent_consequent_trigger
-// CHECK: [[CONSEQUENT_ANY:%.*]] = arith.ori
-// CHECK: [[FOLLOW_FAILED:%.*]] = arith.ori {{.*}} {simulation.branching_antecedent_existential_failure}
+// CHECK: [[B_TRIGGER:%.*]] = arith.andi [[B_MATCH]], [[C_MATCH]] {simulation.branching_antecedent_channel = 1 : i64, simulation.branching_antecedent_consequent_trigger
+// CHECK: [[CONSEQUENT_ANY:%.*]] = arith.ori [[A_TRIGGER]], [[B_TRIGGER]]
+// CHECK: [[SUCCEEDED:%.*]] = arith.andi [[ANTECEDENT_ANY]], [[CONSEQUENT_ANY]]
+// CHECK: [[FOLLOW_FAILED:%.*]] = arith.xori [[SUCCEEDED]], %true
 // CHECK: cf.cond_br [[FOLLOW_FAILED]],
 // CHECK: simulation.spawn @[[FOLLOW_FAIL]]
 // CHECK: cf.cond_br [[CONSEQUENT_ANY]],
 // CHECK: simulation.spawn @[[FOLLOW_PASS]]
-// CHECK-NOT: simulation.spawn @unit_12.fork.188.
+// CHECK-NOT: simulation.spawn @unit_12.fork.189.
 // CHECK: cf.br {{.*}}simulation.branching_antecedent_backedge
 // The strong cover consequent has no pending state, but the two ranged
 // antecedent traces and their matched history do. At EOS the source-age
 // coordinator unions those three words and emits one vacuous cover pass for
 // each of the two still-live source ages, oldest first.
-// CHECK-LABEL: simulation.func private @unit_13.$concurrent_eos_branch_report.203.pass(
+// CHECK-LABEL: simulation.func private @unit_13.$concurrent_eos_branch_report.204.pass(
 // CHECK-SAME: simulation.branching_antecedent_eos_report
 // CHECK: simulation.display
-// CHECK-LABEL: simulation.func private @unit_13.$concurrent_eos_branch.203(
+// CHECK-LABEL: simulation.func private @unit_13.$concurrent_eos_branch.204(
 // CHECK-SAME: %arg1: !simulation.ref<i64>
 // CHECK-SAME: %arg2: !simulation.ref<i64>
 // CHECK-SAME: %arg3: !simulation.ref<i64>
 // CHECK-SAME: simulation.branching_antecedent_eos_coalescer
 // CHECK-COUNT-3: simulation.ref.load
 // CHECK-NOT: simulation.ref.load
-// CHECK: simulation.spawn @unit_13.$concurrent_eos_branch_report.203.pass{{.*}}simulation.branching_antecedent_eos_result = "pass"{{.*}}simulation.branching_antecedent_eos_source_age = 2 : i64
-// CHECK: simulation.spawn @unit_13.$concurrent_eos_branch_report.203.pass{{.*}}simulation.branching_antecedent_eos_result = "pass"{{.*}}simulation.branching_antecedent_eos_source_age = 1 : i64
-// CHECK-NOT: simulation.spawn @unit_13.$concurrent_eos_branch_report.203.pass
-// CHECK-NOT: @unit_13.$concurrent_eos_branch_report.203.fail
+// CHECK: simulation.spawn @unit_13.$concurrent_eos_branch_report.204.pass{{.*}}simulation.branching_antecedent_eos_result = "pass"{{.*}}simulation.branching_antecedent_eos_source_age = 2 : i64
+// CHECK: simulation.spawn @unit_13.$concurrent_eos_branch_report.204.pass{{.*}}simulation.branching_antecedent_eos_result = "pass"{{.*}}simulation.branching_antecedent_eos_source_age = 1 : i64
+// CHECK-NOT: simulation.spawn @unit_13.$concurrent_eos_branch_report.204.pass
+// CHECK-NOT: @unit_13.$concurrent_eos_branch_report.204.fail
 // CHECK-LABEL: simulation.func private @unit_13(
 // CHECK-SAME: simulation.branching_antecedent_consequent_eos_strength = "strong"
 // CHECK-SAME: simulation.branching_antecedent_eos_coalescer
 // CHECK-SAME: simulation.branching_antecedent_result_horizon = 3 : i64
 // CHECK-COUNT-3: simulation.ref.alloc
 // CHECK-NOT: simulation.ref.alloc
-// CHECK: simulation.spawn @unit_13.$concurrent_eos_branch.203
+// CHECK: simulation.spawn @unit_13.$concurrent_eos_branch.204
 // Nonoverlapped followed-by owns two consequent handoff channels in addition
 // to its two ranged-antecedent words and matched history. The weak EOS
 // coordinator selects pass only where a consequent is pending; antecedent-only
 // ages select the one default failure, with no per-channel duplication.
-// CHECK-LABEL: simulation.func private @unit_14.$concurrent_eos_branch_report.218.pass(
+// CHECK-LABEL: simulation.func private @unit_14.$concurrent_eos_branch_report.219.pass(
 // CHECK-SAME: simulation.branching_antecedent_eos_report
 // CHECK: simulation.display
-// CHECK-LABEL: simulation.func private @unit_14.$concurrent_eos_branch_report.218.fail(
+// CHECK-LABEL: simulation.func private @unit_14.$concurrent_eos_branch_report.219.fail(
 // CHECK-SAME: simulation.branching_antecedent_eos_report
 // CHECK: simulation.bytes.constant "ERROR:
-// CHECK-LABEL: simulation.func private @unit_14.$concurrent_eos_branch.218(
+// CHECK-LABEL: simulation.func private @unit_14.$concurrent_eos_branch.219(
 // CHECK-SAME: simulation.branching_antecedent_eos_coalescer
 // CHECK-COUNT-5: simulation.ref.load
 // CHECK-NOT: simulation.ref.load
-// CHECK: simulation.spawn @unit_14.$concurrent_eos_branch_report.218.pass{{.*}}simulation.branching_antecedent_eos_result = "pass"{{.*}}simulation.branching_antecedent_eos_source_age = 3 : i64
-// CHECK: simulation.spawn @unit_14.$concurrent_eos_branch_report.218.fail{{.*}}simulation.branching_antecedent_eos_result = "fail"{{.*}}simulation.branching_antecedent_eos_source_age = 3 : i64
-// CHECK: simulation.spawn @unit_14.$concurrent_eos_branch_report.218.pass{{.*}}simulation.branching_antecedent_eos_result = "pass"{{.*}}simulation.branching_antecedent_eos_source_age = 2 : i64
-// CHECK: simulation.spawn @unit_14.$concurrent_eos_branch_report.218.fail{{.*}}simulation.branching_antecedent_eos_result = "fail"{{.*}}simulation.branching_antecedent_eos_source_age = 2 : i64
-// CHECK: simulation.spawn @unit_14.$concurrent_eos_branch_report.218.fail{{.*}}simulation.branching_antecedent_eos_result = "fail"{{.*}}simulation.branching_antecedent_eos_source_age = 1 : i64
-// CHECK-NOT: simulation.spawn @unit_14.$concurrent_eos_branch_report.218.
+// CHECK: simulation.spawn @unit_14.$concurrent_eos_branch_report.219.pass{{.*}}simulation.branching_antecedent_eos_result = "pass"{{.*}}simulation.branching_antecedent_eos_source_age = 3 : i64
+// CHECK: simulation.spawn @unit_14.$concurrent_eos_branch_report.219.fail{{.*}}simulation.branching_antecedent_eos_result = "fail"{{.*}}simulation.branching_antecedent_eos_source_age = 3 : i64
+// CHECK: simulation.spawn @unit_14.$concurrent_eos_branch_report.219.pass{{.*}}simulation.branching_antecedent_eos_result = "pass"{{.*}}simulation.branching_antecedent_eos_source_age = 2 : i64
+// CHECK: simulation.spawn @unit_14.$concurrent_eos_branch_report.219.fail{{.*}}simulation.branching_antecedent_eos_result = "fail"{{.*}}simulation.branching_antecedent_eos_source_age = 2 : i64
+// CHECK: simulation.spawn @unit_14.$concurrent_eos_branch_report.219.fail{{.*}}simulation.branching_antecedent_eos_result = "fail"{{.*}}simulation.branching_antecedent_eos_source_age = 1 : i64
+// CHECK-NOT: simulation.spawn @unit_14.$concurrent_eos_branch_report.219.
 // CHECK-LABEL: simulation.func private @unit_14(
 // CHECK-SAME: simulation.branching_antecedent_consequent_eos_strength = "weak"
 // CHECK-SAME: simulation.branching_antecedent_eos_coalescer
@@ -276,53 +288,53 @@
 // CHECK-SAME: simulation.followed_by_monitor
 // CHECK-COUNT-5: simulation.ref.alloc
 // CHECK-NOT: simulation.ref.alloc
-// CHECK: simulation.spawn @unit_14.$concurrent_eos_branch.218
+// CHECK: simulation.spawn @unit_14.$concurrent_eos_branch.219
 // An intrinsically strong s_nexttime consequent overrides assert property's
 // default weak sequence completion. At EOS, pending consequents fail while
 // sources with only an unfinished antecedent still pass vacuously, once per
 // source age and oldest first.
-// CHECK-LABEL: simulation.func private @unit_15.$concurrent_eos_branch_report.233.pass(
+// CHECK-LABEL: simulation.func private @unit_15.$concurrent_eos_branch_report.234.pass(
 // CHECK-SAME: simulation.branching_antecedent_eos_report
-// CHECK-LABEL: simulation.func private @unit_15.$concurrent_eos_branch_report.233.fail(
+// CHECK-LABEL: simulation.func private @unit_15.$concurrent_eos_branch_report.234.fail(
 // CHECK-SAME: simulation.branching_antecedent_eos_report
-// CHECK-LABEL: simulation.func private @unit_15.$concurrent_eos_branch.233(
+// CHECK-LABEL: simulation.func private @unit_15.$concurrent_eos_branch.234(
 // CHECK-SAME: simulation.branching_antecedent_eos_coalescer
 // CHECK-COUNT-5: simulation.ref.load
 // CHECK-NOT: simulation.ref.load
-// CHECK: simulation.spawn @unit_15.$concurrent_eos_branch_report.233.pass{{.*}}simulation.branching_antecedent_eos_result = "pass"{{.*}}simulation.branching_antecedent_eos_source_age = 3 : i64
-// CHECK: simulation.spawn @unit_15.$concurrent_eos_branch_report.233.fail{{.*}}simulation.branching_antecedent_eos_result = "fail"{{.*}}simulation.branching_antecedent_eos_source_age = 3 : i64
-// CHECK: simulation.spawn @unit_15.$concurrent_eos_branch_report.233.pass{{.*}}simulation.branching_antecedent_eos_result = "pass"{{.*}}simulation.branching_antecedent_eos_source_age = 2 : i64
-// CHECK: simulation.spawn @unit_15.$concurrent_eos_branch_report.233.fail{{.*}}simulation.branching_antecedent_eos_result = "fail"{{.*}}simulation.branching_antecedent_eos_source_age = 2 : i64
-// CHECK: simulation.spawn @unit_15.$concurrent_eos_branch_report.233.pass{{.*}}simulation.branching_antecedent_eos_result = "pass"{{.*}}simulation.branching_antecedent_eos_source_age = 1 : i64
-// CHECK-NOT: simulation.spawn @unit_15.$concurrent_eos_branch_report.233.
+// CHECK: simulation.spawn @unit_15.$concurrent_eos_branch_report.234.pass{{.*}}simulation.branching_antecedent_eos_result = "pass"{{.*}}simulation.branching_antecedent_eos_source_age = 3 : i64
+// CHECK: simulation.spawn @unit_15.$concurrent_eos_branch_report.234.fail{{.*}}simulation.branching_antecedent_eos_result = "fail"{{.*}}simulation.branching_antecedent_eos_source_age = 3 : i64
+// CHECK: simulation.spawn @unit_15.$concurrent_eos_branch_report.234.pass{{.*}}simulation.branching_antecedent_eos_result = "pass"{{.*}}simulation.branching_antecedent_eos_source_age = 2 : i64
+// CHECK: simulation.spawn @unit_15.$concurrent_eos_branch_report.234.fail{{.*}}simulation.branching_antecedent_eos_result = "fail"{{.*}}simulation.branching_antecedent_eos_source_age = 2 : i64
+// CHECK: simulation.spawn @unit_15.$concurrent_eos_branch_report.234.pass{{.*}}simulation.branching_antecedent_eos_result = "pass"{{.*}}simulation.branching_antecedent_eos_source_age = 1 : i64
+// CHECK-NOT: simulation.spawn @unit_15.$concurrent_eos_branch_report.234.
 // CHECK-LABEL: simulation.func private @unit_15(
 // CHECK-SAME: simulation.branching_antecedent_consequent_eos_strength = "strong"
 // CHECK-SAME: simulation.branching_antecedent_eos_coalescer
 // CHECK-SAME: simulation.branching_antecedent_result_horizon = 4 : i64
 // CHECK-COUNT-5: simulation.ref.alloc
 // CHECK-NOT: simulation.ref.alloc
-// CHECK: simulation.spawn @unit_15.$concurrent_eos_branch.233
+// CHECK: simulation.spawn @unit_15.$concurrent_eos_branch.234
 // Conversely, intrinsically weak nexttime overrides cover property's default
 // strong sequence completion. Every active source age succeeds at EOS, and
 // no failure report actor or dispatch is emitted.
-// CHECK-LABEL: simulation.func private @unit_16.$concurrent_eos_branch_report.249.pass(
+// CHECK-LABEL: simulation.func private @unit_16.$concurrent_eos_branch_report.250.pass(
 // CHECK-SAME: simulation.branching_antecedent_eos_report
-// CHECK-NOT: @unit_16.$concurrent_eos_branch_report.249.fail
-// CHECK-LABEL: simulation.func private @unit_16.$concurrent_eos_branch.249(
+// CHECK-NOT: @unit_16.$concurrent_eos_branch_report.250.fail
+// CHECK-LABEL: simulation.func private @unit_16.$concurrent_eos_branch.250(
 // CHECK-SAME: simulation.branching_antecedent_eos_coalescer
 // CHECK-COUNT-5: simulation.ref.load
 // CHECK-NOT: simulation.ref.load
-// CHECK: simulation.spawn @unit_16.$concurrent_eos_branch_report.249.pass{{.*}}simulation.branching_antecedent_eos_result = "pass"{{.*}}simulation.branching_antecedent_eos_source_age = 3 : i64
-// CHECK: simulation.spawn @unit_16.$concurrent_eos_branch_report.249.pass{{.*}}simulation.branching_antecedent_eos_result = "pass"{{.*}}simulation.branching_antecedent_eos_source_age = 2 : i64
-// CHECK: simulation.spawn @unit_16.$concurrent_eos_branch_report.249.pass{{.*}}simulation.branching_antecedent_eos_result = "pass"{{.*}}simulation.branching_antecedent_eos_source_age = 1 : i64
-// CHECK-NOT: simulation.spawn @unit_16.$concurrent_eos_branch_report.249.
+// CHECK: simulation.spawn @unit_16.$concurrent_eos_branch_report.250.pass{{.*}}simulation.branching_antecedent_eos_result = "pass"{{.*}}simulation.branching_antecedent_eos_source_age = 3 : i64
+// CHECK: simulation.spawn @unit_16.$concurrent_eos_branch_report.250.pass{{.*}}simulation.branching_antecedent_eos_result = "pass"{{.*}}simulation.branching_antecedent_eos_source_age = 2 : i64
+// CHECK: simulation.spawn @unit_16.$concurrent_eos_branch_report.250.pass{{.*}}simulation.branching_antecedent_eos_result = "pass"{{.*}}simulation.branching_antecedent_eos_source_age = 1 : i64
+// CHECK-NOT: simulation.spawn @unit_16.$concurrent_eos_branch_report.250.
 // CHECK-LABEL: simulation.func private @unit_16(
 // CHECK-SAME: simulation.branching_antecedent_consequent_eos_strength = "weak"
 // CHECK-SAME: simulation.branching_antecedent_eos_coalescer
 // CHECK-SAME: simulation.branching_antecedent_result_horizon = 4 : i64
 // CHECK-COUNT-5: simulation.ref.alloc
 // CHECK-NOT: simulation.ref.alloc
-// CHECK: simulation.spawn @unit_16.$concurrent_eos_branch.249
+// CHECK: simulation.spawn @unit_16.$concurrent_eos_branch.250
 // CHECK-NOT: talos.sv.assertion
 
 `timescale 1ns / 1ns
@@ -345,7 +357,8 @@ module top;
   assert property (@(posedge clk) (always [1:2] (first_match(a ##[1:2] b))));
   assert property (@(posedge clk) ((a ##[1:2] b) |-> (a ##1 b)))
     $display;
-  assert property (@(posedge clk) ((a or b) #-# a))
+  logic c;
+  assert property (@(posedge clk) ((a or b) #-# c))
     $display;
   cover property (@(posedge clk) ((a ##[1:2] b) |-> a))
     $display;

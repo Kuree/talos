@@ -16,25 +16,49 @@ namespace {
 // Identity distinguishes two exact dynamically selected addresses whose
 // may-access hulls overlap. The hull is used for kills, never for equality.
 using Range = std::tuple<Value, uint64_t, uint64_t, uint64_t, Type, unsigned>;
-using Memory = DenseMap<Range, Value>;
+/// SSA names known to equal a location's contents: the oldest, and the newest
+/// when it differs. Each is defined on every live path to the program point,
+/// so both dominate it and the oldest dominates the newest. Keeping only these
+/// two bounds the work per location; a name dropped in between would only be
+/// forwarded to the oldest anyway.
+using Names = SmallVector<Value, 2>;
+using Memory = DenseMap<Range, Names>;
+/// The oldest name of a location's contents, or null if none is known.
+static Value lookupOldest(const Memory &memory, const Range &key) {
+  auto found = memory.find(key);
+  return found == memory.end() ? Value{} : found->second.front();
+}
 class MemoryLattice final : public dataflow::AbstractDenseLattice {
 public:
   using AbstractDenseLattice::AbstractDenseLattice;
   bool reachable = false;
   Memory values;
-  ChangeResult merge(const Memory &incoming) {
+  /// A join keeps, per location, only the names known on every incoming
+  /// path; a location left without one is unknown.
+  ChangeResult merge(Memory incoming) {
     if (!reachable) {
       reachable = true;
-      values = incoming;
+      values = std::move(incoming);
       return ChangeResult::Change;
     }
+    bool changed = false;
     SmallVector<Range> remove;
-    for (const auto &entry : values)
-      if (incoming.lookup(entry.first) != entry.second)
-        remove.push_back(entry.first);
+    for (auto &[key, names] : values) {
+      auto other = incoming.find(key);
+      size_t before = names.size();
+      if (other == incoming.end())
+        names.clear();
+      else
+        llvm::erase_if(names, [&](Value name) {
+          return !llvm::is_contained(other->second, name);
+        });
+      changed |= names.size() != before;
+      if (names.empty())
+        remove.push_back(key);
+    }
     for (const auto &key : remove)
       values.erase(key);
-    return remove.empty() ? ChangeResult::NoChange : ChangeResult::Change;
+    return changed ? ChangeResult::Change : ChangeResult::NoChange;
   }
   ChangeResult join(const AbstractDenseLattice &rhs) override {
     const auto &other = static_cast<const MemoryLattice &>(rhs);
@@ -55,8 +79,18 @@ public:
       return success();
     Memory next = before.values;
     if (auto load = dyn_cast<sim::SimRefLoadOp>(op)) {
-      if (auto key = ranges.find(load.getReference()); key != ranges.end())
-        next.try_emplace(key->second, load.getResult());
+      // The load's result becomes the newest name of the contents. Keeping
+      // the oldest too, rather than only one of them, lets a join keep a name
+      // all of its predecessors share (a loop header, a re-read below a
+      // branch) and keeps an optimistic first visit from leaving a name the
+      // settled visit lacks.
+      if (auto key = ranges.find(load.getReference()); key != ranges.end()) {
+        Names &names = next[key->second];
+        if (names.size() < 2)
+          names.push_back(load.getResult());
+        else
+          names.back() = load.getResult();
+      }
     } else if (auto store = dyn_cast<sim::SimRefStoreOp>(op)) {
       auto key = ranges.find(store.getReference());
       if (key == ranges.end()) {
@@ -77,15 +111,15 @@ public:
         for (const auto &range : remove)
           next.erase(range);
         if (local || canonicalWrites)
-          next[key->second] = store.getValue();
+          next[key->second] = Names{store.getValue()};
       }
     } else if (auto allocation = dyn_cast<sim::SimRefAllocOp>(op)) {
       if (auto key = ranges.find(allocation.getResult()); key != ranges.end())
-        next[key->second] = allocation.getInitialValue();
+        next[key->second] = Names{allocation.getInitialValue()};
     } else if (!isMemoryEffectFree(op)) {
       next.clear();
     }
-    propagateIfChanged(after, after->merge(next));
+    propagateIfChanged(after, after->merge(std::move(next)));
     return success();
   }
   void visitCallControlFlowTransfer(CallOpInterface call,
@@ -114,7 +148,7 @@ public:
       }
     for (const auto &key : remove)
       next.erase(key);
-    propagateIfChanged(after, after->merge(next));
+    propagateIfChanged(after, after->merge(std::move(next)));
   }
 
 private:
@@ -186,7 +220,7 @@ SourceMemoryAnalysis::SourceMemoryAnalysis(
     const auto *before =
         solver.lookupState<MemoryLattice>(solver.getProgramPointBefore(load));
     if (key != ranges.end() && before && before->reachable)
-      if (Value previous = before->values.lookup(key->second);
+      if (Value previous = lookupOldest(before->values, key->second);
           previous && previous != load.getResult())
         forwarded.try_emplace(load, previous);
     if (before && before->reachable) {
@@ -204,7 +238,7 @@ SourceMemoryAnalysis::SourceMemoryAnalysis(
       if (parent && sim::getPackedScalarType(
                         cast<sim::RefType>(parent.getType()).getElementType()))
         if (auto key = ranges.find(parent); key != ranges.end())
-          if (Value snapshot = before->values.lookup(key->second))
+          if (Value snapshot = lookupOldest(before->values, key->second))
             slices.try_emplace(load, SliceSnapshot{snapshot, offset});
     }
     // A field read may use a dominating whole-aggregate store even when the
@@ -236,7 +270,7 @@ SourceMemoryAnalysis::SourceMemoryAnalysis(
         auto parent = ranges.find(reference);
         if (parent == ranges.end())
           continue;
-        if (Value snapshot = before->values.lookup(parent->second)) {
+        if (Value snapshot = lookupOldest(before->values, parent->second)) {
           subelements.try_emplace(load, SubelementSnapshot{snapshot, indices});
           break;
         }
@@ -263,7 +297,7 @@ SourceMemoryAnalysis::SourceMemoryAnalysis(
     auto &range = parent->second;
     Range whole{Value{},      *range.descriptor, range.low,
                 *parentWidth, parentType,        false};
-    if (Value snapshot = before->values.lookup(whole))
+    if (Value snapshot = lookupOldest(before->values, whole))
       elements.try_emplace(load, ElementSnapshot{snapshot, element.getIndex()});
   });
 }

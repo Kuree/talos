@@ -73,7 +73,9 @@
 // CHECK-LABEL: simulation.func private @unit_2.$concurrent_eos_branch.69(
 // CHECK-SAME: schedule.concurrent_eos_coordinator
 // CHECK-SAME: simulation.branching_antecedent_eos_coalescer
-// CHECK-COUNT-2: simulation.ref.load
+// The fail test (live | matched history) & live is the live obligation alone,
+// so only that word is read.
+// CHECK: simulation.ref.load
 // CHECK-NOT: simulation.ref.load
 // CHECK: cf.cond_br {{.*}} {simulation.branching_antecedent_eos_result = "fail", simulation.branching_antecedent_eos_source_age = 1 : i64}
 // CHECK: simulation.spawn @unit_2.$concurrent_eos_branch_report.69.fail{{.*}} {simulation.branching_antecedent_eos_result = "fail", simulation.branching_antecedent_eos_source_age = 1 : i64}

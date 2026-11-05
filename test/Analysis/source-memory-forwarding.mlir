@@ -8,6 +8,8 @@ module {
     simulation.storage.decl 0 in 0 : !simulation.logic<16> design
     simulation.storage.decl 1 in 0 : i32 design
     simulation.storage.decl 2 in 0 : !simulation.logic<8> design
+    simulation.storage.decl 5 in 0 : i32 design
+    simulation.storage.decl 6 in 0 : i32 design
     simulation.code_unit.decl 1 in 0 function hierarchy "forwarded_offset"
     // An offset load is itself forwarded before the dependent slice load.
     // Frozen analysis facts must follow that replacement, including X/Z bits.
@@ -112,6 +114,96 @@ module {
       %slice = simulation.ref.extract %packed from 0 : !simulation.ref<!simulation.logic<16>> -> !simulation.ref<!simulation.logic<8>>
       %read = simulation.ref.load %slice : !simulation.ref<!simulation.logic<8>> -> !simulation.logic<8>
       simulation.ref.store %read to %out : !simulation.logic<8>, !simulation.ref<!simulation.logic<8>>
+      simulation.return
+    }
+    // A join whose other predecessor has a side effect knows nothing, so its
+    // load is kept; a re-read below that load still uses it. The solver first
+    // visits the join with the fallthrough predecessor's older read, and the
+    // load must not publish that older name, or the settled visit would
+    // conflict with it and drop the fact for the re-read.
+    // CHECK-LABEL: simulation.func @reread_after_join
+    // CHECK: simulation.time.now
+    // CHECK: ^[[JOIN:bb[0-9]+]]:
+    // CHECK-NEXT: %[[SECOND:.*]] = simulation.ref.load
+    // CHECK-NOT: simulation.ref.load
+    // CHECK: %[[NARROW:.*]] = arith.trunci %[[SECOND]]
+    // CHECK-NEXT: simulation.ref.store %[[NARROW]]
+    // CHECK: simulation.return
+    simulation.code_unit.decl 6 in 0 function hierarchy "reread_after_join"
+    simulation.func @reread_after_join(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 8 : i32, code_unit_id = 6 : i64} {
+      %flag = simulation.context.storage %ctx[1] : !simulation.ref<i32>
+      %copy = simulation.context.storage %ctx[4] : !simulation.ref<i8>
+      %zero = arith.constant 0 : i32
+      %first = simulation.ref.load %flag : !simulation.ref<i32> -> i32
+      %low = arith.cmpi eq, %first, %zero : i32
+      cf.cond_br %low, ^join, ^side
+    ^side:
+      %now = simulation.time.now %ctx
+      cf.br ^join
+    ^join:
+      %second = simulation.ref.load %flag : !simulation.ref<i32> -> i32
+      %again = arith.cmpi eq, %second, %zero : i32
+      cf.cond_br %again, ^reread, ^done
+    ^reread:
+      %third = simulation.ref.load %flag : !simulation.ref<i32> -> i32
+      %narrow = arith.trunci %third : i32 to i8
+      simulation.ref.store %narrow to %copy : i8, !simulation.ref<i8>
+      cf.br ^done
+    ^done:
+      simulation.return
+    }
+    // A store before a loop names the contents on entry; the loop's own load
+    // adds a name the back edge carries, and the header keeps the shared one.
+    // CHECK-LABEL: simulation.func @loop_invariant
+    // CHECK: %[[V:.*]] = simulation.ref.load
+    // CHECK-NOT: simulation.ref.load
+    // CHECK: arith.addi %[[V]],
+    simulation.code_unit.decl 7 in 0 function hierarchy "loop_invariant"
+    simulation.func @loop_invariant(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 8 : i32, code_unit_id = 7 : i64} {
+      %flag = simulation.context.storage %ctx[5] : !simulation.ref<i32>
+      %src = simulation.context.storage %ctx[6] : !simulation.ref<i32>
+      %out = simulation.context.storage %ctx[1] : !simulation.ref<i32>
+      %zero = arith.constant 0 : i32
+      %one = arith.constant 1 : i32
+      %ten = arith.constant 10 : i32
+      %v = simulation.ref.load %src : !simulation.ref<i32> -> i32
+      simulation.ref.store %v to %flag : i32, !simulation.ref<i32>
+      cf.br ^head(%zero : i32)
+    ^head(%i: i32):
+      %x = simulation.ref.load %flag : !simulation.ref<i32> -> i32
+      %s = arith.addi %x, %i : i32
+      simulation.ref.store %s to %out : i32, !simulation.ref<i32>
+      %n = arith.addi %i, %one : i32
+      %c = arith.cmpi slt, %n, %ten : i32
+      cf.cond_br %c, ^head(%n : i32), ^exit
+    ^exit:
+      simulation.return
+    }
+    // A load in one arm adds a name only that arm knows; the join keeps the
+    // stored value both arms share, and both later loads use it.
+    // CHECK-LABEL: simulation.func @store_branch_load_join
+    // CHECK: %[[V:.*]] = simulation.ref.load
+    // CHECK-NOT: simulation.ref.load
+    // CHECK: arith.trunci %[[V]]
+    simulation.code_unit.decl 8 in 0 function hierarchy "store_branch_load_join"
+    simulation.func @store_branch_load_join(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 8 : i32, code_unit_id = 8 : i64} {
+      %flag = simulation.context.storage %ctx[5] : !simulation.ref<i32>
+      %copy = simulation.context.storage %ctx[4] : !simulation.ref<i8>
+      %other = simulation.context.storage %ctx[1] : !simulation.ref<i32>
+      %src = simulation.context.storage %ctx[6] : !simulation.ref<i32>
+      %zero = arith.constant 0 : i32
+      %v = simulation.ref.load %src : !simulation.ref<i32> -> i32
+      %c = arith.cmpi eq, %v, %zero : i32
+      simulation.ref.store %v to %flag : i32, !simulation.ref<i32>
+      cf.cond_br %c, ^a, ^join
+    ^a:
+      %x = simulation.ref.load %flag : !simulation.ref<i32> -> i32
+      simulation.ref.store %x to %other : i32, !simulation.ref<i32>
+      cf.br ^join
+    ^join:
+      %y = simulation.ref.load %flag : !simulation.ref<i32> -> i32
+      %narrow = arith.trunci %y : i32 to i8
+      simulation.ref.store %narrow to %copy : i8, !simulation.ref<i8>
       simulation.return
     }
   }

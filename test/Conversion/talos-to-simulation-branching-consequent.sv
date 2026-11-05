@@ -12,7 +12,7 @@
 // disable iff (rst) (b or c): no live state word is required.
 // cover property (a or b) |=> (b or c). The matched-history word
 // delays vacuity until both antecedent alternatives are exhausted.
-// (a or b) |-> (b or c)
+// (a or b) |-> (c or rst)
 // cover property a |-> ((b ##1 c) or (b ##2 c)). Pending temporal
 // alternatives are strong by default, so EOS creates no cover pass.
 // The overlapped cover consequent samples both exact alternatives on the
@@ -236,7 +236,7 @@
 // CHECK: cf.br {{.*}} : i64, i64, i64) {{.*}}simulation.branching_antecedent_backedge
 // CHECK-NOT: simulation.spawn @unit_5.fork.96.0.0
 // The overlapped combined form has no consequent state: both exact
-// antecedent matches consume the one shared B-or-C truth on this sample.
+// antecedent matches consume the one shared C-or-RST truth on this sample.
 // CHECK-LABEL: simulation.func private @unit_6(
 // CHECK-SAME: simulation.branching_antecedent_alternatives = 2 : i64
 // CHECK-SAME: simulation.branching_antecedent_match_channels = 2 : i64
@@ -251,7 +251,9 @@
 // CHECK: [[OVERLAP_B_MATCH:%.*]] = simulation.logic.is_true [[OVERLAP_B]]
 // CHECK: [[OVERLAP_C:%.*]] = simulation.assert.sampled_read %arg0 from %arg4
 // CHECK: [[OVERLAP_C_MATCH:%.*]] = simulation.logic.is_true [[OVERLAP_C]]
-// CHECK: [[OVERLAP_OR:%.*]] = arith.ori [[OVERLAP_B_MATCH]], [[OVERLAP_C_MATCH]]
+// CHECK: [[OVERLAP_RST:%.*]] = simulation.assert.sampled_read %arg0 from %arg5
+// CHECK: [[OVERLAP_RST_MATCH:%.*]] = simulation.logic.is_true [[OVERLAP_RST]]
+// CHECK: [[OVERLAP_OR:%.*]] = arith.ori [[OVERLAP_C_MATCH]], [[OVERLAP_RST_MATCH]]
 // CHECK: [[OVERLAP_TRIGGER0:%.*]] = arith.andi [[OVERLAP_A_MATCH]], [[OVERLAP_OR]]
 // CHECK: [[OVERLAP_FAILED0:%.*]] = arith.xori [[OVERLAP_TRIGGER0]], {{%.*}}
 // CHECK: arith.andi [[OVERLAP_A_MATCH]], [[OVERLAP_FAILED0]]
@@ -292,7 +294,7 @@ module top;
   assert property (@(posedge clk) disable iff (rst) (b or c));
   cover property (@(posedge clk) ((a or b) |=> (b or c)))
     c = b;
-  assert property (@(posedge clk) ((a or b) |-> (b or c)));
+  assert property (@(posedge clk) ((a or b) |-> (c or rst)));
   cover property (@(posedge clk) (a |-> ((b ##1 c) or (b ##2 c))))
     $display;
 endmodule

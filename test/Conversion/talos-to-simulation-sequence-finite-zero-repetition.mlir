@@ -134,12 +134,13 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // CHECK: %[[GOTO_ZERO:.*]] = simulation.logic.constant false, false
 // CHECK-NEXT: %[[GOTO_FALSE:.*]] = simulation.logic.compare case_eq %[[GOTO_REPEAT]], %[[GOTO_ZERO]]
 // CHECK-NEXT: %[[GOTO_KNOWN:.*]] = arith.ori %[[GOTO_TRUE]], %[[GOTO_FALSE]]
-// CHECK: %[[GOTO_UNKNOWN:.*]] = arith.xori %[[GOTO_KNOWN]],
 // CHECK: %[[GOTO_TERMINAL_SAMPLE:.*]] = simulation.assert.sampled_read
 // CHECK-NEXT: %[[GOTO_TERMINAL:.*]] = simulation.logic.is_true %[[GOTO_TERMINAL_SAMPLE]]
 // CHECK: %[[GOTO_NOT_TERMINAL:.*]] = arith.xori %[[GOTO_TERMINAL]],
 // CHECK: arith.select %[[GOTO_TERMINAL]], %[[GOTO_ENTRY]],
-// CHECK: arith.andi %[[GOTO_NOT_TERMINAL]], %[[GOTO_UNKNOWN]]
+// ~terminal & ~known (the X/Z class) is selected through terminal | known.
+// CHECK: %[[GOTO_RESOLVED:.*]] = arith.ori %[[GOTO_TERMINAL]], %[[GOTO_KNOWN]]
+// CHECK: arith.select %[[GOTO_RESOLVED]], %{{.*}}, %[[GOTO_ENTRY]] : i64
 // CHECK: arith.select %[[GOTO_TERMINAL]], %[[GOTO_PENDING_2]],
 // CHECK: arith.select %[[GOTO_TERMINAL]], {{%.*}}, %[[GOTO_PENDING_2]]
 // CHECK-NOT: simulation.assert.sampled_read
@@ -173,16 +174,16 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // CHECK: %[[NONCONSECUTIVE_ZERO:.*]] = simulation.logic.constant false, false
 // CHECK-NEXT: %[[NONCONSECUTIVE_FALSE:.*]] = simulation.logic.compare case_eq %[[NONCONSECUTIVE_REPEAT]], %[[NONCONSECUTIVE_ZERO]]
 // CHECK-NEXT: %[[NONCONSECUTIVE_KNOWN:.*]] = arith.ori %[[NONCONSECUTIVE_TRUE]], %[[NONCONSECUTIVE_FALSE]]
-// CHECK: %[[NONCONSECUTIVE_UNKNOWN:.*]] = arith.xori %[[NONCONSECUTIVE_KNOWN]],
 // CHECK: %[[NONCONSECUTIVE_TERMINAL_SAMPLE:.*]] = simulation.assert.sampled_read
 // CHECK-NEXT: %[[NONCONSECUTIVE_TERMINAL:.*]] = simulation.logic.is_true %[[NONCONSECUTIVE_TERMINAL_SAMPLE]]
 // CHECK: %[[NONCONSECUTIVE_NOT_TERMINAL:.*]] = arith.xori %[[NONCONSECUTIVE_TERMINAL]],
 // CHECK: %[[NONCONSECUTIVE_CONSUMES:.*]] = arith.andi %[[NONCONSECUTIVE_NOT_TERMINAL]], %[[NONCONSECUTIVE_TRUE]]
 // CHECK-NEXT: %[[NONCONSECUTIVE_WAITS:.*]] = arith.andi %[[NONCONSECUTIVE_NOT_TERMINAL]], %[[NONCONSECUTIVE_FALSE]]
-// CHECK-NEXT: %[[NONCONSECUTIVE_UNKNOWN_ACTIVE:.*]] = arith.andi %[[NONCONSECUTIVE_NOT_TERMINAL]], %[[NONCONSECUTIVE_UNKNOWN]]
+// The X/Z class ~terminal & ~known is selected through terminal | known.
+// CHECK-NEXT: %[[NONCONSECUTIVE_RESOLVED:.*]] = arith.ori %[[NONCONSECUTIVE_TERMINAL]], %[[NONCONSECUTIVE_KNOWN]]
 // CHECK: arith.select %[[NONCONSECUTIVE_CONSUMES]], %[[NONCONSECUTIVE_2]],
 // CHECK: arith.select %[[NONCONSECUTIVE_WAITS]], %[[NONCONSECUTIVE_2]],
-// CHECK: arith.select %[[NONCONSECUTIVE_UNKNOWN_ACTIVE]], %[[NONCONSECUTIVE_2]],
+// CHECK: arith.select %[[NONCONSECUTIVE_RESOLVED]], %{{.*}}, %[[NONCONSECUTIVE_2]] : i64
 // CHECK-NOT: simulation.assert.sampled_read
 // CHECK: simulation.spawn @unit_1.fork.31.0.2
 

@@ -21,6 +21,7 @@
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "mlir/Interfaces/FunctionImplementation.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Interfaces/Utils/InferIntRangeCommon.h"
 #include "mlir/Transforms/InliningUtils.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -4392,6 +4393,77 @@ struct CompareWithZero final : OpRewritePattern<SimLogicCompareOp> {
   }
 };
 
+/// A one-bit value compared with a known constant by an equality or relational
+/// operator is 1, 0 or X as the value is 1, 0 or unknown (11.4.4, 11.4.5), so
+/// when the two known outcomes differ the comparison is the truth of the value
+/// (|x, which maps Z to X) or its negation. A comparison decided for both
+/// known values still yields X for an unknown one and is left alone.
+struct CompareBitWithConstant final : OpRewritePattern<SimLogicCompareOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(SimLogicCompareOp op,
+                                PatternRewriter &rewriter) const override {
+    Value value = op.getLhs();
+    std::optional<LogicPlanes> constant = getConstantPlanes(op.getRhs());
+    if (cast<LogicType>(value.getType()).getWidth() != 1 || !constant ||
+        !constant->unknown.isZero() || isConstantValue(value))
+      return failure();
+    std::optional<arith::CmpIPredicate> predicate;
+    switch (op.getKind()) {
+    case CompareKind::Eq:
+      predicate = arith::CmpIPredicate::eq;
+      break;
+    case CompareKind::Ne:
+      predicate = arith::CmpIPredicate::ne;
+      break;
+    case CompareKind::ULT:
+      predicate = arith::CmpIPredicate::ult;
+      break;
+    case CompareKind::ULE:
+      predicate = arith::CmpIPredicate::ule;
+      break;
+    case CompareKind::UGT:
+      predicate = arith::CmpIPredicate::ugt;
+      break;
+    case CompareKind::UGE:
+      predicate = arith::CmpIPredicate::uge;
+      break;
+    case CompareKind::SLT:
+      predicate = arith::CmpIPredicate::slt;
+      break;
+    case CompareKind::SLE:
+      predicate = arith::CmpIPredicate::sle;
+      break;
+    case CompareKind::SGT:
+      predicate = arith::CmpIPredicate::sgt;
+      break;
+    case CompareKind::SGE:
+      predicate = arith::CmpIPredicate::sge;
+      break;
+    default:
+      return failure();
+    }
+    auto evaluate = [&](const APInt &bit) {
+      return *intrange::evaluatePred(
+          static_cast<intrange::CmpPredicate>(*predicate),
+          ConstantIntRanges::constant(bit),
+          ConstantIntRanges::constant(constant->value));
+    };
+    bool set = evaluate(APInt::getAllOnes(1));
+    if (set == evaluate(APInt::getZero(1)))
+      return failure();
+    Location location = op.getLoc();
+    if (set)
+      replaceWithNewOp(rewriter, op,
+                       SimLogicReductionOp::create(rewriter, location,
+                                                   op.getType(),
+                                                   ReductionKind::Or, value));
+    else
+      replaceWithNewOp(rewriter, op, createNegation(rewriter, location, value));
+    return success();
+  }
+};
+
 /// Table 11-20 is symmetric in the two arms, and an X or Z condition stays
 /// ambiguous under negation, so a negated condition swaps the arms. With
 /// constant one-bit arms the conditional operator is a truth test.
@@ -4428,6 +4500,33 @@ struct SimplifyMuxCondition final : OpRewritePattern<SimLogicMuxOp> {
                          createNegation(rewriter, location, op.getCondition()));
         return success();
       }
+    }
+    // A one-bit constant arm against an arm that cannot hold Z is logic, for
+    // every condition including X and Z. An ambiguous condition returns an
+    // arm when the arms are == (11.4.11), else merges them by Table 11-20, so
+    // c ? 1 : x is 1 or X exactly as c | x is (Table 11-12), and likewise for
+    // the other three forms with & (Table 11-11) and ~c (Table 11-15). A Z arm
+    // passes through a known condition unchanged, while the logic form maps
+    // it to X, so it is excluded.
+    if (op.getType().getWidth() == 1) {
+      Value onTrue = op.getTrueValue(), onFalse = op.getFalseValue();
+      auto logic = [&](BinaryKind kind, Value lhs, Value rhs) {
+        replaceWithNewOp(rewriter, op,
+                         SimLogicBinaryOp::create(rewriter, location,
+                                                  op.getType(), kind, lhs, rhs));
+        return success();
+      };
+      auto notCondition = [&] {
+        return createNegation(rewriter, location, op.getCondition());
+      };
+      if (isKnownOne(onTrue) && cannotHoldHighImpedance(onFalse))
+        return logic(BinaryKind::Or, op.getCondition(), onFalse);
+      if (isKnownZero(onFalse) && cannotHoldHighImpedance(onTrue))
+        return logic(BinaryKind::And, op.getCondition(), onTrue);
+      if (isKnownZero(onTrue) && cannotHoldHighImpedance(onFalse))
+        return logic(BinaryKind::And, notCondition(), onFalse);
+      if (isKnownOne(onFalse) && cannotHoldHighImpedance(onTrue))
+        return logic(BinaryKind::Or, notCondition(), onTrue);
     }
     // Table 11-20 keeps matching known bits and turns Z into X, so equal arms
     // that cannot hold Z are returned unchanged.
@@ -4988,8 +5087,8 @@ void SimStringToPackedExactOp::getCanonicalizationPatterns(
 
 void SimLogicCompareOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                                     MLIRContext *context) {
-  results.add<NormalizeCompareConstant, TwoStateCompare, CompareWithZero>(
-      context);
+  results.add<NormalizeCompareConstant, TwoStateCompare, CompareWithZero,
+              CompareBitWithConstant>(context);
 }
 
 void SimLogicResizeOp::getCanonicalizationPatterns(RewritePatternSet &results,
@@ -5115,9 +5214,358 @@ SimRandomInitializationLeaveOp::canonicalize(SimRandomInitializationLeaveOp op,
   return success();
 }
 
+namespace {
+
+//===----------------------------------------------------------------------===//
+// i1 arith identities that upstream arith does not fold. Registered on the
+// simulation dialect, like ExtractBitsInsertWithTruncation, so they apply to
+// every arith op in a context that has loaded it. Talos produces no poison
+// (every IEEE 1800-2023 operator result is defined, and the lowering emits
+// only total arith: clamped shift amounts, guarded division, no overflow
+// flags or ub.poison), so the logic forms below are exact; a select that
+// becomes and/or would otherwise propagate a poison arm it used to discard.
+//===----------------------------------------------------------------------===//
+
+static bool isI1(Type type) { return type.isSignlessInteger(1); }
+
+static Value buildNotI1(PatternRewriter &rewriter, Location location,
+                        Value value) {
+  return arith::XOrIOp::create(
+      rewriter, location, value,
+      arith::ConstantOp::create(rewriter, location, rewriter.getBoolAttr(true)));
+}
+
+/// Whether `value` is xori(of, true).
+static bool isNotI1Of(Value value, Value of) {
+  auto negation = value.getDefiningOp<arith::XOrIOp>();
+  return negation && isI1(value.getType()) &&
+         ((negation.getLhs() == of && matchPattern(negation.getRhs(), m_One())) ||
+          (negation.getRhs() == of && matchPattern(negation.getLhs(), m_One())));
+}
+
+/// An i1 select with a constant, repeated or negated-condition arm is logic:
+///   select(c, true, x) = c | x     select(c, x, false) = c & x
+///   select(c, false, x) = ~c & x   select(c, x, true) = ~c | x
+///   select(c, c, x) = c | x        select(c, x, c) = c & x
+///   select(c, ~c, x) = ~c & x      select(c, x, ~c) = ~c | x
+/// Upstream folds select(c, true, false), select(c, false, true), equal arms
+/// and a negated condition; these cover the remaining forms short-circuit
+/// lowering produces.
+struct SelectI1ToLogic final : OpRewritePattern<arith::SelectOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::SelectOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!isI1(op.getType()) || !isI1(op.getCondition().getType()))
+      return failure();
+    Value condition = op.getCondition();
+    Value onTrue = op.getTrueValue(), onFalse = op.getFalseValue();
+    Location location = op.getLoc();
+    if (matchPattern(onTrue, m_One()) || onTrue == condition) {
+      rewriter.replaceOpWithNewOp<arith::OrIOp>(op, condition, onFalse);
+      return success();
+    }
+    if (matchPattern(onFalse, m_Zero()) || onFalse == condition) {
+      rewriter.replaceOpWithNewOp<arith::AndIOp>(op, condition, onTrue);
+      return success();
+    }
+    if (matchPattern(onTrue, m_Zero())) {
+      rewriter.replaceOpWithNewOp<arith::AndIOp>(
+          op, buildNotI1(rewriter, location, condition), onFalse);
+      return success();
+    }
+    if (matchPattern(onFalse, m_One())) {
+      rewriter.replaceOpWithNewOp<arith::OrIOp>(
+          op, buildNotI1(rewriter, location, condition), onTrue);
+      return success();
+    }
+    if (isNotI1Of(onTrue, condition)) {
+      rewriter.replaceOpWithNewOp<arith::AndIOp>(op, onTrue, onFalse);
+      return success();
+    }
+    if (isNotI1Of(onFalse, condition)) {
+      rewriter.replaceOpWithNewOp<arith::OrIOp>(op, onFalse, onTrue);
+      return success();
+    }
+    return failure();
+  }
+};
+
+/// Rewrites a comparison against a constant whose left operand is `whenSet`
+/// when `bit` holds and `whenClear` otherwise to a constant, `bit` or ~`bit`.
+static LogicalResult replaceTwoValueComparison(PatternRewriter &rewriter,
+                                               arith::CmpIOp op, Value bit,
+                                               const APInt &whenSet,
+                                               const APInt &whenClear,
+                                               const APInt &constant) {
+  auto evaluate = [&](const APInt &value) {
+    return *intrange::evaluatePred(
+        static_cast<intrange::CmpPredicate>(op.getPredicate()),
+        ConstantIntRanges::constant(value),
+        ConstantIntRanges::constant(constant));
+  };
+  bool set = evaluate(whenSet);
+  bool clear = evaluate(whenClear);
+  if (set == clear)
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(op,
+                                                   rewriter.getBoolAttr(set));
+  else
+    rewriter.replaceOp(op, set ? bit : buildNotI1(rewriter, op.getLoc(), bit));
+  return success();
+}
+
+/// An i1 compared with a constant is a constant, the bit or its negation for
+/// every predicate, e.g. cmpi eq x, false and cmpi ult x, true are ~x. Upstream
+/// folds only cmpi ne x, false and cmpi eq x, true (to x).
+struct CmpI1Constant final : OpRewritePattern<arith::CmpIOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::CmpIOp op,
+                                PatternRewriter &rewriter) const override {
+    APInt constant;
+    if (!isI1(op.getLhs().getType()) ||
+        !matchPattern(op.getRhs(), m_ConstantInt(&constant)))
+      return failure();
+    return replaceTwoValueComparison(rewriter, op, op.getLhs(),
+                                     APInt::getAllOnes(1), APInt::getZero(1),
+                                     constant);
+  }
+};
+
+/// A select of two constants compared with a constant is decided by the
+/// select's condition: (c ? a : b) == k is a constant, c or ~c.
+struct CmpSelectConstants final : OpRewritePattern<arith::CmpIOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::CmpIOp op,
+                                PatternRewriter &rewriter) const override {
+    auto select = op.getLhs().getDefiningOp<arith::SelectOp>();
+    APInt constant, whenSet, whenClear;
+    if (!select || !isa<IntegerType, IndexType>(op.getLhs().getType()) ||
+        !isI1(select.getCondition().getType()) ||
+        !matchPattern(op.getRhs(), m_ConstantInt(&constant)) ||
+        !matchPattern(select.getTrueValue(), m_ConstantInt(&whenSet)) ||
+        !matchPattern(select.getFalseValue(), m_ConstantInt(&whenClear)))
+      return failure();
+    return replaceTwoValueComparison(rewriter, op, select.getCondition(),
+                                     whenSet, whenClear, constant);
+  }
+};
+
+/// Two i1 operands compare as logic (signed i1 values are 0 and -1):
+///   a == b = ~(a ^ b)   a != b = a ^ b
+///   a <u b = ~a & b     a <=u b = ~a | b   a >u b = a & ~b   a >=u b = a | ~b
+///   a <s b = a & ~b     a <=s b = a | ~b   a >s b = ~a & b   a >=s b = ~a | b
+struct CmpI1Pair final : OpRewritePattern<arith::CmpIOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::CmpIOp op,
+                                PatternRewriter &rewriter) const override {
+    Value lhs = op.getLhs(), rhs = op.getRhs();
+    if (!isI1(lhs.getType()) || matchPattern(lhs, m_Constant()) ||
+        matchPattern(rhs, m_Constant()))
+      return failure();
+    Location location = op.getLoc();
+    auto notOf = [&](Value value) {
+      return buildNotI1(rewriter, location, value);
+    };
+    using P = arith::CmpIPredicate;
+    switch (op.getPredicate()) {
+    case P::eq:
+      rewriter.replaceOp(
+          op, notOf(arith::XOrIOp::create(rewriter, location, lhs, rhs)));
+      break;
+    case P::ne:
+      rewriter.replaceOpWithNewOp<arith::XOrIOp>(op, lhs, rhs);
+      break;
+    case P::ult:
+    case P::sgt:
+      rewriter.replaceOpWithNewOp<arith::AndIOp>(op, notOf(lhs), rhs);
+      break;
+    case P::ule:
+    case P::sge:
+      rewriter.replaceOpWithNewOp<arith::OrIOp>(op, notOf(lhs), rhs);
+      break;
+    case P::ugt:
+    case P::slt:
+      rewriter.replaceOpWithNewOp<arith::AndIOp>(op, lhs, notOf(rhs));
+      break;
+    case P::uge:
+    case P::sle:
+      rewriter.replaceOpWithNewOp<arith::OrIOp>(op, lhs, notOf(rhs));
+      break;
+    }
+    return success();
+  }
+};
+
+/// For `value` = xori(operand, all ones), the bitwise negation: the negated
+/// operand and the all-ones constant (a scalar or splat of any integer type).
+static std::pair<Value, Value> matchNegation(Value value) {
+  auto negation = value.getDefiningOp<arith::XOrIOp>();
+  if (!negation)
+    return {};
+  auto isAllOnes = [](Value operand) {
+    APInt bits;
+    return matchPattern(operand, m_ConstantInt(&bits)) && bits.isAllOnes();
+  };
+  if (isAllOnes(negation.getRhs()))
+    return {negation.getLhs(), negation.getRhs()};
+  if (isAllOnes(negation.getLhs()))
+    return {negation.getRhs(), negation.getLhs()};
+  return {};
+}
+
+static Value getNegated(Value value) { return matchNegation(value).first; }
+
+static bool areComplements(Value lhs, Value rhs) {
+  return getNegated(lhs) == rhs || getNegated(rhs) == lhs;
+}
+
+/// Complement absorption: x | (~x & y) = x | y and x & (~x | y) = x & y,
+/// bitwise for any width.
+template <typename Outer, typename Inner>
+struct ComplementAbsorption final : OpRewritePattern<Outer> {
+  using OpRewritePattern<Outer>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(Outer op,
+                                PatternRewriter &rewriter) const override {
+    for (auto [kept, other] : {std::pair(op.getLhs(), op.getRhs()),
+                               std::pair(op.getRhs(), op.getLhs())}) {
+      auto inner = other.template getDefiningOp<Inner>();
+      if (!inner)
+        continue;
+      for (auto [complement, rest] :
+           {std::pair(inner.getLhs(), inner.getRhs()),
+            std::pair(inner.getRhs(), inner.getLhs())})
+        if (areComplements(kept, complement)) {
+          rewriter.replaceOpWithNewOp<Outer>(op, kept, rest);
+          return success();
+        }
+    }
+    return failure();
+  }
+};
+
+/// De Morgan: ~p | ~q = ~(p & q) and ~p & ~q = ~(p | q). It replaces two
+/// negations and the operation by one operation and one negation, so it
+/// applies only when at least one negation has no other use.
+template <typename Outer, typename Inner>
+struct DeMorgan final : OpRewritePattern<Outer> {
+  using OpRewritePattern<Outer>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(Outer op,
+                                PatternRewriter &rewriter) const override {
+    auto [lhs, ones] = matchNegation(op.getLhs());
+    Value rhs = getNegated(op.getRhs());
+    if (!lhs || !rhs ||
+        (!op.getLhs().hasOneUse() && !op.getRhs().hasOneUse()))
+      return failure();
+    Value inner = Inner::create(rewriter, op.getLoc(), lhs, rhs);
+    rewriter.replaceOpWithNewOp<arith::XOrIOp>(op, inner, ones);
+    return success();
+  }
+};
+
+/// Absorption: x & (x | y) = x and x | (x & y) = x, bitwise for any width.
+template <typename Outer, typename Inner>
+struct Absorption final : OpRewritePattern<Outer> {
+  using OpRewritePattern<Outer>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(Outer op,
+                                PatternRewriter &rewriter) const override {
+    for (auto [kept, other] : {std::pair(op.getLhs(), op.getRhs()),
+                               std::pair(op.getRhs(), op.getLhs())})
+      if (auto inner = other.template getDefiningOp<Inner>();
+          inner && (inner.getLhs() == kept || inner.getRhs() == kept)) {
+        rewriter.replaceOp(op, kept);
+        return success();
+      }
+    return failure();
+  }
+};
+
+/// A comparison of an extended value with a constant is decided whenever the
+/// constant lies outside the source range, e.g. extui(x : i1) < 2 is true;
+/// for an extended i1 it is otherwise the bit or its negation. Upstream
+/// compares two extensions with each other, and an extension with zero for
+/// (in)equality, but not with other constants.
+struct CmpExtendedConstant final : OpRewritePattern<arith::CmpIOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::CmpIOp op,
+                                PatternRewriter &rewriter) const override {
+    APInt constant;
+    if (!matchPattern(op.getRhs(), m_ConstantInt(&constant)))
+      return failure();
+    Value lhs = op.getLhs();
+    Value source;
+    bool isSigned;
+    if (auto extension = lhs.getDefiningOp<arith::ExtUIOp>()) {
+      source = extension.getIn();
+      isSigned = false;
+    } else if (auto extension = lhs.getDefiningOp<arith::ExtSIOp>()) {
+      source = extension.getIn();
+      isSigned = true;
+    } else {
+      return failure();
+    }
+    auto sourceType = dyn_cast<IntegerType>(source.getType());
+    if (!sourceType)
+      return failure();
+    unsigned width = constant.getBitWidth();
+    unsigned sourceWidth = sourceType.getWidth();
+    ConstantIntRanges range =
+        isSigned ? ConstantIntRanges::fromSigned(
+                       APInt::getSignedMinValue(sourceWidth).sext(width),
+                       APInt::getSignedMaxValue(sourceWidth).sext(width))
+                 : ConstantIntRanges::fromUnsigned(
+                       APInt::getZero(width),
+                       APInt::getMaxValue(sourceWidth).zext(width));
+    // evaluatePred separates equality only by unsigned bounds; a sign
+    // extension's range wraps there, so test membership directly.
+    std::optional<bool> decided;
+    auto predicate = op.getPredicate();
+    if (predicate == arith::CmpIPredicate::eq ||
+        predicate == arith::CmpIPredicate::ne) {
+      bool outside = isSigned ? constant.slt(range.smin()) ||
+                                    constant.sgt(range.smax())
+                              : constant.ugt(range.umax());
+      if (outside)
+        decided = predicate == arith::CmpIPredicate::ne;
+    } else {
+      decided = intrange::evaluatePred(
+          static_cast<intrange::CmpPredicate>(predicate), range,
+          ConstantIntRanges::constant(constant));
+    }
+    if (decided) {
+      rewriter.replaceOpWithNewOp<arith::ConstantOp>(
+          op, rewriter.getBoolAttr(*decided));
+      return success();
+    }
+    // An extended i1 takes two values, so the comparison is the bit itself or
+    // its negation, e.g. extui(x) == 1 is x and extsi(x) != -1 is ~x.
+    if (sourceWidth != 1)
+      return failure();
+    return replaceTwoValueComparison(
+        rewriter, op, source,
+        isSigned ? APInt::getAllOnes(width) : APInt(width, 1),
+        APInt::getZero(width), constant);
+  }
+};
+
+} // namespace
+
 void TalosSimulationDialect::getCanonicalizationPatterns(
     RewritePatternSet &results) const {
-  results.add<ExtractBitsInsertWithTruncation>(getContext());
+  results.add<ExtractBitsInsertWithTruncation, SelectI1ToLogic, CmpI1Constant,
+              CmpI1Pair, CmpSelectConstants, CmpExtendedConstant,
+              Absorption<arith::AndIOp, arith::OrIOp>,
+              Absorption<arith::OrIOp, arith::AndIOp>,
+              ComplementAbsorption<arith::OrIOp, arith::AndIOp>,
+              ComplementAbsorption<arith::AndIOp, arith::OrIOp>,
+              DeMorgan<arith::OrIOp, arith::AndIOp>,
+              DeMorgan<arith::AndIOp, arith::OrIOp>>(getContext());
 }
 
 } // namespace talos::sim

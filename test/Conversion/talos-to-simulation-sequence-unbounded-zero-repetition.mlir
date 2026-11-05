@@ -199,10 +199,12 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // CHECK: %[[GOTO_ZERO:.*]] = simulation.logic.constant false, false
 // CHECK-NEXT: %[[GOTO_FALSE:.*]] = simulation.logic.compare case_eq %[[GOTO_REPEAT]], %[[GOTO_ZERO]]
 // CHECK-NEXT: %[[GOTO_KNOWN:.*]] = arith.ori %[[GOTO_TRUE]], %[[GOTO_FALSE]]
-// CHECK: %[[GOTO_UNKNOWN:.*]] = arith.xori %[[GOTO_KNOWN]],
 // CHECK: %[[GOTO_TERMINAL:.*]] = simulation.assert.sampled_read
-// CHECK: %[[GOTO_NOT_TERMINAL:.*]] = arith.xori
-// CHECK: arith.andi %[[GOTO_NOT_TERMINAL]], %[[GOTO_UNKNOWN]]
+// CHECK-NEXT: %[[GOTO_TERMINAL_TRUE:.*]] = simulation.logic.is_true %[[GOTO_TERMINAL]]
+// The X/Z state advances only for ~terminal & ~known, selected through its
+// complement terminal | known.
+// CHECK: %[[GOTO_RESOLVED:.*]] = arith.ori %[[GOTO_TERMINAL_TRUE]], %[[GOTO_KNOWN]]
+// CHECK: arith.select %[[GOTO_RESOLVED]], %{{.*}}, %[[GOTO_ENTRY]] : i64
 // CHECK-NOT: simulation.assert.sampled_read
 // CHECK: simulation.spawn @unit_2.fork.51.0.0
 // CHECK: simulation.spawn @unit_2.fork.51.1.2
@@ -229,10 +231,11 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // CHECK: %[[NONCONSECUTIVE_ZERO:.*]] = simulation.logic.constant false, false
 // CHECK-NEXT: %[[NONCONSECUTIVE_FALSE:.*]] = simulation.logic.compare case_eq %[[NONCONSECUTIVE_REPEAT]], %[[NONCONSECUTIVE_ZERO]]
 // CHECK-NEXT: %[[NONCONSECUTIVE_KNOWN:.*]] = arith.ori %[[NONCONSECUTIVE_TRUE]], %[[NONCONSECUTIVE_FALSE]]
-// CHECK: %[[NONCONSECUTIVE_UNKNOWN:.*]] = arith.xori %[[NONCONSECUTIVE_KNOWN]],
 // CHECK: %[[NONCONSECUTIVE_TERMINAL:.*]] = simulation.assert.sampled_read
-// CHECK: %[[NONCONSECUTIVE_NOT_TERMINAL:.*]] = arith.xori
-// CHECK: arith.andi %[[NONCONSECUTIVE_NOT_TERMINAL]], %[[NONCONSECUTIVE_UNKNOWN]]
+// CHECK-NEXT: %[[NONCONSECUTIVE_TERMINAL_TRUE:.*]] = simulation.logic.is_true %[[NONCONSECUTIVE_TERMINAL]]
+// As for goto: ~terminal & ~known is selected through terminal | known.
+// CHECK: %[[NONCONSECUTIVE_RESOLVED:.*]] = arith.ori %[[NONCONSECUTIVE_TERMINAL_TRUE]], %[[NONCONSECUTIVE_KNOWN]]
+// CHECK: arith.select %[[NONCONSECUTIVE_RESOLVED]], %{{.*}}, %[[NONCONSECUTIVE_ENTRY]] : i64
 // CHECK-NOT: simulation.assert.sampled_read
 // CHECK: simulation.spawn @unit_3.fork.71.0.0
 // CHECK: simulation.spawn @unit_3.fork.71.1.2
