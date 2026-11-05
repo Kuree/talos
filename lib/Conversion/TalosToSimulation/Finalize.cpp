@@ -1057,10 +1057,17 @@ static void buildTalosToSimulationPipelineImpl(
   // blocks, which is an executable CFG change and therefore must precede the
   // persistent compute graph.
   if (optLevel > 0) {
+    // Two-state unique/priority checks and case defaults that no value of
+    // their small inputs can reach (IEEE 1800-2023 12.4.2, 12.5.3), before
+    // storage propagation sees which deferred-report epochs stay unarmed.
+    designManager.nest<sim::SimFuncOp>().addPass(
+        createTalosSimFoldSmallDomainsPass());
     TalosSimPropagateInitializedStoragePassOptions initializedStorageOptions;
     initializedStorageOptions.vpi = vpiMode.str();
     designManager.addPass(createTalosSimPropagateInitializedStoragePass(
         std::move(initializedStorageOptions)));
+    // The report evaluators of decided checks are spawned no more.
+    designManager.addPass(createSymbolDCEPass());
     TalosSimSimplifyBodiesPassOptions simplifyOptions;
     simplifyOptions.vpi = vpiMode.str();
     designManager.addPass(createTalosSimSimplifyBodiesPass(simplifyOptions));

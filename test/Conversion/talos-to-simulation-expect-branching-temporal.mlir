@@ -1,5 +1,5 @@
-// RUN: talos-opt %s '--lower-talos-to-sim=opt-level=0' | FileCheck %s
-// RUN: talos-opt %s '--lower-talos-to-sim=opt-level=3' | FileCheck %s
+// RUN: talos-opt %s '--lower-talos-to-sim=opt-level=0' | FileCheck %s --check-prefix=CHECK --check-prefix=O0
+// RUN: talos-opt %s '--lower-talos-to-sim=opt-level=3' | FileCheck %s --check-prefix=CHECK --check-prefix=O3
 // RUN: talos-opt %s '--lower-talos-to-sim=opt-level=3' '--encode-talos-sim-to-bytecode=vpi=off' -o /dev/null
 
 module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu"} {
@@ -101,12 +101,16 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // CHECK-NOT: simulation.ref.store
 // CHECK: simulation.event.trigger
 // CHECK-NOT: simulation.event.trigger
+// Every path that reaches age two activated the longer trace at the first
+// clock, so at -O3 its liveness bit is known there (small-domain folding over
+// that sample) and the word no longer crosses the second wait.
 // CHECK: simulation.assert.sampled_read
 // CHECK: simulation.suspend.edge posedge
 // CHECK: ^bb{{.*}}(%{{.*}}: i64)
 // CHECK: simulation.assert.sampled_read
 // CHECK: simulation.suspend.edge posedge
-// CHECK: ^bb{{.*}}(%{{.*}}: i64)
+// O0: ^bb{{.*}}(%{{.*}}: i64)
+// O3: ^bb{{[0-9]+}}(%{{.*}}: !simulation.ref<i1>, %{{.*}}: !simulation.ref<i1>):
 // CHECK: simulation.assert.sampled_read
 // CHECK-NOT: simulation.assert.sampled_read
 // CHECK-NOT: simulation.suspend.edge
@@ -148,7 +152,11 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // CHECK: %{{.*}} = arith.select {{.*}}, %[[HIGH_RETAIN_MASK]], {{.*}} : i64
 // CHECK: simulation.suspend.edge posedge {{.*}} to ^[[WIDE_RESUME:bb[0-9]+]]({{.*}}, %[[SECOND_NEXT:.*]], %[[FIRST_NEXT:.*]] : !simulation.ref<i1>, i64, i64)
 // CHECK: ^[[WIDE_RESUME]]({{.*}}: !simulation.ref<i1>, %[[SECOND_WORD:.*]]: i64, %[[FIRST_WORD:.*]]: i64)
-// CHECK: %[[HIGH_TEST_MASK:.*]] = arith.constant {simulation.rematerialized} -9223372036854775808 : i64
-// CHECK-NEXT: %{{.*}} = arith.andi %[[FIRST_WORD]], %[[HIGH_TEST_MASK]] : i64
-// CHECK: %[[SECOND_TEST_MASK:.*]] = arith.constant {simulation.rematerialized} 1 : i64
-// CHECK-NEXT: %{{.*}} = arith.andi %[[SECOND_WORD]], %[[SECOND_TEST_MASK]] : i64
+// At -O3 the first samples decide the high-bit tests of the first resume;
+// later resumes still test bit 63 of word zero.
+// O0: %[[HIGH_TEST_MASK:.*]] = arith.constant {simulation.rematerialized} -9223372036854775808 : i64
+// O0-NEXT: %{{.*}} = arith.andi %[[FIRST_WORD]], %[[HIGH_TEST_MASK]] : i64
+// O0: %[[SECOND_TEST_MASK:.*]] = arith.constant {simulation.rematerialized} 1 : i64
+// O0-NEXT: %{{.*}} = arith.andi %[[SECOND_WORD]], %[[SECOND_TEST_MASK]] : i64
+// O3: arith.andi %[[SECOND_WORD]], %{{c1_i64[_0-9]*}} : i64
+// O3: arith.andi %{{[0-9]+}}, %{{c-9223372036854775808_i64[_0-9]*}} : i64

@@ -155,16 +155,38 @@ def TalosSimSCCPPass
   ];
 }
 
+def TalosSimFoldSmallDomainsPass
+    : Pass<"talos-sim-fold-small-domains", "talos::sim::SimFuncOp"> {
+  let summary = "Decide two-state conditions over every value of a small input domain";
+  let description = [{
+    Evaluates each branch and select condition computed from at most 16 bits
+    of two-state values for every value of those bits that its dominating
+    branch edges admit, and replaces a condition that takes one value on all
+    of them with that constant. A unique or priority case or if whose items
+    cover every two-state value without overlap thereby loses its violation
+    check and dead default (IEEE 1800-2023 12.4.2, 12.5.3). Four-state values
+    are never evaluated, so X/Z violations are still reported (12.4.2.1).
+  }];
+  let statistics = [Statistic<"numFolded", "folded",
+                              "Conditions replaced by constants">];
+  let dependentDialects = ["mlir::arith::ArithDialect",
+                           "mlir::cf::ControlFlowDialect"];
+}
+
 def TalosSimPropagateInitializedStoragePass
     : Pass<"talos-sim-propagate-initialized-storage",
            "talos::sim::SimDesignOp"> {
   let summary = "Propagate initialized scalar storage through whole and sliced reads";
   let description = [{
-    Proves a unique constant whole-storage initializer executes before process
-    startup, including stores inlined into the root initializer. Replaces whole
-    and fixed packed-slice reads while preserving four-state X/Z planes and the
-    observable initializing store. Later writes, opaque aliases, initializer
-    reads, and externally writable state conservatively prevent propagation.
+    Proves the value every read of a storage sees: a constant whole-storage
+    initializer that executes before process startup (including stores
+    inlined into the root initializer), or the default 0 of two-state storage
+    without one (IEEE 1800-2023 6.8, Table 6-7). A later write is admitted only
+    when it runs on a branch edge whose condition, with every read at that
+    value, excludes it, so that no later write ever runs. Replaces whole and
+    fixed packed-slice reads while preserving four-state X/Z planes and the
+    observable initializing store. Other later writes, opaque aliases,
+    initializer reads, and externally writable state prevent propagation.
   }];
   let dependentDialects = [
     "talos::sim::TalosSimulationDialect",

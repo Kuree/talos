@@ -3,6 +3,7 @@ add_mlir_dialect_library(TalosSimulationTransforms
   AnnotateSteadyUnknown.cpp
   CompileRandomPlans.cpp
   DevirtualizeClassCalls.cpp
+  FoldSmallDomains.cpp
   ForwardCopyProcesses.cpp
   EliminateDeadBoundaries.cpp
   EliminateDeadCaptures.cpp
@@ -14,6 +15,7 @@ add_mlir_dialect_library(TalosSimulationTransforms
   SCCP.cpp
   SimplifyBodies.cpp
   ThreadSuspension.cpp
+  TwoStateEvaluation.cpp
   UnrollBoundedLoops.cpp
 
   DEPENDS

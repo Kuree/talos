@@ -7,8 +7,10 @@
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Dialect/Simulation/Transforms/Passes.h"
+#include "talos/Dialect/Simulation/Transforms/TwoStateEvaluation.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -334,43 +336,96 @@ private:
     auto &replacements = getAnalysis<InitializedStorageReplacements>();
     for (auto &[descriptor, info] : candidates) {
       (void)descriptor;
-      if (info.invalid || info.writes.size() != 1 || info.reads.empty())
+      if (info.invalid || info.reads.empty())
         continue;
-      StorageAccess write = info.writes.front();
-      if (!initializedBeforeSpawn.contains(write.operation))
+      // The value every read sees: the one constant initializer, which
+      // precedes every process (6.8), or the default 0 of two-state storage
+      // without one (Table 6-7).
+      sim::SimRefStoreOp initializer;
+      SmallVector<sim::SimRefStoreOp> later;
+      for (const StorageAccess &write : info.writes) {
+        auto store = cast<sim::SimRefStoreOp>(write.operation);
+        if (!initializer && initializedBeforeSpawn.contains(store))
+          initializer = store;
+        else
+          later.push_back(store);
+      }
+      APInt initialValue, initialUnknown;
+      if (initializer) {
+        Operation *constant = initializer.getValue().getDefiningOp();
+        if (!constant ||
+            !isa<arith::ConstantIntOp, sim::SimLogicConstantOp>(constant) ||
+            initializer.getValue().getType() != info.type)
+          continue;
+        if (auto integer = dyn_cast<arith::ConstantIntOp>(constant)) {
+          initialValue = cast<IntegerAttr>(integer.getValue()).getValue();
+          initialUnknown = APInt::getZero(initialValue.getBitWidth());
+        } else {
+          auto logic = cast<sim::SimLogicConstantOp>(constant);
+          initialValue = logic.getValue();
+          initialUnknown = logic.getUnknown();
+        }
+      } else if (auto integer = dyn_cast<IntegerType>(info.type)) {
+        initialValue = APInt::getZero(integer.getWidth());
+        initialUnknown = APInt::getZero(integer.getWidth());
+      } else {
         continue;
-      auto store = cast<sim::SimRefStoreOp>(write.operation);
-      Operation *constant = store.getValue().getDefiningOp();
-      if (!constant ||
-          !isa<arith::ConstantIntOp, sim::SimLogicConstantOp>(constant) ||
-          store.getValue().getType() != info.type)
-        continue;
+      }
       bool rootRead = false;
       for (StorageAccess read : info.reads)
         rootRead |= read.function == root ||
                     rootCallClosure.contains(read.function.getOperation());
       if (rootRead)
         continue;
+      SmallVector<InitializedStorageReplacements::Replacement> planned;
+      DenseMap<Operation *, APInt> known;
       for (const StorageAccess &read : info.reads) {
-        auto load = cast<sim::SimRefLoadOp>(read.operation);
-
-        APInt value, unknown;
-        if (auto integer = dyn_cast<arith::ConstantIntOp>(constant)) {
-          value = cast<IntegerAttr>(integer.getValue()).getValue();
-          unknown = APInt::getZero(value.getBitWidth());
-        } else {
-          auto logic = cast<sim::SimLogicConstantOp>(constant);
-          value = logic.getValue();
-          unknown = logic.getUnknown();
-        }
         // IEEE 1800-2023 6.8, 11.5.1: slice both planes without losing Z.
-        value = value.extractBits(read.width, read.low);
-        unknown = unknown.extractBits(read.width, read.low);
+        APInt value = initialValue.extractBits(read.width, read.low);
+        APInt unknown = initialUnknown.extractBits(read.width, read.low);
         auto integer = IntegerType::get(design.getContext(), read.width);
-        replacements.functions[read.function].push_back(
-            {load, IntegerAttr::get(integer, value),
-             IntegerAttr::get(integer, unknown)});
+        auto load = cast<sim::SimRefLoadOp>(read.operation);
+        planned.push_back({load, IntegerAttr::get(integer, value),
+                           IntegerAttr::get(integer, unknown)});
+        if (unknown.isZero() && isa<IntegerType>(load.getResult().getType()))
+          known[load] = value;
       }
+      // A later write keeps the value if it runs only on a branch edge whose
+      // condition, with every read of the storage at that value, excludes it.
+      // Then no write ever runs, so every read does see the value.
+      bool guarded = llvm::all_of(later, [&](sim::SimRefStoreOp store) {
+        Block *block = store->getBlock();
+        Block *predecessor = block->getSinglePredecessor();
+        auto branch =
+            predecessor
+                ? dyn_cast<cf::CondBranchOp>(predecessor->getTerminator())
+                : cf::CondBranchOp();
+        if (!branch || branch.getTrueDest() == branch.getFalseDest())
+          return false;
+        // Evaluate the edge condition from the reads alone: every input must
+        // be one of the storage's reads, at its initial value.
+        FailureOr<sim::TwoStateSlice> slice = sim::buildTwoStateSlice(
+            branch.getCondition(), UINT64_MAX, /*maxOps=*/512);
+        if (failed(slice))
+          return false;
+        SmallVector<APInt> inputs;
+        for (Value leaf : slice->leaves) {
+          auto found = known.find(leaf.getDefiningOp());
+          if (!leaf.getDefiningOp() || found == known.end())
+            return false;
+          inputs.push_back(found->second);
+        }
+        sim::TwoStateEvaluator evaluator(*slice);
+        return succeeded(evaluator.run(inputs)) &&
+               evaluator.get(branch.getCondition()).getBoolValue() !=
+                   (branch.getTrueDest() == block);
+      });
+      if (!guarded)
+        continue;
+      for (const auto &replacement : planned)
+        replacements
+            .functions[replacement.load->getParentOfType<sim::SimFuncOp>()]
+            .push_back(replacement);
     }
     if (!replacements.functions.empty()) {
       OpPassManager pipeline(sim::SimDesignOp::getOperationName());
