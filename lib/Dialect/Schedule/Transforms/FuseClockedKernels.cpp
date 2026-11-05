@@ -2668,9 +2668,12 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
           continue;
         auto enqueue = cast<sim::SimNBAEnqueueOp>(event.operation);
         OpBuilder storeBuilder(enqueue);
-        sim::SimRefStoreOp::create(storeBuilder, enqueue.getLoc(),
-                                   enqueue.getValue(),
-                                   enqueue.getDestination());
+        auto store = sim::SimRefStoreOp::create(storeBuilder, enqueue.getLoc(),
+                                                enqueue.getValue(),
+                                                enqueue.getDestination());
+        // The store performs the NBA update early (4.5, 10.4.2).
+        schedule::set<schedule::Field::EvalNbaEquivalentStore>(
+            store, storeBuilder.getUnitAttr());
         enqueue.erase();
         ++directSites;
       }
@@ -2746,10 +2749,12 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
         }
         recreate(site.enqueue.getDestination());
         recreate(site.enqueue.getValue());
-        sim::SimRefStoreOp::create(
+        auto store = sim::SimRefStoreOp::create(
             commitBuilder, siteLocation,
             mapping.lookupOrDefault(site.enqueue.getValue()),
             mapping.lookupOrDefault(site.enqueue.getDestination()));
+        schedule::set<schedule::Field::EvalNbaEquivalentStore>(
+            store, commitBuilder.getUnitAttr());
         cf::BranchOp::create(commitBuilder, siteLocation, next);
         commitBuilder.setInsertionPointToEnd(next);
         site.enqueue.erase();

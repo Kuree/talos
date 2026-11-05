@@ -39,6 +39,195 @@ constexpr StringLiteral evalFourStateNBAHandoffName =
 
 } // namespace
 
+// The held set's layout: a ready-set layout depends only on its leaf count,
+// and its storage size grows strictly with it.
+static runtime::ReadySetLayout heldWakeLayout(LLVM::GlobalOp held) {
+  uint64_t storage =
+      cast<LLVM::LLVMArrayType>(held.getGlobalType()).getNumElements();
+  for (uint64_t leaves = 1; leaves <= storage; ++leaves) {
+    runtime::ReadySetLayout layout(static_cast<uint32_t>(leaves * 64));
+    if (layout.storageWords == storage)
+      return layout;
+  }
+  llvm_unreachable("held wake set without a ready-set layout");
+}
+
+// The merge itself, emitted once per module: callers test the held set first,
+// so it runs only when an early NBA update published a wake.
+static LLVM::LLVMFuncOp getOrCreateNBAHeldWakeMerge(
+    ModuleOp module, ArrayRef<int32_t> words,
+    const runtime::ReadySetLayout &layout, Location loc) {
+  if (auto existing =
+          module.lookupSymbol<LLVM::LLVMFuncOp>(evalNBAHeldMergeName))
+    return existing;
+  OpBuilder builder = OpBuilder::atBlockEnd(module.getBody());
+  MLIRContext *context = module.getContext();
+  auto function = LLVM::LLVMFuncOp::create(
+      builder, loc, evalNBAHeldMergeName,
+      LLVM::LLVMFunctionType::get(LLVM::LLVMVoidType::get(context), {}),
+      LLVM::Linkage::Internal);
+  Region *region = &function.getBody();
+  auto newBlock = [&] {
+    Block *block = new Block;
+    region->push_back(block);
+    return block;
+  };
+  builder.setInsertionPointToStart(newBlock());
+  Type i64 = builder.getI64Type();
+  Type pointer = LLVM::LLVMPointerType::get(context);
+  auto constant = [&](uint64_t value) {
+    return llvmConstant(builder, loc, i64, value);
+  };
+  Value held =
+      LLVM::AddressOfOp::create(builder, loc, pointer, evalNBAHeldWakesName);
+  Value ingress =
+      LLVM::AddressOfOp::create(builder, loc, pointer, evalModelIngressName);
+  auto word = [&](Value base, uint64_t index) {
+    return ownerWordAddress(builder, loc, base, index);
+  };
+  auto load = [&](Value address) -> Value {
+    return LLVM::LoadOp::create(builder, loc, i64, address, 8);
+  };
+  auto store = [&](Value value, Value address) {
+    LLVM::StoreOp::create(builder, loc, value, address, 8);
+  };
+  // Move one word: OR it into the same ingress word, then clear it. Summary
+  // words move the same way: a held summary bit names a nonempty held word,
+  // which the merge makes nonempty in the ingress set too.
+  auto move = [&](Value heldAddress, Value ingressAddress) {
+    Value value = load(heldAddress);
+    store(arith::OrIOp::create(builder, loc, load(ingressAddress), value),
+          ingressAddress);
+    store(constant(0), heldAddress);
+  };
+  if (!layout.hasSummaries()) {
+    for (int32_t index : words)
+      move(word(held, index), word(ingress, index));
+  } else {
+    // Walk the set bits of each first-level summary word that covers a listed
+    // leaf: only the held leaves are touched.
+    SmallVector<unsigned> groups;
+    for (int32_t index : words)
+      if (groups.empty() || groups.back() != unsigned(index) / 64)
+        groups.push_back(unsigned(index) / 64);
+    for (unsigned group : groups) {
+      Value summaryAddress = word(held, layout.offsets[1] + group);
+      Value summary = load(summaryAddress);
+      Block *visit = newBlock(), *loop = newBlock(), *body = newBlock(),
+            *next = newBlock();
+      loop->addArgument(i64, loc);
+      cf::CondBranchOp::create(
+          builder, loc,
+          arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ne,
+                                summary, constant(0)),
+          visit, ValueRange{}, next, ValueRange{});
+      builder.setInsertionPointToStart(visit);
+      move(summaryAddress, word(ingress, layout.offsets[1] + group));
+      cf::BranchOp::create(builder, loc, loop, ValueRange{summary});
+      builder.setInsertionPointToStart(loop);
+      Value bits = loop->getArgument(0);
+      cf::CondBranchOp::create(
+          builder, loc,
+          arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ne, bits,
+                                constant(0)),
+          body, ValueRange{}, next, ValueRange{});
+      builder.setInsertionPointToStart(body);
+      Value leaf = arith::AddIOp::create(
+          builder, loc,
+          LLVM::CountTrailingZerosOp::create(builder, loc, i64, bits, true),
+          constant(uint64_t{group} * 64));
+      move(LLVM::GEPOp::create(builder, loc, pointer, i64, held,
+                               ValueRange{leaf}),
+           LLVM::GEPOp::create(builder, loc, pointer, i64, ingress,
+                               ValueRange{leaf}));
+      cf::BranchOp::create(
+          builder, loc, loop,
+          ValueRange{arith::AndIOp::create(
+              builder, loc, bits,
+              arith::SubIOp::create(builder, loc, bits, constant(1)))});
+      builder.setInsertionPointToStart(next);
+    }
+    for (unsigned level = 2; level != layout.levels; ++level)
+      for (unsigned index = 0; index != layout.counts[level]; ++index)
+        move(word(held, layout.offsets[level] + index),
+             word(ingress, layout.offsets[level] + index));
+  }
+  if (layout.hasCache()) {
+    // Both caches are lower bounds on their first nonempty leaf; their
+    // minimum bounds the merged set. The empty held set restarts past the end.
+    Value heldCache = word(held, layout.cacheOffset());
+    Value ingressCache = word(ingress, layout.cacheOffset());
+    store(arith::MinUIOp::create(builder, loc, load(ingressCache),
+                                 load(heldCache)),
+          ingressCache);
+    store(constant(layout.counts[0]), heldCache);
+  }
+  LLVM::ReturnOp::create(builder, loc, ValueRange{});
+  return function;
+}
+
+void emitNBAHeldWakeMerge(OpBuilder &builder, Location loc, ModuleOp module,
+                          Block *merged, ValueRange mergedOperands, Block *none,
+                          ValueRange noneOperands) {
+  auto held = module.lookupSymbol<LLVM::GlobalOp>(evalNBAHeldWakesName);
+  DenseI32ArrayAttr words =
+      held ? ::talos::schedule::get<::talos::schedule::Field::EvalNbaHeldWords>(
+                 held)
+           : DenseI32ArrayAttr{};
+  if (!words || words.empty()) {
+    cf::BranchOp::create(builder, loc, none, noneOperands);
+    return;
+  }
+  runtime::ReadySetLayout layout = heldWakeLayout(held);
+  LLVM::LLVMFuncOp merge =
+      getOrCreateNBAHeldWakeMerge(module, words.asArrayRef(), layout, loc);
+  Type i64 = builder.getI64Type();
+  Value base = LLVM::AddressOfOp::create(
+      builder, loc, LLVM::LLVMPointerType::get(builder.getContext()),
+      evalNBAHeldWakesName);
+  auto load = [&](uint64_t index) -> Value {
+    return LLVM::LoadOp::create(builder, loc, i64,
+                                ownerWordAddress(builder, loc, base, index), 8);
+  };
+  // The top summary word is nonzero exactly when a leaf is; a flat layout
+  // tests its listed leaves.
+  Value pending;
+  if (layout.hasSummaries()) {
+    pending = load(layout.offsets[layout.levels - 1]);
+  } else {
+    pending = llvmConstant(builder, loc, i64, 0);
+    for (int32_t index : words.asArrayRef())
+      pending = arith::OrIOp::create(builder, loc, pending, load(index));
+  }
+  Block *call = new Block;
+  builder.getInsertionBlock()->getParent()->push_back(call);
+  cf::CondBranchOp::create(
+      builder, loc,
+      arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ne, pending,
+                            llvmConstant(builder, loc, i64, 0)),
+      call, ValueRange{}, none, noneOperands);
+  builder.setInsertionPointToStart(call);
+  LLVM::CallOp::create(builder, loc, merge, ValueRange{});
+  cf::BranchOp::create(builder, loc, merged, mergedOperands);
+}
+
+void releaseNBAHeldWakesBeforeReturns(LLVM::LLVMFuncOp function) {
+  auto module = function->getParentOfType<ModuleOp>();
+  auto held = module.lookupSymbol<LLVM::GlobalOp>(evalNBAHeldWakesName);
+  if (!held || !::talos::schedule::has<
+                   ::talos::schedule::Field::EvalNbaHeldWords>(held))
+    return;
+  SmallVector<LLVM::ReturnOp> returns;
+  function.walk([&](LLVM::ReturnOp op) { returns.push_back(op); });
+  for (LLVM::ReturnOp op : returns) {
+    Block *block = op->getBlock();
+    Block *tail = block->splitBlock(op);
+    OpBuilder builder = OpBuilder::atBlockEnd(block);
+    emitNBAHeldWakeMerge(builder, op.getLoc(), module, tail, ValueRange{},
+                         tail, ValueRange{});
+  }
+}
+
 LogicalResult
 materializeNativeEvalDispatch(ModuleOp module,
                               const NativeEvalCoordinatorPlan &plan) {
@@ -1000,6 +1189,26 @@ materializeNativeEvalDispatch(ModuleOp module,
                          cases, destinations, destinationOperands,
                          ArrayRef<int32_t>{});
 
+  // Wakes of NBA updates performed early (see evalNBAHeldWakesName) join the
+  // ingress set once the updates of their NBA region are complete (IEEE
+  // 1800-2023 4.5, 4.6(b), 4.7): after the commit, or at quiescence when the
+  // region staged nothing. Designs without held publications keep their
+  // coordinator IR unchanged.
+  bool holdsWakes = false;
+  if (auto held = module.lookupSymbol<LLVM::GlobalOp>(evalNBAHeldWakesName))
+    holdsWakes =
+        ::talos::schedule::has<::talos::schedule::Field::EvalNbaHeldWords>(
+            held);
+  auto emitHeldMerge = [&](Block *merged, ValueRange mergedOperands,
+                           Block *none, ValueRange noneOperands) {
+    emitNBAHeldWakeMerge(builder, location, module, merged, mergedOperands,
+                         none, noneOperands);
+  };
+  // Every return hands the held wakes back as ordinary ingress first (see
+  // releaseNBAHeldWakesBeforeReturns): a return before the region's updates
+  // are complete (a runtime cut, a priority-signal checkpoint, a stop or a
+  // failure) then runs them as Active events, as without holding, which the
+  // direct-store proofs already admit.
   auto emitReturns = [&] {
     builder.setInsertionPointToStart(complete);
     LLVM::ReturnOp::create(builder, location, complete->getArgument(0));
@@ -1009,6 +1218,7 @@ materializeNativeEvalDispatch(ModuleOp module,
         llvmConstant(builder, location, i32, TALOS_RT_TIER_UNAVAILABLE));
     builder.setInsertionPointToStart(failed);
     LLVM::ReturnOp::create(builder, location, failed->getArgument(0));
+    releaseNBAHeldWakesBeforeReturns(fastCoordinator);
   };
 
   builder.setInsertionPointToStart(commit);
@@ -1102,9 +1312,21 @@ materializeNativeEvalDispatch(ModuleOp module,
     Value isNBA = arith::CmpIOp::create(
         builder, location, arith::CmpIPredicate::eq, barrier,
         llvmConstant(builder, location, i32, TALOS_RT_REGION_NBA));
-    cf::CondBranchOp::create(
-        builder, location, isNBA, commitPrefix, ValueRange{}, complete,
-        ValueRange{llvmConstant(builder, location, i32, TALOS_RT_OK)});
+    if (!holdsWakes) {
+      cf::CondBranchOp::create(
+          builder, location, isNBA, commitPrefix, ValueRange{}, complete,
+          ValueRange{llvmConstant(builder, location, i32, TALOS_RT_OK)});
+    } else {
+      Block *noCommit = new Block;
+      fastCoordinator.getBody().push_back(noCommit);
+      cf::CondBranchOp::create(builder, location, isNBA, commitPrefix,
+                               ValueRange{}, noCommit, ValueRange{});
+      // No NBA barrier: the generated region staged nothing, so its early
+      // updates are complete and their wakes run now.
+      builder.setInsertionPointToStart(noCommit);
+      emitHeldMerge(dispatch, ValueRange{}, complete,
+                    llvmConstant(builder, location, i32, TALOS_RT_OK));
+    }
     builder.setInsertionPointToStart(commitPrefix);
     LLVM::StoreOp::create(builder, location,
                           llvmConstant(builder, location, i32, 0), changed, 4);
@@ -1131,8 +1353,17 @@ materializeNativeEvalDispatch(ModuleOp module,
     Value ok = arith::CmpIOp::create(
         builder, location, arith::CmpIPredicate::eq, status,
         llvmConstant(builder, location, i32, TALOS_RT_OK));
-    cf::CondBranchOp::create(builder, location, ok, dispatch, ValueRange{},
-                             failed, ValueRange{status});
+    if (!holdsWakes) {
+      cf::CondBranchOp::create(builder, location, ok, dispatch, ValueRange{},
+                               failed, ValueRange{status});
+    } else {
+      Block *committed = new Block;
+      fastCoordinator.getBody().push_back(committed);
+      cf::CondBranchOp::create(builder, location, ok, committed, ValueRange{},
+                               failed, ValueRange{status});
+      builder.setInsertionPointToStart(committed);
+      emitHeldMerge(dispatch, ValueRange{}, dispatch, ValueRange{});
+    }
     emitReturns();
     return success();
   }
@@ -1173,10 +1404,25 @@ materializeNativeEvalDispatch(ModuleOp module,
   Value noNBA = arith::CmpIOp::create(builder, location,
                                       arith::CmpIPredicate::eq, pendingNBA,
                                       llvmConstant(builder, location, i64, 0));
-  cf::CondBranchOp::create(
-      builder, location, noNBA, complete,
-      ValueRange{llvmConstant(builder, location, i32, TALOS_RT_OK)},
-      performCommit, ValueRange{});
+  if (!holdsWakes) {
+    cf::CondBranchOp::create(
+        builder, location, noNBA, complete,
+        ValueRange{llvmConstant(builder, location, i32, TALOS_RT_OK)},
+        performCommit, ValueRange{});
+  } else {
+    // Nothing generated is staged: the generated part of the region was
+    // performed early, and its wakes run now. Runtime-owned NBAs may still be
+    // pending; running these wakes before them is the behavior without
+    // holding, which the direct-store proofs admit. Otherwise the wakes wait
+    // for the commit.
+    Block *noStaged = new Block;
+    fastCoordinator.getBody().push_back(noStaged);
+    cf::CondBranchOp::create(builder, location, noNBA, noStaged, ValueRange{},
+                             performCommit, ValueRange{});
+    builder.setInsertionPointToStart(noStaged);
+    emitHeldMerge(dispatch, ValueRange{}, complete,
+                  llvmConstant(builder, location, i32, TALOS_RT_OK));
+  }
 
   builder.setInsertionPointToStart(performCommit);
   {
@@ -1370,6 +1616,12 @@ materializeNativeEvalDispatch(ModuleOp module,
                            ValueRange{}, failed, ValueRange{commitStatus});
 
   builder.setInsertionPointToStart(afterCommit);
+  if (holdsWakes) {
+    Block *merged = new Block;
+    fastCoordinator.getBody().push_back(merged);
+    emitHeldMerge(merged, ValueRange{}, merged, ValueRange{});
+    builder.setInsertionPointToStart(merged);
+  }
   Value postNBAReady = combinedIngress();
   Value postNBAEmpty = arith::CmpIOp::create(
       builder, location, arith::CmpIPredicate::eq, postNBAReady,

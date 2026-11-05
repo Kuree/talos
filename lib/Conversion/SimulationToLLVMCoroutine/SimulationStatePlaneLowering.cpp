@@ -29,7 +29,7 @@ void notifySignal(ConversionPatternRewriter &builder, Location location,
                   Value handle, uint64_t width, Value oldValue,
                   Value oldUnknown, Value newValue, Value newUnknown,
                   std::optional<DirectStaticStateRange> directRange,
-                  schedule::SourceOwnerAttr sourceOwner) {
+                  schedule::SourceOwnerAttr sourceOwner, bool nbaEquivalent) {
   Type pointer = LLVM::LLVMPointerType::get(builder.getContext());
   Type i64 = builder.getI64Type();
   Value address = LLVM::AddressOfOp::create(builder, location, pointer,
@@ -65,12 +65,15 @@ void notifySignal(ConversionPatternRewriter &builder, Location location,
     cf::CondBranchOp::create(builder, location, unchanged, continuation,
                              ValueRange{}, publish, ValueRange{});
     builder.setInsertionPointToEnd(publish);
-    schedule::NativeTransitionOp::create(
+    auto transition = schedule::NativeTransitionOp::create(
         builder, location, context,
         llvmConstant(builder, location, i64, directRange->localOffset),
         oldValueScalar, oldUnknownScalar, newValueScalar, newUnknownScalar,
         builder.getI64IntegerAttr(directRange->staticID),
         builder.getI64IntegerAttr(width), sourceOwner);
+    if (nbaEquivalent)
+      ::talos::schedule::set<::talos::schedule::Field::EvalNbaEquivalentStore>(
+          transition, builder.getUnitAttr());
     cf::BranchOp::create(builder, location, continuation);
     builder.setInsertionPointToStart(continuation);
     return;
@@ -94,6 +97,11 @@ void notifySignal(ConversionPatternRewriter &builder, Location location,
   if (sourceOwner)
     ::talos::schedule::set<schedule::metadata::evalSourceOwner>(transition,
                                                                 sourceOwner);
+  // Its machine-word slices inherit the mark (see
+  // normalizeGeneratedWideTransitions).
+  if (nbaEquivalent)
+    ::talos::schedule::set<::talos::schedule::Field::EvalNbaEquivalentStore>(
+        transition, builder.getUnitAttr());
   // The runtime consumes the transition before returning.
   for (Value storage : temporaries)
     endTemporary(builder, location, storage);
@@ -1041,14 +1049,12 @@ Value storeStatePlane(ConversionPatternRewriter &rewriter, Location location,
   return changed;
 }
 
-bool emitDirectDynamicPackedStore(ConversionPatternRewriter &rewriter,
-                                  Location location, Value handle, Value value,
-                                  Value unknown,
-                                  const NativeStateLayout *layout,
-                                  bool assumeClean, bool continuous,
-                                  bool twoState,
-                                  schedule::SourceOwnerAttr sourceOwner,
-                                  const NativeStateAccessInfo *access) {
+bool emitDirectDynamicPackedStore(
+    ConversionPatternRewriter &rewriter, Location location, Value handle,
+    Value value, Value unknown, const NativeStateLayout *layout,
+    bool assumeClean, bool continuous, bool twoState,
+    schedule::SourceOwnerAttr sourceOwner, const NativeStateAccessInfo *access,
+    bool nbaEquivalent) {
   auto accessUnit = access ? access->accessUnit : std::nullopt;
   auto inputType = dyn_cast<IntegerType>(value.getType());
   if (!inputType || !layout || !layout->transitionHandlesExact)
@@ -1279,13 +1285,17 @@ bool emitDirectDynamicPackedStore(ConversionPatternRewriter &rewriter,
           value = resize(value, rewriter.getIntegerType(width));
           return resize(value, i64);
         };
-        schedule::NativeTransitionOp::create(
+        auto transition = schedule::NativeTransitionOp::create(
             rewriter, location, context,
             arith::AddIOp::create(rewriter, location, clamped,
                                   llvmConstant(rewriter, location, i64, low)),
             chunk(oldValue), chunk(oldUnknown), chunk(newValue),
             chunk(newUnknown), rewriter.getI64IntegerAttr(range->staticID),
             rewriter.getI64IntegerAttr(width), sourceOwner);
+        if (nbaEquivalent)
+          ::talos::schedule::set<
+              ::talos::schedule::Field::EvalNbaEquivalentStore>(
+              transition, rewriter.getUnitAttr());
       }
     }
     if (guardContinuation) {
@@ -1381,7 +1391,7 @@ bool emitDirectDynamicPackedStore(ConversionPatternRewriter &rewriter,
                  oldUnknown, newValue, newUnknown,
                  DirectStaticStateRange{range->rootOffset, 0, range->staticID,
                                         range->guarded},
-                 sourceOwner);
+                 sourceOwner, nbaEquivalent);
   }
   return true;
 }

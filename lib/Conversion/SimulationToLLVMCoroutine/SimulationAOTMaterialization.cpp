@@ -25,6 +25,7 @@
 #include "mlir/Interfaces/LoopLikeInterface.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/IR/DataLayout.h"
@@ -672,13 +673,18 @@ static void normalizeGeneratedWideTransitions(
                    : LLVM::ZExtOp::create(builder, call.getLoc(), i64, value)
                          .getResult();
       };
-      schedule::NativeTransitionOp::create(
+      auto transition = schedule::NativeTransitionOp::create(
           builder, call.getLoc(), args[0],
           llvmConstant(builder, call.getLoc(), i64, range->localOffset + low),
           load(args[3]), load(args[4]), load(args[5]), load(args[6]),
           builder.getI64IntegerAttr(range->staticID),
           builder.getI64IntegerAttr(bits),
           ::talos::schedule::get<schedule::metadata::evalSourceOwner>(call));
+      if (::talos::schedule::has<
+              ::talos::schedule::Field::EvalNbaEquivalentStore>(call))
+        ::talos::schedule::set<
+            ::talos::schedule::Field::EvalNbaEquivalentStore>(
+            transition, builder.getUnitAttr());
     }
     call.erase();
   }
@@ -1611,6 +1617,10 @@ FailureOr<bool> makeNativeEvalPlan(
         fusionMembers[direct.fusionGroup].push_back(index);
     }
     llvm::StringMap<APInt> activeOwnerBits;
+    // The bits the coordinator consumes after running a body: its records'
+    // bits and the members their coordinators subsume. A wake to one of them
+    // is dropped by that consume, so it must not be held past it.
+    llvm::StringMap<APInt> consumedOwnerBits;
     DenseMap<std::pair<uint64_t, uint32_t>, std::pair<uint32_t, uint32_t>>
         physicalSourceOwners;
     DenseMap<uint64_t, std::pair<uint32_t, uint32_t>> uniqueCodeUnitOwners;
@@ -1636,6 +1646,17 @@ FailureOr<bool> makeNativeEvalPlan(
             failed(mapActiveBody(directFragments[member].twoStateBody,
                                  mergedFragments[recordIndex].bit)))
           return failure();
+        for (StringRef body : {StringRef(directFragments[member].body),
+                               StringRef(directFragments[member].twoStateBody)}) {
+          if (body.empty())
+            continue;
+          APInt &consumed =
+              consumedOwnerBits.try_emplace(body, ownerCount, 0).first->second;
+          consumed.setBit(mergedFragments[recordIndex].bit);
+          if (recordIndex < ownerSubsumptionMasks.size() &&
+              ownerSubsumptionMasks[recordIndex].getBitWidth() == ownerCount)
+            consumed |= ownerSubsumptionMasks[recordIndex];
+        }
       }
     }
     // The first unfused direct fragment whose body or two-state body has a
@@ -1664,6 +1685,8 @@ FailureOr<bool> makeNativeEvalPlan(
       // Shared per body; null when no active owner maps to the body.
       const APInt *activeOwnerMask;
       std::optional<std::pair<uint32_t, uint32_t>> physicalSourceOwner;
+      // Shared per body; null when no owner maps to the body.
+      const APInt *consumedOwnerMask = nullptr;
     };
     SmallVector<GeneratedTransition> transitions;
     for (sim::SimFuncOp function :
@@ -1673,6 +1696,10 @@ FailureOr<bool> makeNativeEvalPlan(
           activeOwner == activeOwnerBits.end() || activeOwner->second.isZero()
               ? nullptr
               : &activeOwner->second;
+      auto consumedOwner = consumedOwnerBits.find(function.getSymName());
+      const APInt *consumedOwnerMask = consumedOwner == consumedOwnerBits.end()
+                                           ? nullptr
+                                           : &consumedOwner->second;
       std::optional<std::pair<uint32_t, uint32_t>> bodySourceOwner;
       if (auto found = bodySourceOwners.find(function.getSymName());
           found != bodySourceOwners.end())
@@ -1701,11 +1728,56 @@ FailureOr<bool> makeNativeEvalPlan(
         // identity; do not infer one for shared helpers or coordinators.
         if (!physicalSourceOwner)
           physicalSourceOwner = bodySourceOwner;
-        transitions.push_back({call, activeOwnerMask, physicalSourceOwner});
+        transitions.push_back(
+            {call, activeOwnerMask, physicalSourceOwner, consumedOwnerMask});
       });
     }
     SmallVector<std::pair<schedule::NativeTransitionOp, uint32_t>>
         ownedPublications;
+    // A clocked kernel's direct store performs an NBA update early. The
+    // evaluations it causes belong to the NBA region that would perform the
+    // update: they may run after every update of that region (IEEE 1800-2023
+    // 4.5, 4.6(b), 4.7). Its wakes therefore wait in the held set, which the
+    // coordinator merges when the region's updates are complete. Edges are
+    // still decided here, at the store (9.4.2).
+    llvm::SmallSetVector<int32_t, 16> heldWords;
+    // The set a wake goes to: the ingress set, or the held set (created on
+    // first use) for an NBA-equivalent store. The held set has the ingress
+    // layout, so a held publication is the same ready update and coalesces
+    // the same way; its summaries tell the coordinator what to merge.
+    auto wakeBase = [&](OpBuilder &wakeBuilder, Location wakeLocation,
+                        bool held) -> Value {
+      if (held && !module.lookupSymbol(evalNBAHeldWakesName)) {
+        OpBuilder globalBuilder = OpBuilder::atBlockBegin(module.getBody());
+        Type type = LLVM::LLVMArrayType::get(i64, readyLayout.storageWords);
+        auto global = LLVM::GlobalOp::create(
+            globalBuilder, location, type, false, LLVM::Linkage::Internal,
+            evalNBAHeldWakesName, Attribute{}, 8);
+        Block *initializer = new Block;
+        global.getInitializerRegion().push_back(initializer);
+        OpBuilder initializerBuilder = OpBuilder::atBlockBegin(initializer);
+        // Empty: the minimum cache starts past the last leaf.
+        Value empty = LLVM::ZeroOp::create(initializerBuilder, location, type);
+        if (readyLayout.hasCache())
+          empty = LLVM::InsertValueOp::create(
+              initializerBuilder, location, empty,
+              llvmConstant(initializerBuilder, location, i64,
+                           readyLayout.counts[0]),
+              ArrayRef<int64_t>{readyLayout.cacheOffset()});
+        LLVM::ReturnOp::create(initializerBuilder, location, empty);
+      }
+      return LLVM::AddressOfOp::create(wakeBuilder, wakeLocation, pointer,
+                                       held ? StringRef(evalNBAHeldWakesName)
+                                            : StringRef(evalModelIngressName));
+    };
+    auto publishWake = [&](OpBuilder &wakeBuilder, Location wakeLocation,
+                           bool held, Value base, unsigned word,
+                           Value selected) {
+      if (held)
+        heldWords.insert(static_cast<int32_t>(word));
+      updateEvalReadyWord(wakeBuilder, wakeLocation, base, readyLayout, word,
+                          selected);
+    };
     auto packedMask = [](uint64_t width) {
       return width >= 64 ? UINT64_MAX : (uint64_t{1} << width) - 1;
     };
@@ -1714,6 +1786,19 @@ FailureOr<bool> makeNativeEvalPlan(
       const APInt *activeOwnerMask = transition.activeOwnerMask;
       std::optional<std::pair<uint32_t, uint32_t>> physicalSourceOwner =
           transition.physicalSourceOwner;
+      bool held = ::talos::schedule::has<
+          ::talos::schedule::Field::EvalNbaEquivalentStore>(call);
+      // A wake back to the executing owner, or to a member its coordinator
+      // subsumes, stays in the ingress set: the coordinator's consume after
+      // execution is what drops it.
+      const APInt *consumedOwnerMask = transition.consumedOwnerMask;
+      auto targetsSource = [&](uint32_t actorSlot, uint32_t continuation,
+                               uint32_t bit) {
+        return (physicalSourceOwner &&
+                *physicalSourceOwner == std::pair{actorSlot, continuation}) ||
+               (activeOwnerMask && (*activeOwnerMask)[bit]) ||
+               (consumedOwnerMask && (*consumedOwnerMask)[bit]);
+      };
       std::optional<uint64_t> staticState = call.getStaticState();
       std::optional<uint64_t> lowBit = constantU64(call.getOffset());
       std::optional<uint64_t> bitWidth = call.getWidth();
@@ -1773,6 +1858,16 @@ FailureOr<bool> makeNativeEvalPlan(
                                   invert(newOne)),
             arith::AndIOp::create(transitionBuilder, call.getLoc(), oldUnknown,
                                   newZero));
+        // Decide held or ingress per owner bit, as the static branch does.
+        llvm::SmallDenseSet<uint32_t, 4> sourceBits;
+        if (held)
+          for (uint32_t fanoutIndex : fanoutIndicesOf(*staticState)) {
+            const talos_rt_static_fanout_entry &entry =
+                fanoutEntries[fanoutIndex];
+            if (targetsSource(entry.actor_slot, entry.continuation,
+                              entry.merged_bit))
+              sourceBits.insert(entry.merged_bit);
+          }
         for (uint32_t fanoutIndex : fanoutIndicesOf(*staticState)) {
           const talos_rt_static_fanout_entry &entry =
               fanoutEntries[fanoutIndex];
@@ -1841,10 +1936,10 @@ FailureOr<bool> makeNativeEvalPlan(
           Value selected = arith::SelectOp::create(
               transitionBuilder, call.getLoc(), triggered,
               constant(uint64_t{1} << (entry.merged_bit % 64)), constant(0));
-          Value ingress = LLVM::AddressOfOp::create(
-              transitionBuilder, call.getLoc(), pointer, evalModelIngressName);
-          updateEvalReadyWord(transitionBuilder, call.getLoc(), ingress,
-                              readyLayout, entry.merged_bit / 64, selected);
+          bool entryHeld = held && !sourceBits.contains(entry.merged_bit);
+          publishWake(transitionBuilder, call.getLoc(), entryHeld,
+                      wakeBase(transitionBuilder, call.getLoc(), entryHeld),
+                      entry.merged_bit / 64, selected);
         }
         if (!hasRuntimeOwnedObserver)
           call.erase();
@@ -1855,6 +1950,7 @@ FailureOr<bool> makeNativeEvalPlan(
         uint64_t changeMask = 0;
         uint64_t posedgeMask = 0;
         uint64_t negedgeMask = 0;
+        bool toSource = false;
       };
       SmallVector<MergedPublication, 4> publications;
       uint64_t rangeEnd = *lowBit + *bitWidth;
@@ -1900,6 +1996,8 @@ FailureOr<bool> makeNativeEvalPlan(
           publications.push_back({entry.merged_bit});
           publication = std::prev(publications.end());
         }
+        publication->toSource |= targetsSource(
+            entry.actor_slot, entry.continuation, entry.merged_bit);
         if (entry.edge == TALOS_RT_WAIT_EDGE_POSEDGE)
           publication->posedgeMask |= overlapMask;
         else if (entry.edge == TALOS_RT_WAIT_EDGE_NEGEDGE)
@@ -1986,18 +2084,26 @@ FailureOr<bool> makeNativeEvalPlan(
         Value triggered = arith::CmpIOp::create(
             transitionBuilder, call.getLoc(), arith::CmpIPredicate::ne,
             observed, llvmConstant(transitionBuilder, call.getLoc(), i64, 0));
-        Value ingress = LLVM::AddressOfOp::create(
-            transitionBuilder, call.getLoc(), pointer, evalModelIngressName);
+        bool publicationHeld = held && !publication.toSource;
+        Value base =
+            wakeBase(transitionBuilder, call.getLoc(), publicationHeld);
         Value selected = arith::SelectOp::create(
             transitionBuilder, call.getLoc(), triggered,
             llvmConstant(transitionBuilder, call.getLoc(), i64,
                          uint64_t{1} << (publication.bit % 64)),
             llvmConstant(transitionBuilder, call.getLoc(), i64, 0));
-        updateEvalReadyWord(transitionBuilder, call.getLoc(), ingress,
-                            readyLayout, publication.bit / 64, selected);
+        publishWake(transitionBuilder, call.getLoc(), publicationHeld, base,
+                    publication.bit / 64, selected);
       }
       if (!hasRuntimeOwnedObserver)
         call.erase();
+    }
+    if (!heldWords.empty()) {
+      SmallVector<int32_t> words(heldWords.begin(), heldWords.end());
+      llvm::sort(words);
+      ::talos::schedule::set<::talos::schedule::Field::EvalNbaHeldWords>(
+          module.lookupSymbol<LLVM::GlobalOp>(evalNBAHeldWakesName),
+          DenseI32ArrayAttr::get(context, words));
     }
 
     // LRM 4.6(a), 9.4.2: retain runtime waiter delivery at the exact source
@@ -5145,9 +5251,12 @@ FailureOr<bool> makeNativeEvalPlan(
     builder.setInsertionPointToStart(afterStep);
     // prepare_periodic_aot detaches the runtime clock deadlines.  Once that
     // succeeds every generated exit, including TierUnavailable and fatal body
-    // statuses, must restore them before returning to the runtime.
-    cf::BranchOp::create(builder, location, handoff,
-                         ValueRange{afterStep->getArgument(0)});
+    // statuses, must restore them before returning to the runtime. Held NBA
+    // wakes return to the ingress set first: the runtime may run the next NBA
+    // region itself.
+    emitNBAHeldWakeMerge(builder, location, module, handoff,
+                         afterStep->getArgument(0), handoff,
+                         afterStep->getArgument(0));
 
     builder.setInsertionPointToStart(handoff);
     reconstructAliasDrivers();
@@ -5423,6 +5532,7 @@ FailureOr<bool> makeNativeEvalPlan(
   coordinatorPlan.rankedGroupExecutors = *rankedGroups;
   if (failed(materializeNativeEvalDispatch(module, coordinatorPlan)))
     return failure();
+  releaseNBAHeldWakesBeforeReturns(run);
 
   // Cold four-state commit returns to the same region dispatcher. It must
   // not recursively drain post-NBA work in another controller activation.

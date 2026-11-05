@@ -172,6 +172,17 @@ def EvalRuntimeNbaRequired : ScheduleField<"EvalRuntimeNbaRequired", "schedule.e
 // them in every slot.
 def EvalRuntimeRoutedPublication : ScheduleField<"EvalRuntimeRoutedPublication", "schedule.eval.runtime_routed_publication",
     "::mlir::UnitAttr">;
+// A store that performs an NBA update early: a clocked kernel's direct store
+// (IEEE 1800-2023 4.5, 10.4.2). The evaluations its transition causes may run
+// after the remaining updates of its NBA region (4.5, 4.6(b), 4.7), so
+// generated fanout publishes their wakes into the held ready set, which the
+// coordinator merges once those updates are complete.
+def EvalNbaEquivalentStore : ScheduleField<"EvalNbaEquivalentStore", "schedule.eval.nba_equivalent_store",
+    "::mlir::UnitAttr">;
+// On the held ready set's global: the sorted leaf words a held publication can
+// reach. The coordinator merges only these.
+def EvalNbaHeldWords : ScheduleField<"EvalNbaHeldWords", "schedule.eval.nba_held_words",
+    "::mlir::DenseI32ArrayAttr">;
 def EvalSegmentHelpers : ScheduleField<"EvalSegmentHelpers", "schedule.eval.segment_helpers",
     "::mlir::ArrayAttr">;
 def EvalSelectedTwoState : ScheduleField<"EvalSelectedTwoState", "schedule.eval.selected_two_state",

@@ -1713,6 +1713,9 @@ cloneSliceWithTemporaries(const ActivationSlice &slice,
       auto narrowed = sim::SimRefStoreOp::create(builder, loc, part, reference);
       if (auto owner = schedule::get<schedule::Field::EvalSourceOwner>(cloned))
         schedule::set<schedule::Field::EvalSourceOwner>(narrowed, owner);
+      if (schedule::has<schedule::Field::EvalNbaEquivalentStore>(cloned))
+        schedule::set<schedule::Field::EvalNbaEquivalentStore>(
+            narrowed, builder.getUnitAttr());
       writes[narrowed] = {window};
     }
     writes.erase(cloned);

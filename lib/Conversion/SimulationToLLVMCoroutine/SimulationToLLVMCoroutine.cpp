@@ -3097,6 +3097,8 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
       (void)syncCheckpointState();
       LLVM::ReturnOp::create(builder, route.fourState.getLoc(),
                              returnBodyStatus->getArgument(0));
+      // The body may publish held NBA wakes; the runtime resumes after this.
+      detail::releaseNBAHeldWakesBeforeReturns(route.checkpointFallback);
 
       Block *entry = route.dispatcher.addEntryBlock(builder);
       Block *twoState = new Block;

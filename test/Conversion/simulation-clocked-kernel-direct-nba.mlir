@@ -92,7 +92,7 @@ module attributes {
     // CHECK: simulation.logic.extract
     // CHECK-NEXT: simulation.nba.enqueue
     // CHECK: simulation.ref.store %{{.*}} to %{{.*}} : !simulation.logic<8>
-    // CHECK: simulation.ref.store %{{.*}} to %[[A]] : !simulation.logic<8>
+    // CHECK: simulation.ref.store %{{.*}} to %[[A]] {schedule.eval.nba_equivalent_store} : !simulation.logic<8>
     // CHECK-NEXT: simulation.ref.store %[[OLD]] to %{{.*}} : !simulation.logic<8>
     // CHECK-NOT: simulation.nba.enqueue
     // CHECK: }

@@ -57,7 +57,7 @@ module attributes {
     // CHECK: simulation.suspend.edge posedge
     // `follow` reads `q` before `toggle` would update it.
     // CHECK: simulation.ref.load
-    // CHECK: simulation.ref.store %{{.*}} to %[[R:arg[0-9]+]] : !simulation.logic<1>
+    // CHECK: simulation.ref.store %{{.*}} to %[[R:arg[0-9]+]] {schedule.eval.nba_equivalent_store} : !simulation.logic<1>
     // CHECK: simulation.logic.unary logical_not
     // CHECK-NEXT: simulation.nba.enqueue
     // CHECK-NOT: simulation.ref.store

@@ -3,6 +3,7 @@
 
 #include "SimulationAOTPlanning.h"
 #include "SimulationEvalReadySet.h"
+#include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Runtime/RuntimeDialect.h"
 #include "talos/Dialect/Schedule/ClockedKernelName.h"
@@ -696,8 +697,12 @@ unsigned elideUnconditionalMemberPublications(LLVM::LLVMFuncOp function) {
   function.walk([&](schedule::NativeReadyUpdateOp update) {
     if (update.getConsume())
       return;
+    // A held wake (an NBA-equivalent store's, see evalNBAHeldWakesName) to a
+    // member that still runs later in this sweep is redundant as well: the
+    // member reads the stored value there.
     auto base = update.getBase().getDefiningOp<LLVM::AddressOfOp>();
-    if (!base || base.getGlobalName() != ingress.getValue())
+    if (!base || (base.getGlobalName() != ingress.getValue() &&
+                  base.getGlobalName() != evalNBAHeldWakesName))
       return;
     std::optional<uint64_t> bits = constantBits(update.getMask());
     auto word = unconditional.find(update.getWord());

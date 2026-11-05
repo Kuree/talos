@@ -57,7 +57,7 @@ module attributes {native.debug_timing} {
     // CHECK-LABEL: simulation.func private @__talos_clocked_0_1_0
     // CHECK: simulation.suspend.edge posedge
     // CHECK-NOT: simulation.nba.enqueue
-    // CHECK: simulation.ref.store
+    // CHECK: simulation.ref.store {{.*}} {schedule.eval.nba_equivalent_store}
     // CHECK: }
     // CHECK-LABEL: simulation.func private @__talos_clocked_0_2_0
     // CHECK: simulation.suspend.edge negedge

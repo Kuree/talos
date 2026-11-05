@@ -195,7 +195,8 @@ bool tryStoreBulkDirect(ConversionPatternRewriter &rewriter, Location location,
 void notifyBulkSignal(ConversionPatternRewriter &rewriter, Location location,
                       Value handle, uint64_t width, Value oldValue,
                       Value oldUnknown, Value newValue, Value newUnknown,
-                      schedule::SourceOwnerAttr sourceOwner = {}) {
+                      schedule::SourceOwnerAttr sourceOwner = {},
+                      bool nbaEquivalent = false) {
   Type pointer = LLVM::LLVMPointerType::get(rewriter.getContext());
   auto pointerOrNull = [&](Value value) {
     return value
@@ -213,6 +214,11 @@ void notifyBulkSignal(ConversionPatternRewriter &rewriter, Location location,
   if (sourceOwner)
     ::talos::schedule::set<schedule::metadata::evalSourceOwner>(call,
                                                                 sourceOwner);
+  // Its machine-word slices inherit the mark (see
+  // normalizeGeneratedWideTransitions).
+  if (nbaEquivalent)
+    ::talos::schedule::set<::talos::schedule::Field::EvalNbaEquivalentStore>(
+        call, rewriter.getUnitAttr());
 }
 
 class BulkRefCopyConversion final
@@ -287,8 +293,11 @@ public:
       newUnknown = loadBulkStatePlane(rewriter, location, destination, *width,
                                       "__talos_state_unknown", true,
                                       stateBitCount, directLayout, false);
-    notifyBulkSignal(rewriter, location, destination, *width, oldValue,
-                     oldUnknown, newValue, newUnknown);
+    notifyBulkSignal(
+        rewriter, location, destination, *width, oldValue, oldUnknown,
+        newValue, newUnknown, /*sourceOwner=*/{},
+        ::talos::schedule::has<
+            ::talos::schedule::Field::EvalNbaEquivalentStore>(op));
     rewriter.eraseOp(op);
     return success();
   }
@@ -631,6 +640,10 @@ public:
     IntegerType plane = rewriter.getIntegerType(*width);
     bool assumeClean =
         ::talos::schedule::has<assumeCleanSpecializationAttr>(op);
+    // A clocked kernel's direct store: its wakes wait in the held set until
+    // the updates of its NBA region are complete.
+    bool nbaEquivalent = ::talos::schedule::has<
+        ::talos::schedule::Field::EvalNbaEquivalentStore>(op);
     sim::SimFuncOp function = op->getParentOfType<sim::SimFuncOp>();
     sim::EntryKind entryKind = function.getEntryKind();
     bool runtimePublication =
@@ -740,7 +753,8 @@ public:
         notifyBulkSignal(
             rewriter, location, handle, *width, oldValue, oldUnknown, newValue,
             newUnknown,
-            ::talos::schedule::get<schedule::metadata::evalSourceOwner>(op));
+            ::talos::schedule::get<schedule::metadata::evalSourceOwner>(op),
+            nbaEquivalent);
       }
       rewriter.eraseOp(op);
       return success();
@@ -762,7 +776,7 @@ public:
             adaptor.getValue().size() == 2 ? adaptor.getValue()[1] : Value{},
             directLayout, assumeClean, continuous, twoState,
             ::talos::schedule::get<schedule::metadata::evalSourceOwner>(op),
-            access)) {
+            access, nbaEquivalent)) {
       rewriter.eraseOp(op);
       return success();
     }
@@ -896,7 +910,8 @@ public:
                   directLayout->transitionHandlesExact
               ? directRange
               : std::nullopt,
-          ::talos::schedule::get<schedule::metadata::evalSourceOwner>(op));
+          ::talos::schedule::get<schedule::metadata::evalSourceOwner>(op),
+          nbaEquivalent);
     }
     rewriter.eraseOp(op);
     return success();

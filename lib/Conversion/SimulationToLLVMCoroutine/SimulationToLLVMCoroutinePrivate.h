@@ -120,6 +120,32 @@ inline constexpr llvm::StringLiteral evalStepFourStateNBARootsName =
 /// not the runtime, decides whether an NBA barrier is pending.
 inline constexpr llvm::StringLiteral evalDynamicNBAPendingName =
     "__talos_eval_nba_dynamic_pending_v1";
+/// Owner bits woken by NBA-equivalent stores (a clocked kernel's direct
+/// stores, which perform an NBA update early): a second ready set with the
+/// ingress layout. Generated fanout publishes these wakes here instead of into
+/// the ingress set; the coordinator merges them when the updates of the NBA
+/// region are complete: after the commit, or at quiescence when nothing was
+/// staged (IEEE 1800-2023 4.5, 4.6(b), 4.7). Every other coordinator exit
+/// merges them into the ingress set first. The global's EvalNbaHeldWords field
+/// lists the leaf words a publication can reach.
+inline constexpr llvm::StringLiteral evalNBAHeldWakesName =
+    "__talos_eval_nba_held_wakes_v1";
+/// The generated function that merges evalNBAHeldWakesName into the ingress
+/// set and empties it (see emitNBAHeldWakeMerge).
+inline constexpr llvm::StringLiteral evalNBAHeldMergeName =
+    "__talos_eval_nba_held_merge_v1";
+/// At `builder`'s insertion point, which this terminates: merge the held
+/// wakes into the ingress set and continue at `merged` when anything is held,
+/// otherwise continue at `none`. Without held publications in `module` this
+/// is a plain branch to `none`.
+void emitNBAHeldWakeMerge(mlir::OpBuilder &builder, mlir::Location loc,
+                          mlir::ModuleOp module, mlir::Block *merged,
+                          mlir::ValueRange mergedOperands, mlir::Block *none,
+                          mlir::ValueRange noneOperands);
+/// Merge held wakes before every return of `function`, a generated entry the
+/// runtime calls. The held set is then empty whenever the runtime runs, so its
+/// own NBA regions and region checks see every wake.
+void releaseNBAHeldWakesBeforeReturns(mlir::LLVM::LLVMFuncOp function);
 /// Create the step evidence globals unless they exist: a zero byte and, for a
 /// nonzero `taintWords`, a zeroed array of that many root-bit words.
 void materializeEvalStepFourStateGlobals(mlir::ModuleOp module,
@@ -234,7 +260,7 @@ bool emitDirectDynamicPackedStore(
     mlir::Value handle, mlir::Value value, mlir::Value unknown,
     const NativeStateLayout *layout, bool assumeClean, bool continuous,
     bool twoState, schedule::SourceOwnerAttr sourceOwner,
-    const NativeStateAccessInfo *access = nullptr);
+    const NativeStateAccessInfo *access = nullptr, bool nbaEquivalent = false);
 
 /// Compiler-side field indices for talos_rt_native_schedule_plan. Keep all
 /// LLVM literal construction and aggregate access tied to one named layout.
@@ -600,7 +626,7 @@ void notifySignal(
     mlir::Value handle, uint64_t width, mlir::Value oldValue,
     mlir::Value oldUnknown, mlir::Value newValue, mlir::Value newUnknown,
     std::optional<DirectStaticStateRange> directRange = std::nullopt,
-    schedule::SourceOwnerAttr sourceOwner = {});
+    schedule::SourceOwnerAttr sourceOwner = {}, bool nbaEquivalent = false);
 mlir::LogicalResult
 insertAutomaticOwnerReleases(talos::sim::SimFuncOp function);
 mlir::LogicalResult
