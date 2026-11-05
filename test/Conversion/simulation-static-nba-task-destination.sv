@@ -5,8 +5,10 @@
 // IEEE 1800-2023 4.6(b), 10.4.2: an NBA blocks static accumulators only when
 // its destination may be any root. The task below waits, then assigns r; its
 // destination reaches the assignment as a block argument of the resumed
-// body, yet the compute graph still resolves the commit to r alone. So both r
-// and a keep their static NBA roots and run in generated code.
+// body, yet the compute graph still resolves the commit to r alone. So r keeps
+// its static NBA root and runs in generated code. The posedge kernel stores a
+// directly: the negedge $display that reads it never shares its time slot
+// (9.4.2, Table 9-2: the clock changes once per slot).
 module top;
   logic clk = 0;
   logic [7:0] r = 0;
@@ -22,12 +24,12 @@ module top;
   initial #42 $finish;
 endmodule
 
-// CHECK: talos native unchanged NBA roots: 2/2
+// CHECK: talos native unchanged NBA roots: 1/1
 // CHECK: talos eval executor inventory: tier1=2 tier2=0 runtime_checkpoints=0
-// CHECK: talos native NBA batch: candidates=2 roots=2
+// CHECK: talos native NBA batch: candidates=1 roots=1
 
 // The shape this test exists for: r's destination is a block argument of the
-// resumed task body, and both roots are planned.
-// IR: nbaRoots = [1, 2]
+// resumed task body, and it is planned.
+// IR: nbaRoots = [1]
 // IR: ^bb{{[0-9]+}}(%[[REF:[0-9]+]]: !simulation.ref<!simulation.packed_array<7 : 0
 // IR-NEXT: simulation.nba.enqueue %arg1 to %[[REF]]

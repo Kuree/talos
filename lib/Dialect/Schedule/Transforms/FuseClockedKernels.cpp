@@ -606,6 +606,10 @@ public:
     DenseSet<Operation *> otherKernelWaits;
     /// Roots the kernel itself may change in its phase.
     SmallVector<uint64_t> changed;
+    /// Blocks that never run in a later time slot of the kernel's edge, and
+    /// whether they also never run with it in the time-zero slot.
+    const DenseSet<Block *> *otherSlotBlocks = nullptr;
+    bool otherSlotAtZero = false;
   };
   PostKernelAnalysis(DataFlowSolver &solver, const Config &config)
       : DataFlowAnalysis(solver), config(config) {
@@ -693,7 +697,14 @@ private:
                                  point, getLatticeAnchor<AfterEntry>(
                                             std::make_pair(from.callee, 1u)))
                                  ->after;
-    if (!config.phases.getPhases(block).meets(config.kernel))
+    analysis::ActivationPhaseAnalysis::Phases at =
+        config.phases.getPhases(block);
+    if (config.otherSlotBlocks && config.otherSlotBlocks->contains(block)) {
+      at.later = 0;
+      if (config.otherSlotAtZero)
+        at.zero = 0;
+    }
+    if (!at.meets(config.kernel))
       return false;
     if (config.otherKernelWaits.contains(from.terminator))
       return true;
@@ -1050,7 +1061,11 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
 
   // 2. Clocked members, grouped by clock class, edge, and time-zero
   // behavior.
+  // (class root, edge relative to the class | time-zero variant << 8).
   using GroupKey = std::pair<uint64_t, unsigned>;
+  auto groupEdge = [](const GroupKey &key) {
+    return static_cast<sim::EdgeKind>(key.second & 0xff);
+  };
   llvm::MapVector<GroupKey, std::vector<Member>> groups;
   for (sim::SimFuncOp function :
        design.getBody().front().getOps<sim::SimFuncOp>()) {
@@ -1349,6 +1364,195 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
     for (Member &member : members)
       memberWaits.insert(member.wait->getTerminator());
 
+  // The body blocks of the members on each edge of each clock class, with the
+  // edge relative to the class (a complemented chain swaps posedge and
+  // negedge). A member suspends only at its edge wait, so its body runs only
+  // in time slots in which its clock has that edge (9.4.2). Also every clock
+  // root of each class, and the roots its net copy chains update. Both are
+  // collected before planning drops members that access their clock: such a
+  // process still runs only on its edge.
+  struct EdgeBodies {
+    DenseSet<Block *> blocks;
+    DenseSet<std::pair<StringAttr, uint32_t>> indices;
+  };
+  DenseMap<std::pair<uint64_t, unsigned>, EdgeBodies> edgeBodies;
+  DenseMap<uint64_t, SmallVector<uint64_t>> classClockRoots;
+  DenseMap<uint64_t, DenseSet<uint64_t>> classNetCopies;
+  for (auto &[key, members] : groups) {
+    sim::EdgeKind edge = groupEdge(key);
+    bool directed =
+        edge == sim::EdgeKind::Posedge || edge == sim::EdgeKind::Negedge;
+    for (Member &member : members) {
+      if (directed) {
+        EdgeBodies &bodies =
+            edgeBodies[{key.first, static_cast<unsigned>(edge)}];
+        DenseMap<Block *, uint32_t> position;
+        for (auto [index, block] : llvm::enumerate(member.function.getBody()))
+          position[&block] = index;
+        for (Block *block : member.bodyBlocks) {
+          bodies.blocks.insert(block);
+          bodies.indices.insert(
+              {member.function.getSymNameAttr(), position.lookup(block)});
+        }
+      }
+      SmallVector<uint64_t> &roots = classClockRoots[key.first];
+      roots.push_back(member.clock);
+      llvm::append_range(roots, member.clockChain);
+      for (uint64_t root : member.clockChain)
+        if (root != member.origin)
+          classNetCopies[key.first].insert(root);
+    }
+  }
+
+  // Whether every root of a clock class changes at most once in each time
+  // slot after time zero. Copies change exactly when their source does
+  // (10.3.2, 23.3.3), so it suffices that the class sources have one writer in
+  // later slots, a periodic process, which resumes only from positive delays
+  // and so runs at most once per slot (4.4.2.3, 4.5), and that no activation
+  // of it stores a source twice. A single change is a posedge, a negedge or
+  // neither, never both (9.4.2, Table 9-2), so no later slot then has both
+  // edges of the class.
+  //
+  // At time zero, when nothing but static initialization (which precedes
+  // every process, 6.8) writes a class source, the sources and their variable
+  // copies keep their values. A copy chain root (a net, or a variable a
+  // continuous assignment drives) that starts at x or z, a 4-state net or an
+  // uninitialized 4-state variable (6.6, 6.8, Table 6-7), then only moves
+  // through x to its source's value or that value's complement (4.9.1,
+  // 10.3.2; the complement of x or z is x, 11.4.8). Every edge of that slot
+  // then has the direction of the source's value relative to the class, so
+  // the time-zero slot also never has both edges. A root that starts at a
+  // known value, such as a 2-state variable at 0, passes that stale value on:
+  // a net it drives may move from z to it and then on to the final value.
+  enum class SlotChanges { Any, OnceLater, Once };
+  DenseMap<uint64_t, SlotChanges> slotChanges;
+  auto classSlotChanges = [&](uint64_t classRoot) -> SlotChanges {
+    if (auto found = slotChanges.find(classRoot); found != slotChanges.end())
+      return found->second;
+    bool quietAtZero = true;
+    // Returns why the class may change twice in a later slot, or an empty
+    // string.
+    auto decide = [&]() -> StringRef {
+      SmallVector<uint64_t> roots{classRoot};
+      if (auto found = classMembers.find(classRoot);
+          found != classMembers.end())
+        llvm::append_range(roots, found->second);
+      llvm::append_range(roots, classClockRoots.lookup(classRoot));
+      static const DenseSet<uint64_t> noNetCopies;
+      auto netCopiesFound = classNetCopies.find(classRoot);
+      const DenseSet<uint64_t> &netCopies =
+          netCopiesFound != classNetCopies.end() ? netCopiesFound->second
+                                                 : noNetCopies;
+      // A delayed NBA lands in a later slot whatever its writer's phases
+      // (4.9.4).
+      auto inLaterSlots = [&](const Writer &write) {
+        return write.deferred ||
+               phases.getPhases(write.function, write.block).later != 0;
+      };
+      auto atTimeZero = [&](const Writer &write) {
+        return write.deferred ||
+               phases.getPhases(write.function, write.block).zero != 0;
+      };
+      if (llvm::any_of(unknownWriters, inLaterSlots))
+        return "unknown writer";
+      quietAtZero = llvm::none_of(unknownWriters, atTimeZero);
+      DenseSet<uint64_t> sources;
+      StringAttr source;
+      for (uint64_t root : roots) {
+        if (phases.getCopies().count(root) || netCopies.contains(root))
+          continue;
+        sources.insert(root);
+        for (const Writer &write : writers.lookup(root)) {
+          if (write.function == rootInitializer.getSymNameAttr())
+            continue;
+          quietAtZero &= !atTimeZero(write);
+          if (!inLaterSlots(write))
+            continue;
+          if (write.kind == schedule::ComputeEffectKind::NBA)
+            return "nba writer";
+          if (!isPeriodic(write.function))
+            return "aperiodic writer";
+          if (source && source != write.function)
+            return "second writer";
+          source = write.function;
+        }
+      }
+      for (uint64_t root : netCopies)
+        quietAtZero &= root >= ActivationMemoryAnalysis::netRootTag
+                           ? isa_and_nonnull<sim::LogicType>(rootType(root))
+                           : initialLevel(root) == Unknown;
+      if (!source)
+        return {};
+      // Blocks of the writer that store a source: each holds one blocking
+      // store of a resolved source root and no other write.
+      auto function = symbols.lookup<sim::SimFuncOp>(source);
+      DenseSet<Block *> storing;
+      for (Block &block : function.getBody()) {
+        unsigned stores = 0;
+        for (Operation &operation : block) {
+          if (auto store = dyn_cast<sim::SimRefStoreOp>(&operation)) {
+            std::optional<uint64_t> root =
+                phases.getRoot(function, store.getReference());
+            if (!root)
+              return "unresolved store";
+            stores += sources.contains(*root);
+            continue;
+          }
+          if (isSuspension(&operation) || isMemoryEffectFree(&operation))
+            continue;
+          auto effects = dyn_cast<MemoryEffectOpInterface>(&operation);
+          if (!effects || effects.hasEffect<MemoryEffects::Write>() ||
+              effects.hasEffect<MemoryEffects::Allocate>() ||
+              effects.hasEffect<MemoryEffects::Free>())
+            return "writer effect";
+        }
+        if (stores > 1)
+          return "two stores";
+        if (stores)
+          storing.insert(&block);
+      }
+      // No activation reaches a second store: an activation continues only
+      // over plain terminators (a periodic writer makes no task calls).
+      using Transfer = analysis::ActivationPhaseAnalysis::BlockInfo::Transfer;
+      for (Block *start : storing) {
+        SmallVector<Block *> pending;
+        DenseSet<Block *> visited;
+        auto follow = [&](Block *block) {
+          const auto *info = phases.getBlockInfo(block);
+          if (!info)
+            return false;
+          if (info->transfer != Transfer::Plain)
+            return true;
+          llvm::append_range(pending, info->successors);
+          return true;
+        };
+        if (!follow(start))
+          return "unsummarized block";
+        while (!pending.empty()) {
+          Block *block = pending.pop_back_val();
+          if (storing.contains(block))
+            return "two stores";
+          if (visited.insert(block).second && !follow(block))
+            return "unsummarized block";
+        }
+      }
+      return {};
+    };
+    StringRef blocker = decide();
+    SlotChanges result = !blocker.empty() ? SlotChanges::Any
+                         : quietAtZero    ? SlotChanges::Once
+                                          : SlotChanges::OnceLater;
+    if (report)
+      llvm::errs() << "talos clocked kernel class " << classRoot << ": "
+                   << (result == SlotChanges::Once ? "once per slot"
+                       : result == SlotChanges::OnceLater
+                           ? "once per later slot"
+                           : blocker)
+                   << '\n';
+    slotChanges[classRoot] = result;
+    return result;
+  };
+
   // 3. Plan every kernel on the unmodified design: the analyses above
   // describe the original processes and graph, which materialization erases.
   struct Plan {
@@ -1489,8 +1693,34 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
       for (uint64_t root : clockRoots)
         kernelPhases = kernelPhases | phases.getChangePhases(root);
     }
+    // The opposite-edge members of a class that changes at most once per
+    // later slot never run in a later slot of this kernel, nor at time zero
+    // when the class changes once in that slot too.
+    const EdgeBodies *otherSlot = nullptr;
+    bool otherSlotAtZero = false;
+    sim::EdgeKind kernelEdge = groupEdge(key);
+    SlotChanges changes = SlotChanges::Any;
+    if (kernelEdge == sim::EdgeKind::Posedge ||
+        kernelEdge == sim::EdgeKind::Negedge)
+      changes = classSlotChanges(classRoot);
+    if (changes != SlotChanges::Any) {
+      otherSlotAtZero = changes == SlotChanges::Once;
+      auto opposite = kernelEdge == sim::EdgeKind::Posedge
+                          ? sim::EdgeKind::Negedge
+                          : sim::EdgeKind::Posedge;
+      if (auto found =
+              edgeBodies.find({classRoot, static_cast<unsigned>(opposite)});
+          found != edgeBodies.end())
+        otherSlot = &found->second;
+    }
     auto meetsKernel = [&](StringAttr function, uint32_t blockIndex) {
-      return phases.getPhases(function, blockIndex).meets(kernelPhases);
+      Phases at = phases.getPhases(function, blockIndex);
+      if (otherSlot && otherSlot->indices.contains({function, blockIndex})) {
+        at.later = 0;
+        if (otherSlotAtZero)
+          at.zero = 0;
+      }
+      return at.meets(kernelPhases);
     };
 
     // The kernel must run at most once between NBA regions. A second run in
@@ -1553,6 +1783,10 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
                                             memberFunctions,
                                             {},
                                             {}};
+    if (otherSlot) {
+      windowConfig.otherSlotBlocks = &otherSlot->blocks;
+      windowConfig.otherSlotAtZero = otherSlotAtZero;
+    }
     DataFlowSolver window(DataFlowConfig().setInterprocedural(false));
     auto isAfter = [&](StringAttr name, uint32_t index) {
       auto function = symbols.lookup<sim::SimFuncOp>(name);
@@ -1604,6 +1838,10 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
                                                   memberFunctions,
                                                   {},
                                                   {}};
+        if (otherSlot) {
+          inactiveConfig.otherSlotBlocks = &otherSlot->blocks;
+          inactiveConfig.otherSlotAtZero = otherSlotAtZero;
+        }
         DataFlowSolver inactive(DataFlowConfig().setInterprocedural(false));
         inactive.load<PostKernelAnalysis>(inactiveConfig);
         if (failed(inactive.initializeAndRun(design)))
