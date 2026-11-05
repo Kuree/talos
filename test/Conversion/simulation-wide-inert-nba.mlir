@@ -1,5 +1,5 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.llvm.mlir 2>&1 | FileCheck %s --check-prefix=PROOF
-// RUN: FileCheck %s --check-prefix=PLAN < %t.llvm.mlir
+// RUN: FileCheck %s --check-prefix=PLAN --implicit-check-not=__talos_eval_nba_dynamic_pending_v1 < %t.llvm.mlir
 
 // Holds wider than one machine word may skip staging only when both planes
 // match and no earlier update is pending. writer1 stages a different value

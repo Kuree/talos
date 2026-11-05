@@ -6,8 +6,8 @@
 // RUN: FileCheck %s --check-prefix=READ < %t.read.llvm.mlir
 
 // Empty dynamic slots must bypass stale address/value/unknown loads in all
-// three commit variants. The runtime checks below cover independent slots,
-// aliasing lanes, and negative/out-of-range/unknown indices.
+// three commit variants, and each variant clears the slot summary only once
+// the last slot is consumed or skipped.
 // GUARD-LABEL: llvm.func {{(internal )?}}@__talos_aot_static_nba_commit_v1(
 // GUARD: %[[ADDR0:.*]] = llvm.mlir.addressof @__talos_eval_nba_valid_
 // GUARD-NEXT: %[[VALID0:.*]] = llvm.load %[[ADDR0]] {{.*}} : !llvm.ptr -> i32
@@ -17,7 +17,15 @@
 // GUARD: ^[[WORK0]]:
 // GUARD: llvm.mlir.addressof @__talos_eval_nba_offset_
 // GUARD: ^[[NEXT0]]:
-// GUARD-NEXT: {{.*}}llvm.mlir.addressof @__talos_eval_nba_valid_
+// GUARD-NEXT: %[[ADDR0B:.*]] = llvm.mlir.addressof @__talos_eval_nba_valid_
+// GUARD-NEXT: %[[VALID0B:.*]] = llvm.load %[[ADDR0B]] {{.*}} : !llvm.ptr -> i32
+// GUARD-NEXT: %[[ZERO0B:.*]] = llvm.mlir.constant(0 : i32)
+// GUARD-NEXT: %[[ACTIVE0B:.*]] = llvm.icmp "ne" %[[VALID0B]], %[[ZERO0B]] : i32
+// GUARD-NEXT: llvm.cond_br %[[ACTIVE0B]], ^{{bb[0-9]+}}, ^[[LAST0:bb[0-9]+]]
+// GUARD: ^[[LAST0]]:
+// GUARD-NEXT: %[[CLEAR0:.*]] = llvm.mlir.constant(0 : i32) : i32
+// GUARD-NEXT: %[[SUMMARY0:.*]] = llvm.mlir.addressof @__talos_eval_nba_dynamic_pending_v1
+// GUARD-NEXT: llvm.store %[[CLEAR0]], %[[SUMMARY0]]
 // GUARD-LABEL: llvm.func {{(internal )?}}@__talos_aot_static_nba_commit_two_state_v1(
 // GUARD: %[[ADDR1:.*]] = llvm.mlir.addressof @__talos_eval_nba_valid_
 // GUARD-NEXT: %[[VALID1:.*]] = llvm.load %[[ADDR1]] {{.*}} : !llvm.ptr -> i32
@@ -27,7 +35,15 @@
 // GUARD: ^[[WORK1]]:
 // GUARD: llvm.mlir.addressof @__talos_eval_nba_offset_
 // GUARD: ^[[NEXT1]]:
-// GUARD-NEXT: {{.*}}llvm.mlir.addressof @__talos_eval_nba_valid_
+// GUARD-NEXT: %[[ADDR1B:.*]] = llvm.mlir.addressof @__talos_eval_nba_valid_
+// GUARD-NEXT: %[[VALID1B:.*]] = llvm.load %[[ADDR1B]] {{.*}} : !llvm.ptr -> i32
+// GUARD-NEXT: %[[ZERO1B:.*]] = llvm.mlir.constant(0 : i32)
+// GUARD-NEXT: %[[ACTIVE1B:.*]] = llvm.icmp "ne" %[[VALID1B]], %[[ZERO1B]] : i32
+// GUARD-NEXT: llvm.cond_br %[[ACTIVE1B]], ^{{bb[0-9]+}}, ^[[LAST1:bb[0-9]+]]
+// GUARD: ^[[LAST1]]:
+// GUARD-NEXT: %[[CLEAR1:.*]] = llvm.mlir.constant(0 : i32) : i32
+// GUARD-NEXT: %[[SUMMARY1:.*]] = llvm.mlir.addressof @__talos_eval_nba_dynamic_pending_v1
+// GUARD-NEXT: llvm.store %[[CLEAR1]], %[[SUMMARY1]]
 // GUARD-LABEL: llvm.func {{(internal )?}}@__talos_aot_static_nba_commit_two_state_fast_v1(
 // GUARD: %[[ADDR2:.*]] = llvm.mlir.addressof @__talos_eval_nba_valid_
 // GUARD-NEXT: %[[VALID2:.*]] = llvm.load %[[ADDR2]] {{.*}} : !llvm.ptr -> i32
@@ -37,7 +53,15 @@
 // GUARD: ^[[WORK2]]:
 // GUARD: llvm.mlir.addressof @__talos_eval_nba_offset_
 // GUARD: ^[[NEXT2]]:
-// GUARD-NEXT: {{.*}}llvm.mlir.addressof @__talos_eval_nba_valid_
+// GUARD-NEXT: %[[ADDR2B:.*]] = llvm.mlir.addressof @__talos_eval_nba_valid_
+// GUARD-NEXT: %[[VALID2B:.*]] = llvm.load %[[ADDR2B]] {{.*}} : !llvm.ptr -> i32
+// GUARD-NEXT: %[[ZERO2B:.*]] = llvm.mlir.constant(0 : i32)
+// GUARD-NEXT: %[[ACTIVE2B:.*]] = llvm.icmp "ne" %[[VALID2B]], %[[ZERO2B]] : i32
+// GUARD-NEXT: llvm.cond_br %[[ACTIVE2B]], ^{{bb[0-9]+}}, ^[[LAST2:bb[0-9]+]]
+// GUARD: ^[[LAST2]]:
+// GUARD-NEXT: %[[CLEAR2:.*]] = llvm.mlir.constant(0 : i32) : i32
+// GUARD-NEXT: %[[SUMMARY2:.*]] = llvm.mlir.addressof @__talos_eval_nba_dynamic_pending_v1
+// GUARD-NEXT: llvm.store %[[CLEAR2]], %[[SUMMARY2]]
 // Read-only reflection admits cbValueChange, which runs after every value
 // change (IEEE 1800-2017 38.36.1), so an intermediate NBA value is observable
 // and neither lane may take a one-entry latch. The generated queue keeps both
@@ -62,20 +86,29 @@
 // PLAN-LABEL: llvm.func @__talos_aot_schedule_run_v1(
 // PLAN: llvm.call @talos_rt_v1_scheduler_prepare_periodic_aot
 
-// The dispatcher must include BOTH dynamic slots in its empty-barrier test.
-// Neither slot sets fixed dirty bits. Check the shared region path; the
-// executable assertions below catch lost dynamic-only NBA publications.
+// The dispatcher's empty-barrier test must see BOTH dynamic slots. Neither
+// slot sets fixed dirty bits: each staging site sets the one summary word the
+// test reads (the GUARD checks pin where each commit variant clears it).
+// BARRIER-LABEL: llvm.func @update.__talos_eval_body_0(
+// BARRIER: %[[SLOT0:.*]] = llvm.mlir.addressof @__talos_eval_nba_valid_0
+// BARRIER-NEXT: llvm.store %[[BIT0:.*]], %[[SLOT0]] {{.*}} : i32, !llvm.ptr
+// BARRIER-NEXT: %[[SUM0:.*]] = llvm.mlir.addressof @__talos_eval_nba_dynamic_pending_v1
+// BARRIER-NEXT: %[[OLD0:.*]] = llvm.load %[[SUM0]] {{.*}} : !llvm.ptr -> i32
+// BARRIER-NEXT: %[[NEW0:.*]] = llvm.or %[[OLD0]], %[[BIT0]] : i32
+// BARRIER-NEXT: llvm.store %[[NEW0]], %[[SUM0]]
+// BARRIER: %[[SLOT1:.*]] = llvm.mlir.addressof @__talos_eval_nba_valid_1
+// BARRIER-NEXT: llvm.store %[[BIT1:.*]], %[[SLOT1]] {{.*}} : i32, !llvm.ptr
+// BARRIER-NEXT: %[[SUM1:.*]] = llvm.mlir.addressof @__talos_eval_nba_dynamic_pending_v1
+// BARRIER-NEXT: %[[OLD1:.*]] = llvm.load %[[SUM1]] {{.*}} : !llvm.ptr -> i32
+// BARRIER-NEXT: %[[NEW1:.*]] = llvm.or %[[OLD1]], %[[BIT1]] : i32
+// BARRIER-NEXT: llvm.store %[[NEW1]], %[[SUM1]]
 // BARRIER-LABEL: llvm.func @__talos_eval_dispatch_v1(
 // BARRIER: llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1
 // BARRIER: %[[D0:.*]] = llvm.load {{.*}} : !llvm.ptr -> i64
-// BARRIER-NEXT: %[[A0:.*]] = llvm.mlir.addressof @__talos_eval_nba_valid_0
+// BARRIER-NEXT: %[[A0:.*]] = llvm.mlir.addressof @__talos_eval_nba_dynamic_pending_v1
 // BARRIER-NEXT: %[[V0:.*]] = llvm.load %[[A0]] {{.*}} : !llvm.ptr -> i32
 // BARRIER-NEXT: %[[Z0:.*]] = llvm.zext %[[V0]] : i32 to i64
-// BARRIER-NEXT: %[[P0:.*]] = llvm.or %[[D0]], %[[Z0]] : i64
-// BARRIER-NEXT: %[[B0:.*]] = llvm.mlir.addressof @__talos_eval_nba_valid_1
-// BARRIER-NEXT: %[[W0:.*]] = llvm.load %[[B0]] {{.*}} : !llvm.ptr -> i32
-// BARRIER-NEXT: %[[X0:.*]] = llvm.zext %[[W0]] : i32 to i64
-// BARRIER-NEXT: %[[Q0:.*]] = llvm.or %[[P0]], %[[X0]] : i64
+// BARRIER-NEXT: %[[Q0:.*]] = llvm.or %[[D0]], %[[Z0]] : i64
 // BARRIER-NEXT: %[[ZERO0:.*]] = llvm.mlir.constant(0 : i64)
 // BARRIER-NEXT: %[[EMPTY0:.*]] = llvm.icmp "eq" %[[Q0]], %[[ZERO0]] : i64
 // BARRIER-NEXT: %[[OK0:.*]] = llvm.mlir.constant(0 : i32)

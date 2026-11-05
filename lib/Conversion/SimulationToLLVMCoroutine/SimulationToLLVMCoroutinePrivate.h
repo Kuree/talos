@@ -113,6 +113,13 @@ inline constexpr llvm::StringLiteral evalStepFourStateFallbackName =
     "__talos_eval_step_four_state_fallback_v1";
 inline constexpr llvm::StringLiteral evalStepFourStateNBARootsName =
     "__talos_eval_step_four_state_nba_roots_v1";
+/// Nonzero whenever a fixed dynamic NBA slot (`__talos_eval_nba_valid_<site>`)
+/// may hold a staged update: each staging site ORs its valid bit into this
+/// word, and the generated NBA commit clears it after consuming every slot.
+/// It exists only outside EvalRuntimeCalendar mode, where the coordinator,
+/// not the runtime, decides whether an NBA barrier is pending.
+inline constexpr llvm::StringLiteral evalDynamicNBAPendingName =
+    "__talos_eval_nba_dynamic_pending_v1";
 /// Create the step evidence globals unless they exist: a zero byte and, for a
 /// nonzero `taintWords`, a zeroed array of that many root-bit words.
 void materializeEvalStepFourStateGlobals(mlir::ModuleOp module,

@@ -1153,13 +1153,17 @@ materializeNativeEvalDispatch(ModuleOp module,
       pendingNBA = arith::OrIOp::create(builder, location, pendingNBA, dirty);
     }
   }
-  for (const std::string &name : plan.dynamicNBAValidNames) {
-    Value valid = LLVM::LoadOp::create(
+  // One summary word covers every fixed dynamic slot: this test runs at each
+  // quiescent point, so its cost must not grow with the number of slots.
+  if (plan.hasDynamicNBASlots) {
+    Value pending = LLVM::LoadOp::create(
         builder, location, i32,
-        LLVM::AddressOfOp::create(builder, location, pointer, name), 4);
+        LLVM::AddressOfOp::create(builder, location, pointer,
+                                  evalDynamicNBAPendingName),
+        4);
     pendingNBA = arith::OrIOp::create(
         builder, location, pendingNBA,
-        arith::ExtUIOp::create(builder, location, i64, valid));
+        arith::ExtUIOp::create(builder, location, i64, pending));
   }
   if (plan.hasOrderedNBA)
     pendingNBA = arith::OrIOp::create(

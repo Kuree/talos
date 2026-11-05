@@ -2459,6 +2459,10 @@ FailureOr<bool> makeNativeEvalPlan(
             nbaBuilder.setInsertionPointToStart(stage);
           }
           uint64_t chunks = (*width + 63) / 64;
+          bool runtimeCalendar = ::talos::schedule::has<
+              ::talos::schedule::Field::EvalRuntimeCalendar>(module);
+          Value validBit =
+              LLVM::ZExtOp::create(nbaBuilder, call.getLoc(), i32, overlaps);
           for (uint64_t index = 0; index != chunks; ++index) {
             uint64_t slotSite =
                 chunks == 1 ? *site : evalNBAChunkSite(*site, index);
@@ -2527,13 +2531,23 @@ FailureOr<bool> makeNativeEvalPlan(
             storeGlobal(existing->unknownName,
                         chunks == 1 ? stagedUnknown64 : loadUnknownChunk(index),
                         8);
-            storeGlobal(
-                existing->validName,
-                LLVM::ZExtOp::create(nbaBuilder, call.getLoc(), i32, overlaps),
-                4);
+            storeGlobal(existing->validName, validBit, 4);
           }
-          if (::talos::schedule::has<
-                  ::talos::schedule::Field::EvalRuntimeCalendar>(module)) {
+          if (!runtimeCalendar) {
+            // The coordinator asks whether any slot is valid with one load
+            // (evalDynamicNBAPendingName, created with the coordinator plan).
+            // A later store of a clear valid word leaves the summary set;
+            // that only costs an empty commit.
+            Value summary = LLVM::AddressOfOp::create(
+                nbaBuilder, call.getLoc(), pointer, evalDynamicNBAPendingName);
+            Value prior =
+                LLVM::LoadOp::create(nbaBuilder, call.getLoc(), i32, summary, 4);
+            LLVM::StoreOp::create(
+                nbaBuilder, call.getLoc(),
+                arith::OrIOp::create(nbaBuilder, call.getLoc(), prior,
+                                     validBit),
+                summary, 4);
+          } else {
             // Fixed slots share the canonical barrier's sparse root index.
             // No runtime staging call or event allocation is needed.
             uint32_t word = root->second / 64;
@@ -5287,10 +5301,22 @@ FailureOr<bool> makeNativeEvalPlan(
   constexpr StringLiteral evalFourStateNBAHandoffName =
       "__talos_eval_four_state_nba_handoff_v1";
 
-  SmallVector<std::string> dynamicNBAValidNames;
-  for (const DynamicEvalNBA &entry : dynamicEvalNBAs)
-    if (!entry.queued)
-      dynamicNBAValidNames.push_back(entry.validName);
+  // Fixed slots summarize their valid words when the coordinator, not a
+  // shared runtime calendar, decides whether an NBA barrier is pending. Their
+  // staging sites already OR into this word; the commit loop below clears it
+  // under the same rule.
+  bool hasDynamicNBASlots =
+      !::talos::schedule::has<::talos::schedule::Field::EvalRuntimeCalendar>(
+          module) &&
+      llvm::any_of(dynamicEvalNBAs,
+                   [](const DynamicEvalNBA &entry) { return !entry.queued; });
+  if (hasDynamicNBASlots) {
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(module.getBody());
+    LLVM::GlobalOp::create(builder, location, i32, /*isConstant=*/false,
+                           LLVM::Linkage::Internal, evalDynamicNBAPendingName,
+                           builder.getI32IntegerAttr(0), alignof(uint32_t));
+  }
   SmallVector<Attribute> transactionRoots;
   for (const auto &root : resolved->transaction.roots) {
     SmallVector<int64_t> entry{static_cast<int64_t>(root.descriptor),
@@ -5328,7 +5354,7 @@ FailureOr<bool> makeNativeEvalPlan(
       ownerSubsumptionMasks, resolved->rankedNodes,
       recordNBATaintMasks,   nbaTaintedRecords,
       nbaTaintWordCount,     prioritySignalHandoff,
-      dynamicNBAValidNames,  hasOrderedNBA};
+      hasDynamicNBASlots,    hasOrderedNBA};
   coordinatorPlan.firstDeferredBit = firstDeferredBit;
   SmallVector<SmallVector<uint32_t>> ownerStaticStates;
   SmallVector<APInt> ownerFineIngress;
@@ -6174,6 +6200,17 @@ FailureOr<bool> makeNativeEvalPlan(
     else
       builder.setInsertionPointToStart(nextDynamic);
   }
+  // Every fixed slot was consumed above, and the commit runs no actor before
+  // this store, so no slot is restaged before the coordinator's next
+  // quiescence test (applying the whole batch first is an order IEEE
+  // 1800-2023 4.4.2.2 and 4.5 permit). An early error return keeps the
+  // summary set, which is conservative.
+  if (hasDynamicNBASlots)
+    LLVM::StoreOp::create(builder, location,
+                          llvmConstant(builder, location, i32, 0),
+                          LLVM::AddressOfOp::create(builder, location, pointer,
+                                                    evalDynamicNBAPendingName),
+                          4);
 
   size_t scalarCount = 0;
   for (const auto &roots : scalarRootsByWord)

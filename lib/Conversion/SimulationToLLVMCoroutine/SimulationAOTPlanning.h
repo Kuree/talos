@@ -300,8 +300,9 @@ struct NativeEvalCoordinatorPlan {
   const llvm::BitVector &nbaTaintedOwners;
   uint32_t nbaTaintWordCount = 0;
   bool prioritySignalHandoff = false;
-  /// Dynamic slots are staged independently of the fixed-root dirty bitmap.
-  mlir::ArrayRef<std::string> dynamicNBAValidNames;
+  /// Dynamic slots are staged independently of the fixed-root dirty bitmap;
+  /// evalDynamicNBAPendingName summarizes their valid words.
+  bool hasDynamicNBASlots = false;
   bool hasOrderedNBA = false;
   /// Shared bounded ranked sweeps, indexed by the original owner identity.
   mlir::ArrayRef<std::string> rankedGroupExecutors{};
