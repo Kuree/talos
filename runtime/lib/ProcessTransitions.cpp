@@ -389,7 +389,6 @@ bool evaluateExactEventsNowUnlocked(
   auto considerClause = [&](ExactEventClause *clause) {
     if (!clause || clause->lastExaminedSequence == sequence)
       return;
-    clause->lastExaminedSequence = sequence;
     if (context->signalDiagnosticsEnabled)
       ++context->signalDiagnostics.subscribersExamined;
     if (!clause->registration)
@@ -425,9 +424,13 @@ bool evaluateExactEventsNowUnlocked(
             begin < publishedEnd && publishedBegin < end;
       }
     }
-    if (affected)
+    if (affected) {
+      // A grouped publication can visit several bits in the same bucket.
+      // An unrelated earlier bit must not suppress this clause's own event.
+      clause->lastExaminedSequence = sequence;
       candidates.push_back(
           {clause->registration->ownerLogicalToken, clause->clauseIndex});
+    }
   };
   auto visitBucket = [&](int64_t page) {
     SignalSubscriptionBucketKey key{kind, objectID, page};
@@ -776,7 +779,16 @@ bool evaluateExactEventsUnlocked(talos_rt_context *context, uint64_t sequence,
   ExactEventFeatureState *feature = context->exactEvents.get();
   if (!feature)
     return true;
-  if ((feature->flushingSnapshots || !feature->snapshots.empty()) &&
+  if (feature->collectingSnapshotNotifications) {
+    // Atomic packed/alias publications retain one exact-event identity even
+    // when their low-level signal routing visits multiple ranges or bits.
+    // Ordinary covergroup `or` events must sample only once as well.
+    if (!feature->groupedExactSequence)
+      feature->groupedExactSequence = sequence;
+    sequence = feature->groupedExactSequence;
+  }
+  if ((feature->flushingSnapshots || feature->collectingSnapshotNotifications ||
+       !feature->snapshots.empty()) &&
       context->observerDepth != 0) {
     // Explicit snapshot transactions admit read-only notification callbacks.
     // A foreign callback that publishes recursively cannot interleave a new
@@ -801,6 +813,7 @@ bool evaluateExactEventsUnlocked(talos_rt_context *context, uint64_t sequence,
       if (feature && feature->dispatchDepth)
         --feature->dispatchDepth;
       if (feature && !feature->dispatchDepth && !feature->flushingSnapshots &&
+          !feature->collectingSnapshotNotifications &&
           feature->registrations.empty() && feature->snapshots.empty())
         context->exactEvents.reset();
     }

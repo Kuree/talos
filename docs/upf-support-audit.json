@@ -1005,7 +1005,7 @@
         "9.7"
       ],
       "missing": [
-        "Balloon save/restore elaboration and runtime-owned delayed publication integration with the existing snapshot mechanism",
+        "Balloon save/restore elaboration using the existing snapshot mechanism",
         "Collective retention-element lists and named-process/partial selections",
         "Latches, computed events, mixed/multiple writers and unsupported reference escape paths",
         "Nondefault corruption parameters, legacy supply operands and semantic condition refinements"
@@ -1290,8 +1290,41 @@
     },
     {
       "id": 7,
-      "status": "planned",
-      "scope": "Balloon and collective retention using existing snapshot/storage mechanisms, with compiler and scheduling proofs."
+      "status": "in_progress",
+      "scope": "Balloon and collective retention using existing snapshot/storage mechanisms, with compiler and scheduling proofs.",
+      "completed": [
+        {
+          "id": "7a",
+          "status": "complete",
+          "scope": "Runtime-owned exact-event snapshot publication boundaries for deferred NBAs, atomic retained pairs/views, resolved aliases and foreign packed writes, force and release",
+          "clauses": [
+            "6.50",
+            "9.7.3",
+            "IEEE1800-2023 4.6",
+            "IEEE1800-2023 4.9.5",
+            "IEEE1800-2023 10.4.2",
+            "IEEE1800-2023 38.34"
+          ],
+          "runtime_changes": true,
+          "new_public_runtime_functions": false,
+          "architecture": "Reuse the optional event-snapshot service, generic mixed NBA barrier and existing net publication path. Snapshot-free barriers retain their fast path and ordinary native/bytecode links do not extract snapshot registration or commit code. Exact event identities coalesce atomic grouped notifications; foreign force commits its direct node snapshot before pass-network propagation. Source/target callbacks cannot mutate current design state during a snapshot publication; deferred scheduling is allowed. Source updates are detached before callbacks can grow their queue.",
+          "tests": [
+            "test/Runtime/simulation-event-snapshot-deferred.test",
+            "test/Runtime/simulation-event-snapshot-deferred-bytecode.test",
+            "test/Driver/upf-snapshot-cost.test",
+            "runtime/unittests/ProcessTest.cpp",
+            "runtime/unittests/DesignBytecodeTest.cpp",
+            "runtime/unittests/Inputs/EventSnapshotSmoke.h"
+          ],
+          "review": "Two independent subagents approved UPF/LRM event-time qualification, ordered NBA/pair/alias semantics, pass-network force ordering, callback and context lifetime, optional linking, LLVM/MLIR practice and test coverage. Review corrections cover packed-bit exact-event coalescing, same-bucket clauses, callback-driven queue reallocation/reselection, owner deactivation and fail-closed source mutation. Reviewers independently passed 38 and 10 focused unit cases. No remaining review blockers for this prerequisite; balloon lowering remains pending.",
+          "validation": "All 272 selected UPF/supply/snapshot/power-NBA lit tests pass, including MLIR native and required-bytecode execution at LLVM O0/O3 and ordinary native/bytecode static-link exclusions for registration/mask/flush/anchor. All 347 process runtime tests and 231 bytecode/reflection/VPI tests pass (578 unit tests). Existing retention conformance clauses 6.50 and 9.7.3 pass in native/bytecode (four cases); 9.7.1 remains reference-only (two cases), with no unexpected results. Tests cover narrow/wide pairs and views, cross-half iff, distinct NBA event instants, delayed aliases, source/target callback queue growth, calendar cancellation, exact-event coalescing, same-bucket routing, owner lifecycle, scalar/wide foreign writes and force/release through actual tran connectivity, plus context destruction from notification. Existing wasm object compilation checks in the selected suite pass; wasm runtime execution was not run."
+        }
+      ],
+      "remaining": [
+        "Balloon save/restore lowering and event-time conditions/priority",
+        "Collective retention-element lists and remaining storage/writer forms",
+        "Nondefault corruption parameters and remaining retention combinations"
+      ]
     },
     {
       "id": 8,

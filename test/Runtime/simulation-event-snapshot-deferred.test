@@ -1,0 +1,159 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/design.mlir --pass-pipeline='builtin.module(simulation.design(simulation.func(canonicalize,cse,talos-sim-thread-suspension),talos-sim-build-compute-graph,talos-sim-verify-compute-graph),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' --verify-each -o %t.lowered.mlir
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O0>' | %llc -filetype=obj -relocation-model=pic -o %t.o
+// RUN: %target_cxx %t.o %runtime_link_flags -o %t.exe && %t.exe | FileCheck %s
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.opt.o
+// RUN: %target_cxx %t.opt.o %runtime_link_flags -o %t.opt.exe && %t.opt.exe | FileCheck %s
+// IEEE 1801-2018 6.50/9.7.3 and IEEE 1800-2023 4.6/10.4.2:
+// runtime-owned commits supply the snapshot boundary. A retained pair is one
+// publication: each clause qualifies using the other committed root. Separate
+// ordinary NBAs retain their individual event instants, and a guarded view
+// publishes without a second half. No explicit or compiler-inserted flushes.
+// CHECK: retained pair 3 3
+// CHECK-NEXT: ordinary NBAs 3 2
+// CHECK-NEXT: guarded view 3 2
+
+//--- design.mlir
+!c = !simulation.context
+!r = !simulation.ref<i1>
+!e = !simulation.ref<i64>
+!o = !simulation.observer<i1>
+module attributes {llvm.data_layout = "e-p:64:64-i64:64-i32:32-i16:16-i8:8-n8:16:32:64-S128"} {
+  simulation.design @deferred_snapshots {
+    simulation.scope.decl 0 hierarchy "top"
+    simulation.code_unit.decl 1 in 0 root_initializer hierarchy "top.root"
+    simulation.code_unit.decl 2 in 0 initial hierarchy "top.main"
+    simulation.code_unit.decl 3 in 0 fork hierarchy "top.owner"
+    simulation.code_unit.decl 4 in 0 observer hierarchy "top.read"
+    simulation.code_unit.decl 5 in 0 observer hierarchy "top.sample"
+    simulation.code_unit.decl 6 in 0 observer hierarchy "top.allow"
+    simulation.storage.decl 0 in 0 : i1 design hierarchy "top.backing"
+    simulation.storage.decl 1 in 0 : i1 design hierarchy "top.visible"
+    simulation.storage.decl 2 in 0 : !simulation.logic<2> design hierarchy "top.saved"
+    simulation.storage.decl 3 in 0 : i64 design hierarchy "top.mask"
+    simulation.storage.decl 4 in 0 : i64 design hierarchy "top.epoch"
+    simulation.func @root(%ctx: !c {simulation.capture_kind = 0 : i32})
+        attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
+      %b = simulation.context.storage %ctx[0] : !r
+      %q = simulation.context.storage %ctx[1] : !r
+      %saved = simulation.context.storage %ctx[2] : !simulation.ref<!simulation.logic<2>>
+      %mask = simulation.context.storage %ctx[3] : !e
+      %epoch = simulation.context.storage %ctx[4] : !e
+      %false = arith.constant false
+      %zero = arith.constant 0 : i64
+      %bits = simulation.logic.constant 0 : i2, 0 : i2 : !simulation.logic<2>
+      simulation.ref.store %false to %b : i1, !r
+      simulation.ref.store %false to %q : i1, !r
+      simulation.ref.store %bits to %saved : !simulation.logic<2>, !simulation.ref<!simulation.logic<2>>
+      simulation.ref.store %zero to %mask : i64, !e
+      simulation.ref.store %zero to %epoch : i64, !e
+      %owner = simulation.spawn @owner(%ctx) : !c -> !simulation.process
+      %main = simulation.spawn @main(%ctx) : !c -> !simulation.process
+      simulation.return
+    }
+    simulation.func private @read(%ctx: !c {simulation.capture_kind = 0 : i32},
+        %source: !r {simulation.capture_kind = 2 : i32}) -> i1
+        attributes {entry_kind = 14 : i32, code_unit_id = 4 : i64, schedule.observer_width = 1 : i32, schedule.observer_four_state = false} {
+      %value = simulation.ref.load %source : !r -> i1
+      simulation.return %value : i1
+    }
+    simulation.func private @allow(%ctx: !c {simulation.capture_kind = 0 : i32}) -> i1
+        attributes {entry_kind = 14 : i32, code_unit_id = 6 : i64, schedule.observer_width = 1 : i32, schedule.observer_four_state = false} {
+      %true = arith.constant true
+      simulation.return %true : i1
+    }
+    simulation.func private @sample(%ctx: !c {simulation.capture_kind = 0 : i32},
+        %b: !r {simulation.capture_kind = 2 : i32},
+        %q: !r {simulation.capture_kind = 2 : i32}) -> !simulation.logic<66>
+        attributes {entry_kind = 14 : i32, code_unit_id = 5 : i64, schedule.observer_width = 66 : i32, schedule.observer_four_state = true} {
+      %bv = simulation.ref.load %b : !r -> i1
+      %qv = simulation.ref.load %q : !r -> i1
+      %bl = simulation.logic.from_bits %bv : i1 -> !simulation.logic<1>
+      %ql = simulation.logic.from_bits %qv : i1 -> !simulation.logic<1>
+      %pair = simulation.logic.concat %ql, %bl : (!simulation.logic<1>, !simulation.logic<1>) -> !simulation.logic<2>
+      %mask = simulation.event.snapshot.mask %ctx
+      %ml = simulation.logic.from_bits %mask : i64 -> !simulation.logic<64>
+      %payload = simulation.logic.concat %ml, %pair : (!simulation.logic<64>, !simulation.logic<2>) -> !simulation.logic<66>
+      simulation.return %payload : !simulation.logic<66>
+    }
+    simulation.func private @owner(%ctx: !c {simulation.capture_kind = 0 : i32})
+        attributes {entry_kind = 13 : i32, code_unit_id = 3 : i64, internal, schedule.detached_controls, schedule.prime_on_spawn} {
+      %b = simulation.context.storage %ctx[0] : !r
+      %q = simulation.context.storage %ctx[1] : !r
+      %saved = simulation.context.storage %ctx[2] : !simulation.ref<!simulation.logic<2>>
+      %mask = simulation.context.storage %ctx[3] : !e
+      %false = arith.constant false
+      %bp = simulation.observer.bind @read values (%b, %b : !r, !r) captures 1 : !o
+      %qp = simulation.observer.bind @read values (%q, %q : !r, !r) captures 1 : !o
+      %sample = simulation.observer.bind @sample values (%b, %q : !r, !r) captures 2 : !simulation.observer<!simulation.logic<66>>
+      simulation.event.snapshot.register %ctx values [%bp, %qp, %false, %false, %qp, %bp, %sample, %saved, %mask] targets 2 conditions 2 edges [1, 1] indices [0, 1] : !o, !o, i1, i1, !o, !o, !simulation.observer<!simulation.logic<66>>, !simulation.ref<!simulation.logic<2>>, !e
+      simulation.suspend.forever to ^parked
+    ^parked:
+      simulation.return
+    }
+    simulation.func @main(%ctx: !c {simulation.capture_kind = 0 : i32})
+        attributes {entry_kind = 1 : i32, code_unit_id = 2 : i64} {
+      %d1 = simulation.time.constant 1
+      simulation.suspend.delay %d1 to ^pair
+    ^pair:
+      %b = simulation.context.storage %ctx[0] : !r
+      %q = simulation.context.storage %ctx[1] : !r
+      %epoch = simulation.context.storage %ctx[4] : !e
+      %true = arith.constant true
+      %zero = arith.constant 0 : i64
+      %guard = simulation.observer.bind @allow values () captures 0 : !o
+      simulation.power.nba.enqueue %ctx, %true to %b, %q guard %guard epochs (%epoch, %zero, %epoch, %zero) : (!c, i1, !r, !r, !o, !e, i64, !e, i64) -> ()
+      %d2 = simulation.time.constant 1
+      simulation.suspend.delay %d2 to ^check_pair
+    ^check_pair:
+      %saved = simulation.context.storage %ctx[2] : !simulation.ref<!simulation.logic<2>>
+      %mask = simulation.context.storage %ctx[3] : !e
+      %pair_value = simulation.ref.load %saved : !simulation.ref<!simulation.logic<2>> -> !simulation.logic<2>
+      %pair_mask = simulation.ref.load %mask : !e -> i64
+      %out = arith.constant 1 : i32
+      %pair_fmt = simulation.bytes.constant "retained pair %0d %0d"
+      simulation.display %ctx to %out(%pair_fmt, %pair_value, %pair_mask) newline = true radix = <decimal> flags = [0,0,0] : !simulation.bytes, !simulation.logic<2>, i64
+      %b0 = simulation.context.storage %ctx[0] : !r
+      %q0 = simulation.context.storage %ctx[1] : !r
+      %false = arith.constant false
+      simulation.ref.store %false to %b0 : i1, !r
+      simulation.ref.store %false to %q0 : i1, !r
+      %one = arith.constant true
+      simulation.nba.enqueue %one to %b0 : (i1, !r) -> ()
+      simulation.nba.enqueue %one to %q0 : (i1, !r) -> ()
+      %d3 = simulation.time.constant 1
+      simulation.suspend.delay %d3 to ^check_ordinary
+    ^check_ordinary:
+      %saved1 = simulation.context.storage %ctx[2] : !simulation.ref<!simulation.logic<2>>
+      %mask1 = simulation.context.storage %ctx[3] : !e
+      %value1 = simulation.ref.load %saved1 : !simulation.ref<!simulation.logic<2>> -> !simulation.logic<2>
+      %got1 = simulation.ref.load %mask1 : !e -> i64
+      %out1 = arith.constant 1 : i32
+      %fmt1 = simulation.bytes.constant "ordinary NBAs %0d %0d"
+      simulation.display %ctx to %out1(%fmt1, %value1, %got1) newline = true radix = <decimal> flags = [0,0,0] : !simulation.bytes, !simulation.logic<2>, i64
+      %q1 = simulation.context.storage %ctx[1] : !r
+      %e1 = simulation.context.storage %ctx[4] : !e
+      %false1 = arith.constant false
+      %true1 = arith.constant true
+      %z1 = arith.constant 0 : i64
+      %o1 = arith.constant 1 : i64
+      simulation.ref.store %false1 to %q1 : i1, !r
+      simulation.ref.store %z1 to %mask1 : i64, !e
+      %guard1 = simulation.observer.bind @allow values () captures 0 : !o
+      simulation.power.nba.enqueue_view %ctx, %true1 in %q1 window (%z1, %o1) at %z1 when %true1 guard %guard1 epochs (%e1, %z1, %e1, %z1) : (!c, i1, !r, i64, i64, i64, i1, !o, !e, i64, !e, i64) -> ()
+      %d4 = simulation.time.constant 1
+      simulation.suspend.delay %d4 to ^check_view
+    ^check_view:
+      %saved2 = simulation.context.storage %ctx[2] : !simulation.ref<!simulation.logic<2>>
+      %mask2 = simulation.context.storage %ctx[3] : !e
+      %value2 = simulation.ref.load %saved2 : !simulation.ref<!simulation.logic<2>> -> !simulation.logic<2>
+      %got2 = simulation.ref.load %mask2 : !e -> i64
+      %out2 = arith.constant 1 : i32
+      %fmt2 = simulation.bytes.constant "guarded view %0d %0d"
+      simulation.display %ctx to %out2(%fmt2, %value2, %got2) newline = true radix = <decimal> flags = [0,0,0] : !simulation.bytes, !simulation.logic<2>, i64
+      %status = arith.constant 0 : i32
+      simulation.finish %ctx, %status
+      simulation.return
+    }
+  }
+}

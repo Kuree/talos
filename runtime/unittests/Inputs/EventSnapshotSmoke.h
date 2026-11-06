@@ -200,7 +200,7 @@ inline int runEventSnapshotSmoke(bool bytecode, bool maskedNBA = false,
     if (status != TALOS_RT_OK ||
         talos_rt_v1_scheduler_run(context) != TALOS_RT_OK)
       return 8;
-    if (!context->exactEvents || context->exactEvents->snapshots.size() != 1)
+    if (!context->exactEvents || !context->exactEvents->snapshots.empty())
       return 9;
   } else {
     talos_rt_v1_scheduler_signal_transition(context, 0, 1, &zero, nullptr, &one,

@@ -14071,15 +14071,30 @@ static talos_rt_status accessState(talos_rt_context *context,
     if (unknown)
       unknown[limbs - 1] &= mask;
   }
+  if (write && kind == TALOS_RT_DESIGN_RECORD_DRIVER) {
+    talos_rt_status status = talos_rt_resolve_design_drivers(
+        context, stateOffset, stateOffset + width);
+    if (status != TALOS_RT_OK)
+      return status;
+  }
+  if (write) {
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
+    auto *feature = context->exactEvents.get();
+    if (feature && !feature->snapshots.empty()) {
+      auto flush = feature->snapshotFlush;
+      talos_rt_status status = flush ? flush(context) : TALOS_RT_INVALID_DESIGN;
+      if (status != TALOS_RT_OK) {
+        context->schedulerStatus = status;
+        return status;
+      }
+    }
+  }
   if (runClockCoordinator) {
     talos_rt_status status =
         talos_rt_v1_scheduler_run_clock_coordinator(context);
     if (status != TALOS_RT_OK)
       return status;
   }
-  if (write && kind == TALOS_RT_DESIGN_RECORD_DRIVER)
-    return talos_rt_resolve_design_drivers(context, stateOffset,
-                                           stateOffset + width);
   return TALOS_RT_OK;
 }
 
@@ -14258,6 +14273,7 @@ extern "C" talos_rt_status talos_rt_v1_design_force(
     const uint64_t *value, const uint64_t *unknown, uint64_t bitWidth) {
   if (!context || !value || bitWidth == 0 || !context->execution)
     return TALOS_RT_INVALID_ARGUMENT;
+  ContextTransaction transaction(context);
   const Database *database = cachedDatabase(context);
   const uint8_t *record;
   uint32_t kind;
@@ -14271,11 +14287,24 @@ extern "C" talos_rt_status talos_rt_v1_design_force(
   if (stateOffset > context->execution->state_bit_count ||
       bitWidth > context->execution->state_bit_count - stateOffset)
     return TALOS_RT_INVALID_HANDLE;
-  if (kind == TALOS_RT_DESIGN_RECORD_NET)
-    return talos_rt_force_design_nets(
-        context, stateOffset, bitWidth,
-        reinterpret_cast<const uint8_t *>(value),
-        reinterpret_cast<const uint8_t *>(unknown));
+  if (kind == TALOS_RT_DESIGN_RECORD_NET) {
+    talos_rt_status status =
+        talos_rt_force_design_nets(context, stateOffset, bitWidth,
+                                   reinterpret_cast<const uint8_t *>(value),
+                                   reinterpret_cast<const uint8_t *>(unknown));
+    if (status != TALOS_RT_OK)
+      return status;
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
+    auto *feature = context->exactEvents.get();
+    if (feature && !feature->snapshots.empty()) {
+      auto flush = feature->snapshotFlush;
+      talos_rt_status status = flush ? flush(context) : TALOS_RT_INVALID_DESIGN;
+      if (status != TALOS_RT_OK)
+        context->schedulerStatus = status;
+      return status;
+    }
+    return TALOS_RT_OK;
+  }
   TALOS_RT_TRY {
     {
       std::lock_guard<TalosContextMutex> lock(context->mutex);
@@ -14305,6 +14334,7 @@ talos_rt_v1_design_release(talos_rt_context *context,
                            talos_rt_design_cursor_v1 cursor) {
   if (!context || !context->execution)
     return TALOS_RT_INVALID_ARGUMENT;
+  ContextTransaction transaction(context);
   const Database *database = cachedDatabase(context);
   const uint8_t *record;
   uint32_t kind;
@@ -14318,8 +14348,22 @@ talos_rt_v1_design_release(talos_rt_context *context,
   if (stateOffset > context->execution->state_bit_count ||
       bitWidth > context->execution->state_bit_count - stateOffset)
     return TALOS_RT_INVALID_HANDLE;
-  if (kind == TALOS_RT_DESIGN_RECORD_NET)
-    return talos_rt_release_design_nets(context, stateOffset, bitWidth);
+  if (kind == TALOS_RT_DESIGN_RECORD_NET) {
+    talos_rt_status status =
+        talos_rt_release_design_nets(context, stateOffset, bitWidth);
+    if (status != TALOS_RT_OK)
+      return status;
+    std::lock_guard<TalosContextMutex> lock(context->mutex);
+    auto *feature = context->exactEvents.get();
+    if (feature && !feature->snapshots.empty()) {
+      auto flush = feature->snapshotFlush;
+      talos_rt_status status = flush ? flush(context) : TALOS_RT_INVALID_DESIGN;
+      if (status != TALOS_RT_OK)
+        context->schedulerStatus = status;
+      return status;
+    }
+    return TALOS_RT_OK;
+  }
   if (bitWidth > UINT64_MAX - 7)
     return TALOS_RT_OUT_OF_RESOURCES;
   uint64_t byteCount = (bitWidth + 7) / 8;
@@ -14393,6 +14437,14 @@ talos_rt_v1_design_release(talos_rt_context *context,
     std::lock_guard<TalosContextMutex> lock(context->mutex);
     if (context->schedulerStatus != TALOS_RT_OK)
       return context->schedulerStatus;
+    auto *feature = context->exactEvents.get();
+    if (feature && !feature->snapshots.empty()) {
+      auto flush = feature->snapshotFlush;
+      talos_rt_status status = flush ? flush(context) : TALOS_RT_INVALID_DESIGN;
+      if (status != TALOS_RT_OK)
+        context->schedulerStatus = status;
+      return status;
+    }
   }
   return TALOS_RT_OK;
 }

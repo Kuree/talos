@@ -5814,38 +5814,87 @@ talos_rt_status runScheduler(talos_rt_context *context,
             delayedNetPublications;
         uint64_t delayedNetGroup = UINT64_MAX;
         uint64_t delayedNetDueTime = UINT64_MAX;
+        uint64_t powerPublication = UINT64_MAX;
+        bool publicationFlushed = false;
+        const bool snapshotPublications =
+            context->exactEvents && context->exactEvents->snapshotFlush;
+        auto flushSnapshots = [&] {
+          if (!snapshotPublications)
+            return true;
+          auto *feature = context->exactEvents.get();
+          if (!feature || feature->snapshots.empty())
+            return true;
+          publicationFlushed = true;
+          auto flush = feature->snapshotFlush;
+          talos_rt_status status =
+              flush ? flush(context) : TALOS_RT_INVALID_DESIGN;
+          if (status != TALOS_RT_OK)
+            context->schedulerStatus = status;
+          return status == TALOS_RT_OK;
+        };
         auto flushDelayedNetPublications = [&] {
+          if (powerPublication != UINT64_MAX) {
+            context->schedulerStatus = TALOS_RT_INVALID_DESIGN;
+            return false;
+          }
           if (delayedNetPublications.empty()) {
             delayedNetGroup = UINT64_MAX;
             delayedNetDueTime = UINT64_MAX;
-            return true;
+            return flushSnapshots();
           }
+          // Detach this complete publication before callbacks can append or
+          // cancel queued work. Both power-NBA roots and every delayed net
+          // alias have already reached their final canonical values.
+          auto publications = std::move(delayedNetPublications);
+          publicationFlushed = true;
+          delayedNetPublications.clear();
+          delayedNetGroup = UINT64_MAX;
+          delayedNetDueTime = UINT64_MAX;
           auto *cache = talos::designbytecode::getNetAliasCache(
               context->designBytecodeImage, context);
           if (!cache || !talos::designbytecode::publishNetBits(
-                            context, *cache, delayedNetPublications, changed)) {
+                            context, *cache, publications, changed)) {
             if (context->schedulerStatus == TALOS_RT_OK)
               context->schedulerStatus = TALOS_RT_INVALID_HANDLE;
             return false;
           }
-          delayedNetPublications.clear();
-          delayedNetGroup = UINT64_MAX;
-          delayedNetDueTime = UINT64_MAX;
-          return true;
+          return flushSnapshots();
         };
         auto prepareDelayedNetBatch = [&](const ScheduledNBA &update) {
-          if (update.inertialNetBit == UINT64_MAX)
+          // A flush can append to scheduledNBAs. Do not retain a reference
+          // into its storage across a callback-capable boundary.
+          auto half = update.powerGuardHalf();
+          uint64_t sequence = update.sequence;
+          uint64_t netBit = update.inertialNetBit;
+          uint64_t group = update.inertialNetGroup;
+          uint64_t dueTime = update.dueTime;
+          if (powerPublication != UINT64_MAX) {
+            if (half == 2 && sequence == powerPublication + 1)
+              return true;
+            context->schedulerStatus = TALOS_RT_INVALID_DESIGN;
+            return false;
+          }
+          if (netBit == UINT64_MAX)
             return flushDelayedNetPublications();
           if (delayedNetGroup != UINT64_MAX &&
-              (delayedNetGroup != update.inertialNetGroup ||
-               delayedNetDueTime != update.dueTime) &&
+              (delayedNetGroup != group || delayedNetDueTime != dueTime) &&
               !flushDelayedNetPublications())
             return false;
-          delayedNetGroup = update.inertialNetGroup;
-          delayedNetDueTime = update.dueTime;
+          delayedNetGroup = group;
+          delayedNetDueTime = dueTime;
           return true;
         };
         auto applyNative = [&](ScheduledNBA &update) {
+          bool powerSnapshot = update.powerGuardHalf() &&
+                               snapshotPublications && context->exactEvents &&
+                               context->exactEvents->snapshotFlush;
+          if (powerSnapshot) {
+            if (update.powerGuardHalf() == 1 && context->powerNBAs &&
+                context->powerNBAs->conditions.count(update.sequence))
+              powerPublication = update.sequence;
+            else if (update.powerGuardHalf() == 2)
+              powerPublication = UINT64_MAX;
+          }
           bool publicationChanged = false;
           uint64_t oldRealBits = 0;
           uint64_t newRealBits = 0;
@@ -6168,7 +6217,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
                                      : changedBits != 0;
             if (!update.driver)
               changed |= publicationChanged;
-            if (update.inertialNetBit != UINT64_MAX)
+            if (update.inertialNetBit != UINT64_MAX || powerSnapshot)
               for (uint64_t bit = 0; bit != update.bitWidth; ++bit) {
                 uint64_t mask = uint64_t{1} << bit;
                 if ((changedBits & mask) == 0)
@@ -6320,7 +6369,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
                   changed = true;
                 publicationChanged = true;
                 transitions.record(bit, edges);
-                if (update.inertialNetBit != UINT64_MAX)
+                if (update.inertialNetBit != UINT64_MAX || powerSnapshot)
                   delayedNetPublications.push_back(
                       {planeBit, oldValue, oldUnknown, newValue, newUnknown});
               }
@@ -6333,7 +6382,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
             // ranges. Commit all of its same-time inertial publications before
             // evaluating any observer so no callback can see a half-updated
             // alias set.
-            if (update.inertialNetBit != UINT64_MAX)
+            if (update.inertialNetBit != UINT64_MAX || powerSnapshot)
               return;
             if (update.realWidth != 0) {
               if (!talos_rt_publish_signal_occurrence_unlocked(
@@ -6644,7 +6693,8 @@ talos_rt_status runScheduler(talos_rt_context *context,
             (!talos_rt_replaceable_events(context) ||
              talos_rt_replaceable_events(context)->calendar.empty()) &&
             context->scheduledPassSwitchEvents.empty() &&
-            context->scheduledInertialPathNBAs.empty()) {
+            context->scheduledInertialPathNBAs.empty() &&
+            !snapshotPublications) {
           size_t retained = 0;
           for (size_t index = 0;; ++index) {
             if (index == context->scheduledNBAs.size()) {
@@ -6696,6 +6746,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
         } else {
           MixedNBABarrierQueues queues(context);
           for (;;) {
+            publicationFlushed = false;
             uint64_t nativeSequence = UINT64_MAX;
             size_t nativeIndex = 0;
             if (auto index =
@@ -6782,6 +6833,10 @@ talos_rt_status runScheduler(talos_rt_context *context,
             } else if (!flushDelayedNetPublications()) {
               return context->schedulerStatus;
             }
+            // Publication callbacks may cancel a calendar entry or replace
+            // its owner. Re-select before using any previously found item.
+            if (publicationFlushed)
+              continue;
             if (sequence == nativeSequence) {
               uint32_t retainedAutomaticID =
                   context->scheduledNBAs[nativeIndex].retainedAutomaticID;
@@ -6790,8 +6845,20 @@ talos_rt_status runScheduler(talos_rt_context *context,
               if (pathCurrent)
                 completeInertial(context->scheduledNBAs[nativeIndex]);
               context->schedulerApplyingNativeUpdate = pathCurrent;
-              if (pathCurrent)
-                applyNative(context->scheduledNBAs[nativeIndex]);
+              if (snapshotPublications) {
+                // Source callbacks may enqueue deferred work as well as
+                // target notifications. Freeze the entry and its inline
+                // payload before such callbacks can grow the queue.
+                ScheduledNBA update =
+                    std::move(context->scheduledNBAs[nativeIndex]);
+                queues.native.consume();
+                if (pathCurrent)
+                  applyNative(update);
+              } else {
+                if (pathCurrent)
+                  applyNative(context->scheduledNBAs[nativeIndex]);
+                queues.native.consume();
+              }
               context->schedulerApplyingNativeUpdate = false;
               if (context->schedulerStatus != TALOS_RT_OK)
                 return context->schedulerStatus;
@@ -6807,7 +6874,6 @@ talos_rt_status runScheduler(talos_rt_context *context,
                   context->nativeAutomaticStates.erase(found);
                 }
               }
-              queues.native.consume();
             } else if (sequence == pathSequence) {
               ScheduledNBA update = std::move(pathUpdate->second);
               context->scheduledInertialPathNBAs.erase(pathUpdate);
@@ -6921,6 +6987,12 @@ talos_rt_status runScheduler(talos_rt_context *context,
                 return TALOS_RT_INVALID_HANDLE;
               queues.design.consume();
             }
+            // All queue references/iterators above are finished. Snapshot
+            // callbacks may append or cancel work; the mixed-queue guard
+            // keeps positions stable and the next iteration rescans minima.
+            if (powerPublication == UINT64_MAX &&
+                delayedNetGroup == UINT64_MAX && !flushDelayedNetPublications())
+              return context->schedulerStatus;
           }
         }
         if ((changed || eventTriggered) && ++context->schedulerEpoch == 0)

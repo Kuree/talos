@@ -509,6 +509,41 @@ bool isComplementaryDriverPair(const Image &image, talos_rt_context *context,
 
 bool publishNetBits(talos_rt_context *context, const NetAliasCache &cache,
                     std::vector<NetPublication> &publications, bool &changed) {
+  // A resolved component is one publication, even when its logical aliases
+  // occupy distinct observer ranges. Qualify clauses against the completed
+  // component, then sample their union once, outside the per-range overlays.
+  auto *feature = context->exactEvents.get();
+  bool collect =
+      feature && feature->snapshotFlush &&
+      !feature->collectingSnapshotNotifications &&
+      std::any_of(publications.begin(), publications.end(),
+                  [](const NetPublication &publication) {
+                    return publication.oldValue != publication.value ||
+                           publication.oldUnknown != publication.unknown;
+                  });
+  if (collect) {
+    if (feature->flushingSnapshots || !feature->snapshots.empty()) {
+      context->schedulerStatus = TALOS_RT_INVALID_LIFECYCLE;
+      return false;
+    }
+    feature->collectingSnapshotNotifications = true;
+    feature->groupedExactSequence = 0;
+    feature->snapshotOccurrences.clear();
+  }
+  struct CollectionGuard {
+    talos_rt_context *context;
+    ExactEventFeatureState *feature;
+    ~CollectionGuard() {
+      if (!feature)
+        return;
+      feature->collectingSnapshotNotifications = false;
+      feature->groupedExactSequence = 0;
+      feature->snapshotOccurrences.clear();
+      if (!feature->dispatchDepth && feature->registrations.empty() &&
+          feature->snapshots.empty())
+        context->exactEvents.reset();
+    }
+  } collection{context, collect ? feature : nullptr};
   std::sort(publications.begin(), publications.end(),
             [](const NetPublication &lhs, const NetPublication &rhs) {
               return lhs.destination < rhs.destination;
@@ -602,6 +637,15 @@ bool publishNetBits(talos_rt_context *context, const NetAliasCache &cache,
             routed[groupBegin].observerWidth))
       return false;
     groupBegin = groupEnd;
+  }
+  if (context->schedulerStatus != TALOS_RT_OK)
+    return false;
+  if (collect) {
+    auto occurrences = std::move(feature->snapshotOccurrences);
+    feature->snapshotOccurrences.clear();
+    if (!occurrences.empty() &&
+        !captureEventSnapshotsUnlocked(context, occurrences, nullptr))
+      return false;
   }
   return true;
 }
@@ -2149,6 +2193,18 @@ talos_rt_status talos_rt_force_design_nets(talos_rt_context *context,
     bool changed = false;
     if (!publishNetBits(context, *cache, publications, changed))
       return context->schedulerStatus;
+    // A force is visible before it propagates to distinct switch nodes
+    // (IEEE 1800-2023 4.9.5). Finish that source publication before resolving
+    // the pass network, whose remote transitions form the next publication.
+    auto *feature = context->exactEvents.get();
+    if (feature && !feature->snapshots.empty()) {
+      auto flush = feature->snapshotFlush;
+      talos_rt_status status = flush ? flush(context) : TALOS_RT_INVALID_DESIGN;
+      if (status != TALOS_RT_OK) {
+        context->schedulerStatus = status;
+        return status;
+      }
+    }
     std::vector<uint64_t> roots;
     roots.reserve(forcedRoots.size());
     for (const auto &[root, ignored] : forcedRoots)

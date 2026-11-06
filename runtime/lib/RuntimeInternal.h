@@ -1428,7 +1428,12 @@ struct ExactEventFeatureState {
       subscriptionBuckets;
   uint64_t pendingStrobeCount = 0;
   std::deque<EventSnapshotBatch> snapshots;
+  // Installed by the optional snapshot provider. Ordinary runtime objects
+  // need no strong reference that would extract its archive member.
+  decltype(&talos_rt_v1_event_snapshot_flush) snapshotFlush = nullptr;
+  uint64_t snapshotOwnerCount = 0;
   uint64_t snapshotMask = 0;
+  uint64_t groupedExactSequence = 0;
   bool samplingSnapshot = false;
   bool flushingSnapshots = false;
   uint32_t dispatchDepth = 0;

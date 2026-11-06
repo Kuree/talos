@@ -4,6 +4,7 @@
 #include "../lib/DesignBytecodeLogic.h"
 #include "../lib/DesignBytecodeNets.h"
 #include "../lib/ProcessShared.h"
+#include "../lib/ProcessSignals.h"
 #include "../lib/RuntimeInternal.h"
 #include "../lib/VPIHandleToken.h"
 #include "talos/Reflection/DesignReflection.h"
@@ -18,6 +19,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -16913,6 +16915,287 @@ TEST(DesignDatabase, TraversesLooksUpAndAccessesLiveState) {
   EXPECT_EQ(readValue, value);
   EXPECT_EQ(readUnknown, unknown);
   talos_rt_v1_context_destroy(context);
+}
+
+TEST(DesignDatabase, ForeignPackedWritesFlushEventSnapshotsBeforeReturning) {
+  // IEEE 1801-2018 6.50 / IEEE 1800-2023 38.34: a foreign write is a
+  // complete publication, just like a language store. Cover both packed
+  // accessState paths and the separate continuous-storage release path.
+  for (uint32_t mode : {1, 65, 0, 66, 67}) {
+    SCOPED_TRACE(mode);
+    bool pass = mode == 67;
+    bool net = mode == 0 || mode == 66 || pass;
+    uint32_t width = net ? 65 : mode;
+    Fixture fixture;
+    if (width == 1)
+      fixture.database =
+          makeVPIShapeDatabase(VPIShapeType::BasicScalar, vpiReg);
+    fixture.execution.design_database = fixture.database.data();
+    fixture.execution.design_database_size = fixture.database.size();
+    if (net) {
+      fixture.bytecode =
+          pass ? makeConnectedDriverBytecode() : makeDriverBytecode();
+      if (pass) {
+        auto connection = get64(fixture.bytecode, 184);
+        fixture.bytecode[connection + 26] = 8; // Nonresistive tran.
+        put32(fixture.bytecode, connection + 28, 1);
+        auto states = get64(fixture.bytecode, 168);
+        put32(fixture.bytecode, states + 2 * 32 + 4, driverFlags(3, 3));
+      }
+      put32(fixture.database, 240,
+            designRecordKind(TALOS_RT_DESIGN_RECORD_NET, vpiNet));
+      put64(fixture.database, 32, imageChecksum(fixture.database));
+      put64(fixture.bytecode, 32, imageChecksum(fixture.bytecode));
+      fixture.execution.bytecode = fixture.bytecode.data();
+      fixture.execution.bytecode_size = fixture.bytecode.size();
+      fixture.execution.checksum = imageChecksum(fixture.bytecode);
+    }
+    fixture.execution.state_bit_count = 512;
+    talos_rt_observer_capture_abi_v1 primaryABI{
+        TALOS_RT_OBSERVER_CAPTURE_STORAGE, 1};
+    talos_rt_observer_capture_abi_v1 samplerABI{
+        TALOS_RT_OBSERVER_CAPTURE_STORAGE, width};
+    talos_rt_observer_capture_abi_v1 coverageABI{
+        TALOS_RT_OBSERVER_CAPTURE_COVERGROUP, 64};
+    const talos_rt_observer_descriptor_v1 observers[] = {
+        {1, &primaryABI, 1, 1, TALOS_RT_OBSERVER_FOUR_STATE,
+         TALOS_RT_OBSERVER_NO_BYTECODE,
+         +[](talos_rt_context *context, const uint64_t *captures, uint32_t,
+             uint64_t *value, uint64_t *unknown, uint32_t) {
+           bool v = false, u = false;
+           if (!talos_rt_read_signal_bit_unlocked(context, captures[0], 0, v, u,
+                                                  false))
+             return TALOS_RT_INVALID_HANDLE;
+           *value = v;
+           *unknown = u;
+           return TALOS_RT_OK;
+         },
+         0},
+        {2, &samplerABI, 1, width, TALOS_RT_OBSERVER_FOUR_STATE,
+         TALOS_RT_OBSERVER_NO_BYTECODE,
+         +[](talos_rt_context *context, const uint64_t *captures, uint32_t,
+             uint64_t *value, uint64_t *unknown, uint32_t limbs) {
+           uint32_t width = context->execution->observers[1].result_width;
+           if (limbs != (width + 63) / 64)
+             return TALOS_RT_INVALID_ARGUMENT;
+           for (uint32_t bit = 0; bit != width; ++bit) {
+             bool v = false, u = false;
+             if (!talos_rt_read_signal_bit_unlocked(context, captures[0], bit,
+                                                    v, u, false))
+               return TALOS_RT_INVALID_HANDLE;
+             value[bit / 64] |= uint64_t{v} << (bit % 64);
+             unknown[bit / 64] |= uint64_t{u} << (bit % 64);
+           }
+           return TALOS_RT_OK;
+         },
+         0},
+        {3, &coverageABI, 1, 1, 0, TALOS_RT_OBSERVER_NO_BYTECODE,
+         +[](talos_rt_context *context, const uint64_t *captures, uint32_t,
+             uint64_t *value, uint64_t *unknown, uint32_t) {
+           auto *probe = reinterpret_cast<VPIDestroyProbe *>(captures[0]);
+           talos_rt_v1_context_destroy(context);
+           probe->destroyReturned = true;
+           s_vpi_vlog_info info{};
+           probe->vpiRemainedUsable = vpi_get_vlog_info(&info) == 1;
+           *value = 1;
+           *unknown = 0;
+           return TALOS_RT_OK;
+         },
+         0},
+    };
+    fixture.execution.observers = observers;
+    fixture.execution.observer_count = 3;
+    talos_rt_context *context = nullptr;
+    ASSERT_EQ(
+        talos_rt_v1_context_create_for_design(&fixture.execution, &context),
+        TALOS_RT_OK);
+    std::fill(context->stateValue.begin(), context->stateValue.end(), 0);
+    std::fill(context->stateUnknown.begin(), context->stateUnknown.end(), 0);
+    ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 99, 256, width),
+              TALOS_RT_OK);
+    talos_rt_process_instance_v1 owner{};
+    owner.descriptor = &fixture.descriptor;
+    owner.context = context;
+    owner.tier = TALOS_RT_TIER_NATIVE;
+    context->scheduledProcesses.emplace_back();
+    context->scheduledProcesses.back().instance = &owner;
+    context->scheduledProcesses.back().token = 1;
+    context->scheduledProcesses.back().started = true;
+    context->scheduledProcessIndices.emplace(1, 0);
+    context->activeNativeProcess = &owner;
+    context->activeLogicalProcessToken =
+        TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | 1;
+    struct EventPlan {
+      talos_rt_computed_wait_record_v1 header;
+      talos_rt_computed_observer_v1 observer;
+      talos_rt_computed_capture_v1 capture;
+      talos_rt_computed_dependency_v1 dependency;
+      talos_rt_computed_clause_v1 clause;
+      uint64_t previous[2];
+    } plan{};
+    plan.header = {TALOS_RT_VERSION,
+                   TALOS_RT_SUSPEND_OBSERVER,
+                   TALOS_RT_COMPUTED_WAIT_INTERLEAVED,
+                   1,
+                   1,
+                   1,
+                   1,
+                   1,
+                   offsetof(EventPlan, observer),
+                   offsetof(EventPlan, capture),
+                   offsetof(EventPlan, dependency),
+                   offsetof(EventPlan, clause),
+                   offsetof(EventPlan, previous),
+                   0,
+                   sizeof(plan),
+                   0};
+    plan.observer = {1, 0, 1, 0, 1, offsetof(EventPlan, previous), 0};
+    plan.dependency = {0, TALOS_RT_OBSERVER_DEPENDENCY_SIGNAL, 1};
+    plan.clause = {0, TALOS_RT_OBSERVER_CONDITION_NONE,
+                   TALOS_RT_WAIT_EDGE_CHANGE, 0};
+    if (pass) {
+      ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 98, 65, 65),
+                TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 100, 384, 65),
+                TALOS_RT_OK);
+    }
+    talos_rt_computed_capture_v1 capture{pass ? 65u : 0u, 0, 0, 0};
+    talos_rt_event_snapshot_target_v1 target{
+        talos_rt_v1_native_state_static_handle(99), width, 1};
+    ASSERT_EQ(talos_rt_v1_event_snapshot_register(context, &plan.header,
+                                                  sizeof(plan), 2, &capture, 1,
+                                                  &target, 1),
+              TALOS_RT_OK);
+    if (pass) {
+      EventPlan remotePlan = plan;
+      remotePlan.capture.stable_id = 65;
+      remotePlan.dependency.stable_id = 65;
+      context->scheduledProcesses.emplace_back();
+      context->scheduledProcesses.back().instance = &owner;
+      context->scheduledProcesses.back().token = 2;
+      context->scheduledProcesses.back().started = true;
+      context->scheduledProcessIndices.emplace(2, 1);
+      context->activeLogicalProcessToken =
+          TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | 2;
+      talos_rt_computed_capture_v1 remoteCapture{};
+      talos_rt_event_snapshot_target_v1 remoteTarget{
+          talos_rt_v1_native_state_static_handle(100), 65, 1};
+      ASSERT_EQ(talos_rt_v1_event_snapshot_register(
+                    context, &remotePlan.header, sizeof(remotePlan), 2,
+                    &remoteCapture, 1, &remoteTarget, 1),
+                TALOS_RT_OK);
+    }
+    context->activeNativeProcess = nullptr;
+    context->activeLogicalProcessToken = 0;
+    talos_rt_design_cursor_v1 object{};
+    constexpr std::string_view name = "top.value";
+    ASSERT_EQ(talos_rt_v1_design_lookup(
+                  &fixture.execution,
+                  reinterpret_cast<const uint8_t *>(name.data()), name.size(),
+                  &object),
+              TALOS_RT_OK);
+    const std::array<uint64_t, 2> one{1, 1}, zero{};
+    auto check = [&](bool high, bool released = false) {
+      ASSERT_TRUE(context->exactEvents);
+      EXPECT_TRUE(context->exactEvents->snapshots.empty());
+      EXPECT_EQ(uint64_t(context->stateValue[4]), high ? 1u : 0u);
+      EXPECT_EQ(uint64_t(context->stateUnknown[4]), 0u);
+      if (width == 65) {
+        EXPECT_EQ(uint64_t(context->stateValue[5]) & 1, high ? 1u : 0u);
+        EXPECT_EQ(uint64_t(context->stateUnknown[5]) & 1,
+                  (released && !net) ? 1u : 0u);
+      }
+    };
+    if (!net) {
+      ASSERT_EQ(talos_rt_v1_design_write(context, object, one.data(),
+                                         zero.data(), width),
+                TALOS_RT_OK);
+      check(true);
+      ASSERT_EQ(talos_rt_v1_design_write(context, object, zero.data(),
+                                         zero.data(), width),
+                TALOS_RT_OK);
+      check(false);
+    }
+    context->continuousMask.assign(8, 0);
+    context->continuousValue.assign(8, 0);
+    context->continuousUnknown.assign(8, 0);
+    context->continuousMask[0] = width == 1 ? 1 : UINT64_MAX;
+    if (width == 65) {
+      context->continuousMask[1] = 1;
+      context->continuousUnknown[1] = 1;
+    }
+    ASSERT_EQ(talos_rt_v1_design_force(context, object, one.data(), zero.data(),
+                                       width),
+              TALOS_RT_OK);
+    check(!pass);
+    if (pass) {
+      EXPECT_EQ(uint64_t(context->stateValue[6]), 1u);
+      EXPECT_EQ(uint64_t(context->stateValue[7]) & 1, 1u);
+    }
+    ASSERT_EQ(talos_rt_v1_design_release(context, object), TALOS_RT_OK);
+    check(false, true);
+    if (pass) {
+      EXPECT_EQ(uint64_t(context->stateValue[6]), 0u);
+      EXPECT_EQ(uint64_t(context->stateUnknown[6]), 0u);
+      talos_rt_unregister_exact_events_unlocked(
+          context, TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | UINT64_C(2));
+    }
+    talos_rt_unregister_exact_events_unlocked(
+        context, TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | UINT64_C(1));
+    context->scheduledProcesses.clear();
+    context->scheduledProcessIndices.clear();
+    if (net && !pass) {
+      // A net publication callback may request destruction. The public
+      // foreign operation must own the context through its post-helper work.
+      ASSERT_EQ(talos_rt_v1_vpi_startup(context, nullptr, 0), TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_vpi_end_compile(context), TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_vpi_start_simulation(context), TALOS_RT_OK);
+      if (mode == 66)
+        ASSERT_EQ(talos_rt_v1_design_force(context, object, one.data(),
+                                           zero.data(), width),
+                  TALOS_RT_OK);
+      VPIDestroyProbe probe{context};
+      talos_rt_process_instance_v1 *callbackOwner = nullptr;
+      ASSERT_EQ(talos_rt_v1_process_instance_create(&fixture.descriptor,
+                                                    &callbackOwner),
+                TALOS_RT_OK);
+      callbackOwner->context = context;
+      callbackOwner->tier = TALOS_RT_TIER_NATIVE;
+      context->scheduledProcesses.emplace_back();
+      context->scheduledProcesses.back().instance = callbackOwner;
+      context->scheduledProcesses.back().token = 1;
+      context->scheduledProcesses.back().started = true;
+      context->scheduledProcessIndices.emplace(1, 0);
+      context->activeNativeProcess = callbackOwner;
+      context->activeLogicalProcessToken =
+          TALOS_RT_NATIVE_LOGICAL_PROCESS_TAG | 1;
+      context->coverage = std::make_unique<CoverageState>();
+      auto probeID = reinterpret_cast<uint64_t>(&probe);
+      context->coverage->instances.emplace(probeID,
+                                           FunctionalCoverageInstanceState{});
+      talos_rt_computed_capture_v1 destroyCapture{probeID, 0, 0, 0};
+      plan.previous[0] = mode == 66 ? 1 : 0;
+      ASSERT_EQ(
+          talos_rt_v1_covergroup_clock_event_register(
+              context, &plan.header, sizeof(plan), 0, 3, &destroyCapture, 1),
+          TALOS_RT_OK);
+      context->activeNativeProcess = nullptr;
+      context->activeLogicalProcessToken = 0;
+      if (mode == 66)
+        EXPECT_EQ(talos_rt_v1_design_release(context, object), TALOS_RT_OK);
+      else
+        EXPECT_EQ(talos_rt_v1_design_force(context, object, one.data(),
+                                           zero.data(), width),
+                  TALOS_RT_OK);
+      EXPECT_TRUE(probe.destroyReturned);
+      EXPECT_TRUE(probe.vpiRemainedUsable);
+      // The outer transaction has destroyed the context and revoked TLS.
+      char rootName[] = "$root";
+      EXPECT_EQ(vpi_handle_by_name(rootName, nullptr), nullptr);
+    } else {
+      talos_rt_v1_context_destroy(context);
+    }
+  }
 }
 
 TEST(DesignDatabase, LooksUpPhysicalScopeIDsWithoutAssumingTableOrder) {

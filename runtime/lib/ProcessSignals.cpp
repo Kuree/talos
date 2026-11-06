@@ -807,6 +807,11 @@ void eraseExactEventRegistrationUnlocked(talos_rt_context *context,
         context->signalDiagnostics.subscriptionsCurrent != 0)
       --context->signalDiagnostics.subscriptionsCurrent;
   }
+  if (owned->second && owned->second->snapshotIdentity) {
+    --feature.snapshotOwnerCount;
+    if (!feature.snapshotOwnerCount && feature.snapshots.empty())
+      feature.snapshotFlush = nullptr;
+  }
   feature.registrations.erase(owned);
   for (auto bucket = feature.subscriptionBuckets.begin();
        bucket != feature.subscriptionBuckets.end();) {
@@ -817,7 +822,7 @@ void eraseExactEventRegistrationUnlocked(talos_rt_context *context,
   }
   if (feature.registrations.empty() && feature.subscriptionBuckets.empty() &&
       feature.snapshots.empty() && !feature.dispatchDepth &&
-      !feature.flushingSnapshots)
+      !feature.flushingSnapshots && !feature.collectingSnapshotNotifications)
     context->exactEvents.reset();
 }
 
@@ -895,18 +900,20 @@ talos_rt_status validateEventSnapshotTargetUnlocked(
   return TALOS_RT_OK;
 }
 
-static talos_rt_status registerExactEvent(
+talos_rt_status registerExactEvent(
     talos_rt_context *context,
     const talos_rt_computed_wait_record_v1 *eventPlan, uint64_t eventPlanSize,
     uint32_t expectedStrobe, uint64_t observerCodeUnit,
     const talos_rt_computed_capture_v1 *captures, uint32_t captureCount,
-    const talos_rt_event_snapshot_target_v1 *targets, uint32_t targetCount) {
+    const talos_rt_event_snapshot_target_v1 *targets, uint32_t targetCount,
+    decltype(&talos_rt_v1_event_snapshot_flush) snapshotFlush) {
   bool snapshot = targetCount != 0;
   if (!context || !eventPlan ||
       eventPlanSize < sizeof(talos_rt_computed_wait_record_v1) ||
       expectedStrobe > 1 || observerCodeUnit == 0 ||
-      (captureCount != 0 && !captures) || (snapshot && !targets) ||
-      eventPlanSize > SIZE_MAX || eventPlanSize > UINT64_MAX - 7 ||
+      (captureCount != 0 && !captures) ||
+      (snapshot && (!targets || !snapshotFlush)) || eventPlanSize > SIZE_MAX ||
+      eventPlanSize > UINT64_MAX - 7 ||
       uint64_t{captureCount} * sizeof(*captures) > SIZE_MAX ||
       uint64_t{targetCount} * sizeof(*targets) > SIZE_MAX)
     return TALOS_RT_INVALID_ARGUMENT;
@@ -916,6 +923,9 @@ static talos_rt_status registerExactEvent(
     ContextMutexLock lock(context);
     if (context->schedulerStatus != TALOS_RT_OK)
       return context->schedulerStatus;
+    if (snapshot &&
+        (context->observerDepth || context->exactEventEvaluationDepth))
+      return TALOS_RT_INVALID_LIFECYCLE;
     uint64_t logicalToken = context->activeLogicalProcessToken;
     if (logicalToken == 0)
       return TALOS_RT_INVALID_LIFECYCLE;
@@ -1190,8 +1200,12 @@ static talos_rt_status registerExactEvent(
     if (!context->exactEvents)
       context->exactEvents = std::make_unique<ExactEventFeatureState>();
     ExactEventFeatureState &feature = *context->exactEvents;
+    if (snapshot && feature.snapshotOwnerCount == UINT64_MAX)
+      return TALOS_RT_OUT_OF_RESOURCES;
     ExactEventRegistration *stored = registration.get();
     feature.registrations.emplace(logicalToken, std::move(registration));
+    if (snapshot)
+      ++feature.snapshotOwnerCount;
     insertedLogicalToken = logicalToken;
     auto rollback = [&] {
       eraseExactEventRegistrationUnlocked(context, logicalToken);
@@ -1316,6 +1330,8 @@ static talos_rt_status registerExactEvent(
                      context->signalDiagnostics.subscriptionsCurrent);
       }
     }
+    if (snapshot)
+      context->exactEvents->snapshotFlush = snapshotFlush;
     insertedLogicalToken = 0;
     return TALOS_RT_OK;
   }
@@ -1352,18 +1368,6 @@ extern "C" talos_rt_status talos_rt_v1_covergroup_clock_event_register(
                             0);
 }
 
-extern "C" talos_rt_status talos_rt_v1_event_snapshot_register(
-    talos_rt_context *context,
-    const talos_rt_computed_wait_record_v1 *eventPlan, uint64_t eventPlanSize,
-    uint64_t observerCodeUnit, const talos_rt_computed_capture_v1 *captures,
-    uint32_t captureCount, const talos_rt_event_snapshot_target_v1 *targets,
-    uint32_t targetCount) {
-  if (!targetCount)
-    return TALOS_RT_INVALID_ARGUMENT;
-  return registerExactEvent(context, eventPlan, eventPlanSize, 0,
-                            observerCodeUnit, captures, captureCount, targets,
-                            targetCount);
-}
 
 void talos_rt_unregister_signal_wait_unlocked(
     talos_rt_context *context,

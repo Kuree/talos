@@ -4379,12 +4379,14 @@ typedef struct talos_rt_event_snapshot_target_v1 {
 // caller proves packed integral types; runtime validation checks handle bounds
 // and lifetime rather than optional HDL reflection metadata. Target notices
 // and event dependencies use the canonical native/bytecode signal identity.
-// All samplers qualified by one publication capture before any destination
-// write or user covergroup callback. Failure discards that publication's
-// snapshots. Each source publication must be followed immediately by
+// All samplers qualified by one publication observe its completed source
+// state and capture before any destination write. Grouped alias publication
+// may run read-only source callbacks before sampling. Failure discards that
+// publication's snapshots. Each source publication must be followed by
 // snapshot_flush before the next state-changing statement/runtime commit.
-// Source and target notification callbacks must be read-only while a snapshot
-// is pending; recursive publications fail rather than silently reorder data.
+// Source and target callbacks must not change current design state during a
+// snapshot publication; deferred scheduling is allowed. Recursive state
+// publications fail rather than reorder data.
 talos_rt_status talos_rt_v1_event_snapshot_register(
     talos_rt_context *context,
     const talos_rt_computed_wait_record_v1 *event_plan,

@@ -1,5 +1,6 @@
 //===- EventSnapshot.cpp - Explicit event-time state transactions --------===//
 
+#include "DesignBytecodeEvents.h"
 #include "DesignBytecodeExecution.h"
 #include "ProcessContext.h"
 #include "ProcessPacking.h"
@@ -15,10 +16,25 @@
 // for designs with no snapshots (IEEE 1801-2018 6.50 is opt-in).
 extern "C" void talos_rt_v1_event_snapshot_link_anchor() {}
 
+extern "C" talos_rt_status talos_rt_v1_event_snapshot_register(
+    talos_rt_context *context,
+    const talos_rt_computed_wait_record_v1 *eventPlan, uint64_t eventPlanSize,
+    uint64_t observerCodeUnit, const talos_rt_computed_capture_v1 *captures,
+    uint32_t captureCount, const talos_rt_event_snapshot_target_v1 *targets,
+    uint32_t targetCount) {
+  if (!targetCount)
+    return TALOS_RT_INVALID_ARGUMENT;
+  return registerExactEvent(context, eventPlan, eventPlanSize, 0,
+                            observerCodeUnit, captures, captureCount, targets,
+                            targetCount, &talos_rt_v1_event_snapshot_flush);
+}
+
 namespace talos::designbytecode {
 TALOS_RT_FEATURE_TEXT talos_rt_status invokeEventSnapshotIntrinsic(
     const Image &image, Frame &frame, talos_rt_context *context,
     IntrinsicSite site, uint32_t intrinsicId) {
+  if (intrinsicId == TALOS_RT_INTRINSIC_V1_EVENT_SNAPSHOT_REGISTER)
+    return decodeExactEventRegistration<true>(image, frame, context, site);
   if (site.inputCount)
     return TALOS_RT_INVALID_BYTECODE;
   if (intrinsicId == TALOS_RT_INTRINSIC_V1_EVENT_SNAPSHOT_FLUSH)
@@ -155,6 +171,7 @@ talos_rt_v1_event_snapshot_flush(talos_rt_context *context) {
       return TALOS_RT_OK;
     if (context->observerDepth || context->exactEventEvaluationDepth ||
         feature->dispatchDepth || feature->flushingSnapshots ||
+        feature->collectingSnapshotNotifications ||
         context->publicationBatch.depth)
       return TALOS_RT_INVALID_LIFECYCLE;
     if (context->nativeSchedulePlan)
@@ -168,8 +185,11 @@ talos_rt_v1_event_snapshot_flush(talos_rt_context *context) {
         context->observerForcesCanonicalPlane = canonical;
         auto *feature = context->exactEvents.get();
         feature->collectingSnapshotNotifications = false;
+        feature->groupedExactSequence = 0;
         feature->snapshotOccurrences.clear();
         feature->flushingSnapshots = false;
+        if (!feature->snapshotOwnerCount && feature->snapshots.empty())
+          feature->snapshotFlush = nullptr;
         if (feature->registrations.empty() && feature->snapshots.empty())
           context->exactEvents.reset();
       }
@@ -213,6 +233,7 @@ talos_rt_v1_event_snapshot_flush(talos_rt_context *context) {
         }
       }
       feature->collectingSnapshotNotifications = true;
+      feature->groupedExactSequence = 0;
       feature->snapshotOccurrences.clear();
       for (const auto &update : updates) {
         if (!update.differs)

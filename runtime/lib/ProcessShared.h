@@ -340,6 +340,13 @@ bool publishCommittedSignalTransitionUnlocked(
 talos_rt_status validateEventSnapshotTargetUnlocked(
     talos_rt_context *context, const talos_rt_event_snapshot_target_v1 &target,
     EventSnapshotTarget &resolved);
+talos_rt_status registerExactEvent(
+    talos_rt_context *context,
+    const talos_rt_computed_wait_record_v1 *eventPlan, uint64_t eventPlanSize,
+    uint32_t expectedStrobe, uint64_t observerCodeUnit,
+    const talos_rt_computed_capture_v1 *captures, uint32_t captureCount,
+    const talos_rt_event_snapshot_target_v1 *targets, uint32_t targetCount,
+    decltype(&talos_rt_v1_event_snapshot_flush) snapshotFlush = nullptr);
 bool captureEventSnapshotsUnlocked(
     talos_rt_context *context,
     const std::vector<EventSnapshotOccurrence> &occurrences,
