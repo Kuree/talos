@@ -1,8 +1,10 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off prune-native=true},convert-talos-sim-processes-to-llvm-coroutines,materialize-runtime-byte-globals)' -o %t.llvm.mlir 2> %t.plan
-// RUN: FileCheck %s --check-prefix=PROOF < %t.plan && FileCheck %s --check-prefix=STATIC --implicit-check-not='llvm.call @__talos_eval_static_nba_publication' < %t.llvm.mlir && FileCheck %s --check-prefix=BODY < %t.llvm.mlir
+// RUN: FileCheck %s --check-prefix=PROOF < %t.plan && FileCheck %s --check-prefix=STATIC --implicit-check-not='llvm.call @__talos_eval_static_nba_publication_guard_v1' < %t.llvm.mlir && FileCheck %s --check-prefix=BODY < %t.llvm.mlir && FileCheck %s --check-prefix=ELIGIBLE < %t.llvm.mlir
 // RUN: talos-translate --mlir-to-llvmir %t.llvm.mlir | %llvm_dist/bin/opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.o
 // RUN: %target_cxx %t.o %runtime_link_flags -o %t.exe
 // RUN: %t.exe --execution-tier=native | FileCheck %s --check-prefix=OUTPUT
+// RUN: talos-translate --mlir-to-llvmir %t.llvm.mlir | %llvm_dist/bin/opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O0>' | %llc -filetype=obj -relocation-model=pic -o %t.outlined.o
+// RUN: %target_cxx %t.outlined.o %runtime_link_flags -o %t.outlined.exe && %t.outlined.exe --execution-tier=native | FileCheck %s --check-prefix=OUTPUT
 
 // Repeat the scalar/slot/fallback boundary checks with forced two-state
 // bodies and known wide payloads. Preserve the partial target's neighbors,
@@ -13,6 +15,7 @@
 // OUTPUT: {{^}}1 16 16 16 1 5{{$}}
 
 // BODY-LABEL: llvm.func internal @__talos_eval_static_nba_publication_v1(
+// BODY-SAME: -> i1 {
 // BODY-NOT: @__talos_aot_static_nba_commit
 // BODY-NOT: @talos_rt_v1_static_nba_commit
 // BODY-NOT: @__talos_eval_nba_commit_
@@ -20,20 +23,22 @@
 // BODY: {{^  }}}
 
 // STATIC-LABEL: llvm.func internal @__talos_eval_static_nba_publication_v1(
-// STATIC-NOT: @__talos_eval_nba_commit_
-// STATIC-NOT: llvm.switch
-// STATIC: llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1
-// The third scalar accumulator is not in the certificate. Its dirty bit must
-// decline the entire list, even though its root has a generated commit body.
-// STATIC: llvm.mlir.constant(-4 : i64)
-// STATIC: llvm.and
-// STATIC: llvm.icmp "eq"
-// STATIC: llvm.cond_br
 // STATIC: llvm.mlir.addressof @__talos_eval_nba_valid_
 // STATIC: llvm.store
-// STATIC-NOT: @__talos_eval_nba_commit_
-// STATIC-NOT: llvm.switch
+// STATIC: llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1
 // STATIC: llvm.return
+
+// The third scalar accumulator is outside the certificate. The read-only
+// query declines the whole attempt before entering any publication frame.
+// ELIGIBLE-LABEL: llvm.func internal @__talos_eval_static_nba_publication_guard_v1(
+// ELIGIBLE-NOT: llvm.store
+// ELIGIBLE: llvm.mlir.addressof @__talos_aot_nba_dirty_roots_v1
+// ELIGIBLE: llvm.mlir.constant(-4 : i64)
+// ELIGIBLE: llvm.and
+// ELIGIBLE: llvm.icmp "eq"
+// ELIGIBLE-NOT: llvm.store
+// ELIGIBLE: llvm.return
+// ELIGIBLE: {{^  }}}
 
 !bit = !simulation.logic<1>
 !clock = !simulation.ref<!bit>

@@ -266,6 +266,8 @@ inline constexpr llvm::StringLiteral staticNBAPublicationTwoStateName =
     "__talos_eval_static_nba_publication_two_state_v1";
 inline constexpr llvm::StringLiteral staticNBAPublicationFastName =
     "__talos_eval_static_nba_publication_two_state_fast_v1";
+inline constexpr llvm::StringLiteral staticNBAPublicationGuardName =
+    "__talos_eval_static_nba_publication_guard_v1";
 
 // A branch and its no-update successor, recorded while emitting a typed
 // capture consumer. Never recover publication actions from LLVM store shapes.
@@ -282,14 +284,16 @@ struct NativeNBAStaticPublicationPlan {
   bool hasOrdered = false;
 };
 
-// Materialize a guarded, all-or-nothing fixed action list before compacting
-// the ordinary commit into table dispatch. False preserves every capture.
+// Materialize a fixed action list and its read-only eligibility query before
+// compacting the ordinary commit. The caller must pass the query before
+// invoking a publication body; a rejected attempt preserves every capture.
 void materializeNativeNBAStaticPublication(
     mlir::ModuleOp module, mlir::LLVM::LLVMFuncOp source,
     mlir::Block *publicationEntry,
     mlir::ArrayRef<NativeNBAPublicationAction> actions,
     const NativeNBAStaticPublicationPlan &plan);
-mlir::LogicalResult inlineNativeNBAStaticPublications(mlir::ModuleOp module);
+mlir::LogicalResult
+materializeNativeNBAStaticPublicationCalls(mlir::ModuleOp module);
 
 /// Immutable result of eval scheduling analysis.  All identities are resolved
 /// before LLVM CFG construction starts; emission must not infer ownership from

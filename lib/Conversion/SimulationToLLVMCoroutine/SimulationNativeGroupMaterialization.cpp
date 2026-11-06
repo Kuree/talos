@@ -3,6 +3,7 @@
 #include "NativeSymbolUses.h"
 #include "SimulationAOTPlanning.h"
 #include "SimulationEvalReadySet.h"
+#include "SimulationNativeInlineCost.h"
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Analysis/ParallelWalk.h"
 #include "talos/Dialect/Native/NativeDialect.h"
@@ -231,26 +232,6 @@ promoteScalarSlots(ArrayRef<PromotableAllocationOpInterface> allocations,
     alloca.erase();
   }
   return success();
-}
-
-uint64_t nativeOperationCost(Operation *operation) {
-  if (auto merge = dyn_cast<schedule::NativeReadyMergeOp>(operation)) {
-    EvalReadySetLayout layout(merge.getCapacity());
-    // The bounded scan has one CFG body, independent of the number of leaves.
-    return 24 + 24 * layout.levels;
-  }
-  uint64_t capacity = 0;
-  if (auto update = dyn_cast<schedule::NativeReadyUpdateOp>(operation))
-    capacity = update.getCapacity();
-  else if (auto commit = dyn_cast<schedule::NativeReadyCommitOp>(operation))
-    capacity = commit.getCapacity();
-  if (capacity) {
-    EvalReadySetLayout layout(capacity);
-    // Charge deferred leaf/index maintenance before inlining. Semantic ops
-    // must not accidentally multiply the existing machine-IR growth budget.
-    return 12 * layout.levels;
-  }
-  return isa<schedule::NativeReadyReadOp>(operation) ? 2 : 1;
 }
 
 std::optional<uint64_t> staticByteOffset(Value pointer) {

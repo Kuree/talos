@@ -3800,7 +3800,8 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
 LogicalResult materializeEvalNBACommitVariants(ModuleOp module,
                                                StringRef fourStateName,
                                                StringRef twoStateName,
-                                               StringRef fastTwoStateName) {
+                                               StringRef fastTwoStateName,
+                                               bool keepOutOfLine) {
   LLVM::LLVMFuncOp source =
       module.lookupSymbol<LLVM::LLVMFuncOp>(fourStateName);
   if (!source)
@@ -3811,10 +3812,6 @@ LogicalResult materializeEvalNBACommitVariants(ModuleOp module,
   auto clone = cast<LLVM::LLVMFuncOp>(builder.clone(*source.getOperation()));
   clone.setSymName(twoStateName);
   clone.setLinkage(LLVM::Linkage::Internal);
-  clone->setAttr(
-      "passthrough",
-      ArrayAttr::get(module.getContext(),
-                     {StringAttr::get(module.getContext(), "noinline")}));
 
   auto fastClone = module.lookupSymbol<LLVM::LLVMFuncOp>(fastTwoStateName);
   if (!fastClone) {
@@ -3837,11 +3834,6 @@ LogicalResult materializeEvalNBACommitVariants(ModuleOp module,
             .getResult());
     load.erase();
   }
-  // Keep the shared barrier in one helper even when the table loop looks
-  // small to LLVM's inliner. Replicating that loop in slot coordinators adds
-  // instruction footprint without removing its dynamic root work.
-  fastClone->setAttr("passthrough",
-                     builder.getArrayAttr({builder.getStringAttr("noinline")}));
   // The promoted coordinator enters this clone only for the NBA update
   // region.  AOT partitioning deliberately keeps the (large) barrier out of
   // the coordinator's object, so LLVM cannot propagate that constant across
@@ -3851,14 +3843,6 @@ LogicalResult materializeEvalNBACommitVariants(ModuleOp module,
   fastClone.getBody().front().getArgument(2).replaceAllUsesWith(
       detail::llvmConstant(builder, fastClone.getLoc(), builder.getI32Type(),
                            2));
-  // The full four-state and canonicalizing two-state barriers are handoff
-  // paths.  Keep them out of the promoted coordinator so their unknown-plane
-  // bookkeeping does not inflate register pressure and instruction layout in
-  // the fast barrier selected after the one-time canonical scan.
-  source->setAttr(
-      "passthrough",
-      ArrayAttr::get(module.getContext(),
-                     {StringAttr::get(module.getContext(), "noinline")}));
   SmallVector<LLVM::LoadOp> canonicalUnknownLoads;
   SmallVector<LLVM::StoreOp> canonicalUnknownStores;
   auto isUnknownPlaneAddress = [](Value address) {
@@ -3898,11 +3882,33 @@ LogicalResult materializeEvalNBACommitVariants(ModuleOp module,
   }
   for (LLVM::StoreOp store : canonicalUnknownStores)
     store.erase();
-  for (LLVM::LLVMFuncOp function : {source, clone, fastClone})
+  for (LLVM::LLVMFuncOp function : {source, clone, fastClone}) {
+    // Keep the generic table-dispatch barrier shared. The certified action
+    // lists have no dispatch loop; let LLVM decide whether to inline them.
+    if (keepOutOfLine)
+      function->setAttr(
+          "passthrough",
+          builder.getArrayAttr({builder.getStringAttr("noinline")}));
+    else if (auto passthrough =
+                 function->getAttrOfType<ArrayAttr>("passthrough")) {
+      SmallVector<Attribute> attributes;
+      for (Attribute attribute : passthrough) {
+        auto name = dyn_cast<StringAttr>(attribute);
+        if (name && (name.getValue() == "noinline" ||
+                     name.getValue() == "alwaysinline"))
+          continue;
+        attributes.push_back(attribute);
+      }
+      if (attributes.empty())
+        function->removeAttr("passthrough");
+      else
+        function->setAttr("passthrough", builder.getArrayAttr(attributes));
+    }
     function.walk([](Operation *operation) {
       ::talos::schedule::remove<
           ::talos::schedule::Field::EvalPreserveNbaUnknown>(operation);
     });
+  }
 
   source.walk([](LLVM::LoadOp load) {
     ::talos::schedule::remove<
@@ -3918,11 +3924,12 @@ LogicalResult materializeEvalTwoStateNBACommit(ModuleOp module) {
   constexpr StringLiteral fastTwoStateName =
       "__talos_aot_static_nba_commit_two_state_fast_v1";
   if (failed(materializeEvalNBACommitVariants(
-          module, fourStateName, twoStateName, fastTwoStateName)) ||
+          module, fourStateName, twoStateName, fastTwoStateName,
+          /*keepOutOfLine=*/true)) ||
       failed(materializeEvalNBACommitVariants(
           module, detail::staticNBAPublicationName,
           detail::staticNBAPublicationTwoStateName,
-          detail::staticNBAPublicationFastName)))
+          detail::staticNBAPublicationFastName, /*keepOutOfLine=*/false)))
     return failure();
   // Specialization is carried entirely by call-site intent.  Validate and
   // consume the phase-local markers so a renamed or newly outlined
@@ -4003,7 +4010,7 @@ LogicalResult materializeEvalTwoStateNBACommit(ModuleOp module) {
        analysis::collectInWalkOrder<LLVM::CallOp>(module, hasIntent))
     if (rewriteIntent(call).wasInterrupted())
       return failure();
-  return detail::inlineNativeNBAStaticPublications(module);
+  return detail::materializeNativeNBAStaticPublicationCalls(module);
 }
 
 struct NativeBodyConversionInputs {

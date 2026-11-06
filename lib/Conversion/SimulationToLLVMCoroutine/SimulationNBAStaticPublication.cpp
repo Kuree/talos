@@ -3,14 +3,19 @@
 
 #include "SimulationAOTPlanning.h"
 #include "SimulationEvalNBAQueue.h"
+#include "SimulationNativeInlineCost.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Transforms/InliningUtils.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
+#include "llvm/ADT/STLExtras.h"
+#include <optional>
 
 using namespace mlir;
 
@@ -63,24 +68,40 @@ void materializeNativeNBAStaticPublication(
     branch->erase();
   }
   Block &entry = function.getBody().front();
-  Block *initialize = entry.splitBlock(entry.begin());
-  // Keep static stack allocations in the function entry for LLVM's inliner,
-  // but initialize publication scratch only after acceptance. Rejected
-  // batches must not pay for clearing the full consumer bitmap twice.
-  for (auto alloca :
-       llvm::make_early_inc_range(initialize->getOps<LLVM::AllocaOp>())) {
-    auto *count = alloca.getArraySize().getDefiningOp();
-    assert(count && isa<LLVM::ConstantOp>(count) &&
-           "publication scratch has a constant allocation size");
-    if (count->getBlock() == initialize)
-      count->moveBefore(&entry, entry.end());
-    alloca->moveBefore(&entry, entry.end());
-  }
-  auto *oldBranch = initialize->getTerminator();
+  auto *oldBranch = entry.getTerminator();
   b.setInsertionPoint(oldBranch);
   cf::BranchOp::create(b, loc, mapping.lookup(publicationEntry));
   oldBranch->erase();
-  b.setInsertionPointToEnd(&entry);
+  IRRewriter rewriter(b.getContext());
+  (void)eraseUnreachableBlocks(rewriter, function.getBody());
+
+  // The remaining region is non-suspending and infallible. A publication
+  // needing any runtime error/ownership handoff stays on the original route.
+  SmallVector<LLVM::ReturnOp> returns;
+  bool infallible = true;
+  function.walk([&](LLVM::ReturnOp ret) {
+    auto status = ret.getArg().getDefiningOp<LLVM::ConstantOp>();
+    infallible &= status && isa<IntegerAttr>(status.getValue()) &&
+                  cast<IntegerAttr>(status.getValue()).getInt() == TALOS_RT_OK;
+    returns.push_back(ret);
+  });
+  if (!infallible) {
+    function.erase();
+    empty();
+    return;
+  }
+  for (auto ret : returns) {
+    b.setInsertionPoint(ret);
+    ret.getArgMutable().assign(llvmConstant(b, loc, b.getI1Type(), 1));
+  }
+  // The guard has no publication frame or writes. It can remain in the
+  // coordinator while an oversized publication body stays out of line.
+  b.setInsertionPointAfter(function);
+  auto query = LLVM::LLVMFuncOp::create(b, loc, staticNBAPublicationGuardName,
+                                        functionType);
+  query.setLinkage(LLVM::Linkage::Internal);
+  Block *guardEntry = query.addEntryBlock(b);
+  b.setInsertionPointToStart(guardEntry);
   Value blocked = llvmConstant(b, loc, b.getI64Type(), 0);
   auto include = [&](Value value) {
     blocked = arith::OrIOp::create(b, loc, blocked, value);
@@ -112,73 +133,146 @@ void materializeNativeNBAStaticPublication(
     include(arith::ExtUIOp::create(b, loc, b.getI64Type(), error));
   }
   Value wrongRegion = arith::CmpIOp::create(
-      b, loc, arith::CmpIPredicate::ne, entry.getArgument(2),
+      b, loc, arith::CmpIPredicate::ne, guardEntry->getArgument(2),
       llvmConstant(b, loc, b.getI32Type(), TALOS_RT_REGION_NBA));
   include(arith::ExtUIOp::create(b, loc, b.getI64Type(), wrongRegion));
-  auto *declined = new Block;
-  function.getBody().push_back(declined);
   Value accepted =
       arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq, blocked,
                             llvmConstant(b, loc, b.getI64Type(), 0));
-  cf::CondBranchOp::create(b, loc, accepted, initialize, declined);
-  b.setInsertionPointToStart(declined);
-  LLVM::ReturnOp::create(b, loc, llvmConstant(b, loc, b.getI1Type(), 0));
-  IRRewriter rewriter(b.getContext());
-  (void)eraseUnreachableBlocks(rewriter, function.getBody());
-
-  // The remaining region is non-suspending and infallible. A publication
-  // needing any runtime error/ownership handoff stays on the original route.
-  SmallVector<LLVM::ReturnOp> returns;
-  bool infallible = true;
-  function.walk([&](LLVM::ReturnOp ret) {
-    if (ret->getBlock() == declined)
-      return;
-    auto status = ret.getArg().getDefiningOp<LLVM::ConstantOp>();
-    infallible &= status && isa<IntegerAttr>(status.getValue()) &&
-                  cast<IntegerAttr>(status.getValue()).getInt() == TALOS_RT_OK;
-    returns.push_back(ret);
-  });
-  if (!infallible) {
-    function.erase();
-    empty();
-    return;
-  }
-  for (auto ret : returns) {
-    b.setInsertionPoint(ret);
-    ret.getArgMutable().assign(llvmConstant(b, loc, b.getI1Type(), 1));
-  }
+  LLVM::ReturnOp::create(b, loc, accepted);
 }
 
-LogicalResult inlineNativeNBAStaticPublications(ModuleOp module) {
+namespace {
+
+std::optional<bool> constantPublicationResult(LLVM::LLVMFuncOp function) {
+  if (!llvm::hasSingleElement(function.getBody()))
+    return std::nullopt;
+  auto ret =
+      dyn_cast<LLVM::ReturnOp>(function.getBody().front().getTerminator());
+  APInt value;
+  if (!ret || !matchPattern(ret.getArg(), m_ConstantInt(&value)))
+    return std::nullopt;
+  for (Operation &operation : function.getBody().front())
+    if (!isa<LLVM::ConstantOp, LLVM::ZeroOp, LLVM::ReturnOp>(operation))
+      return std::nullopt;
+  return !value.isZero();
+}
+
+LogicalResult inlineEligibilityQuery(InlinerInterface &interface,
+                                     LLVM::CallOp call,
+                                     LLVM::LLVMFuncOp function) {
+  auto clone = [](OpBuilder &, Region *source, Block *inlineBlock,
+                  Block *postInsertBlock, IRMapping &mapping, bool clone) {
+    assert(clone && "eligibility queries remain available to other cuts");
+    source->cloneInto(inlineBlock->getParent(), postInsertBlock->getIterator(),
+                      mapping);
+  };
+  LogicalResult result =
+      inlineCall(interface, clone, cast<CallOpInterface>(*call),
+                 cast<CallableOpInterface>(*function), &function.getBody());
+  if (succeeded(result))
+    call.erase();
+  return result;
+}
+
+} // namespace
+
+LogicalResult materializeNativeNBAStaticPublicationCalls(ModuleOp module) {
   DialectRegistry registry;
   LLVM::registerInlinerInterface(registry);
   module.getContext()->appendDialectRegistry(registry);
   InlinerInterface interface(module.getContext());
   SmallVector<LLVM::CallOp> calls;
+  SmallVector<LLVM::LLVMFuncOp> callers;
   module.walk([&](LLVM::CallOp call) {
     if (schedule::has<schedule::Field::EvalStaticNBAPublication>(call))
       calls.push_back(call);
   });
+  uint64_t limit = schedule::getMaxInlineOperations(module);
+  auto query =
+      module.lookupSymbol<LLVM::LLVMFuncOp>(staticNBAPublicationGuardName);
   for (auto call : calls) {
     auto function =
         call.getCallee()
             ? module.lookupSymbol<LLVM::LLVMFuncOp>(*call.getCallee())
             : LLVM::LLVMFuncOp{};
-    if (function)
-      function->removeAttr("passthrough");
-    auto clone = [](OpBuilder &, Region *source, Block *inlineBlock,
-                    Block *postInsertBlock, IRMapping &mapping, bool clone) {
-      assert(clone && "publication variants remain available to other cuts");
-      source->cloneInto(inlineBlock->getParent(),
-                        postInsertBlock->getIterator(), mapping);
+    auto caller = call->getParentOfType<LLVM::LLVMFuncOp>();
+    if (!function || function.isExternal() || !caller)
+      return call.emitError("static NBA publication requires a defined callee");
+    if (!llvm::is_contained(callers, caller))
+      callers.push_back(caller);
+    schedule::remove<schedule::Field::EvalStaticNBAPublication>(call);
+    OpBuilder b(call);
+    auto replaceWithConstant = [&](bool value) {
+      call.getResult().replaceAllUsesWith(
+          llvmConstant(b, call.getLoc(), b.getI1Type(), value));
+      call.erase();
     };
-    if (!function || function.isExternal() ||
-        failed(inlineCall(interface, clone, cast<CallOpInterface>(*call),
-                          cast<CallableOpInterface>(*function),
-                          &function.getBody())))
-      return call.emitError("cannot inline certified NBA publication");
-    call.erase();
+    // A missing source certificate is a constant false attempt, even with a
+    // tiny budget. Never turn that compile-time decline into a helper call.
+    if (auto value = constantPublicationResult(function)) {
+      replaceWithConstant(*value);
+      continue;
+    }
+    if (!query || query.isExternal())
+      return call.emitError("static NBA publication has no eligibility query");
+    bool complete = true;
+    function.walk([&](LLVM::ReturnOp ret) {
+      complete &= matchPattern(ret.getArg(), m_One());
+    });
+    if (!complete)
+      return call.emitError(
+          "static NBA publication body must complete its batch");
+
+    // Bound only the read-only guard copies. Leave the publication bodies
+    // as ordinary functions so LLVM can use its target-aware inline cost.
+    // Charge prior guard copies against the same caller's current size.
+    uint64_t callerCost = nativeInlineCost(caller);
+    uint64_t guardCost = nativeInlineCost(query);
+    auto fits = [&](uint64_t growth) {
+      return callerCost <= limit && growth <= limit - callerCost;
+    };
+    bool admitGuard = fits(guardCost + 8);
+    if (native::has<native::DebugTiming>(module))
+      llvm::errs() << "talos static NBA guard: caller=" << caller.getSymName()
+                   << " size=" << callerCost << " guard=" << guardCost
+                   << " limit=" << limit
+                   << " decision=" << (admitGuard ? "inline" : "fallback")
+                   << '\n';
+    if (!admitGuard) {
+      replaceWithConstant(false);
+      continue;
+    }
+
+    // Keep rejection in the caller. Only accepted batches enter the large
+    // publication frame, and neither branch replays an Active producer.
+    Location loc = call.getLoc();
+    Block *before = call->getBlock();
+    Block *done = before->splitBlock(call->getIterator());
+    Value outcome = done->addArgument(b.getI1Type(), loc);
+    call.getResult().replaceAllUsesWith(outcome);
+    auto *publish = new Block;
+    done->getParent()->getBlocks().insert(Region::iterator(done), publish);
+    call->moveBefore(publish, publish->end());
+    b.setInsertionPointToEnd(before);
+    auto allowed = LLVM::CallOp::create(
+        b, loc, TypeRange{b.getI1Type()},
+        SymbolRefAttr::get(module.getContext(), staticNBAPublicationGuardName),
+        call.getArgOperands());
+    LLVM::CondBrOp::create(
+        b, loc, allowed.getResult(), publish, ValueRange{}, done,
+        ValueRange{llvmConstant(b, loc, b.getI1Type(), false)});
+    b.setInsertionPointToEnd(publish);
+    LLVM::BrOp::create(b, loc, ValueRange{call.getResult()}, done);
+    if (failed(inlineEligibilityQuery(interface, allowed, query)))
+      return failure();
   }
+  if (native::has<native::DebugTiming>(module))
+    for (auto caller : callers)
+      llvm::errs() << "talos static NBA guards complete: caller="
+                   << caller.getSymName()
+                   << " size=" << nativeInlineCost(caller) << " limit=" << limit
+                   << '\n';
   return success();
 }
 

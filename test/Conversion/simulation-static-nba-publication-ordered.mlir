@@ -1,7 +1,7 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off prune-native=true},convert-talos-sim-processes-to-llvm-coroutines,materialize-runtime-byte-globals)' -o %t.guards.mlir
 // RUN: FileCheck %s --check-prefix=GUARD < %t.guards.mlir && FileCheck %s --check-prefix=BODY < %t.guards.mlir
 // RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-set-module-attributes{attrs="{schedule.eval.runtime_calendar}"},simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off prune-native=true},convert-talos-sim-processes-to-llvm-coroutines,materialize-runtime-byte-globals)' -o %t.llvm.mlir 2> %t.plan
-// RUN: FileCheck %s --check-prefix=REJECT < %t.plan
+// RUN: FileCheck %s --check-prefix=REJECT < %t.plan && FileCheck %s --check-prefix=REJECTIR --implicit-check-not='llvm.call @__talos_eval_static_nba_publication' < %t.llvm.mlir
 // RUN: talos-translate --mlir-to-llvmir %t.llvm.mlir | %llvm_dist/bin/opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.o
 // RUN: %target_cxx %t.o %runtime_link_flags -o %t.exe
 // RUN: %t.exe --execution-tier=native | FileCheck %s --check-prefix=OUTPUT
@@ -12,6 +12,10 @@
 // commit route must preserve the 0->1->0 event even though the final value is 0
 // (IEEE 1800-2023 4.6, 4.9.4, 9.4.2, 10.4.2).
 // REJECT: talos eval static NBA publication: scalar=0 slot-roots=0
+// REJECTIR-LABEL: llvm.func internal @__talos_eval_dispatch_v1.__talos_pending(
+// REJECTIR: llvm.call @__talos_aot_runtime_nba_commit_v1.__talos_pending
+// REJECTIR-LABEL: llvm.func @__talos_eval_four_state_nba_handoff_v1(
+// REJECTIR: llvm.call @__talos_aot_static_nba_commit_v1
 // OUTPUT: {{^}}1 16 16 16 1 5{{$}}
 // BODY-LABEL: llvm.func internal @__talos_eval_static_nba_publication_v1(
 // BODY-NOT: @__talos_aot_static_nba_commit
@@ -19,14 +23,14 @@
 // BODY-NOT: @__talos_eval_nba_commit_
 // BODY-NOT: llvm.switch
 // BODY: {{^  }}}
-// GUARD-LABEL: llvm.func internal @__talos_eval_static_nba_publication_v1(
+// GUARD-LABEL: llvm.func internal @__talos_eval_static_nba_publication_guard_v1(
 // GUARD-NOT: llvm.switch
 // GUARD-NOT: @__talos_eval_nba_commit_
 // GUARD: llvm.mlir.addressof @__talos_eval_ordered_nba_queue_v1
 // GUARD: llvm.getelementptr {{.*}}[0, 1]
 // GUARD: llvm.mlir.addressof @__talos_eval_ordered_nba_queue_v1
 // GUARD: llvm.getelementptr {{.*}}[0, 3]
-// GUARD: llvm.cond_br
+// GUARD: llvm.icmp "eq"
 // GUARD-NOT: llvm.switch
 // GUARD-NOT: @__talos_eval_nba_commit_
 // GUARD: llvm.return
