@@ -168,6 +168,7 @@ struct DynamicEvalNBAProofContext {
 struct DynamicEvalNBAProof {
   bool eligible = false;
   bool periodicWideLatch = false;
+  bool coalescedWholeRoot = false;
   bool orderedWide = false;
   uint32_t commitRegion = UINT32_MAX;
   std::optional<unsigned> periodicRecord;
@@ -591,6 +592,27 @@ proveDynamicEvalNBA(LLVM::CallOp call,
       proof.exclusivePeriodicIngress && proof.siteExecutesAtMostOnce &&
       proof.commitRegion == TALOS_RT_REGION_NBA &&
       staticNBAPlan.roots[root->second].bit_width > 64;
+  // IEEE 1800-2023 4.3, 4.6(b), 4.9.4 and 10.4.2: the same merge certificate
+  // used by scalar accumulators also permits repeated whole-root captures.
+  // With one semantic writer, the last captured value is the final value of
+  // every bit; keep that value in fixed slots instead of queueing each update.
+  // Wide slots have no transient mask, so change-sequence observers still
+  // require the queue. Partial targets cannot replace an earlier whole value.
+  // A shared runtime calendar can have queued cold captures to interleave;
+  // retain its existing staging paths rather than introducing another owner.
+  proof.coalescedWholeRoot =
+      chunkedPayload && fixedRoot && fixedDestination.offset == 0 &&
+      *width == staticNBAPlan.roots[root->second].bit_width &&
+      proof.uniqueSemanticRootSite && mergeSafe &&
+      root->second < staticNBAPlan.privateInfluenceRoots.size() &&
+      staticNBAPlan.privateInfluenceRoots[root->second] &&
+      root->second < staticNBAPlan.changeWatchedRoots.size() &&
+      !staticNBAPlan.changeWatchedRoots[root->second] &&
+      root->second < proofContext.orderedRootClosed.size() &&
+      proofContext.orderedRootClosed[root->second] &&
+      !schedule::has<schedule::Field::EvalRuntimeCalendar>(
+          call->getParentOfType<ModuleOp>()) &&
+      proof.commitRegion == TALOS_RT_REGION_NBA;
   // The generated queue records every enqueue and drains in execution order,
   // including overlapping sites and repeated executions of the same site.
   // Those cases cannot use a final-value latch, but do not need the runtime
@@ -601,9 +623,11 @@ proveDynamicEvalNBA(LLVM::CallOp call,
       proofContext.orderedRootClosed[root->second] &&
       proof.commitRegion == TALOS_RT_REGION_NBA &&
       (!mergeSafe || staticNBAPlan.roots[root->second].bit_width > 64) &&
-      !directAccumulator && !proof.periodicWideLatch;
+      !directAccumulator && !proof.periodicWideLatch &&
+      !proof.coalescedWholeRoot;
   proof.eligible =
-      directAccumulator || proof.periodicWideLatch || proof.orderedWide;
+      directAccumulator || proof.periodicWideLatch || proof.coalescedWholeRoot ||
+      proof.orderedWide;
   return proof;
 }
 
@@ -1112,6 +1136,33 @@ FailureOr<bool> makeNativeEvalPlan(
     std::optional<uint64_t> constantOffset{};
   };
   SmallVector<DynamicEvalNBA> dynamicEvalNBAs;
+  // All implementations of one source site must share a capture: a process
+  // can change between its two-state and four-state bodies within a barrier.
+  // If any implementation needs the queue/periodic protocol, keep the whole
+  // root on that protocol rather than mixing independently committed slots.
+  llvm::SmallDenseSet<uint32_t, 8> separateCaptureRoots;
+  for (auto &[operation, proof] : dynamicNBAProofs)
+    if (!proof.coalescedWholeRoot) {
+      auto call = cast<LLVM::CallOp>(operation);
+      separateCaptureRoots.insert(staticNBAPlan.siteRoots.lookup(
+          *constantU64(call.getArgOperands()[1])));
+    }
+  llvm::SmallDenseSet<uint32_t, 8> coalescedRoots;
+  for (auto &[operation, proof] : dynamicNBAProofs)
+    if (proof.coalescedWholeRoot) {
+      auto call = cast<LLVM::CallOp>(operation);
+      uint32_t root = staticNBAPlan.siteRoots.lookup(
+          *constantU64(call.getArgOperands()[1]));
+      if (separateCaptureRoots.contains(root)) {
+        proof.coalescedWholeRoot = false;
+        proof.orderedWide = !proof.periodicWideLatch;
+      } else {
+        coalescedRoots.insert(root);
+      }
+    }
+  if (native::has<native::DebugTiming>(module))
+    llvm::errs() << "talos eval coalesced whole-root NBA: roots="
+                 << coalescedRoots.size() << '\n';
   llvm::SmallDenseSet<uint32_t, 8> orderedNBARoots;
   for (auto &[operation, proof] : dynamicNBAProofs)
     if (proof.orderedWide) {
@@ -2239,7 +2290,11 @@ FailureOr<bool> makeNativeEvalPlan(
           return failure();
         }
         bool orderedWide = orderedNBARoots.contains(root->second);
-        bool periodicWideLatch = proof->second.periodicWideLatch;
+        bool wideSlots =
+            proof->second.periodicWideLatch || proof->second.coalescedWholeRoot;
+        uint64_t slotSourceSite = proof->second.coalescedWholeRoot
+                                      ? proof->second.firstRootSite
+                                      : *site;
         handleOffsetToErase = offsetCall;
         OpBuilder nbaBuilder(call);
         Value dynamicBit =
@@ -2389,6 +2444,22 @@ FailureOr<bool> makeNativeEvalPlan(
                 arith::ExtUIOp::create(
                     nbaBuilder, call.getLoc(), i64,
                     evalNBAQueueSize(nbaBuilder, call.getLoc())));
+          if (!orderedWide && proof->second.coalescedWholeRoot) {
+            // Unlike a once-per-barrier slot, this slot may already contain a
+            // different value. An equal-to-current capture must overwrite it.
+            // All chunks of a whole-root capture have the same pending state.
+            uint64_t firstSite = evalNBAChunkSite(slotSourceSite, 0);
+            std::string validName =
+                (Twine("__talos_eval_nba_valid_") + Twine(firstSite)).str();
+            Value valid = LLVM::LoadOp::create(
+                nbaBuilder, call.getLoc(), i32,
+                LLVM::AddressOfOp::create(nbaBuilder, call.getLoc(), pointer,
+                                          validName),
+                4);
+            pending = arith::OrIOp::create(
+                nbaBuilder, call.getLoc(), pending,
+                arith::ExtUIOp::create(nbaBuilder, call.getLoc(), i64, valid));
+          }
           Value needed = arith::CmpIOp::create(
               nbaBuilder, call.getLoc(), arith::CmpIPredicate::ne,
               arith::OrIOp::create(nbaBuilder, call.getLoc(), difference,
@@ -2544,7 +2615,7 @@ FailureOr<bool> makeNativeEvalPlan(
             }
             cf::BranchOp::create(nbaBuilder, call.getLoc(), next);
           }
-        } else if (periodicWideLatch) {
+        } else if (wideSlots) {
           Block *inertContinuation = nullptr;
           if (inertCandidate) {
             Block *before = call->getBlock();
@@ -2565,7 +2636,8 @@ FailureOr<bool> makeNativeEvalPlan(
               LLVM::ZExtOp::create(nbaBuilder, call.getLoc(), i32, overlaps);
           for (uint64_t index = 0; index != chunks; ++index) {
             uint64_t slotSite =
-                chunks == 1 ? *site : evalNBAChunkSite(*site, index);
+                chunks == 1 ? slotSourceSite
+                            : evalNBAChunkSite(slotSourceSite, index);
             auto existing = llvm::find_if(dynamicEvalNBAs,
                                           [&](const DynamicEvalNBA &entry) {
                                             return entry.site == slotSite;
@@ -7124,20 +7196,37 @@ FailureOr<bool> makeNativeEvalPlan(
           arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ne,
                                 evalNBAQueueSize(builder, location),
                                 llvmConstant(builder, location, i32, 0));
-    for (const DynamicEvalNBA &entry : dynamicEvalNBAs) {
-      if (entry.queued)
-        continue;
+    if (hasDynamicNBASlots) {
+      // Staging and draining already maintain this summary for quiescence.
+      // Use it for the known-value guard too, rather than scanning every
+      // fixed slot on each barrier. A stale set bit only selects the exact
+      // four-state commit; it cannot authorize a two-state commit (LRM 6.3.1).
       Value valid =
           LLVM::LoadOp::create(builder, location, i32,
                                LLVM::AddressOfOp::create(
-                                   builder, location, pointer, entry.validName),
+                                   builder, location, pointer,
+                                   evalDynamicNBAPendingName),
                                4);
       dynamicActive = arith::OrIOp::create(
           builder, location, dynamicActive,
           arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ne,
                                 valid,
                                 llvmConstant(builder, location, i32, 0)));
-    }
+    } else
+      for (const DynamicEvalNBA &entry : dynamicEvalNBAs) {
+        if (entry.queued)
+          continue;
+        Value valid = LLVM::LoadOp::create(
+            builder, location, i32,
+            LLVM::AddressOfOp::create(builder, location, pointer,
+                                      entry.validName),
+            4);
+        dynamicActive = arith::OrIOp::create(
+            builder, location, dynamicActive,
+            arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ne,
+                                  valid,
+                                  llvmConstant(builder, location, i32, 0)));
+      }
     wordCursor = new Block;
     nbaKnown.getBody().getBlocks().insert(Region::iterator(knownTrue),
                                           wordCursor);

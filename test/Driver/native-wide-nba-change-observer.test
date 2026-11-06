@@ -1,0 +1,12 @@
+// RUN: talos -O3 --vpi=off --native-scheduler=eval -D OBSERVE --mlir-timing %S/native-wide-nba-coalesced.sv -o %t.observed 2> %t.plan
+// RUN: FileCheck %s --check-prefix=PLAN < %t.plan
+// RUN: %t.observed | FileCheck %s
+// RUN: talos -O3 --vpi=off --native-scheduler=eval -D OBSERVE -emit-llvm %S/native-wide-nba-coalesced.sv -o %t.ll
+// RUN: FileCheck %s --check-prefix=IR < %t.ll
+
+// IEEE 1800-2023 9.4.2: a pending change waiter observes the transient pulse
+// even when a repeated whole-root NBA restores the current value. These wide
+// updates retain their execution order instead of coalescing in a fixed slot.
+// PLAN: talos eval coalesced whole-root NBA: roots=0
+// CHECK: {{^}}PASS{{$}}
+// IR: @__talos_eval_ordered_nba_queue_v1 = internal
