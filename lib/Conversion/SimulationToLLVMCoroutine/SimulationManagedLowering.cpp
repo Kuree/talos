@@ -4,6 +4,7 @@
 #include "talos/Dialect/Schedule/ScheduleOps.h"
 
 #include "talos/Analysis/SimulationStorageAnalysis.h"
+#include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Runtime/RuntimeOps.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Runtime/Runtime.h"
@@ -560,6 +561,12 @@ public:
     if (adaptor.getReceiver().size() != 1 ||
         adaptor.getArguments().size() != op.getArguments().size())
       return failure();
+    auto dispatch = classes.dispatches.find(op);
+    if (dispatch == classes.dispatches.end())
+      return op.emitError("virtual method descriptor is missing");
+    if (dispatch->second.vtablePath)
+      return lowerTypedCall(op, adaptor, rewriter,
+                            *dispatch->second.vtablePath);
     for (auto [argument, converted] :
          llvm::zip_equal(op.getArguments(), adaptor.getArguments()))
       if (isa<sim::RefType>(argument.getType()) && converted.size() == 1)
@@ -643,9 +650,6 @@ public:
         lane, managedObjectPointer(rewriter, op.getLoc(),
                                    adaptor.getReceiver().front())};
     StringRef invokeName = "talos_rt_v1_method_invoke";
-    auto dispatch = classes.dispatches.find(op);
-    if (dispatch == classes.dispatches.end())
-      return op.emitError("virtual method descriptor is missing");
     const auto &target = dispatch->second;
     if (target.isInterface) {
       invokeName = "talos_rt_v1_interface_method_invoke";
@@ -692,6 +696,137 @@ public:
   }
 
 private:
+  LogicalResult lowerTypedCall(sim::SimClassVirtualCallOp op,
+                               OneToNOpAdaptor adaptor,
+                               ConversionPatternRewriter &rewriter,
+                               std::pair<uint32_t, uint32_t> path) const {
+    Location location = op.getLoc();
+    Type pointer = LLVM::LLVMPointerType::get(rewriter.getContext());
+    Type i32 = rewriter.getI32Type();
+    SmallVector<Type> resultTypes;
+    SmallVector<unsigned> resultCounts;
+    for (Type type : op.getResultTypes()) {
+      SmallVector<Type> converted;
+      if (failed(getTypeConverter()->convertType(type, converted)))
+        return failure();
+      resultCounts.push_back(converted.size());
+      llvm::append_range(resultTypes, converted);
+    }
+    SmallVector<Type> entryResults(resultTypes);
+    entryResults.push_back(i32);
+    Type entryResultType = entryResults.size() == 1
+                               ? i32
+                               : LLVM::LLVMStructType::getLiteral(
+                                     rewriter.getContext(), entryResults);
+    Value context = managedContext(rewriter, location);
+    Value receiver = adaptor.getReceiver().front();
+    Value object = managedObjectPointer(rewriter, location, receiver);
+    Block *head = op->getBlock();
+    Block *continuation = rewriter.splitBlock(head, op->getIterator());
+    SmallVector<Value> merged;
+    for (Type type : resultTypes)
+      merged.push_back(continuation->addArgument(type, location));
+    auto block = [&]() {
+      OpBuilder::InsertionGuard guard(rewriter);
+      return rewriter.createBlock(continuation);
+    };
+    Block *lookup = block();
+    Block *nullReceiver = block();
+    Block *missing = block();
+    rewriter.setInsertionPointToEnd(head);
+    Value hasReceiver = LLVM::ICmpOp::create(
+        rewriter, location, LLVM::ICmpPredicate::ne, object,
+        LLVM::ZeroOp::create(rewriter, location, pointer));
+    cf::CondBranchOp::create(rewriter, location, hasReceiver, lookup,
+                             ValueRange{}, nullReceiver, ValueRange{});
+    // IEEE 1800-2023 8.4: null instance access is illegal. Keep Talos's
+    // diagnosed-error policy, and never load an object header on that path.
+    for (auto [failure, status] :
+         {std::pair(nullReceiver, TALOS_RT_INVALID_HANDLE),
+          std::pair(missing, TALOS_RT_INVALID_ARGUMENT)}) {
+      rewriter.setInsertionPointToStart(failure);
+      reportManagedStatus(rewriter, location, context,
+                          llvmConstant(rewriter, location, i32, status));
+      SmallVector<Value> zeros;
+      for (Type type : resultTypes)
+        zeros.push_back(LLVM::ZeroOp::create(rewriter, location, type));
+      cf::BranchOp::create(rewriter, location, continuation, zeros);
+    }
+    rewriter.setInsertionPointToStart(lookup);
+    unsigned alignment = dataLayout.getPointerABIAlignment(0).value();
+    // Allocation stores the immutable descriptor pointer in the object's
+    // first managed word. GEP uses the target layout, including wasm32.
+    Value descriptor =
+        LLVM::LoadOp::create(rewriter, location, pointer, object, alignment);
+    Value address =
+        LLVM::GEPOp::create(rewriter, location, pointer,
+                            managedClassDescriptorType(rewriter.getContext()),
+                            descriptor, ArrayRef<LLVM::GEPArg>{0, 21});
+    Value table =
+        LLVM::LoadOp::create(rewriter, location, pointer, address, alignment);
+    for (unsigned level = path.second; level != 0; --level) {
+      Block *next = block();
+      Value present = LLVM::ICmpOp::create(
+          rewriter, location, LLVM::ICmpPredicate::ne, table,
+          LLVM::ZeroOp::create(rewriter, location, pointer));
+      cf::CondBranchOp::create(rewriter, location, present, next, ValueRange{},
+                               missing, ValueRange{});
+      rewriter.setInsertionPointToStart(next);
+      unsigned digit = (path.first >> ((level - 1) * 4)) & 15;
+      Value entry = LLVM::GEPOp::create(
+          rewriter, location, pointer, pointer, table,
+          ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(digit)});
+      table =
+          LLVM::LoadOp::create(rewriter, location, pointer, entry, alignment);
+    }
+    Block *invoke = block();
+    Value present =
+        LLVM::ICmpOp::create(rewriter, location, LLVM::ICmpPredicate::ne, table,
+                             LLVM::ZeroOp::create(rewriter, location, pointer));
+    cf::CondBranchOp::create(rewriter, location, present, invoke, ValueRange{},
+                             missing, ValueRange{});
+    rewriter.setInsertionPointToStart(invoke);
+    SmallVector<Value> arguments{table, context, receiver};
+    SmallVector<Type> argumentTypes{pointer, receiver.getType()};
+    for (auto [original, converted] :
+         llvm::zip_equal(op.getArguments(), adaptor.getArguments())) {
+      if (isa<sim::RefType>(original.getType()) && converted.size() == 1)
+        emitNativeStateRetain(rewriter, location, converted.front());
+      llvm::append_range(arguments, converted);
+      llvm::append_range(argumentTypes, converted.getTypes());
+    }
+    // IEEE 1800-2023 8.20/8.26 and 13.5: the effective method receives native
+    // physical arguments directly. Caller/callee managed-root instrumentation
+    // already protects receiver and arguments; dispatch adds no root push or
+    // argument/result buffers. The final result always carries unwind status.
+    Value callResult =
+        LLVM::CallOp::create(
+            rewriter, location,
+            LLVM::LLVMFunctionType::get(entryResultType, argumentTypes, false),
+            arguments)
+            .getResult();
+    Value status = callResult;
+    SmallVector<Value> results;
+    if (!resultTypes.empty()) {
+      for (unsigned index = 0; index != resultTypes.size(); ++index)
+        results.push_back(LLVM::ExtractValueOp::create(rewriter, location,
+                                                       callResult, index));
+      status = LLVM::ExtractValueOp::create(rewriter, location, callResult,
+                                            resultTypes.size());
+    }
+    reportManagedStatus(rewriter, location, context, status);
+    cf::BranchOp::create(rewriter, location, continuation, results);
+    SmallVector<SmallVector<Value>> replacements;
+    size_t offset = 0;
+    for (unsigned count : resultCounts) {
+      replacements.emplace_back(merged.begin() + offset,
+                                merged.begin() + offset + count);
+      offset += count;
+    }
+    rewriter.replaceOpWithMultiple(op, std::move(replacements));
+    return success();
+  }
+
   const llvm::DataLayout &dataLayout;
   const NativeClassLowering &classes;
 };
@@ -725,10 +860,19 @@ FailureOr<NativeClassLowering> collectNativeClassLowering(ModuleOp module) {
         op.emitError("interface method has no dispatch ordinal");
         return WalkResult::interrupt();
       }
+      std::optional<std::pair<uint32_t, uint32_t>> path;
+      if (auto certificate = native::get<native::MethodVtablePath>(op)) {
+        auto values = certificate.asArrayRef();
+        if (values.size() != 2 || values[1] <= 0 || values[1] > 8)
+          return op.emitError("native method table path is invalid"),
+                 WalkResult::interrupt();
+        path = std::pair(static_cast<uint32_t>(values[0]),
+                         static_cast<uint32_t>(values[1]));
+      }
       classes.dispatches.try_emplace(
           op, NativeClassLowering::Dispatch{
                   owner.getId(), method.getInterfaceOrdinal().value_or(0),
-                  owner.getIsInterface()});
+                  owner.getIsInterface(), path});
     }
     return WalkResult::advance();
   });
@@ -1070,7 +1214,7 @@ materializeManagedMethodThunks(ModuleOp module,
           "managed method result flattening is inconsistent");
     LLVM::ReturnOp::create(builder, method.getLoc(), returnedStatus);
   }
-  return success();
+  return materializeTypedNativeMethodEntries(module, dataLayout);
 }
 
 void populateManagedToLLVMConversionPatterns(

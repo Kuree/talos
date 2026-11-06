@@ -308,6 +308,10 @@ typedef struct talos_rt_class_descriptor_v1 {
   uint64_t builtin_base_offset;
   const talos_rt_direct_method_v1 *direct_methods;
   uint64_t direct_method_count;
+  // Compiler-private immutable native dispatch tree. Nodes are arrays of
+  // sixteen pointers; leaves hold typed native entries. Calls encode their
+  // ordinal and depth. Unchanged inherited subtrees share their storage.
+  const void *native_vtable;
 } talos_rt_class_descriptor_v1;
 
 // Compiler-emitted erased element metadata. Four-state storage places an

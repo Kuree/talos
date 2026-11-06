@@ -74,6 +74,9 @@ def NativeDialect : Dialect {
     "::mlir::IntegerAttr":$initialization_scope,
     "::mlir::DenseI64ArrayAttr":$method_argument_sizes,
     "::mlir::DenseI64ArrayAttr":$method_argument_roots,
+    // Virtual call: compiler-generated ordinal and depth in the shared
+    // native method table. Recomputed before native conversion.
+    "::mlir::DenseI32ArrayAttr":$method_vtable_path,
     "::mlir::IntegerAttr":$table_wait,
     "::mlir::UnitAttr":$unmanaged,
     "::mlir::UnitAttr":$shared_callback,

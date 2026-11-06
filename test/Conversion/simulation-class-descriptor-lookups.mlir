@@ -1,7 +1,6 @@
 // RUN: talos-opt %s --test-talos-replicate --convert-talos-sim-processes-to-llvm-coroutines -o %t.mlir
 // RUN: FileCheck %s < %t.mlir
 // RUN: FileCheck %s --check-prefix=VIRTUAL < %t.mlir
-// RUN: FileCheck %s --check-prefix=INTERFACE < %t.mlir
 // RUN: talos-translate %t.mlir --mlir-to-llvmir | opt -S -passes=verify -o /dev/null
 // RUN: talos-opt %s --test-talos-replicate --encode-talos-sim-to-bytecode='vpi=off' --convert-talos-sim-processes-to-llvm-coroutines | FileCheck %s --check-prefix=BYTECODE
 
@@ -13,18 +12,16 @@
 // CHECK-LABEL: llvm.func @use39(
 // CHECK: llvm.call @talos_rt_v1_object_read
 // CHECK: llvm.call @c39(
-// CHECK: llvm.mlir.constant(1000 : i64)
-// CHECK: llvm.call @talos_rt_v1_method_invoke(
+// CHECK: llvm.getelementptr {{.*}}[0, 21]
+// CHECK: llvm.call %
 // CHECK: llvm.call @talos_rt_v1_object_cast
-// I39 has class ID 79 and the method is its interface ordinal 0.
-// CHECK: llvm.mlir.constant(79 : i64)
-// CHECK-NEXT: llvm.mlir.constant(0 : i64)
-// CHECK-NEXT: llvm.mlir.constant(1000 : i64)
-// CHECK: llvm.call @talos_rt_v1_interface_method_invoke(
-// VIRTUAL-COUNT-40: llvm.call @talos_rt_v1_method_invoke(
-// VIRTUAL-NOT: llvm.call @talos_rt_v1_method_invoke(
-// INTERFACE-COUNT-40: llvm.call @talos_rt_v1_interface_method_invoke(
-// INTERFACE-NOT: llvm.call @talos_rt_v1_interface_method_invoke(
+// Interface and ordinary slots both use typed shared table entries.
+// CHECK: llvm.getelementptr {{.*}}[0, 21]
+// CHECK: llvm.call %
+// VIRTUAL-COUNT-80: llvm.call %
+// VIRTUAL-NOT: llvm.call %
+// VIRTUAL-NOT: llvm.call @talos_rt_v1_method_invoke
+// VIRTUAL-NOT: llvm.call @talos_rt_v1_interface_method_invoke
 
 // Bytecode preparation resolves each implementation's owner through the same
 // class layout index.

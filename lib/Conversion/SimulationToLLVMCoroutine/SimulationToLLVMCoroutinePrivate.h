@@ -47,7 +47,12 @@ namespace talos {
 class SimulationProcessFrameAnalysis;
 }
 
+namespace talos::analysis {
+class ClassDispatchAnalysis;
+}
+
 namespace talos::sim {
+class SimClassDeclOp;
 class AssocArrayType;
 class SimFuncOp;
 } // namespace talos::sim
@@ -428,6 +433,13 @@ mlir::Value zeroNativeValue(mlir::OpBuilder &builder, mlir::Location location,
 
 std::string managedClassDescriptorName(mlir::SymbolRefAttr className);
 std::string managedMethodThunkName(llvm::StringRef methodName);
+std::string managedTypedMethodName(llvm::StringRef methodName);
+mlir::LLVM::LLVMStructType managedClassDescriptorType(mlir::MLIRContext *context);
+mlir::FailureOr<llvm::StringMap<std::string>> materializeNativeMethodTables(
+    mlir::ModuleOp module, mlir::ArrayRef<sim::SimClassDeclOp> classes,
+    const analysis::ClassDispatchAnalysis &dispatch);
+mlir::LogicalResult materializeTypedNativeMethodEntries(
+    mlir::ModuleOp module, const llvm::DataLayout &dataLayout);
 mlir::LLVM::GlobalOp makeByteArrayGlobal(mlir::ModuleOp module,
                                          mlir::Location location,
                                          llvm::StringRef name,
@@ -517,6 +529,7 @@ struct NativeClassLowering {
     uint64_t ownerID = 0;
     uint64_t interfaceOrdinal = 0;
     bool isInterface = false;
+    std::optional<std::pair<uint32_t, uint32_t>> vtablePath;
   };
   llvm::DenseMap<mlir::Operation *, uint64_t> fieldOffsets;
   llvm::DenseMap<mlir::Operation *, Dispatch> dispatches;

@@ -206,6 +206,12 @@ module attributes {
   }
 }
 
+// A failing implementation returns its status through the typed entry.
+// CHECK-LABEL: llvm.func internal @Base_get.__talos_typed_entry(
+// CHECK: %[[CALL:.*]] = llvm.call @base_get
+// CHECK: %[[STATUS:.*]] = llvm.extractvalue %[[CALL]][1]
+// CHECK: llvm.insertvalue %[[STATUS]], {{.*}}[1]
+// CHECK: llvm.return
 // CHECK: llvm.func @talos_rt_v1_object_bits_insert(!llvm.ptr, i64, i64, i64, i32, i64, i32) -> i32
 // CHECK-LABEL: llvm.mlir.global internal constant @Derived.__talos_class_descriptor
 // CHECK-LABEL: llvm.mlir.global internal constant @Derived.__talos_interfaces
@@ -222,7 +228,7 @@ module attributes {
 // PARTITION: module attributes {
 // PARTITION-SAME: native.physical_partition_manifest = [
 // PARTITION-SAME: id = "unit:2"
-// PARTITION-SAME: members = [@Base_get.__talos_native_thunk, @base_get]
+// PARTITION-SAME: members = [@Base_get.__talos_native_thunk, @Base_get.__talos_typed_entry, @base_get]
 // PARTITION-SAME: id = "unit:3"
 // PARTITION-SAME: members = [@Base_tag.__talos_native_thunk, @base_tag]
 // PARTITION: llvm.func internal @Base_get.__talos_native_thunk
@@ -257,12 +263,11 @@ module attributes {
 // CHECK-NOT: llvm.call @talos_rt_v1_object_bits_insert
 // CHECK: llvm.call @talos_rt_v1_scheduler_managed_nba
 // CHECK: llvm.call @base_get
-// CHECK: llvm.call @talos_rt_v1_method_invoke
+// CHECK: llvm.getelementptr {{.*}}[0, 21]
+// CHECK: llvm.call %
 // CHECK: llvm.call @talos_rt_v1_object_cast
-// CHECK: %[[IID:.*]] = llvm.mlir.constant(1 : i64)
-// CHECK: %[[ORDINAL:.*]] = llvm.mlir.constant(0 : i64)
-// CHECK: %[[SIGNATURE:.*]] = llvm.mlir.constant(17 : i64)
-// CHECK: llvm.call @talos_rt_v1_interface_method_invoke({{.*}}, {{.*}}, %[[IID]], %[[ORDINAL]], %[[SIGNATURE]],
+// CHECK: llvm.getelementptr {{.*}}[0, 21]
+// CHECK: llvm.call %
 // CHECK: llvm.call @talos_rt_v1_gc_safepoint
 // CHECK-NOT: simulation.class
 // CHECK-NOT: simulation.managed

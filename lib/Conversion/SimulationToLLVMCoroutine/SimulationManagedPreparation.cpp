@@ -462,10 +462,7 @@ prepareManagedClassInventory(ModuleOp module,
   Type interfaceType = LLVM::LLVMStructType::getLiteral(
       context, {i64, pointer, i64, pointer, i64});
   Type byteRangeType = LLVM::LLVMStructType::getLiteral(context, {i64, i64});
-  Type classType = LLVM::LLVMStructType::getLiteral(
-      context, {i32,     i32,     i64,     i64, i64,     pointer, pointer,
-                i64,     pointer, pointer, i64, pointer, i64,     pointer,
-                pointer, i64,     i32,     i32, i64,     pointer, i64});
+  Type classType = managedClassDescriptorType(context);
   bool bytecodeOnly =
       runtime::bitEnumContainsAll(runtime::getExecutionFlags(module),
                                   runtime::ExecutionFlags::RequireBytecode);
@@ -484,6 +481,13 @@ prepareManagedClassInventory(ModuleOp module,
               false));
     }
   }
+  SmallVector<sim::SimClassDeclOp> dispatchOrder;
+  for (SharedClass *shared : orderedClasses)
+    dispatchOrder.push_back(shared->declaration);
+  auto nativeTables =
+      materializeNativeMethodTables(module, dispatchOrder, dispatch);
+  if (failed(nativeTables))
+    return failure();
   llvm::StringMap<uint32_t> bytecodeFunctions;
   ::talos::detail::walkNativeFunctions<sim::SimFuncOp>(
       module, [&](sim::SimFuncOp function) {
@@ -1051,6 +1055,13 @@ prepareManagedClassInventory(ModuleOp module,
                 descriptor = insertValue(
                     builder, location, descriptor,
                     llvmConstant(builder, location, i64, direct.size()), 20);
+                auto nativeTable = nativeTables->find(declaration.getSymName());
+                if (nativeTable != nativeTables->end())
+                  descriptor = insertValue(
+                      builder, location, descriptor,
+                      LLVM::AddressOfOp::create(builder, location, pointer,
+                                                nativeTable->second),
+                      21);
                 return descriptor;
               });
           return success();

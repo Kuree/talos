@@ -10145,7 +10145,8 @@ TEST(VPI, ClassVariableObjectIdTracksLiveManagedIdentity) {
                                                      0,
                                                      0,
                                                      nullptr,
-                                                     0};
+                                                     0,
+                                                     nullptr};
   talos_rt_object_v1 *firstObject = nullptr;
   talos_rt_object_v1 *secondObject = nullptr;
   ASSERT_EQ(talos_rt_v1_object_allocate(lane, &classDescriptor, &firstObject),
