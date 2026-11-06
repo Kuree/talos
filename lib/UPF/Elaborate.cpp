@@ -746,6 +746,81 @@ struct Lowering {
     enqueue.erase();
     return success();
   }
+  void reportSwitchConflict(upf::UPFDomainOp domain,
+                            const PowerCondition &condition, Value context) {
+    if (condition.off.nodes.empty())
+      return;
+    Location loc = domain.getLoc();
+    Value conflict = condition.conflict(builder, loc, context);
+    Region *body = builder.getInsertionBlock()->getParent();
+    Block *report = new Block, *evaluate = new Block;
+    body->push_back(report);
+    body->push_back(evaluate);
+    cf::CondBranchOp::create(builder, loc, conflict, report, evaluate);
+    builder.setInsertionPointToEnd(report);
+    sim::SimErrorOp::create(builder, loc, context);
+    Value descriptor =
+        arith::ConstantIntOp::create(builder, loc, 0x80000002u, 32);
+    Value message = sim::SimBytesConstantOp::create(
+        builder, loc,
+        "UPF domain " + domain.getSymName().str() +
+            ": ON/PARTIAL and OFF conditions are simultaneously true (IEEE "
+            "1801-2018 6.22)");
+    sim::SimDisplayOp::create(builder, loc, context, descriptor,
+                              ValueRange{message}, true, sim::Radix::Decimal,
+                              builder.getDenseI32ArrayAttr({0}), StringAttr{},
+                              StringAttr{}, IntegerAttr{}, IntegerAttr{});
+    cf::BranchOp::create(builder, loc, evaluate);
+    builder.setInsertionPointToEnd(evaluate);
+  }
+
+  void switchOnly(upf::UPFDomainOp domain, const PowerCondition &condition) {
+    Location loc = domain.getLoc();
+    auto monitor = function(
+        loc, "__upf_" + domain.getSymName().str() + ".switch",
+        {sim::ContextType::get(builder.getContext())}, sim::EntryKind::Always);
+    sim::mark<sim::metadata::PowerMonitor>(monitor);
+    Block &entry = monitor.getBody().front();
+    Block *loop = new Block, *wait = new Block;
+    monitor.getBody().push_back(loop);
+    monitor.getBody().push_back(wait);
+    builder.setInsertionPointToEnd(&entry);
+    Value context = entry.getArgument(0);
+    SmallVector<Value> watched;
+    std::set<std::tuple<uint64_t, bool, bool>> seen;
+    auto watch = [&](Descriptor descriptor) {
+      if (seen.emplace(descriptor.id, descriptor.net, descriptor.driver).second)
+        watched.push_back(handle(builder, loc, context, descriptor));
+    };
+    for (StringRef path : condition.controls)
+      watch(descriptors.lookup(path));
+    watch(*condition.input);
+    cf::BranchOp::create(builder, loc, loop);
+    builder.setInsertionPointToEnd(loop);
+    // 6.20 permits an empty extent. The abstract switch remains a real supply
+    // driver (6.22/9.2.2), independent of whether any RTL needs corruption.
+    store(builder, loc, handle(builder, loc, context, condition.power),
+          condition.drivenSupply(builder, loc, context));
+    reportSwitchConflict(domain, condition, context);
+    cf::BranchOp::create(builder, loc, wait);
+    builder.setInsertionPointToEnd(wait);
+    sim::SimSuspendAnyOp::create(
+        builder, loc, watched,
+        builder.getDenseI32ArrayAttr(SmallVector<int32_t>(watched.size(), 0)),
+        schedule::ContinuationSiteAttr{}, sim::EventRegionAttr{}, loop);
+    Operation *firstSpawn = nullptr;
+    for (Operation &op : root.getBody().front())
+      if (isa<sim::SimSpawnOp>(op)) {
+        firstSpawn = &op;
+        break;
+      }
+    builder.setInsertionPoint(
+        firstSpawn ? firstSpawn : root.getBody().front().getTerminator());
+    sim::SimSpawnOp::create(builder, loc, monitor.getSymNameAttr(),
+                            ValueRange{root.getArgument(0)}, ArrayAttr{},
+                            ArrayAttr{});
+  }
+
   LogicalResult apply(upf::UPFDomainOp domain) {
     if (!root)
       return domain.emitError("UPF needs an executable design root");
@@ -772,6 +847,12 @@ struct Lowering {
         return domain.emitError("power control source width disagrees with "
                                 "simulation storage: ")
                << token.getControl().getValue();
+    if (domain.getElements().empty()) {
+      if (condition.input)
+        switchOnly(domain, condition);
+      domain.erase();
+      return success();
+    }
     llvm::DenseSet<uint64_t> computedInputs;
     for (auto unit : design.getOps<sim::SimCodeUnitDeclOp>())
       if (sim::has<sim::metadata::ComputedPortInput>(unit) &&
@@ -925,6 +1006,8 @@ struct Lowering {
     // can corrupt, such as an empty leaf, so there is nothing to lower.
     if (targets.empty() && processes.empty() &&
         !domain.getIsolationControl()) {
+      if (condition.input)
+        switchOnly(domain, condition);
       domain.erase();
       return success();
     }
@@ -1142,31 +1225,9 @@ struct Lowering {
       sim::SimCallOp::create(builder, loc, TypeRange{}, update,
                              ValueRange{context}, ArrayAttr{}, ArrayAttr{});
     store(builder, loc, normalRef, on);
-    // IEEE 1801-2018 6.22: an explicit OFF simultaneously true with ON
-    // reports an error and contributes UNDETERMINED (CORRUPT in this slice).
-    if (!condition.off.nodes.empty()) {
-      Value conflict = condition.conflict(builder, loc, context);
-      Block *report = new Block, *evaluate = new Block;
-      monitor.getBody().push_back(report);
-      monitor.getBody().push_back(evaluate);
-      cf::CondBranchOp::create(builder, loc, conflict, report, evaluate);
-      builder.setInsertionPointToEnd(report);
-      sim::SimErrorOp::create(builder, loc, context);
-      Value descriptor =
-          arith::ConstantIntOp::create(builder, loc, 0x80000002u, 32);
-      Value message = sim::SimBytesConstantOp::create(
-          builder, loc,
-          "UPF domain " + domain.getSymName().str() +
-              ": ON/PARTIAL and OFF conditions are simultaneously true (IEEE "
-              "1801-2018 "
-              "6.22)");
-      sim::SimDisplayOp::create(builder, loc, context, descriptor,
-                                ValueRange{message}, true, sim::Radix::Decimal,
-                                builder.getDenseI32ArrayAttr({0}), StringAttr{},
-                                StringAttr{}, IntegerAttr{}, IntegerAttr{});
-      cf::BranchOp::create(builder, loc, evaluate);
-      builder.setInsertionPointToEnd(evaluate);
-    }
+    // 6.22: explicit ON/PARTIAL and OFF conflicts also diagnose when no
+    // functional target needs corruption (the switch-only path above).
+    reportSwitchConflict(domain, condition, context);
     Value wasOn = load(builder, loc, previousRef);
     store(builder, loc, previousRef, on);
     Value off = arith::XOrIOp::create(

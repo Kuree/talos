@@ -1,0 +1,19 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: not talos --upf %t/missing.upf -emit-slang %t/design.sv -o %t.mlir 2>&1 | FileCheck %s
+// RUN: talos --upf %t/missing.upf --upf %t/complete.upf -emit-slang %t/design.sv -o - | FileCheck %s --check-prefix=COMPLETE
+// IEEE 1801-2018 6.20: -elements must appear at least once, including
+// across later files. Its presence and an empty extent are separate facts.
+// CHECK: missing.upf":1:1
+// CHECK: power domain requires -elements in its base or an update
+// COMPLETE: upf.domain @top.Missing elements []
+
+//--- design.sv
+module top;
+endmodule
+
+//--- missing.upf
+create_power_domain Missing
+
+//--- complete.upf
+create_power_domain Missing -update -elements {}

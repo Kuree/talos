@@ -45,6 +45,7 @@ struct Domain {
   SmallVector<Attribute> on, partial, errors;
   upf::SwitchStateAttr off;
   std::vector<std::string> elements;
+  bool hasElements = false;
   bool isolationHigh = true;
   bool isolationDiffSupplyOnly = true;
   int64_t clamp = 0;
@@ -863,41 +864,53 @@ struct Session {
         return TCL_ERROR;
       RepeatedOptions repeated{{"-supply", {}}};
       if (objc < 2 ||
-          !options(objc, objv, 2, {"-elements", "-supply"}, opts, &repeated))
+          !options(objc, objv, 2, {"-elements", "-supply", "-update"}, opts,
+                   &repeated, {"-update"}))
         return TCL_ERROR;
-      Domain dom;
       if (!identifier(Tcl_GetString(objv[1])))
         return TCL_ERROR;
-      dom.location = declarationLocation();
-      dom.name = key(Tcl_GetString(objv[1]));
-      if (hasNamedSet(Tcl_GetString(objv[1])))
-        return error("power domain name conflicts with a supply set");
-      dom.scope = scope;
-      dom.primary =
-          supplySetKey(std::string(Tcl_GetString(objv[1])) + ".primary");
+      std::string id = key(Tcl_GetString(objv[1]));
+      auto found = domains.find(id);
+      bool update = opts.count("-update");
+      if (update && found == domains.end())
+        return error("cannot update an unknown power domain");
+      if (!update && found != domains.end())
+        return error("duplicate power domain; use -update");
+      Domain dom = update ? found->second : Domain{};
+      if (update) {
+        if (dom.scope != scope)
+          return error(
+              "power-domain updates require the original execution scope");
+      } else {
+        if (hasNamedSet(Tcl_GetString(objv[1])))
+          return error("power domain name conflicts with a supply set");
+        if (hasNamedObject(Tcl_GetString(objv[1])))
+          return error("power domain name conflicts with an existing object");
+        dom.location = declarationLocation();
+        dom.name = id;
+        dom.scope = scope;
+        dom.primary =
+            supplySetKey(std::string(Tcl_GetString(objv[1])) + ".primary");
+      }
       std::vector<std::string> names;
-      // IEEE 1801-2018 6.20: omitted -elements creates an empty extent,
-      // not an implicit '.'. Empty/updateable domains are a deferred feature.
-      if (!opts.count("-elements"))
-        return error("initial power domains require explicit -elements");
-      if (!list(opts["-elements"], names))
+      // 5.9/6.20: preserve omitted versus explicit empty selections. Elements
+      // aggregate as a set, and a later file may complete an empty base.
+      if (opts.count("-elements") && !list(opts["-elements"], names))
         return TCL_ERROR;
+      dom.hasElements |= opts.count("-elements");
       for (auto &name : names) {
         std::string path = object(name);
         if (path.empty() || objects.at(path)->getName().getStringRef() !=
                                 "slang.symbol.instance")
           return error("power-domain element is not a design instance: " +
                        name);
-        dom.elements.push_back(path);
+        if (!llvm::is_contained(dom.elements, path))
+          dom.elements.push_back(path);
       }
-      if (dom.elements.empty())
-        return error("power domain has no elements");
-      if (domains.count(dom.name))
-        return error("duplicate power domain");
-      if (hasNamedObject(Tcl_GetString(objv[1])))
-        return error("power domain name conflicts with an existing object");
       std::map<std::string, SupplySet> handles;
       auto makeHandle = [&](const std::string &id) {
+        if (supplySets.count(id) || handles.count(id))
+          return;
         SupplySet handle;
         handle.scope = scope;
         handle.handle = true;
@@ -919,6 +932,9 @@ struct Session {
           return error("domain supply requires {handle [supply_set]}");
         if (!identifier(fields[0]))
           return TCL_ERROR;
+        if (dom.retentions.count(fields[0]) || dom.isolationName == fields[0])
+          return error("domain supply handle conflicts with a strategy: " +
+                       fields[0]);
         std::string id =
             supplySetKey(std::string(Tcl_GetString(objv[1])) + "." + fields[0]);
         makeHandle(id);
@@ -929,8 +945,9 @@ struct Session {
         if (!supplySets.count(b) && !handles.count(b))
           return error("unknown supply set: " + b);
       std::string primary = dom.primary;
-      if (!domains.emplace(dom.name, std::move(dom)).second)
-        return error("duplicate power domain");
+      // 5.10: a caught failure must preserve the extent, handle identities,
+      // catalogs and all associations; commit only after every row validates.
+      domains.insert_or_assign(id, std::move(dom));
       supplySets.insert(handles.begin(), handles.end());
       setAssociations.insert(setAssociations.end(), associations.begin(),
                              associations.end());
@@ -1787,6 +1804,12 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
     module->setAttr(upf::partialOnTranslationName,
                     upf::PartialOnTranslationAttr::get(
                         module.getContext(), *session.partialOnTranslation));
+  for (auto &[name, domain] : session.domains)
+    if (!domain.hasElements)
+      return emitError(domain.location.value_or(module.getLoc()))
+             << "power domain requires -elements in its base or an update "
+                "(IEEE 1801-2018 6.20): "
+             << name;
   // 8.3.2: a base strategy may be completed by later -update calls, including
   // in another UPF file. Diagnose incompleteness only after all Tcl executes.
   for (auto &[domainName, domain] : session.domains)

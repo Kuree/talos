@@ -34,6 +34,10 @@ bool needsSnapshots(ModuleOp module) {
   bool needed = false;
   module.walk([&](sim::SimEventSnapshotRegisterOp) { needed = true; });
   module.walk([&](upf::UPFDomainOp domain) {
+    // No retained state can belong to an empty effective extent (6.20).
+    // Its intent must not add barriers or reject unrelated publications.
+    if (domain.getElements().empty())
+      return;
     if (auto strategies = domain.getRetentionsAttr())
       for (auto attribute : strategies) {
         auto retention = cast<upf::RetentionAttr>(attribute);

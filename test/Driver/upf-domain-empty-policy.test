@@ -1,0 +1,39 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/illegal.upf -O3 --mlir-verify-each %t/design.sv -o %t.illegal
+// RUN: not %t.illegal 2>&1 | FileCheck %s --check-prefix=ILLEGAL --check-prefix=COMMON
+// RUN: talos --upf %t/overlap.upf -O3 --mlir-verify-each %t/design.sv -o %t.overlap
+// RUN: not %t.overlap 2>&1 | FileCheck %s --check-prefix=OVERLAP --check-prefix=COMMON
+// RUN: talos --upf %t/illegal.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: not %t.bc 2>&1 | FileCheck %s --check-prefix=ILLEGAL --check-prefix=COMMON
+// IEEE 1801-2018 4.7.3/6.5.6n: deleting a direct empty domain's corruption
+// monitor must not delete explicit supply-set overlap/illegal-state diagnostics.
+// ILLEGAL: illegal power state
+// OVERLAP: overlapping power states
+// COMMON: empty-domain policy diagnostics preserved
+
+//--- design.sv
+module top;
+  import UPF::*;
+  initial begin
+    if (!supply_on("/top/VDD") || !supply_on("/top/VSS", 0.0))
+      $fatal(1, "supply startup failed");
+    #1;
+    $display("empty-domain policy diagnostics preserved");
+    $finish;
+  end
+endmodule
+
+//--- base.upf
+create_supply_net VDD
+create_supply_net VSS
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_power_domain Empty -elements {} -supply {primary CORE}
+
+//--- illegal.upf
+source [file join [file dirname [info script]] base.upf]
+add_power_state CORE -state {ON -illegal}
+
+//--- overlap.upf
+source [file join [file dirname [info script]] base.upf]
+add_power_state CORE -state {EXTRA -supply_expr {power == FULL_ON && ground == FULL_ON} -simstate NORMAL}

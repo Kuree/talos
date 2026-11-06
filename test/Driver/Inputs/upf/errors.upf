@@ -29,8 +29,9 @@ expect_error {find_objects . -pattern * -unknown x} {*unsupported*}
 
 # IEEE 1801-2018 5.3.2, 6.20, 6.24: identifiers, options and design binding.
 expect_error {create_power_domain 1bad -elements dut} {*invalid UPF identifier*}
-expect_error {create_power_domain Bad} {*require explicit -elements*}
-expect_error {create_power_domain Empty -elements {}} {*no elements*}
+assert_equal [create_power_domain Deferred] {}
+assert_equal [create_power_domain Deferred -update -elements {}] {}
+assert_equal [create_power_domain Empty -elements {}] {}
 expect_error {create_power_domain Bad -elements missing} {*not a design instance*}
 expect_error {create_power_domain Bad -elements "\{"} {*unmatched open brace*}
 expect_error {create_power_domain Bad -elements dut -unknown x} {*unsupported UPF option*}

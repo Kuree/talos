@@ -1,0 +1,79 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: cp %S/Inputs/upf/assertions.tcl %t/assertions.tcl
+// RUN: talos --upf %t/base.upf --upf %t/update.upf -O3 --mlir-verify-each %t/design.sv -o %t.exe
+// RUN: %t.exe | FileCheck %s
+// RUN: talos --upf %t/base.upf --upf %t/update.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// RUN: talos --upf %t/base.upf --upf %t/update.upf -emit-slang %t/design.sv -o - | FileCheck %s --check-prefix=IR
+// IEEE 1801-2018 5.9/5.10/6.20: elements aggregate idempotently; a later
+// file can complete the base. Failed updates preserve the old extent, handle
+// functions/catalogs, and electrical associations. Empty strategies create no
+// functional corruption targets but retain their namespace reservations.
+// CHECK: staged domain updates passed
+// IR: upf.domain @top.Deferred elements ["top.c"]
+// IR: upf.domain @top.Empty elements []
+// IR: upf.domain @top.PD elements ["top.a", "top.b"]
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1'b1;
+endmodule
+module top;
+  import UPF::*;
+  logic hold = 1, iso = 0;
+  wire qa, qb, qc, qd;
+  leaf a(qa), b(qb), c(qc), d(qd);
+  initial begin
+    if (!supply_on("/top/VDD", 0.8) || !supply_on("/top/VSS", 0.0) ||
+        !supply_on("/top/VBIAS", 1.2)) $fatal(1, "startup failed");
+    #1;
+    if ({qa,qb,qc,qd} !== 4'b1111) $fatal(1, "updated extents failed to power");
+    if (get_supply_state(get_supply_value("/top/AUX.power")) != OFF)
+      $fatal(1, "failed update leaked an electrical association");
+    if (get_supply_value("/top/MIRROR.power") !== get_supply_value("/top/VDD"))
+      $fatal(1, "domain handle rejected or lost a second supplier");
+    if (get_supply_voltage(get_supply_value("/top/PD.primary.nwell")) != 1.2)
+      $fatal(1, "update replaced an existing function binding");
+    if (!supply_on("/top/VDD", 1.0)) $fatal(1, "voltage change failed");
+    #1;
+    if ({qa,qb,qc,qd} !== 4'bxx11)
+      $fatal(1, "update replaced the primary catalog or added a failed element");
+    if (!supply_on("/top/VDD", 0.8)) $fatal(1, "restore failed");
+    #1;
+    if ({qa,qb,qc,qd} !== 4'b1111) $fatal(1, "updated-domain restoration failed");
+    if (!supply_off("/top/VDD")) $fatal(1, "OFF failed");
+    #1;
+    if ({qa,qb,qc,qd} !== 4'bxxx1) $fatal(1, "rolled-back element acquired power intent");
+    $display("staged domain updates passed");
+    $finish;
+  end
+endmodule
+
+//--- base.upf
+source [file join [file dirname [info script]] assertions.tcl]
+foreach rail {VDD VSS VBIAS} {create_supply_net $rail}
+create_supply_set CORE -function {power VDD} -function {ground VSS}
+create_supply_set AUX
+create_supply_set MIRROR
+assert_equal [create_power_domain Deferred] {}
+assert_equal [create_power_domain Empty -elements {}] {}
+create_power_domain PD -elements {a a} -supply {primary CORE}
+create_supply_set PD.primary -update -function {nwell VBIAS}
+add_power_state PD.primary -state {ON -supply_expr {power == {FULL_ON 0.8} && ground == {FULL_ON 0}}}
+set_retention KEEP -domain PD -elements {} -retention_condition hold
+set_isolation ISO -domain Empty -isolation_signal iso -clamp_value 0 -applies_to outputs -location parent
+
+//--- update.upf
+assert_equal [create_power_domain Deferred -update -elements c -supply {primary CORE}] {}
+assert_equal [create_power_domain PD -update -elements {b a b} -supply {primary CORE}] {}
+assert_equal [create_power_domain PD -update -elements {}] {}
+expect_error {create_power_domain Missing -update -elements d} {*unknown power domain*}
+expect_error {create_power_domain PD -elements d} {*duplicate power domain*}
+expect_error {create_power_domain PD -update -elements d -supply {transient AUX} -supply {late Missing}} {*unknown supply set*}
+expect_error {create_supply_set PD.transient -update} {*unknown supply set or handle*}
+expect_error {create_power_domain PD -update -supply {primary AUX} -supply {late Missing}} {*unknown supply set*}
+expect_error {create_power_domain PD -update -supply {KEEP}} {*conflicts with a strategy*}
+expect_error {create_power_domain Empty -update -supply {ISO}} {*conflicts with a strategy*}
+assert_equal [create_power_domain PD -update -supply {backup AUX}] {}
+assert_equal [create_power_domain PD -update -supply {primary MIRROR}] {}

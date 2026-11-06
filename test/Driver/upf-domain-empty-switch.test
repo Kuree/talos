@@ -1,0 +1,71 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 6.20/6.22/9.2.2: an empty extent has no corruption
+// targets, but the switch still propagates input/control/voltage changes.
+// Its physical output does not depend on the domain's ground/NORMAL policy.
+// CHECK: empty-domain switch propagation passed
+
+//--- design.sv
+module top;
+  import UPF::*;
+  logic en = 0, part = 0, bad = 0, stop = 0;
+  upfSupplyTypeT value;
+  task sample(input upfSupplyStateE expected, input int volts);
+    value = get_supply_value("/top/OUT");
+    if (value.state != expected || value.voltage != volts)
+      $fatal(1, "empty-domain switch lost a supply transition");
+  endtask
+  initial begin
+    sample(OFF, 0);
+    if (!supply_on("/top/VDD")) $fatal(1, "input ON");
+    #1;
+    sample(OFF, 0);
+    en = 1;
+    #1;
+    sample(FULL_ON, 1000000);
+    if (!supply_on("/top/VDD", 0.8)) $fatal(1, "input voltage");
+    #1;
+    sample(FULL_ON, 800000);
+    en = 0; part = 1;
+    #1;
+    sample(PARTIAL_ON, 800000);
+    bad = 1;
+    #1;
+    sample(UNDETERMINED, 0);
+    bad = 0;
+    #1;
+    sample(PARTIAL_ON, 800000);
+    part = 0; en = 1;
+    if (!supply_off("/top/VDD")) $fatal(1, "input OFF");
+    #1;
+    sample(OFF, 0);
+    if (!supply_partial_on("/top/VDD", -0.2)) $fatal(1, "partial input");
+    #1;
+    sample(PARTIAL_ON, -200000);
+`ifdef CONFLICT
+    stop = 1;
+    #1;
+    sample(UNDETERMINED, 0);
+    $display("empty-domain conflict reported");
+`endif
+    $display("empty-domain switch propagation passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_power_domain Empty -elements {}
+foreach rail {VDD VSS OUT} {create_supply_net $rail}
+set_domain_supply_net Empty -primary_power_net OUT -primary_ground_net VSS
+create_power_switch SW -domain Empty \
+  -input_supply_port {vin VDD} -output_supply_port {vout OUT} \
+  -control_port {en en} -control_port {part part} -control_port {bad bad} -control_port {stop stop} \
+  -on_state {ON vin en} -on_partial_state {PART vin part} \
+  -error_state {BAD bad} -off_state {OFF stop}
+create_power_domain Empty -update -elements {} -supply {spare}

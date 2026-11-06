@@ -1,0 +1,10 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-domain-empty-switch.test %t
+// RUN: talos --upf %t/design.upf -DCONFLICT -O3 --mlir-verify-each %t/design.sv -o %t.exe
+// RUN: not %t.exe 2>&1 | FileCheck %s
+// RUN: talos --upf %t/design.upf -DCONFLICT -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: not %t.bc 2>&1 | FileCheck %s
+// IEEE 1801-2018 6.22: ON/OFF conflicts are errors independently of
+// domain targets or whether the supplying input is FULL_ON or PARTIAL_ON.
+// CHECK: ON/PARTIAL and OFF conditions are simultaneously true
+// CHECK: empty-domain conflict reported

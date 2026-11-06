@@ -191,18 +191,18 @@
       "status": "partial",
       "accepted_options": [
         "-elements",
-        "-supply"
+        "-supply",
+        "-update"
       ],
       "unsupported_options": [
         "-exclude_elements",
-        "-update",
         "-subdomains",
         "-atomic",
         "-define_func_type",
         "-boundary_supplies",
         "-available_supplies"
       ],
-      "limits": "Explicit nonempty lists of existing module instances, disjoint extents and supply handles. No empty/updateable domains, nested extent partitioning, composites or abstract/model domains.",
+      "limits": "Explicit lists of existing module instances, including empty and deferred extents; additive transactional updates preserve existing supply handles, bindings, state catalogs and strategies. Physical switches and explicit state catalogs work with empty extents; empty retention intent adds no snapshot machinery. Extents must remain disjoint; nested partitioning, excludes, composites, atomic and abstract/model domains remain unsupported.",
       "implementation": [
         "lib/UPF/Execute.cpp"
       ]
@@ -915,7 +915,7 @@
         "8.3"
       ],
       "missing": [
-        "Empty domains, updates and aggregate include/exclude selection",
+        "Aggregate include/exclude selection and terminal PG extent enforcement",
         "Nested and composite domains, extent partitioning and multiple boundaries",
         "Atomic domains, available/boundary supplies and function-type definition"
       ]
@@ -1117,8 +1117,43 @@
     },
     {
       "id": 4,
-      "status": "planned",
-      "scope": "Domain declaration updates and empty extents, followed by nested extent partitioning."
+      "status": "in_progress",
+      "scope": "Domain declaration updates and empty extents, followed by nested extent partitioning.",
+      "completed": [
+        {
+          "id": "4a",
+          "status": "complete",
+          "scope": "Deferred and empty domain extents, additive transactional declaration updates, preserved handle identity, lightweight physical-switch monitoring and empty-retention snapshot elision",
+          "clauses": [
+            "5.9",
+            "5.10",
+            "6.20",
+            "6.22",
+            "8.3.2",
+            "9.2.2",
+            "9.3.2",
+            "9.7.1"
+          ],
+          "runtime_changes": false,
+          "tests": [
+            "test/Driver/upf-domain-updates.test",
+            "test/Driver/upf-domain-deferred-errors.test",
+            "test/Driver/upf-domain-empty-switch.test",
+            "test/Driver/upf-domain-empty-conflict.test",
+            "test/Driver/upf-domain-empty-policy.test",
+            "test/Driver/upf-empty-domain-balloon.test",
+            "test/Conversion/upf-empty-extent.mlir",
+            "test/Dialect/UPF/invalid.mlir",
+            "test/Driver/upf-errors.test"
+          ],
+          "review": "Independent subagent approved UPF/LRM rules, transactional updates, handle identity, namespace checks, switch propagation, retained state-catalog diagnostics, MLIR control flow/effects and coverage. Review found empty balloon intent unnecessarily enabled snapshot machinery and rejected context DPI; fixed with positive and negative extent tests before approval.",
+          "validation": "11 targeted lit tests and all 208 unique UPF/simulation-supply regression tests pass. Eight IEEE1801 clauses across native/bytecode produce 12 passes, two reference-only cases and two expected failures; no unexpected results. Emitted IR tests verify empty domains avoid corruption epochs/guards and unnecessary retention snapshots."
+        }
+      ],
+      "remaining": [
+        "Nested extent partitioning and include/exclude selection",
+        "Composite and atomic domains, available/boundary supplies and function-type definition"
+      ]
     },
     {
       "id": 5,

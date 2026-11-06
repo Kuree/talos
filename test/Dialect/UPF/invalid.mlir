@@ -2,7 +2,7 @@
 module {
   upf.supply @rail names ["/top/VDD"] writable = true
   upf.supply @switched names ["/top/SW"] writable = false
-  // expected-error @+1 {{requires domain elements}}
+  // IEEE 1801-2018 6.20 permits an empty effective extent.
   upf.domain @empty elements [] power @switched on [] {input = @rail}
 }
 // -----

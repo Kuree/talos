@@ -472,8 +472,6 @@ mlir::LogicalResult UPFDomainOp::verify() {
   if (getRetentionsAttr() && !getRetentionsAttr().empty() && !getPrimaryAttr())
     return emitOpError(
         "retention strategies require a primary supply-set reference");
-  if (getElements().empty())
-    return emitOpError("requires domain elements");
   for (auto element : getElements())
     if (mlir::cast<mlir::StringAttr>(element).getValue().empty())
       return emitOpError("domain element must not be empty");
