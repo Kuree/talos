@@ -255,7 +255,41 @@ struct NativeEvalTransactionRoot {
 struct NativeEvalTransactionPlan {
   schedule::ComputeGraphAttr sourceGraph;
   llvm::SmallVector<NativeEvalTransactionRoot> roots;
+  // The same source ownership proof also covers wide roots. Their actual
+  // fixed-slot protocol is certified separately during capture lowering.
+  llvm::SmallVector<uint32_t> publicationRoots;
 };
+
+inline constexpr llvm::StringLiteral staticNBAPublicationName =
+    "__talos_eval_static_nba_publication_v1";
+inline constexpr llvm::StringLiteral staticNBAPublicationTwoStateName =
+    "__talos_eval_static_nba_publication_two_state_v1";
+inline constexpr llvm::StringLiteral staticNBAPublicationFastName =
+    "__talos_eval_static_nba_publication_two_state_fast_v1";
+
+// A branch and its no-update successor, recorded while emitting a typed
+// capture consumer. Never recover publication actions from LLVM store shapes.
+struct NativeNBAPublicationAction {
+  uint32_t root;
+  mlir::Operation *branch;
+  mlir::Block *next;
+  bool scalar;
+};
+struct NativeNBAStaticPublicationPlan {
+  llvm::SmallVector<uint64_t> scalarRoots;
+  llvm::DenseSet<uint32_t> slotRoots;
+  llvm::SmallVector<std::string> rejectedSlots;
+  bool hasOrdered = false;
+};
+
+// Materialize a guarded, all-or-nothing fixed action list before compacting
+// the ordinary commit into table dispatch. False preserves every capture.
+void materializeNativeNBAStaticPublication(
+    mlir::ModuleOp module, mlir::LLVM::LLVMFuncOp source,
+    mlir::Block *publicationEntry,
+    mlir::ArrayRef<NativeNBAPublicationAction> actions,
+    const NativeNBAStaticPublicationPlan &plan);
+mlir::LogicalResult inlineNativeNBAStaticPublications(mlir::ModuleOp module);
 
 /// Immutable result of eval scheduling analysis.  All identities are resolved
 /// before LLVM CFG construction starts; emission must not infer ownership from

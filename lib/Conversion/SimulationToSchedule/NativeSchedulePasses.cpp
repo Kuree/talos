@@ -1885,8 +1885,10 @@ LogicalResult NativePipelineAnalysis::resolveEval() {
       // continuation before a foreign cut (LRM 38.15/38.34, 4.9.4). The
       // writable service and Tier-2/3 routing are absent from off/read code.
       if (hasLanguageObserver || hasLanguageOverride ||
-          !native::has<native::ClosedExecutable>(module))
+          !native::has<native::ClosedExecutable>(module)) {
         resolvedEval->transaction.roots.clear();
+        resolvedEval->transaction.publicationRoots.clear();
+      }
     }
   }
 

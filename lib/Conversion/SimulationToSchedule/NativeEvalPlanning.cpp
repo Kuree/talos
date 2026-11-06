@@ -1689,8 +1689,7 @@ resolveNativeEvalPlan(ModuleOp module,
       staticNBAPlan.completeSourceWriters) {
     result.transaction.sourceGraph = computeGraph;
     for (auto [index, root] : llvm::enumerate(staticNBAPlan.roots)) {
-      if (root.bit_width > 64 ||
-          index >= staticNBAPlan.rootDescriptors.size() ||
+      if (index >= staticNBAPlan.rootDescriptors.size() ||
           !staticNBAPlan.mergeSafeRoots[index] ||
           !staticNBAPlan.privateInfluenceRoots[index])
         continue;
@@ -1761,7 +1760,9 @@ resolveNativeEvalPlan(ModuleOp module,
       planned.owners.erase(
           std::unique(planned.owners.begin(), planned.owners.end()),
           planned.owners.end());
-      result.transaction.roots.push_back(std::move(planned));
+      result.transaction.publicationRoots.push_back(index);
+      if (root.bit_width <= 64)
+        result.transaction.roots.push_back(std::move(planned));
     }
   }
   if (native::has<native::DebugTiming>(module))

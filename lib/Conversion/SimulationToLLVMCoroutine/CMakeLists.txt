@@ -35,6 +35,7 @@ add_mlir_library(TalosSimulationToLLVMCoroutine
   SimulationManagedStringLowering.cpp
   SimulationNBALowering.cpp
   SimulationNBACommit.cpp
+  SimulationNBAStaticPublication.cpp
   SimulationNBABatchLowering.cpp
   SimulationNBAPlanMaterialization.cpp
   SimulationNativeGroupMaterialization.cpp

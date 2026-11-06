@@ -3797,12 +3797,10 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
   return success();
 }
 
-LogicalResult materializeEvalTwoStateNBACommit(ModuleOp module) {
-  constexpr StringLiteral fourStateName = "__talos_aot_static_nba_commit_v1";
-  constexpr StringLiteral twoStateName =
-      "__talos_aot_static_nba_commit_two_state_v1";
-  constexpr StringLiteral fastTwoStateName =
-      "__talos_aot_static_nba_commit_two_state_fast_v1";
+LogicalResult materializeEvalNBACommitVariants(ModuleOp module,
+                                               StringRef fourStateName,
+                                               StringRef twoStateName,
+                                               StringRef fastTwoStateName) {
   LLVM::LLVMFuncOp source =
       module.lookupSymbol<LLVM::LLVMFuncOp>(fourStateName);
   if (!source)
@@ -3906,6 +3904,26 @@ LogicalResult materializeEvalTwoStateNBACommit(ModuleOp module) {
           ::talos::schedule::Field::EvalPreserveNbaUnknown>(operation);
     });
 
+  source.walk([](LLVM::LoadOp load) {
+    ::talos::schedule::remove<
+        ::talos::schedule::Field::EvalTwoStateZeroUnknown>(load);
+  });
+  return success();
+}
+
+LogicalResult materializeEvalTwoStateNBACommit(ModuleOp module) {
+  constexpr StringLiteral fourStateName = "__talos_aot_static_nba_commit_v1";
+  constexpr StringLiteral twoStateName =
+      "__talos_aot_static_nba_commit_two_state_v1";
+  constexpr StringLiteral fastTwoStateName =
+      "__talos_aot_static_nba_commit_two_state_fast_v1";
+  if (failed(materializeEvalNBACommitVariants(
+          module, fourStateName, twoStateName, fastTwoStateName)) ||
+      failed(materializeEvalNBACommitVariants(
+          module, detail::staticNBAPublicationName,
+          detail::staticNBAPublicationTwoStateName,
+          detail::staticNBAPublicationFastName)))
+    return failure();
   // Specialization is carried entirely by call-site intent.  Validate and
   // consume the phase-local markers so a renamed or newly outlined
   // coordinator cannot silently retain the wrong NBA implementation.
@@ -3935,9 +3953,17 @@ LogicalResult materializeEvalTwoStateNBACommit(ModuleOp module) {
     if (!callee)
       return call.emitError("NBA specialization requires a direct call"),
              WalkResult::interrupt();
-    bool expectedSource = *callee == fourStateName;
-    bool expectedCanonical = *callee == twoStateName;
-    bool expectedFast = *callee == fastTwoStateName;
+    bool publication = ::talos::schedule::has<
+        ::talos::schedule::Field::EvalStaticNBAPublication>(call);
+    StringRef sourceName =
+        publication ? detail::staticNBAPublicationName : fourStateName;
+    StringRef canonicalName =
+        publication ? detail::staticNBAPublicationTwoStateName : twoStateName;
+    StringRef fastName =
+        publication ? detail::staticNBAPublicationFastName : fastTwoStateName;
+    bool expectedSource = *callee == sourceName;
+    bool expectedCanonical = *callee == canonicalName;
+    bool expectedFast = *callee == fastName;
     if (useFast) {
       if (!expectedSource && !expectedCanonical && !expectedFast)
         return call.emitError("fast two-state NBA intent is attached to an "
@@ -3950,7 +3976,7 @@ LogicalResult materializeEvalTwoStateNBACommit(ModuleOp module) {
         return call.emitError("fast two-state NBA intent requires the NBA "
                               "execution region"),
                WalkResult::interrupt();
-      call.setCallee(fastTwoStateName);
+      call.setCallee(fastName);
       ::talos::schedule::remove<
           ::talos::schedule::Field::EvalUseFastTwoStateNba>(call);
       return WalkResult::advance();
@@ -3960,7 +3986,7 @@ LogicalResult materializeEvalTwoStateNBACommit(ModuleOp module) {
         return call.emitError("canonical two-state NBA intent is attached to "
                               "an unrelated callee"),
                WalkResult::interrupt();
-      call.setCallee(twoStateName);
+      call.setCallee(canonicalName);
       ::talos::schedule::remove<
           ::talos::schedule::Field::EvalUseCanonicalTwoStateNba>(call);
       return WalkResult::advance();
@@ -3977,11 +4003,7 @@ LogicalResult materializeEvalTwoStateNBACommit(ModuleOp module) {
        analysis::collectInWalkOrder<LLVM::CallOp>(module, hasIntent))
     if (rewriteIntent(call).wasInterrupted())
       return failure();
-  source.walk([](LLVM::LoadOp load) {
-    ::talos::schedule::remove<
-        ::talos::schedule::Field::EvalTwoStateZeroUnknown>(load);
-  });
-  return success();
+  return detail::inlineNativeNBAStaticPublications(module);
 }
 
 struct NativeBodyConversionInputs {

@@ -1849,6 +1849,24 @@ materializeNativeEvalDispatch(ModuleOp module,
     fastCoordinator.getBody().push_back(canonicalTwoStateCommit);
     fastCoordinator.getBody().push_back(fourStateCommit);
     fastCoordinator.getBody().push_back(commitJoin);
+    auto tryStaticPublication = [&](schedule::Field intent) {
+      auto attempt = LLVM::CallOp::create(
+          builder, location, TypeRange{builder.getI1Type()},
+          SymbolRefAttr::get(context, staticNBAPublicationName),
+          ValueRange{fastEntry->getArgument(0), fastEntry->getArgument(1),
+                     llvmConstant(builder, location, i32, TALOS_RT_REGION_NBA),
+                     changed});
+      schedule::set<schedule::Field::EvalStaticNBAPublication>(
+          attempt, builder.getUnitAttr());
+      schedule::set(attempt, intent, builder.getUnitAttr());
+      auto *fallback = new Block;
+      fastCoordinator.getBody().push_back(fallback);
+      cf::CondBranchOp::create(
+          builder, location, attempt.getResult(), commitJoin,
+          ValueRange{llvmConstant(builder, location, i32, TALOS_RT_OK)},
+          fallback, ValueRange{});
+      builder.setInsertionPointToStart(fallback);
+    };
     Value usedFallback = LLVM::LoadOp::create(
         builder, location, builder.getI1Type(), fourStateFallback, 1);
     cf::CondBranchOp::create(builder, location, usedFallback, checkFallbackNBA,
@@ -1951,6 +1969,7 @@ materializeNativeEvalDispatch(ModuleOp module,
     markCurrentDirtyRootsFast();
     cf::BranchOp::create(builder, location, fastTwoStateCommit);
     builder.setInsertionPointToStart(fastTwoStateCommit);
+    tryStaticPublication(schedule::Field::EvalUseFastTwoStateNba);
     auto fastTwoStateCall = LLVM::CallOp::create(
         builder, location, TypeRange{i32},
         SymbolRefAttr::get(context, nbaCommitName),
@@ -1962,6 +1981,7 @@ materializeNativeEvalDispatch(ModuleOp module,
                          ValueRange{fastTwoStateCall.getResult()});
     builder.setInsertionPointToStart(canonicalTwoStateCommit);
     markCurrentDirtyRootsFast();
+    tryStaticPublication(schedule::Field::EvalUseCanonicalTwoStateNba);
     auto canonicalTwoStateCall = LLVM::CallOp::create(
         builder, location, TypeRange{i32},
         SymbolRefAttr::get(context, nbaCommitName),
@@ -1973,6 +1993,7 @@ materializeNativeEvalDispatch(ModuleOp module,
     cf::BranchOp::create(builder, location, commitJoin,
                          ValueRange{canonicalTwoStateCall.getResult()});
     builder.setInsertionPointToStart(fourStateCommit);
+    tryStaticPublication(schedule::Field::EvalKeepFourStateNba);
     Value fourStateStatus =
         LLVM::CallOp::create(
             builder, location, TypeRange{i32},

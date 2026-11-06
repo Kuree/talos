@@ -217,6 +217,10 @@ def EvalStateAccessBytes : ScheduleField<"EvalStateAccessBytes", "schedule.eval.
 // descriptor/root identity, exact canonical range, captured mask and region.
 def EvalTransactionRoots : ScheduleField<"EvalTransactionRoots", "schedule.eval.transaction_roots",
     "::mlir::ArrayAttr">;
+// A compile-time publication action list and its explicit acceptance result.
+// The call is inlined before canonical knownness/proof publication runs.
+def EvalStaticNBAPublication : ScheduleField<"EvalStaticNBAPublication", "schedule.eval.static_nba_publication",
+    "::mlir::UnitAttr">;
 // Semantic roles emitted at NBA lowering, rather than recovered from GEPs.
 def EvalPendingDirtyRoot : ScheduleField<"EvalPendingDirtyRoot", "schedule.eval.pending_dirty_root",
     "::mlir::IntegerAttr">;

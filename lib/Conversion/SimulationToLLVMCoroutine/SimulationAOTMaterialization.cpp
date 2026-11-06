@@ -5625,6 +5625,9 @@ FailureOr<bool> makeNativeEvalPlan(
   if (failed(rankedGroups))
     return failure();
   coordinatorPlan.rankedGroupExecutors = *rankedGroups;
+  getOrDeclareLLVMFunction(module, staticNBAPublicationName,
+                           builder.getI1Type(),
+                           {pointer, pointer, i32, pointer});
   if (failed(materializeNativeEvalDispatch(module, coordinatorPlan)))
     return failure();
   releaseNBAHeldWakesBeforeReturns(run);
@@ -5777,6 +5780,15 @@ FailureOr<bool> makeNativeEvalPlan(
   // Dropping dynamic unknown stores here leaves the canonical handover unable
   // to clear a register element that became known during promoted execution.
   constexpr bool forcedTwoStateEval = false;
+  SmallVector<NativeNBAPublicationAction> publicationActions;
+  auto *publicationEntry = new Block;
+  nbaCommit.getBody().getBlocks().insert(Region::iterator(genericNBACommit),
+                                         publicationEntry);
+  auto *orderedEntry = new Block;
+  nbaCommit.getBody().getBlocks().insert(Region::iterator(publicationEntry),
+                                         orderedEntry);
+  cf::BranchOp::create(builder, location, orderedEntry);
+  builder.setInsertionPointToStart(orderedEntry);
   // Drain records in staging order. No actor executes within the NBA barrier,
   // so the allocation and payload stay stable until the drain is complete.
   Block *queueAdvance = nullptr;
@@ -5882,6 +5894,8 @@ FailureOr<bool> makeNativeEvalPlan(
                           llvmConstant(builder, location, i32, 0),
                           evalNBAQueueField(builder, location, 1), 4);
   }
+  cf::BranchOp::create(builder, location, publicationEntry);
+  builder.setInsertionPointToStart(publicationEntry);
   llvm::SmallPtrSet<Block *, 32> emittedCommitCases;
   for (const DynamicEvalNBA &entry : dynamicEvalNBAs) {
     // Fixed latches belong to the canonical barrier in a shared calendar.
@@ -5955,8 +5969,11 @@ FailureOr<bool> makeNativeEvalPlan(
                                              commitDynamic);
       nbaCommit.getBody().getBlocks().insert(Region::iterator(genericNBACommit),
                                              nextDynamic);
-      cf::CondBranchOp::create(builder, location, active, commitDynamic,
-                               ValueRange{}, nextDynamic, ValueRange{});
+      auto dispatch =
+          cf::CondBranchOp::create(builder, location, active, commitDynamic,
+                                   ValueRange{}, nextDynamic, ValueRange{});
+      publicationActions.push_back(
+          {entry.rootIndex, dispatch, nextDynamic, false});
       builder.setInsertionPointToStart(commitDynamic);
     }
     auto loadStaged = [&](StringRef name) -> Value {
@@ -6674,8 +6691,10 @@ FailureOr<bool> makeNativeEvalPlan(
       }
       Value validRoot =
           arith::AndIOp::create(builder, location, selected, regionMatches);
-      cf::CondBranchOp::create(builder, location, validRoot, commitRoot,
-                               ValueRange{}, afterRoot, ValueRange{});
+      auto dispatch =
+          cf::CondBranchOp::create(builder, location, validRoot, commitRoot,
+                                   ValueRange{}, afterRoot, ValueRange{});
+      publicationActions.push_back({rootIndex, dispatch, afterRoot, true});
 
       builder.setInsertionPointToStart(commitRoot);
       // Consume only the roots this barrier commits. A runtime-executed actor
@@ -6973,6 +6992,58 @@ FailureOr<bool> makeNativeEvalPlan(
   builder.setInsertionPointToStart(directDone);
   LLVM::ReturnOp::create(builder, location,
                          llvmConstant(builder, location, i32, TALOS_RT_OK));
+
+  NativeNBAStaticPublicationPlan publicationPlan;
+  publicationPlan.scalarRoots.assign(nbaDirtyWordCount, 0);
+  publicationPlan.hasOrdered = hasOrderedNBA;
+  llvm::DenseSet<uint32_t> publicationOwners;
+  if (generateScalarCommits && staticNBAPlan.completeSourceWriters &&
+      resolved->transaction.sourceGraph == computeGraph && !vpi.allowsWrite() &&
+      !schedule::has<schedule::Field::EvalRuntimeCalendar>(module))
+    publicationOwners.insert(resolved->transaction.publicationRoots.begin(),
+                             resolved->transaction.publicationRoots.end());
+  llvm::DenseSet<uint32_t> observedPublicationStates;
+  for (const auto &entry : fanoutEntries)
+    if (fanoutRoute(entry) != TALOS_RT_FANOUT_DIRECT ||
+        entry.edge != TALOS_RT_WAIT_EDGE_CHANGE)
+      observedPublicationStates.insert(entry.static_state);
+  auto privatePublication = [&](uint32_t root) {
+    uint32_t state = nbaRoots[root].static_state;
+    return publicationOwners.contains(root) &&
+           !observedPublicationStates.contains(state) &&
+           !staticFanoutPlan.runtimeTransitionStates.contains(state);
+  };
+  for (auto roots : scalarRootsByWord)
+    for (uint32_t root : roots)
+      if (privatePublication(root) &&
+          staticNBAPlan.generatedCommitRegions[root] == TALOS_RT_REGION_NBA)
+        publicationPlan.scalarRoots[root / 64] |= uint64_t{1} << (root % 64);
+  for (const auto &entry : dynamicEvalNBAs) {
+    if (entry.queued)
+      continue;
+    // Nonqueued entries exist only after every implementation passed the
+    // periodic/disjoint-site or whole-root coalescing protocol. Keep that
+    // exact order. A canonical accumulator may exist for cold execution of a
+    // wide root; its dirty bit is deliberately absent from the scalar mask,
+    // so the entry guard rejects that capture form independently of slots.
+    if (privatePublication(entry.rootIndex) &&
+        !orderedNBARoots.contains(entry.rootIndex) &&
+        nbaRoots[entry.rootIndex].bit_width > 64)
+      publicationPlan.slotRoots.insert(entry.rootIndex);
+    else
+      publicationPlan.rejectedSlots.push_back(entry.validName);
+  }
+  if (native::has<native::DebugTiming>(module)) {
+    uint64_t scalar = 0;
+    for (uint64_t mask : publicationPlan.scalarRoots)
+      scalar += llvm::popcount(mask);
+    llvm::errs() << "talos eval static NBA publication: scalar=" << scalar
+                 << " slot-roots=" << publicationPlan.slotRoots.size()
+                 << " rejected-slots=" << publicationPlan.rejectedSlots.size()
+                 << " ordered-fallback=" << hasOrderedNBA << '\n';
+  }
+  materializeNativeNBAStaticPublication(module, nbaCommit, publicationEntry,
+                                        publicationActions, publicationPlan);
 
   constexpr StringLiteral orderedCommitName =
       "__talos_eval_ordered_nba_commit_v1";
