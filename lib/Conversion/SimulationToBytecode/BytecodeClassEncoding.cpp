@@ -348,7 +348,7 @@ std::optional<uint32_t> Encoder::encodeNativeMethodSite(FunctionPlan &plan,
   if (options.requireBytecode)
     return std::nullopt;
   SmallVector<uint8_t> records;
-  uint32_t argumentPlanes = 0, resultPlanes = 0;
+  uint32_t argumentPlanes = 0, resultPlanes = 0, handleArguments = 0;
   uint64_t resultSize = 0;
   uint32_t resultAlignment = 1;
   llvm::LLVMContext llvmContext;
@@ -356,7 +356,26 @@ std::optional<uint32_t> Encoder::encodeNativeMethodSite(FunctionPlan &plan,
     Type type = value.getType();
     uint32_t index = reg(plan, value);
     const Layout &layout = plan.layouts[index];
+    uint32_t referenceWidth = 0;
     switch (layout.kind) {
+    case Handle:
+      // IEEE 1800-2023 13.5: state references keep the same aliased view.
+      // Expanded interpreter handles need a stable native word, not a copy
+      // of the referenced value. Local-only handles fall back at run time.
+      if (result)
+        return false;
+      if (auto reference = dyn_cast<sim::RefType>(type)) {
+        auto referent = getLayout(reference.getElementType());
+        if (failed(referent))
+          return false;
+        referenceWidth = referent->kind == Handle ? 64 : referent->width;
+        if (!referenceWidth)
+          return false;
+      } else {
+        return false;
+      }
+      ++handleArguments;
+      break;
     case Bits:
     case Logic:
     case Managed:
@@ -371,8 +390,9 @@ std::optional<uint32_t> Encoder::encodeNativeMethodSite(FunctionPlan &plan,
     }
     auto storage =
         analysis::getSimulationStorageProperties(type, dataLayout, llvmContext);
-    uint64_t nativeSize =
-        layout.kind == ManagedRef ? 8 : (uint64_t{layout.width} + 7) / 8;
+    uint64_t nativeSize = layout.kind == ManagedRef || layout.kind == Handle
+                              ? 8
+                              : (uint64_t{layout.width} + 7) / 8;
     if (failed(storage) || storage->size != nativeSize ||
         storage->size > UINT32_MAX ||
         (storage->fourState && layout.kind != Logic) ||
@@ -397,7 +417,7 @@ std::optional<uint32_t> Encoder::encodeNativeMethodSite(FunctionPlan &plan,
       append32(records, index);
       append32(records, plane * planeStride);
       append32(records, storage->size);
-      append32(records, offset);
+      append32(records, result ? offset : referenceWidth);
     }
     return true;
   };
@@ -414,7 +434,7 @@ std::optional<uint32_t> Encoder::encodeNativeMethodSite(FunctionPlan &plan,
   append32(site, firstOutputs);
   append32(site, argumentPlanes);
   append32(site, resultPlanes);
-  append32(site, 0);
+  append32(site, handleArguments);
   append64(site, resultSize);
   llvm::append_range(site, records);
   if (constants.size() > UINT32_MAX ||

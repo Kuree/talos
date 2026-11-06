@@ -567,10 +567,6 @@ public:
     if (dispatch->second.vtablePath)
       return lowerTypedCall(op, adaptor, rewriter,
                             *dispatch->second.vtablePath);
-    for (auto [argument, converted] :
-         llvm::zip_equal(op.getArguments(), adaptor.getArguments()))
-      if (isa<sim::RefType>(argument.getType()) && converted.size() == 1)
-        emitNativeStateRetain(rewriter, op.getLoc(), converted.front());
     Type pointer = LLVM::LLVMPointerType::get(rewriter.getContext());
     Type i32 = rewriter.getI32Type();
     Type i64 = rewriter.getI64Type();
@@ -1060,12 +1056,15 @@ materializeManagedMethodThunks(ModuleOp module,
         implementationType.getNumInputs() - implicitArguments;
     FunctionType semanticType = cast<FunctionType>(method.getFunctionType());
     SmallVector<uint64_t> expectedSizes;
+    SmallVector<unsigned> referenceArguments;
     for (Type argument :
          semanticType.getInputs().drop_front(implicitArguments)) {
       auto storage = analysis::getSimulationStorageProperties(
           argument, localDataLayout, llvmContext);
       if (failed(storage))
         return method.emitError("managed method argument has no native ABI");
+      if (isa<sim::RefType>(argument))
+        referenceArguments.push_back(expectedSizes.size());
       expectedSizes.append(
           analysis::getSimulationPhysicalStorageCount(*storage), storage->size);
     }
@@ -1164,6 +1163,37 @@ materializeManagedMethodThunks(ModuleOp module,
       Type type = implementationType.getInput(index + implicitArguments);
       callArguments.push_back(LLVM::LoadOp::create(
           builder, method.getLoc(), type, argumentData[index], 1));
+    }
+    // The erased native ABI borrows its argument words. The implementation
+    // consumes one automatic-state reference per ref formal, just as an
+    // ordinary native call does (IEEE 1800-2023 8.6 and 13.5). Acquire only
+    // after validating every record and roll back if a later acquisition fails.
+    SmallVector<Value> acquired;
+    for (unsigned index : referenceArguments) {
+      Value handle = callArguments[implicitArguments + index];
+      Value status =
+          LLVM::CallOp::create(builder, method.getLoc(), TypeRange{i32},
+                               "talos_rt_v1_native_state_retain",
+                               ValueRange{entry->getArgument(0), handle})
+              .getResult();
+      Block *next = new Block;
+      Block *failed = new Block;
+      thunk.getBody().push_back(next);
+      thunk.getBody().push_back(failed);
+      Value ok = LLVM::ICmpOp::create(
+          builder, method.getLoc(), LLVM::ICmpPredicate::eq, status,
+          llvmConstant(builder, method.getLoc(), i32, TALOS_RT_OK));
+      LLVM::CondBrOp::create(builder, method.getLoc(), ok, next, failed);
+      builder.setInsertionPointToStart(failed);
+      for (Value previous : acquired)
+        LLVM::CallOp::create(
+            builder, method.getLoc(), TypeRange{i32},
+            "talos_rt_v1_native_state_release",
+            ValueRange{entry->getArgument(0), previous,
+                       llvmConstant(builder, method.getLoc(), i32, 0)});
+      LLVM::ReturnOp::create(builder, method.getLoc(), status);
+      builder.setInsertionPointToStart(next);
+      acquired.push_back(handle);
     }
     auto call = func::CallOp::create(
         builder, method.getLoc(), implementation.getSymName(),

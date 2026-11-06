@@ -290,7 +290,10 @@ private:
         uint32_t outputs = reader.read<uint32_t>(site + 8);
         os << "native method: argument_planes=" << inputs
            << " result_planes=" << outputs
-           << " result_size=" << reader.read<uint64_t>(site + 16) << '\n';
+           << " result_size=" << reader.read<uint64_t>(site + 16);
+        if (auto handles = reader.read<uint32_t>(site + 12))
+          os << " handle_arguments=" << handles;
+        os << '\n';
         if (!reader.fits(site + 24, uint64_t{inputs} + outputs, 16))
           return failure();
         for (uint64_t plane = 0; plane != uint64_t{inputs} + outputs; ++plane) {

@@ -26,7 +26,7 @@ module attributes {
       }
     simulation.class.method @C_reference of @C slot 1 signature_id 18
         implemented_by @reference_method :
-      (!simulation.context, !simulation.class_handle<@C>, !simulation.ref<i9>)
+      (!simulation.context, !simulation.class_handle<@C>, !simulation.ref<i9>, !simulation.ref<i9>)
       -> i9 {
         is_final = true, is_pure = false, is_static = false,
         is_task = false, is_virtual = true
@@ -65,7 +65,8 @@ module attributes {
     simulation.func @reference_method(
         %ctx: !simulation.context {simulation.capture_kind = 0 : i32},
         %this: !simulation.class_handle<@C> {simulation.capture_kind = 1 : i32},
-        %text: !simulation.ref<i9> {simulation.capture_kind = 1 : i32})
+        %text: !simulation.ref<i9> {simulation.capture_kind = 1 : i32},
+        %other: !simulation.ref<i9> {simulation.capture_kind = 1 : i32})
         -> i9
         attributes {code_unit_id = 3 : i64, entry_kind = 8 : i32} {
       %value = simulation.ref.load %text : !simulation.ref<i9> -> i9
@@ -77,8 +78,8 @@ module attributes {
         %text: !simulation.ref<i9> {simulation.capture_kind = 1 : i32})
         attributes {code_unit_id = 4 : i64, entry_kind = 8 : i32} {
       %result = simulation.class.virtual_call
-        %this[@C_reference] slot 1 signature_id 18(%text) :
-        (!simulation.class_handle<@C>, !simulation.ref<i9>) -> i9
+        %this[@C_reference] slot 1 signature_id 18(%text, %text) :
+        (!simulation.class_handle<@C>, !simulation.ref<i9>, !simulation.ref<i9>) -> i9
       simulation.return
     }
     simulation.code_unit.decl 5 in 0 function hierarchy "C.packed_method"
@@ -206,9 +207,12 @@ module attributes {
 // CHECK-NEXT: result plane=3 register=9 byte_offset=0 native_size=8 result_offset=48
 // CHECK-NEXT: result plane=4 register=10 byte_offset=0 native_size=4 result_offset=56
 // CHECK-NEXT: result plane=5 register=11 byte_offset=0 native_size=8 result_offset=64
-// Ordinary reference handles need stable-ID conversion; keep their bytecode call.
-// CHECK: opcode=41 flags=1 dst=1
-// CHECK-NOT: native method:
+// IEEE 13.5.2: both aliased formals use stable words, preserving the same view.
+// CHECK: opcode=63 flags=1 dst=1
+// CHECK-NEXT: native method: argument_planes=2 result_planes=1 result_size=2 handle_arguments=2
+// CHECK-NEXT: argument plane=0 register=2 byte_offset=0 native_size=8 result_offset=9
+// CHECK-NEXT: argument plane=1 register=2 byte_offset=0 native_size=8 result_offset=9
+// CHECK-NEXT: result plane=0 register=3 byte_offset=0 native_size=2 result_offset=0
 // Packed SystemVerilog vectors use exactly the same scalar marshal rules.
 // CHECK: opcode=63 flags=2
 // CHECK-NEXT: native method: argument_planes=3 result_planes=3 result_size=48
@@ -236,6 +240,17 @@ module attributes {
 // THUNK: llvm.icmp "eq" %arg6
 // THUNK: llvm.cond_br
 // THUNK: llvm.mlir.constant(8 : i32)
+
+// Erased entry arguments are borrowed; each ref formal gets its own ownership.
+// Failed acquisition of the second formal releases the first before returning.
+// THUNK-LABEL: llvm.func internal @C_reference.__talos_native_thunk
+// THUNK: llvm.call @talos_rt_v1_native_state_retain
+// THUNK: llvm.cond_br
+// THUNK: llvm.call @talos_rt_v1_native_state_retain
+// THUNK: llvm.cond_br
+// THUNK: llvm.call @reference_method
+// THUNK: llvm.call @talos_rt_v1_native_state_release
+// THUNK: llvm.return
 
 // An explicitly bytecode-only build emits no unused native marshal plans.
 // BYTECODE-NOT: native method:

@@ -4741,6 +4741,252 @@ TEST(DesignBytecode, NativeMethodsPreserveManagedAndArgumentReferenceAliases) {
   }
 }
 
+std::vector<uint8_t> makeNativeStateReferenceMethodBytecode(unsigned kind) {
+  constexpr size_t functions = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
+  constexpr size_t layouts = functions + 2 * 96;
+  constexpr size_t code = layouts + layoutTableSize(5);
+  constexpr size_t operands = code + 12 * 32;
+  constexpr size_t constants = operands + 6 * 8;
+  constexpr size_t site = constants + 40;
+  constexpr size_t continuations = site + 24 + 2 * 16;
+  std::vector<uint8_t> bytes(continuations + 2 * 24, 0);
+  std::memcpy(bytes.data(), TALOS_RT_DESIGN_BYTECODE_MAGIC, 8);
+  put32(bytes, 8, TALOS_RT_VERSION);
+  put32(bytes, 16, TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE);
+  put64(bytes, 24, bytes.size());
+  put64(bytes, 40, functions);
+  put64(bytes, 48, 2);
+  put64(bytes, 56, layouts);
+  put64(bytes, 64, 5);
+  putShapeTable(bytes, layouts, 5);
+  put64(bytes, 72, code);
+  put64(bytes, 80, 12);
+  put64(bytes, 88, operands);
+  put64(bytes, 96, 6);
+  put64(bytes, 104, constants);
+  put64(bytes, 112, continuations - constants);
+  put64(bytes, 120, continuations);
+  put64(bytes, 128, 2);
+  for (size_t offset = 136; offset < 200; offset += 16)
+    put64(bytes, offset, bytes.size());
+  for (unsigned index = 0; index != 2; ++index) {
+    size_t function = functions + index * 96;
+    put64(bytes, function, index + 1);
+    put64(bytes, function + 16, index ? 7 : 0);
+    put64(bytes, function + 24, index ? 5 : 7);
+    put64(bytes, function + 40, 5);
+    put32(bytes, function + 48, index ? 3 : 0);
+    put32(bytes, function + 52, index ? 1 : 0);
+    put64(bytes, function + 56, 88);
+    put64(bytes, function + 64, 8);
+    put64(bytes, function + 72, index);
+    put64(bytes, function + 80, 1);
+    put64(bytes, function + 88,
+          index ? 0 : TALOS_RT_DESIGN_FUNCTION_PROCESS | (uint64_t{40} << 1));
+    put32(bytes, continuations + index * 24, index);
+    put64(bytes, continuations + index * 24 + 8, index ? 7 : 0);
+  }
+  putLayout(bytes, layouts, 5, 0, TALOS_RT_DBREG_HANDLE, 256, 0, 32);
+  putLayout(bytes, layouts, 5, 1, TALOS_RT_DBREG_MANAGED, 64, 32, 8,
+            TALOS_RT_DBREG_CLASS_HANDLE);
+  putLayout(bytes, layouts, 5, 2, TALOS_RT_DBREG_HANDLE, 256, 40, 32);
+  putLayout(bytes, layouts, 5, 3, TALOS_RT_DBREG_BITS, 64, 72, 8);
+  putLayout(bytes, layouts, 5, 4, TALOS_RT_DBREG_BITS, 64, 80, 8);
+  uint32_t maps[][2] = {{0, 0}, {1, 1}, {2, 2}, {3, 3}, {3, 0}, {3, 3}};
+  for (unsigned index = 0; index != 6; ++index) {
+    put32(bytes, operands + index * 8, maps[index][0]);
+    put32(bytes, operands + index * 8 + 4, maps[index][1]);
+  }
+  instruction(bytes, code, 0, TALOS_RT_DB_CONSTANT);
+  instruction(bytes, code, 1, TALOS_RT_DB_LOAD_FRAME, 0, 1);
+  instruction(bytes, code, 2, TALOS_RT_DB_LOAD_FRAME, 0, 4, 0, 0, 0, 0, 16);
+  if (kind == 2)
+    instruction(bytes, code, 3, TALOS_RT_DB_MAKE_LOCAL_HANDLE, 0, 2, 4);
+  else if (kind == 3)
+    instruction(bytes, code, 3, TALOS_RT_DB_MAKE_HANDLE, 0, 2,
+                TALOS_RT_DESCRIPTOR_STORAGE, 32);
+  else
+    instruction(bytes, code, 3, TALOS_RT_DB_LOAD_FRAME,
+                TALOS_RT_DESCRIPTOR_STORAGE, 2, 0, 0, 0, 64, 8);
+  instruction(bytes, code, 4, TALOS_RT_DB_NATIVE_VIRTUAL_CALL, 1, 0, 1, 0, 3,
+              40, 17);
+  instruction(bytes, code, 5, TALOS_RT_DB_STORE_FRAME, 0, 0, 3, 0, 0, 0, 24);
+  instruction(bytes, code, 6, TALOS_RT_DB_TERMINATE);
+  instruction(bytes, code, 7, TALOS_RT_DB_LOAD_STATE, 0, 3, 2);
+  instruction(bytes, code, 8, TALOS_RT_DB_CONSTANT, 0, 4, 0, 0, 0, 0, 32);
+  instruction(bytes, code, 9, TALOS_RT_DB_ADD, 0, 3, 3, 4);
+  instruction(bytes, code, 10, TALOS_RT_DB_STORE_STATE, 0, 0, 2, 3);
+  instruction(bytes, code, 11, TALOS_RT_DB_RETURN, 0, 0, 5, 1);
+  put64(bytes, constants + 32, 1);
+  put32(bytes, site, 3);
+  put32(bytes, site + 4, 1);
+  put32(bytes, site + 8, 1);
+  put32(bytes, site + 12, 1);
+  put64(bytes, site + 16, 8);
+  put32(bytes, site + 24, 2);
+  put32(bytes, site + 32, 8);
+  put32(bytes, site + 36, 64);
+  put32(bytes, site + 40, 3);
+  put32(bytes, site + 48, 8);
+  put64(bytes, 32, imageChecksum(bytes));
+  return bytes;
+}
+
+talos_rt_status
+nativeStateReferenceMethod(talos_rt_context *context, talos_rt_gc_lane_v1 *lane,
+                           talos_rt_object_v1 *receiver,
+                           const talos_rt_method_argument_v1 *arguments,
+                           uint32_t count, void *result, uint64_t resultSize) {
+  if (count != 1 || arguments[0].size != 8 || resultSize != 8)
+    return TALOS_RT_ARGUMENT_MISMATCH;
+  talos_rt_status status = talos_rt_v1_gc_collect(lane);
+  if (status != TALOS_RT_OK)
+    return status;
+  auto *plane = reinterpret_cast<uint8_t *>(context->stateValue.data());
+  uint64_t handle, value = 0;
+  std::memcpy(&handle, arguments[0].data, 8);
+  status =
+      talos_rt_v1_native_state_load_plane(context, plane, 65, handle, 64, 0, 0,
+                                          reinterpret_cast<uint8_t *>(&value));
+  if (status != TALOS_RT_OK)
+    return status;
+  ++value;
+  uint8_t changed = 0;
+  status = talos_rt_v1_native_state_store_plane(
+      context, plane, 65, handle, 64, 0,
+      reinterpret_cast<const uint8_t *>(&value), &changed);
+  if (status != TALOS_RT_OK)
+    return status;
+  std::memcpy(result, &value, 8);
+  uint64_t calls = 1;
+  return talos_rt_v1_object_write(receiver, 8, &calls, 8);
+}
+
+TEST(DesignBytecode, NativeMethodsPreserveStateViewsAndLocalFallback) {
+  for (unsigned kind = 0; kind != 4; ++kind) {
+    for (bool native : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << kind << '/' << native);
+      Fixture fixture;
+      fixture.bytecode = makeNativeStateReferenceMethodBytecode(kind);
+      fixture.execution.bytecode = fixture.bytecode.data();
+      fixture.execution.bytecode_size = fixture.bytecode.size();
+      fixture.execution.checksum = imageChecksum(fixture.bytecode);
+      talos_rt_context *context = nullptr;
+      ASSERT_EQ(
+          talos_rt_v1_context_create_for_design(&fixture.execution, &context),
+          TALOS_RT_OK);
+      std::array<uint64_t, 2> initial{0x123456789abcdef0, 1};
+      std::memcpy(context->stateValue.data(), initial.data(), 16);
+      std::memset(context->stateUnknown.data(), 0, 16);
+      uint64_t root = 0;
+      std::array<uint64_t, 2> unknown{};
+      if (kind == 1)
+        ASSERT_EQ(talos_rt_v1_native_state_alloc(
+                      context, 80,
+                      reinterpret_cast<const uint8_t *>(initial.data()),
+                      reinterpret_cast<const uint8_t *>(unknown.data()), &root),
+                  TALOS_RT_OK);
+      uint64_t handle =
+          talos_rt_v1_native_handle_offset(root, kind == 1 ? 5 : 1);
+      uint64_t expected = kind == 2 ? 13
+                          : kind == 3
+                              ? initial[0] & UINT32_MAX
+                              : (initial[0] >> (kind == 1 ? 5 : 1)) |
+                                    (initial[1] << (kind == 1 ? 59 : 63));
+      talos_rt_method_descriptor_v1 method{
+          17, 0, 1, native ? nativeStateReferenceMethod : nullptr, nullptr, 0};
+      talos_rt_class_descriptor_v1 descriptor{};
+      descriptor.version = TALOS_RT_VERSION;
+      descriptor.class_id = 1;
+      descriptor.instance_size = 16;
+      descriptor.instance_alignment = 8;
+      descriptor.methods = &method;
+      descriptor.method_count = 1;
+      talos_rt_gc_lane_v1 *lane = nullptr;
+      ASSERT_EQ(talos_rt_v1_gc_lane_create(context, &lane), TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_gc_lane_enter(lane), TALOS_RT_OK);
+      talos_rt_object_v1 *receiver = nullptr;
+      ASSERT_EQ(talos_rt_v1_object_allocate(lane, &descriptor, &receiver),
+                TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_gc_lane_leave(lane), TALOS_RT_OK);
+      std::array<uint64_t, 16> frame{};
+      frame[0] = talos_rt_managed_word_from_object(receiver);
+      frame[1] = handle;
+      frame[2] = 13;
+      talos_rt_fragment_action_v1 action{};
+      ASSERT_EQ(talos_rt_execute_design_bytecode(fixture.entry, context,
+                                                 frame.data(), sizeof(frame),
+                                                 40, 88, 0, 0, &action),
+                TALOS_RT_OK);
+      EXPECT_EQ(action.kind, TALOS_RT_FRAGMENT_TERMINATE);
+      EXPECT_EQ(frame[3], expected + 1);
+      if (kind == 2)
+        EXPECT_EQ(frame[15], 14u);
+      uint64_t calls = 0;
+      ASSERT_EQ(talos_rt_v1_object_read(receiver, 8, &calls, 8), TALOS_RT_OK);
+      EXPECT_EQ(calls, native && kind < 2 ? 1u : 0u);
+      if (kind != 2) {
+        std::array<uint64_t, 2> after{};
+        ASSERT_EQ(
+            talos_rt_v1_native_state_load_plane(
+                context,
+                reinterpret_cast<const uint8_t *>(context->stateValue.data()),
+                65, root, kind == 1 ? 80 : 65, 0, 0,
+                reinterpret_cast<uint8_t *>(after.data())),
+            TALOS_RT_OK);
+        if (kind == 3) {
+          EXPECT_EQ(after[0] & ~uint64_t{UINT32_MAX},
+                    initial[0] & ~uint64_t{UINT32_MAX});
+          EXPECT_EQ(after[1], initial[1]);
+        } else {
+          unsigned shift = kind == 1 ? 5 : 1;
+          EXPECT_EQ(after[0] & ((uint64_t{1} << shift) - 1),
+                    initial[0] & ((uint64_t{1} << shift) - 1));
+        }
+        if (kind == 1) {
+          EXPECT_EQ(after[1] & ~UINT64_C(31), initial[1] & ~UINT64_C(31));
+          ASSERT_EQ(talos_rt_v1_native_state_release(context, root, 0),
+                    TALOS_RT_OK);
+          EXPECT_EQ(
+              talos_rt_v1_native_state_load_plane(
+                  context,
+                  reinterpret_cast<const uint8_t *>(context->stateValue.data()),
+                  65, root, 80, 0, 0,
+                  reinterpret_cast<uint8_t *>(after.data())),
+              TALOS_RT_INVALID_HANDLE);
+        }
+      }
+      ASSERT_EQ(talos_rt_v1_gc_lane_destroy(lane), TALOS_RT_OK);
+      talos_rt_v1_context_destroy(context);
+    }
+  }
+}
+
+TEST(DesignBytecode, RejectsMalformedNativeStateReferencePlans) {
+  for (unsigned mutation = 0; mutation != 4; ++mutation) {
+    SCOPED_TRACE(mutation);
+    Fixture fixture;
+    fixture.bytecode = makeNativeStateReferenceMethodBytecode(0);
+    size_t site = get64(fixture.bytecode, 104) + 40;
+    size_t offset = mutation == 0   ? 12
+                    : mutation == 1 ? 36
+                    : mutation == 2 ? 32
+                                    : 28;
+    put32(fixture.bytecode, site + offset,
+          mutation < 2    ? 0
+          : mutation == 2 ? 32
+                          : 8);
+    put64(fixture.bytecode, 32, imageChecksum(fixture.bytecode));
+    fixture.execution.bytecode = fixture.bytecode.data();
+    fixture.execution.bytecode_size = fixture.bytecode.size();
+    fixture.execution.checksum = imageChecksum(fixture.bytecode);
+    uint64_t scratchSize = 0, scratchAlignment = 0;
+    EXPECT_EQ(talos_rt_validate_design_bytecode(
+                  fixture.entry, nullptr, &scratchSize, &scratchAlignment),
+              TALOS_RT_INVALID_BYTECODE);
+  }
+}
+
 TEST(DesignBytecode, ExactNativeMethodsKeepBaseBindingAndFallback) {
   for (bool native : {false, true}) {
     SCOPED_TRACE(native);

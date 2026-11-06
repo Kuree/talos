@@ -75,7 +75,8 @@ inline bool isDynamicEventHandle(uint32_t kind, uint64_t stable) {
          isDynamicEventStableHandle(stable);
 }
 
-inline bool encodeCanonicalHandle(const uint8_t *address, uint64_t &stable) {
+inline bool encodeCanonicalHandle(const uint8_t *address, uint64_t &stable,
+                                  uint32_t referenceWidth = 0) {
   uint32_t kind = 0;
   int64_t start = kInvalidHandleStart;
   std::memcpy(&kind, address, sizeof(kind));
@@ -83,6 +84,8 @@ inline bool encodeCanonicalHandle(const uint8_t *address, uint64_t &stable) {
   if ((kind & kLocalHandleKind) != 0)
     return false;
   uint32_t descriptorKind = kind & ~(kLocalHandleKind | kAutomaticHandleKind);
+  if (referenceWidth && descriptorKind != TALOS_RT_DESCRIPTOR_STORAGE)
+    return false;
   // Event null uses an all-ones descriptor coordinate rather than the
   // out-of-range state-view sentinel. Preserve it as the canonical all-ones
   // stable handle when an event crosses a frame or state-storage boundary.
@@ -91,6 +94,8 @@ inline bool encodeCanonicalHandle(const uint8_t *address, uint64_t &stable) {
     return true;
   }
   if (start == kInvalidHandleStart) {
+    if (referenceWidth)
+      return false;
     stable = UINT64_MAX;
     return true;
   }
@@ -110,6 +115,18 @@ inline bool encodeCanonicalHandle(const uint8_t *address, uint64_t &stable) {
     stable = encodeAutomaticHandle(id, start);
   } else if (decodeStaticHandle(base, id, begin)) {
     stable = encodeStaticHandle(id, start);
+  } else {
+    begin = static_cast<int64_t>(base);
+  }
+  if (referenceWidth) {
+    int64_t end = 0;
+    std::memcpy(&end, address + 24, sizeof(end));
+    // A native word cannot carry a view's clipped bounds. IEEE 1800-2023
+    // 13.5.2 requires the same alias, so retain bytecode if native access
+    // could reach bits outside the interpreter's original reference view.
+    if (start < begin || end < start ||
+        uint64_t{referenceWidth} > uint64_t(end) - uint64_t(start))
+      return false;
   }
   return stable != UINT64_MAX;
 }
@@ -298,7 +315,7 @@ inline bool isStaticMethodCall(const Instruction &instruction) {
 }
 
 struct NativeMethodCallSite {
-  uint32_t outputMap, argumentPlanes, resultPlanes;
+  uint32_t outputMap, argumentPlanes, resultPlanes, handleArguments;
   uint64_t resultSize;
   const uint8_t *planes;
 };
@@ -306,8 +323,8 @@ struct NativeMethodCallSite {
 inline NativeMethodCallSite nativeMethodCallSite(const Image &image,
                                                  uint32_t offset) {
   const uint8_t *data = image.data + image.constants + offset;
-  return {read32(data), read32(data + 4), read32(data + 8), read64(data + 16),
-          data + 24};
+  return {read32(data),      read32(data + 4),  read32(data + 8),
+          read32(data + 12), read64(data + 16), data + 24};
 }
 
 inline uint32_t methodCallOutputMap(const Image &image,

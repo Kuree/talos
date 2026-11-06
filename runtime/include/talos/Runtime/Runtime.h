@@ -165,6 +165,9 @@ typedef struct talos_rt_trace_layout_v1 {
 } talos_rt_trace_layout_v1;
 
 typedef struct talos_rt_method_argument_v1 {
+  // Function-call values are borrowed. Compiled function thunks acquire any
+  // automatic state-reference ownership their body consumes; the caller keeps
+  // its own reference.
   const void *data;
   uint64_t size;
 } talos_rt_method_argument_v1;
@@ -1079,11 +1082,14 @@ enum {
   TALOS_RT_DB_POPCOUNT = 62,
   // Function calls with a compiler-computed native marshal plan. Other fields
   // match VIRTUAL_CALL / INTERFACE_CALL; auxiliary is a constant-table offset:
-  // {u32 output_map, u32 argument_planes, u32 result_planes, u32 reserved,
+  // {u32 output_map, u32 argument_planes, u32 result_planes, u32
+  // handle_arguments,
   //  u64 result_size}, followed by argument then result plane records
   // {u32 register, u32 register_byte_offset, u32 native_size, u32
   // result_offset}. If the resolved method has no native entry, use its
-  // retained bytecode body.
+  // retained bytecode body. Expanded handle arguments are converted to stable
+  // native words; their result_offset field carries the referenced bit width.
+  // Interpreter-local or clipped references use the bytecode fallback.
   TALOS_RT_DB_NATIVE_VIRTUAL_CALL = 63,
   TALOS_RT_DB_NATIVE_INTERFACE_CALL = 64,
   // Exact class method: destination is the retained bytecode function index,

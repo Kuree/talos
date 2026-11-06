@@ -1862,9 +1862,12 @@ static bool validNativeMethodSite(const Image &image, const Function &function,
     return false;
   NativeMethodCallSite site =
       nativeMethodCallSite(image, instruction.auxiliary);
-  const uint8_t *header = image.data + image.constants + offset;
   uint64_t count = uint64_t{site.argumentPlanes} + site.resultPlanes;
-  if (read32(header + 12) || site.resultSize > UINT32_MAX ||
+  if (site.handleArguments > site.argumentPlanes ||
+      uint64_t{site.argumentPlanes} * sizeof(talos_rt_method_argument_v1) +
+              uint64_t{site.handleArguments} * sizeof(uint64_t) >
+          SIZE_MAX ||
+      site.resultSize > UINT32_MAX ||
       count > (image.constantSize - offset - 24) / 16 ||
       instruction.source2 < (isStaticMethodCall(instruction) ? 1u : 2u) ||
       instruction.source1 > image.operandCount ||
@@ -1873,11 +1876,17 @@ static bool validNativeMethodSite(const Image &image, const Function &function,
       instruction.flags > image.operandCount - site.outputMap)
     return false;
   uint64_t cursor = 0, previousEnd = 0;
+  uint32_t handleArguments = 0;
   auto check = [&](uint32_t reg, bool result) {
     if (!validRegister(function, reg))
       return false;
     Layout layout = layoutAt(image, function, reg);
     switch (layout.kind) {
+    case TALOS_RT_DBREG_HANDLE:
+      if (result)
+        return false;
+      ++handleArguments;
+      break;
     case TALOS_RT_DBREG_BITS:
     case TALOS_RT_DBREG_LOGIC:
     case TALOS_RT_DBREG_REAL32:
@@ -1895,7 +1904,8 @@ static bool validNativeMethodSite(const Image &image, const Function &function,
                           ? 2
                           : 1;
     uint64_t stride = layout.size / planes;
-    uint64_t nativeSize = layout.kind == TALOS_RT_DBREG_MANAGED_REF
+    uint64_t nativeSize = layout.kind == TALOS_RT_DBREG_MANAGED_REF ||
+                                  layout.kind == TALOS_RT_DBREG_HANDLE
                               ? 8
                               : (uint64_t{layout.width} + 7) / 8;
     for (uint32_t plane = 0; plane != planes; ++plane, ++cursor) {
@@ -1905,7 +1915,8 @@ static bool validNativeMethodSite(const Image &image, const Function &function,
       uint64_t nativeOffset = read32(record + 12);
       if (read32(record) != reg || read32(record + 4) != plane * stride ||
           read32(record + 8) != nativeSize || nativeSize > stride ||
-          (!result && nativeOffset != 0) ||
+          (!result &&
+           ((layout.kind == TALOS_RT_DBREG_HANDLE) != (nativeOffset != 0))) ||
           (result &&
            (nativeOffset < previousEnd || nativeOffset > site.resultSize ||
             nativeSize > site.resultSize - nativeOffset)))
@@ -1919,7 +1930,7 @@ static bool validNativeMethodSite(const Image &image, const Function &function,
        index != instruction.source2; ++index)
     if (!check(operandAt(image, instruction.source1 + index).second, false))
       return false;
-  if (cursor != site.argumentPlanes)
+  if (cursor != site.argumentPlanes || handleArguments != site.handleArguments)
     return false;
   for (uint32_t index = 0; index != instruction.flags; ++index)
     if (!check(operandAt(image, site.outputMap + index).first, true))

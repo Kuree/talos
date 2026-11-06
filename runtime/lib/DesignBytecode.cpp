@@ -4209,44 +4209,63 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
             nativeMethodCallSite(image, instruction.auxiliary);
         ScopedCopyMapBuffer argumentStorage(
             context,
-            size_t{site.argumentPlanes} * sizeof(talos_rt_method_argument_v1));
+            size_t{site.argumentPlanes} * sizeof(talos_rt_method_argument_v1) +
+                size_t{site.handleArguments} * sizeof(uint64_t));
         auto *arguments = reinterpret_cast<talos_rt_method_argument_v1 *>(
             argumentStorage.data());
+        auto *handles = reinterpret_cast<uint64_t *>(
+            argumentStorage.data() +
+            size_t{site.argumentPlanes} * sizeof(talos_rt_method_argument_v1));
+        bool nativeArguments = true;
         for (uint32_t index = 0; index != site.argumentPlanes; ++index) {
           const uint8_t *record = site.planes + uint64_t{index} * 16;
           Layout source = layout(read32(record));
-          new (arguments + index) talos_rt_method_argument_v1{
-              frame.data + source.offset + read32(record + 4),
-              read32(record + 8)};
+          const void *data = frame.data + source.offset + read32(record + 4);
+          if (site.handleArguments && source.kind == TALOS_RT_DBREG_HANDLE) {
+            // IEEE 1800-2023 13.5: pass the same reference view, not its value.
+            // A local interpreter address has no stable native identity. Fall
+            // back before invoking or retaining anything in the native callee.
+            if (!encodeCanonicalHandle(frame.data + source.offset, *handles,
+                                       read32(record + 12))) {
+              nativeArguments = false;
+              break;
+            }
+            data = handles++;
+          }
+          new (arguments + index)
+              talos_rt_method_argument_v1{data, read32(record + 8)};
         }
-        ScopedCopyMapBuffer resultStorage(context, site.resultSize);
-        // Native result layouts can contain alignment padding. Keep it
-        // defined even for an in-bounds marshal plan naming those bytes.
-        std::memset(resultStorage.data(), 0, site.resultSize);
-        status = method->native_entry(
-            context, talos_rt_v1_gc_current_lane(context), receiver, arguments,
-            site.argumentPlanes, resultStorage.data(), site.resultSize);
-        if (status != TALOS_RT_OK)
-          return status;
-        for (uint32_t index = 0; index != site.resultPlanes; ++index) {
-          const uint8_t *record =
-              site.planes + (uint64_t{site.argumentPlanes} + index) * 16;
-          Layout destination = layout(read32(record));
-          uint64_t stride =
-              destination.kind == TALOS_RT_DBREG_LOGIC ||
-                      destination.kind == TALOS_RT_DBREG_MANAGED_REF
-                  ? destination.size / 2
-                  : destination.size;
-          uint8_t *to = frame.data + destination.offset + read32(record + 4);
-          std::memset(to, 0, stride);
-          uint32_t size = read32(record + 8);
-          std::memcpy(to, resultStorage.data() + read32(record + 12), size);
-          // Native iN stores leave high padding bits unspecified. Bytecode
-          // registers keep both planes masked to their semantic width.
-          if (destination.width % 8)
-            to[size - 1] &= (1u << (destination.width % 8)) - 1;
+        if (nativeArguments) {
+          ScopedCopyMapBuffer resultStorage(context, site.resultSize);
+          // Native result layouts can contain alignment padding. Keep it
+          // defined even for an in-bounds marshal plan naming those bytes.
+          std::memset(resultStorage.data(), 0, site.resultSize);
+          status = method->native_entry(
+              context, talos_rt_v1_gc_current_lane(context), receiver,
+              arguments, site.argumentPlanes, resultStorage.data(),
+              site.resultSize);
+          if (status != TALOS_RT_OK)
+            return status;
+          for (uint32_t index = 0; index != site.resultPlanes; ++index) {
+            const uint8_t *record =
+                site.planes + (uint64_t{site.argumentPlanes} + index) * 16;
+            Layout destination = layout(read32(record));
+            uint64_t stride =
+                destination.kind == TALOS_RT_DBREG_LOGIC ||
+                        destination.kind == TALOS_RT_DBREG_MANAGED_REF
+                    ? destination.size / 2
+                    : destination.size;
+            uint8_t *to = frame.data + destination.offset + read32(record + 4);
+            std::memset(to, 0, stride);
+            uint32_t size = read32(record + 8);
+            std::memcpy(to, resultStorage.data() + read32(record + 12), size);
+            // Native iN stores leave high padding bits unspecified. Bytecode
+            // registers keep both planes masked to their semantic width.
+            if (destination.width % 8)
+              to[size - 1] &= (1u << (destination.width % 8)) - 1;
+          }
+          break;
         }
-        break;
       }
       if (state.callDepth >= 1024)
         return TALOS_RT_OUT_OF_RESOURCES;
