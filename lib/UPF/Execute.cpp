@@ -850,10 +850,24 @@ struct Session {
     if (command == "find_objects") {
       // IEEE 1801-2018 6.31.1: default non-transitive; a bare -transitive
       // means TRUE; every returned object is relative to the current scope.
-      bool transitive = false, sawTransitive = false;
+      bool transitive = false, sawTransitive = false, ignoreCase = false;
+      enum class MatchStyle { Glob, Regexp, Exact };
+      MatchStyle style = MatchStyle::Glob;
       for (Tcl_Size i = 2; i < objc; ++i) {
         StringRef option = Tcl_GetString(objv[i]);
-        if (option == "-transitive") {
+        if (option == "-regexp" || option == "-exact") {
+          MatchStyle next = option == "-regexp" ? MatchStyle::Regexp
+                                                : MatchStyle::Exact;
+          if (style == next)
+            return error("duplicate UPF option " + option);
+          if (style != MatchStyle::Glob)
+            return error("find_objects -regexp and -exact are mutually exclusive");
+          style = next;
+        } else if (option == "-ignore_case") {
+          if (ignoreCase)
+            return error("duplicate UPF option -ignore_case");
+          ignoreCase = true;
+        } else if (option == "-transitive") {
           if (sawTransitive)
             return error("duplicate UPF option -transitive");
           sawTransitive = transitive = true;
@@ -887,12 +901,32 @@ struct Session {
         return error("find_objects requires -pattern");
       // IEEE 1801-2018 6.31.2 also defines brace alternatives, which Tcl's
       // StringMatch does not implement. Diagnose that deferred pattern form.
-      if (pattern.contains('{') || pattern.contains('}'))
+      if (style == MatchStyle::Glob &&
+          (pattern.contains('{') || pattern.contains('}')))
         return error("find_objects brace alternatives are not implemented");
       StringRef kind = value(opts, "-object_type");
       if (!kind.empty() && kind != "inst" && kind != "port" && kind != "net")
         return error("unsupported find_objects object type: " + kind);
+      // 6.31.2: regexp patterns cannot contain hierarchy separators. Match
+      // the terminal name in each searched scope, using Tcl's regexp engine
+      // and Unicode case rules. Compile even if the search finds no objects,
+      // so malformed patterns always raise a catchable Tcl error.
+      Tcl_RegExp expression = nullptr;
+      llvm::SmallVector<StringRef> patterns;
+      if (style == MatchStyle::Regexp) {
+        if (pattern.contains('/'))
+          return error("find_objects -regexp pattern cannot contain '/'");
+        expression = Tcl_GetRegExpFromObj(
+            interp, opts.at("-pattern"),
+            TCL_REG_ADVANCED | TCL_REG_NOSUB |
+                (ignoreCase ? TCL_REG_NOCASE : 0));
+        if (!expression)
+          return TCL_ERROR;
+      } else
+        pattern.split(patterns, '/');
       Tcl_Obj *result = Tcl_NewListObj(0, nullptr);
+      Tcl_IncrRefCount(result);
+      auto releaseResult = llvm::scope_exit([&] { Tcl_DecrRefCount(result); });
       for (auto &[path, operation] : objects) {
         StringRef relative = path;
         if (!relative.consume_front(base + "."))
@@ -905,16 +939,38 @@ struct Session {
              op != "slang.symbol.net" && !designPorts.count(path)))
           continue;
         // Match individual hierarchy components: Tcl '*' must not cross '/'.
-        llvm::SmallVector<StringRef> names, patterns;
+        llvm::SmallVector<StringRef> names;
         relative.split(names, '.');
-        pattern.split(patterns, '/');
-        bool match = names.size() >= patterns.size() &&
-                     (transitive || names.size() == patterns.size());
-        if (match) {
+        size_t patternSize = expression ? 1 : patterns.size();
+        bool match = names.size() >= patternSize &&
+                     (transitive || names.size() == patternSize);
+        if (match && expression) {
+          StringRef name = names.back();
+          Tcl_Obj *text = Tcl_NewStringObj(name.data(), name.size());
+          Tcl_IncrRefCount(text);
+          int status = Tcl_RegExpExecObj(interp, expression, text, 0, 0, 0);
+          Tcl_DecrRefCount(text);
+          if (status < 0)
+            return TCL_ERROR;
+          match = status;
+        } else if (match) {
           size_t offset = names.size() - patterns.size();
-          for (size_t i = 0; i < patterns.size(); ++i)
-            match &= Tcl_StringMatch(names[offset + i].str().c_str(),
-                                     patterns[i].str().c_str());
+          for (size_t i = 0; i < patterns.size() && match; ++i) {
+            std::string name = names[offset + i].str();
+            std::string component = patterns[i].str();
+            if (style == MatchStyle::Exact) {
+              match = name == component;
+              if (ignoreCase) {
+                Tcl_Size count = Tcl_NumUtfChars(name.c_str(), name.size());
+                match = count == Tcl_NumUtfChars(component.c_str(),
+                                                component.size()) &&
+                        Tcl_UtfNcasecmp(name.c_str(), component.c_str(),
+                                         count) == 0;
+              }
+            } else
+              match = Tcl_StringCaseMatch(name.c_str(), component.c_str(),
+                                          ignoreCase);
+          }
         }
         if (!match)
           continue;

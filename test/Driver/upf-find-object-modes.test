@@ -1,0 +1,25 @@
+# REQUIRES: upf
+# RUN: %split-file %s %t
+# RUN: talos --upf %S/Inputs/upf/find-object-modes.upf -emit-slang %S/Inputs/upf/design.sv -o %t.mlir | FileCheck %s
+# RUN: cp %S/Inputs/upf/assertions.tcl %t/assertions.tcl
+# RUN: talos --upf %t/unicode.upf -emit-slang %t/unicode.sv -o %t/unicode.mlir | FileCheck %s --check-prefix=UNICODE
+# IEEE 1801-2018 5.11 and 6.31.1-6.31.3.
+# CHECK: UPF find_objects matching modes passed
+# UNICODE: UPF find_objects Unicode matching passed
+
+#--- unicode.sv
+module unicode_top;
+  wire K, KK;
+endmodule
+
+#--- unicode.upf
+source [file join [file dirname [info script]] assertions.tcl]
+# Tcl Unicode case folding maps U+212A KELVIN SIGN to ASCII k. Its UTF-8
+# byte count differs from its character count; HDL names remain ASCII.
+assert_equal [find_objects . -pattern K -exact -ignore_case -object_type net] K
+assert_equal [find_objects . -pattern KK -exact -ignore_case -object_type net] KK
+assert_equal [find_objects . -pattern KKK -exact -ignore_case -object_type net] {}
+assert_equal [find_objects . -pattern K -exact -object_type net] {}
+assert_equal [find_objects . -pattern K* -ignore_case -object_type net] {K KK}
+assert_equal [find_objects . -pattern {^K$} -regexp -ignore_case -object_type net] K
+puts "UPF find_objects Unicode matching passed"

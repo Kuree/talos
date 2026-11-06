@@ -1,0 +1,48 @@
+source [file join [file dirname [info script]] assertions.tcl]
+
+# Tcl advanced regular expressions search individual names in each scope.
+# They are unanchored unless the user supplies anchors, just like Tcl regexp.
+assert_equal [find_objects . -pattern {^d(ut|ut2)$} -regexp -object_type inst] {dut dut2}
+assert_equal [find_objects . -pattern ut -regexp -object_type inst] {dut dut2}
+assert_equal [find_objects . -pattern {^child$} -regexp -object_type inst] {}
+assert_equal [find_objects . -pattern {^child$} -regexp -object_type inst -transitive] cluster/child
+assert_equal [find_objects cluster -pattern {^child$} -regexp -object_type inst] cluster/child
+assert_equal [find_objects . -pattern {^dut{1}$} -regexp -object_type inst] dut
+assert_equal [find_objects . -pattern {} -regexp -object_type inst] {cluster dut dut2}
+
+# -exact treats glob and regexp metacharacters literally. Explicit hierarchy
+# paths remain relative to the search scope and results to the current scope.
+assert_equal [find_objects . -pattern dut -exact -object_type inst] dut
+assert_equal [find_objects . -pattern {d*} -exact -object_type inst] {}
+assert_equal [find_objects . -pattern {d?t} -exact -object_type inst] {}
+assert_equal [find_objects . -pattern {dut{1}} -exact -object_type inst] {}
+assert_equal [find_objects . -pattern {dut[2]} -exact -object_type inst] {}
+assert_equal [find_objects . -pattern cluster/child -exact -object_type inst] cluster/child
+assert_equal [find_objects cluster -pattern child -exact -object_type inst] cluster/child
+assert_equal [find_objects . -pattern child -exact -object_type inst -transitive] cluster/child
+assert_equal [find_objects . -pattern {} -exact -object_type inst -transitive] {}
+
+# Case folding applies to all three matching modes, at every path component.
+assert_equal [find_objects . -pattern DUT -exact -object_type inst] {}
+assert_equal [find_objects . -pattern DUT -exact -ignore_case -object_type inst] dut
+assert_equal [find_objects . -pattern {D*} -ignore_case -object_type inst] {dut dut2}
+assert_equal [find_objects . -ignore_case -pattern {^DUT[2]?$} -regexp -object_type inst] {dut dut2}
+assert_equal [find_objects . -pattern CLUSTER/CHILD -ignore_case -exact -object_type inst] cluster/child
+assert_equal [find_objects . -pattern CLUSTER/CH* -ignore_case -object_type inst] cluster/child
+assert_equal [find_objects dut -pattern Q -ignore_case -exact -object_type port] dut/q
+assert_equal [find_objects dut -pattern {^Q$} -regexp -ignore_case -object_type port] dut/q
+
+# Invalid patterns fail even in a scope with no candidate instances. Failures
+# must be catchable and must not poison later Tcl queries (5.11).
+expect_error {find_objects dut -pattern {[} -regexp -object_type inst} {*regular expression*}
+expect_error {find_objects . -pattern {cluster/child} -regexp} {*cannot contain*}
+expect_error {find_objects . -pattern * -regexp -exact} {*mutually exclusive*}
+expect_error {find_objects . -pattern * -exact -regexp} {*mutually exclusive*}
+foreach flag {-regexp -exact -ignore_case} {
+    expect_error [list find_objects . -pattern dut $flag $flag] {*duplicate UPF option*}
+}
+assert_equal [find_objects . -pattern dut -exact -object_type inst] dut
+assert_equal [set_scope cluster] /
+assert_equal [find_objects . -pattern CHILD -exact -ignore_case -object_type inst] child
+assert_equal [set_scope /] /cluster
+puts "UPF find_objects matching modes passed"
