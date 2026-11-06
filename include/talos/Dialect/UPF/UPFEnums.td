@@ -61,8 +61,10 @@ def UPFPartialOnTranslation : I32EnumAttr<"PartialOnTranslation",
 }
 def UPFRetSignal : I32EnumAttrCase<"Signal", 0, "signal">;
 def UPFRetInstance : I32EnumAttrCase<"Instance", 1, "instance">;
+def UPFRetProcess : I32EnumAttrCase<"Process", 2, "process">;
 def UPFRetentionElementKind : I32EnumAttr<"RetentionElementKind",
-    "IEEE 1801 5.7.3 retention selection kind", [UPFRetSignal, UPFRetInstance]> {
+    "IEEE 1801 5.7.3 retention selection kind",
+    [UPFRetSignal, UPFRetInstance, UPFRetProcess]> {
   let cppNamespace = "::talos::upf";
 }
 def UPFRetHigh : I32EnumAttrCase<"High", 0, "high">;

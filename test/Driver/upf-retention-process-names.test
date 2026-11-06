@@ -1,0 +1,82 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: cp %S/Inputs/upf/assertions.tcl %t/assertions.tcl
+// RUN: talos --upf %t/design.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.mlir | FileCheck %s --check-prefix=TCL
+// RUN: talos-opt %t.mlir | talos-opt | FileCheck %s --check-prefix=IR
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// IEEE 1801-2018 6.31/6.50 and IEEE 1800-2023 9.2/9.3.5: query
+// results bind exactly to outer named bodies, including statement labels on
+// either side of the event control. Escaped names and generate instances
+// retain their identities; nested blocks and inactive branches are excluded.
+// TCL: named process queries passed
+// IR: path = "top.g[1].dut.\\p.dot/q[0] ", kind = process
+// IR-SAME: path = "top.g[1].dut.label_if", kind = process
+// IR-SAME: path = "top.g[1].dut.pre_event", kind = process
+// CHECK: named process identity passed
+
+//--- design.sv
+module leaf(input logic clk, input logic [7:0] d);
+  logic [7:0] q, r, s, scratch, conditional_state, comb;
+  initial begin : init_model q = 0; r = 0; s = 0; end
+  always @(posedge clk) begin : \p.dot/q[0]
+    q <= d;
+    begin : nested scratch <= d; end
+  end
+  always pre_event: @(posedge clk) r <= d + 1;
+  always @(posedge clk) label_if: if (d[0]) s <= d + 2; else s <= d + 2;
+  always @(posedge clk) begin
+    if (d[0]) begin : conditional conditional_state <= d; end
+  end
+  always_comb begin : combo comb = d; end
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, enable = 1, hold = 0;
+  logic [7:0] d = 8'h11;
+  for (genvar i = 0; i < 2; ++i) begin : g
+    leaf dut(clk,d);
+  end
+  if (0) begin : inactive leaf dead(clk,d); end
+  final begin : final_model $display("finished design"); end
+  initial begin
+    if (!supply_on("/top/AON.power") || !supply_on("/top/AON.ground", 0.0))
+      $fatal(1, "supplies");
+    #1 clk = 1; #1 clk = 0;
+    hold = 1; enable = 0;
+    #1 d = 8'h22; clk = 1;
+    #1 clk = 0; enable = 1;
+    #1;
+    if (g[0].dut.q !== 'x || g[0].dut.r !== 'x || g[0].dut.s !== 'x)
+      $fatal(1, "process selection leaked across generated instances");
+    if (g[1].dut.q !== 8'h11 || g[1].dut.r !== 8'h12 || g[1].dut.s !== 8'h13 ||
+        g[1].dut.scratch !== 8'h11)
+      $fatal(1, "escaped or labeled whole-process selector");
+    $display("named process identity passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+source [file join [file dirname [info script]] assertions.tcl]
+set all [find_objects . -pattern * -object_type process -transitive]
+assert_equal [find_objects . -pattern final_model -exact -object_type process] final_model
+assert_equal [lsearch -glob $all *nested*] -1
+assert_equal [lsearch -glob $all *conditional*] -1
+assert_equal [lsearch -glob $all *inactive*] -1
+create_supply_set AON
+create_supply_set SW -function {ground AON.ground}
+create_power_domain PD -elements {g[0]/dut g[1]/dut} -supply {primary SW}
+create_power_switch PS -domain PD -input_supply_port {vin AON.power} \
+    -output_supply_port {vout PD.primary.power} -control_port {en enable} -on_state {ON vin en}
+set_scope {g[1]}
+assert_equal [lsort [find_objects dut -pattern * -object_type process]] \
+    [lsort [list dut/combo dut/init_model {dut/p\.dot\/q\[0\]} dut/pre_event dut/label_if]]
+set escaped [find_objects dut -pattern {p\.dot\/q\[0\]} -exact -object_type process]
+assert_equal $escaped [list {dut/p\.dot\/q\[0\]}]
+set selected [concat $escaped [find_objects dut -pattern pre_event -exact -object_type process] \
+    [find_objects dut -pattern label_if -exact -object_type process]]
+set_retention R -domain /PD -elements $selected -retention_condition /hold
+puts "named process queries passed"

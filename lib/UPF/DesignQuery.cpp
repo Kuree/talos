@@ -1,5 +1,7 @@
 #include "DesignQuery.h"
 #ifdef TALOS_ENABLE_UPF
+#include "talos/Dialect/NamedProcess.h"
+#include "talos/Dialect/Slang/SlangOps.h"
 #include "talos/Dialect/Slang/SlangTypes.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
@@ -348,6 +350,7 @@ std::string DesignQuery::Path::upf(size_t start) const {
 }
 
 DesignQuery::DesignQuery(ModuleOp module) {
+  SymbolTableCollection processSymbols;
   std::map<std::string, std::string> models;
   module.walk([&](Operation *op) {
     auto path = op->getAttrOfType<StringAttr>("hierarchical_name");
@@ -365,13 +368,30 @@ DesignQuery::DesignQuery(ModuleOp module) {
                  kind == "slang.symbol.generate_block";
     bool object = scope || kind == "slang.symbol.net" ||
                   kind == "slang.symbol.variable" ||
-                  kind == "slang.symbol.port";
+                  kind == "slang.symbol.port" ||
+                  kind == "slang.symbol.statement_block";
+    if (kind == "slang.symbol.statement_block")
+      namedBlocks.insert(spelling.str());
     if (object) {
       Path path = Path::fromHDL(spelling);
       names.emplace(path.keys(), spelling.str());
       if (scope)
         scopes.emplace(spelling.str(), std::move(path));
     }
+  });
+  module.walk([&](slangir::ProceduralBlockSymbolOp procedure) {
+    if (uninstantiated(procedure))
+      return;
+    auto body = getNamedProcessBody<slangir::TimedStatementOp,
+                                    slangir::BlockStatementOp>(procedure);
+    if (!body)
+      return;
+    auto declaration =
+        processSymbols.lookupSymbolIn<slangir::StatementBlockSymbolOp>(
+            module, body.getBlockSymbolAttr());
+    if (declaration &&
+        declaration.getHierarchicalNameAttr() == body.getBlockPathAttr())
+      processes.emplace(body.getBlockPathAttr().str(), procedure);
   });
   module.walk([&](Operation *op) {
     auto spelling = op->getAttrOfType<StringAttr>("hierarchical_name");
@@ -391,7 +411,7 @@ DesignQuery::DesignQuery(ModuleOp module) {
       return;
     if (*kind == Kind::Process) {
       auto name = op->getAttrOfType<StringAttr>("name");
-      if (!name || name.getValue().empty())
+      if (!name || name.getValue().empty() || !processes.count(spelling.str()))
         return;
     }
     Path path = Path::fromHDL(spelling);
@@ -454,6 +474,13 @@ std::string DesignQuery::parent(StringRef path) const {
 }
 bool DesignQuery::isTop(StringRef path) const {
   return Path::fromHDL(path).names.size() == 1;
+}
+Operation *DesignQuery::process(StringRef path) const {
+  auto found = processes.find(path.str());
+  return found == processes.end() ? nullptr : found->second;
+}
+bool DesignQuery::isNamedBlock(StringRef path) const {
+  return namedBlocks.count(path.str());
 }
 
 int DesignQuery::find(Tcl_Interp *interp, Tcl_Size objc, Tcl_Obj *const objv[],

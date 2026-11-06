@@ -1,0 +1,48 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 -emit-sim --mlir-verify-each %t/design.sv -o - | FileCheck %s --check-prefix=IR --implicit-check-not=__upf_retention.
+// IEEE 1801-2018 6.50/9.2.1: initialization/observation does not infer q's
+// clocked register; a complete combinational process infers no retained state.
+// CHECK: nonproducing process selection passed
+// IR: simulation.design
+
+//--- design.sv
+module leaf(input logic clk, input logic [7:0] d);
+  logic [7:0] q, comb;
+  initial begin : init_model q = 8'h05; end
+  always @(posedge clk) q <= d;
+  always @(posedge clk) begin : observe
+    if (q[0]) $display("observed q");
+  end
+  always_comb begin : complete comb = d; end
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, enable = 1, hold = 0;
+  logic [7:0] d = 8'h11;
+  leaf dut(clk,d);
+  initial begin
+    if (!supply_on("/top/AON.power") || !supply_on("/top/AON.ground", 0.0))
+      $fatal(1, "supplies");
+    #1 clk = 1; #1 clk = 0;
+    hold = 1; enable = 0;
+    #1 d = 8'h22;
+    enable = 1;
+    #1;
+    if (dut.q !== 'x || dut.comb !== 8'h22) $fatal(1, "unrelated state was retained");
+    $display("nonproducing process selection passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set AON
+create_supply_set SW -function {ground AON.ground}
+create_power_domain PD -elements dut -supply {primary SW}
+create_power_switch PS -domain PD -input_supply_port {vin AON.power} \
+    -output_supply_port {vout PD.primary.power} -control_port {en enable} -on_state {ON vin en}
+set_retention R -domain PD -elements {dut/init_model dut/observe dut/complete} -retention_condition hold

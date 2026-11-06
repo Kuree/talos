@@ -352,7 +352,7 @@
         "-leaf_only",
         "-traverse_macros"
       ],
-      "limits": "Module/generate hierarchy queries include instances, model-name matching, logic ports, HDL nets/variables and named processes; UPF-created supply ports have execution-time visibility and direction filters. Tcl glob brace alternatives, regexp/exact/case modes, escaped identifier/array identity and static packed/unpacked/enum selections are supported. Macro/leaf filters and traversal await design attributes; implemented HDL supply objects/ports await linkage. Patterns are bounded to 64 KiB without NUL, brace expansion to 4096 alternatives/4 MiB/256 levels/65536 work steps, and selected-element enumeration to 1048576 work units. Broad regexp bit queries can reach that limit; conservative anchored-prefix pruning avoids unrelated arrays when provable.",
+      "limits": "Module/generate hierarchy queries include instances, model-name matching, logic ports, HDL nets/variables and supported whole-process names (outer named bodies or labeled statements, with at most one leading timing wrapper); nested ordinary/conditional blocks are not whole-process selectors; UPF-created supply ports have execution-time visibility and direction filters. Tcl glob brace alternatives, regexp/exact/case modes, escaped identifier/array identity and static packed/unpacked/enum selections are supported. Macro/leaf filters and traversal await design attributes; implemented HDL supply objects/ports await linkage. Patterns are bounded to 64 KiB without NUL, brace expansion to 4096 alternatives/4 MiB/256 levels/65536 work steps, and selected-element enumeration to 1048576 work units. Broad regexp bit queries can reach that limit; conservative anchored-prefix pruning avoids unrelated arrays when provable.",
       "implementation": [
         "lib/UPF/Execute.cpp",
         "lib/UPF/DesignQuery.cpp"
@@ -566,7 +566,7 @@
         "-retention_ground_net",
         "-instance"
       ],
-      "limits": "Master/slave and balloon whole packed-register retention with one edge-sensitive writer, asynchronous edge lists and persistent direct clock/iff references. All four RET_SUP_COR/NO_RET_SUP_COR and SAV_RES_COR/NO_SAV_RES_COR combinations are supported, with explicit presence preserved across transactional physical/composite updates before defaults. Balloon storage is separate from normal/output state; edge and trailing-level save/restore use event-time qualification, independent normal/saved corruption, ordered publications and zero-delay NBA restore priority. Startup initial writes and local own-state readbacks preserve typed partial packed views while output power is masked. Master/slave supports retention-powered outputs, including separate normal/output guards under NO_RET_SUP_COR; balloon -use_retention_as_primary remains rejected. No latch/computed-event/partial functional/multiple/mixed writers, named-process selectors, general condition refinements, partial captured initialization aliases, caller-specific helper readbacks, opaque virtual readback dispatch or late raw-IR balloon root initialization. Broader event-ordered master initialization remains to be audited. Snapshot aggregate widths are bounded by the LLVM packed-integer limit. Physical and composite targets support additive per-leaf updates and typed ordered provenance bounded to 1048576 work units; no synthetic composite strategy handles are exposed. Empty extents and explicitly empty element lists add no snapshot machinery; broader intent-only no-eligible-state elision remains pending.",
+      "limits": "Master/slave and balloon whole packed-register retention with one edge-sensitive writer, asynchronous edge lists and persistent direct clock/iff references. All four RET_SUP_COR/NO_RET_SUP_COR and SAV_RES_COR/NO_SAV_RES_COR combinations are supported, with explicit presence preserved across transactional physical/composite updates before defaults. Balloon storage is separate from normal/output state; edge and trailing-level save/restore use event-time qualification, independent normal/saved corruption, ordered publications and zero-delay NBA restore priority. Startup initial writes and local own-state readbacks preserve typed partial packed views while output power is masked. Master/slave supports retention-powered outputs, including separate normal/output guards under NO_RET_SUP_COR; balloon -use_retention_as_primary remains rejected. Named whole-process selectors use inferred-register producer identities, including module-scope registers, nested writes, labels and escaped/generated names, with signal > process > instance precedence and process exclusions. Initial/Final and read-only/complete-combinational processes do not infer retained registers. Referenced indirect/fork/context-DPI and unresolved call closures are diagnosed. External named processes are supported when all their inferred in-domain state is effectively retained; excluded or overridden unretained state is diagnosed pending per-target ordinary-domain write handling. No latch/computed-event/partial functional/multiple/mixed writers, general condition refinements, partial captured initialization aliases, caller-specific helper readbacks, opaque virtual readback dispatch or late raw-IR balloon root initialization. Broader event-ordered master initialization remains to be audited. Snapshot aggregate widths are bounded by the LLVM packed-integer limit. Physical and composite targets support additive per-leaf updates and typed ordered provenance bounded to 1048576 work units; no synthetic composite strategy handles are exposed. Empty extents and explicitly empty element lists add no snapshot machinery; broader intent-only no-eligible-state elision remains pending.",
       "implementation": [
         "lib/UPF/Execute.cpp",
         "lib/UPF/Retention.cpp",
@@ -1009,9 +1009,10 @@
       ],
       "missing": [
         "Balloon retention-powered outputs and broader initialization/helper/reference forms",
-        "Collective retention-element lists and named-process/partial selections",
+        "Collective retention-element lists, partial selections and broader named-process/writer forms",
         "Latches, computed events, mixed/multiple writers and unsupported reference escape paths",
-        "Legacy supply operands, semantic condition refinements and broader initialization ordering"
+        "Legacy supply operands, semantic condition refinements and broader initialization ordering",
+        "Generic external procedural writes to ordinary in-domain state need per-target issue guards, destructive epochs and blocking-store handling; named-process mixtures are diagnosed, while the prior signal-only path remains to be repaired"
       ]
     },
     {
@@ -1408,12 +1409,54 @@
           ],
           "review": "Two independent subagents approved UPF/LRM parameter/default/refinement rules, explicitly documented specification inconsistencies, normal/saved/output separation, source-order and due-time NBA behavior, typed MLIR views/metadata/effects and coverage. Review corrections preserve B-only loss epochs, effective saved data on restore, per-NBA Q occurrences, initialized output masking and static/direct/virtual helper closure admission. The reviewers independently passed ten O3 native/bytecode executions, three helper diagnostic reproducers, raw-IR roundtrip/lowering checks, frontend/wasm checks and the final class-readback fixture. No remaining blockers for this documented subset.",
           "validation": "All 314 selected UPF/supply/snapshot/power-NBA/cohort/time lit tests pass. All 347 process and 269 bytecode/reflection/VPI tests pass (616 unit tests). Clauses 6.50 and 9.7.3 pass in native/bytecode (four cases); 9.7.1 remains reference-only (two cases), with no unexpected conformance results. New source tests cover native/bytecode O0/O3, both state domains, 65-bit values, partial/ascending initialization views, all four parameter combinations, current/future normal NBA survival, overlap priority, RET-driven output transitions/feedback/masking and composite rollback of both parameter families. Direct MLIR verifies negative-flag roundtrips, a balloon guard without retention-supply dependence, normal backing reads and distinct guarded N/Q transactions. Four new wasm32 objects compile across native/bytecode O0/O3; wasm runtime execution was not run."
+        },
+        {
+          "id": "7d",
+          "status": "complete",
+          "scope": "Named whole-process retention selectors, exact immutable source bindings and inferred-state producer precedence",
+          "clauses": [
+            "5.7.3",
+            "5.9.3",
+            "6.31",
+            "6.50",
+            "9.2.1",
+            "9.5.3",
+            "IEEE1800-2023 9.2",
+            "IEEE1800-2023 9.3.5"
+          ],
+          "runtime_changes": false,
+          "new_public_runtime_functions": false,
+          "architecture": "Reuse existing Slang/SV named-body symbols for supported whole-procedure names. Preserve exact source_process metadata separately from stable code-unit IDs and synthetic executable hierarchy; verify kind, nonempty/unique identity and lexical owning scope. Add a typed process selector. Trace only referenced functional producer origins through cached direct-call edges and symbol tables; Initial/Final procedures never seed inferred registers. Match physical state before domain intersection, with signal > process > instance precedence and matching exclusion specificity. Diagnose unsupported indirect/ref/helper writer paths rather than silently selecting no state. Reuse existing native/bytecode retention lowering; no runtime API, opcode, service or ABI changes.",
+          "spec_interpretations": [
+            "Section 6.50 selects all registers inferred by a process, not variables lexically below its name. Supported RTL whole-process names come from the outer named body or implicit labeled-statement block; arbitrary nested blocks are not classified as whole processes.",
+            "Process expansion followed by physical state/domain intersection is the adopted interpretation of 6.50, consistent with ancestor-instance expansion; the text does not explicitly prescribe expansion order. External processes may infer retained state inside the target domain without assigning retention to outside neighbors.",
+            "A label before an outer event control has the same activation proof when its named sequential wrapper contains exactly that timing statement. Work preceding a wait, conditional waits and deeper wrappers retain the unsupported classification.",
+            "Section 9.5.3 requires ordinary in-domain state to stay corrupt even when an external procedural writer executes. Until generic per-target issue/epoch lowering is added, referenced external-process origins with final unretained in-domain state are diagnosed before rewrites, including exclusions and higher-precedence no_retention. Initial/Final sources do not create that admission condition.",
+            "Virtual/fork/context-DPI or unresolved producer closures remain conservatively unsupported even for exclusions or no_retention selectors. Reference-formal escapes retain explicit unsupported-writer diagnostics."
+          ],
+          "tests": [
+            "test/Conversion/upf-retention-process.test",
+            "test/Driver/upf-retention-process-balloon.test",
+            "test/Driver/upf-retention-process-errors.test",
+            "test/Driver/upf-retention-process-exclusions.test",
+            "test/Driver/upf-retention-process-external-errors.test",
+            "test/Driver/upf-retention-process-external.test",
+            "test/Driver/upf-retention-process-indirect-errors.test",
+            "test/Driver/upf-retention-process-names.test",
+            "test/Driver/upf-retention-process-no-state.test",
+            "test/Driver/upf-retention-process-wasm.test",
+            "test/Driver/upf-retention-process.test",
+            "test/Dialect/Simulation/source-process-invalid.mlir"
+          ],
+          "review": "Two independent subagents approved UPF/LRM process identity, inference, scope/extent interpretation and precedence/exclusion semantics; bounded LLVM/MLIR metadata, cached call-origin analysis, unchanged stable IDs/runtime ABI and test coverage. Review corrections close reference-formal origins, label-before-event activation proofs and external-process mixtures with final unretained in-domain state. Reviewers independently verified escaped/generated identities, master/balloon execution, Initial exemption, helper/class/context-DPI/virtual admission, exact missing binding, repeated MLIR optimization and the external exclusion reproducer. No blockers remain for this documented subset; generic external ordinary-state write instrumentation is the immediate follow-up.",
+          "validation": "All 340 selected UPF/supply/snapshot/power-NBA/cohort/time and code-unit/inventory lit tests pass, including 12 new source/MLIR fixtures. The two expanded inventory cases passed after building their previously missing test helper. Clauses 6.50 and 9.7.3 pass in native/bytecode (four cases); 9.7.1 remains reference-only (two cases), with no unexpected results. Source tests exercise native/bytecode O0/O3, exact escaped/generated process names, labels before/after event controls, module-scope/nested inferred state, process precedence and exclusions, nonproducing/Initial selections, all-retained external producers with active AON neighbors, and fail-closed helper/reference/indirect/foreign/external-mixture diagnostics. Raw MLIR verifies typed selector roundtrips, immutable IDs/hierarchy independent of source bindings, domain intersection, repeated canonicalize/CSE, missing bindings and malformed inventory. Four new wasm32 objects compile across native/bytecode O0/O3; wasm runtime execution was not run. Final diagnostic-only wording and two added class/context-DPI regression cases pass the four-test targeted recheck."
         }
       ],
       "remaining": [
         "Balloon retention-powered outputs, caller-specific helper/alias readbacks and intent-only no-eligible-state elision",
         "Collective retention-element lists and remaining storage/writer forms",
-        "Legacy supply operands, remaining condition refinements and broader master initialization ordering"
+        "Legacy supply operands, remaining condition refinements and broader master initialization ordering",
+        "Immediate next prerequisite: per-target power guards and epoch handling for generic external writes to unretained domain state, including delayed OFF-to-ON NBAs and Initial/helper exemptions"
       ]
     },
     {

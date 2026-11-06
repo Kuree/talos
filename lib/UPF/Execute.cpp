@@ -136,9 +136,11 @@ struct Session {
         declaredHDLNames.insert(path.str());
       StringRef kind = op->getName().getStringRef();
       if (!path ||
-          (kind != "slang.symbol.instance" && kind != "slang.symbol.generate_block" &&
-           kind != "slang.symbol.variable" &&
-           kind != "slang.symbol.net" && kind != "slang.symbol.port"))
+          (kind != "slang.symbol.instance" &&
+           kind != "slang.symbol.generate_block" &&
+           kind != "slang.symbol.variable" && kind != "slang.symbol.net" &&
+           kind != "slang.symbol.port" &&
+           !(kind == "slang.symbol.statement_block" && queries.process(path))))
         return;
       if (kind != "slang.symbol.port" || !objects.count(path.str()))
         objects[path.str()] = op;
@@ -822,18 +824,25 @@ struct Session {
       for (auto &name : names) {
         std::string path = object(name);
         if (path.empty()) {
-          error("unknown or unsupported retention selector (whole signals and "
-                "instances are supported): " +
+          if (queries.isNamedBlock(queries.resolve(name, scope, top))) {
+            error("not a supported whole-process retention selector: " + name);
+            return false;
+          }
+          error("unknown or unsupported retention selector (whole signals, "
+                "instances and supported whole processes are accepted): " +
                 name);
           return false;
         }
         bool instance = objects.at(path)->getName().getStringRef() ==
                         "slang.symbol.instance";
-        target.emplace(path, upf::RetentionElementAttr::get(
-                                 module.getContext(),
-                                 StringAttr::get(module.getContext(), path),
-                                 instance ? upf::RetentionElementKind::Instance
-                                          : upf::RetentionElementKind::Signal));
+        bool process = queries.process(path) != nullptr;
+        target.emplace(path,
+                       upf::RetentionElementAttr::get(
+                           module.getContext(),
+                           StringAttr::get(module.getContext(), path),
+                           instance  ? upf::RetentionElementKind::Instance
+                           : process ? upf::RetentionElementKind::Process
+                                     : upf::RetentionElementKind::Signal));
       }
       if (target.size() > 4096) {
         error("retention selection exceeds 4096 elements");

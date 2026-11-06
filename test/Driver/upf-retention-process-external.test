@@ -1,0 +1,65 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/master.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/master.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/master.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/master.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// IEEE 1801-2018 6.50: expand a process into inferred registers before
+// intersecting domain ownership. P is outside PD but writes inside and
+// outside it. Only dut.q is retained; unrelated dut.r and outside remain
+// governed by their ordinary domain policies.
+// CHECK: external process retention passed
+
+//--- design.sv
+module leaf(input logic clk, input logic [7:0] d);
+  logic [7:0] q = 0, r = 0;
+  always @(posedge clk) r <= d + 1;
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, enable = 1, hold = 0, save = 0, restore = 0;
+  logic [7:0] d = 8'h11, outside = 0, only_outside = 0;
+  leaf dut(clk,d);
+  initial begin : model_init dut.q = 0; dut.r = 0; end
+  always @(posedge clk) begin : P
+    dut.q <= d;
+    outside <= d;
+  end
+  always @(posedge clk) begin : outside_writer only_outside <= d; end
+  initial begin
+    if (!supply_on("/top/AON.power") || !supply_on("/top/AON.ground", 0.0))
+      $fatal(1, "supplies");
+    #1 clk = 1; #1 clk = 0;
+    hold = 1; save = 1;
+    #1 save = 0; enable = 0;
+    #1 d = 8'h22; clk = 1;
+    #1 clk = 0;
+`ifdef BALLOON
+    if (dut.q !== 'x) $fatal(1, "powered-off balloon output");
+`endif
+    enable = 1;
+    #1 restore = 1;
+    #1 restore = 0;
+    if (dut.q !== 8'h11 || dut.r !== 'x || outside !== 8'h22 || only_outside !== 8'h22)
+      $fatal(1, "process expansion and effective domain intersection");
+    hold = 0; d = 8'h33;
+    #1 clk = 1; #1 clk = 0;
+    if (dut.q !== 8'h33 || dut.r !== 8'h34 || outside !== 8'h33 || only_outside !== 8'h33)
+      $fatal(1, "normal capture after restore");
+    $display("external process retention passed");
+    $finish;
+  end
+endmodule
+
+//--- common.upf
+create_supply_set AON
+create_supply_set SW -function {ground AON.ground}
+create_power_domain PD -elements dut -supply {primary SW}
+create_power_switch PS -domain PD -input_supply_port {vin AON.power} \
+    -output_supply_port {vout PD.primary.power} -control_port {en enable} -on_state {ON vin en}
+//--- master.upf
+source [file join [file dirname [info script]] common.upf]
+set_retention R -domain PD -elements {P outside_writer model_init} -retention_condition hold
+//--- balloon.upf
+source [file join [file dirname [info script]] common.upf]
+set_retention R -domain PD -elements {P outside_writer model_init} -save_signal {save posedge} -restore_signal {restore high}

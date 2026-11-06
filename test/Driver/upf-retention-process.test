@@ -1,0 +1,89 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// IEEE 1801-2018 5.7.3/6.50: signal > process > owning instance >
+// transitive instance > domain. Process P infers module-scope q and r;
+// assignments in P's nested ordinary block still belong to P.
+// CHECK: named retention precedence passed
+
+//--- design.sv
+module leaf(input logic clk, input logic [7:0] d);
+  logic [7:0] q, r, s;
+  initial begin : model_init q = 0; r = 0; s = 0; end
+  always @(posedge clk) begin : P
+    q <= d;
+    begin : nested r <= d + 1; end
+  end
+  always @(posedge clk) labelled: s <= d + 2;
+endmodule
+module cluster(input logic clk, input logic [7:0] d);
+  leaf a(clk,d), b(clk,d), c(clk,d);
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, enable = 1, hold = 0;
+  logic [7:0] d = 0;
+  cluster u(clk,d);
+  task automatic tick(input logic [7:0] v);
+    clk = 0; d = v; #1 clk = 1; #1 clk = 0; #1;
+  endtask
+  initial begin
+    if (!supply_on("/top/AON.power") || !supply_on("/top/AON.ground", 0.0))
+      $fatal(1, "supplies");
+    tick(8'h11);
+    hold = 1;
+    #1 enable = 0;
+    #1;
+    tick(8'h22);
+    enable = 1;
+    #1;
+`ifdef EXCLUSIONS
+    if (u.a.q !== 'x || u.a.r !== 8'h12 || u.a.s !== 8'h13)
+      $fatal(1, "process/instance/signal exclusions or labeled statement");
+    if (u.b.q !== 'x || u.b.r !== 'x || u.b.s !== 8'h13)
+      $fatal(1, "process exclusion did not remove its inferred registers");
+    if (u.c.q !== 8'h11 || u.c.r !== 'x || u.c.s !== 'x)
+      $fatal(1, "signal reentry through process exclusion");
+`else
+    if (u.a.q !== 8'h11 || u.a.r !== 'x || u.a.s !== 8'h13)
+      $fatal(1, "signal/process/instance precedence");
+    if (u.b.q !== 'x || u.b.r !== 'x || u.b.s !== 'x)
+      $fatal(1, "transitive instance did not beat domain default");
+    if (u.c.q !== 8'h11 || u.c.r !== 8'h12 || u.c.s !== 8'h13)
+      $fatal(1, "domain default did not cover remaining state");
+`endif
+    hold = 0;
+    tick(8'h33);
+    if (u.a.q !== 8'h33 || u.a.r !== 8'h34 || u.a.s !== 8'h35 ||
+        u.b.q !== 8'h33 || u.b.r !== 8'h34 || u.b.s !== 8'h35 ||
+        u.c.q !== 8'h33 || u.c.r !== 8'h34 || u.c.s !== 8'h35)
+      $fatal(1, "normal writes after retention");
+    $display("named retention precedence passed");
+    $finish;
+  end
+endmodule
+
+//--- common.upf
+create_supply_set AON
+create_supply_set SW -function {ground AON.ground}
+create_power_domain PD -elements u -supply {primary SW}
+create_power_switch PS -domain PD -input_supply_port {vin AON.power} \
+    -output_supply_port {vout PD.primary.power} -control_port {en enable} -on_state {ON vin en}
+
+//--- design.upf
+source [file join [file dirname [info script]] common.upf]
+set_retention DOMAIN -domain PD -retention_condition hold
+set_retention TRANSITIVE -domain PD -elements u -exclude_elements u/c -no_retention
+set_retention INSTANCE -domain PD -elements u/a -retention_condition hold
+set_retention PROCESS -domain PD -elements u/a/P -no_retention
+set_retention SIGNAL -domain PD -elements u/a/q -retention_condition hold
+
+//--- exclusions.upf
+source [file join [file dirname [info script]] common.upf]
+set_retention P -domain PD -elements u/a/P -exclude_elements {u/a u/a/q} -retention_condition hold
+set_retention LABEL -domain PD -elements u/a/labelled -retention_condition hold
+set_retention INSTANCE -domain PD -elements u/b -exclude_elements u/b/P -retention_condition hold
+set_retention REENTER -domain PD -elements {u/c/P u/c/q} -exclude_elements u/c/P -retention_condition hold

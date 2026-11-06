@@ -1,0 +1,6 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-retention-process-external.test %t
+// RUN: talos --upf %t/balloon.upf -DBALLOON -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %S/upf-retention-process-external.test
+// RUN: talos --upf %t/balloon.upf -DBALLOON -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %S/upf-retention-process-external.test
+// RUN: talos --upf %t/balloon.upf -DBALLOON -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %S/upf-retention-process-external.test
+// RUN: talos --upf %t/balloon.upf -DBALLOON -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %S/upf-retention-process-external.test

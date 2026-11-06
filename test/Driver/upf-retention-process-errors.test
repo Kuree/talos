@@ -1,0 +1,75 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: cp %S/Inputs/upf/assertions.tcl %t/assertions.tcl
+// RUN: talos --upf %t/frontend.upf -emit-slang %t/design.sv -o %t.mlir | FileCheck %s --check-prefix=TCL
+// RUN: not talos --upf %t/ambiguous.upf -O0 --mlir-verify-each %t/design.sv -o %t.ambiguous 2>&1 | FileCheck %s --check-prefix=AMBIGUOUS
+// RUN: not talos --upf %t/helper.upf -O3 --mlir-verify-each %t/design.sv -o %t.helper 2>&1 | FileCheck %s --check-prefix=HELPER
+// RUN: not talos --upf %t/reference.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.reference 2>&1 | FileCheck %s --check-prefix=REFERENCE
+// RUN: not talos --upf %t/latch.upf -O3 --mlir-verify-each %t/design.sv -o %t.latch 2>&1 | FileCheck %s --check-prefix=HELPER
+// RUN: not talos --upf %t/prefix.upf -O0 --mlir-verify-each %t/design.sv -o %t.prefix 2>&1 | FileCheck %s --check-prefix=HELPER
+// IEEE 1801-2018 5.7.3/6.50: only supported whole-process names select
+// inferred state. Direct-call and reference escapes must reach the existing
+// unsupported-writer diagnostics instead of silently selecting no registers.
+// TCL: named process errors and rollback passed
+// AMBIGUOUS: ambiguous retention strategies for top.dut.q
+// HELPER: retention requires one top-level edge-sensitive event control
+// REFERENCE: retained storage may be written through an unsupported helper, copy or override
+
+//--- design.sv
+module leaf(input logic clk, input logic en, input logic [7:0] d);
+  logic [7:0] q, r, s, latched, other, bad;
+  always @(posedge clk) begin : P
+    q <= d;
+    begin : nested other <= d; end
+  end
+  always @(posedge clk) if (en) begin : conditional other <= d; end
+  always @(posedge clk) begin
+    begin : inner_only other <= d; end
+  end
+  always @(posedge clk) begin : helper_writer top.write_r(d); end
+  always @(posedge clk) begin : reference_writer top.write_ref(s,d); end
+  always_latch begin : latch_writer if (en) latched <= d; end
+  always begin : prefix
+    bad = d;
+    @(posedge clk) bad <= d;
+  end
+endmodule
+module top;
+  logic clk, en, hold;
+  logic [7:0] d;
+  leaf dut(clk,en,d);
+  function automatic void write_r(input logic [7:0] value); dut.r = value; endfunction
+  function automatic void write_ref(ref logic [7:0] target, input logic [7:0] value);
+    target = value;
+  endfunction
+  initial begin #10; $display("%h %h %h %h %h",dut.q,dut.r,dut.s,dut.latched,dut.bad); $finish; end
+endmodule
+
+//--- common.upf
+create_power_domain PD -elements dut
+//--- frontend.upf
+source [file join [file dirname [info script]] assertions.tcl]
+source [file join [file dirname [info script]] common.upf]
+expect_error {set_retention R -domain PD -elements dut/P/nested -retention_condition hold} {*not a supported whole-process retention selector*}
+expect_error {set_retention R -domain PD -elements dut/conditional -retention_condition hold} {*not a supported whole-process retention selector*}
+expect_error {set_retention R -domain PD -elements dut/inner_only -retention_condition hold} {*not a supported whole-process retention selector*}
+set_retention R -domain PD -elements dut/P -retention_condition hold
+expect_error {set_retention R -domain PD -update -exclude_elements dut/P/nested} {*not a supported whole-process retention selector*}
+set_retention R -domain PD -update -exclude_elements dut/q
+puts "named process errors and rollback passed"
+//--- ambiguous.upf
+source [file join [file dirname [info script]] common.upf]
+set_retention R -domain PD -elements dut/P -retention_condition hold
+set_retention S -domain PD -elements dut/P -no_retention
+//--- helper.upf
+source [file join [file dirname [info script]] common.upf]
+set_retention R -domain PD -elements dut/helper_writer -retention_condition hold
+//--- reference.upf
+source [file join [file dirname [info script]] common.upf]
+set_retention R -domain PD -elements dut/reference_writer -retention_condition hold
+//--- latch.upf
+source [file join [file dirname [info script]] common.upf]
+set_retention R -domain PD -elements dut/latch_writer -retention_condition hold
+//--- prefix.upf
+source [file join [file dirname [info script]] common.upf]
+set_retention R -domain PD -elements dut/prefix -retention_condition hold

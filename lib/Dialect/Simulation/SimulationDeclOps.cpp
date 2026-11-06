@@ -554,6 +554,17 @@ LogicalResult SimCodeUnitDeclOp::verify() {
     return emitOpError("code-unit ID must be nonzero");
   if (getHierarchicalName().empty())
     return emitOpError("requires a nonempty hierarchical name");
+  if (auto source = getSourceProcess()) {
+    if (source->empty())
+      return emitOpError("source process name must be nonempty");
+    if (getCodeUnitKind() != EntryKind::Initial &&
+        getCodeUnitKind() != EntryKind::Final &&
+        getCodeUnitKind() != EntryKind::Always &&
+        getCodeUnitKind() != EntryKind::AlwaysComb &&
+        getCodeUnitKind() != EntryKind::AlwaysFF &&
+        getCodeUnitKind() != EntryKind::AlwaysLatch)
+      return emitOpError("source process name requires a procedural code unit");
+  }
   if (sim::has<sim::metadata::ComputedPortInput>(*this) &&
       getCodeUnitKind() != EntryKind::PortInput &&
       getCodeUnitKind() != EntryKind::PortInitialize)
@@ -4043,6 +4054,7 @@ LogicalResult SimDesignOp::verifyRegions() {
       typespecIds, nettypeIds, enumConstIds, vpiCallIds;
   llvm::DenseMap<uint64_t, SimScopeDeclOp> scopes;
   llvm::DenseMap<uint64_t, SimCodeUnitDeclOp> codeUnits;
+  llvm::StringMap<SimCodeUnitDeclOp> sourceProcesses;
   llvm::DenseMap<uint64_t, SimStatementDeclOp> statements;
   llvm::DenseMap<uint64_t, SimVPIObjectAnchorOp> vpiAnchorsById;
   llvm::DenseMap<uint64_t, SimStorageDeclOp> storagesById;
@@ -4116,6 +4128,10 @@ LogicalResult SimDesignOp::verifyRegions() {
       if (failed(addId(codeUnit.getIdAttr(), codeUnitIds, "code-unit")))
         return failure();
       codeUnits[codeUnit.getId()] = codeUnit;
+      if (auto source = codeUnit.getSourceProcess())
+        if (!sourceProcesses.try_emplace(*source, codeUnit).second)
+          return codeUnit.emitOpError("duplicates a source process name: ")
+                 << *source;
     } else if (auto statement = dyn_cast<SimStatementDeclOp>(op)) {
       if (failed(addId(statement.getIdAttr(), statementIds, "statement")))
         return failure();
@@ -6790,6 +6806,15 @@ LogicalResult SimDesignOp::verifyRegions() {
     } else if (auto codeUnit = dyn_cast<SimCodeUnitDeclOp>(op)) {
       if (!scopeIds.count(codeUnit.getScopeId()))
         return codeUnit.emitOpError("references an unknown scope ID");
+      if (auto process = codeUnit.getSourceProcess()) {
+        auto scope = scopes.lookup(codeUnit.getScopeId());
+        StringRef relative = *process;
+        if (!scope.getHierarchicalName() ||
+            !relative.consume_front(*scope.getHierarchicalName()) ||
+            !relative.consume_front(".") || relative.empty())
+          return codeUnit.emitOpError(
+              "source process must be nested in the code unit's scope");
+      }
     } else if (auto statement = dyn_cast<SimStatementDeclOp>(op)) {
       if (!scopeIds.count(statement.getScopeId()))
         return statement.emitOpError("references an unknown scope ID");

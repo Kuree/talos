@@ -1,0 +1,68 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: not talos --upf %t/design.upf -O0 -emit-sim --mlir-verify-each %t/virtual.sv -o %t.virtual.mlir 2>&1 | FileCheck %s
+// RUN: not talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/virtual.sv -o %t.virtual.bc 2>&1 | FileCheck %s
+// RUN: not talos --upf %t/design.upf -O0 -emit-sim --mlir-verify-each %t/fork.sv -o %t.fork.mlir 2>&1 | FileCheck %s
+// RUN: not talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/fork.sv -o %t.fork.bc 2>&1 | FileCheck %s
+// RUN: not talos --upf %t/design.upf -O0 --mlir-verify-each %t/direct.sv -o %t.direct 2>&1 | FileCheck %s --check-prefix=DIRECT
+// RUN: not talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/context.sv -o %t.context 2>&1 | FileCheck %s --check-prefix=CONTEXT
+// The producing process is outside PD. Unknown indirect/subprocess origins
+// must not silently erase the inferred state from an explicit selection.
+// CHECK: retention process selection through forked or indirect work is not implemented
+// DIRECT: retention requires one top-level edge-sensitive event control
+// CONTEXT: retention process selection through context DPI calls is not implemented
+
+//--- virtual.sv
+module leaf; logic [7:0] q; endmodule
+module top;
+  logic clk, hold;
+  logic [7:0] d;
+  leaf dut();
+  class Model;
+    virtual function void put(input logic [7:0] value); top.dut.q = value; endfunction
+  endclass
+  Model model = new;
+  always @(posedge clk) begin : P model.put(d); end
+  initial begin #10; $display("%h",dut.q); $finish; end
+endmodule
+
+//--- fork.sv
+module leaf; logic [7:0] q; endmodule
+module top;
+  logic clk, hold;
+  logic [7:0] d;
+  leaf dut();
+  always @(posedge clk) begin : P
+    fork dut.q <= d; join
+  end
+  initial begin #10; $display("%h",dut.q); $finish; end
+endmodule
+
+//--- design.upf
+create_power_domain PD -elements dut
+set_retention R -domain PD -elements P -retention_condition hold
+
+//--- direct.sv
+module leaf; logic [7:0] q; endmodule
+module top;
+  logic clk, hold;
+  logic [7:0] d;
+  leaf dut();
+  class Model;
+    function void put(input logic [7:0] value); top.dut.q = value; endfunction
+  endclass
+  Model model = new;
+  always @(posedge clk) begin : P model.put(d); end
+  initial begin #10; $display("%h",dut.q); $finish; end
+endmodule
+
+//--- context.sv
+module leaf; logic [7:0] q; endmodule
+module top;
+  import "DPI-C" context function void foreign_write();
+  logic clk, hold;
+  logic [7:0] d;
+  leaf dut();
+  always @(posedge clk) begin : P foreign_write(); dut.q <= d; end
+  initial begin #10; $display("%h",dut.q); $finish; end
+endmodule

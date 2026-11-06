@@ -1,0 +1,6 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-retention-process.test %t
+// RUN: talos -DEXCLUSIONS --upf %t/exclusions.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %S/upf-retention-process.test
+// RUN: talos -DEXCLUSIONS --upf %t/exclusions.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %S/upf-retention-process.test
+// RUN: talos -DEXCLUSIONS --upf %t/exclusions.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %S/upf-retention-process.test
+// RUN: talos -DEXCLUSIONS --upf %t/exclusions.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %S/upf-retention-process.test

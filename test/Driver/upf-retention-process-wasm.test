@@ -1,0 +1,10 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-retention-process-names.test %t/names
+// RUN: cp %S/Inputs/upf/assertions.tcl %t/names/assertions.tcl
+// RUN: %split-file %S/upf-retention-process-external.test %t/external
+// RUN: talos --upf %t/names/design.upf --target=wasm32 -O0 --mlir-verify-each -c %t/names/design.sv -o %t.names.o
+// RUN: talos --upf %t/names/design.upf --target=wasm32 -O3 --execution-tier=bytecode --mlir-verify-each -c %t/names/design.sv -o %t.names.bc.o
+// RUN: talos --upf %t/external/balloon.upf -DBALLOON --target=wasm32 -O3 --mlir-verify-each -c %t/external/design.sv -o %t.balloon.o
+// RUN: talos --upf %t/external/balloon.upf -DBALLOON --target=wasm32 -O0 --execution-tier=bytecode --mlir-verify-each -c %t/external/design.sv -o %t.balloon.bc.o
+// RUN: %llvm_dist/bin/llvm-readobj --file-headers %t.names.o %t.names.bc.o %t.balloon.o %t.balloon.bc.o | FileCheck %s
+// CHECK-COUNT-4: AddressSize: 32bit

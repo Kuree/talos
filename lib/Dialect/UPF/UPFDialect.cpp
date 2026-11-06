@@ -654,7 +654,8 @@ mlir::LogicalResult RetentionElementAttr::verify(
   if (!path || path.getValue().empty())
     return error() << "retention selector requires a nonempty HDL path";
   if (kind != RetentionElementKind::Signal &&
-      kind != RetentionElementKind::Instance)
+      kind != RetentionElementKind::Instance &&
+      kind != RetentionElementKind::Process)
     return error() << "unsupported retention selector kind";
   return mlir::success();
 }

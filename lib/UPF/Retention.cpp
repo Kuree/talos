@@ -11,6 +11,7 @@
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringSet.h"
 #include <limits>
 #include <map>
 #include <set>
@@ -27,6 +28,7 @@ struct Register {
   sim::SimStorageDeclOp declaration;
   SmallVector<Alias> aliases;
   SmallVector<Operation *> writers;
+  SmallVector<StringRef> processes;
   upf::RetentionAttr strategy;
   Descriptor visible, backing;
 };
@@ -112,25 +114,31 @@ struct Lowering {
       }
       auto match = [&](upf::RetentionElementAttr element) {
         StringRef path = element.getPath().getValue();
+        if (element.getKind() == upf::RetentionElementKind::Process)
+          return llvm::is_contained(reg.processes, path);
         return element.getKind() == upf::RetentionElementKind::Signal
                    ? path == alias.path
                    : within(alias.path, path);
       };
       auto specificity = [&](upf::RetentionElementAttr element) {
-        return element.getKind() == upf::RetentionElementKind::Signal
-                   ? std::numeric_limits<size_t>::max()
-                   : size_t{2} + element.getPath().getValue().count('.');
+        if (element.getKind() == upf::RetentionElementKind::Signal)
+          return std::numeric_limits<size_t>::max();
+        if (element.getKind() == upf::RetentionElementKind::Process)
+          return std::numeric_limits<size_t>::max() - 1;
+        return size_t{2} + element.getPath().getValue().count('.');
       };
       for (auto attribute : strategy.getElements()) {
         auto element = cast<upf::RetentionElementAttr>(attribute);
         if (!match(element))
           continue;
         bool signal = element.getKind() == upf::RetentionElementKind::Signal;
+        bool process = element.getKind() == upf::RetentionElementKind::Process;
         included = std::max(included, specificity(element));
-        // 5.7.3: explicit signal > owning instance > transitive instance >
+        // 5.7.3: signal > process > owning instance > transitive instance >
         // domain default. Exclusions affect membership, never precedence.
         precedence = std::max(precedence,
-                              signal                                     ? 4u
+                              signal                                     ? 5u
+                              : process                                  ? 4u
                               : element.getPath().getValue() == instance ? 3u
                                                                          : 2u);
         partial |= signal && alias.partial;
@@ -295,6 +303,90 @@ struct Lowering {
   LogicalResult plan() {
     if (!o.domain.getRetentionsAttr())
       return success();
+    llvm::DenseMap<uint64_t, StringRef> processBindings;
+    llvm::StringSet<> processNames;
+    llvm::StringSet<> requestedProcesses;
+    for (auto unit : o.design.getOps<sim::SimCodeUnitDeclOp>())
+      if (auto name = unit.getSourceProcess()) {
+        processBindings[unit.getId()] = *name;
+        processNames.insert(*name);
+      }
+    for (auto attr : o.domain.getRetentionsAttr()) {
+      auto strategy = cast<upf::RetentionAttr>(attr);
+      for (auto selectors : {strategy.getElements(), strategy.getExcluded()})
+        for (auto attr : selectors) {
+          auto selector = cast<upf::RetentionElementAttr>(attr);
+          if (selector.getKind() != upf::RetentionElementKind::Process)
+            continue;
+          StringRef name = selector.getPath().getValue();
+          if (!processNames.contains(name))
+            return emitError(location(strategy))
+                   << "retention process selector has no source-code-unit "
+                      "binding: "
+                   << name;
+          requestedProcesses.insert(name);
+        }
+    }
+    // Preserve the producing procedure across direct calls. Unsupported helper
+    // writers must reach the ordinary writer diagnostic after selection, rather
+    // than disappear because their stores live in another executable unit.
+    llvm::DenseMap<Operation *, SmallVector<StringRef>> origins;
+    llvm::DenseMap<Operation *, SmallVector<sim::SimFuncOp>> callees;
+    SymbolTableCollection processSymbols;
+    SmallVector<std::pair<sim::SimFuncOp, StringRef>> pending;
+    for (auto fn : o.design.getOps<sim::SimFuncOp>())
+      if (auto id = fn.getCodeUnitId()) {
+        auto found = processBindings.find(*id);
+        if (found != processBindings.end() &&
+            requestedProcesses.contains(found->second) &&
+            fn.getEntryKind() != sim::EntryKind::Initial &&
+            fn.getEntryKind() != sim::EntryKind::Final)
+          pending.emplace_back(fn, found->second);
+      }
+    llvm::DenseSet<std::pair<Operation *, StringRef>> visited;
+    while (!pending.empty()) {
+      auto item = pending.pop_back_val();
+      auto fn = item.first;
+      StringRef name = item.second;
+      if (!visited.insert({fn.getOperation(), name}).second)
+        continue;
+      origins[fn].push_back(name);
+      auto entry = callees.try_emplace(fn);
+      if (entry.second) {
+        auto &targets = entry.first->second;
+        WalkResult calls = fn.walk([&](Operation *op) {
+          if (isa<sim::SimSpawnOp, sim::SimClassVirtualCallOp,
+                  sim::SimClassVirtualTaskCallOp>(op)) {
+            op->emitError("retention process selection through forked or "
+                          "indirect work is not implemented");
+            return WalkResult::interrupt();
+          }
+          if (auto call = dyn_cast<sim::SimDPICallOp>(op))
+            if (call.getIsContext()) {
+              call.emitError("retention process selection through context DPI "
+                             "calls is not implemented");
+              return WalkResult::interrupt();
+            }
+          if (!isa<sim::SimCallOp, sim::SimTaskCallOp,
+                   sim::SimClassDirectCallOp>(op))
+            return WalkResult::advance();
+          auto callee = op->getAttrOfType<FlatSymbolRefAttr>("callee");
+          auto target = processSymbols.lookupNearestSymbolFrom<sim::SimFuncOp>(
+              op, callee);
+          if (!target || target.isExternal()) {
+            op->emitError("retention process selection requires defined "
+                          "compiled call targets");
+            return WalkResult::interrupt();
+          }
+          targets.push_back(target);
+          return WalkResult::advance();
+        });
+        if (calls.wasInterrupted())
+          return failure();
+      }
+      for (auto target : entry.first->second)
+        pending.emplace_back(target, name);
+    }
     llvm::DenseMap<uint64_t, SmallVector<Operation *>> writers;
     llvm::DenseSet<uint64_t> domainUnits;
     for (auto unit : o.design.getOps<sim::SimCodeUnitDeclOp>())
@@ -324,17 +416,23 @@ struct Lowering {
     if (inventory.wasInterrupted())
       return failure();
     llvm::DenseSet<uint64_t> opaqueWriters;
+    llvm::DenseMap<uint64_t, SmallVector<StringRef>> opaqueOrigins;
     o.design.walk([&](Operation *op) {
       if (!isa<sim::SimCallOp, sim::SimTaskCallOp, sim::SimRefCopyOp,
-               sim::SimOverrideOp, sim::SimDynamicOverrideOp>(op))
+               sim::SimArgumentRefFromRefOp, sim::SimOverrideOp,
+               sim::SimDynamicOverrideOp>(op))
         return;
       auto fn = op->getParentOfType<sim::SimFuncOp>();
       if (!fn)
         return;
       for (Value operand : op->getOperands())
         if (isa<sim::RefType>(operand.getType()))
-          if (auto id = storageID(operand, fn))
+          if (auto id = storageID(operand, fn)) {
             opaqueWriters.insert(*id);
+            for (auto name : origins[fn])
+              if (!llvm::is_contained(opaqueOrigins[*id], name))
+                opaqueOrigins[*id].push_back(name);
+          }
     });
     for (auto decl : o.design.getOps<sim::SimStorageDeclOp>()) {
       if (!decl.getHierarchicalName() ||
@@ -350,6 +448,11 @@ struct Lowering {
                                    sim::getPackedWidth(port.getType()) !=
                                        sim::getPackedWidth(decl.getType())});
       reg.writers = writers.lookup(decl.getId());
+      reg.processes = opaqueOrigins.lookup(decl.getId());
+      for (auto *write : reg.writers)
+        for (auto name : origins[write->getParentOfType<sim::SimFuncOp>()])
+          if (!llvm::is_contained(reg.processes, name))
+            reg.processes.push_back(name);
       bool state = opaqueWriters.contains(decl.getId());
       for (auto *op : reg.writers) {
         auto fn = op->getParentOfType<sim::SimFuncOp>();
@@ -392,8 +495,22 @@ struct Lowering {
             << "other strategy is declared here";
         return failure();
       }
-      if (!reg.strategy || reg.strategy.getNoRetention())
+      if (!reg.strategy || reg.strategy.getNoRetention()) {
+        // Domain-only gating currently follows lexical actors. The retained
+        // writes below have per-target guards, but ordinary writes from an
+        // external process need separate issue guards and domain epochs.
+        // Do not admit an external whole-process selector that silently leaves
+        // excluded or overridden state outside that power instrumentation.
+        auto external = llvm::find_if(reg.processes, [&](StringRef name) {
+          return !contains(o.domain, name);
+        });
+        if (external != reg.processes.end())
+          return decl.emitError(
+                     "retention process selection with external writes to "
+                     "unretained domain state is not implemented: ")
+                 << *decl.getHierarchicalName() << " from " << *external;
         continue;
+      }
       if (opaqueWriters.contains(decl.getId()))
         return decl.emitError("retained storage may be written through an "
                               "unsupported helper, copy or override");

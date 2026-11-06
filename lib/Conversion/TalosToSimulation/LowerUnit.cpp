@@ -6394,7 +6394,20 @@ LogicalResult UnitLowering::lowerRoots(ArrayRef<Operation *> roots) {
        (entryKind == sim::EntryKind::AlwaysFF && loweringInputs.powerIntent &&
         !sim::has<sim::metadata::CheckerProcedure>(function))) &&
       roots.size() == 1) {
-    if (auto timed = dyn_cast<semantic::SVTimedStatementOp>(roots.front())) {
+    Operation *outer = roots.front();
+    // IEEE 1800-2023 9.3.5 permits a statement label before the event
+    // control. For UPF it has the same edge-activation proof as a label on
+    // the controlled body. Peel only a sole named sequential wrapper; work
+    // preceding the wait, declarations and conditional waits are not proof.
+    if (loweringInputs.powerIntent)
+      if (auto block = dyn_cast<semantic::SVBlockStatementOp>(outer))
+        if (block.getBlockSymbolAttr() && block.getBlockPathAttr() &&
+            block.getBlockKind() == semantic::SVStatementBlockKind::Sequential) {
+          auto children = getChildren(block);
+          if (children.size() == 1)
+            outer = children.front();
+        }
+    if (auto timed = dyn_cast<semantic::SVTimedStatementOp>(outer)) {
       SmallVector<Operation *> children = getChildren(timed);
       if (children.size() == 2) {
         topLevelAlwaysControl = children.front();

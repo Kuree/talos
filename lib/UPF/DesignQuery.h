@@ -5,6 +5,7 @@
 #include "SupplyNetwork.h"
 #include "mlir/IR/BuiltinOps.h"
 #include <map>
+#include <set>
 #include <string>
 #include <tcl.h>
 #include <vector>
@@ -21,6 +22,8 @@ public:
   bool isScope(llvm::StringRef path) const;
   std::string parent(llvm::StringRef path) const;
   bool isTop(llvm::StringRef path) const;
+  mlir::Operation *process(llvm::StringRef path) const;
+  bool isNamedBlock(llvm::StringRef path) const;
   int find(Tcl_Interp *interp, Tcl_Size objc, Tcl_Obj *const objv[],
            llvm::StringRef scope, llvm::StringRef top,
            const SupplyPorts &supplyPorts) const;
@@ -42,6 +45,8 @@ private:
   };
   std::map<std::vector<std::string>, std::string> names;
   std::map<std::string, Path> scopes;
+  std::map<std::string, mlir::Operation *> processes;
+  std::set<std::string> namedBlocks;
   std::vector<Object> objects;
 };
 } // namespace talos

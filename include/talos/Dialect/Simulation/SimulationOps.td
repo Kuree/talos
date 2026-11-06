@@ -265,9 +265,26 @@ def SimCodeUnitDeclOp : SimOp<"code_unit.decl", [
                        SimEntryKind:$code_unit_kind,
                        StrAttr:$hierarchical_name,
                        OptionalAttr<StrAttr>:$debug_name,
-                       OptionalAttr<UnitAttr>:$internal);
+                       OptionalAttr<UnitAttr>:$internal,
+                       // Exact whole-procedure selector, bound from the
+                       // elaborated outer body symbol before optimization.
+                       OptionalAttr<StrAttr>:$source_process);
   let assemblyFormat = [{$id `in` $scope_id $code_unit_kind
     `hierarchy` $hierarchical_name (`debug` $debug_name^)? attr-dict}];
+  let builders = [
+    OpBuilder<(ins "uint64_t":$id, "uint64_t":$scopeId,
+        "::talos::sim::EntryKind":$kind, "::llvm::StringRef":$hierarchy,
+        "::mlir::StringAttr":$debugName, "::mlir::UnitAttr":$internal), [{
+      build($_builder, $_state, id, scopeId, kind, hierarchy, debugName,
+            internal, ::mlir::StringAttr{});
+    }]>,
+    OpBuilder<(ins "::mlir::IntegerAttr":$id, "::mlir::IntegerAttr":$scopeId,
+        "::talos::sim::EntryKindAttr":$kind, "::mlir::StringAttr":$hierarchy,
+        "::mlir::StringAttr":$debugName, "::mlir::UnitAttr":$internal), [{
+      build($_builder, $_state, id, scopeId, kind, hierarchy, debugName,
+            internal, ::mlir::StringAttr{});
+    }]>
+  ];
   let hasVerifier = 1;
 }
 

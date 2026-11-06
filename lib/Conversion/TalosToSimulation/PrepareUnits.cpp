@@ -4,6 +4,7 @@
 #include "PrepareTopology.h"
 #include "PrepareUnits.h"
 #include "UnitLoweringInputs.h"
+#include "talos/Dialect/NamedProcess.h"
 
 #include "mlir/IR/SymbolTable.h"
 
@@ -222,6 +223,7 @@ FailureOr<PreparedUnits> materializeCodeUnitDeclarations(
   bool invalid = false;
   bool powerIntent = hasPowerIntent(module);
   PreparedUnits result;
+  SymbolTableCollection processSymbols;
   result.units.reserve(sourceUnits.size());
   llvm::DenseMap<uint64_t, Operation *> codeUnitIDs;
   SmallVector<semantic::SVSubroutineSymbolOp> interfaceExterns;
@@ -1287,6 +1289,22 @@ FailureOr<PreparedUnits> materializeCodeUnitDeclarations(
             ? builder.getUnitAttr()
             : UnitAttr{});
     result.declarations[unit.source] = declaration;
+    if (powerIntent && isa<semantic::SVProceduralBlockSymbolOp>(unit.source)) {
+      auto body =
+          getNamedProcessBody<semantic::SVTimedStatementOp,
+                              semantic::SVBlockStatementOp>(unit.source);
+      if (body) {
+        auto block =
+            processSymbols.lookupSymbolIn<semantic::SVStatementBlockSymbolOp>(
+                module, body.getBlockSymbolAttr());
+        if (!block ||
+            getHierarchyName(block) != body.getBlockPathAttr().getValue()) {
+          body.emitError("named process body has inconsistent symbol and path");
+          return failure();
+        }
+        declaration.setSourceProcessAttr(body.getBlockPathAttr());
+      }
+    }
     // Preserve the original connection computation in the immutable inventory:
     // later port projection can inline it into consumers and erase its actor.
     // IEEE 1801-2018 6.20/9.5.3 assign this inferred logic to the parent scope.
