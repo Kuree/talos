@@ -1,0 +1,124 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// IEEE 1801-2018 6.50/9.7.2/9.7.3 Table 11: NO_RET_SUP_COR keeps
+// primary-powered normal state alive, but both supplies OFF destroys it.
+// RET-powered outputs still mask when R is OFF. Their independent normal
+// reads/writes and each visible NBA occurrence must survive that separation.
+// CHECK: master corruption parameters passed
+
+//--- design.sv
+`ifdef BLOCKING
+  `define WRITE =
+`else
+  `define WRITE <=
+`endif
+module leaf(input logic clk, input logic [7:0] d,
+            output logic [7:0] df = 0, nr = 0, live = 0,
+            output bit [7:0] liveb = 0);
+  always @(posedge clk) begin
+    df `WRITE d;
+    nr `WRITE d;
+    if (top.mode == 1) begin
+      live `WRITE live + 1;
+      liveb `WRITE liveb + 1;
+    end else if (top.mode == 2) begin
+      live `WRITE 1; live `WRITE 0;
+      liveb `WRITE 1; liveb `WRITE 0;
+`ifndef BLOCKING
+    end else if (top.mode == 3) begin
+      live <= #5 1; live <= #5 0;
+      liveb <= #5 1; liveb <= #5 0;
+`endif
+    end else begin
+      live `WRITE d;
+      liveb `WRITE d;
+    end
+  end
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, rtc = 0;
+  logic [7:0] d = 0;
+  int mode = 0, edges = 0;
+  wire [7:0] df, nr, live, liveb;
+  leaf dut(clk,d,df,nr,live,liveb);
+  // Direct root reference observes each NBA publication before port routing.
+  always @(posedge dut.live[0]) edges++;
+  task automatic tick(input logic [7:0] v);
+    clk = 0; d = v; #1 clk = 1; #1 clk = 0; #1;
+  endtask
+  initial begin
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground", 0.0) ||
+        !supply_on("/top/RET.power") || !supply_on("/top/RET.ground", 0.0))
+      $fatal(1, "supplies");
+    tick(0);
+    edges = 0; mode = 2;
+    tick(0);
+    if (edges != 1 || live !== 0 || liveb !== 0)
+      $fatal(1, "ordinary NBA transition was coalesced");
+`ifndef BLOCKING
+    edges = 0; mode = 3;
+    tick(0);
+    if (!supply_off("/top/RET.power")) $fatal(1, "retention pulse off");
+    #1;
+    if (!supply_on("/top/RET.power")) $fatal(1, "retention pulse on");
+    #1;
+    edges = 0; // Exclude the legitimate 0->X posedge at output power loss.
+    #4;
+    if (edges != 1 || live !== 0 || liveb !== 0)
+      $fatal(1, "visibility pulse cancelled future normal NBA occurrences");
+`endif
+    mode = 0;
+    tick(1);
+    if (!supply_off("/top/RET.power")) $fatal(1, "retention off");
+    #1;
+    if (df !== 'x || nr !== 1 || live !== 'x || liveb !== 0)
+      $fatal(1, "retention loss output matrix");
+    mode = 1;
+    tick(8'h22); tick(8'h33);
+    if (df !== 'x || nr !== 8'h33 || live !== 'x || liveb !== 0)
+      $fatal(1, "normal writes or output power while RET off");
+    if (!supply_on("/top/RET.power")) $fatal(1, "retention on");
+    #1;
+    if (live !== 3 || liveb !== 3)
+      $fatal(1, "masked normal-state self-read did not advance");
+    rtc = 1;
+    #1;
+    if (!supply_off("/top/RET.power")) $fatal(1, "frozen retention off");
+    tick(8'h44);
+    if (nr !== 8'h33) $fatal(1, "NO_RET_SUP_COR disabled RTC priority");
+    if (!supply_on("/top/RET.power")) $fatal(1, "frozen retention on");
+    #1;
+    if (live !== 3 || liveb !== 3) $fatal(1, "RTC did not freeze normal state");
+    if (!supply_off("/top/CORE.power")) $fatal(1, "primary off");
+    #1;
+    if (!supply_off("/top/RET.power")) $fatal(1, "both off");
+    #1;
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/RET.power"))
+      $fatal(1, "recover supplies");
+    #1;
+    if (nr !== 'x || live !== 'x || liveb !== 0)
+      $fatal(1, "both-OFF incorrectly retained shared state");
+    rtc = 0; mode = 0;
+    tick(8'h55);
+    if (df !== 8'h55 || nr !== 8'h55 || live !== 8'h55 || liveb !== 8'h55)
+      $fatal(1, "normal recovery");
+    $display("master corruption parameters passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set CORE
+create_supply_set RET
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention DEFAULT -domain PD -elements dut/df -retention_supply RET -retention_condition rtc
+set_retention NORMAL -domain PD -elements dut/nr -retention_supply RET \
+    -retention_condition rtc -parameters NO_RET_SUP_COR
+set_retention LIVE -domain PD -elements {dut/live dut/liveb} -retention_supply RET \
+    -retention_condition rtc -use_retention_as_primary \
+    -parameters {NO_RET_SUP_COR NO_SAV_RES_COR}

@@ -83,7 +83,11 @@ def UPFRetentionAttr : UPFAttr<"Retention", "retention"> {
       OptionalParameter<"::mlir::LocationAttr">:$declaration,
       // 6.50: only the output driver moves to the retention supply. The
       // normal-mode storage input remains powered by the primary supply.
-      DefaultValuedParameter<"bool", "false">:$useRetentionAsPrimary);
+      DefaultValuedParameter<"bool", "false">:$useRetentionAsPrimary,
+      // 6.50: normalize explicit positive/negative parameter spellings only
+      // after all command updates have been combined. Both default to true.
+      DefaultValuedParameter<"bool", "true">:$retentionSupplyCorrupt,
+      DefaultValuedParameter<"bool", "true">:$saveRestoreCorrupt);
   let assemblyFormat = "`<` struct(params) `>`";
   let genVerifyDecl = 1;
 }

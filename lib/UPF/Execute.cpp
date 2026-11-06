@@ -35,6 +35,7 @@ struct Retention {
   std::string name, scope, retentionSupply, primarySupply;
   std::map<std::string, Attribute> elements, excluded;
   bool hasElements = false, noRetention = false, useRetentionAsPrimary = false;
+  std::optional<bool> retentionSupplyCorrupt, saveRestoreCorrupt;
   upf::RetentionTriggerAttr save, restore;
   upf::ExpressionAttr saveCondition, restoreCondition, condition;
   std::optional<Location> location;
@@ -595,7 +596,11 @@ struct Session {
         !refine(next.restore, delta.restore, "trigger") ||
         !refine(next.saveCondition, delta.saveCondition, "condition") ||
         !refine(next.restoreCondition, delta.restoreCondition, "condition") ||
-        !refine(next.condition, delta.condition, "condition"))
+        !refine(next.condition, delta.condition, "condition") ||
+        !refine(next.retentionSupplyCorrupt, delta.retentionSupplyCorrupt,
+                "corruption parameter") ||
+        !refine(next.saveRestoreCorrupt, delta.saveRestoreCorrupt,
+                "corruption parameter"))
       return TCL_ERROR;
     size_t tokens = 0;
     auto count = [&](const Retention &retention) {
@@ -916,8 +921,13 @@ struct Session {
             parameters.count(("NO_" + flag).str()))
           return error("conflicting retention corruption parameters");
       for (auto &value : values)
-        if (value != "RET_SUP_COR" && value != "SAV_RES_COR")
+        if (value != "RET_SUP_COR" && value != "NO_RET_SUP_COR" &&
+            value != "SAV_RES_COR" && value != "NO_SAV_RES_COR")
           return error("unsupported retention corruption parameter: " + value);
+      if (parameters.count("RET_SUP_COR") || parameters.count("NO_RET_SUP_COR"))
+        next.retentionSupplyCorrupt = parameters.count("RET_SUP_COR") != 0;
+      if (parameters.count("SAV_RES_COR") || parameters.count("NO_SAV_RES_COR"))
+        next.saveRestoreCorrupt = parameters.count("SAV_RES_COR") != 0;
     }
     RetentionEdit edit;
     edit.intent = std::move(next);
@@ -2496,7 +2506,9 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
           retention.restoreCondition, retention.condition,
           retention.location ? mlir::LocationAttr(*retention.location)
                              : mlir::LocationAttr{},
-          retention.useRetentionAsPrimary));
+          retention.useRetentionAsPrimary,
+          retention.retentionSupplyCorrupt.value_or(true),
+          retention.saveRestoreCorrupt.value_or(true)));
     }
     upf::UPFDomainOp::create(
         builder, domain.location.value_or(module.getLoc()), name,

@@ -1,0 +1,42 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// IEEE 1801-2018 6.50/9.2.1: NO_RET_SUP_COR also applies to the
+// primary-powered output projection of exempt normal initialization. It does
+// not initialize the unpowered balloon or manufacture a save operation.
+// CHECK: balloon NO_RET_SUP_COR initialization passed
+
+//--- design.sv
+module leaf(input logic clk, output logic [7:0] q, output bit [7:0] qb);
+  always @(posedge clk) begin q <= 8'h55; qb <= 8'h55; end
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, restore = 0;
+  wire [7:0] q, qb;
+  leaf dut(clk,q,qb);
+  initial begin
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground", 0.0) ||
+        !supply_on("/top/RET.ground", 0.0)) $fatal(1, "supplies");
+    dut.q = 8'h13; dut.qb = 8'h17;
+  end
+  initial begin
+    #1;
+    if (q !== 8'h13 || qb !== 8'h17) $fatal(1, "NO_RET_SUP_COR initial output was masked");
+    if (!supply_on("/top/RET.power")) $fatal(1, "retention on");
+    #1 restore = 1; #1 restore = 0; #1;
+    if (q !== 'x || qb !== 0) $fatal(1, "initialization manufactured saved data");
+    $display("balloon NO_RET_SUP_COR initialization passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set CORE
+create_supply_set RET
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention KEEP -domain PD -elements {dut/q dut/qb} -retention_supply RET -restore_signal {restore high}
+set_retention KEEP -domain PD -update -parameters NO_RET_SUP_COR

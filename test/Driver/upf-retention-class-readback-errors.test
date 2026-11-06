@@ -1,0 +1,60 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: not talos --upf %t/master.upf -O0 -emit-sim --mlir-verify-each %t/design.sv -o %t.bad.mlir 2>&1 | FileCheck %s --check-prefix=DIRECT
+// RUN: not talos -DVIRTUAL --upf %t/master.upf -O0 -emit-sim --mlir-verify-each %t/design.sv -o %t.bad.mlir 2>&1 | FileCheck %s --check-prefix=VIRTUAL
+// RUN: not talos --upf %t/balloon.upf -O0 -emit-sim --mlir-verify-each %t/design.sv -o %t.bad.mlir 2>&1 | FileCheck %s --check-prefix=DIRECT
+// RUN: not talos -DVIRTUAL --upf %t/balloon.upf -O0 -emit-sim --mlir-verify-each %t/design.sv -o %t.bad.mlir 2>&1 | FileCheck %s --check-prefix=VIRTUAL
+// RUN: talos -DSAFE --upf %t/master.upf -O3 --mlir-verify-each %t/design.sv -o %t.master && %t.master | FileCheck %s --check-prefix=SAFE
+// RUN: talos -DSAFE --upf %t/balloon.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.balloon && %t.balloon | FileCheck %s --check-prefix=SAFE
+// The model initializer lives outside the powered process set. Its methods
+// still cannot silently read masked Q when its own direct reads use N.
+// Direct methods without state reads remain valid; virtual dispatch needs
+// caller-specific closure analysis before own-state readback can be promised.
+// DIRECT: readback through helpers is not implemented
+// VIRTUAL: readback through virtual calls is not implemented
+// SAFE: class helper checked
+
+//--- design.sv
+module leaf(input logic clk, output logic [7:0] q);
+  always @(posedge clk) q <= 8'h55;
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, rtc = 0, restore = 0;
+  wire [7:0] q;
+  leaf dut(clk,q);
+  class Reader;
+`ifdef VIRTUAL
+    virtual
+`endif
+    function logic [7:0] read_q();
+`ifdef SAFE
+      return 8'h13;
+`else
+      return top.dut.q;
+`endif
+    endfunction
+  endclass
+  Reader reader = new;
+  initial begin
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground", 0.0) ||
+        !supply_on("/top/RET.ground", 0.0)) $fatal(1, "supplies");
+    dut.q = 8'h13;
+    if (dut.q !== reader.read_q()) $fatal(1, "inconsistent class helper readback");
+    $display("class helper checked");
+  end
+  initial begin #1; $finish; end
+endmodule
+
+//--- master.upf
+create_supply_set CORE
+create_supply_set RET
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention R -domain PD -elements dut/q -retention_supply RET \
+    -retention_condition rtc -use_retention_as_primary -parameters NO_RET_SUP_COR
+
+//--- balloon.upf
+create_supply_set CORE
+create_supply_set RET
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention R -domain PD -elements dut/q -retention_supply RET -restore_signal {restore high}

@@ -1,0 +1,92 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// IEEE 1801-2018 6.50/9.7.3 Figure 6: all four corruption parameter
+// combinations. NO_SAV_RES_COR removes overlap corruption, not trailing
+// transfers or level-restore priority. NO_RET_SUP_COR protects normal
+// primary-backed state while the unpowered balloon is still destroyed.
+// CHECK: balloon parameter matrix passed
+
+//--- design.sv
+module leaf(input logic [7:0] d, output logic [7:0] df = 0,
+            nr = 0, ns = 0, both = 0);
+  always @(posedge top.controls[1]) begin
+    df <= d; nr <= d; ns <= d; both <= d;
+  end
+endmodule
+module top;
+  import UPF::*;
+  logic [1:0] controls = 0;
+  logic save = 0, sc = 1;
+  logic [7:0] d = 0;
+  wire [7:0] df, nr, ns, both;
+  leaf dut(d,df,nr,ns,both);
+  task automatic tick(input logic [7:0] v);
+    controls[1] = 0; d = v; #1 controls[1] = 1;
+    #1 controls[1] = 0; #1;
+  endtask
+  task automatic save_value;
+    save = 1; #1 save = 0; #1;
+  endtask
+  task automatic restore_value;
+    controls[0] = 1; #1 controls[0] = 0; #1;
+  endtask
+  initial begin
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground", 0.0) ||
+        !supply_on("/top/RET.power") || !supply_on("/top/RET.ground", 0.0))
+      $fatal(1, "supplies");
+    tick(8'h11); save_value(); tick(8'h22);
+    save = 1; controls[0] = 1;
+    #1;
+    if (df !== 'x || nr !== 'x || ns !== 8'h22 || both !== 8'h22)
+      $fatal(1, "qualified overlap parameter matrix");
+    tick(8'h33);
+    if (df !== 'x || nr !== 'x || ns !== 8'h33 || both !== 8'h33)
+      $fatal(1, "disabled corruption still froze normal writes");
+    sc = 0; save = 0; controls[0] = 0;
+    #1;
+    if (df !== 'x || nr !== 'x || ns !== 8'h11 || both !== 8'h11)
+      $fatal(1, "disabled overlap destroyed saved data");
+    sc = 1;
+    tick(8'h44);
+    controls[0] = 1;
+    d = 8'h55;
+    #1 controls = 2'b10;
+    #1;
+    if (ns !== 8'h11 || both !== 8'h11)
+      $fatal(1, "NO_SAV_RES_COR disabled restore priority");
+    controls = 0;
+    tick(8'h66); save_value(); tick(8'h77);
+    if (!supply_off("/top/RET.power")) $fatal(1, "retention off");
+    #1;
+    if (df !== 'x || ns !== 'x || nr !== 8'h77 || both !== 8'h77)
+      $fatal(1, "retention loss parameter matrix");
+    tick(8'h88);
+    if (df !== 'x || ns !== 'x || nr !== 8'h88 || both !== 8'h88)
+      $fatal(1, "NO_RET_SUP_COR blocked powered normal writes");
+    if (!supply_on("/top/RET.power")) $fatal(1, "retention on");
+    #1 restore_value();
+    if (df !== 'x || nr !== 'x || ns !== 'x || both !== 'x)
+      $fatal(1, "NO_RET_SUP_COR preserved an unpowered balloon");
+    $display("balloon parameter matrix passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set CORE
+create_supply_set RET
+create_power_domain PD -elements dut -supply {primary CORE}
+foreach {name signal params} {
+    DEFAULT df {}
+    NORET nr {NO_RET_SUP_COR}
+    NOSAVE ns {NO_SAV_RES_COR}
+    BOTH both {NO_RET_SUP_COR NO_SAV_RES_COR}
+} {
+    set_retention $name -domain PD -elements dut/$signal -retention_supply RET \
+        -save_signal {save high} -restore_signal {controls[0] high} \
+        -save_condition sc -parameters $params
+}

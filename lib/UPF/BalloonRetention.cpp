@@ -2,6 +2,7 @@
 
 #include "BalloonRetention.h"
 #include "PowerState.h"
+#include "RetentionReadback.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/SymbolTable.h"
@@ -181,8 +182,12 @@ struct BalloonLowering {
              predicate(ctx, strategy.getRestoreCondition())));
   }
   Value writable(Value ctx) {
-    return and_(and_(primary(ctx), normal(ctx, retentionSets)),
-                not_(overlap(ctx)));
+    Value supply = strategy.getRetentionSupplyCorrupt()
+                       ? normal(ctx, retentionSets)
+                       : bit(true);
+    Value collision =
+        strategy.getSaveRestoreCorrupt() ? overlap(ctx) : bit(false);
+    return and_(and_(primary(ctx), supply), not_(collision));
   }
 
   // Make every persistent capture explicit. Snapshot callback closures never
@@ -326,8 +331,12 @@ struct BalloonLowering {
       Value saveAttempt = or_(save, and_(asserted(ss, strategy.getSave()), sc));
       Value restoreAttempt =
           or_(restore, and_(asserted(rs, strategy.getRestore()), rc));
-      Value overlapping = overlap(ctx);
-      Value normalBad = or_(or_(not_(p), not_(r)), overlapping);
+      Value overlapping =
+          strategy.getSaveRestoreCorrupt() ? overlap(ctx) : bit(false);
+      Value normalBad =
+          or_(or_(not_(p),
+                  strategy.getRetentionSupplyCorrupt() ? not_(r) : bit(false)),
+              overlapping);
       // 6.50 and Figure 6: default RET_SUP_COR destroys normal storage too.
       // Table 10's PARTIAL_CORRUPT comment conflicts with that parameter rule;
       // Figure 6 reserves that transition for NO_RET_SUP_COR.
@@ -335,7 +344,9 @@ struct BalloonLowering {
           or_(or_(not_(r), overlapping),
               and_(not_(p), or_(not_(predicate(ctx, strategy.getCondition())),
                                 or_(saveAttempt, restoreAttempt))));
-      Value destructive = or_(normalBad, savedBad);
+      // A NO_RET_SUP_COR retention-supply loss can destroy only B. Normal
+      // clock activations and already issued writes must remain valid.
+      Value destructive = normalBad;
       Value levelRestore = level(strategy.getRestore())
                                ? and_(restore, not_(normalBad))
                                : bit(false);
@@ -350,8 +361,10 @@ struct BalloonLowering {
       for (auto &state : states) {
         Value before = read(ctx, state.normal),
               retained = read(ctx, state.saved);
+        Value restoreValue =
+            choose(savedBad, corrupt(b, loc, state.saved.type), retained);
         Value nextNormal = choose(normalBad, corrupt(b, loc, state.normal.type),
-                                  choose(restore, retained, before));
+                                  choose(restore, restoreValue, before));
         Value nextSaved = choose(savedBad, corrupt(b, loc, state.saved.type),
                                  choose(save, before, retained));
         outputs.append(
@@ -577,24 +590,10 @@ struct BalloonLowering {
         initializers.insert(fn);
     }
     for (auto fn : initializers) {
-      SmallVector<sim::SimCallOp> calls;
-      fn.walk([&](sim::SimCallOp call) { calls.push_back(call); });
-      llvm::DenseSet<Operation *> seen;
-      while (!calls.empty()) {
-        auto call = calls.pop_back_val();
-        auto helper = SymbolTable::lookupNearestSymbolFrom<sim::SimFuncOp>(
-            call, call.getCalleeAttr());
-        if (!helper || !seen.insert(helper).second)
-          continue;
-        bool readsState = false;
-        helper.walk([&](sim::SimRefLoadOp load) {
-          readsState |= refersTo(load.getReference(), state.visible.id);
-        });
-        if (readsState)
-          return call.emitError("balloon retention initialization readback "
-                                "through helpers is not implemented");
-        helper.walk([&](sim::SimCallOp nested) { calls.push_back(nested); });
-      }
+      if (failed(validateRetentionReadbackHelpers(
+              fn, state.visible.id,
+              "balloon retention initialization readback")))
+        return failure();
       SmallVector<sim::SimRefLoadOp> loads;
       fn.walk([&](sim::SimRefLoadOp load) {
         if (refersTo(load.getReference(), state.visible.id))
@@ -756,7 +755,9 @@ struct BalloonLowering {
           // still requires power (6.50/9.7.2).
           if (fn.getEntryKind() == sim::EntryKind::Initial)
             write.getValueMutable().assign(choose(
-                and_(primary(ctx), normal(ctx, retentionSets)),
+                and_(primary(ctx), strategy.getRetentionSupplyCorrupt()
+                                       ? normal(ctx, retentionSets)
+                                       : bit(true)),
                 write.getValue(), corrupt(b, loc, write.getValue().getType())));
           continue;
         }

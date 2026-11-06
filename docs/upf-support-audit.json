@@ -566,7 +566,7 @@
         "-retention_ground_net",
         "-instance"
       ],
-      "limits": "Master/slave and balloon whole packed-register retention with one edge-sensitive writer, asynchronous edge lists and persistent direct clock/iff references. Balloon storage is separate from normal/output state; edge and trailing-level save/restore use event-time UPF qualification, default corruption parameters, ordered publications and zero-delay NBA restore priority. Startup initial writes and local readbacks preserve typed partial packed views while output power is masked. Master/slave supports retention-powered outputs; balloon -use_retention_as_primary remains rejected. No latch/computed-event/partial functional/multiple/mixed writers, named-process selectors, general condition refinements, nondefault corruption parameters, partial captured initialization aliases, initialization helper readbacks or late raw-IR root initialization. Snapshot aggregate widths are bounded by the LLVM packed-integer limit. Physical and composite targets support additive per-leaf updates and bounded typed ordered provenance for later membership; no synthetic composite strategy handles are exposed. Empty extents and explicitly empty element lists add no snapshot machinery; broader intent-only no-eligible-state elision remains pending.",
+      "limits": "Master/slave and balloon whole packed-register retention with one edge-sensitive writer, asynchronous edge lists and persistent direct clock/iff references. All four RET_SUP_COR/NO_RET_SUP_COR and SAV_RES_COR/NO_SAV_RES_COR combinations are supported, with explicit presence preserved across transactional physical/composite updates before defaults. Balloon storage is separate from normal/output state; edge and trailing-level save/restore use event-time qualification, independent normal/saved corruption, ordered publications and zero-delay NBA restore priority. Startup initial writes and local own-state readbacks preserve typed partial packed views while output power is masked. Master/slave supports retention-powered outputs, including separate normal/output guards under NO_RET_SUP_COR; balloon -use_retention_as_primary remains rejected. No latch/computed-event/partial functional/multiple/mixed writers, named-process selectors, general condition refinements, partial captured initialization aliases, caller-specific helper readbacks, opaque virtual readback dispatch or late raw-IR balloon root initialization. Broader event-ordered master initialization remains to be audited. Snapshot aggregate widths are bounded by the LLVM packed-integer limit. Physical and composite targets support additive per-leaf updates and typed ordered provenance bounded to 1048576 work units; no synthetic composite strategy handles are exposed. Empty extents and explicitly empty element lists add no snapshot machinery; broader intent-only no-eligible-state elision remains pending.",
       "implementation": [
         "lib/UPF/Execute.cpp",
         "lib/UPF/Retention.cpp",
@@ -1011,7 +1011,7 @@
         "Balloon retention-powered outputs and broader initialization/helper/reference forms",
         "Collective retention-element lists and named-process/partial selections",
         "Latches, computed events, mixed/multiple writers and unsupported reference escape paths",
-        "Nondefault corruption parameters, legacy supply operands and semantic condition refinements"
+        "Legacy supply operands, semantic condition refinements and broader initialization ordering"
       ]
     },
     {
@@ -1367,12 +1367,53 @@
           ],
           "review": "Two independent subagents approved the supported UPF/LRM semantics, read-only callback closure/capture discipline, MLIR CFG/types/effects and folding, native state planning, bounds and test coverage. Findings corrected before approval include typed clock projections, zero-effective-delay NBA priority, initialized normal/output separation, partial startup views, explicit helper-read rejection and backend width limits. Reviewers independently passed eight O3 native/bytecode executions and three direct MLIR fixtures.",
           "validation": "All 303 unique selected lit tests pass: 302 UPF/supply/snapshot/power-NBA/cohort/time regressions plus the newly added balloon wasm fixture. All 347 process and 269 bytecode/reflection/VPI unit tests pass (616 total). Clauses 6.50 and 9.7.3 pass in native/bytecode (four cases); 9.7.1 remains reference-only (two cases), with no unexpected conformance results. Source tests exercise native/bytecode O0/O3 and verification; direct MLIR fixtures check repeated canonicalize/CSE, explicit capture closure, distinct state/epoch targets and fail-closed diagnostics. Four new wasm32 balloon objects compile across native/bytecode O0/O3, including wide state and dynamic real delays; wasm runtime execution was not run."
+        },
+        {
+          "id": "7c",
+          "status": "complete",
+          "scope": "Both retention corruption parameter families, transactional refinement/provenance, independent normal/output writes and closed helper-readback admission",
+          "clauses": [
+            "5.10",
+            "6.50",
+            "8.3.2",
+            "9.2.1",
+            "9.7.2",
+            "9.7.3",
+            "IEEE1800-2023 4.6",
+            "IEEE1800-2023 9.4.2",
+            "IEEE1800-2023 10.4.2"
+          ],
+          "runtime_changes": false,
+          "new_public_runtime_functions": false,
+          "architecture": "Preserve each parameter family as an optional setting until command updates and composite fanout validate; emit effective typed booleans defaulting to true. Opposite explicit settings conflict; omissions and empty lists add no setting. Balloon saved-only destruction does not advance normal-write epochs, and restore reads effective corrupt saved data without forwarding a concurrent save. Master NO_RET_SUP_COR permits normal writes behind an unpowered RET-driven output: reuse two existing independently guarded bounded NBA transactions, preserving every visible occurrence and retaining due-time eligibility across output-supply pulses. Functional and accepted initial own-state readbacks use typed normal-storage views; a shared compiler-only call-closure check handles static/direct class helpers and diagnoses unsupported state readbacks or opaque virtual dispatch. No new runtime API, opcode or service is introduced, and the special master path avoids an unused visibility state slot.",
+          "spec_interpretations": [
+            "Section 6.50 limits NO_RET_SUP_COR to normal storage; Figure 6 PARTIAL_CORRUPT supports loss of an unpowered balloon with normal storage preserved. This topology-specific rule resolves the conditional retained-value wording in 9.7.2(a).",
+            "Master corruption follows Table 11: primary-ON/retention-OFF rows are qualified by RET_SUP_COR, but the both-OFF row unconditionally corrupts shared backing. Figure 7 omits that both-OFF exception under NO_RET_SUP_COR.",
+            "SAV_RES_COR qualifies overlap corruption for both balloon stores; disabling it does not disable real save/restore transfers, level-restore priority or independent power/RTC corruption. It has no operational effect for master/slave without save/restore controls.",
+            "Section 6.50 applies the physical retention-supply simstate to a retention-powered output even when NO_RET_SUP_COR preserves its primary-powered normal state. Ordinary outputs remain primary-powered.",
+            "The PON/ROFF normal-initialization/output-mask case is verified. Broader ordering of master initialization and separately latched corruption is a pre-existing behavior requiring further audit; 9.2.1 is not treated as a guarantee of immunity from later independent corruption."
+          ],
+          "tests": [
+            "test/Driver/upf-retention-parameters-frontend.test",
+            "test/Driver/upf-balloon-corruption-parameters.test",
+            "test/Driver/upf-balloon-no-ret-supply-corruption.test",
+            "test/Driver/upf-balloon-no-ret-initial.test",
+            "test/Driver/upf-retention-corruption-parameters.test",
+            "test/Driver/upf-retention-corruption-blocking.test",
+            "test/Driver/upf-retention-corruption-initial.test",
+            "test/Driver/upf-retention-corruption-errors.test",
+            "test/Driver/upf-retention-class-readback-errors.test",
+            "test/Driver/upf-retention-parameters-wasm.test",
+            "test/Conversion/upf-retention-parameters.mlir"
+          ],
+          "review": "Two independent subagents approved UPF/LRM parameter/default/refinement rules, explicitly documented specification inconsistencies, normal/saved/output separation, source-order and due-time NBA behavior, typed MLIR views/metadata/effects and coverage. Review corrections preserve B-only loss epochs, effective saved data on restore, per-NBA Q occurrences, initialized output masking and static/direct/virtual helper closure admission. The reviewers independently passed ten O3 native/bytecode executions, three helper diagnostic reproducers, raw-IR roundtrip/lowering checks, frontend/wasm checks and the final class-readback fixture. No remaining blockers for this documented subset.",
+          "validation": "All 314 selected UPF/supply/snapshot/power-NBA/cohort/time lit tests pass. All 347 process and 269 bytecode/reflection/VPI tests pass (616 unit tests). Clauses 6.50 and 9.7.3 pass in native/bytecode (four cases); 9.7.1 remains reference-only (two cases), with no unexpected conformance results. New source tests cover native/bytecode O0/O3, both state domains, 65-bit values, partial/ascending initialization views, all four parameter combinations, current/future normal NBA survival, overlap priority, RET-driven output transitions/feedback/masking and composite rollback of both parameter families. Direct MLIR verifies negative-flag roundtrips, a balloon guard without retention-supply dependence, normal backing reads and distinct guarded N/Q transactions. Four new wasm32 objects compile across native/bytecode O0/O3; wasm runtime execution was not run."
         }
       ],
       "remaining": [
-        "Balloon retention-powered outputs, helper/alias initialization and intent-only no-eligible-state elision",
+        "Balloon retention-powered outputs, caller-specific helper/alias readbacks and intent-only no-eligible-state elision",
         "Collective retention-element lists and remaining storage/writer forms",
-        "Nondefault corruption parameters and remaining retention combinations"
+        "Legacy supply operands, remaining condition refinements and broader master initialization ordering"
       ]
     },
     {

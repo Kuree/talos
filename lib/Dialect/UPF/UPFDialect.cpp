@@ -678,7 +678,8 @@ mlir::LogicalResult RetentionAttr::verify(
     RetentionTriggerAttr save, RetentionTriggerAttr restore,
     ExpressionAttr saveCondition, ExpressionAttr restoreCondition,
     ExpressionAttr condition, mlir::LocationAttr declaration,
-    bool useRetentionAsPrimary) {
+    bool useRetentionAsPrimary, bool retentionSupplyCorrupt,
+    bool saveRestoreCorrupt) {
   if (!name || name.getValue().empty() || !scope || scope.getValue().empty())
     return error() << "retention strategy requires a name and execution scope";
   for (auto selectors : {elements, excluded}) {

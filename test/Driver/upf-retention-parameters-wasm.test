@@ -1,0 +1,11 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-balloon-no-ret-supply-corruption.test %t/balloon
+// RUN: %split-file %S/upf-retention-corruption-parameters.test %t/master
+// RUN: talos --upf %t/balloon/design.upf --target=wasm32 -O0 --mlir-verify-each -c %t/balloon/design.sv -o %t.balloon.o
+// RUN: talos --upf %t/balloon/design.upf --target=wasm32 -O3 --execution-tier=bytecode --mlir-verify-each -c %t/balloon/design.sv -o %t.balloon.bc.o
+// RUN: talos --upf %t/master/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/master/design.sv -o %t.master.o
+// RUN: talos --upf %t/master/design.upf --target=wasm32 -O0 --execution-tier=bytecode --mlir-verify-each -c %t/master/design.sv -o %t.master.bc.o
+// RUN: %llvm_dist/bin/llvm-readobj --file-headers %t.balloon.o %t.balloon.bc.o %t.master.o %t.master.bc.o | FileCheck %s
+// Negative flags, wide state, typed feedback reads and two independently
+// guarded output transactions retain their widths on 32-bit pointer targets.
+// CHECK-COUNT-4: AddressSize: 32bit

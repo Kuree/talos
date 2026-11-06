@@ -1,0 +1,47 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: cp %S/Inputs/upf/assertions.tcl %t/assertions.tcl
+// RUN: talos --upf %t/design.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.mlir | FileCheck %s
+// RUN: talos-opt %t.mlir --resolve-upf-domains --canonicalize --cse --verify-each | talos-opt | FileCheck %s --check-prefix=IR
+// IEEE 1801-2018 5.10/6.50/8.3.2: preserve explicit presence until merge,
+// then default each parameter family independently. Conflicts roll back all
+// leaves and provenance; empty lists and duplicate same settings add nothing.
+// CHECK: retention parameter transactions passed
+// IR-DAG: upf.domain @top.A {{.*}}name = "R"
+// IR-DAG: upf.domain @top.B {{.*}}name = "R"{{.*}}saveRestoreCorrupt = false
+// IR-DAG: upf.domain @top.C {{.*}}name = "R"{{.*}}retentionSupplyCorrupt = false
+// IR-DAG: upf.domain @top.Fresh {{.*}}name = "LATE"{{.*}}retentionSupplyCorrupt = false, saveRestoreCorrupt = false
+
+//--- design.sv
+module top; logic hold; endmodule
+
+//--- design.upf
+source [file join [file dirname [info script]] assertions.tcl]
+foreach d {A B C Fresh} {create_power_domain $d -elements {}}
+set_retention R -domain A -retention_condition hold
+set_retention R -domain B -retention_condition hold -parameters RET_SUP_COR
+set_retention R -domain C -retention_condition hold -parameters {}
+set_retention R -domain C -update -parameters {NO_RET_SUP_COR}
+set_retention R -domain C -update -parameters {NO_RET_SUP_COR NO_RET_SUP_COR}
+set_retention R -domain C -update -parameters {}
+expect_error {set_retention R -domain C -update -parameters RET_SUP_COR} {*corruption parameter refinement*}
+expect_error {set_retention R -domain C -update -parameters {SAV_RES_COR NO_SAV_RES_COR}} {*conflicting retention corruption*}
+set_retention R -domain C -update -parameters SAV_RES_COR
+expect_error {set_retention R -domain C -update -parameters UNKNOWN_COR} {*unsupported retention corruption*}
+create_composite_domain Group -subdomains {A B}
+expect_error {set_retention R -domain Group -update -parameters {NO_RET_SUP_COR NO_SAV_RES_COR}} {*corruption parameter refinement*}
+# If the failed first-leaf edit leaked, this positive explicit value conflicts.
+set_retention R -domain A -update -parameters RET_SUP_COR
+set_retention R -domain A -update -parameters SAV_RES_COR
+expect_error {set_retention R -domain A -update -parameters NO_SAV_RES_COR} {*corruption parameter refinement*}
+set_retention R -domain B -update -parameters NO_SAV_RES_COR
+# Failed broadcast provenance must not leak into a later member.
+set_retention R -domain Fresh -retention_condition hold -parameters RET_SUP_COR
+create_composite_domain Group -update -subdomains Fresh
+create_composite_domain Late
+set_retention LATE -domain Late -retention_condition hold -parameters NO_RET_SUP_COR
+set_retention LATE -domain Late -update -parameters NO_SAV_RES_COR
+create_composite_domain Late -update -subdomains Fresh
+expect_error {set_retention LATE -domain Fresh -update -parameters RET_SUP_COR} {*corruption parameter refinement*}
+expect_error {set_retention LATE -domain Fresh -update -parameters SAV_RES_COR} {*corruption parameter refinement*}
+puts {retention parameter transactions passed}

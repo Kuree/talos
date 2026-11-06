@@ -2,6 +2,7 @@
 #include "BalloonRetention.h"
 #include "PowerState.h"
 #include "ReferenceWindow.h"
+#include "RetentionReadback.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/SymbolTable.h"
@@ -35,7 +36,7 @@ struct Strategy {
   SmallVector<upf::UPFSupplySetOp> primary, retention;
   SmallVector<Descriptor> dependencies;
   Descriptor epoch, visible, badProcess, freezeProcess;
-  sim::SimFuncOp update, predicate;
+  sim::SimFuncOp update, predicate, outputPredicate;
 };
 struct Lowering {
   RetentionLoweringOptions o;
@@ -597,18 +598,27 @@ struct Lowering {
         .predicate(b, loc, ctx, o.descriptors);
   }
   Value canWrite(Strategy &s, Location loc, Value ctx) {
-    Value on = arith::AndIOp::create(b, loc, primary(s, loc, ctx),
-                                     normal(loc, ctx, s.retention));
+    Value supply = s.attribute.getRetentionSupplyCorrupt()
+                       ? normal(loc, ctx, s.retention)
+                       : bit(loc, true);
+    Value on = arith::AndIOp::create(b, loc, primary(s, loc, ctx), supply);
     return arith::AndIOp::create(b, loc, on, negate(loc, rtc(s, loc, ctx)));
   }
   Value bad(Strategy &s, Location loc, Value ctx) {
     // IEEE 1801-2018 9.7.3 Table 11: master/slave storage is destroyed
-    // whenever retention power is lost, or RTC is not True while primary is
-    // off.
+    // by retention loss when RET_SUP_COR is set, by both supplies OFF, or
+    // by primary OFF without retention. NO_RET_SUP_COR protects normal
+    // storage while primary is ON; it cannot power either store when both
+    // supplies are OFF (the unqualified both-OFF row of Table 11).
+    Value retentionOff = negate(loc, normal(loc, ctx, s.retention));
     return arith::OrIOp::create(
-        b, loc, negate(loc, normal(loc, ctx, s.retention)),
-        arith::AndIOp::create(b, loc, negate(loc, primary(s, loc, ctx)),
-                              negate(loc, rtc(s, loc, ctx))));
+        b, loc,
+        s.attribute.getRetentionSupplyCorrupt() ? retentionOff
+                                                : bit(loc, false),
+        arith::AndIOp::create(
+            b, loc, negate(loc, primary(s, loc, ctx)),
+            arith::OrIOp::create(b, loc, retentionOff,
+                                 negate(loc, rtc(s, loc, ctx)))));
   }
   Value pending(Location loc, Value ctx, Descriptor actor) {
     return sim::SimProcessEventPendingOp::create(
@@ -681,20 +691,28 @@ struct Lowering {
     // primary shutdown. Functional writes still require primary power in
     // canWrite(); neither the data input nor its supply handle is rebound.
     Value visible = normal(loc, ctx, s.retention);
-    if (!s.attribute.getUseRetentionAsPrimary())
+    if (!s.attribute.getUseRetentionAsPrimary()) {
+      if (!s.attribute.getRetentionSupplyCorrupt())
+        visible = bit(loc, true);
       visible = arith::AndIOp::create(b, loc, primary(s, loc, ctx), visible);
-    Value previous = handle(b, loc, ctx, s.visible);
-    Value changed = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::ne,
-                                          visible, load(b, loc, previous));
-    conditional(loc, changed, [&] {
-      // Output masking changes invalidate queued output publications without
-      // replacing the retained value with the corrupt visible value.
-      for (auto *reg : s.registers)
-        sim::SimPowerCancelNBAOp::create(
-            b, loc, ctx, handle(b, loc, ctx, reg->visible),
-            *sim::getPackedWidth(reg->visible.type));
-    });
-    store(b, loc, previous, visible);
+    }
+    // Independently guarded output transactions may become powered again
+    // before their due time. A RET visibility change alone must not cancel
+    // them when NO_RET_SUP_COR keeps the normal store alive.
+    if (!s.attribute.getUseRetentionAsPrimary() ||
+        s.attribute.getRetentionSupplyCorrupt()) {
+      Value previous = handle(b, loc, ctx, s.visible);
+      Value changed = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::ne,
+                                            visible, load(b, loc, previous));
+      conditional(loc, changed, [&] {
+        // Masking must not replace the retained value with corrupt Q.
+        for (auto *reg : s.registers)
+          sim::SimPowerCancelNBAOp::create(
+              b, loc, ctx, handle(b, loc, ctx, reg->visible),
+              *sim::getPackedWidth(reg->visible.type));
+      });
+      store(b, loc, previous, visible);
+    }
     for (auto *reg : s.registers) {
       // Select whole packed values with CFG, preserving 2/4-state and declared
       // packed layout, including non-host widths and ascending dimensions.
@@ -732,6 +750,16 @@ struct Lowering {
     b.setInsertionPointToEnd(&s.predicate.getBody().front());
     sim::SimReturnOp::create(b, loc,
                              allowed(s, loc, s.predicate.getArgument(0)));
+    if (s.attribute.getUseRetentionAsPrimary() &&
+        !s.attribute.getRetentionSupplyCorrupt()) {
+      s.outputPredicate =
+          observer(loc, s.update.getSymName().str() + ".output_allowed");
+      b.setInsertionPointToEnd(&s.outputPredicate.getBody().front());
+      Value ctx = s.outputPredicate.getArgument(0);
+      Value output = arith::AndIOp::create(b, loc, allowed(s, loc, ctx),
+                                           normal(loc, ctx, s.retention));
+      sim::SimReturnOp::create(b, loc, output);
+    }
   }
   void eventActor(Strategy &s, StringRef suffix, bool destructive) {
     Location loc = location(s.attribute);
@@ -787,7 +815,8 @@ struct Lowering {
           spawned);
   }
   void rootInsertion() { b.setInsertionPoint(rootBoundary); }
-  Value cloneView(Value value, sim::SimFuncOp fn, Descriptor backing) {
+  FailureOr<Value> cloneView(Value value, sim::SimFuncOp fn,
+                             Descriptor backing) {
     SmallVector<Operation *> projections;
     Value source = value;
     while (auto view = source.getDefiningOp<ViewLikeOpInterface>()) {
@@ -795,12 +824,42 @@ struct Lowering {
       source = view.getViewSource();
     }
     IRMapping mapping;
-    mapping.map(source, handle(b, fn.getLoc(), fn.getArgument(0), backing));
+    Value replacement = handle(b, fn.getLoc(), fn.getArgument(0), backing);
+    if (source.getType() != replacement.getType())
+      return failure();
+    mapping.map(source, replacement);
     for (Operation *projection : llvm::reverse(projections)) {
       Operation *copy = b.clone(*projection, mapping);
       mapping.map(projection->getResults(), copy->getResults());
     }
     return mapping.lookup(value);
+  }
+  LogicalResult normalReads(Register &reg) {
+    llvm::DenseSet<Operation *> seen;
+    for (auto *writer : reg.writers) {
+      auto fn = writer->getParentOfType<sim::SimFuncOp>();
+      if ((startup(fn) && fn.getEntryKind() != sim::EntryKind::Initial) ||
+          !seen.insert(fn).second)
+        continue;
+      if (failed(validateRetentionReadbackHelpers(
+              fn, reg.visible.id, "retention-powered normal-state readback")))
+        return failure();
+      SmallVector<sim::SimRefLoadOp> loads;
+      fn.walk([&](sim::SimRefLoadOp load) {
+        if (storageID(load.getReference(), fn) == reg.visible.id)
+          loads.push_back(load);
+      });
+      for (auto load : loads) {
+        b.setInsertionPoint(load);
+        auto reference = cloneView(load.getReference(), fn, reg.backing);
+        if (failed(reference))
+          return load.emitError("retention-powered normal-state readback "
+                                "through partial captured aliases is not "
+                                "implemented");
+        load.getReferenceMutable().assign(*reference);
+      }
+    }
+    return success();
   }
   void guard(Operation *op, Value valid, llvm::function_ref<void()> emit) {
     Location loc = op->getLoc();
@@ -822,11 +881,31 @@ struct Lowering {
     Value predicate = sim::SimObserverBindOp::create(
         b, loc, sim::ObserverType::get(b.getContext(), b.getI1Type()),
         s.predicate.getSymNameAttr(), dependencies, uint32_t{0});
-    sim::SimPowerNBAOp::create(
-        b, loc, ctx, value, handle(b, loc, ctx, reg.backing),
-        handle(b, loc, ctx, reg.visible), predicate,
-        handle(b, loc, ctx, o.domainEpoch), domainEpoch,
-        handle(b, loc, ctx, s.epoch), strategyEpoch, delay);
+    if (s.outputPredicate) {
+      // Retention-powered Q can be OFF while primary-powered N still
+      // updates under NO_RET_SUP_COR. Keep each Q NBA occurrence, rather
+      // than coalescing several backing writes in the output monitor.
+      Value zero = arith::ConstantIntOp::create(b, loc, 0, 64);
+      Value width = arith::ConstantIntOp::create(
+          b, loc, *sim::getPackedWidth(reg.backing.type), 64);
+      auto issue = [&](Descriptor target, Value guard) {
+        sim::SimPowerNBAViewOp::create(
+            b, loc, ctx, value, handle(b, loc, ctx, target), zero, zero, width,
+            bit(loc, true), guard, handle(b, loc, ctx, o.domainEpoch),
+            domainEpoch, handle(b, loc, ctx, s.epoch), strategyEpoch, delay);
+      };
+      issue(reg.backing, predicate);
+      Value output = sim::SimObserverBindOp::create(
+          b, loc, sim::ObserverType::get(b.getContext(), b.getI1Type()),
+          s.outputPredicate.getSymNameAttr(), dependencies, uint32_t{0});
+      issue(reg.visible, output);
+    } else {
+      sim::SimPowerNBAOp::create(
+          b, loc, ctx, value, handle(b, loc, ctx, reg.backing),
+          handle(b, loc, ctx, reg.visible), predicate,
+          handle(b, loc, ctx, o.domainEpoch), domainEpoch,
+          handle(b, loc, ctx, s.epoch), strategyEpoch, delay);
+    }
   }
   void nba(Strategy &s, Register &reg, sim::SimNBAEnqueueOp op,
            Value domainEpoch, Value strategyEpoch) {
@@ -894,7 +973,9 @@ struct Lowering {
         add(found->second);
       }
       s.epoch = o.storage(loc, name + ".epoch", b.getI64Type());
-      s.visible = o.storage(loc, name + ".visible", b.getI1Type());
+      if (!s.attribute.getUseRetentionAsPrimary() ||
+          s.attribute.getRetentionSupplyCorrupt())
+        s.visible = o.storage(loc, name + ".visible", b.getI1Type());
       s.badProcess = o.storage(loc, name + ".bad_process",
                                sim::ProcessType::get(b.getContext()));
       s.freezeProcess = o.storage(loc, name + ".freeze_process",
@@ -906,11 +987,17 @@ struct Lowering {
                       reg->visible.type);
       makeUpdate(s);
       makePredicate(s);
+      if (s.outputPredicate)
+        for (auto *reg : s.registers)
+          if (failed(normalReads(*reg)))
+            return failure();
       rootInsertion();
       Value ctx = o.root.getArgument(0);
       store(b, loc, handle(b, loc, ctx, s.epoch),
             arith::ConstantIntOp::create(b, loc, 0, 64));
-      store(b, loc, handle(b, loc, ctx, s.visible), bit(loc, false));
+      if (!s.attribute.getUseRetentionAsPrimary() ||
+          s.attribute.getRetentionSupplyCorrupt())
+        store(b, loc, handle(b, loc, ctx, s.visible), bit(loc, false));
       for (auto *reg : s.registers)
         store(b, loc, handle(b, loc, ctx, reg->backing),
               load(b, loc, handle(b, loc, ctx, reg->visible)));
@@ -951,9 +1038,19 @@ struct Lowering {
           Value context = fn.getArgument(0);
           if (startup(fn)) {
             auto write = cast<sim::SimRefStoreOp>(op);
-            Value destination =
+            auto destination =
                 cloneView(write.getReference(), fn, reg->backing);
-            store(b, op->getLoc(), destination, write.getValue());
+            if (failed(destination))
+              return write.emitError(
+                  "retention initialization through a "
+                  "partial captured alias is not implemented");
+            store(b, op->getLoc(), *destination, write.getValue());
+            if (s.outputPredicate &&
+                fn.getEntryKind() == sim::EntryKind::Initial)
+              write.getValueMutable().assign(arith::SelectOp::create(
+                  b, op->getLoc(), normal(op->getLoc(), context, s.retention),
+                  write.getValue(),
+                  corrupt(b, op->getLoc(), write.getValue().getType())));
             continue;
           }
           Value domainSnapshot, strategySnapshot;
@@ -971,6 +1068,11 @@ struct Lowering {
               store(b, op->getLoc(),
                     handle(b, op->getLoc(), context, reg->backing),
                     write.getValue());
+              if (s.outputPredicate)
+                write.getValueMutable().assign(arith::SelectOp::create(
+                    b, op->getLoc(), normal(op->getLoc(), context, s.retention),
+                    write.getValue(),
+                    corrupt(b, op->getLoc(), write.getValue().getType())));
             } else {
               auto enqueue = cast<sim::SimNBAEnqueueOp>(op);
               nba(s, *reg, enqueue, domainSnapshot, strategySnapshot);
