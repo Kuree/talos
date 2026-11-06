@@ -4,14 +4,14 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-edit-attributes{has=test.priority erase},test-talos-edit-attributes{has=test.deferred set="{resume_region = 3 : i32}"},test-talos-replicate,simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.deferred.mlir 2> %t.deferred.trace
 // RUN: FileCheck %s --check-prefix=DEFERRED < %t.deferred.mlir
 // RUN: FileCheck %s --check-prefix=DEFERRED-PLAN < %t.deferred.trace
-// RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-replicate,simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.priority.mlir 2> %t.priority.trace
+// RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-edit-attributes{has=test.deferred set="{resume_region = 3 : i32}"},test-talos-replicate,simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.priority.mlir 2> %t.priority.trace
 // RUN: FileCheck %s --check-prefix=PRIORITY < %t.priority.mlir
 
 // The counter owners cannot fuse because they may terminate. The pure `aaa`
 // owner instead joins a ranked group; making its wait deferred moves it after
-// all Active owners. A priority cancellation waiter disables local dispatch.
-// These variants check the generated CFG, including the actual planner choices,
-// rather than inferring coverage from the existence of a segment symbol.
+// all Active owners. A priority cancellation waiter adds a priority check
+// between owners. These variants check the generated CFG, including the
+// actual planner choices, rather than inferring coverage from symbols.
 // IEEE 1800-2023 4.4.2.2-4.4.2.4, 4.6 and 4.7: retain region boundaries and
 // statement/NBA ordering; the particular order between Active owners is chosen
 // by the implementation.
@@ -19,73 +19,75 @@
 // SPARSE-PLAN: talos eval owner: bit=0 {{.*}} group=__talos_eval_ranked_group_0
 // SPARSE-PLAN: talos eval owner: bit=513 {{.*}} group=-
 
-// The outer coordinator owns bit zero. A local encounter with that bit must
-// return OK without consuming it, while an invalid initial selection fails.
+// The ranked group runs from its word, in rank order before the direct owners
+// of that word; the coordinator polls termination after the word. No owner
+// needs the per-owner switch.
 // SPARSE-LABEL: llvm.func @__talos_eval_dispatch_v1(
-// SPARSE: llvm.call @__talos_eval_ranked_group_0(
-// SPARSE-LABEL: llvm.func @__talos_eval_dispatch_v1.segment_0(
-// SPARSE: llvm.switch %arg1 : i64, ^[[INVALID:bb[0-9]+]] [
-// SPARSE-NEXT: 1: ^[[FIRST:bb[0-9]+]],
-// SPARSE: 511:
-// SPARSE-NEXT: ]
-// SPARSE: ^[[LOCAL:bb[0-9]+]](%[[BIT:.*]]: i64):
-// SPARSE: llvm.switch %[[BIT]] : i64, ^[[DONE:bb[0-9]+]] [
-// SPARSE-NEXT: 1: ^[[FIRST]],
-// SPARSE: 511:
-// SPARSE-NEXT: ]
-// SPARSE: ^[[INVALID]]:
-// SPARSE: %[[UNAVAILABLE:.*]] = llvm.mlir.constant(13 : i32)
-// SPARSE: llvm.br ^[[RETURN:bb[0-9]+]](%[[UNAVAILABLE]] : i32)
-// SPARSE: "llvm.intr.cttz"
-// SPARSE: llvm.br ^[[LOCAL]](
-// SPARSE: ^[[DONE]]:
-// SPARSE-NEXT: %[[OK:.*]] = llvm.mlir.constant(0 : i32)
-// SPARSE-NEXT: llvm.br ^[[RETURN]](%[[OK]] : i32)
-// SPARSE: ^[[RETURN]](%[[STATUS:.*]]: i32):
-// SPARSE-NEXT: llvm.return %[[STATUS]]
-// SPARSE-LABEL: llvm.func @__talos_eval_dispatch_v1.segment_1(
+// SPARSE-NOT: llvm.call @__talos_eval_ranked_group_0(
+// SPARSE: llvm.call @__talos_eval_dispatch_v1.word_0(
+// SPARSE-NOT: segment
+// SPARSE-LABEL: llvm.func @__talos_eval_dispatch_v1.word_0(
+// SPARSE: %[[GROUP_BIT:.*]] = llvm.mlir.constant(1 : i64)
+// SPARSE: llvm.and %{{.*}}, %[[GROUP_BIT]]
+// SPARSE: llvm.cond_br %{{.*}}, ^[[GROUP:bb[0-9]+]], ^[[NEXT:bb[0-9]+]]
+// SPARSE: ^[[GROUP]]:
+// SPARSE-NEXT: llvm.call @__talos_eval_ranked_group_0(%arg0)
+// SPARSE-NEXT: llvm.br ^[[NEXT]]
+// SPARSE: ^[[NEXT]]:
+// SPARSE: %[[SECOND:.*]] = llvm.mlir.constant(2 : i64)
+// SPARSE: llvm.and %{{.*}}, %[[SECOND]]
+// SPARSE-LABEL: llvm.func @__talos_eval_dispatch_v1.word_8(
+// SPARSE: llvm.call @__talos_eval_path_dispatch_v1_{{[0-9]+}}(%arg0)
+// SPARSE: llvm.call @__talos_eval_path_dispatch_v1_{{[0-9]+}}(%arg0)
+// SPARSE: llvm.return
+// SPARSE-NEXT: }
 
 // DEFERRED-PLAN: talos eval owner: bit=512 {{.*}} group=- {{.*}}{{$}}
 // DEFERRED-PLAN-NEXT: talos eval owner: bit=513 {{.*}} deferred{{$}}
 
-// The wholly Active segment can loop. The mixed segment must return after
-// each owner so the outer coordinator checks the Inactive boundary again.
+// Word 8 holds Active owner 512 and deferred owner 513. The sweep gates that
+// word (and only that word) on its Active bit; once no Active word is dirty, the coordinator
+// scans the deferred bits directly, checks for a finish request, takes the
+// Inactive cut and runs the deferred owner from the per-owner switch.
 // DEFERRED-LABEL: llvm.func @__talos_eval_dispatch_v1(
-// DEFERRED: %[[FIRST_DEFERRED:.*]] = llvm.mlir.constant(513 : i64)
-// DEFERRED: llvm.icmp "uge" %{{.*}}, %[[FIRST_DEFERRED]]
-// DEFERRED: llvm.call @talos_rt_v1_scheduler_termination_requested(
-// DEFERRED-LABEL: llvm.func @__talos_eval_dispatch_v1.segment_0(
-// DEFERRED: "llvm.intr.cttz"
-// DEFERRED-LABEL: llvm.func @__talos_eval_dispatch_v1.segment_1(
-// DEFERRED: llvm.switch %arg1 : i64,
-// DEFERRED-NEXT: 512:
-// DEFERRED-NEXT: 513:
+// DEFERRED: llvm.switch %[[DEFERRED_BIT:.*]] : i64, ^{{bb[0-9]+}} [
+// DEFERRED-NEXT: 513: ^
 // DEFERRED-NEXT: ]
-// DEFERRED-NEXT: ^[[RESUME:bb[0-9]+]]:
-// DEFERRED-NEXT: %[[OK:.*]] = llvm.mlir.constant(0 : i32)
-// DEFERRED-NEXT: llvm.br ^[[RETURN:bb[0-9]+]](%[[OK]] : i32)
-// DEFERRED-NOT: llvm.switch
-// DEFERRED-NOT: llvm.intr.cttz
-// DEFERRED: llvm.br ^[[RESUME]]
-// DEFERRED-NOT: llvm.switch
-// DEFERRED-NOT: llvm.intr.cttz
-// DEFERRED: ^[[RETURN]](%[[STATUS:.*]]: i32):
-// DEFERRED-NEXT: llvm.return %[[STATUS]]
-// DEFERRED-NEXT: }
+// DEFERRED: %[[INACTIVE:.*]] = llvm.mlir.constant(2 : i64)
+// DEFERRED-NEXT: %[[PENDING:.*]] = llvm.and %{{.*}}, %[[INACTIVE]]
+// DEFERRED: %[[MIXED:.*]] = llvm.mlir.constant(8 : i64)
+// DEFERRED-NEXT: %[[IS_MIXED:.*]] = llvm.icmp "eq" %{{.*}}, %[[MIXED]]
+// DEFERRED-NEXT: llvm.cond_br %[[IS_MIXED]], ^[[SHARED:bb[0-9]+]], ^{{bb[0-9]+}}(
+// DEFERRED-NEXT: ^[[SHARED]]:
+// DEFERRED-NEXT: %[[ACTIVE:.*]] = llvm.mlir.constant(1 : i64)
+// DEFERRED-NEXT: llvm.and %{{.*}}, %[[ACTIVE]]
+// DEFERRED: "llvm.intr.cttz"(%[[PENDING]])
+// DEFERRED: llvm.call @talos_rt_v1_scheduler_termination_requested(
+// DEFERRED-LABEL: llvm.func @__talos_eval_dispatch_v1.word_8(
+// DEFERRED: llvm.mlir.constant(1 : i64)
+// DEFERRED-NOT: llvm.mlir.constant(2 : i64)
+// DEFERRED-NOT: llvm.func
+// DEFERRED: llvm.call @__talos_eval_path_dispatch_v1_{{[0-9]+}}(%arg0)
+// DEFERRED-NOT: llvm.mlir.constant(2 : i64)
+// DEFERRED: llvm.func
 
-// Priority work is polled between owners, including owners in the same segment.
+// The priority cancellation waiter is runtime-owned, so this variant keeps a
+// runtime calendar; with `aaa` deferred, word 8 is shared with the deferred
+// owner. The NBA cut drains runtime work, then the deferred owner runs from
+// the per-owner switch, which must survive although only the commit path
+// emitted after the sweep branches to it. Priority work is polled after each
+// owner of a word: a pending priority signal returns TALOS_RT_AOT_CHECKPOINT
+// (20) before the next owner (IEEE 1800-2023 4.4.2.3-4.4.2.4).
 // PRIORITY-LABEL: llvm.func internal @__talos_eval_dispatch_v1.__talos_pending(
-// PRIORITY: llvm.call @talos_rt_v1_scheduler_priority_signal_pending(
-// PRIORITY-LABEL: llvm.func @__talos_eval_dispatch_v1.segment_0(
-// PRIORITY: llvm.switch %arg1 : i64,
-// PRIORITY-NOT: llvm.switch
-// PRIORITY-NOT: llvm.intr.cttz
-// PRIORITY-LABEL: llvm.func @__talos_eval_dispatch_v1.segment_1(
-// PRIORITY: llvm.switch %arg1 : i64,
-// PRIORITY-NOT: llvm.switch
-// PRIORITY-NOT: llvm.intr.cttz
-// PRIORITY: llvm.return
-// PRIORITY-NEXT: }
+// PRIORITY: llvm.call @talos_rt_v1_scheduler_prepare_eval_nba
+// PRIORITY: llvm.switch %{{.*}} : i64, ^{{bb[0-9]+}} [
+// PRIORITY-NEXT: 513: ^
+// PRIORITY-NEXT: ]
+// PRIORITY-LABEL: llvm.func @__talos_eval_dispatch_v1.word_0(
+// PRIORITY: llvm.call @talos_rt_v1_scheduler_priority_signal_pending(%arg0)
+// PRIORITY-NEXT: llvm.mlir.constant(0 : i32)
+// PRIORITY-NEXT: llvm.icmp "ne"
+// PRIORITY-NEXT: llvm.mlir.constant(20 : i32)
 
 !clk = !simulation.ref<i1>
 !int = !simulation.ref<i32>

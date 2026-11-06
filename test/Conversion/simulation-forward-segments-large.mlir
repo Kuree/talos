@@ -9,17 +9,25 @@
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_0.fallback(
 // PLAN-SAME: schedule.eval.ranked_members = array<i32: 0, 1, {{.*}}27, 28>
 // Deferred readiness is charged before expansion; the remaining helper
-// budget admits 19 state ranges using their actual joins and memory cuts.
+// budget admits 28 state ranges using their actual joins and memory cuts.
 // Promotion queries read only the unknown plane and are no value-plane cut.
 // Readiness itself already uses region SSA.
-// PLAN-SAME: schedule.eval.ssa_value_ranges = 19 : i64
+// PLAN-SAME: schedule.eval.ssa_value_ranges = 28 : i64
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_2(
-// PLAN-SAME: schedule.eval.cache_hint_words = 2 : i64
 // PLAN-SAME: schedule.eval.predicated_dataflow
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_2.fallback(
 // PLAN-NOT: schedule.ready.
-// PLAN-LABEL: llvm.func @__talos_eval_ranked_group_0.segment(
-// PLAN-SAME: schedule.eval.segment_helpers = [@__talos_eval_ranked_group_0, @__talos_eval_ranked_group_1, @__talos_eval_ranked_group_2]
+// The chain spans two ready words, so the coordinator's word sweep calls the
+// chunks in rank order instead of a segment wrapper; the last chunk starts in
+// word 0 and runs again from word 1 only if its members there are pending.
+// PLAN-NOT: .segment(
+// PLAN-LABEL: llvm.func @__talos_eval_dispatch_v1.word_0(
+// PLAN: llvm.call @__talos_eval_ranked_group_0(
+// PLAN: llvm.call @__talos_eval_ranked_group_1(
+// PLAN: llvm.call @__talos_eval_ranked_group_2(
+// PLAN-LABEL: llvm.func @__talos_eval_dispatch_v1.word_1(
+// PLAN-NOT: llvm.func
+// PLAN: llvm.call @__talos_eval_ranked_group_2(
 
 !ref = !simulation.ref<i1>
 !vref = !simulation.ref<i8>

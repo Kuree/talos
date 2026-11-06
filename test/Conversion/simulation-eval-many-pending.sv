@@ -6,8 +6,8 @@
 // than 64 roots share one activation. The 66 clocked processes share one clock
 // cohort, so their pending updates span two readiness words. The testbench
 // keeps a string across its waits and stays a runtime process.
-// TRACE: talos ranked groups: candidates=66 groups=3 segments=1 members=66 clocked_members=66
-// TRACE: talos eval local pending roots: 66 cores=6 fixed-candidates=66 bitmap-words=2 frame-bytes=1072
+// TRACE: talos ranked groups: candidates=66 groups=3 segments=0 members=66 clocked_members=66
+// TRACE: talos eval local pending roots: 66 cores=7 fixed-candidates=66 bitmap-words=2 frame-bytes=1072
 // The cohort's frame holds the two bitmap words and 66 value/unknown pairs.
 // CHECK-LABEL: llvm.func @__talos_eval_ranked_group_0(
 // CHECK: %[[WORDS:.*]] = llvm.mlir.constant(134 : i64) : i64

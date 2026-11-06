@@ -6,19 +6,20 @@
 // RUN: %llvm_dist/bin/clang -O3 %t.ll -o %t.o3
 // RUN: %t.o3
 // Local reads see ordered consume/add actions. Opaque calls see coherent leaves
-// and summaries, and later local reads include the callback's modifications.
+// and dirty bits (the region adds only its net additions, here to the last
+// leaf), and later local reads include the callback's modifications.
 // CHECK-NOT: schedule.ready
 // CHECK-LABEL: llvm.func @exercise
 // CHECK-NOT: llvm.alloca
 // CHECK: llvm.call @observe
 // CHECK-NOT: schedule.ready
 module {
-  llvm.mlir.global internal @ready(dense<0> : tensor<66xi64>) : !llvm.array<66 x i64>
+  llvm.mlir.global internal @ready(dense<0> : tensor<65xi64>) : !llvm.array<65 x i64>
   llvm.mlir.global internal @error(0 : i32) : i32
   llvm.func @observe() -> i1 attributes {passthrough = ["noinline"]} {
     %base = llvm.mlir.addressof @ready : !llvm.ptr
     %last = llvm.getelementptr %base[63] : (!llvm.ptr) -> !llvm.ptr, i64
-    %summary = llvm.getelementptr %base[65] : (!llvm.ptr) -> !llvm.ptr, i64
+    %summary = llvm.getelementptr %base[64] : (!llvm.ptr) -> !llvm.ptr, i64
     %zero = llvm.mlir.constant(0 : i64) : i64
     %one = llvm.mlir.constant(1 : i64) : i64
     %eight = llvm.mlir.constant(8 : i64) : i64

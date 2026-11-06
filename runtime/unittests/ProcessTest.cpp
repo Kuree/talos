@@ -5466,10 +5466,13 @@ TEST(Scheduler, IndexedClockKernelIngressMaintainsReadySetAcrossReentry) {
               TALOS_RT_OK);
     ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 0, 1),
               TALOS_RT_OK);
-    clock.reserved =
-        2; // Unknown index layout must be rejected, not read as leaves.
-    EXPECT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan),
-              TALOS_RT_INVALID_ARGUMENT);
+    // Unknown or conflicting index layouts must be rejected, not read as
+    // leaves.
+    for (uint32_t reserved : {4u, 3u}) {
+      clock.reserved = reserved;
+      EXPECT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan),
+                TALOS_RT_INVALID_ARGUMENT);
+    }
     clock.reserved = talos::runtime::indexedClockKernelReadySet;
     ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
     for (unsigned iteration = 0; iteration != 3; ++iteration) {
@@ -5483,6 +5486,63 @@ TEST(Scheduler, IndexedClockKernelIngressMaintainsReadySetAcrossReentry) {
                 TALOS_RT_OK);
       EXPECT_EQ(ready.popFirst(), 0u);
       EXPECT_EQ(ready.popFirst(), capacity - 1);
+      EXPECT_EQ(ready.findFirst(), UINT32_MAX);
+    }
+    talos_rt_v1_context_destroy(context);
+  }
+}
+
+// Generated eval ingress: native publications set the leaf and every dirty
+// level, so a sweep that cleared a dirty bit finds the owner again.
+TEST(Scheduler, DirtyClockKernelIngressSetsEveryDirtyLevel) {
+  for (uint32_t capacity : {65u, 129u, 2049u, 4097u, 40000u}) {
+    SCOPED_TRACE(capacity);
+    uint32_t words = (capacity + 63) / 64;
+    const auto layout = talos::runtime::clockKernelDirtyReadySetLayout(words);
+    std::vector<uint64_t> ingress(layout.storageWords);
+    talos::runtime::DirtyReadySetView ready(ingress.data(), layout);
+    AOTTestState state;
+    talos_rt_native_clock_kernel clock{1,
+                                       TALOS_RT_WAIT_EDGE_POSEDGE,
+                                       0,
+                                       1,
+                                       ingress.data(),
+                                       words,
+                                       talos::runtime::dirtyClockKernelReadySet,
+                                       nullptr};
+    talos_rt_native_schedule_plan plan = makeAOTPlan(state, 1);
+    plan.clock_kernels = &clock;
+    plan.clock_kernel_count = 1;
+    talos_rt_native_merged_fragment merged{0, 0, 0,      capacity - 1,
+                                           0, 0, nullptr};
+    plan.merged_fragments = &merged;
+    plan.merged_fragment_count = 1;
+    plan.timeslot_coordinator = clockCoordinator;
+    talos_rt_execution_descriptor_v1 execution{};
+    execution.version = TALOS_RT_VERSION;
+    execution.state_bit_count = 1;
+    talos_rt_context *context = nullptr;
+    ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 0, 1),
+              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_scheduler_install_aot(context, &plan), TALOS_RT_OK);
+    for (unsigned iteration = 0; iteration != 3; ++iteration) {
+      ASSERT_EQ(
+          talos_rt_v1_scheduler_activate_clock_kernel(context, 0, capacity - 1),
+          TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_scheduler_activate_clock_kernel(context, 0, 0),
+                TALOS_RT_OK);
+      EXPECT_EQ(ready.findFirst(), 0u);
+      ready.reset(0);
+      // Clear every dirty bit although the last leaf stays pending (a sweep
+      // never does): a publication into a nonempty leaf must still set them.
+      std::fill(ingress.begin() + words, ingress.end(), 0);
+      ASSERT_EQ(
+          talos_rt_v1_scheduler_activate_clock_kernel(context, 0, capacity - 1),
+          TALOS_RT_OK);
+      EXPECT_EQ(ready.findFirst(), capacity - 1);
+      ready.reset(capacity - 1);
       EXPECT_EQ(ready.findFirst(), UINT32_MAX);
     }
     talos_rt_v1_context_destroy(context);

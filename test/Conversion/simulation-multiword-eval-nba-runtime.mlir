@@ -14,9 +14,15 @@
 // PLAN-SAME: !llvm.array<2 x i64>
 // PLAN-LABEL: llvm.func @__talos_aot_schedule_run_v1(
 // PLAN: llvm.call @talos_rt_v1_scheduler_prepare_periodic_aot
+// Two leaves and one dirty word; the word sweep reaches the second word.
 // PLAN-LABEL: llvm.func @__talos_eval_dispatch_v1(
 // PLAN: llvm.switch
-// PLAN: 64: ^
+// PLAN-NEXT: 0: ^
+// PLAN-NEXT: 1: ^
+// PLAN: llvm.call @__talos_eval_dispatch_v1.word_1(
+// PLAN-LABEL: llvm.func @__talos_eval_dispatch_v1.word_1(
+// PLAN: llvm.mlir.addressof @__talos_aot_model_ingress_v1
+// PLAN-NEXT: llvm.getelementptr %{{.*}}[8]
 
 !bit = !simulation.logic<1>
 !clockref = !simulation.ref<!bit>

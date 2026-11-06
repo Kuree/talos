@@ -2558,7 +2558,10 @@ talos_rt_v1_scheduler_install_aot(talos_rt_context *context,
         kernel.edge > TALOS_RT_WAIT_EDGE_BOTH || !kernel.ingress_mask ||
         kernel.ingress_word_count == 0 ||
         kernel.ingress_word_count > (uint64_t{UINT32_MAX} + 63) / 64 ||
-        (kernel.reserved & ~talos::runtime::indexedClockKernelReadySet) != 0 ||
+        (kernel.reserved & ~(talos::runtime::indexedClockKernelReadySet |
+                             talos::runtime::dirtyClockKernelReadySet)) != 0 ||
+        kernel.reserved == (talos::runtime::indexedClockKernelReadySet |
+                            talos::runtime::dirtyClockKernelReadySet) ||
         (((plan->flags & TALOS_RT_NATIVE_SCHEDULE_EVAL) != 0) &&
          !kernel.active_mask))
       return TALOS_RT_INVALID_ARGUMENT;

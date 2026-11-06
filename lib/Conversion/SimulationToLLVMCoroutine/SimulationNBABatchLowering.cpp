@@ -135,7 +135,7 @@ public:
     Value pending = c(0);
     if (!ready.empty()) {
       Value ingress = address(layout.getIngress());
-      runtime::ReadySetLayout readyLayout(layout.getCapacity());
+      EvalReadySetLayout readyLayout(layout.getCapacity());
       for (auto &[word, scratch] : ready) {
         Value mask = load(scratch);
         updateEvalReadyWord(b, loc, ingress, readyLayout, word, mask);

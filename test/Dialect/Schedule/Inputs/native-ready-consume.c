@@ -2,24 +2,22 @@
 #include <stdint.h>
 #include <string.h>
 
-enum { LEAVES = 4096, CACHE = 4096, SUMMARY = 4097, TOP = 4161, WORDS = 4162 };
+// DirtyReadySetLayout for 262144 bits: leaves, 64 dirty words, one top word.
+enum { LEAVES = 4096, DIRTY = 4096, TOP = 4160, WORDS = 4161 };
 static uint64_t expected[WORDS];
 uint64_t ready[WORDS];
 void consume(uint64_t *, uint64_t);
 void consume_structured(uint64_t *, uint64_t, uint64_t);
 void consume_global(uint64_t);
 
-// Recompute every summary from the leaves, independently of the incremental
-// generated code. Siblings in the same and different summary words exercise
-// stopping at each level, including a completely empty ready universe.
-static void index_words(uint64_t *words) {
-  memset(words + SUMMARY, 0, (WORDS - SUMMARY) * sizeof(*words));
+// Mark every nonempty leaf dirty, as the adds that filled it did. `stale`
+// also leaves a dirty bit over an empty leaf, which a consume must keep.
+static void index_words(uint64_t *words, unsigned stale) {
   for (unsigned i = 0; i < LEAVES; ++i)
-    if (words[i])
-      words[SUMMARY + i / 64] |= UINT64_C(1) << (i % 64);
-  for (unsigned i = 0; i < 64; ++i)
-    if (words[SUMMARY + i])
-      words[TOP] |= UINT64_C(1) << i;
+    if (words[i] || i == stale) {
+      words[DIRTY + i / 64] |= UINT64_C(1) << (i % 64);
+      words[TOP] |= UINT64_C(1) << (i / 64);
+    }
 }
 void observe(uint64_t *actual) {
   assert(memcmp(actual, expected, sizeof(expected)) == 0);
@@ -34,17 +32,18 @@ int main(void) {
         actual[0] = masks[i];
         actual[1] = siblings & 1;
         actual[64] = siblings & 2;
-        index_words(actual);
+        index_words(actual, siblings == 3 ? 2 : LEAVES);
         memcpy(expected, actual, sizeof(expected));
         expected[0] &= ~masks[j];
-        index_words(expected);
         consume(actual, masks[j]);
         // A second consume of the same mask must be harmless, even after
-        // the last pending owner in a leaf or summary has disappeared.
+        // the last pending owner in a leaf has disappeared.
         consume(actual, masks[j]);
         memcpy(actual, expected, sizeof(actual));
         actual[0] = masks[i];
-        index_words(actual);
+        index_words(actual, LEAVES);
+        memcpy(expected, actual, sizeof(expected));
+        expected[0] &= ~masks[j];
         consume_structured(actual, masks[j], 1);
         consume_structured(actual, UINT64_MAX, 0);
 
@@ -52,11 +51,9 @@ int main(void) {
         ready[4095] = masks[i];
         ready[4094] = siblings & 1;
         ready[4031] = siblings & 2;
-        ready[CACHE] = siblings & 2 ? 4031 : 4094;
-        index_words(ready);
+        index_words(ready, LEAVES);
         memcpy(expected, ready, sizeof(expected));
         expected[4095] &= ~masks[j];
-        index_words(expected);
         consume_global(masks[j]);
       }
   return 0;

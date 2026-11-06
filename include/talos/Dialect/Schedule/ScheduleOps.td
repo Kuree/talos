@@ -222,8 +222,11 @@ def NativeReadyUpdateOp
                                            MemoryEffectsOpInterface>]> {
   let summary = "add or consume an exact word of pending fine activations";
   let description = [{
-    Updates the authoritative ReadySetLayout leaf and its derived indexes.
-    With consume=false it unions mask; with consume=true it removes mask.
+    Updates the authoritative DirtyReadySetLayout leaf and its dirty levels.
+    With consume=false it unions mask and, when mask may be nonzero, sets the
+    leaf's dirty bit at every level; with consume=true it removes mask from
+    the leaf only (dirty bits are cleared by the reader that sees the child
+    empty).
     capacity freezes the ready universe and word identifies the leaf, without
     recovering either from addresses. These are pending activations, not
     event history. Ordered updates may be combined only while no selection,
@@ -256,15 +259,15 @@ def NativeReadyMergeOp
   let description = [{
     Reads ceil(capacity / 64) i64 words from source in ascending order. Each
     word is read immediately before adding its bits to the corresponding
-    ReadySetLayout leaf at base and updating that leaf's indexes. Bits above
-    capacity in the last source word are ignored. Source may overlap base;
-    earlier leaf/index writes are visible to later source reads. Both operands
-    address storage aligned to at least eight bytes.
+    DirtyReadySetLayout leaf at base and setting that leaf's dirty bits. Bits
+    above capacity in the last source word are ignored. Source may overlap
+    base; earlier leaf/dirty writes are visible to later source reads. Both
+    operands address storage aligned to at least eight bytes.
 
     This is an ordered scheduler effect, with no actor, callback, selection or
     checkpoint inside it. Pending ready updates must be materialized before
-    the merge, and its leaves, exact summaries and stale-low minimum cache are
-    visible to every subsequent observer. It does not consume the source.
+    the merge, and its leaves and dirty bits are visible to every subsequent
+    observer. It does not consume the source.
   }];
   let arguments = (ins LLVM_AnyPointer:$base, LLVM_AnyPointer:$source,
       I64Attr:$capacity);

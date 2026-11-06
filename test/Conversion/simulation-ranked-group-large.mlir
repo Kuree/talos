@@ -5,12 +5,11 @@
 // into a 70-member chain (storage 1 ... 70); the checker observes the first.
 
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_0(
-// PLAN-SAME: schedule.eval.cache_hint_words = 2 : i64
 // PLAN-SAME: schedule.eval.ranked_members = array<i32: 0, 1, {{.*}}62, 63, 64, 65, 66, 67, 68, 69>
 // PLAN-NOT: llvm.call %
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_0.fallback(
 // PLAN-SAME: schedule.eval.ssa_ready_words = 3 : i64
-// PLAN-LABEL: llvm.func @__talos_eval_dispatch_v1(
+// PLAN-LABEL: llvm.func @__talos_eval_dispatch_v1.word_0(
 // PLAN: llvm.call @__talos_eval_ranked_group_0
 
 !ref = !simulation.ref<i1>

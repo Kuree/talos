@@ -353,6 +353,132 @@ private:
   uint64_t *words = &inlineWord;
 };
 
+/// Generated eval ready sets: authoritative leaves followed by dirty levels,
+/// one bit per word of the level below and no minimum cache. Every add ORs
+/// its leaf and one bit at every level, without testing the old leaf; a
+/// consume clears only its leaf. A dirty bit therefore covers a superset of
+/// the nonempty children: whenever a child holds a pending bit, so does its
+/// parent. Only a reader clears a dirty bit, after observing the child empty,
+/// so adds need no compare/select chain and consumes never touch the index.
+struct DirtyReadySetLayout {
+  // The top level is scanned flat; beyond this many words add a level.
+  static constexpr uint32_t flatWordLimit = 8;
+  static constexpr unsigned maxLevels = 6;
+
+  uint32_t capacity = 0;
+  unsigned levels = 1;
+  std::array<uint32_t, maxLevels> offsets{};
+  std::array<uint32_t, maxLevels> counts{};
+  uint32_t storageWords = 0;
+
+  explicit DirtyReadySetLayout(uint32_t bits = 0) : capacity(bits) {
+    counts[0] = (uint64_t{bits} + 63) / 64;
+    storageWords = counts[0];
+    if (counts[0] > 1)
+      do {
+        assert(levels < maxLevels);
+        offsets[levels] = storageWords;
+        counts[levels] = (uint64_t{counts[levels - 1]} + 63) / 64;
+        storageWords += counts[levels];
+        ++levels;
+      } while (counts[levels - 1] > flatWordLimit);
+  }
+
+  bool hasSummaries() const { return levels > 1; }
+  uint64_t lastWordMask() const {
+    return (capacity & 63) ? (uint64_t{1} << (capacity & 63)) - 1 : UINT64_MAX;
+  }
+};
+
+/// Mutable view over caller-owned storage in DirtyReadySetLayout format,
+/// with the same serialization rules as BasicReadySetView.
+class DirtyReadySetView {
+public:
+  DirtyReadySetView(uint64_t *storage, const DirtyReadySetLayout &layout)
+      : storage(storage), layout(layout) {}
+  DirtyReadySetView(uint64_t *, DirtyReadySetLayout &&) = delete;
+
+  bool test(uint32_t bit) const {
+    return bit < layout.capacity &&
+           (storage[bit / 64] & (uint64_t{1} << (bit & 63))) != 0;
+  }
+  bool set(uint32_t bit) {
+    if (bit >= layout.capacity)
+      return false;
+    uint64_t old = storage[bit / 64];
+    storage[bit / 64] = old | (uint64_t{1} << (bit & 63));
+    uint32_t child = bit / 64;
+    for (unsigned level = 1; level < layout.levels; ++level) {
+      storage[layout.offsets[level] + child / 64] |= uint64_t{1}
+                                                     << (child & 63);
+      child /= 64;
+    }
+    return (old & (uint64_t{1} << (bit & 63))) == 0;
+  }
+  bool reset(uint32_t bit) {
+    if (bit >= layout.capacity)
+      return false;
+    uint64_t old = storage[bit / 64];
+    storage[bit / 64] = old & ~(uint64_t{1} << (bit & 63));
+    return old != storage[bit / 64];
+  }
+  /// Add `mask` to leaf `index`; a nonempty mask sets its dirty bits.
+  bool setWord(uint32_t index, uint64_t mask) {
+    if (index >= layout.counts[0])
+      return false;
+    if (index + 1 == layout.counts[0])
+      mask &= layout.lastWordMask();
+    if (!mask)
+      return false;
+    uint64_t old = storage[index];
+    storage[index] = old | mask;
+    uint32_t child = index;
+    for (unsigned level = 1; level < layout.levels; ++level) {
+      storage[layout.offsets[level] + child / 64] |= uint64_t{1}
+                                                     << (child & 63);
+      child /= 64;
+    }
+    return storage[index] != old;
+  }
+  /// The lowest pending bit, clearing every dirty bit it finds stale.
+  uint32_t findFirst() {
+    if (!layout.hasSummaries())
+      return layout.counts[0] && storage[0]
+                 ? static_cast<uint32_t>(__builtin_ctzll(storage[0]))
+                 : ReadySetLayout::noBit;
+    unsigned top = layout.levels - 1;
+    for (uint32_t word = 0; word != layout.counts[top]; ++word)
+      while (uint64_t bits = storage[layout.offsets[top] + word]) {
+        uint32_t child = word * 64 + __builtin_ctzll(bits);
+        uint32_t found = descend(top, child);
+        if (found != ReadySetLayout::noBit)
+          return found;
+        storage[layout.offsets[top] + word] &= ~(uint64_t{1} << (child & 63));
+      }
+    return ReadySetLayout::noBit;
+  }
+
+private:
+  // `child` indexes level `level - 1`; its dirty bit at `level` is set.
+  uint32_t descend(unsigned level, uint32_t child) {
+    if (level == 1)
+      return storage[child] ? child * 64 + __builtin_ctzll(storage[child])
+                            : ReadySetLayout::noBit;
+    uint64_t &word = storage[layout.offsets[level - 1] + child];
+    while (word) {
+      uint32_t next = child * 64 + __builtin_ctzll(word);
+      uint32_t found = descend(level - 1, next);
+      if (found != ReadySetLayout::noBit)
+        return found;
+      word &= ~(uint64_t{1} << (next & 63));
+    }
+    return ReadySetLayout::noBit;
+  }
+
+  uint64_t *storage;
+  const DirtyReadySetLayout &layout;
+};
+
 using ReadySet = BasicReadySet<true>;
 // Forward graph passes carry their own cursor and ask for the global minimum
 // only on wraparound. Do not maintain an unused minimum cache on every wakeup;

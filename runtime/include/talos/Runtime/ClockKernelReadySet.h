@@ -11,17 +11,28 @@ namespace talos::runtime {
 
 // Opt-in use of the clock kernel's reserved field. ABI layout and leaf count
 // stay unchanged. Indexed kernels append ReadySetLayout's cache/summaries;
-// legacy callers with reserved == 0 continue to supply only raw leaf words.
+// dirty kernels append DirtyReadySetLayout's dirty levels; legacy callers
+// with reserved == 0 continue to supply only raw leaf words.
 inline constexpr uint32_t indexedClockKernelReadySet = 1;
+inline constexpr uint32_t dirtyClockKernelReadySet = 2;
 
 inline ReadySetLayout clockKernelReadySetLayout(uint32_t words) {
   return ReadySetLayout(static_cast<uint32_t>(
       std::min(uint64_t{words} * 64, uint64_t{UINT32_MAX})));
 }
 
+inline DirtyReadySetLayout clockKernelDirtyReadySetLayout(uint32_t words) {
+  return DirtyReadySetLayout(static_cast<uint32_t>(
+      std::min(uint64_t{words} * 64, uint64_t{UINT32_MAX})));
+}
+
 inline void publishClockKernelReady(const talos_rt_native_clock_kernel &kernel,
                                     uint32_t bit) {
-  if (kernel.reserved & indexedClockKernelReadySet) {
+  if (kernel.reserved & dirtyClockKernelReadySet) {
+    const DirtyReadySetLayout layout =
+        clockKernelDirtyReadySetLayout(kernel.ingress_word_count);
+    DirtyReadySetView(kernel.ingress_mask, layout).set(bit);
+  } else if (kernel.reserved & indexedClockKernelReadySet) {
     const ReadySetLayout layout =
         clockKernelReadySetLayout(kernel.ingress_word_count);
     ReadySetView(kernel.ingress_mask, layout).set(bit);

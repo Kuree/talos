@@ -7,7 +7,7 @@
 // RUN: %llvm_dist/bin/clang -O3 %t.ll %t.harness.ll -o %t.o3
 // RUN: %t.o3
 // Ordered additions/consumes cross loop backedges and joins. Alias reads and
-// callbacks see materialized leaves AND indexes. Callback changes survive.
+// callbacks see materialized leaves AND dirty bits. Callback changes survive.
 // CHECK-NOT: schedule.ready
 // CHECK-LABEL: llvm.func @exercise
 // CHECK-NOT: llvm.alloca
@@ -20,11 +20,11 @@
 // CHECK: llvm.call @observe
 // CHECK-NOT: schedule.ready
 module {
-  llvm.mlir.global external @ready() : !llvm.array<66 x i64> {
-    %zero = llvm.mlir.zero : !llvm.array<66 x i64>
-    llvm.return %zero : !llvm.array<66 x i64>
+  llvm.mlir.global external @ready() : !llvm.array<65 x i64> {
+    %zero = llvm.mlir.zero : !llvm.array<65 x i64>
+    llvm.return %zero : !llvm.array<65 x i64>
   }
-  llvm.mlir.alias external @ready_alias : !llvm.array<66 x i64> {
+  llvm.mlir.alias external @ready_alias : !llvm.array<65 x i64> {
     %base = llvm.mlir.addressof @ready : !llvm.ptr
     llvm.return %base : !llvm.ptr
   }

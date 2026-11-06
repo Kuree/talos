@@ -27,11 +27,11 @@ namespace {
 // boundary (IEEE 1800-2023 4.3, 4.5--4.7): no actor or observer executes inside
 // this operation, and it does not coalesce source events. Preserve ascending
 // read/add order even when source aliases the ready set. In particular, do not
-// defer cache or summary writes past a later source read.
+// defer dirty-level writes past a later source read.
 void materializeReadyMerge(schedule::NativeReadyMergeOp merge) {
   OpBuilder builder(merge);
   Location loc = merge.getLoc();
-  runtime::ReadySetLayout layout(merge.getCapacity());
+  detail::EvalReadySetLayout layout(merge.getCapacity());
   auto i64 = builder.getI64Type();
   auto constant = [&](uint64_t value) {
     return detail::llvmConstant(builder, loc, i64, value);
@@ -74,39 +74,25 @@ void materializeReadyMerge(schedule::NativeReadyMergeOp merge) {
   builder.setInsertionPointToStart(update);
   Value leaf = address(merge.getBase(), word);
   Value previous = load(leaf);
-  Value next = arith::OrIOp::create(builder, loc, previous, selected);
-  LLVM::StoreOp::create(builder, loc, next, leaf, 8);
-  if (layout.hasCache() || layout.hasSummaries()) {
-    Block *indexes = block();
-    // A previously nonempty leaf already has exact ancestor bits and a cache
-    // no greater than its index. Adding bits cannot change either property.
-    cf::CondBranchOp::create(builder, loc, empty(previous), indexes, advance);
-    builder.setInsertionPointToStart(indexes);
-    if (layout.hasCache()) {
-      Value slot = address(merge.getBase(), constant(layout.cacheOffset()));
-      Value minimum = arith::MinUIOp::create(builder, loc, load(slot), word);
-      LLVM::StoreOp::create(builder, loc, minimum, slot, 8);
-    }
-    Value child = word;
-    for (unsigned level = 1; level != layout.levels; ++level) {
-      Value parent = arith::ShRUIOp::create(builder, loc, child, constant(6));
-      Value index = arith::AddIOp::create(builder, loc, parent,
-                                          constant(layout.offsets[level]));
-      Value slot = address(merge.getBase(), index);
-      Value old = load(slot);
-      Value bit = arith::ShLIOp::create(
-          builder, loc, constant(1),
-          arith::AndIOp::create(builder, loc, child, constant(63)));
-      LLVM::StoreOp::create(
-          builder, loc, arith::OrIOp::create(builder, loc, old, bit), slot, 8);
-      child = parent;
-      if (level + 1 != layout.levels) {
-        Block *propagate = block();
-        // A nonempty parent already has its bit in the next level.
-        cf::CondBranchOp::create(builder, loc, empty(old), propagate, advance);
-        builder.setInsertionPointToStart(propagate);
-      }
-    }
+  LLVM::StoreOp::create(builder, loc,
+                        arith::OrIOp::create(builder, loc, previous, selected),
+                        leaf, 8);
+  // Every add ORs its dirty bits at each level, whatever the old leaf held:
+  // only the coordinator's sweep clears a dirty bit, after it observes the
+  // child empty (runtime::DirtyReadySetLayout).
+  Value child = word;
+  for (unsigned level = 1; level < layout.levels; ++level) {
+    Value parent = arith::ShRUIOp::create(builder, loc, child, constant(6));
+    Value index = arith::AddIOp::create(builder, loc, parent,
+                                        constant(layout.offsets[level]));
+    Value slot = address(merge.getBase(), index);
+    Value bit = arith::ShLIOp::create(
+        builder, loc, constant(1),
+        arith::AndIOp::create(builder, loc, child, constant(63)));
+    LLVM::StoreOp::create(builder, loc,
+                          arith::OrIOp::create(builder, loc, load(slot), bit),
+                          slot, 8);
+    child = parent;
   }
   cf::BranchOp::create(builder, loc, advance);
   builder.setInsertionPointToStart(advance);
@@ -189,7 +175,7 @@ void materializeReadyBatches(Operation *operation,
       }
     }
     detail::materializeEvalReadyWords(
-        builder, loc, base, runtime::ReadySetLayout(capacity), changes);
+        builder, loc, base, detail::EvalReadySetLayout(capacity), changes);
     for (Operation *op : batch)
       op->erase();
   }
@@ -313,7 +299,7 @@ void materializeLocalScheduleActions(
   }
   for (auto update : updates) {
     OpBuilder builder(update);
-    runtime::ReadySetLayout layout(update.getCapacity());
+    detail::EvalReadySetLayout layout(update.getCapacity());
     detail::materializeEvalReadyWord(builder, update.getLoc(), update.getBase(),
                                      layout, update.getWord(), update.getMask(),
                                      update.getConsume());
@@ -322,7 +308,7 @@ void materializeLocalScheduleActions(
   for (auto commit : commits) {
     OpBuilder builder(commit);
     auto loc = commit.getLoc();
-    runtime::ReadySetLayout layout(commit.getCapacity());
+    detail::EvalReadySetLayout layout(commit.getCapacity());
     Value previous =
         detail::loadOwnerWord(builder, loc, commit.getBase(), commit.getWord());
     Value inverse = builder.createOrFold<arith::XOrIOp>(
@@ -337,8 +323,7 @@ void materializeLocalScheduleActions(
                               builder, loc, commit.getBase(), commit.getWord()),
                           8);
     detail::materializeEvalReadyIndexes(builder, loc, commit.getBase(), layout,
-                                        commit.getWord(), next,
-                                        commit.getAddMask());
+                                        commit.getWord(), commit.getAddMask());
     commit.erase();
   }
   for (auto merge : merges)

@@ -2,7 +2,7 @@
 
 // A wide NBA root with an edge observer must retain ordered update events
 // (IEEE 1800-2023 4.6(b), 9.4.2 and 10.4.2). An enqueue allocation failure
-// must stop the local loop before another owner runs. The outer dispatcher
+// must stop the word sweep before another owner runs. The outer dispatcher
 // propagates that same status instead of entering the NBA commit path.
 // CHECK: llvm.mlir.global internal @__talos_eval_ordered_nba_queue_v1
 // CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1(
@@ -15,36 +15,18 @@
 // CHECK: ^[[RETURN]](%[[RESULT:.*]]: i32):
 // CHECK-NEXT: %[[BOUNDARY:.*]] = llvm.call @__talos_eval_route_promotion_boundary_v1(%[[RESULT]])
 // CHECK-NEXT: llvm.return %[[BOUNDARY]]
-// CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1.segment_0(
-// CHECK: %[[INSIDE:.*]] = llvm.icmp "ult"
+// After an owner of a word runs, the word function reads the queue status and
+// returns a failure before testing the next owner; idle owners need no check.
+// CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1.word_0(
+// CHECK: ^[[FAIL:bb[0-9]+]](%{{.*}}: i32):
+// CHECK: ^[[SECOND:bb[0-9]+]]:  // 2 preds
+// CHECK-NEXT: llvm.mlir.addressof @__talos_aot_model_ingress_v1
 // CHECK: %[[QUEUE:.*]] = llvm.mlir.addressof @__talos_eval_ordered_nba_queue_v1
-// CHECK: %[[STATUS_PTR:.*]] = llvm.getelementptr %[[QUEUE]][0, 3]
-// CHECK: %[[STATUS:.*]] = llvm.load %[[STATUS_PTR]]
-// CHECK: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
-// CHECK: %[[OK:.*]] = llvm.icmp "eq" %[[STATUS]], %[[ZERO]]
-// CHECK: %[[PROCEED:.*]] = llvm.and %[[INSIDE]], %[[OK]] : i1
-// CHECK-NEXT: llvm.cond_br %[[PROCEED]], ^[[LOAD:bb[0-9]+]], ^[[DONE:bb[0-9]+]]
-// CHECK: ^[[LOAD]]:
-// CHECK: llvm.load
-// CHECK: "llvm.intr.cttz"
-// CHECK: ^[[DONE]]:
-// CHECK-NEXT: %[[SUCCESS:.*]] = llvm.mlir.constant(0 : i32)
-// CHECK-NEXT: llvm.br ^{{bb[0-9]+}}(%[[SUCCESS]] : i32)
-// CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1.segment_1(
-// CHECK: %[[INSIDE:.*]] = llvm.icmp "ult"
-// CHECK: %[[QUEUE:.*]] = llvm.mlir.addressof @__talos_eval_ordered_nba_queue_v1
-// CHECK: %[[STATUS_PTR:.*]] = llvm.getelementptr %[[QUEUE]][0, 3]
-// CHECK: %[[STATUS:.*]] = llvm.load %[[STATUS_PTR]]
-// CHECK: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
-// CHECK: %[[OK:.*]] = llvm.icmp "eq" %[[STATUS]], %[[ZERO]]
-// CHECK: %[[PROCEED:.*]] = llvm.and %[[INSIDE]], %[[OK]] : i1
-// CHECK-NEXT: llvm.cond_br %[[PROCEED]], ^[[LOAD:bb[0-9]+]], ^[[DONE:bb[0-9]+]]
-// CHECK: ^[[LOAD]]:
-// CHECK: llvm.load
-// CHECK: "llvm.intr.cttz"
-// CHECK: ^[[DONE]]:
-// CHECK-NEXT: %[[SUCCESS:.*]] = llvm.mlir.constant(0 : i32)
-// CHECK-NEXT: llvm.br ^{{bb[0-9]+}}(%[[SUCCESS]] : i32)
+// CHECK-NEXT: %[[STATUS_PTR:.*]] = llvm.getelementptr %[[QUEUE]][0, 3]
+// CHECK-NEXT: %[[STATUS:.*]] = llvm.load %[[STATUS_PTR]]
+// CHECK-NEXT: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
+// CHECK-NEXT: %[[OK:.*]] = llvm.icmp "eq" %[[STATUS]], %[[ZERO]]
+// CHECK-NEXT: llvm.cond_br %[[OK]], ^[[SECOND]], ^[[FAIL]](%[[STATUS]] : i32)
 
 !int = !simulation.ref<i32>
 !bit = !simulation.logic<1>

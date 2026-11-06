@@ -8,8 +8,9 @@
 // A conditionally assigned output must also hold when its branch is closed.
 // For input 7 the inactive assignment's shift produces poison. Its branch
 // condition must not poison the enclosing reconvergence or retained state.
+// The publication also sets the ready set's dirty bit (word 2), conditionally,
+// like any other predicated store.
 // CHECK-LABEL: llvm.func @group()
-// CHECK-SAME: schedule.eval.cache_hint_words = 1 : i64
 // CHECK-SAME: schedule.eval.dataflow_fallback = @group.fallback
 // CHECK-SAME: schedule.eval.predicated_dataflow
 // CHECK: llvm.cond_br
@@ -39,9 +40,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %middle = llvm.getelementptr %base[1] : (!llvm.ptr) -> !llvm.ptr, i8
     %output = llvm.getelementptr %base[2] : (!llvm.ptr) -> !llvm.ptr, i8
     %ready = llvm.mlir.addressof @ready : !llvm.ptr
-    %cache = llvm.getelementptr %ready[16] : (!llvm.ptr) -> !llvm.ptr, i8
-    %lower = llvm.load %cache : !llvm.ptr -> i64
-    llvm.store %lower, %cache : i64, !llvm.ptr
+    %dirty = llvm.getelementptr %ready[16] : (!llvm.ptr) -> !llvm.ptr, i8
     %one = llvm.mlir.constant(1 : i64) : i64
     %two = llvm.mlir.constant(2 : i64) : i64
     %zero = llvm.mlir.constant(0 : i64) : i64
@@ -69,6 +68,9 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     llvm.store %next, %middle : i8, !llvm.ptr
     %published = llvm.or %consumed, %two : i64
     llvm.store %published, %ready : i64, !llvm.ptr
+    %marks = llvm.load %dirty : !llvm.ptr -> i64
+    %marked = llvm.or %marks, %one : i64
+    llvm.store %marked, %dirty : i64, !llvm.ptr
     llvm.br ^consumer_check
   ^consumer_check:
     %pending = llvm.load %ready : !llvm.ptr -> i64
@@ -102,7 +104,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %output = llvm.getelementptr %base[2] : (!llvm.ptr) -> !llvm.ptr, i8
     %ready = llvm.mlir.addressof @ready : !llvm.ptr
     %outside = llvm.getelementptr %ready[8] : (!llvm.ptr) -> !llvm.ptr, i8
-    %cache = llvm.getelementptr %ready[16] : (!llvm.ptr) -> !llvm.ptr, i8
+    %dirty = llvm.getelementptr %ready[16] : (!llvm.ptr) -> !llvm.ptr, i8
     %one64 = llvm.mlir.constant(1 : i64) : i64
     %two64 = llvm.mlir.constant(2 : i64) : i64
     %zero64 = llvm.mlir.constant(0 : i64) : i64
@@ -114,10 +116,9 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %n33 = llvm.mlir.constant(33 : i8) : i8
     %n34 = llvm.mlir.constant(34 : i8) : i8
     llvm.call @group() : () -> ()
-    // Word zero has been consumed. The group does not inspect word one, so
-    // the hint must stop there and preserve that external pending actor.
-    %hint = llvm.load %cache : !llvm.ptr -> i64
-    %hintok = llvm.icmp "eq" %hint, %one64 : i64
+    // Nothing was published: the dirty word is untouched.
+    %marks1 = llvm.load %dirty : !llvm.ptr -> i64
+    %dirtyok1 = llvm.icmp "eq" %marks1, %zero64 : i64
     %mid1 = llvm.load %middle : !llvm.ptr -> i8
     %out1 = llvm.load %output : !llvm.ptr -> i8
     %a = llvm.icmp "eq" %mid1, %n99 : i8
@@ -125,13 +126,16 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %ok1 = llvm.and %a, %b : i1
     llvm.store %six, %base : i8, !llvm.ptr
     llvm.store %one64, %ready : i64, !llvm.ptr
-    llvm.store %zero64, %cache : i64, !llvm.ptr
     llvm.call @group() : () -> ()
     %out2 = llvm.load %output : !llvm.ptr -> i8
-    %ok2 = llvm.icmp "eq" %out2, %nine : i8
+    %ok2out = llvm.icmp "eq" %out2, %nine : i8
+    // The producer published to the consumer and marked word zero dirty.
+    %marks2 = llvm.load %dirty : !llvm.ptr -> i64
+    %marked2 = llvm.icmp "eq" %marks2, %one64 : i64
+    %ok2 = llvm.and %ok2out, %marked2 : i1
     llvm.store %seven, %base : i8, !llvm.ptr
     llvm.store %one64, %ready : i64, !llvm.ptr
-    llvm.store %zero64, %cache : i64, !llvm.ptr
+    llvm.store %zero64, %dirty : i64, !llvm.ptr
     llvm.call @group() : () -> ()
     %mid3 = llvm.load %middle : !llvm.ptr -> i8
     %out3 = llvm.load %output : !llvm.ptr -> i8
@@ -140,27 +144,25 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %ok3 = llvm.and %c, %d : i1
     llvm.store %n33, %middle : i8, !llvm.ptr
     llvm.store %two64, %ready : i64, !llvm.ptr
-    llvm.store %zero64, %cache : i64, !llvm.ptr
     llvm.call @group() : () -> ()
     %out4 = llvm.load %output : !llvm.ptr -> i8
     %ok4 = llvm.icmp "eq" %out4, %n34 : i8
     %pending = llvm.load %ready : !llvm.ptr -> i64
     %ok5 = llvm.icmp "eq" %pending, %zero64 : i64
-    // An unowned bit in the same word prevents hint advancement. It must
-    // neither be consumed nor hidden by a cache pointing past that word.
+    // An unowned bit in the same word must not be consumed, and the group
+    // publishes nothing, so the dirty word keeps its value.
     %four64 = llvm.mlir.constant(4 : i64) : i64
     llvm.store %four64, %ready : i64, !llvm.ptr
-    llvm.store %zero64, %cache : i64, !llvm.ptr
     llvm.call @group() : () -> ()
     %held = llvm.load %ready : !llvm.ptr -> i64
-    %heldHint = llvm.load %cache : !llvm.ptr -> i64
+    %heldDirty = llvm.load %dirty : !llvm.ptr -> i64
     %external = llvm.load %outside : !llvm.ptr -> i64
     %heldok = llvm.icmp "eq" %held, %four64 : i64
-    %heldHintok = llvm.icmp "eq" %heldHint, %zero64 : i64
+    %heldDirtyok = llvm.icmp "eq" %heldDirty, %zero64 : i64
     %externalok = llvm.icmp "eq" %external, %one64 : i64
-    %hintpair = llvm.and %hintok, %heldHintok : i1
+    %dirtypair = llvm.and %dirtyok1, %heldDirtyok : i1
     %readyPair = llvm.and %heldok, %externalok : i1
-    %cacheok = llvm.and %hintpair, %readyPair : i1
+    %dirtyok = llvm.and %dirtypair, %readyPair : i1
     %slow = llvm.mlir.addressof @slow_count : !llvm.ptr
     %count = llvm.load %slow : !llvm.ptr -> i32
     %zero = llvm.mlir.constant(0 : i32) : i32
@@ -171,7 +173,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     %ok56 = llvm.and %ok5, %ok6 : i1
     %ok1234 = llvm.and %ok12, %ok34 : i1
     %ok = llvm.and %ok1234, %ok56 : i1
-    %allok = llvm.and %ok, %cacheok : i1
+    %allok = llvm.and %ok, %dirtyok : i1
     %status = llvm.select %allok, %zero, %failure : i1, i32
     llvm.return %status : i32
   }

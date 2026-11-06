@@ -1246,7 +1246,7 @@ FailureOr<bool> makeNativeEvalPlan(
   constexpr StringLiteral planName = "__talos_aot_schedule_plan_v1";
   unsigned ownerCount = std::max<size_t>(64, mergedFragments.size());
   APInt allOwners = APInt::getAllOnes(ownerCount);
-  const runtime::ReadySetLayout readyLayout(ownerCount);
+  const EvalReadySetLayout readyLayout(ownerCount);
   APInt pathGuardedOwnerMask(ownerCount, 0);
 
   builder.setInsertionPointToStart(module.getBody());
@@ -1744,7 +1744,7 @@ FailureOr<bool> makeNativeEvalPlan(
     // The set a wake goes to: the ingress set, or the held set (created on
     // first use) for an NBA-equivalent store. The held set has the ingress
     // layout, so a held publication is the same ready update and coalesces
-    // the same way; its summaries tell the coordinator what to merge.
+    // the same way; its dirty bits tell the coordinator what to merge.
     auto wakeBase = [&](OpBuilder &wakeBuilder, Location wakeLocation,
                         bool held) -> Value {
       if (held && !module.lookupSymbol(evalNBAHeldWakesName)) {
@@ -1756,15 +1756,9 @@ FailureOr<bool> makeNativeEvalPlan(
         Block *initializer = new Block;
         global.getInitializerRegion().push_back(initializer);
         OpBuilder initializerBuilder = OpBuilder::atBlockBegin(initializer);
-        // Empty: the minimum cache starts past the last leaf.
-        Value empty = LLVM::ZeroOp::create(initializerBuilder, location, type);
-        if (readyLayout.hasCache())
-          empty = LLVM::InsertValueOp::create(
-              initializerBuilder, location, empty,
-              llvmConstant(initializerBuilder, location, i64,
-                           readyLayout.counts[0]),
-              ArrayRef<int64_t>{readyLayout.cacheOffset()});
-        LLVM::ReturnOp::create(initializerBuilder, location, empty);
+        LLVM::ReturnOp::create(
+            initializerBuilder, location,
+            LLVM::ZeroOp::create(initializerBuilder, location, type));
       }
       return LLVM::AddressOfOp::create(wakeBuilder, wakeLocation, pointer,
                                        held ? StringRef(evalNBAHeldWakesName)
@@ -3544,13 +3538,13 @@ FailureOr<bool> makeNativeEvalPlan(
                                 llvmConstant(initializerBuilder, location, i32,
                                              ingressWordCount(kernel)),
                                 5);
-            value = insertValue(
-                initializerBuilder, location, value,
-                llvmConstant(initializerBuilder, location, i32,
-                             readyLayout.hasCache()
-                                 ? runtime::indexedClockKernelReadySet
-                                 : 0),
-                6);
+            value =
+                insertValue(initializerBuilder, location, value,
+                            llvmConstant(initializerBuilder, location, i32,
+                                         readyLayout.hasSummaries()
+                                             ? runtime::dirtyClockKernelReadySet
+                                             : 0),
+                            6);
             value = insertValue(initializerBuilder, location, value,
                                 LLVM::AddressOfOp::create(initializerBuilder,
                                                           location, pointer,

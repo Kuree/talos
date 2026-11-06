@@ -13,8 +13,6 @@ def EvalBody : ScheduleField<"EvalBody", "schedule.eval.body",
     "::mlir::FlatSymbolRefAttr">;
 def EvalBorrowedCaptures : ScheduleField<"EvalBorrowedCaptures", "schedule.eval.borrowed_captures",
     "::mlir::UnitAttr">;
-def EvalCacheHintWords : ScheduleField<"EvalCacheHintWords", "schedule.eval.cache_hint_words",
-    "::mlir::IntegerAttr">;
 def EvalCallClosureRoot : ScheduleField<"EvalCallClosureRoot", "schedule.eval.call_closure_root",
     "::mlir::UnitAttr">;
 def EvalCheckpointOnly : ScheduleField<"EvalCheckpointOnly", "schedule.eval.checkpoint_only",

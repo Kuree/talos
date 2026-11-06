@@ -2,7 +2,7 @@
 // both O0 and O3. The oracle uses ordinary LLVM memory operations and asserts;
 // it does not run the schedule transformations being tested.
 module {
-  llvm.mlir.global external @ready() : !llvm.array<66 x i64>
+  llvm.mlir.global external @ready() : !llvm.array<65 x i64>
   llvm.mlir.global external @ordinary(0 : i64) : i64
   llvm.mlir.global external @seen_before(0 : i64) : i64
   llvm.mlir.global external @seen_after(0 : i64) : i64
@@ -13,8 +13,7 @@ module {
   llvm.func @observe(%n: i64) {
     %base = llvm.mlir.addressof @ready : !llvm.ptr
     %last = llvm.getelementptr %base[63] : (!llvm.ptr) -> !llvm.ptr, i64
-    %cache = llvm.getelementptr %base[64] : (!llvm.ptr) -> !llvm.ptr, i64
-    %summary = llvm.getelementptr %base[65] : (!llvm.ptr) -> !llvm.ptr, i64
+    %summary = llvm.getelementptr %base[64] : (!llvm.ptr) -> !llvm.ptr, i64
     %expected = llvm.mlir.addressof @expected : !llvm.ptr
     %zero = arith.constant 0 : i64
     %one = arith.constant 1 : i64
@@ -33,15 +32,13 @@ module {
     %actual_last = llvm.load %last : !llvm.ptr -> i64
     %last_ok = arith.cmpi eq, %actual_last, %wanted_last : i64
     cf.assert %last_ok, "callback must see bit 63 in the last leaf"
-    %actual_cache = llvm.load %cache : !llvm.ptr -> i64
-    %cache_ok = arith.cmpi eq, %actual_cache, %zero : i64
-    cf.assert %cache_ok, "callback must see the minimum cache"
     %wanted_summary = arith.ori %one, %high : i64
     %actual_summary = llvm.load %summary : !llvm.ptr -> i64
     %summary_ok = arith.cmpi eq, %actual_summary, %wanted_summary : i64
-    cf.assert %summary_ok, "callback must see the leaf summary"
+    cf.assert %summary_ok, "callback must see the dirty bits"
 
-    // Mutate authoritative state so later region commits must retain it.
+    // Mutate authoritative state so later region commits must retain it. A
+    // reader may clear the dirty bit of a leaf it observes empty.
     %updated = arith.ori %actual, %bit16 : i64
     llvm.store %updated, %base : i64, !llvm.ptr
     %updated_last = arith.xori %actual_last, %four : i64
@@ -56,13 +53,12 @@ module {
   llvm.func @main() -> i32 {
     %base = llvm.mlir.addressof @ready : !llvm.ptr
     %last = llvm.getelementptr %base[63] : (!llvm.ptr) -> !llvm.ptr, i64
-    %cache = llvm.getelementptr %base[64] : (!llvm.ptr) -> !llvm.ptr, i64
-    %summary = llvm.getelementptr %base[65] : (!llvm.ptr) -> !llvm.ptr, i64
+    %summary = llvm.getelementptr %base[64] : (!llvm.ptr) -> !llvm.ptr, i64
     %ordinary = llvm.mlir.addressof @ordinary : !llvm.ptr
     %before = llvm.mlir.addressof @seen_before : !llvm.ptr
     %after = llvm.mlir.addressof @seen_after : !llvm.ptr
     %expected = llvm.mlir.addressof @expected : !llvm.ptr
-    %empty = llvm.mlir.zero : !llvm.array<66 x i64>
+    %empty = llvm.mlir.zero : !llvm.array<65 x i64>
     %zero = arith.constant 0 : i64
     %one = arith.constant 1 : i64
     %two = arith.constant 2 : i64
@@ -85,7 +81,7 @@ module {
     %more = arith.cmpi ult, %n, %nine : i64
     cf.cond_br %more, ^exercise, ^done
   ^exercise:
-    llvm.store %empty, %base : !llvm.array<66 x i64>, !llvm.ptr
+    llvm.store %empty, %base : !llvm.array<65 x i64>, !llvm.ptr
     llvm.store %initial, %base : i64, !llvm.ptr
     llvm.store %four, %last : i64, !llvm.ptr
     llvm.store %initial_summary, %summary : i64, !llvm.ptr
@@ -117,13 +113,13 @@ module {
     %actual_last = llvm.load %last : !llvm.ptr -> i64
     %last_ok = arith.cmpi eq, %actual_last, %zero : i64
     cf.assert %last_ok, "last leaf must be empty after consume"
-    %actual_cache = llvm.load %cache : !llvm.ptr -> i64
-    %cache_ok = arith.cmpi eq, %actual_cache, %zero : i64
-    cf.assert %cache_ok, "minimum cache must survive region exit"
-    %actual_summary = llvm.load %summary : !llvm.ptr -> i64
-    %summary_ok = arith.cmpi eq, %actual_summary, %one : i64
-    cf.assert %summary_ok, "summary must clear the emptied last leaf"
+    // A consume keeps the dirty bit of the leaf it empties: only the callback
+    // (a reader observing an empty leaf, n == 0) cleared it.
     %has_iterations = arith.cmpi ne, %n, %zero : i64
+    %wanted_summary = arith.select %has_iterations, %initial_summary, %one : i64
+    %actual_summary = llvm.load %summary : !llvm.ptr -> i64
+    %summary_ok = arith.cmpi eq, %actual_summary, %wanted_summary : i64
+    cf.assert %summary_ok, "a consume must keep dirty bits"
     %last_iteration = arith.subi %n, %one : i64
     %wanted_ordinary = arith.select %has_iterations, %last_iteration, %sentinel : i64
     %actual_ordinary = llvm.load %ordinary : !llvm.ptr -> i64

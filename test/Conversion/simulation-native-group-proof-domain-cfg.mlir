@@ -1,5 +1,5 @@
 // RUN: talos-opt %s --talos-materialize-native-eval-groups -o %t.mlir
-// RUN: FileCheck %s --implicit-check-not=predicated_dataflow --implicit-check-not=refresh_group_proofs --implicit-check-not=cache_hint_words --implicit-check-not=coalesced_slots < %t.mlir
+// RUN: FileCheck %s --implicit-check-not=predicated_dataflow --implicit-check-not=refresh_group_proofs --implicit-check-not=coalesced_slots < %t.mlir
 // RUN: talos-opt %s --mlir-disable-threading --talos-materialize-native-eval-groups | diff %t.mlir -
 // RUN: talos-opt %t.mlir --talos-materialize-native-eval-groups | diff %t.mlir -
 // RUN: talos-opt %s '--test-talos-set-module-attributes=attrs="{schedule.native.max_inline_ops = 60 : i64}"' --talos-materialize-native-eval-groups | FileCheck %s --check-prefix=BUDGET

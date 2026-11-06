@@ -2,38 +2,26 @@
 #include <stdint.h>
 #include <string.h>
 
-enum { LEAVES = 4096, CACHE = 4096, SUMMARY = 4097, TOP = 4161, WORDS = 4162 };
+// DirtyReadySetLayout for 262144 bits: leaves, 64 dirty words, one top word.
+enum { LEAVES = 4096, DIRTY = 4096, TOP = 4160, WORDS = 4161 };
 static uint64_t expected[WORDS];
 void exercise(uint64_t *, uint64_t, uint64_t);
 
-// Recompute the oracle's indexes from authoritative leaves. This deliberately
-// does not use generated readiness code or incremental summary updates.
-static void index_words(uint64_t *words) {
-  memset(words + SUMMARY, 0, (WORDS - SUMMARY) * sizeof(*words));
-  for (unsigned i = 0; i < LEAVES; ++i)
-    if (words[i])
-      words[SUMMARY + i / 64] |= UINT64_C(1) << (i % 64);
-  for (unsigned i = 0; i < 64; ++i)
-    if (words[SUMMARY + i])
-      words[TOP] |= UINT64_C(1) << i;
+// The oracle's dirty bits: each leaf that received a nonempty add.
+static void mark(uint64_t *words, unsigned leaf) {
+  words[DIRTY + leaf / 64] |= UINT64_C(1) << (leaf % 64);
+  words[TOP] |= UINT64_C(1) << (leaf / 64);
 }
 static void check(uint64_t *actual) {
   for (unsigned i = 0; i < WORDS; ++i)
-    if (i != CACHE)
-      assert(actual[i] == expected[i]);
-  unsigned first = 0;
-  while (first < LEAVES && !actual[first])
-    ++first;
-  assert(actual[CACHE] <= first);
+    assert(actual[i] == expected[i]);
 }
 void observe(uint64_t *actual) {
   check(actual);
   actual[64] |= UINT64_C(1) << 60;
+  mark(actual, 64);
   expected[64] = actual[64];
-  index_words(actual);
-  index_words(expected);
-  if (actual[CACHE] > 64)
-    actual[CACHE] = 64;
+  mark(expected, 64);
 }
 int main(void) {
   static uint64_t actual[WORDS];
@@ -43,21 +31,27 @@ int main(void) {
     for (unsigned j = 0; j < 5; ++j) {
       uint64_t a = masks[i], b = masks[j];
       memset(actual, 0, sizeof(actual));
-      actual[CACHE] = 64;
       actual[64] = UINT64_MAX;
       actual[4095] = UINT64_MAX;
-      actual[127] = 1; // Untouched sibling in a shared summary word.
-      index_words(actual);
+      actual[127] = 1; // Untouched sibling in a shared dirty word.
+      mark(actual, 64);
+      mark(actual, 4095);
+      mark(actual, 127);
       memcpy(expected, actual, sizeof(actual));
       expected[0] = b;
       expected[63] = b;
       expected[64] &= ~a;
       expected[4095] = 0;
-      index_words(expected);
+      // Word 0 received a, then b; its dirty bit may cover an empty leaf.
+      if (a || b)
+        mark(expected, 0);
+      if (b)
+        mark(expected, 63);
       exercise(actual, a, b);
       expected[63] = 0;
       expected[4095] = a;
-      index_words(expected);
+      if (a)
+        mark(expected, 4095);
       check(actual);
     }
   return 0;

@@ -366,6 +366,75 @@ TEST(ReadySet, SummaryChainClearsAndReappears) {
   EXPECT_EQ(ready.popFirst(), 1048575u);
 }
 
+// Dirty levels are a superset index: adds (generated or native) OR every
+// level, consumes clear only leaves, and only a reader clears stale bits.
+// Selection still finds exactly the lowest pending bit.
+TEST_P(ReadySetCapacity, DirtyLevelsCoverEveryPendingBit) {
+  uint32_t n = GetParam();
+  if (!n)
+    return;
+  uint32_t words = (uint64_t{n} + 63) / 64;
+  const talos::runtime::DirtyReadySetLayout layout =
+      talos::runtime::clockKernelDirtyReadySetLayout(words);
+  EXPECT_EQ(layout.hasSummaries(), words > 1);
+  EXPECT_LE(layout.counts[layout.levels - 1],
+            talos::runtime::DirtyReadySetLayout::flatWordLimit);
+  std::vector<uint64_t> storage(layout.storageWords);
+  talos::runtime::DirtyReadySetView ready(storage.data(), layout);
+  talos_rt_native_clock_kernel kernel{};
+  kernel.ingress_mask = storage.data();
+  kernel.ingress_word_count = words;
+  kernel.reserved = talos::runtime::dirtyClockKernelReadySet;
+  uint32_t capacity = words * 64;
+  std::set<uint32_t> reference;
+  std::mt19937 random(23);
+  auto covered = [&] {
+    for (uint32_t bit : reference) {
+      uint32_t child = bit / 64;
+      for (unsigned level = 1; level < layout.levels; ++level) {
+        if (!(storage[layout.offsets[level] + child / 64] &
+              (uint64_t{1} << (child % 64))))
+          return false;
+        child /= 64;
+      }
+    }
+    return true;
+  };
+  for (unsigned step = 0; step < 10000; ++step) {
+    uint32_t bit = random() % capacity;
+    switch (random() % 4) {
+    case 0:
+      EXPECT_EQ(ready.set(bit), reference.insert(bit).second);
+      break;
+    case 1:
+      talos::runtime::publishClockKernelReady(kernel, bit);
+      reference.insert(bit);
+      break;
+    case 2:
+      EXPECT_EQ(ready.reset(bit), reference.erase(bit) != 0);
+      break;
+    case 3: {
+      uint32_t expected = reference.empty() ? none : *reference.begin();
+      ASSERT_EQ(ready.findFirst(), expected);
+      if (expected != none)
+        ready.reset(expected), reference.erase(expected);
+      break;
+    }
+    }
+    ASSERT_TRUE(covered());
+    EXPECT_EQ(ready.test(bit), reference.count(bit) != 0);
+  }
+  while (!reference.empty()) {
+    ASSERT_EQ(ready.findFirst(), *reference.begin());
+    ready.reset(*reference.begin());
+    reference.erase(reference.begin());
+  }
+  EXPECT_EQ(ready.findFirst(), none);
+  // The search cleared every stale dirty bit on its way.
+  for (uint32_t word = words; word != layout.storageWords; ++word)
+    EXPECT_EQ(storage[word], 0u);
+}
+
 INSTANTIATE_TEST_SUITE_P(Boundaries, ReadySetCapacity,
                          testing::Values(0u, 1u, 63u, 64u, 65u, 127u, 128u,
                                          129u, 2048u, 2049u, 4095u, 4096u,

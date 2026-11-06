@@ -6,7 +6,8 @@
 
 // Bulk publication has a bounded CFG, no callback/runtime helper, and no
 // per-leaf SSA expansion. The runtime companion compares ascending merges
-// against ReadySetView for empty, sparse, dense, partial and aliased sources.
+// against DirtyReadySetView for empty, sparse, dense, partial and aliased
+// sources.
 module {
   llvm.func @merge_1(%base: !llvm.ptr, %source: !llvm.ptr) {
     schedule.ready.merge %base, %source {capacity = 1 : i64} : (!llvm.ptr, !llvm.ptr) -> ()
@@ -51,24 +52,21 @@ module {
   // CHECK: %[[SELECTED:.*]] = arith.select
   // CHECK: %[[EMPTY:.*]] = arith.cmpi eq, %[[SELECTED]],
   // CHECK: cf.cond_br %[[EMPTY]], ^[[ADVANCE:bb[0-9]+]], ^[[UPDATE:bb[0-9]+]]
+  // Every add sets its dirty bit at both levels, without testing the leaf.
   // CHECK: ^[[UPDATE]]:
-  // CHECK: %[[PREVIOUS:.*]] = llvm.load
+  // CHECK: llvm.load
   // CHECK: llvm.store
-  // CHECK: arith.cmpi eq, %[[PREVIOUS]],
-  // CHECK: cf.cond_br
+  // CHECK-NOT: cf.cond_br
+  // CHECK: %[[PARENT:.*]] = arith.shrui %[[WORD]],
+  // CHECK: llvm.store
+  // CHECK-NOT: cf.cond_br
+  // CHECK: arith.shrui %[[PARENT]],
+  // CHECK: llvm.store
+  // CHECK-NEXT: cf.br ^[[ADVANCE]]
   // CHECK: ^[[ADVANCE]]:
   // CHECK: arith.addi %[[WORD]],
   // CHECK: arith.cmpi ult,
   // CHECK: cf.cond_br {{.*}}, ^[[HEAD]]({{.*}} : i64),
-  // CHECK: arith.minui
-  // CHECK: arith.shrui
-  // CHECK: llvm.store
-  // CHECK: cf.cond_br
-  // CHECK: arith.shrui
-  // CHECK: llvm.store
-  // CHECK: cf.cond_br
-  // CHECK: arith.shrui
-  // CHECK: llvm.store
   // CHECK-NOT: llvm.call
   // CHECK-NOT: schedule.ready
   // CHECK: llvm.return

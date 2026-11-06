@@ -250,7 +250,7 @@ materializeNativeRankedGroups(ModuleOp module,
   Location loc = module.getLoc();
   Type pointer = LLVM::LLVMPointerType::get(module.getContext());
   Type i64 = builder.getI64Type();
-  const runtime::ReadySetLayout readyLayout(
+  const EvalReadySetLayout readyLayout(
       std::max<size_t>(64, plan.fragments.size()));
   SmallVector<const NativeRankedEvalNode *> members;
   unsigned groupID = 0;
@@ -264,7 +264,11 @@ materializeNativeRankedGroups(ModuleOp module,
   SmallVector<Chunk> chunks;
   unsigned segmentCount = 0;
   auto finishSegment = [&]() {
-    if (chunks.size() < 2) {
+    // A multi-word ready set is swept word by word by the coordinator, which
+    // already calls each chunk at its first pending member in rank order. A
+    // wrapper over several words would run their chunks early and leave
+    // their dirty words to be revisited.
+    if (chunks.size() < 2 || readyLayout.hasSummaries()) {
       chunks.clear();
       return;
     }

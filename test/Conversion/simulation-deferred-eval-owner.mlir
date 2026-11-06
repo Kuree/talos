@@ -1,4 +1,4 @@
-// RUN: talos-opt %s --split-input-file --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.mlir 2>&1 | FileCheck %s --check-prefix=PLAN
+// RUN: talos-opt %s --split-input-file --pass-pipeline='builtin.module(test-talos-replicate,simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.mlir 2>&1 | FileCheck %s --check-prefix=PLAN
 // RUN: FileCheck %s --check-prefix=LOWER < %t.mlir
 
 // IEEE 1800-2023 4.4.2.3 and 4.5: a deferred kernel resumes in the Inactive
@@ -24,13 +24,13 @@
 
 // LOWER-LABEL: llvm.func @__talos_eval_dispatch_v1(
 // LOWER-NOT: prepare_eval_nba
-// LOWER: %[[BIT:.*]] = llvm.add
-// LOWER: %[[FIRST:.*]] = llvm.mlir.constant(1 : i64)
-// LOWER-NEXT: %[[DEFERRED:.*]] = llvm.icmp "uge" %[[BIT]], %[[FIRST]]
-// LOWER-NEXT: llvm.cond_br %[[DEFERRED]], ^[[POLL:bb[0-9]+]], ^[[SWITCH:bb[0-9]+]](%[[BIT]] : i64)
-// LOWER-NEXT: ^[[SWITCH]](%[[OWNER:.*]]: i64):
+// LOWER: ^[[SWITCH:bb[0-9]+]](%[[OWNER:.*]]: i64):
 // LOWER-NEXT: llvm.switch %[[OWNER]] : i64, ^[[STOPPED:bb[0-9]+]] [
-// LOWER: ^[[POLL]]:
+// LOWER: %[[BIT:.*]] = "llvm.intr.cttz"
+// LOWER-NEXT: %[[FIRST:.*]] = llvm.mlir.constant(1 : i64)
+// LOWER-NEXT: %[[DEFERRED:.*]] = llvm.icmp "uge" %[[BIT]], %[[FIRST]]
+// LOWER-NEXT: llvm.cond_br %[[DEFERRED]], ^[[POLL:bb[0-9]+]], ^[[SWITCH]](%[[BIT]] : i64)
+// LOWER-NEXT: ^[[POLL]]:
 // LOWER-NEXT: %[[LATCH:.*]] = llvm.call @talos_rt_v1_scheduler_termination_requested(%arg1)
 // LOWER-NEXT: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
 // LOWER-NEXT: %[[FINISHED:.*]] = llvm.icmp "ne" %[[LATCH]], %[[ZERO]]
@@ -146,7 +146,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
 // LOWER: llvm.call @talos_rt_v1_scheduler_prepare_eval_nba(%arg1, %[[REGION:[0-9]+]])
 // LOWER: %[[EMPTY:.*]] = llvm.icmp "eq" %{{.*}}, %{{.*}} : i64
 // LOWER-NEXT: llvm.cond_br %[[EMPTY]], ^[[CUT:bb[0-9]+]], ^[[SELECT:bb[0-9]+]]
-// LOWER-NEXT: ^[[SELECT]]:
+// LOWER: ^[[SELECT]]:
 // LOWER: %[[DEFERRED:.*]] = llvm.icmp "uge"
 // LOWER-NEXT: llvm.cond_br %[[DEFERRED]], ^[[CUT]], ^[[SWITCH:bb[0-9]+]](
 // LOWER: %[[CUT_REGION:.*]] = llvm.load %[[REGION]] {{.*}}: !llvm.ptr -> i32
@@ -227,6 +227,78 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
     ^finish:
       %status = arith.constant 1 : i32
       simulation.finish %ctx, %status
+      cf.br ^wait
+    }
+  }
+}
+
+// -----
+
+// Every owner of a two-word set is deferred, so no word is swept. Once no
+// Active owner is pending, the coordinator scans the deferred words directly,
+// polls the latch, takes the Inactive cut and runs the lowest pending
+// deferred owner from the per-owner switch (IEEE 1800-2023 4.4.2.3, 4.5,
+// 9.2.3, 20.2).
+// PLAN: talos eval owner: bit=0 {{.*}} deferred{{$}}
+// PLAN: talos eval owner: bit=69 {{.*}} deferred{{$}}
+// LOWER-LABEL: llvm.func @__talos_eval_dispatch_v1(
+// LOWER: ^[[SWITCH:bb[0-9]+]](%[[OWNER:.*]]: i64):
+// LOWER-NEXT: llvm.switch %[[OWNER]] : i64, ^{{bb[0-9]+}} [
+// LOWER-NEXT: 0: ^
+// LOWER: 69: ^
+// LOWER-NEXT: ]
+// LOWER: "llvm.intr.cttz"
+// LOWER: llvm.call @talos_rt_v1_scheduler_termination_requested(%arg1)
+// LOWER: llvm.getelementptr %{{.*}}[8] : (!llvm.ptr) -> !llvm.ptr, i8
+// LOWER-NEXT: %[[HIGH:.*]] = llvm.load
+// LOWER-NEXT: %[[DEFERRED_HIGH:.*]] = llvm.mlir.constant(63 : i64)
+// LOWER-NEXT: llvm.and %[[HIGH]], %[[DEFERRED_HIGH]]
+// LOWER-NOT: @__talos_eval_dispatch_v1.word_
+
+!clk = !simulation.ref<i1>
+!int = !simulation.ref<i32>
+module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", schedule.native_scheduler = 3 : i32, native.closed_executable, native.debug_timing} {
+  simulation.design @all_deferred {
+    simulation.scope.decl 0 hierarchy "t"
+    simulation.code_unit.decl 1 in 0 root_initializer hierarchy "t.root"
+    simulation.code_unit.decl 2 in 0 always hierarchy "t.clock"
+    simulation.code_unit.decl 3 in 0 always hierarchy "t.kernel#" {test.replicate = 70 : i64, test.replicate_stride = {id = 1 : i64}}
+    simulation.storage.decl 0 in 0 : i1 design
+    simulation.storage.decl 1 in 0 : i32 design
+    simulation.storage.decl 2 in 0 : i32 design {test.replicate = 70 : i64, test.replicate_stride = {id = 1 : i64}}
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
+      %clk = simulation.context.storage %ctx[0] : !clk
+      %n = simulation.context.storage %ctx[1] : !int
+      %false = arith.constant false
+      %zero = arith.constant 0 : i32
+      simulation.ref.store %false to %clk : i1, !clk
+      simulation.ref.store %zero to %n : i32, !int
+      %c = simulation.spawn @clock(%ctx, %clk) : !simulation.context, !clk -> !simulation.process
+      %q = simulation.context.storage %ctx[2] {test.replicate = 70 : i64, test.replicate_stride = {id = 1 : i64}} : !int
+      %k = simulation.spawn @"kernel#"(%ctx, %clk, %q) {test.replicate = 70 : i64} : !simulation.context, !clk, !int -> !simulation.process
+      simulation.return
+    }
+    simulation.func @clock(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %clk: !clk {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}) attributes {entry_kind = 3 : i32, code_unit_id = 2 : i64} {
+      cf.br ^wait
+    ^wait:
+      %delay = simulation.time.constant 5
+      simulation.suspend.delay %delay to ^toggle {site = #schedule.continuation<id = 1>, timing = #schedule.timing_site<id = 0, kind = calendar>}
+    ^toggle:
+      %old = simulation.ref.load %clk : !clk -> i1
+      %true = arith.constant true
+      %new = arith.xori %old, %true : i1
+      simulation.ref.store %new to %clk : i1, !clk
+      cf.br ^wait
+    }
+    simulation.func @"kernel#"(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %clk: !clk {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}, %q: !int {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 2 : i64, test.replicate_stride = {simulation.descriptor_id = 1 : i64}}) attributes {entry_kind = 3 : i32, code_unit_id = 3 : i64, test.replicate = 70 : i64, test.replicate_stride = {code_unit_id = 1 : i64}} {
+      cf.br ^wait
+    ^wait:
+      simulation.suspend.edge posedge %clk to ^body {resume_region = 3 : i32, schedule.procedural_event_wait, schedule.repeating_always_wait, site = #schedule.continuation<id = 2>} : !clk
+    ^body:
+      %old = simulation.ref.load %q : !int -> i32
+      %one = arith.constant 1 : i32
+      %new = arith.addi %old, %one : i32
+      simulation.ref.store %new to %q : i32, !int
       cf.br ^wait
     }
   }

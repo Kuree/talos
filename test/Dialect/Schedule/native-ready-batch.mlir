@@ -6,12 +6,13 @@
 // RUN: %llvm_dist/bin/clang -O3 %t.ll %S/Inputs/native-ready-batch.c -o %t.o3
 // RUN: %t.o3
 
-// Multiple leaves share indexes. Dynamic masks, repeated leaf updates and
-// consumes must preserve the exact summary hierarchy and a stale-low cache.
+// Multiple leaves share dirty words. Dynamic masks, repeated leaf updates and
+// consumes write each leaf and dirty word once: a dirty bit is set for every
+// leaf that may have received an add, and consumes leave dirty bits alone.
 // A callback sees all pending work; its changes survive the following batch.
 // CHECK-LABEL: llvm.func @exercise
 // CHECK-NOT: schedule.ready
-// CHECK-COUNT-9: llvm.store
+// CHECK-COUNT-6: llvm.store
 // CHECK-NOT: llvm.store
 // CHECK: llvm.call @observe
 // CHECK-NOT: schedule.ready

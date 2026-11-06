@@ -3,7 +3,6 @@
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
-#include "talos/Runtime/ReadySet.h"
 
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
@@ -444,53 +443,6 @@ bool materializeNativeGroupDataflow(LLVM::LLVMFuncOp function,
   for (const Edge &edge : llvm::drop_begin(returns))
     for (size_t i = 0; i < final.size(); ++i)
       final[i] = select(edge.predicate, edge.memory[i], final[i]);
-  // Internal publications can leave the minimum cache pointing at work that
-  // this finite group has already consumed. Advance that lower bound only
-  // through exact, final SSA words proved empty. Missing words stop progress;
-  // no ready bit is consumed and no additional state load is introduced.
-  auto rawCount =
-      ::talos::schedule::get<::talos::schedule::Field::EvalReadyWordCount>(
-          function);
-  if (rawCount && rawCount.getUInt() > 1 &&
-      rawCount.getUInt() <= runtime::ReadySetLayout::flatWordLimit) {
-    uint64_t count = rawCount.getUInt();
-    auto readyGlobal = symbols.lookup<LLVM::GlobalOp>(ingress.getValue());
-    auto readyType =
-        readyGlobal ? dyn_cast<LLVM::LLVMArrayType>(readyGlobal.getGlobalType())
-                    : LLVM::LLVMArrayType{};
-    auto cache = slotIndex.find({ingress.getValue().str(), count * 8});
-    if (readyType && readyType.getElementType().isInteger(64) &&
-        readyType.getNumElements() == count + 1 && cache != slotIndex.end() &&
-        slots[cache->second].type.getWidth() == 64) {
-      unsigned cacheID = cache->second;
-      Value lower = final[cacheID];
-      uint64_t hints = 0;
-      for (auto [key, id] : slotIndex) {
-        const Slot &slot = slots[id];
-        if (slot.global != ingress.getValue() || slot.offset % 8 ||
-            slot.offset / 8 >= count || slot.type.getWidth() != 64)
-          continue;
-        uint64_t word = slot.offset / 8;
-        Value atWord = LLVM::ICmpOp::create(
-            builder, loc, LLVM::ICmpPredicate::eq, lower,
-            llvmConstant(builder, loc, builder.getI64Type(), word));
-        Value empty = LLVM::ICmpOp::create(
-            builder, loc, LLVM::ICmpPredicate::eq, final[id],
-            llvmConstant(builder, loc, builder.getI64Type(), 0));
-        Value advance = LLVM::AndOp::create(builder, loc, atWord, empty);
-        lower = select(
-            advance, llvmConstant(builder, loc, builder.getI64Type(), word + 1),
-            lower);
-        ++hints;
-      }
-      if (hints) {
-        final[cacheID] = lower;
-        slots[cacheID].written = true;
-        ::talos::schedule::set<::talos::schedule::Field::EvalCacheHintWords>(
-            function, builder.getI64IntegerAttr(hints));
-      }
-    }
-  }
   for (size_t i = 0; i < slots.size(); ++i)
     if (slots[i].written)
       LLVM::StoreOp::create(builder, loc, final[i], addresses[i], 1);

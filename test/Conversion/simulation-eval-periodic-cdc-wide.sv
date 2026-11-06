@@ -17,8 +17,10 @@
 // CHECK: llvm.mlir.constant(5 : i64)
 // CHECK: llvm.mlir.constant(7 : i64)
 // CHECK: llvm.return
-// The dispatcher also consumes owners from the second ingress word.
+// The word sweep also runs the owners of the second ingress word.
 // CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1(
+// CHECK: llvm.call @__talos_eval_dispatch_v1.word_1(
+// CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1.word_1(
 // CHECK: %[[INGRESS:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
 // CHECK: llvm.getelementptr %[[INGRESS]][8] : (!llvm.ptr) -> !llvm.ptr, i8
 

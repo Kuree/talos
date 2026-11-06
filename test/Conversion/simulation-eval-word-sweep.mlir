@@ -1,79 +1,79 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-replicate,simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' | FileCheck %s
 
 // test-talos-replicate expands counter# into 513 clocked counters, each a
-// direct eval owner outside any ranked group. Beyond one 512-owner segment,
-// the coordinator selects a segment function by `bit >> 9`; the segment runs
-// owners while the globally first ready leaf remains local. Empty leaves and
-// cross-segment publications return to the coordinator. The four-state
-// fallback flag is passed by address; errors and termination still escape.
+// direct eval owner outside any ranked group: nine ready words and one dirty
+// word (runtime::DirtyReadySetLayout). The coordinator selects the lowest
+// dirty word, skips and clears it when its leaf is empty, and otherwise runs
+// that word's function, which tests and runs its owners in rank order. After
+// the word it clears the dirty bit only if no owner of the word is pending.
+// The four-state fallback flag is passed by address; errors and termination
+// escape the word function (IEEE 1800-2023 4.5, 4.7, 9.2.3).
 
 // CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1(
 // CHECK: %[[FALLBACK:.*]] = llvm.alloca %{{.*}} x i1
 // CHECK: ^[[DISPATCH:bb[0-9]+]]:
-// CHECK: llvm.switch %[[BIT:.*]] : i64, ^[[SEGMENTS:bb[0-9]+]] [
-// CHECK-NEXT: ]
-// CHECK: ^[[SEGMENTS]]:
-// CHECK-NEXT: %[[SHIFT:.*]] = llvm.mlir.constant(9 : i64)
-// CHECK-NEXT: %[[INDEX:.*]] = llvm.lshr %[[BIT]], %[[SHIFT]]
-// CHECK-NEXT: llvm.switch %[[INDEX]] : i64, ^[[STOPPED:bb[0-9]+]] [
-// CHECK-NEXT: 0: ^[[FIRST:bb[0-9]+]],
-// CHECK-NEXT: 1: ^[[SECOND:bb[0-9]+]]
-// CHECK-NEXT: ]
-// CHECK: ^[[FIRST]]:
-// CHECK-NEXT: %[[STATUS:.*]] = llvm.call @__talos_eval_dispatch_v1.segment_0(%arg1, %[[BIT]], %[[FALLBACK]])
-// CHECK-NEXT: %[[OK:.*]] = llvm.mlir.constant(0 : i32)
-// CHECK-NEXT: %[[RESUME:.*]] = llvm.icmp "eq" %[[STATUS]], %[[OK]]
-// CHECK-NEXT: llvm.cond_br %[[RESUME]], ^[[DISPATCH]], ^[[FAILED:bb[0-9]+]](%[[STATUS]] : i32)
-// CHECK: ^[[SECOND]]:
-// CHECK-NEXT: llvm.call @__talos_eval_dispatch_v1.segment_1(%arg1, %[[BIT]], %[[FALLBACK]])
-
-// CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1.segment_0(%arg0: !llvm.ptr, %arg1: i64, %arg2: !llvm.ptr) -> i32
-// CHECK: llvm.br ^[[LOCAL:bb[0-9]+]](%arg1 : i64)
-// CHECK-NEXT: ^[[LOCAL]](%[[SELECTED:.*]]: i64):
-// CHECK-NEXT: llvm.switch %[[SELECTED]] : i64, ^[[NONE:bb[0-9]+]] [
-// CHECK-NEXT: 0: ^
-// CHECK: 511: ^
-// CHECK-NEXT: ]
-
-// CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1.segment_1(%arg0: !llvm.ptr, %arg1: i64, %arg2: !llvm.ptr) -> i32
-// CHECK-NEXT: llvm.br ^[[LOCAL:bb[0-9]+]](%arg1 : i64)
-// CHECK-NEXT: ^[[LOCAL]](%[[SELECTED:.*]]: i64):
-// CHECK-NEXT: llvm.switch %[[SELECTED]] : i64, ^[[NONE:bb[0-9]+]] [
-// CHECK-NEXT: 512: ^[[OWNER:bb[0-9]+]]
-// CHECK-NEXT: ]
-// CHECK-NEXT: ^[[CONTINUE:bb[0-9]+]]:
+// CHECK-NEXT: llvm.br ^[[SCAN:bb[0-9]+]]
+// CHECK: ^[[SCAN]]:
 // CHECK: %[[INGRESS:.*]] = llvm.mlir.addressof @__talos_aot_model_ingress_v1
-// CHECK: %[[CACHE:.*]] = llvm.getelementptr %[[INGRESS]][72]
-// CHECK: %[[WORD:.*]] = llvm.load %[[CACHE]]
-// CHECK: %[[START:.*]] = llvm.mlir.constant(8 : i64)
-// CHECK: %[[RELATIVE:.*]] = llvm.sub %[[WORD]], %[[START]]
-// CHECK: %[[COUNT:.*]] = llvm.mlir.constant(1 : i64)
-// CHECK: %[[INSIDE:.*]] = llvm.icmp "ult" %[[RELATIVE]], %[[COUNT]]
-// CHECK-NEXT: llvm.cond_br %[[INSIDE]], ^[[LOAD:bb[0-9]+]], ^[[DONE:bb[0-9]+]]
-// CHECK-NEXT: ^[[FAIL:bb[0-9]+]](%[[CODE:.*]]: i32):
-// CHECK-NEXT: llvm.return %[[CODE]]
-// CHECK-NEXT: ^[[NONE]]:
-// CHECK-NEXT: %[[UNAVAILABLE:.*]] = llvm.mlir.constant(13 : i32)
-// CHECK-NEXT: llvm.return %[[UNAVAILABLE]]
-// CHECK: llvm.store %{{.*}}, %arg2 {{.*}} : i1, !llvm.ptr
+// CHECK: %[[TOP_ADDRESS:.*]] = llvm.getelementptr %[[INGRESS]][72]
+// CHECK: %[[TOP:.*]] = llvm.load %[[TOP_ADDRESS]]
+// CHECK: %[[NINE_WORDS:.*]] = llvm.mlir.constant(511 : i64)
+// CHECK: %[[DIRTY:.*]] = llvm.and %[[TOP]], %[[NINE_WORDS]]
+// CHECK: llvm.cond_br %{{.*}}, ^[[FOUND:bb[0-9]+]], ^[[EMPTY:bb[0-9]+]]
+// CHECK: ^[[CLEAR:bb[0-9]+]](%[[CLEARED:.*]]: i64):
+// CHECK: %[[PARENT:.*]] = llvm.lshr %[[CLEARED]],
+// CHECK: %[[DIRTY_INDEX:.*]] = llvm.add %[[PARENT]],
+// CHECK: %[[DIRTY_ADDRESS:.*]] = llvm.getelementptr %{{.*}}[%[[DIRTY_INDEX]]]
+// CHECK: llvm.load %[[DIRTY_ADDRESS]]
+// CHECK: llvm.store %{{.*}}, %[[DIRTY_ADDRESS]]
+// CHECK-NEXT: llvm.br ^[[DISPATCH]]
+// CHECK: ^[[GATE:bb[0-9]+]](%[[WORD:.*]]: i64):
+// CHECK: %[[LEAF_ADDRESS:.*]] = llvm.getelementptr %{{.*}}[%[[WORD]]]
+// CHECK: %[[LEAF:.*]] = llvm.load %[[LEAF_ADDRESS]]
+// CHECK: %[[NONEMPTY:.*]] = llvm.icmp "ne" %[[LEAF]],
+// CHECK-NEXT: llvm.cond_br %[[NONEMPTY]], ^[[SWITCH:bb[0-9]+]](%[[WORD]] : i64), ^[[CLEAR]](%[[WORD]] : i64)
+// CHECK: ^[[FOUND]]:
+// CHECK-NEXT: "llvm.intr.cttz"(%[[DIRTY]]) <{is_zero_poison = true}>
+// CHECK: llvm.br ^[[GATE]](
+// CHECK: ^[[SWITCH]](%[[SELECTED:.*]]: i64):
+// CHECK-NEXT: llvm.switch %[[SELECTED]] : i64, ^{{bb[0-9]+}} [
+// CHECK-NEXT: 0: ^[[WORD0:bb[0-9]+]],
+// CHECK: 8: ^[[WORD8:bb[0-9]+]]
+// CHECK-NEXT: ]
+// After a successful word the coordinator polls termination once.
+// CHECK: ^[[AFTER:bb[0-9]+]](%[[RAN:.*]]: i64, %[[STATUS:.*]]: i32):
+// CHECK: llvm.cond_br %{{.*}}, ^[[POLL:bb[0-9]+]], ^{{bb[0-9]+}}(%[[STATUS]] : i32)
+// CHECK: ^[[POLL]]:
+// CHECK-NEXT: llvm.mlir.addressof @__talos_periodic_termination_v1
+// CHECK: llvm.cond_br %{{.*}}, ^[[RECHECK:bb[0-9]+]], ^{{bb[0-9]+}}
+// CHECK: ^[[RECHECK]]:
+// CHECK: llvm.getelementptr %{{.*}}[%[[RAN]]]
+// CHECK: llvm.cond_br %{{.*}}, ^[[DISPATCH]], ^[[CLEAR]](%[[RAN]] : i64)
+// CHECK: ^[[WORD0]]:
+// CHECK-NEXT: %[[CALLED:.*]] = llvm.call @__talos_eval_dispatch_v1.word_0(%arg1, %[[FALLBACK]])
+// CHECK-NEXT: llvm.br ^[[AFTER]](%[[SELECTED]], %[[CALLED]] : i64, i32)
+// CHECK: ^[[WORD8]]:
+// CHECK-NEXT: llvm.call @__talos_eval_dispatch_v1.word_8(%arg1, %[[FALLBACK]])
+
+// Owners run in bit order; each consumes its own bit and polls termination.
+// CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1.word_0(%arg0: !llvm.ptr, %arg1: !llvm.ptr) -> i32
+// CHECK: %[[FIRST:.*]] = llvm.mlir.constant(1 : i64)
+// CHECK: llvm.and %{{.*}}, %[[FIRST]]
+// CHECK: llvm.cond_br %{{.*}}, ^[[RUN0:bb[0-9]+]], ^[[NEXT0:bb[0-9]+]]
+// CHECK: ^[[NEXT0]]:
+// CHECK: %[[SECOND:.*]] = llvm.mlir.constant(2 : i64)
+// CHECK: llvm.and %{{.*}}, %[[SECOND]]
+// CHECK: llvm.store %{{.*}}, %arg1 {{.*}} : i1, !llvm.ptr
 // CHECK-NEXT: llvm.call @__talos_direct_fragment_{{.*}}.__talos_execute(%arg0)
 // The proven two-state call's trivial trusted wrapper is inlined, so the
-// segment calls the owner's path dispatcher directly.
+// word calls the owner's path dispatcher directly.
 // CHECK: llvm.call @__talos_eval_path_dispatch_v1_{{[0-9]+}}(%arg0) {schedule.eval.direct_call}
-// CHECK: llvm.cond_br %{{.*}}, ^{{bb[0-9]+}}, ^[[FAIL]](%{{.*}} : i32)
-// CHECK: llvm.cond_br %{{.*}}, ^[[NONE]], ^[[CONTINUE]]
-// CHECK: ^[[LOAD]]:
-// CHECK: %[[ADDRESS:.*]] = llvm.getelementptr %[[INGRESS]][%[[WORD]]]
-// CHECK: %[[READY:.*]] = llvm.load %[[ADDRESS]]
-// CHECK: %[[ZERO:.*]] = llvm.mlir.constant(0 : i64)
-// CHECK: %[[NONEMPTY:.*]] = llvm.icmp "ne" %[[READY]], %[[ZERO]]
-// CHECK-NEXT: llvm.cond_br %[[NONEMPTY]], ^[[SELECT:bb[0-9]+]], ^[[DONE]]
-// CHECK: ^[[SELECT]]:
-// CHECK-NEXT: %[[BIT:.*]] = "llvm.intr.cttz"(%[[READY]]) <{is_zero_poison = true}>
-// CHECK: llvm.br ^[[LOCAL]](%{{.*}} : i64)
-// CHECK: ^[[DONE]]:
-// CHECK-NEXT: %[[OK:.*]] = llvm.mlir.constant(0 : i32)
-// CHECK-NEXT: llvm.return %[[OK]]
+// CHECK: llvm.mlir.addressof @__talos_periodic_termination_v1
+// CHECK-LABEL: llvm.func @__talos_eval_dispatch_v1.word_8(
+// CHECK-NOT: llvm.func
+// CHECK: llvm.call @__talos_eval_path_dispatch_v1_{{[0-9]+}}(%arg0)
+// CHECK-NOT: llvm.call @__talos_eval_path_dispatch
+// CHECK: llvm.return
 
 !clk = !simulation.ref<i1>
 !int = !simulation.ref<i32>

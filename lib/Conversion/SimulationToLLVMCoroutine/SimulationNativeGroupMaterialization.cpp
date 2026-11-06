@@ -235,9 +235,9 @@ promoteScalarSlots(ArrayRef<PromotableAllocationOpInterface> allocations,
 
 uint64_t nativeOperationCost(Operation *operation) {
   if (auto merge = dyn_cast<schedule::NativeReadyMergeOp>(operation)) {
-    runtime::ReadySetLayout layout(merge.getCapacity());
+    EvalReadySetLayout layout(merge.getCapacity());
     // The bounded scan has one CFG body, independent of the number of leaves.
-    return 24 + 24 * layout.levels + (layout.hasCache() ? 8 : 0);
+    return 24 + 24 * layout.levels;
   }
   uint64_t capacity = 0;
   if (auto update = dyn_cast<schedule::NativeReadyUpdateOp>(operation))
@@ -245,10 +245,10 @@ uint64_t nativeOperationCost(Operation *operation) {
   else if (auto commit = dyn_cast<schedule::NativeReadyCommitOp>(operation))
     capacity = commit.getCapacity();
   if (capacity) {
-    runtime::ReadySetLayout layout(capacity);
+    EvalReadySetLayout layout(capacity);
     // Charge deferred leaf/index maintenance before inlining. Semantic ops
     // must not accidentally multiply the existing machine-IR growth budget.
-    return 12 * layout.levels + (layout.hasCache() ? 8 : 0);
+    return 12 * layout.levels;
   }
   return isa<schedule::NativeReadyReadOp>(operation) ? 2 : 1;
 }
@@ -2178,7 +2178,6 @@ materializeNativeEvalGroupBodies(ModuleOp module, AnalysisManager manager) {
                         ::talos::schedule::Field::EvalControlFlowDataflow,
                         ::talos::schedule::Field::EvalDataflowSlots,
                         ::talos::schedule::Field::EvalCoalescedSlots,
-                        ::talos::schedule::Field::EvalCacheHintWords,
                         ::talos::schedule::Field::EvalUnconditionalMembers}) {
         Attribute slow = schedule::get<Attribute>(original, name),
                   fast = schedule::get<Attribute>(function, name);
