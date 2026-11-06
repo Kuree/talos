@@ -1638,6 +1638,8 @@ LogicalResult NativePipelineAnalysis::prepareRoots(
     llvm::function_ref<LogicalResult()> instrumentFunctions) {
   if (bytecodeOnly)
     return success();
+  if (failed(prepareNativeSynchronousTaskCalls(module)))
+    return failure();
   if (materializeNBAAccumulators &&
       failed(materializeGeneratedNBAAccumulators(module, staticNBAPlan)))
     return failure();

@@ -231,10 +231,18 @@ public:
     for (ValueRange values :
          ArrayRef(adaptor.getOperands()).take_front(logicalArguments))
       physicalArguments += values.size();
-    for (auto [operand, converted] :
-         llvm::zip_equal(operation.getOperands(), adaptor.getOperands()))
-      if (isa<sim::RefType>(operand.getType()) && converted.size() == 1)
-        emitNativeStateRetain(rewriter, operation.getLoc(), converted.front());
+    auto operands = operation.getOperands();
+    auto convertedOperands = ArrayRef(adaptor.getOperands());
+    // A synchronous helper call already transfers the callee's references.
+    // This retained terminator owns only the continuation's copies.
+    unsigned first = native::has<native::SynchronousTaskCall>(operation)
+                         ? logicalArguments
+                         : 0;
+    for (unsigned index = first; index != operands.size(); ++index)
+      if (isa<sim::RefType>(operands[index].getType()) &&
+          convertedOperands[index].size() == 1)
+        emitNativeStateRetain(rewriter, operation.getLoc(),
+                              convertedOperands[index].front());
     OperationState state(operation.getLoc(),
                          schedule::NativeTaskCallOp::getOperationName());
     state.addOperands(flatten(adaptor.getOperands()));
@@ -264,10 +272,16 @@ public:
     for (ValueRange values :
          ArrayRef(adaptor.getValues()).take_front(logicalArguments))
       physicalArguments += values.size();
-    for (auto [operand, converted] :
-         llvm::zip_equal(operation.getValues(), adaptor.getValues()))
-      if (isa<sim::RefType>(operand.getType()) && converted.size() == 1)
-        emitNativeStateRetain(rewriter, operation.getLoc(), converted.front());
+    unsigned first = native::has<native::SynchronousTaskCall>(operation)
+                         ? logicalArguments
+                         : 0;
+    auto values = operation.getValues();
+    auto convertedValues = ArrayRef(adaptor.getValues());
+    for (unsigned index = first; index != values.size(); ++index)
+      if (isa<sim::RefType>(values[index].getType()) &&
+          convertedValues[index].size() == 1)
+        emitNativeStateRetain(rewriter, operation.getLoc(),
+                              convertedValues[index].front());
     OperationState state(
         operation.getLoc(),
         schedule::NativeClassVirtualTaskCallOp::getOperationName());

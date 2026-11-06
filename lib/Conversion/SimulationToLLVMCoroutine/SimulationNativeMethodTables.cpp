@@ -131,6 +131,9 @@ materializeNativeMethodTables(ModuleOp module,
                               ArrayRef<sim::SimClassDeclOp> classes,
                               const analysis::ClassDispatchAnalysis &dispatch) {
   llvm::StringMap<std::string> roots;
+  if (classes.empty())
+    return roots;
+  auto design = classes.front()->getParentOfType<sim::SimDesignOp>();
   struct Call {
     Operation *operation;
     FlatSymbolRefAttr method;
@@ -138,6 +141,20 @@ materializeNativeMethodTables(ModuleOp module,
     bool isTask;
   };
   SmallVector<Call> calls;
+  // Inventory native task callers before frames are frozen. Only families
+  // whose every implementation has a synchronous body receive a table path.
+  // The later root-preparation phase can insert calls without replacing the
+  // canonical suspension operations held by the frame snapshot.
+  DenseSet<uint64_t> taskFamilies, unsupportedTasks;
+  for (auto method : design.getOps<sim::SimClassMethodDeclOp>()) {
+    if (!method.getIsTask() || !method.getIsVirtual() ||
+        !method.getImplementation())
+      continue;
+    uint64_t signature = method.getSignatureId().value_or(0);
+    taskFamilies.insert(signature);
+    if (!native::get<native::SynchronousTaskBody>(method))
+      unsupportedTasks.insert(signature);
+  }
   module.walk([&](Operation *operation) {
     auto append = [&](auto call, bool isTask) {
       native::remove<native::MethodVtablePath>(call);
@@ -149,6 +166,12 @@ materializeNativeMethodTables(ModuleOp module,
     else if (auto call =
                  dyn_cast<schedule::NativeSynchronousClassCallOp>(operation))
       append(call, true);
+    else if (auto call = dyn_cast<sim::SimClassVirtualTaskCallOp>(operation)) {
+      native::remove<native::MethodVtablePath>(call);
+      if (taskFamilies.contains(call.getSignatureId()) &&
+          !unsupportedTasks.contains(call.getSignatureId()))
+        append(call, true);
+    }
   });
   if (calls.empty() ||
       runtime::bitEnumContainsAll(runtime::getExecutionFlags(module),
@@ -200,7 +223,6 @@ materializeNativeMethodTables(ModuleOp module,
                                          static_cast<int32_t>(depth)}));
 
   llvm::StringMap<SmallVector<sim::SimClassMethodDeclOp>> methods;
-  auto design = classes.front()->getParentOfType<sim::SimDesignOp>();
   for (auto method : design.getOps<sim::SimClassMethodDeclOp>())
     if (method.getSlot() && method.getSignatureId())
       methods[method.getOwner()].push_back(method);

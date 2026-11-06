@@ -434,6 +434,7 @@ mlir::Value zeroNativeValue(mlir::OpBuilder &builder, mlir::Location location,
 std::string managedClassDescriptorName(mlir::SymbolRefAttr className);
 std::string managedMethodThunkName(llvm::StringRef methodName);
 std::string managedSynchronousMethodThunkName(llvm::StringRef methodName);
+mlir::LogicalResult prepareNativeSynchronousTaskCalls(mlir::ModuleOp module);
 std::string managedTypedMethodName(llvm::StringRef methodName);
 mlir::LLVM::LLVMStructType
 managedClassDescriptorType(mlir::MLIRContext *context);

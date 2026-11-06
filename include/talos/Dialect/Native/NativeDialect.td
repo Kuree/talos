@@ -80,6 +80,9 @@ def NativeDialect : Dialect {
     // Method/task: ordinary native body proven to return without suspension.
     // The original task keeps its canonical activation and bytecode ABI.
     "::mlir::FlatSymbolRefAttr":$synchronous_task_body,
+    // Native call already executed through an ordinary helper. Keep the task
+    // terminator as the canonical continuation/ownership transfer boundary.
+    "::mlir::UnitAttr":$synchronous_task_call,
     "::mlir::IntegerAttr":$table_wait,
     "::mlir::UnitAttr":$unmanaged,
     "::mlir::UnitAttr":$shared_callback,

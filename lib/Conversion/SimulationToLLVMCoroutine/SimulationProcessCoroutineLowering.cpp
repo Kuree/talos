@@ -171,6 +171,18 @@ lowerSuspendTerminator(Operation *operation, Value instance, Value handle,
     return operation->emitError(
         "converted continuation arity disagrees with frame analysis");
 
+  if (native::has<native::SynchronousTaskCall>(operation)) {
+    // The ordinary call ran before this canonical transfer boundary. Keep
+    // continuation ownership/reloads without creating or scheduling a task.
+    storeAt(
+        builder, location, instance, kInstanceContinuationField,
+        llvmConstant(builder, location, builder.getI32Type(), continuationID),
+        4);
+    LLVM::BrOp::create(builder, location, blocks.shims.lookup(continuation));
+    builder.eraseOp(operation);
+    return success();
+  }
+
   if (auto control = dyn_cast<schedule::NativeProcessControlOp>(operation)) {
     Type i32 = builder.getI32Type();
     Type i64 = builder.getI64Type();

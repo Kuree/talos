@@ -1,5 +1,6 @@
 //===- SimulationSynchronousTasks.cpp - Ordinary native task bodies -----===//
 
+#include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Analysis/NativeMethodEligibilityAnalysis.h"
 #include "talos/Conversion/Passes.h"
 #include "talos/Dialect/Native/NativeDialect.h"
@@ -17,6 +18,58 @@
 using namespace mlir;
 
 namespace talos {
+namespace detail {
+LogicalResult prepareNativeSynchronousTaskCalls(ModuleOp module) {
+  // The canonical frame snapshot holds pointers to the original suspension
+  // operations. Keep those operations and their successor operands intact.
+  // Insert the ordinary call only after frame planning and before managed-root
+  // instrumentation, then let the retained terminator transfer the continuation
+  // through its canonical shim without creating a task activation (13.3).
+  SmallVector<sim::SimClassMethodDeclOp> methods;
+  llvm::append_range(methods, module.getOps<sim::SimClassMethodDeclOp>());
+  for (auto design : module.getOps<sim::SimDesignOp>())
+    llvm::append_range(methods, design.getOps<sim::SimClassMethodDeclOp>());
+  bool hasBodies = llvm::any_of(methods, [](auto method) {
+    return method.getIsTask() && method.getImplementation() &&
+           native::get<native::SynchronousTaskBody>(method);
+  });
+  if (!hasBodies)
+    return success();
+  SymbolTableCollection symbols;
+  SmallVector<Operation *> calls;
+  module.walk([&](Operation *operation) {
+    if (isa<sim::SimTaskCallOp, sim::SimClassVirtualTaskCallOp>(operation) &&
+        !native::has<native::SynchronousTaskCall>(operation))
+      calls.push_back(operation);
+  });
+  for (Operation *operation : calls) {
+    OpBuilder builder(operation);
+    if (auto call = dyn_cast<sim::SimTaskCallOp>(operation)) {
+      auto callee = symbols.lookupNearestSymbolFrom<sim::SimFuncOp>(
+          call, call.getCalleeAttr());
+      auto body = callee ? native::get<native::SynchronousTaskBody>(callee)
+                         : FlatSymbolRefAttr{};
+      if (!body)
+        continue;
+      sim::SimCallOp::create(builder, call.getLoc(), TypeRange{}, body,
+                             call.getArguments(), ArrayAttr{}, ArrayAttr{});
+    } else {
+      auto virtualCall = cast<sim::SimClassVirtualTaskCallOp>(operation);
+      auto path = native::get<native::MethodVtablePath>(virtualCall);
+      if (!path)
+        continue;
+      auto replacement = schedule::NativeSynchronousClassCallOp::create(
+          builder, virtualCall.getLoc(), virtualCall.getReceiver(),
+          virtualCall.getMethodAttr(), virtualCall.getSlotAttr(),
+          virtualCall.getSignatureIdAttr(), virtualCall.getArguments());
+      native::set<native::MethodVtablePath>(replacement, path);
+    }
+    native::mark<native::SynchronousTaskCall>(operation);
+  }
+  return success();
+}
+} // namespace detail
+
 #define GEN_PASS_DEF_PREPARESYNCHRONOUSNATIVETASKSPASS
 #include "talos/Conversion/Passes.h.inc"
 
