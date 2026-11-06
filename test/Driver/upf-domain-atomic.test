@@ -1,0 +1,94 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: cp %S/Inputs/upf/assertions.tcl %t/assertions.tcl
+// RUN: talos --upf %t/power.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/reverse.upf --upf %t/power.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/power.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 5.10/6.20/8.3.2/8.3.3: atomic extents are constructed
+// after updates aggregate, independently of declaration order. A later update
+// can add an excluded hole; a separate domain there stays independently powered.
+// The atomic flag itself is base-only, and caught update errors preserve intent.
+// CHECK: atomic domain extents passed
+
+//--- design.sv
+module leaf(input logic clk, d);
+  logic q;
+  always @(posedge clk) q <= d;
+endmodule
+module fixed(input logic clk, d);
+  logic q;
+  always @(posedge clk) q <= d;
+  leaf closed(clk, d), open(clk, d);
+endmodule
+module shell(input logic clk, d);
+  logic q;
+  always @(posedge clk) q <= d;
+  fixed fixed(clk, d);
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, d = 1;
+  shell shell(clk, d);
+  initial begin
+    if (!supply_on("/top/V0", 1.0) || !supply_on("/top/V1", 1.0) ||
+        !supply_on("/top/V2", 1.0) || !supply_on("/top/G", 0.0))
+      $fatal(1, "atomic supply startup failed");
+    #1; clk = 1;
+    #1; clk = 0;
+    if ({shell.q,shell.fixed.q,shell.fixed.closed.q,shell.fixed.open.q}
+        !== 4'b1111) $fatal(1, "initial ownership failed");
+    if (!supply_off("/top/V0")) $fatal(1, "outer off failed");
+    #1;
+    if ({shell.q,shell.fixed.q,shell.fixed.closed.q,shell.fixed.open.q}
+        !== 4'bx111) $fatal(1, "outer domain partitioned atomic child");
+    if (!supply_on("/top/V0", 1.0)) $fatal(1, "outer restore failed");
+    #1; clk = 1;
+    #1; clk = 0;
+    if (!supply_off("/top/V1")) $fatal(1, "atomic off failed");
+    #1;
+    if ({shell.q,shell.fixed.q,shell.fixed.closed.q,shell.fixed.open.q}
+        !== 4'b1xx1) $fatal(1, "atomic hole or descendant extent failed");
+    if (!supply_off("/top/V2")) $fatal(1, "hole off failed");
+    #1;
+    if ({shell.q,shell.fixed.q,shell.fixed.closed.q,shell.fixed.open.q}
+        !== 4'b1xxx) $fatal(1, "hole lost independent supply");
+    if (!supply_on("/top/V1", 1.0) || !supply_on("/top/V2", 1.0))
+      $fatal(1, "atomic restore failed");
+    #1; d = 0; clk = 1;
+    #1;
+    if ({shell.q,shell.fixed.q,shell.fixed.closed.q,shell.fixed.open.q}
+        !== 4'b0000) $fatal(1, "atomic writers did not resume");
+    $display("atomic domain extents passed");
+    $finish;
+  end
+endmodule
+
+//--- power.upf
+source [file join [file dirname [info script]] assertions.tcl]
+foreach rail {V0 V1 V2 G} {create_supply_net $rail}
+foreach {set rail} {S0 V0 S1 V1 S2 V2} {
+  create_supply_set $set -function [list power $rail] -function {ground G}
+}
+set order {P A O}
+if {[info exists reverse_domains]} {set order {O A P}}
+foreach name $order {
+  switch $name {
+    P {create_power_domain Parent -elements shell -supply {primary S0}}
+    A {create_power_domain Atomic -atomic -supply {primary S1}}
+    O {create_power_domain Open -elements shell/fixed/open -supply {primary S2}}
+  }
+}
+create_power_domain Atomic -update -elements shell/fixed
+expect_error {create_power_domain Atomic -update -atomic -exclude_elements shell/fixed/closed} {*-atomic is not refinable*}
+expect_error {create_power_domain Parent -update -atomic} {*-atomic is not refinable*}
+expect_error {create_power_domain Duplicate -atomic -atomic -elements {}} {*duplicate UPF option*}
+expect_error {create_power_domain Valued -atomic true -elements {}} {*unsupported UPF option*}
+# All refinements precede construction of the minimum extent in phase 2.
+create_power_domain Atomic -update -exclude_elements shell/fixed/open
+create_power_domain Empty -atomic -elements shell/fixed -exclude_elements shell/fixed
+
+//--- reverse.upf
+set reverse_domains 1

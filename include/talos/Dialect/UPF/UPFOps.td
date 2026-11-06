@@ -52,6 +52,10 @@ def UPFDomainOp : Op<UPFDialect, "domain", [Symbol,
     the control polarity, clamp value, and supply-comparison policy; retention
     attributes retain resolved selectors, control events, and strategy supply
     handles for UPF lowering.
+
+    Aggregate selectors are preserved independently of the derived `extent`.
+    An atomic domain protects its normalized extent against later partitioning;
+    explicit exclusions can leave holes for other domains.
   }];
   let arguments = (ins SymbolNameAttr:$sym_name, StrArrayAttr:$elements,
       FlatSymbolRefAttr:$power, OptionalAttr<FlatSymbolRefAttr>:$ground,
@@ -70,7 +74,8 @@ def UPFDomainOp : Op<UPFDialect, "domain", [Symbol,
       // driver/receiver supply comparison from isolation's port filters.
       DefaultValuedAttr<BoolAttr, "true">:$isolation_diff_supply_only,
       OptionalAttr<StrArrayAttr>:$excluded_elements,
-      OptionalAttr<UPFDomainExtentAttr>:$extent);
+      OptionalAttr<UPFDomainExtentAttr>:$extent,
+      DefaultValuedAttr<BoolAttr, "false">:$atomic);
   let assemblyFormat = "$sym_name `elements` $elements `power` $power `on` $on attr-dict";
   let hasVerifier = 1;
   let extraClassDeclaration = [{

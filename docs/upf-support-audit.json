@@ -193,16 +193,16 @@
         "-elements",
         "-supply",
         "-update",
-        "-exclude_elements"
+        "-exclude_elements",
+        "-atomic"
       ],
       "unsupported_options": [
         "-subdomains",
-        "-atomic",
         "-define_func_type",
         "-boundary_supplies",
         "-available_supplies"
       ],
-      "limits": "Explicit module-instance selections, deferred and empty extents, additive transactional updates, aggregate exclusions and globally resolved nested/donut ownership. Explicit descendant re-entry survives ancestor exclusions; inheritance stops at another domain boundary. Existing handle identities, bindings, catalogs and strategies survive updates. Empty effective extents avoid corruption/snapshot machinery but retain physical switching and explicit state catalogs. Composite/atomic domains, hard-macro model selections, available/boundary supplies and PG function-type definitions remain unsupported. Per-path isolation across lower or multiple boundaries is still rejected.",
+      "limits": "Explicit module-instance selections, deferred and empty extents, additive transactional updates, aggregate exclusions and globally resolved nested/donut ownership. Explicit descendant re-entry survives ancestor exclusions; inheritance stops at another domain boundary. Existing handle identities, bindings, catalogs and strategies survive updates. Empty effective extents avoid corruption/snapshot machinery but retain physical switching and explicit state catalogs. Base-only atomic domains protect the normalized minimum extent after all updates, with explicit holes and protected re-entry. Composite domains, hard-macro model selections, available/boundary supplies and PG function-type definitions remain unsupported. Per-path isolation across lower or multiple boundaries is still rejected.",
       "implementation": [
         "lib/UPF/Execute.cpp"
       ]
@@ -916,7 +916,7 @@
       ],
       "missing": [
         "Composite domains and aggregation of multiple domains",
-        "Atomic domains, available/boundary supplies and function-type definition",
+        "Available/boundary supplies and function-type definition",
         "Design-top coverage validation and anonymous hard-macro domains; current compatibility behavior leaves unclaimed RTL outside declared intent"
       ]
     },
@@ -1118,7 +1118,7 @@
     {
       "id": 4,
       "status": "in_progress",
-      "scope": "Domain declaration updates and empty extents, nested extent partitioning and aggregate exclusions; atomic/composite domains remain.",
+      "scope": "Domain declaration updates, empty extents, aggregate exclusions, nested partitioning and atomic minimum extents; composite domains and supply availability remain.",
       "completed": [
         {
           "id": "4a",
@@ -1178,10 +1178,33 @@
           ],
           "review": "Independent subagent reviewed IEEE1801 ownership/precedence/effective-element-list rules and LRM hierarchy/scheduling, MLIR attributes/pass behavior, shared membership and test coverage. Parent inheritance instead of ancestor fallback, preserved raw aggregate provenance, resolved emptiness, no-UPF analysis preservation and nested module scope were checked; review findings fixed before approval.",
           "validation": "14 targeted lit tests pass. All 216 unique UPF/simulation-supply regression tests pass, including four older declaration-only fixtures corrected to avoid unrelated duplicate domain ownership. Ten selected IEEE1801 clauses produce 18 native/bytecode passes and two reference-only cases; 5.7.2 and 5.9 promoted from XFAIL to SINCE 0.2.0."
+        },
+        {
+          "id": "4c",
+          "status": "complete",
+          "scope": "Base-only atomic domain declarations with normalized minimum-extent protection, excluded holes, protected re-entry and declaration-order-independent error checking",
+          "clauses": [
+            "5.7.2",
+            "5.7.9",
+            "5.9",
+            "5.10",
+            "6.20",
+            "8.3.2",
+            "8.3.3"
+          ],
+          "runtime_changes": false,
+          "tests": [
+            "test/Driver/upf-domain-atomic.test",
+            "test/Driver/upf-domain-atomic-errors.test",
+            "test/Dialect/UPF/domain-atomic.mlir",
+            "test/Dialect/UPF/domain-atomic-invalid.mlir"
+          ],
+          "review": "Independent subagent approved IEEE1801 phase-normalized atomic semantics and LRM hierarchy/scheduling, compiler-only typed metadata, transactional option validation, ownership checks, mutation after full validation and coverage. Independently ran repeated-resolution/canonicalization/CSE and invalid-diagnostic MLIR tests, including two-atomic-hole and direct-re-entry cases. No remaining review blockers.",
+          "validation": "Four targeted lit tests and all 220 unique UPF/simulation-supply regression tests pass. Seven selected IEEE1801 clauses pass in native and bytecode tiers (14 cases). Coverage includes normalized deferred atomic bases, hole updates, ordering, invalid refinements, atomic/atomic overlap and explicit re-entry protection."
         }
       ],
       "remaining": [
-        "Atomic and composite domains",
+        "Composite domains",
         "Available/boundary supplies and function-type definition",
         "Design-top coverage validation and anonymous hard-macro domains"
       ]

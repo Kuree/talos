@@ -60,9 +60,23 @@ LogicalResult resolveUPFDomainExtents(ModuleOp module) {
       }
       owner = index;
     }
-    if (!owner && parent &&
-        !std::binary_search(selection.excluded.begin(),
-                            selection.excluded.end(), *parent))
+    bool excludesParent =
+        parent && std::binary_search(selection.excluded.begin(),
+                                     selection.excluded.end(), *parent);
+    // 5.7.2/6.20/8.3.3: atomic minimum extents are established before
+    // non-atomic partitioning, after aggregate updates have been collapsed.
+    // A tree sweep is equivalent: no explicit descendant claim can displace
+    // inherited atomic ownership, except at that atomic domain's own hole.
+    if (owner && parent && *owner != *parent && domains[*parent].getAtomic() &&
+        !excludesParent) {
+      auto diagnostic = domains[*owner].emitError()
+                        << "cannot partition atomic power domain "
+                        << domains[*parent].getSymName() << " at " << path;
+      diagnostic.attachNote(domains[*parent].getLoc())
+          << "atomic minimum extent declared here";
+      return failure();
+    }
+    if (!owner && parent && !excludesParent)
       owner = parent;
     // 4.4.2/6.20: inheritance follows immediate parent ownership, not any
     // ancestor domain. An excluded child cannot fall back through another

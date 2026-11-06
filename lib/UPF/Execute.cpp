@@ -45,7 +45,7 @@ struct Domain {
   SmallVector<Attribute> on, partial, errors;
   upf::SwitchStateAttr off;
   std::vector<std::string> elements, excluded;
-  bool hasElements = false;
+  bool hasElements = false, atomic = false;
   bool isolationHigh = true;
   bool isolationDiffSupplyOnly = true;
   int64_t clamp = 0;
@@ -865,8 +865,9 @@ struct Session {
       RepeatedOptions repeated{{"-supply", {}}};
       if (objc < 2 ||
           !options(objc, objv, 2,
-                   {"-elements", "-exclude_elements", "-supply", "-update"},
-                   opts, &repeated, {"-update"}))
+                   {"-elements", "-exclude_elements", "-supply", "-update",
+                    "-atomic"},
+                   opts, &repeated, {"-update", "-atomic"}))
         return TCL_ERROR;
       if (!identifier(Tcl_GetString(objv[1])))
         return TCL_ERROR;
@@ -877,6 +878,9 @@ struct Session {
         return error("cannot update an unknown power domain");
       if (!update && found != domains.end())
         return error("duplicate power domain; use -update");
+      if (update && opts.count("-atomic"))
+        return error(
+            "power-domain -atomic is not refinable (IEEE 1801-2018 6.20)");
       Domain dom = update ? found->second : Domain{};
       if (update) {
         if (dom.scope != scope)
@@ -890,6 +894,7 @@ struct Session {
         dom.location = declarationLocation();
         dom.name = id;
         dom.scope = scope;
+        dom.atomic = opts.count("-atomic");
         dom.primary =
             supplySetKey(std::string(Tcl_GetString(objv[1])) + ".primary");
       }
@@ -2170,7 +2175,7 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
             : builder.getStringAttr(domain.isolationName),
         domain.isolationDiffSupplyOnly,
         excluded.empty() ? ArrayAttr{} : builder.getArrayAttr(excluded),
-        upf::DomainExtentAttr{});
+        upf::DomainExtentAttr{}, domain.atomic);
   }
   if (failed(resolveUPFDomainExtents(module)))
     return failure();

@@ -1,0 +1,13 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-domain-atomic.test %t
+// RUN: %split-file %s %t/intent
+// RUN: cp %S/Inputs/upf/assertions.tcl %t/assertions.tcl
+// RUN: not talos --upf %t/power.upf --upf %t/intent/steal.upf -emit-slang %t/design.sv -o - 2>&1 | FileCheck %s
+// RUN: not talos --upf %t/intent/steal.upf --upf %t/reverse.upf --upf %t/power.upf -emit-slang %t/design.sv -o - 2>&1 | FileCheck %s
+// Atomic minimum ownership is checked after phase-1 updates regardless of
+// textual declaration order, before simulation lowering mutates any process.
+// CHECK: cannot partition atomic power domain top.Atomic at top.shell.fixed.closed
+// CHECK: atomic minimum extent declared here
+
+//--- steal.upf
+create_power_domain Steal -elements shell/fixed/closed
