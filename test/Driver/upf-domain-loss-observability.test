@@ -1,0 +1,37 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --vpi=off --upf %t/base.upf -O0 -emit-sim --mlir-verify-each %t/design.sv -o %t.off.mlir
+// RUN: talos --vpi=read --upf %t/base.upf -O0 -emit-sim --mlir-verify-each %t/design.sv -o %t.read.mlir
+// RUN: talos --vpi=off --upf %t/control.upf -O0 -emit-sim --mlir-verify-each %t/design.sv -o %t.control.mlir
+// RUN: talos --vpi=off --upf %t/collision.upf -O0 -emit-sim --mlir-verify-each %t/design.sv -o %t.collision.mlir && talos --vpi=off --upf %t/collision.upf -O0 -emit-sim --dump-ir-before=elaborate-upf --dump-ir-path=%t.before.mlir %t/design.sv -o /dev/null
+// RUN: FileCheck %s --check-prefix=OFF --input-file=%t.off.mlir --implicit-check-not=simulation.event.snapshot --implicit-check-not=simulation.snapshot_publications && FileCheck %s --check-prefix=OFF --input-file=%t.collision.mlir --implicit-check-not=simulation.event.snapshot --implicit-check-not=simulation.snapshot_publications
+// RUN: FileCheck %s --check-prefix=ON --input-file=%t.read.mlir && FileCheck %s --check-prefix=ON --input-file=%t.control.mlir && FileCheck %s --check-prefix=IDS --input-file=%t.before.mlir
+// Unused source inventory needs no corruption owner in VPI-off compilation.
+// VPI/waveform visibility and real UPF control reads preserve state. Separate
+// descriptor namespaces cannot retain storage merely through equal net IDs.
+// OFF: simulation.design
+// ON: simulation.event.snapshot.register
+// ON-SAME: cancel_indices = array<i32: 2>
+// IDS-DAG: simulation.storage.decl 0 {{.*}} hierarchy "top.dut.unused"
+// IDS-DAG: simulation.net.decl 0 {{.*}} hierarchy "top.en"
+
+//--- design.sv
+module leaf; logic unused; endmodule
+module top;
+  wire en = 1;
+  leaf dut();
+  initial begin #1; $finish; end
+endmodule
+//--- base.upf
+create_supply_set CORE
+create_power_domain PD -elements dut -supply {primary CORE}
+//--- control.upf
+source [file join [file dirname [info script]] base.upf]
+create_power_domain Other -elements {}
+create_power_switch PS -domain Other -input_supply_port {vin CORE.power} \
+    -output_supply_port {vout Other.primary.power} -control_port {en dut/unused} -on_state {ON vin en}
+//--- collision.upf
+source [file join [file dirname [info script]] base.upf]
+create_power_domain Other -elements {}
+create_power_switch PS -domain Other -input_supply_port {vin CORE.power} \
+    -output_supply_port {vout Other.primary.power} -control_port {en en} -on_state {ON vin en}

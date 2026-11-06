@@ -2,6 +2,7 @@
 
 #include "SimulationToLLVMCoroutinePrivate.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
+#include "llvm/ADT/BitVector.h"
 
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Runtime/Runtime.h"
@@ -903,6 +904,10 @@ public:
                                   op.getTargets().size() *
                                       sizeof(talos_rt_event_snapshot_target_v1),
                                   8);
+      llvm::BitVector cancelled(op.getTargets().size());
+      if (auto indices = op.getCancelIndicesAttr())
+        for (int32_t index : indices.asArrayRef())
+          cancelled.set(index);
       for (auto [index, target] : llvm::enumerate(op.getTargets())) {
         ValueRange lowered =
             adaptor.getArguments()[op.getValues().size() + index];
@@ -915,13 +920,14 @@ public:
         LLVM::StoreOp::create(rewriter, location,
                               llvmConstant(rewriter, location, i32, *width),
                               byteGEP(rewriter, location, address, 8), 4);
-        LLVM::StoreOp::create(
-            rewriter, location,
-            llvmConstant(rewriter, location, i32,
-                         sim::containsFourStateLeaf(type)
+        uint32_t flags = sim::containsFourStateLeaf(type)
                              ? TALOS_RT_EVENT_SNAPSHOT_FOUR_STATE
-                             : 0),
-            byteGEP(rewriter, location, address, 12), 4);
+                             : 0;
+        if (cancelled.test(index))
+          flags |= TALOS_RT_EVENT_SNAPSHOT_CANCEL_NBA;
+        LLVM::StoreOp::create(rewriter, location,
+                              llvmConstant(rewriter, location, i32, flags),
+                              byteGEP(rewriter, location, address, 12), 4);
       }
       arguments.append(
           {llvmConstant(rewriter, location, i64,

@@ -1,12 +1,17 @@
 // REQUIRES: upf
 // RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O3 --vpi=off -emit-sim %t/design.sv -o %t.empty.mlir
+// RUN: talos --upf %t/baseline.upf -O3 --vpi=off -emit-sim %t/design.sv -o %t.base.mlir
+// RUN: FileCheck %s --check-prefix=IR --input-file=%t.empty.mlir --implicit-check-not=__upf_balloon && FileCheck %s --check-prefix=IR --input-file=%t.base.mlir --implicit-check-not=__upf_balloon
 // RUN: talos --upf %t/design.upf -O3 --vpi=off %t/design.sv -o %t.exe
-// RUN: %llvm_dist/bin/llvm-nm --defined-only -C %t.exe | FileCheck %s --implicit-check-not=talos_rt_v1_event_snapshot_register --implicit-check-not=talos_rt_v1_event_snapshot_mask --implicit-check-not=talos_rt_v1_event_snapshot_flush --implicit-check-not=talos_rt_v1_event_snapshot_link_anchor
-// RUN: talos --upf %t/design.upf -O3 --vpi=off --execution-tier=bytecode %t/design.sv -o %t.bc
-// RUN: %llvm_dist/bin/llvm-nm --defined-only -C %t.bc | FileCheck %s --implicit-check-not=talos_rt_v1_event_snapshot_register --implicit-check-not=talos_rt_v1_event_snapshot_mask --implicit-check-not=talos_rt_v1_event_snapshot_flush --implicit-check-not=talos_rt_v1_event_snapshot_link_anchor
-// An explicitly empty retention selection adds no snapshot service to either
-// execution tier, including when its containing power domain is nonempty.
-// CHECK: main
+// RUN: %t.exe | FileCheck %s --check-prefix=OUTPUT
+// RUN: talos --upf %t/design.upf -O3 --vpi=off --execution-tier=bytecode %t/design.sv -o %t.bc && %t.bc | FileCheck %s --check-prefix=OUTPUT
+// Empty retention adds no owner or registration beyond the ordinary-domain
+// exact-loss policy. Compare the same nonempty domain without retention.
+// True empty domains and ordinary no-UPF links retain no-service checks.
+// IR-COUNT-1: simulation.event.snapshot.register
+// IR-NOT: simulation.event.snapshot.register
+// OUTPUT: empty retention cost passed
 
 //--- design.sv
 module leaf(input logic clk, output logic q = 0);
@@ -22,11 +27,14 @@ module top;
       $fatal(1, "supplies");
     #1 clk = 1;
     #1;
+    $display("empty retention cost passed");
     $finish;
   end
 endmodule
 
-//--- design.upf
+//--- baseline.upf
 create_supply_set CORE
 create_power_domain PD -elements dut -supply {primary CORE}
+//--- design.upf
+source [file join [file dirname [info script]] baseline.upf]
 set_retention UNUSED -domain PD -elements {} -save_signal {save high}

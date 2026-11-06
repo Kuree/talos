@@ -837,8 +837,10 @@ talos_rt_status validateEventSnapshotTargetUnlocked(
     talos_rt_context *context, const talos_rt_event_snapshot_target_v1 &target,
     EventSnapshotTarget &resolved) {
   if (!context || !context->execution || !target.width ||
-      (target.flags & ~TALOS_RT_EVENT_SNAPSHOT_FOUR_STATE) ||
-      (context->twoState() && target.flags))
+      (target.flags & ~(TALOS_RT_EVENT_SNAPSHOT_FOUR_STATE |
+                        TALOS_RT_EVENT_SNAPSHOT_CANCEL_NBA)) ||
+      (context->twoState() &&
+       (target.flags & TALOS_RT_EVENT_SNAPSHOT_FOUR_STATE)))
     return TALOS_RT_INVALID_DESIGN;
   talos_rt_stable_handle_v1 decoded{};
   if (!talos_rt_stable_handle_decode(target.stable_id, &decoded) ||

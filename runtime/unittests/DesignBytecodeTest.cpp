@@ -13782,6 +13782,7 @@ TEST(VPI, IteratesCanonicalSchedulerTimeQueuesOnDemand) {
   managed.dueTime = 60;
   context->scheduledManagedNBAs.push_back(std::move(managed));
   ScheduledDesignNBA designNBA;
+  designNBA.sequence = 1; // Nonzero identifies a live queued update.
   designNBA.dueTime = 50;
   context->scheduledDesignNBAs.push_back(std::move(designNBA));
   context->scheduledDesignEvents.push_back({1, 80});

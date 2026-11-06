@@ -636,28 +636,37 @@ talos_rt_v1_power_cancel_nba(talos_rt_context *context, uint64_t target,
   // overwrite corruption, including updates already queued for this NBA slot.
   if (!context || !width)
     return TALOS_RT_INVALID_ARGUMENT;
-  uint32_t targetID = 0;
-  int64_t targetOffset = 0;
-  bool targetStatic = decodeNativeStatic(target, targetID, targetOffset);
-  if (!targetStatic && !decodeNativeGlobal(target, targetOffset))
-    return TALOS_RT_INVALID_HANDLE;
   ContextTransaction transaction(context);
   ContextMutexLock lock(context);
-  for (ScheduledNBA &update : context->scheduledNBAs) {
+  using Range = std::pair<__int128, __int128>;
+  auto physical = [&](uint64_t handle, uint64_t span) -> std::optional<Range> {
     uint32_t id = 0;
     int64_t offset = 0;
-    bool bounded = decodeNativeStatic(update.bitOffset, id, offset);
-    if (bounded != targetStatic)
-      continue;
-    if (bounded ? id != targetID
-                : !decodeNativeGlobal(update.bitOffset, offset))
-      continue;
-    // Compiler power-loss sites always name the full declared root. Keep the
-    // range check so unrelated raw-global roots and adjacent slices survive.
-    if (static_cast<__int128>(offset) <
-            static_cast<__int128>(targetOffset) + width &&
-        static_cast<__int128>(targetOffset) <
-            static_cast<__int128>(offset) + update.bitWidth) {
+    if (decodeNativeStatic(handle, id, offset)) {
+      auto *state = findNativeStaticState(context, id);
+      if (!state)
+        return std::nullopt;
+      __int128 begin = std::max<__int128>(0, offset);
+      __int128 end = std::min<__int128>(
+          state->bitWidth, static_cast<__int128>(offset) + span);
+      return Range{state->bitOffset + begin, state->bitOffset + end};
+    }
+    if (decodeNativeGlobal(handle, offset))
+      return Range{offset, static_cast<__int128>(offset) + span};
+    return std::nullopt;
+  };
+  auto targetRange = physical(target, width);
+  if (!targetRange || targetRange->first < 0)
+    return TALOS_RT_INVALID_HANDLE;
+  if (targetRange->first >= targetRange->second)
+    return TALOS_RT_OK;
+  auto overlaps = [&](const __int128 begin, const __int128 end) {
+    return begin < end && begin < targetRange->second && targetRange->first < end;
+  };
+  for (ScheduledNBA &update : context->scheduledNBAs) {
+    auto at = physical(update.bitOffset, update.bitWidth);
+    if (at && overlaps(std::max<__int128>(0, at->first),
+                       std::min<__int128>(update.planeBitCount, at->second))) {
       update.cancelled = true;
       if (uint8_t half = update.powerGuardHalf(); half && context->powerNBAs) {
         auto found =
@@ -673,6 +682,25 @@ talos_rt_v1_power_cancel_nba(talos_rt_context *context, uint64_t target,
       }
     }
   }
+  for (auto &update : context->scheduledDesignNBAs) {
+    if (!update.sequence || update.stringValue ||
+        update.handleKind != TALOS_RT_DESCRIPTOR_STORAGE)
+      continue;
+    __int128 begin =
+        std::max<__int128>(0, std::max(update.begin, update.start));
+    __int128 end = std::min<__int128>(
+        update.end, static_cast<__int128>(update.start) + update.bitWidth);
+    if (begin < end && overlaps(begin, end))
+      update.sequence = 0; // Zero is never a live scheduler sequence.
+  }
+  // Preserve cursor indices during a mixed NBA barrier. Packed design updates
+  // own no managed roots and can otherwise be retired immediately.
+  if (!context->schedulerDrainingNBAQueues)
+    context->scheduledDesignNBAs.erase(
+        std::remove_if(context->scheduledDesignNBAs.begin(),
+                       context->scheduledDesignNBAs.end(),
+                       [](const auto &update) { return !update.sequence; }),
+        context->scheduledDesignNBAs.end());
   // A cancelled-only queue never creates an NBA barrier. Retire its tail
   // now, so repeated power/RTC pulses do not accumulate dead payloads. Keep
   // vector positions stable during a barrier or synchronous observer callback.

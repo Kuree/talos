@@ -4364,6 +4364,10 @@ talos_rt_status talos_rt_v1_power_nba_view(
 // convert X/Z to zero; four-state targets preserve both planes. Handles and
 // this record have identical layout on native hosts and wasm32.
 #define TALOS_RT_EVENT_SNAPSHOT_FOUR_STATE UINT32_C(1)
+// Cancel overlapping queued writes at this publication, including unchanged
+// data. The complete target batch validates before cancellation and commits
+// before notifications. No cancellation occurs merely on registration.
+#define TALOS_RT_EVENT_SNAPSHOT_CANCEL_NBA UINT32_C(2)
 typedef struct talos_rt_event_snapshot_target_v1 {
   uint64_t stable_id;
   uint32_t width;

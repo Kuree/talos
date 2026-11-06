@@ -5,6 +5,7 @@
 // RUN: talos --upf %t/excluded.upf -O0 -emit-sim --mlir-verify-each %t/design.sv -o - | FileCheck %s --implicit-check-not=simulation.snapshot_publications --implicit-check-not=simulation.event.snapshot.
 // RUN: not talos --upf %t/nonempty.upf -O0 -emit-sim %t/design.sv -o %t.bad.mlir 2>&1 | FileCheck %s --check-prefix=NONEMPTY
 // RUN: talos --upf %t/empty-elements.upf -O0 -emit-sim --mlir-verify-each %t/design.sv -o - | FileCheck %s --implicit-check-not=simulation.snapshot_publications --implicit-check-not=simulation.event.snapshot.
+// RUN: talos --upf %t/empty-control.upf -O0 -emit-sim --mlir-verify-each %t/design.sv -o - | FileCheck %s --implicit-check-not=simulation.snapshot_publications --implicit-check-not=simulation.event.snapshot.
 // IEEE 1801-2018 6.20/6.50: an empty extent cannot retain any state.
 // Balloon intent there must not enable publication barriers or reject an
 // unrelated context DPI call; genuine nonempty intent keeps that diagnostic.
@@ -44,3 +45,7 @@ set_retention R -domain Nonempty -save_signal {save high}
 //--- excluded.upf
 create_power_domain Empty -elements . -exclude_elements .
 set_retention R -domain Empty -save_signal {save high}
+
+//--- empty-control.upf
+create_power_domain Nonempty -elements dut
+set_retention R -domain Nonempty -elements {} -save_signal {dut/unused high}

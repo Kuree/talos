@@ -297,6 +297,14 @@ LogicalResult SimEventSnapshotRegisterOp::verify() {
     return failure();
   if (getTargets().empty() || getTargets().size() > UINT32_MAX)
     return emitOpError("requires between one and UINT32_MAX targets");
+  if (auto indices = getCancelIndicesAttr()) {
+    DenseSet<int32_t> unique;
+    for (int32_t index : indices.asArrayRef())
+      if (index < 0 || static_cast<uint64_t>(index) >= getTargets().size() ||
+          !unique.insert(index).second)
+        return emitOpError(
+            "cancel indices must name distinct existing snapshot targets");
+  }
   uint64_t width = 0;
   DenseSet<uint64_t> occupied;
   for (Value target : getTargets()) {

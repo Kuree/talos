@@ -213,6 +213,16 @@ talos_rt_v1_event_snapshot_flush(talos_rt_context *context) {
       auto status = stageSnapshotBatch(context, batch, updates);
       if (status != TALOS_RT_OK)
         return status;
+      // All targets have validated before queue or state mutation. A power
+      // loss cancels pending transactions even if the corrupt value is already
+      // present; defer notifications until the entire publication commits.
+      for (const auto &update : updates)
+        if (update.target.abi.flags & TALOS_RT_EVENT_SNAPSHOT_CANCEL_NBA) {
+          status = talos_rt_v1_power_cancel_nba(
+              context, update.target.abi.stable_id, update.target.abi.width);
+          if (status != TALOS_RT_OK)
+            return status;
+        }
       // IEEE 1801-2018 6.50: all same-event samplers already observed the
       // pre-transaction state. Commit every target before notifying the first
       // one, including packed destinations sharing a canonical limb.

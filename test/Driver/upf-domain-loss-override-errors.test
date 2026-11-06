@@ -1,0 +1,59 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: not talos --upf %t/design.upf -O0 %t/design.sv -o %t.force 2>&1 | FileCheck %s
+// RUN: not talos --upf %t/design.upf -DRELEASE -O3 --execution-tier=bytecode %t/design.sv -o %t.release 2>&1 | FileCheck %s
+// RUN: not talos --upf %t/design.upf -DASSIGN -O0 %t/design.sv -o %t.assign 2>&1 | FileCheck %s
+// RUN: not talos --upf %t/design.upf -DHELPER -O3 --execution-tier=bytecode %t/design.sv -o %t.helper 2>&1 | FileCheck %s
+// RUN: not talos --upf %t/design.upf -DDYNAMIC -O3 %t/design.sv -o %t.dynamic 2>&1 | FileCheck %s
+// RUN: talos --upf %t/design.upf -DSAFE -O3 --mlir-verify-each %t/design.sv -o %t.safe && %t.safe | FileCheck %s --check-prefix=SAFE
+// RUN: talos --upf %t/design.upf -DSAFE -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.safe.bc && %t.safe.bc | FileCheck %s --check-prefix=SAFE
+// LRM 10.6 precedence needs mask-aware loss commits. Until supported, reject
+// overrides of the physical snapshot-owned root across external processes,
+// helper calls and releases. Unrelated AON overrides remain valid.
+// CHECK: force, procedural assign and release on exact power-loss storage are not implemented
+// SAFE: unrelated override passed
+
+//--- design.sv
+module leaf(input logic clk);
+  logic [7:0] q;
+  always @(posedge clk) q <= 8'h11;
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0;
+  logic [7:0] outside_value = 8'h44;
+  leaf dut(clk);
+  task force_q;
+    force dut.q = 8'h22;
+  endtask
+  initial begin
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground",0.0))
+      $fatal(1,"supplies");
+`ifdef SAFE
+    force outside_value = 8'h55;
+    #1 clk = 1; #1 clk = 0;
+    if (dut.q !== 8'h11 || outside_value !== 8'h55) $fatal(1,"AON override");
+    release outside_value;
+    $display("unrelated override passed");
+`elsif RELEASE
+    release dut.q;
+`elsif ASSIGN
+    assign dut.q = 8'h22;
+`elsif HELPER
+    force_q();
+`elsif DYNAMIC
+    force dut.q = outside_value;
+`else
+    force dut.q = 8'h22;
+`endif
+    #1;
+    if (!supply_off("/top/CORE.power")) $fatal(1,"OFF");
+    #1;
+    $display("%h",dut.q);
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set CORE
+create_power_domain PD -elements dut -supply {primary CORE}

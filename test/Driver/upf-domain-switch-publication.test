@@ -1,0 +1,49 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// 1801 9.2.2/9.5.3: raw switch-control pulses which never propagate are
+// distinct from published primary loss. Only the latter destroys old events.
+// CHECK: switch publication loss passed
+
+//--- design.sv
+module leaf(input logic clk, input logic [7:0] d);
+  logic [7:0] q;
+  always @(posedge clk) q <= #5 d;
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, enable = 1;
+  logic [7:0] d = 8'h11;
+  leaf dut(clk,d);
+  initial begin
+    if (!supply_on("/top/AON.power") || !supply_on("/top/AON.ground",0.0))
+      $fatal(1,"supplies");
+    #1 clk = 1; #1 clk = 0;
+    enable = 0;
+    if (get_supply_state(get_supply_value("/top/PD.primary.power")) != FULL_ON)
+      $fatal(1,"raw control was treated as published output");
+    enable = 1;
+    #6;
+    if (dut.q !== 8'h11) $fatal(1,"unpropagated pulse cancelled NBA");
+    d = 8'h22; clk = 1;
+    #1 clk = 0; enable = 0;
+    #1;
+    if (get_supply_state(get_supply_value("/top/PD.primary.power")) != OFF)
+      $fatal(1,"switch did not publish loss");
+    enable = 1;
+    #6;
+    if (dut.q !== 'x) $fatal(1,"published switch loss revived NBA");
+    $display("switch publication loss passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set AON
+create_supply_set SW -function {ground AON.ground}
+create_power_domain PD -elements dut -supply {primary SW}
+create_power_switch PS -domain PD -input_supply_port {vin AON.power} \
+    -output_supply_port {vout PD.primary.power} -control_port {en enable} -on_state {ON vin en}

@@ -120,6 +120,9 @@ struct DueUpdateCursor {
     if constexpr (std::is_same_v<Update, ScheduledNBA>)
       while (next != ordered.end() && entries[next->second].cancelled)
         ++next;
+    if constexpr (std::is_same_v<Update, ScheduledDesignNBA>)
+      while (next != ordered.end() && !entries[next->second].sequence)
+        ++next;
     return next == ordered.end() ? std::nullopt
                                  : std::optional<size_t>(next->second);
   }
@@ -129,16 +132,20 @@ struct DueUpdateCursor {
   }
   template <typename Update> void compact(std::vector<Update> &entries) {
     size_t ordinal = 0;
-    entries.erase(std::remove_if(
-                      entries.begin(), entries.end(),
-                      [&](const Update &entry) {
-                        size_t current = ordinal++;
-                        if constexpr (std::is_same_v<Update, ScheduledNBA>)
-                          if (entry.cancelled && entry.retainedAutomaticID == 0)
-                            return true;
-                        return current < consumed.size() && consumed[current];
-                      }),
-                  entries.end());
+    entries.erase(
+        std::remove_if(
+            entries.begin(), entries.end(),
+            [&](const Update &entry) {
+              size_t current = ordinal++;
+              if constexpr (std::is_same_v<Update, ScheduledNBA>)
+                if (entry.cancelled && entry.retainedAutomaticID == 0)
+                  return true;
+              if constexpr (std::is_same_v<Update, ScheduledDesignNBA>)
+                if (!entry.sequence)
+                  return true;
+              return current < consumed.size() && consumed[current];
+            }),
+        entries.end());
   }
 };
 
@@ -1285,7 +1292,8 @@ talos_rt_snapshot_future_time_queues_unlocked(const talos_rt_context *context,
     for (const ScheduledManagedNBA &update : context->scheduledManagedNBAs)
       append(update.dueTime);
     for (const ScheduledDesignNBA &update : context->scheduledDesignNBAs)
-      append(update.dueTime);
+      if (update.sequence)
+        append(update.dueTime);
     for (const ScheduledDesignEvent &event : context->scheduledDesignEvents)
       append(event.dueTime);
     if (const ReplaceableEventFeatureState *replaceable =
@@ -1349,11 +1357,15 @@ bool talos_rt_current_time_queue_pending_unlocked(talos_rt_context *context) {
       context->scheduledInertialPathNBAs.begin()->first.first <= now)
     return true;
   auto hasDueBeforeReadOnly = [now](const auto &entries) {
-    return std::any_of(entries.begin(), entries.end(),
-                       [now](const auto &entry) {
-                         return entry.dueTime <= now &&
-                                entry.execRegion < TALOS_RT_REGION_POSTPONED;
-                       });
+    return std::any_of(
+        entries.begin(), entries.end(), [now](const auto &entry) {
+          if constexpr (std::is_same_v<std::decay_t<decltype(entry)>,
+                                       ScheduledDesignNBA>)
+            if (!entry.sequence)
+              return false;
+          return entry.dueTime <= now &&
+                 entry.execRegion < TALOS_RT_REGION_POSTPONED;
+        });
   };
   for (uint32_t region : {TALOS_RT_REGION_NBA, TALOS_RT_REGION_RE_NBA})
     if (const ScheduledManagedNBA *update =
@@ -4017,10 +4029,15 @@ uint32_t nextDueNBABarrierRegionUnlocked(const talos_rt_context *context,
                                          bool includeGenerated) {
   uint32_t barrierRegion = UINT32_MAX;
   auto considerBarrier = [&](const auto &entries) {
-    for (const auto &entry : entries)
+    for (const auto &entry : entries) {
+      if constexpr (std::is_same_v<std::decay_t<decltype(entry)>,
+                                   ScheduledDesignNBA>)
+        if (!entry.sequence)
+          continue;
       if (entry.dueTime <= context->schedulerTime &&
           schedulerRegionEligible(context, entry.execRegion))
         barrierRegion = std::min(barrierRegion, entry.execRegion);
+    }
   };
   for (const ScheduledNBA &entry : context->scheduledNBAs)
     if (!entry.cancelled && entry.dueTime <= context->schedulerTime &&
@@ -7082,7 +7099,7 @@ talos_rt_status runScheduler(talos_rt_context *context,
               candidate.suspendKind == TALOS_RT_SUSPEND_DELAY)
             considerTime(candidate.wakeTime);
         for (const ScheduledDesignNBA &update : context->scheduledDesignNBAs)
-          if (update.dueTime > context->schedulerTime)
+          if (update.sequence && update.dueTime > context->schedulerTime)
             considerTime(update.dueTime);
         for (const ScheduledNBA &update : context->scheduledNBAs)
           if (!update.cancelled && update.dueTime > context->schedulerTime)

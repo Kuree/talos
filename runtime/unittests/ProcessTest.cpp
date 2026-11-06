@@ -11577,6 +11577,34 @@ TEST(Scheduler, DelayedNBAsAdvanceTimeAndPreserveQueueOrder) {
   talos_rt_v1_context_destroy(context);
 }
 
+TEST(Scheduler,
+     PowerCancellationClipsStaticSlicesBeforeCanonicalAliasMatching) {
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 32, 1),
+            TALOS_RT_OK);
+  auto root = talos_rt_v1_native_state_static_handle(1);
+  std::array<uint8_t, 8> plane{};
+  uint8_t lower = 2, upper = 1;
+  ASSERT_EQ(
+      talos_rt_v1_scheduler_nba(context, plane.data(), nullptr, 64,
+                                talos_rt_v1_native_handle_offset(root, -1), 2,
+                                1, &lower, nullptr),
+      TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_nba(context, plane.data(), nullptr, 64, root,
+                                      2, 1, &upper, nullptr),
+            TALOS_RT_OK);
+  // Neither out-of-object slice bit can alias a neighboring global object.
+  ASSERT_EQ(talos_rt_v1_power_cancel_nba(context, 31, 1), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_power_cancel_nba(context, 33, 1), TALOS_RT_OK);
+  ASSERT_EQ(context->scheduledNBAs.size(), 2u);
+  EXPECT_FALSE(context->scheduledNBAs[0].cancelled);
+  EXPECT_FALSE(context->scheduledNBAs[1].cancelled);
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  EXPECT_EQ(plane[4] & 1, 1);
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(Scheduler, PowerLossCancelsPendingNBAWithoutAffectingAdjacentState) {
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
@@ -17889,6 +17917,129 @@ TEST_F(EventSnapshotRuntime, SamePublicationSwapsBeforeAtomicNotifications) {
   }
 }
 
+TEST_F(EventSnapshotRuntime, LossCancelsBothQueuesAcrossCanonicalAliases) {
+  for (auto &process : context->scheduledProcesses)
+    process.suspendKind = TALOS_RT_SUSPEND_FOREVER;
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 1, 32, 1),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 2, 48, 1),
+            TALOS_RT_OK);
+  auto first = talos_rt_v1_native_state_static_handle(1);
+  auto second = talos_rt_v1_native_state_static_handle(2);
+  observers[1].result_width = 2;
+  samplerABI.width = 2;
+  set(16, 2, 0); // Both destination values are already zero.
+  ASSERT_EQ(install(1, 16,
+                    {{first, 1, TALOS_RT_EVENT_SNAPSHOT_CANCEL_NBA},
+                     {48, 1, TALOS_RT_EVENT_SNAPSHOT_CANCEL_NBA}}),
+            TALOS_RT_OK);
+  uint8_t one = 1, zero = 0;
+  // Native queued aliases deliberately use the other spelling of each target.
+  for (uint64_t target : {uint64_t{32}, second, uint64_t{64}})
+    ASSERT_EQ(talos_rt_v1_scheduler_nba(
+                  context, reinterpret_cast<uint8_t *>(nativeValue.data()),
+                  reinterpret_cast<uint8_t *>(nativeUnknown.data()), 256,
+                  target, 1, 5, &one, &zero),
+              TALOS_RT_OK);
+  // Required-bytecode raw NBAs use this distinct packed design queue.
+  for (int64_t target : {32, 48, 80}) {
+    ScheduledDesignNBA update;
+    update.sequence = context->nextSchedulerSequence++;
+    update.dueTime = 5;
+    update.handleKind = TALOS_RT_DESCRIPTOR_STORAGE;
+    update.begin = update.start = target;
+    update.end = target + 1;
+    update.bitWidth = 1;
+    update.value = {1};
+    update.unknown = {0};
+    context->scheduledDesignNBAs.push_back(std::move(update));
+  }
+  // Cancellation during an active mixed barrier cannot invalidate its cursors.
+  context->schedulerDrainingNBAQueues = true;
+  publish(0, 0, 1);
+  EXPECT_EQ(talos_rt_v1_event_snapshot_flush(context), TALOS_RT_OK);
+  context->schedulerDrainingNBAQueues = false;
+  ASSERT_EQ(context->scheduledDesignNBAs.size(), 3u);
+  EXPECT_EQ(context->scheduledDesignNBAs[0].sequence, 0u);
+  EXPECT_EQ(context->scheduledDesignNBAs[1].sequence, 0u);
+  EXPECT_NE(context->scheduledDesignNBAs[2].sequence, 0u);
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 32, 1), 0u);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 48, 1), 0u);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 64, 1), 1u);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 80, 1), 1u);
+  EXPECT_TRUE(context->scheduledDesignNBAs.empty());
+}
+
+TEST_F(EventSnapshotRuntime, LossDuringMixedBarrierReselectsCancelledEntries) {
+  for (auto &process : context->scheduledProcesses)
+    process.suspendKind = TALOS_RT_SUSPEND_FOREVER;
+  ASSERT_EQ(install(1, 16, {{32, 1, TALOS_RT_EVENT_SNAPSHOT_CANCEL_NBA}}),
+            TALOS_RT_OK);
+  uint8_t one = 1, zero = 0;
+  // The first actual NBA publishes the loss trigger. Mixed cursors have
+  // already discovered all later native/design entries when its flush runs.
+  for (uint64_t target : {uint64_t{0}, uint64_t{32}, uint64_t{64}})
+    ASSERT_EQ(talos_rt_v1_scheduler_nba(
+                  context, reinterpret_cast<uint8_t *>(nativeValue.data()),
+                  reinterpret_cast<uint8_t *>(nativeUnknown.data()), 256,
+                  target, 1, 0, &one, &zero),
+              TALOS_RT_OK);
+  for (int64_t target : {32, 80}) {
+    ScheduledDesignNBA update;
+    update.sequence = context->nextSchedulerSequence++;
+    update.handleKind = TALOS_RT_DESCRIPTOR_STORAGE;
+    update.begin = update.start = target;
+    update.end = target + 1;
+    update.bitWidth = 1;
+    update.value = {1};
+    update.unknown = {0};
+    context->scheduledDesignNBAs.push_back(std::move(update));
+  }
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 32, 1), 0u);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 64, 1), 1u);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 80, 1), 1u);
+  EXPECT_TRUE(context->scheduledDesignNBAs.empty());
+}
+
+TEST_F(EventSnapshotRuntime, CancellationIsAllowedInTwoStateContexts) {
+  execution.flags |= TALOS_RT_EXECUTION_TWO_STATE;
+  observers[0].flags = observers[1].flags = 0;
+  ASSERT_EQ(install(1, 16, {{32, 1, TALOS_RT_EVENT_SNAPSHOT_CANCEL_NBA}}),
+            TALOS_RT_OK);
+  uint8_t one = 1;
+  ASSERT_EQ(talos_rt_v1_scheduler_nba(
+                context, reinterpret_cast<uint8_t *>(nativeValue.data()),
+                nullptr, 256, 32, 1, 5, &one, nullptr),
+            TALOS_RT_OK);
+  publish(0, 0, 1);
+  ASSERT_EQ(talos_rt_v1_event_snapshot_flush(context), TALOS_RT_OK);
+  EXPECT_TRUE(context->scheduledNBAs.empty());
+  EXPECT_EQ(loadPackedBits(context->stateValue, 32, 1), 0u);
+}
+
+TEST_F(EventSnapshotRuntime, InvalidLaterTargetDoesNotCancelEarlierQueue) {
+  observers[1].result_width = 2;
+  samplerABI.width = 2;
+  ASSERT_EQ(
+      install(1, 16, {{32, 1, TALOS_RT_EVENT_SNAPSHOT_CANCEL_NBA}, {48, 1, 0}}),
+      TALOS_RT_OK);
+  uint8_t one = 1, zero = 0;
+  ASSERT_EQ(talos_rt_v1_scheduler_nba(
+                context, reinterpret_cast<uint8_t *>(nativeValue.data()),
+                reinterpret_cast<uint8_t *>(nativeUnknown.data()), 256, 32, 1,
+                5, &one, &zero),
+            TALOS_RT_OK);
+  publish(0, 0, 1);
+  context->forceMask.assign(4, 0);
+  context->forceMask[0] |= UINT64_C(1) << 48;
+  EXPECT_EQ(talos_rt_v1_event_snapshot_flush(context), TALOS_RT_INVALID_DESIGN);
+  ASSERT_EQ(context->scheduledNBAs.size(), 1u);
+  EXPECT_FALSE(context->scheduledNBAs.front().cancelled);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 32, 1), 0u);
+}
+
 TEST_F(EventSnapshotRuntime, WidePayloadPreservesXZAndConvertsTwoState) {
   observers[1].result_width = 66;
   samplerABI.width = 66;
@@ -17942,7 +18093,7 @@ TEST_F(EventSnapshotRuntime, InvalidTargetsAndMissingBoundaryFail) {
   auto alias = talos_rt_v1_native_state_static_handle(1);
   EXPECT_EQ(install(2, 1, {{alias, 1, 1}}), TALOS_RT_INVALID_DESIGN);
   EXPECT_EQ(install(2, 1, {{48, 0, 0}}), TALOS_RT_INVALID_DESIGN);
-  EXPECT_EQ(install(2, 1, {{48, 1, 2}}), TALOS_RT_INVALID_DESIGN);
+  EXPECT_EQ(install(2, 1, {{48, 1, 4}}), TALOS_RT_INVALID_DESIGN);
   EXPECT_EQ(install(2, 1, {{256, 1, 1}}), TALOS_RT_INVALID_HANDLE);
   auto automatic =
       talos_rt_stable_handle_encode(TALOS_RT_STABLE_HANDLE_AUTOMATIC, 1, 0);

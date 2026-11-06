@@ -2,6 +2,7 @@
 
 #include "BytecodeEncoder.h"
 #include "BytecodeSerialization.h"
+#include "llvm/ADT/BitVector.h"
 #include <type_traits>
 
 using namespace mlir;
@@ -290,17 +291,23 @@ Encoder::encodeCoverageOperation(FunctionPlan &plan, Operation *operation) {
     for (Value capture : sampler.getCaptures())
       inputs.push_back(reg(plan, capture));
     if constexpr (snapshot) {
-      for (Value target : op.getTargets()) {
+      llvm::BitVector cancelled(op.getTargets().size());
+      if (auto indices = op.getCancelIndicesAttr())
+        for (int32_t index : indices.asArrayRef())
+          cancelled.set(index);
+      for (auto [index, target] : llvm::enumerate(op.getTargets())) {
         FailureOr<uint32_t> handle = stableHandle(target);
         Type type = cast<sim::RefType>(target.getType()).getElementType();
         auto width = simulationWidth(type);
         if (failed(handle) || !width)
           return op.emitOpError("snapshot target has no fixed handle/width");
-        inputs.append(
-            {*handle, emitU64Constant(plan, *width),
-             emitU64Constant(plan, sim::containsFourStateLeaf(type)
-                                       ? TALOS_RT_EVENT_SNAPSHOT_FOUR_STATE
-                                       : 0)});
+        uint32_t flags = sim::containsFourStateLeaf(type)
+                             ? TALOS_RT_EVENT_SNAPSHOT_FOUR_STATE
+                             : 0;
+        if (cancelled.test(index))
+          flags |= TALOS_RT_EVENT_SNAPSHOT_CANCEL_NBA;
+        inputs.append({*handle, emitU64Constant(plan, *width),
+                       emitU64Constant(plan, flags)});
       }
     }
     return emitIntrinsicRegisters(

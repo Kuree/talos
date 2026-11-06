@@ -978,7 +978,9 @@
         "Logic and power expressions, legal state transitions and legacy PSTs",
         "Activity/change-dependent corruption simstates and custom simstate behaviors",
         "Assertion/corruption/replay controls and supply variation",
-        "General predicate consistency/satisfiability beyond existing bounded structural analysis"
+        "General predicate consistency/satisfiability beyond existing bounded structural analysis",
+        "Exact published-loss snapshots now cover observable ordinary packed roots in domains without owned drivers and cancel already-issued native/raw bytecode updates; pending powered-actor clock activations still need event-time epoch qualification, and driver-owning domains retain periodic loss handling",
+        "Force/procedural-assign/release of snapshot-owned ordinary roots is explicitly diagnosed pending mask-aware loss updates; external per-target functional writes, broader writer/restoration forms and opaque publication contexts remain incomplete"
       ]
     },
     {
@@ -1450,13 +1452,64 @@
           ],
           "review": "Two independent subagents approved UPF/LRM process identity, inference, scope/extent interpretation and precedence/exclusion semantics; bounded LLVM/MLIR metadata, cached call-origin analysis, unchanged stable IDs/runtime ABI and test coverage. Review corrections close reference-formal origins, label-before-event activation proofs and external-process mixtures with final unretained in-domain state. Reviewers independently verified escaped/generated identities, master/balloon execution, Initial exemption, helper/class/context-DPI/virtual admission, exact missing binding, repeated MLIR optimization and the external exclusion reproducer. No blockers remain for this documented subset; generic external ordinary-state write instrumentation is the immediate follow-up.",
           "validation": "All 340 selected UPF/supply/snapshot/power-NBA/cohort/time and code-unit/inventory lit tests pass, including 12 new source/MLIR fixtures. The two expanded inventory cases passed after building their previously missing test helper. Clauses 6.50 and 9.7.3 pass in native/bytecode (four cases); 9.7.1 remains reference-only (two cases), with no unexpected results. Source tests exercise native/bytecode O0/O3, exact escaped/generated process names, labels before/after event controls, module-scope/nested inferred state, process precedence and exclusions, nonproducing/Initial selections, all-retained external producers with active AON neighbors, and fail-closed helper/reference/indirect/foreign/external-mixture diagnostics. Raw MLIR verifies typed selector roundtrips, immutable IDs/hierarchy independent of source bindings, domain intersection, repeated canonicalize/CSE, missing bindings and malformed inventory. Four new wasm32 objects compile across native/bytecode O0/O3; wasm runtime execution was not run. Final diagnostic-only wording and two added class/context-DPI regression cases pass the four-test targeted recheck."
+        },
+        {
+          "id": "7e",
+          "status": "complete",
+          "scope": "Exact published NORMAL loss, corruption and cancellation of already-issued packed updates; prerequisite for external per-target guards",
+          "clauses": [
+            "9.2.1",
+            "9.2.2",
+            "9.2.3",
+            "9.5.1",
+            "9.5.3",
+            "9.7.3",
+            "IEEE1800-2023 4.6",
+            "IEEE1800-2023 4.9.4",
+            "IEEE1800-2023 10.6.1",
+            "IEEE1800-2023 10.6.2"
+          ],
+          "runtime_changes": true,
+          "new_public_runtime_functions": false,
+          "runtime_record_layout_changes": false,
+          "architecture": "Reuse exact-event snapshot registration for the negative edge of the evaluated/published primary NORMAL predicate. Atomically advance the existing domain epoch, clear restoration readiness and write default-corrupt ordinary packed roots, excluding retention-owned storage. Partition payloads below the LLVM integer width limit, placing epoch/restoration in only one group. Startup OFF policy is primed before HDL actors, while ordinary restoration remains after retention updates in the existing monitor. Share explicit callback-capture construction with Balloon lowering. An optional typed cancel_indices attribute extends the existing target-record flags with CANCEL_NBA; function signatures, record sizes and bytecode intrinsic operand schema remain unchanged. Validate the complete batch before cancelling native/raw-design queued updates or committing any state; notify after all writes. Canonicalize STATIC/GLOBAL aliases with clipped object bounds, mark raw design cancellation using reserved sequence zero, preserve mixed-drain cursor positions and retire cancelled events from calendars/compaction. Backend cancellation-index encoding uses linear BitVector construction rather than quadratic membership scans.",
+          "spec_interpretations": [
+            "A published NORMAL-to-non-NORMAL transition is destructive even if supplies return ON without a process yield. Raw switch controls that never propagate are not published loss. Capture reads evaluated supplies with inline switch prediction disabled.",
+            "Initial execution and assignment issue remain exempt under 9.2.1; a subsequent target loss cancels already-queued target updates under 9.5.3, including Initial-issued NBAs. An Initial event issued while OFF retains HDL scheduling if no later target loss occurs. This preserves the agreed separation between issue semantics and separately scheduled target events.",
+            "Corruption uses each HDL type default, including X for four-state state and zero for two-state state. Cancellation occurs even when that value is unchanged, and never re-corrupts an exempt Initial write merely because a later periodic monitor executes.",
+            "This chunk observes loss exactly and cancels already-issued updates; it does not yet qualify clock activations queued before loss but resumed after restoration. Event-time qualification of those powered-actor activations is a separate immediate prerequisite, including causally later valid clocks.",
+            "Domains with owned net drivers retain the existing periodic implementation until resolved contribution targets are supported. Source force/procedural assign/release of new ordinary snapshot roots is diagnosed instead of bypassing LRM precedence or failing later as invalid runtime metadata; unrelated provably distinct AON targets remain supported.",
+            "VPI-off compilation can elide unused source-only roots. Executable storage references, storage captures, actual UPF control uses and explicit observability remain live, with independent descriptor namespaces respected. Empty/no-retention intent does not retain unused controls. VPI-enabled and raw MLIR default paths preserve inventory conservatively; waveform use also preserves storage.",
+            "The current supply model preserves effectful supply commands until elaboration materializes supply stores; generated switch stores also appear then. The late publication scan therefore covers actual ordinary loss sources without prematurely freezing unused HDL inventory. Future HDL supply linkage or logic-expression power sources must revisit that ordering; Balloon data/control publications keep their early barriers."
+          ],
+          "tests": [
+            "test/Conversion/simulation-event-snapshot-cancel.mlir",
+            "test/Conversion/upf-domain-loss-groups.mlir",
+            "test/Conversion/upf-domain-published-loss.mlir",
+            "test/Driver/upf-domain-initial-published-loss.test",
+            "test/Driver/upf-domain-loss-observability.test",
+            "test/Driver/upf-domain-loss-override-errors.test",
+            "test/Driver/upf-domain-published-loss-wasm.test",
+            "test/Driver/upf-domain-published-loss.test",
+            "test/Driver/upf-domain-retained-published-loss.test",
+            "test/Driver/upf-domain-switch-publication.test",
+            "test/IR/simulation-event-snapshot-cancel-invalid.mlir",
+            "runtime/unittests/ProcessTest.cpp",
+            "runtime/unittests/DesignBytecodeTest.cpp",
+            "test/Driver/upf-balloon-empty-cost.test",
+            "test/Driver/upf-empty-domain-balloon.test"
+          ],
+          "review": "Two independent subagents approved IEEE1801/LRM loss/initialization/override interpretation, exact event ordering, retained ownership, bounded grouped payloads, typed MLIR metadata/effects, explicit callback captures, VPI-aware elision, backend linear encoding, unchanged runtime signatures/layouts and unit/source/MLIR coverage. Review fixes cover raw-design queue cancellation, STATIC/GLOBAL clipping and aliases, actual mixed-barrier cursor reselection, two-state and unchanged payloads, physical override admission and independent descriptor namespaces. Reviewers independently executed native/required-bytecode sources, targeted runtime units, repeated MLIR optimization/verifier cases and observability/empty-intent checks. Both final audit reviews approved; no blockers remain for this documented subset.",
+          "validation": "All 351 selected UPF/supply/snapshot/power-NBA/cohort/time and code-unit/inventory lit tests pass, including eleven new source/MLIR fixtures. All 352 process and 269 selected bytecode/reflection/VPI unit tests pass (621). Clauses 6.50 and 9.7.3 pass in native/bytecode (four cases); 9.7.1 remains reference-only (two cases), with no unexpected results. Sources exercise native/bytecode O0/O3 with actual published zero-yield loss, raw Initial NBAs in the distinct design queue, stable-OFF initialization, unchanged X/two-state-zero cancellation, later valid clocks, raw unpropagated switch controls and mixed retained/ordinary roots. Runtime units cover STATIC/GLOBAL aliases, clipped neighbor survival, both NBA queues, actual in-barrier cancellation/reselection, unchanged and two-state targets, and atomic rejection before cancellation. MLIR tests cover optional attribute compatibility/roundtrip, negative/range/duplicate indices, closed callbacks, repeated canonicalize/CSE, one epoch across width-bounded groups and no duplicate monitor cancellation. VPI/control/dump preservation and empty-intent/source-only elision are tested; valid source overrides diagnose before runtime while unrelated AON overrides execute. Four new wasm32 objects compile across native/bytecode O0/O3; wasm execution was not run."
         }
       ],
       "remaining": [
         "Balloon retention-powered outputs, caller-specific helper/alias readbacks and intent-only no-eligible-state elision",
         "Collective retention-element lists and remaining storage/writer forms",
         "Legacy supply operands, remaining condition refinements and broader master initialization ordering",
-        "Immediate next prerequisite: per-target power guards and epoch handling for generic external writes to unretained domain state, including delayed OFF-to-ON NBAs and Initial/helper exemptions"
+        "Immediate scheduling prerequisite: event-time qualification of pre-loss powered-actor clock activations, without suppressing causally later valid clocks",
+        "External ordinary-state per-target issue guards and due epochs, blocking stores and shared Initial/functional helper contexts; existing named-process mixture diagnostic remains until these are implemented",
+        "Resolved-driver exact loss, mask-aware force/assign/release and broader unsupported publication/writer contexts"
       ]
     },
     {

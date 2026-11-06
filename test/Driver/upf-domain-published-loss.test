@@ -1,0 +1,82 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// IEEE 1801-2018 9.2.3/9.5.3: an actual published OFF/ON pulse is a
+// destructive loss even without a process yield. Corruption and cancellation
+// precede the next statement; power-up does not invent a functional clock.
+// CHECK: exact domain loss passed
+
+//--- design.sv
+module leaf(input logic clk, input logic [0:64] d);
+  logic [0:64] q;
+  bit [64:0] qb;
+  logic [0:64] immediate;
+  always @(posedge clk) begin
+    q <= #5 d;
+    qb <= #5 d;
+    immediate <= d;
+  end
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0;
+  logic [0:64] d = 65'h10000000000000011;
+  leaf dut(clk,d);
+  initial begin
+`ifdef RAW_INITIAL
+    // Prime OFF policy before model initialization; no later periodic pass
+    // may re-corrupt an exempt Initial write while the supplies stay stable.
+    #1 dut.q = d; dut.qb = d;
+    #1;
+    if (dut.q !== d || dut.qb !== d) $fatal(1,"startup Initial exemption");
+`endif
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground",0.0))
+      $fatal(1,"supplies");
+`ifdef RAW_INITIAL
+    #1;
+    // These are ordinary Initial-origin NBAs, not guarded PowerNBAViews.
+    // q is already X and qb already zero: no payload change is needed to
+    // cancel either event at the next actual published loss.
+    dut.q <= #5 d;
+    dut.qb <= #5 d;
+`else
+    #1 clk = 1; #1 clk = 0;
+    if (dut.immediate !== d) $fatal(1,"first clock");
+`endif
+    #1;
+    if (!supply_off("/top/CORE.power") || get_supply_state(get_supply_value("/top/CORE.power")) != OFF)
+      $fatal(1,"actual published OFF");
+    if (dut.q !== 'x || dut.qb !== 0 || dut.immediate !== 'x)
+      $fatal(1,"loss must corrupt before the next statement");
+    if (!supply_on("/top/CORE.power") || get_supply_state(get_supply_value("/top/CORE.power")) != FULL_ON)
+      $fatal(1,"actual published ON");
+    #6;
+    if (dut.q !== 'x || dut.qb !== 0 || dut.immediate !== 'x)
+      $fatal(1,"published pulse revived an old NBA or invented a clock");
+`ifdef RAW_INITIAL
+    if (!supply_off("/top/CORE.power")) $fatal(1,"OFF");
+    // Initial execution/issue is exempt. No later loss occurs, so these raw
+    // events retain their HDL scheduling even though issued while OFF.
+    dut.q <= #2 d;
+    dut.qb <= #2 d;
+    if (!supply_on("/top/CORE.power")) $fatal(1,"ON");
+    #3;
+    if (dut.q !== d || dut.qb !== d) $fatal(1,"Initial issue exemption");
+`else
+    d = 65'h10000000000000033;
+    #1 clk = 1; #1 clk = 0;
+    #5;
+    if (dut.q !== d || dut.qb !== d || dut.immediate !== d)
+      $fatal(1,"fresh clock after restoration");
+`endif
+    $display("exact domain loss passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set CORE
+create_power_domain PD -elements dut -supply {primary CORE}

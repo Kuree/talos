@@ -33,6 +33,11 @@ bool needsSnapshots(ModuleOp module) {
     return true;
   bool needed = false;
   module.walk([&](sim::SimEventSnapshotRegisterOp) { needed = true; });
+  // Ordinary loss policies appear during elaboration. Their supported supply
+  // commands keep effects until Elab materializes their stores, as do generated
+  // switch writers; the late rescan preserves every actual publication. Revisit
+  // this ordering when HDL supply linkage or logic-expression power sources are
+  // admitted. Balloon data/control publications already need this early scan.
   for (auto domain : module.getOps<upf::UPFDomainOp>()) {
     // No retained state can belong to an empty effective extent (6.20).
     // Its intent must not add barriers or reject unrelated publications.

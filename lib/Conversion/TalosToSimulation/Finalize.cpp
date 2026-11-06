@@ -964,7 +964,7 @@ static void buildTalosToSimulationPipelineImpl(
   if (pruneVPIInventory && vpiMode == "off")
     loweredDesignManager->addPass(createTalosSimPruneVPIInventoryPass());
   if (enableUPF) {
-    manager.addPass(createElaborateUPFPass());
+    manager.addPass(createElaborateUPFPass(vpiMode != "off"));
     // Elaboration creates supply monitors and other executable writers. The
     // persistent marker requests a rescan even after UPF declarations vanish.
     manager.addPass(createPrepareUPFSnapshotPublicationsPass());

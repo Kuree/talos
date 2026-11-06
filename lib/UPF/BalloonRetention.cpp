@@ -2,6 +2,7 @@
 
 #include "BalloonRetention.h"
 #include "PowerState.h"
+#include "PublicationCallback.h"
 #include "RetentionReadback.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/IRMapping.h"
@@ -25,10 +26,7 @@ using namespace upf_detail;
 // Check the LLVM backend limit before constructing concatenated types.
 constexpr uint64_t maxPackedWidth = llvm::IntegerType::MAX_INT_BITS;
 
-struct Callback {
-  sim::SimFuncOp function;
-  SmallVector<Descriptor> captures;
-};
+using Callback = PublicationCallback;
 struct State {
   BalloonRegister source;
   Descriptor normal, saved, visible;
@@ -207,40 +205,10 @@ struct BalloonLowering {
     schedule::set<schedule::Field::ObserverFourState>(
         fn, b.getBoolAttr(isa<sim::LogicType>(result.getType())));
     sim::SimReturnOp::create(b, loc, result);
-    Callback output{fn, {}};
-    std::map<std::pair<uint64_t, bool>, unsigned> indices;
-    SmallVector<Operation *> lookups;
-    fn.walk([&](Operation *op) {
-      if (isa<sim::SimContextStorageOp, sim::SimContextNetOp>(op))
-        lookups.push_back(op);
-    });
-    for (Operation *op : lookups) {
-      bool net = isa<sim::SimContextNetOp>(op);
-      uint64_t id = net ? cast<sim::SimContextNetOp>(op).getId()
-                        : cast<sim::SimContextStorageOp>(op).getId();
-      auto key = std::pair{id, net};
-      auto [it, inserted] = indices.emplace(key, fn.getNumArguments());
-      if (inserted) {
-        Type type = op->getResult(0).getType();
-        Type element = net ? cast<sim::NetType>(type).getElementType()
-                           : cast<sim::RefType>(type).getElementType();
-        output.captures.push_back({id, element, net});
-        auto attrs = b.getDictionaryAttr(
-            {sim::named<sim::metadata::CaptureKind>(sim::CaptureKindAttr::get(
-                b.getContext(), sim::CaptureKind::Value))});
-        if (failed(fn.insertArgument(fn.getNumArguments(), type, attrs, loc)))
-          return failure();
-      }
-      op->getResult(0).replaceAllUsesWith(fn.getArgument(it->second));
-      op->erase();
-    }
-    return output;
+    return closePublicationCallback(fn, b);
   }
   SmallVector<Value> arguments(Value ctx, const Callback &cb) {
-    SmallVector<Value> args{ctx};
-    for (auto d : cb.captures)
-      args.push_back(handle(b, loc, ctx, d));
-    return args;
+    return publicationArguments(b, loc, ctx, cb);
   }
   Value call(Value ctx, Callback cb) {
     return sim::SimCallOp::create(b, loc, cb.function.getResultTypes(),
@@ -249,18 +217,7 @@ struct BalloonLowering {
         .getResult(0);
   }
   Value bind(Value ctx, Callback cb, bool dependencies) {
-    SmallVector<Value> values;
-    for (auto d : cb.captures)
-      values.push_back(handle(b, loc, ctx, d));
-    unsigned count = values.size();
-    if (dependencies) {
-      SmallVector<Value> watched(values);
-      llvm::append_range(values, watched);
-    }
-    return sim::SimObserverBindOp::create(
-        b, loc,
-        sim::ObserverType::get(b.getContext(), cb.function.getResultTypes()[0]),
-        cb.function.getSymNameAttr(), values, count);
+    return bindPublication(b, loc, ctx, cb, dependencies);
   }
   void unpack(Value ctx, Value payload, ArrayRef<Descriptor> targets) {
     uint64_t offset = 0;
@@ -292,9 +249,9 @@ struct BalloonLowering {
                               bind(ctx, sampler, false)};
     for (auto target : targets)
       values.push_back(handle(b, loc, ctx, target));
-    sim::SimEventSnapshotRegisterOp::create(b, loc, ctx, values, targets.size(),
-                                            0, b.getDenseI32ArrayAttr({0}),
-                                            b.getDenseI32ArrayAttr({-1}));
+    sim::SimEventSnapshotRegisterOp::create(
+        b, loc, ctx, values, targets.size(), 0, b.getDenseI32ArrayAttr({0}),
+        b.getDenseI32ArrayAttr({-1}), DenseI32ArrayAttr{});
     auto *parked = new Block;
     owner.getBody().push_back(parked);
     sim::SimSuspendForeverOp::create(b, loc, ValueRange{},

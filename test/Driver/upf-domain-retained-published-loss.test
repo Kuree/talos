@@ -1,0 +1,43 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// Ordinary loss policy must never corrupt/cancel retained-owned state.
+// CHECK: mixed domain loss passed
+
+//--- design.sv
+module leaf(input logic clk, input logic [7:0] d);
+  logic [7:0] saved, ordinary;
+  always @(posedge clk) begin saved <= d; ordinary <= #5 d; end
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, hold = 0;
+  logic [7:0] d = 8'h11;
+  leaf dut(clk,d);
+  initial begin
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/AON.power") ||
+        !supply_on("/top/AON.ground",0.0)) $fatal(1,"supplies");
+    #1 clk = 1; #1 clk = 0; hold = 1;
+    #1;
+    if (!supply_off("/top/CORE.power")) $fatal(1,"OFF");
+    if (dut.ordinary !== 'x) $fatal(1,"ordinary loss");
+    if (!supply_on("/top/CORE.power")) $fatal(1,"ON");
+    #6;
+    if (dut.saved !== 8'h11 || dut.ordinary !== 'x)
+      $fatal(1,"retained/ordinary ownership or queued loss");
+    hold = 0; d = 8'h33;
+    #1 clk = 1; #1 clk = 0; #5;
+    if (dut.saved !== d || dut.ordinary !== d) $fatal(1,"fresh clock");
+    $display("mixed domain loss passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set AON
+create_supply_set CORE -function {ground AON.ground}
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention R -domain PD -elements dut/saved -retention_supply AON -retention_condition hold

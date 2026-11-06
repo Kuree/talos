@@ -6490,6 +6490,12 @@ def SimEventSnapshotRegisterOp : SimOp<"event.snapshot.register", [
     an immediate or definite overwrite. The private primed owner parks after
     registration and remains alive until simulation teardown.
 
+    Optional cancel_indices names destinations whose previously queued NBAs
+    are cancelled at each qualified publication, even if their new value is
+    unchanged. Cancellation follows validation of the complete batch, before
+    any destination commit or notification. Other destinations retain ordinary
+    snapshot semantics.
+
     Capture callbacks read persistent bound roots. The sampler may query the
     complete qualified clause mask. An explicit snapshot.flush after each
     complete source publication commits the captured state transaction.
@@ -6497,7 +6503,8 @@ def SimEventSnapshotRegisterOp : SimOp<"event.snapshot.register", [
   let arguments = (ins SimContextType:$context, Variadic<AnyType>:$arguments,
       I32Attr:$target_count,
       I32Attr:$condition_count, DenseI32ArrayAttr:$edges,
-      DenseI32ArrayAttr:$condition_indices);
+      DenseI32ArrayAttr:$condition_indices,
+      OptionalAttr<DenseI32ArrayAttr>:$cancel_indices);
   let assemblyFormat = [{
     $context `values` `[` $arguments `]` `targets` $target_count
     `conditions` $condition_count `edges` $edges `indices` $condition_indices

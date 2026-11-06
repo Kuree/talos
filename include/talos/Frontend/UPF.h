@@ -18,7 +18,7 @@ executeUPF(mlir::ModuleOp module, llvm::ArrayRef<std::string> paths,
            llvm::StringRef resourceDir, llvm::StringRef executablePath,
            bool allowHDLExpressions = false, bool assumePoweredInputs = false);
 /// Apply resolved power intent after semantic units have become simulation IR.
-std::unique_ptr<mlir::Pass> createElaborateUPFPass();
+std::unique_ptr<mlir::Pass> createElaborateUPFPass(bool preserveVPIStorage = true);
 /// Resolve aggregate domain selections into exclusive ownership boundaries.
 mlir::LogicalResult resolveUPFDomainExtents(mlir::ModuleOp module);
 std::unique_ptr<mlir::Pass> createResolveUPFDomainExtentsPass();

@@ -2,6 +2,7 @@
 #include "ControlValue.h"
 #include "ElaborateSupply.h"
 #include "PowerState.h"
+#include "PublicationCallback.h"
 #include "ReferenceWindow.h"
 #include "Retention.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -22,6 +23,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/IR/DerivedTypes.h"
 #include <memory>
 #include <set>
 #include <tuple>
@@ -303,11 +305,14 @@ struct Lowering {
   llvm::DenseMap<uint64_t, std::string> unitPaths;
   llvm::DenseMap<uint64_t, std::string> scopePaths;
   llvm::DenseMap<uint64_t, sim::SimCodeUnitDeclOp> units;
+  llvm::DenseSet<uint64_t> referencedStorage;
+  bool preserveStorage;
   llvm::StringMap<uint64_t> unitIDs;
   sim::SimFuncOp root;
   std::unique_ptr<ReferenceWindows> nbaWindows;
-  Lowering(sim::SimDesignOp design)
-      : design(design), builder(design.getContext()) {
+  Lowering(sim::SimDesignOp design, bool preserveStorage)
+      : design(design), builder(design.getContext()),
+        preserveStorage(preserveStorage) {
     for (auto scope : design.getOps<sim::SimScopeDeclOp>())
       if (auto name = scope.getHierarchicalName())
         scopePaths[scope.getId()] = name->str();
@@ -328,6 +333,58 @@ struct Lowering {
     for (auto fn : design.getOps<sim::SimFuncOp>())
       if (fn.getEntryKind() == sim::EntryKind::RootInitializer)
         root = fn;
+    if (!preserveStorage)
+      collectReferencedStorage();
+  }
+  void collectReferencedStorage() {
+    design.walk([&](sim::SimContextStorageOp ref) {
+      referencedStorage.insert(ref.getId());
+    });
+    for (auto fn : design.getOps<sim::SimFuncOp>())
+      for (unsigned index = 0; index != fn.getNumArguments(); ++index) {
+        if (!isa<sim::RefType>(fn.getArgumentTypes()[index]))
+          continue;
+        if (auto id = fn.getArgAttrOfType<IntegerAttr>(
+                index, sim::metadata::DescriptorId::getNameStr()))
+          referencedStorage.insert(id.getUInt());
+      }
+    for (auto anchor : design.getOps<sim::SimVPIObjectAnchorOp>())
+      if (auto backing = anchor.getBackingAttr())
+        if (backing.getKind() == sim::VPIObjectBackingKind::Storage)
+          referencedStorage.insert(backing.getId().getInt());
+    // UPF expressions can observe HDL state without an HDL reference. Keep
+    // those roots, while declarations elided from executable/VPI use need no
+    // corruption owner merely because they remain in source inventory.
+    SmallVector<Attribute> attributes;
+    for (Operation &op : design->getParentOp()->getRegion(0).front())
+      if (isa<upf::UPFDomainOp>(op)) {
+        for (auto attr : op.getAttrs())
+          attributes.push_back(attr.getValue());
+        if (auto domain = dyn_cast<upf::UPFDomainOp>(op))
+          if (auto path = domain.getIsolationControl())
+            if (auto found = descriptors.find(*path);
+                found != descriptors.end())
+              if (!found->second.net && !found->second.driver)
+                referencedStorage.insert(found->second.id);
+      }
+    llvm::DenseSet<Attribute> seen;
+    while (!attributes.empty()) {
+      Attribute attr = attributes.pop_back_val();
+      if (!seen.insert(attr).second)
+        continue;
+      if (auto retention = dyn_cast<upf::RetentionAttr>(attr))
+        if (retention.getNoRetention() ||
+            (!retention.getDomainDefault() && retention.getElements().empty()))
+          continue;
+      if (auto token = dyn_cast<upf::ExpressionTokenAttr>(attr))
+        if (token.getOpcode() == upf::ExpressionOpcode::Control)
+          if (auto found = descriptors.find(token.getControl().getValue());
+              found != descriptors.end())
+            if (!found->second.net && !found->second.driver)
+              referencedStorage.insert(found->second.id);
+      attr.walkImmediateSubElements(
+          [&](Attribute child) { attributes.push_back(child); }, [](Type) {});
+    }
   }
   sim::SimFuncOp function(Location loc, StringRef name, ArrayRef<Type> inputs,
                           sim::EntryKind kind) {
@@ -749,6 +806,189 @@ struct Lowering {
     enqueue.erase();
     return success();
   }
+  LogicalResult exactLoss(const PowerCondition &condition, StringRef prefix,
+                          Descriptor epoch, Descriptor restoration,
+                          ArrayRef<Descriptor> ordinary) {
+    Location loc = root.getLoc();
+    llvm::DenseSet<uint64_t> owned;
+    for (auto target : ordinary)
+      owned.insert(target.id);
+    WalkResult overrides =
+        owned.empty() ? WalkResult::advance() : design.walk([&](Operation *op) {
+          Value target;
+          if (auto force = dyn_cast<sim::SimOverrideOp>(op))
+            target = force.getTarget();
+          if (auto force = dyn_cast<sim::SimDynamicOverrideOp>(op))
+            target = force.getTarget();
+          if (auto release = dyn_cast<sim::SimReleaseOverrideOp>(op))
+            target = release.getTarget();
+          if (!target || !isa<sim::RefType>(target.getType()))
+            return WalkResult::advance();
+          auto fn = op->getParentOfType<sim::SimFuncOp>();
+          auto id = storageID(target, fn);
+          if (!id) {
+            if (!nbaWindows)
+              nbaWindows = std::make_unique<ReferenceWindows>(design);
+            auto resolved = nbaWindows->getRoot(target);
+            if (failed(resolved))
+              return WalkResult::interrupt();
+            id = resolved->id;
+          }
+          if (!owned.contains(*id))
+            return WalkResult::advance();
+          op->emitError(
+              "force, procedural assign and release on exact power-loss "
+              "storage are not implemented");
+          return WalkResult::interrupt();
+        });
+    if (overrides.wasInterrupted())
+      return failure();
+    SmallVector<SmallVector<Descriptor>> groups{{epoch, restoration}};
+    uint64_t width = 65;
+    for (auto target : ordinary) {
+      uint64_t bits = *sim::getPackedWidth(target.type);
+      if (bits > llvm::IntegerType::MAX_INT_BITS)
+        return emitError(loc)
+               << "domain loss target exceeds supported packed width";
+      if (bits > llvm::IntegerType::MAX_INT_BITS - width) {
+        groups.emplace_back();
+        width = 0;
+      }
+      groups.back().push_back(target);
+      width += bits;
+    }
+    for (auto group : llvm::enumerate(groups)) {
+      size_t index = group.index();
+      auto &targets = group.value();
+      std::string name = (prefix + ".loss." + Twine(index)).str();
+      auto callback = [&](StringRef suffix,
+                          llvm::function_ref<Value(Value)> body)
+          -> FailureOr<PublicationCallback> {
+        auto fn = function(loc, name + suffix.str(),
+                           {sim::ContextType::get(builder.getContext())},
+                           sim::EntryKind::Observer);
+        sim::mark<sim::metadata::PowerMonitor>(fn);
+        builder.setInsertionPointToEnd(&fn.getBody().front());
+        Value result = body(fn.getArgument(0));
+        fn.setFunctionType(
+            builder.getFunctionType(fn.getArgumentTypes(), {result.getType()}));
+        schedule::set<schedule::Field::ObserverWidth>(
+            fn,
+            builder.getI32IntegerAttr(*sim::getPackedWidth(result.getType())));
+        schedule::set<schedule::Field::ObserverFourState>(
+            fn, builder.getBoolAttr(isa<sim::LogicType>(result.getType())));
+        sim::SimReturnOp::create(builder, loc, result);
+        return closePublicationCallback(fn, builder);
+      };
+      auto primary = callback(".power", [&](Value ctx) {
+        return condition.normal(builder, loc, ctx, false);
+      });
+      auto value = [&](Value ctx, Descriptor target) -> Value {
+        if (target.id == epoch.id)
+          return arith::AddIOp::create(
+              builder, loc,
+              load(builder, loc, handle(builder, loc, ctx, epoch)),
+              arith::ConstantIntOp::create(builder, loc, 1, 64));
+        if (target.id == restoration.id)
+          return arith::ConstantIntOp::create(builder, loc, 0, 1);
+        return corrupt(builder, loc, target.type);
+      };
+      auto sampler = callback(".capture", [&](Value ctx) -> Value {
+        SmallVector<Value> parts;
+        uint64_t bits = 0;
+        for (auto target : llvm::reverse(targets)) {
+          Value part = flatten(builder, loc, value(ctx, target));
+          unsigned partWidth = *sim::getPackedWidth(part.getType());
+          if (isa<IntegerType>(part.getType()))
+            part = sim::SimLogicFromBitsOp::create(
+                builder, loc,
+                sim::LogicType::get(builder.getContext(), partWidth), part);
+          parts.push_back(part);
+          bits += partWidth;
+        }
+        return parts.size() == 1
+                   ? parts.front()
+                   : sim::SimLogicConcatOp::create(
+                         builder, loc,
+                         sim::LogicType::get(builder.getContext(), bits),
+                         parts);
+      });
+      if (failed(primary) || failed(sampler))
+        return failure();
+      auto initializer = function(loc, name + ".initialize",
+                                  {sim::ContextType::get(builder.getContext())},
+                                  sim::EntryKind::Function);
+      sim::mark<sim::metadata::PowerMonitor>(initializer);
+      Block *off = new Block, *done = new Block;
+      initializer.getBody().push_back(off);
+      initializer.getBody().push_back(done);
+      builder.setInsertionPointToEnd(&initializer.getBody().front());
+      Value ctx = initializer.getArgument(0);
+      cf::CondBranchOp::create(
+          builder, loc, condition.normal(builder, loc, ctx, false), done, off);
+      builder.setInsertionPointToEnd(off);
+      SmallVector<int32_t> cancel;
+      for (auto [at, target] : llvm::enumerate(targets)) {
+        Value reference = handle(builder, loc, ctx, target);
+        if (target.id != epoch.id && target.id != restoration.id) {
+          cancel.push_back(at);
+          sim::SimPowerCancelNBAOp::create(builder, loc, ctx, reference,
+                                           *sim::getPackedWidth(target.type));
+        }
+        store(builder, loc, reference, value(ctx, target));
+      }
+      cf::BranchOp::create(builder, loc, done);
+      builder.setInsertionPointToEnd(done);
+      sim::SimReturnOp::create(builder, loc, ValueRange{});
+      auto owner = function(loc, name + ".owner",
+                            {sim::ContextType::get(builder.getContext())},
+                            sim::EntryKind::Fork);
+      sim::mark<sim::metadata::PowerMonitor>(owner);
+      schedule::set<schedule::Field::DetachedControls>(owner,
+                                                       builder.getUnitAttr());
+      schedule::set<schedule::Field::PrimeOnSpawn>(owner,
+                                                   builder.getUnitAttr());
+      builder.setInsertionPointToEnd(&owner.getBody().front());
+      ctx = owner.getArgument(0);
+      sim::SimCallOp::create(builder, loc, TypeRange{},
+                             initializer.getSymNameAttr(), ValueRange{ctx},
+                             ArrayAttr{}, ArrayAttr{});
+      Value initial = sim::SimCallOp::create(
+                          builder, loc, primary->function.getResultTypes(),
+                          primary->function.getSymNameAttr(),
+                          publicationArguments(builder, loc, ctx, *primary),
+                          ArrayAttr{}, ArrayAttr{})
+                          .getResult(0);
+      SmallVector<Value> values{
+          bindPublication(builder, loc, ctx, *primary, true), initial,
+          bindPublication(builder, loc, ctx, *sampler, false)};
+      for (auto target : targets)
+        values.push_back(handle(builder, loc, ctx, target));
+      sim::SimEventSnapshotRegisterOp::create(
+          builder, loc, ctx, values, targets.size(), 0,
+          builder.getDenseI32ArrayAttr(
+              {static_cast<int32_t>(sim::EdgeKind::Negedge)}),
+          builder.getDenseI32ArrayAttr({-1}),
+          builder.getDenseI32ArrayAttr(cancel));
+      auto *park = new Block;
+      owner.getBody().push_back(park);
+      sim::SimSuspendForeverOp::create(builder, loc, ValueRange{},
+                                       schedule::ContinuationSiteAttr{},
+                                       sim::EventRegionAttr{}, park);
+      builder.setInsertionPointToEnd(park);
+      sim::SimReturnOp::create(builder, loc, ValueRange{});
+      auto spawn = llvm::find_if(root.getBody().front(), [](Operation &op) {
+        return isa<sim::SimSpawnOp>(op);
+      });
+      builder.setInsertionPoint(spawn == root.getBody().front().end()
+                                    ? root.getBody().front().getTerminator()
+                                    : &*spawn);
+      sim::SimSpawnOp::create(builder, loc, owner.getSymNameAttr(),
+                              ValueRange{root.getArgument(0)}, ArrayAttr{},
+                              ArrayAttr{});
+    }
+    return success();
+  }
   void reportSwitchConflict(upf::UPFDomainOp domain,
                             const PowerCondition &condition, Value context) {
     if (condition.off.nodes.empty())
@@ -990,7 +1230,9 @@ struct Lowering {
     for (auto decl : design.getOps<sim::SimStorageDeclOp>()) {
       if (!decl.getHierarchicalName() ||
           !contains(domain, *decl.getHierarchicalName()) ||
-          inputStorage.contains(decl.getId()))
+          inputStorage.contains(decl.getId()) ||
+          (!preserveStorage && !referencedStorage.contains(decl.getId()) &&
+           !decl.getObservabilityAttr()))
         continue;
       if (!supportedState(decl.getType()))
         return decl.emitError(
@@ -1034,8 +1276,10 @@ struct Lowering {
     Location loc = domain.getLoc();
     std::string prefix = "__upf_" + domain.getSymName().str();
     Descriptor epoch = storage(loc, prefix + ".epoch", builder.getI64Type());
-    Descriptor previous =
-        storage(loc, prefix + ".previous", builder.getI1Type());
+    bool exact = llvm::none_of(targets, [](Descriptor d) { return d.driver; });
+    Descriptor previous{0, {}};
+    if (!exact)
+      previous = storage(loc, prefix + ".previous", builder.getI1Type());
     Descriptor restoration =
         storage(loc, prefix + ".normal", builder.getI1Type());
     for (auto process : processes) {
@@ -1187,19 +1431,31 @@ struct Lowering {
                       !retention.publishedProcesses.contains(process))))
         return failure();
     }
+    if (exact) {
+      SmallVector<Descriptor> ordinary;
+      for (auto target : targets)
+        if (!retention.storage.contains(target.id))
+          ordinary.push_back(target);
+      if (failed(exactLoss(condition, prefix, epoch, restoration, ordinary)))
+        return failure();
+    }
     auto monitor = function(loc, prefix + ".monitor",
                             {sim::ContextType::get(builder.getContext())},
                             sim::EntryKind::Always);
     sim::mark<sim::metadata::PowerMonitor>(monitor);
     Block &entry = monitor.getBody().front();
-    Block *loop = new Block, *loss = new Block, *wait = new Block;
+    Block *loop = new Block, *loss = exact ? nullptr : new Block,
+          *wait = new Block;
     monitor.getBody().push_back(loop);
-    monitor.getBody().push_back(loss);
+    if (loss)
+      monitor.getBody().push_back(loss);
     monitor.getBody().push_back(wait);
     builder.setInsertionPointToEnd(&entry);
     Value context = entry.getArgument(0),
           epochRef = handle(builder, loc, context, epoch);
-    Value previousRef = handle(builder, loc, context, previous);
+    Value previousRef;
+    if (!exact)
+      previousRef = handle(builder, loc, context, previous);
     Value normalRef = handle(builder, loc, context, restoration);
     SmallVector<Value> watched;
     for (StringRef path : controls)
@@ -1221,10 +1477,10 @@ struct Lowering {
         watch(supply);
     cf::BranchOp::create(builder, loc, loop);
     builder.setInsertionPointToEnd(loop);
-    Value on = condition.normal(builder, loc, context);
     if (condition.input)
       store(builder, loc, handle(builder, loc, context, condition.power),
             condition.drivenSupply(builder, loc, context));
+    Value on = condition.normal(builder, loc, context, !exact);
     // IEEE 1801-2018 9.7.3: publish restored retained values before NORMAL
     // can reactivate level-sensitive consumers of this domain.
     for (auto update : retention.updates)
@@ -1234,35 +1490,39 @@ struct Lowering {
     // 6.22: explicit ON/PARTIAL and OFF conflicts also diagnose when no
     // functional target needs corruption (the switch-only path above).
     reportSwitchConflict(domain, condition, context);
-    Value wasOn = load(builder, loc, previousRef);
-    store(builder, loc, previousRef, on);
-    Value off = arith::XOrIOp::create(
-        builder, loc, on, arith::ConstantIntOp::create(builder, loc, 1, 1));
-    Value falling = arith::AndIOp::create(builder, loc, wasOn, off);
-    cf::CondBranchOp::create(builder, loc, falling, loss, wait);
-    builder.setInsertionPointToEnd(loss);
-    Value oldEpoch = load(builder, loc, epochRef);
-    Value nextEpoch = arith::AddIOp::create(
-        builder, loc, oldEpoch,
-        arith::ConstantIntOp::create(builder, loc, 1, 64));
-    store(builder, loc, epochRef, nextEpoch);
-    for (Descriptor target : targets) {
-      if (!target.driver && retention.storage.contains(target.id))
-        continue;
-      // IEEE 1801-2018 9.5.1/9.6.2: corruption uses the HDL type's default
-      // initial value, independently of explicit declaration initializers.
-      Value reference = handle(builder, loc, context, target);
-      if (!target.driver) {
-        uint64_t width = *sim::getPackedWidth(target.type);
-        sim::SimPowerCancelNBAOp::create(builder, loc, context, reference,
-                                         width);
+    if (exact) {
+      cf::BranchOp::create(builder, loc, wait);
+    } else {
+      Value wasOn = load(builder, loc, previousRef);
+      store(builder, loc, previousRef, on);
+      Value off = arith::XOrIOp::create(
+          builder, loc, on, arith::ConstantIntOp::create(builder, loc, 1, 1));
+      Value falling = arith::AndIOp::create(builder, loc, wasOn, off);
+      cf::CondBranchOp::create(builder, loc, falling, loss, wait);
+      builder.setInsertionPointToEnd(loss);
+      Value oldEpoch = load(builder, loc, epochRef);
+      Value nextEpoch = arith::AddIOp::create(
+          builder, loc, oldEpoch,
+          arith::ConstantIntOp::create(builder, loc, 1, 64));
+      store(builder, loc, epochRef, nextEpoch);
+      for (Descriptor target : targets) {
+        if (!target.driver && retention.storage.contains(target.id))
+          continue;
+        // IEEE 1801-2018 9.5.1/9.6.2: corruption uses the HDL type's default
+        // initial value, independently of explicit declaration initializers.
+        Value reference = handle(builder, loc, context, target);
+        if (!target.driver) {
+          uint64_t width = *sim::getPackedWidth(target.type);
+          sim::SimPowerCancelNBAOp::create(builder, loc, context, reference,
+                                           width);
+        }
+        store(builder, loc, reference, corrupt(builder, loc, target.type));
+        if (!target.driver && continuouslyDriven.contains(target.id))
+          sim::mark<sim::metadata::ContinuousStore>(
+              &*std::prev(builder.getInsertionPoint()));
       }
-      store(builder, loc, reference, corrupt(builder, loc, target.type));
-      if (!target.driver && continuouslyDriven.contains(target.id))
-        sim::mark<sim::metadata::ContinuousStore>(
-            &*std::prev(builder.getInsertionPoint()));
+      cf::BranchOp::create(builder, loc, wait);
     }
-    cf::BranchOp::create(builder, loc, wait);
     builder.setInsertionPointToEnd(wait);
     // IEEE 1801-2018 9.2.2: referenced ON/PARTIAL/OFF/ERROR controls and input
     // supplies reevaluate the switch, including voltage-only changes.
@@ -1284,8 +1544,9 @@ struct Lowering {
     Value rootContext = root.getArgument(0);
     store(builder, loc, handle(builder, loc, rootContext, epoch),
           arith::ConstantIntOp::create(builder, loc, 0, 64));
-    store(builder, loc, handle(builder, loc, rootContext, previous),
-          arith::ConstantIntOp::create(builder, loc, 1, 1));
+    if (!exact)
+      store(builder, loc, handle(builder, loc, rootContext, previous),
+            arith::ConstantIntOp::create(builder, loc, 1, 1));
     // Seed before spawning HDL actors, avoiding a false restoration event
     // when the domain starts NORMAL. Guards still evaluate raw controls inline
     // so clock/NBA execution never depends on monitor scheduling order.
@@ -1300,6 +1561,13 @@ struct Lowering {
 struct ElaborateUPFPass
     : PassWrapper<ElaborateUPFPass, OperationPass<ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ElaborateUPFPass)
+  ElaborateUPFPass() = default;
+  ElaborateUPFPass(const ElaborateUPFPass &other) : PassWrapper(other) {}
+  explicit ElaborateUPFPass(bool preserve) { preserveVPIStorage = preserve; }
+  Option<bool> preserveVPIStorage{
+      *this, "preserve-vpi-storage",
+      llvm::cl::desc("Retain storage observable through VPI inventory"),
+      llvm::cl::init(true)};
   StringRef getArgument() const final { return "elaborate-upf"; }
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<sim::TalosSimulationDialect, arith::ArithDialect,
@@ -1333,7 +1601,13 @@ struct ElaborateUPFPass
       signalPassFailure();
       return;
     }
-    Lowering lowering(*designs.begin());
+    bool preserve = preserveVPIStorage;
+    getOperation().walk([&](Operation *op) {
+      preserve |=
+          isa<sim::SimDumpOpenOp, sim::SimDumpOpenStringOp, sim::SimDumpVarsOp,
+              sim::SimDumpPortsOp, sim::SimDumpAllOp>(op);
+    });
+    Lowering lowering(*designs.begin(), preserve);
     if (failed(lowering.prepareSupplies(supplies))) {
       signalPassFailure();
       return;
@@ -1368,7 +1642,7 @@ struct ElaborateUPFPass
   }
 };
 } // namespace
-std::unique_ptr<Pass> createElaborateUPFPass() {
-  return std::make_unique<ElaborateUPFPass>();
+std::unique_ptr<Pass> createElaborateUPFPass(bool preserveVPIStorage) {
+  return std::make_unique<ElaborateUPFPass>(preserveVPIStorage);
 }
 } // namespace talos
