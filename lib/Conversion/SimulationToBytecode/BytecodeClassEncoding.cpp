@@ -1,9 +1,13 @@
 //===- BytecodeClassEncoding.cpp - Managed class bytecode encoding -------===//
 
 #include "BytecodeEncoder.h"
+#include "BytecodeSerialization.h"
 #include "talos/Analysis/ManagedClassLayoutAnalysis.h"
+#include "talos/Analysis/SimulationStorageAnalysis.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/Support/MathExtras.h"
 
 using namespace mlir;
 
@@ -38,7 +42,102 @@ LogicalResult Encoder::prepareClassLayouts() {
         owner->second, method.getInterfaceOrdinal().value_or(UINT64_MAX),
         ownerDeclaration.getIsInterface()};
   }
+  prepareNativeMethodCalls();
   return success();
+}
+
+void Encoder::prepareNativeMethodCalls() {
+  // A VPI client can inspect the frame and scope of a running method (IEEE
+  // 1800-2023 37.12, 37.43); only its own bytecode body has them.
+  if (options.requireBytecode || (vpiProfile & TALOS_RT_DESIGN_PROFILE_READ))
+    return;
+  SmallVector<sim::SimClassMethodDeclOp> methods;
+  for (auto method :
+       design.getBody().front().getOps<sim::SimClassMethodDeclOp>())
+    if (!method.getIsTask() && method.getImplementation()) {
+      methods.push_back(method);
+      methodImplementations.try_emplace(*method.getImplementation(), method);
+    }
+  if (methods.empty())
+    return;
+  llvm::StringMap<sim::SimFuncOp> functions;
+  for (auto function : design.getBody().front().getOps<sim::SimFuncOp>())
+    functions[function.getSymName()] = function;
+  DenseMap<uint64_t, SmallVector<sim::SimFuncOp>> targets;
+  SmallVector<sim::SimFuncOp> pending;
+  for (auto method : methods) {
+    uint64_t signature = method.getSignatureId().value_or(0);
+    auto found = functions.find(*method.getImplementation());
+    if (found == functions.end()) {
+      bytecodeOnlyMethodSignatures.insert(signature);
+      continue;
+    }
+    if (method.getIsVirtual())
+      targets[signature].push_back(found->second);
+    pending.push_back(found->second);
+  }
+  // IEEE 1800-2023 13.4(c) permits function process control. The native
+  // callable ABI rejects control of the current process, whereas bytecode
+  // unwinds its caller correctly. Preserve that behavior over the complete
+  // call closure, including virtual overrides and recursive SCCs. Foreign
+  // calls also stay interpreted until their callback/unwind ABI is covered.
+  DenseSet<Operation *> visited, unsupported;
+  DenseMap<Operation *, SmallVector<Operation *>> callers;
+  SmallVector<Operation *> worklist;
+  while (!pending.empty()) {
+    sim::SimFuncOp function = pending.pop_back_val();
+    if (!visited.insert(function).second)
+      continue;
+    bool needsBytecode = function.isExternal();
+    auto edge = [&](sim::SimFuncOp callee) {
+      callers[callee].push_back(function);
+      pending.push_back(callee);
+    };
+    function.walk([&](Operation *operation) {
+      if (operation == function)
+        return;
+      needsBytecode |= sim::isSuspensionOp(operation) ||
+                       isa<sim::SimControlNonlocalExitOp, sim::SimDPICallOp,
+                           sim::SimFinishOp, sim::SimStopOp, sim::SimFatalOp,
+                           sim::SimErrorOp, sim::SimProgramExitOp>(operation);
+      StringRef callee;
+      if (auto call = dyn_cast<sim::SimCallOp>(operation))
+        callee = call.getCallee();
+      else if (auto call = dyn_cast<sim::SimClassDirectCallOp>(operation))
+        callee = call.getCallee();
+      if (!callee.empty()) {
+        auto found = functions.find(callee);
+        if (found == functions.end())
+          needsBytecode = true;
+        else
+          edge(found->second);
+      }
+      if (auto call = dyn_cast<sim::SimClassVirtualCallOp>(operation)) {
+        auto found = targets.find(call.getSignatureId());
+        if (found == targets.end())
+          needsBytecode = true;
+        else
+          for (sim::SimFuncOp target : found->second)
+            edge(target);
+      }
+    });
+    if (needsBytecode && unsupported.insert(function).second)
+      worklist.push_back(function);
+  }
+  while (!worklist.empty()) {
+    Operation *callee = worklist.pop_back_val();
+    for (Operation *caller : callers[callee])
+      if (unsupported.insert(caller).second)
+        worklist.push_back(caller);
+  }
+  for (Operation *function : unsupported)
+    bytecodeOnlyMethodBodies.insert(
+        cast<sim::SimFuncOp>(function).getSymName());
+  for (auto &entry : targets)
+    if (llvm::any_of(entry.second, [&](sim::SimFuncOp target) {
+          return unsupported.contains(target);
+        }))
+      bytecodeOnlyMethodSignatures.insert(entry.first);
 }
 
 FailureOr<uint64_t> Encoder::classID(SymbolRefAttr symbol,
@@ -148,10 +247,40 @@ LogicalResult Encoder::encodeClassDirectCall(FunctionPlan &plan,
        llvm::zip_equal(call.getResults(), callee.resultRegisters))
     operandMaps.push_back({reg(plan, destination), source});
   firstOutputs = internOperandRun(firstOutputs);
+  if (encodeNativeDirectCall(plan, call.getCallee(), arguments,
+                             call.getResults(), inputs.first, firstOutputs))
+    return success();
   emit({Call, 0, 0, callee.index, static_cast<uint32_t>(inputs.first),
         static_cast<uint32_t>(inputs.second),
         static_cast<uint32_t>(firstOutputs), call.getNumResults()});
   return success();
+}
+
+bool Encoder::encodeNativeDirectCall(FunctionPlan &plan, StringRef callee,
+                                     ValueRange arguments, ValueRange results,
+                                     uint32_t firstInputs,
+                                     uint32_t firstOutputs) {
+  auto found = methodImplementations.find(callee);
+  if (found == methodImplementations.end() ||
+      bytecodeOnlyMethodBodies.contains(callee) || results.size() > UINT16_MAX)
+    return false;
+  sim::SimClassMethodDeclOp method = found->second;
+  unsigned implicit = method.getIsStatic() ? 1 : 2;
+  if (arguments.size() < implicit)
+    return false;
+  auto site = encodeNativeMethodSite(plan, arguments.drop_front(implicit),
+                                     results, firstOutputs);
+  if (!site)
+    return false;
+  uint32_t index = indices.lookup(callee);
+  nativeMethodCallees.insert(index);
+  // IEEE 1800-2023 8.10/8.20: this binding names the statically chosen method,
+  // including base-qualified calls. It must not resolve a derived override.
+  emit({NativeDirectCall, static_cast<uint16_t>(results.size()), index,
+        method.getIsStatic() ? UINT32_MAX : reg(plan, arguments[1]),
+        firstInputs, static_cast<uint32_t>(arguments.size()), *site,
+        classIDs.lookup(method.getOwner())});
+  return true;
 }
 
 LogicalResult Encoder::encodeClassVirtualCall(FunctionPlan &plan,
@@ -191,11 +320,107 @@ LogicalResult Encoder::encodeClassVirtualCall(FunctionPlan &plan,
     operandMaps.push_back(
         {reg(plan, result), static_cast<uint32_t>(arguments.size() + index)});
   firstOutputs = internOperandRun(firstOutputs);
+  uint32_t outputs = firstOutputs;
+  if (!bytecodeOnlyMethodSignatures.contains(call.getSignatureId()))
+    if (auto site = encodeNativeMethodSite(plan, call.getArguments(),
+                                           call.getResults(), firstOutputs)) {
+      opcode =
+          opcode == InterfaceCall ? NativeInterfaceCall : NativeVirtualCall;
+      outputs = *site;
+    }
   emit({opcode, static_cast<uint16_t>(call.getNumResults()), dispatch,
         reg(plan, call.getReceiver()), firstInputs,
-        static_cast<uint32_t>(arguments.size()), firstOutputs,
+        static_cast<uint32_t>(arguments.size()), outputs,
         call.getSignatureId()});
   return success();
+}
+
+std::optional<uint32_t> Encoder::encodeNativeMethodSite(FunctionPlan &plan,
+                                                        ValueRange arguments,
+                                                        ValueRange results,
+                                                        uint32_t firstOutputs) {
+  // IEEE 1800-2023 8.6, 8.20, 13.4 and 13.5: a function's native entry
+  // executes in the caller's activation, with the same automatic lifetime,
+  // dispatch and argument values. Packed integral values (7.4.1) share the
+  // scalar plane ABI. Managed values, unpacked values and exact-alias argument
+  // references share canonical storage. Ordinary simulation handles need a
+  // separate stable-ID conversion from their expanded bytecode records.
+  if (options.requireBytecode)
+    return std::nullopt;
+  SmallVector<uint8_t> records;
+  uint32_t argumentPlanes = 0, resultPlanes = 0;
+  uint64_t resultSize = 0;
+  uint32_t resultAlignment = 1;
+  llvm::LLVMContext llvmContext;
+  auto append = [&](Value value, bool result) {
+    Type type = value.getType();
+    uint32_t index = reg(plan, value);
+    const Layout &layout = plan.layouts[index];
+    switch (layout.kind) {
+    case Bits:
+    case Logic:
+    case Managed:
+    case String:
+    case Real32:
+    case Real64:
+    case ManagedRef:
+    case ArgumentRef:
+      break;
+    default:
+      return false;
+    }
+    auto storage =
+        analysis::getSimulationStorageProperties(type, dataLayout, llvmContext);
+    uint64_t nativeSize =
+        layout.kind == ManagedRef ? 8 : (uint64_t{layout.width} + 7) / 8;
+    if (failed(storage) || storage->size != nativeSize ||
+        storage->size > UINT32_MAX ||
+        (storage->fourState && layout.kind != Logic) ||
+        storage->managedReference != (layout.kind == ManagedRef))
+      return false;
+    unsigned planes = analysis::getSimulationPhysicalStorageCount(*storage);
+    uint64_t planeStride = layout.size / planes;
+    if (planeStride > UINT32_MAX || storage->size > planeStride)
+      return false;
+    for (unsigned plane = 0; plane != planes; ++plane) {
+      uint64_t offset = 0;
+      if (result) {
+        offset = llvm::alignTo(resultSize, storage->alignment);
+        if (offset > UINT32_MAX || storage->size > UINT32_MAX - offset)
+          return false;
+        resultSize = offset + storage->size;
+        resultAlignment = std::max(resultAlignment, storage->alignment);
+        ++resultPlanes;
+      } else {
+        ++argumentPlanes;
+      }
+      append32(records, index);
+      append32(records, plane * planeStride);
+      append32(records, storage->size);
+      append32(records, offset);
+    }
+    return true;
+  };
+  for (Value argument : arguments)
+    if (!append(argument, false))
+      return std::nullopt;
+  for (Value result : results)
+    if (!append(result, true))
+      return std::nullopt;
+  resultSize = llvm::alignTo(resultSize, resultAlignment);
+  if (resultSize > UINT32_MAX)
+    return std::nullopt;
+  SmallVector<uint8_t> site;
+  append32(site, firstOutputs);
+  append32(site, argumentPlanes);
+  append32(site, resultPlanes);
+  append32(site, 0);
+  append64(site, resultSize);
+  llvm::append_range(site, records);
+  if (constants.size() > UINT32_MAX ||
+      site.size() > UINT32_MAX - constants.size())
+    return std::nullopt;
+  return static_cast<uint32_t>(addRawConstant(site));
 }
 
 LogicalResult

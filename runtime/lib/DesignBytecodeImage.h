@@ -286,6 +286,37 @@ inline Instruction instructionAt(const Image &image, uint64_t index) {
           read32(data + 20), read64(data + 24)};
 }
 
+inline bool isNativeMethodCall(const Instruction &instruction) {
+  return instruction.opcode == TALOS_RT_DB_NATIVE_VIRTUAL_CALL ||
+         instruction.opcode == TALOS_RT_DB_NATIVE_INTERFACE_CALL ||
+         instruction.opcode == TALOS_RT_DB_NATIVE_DIRECT_CALL;
+}
+
+inline bool isStaticMethodCall(const Instruction &instruction) {
+  return instruction.opcode == TALOS_RT_DB_NATIVE_DIRECT_CALL &&
+         instruction.source0 == UINT32_MAX;
+}
+
+struct NativeMethodCallSite {
+  uint32_t outputMap, argumentPlanes, resultPlanes;
+  uint64_t resultSize;
+  const uint8_t *planes;
+};
+
+inline NativeMethodCallSite nativeMethodCallSite(const Image &image,
+                                                 uint32_t offset) {
+  const uint8_t *data = image.data + image.constants + offset;
+  return {read32(data), read32(data + 4), read32(data + 8), read64(data + 16),
+          data + 24};
+}
+
+inline uint32_t methodCallOutputMap(const Image &image,
+                                    const Instruction &instruction) {
+  return isNativeMethodCall(instruction)
+             ? nativeMethodCallSite(image, instruction.auxiliary).outputMap
+             : instruction.auxiliary;
+}
+
 bool parseImage(const talos_rt_design_bytecode_entry_v1 &entry, Image &image,
                 bool inventoryOnly = false);
 /// Validates the image tables and every function's metadata, layouts and

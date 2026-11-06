@@ -20,6 +20,7 @@
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringSet.h"
 
 #include <cstdint>
 #include <optional>
@@ -48,6 +49,7 @@ private:
 
   mlir::LogicalResult prepareStaticSpecializationSites();
   mlir::LogicalResult prepareClassLayouts();
+  void prepareNativeMethodCalls();
   mlir::FailureOr<uint64_t> classID(mlir::SymbolRefAttr symbol,
                                     mlir::Operation *anchor) const;
   mlir::LogicalResult planTwoStateRegisters();
@@ -92,8 +94,16 @@ private:
 
   mlir::LogicalResult encodeClassDirectCall(FunctionPlan &plan,
                                             sim::SimClassDirectCallOp call);
+  bool encodeNativeDirectCall(FunctionPlan &plan, llvm::StringRef callee,
+                              mlir::ValueRange arguments,
+                              mlir::ValueRange results, uint32_t firstInputs,
+                              uint32_t firstOutputs);
   mlir::LogicalResult encodeClassVirtualCall(FunctionPlan &plan,
                                              sim::SimClassVirtualCallOp call);
+  std::optional<uint32_t> encodeNativeMethodSite(FunctionPlan &plan,
+                                                 mlir::ValueRange arguments,
+                                                 mlir::ValueRange results,
+                                                 uint32_t firstOutputs);
   mlir::LogicalResult
   encodeClassVirtualTaskCall(FunctionPlan &plan,
                              sim::SimClassVirtualTaskCallOp call);
@@ -207,6 +217,8 @@ private:
              uint64_t payload = 0, uint64_t auxiliary = 0);
 
   uint32_t getVPIProfile();
+  /// The design database profile (TALOS_RT_DESIGN_PROFILE_*) of this design.
+  uint32_t vpiProfile = 0;
   llvm::SmallVector<uint8_t> serializeBytecode();
   llvm::SmallVector<uint8_t> serializeDatabase(uint32_t profile,
                                                bool includeStatements);
@@ -222,6 +234,10 @@ private:
   llvm::StringMap<uint64_t> classIDs;
   llvm::StringMap<uint64_t> classFieldOffsets;
   llvm::StringMap<ClassMethodDispatch> classMethodDispatch;
+  llvm::DenseSet<uint64_t> bytecodeOnlyMethodSignatures;
+  llvm::StringMap<sim::SimClassMethodDeclOp> methodImplementations;
+  llvm::StringSet<> bytecodeOnlyMethodBodies;
+  llvm::DenseSet<uint32_t> nativeMethodCallees;
   llvm::StringMap<sim::SimFuncOp> externalFunctions;
   llvm::DenseMap<uint32_t, std::string> importSymbols;
   llvm::SmallVector<Instruction> instructions;

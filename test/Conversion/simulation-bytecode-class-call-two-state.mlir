@@ -82,4 +82,4 @@ module attributes {
 // CHECK: layout function=2 register=6 kind=2 flags=0 width=64
 // CHECK-SAME: size=16
 // CHECK: opcode=31
-// CHECK: opcode=41
+// CHECK: opcode=63

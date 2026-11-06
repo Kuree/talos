@@ -742,7 +742,9 @@ materializeManagedMethodThunks(ModuleOp module,
                                const llvm::DataLayout &dataLayout) {
   SmallVector<schedule::NativeMethodOp> methods;
   module.walk([&](schedule::NativeMethodOp method) {
-    if (method.getImplementation() && method.getIsVirtual())
+    if (method.getImplementation() &&
+        (method.getIsVirtual() ||
+         runtime::has<runtime::BytecodeNativeMethod>(method)))
       methods.push_back(method);
   });
   MLIRContext *context = module.getContext();
@@ -902,27 +904,127 @@ materializeManagedMethodThunks(ModuleOp module,
     Block *entry = thunk.addEntryBlock(builder);
     builder.setInsertionPointToStart(entry);
 
-    SmallVector<Value> callArguments{
-        entry->getArgument(0),
-        managedObjectHandle(builder, method.getLoc(), entry->getArgument(2))};
+    SmallVector<Value> callArguments{entry->getArgument(0)};
+    unsigned implicitArguments = method.getIsStatic() ? 1 : 2;
+    if (!method.getIsStatic())
+      callArguments.push_back(
+          managedObjectHandle(builder, method.getLoc(), entry->getArgument(2)));
     FunctionType implementationType = implementation.getFunctionType();
-    if (implementationType.getNumInputs() < 2)
+    if (implementationType.getNumInputs() < implicitArguments)
       return method.emitError("managed method implementation has no receiver");
-    unsigned physicalArgumentCount = implementationType.getNumInputs() - 2;
+    unsigned physicalArgumentCount =
+        implementationType.getNumInputs() - implicitArguments;
+    FunctionType semanticType = cast<FunctionType>(method.getFunctionType());
+    SmallVector<uint64_t> expectedSizes;
+    for (Type argument :
+         semanticType.getInputs().drop_front(implicitArguments)) {
+      auto storage = analysis::getSimulationStorageProperties(
+          argument, localDataLayout, llvmContext);
+      if (failed(storage))
+        return method.emitError("managed method argument has no native ABI");
+      expectedSizes.append(
+          analysis::getSimulationPhysicalStorageCount(*storage), storage->size);
+    }
+    if (expectedSizes.size() != physicalArgumentCount)
+      return method.emitError(
+          "managed method argument flattening is inconsistent");
+    uint64_t expectedResultSize = 0;
+    uint32_t expectedResultAlignment = 1;
+    for (Type result : semanticType.getResults()) {
+      auto storage = analysis::getSimulationStorageProperties(
+          result, localDataLayout, llvmContext);
+      if (failed(storage))
+        return method.emitError("managed method result has no native ABI");
+      for (unsigned plane = 0;
+           plane != analysis::getSimulationPhysicalStorageCount(*storage);
+           ++plane) {
+        uint64_t offset;
+        if (!alignUp(expectedResultSize, storage->alignment, offset) ||
+            storage->size > std::numeric_limits<uint64_t>::max() - offset)
+          return method.emitError("managed method result layout overflow");
+        expectedResultSize = offset + storage->size;
+      }
+      expectedResultAlignment =
+          std::max(expectedResultAlignment, storage->alignment);
+    }
+    if (!alignUp(expectedResultSize, expectedResultAlignment,
+                 expectedResultSize))
+      return method.emitError("managed method result layout overflow");
+
+    // Bytecode marshal plans and foreign native callers share this thunk.
+    // Validate the complete ABI before loading any argument or writing a
+    // result; a malformed plan must not cause an out-of-bounds native access.
+    Block *invoke = new Block;
+    Block *invalid = new Block;
+    SmallVector<Block *> validations(physicalArgumentCount);
+    for (Block *&block : validations) {
+      block = new Block;
+      thunk.getBody().push_back(block);
+    }
+    thunk.getBody().push_back(invoke);
+    thunk.getBody().push_back(invalid);
+    Value countMatches = arith::CmpIOp::create(
+        builder, method.getLoc(), arith::CmpIPredicate::eq,
+        entry->getArgument(4),
+        llvmConstant(builder, method.getLoc(), i32, physicalArgumentCount));
+    Value resultSizeMatches = arith::CmpIOp::create(
+        builder, method.getLoc(), arith::CmpIPredicate::eq,
+        entry->getArgument(6),
+        llvmConstant(builder, method.getLoc(), i64, expectedResultSize));
+    Value validABI = arith::AndIOp::create(builder, method.getLoc(),
+                                           countMatches, resultSizeMatches);
+    for (unsigned index : {3u, 5u}) {
+      if ((index == 3 && physicalArgumentCount == 0) ||
+          (index == 5 && expectedResultSize == 0))
+        continue;
+      Value hasData = LLVM::ICmpOp::create(
+          builder, method.getLoc(), LLVM::ICmpPredicate::ne,
+          entry->getArgument(index),
+          LLVM::ZeroOp::create(builder, method.getLoc(), pointer));
+      validABI =
+          arith::AndIOp::create(builder, method.getLoc(), validABI, hasData);
+    }
+    LLVM::CondBrOp::create(builder, method.getLoc(), validABI,
+                           validations.empty() ? invoke : validations.front(),
+                           invalid);
+    builder.setInsertionPointToStart(invalid);
+    LLVM::ReturnOp::create(builder, method.getLoc(),
+                           llvmConstant(builder, method.getLoc(), i32,
+                                        TALOS_RT_ARGUMENT_MISMATCH));
+    SmallVector<Value> argumentData;
     for (unsigned index = 0; index != physicalArgumentCount; ++index) {
-      Type type = implementationType.getInput(index + 2);
+      builder.setInsertionPointToStart(validations[index]);
       Value record =
           byteGEP(builder, method.getLoc(), entry->getArgument(3), index * 16);
       Value data =
           LLVM::LoadOp::create(builder, method.getLoc(), pointer, record, 8);
-      callArguments.push_back(
-          LLVM::LoadOp::create(builder, method.getLoc(), type, data, 1));
+      Value size =
+          LLVM::LoadOp::create(builder, method.getLoc(), i64,
+                               byteGEP(builder, method.getLoc(), record, 8), 8);
+      Value hasData = LLVM::ICmpOp::create(
+          builder, method.getLoc(), LLVM::ICmpPredicate::ne, data,
+          LLVM::ZeroOp::create(builder, method.getLoc(), pointer));
+      Value sizeMatches = arith::CmpIOp::create(
+          builder, method.getLoc(), arith::CmpIPredicate::eq, size,
+          llvmConstant(builder, method.getLoc(), i64, expectedSizes[index]));
+      Value validRecord =
+          arith::AndIOp::create(builder, method.getLoc(), hasData, sizeMatches);
+      LLVM::CondBrOp::create(
+          builder, method.getLoc(), validRecord,
+          index + 1 == physicalArgumentCount ? invoke : validations[index + 1],
+          invalid);
+      argumentData.push_back(data);
+    }
+    builder.setInsertionPointToStart(invoke);
+    for (unsigned index = 0; index != physicalArgumentCount; ++index) {
+      Type type = implementationType.getInput(index + implicitArguments);
+      callArguments.push_back(LLVM::LoadOp::create(
+          builder, method.getLoc(), type, argumentData[index], 1));
     }
     auto call = func::CallOp::create(
         builder, method.getLoc(), implementation.getSymName(),
         implementationType.getResults(), callArguments);
 
-    FunctionType semanticType = cast<FunctionType>(method.getFunctionType());
     uint64_t resultOffset = 0;
     unsigned physicalResult = 0;
     for (Type resultType : semanticType.getResults()) {

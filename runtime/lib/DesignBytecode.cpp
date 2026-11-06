@@ -97,7 +97,7 @@ private:
   // Most block maps only move a handful of scalar values. Keeping that
   // snapshot inline avoids both allocator traffic and pressure on the shared
   // frame pool; unusually wide maps still reuse a context-owned buffer.
-  std::array<uint8_t, 256> inlineBuffer;
+  alignas(std::max_align_t) std::array<uint8_t, 256> inlineBuffer;
   std::optional<ScopedReusableByteBuffer> overflow;
 };
 
@@ -4121,18 +4121,56 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
       break;
     }
     case TALOS_RT_DB_VIRTUAL_CALL:
-    case TALOS_RT_DB_INTERFACE_CALL: {
-      Layout receiverLayout = layout(instruction.source0);
-      talos_rt_managed_word_v1 receiverWord = 0;
-      std::memcpy(&receiverWord, frame.data + receiverLayout.offset,
-                  sizeof(receiverWord));
-      talos_rt_object_v1 *receiver =
-          talos_rt_object_from_managed_word(receiverWord);
-      if (talos_rt_managed_word_from_object(receiver) != receiverWord)
-        return TALOS_RT_INVALID_BYTECODE;
+    case TALOS_RT_DB_INTERFACE_CALL:
+    case TALOS_RT_DB_NATIVE_VIRTUAL_CALL:
+    case TALOS_RT_DB_NATIVE_INTERFACE_CALL:
+    case TALOS_RT_DB_NATIVE_DIRECT_CALL: {
+      talos_rt_object_v1 *receiver = nullptr;
+      if (!isStaticMethodCall(instruction)) {
+        Layout receiverLayout = layout(instruction.source0);
+        talos_rt_managed_word_v1 receiverWord = 0;
+        std::memcpy(&receiverWord, frame.data + receiverLayout.offset,
+                    sizeof(receiverWord));
+        receiver = talos_rt_object_from_managed_word(receiverWord);
+        if (talos_rt_managed_word_from_object(receiver) != receiverWord)
+          return TALOS_RT_INVALID_BYTECODE;
+      }
       const talos_rt_method_descriptor_v1 *method = nullptr;
+      talos_rt_method_descriptor_v1 exact{};
       talos_rt_status status;
-      if (instruction.opcode == TALOS_RT_DB_INTERFACE_CALL) {
+      if (instruction.opcode == TALOS_RT_DB_NATIVE_DIRECT_CALL) {
+        const auto *owner =
+            talos_rt_managed_class_lookup(context, instruction.immediate);
+        if (!owner)
+          return TALOS_RT_INVALID_DESIGN;
+        if (!isStaticMethodCall(instruction) &&
+            (!receiver ||
+             !talos_rt_managed_object_belongs_to(context, receiver) ||
+             !talos_rt_v1_object_is_instance(receiver, owner)))
+          return TALOS_RT_INVALID_HANDLE;
+        exact.bytecode_function = instruction.destination;
+        uint64_t lo = 0, hi = owner->direct_method_count;
+        while (lo != hi) {
+          uint64_t middle = lo + (hi - lo) / 2;
+          if (owner->direct_methods[middle].bytecode_function <
+              instruction.destination)
+            lo = middle + 1;
+          else
+            hi = middle;
+        }
+        if (lo < owner->direct_method_count &&
+            owner->direct_methods[lo].bytecode_function ==
+                instruction.destination) {
+          const auto &binding = owner->direct_methods[lo];
+          if (bool(binding.flags & TALOS_RT_METHOD_STATIC) !=
+              isStaticMethodCall(instruction))
+            return TALOS_RT_INVALID_BYTECODE;
+          exact.native_entry = binding.native_entry;
+        }
+        method = &exact;
+        status = TALOS_RT_OK;
+      } else if (instruction.opcode == TALOS_RT_DB_INTERFACE_CALL ||
+                 instruction.opcode == TALOS_RT_DB_NATIVE_INTERFACE_CALL) {
         auto [interfaceID, ordinal] = operandAt(image, instruction.destination);
         status = talos_rt_v1_interface_method_resolve(
             receiver, interfaceID, ordinal, instruction.immediate, &method);
@@ -4142,6 +4180,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
       }
       if (status != TALOS_RT_OK)
         return status;
+      uint32_t outputs = methodCallOutputMap(image, instruction);
       if (!method || method->bytecode_function == TALOS_RT_METHOD_NO_BYTECODE ||
           method->bytecode_function >= image.functionCount)
         return TALOS_RT_TIER_UNAVAILABLE;
@@ -4151,16 +4190,64 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
           calleeFunction.resultCount != instruction.flags ||
           !validMap(image, frame.function, calleeFunction, instruction.source1,
                     instruction.source2) ||
-          !validMap(image, calleeFunction, frame.function,
-                    instruction.auxiliary, instruction.flags))
+          !validMap(image, calleeFunction, frame.function, outputs,
+                    instruction.flags))
         return TALOS_RT_INVALID_BYTECODE;
       for (uint32_t index = 0; index != calleeFunction.argumentCount; ++index)
         if (operandAt(image, instruction.source1 + index).first != index)
           return TALOS_RT_INVALID_BYTECODE;
       for (uint32_t index = 0; index != calleeFunction.resultCount; ++index)
-        if (operandAt(image, instruction.auxiliary + index).second !=
+        if (operandAt(image, outputs + index).second !=
             calleeFunction.argumentCount + index)
           return TALOS_RT_INVALID_BYTECODE;
+      if (isNativeMethodCall(instruction) && method->native_entry &&
+          (method->flags & TALOS_RT_METHOD_TASK) == 0) {
+        // IEEE 1800-2023 8.6, 8.20/8.26 and 13.4: native function execution
+        // is synchronous in this bytecode activation. Its frame root provider
+        // already keeps the receiver and all managed arguments alive.
+        NativeMethodCallSite site =
+            nativeMethodCallSite(image, instruction.auxiliary);
+        ScopedCopyMapBuffer argumentStorage(
+            context,
+            size_t{site.argumentPlanes} * sizeof(talos_rt_method_argument_v1));
+        auto *arguments = reinterpret_cast<talos_rt_method_argument_v1 *>(
+            argumentStorage.data());
+        for (uint32_t index = 0; index != site.argumentPlanes; ++index) {
+          const uint8_t *record = site.planes + uint64_t{index} * 16;
+          Layout source = layout(read32(record));
+          new (arguments + index) talos_rt_method_argument_v1{
+              frame.data + source.offset + read32(record + 4),
+              read32(record + 8)};
+        }
+        ScopedCopyMapBuffer resultStorage(context, site.resultSize);
+        // Native result layouts can contain alignment padding. Keep it
+        // defined even for an in-bounds marshal plan naming those bytes.
+        std::memset(resultStorage.data(), 0, site.resultSize);
+        status = method->native_entry(
+            context, talos_rt_v1_gc_current_lane(context), receiver, arguments,
+            site.argumentPlanes, resultStorage.data(), site.resultSize);
+        if (status != TALOS_RT_OK)
+          return status;
+        for (uint32_t index = 0; index != site.resultPlanes; ++index) {
+          const uint8_t *record =
+              site.planes + (uint64_t{site.argumentPlanes} + index) * 16;
+          Layout destination = layout(read32(record));
+          uint64_t stride =
+              destination.kind == TALOS_RT_DBREG_LOGIC ||
+                      destination.kind == TALOS_RT_DBREG_MANAGED_REF
+                  ? destination.size / 2
+                  : destination.size;
+          uint8_t *to = frame.data + destination.offset + read32(record + 4);
+          std::memset(to, 0, stride);
+          uint32_t size = read32(record + 8);
+          std::memcpy(to, resultStorage.data() + read32(record + 12), size);
+          // Native iN stores leave high padding bits unspecified. Bytecode
+          // registers keep both planes masked to their semantic width.
+          if (destination.width % 8)
+            to[size - 1] &= (1u << (destination.width % 8)) - 1;
+        }
+        break;
+      }
       if (state.callDepth >= 1024)
         return TALOS_RT_OUT_OF_RESOURCES;
       ScopedReusableByteBuffer storage(
@@ -4179,7 +4266,7 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
       status = executeFunction(
           image, callee, context, canonicalFrame, canonicalFrameSize,
           calleeFunction.firstInstruction, budget, action, state,
-          pendingActivation, instruction.auxiliary, instruction.flags, &frame);
+          pendingActivation, outputs, instruction.flags, &frame);
       --state.callDepth;
       if (status != TALOS_RT_OK)
         return status;

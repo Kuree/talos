@@ -45,6 +45,9 @@ def TalosRuntimeDialect : Dialect {
     "::mlir::DenseI8ArrayAttr":$coverage_schema_blob,
     "::talos::runtime::FeaturesAttr":$features,
     "::mlir::IntegerAttr":$bytecode_function,
+    // Only methods reached by a native-capable direct bytecode call need an
+    // exact-entry bridge in their declaring class's descriptor.
+    "::mlir::UnitAttr":$bytecode_native_method,
     "::mlir::IntegerAttr":$bytecode_scratch_size,
     "::mlir::IntegerAttr":$bytecode_scratch_alignment,
     "::mlir::IntegerAttr":$bytecode_two_state_logic_registers,

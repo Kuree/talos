@@ -32,5 +32,8 @@ endmodule
 // CHECK: simulation.func private
 // CHECK-SAME: simulation.hierarchical_name = "worker::live"
 // CHECK: simulation.class.method
+// CHECK-SAME: debug_name = "live"
+// CHECK-SAME: is_virtual = false
+// CHECK: simulation.class.method
 // CHECK-SAME: slot 0
 // CHECK-SAME: debug_name = "live_virtual"

@@ -178,6 +178,9 @@ FailureOr<EncodedSimulationDesign> Encoder::encode() {
     return failure();
   bool hasClassBitstream =
       module && runtime::has<runtime::ClassBitstreamBlob>(module);
+  vpiProfile = getVPIProfile();
+  if (vpiProfile == UINT32_MAX)
+    return failure();
   if (failed(prepareClassLayouts()))
     return failure();
   if (failed(prepareStaticSpecializationSites()))
@@ -205,9 +208,7 @@ FailureOr<EncodedSimulationDesign> Encoder::encode() {
   result.bytecode = serializeBytecode();
   if (result.bytecode.empty())
     return failure();
-  uint32_t profile = getVPIProfile();
-  if (profile == UINT32_MAX)
-    return failure();
+  uint32_t profile = vpiProfile;
   bool waveformMetadata = needsWaveformMetadata(design);
   uint32_t databaseProfile = profile;
   if (waveformMetadata)
@@ -240,7 +241,8 @@ FailureOr<EncodedSimulationDesign> Encoder::encode() {
   for (FunctionPlan &plan : plans)
     result.functions.push_back({plan.function.getSymName().str(), plan.index,
                                 plan.scratchSize, plan.scratchAlignment,
-                                plan.twoStateLogicRegisters});
+                                plan.twoStateLogicRegisters,
+                                nativeMethodCallees.contains(plan.index)});
   return result;
 }
 
@@ -1047,6 +1049,7 @@ public:
     designs.front().walk([&](sim::SimFuncOp function) {
       functions[function.getSymName()] = function;
       runtime::remove<runtime::BytecodeFunction>(function);
+      runtime::remove<runtime::BytecodeNativeMethod>(function);
       runtime::remove<runtime::BytecodeScratchSize>(function);
       runtime::remove<runtime::BytecodeScratchAlignment>(function);
       runtime::remove<runtime::BytecodeTwoStateLogicRegisters>(function);
@@ -1055,6 +1058,8 @@ public:
       sim::SimFuncOp source = functions.lookup(function.symbol);
       runtime::set<runtime::BytecodeFunction>(
           source, builder.getI32IntegerAttr(function.index));
+      if (function.nativeMethodEntry)
+        runtime::mark<runtime::BytecodeNativeMethod>(source);
       runtime::set<runtime::BytecodeScratchSize>(
           source, builder.getI64IntegerAttr(function.scratchSize));
       runtime::set<runtime::BytecodeScratchAlignment>(

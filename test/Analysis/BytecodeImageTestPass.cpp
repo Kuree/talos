@@ -280,6 +280,29 @@ private:
          << " dst=" << fields[2] << " src0=" << fields[3]
          << " src1=" << fields[4] << " src2=" << fields[5]
          << " aux=" << fields[6] << " imm=" << fields[7] << '\n';
+      if (metadata && (fields[0] == TALOS_RT_DB_NATIVE_VIRTUAL_CALL ||
+                       fields[0] == TALOS_RT_DB_NATIVE_INTERFACE_CALL ||
+                       fields[0] == TALOS_RT_DB_NATIVE_DIRECT_CALL)) {
+        uint64_t site = constantOffset + fields[6];
+        if (!reader.fits(site, 1, 24))
+          return failure();
+        uint32_t inputs = reader.read<uint32_t>(site + 4);
+        uint32_t outputs = reader.read<uint32_t>(site + 8);
+        os << "native method: argument_planes=" << inputs
+           << " result_planes=" << outputs
+           << " result_size=" << reader.read<uint64_t>(site + 16) << '\n';
+        if (!reader.fits(site + 24, uint64_t{inputs} + outputs, 16))
+          return failure();
+        for (uint64_t plane = 0; plane != uint64_t{inputs} + outputs; ++plane) {
+          uint64_t record = site + 24 + plane * 16;
+          os << (plane < inputs ? "argument" : "result")
+             << " plane=" << (plane < inputs ? plane : plane - inputs)
+             << " register=" << reader.read<uint32_t>(record)
+             << " byte_offset=" << reader.read<uint32_t>(record + 4)
+             << " native_size=" << reader.read<uint32_t>(record + 8)
+             << " result_offset=" << reader.read<uint32_t>(record + 12) << '\n';
+        }
+      }
     }
 
     uint64_t continuationOffset =

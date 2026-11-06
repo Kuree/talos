@@ -2853,12 +2853,23 @@ talos_rt_status validateClassDescriptor(
         (current->flags & ~validFlags) != 0 ||
         (current->interface_count == 0) != (current->interfaces == nullptr) ||
         (current->method_count == 0) != (current->methods == nullptr) ||
+        (current->direct_method_count == 0) !=
+            (current->direct_methods == nullptr) ||
         (current->debug_name_size == 0) != (current->debug_name == nullptr) ||
         (current->copy_reset_count == 0) != (current->copy_resets == nullptr) ||
         (base && ((base->flags & TALOS_RT_CLASS_FINAL) != 0 ||
                   current->instance_size < base->instance_size ||
                   current->instance_alignment < base->instance_alignment)))
       return TALOS_RT_INVALID_DESIGN;
+    for (uint64_t index = 0; index != current->direct_method_count; ++index) {
+      const auto &method = current->direct_methods[index];
+      if (method.bytecode_function == TALOS_RT_METHOD_NO_BYTECODE ||
+          (method.flags & ~TALOS_RT_METHOD_STATIC) != 0 ||
+          !method.native_entry ||
+          (index && current->direct_methods[index - 1].bytecode_function >=
+                        method.bytecode_function))
+        return TALOS_RT_INVALID_DESIGN;
+    }
     const TraceHandleIndex *currentHandles = layouts.get(current->layout);
     if (!currentHandles ||
         (!currentHandles->empty() &&

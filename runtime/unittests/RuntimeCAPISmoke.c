@@ -54,8 +54,13 @@ _Static_assert(sizeof(talos_rt_random_layout_v1) == 40,
                "managed random layout size changed");
 _Static_assert(sizeof(talos_rt_byte_range_v1) == 16,
                "byte range size changed");
-_Static_assert(sizeof(talos_rt_class_descriptor_v1) == SMOKE_PTR(136, 112),
+_Static_assert(sizeof(talos_rt_class_descriptor_v1) == SMOKE_PTR(152, 128),
                "managed class descriptor size changed");
+_Static_assert(sizeof(talos_rt_direct_method_v1) == SMOKE_PTR(16, 12),
+               "exact native method binding size changed");
+_Static_assert(offsetof(talos_rt_class_descriptor_v1, direct_methods) ==
+                   SMOKE_PTR(136, 112),
+               "exact native method table offset changed");
 _Static_assert(offsetof(talos_rt_class_descriptor_v1, base) == 32,
                "managed class base offset changed");
 _Static_assert(offsetof(talos_rt_class_descriptor_v1, methods) ==

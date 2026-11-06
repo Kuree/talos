@@ -85,10 +85,10 @@ module attributes {
   }
 }
 
-// Class dispatch remains opcode 41 with dense slot 0. Interface dispatch uses
-// opcode 56 and indexes operand record 4 containing interface ID 3/ordinal 1;
-// neither instruction carries the transitional UINT32_MAX sentinel.
+// Native-capable class/interface calls retain dense dispatch slots/ordinals
+// and carry a native marshal plan. A bytecode-only descriptor still uses the
+// retained interpreter body.
 // CHECK: runtime.bytecode_image = array<i8:
 // PRINT: operand 4: dst=3 src=1
-// PRINT: opcode=41 flags=1 dst=0 src0=1 src1=1 src2=2 aux=3 imm=17
-// PRINT: opcode=56 flags=1 dst=4 src0=2 src1=5 src2=2 aux=7 imm=17
+// PRINT: opcode=63 flags=1 dst=0 src0=1 src1=1 src2=2 aux={{[0-9]+}} imm=17
+// PRINT: opcode=64 flags=1 dst=4 src0=2 src1=5 src2=2 aux={{[0-9]+}} imm=17

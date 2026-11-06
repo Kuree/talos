@@ -12992,6 +12992,14 @@ void TalosSimPreparePass::runOnOperation() {
       // discard unused method families before per-function lowering.
       SymbolTable::setSymbolVisibility(declaration,
                                        SymbolTable::Visibility::Private);
+      // IEEE 1800-2023 8.6/8.20: direct calls keep the selected declaration
+      // even after normalization to simulation.call. This private symbol
+      // cycle does not keep an unreachable method alive, but lets bytecode
+      // later request its exact native entry without retaining every method.
+      if (implementation)
+        sim::set<sim::metadata::ClassMethod>(
+            implementation,
+            FlatSymbolRefAttr::get(context, declaration.getSymName()));
     }
   }
   if (invalid)

@@ -193,12 +193,13 @@ TalosRuntimeDialect::verifyOperationAttribute(Operation *operation,
              BytecodeImage, DesignDatabase, ExecutionFlagSet, StateBits,
              SampledRanges, Materialized, ClassBitstreamBlob,
              CoverageSchemaBlob, FeatureSet, BytecodeFunction,
-             BytecodeScratchSize, BytecodeScratchAlignment,
-             BytecodeTwoStateLogicRegisters, LLVMPrepared, LLVMByteGlobals>(
-          operation, attribute)))
+             BytecodeNativeMethod, BytecodeScratchSize,
+             BytecodeScratchAlignment, BytecodeTwoStateLogicRegisters,
+             LLVMPrepared, LLVMByteGlobals>(operation, attribute)))
     return failure();
   StringRef name = attribute.getName().strref();
   bool function = name == BytecodeFunction::getNameStr() ||
+                  name == BytecodeNativeMethod::getNameStr() ||
                   name == BytecodeScratchSize::getNameStr() ||
                   name == BytecodeScratchAlignment::getNameStr() ||
                   name == BytecodeTwoStateLogicRegisters::getNameStr();

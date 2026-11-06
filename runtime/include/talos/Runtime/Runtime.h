@@ -176,6 +176,7 @@ typedef talos_rt_status (*talos_rt_native_method_v1)(
 
 #define TALOS_RT_METHOD_TASK (UINT32_C(1) << 0)
 #define TALOS_RT_METHOD_PURE (UINT32_C(1) << 1)
+#define TALOS_RT_METHOD_STATIC (UINT32_C(1) << 2)
 #define TALOS_RT_METHOD_NO_BYTECODE UINT32_MAX
 
 typedef struct talos_rt_method_descriptor_v1 {
@@ -188,6 +189,15 @@ typedef struct talos_rt_method_descriptor_v1 {
   // ordered by slot; inherited entries remain in the base descriptor.
   uint64_t slot;
 } talos_rt_method_descriptor_v1;
+
+// Exact method entries used only by retained bytecode callers. Unlike virtual
+// slots these do not dispatch through the receiver's dynamic class: a base or
+// nonvirtual call preserves its statically selected implementation (8.20).
+typedef struct talos_rt_direct_method_v1 {
+  uint32_t bytecode_function;
+  uint32_t flags;
+  talos_rt_native_method_v1 native_entry;
+} talos_rt_direct_method_v1;
 
 // An interface introduced by this class. Signatures are indexed by the
 // declaring interface's stable method ordinal. Inherited bindings remain in
@@ -296,6 +306,8 @@ typedef struct talos_rt_class_descriptor_v1 {
   talos_rt_builtin_class_kind_v1 builtin_base_kind;
   uint32_t builtin_base_reserved;
   uint64_t builtin_base_offset;
+  const talos_rt_direct_method_v1 *direct_methods;
+  uint64_t direct_method_count;
 } talos_rt_class_descriptor_v1;
 
 // Compiler-emitted erased element metadata. Four-state storage places an
@@ -1060,7 +1072,22 @@ enum {
   TALOS_RT_DB_REPLICATE = 61,
   // Two-state population count (math.ctpop). Destination and source are
   // equal-width bit registers.
-  TALOS_RT_DB_POPCOUNT = 62
+  TALOS_RT_DB_POPCOUNT = 62,
+  // Function calls with a compiler-computed native marshal plan. Other fields
+  // match VIRTUAL_CALL / INTERFACE_CALL; auxiliary is a constant-table offset:
+  // {u32 output_map, u32 argument_planes, u32 result_planes, u32 reserved,
+  //  u64 result_size}, followed by argument then result plane records
+  // {u32 register, u32 register_byte_offset, u32 native_size, u32
+  // result_offset}. If the resolved method has no native entry, use its
+  // retained bytecode body.
+  TALOS_RT_DB_NATIVE_VIRTUAL_CALL = 63,
+  TALOS_RT_DB_NATIVE_INTERFACE_CALL = 64,
+  // Exact class method: destination is the retained bytecode function index,
+  // immediate is the declaring class ID, and auxiliary names the same native
+  // marshal plan. source0 is the receiver register, or UINT32_MAX for a static
+  // method. The argument map includes context and, for an instance method,
+  // receiver before the explicitly marshalled values.
+  TALOS_RT_DB_NATIVE_DIRECT_CALL = 65
 };
 
 // StoreState writes its exact post-resolution transition predicate to the

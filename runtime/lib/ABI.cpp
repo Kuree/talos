@@ -106,7 +106,11 @@ ABI_OFFSET(talos_rt_random_layout_v1, variable_count, 32);
 ABI_SIZE_ALIGN(talos_rt_byte_range_v1, 16, 8);
 ABI_OFFSET(talos_rt_byte_range_v1, offset, 0);
 ABI_OFFSET(talos_rt_byte_range_v1, size, 8);
-ABI_SIZE_ALIGN(talos_rt_class_descriptor_v1, ABI_PTR(136, 112), 8);
+ABI_SIZE_ALIGN(talos_rt_direct_method_v1, ABI_PTR(16, 12), ABI_PTR(8, 4));
+ABI_OFFSET(talos_rt_direct_method_v1, bytecode_function, 0);
+ABI_OFFSET(talos_rt_direct_method_v1, flags, 4);
+ABI_OFFSET(talos_rt_direct_method_v1, native_entry, 8);
+ABI_SIZE_ALIGN(talos_rt_class_descriptor_v1, ABI_PTR(152, 128), 8);
 ABI_OFFSET(talos_rt_class_descriptor_v1, version, 0);
 ABI_OFFSET(talos_rt_class_descriptor_v1, flags, 4);
 ABI_OFFSET(talos_rt_class_descriptor_v1, class_id, 8);
@@ -128,6 +132,9 @@ ABI_OFFSET(talos_rt_class_descriptor_v1, builtin_base_reserved,
            ABI_PTR(124, 100));
 ABI_OFFSET(talos_rt_class_descriptor_v1, builtin_base_offset,
            ABI_PTR(128, 104));
+ABI_OFFSET(talos_rt_class_descriptor_v1, direct_methods, ABI_PTR(136, 112));
+ABI_OFFSET(talos_rt_class_descriptor_v1, direct_method_count,
+           ABI_PTR(144, 120));
 ABI_SIZE_ALIGN(talos_rt_element_type_v1, ABI_PTR(64, 56), 8);
 ABI_OFFSET(talos_rt_element_type_v1, version, 0);
 ABI_OFFSET(talos_rt_element_type_v1, kind, 4);

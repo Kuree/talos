@@ -1855,6 +1855,78 @@ bool validIntrinsic(const Image &image, const Function &function,
   }
 }
 
+static bool validNativeMethodSite(const Image &image, const Function &function,
+                                  const Instruction &instruction) {
+  uint64_t offset = instruction.auxiliary;
+  if (offset > image.constantSize || image.constantSize - offset < 24)
+    return false;
+  NativeMethodCallSite site =
+      nativeMethodCallSite(image, instruction.auxiliary);
+  const uint8_t *header = image.data + image.constants + offset;
+  uint64_t count = uint64_t{site.argumentPlanes} + site.resultPlanes;
+  if (read32(header + 12) || site.resultSize > UINT32_MAX ||
+      count > (image.constantSize - offset - 24) / 16 ||
+      instruction.source2 < (isStaticMethodCall(instruction) ? 1u : 2u) ||
+      instruction.source1 > image.operandCount ||
+      instruction.source2 > image.operandCount - instruction.source1 ||
+      site.outputMap > image.operandCount ||
+      instruction.flags > image.operandCount - site.outputMap)
+    return false;
+  uint64_t cursor = 0, previousEnd = 0;
+  auto check = [&](uint32_t reg, bool result) {
+    if (!validRegister(function, reg))
+      return false;
+    Layout layout = layoutAt(image, function, reg);
+    switch (layout.kind) {
+    case TALOS_RT_DBREG_BITS:
+    case TALOS_RT_DBREG_LOGIC:
+    case TALOS_RT_DBREG_REAL32:
+    case TALOS_RT_DBREG_REAL64:
+    case TALOS_RT_DBREG_MANAGED:
+    case TALOS_RT_DBREG_STRING:
+    case TALOS_RT_DBREG_MANAGED_REF:
+    case TALOS_RT_DBREG_ARGUMENT_REF:
+      break;
+    default:
+      return false;
+    }
+    uint32_t planes = layout.kind == TALOS_RT_DBREG_LOGIC ||
+                              layout.kind == TALOS_RT_DBREG_MANAGED_REF
+                          ? 2
+                          : 1;
+    uint64_t stride = layout.size / planes;
+    uint64_t nativeSize = layout.kind == TALOS_RT_DBREG_MANAGED_REF
+                              ? 8
+                              : (uint64_t{layout.width} + 7) / 8;
+    for (uint32_t plane = 0; plane != planes; ++plane, ++cursor) {
+      if (cursor >= (result ? count : site.argumentPlanes))
+        return false;
+      const uint8_t *record = site.planes + cursor * 16;
+      uint64_t nativeOffset = read32(record + 12);
+      if (read32(record) != reg || read32(record + 4) != plane * stride ||
+          read32(record + 8) != nativeSize || nativeSize > stride ||
+          (!result && nativeOffset != 0) ||
+          (result &&
+           (nativeOffset < previousEnd || nativeOffset > site.resultSize ||
+            nativeSize > site.resultSize - nativeOffset)))
+        return false;
+      if (result)
+        previousEnd = nativeOffset + nativeSize;
+    }
+    return true;
+  };
+  for (uint32_t index = isStaticMethodCall(instruction) ? 1 : 2;
+       index != instruction.source2; ++index)
+    if (!check(operandAt(image, instruction.source1 + index).second, false))
+      return false;
+  if (cursor != site.argumentPlanes)
+    return false;
+  for (uint32_t index = 0; index != instruction.flags; ++index)
+    if (!check(operandAt(image, site.outputMap + index).first, true))
+      return false;
+  return cursor == count && (site.resultPlanes != 0 || site.resultSize == 0);
+}
+
 bool validateInitialization(const Image &image, const Function &function,
                             uint32_t functionIndex) {
   const uint64_t begin = function.firstInstruction;
@@ -2000,7 +2072,11 @@ bool validateInitialization(const Image &image, const Function &function,
       break;
     case TALOS_RT_DB_VIRTUAL_CALL:
     case TALOS_RT_DB_INTERFACE_CALL:
-      if (!defineMap(state, instruction.auxiliary, instruction.flags))
+    case TALOS_RT_DB_NATIVE_VIRTUAL_CALL:
+    case TALOS_RT_DB_NATIVE_INTERFACE_CALL:
+    case TALOS_RT_DB_NATIVE_DIRECT_CALL:
+      if (!defineMap(state, methodCallOutputMap(image, instruction),
+                     instruction.flags))
         return false;
       break;
     case TALOS_RT_DB_CLEAR_FRAME_ROOT:
@@ -2153,7 +2229,11 @@ bool validateInitialization(const Image &image, const Function &function,
     case TALOS_RT_DB_VIRTUAL_TASK_CALL:
     case TALOS_RT_DB_INTERFACE_CALL:
     case TALOS_RT_DB_INTERFACE_TASK_CALL:
-      valid = requireInitialized(state, instruction.source0) &&
+    case TALOS_RT_DB_NATIVE_VIRTUAL_CALL:
+    case TALOS_RT_DB_NATIVE_INTERFACE_CALL:
+    case TALOS_RT_DB_NATIVE_DIRECT_CALL:
+      valid = (isStaticMethodCall(instruction) ||
+               requireInitialized(state, instruction.source0)) &&
               mapSourcesInitialized(state, instruction.source1,
                                     instruction.source2);
       break;
@@ -2807,17 +2887,32 @@ bool validateFunctionCode(const Image &image, uint32_t functionIndex) {
       break;
     }
     case TALOS_RT_DB_VIRTUAL_CALL:
-    case TALOS_RT_DB_INTERFACE_CALL: {
-      bool interfaceDispatch = instruction.opcode == TALOS_RT_DB_INTERFACE_CALL;
+    case TALOS_RT_DB_INTERFACE_CALL:
+    case TALOS_RT_DB_NATIVE_VIRTUAL_CALL:
+    case TALOS_RT_DB_NATIVE_INTERFACE_CALL:
+    case TALOS_RT_DB_NATIVE_DIRECT_CALL: {
+      if (isNativeMethodCall(instruction) &&
+          !validNativeMethodSite(image, function, instruction))
+        return reject(__LINE__, "invalid native method marshal plan",
+                      functionIndex, pc, instruction.opcode);
+      uint32_t outputs = methodCallOutputMap(image, instruction);
+      bool interfaceDispatch =
+          instruction.opcode == TALOS_RT_DB_INTERFACE_CALL ||
+          instruction.opcode == TALOS_RT_DB_NATIVE_INTERFACE_CALL;
+      bool directDispatch =
+          instruction.opcode == TALOS_RT_DB_NATIVE_DIRECT_CALL;
+      bool staticMethod = isStaticMethodCall(instruction);
       if (instruction.flags > function.layoutCount ||
-          instruction.immediate == 0 || instruction.source2 < 2 ||
-          !reg(instruction.source0) ||
-          layoutAt(image, function, instruction.source0).kind !=
-              TALOS_RT_DBREG_MANAGED ||
+          instruction.immediate == 0 ||
+          instruction.source2 < (staticMethod ? 1u : 2u) ||
+          (!staticMethod &&
+           (!reg(instruction.source0) ||
+            layoutAt(image, function, instruction.source0).kind !=
+                TALOS_RT_DBREG_MANAGED)) ||
           instruction.source1 > image.operandCount ||
           instruction.source2 > image.operandCount - instruction.source1 ||
-          instruction.auxiliary > image.operandCount ||
-          instruction.flags > image.operandCount - instruction.auxiliary ||
+          outputs > image.operandCount ||
+          instruction.flags > image.operandCount - outputs ||
           (interfaceDispatch &&
            (instruction.destination >= image.operandCount ||
             operandAt(image, instruction.destination).first == 0)))
@@ -2827,15 +2922,28 @@ bool validateFunctionCode(const Image &image, uint32_t functionIndex) {
         auto [destination, source] =
             operandAt(image, instruction.source1 + index);
         if (destination != index || !reg(source) ||
-            (index == 1 && source != instruction.source0))
+            (!staticMethod && index == 1 && source != instruction.source0))
           return reject(__LINE__, "invalid instruction encoding or operands",
                         functionIndex, pc, instruction.opcode);
       }
       for (uint32_t index = 0; index != instruction.flags; ++index) {
-        auto [destination, source] =
-            operandAt(image, instruction.auxiliary + index);
+        auto [destination, source] = operandAt(image, outputs + index);
         if (!reg(destination) || source != instruction.source2 + index)
           return reject(__LINE__, "invalid instruction encoding or operands",
+                        functionIndex, pc, instruction.opcode);
+      }
+      if (directDispatch) {
+        if (instruction.destination >= image.functionCount)
+          return reject(__LINE__, "unknown exact native method", functionIndex,
+                        pc, instruction.opcode);
+        Function callee = functionAt(image, instruction.destination);
+        if ((callee.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) != 0 ||
+            callee.argumentCount != instruction.source2 ||
+            callee.resultCount != instruction.flags ||
+            !validMap(image, function, callee, instruction.source1,
+                      instruction.source2) ||
+            !validMap(image, callee, function, outputs, instruction.flags))
+          return reject(__LINE__, "incompatible exact native method",
                         functionIndex, pc, instruction.opcode);
       }
       break;

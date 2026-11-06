@@ -474,6 +474,9 @@ enum Opcode : uint16_t {
   Power = TALOS_RT_DB_POWER,
   Replicate = TALOS_RT_DB_REPLICATE,
   PopCount = TALOS_RT_DB_POPCOUNT,
+  NativeVirtualCall = TALOS_RT_DB_NATIVE_VIRTUAL_CALL,
+  NativeInterfaceCall = TALOS_RT_DB_NATIVE_INTERFACE_CALL,
+  NativeDirectCall = TALOS_RT_DB_NATIVE_DIRECT_CALL,
 };
 
 } // namespace talos::bytecode

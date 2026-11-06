@@ -486,6 +486,9 @@ def TalosSimulationDialect : Dialect {
     "::mlir::IntegerAttr":$class_bitstream_width,
     "::mlir::FlatSymbolRefAttr":$class_field,
     "::mlir::UnitAttr":$class_instance,
+    // Exact declaration for a source call or method implementation. On the
+    // implementation, the symbol edge survives ordinary-call normalization
+    // and keeps its native binding exactly while the method is reachable.
     "::mlir::FlatSymbolRefAttr":$class_method,
     "::mlir::IntegerAttr":$class_signature,
     "::mlir::IntegerAttr":$class_slot,

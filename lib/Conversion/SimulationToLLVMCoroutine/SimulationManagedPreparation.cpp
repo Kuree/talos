@@ -73,6 +73,7 @@ struct ManagedClassLayout {
   // Own instance (offset, size) ranges a shallow copy clears.
   SmallVector<std::pair<uint64_t, uint64_t>> copyResets;
   SmallVector<sim::SimClassMethodDeclOp> methods;
+  SmallVector<sim::SimClassMethodDeclOp> directMethods;
   SmallVector<Interface> interfaces;
   uint32_t builtinBaseKind = TALOS_RT_BUILTIN_CLASS_NONE;
   uint64_t builtinBaseOffset = 0;
@@ -130,6 +131,16 @@ prepareManagedClassInventory(ModuleOp module,
   module.walk([&](sim::SimClassMethodDeclOp op) { methods.push_back(op); });
   if (classes.empty())
     return success();
+
+  llvm::StringSet<> nativeDirectFunctions;
+  module.walk([&](sim::SimFuncOp function) {
+    if (runtime::has<runtime::BytecodeNativeMethod>(function))
+      nativeDirectFunctions.insert(function.getSymName());
+  });
+  for (auto method : methods)
+    if (method.getImplementation() &&
+        nativeDirectFunctions.contains(*method.getImplementation()))
+      runtime::mark<runtime::BytecodeNativeMethod>(method);
 
   llvm::StringMap<sim::SimClassDeclOp> classesByName;
   llvm::StringMap<SmallVector<sim::SimClassMethodDeclOp>> methodsByOwner;
@@ -278,6 +289,8 @@ prepareManagedClassInventory(ModuleOp module,
 
     for (sim::SimClassMethodDeclOp method :
          methodsByOwner[declaration.getSymName()]) {
+      if (runtime::has<runtime::BytecodeNativeMethod>(method))
+        layout.directMethods.push_back(method);
       if (!method.getSlot())
         continue;
       if (declaration.getIsInterface())
@@ -444,13 +457,15 @@ prepareManagedClassInventory(ModuleOp module,
       context, {i32, i32, pointer, i64, pointer, i64});
   Type methodType = LLVM::LLVMStructType::getLiteral(
       context, {i64, i32, i32, pointer, pointer, i64});
+  Type directMethodType =
+      LLVM::LLVMStructType::getLiteral(context, {i32, i32, pointer});
   Type interfaceType = LLVM::LLVMStructType::getLiteral(
       context, {i64, pointer, i64, pointer, i64});
   Type byteRangeType = LLVM::LLVMStructType::getLiteral(context, {i64, i64});
   Type classType = LLVM::LLVMStructType::getLiteral(
-      context,
-      {i32, i32, i64, i64, i64, pointer, pointer, i64, pointer, pointer, i64,
-       pointer, i64, pointer, pointer, i64, i32, i32, i64});
+      context, {i32,     i32,     i64,     i64, i64,     pointer, pointer,
+                i64,     pointer, pointer, i64, pointer, i64,     pointer,
+                pointer, i64,     i32,     i32, i64,     pointer, i64});
   bool bytecodeOnly =
       runtime::bitEnumContainsAll(runtime::getExecutionFlags(module),
                                   runtime::ExecutionFlags::RequireBytecode);
@@ -458,7 +473,9 @@ prepareManagedClassInventory(ModuleOp module,
     OpBuilder builder(context);
     builder.setInsertionPointToStart(module.getBody());
     for (auto method : methods) {
-      if (!method.getImplementation() || !method.getIsVirtual())
+      if (!method.getImplementation() ||
+          (!method.getIsVirtual() &&
+           !runtime::has<runtime::BytecodeNativeMethod>(method)))
         continue;
       LLVM::LLVMFuncOp::create(
           builder, method.getLoc(), managedMethodThunkName(method.getSymName()),
@@ -569,6 +586,7 @@ prepareManagedClassInventory(ModuleOp module,
               prefix + ".__talos_random_variables";
           std::string randomLayoutName = prefix + ".__talos_random_layout";
           std::string methodsName = prefix + ".__talos_methods";
+          std::string directMethodsName = prefix + ".__talos_direct_methods";
           std::string interfacesName = prefix + ".__talos_interfaces";
           std::string copyResetsName = prefix + ".__talos_copy_resets";
           std::string debugName = prefix + ".__talos_debug_name";
@@ -827,6 +845,58 @@ prepareManagedClassInventory(ModuleOp module,
                   return array;
                 });
 
+          SmallVector<std::pair<uint32_t, sim::SimClassMethodDeclOp>> direct;
+          if (!bytecodeOnly)
+            for (auto method : layout.directMethods) {
+              auto index = bytecodeFunctions.find(*method.getImplementation());
+              if (index == bytecodeFunctions.end())
+                return method.emitError(
+                    "native direct method has no bytecode binding");
+              direct.push_back({index->second, method});
+            }
+          llvm::sort(direct, [](const auto &left, const auto &right) {
+            return left.first < right.first;
+          });
+          direct.erase(std::unique(direct.begin(), direct.end(),
+                                   [](const auto &left, const auto &right) {
+                                     return left.first == right.first;
+                                   }),
+                       direct.end());
+          if (!direct.empty()) {
+            Type arrayType =
+                LLVM::LLVMArrayType::get(directMethodType, direct.size());
+            makeConstantGlobal(
+                module, location, arrayType, directMethodsName,
+                LLVM::Linkage::Internal, 8, [&](OpBuilder &builder) {
+                  Value array =
+                      LLVM::ZeroOp::create(builder, location, arrayType);
+                  for (auto [ordinal, binding] : llvm::enumerate(direct)) {
+                    auto [function, method] = binding;
+                    Value entry = LLVM::ZeroOp::create(builder, location,
+                                                       directMethodType);
+                    entry = insertValue(
+                        builder, location, entry,
+                        llvmConstant(builder, location, i32, function), 0);
+                    entry = insertValue(
+                        builder, location, entry,
+                        llvmConstant(
+                            builder, location, i32,
+                            method.getIsStatic() ? TALOS_RT_METHOD_STATIC : 0),
+                        1);
+                    entry = insertValue(
+                        builder, location, entry,
+                        LLVM::AddressOfOp::create(
+                            builder, location, pointer,
+                            managedMethodThunkName(method.getSymName())),
+                        2);
+                    array = LLVM::InsertValueOp::create(
+                        builder, location, array, entry,
+                        ArrayRef<int64_t>{static_cast<int64_t>(ordinal)});
+                  }
+                  return array;
+                });
+          }
+
           Type interfacesType =
               LLVM::LLVMArrayType::get(interfaceType, layout.interfaces.size());
           if (!layout.interfaces.empty())
@@ -972,6 +1042,15 @@ prepareManagedClassInventory(ModuleOp module,
                                          llvmConstant(builder, location, i64,
                                                       layout.builtinBaseOffset),
                                          18);
+                if (!direct.empty())
+                  descriptor = insertValue(
+                      builder, location, descriptor,
+                      LLVM::AddressOfOp::create(builder, location, pointer,
+                                                directMethodsName),
+                      19);
+                descriptor = insertValue(
+                    builder, location, descriptor,
+                    llvmConstant(builder, location, i64, direct.size()), 20);
                 return descriptor;
               });
           return success();
