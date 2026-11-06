@@ -19,6 +19,9 @@ executeUPF(mlir::ModuleOp module, llvm::ArrayRef<std::string> paths,
            bool allowHDLExpressions = false, bool assumePoweredInputs = false);
 /// Apply resolved power intent after semantic units have become simulation IR.
 std::unique_ptr<mlir::Pass> createElaborateUPFPass();
+/// Resolve aggregate domain selections into exclusive ownership boundaries.
+mlir::LogicalResult resolveUPFDomainExtents(mlir::ModuleOp module);
+std::unique_ptr<mlir::Pass> createResolveUPFDomainExtentsPass();
 /// Preserve synchronous event-time publications before optimizer cleanup.
 /// Run after unit lowering and again after UPF creates executable writers.
 std::unique_ptr<mlir::Pass> createPrepareUPFSnapshotPublicationsPass();

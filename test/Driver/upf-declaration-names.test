@@ -36,8 +36,8 @@ proc expect_error {script pattern} {
     }
 }
 create_power_domain SwitchOwner -elements dut
-create_power_domain OtherOwner -elements dut
-create_power_domain ScopeOwner -elements dut
+create_power_domain OtherOwner -elements {}
+create_power_domain ScopeOwner -elements {}
 foreach net {N G OUT OTHER_OUT} {create_supply_net $net}
 set switch_options {-domain SwitchOwner -input_supply_port {vin N} -output_supply_port {vout OUT} -control_port {en clk} -on_state {ON vin en}}
 # Include non-signal HDL declarations, input ports and implemented supply types.
@@ -49,7 +49,7 @@ foreach name {clk pin dut K T f hdl_supply} {
 }
 create_supply_net NetFirst
 create_supply_port PortFirst
-create_power_domain DomainFirst -elements dut
+create_power_domain DomainFirst -elements {}
 foreach name {NetFirst PortFirst} {
     expect_error [list create_power_domain $name -elements dut] {*name conflicts*}
     expect_error [list create_power_switch $name {*}$switch_options] {*name conflicts*}
@@ -61,7 +61,7 @@ expect_error [list create_power_switch DomainFirst {*}$switch_options] {*name co
 expect_error {create_power_domain Retry -elements missing} {*not a design instance*}
 create_supply_net Retry
 expect_error {create_supply_port RetryPort -direction invalid} {*direction must be*}
-create_power_domain RetryPort -elements dut
+create_power_domain RetryPort -elements {}
 expect_error {create_power_switch RetrySwitch -domain SwitchOwner} {*missing power-switch option*}
 create_supply_net RetrySwitch
 expect_error {create_supply_net RetrySwitch} {*duplicate supply object*}
@@ -72,7 +72,7 @@ foreach name {NetStrategy PortStrategy SetStrategy DomainStrategy SwitchFirst} {
 create_supply_net NetStrategy
 create_supply_port PortStrategy
 create_supply_set SetStrategy
-create_power_domain DomainStrategy -elements dut
+create_power_domain DomainStrategy -elements {}
 create_power_switch SwitchFirst {*}$switch_options
 set_domain_supply_net SwitchOwner -primary_power_net OUT -primary_ground_net G
 foreach command {create_supply_net create_supply_port create_supply_set} {
@@ -90,7 +90,7 @@ create_supply_port ReversePair
 create_supply_net ScopedNet
 create_supply_port ScopedPort
 create_supply_set ScopedSet
-create_power_domain ScopedDomain -elements dut
+create_power_domain ScopedDomain -elements {}
 set_scope child
 # -domain selects the owner's creation scope, even when invoked in a child.
 expect_error {create_supply_net clk -domain /SwitchOwner} {*name conflicts*}

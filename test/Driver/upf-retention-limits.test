@@ -23,7 +23,7 @@ proc expect_error {script pattern} {
         error "expected <$pattern>, got code $code <$message>"
     }
 }
-create_power_domain STRATEGIES -elements dut
+create_power_domain STRATEGIES -elements {}
 for {set i 0} {$i < 256} {incr i} {set_retention R$i -domain STRATEGIES -no_retention}
 expect_error {set_retention overflow -domain STRATEGIES -no_retention} {*256 retention strategies*}
 set_retention R255 -domain STRATEGIES -update -elements {}
@@ -33,7 +33,7 @@ for {set i 0} {$i < 4096} {incr i} {lappend names [format {dut/g[%d]/q} $i]}
 set_retention R -domain SELECTORS -no_retention -elements $names
 expect_error {set_retention R -domain SELECTORS -update -elements {dut/g[4096]/q}} {*4096 elements*}
 set_retention R -domain SELECTORS -update -elements {dut/g[0]/q}
-create_power_domain TOKENS -elements dut
+create_power_domain TOKENS -elements {}
 set expression ctrl
 for {set i 0} {$i < 9} {incr i} {set expression "($expression || $expression)"}
 set expression "!($expression)"

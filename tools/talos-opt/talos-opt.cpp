@@ -35,6 +35,7 @@ int main(int argc, char **argv) {
   mlir::registerTransformsPasses();
   mlir::registerPass([] { return mlir::createSCFToControlFlowPass(); });
   mlir::registerPass([] { return talos::createElaborateUPFPass(); });
+  mlir::registerPass([] { return talos::createResolveUPFDomainExtentsPass(); });
   mlir::registerPass(
       [] { return talos::createPrepareUPFSnapshotPublicationsPass(); });
   talos::registerTalosConversionPasses();

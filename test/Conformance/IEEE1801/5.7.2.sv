@@ -1,7 +1,6 @@
 // CLAUSE: Precedence resolution for power domains
+// SINCE: 0.2.0
 // REQUIRES: upf
-// XFAIL: *
-// nested switchable domains are not implemented: top.Q and top.P
 // Pins: a nested instance in its own domain is outside its parent's: the parent powering off corrupts the parent only (IEEE 1801-2018 5.7.2).
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top --upf %S/Inputs/5.7.2/design.upf -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe

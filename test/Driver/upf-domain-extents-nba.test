@@ -1,0 +1,10 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-domain-extents.test %t
+// RUN: cp %S/Inputs/upf/assertions.tcl %t/assertions.tcl
+// RUN: talos --upf %t/power.upf -DDELAYED -O3 --mlir-verify-each %t/design.sv -o %t.native
+// RUN: %t.native | FileCheck %S/upf-domain-extents.test --check-prefix=DELAY
+// RUN: talos --upf %t/reverse.upf --upf %t/power.upf -DDELAYED -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %S/upf-domain-extents.test --check-prefix=DELAY
+// IEEE 1801-2018 9.5.3: donut and nested extents own separate cancellation
+// epochs. A pending publication in the inner domain survives outer power loss;
+// a publication into the outer domain's re-entry is cancelled across repower.

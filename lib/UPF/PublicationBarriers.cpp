@@ -33,11 +33,11 @@ bool needsSnapshots(ModuleOp module) {
     return true;
   bool needed = false;
   module.walk([&](sim::SimEventSnapshotRegisterOp) { needed = true; });
-  module.walk([&](upf::UPFDomainOp domain) {
+  for (auto domain : module.getOps<upf::UPFDomainOp>()) {
     // No retained state can belong to an empty effective extent (6.20).
     // Its intent must not add barriers or reject unrelated publications.
-    if (domain.getElements().empty())
-      return;
+    if (domain.getExtentAttr().getIncluded().empty())
+      continue;
     if (auto strategies = domain.getRetentionsAttr())
       for (auto attribute : strategies) {
         auto retention = cast<upf::RetentionAttr>(attribute);
@@ -45,7 +45,7 @@ bool needsSnapshots(ModuleOp module) {
         needed |= !retention.getNoRetention() &&
                   (retention.getSave() || retention.getRestore());
       }
-  });
+  }
   return needed;
 }
 
@@ -179,8 +179,13 @@ struct PrepareUPFSnapshotPublicationsPass
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    if (!needsSnapshots(module))
-      return markAllAnalysesPreserved();
+    if (failed(resolveUPFDomainExtents(module)))
+      return signalPassFailure();
+    if (!needsSnapshots(module)) {
+      if (module.getOps<upf::UPFDomainOp>().empty())
+        markAllAnalysesPreserved();
+      return;
+    }
     // Preflight before changing IR: serialized executable images and graph
     // summaries cannot be repaired by adding a boundary afterward.
     auto designs = module.getOps<sim::SimDesignOp>();

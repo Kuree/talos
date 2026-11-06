@@ -1,0 +1,161 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: cp %S/Inputs/upf/assertions.tcl %t/assertions.tcl
+// RUN: talos --upf %t/power.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/reverse.upf --upf %t/power.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/power.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 4.4.2/5.7.2/5.9/6.20: explicit nested ownership,
+// donut re-entry, a child excluded from both domains (no ancestor fallback),
+// idempotent updates and a similarly prefixed $ identifier. Raw redundant
+// includes must survive a later ancestor exclusion. Reversing declarations
+// must preserve effective ownership. That variant also omits A's explicit
+// ancestor exclusion, exercising automatic partitioning and no fallback.
+// CHECK: nested domain extents passed
+// DELAY: nested domain NBA cancellation passed
+// RETAIN: nested domain retention passed
+
+//--- design.sv
+`timescale 1ns/1ps
+module leaf(input logic clk, d);
+  logic q;
+`ifdef DELAYED
+  always @(posedge clk) q <= #4 d;
+`else
+  always @(posedge clk) q <= d;
+`endif
+endmodule
+module middle(input logic clk, d);
+  logic q;
+`ifdef DELAYED
+  always @(posedge clk) q <= #4 d;
+`else
+  always @(posedge clk) q <= d;
+`endif
+  leaf back(clk, d), hole(clk, d);
+endmodule
+module outer(input logic clk, d);
+  logic q;
+`ifdef DELAYED
+  always @(posedge clk) q <= #4 d;
+`else
+  always @(posedge clk) q <= d;
+`endif
+  leaf keep(clk, d);
+  middle b(clk, d);
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, d = 1, rtc = 0;
+  outer a(clk, d);
+  leaf a$alias(clk, d), outside(clk, d);
+  initial begin
+    if (!supply_on("/top/V1", 1.0) || !supply_on("/top/V2", 1.0) ||
+        !supply_on("/top/V3", 1.0) || !supply_on("/top/G", 0.0))
+      $fatal(1, "supply startup failed");
+    #1; clk = 1;
+`ifdef RETENTION
+    #1; clk = 0; rtc = 1; d = 0;
+    #1; clk = 1;
+    #1; clk = 0;
+    if ({a.q,a.keep.q,a.b.q,a.b.back.q,a.b.hole.q,a$alias.q,outside.q}
+        !== 7'b1101000) $fatal(1, "retention crossed resolved domain boundaries");
+    if (!supply_off("/top/V1") || !supply_off("/top/V2"))
+      $fatal(1, "retention power loss failed");
+    #1;
+    if ({a.q,a.keep.q,a.b.q,a.b.back.q,a.b.hole.q,a$alias.q,outside.q}
+        !== 7'bxxxx000) $fatal(1, "primary output masking failed: %b",
+            {a.q,a.keep.q,a.b.q,a.b.back.q,a.b.hole.q,a$alias.q,outside.q});
+    if (!supply_on("/top/V1", 1.0) || !supply_on("/top/V2", 1.0))
+      $fatal(1, "retention repower failed");
+    #1;
+    if ({a.q,a.keep.q,a.b.q,a.b.back.q,a.b.hole.q,a$alias.q,outside.q}
+        !== 7'b11x1000) $fatal(1, "retention candidate ownership failed");
+    rtc = 0; clk = 1;
+    #1;
+    if ({a.q,a.keep.q,a.b.q,a.b.back.q,a.b.hole.q,a$alias.q,outside.q}
+        !== 7'b0000000) $fatal(1, "retention release lost nested writers");
+    $display("nested domain retention passed");
+`else
+`ifdef DELAYED
+    #1;
+    if (!supply_off("/top/V1")) $fatal(1, "power loss failed");
+    #1;
+    if (!supply_on("/top/V1", 1.0)) $fatal(1, "repower failed");
+    #3;
+    if ({a.q,a.keep.q,a.b.q,a.b.back.q,a.b.hole.q,a$alias.q,outside.q}
+        !== 7'bxx1x111)
+      $fatal(1, "nested epochs cancelled another domain or replayed stale NBAs");
+    clk = 0;
+    #1; clk = 1;
+    #5;
+    if ({a.q,a.keep.q,a.b.q,a.b.back.q,a.b.hole.q,a$alias.q,outside.q}
+        !== 7'b1111111) $fatal(1, "new nested-domain NBAs were cancelled");
+    $display("nested domain NBA cancellation passed");
+`else
+    #1; clk = 0;
+    if ({a.q,a.keep.q,a.b.q,a.b.back.q,a.b.hole.q,a$alias.q,outside.q}
+        !== 7'b1111111) $fatal(1, "initial ownership failed");
+    if (!supply_off("/top/V1")) $fatal(1, "V1 off failed");
+    #1;
+    if ({a.q,a.keep.q,a.b.q,a.b.back.q,a.b.hole.q,a$alias.q,outside.q}
+        !== 7'bxx1x111) $fatal(1, "outer/donut extent failed");
+    if (!supply_on("/top/V1", 1.0)) $fatal(1, "V1 on failed");
+    #1; clk = 1;
+    #1; clk = 0;
+    if (!supply_off("/top/V2")) $fatal(1, "V2 off failed");
+    #1;
+    if ({a.q,a.keep.q,a.b.q,a.b.back.q,a.b.hole.q,a$alias.q,outside.q}
+        !== 7'b11x1111) $fatal(1, "nested exclusion or inherited ownership failed");
+    if (!supply_on("/top/V2", 1.0)) $fatal(1, "V2 on failed");
+    #1; clk = 1;
+    #1; clk = 0;
+    if (!supply_off("/top/V3")) $fatal(1, "V3 off failed");
+    #1;
+    if ({a.q,a.keep.q,a.b.q,a.b.back.q,a.b.hole.q,a$alias.q,outside.q}
+        !== 7'b11111x1) $fatal(1, "similarly prefixed sibling broke ownership");
+    if (!supply_off("/top/V1") || !supply_off("/top/V2"))
+      $fatal(1, "power down failed");
+    #1; d = 0; clk = 1;
+    #1; clk = 0;
+    if ({a.q,a.keep.q,a.b.q,a.b.back.q,a.b.hole.q,a$alias.q,outside.q}
+        !== 7'bxxxx0x0) $fatal(1, "excluded child inherited a grandparent domain");
+    if (!supply_on("/top/V1", 1.0) || !supply_on("/top/V2", 1.0) ||
+        !supply_on("/top/V3", 1.0)) $fatal(1, "restore failed");
+    #1; clk = 1;
+    #1;
+    if ({a.q,a.keep.q,a.b.q,a.b.back.q,a.b.hole.q,a$alias.q,outside.q}
+        !== 7'b0000000) $fatal(1, "restored domains lost their writers");
+    $display("nested domain extents passed");
+`endif
+`endif
+    $finish;
+  end
+endmodule
+
+//--- power.upf
+source [file join [file dirname [info script]] assertions.tcl]
+foreach rail {V1 V2 V3 G} {create_supply_net $rail}
+foreach {set rail} {S1 V1 S2 V2 S3 V3} {
+  create_supply_set $set -function [list power $rail] -function {ground G}
+}
+set declarations {A {a a/b/back a/b/back} S1 B a/b S2 C {a$alias} S3}
+if {[info exists reverse_domains]} {
+  set declarations {C {a$alias} S3 B a/b S2 A {a a/b/back a/b/back} S1}
+}
+foreach {domain elements supply} $declarations {
+  create_power_domain $domain -elements $elements -supply [list primary $supply]
+}
+expect_error {create_power_domain A -update -exclude_elements {a/keep missing}} {*not a design instance*}
+expect_error {create_power_domain A -update -exclude_elements a/keep -supply {bad Missing}} {*unknown supply set*}
+if {![info exists partition_without_exclusion]} {
+  create_power_domain A -update -exclude_elements {a/b a/b}
+}
+create_power_domain B -update -exclude_elements a/b/hole
+create_power_domain A -update -elements {} -exclude_elements {}
+
+//--- reverse.upf
+set reverse_domains 1
+set partition_without_exclusion 1

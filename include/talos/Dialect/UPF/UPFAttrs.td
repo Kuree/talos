@@ -7,6 +7,20 @@ include "mlir/IR/BuiltinAttributes.td"
 class UPFAttr<string name, string attrMnemonic> : AttrDef<UPFDialect, name> {
   let mnemonic = attrMnemonic;
 }
+def UPFDomainExtentAttr : UPFAttr<"DomainExtent", "extent"> {
+  let summary = "resolved power-domain ownership boundaries (1801 4.4.2/5.7.2/5.9)";
+  let description = [{
+    Inclusive instance roots and exclusive subtree roots describe the resolved
+    extent. The most specific boundary determines membership. Nested inclusive
+    roots can re-enter the domain below an exclusion, forming a donut domain.
+    These boundaries are derived from all domains together; raw aggregate
+    selectors remain on the domain operation for subsequent resolution.
+  }];
+  let parameters = (ins "::mlir::ArrayAttr":$included,
+      "::mlir::ArrayAttr":$excluded);
+  let assemblyFormat = "`<` struct(params) `>`";
+  let genVerifyDecl = 1;
+}
 def UPFPartialOnTranslationAttr : UPFAttr<"PartialOnTranslation", "partial_on_translation"> {
   let summary = "global PARTIAL_ON interpretation (IEEE 1801 6.47)";
   let parameters = (ins EnumParameter<UPFPartialOnTranslation>:$value);

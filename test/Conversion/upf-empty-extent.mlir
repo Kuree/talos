@@ -4,7 +4,8 @@
 // physical input/control-to-output monitor and no guard/epoch ABI.
 module {
   upf.supply @rail names ["/top/VDD"] writable = true
-  upf.domain @Empty elements [] power @rail on []
+  upf.domain @Empty elements ["top"] power @rail on []
+      {excluded_elements = ["top"]}
   // CHECK-LABEL: simulation.design @empty_direct
   simulation.design @empty_direct {
     simulation.scope.decl 0 hierarchy "top"
@@ -26,7 +27,8 @@ module {
 module {
   upf.supply @rail names ["/top/VDD"] writable = true
   upf.supply @out names ["/top/OUT"] writable = false
-  upf.domain @Empty elements [] power @out on [#upf.state<name = "ON", condition = #on>] {input = @rail}
+  upf.domain @Empty elements ["top"] power @out on [#upf.state<name = "ON", condition = #on>]
+      {input = @rail, excluded_elements = ["top"]}
   // CHECK-LABEL: simulation.design @empty_switched
   simulation.design @empty_switched {
     simulation.scope.decl 0 hierarchy "top"

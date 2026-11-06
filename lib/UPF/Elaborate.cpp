@@ -847,7 +847,7 @@ struct Lowering {
         return domain.emitError("power control source width disagrees with "
                                 "simulation storage: ")
                << token.getControl().getValue();
-    if (domain.getElements().empty()) {
+    if (domain.getExtentAttr().getIncluded().empty()) {
       if (condition.input)
         switchOnly(domain, condition);
       domain.erase();
@@ -863,7 +863,9 @@ struct Lowering {
     // Multiple boundary instances can exchange internal same-domain traffic;
     // even diff_supply_only FALSE needs that interface/path classification.
     // A whole-output mux cannot yet represent these multiple-boundary paths.
-    if (domain.getIsolationControl() && boundaries.size() != 1)
+    if (domain.getIsolationControl() &&
+        (boundaries.size() != 1 ||
+         !domain.getExtentAttr().getExcluded().empty()))
       return domain.emitError(
           "isolation across multiple boundary instances "
           "requires per-path handling and is not implemented");
@@ -1314,29 +1316,10 @@ struct ElaborateUPFPass
       getOperation()->removeAttr(upf::partialOnTranslationName);
       return;
     }
-    // IEEE 1801-2018 6.20 assigns an instance to exactly one effective extent.
-    // Until nested-domain extent partitioning exists, require disjoint roots;
-    // validate the entire inventory before adding any guards or corruption.
-    for (auto [index, domain] : llvm::enumerate(domains))
-      for (auto other : ArrayRef(domains).take_front(index))
-        for (Attribute element : domain.getElements())
-          for (Attribute otherElement : other.getElements()) {
-            StringRef path = cast<StringAttr>(element).getValue();
-            StringRef otherPath = cast<StringAttr>(otherElement).getValue();
-            if (within(path, otherPath) || within(otherPath, path)) {
-              auto diagnostic = domain.emitError();
-              if (path == otherPath)
-                diagnostic << "design instance is selected by multiple "
-                              "switchable domains: "
-                           << path;
-              else
-                diagnostic << "nested switchable domains are not implemented: "
-                           << domain.getSymName() << " and "
-                           << other.getSymName();
-              signalPassFailure();
-              return;
-            }
-          }
+    if (failed(resolveUPFDomainExtents(getOperation()))) {
+      signalPassFailure();
+      return;
+    }
     auto designs = getOperation().getOps<sim::SimDesignOp>();
     if (!llvm::hasSingleElement(designs)) {
       getOperation().emitError("UPF requires exactly one simulation design");

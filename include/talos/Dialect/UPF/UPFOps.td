@@ -68,8 +68,15 @@ def UPFDomainOp : Op<UPFDialect, "domain", [Symbol,
       OptionalAttr<StrAttr>:$isolation_name,
       // IEEE 1801 6.45: omitted/bare is TRUE; FALSE removes only the
       // driver/receiver supply comparison from isolation's port filters.
-      DefaultValuedAttr<BoolAttr, "true">:$isolation_diff_supply_only);
+      DefaultValuedAttr<BoolAttr, "true">:$isolation_diff_supply_only,
+      OptionalAttr<StrArrayAttr>:$excluded_elements,
+      OptionalAttr<UPFDomainExtentAttr>:$extent);
   let assemblyFormat = "$sym_name `elements` $elements `power` $power `on` $on attr-dict";
   let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    /// Membership after global extent resolution, or in the local effective
+    /// element list when no resolved extent has been attached yet.
+    bool containsPath(::llvm::StringRef path);
+  }];
 }
 #endif

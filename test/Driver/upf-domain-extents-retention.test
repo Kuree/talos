@@ -1,0 +1,14 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-domain-extents.test %t
+// RUN: %split-file %s %t/intent
+// RUN: cp %S/Inputs/upf/assertions.tcl %t/assertions.tcl
+// RUN: talos --upf %t/power.upf --upf %t/intent/retention.upf -DRETENTION -O3 --mlir-verify-each %t/design.sv -o %t.native
+// RUN: %t.native | FileCheck %S/upf-domain-extents.test --check-prefix=RETAIN
+// RUN: talos --upf %t/reverse.upf --upf %t/power.upf --upf %t/intent/retention.upf -DRETENTION -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %S/upf-domain-extents.test --check-prefix=RETAIN
+// IEEE 1801-2018 6.50/9.7: domain-default retention selects only storage
+// within the resolved extent, including explicit donut re-entry. Storage in
+// the nested domain and its excluded descendant keeps its own behavior.
+
+//--- retention.upf
+set_retention KEEP -domain A -retention_condition rtc

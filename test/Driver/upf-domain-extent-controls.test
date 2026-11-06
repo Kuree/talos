@@ -1,0 +1,34 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf-assume-powered-inputs --upf %t/power.upf -emit-sim --mlir-verify-each %t/design.sv -o - | FileCheck %s
+// RUN: not talos --upf-assume-powered-inputs --upf %t/power.upf --upf %t/reenter.upf -emit-sim %t/design.sv -o - 2>&1 | FileCheck %s --check-prefix=INSIDE
+// Controls in an excluded subtree are outside the effective domain. Explicit
+// re-entry places that same control back inside and must be diagnosed.
+// CHECK: __upf_top.PD.monitor
+// INSIDE: power control must be outside the switchable domain: top.a.mid.ctrl.en
+
+//--- design.sv
+module control;
+  logic en = 1;
+endmodule
+module middle;
+  control ctrl();
+endmodule
+module outer;
+  logic q;
+  always_comb q = 1'b1;
+  middle mid();
+endmodule
+module top;
+  outer a();
+endmodule
+
+//--- power.upf
+create_power_domain PD -elements a -exclude_elements a/mid
+foreach rail {VDD OUT} {create_supply_net $rail}
+create_power_switch SW -domain PD \
+  -input_supply_port {vin VDD} -output_supply_port {vout OUT} \
+  -control_port {en a/mid/ctrl/en} -on_state {ON vin en}
+
+//--- reenter.upf
+create_power_domain PD -update -elements a/mid/ctrl

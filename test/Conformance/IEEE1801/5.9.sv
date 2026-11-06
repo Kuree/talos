@@ -1,7 +1,6 @@
 // CLAUSE: effective_element_list semantics
+// SINCE: 0.2.0
 // REQUIRES: upf
-// XFAIL: *
-// UPF execution failed: unsupported UPF option '-exclude_elements' in create_power_domain; the option is not implemented.
 // Pins: the effective list is the elements minus the exclusions: an excluded child is not in the domain (IEEE 1801-2018 5.9).
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top --upf %S/Inputs/5.9/design.upf -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe

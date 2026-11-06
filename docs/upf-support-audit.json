@@ -192,17 +192,17 @@
       "accepted_options": [
         "-elements",
         "-supply",
-        "-update"
+        "-update",
+        "-exclude_elements"
       ],
       "unsupported_options": [
-        "-exclude_elements",
         "-subdomains",
         "-atomic",
         "-define_func_type",
         "-boundary_supplies",
         "-available_supplies"
       ],
-      "limits": "Explicit lists of existing module instances, including empty and deferred extents; additive transactional updates preserve existing supply handles, bindings, state catalogs and strategies. Physical switches and explicit state catalogs work with empty extents; empty retention intent adds no snapshot machinery. Extents must remain disjoint; nested partitioning, excludes, composites, atomic and abstract/model domains remain unsupported.",
+      "limits": "Explicit module-instance selections, deferred and empty extents, additive transactional updates, aggregate exclusions and globally resolved nested/donut ownership. Explicit descendant re-entry survives ancestor exclusions; inheritance stops at another domain boundary. Existing handle identities, bindings, catalogs and strategies survive updates. Empty effective extents avoid corruption/snapshot machinery but retain physical switching and explicit state catalogs. Composite/atomic domains, hard-macro model selections, available/boundary supplies and PG function-type definitions remain unsupported. Per-path isolation across lower or multiple boundaries is still rejected.",
       "implementation": [
         "lib/UPF/Execute.cpp"
       ]
@@ -915,9 +915,9 @@
         "8.3"
       ],
       "missing": [
-        "Aggregate include/exclude selection and terminal PG extent enforcement",
-        "Nested and composite domains, extent partitioning and multiple boundaries",
-        "Atomic domains, available/boundary supplies and function-type definition"
+        "Composite domains and aggregation of multiple domains",
+        "Atomic domains, available/boundary supplies and function-type definition",
+        "Design-top coverage validation and anonymous hard-macro domains; current compatibility behavior leaves unclaimed RTL outside declared intent"
       ]
     },
     {
@@ -1118,7 +1118,7 @@
     {
       "id": 4,
       "status": "in_progress",
-      "scope": "Domain declaration updates and empty extents, followed by nested extent partitioning.",
+      "scope": "Domain declaration updates and empty extents, nested extent partitioning and aggregate exclusions; atomic/composite domains remain.",
       "completed": [
         {
           "id": "4a",
@@ -1148,11 +1148,42 @@
           ],
           "review": "Independent subagent approved UPF/LRM rules, transactional updates, handle identity, namespace checks, switch propagation, retained state-catalog diagnostics, MLIR control flow/effects and coverage. Review found empty balloon intent unnecessarily enabled snapshot machinery and rejected context DPI; fixed with positive and negative extent tests before approval.",
           "validation": "11 targeted lit tests and all 208 unique UPF/simulation-supply regression tests pass. Eight IEEE1801 clauses across native/bytecode produce 12 passes, two reference-only cases and two expected failures; no unexpected results. Emitted IR tests verify empty domains avoid corruption epochs/guards and unnecessary retention snapshots."
+        },
+        {
+          "id": "4b",
+          "status": "complete",
+          "scope": "Transactional aggregate exclusions and compiler-only global parent-ownership resolution, including nested/donut domains, explicit re-entry, typed canonical extent attributes and shared membership across guards/corruption/retention",
+          "clauses": [
+            "4.4.2",
+            "5.7.2",
+            "5.7.9",
+            "5.9",
+            "5.10",
+            "6.20"
+          ],
+          "runtime_changes": false,
+          "tests": [
+            "test/Dialect/UPF/domain-extents.mlir",
+            "test/Dialect/UPF/domain-extent-invalid.mlir",
+            "test/Dialect/UPF/domain-extent-conflicts.mlir",
+            "test/Driver/upf-domain-extents.test",
+            "test/Driver/upf-domain-extents-nba.test",
+            "test/Driver/upf-domain-extents-retention.test",
+            "test/Driver/upf-domain-extent-controls.test",
+            "test/Conversion/upf-nested-module-publications.mlir",
+            "test/Conversion/upf-empty-extent.mlir",
+            "test/Driver/upf-empty-domain-balloon.test",
+            "test/Conformance/IEEE1801/5.7.2.sv",
+            "test/Conformance/IEEE1801/5.9.sv"
+          ],
+          "review": "Independent subagent reviewed IEEE1801 ownership/precedence/effective-element-list rules and LRM hierarchy/scheduling, MLIR attributes/pass behavior, shared membership and test coverage. Parent inheritance instead of ancestor fallback, preserved raw aggregate provenance, resolved emptiness, no-UPF analysis preservation and nested module scope were checked; review findings fixed before approval.",
+          "validation": "14 targeted lit tests pass. All 216 unique UPF/simulation-supply regression tests pass, including four older declaration-only fixtures corrected to avoid unrelated duplicate domain ownership. Ten selected IEEE1801 clauses produce 18 native/bytecode passes and two reference-only cases; 5.7.2 and 5.9 promoted from XFAIL to SINCE 0.2.0."
         }
       ],
       "remaining": [
-        "Nested extent partitioning and include/exclude selection",
-        "Composite and atomic domains, available/boundary supplies and function-type definition"
+        "Atomic and composite domains",
+        "Available/boundary supplies and function-type definition",
+        "Design-top coverage validation and anonymous hard-macro domains"
       ]
     },
     {

@@ -44,7 +44,7 @@ struct Domain {
   std::string isolationName;
   SmallVector<Attribute> on, partial, errors;
   upf::SwitchStateAttr off;
-  std::vector<std::string> elements;
+  std::vector<std::string> elements, excluded;
   bool hasElements = false;
   bool isolationHigh = true;
   bool isolationDiffSupplyOnly = true;
@@ -864,8 +864,9 @@ struct Session {
         return TCL_ERROR;
       RepeatedOptions repeated{{"-supply", {}}};
       if (objc < 2 ||
-          !options(objc, objv, 2, {"-elements", "-supply", "-update"}, opts,
-                   &repeated, {"-update"}))
+          !options(objc, objv, 2,
+                   {"-elements", "-exclude_elements", "-supply", "-update"},
+                   opts, &repeated, {"-update"}))
         return TCL_ERROR;
       if (!identifier(Tcl_GetString(objv[1])))
         return TCL_ERROR;
@@ -892,21 +893,31 @@ struct Session {
         dom.primary =
             supplySetKey(std::string(Tcl_GetString(objv[1])) + ".primary");
       }
-      std::vector<std::string> names;
       // 5.9/6.20: preserve omitted versus explicit empty selections. Elements
       // aggregate as a set, and a later file may complete an empty base.
-      if (opts.count("-elements") && !list(opts["-elements"], names))
-        return TCL_ERROR;
       dom.hasElements |= opts.count("-elements");
-      for (auto &name : names) {
-        std::string path = object(name);
-        if (path.empty() || objects.at(path)->getName().getStringRef() !=
-                                "slang.symbol.instance")
-          return error("power-domain element is not a design instance: " +
-                       name);
-        if (!llvm::is_contained(dom.elements, path))
-          dom.elements.push_back(path);
-      }
+      auto selectors = [&](StringRef option, auto &aggregate) {
+        auto found = opts.find(option.str());
+        if (found == opts.end())
+          return true;
+        std::vector<std::string> names;
+        if (!list(found->second, names))
+          return false;
+        for (auto &name : names) {
+          std::string path = object(name);
+          if (path.empty() || objects.at(path)->getName().getStringRef() !=
+                                  "slang.symbol.instance") {
+            error("power-domain element is not a design instance: " + name);
+            return false;
+          }
+          if (!llvm::is_contained(aggregate, path))
+            aggregate.push_back(path);
+        }
+        return true;
+      };
+      if (!selectors("-elements", dom.elements) ||
+          !selectors("-exclude_elements", dom.excluded))
+        return TCL_ERROR;
       std::map<std::string, SupplySet> handles;
       auto makeHandle = [&](const std::string &id) {
         if (supplySets.count(id) || handles.count(id))
@@ -2088,9 +2099,11 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
                                        SymbolTable::Visibility::Private);
   }
   for (auto &[name, domain] : session.domains) {
-    llvm::SmallVector<Attribute> elements;
+    llvm::SmallVector<Attribute> elements, excluded;
     for (auto &element : domain.elements)
       elements.push_back(builder.getStringAttr(element));
+    for (auto &element : domain.excluded)
+      excluded.push_back(builder.getStringAttr(element));
     // 6.20/9.5.1: retain role provenance. Global supply sets associated to
     // this primary can constrain its elements; a sibling domain's local
     // primary catalog does not acquire that role merely by sharing rails.
@@ -2155,8 +2168,12 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
         domain.isolationName.empty()
             ? StringAttr{}
             : builder.getStringAttr(domain.isolationName),
-        domain.isolationDiffSupplyOnly);
+        domain.isolationDiffSupplyOnly,
+        excluded.empty() ? ArrayAttr{} : builder.getArrayAttr(excluded),
+        upf::DomainExtentAttr{});
   }
+  if (failed(resolveUPFDomainExtents(module)))
+    return failure();
   return verify(module);
 #endif
 }

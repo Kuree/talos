@@ -34,13 +34,13 @@ foreach net {P G} {create_supply_net $net}
 create_supply_set ROOT_SET -function {power P} -function {ground G}
 create_power_domain ROOT -elements other
 create_supply_set UNBOUND
-create_power_domain ASSOCIATED -elements other -supply {primary UNBOUND}
+create_power_domain ASSOCIATED -elements {} -supply {primary UNBOUND}
 expect_error {set_domain_supply_net ASSOCIATED -primary_power_net P -primary_ground_net G} {*already associated*}
 set_scope dut
 create_power_domain FAIL -elements .
-create_power_domain DESC -elements .
-create_power_domain PORT -elements .
-create_power_domain OWN_CHECK -elements .
+create_power_domain DESC -elements {}
+create_power_domain PORT -elements {}
+create_power_domain OWN_CHECK -elements {}
 foreach net {LOCAL_P LOCAL_G} {create_supply_net $net}
 create_supply_net OWN -domain FAIL
 create_supply_net PAIR -domain FAIL
@@ -73,4 +73,4 @@ if {[set_scope .] ne "/"} {error "scoped load or legacy changed caller"}
 puts {legacy source validation, private suppliers and rollback passed}
 
 //--- child.upf
-create_power_domain SCOPED -elements .
+create_power_domain SCOPED -elements {}

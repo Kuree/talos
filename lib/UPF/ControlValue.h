@@ -18,28 +18,17 @@ struct Descriptor {
   bool net = false, driver = false;
 };
 inline bool within(StringRef path, StringRef prefix) {
-  return path == prefix || (path.starts_with(prefix) &&
-                            path.drop_front(prefix.size()).starts_with('.'));
+  return upf::isWithinPath(path, prefix);
 }
 inline bool contains(upf::UPFDomainOp domain, StringRef path) {
-  for (Attribute element : domain.getElements()) {
-    StringRef prefix = cast<StringAttr>(element).getValue();
-    if (within(path, prefix))
-      return true;
-  }
-  return false;
+  return domain.containsPath(path);
 }
 inline SmallVector<StringRef> boundaryInstances(upf::UPFDomainOp domain) {
   // IEEE 1801-2018 6.20: a boundary instance has a parent outside the extent.
-  // Listing a descendant redundantly does not create an additional boundary.
+  // Resolved positive transitions retain re-entry below a negative boundary.
   SmallVector<StringRef> roots;
-  for (Attribute element : domain.getElements()) {
-    StringRef path = cast<StringAttr>(element).getValue();
-    if (llvm::any_of(roots, [&](StringRef root) { return within(path, root); }))
-      continue;
-    llvm::erase_if(roots, [&](StringRef root) { return within(root, path); });
-    roots.push_back(path);
-  }
+  for (Attribute element : domain.getExtentAttr().getIncluded())
+    roots.push_back(cast<StringAttr>(element).getValue());
   return roots;
 }
 inline Value handle(OpBuilder &b, Location loc, Value context, Descriptor d) {

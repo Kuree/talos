@@ -6,6 +6,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include <map>
 
 #include "talos/Dialect/UPF/UPFDialect.cpp.inc"
 #include "talos/Dialect/UPF/UPFEnums.cpp.inc"
@@ -14,6 +15,49 @@
 #define GET_OP_CLASSES
 #include "talos/Dialect/UPF/UPFOps.cpp.inc"
 namespace talos::upf {
+mlir::LogicalResult
+DomainExtentAttr::verify(llvm::function_ref<mlir::InFlightDiagnostic()> error,
+                         mlir::ArrayAttr included, mlir::ArrayAttr excluded) {
+  std::map<llvm::StringRef, bool, InstancePathLess> boundaries;
+  for (auto [entries, value] :
+       {std::pair{included, true}, std::pair{excluded, false}})
+    for (auto entry : entries) {
+      auto path = mlir::dyn_cast<mlir::StringAttr>(entry);
+      if (!path || path.getValue().empty())
+        return error() << "extent boundary must be a nonempty instance path";
+      if (!boundaries.emplace(path.getValue(), value).second)
+        return error() << "extent boundary must be unique";
+    }
+  llvm::SmallVector<std::pair<llvm::StringRef, bool>> ancestors;
+  for (auto [path, included] : boundaries) {
+    while (!ancestors.empty() && !isWithinPath(path, ancestors.back().first))
+      ancestors.pop_back();
+    bool parentIncluded = !ancestors.empty() && ancestors.back().second;
+    if (included == parentIncluded)
+      return error()
+             << "extent boundaries must alternate inclusion and exclusion";
+    ancestors.emplace_back(path, included);
+  }
+  return mlir::success();
+}
+bool UPFDomainOp::containsPath(llvm::StringRef path) {
+  auto extent = getExtentAttr();
+  auto included = extent ? extent.getIncluded() : getElements();
+  auto excluded = extent ? extent.getExcluded() : getExcludedElementsAttr();
+  size_t includeLength = 0, excludeLength = 0;
+  for (auto entry : included) {
+    auto root = mlir::cast<mlir::StringAttr>(entry).getValue();
+    if (isWithinPath(path, root))
+      includeLength = std::max(includeLength, root.size());
+  }
+  if (excluded)
+    for (auto entry : excluded) {
+      auto root = mlir::cast<mlir::StringAttr>(entry).getValue();
+      if (isWithinPath(path, root))
+        excludeLength = std::max(excludeLength, root.size());
+    }
+  return includeLength > excludeLength;
+}
 std::optional<PartialOnTranslation>
 getPartialOnTranslation(mlir::Operation *operation) {
   auto module = mlir::dyn_cast<mlir::ModuleOp>(operation);
@@ -472,9 +516,11 @@ mlir::LogicalResult UPFDomainOp::verify() {
   if (getRetentionsAttr() && !getRetentionsAttr().empty() && !getPrimaryAttr())
     return emitOpError(
         "retention strategies require a primary supply-set reference");
-  for (auto element : getElements())
-    if (mlir::cast<mlir::StringAttr>(element).getValue().empty())
-      return emitOpError("domain element must not be empty");
+  for (auto selectors : {getElements(), getExcludedElementsAttr()})
+    if (selectors)
+      for (auto element : selectors)
+        if (mlir::cast<mlir::StringAttr>(element).getValue().empty())
+          return emitOpError("domain element must not be empty");
   if (auto isolation = getIsolationControl(); isolation && isolation->empty())
     return emitOpError("isolation control must not be empty");
   if (auto name = getIsolationName();

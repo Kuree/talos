@@ -53,8 +53,8 @@ expect_error {create_power_domain Atomic -elements dut -supply {primary missing}
 create_power_domain Atomic -elements dut -supply {primary Bad}
 expect_error {create_supply_set Atomic.primary} {*requires -update*}
 expect_error {set_domain_supply_net Atomic -primary_power_net N -primary_ground_net G} {*already associated*}
-create_power_domain Ground -elements dut
-create_power_domain Fresh -elements dut
+create_power_domain Ground -elements {}
+create_power_domain Fresh -elements {}
 create_supply_set Ground.primary -update -function {ground G}
 expect_error {set_domain_supply_net Ground -primary_power_net N -primary_ground_net G} {*already associated*}
 # Function-reference cycles are aliases, not directional driver cycles.
@@ -89,8 +89,8 @@ create_supply_set Ground.primary -update -function {power N}
 create_supply_set Fresh.primary -update -function {power N} -function {ground G}
 expect_error {create_supply_set Wrong -function {power child/LOCAL}} {*defined in the current scope*}
 create_supply_set Descendant -function {power child/Child.power}
-create_power_domain BiasUser -elements dut
-create_power_domain BiasOwner -elements dut
+create_power_domain BiasUser -elements {}
+create_power_domain BiasOwner -elements {}
 set_domain_supply_net BiasUser -primary_power_net BiasOwner.primary.nwell -primary_ground_net G
 # Referencing a well does not associate BiasOwner's primary power/ground.
 set_domain_supply_net BiasOwner -primary_power_net N -primary_ground_net G
