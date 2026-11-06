@@ -84,4 +84,19 @@ def UPFDomainOp : Op<UPFDialect, "domain", [Symbol,
     bool containsPath(::llvm::StringRef path);
   }];
 }
+def UPFCompositeDomainOp : Op<UPFDialect, "composite_domain", [Symbol,
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "power-domain container without a physical extent (1801 6.16)";
+  let description = [{
+    Retains composite identity, child domain references and a primary supply
+    handle after compiler-time composition. Corresponding primary functions
+    share roots after their preexisting equivalence has been checked. The
+    container owns no HDL processes or corruption monitor. Its local primary
+    state catalog does not become a subdomain's simulation policy.
+  }];
+  let arguments = (ins SymbolNameAttr:$sym_name,
+      FlatSymbolRefArrayAttr:$subdomains, FlatSymbolRefAttr:$primary);
+  let assemblyFormat = "$sym_name `subdomains` $subdomains `primary` $primary attr-dict";
+  let hasVerifier = 1;
+}
 #endif

@@ -1,0 +1,14 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-composite-domain.test %t
+// RUN: %split-file %s %t/intent
+// RUN: cp %S/Inputs/upf/assertions.tcl %t/assertions.tcl
+// RUN: talos --upf %t/intent/unbound.upf --upf %t/power.upf -DUNBOUND -O3 --mlir-verify-each %t/design.sv -o %t.native
+// RUN: %t.native | FileCheck %S/upf-composite-domain.test
+// RUN: talos --upf %t/intent/unbound.upf --upf %t/power.upf -DUNBOUND -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %S/upf-composite-domain.test
+// IEEE 1801-2018 8.3.3(f)(2): an unbound container can receive its primary
+// physical functions from a supplied child, then power an unbound sibling
+// through a nested container, without sharing catalogs or unused functions.
+
+//--- unbound.upf
+set unbound_composite 1

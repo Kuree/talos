@@ -1,7 +1,6 @@
 // CLAUSE: create_composite_domain
+// SINCE: 0.2.0
 // REQUIRES: upf
-// XFAIL: *
-// UPF execution failed: invalid command name "create_composite_domain"; the command is not implemented.
 // Pins: the composite's primary supply reaches each subdomain, and it does not reach a domain outside it (IEEE 1801-2018 6.16).
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top --upf %S/Inputs/6.16/design.upf -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe

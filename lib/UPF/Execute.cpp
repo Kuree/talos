@@ -12,6 +12,7 @@
 #include "talos/Dialect/Slang/SlangOps.h"
 #include "talos/Dialect/UPF/UPFOps.h"
 #include "talos/Frontend/UPF.h"
+#include "llvm/ADT/IntEqClasses.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
@@ -44,8 +45,8 @@ struct Domain {
   std::string isolationName;
   SmallVector<Attribute> on, partial, errors;
   upf::SwitchStateAttr off;
-  std::vector<std::string> elements, excluded;
-  bool hasElements = false, atomic = false;
+  std::vector<std::string> elements, excluded, subdomains;
+  bool hasElements = false, hasExcluded = false, atomic = false, composite = false;
   bool isolationHigh = true;
   bool isolationDiffSupplyOnly = true;
   int64_t clamp = 0;
@@ -424,6 +425,10 @@ struct Session {
     auto found = domains.find(key(value(options, "-domain")));
     if (found == domains.end()) {
       error("unknown power domain '" + value(options, "-domain") + "'");
+      return nullptr;
+    }
+    if (found->second.composite) {
+      error("this command on a composite domain is not implemented");
       return nullptr;
     }
     return &found->second;
@@ -859,15 +864,15 @@ struct Session {
           "UPF requires a unique elaborated design top; select one with --top");
     if (command == "find_objects")
       return queries.find(interp, objc, objv, scope, top, supplyPortInfo);
-    if (command == "create_power_domain") {
+    if (command == "create_power_domain" ||
+        command == "create_composite_domain") {
       if (!creationScope(scope))
         return TCL_ERROR;
       RepeatedOptions repeated{{"-supply", {}}};
-      if (objc < 2 ||
-          !options(objc, objv, 2,
-                   {"-elements", "-exclude_elements", "-supply", "-update",
-                    "-atomic"},
-                   opts, &repeated, {"-update", "-atomic"}))
+      if (objc < 2 || !options(objc, objv, 2,
+                               {"-elements", "-exclude_elements", "-supply",
+                                "-update", "-atomic", "-subdomains"},
+                               opts, &repeated, {"-update", "-atomic"}))
         return TCL_ERROR;
       if (!identifier(Tcl_GetString(objv[1])))
         return TCL_ERROR;
@@ -882,6 +887,25 @@ struct Session {
         return error(
             "power-domain -atomic is not refinable (IEEE 1801-2018 6.20)");
       Domain dom = update ? found->second : Domain{};
+      bool composite = command == "create_composite_domain" ||
+                       opts.count("-subdomains") || dom.composite;
+      if (composite &&
+          (opts.count("-elements") || opts.count("-exclude_elements") ||
+           opts.count("-atomic")))
+        return error(
+            "composite domains do not accept element selections or -atomic");
+      if (update && composite && !dom.composite) {
+        bool auxiliary = llvm::any_of(supplySets, [&](const auto &entry) {
+          return entry.second.owner == dom.name && entry.first != dom.primary;
+        });
+        if (dom.hasElements || dom.hasExcluded || dom.atomic || auxiliary ||
+            !dom.switchOutput.empty() || !dom.isolation.empty() ||
+            !dom.retentions.empty())
+          return error(
+              "composite subdomains conflict with an existing physical "
+              "domain definition");
+      }
+      dom.composite = composite;
       if (update) {
         if (dom.scope != scope)
           return error(
@@ -901,6 +925,7 @@ struct Session {
       // 5.9/6.20: preserve omitted versus explicit empty selections. Elements
       // aggregate as a set, and a later file may complete an empty base.
       dom.hasElements |= opts.count("-elements");
+      dom.hasExcluded |= opts.count("-exclude_elements");
       auto selectors = [&](StringRef option, auto &aggregate) {
         auto found = opts.find(option.str());
         if (found == opts.end())
@@ -923,6 +948,34 @@ struct Session {
       if (!selectors("-elements", dom.elements) ||
           !selectors("-exclude_elements", dom.excluded))
         return TCL_ERROR;
+      if (opts.count("-subdomains")) {
+        std::vector<std::string> names;
+        if (!list(opts["-subdomains"], names))
+          return TCL_ERROR;
+        for (auto &name : names) {
+          std::string child = key(name);
+          if (child == id)
+            return error("a composite domain cannot contain itself");
+          if (!domains.count(child))
+            return error("unknown composite subdomain: " + name);
+          if (!llvm::is_contained(dom.subdomains, child))
+            dom.subdomains.push_back(child);
+        }
+      }
+      // A later update can introduce a back edge. Check the staged graph
+      // before reserving handles or committing electrical associations.
+      std::set<std::string> seen;
+      std::vector<std::string> pending = dom.subdomains;
+      while (!pending.empty()) {
+        std::string child = std::move(pending.back());
+        pending.pop_back();
+        if (child == id)
+          return error("cycle in composite domain composition");
+        if (seen.insert(child).second) {
+          auto &children = domains.at(child).subdomains;
+          pending.insert(pending.end(), children.begin(), children.end());
+        }
+      }
       std::map<std::string, SupplySet> handles;
       auto makeHandle = [&](const std::string &id) {
         if (supplySets.count(id) || handles.count(id))
@@ -948,6 +1001,8 @@ struct Session {
           return error("domain supply requires {handle [supply_set]}");
         if (!identifier(fields[0]))
           return TCL_ERROR;
+        if (composite && fields[0] != "primary")
+          return error("composite domains only have the primary supply handle");
         if (dom.retentions.count(fields[0]) || dom.isolationName == fields[0])
           return error("domain supply handle conflicts with a strategy: " +
                        fields[0]);
@@ -1417,6 +1472,8 @@ struct Session {
       auto found = domains.find(key(Tcl_GetString(objv[1])));
       if (found == domains.end())
         return error("unknown power domain");
+      if (found->second.composite)
+        return error("legacy supply association on composite domains is not implemented");
       if (!opts.count("-primary_power_net") ||
           !opts.count("-primary_ground_net"))
         return error("both primary power and ground nets are required");
@@ -1793,11 +1850,11 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
   std::vector<Command> commands;
   for (const char *name :
        {"upf_version", "set_design_top", "set_scope", "find_objects",
-        "load_upf", "create_power_domain", "create_supply_net",
-        "create_supply_port", "connect_supply_net", "set_domain_supply_net",
-        "create_power_switch", "set_isolation", "create_supply_set",
-        "associate_supply_set", "add_power_state", "set_partial_on_translation",
-        "set_retention"})
+        "load_upf", "create_power_domain", "create_composite_domain",
+        "create_supply_net", "create_supply_port", "connect_supply_net",
+        "set_domain_supply_net", "create_power_switch", "set_isolation",
+        "create_supply_set", "associate_supply_set", "add_power_state",
+        "set_partial_on_translation", "set_retention"})
     commands.push_back({&session, name});
   for (auto &command : commands)
     Tcl_CreateObjCommand2(interp.get(), command.name, dispatch, &command,
@@ -1821,7 +1878,7 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
                     upf::PartialOnTranslationAttr::get(
                         module.getContext(), *session.partialOnTranslation));
   for (auto &[name, domain] : session.domains)
-    if (!domain.hasElements)
+    if (!domain.composite && !domain.hasElements)
       return emitError(domain.location.value_or(module.getLoc()))
              << "power domain requires -elements in its base or an update "
                 "(IEEE 1801-2018 6.20): "
@@ -1859,6 +1916,104 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
       [&](const llvm::Twine &message) { supplyError = message.str(); });
   if (failed(resolved))
     return module.emitError() << supplyError;
+  // 4.5.4.7/4.5.5.3: binding an unused function does not make it required.
+  // Propagate usage through existing explicit associations before testing
+  // natural equivalence of composite primaries. Keep catalog provenance out
+  // of the new physical propagation links (6.16).
+  if (llvm::any_of(session.domains,
+                   [](const auto &entry) { return entry.second.composite; })) {
+    // Always check constraints against the topology before composition. A
+    // later usage iteration must not bless rails merged by an earlier one.
+    auto initial = *resolved;
+    auto originalEquivalences = equivalences;
+    bool first = true;
+    while (true) {
+      bool added = false;
+      for (auto &[name, set] : session.supplySets)
+        for (auto &[stateName, state] : set.states)
+          if (state.condition)
+            for (auto &token : state.condition->tokens) {
+              if (!token.reference || !token.reference->function.empty())
+                continue;
+              auto &object = token.reference->object;
+              unsigned root = object.kind == SupplyObject::Net
+                                  ? resolved->nets.at(object.path)
+                              : object.kind == SupplyObject::Port
+                                  ? resolved->ports.at(object.path)
+                                  : resolved->functions.at(object.path);
+              for (StringRef function : upf::getSupplyFunctionNames())
+                if (root == resolved->functions.at(name + "." + function.str()))
+                  added |= set.required.insert(function.str()).second;
+            }
+      bool requirementsChanged;
+      do {
+        requirementsChanged = false;
+        for (auto &[a, b] : session.setAssociations) {
+          auto &left = session.supplySets.at(a).required;
+          auto &right = session.supplySets.at(b).required;
+          for (auto function : left)
+            requirementsChanged |= right.insert(function).second;
+          for (auto function : right)
+            requirementsChanged |= left.insert(function).second;
+        }
+        added |= requirementsChanged;
+      } while (requirementsChanged);
+      if (!first && !added)
+        break;
+      first = false;
+      llvm::IntEqClasses composition(initial.roots.size());
+      std::vector<std::optional<unsigned>> constrained(initial.roots.size());
+      for (auto [index, root] : llvm::enumerate(initial.roots))
+        if (root.explicitSource)
+          constrained[index] = index;
+      SupplyEquivalences compositionLinks;
+      for (auto &[name, domain] : session.domains) {
+        if (!domain.composite)
+          continue;
+        auto &primary = session.supplySets.at(domain.primary);
+        for (auto &childName : domain.subdomains) {
+          auto &child = session.domains.at(childName);
+          auto &childPrimary = session.supplySets.at(child.primary);
+          if (primary.required != childPrimary.required)
+            return emitError(domain.location.value_or(module.getLoc()))
+                   << "composite primary supplies with different required "
+                      "functions "
+                      "are not implemented (IEEE 1801-2018 4.5.5.3/6.16): "
+                   << childName;
+          for (auto &function : primary.required) {
+            unsigned a = composition.findLeader(
+                initial.functions.at(domain.primary + "." + function));
+            unsigned b = composition.findLeader(
+                initial.functions.at(child.primary + "." + function));
+            if (a != b && constrained[a] && constrained[b])
+              return emitError(domain.location.value_or(module.getLoc()))
+                     << "composite primary supplies are not electrically "
+                        "equivalent "
+                        "(IEEE 1801-2018 6.16): "
+                     << name << " and " << childName << " function "
+                     << function;
+            std::optional<unsigned> source =
+                constrained[a] ? constrained[a] : constrained[b];
+            constrained[composition.join(a, b)] = source;
+            compositionLinks.emplace_back(
+                session.function(domain.primary, function),
+                session.function(child.primary, function));
+          }
+        }
+      }
+      if (!compositionLinks.empty()) {
+        equivalences = originalEquivalences;
+        equivalences.insert(equivalences.end(), compositionLinks.begin(),
+                            compositionLinks.end());
+        resolved = resolveSupplies(
+            session.nets, session.supplyPortInfo, functions,
+            session.supplyBindings, equivalences,
+            [&](const llvm::Twine &message) { supplyError = message.str(); });
+        if (failed(resolved))
+          return module.emitError() << supplyError;
+      }
+    }
+  }
   auto &supplies = *resolved;
   auto rootFor = [&](const SupplyObject &object) {
     if (object.kind == SupplyObject::Function)
@@ -1932,6 +2087,8 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
   };
   std::map<std::string, DomainSupplies> domainSupplies;
   for (auto &[name, domain] : session.domains) {
+    if (domain.composite)
+      continue;
     unsigned power = supplies.functions.at(domain.primary + ".power");
     unsigned ground = supplies.functions.at(domain.primary + ".ground");
     std::optional<unsigned> input;
@@ -2104,6 +2261,17 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
                                        SymbolTable::Visibility::Private);
   }
   for (auto &[name, domain] : session.domains) {
+    if (domain.composite) {
+      SmallVector<Attribute> children;
+      for (auto &child : domain.subdomains)
+        children.push_back(FlatSymbolRefAttr::get(module.getContext(), child));
+      upf::UPFCompositeDomainOp::create(
+          builder, domain.location.value_or(module.getLoc()),
+          builder.getStringAttr(name),
+          builder.getArrayAttr(children),
+          FlatSymbolRefAttr::get(module.getContext(), domain.primary));
+      continue;
+    }
     llvm::SmallVector<Attribute> elements, excluded;
     for (auto &element : domain.elements)
       elements.push_back(builder.getStringAttr(element));

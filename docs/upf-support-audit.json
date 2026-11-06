@@ -18,8 +18,8 @@
     "cell_tcl_commands": 6,
     "query_tcl_commands": 5,
     "total_tcl_commands": 68,
-    "registered_tcl_commands": 17,
-    "unregistered_tcl_commands": 51,
+    "registered_tcl_commands": 18,
+    "unregistered_tcl_commands": 50,
     "enumerated_hdl_functions": 25,
     "available_hdl_functions": 9,
     "unavailable_hdl_functions": 16
@@ -160,9 +160,21 @@
     {
       "clause": "6.16",
       "command": "create_composite_domain",
-      "status": "unsupported",
-      "missing": "Command is not registered; its functionality is not implemented.",
-      "workstream": "domain_and_attributes"
+      "status": "partial",
+      "workstream": "domain_and_attributes",
+      "accepted_options": [
+        "-subdomains",
+        "-supply",
+        "-update"
+      ],
+      "unsupported_options": [],
+      "limits": "Compiler-only containers with nested/empty membership, additive updates, transactional cycle/namespace checks and primary-only supply handles. Required physical functions propagate to/among unbound primaries after checking preexisting concrete equivalence; unused well bindings, set identities and state catalogs remain distinct. Currently requires matching required-function sets. Deferred strategy/connectivity fanout and declared functional equivalence remain unsupported and explicitly reject.",
+      "implementation": [
+        "lib/UPF/Execute.cpp",
+        "include/talos/Dialect/UPF/UPFOps.td",
+        "lib/Dialect/UPF/UPFDialect.cpp",
+        "lib/UPF/Elaborate.cpp"
+      ]
     },
     {
       "clause": "6.17",
@@ -194,15 +206,15 @@
         "-supply",
         "-update",
         "-exclude_elements",
-        "-atomic"
+        "-atomic",
+        "-subdomains"
       ],
       "unsupported_options": [
-        "-subdomains",
         "-define_func_type",
         "-boundary_supplies",
         "-available_supplies"
       ],
-      "limits": "Explicit module-instance selections, deferred and empty extents, additive transactional updates, aggregate exclusions and globally resolved nested/donut ownership. Explicit descendant re-entry survives ancestor exclusions; inheritance stops at another domain boundary. Existing handle identities, bindings, catalogs and strategies survive updates. Empty effective extents avoid corruption/snapshot machinery but retain physical switching and explicit state catalogs. Base-only atomic domains protect the normalized minimum extent after all updates, with explicit holes and protected re-entry. Composite domains, hard-macro model selections, available/boundary supplies and PG function-type definitions remain unsupported. Per-path isolation across lower or multiple boundaries is still rejected.",
+      "limits": "Explicit module-instance selections, deferred and empty extents, additive transactional updates, aggregate exclusions and globally resolved nested/donut ownership. Explicit descendant re-entry survives ancestor exclusions; inheritance stops at another domain boundary. Existing handle identities, bindings, catalogs and strategies survive updates. Empty effective extents avoid corruption/snapshot machinery but retain physical switching and explicit state catalogs. Base-only atomic domains protect the normalized minimum extent after all updates, with explicit holes and protected re-entry. The -subdomains form creates compiler-only composite containers with the limits listed for create_composite_domain; a deferred declaration may become a container before physical-only options are used. Hard-macro model selections, available/boundary supplies and PG function-type definitions remain unsupported. Per-path isolation across lower or multiple boundaries is still rejected.",
       "implementation": [
         "lib/UPF/Execute.cpp"
       ]
@@ -915,7 +927,7 @@
         "8.3"
       ],
       "missing": [
-        "Composite domains and aggregation of multiple domains",
+        "Deferred transactional strategy/connectivity fanout to final composite membership, differing required-function set propagation and declared functional equivalence",
         "Available/boundary supplies and function-type definition",
         "Design-top coverage validation and anonymous hard-macro domains; current compatibility behavior leaves unclaimed RTL outside declared intent"
       ]
@@ -1118,7 +1130,7 @@
     {
       "id": 4,
       "status": "in_progress",
-      "scope": "Domain declaration updates, empty extents, aggregate exclusions, nested partitioning and atomic minimum extents; composite domains and supply availability remain.",
+      "scope": "Domain updates, empty/nested/donut/atomic extents and compiler-only composite supply composition; deferred composite strategy fanout and supply availability remain.",
       "completed": [
         {
           "id": "4a",
@@ -1201,10 +1213,37 @@
           ],
           "review": "Independent subagent approved IEEE1801 phase-normalized atomic semantics and LRM hierarchy/scheduling, compiler-only typed metadata, transactional option validation, ownership checks, mutation after full validation and coverage. Independently ran repeated-resolution/canonicalization/CSE and invalid-diagnostic MLIR tests, including two-atomic-hole and direct-re-entry cases. No remaining review blockers.",
           "validation": "Four targeted lit tests and all 220 unique UPF/simulation-supply regression tests pass. Seven selected IEEE1801 clauses pass in native and bytecode tiers (14 cases). Coverage includes normalized deferred atomic bases, hole updates, ordering, invalid refinements, atomic/atomic overlap and explicit re-entry protection."
+        },
+        {
+          "id": "4d",
+          "status": "complete",
+          "scope": "Typed compiler-only composite containers, deferred classification, nested/empty memberships, transactional updates/cycle checks and required-function physical supply composition with preserved catalog provenance",
+          "clauses": [
+            "4.5.4.7",
+            "4.5.5.3",
+            "5.10",
+            "6.16",
+            "6.20",
+            "8.3.2",
+            "8.3.3"
+          ],
+          "runtime_changes": false,
+          "tests": [
+            "test/Driver/upf-composite-domain.test",
+            "test/Driver/upf-composite-frontend.test",
+            "test/Driver/upf-composite-supply-errors.test",
+            "test/Driver/upf-composite-unbound.test",
+            "test/Dialect/UPF/composite-domain.mlir",
+            "test/Dialect/UPF/composite-domain-invalid.mlir",
+            "test/Conversion/upf-composite-domain.mlir",
+            "test/Conformance/IEEE1801/6.16.sv"
+          ],
+          "review": "Independent subagent approved UPF/LRM correctness, required-function equivalence, physical propagation separate from catalog provenance, deferred classification/presence tracking, transactional cycles, typed symbol ownership and LLVM IntEqClasses use. Independently ran MLIR verification/round-trip/canonicalization/CSE, diagnostic and no-runtime-machinery lowering tests plus bytecode catalog-isolation execution. No remaining review blockers for this explicitly partial scope.",
+          "validation": "Seven targeted composite lit tests and all 227 unique UPF/simulation-supply regression tests pass. Nine selected IEEE1801 clauses pass in native and bytecode tiers (18 cases). Clause 6.16 promoted from XFAIL to SINCE 0.2.0. Coverage includes unbound-container propagation from a supplied child through nested siblings, transitive concrete-source conflicts, distinct unused wells, preserved catalogs and no container runtime monitor."
         }
       ],
       "remaining": [
-        "Composite domains",
+        "Composite deferred transactional strategy/connectivity fanout and declared equivalence",
         "Available/boundary supplies and function-type definition",
         "Design-top coverage validation and anonymous hard-macro domains"
       ]

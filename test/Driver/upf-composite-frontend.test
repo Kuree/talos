@@ -1,0 +1,14 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-composite-domain.test %t
+// RUN: cp %S/Inputs/upf/assertions.tcl %t/assertions.tcl
+// RUN: talos --upf %t/power.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.mlir
+// RUN: talos-opt %t.mlir --symbol-dce --verify-each | FileCheck %s
+// RUN: talos --upf %t/power.upf -O3 -emit-sim --mlir-verify-each %t/design.sv -o - | FileCheck %s --check-prefix=LOWER --implicit-check-not=__upf_top.C.monitor --implicit-check-not=__upf_top.Base.monitor --implicit-check-not=upf.composite_domain
+// The compiler-only container preserves identity and child symbol references;
+// it does not introduce a physical extent, epoch, guard, or corruption monitor.
+// CHECK-DAG: upf.composite_domain @top.Base subdomains [@top.P] primary @"/top/Base.primary"
+// CHECK-DAG: upf.composite_domain @top.C subdomains [@top.Base, @top.Q] primary @"/top/C.primary"
+// CHECK-DAG: upf.composite_domain @top.Empty subdomains [] primary @"/top/Empty.primary"
+// CHECK-DAG: upf.composite_domain @top.EmptyAlias subdomains [] primary @"/top/EmptyAlias.primary"
+// LOWER-DAG: __upf_top.P.monitor
+// LOWER-DAG: __upf_top.Q.monitor

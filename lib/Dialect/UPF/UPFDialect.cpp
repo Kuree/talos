@@ -15,6 +15,68 @@
 #define GET_OP_CLASSES
 #include "talos/Dialect/UPF/UPFOps.cpp.inc"
 namespace talos::upf {
+static mlir::Operation *lookupDomain(mlir::SymbolTableCollection &symbols,
+                                     mlir::Operation *from,
+                                     mlir::FlatSymbolRefAttr name) {
+  auto *domain = symbols.lookupNearestSymbolFrom(from, name);
+  return mlir::isa_and_nonnull<UPFDomainOp, UPFCompositeDomainOp>(domain)
+             ? domain
+             : nullptr;
+}
+static mlir::FlatSymbolRefAttr domainPrimary(mlir::Operation *domain) {
+  if (auto physical = mlir::dyn_cast<UPFDomainOp>(domain))
+    return physical.getPrimaryAttr();
+  return mlir::cast<UPFCompositeDomainOp>(domain).getPrimaryAttr();
+}
+mlir::LogicalResult UPFCompositeDomainOp::verify() {
+  llvm::DenseSet<mlir::Attribute> seen;
+  for (auto child : getSubdomains())
+    if (!seen.insert(child).second)
+      return emitOpError("composite subdomain references must be unique");
+  return mlir::success();
+}
+mlir::LogicalResult
+UPFCompositeDomainOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
+  auto primary =
+      symbols.lookupNearestSymbolFrom<UPFSupplySetOp>(*this, getPrimaryAttr());
+  if (!primary || primary.getStrategyAttr() ||
+      primary.getOwnerAttr() !=
+          mlir::FlatSymbolRefAttr::get(getContext(), getSymName()))
+    return emitOpError(
+        "composite primary must reference its own supply-set handle");
+  llvm::SmallVector<mlir::Attribute> work(getSubdomains().getValue());
+  llvm::DenseSet<mlir::Operation *> seen;
+  while (!work.empty()) {
+    auto ref = mlir::cast<mlir::FlatSymbolRefAttr>(work.pop_back_val());
+    auto *child = lookupDomain(symbols, *this, ref);
+    if (!child)
+      return emitOpError("references an unknown composite subdomain: ") << ref;
+    if (child == getOperation())
+      return emitOpError("cycle in composite domain composition");
+    if (!seen.insert(child).second)
+      continue;
+    if (auto container = mlir::dyn_cast<UPFCompositeDomainOp>(child))
+      work.append(container.getSubdomains().begin(),
+                  container.getSubdomains().end());
+    auto childPrimary = domainPrimary(child);
+    if (!childPrimary)
+      return emitOpError("subdomain requires a resolved primary supply set");
+    auto supply =
+        symbols.lookupNearestSymbolFrom<UPFSupplySetOp>(child, childPrimary);
+    if (!supply)
+      return emitOpError("subdomain requires a resolved primary supply set");
+    if (primary.getRequired().size() != supply.getRequired().size() ||
+        !llvm::all_of(primary.getRequired(), [&](mlir::Attribute function) {
+          auto name = mlir::cast<mlir::StringAttr>(function).getValue();
+          return llvm::is_contained(supply.getRequired(), function) &&
+                 primary.getFunctions().get(name) ==
+                     supply.getFunctions().get(name);
+        }))
+      return emitOpError("composite and subdomain primary required functions "
+                         "must be electrically equivalent");
+  }
+  return mlir::success();
+}
 mlir::LogicalResult
 DomainExtentAttr::verify(llvm::function_ref<mlir::InFlightDiagnostic()> error,
                          mlir::ArrayAttr included, mlir::ArrayAttr excluded) {
@@ -197,12 +259,13 @@ UPFSupplySetOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
     if (!symbols.lookupNearestSymbolFrom<UPFSupplyOp>(
             *this, mlir::cast<mlir::FlatSymbolRefAttr>(binding.getValue())))
       return emitOpError("references an unknown function supply root");
-  if (auto owner = getOwnerAttr();
-      owner && !symbols.lookupNearestSymbolFrom<UPFDomainOp>(*this, owner))
+  if (auto owner = getOwnerAttr(); owner && !lookupDomain(symbols, *this, owner))
     return emitOpError("references an unknown owning domain");
   if (auto strategy = getStrategyAttr()) {
     auto owner =
         symbols.lookupNearestSymbolFrom<UPFDomainOp>(*this, getOwnerAttr());
+    if (!owner)
+      return emitOpError("retention strategy requires a physical owning domain");
     bool found = false;
     if (auto retentions = owner.getRetentionsAttr())
       for (auto attribute : retentions) {
@@ -394,13 +457,12 @@ UPFDomainOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
         continue;
       bool otherPrimary = false;
       if (auto owner = current.getOwnerAttr()) {
-        auto domain =
-            symbols.lookupNearestSymbolFrom<UPFDomainOp>(*this, owner);
+        auto *domain = lookupDomain(symbols, *this, owner);
         if (!domain)
           return emitOpError("policy set references an unknown owning domain");
         otherPrimary =
-            current != set && domain.getPrimaryAttr() &&
-            domain.getPrimaryAttr().getValue() == current.getSymName();
+            current != set && domainPrimary(domain) &&
+            domainPrimary(domain).getValue() == current.getSymName();
       }
       if (!otherPrimary && !current.getStrategyAttr())
         applicable.insert(current.getSymName());
@@ -425,9 +487,8 @@ UPFDomainOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
           return emitOpError(
               "strategy-local supply catalogs are not domain-wide policies");
         if (auto owner = policy.getOwnerAttr(); owner && ref != primary) {
-          auto domain =
-              symbols.lookupNearestSymbolFrom<UPFDomainOp>(*this, owner);
-          if (!domain || domain.getPrimaryAttr() == ref)
+          auto *domain = lookupDomain(symbols, *this, owner);
+          if (!domain || domainPrimary(domain) == ref)
             return emitOpError("another domain's primary handle is not a "
                                "policy for this domain");
         }

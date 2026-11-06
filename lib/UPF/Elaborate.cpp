@@ -1308,11 +1308,14 @@ struct ElaborateUPFPass
         getOperation().getOps<upf::UPFSupplyOp>());
     SmallVector<upf::UPFSupplySetOp> sets(
         getOperation().getOps<upf::UPFSupplySetOp>());
+    SmallVector<upf::UPFCompositeDomainOp> composites(
+        getOperation().getOps<upf::UPFCompositeDomainOp>());
     bool accesses = false;
     getOperation().walk([&](Operation *op) {
       accesses |= isa<sim::SimSupplyControlOp, sim::SimSupplyReadOp>(op);
     });
-    if (domains.empty() && supplies.empty() && sets.empty() && !accesses) {
+    if (domains.empty() && composites.empty() && supplies.empty() &&
+        sets.empty() && !accesses) {
       getOperation()->removeAttr(upf::partialOnTranslationName);
       return;
     }
@@ -1351,6 +1354,8 @@ struct ElaborateUPFPass
       signalPassFailure();
       return;
     }
+    for (auto composite : composites)
+      composite.erase();
     for (auto set : sets)
       set.erase();
     for (auto supply : supplies)

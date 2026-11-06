@@ -1,0 +1,26 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-composite-domain.test %t
+// RUN: %split-file %s %t/intent
+// RUN: cp %S/Inputs/upf/assertions.tcl %t/assertions.tcl
+// RUN: not talos --upf %t/power.upf --upf %t/intent/conflict.upf -emit-slang %t/design.sv -o - 2>&1 | FileCheck %s --check-prefix=CONFLICT
+// RUN: not talos --upf %t/power.upf --upf %t/intent/requirements.upf -emit-slang %t/design.sv -o - 2>&1 | FileCheck %s --check-prefix=REQUIRED
+// RUN: not talos --upf %t/power.upf --upf %t/intent/transitive.upf -emit-slang %t/design.sv -o - 2>&1 | FileCheck %s --check-prefix=CONFLICT
+// Distinct concrete required rails do not become equivalent by composition.
+// Function requirements inferred from a bare-net expression count as usage.
+// CONFLICT: composite primary supplies are not electrically equivalent
+// CONFLICT-SAME: function power
+// REQUIRED: composite primary supplies with different required functions are not implemented
+
+//--- conflict.upf
+create_supply_net OTHER
+create_supply_set DIFFERENT -function {power OTHER} -function {ground G}
+create_power_domain R -elements u2 -supply {primary DIFFERENT}
+create_composite_domain C -update -subdomains R
+
+//--- requirements.upf
+add_power_state Q.primary -state {EXTRA -supply_expr {power == FULL_ON && N2 == FULL_ON} -simstate NORMAL}
+
+//--- transitive.upf
+create_supply_net OTHER
+create_supply_set DIFFERENT -function {power OTHER} -function {ground G}
+create_composite_domain OtherContainer -subdomains Base -supply {primary DIFFERENT}

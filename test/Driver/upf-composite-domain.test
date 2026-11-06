@@ -1,0 +1,97 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: cp %S/Inputs/upf/assertions.tcl %t/assertions.tcl
+// RUN: talos --upf %t/power.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/power.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/power.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 4.5.5.3/5.10/6.16/6.20/8.3.3: nested containers
+// propagate required physical supplies while retaining distinct catalogs.
+// Different unused well bindings remain distinct. Empty containers own no RTL.
+// CHECK: composite physical supplies and catalog isolation passed
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1'b1;
+endmodule
+module top;
+  import UPF::*;
+  wire a, b, c;
+  logic hold = 0;
+  leaf u0(a), u1(b), u2(c);
+  initial begin
+    if (!supply_on("/top/VDD", 1.0) || !supply_on("/top/G", 0.0) ||
+        !supply_on("/top/N1", 1.2) || !supply_on("/top/N2", 0.7))
+      $fatal(1, "composite supply startup failed");
+    #1;
+    if ({a,b,c} !== 3'b111) $fatal(1, "composite imported a supplier's catalog");
+`ifdef UNBOUND
+    if (get_supply_state(get_supply_value("/top/C.primary.nwell")) != OFF)
+      $fatal(1, "composition supplied an unused function");
+`else
+    if (get_supply_voltage(get_supply_value("/top/C.primary.nwell")) != 1.2)
+      $fatal(1, "composition lost its existing unused well");
+`endif
+    if (get_supply_voltage(get_supply_value("/top/Q.primary.nwell")) != 0.7)
+      $fatal(1, "composition merged unused well rails");
+    if (!supply_off("/top/VDD")) $fatal(1, "composite power loss failed");
+    #1;
+    if ({a,b,c} !== 3'bxx1) $fatal(1, "composite physical propagation failed");
+    if (!supply_on("/top/VDD", 0.8)) $fatal(1, "composite repower failed");
+    #1;
+    if ({a,b,c} !== 3'b1x1) $fatal(1, "composition replaced a child's catalog");
+    if (!supply_on("/top/VDD", 1.0) || !supply_off("/top/N1") ||
+        !supply_off("/top/N2")) $fatal(1, "unused function change failed");
+    #1;
+    if ({a,b,c} !== 3'b111) $fatal(1, "unused wells became required");
+    $display("composite physical supplies and catalog isolation passed");
+    $finish;
+  end
+endmodule
+
+//--- power.upf
+source [file join [file dirname [info script]] assertions.tcl]
+foreach rail {VDD G N1 N2} {create_supply_net $rail}
+create_supply_set CORE -function {power VDD} -function {ground G} -function {nwell N1}
+create_supply_set CHILD -function {power VDD} -function {ground G} -function {nwell N2}
+add_power_state CORE -state {ON -supply_expr {power == {FULL_ON 0.8} && ground == {FULL_ON 0}}}
+add_power_state CHILD -state {ON -supply_expr {power == {FULL_ON 1.0} && ground == {FULL_ON 0}}}
+create_power_domain P -elements u0
+create_power_domain Q -elements u1 -supply {primary CHILD}
+assert_equal [create_composite_domain Base -subdomains {P P}] {}
+# No elements option was given: an update can classify this as a container.
+create_power_domain C
+set supplyargs {-supply {primary CORE}}
+if {[info exists unbound_composite]} {set supplyargs {}}
+assert_equal [create_power_domain C -update -subdomains {Base Q Base} {*}$supplyargs] {}
+add_power_state C.primary -state {ON -supply_expr {power == {FULL_ON 0.9} && ground == {FULL_ON 0}}}
+assert_equal [create_composite_domain C -update -subdomains Q] {}
+assert_equal [create_composite_domain Empty] {}
+assert_equal [create_power_domain EmptyAlias -subdomains {}] {}
+expect_error {create_composite_domain C -subdomains P} {*duplicate power domain*}
+expect_error {create_composite_domain Missing -update} {*unknown power domain*}
+expect_error {create_composite_domain Retry -subdomains Missing} {*unknown composite subdomain*}
+assert_equal [create_composite_domain Retry] {}
+expect_error {create_composite_domain Base -update -subdomains C} {*cycle*}
+expect_error {create_composite_domain C -update -subdomains C} {*cannot contain itself*}
+expect_error {create_composite_domain C -update -subdomains Missing -supply {primary CHILD}} {*unknown composite subdomain*}
+expect_error {create_composite_domain BadHandle -subdomains P -supply {extra CORE}} {*only have the primary*}
+create_supply_net BadHandle
+create_power_domain ExplicitEmpty -elements {}
+expect_error {create_power_domain ExplicitEmpty -update -subdomains P} {*conflict with an existing physical*}
+create_power_domain PriorExclusion -exclude_elements u0
+expect_error {create_power_domain PriorExclusion -update -subdomains P} {*conflict with an existing physical*}
+create_power_domain PriorExclusion -update -elements {}
+create_power_domain PriorEmptyExclusion -exclude_elements {}
+expect_error {create_power_domain PriorEmptyExclusion -update -subdomains P} {*conflict with an existing physical*}
+create_power_domain PriorEmptyExclusion -update -elements {}
+expect_error {create_power_domain Mixed -elements {} -subdomains P} {*do not accept element selections*}
+expect_error {create_power_domain AtomicContainer -atomic -subdomains P} {*do not accept element selections*}
+expect_error {create_power_domain C -update -elements {}} {*do not accept element selections*}
+# Deferred strategy fanout remains a separate implementation chunk.
+expect_error {set_retention R -domain C -retention_condition hold} {*composite domain is not implemented*}
+expect_error {set_isolation I -domain C -isolation_signal hold -clamp_value 0 -applies_to outputs -location parent} {*composite domain is not implemented*}
+expect_error {create_supply_net RetryNet -domain C} {*composite domain is not implemented*}
+create_supply_net RetryNet
