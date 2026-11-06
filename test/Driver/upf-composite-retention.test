@@ -1,0 +1,83 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: cp %S/Inputs/upf/assertions.tcl %t/assertions.tcl
+// RUN: talos --upf %t/power.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/power.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/power.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 5.10/6.16/6.50: common deltas reach late leaves, while
+// local refinements and independent handle catalogs stay on their own leaf.
+// CHECK: composite retention propagation passed
+
+//--- design.sv
+module bank(input logic clk, d);
+  logic a, b, c;
+  always @(posedge clk) begin a <= d; b <= d; c <= d; end
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, d = 1, rtc = 0;
+  bank u0(clk,d), u1(clk,d), u2(clk,d), outside(clk,d);
+  initial begin
+    if (!supply_on("/top/VDD",1.0) || !supply_on("/top/G",0.0) ||
+        !supply_on("/top/RP.power",1.2) || !supply_on("/top/RQ.power",1.1) ||
+        !supply_on("/top/RR.power",1.0)) $fatal(1,"supplies");
+    #1; clk = 1;
+    #1; clk = 0; rtc = 1; d = 0;
+    #1; clk = 1;
+    #1; clk = 0;
+    if ({u0.a,u0.b,u0.c,u1.a,u1.b,u1.c,u2.a,u2.b,u2.c,
+         outside.a,outside.b,outside.c} !== 12'b111_100_101_000)
+      $fatal(1,"late/common/local retention selection");
+    if (!supply_off("/top/RQ.power")) $fatal(1,"retention loss");
+    #1;
+    if ({u0.a,u0.b,u0.c,u1.a,u1.b,u1.c,u2.a,u2.b,u2.c}
+        !== 9'b111_x00_101) $fatal(1,"leaf retention handles were aliased");
+    if (!supply_on("/top/RQ.power",1.1) || !supply_off("/top/VDD"))
+      $fatal(1,"primary loss");
+    #1;
+    if ({u0.a,u0.b,u0.c,u1.a,u1.b,u1.c,u2.a,u2.b,u2.c}
+        !== 9'bxxx_xxx_xxx) $fatal(1,"primary output masking");
+    if (!supply_on("/top/VDD",1.0)) $fatal(1,"primary restore");
+    #1;
+    if ({u0.a,u0.b,u0.c,u1.a,u1.b,u1.c,u2.a,u2.b,u2.c}
+        !== 9'b111_xxx_1x1) $fatal(1,"retained backing or private catalog lost");
+    rtc = 0; clk = 1;
+    #1;
+    if ({u0.a,u0.b,u0.c,u1.a,u1.b,u1.c,u2.a,u2.b,u2.c}
+        !== 9'b000_000_000) $fatal(1,"retention release");
+    $display("composite retention propagation passed");
+    $finish;
+  end
+endmodule
+
+//--- power.upf
+source [file join [file dirname [info script]] assertions.tcl]
+foreach rail {VDD G} {create_supply_net $rail}
+create_supply_set CORE -function {power VDD} -function {ground G}
+foreach set {RP RQ RR} {create_supply_set $set -function {ground G}}
+foreach {name element} {P u0 Q u1 R u2} {create_power_domain $name -elements $element}
+create_composite_domain Inner -subdomains P
+create_composite_domain C -subdomains {Inner P} -supply {primary CORE}
+add_power_state C.primary -state {ON -supply_expr {power == {FULL_ON 0.9} && ground == FULL_ON}}
+set_retention KEEP -domain C -elements {u0/a u1/a u2/a} -retention_condition rtc
+associate_supply_set RP -handle P.KEEP.retention_supply
+add_power_state P.KEEP.retention_supply -state {ON -supply_expr {power == {FULL_ON 1.2} && ground == FULL_ON}}
+add_power_state P.KEEP.primary_supply -state {ON -supply_expr {power == {FULL_ON 1.0} && ground == FULL_ON}}
+set_retention KEEP -domain P -update -elements u0/b
+set_retention KEEP -domain C -update -elements {u0/c u1/c u2/c}
+# Updating an inner container must also affect commands issued on its ancestor.
+create_composite_domain Inner -update -subdomains Q
+associate_supply_set RQ -handle Q.KEEP.retention_supply
+add_power_state Q.KEEP.retention_supply -state {ON -supply_expr {power == {FULL_ON 1.1} && ground == FULL_ON}}
+create_composite_domain C -update -subdomains R
+associate_supply_set RR -handle R.KEEP.retention_supply
+set_retention KEEP -domain C -update -exclude_elements u1/c
+expect_error {create_supply_set C.KEEP.retention_supply -update} {*unknown supply set or handle*}
+# A first composite-targeted update uses existing leaf objects, not C history.
+create_composite_domain View -subdomains {P Q R}
+assert_equal [set_retention KEEP -domain View -update -elements {}] {}
+# Supplier conflicts reject the entire broadcast and keep each private catalog.
+expect_error {set_retention KEEP -domain C -update -retention_supply RP} {*cannot associate more than one*}

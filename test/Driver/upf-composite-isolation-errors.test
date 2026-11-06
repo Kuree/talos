@@ -1,0 +1,10 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-composite-isolation.test %t
+// RUN: %split-file %s %t/intent
+// RUN: not talos --upf %t/intent/bad.upf --upf %t/power.upf -emit-sim %t/design.sv -o - 2>&1 | FileCheck %s
+// Per-leaf boundary legality is still checked during simulation elaboration.
+// A scalar common control inside one target domain must reject lowering.
+// CHECK: parent isolation requires a control outside the switchable domain
+
+//--- bad.upf
+set bad_control x/u/q

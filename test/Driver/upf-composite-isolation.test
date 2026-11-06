@@ -1,0 +1,65 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/power.upf -O3 --mlir-verify-each %t/design.sv -o %t.native
+// RUN: %t.native | FileCheck %s
+// RUN: talos --upf %t/power.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// RUN: talos --upf %t/power.upf -emit-slang --mlir-verify-each %t/design.sv -o - | FileCheck %s --check-prefix=IR
+// IEEE 1801-2018 6.16/6.45: each physical boundary receives isolation,
+// including late members. Resolve controls in the original caller scope,
+// independently of each leaf domain's HDL scope and parent placement.
+// CHECK: composite parent isolation passed
+// IR-COUNT-3: isolation_control = "top.iso"
+
+//--- design.sv
+module leaf(input logic clk,d, output logic q);
+  always @(posedge clk) q <= d;
+endmodule
+module shell(input logic clk,d, output wire q);
+  logic iso = 1;
+  leaf u(clk,d,q);
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0,d = 1,iso = 0;
+  wire a,b,c,e;
+  shell x(clk,d,a),y(clk,d,b),z(clk,d,c);
+  leaf outside(clk,d,e);
+  initial begin
+    if (!supply_on("/top/VDD") || !supply_on("/top/G",0.0)) $fatal(1,"supplies");
+    #1; clk=1;
+    #1; clk=0;
+    if ({a,b,c,e} !== 4'b1111) $fatal(1,"caller scope");
+    iso=1;
+    #1;
+    if ({a,b,c,e} !== 4'b0001) $fatal(1,"late isolation members");
+    iso=0;
+    #1;
+    if ({a,b,c,e} !== 4'b1111) $fatal(1,"isolation release");
+    if (!supply_off("/top/VDD")) $fatal(1,"primary loss");
+    #1;
+    if ({a,b,c,e} !== 4'bxxx1) $fatal(1,"unisolated loss");
+    iso=1;
+    #1;
+    if ({a,b,c,e} !== 4'b0001) $fatal(1,"parent isolation during loss");
+    $display("composite parent isolation passed");
+    $finish;
+  end
+endmodule
+
+//--- power.upf
+foreach rail {VDD G} {create_supply_net $rail}
+create_supply_set CORE -function {power VDD} -function {ground G}
+foreach {scope domain} {x P y Q z R} {
+  set_scope /$scope
+  create_power_domain $domain -elements u
+}
+set_scope /
+create_composite_domain Inner -subdomains x/P
+create_composite_domain C -subdomains {Inner x/P} -supply {primary CORE}
+set signal iso
+if {[info exists bad_control]} {set signal $bad_control}
+set_isolation ISO -domain C -isolation_signal $signal -clamp_value 0 -applies_to outputs -location parent
+set signal missing_after_the_call
+create_composite_domain Inner -update -subdomains y/Q
+create_composite_domain C -update -subdomains z/R

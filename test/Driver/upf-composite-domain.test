@@ -90,8 +90,6 @@ create_power_domain PriorEmptyExclusion -update -elements {}
 expect_error {create_power_domain Mixed -elements {} -subdomains P} {*do not accept element selections*}
 expect_error {create_power_domain AtomicContainer -atomic -subdomains P} {*do not accept element selections*}
 expect_error {create_power_domain C -update -elements {}} {*do not accept element selections*}
-# Deferred strategy fanout remains a separate implementation chunk.
-expect_error {set_retention R -domain C -retention_condition hold} {*composite domain is not implemented*}
-expect_error {set_isolation I -domain C -isolation_signal hold -clamp_value 0 -applies_to outputs -location parent} {*composite domain is not implemented*}
+# Physical supply declarations still require a physical domain.
 expect_error {create_supply_net RetryNet -domain C} {*composite domain is not implemented*}
 create_supply_net RetryNet

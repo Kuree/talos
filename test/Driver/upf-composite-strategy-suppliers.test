@@ -1,0 +1,31 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: cp %S/Inputs/upf/assertions.tcl %t/assertions.tcl
+// RUN: talos --upf %t/power.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.mlir | FileCheck %s
+// RUN: talos-opt %t.mlir --verify-each | FileCheck %s --check-prefix=IR
+// Same-command predefined primary handles are valid supplier references.
+// Resolve identity once, validate after all leaf handles are staged, and keep
+// the result independent of leaf traversal order. Own retention self-aliases
+// remain illegal; a failure leaks no leaf handles.
+// CHECK: staged composite strategy suppliers passed
+// IR-DAG: upf.supply_set @"/top/Z.KEEP.retention_supply" {{.*}}binding = @"/top/Z.KEEP.primary_supply"
+// IR-DAG: upf.supply_set @"/top/A.KEEP.retention_supply" {{.*}}binding = @"/top/Z.KEEP.primary_supply"
+// IR-NOT: /top/A.FAILED.retention_supply
+
+//--- design.sv
+module top; logic hold; endmodule
+
+//--- power.upf
+source [file join [file dirname [info script]] assertions.tcl]
+foreach d {A Z Direct} {create_power_domain $d -elements {}}
+set_retention SELF -domain Direct -no_retention -retention_supply Direct.SELF.primary_supply
+expect_error {set_retention BAD -domain Direct -no_retention -retention_supply Direct.BAD.retention_supply} {*own predefined handle*}
+create_composite_domain C -subdomains {Z A}
+set_retention KEEP -domain C -no_retention -retention_supply Z.KEEP.primary_supply
+expect_error {set_retention FAILED -domain C -no_retention -retention_supply Missing} {*unknown retention supply set*}
+expect_error {create_supply_set A.FAILED.retention_supply -update} {*unknown supply set or handle*}
+expect_error {create_supply_set Z.FAILED.retention_supply -update} {*unknown supply set or handle*}
+expect_error {create_supply_set C.KEEP.retention_supply -update} {*unknown supply set or handle*}
+create_composite_domain Empty
+expect_error {set_retention BAD -domain Empty -no_retention -retention_supply Missing} {*unknown retention supply set*}
+puts {staged composite strategy suppliers passed}

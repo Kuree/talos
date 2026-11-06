@@ -168,7 +168,7 @@
         "-update"
       ],
       "unsupported_options": [],
-      "limits": "Compiler-only containers with nested/empty membership, additive updates, transactional cycle/namespace checks and primary-only supply handles. Required physical functions propagate to/among unbound primaries after checking preexisting concrete equivalence; unused well bindings, set identities and state catalogs remain distinct. Currently requires matching required-function sets. Deferred strategy/connectivity fanout and declared functional equivalence remain unsupported and explicitly reject.",
+      "limits": "Compiler-only containers with nested/empty membership, additive updates, transactional cycle/namespace checks and primary-only supply handles. Required physical functions propagate to/among unbound primaries after checking preexisting concrete equivalence; unused well bindings, set identities and state catalogs remain distinct. Currently requires matching required-function sets. Retention and the implemented parent-output isolation subset propagate transactional typed deltas to unique leaves, including late nested members. Leaf identities, independent handles/catalogs, direct local refinements and original caller scope/source order are preserved. Constructor additions that conflict with prior operations roll back. Connectivity/cell-mapping/level-shifter/repeater fanout, differing required-function sets and declared functional equivalence remain unsupported. Some boundary legality is still diagnosed during simulation lowering. Composite classification must precede strategy application.",
       "implementation": [
         "lib/UPF/Execute.cpp",
         "include/talos/Dialect/UPF/UPFOps.td",
@@ -505,7 +505,7 @@
         "-name_suffix",
         "-use_functional_equivalence"
       ],
-      "limits": "One parent-located output strategy per domain; scalar control and clamp 0/1. No input/inout or per-path selection, other locations, X/Z/latch/any clamps, strategy supplies, mapped cells or supply filtering for retention-powered outputs. diff_supply_only FALSE permits unconditional RET-powered output isolation.",
+      "limits": "One parent-located output strategy per domain; scalar control and clamp 0/1. No input/inout or per-path selection, other locations, X/Z/latch/any clamps, strategy supplies, mapped cells or supply filtering for retention-powered outputs. diff_supply_only FALSE permits unconditional RET-powered output isolation. Physical and composite targets support caller-scope control resolution independently of leaf creation scope; late members receive the common strategy transactionally. Boundary/control ownership checks remain in simulation elaboration. Isolation predefined supply handles remain unimplemented.",
       "implementation": [
         "lib/UPF/Execute.cpp"
       ]
@@ -566,7 +566,7 @@
         "-retention_ground_net",
         "-instance"
       ],
-      "limits": "Master/slave whole packed-register retention, one edge-sensitive writer, asynchronous edge lists and retained output supply support. Balloon save/restore syntax is stored but simulation is rejected. No latch/computed-event/partial/multiple/mixed writers, named-process selectors, general condition refinements or nondefault corruption parameters.",
+      "limits": "Master/slave whole packed-register retention, one edge-sensitive writer, asynchronous edge lists and retained output supply support. Balloon save/restore syntax is stored but simulation is rejected. No latch/computed-event/partial/multiple/mixed writers, named-process selectors, general condition refinements or nondefault corruption parameters. Physical and composite targets are supported with additive per-leaf updates and typed ordered provenance for later membership. Real leaf handles remain independent; no synthetic composite strategy handles are exposed. Compiler-only provenance is bounded to 1048576 work units.",
       "implementation": [
         "lib/UPF/Execute.cpp"
       ]
@@ -927,7 +927,7 @@
         "8.3"
       ],
       "missing": [
-        "Deferred transactional strategy/connectivity fanout to final composite membership, differing required-function set propagation and declared functional equivalence",
+        "Composite connectivity/cell-mapping/level-shifter/repeater fanout, differing required-function set propagation and declared functional equivalence; deferred domain classification after strategy use",
         "Available/boundary supplies and function-type definition",
         "Design-top coverage validation and anonymous hard-macro domains; current compatibility behavior leaves unclaimed RTL outside declared intent"
       ]
@@ -1130,7 +1130,7 @@
     {
       "id": 4,
       "status": "in_progress",
-      "scope": "Domain updates, empty/nested/donut/atomic extents and compiler-only composite supply composition; deferred composite strategy fanout and supply availability remain.",
+      "scope": "Domain extents, atomic/composite supply composition and transactional composite retention/parent-output isolation; remaining domain supply availability and composite operations are tracked separately.",
       "completed": [
         {
           "id": "4a",
@@ -1240,10 +1240,40 @@
           ],
           "review": "Independent subagent approved UPF/LRM correctness, required-function equivalence, physical propagation separate from catalog provenance, deferred classification/presence tracking, transactional cycles, typed symbol ownership and LLVM IntEqClasses use. Independently ran MLIR verification/round-trip/canonicalization/CSE, diagnostic and no-runtime-machinery lowering tests plus bytecode catalog-isolation execution. No remaining review blockers for this explicitly partial scope.",
           "validation": "Seven targeted composite lit tests and all 227 unique UPF/simulation-supply regression tests pass. Nine selected IEEE1801 clauses pass in native and bytecode tiers (18 cases). Clause 6.16 promoted from XFAIL to SINCE 0.2.0. Coverage includes unbound-container propagation from a supplied child through nested siblings, transitive concrete-source conflicts, distinct unused wells, preserved catalogs and no container runtime monitor."
+        },
+        {
+          "id": "4e",
+          "status": "complete",
+          "scope": "Typed transactional composite retention/current isolation propagation to unique physical leaves, ordered late-member contributions, independent leaf namespaces/catalogs, caller-scope resolution and bounded compiler provenance",
+          "clauses": [
+            "5.5",
+            "5.10",
+            "6.16",
+            "6.45",
+            "6.50",
+            "8.3.2",
+            "8.3.3",
+            "10.6.1.1",
+            "10.6.1.2",
+            "10.6.1.20"
+          ],
+          "runtime_changes": false,
+          "tests": [
+            "test/Driver/upf-composite-retention.test",
+            "test/Driver/upf-composite-isolation.test",
+            "test/Driver/upf-composite-strategy-transactions.test",
+            "test/Driver/upf-composite-strategy-suppliers.test",
+            "test/Driver/upf-composite-strategy-limits.test",
+            "test/Driver/upf-composite-retention-scopes.test",
+            "test/Driver/upf-composite-isolation-errors.test",
+            "test/Driver/upf-composite-domain.test"
+          ],
+          "review": "Independent subagent approved IEEE1801/LRM normalization, leaf identities and caller/creation scope, per-leaf deltas/catalogs, source-order validation, staged suppliers, transactional rollback, bounded compiler provenance and unchanged MLIR effects/scheduling/runtime ABI. Reviewer independently reproduced both reported corrections and ran the expanded Tcl transaction fixture plus emitted-IR resolution/canonicalization/CSE/verification/FileCheck, including isolation rollback and failed-provenance exclusion. No remaining review blockers for this supported subset.",
+          "validation": "Seven new targeted lit tests and all 234 unique UPF/simulation-supply regression tests pass. Added isolation scalar/history/membership rollback coverage passes in the updated transaction test. Ten selected IEEE1801 clauses produce 16 native/bytecode passes, two reference-only cases and two expected failures (remaining isolation features in clause 6.45); no unexpected results. IR tests verify leaf ownership/control paths, no leaked names/edits, and compatibility with canonicalize/CSE/verification."
         }
       ],
       "remaining": [
-        "Composite deferred transactional strategy/connectivity fanout and declared equivalence",
+        "Composite connectivity/cell-mapping/level-shifter/repeater fanout and declared equivalence; deferred domain classification after strategy use",
         "Available/boundary supplies and function-type definition",
         "Design-top coverage validation and anonymous hard-macro domains"
       ]

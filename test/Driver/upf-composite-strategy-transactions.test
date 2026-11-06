@@ -1,0 +1,87 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: cp %S/Inputs/upf/assertions.tcl %t/assertions.tcl
+// RUN: talos --upf %t/power.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.mlir | FileCheck %s
+// RUN: talos-opt %t.mlir --resolve-upf-domains --canonicalize --cse --verify-each | FileCheck %s --check-prefix=IR --implicit-check-not='isolation_name = "FAILED"'
+// IEEE 1801-2018 5.10/6.16: ordered deltas, leaf identity and atomic
+// rollback apply to membership changes as well as direct broadcasts.
+// CHECK: composite strategy transactions passed
+// IR-DAG: upf.composite_domain @top.Ordered subdomains [@top.P] primary
+// IR-DAG: upf.composite_domain @top.Late subdomains [@top.P, @top.Z] primary
+// IR-DAG: upf.composite_domain @top.Inner subdomains [@top.P, @top.Fresh] primary
+// IR-DAG: upf.domain @top.A {{.*}}name = "MERGE"{{.*}}elements = []
+// IR-DAG: upf.domain @top.B {{.*}}name = "MERGE"{{.*}}elements = []
+// IR-DAG: upf.composite_domain @top.IsoLate subdomains [@top.B, @top.Fresh] primary
+
+//--- design.sv
+module leaf; logic q; endmodule
+module top;
+  logic hold = 0, other = 0;
+  leaf dut();
+endmodule
+
+//--- power.upf
+source [file join [file dirname [info script]] assertions.tcl]
+foreach d {P Q Z A B ZBlock NoBase Fresh} {create_power_domain $d -elements {}}
+create_power_domain ZBlock -update -supply {BLOCKED}
+# An early common update cannot use a leaf base created later in source order.
+set_retention ORDER -domain P -no_retention
+create_composite_domain Ordered -subdomains P
+set_retention ORDER -domain Ordered -update -elements {}
+set_retention ORDER -domain Q -no_retention
+expect_error {create_composite_domain Ordered -update -subdomains Q} {*before its base declaration*}
+# A direct base that precedes the common update is valid, including late leaves.
+set_retention EARLY -domain P -no_retention
+set_retention EARLY -domain Z -no_retention
+create_composite_domain Late -subdomains P
+set_retention EARLY -domain Late -update -elements {}
+assert_equal [create_composite_domain Late -update -subdomains Z] {}
+expect_error {create_composite_domain Late -update -subdomains NoBase} {*unknown retention strategy*}
+assert_equal [set_retention EARLY -domain Late -update -elements {}] {}
+# A failure in the second leaf must remove handles and provenance in the first.
+create_composite_domain Bad -subdomains {P ZBlock}
+expect_error {set_retention BLOCKED -domain Bad -no_retention} {*conflicts with another object*}
+expect_error {create_supply_set P.BLOCKED.retention_supply -update} {*unknown supply set or handle*}
+# Roll back marks already applied by earlier records when a later record fails.
+create_composite_domain Inner -subdomains P
+create_composite_domain History -subdomains Inner
+set_retention DRAFT -domain History -elements {}
+set_retention DRAFT -domain History -update -retention_condition hold
+set_retention CONFLICT -domain P -no_retention
+set_retention CONFLICT -domain Fresh -no_retention
+create_composite_domain UpdateView -subdomains Inner
+set_retention CONFLICT -domain UpdateView -update -elements {}
+set_retention CONFLICT -domain Z -no_retention
+expect_error {create_composite_domain Inner -update -subdomains Z -supply {primary P.primary}} {*before its base declaration*}
+expect_error {create_supply_set Z.DRAFT.retention_supply -update} {*unknown supply set or handle*}
+# Both source records for DRAFT must still be replayable after the failure.
+assert_equal [create_composite_domain Inner -update -subdomains Fresh] {}
+create_supply_set Fresh.DRAFT.retention_supply -update
+# A conflicting nonaggregate field must undo otherwise valid aggregate edits.
+set_retention MERGE -domain A -elements {} -retention_condition hold
+set_retention MERGE -domain B -elements {} -retention_condition other
+create_composite_domain Merge -subdomains {A B}
+expect_error {set_retention MERGE -domain Merge -update -elements dut/q -retention_condition hold} {*condition refinement*}
+# Empty containers retain typed draft contributions for future leaves.
+create_composite_domain Empty
+set_retention EMPTY -domain Empty -elements {}
+set_retention EMPTY -domain Empty -update -retention_condition hold
+create_composite_domain Empty -update -subdomains Fresh
+# A common base conflicting with an existing direct leaf base rejects addition.
+create_composite_domain BaseFirst -subdomains P
+set_retention DUP -domain BaseFirst -no_retention
+set_retention DUP -domain Z -no_retention
+expect_error {create_composite_domain BaseFirst -update -subdomains Z} {*already exists*}
+# Isolation has separate scalar fields and must roll them back together.
+set isolation_args {-isolation_signal hold -clamp_value 0 -applies_to outputs -location parent}
+set_isolation EXISTING -domain Z {*}$isolation_args
+create_composite_domain IsoGroup -subdomains {A Z}
+expect_error {set_isolation FAILED -domain IsoGroup {*}$isolation_args} {*one isolation strategy per domain*}
+assert_equal [set_isolation SUCCESS -domain A {*}$isolation_args] {}
+# A failed broadcast must leave no common contribution for future members.
+create_composite_domain IsoGroup -update -subdomains Fresh
+create_composite_domain IsoLate -subdomains B
+set_isolation LATE -domain IsoLate {*}$isolation_args
+expect_error {create_composite_domain IsoLate -update -subdomains Z} {*one isolation strategy per domain*}
+assert_equal [create_composite_domain IsoLate -update -subdomains Fresh] {}
+puts {composite strategy transactions passed}

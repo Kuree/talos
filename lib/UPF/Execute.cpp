@@ -14,12 +14,14 @@
 #include "talos/Frontend/UPF.h"
 #include "llvm/ADT/IntEqClasses.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include <map>
 #include <mutex>
 #include <optional>
 #include <set>
+#include <variant>
 #include <vector>
 #ifdef TALOS_ENABLE_UPF
 #include <tcl.h>
@@ -36,6 +38,24 @@ struct Retention {
   upf::RetentionTriggerAttr save, restore;
   upf::ExpressionAttr saveCondition, restoreCondition, condition;
   std::optional<Location> location;
+  uint64_t sourceOrdinal = 0;
+};
+struct RetentionEdit {
+  Retention intent;
+  bool update = false;
+  std::string supplier;
+};
+struct IsolationEdit {
+  std::string name, scope, control;
+  std::optional<Location> location;
+  bool high = true, diffSupplyOnly = true;
+  int64_t clamp = 0;
+};
+using StrategyEdit = std::variant<RetentionEdit, IsolationEdit>;
+struct CompositeStrategyEdit {
+  std::string domain;
+  StrategyEdit edit;
+  std::set<std::string> applied;
 };
 struct Domain {
   std::string name, scope, switchInput, switchOutput, isolation;
@@ -97,6 +117,9 @@ struct Session {
   SupplyBindings supplyBindings;
   std::map<std::string, SupplySet> supplySets;
   std::vector<std::pair<std::string, std::string>> setAssociations;
+  std::vector<CompositeStrategyEdit> compositeStrategies;
+  size_t compositeStrategyCost = 0;
+  uint64_t strategyOrdinal = 0;
   std::set<std::string> declaredHDLNames;
   Session(ModuleOp module, Tcl_Interp *interp, bool allowHDLExpressions)
       : module(module), interp(interp),
@@ -421,13 +444,13 @@ struct Session {
     return found == options.end() ? StringRef{}
                                   : StringRef(Tcl_GetString(found->second));
   }
-  Domain *domain(const Options &options) {
+  Domain *domain(const Options &options, bool allowComposite = false) {
     auto found = domains.find(key(value(options, "-domain")));
     if (found == domains.end()) {
       error("unknown power domain '" + value(options, "-domain") + "'");
       return nullptr;
     }
-    if (found->second.composite) {
+    if (found->second.composite && !allowComposite) {
       error("this command on a composite domain is not implemented");
       return nullptr;
     }
@@ -517,6 +540,235 @@ struct Session {
     }
     return true;
   }
+  int applyStrategy(Domain &dom, const RetentionEdit &edit,
+                    bool pendingSuppliers = false) {
+    const auto &delta = edit.intent;
+    auto found = dom.retentions.find(delta.name);
+    if (found != dom.retentions.end() && !edit.update)
+      return error("retention strategy already exists; use -update");
+    if (found == dom.retentions.end() && edit.update)
+      return error("cannot update an unknown retention strategy");
+    if (edit.update && found->second.sourceOrdinal >= delta.sourceOrdinal)
+      return error(
+          "cannot update a retention strategy before its base declaration");
+    Retention next;
+    if (found != dom.retentions.end()) {
+      next = found->second;
+      if (next.scope != delta.scope)
+        return error("retention update must execute in the original scope");
+    } else {
+      if (dom.retentions.size() >= 256)
+        return error("power domain exceeds 256 retention strategies");
+      next.name = delta.name;
+      next.scope = delta.scope;
+      next.location = delta.location;
+      next.sourceOrdinal = delta.sourceOrdinal;
+      std::string stem =
+          StringRef(dom.primary).drop_back(8).str() + "." + delta.name;
+      if (supplySets.count(stem) || dom.isolationName == delta.name)
+        return error("retention strategy name conflicts with another object in "
+                     "the domain");
+      next.retentionSupply = stem + ".retention_supply";
+      next.primarySupply = stem + ".primary_supply";
+      if (supplySets.count(next.retentionSupply) ||
+          supplySets.count(next.primarySupply))
+        return error("retention strategy supply handle already exists");
+    }
+    next.elements.insert(delta.elements.begin(), delta.elements.end());
+    next.excluded.insert(delta.excluded.begin(), delta.excluded.end());
+    if (next.elements.size() > 4096 || next.excluded.size() > 4096)
+      return error("retention selection exceeds 4096 elements");
+    next.hasElements |= delta.hasElements;
+    next.noRetention |= delta.noRetention;
+    next.useRetentionAsPrimary |= delta.useRetentionAsPrimary;
+    auto refine = [&](auto &target, auto proposed, StringRef description) {
+      if (target && proposed && target != proposed) {
+        error("conflicting or unsupported retention " + description +
+              " refinement");
+        return false;
+      }
+      if (proposed)
+        target = proposed;
+      return true;
+    };
+    if (!refine(next.save, delta.save, "trigger") ||
+        !refine(next.restore, delta.restore, "trigger") ||
+        !refine(next.saveCondition, delta.saveCondition, "condition") ||
+        !refine(next.restoreCondition, delta.restoreCondition, "condition") ||
+        !refine(next.condition, delta.condition, "condition"))
+      return TCL_ERROR;
+    size_t tokens = 0;
+    auto count = [&](const Retention &retention) {
+      for (auto expression : {retention.saveCondition,
+                              retention.restoreCondition, retention.condition})
+        if (expression)
+          tokens += expression.getTokens().size();
+    };
+    for (auto &[name, retention] : dom.retentions)
+      if (name != delta.name)
+        count(retention);
+    count(next);
+    if (tokens > 65536)
+      return error("power domain exceeds 65536 retention expression tokens");
+    std::map<std::string, SupplySet> handles;
+    SmallVector<std::pair<std::string, std::string>> links;
+    if (found == dom.retentions.end()) {
+      for (auto &id : {next.retentionSupply, next.primarySupply}) {
+        SupplySet handle;
+        // 10.6.1.2: strategy identity is in the physical domain's HDL scope;
+        // 5.10/8.3.2: updates still use the command's original execution scope.
+        handle.scope = dom.scope;
+        handle.updateScope = delta.scope;
+        handle.handle = true;
+        handle.location = delta.location;
+        handle.owner = dom.name;
+        handle.strategy = delta.name;
+        handle.required = {"power", "ground"};
+        handles.emplace(id, std::move(handle));
+      }
+      handles.at(next.primarySupply).binding = dom.primary;
+      links.emplace_back(next.primarySupply, dom.primary);
+    }
+    if (!edit.supplier.empty()) {
+      if (edit.supplier == next.retentionSupply)
+        return error(
+            "retention supply cannot refer to its own predefined handle");
+      if (!pendingSuppliers && !supplySets.count(edit.supplier) &&
+          !handles.count(edit.supplier))
+        return error("unknown retention supply set: " + edit.supplier);
+      if (!strategyBinding(next.retentionSupply, edit.supplier))
+        return TCL_ERROR;
+      links.emplace_back(next.retentionSupply, edit.supplier);
+    }
+    // A failed leaf leaves its own declaration intact. Composite callers wrap
+    // all leaves and the provenance record in a single compiler transaction.
+    supplySets.insert(handles.begin(), handles.end());
+    if (!edit.supplier.empty()) {
+      auto &handle = supplySets.at(next.retentionSupply);
+      handle.binding = edit.supplier;
+      handle.explicitStrategySupply = true;
+    }
+    setAssociations.insert(setAssociations.end(), links.begin(), links.end());
+    dom.retentions.insert_or_assign(delta.name, std::move(next));
+    return TCL_OK;
+  }
+  int applyStrategy(Domain &dom, const IsolationEdit &edit,
+                    bool pendingSuppliers = false) {
+    std::string path =
+        StringRef(dom.primary).drop_back(8).str() + "." + edit.name;
+    if (dom.retentions.count(edit.name) || supplySets.count(path))
+      return error("isolation strategy name conflicts with another object in "
+                   "the domain");
+    if (!dom.isolation.empty())
+      return error("one isolation strategy per domain is supported");
+    dom.isolation = edit.control;
+    dom.isolationName = edit.name;
+    dom.isolationHigh = edit.high;
+    dom.clamp = edit.clamp;
+    dom.isolationDiffSupplyOnly = edit.diffSupplyOnly;
+    return TCL_OK;
+  }
+  int applyStrategy(Domain &dom, const StrategyEdit &edit,
+                    bool pendingSuppliers = false) {
+    return std::visit(
+        [&](const auto &delta) {
+          return applyStrategy(dom, delta, pendingSuppliers);
+        },
+        edit);
+  }
+  int validateStrategySupplier(const StrategyEdit &edit) {
+    if (auto retention = std::get_if<RetentionEdit>(&edit);
+        retention && !retention->supplier.empty() &&
+        !supplySets.count(retention->supplier))
+      return error("unknown retention supply set: " + retention->supplier);
+    return TCL_OK;
+  }
+  std::set<std::string> physicalLeaves(StringRef name) const {
+    std::set<std::string> leaves, seen;
+    std::vector<std::string> work{name.str()};
+    while (!work.empty()) {
+      std::string current = std::move(work.back());
+      work.pop_back();
+      if (!seen.insert(current).second)
+        continue;
+      const auto &dom = domains.at(current);
+      if (!dom.composite)
+        leaves.insert(current);
+      else
+        work.insert(work.end(), dom.subdomains.begin(), dom.subdomains.end());
+    }
+    return leaves;
+  }
+  int strategyTransaction(llvm::function_ref<int()> action) {
+    auto oldDomains = domains;
+    auto oldSets = supplySets;
+    auto oldLinks = setAssociations;
+    size_t oldCount = compositeStrategies.size();
+    size_t oldCost = compositeStrategyCost;
+    int result = action();
+    if (result != TCL_OK) {
+      domains = std::move(oldDomains);
+      supplySets = std::move(oldSets);
+      setAssociations = std::move(oldLinks);
+      compositeStrategies.resize(oldCount);
+      compositeStrategyCost = oldCost;
+    }
+    return result;
+  }
+  int distributeStrategy(const std::string &target, StrategyEdit edit) {
+    if (!domains.at(target).composite) {
+      int result = applyStrategy(domains.at(target), edit);
+      if (result == TCL_OK)
+        Tcl_ResetResult(interp);
+      return result;
+    }
+    // Empty containers still retain deltas for future members. Bound that
+    // compiler inventory independently of per-leaf strategy/expression limits.
+    size_t cost = 1;
+    if (auto retention = std::get_if<RetentionEdit>(&edit)) {
+      cost +=
+          retention->intent.elements.size() + retention->intent.excluded.size();
+      for (auto expression :
+           {retention->intent.condition, retention->intent.saveCondition,
+            retention->intent.restoreCondition})
+        if (expression)
+          cost += expression.getTokens().size();
+    }
+    if (cost > 1048576 - compositeStrategyCost)
+      return error("composite strategy provenance exceeds 1048576 work units");
+    return strategyTransaction([&] {
+      CompositeStrategyEdit record{target, std::move(edit), {}};
+      for (const auto &leaf : physicalLeaves(target)) {
+        if (applyStrategy(domains.at(leaf), record.edit, true) != TCL_OK)
+          return TCL_ERROR;
+        record.applied.insert(leaf);
+      }
+      if (validateStrategySupplier(record.edit) != TCL_OK)
+        return TCL_ERROR;
+      compositeStrategies.push_back(std::move(record));
+      compositeStrategyCost += cost;
+      Tcl_ResetResult(interp);
+      return TCL_OK;
+    });
+  }
+  int propagateStrategies() {
+    // 5.10/8.3.3: membership updates change which leaves receive prior typed
+    // contributions. Reapply only missing contributions, in source order;
+    // existing leaf refinements and handle catalogs are never replaced.
+    SmallVector<std::pair<size_t, std::string>> applied;
+    for (auto [index, record] : llvm::enumerate(compositeStrategies))
+      for (const auto &leaf : physicalLeaves(record.domain))
+        if (!record.applied.count(leaf)) {
+          if (applyStrategy(domains.at(leaf), record.edit) != TCL_OK) {
+            for (auto &[previous, path] : applied)
+              compositeStrategies[previous].applied.erase(path);
+            return TCL_ERROR;
+          }
+          record.applied.insert(leaf);
+          applied.emplace_back(index, leaf);
+        }
+    return TCL_OK;
+  }
   int setRetention(Tcl_Size objc, Tcl_Obj *const objv[]) {
     // IEEE 1801-2018 6.50/8.3.2: merge explicit updates before applying any
     // defaults. Keep selectors and their provenance until register inference.
@@ -543,42 +795,18 @@ struct Session {
       if (!opts.emplace(option.str(), objv[i]).second)
         return error("duplicate UPF option " + option);
     }
-    Domain *dom = domain(opts);
+    Domain *dom = domain(opts, true);
     if (!dom)
       return TCL_ERROR;
+    std::string target = dom->name;
     StringRef name = Tcl_GetString(objv[1]);
     if (!identifier(name))
       return TCL_ERROR;
-    auto found = dom->retentions.find(name.str());
-    bool update = flags.count("-update");
-    if (found != dom->retentions.end() && !update)
-      return error("retention strategy already exists; use -update");
-    if (found == dom->retentions.end() && update)
-      return error("cannot update an unknown retention strategy");
     Retention next;
-    if (found != dom->retentions.end()) {
-      next = found->second;
-      if (next.scope != scope)
-        return error("retention update must execute in the original scope");
-    } else {
-      if (dom->retentions.size() >= 256)
-        return error("power domain exceeds 256 retention strategies");
-      next.name = name.str();
-      next.scope = scope;
-      next.location = declarationLocation();
-      std::string stem = StringRef(dom->primary)
-                             .drop_back(StringRef(".primary").size())
-                             .str() +
-                         "." + name.str();
-      if (supplySets.count(stem) || dom->isolationName == name)
-        return error("retention strategy name conflicts with another object in "
-                     "the domain");
-      next.retentionSupply = stem + ".retention_supply";
-      next.primarySupply = stem + ".primary_supply";
-      if (supplySets.count(next.retentionSupply) ||
-          supplySets.count(next.primarySupply))
-        return error("retention strategy supply handle already exists");
-    }
+    next.name = name.str();
+    next.scope = scope;
+    next.location = declarationLocation();
+    next.sourceOrdinal = ++strategyOrdinal;
     auto selectors = [&](StringRef option, auto &target) {
       auto it = opts.find(option.str());
       if (it == opts.end())
@@ -691,59 +919,13 @@ struct Session {
         if (value != "RET_SUP_COR" && value != "SAV_RES_COR")
           return error("unsupported retention corruption parameter: " + value);
     }
-    size_t tokens = 0;
-    auto count = [&](const Retention &retention) {
-      for (auto expression : {retention.saveCondition,
-                              retention.restoreCondition, retention.condition})
-        if (expression)
-          tokens += expression.getTokens().size();
-    };
-    for (auto &[otherName, retention] : dom->retentions)
-      if (otherName != name)
-        count(retention);
-    count(next);
-    if (tokens > 65536)
-      return error("power domain exceeds 65536 retention expression tokens");
-    SmallVector<std::pair<std::string, std::string>> links;
-    std::map<std::string, SupplySet> handles;
-    if (found == dom->retentions.end()) {
-      for (auto &id : {next.retentionSupply, next.primarySupply}) {
-        SupplySet handle;
-        handle.scope = next.scope;
-        handle.updateScope = next.scope;
-        handle.handle = true;
-        handle.location = next.location;
-        handle.owner = dom->name;
-        handle.strategy = name.str();
-        handle.required = {"power", "ground"};
-        handles.emplace(id, std::move(handle));
-      }
-      handles.at(next.primarySupply).binding = dom->primary;
-      links.emplace_back(next.primarySupply, dom->primary);
-    }
+    RetentionEdit edit;
+    edit.intent = std::move(next);
+    edit.update = flags.count("-update");
     if (opts.count("-retention_supply")) {
-      std::string id = supplySetKey(value(opts, "-retention_supply"));
-      if (!supplySets.count(id) && !handles.count(id))
-        return error("unknown retention supply set: " + id);
-      if (id == next.retentionSupply)
-        return error(
-            "retention supply cannot refer to its own predefined handle");
-      if (!strategyBinding(next.retentionSupply, id))
-        return TCL_ERROR;
-      links.emplace_back(next.retentionSupply, id);
+      edit.supplier = supplySetKey(value(opts, "-retention_supply"));
     }
-    // Commit strategy and its implicit handles together; no caught error may
-    // leave half a declaration or alter earlier associations (5.11/8.3.2).
-    supplySets.insert(handles.begin(), handles.end());
-    if (opts.count("-retention_supply")) {
-      auto &handle = supplySets.at(next.retentionSupply);
-      handle.binding = supplySetKey(value(opts, "-retention_supply"));
-      handle.explicitStrategySupply = true;
-    }
-    setAssociations.insert(setAssociations.end(), links.begin(), links.end());
-    dom->retentions.insert_or_assign(name.str(), std::move(next));
-    Tcl_ResetResult(interp);
-    return TCL_OK;
+    return distributeStrategy(target, std::move(edit));
   }
   int run(StringRef command, Tcl_Size objc, Tcl_Obj *const objv[]) {
     Options opts;
@@ -1018,15 +1200,22 @@ struct Session {
       std::string primary = dom.primary;
       // 5.10: a caught failure must preserve the extent, handle identities,
       // catalogs and all associations; commit only after every row validates.
-      domains.insert_or_assign(id, std::move(dom));
-      supplySets.insert(handles.begin(), handles.end());
-      setAssociations.insert(setAssociations.end(), associations.begin(),
-                             associations.end());
-      for (auto &[a, b] : associations)
-        if (a == primary || b == primary)
-          markPrimaryAssociations({a, b});
-      Tcl_ResetResult(interp);
-      return TCL_OK;
+      auto commit = [&] {
+        domains.insert_or_assign(id, std::move(dom));
+        supplySets.insert(handles.begin(), handles.end());
+        setAssociations.insert(setAssociations.end(), associations.begin(),
+                               associations.end());
+        for (auto &[a, b] : associations)
+          if (a == primary || b == primary)
+            markPrimaryAssociations({a, b});
+        int result = composite ? propagateStrategies() : TCL_OK;
+        if (result == TCL_OK)
+          Tcl_ResetResult(interp);
+        return result;
+      };
+      if (composite && !compositeStrategies.empty())
+        return strategyTransaction(commit);
+      return commit();
     }
     if (command == "add_power_state") {
       // IEEE 1801-2018 5.10/6.5: stage catalog, command scope, requirements
@@ -1769,29 +1958,16 @@ struct Session {
         if (!opts.emplace(option.str(), objv[i]).second)
           return error("duplicate UPF option " + option);
       }
-      Domain *dom = domain(opts);
+      Domain *dom = domain(opts, true);
       if (!dom)
         return TCL_ERROR;
       if (!identifier(Tcl_GetString(objv[1])))
         return TCL_ERROR;
       StringRef isolationName = Tcl_GetString(objv[1]);
-      std::string isolationPath = StringRef(dom->primary)
-                                      .drop_back(StringRef(".primary").size())
-                                      .str() +
-                                  "." + isolationName.str();
-      if (dom->retentions.count(isolationName.str()) ||
-          supplySets.count(isolationPath))
-        return error("isolation strategy name conflicts with another object in "
-                     "the domain");
-      if (!dom->isolation.empty())
-        return error("one isolation strategy per domain is supported");
       if (value(opts, "-applies_to") != "outputs" ||
           value(opts, "-location") != "parent")
         return error("initial isolation support requires -applies_to outputs "
                      "-location parent");
-      if (scope != dom->scope)
-        return error(
-            "initial isolation must be declared in the power domain's scope");
       std::string isolation;
       if (!control(value(opts, "-isolation_signal"), isolation))
         return TCL_ERROR;
@@ -1801,12 +1977,15 @@ struct Session {
       StringRef clamp = value(opts, "-clamp_value");
       if (clamp != "0" && clamp != "1")
         return error("initial isolation clamp must be 0 or 1");
-      dom->isolation = isolation;
-      dom->isolationName = isolationName.str();
-      dom->isolationHigh = sense != "low";
-      dom->clamp = clamp == "1";
-      dom->isolationDiffSupplyOnly = diffSupplyOnly;
-      return TCL_OK;
+      IsolationEdit edit;
+      edit.name = isolationName.str();
+      edit.scope = scope;
+      edit.location = declarationLocation();
+      edit.control = std::move(isolation);
+      edit.high = sense != "low";
+      edit.clamp = clamp == "1";
+      edit.diffSupplyOnly = diffSupplyOnly;
+      return distributeStrategy(dom->name, std::move(edit));
     }
     return error("unsupported UPF command: " + command);
   }

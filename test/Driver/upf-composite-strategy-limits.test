@@ -1,0 +1,27 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/power.upf -emit-slang --mlir-verify-each %t/design.sv -o - | FileCheck %s
+// Empty containers retain future-member provenance. Bound this compiler-only
+// inventory, report a catchable error, and leave enough capacity for a small
+// valid declaration after rejecting an oversized contribution.
+// CHECK: composite provenance bound passed
+
+//--- design.sv
+module top; logic hold; endmodule
+
+//--- power.upf
+create_composite_domain C
+set expression hold
+for {set i 0} {$i < 9} {incr i} {set expression "($expression || $expression)"}
+set expression "!($expression)"
+set bounded 0
+for {set i 0} {$i < 1024} {incr i} {
+  if {[catch {set_retention R -domain C -save_condition $expression -restore_condition $expression -no_retention} message]} {
+    if {![string match {*composite strategy provenance exceeds*} $message]} {error $message}
+    set bounded 1
+    break
+  }
+}
+if {!$bounded} {error "unbounded composite provenance"}
+set_retention SMALL -domain C -no_retention
+puts {composite provenance bound passed}

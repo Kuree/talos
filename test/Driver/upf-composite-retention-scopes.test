@@ -1,0 +1,23 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-composite-isolation.test %t
+// RUN: %split-file %s %t/intent
+// RUN: cp %S/Inputs/upf/assertions.tcl %t/assertions.tcl
+// RUN: talos --upf %t/power.upf --upf %t/intent/retention.upf -O3 --mlir-verify-each %t/design.sv -o %t.native
+// RUN: %t.native | FileCheck %S/upf-composite-isolation.test
+// RUN: talos --upf %t/power.upf --upf %t/intent/retention.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %S/upf-composite-isolation.test
+// RUN: talos --upf %t/power.upf --upf %t/intent/retention.upf -emit-slang --mlir-verify-each %t/design.sv -o - | FileCheck %s --check-prefix=IR
+// Physical domain ownership and original command scope are distinct. Both
+// retention controls and the update rule keep the top-level caller scope;
+// shadow child controls must not freeze the initial register write.
+// IR-COUNT-3: #upf.retention<name = "KEEP", scope = "top"
+
+//--- retention.upf
+source [file join [file dirname [info script]] .. assertions.tcl]
+set_retention KEEP -domain C -retention_condition iso
+set_retention KEEP -domain x/P -update -elements x/u/q
+create_supply_set x/P.KEEP.retention_supply -update
+set_scope x
+expect_error {set_retention KEEP -domain P -update -elements {}} {*original scope*}
+expect_error {create_supply_set P.KEEP.retention_supply -update} {*original execution scope*}
+set_scope /
