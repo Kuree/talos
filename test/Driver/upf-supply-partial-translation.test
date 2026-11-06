@@ -1,0 +1,10 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-supply-partial.test %t
+// RUN: talos --upf %t/full.upf -DFULL_TRANSLATION -O3 --mlir-verify-each %t/design.sv -o %t.full
+// RUN: %t.full | FileCheck %S/upf-supply-partial.test
+// RUN: talos --upf %t/full.upf -DFULL_TRANSLATION -O0 --execution-tier=bytecode %t/design.sv -o %t.full.bc
+// RUN: %t.full.bc | FileCheck %S/upf-supply-partial.test
+// RUN: talos --upf %t/off.upf -O3 %t/design.sv -o %t.off
+// RUN: %t.off | FileCheck %S/upf-supply-partial.test
+// IEEE 1801-2018 6.47/11.2.3.3.6: partial writes preserve their raw state
+// under both translations. FULL_ON retains NORMAL behavior and pending NBAs.

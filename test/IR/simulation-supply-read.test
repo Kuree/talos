@@ -16,10 +16,10 @@ module {
       %name: !simulation.string {simulation.capture_kind = 1 : i32},
       %voltage: f64 {simulation.capture_kind = 1 : i32}) -> i64
       attributes {entry_kind = 8 : i32} {
-    %on = arith.constant true
+    %on = arith.constant 1 : i32
     %first = simulation.supply.read %ctx %name
     %duplicate = simulation.supply.read %ctx %name
-    %status = simulation.supply.control %ctx %name voltage %voltage on %on
+    %status = simulation.supply.control %ctx %name voltage %voltage state %on
     %last = simulation.supply.read %ctx %name
     simulation.return %last : i64
   }

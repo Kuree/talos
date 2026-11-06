@@ -18,7 +18,7 @@ LogicalResult lowerSupplyAccesses(sim::SimDesignOp design,
     Location loc = op->getLoc();
     OpBuilder b(op->getContext());
     Value context = op->getOperand(0), name = op->getOperand(1);
-    Value on = writing ? control.getOn() : Value{};
+    Value state = writing ? control.getState() : Value{};
     Value voltage = writing ? control.getVoltage() : Value{};
     Region &body = *op->getParentRegion();
     Block *entry = op->getBlock();
@@ -40,7 +40,7 @@ LogicalResult lowerSupplyAccesses(sim::SimDesignOp design,
     };
     Block *lookup = block(), *error = block();
     b.setInsertionPointToEnd(entry);
-    Value scaled;
+    Value scaled, on;
     if (writing) {
       // IEEE 1801-2018 11.2.2/11.2.3.5.4 use signed32 microvolts and SV
       // nearest-integer conversion. Guard the rounded range before conversion,
@@ -51,8 +51,13 @@ LogicalResult lowerSupplyAccesses(sim::SimDesignOp design,
       Value upper = arith::CmpFOp::create(b, loc, arith::CmpFPredicate::OLT,
                                           scaled, real(2147483647.5));
       Value valid = arith::AndIOp::create(b, loc, lower, upper);
-      Value off = arith::XOrIOp::create(b, loc, on, integer(1, 1));
+      Value off = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq,
+                                       state, integer(0, 32));
+      on = arith::XOrIOp::create(b, loc, off, integer(1, 1));
       valid = arith::OrIOp::create(b, loc, off, valid);
+      Value validState = arith::CmpIOp::create(
+          b, loc, arith::CmpIPredicate::ule, state, integer(2, 32));
+      valid = arith::AndIOp::create(b, loc, validState, valid);
       cf::CondBranchOp::create(b, loc, valid, lookup, error);
     } else
       cf::BranchOp::create(b, loc, lookup);
@@ -96,7 +101,10 @@ LogicalResult lowerSupplyAccesses(sim::SimDesignOp design,
           sim::SimRealToIntegerOp::create(b, loc, b.getI32Type(), safe, true);
       Value bits = arith::ExtUIOp::create(b, loc, b.getI64Type(), microvolts);
       bits = arith::ShLIOp::create(b, loc, bits, integer(2, 64));
-      bits = arith::OrIOp::create(b, loc, bits, integer(1, 64));
+      // Preserve physical PARTIAL_ON even under a global 6.47 translation;
+      // only policy evaluation and get_supply_on_state apply translation.
+      Value stateBits = arith::ExtUIOp::create(b, loc, b.getI64Type(), state);
+      bits = arith::OrIOp::create(b, loc, bits, stateBits);
       // 11.2.3.3.5 explicitly writes OFF,0, unlike the general summary in
       // 9.3.1. Follow the function-specific text and algorithm. Publish the
       // complete pair once; propagation follows ordinary logic scheduling
@@ -107,13 +115,13 @@ LogicalResult lowerSupplyAccesses(sim::SimDesignOp design,
     }
     b.setInsertionPointToEnd(error);
     // Invalid accesses are runtime errors only on the executed path
-    // (11.2.3.2.6 and 11.2.3.3.4/.5). No root is modified on this path.
+    // (11.2.3.2.6 and 11.2.3.3.4-.6). No root is modified on this path.
     sim::SimErrorOp::create(b, loc, context);
     Value message = sim::SimBytesConstantOp::create(
         b, loc,
         writing ? "UPF supply control failed for %s: unknown/protected root or "
                   "invalid "
-                  "voltage (IEEE 1801-2018 11.2.3.3.4/.5)"
+                  "voltage/state (IEEE 1801-2018 11.2.3.3.4-.6)"
                 : "UPF supply query failed for %s: unknown supply "
                   "(IEEE 1801-2018 11.2.3.2.6)");
     sim::SimDisplayOp::create(

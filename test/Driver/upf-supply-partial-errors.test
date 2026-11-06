@@ -1,0 +1,72 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: not %t.o0 2>&1 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: not %t.o3 2>&1 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: not %t.bc 2>&1 | FileCheck %s
+// RUN: not talos --upf %t/design.upf -emit-slang %t/constant.sv -o %t.mlir 2>&1 | FileCheck %s --check-prefix=CONSTANT
+// IEEE 1801-2018 11.2.3.3.6: unsuccessful writes record errors only on
+// executed paths, return false, and preserve both supply fields and RTL.
+// CHECK-COUNT-12: UPF supply control failed for
+// CHECK: rejected 12 invalid partial supply calls without mutation
+// CONSTANT: '$talos_upf_supply_control' is not allowed in a constant context
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1'b1;
+endmodule
+module top;
+  import UPF::*;
+  logic enable = 1;
+  wire q;
+  int failures = 0;
+  string nul_name;
+  upfSupplyTypeT original;
+  leaf dut(q);
+  task expect_failure(input bit status);
+    if (status) $fatal(1, "invalid partial supply call succeeded");
+    if (get_supply_value("/top/VDD") !== original)
+      $fatal(1, "failed partial write changed state or voltage");
+    failures++;
+  endtask
+  initial begin
+    if (0) void'(supply_partial_on("/unreachable"));
+    if (!supply_on("/top/VDD") || !supply_on("/top/VSS", 0.0))
+      $fatal(1, "valid startup call failed");
+    #1;
+    if (q !== 1'b1) $fatal(1, "startup propagation failed");
+    original = get_supply_value("/top/VDD");
+    expect_failure(supply_partial_on("/top/MISSING"));
+    expect_failure(supply_partial_on("VDD"));
+    expect_failure(supply_partial_on("/top/VDD@bogus"));
+    expect_failure(supply_partial_on("/top/SW"));
+    expect_failure(supply_partial_on("/top/PS/vout@upfSupplyPortT"));
+    nul_name = $sformatf("%s%c", "/top/VDD", 0);
+    expect_failure(supply_partial_on(nul_name));
+    expect_failure(supply_partial_on("/top/VDD", $bitstoreal(64'h7ff0000000000000)));
+    expect_failure(supply_partial_on("/top/VDD", $bitstoreal(64'hfff0000000000000)));
+    expect_failure(supply_partial_on("/top/VDD", $bitstoreal(64'h7ff8000000000000)));
+    expect_failure(supply_partial_on("/top/VDD", 2147.483648));
+    expect_failure(supply_partial_on("/top/VDD", -2147.483649));
+    void'(supply_partial_on("/discarded-invalid"));
+    #1;
+    if (q !== 1'b1 || failures != 11) $fatal(1, "failed partial writes affected RTL");
+    $display("rejected 12 invalid partial supply calls without mutation");
+    $finish;
+  end
+endmodule
+
+//--- constant.sv
+module top;
+  localparam bit state = UPF::supply_partial_on("/top/VDD");
+endmodule
+
+//--- design.upf
+create_power_domain PD -elements dut
+foreach net {VDD VSS SW} {create_supply_net $net}
+set_domain_supply_net PD -primary_power_net SW -primary_ground_net VSS
+create_power_switch PS -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout SW} \
+    -control_port {en enable} -on_state {ON vin en}

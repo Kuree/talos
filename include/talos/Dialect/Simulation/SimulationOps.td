@@ -3889,14 +3889,18 @@ def SimSupplyControlOp : SimOp<"supply.control", [
 ]> {
   let summary = "control an elaborated UPF root supply by dynamic handle name";
   let description = [{
-    IEEE 1801 11.2.3.3.4/.5: changes the root supply immediately and returns
-    success. UPF elaboration replaces this operation with effectful simulation
-    storage accesses and validated name dispatch before target lowering.
+    IEEE 1801 11.2.3.3.4-.6: changes the root supply immediately and returns
+    success. State uses the public upfSupplyStateE encoding: OFF = 0,
+    FULL_ON = 1, PARTIAL_ON = 2. Other values, invalid voltages, and protected
+    or unknown names record a simulation error and return false without a
+    write. OFF writes zero volts. UPF elaboration replaces this operation
+    with effectful simulation storage accesses and validated name dispatch
+    before target lowering; constant state/name checks can then fold away.
   }];
   let arguments = (ins SimContextType:$context, SimStringType:$name,
-                       F64:$voltage, I1:$on);
+                       F64:$voltage, I32:$state);
   let results = (outs I1:$success);
-  let assemblyFormat = "$context $name `voltage` $voltage `on` $on attr-dict";
+  let assemblyFormat = "$context $name `voltage` $voltage `state` $state attr-dict";
 }
 
 def SimSupplyReadOp : SimOp<"supply.read", [

@@ -524,20 +524,20 @@ UnitLowering::lowerSystemCall(semantic::SVCallExpressionOp op) {
 
   if (name == "$talos_upf_supply_control") {
     // A compiler-registered nonconstant system function underlies package UPF
-    // (IEEE 1801-2018 11.2.3.3.4/.5); ordinary user functions cannot match this
+    // (IEEE 1801-2018 11.2.3.3.4-.6); ordinary user functions cannot match this
     // system-call identity. Evaluate every argument exactly once.
     if (children.size() != 3)
       return emitError(location) << "malformed UPF supply intrinsic", failure();
     auto supply = lowerExpression(children[0]);
     auto voltage = lowerExpression(children[1]);
-    auto on = lowerInteger(children[2], builder.getI1Type());
-    if (failed(supply) || failed(voltage) || failed(on))
+    auto state = lowerInteger(children[2], builder.getI32Type());
+    if (failed(supply) || failed(voltage) || failed(state))
       return failure();
     auto real = convert(*voltage, builder.getF64Type(), true, location);
     if (failed(real))
       return failure();
     return convertResult(sim::SimSupplyControlOp::create(
-        builder, location, builder.getI1Type(), context, *supply, *real, *on));
+        builder, location, builder.getI1Type(), context, *supply, *real, *state));
   }
 
   if (name == "$talos_upf_supply_read") {

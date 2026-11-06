@@ -1,0 +1,8 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-supply-partial.test %t
+// RUN: talos --upf %t/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/design.sv -o %t.native.o
+// RUN: talos --upf %t/full.upf -DFULL_TRANSLATION --target=wasm32 --execution-tier=bytecode -O0 --mlir-verify-each -c %t/design.sv -o %t.bytecode.o
+// RUN: %llvm_dist/bin/llvm-readobj --file-headers %t.native.o %t.bytecode.o | FileCheck %s
+// IEEE 1801-2018 11.2.3.3.6/6.47: the existing packed64 supply storage
+// and interpreter path also support partial writes with 32-bit pointers.
+// CHECK-COUNT-2: AddressSize: 32bit

@@ -1,0 +1,152 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// IEEE 1801-2018 11.2.3.3.6: immediate PARTIAL_ON writes, signed32
+// microvolts, aliases, default/named arguments, single evaluation and unused
+// effects. 6.47: translation changes policy, never the physical state/voltage.
+// 9.2.3/9.5.3/9.6.7: propagation settles normally; NORMAL-to-NORMAL changes
+// preserve queued NBAs, while actual power loss cancels them.
+// CHECK: partial supply control passed
+
+//--- design.sv
+package audit;
+  int calls = 0;
+  function logic sample(logic d);
+    calls++;
+    return d;
+  endfunction
+endpackage
+module leaf(input logic clk, d, output logic q, y);
+  always @(posedge clk) q <= #3 d;
+  always_comb y = audit::sample(d);
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, d = 1, enable = 1;
+  wire q, y;
+  string rail = "/top/PAD";
+  int names = 0, volts = 0, calls;
+  upfSupplyTypeT before_write, raw;
+  leaf dut(clk, d, q, y);
+  function string name_once();
+    names++;
+    return rail;
+  endfunction
+  function real volts_once();
+    volts++;
+    return 0.8;
+  endfunction
+  task check_partial(input int microvolts);
+    raw = get_supply_value("/top/VDD");
+    if (raw.state != PARTIAL_ON || raw.voltage != microvolts ||
+        get_supply_value("/top/AON.power") !== raw ||
+        get_supply_value("/top/PAD@upfSupplyPortT") !== raw)
+      $fatal(1, "partial write did not preserve physical state, voltage or aliases");
+`ifdef FULL_TRANSLATION
+    if (!get_supply_on_state(raw)) $fatal(1, "FULL_ON translation lost");
+`else
+    if (get_supply_on_state(raw)) $fatal(1, "partial supply reported FULL_ON");
+`endif
+  endtask
+  task check_voltage(input real voltage, input int microvolts);
+    if (!supply_partial_on("/top/AON.power", voltage))
+      $fatal(1, "valid partial voltage rejected");
+    check_partial(microvolts);
+  endtask
+  initial begin
+    if (!supply_on("/top/VDD") || !supply_on("/top/VSS", 0.0))
+      $fatal(1, "startup failed");
+    #1;
+    if (y !== 1'b1) $fatal(1, "startup propagation failed");
+    before_write = get_supply_value("/top/VDD");
+    clk = 1;
+    #1;
+    calls = audit::calls;
+    if (!supply_partial_on(.value(volts_once()), .supply_name(name_once())))
+      $fatal(1, "partial call failed");
+    if (names != 1 || volts != 1) $fatal(1, "arguments evaluated more than once");
+    check_partial(800000);
+    if (before_write.state != FULL_ON || before_write.voltage != 1000000)
+      $fatal(1, "earlier snapshot changed");
+    if (get_supply_state(get_supply_value("/top/SW")) != FULL_ON)
+      $fatal(1, "immediate write synchronously propagated switch");
+    #1;
+    raw = get_supply_value("/top/SW");
+    if (raw.state != PARTIAL_ON || raw.voltage != 800000)
+      $fatal(1, "switch upgraded a partial input");
+`ifdef FULL_TRANSLATION
+    if (y !== 1'b1 || audit::calls != calls)
+      $fatal(1, "NORMAL-to-NORMAL change reevaluated RTL");
+`else
+    if (y !== 1'bx || q !== 1'bx) $fatal(1, "partial loss did not corrupt");
+`endif
+    #2;
+`ifdef FULL_TRANSLATION
+    if (q !== 1'b1) $fatal(1, "NORMAL-to-NORMAL partial write cancelled NBA");
+`else
+    if (q !== 1'bx) $fatal(1, "old NBA survived partial power loss");
+`endif
+    calls = audit::calls;
+    if (!supply_partial_on(rail, 0.9)) $fatal(1, "partial voltage change failed");
+    #1;
+    if (audit::calls != calls) $fatal(1, "partial voltage change reevaluated RTL");
+    void'(supply_partial_on(rail));
+    check_partial(1000000);
+    #1;
+    d = 0;
+    if (!supply_on("/top/VDD")) $fatal(1, "restore failed");
+    #1;
+    if (y !== 1'b0) $fatal(1, "restoration did not reevaluate level logic");
+`ifndef FULL_TRANSLATION
+    if (q !== 1'bx) $fatal(1, "restoration invented a clock");
+`endif
+    clk = 0;
+    #1 clk = 1;
+    #4;
+    if (q !== 1'b0) $fatal(1, "fresh NBA failed");
+    if (!supply_off(rail)) $fatal(1, "OFF failed");
+    #1;
+    if (q !== 1'bx || y !== 1'bx) $fatal(1, "OFF did not corrupt");
+    check_voltage(0.0, 0);
+    check_voltage(-1.000001, -1000001);
+    check_voltage(0.0000005, 1);
+    check_voltage(-0.0000005, -1);
+    check_voltage(2147.483647, 2147483647);
+    check_voltage(-2147.483648, -2147483648);
+    #1;
+`ifdef FULL_TRANSLATION
+    if (y !== 1'b0 || q !== 1'bx) $fatal(1, "partial restoration behavior");
+`else
+    if (y !== 1'bx) $fatal(1, "partial source unexpectedly powered domain");
+`endif
+    if (!supply_off(rail)) $fatal(1, "final OFF failed");
+    raw = get_supply_value("/top/VDD");
+    if (raw.state != OFF || raw.voltage != 0) $fatal(1, "OFF retained partial voltage");
+    $display("partial supply control passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+foreach net {VDD VSS SW} {create_supply_net $net}
+create_supply_port PAD -direction in
+connect_supply_net VDD -ports PAD
+create_supply_set AON -function {power VDD} -function {ground VSS}
+create_power_domain PD -elements dut
+set_domain_supply_net PD -primary_power_net SW -primary_ground_net VSS
+create_power_switch PS -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout SW} \
+    -control_port {en enable} -on_state {ON vin en}
+
+//--- full.upf
+set_partial_on_translation FULL_ON
+source [file join [file dirname [info script]] design.upf]
+
+//--- off.upf
+set_partial_on_translation OFF
+source [file join [file dirname [info script]] design.upf]

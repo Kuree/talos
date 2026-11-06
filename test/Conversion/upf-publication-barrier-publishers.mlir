@@ -68,6 +68,7 @@ module attributes {simulation.snapshot_publications} {
       %d = simulation.time.constant 0
       %name = simulation.string.literal "VDD"
       %voltage = arith.constant 1.0 : f64
+      %full_on = arith.constant 1 : i32
       simulation.ref.store %v to %ref : !simulation.logic<1>, !simulation.ref<!simulation.logic<1>>
       simulation.ref.copy %ref to %other : !simulation.ref<!simulation.logic<1>>
       simulation.argument_ref.store %v to %arg : !simulation.logic<1>, !simulation.argument_ref<!simulation.logic<1>>
@@ -85,7 +86,7 @@ module attributes {simulation.snapshot_publications} {
       simulation.net.pass.control 0 = %v : !simulation.logic<1>
       simulation.net.pass.control_delayed 0 = %v after[%d,%d,%d] : !simulation.logic<1>
       simulation.net.mos.drive_delayed 1 = %v after[%d,%d,%d] : !simulation.logic<1>
-      %on = simulation.supply.control %ctx %name voltage %voltage on %mask
+      %on = simulation.supply.control %ctx %name voltage %voltage state %full_on
       simulation.ref.store_inertial_path %v to %ref write %mask active %mask masks[%mask,%mask,%mask] after[%d,%d,%d] site 9 : 0 group 0 of 1 nonblocking = false : !simulation.ref<!simulation.logic<1>>, !simulation.logic<1>, i1
       simulation.nba.enqueue %v to %ref : (!simulation.logic<1>, !simulation.ref<!simulation.logic<1>>) -> ()
       simulation.ref.store_inertial_path %v to %ref write %mask active %mask masks[%mask,%mask,%mask] after[%d,%d,%d] site 9 : 1 group 0 of 1 nonblocking = true : !simulation.ref<!simulation.logic<1>>, !simulation.logic<1>, i1

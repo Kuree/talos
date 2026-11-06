@@ -7,7 +7,7 @@
 // RUN: %target_cxx %t.opt.o %runtime_link_flags -o %t.opt.exe && %t.opt.exe | FileCheck %s
 // IEEE 1801-2018 6.22: neither full nor partial conditions upgrade an input
 // that is already PARTIAL_ON or UNDETERMINED. Seed those input states in IR
-// because supply_on/off only produce FULL_ON/OFF and cascades are unsupported.
+// to isolate switch evaluation from immediate supply-write behavior.
 // 6.47: raw outputs preserve PARTIAL_ON/800000uV under FULL_ON translation.
 // Legacy domains without primary supply-set attributes must still evaluate
 // translated output states for NORMAL, including partial-only switches.

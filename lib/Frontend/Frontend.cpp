@@ -8842,10 +8842,13 @@ importSystemVerilog(ArrayRef<std::string> inputFilenames, MLIRContext &context,
   endfunction
 
   function automatic upfBooleanT supply_on(upfStringT supply_name, upfRealT value = 1.0);
-    return $talos_upf_supply_control(supply_name, value, 1'b1);
+    return $talos_upf_supply_control(supply_name, value, FULL_ON);
   endfunction
   function automatic upfBooleanT supply_off(upfStringT supply_name);
-    return $talos_upf_supply_control(supply_name, 0.0, 1'b0);
+    return $talos_upf_supply_control(supply_name, 0.0, OFF);
+  endfunction
+  function automatic upfBooleanT supply_partial_on(upfStringT supply_name, upfRealT value = 1.0);
+    return $talos_upf_supply_control(supply_name, value, PARTIAL_ON);
   endfunction
 endpackage
 )sv";
@@ -8862,7 +8865,7 @@ endpackage
             "$talos_upf_supply_control", compilation->getBitType(), 3,
             std::vector<const slang::ast::Type *>{&compilation->getStringType(),
                                                   &compilation->getRealType(),
-                                                  &compilation->getBitType()}));
+                                                  &compilation->getIntType()}));
     compilation->addSystemSubroutine(
         std::make_shared<slang::ast::NonConstantFunction>(
             "$talos_upf_supply_read", compilation->getType(64, {}), 1,

@@ -21,7 +21,8 @@
     "registered_tcl_commands": 17,
     "unregistered_tcl_commands": 51,
     "enumerated_hdl_functions": 25,
-    "available_hdl_functions": 8
+    "available_hdl_functions": 9,
+    "unavailable_hdl_functions": 16
   },
   "tcl_commands": [
     {
@@ -819,8 +820,13 @@
     {
       "clause": "11.2.3.3.6",
       "function": "supply_partial_on",
-      "status": "unsupported",
-      "missing": "Partial root writes are next in chunk 2."
+      "status": "partial",
+      "limits": "Absolute UPF-created supply net/port/function aliases only; no relative HDL object lookup, HDL implemented supply structs/objects or resolved networks. Rejects protected switch outputs and invalid voltages. Writes raw PARTIAL_ON and signed microvolts; translation applies only to policy and on-state queries.",
+      "implementation": [
+        "lib/Frontend/Frontend.cpp",
+        "lib/Conversion/TalosToSimulation/LowerUnitSystemCalls.cpp",
+        "lib/UPF/ElaborateSupply.cpp"
+      ]
     },
     {
       "clause": "11.2.3.3.7",
@@ -1052,7 +1058,7 @@
     },
     {
       "id": 2,
-      "status": "next",
+      "status": "complete",
       "scope": "supply_partial_on through existing supply access lowering",
       "clauses": [
         "11.2.3.3.6",
@@ -1060,7 +1066,19 @@
         "9.2.3"
       ],
       "runtime_changes": false,
-      "validation": "Direct MLIR lowering/effect tests and SV native/bytecode execution, including voltage validation, aliases, protected writes and translation policies."
+      "validation": "212 UPF-related lit tests pass (198 query/runtime/lowering and 14 UPF dialect tests), including all 12 targeted tests. Official IEEE1801 probes 6.31, 6.47 and 11.2.3.3.4-.6 pass in native and bytecode tiers (10 cases). Wasm32 native/bytecode object compilation also passes; wasm execution was not run.",
+      "review": "Independent subagent approved UPF 11.2.3.3.6/6.47/9.2.3, LRM conversion/scheduling semantics, MLIR types/effects, guarded conversion and atomic storage publication; independently executed direct lowering, CSE/effect and publication barrier tests.",
+      "tests": [
+        "test/Conversion/upf-supply-partial.mlir",
+        "test/IR/simulation-supply-control.mlir",
+        "test/IR/simulation-supply-read.test",
+        "test/Conversion/upf-publication-barrier-publishers.mlir",
+        "test/Driver/upf-supply-partial.test",
+        "test/Driver/upf-supply-partial-translation.test",
+        "test/Driver/upf-supply-partial-errors.test",
+        "test/Driver/upf-supply-partial-wasm.test",
+        "test/Conformance/IEEE1801/11.2.3.3.6.sv"
+      ]
     },
     {
       "id": 3,
