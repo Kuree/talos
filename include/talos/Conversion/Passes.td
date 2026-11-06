@@ -632,6 +632,24 @@ def TalosSimBuildComputeGraphPass
   ];
 }
 
+def PrepareSynchronousNativeTasksPass
+    : Pass<"prepare-synchronous-native-tasks", "mlir::ModuleOp"> {
+  let summary = "materialize ordinary native bodies for non-suspending tasks";
+  let description = [{
+    Selected class tasks get an ordinary native function body after bytecode
+    encoding and before canonical native frame preparation. The complete call
+    closure must exclude timing controls, process control and foreign calls.
+    Original task activations and their fallback frames remain canonical.
+  }];
+  let dependentDialects = [
+    "talos::sim::TalosSimulationDialect",
+    "talos::schedule::ScheduleDialect",
+    "talos::runtime::TalosRuntimeDialect",
+    "talos::native::NativeDialect",
+    "mlir::cf::ControlFlowDialect"
+  ];
+}
+
 def PrepareNativeScheduleInputsPass : Pass<"prepare-native-schedule-inputs", "mlir::ModuleOp"> {
   let summary = "prepare native schedule inputs";
   let description = [{

@@ -77,6 +77,9 @@ def NativeDialect : Dialect {
     // Virtual call: compiler-generated ordinal and depth in the shared
     // native method table. Recomputed before native conversion.
     "::mlir::DenseI32ArrayAttr":$method_vtable_path,
+    // Method/task: ordinary native body proven to return without suspension.
+    // The original task keeps its canonical activation and bytecode ABI.
+    "::mlir::FlatSymbolRefAttr":$synchronous_task_body,
     "::mlir::IntegerAttr":$table_wait,
     "::mlir::UnitAttr":$unmanaged,
     "::mlir::UnitAttr":$shared_callback,

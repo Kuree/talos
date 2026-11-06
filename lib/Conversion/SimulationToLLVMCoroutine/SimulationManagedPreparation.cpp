@@ -456,9 +456,9 @@ prepareManagedClassInventory(ModuleOp module,
   Type randomLayoutType = LLVM::LLVMStructType::getLiteral(
       context, {i32, i32, pointer, i64, pointer, i64});
   Type methodType = LLVM::LLVMStructType::getLiteral(
-      context, {i64, i32, i32, pointer, pointer, i64});
+      context, {i64, i32, i32, pointer, pointer, i64, pointer});
   Type directMethodType =
-      LLVM::LLVMStructType::getLiteral(context, {i32, i32, pointer});
+      LLVM::LLVMStructType::getLiteral(context, {i32, i32, pointer, pointer});
   Type interfaceType = LLVM::LLVMStructType::getLiteral(
       context, {i64, pointer, i64, pointer, i64});
   Type byteRangeType = LLVM::LLVMStructType::getLiteral(context, {i64, i64});
@@ -470,15 +470,22 @@ prepareManagedClassInventory(ModuleOp module,
     OpBuilder builder(context);
     builder.setInsertionPointToStart(module.getBody());
     for (auto method : methods) {
-      if (!method.getImplementation() ||
-          (!method.getIsVirtual() &&
-           !runtime::has<runtime::BytecodeNativeMethod>(method)))
+      if (!method.getImplementation())
         continue;
-      LLVM::LLVMFuncOp::create(
-          builder, method.getLoc(), managedMethodThunkName(method.getSymName()),
-          LLVM::LLVMFunctionType::get(
-              i32, {pointer, pointer, pointer, pointer, i32, pointer, i64},
-              false));
+      auto declare = [&](StringRef name) {
+        LLVM::LLVMFuncOp::create(
+            builder, method.getLoc(), name,
+            LLVM::LLVMFunctionType::get(
+                i32, {pointer, pointer, pointer, pointer, i32, pointer, i64},
+                false));
+      };
+      if (method.getIsVirtual() ||
+          (!method.getIsTask() &&
+           runtime::has<runtime::BytecodeNativeMethod>(method)))
+        declare(managedMethodThunkName(method.getSymName()));
+      if (method.getIsTask() &&
+          native::get<native::SynchronousTaskBody>(method))
+        declare(managedSynchronousMethodThunkName(method.getSymName()));
     }
   }
   SmallVector<sim::SimClassDeclOp> dispatchOrder;
@@ -838,6 +845,14 @@ prepareManagedClassInventory(ModuleOp module,
                               builder, location, pointer,
                               managedMethodThunkName(method.getSymName())),
                           3);
+                    if (!bytecodeOnly &&
+                        native::get<native::SynchronousTaskBody>(method))
+                      entry = insertValue(builder, location, entry,
+                                          LLVM::AddressOfOp::create(
+                                              builder, location, pointer,
+                                              managedSynchronousMethodThunkName(
+                                                  method.getSymName())),
+                                          6);
                     entry = insertValue(
                         builder, location, entry,
                         llvmConstant(builder, location, i64, *method.getSlot()),
@@ -885,14 +900,25 @@ prepareManagedClassInventory(ModuleOp module,
                         builder, location, entry,
                         llvmConstant(
                             builder, location, i32,
-                            method.getIsStatic() ? TALOS_RT_METHOD_STATIC : 0),
+                            (method.getIsStatic() ? TALOS_RT_METHOD_STATIC
+                                                  : 0) |
+                                (method.getIsTask() ? TALOS_RT_METHOD_TASK
+                                                    : 0)),
                         1);
-                    entry = insertValue(
-                        builder, location, entry,
-                        LLVM::AddressOfOp::create(
-                            builder, location, pointer,
-                            managedMethodThunkName(method.getSymName())),
-                        2);
+                    if (!method.getIsTask())
+                      entry = insertValue(
+                          builder, location, entry,
+                          LLVM::AddressOfOp::create(
+                              builder, location, pointer,
+                              managedMethodThunkName(method.getSymName())),
+                          2);
+                    if (native::get<native::SynchronousTaskBody>(method))
+                      entry = insertValue(builder, location, entry,
+                                          LLVM::AddressOfOp::create(
+                                              builder, location, pointer,
+                                              managedSynchronousMethodThunkName(
+                                                  method.getSymName())),
+                                          3);
                     array = LLVM::InsertValueOp::create(
                         builder, location, array, entry,
                         ArrayRef<int64_t>{static_cast<int64_t>(ordinal)});

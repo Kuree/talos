@@ -48,6 +48,7 @@ using InitializationScope = NativeDialect::InitializationScopeAttrHelper;
 using MethodArgumentSizes = NativeDialect::MethodArgumentSizesAttrHelper;
 using MethodArgumentRoots = NativeDialect::MethodArgumentRootsAttrHelper;
 using MethodVtablePath = NativeDialect::MethodVtablePathAttrHelper;
+using SynchronousTaskBody = NativeDialect::SynchronousTaskBodyAttrHelper;
 using TableWait = NativeDialect::TableWaitAttrHelper;
 using Unmanaged = NativeDialect::UnmanagedAttrHelper;
 using SharedCallback = NativeDialect::SharedCallbackAttrHelper;

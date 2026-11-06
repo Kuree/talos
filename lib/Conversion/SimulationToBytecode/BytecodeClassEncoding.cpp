@@ -55,22 +55,26 @@ void Encoder::prepareNativeMethodCalls() {
   SmallVector<sim::SimClassMethodDeclOp> methods;
   for (auto method :
        design.getBody().front().getOps<sim::SimClassMethodDeclOp>())
-    if (!method.getIsTask() && method.getImplementation()) {
+    if (method.getImplementation()) {
       methods.push_back(method);
       methodImplementations.try_emplace(*method.getImplementation(), method);
     }
   if (methods.empty())
     return;
-  analysis::NativeMethodEligibilityAnalysis eligibility(design,
-                                                        /*includeTasks=*/false);
+  analysis::NativeMethodEligibilityAnalysis eligibility(design);
   for (auto method : methods) {
     StringRef implementation = *method.getImplementation();
     if (!eligibility.canInvoke(implementation))
       bytecodeOnlyMethodBodies.insert(implementation);
-    if (method.getIsVirtual() &&
-        !eligibility.canInvokeVirtual(method.getSignatureId().value_or(0),
-                                      /*isTask=*/false))
-      bytecodeOnlyMethodSignatures.insert(method.getSignatureId().value_or(0));
+    if (!method.getIsVirtual())
+      continue;
+    uint64_t signature = method.getSignatureId().value_or(0);
+    if (method.getIsTask()) {
+      if (eligibility.canInvokeVirtual(signature, true))
+        nativeTaskFamilies[signature].push_back(method);
+    } else if (!eligibility.canInvokeVirtual(signature, false)) {
+      bytecodeOnlyMethodSignatures.insert(signature);
+    }
   }
 }
 
@@ -193,24 +197,29 @@ LogicalResult Encoder::encodeClassDirectCall(FunctionPlan &plan,
 bool Encoder::encodeNativeDirectCall(FunctionPlan &plan, StringRef callee,
                                      ValueRange arguments, ValueRange results,
                                      uint32_t firstInputs,
-                                     uint32_t firstOutputs) {
+                                     uint32_t firstOutputs,
+                                     std::optional<uint64_t> continuation) {
   auto found = methodImplementations.find(callee);
   if (found == methodImplementations.end() ||
       bytecodeOnlyMethodBodies.contains(callee) || results.size() > UINT16_MAX)
     return false;
   sim::SimClassMethodDeclOp method = found->second;
   unsigned implicit = method.getIsStatic() ? 1 : 2;
-  if (arguments.size() < implicit)
+  if (method.getIsTask() != continuation.has_value() ||
+      arguments.size() < implicit)
     return false;
   auto site = encodeNativeMethodSite(plan, arguments.drop_front(implicit),
-                                     results, firstOutputs);
+                                     results, firstOutputs, continuation);
   if (!site)
     return false;
   uint32_t index = indices.lookup(callee);
   nativeMethodCallees.insert(index);
+  if (continuation)
+    nativeTaskCallees.insert(index);
   // IEEE 1800-2023 8.10/8.20: this binding names the statically chosen method,
   // including base-qualified calls. It must not resolve a derived override.
-  emit({NativeDirectCall, static_cast<uint16_t>(results.size()), index,
+  emit({continuation ? NativeDirectTaskCall : NativeDirectCall,
+        static_cast<uint16_t>(results.size()), index,
         method.getIsStatic() ? UINT32_MAX : reg(plan, arguments[1]),
         firstInputs, static_cast<uint32_t>(arguments.size()), *site,
         classIDs.lookup(method.getOwner())});
@@ -269,10 +278,10 @@ LogicalResult Encoder::encodeClassVirtualCall(FunctionPlan &plan,
   return success();
 }
 
-std::optional<uint32_t> Encoder::encodeNativeMethodSite(FunctionPlan &plan,
-                                                        ValueRange arguments,
-                                                        ValueRange results,
-                                                        uint32_t firstOutputs) {
+std::optional<uint32_t>
+Encoder::encodeNativeMethodSite(FunctionPlan &plan, ValueRange arguments,
+                                ValueRange results, uint32_t firstOutputs,
+                                std::optional<uint64_t> continuation) {
   // IEEE 1800-2023 8.6, 8.20, 13.4 and 13.5: a function's native entry
   // executes in the caller's activation, with the same automatic lifetime,
   // dispatch and argument values. Packed integral values (7.4.1) share the
@@ -281,6 +290,18 @@ std::optional<uint32_t> Encoder::encodeNativeMethodSite(FunctionPlan &plan,
   // separate stable-ID conversion from their expanded bytecode records.
   if (options.requireBytecode)
     return std::nullopt;
+  if (continuation) {
+    if (!plan.frame)
+      return std::nullopt;
+    // The canonical IDs are the cross-tier ABI; bytecode sites use dense
+    // ordinals. Resolve before interning the plan so equal instances can
+    // share it without rewriting an already-interned constant (two-tier B4).
+    auto ids = plan.frame->getContinuations();
+    auto found = llvm::lower_bound(ids, *continuation);
+    if (found == ids.end() || *found != *continuation)
+      return std::nullopt;
+    continuation = std::distance(ids.begin(), found);
+  }
   SmallVector<uint8_t> records;
   uint32_t argumentPlanes = 0, resultPlanes = 0, handleArguments = 0;
   uint64_t resultSize = 0;
@@ -370,6 +391,8 @@ std::optional<uint32_t> Encoder::encodeNativeMethodSite(FunctionPlan &plan,
   append32(site, resultPlanes);
   append32(site, handleArguments);
   append64(site, resultSize);
+  if (continuation)
+    append64(site, *continuation);
   llvm::append_range(site, records);
   if (constants.size() > UINT32_MAX ||
       site.size() > UINT32_MAX - constants.size())
@@ -435,8 +458,19 @@ Encoder::encodeClassVirtualTaskCall(FunctionPlan &plan,
   for (auto [index, argument] : llvm::enumerate(arguments))
     operandMaps.push_back({static_cast<uint32_t>(index), reg(plan, argument)});
   firstInputs = internOperandRun(firstInputs);
+  uint32_t continuation = suspension->continuationID;
+  auto family = nativeTaskFamilies.find(call.getSignatureId());
+  if (family != nativeTaskFamilies.end())
+    if (auto site = encodeNativeMethodSite(plan, call.getArguments(), {}, 0,
+                                           suspension->continuationID)) {
+      opcode = opcode == InterfaceTaskCall ? NativeInterfaceTaskCall
+                                           : NativeVirtualTaskCall;
+      continuation = *site;
+      for (auto target : family->second)
+        nativeTaskCallees.insert(indices.lookup(*target.getImplementation()));
+    }
   emit({opcode, 0, dispatch, reg(plan, call.getReceiver()), firstInputs,
-        static_cast<uint32_t>(arguments.size()), suspension->continuationID,
+        static_cast<uint32_t>(arguments.size()), continuation,
         call.getSignatureId()});
   return success();
 }

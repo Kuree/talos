@@ -165,7 +165,7 @@ typedef struct talos_rt_trace_layout_v1 {
 } talos_rt_trace_layout_v1;
 
 typedef struct talos_rt_method_argument_v1 {
-  // Function-call values are borrowed. Compiled function thunks acquire any
+  // Synchronous-call values are borrowed. Compiled synchronous thunks acquire any
   // automatic state-reference ownership their body consumes; the caller keeps
   // its own reference.
   const void *data;
@@ -191,6 +191,9 @@ typedef struct talos_rt_method_descriptor_v1 {
   // Stable dispatch slot. Class arrays contain only direct declarations,
   // ordered by slot; inherited entries remain in the base descriptor.
   uint64_t slot;
+  // Ordinary call entry for a proven non-suspending task. native_entry keeps
+  // the task activation ABI and returns an activation handle in its result.
+  talos_rt_native_method_v1 native_sync_entry;
 } talos_rt_method_descriptor_v1;
 
 // Exact method entries used only by retained bytecode callers. Unlike virtual
@@ -200,6 +203,7 @@ typedef struct talos_rt_direct_method_v1 {
   uint32_t bytecode_function;
   uint32_t flags;
   talos_rt_native_method_v1 native_entry;
+  talos_rt_native_method_v1 native_sync_entry;
 } talos_rt_direct_method_v1;
 
 // An interface introduced by this class. Signatures are indexed by the
@@ -1097,7 +1101,15 @@ enum {
   // marshal plan. source0 is the receiver register, or UINT32_MAX for a static
   // method. The argument map includes context and, for an instance method,
   // receiver before the explicitly marshalled values.
-  TALOS_RT_DB_NATIVE_DIRECT_CALL = 65
+  TALOS_RT_DB_NATIVE_DIRECT_CALL = 65,
+  // Non-suspending task entries use the same fields and marshal records as
+  // the native function calls, with no results. The plan header appends the
+  // u64 caller continuation ordinal at +24; plane records begin at +32.
+  // Missing entries or unrepresentable references create an ordinary task
+  // activation and resume through that same canonical continuation.
+  TALOS_RT_DB_NATIVE_DIRECT_TASK_CALL = 66,
+  TALOS_RT_DB_NATIVE_VIRTUAL_TASK_CALL = 67,
+  TALOS_RT_DB_NATIVE_INTERFACE_TASK_CALL = 68
 };
 
 // StoreState writes its exact post-resolution transition predicate to the

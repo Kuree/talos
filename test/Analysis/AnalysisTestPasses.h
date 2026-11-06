@@ -13,6 +13,7 @@ void registerClockInferenceAnalysisTestPass();
 void registerDPIEffectAnalysisTestPass();
 void registerClassDispatchAnalysisTestPass();
 void registerNativeMethodEligibilityAnalysisTestPass();
+void registerBytecodeBootstrapTestPass();
 void registerCombinationalDependencyAnalysisTestPass();
 void registerCoverageSchemaTestPass();
 void registerManagedClassLayoutAnalysisTestPass();

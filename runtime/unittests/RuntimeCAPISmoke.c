@@ -42,7 +42,7 @@ _Static_assert(sizeof(talos_rt_trace_entry_v1) == 40,
                "managed trace entry size changed");
 _Static_assert(sizeof(talos_rt_trace_layout_v1) == 40,
                "managed trace layout size changed");
-_Static_assert(sizeof(talos_rt_method_descriptor_v1) == SMOKE_PTR(40, 32),
+_Static_assert(sizeof(talos_rt_method_descriptor_v1) == SMOKE_PTR(48, 40),
                "managed method descriptor size changed");
 _Static_assert(sizeof(talos_rt_random_edge_v1) == 24,
                "managed random edge size changed");
@@ -56,7 +56,7 @@ _Static_assert(sizeof(talos_rt_byte_range_v1) == 16,
                "byte range size changed");
 _Static_assert(sizeof(talos_rt_class_descriptor_v1) == SMOKE_PTR(160, 136),
                "managed class descriptor size changed");
-_Static_assert(sizeof(talos_rt_direct_method_v1) == SMOKE_PTR(16, 12),
+_Static_assert(sizeof(talos_rt_direct_method_v1) == SMOKE_PTR(24, 16),
                "exact native method binding size changed");
 _Static_assert(offsetof(talos_rt_class_descriptor_v1, native_vtable) ==
                    SMOKE_PTR(152, 128),

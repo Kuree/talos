@@ -48,6 +48,9 @@ def TalosRuntimeDialect : Dialect {
     // Only methods reached by a native-capable direct bytecode call need an
     // exact-entry bridge in their declaring class's descriptor.
     "::mlir::UnitAttr":$bytecode_native_method,
+    // A retained bytecode caller can invoke this task synchronously. Virtual
+    // targets need the ordinary body, but no unused exact-entry binding.
+    "::mlir::UnitAttr":$bytecode_synchronous_task,
     "::mlir::IntegerAttr":$bytecode_scratch_size,
     "::mlir::IntegerAttr":$bytecode_scratch_alignment,
     "::mlir::IntegerAttr":$bytecode_two_state_logic_registers,

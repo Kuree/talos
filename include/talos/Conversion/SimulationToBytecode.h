@@ -36,6 +36,8 @@ struct SimulationBytecodeFunction {
   uint32_t twoStateLogicRegisters = 0;
   /// A retained bytecode caller uses this method's exact native entry.
   bool nativeMethodEntry = false;
+  /// A bytecode caller uses an ordinary synchronous native task body.
+  bool synchronousTaskEntry = false;
 };
 
 struct SimulationSampledRange {

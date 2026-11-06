@@ -3,6 +3,7 @@
 #include "talos/Analysis/ManagedCollectionAnalysis.h"
 
 #include "talos/Analysis/ClassDispatchAnalysis.h"
+#include "talos/Dialect/Schedule/ScheduleOps.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 
 #include "mlir/Analysis/DataFlowFramework.h"
@@ -240,6 +241,11 @@ void CallGraph::build(Operation *root) {
       setTargets(dispatchTargets(dispatch, dispatch.getReceiver(),
                                  dispatch.getSlot(), dispatch.getSignatureId(),
                                  /*isTask=*/false));
+    } else if (auto dispatch = dyn_cast<schedule::NativeSynchronousClassCallOp>(
+                   operation)) {
+      setTargets(dispatchTargets(dispatch, dispatch.getReceiver(),
+                                 dispatch.getSlot(), dispatch.getSignatureId(),
+                                 /*isTask=*/true));
     } else if (auto dpi = dyn_cast<sim::SimDPICallOp>(operation)) {
       if (dpi.getIsContext())
         call.callees = foreignEntries;
@@ -411,7 +417,8 @@ bool mayAllocateManagedStorage(Operation *operation) {
 
 bool isCompiledCall(Operation *operation) {
   return isa<sim::SimCallOp, sim::SimClassDirectCallOp,
-             sim::SimClassVirtualCallOp, sim::SimDPICallOp>(operation);
+             sim::SimClassVirtualCallOp, sim::SimDPICallOp,
+             schedule::NativeSynchronousClassCallOp>(operation);
 }
 
 ManagedCollectionAnalysis::ManagedCollectionAnalysis(Operation *root) {

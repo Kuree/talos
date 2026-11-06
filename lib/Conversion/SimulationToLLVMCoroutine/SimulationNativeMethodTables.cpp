@@ -42,9 +42,11 @@ namespace {
 
 struct DispatchKey {
   uint64_t interfaceID, slot, signature;
+  bool isTask;
   bool operator<(const DispatchKey &other) const {
-    return std::tie(interfaceID, slot, signature) <
-           std::tie(other.interfaceID, other.slot, other.signature);
+    return std::tie(interfaceID, slot, signature, isTask) <
+           std::tie(other.interfaceID, other.slot, other.signature,
+                    other.isTask);
   }
 };
 
@@ -129,10 +131,24 @@ materializeNativeMethodTables(ModuleOp module,
                               ArrayRef<sim::SimClassDeclOp> classes,
                               const analysis::ClassDispatchAnalysis &dispatch) {
   llvm::StringMap<std::string> roots;
-  SmallVector<sim::SimClassVirtualCallOp> calls;
-  module.walk([&](sim::SimClassVirtualCallOp call) {
-    native::remove<native::MethodVtablePath>(call);
-    calls.push_back(call);
+  struct Call {
+    Operation *operation;
+    FlatSymbolRefAttr method;
+    uint64_t slot, signature;
+    bool isTask;
+  };
+  SmallVector<Call> calls;
+  module.walk([&](Operation *operation) {
+    auto append = [&](auto call, bool isTask) {
+      native::remove<native::MethodVtablePath>(call);
+      calls.push_back({call, call.getMethodAttr(), call.getSlot(),
+                       call.getSignatureId(), isTask});
+    };
+    if (auto call = dyn_cast<sim::SimClassVirtualCallOp>(operation))
+      append(call, false);
+    else if (auto call =
+                 dyn_cast<schedule::NativeSynchronousClassCallOp>(operation))
+      append(call, true);
   });
   if (calls.empty() ||
       runtime::bitEnumContainsAll(runtime::getExecutionFlags(module),
@@ -145,14 +161,15 @@ materializeNativeMethodTables(ModuleOp module,
   DenseMap<uint64_t, sim::SimClassDeclOp> interfaces;
   for (auto call : calls) {
     auto method = symbols.lookupNearestSymbolFrom<sim::SimClassMethodDeclOp>(
-        call, call.getMethodAttr());
+        call.operation, call.method);
     auto owner =
         method ? dispatch.lookup(method.getOwner()) : sim::SimClassDeclOp{};
     if (!owner)
-      return call.emitError("virtual method owner is missing"), failure();
+      return call.operation->emitError("virtual method owner is missing"),
+             failure();
     DispatchKey key{owner.getIsInterface() ? owner.getId() : 0,
-                    owner.getIsInterface() ? UINT32_MAX : call.getSlot(),
-                    call.getSignatureId()};
+                    owner.getIsInterface() ? UINT32_MAX : call.slot,
+                    call.signature, call.isTask};
     if (owner.getIsInterface())
       interfaces.try_emplace(owner.getId(), owner);
     ordinals.try_emplace(key, 0);
@@ -178,7 +195,7 @@ materializeNativeMethodTables(ModuleOp module,
   Builder attributes(module.getContext());
   for (auto [call, key] : llvm::zip_equal(calls, callKeys))
     native::set<native::MethodVtablePath>(
-        call,
+        call.operation,
         attributes.getDenseI32ArrayAttr({static_cast<int32_t>(ordinals.at(key)),
                                          static_cast<int32_t>(depth)}));
 
@@ -238,7 +255,8 @@ materializeNativeMethodTables(ModuleOp module,
       const DispatchKey &key = keys[ordinal];
       auto method = dispatch.resolve(declaration, key.slot, key.signature);
       uint32_t target = 0;
-      if (method && !method.getIsPure() && !method.getIsTask() &&
+      if (method && !method.getIsPure() && method.getIsTask() == key.isTask &&
+          (!key.isTask || native::get<native::SynchronousTaskBody>(method)) &&
           method.getImplementation() &&
           (!key.interfaceID ||
            dispatch.isInstanceOf(declaration,
@@ -289,7 +307,9 @@ materializeTypedNativeMethodEntries(ModuleOp module,
     if (!declaration.isExternal())
       return declaration.emitError("native typed method entry already exists");
     auto implementation = symbols.lookupNearestSymbolFrom<func::FuncOp>(
-        method, method.getImplementationAttr());
+        method, method.getIsTask()
+                    ? native::get<native::SynchronousTaskBody>(method)
+                    : method.getImplementationAttr());
     if (!implementation)
       return method.emitError("native typed method implementation is missing");
     FunctionType semantic = cast<FunctionType>(method.getFunctionType());

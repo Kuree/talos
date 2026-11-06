@@ -433,13 +433,17 @@ mlir::Value zeroNativeValue(mlir::OpBuilder &builder, mlir::Location location,
 
 std::string managedClassDescriptorName(mlir::SymbolRefAttr className);
 std::string managedMethodThunkName(llvm::StringRef methodName);
+std::string managedSynchronousMethodThunkName(llvm::StringRef methodName);
 std::string managedTypedMethodName(llvm::StringRef methodName);
-mlir::LLVM::LLVMStructType managedClassDescriptorType(mlir::MLIRContext *context);
-mlir::FailureOr<llvm::StringMap<std::string>> materializeNativeMethodTables(
-    mlir::ModuleOp module, mlir::ArrayRef<sim::SimClassDeclOp> classes,
-    const analysis::ClassDispatchAnalysis &dispatch);
-mlir::LogicalResult materializeTypedNativeMethodEntries(
-    mlir::ModuleOp module, const llvm::DataLayout &dataLayout);
+mlir::LLVM::LLVMStructType
+managedClassDescriptorType(mlir::MLIRContext *context);
+mlir::FailureOr<llvm::StringMap<std::string>>
+materializeNativeMethodTables(mlir::ModuleOp module,
+                              mlir::ArrayRef<sim::SimClassDeclOp> classes,
+                              const analysis::ClassDispatchAnalysis &dispatch);
+mlir::LogicalResult
+materializeTypedNativeMethodEntries(mlir::ModuleOp module,
+                                    const llvm::DataLayout &dataLayout);
 mlir::LLVM::GlobalOp makeByteArrayGlobal(mlir::ModuleOp module,
                                          mlir::Location location,
                                          llvm::StringRef name,

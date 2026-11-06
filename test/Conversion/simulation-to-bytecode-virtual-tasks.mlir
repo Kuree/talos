@@ -48,6 +48,10 @@ module attributes {
         %value: i32 {simulation.capture_kind = 2 : i32},
         %bundle: !bundle {simulation.capture_kind = 2 : i32})
         attributes {code_unit_id = 2 : i64, entry_kind = 12 : i32} {
+      // Retain activation dispatch: timing excludes the synchronous native ABI.
+      %delay = simulation.time.constant 1
+      simulation.suspend.delay %delay to ^done
+    ^done:
       simulation.return
     }
 

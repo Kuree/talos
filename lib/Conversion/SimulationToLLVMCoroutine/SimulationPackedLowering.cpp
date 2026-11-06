@@ -1255,6 +1255,7 @@ LogicalResult lowerPackedSimulationOperations(
     target.addLegalDialect<runtime::TalosRuntimeDialect>();
     target.addLegalOp<sim::SimContextRuntimeOp, sim::SimStatusCheckOp>();
     target.addLegalDialect<schedule::ScheduleDialect>();
+    target.addIllegalOp<schedule::NativeSynchronousClassCallOp>();
     target.addIllegalOp<schedule::NativeKnownValueOp>();
     // A test feeding only its block's branch lowers with that branch.
     target.addDynamicallyLegalOp<schedule::NativeKnownRootsOp>(

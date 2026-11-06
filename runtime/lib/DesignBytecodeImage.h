@@ -303,34 +303,46 @@ inline Instruction instructionAt(const Image &image, uint64_t index) {
           read32(data + 20), read64(data + 24)};
 }
 
+inline bool isNativeTaskCall(const Instruction &instruction) {
+  return instruction.opcode == TALOS_RT_DB_NATIVE_DIRECT_TASK_CALL ||
+         instruction.opcode == TALOS_RT_DB_NATIVE_VIRTUAL_TASK_CALL ||
+         instruction.opcode == TALOS_RT_DB_NATIVE_INTERFACE_TASK_CALL;
+}
+
 inline bool isNativeMethodCall(const Instruction &instruction) {
   return instruction.opcode == TALOS_RT_DB_NATIVE_VIRTUAL_CALL ||
          instruction.opcode == TALOS_RT_DB_NATIVE_INTERFACE_CALL ||
-         instruction.opcode == TALOS_RT_DB_NATIVE_DIRECT_CALL;
+         instruction.opcode == TALOS_RT_DB_NATIVE_DIRECT_CALL ||
+         isNativeTaskCall(instruction);
 }
 
 inline bool isStaticMethodCall(const Instruction &instruction) {
-  return instruction.opcode == TALOS_RT_DB_NATIVE_DIRECT_CALL &&
+  return (instruction.opcode == TALOS_RT_DB_NATIVE_DIRECT_CALL ||
+          instruction.opcode == TALOS_RT_DB_NATIVE_DIRECT_TASK_CALL) &&
          instruction.source0 == UINT32_MAX;
 }
 
 struct NativeMethodCallSite {
   uint32_t outputMap, argumentPlanes, resultPlanes, handleArguments;
-  uint64_t resultSize;
+  uint64_t resultSize, continuation;
   const uint8_t *planes;
 };
 
-inline NativeMethodCallSite nativeMethodCallSite(const Image &image,
-                                                 uint32_t offset) {
+inline NativeMethodCallSite
+nativeMethodCallSite(const Image &image, uint32_t offset, bool task = false) {
   const uint8_t *data = image.data + image.constants + offset;
-  return {read32(data),      read32(data + 4),  read32(data + 8),
-          read32(data + 12), read64(data + 16), data + 24};
+  return {read32(data),           read32(data + 4),
+          read32(data + 8),       read32(data + 12),
+          read64(data + 16),      task ? read64(data + 24) : 0,
+          data + (task ? 32 : 24)};
 }
 
 inline uint32_t methodCallOutputMap(const Image &image,
                                     const Instruction &instruction) {
   return isNativeMethodCall(instruction)
-             ? nativeMethodCallSite(image, instruction.auxiliary).outputMap
+             ? nativeMethodCallSite(image, instruction.auxiliary,
+                                    isNativeTaskCall(instruction))
+                   .outputMap
              : instruction.auxiliary;
 }
 

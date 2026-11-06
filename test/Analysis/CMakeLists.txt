@@ -3,6 +3,7 @@ add_mlir_library(TalosAnalysisTestPasses
   ActivationMemoryAnalysisTestPass.cpp
   ActivationPhaseAnalysisTestPass.cpp
   BytecodeImageTestPass.cpp
+  BytecodeBootstrapTestPass.cpp
   ClockInferenceAnalysisTestPass.cpp
   DPIEffectAnalysisTestPass.cpp
   ClassDispatchAnalysisTestPass.cpp

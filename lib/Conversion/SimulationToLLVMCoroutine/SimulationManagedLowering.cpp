@@ -545,18 +545,21 @@ public:
   }
 };
 
-class ClassVirtualCallConversion final
-    : public OpConversionPattern<sim::SimClassVirtualCallOp> {
+template <typename CallOp>
+class ClassVirtualCallConversion final : public OpConversionPattern<CallOp> {
+  using Base = OpConversionPattern<CallOp>;
+  using Base::getTypeConverter;
+  using typename Base::OneToNOpAdaptor;
+
 public:
   ClassVirtualCallConversion(const TypeConverter &converter,
                              MLIRContext *context,
                              const llvm::DataLayout &dataLayout,
                              const NativeClassLowering &classes)
-      : OpConversionPattern(converter, context), dataLayout(dataLayout),
-        classes(classes) {}
+      : Base(converter, context), dataLayout(dataLayout), classes(classes) {}
 
   LogicalResult
-  matchAndRewrite(sim::SimClassVirtualCallOp op, OneToNOpAdaptor adaptor,
+  matchAndRewrite(CallOp op, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     if (adaptor.getReceiver().size() != 1 ||
         adaptor.getArguments().size() != op.getArguments().size())
@@ -567,6 +570,9 @@ public:
     if (dispatch->second.vtablePath)
       return lowerTypedCall(op, adaptor, rewriter,
                             *dispatch->second.vtablePath);
+    if constexpr (std::is_same_v<CallOp,
+                                 schedule::NativeSynchronousClassCallOp>)
+      return op.emitError("synchronous task has no native method table path");
     Type pointer = LLVM::LLVMPointerType::get(rewriter.getContext());
     Type i32 = rewriter.getI32Type();
     Type i64 = rewriter.getI64Type();
@@ -612,7 +618,7 @@ public:
     SmallVector<uint64_t> resultOffsets;
     uint64_t resultSize = 0;
     uint32_t resultAlignment = 1;
-    for (Type original : op.getResultTypes()) {
+    for (Type original : op->getResultTypes()) {
       FailureOr<analysis::SimulationStorageProperties> storage =
           analysis::getSimulationStorageProperties(original, local,
                                                    llvmContext);
@@ -679,7 +685,7 @@ public:
 
     SmallVector<SmallVector<Value>> replacements;
     size_t physical = 0;
-    for (Type original : op.getResultTypes()) {
+    for (Type original : op->getResultTypes()) {
       SmallVector<Type> converted;
       if (failed(getTypeConverter()->convertType(original, converted)))
         return failure();
@@ -692,8 +698,7 @@ public:
   }
 
 private:
-  LogicalResult lowerTypedCall(sim::SimClassVirtualCallOp op,
-                               OneToNOpAdaptor adaptor,
+  LogicalResult lowerTypedCall(CallOp op, OneToNOpAdaptor adaptor,
                                ConversionPatternRewriter &rewriter,
                                std::pair<uint32_t, uint32_t> path) const {
     Location location = op.getLoc();
@@ -701,7 +706,7 @@ private:
     Type i32 = rewriter.getI32Type();
     SmallVector<Type> resultTypes;
     SmallVector<unsigned> resultCounts;
-    for (Type type : op.getResultTypes()) {
+    for (Type type : op->getResultTypes()) {
       SmallVector<Type> converted;
       if (failed(getTypeConverter()->convertType(type, converted)))
         return failure();
@@ -841,26 +846,28 @@ FailureOr<NativeClassLowering> collectNativeClassLowering(ModuleOp module) {
         return WalkResult::interrupt();
       }
       classes.fieldOffsets.try_emplace(op, *field.getOffset());
-    } else if (auto op = dyn_cast<sim::SimClassVirtualCallOp>(operation)) {
+    } else if (isa<sim::SimClassVirtualCallOp,
+                   schedule::NativeSynchronousClassCallOp>(operation)) {
+      Operation *op = operation;
       auto method = symbols.lookupNearestSymbolFrom<sim::SimClassMethodDeclOp>(
-          op, op.getMethodAttr());
+          op, op->getAttrOfType<FlatSymbolRefAttr>("method"));
       auto owner = method
                        ? symbols.lookupNearestSymbolFrom<sim::SimClassDeclOp>(
                              method, method.getOwnerAttr())
                        : sim::SimClassDeclOp{};
       if (!method || !owner) {
-        op.emitError("virtual method descriptor is missing");
+        op->emitError("virtual method descriptor is missing");
         return WalkResult::interrupt();
       }
       if (owner.getIsInterface() && !method.getInterfaceOrdinalAttr()) {
-        op.emitError("interface method has no dispatch ordinal");
+        op->emitError("interface method has no dispatch ordinal");
         return WalkResult::interrupt();
       }
       std::optional<std::pair<uint32_t, uint32_t>> path;
       if (auto certificate = native::get<native::MethodVtablePath>(op)) {
         auto values = certificate.asArrayRef();
         if (values.size() != 2 || values[1] <= 0 || values[1] > 8)
-          return op.emitError("native method table path is invalid"),
+          return op->emitError("native method table path is invalid"),
                  WalkResult::interrupt();
         path = std::pair(static_cast<uint32_t>(values[0]),
                          static_cast<uint32_t>(values[1]));
@@ -880,12 +887,16 @@ FailureOr<NativeClassLowering> collectNativeClassLowering(ModuleOp module) {
 LogicalResult
 materializeManagedMethodThunks(ModuleOp module,
                                const llvm::DataLayout &dataLayout) {
-  SmallVector<schedule::NativeMethodOp> methods;
+  SmallVector<std::pair<schedule::NativeMethodOp, bool>> methods;
   module.walk([&](schedule::NativeMethodOp method) {
-    if (method.getImplementation() &&
-        (method.getIsVirtual() ||
+    if (!method.getImplementation())
+      return;
+    if (method.getIsVirtual() ||
+        (!method.getIsTask() &&
          runtime::has<runtime::BytecodeNativeMethod>(method)))
-      methods.push_back(method);
+      methods.push_back({method, false});
+    if (method.getIsTask() && native::get<native::SynchronousTaskBody>(method))
+      methods.push_back({method, true});
   });
   MLIRContext *context = module.getContext();
   Type pointer = LLVM::LLVMPointerType::get(context);
@@ -898,8 +909,10 @@ materializeManagedMethodThunks(ModuleOp module,
   SymbolTable &moduleSymbols = symbolTables.getSymbolTable(module);
   llvm::DataLayout localDataLayout(dataLayout.getStringRepresentation());
   llvm::LLVMContext llvmContext;
-  for (schedule::NativeMethodOp method : methods) {
-    std::string thunkName = managedMethodThunkName(method.getSymName());
+  for (auto [method, synchronous] : methods) {
+    std::string thunkName =
+        synchronous ? managedSynchronousMethodThunkName(method.getSymName())
+                    : managedMethodThunkName(method.getSymName());
     if (auto declaration = moduleSymbols.lookup<LLVM::LLVMFuncOp>(thunkName)) {
       auto expected = LLVM::LLVMFunctionType::get(
           i32, {pointer, pointer, pointer, pointer, i32, pointer, i64}, false);
@@ -909,7 +922,7 @@ materializeManagedMethodThunks(ModuleOp module,
       moduleSymbols.erase(declaration);
     }
     OpBuilder builder(context);
-    if (method.getIsTask()) {
+    if (method.getIsTask() && !synchronous) {
       auto implementation =
           symbolTables.lookupNearestSymbolFrom<sim::SimFuncOp>(
               method, method.getImplementationAttr());
@@ -1028,7 +1041,8 @@ materializeManagedMethodThunks(ModuleOp module,
       continue;
     }
     auto implementation = symbolTables.lookupNearestSymbolFrom<func::FuncOp>(
-        method, method.getImplementationAttr());
+        method, synchronous ? native::get<native::SynchronousTaskBody>(method)
+                            : method.getImplementationAttr());
     if (!implementation)
       return method.emitError(
           "managed method implementation was not lowered to func");
@@ -1271,8 +1285,10 @@ void populateManagedToLLVMConversionPatterns(
                                                    dataLayout, stateBitCount);
   populateManagedStringToLLVMConversionPatterns(patterns, converter);
   patterns.add<ClassFieldRefConversion>(converter, context, classes);
-  patterns.add<ClassVirtualCallConversion>(converter, context, dataLayout,
-                                           classes);
+  patterns
+      .add<ClassVirtualCallConversion<sim::SimClassVirtualCallOp>,
+           ClassVirtualCallConversion<schedule::NativeSynchronousClassCallOp>>(
+          converter, context, dataLayout, classes);
 }
 
 } // namespace talos::detail

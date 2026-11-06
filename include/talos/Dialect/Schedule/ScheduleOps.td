@@ -841,6 +841,24 @@ def NativeExecuteOp : ScheduleNativeOp<"execute", [
   let assemblyFormat = "$callee `(` $operands `)` attr-dict `:` functional-type($operands, $results)";
 }
 
+def NativeSynchronousClassCallOp : ScheduleNativeOp<"class.synchronous_call", [
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "invoke a proven non-suspending virtual task through its native table";
+  let description = [{
+    Compiler-only task call inside an ordinary native body. Admission proves
+    that every possible target returns without suspension; the task's original
+    activation entry remains available independently for fallback execution.
+  }];
+  let arguments = (ins AnyType:$receiver, FlatSymbolRefAttr:$method,
+                       I64Attr:$slot, I64Attr:$signature_id,
+                       Variadic<AnyType>:$arguments);
+  let assemblyFormat = [{
+    $receiver `[` $method `]` `slot` $slot `signature_id` $signature_id
+    `(` $arguments `)` attr-dict `:` type($receiver)
+    (`,` type($arguments)^)?
+  }];
+}
+
 def NativeMethodOp : ScheduleNativeOp<"class.method", [
     Symbol, DeclareOpInterfaceMethods<SymbolUserOpInterface>,
     MemoryEffects<[MemWrite<SimInventoryResource>]>

@@ -477,6 +477,9 @@ enum Opcode : uint16_t {
   NativeVirtualCall = TALOS_RT_DB_NATIVE_VIRTUAL_CALL,
   NativeInterfaceCall = TALOS_RT_DB_NATIVE_INTERFACE_CALL,
   NativeDirectCall = TALOS_RT_DB_NATIVE_DIRECT_CALL,
+  NativeDirectTaskCall = TALOS_RT_DB_NATIVE_DIRECT_TASK_CALL,
+  NativeVirtualTaskCall = TALOS_RT_DB_NATIVE_VIRTUAL_TASK_CALL,
+  NativeInterfaceTaskCall = TALOS_RT_DB_NATIVE_INTERFACE_TASK_CALL,
 };
 
 } // namespace talos::bytecode

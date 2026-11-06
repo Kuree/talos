@@ -143,7 +143,7 @@ module attributes {
 // CHECK-NOT: opcode=65
 
 // LLVM-DAG: llvm.mlir.global internal constant @Base.__talos_direct_methods()
-// LLVM-DAG: !llvm.array<3 x struct<(i32, i32, ptr)>>
+// LLVM-DAG: !llvm.array<3 x struct<(i32, i32, ptr, ptr)>>
 // LLVM-LABEL: llvm.func internal @Base_ordinary.__talos_native_thunk(
 // LLVM: llvm.call @ordinary_body
 // LLVM-LABEL: llvm.func internal @Base_static.__talos_native_thunk(

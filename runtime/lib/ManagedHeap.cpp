@@ -800,7 +800,7 @@ public:
       if (!method.signature_id || method.slot >= UINT32_MAX ||
           (index && descriptor->methods[index - 1].slot >= method.slot) ||
           (method.flags & ~validFlags) != 0 ||
-          (!method.native_entry &&
+          (!method.native_entry && !method.native_sync_entry &&
            method.bytecode_function == TALOS_RT_METHOD_NO_BYTECODE &&
            !(method.flags & TALOS_RT_METHOD_PURE)))
         return nullptr;
@@ -2864,8 +2864,10 @@ talos_rt_status validateClassDescriptor(
     for (uint64_t index = 0; index != current->direct_method_count; ++index) {
       const auto &method = current->direct_methods[index];
       if (method.bytecode_function == TALOS_RT_METHOD_NO_BYTECODE ||
-          (method.flags & ~TALOS_RT_METHOD_STATIC) != 0 ||
-          !method.native_entry ||
+          (method.flags & ~(TALOS_RT_METHOD_STATIC | TALOS_RT_METHOD_TASK)) !=
+              0 ||
+          ((method.flags & TALOS_RT_METHOD_TASK) ? !method.native_sync_entry
+                                                 : !method.native_entry) ||
           (index && current->direct_methods[index - 1].bytecode_function >=
                         method.bytecode_function))
         return TALOS_RT_INVALID_DESIGN;
@@ -4831,10 +4833,10 @@ invokeResolvedMethod(talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *receiver,
                      const talos_rt_method_argument_v1 *arguments,
                      uint32_t argumentCount, void *result,
                      uint64_t resultSize) {
-  if ((method->flags & TALOS_RT_METHOD_TASK) != 0)
-    return TALOS_RT_INVALID_ARGUMENT;
-  if (!method->native_entry)
-    return TALOS_RT_TIER_UNAVAILABLE;
+  bool task = (method->flags & TALOS_RT_METHOD_TASK) != 0;
+  auto native = task ? method->native_sync_entry : method->native_entry;
+  if (!native)
+    return task ? TALOS_RT_INVALID_ARGUMENT : TALOS_RT_TIER_UNAVAILABLE;
   // A foreign caller is not required to have placed the receiver in its own
   // root set. Keep it alive across allocations made by the method body.
   talos_rt_gc_root_v1 receiverRoot{};
@@ -4843,8 +4845,8 @@ invokeResolvedMethod(talos_rt_gc_lane_v1 *lane, talos_rt_object_v1 *receiver,
     return status;
   talos_rt_status callStatus = TALOS_RT_OK;
   TALOS_RT_TRY {
-    callStatus = method->native_entry(lane->context, lane, receiver, arguments,
-                                      argumentCount, result, resultSize);
+    callStatus = native(lane->context, lane, receiver, arguments, argumentCount,
+                        result, resultSize);
   }
   TALOS_RT_CATCH(const std::bad_alloc &) {
     callStatus = TALOS_RT_OUT_OF_MEMORY;

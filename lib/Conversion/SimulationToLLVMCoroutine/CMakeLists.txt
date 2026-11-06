@@ -29,6 +29,7 @@ add_mlir_library(TalosSimulationToLLVMCoroutine
   SimulationLocalStorageLowering.cpp
   SimulationManagedLowering.cpp
   SimulationNativeMethodTables.cpp
+  SimulationSynchronousTasks.cpp
   SimulationManagedAssociativeLowering.cpp
   SimulationManagedContainerLowering.cpp
   SimulationManagedCoverageLowering.cpp

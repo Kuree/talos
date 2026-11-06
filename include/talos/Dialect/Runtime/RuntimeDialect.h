@@ -31,6 +31,8 @@ using FeatureSet = TalosRuntimeDialect::FeaturesAttrHelper;
 using BytecodeFunction = TalosRuntimeDialect::BytecodeFunctionAttrHelper;
 using BytecodeNativeMethod =
     TalosRuntimeDialect::BytecodeNativeMethodAttrHelper;
+using BytecodeSynchronousTask =
+    TalosRuntimeDialect::BytecodeSynchronousTaskAttrHelper;
 using BytecodeScratchSize = TalosRuntimeDialect::BytecodeScratchSizeAttrHelper;
 using BytecodeScratchAlignment =
     TalosRuntimeDialect::BytecodeScratchAlignmentAttrHelper;

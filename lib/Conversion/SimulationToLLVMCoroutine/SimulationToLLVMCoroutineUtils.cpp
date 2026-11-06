@@ -520,6 +520,10 @@ std::string managedMethodThunkName(StringRef methodName) {
   return (methodName + ".__talos_native_thunk").str();
 }
 
+std::string managedSynchronousMethodThunkName(StringRef methodName) {
+  return (methodName + ".__talos_native_sync_thunk").str();
+}
+
 LLVM::GlobalOp makeByteArrayGlobal(ModuleOp module, Location location,
                                    StringRef name, StringRef bytes) {
   MLIRContext *context = module.getContext();

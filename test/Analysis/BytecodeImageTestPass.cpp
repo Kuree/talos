@@ -280,11 +280,16 @@ private:
          << " dst=" << fields[2] << " src0=" << fields[3]
          << " src1=" << fields[4] << " src2=" << fields[5]
          << " aux=" << fields[6] << " imm=" << fields[7] << '\n';
-      if (metadata && (fields[0] == TALOS_RT_DB_NATIVE_VIRTUAL_CALL ||
-                       fields[0] == TALOS_RT_DB_NATIVE_INTERFACE_CALL ||
-                       fields[0] == TALOS_RT_DB_NATIVE_DIRECT_CALL)) {
+      bool nativeTask = fields[0] == TALOS_RT_DB_NATIVE_DIRECT_TASK_CALL ||
+                        fields[0] == TALOS_RT_DB_NATIVE_VIRTUAL_TASK_CALL ||
+                        fields[0] == TALOS_RT_DB_NATIVE_INTERFACE_TASK_CALL;
+      if (metadata &&
+          (fields[0] == TALOS_RT_DB_NATIVE_VIRTUAL_CALL ||
+           fields[0] == TALOS_RT_DB_NATIVE_INTERFACE_CALL ||
+           fields[0] == TALOS_RT_DB_NATIVE_DIRECT_CALL || nativeTask)) {
         uint64_t site = constantOffset + fields[6];
-        if (!reader.fits(site, 1, 24))
+        uint64_t headerSize = nativeTask ? 32 : 24;
+        if (!reader.fits(site, 1, headerSize))
           return failure();
         uint32_t inputs = reader.read<uint32_t>(site + 4);
         uint32_t outputs = reader.read<uint32_t>(site + 8);
@@ -293,11 +298,13 @@ private:
            << " result_size=" << reader.read<uint64_t>(site + 16);
         if (auto handles = reader.read<uint32_t>(site + 12))
           os << " handle_arguments=" << handles;
+        if (nativeTask)
+          os << " continuation=" << reader.read<uint64_t>(site + 24);
         os << '\n';
-        if (!reader.fits(site + 24, uint64_t{inputs} + outputs, 16))
+        if (!reader.fits(site + headerSize, uint64_t{inputs} + outputs, 16))
           return failure();
         for (uint64_t plane = 0; plane != uint64_t{inputs} + outputs; ++plane) {
-          uint64_t record = site + 24 + plane * 16;
+          uint64_t record = site + headerSize + plane * 16;
           os << (plane < inputs ? "argument" : "result")
              << " plane=" << (plane < inputs ? plane : plane - inputs)
              << " register=" << reader.read<uint32_t>(record)

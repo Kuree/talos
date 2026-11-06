@@ -1858,17 +1858,21 @@ bool validIntrinsic(const Image &image, const Function &function,
 static bool validNativeMethodSite(const Image &image, const Function &function,
                                   const Instruction &instruction) {
   uint64_t offset = instruction.auxiliary;
-  if (offset > image.constantSize || image.constantSize - offset < 24)
+  bool task = isNativeTaskCall(instruction);
+  uint64_t headerSize = task ? 32 : 24;
+  if (offset > image.constantSize || image.constantSize - offset < headerSize)
     return false;
   NativeMethodCallSite site =
-      nativeMethodCallSite(image, instruction.auxiliary);
+      nativeMethodCallSite(image, instruction.auxiliary, task);
   uint64_t count = uint64_t{site.argumentPlanes} + site.resultPlanes;
   if (site.handleArguments > site.argumentPlanes ||
       uint64_t{site.argumentPlanes} * sizeof(talos_rt_method_argument_v1) +
               uint64_t{site.handleArguments} * sizeof(uint64_t) >
           SIZE_MAX ||
       site.resultSize > UINT32_MAX ||
-      count > (image.constantSize - offset - 24) / 16 ||
+      count > (image.constantSize - offset - headerSize) / 16 ||
+      (task && (instruction.flags || site.resultPlanes || site.resultSize ||
+                site.continuation >= function.continuationCount)) ||
       instruction.source2 < (isStaticMethodCall(instruction) ? 1u : 2u) ||
       instruction.source1 > image.operandCount ||
       instruction.source2 > image.operandCount - instruction.source1 ||
@@ -2111,6 +2115,9 @@ bool validateInitialization(const Image &image, const Function &function,
     case TALOS_RT_DB_TASK_CALL:
     case TALOS_RT_DB_VIRTUAL_TASK_CALL:
     case TALOS_RT_DB_INTERFACE_TASK_CALL:
+    case TALOS_RT_DB_NATIVE_DIRECT_TASK_CALL:
+    case TALOS_RT_DB_NATIVE_VIRTUAL_TASK_CALL:
+    case TALOS_RT_DB_NATIVE_INTERFACE_TASK_CALL:
       fallthrough = false;
       break;
     case TALOS_RT_DB_PROCESS_CONTROL:
@@ -2243,6 +2250,9 @@ bool validateInitialization(const Image &image, const Function &function,
     case TALOS_RT_DB_NATIVE_VIRTUAL_CALL:
     case TALOS_RT_DB_NATIVE_INTERFACE_CALL:
     case TALOS_RT_DB_NATIVE_DIRECT_CALL:
+    case TALOS_RT_DB_NATIVE_DIRECT_TASK_CALL:
+    case TALOS_RT_DB_NATIVE_VIRTUAL_TASK_CALL:
+    case TALOS_RT_DB_NATIVE_INTERFACE_TASK_CALL:
       valid = (isStaticMethodCall(instruction) ||
                requireInitialized(state, instruction.source0)) &&
               mapSourcesInitialized(state, instruction.source1,
@@ -2901,7 +2911,11 @@ bool validateFunctionCode(const Image &image, uint32_t functionIndex) {
     case TALOS_RT_DB_INTERFACE_CALL:
     case TALOS_RT_DB_NATIVE_VIRTUAL_CALL:
     case TALOS_RT_DB_NATIVE_INTERFACE_CALL:
-    case TALOS_RT_DB_NATIVE_DIRECT_CALL: {
+    case TALOS_RT_DB_NATIVE_DIRECT_CALL:
+    case TALOS_RT_DB_NATIVE_DIRECT_TASK_CALL:
+    case TALOS_RT_DB_NATIVE_VIRTUAL_TASK_CALL:
+    case TALOS_RT_DB_NATIVE_INTERFACE_TASK_CALL: {
+      bool task = isNativeTaskCall(instruction);
       if (isNativeMethodCall(instruction) &&
           !validNativeMethodSite(image, function, instruction))
         return reject(__LINE__, "invalid native method marshal plan",
@@ -2909,11 +2923,14 @@ bool validateFunctionCode(const Image &image, uint32_t functionIndex) {
       uint32_t outputs = methodCallOutputMap(image, instruction);
       bool interfaceDispatch =
           instruction.opcode == TALOS_RT_DB_INTERFACE_CALL ||
-          instruction.opcode == TALOS_RT_DB_NATIVE_INTERFACE_CALL;
+          instruction.opcode == TALOS_RT_DB_NATIVE_INTERFACE_CALL ||
+          instruction.opcode == TALOS_RT_DB_NATIVE_INTERFACE_TASK_CALL;
       bool directDispatch =
-          instruction.opcode == TALOS_RT_DB_NATIVE_DIRECT_CALL;
+          instruction.opcode == TALOS_RT_DB_NATIVE_DIRECT_CALL ||
+          instruction.opcode == TALOS_RT_DB_NATIVE_DIRECT_TASK_CALL;
       bool staticMethod = isStaticMethodCall(instruction);
-      if (instruction.flags > function.layoutCount ||
+      if ((task && (function.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) == 0) ||
+          instruction.flags > function.layoutCount ||
           instruction.immediate == 0 ||
           instruction.source2 < (staticMethod ? 1u : 2u) ||
           (!staticMethod &&
@@ -2948,7 +2965,7 @@ bool validateFunctionCode(const Image &image, uint32_t functionIndex) {
           return reject(__LINE__, "unknown exact native method", functionIndex,
                         pc, instruction.opcode);
         Function callee = functionAt(image, instruction.destination);
-        if ((callee.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) != 0 ||
+        if (bool(callee.flags & TALOS_RT_DESIGN_FUNCTION_PROCESS) != task ||
             callee.argumentCount != instruction.source2 ||
             callee.resultCount != instruction.flags ||
             !validMap(image, function, callee, instruction.source1,
@@ -3219,7 +3236,8 @@ bool validateImage(const Image &image, bool validateCode) {
     // Bits 16 to 24 hold a `default_trireg_strength plus one, on a trireg.
     uint32_t capacity = (net.argument >> 16) & 0x1ff;
     if ((net.argument & ~(uint32_t{511} | (uint32_t{0x1ff} << 16))) != 0 ||
-        capacity > 251 || (capacity != 0 && decodeNetResolution(net.argument) != 9) ||
+        capacity > 251 ||
+        (capacity != 0 && decodeNetResolution(net.argument) != 9) ||
         decodeNetResolution(net.argument) > 9 || net.planeSize == 0 ||
         (decodeNetResolution(net.argument) == 9 && (net.argument & 1) == 0) ||
         (decodeNetResolution(net.argument) != 9 && chargeStrength != 0) ||

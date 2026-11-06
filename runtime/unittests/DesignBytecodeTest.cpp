@@ -4987,6 +4987,373 @@ TEST(DesignBytecode, RejectsMalformedNativeStateReferencePlans) {
   }
 }
 
+// A bytecode thread calls a task with a state subview and two physical
+// four-state planes. Native execution and retained activation fallback must
+// reach the same canonical continuation and balance automatic references.
+std::vector<uint8_t> makeNativeTaskBytecode(unsigned dispatch) {
+  bool staticMethod = dispatch == 3;
+  uint32_t arguments = staticMethod ? 3 : 4;
+  uint32_t layoutCount = staticMethod ? 11 : 6;
+  constexpr size_t functions = TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE;
+  constexpr size_t layouts = functions + 2 * 96;
+  size_t code = layouts + layoutTableSize(layoutCount);
+  size_t operands = code + 18 * 32;
+  size_t constants = operands + (arguments + 1) * 8;
+  size_t site = constants + 40;
+  size_t continuations = site + 32 + 3 * 16;
+  size_t captures = continuations + 3 * 24;
+  std::vector<uint8_t> bytes(captures + arguments * 32, 0);
+  std::memcpy(bytes.data(), TALOS_RT_DESIGN_BYTECODE_MAGIC, 8);
+  put32(bytes, 8, TALOS_RT_VERSION);
+  put32(bytes, 16, TALOS_RT_DESIGN_BYTECODE_HEADER_SIZE);
+  put64(bytes, 24, bytes.size());
+  for (auto [offset, value] : {std::pair<size_t, size_t>{40, functions},
+                               {48, 2},
+                               {56, layouts},
+                               {64, layoutCount},
+                               {72, code},
+                               {80, 18},
+                               {88, operands},
+                               {96, arguments + 1},
+                               {104, constants},
+                               {112, continuations - constants},
+                               {120, continuations},
+                               {128, 3},
+                               {136, captures},
+                               {152, captures},
+                               {168, captures},
+                               {176, arguments},
+                               {184, bytes.size()}})
+    put64(bytes, offset, value);
+  putShapeTable(bytes, layouts, layoutCount);
+  for (uint32_t index = 0; index != 2; ++index) {
+    size_t function = functions + index * 96;
+    put64(bytes, function, index + 1);
+    put64(bytes, function + 16, index ? 9 : 0);
+    put64(bytes, function + 24, 9);
+    put64(bytes, function + 32, index && staticMethod ? 6 : 0);
+    put64(bytes, function + 40, index && staticMethod ? 5 : 6);
+    put32(bytes, function + 48, index ? arguments : 0);
+    put64(bytes, function + 56, index && staticMethod ? 96 : 104);
+    put64(bytes, function + 64, 8);
+    put64(bytes, function + 72, index ? 2 : 0);
+    put64(bytes, function + 80, index ? 1 : 2);
+    put64(bytes, function + 88,
+          TALOS_RT_DESIGN_FUNCTION_PROCESS |
+              (uint64_t{index ? (staticMethod ? 24u : 32u) : 48u} << 1));
+  }
+  auto layout = [&](unsigned index, uint8_t kind, uint32_t width,
+                    uint32_t offset, uint64_t size) {
+    putLayout(bytes, layouts, layoutCount, index, kind, width, offset, size,
+              kind == TALOS_RT_DBREG_MANAGED ? TALOS_RT_DBREG_CLASS_HANDLE : 0);
+  };
+  layout(0, TALOS_RT_DBREG_HANDLE, 256, 0, 32);
+  layout(1, TALOS_RT_DBREG_MANAGED, 64, 32, 8);
+  layout(2, TALOS_RT_DBREG_HANDLE, 256, 40, 32);
+  layout(3, TALOS_RT_DBREG_LOGIC, 9, 72, 16);
+  layout(4, TALOS_RT_DBREG_BITS, 64, 88, 8);
+  layout(5, TALOS_RT_DBREG_BITS, 64, 96, 8);
+  if (staticMethod) {
+    layout(6, TALOS_RT_DBREG_HANDLE, 256, 0, 32);
+    layout(7, TALOS_RT_DBREG_HANDLE, 256, 32, 32);
+    layout(8, TALOS_RT_DBREG_LOGIC, 9, 64, 16);
+    layout(9, TALOS_RT_DBREG_BITS, 64, 80, 8);
+    layout(10, TALOS_RT_DBREG_BITS, 64, 88, 8);
+  }
+  for (uint32_t argument = 0; argument != arguments; ++argument) {
+    put32(bytes, operands + argument * 8, argument);
+    put32(bytes, operands + argument * 8 + 4,
+          staticMethod && argument ? argument + 1 : argument);
+    size_t capture = captures + argument * 32;
+    put32(bytes, capture, 1);
+    put32(bytes, capture + 4, argument);
+    put64(bytes, capture + 8, argument ? (argument - 1) * 8 : UINT64_MAX);
+    put64(bytes, capture + 16,
+          argument == arguments - 1 ? (argument - 1) * 8 + 8 : UINT64_MAX);
+    put64(bytes, capture + 24, argument ? 8 : 0);
+  }
+  put32(bytes, operands + arguments * 8, 3); // interface ID
+  put32(bytes, operands + arguments * 8 + 4, 0);
+  instruction(bytes, code, 0, TALOS_RT_DB_CONSTANT);
+  instruction(bytes, code, 1, TALOS_RT_DB_LOAD_FRAME, 0, 1);
+  instruction(bytes, code, 2, TALOS_RT_DB_LOAD_FRAME,
+              TALOS_RT_DESCRIPTOR_STORAGE, 2, 0, 0, 0, 64, 8);
+  instruction(bytes, code, 3, TALOS_RT_DB_LOAD_FRAME, 0, 3, 0, 0, 0, 0, 16);
+  instruction(bytes, code, 4,
+              dispatch == 1   ? TALOS_RT_DB_NATIVE_VIRTUAL_TASK_CALL
+              : dispatch == 2 ? TALOS_RT_DB_NATIVE_INTERFACE_TASK_CALL
+                              : TALOS_RT_DB_NATIVE_DIRECT_TASK_CALL,
+              0,
+              dispatch == 1   ? 0
+              : dispatch == 2 ? arguments
+                              : 1,
+              staticMethod ? UINT32_MAX : 1, 0, arguments, 40,
+              dispatch == 1 || dispatch == 2 ? 17 : 1);
+  instruction(bytes, code, 5, TALOS_RT_DB_LOAD_FRAME, 0, 4, 0, 0, 0, 0, 32);
+  instruction(bytes, code, 6, TALOS_RT_DB_MAKE_HANDLE, 0, 2,
+              TALOS_RT_DESCRIPTOR_STORAGE, 64);
+  instruction(bytes, code, 7, TALOS_RT_DB_STORE_STATE, 0, 0, 2, 4);
+  instruction(bytes, code, 8, TALOS_RT_DB_TERMINATE);
+  uint32_t reference = staticMethod ? 1 : 2;
+  uint32_t logic = reference + 1, working = reference + 2, one = reference + 3;
+  instruction(bytes, code, 9, TALOS_RT_DB_CONSTANT);
+  instruction(bytes, code, 10,
+              staticMethod ? TALOS_RT_DB_NOP : TALOS_RT_DB_LOAD_FRAME, 0,
+              staticMethod ? 0 : 1);
+  instruction(bytes, code, 11, TALOS_RT_DB_LOAD_FRAME,
+              TALOS_RT_DESCRIPTOR_STORAGE, reference, 0, 0, 0, 64,
+              staticMethod ? 0 : 8);
+  instruction(bytes, code, 12, TALOS_RT_DB_LOAD_FRAME, 0, logic, 0, 0, 0, 0,
+              staticMethod ? 8 : 16);
+  instruction(bytes, code, 13, TALOS_RT_DB_LOAD_STATE, 0, working, reference);
+  instruction(bytes, code, 14, TALOS_RT_DB_CONSTANT, 0, one, 0, 0, 0, 0, 32);
+  instruction(bytes, code, 15, TALOS_RT_DB_ADD, 0, working, working, one);
+  instruction(bytes, code, 16, TALOS_RT_DB_STORE_STATE, 0, 0, reference,
+              working);
+  instruction(bytes, code, 17, TALOS_RT_DB_TERMINATE);
+  put64(bytes, constants + 32, 1);
+  put32(bytes, site + 4, 3);
+  put32(bytes, site + 12, 1);
+  put64(bytes, site + 24, 1); // ordinal, not the cross-tier ID 77
+  for (unsigned plane = 0; plane != 3; ++plane) {
+    size_t record = site + 32 + plane * 16;
+    put32(bytes, record, plane ? 3 : 2);
+    put32(bytes, record + 4, plane == 2 ? 8 : 0);
+    put32(bytes, record + 8, plane ? 2 : 8);
+    put32(bytes, record + 12, plane ? 0 : 64);
+  }
+  put64(bytes, continuations + 24 + 8, 5);
+  put32(bytes, continuations + 24 + 4, 77);
+  put32(bytes, continuations + 48, 1);
+  put64(bytes, continuations + 48 + 8, 9);
+  put64(bytes, 32, imageChecksum(bytes));
+  return bytes;
+}
+
+talos_rt_status
+nativeSynchronousTask(talos_rt_context *context, talos_rt_gc_lane_v1 *lane,
+                      talos_rt_object_v1 *receiver,
+                      const talos_rt_method_argument_v1 *arguments,
+                      uint32_t count, void *, uint64_t resultSize) {
+  if (!lane || count != 3 || resultSize || arguments[0].size != 8 ||
+      arguments[1].size != 2 || arguments[2].size != 2)
+    return TALOS_RT_ARGUMENT_MISMATCH;
+  uint16_t valuePlane, unknownPlane;
+  std::memcpy(&valuePlane, arguments[1].data, 2);
+  std::memcpy(&unknownPlane, arguments[2].data, 2);
+  if (valuePlane != 0x155 || unknownPlane != 0xa0)
+    return TALOS_RT_ARGUMENT_MISMATCH;
+  uint64_t reference, value = 0;
+  std::memcpy(&reference, arguments[0].data, 8);
+  talos_rt_status status = talos_rt_v1_native_state_retain(context, reference);
+  if (status != TALOS_RT_OK)
+    return status;
+  status = talos_rt_v1_gc_collect(lane);
+  if (status == TALOS_RT_OK && receiver && !talos_rt_v1_object_id(receiver))
+    status = TALOS_RT_INVALID_HANDLE;
+  auto *state = reinterpret_cast<uint8_t *>(context->stateValue.data());
+  if (status == TALOS_RT_OK)
+    status = talos_rt_v1_native_state_load_plane(
+        context, state, 65, reference, 64, 0, 0,
+        reinterpret_cast<uint8_t *>(&value));
+  if (status == TALOS_RT_OK) {
+    ++value;
+    uint8_t changed = 0;
+    status = talos_rt_v1_native_state_store_plane(
+        context, state, 65, reference, 64, 0,
+        reinterpret_cast<const uint8_t *>(&value), &changed);
+  }
+  auto released = talos_rt_v1_native_state_release(context, reference, 0);
+  return status == TALOS_RT_OK ? released : status;
+}
+
+TEST(DesignBytecode,
+     NativeTasksKeepDispatchContinuationsAndReferenceOwnership) {
+  for (unsigned dispatch = 0; dispatch != 4; ++dispatch) {
+    for (bool native : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << dispatch << '/' << native);
+      Fixture fixture;
+      fixture.bytecode = makeNativeTaskBytecode(dispatch);
+      fixture.execution.bytecode = fixture.bytecode.data();
+      fixture.execution.bytecode_size = fixture.bytecode.size();
+      fixture.execution.checksum = imageChecksum(fixture.bytecode);
+      uint64_t scratchSize = 0, scratchAlignment = 0;
+      ASSERT_EQ(talos_rt_validate_design_bytecode(
+                    fixture.entry, nullptr, &scratchSize, &scratchAlignment),
+                TALOS_RT_OK);
+      talos_rt_context *context = nullptr;
+      ASSERT_EQ(
+          talos_rt_v1_context_create_for_design(&fixture.execution, &context),
+          TALOS_RT_OK);
+      auto wrongEntry =
+          +[](talos_rt_context *, talos_rt_gc_lane_v1 *, talos_rt_object_v1 *,
+              const talos_rt_method_argument_v1 *, uint32_t, void *,
+              uint64_t) -> talos_rt_status {
+        return TALOS_RT_INVALID_ARGUMENT;
+      };
+      const uint64_t signatures[] = {17};
+      talos_rt_interface_descriptor_v1 interface{3, signatures, 1, nullptr, 0};
+      talos_rt_method_descriptor_v1 baseMethod{
+          17, TALOS_RT_METHOD_TASK, 1, wrongEntry, nullptr, 0, wrongEntry};
+      talos_rt_method_descriptor_v1 method = baseMethod;
+      method.native_sync_entry = native ? nativeSynchronousTask : nullptr;
+      uint32_t flags =
+          TALOS_RT_METHOD_TASK | (dispatch == 3 ? TALOS_RT_METHOD_STATIC : 0);
+      talos_rt_direct_method_v1 exact{1, flags, nullptr, nativeSynchronousTask};
+      talos_rt_direct_method_v1 override{1, flags, nullptr, wrongEntry};
+      talos_rt_class_descriptor_v1 base{};
+      base.version = TALOS_RT_VERSION;
+      base.class_id = 1;
+      base.instance_size = 8;
+      base.instance_alignment = 8;
+      base.methods = &baseMethod;
+      base.method_count = 1;
+      base.interfaces = &interface;
+      base.interface_count = 1;
+      base.direct_methods = native ? &exact : nullptr;
+      base.direct_method_count = native ? 1 : 0;
+      talos_rt_class_descriptor_v1 derived = base;
+      derived.class_id = 2;
+      derived.base = &base;
+      derived.methods = &method;
+      derived.interfaces = nullptr;
+      derived.interface_count = 0;
+      derived.direct_methods = &override;
+      derived.direct_method_count = 1;
+      ASSERT_EQ(talos_rt_v1_class_register(context, &base), TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_class_register(context, &derived), TALOS_RT_OK);
+      talos_rt_gc_lane_v1 *lane = nullptr;
+      ASSERT_EQ(talos_rt_v1_gc_lane_create(context, &lane), TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_gc_lane_enter(lane), TALOS_RT_OK);
+      talos_rt_object_v1 *receiver = nullptr;
+      ASSERT_EQ(talos_rt_v1_object_allocate(lane, &derived, &receiver),
+                TALOS_RT_OK);
+      ASSERT_EQ(talos_rt_v1_gc_lane_leave(lane), TALOS_RT_OK);
+      std::array<uint64_t, 2> initial{0x123456789abcdef0, 1}, unknown{};
+      uint64_t reference = 0;
+      ASSERT_EQ(
+          talos_rt_v1_native_state_alloc(
+              context, 80, reinterpret_cast<const uint8_t *>(initial.data()),
+              reinterpret_cast<const uint8_t *>(unknown.data()), &reference),
+          TALOS_RT_OK);
+      uint64_t handle = talos_rt_v1_native_handle_offset(reference, 5);
+      ScheduledDesignTask task;
+      task.id = 1;
+      task.function = 0;
+      task.frame.resize(48 + scratchSize);
+      task.scratchOffset = 48;
+      task.scratchSize = scratchSize;
+      task.started = true;
+      task.urgent = true;
+      task.queuedRegion = TALOS_RT_REGION_ACTIVE;
+      uint64_t values[] = {talos_rt_managed_word_from_object(receiver), handle,
+                           0x155, 0xa0, 0x5a};
+      std::memcpy(task.frame.data(), values, sizeof(values));
+      context->scheduledDesignTaskIndices.emplace(task.id, 0);
+      context->designPollCandidates.insert(task.id);
+      context->scheduledDesignTasks.push_back(std::move(task));
+      unsigned steps = 0;
+      do {
+        bool progress = false;
+        ASSERT_EQ(talos_rt_run_one_design_task(context, UINT32_MAX, UINT32_MAX,
+                                               UINT64_MAX, &progress),
+                  TALOS_RT_OK);
+        ASSERT_TRUE(progress);
+        ASSERT_LE(++steps, 3u);
+        if (!native && steps == 1) {
+          ASSERT_EQ(context->scheduledDesignTasks.size(), 1u);
+          const auto &activation = context->scheduledDesignTasks.front();
+          EXPECT_EQ(activation.function, 1u);
+          ASSERT_EQ(activation.callers.size(), 1u);
+          EXPECT_EQ(activation.callers.front().continuation, 77u);
+        }
+      } while (!context->scheduledDesignTasks.empty());
+      EXPECT_EQ(steps, native ? 1u : 3u);
+      EXPECT_EQ(context->stateValue[0], 0x5au);
+      std::array<uint64_t, 2> after{};
+      ASSERT_EQ(
+          talos_rt_v1_native_state_load_plane(
+              context,
+              reinterpret_cast<const uint8_t *>(context->stateValue.data()), 65,
+              reference, 80, 0, 0, reinterpret_cast<uint8_t *>(after.data())),
+          TALOS_RT_OK);
+      EXPECT_EQ((after[0] >> 5) | (after[1] << 59),
+                ((initial[0] >> 5) | (initial[1] << 59)) + 1);
+      EXPECT_EQ(after[0] & 31u, initial[0] & 31u);
+      EXPECT_EQ(after[1] & ~UINT64_C(31), initial[1] & ~UINT64_C(31));
+      if (dispatch != 3) {
+        std::array<uint64_t, 24> nullFrame{};
+        nullFrame[1] = handle;
+        nullFrame[2] = 0x155;
+        nullFrame[3] = 0xa0;
+        talos_rt_fragment_action_v1 action{};
+        // IEEE 1800-2023 8.4: a virtual call through a null handle is
+        // illegal, a direct one is not: it starts the bytecode task, which
+        // this harness has no activation slot for.
+        EXPECT_EQ(talos_rt_execute_design_bytecode(
+                      fixture.entry, context, nullFrame.data(),
+                      sizeof(nullFrame), 48, scratchSize, 0, 0, &action),
+                  dispatch == 0 ? TALOS_RT_INVALID_LIFECYCLE
+                                : TALOS_RT_INVALID_HANDLE);
+      }
+      if ((dispatch == 1 || dispatch == 2) && native) {
+        // Foreign synchronous invocation uses the new task entry. Its legacy
+        // activation entry above deliberately rejects this call shape.
+        uint16_t valuePlane = 0x155, unknownPlane = 0xa0;
+        talos_rt_method_argument_v1 arguments[] = {
+            {&handle, 8}, {&valuePlane, 2}, {&unknownPlane, 2}};
+        ASSERT_EQ(talos_rt_v1_gc_lane_enter(lane), TALOS_RT_OK);
+        auto status =
+            dispatch == 1
+                ? talos_rt_v1_method_invoke(lane, receiver, 0, 17, arguments, 3,
+                                            nullptr, 0)
+                : talos_rt_v1_interface_method_invoke(lane, receiver, 3, 0, 17,
+                                                      arguments, 3, nullptr, 0);
+        EXPECT_EQ(status, TALOS_RT_OK);
+        ASSERT_EQ(talos_rt_v1_gc_lane_leave(lane), TALOS_RT_OK);
+      }
+      ASSERT_EQ(talos_rt_v1_native_state_release(context, reference, 0),
+                TALOS_RT_OK);
+      EXPECT_EQ(
+          talos_rt_v1_native_state_load_plane(
+              context,
+              reinterpret_cast<const uint8_t *>(context->stateValue.data()), 65,
+              reference, 80, 0, 0, reinterpret_cast<uint8_t *>(after.data())),
+          TALOS_RT_INVALID_HANDLE);
+      ASSERT_EQ(talos_rt_v1_gc_lane_destroy(lane), TALOS_RT_OK);
+      talos_rt_v1_context_destroy(context);
+    }
+  }
+}
+
+TEST(DesignBytecode, RejectsMalformedNativeTaskPlans) {
+  for (unsigned mutation = 0; mutation != 5; ++mutation) {
+    SCOPED_TRACE(mutation);
+    Fixture fixture;
+    fixture.bytecode = makeNativeTaskBytecode(1);
+    size_t constants = get64(fixture.bytecode, 104);
+    size_t code = get64(fixture.bytecode, 72);
+    if (mutation == 0)
+      put64(fixture.bytecode, constants + 40 + 24, 77); // ID is not an ordinal.
+    else if (mutation == 1)
+      put32(fixture.bytecode, constants + 40 + 8, 1); // A task has no results.
+    else if (mutation == 2)
+      put64(fixture.bytecode, constants + 40 + 16, 8);
+    else if (mutation == 3)
+      put32(fixture.bytecode, constants + 40 + 32 + 8, 32); // Expanded raw ref.
+    else
+      put16(fixture.bytecode, code + 4 * 32, TALOS_RT_DB_NATIVE_VIRTUAL_CALL);
+    put64(fixture.bytecode, 32, imageChecksum(fixture.bytecode));
+    fixture.execution.bytecode = fixture.bytecode.data();
+    fixture.execution.bytecode_size = fixture.bytecode.size();
+    fixture.execution.checksum = imageChecksum(fixture.bytecode);
+    uint64_t scratchSize = 0, scratchAlignment = 0;
+    EXPECT_EQ(talos_rt_validate_design_bytecode(
+                  fixture.entry, nullptr, &scratchSize, &scratchAlignment),
+              TALOS_RT_INVALID_BYTECODE);
+  }
+}
+
 TEST(DesignBytecode, ExactNativeMethodsKeepBaseBindingAndFallback) {
   for (bool native : {false, true}) {
     SCOPED_TRACE(native);
@@ -5044,11 +5411,16 @@ TEST(DesignBytecode, ExactNativeMethodsKeepBaseBindingAndFallback) {
               TALOS_RT_OK);
     EXPECT_EQ(frame[3], native ? 0x15au : 0x55u);
     EXPECT_EQ(frame[4], native ? 0x1a3u : 0xa0u);
+    // IEEE 1800-2023 8.4: a non-virtual call through a null handle is legal;
+    // it runs the bytecode body, never the native entry.
     frame[0] = 0;
+    frame[3] = frame[4] = 0;
     EXPECT_EQ(talos_rt_execute_design_bytecode(fixture.entry, context,
                                                frame.data(), sizeof(frame), 40,
                                                72, 0, 0, &action),
-              TALOS_RT_INVALID_HANDLE);
+              TALOS_RT_OK);
+    EXPECT_EQ(frame[3], 0x55u);
+    EXPECT_EQ(frame[4], 0xa0u);
     ASSERT_EQ(talos_rt_v1_gc_lane_destroy(lane), TALOS_RT_OK);
     talos_rt_v1_context_destroy(context);
   }

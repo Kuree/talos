@@ -11,6 +11,7 @@ void buildSimulationToLLVMCoroutinePipeline(mlir::OpPassManager &manager,
                                             bool nativeAggregates) {
   // Bytecode and the actor CFG stay canonical. Lower address selections only
   // in their borrowed invocation bodies, before native storage admission.
+  manager.addPass(createPrepareSynchronousNativeTasksPass());
   SpecializeReferenceJoinsPassOptions joins;
   joins.nativeBodiesOnly = true;
   manager.nest<sim::SimDesignOp>().nest<sim::SimFuncOp>().addPass(

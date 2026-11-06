@@ -97,13 +97,14 @@ private:
   bool encodeNativeDirectCall(FunctionPlan &plan, llvm::StringRef callee,
                               mlir::ValueRange arguments,
                               mlir::ValueRange results, uint32_t firstInputs,
-                              uint32_t firstOutputs);
+                              uint32_t firstOutputs,
+                              std::optional<uint64_t> continuation = {});
   mlir::LogicalResult encodeClassVirtualCall(FunctionPlan &plan,
                                              sim::SimClassVirtualCallOp call);
-  std::optional<uint32_t> encodeNativeMethodSite(FunctionPlan &plan,
-                                                 mlir::ValueRange arguments,
-                                                 mlir::ValueRange results,
-                                                 uint32_t firstOutputs);
+  std::optional<uint32_t>
+  encodeNativeMethodSite(FunctionPlan &plan, mlir::ValueRange arguments,
+                         mlir::ValueRange results, uint32_t firstOutputs,
+                         std::optional<uint64_t> continuation = {});
   mlir::LogicalResult
   encodeClassVirtualTaskCall(FunctionPlan &plan,
                              sim::SimClassVirtualTaskCallOp call);
@@ -235,9 +236,12 @@ private:
   llvm::StringMap<uint64_t> classFieldOffsets;
   llvm::StringMap<ClassMethodDispatch> classMethodDispatch;
   llvm::DenseSet<uint64_t> bytecodeOnlyMethodSignatures;
+  llvm::DenseMap<uint64_t, llvm::SmallVector<sim::SimClassMethodDeclOp>>
+      nativeTaskFamilies;
   llvm::StringMap<sim::SimClassMethodDeclOp> methodImplementations;
   llvm::StringSet<> bytecodeOnlyMethodBodies;
   llvm::DenseSet<uint32_t> nativeMethodCallees;
+  llvm::DenseSet<uint32_t> nativeTaskCallees;
   llvm::StringMap<sim::SimFuncOp> externalFunctions;
   llvm::DenseMap<uint32_t, std::string> importSymbols;
   llvm::SmallVector<Instruction> instructions;

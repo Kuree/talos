@@ -109,6 +109,9 @@ LogicalResult Encoder::encodeTaskCall(FunctionPlan &plan,
   Block &calleeEntry = callee.function.getBody().front();
   auto inputs =
       addMap(callee, calleeEntry.getArguments(), plan, call.getArguments());
+  if (encodeNativeDirectCall(plan, call.getCallee(), call.getArguments(), {},
+                             inputs.first, 0, suspension->continuationID))
+    return success();
   emit({TaskCall, 0, 0, callee.index, static_cast<uint32_t>(inputs.first),
         static_cast<uint32_t>(inputs.second), 0, suspension->continuationID});
   return success();

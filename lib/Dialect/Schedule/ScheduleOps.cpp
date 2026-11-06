@@ -1261,6 +1261,32 @@ NativeExecuteOp::verifySymbolUses(SymbolTableCollection &symbols) {
 } // namespace talos::schedule
 
 namespace talos::schedule {
+LogicalResult
+NativeSynchronousClassCallOp::verifySymbolUses(SymbolTableCollection &symbols) {
+  Operation *declaration =
+      symbols.lookupNearestSymbolFrom(*this, getMethodAttr());
+  auto method = dyn_cast_if_present<sim::SimClassMethodDeclOp>(declaration);
+  auto nativeMethod = dyn_cast_if_present<NativeMethodOp>(declaration);
+  bool isTask =
+      method ? method.getIsTask() : nativeMethod && nativeMethod.getIsTask();
+  bool isVirtual = method ? method.getIsVirtual()
+                          : nativeMethod && nativeMethod.getIsVirtual();
+  if (!isTask || !isVirtual)
+    return emitOpError("requires a virtual task method declaration");
+  auto slot = method ? method.getSlot() : nativeMethod.getSlot();
+  auto signature =
+      method ? method.getSignatureId() : nativeMethod.getSignatureId();
+  if (!slot || !signature || *slot != getSlot() ||
+      *signature != getSignatureId())
+    return emitOpError("must match the declared task slot and signature");
+  auto type = dyn_cast<FunctionType>(method ? method.getFunctionType()
+                                            : nativeMethod.getFunctionType());
+  if (!type || type.getNumInputs() < 2 || type.getNumResults() ||
+      getArguments().getTypes() != TypeRange(type.getInputs().drop_front(2)) ||
+      !isa<sim::ClassHandleType>(getReceiver().getType()))
+    return emitOpError("must match the declared task argument types");
+  return success();
+}
 LogicalResult NativeMethodOp::verify() {
   if (!isa<FunctionType>(getFunctionType()))
     return emitOpError("requires a semantic function signature");

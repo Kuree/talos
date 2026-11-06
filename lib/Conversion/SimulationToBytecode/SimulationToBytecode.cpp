@@ -242,7 +242,8 @@ FailureOr<EncodedSimulationDesign> Encoder::encode() {
     result.functions.push_back({plan.function.getSymName().str(), plan.index,
                                 plan.scratchSize, plan.scratchAlignment,
                                 plan.twoStateLogicRegisters,
-                                nativeMethodCallees.contains(plan.index)});
+                                nativeMethodCallees.contains(plan.index),
+                                nativeTaskCallees.contains(plan.index)});
   return result;
 }
 
@@ -1050,6 +1051,7 @@ public:
       functions[function.getSymName()] = function;
       runtime::remove<runtime::BytecodeFunction>(function);
       runtime::remove<runtime::BytecodeNativeMethod>(function);
+      runtime::remove<runtime::BytecodeSynchronousTask>(function);
       runtime::remove<runtime::BytecodeScratchSize>(function);
       runtime::remove<runtime::BytecodeScratchAlignment>(function);
       runtime::remove<runtime::BytecodeTwoStateLogicRegisters>(function);
@@ -1060,6 +1062,8 @@ public:
           source, builder.getI32IntegerAttr(function.index));
       if (function.nativeMethodEntry)
         runtime::mark<runtime::BytecodeNativeMethod>(source);
+      if (function.synchronousTaskEntry)
+        runtime::mark<runtime::BytecodeSynchronousTask>(source);
       runtime::set<runtime::BytecodeScratchSize>(
           source, builder.getI64IntegerAttr(function.scratchSize));
       runtime::set<runtime::BytecodeScratchAlignment>(
