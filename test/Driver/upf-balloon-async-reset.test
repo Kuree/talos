@@ -1,0 +1,63 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0
+// RUN: %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// IEEE 1801-2018 6.50: level restore also wins over a coincident
+// asynchronous reset. Later fresh reset edges and normal clocks remain valid.
+// The two-edge writer exercises the shared packed clock-history inventory.
+// CHECK: balloon async reset passed
+
+//--- design.sv
+module leaf(input logic [7:0] d, output logic [7:0] q = 0);
+  always @(posedge top.controls[1] or negedge top.controls[2])
+    if (!top.controls[2]) q <= 0;
+    else q <= d;
+endmodule
+module top;
+  import UPF::*;
+  logic [2:0] controls = 3'b100;
+  logic save = 0;
+  logic [7:0] d = 0;
+  wire [7:0] q;
+  leaf dut(d,q);
+  task automatic tick(input logic [7:0] v);
+    controls[1] = 0; d = v; #1 controls[1] = 1;
+    #1 controls[1] = 0; #1;
+  endtask
+  initial begin
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground", 0.0))
+      $fatal(1, "supplies");
+    tick(8'h11);
+    save = 1; #1 save = 0; #1;
+    tick(8'h22);
+    controls[2] = 0;
+    #1;
+    if (q !== 0) $fatal(1, "asynchronous reset missing");
+    controls[2] = 1;
+    tick(8'h33);
+    controls[0] = 1;
+    #1 controls = 3'b000; // Restore trailing edge plus reset negedge.
+    #1;
+    if (q !== 8'h11) $fatal(1, "coincident reset overwrote restore");
+    controls[2] = 1;
+    #1 controls[2] = 0;
+    #1;
+    if (q !== 0) $fatal(1, "later reset suppressed");
+    controls[2] = 1;
+    tick(8'h44);
+    if (q !== 8'h44) $fatal(1, "normal clock after reset");
+    $display("balloon async reset passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set CORE
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention KEEP -domain PD -elements dut/q \
+    -save_signal {save high} -restore_signal {controls[0] high}

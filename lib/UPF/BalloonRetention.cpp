@@ -1,0 +1,842 @@
+//===- BalloonRetention.cpp - Event-time balloon storage lowering -------===//
+
+#include "BalloonRetention.h"
+#include "PowerState.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/IR/IRMapping.h"
+#include "mlir/IR/SymbolTable.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Interfaces/ViewLikeInterface.h"
+#include "talos/Dialect/Schedule/ScheduleFields.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SetVector.h"
+#include "llvm/IR/DerivedTypes.h"
+
+#include <map>
+#include <tuple>
+
+using namespace mlir;
+namespace talos {
+namespace {
+using namespace upf_detail;
+
+// Snapshot payloads lower to packed integers, one per four-state plane.
+// Check the LLVM backend limit before constructing concatenated types.
+constexpr uint64_t maxPackedWidth = llvm::IntegerType::MAX_INT_BITS;
+
+struct Callback {
+  sim::SimFuncOp function;
+  SmallVector<Descriptor> captures;
+};
+struct State {
+  BalloonRegister source;
+  Descriptor normal, saved, visible;
+};
+struct Clock {
+  sim::SimFuncOp writer;
+  Operation *wait;
+  Descriptor armed, valid, epoch, history;
+  SmallVector<Value> controls;
+  SmallVector<sim::EdgeKind> edges;
+  Value condition;
+};
+
+struct BalloonLowering {
+  RetentionLoweringOptions o;
+  upf::RetentionAttr strategy;
+  ArrayRef<upf::UPFSupplySetOp> primarySets, retentionSets;
+  ArrayRef<BalloonRegister> registers;
+  Operation *rootBoundary;
+  OpBuilder b;
+  Location loc;
+  std::string name;
+  SmallVector<State> states;
+  SmallVector<Clock> clocks;
+  SmallVector<Descriptor> dependencies;
+  Descriptor destructiveEpoch, priorityEpoch, previousSave, previousRestore;
+  sim::SimFuncOp nbaPredicate;
+
+  BalloonLowering(const RetentionLoweringOptions &o,
+                  upf::RetentionAttr strategy,
+                  ArrayRef<upf::UPFSupplySetOp> primary,
+                  ArrayRef<upf::UPFSupplySetOp> retention,
+                  ArrayRef<BalloonRegister> registers, Operation *rootBoundary)
+      : o(o), strategy(strategy), primarySets(primary),
+        retentionSets(retention), registers(registers),
+        rootBoundary(rootBoundary), b(this->o.design.getContext()),
+        loc(strategy.getDeclaration() ? Location(strategy.getDeclaration())
+                                      : this->o.domain.getLoc()),
+        name("__upf_balloon." + this->o.domain.getSymName().str() + "." +
+             strategy.getName().getValue().str()) {}
+
+  Value bit(bool value) {
+    return arith::ConstantIntOp::create(b, loc, value, 1);
+  }
+  Value integer(uint64_t value) {
+    return arith::ConstantIntOp::create(b, loc, value, 64);
+  }
+  Value not_(Value value) {
+    return arith::XOrIOp::create(b, loc, value, bit(true));
+  }
+  Value and_(Value a, Value c) { return arith::AndIOp::create(b, loc, a, c); }
+  Value or_(Value a, Value c) { return arith::OrIOp::create(b, loc, a, c); }
+  Value choose(Value test, Value yes, Value no) {
+    return arith::SelectOp::create(b, loc, test, yes, no);
+  }
+  Value read(Value ctx, Descriptor d) {
+    return load(b, loc, handle(b, loc, ctx, d));
+  }
+  void write(Value ctx, Descriptor d, Value value) {
+    store(b, loc, handle(b, loc, ctx, d), value);
+  }
+  void root() { b.setInsertionPoint(rootBoundary); }
+  Value logic(Value value) {
+    value = flatten(b, loc, value);
+    if (auto type = dyn_cast<IntegerType>(value.getType()))
+      return sim::SimLogicFromBitsOp::create(
+          b, loc, sim::LogicType::get(b.getContext(), type.getWidth()), value);
+    return value;
+  }
+  Value slice(Value value, uint64_t offset, uint64_t width) {
+    return sim::SimLogicExtractOp::create(
+        b, loc, sim::LogicType::get(b.getContext(), width), value, offset);
+  }
+  Value pack(ValueRange values) {
+    SmallVector<Value> parts;
+    uint64_t width = 0;
+    for (Value value : llvm::reverse(values)) {
+      value = logic(value);
+      width += cast<sim::LogicType>(value.getType()).getWidth();
+      parts.push_back(value);
+    }
+    if (parts.size() == 1)
+      return parts.front();
+    return sim::SimLogicConcatOp::create(
+        b, loc, sim::LogicType::get(b.getContext(), width), parts);
+  }
+  Value predicate(Value ctx, upf::ExpressionAttr expression) {
+    return expression
+               ? Expression(expression).predicate(b, loc, ctx, o.descriptors)
+               : bit(true);
+  }
+  Value normal(Value ctx, ArrayRef<upf::UPFSupplySetOp> sets) {
+    Value result = bit(true);
+    for (auto set : sets)
+      result = and_(result,
+                    evaluateSupplySet(set, b, loc, [&](FlatSymbolRefAttr ref) {
+                      return o.readSupply(b, loc, ctx, ref);
+                    }).normal);
+    return result;
+  }
+  Value primary(Value ctx) {
+    return and_(o.domainNormal(b, loc, ctx), normal(ctx, primarySets));
+  }
+  Value control(Value ctx, upf::RetentionTriggerAttr trigger) {
+    return trigger ? Expression::reference(b, loc, ctx, o.descriptors,
+                                           trigger.getControl())
+                   : logic(bit(false));
+  }
+  bool level(upf::RetentionTriggerAttr trigger) const {
+    return trigger && (trigger.getKind() == upf::RetentionTriggerKind::High ||
+                       trigger.getKind() == upf::RetentionTriggerKind::Low);
+  }
+  Value asserted(Value current, upf::RetentionTriggerAttr trigger) {
+    return level(trigger) ? equalsLevel(b, loc, current,
+                                        trigger.getKind() ==
+                                            upf::RetentionTriggerKind::High)
+                          : bit(false);
+  }
+  Value rawEdge(Value before, Value after, sim::EdgeKind kind) {
+    Value beforeZero = equalsLevel(b, loc, before, false);
+    Value beforeOne = equalsLevel(b, loc, before, true);
+    Value afterZero = equalsLevel(b, loc, after, false);
+    Value afterOne = equalsLevel(b, loc, after, true);
+    Value unknown = not_(or_(beforeZero, beforeOne));
+    Value posedge =
+        or_(and_(beforeZero, not_(afterZero)), and_(unknown, afterOne));
+    Value negedge =
+        or_(and_(beforeOne, not_(afterOne)), and_(unknown, afterZero));
+    return kind == sim::EdgeKind::Posedge   ? posedge
+           : kind == sim::EdgeKind::Negedge ? negedge
+                                            : or_(posedge, negedge);
+  }
+  Value event(Value before, Value after, upf::RetentionTriggerAttr trigger) {
+    if (!trigger)
+      return bit(false);
+    if (level(trigger))
+      return and_(asserted(before, trigger), not_(asserted(after, trigger)));
+    return rawEdge(before, after,
+                   trigger.getKind() == upf::RetentionTriggerKind::Posedge
+                       ? sim::EdgeKind::Posedge
+                       : sim::EdgeKind::Negedge);
+  }
+  Value overlap(Value ctx) {
+    if (!level(strategy.getSave()) || !level(strategy.getRestore()))
+      return bit(false);
+    return and_(
+        and_(asserted(control(ctx, strategy.getSave()), strategy.getSave()),
+             predicate(ctx, strategy.getSaveCondition())),
+        and_(asserted(control(ctx, strategy.getRestore()),
+                      strategy.getRestore()),
+             predicate(ctx, strategy.getRestoreCondition())));
+  }
+  Value writable(Value ctx) {
+    return and_(and_(primary(ctx), normal(ctx, retentionSets)),
+                not_(overlap(ctx)));
+  }
+
+  // Make every persistent capture explicit. Snapshot callback closures never
+  // perform unbound context lookups, even for policy expressions and supplies.
+  FailureOr<Callback> callback(StringRef suffix,
+                               llvm::function_ref<Value(Value)> body) {
+    auto fn = o.function(loc, name + suffix.str(),
+                         {sim::ContextType::get(b.getContext())},
+                         sim::EntryKind::Observer);
+    sim::mark<sim::metadata::PowerMonitor>(fn);
+    b.setInsertionPointToEnd(&fn.getBody().front());
+    Value result = body(fn.getArgument(0));
+    fn.setFunctionType(
+        b.getFunctionType(fn.getArgumentTypes(), {result.getType()}));
+    schedule::set<schedule::Field::ObserverWidth>(
+        fn, b.getI32IntegerAttr(*sim::getPackedWidth(result.getType())));
+    schedule::set<schedule::Field::ObserverFourState>(
+        fn, b.getBoolAttr(isa<sim::LogicType>(result.getType())));
+    sim::SimReturnOp::create(b, loc, result);
+    Callback output{fn, {}};
+    std::map<std::pair<uint64_t, bool>, unsigned> indices;
+    SmallVector<Operation *> lookups;
+    fn.walk([&](Operation *op) {
+      if (isa<sim::SimContextStorageOp, sim::SimContextNetOp>(op))
+        lookups.push_back(op);
+    });
+    for (Operation *op : lookups) {
+      bool net = isa<sim::SimContextNetOp>(op);
+      uint64_t id = net ? cast<sim::SimContextNetOp>(op).getId()
+                        : cast<sim::SimContextStorageOp>(op).getId();
+      auto key = std::pair{id, net};
+      auto [it, inserted] = indices.emplace(key, fn.getNumArguments());
+      if (inserted) {
+        Type type = op->getResult(0).getType();
+        Type element = net ? cast<sim::NetType>(type).getElementType()
+                           : cast<sim::RefType>(type).getElementType();
+        output.captures.push_back({id, element, net});
+        auto attrs = b.getDictionaryAttr(
+            {sim::named<sim::metadata::CaptureKind>(sim::CaptureKindAttr::get(
+                b.getContext(), sim::CaptureKind::Value))});
+        if (failed(fn.insertArgument(fn.getNumArguments(), type, attrs, loc)))
+          return failure();
+      }
+      op->getResult(0).replaceAllUsesWith(fn.getArgument(it->second));
+      op->erase();
+    }
+    return output;
+  }
+  SmallVector<Value> arguments(Value ctx, const Callback &cb) {
+    SmallVector<Value> args{ctx};
+    for (auto d : cb.captures)
+      args.push_back(handle(b, loc, ctx, d));
+    return args;
+  }
+  Value call(Value ctx, Callback cb) {
+    return sim::SimCallOp::create(b, loc, cb.function.getResultTypes(),
+                                  cb.function.getSymNameAttr(),
+                                  arguments(ctx, cb), ArrayAttr{}, ArrayAttr{})
+        .getResult(0);
+  }
+  Value bind(Value ctx, Callback cb, bool dependencies) {
+    SmallVector<Value> values;
+    for (auto d : cb.captures)
+      values.push_back(handle(b, loc, ctx, d));
+    unsigned count = values.size();
+    if (dependencies) {
+      SmallVector<Value> watched(values);
+      llvm::append_range(values, watched);
+    }
+    return sim::SimObserverBindOp::create(
+        b, loc,
+        sim::ObserverType::get(b.getContext(), cb.function.getResultTypes()[0]),
+        cb.function.getSymNameAttr(), values, count);
+  }
+  void unpack(Value ctx, Value payload, ArrayRef<Descriptor> targets) {
+    uint64_t offset = 0;
+    for (auto target : targets) {
+      uint64_t width = *sim::getPackedWidth(target.type);
+      Value value = slice(payload, offset, width);
+      Type scalar = sim::getPackedScalarType(target.type);
+      if (isa<IntegerType>(scalar))
+        value = sim::SimLogicToBitsOp::create(b, loc, scalar, value);
+      if (scalar != target.type)
+        value = sim::SimPackedUnflattenOp::create(b, loc, target.type, value);
+      write(ctx, target, value);
+      offset += width;
+    }
+  }
+  LogicalResult registerSnapshot(StringRef suffix, const Callback &primary,
+                                 const Callback &sampler,
+                                 ArrayRef<Descriptor> targets) {
+    auto owner = o.function(loc, name + suffix.str() + ".owner",
+                            {sim::ContextType::get(b.getContext())},
+                            sim::EntryKind::Fork);
+    sim::mark<sim::metadata::PowerMonitor>(owner);
+    schedule::set<schedule::Field::DetachedControls>(owner, b.getUnitAttr());
+    schedule::set<schedule::Field::PrimeOnSpawn>(owner, b.getUnitAttr());
+    b.setInsertionPointToEnd(&owner.getBody().front());
+    Value ctx = owner.getArgument(0);
+    Value initial = call(ctx, primary);
+    SmallVector<Value> values{bind(ctx, primary, true), initial,
+                              bind(ctx, sampler, false)};
+    for (auto target : targets)
+      values.push_back(handle(b, loc, ctx, target));
+    sim::SimEventSnapshotRegisterOp::create(b, loc, ctx, values, targets.size(),
+                                            0, b.getDenseI32ArrayAttr({0}),
+                                            b.getDenseI32ArrayAttr({-1}));
+    auto *parked = new Block;
+    owner.getBody().push_back(parked);
+    sim::SimSuspendForeverOp::create(b, loc, ValueRange{},
+                                     schedule::ContinuationSiteAttr{},
+                                     sim::EventRegionAttr{}, parked);
+    b.setInsertionPointToEnd(parked);
+    sim::SimReturnOp::create(b, loc, ValueRange{});
+    root();
+    sim::SimSpawnOp::create(b, loc, owner.getSymNameAttr(),
+                            ValueRange{o.root.getArgument(0)}, ArrayAttr{},
+                            ArrayAttr{});
+    return success();
+  }
+
+  LogicalResult policy() {
+    auto primaryCallback = callback(".policy", [&](Value ctx) {
+      SmallVector<Value> inputs;
+      for (auto d : dependencies)
+        inputs.push_back(read(ctx, d));
+      return pack(inputs);
+    });
+    if (failed(primaryCallback))
+      return failure();
+    auto sampler = callback(".transfer", [&](Value ctx) {
+      Value p = primary(ctx), r = normal(ctx, retentionSets);
+      Value ss = control(ctx, strategy.getSave()),
+            rs = control(ctx, strategy.getRestore());
+      Value sc = predicate(ctx, strategy.getSaveCondition());
+      Value rc = predicate(ctx, strategy.getRestoreCondition());
+      Value save =
+          and_(event(read(ctx, previousSave), ss, strategy.getSave()), sc);
+      Value restore = and_(
+          event(read(ctx, previousRestore), rs, strategy.getRestore()), rc);
+      Value saveAttempt = or_(save, and_(asserted(ss, strategy.getSave()), sc));
+      Value restoreAttempt =
+          or_(restore, and_(asserted(rs, strategy.getRestore()), rc));
+      Value overlapping = overlap(ctx);
+      Value normalBad = or_(or_(not_(p), not_(r)), overlapping);
+      // 6.50 and Figure 6: default RET_SUP_COR destroys normal storage too.
+      // Table 10's PARTIAL_CORRUPT comment conflicts with that parameter rule;
+      // Figure 6 reserves that transition for NO_RET_SUP_COR.
+      Value savedBad =
+          or_(or_(not_(r), overlapping),
+              and_(not_(p), or_(not_(predicate(ctx, strategy.getCondition())),
+                                or_(saveAttempt, restoreAttempt))));
+      Value destructive = or_(normalBad, savedBad);
+      Value levelRestore = level(strategy.getRestore())
+                               ? and_(restore, not_(normalBad))
+                               : bit(false);
+      Value nextEpoch = arith::AddIOp::create(
+          b, loc, read(ctx, destructiveEpoch),
+          arith::ExtUIOp::create(b, loc, b.getI64Type(), destructive));
+      Value nextPriority = arith::AddIOp::create(
+          b, loc, read(ctx, priorityEpoch),
+          arith::ExtUIOp::create(b, loc, b.getI64Type(),
+                                 or_(destructive, levelRestore)));
+      SmallVector<Value> outputs{ss, rs, nextEpoch, nextPriority};
+      for (auto &state : states) {
+        Value before = read(ctx, state.normal),
+              retained = read(ctx, state.saved);
+        Value nextNormal = choose(normalBad, corrupt(b, loc, state.normal.type),
+                                  choose(restore, retained, before));
+        Value nextSaved = choose(savedBad, corrupt(b, loc, state.saved.type),
+                                 choose(save, before, retained));
+        outputs.append(
+            {nextNormal, nextSaved,
+             choose(p, nextNormal, corrupt(b, loc, state.visible.type))});
+      }
+      return pack(outputs);
+    });
+    if (failed(sampler))
+      return failure();
+    SmallVector<Descriptor> targets{previousSave, previousRestore,
+                                    destructiveEpoch, priorityEpoch};
+    for (auto &state : states)
+      targets.append({state.normal, state.saved, state.visible});
+    root();
+    Value ctx = o.root.getArgument(0);
+    write(ctx, previousSave, control(ctx, strategy.getSave()));
+    write(ctx, previousRestore, control(ctx, strategy.getRestore()));
+    write(ctx, destructiveEpoch, integer(0));
+    write(ctx, priorityEpoch, integer(0));
+    for (auto &state : states) {
+      write(ctx, state.normal, read(ctx, state.visible));
+      write(ctx, state.saved, corrupt(b, loc, state.saved.type));
+    }
+    unpack(ctx, call(ctx, *sampler), targets);
+    return registerSnapshot(".policy", *primaryCallback, *sampler, targets);
+  }
+
+  FailureOr<Value> clone(Value value, Value ctx, IRMapping &mapping) {
+    if (auto known = mapping.lookupOrNull(value))
+      return known;
+    if (auto argument = dyn_cast<BlockArgument>(value)) {
+      auto fn = dyn_cast<sim::SimFuncOp>(argument.getOwner()->getParentOp());
+      if (!fn || argument.getOwner() != &fn.getBody().front())
+        return failure();
+      if (isa<sim::ContextType>(value.getType()))
+        return ctx;
+      auto id = fn.getArgAttrOfType<IntegerAttr>(
+          argument.getArgNumber(), sim::metadata::DescriptorId::getNameStr());
+      if (!id)
+        return failure();
+      bool net = isa<sim::NetType>(value.getType());
+      if (!net && !isa<sim::RefType>(value.getType()))
+        return failure();
+      Type element = net ? cast<sim::NetType>(value.getType()).getElementType()
+                         : cast<sim::RefType>(value.getType()).getElementType();
+      auto rootType = fn.getArgAttrOfType<TypeAttr>(
+          argument.getArgNumber(),
+          sim::metadata::DescriptorRootType::getNameStr());
+      if (rootType)
+        element = rootType.getValue();
+      Value copy = handle(b, loc, ctx, {id.getUInt(), element, net});
+      if (rootType) {
+        if (net || !fn.getArgAttr(argument.getArgNumber(),
+                                  sim::metadata::DescriptorLow::getNameStr()))
+          return failure();
+        if (auto indices = fn.getArgAttrOfType<DenseI64ArrayAttr>(
+                argument.getArgNumber(),
+                sim::metadata::DescriptorIndices::getNameStr())) {
+          auto aggregate = fn.getArgAttrOfType<TypeAttr>(
+              argument.getArgNumber(),
+              sim::metadata::DescriptorAggregateType::getNameStr());
+          if (!aggregate)
+            return failure();
+          copy = sim::SimRefSubelementOp::create(
+              b, loc, sim::RefType::get(b.getContext(), aggregate.getValue()),
+              copy, indices);
+        }
+        if (copy.getType() != value.getType()) {
+          auto low = fn.getArgAttrOfType<IntegerAttr>(
+              argument.getArgNumber(),
+              sim::metadata::DescriptorPackedLow::getNameStr());
+          if (!low)
+            return failure();
+          copy =
+              sim::SimRefExtractOp::create(b, loc, value.getType(), copy, low);
+        }
+      }
+      mapping.map(value, copy);
+      return copy;
+    }
+    Operation *op = value.getDefiningOp();
+    if (!op || (!isMemoryEffectFree(op) &&
+                !isa<sim::SimContextStorageOp, sim::SimContextNetOp>(op)))
+      return failure();
+    for (Value operand : op->getOperands()) {
+      auto input = clone(operand, ctx, mapping);
+      if (failed(input))
+        return failure();
+      mapping.map(operand, *input);
+    }
+    auto *copy = b.clone(*op, mapping);
+    mapping.map(op->getResults(), copy->getResults());
+    return mapping.lookup(value);
+  }
+  FailureOr<Value> clockLevels(Clock &clock, Value ctx, IRMapping &mapping) {
+    SmallVector<Value> levels;
+    for (Value reference : clock.controls) {
+      if (!isa<sim::RefType, sim::NetType>(reference.getType()))
+        return failure();
+      auto copied = clone(reference, ctx, mapping);
+      if (failed(copied))
+        return failure();
+      levels.push_back(slice(logic(load(b, loc, *copied)), 0, 1));
+    }
+    return pack(levels);
+  }
+  LogicalResult clock(Clock &clock, unsigned index) {
+    std::string suffix = ".clock." + std::to_string(index);
+    FailureOr<Value> levels = failure();
+    auto primary = callback(suffix, [&](Value ctx) {
+      IRMapping mapping;
+      levels = clockLevels(clock, ctx, mapping);
+      return succeeded(levels) ? *levels : logic(bit(false));
+    });
+    if (failed(levels))
+      return clock.wait->emitError("balloon retention requires persistent "
+                                   "directly addressable clock controls");
+    if (failed(primary))
+      return failure();
+    auto sampler = callback(suffix + ".capture", [&](Value ctx) {
+      IRMapping mapping;
+      auto current = clockLevels(clock, ctx, mapping);
+      assert(succeeded(current));
+      Value previous = read(ctx, clock.history);
+      Value triggered = bit(false);
+      for (auto [i, edge] : llvm::enumerate(clock.edges))
+        triggered = or_(triggered, rawEdge(slice(previous, i, 1),
+                                           slice(*current, i, 1), edge));
+      if (clock.condition) {
+        if (!isa<sim::RefType, sim::NetType>(clock.condition.getType())) {
+          levels = failure();
+          return logic(bit(false));
+        }
+        auto reference = clone(clock.condition, ctx, mapping);
+        if (failed(reference)) {
+          levels = failure();
+          return logic(bit(false));
+        }
+        triggered = and_(triggered, sim::SimLogicIsTrueOp::create(
+                                        b, loc, b.getI1Type(),
+                                        logic(load(b, loc, *reference))));
+      }
+      Value armed = read(ctx, clock.armed);
+      Value accept = and_(armed, triggered);
+      return pack(ValueRange{
+          *current,
+          choose(accept, read(ctx, priorityEpoch), read(ctx, clock.epoch)),
+          choose(accept, writable(ctx), read(ctx, clock.valid)),
+          and_(armed, not_(accept))});
+    });
+    if (failed(levels))
+      return clock.wait->emitError("balloon retention requires a persistent "
+                                   "directly addressable clock iff condition");
+    if (failed(sampler))
+      return failure();
+    root();
+    Value ctx = o.root.getArgument(0);
+    write(ctx, clock.history, call(ctx, *primary));
+    write(ctx, clock.epoch, read(ctx, priorityEpoch));
+    write(ctx, clock.valid, bit(false));
+    write(ctx, clock.armed, bit(false));
+    SmallVector<Descriptor> targets{clock.history, clock.epoch, clock.valid,
+                                    clock.armed};
+    if (failed(registerSnapshot(suffix, *primary, *sampler, targets)))
+      return failure();
+    b.setInsertionPoint(clock.wait);
+    write(clock.writer.getArgument(0), clock.armed, bit(true));
+    return success();
+  }
+
+  void guard(Operation *op, Value valid, llvm::function_ref<void()> body) {
+    auto *before = op->getBlock();
+    auto *execute = before->splitBlock(Block::iterator(op));
+    auto *next = execute->splitBlock(std::next(execute->begin()));
+    b.setInsertionPointToEnd(before);
+    cf::CondBranchOp::create(b, loc, valid, execute, next);
+    b.setInsertionPoint(op);
+    body();
+    b.setInsertionPointToEnd(b.getInsertionBlock());
+    cf::BranchOp::create(b, loc, next);
+  }
+  Value viewRoot(Value value) {
+    while (auto view = value.getDefiningOp<ViewLikeOpInterface>())
+      value = view.getViewSource();
+    return value;
+  }
+  FailureOr<Value> normalView(Value value, Value ctx, Descriptor normal) {
+    SmallVector<Operation *> projections;
+    Value source = value;
+    while (auto view = source.getDefiningOp<ViewLikeOpInterface>()) {
+      projections.push_back(view.getOperation());
+      source = view.getViewSource();
+    }
+    Value replacement = handle(b, loc, ctx, normal);
+    if (source.getType() != replacement.getType())
+      return failure();
+    IRMapping mapping;
+    mapping.map(source, replacement);
+    for (auto *projection : llvm::reverse(projections))
+      b.clone(*projection, mapping);
+    return mapping.lookup(value);
+  }
+  bool refersTo(Value reference, uint64_t id) {
+    Value root = viewRoot(reference);
+    if (auto storage = root.getDefiningOp<sim::SimContextStorageOp>())
+      return storage.getId() == id;
+    auto argument = dyn_cast<BlockArgument>(root);
+    if (!argument)
+      return false;
+    auto fn = dyn_cast<sim::SimFuncOp>(argument.getOwner()->getParentOp());
+    if (!fn || argument.getOwner() != &fn.getBody().front())
+      return false;
+    auto descriptor = fn.getArgAttrOfType<IntegerAttr>(
+        argument.getArgNumber(), sim::metadata::DescriptorId::getNameStr());
+    return descriptor && descriptor.getUInt() == id;
+  }
+  LogicalResult initializeReads(State &state) {
+    llvm::SetVector<sim::SimFuncOp> initializers;
+    for (auto *op : state.source.writers) {
+      auto fn = op->getParentOfType<sim::SimFuncOp>();
+      if (fn.getEntryKind() == sim::EntryKind::Initial)
+        initializers.insert(fn);
+    }
+    for (auto fn : initializers) {
+      SmallVector<sim::SimCallOp> calls;
+      fn.walk([&](sim::SimCallOp call) { calls.push_back(call); });
+      llvm::DenseSet<Operation *> seen;
+      while (!calls.empty()) {
+        auto call = calls.pop_back_val();
+        auto helper = SymbolTable::lookupNearestSymbolFrom<sim::SimFuncOp>(
+            call, call.getCalleeAttr());
+        if (!helper || !seen.insert(helper).second)
+          continue;
+        bool readsState = false;
+        helper.walk([&](sim::SimRefLoadOp load) {
+          readsState |= refersTo(load.getReference(), state.visible.id);
+        });
+        if (readsState)
+          return call.emitError("balloon retention initialization readback "
+                                "through helpers is not implemented");
+        helper.walk([&](sim::SimCallOp nested) { calls.push_back(nested); });
+      }
+      SmallVector<sim::SimRefLoadOp> loads;
+      fn.walk([&](sim::SimRefLoadOp load) {
+        if (refersTo(load.getReference(), state.visible.id))
+          loads.push_back(load);
+      });
+      for (auto load : loads) {
+        b.setInsertionPoint(load);
+        auto reference =
+            normalView(load.getReference(), fn.getArgument(0), state.normal);
+        if (failed(reference))
+          return load.emitError("balloon retention initialization through a "
+                                "partial captured alias is not implemented");
+        load.getReferenceMutable().assign(*reference);
+      }
+    }
+    return success();
+  }
+  LogicalResult run() {
+    if (strategy.getUseRetentionAsPrimary())
+      return emitError(loc)
+             << "balloon retention with -use_retention_as_primary requires "
+                "resolved storage/output supply semantics and is not "
+                "implemented";
+    llvm::SetVector<sim::SimFuncOp> writers;
+    uint64_t payloadWidth = 130;
+    for (auto reg : registers) {
+      auto visible =
+          Descriptor{reg.declaration.getId(), reg.declaration.getType()};
+      uint64_t width = *sim::getPackedWidth(visible.type);
+      if (width > (maxPackedWidth - payloadWidth) / 3)
+        return emitError(loc)
+               << "balloon retention snapshot exceeds supported packed width";
+      payloadWidth += 3 * width;
+      std::string suffix = "." + std::to_string(visible.id);
+      states.push_back(
+          {reg, o.storage(loc, name + ".normal" + suffix, visible.type),
+           o.storage(loc, name + ".saved" + suffix, visible.type), visible});
+      for (Operation *op : reg.writers) {
+        auto fn = op->getParentOfType<sim::SimFuncOp>();
+        if (fn == o.root && (op->getBlock() != rootBoundary->getBlock() ||
+                             !op->isBeforeInBlock(rootBoundary)))
+          return op->emitError("balloon retention root initialization after "
+                               "startup is not implemented");
+        if (fn.getEntryKind() == sim::EntryKind::Always ||
+            fn.getEntryKind() == sim::EntryKind::AlwaysFF)
+          writers.insert(fn);
+      }
+    }
+    destructiveEpoch = o.storage(loc, name + ".epoch", b.getI64Type());
+    priorityEpoch = o.storage(loc, name + ".priority", b.getI64Type());
+    previousSave = o.storage(loc, name + ".save_previous",
+                             sim::LogicType::get(b.getContext(), 1));
+    previousRestore = o.storage(loc, name + ".restore_previous",
+                                sim::LogicType::get(b.getContext(), 1));
+    llvm::DenseSet<std::pair<uint64_t, uint32_t>> seen;
+    auto add = [&](Descriptor d) {
+      if (seen.insert({d.id, uint32_t(d.net)}).second)
+        dependencies.push_back(d);
+    };
+    for (auto d : o.domainDependencies)
+      add(d);
+    for (auto set :
+         llvm::concat<const upf::UPFSupplySetOp>(primarySets, retentionSets))
+      for (auto ref : getSupplySetReferences(set))
+        for (auto d : o.supplyDependencies(ref))
+          add(d);
+    llvm::SetVector<StringRef> paths;
+    for (auto expression :
+         {strategy.getCondition(), strategy.getSaveCondition(),
+          strategy.getRestoreCondition()})
+      for (StringRef path : Expression(expression).controls)
+        paths.insert(path);
+    for (auto trigger : {strategy.getSave(), strategy.getRestore()})
+      if (trigger)
+        paths.insert(trigger.getControl().getControl().getValue());
+    for (StringRef path : paths) {
+      auto found = o.descriptors.find(path);
+      if (found == o.descriptors.end() || found->second.driver ||
+          !supportedState(found->second.type))
+        return emitError(loc) << "retention control is absent from supported "
+                                 "simulation storage: "
+                              << path;
+      add(found->second);
+    }
+    uint64_t policyWidth = 0;
+    for (auto dependency : dependencies) {
+      auto width = sim::getPackedWidth(dependency.type);
+      if (!width || *width > maxPackedWidth - policyWidth)
+        return emitError(loc)
+               << "balloon retention policy exceeds supported packed width";
+      policyWidth += *width;
+    }
+    if (failed(policy()))
+      return failure();
+    for (auto writer : writers) {
+      Clock item;
+      item.writer = writer;
+      writer.walk([&](Operation *op) {
+        if (auto edge = dyn_cast<sim::SimSuspendEdgeOp>(op)) {
+          item.wait = op;
+          item.controls.push_back(edge.getWatched());
+          item.edges.push_back(edge.getEdge());
+        } else if (auto edge = dyn_cast<sim::SimSuspendEdgeIffOp>(op)) {
+          item.wait = op;
+          item.controls.push_back(edge.getWatched());
+          item.edges.push_back(edge.getEdge());
+          item.condition = edge.getCondition();
+        } else if (auto any = dyn_cast<sim::SimSuspendAnyOp>(op)) {
+          item.wait = op;
+          llvm::append_range(item.controls, any.getWatched());
+          for (int32_t edge : any.getEdges())
+            item.edges.push_back(static_cast<sim::EdgeKind>(edge));
+        }
+      });
+      assert(item.wait && !item.controls.empty());
+      if (item.controls.size() > maxPackedWidth - 66)
+        return item.wait->emitError(
+            "balloon retention clock inventory exceeds supported packed width");
+      std::string suffix = ".clock." + std::to_string(clocks.size());
+      item.history =
+          o.storage(loc, name + suffix + ".history",
+                    sim::LogicType::get(b.getContext(), item.controls.size()));
+      item.armed = o.storage(loc, name + suffix + ".armed", b.getI1Type());
+      item.valid = o.storage(loc, name + suffix + ".valid", b.getI1Type());
+      item.epoch = o.storage(loc, name + suffix + ".epoch", b.getI64Type());
+      clocks.push_back(std::move(item));
+      if (failed(clock(clocks.back(), clocks.size() - 1)))
+        return failure();
+    }
+    nbaPredicate = o.function(loc, name + ".nba_allowed",
+                              {sim::ContextType::get(b.getContext())},
+                              sim::EntryKind::Observer);
+    nbaPredicate.setFunctionType(
+        b.getFunctionType(nbaPredicate.getArgumentTypes(), {b.getI1Type()}));
+    schedule::set<schedule::Field::ObserverWidth>(nbaPredicate,
+                                                  b.getI32IntegerAttr(1));
+    schedule::set<schedule::Field::ObserverFourState>(nbaPredicate,
+                                                      b.getBoolAttr(false));
+    b.setInsertionPointToEnd(&nbaPredicate.getBody().front());
+    sim::SimReturnOp::create(b, loc, writable(nbaPredicate.getArgument(0)));
+    for (auto &state : states) {
+      if (failed(initializeReads(state)))
+        return failure();
+      for (Operation *op : state.source.writers) {
+        auto fn = op->getParentOfType<sim::SimFuncOp>();
+        b.setInsertionPoint(op);
+        Value ctx = fn.getArgument(0);
+        auto clock = llvm::find_if(
+            clocks, [&](const Clock &item) { return item.writer == fn; });
+        if (clock == clocks.end()) {
+          auto write = cast<sim::SimRefStoreOp>(op);
+          auto target = normalView(write.getReference(), ctx, state.normal);
+          if (failed(target))
+            return write.emitError("balloon retention initialization through a "
+                                   "partial captured alias is not implemented");
+          store(b, loc, *target, write.getValue());
+          // 9.2.1 exempts model initialization in initial blocks. Preserve
+          // that write to normal storage, but the inferred output driver
+          // still requires power (6.50/9.7.2).
+          if (fn.getEntryKind() == sim::EntryKind::Initial)
+            write.getValueMutable().assign(choose(
+                and_(primary(ctx), normal(ctx, retentionSets)),
+                write.getValue(), corrupt(b, loc, write.getValue().getType())));
+          continue;
+        }
+        Value valid =
+            and_(writable(ctx),
+                 and_(read(ctx, clock->valid),
+                      arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq,
+                                            read(ctx, clock->epoch),
+                                            read(ctx, priorityEpoch))));
+        Value destructive, priority, domain;
+        if (isa<sim::SimNBAEnqueueOp>(op)) {
+          destructive = read(ctx, destructiveEpoch);
+          if (level(strategy.getRestore()))
+            priority = read(ctx, priorityEpoch);
+          domain = read(ctx, o.domainEpoch);
+        }
+        guard(op, valid, [&] {
+          if (auto write = dyn_cast<sim::SimRefStoreOp>(op))
+            this->write(ctx, state.normal, write.getValue());
+          else {
+            auto enqueue = cast<sim::SimNBAEnqueueOp>(op);
+            SmallVector<Value> watched;
+            for (auto d : dependencies)
+              watched.push_back(handle(b, loc, ctx, d));
+            Value predicate = sim::SimObserverBindOp::create(
+                b, loc, sim::ObserverType::get(b.getContext(), b.getI1Type()),
+                nbaPredicate.getSymNameAttr(), watched, 0);
+            auto issue = [&](Descriptor epoch, Value captured) {
+              sim::SimPowerNBAOp::create(
+                  b, loc, ctx, enqueue.getValue(),
+                  handle(b, loc, ctx, state.normal),
+                  handle(b, loc, ctx, state.visible), predicate,
+                  handle(b, loc, ctx, o.domainEpoch), domain,
+                  handle(b, loc, ctx, epoch), captured, enqueue.getDelay());
+            };
+            // Carry level-restore priority through a current-step NBA as
+            // well as its clock activation (6.50, LRM 4.9.4/10.4.2). Future
+            // timed writes retain only destructive-corruption validity.
+            if (!priority) {
+              issue(destructiveEpoch, destructive);
+            } else if (!enqueue.getDelay()) {
+              issue(priorityEpoch, priority);
+            } else {
+              Value zero =
+                  sim::SimTimeIsZeroOp::create(b, loc, enqueue.getDelay());
+              Block *before = enqueue->getBlock();
+              Block *join = before->splitBlock(Block::iterator(enqueue));
+              auto *current = new Block;
+              auto *future = new Block;
+              auto &blocks = before->getParent()->getBlocks();
+              blocks.insert(join->getIterator(), current);
+              blocks.insert(join->getIterator(), future);
+              b.setInsertionPointToEnd(before);
+              cf::CondBranchOp::create(b, loc, zero, current, future);
+              b.setInsertionPointToEnd(current);
+              issue(priorityEpoch, priority);
+              cf::BranchOp::create(b, loc, join);
+              b.setInsertionPointToEnd(future);
+              issue(destructiveEpoch, destructive);
+              cf::BranchOp::create(b, loc, join);
+            }
+            b.setInsertionPoint(enqueue);
+            enqueue.erase();
+          }
+        });
+      }
+    }
+    return success();
+  }
+};
+} // namespace
+
+LogicalResult lowerBalloonRetention(const RetentionLoweringOptions &options,
+                                    upf::RetentionAttr strategy,
+                                    ArrayRef<upf::UPFSupplySetOp> primary,
+                                    ArrayRef<upf::UPFSupplySetOp> retention,
+                                    ArrayRef<BalloonRegister> registers,
+                                    Operation *rootBoundary) {
+  return BalloonLowering(options, strategy, primary, retention, registers,
+                         rootBoundary)
+      .run();
+}
+} // namespace talos

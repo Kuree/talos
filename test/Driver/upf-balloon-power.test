@@ -1,0 +1,131 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0
+// RUN: %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// IEEE 1801-2018 6.50/9.7.2/9.7.3: default RET_SUP_COR destroys both
+// stores on retention power loss. RTC loss and save/restore attempts while
+// primary is OFF destroy the balloon. Short published pulses are observable.
+// Ascending 65-bit two-/four-state state, low save and negedge restore exercise
+// payload layout, while HDL iff uses known-one truth rather than UPF exact 1.
+// CHECK: balloon power passed
+
+//--- design.sv
+module leaf(input logic [0:64] d,
+            output logic [0:64] q = 0, output bit [0:64] qb = 0);
+  always @(posedge top.clocks[1] iff top.qualification) begin
+    q <= d;
+    qb <= d;
+  end
+endmodule
+module top;
+  import UPF::*;
+  logic [0:3] clocks = 0;
+  logic [1:0] qualification = 0;
+  logic save = 1, restore = 1, rtc = 1;
+  logic [0:64] d = 0;
+  wire [0:64] q, qb;
+  leaf dut(d,q,qb);
+  task automatic tick(input logic [0:64] v);
+    clocks[1] = 0; d = v;
+    #1 clocks[1] = 1;
+    #1 clocks[1] = 0;
+    #1;
+  endtask
+  task automatic save_value;
+    save = 0; #1 save = 1; #1;
+  endtask
+  task automatic restore_value;
+    restore = 0; #1 restore = 1; #1;
+  endtask
+  task automatic save_known;
+    tick(65'h10000000000000013); save_value();
+  endtask
+  task automatic power_up;
+    if (!supply_on("/top/CORE.power")) $fatal(1, "primary on");
+    #1;
+  endtask
+  task automatic power_down;
+    if (!supply_off("/top/CORE.power")) $fatal(1, "primary off");
+    #1;
+  endtask
+  task automatic expect_corrupt;
+    if (q !== 'x || qb !== 0) $fatal(1, "expected corrupt normal/output");
+  endtask
+  initial begin
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground", 0.0) ||
+        !supply_on("/top/RET.power") || !supply_on("/top/RET.ground", 0.0))
+      $fatal(1, "supplies");
+    qualification = 0;
+    tick(65'h10000000000000011);
+    expect_corrupt();
+    qualification = 2'b10;
+    save_known();
+    if (q !== 65'h10000000000000013 || qb !== q) $fatal(1, "qualified wide clock");
+    // An unrelated ascending clock bit cannot create an activation.
+    d = 65'h10000000000000017;
+    clocks[0] = 1; #1 clocks[0] = 0; #1;
+    if (q !== 65'h10000000000000013) $fatal(1, "unselected clock bit");
+    power_down();
+    expect_corrupt();
+    power_up();
+    expect_corrupt();
+    restore_value();
+    if (q !== 65'h10000000000000013 || qb !== q) $fatal(1, "wide restore");
+    if (!supply_off("/top/RET.power")) $fatal(1, "retention off");
+    #1 expect_corrupt();
+    if (!supply_on("/top/RET.power")) $fatal(1, "retention on");
+    tick(65'h10000000000000021);
+    restore_value();
+    expect_corrupt();
+    save_known();
+    power_down();
+    rtc = 0; #1 rtc = 1;
+    power_up();
+    restore_value();
+    expect_corrupt();
+    save_known();
+    power_down();
+    rtc = 1'bx; rtc = 1; // No yield between the two publications.
+    power_up();
+    restore_value();
+    expect_corrupt();
+    save_known();
+    power_down();
+    save_value();
+    power_up();
+    restore_value();
+    expect_corrupt();
+    save_known();
+    power_down();
+    restore_value();
+    power_up();
+    restore_value();
+    expect_corrupt();
+    save_known();
+    if (!supply_off("/top/CORE.power") || !supply_on("/top/CORE.power"))
+      $fatal(1, "short primary pulse");
+    #1 expect_corrupt();
+    restore_value();
+    if (q !== 65'h10000000000000013 || qb !== q) $fatal(1, "primary pulse destroyed balloon");
+    if (!supply_off("/top/RET.power") || !supply_on("/top/RET.power"))
+      $fatal(1, "short retention pulse");
+    #1;
+    tick(65'h10000000000000031);
+    restore_value();
+    expect_corrupt();
+    $display("balloon power passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set CORE
+create_supply_set RET
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention KEEP -domain PD -elements {dut/q dut/qb} -retention_supply RET \
+    -save_signal {save low} -restore_signal {restore negedge} -retention_condition rtc

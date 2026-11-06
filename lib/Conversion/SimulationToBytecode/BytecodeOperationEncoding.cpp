@@ -773,6 +773,16 @@ LogicalResult Encoder::encodeOperation(FunctionPlan &plan,
   }
   if (auto add = dyn_cast<sim::SimTimeAddOp>(operation))
     return binary(Add, add.getResult(), add.getLhs(), add.getRhs());
+  if (auto op = dyn_cast<sim::SimTimeIsZeroOp>(operation)) {
+    uint32_t zero = temporary(plan, IntegerType::get(op.getContext(), 64));
+    if (zero == kInvalidRegister)
+      return failure();
+    emit({Constant, 0, zero, 0, 0, 0, 0,
+          addConstant(plan.layouts[zero], APInt(64, 0))});
+    emit({Compare, TALOS_RT_DB_CMP_EQ, reg(plan, op.getResult()),
+          reg(plan, op.getInput()), zero});
+    return success();
+  }
   if (auto op = dyn_cast<sim::SimTimeToRealOp>(operation)) {
     uint32_t scale = temporary(plan, IntegerType::get(op.getContext(), 64));
     if (scale == kInvalidRegister)

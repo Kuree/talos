@@ -2,10 +2,10 @@
 // RUN: %split-file %s %t
 // RUN: talos --upf %t/save.upf -O3 --vpi=off --coverage=functional -emit-sim --dump-ir-after=prepare-upf-snapshot-publications --dump-ir-path=%t.prepared.mlir %t/design.sv -o %t.mlir
 // RUN: FileCheck %s < %t.prepared.mlir
-// RUN: not talos --upf %t/save.upf -O3 --vpi=off --coverage=functional -emit-sim %t/design.sv -o %t.mlir 2>&1 | FileCheck %s --check-prefix=ERROR
+// RUN: talos --upf %t/save.upf -O3 --vpi=off --coverage=functional -emit-sim --mlir-verify-each %t/design.sv -o - | FileCheck %s --check-prefix=LOWERED
 // IEEE 1801-2018 6.50: preparation must run before the first canonicalizer,
 // CSE or mem2reg in the real driver pipeline, preserving an untimed save pulse.
-// Balloon strategy elaboration remains a diagnosed, separate milestone.
+// The preserved intent then lowers to atomic snapshots and retained NBAs.
 // CHECK: simulation.snapshot_publications
 // CHECK: simulation.func @{{.*}}
 // CHECK: simulation.covergroup.clock_event.register
@@ -19,7 +19,8 @@
 // CHECK-NEXT: %[[B:[a-zA-Z0-9_]+]] = arith.constant 34 : i32
 // CHECK-NEXT: simulation.ref.store %[[B]] to %[[DATA]] : i32,
 // CHECK-NEXT: simulation.event.snapshot.flush
-// ERROR: retention simulation lowering is not implemented for balloon-style strategies
+// LOWERED-DAG: simulation.power.nba.enqueue
+// LOWERED-DAG: simulation.event.snapshot.register
 
 //--- save.upf
 create_supply_set CORE

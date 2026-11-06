@@ -1,0 +1,77 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0
+// RUN: %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// IEEE 1801-2018 6.50 priority with IEEE 1800-2023 3.14.1/4.9.4/10.4.2:
+// a positive real source delay may round to a current-step NBA. Classify the
+// final ticks, evaluating RHS and delay once. A future timed update survives
+// a clean restore; a later newly armed clock also remains valid.
+// CHECK: balloon real delay passed
+
+//--- design.sv
+`timescale 1ns/1ns
+module leaf(output logic [7:0] q = 0);
+  always @(posedge top.clk) q <= #(top.capture_delay()) top.capture_data();
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, save = 0, restore = 0;
+  logic [7:0] d = 0;
+  realtime delay_value = 0.4;
+  int delay_reads = 0, data_reads = 0;
+  wire [7:0] q;
+  leaf dut(q);
+  function automatic realtime capture_delay();
+    delay_reads++;
+    return delay_value;
+  endfunction
+  function automatic logic [7:0] capture_data();
+    data_reads++;
+    return d;
+  endfunction
+  task automatic tick(input logic [7:0] v);
+    clk = 0; d = v; #1 clk = 1; #1 clk = 0; #1;
+  endtask
+  initial begin
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground", 0.0))
+      $fatal(1, "supplies");
+    tick(8'h11);
+    save = 1; #1 save = 0; #1;
+    tick(8'h22);
+    restore = 1;
+    #1 d = 8'h33;
+    clk = 1;
+    #0 restore = 0;
+    #1;
+    if (q !== 8'h11) $fatal(1, "rounded zero NBA overwrote restore");
+    if (data_reads != 3 || delay_reads != 3) $fatal(1, "duplicate delay or RHS evaluation");
+    clk = 0;
+    #1 restore = 1;
+    #1 restore = 0;
+    d = 8'h44; clk = 1;
+    #1;
+    if (q !== 8'h44) $fatal(1, "later clock suppressed");
+    clk = 0;
+    delay_value = 1.4;
+    #1 d = 8'h55;
+    clk = 1;
+    #0 restore = 1;
+    #0 restore = 0;
+    #2;
+    if (q !== 8'h55) $fatal(1, "positive-delay NBA cancelled");
+    if (data_reads != 5 || delay_reads != 5) $fatal(1, "future delay or RHS reevaluated");
+    $display("balloon real delay passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set CORE
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention KEEP -domain PD -elements dut/q \
+    -save_signal {save high} -restore_signal {restore high}

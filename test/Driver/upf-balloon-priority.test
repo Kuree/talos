@@ -1,0 +1,101 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0
+// RUN: %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// IEEE 1801-2018 6.50 and IEEE 1800-2023 4.6/10.4.2: a level-restore
+// trailing event overrides a coincident or already-pending clock. Physical
+// edges while that actor is unarmed cannot relabel its frozen occurrence.
+// A newly armed #0 clock and a previously issued later-due NBA still work.
+// CHECK: balloon priority passed
+
+//--- design.sv
+module leaf(input logic [7:0] d, output logic [7:0] q = 0);
+  // Direct hierarchical clock avoids coalescing through a port-copy actor.
+  always @(posedge top.controls[1]) q <= #(top.delay_ticks) d;
+endmodule
+module top;
+  import UPF::*;
+  logic [1:0] controls = 0;
+  logic save = 0;
+  logic [7:0] d = 0;
+  int unsigned delay_ticks = 0;
+  wire [7:0] q;
+  leaf dut(d,q);
+  task automatic tick(input logic [7:0] v);
+    controls[1] = 0; d = v; #1 controls[1] = 1;
+    #1 controls[1] = 0; #1;
+  endtask
+  initial begin
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground", 0.0))
+      $fatal(1, "supplies");
+    tick(8'h11);
+    save = 1;
+    #1 save = 0;
+    #1;
+    tick(8'h22);
+    controls[0] = 1;
+    tick(8'h33);
+    if (q !== 8'h33) $fatal(1, "asserted restore froze normal write");
+    d = 8'h44;
+    #1 controls = 2'b10; // Restore trailing event and clock in one publication.
+    #0;
+    if (q !== 8'h11) $fatal(1, "coincident clock overwrote restore");
+    controls[1] = 0;
+    d = 8'h55;
+    #0 controls[1] = 1;
+    #1;
+    if (q !== 8'h55) $fatal(1, "later zero-delay clock was suppressed");
+    controls = 0;
+    #1;
+    controls[0] = 1;
+    #1;
+    controls[0] = 0; // Completed restore publication.
+    d = 8'h5a;
+    controls[1] = 1; // Causally later clock in the same Active wave.
+    #1;
+    if (q !== 8'h5a) $fatal(1, "later ordered clock was suppressed");
+    controls = 0;
+    #1 controls[0] = 1;
+    #1;
+    d = 8'h5b;
+    controls[1] = 1;
+    #0 controls[0] = 0; // The older clock already issued a current-step NBA.
+    #1;
+    if (q !== 8'h11) $fatal(1, "already-issued zero NBA overwrote restore");
+    controls = 0;
+    d = 8'h66;
+    #1;
+    controls[1] = 1; // Original activation becomes pending.
+    controls[1] = 0;
+    controls[0] = 1;
+    controls[0] = 0;
+    controls[1] = 1; // It is still unarmed; do not overwrite its old token.
+    #1;
+    if (q !== 8'h11) $fatal(1, "later physical edge relabelled pending actor");
+    controls = 0;
+    #1;
+    delay_ticks = 6;
+    d = 8'h77;
+    #1 controls[1] = 1;
+    #1 controls[1] = 0;
+    controls[0] = 1;
+    #1 controls[0] = 0;
+    #1;
+    if (q !== 8'h11) $fatal(1, "clean restore before future NBA");
+    #4;
+    if (q !== 8'h77) $fatal(1, "clean restore cancelled future delayed NBA");
+    $display("balloon priority passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set CORE
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention KEEP -domain PD -elements dut/q \
+    -save_signal {save high} -restore_signal {controls[0] high}

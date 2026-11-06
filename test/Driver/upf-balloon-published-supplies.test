@@ -1,0 +1,71 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0
+// RUN: %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// IEEE 1801-2018 9.2.2/9.2.3/9.7.3: use published switched supplies.
+// Raw control pulses that coalesce before the rail changes must neither
+// suppress a clock occurrence nor destroy normal or saved storage.
+// CHECK: balloon published supplies passed
+
+//--- design.sv
+module leaf(input logic d, output logic q = 0);
+  always @(posedge top.clk) q <= #3 d;
+endmodule
+module rail_dummy;
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, d = 1, enable = 1, ret_enable = 1, save = 0, restore = 0;
+  wire q;
+  leaf dut(d,q);
+  rail_dummy dummy();
+  initial begin
+    if (!supply_on("/top/AON.power") || !supply_on("/top/AON.ground", 0.0))
+      $fatal(1, "supplies");
+    #1 clk = 1;
+    #4 clk = 0;
+    save = 1; #1 save = 0; #1;
+    d = 0;
+    enable = 0;
+    ret_enable = 0;
+    clk = 1;
+    enable = 1;
+    ret_enable = 1;
+    #4;
+    if (q !== 0) $fatal(1, "raw control pulse suppressed normal update");
+    if (get_supply_state(get_supply_value("/top/SW.power")) != FULL_ON ||
+        get_supply_state(get_supply_value("/top/RAIL.power")) != FULL_ON)
+      $fatal(1, "coalesced rail not normal");
+    restore = 1; #1 restore = 0; #1;
+    if (q !== 1) $fatal(1, "raw control pulse destroyed balloon");
+    ret_enable = 0;
+    #1;
+    if (q !== 1'bx) $fatal(1, "published retention loss did not corrupt normal");
+    ret_enable = 1;
+    #1;
+    clk = 0; d = 0; #1 clk = 1; #4;
+    restore = 1; #1 restore = 0; #1;
+    if (q !== 1'bx) $fatal(1, "published retention loss did not destroy balloon");
+    $display("balloon published supplies passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_net VDD
+create_supply_set AON -function {power VDD}
+create_supply_set SW -function {ground AON.ground}
+create_supply_set RAIL -function {ground AON.ground}
+create_power_domain PD -elements dut -supply {primary SW}
+create_power_domain RP -elements dummy -supply {primary RAIL}
+create_power_switch PS -domain PD -input_supply_port {vin AON.power} \
+    -output_supply_port {vout PD.primary.power} -control_port {en enable} -on_state {ON vin en}
+create_power_switch RS -domain RP -input_supply_port {vin AON.power} \
+    -output_supply_port {vout RP.primary.power} -control_port {en ret_enable} -on_state {ON vin en}
+set_retention KEEP -domain PD -elements dut/q -retention_supply RAIL \
+    -save_signal {save high} -restore_signal {restore high}

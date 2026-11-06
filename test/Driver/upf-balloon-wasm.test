@@ -1,0 +1,11 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-balloon-power.test %t/wide
+// RUN: %split-file %S/upf-balloon-real-delay.test %t/real
+// RUN: talos --upf %t/wide/design.upf --target=wasm32 -O3 --mlir-verify-each -c %t/wide/design.sv -o %t.wide.o
+// RUN: talos --upf %t/wide/design.upf --target=wasm32 -O0 --execution-tier=bytecode --mlir-verify-each -c %t/wide/design.sv -o %t.wide.bc.o
+// RUN: talos --upf %t/real/design.upf --target=wasm32 -O0 --mlir-verify-each -c %t/real/design.sv -o %t.real.o
+// RUN: talos --upf %t/real/design.upf --target=wasm32 -O3 --execution-tier=bytecode --mlir-verify-each -c %t/real/design.sv -o %t.real.bc.o
+// RUN: %llvm_dist/bin/llvm-readobj --file-headers %t.wide.o %t.wide.bc.o %t.real.o %t.real.bc.o | FileCheck %s
+// Snapshot targets/captures, 65-bit packed values, dynamic real-delay zero
+// tests and both epoch branches compile with wasm32's pointer representation.
+// CHECK-COUNT-4: AddressSize: 32bit

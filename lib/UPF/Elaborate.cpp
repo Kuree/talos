@@ -262,7 +262,9 @@ LogicalResult synchronousHelper(sim::SimCallOp call) {
       // IEEE 1801-2018 11.2.3.2.6 samples synchronously. Its conditional
       // diagnostic records failure but queues no work needing cancellation.
       // Keep the op's scheduler/IO effects for optimization and error handling.
-      if (isa<sim::SimSupplyReadOp>(op))
+      // A snapshot flush publishes that helper's completed synchronous
+      // write. It leaves no asynchronous work owned by the helper.
+      if (isa<sim::SimSupplyReadOp, sim::SimEventSnapshotFlushOp>(op))
         return WalkResult::advance();
       bool asynchronous =
           sim::isSuspensionOp(op) ||
@@ -599,7 +601,7 @@ struct Lowering {
     return success();
   }
   LogicalResult gate(sim::SimFuncOp fn, const PowerCondition &condition,
-                     Descriptor restoration) {
+                     Descriptor restoration, bool inlineOutput = true) {
     SmallVector<Operation *> waits;
     fn.walk([&](Operation *op) {
       if (op->getName().getStringRef().starts_with("simulation.suspend."))
@@ -679,7 +681,8 @@ struct Lowering {
     }
     Block *body = gate->splitBlock(gate->begin());
     builder.setInsertionPointToEnd(gate);
-    Value on = condition.normal(builder, fn.getLoc(), fn.getArgument(0));
+    Value on =
+        condition.normal(builder, fn.getLoc(), fn.getArgument(0), inlineOutput);
     if (!edgeSensitive) {
       // IEEE 1801-2018 9.2.1/9.6.7: control-net routing can settle after the
       // root's initial aggregate snapshot. Wait for publication before the
@@ -1180,7 +1183,8 @@ struct Lowering {
           return failure();
     }
     for (auto process : processes) {
-      if (failed(gate(process, condition, restoration)))
+      if (failed(gate(process, condition, restoration,
+                      !retention.publishedProcesses.contains(process))))
         return failure();
     }
     auto monitor = function(loc, prefix + ".monitor",

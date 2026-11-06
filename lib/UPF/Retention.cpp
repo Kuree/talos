@@ -1,4 +1,5 @@
 #include "Retention.h"
+#include "BalloonRetention.h"
 #include "PowerState.h"
 #include "ReferenceWindow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -398,10 +399,6 @@ struct Lowering {
       if (partial)
         return decl.emitError(
             "retention through a partial port alias is not implemented");
-      if (reg.strategy.getSave() || reg.strategy.getRestore())
-        return emitError(location(reg.strategy))
-               << "retention simulation lowering is not implemented for "
-                  "balloon-style strategies";
       if (!supportedState(decl.getType()))
         return decl.emitError("retention requires packed integral state");
       llvm::DenseSet<Operation *> functions;
@@ -864,6 +861,19 @@ struct Lowering {
                          "." + s.attribute.getName().getValue().str();
       s.primary = policies(s.attribute.getPrimarySupply());
       s.retention = policies(s.attribute.getRetentionSupply());
+      if (s.attribute.getSave() || s.attribute.getRestore()) {
+        SmallVector<BalloonRegister> selected;
+        for (auto *reg : s.registers) {
+          selected.push_back({reg->declaration, reg->writers});
+          for (Operation *op : reg->writers)
+            result.publishedProcesses.insert(
+                op->getParentOfType<sim::SimFuncOp>().getOperation());
+        }
+        if (failed(lowerBalloonRetention(o, s.attribute, s.primary, s.retention,
+                                         selected, rootBoundary)))
+          return failure();
+        continue;
+      }
       llvm::DenseSet<std::pair<uint64_t, uint32_t>> seen;
       auto add = [&](Descriptor descriptor) {
         if (seen.insert({descriptor.id, descriptor.net}).second)

@@ -1,0 +1,32 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O3 --vpi=off %t/design.sv -o %t.exe
+// RUN: %llvm_dist/bin/llvm-nm --defined-only -C %t.exe | FileCheck %s --implicit-check-not=talos_rt_v1_event_snapshot_register --implicit-check-not=talos_rt_v1_event_snapshot_mask --implicit-check-not=talos_rt_v1_event_snapshot_flush --implicit-check-not=talos_rt_v1_event_snapshot_link_anchor
+// RUN: talos --upf %t/design.upf -O3 --vpi=off --execution-tier=bytecode %t/design.sv -o %t.bc
+// RUN: %llvm_dist/bin/llvm-nm --defined-only -C %t.bc | FileCheck %s --implicit-check-not=talos_rt_v1_event_snapshot_register --implicit-check-not=talos_rt_v1_event_snapshot_mask --implicit-check-not=talos_rt_v1_event_snapshot_flush --implicit-check-not=talos_rt_v1_event_snapshot_link_anchor
+// An explicitly empty retention selection adds no snapshot service to either
+// execution tier, including when its containing power domain is nonempty.
+// CHECK: main
+
+//--- design.sv
+module leaf(input logic clk, output logic q = 0);
+  always @(posedge clk) q <= !q;
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, save = 0;
+  wire q;
+  leaf dut(clk,q);
+  initial begin
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground", 0.0))
+      $fatal(1, "supplies");
+    #1 clk = 1;
+    #1;
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set CORE
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention UNUSED -domain PD -elements {} -save_signal {save high}

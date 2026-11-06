@@ -6207,6 +6207,19 @@ def SimTimeConstantOp : SimOp<"time.constant", [Pure, ConstantLike]> {
   let hasFolder = 1;
 }
 
+def SimTimeIsZeroOp : SimOp<"time.is_zero", [Pure]> {
+  let summary = "test whether a normalized delay has zero precision ticks";
+  let description = [{
+    Tests the final delay after source scaling and precision rounding. This
+    distinguishes a current-step NBA update from a future timed update
+    (IEEE 1800 4.9.4) without reevaluating the source delay expression.
+  }];
+  let arguments = (ins SimTimeType:$input);
+  let results = (outs I1:$result);
+  let assemblyFormat = "$input attr-dict";
+  let hasFolder = 1;
+}
+
 def SimTimeNowOp : SimOp<"time.now", [
   MemoryEffects<[MemRead<SimSchedulerResource>]>
 ]> {

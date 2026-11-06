@@ -16,7 +16,7 @@
 // LATCH: retention requires one top-level edge-sensitive event control
 // AMBIGUOUS: ambiguous retention strategies for top.dut.q
 // AMBIGUOUS: other strategy is declared here
-// BALLOON: retention simulation lowering is not implemented for balloon-style strategies
+// BALLOON: retention requires one sequential writer per register
 
 //--- master.upf
 create_supply_set CORE

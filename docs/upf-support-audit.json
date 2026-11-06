@@ -566,9 +566,12 @@
         "-retention_ground_net",
         "-instance"
       ],
-      "limits": "Master/slave whole packed-register retention, one edge-sensitive writer, asynchronous edge lists and retained output supply support. Balloon save/restore syntax is stored but simulation is rejected. No latch/computed-event/partial/multiple/mixed writers, named-process selectors, general condition refinements or nondefault corruption parameters. Physical and composite targets are supported with additive per-leaf updates and typed ordered provenance for later membership. Real leaf handles remain independent; no synthetic composite strategy handles are exposed. Compiler-only provenance is bounded to 1048576 work units.",
+      "limits": "Master/slave and balloon whole packed-register retention with one edge-sensitive writer, asynchronous edge lists and persistent direct clock/iff references. Balloon storage is separate from normal/output state; edge and trailing-level save/restore use event-time UPF qualification, default corruption parameters, ordered publications and zero-delay NBA restore priority. Startup initial writes and local readbacks preserve typed partial packed views while output power is masked. Master/slave supports retention-powered outputs; balloon -use_retention_as_primary remains rejected. No latch/computed-event/partial functional/multiple/mixed writers, named-process selectors, general condition refinements, nondefault corruption parameters, partial captured initialization aliases, initialization helper readbacks or late raw-IR root initialization. Snapshot aggregate widths are bounded by the LLVM packed-integer limit. Physical and composite targets support additive per-leaf updates and bounded typed ordered provenance for later membership; no synthetic composite strategy handles are exposed. Empty extents and explicitly empty element lists add no snapshot machinery; broader intent-only no-eligible-state elision remains pending.",
       "implementation": [
-        "lib/UPF/Execute.cpp"
+        "lib/UPF/Execute.cpp",
+        "lib/UPF/Retention.cpp",
+        "lib/UPF/BalloonRetention.cpp",
+        "lib/UPF/PublicationBarriers.cpp"
       ]
     },
     {
@@ -1005,7 +1008,7 @@
         "9.7"
       ],
       "missing": [
-        "Balloon save/restore elaboration using the existing snapshot mechanism",
+        "Balloon retention-powered outputs and broader initialization/helper/reference forms",
         "Collective retention-element lists and named-process/partial selections",
         "Latches, computed events, mixed/multiple writers and unsupported reference escape paths",
         "Nondefault corruption parameters, legacy supply operands and semantic condition refinements"
@@ -1318,10 +1321,56 @@
           ],
           "review": "Two independent subagents approved UPF/LRM event-time qualification, ordered NBA/pair/alias semantics, pass-network force ordering, callback and context lifetime, optional linking, LLVM/MLIR practice and test coverage. Review corrections cover packed-bit exact-event coalescing, same-bucket clauses, callback-driven queue reallocation/reselection, owner deactivation and fail-closed source mutation. Reviewers independently passed 38 and 10 focused unit cases. No remaining review blockers for this prerequisite; balloon lowering remains pending.",
           "validation": "All 272 selected UPF/supply/snapshot/power-NBA lit tests pass, including MLIR native and required-bytecode execution at LLVM O0/O3 and ordinary native/bytecode static-link exclusions for registration/mask/flush/anchor. All 347 process runtime tests and 231 bytecode/reflection/VPI tests pass (578 unit tests). Existing retention conformance clauses 6.50 and 9.7.3 pass in native/bytecode (four cases); 9.7.1 remains reference-only (two cases), with no unexpected results. Tests cover narrow/wide pairs and views, cross-half iff, distinct NBA event instants, delayed aliases, source/target callback queue growth, calendar cancellation, exact-event coalescing, same-bucket routing, owner lifecycle, scalar/wide foreign writes and force/release through actual tran connectivity, plus context destruction from notification. Existing wasm object compilation checks in the selected suite pass; wasm runtime execution was not run."
+        },
+        {
+          "id": "7b",
+          "status": "complete",
+          "scope": "Event-time balloon save/restore lowering with separate normal/saved/output state, qualified edge and trailing-level transfers, corruption, restore priority, NBA epochs and typed initialization",
+          "clauses": [
+            "6.50",
+            "9.2.1",
+            "9.7.2",
+            "9.7.3",
+            "IEEE1800-2023 4.6",
+            "IEEE1800-2023 4.9.4",
+            "IEEE1800-2023 9.4.2",
+            "IEEE1800-2023 10.4.2"
+          ],
+          "runtime_changes": false,
+          "new_public_runtime_functions": false,
+          "architecture": "Reuse optional exact-event snapshots and existing retained-pair NBA operations. Policy and per-writer callbacks have explicit persistent captures and disjoint targets, sample before commit, and do not add retained data as policy dependencies. Armed clock histories and frozen epochs preserve event identity across pending activations; zero-effective-delay NBAs use the priority epoch while future timed writes use only the destructive epoch. The compiler-only pure time.is_zero operation folds normalized constants and lowers to existing LLVM arithmetic and bytecode Compare, with no new runtime API or opcode. Native snapshot state participates in existing standalone state planning/synchronization. Published supplies qualify balloon writers; raw coalesced switch controls cannot predict corruption. Empty explicit element lists avoid the service entirely.",
+          "spec_interpretations": [
+            "Section 6.50 and Figure 6 govern default RET_SUP_COR normal-storage destruction; Table 10 PARTIAL_CORRUPT wording conflicts with this default and Figure 6 reserves that transition for NO_RET_SUP_COR.",
+            "Balloon RTC does not freeze normal clocks while primary is NORMAL. Level controls transfer at the raw asserted-predicate trailing event, qualified using the condition at that event; condition-only changes do not manufacture transfers.",
+            "Level restore overrides older pending activations and their current-step NBA updates. The zero/future NBA distinction is an implementation inference from 6.50 priority and LRM 4.9.4; source-ordered later clock publications and positive-delay writes remain valid.",
+            "Exempt initial writes and direct own-state readbacks use normal storage; independently inferred outputs require primary and retention power under default RET_SUP_COR. Saved storage starts corrupt until an actual save."
+          ],
+          "tests": [
+            "test/Driver/upf-balloon-transfers.test",
+            "test/Driver/upf-balloon-edges.test",
+            "test/Driver/upf-balloon-conditions.test",
+            "test/Driver/upf-balloon-priority.test",
+            "test/Driver/upf-balloon-real-delay.test",
+            "test/Driver/upf-balloon-power.test",
+            "test/Driver/upf-balloon-published-supplies.test",
+            "test/Driver/upf-balloon-one-sided.test",
+            "test/Driver/upf-balloon-async-reset.test",
+            "test/Driver/upf-balloon-initial.test",
+            "test/Driver/upf-balloon-initial-retention-off.test",
+            "test/Driver/upf-balloon-initial-errors.test",
+            "test/Driver/upf-balloon-empty-cost.test",
+            "test/Driver/upf-balloon-wasm.test",
+            "test/Conversion/upf-balloon-retention.test",
+            "test/IR/upf-balloon-invalid.mlir",
+            "test/IR/upf-balloon-late-root.mlir",
+            "test/Dialect/Simulation/time-is-zero.mlir"
+          ],
+          "review": "Two independent subagents approved the supported UPF/LRM semantics, read-only callback closure/capture discipline, MLIR CFG/types/effects and folding, native state planning, bounds and test coverage. Findings corrected before approval include typed clock projections, zero-effective-delay NBA priority, initialized normal/output separation, partial startup views, explicit helper-read rejection and backend width limits. Reviewers independently passed eight O3 native/bytecode executions and three direct MLIR fixtures.",
+          "validation": "All 303 unique selected lit tests pass: 302 UPF/supply/snapshot/power-NBA/cohort/time regressions plus the newly added balloon wasm fixture. All 347 process and 269 bytecode/reflection/VPI unit tests pass (616 total). Clauses 6.50 and 9.7.3 pass in native/bytecode (four cases); 9.7.1 remains reference-only (two cases), with no unexpected conformance results. Source tests exercise native/bytecode O0/O3 and verification; direct MLIR fixtures check repeated canonicalize/CSE, explicit capture closure, distinct state/epoch targets and fail-closed diagnostics. Four new wasm32 balloon objects compile across native/bytecode O0/O3, including wide state and dynamic real delays; wasm runtime execution was not run."
         }
       ],
       "remaining": [
-        "Balloon save/restore lowering and event-time conditions/priority",
+        "Balloon retention-powered outputs, helper/alias initialization and intent-only no-eligible-state elision",
         "Collective retention-element lists and remaining storage/writer forms",
         "Nondefault corruption parameters and remaining retention combinations"
       ]

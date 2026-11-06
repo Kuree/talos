@@ -1,0 +1,89 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0
+// RUN: %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// IEEE 1801-2018 5.4/6.50, IEEE 1800-2023 9.4.2: edge transfers read
+// pre-publication storage, four-state edges, exact-one UPF qualification,
+// selected-bit controls and balloon RTC without master/slave clock gating.
+// CHECK: balloon edges passed
+
+//--- design.sv
+module leaf(input logic clk, input logic [7:0] d, output logic [7:0] q = 0);
+  always @(posedge clk) q <= d;
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, rtc = 1;
+  logic [1:0] controls = 0, sc = 1;
+  logic [7:0] d = 0;
+  wire [7:0] q;
+  leaf dut(clk,d,q);
+  task automatic tick(input logic [7:0] v);
+    clk = 0; d = v; #1 clk = 1; #1 clk = 0; #1;
+  endtask
+  initial begin
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground", 0.0))
+      $fatal(1, "supplies");
+    tick(8'h11);
+    controls = 2'b10;
+    #1;
+    if (q !== 8'hxx) $fatal(1, "initial restore manufactured data");
+    controls = 0;
+    tick(8'h22);
+    controls = 1;
+    #1 controls = 0;
+    tick(8'h33);
+    controls = 3;
+    #1;
+    if (q !== 8'h22) $fatal(1, "simultaneous edge restore did not read old balloon");
+    controls = 0;
+    #1 controls = 2;
+    #1;
+    if (q !== 8'h33) $fatal(1, "simultaneous edge save did not read old normal");
+    controls = 0;
+    sc = 0;
+    tick(8'h44);
+    controls = 1;
+    #1 controls = 0;
+    tick(8'h55);
+    controls = 2;
+    #1;
+    if (q !== 8'h33) $fatal(1, "false save condition transferred");
+    controls = 0;
+    sc = 2;
+    tick(8'h66);
+    controls = 1;
+    #1 controls = 0;
+    #1 controls = 2;
+    #1;
+    if (q !== 8'h33) $fatal(1, "UPF Boolean accepted non-one");
+    controls = 0;
+    sc = 1;
+    tick(8'h77);
+    controls[0] = 1'bx; // 0->X is a posedge.
+    #1 controls = 0;
+    tick(8'h88);
+    controls[1] = 1'bz; // 0->Z is a posedge.
+    #1;
+    if (q !== 8'h77) $fatal(1, "four-state save/restore edge");
+    tick(8'h99); // A held edge restore pin and RTC do not freeze clocks.
+    if (q !== 8'h99) $fatal(1, "balloon RTC incorrectly froze clock");
+    controls[1] = 1'b1; // Z->1 is also a posedge.
+    #1;
+    if (q !== 8'h77) $fatal(1, "Z-to-one restore edge");
+    $display("balloon edges passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set CORE
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention KEEP -domain PD -elements dut/q \
+    -save_signal {controls[0] posedge} -restore_signal {controls[1] posedge} \
+    -save_condition {sc == 1} -retention_condition rtc

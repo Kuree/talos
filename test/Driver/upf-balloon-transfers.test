@@ -1,0 +1,81 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0
+// RUN: %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// IEEE 1801-2018 6.50/9.7.3: normal and balloon storage are independent.
+// Save/restore high controls transfer on their trailing edge; a recovered
+// primary supply does not itself restore. Missing RTC does not freeze clocks.
+// CHECK: balloon transfers passed
+
+//--- design.sv
+module leaf(input logic clk, input logic [7:0] d, output logic [7:0] q = 0);
+  always @(posedge clk) q <= d;
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, enable = 1, save = 0, restore = 0;
+  logic [7:0] d = 8'h11;
+  wire [7:0] q;
+  leaf dut(clk, d, q);
+  task automatic tick(input logic [7:0] value);
+    clk = 0;
+    d = value;
+    #1 clk = 1;
+    #1 clk = 0;
+    #1;
+  endtask
+  initial begin
+    if (!supply_on("/top/AON.power") || !supply_on("/top/AON.ground", 0.0))
+      $fatal(1, "initial supplies");
+    tick(8'h11);
+    if (q !== 8'h11) $fatal(1, "normal clock with missing RTC");
+    restore = 1;
+    #1;
+    if (q !== 8'h11) $fatal(1, "leading restore transferred");
+    restore = 0;
+    #1;
+    if (q !== 8'hxx) $fatal(1, "unsaved balloon was initialized from q");
+    tick(8'h22);
+    save = 1;
+    tick(8'h33);
+    save = 0;
+    #1;
+    tick(8'h44);
+    enable = 0;
+    #1;
+    if (q !== 8'hxx) $fatal(1, "primary off did not corrupt normal/output");
+    enable = 1;
+    #1;
+    if (q !== 8'hxx) $fatal(1, "powerup manufactured balloon restore");
+    restore = 1;
+    #1;
+    if (q !== 8'hxx) $fatal(1, "restore leading edge manufactured data");
+    restore = 0;
+    #1;
+    if (q !== 8'h33) $fatal(1, "trailing save/restore did not preserve balloon");
+    tick(8'h55);
+    if (q !== 8'h55) $fatal(1, "normal clocks modified only balloon");
+    restore = 1;
+    #1 restore = 0;
+    #1;
+    if (q !== 8'h33) $fatal(1, "ordinary clocks overwrote saved storage");
+    $display("balloon transfers passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_net VDD
+create_supply_set AON -function {power VDD}
+create_supply_set SW -function {ground AON.ground}
+create_power_domain PD -elements dut -supply {primary SW}
+create_power_switch PS -domain PD \
+    -input_supply_port {vin AON.power} -output_supply_port {vout PD.primary.power} \
+    -control_port {en enable} -on_state {ON vin en}
+set_retention KEEP -domain PD -elements dut/q \
+    -save_signal {save high} -restore_signal {restore high}

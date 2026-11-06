@@ -1,0 +1,101 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0
+// RUN: %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3
+// RUN: %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0
+// RUN: %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// IEEE 1801-2018 6.50: level controls transfer on the raw asserted
+// predicate's trailing edge, then qualify using the condition at that event.
+// Condition-only changes do not transfer. Qualified overlap still corrupts.
+// CHECK: balloon conditions passed
+
+//--- design.sv
+module leaf(input logic clk, input logic [7:0] d, output logic [7:0] q = 0);
+  always @(posedge clk) q = d;
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, sc = 1, rc = 1, rtc = 1;
+  logic [0:3] save_bus = 0, restore_bus = 0;
+  logic [7:0] d = 0;
+  wire [7:0] q;
+  leaf dut(clk,d,q);
+  task automatic tick(input logic [7:0] v);
+    clk = 0; d = v; #1 clk = 1; #1 clk = 0; #1;
+  endtask
+  task automatic restore_value;
+    restore_bus[2] = 1; #1 restore_bus[2] = 0; #1;
+  endtask
+  initial begin
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground", 0.0))
+      $fatal(1, "supplies");
+    tick(8'h11);
+    save_bus[1] = 1;
+    tick(8'h22); // Leading save did not snapshot 11.
+    save_bus[1] = 0;
+    #1;
+    tick(8'h33);
+    restore_value();
+    if (q !== 8'h22) $fatal(1, "save did not use trailing-edge data");
+    tick(8'h44);
+    save_bus[1] = 1;
+    #1 sc = 0; // Ending qualified assertion alone must not save 44.
+    #1 sc = 1;
+    #1 sc = 0;
+    save_bus[1] = 0; // At the real trailing event SC is false.
+    #1 sc = 1;
+    restore_value();
+    if (q !== 8'h22) $fatal(1, "condition-only change manufactured save");
+    restore_bus[2] = 1;
+    tick(8'h55); // Restore transfer is at the trailing instant, not an interval hold.
+    if (q !== 8'h55) $fatal(1, "asserted restore/RTC froze normal clock");
+    rc = 0;
+    #1 rc = 1;
+    #1;
+    if (q !== 8'h55) $fatal(1, "condition-only change manufactured restore");
+    restore_bus[2] = 0;
+    #1;
+    if (q !== 8'h22) $fatal(1, "trailing restore did not transfer");
+    tick(8'h66);
+    save_bus[1] = 1;
+    #1 save_bus[1] = 1'bx; // high->X ends the asserted predicate once.
+    #1;
+    tick(8'h77);
+    save_bus[1] = 0; // X->0 must not manufacture a second save.
+    #1;
+    restore_value();
+    if (q !== 8'h66) $fatal(1, "four-state level trailing event");
+    tick(8'h88);
+    save_bus[0] = 1; // Unselected ascending-array bit must not save.
+    #1 save_bus[0] = 0;
+    restore_value();
+    if (q !== 8'h66) $fatal(1, "unselected control bit saved");
+    rc = 0;
+    save_bus[1] = 1;
+    restore_bus[2] = 1;
+    #1;
+    if (q !== 8'h66) $fatal(1, "unqualified overlap corrupted data");
+    #1 rc = 1; // Continuous qualified level overlap corrupts both stores.
+    #1;
+    if (q !== 8'hxx) $fatal(1, "qualified overlap did not corrupt normal");
+    sc = 0; rc = 0;
+    save_bus[1] = 0; restore_bus[2] = 0;
+    #1;
+    tick(8'h99);
+    rc = 1;
+    restore_value();
+    if (q !== 8'hxx) $fatal(1, "overlap did not destroy balloon");
+    $display("balloon conditions passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set CORE
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention KEEP -domain PD -elements dut/q \
+    -save_signal {save_bus[1] high} -restore_signal {restore_bus[2] high} \
+    -save_condition sc -restore_condition rc -retention_condition rtc

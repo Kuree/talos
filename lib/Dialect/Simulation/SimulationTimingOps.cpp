@@ -591,6 +591,12 @@ OpFoldResult SimTimeConstantOp::fold(FoldAdaptor adaptor) {
   return adaptor.getValueAttr();
 }
 
+OpFoldResult SimTimeIsZeroOp::fold(FoldAdaptor adaptor) {
+  if (auto input = dyn_cast_or_null<IntegerAttr>(adaptor.getInput()))
+    return BoolAttr::get(getContext(), input.getValue().isZero());
+  return {};
+}
+
 OpFoldResult SimTimeAddOp::fold(FoldAdaptor adaptor) {
   auto lhs = dyn_cast_or_null<IntegerAttr>(adaptor.getLhs());
   auto rhs = dyn_cast_or_null<IntegerAttr>(adaptor.getRhs());

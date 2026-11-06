@@ -64,6 +64,19 @@ public:
   }
 };
 
+class TimeIsZeroLowering final : public OpRewritePattern<sim::SimTimeIsZeroOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(sim::SimTimeIsZeroOp op,
+                                PatternRewriter &rewriter) const override {
+    Value zero = arith::ConstantIntOp::create(rewriter, op.getLoc(), 0, 64);
+    rewriter.replaceOpWithNewOp<arith::CmpIOp>(op, arith::CmpIPredicate::eq,
+                                               op.getInput(), zero);
+    return success();
+  }
+};
+
 class TimeToRealLowering final : public OpRewritePattern<sim::SimTimeToRealOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
@@ -477,7 +490,8 @@ public:
 void populateSimulationTimeLoweringPatterns(RewritePatternSet &patterns) {
   patterns.add<TimeConstantLowering, TimeAddLowering, TimeToRealLowering,
                TimeFromRealLowering, RealFromIntegerLowering,
-               RealToIntegerLowering, TimeScaleLowering>(patterns.getContext());
+               RealToIntegerLowering, TimeScaleLowering, TimeIsZeroLowering>(
+      patterns.getContext());
 }
 
 LogicalResult lowerSimulationTimeOperations(Operation *root) {
@@ -486,7 +500,7 @@ LogicalResult lowerSimulationTimeOperations(Operation *root) {
   SmallVector<Operation *> operations;
   root->walk([&](Operation *operation) {
     if (isa<sim::SimTimeConstantOp, sim::SimTimeAddOp, sim::SimTimeScaleOp,
-            sim::SimTimeToRealOp, sim::SimTimeFromRealOp,
+            sim::SimTimeIsZeroOp, sim::SimTimeToRealOp, sim::SimTimeFromRealOp,
             sim::SimRealFromIntegerOp, sim::SimRealToIntegerOp>(operation))
       operations.push_back(operation);
   });
@@ -494,8 +508,9 @@ LogicalResult lowerSimulationTimeOperations(Operation *root) {
     return failure();
   WalkResult remaining = root->walk([](Operation *operation) {
     return isa<sim::SimTimeConstantOp, sim::SimTimeAddOp, sim::SimTimeScaleOp,
-               sim::SimTimeToRealOp, sim::SimTimeFromRealOp,
-               sim::SimRealFromIntegerOp, sim::SimRealToIntegerOp>(operation)
+               sim::SimTimeIsZeroOp, sim::SimTimeToRealOp,
+               sim::SimTimeFromRealOp, sim::SimRealFromIntegerOp,
+               sim::SimRealToIntegerOp>(operation)
                ? WalkResult::interrupt()
                : WalkResult::advance();
   });

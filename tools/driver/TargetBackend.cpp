@@ -809,6 +809,7 @@ lowerToLLVM(ModuleOp module, TargetMachine &targetMachine, StringRef triple,
   bool hasInertialDriver = false;
   bool hasPassSwitch = false;
   bool hasClockOccurrenceCondition = false;
+  bool hasEventSnapshots = false;
   module.walk([&](mlir::Operation *operation) {
     if (mlir::isa<talos::sim::SimOverrideOp, talos::sim::SimDynamicOverrideOp,
                   talos::sim::SimReleaseOverrideOp>(operation))
@@ -827,10 +828,12 @@ lowerToLLVM(ModuleOp module, TargetMachine &targetMachine, StringRef triple,
     hasPassSwitch |= mlir::isa<talos::sim::SimPassSwitchDeclOp>(operation);
     if (auto wait = mlir::dyn_cast<talos::sim::SimSuspendClockSetOp>(operation))
       hasClockOccurrenceCondition |= !wait.getConditions().empty();
+    hasEventSnapshots |=
+        mlir::isa<talos::sim::SimEventSnapshotRegisterOp>(operation);
   });
   requiresStateSync = vpi != "off" || hasLanguageOverride || hasDriverNBA ||
                       hasDelayedNet || hasInertialDriver ||
-                      hasClockOccurrenceCondition;
+                      hasClockOccurrenceCondition || hasEventSnapshots;
   resolveInitialDrivers = hasInertialDriver;
   ::talos::schedule::set<::talos::schedule::Field::NativeScheduler>(
       module, talos::schedule::NativeSchedulerModeAttr::get(module.getContext(),
@@ -876,7 +879,7 @@ lowerToLLVM(ModuleOp module, TargetMachine &targetMachine, StringRef triple,
                              hasDriverNBA || hasDelayedNet ||
                              hasInertialDriver || needsNetDriverTopology;
   bool needsStandaloneStatePlan =
-      needsSampledStatePlan || hasClockOccurrenceCondition;
+      needsSampledStatePlan || hasClockOccurrenceCondition || hasEventSnapshots;
   requiresStateSync |= needsStandaloneStatePlan && !needsDesignEncoding;
   // Both tiers share the polls that bound garbage between collections, so
   // place them before bytecode is frozen.
