@@ -29,6 +29,34 @@ module {
       simulation.suspend.any %a, %b, %choose edges [0, 0, 0] to ^body : !simulation.net<i8>, !simulation.net<i8>, !simulation.ref<i1>
     }
   }
+  // Canonicalizing a branch between two sliced net reads may select the
+  // handles first and extract the common slice afterward. Both candidate
+  // roots and the selector remain dependencies, at the projected offsets.
+  simulation.design @selected_net_slice {
+    simulation.scope.decl 0
+    simulation.net.decl 0 in 0 : i8 design
+    simulation.net.decl 1 in 0 : i8 design
+    simulation.storage.decl 0 in 0 : i1 design
+    simulation.storage.decl 1 in 0 : i3 design
+    simulation.code_unit.decl 1 in 0 always_comb hierarchy "selected_slice"
+    // CHECK-LABEL: regions @selected_slice valid=1
+    // CHECK: node simulation.net.read read:s4611686018427387904[2,5) read:s4611686018427387905[2,5)
+    // CHECK: publication read:s0[0,1) read:s4611686018427387904[2,5) read:s4611686018427387905[2,5) write:s1[0,3)
+    simulation.func @selected_slice(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 4 : i32, code_unit_id = 1 : i64} {
+      %a = simulation.context.net %ctx[0] : !simulation.net<i8>
+      %b = simulation.context.net %ctx[1] : !simulation.net<i8>
+      %choose = simulation.context.storage %ctx[0] : !simulation.ref<i1>
+      %out = simulation.context.storage %ctx[1] : !simulation.ref<i3>
+      cf.br ^body
+    ^body:
+      %c = simulation.ref.load %choose : !simulation.ref<i1> -> i1
+      %net = arith.select %c, %a, %b : !simulation.net<i8>
+      %slice = simulation.net.extract %net from 2 : !simulation.net<i8> -> !simulation.net<i3>
+      %value = simulation.net.read %slice : !simulation.net<i3> -> i3
+      simulation.ref.store %value to %out : i3, !simulation.ref<i3>
+      simulation.suspend.any %a, %b, %choose edges [0, 0, 0] to ^body : !simulation.net<i8>, !simulation.net<i8>, !simulation.ref<i1>
+    }
+  }
   // One known arm cannot stand in for an unresolved formal net. Otherwise
   // the dependency proof would omit reads of whichever net the caller binds.
   simulation.design @unresolved_net {
@@ -46,7 +74,9 @@ module {
     ^body:
       %c = simulation.ref.load %choose : !simulation.ref<i1> -> i1
       %net = arith.select %c, %known, %unknown : !simulation.net<i8>
-      %value = simulation.net.read %net : !simulation.net<i8> -> i8
+      %slice = simulation.net.extract %net from 2 : !simulation.net<i8> -> !simulation.net<i3>
+      %bits = simulation.net.read %slice : !simulation.net<i3> -> i3
+      %value = arith.extui %bits : i3 to i8
       simulation.ref.store %value to %out : i8, !simulation.ref<i8>
       simulation.suspend.any %known, %unknown, %choose edges [0, 0, 0] to ^body : !simulation.net<i8>, !simulation.net<i8>, !simulation.ref<i1>
     }

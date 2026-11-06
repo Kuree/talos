@@ -1622,6 +1622,8 @@ private:
   /// Bit offset of a projection within its parent reference, when constant.
   std::optional<uint64_t> projectionOffset(Operation *op,
                                            const Memory &state) const {
+    if (auto extract = dyn_cast<sim::SimNetExtractOp>(op))
+      return extract.getLowBit();
     auto parentType = dyn_cast<sim::RefType>(op->getOperand(0).getType());
     if (!parentType)
       return std::nullopt;
@@ -1690,7 +1692,7 @@ private:
     for (Value value : op->getResults())
       state.references.erase(value);
     if (op->getNumResults() != 1 ||
-        !isa<sim::RefType>(op->getResult(0).getType()))
+        !isa<sim::RefType, sim::NetType>(op->getResult(0).getType()))
       return;
     if (op->getNumOperands() == 0)
       return;
@@ -1748,7 +1750,11 @@ private:
                                  result) &&
                collectCandidates(select.getFalseValue(), state, visiting,
                                  result);
-      if (!isa<sim::SimRefExtractOp, sim::SimRefDynExtractOp,
+      // Canonicalization can select net handles before taking a common
+      // slice. Project every candidate, just as for selected storage views;
+      // this describes reads of resolved state, not permission to move drives.
+      if (!isa<sim::SimRefExtractOp, sim::SimNetExtractOp,
+               sim::SimRefDynExtractOp,
                sim::SimRefArrayElementOp, sim::SimRefSubelementOp>(definition))
         return false;
       SmallVector<HandleFact> parents;

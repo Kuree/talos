@@ -3062,6 +3062,7 @@ FailureOr<bool> makeNativeEvalPlan(
       Value dynamicOffset =
           hasOffset ? offsetCall.getArgOperands()[1]
                     : llvmConstant(chainBuilder, call.getLoc(), i64, 0);
+      bool chainedOffsets = false;
       auto requireValid = [&, &call = call](Value guard) {
         sourceValid = sourceValid
                           ? arith::AndIOp::create(chainBuilder, call.getLoc(),
@@ -3081,6 +3082,7 @@ FailureOr<bool> makeNativeEvalPlan(
             inner && inner.getCallee() &&
             *inner.getCallee() == "talos_rt_v1_native_handle_offset" &&
             inner.getArgOperands().size() == 2) {
+          chainedOffsets = true;
           dynamicOffset =
               arith::AddIOp::create(chainBuilder, call.getLoc(),
                                     inner.getArgOperands()[1], dynamicOffset);
@@ -3107,6 +3109,33 @@ FailureOr<bool> makeNativeEvalPlan(
           break;
         }
         requireValid(guard);
+      }
+      // A common packed view can leave offset(selected-root, constant) after
+      // branch canonicalization. Retry the finite-handle proof on the base
+      // with that projection, checking each leaf's read and handle bounds.
+      // Guards, chained offsets (whose intermediate bounds also matter), and
+      // nonconstant offsets keep the path below.
+      std::optional<uint64_t> projectedOffset = constantU64(dynamicOffset);
+      if (hasOffset && !chainedOffsets && !sourceValid && projectedOffset &&
+          *projectedOffset <= uint64_t{INT32_MAX}) {
+        if (Value selected = tryLoadSelectedStaticStatePlane(
+                chainBuilder, call.getLoc(), chainBase,
+                chainBuilder.getIntegerType(*width),
+                *unknownPlane ? "__talos_state_unknown" : "__talos_state_value",
+                &stateLayout, true, twoState && *unknownPlane, {},
+                *projectedOffset)) {
+          if (call.getNumResults() != 1 || call.getResult().getType() != i32)
+            return call.emitError("unsupported native state load status ABI"),
+                   failure();
+          LLVM::StoreOp::create(chainBuilder, call.getLoc(), selected,
+                                arguments[7], 1);
+          call.getResult().replaceAllUsesWith(
+              llvmConstant(chainBuilder, call.getLoc(), i32, TALOS_RT_OK));
+          call.erase();
+          if (offsetCall->use_empty())
+            offsetCall.erase();
+          continue;
+        }
       }
       std::optional<uint64_t> encodedRoot = constantU64(chainBase);
       talos_rt_stable_handle_v1 decoded{};

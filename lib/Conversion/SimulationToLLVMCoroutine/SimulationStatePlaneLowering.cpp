@@ -726,7 +726,8 @@ Value tryLoadSelectedStaticStatePlane(OpBuilder &builder, Location location,
                                       StringRef globalName,
                                       const NativeStateLayout *directLayout,
                                       bool assumeClean, bool knownZero,
-                                      llvm::function_ref<Value(Value)> remap) {
+                                      llvm::function_ref<Value(Value)> remap,
+                                      uint64_t additionalOffset) {
   // CFG canonicalization can merge reads into selects or block arguments of
   // distinct handles. Every incoming leaf must be in bounds and free of
   // runtime overlays before its read can be speculated. Keep the loads at the
@@ -760,6 +761,26 @@ Value tryLoadSelectedStaticStatePlane(OpBuilder &builder, Location location,
                       : resolveDirectStaticStateRange(
                             current, resultType.getWidth(), directLayout);
       if (leaf && (!leaf->guarded || assumeClean)) {
+        if (additionalOffset) {
+          const auto *bound = directLayout->findBound(leaf->staticID);
+          if (!bound || leaf->localOffset > uint64_t{INT32_MAX} ||
+              additionalOffset > uint64_t{INT32_MAX} - leaf->localOffset ||
+              additionalOffset > bound->width - leaf->localOffset ||
+              resultType.getWidth() >
+                  bound->width - leaf->localOffset - additionalOffset) {
+            direct = false;
+            break;
+          }
+          leaf->offset += additionalOffset;
+          leaf->localOffset += additionalOffset;
+          leaf->containerWidth = 0;
+          leaf->accessUnit =
+              directLayout->packedStorage
+                  ? directLayout->packedStorage->get(
+                        bound->type, bound->offset, leaf->localOffset,
+                        resultType.getWidth())
+                  : std::nullopt;
+        }
         uint64_t encoded = *resolveCFGConstantInteger(current);
         if (leafHandles.insert(encoded).second)
           leaves.emplace_back(encoded, *leaf);

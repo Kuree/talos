@@ -386,16 +386,21 @@ public:
   }
 };
 
-/// Propagation through side-effect-free combinational processes, which
-/// republish the changes of the roots they wait on into the roots they write.
-/// Toward sources, a process that writes a reached root reaches every root it
-/// waits on: they can affect the seeds. Toward readers, a process that waits
-/// on a reached root reaches every root it writes: the seeds wake it.
+/// Value influence through side-effect-free combinational processes. Toward
+/// sources, an exposed output reaches the inputs of every publication to it;
+/// toward readers, a reached input reaches the outputs it can influence.
+/// Without a value proof, use the conservative watch/write cross-product.
+/// This is not general activation reachability: an unrelated watched input
+/// can wake the process without influencing a particular output's value.
 class ConeAnalysis final : public DataFlowAnalysis {
 public:
   struct Process {
     sim::SimFuncOp function;
     SmallVector<uint64_t> watched, written;
+    /// Input/output root pairs, including publication control and target
+    /// dependencies. An unavailable value proof retains the watch cross-product.
+    SmallVector<std::pair<uint64_t, uint64_t>> dependencies{};
+    bool precise = false;
   };
   enum class Direction { Sources, Readers };
   ConeAnalysis(DataFlowSolver &solver, Operation *design,
@@ -419,6 +424,15 @@ public:
       return success();
     const Process &process = *found->second;
     bool toSources = direction == Direction::Sources;
+    if (process.precise) {
+      for (auto [input, output] : process.dependencies) {
+        uint64_t from = toSources ? output : input;
+        uint64_t to = toSources ? input : output;
+        if (getOrCreateFor<ConeState>(point, anchor(from))->reached)
+          propagateIfChanged(state(to), state(to)->reach());
+      }
+      return success();
+    }
     ArrayRef<uint64_t> from = toSources ? process.written : process.watched;
     ArrayRef<uint64_t> to = toSources ? process.watched : process.written;
     if (llvm::none_of(from, [&](uint64_t root) {
@@ -1279,6 +1293,29 @@ void TalosSimFuseClockedKernelsPass::runOnOperation() {
       for (const Writer &write : list)
         if (auto found = index.find(write.function); found != index.end())
           combinationalProcesses[found->second].written.push_back(root);
+    // A process can publish several independent outputs. Access to one must
+    // expose only the inputs that can affect that publication (LRM 4.3), not
+    // every root on its union wait. Include every intermediate publication;
+    // the separate glitch-insensitivity certificate decides what can be hidden.
+    for (ConeAnalysis::Process &process : combinationalProcesses) {
+      auto body = combinational.analyze(process.function, provenance,
+                                        /*interleaved=*/true, nullptr,
+                                        /*finalValuesOnly=*/true);
+      if (!body || !body->structured)
+        continue;
+      const auto &memory = body->structured->getMemory();
+      if (!memory.hasValueDependencies())
+        continue;
+      process.precise = true;
+      DenseSet<std::pair<uint64_t, uint64_t>> seen;
+      for (const auto &[operation, publications] : memory.getPublications())
+        for (const auto &publication : publications)
+          for (const auto &input : publication.inputs) {
+            auto edge = std::pair{input.root, publication.output.root};
+            if (seen.insert(edge).second)
+              process.dependencies.push_back(edge);
+          }
+    }
   }
 
   // IEEE 1800-2023 20.2 and 9.2.3: `$finish` ends the simulation at once,
