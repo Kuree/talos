@@ -13,6 +13,7 @@ add_mlir_library(TalosAnalysisTestPasses
   LocalUnknownAnalysisTestPass.cpp
   SteadyUnknownAnalysisTestPass.cpp
   NativeAOTAnalysisTestPass.cpp
+  NativeMethodEligibilityAnalysisTestPass.cpp
   NativeSizeCensusTestPass.cpp
   NativeStateLayoutAnalysisTestPass.cpp
   RandomProgramTestPass.cpp

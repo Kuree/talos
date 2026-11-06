@@ -57,6 +57,7 @@ int main(int argc, char **argv) {
   talos::registerClockInferenceAnalysisTestPass();
   talos::registerDPIEffectAnalysisTestPass();
   talos::registerClassDispatchAnalysisTestPass();
+  talos::registerNativeMethodEligibilityAnalysisTestPass();
   talos::registerCombinationalDependencyAnalysisTestPass();
   talos::registerCoverageSchemaTestPass();
   talos::registerStorageWriteAnalysisTestPass();

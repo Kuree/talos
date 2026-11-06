@@ -3,6 +3,7 @@
 #include "BytecodeEncoder.h"
 #include "BytecodeSerialization.h"
 #include "talos/Analysis/ManagedClassLayoutAnalysis.h"
+#include "talos/Analysis/NativeMethodEligibilityAnalysis.h"
 #include "talos/Analysis/SimulationStorageAnalysis.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -60,84 +61,17 @@ void Encoder::prepareNativeMethodCalls() {
     }
   if (methods.empty())
     return;
-  llvm::StringMap<sim::SimFuncOp> functions;
-  for (auto function : design.getBody().front().getOps<sim::SimFuncOp>())
-    functions[function.getSymName()] = function;
-  DenseMap<uint64_t, SmallVector<sim::SimFuncOp>> targets;
-  SmallVector<sim::SimFuncOp> pending;
+  analysis::NativeMethodEligibilityAnalysis eligibility(design,
+                                                        /*includeTasks=*/false);
   for (auto method : methods) {
-    uint64_t signature = method.getSignatureId().value_or(0);
-    auto found = functions.find(*method.getImplementation());
-    if (found == functions.end()) {
-      bytecodeOnlyMethodSignatures.insert(signature);
-      continue;
-    }
-    if (method.getIsVirtual())
-      targets[signature].push_back(found->second);
-    pending.push_back(found->second);
+    StringRef implementation = *method.getImplementation();
+    if (!eligibility.canInvoke(implementation))
+      bytecodeOnlyMethodBodies.insert(implementation);
+    if (method.getIsVirtual() &&
+        !eligibility.canInvokeVirtual(method.getSignatureId().value_or(0),
+                                      /*isTask=*/false))
+      bytecodeOnlyMethodSignatures.insert(method.getSignatureId().value_or(0));
   }
-  // IEEE 1800-2023 13.4(c) permits function process control. The native
-  // callable ABI rejects control of the current process, whereas bytecode
-  // unwinds its caller correctly. Preserve that behavior over the complete
-  // call closure, including virtual overrides and recursive SCCs. Foreign
-  // calls also stay interpreted until their callback/unwind ABI is covered.
-  DenseSet<Operation *> visited, unsupported;
-  DenseMap<Operation *, SmallVector<Operation *>> callers;
-  SmallVector<Operation *> worklist;
-  while (!pending.empty()) {
-    sim::SimFuncOp function = pending.pop_back_val();
-    if (!visited.insert(function).second)
-      continue;
-    bool needsBytecode = function.isExternal();
-    auto edge = [&](sim::SimFuncOp callee) {
-      callers[callee].push_back(function);
-      pending.push_back(callee);
-    };
-    function.walk([&](Operation *operation) {
-      if (operation == function)
-        return;
-      needsBytecode |= sim::isSuspensionOp(operation) ||
-                       isa<sim::SimControlNonlocalExitOp, sim::SimDPICallOp,
-                           sim::SimFinishOp, sim::SimStopOp, sim::SimFatalOp,
-                           sim::SimErrorOp, sim::SimProgramExitOp>(operation);
-      StringRef callee;
-      if (auto call = dyn_cast<sim::SimCallOp>(operation))
-        callee = call.getCallee();
-      else if (auto call = dyn_cast<sim::SimClassDirectCallOp>(operation))
-        callee = call.getCallee();
-      if (!callee.empty()) {
-        auto found = functions.find(callee);
-        if (found == functions.end())
-          needsBytecode = true;
-        else
-          edge(found->second);
-      }
-      if (auto call = dyn_cast<sim::SimClassVirtualCallOp>(operation)) {
-        auto found = targets.find(call.getSignatureId());
-        if (found == targets.end())
-          needsBytecode = true;
-        else
-          for (sim::SimFuncOp target : found->second)
-            edge(target);
-      }
-    });
-    if (needsBytecode && unsupported.insert(function).second)
-      worklist.push_back(function);
-  }
-  while (!worklist.empty()) {
-    Operation *callee = worklist.pop_back_val();
-    for (Operation *caller : callers[callee])
-      if (unsupported.insert(caller).second)
-        worklist.push_back(caller);
-  }
-  for (Operation *function : unsupported)
-    bytecodeOnlyMethodBodies.insert(
-        cast<sim::SimFuncOp>(function).getSymName());
-  for (auto &entry : targets)
-    if (llvm::any_of(entry.second, [&](sim::SimFuncOp target) {
-          return unsupported.contains(target);
-        }))
-      bytecodeOnlyMethodSignatures.insert(entry.first);
 }
 
 FailureOr<uint64_t> Encoder::classID(SymbolRefAttr symbol,

@@ -12,6 +12,7 @@ void registerBytecodeImageTestPass();
 void registerClockInferenceAnalysisTestPass();
 void registerDPIEffectAnalysisTestPass();
 void registerClassDispatchAnalysisTestPass();
+void registerNativeMethodEligibilityAnalysisTestPass();
 void registerCombinationalDependencyAnalysisTestPass();
 void registerCoverageSchemaTestPass();
 void registerManagedClassLayoutAnalysisTestPass();
