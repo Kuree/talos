@@ -1,5 +1,6 @@
 add_mlir_library(TalosUPF
   Execute.cpp
+  DesignQuery.cpp
   BooleanExpression.cpp
   SupplyExpression.cpp
   PowerState.cpp

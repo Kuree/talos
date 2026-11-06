@@ -23,7 +23,7 @@ expect_error {find_objects . -pattern} {*missing value*}
 expect_error {find_objects . -pattern * -pattern *} {*duplicate UPF option*}
 expect_error {find_objects . -pattern * -transitive maybe} {*expected boolean*}
 expect_error {find_objects . -pattern * -transitive -transitive} {*duplicate UPF option*}
-expect_error {find_objects . -pattern {a{b,c}}} {*brace alternatives*}
+assert_equal [find_objects . -pattern {a{b,c}}] {}
 expect_error {find_objects . -pattern * -object_type reg} {*unsupported*}
 expect_error {find_objects . -pattern * -unknown x} {*unsupported*}
 

@@ -332,17 +332,18 @@
         "-transitive",
         "-regexp",
         "-exact",
-        "-ignore_case"
+        "-ignore_case",
+        "-direction"
       ],
       "unsupported_options": [
-        "-direction",
         "-non_leaf",
         "-leaf_only",
         "-traverse_macros"
       ],
-      "limits": "Existing instance, logic port and net objects in module scopes. Missing model/process/supply_port object kinds, generate-block search roots, brace alternatives, explicit bus-bit expansion, UPF hard/soft-macro traversal and leaf classification. Query matching modes added in chunk 1. Escaped HDL identifier normalization is also incomplete.",
+      "limits": "Module/generate hierarchy queries include instances, model-name matching, logic ports, HDL nets/variables and named processes; UPF-created supply ports have execution-time visibility and direction filters. Tcl glob brace alternatives, regexp/exact/case modes, escaped identifier/array identity and static packed/unpacked/enum selections are supported. Macro/leaf filters and traversal await design attributes; implemented HDL supply objects/ports await linkage. Patterns are bounded to 64 KiB without NUL, brace expansion to 4096 alternatives/4 MiB/256 levels/65536 work steps, and selected-element enumeration to 1048576 work units. Broad regexp bit queries can reach that limit; conservative anchored-prefix pruning avoids unrelated arrays when provable.",
       "implementation": [
-        "lib/UPF/Execute.cpp"
+        "lib/UPF/Execute.cpp",
+        "lib/UPF/DesignQuery.cpp"
       ]
     },
     {
@@ -571,7 +572,7 @@
       "status": "partial",
       "accepted_options": [],
       "unsupported_options": [],
-      "limits": "Existing instance scopes, design-relative roots, single .. and prior-scope return. No generate-block or newly-created logic hierarchy scopes, or general embedded parent-path navigation.",
+      "limits": "Module and generate scopes, rooted/relative names, parent navigation, and escaped literal/index identities are supported. UPF object creation in generate scopes is rejected after resolving -domain creation-scope overrides. Macro/leaf-cell restrictions await design attributes.",
       "implementation": [
         "lib/UPF/Execute.cpp"
       ]
@@ -898,11 +899,10 @@
         "11.2.3.1"
       ],
       "missing": [
-        "Brace-alternative globbing and bus-bit expansion",
-        "Models, named processes, supply ports and generate-block query scopes",
-        "Port direction and macro/leaf filters",
+        "Macro/leaf filtering and traversal, including terminal boundary/HighConn semantics",
+        "Queries for implemented HDL supply objects and ports require HDL/UPF linkage",
         "General object handles, properties, class/property enums, iterators and query_upf",
-        "Escaped HDL identifier normalization and semantic hierarchy components"
+        "General UPF supply-object addressing in escaped HDL creation scopes still needs the semantic path representation"
       ]
     },
     {
@@ -1066,7 +1066,7 @@
         "9.2.3"
       ],
       "runtime_changes": false,
-      "validation": "212 UPF-related lit tests pass (198 query/runtime/lowering and 14 UPF dialect tests), including all 12 targeted tests. Official IEEE1801 probes 6.31, 6.47 and 11.2.3.3.4-.6 pass in native and bytecode tiers (10 cases). Wasm32 native/bytecode object compilation also passes; wasm execution was not run.",
+      "validation": "198 unique UPF-related lit tests pass, including 14 UPF dialect tests (the separate 14-test run overlaps the case-insensitive lit filter). Official IEEE1801 probes 6.31, 6.47 and 11.2.3.3.4-.6 pass in native and bytecode tiers (10 cases). Wasm32 native/bytecode object compilation also passes; wasm execution was not run.",
       "review": "Independent subagent approved UPF 11.2.3.3.6/6.47/9.2.3, LRM conversion/scheduling semantics, MLIR types/effects, guarded conversion and atomic storage publication; independently executed direct lowering, CSE/effect and publication barrier tests.",
       "tests": [
         "test/Conversion/upf-supply-partial.mlir",
@@ -1082,8 +1082,38 @@
     },
     {
       "id": 3,
-      "status": "planned",
-      "scope": "Remaining find_objects globbing, object kinds and direction filtering; macro/leaf semantics depend on attribute support."
+      "status": "in_progress",
+      "scope": "Remaining find_objects globbing, object kinds and direction filtering; macro/leaf semantics depend on attribute support.",
+      "completed": [
+        {
+          "id": "3a",
+          "scope": "Compiler-only semantic design queries, escaped/array scope identity, brace globbing, model/net/process/port kinds, direction and static element selections",
+          "status": "complete",
+          "clauses": [
+            "3",
+            "5.3",
+            "6.31",
+            "6.52",
+            "8.3.2",
+            "10.4.3.3"
+          ],
+          "runtime_changes": false,
+          "tests": [
+            "test/Driver/upf-design-queries.test",
+            "test/Driver/upf-query-identity.test",
+            "test/Driver/upf-query-intent.test",
+            "test/Driver/upf-find-object-modes.test",
+            "test/Driver/upf-database.test",
+            "test/Driver/upf-errors.test"
+          ],
+          "review": "Independent subagent reviewed the UPF/LRM requirements, Tcl ownership and error recovery, semantic name keys, escaped instance arrays, enums, variables, generate creation-scope overrides, conservative regexp pruning and test coverage. All reported semantic failures were corrected and independently reproduced as passing before approval.",
+          "validation": "Six targeted lit tests pass, including native/bytecode query-created intent and emitted IR bit offsets. Full case-insensitive UPF/simulation-supply regression selection passes all 201 unique tests. Eight IEEE1801 clauses pass in native and bytecode tiers (16 cases)."
+        }
+      ],
+      "remaining": [
+        "Macro/leaf filtering and traversal after design attribute support",
+        "Implemented HDL supply-port queries after implemented-object linkage"
+      ]
     },
     {
       "id": 4,

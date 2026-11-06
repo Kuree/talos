@@ -1,0 +1,56 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.exe
+// RUN: %t.exe | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc
+// RUN: %t.bc | FileCheck %s
+// RUN: talos --upf %t/design.upf -emit-slang %t/design.sv -o - | FileCheck %s --check-prefix=IR
+// IEEE 1801-2018 6.31/6.20/6.22: queried model instances and declared bus
+// selections become resolved intent. The selected ascending-range control bit
+// alone participates in switch knownness; unrelated X bits do not remove power.
+// CHECK: queried intent passed
+// IR: upf.domain @top.PD elements ["top.d0", "top.d1", "top.g[0].d2"]
+// IR-SAME: #upf.token<opcode = control, control = "top.flags"
+// IR-SAME: sourceWidth = 3, offset = 2
+
+//--- design.sv
+module leaf(output wire q);
+  assign q = 1'b1;
+endmodule
+module top;
+  import UPF::*;
+  logic enable = 0;
+  wire [1:3] flags = {enable, 1'bx, 1'b1};
+  wire q0, q1, q2;
+  leaf d0(q0), d1(q1);
+  for(genvar i=0;i<1;i++) begin : g
+    leaf d2(q2);
+  end
+  initial begin
+    if (!supply_on("/top/VDD") || !supply_on("/top/VSS", 0.0))
+      $fatal(1, "supply startup failed");
+    #1;
+    if ({q0,q1,q2} !== 3'bxxx) $fatal(1, "queried domain started ON");
+    enable = 1;
+    #1;
+    if ({q0,q1,q2} !== 3'b111) $fatal(1, "queried control did not restore domain");
+    enable = 0;
+    #1;
+    if ({q0,q1,q2} !== 3'bxxx) $fatal(1, "queried domain did not lose power");
+    $display("queried intent passed");
+    $finish;
+  end
+endmodule
+
+//--- design.upf
+set paths [find_objects . -pattern {{d{0,1},g\[0\]/d2}} -object_type inst]
+set models [find_objects . -pattern {l{eaf,ost}} -object_type model -transitive]
+if {$paths ne $models || [llength $models] != 3} {error "inconsistent query identity"}
+set control [find_objects . -pattern {flags\[1\]} -object_type net]
+if {[llength $control] != 1} {error "missing declared control bit"}
+create_power_domain PD -elements $models
+foreach rail {VDD VSS SW} {create_supply_net $rail}
+set_domain_supply_net PD -primary_power_net SW -primary_ground_net VSS
+create_power_switch PS -domain PD \
+    -input_supply_port {vin VDD} -output_supply_port {vout SW} \
+    -control_port [list en [lindex $control 0]] -on_state {ON vin en}

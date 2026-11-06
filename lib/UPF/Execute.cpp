@@ -2,6 +2,7 @@
 // lookup.
 #include "BooleanExpression.h"
 #include "ControlReference.h"
+#include "DesignQuery.h"
 #include "SupplyExpression.h"
 #include "SupplyNetwork.h"
 #include "mlir/IR/Builders.h"
@@ -81,6 +82,7 @@ struct Session {
   ModuleOp module;
   Tcl_Interp *interp;
   bool allowHDLExpressions;
+  DesignQuery queries;
   std::optional<upf::PartialOnTranslation> partialOnTranslation;
   std::string top, scope, file, designModule;
   std::map<std::string, Operation *> objects;
@@ -93,27 +95,29 @@ struct Session {
   SupplyBindings supplyBindings;
   std::map<std::string, SupplySet> supplySets;
   std::vector<std::pair<std::string, std::string>> setAssociations;
-  std::set<std::string> designPorts;
   std::set<std::string> declaredHDLNames;
   Session(ModuleOp module, Tcl_Interp *interp, bool allowHDLExpressions)
       : module(module), interp(interp),
-        allowHDLExpressions(allowHDLExpressions) {
+        allowHDLExpressions(allowHDLExpressions), queries(module) {
     std::set<std::string> tops;
     module.walk([&](Operation *op) {
+      for (Operation *owner = op; owner; owner = owner->getParentOp())
+        if (auto inactive = owner->getAttrOfType<BoolAttr>("is_uninstantiated");
+            inactive && inactive.getValue())
+          return;
       auto path = op->getAttrOfType<StringAttr>("hierarchical_name");
       if (path)
         declaredHDLNames.insert(path.str());
       StringRef kind = op->getName().getStringRef();
       if (!path ||
-          (kind != "slang.symbol.instance" && kind != "slang.symbol.variable" &&
+          (kind != "slang.symbol.instance" && kind != "slang.symbol.generate_block" &&
+           kind != "slang.symbol.variable" &&
            kind != "slang.symbol.net" && kind != "slang.symbol.port"))
         return;
       if (kind != "slang.symbol.port" || !objects.count(path.str()))
         objects[path.str()] = op;
-      if (kind == "slang.symbol.port")
-        designPorts.insert(path.str());
       if (op->getName().getStringRef() == "slang.symbol.instance" &&
-          !path.getValue().contains('.')) {
+          queries.isTop(path)) {
         tops.insert(path.str());
       }
     });
@@ -143,14 +147,7 @@ struct Session {
   }
   // IEEE 1801-2018 5.3.3.4: '/' is relative to the current design-top instance.
   std::string rooted(StringRef path) const {
-    if (path == top)
-      return "/";
-    StringRef suffix = path.drop_front(top.size() + 1);
-    std::string result = "/" + suffix.str();
-    for (char &ch : result)
-      if (ch == '.')
-        ch = '/';
-    return result;
+    return queries.rooted(path, top);
   }
   std::string model(StringRef instance) const {
     auto found = objects.find(instance.str());
@@ -207,12 +204,25 @@ struct Session {
     return FileLineColLoc::get(module.getContext(), path, std::max(1, line), 1);
   }
   std::string object(StringRef name) const {
-    std::string result = resolve(name);
+    std::string result = queries.resolve(name, scope, top);
+    if (objects.count(result))
+      return result;
+    // Preserve the existing dotted-HDL extension for unambiguous names.
+    result = resolve(name);
     if (objects.count(result))
       return result;
     return {};
   }
   std::string key(StringRef name) const { return resolve(name); }
+  bool creationScope(StringRef path) {
+    auto found = objects.find(path.str());
+    if (found != objects.end() &&
+        found->second->getName().getStringRef() == "slang.symbol.generate_block") {
+      error("cannot create UPF objects in a generate block (IEEE 1801-2018 clause 3)");
+      return false;
+    }
+    return true;
+  }
   std::string supplySetKey(StringRef name) const {
     // 5.3.3.3/.5: '/' separates HDL scopes; dots select UPF object fields.
     // Keeping those separators distinct also avoids a collision between
@@ -790,11 +800,10 @@ struct Session {
       if (requested == "..") {
         if (scope == top)
           return error("set_scope .. cannot leave the design top");
-        scope = scope.substr(0, scope.rfind('.'));
+        scope = queries.parent(scope);
       } else {
         std::string next = object(requested);
-        if (next.empty() || objects.at(next)->getName().getStringRef() !=
-                                "slang.symbol.instance")
+        if (next.empty() || !queries.isScope(next))
           return error("design scope not found: " +
                        StringRef(Tcl_GetString(objv[1])));
         scope = next;
@@ -847,144 +856,11 @@ struct Session {
     if (top.empty())
       return error(
           "UPF requires a unique elaborated design top; select one with --top");
-    if (command == "find_objects") {
-      // IEEE 1801-2018 6.31.1: default non-transitive; a bare -transitive
-      // means TRUE; every returned object is relative to the current scope.
-      bool transitive = false, sawTransitive = false, ignoreCase = false;
-      enum class MatchStyle { Glob, Regexp, Exact };
-      MatchStyle style = MatchStyle::Glob;
-      for (Tcl_Size i = 2; i < objc; ++i) {
-        StringRef option = Tcl_GetString(objv[i]);
-        if (option == "-regexp" || option == "-exact") {
-          MatchStyle next = option == "-regexp" ? MatchStyle::Regexp
-                                                : MatchStyle::Exact;
-          if (style == next)
-            return error("duplicate UPF option " + option);
-          if (style != MatchStyle::Glob)
-            return error("find_objects -regexp and -exact are mutually exclusive");
-          style = next;
-        } else if (option == "-ignore_case") {
-          if (ignoreCase)
-            return error("duplicate UPF option -ignore_case");
-          ignoreCase = true;
-        } else if (option == "-transitive") {
-          if (sawTransitive)
-            return error("duplicate UPF option -transitive");
-          sawTransitive = transitive = true;
-          if (i + 1 < objc &&
-              !StringRef(Tcl_GetString(objv[i + 1])).starts_with('-')) {
-            int flag;
-            if (Tcl_GetBooleanFromObj(interp, objv[++i], &flag) != TCL_OK)
-              return TCL_ERROR;
-            transitive = flag;
-          }
-        } else {
-          if (option != "-pattern" && option != "-object_type")
-            return error("unsupported find_objects option: " + option);
-          if (++i == objc)
-            return error("missing value for " + option);
-          if (!opts.emplace(option.str(), objv[i]).second)
-            return error("duplicate UPF option " + option);
-        }
-      }
-      StringRef requestedScope = Tcl_GetString(objv[1]);
-      if (requestedScope.starts_with('/') || requestedScope.starts_with(".."))
-        return error("find_objects scope must be relative to current scope");
-      std::string base = object(requestedScope);
-      if (base.empty() ||
-          objects.at(base)->getName().getStringRef() !=
-              "slang.symbol.instance" ||
-          (base != scope && !StringRef(base).starts_with(scope + ".")))
-        return error("find_objects scope not found");
-      StringRef pattern = value(opts, "-pattern");
-      if (!opts.count("-pattern"))
-        return error("find_objects requires -pattern");
-      // IEEE 1801-2018 6.31.2 also defines brace alternatives, which Tcl's
-      // StringMatch does not implement. Diagnose that deferred pattern form.
-      if (style == MatchStyle::Glob &&
-          (pattern.contains('{') || pattern.contains('}')))
-        return error("find_objects brace alternatives are not implemented");
-      StringRef kind = value(opts, "-object_type");
-      if (!kind.empty() && kind != "inst" && kind != "port" && kind != "net")
-        return error("unsupported find_objects object type: " + kind);
-      // 6.31.2: regexp patterns cannot contain hierarchy separators. Match
-      // the terminal name in each searched scope, using Tcl's regexp engine
-      // and Unicode case rules. Compile even if the search finds no objects,
-      // so malformed patterns always raise a catchable Tcl error.
-      Tcl_RegExp expression = nullptr;
-      llvm::SmallVector<StringRef> patterns;
-      if (style == MatchStyle::Regexp) {
-        if (pattern.contains('/'))
-          return error("find_objects -regexp pattern cannot contain '/'");
-        expression = Tcl_GetRegExpFromObj(
-            interp, opts.at("-pattern"),
-            TCL_REG_ADVANCED | TCL_REG_NOSUB |
-                (ignoreCase ? TCL_REG_NOCASE : 0));
-        if (!expression)
-          return TCL_ERROR;
-      } else
-        pattern.split(patterns, '/');
-      Tcl_Obj *result = Tcl_NewListObj(0, nullptr);
-      Tcl_IncrRefCount(result);
-      auto releaseResult = llvm::scope_exit([&] { Tcl_DecrRefCount(result); });
-      for (auto &[path, operation] : objects) {
-        StringRef relative = path;
-        if (!relative.consume_front(base + "."))
-          continue;
-        StringRef op = operation->getName().getStringRef();
-        if ((kind == "inst" && op != "slang.symbol.instance") ||
-            (kind == "port" && !designPorts.count(path)) ||
-            (kind == "net" && op != "slang.symbol.net") ||
-            (kind.empty() && op != "slang.symbol.instance" &&
-             op != "slang.symbol.net" && !designPorts.count(path)))
-          continue;
-        // Match individual hierarchy components: Tcl '*' must not cross '/'.
-        llvm::SmallVector<StringRef> names;
-        relative.split(names, '.');
-        size_t patternSize = expression ? 1 : patterns.size();
-        bool match = names.size() >= patternSize &&
-                     (transitive || names.size() == patternSize);
-        if (match && expression) {
-          StringRef name = names.back();
-          Tcl_Obj *text = Tcl_NewStringObj(name.data(), name.size());
-          Tcl_IncrRefCount(text);
-          int status = Tcl_RegExpExecObj(interp, expression, text, 0, 0, 0);
-          Tcl_DecrRefCount(text);
-          if (status < 0)
-            return TCL_ERROR;
-          match = status;
-        } else if (match) {
-          size_t offset = names.size() - patterns.size();
-          for (size_t i = 0; i < patterns.size() && match; ++i) {
-            std::string name = names[offset + i].str();
-            std::string component = patterns[i].str();
-            if (style == MatchStyle::Exact) {
-              match = name == component;
-              if (ignoreCase) {
-                Tcl_Size count = Tcl_NumUtfChars(name.c_str(), name.size());
-                match = count == Tcl_NumUtfChars(component.c_str(),
-                                                component.size()) &&
-                        Tcl_UtfNcasecmp(name.c_str(), component.c_str(),
-                                         count) == 0;
-              }
-            } else
-              match = Tcl_StringCaseMatch(name.c_str(), component.c_str(),
-                                          ignoreCase);
-          }
-        }
-        if (!match)
-          continue;
-        std::string resultName = path.substr(scope.size() + 1);
-        for (char &ch : resultName)
-          if (ch == '.')
-            ch = '/';
-        Tcl_ListObjAppendElement(interp, result,
-                                 Tcl_NewStringObj(resultName.c_str(), -1));
-      }
-      Tcl_SetObjResult(interp, result);
-      return TCL_OK;
-    }
+    if (command == "find_objects")
+      return queries.find(interp, objc, objv, scope, top, supplyPortInfo);
     if (command == "create_power_domain") {
+      if (!creationScope(scope))
+        return TCL_ERROR;
       RepeatedOptions repeated{{"-supply", {}}};
       if (objc < 2 ||
           !options(objc, objv, 2, {"-elements", "-supply"}, opts, &repeated))
@@ -1290,6 +1166,8 @@ struct Session {
       if (found != supplySets.end() && !update)
         return error("existing supply set or handle requires -update");
       if (found == supplySets.end()) {
+        if (!creationScope(scope))
+          return TCL_ERROR;
         if (update)
           return error("cannot update unknown supply set or handle");
         if (local.contains('.'))
@@ -1418,6 +1296,8 @@ struct Session {
           return TCL_ERROR;
         scope = owner->scope;
       }
+      if (!creationScope(scope))
+        return TCL_ERROR;
       std::string name = key(Tcl_GetString(objv[1]));
       if (reuse) {
         auto found = domainNets.find(name);
@@ -1575,6 +1455,8 @@ struct Session {
       std::string previousScope = scope;
       auto restoreScope = llvm::scope_exit([&] { scope = previousScope; });
       scope = dom->scope;
+      if (!creationScope(scope))
+        return TCL_ERROR;
       if (hasNamedSet(Tcl_GetString(objv[1])))
         return error("power switch name conflicts with a supply set");
       if (!dom->switchOutput.empty())
