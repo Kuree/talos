@@ -1,0 +1,47 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// IEEE 1801-2018 6.50/9.2.1/9.7.3: Q's output supply selection cannot
+// change N's lifetime. An Initial overrides already-corrupt N; only a new
+// destructive entry destroys it again. Startup still applies initial policy.
+// CHECK: master Initial output mode passed
+
+//--- design.sv
+module leaf;
+  logic a = 0, b = 0, startup_bad = 1;
+  initial begin a = 1; b = 1; end
+  always @(posedge top.clk) begin a <= top.d; b <= top.d; startup_bad <= top.d; end
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, rtc = 0, d = 0;
+  leaf dut();
+  initial begin
+    #1;
+    if (!supply_on("/top/CORE.ground",0.0) || !supply_on("/top/RET.ground",0.0) ||
+        !supply_on("/top/RET.power")) $fatal(1,"RET ON");
+    if (dut.a !== 'x || dut.b !== 1) $fatal(1,"output-only transition destroyed exempt N");
+    rtc = 1;
+    if (!supply_on("/top/CORE.power")) $fatal(1,"CORE ON");
+    if (dut.startup_bad !== 'x) $fatal(1,"startup corruption was not applied");
+    if (dut.a !== 1 || dut.b !== 1) $fatal(1,"output mode changed N lifetime");
+    rtc = 0;
+    if (!supply_off("/top/RET.power") || !supply_off("/top/CORE.power")) $fatal(1,"both OFF");
+    if (!supply_on("/top/RET.power")) $fatal(1,"RET recovery");
+    rtc = 1;
+    if (!supply_on("/top/CORE.power")) $fatal(1,"CORE recovery");
+    if (dut.a !== 'x || dut.b !== 'x) $fatal(1,"new destructive entry failed");
+    $display("master Initial output mode passed"); $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set CORE
+create_supply_set RET
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention DEFAULT -domain PD -elements dut/a -retention_supply RET -retention_condition rtc -parameters NO_RET_SUP_COR
+set_retention RET_POWERED -domain PD -elements dut/b -retention_supply RET -retention_condition rtc -parameters NO_RET_SUP_COR -use_retention_as_primary
+set_retention STARTUP -domain PD -elements dut/startup_bad -retention_supply RET -retention_condition rtc

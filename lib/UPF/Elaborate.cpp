@@ -1532,11 +1532,8 @@ struct Lowering {
       store(builder, loc, handle(builder, loc, context, condition.power),
             condition.drivenSupply(builder, loc, context));
     Value on = condition.normal(builder, loc, context, !exact);
-    // IEEE 1801-2018 9.7.3: publish restored retained values before NORMAL
-    // can reactivate level-sensitive consumers of this domain.
-    for (auto update : retention.updates)
-      sim::SimCallOp::create(builder, loc, TypeRange{}, update,
-                             ValueRange{context}, ArrayAttr{}, ArrayAttr{});
+    // Exact retention policy snapshots publish restored values before this
+    // aggregate NORMAL readiness can reactivate level-sensitive consumers.
     store(builder, loc, normalRef, on);
     // 6.22: explicit ON/PARTIAL and OFF conflicts also diagnose when no
     // functional target needs corruption (the switch-only path above).

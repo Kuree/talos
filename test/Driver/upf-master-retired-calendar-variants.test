@@ -1,0 +1,8 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-master-retired-calendar.test %t
+// RUN: talos -DRET_LOSS --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.ret && %t.ret | FileCheck %S/upf-master-retired-calendar.test
+// RUN: talos -DRET_LOSS --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.retbc && %t.retbc | FileCheck %S/upf-master-retired-calendar.test
+// RUN: talos --upf %t/view.upf -O0 --mlir-verify-each %t/design.sv -o %t.view0 && %t.view0 | FileCheck %S/upf-master-retired-calendar.test
+// RUN: talos --upf %t/view.upf -O3 --mlir-verify-each %t/design.sv -o %t.view3 && %t.view3 | FileCheck %S/upf-master-retired-calendar.test
+// RUN: talos --upf %t/view.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.viewbc0 && %t.viewbc0 | FileCheck %S/upf-master-retired-calendar.test
+// RUN: talos --upf %t/view.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.viewbc3 && %t.viewbc3 | FileCheck %S/upf-master-retired-calendar.test

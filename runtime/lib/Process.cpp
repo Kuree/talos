@@ -7079,6 +7079,14 @@ talos_rt_status runScheduler(talos_rt_context *context,
         // can execute that node directly.
         if (context->nativeScheduleControlOnly || options.currentSlotOnly)
           return midSimulationStatusUnlocked(context);
+        // Snapshot epochs already retire before notifications. This fallback
+        // also handles direct epoch changes, once before time advancement;
+        // it must not rescan future guards at every actor arbitration.
+        if (context->powerNBAs) {
+          auto status = retireInvalidPowerNBAsUnlocked(context);
+          if (status != TALOS_RT_OK)
+            return context->schedulerStatus = status;
+        }
         std::optional<uint64_t> nextTime;
         auto considerTime = [&](uint64_t candidate) {
           if (candidate > context->schedulerTime &&

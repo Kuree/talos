@@ -33,7 +33,6 @@ struct RetentionLoweringOptions {
 struct RetentionLoweringResult {
   llvm::DenseSet<uint64_t> storage;
   llvm::DenseSet<mlir::Operation *> publishedProcesses;
-  llvm::SmallVector<mlir::FlatSymbolRefAttr> updates;
 };
 // IEEE 1801-2018 5.7.3/5.9.3/6.50/9.7: resolve effective strategies before
 // validating their writers, then preserve separate backing and output state.

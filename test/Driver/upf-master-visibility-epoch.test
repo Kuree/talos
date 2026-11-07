@@ -1,0 +1,61 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// IEEE 1801-2018 6.50/9.7.3: NO_RET_SUP_COR with RET-powered output
+// preserves N while only Q power changes. Recovery/benign voltage changes
+// cannot cancel valid future writes; RTC entry invalidates earlier issued ones.
+// CHECK: master visibility epoch passed
+
+//--- design.sv
+module leaf;
+  logic [7:0] q, ordinary;
+  initial q = 8'h13;
+  always @(posedge top.clk) begin
+    q <= #5 top.d; q <= #5 (top.d + 8'd1);
+    ordinary <= #5 top.d;
+  end
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, rtc = 0;
+  logic [7:0] d = 8'h22;
+  leaf dut();
+  task automatic tick;
+    clk = 0; #1 clk = 1; #1;
+  endtask
+  initial begin
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground",0.0) ||
+        !supply_on("/top/RET.power") || !supply_on("/top/RET.ground",0.0)) $fatal(1,"supplies");
+    #1;
+    if (!supply_off("/top/RET.power")) $fatal(1,"RET OFF");
+    if (dut.q !== 'x) $fatal(1,"RET mask deferred");
+    clk = 1; // W remains true; eligibility must survive R-only recovery.
+    if (!supply_on("/top/RET.power")) $fatal(1,"RET ON");
+    #1;
+    if (dut.q !== 8'h13) $fatal(1,"visibility-only recovery destroyed N");
+    if (!supply_on("/top/RET.power",0.9)) $fatal(1,"benign voltage");
+    #5;
+    if (dut.q !== 8'h23 || dut.ordinary !== 8'h22) $fatal(1,"valid delayed occurrences cancelled");
+    d = 8'h44; tick();
+    rtc = 1; rtc = 0;
+    #5;
+    if (dut.q !== 8'h23 || dut.ordinary !== 8'h44) $fatal(1,"RTC revived old NBA or gated neighbor");
+    d = 8'h66; tick();
+    if (!supply_off("/top/RET.power")) $fatal(1,"RET OFF before due");
+    #5;
+    if (dut.q !== 'x || dut.ordinary !== 8'h66) $fatal(1,"masked Q or pending N");
+    if (!supply_on("/top/RET.power")) $fatal(1,"RET ON after due");
+    if (dut.q !== 8'h67) $fatal(1,"clockless Q projection lost N updates");
+    $display("master visibility epoch passed"); $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set CORE
+create_supply_set RET
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention LIVE -domain PD -elements dut/q -retention_supply RET \
+    -retention_condition rtc -use_retention_as_primary -parameters NO_RET_SUP_COR

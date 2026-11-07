@@ -30,6 +30,7 @@
 #include <cstring>
 #include <functional>
 #include <limits>
+#include <map>
 #include <memory>
 #include <new>
 #include <optional>
@@ -720,6 +721,74 @@ talos_rt_v1_scheduler_nba(talos_rt_context *context, uint8_t *valuePlane,
                           const uint8_t *value, const uint8_t *unknown) {
   return schedulerNBA(context, valuePlane, unknownPlane, planeBitCount,
                       bitOffset, bitWidth, delay, value, unknown, false);
+}
+
+// Epoch mismatch is permanent: remove those events before choosing a future
+// deadline, without testing a temporarily false power/output predicate. This
+// replaces per-register queue scans with one feature-local pass and one load
+// per distinct epoch/plane, and avoids empty future NBA barriers entirely.
+talos_rt_status retireInvalidPowerNBAsUnlocked(talos_rt_context *context) {
+  if (!context->powerNBAs || context->powerNBAs->conditions.empty())
+    return TALOS_RT_OK;
+  TALOS_RT_TRY {
+    std::map<std::tuple<uintptr_t, uint64_t, uint64_t>, uint64_t> epochs;
+    bool invalid = false;
+    for (auto &entry : context->powerNBAs->conditions) {
+      auto &condition = entry.second;
+      if (!condition.checked) {
+        auto &guard = condition.guard;
+        for (auto epoch :
+             {std::pair{guard.domain_epoch_handle, guard.domain_epoch},
+              std::pair{guard.strategy_epoch_handle, guard.strategy_epoch}}) {
+          auto known = epochs.try_emplace(std::make_tuple(
+              reinterpret_cast<uintptr_t>(condition.globalValue),
+              condition.globalBitCount, epoch.first));
+          if (known.second) {
+            auto status = talos_rt_v1_native_state_load_plane(
+                context, condition.globalValue, condition.globalBitCount,
+                epoch.first, 64, 0, 0,
+                reinterpret_cast<uint8_t *>(&known.first->second));
+            if (status != TALOS_RT_OK)
+              return status;
+          }
+          if (known.first->second != epoch.second) {
+            condition.checked = true;
+            condition.allowed = false;
+            break;
+          }
+        }
+      }
+      // Once the first half has committed, its cached decision still owns
+      // the atomic pair. Never re-evaluate a successful in-flight half.
+      invalid |= condition.checked && !condition.allowed;
+    }
+    if (!invalid)
+      return TALOS_RT_OK;
+    auto &conditions = context->powerNBAs->conditions;
+    for (auto &update : context->scheduledNBAs) {
+      uint8_t half = update.powerGuardHalf();
+      if (!half || update.cancelled)
+        continue;
+      auto found = conditions.find(update.sequence - (half == 2));
+      if (found == conditions.end() || !found->second.checked ||
+          found->second.allowed || !(found->second.pending & half))
+        continue;
+      update.cancelled = true;
+      found->second.pending &= ~half;
+      if (!found->second.pending)
+        conditions.erase(found);
+    }
+    // Preserve cursor indices and any currently borrowed queue entry.
+    if (!context->schedulerDrainingNBAQueues &&
+        !context->schedulerApplyingNativeUpdate && !context->observerDepth)
+      while (!context->scheduledNBAs.empty() &&
+             context->scheduledNBAs.back().cancelled &&
+             !context->scheduledNBAs.back().retainedAutomaticID)
+        context->scheduledNBAs.pop_back();
+    return TALOS_RT_OK;
+  }
+  TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
+  TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_ARGUMENT; }
 }
 
 bool powerNBAAllowedUnlocked(talos_rt_context *context, uint64_t sequence,

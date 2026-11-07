@@ -1,0 +1,76 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// IEEE 1801-2018 9.7.3: freeze each master's RTC/supply qualification at
+// its original clock event. Independent channels in one actor must not gate
+// ordinary neighboring state or body effects. Width and state planes survive.
+// CHECK: master pending clock passed
+
+//--- design.sv
+module leaf;
+  logic [0:64] q, r, ordinary;
+  bit [0:64] qb;
+  always @(posedge top.clk iff top.qualification) begin
+    top.effects += 1;
+    q <= top.d; qb <= top.d; r <= top.d; ordinary <= top.d;
+  end
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, rtc_a = 0, rtc_b = 0;
+  logic [1:0] qualification = 2;
+  logic [0:64] d = 65'h10000000000000011;
+  bit [31:0] effects = 0;
+  leaf dut();
+  task automatic tick;
+    clk = 0; #1 clk = 1; #1;
+  endtask
+  initial begin
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground",0.0) ||
+        !supply_on("/top/RET.power") || !supply_on("/top/RET.ground",0.0)) $fatal(1,"supplies");
+    tick();
+    if (dut.q !== d || dut.r !== d || dut.qb !== d || effects != 1) $fatal(1,"first clock");
+    clk = 0; rtc_a = 1; #1;
+    d = 65'h10000000000000022; clk = 1; rtc_a = 0;
+    clk = 0; clk = 1; // A second unarmed edge cannot relabel A's invalid clock.
+    #1;
+    if (dut.q !== 65'h10000000000000011 || dut.qb !== 65'h10000000000000011 ||
+        dut.r !== d || dut.ordinary !== d || effects != 2) $fatal(1,"RTC relabelled clock or gated body");
+    clk = 0; #1;
+    d = 65'h10000000000000033; clk = 1; rtc_a = 1; rtc_a = 0;
+    #0;
+    if (dut.q !== 65'h10000000000000011 || effects != 3) $fatal(1,"pending pre-RTC clock revived");
+    clk = 0; #0 clk = 1; #1;
+    if (dut.q !== d || dut.qb !== d || effects != 4) $fatal(1,"fresh same-time clock suppressed");
+    clk = 0; #1;
+    d = 65'h10000000000000044; clk = 1;
+    if (!supply_off("/top/RET.power")) $fatal(1,"RET OFF");
+    if (dut.q !== 'x || dut.r !== 'x || dut.qb !== 0) $fatal(1,"loss was deferred");
+    if (!supply_on("/top/RET.power")) $fatal(1,"RET ON");
+    clk = 0; clk = 1;
+    #1;
+    if (dut.q !== 'x || dut.r !== 'x || dut.qb !== 0 || dut.ordinary !== d || effects != 5) $fatal(1,"RET loss revived clock");
+    tick();
+    if (dut.q !== d || dut.r !== d || dut.qb !== d || effects != 6) $fatal(1,"fresh post-RET clock");
+    rtc_a = 1; rtc_b = 1; #1;
+    if (!supply_off("/top/RET.power")) $fatal(1,"held RET OFF");
+    if (dut.q !== 'x || dut.r !== 'x || dut.qb !== 0) $fatal(1,"destruction while already inhibited");
+    if (!supply_on("/top/RET.power")) $fatal(1,"held RET ON");
+    rtc_a = 0; rtc_b = 0;
+    qualification = 'x; tick();
+    if (effects != 6) $fatal(1,"unknown iff activated body");
+    clk = 0; qualification = 2; #1 clk = 1; qualification = 0; #1;
+    if (dut.q !== d || dut.r !== d || dut.qb !== d || effects != 7) $fatal(1,"event-time iff was retested");
+    $display("master pending clock passed"); $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set CORE
+create_supply_set RET
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention A -domain PD -elements {dut/q dut/qb} -retention_supply RET -retention_condition rtc_a
+set_retention B -domain PD -elements dut/r -retention_supply RET -retention_condition rtc_b

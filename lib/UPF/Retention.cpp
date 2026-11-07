@@ -1,6 +1,8 @@
 #include "Retention.h"
 #include "BalloonRetention.h"
+#include "ClockSnapshot.h"
 #include "PowerState.h"
+#include "PublicationCallback.h"
 #include "ReferenceWindow.h"
 #include "RetentionReadback.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -12,6 +14,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/IR/DerivedTypes.h"
 #include <limits>
 #include <map>
 #include <set>
@@ -37,8 +40,9 @@ struct Strategy {
   SmallVector<Register *> registers;
   SmallVector<upf::UPFSupplySetOp> primary, retention;
   SmallVector<Descriptor> dependencies;
-  Descriptor epoch, visible, badProcess, freezeProcess;
-  sim::SimFuncOp update, predicate, outputPredicate;
+  Descriptor epoch, previousWritable, previousBad;
+  sim::SimFuncOp predicate, outputPredicate;
+  llvm::DenseMap<Operation *, FrozenClock> clocks;
 };
 struct Lowering {
   RetentionLoweringOptions o;
@@ -160,12 +164,14 @@ struct Lowering {
     return result;
   }
   bool classifyStartup(sim::SimFuncOp fn) {
-    if (fn.getEntryKind() == sim::EntryKind::RootInitializer)
+    if (fn.getEntryKind() == sim::EntryKind::RootInitializer ||
+        fn.getEntryKind() == sim::EntryKind::Initial)
+      // IEEE 1801-2018 9.2.1 exempts Initial execution at every scheduled
+      // time. Only functional clocked writers use policy/epoch issue guards.
       return true;
     // Declaration initializers are zero-time functions called by the root
     // before spawning any HDL process (1801-2018 9.2.1).
-    if (fn.getEntryKind() != sim::EntryKind::Initial &&
-        !initializers.contains(fn))
+    if (!initializers.contains(fn))
       return false;
     llvm::DenseSet<Block *> active, finished;
     SmallVector<std::pair<Block *, bool>> pending{
@@ -737,120 +743,231 @@ struct Lowering {
             arith::OrIOp::create(b, loc, retentionOff,
                                  negate(loc, rtc(s, loc, ctx)))));
   }
-  Value pending(Location loc, Value ctx, Descriptor actor) {
-    return sim::SimProcessEventPendingOp::create(
-        b, loc, b.getI1Type(), load(b, loc, handle(b, loc, ctx, actor)));
-  }
-  Value allowed(Strategy &s, Location loc, Value ctx) {
-    // IEEE 1801-2018 9.7.3 gives RTC priority while it is True. A later
-    // clock after RTC falls can write in the same Active batch. Captured
-    // epochs invalidate older NBAs without suppressing that later clock.
-    Value event = arith::OrIOp::create(b, loc, pending(loc, ctx, s.badProcess),
-                                       pending(loc, ctx, s.freezeProcess));
-    return arith::AndIOp::create(b, loc, canWrite(s, loc, ctx),
-                                 negate(loc, event));
-  }
-  void cancel(Strategy &s, Location loc, Value ctx) {
-    Value reference = handle(b, loc, ctx, s.epoch);
-    Value next =
-        arith::AddIOp::create(b, loc, load(b, loc, reference),
-                              arith::ConstantIntOp::create(b, loc, 1, 64));
-    store(b, loc, reference, next);
-    for (auto *reg : s.registers)
-      for (auto descriptor : {reg->visible, reg->backing})
-        sim::SimPowerCancelNBAOp::create(b, loc, ctx,
-                                         handle(b, loc, ctx, descriptor),
-                                         *sim::getPackedWidth(descriptor.type));
-  }
-  void corruptBacking(Strategy &s, Location loc, Value ctx,
-                      bool invalidate = true) {
-    if (invalidate)
-      cancel(s, loc, ctx);
-    for (auto *reg : s.registers)
-      store(b, loc, handle(b, loc, ctx, reg->backing),
-            corrupt(b, loc, reg->backing.type));
-  }
-  void callUpdate(Strategy &s, Location loc, Value ctx) {
-    sim::SimCallOp::create(
-        b, loc, TypeRange{},
-        FlatSymbolRefAttr::get(b.getContext(), s.update.getSymName()),
-        ValueRange{ctx}, ArrayAttr{}, ArrayAttr{});
-  }
-  void conditional(Location loc, Value condition,
-                   llvm::function_ref<void()> body) {
-    auto *source = b.getInsertionBlock();
-    auto *function = source->getParent();
-    auto *execute = new Block, *next = new Block;
-    function->push_back(execute);
-    function->push_back(next);
-    cf::CondBranchOp::create(b, loc, condition, execute, next);
-    b.setInsertionPointToEnd(execute);
-    body();
-    cf::BranchOp::create(b, loc, next);
-    b.setInsertionPointToEnd(next);
-  }
-  void makeUpdate(Strategy &s) {
-    Location loc = location(s.attribute);
-    std::string name = "__upf_retention." + o.domain.getSymName().str() + "." +
-                       s.attribute.getName().getValue().str();
-    s.update = o.function(loc, name + ".update",
-                          {sim::ContextType::get(b.getContext())},
-                          sim::EntryKind::Function);
-    sim::mark<sim::metadata::PowerMonitor>(s.update);
-    b.setInsertionPointToEnd(&s.update.getBody().front());
-    Value ctx = s.update.getArgument(0);
-    // IEEE 1801-2018 9.7.3: a destructive event may still be pending when
-    // the freeze handler wins scheduler priority. Never republish stale data.
-    Value destructive = arith::OrIOp::create(b, loc, bad(s, loc, ctx),
-                                             pending(loc, ctx, s.badProcess));
-    conditional(loc, destructive, [&] { corruptBacking(s, loc, ctx, false); });
-    // IEEE 1801-2018 6.50/9.7.3 Table 12: RET can power the output during
-    // primary shutdown. Functional writes still require primary power in
-    // canWrite(); neither the data input nor its supply handle is rebound.
-    Value visible = normal(loc, ctx, s.retention);
+  Value outputEnabled(Strategy &s, Location loc, Value ctx) {
+    Value enabled = normal(loc, ctx, s.retention);
     if (!s.attribute.getUseRetentionAsPrimary()) {
       if (!s.attribute.getRetentionSupplyCorrupt())
-        visible = bit(loc, true);
-      visible = arith::AndIOp::create(b, loc, primary(s, loc, ctx), visible);
+        enabled = bit(loc, true);
+      enabled = arith::AndIOp::create(b, loc, primary(s, loc, ctx), enabled);
     }
-    // Independently guarded output transactions may become powered again
-    // before their due time. A RET visibility change alone must not cancel
-    // them when NO_RET_SUP_COR keeps the normal store alive.
-    if (!s.attribute.getUseRetentionAsPrimary() ||
-        s.attribute.getRetentionSupplyCorrupt()) {
-      Value previous = handle(b, loc, ctx, s.visible);
-      Value changed = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::ne,
-                                            visible, load(b, loc, previous));
-      conditional(loc, changed, [&] {
-        // Masking must not replace the retained value with corrupt Q.
-        for (auto *reg : s.registers)
-          sim::SimPowerCancelNBAOp::create(
-              b, loc, ctx, handle(b, loc, ctx, reg->visible),
-              *sim::getPackedWidth(reg->visible.type));
+    return enabled;
+  }
+  std::string strategyName(Strategy &s) {
+    return "__upf_retention." + o.domain.getSymName().str() + "." +
+           s.attribute.getName().getValue().str();
+  }
+  Value policy(Strategy &s, Location loc, Value ctx) {
+    auto type = b.getIntegerType(3);
+    Value value = arith::ExtUIOp::create(b, loc, type, canWrite(s, loc, ctx));
+    SmallVector<Value> fields{bad(s, loc, ctx), outputEnabled(s, loc, ctx)};
+    for (auto [index, field] : llvm::enumerate(fields)) {
+      Value lane = arith::ExtUIOp::create(b, loc, type, field);
+      lane = arith::ShLIOp::create(
+          b, loc, lane, arith::ConstantIntOp::create(b, loc, index + 1, 3));
+      value = arith::OrIOp::create(b, loc, value, lane);
+    }
+    return value;
+  }
+  Value policyBit(Location loc, Value value, unsigned index) {
+    if (index)
+      value = arith::ShRUIOp::create(
+          b, loc, value, arith::ConstantIntOp::create(b, loc, index, 3));
+    return arith::TruncIOp::create(b, loc, b.getI1Type(), value);
+  }
+  Value pack(Location loc, ValueRange values) {
+    SmallVector<Value> parts;
+    bool twoState = true;
+    uint64_t width = 0;
+    for (Value value : llvm::reverse(values)) {
+      value = flatten(b, loc, value);
+      uint64_t bits = *sim::getPackedWidth(value.getType());
+      width += bits;
+      if (isa<IntegerType>(value.getType()))
+        value = sim::SimLogicFromBitsOp::create(
+            b, loc, sim::LogicType::get(b.getContext(), bits), value);
+      else
+        twoState = false;
+      parts.push_back(value);
+    }
+    Value result =
+        parts.size() == 1
+            ? parts.front()
+            : sim::SimLogicConcatOp::create(
+                  b, loc, sim::LogicType::get(b.getContext(), width), parts);
+    if (twoState)
+      result = sim::SimLogicToBitsOp::create(b, loc, b.getIntegerType(width),
+                                             result);
+    return result;
+  }
+  FailureOr<PublicationCallback>
+  callback(Strategy &s, StringRef suffix,
+           llvm::function_ref<Value(Value)> body) {
+    Location loc = location(s.attribute);
+    auto fn = o.function(loc, strategyName(s) + suffix.str(),
+                         {sim::ContextType::get(b.getContext())},
+                         sim::EntryKind::Observer);
+    sim::mark<sim::metadata::PowerMonitor>(fn);
+    b.setInsertionPointToEnd(&fn.getBody().front());
+    Value result = body(fn.getArgument(0));
+    fn.setFunctionType(
+        b.getFunctionType(fn.getArgumentTypes(), {result.getType()}));
+    schedule::set<schedule::Field::ObserverWidth>(
+        fn, b.getI32IntegerAttr(*sim::getPackedWidth(result.getType())));
+    schedule::set<schedule::Field::ObserverFourState>(
+        fn, b.getBoolAttr(isa<sim::LogicType>(result.getType())));
+    sim::SimReturnOp::create(b, loc, result);
+    return closePublicationCallback(fn, b);
+  }
+  LogicalResult makePolicy(Strategy &s) {
+    Location loc = location(s.attribute);
+    constexpr uint64_t maxWidth = llvm::IntegerType::MAX_INT_BITS;
+    struct Target {
+      Descriptor descriptor;
+      Register *reg = nullptr;
+      bool output = false;
+    };
+    SmallVector<SmallVector<Target>> groups{
+        {{s.epoch}, {s.previousWritable}, {s.previousBad}}};
+    uint64_t width = 66;
+    for (auto *reg : s.registers)
+      for (bool output : {false, true}) {
+        Descriptor d = output ? reg->visible : reg->backing;
+        uint64_t bits = *sim::getPackedWidth(d.type);
+        if (bits > maxWidth)
+          return emitError(loc)
+                 << "master retention target exceeds supported packed width";
+        if (bits > maxWidth - width) {
+          groups.emplace_back();
+          width = 0;
+        }
+        groups.back().push_back({d, reg, output});
+        width += bits;
+      }
+    auto primaryCallback =
+        callback(s, ".policy", [&](Value ctx) { return policy(s, loc, ctx); });
+    if (failed(primaryCallback))
+      return failure();
+    for (auto group : llvm::enumerate(groups)) {
+      auto &targets = group.value();
+      unsigned index = group.index();
+      std::string name = ".policy." + std::to_string(index);
+      auto payloadFor = [&](Value ctx, bool initialize) {
+        Value fields = policy(s, loc, ctx);
+        Value writable = policyBit(loc, fields, 0),
+              destructive = policyBit(loc, fields, 1),
+              visible = policyBit(loc, fields, 2);
+        // A retained Initial write may replace an already-corrupt N. Only
+        // a new destructive transition may destroy it again; changing Q's
+        // output supply alone must never decide the lifetime of N.
+        Value corruptNow =
+            initialize
+                ? destructive
+                : arith::AndIOp::create(
+                      b, loc, destructive,
+                      negate(loc,
+                             load(b, loc, handle(b, loc, ctx, s.previousBad))));
+        SmallVector<Value> outputs;
+        for (auto target : targets) {
+          Value next;
+          if (target.reg) {
+            next = arith::SelectOp::create(
+                b, loc, corruptNow, corrupt(b, loc, target.descriptor.type),
+                load(b, loc, handle(b, loc, ctx, target.reg->backing)));
+            if (target.output)
+              next = arith::SelectOp::create(
+                  b, loc, visible, next,
+                  corrupt(b, loc, target.descriptor.type));
+          } else if (target.descriptor.id == s.epoch.id && initialize) {
+            next = load(b, loc, handle(b, loc, ctx, s.epoch));
+          } else if (target.descriptor.id == s.epoch.id) {
+            Value lostWrite = arith::AndIOp::create(
+                b, loc, load(b, loc, handle(b, loc, ctx, s.previousWritable)),
+                negate(loc, writable));
+            Value becameBad = arith::AndIOp::create(
+                b, loc, destructive,
+                negate(loc, load(b, loc, handle(b, loc, ctx, s.previousBad))));
+            Value invalidate =
+                arith::OrIOp::create(b, loc, lostWrite, becameBad);
+            next = arith::AddIOp::create(
+                b, loc, load(b, loc, handle(b, loc, ctx, s.epoch)),
+                arith::ExtUIOp::create(b, loc, b.getI64Type(), invalidate));
+          } else {
+            next = target.descriptor.id == s.previousWritable.id ? writable
+                                                                 : destructive;
+          }
+          outputs.push_back(next);
+        }
+        return pack(loc, outputs);
+      };
+      auto sampler = callback(s, name + ".capture", [&](Value ctx) {
+        return payloadFor(ctx, false);
       });
-      store(b, loc, previous, visible);
+      auto initialize = callback(s, name + ".initialize", [&](Value ctx) {
+        return payloadFor(ctx, true);
+      });
+      if (failed(sampler) || failed(initialize))
+        return failure();
+      // Apply startup policy exactly once before HDL Initial actors. The
+      // callback is pure; initialize from its same bounded packed payload.
+      auto owner = o.function(loc, strategyName(s) + name + ".owner",
+                              {sim::ContextType::get(b.getContext())},
+                              sim::EntryKind::Fork);
+      sim::mark<sim::metadata::PowerMonitor>(owner);
+      schedule::set<schedule::Field::DetachedControls>(owner, b.getUnitAttr());
+      schedule::set<schedule::Field::PrimeOnSpawn>(owner, b.getUnitAttr());
+      b.setInsertionPointToEnd(&owner.getBody().front());
+      Value ctx = owner.getArgument(0);
+      auto call = [&](const PublicationCallback &cb) -> Value {
+        auto fn = cb.function;
+        return sim::SimCallOp::create(b, loc, fn.getResultTypes(),
+                                      fn.getSymNameAttr(),
+                                      publicationArguments(b, loc, ctx, cb),
+                                      ArrayAttr{}, ArrayAttr{})
+            .getResult(0);
+      };
+      Value payload = call(*initialize);
+      if (auto type = dyn_cast<IntegerType>(payload.getType()))
+        payload = sim::SimLogicFromBitsOp::create(
+            b, loc, sim::LogicType::get(b.getContext(), type.getWidth()),
+            payload);
+      uint64_t offset = 0;
+      for (auto target : targets) {
+        uint64_t bits = *sim::getPackedWidth(target.descriptor.type);
+        Value value = sim::SimLogicExtractOp::create(
+            b, loc, sim::LogicType::get(b.getContext(), bits), payload, offset);
+        Type scalar = sim::getPackedScalarType(target.descriptor.type);
+        if (isa<IntegerType>(scalar))
+          value = sim::SimLogicToBitsOp::create(b, loc, scalar, value);
+        if (scalar != target.descriptor.type)
+          value = sim::SimPackedUnflattenOp::create(
+              b, loc, target.descriptor.type, value);
+        store(b, loc, handle(b, loc, ctx, target.descriptor), value);
+        offset += bits;
+      }
+      SmallVector<Value> values{
+          bindPublication(b, loc, ctx, *primaryCallback, true),
+          call(*primaryCallback),
+          bindPublication(b, loc, ctx, *sampler, false)};
+      for (auto target : targets)
+        values.push_back(handle(b, loc, ctx, target.descriptor));
+      // Every admitted functional NBA already carries this exact epoch;
+      // Initial retained NBAs are rejected. Do not cancel on benign recovery.
+      sim::SimEventSnapshotRegisterOp::create(
+          b, loc, ctx, values, targets.size(), 0, b.getDenseI32ArrayAttr({0}),
+          b.getDenseI32ArrayAttr({-1}), DenseI32ArrayAttr{});
+      auto *parked = new Block;
+      owner.getBody().push_back(parked);
+      sim::SimSuspendForeverOp::create(b, loc, ValueRange{},
+                                       schedule::ContinuationSiteAttr{},
+                                       sim::EventRegionAttr{}, parked);
+      b.setInsertionPointToEnd(parked);
+      sim::SimReturnOp::create(b, loc, ValueRange{});
+      rootInsertion();
+      sim::SimSpawnOp::create(b, loc, owner.getSymNameAttr(),
+                              ValueRange{o.root.getArgument(0)}, ArrayAttr{},
+                              ArrayAttr{});
     }
-    for (auto *reg : s.registers) {
-      // Select whole packed values with CFG, preserving 2/4-state and declared
-      // packed layout, including non-host widths and ascending dimensions.
-      auto *on = new Block, *off = new Block, *merge = new Block;
-      auto &region = s.update.getBody();
-      region.push_back(on);
-      region.push_back(off);
-      region.push_back(merge);
-      merge->addArgument(reg->visible.type, loc);
-      cf::CondBranchOp::create(b, loc, visible, on, off);
-      b.setInsertionPointToEnd(on);
-      cf::BranchOp::create(b, loc, merge,
-                           load(b, loc, handle(b, loc, ctx, reg->backing)));
-      b.setInsertionPointToEnd(off);
-      cf::BranchOp::create(b, loc, merge, corrupt(b, loc, reg->visible.type));
-      b.setInsertionPointToEnd(merge);
-      store(b, loc, handle(b, loc, ctx, reg->visible), merge->getArgument(0));
-    }
-    sim::SimReturnOp::create(b, loc, ValueRange{});
-    result.updates.push_back(
-        FlatSymbolRefAttr::get(b.getContext(), s.update.getSymName()));
+    return success();
   }
   sim::SimFuncOp observer(Location loc, StringRef name) {
     auto fn = o.function(loc, name, {sim::ContextType::get(b.getContext())},
@@ -863,73 +980,20 @@ struct Lowering {
   }
   void makePredicate(Strategy &s) {
     Location loc = location(s.attribute);
-    s.predicate = observer(loc, s.update.getSymName().str() + ".allowed");
+    s.predicate = observer(loc, strategyName(s) + ".update.allowed");
     b.setInsertionPointToEnd(&s.predicate.getBody().front());
     sim::SimReturnOp::create(b, loc,
-                             allowed(s, loc, s.predicate.getArgument(0)));
+                             canWrite(s, loc, s.predicate.getArgument(0)));
     if (s.attribute.getUseRetentionAsPrimary() &&
         !s.attribute.getRetentionSupplyCorrupt()) {
       s.outputPredicate =
-          observer(loc, s.update.getSymName().str() + ".output_allowed");
+          observer(loc, strategyName(s) + ".update.output_allowed");
       b.setInsertionPointToEnd(&s.outputPredicate.getBody().front());
       Value ctx = s.outputPredicate.getArgument(0);
-      Value output = arith::AndIOp::create(b, loc, allowed(s, loc, ctx),
+      Value output = arith::AndIOp::create(b, loc, canWrite(s, loc, ctx),
                                            normal(loc, ctx, s.retention));
       sim::SimReturnOp::create(b, loc, output);
     }
-  }
-  void eventActor(Strategy &s, StringRef suffix, bool destructive) {
-    Location loc = location(s.attribute);
-    std::string name = s.update.getSymName().str() + suffix.str();
-    auto evaluator = observer(loc, name + ".evaluate");
-    b.setInsertionPointToEnd(&evaluator.getBody().front());
-    Value evaluated =
-        destructive ? bad(s, loc, evaluator.getArgument(0))
-                    : negate(loc, canWrite(s, loc, evaluator.getArgument(0)));
-    sim::SimReturnOp::create(b, loc, evaluated);
-    auto actor = o.function(loc, name, {sim::ContextType::get(b.getContext())},
-                            sim::EntryKind::Fork);
-    sim::mark<sim::metadata::PowerMonitor>(actor);
-    schedule::set<schedule::Field::DetachedControls>(actor, b.getUnitAttr());
-    schedule::set<schedule::Field::PrimeOnSpawn>(actor, b.getUnitAttr());
-    schedule::set<schedule::Field::PrioritySignalResume>(actor,
-                                                         b.getUnitAttr());
-    Value ctx = actor.getArgument(0);
-    auto *wait = new Block, *event = new Block;
-    actor.getBody().push_back(wait);
-    actor.getBody().push_back(event);
-    b.setInsertionPointToEnd(&actor.getBody().front());
-    cf::BranchOp::create(b, loc, wait);
-    b.setInsertionPointToEnd(wait);
-    SmallVector<Value> dependencies;
-    for (auto descriptor : s.dependencies)
-      dependencies.push_back(handle(b, loc, ctx, descriptor));
-    Value observer = sim::SimObserverBindOp::create(
-        b, loc, sim::ObserverType::get(b.getContext(), b.getI1Type()),
-        evaluator.getSymNameAttr(), dependencies, uint32_t{0});
-    Value initial =
-        destructive ? bad(s, loc, ctx) : negate(loc, canWrite(s, loc, ctx));
-    sim::SimSuspendObserveOp::create(
-        b, loc, ValueRange{observer, initial}, b.getI32IntegerAttr(0),
-        b.getDenseI32ArrayAttr({1}), b.getDenseI32ArrayAttr({-1}),
-        schedule::ContinuationSiteAttr{}, sim::EventRegionAttr{}, event);
-    b.setInsertionPointToEnd(event);
-    // Act on the latched occurrence even if the current predicate recovered.
-    // Otherwise a zero-time OFF/ON or RTC pulse could revive a delayed write.
-    if (destructive)
-      corruptBacking(s, loc, ctx);
-    else
-      cancel(s, loc, ctx);
-    callUpdate(s, loc, ctx);
-    cf::BranchOp::create(b, loc, wait);
-    rootInsertion();
-    Value spawned = sim::SimSpawnOp::create(b, loc, actor.getSymNameAttr(),
-                                            ValueRange{o.root.getArgument(0)},
-                                            ArrayAttr{}, ArrayAttr{});
-    store(b, loc,
-          handle(b, loc, o.root.getArgument(0),
-                 destructive ? s.badProcess : s.freezeProcess),
-          spawned);
   }
   void rootInsertion() { b.setInsertionPoint(rootBoundary); }
   FailureOr<Value> cloneView(Value value, sim::SimFuncOp fn,
@@ -951,11 +1015,12 @@ struct Lowering {
     }
     return mapping.lookup(value);
   }
-  LogicalResult normalReads(Register &reg) {
+  LogicalResult normalReads(Register &reg, bool initialOnly = false) {
     llvm::DenseSet<Operation *> seen;
     for (auto *writer : reg.writers) {
       auto fn = writer->getParentOfType<sim::SimFuncOp>();
-      if ((startup(fn) && fn.getEntryKind() != sim::EntryKind::Initial) ||
+      if ((initialOnly && fn.getEntryKind() != sim::EntryKind::Initial) ||
+          (startup(fn) && fn.getEntryKind() != sim::EntryKind::Initial) ||
           !seen.insert(fn).second)
         continue;
       if (failed(validateRetentionReadbackHelpers(
@@ -1090,70 +1155,53 @@ struct Lowering {
         add(found->second);
       }
       s.epoch = o.storage(loc, name + ".epoch", b.getI64Type());
-      if (!s.attribute.getUseRetentionAsPrimary() ||
-          s.attribute.getRetentionSupplyCorrupt())
-        s.visible = o.storage(loc, name + ".visible", b.getI1Type());
-      s.badProcess = o.storage(loc, name + ".bad_process",
-                               sim::ProcessType::get(b.getContext()));
-      s.freezeProcess = o.storage(loc, name + ".freeze_process",
-                                  sim::ProcessType::get(b.getContext()));
+      s.previousWritable =
+          o.storage(loc, name + ".previous_writable", b.getI1Type());
+      s.previousBad = o.storage(loc, name + ".previous_bad", b.getI1Type());
       for (auto *reg : s.registers)
         reg->backing =
             o.storage(reg->declaration.getLoc(),
                       name + ".backing." + std::to_string(reg->visible.id),
                       reg->visible.type);
-      makeUpdate(s);
       makePredicate(s);
-      if (s.outputPredicate)
-        for (auto *reg : s.registers)
-          if (failed(normalReads(*reg)))
-            return failure();
+      for (auto *reg : s.registers)
+        if (failed(normalReads(*reg, !s.outputPredicate)))
+          return failure();
       rootInsertion();
       Value ctx = o.root.getArgument(0);
       store(b, loc, handle(b, loc, ctx, s.epoch),
             arith::ConstantIntOp::create(b, loc, 0, 64));
-      if (!s.attribute.getUseRetentionAsPrimary() ||
-          s.attribute.getRetentionSupplyCorrupt())
-        store(b, loc, handle(b, loc, ctx, s.visible), bit(loc, false));
       for (auto *reg : s.registers)
         store(b, loc, handle(b, loc, ctx, reg->backing),
               load(b, loc, handle(b, loc, ctx, reg->visible)));
-      eventActor(s, ".bad", true);
-      eventActor(s, ".freeze", false);
-      auto monitor = o.function(loc, name + ".monitor",
-                                {sim::ContextType::get(b.getContext())},
-                                sim::EntryKind::Fork);
-      sim::mark<sim::metadata::PowerMonitor>(monitor);
-      schedule::set<schedule::Field::DetachedControls>(monitor,
-                                                       b.getUnitAttr());
-      schedule::set<schedule::Field::PrimeOnSpawn>(monitor, b.getUnitAttr());
-      schedule::set<schedule::Field::PrioritySignalResume>(monitor,
-                                                           b.getUnitAttr());
-      auto *loop = new Block;
-      monitor.getBody().push_back(loop);
-      b.setInsertionPointToEnd(&monitor.getBody().front());
-      cf::BranchOp::create(b, loc, loop);
-      b.setInsertionPointToEnd(loop);
-      Value monitorCtx = monitor.getArgument(0);
-      callUpdate(s, loc, monitorCtx);
-      SmallVector<Value> watched;
-      for (auto descriptor : s.dependencies)
-        watched.push_back(handle(b, loc, monitorCtx, descriptor));
+      if (failed(makePolicy(s)))
+        return failure();
       for (auto *reg : s.registers)
-        watched.push_back(handle(b, loc, monitorCtx, reg->backing));
-      sim::SimSuspendAnyOp::create(
-          b, loc, watched,
-          b.getDenseI32ArrayAttr(SmallVector<int32_t>(watched.size(), 0)),
-          schedule::ContinuationSiteAttr{}, sim::EventRegionAttr{}, loop);
-      rootInsertion();
-      sim::SimSpawnOp::create(b, loc, monitor.getSymNameAttr(), ValueRange{ctx},
-                              ArrayAttr{}, ArrayAttr{});
+        for (auto *op : reg->writers) {
+          auto fn = op->getParentOfType<sim::SimFuncOp>();
+          if (startup(fn) || s.clocks.contains(fn))
+            continue;
+          auto clock = o.clocks->freeze(
+              fn, name + ".clock." + std::to_string(s.clocks.size()), s.epoch,
+              [&](OpBuilder &sampleBuilder, Location loc, Value ctx) {
+                OpBuilder::InsertionGuard guard(b);
+                b.restoreInsertionPoint(sampleBuilder.saveInsertionPoint());
+                return canWrite(s, loc, ctx);
+              });
+          if (failed(clock))
+            return failure();
+          s.clocks.try_emplace(fn, *clock);
+          result.publishedProcesses.insert(fn);
+        }
       for (auto *reg : s.registers)
         for (auto *op : reg->writers) {
           auto fn = op->getParentOfType<sim::SimFuncOp>();
           b.setInsertionPoint(op);
           Value context = fn.getArgument(0);
           if (startup(fn)) {
+            bool lateRoot = fn == o.root &&
+                (op->getBlock() != rootBoundary->getBlock() ||
+                 !op->isBeforeInBlock(rootBoundary));
             auto write = cast<sim::SimRefStoreOp>(op);
             auto destination =
                 cloneView(write.getReference(), fn, reg->backing);
@@ -1162,10 +1210,9 @@ struct Lowering {
                   "retention initialization through a "
                   "partial captured alias is not implemented");
             store(b, op->getLoc(), *destination, write.getValue());
-            if (s.outputPredicate &&
-                fn.getEntryKind() == sim::EntryKind::Initial)
+            if (fn.getEntryKind() == sim::EntryKind::Initial || lateRoot)
               write.getValueMutable().assign(arith::SelectOp::create(
-                  b, op->getLoc(), normal(op->getLoc(), context, s.retention),
+                  b, op->getLoc(), outputEnabled(s, op->getLoc(), context),
                   write.getValue(),
                   corrupt(b, op->getLoc(), write.getValue().getType())));
             continue;
@@ -1178,7 +1225,18 @@ struct Lowering {
             strategySnapshot = load(b, op->getLoc(),
                                     handle(b, op->getLoc(), context, s.epoch));
           }
-          Value valid = allowed(s, op->getLoc(), context);
+          auto clock = s.clocks.lookup(fn);
+          Value sameEpoch = arith::CmpIOp::create(
+              b, op->getLoc(), arith::CmpIPredicate::eq,
+              load(b, op->getLoc(),
+                   handle(b, op->getLoc(), context, clock.epoch)),
+              load(b, op->getLoc(), handle(b, op->getLoc(), context, s.epoch)));
+          Value valid = arith::AndIOp::create(
+              b, op->getLoc(), canWrite(s, op->getLoc(), context),
+              arith::AndIOp::create(
+                  b, op->getLoc(), sameEpoch,
+                  load(b, op->getLoc(),
+                       handle(b, op->getLoc(), context, clock.valid))));
           guard(op, valid, [&] {
             if (auto write = dyn_cast<sim::SimRefStoreOp>(op)) {
               // Preserve visible RHS/program order; mirror only this value.

@@ -1,0 +1,49 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// IEEE 1801-2018 9.2.1/9.7.3: Initial writes/readbacks use N despite
+// RTC and OFF output power. No deferred handler may destroy later exempt data.
+// CHECK: master initial policy passed
+
+//--- design.sv
+module leaf;
+  logic [0:7] q;
+  bit [0:1][3:0] qb;
+  always @(posedge top.clk) begin q <= top.d; qb <= top.d; end
+  initial begin
+    q[0:3] = 4'h1; q[4:7] = 4'h3; q[7] = ~q[7];
+    qb[0] = 4'h1; qb[1] = 4'h7; qb[1][3] = ~qb[1][3];
+    if (q !== 8'h12 || qb !== 8'h1f) $fatal(1,"initial normal readback");
+    #3;
+    q = 8'h66; qb = 8'h66; // Timed Initial stays exempt while Q is OFF.
+    if (q !== 8'h66 || qb !== 8'h66) $fatal(1,"timed Initial readback");
+  end
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, rtc = 1;
+  logic [7:0] d = 8'h55;
+  leaf dut();
+  initial begin
+    #1;
+    if (dut.q !== 'x || dut.qb !== 0) $fatal(1,"OFF output mask bypassed");
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground",0.0)) $fatal(1,"supplies");
+    if (dut.q !== 8'h12 || dut.qb !== 8'h1f) $fatal(1,"Initial held data destroyed on restore");
+    rtc = 0; clk = 1; #1;
+    if (dut.q !== d || dut.qb !== d) $fatal(1,"fresh clock after Initial");
+    rtc = 1;
+    if (!supply_off("/top/CORE.power")) $fatal(1,"OFF");
+    #2;
+    if (!supply_on("/top/CORE.power")) $fatal(1,"ON");
+    if (dut.q !== 8'h66 || dut.qb !== 8'h66) $fatal(1,"later Initial backing lost");
+    $display("master initial policy passed"); $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set CORE
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention R -domain PD -elements {dut/q dut/qb} -retention_condition rtc

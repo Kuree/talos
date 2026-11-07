@@ -242,6 +242,16 @@ talos_rt_v1_event_snapshot_flush(talos_rt_context *context) {
           storePackedBits(context->stateUnknown, at, width, unknown);
         }
       }
+      // Policy epochs are 64-bit snapshot targets. Retire permanently
+      // invalid updates before notifications can inspect the time queues.
+      if (context->powerNBAs &&
+          std::any_of(updates.begin(), updates.end(), [](const auto &update) {
+            return update.differs && update.target.abi.width == 64;
+          })) {
+        status = retireInvalidPowerNBAsUnlocked(context);
+        if (status != TALOS_RT_OK)
+          return context->schedulerStatus = status;
+      }
       feature->collectingSnapshotNotifications = true;
       feature->groupedExactSequence = 0;
       feature->snapshotOccurrences.clear();

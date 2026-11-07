@@ -5,8 +5,9 @@
 // RUN: talos-opt %t/none.mlir --prepare-upf-snapshot-publications | FileCheck %s --check-prefix=OFF --implicit-check-not=snapshot
 // RUN: talos-opt %t/late.mlir --pass-pipeline='builtin.module(prepare-upf-snapshot-publications,elaborate-upf,prepare-upf-snapshot-publications)' --verify-each | FileCheck %s --check-prefix=LATE --implicit-check-not=upf.domain
 // IEEE 1801-2018 6.50/9.7.3: either save or restore activates event-time
-// boundaries. Master/slave and no-retention strategies need no snapshot cost.
-// The marker survives intent erasure and a second scan covers generated stores.
+// boundaries. The first scan stays inactive for master/slave and no-retention
+// intent; generated master policy activates the post-Elab scan. The marker
+// survives intent erasure and the second scan covers generated stores.
 // ON: simulation.snapshot_publications
 // ON: simulation.ref.store
 // ON-NEXT: simulation.event.snapshot.flush

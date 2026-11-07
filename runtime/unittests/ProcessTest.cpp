@@ -12164,6 +12164,144 @@ TEST(Scheduler, GuardedNBARejectsUnknownAndPropagatesEvaluatorFailures) {
   }
 }
 
+TEST(Scheduler,
+     PowerEpochRetirementKeepsTemporaryEligibilityAndOtherDeadlines) {
+  static unsigned evaluations;
+  static bool allowed;
+  for (bool fresh : {false, true}) {
+    evaluations = 0;
+    allowed = false;
+    talos_rt_observer_descriptor_v1 observer{
+        1,
+        nullptr,
+        0,
+        1,
+        0,
+        TALOS_RT_OBSERVER_NO_BYTECODE,
+        [](talos_rt_context *, const uint64_t *, uint32_t, uint64_t *value,
+           uint64_t *unknown, uint32_t) {
+          ++evaluations;
+          *value = allowed;
+          *unknown = 0; // Temporarily false, not an epoch invalidation.
+          return TALOS_RT_OK;
+        },
+        0};
+    talos_rt_execution_descriptor_v1 execution{};
+    execution.version = TALOS_RT_VERSION;
+    execution.state_bit_count = 256;
+    execution.observers = &observer;
+    execution.observer_count = 1;
+    talos_rt_context *context = nullptr;
+    ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_native_state_register_static(context, 3, 64, 64),
+              TALOS_RT_OK);
+    std::array<uint8_t, 32> plane{};
+    uint8_t value = 0x6d;
+    talos_rt_power_nba_guard_v1 guard{
+        1, talos_rt_v1_native_state_static_handle(3), 0, 128, 0};
+    ASSERT_EQ(talos_rt_v1_power_nba_after(context, plane.data(), nullptr, 256,
+                                          0, 8, 8, 100, &value, nullptr,
+                                          &guard),
+              TALOS_RT_OK);
+    guard.domain_epoch_handle = 64; // Alias the same epoch through GLOBAL.
+    ASSERT_EQ(talos_rt_v1_power_nba_view(context, plane.data(), nullptr, 256,
+                                         24, 8, 0, 0, 8, 1, 8, 200, &value,
+                                         nullptr, &guard),
+              TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_v1_scheduler_nba(context, plane.data(), nullptr, 256, 16,
+                                        8, 90, &value, nullptr),
+              TALOS_RT_OK);
+    EXPECT_EQ(retireInvalidPowerNBAsUnlocked(context), TALOS_RT_OK);
+    EXPECT_EQ(evaluations, 0u);
+    std::vector<uint64_t> times;
+    ASSERT_EQ(talos_rt_snapshot_future_time_queues_unlocked(context, times),
+              TALOS_RT_OK);
+    EXPECT_EQ(times, (std::vector<uint64_t>{90, 100, 200}));
+    uint64_t nextEpoch = 1;
+    uint8_t epochChanged = 0;
+    ASSERT_EQ(talos_rt_v1_native_state_store_plane(
+                  context, plane.data(), 256, 64, 64, 0,
+                  reinterpret_cast<const uint8_t *>(&nextEpoch), &epochChanged),
+              TALOS_RT_OK);
+    if (fresh) {
+      guard.domain_epoch = 1;
+      ASSERT_EQ(talos_rt_v1_power_nba_after(context, plane.data(), nullptr, 256,
+                                            32, 40, 8, 150, &value, nullptr,
+                                            &guard),
+                TALOS_RT_OK);
+    }
+    // Cache the actual epoch value, not a match result shared between captures.
+    EXPECT_EQ(retireInvalidPowerNBAsUnlocked(context), TALOS_RT_OK);
+    ASSERT_EQ(talos_rt_snapshot_future_time_queues_unlocked(context, times),
+              TALOS_RT_OK);
+    EXPECT_EQ(times, fresh ? (std::vector<uint64_t>{90, 150})
+                           : (std::vector<uint64_t>{90}));
+    EXPECT_EQ(context->powerNBAs->conditions.size(), fresh ? 1u : 0u);
+    allowed = true;
+    ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+    EXPECT_EQ(context->schedulerTime, fresh ? 150u : 90u);
+    EXPECT_EQ(evaluations, fresh ? 1u : 0u);
+    EXPECT_EQ(plane[2], value);
+    EXPECT_EQ(plane[0], 0u);
+    EXPECT_EQ(plane[1], 0u);
+    EXPECT_EQ(plane[3], 0u);
+    EXPECT_EQ(plane[4], fresh ? value : 0u);
+    EXPECT_EQ(plane[5], fresh ? value : 0u);
+    EXPECT_TRUE(context->scheduledNBAs.empty());
+    EXPECT_TRUE(context->powerNBAs->conditions.empty());
+    talos_rt_v1_context_destroy(context);
+  }
+}
+
+TEST(Scheduler, PowerEpochRetirementSeparatesCallerPlanesAndCapturedValues) {
+  talos_rt_observer_descriptor_v1 observer{
+      1,
+      nullptr,
+      0,
+      1,
+      0,
+      TALOS_RT_OBSERVER_NO_BYTECODE,
+      [](talos_rt_context *, const uint64_t *, uint32_t, uint64_t *value,
+         uint64_t *unknown, uint32_t) {
+        *value = 1;
+        *unknown = 0;
+        return TALOS_RT_OK;
+      },
+      0};
+  talos_rt_execution_descriptor_v1 execution{};
+  execution.version = TALOS_RT_VERSION;
+  execution.state_bit_count = 192;
+  execution.observers = &observer;
+  execution.observer_count = 1;
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+            TALOS_RT_OK);
+  std::array<uint8_t, 24> first{}, second{};
+  first[8] = 1; // The same GLOBAL handle resolves against a different plane.
+  uint8_t data = 0x6d;
+  talos_rt_power_nba_guard_v1 guard{1, 64, 0, 128, 0};
+  auto enqueue = [&](auto &plane, uint64_t captured, uint64_t delay) {
+    guard.domain_epoch = captured;
+    return talos_rt_v1_power_nba_after(context, plane.data(), nullptr, 192, 0,
+                                       8, 8, delay, &data, nullptr, &guard);
+  };
+  ASSERT_EQ(enqueue(first, 0, 100), TALOS_RT_OK); // Permanently stale.
+  ASSERT_EQ(enqueue(first, 1, 20), TALOS_RT_OK);  // Same plane, fresh capture.
+  ASSERT_EQ(enqueue(second, 0, 10), TALOS_RT_OK); // Same handle, other plane.
+  ASSERT_EQ(retireInvalidPowerNBAsUnlocked(context), TALOS_RT_OK);
+  ASSERT_EQ(context->powerNBAs->conditions.size(), 2u);
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  EXPECT_EQ(context->schedulerTime, 20u);
+  EXPECT_EQ(first[0], data);
+  EXPECT_EQ(first[1], data);
+  EXPECT_EQ(second[0], data);
+  EXPECT_EQ(second[1], data);
+  EXPECT_TRUE(context->scheduledNBAs.empty());
+  EXPECT_TRUE(context->powerNBAs->conditions.empty());
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(Scheduler, CanonicalNBAKeepsBoundNativeStateMirrorCoherent) {
   talos_rt_execution_descriptor_v1 execution{};
   execution.version = TALOS_RT_VERSION;
@@ -17671,6 +17809,41 @@ TEST_F(EventSnapshotRuntime, NarrowPowerPairAndViewPublishCompletedState) {
 
 TEST_F(EventSnapshotRuntime, WidePowerPairAndViewPublishCompletedState) {
   checkPowerPublication(65);
+}
+
+TEST_F(EventSnapshotRuntime,
+       EpochRetirementDuringPowerPairPublicationPreservesDrainCursor) {
+  for (auto &process : context->scheduledProcesses)
+    process.suspendKind = TALOS_RT_SUSPEND_FOREVER;
+  for (auto root : {std::array<uint64_t, 3>{1, 0, 1}, {2, 80, 1}, {3, 152, 64}})
+    ASSERT_EQ(talos_rt_v1_native_state_register_static(context, root[0],
+                                                       root[1], root[2]),
+              TALOS_RT_OK);
+  auto backing = talos_rt_v1_native_state_static_handle(1);
+  auto visible = talos_rt_v1_native_state_static_handle(2);
+  auto epoch = talos_rt_v1_native_state_static_handle(3);
+  samplerABI.width = 64;
+  observers[1].result_width = 64;
+  // Publishing the completed pair changes the epoch. Its atomic values stay
+  // committed, while a future pair retires without invalidating cursor indices.
+  // GLOBAL0 supplies the low backing bit and zero upper bits to the sampler.
+  ASSERT_EQ(install(1, 0, {{epoch, 64, 1}}, {backing}), TALOS_RT_OK);
+  talos_rt_power_nba_guard_v1 guard{993, epoch, 0, epoch, 0};
+  uint8_t one = 1, zero = 0;
+  for (auto item :
+       {std::pair<uint64_t, const uint8_t *>{0, &one}, {100, &zero}})
+    ASSERT_EQ(talos_rt_v1_power_nba_after(
+                  context, reinterpret_cast<uint8_t *>(nativeValue.data()),
+                  reinterpret_cast<uint8_t *>(nativeUnknown.data()), 256,
+                  backing, visible, 1, item.first, item.second, &zero, &guard),
+              TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_scheduler_run(context), TALOS_RT_OK);
+  EXPECT_EQ(context->schedulerTime, 0u);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 0, 1), 1u);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 80, 1), 1u);
+  EXPECT_EQ(loadPackedBits(context->stateValue, 152, 64), 1u);
+  EXPECT_TRUE(context->scheduledNBAs.empty());
+  EXPECT_TRUE(context->powerNBAs->conditions.empty());
 }
 
 TEST_F(EventSnapshotRuntime, DelayedAliasGroupUnionsClausesBeforeNextNBA) {

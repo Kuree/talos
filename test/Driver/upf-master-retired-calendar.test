@@ -1,0 +1,48 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// IEEE 1801-2018 9.7.3 precedence: RTC entry invalidates issued updates.
+// Their obsolete deadlines must not advance final simulation time.
+// CHECK: retired master calendar passed
+
+//--- design.sv
+module leaf;
+  logic q;
+  always @(posedge top.clk) q <= #100 1;
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, rtc = 0;
+  leaf dut();
+  initial begin
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground",0.0) ||
+        !supply_on("/top/RET.power") || !supply_on("/top/RET.ground",0.0)) $fatal(1,"supplies");
+    #1 clk = 1;
+    #1 clk = 0;
+`ifdef RET_LOSS
+    if (!supply_off("/top/RET.power") || !supply_on("/top/RET.power")) $fatal(1,"RET pulse");
+`else
+    rtc = 1;
+`endif
+    #1;
+  end
+  final begin
+    if ($time != 3) $fatal(1,"stale NBA advanced final time to %0t",$time);
+    $display("retired master calendar passed");
+  end
+endmodule
+
+//--- design.upf
+create_supply_set CORE
+create_supply_set RET
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention R -domain PD -elements dut/q -retention_supply RET -retention_condition rtc
+
+//--- view.upf
+create_supply_set CORE
+create_supply_set RET
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention R -domain PD -elements dut/q -retention_supply RET -retention_condition rtc -use_retention_as_primary -parameters NO_RET_SUP_COR
