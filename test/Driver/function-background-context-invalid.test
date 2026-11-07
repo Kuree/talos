@@ -1,0 +1,75 @@
+// RUN: %split-file %s %t
+// RUN: not talos -O0 --mlir-verify-each %t/declaration.sv -o %t.decl 2>&1 | FileCheck %s
+// RUN: not talos -O3 --execution-tier=bytecode --mlir-verify-each %t/continuous.sv -o %t.continuous 2>&1 | FileCheck %s
+// RUN: not talos -O3 --mlir-verify-each %t/transitive.sv -o %t.transitive 2>&1 | FileCheck %s
+// RUN: not talos -O3 --execution-tier=bytecode --mlir-verify-each %t/virtual.sv -o %t.virtual 2>&1 | FileCheck %s --check-prefix=VIRTUAL
+// RUN: not talos -O3 --mlir-verify-each %t/property.sv -o %t.property 2>&1 | FileCheck %s
+// RUN: not talos -O3 --execution-tier=bytecode --mlir-verify-each %t/base.sv -o %t.base 2>&1 | FileCheck %s
+// IEEE 1800-2023 13.4.4: no initial/always/fork thread exists in static
+// initialization or a continuous driver. Forwarding calls cannot hide a
+// delayed NBA, even though the function itself returns at the same time.
+// CHECK: function scheduling background work requires an initial, always or fork thread
+// VIRTUAL: nonprocedural call with potential background dispatch is not implemented; exact virtual receiver analysis is required
+
+//--- declaration.sv
+module top;
+  logic q;
+  function automatic int issue(); q <= #3 1; return 1; endfunction
+  int value = issue();
+  initial #5 $finish;
+endmodule
+//--- continuous.sv
+module top;
+  logic q;
+  function automatic int issue(); q <= #3 1; return 1; endfunction
+  wire [31:0] value;
+  assign value = issue();
+  initial #5 $finish;
+endmodule
+//--- transitive.sv
+module top;
+  logic q;
+  function automatic int issue(); q <= #3 1; return 1; endfunction
+  function automatic int forward(); return issue(); endfunction
+  int value = forward();
+  initial #5 $finish;
+endmodule
+//--- virtual.sv
+class Base;
+  virtual function int issue(); return 0; endfunction
+endclass
+class Derived extends Base;
+  function int issue(); top.q <= #3 1; return 1; endfunction
+endclass
+module top;
+  logic q;
+`ifdef PURE_BASE
+  Base base = new;
+`else
+  Derived derived = new;
+  Base base = derived;
+`endif
+  int value = base.issue();
+  initial #5 $finish;
+endmodule
+//--- property.sv
+function automatic int issue(); top.q <= #3 1; return 1; endfunction
+class C;
+  int value = issue();
+endclass
+module top;
+  logic q;
+  C object = new;
+  initial #5 $finish;
+endmodule
+//--- base.sv
+class Base;
+  function new(); top.q <= #3 1; endfunction
+endclass
+class Derived extends Base;
+endclass
+module top;
+  logic q;
+  Derived object = new;
+  initial #5 $finish;
+endmodule

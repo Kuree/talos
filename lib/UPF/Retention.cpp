@@ -502,19 +502,8 @@ struct Lowering {
         return failure();
       }
       if (!reg.strategy || reg.strategy.getNoRetention()) {
-        // Domain-only gating currently follows lexical actors. The retained
-        // writes below have per-target guards, but ordinary writes from an
-        // external process need separate issue guards and domain epochs.
-        // Do not admit an external whole-process selector that silently leaves
-        // excluded or overridden state outside that power instrumentation.
-        auto external = llvm::find_if(reg.processes, [&](StringRef name) {
-          return !contains(o.domain, name);
-        });
-        if (external != reg.processes.end())
-          return decl.emitError(
-                     "retention process selection with external writes to "
-                     "unretained domain state is not implemented: ")
-                 << *decl.getHierarchicalName() << " from " << *external;
+        // Ordinary roots, including external producers, are instrumented by
+        // the global owner-aware write lowering after retention resolution.
         continue;
       }
       if (opaqueWriters.contains(decl.getId()))
@@ -535,6 +524,10 @@ struct Lowering {
                 "nonblocking retention initialization is not implemented");
           continue;
         }
+        if (o.externalPoweredSource(fn))
+          return op->emitError(
+              "retention from another switched producer requires "
+              "source/strategy epoch composition and is not implemented");
         if (!edgeWriter(fn))
           return op->emitError(
               "retention requires one top-level edge-sensitive event control; "

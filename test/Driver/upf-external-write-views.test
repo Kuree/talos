@@ -1,0 +1,53 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// LHS selector, RHS and delay effects happen once even for rejected issues.
+// IEEE 1800 7.4.5/11.5.1 ascending clipped and unknown selections retain their
+// captured geometry; destination power neither repeats nor undoes evaluation.
+// CHECK: external write views passed
+
+//--- design.sv
+module leaf; logic [0:64] q; endmodule
+module top;
+  import UPF::*;
+  logic clk = 0;
+  logic [31:0] index = 61;
+  logic [7:0] data = 8'ha5, outside;
+  time ticks = 3;
+  int indexes = 0, values = 0, delays = 0;
+  leaf dut();
+  function automatic logic [31:0] index_value(); indexes++; return index; endfunction
+  function automatic logic [7:0] rhs(); values++; return data; endfunction
+  function automatic time delay_value(); delays++; return ticks; endfunction
+  always @(posedge clk) begin
+    dut.q[index_value() +: 8] <= #(delay_value()) rhs();
+    outside <= data;
+  end
+  initial begin
+    if (!supply_on("/top/C.power") || !supply_on("/top/C.ground", 0.0)) $fatal(1, "supplies");
+    dut.q = 0;
+    #1 clk = 1; #1 clk = 0;
+    index = 40; data = 8'h77; ticks = 0;
+    #3;
+    if (dut.q !== 65'ha || outside !== 8'ha5 || indexes != 1 || values != 1 || delays != 1) $fatal(1, "ascending capture and clipping");
+    index = 'x;
+    #1 clk = 1; #1 clk = 0;
+    if (dut.q !== 65'ha || outside !== data || indexes != 2 || values != 2 || delays != 2) $fatal(1, "unknown selector");
+    if (!supply_off("/top/C.power")) $fatal(1, "off");
+    index = 0; data = 8'h33;
+    #1 clk = 1; #1 clk = 0;
+    if (!supply_on("/top/C.power")) $fatal(1, "on");
+    #1;
+    if (dut.q !== 'x || outside !== data || indexes != 3 || values != 3 || delays != 3) $fatal(1, "rejected target effects");
+    // A fresh projected write updates only the selected bits of corrupt Q.
+    #1 clk = 1; #1 clk = 0;
+    if (dut.q[0:7] !== data || dut.q[8:64] !== 'x || indexes != 4 || values != 4 || delays != 4) $fatal(1, "fresh partial write");
+    $display("external write views passed"); $finish;
+  end
+endmodule
+//--- design.upf
+create_supply_set C
+create_power_domain PD -elements dut -supply {primary C}

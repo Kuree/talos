@@ -1,0 +1,77 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// RUN: talos -DNO_LOCAL_STATE --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.empty && %t.empty | FileCheck %s
+// RUN: talos -DNO_LOCAL_STATE --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.empty.bc && %t.empty.bc | FileCheck %s
+// Existing two-epoch NBA primitives compose independent source and target
+// losses (1801 9.5.3). Delays and RHS effects occur once at the statement,
+// including rejected targets; source power still gates the original actor.
+// CHECK: external source epochs passed
+
+//--- design.sv
+module leaf; logic [7:0] q, r; endmodule
+module producer(input logic clk);
+`ifndef NO_LOCAL_STATE
+  logic [7:0] own;
+`endif
+  always @(posedge clk) begin
+    top.calls++;
+`ifndef NO_LOCAL_STATE
+    own <= #4 top.d;
+`endif
+    top.b.q <= #(top.delay_value()) top.d;
+    top.b.r = top.d;
+    top.outside <= #(top.delay_value()) top.d;
+  end
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0;
+  logic [7:0] d = 8'h11, outside;
+  int calls = 0, delays = 0;
+  time ticks = 4;
+  producer a(clk);
+  leaf b();
+  function automatic time delay_value(); delays++; return ticks; endfunction
+  function automatic void check_source(input logic [7:0] expected);
+`ifndef NO_LOCAL_STATE
+    if (a.own !== expected) $fatal(1, "local source state");
+`endif
+  endfunction
+  initial begin
+    if (!supply_on("/top/A.power") || !supply_on("/top/A.ground", 0.0) ||
+        !supply_on("/top/B.power") || !supply_on("/top/B.ground", 0.0)) $fatal(1, "supplies");
+    #1 clk = 1; #1 clk = 0;
+    if (!supply_off("/top/B.power") || !supply_on("/top/B.power")) $fatal(1, "target pulse");
+    #4;
+    check_source(d);
+    if (b.q !== 'x || b.r !== 'x || outside !== d || calls != 1 || delays != 2) $fatal(1, "target epoch");
+    d = 8'h22; #1 clk = 1; #1 clk = 0;
+    if (!supply_off("/top/A.power") || !supply_on("/top/A.power")) $fatal(1, "source pulse");
+    #4;
+    check_source('x);
+    if (b.q !== 'x || b.r !== d || outside !== 8'h11 || calls != 2 || delays != 4) $fatal(1, "source epoch");
+    if (!supply_off("/top/B.power")) $fatal(1, "target off");
+    d = 8'h33; #1 clk = 1; #1 clk = 0;
+    if (!supply_on("/top/B.power")) $fatal(1, "target restore");
+    #4;
+    check_source(d);
+    if (b.q !== 'x || b.r !== 'x || outside !== d || calls != 3 || delays != 6) $fatal(1, "target issue guard and effects");
+    if (!supply_off("/top/A.power")) $fatal(1, "source off");
+    d = 8'h44; #1 clk = 1; #1 clk = 0; #4;
+    if (b.q !== 'x || b.r !== 'x || outside !== 8'h33 || calls != 3 || delays != 6) $fatal(1, "source actor gate");
+    if (!supply_on("/top/A.power")) $fatal(1, "source restore");
+    ticks = 0;
+    #1 clk = 1; #1 clk = 0;
+    if (b.q !== d || b.r !== d || outside !== d || calls != 4 || delays != 8) $fatal(1, "zero dynamic delay");
+    $display("external source epochs passed"); $finish;
+  end
+endmodule
+//--- design.upf
+create_supply_set A
+create_supply_set B
+create_power_domain PB -elements b -supply {primary B}
+create_power_domain PA -elements a -supply {primary A}

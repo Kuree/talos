@@ -1,0 +1,63 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/excluded.upf -O0 --mlir-verify-each %t/design.sv -o %t.excluded && %t.excluded | FileCheck %s
+// RUN: talos --upf %t/overridden.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.overridden && %t.overridden | FileCheck %s
+// RUN: talos -DNO_RETAINED --upf %t/none.upf -O3 --mlir-verify-each %t/design.sv -o %t.none && %t.none | FileCheck %s
+// RUN: talos -DNO_RETAINED --upf %t/exclude-process.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.exclude-process && %t.exclude-process | FileCheck %s
+// Final process membership determines retention. Ordinary roots excluded or
+// overridden by no_retention gain destination guards without gating AON
+// neighbors or suppressing expression side effects (1801 6.50/9.5.3).
+// CHECK: external ordinary process writes passed
+
+//--- design.sv
+module leaf; logic [7:0] q, r; endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, hold = 0;
+  logic [7:0] d = 8'h11, outside;
+  int calls = 0;
+  leaf dut();
+  function automatic logic [7:0] next_r(); calls++; return d + 1; endfunction
+  always @(posedge clk) begin : P
+    dut.q <= d;
+    dut.r = next_r();
+    outside <= d;
+  end
+  initial begin
+    if (!supply_on("/top/C.power") || !supply_on("/top/C.ground", 0.0)) $fatal(1, "supplies");
+    #1 clk = 1; #1 clk = 0;
+    if (dut.q !== d || dut.r !== 8'h12 || outside !== d || calls != 1) $fatal(1, "first write");
+    hold = 1;
+    if (!supply_off("/top/C.power")) $fatal(1, "off");
+    d = 8'h22; #1 clk = 1; #1 clk = 0;
+    if (dut.q !== 'x || dut.r !== 'x || outside !== d || calls != 2) $fatal(1, "CORRUPT write");
+    if (!supply_on("/top/C.power")) $fatal(1, "on");
+    #1;
+`ifdef NO_RETAINED
+    if (dut.q !== 'x) $fatal(1, "no_retention revived ordinary state");
+`else
+    if (dut.q !== 8'h11) $fatal(1, "master value was not held");
+`endif
+    if (dut.r !== 'x || outside !== d) $fatal(1, "restoration replayed writes");
+    hold = 0; d = 8'h33;
+    #1 clk = 1; #1 clk = 0;
+    if (dut.q !== d || dut.r !== 8'h34 || outside !== d || calls != 3) $fatal(1, "fresh write");
+    $display("external ordinary process writes passed"); $finish;
+  end
+endmodule
+//--- common.upf
+create_supply_set C
+create_power_domain PD -elements dut -supply {primary C}
+//--- excluded.upf
+source [file join [file dirname [info script]] common.upf]
+set_retention R -domain PD -elements P -exclude_elements dut/r -retention_condition hold
+//--- overridden.upf
+source [file join [file dirname [info script]] common.upf]
+set_retention R -domain PD -elements P -retention_condition hold
+set_retention N -domain PD -elements dut/r -no_retention
+//--- none.upf
+source [file join [file dirname [info script]] common.upf]
+set_retention N -domain PD -elements P -no_retention
+//--- exclude-process.upf
+source [file join [file dirname [info script]] common.upf]
+set_retention R -domain PD -elements dut -exclude_elements P -retention_condition hold

@@ -1,0 +1,63 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: not talos --upf %t/design.upf --mlir-verify-each %t/level.sv -o %t.level 2>&1 | FileCheck %s --check-prefix=CONTEXT
+// RUN: not talos --upf %t/design.upf --mlir-verify-each %t/shared-level.sv -o %t.shared 2>&1 | FileCheck %s --check-prefix=CONTEXT
+// RUN: not talos --upf %t/design.upf --mlir-verify-each %t/timed.sv -o %t.timed 2>&1 | FileCheck %s --check-prefix=CONTEXT
+// RUN: not talos --upf %t/retained.upf --mlir-verify-each %t/source.sv -o %t.source 2>&1 | FileCheck %s --check-prefix=RETAINED
+// RUN: not talos --upf %t/design.upf --mlir-verify-each %t/indirect.sv -o %t.indirect 2>&1 | FileCheck %s --check-prefix=INDIRECT
+// A private direct helper is not dead or initialization-only when an
+// unsupported actor can call it. Reject before adding caller arguments.
+// CONTEXT: UPF external writes require Initial or a repeating edge actor
+// RETAINED: retention from another switched producer requires source/strategy epoch composition and is not implemented
+// INDIRECT: UPF ordinary state through copied or indirect argument references is not implemented
+
+//--- design.upf
+create_supply_set C
+create_power_domain PD -elements dut -supply {primary C}
+//--- retained.upf
+source [file join [file dirname [info script]] design.upf]
+create_supply_set S
+create_power_domain SOURCE -elements src -supply {primary S}
+set_retention R -domain PD -retention_condition hold
+//--- level.sv
+module leaf; logic q; endmodule
+module top;
+  logic d;
+  leaf dut();
+  function automatic void write_q(); dut.q = d; endfunction
+  always_comb write_q();
+endmodule
+//--- shared-level.sv
+module leaf; logic q; endmodule
+module top;
+  logic d;
+  leaf dut();
+  function automatic void write_q(); dut.q = d; endfunction
+  always @(d) write_q();
+  initial write_q();
+endmodule
+//--- timed.sv
+module leaf; logic q; endmodule
+module top;
+  logic clk;
+  leaf dut();
+  always @(posedge clk) begin #1; dut.q = 1; end
+endmodule
+//--- source.sv
+module leaf; logic q; endmodule
+module producer(input logic clk);
+  always @(posedge clk) top.dut.q <= 1;
+endmodule
+module top;
+  logic clk, hold;
+  leaf dut();
+  producer src(clk);
+endmodule
+//--- indirect.sv
+module leaf; logic q; endmodule
+module top;
+  logic clk;
+  leaf dut();
+  function automatic void write_q(ref logic v); v = 1; endfunction
+  always @(posedge clk) write_q(dut.q);
+endmodule

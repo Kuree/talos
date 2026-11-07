@@ -2,6 +2,7 @@
 #include "ClockSnapshot.h"
 #include "ControlValue.h"
 #include "ElaborateSupply.h"
+#include "OrdinaryWrites.h"
 #include "PowerState.h"
 #include "PublicationCallback.h"
 #include "ReferenceWindow.h"
@@ -267,7 +268,9 @@ LogicalResult synchronousHelper(sim::SimCallOp call) {
       // Keep the op's scheduler/IO effects for optimization and error handling.
       // A snapshot flush publishes that helper's completed synchronous
       // write. It leaves no asynchronous work owned by the helper.
-      if (isa<sim::SimSupplyReadOp, sim::SimEventSnapshotFlushOp>(op))
+      // Ordinary-write lowering attaches the caller's lifetime to NBAs.
+      if (isa<sim::SimSupplyReadOp, sim::SimEventSnapshotFlushOp,
+              sim::SimNBAEnqueueOp>(op))
         return WalkResult::advance();
       bool asynchronous =
           sim::isSuspensionOp(op) ||
@@ -312,6 +315,10 @@ struct Lowering {
   sim::SimFuncOp root;
   std::unique_ptr<ReferenceWindows> nbaWindows;
   std::unique_ptr<ClockSnapshots> clocks;
+  SmallVector<sim::SimFuncOp> originalFunctions;
+  llvm::DenseSet<uint64_t> originalStorage;
+  SmallVector<WriteDomain> writeDomains;
+  llvm::DenseMap<Operation *, std::string> powerOwners;
   Lowering(sim::SimDesignOp design, bool preserveStorage)
       : design(design), builder(design.getContext()),
         preserveStorage(preserveStorage) {
@@ -320,6 +327,7 @@ struct Lowering {
         scopePaths[scope.getId()] = name->str();
     for (auto decl : design.getOps<sim::SimStorageDeclOp>()) {
       nextStorage = std::max(nextStorage, decl.getId() + 1);
+      originalStorage.insert(decl.getId());
       if (auto name = decl.getHierarchicalName())
         descriptors[*name] = {decl.getId(), decl.getType()};
     }
@@ -332,9 +340,11 @@ struct Lowering {
       units[decl.getId()] = decl;
       unitIDs[decl.getHierarchicalName()] = decl.getId();
     }
-    for (auto fn : design.getOps<sim::SimFuncOp>())
+    for (auto fn : design.getOps<sim::SimFuncOp>()) {
+      originalFunctions.push_back(fn);
       if (fn.getEntryKind() == sim::EntryKind::RootInitializer)
         root = fn;
+    }
     if (!preserveStorage)
       collectReferencedStorage();
     if (root)
@@ -795,57 +805,6 @@ struct Lowering {
     // change while the domain remains NORMAL without activating HDL code.
     return edgeSensitive ? success() : watch(fn, restoration);
   }
-  LogicalResult nba(sim::SimNBAEnqueueOp enqueue, sim::SimFuncOp predicate,
-                    ArrayRef<Descriptor> dependencies, Descriptor epoch) {
-    // IEEE 1801-2018 9.5.3: events queued before CORRUPT have no effect.
-    // Capturing the epoch also prevents an OFF/ON cycle from reviving an old
-    // delayed event merely because the domain is NORMAL again at commit time.
-    sim::SimFuncOp caller = enqueue->getParentOfType<sim::SimFuncOp>();
-    Location loc = enqueue.getLoc();
-    if (!isa<sim::RefType>(enqueue.getDestination().getType()))
-      return enqueue.emitError("guarded UPF NBA requires a storage reference");
-    auto window = nbaWindows->get(enqueue.getDestination());
-    if (failed(window))
-      return failure();
-    Type rootScalar = sim::getPackedScalarType(window->root.type);
-    if (!rootScalar)
-      return enqueue.emitError(
-          "guarded UPF NBA requires a packed integral root");
-    builder.setInsertionPoint(enqueue);
-    Value context = caller.getArgument(0);
-    Value data = flatten(builder, loc, enqueue.getValue());
-    // The view primitive writes the root's state planes. In mixed packed
-    // aggregates a two-state selected field still clears its old unknown bits.
-    if (isa<sim::LogicType>(rootScalar) && isa<IntegerType>(data.getType()))
-      data = sim::SimLogicFromBitsOp::create(
-          builder, loc,
-          sim::LogicType::get(builder.getContext(),
-                              *sim::getPackedWidth(data.getType())),
-          data);
-    else if (isa<IntegerType>(rootScalar) &&
-             isa<sim::LogicType>(data.getType()))
-      data = sim::SimLogicToBitsOp::create(
-          builder, loc,
-          builder.getIntegerType(*sim::getPackedWidth(data.getType())), data);
-    SmallVector<Value> watched;
-    for (auto dependency : dependencies)
-      watched.push_back(handle(builder, loc, context, dependency));
-    Value guard = sim::SimObserverBindOp::create(
-        builder, loc,
-        sim::ObserverType::get(builder.getContext(), builder.getI1Type()),
-        predicate.getSymNameAttr(), watched, uint32_t{0});
-    Value reference = handle(builder, loc, context, epoch);
-    Value snapshot = load(builder, loc, reference);
-    // IEEE 1800-2023 4.6(b)/10.4.2: enqueue at the original statement,
-    // preserving order with retained writes, including dynamic zero delays.
-    sim::SimPowerNBAViewOp::create(builder, loc, context, data,
-                                   handle(builder, loc, context, window->root),
-                                   window->start, window->lower, window->upper,
-                                   window->valid, guard, reference, snapshot,
-                                   reference, snapshot, enqueue.getDelay());
-    enqueue.erase();
-    return success();
-  }
   LogicalResult exactLoss(const PowerCondition &condition, StringRef prefix,
                           Descriptor epoch, Descriptor restoration,
                           ArrayRef<Descriptor> ordinary) {
@@ -1203,11 +1162,9 @@ struct Lowering {
       case sim::EntryKind::Initial:
         break; // IEEE 1801 9.2.1: model initialization is unaffected.
       case sim::EntryKind::Function:
-        if (auto path = sim::get<sim::metadata::HierarchicalName>(fn))
-          if (descriptors.count(path.getValue()))
-            break;
-        return fn.emitError(
-            "user subroutines inside a switchable domain are not implemented");
+        // Direct helper execution inherits its procedural caller's power and
+        // initialization context; ordinary writes are handled globally below.
+        break;
       default:
         return fn.emitError(
             "initial UPF slice supports event-controlled RTL and combinational "
@@ -1269,6 +1226,7 @@ struct Lowering {
     }
     for (auto decl : design.getOps<sim::SimStorageDeclOp>()) {
       if (!decl.getHierarchicalName() ||
+          decl.getLifetime() == sim::Lifetime::Automatic ||
           !contains(domain, *decl.getHierarchicalName()) ||
           inputStorage.contains(decl.getId()) ||
           (!preserveStorage && !referencedStorage.contains(decl.getId()) &&
@@ -1298,7 +1256,9 @@ struct Lowering {
       domain.erase();
       return success();
     }
-    if (targets.empty())
+    // A producer may update only foreign roots. Its published source policy
+    // and epoch still cancel those activations and already-issued NBAs.
+    if (targets.empty() && processes.empty())
       return domain.emitError(
           "switchable domain has no supported state or drivers");
     if (auto isoName = domain.getIsolationControl()) {
@@ -1432,41 +1392,17 @@ struct Lowering {
           },
           [&](FlatSymbolRefAttr ref) {
             return SmallVector<Descriptor>{supplies.lookup(ref.getValue())};
+          },
+          [&, ownerName = domain.getSymName().str()](sim::SimFuncOp fn) {
+            auto found = powerOwners.find(fn);
+            return found != powerOwners.end() && found->second != ownerName;
           }};
       if (failed(lowerRetentions(options, retention)))
         return failure();
     }
-    // Validate original actors before adding feature-local helpers; only
-    // ordinary remaining NBAs use the domain-only epoch path below.
-    SmallVector<sim::SimNBAEnqueueOp> enqueues;
-    for (auto process : processes)
-      process.walk([&](sim::SimNBAEnqueueOp op) { enqueues.push_back(op); });
-    if (!enqueues.empty()) {
-      if (!nbaWindows)
-        nbaWindows = std::make_unique<ReferenceWindows>(design);
-      SmallVector<Value> references;
-      for (auto enqueue : enqueues)
-        references.push_back(enqueue.getDestination());
-      if (failed(nbaWindows->prepare(references)))
-        return failure();
-      auto predicate = function(loc, prefix + ".nba_allowed",
-                                {sim::ContextType::get(builder.getContext())},
-                                sim::EntryKind::Observer);
-      predicate.setFunctionType(
-          builder.getFunctionType({sim::ContextType::get(builder.getContext())},
-                                  {builder.getI1Type()}));
-      schedule::set<schedule::Field::ObserverWidth>(
-          predicate, builder.getI32IntegerAttr(1));
-      schedule::set<schedule::Field::ObserverFourState>(
-          predicate, builder.getBoolAttr(false));
-      builder.setInsertionPointToEnd(&predicate.getBody().front());
-      sim::SimReturnOp::create(
-          builder, loc,
-          condition.normal(builder, loc, predicate.getArgument(0)));
-      for (auto enqueue : enqueues)
-        if (failed(nba(enqueue, predicate, dependencies, epoch)))
-          return failure();
-    }
+    // Ordinary procedural updates are handled once after all physical domain
+    // owners and final retained roots are known. Preserve both source and
+    // destination policy rather than rewriting in domain declaration order.
     // Protected roots cannot publish a loss after startup. Avoid clock
     // snapshots when every input to the primary policy is immutable.
     auto immutable = [&](Descriptor d) {
@@ -1476,6 +1412,22 @@ struct Lowering {
                         (condition.ground && !immutable(*condition.ground)) ||
                         !llvm::all_of(condition.required, immutable) ||
                         !llvm::all_of(condition.policyInputs, immutable);
+    WriteDomain writes;
+    writes.name = domain.getSymName().str();
+    writes.epoch = epoch;
+    writes.exact = exact;
+    writes.immutable = !qualifyClock;
+    writes.dependencies = dependencies;
+    writes.normal = [condition](OpBuilder &b, Location loc, Value ctx) {
+      return condition.normal(b, loc, ctx, false);
+    };
+    writes.retained = retention.storage;
+    for (auto target : targets)
+      if (!target.driver && !retention.storage.contains(target.id))
+        writes.ordinary.insert(target.id);
+    for (auto process : processes)
+      writes.actors.insert(process);
+    writeDomains.push_back(std::move(writes));
     for (auto process : processes) {
       if (failed(gate(process, condition, restoration, epoch,
                       exact && qualifyClock,
@@ -1668,10 +1620,29 @@ struct ElaborateUPFPass
                                       std::move(condition));
       }
     for (auto domain : domains)
+      for (auto fn : lowering.originalFunctions)
+        if (fn.getCodeUnitId() &&
+            contains(domain, lowering.unitPaths.lookup(*fn.getCodeUnitId())))
+          lowering.powerOwners[fn] = domain.getSymName().str();
+    for (auto domain : domains)
       if (failed(lowering.apply(domain))) {
         signalPassFailure();
         return;
       }
+    if (lowering.clocks &&
+        failed(lowerOrdinaryUPFWrites(OrdinaryWriteOptions{
+            lowering.design, lowering.root, lowering.originalFunctions,
+            lowering.originalStorage, lowering.writeDomains, *lowering.clocks,
+            [&](Location loc, StringRef name, Type type) {
+              return lowering.storage(loc, name, type);
+            },
+            [&](Location loc, StringRef name, ArrayRef<Type> inputs,
+                sim::EntryKind kind) {
+              return lowering.function(loc, name, inputs, kind);
+            }}))) {
+      signalPassFailure();
+      return;
+    }
     if (lowering.clocks && failed(lowering.clocks->finalize())) {
       signalPassFailure();
       return;

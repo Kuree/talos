@@ -1,0 +1,56 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// SV 13.4.4 permits delayed NBAs in functions. Both the initialization
+// exemption (1801 9.2.1) and the first clock-event ticket belong to the caller,
+// including forwarding-only helpers and distinct actors sharing a callee.
+// CHECK: shared write context passed
+
+//--- design.sv
+module leaf; logic [7:0] q; endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, second = 0;
+  logic [7:0] d = 8'h11, outside;
+  int calls = 0;
+  leaf dut();
+  function automatic void issue(input logic [7:0] v);
+    calls++; dut.q <= #3 v; outside <= v;
+  endfunction
+  function automatic void forward(input logic [7:0] v); issue(v); endfunction
+  always @(posedge clk) forward(d);
+  always @(posedge second) forward(d + 1);
+  initial begin
+    if (!supply_on("/top/C.ground", 0.0)) $fatal(1, "ground");
+    forward(8'h13);
+    if (!supply_on("/top/C.power")) $fatal(1, "power");
+    #4;
+    if (dut.q !== 8'h13 || outside !== 8'h13 || calls != 1) $fatal(1, "Initial exemption");
+    #1 clk = 1; #1 clk = 0;
+    if (!supply_off("/top/C.power") || !supply_on("/top/C.power")) $fatal(1, "loss pulse");
+    #3;
+    if (dut.q !== 'x || outside !== d || calls != 2) $fatal(1, "old NBA");
+    if (!supply_off("/top/C.power")) $fatal(1, "off");
+    d = 8'h22; #1 clk = 1;
+    if (!supply_on("/top/C.power")) $fatal(1, "on");
+    // A fresh edge on another actor must not reuse clk's ineligible ticket.
+    second = 1;
+    #4;
+    if (dut.q !== 8'h23 || outside !== 8'h23 || calls != 4) $fatal(1, "caller-specific ticket");
+    clk = 0; second = 0;
+    #1 clk = 1; #4;
+    if (dut.q !== d || outside !== d || calls != 5) $fatal(1, "fresh event");
+    // Exemption follows the caller even at nonzero simulation time.
+    if (!supply_off("/top/C.power")) $fatal(1, "off again");
+    forward(8'h77);
+    #4;
+    if (dut.q !== 8'h77 || outside !== 8'h77 || calls != 6) $fatal(1, "late Initial exemption");
+    $display("shared write context passed"); $finish;
+  end
+endmodule
+//--- design.upf
+create_supply_set C
+create_power_domain PD -elements dut -supply {primary C}

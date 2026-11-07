@@ -11,6 +11,7 @@ add_mlir_library(TalosUPF
   Retention.cpp
   BalloonRetention.cpp
   ClockSnapshot.cpp
+  OrdinaryWrites.cpp
   PublicationBarriers.cpp
   ReferenceWindow.cpp
   ElaborateSupply.cpp

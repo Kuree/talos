@@ -41,6 +41,7 @@ Value clockEdge(OpBuilder &b, Location loc, Value before, Value after,
 }
 struct ClockSnapshots::Impl {
   struct Consumer {
+    std::string name;
     Descriptor source;
     FrozenClock frozen;
   };
@@ -310,6 +311,12 @@ struct ClockSnapshots::Impl {
         return failure();
     }
     auto &s = *source;
+    for (const auto &consumer : s.consumers)
+      if (consumer.name == name) {
+        if (consumer.source.id != epoch.id)
+          return writer.emitError("conflicting UPF clock qualification epoch");
+        return consumer.frozen;
+      }
     if (s.width > llvm::IntegerType::MAX_INT_BITS - 65)
       return s.wait->emitError(
           "UPF clock qualification exceeds supported packed width");
@@ -324,7 +331,7 @@ struct ClockSnapshots::Impl {
                                               read(ctx, frozen.valid)));
     s.targets.push_back(frozen.epoch);
     s.targets.push_back(frozen.valid);
-    s.consumers.push_back({epoch, frozen});
+    s.consumers.push_back({name.str(), epoch, frozen});
     s.width += 65;
     return frozen;
   }

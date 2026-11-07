@@ -1,0 +1,61 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/forward.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/reverse.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/reverse.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/forward.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// Physical root ownership is independent of producer scope and UPF order.
+// Target guards suppress just the final publication; all expression effects
+// and neighboring AON writes still execute. Frozen first-event qualification
+// rejects an OFF->ON pending activation even without a loss epoch change.
+// CHECK: external domain writes passed
+
+//--- design.sv
+module leaf; logic [7:0] q, r; endmodule
+module top;
+  import UPF::*;
+  logic clk = 0;
+  logic [7:0] d = 8'h11, outside;
+  int calls = 0;
+  leaf a(), b();
+  function automatic logic [7:0] rhs(); calls++; return d; endfunction
+  always @(posedge clk) begin
+    a.q <= rhs(); b.q <= d;
+    a.r = rhs(); b.r = d;
+    outside <= d;
+  end
+  initial begin
+    if (!supply_on("/top/A.power") || !supply_on("/top/A.ground", 0.0) ||
+        !supply_on("/top/B.power") || !supply_on("/top/B.ground", 0.0)) $fatal(1, "supplies");
+    #1 clk = 1; #1 clk = 0;
+    if (a.q !== d || a.r !== d || b.q !== d || b.r !== d || outside !== d || calls != 2) $fatal(1, "normal");
+    if (!supply_off("/top/A.power")) $fatal(1, "off A");
+    d = 8'h22; #1 clk = 1; #1 clk = 0;
+    if (a.q !== 'x || a.r !== 'x || b.q !== d || b.r !== d || outside !== d || calls != 4) $fatal(1, "A-only rejection");
+    // The first qualified edge is while A is OFF. Restoration before dispatch
+    // must not make that old activation eligible for A's state.
+    d = 8'h33; #1 clk = 1;
+    if (!supply_on("/top/A.power")) $fatal(1, "restore A");
+    #1 clk = 0;
+    if (a.q !== 'x || a.r !== 'x || b.q !== d || b.r !== d || outside !== d || calls != 6) $fatal(1, "OFF event revived");
+    d = 8'h44; #1 clk = 1; #1 clk = 0;
+    if (a.q !== d || a.r !== d || b.q !== d || b.r !== d || calls != 8) $fatal(1, "fresh A event");
+    d = 8'h55; #1 clk = 1;
+    if (!supply_off("/top/B.power") || !supply_on("/top/B.power")) $fatal(1, "B loss pulse");
+    #1 clk = 0;
+    if (a.q !== d || a.r !== d || b.q !== 'x || b.r !== 'x || outside !== d || calls != 10) $fatal(1, "pre-loss pending event");
+    d = 8'h66; #1 clk = 1; #1 clk = 0;
+    if (a.q !== d || b.q !== d || b.r !== d || outside !== d || calls != 12) $fatal(1, "fresh B event");
+    $display("external domain writes passed"); $finish;
+  end
+endmodule
+//--- forward.upf
+create_supply_set A
+create_supply_set B
+create_power_domain PA -elements a -supply {primary A}
+create_power_domain PB -elements b -supply {primary B}
+//--- reverse.upf
+create_supply_set A
+create_supply_set B
+create_power_domain PB -elements b -supply {primary B}
+create_power_domain PA -elements a -supply {primary A}

@@ -1,0 +1,9 @@
+// RUN: talos-opt %S/../Conversion/upf-external-write-context.mlir --pass-pipeline='builtin.module(prepare-upf-snapshot-publications,elaborate-upf,prepare-upf-snapshot-publications,simulation.design(simulation.func(talos-sim-thread-suspension),talos-sim-build-compute-graph,talos-sim-verify-compute-graph),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' --verify-each -o %t.lowered.mlir
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O0>' | %llc -filetype=obj -relocation-model=pic -o %t.o
+// RUN: %target_cxx %t.o %runtime_link_flags -o %t.exe && %t.exe | FileCheck %s
+// RUN: talos-translate --mlir-to-llvmir %t.lowered.mlir | opt -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>' | %llc -filetype=obj -relocation-model=pic -o %t.opt.o
+// RUN: %target_cxx %t.opt.o %runtime_link_flags -o %t.opt.exe && %t.opt.exe | FileCheck %s
+// Both directions of clipping survive the helper's formal boundary, including
+// Root initialization, two AON clock actors and a switched source actor. Bit
+// positions that would escape an eight-bit ancestor must remain untouched.
+// CHECK: external windows 1 1

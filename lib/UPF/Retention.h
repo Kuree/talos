@@ -29,6 +29,7 @@ struct RetentionLoweringOptions {
   std::function<llvm::SmallVector<upf_detail::Descriptor>(
       mlir::FlatSymbolRefAttr)>
       supplyDependencies;
+  std::function<bool(sim::SimFuncOp)> externalPoweredSource;
 };
 struct RetentionLoweringResult {
   llvm::DenseSet<uint64_t> storage;

@@ -214,6 +214,214 @@ PreparedUnits::resolveVirtualInterfaceCallees(
   return result;
 }
 
+static LogicalResult validateBackgroundFunctionCallers(
+    const PreparedUnits &result,
+    const llvm::StringMap<Operation *> &semanticSymbols) {
+  // IEEE 1800-2023 13.4.4: background work requires a thread created by
+  // initial/always or its fork. Use Slang's override identities, including
+  // out-of-block prototypes, so a pure virtual base cannot hide that effect.
+  llvm::DenseMap<Operation *, SmallVector<Operation *>> overrides,
+      virtualTargets;
+  auto resolveOverride = [&](SymbolRefAttr symbol) -> Operation * {
+    auto found = semanticSymbols.find(symbol.getLeafReference());
+    if (found == semanticSymbols.end())
+      return nullptr;
+    Operation *source = found->second;
+    if (auto external = result.externCalleeTargets.find(source);
+        external != result.externCalleeTargets.end())
+      source = external->second;
+    if (isa<semantic::SVMethodPrototypeSymbolOp>(source))
+      for (auto *child : getChildren(source))
+        if (isa<semantic::SVSubroutineSymbolOp>(child))
+          return child;
+    return source;
+  };
+  for (const PreparedUnit &unit : result.units)
+    if (auto method = dyn_cast<semantic::SVSubroutineSymbolOp>(unit.source)) {
+      auto overridden = method.getOverrideSymbol();
+      if (!overridden)
+        if (auto prototype =
+                method->getParentOfType<semantic::SVMethodPrototypeSymbolOp>())
+          overridden = prototype.getOverrideSymbol();
+      if (overridden)
+        if (auto *base = resolveOverride(*overridden))
+          overrides[base].push_back(method);
+    }
+  struct CallSite {
+    Operation *call;
+    Operation *caller;
+    SmallVector<Operation *> targets;
+    bool procedural;
+  };
+  SmallVector<CallSite> calls;
+  llvm::DenseMap<Operation *, SmallVector<Operation *>> callers;
+  // Slang keeps instance-property initializers on declarations and may omit
+  // constructor calls for implicit new/super.new. Model each class's complete
+  // construction as a synthetic effect node, without treating ordinary method
+  // bodies as property initialization or rejecting the property definition.
+  SmallVector<PreparedUnit> analysisUnits(result.units);
+  llvm::StringMap<semantic::SVClassTypeOp> classes;
+  for (const auto &entry : semanticSymbols)
+    if (auto type = dyn_cast<semantic::SVClassTypeOp>(entry.second))
+      if (auto handle =
+              dyn_cast<semantic::ClassHandleType>(type.getSemanticType()))
+        classes.try_emplace(handle.getClassName().getLeafReference(), type);
+  llvm::DenseSet<Operation *> properties;
+  for (const auto &entry : classes) {
+    auto type = entry.second;
+    if (auto base = type.getBaseClass())
+      if (auto handle = dyn_cast<semantic::ClassHandleType>(*base))
+        if (auto parent =
+                classes.lookup(handle.getClassName().getLeafReference()))
+          callers[parent].push_back(type);
+    for (auto *child : getChildren(type)) {
+      if (auto method = getClassMethod(child);
+          method && method.getIsConstructor().value_or(false))
+        callers[method].push_back(type);
+      auto property = dyn_cast<semantic::SVClassPropertySymbolOp>(child);
+      if (!property ||
+          property.getLifetime() == semantic::SVVariableLifetime::Static ||
+          getChildren(property).empty())
+        continue;
+      callers[property].push_back(type);
+      properties.insert(property);
+      analysisUnits.push_back(
+          {property, 0, sim::EntryKind::Function, {}, {}, {}});
+    }
+  }
+  auto constructedClass = [&](semantic::SVNewClassExpressionOp construct) {
+    std::optional<Type> type;
+    if (construct.getIsSuperClass()) {
+      if (auto owner = construct->getParentOfType<semantic::SVClassTypeOp>())
+        type = owner.getBaseClass();
+    } else if (auto attr = construct->getAttrOfType<TypeAttr>("semantic_type"))
+      type = attr.getValue();
+    auto handle = type ? dyn_cast<semantic::ClassHandleType>(*type)
+                       : semantic::ClassHandleType{};
+    return handle ? classes.lookup(handle.getClassName().getLeafReference())
+                  : semantic::SVClassTypeOp{};
+  };
+  llvm::DenseSet<Operation *> requiresProcess;
+  llvm::DenseSet<Operation *> potentialDispatch;
+  SmallVector<Operation *> work;
+  uint64_t dispatchWork = 0;
+  for (const PreparedUnit &unit : analysisUnits) {
+    bool subroutine = isa<semantic::SVSubroutineSymbolOp>(unit.source);
+    bool procedural = subroutine || properties.contains(unit.source) ||
+                      unit.entryKind == sim::EntryKind::Initial ||
+                      unit.entryKind == sim::EntryKind::Always ||
+                      unit.entryKind == sim::EntryKind::AlwaysComb ||
+                      unit.entryKind == sim::EntryKind::AlwaysFF ||
+                      unit.entryKind == sim::EntryKind::AlwaysLatch ||
+                      unit.entryKind == sim::EntryKind::Fork;
+    WalkResult valid = unit.source->walk([&](Operation *op) {
+      if (subroutine) {
+        auto assignment = dyn_cast<semantic::SVAssignmentExpressionOp>(op);
+        auto trigger = dyn_cast<semantic::SVEventTriggerStatementOp>(op);
+        auto block = dyn_cast<semantic::SVBlockStatementOp>(op);
+        if ((assignment && assignment.getAssignmentKind() ==
+                               semantic::SVAssignmentKind::Nonblocking) ||
+            (trigger && trigger.getIsNonblocking()) ||
+            (block &&
+             block.getBlockKind() == semantic::SVStatementBlockKind::JoinNone))
+          if (requiresProcess.insert(unit.source).second)
+            work.push_back(unit.source);
+      }
+      if (auto construct = dyn_cast<semantic::SVNewClassExpressionOp>(op))
+        if (auto type = constructedClass(construct)) {
+          callers[type].push_back(unit.source);
+          calls.push_back({construct, unit.source, {type}, procedural});
+        }
+      auto call = dyn_cast<semantic::SVCallExpressionOp>(op);
+      if (!call || call.getIsSystemCall())
+        return WalkResult::advance();
+      SmallVector<Operation *> targets;
+      if (auto *target = result.resolveDirectCallee(call, semanticSymbols)) {
+        auto method = dyn_cast<semantic::SVSubroutineSymbolOp>(target);
+        if (method && method.getIsVirtual().value_or(false) &&
+            !(call.getIsSuperClass() && !call.getHasThisClass())) {
+          potentialDispatch.insert(unit.source);
+          auto known = virtualTargets.find(target);
+          if (known == virtualTargets.end()) {
+            SmallVector<Operation *> pending{target}, implementations;
+            llvm::DenseSet<Operation *> seen;
+            while (!pending.empty()) {
+              auto *implementation = pending.pop_back_val();
+              if (!seen.insert(implementation).second)
+                continue;
+              if (++dispatchWork > (1u << 20)) {
+                emitError(getSemanticLocation(call))
+                    << "function background dispatch analysis exceeds "
+                       "supported work";
+                return WalkResult::interrupt();
+              }
+              implementations.push_back(implementation);
+              llvm::append_range(pending, overrides[implementation]);
+            }
+            known =
+                virtualTargets.try_emplace(target, std::move(implementations))
+                    .first;
+          }
+          targets = known->second;
+        } else
+          targets.push_back(target);
+      }
+      for (auto *candidate : result.resolveVirtualInterfaceCallees(call)) {
+        potentialDispatch.insert(unit.source);
+        targets.push_back(candidate->source);
+      }
+      dispatchWork += targets.size();
+      if (dispatchWork > (1u << 20)) {
+        emitError(getSemanticLocation(call))
+            << "function background dispatch analysis exceeds supported work";
+        return WalkResult::interrupt();
+      }
+      for (auto *target : targets)
+        callers[target].push_back(unit.source);
+      calls.push_back({call, unit.source, std::move(targets), procedural});
+      return WalkResult::advance();
+    });
+    if (valid.wasInterrupted())
+      return failure();
+  }
+  while (!work.empty()) {
+    auto *target = work.pop_back_val();
+    for (auto *caller : callers[target])
+      if ((isa<semantic::SVSubroutineSymbolOp, semantic::SVClassTypeOp>(
+               caller) ||
+           properties.contains(caller)) &&
+          requiresProcess.insert(caller).second)
+        work.push_back(caller);
+  }
+  // Override-family effects are conservative until the receiver's allocation
+  // is proved. Propagate that uncertainty through helper/construction closures
+  // and diagnose an unsupported proof, rather than an actual LRM violation.
+  llvm::append_range(work, potentialDispatch);
+  while (!work.empty()) {
+    auto *target = work.pop_back_val();
+    for (auto *caller : callers[target])
+      if (potentialDispatch.insert(caller).second)
+        work.push_back(caller);
+  }
+  for (auto &site : calls)
+    if (!site.procedural && llvm::any_of(site.targets, [&](Operation *target) {
+          return requiresProcess.contains(target);
+        })) {
+      if (potentialDispatch.contains(site.caller)) {
+        emitError(getSemanticLocation(site.call))
+            << "nonprocedural call with potential background dispatch is not "
+               "implemented; exact virtual receiver analysis is required "
+               "(IEEE 1800-2023 13.4.4)";
+        return failure();
+      }
+      emitError(getSemanticLocation(site.call))
+          << "function scheduling background work requires an initial, always "
+             "or fork thread (IEEE 1800-2023 13.4.4)";
+      return failure();
+    }
+  return success();
+}
+
 FailureOr<PreparedUnits> materializeCodeUnitDeclarations(
     ModuleOp module, semantic::SVRootSymbolOp semanticRoot,
     ArrayRef<Operation *> sourceUnits,
@@ -283,8 +491,24 @@ FailureOr<PreparedUnits> materializeCodeUnitDeclarations(
           return WalkResult::skip();
         }
         if (isa<semantic::SVDelayControlOp, semantic::SVSignalEventControlOp,
-                semantic::SVEventListControlOp>(nested))
+                semantic::SVEventListControlOp>(nested)) {
+          // IEEE 1800-2023 13.4.4 permits nonblocking assignments and event
+          // triggers in functions: their intra-assignment controls schedule
+          // background work without suspending the calling function.
+          Operation *parent = nested->getParentOp();
+          if (auto assignment =
+                  dyn_cast<semantic::SVAssignmentExpressionOp>(parent);
+              assignment && assignment.getHasTimingControl() &&
+              assignment.getAssignmentKind() ==
+                  semantic::SVAssignmentKind::Nonblocking)
+            return WalkResult::skip();
+          if (auto trigger =
+                  dyn_cast<semantic::SVEventTriggerStatementOp>(parent);
+              trigger && trigger.getHasTimingControl() &&
+              trigger.getIsNonblocking())
+            return WalkResult::skip();
           hasTiming = true;
+        }
         return hasTiming ? WalkResult::interrupt() : WalkResult::advance();
       });
       if (*entryKind == sim::EntryKind::Function && !dpiImport && hasTiming) {
@@ -622,6 +846,9 @@ FailureOr<PreparedUnits> materializeCodeUnitDeclarations(
     }
   }
   if (invalid)
+    return failure();
+
+  if (failed(validateBackgroundFunctionCallers(result, semanticSymbols)))
     return failure();
 
   struct ObserverCandidate {

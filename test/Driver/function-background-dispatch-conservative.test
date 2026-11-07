@@ -1,0 +1,6 @@
+// RUN: %split-file %S/function-background-context-invalid.test %t
+// RUN: not talos -DPURE_BASE -O3 --mlir-verify-each %t/virtual.sv -o %t.native 2>&1 | FileCheck %S/function-background-context-invalid.test --check-prefix=VIRTUAL
+// RUN: not talos -DPURE_BASE -O3 --execution-tier=bytecode --mlir-verify-each %t/virtual.sv -o %t.bc 2>&1 | FileCheck %S/function-background-context-invalid.test --check-prefix=VIRTUAL
+// Receiver allocation proof is staged. This legal pure Base call shares a
+// virtual family with a background-writing override; diagnose the unsupported
+// conservative effect proof instead of claiming an actual 13.4.4 violation.
