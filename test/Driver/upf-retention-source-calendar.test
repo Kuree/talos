@@ -1,0 +1,49 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// RUN: talos -DTARGET_LOSS --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.target && %t.target | FileCheck %s
+// RUN: talos -DTARGET_LOSS --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.target.bc && %t.target.bc | FileCheck %s
+// No $finish: either lifetime must remove the obsolete t101 event, not merely
+// suppress its publication when the simulator eventually reaches that time.
+// CHECK: retained source calendar 3
+
+//--- design.sv
+module leaf; logic [7:0] q = 0; endmodule
+module producer(input logic clk);
+  always @(posedge clk) top.dut.q <= #100 8'h51;
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, hold = 0;
+  leaf dut();
+  producer src(clk);
+  initial begin
+    if (!supply_on("/top/A.power") || !supply_on("/top/A.ground", 0.0) ||
+        !supply_on("/top/P.power") || !supply_on("/top/P.ground", 0.0) ||
+        !supply_on("/top/R.power") || !supply_on("/top/R.ground", 0.0)) $fatal(1, "supplies");
+    #1 clk = 1;
+    #2;
+`ifdef TARGET_LOSS
+    if (!supply_off("/top/P.power")) $fatal(1, "target loss");
+`else
+    if (!supply_off("/top/A.power")) $fatal(1, "source loss");
+`endif
+  end
+  final begin
+    if ($time != 3) $fatal(1, "obsolete retained NBA advanced time");
+    $display("retained source calendar %0d", $time);
+  end
+endmodule
+//--- design.upf
+create_supply_set A
+create_supply_set P
+create_supply_set R
+create_power_domain PD -elements dut -supply {primary P}
+create_power_domain SOURCE -elements src -supply {primary A}
+set_retention RET -domain PD -elements dut/q -retention_supply R -retention_condition hold
+//--- live.upf
+source [file join [file dirname [info script]] design.upf]
+set_retention RET -domain PD -update -parameters NO_RET_SUP_COR -use_retention_as_primary

@@ -29,11 +29,19 @@ struct RetentionLoweringOptions {
   std::function<llvm::SmallVector<upf_detail::Descriptor>(
       mlir::FlatSymbolRefAttr)>
       supplyDependencies;
-  std::function<bool(sim::SimFuncOp)> externalPoweredSource;
+};
+// Functional statement groups remain intact until all physical domain owners
+// are known. The guard owns every N/Q publication, including both NBA paths
+// for a dynamic-zero Balloon delay. Initial updates never enter this list.
+struct RetentionWrite {
+  upf_detail::Descriptor domainEpoch;
+  mlir::Operation *guard;
+  llvm::SmallVector<mlir::Operation *> enqueues;
 };
 struct RetentionLoweringResult {
   llvm::DenseSet<uint64_t> storage;
   llvm::DenseSet<mlir::Operation *> publishedProcesses;
+  llvm::SmallVector<RetentionWrite> writes;
 };
 // IEEE 1801-2018 5.7.3/5.9.3/6.50/9.7: resolve effective strategies before
 // validating their writers, then preserve separate backing and output state.

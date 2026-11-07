@@ -4,6 +4,7 @@
 #define TALOS_UPF_ORDINARYWRITES_H
 
 #include "ClockSnapshot.h"
+#include "Retention.h"
 #include "llvm/ADT/DenseSet.h"
 #include <functional>
 
@@ -25,6 +26,7 @@ struct OrdinaryWriteOptions {
   ArrayRef<sim::SimFuncOp> functions;
   const llvm::DenseSet<uint64_t> &originalStorage;
   ArrayRef<WriteDomain> domains;
+  ArrayRef<RetentionWrite> retainedWrites;
   ClockSnapshots &clocks;
   std::function<Descriptor(Location, StringRef, Type)> storage;
   std::function<sim::SimFuncOp(Location, StringRef, ArrayRef<Type>,

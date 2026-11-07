@@ -15,6 +15,7 @@ mlir::LogicalResult lowerBalloonRetention(
     const RetentionLoweringOptions &options, upf::RetentionAttr strategy,
     llvm::ArrayRef<upf::UPFSupplySetOp> primary,
     llvm::ArrayRef<upf::UPFSupplySetOp> retention,
-    llvm::ArrayRef<BalloonRegister> registers, mlir::Operation *rootBoundary);
+    llvm::ArrayRef<BalloonRegister> registers, mlir::Operation *rootBoundary,
+    llvm::SmallVectorImpl<RetentionWrite> &writes);
 } // namespace talos
 #endif

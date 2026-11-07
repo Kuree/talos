@@ -1,0 +1,9 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-retention-source-epochs.test %t
+// RUN: talos -DNO_RET --upf %t/no-ret-primary.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %S/upf-retention-source-epochs.test
+// RUN: talos -DNO_RET --upf %t/no-ret-primary.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %S/upf-retention-source-epochs.test
+// RUN: talos -DNO_RET --upf %t/no-ret-primary.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %S/upf-retention-source-epochs.test
+// RUN: talos -DNO_RET --upf %t/no-ret-primary.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %S/upf-retention-source-epochs.test
+// RUN: talos --upf %t/ret-primary.upf -O3 --mlir-verify-each %t/design.sv -o %t.ret && %t.ret | FileCheck %S/upf-retention-source-epochs.test
+// RUN: talos --upf %t/ret-primary.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.ret.bc && %t.ret.bc | FileCheck %S/upf-retention-source-epochs.test
+// Both atomic pair and independently guarded N/Q views retain source lifetime.

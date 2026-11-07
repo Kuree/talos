@@ -1,0 +1,453 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/pair.mlir --prepare-upf-snapshot-publications --elaborate-upf --prepare-upf-snapshot-publications --verify-each -o %t.pair && FileCheck %s --check-prefix=PAIR --input-file=%t.pair --implicit-check-not=__upf_retained_source
+// RUN: talos-opt %t/views.mlir --prepare-upf-snapshot-publications --elaborate-upf --prepare-upf-snapshot-publications --verify-each -o %t.views && FileCheck %s --check-prefix=VIEWS --input-file=%t.views --implicit-check-not=__upf_retained_source
+// RUN: talos-opt %t/balloon.mlir --prepare-upf-snapshot-publications --elaborate-upf --prepare-upf-snapshot-publications --verify-each -o %t.balloon && FileCheck %s --check-prefix=BALLOON --input-file=%t.balloon --implicit-check-not=__upf_retained_source
+// RUN: talos-opt %t.pair --canonicalize --cse --verify-each --canonicalize --cse --verify-each -o /dev/null
+// RUN: talos-opt %t.views --canonicalize --cse --verify-each --canonicalize --cse --verify-each -o /dev/null
+// RUN: talos-opt %t.balloon --canonicalize --cse --verify-each --canonicalize --cse --verify-each -o /dev/null
+// Functional strategy epochs already subsume destination loss. Source and
+// strategy lifetimes fit the existing slots without new predicates or state.
+// A real source publication after the outer actor gate must be seen by each
+// statement guard; capturing a fresh epoch cannot relabel an old activation.
+// PAIR-DAG: simulation.storage.decl [[SE:[0-9]+]] {{.*}}"__upf_SOURCE.epoch"
+// PAIR-DAG: simulation.storage.decl [[ST:[0-9]+]] {{.*}}"__upf_retention.D.RET.epoch"
+// PAIR-LABEL: simulation.func private @writer
+// PAIR: simulation.event.snapshot.flush {{.*}}test.source_barrier
+// PAIR: %[[CURRENT_REF:[a-zA-Z0-9_]+]] = simulation.context.storage %arg0[[[SE]]]
+// PAIR: %[[CURRENT:[a-zA-Z0-9_]+]] = simulation.ref.load %[[CURRENT_REF]]
+// PAIR: arith.cmpi eq
+// PAIR: cf.cond_br
+// PAIR-DAG: %[[FIRST:[a-zA-Z0-9_]+]] = simulation.context.storage %arg0[[[SE]]]
+// PAIR-DAG: %[[SECOND:[a-zA-Z0-9_]+]] = simulation.context.storage %arg0[[[ST]]]
+// PAIR-DAG: %[[GUARD:[a-zA-Z0-9_]+]] = simulation.observer.bind @__upf_retention.D.RET.update.allowed
+// PAIR: simulation.power.nba.enqueue {{.*}} guard %[[GUARD]] epochs(%[[FIRST]], %[[CURRENT]], %[[SECOND]],
+// PAIR: simulation.ref.store
+// PAIR-LABEL: simulation.func private @__upf_clock.55.capture(
+// PAIR-SAME: -> i132
+// PAIR-NOT: simulation.context.storage
+// PAIR: simulation.return
+// PAIR-LABEL: simulation.func private @__upf_clock.55.owner
+// PAIR: simulation.event.snapshot.register
+// PAIR-SAME: targets 6 conditions 0 edges [0] indices [-1]
+// VIEWS-DAG: simulation.storage.decl [[SE:[0-9]+]] {{.*}}"__upf_SOURCE.epoch"
+// VIEWS-DAG: simulation.storage.decl [[ST:[0-9]+]] {{.*}}"__upf_retention.D.RET.epoch"
+// VIEWS-LABEL: simulation.func private @writer
+// VIEWS: simulation.event.snapshot.flush {{.*}}test.source_barrier
+// VIEWS: %[[CURRENT_REF:[a-zA-Z0-9_]+]] = simulation.context.storage %arg0[[[SE]]]
+// VIEWS: %[[CURRENT:[a-zA-Z0-9_]+]] = simulation.ref.load %[[CURRENT_REF]]
+// VIEWS: arith.cmpi eq
+// VIEWS: cf.cond_br
+// VIEWS-DAG: %[[NFIRST:[a-zA-Z0-9_]+]] = simulation.context.storage %arg0[[[SE]]]
+// VIEWS-DAG: %[[NSECOND:[a-zA-Z0-9_]+]] = simulation.context.storage %arg0[[[ST]]]
+// VIEWS-DAG: %[[NGUARD:[a-zA-Z0-9_]+]] = simulation.observer.bind @__upf_retention.D.RET.update.allowed
+// VIEWS: simulation.power.nba.enqueue_view {{.*}} guard %[[NGUARD]] epochs(%[[NFIRST]], %[[CURRENT]], %[[NSECOND]],
+// VIEWS-DAG: %[[QFIRST:[a-zA-Z0-9_]+]] = simulation.context.storage %arg0[[[SE]]]
+// VIEWS-DAG: %[[QSECOND:[a-zA-Z0-9_]+]] = simulation.context.storage %arg0[[[ST]]]
+// VIEWS-DAG: %[[QGUARD:[a-zA-Z0-9_]+]] = simulation.observer.bind @__upf_retention.D.RET.update.output_allowed
+// VIEWS: simulation.power.nba.enqueue_view {{.*}} guard %[[QGUARD]] epochs(%[[QFIRST]], %[[CURRENT]], %[[QSECOND]],
+// VIEWS: simulation.ref.store
+// VIEWS-LABEL: simulation.func private @__upf_clock.55.capture(
+// VIEWS-SAME: -> i132
+// VIEWS-NOT: simulation.context.storage
+// VIEWS: simulation.return
+// VIEWS-LABEL: simulation.func private @__upf_clock.55.owner
+// VIEWS: simulation.event.snapshot.register
+// VIEWS-SAME: targets 6 conditions 0 edges [0] indices [-1]
+// BALLOON-DAG: simulation.storage.decl [[SE:[0-9]+]] {{.*}}"__upf_SOURCE.epoch"
+// BALLOON-DAG: simulation.storage.decl [[ST:[0-9]+]] {{.*}}"__upf_balloon.D.RET.epoch"
+// BALLOON-DAG: simulation.storage.decl [[PR:[0-9]+]] {{.*}}"__upf_balloon.D.RET.priority"
+// BALLOON-LABEL: simulation.func private @writer
+// BALLOON: simulation.event.snapshot.flush {{.*}}test.source_barrier
+// BALLOON: %[[CURRENT_REF:[a-zA-Z0-9_]+]] = simulation.context.storage %arg0[[[SE]]]
+// BALLOON: %[[CURRENT:[a-zA-Z0-9_]+]] = simulation.ref.load %[[CURRENT_REF]]
+// BALLOON: arith.cmpi eq
+// BALLOON: cf.cond_br
+// BALLOON: simulation.time.is_zero
+// BALLOON: cf.cond_br
+// BALLOON-DAG: %[[NOWFIRST:[a-zA-Z0-9_]+]] = simulation.context.storage %arg0[[[SE]]]
+// BALLOON-DAG: %[[NOWSECOND:[a-zA-Z0-9_]+]] = simulation.context.storage %arg0[[[PR]]]
+// BALLOON: simulation.power.nba.enqueue {{.*}} epochs(%[[NOWFIRST]], %[[CURRENT]], %[[NOWSECOND]],
+// BALLOON-DAG: %[[LATERFIRST:[a-zA-Z0-9_]+]] = simulation.context.storage %arg0[[[SE]]]
+// BALLOON-DAG: %[[LATERSECOND:[a-zA-Z0-9_]+]] = simulation.context.storage %arg0[[[ST]]]
+// BALLOON: simulation.power.nba.enqueue {{.*}} epochs(%[[LATERFIRST]], %[[CURRENT]], %[[LATERSECOND]],
+// BALLOON: simulation.ref.store
+// BALLOON-LABEL: simulation.func private @__upf_clock.55.capture(
+// BALLOON-SAME: -> i132
+// BALLOON-NOT: simulation.context.storage
+// BALLOON: simulation.return
+// BALLOON-LABEL: simulation.func private @__upf_clock.55.owner
+// BALLOON: simulation.event.snapshot.register
+// BALLOON-SAME: targets 6 conditions 0 edges [0] indices [-1]
+
+//--- pair.mlir
+
+#rtc = #upf.expression<[#upf.token<opcode = control, control = "top.rtc">]>
+#save = #upf.retention_trigger<control = #upf.token<opcode = control, control = "top.save">, kind = high>
+#restore = #upf.retention_trigger<control = #upf.token<opcode = control, control = "top.restore">, kind = high>
+module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu"} {
+  upf.supply @a names ["/top/A"] writable = true {initial_value = 1 : i64}
+  upf.supply @p names ["/top/P"] writable = true {initial_value = 1 : i64}
+  upf.supply @r names ["/top/R"] writable = true {initial_value = 1 : i64}
+  upf.supply @g names ["/top/G"] writable = false {always_on = true, initial_value = 1 : i64}
+  upf.supply_set @source functions {power = @a, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @SOURCE}
+  upf.supply_set @primary functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @D, associated = [@local]}
+  upf.supply_set @local functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @D, strategy = "RET", associated = [@primary]}
+  upf.supply_set @ret functions {power = @r, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @D, strategy = "RET"}
+  upf.domain @SOURCE elements ["top.src"] power @a on [] {ground = @g, primary = @source, policies = [@source]}
+  upf.domain @D elements ["top.dut"] power @p on [] {ground = @g, primary = @primary, policies = [@primary], retentions = [#upf.retention<name = "RET", scope = "top", elements = [], excluded = [], retentionSupply = @ret, primarySupply = @local, domainDefault = true, condition = #rtc>]}
+  simulation.design @source_barrier {
+    simulation.scope.decl 0 hierarchy "top"
+    simulation.scope.decl 1 parent 0 hierarchy "top.src" source_definition "producer"
+    simulation.scope.decl 2 parent 0 hierarchy "top.dut" source_definition "leaf"
+    simulation.storage.decl 0 in 2 : i8 design hierarchy "top.dut.q"
+    simulation.storage.decl 1 in 2 : i8 design hierarchy "top.dut.r"
+    simulation.storage.decl 2 in 0 : i1 design hierarchy "top.clk"
+    simulation.storage.decl 3 in 0 : i8 design hierarchy "top.outside"
+    simulation.storage.decl 4 in 0 : i1 design hierarchy "top.rtc"
+    simulation.storage.decl 5 in 0 : i1 design hierarchy "top.save"
+    simulation.storage.decl 6 in 0 : i1 design hierarchy "top.restore"
+    simulation.code_unit.decl 2 in 0 root_initializer hierarchy "top.root"
+    simulation.code_unit.decl 55 in 1 always hierarchy "top.src.writer"
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 2 : i64} {
+      %q = simulation.context.storage %ctx[0] : !simulation.ref<i8>
+      %r = simulation.context.storage %ctx[1] : !simulation.ref<i8>
+      %clk = simulation.context.storage %ctx[2] : !simulation.ref<i1>
+      %outside = simulation.context.storage %ctx[3] : !simulation.ref<i8>
+      %rtc = simulation.context.storage %ctx[4] : !simulation.ref<i1>
+      %save = simulation.context.storage %ctx[5] : !simulation.ref<i1>
+      %restore = simulation.context.storage %ctx[6] : !simulation.ref<i1>
+      %zero = arith.constant 0 : i8
+      %one = arith.constant 1 : i8
+      %false = arith.constant false
+      %true = arith.constant true
+      simulation.ref.store %zero to %q : i8, !simulation.ref<i8>
+      simulation.ref.store %zero to %r : i8, !simulation.ref<i8>
+      simulation.ref.store %zero to %outside : i8, !simulation.ref<i8>
+      simulation.ref.store %false to %clk : i1, !simulation.ref<i1>
+      simulation.ref.store %false to %rtc : i1, !simulation.ref<i1>
+      simulation.ref.store %false to %save : i1, !simulation.ref<i1>
+      simulation.ref.store %false to %restore : i1, !simulation.ref<i1>
+      %p = simulation.spawn @writer(%ctx) : !simulation.context -> !simulation.process
+      %delay = simulation.time.constant 1
+      simulation.suspend.delay %delay to ^clock
+    ^clock:
+      simulation.ref.store %true to %clk : i1, !simulation.ref<i1>
+      simulation.suspend.delay %delay to ^check
+    ^check:
+      %qv = simulation.ref.load %q : !simulation.ref<i8> -> i8
+      %rv = simulation.ref.load %r : !simulation.ref<i8> -> i8
+      %ov = simulation.ref.load %outside : !simulation.ref<i8> -> i8
+      %qok = arith.cmpi eq, %qv, %zero : i8
+      %rok = arith.cmpi eq, %rv, %zero : i8
+      %ook = arith.cmpi eq, %ov, %one : i8
+      %out = arith.constant 1 : i32
+      %fmt = simulation.bytes.constant "retained source barrier %0d %0d %0d"
+      simulation.display %ctx to %out(%fmt, %qok, %rok, %ook) newline = true radix = <decimal> flags = [0,0,0,0] : !simulation.bytes, i1, i1, i1
+      %success = arith.constant 0 : i32
+      simulation.finish %ctx, %success
+      simulation.return
+    }
+    simulation.func private @writer(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 3 : i32, code_unit_id = 55 : i64} {
+      %q = simulation.context.storage %ctx[0] : !simulation.ref<i8>
+      %r = simulation.context.storage %ctx[1] : !simulation.ref<i8>
+      %clk = simulation.context.storage %ctx[2] : !simulation.ref<i1>
+      %outside = simulation.context.storage %ctx[3] : !simulation.ref<i8>
+      %one = arith.constant 1 : i8
+      %value = arith.constant 9 : i8
+      %name = simulation.string.literal "/top/A"
+      %voltage = arith.constant 0.0 : f64
+      %off = arith.constant 0 : i32
+
+      cf.br ^wait
+    ^wait:
+      simulation.suspend.edge posedge %clk to ^body {schedule.repeating_always_wait} : !simulation.ref<i1>
+    ^body:
+      simulation.ref.store %one to %outside : i8, !simulation.ref<i8>
+      %status = simulation.supply.control %ctx %name voltage %voltage state %off
+      simulation.event.snapshot.flush %ctx {test.source_barrier}
+      simulation.nba.enqueue %value to %q  : (i8, !simulation.ref<i8>) -> ()
+      simulation.ref.store %value to %r : i8, !simulation.ref<i8>
+      cf.br ^wait
+    }
+  }
+}
+
+//--- views.mlir
+
+#rtc = #upf.expression<[#upf.token<opcode = control, control = "top.rtc">]>
+#save = #upf.retention_trigger<control = #upf.token<opcode = control, control = "top.save">, kind = high>
+#restore = #upf.retention_trigger<control = #upf.token<opcode = control, control = "top.restore">, kind = high>
+module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu"} {
+  upf.supply @a names ["/top/A"] writable = true {initial_value = 1 : i64}
+  upf.supply @p names ["/top/P"] writable = true {initial_value = 1 : i64}
+  upf.supply @r names ["/top/R"] writable = true {initial_value = 1 : i64}
+  upf.supply @g names ["/top/G"] writable = false {always_on = true, initial_value = 1 : i64}
+  upf.supply_set @source functions {power = @a, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @SOURCE}
+  upf.supply_set @primary functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @D, associated = [@local]}
+  upf.supply_set @local functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @D, strategy = "RET", associated = [@primary]}
+  upf.supply_set @ret functions {power = @r, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @D, strategy = "RET"}
+  upf.domain @SOURCE elements ["top.src"] power @a on [] {ground = @g, primary = @source, policies = [@source]}
+  upf.domain @D elements ["top.dut"] power @p on [] {ground = @g, primary = @primary, policies = [@primary], retentions = [#upf.retention<name = "RET", scope = "top", elements = [], excluded = [], retentionSupply = @ret, primarySupply = @local, domainDefault = true, condition = #rtc, retentionSupplyCorrupt = false, useRetentionAsPrimary = true>]}
+  simulation.design @source_barrier {
+    simulation.scope.decl 0 hierarchy "top"
+    simulation.scope.decl 1 parent 0 hierarchy "top.src" source_definition "producer"
+    simulation.scope.decl 2 parent 0 hierarchy "top.dut" source_definition "leaf"
+    simulation.storage.decl 0 in 2 : i8 design hierarchy "top.dut.q"
+    simulation.storage.decl 1 in 2 : i8 design hierarchy "top.dut.r"
+    simulation.storage.decl 2 in 0 : i1 design hierarchy "top.clk"
+    simulation.storage.decl 3 in 0 : i8 design hierarchy "top.outside"
+    simulation.storage.decl 4 in 0 : i1 design hierarchy "top.rtc"
+    simulation.storage.decl 5 in 0 : i1 design hierarchy "top.save"
+    simulation.storage.decl 6 in 0 : i1 design hierarchy "top.restore"
+    simulation.code_unit.decl 2 in 0 root_initializer hierarchy "top.root"
+    simulation.code_unit.decl 55 in 1 always hierarchy "top.src.writer"
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 2 : i64} {
+      %q = simulation.context.storage %ctx[0] : !simulation.ref<i8>
+      %r = simulation.context.storage %ctx[1] : !simulation.ref<i8>
+      %clk = simulation.context.storage %ctx[2] : !simulation.ref<i1>
+      %outside = simulation.context.storage %ctx[3] : !simulation.ref<i8>
+      %rtc = simulation.context.storage %ctx[4] : !simulation.ref<i1>
+      %save = simulation.context.storage %ctx[5] : !simulation.ref<i1>
+      %restore = simulation.context.storage %ctx[6] : !simulation.ref<i1>
+      %zero = arith.constant 0 : i8
+      %one = arith.constant 1 : i8
+      %false = arith.constant false
+      %true = arith.constant true
+      simulation.ref.store %zero to %q : i8, !simulation.ref<i8>
+      simulation.ref.store %zero to %r : i8, !simulation.ref<i8>
+      simulation.ref.store %zero to %outside : i8, !simulation.ref<i8>
+      simulation.ref.store %false to %clk : i1, !simulation.ref<i1>
+      simulation.ref.store %false to %rtc : i1, !simulation.ref<i1>
+      simulation.ref.store %false to %save : i1, !simulation.ref<i1>
+      simulation.ref.store %false to %restore : i1, !simulation.ref<i1>
+      %p = simulation.spawn @writer(%ctx) : !simulation.context -> !simulation.process
+      %delay = simulation.time.constant 1
+      simulation.suspend.delay %delay to ^clock
+    ^clock:
+      simulation.ref.store %true to %clk : i1, !simulation.ref<i1>
+      simulation.suspend.delay %delay to ^check
+    ^check:
+      %qv = simulation.ref.load %q : !simulation.ref<i8> -> i8
+      %rv = simulation.ref.load %r : !simulation.ref<i8> -> i8
+      %ov = simulation.ref.load %outside : !simulation.ref<i8> -> i8
+      %qok = arith.cmpi eq, %qv, %zero : i8
+      %rok = arith.cmpi eq, %rv, %zero : i8
+      %ook = arith.cmpi eq, %ov, %one : i8
+      %out = arith.constant 1 : i32
+      %fmt = simulation.bytes.constant "retained source barrier %0d %0d %0d"
+      simulation.display %ctx to %out(%fmt, %qok, %rok, %ook) newline = true radix = <decimal> flags = [0,0,0,0] : !simulation.bytes, i1, i1, i1
+      %success = arith.constant 0 : i32
+      simulation.finish %ctx, %success
+      simulation.return
+    }
+    simulation.func private @writer(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 3 : i32, code_unit_id = 55 : i64} {
+      %q = simulation.context.storage %ctx[0] : !simulation.ref<i8>
+      %r = simulation.context.storage %ctx[1] : !simulation.ref<i8>
+      %clk = simulation.context.storage %ctx[2] : !simulation.ref<i1>
+      %outside = simulation.context.storage %ctx[3] : !simulation.ref<i8>
+      %one = arith.constant 1 : i8
+      %value = arith.constant 9 : i8
+      %name = simulation.string.literal "/top/A"
+      %voltage = arith.constant 0.0 : f64
+      %off = arith.constant 0 : i32
+
+      cf.br ^wait
+    ^wait:
+      simulation.suspend.edge posedge %clk to ^body {schedule.repeating_always_wait} : !simulation.ref<i1>
+    ^body:
+      simulation.ref.store %one to %outside : i8, !simulation.ref<i8>
+      %status = simulation.supply.control %ctx %name voltage %voltage state %off
+      simulation.event.snapshot.flush %ctx {test.source_barrier}
+      simulation.nba.enqueue %value to %q  : (i8, !simulation.ref<i8>) -> ()
+      simulation.ref.store %value to %r : i8, !simulation.ref<i8>
+      cf.br ^wait
+    }
+  }
+}
+
+//--- balloon.mlir
+
+#rtc = #upf.expression<[#upf.token<opcode = control, control = "top.rtc">]>
+#save = #upf.retention_trigger<control = #upf.token<opcode = control, control = "top.save">, kind = high>
+#restore = #upf.retention_trigger<control = #upf.token<opcode = control, control = "top.restore">, kind = high>
+module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu"} {
+  upf.supply @a names ["/top/A"] writable = true {initial_value = 1 : i64}
+  upf.supply @p names ["/top/P"] writable = true {initial_value = 1 : i64}
+  upf.supply @r names ["/top/R"] writable = true {initial_value = 1 : i64}
+  upf.supply @g names ["/top/G"] writable = false {always_on = true, initial_value = 1 : i64}
+  upf.supply_set @source functions {power = @a, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @SOURCE}
+  upf.supply_set @primary functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @D, associated = [@local]}
+  upf.supply_set @local functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @D, strategy = "RET", associated = [@primary]}
+  upf.supply_set @ret functions {power = @r, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @D, strategy = "RET"}
+  upf.domain @SOURCE elements ["top.src"] power @a on [] {ground = @g, primary = @source, policies = [@source]}
+  upf.domain @D elements ["top.dut"] power @p on [] {ground = @g, primary = @primary, policies = [@primary], retentions = [#upf.retention<name = "RET", scope = "top", elements = [], excluded = [], retentionSupply = @ret, primarySupply = @local, domainDefault = true, save = #save, restore = #restore>]}
+  simulation.design @source_barrier {
+    simulation.scope.decl 0 hierarchy "top"
+    simulation.scope.decl 1 parent 0 hierarchy "top.src" source_definition "producer"
+    simulation.scope.decl 2 parent 0 hierarchy "top.dut" source_definition "leaf"
+    simulation.storage.decl 0 in 2 : i8 design hierarchy "top.dut.q"
+    simulation.storage.decl 1 in 2 : i8 design hierarchy "top.dut.r"
+    simulation.storage.decl 2 in 0 : i1 design hierarchy "top.clk"
+    simulation.storage.decl 3 in 0 : i8 design hierarchy "top.outside"
+    simulation.storage.decl 4 in 0 : i1 design hierarchy "top.rtc"
+    simulation.storage.decl 5 in 0 : i1 design hierarchy "top.save"
+    simulation.storage.decl 6 in 0 : i1 design hierarchy "top.restore"
+    simulation.code_unit.decl 2 in 0 root_initializer hierarchy "top.root"
+    simulation.code_unit.decl 55 in 1 always hierarchy "top.src.writer"
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 2 : i64} {
+      %q = simulation.context.storage %ctx[0] : !simulation.ref<i8>
+      %r = simulation.context.storage %ctx[1] : !simulation.ref<i8>
+      %clk = simulation.context.storage %ctx[2] : !simulation.ref<i1>
+      %outside = simulation.context.storage %ctx[3] : !simulation.ref<i8>
+      %rtc = simulation.context.storage %ctx[4] : !simulation.ref<i1>
+      %save = simulation.context.storage %ctx[5] : !simulation.ref<i1>
+      %restore = simulation.context.storage %ctx[6] : !simulation.ref<i1>
+      %zero = arith.constant 0 : i8
+      %one = arith.constant 1 : i8
+      %false = arith.constant false
+      %true = arith.constant true
+      simulation.ref.store %zero to %q : i8, !simulation.ref<i8>
+      simulation.ref.store %zero to %r : i8, !simulation.ref<i8>
+      simulation.ref.store %zero to %outside : i8, !simulation.ref<i8>
+      simulation.ref.store %false to %clk : i1, !simulation.ref<i1>
+      simulation.ref.store %false to %rtc : i1, !simulation.ref<i1>
+      simulation.ref.store %false to %save : i1, !simulation.ref<i1>
+      simulation.ref.store %false to %restore : i1, !simulation.ref<i1>
+      %p = simulation.spawn @writer(%ctx) : !simulation.context -> !simulation.process
+      %delay = simulation.time.constant 1
+      simulation.suspend.delay %delay to ^clock
+    ^clock:
+      simulation.ref.store %true to %clk : i1, !simulation.ref<i1>
+      simulation.suspend.delay %delay to ^check
+    ^check:
+      %qv = simulation.ref.load %q : !simulation.ref<i8> -> i8
+      %rv = simulation.ref.load %r : !simulation.ref<i8> -> i8
+      %ov = simulation.ref.load %outside : !simulation.ref<i8> -> i8
+      %qok = arith.cmpi eq, %qv, %zero : i8
+      %rok = arith.cmpi eq, %rv, %zero : i8
+      %ook = arith.cmpi eq, %ov, %one : i8
+      %out = arith.constant 1 : i32
+      %fmt = simulation.bytes.constant "retained source barrier %0d %0d %0d"
+      simulation.display %ctx to %out(%fmt, %qok, %rok, %ook) newline = true radix = <decimal> flags = [0,0,0,0] : !simulation.bytes, i1, i1, i1
+      %success = arith.constant 0 : i32
+      simulation.finish %ctx, %success
+      simulation.return
+    }
+    simulation.func private @writer(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 3 : i32, code_unit_id = 55 : i64} {
+      %q = simulation.context.storage %ctx[0] : !simulation.ref<i8>
+      %r = simulation.context.storage %ctx[1] : !simulation.ref<i8>
+      %clk = simulation.context.storage %ctx[2] : !simulation.ref<i1>
+      %outside = simulation.context.storage %ctx[3] : !simulation.ref<i8>
+      %one = arith.constant 1 : i8
+      %value = arith.constant 9 : i8
+      %name = simulation.string.literal "/top/A"
+      %voltage = arith.constant 0.0 : f64
+      %off = arith.constant 0 : i32
+      %zero_delay = simulation.time.constant 0
+      cf.br ^wait
+    ^wait:
+      simulation.suspend.edge posedge %clk to ^body {schedule.repeating_always_wait} : !simulation.ref<i1>
+    ^body:
+      simulation.ref.store %one to %outside : i8, !simulation.ref<i8>
+      %status = simulation.supply.control %ctx %name voltage %voltage state %off
+      simulation.event.snapshot.flush %ctx {test.source_barrier}
+      simulation.nba.enqueue %value to %q after %zero_delay : (i8, !simulation.ref<i8>, !simulation.time) -> ()
+      simulation.ref.store %value to %r : i8, !simulation.ref<i8>
+      cf.br ^wait
+    }
+  }
+}
+
+//--- benign.mlir
+
+#rtc = #upf.expression<[#upf.token<opcode = control, control = "top.rtc">]>
+#save = #upf.retention_trigger<control = #upf.token<opcode = control, control = "top.save">, kind = high>
+#restore = #upf.retention_trigger<control = #upf.token<opcode = control, control = "top.restore">, kind = high>
+module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu"} {
+  upf.supply @a names ["/top/A"] writable = true {initial_value = 1 : i64}
+  upf.supply @p names ["/top/P"] writable = true {initial_value = 1 : i64}
+  upf.supply @r names ["/top/R"] writable = true {initial_value = 1 : i64}
+  upf.supply @g names ["/top/G"] writable = false {always_on = true, initial_value = 1 : i64}
+  upf.supply_set @source functions {power = @a, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @SOURCE}
+  upf.supply_set @primary functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @D, associated = [@local]}
+  upf.supply_set @local functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @D, strategy = "RET", associated = [@primary]}
+  upf.supply_set @ret functions {power = @r, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @D, strategy = "RET"}
+  upf.domain @SOURCE elements ["top.src"] power @a on [] {ground = @g, primary = @source, policies = [@source]}
+  upf.domain @D elements ["top.dut"] power @p on [] {ground = @g, primary = @primary, policies = [@primary], retentions = [#upf.retention<name = "RET", scope = "top", elements = [], excluded = [], retentionSupply = @ret, primarySupply = @local, domainDefault = true, condition = #rtc>]}
+  simulation.design @source_barrier {
+    simulation.scope.decl 0 hierarchy "top"
+    simulation.scope.decl 1 parent 0 hierarchy "top.src" source_definition "producer"
+    simulation.scope.decl 2 parent 0 hierarchy "top.dut" source_definition "leaf"
+    simulation.storage.decl 0 in 2 : i8 design hierarchy "top.dut.q"
+    simulation.storage.decl 1 in 2 : i8 design hierarchy "top.dut.r"
+    simulation.storage.decl 2 in 0 : i1 design hierarchy "top.clk"
+    simulation.storage.decl 3 in 0 : i8 design hierarchy "top.outside"
+    simulation.storage.decl 4 in 0 : i1 design hierarchy "top.rtc"
+    simulation.storage.decl 5 in 0 : i1 design hierarchy "top.save"
+    simulation.storage.decl 6 in 0 : i1 design hierarchy "top.restore"
+    simulation.code_unit.decl 2 in 0 root_initializer hierarchy "top.root"
+    simulation.code_unit.decl 55 in 1 always hierarchy "top.src.writer"
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 2 : i64} {
+      %q = simulation.context.storage %ctx[0] : !simulation.ref<i8>
+      %r = simulation.context.storage %ctx[1] : !simulation.ref<i8>
+      %clk = simulation.context.storage %ctx[2] : !simulation.ref<i1>
+      %outside = simulation.context.storage %ctx[3] : !simulation.ref<i8>
+      %rtc = simulation.context.storage %ctx[4] : !simulation.ref<i1>
+      %save = simulation.context.storage %ctx[5] : !simulation.ref<i1>
+      %restore = simulation.context.storage %ctx[6] : !simulation.ref<i1>
+      %zero = arith.constant 0 : i8
+      %one = arith.constant 1 : i8
+      %expected = arith.constant 9 : i8
+      %false = arith.constant false
+      %true = arith.constant true
+      simulation.ref.store %zero to %q : i8, !simulation.ref<i8>
+      simulation.ref.store %zero to %r : i8, !simulation.ref<i8>
+      simulation.ref.store %zero to %outside : i8, !simulation.ref<i8>
+      simulation.ref.store %false to %clk : i1, !simulation.ref<i1>
+      simulation.ref.store %false to %rtc : i1, !simulation.ref<i1>
+      simulation.ref.store %false to %save : i1, !simulation.ref<i1>
+      simulation.ref.store %false to %restore : i1, !simulation.ref<i1>
+      %p = simulation.spawn @writer(%ctx) : !simulation.context -> !simulation.process
+      %delay = simulation.time.constant 1
+      simulation.suspend.delay %delay to ^clock
+    ^clock:
+      simulation.ref.store %true to %clk : i1, !simulation.ref<i1>
+      simulation.suspend.delay %delay to ^check
+    ^check:
+      %qv = simulation.ref.load %q : !simulation.ref<i8> -> i8
+      %rv = simulation.ref.load %r : !simulation.ref<i8> -> i8
+      %ov = simulation.ref.load %outside : !simulation.ref<i8> -> i8
+      %qok = arith.cmpi eq, %qv, %expected : i8
+      %rok = arith.cmpi eq, %rv, %expected : i8
+      %ook = arith.cmpi eq, %ov, %one : i8
+      %out = arith.constant 1 : i32
+      %fmt = simulation.bytes.constant "retained source barrier %0d %0d %0d"
+      simulation.display %ctx to %out(%fmt, %qok, %rok, %ook) newline = true radix = <decimal> flags = [0,0,0,0] : !simulation.bytes, i1, i1, i1
+      %success = arith.constant 0 : i32
+      simulation.finish %ctx, %success
+      simulation.return
+    }
+    simulation.func private @writer(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 3 : i32, code_unit_id = 55 : i64} {
+      %q = simulation.context.storage %ctx[0] : !simulation.ref<i8>
+      %r = simulation.context.storage %ctx[1] : !simulation.ref<i8>
+      %clk = simulation.context.storage %ctx[2] : !simulation.ref<i1>
+      %outside = simulation.context.storage %ctx[3] : !simulation.ref<i8>
+      %one = arith.constant 1 : i8
+      %value = arith.constant 9 : i8
+      %name = simulation.string.literal "/top/A"
+      %voltage = arith.constant 1.0 : f64
+      %on = arith.constant 1 : i32
+
+      cf.br ^wait
+    ^wait:
+      simulation.suspend.edge posedge %clk to ^body {schedule.repeating_always_wait} : !simulation.ref<i1>
+    ^body:
+      simulation.ref.store %one to %outside : i8, !simulation.ref<i8>
+      %status = simulation.supply.control %ctx %name voltage %voltage state %on
+      simulation.event.snapshot.flush %ctx {test.source_barrier}
+      simulation.nba.enqueue %value to %q  : (i8, !simulation.ref<i8>) -> ()
+      simulation.ref.store %value to %r : i8, !simulation.ref<i8>
+      cf.br ^wait
+    }
+  }
+}

@@ -1,0 +1,8 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-retention-source-epochs.test %t
+// RUN: talos -DNO_RET --upf %t/no-ret-primary.upf --target=wasm32 -O0 --mlir-verify-each -c %t/design.sv -o %t.o0
+// RUN: talos -DNO_RET --upf %t/no-ret-primary.upf --target=wasm32 -O3 --mlir-verify-each -c %t/design.sv -o %t.o3
+// RUN: talos -DNO_RET --upf %t/no-ret-primary.upf --target=wasm32 -O0 --execution-tier=bytecode --mlir-verify-each -c %t/design.sv -o %t.bc0
+// RUN: talos -DNO_RET --upf %t/no-ret-primary.upf --target=wasm32 -O3 --execution-tier=bytecode --mlir-verify-each -c %t/design.sv -o %t.bc3
+// RUN: %llvm_dist/bin/llvm-readobj --file-headers %t.o0 %t.o3 %t.bc0 %t.bc3 | FileCheck %s
+// CHECK-COUNT-4: AddressSize: 32bit

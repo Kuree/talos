@@ -1,0 +1,71 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/switched.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/switched.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/switched.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/switched.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// RUN: talos --upf %t/peers.upf -O3 --mlir-verify-each %t/design.sv -o %t.peers && %t.peers | FileCheck %s
+// RUN: talos --upf %t/peers.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.peers.bc && %t.peers.bc | FileCheck %s
+// External producers receive powered Q, not hidden N (1801 4.4.3/6.50).
+// This remains true for peers sharing a power domain and for one evaluated
+// value used as both feedback data and an unrelated output. Helpers read Q too.
+// CHECK: retained external Q readback passed
+
+//--- design.sv
+module leaf; logic [7:0] q = 0; endmodule
+module producer(input logic clk);
+  logic [7:0] captured;
+  if (1) begin : generated
+  always @(posedge clk) begin : writer
+    captured = top.dut.q;
+    top.dut.q <= top.feedback ? captured + 1 : top.d;
+    top.seen <= captured;
+    top.helper_seen <= top.read_q();
+  end
+  end
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, hold = 0, feedback = 0;
+  logic [7:0] d = 8'h11, seen, helper_seen;
+  leaf dut();
+  producer src(clk);
+  function automatic logic [7:0] read_q(); return dut.q; endfunction
+  initial begin
+    if (!supply_on("/top/A.power") || !supply_on("/top/A.ground", 0.0) ||
+        !supply_on("/top/P.power") || !supply_on("/top/P.ground", 0.0) ||
+        !supply_on("/top/R.power") || !supply_on("/top/R.ground", 0.0)) $fatal(1, "supplies");
+    #1 clk = 1; #1 clk = 0;
+    if (dut.q !== d) $fatal(1, "seed");
+    if (!supply_off("/top/R.power")) $fatal(1, "RET off");
+    d = 8'h22; #1 clk = 1; #1 clk = 0;
+    if (dut.q !== 'x || seen !== 'x || helper_seen !== 'x) $fatal(1, "external consumer leaked N");
+    if (!supply_on("/top/R.power")) $fatal(1, "RET on");
+    #1;
+    if (dut.q !== d) $fatal(1, "normal data was not written behind masked Q");
+    feedback = 1;
+    if (!supply_off("/top/R.power")) $fatal(1, "RET off for feedback");
+    #1 clk = 1; #1 clk = 0;
+    if (!supply_on("/top/R.power")) $fatal(1, "RET restore for feedback");
+    #1;
+    if (dut.q !== 'x || seen !== 'x || helper_seen !== 'x) $fatal(1, "external feedback bypassed powered Q");
+    $display("retained external Q readback passed"); $finish;
+  end
+endmodule
+//--- common.upf
+create_supply_set A
+create_supply_set P
+create_supply_set R
+//--- switched.upf
+source [file join [file dirname [info script]] common.upf]
+create_power_domain SOURCE -elements src -supply {primary A}
+create_power_domain PD -elements dut -supply {primary P}
+set_retention RET -domain PD -elements dut/q -retention_supply R -retention_condition hold -parameters NO_RET_SUP_COR -use_retention_as_primary
+//--- peers.upf
+source [file join [file dirname [info script]] common.upf]
+create_power_domain PD -elements {src dut} -supply {primary P}
+set_retention RET -domain PD -elements dut/q -retention_supply R -retention_condition hold -parameters NO_RET_SUP_COR -use_retention_as_primary
+//--- aon.upf
+source [file join [file dirname [info script]] common.upf]
+create_power_domain PD -elements dut -supply {primary P}
+set_retention RET -domain PD -elements dut/q -retention_supply R -retention_condition hold -parameters NO_RET_SUP_COR -use_retention_as_primary

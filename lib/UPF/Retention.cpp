@@ -52,6 +52,8 @@ struct Lowering {
   SmallVector<Register> registers;
   SmallVector<Strategy, 0> strategies;
   llvm::DenseMap<uint64_t, sim::SimScopeDeclOp> scopes;
+  llvm::DenseMap<uint64_t, uint64_t> unitScopes;
+  llvm::DenseMap<uint64_t, uint64_t> instanceOwners;
   llvm::DenseMap<Operation *, bool> startupCache, edgeCache;
   llvm::DenseSet<Operation *> initializers;
   std::map<std::pair<Operation *, uint64_t>, bool> completeCache;
@@ -62,6 +64,8 @@ struct Lowering {
         references(this->o.design) {
     for (auto scope : this->o.design.getOps<sim::SimScopeDeclOp>())
       scopes[scope.getId()] = scope;
+    for (auto unit : this->o.design.getOps<sim::SimCodeUnitDeclOp>())
+      unitScopes[unit.getId()] = unit.getScopeId();
     for (auto port : this->o.design.getOps<sim::SimPortDeclOp>())
       if (!port.getSourceIsNet())
         aliases[port.getSourceId()].push_back(port);
@@ -86,14 +90,21 @@ struct Lowering {
   uint64_t owner(uint64_t scope) {
     llvm::DenseSet<uint64_t> seen;
     while (seen.insert(scope).second) {
+      if (auto known = instanceOwners.find(scope);
+          known != instanceOwners.end()) {
+        scope = known->second;
+        break;
+      }
       auto declaration = scopes.lookup(scope);
       if (!declaration || declaration.getDefinitionName() ||
           declaration.getVpiDefinitionAttr() || declaration.getInterfaceType())
-        return scope;
+        break;
       if (!declaration.getParent())
-        return scope;
+        break;
       scope = *declaration.getParent();
     }
+    for (auto visited : seen)
+      instanceOwners[visited] = scope;
     return scope;
   }
   unsigned rank(upf::RetentionAttr strategy, Register &reg, bool &partial) {
@@ -524,10 +535,6 @@ struct Lowering {
                 "nonblocking retention initialization is not implemented");
           continue;
         }
-        if (o.externalPoweredSource(fn))
-          return op->emitError(
-              "retention from another switched producer requires "
-              "source/strategy epoch composition and is not implemented");
         if (!edgeWriter(fn))
           return op->emitError(
               "retention requires one top-level edge-sensitive event control; "
@@ -1016,6 +1023,20 @@ struct Lowering {
           (startup(fn) && fn.getEntryKind() != sim::EntryKind::Initial) ||
           !seen.insert(fn).second)
         continue;
+      if (!startup(fn)) {
+        auto id = fn.getCodeUnitId();
+        auto unit = id ? unitScopes.find(*id) : unitScopes.end();
+        auto scope = unit == unitScopes.end() ? sim::SimScopeDeclOp{}
+                                              : scopes.lookup(unit->second);
+        if (!scope)
+          return fn.emitError("retention writer has no resolved owning scope");
+        // An external producer receives the powered Q output (4.4.3/6.50),
+        // even when its data input feeds this register. It must not observe
+        // hidden N in either feedback or neighboring expressions. Keep the
+        // local inferred-model and Initial own-read interpretations separate.
+        if (owner(scope.getId()) != owner(reg.declaration.getScopeId()))
+          continue;
+      }
       if (failed(validateRetentionReadbackHelpers(
               fn, reg.visible.id, "retention-powered normal-state readback")))
         return failure();
@@ -1036,20 +1057,23 @@ struct Lowering {
     }
     return success();
   }
-  void guard(Operation *op, Value valid, llvm::function_ref<void()> emit) {
+  Operation *guard(Operation *op, Value valid,
+                   llvm::function_ref<void()> emit) {
     Location loc = op->getLoc();
     auto *before = op->getBlock();
     auto *execute = before->splitBlock(Block::iterator(op));
     auto *next = execute->splitBlock(std::next(execute->begin()));
     b.setInsertionPointToEnd(before);
-    cf::CondBranchOp::create(b, loc, valid, execute, next);
+    auto branch = cf::CondBranchOp::create(b, loc, valid, execute, next);
     b.setInsertionPoint(op);
     emit();
     b.setInsertionPointToEnd(execute);
     cf::BranchOp::create(b, loc, next);
+    return branch;
   }
   void enqueue(Strategy &s, Register &reg, Location loc, Value ctx, Value value,
-               Value domainEpoch, Value strategyEpoch, Value delay) {
+               Value domainEpoch, Value strategyEpoch, Value delay,
+               SmallVectorImpl<Operation *> &enqueues) {
     SmallVector<Value> dependencies;
     for (auto descriptor : s.dependencies)
       dependencies.push_back(handle(b, loc, ctx, descriptor));
@@ -1064,10 +1088,10 @@ struct Lowering {
       Value width = arith::ConstantIntOp::create(
           b, loc, *sim::getPackedWidth(reg.backing.type), 64);
       auto issue = [&](Descriptor target, Value guard) {
-        sim::SimPowerNBAViewOp::create(
+        enqueues.push_back(sim::SimPowerNBAViewOp::create(
             b, loc, ctx, value, handle(b, loc, ctx, target), zero, zero, width,
             bit(loc, true), guard, handle(b, loc, ctx, o.domainEpoch),
-            domainEpoch, handle(b, loc, ctx, s.epoch), strategyEpoch, delay);
+            domainEpoch, handle(b, loc, ctx, s.epoch), strategyEpoch, delay));
       };
       issue(reg.backing, predicate);
       Value output = sim::SimObserverBindOp::create(
@@ -1075,22 +1099,23 @@ struct Lowering {
           s.outputPredicate.getSymNameAttr(), dependencies, uint32_t{0});
       issue(reg.visible, output);
     } else {
-      sim::SimPowerNBAOp::create(
+      enqueues.push_back(sim::SimPowerNBAOp::create(
           b, loc, ctx, value, handle(b, loc, ctx, reg.backing),
           handle(b, loc, ctx, reg.visible), predicate,
           handle(b, loc, ctx, o.domainEpoch), domainEpoch,
-          handle(b, loc, ctx, s.epoch), strategyEpoch, delay);
+          handle(b, loc, ctx, s.epoch), strategyEpoch, delay));
     }
   }
   void nba(Strategy &s, Register &reg, sim::SimNBAEnqueueOp op,
-           Value domainEpoch, Value strategyEpoch) {
+           Value domainEpoch, Value strategyEpoch,
+           SmallVectorImpl<Operation *> &enqueues) {
     Location loc = op.getLoc();
     auto fn = op->getParentOfType<sim::SimFuncOp>();
     // IEEE 1800-2023 4.6(b)/10.4.2: queue at the original statement. A
     // detached helper would reorder delayed writes by helper identity and
     // defer a dynamic zero delay to Inactive instead of enqueueing now.
     enqueue(s, reg, loc, fn.getArgument(0), op.getValue(), domainEpoch,
-            strategyEpoch, op.getDelay());
+            strategyEpoch, op.getDelay(), enqueues);
     op.erase();
   }
   LogicalResult lower() {
@@ -1124,7 +1149,8 @@ struct Lowering {
                 op->getParentOfType<sim::SimFuncOp>().getOperation());
         }
         if (failed(lowerBalloonRetention(o, s.attribute, s.primary, s.retention,
-                                         selected, rootBoundary)))
+                                         selected, rootBoundary,
+                                         result.writes)))
           return failure();
         continue;
       }
@@ -1230,7 +1256,8 @@ struct Lowering {
                   b, op->getLoc(), sameEpoch,
                   load(b, op->getLoc(),
                        handle(b, op->getLoc(), context, clock.valid))));
-          guard(op, valid, [&] {
+          SmallVector<Operation *> enqueues;
+          auto *branch = guard(op, valid, [&] {
             if (auto write = dyn_cast<sim::SimRefStoreOp>(op)) {
               // Preserve visible RHS/program order; mirror only this value.
               store(b, op->getLoc(),
@@ -1243,9 +1270,10 @@ struct Lowering {
                     corrupt(b, op->getLoc(), write.getValue().getType())));
             } else {
               auto enqueue = cast<sim::SimNBAEnqueueOp>(op);
-              nba(s, *reg, enqueue, domainSnapshot, strategySnapshot);
+              nba(s, *reg, enqueue, domainSnapshot, strategySnapshot, enqueues);
             }
           });
+          result.writes.push_back({o.domainEpoch, branch, std::move(enqueues)});
         }
     }
     return success();

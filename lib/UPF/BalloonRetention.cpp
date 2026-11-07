@@ -42,6 +42,7 @@ struct BalloonLowering {
   ArrayRef<upf::UPFSupplySetOp> primarySets, retentionSets;
   ArrayRef<BalloonRegister> registers;
   Operation *rootBoundary;
+  SmallVectorImpl<RetentionWrite> &writes;
   OpBuilder b;
   Location loc;
   std::string name;
@@ -55,10 +56,12 @@ struct BalloonLowering {
                   upf::RetentionAttr strategy,
                   ArrayRef<upf::UPFSupplySetOp> primary,
                   ArrayRef<upf::UPFSupplySetOp> retention,
-                  ArrayRef<BalloonRegister> registers, Operation *rootBoundary)
+                  ArrayRef<BalloonRegister> registers, Operation *rootBoundary,
+                  SmallVectorImpl<RetentionWrite> &writes)
       : o(o), strategy(strategy), primarySets(primary),
         retentionSets(retention), registers(registers),
-        rootBoundary(rootBoundary), b(this->o.design.getContext()),
+        rootBoundary(rootBoundary), writes(writes),
+        b(this->o.design.getContext()),
         loc(strategy.getDeclaration() ? Location(strategy.getDeclaration())
                                       : this->o.domain.getLoc()),
         name("__upf_balloon." + this->o.domain.getSymName().str() + "." +
@@ -335,16 +338,18 @@ struct BalloonLowering {
     return registerSnapshot(".policy", *primaryCallback, *sampler, targets);
   }
 
-  void guard(Operation *op, Value valid, llvm::function_ref<void()> body) {
+  Operation *guard(Operation *op, Value valid,
+                   llvm::function_ref<void()> body) {
     auto *before = op->getBlock();
     auto *execute = before->splitBlock(Block::iterator(op));
     auto *next = execute->splitBlock(std::next(execute->begin()));
     b.setInsertionPointToEnd(before);
-    cf::CondBranchOp::create(b, loc, valid, execute, next);
+    auto branch = cf::CondBranchOp::create(b, loc, valid, execute, next);
     b.setInsertionPoint(op);
     body();
     b.setInsertionPointToEnd(b.getInsertionBlock());
     cf::BranchOp::create(b, loc, next);
+    return branch;
   }
   Value viewRoot(Value value) {
     while (auto view = value.getDefiningOp<ViewLikeOpInterface>())
@@ -551,7 +556,8 @@ struct BalloonLowering {
             priority = read(ctx, priorityEpoch);
           domain = read(ctx, o.domainEpoch);
         }
-        guard(op, valid, [&] {
+        SmallVector<Operation *> enqueues;
+        auto *branch = guard(op, valid, [&] {
           if (auto write = dyn_cast<sim::SimRefStoreOp>(op))
             this->write(ctx, state.normal, write.getValue());
           else {
@@ -563,12 +569,12 @@ struct BalloonLowering {
                 b, loc, sim::ObserverType::get(b.getContext(), b.getI1Type()),
                 nbaPredicate.getSymNameAttr(), watched, 0);
             auto issue = [&](Descriptor epoch, Value captured) {
-              sim::SimPowerNBAOp::create(
+              enqueues.push_back(sim::SimPowerNBAOp::create(
                   b, loc, ctx, enqueue.getValue(),
                   handle(b, loc, ctx, state.normal),
                   handle(b, loc, ctx, state.visible), predicate,
                   handle(b, loc, ctx, o.domainEpoch), domain,
-                  handle(b, loc, ctx, epoch), captured, enqueue.getDelay());
+                  handle(b, loc, ctx, epoch), captured, enqueue.getDelay()));
             };
             // Carry level-restore priority through a current-step NBA as
             // well as its clock activation (6.50, LRM 4.9.4/10.4.2). Future
@@ -600,6 +606,7 @@ struct BalloonLowering {
             enqueue.erase();
           }
         });
+        writes.push_back({o.domainEpoch, branch, std::move(enqueues)});
       }
     }
     return success();
@@ -612,9 +619,10 @@ LogicalResult lowerBalloonRetention(const RetentionLoweringOptions &options,
                                     ArrayRef<upf::UPFSupplySetOp> primary,
                                     ArrayRef<upf::UPFSupplySetOp> retention,
                                     ArrayRef<BalloonRegister> registers,
-                                    Operation *rootBoundary) {
+                                    Operation *rootBoundary,
+                                    SmallVectorImpl<RetentionWrite> &writes) {
   return BalloonLowering(options, strategy, primary, retention, registers,
-                         rootBoundary)
+                         rootBoundary, writes)
       .run();
 }
 } // namespace talos

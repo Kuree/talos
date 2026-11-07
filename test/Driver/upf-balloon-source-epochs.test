@@ -1,0 +1,113 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/reverse.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/reverse.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// RUN: talos -DNO_RET --upf %t/no-ret.upf -O3 --mlir-verify-each %t/design.sv -o %t.no-ret && %t.no-ret | FileCheck %s
+// RUN: talos -DNO_RET --upf %t/no-ret.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.no-ret.bc && %t.no-ret.bc | FileCheck %s
+// Producer lifetime occupies the first existing slot. Both Balloon priority
+// and destructive slots still cover destination loss, with their different
+// zero/future-delay restore behavior intact (1801 6.50/9.5.3/9.7.3).
+// Save/restore belongs to the target, independently of producer power.
+// CHECK: balloon source epochs passed
+
+//--- design.sv
+module leaf; logic [7:0] q = 0, r = 0, plain = 0; endmodule
+module producer;
+  always @(posedge top.clk) begin
+    top.calls++;
+    top.dut.q <= #(top.ticks) top.d;
+    top.dut.r = top.d;
+    top.dut.plain <= #(top.ticks) top.d;
+    top.outside <= #(top.ticks) top.d;
+  end
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, save = 0, restore = 0, hold = 1;
+  logic [7:0] d = 8'h11, outside;
+  time ticks = 0;
+  int calls = 0;
+  leaf dut();
+  producer src();
+  initial begin
+    if (!supply_on("/top/A.power") || !supply_on("/top/A.ground", 0.0) ||
+        !supply_on("/top/P.power") || !supply_on("/top/P.ground", 0.0) ||
+        !supply_on("/top/R.power") || !supply_on("/top/R.ground", 0.0)) $fatal(1, "supplies");
+    #1 clk = 1; #1 clk = 0;
+    if (dut.q !== d || dut.r !== d || calls != 1) $fatal(1, "seed");
+    save = 1; #1 save = 0;
+    ticks = 3; d = 8'h22;
+    #1 clk = 1; #1 clk = 0;
+    if (!supply_off("/top/A.power") || !supply_on("/top/A.power")) $fatal(1, "source pulse");
+    #3;
+    if (dut.q !== 8'h11 || dut.r !== d || dut.plain !== 8'h11 || outside !== 8'h11 || calls != 2) $fatal(1, "source epoch");
+    if (!supply_off("/top/A.power")) $fatal(1, "source off for restore");
+    restore = 1; #1 restore = 0; #1;
+    if (dut.q !== 8'h11 || dut.r !== 8'h11) $fatal(1, "source power gated target restore");
+    if (!supply_on("/top/A.power")) $fatal(1, "source restore");
+    d = 8'h33; #1 clk = 1; #1 clk = 0;
+    if (!supply_off("/top/P.power") || !supply_on("/top/P.power")) $fatal(1, "destination pulse");
+    #3;
+    if (dut.q !== 'x || dut.r !== 'x || dut.plain !== 'x || outside !== d || calls != 3) $fatal(1, "destructive destination epoch");
+    restore = 1; #1 restore = 0; #1;
+    if (dut.q !== 8'h11 || dut.r !== 8'h11) $fatal(1, "saved value lost with producer");
+    d = 8'h44; #1 clk = 1; #1 clk = 0;
+    if (!supply_off("/top/R.power") || !supply_on("/top/R.power")) $fatal(1, "retention pulse");
+    #3;
+`ifdef NO_RET
+    if (dut.q !== d || dut.r !== d) $fatal(1, "saved-only corruption canceled normal data");
+`else
+    if (dut.q !== 'x || dut.r !== 'x) $fatal(1, "retention destruction missed normal data");
+`endif
+    if (dut.plain !== d || outside !== d || calls != 4) $fatal(1, "retention affected neighbors");
+    ticks = 0; d = 8'h55; #1 clk = 1; #1 clk = 0;
+    save = 1; #1 save = 0;
+    ticks = 3; d = 8'h66; #1 clk = 1; #1 clk = 0;
+    restore = 1; #1 restore = 0; #2;
+    if (dut.q !== d || dut.r !== 8'h55 || dut.plain !== d || outside !== d || calls != 6) $fatal(1, "future write lost to restore priority");
+    ticks = 0; d = 8'h77; restore = 1;
+    #1 clk = 1; restore = 0;
+    #1 clk = 0;
+    if (dut.q !== 8'h55 || dut.r !== 8'h55 || dut.plain !== d || outside !== d || calls != 7) $fatal(1, "pending clock ignored restore priority");
+    // #0 executes the actor before the trailing restore, while its dynamic
+    // zero NBA remains queued until after Inactive. That issued NBA must die.
+    d = 8'h88; restore = 1;
+    #1 clk = 1; #0 restore = 0;
+    #1 clk = 0;
+    if (dut.q !== 8'h55 || dut.r !== 8'h55 || dut.plain !== d || outside !== d || calls != 8) $fatal(1, "issued zero NBA ignored restore priority");
+    if (!supply_off("/top/A.power")) $fatal(1, "source off");
+    d = 8'haa; #1 clk = 1;
+    if (!supply_on("/top/A.power")) $fatal(1, "source on");
+    #1 clk = 0;
+    if (dut.q !== 8'h55 || dut.r !== 8'h55 || outside !== 8'h88 || calls != 8) $fatal(1, "OFF source event revived");
+    d = 8'hbb; #1 clk = 1; #1 clk = 0;
+    if (dut.q !== d || dut.r !== d || outside !== d || calls != 9) $fatal(1, "fresh source");
+    if (!supply_off("/top/A.power")) $fatal(1, "source off for save");
+    save = 1; #1 save = 0;
+    if (!supply_on("/top/A.power")) $fatal(1, "source on for update");
+    d = 8'hcc; #1 clk = 1; #1 clk = 0;
+    if (!supply_off("/top/A.power")) $fatal(1, "source off for final restore");
+    restore = 1; #1 restore = 0; #1;
+    if (dut.q !== 8'hbb || dut.r !== 8'hbb) $fatal(1, "target save depended on source power");
+    $display("balloon source epochs passed"); $finish;
+  end
+endmodule
+//--- supplies.upf
+create_supply_set A
+create_supply_set P
+create_supply_set R
+//--- design.upf
+source [file join [file dirname [info script]] supplies.upf]
+create_power_domain SOURCE -elements src -supply {primary A}
+create_power_domain PD -elements dut -supply {primary P}
+set_retention RET -domain PD -elements {dut/q dut/r} -retention_supply R -save_signal {save high} -restore_signal {restore high} -retention_condition hold
+//--- reverse.upf
+source [file join [file dirname [info script]] supplies.upf]
+create_power_domain PD -elements dut -supply {primary P}
+create_power_domain SOURCE -elements src -supply {primary A}
+set_retention RET -domain PD -elements {dut/q dut/r} -retention_supply R -save_signal {save high} -restore_signal {restore high} -retention_condition hold
+//--- no-ret.upf
+source [file join [file dirname [info script]] reverse.upf]
+set_retention RET -domain PD -update -parameters NO_RET_SUP_COR

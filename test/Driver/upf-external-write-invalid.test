@@ -8,7 +8,7 @@
 // A private direct helper is not dead or initialization-only when an
 // unsupported actor can call it. Reject before adding caller arguments.
 // CONTEXT: UPF external writes require Initial or a repeating edge actor
-// RETAINED: retention from another switched producer requires source/strategy epoch composition and is not implemented
+// RETAINED: retention updates from another domain require exact source power epochs; resolved-driver source loss is not implemented
 // INDIRECT: UPF ordinary state through copied or indirect argument references is not implemented
 
 //--- design.upf
@@ -45,13 +45,16 @@ module top;
 endmodule
 //--- source.sv
 module leaf; logic q; endmodule
-module producer(input logic clk);
+module producer(input logic clk, output wire trace);
+  assign trace = clk ^ top.enable;
   always @(posedge clk) top.dut.q <= 1;
 endmodule
 module top;
-  logic clk, hold;
+  logic clk = 0, hold, enable = 1;
+  wire trace;
   leaf dut();
-  producer src(clk);
+  producer src(clk, trace);
+  initial begin #1 clk = 1; #1 enable = 0; #1 $display("%b", trace); $finish; end
 endmodule
 //--- indirect.sv
 module leaf; logic q; endmodule

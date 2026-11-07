@@ -44,11 +44,14 @@ struct Lowering {
   llvm::DenseMap<Operation *, SmallVector<Operation *>> callers;
   llvm::DenseMap<Operation *, SmallVector<sim::SimFuncOp>> callees;
   llvm::DenseMap<Operation *, unsigned> actorRoles;
+  llvm::DenseMap<Operation *, bool> edgeActors;
   llvm::DenseMap<Operation *, std::set<unsigned>> roles, needed;
   llvm::DenseMap<Operation *, Frame> frames;
   llvm::DenseSet<Operation *> opaque, relevant, unsupported;
   llvm::DenseMap<uint64_t, sim::SimStorageDeclOp> storage;
   llvm::DenseMap<uint64_t, unsigned> owners;
+  llvm::DenseMap<Operation *, unsigned> actorDomains;
+  llvm::DenseMap<uint64_t, unsigned> epochDomains;
   llvm::DenseMap<Value, Origins> originCache;
   std::map<std::pair<Operation *, unsigned>, FrozenClock> tickets;
   std::map<std::pair<int, int>, sim::SimFuncOp> predicates;
@@ -65,6 +68,9 @@ struct Lowering {
     for (auto decl : o.design.getOps<sim::SimStorageDeclOp>())
       storage[decl.getId()] = decl;
     for (auto [index, domain] : llvm::enumerate(o.domains)) {
+      epochDomains[domain.epoch.id] = index;
+      for (auto *actor : domain.actors)
+        actorDomains[actor] = index;
       for (auto id : domain.ordinary)
         owners[id] = index;
       roleTable.push_back({int(index), false, true});
@@ -88,12 +94,18 @@ struct Lowering {
     return load(b, loc, handle(b, loc, ctx, d));
   }
   int owner(sim::SimFuncOp fn) {
-    for (auto [index, domain] : llvm::enumerate(o.domains))
-      if (domain.actors.contains(fn))
-        return index;
-    return -1;
+    auto known = actorDomains.find(fn);
+    return known == actorDomains.end() ? -1 : int(known->second);
   }
   bool edgeActor(sim::SimFuncOp fn) {
+    auto known = edgeActors.find(fn);
+    if (known != edgeActors.end())
+      return known->second;
+    bool result = classifyEdgeActor(fn);
+    edgeActors.try_emplace(fn, result);
+    return result;
+  }
+  bool classifyEdgeActor(sim::SimFuncOp fn) {
     SmallVector<Operation *> waits;
     fn.walk([&](Operation *op) {
       if (sim::isSuspensionOp(op))
@@ -378,7 +390,8 @@ struct Lowering {
           }
           if (destination >= 0 && r.domain != destination &&
               (!o.domains[destination].exact ||
-               (r.domain >= 0 && !o.domains[r.domain].exact))) {
+               (r.domain >= 0 && !o.domains[r.domain].exact &&
+                !o.domains[r.domain].immutable))) {
             op->emitError(
                 "UPF external writes require exact source and target domain "
                 "epochs; resolved-driver loss is not implemented");
@@ -718,8 +731,69 @@ struct Lowering {
       initial->erase();
     return success();
   }
+  LogicalResult retainedSources() {
+    for (const auto &write : o.retainedWrites) {
+      auto gate = cast<cf::CondBranchOp>(write.guard);
+      auto fn = gate->getParentOfType<sim::SimFuncOp>();
+      int source = owner(fn);
+      auto target = epochDomains.find(write.domainEpoch.id);
+      if (target == epochDomains.end())
+        return gate.emitError("retention update has no physical domain policy");
+      // Constant source policy cannot invalidate an issued activation. Treat
+      // it like an AON producer, avoiding even a redundant statement guard.
+      if (source < 0 || unsigned(source) == target->second ||
+          o.domains[source].immutable)
+        continue;
+      if (!o.domains[source].exact)
+        return gate.emitError("retention updates from another domain require "
+                              "exact source power epochs; resolved-driver "
+                              "source loss is not implemented");
+      expansionWork += 1 + write.enqueues.size();
+      if (expansionWork > (1u << 20))
+        return gate.emitError(
+            "UPF write-context expansion exceeds supported work");
+      b.setInsertionPoint(gate);
+      auto sourceTicket = ticket(fn, source, gate.getLoc());
+      if (failed(sourceTicket))
+        return failure();
+      Value ctx = fn.getArgument(0);
+      Descriptor epoch = o.domains[source].epoch;
+      Value current = read(gate.getLoc(), ctx, epoch);
+      Value same =
+          arith::CmpIOp::create(b, gate.getLoc(), arith::CmpIPredicate::eq,
+                                sourceTicket->second, current);
+      // An exact source ticket was captured in NORMAL. Its unchanged epoch
+      // proves NORMAL through this statement, so no additional source policy
+      // evaluator or dependent snapshot state is needed.
+      Value valid = and_(gate.getLoc(), sourceTicket->first, same);
+      gate.getConditionMutable().assign(
+          and_(gate.getLoc(), gate.getCondition(), valid));
+      for (auto *action : write.enqueues) {
+        // These functional writes issue only while retention is writable.
+        // Master W-fall and Balloon destructive/priority epochs necessarily
+        // advance on any later destination primary loss. The strategy slot
+        // therefore subsumes destination loss; reuse the first slot for the
+        // independent source lifetime, preserving the existing pair decision
+        // and each dynamic-zero Balloon branch and output-view predicate.
+        b.setInsertionPoint(action);
+        Value reference = handle(b, action->getLoc(), ctx, epoch);
+        if (auto nba = dyn_cast<sim::SimPowerNBAOp>(action)) {
+          nba.getDomainEpochRefMutable().assign(reference);
+          nba.getDomainEpochMutable().assign(current);
+        } else if (auto nba = dyn_cast<sim::SimPowerNBAViewOp>(action)) {
+          nba.getDomainEpochRefMutable().assign(reference);
+          nba.getDomainEpochMutable().assign(current);
+        } else
+          return action->emitError(
+              "retention update has an unknown NBA publication");
+      }
+    }
+    return success();
+  }
   LogicalResult run() {
     if (failed(graph()) || failed(inventory()) || failed(contexts()))
+      return failure();
+    if (failed(retainedSources()))
       return failure();
     SmallVector<Value> refs;
     for (const auto &w : writes)

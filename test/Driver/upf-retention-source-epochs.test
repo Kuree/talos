@@ -1,0 +1,131 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/master.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/reverse.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/master.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/reverse.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// RUN: talos -DNO_RET --upf %t/no-ret.upf -O3 --mlir-verify-each %t/design.sv -o %t.no-ret && %t.no-ret | FileCheck %s
+// RUN: talos -DNO_RET --upf %t/no-ret.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.no-ret.bc && %t.no-ret.bc | FileCheck %s
+// A source-only switched actor drives retained blocking/NBA state, ordinary
+// target state and AON neighbors. Its exact lifetime is independent of the
+// retained target's writable lifetime (1801 9.5.3/9.7.3). A strategy epoch
+// already subsumes primary loss, including loss after RTC inhibited a write.
+// CHECK: retained source epochs passed
+
+//--- design.sv
+module leaf; logic [0:64] q = 0, r = 0, plain = 0; endmodule
+module producer;
+  import UPF::*;
+  always @(posedge top.clk) begin
+    top.calls++;
+`ifdef INLINE_SOURCE
+    if (top.pulse_source) begin
+      if (!supply_off("/top/A.power") || !supply_on("/top/A.power")) $fatal(1, "inline source loss");
+    end
+`endif
+    top.dut.q <= #(top.delay_value()) top.value();
+    top.dut.r = top.d;
+    top.dut.plain <= #(top.ticks) top.d;
+    top.outside <= #(top.ticks) top.d;
+  end
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, hold = 0, pulse_source = 0;
+  logic [64:0] d = 65'h10000000000000011, outside;
+  time ticks = 3;
+  int calls = 0, values = 0, delays = 0;
+  leaf dut();
+  producer src();
+  function automatic logic [64:0] value(); values++; return d; endfunction
+  function automatic time delay_value(); delays++; return ticks; endfunction
+  initial begin
+    if (!supply_on("/top/A.power") || !supply_on("/top/A.ground", 0.0) ||
+        !supply_on("/top/P.power") || !supply_on("/top/P.ground", 0.0) ||
+        !supply_on("/top/R.power") || !supply_on("/top/R.ground", 0.0)) $fatal(1, "supplies");
+    #1 clk = 1; #1 clk = 0; #3;
+    if (dut.q !== d || dut.r !== d || dut.plain !== d || outside !== d || calls != 1) $fatal(1, "first publication");
+    d = 65'h10000000000000022;
+    #1 clk = 1; #1 clk = 0;
+    if (!supply_off("/top/A.power") || !supply_on("/top/A.power")) $fatal(1, "source pulse");
+    #3;
+    if (dut.q !== 65'h10000000000000011 || dut.r !== d || dut.plain !== 65'h10000000000000011 || outside !== 65'h10000000000000011 || calls != 2) $fatal(1, "source-only cancellation");
+    d = 65'h10000000000000033;
+    #1 clk = 1; #1 clk = 0;
+    if (!supply_off("/top/P.power") || !supply_on("/top/P.power")) $fatal(1, "target pulse");
+    #3;
+    if (dut.q !== 'x || dut.r !== 'x || dut.plain !== 'x || outside !== d || calls != 3) $fatal(1, "destination lifetime");
+    d = 65'h10000000000000044;
+    #1 clk = 1; #1 clk = 0;
+    if (!supply_off("/top/R.power") || !supply_on("/top/R.power")) $fatal(1, "retention pulse");
+    #3;
+`ifdef NO_RET
+    if (dut.q !== d || dut.r !== d) $fatal(1, "NO_RET invalidated normal data");
+`else
+    if (dut.q !== 'x || dut.r !== 'x) $fatal(1, "retention destruction");
+`endif
+    if (dut.plain !== d || outside !== d || calls != 4) $fatal(1, "retention affected neighbors");
+    d = 65'h10000000000000055;
+    #1 clk = 1; #1 clk = 0; #3;
+    if (dut.q !== d || dut.r !== d || calls != 5) $fatal(1, "fresh capture");
+    d = 65'h10000000000000066;
+    #1 clk = 1; #1 clk = 0;
+    hold = 1;
+    if (!supply_off("/top/P.power") || !supply_on("/top/P.power")) $fatal(1, "held destination loss");
+    #1 hold = 0; #3;
+    if (dut.q !== 65'h10000000000000055 || dut.r !== d || dut.plain !== 'x || outside !== d || calls != 6) $fatal(1, "RTC lifetime subsumes later loss");
+    if (!supply_off("/top/A.power")) $fatal(1, "source off");
+    d = 65'h10000000000000077;
+    #1 clk = 1;
+    if (!supply_on("/top/A.power")) $fatal(1, "source restore");
+    #4 clk = 0;
+    if (dut.q !== 65'h10000000000000055 || dut.r !== 65'h10000000000000066 || outside !== 65'h10000000000000066 || calls != 6) $fatal(1, "OFF source edge revived");
+    d = 65'h10000000000000088;
+    #1 clk = 1;
+    if (!supply_off("/top/A.power") || !supply_on("/top/A.power")) $fatal(1, "pending source loss");
+    #4 clk = 0;
+    if (dut.q !== 65'h10000000000000055 || dut.r !== 65'h10000000000000066 || outside !== 65'h10000000000000066 || calls != 6) $fatal(1, "pending source occurrence revived");
+    ticks = 0; d = 65'h10000000000000099;
+    #1 clk = 1; #1 clk = 0;
+    if (dut.q !== d || dut.r !== d || dut.plain !== d || outside !== d || calls != 7) $fatal(1, "fresh zero-delay publication");
+    hold = 1;
+    if (!supply_off("/top/P.power")) $fatal(1, "target off");
+    d = 65'h100000000000000aa;
+    #1 clk = 1;
+    if (!supply_on("/top/P.power")) $fatal(1, "target restore");
+    hold = 0; #4 clk = 0;
+    if (dut.q !== 65'h10000000000000099 || dut.r !== 65'h10000000000000099 || dut.plain !== 'x || outside !== d || calls != 8) $fatal(1, "OFF destination edge revived");
+`ifdef INLINE_SOURCE
+    // Loss inside the already-running actor is later than the outer gate.
+    pulse_source = 1; d = 65'h100000000000000bb;
+    #1 clk = 1; #1 clk = 0;
+    if (dut.q !== 65'h10000000000000099 || dut.r !== 65'h10000000000000099 || outside !== 65'h100000000000000aa || calls != 9 || values != 8 || delays != 8) $fatal(1, "statement source epoch");
+`else
+    if (values != 8 || delays != 8) $fatal(1, "retained expression effects repeated");
+`endif
+    $display("retained source epochs passed"); $finish;
+  end
+endmodule
+//--- supplies.upf
+create_supply_set A
+create_supply_set P
+create_supply_set R
+//--- master.upf
+source [file join [file dirname [info script]] supplies.upf]
+create_power_domain SRC -elements src -supply {primary A}
+create_power_domain PD -elements dut -supply {primary P}
+set_retention RET -domain PD -elements {dut/q dut/r} -retention_supply R -retention_condition hold
+//--- reverse.upf
+source [file join [file dirname [info script]] supplies.upf]
+create_power_domain PD -elements dut -supply {primary P}
+create_power_domain SRC -elements src -supply {primary A}
+set_retention RET -domain PD -elements {dut/q dut/r} -retention_supply R -retention_condition hold
+//--- no-ret.upf
+source [file join [file dirname [info script]] reverse.upf]
+set_retention RET -domain PD -update -parameters NO_RET_SUP_COR
+//--- ret-primary.upf
+source [file join [file dirname [info script]] master.upf]
+set_retention RET -domain PD -update -use_retention_as_primary
+//--- no-ret-primary.upf
+source [file join [file dirname [info script]] no-ret.upf]
+set_retention RET -domain PD -update -use_retention_as_primary

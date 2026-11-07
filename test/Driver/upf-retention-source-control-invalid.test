@@ -1,0 +1,7 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-retention-source-epochs.test %t
+// RUN: not talos -DINLINE_SOURCE --upf %t/master.upf -O0 --mlir-verify-each %t/design.sv -o %t.native 2>&1 | FileCheck %s
+// RUN: not talos -DINLINE_SOURCE --upf %t/master.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc 2>&1 | FileCheck %s
+// Supply control is synchronous, but 9.5.3 requires interruption after source
+// corruption. State-publication tokens do not cover every helper side effect.
+// CHECK: power-control calls from a switched actor require caller-continuation analysis and are not implemented

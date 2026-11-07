@@ -272,6 +272,11 @@ LogicalResult synchronousHelper(sim::SimCallOp call) {
       if (isa<sim::SimSupplyReadOp, sim::SimEventSnapshotFlushOp,
               sim::SimNBAEnqueueOp>(op))
         return WalkResult::advance();
+      if (isa<sim::SimSupplyControlOp>(op)) {
+        op->emitError("power-control calls from a switched actor require "
+                      "caller-continuation analysis and are not implemented");
+        return WalkResult::interrupt();
+      }
       bool asynchronous =
           sim::isSuspensionOp(op) ||
           isa<sim::SimSpawnOp, sim::SimTaskCallOp,
@@ -318,7 +323,7 @@ struct Lowering {
   SmallVector<sim::SimFuncOp> originalFunctions;
   llvm::DenseSet<uint64_t> originalStorage;
   SmallVector<WriteDomain> writeDomains;
-  llvm::DenseMap<Operation *, std::string> powerOwners;
+  SmallVector<RetentionWrite> retainedWrites;
   Lowering(sim::SimDesignOp design, bool preserveStorage)
       : design(design), builder(design.getContext()),
         preserveStorage(preserveStorage) {
@@ -1392,13 +1397,10 @@ struct Lowering {
           },
           [&](FlatSymbolRefAttr ref) {
             return SmallVector<Descriptor>{supplies.lookup(ref.getValue())};
-          },
-          [&, ownerName = domain.getSymName().str()](sim::SimFuncOp fn) {
-            auto found = powerOwners.find(fn);
-            return found != powerOwners.end() && found->second != ownerName;
           }};
       if (failed(lowerRetentions(options, retention)))
         return failure();
+      llvm::append_range(retainedWrites, retention.writes);
     }
     // Ordinary procedural updates are handled once after all physical domain
     // owners and final retained roots are known. Preserve both source and
@@ -1620,11 +1622,6 @@ struct ElaborateUPFPass
                                       std::move(condition));
       }
     for (auto domain : domains)
-      for (auto fn : lowering.originalFunctions)
-        if (fn.getCodeUnitId() &&
-            contains(domain, lowering.unitPaths.lookup(*fn.getCodeUnitId())))
-          lowering.powerOwners[fn] = domain.getSymName().str();
-    for (auto domain : domains)
       if (failed(lowering.apply(domain))) {
         signalPassFailure();
         return;
@@ -1632,7 +1629,8 @@ struct ElaborateUPFPass
     if (lowering.clocks &&
         failed(lowerOrdinaryUPFWrites(OrdinaryWriteOptions{
             lowering.design, lowering.root, lowering.originalFunctions,
-            lowering.originalStorage, lowering.writeDomains, *lowering.clocks,
+            lowering.originalStorage, lowering.writeDomains,
+            lowering.retainedWrites, *lowering.clocks,
             [&](Location loc, StringRef name, Type type) {
               return lowering.storage(loc, name, type);
             },
