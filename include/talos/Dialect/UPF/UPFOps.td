@@ -117,6 +117,12 @@ def UPFDomainOp : Op<UPFDialect, "domain", [Symbol,
     Aggregate selectors are preserved independently of the derived `extent`.
     An atomic domain protects its normalized extent against later partitioning;
     explicit exclusions can leave holes for other domains.
+
+    anonymous_parent identifies a compiler-derived hard-macro domain. It shares
+    the physical parent's exact primary supply and policies, but owns a distinct
+    extent and inherits no strategies or switch definitions. Resolution rebuilds
+    these owners from explicit declarations. Even a private domain has semantic
+    effects when its symbol is unused, so symbol DCE cannot discard it.
   }];
   let arguments = (ins SymbolNameAttr:$sym_name, StrArrayAttr:$elements,
       FlatSymbolRefAttr:$power, OptionalAttr<FlatSymbolRefAttr>:$ground,
@@ -138,13 +144,17 @@ def UPFDomainOp : Op<UPFDialect, "domain", [Symbol,
       OptionalAttr<UPFDomainExtentAttr>:$extent,
       DefaultValuedAttr<BoolAttr, "false">:$atomic,
       // Source authority for parent isolation placement across macro bounds.
-      OptionalAttr<StrAttr>:$isolation_top);
+      OptionalAttr<StrAttr>:$isolation_top,
+      // Derived 6.20 ownership. Shares the physical parent's exact primary
+      // supply and policies, without copying its strategies or switch.
+      OptionalAttr<FlatSymbolRefAttr>:$anonymous_parent);
   let assemblyFormat = "$sym_name `elements` $elements `power` $power `on` $on attr-dict";
   let hasVerifier = 1;
   let extraClassDeclaration = [{
     /// Membership after global extent resolution, or in the local effective
     /// element list when no resolved extent has been attached yet.
     bool containsPath(::llvm::StringRef path);
+    bool canDiscardOnUseEmpty() { return false; }
   }];
 }
 def UPFCompositeDomainOp : Op<UPFDialect, "composite_domain", [Symbol,

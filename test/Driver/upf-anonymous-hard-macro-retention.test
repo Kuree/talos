@@ -1,0 +1,64 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.native && %t.native | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc && %t.bc | FileCheck %s
+// RUN: talos --upf %t/required.upf -O3 --mlir-verify-each %t/design.sv -o %t.required && %t.required | FileCheck %s
+// RUN: not talos --upf %t/collective.upf -emit-sim %t/design.sv -o %t.bad 2>&1 | FileCheck %s --check-prefix=COLLECTIVE
+// RUN: talos --upf %t/design.upf -emit-slang %t/design.sv -o %t.mlir && FileCheck %s --check-prefix=IR --input-file=%t.mlir
+// A parent's default retention never applies to anonymous-owned macro state.
+// The distinct ownership must also be present in the immutable retention plan,
+// before source annotations are consumed or storage is rewritten.
+// CHECK: anonymous retention ownership passed
+// COLLECTIVE: collective retention list has uncovered state while another member is retained
+// IR: upf.domain @top.PD elements ["top.dut"]
+// IR-SAME: retentions =
+// IR: upf.domain @"$anonymous:top.dut.mac" elements ["top.dut.mac"]
+// IR-NOT: retentions =
+
+//--- design.sv
+module macro_cell(input logic clk,d);
+  logic q=0; always @(posedge clk) q <= d;
+endmodule
+module host(input logic clk,d);
+  logic q=0; always @(posedge clk) q <= d;
+  macro_cell mac(clk,d);
+endmodule
+module top;
+  import UPF::*;
+  logic clk=0,d=1,hold=0;
+  host dut(clk,d);
+  initial begin
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground",0.0) ||
+        !supply_on("/top/RET.power") || !supply_on("/top/RET.ground",0.0))
+      $fatal(1,"supplies");
+    #1; clk=1;
+    #1; clk=0; hold=1; d=0;
+    #1; clk=1;
+    #1;
+    if (dut.q !== 1 || dut.mac.q !== 0) $fatal(1,"parent retention entered macro");
+    if (!supply_off("/top/CORE.power")) $fatal(1,"power off");
+    #1;
+    if (dut.q !== 'x || dut.mac.q !== 'x) $fatal(1,"output masking");
+    if (!supply_on("/top/CORE.power")) $fatal(1,"power on");
+    #1;
+    if (dut.q !== 1 || dut.mac.q !== 'x) $fatal(1,"macro inherited retention");
+    clk=0; hold=0;
+    #1; clk=1;
+    #1;
+    if (dut.q !== 0 || dut.mac.q !== 0) $fatal(1,"recovery update");
+    $display("anonymous retention ownership passed"); $finish;
+  end
+endmodule
+//--- design.upf
+create_supply_set CORE
+create_supply_set RET
+create_power_domain PD -elements dut -supply {primary CORE}
+set_design_attributes -models macro_cell -is_hard_macro -attribute {UPF_simstate_behavior SIMSTATE_ONLY}
+set_retention KEEP -domain PD -retention_condition hold -retention_supply RET
+//--- required.upf
+source [file join [file dirname [info script]] design.upf]
+set_design_attributes -elements dut/mac -attribute {UPF_retention required}
+set_retention_elements REQUIRED -elements dut/mac
+//--- collective.upf
+source [file join [file dirname [info script]] design.upf]
+set_retention_elements OPTIONAL -elements {dut/q dut/mac} -retention_purpose optional

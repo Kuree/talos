@@ -1,0 +1,47 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-anonymous-hard-macro.test %t
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/anonymous-atomic.upf -O3 --mlir-verify-each %t/design.sv -o %t.anon && %t.anon | FileCheck %S/upf-anonymous-hard-macro.test
+// RUN: talos --upf %t/parent-first.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.parent && %t.parent | FileCheck %S/upf-anonymous-hard-macro.test
+// RUN: talos --upf %t/child-first.upf -O0 --mlir-verify-each %t/design.sv -o %t.child && %t.child | FileCheck %S/upf-anonymous-hard-macro.test
+// RUN: talos --upf %t/late-hard.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.late && %t.late | FileCheck %S/upf-anonymous-hard-macro.test
+// The specific hard-macro ownership rule establishes a structural cut before
+// the general atomic minimum extent. Anonymous and separately explicit hard
+// owners obey that same rule, independent of textual declaration order.
+
+//--- supplies.upf
+create_supply_net P
+create_supply_net G
+create_supply_net B
+create_supply_set RAILS -function {power P} -function {ground G} -function {nwell B}
+add_power_state RAILS -state {ON -supply_expr {power == {FULL_ON,1.1} && ground == FULL_ON} -simstate NORMAL}
+proc parent {} {
+  create_power_domain PD -elements dut -atomic -supply {primary RAILS}
+  add_power_state PD.primary -state {ON -supply_expr {power == FULL_ON && ground == FULL_ON && nwell == FULL_ON} -simstate NORMAL}
+}
+proc child {} {
+  create_power_domain MACRO -elements dut/mac -supply {primary RAILS}
+  add_power_state MACRO.primary -state {ON -supply_expr {power == FULL_ON && ground == FULL_ON && nwell == FULL_ON} -simstate NORMAL}
+}
+proc hard {} {
+  set_design_attributes -models macro_cell -is_hard_macro -attribute {UPF_simstate_behavior SIMSTATE_ONLY}
+}
+//--- anonymous-atomic.upf
+source [file join [file dirname [info script]] supplies.upf]
+hard
+parent
+//--- parent-first.upf
+source [file join [file dirname [info script]] supplies.upf]
+hard
+parent
+child
+//--- child-first.upf
+source [file join [file dirname [info script]] supplies.upf]
+hard
+child
+parent
+//--- late-hard.upf
+source [file join [file dirname [info script]] supplies.upf]
+parent
+child
+hard

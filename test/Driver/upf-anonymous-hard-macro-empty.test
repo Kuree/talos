@@ -1,0 +1,22 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.native && %t.native | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc && %t.bc | FileCheck %s
+// RUN: talos --upf %t/design.upf -emit-sim -O0 --mlir-verify-each %t/design.sv -o %t.mlir && FileCheck %s --check-prefix=IR --input-file=%t.mlir --implicit-check-not=simulation.event.snapshot --implicit-check-not=simulation.snapshot_publications --implicit-check-not=power_monitor --implicit-check-not=__upf_retention --implicit-check-not=power_nba
+// A real anonymous owner with no corruptible state needs no policy actors.
+// Initial/DPI behavior remains normal initialization and adds no UPF services.
+// CHECK: empty anonymous macro passed
+// IR: simulation.design @design
+
+//--- design.sv
+module macro_empty;
+  import "DPI-C" function int abs(input int value);
+  initial if (abs(-7) != 7) $fatal(1,"unrelated initial DPI");
+endmodule
+module top;
+  macro_empty dut();
+  initial begin #1; $display("empty anonymous macro passed"); $finish; end
+endmodule
+//--- design.upf
+create_power_domain PD -elements .
+set_design_attributes -models macro_empty -is_hard_macro -attribute {UPF_simstate_behavior SIMSTATE_ONLY}

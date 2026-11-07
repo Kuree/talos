@@ -532,6 +532,34 @@ mlir::LogicalResult UPFSupplySetOp::verify() {
 }
 mlir::LogicalResult
 UPFDomainOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
+  UPFDomainOp anonymousParent;
+  if (auto ref = getAnonymousParentAttr()) {
+    anonymousParent = symbols.lookupNearestSymbolFrom<UPFDomainOp>(*this, ref);
+    if (!anonymousParent || anonymousParent == *this)
+      return emitOpError(
+          "anonymous domain requires a distinct physical parent domain");
+    if (getElements().size() != 1)
+      return emitOpError("anonymous domain requires one hard-macro root");
+    // Strictly descending macro roots make anonymous parent chains acyclic
+    // with a local check, avoiding a repeated walk of every ancestor chain.
+    if (anonymousParent.getAnonymousParentAttr()) {
+      if (anonymousParent.getElements().size() != 1)
+        return emitOpError("anonymous parent requires one hard-macro root");
+      auto path = mlir::cast<mlir::StringAttr>(getElements()[0]).getValue();
+      auto parentPath =
+          mlir::cast<mlir::StringAttr>(anonymousParent.getElements()[0])
+              .getValue();
+      if (path == parentPath || !isWithinPath(path, parentPath))
+        return emitOpError(
+            "anonymous parent must have a proper ancestor macro root");
+    }
+    if (getPowerAttr() != anonymousParent.getPowerAttr() ||
+        getGroundAttr() != anonymousParent.getGroundAttr() ||
+        getPrimaryAttr() != anonymousParent.getPrimaryAttr() ||
+        getPoliciesAttr() != anonymousParent.getPoliciesAttr())
+      return emitOpError("anonymous domain must share its parent's exact "
+                         "primary supply and policies");
+  }
   for (auto ref : {getPowerAttr(), getGroundAttr(), getInputAttr()})
     if (ref && !symbols.lookupNearestSymbolFrom<UPFSupplyOp>(*this, ref))
       return emitOpError("references an unknown supply root: ") << ref;
@@ -588,7 +616,7 @@ UPFDomainOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
                 "retention primary handle must share the domain primary roots");
       }
     if (auto owner = set.getOwnerAttr();
-        owner && owner.getValue() != getSymName())
+        owner && owner.getValue() != getSymName() && !anonymousParent)
       return emitOpError("primary supply handle must be owned by this domain");
     llvm::StringSet<> applicable;
     llvm::DenseSet<mlir::Operation *> visited;
@@ -695,7 +723,7 @@ UPFDomainOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
       if (other != *this && other.getInputAttr() &&
           other.getPowerAttr() == getPowerAttr())
         return emitOpError("multiple switches drive the same supply root");
-  } else if (!source(getPowerAttr())) {
+  } else if (!source(getPowerAttr()) && !anonymousParent) {
     return emitOpError("direct domain power supply root must be writable");
   }
   if (getGroundAttr() && !source(getGroundAttr()))
@@ -713,6 +741,15 @@ void UPFDialect::initialize() {
       >();
 }
 mlir::LogicalResult UPFDomainOp::verify() {
+  if (getAnonymousParentAttr() &&
+      (getElements().size() != 1 || getInputAttr() || !getOn().empty() ||
+       (getPartialAttr() && !getPartialAttr().empty()) || getOffAttr() ||
+       (getErrorsAttr() && !getErrorsAttr().empty()) || getIsolationControl() ||
+       getIsolationName() || getIsolationTop() || getClamp() != 0 ||
+       (getRetentionsAttr() && !getRetentionsAttr().empty()) || getAtomic() ||
+       (getExcludedElementsAttr() && !getExcludedElementsAttr().empty())))
+    return emitOpError("anonymous domain cannot define its own switch, "
+                       "strategies, atomic extent or exclusions");
   if (getPoliciesAttr() && !getPrimaryAttr())
     return emitOpError(
         "primary policies require a primary supply-set reference");

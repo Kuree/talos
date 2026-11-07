@@ -1,0 +1,156 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/valid.mlir --split-input-file --resolve-upf-domains --symbol-dce --canonicalize --cse --verify-each | FileCheck %s
+// RUN: talos-opt %t/valid.mlir --split-input-file --resolve-upf-domains --resolve-upf-domains --verify-each | FileCheck %s
+// RUN: talos-opt %t/invalid.mlir --split-input-file --resolve-upf-domains --verify-diagnostics
+// Derived owners are rebuilt from explicit intent, not from their cached
+// extent or selector. They share supplies and survive symbol DCE even when
+// nothing names them. Stale owners cannot leave dangling external symbols.
+
+//--- valid.mlir
+module {
+  upf.supply @p names ["/top/P"] writable = true
+  upf.supply @g names ["/top/G"] writable = true
+  upf.supply_set @primary functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {owner = @PARENT}
+  // CHECK: upf.domain @PARENT elements ["top"]
+  // CHECK-SAME: excluded = ["top.box"]
+  upf.domain @PARENT elements ["top"] power @p on [] {ground = @g, primary = @primary, policies = [@primary], atomic = true, excluded_elements = ["top.box"]}
+  upf.design_attributes <path = "top.box", kind = instance> {hard_macro = true}
+  upf.design_attributes <path = "top.box.inner", kind = instance> {hard_macro = true}
+  // CHECK: upf.domain @"$anonymous:top.box" elements ["top.box"]
+  // CHECK-SAME: anonymous_parent = @PARENT
+  // CHECK-SAME: excluded = ["top.box.inner"]
+  // CHECK-SAME: policies = [@primary]
+  // CHECK-SAME: primary = @primary
+  // CHECK-SAME: sym_visibility = "private"
+  // CHECK: upf.domain @"$anonymous:top.box.inner" elements ["top.box.inner"]
+  // CHECK-SAME: anonymous_parent = @"$anonymous:top.box"
+  // CHECK-SAME: policies = [@primary]
+  // CHECK-SAME: primary = @primary
+}
+// -----
+module {
+  upf.supply @p names ["/top/P"] writable = true
+  upf.supply @q names ["/top/Q"] writable = true
+  upf.domain @PARENT elements ["top"] power @p on [] {atomic = true}
+  // Explicit replacement of a cached anonymous owner also changes the nested
+  // owner's inherited supply. No stale parent symbol can remain afterward.
+  // CHECK: upf.domain @REPLACEMENT elements ["top.box"] power @q
+  // CHECK-SAME: excluded = ["top.box.inner"]
+  upf.domain @REPLACEMENT elements ["top.box"] power @q on []
+  upf.design_attributes <path = "top.box", kind = instance> {hard_macro = true}
+  upf.design_attributes <path = "top.box.inner", kind = instance> {hard_macro = true}
+  upf.domain @old elements ["top.box"] power @p on [] {anonymous_parent = @PARENT, sym_visibility = "private"}
+  // CHECK: upf.domain @nested elements ["top.box.inner"] power @q
+  // CHECK-SAME: anonymous_parent = @REPLACEMENT
+  // CHECK-NOT: anonymous_parent = @old
+  upf.domain @nested elements ["top.box.inner"] power @p on [] {anonymous_parent = @old, sym_visibility = "private"}
+}
+// -----
+module {
+  upf.supply @p names ["/top/P"] writable = true
+  // CHECK: upf.domain @PARENT elements ["top"]
+  // CHECK-SAME: extent = #upf.extent<included = ["top"], excluded = []>
+  upf.domain @PARENT elements ["top"] power @p on []
+  // A removed hard flag must remove its old derived owner and restore parent
+  // coverage. A soft macro has no special physical ownership rule.
+  upf.design_attributes <path = "top.box", kind = instance> {soft_macro = true}
+  // CHECK-NOT: upf.domain @old
+  upf.domain @old elements ["top.box"] power @p on [] {anonymous_parent = @PARENT, sym_visibility = "private"}
+}
+// -----
+module {
+  upf.supply @p names ["/top/P"] writable = true
+  upf.domain @PARENT elements ["top"] power @p on []
+  upf.domain @"$anonymous:top.box" elements [] power @p on []
+  upf.design_attributes <path = "top.box", kind = instance> {hard_macro = true}
+  // CHECK: upf.domain @"$anonymous:top.box_0" elements ["top.box"]
+  // CHECK-SAME: anonymous_parent = @PARENT
+}
+// -----
+module {
+  upf.supply @p names ["/top/P"] writable = true
+  upf.domain @PARENT elements ["top.h"] power @p on []
+  upf.design_attributes <path = "top.h.\\m.dot ", kind = instance> {hard_macro = true}
+  upf.domain @SIBLING elements ["top.h.\\m.dot $alias"] power @p on []
+  // CHECK: upf.domain @PARENT elements ["top.h"]
+  // CHECK-SAME: excluded = ["top.h.\\m.dot ", "top.h.\\m.dot $alias"]
+  // CHECK: upf.domain @"$anonymous:top.h.\\m.dot " elements ["top.h.\\m.dot "]
+  // CHECK-SAME: anonymous_parent = @PARENT
+}
+//--- invalid.mlir
+module {
+  upf.supply @p names ["/top/P"] writable = true
+  upf.domain @PARENT elements ["top"] power @p on []
+  upf.domain @old elements ["top.box"] power @p on [] {anonymous_parent = @PARENT}
+  upf.design_attributes <path = "top.box.inner", kind = instance> {hard_macro = true}
+  // expected-error @+1 {{references a stale anonymous hard-macro domain}}
+  upf.domain @nested elements ["top.box.inner"] power @p on [] {anonymous_parent = @old, test.external = @old::@child}
+}
+// -----
+module {
+  upf.supply @p names ["/top/P"] writable = true
+  upf.domain @PARENT elements ["top"] power @p on []
+  upf.domain @old elements ["top.box"] power @p on [] {anonymous_parent = @PARENT}
+  upf.design_attributes <path = "top.box.inner", kind = instance> {hard_macro = true}
+  // expected-error @+1 {{references a stale anonymous hard-macro domain in custom metadata}}
+  upf.domain @nested elements ["top.box.inner"] power @p on [] {anonymous_parent = @old, test.external = @old}
+}
+// -----
+module {
+  upf.supply @p names ["/top/P"] writable = true
+  upf.domain @PARENT elements ["top"] power @p on [] {excluded_elements = ["top.box"]}
+  // expected-error @+1 {{anonymous hard-macro domain requires an owned parent instance}}
+  upf.design_attributes <path = "top.box.inner", kind = instance> {hard_macro = true}
+}
+// -----
+module {
+  upf.supply @p names ["/top/P"] writable = true
+  upf.domain @PARENT elements ["top", "top.box"] power @p on []
+  // expected-error @+1 {{hard macro cannot be explicitly selected in its parent's power domain}}
+  upf.design_attributes <path = "top.box", kind = instance> {hard_macro = true}
+}
+// -----
+module {
+  upf.supply @p names ["/top/P"] writable = true
+  // expected-note @+1 {{atomic minimum extent declared here}}
+  upf.domain @PARENT elements ["top"] power @p on [] {atomic = true}
+  // expected-error @+1 {{cannot partition atomic power domain}}
+  upf.domain @CHILD elements ["top.box"] power @p on []
+}
+// -----
+module {
+  upf.supply @p names ["/top/P"] writable = true
+  upf.domain @PARENT elements ["top"] power @p on []
+  upf.domain @old elements ["top.box"] power @p on [] {anonymous_parent = @PARENT, sym_visibility = "private"}
+  // expected-error @+1 {{references a stale anonymous hard-macro domain}}
+  upf.supply_set @aux functions {power = @p, ground = @p, nwell = @p, pwell = @p, deepnwell = @p, deeppwell = @p} required ["power", "ground"] {owner = @old}
+}
+// -----
+module {
+  upf.supply @p names ["/top/P"] writable = true
+  // expected-error @+1 {{anonymous domain requires a distinct physical parent domain}}
+  upf.domain @bad elements ["top.box"] power @p on [] {anonymous_parent = @bad, sym_visibility = "private"}
+}
+// -----
+module {
+  upf.supply @p names ["/top/P"] writable = true
+  upf.supply @q names ["/top/Q"] writable = true
+  upf.domain @PARENT elements ["top"] power @p on []
+  // expected-error @+1 {{anonymous domain must share its parent's exact primary supply and policies}}
+  upf.domain @bad elements ["top.box"] power @q on [] {anonymous_parent = @PARENT, sym_visibility = "private"}
+}
+// -----
+module {
+  upf.supply @p names ["/top/P"] writable = true
+  upf.domain @PARENT elements ["top"] power @p on []
+  // expected-error @+1 {{anonymous domain cannot define its own switch, strategies, atomic extent or exclusions}}
+  upf.domain @bad elements ["top.box"] power @p on [] {anonymous_parent = @PARENT, atomic = true, sym_visibility = "private"}
+}
+// -----
+module {
+  upf.supply @p names ["/top/P"] writable = true
+  upf.domain @PARENT elements ["top"] power @p on []
+  upf.domain @outer elements ["top.box"] power @p on [] {anonymous_parent = @PARENT, sym_visibility = "private"}
+  // expected-error @+1 {{anonymous parent must have a proper ancestor macro root}}
+  upf.domain @bad elements ["top.other"] power @p on [] {anonymous_parent = @outer, sym_visibility = "private"}
+}

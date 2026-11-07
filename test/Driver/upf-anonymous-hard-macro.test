@@ -1,0 +1,76 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/anonymous.upf -O0 --mlir-verify-each %t/design.sv -o %t.native && %t.native | FileCheck %s
+// RUN: talos --upf %t/anonymous.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc && %t.bc | FileCheck %s
+// RUN: talos --upf %t/explicit.upf -O3 --mlir-verify-each %t/design.sv -o %t.explicit && %t.explicit | FileCheck %s
+// RUN: talos --upf %t/anonymous.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.mlir && FileCheck %s --check-prefix=IR --input-file=%t.mlir
+// RUN: talos --upf %t/anonymous.upf --target=wasm32 -O3 --execution-tier=bytecode --mlir-verify-each -c %t/design.sv -o %t.wasm
+// RUN: %llvm_dist/bin/llvm-readobj --file-headers %t.wasm | FileCheck %s --check-prefix=WASM
+// IEEE 1801-2018 6.20: anonymous ownership borrows the same primary supply,
+// including its catalog, associated policies and required auxiliary function.
+// Separate explicit ownership with the same policies has identical behavior.
+// CHECK: anonymous primary policies passed
+// WASM: AddressSize: 32bit
+// IR: upf.domain @top.PD elements ["top.dut"]
+// IR-SAME: excluded = ["top.dut.mac"]
+// IR: upf.domain @"$anonymous:top.dut.mac" elements ["top.dut.mac"]
+// IR-SAME: anonymous_parent = @top.PD
+// IR-SAME: policies = [@"/top/PD.primary", @"/top/RAILS"]
+// IR-SAME: primary = @"/top/PD.primary"
+
+//--- design.sv
+module macro_cell(input logic clk,d,output logic q=0);
+  always @(posedge clk) q <= d;
+endmodule
+module host(input logic clk,d,output logic parent_q=0,output wire macro_q);
+  macro_cell mac(clk,d,macro_q);
+  always @(posedge clk) parent_q <= d;
+endmodule
+module top;
+  import UPF::*;
+  logic clk=0,d=1;
+  wire parent_q,macro_q;
+  host dut(clk,d,parent_q,macro_q);
+  initial begin
+    if (!supply_on("/top/P",1.0) || !supply_on("/top/G",0.0) || !supply_on("/top/B",1.0))
+      $fatal(1,"supplies");
+    #1; clk=1;
+    #1;
+    if ({parent_q,macro_q} !== 2'bxx) $fatal(1,"associated policy lost");
+    clk=0;
+    if (!supply_off("/top/B") || !supply_on("/top/P",1.1)) $fatal(1,"bias loss");
+    #1; clk=1;
+    #1;
+    if ({parent_q,macro_q} !== 2'bxx) $fatal(1,"primary auxiliary requirement lost");
+    clk=0;
+    if (!supply_on("/top/B",1.0)) $fatal(1,"bias restore");
+    #1; clk=1;
+    #1;
+    if ({parent_q,macro_q} !== 2'b11) $fatal(1,"normal update");
+    clk=0;
+    if (!supply_off("/top/B")) $fatal(1,"bias off");
+    #1;
+    if ({parent_q,macro_q} !== 2'bxx) $fatal(1,"anonymous owner lost published corruption");
+    if (!supply_on("/top/B",1.0)) $fatal(1,"bias on");
+    d=0;
+    #1; clk=1;
+    #1;
+    if ({parent_q,macro_q} !== 2'b00) $fatal(1,"recovery update");
+    $display("anonymous primary policies passed"); $finish;
+  end
+endmodule
+//--- base.upf
+create_supply_net P
+create_supply_net G
+create_supply_net B
+create_supply_set RAILS -function {power P} -function {ground G} -function {nwell B}
+add_power_state RAILS -state {ON -supply_expr {power == {FULL_ON,1.1} && ground == FULL_ON} -simstate NORMAL}
+create_power_domain PD -elements dut -supply {primary RAILS}
+add_power_state PD.primary -state {ON -supply_expr {power == FULL_ON && ground == FULL_ON && nwell == FULL_ON} -simstate NORMAL}
+set_design_attributes -models macro_cell -is_hard_macro -attribute {UPF_simstate_behavior SIMSTATE_ONLY}
+//--- anonymous.upf
+source [file join [file dirname [info script]] base.upf]
+//--- explicit.upf
+source [file join [file dirname [info script]] base.upf]
+create_power_domain MACRO -elements dut/mac -supply {primary RAILS}
+add_power_state MACRO.primary -state {ON -supply_expr {power == FULL_ON && ground == FULL_ON && nwell == FULL_ON} -simstate NORMAL}

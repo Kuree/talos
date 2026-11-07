@@ -46,6 +46,7 @@ struct PowerCondition {
   std::optional<Descriptor> input, ground;
   SmallVector<Descriptor> required;
   std::optional<upf::PartialOnTranslation> translation;
+  const PowerCondition *inherited = nullptr;
   PowerCondition(upf::UPFDomainOp domain,
                  const llvm::StringMap<Descriptor> &descriptors,
                  const llvm::StringMap<Descriptor> &supplies)
@@ -144,6 +145,8 @@ struct PowerCondition {
   }
   Value normal(OpBuilder &b, Location loc, Value context,
                bool inlineOutput = true) const {
+    if (inherited)
+      return inherited->normal(b, loc, context, inlineOutput);
     if (!policies.empty()) {
       Value result = arith::ConstantIntOp::create(b, loc, 1, 1);
       for (auto policy : policies) {
@@ -1075,6 +1078,15 @@ struct Lowering {
     if (!root)
       return domain.emitError("UPF needs an executable design root");
     PowerCondition condition(domain, descriptors, supplies);
+    // Borrow the supplying switch's evaluation without making the anonymous
+    // owner a second driver. Published observations remain published; inline
+    // callers use the same source controls/voltage as the physical parent.
+    if (domain.getAnonymousParentAttr())
+      if (auto source = computed.find(condition.power.id);
+          source != computed.end()) {
+        condition.inherited = source->second.get();
+        condition.controls = source->second->controls;
+      }
     const auto &controls = condition.controls;
     for (StringRef path : controls) {
       auto found = descriptors.find(path);
@@ -1614,6 +1626,8 @@ struct ElaborateUPFPass
       signalPassFailure();
       return;
     }
+    domains.assign(getOperation().getOps<upf::UPFDomainOp>().begin(),
+                   getOperation().getOps<upf::UPFDomainOp>().end());
     auto designs = getOperation().getOps<sim::SimDesignOp>();
     if (!llvm::hasSingleElement(designs)) {
       getOperation().emitError("UPF requires exactly one simulation design");

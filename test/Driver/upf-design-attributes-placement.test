@@ -3,7 +3,7 @@
 // RUN: not talos --upf %t/inside.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.inside 2>&1 | FileCheck %s --check-prefix=INSIDE
 // RUN: not talos --upf %t/late.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.late 2>&1 | FileCheck %s --check-prefix=INSIDE
 // RUN: talos --upf %t/outside.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.outside | FileCheck %s --check-prefix=OUTSIDE
-// RUN: not talos --upf %t/hard-inherited.upf -emit-sim %t/design.sv -o %t.bad 2>&1 | FileCheck %s --check-prefix=ANONYMOUS
+// RUN: talos --upf %t/hard-inherited.upf -emit-slang %t/design.sv -o %t.inherited && FileCheck %s --check-prefix=ANONYMOUS --input-file=%t.inherited
 // RUN: not talos --upf %t/hard-parent.upf -emit-sim %t/design.sv -o %t.bad 2>&1 | FileCheck %s --check-prefix=PARENT
 // RUN: not talos --upf %t/disabled-alias.upf -emit-sim %t/design.sv -o %t.bad 2>&1 | FileCheck %s --check-prefix=DISABLED
 // The public-domain exception does not authorize insertion inside a macro.
@@ -11,8 +11,8 @@
 // anonymous ownership must be handled before retention or atomic partitioning.
 // INSIDE: isolation placement crosses macro terminal boundary: top.w
 // OUTSIDE: external placement checks passed
-// ANONYMOUS: anonymous hard-macro power domains are not implemented
-// ANONYMOUS-NOT: collective retention
+// ANONYMOUS: upf.domain @"$anonymous:top.w" elements ["top.w"]
+// ANONYMOUS-SAME: anonymous_parent = @top.ALL
 // PARENT: hard macro cannot be explicitly selected in its parent's power domain
 // DISABLED: per-object disabled simstate semantics are not implemented
 

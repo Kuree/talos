@@ -2,15 +2,16 @@
 // RUN: not talos-opt %t/inside.mlir --elaborate-upf --verify-each 2>&1 | FileCheck %s --check-prefix=INSIDE
 // RUN: not talos-opt %t/inside.mlir --prepare-upf-snapshot-publications --verify-each 2>&1 | FileCheck %s --check-prefix=INSIDE
 // RUN: talos-opt %t/outside.mlir --prepare-upf-snapshot-publications --canonicalize --cse --verify-each | FileCheck %s --check-prefix=OUTSIDE
-// RUN: not talos-opt %t/inherited.mlir --resolve-upf-domains --verify-each 2>&1 | FileCheck %s --check-prefix=ANONYMOUS
+// RUN: talos-opt %t/inherited.mlir --resolve-upf-domains --verify-each | FileCheck %s --check-prefix=ANONYMOUS
 // RUN: not talos-opt %t/parent.mlir --resolve-upf-domains --verify-each 2>&1 | FileCheck %s --check-prefix=PARENT
 // RUN: talos-opt %t/separate.mlir --resolve-upf-domains --canonicalize --cse --verify-each | FileCheck %s --check-prefix=SEPARATE
 // Raw MLIR cannot bypass source placement or hard-macro ownership admission.
-// Missing anonymous ownership diagnoses before atomic minimum-extent checks.
+// Anonymous ownership is established before atomic minimum-extent checks.
 // INSIDE: isolation placement crosses macro terminal boundary: top.box
 // OUTSIDE: upf.domain @PD elements ["top.box"]
 // OUTSIDE-SAME: isolation_top = "top"
-// ANONYMOUS: anonymous hard-macro power domains are not implemented
+// ANONYMOUS: upf.domain @"$anonymous:top.box" elements ["top.box"]
+// ANONYMOUS-SAME: anonymous_parent = @PD
 // PARENT: hard macro cannot be explicitly selected in its parent's power domain
 // SEPARATE: upf.domain @PARENT elements ["top"]
 // SEPARATE-SAME: excluded = ["top.box"]

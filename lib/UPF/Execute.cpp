@@ -2794,7 +2794,8 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
         upf::DomainExtentAttr{}, domain.atomic,
         domain.isolationTop.empty()
             ? StringAttr{}
-            : builder.getStringAttr(domain.isolationTop));
+            : builder.getStringAttr(domain.isolationTop),
+        FlatSymbolRefAttr{});
   }
   if (failed(resolveUPFDomainExtents(module)))
     return failure();

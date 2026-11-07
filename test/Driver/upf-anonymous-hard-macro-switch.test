@@ -1,0 +1,72 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.native && %t.native | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc && %t.bc | FileCheck %s
+// RUN: talos --upf %t/design.upf -DDELAYED -O3 --mlir-verify-each %t/design.sv -o %t.delayed && %t.delayed | FileCheck %s
+// RUN: talos --upf %t/design.upf -DDELAYED -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.delayed-bc && %t.delayed-bc | FileCheck %s
+// RUN: talos --upf %t/design.upf -emit-slang %t/design.sv -o %t.mlir && FileCheck %s --check-prefix=IR --input-file=%t.mlir
+// RUN: talos --upf %t/design.upf --target=wasm32 -O3 --execution-tier=native --mlir-verify-each -c %t/design.sv -o %t.wasm && %llvm_dist/bin/llvm-readobj --file-headers %t.wasm | FileCheck %s --check-prefix=WASM
+// Share the computed primary without a second switch writer. Published loss
+// and pending NBA cancellation must agree for parent and anonymous storage;
+// an OFF/ON control pulse without a published loss must not invent corruption.
+// CHECK: anonymous switched primary passed
+// WASM: AddressSize: 32bit
+// IR: upf.domain @top.PD elements ["top.dut"]
+// IR-SAME: input =
+// IR: upf.domain @"$anonymous:top.dut.mac" elements ["top.dut.mac"]
+// IR-NOT: input =
+// IR-NOT: upf.supply
+
+//--- design.sv
+module macro_cell(input logic clk,d,output logic q=0);
+`ifdef DELAYED
+  always @(posedge clk) q <= #3 d;
+`else
+  always @(posedge clk) q <= d;
+`endif
+endmodule
+module host(input logic clk,d,output logic parent_q=0,output wire macro_q);
+  macro_cell mac(clk,d,macro_q);
+`ifdef DELAYED
+  always @(posedge clk) parent_q <= #3 d;
+`else
+  always @(posedge clk) parent_q <= d;
+`endif
+endmodule
+module top;
+  import UPF::*;
+  logic clk=0,d=1,on=1;
+  wire parent_q,macro_q;
+  host dut(clk,d,parent_q,macro_q);
+  initial begin
+    if (!supply_on("/top/VDD",1.0) || !supply_on("/top/G",0.0)) $fatal(1,"supplies");
+    #1; clk=1;
+    #4;
+    if ({parent_q,macro_q} !== 2'b11) $fatal(1,"normal switched update");
+    clk=0; d=0;
+    #1; clk=1;
+    #1; on=0;
+    #1;
+    if ({parent_q,macro_q} !== 2'bxx) $fatal(1,"published switch loss");
+    on=1;
+    #3;
+    if ({parent_q,macro_q} !== 2'bxx) $fatal(1,"stale switched NBA replayed");
+    clk=0;
+    #1; clk=1;
+    #4;
+    if ({parent_q,macro_q} !== 2'b00) $fatal(1,"switched recovery update");
+    clk=0; d=1;
+    #1; clk=1; on=0; on=1;
+    #4;
+    if ({parent_q,macro_q} !== 2'b11) $fatal(1,"unpublished switch pulse corrupted");
+    $display("anonymous switched primary passed"); $finish;
+  end
+endmodule
+//--- design.upf
+create_supply_net VDD
+create_supply_net G
+create_supply_net VSW
+create_power_domain PD -elements dut
+set_domain_supply_net PD -primary_power_net VSW -primary_ground_net G
+create_power_switch SW -domain PD -input_supply_port {in VDD} -output_supply_port {out VSW} -control_port {ctrl on} -on_state {ON in ctrl}
+set_design_attributes -models macro_cell -is_hard_macro -attribute {UPF_simstate_behavior SIMSTATE_ONLY}

@@ -1,7 +1,7 @@
 // CLAUSE: set_design_attributes
 // REQUIRES: upf
 // XFAIL: *
-// Hard-macro anonymous-domain and related-supply port-corruption semantics are not implemented.
+// Hard-macro related-supply port-corruption semantics are not implemented.
 // Pins: model-only hard-macro attributes establish a leaf boundary and its anonymous domain (IEEE 1801-2018 4.9, 6.41).
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top --upf %S/Inputs/6.41/design.upf -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe
