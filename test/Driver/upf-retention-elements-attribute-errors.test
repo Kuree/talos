@@ -1,0 +1,23 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: not talos --upf %t/design.upf -emit-slang %t/retention.sv -o %t.bad 2>&1 | FileCheck %s --check-prefix=VALUE
+// RUN: not talos --upf %t/design.upf -emit-slang %t/instance.sv -o %t.bad 2>&1 | FileCheck %s --check-prefix=MODEL
+// RUN: not talos --upf %t/design.upf -emit-slang %t/signal.sv -o %t.bad 2>&1 | FileCheck %s --check-prefix=MODEL
+// VALUE: UPF_retention must be required or optional
+// MODEL: UPF_is_hard_macro and UPF_is_soft_macro are model-only attributes
+
+//--- design.upf
+set_retention_elements EMPTY -elements {}
+//--- retention.sv
+module top;
+  (* UPF_retention="invalid" *) logic q;
+endmodule
+//--- instance.sv
+module leaf; endmodule
+module top;
+  (* UPF_is_hard_macro="TRUE" *) leaf dut();
+endmodule
+//--- signal.sv
+module top;
+  (* UPF_is_hard_macro="TRUE" *) logic q;
+endmodule

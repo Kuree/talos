@@ -1,0 +1,48 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: not talos --upf %t/policies.upf -emit-sim -O0 %t/design.sv -o %t.policies 2>&1 | FileCheck %s --check-prefix=POLICY
+// RUN: not talos --upf %t/aon.upf -emit-sim -O0 %t/design.sv -o %t.aon 2>&1 | FileCheck %s --check-prefix=AON
+// RUN: not talos --upf %t/precedence.upf -emit-sim -O0 %t/design.sv -o %t.precedence 2>&1 | FileCheck %s --check-prefix=PRECEDENCE
+// RUN: not talos --upf %t/domains.upf -emit-sim -O0 %t/design.sv -o %t.domains 2>&1 | FileCheck %s --check-prefix=POLICY
+// Distinct controls can satisfy a protocol but require a stronger proof. Do
+// not declare them illegal, invent controls, or lose a global list at a domain
+// boundary. An instance-root list never gains explicit signal precedence.
+// POLICY: collective retention coherence for differing storage policies is not implemented
+// AON: collective retention list has uncovered state while another member is retained
+// AON-SAME: top.outside
+// PRECEDENCE: required collective retention list has uncovered state
+
+//--- design.sv
+module leaf(input logic clk);
+  logic q=0,r=0;
+  always @(posedge clk) begin : P q<=~q; r<=~r; end
+endmodule
+module top;
+  logic clk=0,rtc=0,other=0,outside=0;
+  leaf dut(clk),peer(clk);
+  always @(posedge clk) outside<=~outside;
+  initial begin #1 clk=1; #1 $finish; end
+endmodule
+//--- policies.upf
+create_supply_set RET
+create_power_domain PD -elements dut
+set_retention_elements G -elements {dut/q dut/r}
+set_retention Q -domain PD -elements dut/q -retention_condition rtc -retention_supply RET
+set_retention R -domain PD -elements dut/r -retention_condition other -retention_supply RET
+//--- aon.upf
+create_power_domain PD -elements dut
+set_retention_elements G -elements {dut/q outside} -retention_purpose optional
+set_retention Q -domain PD -elements dut/q -retention_condition rtc
+//--- precedence.upf
+create_power_domain PD -elements dut
+set_retention_elements G -elements dut
+set_retention ALL -domain PD -elements G -retention_condition rtc
+set_retention PROCESS -domain PD -elements dut/P -no_retention
+set_retention SIGNAL -domain PD -elements dut/q -retention_condition rtc
+//--- domains.upf
+create_supply_set RET
+create_power_domain PD -elements dut
+create_power_domain PEER -elements peer
+set_retention_elements G -elements {dut peer}
+set_retention Q -domain PD -elements G -retention_condition rtc -retention_supply RET
+set_retention R -domain PEER -elements G -retention_condition other -retention_supply RET

@@ -1,0 +1,70 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/local.upf -O0 --mlir-verify-each %t/design.sv -o %t.local && %t.local +expected=3 | FileCheck %s
+// RUN: talos --upf %t/default.upf -O3 --mlir-verify-each %t/design.sv -o %t.default && %t.default +expected=7 | FileCheck %s
+// RUN: talos --upf %t/bare.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bare && %t.bare +expected=7 | FileCheck %s
+// RUN: talos --upf %t/excluded.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.excluded && %t.excluded +expected=2 | FileCheck %s
+// RUN: talos --upf %t/generate.upf -O0 --mlir-verify-each %t/design.sv -o %t.generate && %t.generate +expected=7 | FileCheck %s
+// FALSE includes direct local state inside generate scopes, while TRUE also
+// traverses child instances. A signal exclusion wins through its port alias.
+// CHECK: collective transitivity passed
+
+//--- design.sv
+module leaf(input logic clk,d);
+  logic q=0; always @(posedge clk) q<=d;
+endmodule
+module cluster(clk,d,out);
+  input logic clk,d;
+  output logic out;
+  logic q=0; assign out=q;
+  always @(posedge clk) q<=d;
+  if (1) begin : generated
+    logic q=0; always @(posedge clk) q<=d;
+  end
+  leaf child(clk,d);
+endmodule
+module top;
+  import UPF::*;
+  logic clk=0,d=0,hold=0;
+  wire out;
+  cluster dut(clk,d,out);
+  integer expected;
+  initial begin
+    if (!supply_on("/top/PD.primary.power") || !supply_on("/top/PD.primary.ground",0.0))
+      $fatal(1,"supplies");
+    if (!$value$plusargs("expected=%d",expected)) $fatal(1,"expected mask");
+    #1 d=1; clk=1;
+    #1 hold=1; clk=0; d=0;
+    #1 clk=1;
+    #1;
+    if ({dut.child.q,dut.generated.q,dut.q} !== 3'(expected))
+      $fatal(1,"transitive projection %b expected %b",{dut.child.q,dut.generated.q,dut.q},3'(expected));
+    $display("collective transitivity passed");
+    $finish;
+  end
+endmodule
+//--- base.upf
+create_power_domain PD -elements dut
+set_retention DEFAULT -domain PD -retention_condition 0
+//--- local.upf
+source [file join [file dirname [info script]] base.upf]
+set_retention_elements G -elements dut -transitive FALSE
+set_retention SELECT -domain PD -elements G -retention_condition hold
+//--- default.upf
+source [file join [file dirname [info script]] base.upf]
+set_retention_elements G -elements dut
+set_retention SELECT -domain PD -elements G -retention_condition hold
+//--- bare.upf
+source [file join [file dirname [info script]] base.upf]
+set_retention_elements G -elements dut -transitive
+set_retention SELECT -domain PD -elements G -retention_condition hold
+//--- excluded.upf
+source [file join [file dirname [info script]] base.upf]
+set_retention_elements G -elements dut -exclude_elements {dut/q dut/child}
+set_retention SELECT -domain PD -elements G -retention_condition hold
+//--- generate.upf
+source [file join [file dirname [info script]] base.upf]
+set_retention_elements G -elements dut/generated
+set_retention INSTANCE -domain PD -elements dut -retention_condition hold
+set_retention GENERATE -domain PD -elements G -retention_condition 0
+set_retention DIRECT -domain PD -elements dut/generated -retention_condition 0

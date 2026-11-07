@@ -5,6 +5,7 @@
 #include "PublicationCallback.h"
 #include "ReferenceWindow.h"
 #include "RetentionReadback.h"
+#include "RetentionSelection.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/SymbolTable.h"
@@ -22,19 +23,8 @@ using namespace mlir;
 namespace talos {
 namespace {
 using namespace upf_detail;
-struct Alias {
-  StringRef path;
-  uint64_t scope;
-  bool partial = false;
-};
-struct Register {
-  sim::SimStorageDeclOp declaration;
-  SmallVector<Alias> aliases;
-  SmallVector<Operation *> writers;
-  SmallVector<StringRef> processes;
-  upf::RetentionAttr strategy;
-  Descriptor visible, backing;
-};
+using Alias = RetentionAlias;
+using Register = RetentionRegister;
 struct Strategy {
   upf::RetentionAttr attribute;
   SmallVector<Register *> registers;
@@ -69,6 +59,8 @@ struct Lowering {
     for (auto port : this->o.design.getOps<sim::SimPortDeclOp>())
       if (!port.getSourceIsNet())
         aliases[port.getSourceId()].push_back(port);
+    if (!this->o.root)
+      return;
     rootBoundary = this->o.root.getBody().front().getTerminator();
     for (Operation &op : this->o.root.getBody().front()) {
       if (isa<sim::SimSpawnOp>(op)) {
@@ -85,7 +77,7 @@ struct Lowering {
   }
   Location location(upf::RetentionAttr strategy) {
     return strategy.getDeclaration() ? Location(strategy.getDeclaration())
-                                     : o.domain.getLoc();
+                                     : o.design.getLoc();
   }
   uint64_t owner(uint64_t scope) {
     llvm::DenseSet<uint64_t> seen;
@@ -106,65 +98,6 @@ struct Lowering {
     for (auto visited : seen)
       instanceOwners[visited] = scope;
     return scope;
-  }
-  unsigned rank(upf::RetentionAttr strategy, Register &reg, bool &partial) {
-    // IEEE 1801-2018 5.9.3: explicit descendant inclusions survive an
-    // excluded ancestor, and an exact exclusion wins. Resolve membership
-    // across every alias of the physical register, so an excluded variable
-    // cannot reenter the strategy through its output-port name. Signal names
-    // have the same specificity regardless of their spelling or hierarchy.
-    size_t included = 0, excluded = 0;
-    unsigned precedence = 0;
-    partial = false;
-    auto scope = scopes.lookup(owner(reg.declaration.getScopeId()));
-    StringRef instance = scope && scope.getHierarchicalName()
-                             ? *scope.getHierarchicalName()
-                             : StringRef{};
-    for (const auto &alias : reg.aliases) {
-      if (!contains(o.domain, alias.path))
-        continue;
-      if (strategy.getDomainDefault()) {
-        included = std::max(included, size_t{1});
-        precedence = std::max(precedence, 1u);
-      }
-      auto match = [&](upf::RetentionElementAttr element) {
-        StringRef path = element.getPath().getValue();
-        if (element.getKind() == upf::RetentionElementKind::Process)
-          return llvm::is_contained(reg.processes, path);
-        return element.getKind() == upf::RetentionElementKind::Signal
-                   ? path == alias.path
-                   : within(alias.path, path);
-      };
-      auto specificity = [&](upf::RetentionElementAttr element) {
-        if (element.getKind() == upf::RetentionElementKind::Signal)
-          return std::numeric_limits<size_t>::max();
-        if (element.getKind() == upf::RetentionElementKind::Process)
-          return std::numeric_limits<size_t>::max() - 1;
-        return size_t{2} + element.getPath().getValue().count('.');
-      };
-      for (auto attribute : strategy.getElements()) {
-        auto element = cast<upf::RetentionElementAttr>(attribute);
-        if (!match(element))
-          continue;
-        bool signal = element.getKind() == upf::RetentionElementKind::Signal;
-        bool process = element.getKind() == upf::RetentionElementKind::Process;
-        included = std::max(included, specificity(element));
-        // 5.7.3: signal > process > owning instance > transitive instance >
-        // domain default. Exclusions affect membership, never precedence.
-        precedence = std::max(precedence,
-                              signal                                     ? 5u
-                              : process                                  ? 4u
-                              : element.getPath().getValue() == instance ? 3u
-                                                                         : 2u);
-        partial |= signal && alias.partial;
-      }
-      for (auto attribute : strategy.getExcluded()) {
-        auto element = cast<upf::RetentionElementAttr>(attribute);
-        if (match(element))
-          excluded = std::max(excluded, specificity(element));
-      }
-    }
-    return included > excluded ? precedence : 0;
   }
   bool startup(sim::SimFuncOp fn) {
     auto found = startupCache.find(fn);
@@ -317,9 +250,7 @@ struct Lowering {
     }
     return true;
   }
-  LogicalResult plan() {
-    if (!o.domain.getRetentionsAttr())
-      return success();
+  LogicalResult plan(RetentionSelection &selection) {
     llvm::DenseMap<uint64_t, StringRef> processBindings;
     llvm::StringSet<> processNames;
     llvm::StringSet<> requestedProcesses;
@@ -328,21 +259,13 @@ struct Lowering {
         processBindings[unit.getId()] = *name;
         processNames.insert(*name);
       }
-    for (auto attr : o.domain.getRetentionsAttr()) {
-      auto strategy = cast<upf::RetentionAttr>(attr);
-      for (auto selectors : {strategy.getElements(), strategy.getExcluded()})
-        for (auto attr : selectors) {
-          auto selector = cast<upf::RetentionElementAttr>(attr);
-          if (selector.getKind() != upf::RetentionElementKind::Process)
-            continue;
-          StringRef name = selector.getPath().getValue();
-          if (!processNames.contains(name))
-            return emitError(location(strategy))
-                   << "retention process selector has no source-code-unit "
-                      "binding: "
-                   << name;
-          requestedProcesses.insert(name);
-        }
+    for (auto &entry : selection.processes()) {
+      StringRef name = entry.getKey();
+      if (!processNames.contains(name))
+        return o.design.emitError()
+               << "retention process selector has no source-code-unit binding: "
+               << name;
+      requestedProcesses.insert(name);
     }
     // Preserve the producing procedure across direct calls. Unsupported helper
     // writers must reach the ordinary writer diagnostic after selection, rather
@@ -407,7 +330,7 @@ struct Lowering {
     llvm::DenseMap<uint64_t, SmallVector<Operation *>> writers;
     llvm::DenseSet<uint64_t> domainUnits;
     for (auto unit : o.design.getOps<sim::SimCodeUnitDeclOp>())
-      if (contains(o.domain, unit.getHierarchicalName()))
+      if (selection.domain(unit.getHierarchicalName()))
         domainUnits.insert(unit.getId());
     WalkResult inventory = o.design.walk([&](Operation *op) {
       Value target;
@@ -453,9 +376,10 @@ struct Lowering {
     });
     for (auto decl : o.design.getOps<sim::SimStorageDeclOp>()) {
       if (!decl.getHierarchicalName() ||
-          !contains(o.domain, *decl.getHierarchicalName()))
+          decl.getLifetime() == sim::Lifetime::Automatic)
         continue;
       Register reg;
+      reg.domain = selection.domain(*decl.getHierarchicalName());
       reg.declaration = decl;
       reg.visible = {decl.getId(), decl.getType()};
       reg.aliases.push_back({*decl.getHierarchicalName(), decl.getScopeId()});
@@ -488,10 +412,14 @@ struct Lowering {
       unsigned best = 0;
       bool partial = false;
       upf::RetentionAttr ambiguous;
-      for (auto attribute : o.domain.getRetentionsAttr()) {
+      auto candidates =
+          reg.domain ? reg.domain.getRetentionsAttr() : ArrayAttr{};
+      for (auto attribute : candidates
+                                ? candidates
+                                : ArrayAttr::get(o.design.getContext(), {})) {
         auto strategy = cast<upf::RetentionAttr>(attribute);
         bool partialMatch = false;
-        unsigned precedence = rank(strategy, reg, partialMatch);
+        unsigned precedence = selection.rank(strategy, reg, partialMatch);
         if (precedence == 0 || precedence < best)
           continue;
         if (precedence == best && reg.strategy != strategy) {
@@ -512,6 +440,7 @@ struct Lowering {
             << "other strategy is declared here";
         return failure();
       }
+      selection.record(reg);
       if (!reg.strategy || reg.strategy.getNoRetention()) {
         // Ordinary roots, including external producers, are instrumented by
         // the global owner-aware write lowering after retention resolution.
@@ -558,8 +487,8 @@ struct Lowering {
         return decl.emitError(
             "retention requires one sequential writer per register");
       if (reg.strategy.getUseRetentionAsPrimary() &&
-          o.domain.getIsolationControl() &&
-          o.domain.getIsolationDiffSupplyOnly())
+          reg.domain.getIsolationControl() &&
+          reg.domain.getIsolationDiffSupplyOnly())
         // IEEE 1801-2018 6.50 Note 2 changes the driver supply used by
         // 6.45's default diff_supply_only filter. The current whole-boundary
         // mux cannot prove that selection for mixed RET/primary outputs.
@@ -667,39 +596,7 @@ struct Lowering {
     return arith::XOrIOp::create(b, loc, value, bit(loc, true));
   }
   SmallVector<upf::UPFSupplySetOp> policies(FlatSymbolRefAttr root) {
-    SmallVector<upf::UPFSupplySetOp> result;
-    llvm::DenseSet<Operation *> seen;
-    llvm::DenseSet<Operation *> included;
-    SmallVector<std::pair<upf::UPFSupplySetOp, bool>> pending{
-        {SymbolTable::lookupNearestSymbolFrom<upf::UPFSupplySetOp>(o.domain,
-                                                                   root),
-         true}};
-    while (!pending.empty()) {
-      auto [set, supplier] = pending.pop_back_val();
-      if (!set)
-        continue;
-      // 6.10: strategy handles have local state catalogs. Traverse
-      // electrical equivalence, admitting the selected handle and its
-      // supplying catalogs, but never an unrelated consumer strategy's
-      // private policy.
-      if ((supplier || (!set.getOwnerAttr() && !set.getStrategyAttr())) &&
-          included.insert(set).second)
-        result.push_back(set);
-      if (!seen.insert(set).second)
-        continue;
-      if (auto associated = set.getAssociatedAttr())
-        for (auto attr : llvm::reverse(associated))
-          pending.emplace_back(
-              SymbolTable::lookupNearestSymbolFrom<upf::UPFSupplySetOp>(
-                  set, cast<FlatSymbolRefAttr>(attr)),
-              false);
-      if (auto source = set.getBindingAttr())
-        pending.emplace_back(
-            SymbolTable::lookupNearestSymbolFrom<upf::UPFSupplySetOp>(set,
-                                                                      source),
-            true);
-    }
-    return result;
+    return getRetentionSupplyPolicies(o.domain, root);
   }
   Value normal(Location loc, Value ctx, ArrayRef<upf::UPFSupplySetOp> sets) {
     Value value = bit(loc, true);
@@ -1119,8 +1016,7 @@ struct Lowering {
     op.erase();
   }
   LogicalResult lower() {
-    if (failed(plan()))
-      return failure();
+    registers.assign(o.plan.begin(), o.plan.end());
     for (auto &reg : registers) {
       auto found = llvm::find_if(strategies, [&](const Strategy &s) {
         return s.attribute == reg.strategy;
@@ -1280,6 +1176,40 @@ struct Lowering {
   }
 };
 } // namespace
+LogicalResult planRetentions(sim::SimDesignOp design, sim::SimFuncOp root,
+                             const llvm::StringMap<Descriptor> &descriptors,
+                             const llvm::StringMap<Descriptor> &supplies,
+                             RetentionPlans &plans) {
+  auto module = design->getParentOfType<ModuleOp>();
+  bool needed = !module.getOps<upf::UPFHierarchyOp>().empty() ||
+                !module.getOps<upf::UPFRetentionElementsOp>().empty() ||
+                !module.getOps<upf::UPFDesignAttributesOp>().empty();
+  for (auto domain : module.getOps<upf::UPFDomainOp>())
+    needed |= domain.getRetentionsAttr() && !domain.getRetentionsAttr().empty();
+  if (!needed)
+    return success();
+  RetentionSelection selection(design);
+  if (failed(selection.initialize()))
+    return failure();
+  bool strategies = false;
+  for (auto domain : module.getOps<upf::UPFDomainOp>())
+    strategies |=
+        domain.getRetentionsAttr() && !domain.getRetentionsAttr().empty();
+  // Neither 5.6 nor 6.51 has an active obligation without a strategy. Avoid
+  // demanding closed writer/call provenance for dormant annotations/lists.
+  if (!strategies)
+    return success();
+  RetentionLoweringResult unused;
+  RetentionLoweringOptions options{design, {},      root, descriptors, supplies,
+                                   {},     nullptr, {},   {},          {},
+                                   {},     {},      {},   {}};
+  Lowering planning(options, unused);
+  if (failed(planning.plan(selection)) || failed(selection.validate()))
+    return failure();
+  for (auto &reg : planning.registers)
+    plans[reg.domain].push_back(std::move(reg));
+  return success();
+}
 LogicalResult lowerRetentions(const RetentionLoweringOptions &options,
                               RetentionLoweringResult &result) {
   return Lowering(options, result).lower();

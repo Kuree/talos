@@ -4,6 +4,51 @@ include "talos/Dialect/UPF/UPFDialect.td"
 include "talos/Dialect/UPF/UPFAttrs.td"
 include "mlir/IR/OpBase.td"
 include "mlir/IR/SymbolInterfaces.td"
+def UPFHierarchyOp : Op<UPFDialect, "hierarchy", []> {
+  let summary = "compiler-only HDL hierarchy for declarative UPF selection";
+  let description = [{
+    Preserves component-aware parent links of active instances and generate
+    scopes. Simulation reflection can elide lexical generate scopes without
+    changing UPF selection, traversal or selector precedence. This semantic
+    inventory is consumed during UPF elaboration and has no runtime cost.
+  }];
+  let arguments = (ins ArrayAttr:$scopes);
+  let assemblyFormat = "$scopes attr-dict";
+  let hasVerifier = 1;
+}
+def UPFRetentionElementsOp : Op<UPFDialect, "retention_elements", [Symbol]> {
+  let summary = "named collective-state constraint (IEEE 1801 6.51)";
+  let description = [{
+    Preserves the declaration scope, aggregate typed HDL selectors and filters.
+    A retention strategy can reference this symbol without converting implied
+    registers into explicit signal selectors. Membership and collective-state
+    coverage are resolved against the final physical state and domain extents.
+    This declaration supplies no save/restore controls and creates no runtime
+    storage or processes by itself.
+  }];
+  let arguments = (ins SymbolNameAttr:$sym_name, StrAttr:$scope,
+      ArrayAttr:$elements, ArrayAttr:$excluded,
+      OptionalAttr<UPFRetentionFilter>:$applies_to,
+      DefaultValuedAttr<UPFRetentionPurpose, "::talos::upf::RetentionPurpose::Required">:$purpose,
+      DefaultValuedAttr<BoolAttr, "true">:$transitive);
+  let assemblyFormat = "$sym_name `scope` $scope `elements` $elements attr-dict";
+  let hasVerifier = 1;
+}
+def UPFDesignAttributesOp : Op<UPFDialect, "design_attributes", []> {
+  let summary = "resolved HDL object attributes used by UPF selection";
+  let description = [{
+    Records an object's retention requirement and leaf boundary after resolving
+    model and instance attribute precedence. Filtering precedes projection to
+    the object's implied state; attributes do not inherit into child instances.
+    These annotations are consumed with the declarative UPF intent.
+  }];
+  let arguments = (ins UPFRetentionElementAttr:$element,
+      OptionalAttr<UPFRetentionPurpose>:$retention,
+      DefaultValuedAttr<BoolAttr, "false">:$hard_macro,
+      DefaultValuedAttr<BoolAttr, "false">:$soft_macro);
+  let assemblyFormat = "$element attr-dict";
+  let hasVerifier = 1;
+}
 def UPFSupplyOp : Op<UPFDialect, "supply", [Symbol]> {
   let summary = "one shared root supply value and its absolute handle aliases";
   let description = [{

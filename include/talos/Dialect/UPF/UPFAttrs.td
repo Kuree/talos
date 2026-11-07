@@ -56,6 +56,13 @@ def UPFRetentionElementAttr : UPFAttr<"RetentionElement", "retention_element"> {
   let assemblyFormat = "`<` struct(params) `>`";
   let genVerifyDecl = 1;
 }
+def UPFHierarchyScopeAttr : UPFAttr<"HierarchyScope", "hierarchy_scope"> {
+  let summary = "semantic HDL instance or generate scope before inventory elision";
+  let parameters = (ins "::mlir::StringAttr":$path,
+      "::mlir::StringAttr":$parent, "bool":$instance);
+  let assemblyFormat = "`<` struct(params) `>`";
+  let genVerifyDecl = 1;
+}
 def UPFRetentionTriggerAttr : UPFAttr<"RetentionTrigger", "retention_trigger"> {
   // 6.50: high/low describe an asserted level, with the event at its trailing
   // edge. Preserve that distinction for write priority and event lowering.

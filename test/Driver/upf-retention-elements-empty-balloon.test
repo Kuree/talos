@@ -1,0 +1,34 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/named.upf -O0 -emit-sim --mlir-verify-each %t/design.sv -o - | FileCheck %s --implicit-check-not=simulation.snapshot_publications --implicit-check-not=simulation.event.snapshot. --implicit-check-not=__upf_balloon
+// RUN: talos --upf %t/unused.upf -O3 -emit-sim --mlir-verify-each %t/design.sv -o - | FileCheck %s --implicit-check-not=simulation.snapshot_publications --implicit-check-not=simulation.event.snapshot. --implicit-check-not=__upf_balloon
+// Named empty lists have the same admission and control-liveness semantics as
+// literal empty -elements, including before early publication preparation.
+// CHECK: simulation.dpi.call "outside_call"
+
+//--- design.sv
+module leaf;
+  logic unused;
+endmodule
+module top;
+  leaf dut();
+  logic save = 0;
+  logic q = 0;
+  import "DPI-C" context function void outside_call();
+  initial begin
+    q = 1;
+    outside_call();
+    save = 1;
+    q = 0;
+    $finish;
+  end
+endmodule
+
+//--- named.upf
+create_power_domain Nonempty -elements dut
+set_retention_elements EMPTY -elements {}
+set_retention R -domain Nonempty -elements EMPTY -save_signal {save high}
+//--- unused.upf
+create_power_domain Nonempty -elements dut
+set_retention_elements EMPTY -elements {}
+set_retention R -domain Nonempty -elements EMPTY -save_signal {dut/unused high}

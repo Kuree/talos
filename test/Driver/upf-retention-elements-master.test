@@ -1,0 +1,56 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// A vector of state can have independent clocks and differently named but
+// equivalent policies. Output-only retention supply selection can differ.
+// CHECK: collective master state passed
+
+//--- design.sv
+module leaf(input logic a,b, input logic [7:0] d);
+  logic [7:0] q=0,r=0;
+  always @(posedge a) q <= d;
+  always @(posedge b) r <= d;
+endmodule
+module top;
+  import UPF::*;
+  logic a=0,b=0,rtc=0,enable=1;
+  logic [7:0] d=0;
+  leaf dut(a,b,d);
+  initial begin
+    if (!supply_on("/top/AON.power") || !supply_on("/top/AON.ground",0.0))
+      $fatal(1,"supplies");
+    #1 d=8'h31; a=1;
+    #1 d=8'h42; b=1;
+    #1 rtc=1;
+    #1 a=0; b=0; d=8'h99;
+    #1 a=1; b=1;
+    #1;
+    if (dut.q !== 8'h31 || dut.r !== 8'h42) $fatal(1,"collective hold");
+    enable=0;
+    #1;
+    if (dut.q !== 8'h31 || dut.r !== 'x) $fatal(1,"output supply selection");
+    enable=1;
+    #1;
+    if (dut.q !== 8'h31 || dut.r !== 8'h42) $fatal(1,"collective restore");
+    rtc=0; a=0; b=0;
+    #1 a=1; b=1;
+    #1;
+    if (dut.q !== 8'h99 || dut.r !== 8'h99) $fatal(1,"resumed writes");
+    $display("collective master state passed");
+    $finish;
+  end
+endmodule
+//--- design.upf
+create_supply_set AON
+create_supply_set SW -function {ground AON.ground}
+create_power_domain PD -elements dut -supply {primary SW}
+create_power_switch PS -domain PD -input_supply_port {vin AON.power} \
+  -output_supply_port {vout PD.primary.power} -control_port {en enable} -on_state {ON vin en}
+set_retention_elements VECTOR -elements {dut/q dut/r}
+set_retention_elements Q -elements dut/q
+set_retention_elements R -elements dut/r
+set_retention FIRST -domain PD -elements Q -retention_condition rtc -retention_supply AON -use_retention_as_primary
+set_retention SECOND -domain PD -elements R -retention_condition rtc -retention_supply AON

@@ -33,6 +33,10 @@ inline llvm::ArrayRef<llvm::StringRef> getSupplyFunctionNames() {
       "power", "ground", "nwell", "pwell", "deepnwell", "deeppwell"};
   return names;
 }
+// Literal empty selections and references solely to structurally empty lists
+// must not activate retention machinery before physical-state inference.
+bool isStaticallyEmptyRetention(RetentionAttr strategy, mlir::Operation *from,
+                                mlir::SymbolTableCollection *symbols = nullptr);
 } // namespace talos::upf
 #define GET_OP_CLASSES
 #include "talos/Dialect/UPF/UPFOps.h.inc"

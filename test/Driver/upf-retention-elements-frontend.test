@@ -1,0 +1,57 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.mlir | FileCheck %s --check-prefix=TCL
+// RUN: talos-opt %t.mlir | talos-opt | FileCheck %s --check-prefix=IR
+// IEEE 1801-2018 6.50/6.51: scoped symbols, typed references, explicit empty
+// selection, Tcl rollback and namespace collisions. Model and procedural
+// attributes are attached to their semantic objects, not inferred registers.
+// TCL: collective list transactions passed
+// IR-DAG: upf.retention_elements @top.EMPTY scope "top" elements []
+// IR-DAG: upf.retention_elements @top.G scope "top" elements
+// IR-DAG: upf.retention_elements @top.dut.G scope "top.dut" elements
+// IR-DAG: upf.design_attributes <path = "top.dut", kind = instance>
+// IR-DAG: upf.design_attributes <path = "top.dut.P", kind = process>
+// IR-DAG: elements = [@top.dut.G]
+// IR-DAG: elements = [@top.EMPTY]
+
+//--- design.sv
+(* UPF_retention = "required" *)
+module leaf(input logic clk, output logic q = 0);
+  (* UPF_retention = "optional" *) always @(posedge clk) begin : P q <= ~q; end
+endmodule
+module top;
+  logic clk = 0, rtc = 0;
+  wire q;
+  leaf dut(clk,q);
+  initial begin #1 clk=1; #1 $finish; end
+endmodule
+//--- design.upf
+proc expect_error {script pattern} {
+  if {[catch {uplevel 1 $script} message] != 1 || ![string match $pattern $message]} {
+    error "expected <$pattern>, got <$message>"
+  }
+}
+expect_error {set_retention_elements G} {*requires -elements*}
+expect_error {set_retention_elements G -elements dut -transitive bad} {*expected boolean*}
+expect_error {set_retention_elements G -elements dut -applies_to bogus} {*retention filter must*}
+expect_error {set_retention_elements G -elements dut -retention_purpose bogus} {*retention purpose must*}
+expect_error {set_retention_elements G -elements dut -transitive -transitive} {*duplicate UPF option*}
+expect_error {set_retention_elements G -elements absent} {*unknown or unsupported retention selector*}
+expect_error {set_retention_elements G -elements dut -update} {*unsupported set_retention_elements option*}
+expect_error {set_retention_elements G -elements dut -exclude_elements absent} {*unknown or unsupported retention selector*}
+expect_error {set_retention_elements dut -elements dut} {*conflicts with an existing object*}
+set_retention_elements G -elements {dut dut} -transitive -retention_purpose optional
+expect_error {set_retention_elements G -elements {}} {*conflicts with an existing object*}
+expect_error {set_retention_elements NEST -elements G} {*unknown or unsupported retention selector*}
+expect_error {create_supply_net G} {*conflicts with an existing object*}
+expect_error {create_supply_set G} {*conflicts with an existing object*}
+expect_error {create_power_domain G -elements dut} {*conflicts with an existing object*}
+set_retention_elements EMPTY -elements {}
+set_scope dut
+set_retention_elements G -elements P -applies_to optional -transitive FALSE
+set_scope ..
+create_power_domain PD -elements dut
+set_retention KEEP -domain PD -elements dut/G -retention_condition rtc
+set_retention NOTHING -domain PD -elements EMPTY -retention_condition rtc
+expect_error {set_retention BAD -domain PD -exclude_elements G -retention_condition rtc} {*unknown or unsupported retention selector*}
+puts "collective list transactions passed"

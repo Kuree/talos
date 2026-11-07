@@ -1,0 +1,88 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/valid.mlir | talos-opt | FileCheck %s
+// RUN: talos-opt %t/invalid.mlir --split-input-file --verify-diagnostics
+// CHECK: upf.retention_elements @G scope "top" elements
+// CHECK-SAME: applies_to = 2 : i32
+// CHECK-SAME: purpose = 1 : i32
+// CHECK-SAME: transitive = false
+// CHECK: upf.design_attributes <path = "top.dut", kind = instance>
+// CHECK: upf.hierarchy [#upf.hierarchy_scope<path = "top", parent = "", instance = true>
+
+//--- valid.mlir
+module {
+  upf.retention_elements @G scope "top" elements [#upf.retention_element<path = "top.dut", kind = instance>] {excluded = [#upf.retention_element<path = "top.dut.P", kind = process>], applies_to = 2 : i32, purpose = 1 : i32, transitive = false}
+  upf.design_attributes <path = "top.dut", kind = instance> {retention = 0 : i32, hard_macro = true}
+  upf.hierarchy [#upf.hierarchy_scope<path = "top", parent = "", instance = true>, #upf.hierarchy_scope<path = "top.G", parent = "top", instance = false>]
+}
+//--- invalid.mlir
+module {
+  // expected-error @+1 {{requires a nonempty declaration scope}}
+  upf.retention_elements @G scope "" elements [] {excluded = []}
+}
+// -----
+module {
+  // expected-error @+1 {{requires typed HDL selectors}}
+  upf.retention_elements @G scope "top" elements ["top.dut"] {excluded = []}
+}
+// -----
+module {
+  // expected-error @+1 {{requires typed HDL selectors}}
+  upf.retention_elements @G scope "top" elements [] {excluded = [@other]}
+}
+// -----
+module {
+  // expected-error @+1 {{requires at least one design attribute}}
+  upf.design_attributes <path = "top.dut", kind = instance>
+}
+// -----
+module {
+  // expected-error @+1 {{a macro attribute requires an instance}}
+  upf.design_attributes <path = "top.q", kind = signal> {hard_macro = true}
+}
+// -----
+// expected-error @+1 {{retention selection requires typed HDL selectors}}
+#bad = #upf.retention<name = "R", scope = "top", elements = [], excluded = [@G], retentionSupply = @ret, primarySupply = @primary, noRetention = true>
+// -----
+module {
+  // expected-error @+1 {{attribute 'applies_to' failed to satisfy constraint}}
+  upf.retention_elements @G scope "top" elements [] {excluded = [], applies_to = 9 : i32}
+}
+// -----
+module {
+  // expected-error @+1 {{attribute 'purpose' failed to satisfy constraint}}
+  upf.retention_elements @G scope "top" elements [] {excluded = [], purpose = 9 : i32}
+}
+// -----
+#one = #upf.expression<[#upf.token<opcode = constant, value = true, unknown = false>]>
+module {
+  upf.supply @p names ["/top/P"] writable = true
+  upf.supply_set @primary functions {power = @p, ground = @p, nwell = @p, pwell = @p, deepnwell = @p, deeppwell = @p} required ["power"] {owner = @PD, associated = [@local]}
+  upf.supply_set @local functions {power = @p, ground = @p, nwell = @p, pwell = @p, deepnwell = @p, deeppwell = @p} required ["power"] {owner = @PD, strategy = "R", associated = [@primary]}
+  upf.supply_set @ret functions {power = @p, ground = @p, nwell = @p, pwell = @p, deepnwell = @p, deeppwell = @p} required ["power"] {owner = @PD, strategy = "R"}
+  // expected-error @+1 {{retention references an unknown element list}}
+  upf.domain @PD elements ["top.dut"] power @p on [] {primary = @primary, policies = [@primary], retentions = [#upf.retention<name = "R", scope = "top", elements = [@absent], excluded = [], retentionSupply = @ret, primarySupply = @local, condition = #one>]}
+}
+// -----
+module {
+  // expected-error @+1 {{requires typed HDL hierarchy entries}}
+  upf.hierarchy ["top"]
+}
+// -----
+module {
+  // expected-error @+1 {{duplicate HDL hierarchy scope}}
+  upf.hierarchy [#upf.hierarchy_scope<path = "top", parent = "", instance = true>, #upf.hierarchy_scope<path = "top", parent = "", instance = false>]
+}
+// -----
+module {
+  // expected-error @+1 {{hierarchy scope references an unknown parent}}
+  upf.hierarchy [#upf.hierarchy_scope<path = "top.G", parent = "top", instance = false>]
+}
+// -----
+// expected-error @+1 {{hierarchy parent must be a proper HDL path ancestor}}
+#bad = #upf.hierarchy_scope<path = "top.a", parent = "top.b", instance = true>
+// -----
+// A parent cycle is rejected at its first non-ancestor link.
+module {
+  // expected-error @+1 {{hierarchy parent must be a proper HDL path ancestor}}
+  upf.hierarchy [#upf.hierarchy_scope<path = "top", parent = "top.G", instance = true>, #upf.hierarchy_scope<path = "top.G", parent = "top", instance = false>]
+}

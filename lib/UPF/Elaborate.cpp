@@ -324,6 +324,7 @@ struct Lowering {
   llvm::DenseSet<uint64_t> originalStorage;
   SmallVector<WriteDomain> writeDomains;
   SmallVector<RetentionWrite> retainedWrites;
+  RetentionPlans retentionPlans;
   Lowering(sim::SimDesignOp design, bool preserveStorage)
       : design(design), builder(design.getContext()),
         preserveStorage(preserveStorage) {
@@ -364,6 +365,7 @@ struct Lowering {
                                }});
   }
   void collectReferencedStorage() {
+    SymbolTableCollection retentionSymbols;
     design.walk([&](sim::SimContextStorageOp ref) {
       referencedStorage.insert(ref.getId());
     });
@@ -401,7 +403,8 @@ struct Lowering {
         continue;
       if (auto retention = dyn_cast<upf::RetentionAttr>(attr))
         if (retention.getNoRetention() ||
-            (!retention.getDomainDefault() && retention.getElements().empty()))
+            upf::isStaticallyEmptyRetention(retention, design->getParentOp(),
+                                            &retentionSymbols))
           continue;
       if (auto token = dyn_cast<upf::ExpressionTokenAttr>(attr))
         if (token.getOpcode() == upf::ExpressionOpcode::Control)
@@ -1397,7 +1400,8 @@ struct Lowering {
           },
           [&](FlatSymbolRefAttr ref) {
             return SmallVector<Descriptor>{supplies.lookup(ref.getValue())};
-          }};
+          },
+          retentionPlans[domain]};
       if (failed(lowerRetentions(options, retention)))
         return failure();
       llvm::append_range(retainedWrites, retention.writes);
@@ -1584,12 +1588,19 @@ struct ElaborateUPFPass
         getOperation().getOps<upf::UPFSupplySetOp>());
     SmallVector<upf::UPFCompositeDomainOp> composites(
         getOperation().getOps<upf::UPFCompositeDomainOp>());
+    SmallVector<upf::UPFHierarchyOp> hierarchies(
+        getOperation().getOps<upf::UPFHierarchyOp>());
+    SmallVector<upf::UPFRetentionElementsOp> retentionElements(
+        getOperation().getOps<upf::UPFRetentionElementsOp>());
+    SmallVector<upf::UPFDesignAttributesOp> designAttributes(
+        getOperation().getOps<upf::UPFDesignAttributesOp>());
     bool accesses = false;
     getOperation().walk([&](Operation *op) {
       accesses |= isa<sim::SimSupplyControlOp, sim::SimSupplyReadOp>(op);
     });
     if (domains.empty() && composites.empty() && supplies.empty() &&
-        sets.empty() && !accesses) {
+        sets.empty() && hierarchies.empty() && retentionElements.empty() &&
+        designAttributes.empty() && !accesses) {
       getOperation()->removeAttr(upf::partialOnTranslationName);
       return;
     }
@@ -1621,6 +1632,12 @@ struct ElaborateUPFPass
         lowering.computed.try_emplace(condition->power.id,
                                       std::move(condition));
       }
+    if (failed(planRetentions(lowering.design, lowering.root,
+                              lowering.descriptors, lowering.supplies,
+                              lowering.retentionPlans))) {
+      signalPassFailure();
+      return;
+    }
     for (auto domain : domains)
       if (failed(lowering.apply(domain))) {
         signalPassFailure();
@@ -1655,6 +1672,12 @@ struct ElaborateUPFPass
     }
     for (auto composite : composites)
       composite.erase();
+    for (auto hierarchy : hierarchies)
+      hierarchy.erase();
+    for (auto list : retentionElements)
+      list.erase();
+    for (auto annotation : designAttributes)
+      annotation.erase();
     for (auto set : sets)
       set.erase();
     for (auto supply : supplies)

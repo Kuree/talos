@@ -15,6 +15,74 @@
 #define GET_OP_CLASSES
 #include "talos/Dialect/UPF/UPFOps.cpp.inc"
 namespace talos::upf {
+bool isStaticallyEmptyRetention(RetentionAttr strategy, mlir::Operation *from,
+                                mlir::SymbolTableCollection *symbols) {
+  if (strategy.getDomainDefault())
+    return false;
+  for (auto element : strategy.getElements()) {
+    auto reference = mlir::dyn_cast<mlir::FlatSymbolRefAttr>(element);
+    if (!reference)
+      return false;
+    auto list = symbols
+                    ? symbols->lookupNearestSymbolFrom<UPFRetentionElementsOp>(
+                          from, reference)
+                    : mlir::SymbolTable::lookupNearestSymbolFrom<
+                          UPFRetentionElementsOp>(from, reference);
+    if (!list || !list.getElements().empty())
+      return false;
+  }
+  return true;
+}
+mlir::LogicalResult
+HierarchyScopeAttr::verify(llvm::function_ref<mlir::InFlightDiagnostic()> error,
+                           mlir::StringAttr path, mlir::StringAttr parent,
+                           bool instance) {
+  if (!path || path.getValue().empty() || !parent || path == parent)
+    return error() << "hierarchy scope requires a path and a distinct parent";
+  if (!parent.getValue().empty() &&
+      !isWithinPath(path.getValue(), parent.getValue()))
+    return error() << "hierarchy parent must be a proper HDL path ancestor";
+  return mlir::success();
+}
+mlir::LogicalResult UPFHierarchyOp::verify() {
+  if (getScopes().size() > 1048576)
+    return emitOpError("hierarchy exceeds 1048576 scopes");
+  llvm::DenseSet<mlir::StringAttr> paths;
+  for (auto attr : getScopes()) {
+    auto scope = mlir::dyn_cast<HierarchyScopeAttr>(attr);
+    if (!scope)
+      return emitOpError("requires typed HDL hierarchy entries");
+    if (!paths.insert(scope.getPath()).second)
+      return emitOpError("duplicate HDL hierarchy scope");
+  }
+  for (auto attr : getScopes()) {
+    auto scope = mlir::cast<HierarchyScopeAttr>(attr);
+    if (!scope.getParent().getValue().empty() &&
+        !paths.contains(scope.getParent()))
+      return emitOpError("hierarchy scope references an unknown parent");
+  }
+  return mlir::success();
+}
+mlir::LogicalResult UPFRetentionElementsOp::verify() {
+  if (getScope().empty())
+    return emitOpError("requires a nonempty declaration scope");
+  for (auto entries : {getElements(), getExcluded()}) {
+    if (entries.size() > 4096)
+      return emitOpError("retention selection exceeds 4096 elements");
+    for (auto entry : entries)
+      if (!mlir::isa<RetentionElementAttr>(entry))
+        return emitOpError("requires typed HDL selectors");
+  }
+  return mlir::success();
+}
+mlir::LogicalResult UPFDesignAttributesOp::verify() {
+  if (!getRetentionAttr() && !getHardMacro() && !getSoftMacro())
+    return emitOpError("requires at least one design attribute");
+  if ((getHardMacro() || getSoftMacro()) &&
+      getElement().getKind() != RetentionElementKind::Instance)
+    return emitOpError("a macro attribute requires an instance");
+  return mlir::success();
+}
 static mlir::Operation *lookupDomain(mlir::SymbolTableCollection &symbols,
                                      mlir::Operation *from,
                                      mlir::FlatSymbolRefAttr name) {
@@ -404,6 +472,12 @@ UPFDomainOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
   if (auto retentions = getRetentionsAttr()) {
     for (auto attribute : retentions) {
       auto retention = mlir::cast<RetentionAttr>(attribute);
+      for (auto selector : retention.getElements())
+        if (auto list = mlir::dyn_cast<mlir::FlatSymbolRefAttr>(selector))
+          if (!symbols.lookupNearestSymbolFrom<UPFRetentionElementsOp>(*this,
+                                                                       list))
+            return emitOpError("retention references an unknown element list: ")
+                   << list;
       if (auto primary = getPrimaryAttr();
           primary && primary.getValue().ends_with(".primary")) {
         std::string stem = primary.getValue().drop_back(8).str() + "." +
@@ -683,11 +757,13 @@ mlir::LogicalResult RetentionAttr::verify(
     bool saveRestoreCorrupt) {
   if (!name || name.getValue().empty() || !scope || scope.getValue().empty())
     return error() << "retention strategy requires a name and execution scope";
-  for (auto selectors : {elements, excluded}) {
+  mlir::ArrayAttr selectorLists[] = {elements, excluded};
+  for (auto [index, selectors] : llvm::enumerate(selectorLists)) {
     if (!selectors || selectors.size() > 4096)
       return error() << "retention selection exceeds 4096 elements";
     for (auto selector : selectors)
-      if (!mlir::isa<RetentionElementAttr>(selector))
+      if (!mlir::isa<RetentionElementAttr>(selector) &&
+          !(index == 0 && mlir::isa<mlir::FlatSymbolRefAttr>(selector)))
         return error() << "retention selection requires typed HDL selectors";
   }
   if (domainDefault && !elements.empty())

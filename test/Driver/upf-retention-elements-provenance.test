@@ -1,0 +1,58 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/filtered.upf -O0 --mlir-verify-each %t/design.sv -o %t.filtered && %t.filtered +expected=7 | FileCheck %s
+// RUN: talos --upf %t/process.upf -O3 --mlir-verify-each %t/design.sv -o %t.process && %t.process +expected=5 | FileCheck %s
+// RUN: talos --upf %t/instance.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.instance && %t.instance +expected=12 | FileCheck %s
+// RUN: talos --upf %t/reentry.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.reentry && %t.reentry +expected=9 | FileCheck %s
+// A selected attributed producer contributes its inferred q even though q has
+// a different attribute. Process exclusions need producer provenance even
+// when the process is not an inclusion. Explicit signals can re-enter it.
+// CHECK: collective producer provenance passed
+
+//--- design.sv
+module leaf(input logic clk,d);
+  (* UPF_retention="required" *) logic q=0;
+  logic r=0;
+  (* UPF_retention="optional" *) logic s=0;
+  logic z=0;
+  (* UPF_retention="optional" *) always @(posedge clk) begin : P q<=d; r<=d; end
+  always @(posedge clk) begin s<=d; z<=d; end
+endmodule
+module top;
+  import UPF::*;
+  logic clk=0,d=0,hold=0;
+  leaf dut(clk,d);
+  integer expected;
+  initial begin
+    if (!supply_on("/top/PD.primary.power") || !supply_on("/top/PD.primary.ground",0.0))
+      $fatal(1,"supplies");
+    if (!$value$plusargs("expected=%d",expected)) $fatal(1,"expected mask");
+    #1 d=1; clk=1;
+    #1 hold=1; clk=0; d=0;
+    #1 clk=1;
+    #1;
+    if ({dut.z,dut.s,dut.r,dut.q} !== 4'(expected))
+      $fatal(1,"producer projection %b expected %b",{dut.z,dut.s,dut.r,dut.q},4'(expected));
+    $display("collective producer provenance passed");
+    $finish;
+  end
+endmodule
+//--- base.upf
+create_power_domain PD -elements dut
+set_retention DEFAULT -domain PD -retention_condition 0
+//--- filtered.upf
+source [file join [file dirname [info script]] base.upf]
+set_retention_elements G -elements {dut/P dut/q dut/s} -applies_to optional
+set_retention SELECT -domain PD -elements G -retention_condition hold
+//--- process.upf
+source [file join [file dirname [info script]] base.upf]
+set_retention_elements G -elements {dut/P dut/q dut/s} -exclude_elements dut/P
+set_retention SELECT -domain PD -elements G -retention_condition hold
+//--- instance.upf
+source [file join [file dirname [info script]] base.upf]
+set_retention_elements G -elements dut -exclude_elements dut/P
+set_retention SELECT -domain PD -elements G -retention_condition hold
+//--- reentry.upf
+source [file join [file dirname [info script]] base.upf]
+set_retention_elements G -elements {dut dut/q} -exclude_elements {dut/P dut/s}
+set_retention SELECT -domain PD -elements G -retention_condition hold

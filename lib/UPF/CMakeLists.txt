@@ -9,6 +9,7 @@ add_mlir_library(TalosUPF
   SupplyNetwork.cpp
   Elaborate.cpp
   Retention.cpp
+  RetentionSelection.cpp
   BalloonRetention.cpp
   ClockSnapshot.cpp
   OrdinaryWrites.cpp

@@ -1,0 +1,8 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-retention-elements-balloon.test %t
+// RUN: talos --upf %t/design.upf --target=wasm32 -O0 --execution-tier=native --mlir-verify-each -c %t/design.sv -o %t.native0
+// RUN: talos --upf %t/design.upf --target=wasm32 -O3 --execution-tier=native --mlir-verify-each -c %t/design.sv -o %t.native3
+// RUN: talos --upf %t/design.upf --target=wasm32 -O0 --execution-tier=bytecode --mlir-verify-each -c %t/design.sv -o %t.bytecode0
+// RUN: talos --upf %t/design.upf --target=wasm32 -O3 --execution-tier=bytecode --mlir-verify-each -c %t/design.sv -o %t.bytecode3
+// RUN: %llvm_dist/bin/llvm-readobj --file-headers %t.native0 %t.native3 %t.bytecode0 %t.bytecode3 | FileCheck %s
+// CHECK-COUNT-4: AddressSize: 32bit

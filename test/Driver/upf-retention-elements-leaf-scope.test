@@ -1,0 +1,96 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/macro.upf -O0 --mlir-verify-each %t/macro.sv -o %t.macro && %t.macro | FileCheck %s
+// RUN: talos --upf %t/scoped.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/scoped.sv -o %t.scoped && %t.scoped | FileCheck %s
+// RUN: talos -DSOFT --upf %t/macro.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/macro.sv -o %t.soft && %t.soft | FileCheck %s
+// RUN: talos --upf %t/overlay.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/overlay.sv -o %t.overlay && %t.overlay | FileCheck %s
+// Leaf boundaries stop transitive traversal. Reusing an IP-local list in
+// separate scoped loads preserves each identity through composite fanout.
+// CHECK: collective boundary and scope passed
+
+//--- macro.sv
+module leaf(input logic clk,d);
+  logic q=0; always @(posedge clk) q<=d;
+endmodule
+`ifdef SOFT
+(* UPF_is_soft_macro="TRUE" *)
+`else
+(* UPF_is_hard_macro="TRUE" *)
+`endif
+module macro_model(input logic clk,d);
+  logic q=0; always @(posedge clk) q<=d;
+  leaf child(clk,d);
+endmodule
+module top;
+  import UPF::*;
+  logic clk=0,d=0,hold=0;
+  macro_model dut(clk,d);
+  initial begin
+    if (!supply_on("/top/PD.primary.power") || !supply_on("/top/PD.primary.ground",0.0))
+      $fatal(1,"supplies");
+    #1 d=1; clk=1;
+    #1 hold=1; clk=0; d=0;
+    #1 clk=1;
+    #1;
+    if (dut.q !== 1 || dut.child.q !== 0) $fatal(1,"leaf traversal");
+    $display("collective boundary and scope passed"); $finish;
+  end
+endmodule
+//--- macro.upf
+create_power_domain PD -elements dut
+set_retention DEFAULT -domain PD -retention_condition 0
+set_retention_elements G -elements dut
+set_retention SELECT -domain PD -elements G -retention_condition hold
+//--- scoped.sv
+module leaf(input logic clk,d);
+  logic q=0; always @(posedge clk) begin : P q<=d; end
+endmodule
+module top;
+  import UPF::*;
+  logic clk=0,d=0,hold=0;
+  leaf a(clk,d),b(clk,d);
+  initial begin
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground",0.0))
+      $fatal(1,"supplies");
+    #1 d=1; clk=1;
+    #1 hold=1; clk=0; d=0;
+    #1 clk=1;
+    #1;
+    if (a.q !== 1 || b.q !== 1) $fatal(1,"scoped fanout");
+    $display("collective boundary and scope passed"); $finish;
+  end
+endmodule
+//--- ip.upf
+set_retention_elements G -elements P
+//--- scoped.upf
+load_upf [file join [file dirname [info script]] ip.upf] -scope {a b}
+create_supply_set CORE
+create_power_domain A -elements a -supply {primary CORE}
+create_power_domain B -elements b -supply {primary CORE}
+create_composite_domain BOTH -subdomains {A B}
+set_retention KEEP -domain BOTH -elements {a/G b/G} -retention_condition hold
+//--- overlay.sv
+(* UPF_retention="required" *) module leaf(input logic clk,d,output logic q=0);
+  always @(posedge clk) q<=d;
+endmodule
+module top;
+  import UPF::*;
+  logic clk=0,d=0,hold=0;
+  wire q;
+  (* UPF_retention="optional" *) leaf \u.part (clk,d,q);
+  initial begin
+    if (!supply_on("/top/PD.primary.power") || !supply_on("/top/PD.primary.ground",0.0))
+      $fatal(1,"supplies");
+    #1 d=1; clk=1;
+    #1 hold=1; clk=0; d=0;
+    #1 clk=1;
+    #1;
+    if (q !== 1) $fatal(1,"instance/model precedence or escaped hierarchy");
+    $display("collective boundary and scope passed"); $finish;
+  end
+endmodule
+//--- overlay.upf
+create_power_domain PD -elements {{u\.part}}
+set_retention DEFAULT -domain PD -retention_condition 0
+set_retention_elements G -elements {{u\.part}} -applies_to optional -transitive FALSE
+set_retention SELECT -domain PD -elements G -retention_condition hold

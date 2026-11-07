@@ -15,6 +15,12 @@ interpretedSupplyState(mlir::OpBuilder &builder, mlir::Location location,
                        std::optional<upf::PartialOnTranslation> translation);
 llvm::SmallVector<mlir::FlatSymbolRefAttr>
 getSupplySetReferences(upf::UPFSupplySetOp set);
+// Strategy-local catalogs and supplying/global catalogs participate in the
+// effective policy; another consumer strategy's private catalog does not.
+llvm::SmallVector<upf::UPFSupplySetOp>
+getRetentionSupplyPolicies(mlir::Operation *from, mlir::FlatSymbolRefAttr root,
+                           mlir::SymbolTableCollection *symbols = nullptr,
+                           llvm::function_ref<bool()> charge = {});
 SupplyStateEvaluation evaluateSupplySet(
     upf::UPFSupplySetOp set, mlir::OpBuilder &builder, mlir::Location location,
     llvm::function_ref<mlir::Value(mlir::FlatSymbolRefAttr)> read);

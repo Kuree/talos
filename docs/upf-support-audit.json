@@ -18,8 +18,8 @@
     "cell_tcl_commands": 6,
     "query_tcl_commands": 5,
     "total_tcl_commands": 68,
-    "registered_tcl_commands": 18,
-    "unregistered_tcl_commands": 50,
+    "registered_tcl_commands": 19,
+    "unregistered_tcl_commands": 49,
     "enumerated_hdl_functions": 25,
     "available_hdl_functions": 9,
     "unavailable_hdl_functions": 16
@@ -566,22 +566,40 @@
         "-retention_ground_net",
         "-instance"
       ],
-      "limits": "Master/slave and balloon whole packed-register retention with one edge-sensitive writer, asynchronous edge lists and persistent direct clock/iff references. All four RET_SUP_COR/NO_RET_SUP_COR and SAV_RES_COR/NO_SAV_RES_COR combinations are supported, with explicit presence preserved across transactional physical/composite updates before defaults. Balloon storage is separate from normal/output state; edge and trailing-level save/restore use event-time qualification, independent normal/saved corruption, ordered publications and zero-delay NBA restore priority. Startup initial writes and local own-state readbacks preserve typed partial packed views while output power is masked. Master/slave supports retention-powered outputs, including separate normal/output guards under NO_RET_SUP_COR; balloon -use_retention_as_primary remains rejected. Named whole-process selectors use inferred-register producer identities, including module-scope registers, nested writes, labels and escaped/generated names, with signal > process > instance precedence and process exclusions. Initial/Final and read-only/complete-combinational processes do not infer retained registers. Referenced indirect/fork/context-DPI and unresolved call closures are diagnosed. External named and signal-only edge producers can mix retained state with ordinary excluded or no_retention roots: ordinary writes have per-target issue/epoch guards and leave AON neighbors active. Qualified whole edge producers in another domain preserve independent source and retained lifetimes using existing epoch slots: strategy validity already subsumes destination primary loss. Mutable sources require exact published loss; immutable protected sources reuse existing target handling, including driver-owning protected producers. Normal/output pair and independent view behavior, Balloon zero/future restore priority and target save/restore remain unchanged. No latch/computed-event/partial functional/multiple/mixed writers, general condition refinements, partial captured initialization aliases, caller-specific hidden-N helper readbacks, opaque hidden-state readback dispatch or late raw-IR balloon root initialization. Direct timed Initial and later raw-root stores mirror normal state with independent output-power projection; Initial own-state readbacks preserve packed views. Retained Initial NBAs and caller-specific/shared retained helper initialization remain unsupported; ordinary packed roots support shared direct Initial/functional helpers and captured reference windows. Snapshot aggregate widths are bounded by the LLVM packed-integer limit. Physical and composite targets support additive per-leaf updates and typed ordered provenance bounded to 1048576 work units; no synthetic composite strategy handles are exposed. Empty extents and explicitly empty element lists add no snapshot machinery; broader intent-only no-eligible-state elision remains pending. Domain, Balloon and master channels share one armed clock history with independent eligibility. Master RTC/retention-supply transitions update state and epochs at publication, qualifying pending retained writes without suppressing ordinary neighboring state. Obsolete future updates retire without advancing simulation time; protected roots and two-state histories preserve the prior cost bounds. External functional readers, including feedback and helper/neighbor reads from peer RTL instances in the same power domain, observe powered Q. Local inferred-model N readbacks and Initial own-read exemption remain separate. RTL locality uses resolved code-unit/storage scopes and containing-instance identity, climbing generated/named scopes. Power-control helpers in switched actors remain diagnosed pending caller-continuation/noninterference analysis.",
+      "limits": "Master/slave and balloon whole packed-register retention with one edge-sensitive writer, asynchronous edge lists and persistent direct clock/iff references. All four RET_SUP_COR/NO_RET_SUP_COR and SAV_RES_COR/NO_SAV_RES_COR combinations are supported, with explicit presence preserved across transactional physical/composite updates before defaults. Balloon storage is separate from normal/output state; edge and trailing-level save/restore use event-time qualification, independent normal/saved corruption, ordered publications and zero-delay NBA restore priority. Startup initial writes and local own-state readbacks preserve typed partial packed views while output power is masked. Master/slave supports retention-powered outputs, including separate normal/output guards under NO_RET_SUP_COR; balloon -use_retention_as_primary remains rejected. Named whole-process selectors use inferred-register producer identities, including module-scope registers, nested writes, labels and escaped/generated names, with signal > process > instance precedence and process exclusions. Initial/Final and read-only/complete-combinational processes do not infer retained registers. Referenced indirect/fork/context-DPI and unresolved call closures are diagnosed. External named and signal-only edge producers can mix retained state with ordinary excluded or no_retention roots: ordinary writes have per-target issue/epoch guards and leave AON neighbors active. Qualified whole edge producers in another domain preserve independent source and retained lifetimes using existing epoch slots: strategy validity already subsumes destination primary loss. Mutable sources require exact published loss; immutable protected sources reuse existing target handling, including driver-owning protected producers. Normal/output pair and independent view behavior, Balloon zero/future restore priority and target save/restore remain unchanged. No latch/computed-event/partial functional/multiple/mixed writers, general condition refinements, partial captured initialization aliases, caller-specific hidden-N helper readbacks, opaque hidden-state readback dispatch or late raw-IR balloon root initialization. Direct timed Initial and later raw-root stores mirror normal state with independent output-power projection; Initial own-state readbacks preserve packed views. Retained Initial NBAs and caller-specific/shared retained helper initialization remain unsupported; ordinary packed roots support shared direct Initial/functional helpers and captured reference windows. Snapshot aggregate widths are bounded by the LLVM packed-integer limit. Physical and composite targets support additive per-leaf updates and typed ordered provenance bounded to 1048576 work units; no synthetic composite strategy handles are exposed. Empty extents and explicitly empty element lists add no snapshot machinery; broader intent-only no-eligible-state elision remains pending. Domain, Balloon and master channels share one armed clock history with independent eligibility. Master RTC/retention-supply transitions update state and epochs at publication, qualifying pending retained writes without suppressing ordinary neighboring state. Obsolete future updates retire without advancing simulation time; protected roots and two-state histories preserve the prior cost bounds. External functional readers, including feedback and helper/neighbor reads from peer RTL instances in the same power domain, observe powered Q. Local inferred-model N readbacks and Initial own-read exemption remain separate. RTL locality uses resolved code-unit/storage scopes and containing-instance identity, climbing generated/named scopes. Power-control helpers in switched actors remain diagnosed pending caller-continuation/noninterference analysis. Named collective lists are now accepted in -elements, with original selector precedence and compiler-only final coverage/coherence validation; correlated/differing policy proofs remain staged. Named structurally empty lists preserve literal-empty selection liveness and snapshot elision.",
       "implementation": [
         "lib/UPF/Execute.cpp",
         "lib/UPF/Retention.cpp",
         "lib/UPF/BalloonRetention.cpp",
         "lib/UPF/PublicationBarriers.cpp",
         "lib/UPF/OrdinaryWrites.cpp",
-        "lib/UPF/ClockSnapshot.cpp"
+        "lib/UPF/ClockSnapshot.cpp",
+        "lib/UPF/RetentionSelection.cpp",
+        "lib/UPF/PowerState.cpp"
       ]
     },
     {
       "clause": "6.51",
       "command": "set_retention_elements",
-      "status": "unsupported",
-      "missing": "Command is not registered; its functionality is not implemented.",
-      "workstream": "retention"
+      "status": "partial",
+      "accepted_options": [
+        "-elements",
+        "-exclude_elements",
+        "-applies_to",
+        "-retention_purpose",
+        "-transitive"
+      ],
+      "unsupported_options": [],
+      "limits": "Scoped named lists preserve typed instance/process/signal origins, exclusions, all four UPF_retention filters, required/optional purpose and omitted/bare/explicit transitivity. set_retention -elements accepts typed list references without raising underlying selector precedence. Semantic HDL attributes and compiler-only hierarchy preserve model/instance overlays, process-to-state projection, generate scopes, hard/soft macro leaves, alias identity, parent-filter pruning and explicit descendant re-entry. Global physical state and final strategy winners are planned before any domain rewrite. Required-list domain-wide coverage, optional activated-list coverage and the separate 5.6 required-attribute trigger are checked. Equivalent canonical storage policies prove coherence across independent clocks, differently named strategies and domains; output-only Q supply choice need not agree. Uncovered ordinary clocked members diagnose rather than receiving invented controls; differing/correlated policy or control-protocol proofs remain explicitly unsupported. Supported state/writer forms inherit the existing retention lowering limits. UPF set_design_attributes and Liberty-origin attributes remain unimplemented; HDL required/optional and hard/soft macro annotations are available. Constraint-only/dormant metadata and named structurally empty selections add no retention runtime services or snapshots; broader no-eligible-state inference remains pending.",
+      "implementation": [
+        "lib/UPF/Execute.cpp",
+        "lib/UPF/RetentionSelection.cpp",
+        "lib/UPF/Retention.cpp",
+        "lib/UPF/Elaborate.cpp",
+        "lib/UPF/PublicationBarriers.cpp",
+        "lib/Frontend/Frontend.cpp",
+        "include/talos/Dialect/UPF/UPFOps.td"
+      ]
     },
     {
       "clause": "6.52",
@@ -1013,7 +1031,7 @@
       ],
       "missing": [
         "Balloon retention-powered outputs and broader initialization/helper/reference forms",
-        "Collective retention-element lists, partial selections and broader named-process/writer forms",
+        "Collective differing/correlated-policy and control-protocol proofs, invariant unretained-member proofs, partial selections and broader named-process/writer forms; UPF set_design_attributes and Liberty attribute sources",
         "Latches, computed events, mixed/multiple writers and unsupported reference escape paths",
         "Legacy supply operands, semantic condition refinements and broader initialization ordering",
         "External whole edge producers now compose exact mutable-source and retained strategy lifetimes without new runtime state. Mutable resolved-driver sources and retained helper/partial/multiple-writer forms remain staged. External RTL-instance reads preserve Q, while broader hidden-N helper/alias readbacks and caller interruption need further work.",
@@ -1687,11 +1705,61 @@
           ],
           "review": "Two independent subagents explicitly approve scoped source/specification/LRM interpretation, LLVM/MLIR design, emitter-record liveness and common-gate dominance, exact slot proofs, immutable-source exception, per-instance Q readbacks, cache/work bounds and test coverage. Both reviewers explicitly approve the final audit and commit with no remaining blockers. Review findings fixed the pre-existing external hidden-N leak, refined locality from power-domain to RTL-instance identity, preserved the power-control continuation boundary and distinguished direct clocks from delayed port forwarding. Independent checks include over twenty native/required-bytecode O3 executions, source/target and independent-view final-time calendars, protected driver-owning source, original Q leak reproduction, raw pair/view/Balloon slot and repeated CSE/verifier checks, actual post-entry source-loss and benign-publication runtimes, and full optimized strict-bytecode Balloon execution. No runtime/API/ABI additions.",
           "validation": "The final extended gate selects 560 UPF/supply/snapshot/power-NBA/cohort/time/code-unit/inventory, wait/iff/publication, function-background and class/constructor/property lit fixtures: 551 pass and nine have their expected failures, with no unexpected results. All 355 process and 269 selected bytecode/reflection/VPI runtime units pass (624). Clauses 6.50 and 9.7.3 pass native/bytecode (four cases); 9.7.1 remains reference-only (two), with no unexpected results. New sources execute native/required-bytecode O0/O3: source-only producer domains, reversed intent order, 65-bit ascending state, blocking plus delayed/current-step updates, master pair and independent N/Q views, RTC/RET/primary/source losses, Balloon future/zero restore priority and target save/restore while producer OFF. External Q feedback, ordinary/helper reads, shared evaluated values, AON/other-domain/same-domain peers and generated/named scopes pass. Final-time fixtures end at t3 rather than obsolete t101. Raw MLIR proves first-slot substitution, unchanged strategy/predicate identities, common-gate SSA dominance, shared clock channels without extra source machinery, and repeated canonicalize/CSE/verification. Low-level runtime barriers publish source loss after the outer actor gate and suppress both retained publication kinds; benign FULL_ON voltage changes still commit them. Pair, independent views and Balloon execute LLVM O0/O3, and Balloon also passes full simulation optimization in strict bytecode. Mutable driver source and helper power-control continuation boundaries diagnose explicitly. Protected driver sources bind to a real protected anonymous retention supplier and execute all four modes. Four wasm32 objects compile across native/bytecode O0/O3; wasm execution was not run."
+        },
+        {
+          "id": "7j",
+          "status": "complete",
+          "scope": "Named collective retention constraints, semantic HDL attributes and hierarchy, and compiler-only physical coverage/coherence proofs",
+          "clauses": [
+            "4.9.1",
+            "4.9.2.5",
+            "5.3",
+            "5.6",
+            "5.7.3",
+            "5.9",
+            "6.50",
+            "6.51",
+            "9.7",
+            "IEEE1800-2023 6.16"
+          ],
+          "runtime_changes": false,
+          "architecture": "Introduce declarative upf.retention_elements symbols and typed strategy references, resolved design-attribute annotations and a compiler-only instance/generate hierarchy snapshot. Reuse Slang semantic attributes/string conversion and LLVM containers; all original physical-state winners are planned before domain rewrites. Keep exact selected objects and original precedence provenance, global list identity and canonical physical aliases. Private lexical IDs plus DFS ancestry and cached inherited marks preserve generate ownership, parent pruning, macro leaves and explicit re-entry without adding Simulation reflection/runtime scopes. Reuse the same supplying-catalog resolver for lowering and cached bounded policy proof keys; semantic policy equality admits independent clocks/strategy names/domains and differing output-only Q supplies. Cache symbol tables and bound traversal/projection/proof work. Shared structural-empty-list handling preserves early publication/control liveness. No new runtime functions, ABI, opcodes, state or SDC changes.",
+          "spec_interpretations": [
+            "6.50 explicitly permits a 6.51 list as an inclusion selector; its members retain original signal/process/own-instance/transitive-instance specificity. Lists are constraints and supply no retention controls (4.9.1).",
+            "Required coverage is triggered per final physical domain by retained state anywhere in that domain. Optional has no such outside-list trigger, but selection of any member activates the global collective-state obligation. A winning no_retention is never overridden.",
+            "5.6 required attributes have the distinct domain-has-any-strategy trigger, including empty/no_retention strategies. No strategy means both annotations and lists are dormant.",
+            "Instance-hierarchy filtering precedes direct implied-state projection; an accepted annotated process or instance contributes its implied state without independently refiltering local registers. Parent failures prune child instances, while explicit descendant seeds can re-enter. Generate scopes are lexical ownership, and hard/soft macros are leaves.",
+            "Equivalent effective storage policy is a sufficient compiler proof, not a standard requirement for identically named strategies. Uncovered state and unproved policy combinations diagnose; stronger correlated-policy/protocol or invariant-state proofs remain future work.",
+            "6.51 specifies per-current-scope list uniqueness, supported by Annex E scoped IP reuse, despite general globally-named-object wording in 5.3.3.2."
+          ],
+          "tests": [
+            "test/Conversion/upf-retention-elements.test",
+            "test/Dialect/UPF/retention-elements.test",
+            "test/Driver/upf-retention-elements-attribute-errors.test",
+            "test/Driver/upf-retention-elements-attributes.test",
+            "test/Driver/upf-retention-elements-balloon-wasm.test",
+            "test/Driver/upf-retention-elements-balloon.test",
+            "test/Driver/upf-retention-elements-coverage.test",
+            "test/Driver/upf-retention-elements-cross-domain.test",
+            "test/Driver/upf-retention-elements-empty-balloon.test",
+            "test/Driver/upf-retention-elements-filters.test",
+            "test/Driver/upf-retention-elements-frontend.test",
+            "test/Driver/upf-retention-elements-inactive.test",
+            "test/Driver/upf-retention-elements-leaf-scope.test",
+            "test/Driver/upf-retention-elements-master-wasm.test",
+            "test/Driver/upf-retention-elements-master.test",
+            "test/Driver/upf-retention-elements-policy-errors.test",
+            "test/Driver/upf-retention-elements-provenance.test",
+            "test/Driver/upf-retention-elements-transitive.test",
+            "test/Conformance/IEEE1801/6.51.sv"
+          ],
+          "review": "Independent UPF/LRM and compiler/LLVM/MLIR/coverage reviewers approve the final scoped implementation with no source blockers. Review findings fixed parent-order dependence, global alias omissions, generate inventory and origin precedence, excluded-process provenance, model-only hard/soft macro leaves, dormant opaque process admission, named-empty Balloon/control liveness and malformed hierarchy links. Compiler proofs use cached symbol tables and bounded policy keys, DFS ancestry and cached inherited marks. Independent validation includes 30 spec-review and 34 compiler-review O3 native/bytecode executions, coverage/attribute/coherence cases, original failure reproductions, no-feature checks and raw MLIR roundtrip/optimization/alias/hierarchy/generate/rootless fixtures. No runtime/API/ABI/layout/SDC changes; final gate totals recorded below.",
+          "validation": "Clean final extended gate selects 578 UPF/supply/snapshot/power-NBA/cohort/time/code-unit/inventory, wait/iff/publication, function-background and class/constructor/property lit fixtures: 569 pass and nine expected failures, no unexpected results. All 355 process and 269 selected bytecode/reflection/VPI runtime units pass (624). Retention conformance clauses 6.50, 6.51 and 9.7.3 pass native/bytecode (six cases); 9.7.1 remains reference-only (two), no unexpected results. Eighteen new source/dialect/conversion fixtures cover all filter values, absent/model/instance/process/signal attributes, direct-state generation and parent pruning/re-entry, hard/soft macro leaves, explicit signals/process exclusions, canonical aliases outside domains, required/optional and distinct 5.6 triggers, winning no_retention, independent clocks, same-policy strategy/domain partitions, scoped/composite list fanout, escaped instance overlays, generated direct/list precedence, unsupported policy coherence, Tcl rollback/namespace errors, rootless and dormant constraints, and early empty Balloon/control elision. Native and required-bytecode O0/O3 master/Balloon simulations pass. Dialect malformed metadata and symbol use tests, hierarchy consumption, immutable planning, nested IDs, repeated canonicalize/CSE/verifier and no-runtime-feature checks pass. Eight new wasm32 objects compile across both retention styles, native/bytecode O0/O3; wasm execution was not run. The promoted 6.51 conformance fixture also checks retained versus ordinary state restoration."
         }
       ],
       "remaining": [
         "Balloon retention-powered outputs, caller-specific retained helper/alias readbacks and intent-only no-eligible-state elision",
-        "Collective retention-element lists and remaining retained storage/writer forms",
+        "Collective differing/correlated-policy and control-protocol proofs, UPF design-attribute command/Liberty sources, and remaining retained storage/writer forms",
         "Legacy supply operands, remaining condition refinements, retained Initial NBAs and shared retained helper initialization",
         "External level/combinational restoration, intra/blocking timed ordinary writes, opaque/task/class/fork power provenance, exact resolved-driver source/target losses and mixed physical reference roots",
         "Resolved-driver exact loss, mask-aware force/assign/release and broader unsupported publication/writer contexts",

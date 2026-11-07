@@ -1,0 +1,45 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: not talos --upf %t/required.upf -emit-sim -O0 %t/design.sv -o %t.required 2>&1 | FileCheck %s --check-prefix=REQUIRED
+// RUN: talos --upf %t/optional.upf -emit-sim -O0 --mlir-verify-each %t/design.sv -o %t.optional
+// RUN: not talos --upf %t/partial.upf -emit-sim -O0 %t/design.sv -o %t.partial 2>&1 | FileCheck %s --check-prefix=PARTIAL
+// RUN: not talos --upf %t/exempt.upf -emit-sim -O0 %t/design.sv -o %t.exempt 2>&1 | FileCheck %s --check-prefix=REQUIRED
+// RUN: talos --upf %t/none.upf -emit-sim -O0 --mlir-verify-each %t/design.sv -o %t.none
+// Required has a domain-wide retained-state trigger; optional has a list-local
+// trigger. A winning -no_retention is resolved before checking coverage.
+// REQUIRED: required collective retention list has uncovered state in a domain with retained elements
+// PARTIAL: collective retention list has uncovered state while another member is retained
+
+//--- design.sv
+module leaf(input logic clk);
+  logic q=0,r=0,s=0;
+  always @(posedge clk) begin q<=~q; r<=~r; s<=~s; end
+endmodule
+module top;
+  logic clk=0,rtc=0;
+  leaf dut(clk);
+  initial begin #1 clk=1; #1 $finish; end
+endmodule
+//--- base.upf
+create_power_domain PD -elements dut
+//--- required.upf
+source [file join [file dirname [info script]] base.upf]
+set_retention_elements G -elements {dut/q dut/r}
+set_retention OUTSIDE -domain PD -elements dut/s -retention_condition rtc
+//--- optional.upf
+source [file join [file dirname [info script]] base.upf]
+set_retention_elements G -elements {dut/q dut/r} -retention_purpose optional
+set_retention OUTSIDE -domain PD -elements dut/s -retention_condition rtc
+//--- partial.upf
+source [file join [file dirname [info script]] base.upf]
+set_retention_elements G -elements {dut/q dut/r} -retention_purpose optional
+set_retention PART -domain PD -elements dut/q -retention_condition rtc
+//--- exempt.upf
+source [file join [file dirname [info script]] base.upf]
+set_retention_elements G -elements {dut/q dut/r}
+set_retention ALL -domain PD -retention_condition rtc
+set_retention EXEMPT -domain PD -elements dut/q -no_retention
+//--- none.upf
+source [file join [file dirname [info script]] base.upf]
+set_retention_elements G -elements {dut/q dut/r}
+set_retention NONE -domain PD -no_retention

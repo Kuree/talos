@@ -1,0 +1,75 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/required.upf -O0 --mlir-verify-each %t/design.sv -o %t.required && %t.required +expected=1 | FileCheck %s
+// RUN: talos --upf %t/optional.upf -O0 --mlir-verify-each %t/design.sv -o %t.optional && %t.optional +expected=2 | FileCheck %s
+// RUN: talos --upf %t/not-required.upf -O0 --mlir-verify-each %t/design.sv -o %t.not-required && %t.not-required +expected=14 | FileCheck %s
+// RUN: talos --upf %t/not-optional.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.not-optional && %t.not-optional +expected=29 | FileCheck %s
+// RUN: talos --upf %t/reentry.upf -O3 --mlir-verify-each %t/design.sv -o %t.reentry && %t.reentry +expected=17 | FileCheck %s
+// Filters inspect selected instances before projecting their unannotated
+// local registers. A rejected parent prunes its required child unless the
+// child is explicitly seeded. Negative filters include absent attributes.
+// CHECK: collective filters passed
+
+//--- design.sv
+(* UPF_retention="required" *) module required_leaf(input logic clk,d);
+  logic q=0; always @(posedge clk) q<=d;
+endmodule
+(* UPF_retention="optional" *) module optional_leaf(input logic clk,d);
+  logic q=0; always @(posedge clk) q<=d;
+endmodule
+module plain_leaf(input logic clk,d);
+  logic q=0; always @(posedge clk) q<=d;
+endmodule
+module cluster(input logic clk,d);
+  logic q=0; always @(posedge clk) q<=d;
+  required_leaf child(clk,d);
+endmodule
+module top;
+  import UPF::*;
+  logic clk=0,d=0,hold=0;
+  required_leaf req(clk,d);
+  optional_leaf opt(clk,d);
+  plain_leaf plain(clk,d);
+  cluster parent(clk,d);
+  integer expected;
+  initial begin
+    if (!supply_on("/top/PD.primary.power") || !supply_on("/top/PD.primary.ground",0.0))
+      $fatal(1,"supplies");
+    if (!$value$plusargs("expected=%d",expected)) $fatal(1,"expected mask");
+    #1 d=1; clk=1;
+    #1 hold=1; clk=0; d=0;
+    #1 clk=1;
+    #1;
+    if ({parent.child.q,parent.q,plain.q,opt.q,req.q} !== 5'(expected))
+      $fatal(1,"filter or traversal: got %b expected %b",{parent.child.q,parent.q,plain.q,opt.q,req.q},5'(expected));
+    $display("collective filters passed");
+    $finish;
+  end
+endmodule
+//--- base.upf
+create_power_domain PD -elements {req opt plain parent}
+# Required annotations still receive a strategy when a filter removes them.
+# A domain-default strategy has lower precedence than any list instance.
+set_retention DEFAULT -domain PD -retention_condition 0
+set_retention_elements G -elements $roots -applies_to $choice
+set_retention FILTERED -domain PD -elements G -retention_condition hold
+//--- required.upf
+set roots {req opt plain parent}
+set choice required
+source [file join [file dirname [info script]] base.upf]
+//--- optional.upf
+set roots {req opt plain parent}
+set choice optional
+source [file join [file dirname [info script]] base.upf]
+//--- not-required.upf
+set roots {req opt plain parent}
+set choice not_required
+source [file join [file dirname [info script]] base.upf]
+//--- not-optional.upf
+set roots {req opt plain parent}
+set choice not_optional
+source [file join [file dirname [info script]] base.upf]
+//--- reentry.upf
+set roots {req opt plain parent parent/child}
+set choice required
+source [file join [file dirname [info script]] base.upf]

@@ -1,9 +1,44 @@
 #include "PowerState.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 using namespace mlir;
 namespace talos {
+llvm::SmallVector<upf::UPFSupplySetOp>
+getRetentionSupplyPolicies(Operation *from, FlatSymbolRefAttr root,
+                           SymbolTableCollection *symbols,
+                           llvm::function_ref<bool()> charge) {
+  SmallVector<upf::UPFSupplySetOp> result;
+  auto lookup = [&](Operation *from, FlatSymbolRefAttr ref) {
+    return symbols ? symbols->lookupNearestSymbolFrom<upf::UPFSupplySetOp>(from,
+                                                                           ref)
+                   : SymbolTable::lookupNearestSymbolFrom<upf::UPFSupplySetOp>(
+                         from, ref);
+  };
+  llvm::DenseSet<Operation *> seen, included;
+  SmallVector<std::pair<upf::UPFSupplySetOp, bool>> pending{
+      {lookup(from, root), true}};
+  while (!pending.empty()) {
+    if (charge && !charge())
+      return {};
+    auto [set, supplier] = pending.pop_back_val();
+    if (!set)
+      continue;
+    if ((supplier || (!set.getOwnerAttr() && !set.getStrategyAttr())) &&
+        included.insert(set).second)
+      result.push_back(set);
+    if (!seen.insert(set).second)
+      continue;
+    if (auto associated = set.getAssociatedAttr())
+      for (auto attr : llvm::reverse(associated))
+        pending.emplace_back(lookup(set, cast<FlatSymbolRefAttr>(attr)), false);
+    if (auto source = set.getBindingAttr())
+      pending.emplace_back(lookup(set, source), true);
+  }
+  return result;
+}
 namespace {
 Value integer(OpBuilder &b, Location loc, int64_t value, unsigned width) {
   return arith::ConstantIntOp::create(b, loc, value, width);

@@ -67,6 +67,23 @@ def UPFRetentionElementKind : I32EnumAttr<"RetentionElementKind",
     [UPFRetSignal, UPFRetInstance, UPFRetProcess]> {
   let cppNamespace = "::talos::upf";
 }
+def UPFRetentionRequired : I32EnumAttrCase<"Required", 0, "required">;
+def UPFRetentionOptional : I32EnumAttrCase<"Optional", 1, "optional">;
+def UPFRetentionPurpose : I32EnumAttr<"RetentionPurpose",
+    "IEEE 1801 6.51 retention purpose or requirement",
+    [UPFRetentionRequired, UPFRetentionOptional]> {
+  let cppNamespace = "::talos::upf";
+}
+def UPFRetentionFilterRequired : I32EnumAttrCase<"Required", 0, "required">;
+def UPFRetentionFilterOptional : I32EnumAttrCase<"Optional", 1, "optional">;
+def UPFRetentionFilterNotRequired : I32EnumAttrCase<"NotRequired", 2, "not_required">;
+def UPFRetentionFilterNotOptional : I32EnumAttrCase<"NotOptional", 3, "not_optional">;
+def UPFRetentionFilter : I32EnumAttr<"RetentionFilter",
+    "IEEE 1801 6.51 UPF_retention filter",
+    [UPFRetentionFilterRequired, UPFRetentionFilterOptional,
+     UPFRetentionFilterNotRequired, UPFRetentionFilterNotOptional]> {
+  let cppNamespace = "::talos::upf";
+}
 def UPFRetHigh : I32EnumAttrCase<"High", 0, "high">;
 def UPFRetLow : I32EnumAttrCase<"Low", 1, "low">;
 def UPFRetPosedge : I32EnumAttrCase<"Posedge", 2, "posedge">;

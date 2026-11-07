@@ -1,7 +1,6 @@
 // CLAUSE: set_retention_elements
+// SINCE: 0.1.0
 // REQUIRES: upf
-// XFAIL: *
-// UPF execution failed: invalid command name "set_retention_elements"; the command is not implemented.
 // Pins: a named retention list selects the retained registers: the listed one comes back and the other does not (IEEE 1801-2018 6.51).
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top --upf %S/Inputs/6.51/design.upf -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe

@@ -1,0 +1,33 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/none.upf -emit-sim -O0 --mlir-verify-each %t/design.sv -o %t.none
+// RUN: not talos --upf %t/empty.upf -emit-sim -O0 %t/design.sv -o %t.empty 2>&1 | FileCheck %s
+// RUN: not talos --upf %t/exempt.upf -emit-sim -O0 %t/design.sv -o %t.exempt 2>&1 | FileCheck %s
+// RUN: talos --upf %t/full.upf -emit-sim -O0 --mlir-verify-each %t/design.sv -o %t.full
+// UPF_retention required has a different trigger from a required collective
+// list: even an explicit empty or -no_retention strategy counts for 5.6.
+// CHECK: UPF_retention=required state is not retained by a domain strategy (IEEE 1801-2018 5.6): top.dut.q
+
+//--- design.sv
+(* UPF_retention="required" *) module leaf(input logic clk);
+  logic q=0; always @(posedge clk) q<=~q;
+endmodule
+module top;
+  logic clk=0,rtc=0;
+  leaf dut(clk);
+  initial begin #1 clk=1; #1 $finish; end
+endmodule
+//--- base.upf
+create_power_domain PD -elements dut
+set_retention_elements G -elements dut
+//--- none.upf
+source [file join [file dirname [info script]] base.upf]
+//--- empty.upf
+source [file join [file dirname [info script]] base.upf]
+set_retention EMPTY -domain PD -elements {} -retention_condition rtc
+//--- exempt.upf
+source [file join [file dirname [info script]] base.upf]
+set_retention NONE -domain PD -no_retention
+//--- full.upf
+source [file join [file dirname [info script]] base.upf]
+set_retention ALL -domain PD -elements G -retention_condition rtc

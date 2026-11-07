@@ -7,6 +7,29 @@ namespace talos {
 namespace upf_detail {
 class ClockSnapshots;
 }
+struct RetentionAlias {
+  llvm::StringRef path;
+  uint64_t scope;
+  bool partial = false;
+};
+// An immutable plan over original physical state. All domains are planned and
+// collective constraints validated before any writer or domain is rewritten.
+struct RetentionRegister {
+  sim::SimStorageDeclOp declaration;
+  llvm::SmallVector<RetentionAlias> aliases;
+  llvm::SmallVector<mlir::Operation *> writers;
+  llvm::SmallVector<llvm::StringRef> processes;
+  upf::UPFDomainOp domain;
+  upf::RetentionAttr strategy;
+  upf_detail::Descriptor visible{}, backing{};
+};
+using RetentionPlans =
+    llvm::DenseMap<mlir::Operation *, llvm::SmallVector<RetentionRegister>>;
+mlir::LogicalResult
+planRetentions(sim::SimDesignOp design, sim::SimFuncOp root,
+               const llvm::StringMap<upf_detail::Descriptor> &descriptors,
+               const llvm::StringMap<upf_detail::Descriptor> &supplies,
+               RetentionPlans &plans);
 struct RetentionLoweringOptions {
   sim::SimDesignOp design;
   upf::UPFDomainOp domain;
@@ -29,6 +52,7 @@ struct RetentionLoweringOptions {
   std::function<llvm::SmallVector<upf_detail::Descriptor>(
       mlir::FlatSymbolRefAttr)>
       supplyDependencies;
+  llvm::ArrayRef<RetentionRegister> plan;
 };
 // Functional statement groups remain intact until all physical domain owners
 // are known. The guard owns every N/Q publication, including both NBA paths

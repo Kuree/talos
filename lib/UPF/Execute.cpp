@@ -13,8 +13,8 @@
 #include "talos/Dialect/UPF/UPFOps.h"
 #include "talos/Frontend/UPF.h"
 #include "llvm/ADT/IntEqClasses.h"
-#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include <map>
@@ -45,6 +45,14 @@ struct RetentionEdit {
   Retention intent;
   bool update = false;
   std::string supplier;
+};
+struct RetentionElements {
+  std::string scope;
+  std::map<std::string, Attribute> elements, excluded;
+  std::optional<upf::RetentionFilter> appliesTo;
+  upf::RetentionPurpose purpose = upf::RetentionPurpose::Required;
+  bool transitive = true;
+  std::optional<Location> location;
 };
 struct IsolationEdit {
   std::string name, scope, control;
@@ -110,6 +118,7 @@ struct Session {
   std::string top, scope, file, designModule;
   std::map<std::string, Operation *> objects;
   std::map<std::string, Domain> domains;
+  std::map<std::string, RetentionElements> retentionElements;
   std::set<std::string> nets, supplyPorts, switches;
   // IEEE 1801-2018 6.24.1: ownership and -reuse availability belong to a
   // declared net, not the resolved electrical root shared with other objects.
@@ -244,9 +253,10 @@ struct Session {
   std::string key(StringRef name) const { return resolve(name); }
   bool creationScope(StringRef path) {
     auto found = objects.find(path.str());
-    if (found != objects.end() &&
-        found->second->getName().getStringRef() == "slang.symbol.generate_block") {
-      error("cannot create UPF objects in a generate block (IEEE 1801-2018 clause 3)");
+    if (found != objects.end() && found->second->getName().getStringRef() ==
+                                      "slang.symbol.generate_block") {
+      error("cannot create UPF objects in a generate block (IEEE 1801-2018 "
+            "clause 3)");
       return false;
     }
     return true;
@@ -350,6 +360,7 @@ struct Session {
     std::string path = key(name);
     return hasNamedSet(name) || declaredHDLNames.count(path) ||
            domains.count(path) || switches.count(path) ||
+           retentionElements.count(path) ||
            (!allowSupplyPair && (nets.count(path) || supplyPorts.count(path)));
   }
   bool functionSupply(const SupplyObject &object) {
@@ -776,6 +787,109 @@ struct Session {
         }
     return TCL_OK;
   }
+  std::string retentionListKey(StringRef name) const {
+    size_t slash = name.rfind('/');
+    if (slash == StringRef::npos)
+      return key(name);
+    std::string owner = queries.resolve(
+        slash == 0 ? StringRef("/") : name.take_front(slash), scope, top);
+    return owner.empty() ? std::string{}
+                         : owner + "." + name.drop_front(slash + 1).str();
+  }
+  bool retentionSelectors(Tcl_Obj *value,
+                          std::map<std::string, Attribute> &target,
+                          bool allowLists = false) {
+    std::vector<std::string> names;
+    if (!list(value, names))
+      return false;
+    for (auto &name : names) {
+      std::string listName = retentionListKey(name);
+      if (allowLists && retentionElements.count(listName)) {
+        target.emplace(listName,
+                       FlatSymbolRefAttr::get(module.getContext(), listName));
+        continue;
+      }
+      std::string path = object(name);
+      if (path.empty()) {
+        if (queries.isNamedBlock(queries.resolve(name, scope, top)))
+          error("not a supported whole-process retention selector: " + name);
+        else
+          error("unknown or unsupported retention selector (whole signals, "
+                "instances and supported whole processes are accepted): " +
+                name);
+        return false;
+      }
+      bool instance = queries.isScope(path);
+      bool process = queries.process(path) != nullptr;
+      target.emplace(path, upf::RetentionElementAttr::get(
+                               module.getContext(),
+                               StringAttr::get(module.getContext(), path),
+                               instance  ? upf::RetentionElementKind::Instance
+                               : process ? upf::RetentionElementKind::Process
+                                         : upf::RetentionElementKind::Signal));
+    }
+    if (target.size() > 4096) {
+      error("retention selection exceeds 4096 elements");
+      return false;
+    }
+    return true;
+  }
+  int setRetentionElements(Tcl_Size objc, Tcl_Obj *const objv[]) {
+    StringRef name = Tcl_GetString(objv[1]);
+    if (!identifier(name) || !creationScope(scope))
+      return TCL_ERROR;
+    if (hasNamedObject(name))
+      return error("retention list name conflicts with an existing object");
+    if (retentionElements.size() >= 4096)
+      return error("design exceeds 4096 retention lists");
+    RetentionElements next;
+    next.scope = scope;
+    next.location = declarationLocation();
+    Options opts;
+    std::set<std::string> seen;
+    for (Tcl_Size i = 2; i < objc; ++i) {
+      StringRef option = Tcl_GetString(objv[i]);
+      if (!seen.insert(option.str()).second)
+        return error("duplicate UPF option " + option);
+      if (option == "-transitive") {
+        if (i + 1 < objc &&
+            !StringRef(Tcl_GetString(objv[i + 1])).starts_with('-')) {
+          int flag;
+          if (Tcl_GetBooleanFromObj(interp, objv[++i], &flag) != TCL_OK)
+            return TCL_ERROR;
+          next.transitive = flag;
+        }
+        continue;
+      }
+      if (option != "-elements" && option != "-exclude_elements" &&
+          option != "-applies_to" && option != "-retention_purpose")
+        return error("unsupported set_retention_elements option: " + option);
+      if (++i == objc)
+        return error("missing value for " + option);
+      opts.emplace(option.str(), objv[i]);
+    }
+    if (!opts.count("-elements"))
+      return error("set_retention_elements requires -elements");
+    if (!retentionSelectors(opts.at("-elements"), next.elements) ||
+        (opts.count("-exclude_elements") &&
+         !retentionSelectors(opts.at("-exclude_elements"), next.excluded)))
+      return TCL_ERROR;
+    if (auto it = opts.find("-applies_to"); it != opts.end()) {
+      next.appliesTo = upf::symbolizeRetentionFilter(Tcl_GetString(it->second));
+      if (!next.appliesTo)
+        return error("retention filter must be required, optional, "
+                     "not_required, or not_optional");
+    }
+    if (auto it = opts.find("-retention_purpose"); it != opts.end()) {
+      auto purpose = upf::symbolizeRetentionPurpose(Tcl_GetString(it->second));
+      if (!purpose)
+        return error("retention purpose must be required or optional");
+      next.purpose = *purpose;
+    }
+    retentionElements.emplace(key(name), std::move(next));
+    Tcl_ResetResult(interp);
+    return TCL_OK;
+  }
   int setRetention(Tcl_Size objc, Tcl_Obj *const objv[]) {
     // IEEE 1801-2018 6.50/8.3.2: merge explicit updates before applying any
     // defaults. Keep selectors and their provenance until register inference.
@@ -818,37 +932,7 @@ struct Session {
       auto it = opts.find(option.str());
       if (it == opts.end())
         return true;
-      std::vector<std::string> names;
-      if (!list(it->second, names))
-        return false;
-      for (auto &name : names) {
-        std::string path = object(name);
-        if (path.empty()) {
-          if (queries.isNamedBlock(queries.resolve(name, scope, top))) {
-            error("not a supported whole-process retention selector: " + name);
-            return false;
-          }
-          error("unknown or unsupported retention selector (whole signals, "
-                "instances and supported whole processes are accepted): " +
-                name);
-          return false;
-        }
-        bool instance = objects.at(path)->getName().getStringRef() ==
-                        "slang.symbol.instance";
-        bool process = queries.process(path) != nullptr;
-        target.emplace(path,
-                       upf::RetentionElementAttr::get(
-                           module.getContext(),
-                           StringAttr::get(module.getContext(), path),
-                           instance  ? upf::RetentionElementKind::Instance
-                           : process ? upf::RetentionElementKind::Process
-                                     : upf::RetentionElementKind::Signal));
-      }
-      if (target.size() > 4096) {
-        error("retention selection exceeds 4096 elements");
-        return false;
-      }
-      return true;
+      return retentionSelectors(it->second, target, option == "-elements");
     };
     if (!selectors("-elements", next.elements) ||
         !selectors("-exclude_elements", next.excluded))
@@ -954,6 +1038,8 @@ struct Session {
       return error("missing argument for " + command);
     if (command == "set_retention")
       return setRetention(objc, objv);
+    if (command == "set_retention_elements")
+      return setRetentionElements(objc, objv);
     if (command == "upf_version") {
       if (objc > 2 || (objc == 2 && StringRef(Tcl_GetString(objv[1])) != "3.1"))
         return error(
@@ -1681,7 +1767,8 @@ struct Session {
       if (found == domains.end())
         return error("unknown power domain");
       if (found->second.composite)
-        return error("legacy supply association on composite domains is not implemented");
+        return error("legacy supply association on composite domains is not "
+                     "implemented");
       if (!opts.count("-primary_power_net") ||
           !opts.count("-primary_ground_net"))
         return error("both primary power and ground nets are required");
@@ -2052,7 +2139,8 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
         "create_supply_net", "create_supply_port", "connect_supply_net",
         "set_domain_supply_net", "create_power_switch", "set_isolation",
         "create_supply_set", "associate_supply_set", "add_power_state",
-        "set_partial_on_translation", "set_retention"})
+        "set_partial_on_translation", "set_retention",
+        "set_retention_elements"})
     commands.push_back({&session, name});
   for (auto &command : commands)
     Tcl_CreateObjCommand2(interp.get(), command.name, dispatch, &command,
@@ -2320,6 +2408,103 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
   }
   OpBuilder builder(module.getContext());
   builder.setInsertionPointToEnd(module.getBody());
+  bool retentionHierarchy = !session.retentionElements.empty();
+  for (auto &[name, domain] : session.domains)
+    retentionHierarchy |= !domain.retentions.empty();
+  if (retentionHierarchy) {
+    SmallVector<Attribute> scopes;
+    for (auto &[path, object] : session.objects)
+      if (session.queries.isScope(path))
+        scopes.push_back(upf::HierarchyScopeAttr::get(
+            module.getContext(), builder.getStringAttr(path),
+            builder.getStringAttr(session.queries.parent(path)),
+            object->getName().getStringRef() == "slang.symbol.instance"));
+    upf::UPFHierarchyOp::create(builder, module.getLoc(),
+                                builder.getArrayAttr(scopes));
+  }
+  auto selectorArray = [&](const auto &entries) {
+    SmallVector<Attribute> result;
+    for (auto &[path, attr] : entries)
+      result.push_back(attr);
+    return builder.getArrayAttr(result);
+  };
+  for (auto &[name, list] : session.retentionElements)
+    upf::UPFRetentionElementsOp::create(
+        builder, list.location.value_or(module.getLoc()), name, list.scope,
+        selectorArray(list.elements), selectorArray(list.excluded),
+        list.appliesTo ? upf::RetentionFilterAttr::get(module.getContext(),
+                                                       *list.appliesTo)
+                       : upf::RetentionFilterAttr{},
+        list.purpose, list.transitive);
+  // HDL attributes have the semantics of model declarations (5.6). Resolve
+  // model and object overlays while the semantic Slang inventory is present,
+  // and carry the result independently of optimized simulation declarations.
+  std::map<std::string, DictionaryAttr> modelAttributes;
+  module.walk([&](slangir::DefinitionSymbolOp definition) {
+    if (auto attrs =
+            definition->getAttrOfType<DictionaryAttr>("hdl_power_attributes"))
+      modelAttributes[definition.getHierarchicalName()->str()] = attrs;
+  });
+  for (auto &[path, object] : session.objects) {
+    NamedAttrList attrs;
+    bool instance = session.queries.isScope(path);
+    if (instance)
+      if (auto ref = object->getAttrOfType<StringAttr>("referenced_path"))
+        if (auto found = modelAttributes.find(ref.str());
+            found != modelAttributes.end())
+          attrs.append(found->second.getValue());
+    if (auto direct =
+            object->getAttrOfType<DictionaryAttr>("hdl_power_attributes")) {
+      if (direct.contains("UPF_is_hard_macro") ||
+          direct.contains("UPF_is_soft_macro"))
+        return object->emitError("UPF_is_hard_macro and UPF_is_soft_macro are "
+                                 "model-only attributes (IEEE 1801-2018 5.6)");
+      for (auto entry : direct)
+        attrs.set(entry.getName(), entry.getValue());
+    }
+    bool process = session.queries.process(path) != nullptr;
+    if (process)
+      if (auto direct =
+              session.queries.process(path)->getAttrOfType<DictionaryAttr>(
+                  "hdl_power_attributes"))
+        for (auto entry : direct)
+          attrs.set(entry.getName(), entry.getValue());
+    upf::RetentionPurposeAttr retention;
+    if (auto value = attrs.get("UPF_retention")) {
+      auto spelling = dyn_cast<StringAttr>(value);
+      auto parsed = spelling
+                        ? upf::symbolizeRetentionPurpose(spelling.getValue())
+                        : std::nullopt;
+      if (!parsed)
+        return object->emitError("UPF_retention must be required or optional");
+      retention = upf::RetentionPurposeAttr::get(module.getContext(), *parsed);
+    }
+    auto macro = [&attrs, instance, attributeOwner = object](
+                     StringRef name, bool &target) -> LogicalResult {
+      if (auto value = attrs.get(name)) {
+        auto spelling = dyn_cast<StringAttr>(value);
+        if (!instance || !spelling ||
+            (spelling.getValue() != "TRUE" && spelling.getValue() != "FALSE"))
+          return attributeOwner->emitError()
+                 << name << " requires an instance and TRUE or FALSE";
+        target = spelling.getValue() == "TRUE";
+      }
+      return success();
+    };
+    bool hardMacro = false, softMacro = false;
+    if (failed(macro("UPF_is_hard_macro", hardMacro)) ||
+        failed(macro("UPF_is_soft_macro", softMacro)))
+      return failure();
+    if (retention || hardMacro || softMacro)
+      upf::UPFDesignAttributesOp::create(
+          builder, object->getLoc(),
+          upf::RetentionElementAttr::get(
+              module.getContext(), builder.getStringAttr(path),
+              instance  ? upf::RetentionElementKind::Instance
+              : process ? upf::RetentionElementKind::Process
+                        : upf::RetentionElementKind::Signal),
+          retention, hardMacro, softMacro);
+  }
   auto supplySymbol = [&](unsigned id) {
     return FlatSymbolRefAttr::get(module.getContext(),
                                   "__upf_supply_" + std::to_string(id));

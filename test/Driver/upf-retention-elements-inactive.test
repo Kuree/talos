@@ -1,0 +1,38 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/constraint.upf -emit-sim -O3 --mlir-verify-each %t/design.sv -o %t.constraint
+// RUN: FileCheck %s --input-file=%t.constraint --implicit-check-not=__upf_ --implicit-check-not=simulation.event.snapshot --implicit-check-not=upf.retention_elements --implicit-check-not=upf.hierarchy
+// RUN: talos --upf %t/empty.upf -emit-sim -O0 --mlir-verify-each %t/design.sv -o %t.empty
+// RUN: FileCheck %s --input-file=%t.empty --implicit-check-not=__upf_retention --implicit-check-not=upf.retention_elements --implicit-check-not=upf.hierarchy
+// RUN: talos --upf %t/dormant.upf -emit-sim -O0 --mlir-verify-each %t/opaque.sv -o %t.dormant
+// RUN: FileCheck %s --input-file=%t.dormant --check-prefix=DORMANT --implicit-check-not=__upf_ --implicit-check-not=simulation.event.snapshot
+// Constraint-only declarations introduce no runtime policy, save/restore
+// actors, snapshots or backing state. An explicit empty named selection never
+// falls back to a domain-default strategy.
+// CHECK: simulation.design
+// DORMANT: simulation.dpi.call "opaque"
+
+//--- design.sv
+module leaf(input logic clk);
+  logic q=0; always @(posedge clk) q<=~q;
+endmodule
+module top;
+  logic clk=0,rtc=0;
+  leaf dut(clk);
+  initial begin #1 clk=1; #1 $finish; end
+endmodule
+//--- constraint.upf
+set_retention_elements G -elements dut
+//--- empty.upf
+create_power_domain PD -elements dut
+set_retention_elements EMPTY -elements {}
+set_retention NONE -domain PD -elements EMPTY -retention_condition rtc
+//--- opaque.sv
+module top;
+  import "DPI-C" context function int opaque();
+  logic clk=0; int q=0;
+  (* UPF_retention="required" *) always @(posedge clk) begin : P q <= opaque(); end
+  initial begin #1 clk=1; #1 $finish; end
+endmodule
+//--- dormant.upf
+set_retention_elements EMPTY -elements {}

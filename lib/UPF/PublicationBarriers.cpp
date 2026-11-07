@@ -29,6 +29,7 @@ namespace talos {
 namespace {
 
 bool needsSnapshots(ModuleOp module) {
+  SymbolTableCollection symbols;
   if (sim::has<sim::metadata::SnapshotPublications>(module))
     return true;
   bool needed = false;
@@ -46,7 +47,7 @@ bool needsSnapshots(ModuleOp module) {
     if (auto strategies = domain.getRetentionsAttr())
       for (auto attribute : strategies) {
         auto retention = cast<upf::RetentionAttr>(attribute);
-        if (!retention.getDomainDefault() && retention.getElements().empty())
+        if (upf::isStaticallyEmptyRetention(retention, domain, &symbols))
           continue;
         // IEEE 1801-2018 6.50/9.7.3: either control selects balloon intent.
         needed |= !retention.getNoRetention() &&
