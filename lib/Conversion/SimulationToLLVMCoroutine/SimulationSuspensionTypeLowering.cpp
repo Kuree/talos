@@ -33,11 +33,11 @@ SmallVector<int32_t> suspensionWaitWidths(Operation *operation) {
       })
       .Case<sim::SimSuspendEdgeOp>([&](auto op) {
         watched.push_back(op.getWatched());
-        scalarEdge.push_back(true);
+        scalarEdge.push_back(op.getEdge() != sim::EdgeKind::Change);
       })
       .Case<sim::SimSuspendEdgeIffOp>([&](auto op) {
         watched.push_back(op.getWatched());
-        scalarEdge.push_back(true);
+        scalarEdge.push_back(op.getEdge() != sim::EdgeKind::Change);
         watched.push_back(op.getCondition());
         scalarEdge.push_back(false);
       })

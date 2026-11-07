@@ -4,12 +4,16 @@
 #include "llvm/ADT/DenseSet.h"
 #include <functional>
 namespace talos {
+namespace upf_detail {
+class ClockSnapshots;
+}
 struct RetentionLoweringOptions {
   sim::SimDesignOp design;
   upf::UPFDomainOp domain;
   sim::SimFuncOp root;
   const llvm::StringMap<upf_detail::Descriptor> &descriptors, &supplies;
   upf_detail::Descriptor domainEpoch;
+  upf_detail::ClockSnapshots *clocks;
   llvm::ArrayRef<upf_detail::Descriptor> domainDependencies;
   std::function<upf_detail::Descriptor(mlir::Location, llvm::StringRef,
                                        mlir::Type)>

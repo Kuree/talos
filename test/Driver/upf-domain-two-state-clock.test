@@ -1,0 +1,41 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --vpi=off -emit-sim %t/design.sv -o %t.mlir && FileCheck %s --check-prefix=IR --input-file=%t.mlir --implicit-check-not='simulation.storage.decl {{.*}}!simulation.logic'
+// IR: simulation.storage.decl {{.*}} : i1 design hierarchy "__upf_clock.{{[0-9]+}}.history"
+// The clock history, callback payload and all persistent HDL state remain
+// two-state. Qualification must not require an unknown state plane.
+// CHECK: domain two-state clock passed
+
+//--- design.sv
+module leaf;
+  bit q;
+  always @(posedge top.clk) begin
+    top.hits += 1;
+    q <= 1;
+  end
+endmodule
+module top;
+  import UPF::*;
+  bit clk;
+  bit [31:0] hits = 0;
+  leaf dut();
+  initial begin
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground",0.0)) $fatal(1,"supplies");
+    #1 clk = 1;
+    if (!supply_off("/top/CORE.power") || !supply_on("/top/CORE.power")) $fatal(1,"pulse");
+    clk = 0; clk = 1;
+    #0;
+    if (dut.q !== 0 || hits != 0) $fatal(1,"pending two-state body revived");
+    clk = 0; #0 clk = 1; #1;
+    if (dut.q !== 1 || hits != 1) $fatal(1,"fresh two-state clock suppressed");
+    $display("domain two-state clock passed"); $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set CORE
+create_power_domain PD -elements dut -supply {primary CORE}

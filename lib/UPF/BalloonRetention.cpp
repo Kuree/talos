@@ -1,13 +1,13 @@
 //===- BalloonRetention.cpp - Event-time balloon storage lowering -------===//
 
 #include "BalloonRetention.h"
+#include "ClockSnapshot.h"
 #include "PowerState.h"
 #include "PublicationCallback.h"
 #include "RetentionReadback.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/SymbolTable.h"
-#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Interfaces/ViewLikeInterface.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "llvm/ADT/DenseMap.h"
@@ -33,11 +33,7 @@ struct State {
 };
 struct Clock {
   sim::SimFuncOp writer;
-  Operation *wait;
-  Descriptor armed, valid, epoch, history;
-  SmallVector<Value> controls;
-  SmallVector<sim::EdgeKind> edges;
-  Value condition;
+  Descriptor epoch, valid;
 };
 
 struct BalloonLowering {
@@ -146,18 +142,7 @@ struct BalloonLowering {
                           : bit(false);
   }
   Value rawEdge(Value before, Value after, sim::EdgeKind kind) {
-    Value beforeZero = equalsLevel(b, loc, before, false);
-    Value beforeOne = equalsLevel(b, loc, before, true);
-    Value afterZero = equalsLevel(b, loc, after, false);
-    Value afterOne = equalsLevel(b, loc, after, true);
-    Value unknown = not_(or_(beforeZero, beforeOne));
-    Value posedge =
-        or_(and_(beforeZero, not_(afterZero)), and_(unknown, afterOne));
-    Value negedge =
-        or_(and_(beforeOne, not_(afterOne)), and_(unknown, afterZero));
-    return kind == sim::EdgeKind::Posedge   ? posedge
-           : kind == sim::EdgeKind::Negedge ? negedge
-                                            : or_(posedge, negedge);
+    return clockEdge(b, loc, before, after, kind);
   }
   Value event(Value before, Value after, upf::RetentionTriggerAttr trigger) {
     if (!trigger)
@@ -350,149 +335,6 @@ struct BalloonLowering {
     return registerSnapshot(".policy", *primaryCallback, *sampler, targets);
   }
 
-  FailureOr<Value> clone(Value value, Value ctx, IRMapping &mapping) {
-    if (auto known = mapping.lookupOrNull(value))
-      return known;
-    if (auto argument = dyn_cast<BlockArgument>(value)) {
-      auto fn = dyn_cast<sim::SimFuncOp>(argument.getOwner()->getParentOp());
-      if (!fn || argument.getOwner() != &fn.getBody().front())
-        return failure();
-      if (isa<sim::ContextType>(value.getType()))
-        return ctx;
-      auto id = fn.getArgAttrOfType<IntegerAttr>(
-          argument.getArgNumber(), sim::metadata::DescriptorId::getNameStr());
-      if (!id)
-        return failure();
-      bool net = isa<sim::NetType>(value.getType());
-      if (!net && !isa<sim::RefType>(value.getType()))
-        return failure();
-      Type element = net ? cast<sim::NetType>(value.getType()).getElementType()
-                         : cast<sim::RefType>(value.getType()).getElementType();
-      auto rootType = fn.getArgAttrOfType<TypeAttr>(
-          argument.getArgNumber(),
-          sim::metadata::DescriptorRootType::getNameStr());
-      if (rootType)
-        element = rootType.getValue();
-      Value copy = handle(b, loc, ctx, {id.getUInt(), element, net});
-      if (rootType) {
-        if (net || !fn.getArgAttr(argument.getArgNumber(),
-                                  sim::metadata::DescriptorLow::getNameStr()))
-          return failure();
-        if (auto indices = fn.getArgAttrOfType<DenseI64ArrayAttr>(
-                argument.getArgNumber(),
-                sim::metadata::DescriptorIndices::getNameStr())) {
-          auto aggregate = fn.getArgAttrOfType<TypeAttr>(
-              argument.getArgNumber(),
-              sim::metadata::DescriptorAggregateType::getNameStr());
-          if (!aggregate)
-            return failure();
-          copy = sim::SimRefSubelementOp::create(
-              b, loc, sim::RefType::get(b.getContext(), aggregate.getValue()),
-              copy, indices);
-        }
-        if (copy.getType() != value.getType()) {
-          auto low = fn.getArgAttrOfType<IntegerAttr>(
-              argument.getArgNumber(),
-              sim::metadata::DescriptorPackedLow::getNameStr());
-          if (!low)
-            return failure();
-          copy =
-              sim::SimRefExtractOp::create(b, loc, value.getType(), copy, low);
-        }
-      }
-      mapping.map(value, copy);
-      return copy;
-    }
-    Operation *op = value.getDefiningOp();
-    if (!op || (!isMemoryEffectFree(op) &&
-                !isa<sim::SimContextStorageOp, sim::SimContextNetOp>(op)))
-      return failure();
-    for (Value operand : op->getOperands()) {
-      auto input = clone(operand, ctx, mapping);
-      if (failed(input))
-        return failure();
-      mapping.map(operand, *input);
-    }
-    auto *copy = b.clone(*op, mapping);
-    mapping.map(op->getResults(), copy->getResults());
-    return mapping.lookup(value);
-  }
-  FailureOr<Value> clockLevels(Clock &clock, Value ctx, IRMapping &mapping) {
-    SmallVector<Value> levels;
-    for (Value reference : clock.controls) {
-      if (!isa<sim::RefType, sim::NetType>(reference.getType()))
-        return failure();
-      auto copied = clone(reference, ctx, mapping);
-      if (failed(copied))
-        return failure();
-      levels.push_back(slice(logic(load(b, loc, *copied)), 0, 1));
-    }
-    return pack(levels);
-  }
-  LogicalResult clock(Clock &clock, unsigned index) {
-    std::string suffix = ".clock." + std::to_string(index);
-    FailureOr<Value> levels = failure();
-    auto primary = callback(suffix, [&](Value ctx) {
-      IRMapping mapping;
-      levels = clockLevels(clock, ctx, mapping);
-      return succeeded(levels) ? *levels : logic(bit(false));
-    });
-    if (failed(levels))
-      return clock.wait->emitError("balloon retention requires persistent "
-                                   "directly addressable clock controls");
-    if (failed(primary))
-      return failure();
-    auto sampler = callback(suffix + ".capture", [&](Value ctx) {
-      IRMapping mapping;
-      auto current = clockLevels(clock, ctx, mapping);
-      assert(succeeded(current));
-      Value previous = read(ctx, clock.history);
-      Value triggered = bit(false);
-      for (auto [i, edge] : llvm::enumerate(clock.edges))
-        triggered = or_(triggered, rawEdge(slice(previous, i, 1),
-                                           slice(*current, i, 1), edge));
-      if (clock.condition) {
-        if (!isa<sim::RefType, sim::NetType>(clock.condition.getType())) {
-          levels = failure();
-          return logic(bit(false));
-        }
-        auto reference = clone(clock.condition, ctx, mapping);
-        if (failed(reference)) {
-          levels = failure();
-          return logic(bit(false));
-        }
-        triggered = and_(triggered, sim::SimLogicIsTrueOp::create(
-                                        b, loc, b.getI1Type(),
-                                        logic(load(b, loc, *reference))));
-      }
-      Value armed = read(ctx, clock.armed);
-      Value accept = and_(armed, triggered);
-      return pack(ValueRange{
-          *current,
-          choose(accept, read(ctx, priorityEpoch), read(ctx, clock.epoch)),
-          choose(accept, writable(ctx), read(ctx, clock.valid)),
-          and_(armed, not_(accept))});
-    });
-    if (failed(levels))
-      return clock.wait->emitError("balloon retention requires a persistent "
-                                   "directly addressable clock iff condition");
-    if (failed(sampler))
-      return failure();
-    root();
-    Value ctx = o.root.getArgument(0);
-    write(ctx, clock.history, call(ctx, *primary));
-    write(ctx, clock.epoch, read(ctx, priorityEpoch));
-    write(ctx, clock.valid, bit(false));
-    write(ctx, clock.armed, bit(false));
-    SmallVector<Descriptor> targets{clock.history, clock.epoch, clock.valid,
-                                    clock.armed};
-    if (failed(registerSnapshot(suffix, *primary, *sampler, targets)))
-      return failure();
-    b.setInsertionPoint(clock.wait);
-    write(clock.writer.getArgument(0), clock.armed, bit(true));
-    return success();
-  }
-
   void guard(Operation *op, Value valid, llvm::function_ref<void()> body) {
     auto *before = op->getBlock();
     auto *execute = before->splitBlock(Block::iterator(op));
@@ -646,39 +488,17 @@ struct BalloonLowering {
     if (failed(policy()))
       return failure();
     for (auto writer : writers) {
-      Clock item;
-      item.writer = writer;
-      writer.walk([&](Operation *op) {
-        if (auto edge = dyn_cast<sim::SimSuspendEdgeOp>(op)) {
-          item.wait = op;
-          item.controls.push_back(edge.getWatched());
-          item.edges.push_back(edge.getEdge());
-        } else if (auto edge = dyn_cast<sim::SimSuspendEdgeIffOp>(op)) {
-          item.wait = op;
-          item.controls.push_back(edge.getWatched());
-          item.edges.push_back(edge.getEdge());
-          item.condition = edge.getCondition();
-        } else if (auto any = dyn_cast<sim::SimSuspendAnyOp>(op)) {
-          item.wait = op;
-          llvm::append_range(item.controls, any.getWatched());
-          for (int32_t edge : any.getEdges())
-            item.edges.push_back(static_cast<sim::EdgeKind>(edge));
-        }
-      });
-      assert(item.wait && !item.controls.empty());
-      if (item.controls.size() > maxPackedWidth - 66)
-        return item.wait->emitError(
-            "balloon retention clock inventory exceeds supported packed width");
       std::string suffix = ".clock." + std::to_string(clocks.size());
-      item.history =
-          o.storage(loc, name + suffix + ".history",
-                    sim::LogicType::get(b.getContext(), item.controls.size()));
-      item.armed = o.storage(loc, name + suffix + ".armed", b.getI1Type());
-      item.valid = o.storage(loc, name + suffix + ".valid", b.getI1Type());
-      item.epoch = o.storage(loc, name + suffix + ".epoch", b.getI64Type());
-      clocks.push_back(std::move(item));
-      if (failed(clock(clocks.back(), clocks.size() - 1)))
+      auto frozen = o.clocks->freeze(
+          writer, name + suffix, priorityEpoch,
+          [&](OpBuilder &sampleBuilder, Location, Value ctx) {
+            OpBuilder::InsertionGuard guard(b);
+            b.restoreInsertionPoint(sampleBuilder.saveInsertionPoint());
+            return writable(ctx);
+          });
+      if (failed(frozen))
         return failure();
+      clocks.push_back({writer, frozen->epoch, frozen->valid});
     }
     nbaPredicate = o.function(loc, name + ".nba_allowed",
                               {sim::ContextType::get(b.getContext())},

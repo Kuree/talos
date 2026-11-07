@@ -7,9 +7,9 @@
 // RUN: %t.exe | FileCheck %s --check-prefix=OUTPUT
 // RUN: talos --upf %t/design.upf -O3 --vpi=off --execution-tier=bytecode %t/design.sv -o %t.bc && %t.bc | FileCheck %s --check-prefix=OUTPUT
 // Empty retention adds no owner or registration beyond the ordinary-domain
-// exact-loss policy. Compare the same nonempty domain without retention.
+// exact-loss and clock policies. Compare the same nonempty domain without retention.
 // True empty domains and ordinary no-UPF links retain no-service checks.
-// IR-COUNT-1: simulation.event.snapshot.register
+// IR-COUNT-2: simulation.event.snapshot.register
 // IR-NOT: simulation.event.snapshot.register
 // OUTPUT: empty retention cost passed
 

@@ -1,0 +1,60 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// IEEE 1801-2018 6.50/9.7: primary-domain eligibility is independent of
+// per-register master/Balloon policy. Strategy-only inhibition must not skip
+// ordinary neighboring state or unrelated body effects in the same actor.
+// CHECK: independent domain retention clock policy passed
+
+//--- design.sv
+module leaf;
+  logic [7:0] master_q, balloon_q, ordinary;
+  always @(posedge top.clk) begin
+    top.effects += 1;
+    master_q <= top.d;
+    balloon_q <= top.d;
+    ordinary <= top.d;
+  end
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, rtc = 0, save = 0, restore = 0;
+  logic [7:0] d = 8'h11;
+  int effects = 0;
+  leaf dut();
+  task automatic tick;
+    clk = 0; #1 clk = 1; #1;
+  endtask
+  initial begin
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground",0.0) ||
+        !supply_on("/top/RET.power") || !supply_on("/top/RET.ground",0.0)) $fatal(1,"supplies");
+    tick();
+    if (dut.master_q !== d || dut.balloon_q !== d || dut.ordinary !== d || effects != 1) $fatal(1,"first clock");
+    rtc = 1; #1; d = 8'h22; tick();
+    if (dut.master_q !== 8'h11 || dut.balloon_q !== d || dut.ordinary !== d || effects != 2) $fatal(1,"RTC froze actor");
+    if (!supply_off("/top/RET.power")) $fatal(1,"RET OFF");
+    #1; d = 8'h33; tick();
+    if (dut.master_q !== 'x || dut.balloon_q !== 'x || dut.ordinary !== d || effects != 3) $fatal(1,"RET froze actor");
+    if (!supply_on("/top/RET.power")) $fatal(1,"RET ON");
+    rtc = 0; d = 8'h44; #1; tick();
+    if (dut.master_q !== d || dut.balloon_q !== d || dut.ordinary !== d || effects != 4) $fatal(1,"strategy recovery");
+    clk = 0; #1 clk = 1;
+    if (!supply_off("/top/CORE.power") || !supply_on("/top/CORE.power")) $fatal(1,"primary pulse");
+    #1;
+    if (dut.master_q !== 'x || dut.balloon_q !== 'x || dut.ordinary !== 'x || effects != 4) $fatal(1,"primary pending body revived");
+    d = 8'h55; tick();
+    if (dut.master_q !== d || dut.balloon_q !== d || dut.ordinary !== d || effects != 5) $fatal(1,"fresh mixed clock");
+    $display("independent domain retention clock policy passed"); $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set CORE
+create_supply_set RET
+create_power_domain PD -elements dut -supply {primary CORE}
+set_retention MASTER -domain PD -elements dut/master_q -retention_supply RET -retention_condition rtc
+set_retention BALLOON -domain PD -elements dut/balloon_q -retention_supply RET \
+    -save_signal {save high} -restore_signal {restore high} -retention_condition rtc

@@ -1,4 +1,5 @@
 // Power guards and corruption writes remain visible to subsequent analyses.
+#include "ClockSnapshot.h"
 #include "ControlValue.h"
 #include "ElaborateSupply.h"
 #include "PowerState.h"
@@ -305,11 +306,12 @@ struct Lowering {
   llvm::DenseMap<uint64_t, std::string> unitPaths;
   llvm::DenseMap<uint64_t, std::string> scopePaths;
   llvm::DenseMap<uint64_t, sim::SimCodeUnitDeclOp> units;
-  llvm::DenseSet<uint64_t> referencedStorage;
+  llvm::DenseSet<uint64_t> referencedStorage, immutableSupplies;
   bool preserveStorage;
   llvm::StringMap<uint64_t> unitIDs;
   sim::SimFuncOp root;
   std::unique_ptr<ReferenceWindows> nbaWindows;
+  std::unique_ptr<ClockSnapshots> clocks;
   Lowering(sim::SimDesignOp design, bool preserveStorage)
       : design(design), builder(design.getContext()),
         preserveStorage(preserveStorage) {
@@ -335,6 +337,16 @@ struct Lowering {
         root = fn;
     if (!preserveStorage)
       collectReferencedStorage();
+    if (root)
+      clocks = std::make_unique<ClockSnapshots>(
+          ClockSnapshotOptions{root,
+                               [&](Location loc, StringRef name, Type type) {
+                                 return storage(loc, name, type);
+                               },
+                               [&](Location loc, StringRef name,
+                                   ArrayRef<Type> inputs, sim::EntryKind kind) {
+                                 return function(loc, name, inputs, kind);
+                               }});
   }
   void collectReferencedStorage() {
     design.walk([&](sim::SimContextStorageOp ref) {
@@ -553,6 +565,8 @@ struct Lowering {
       auto d =
           storage(supply.getLoc(), supply.getSymName(), builder.getI64Type());
       supplies[supply.getSymName()] = d;
+      if (supply.getAlwaysOn())
+        immutableSupplies.insert(d.id);
       for (auto name : supply.getNames())
         supplyTable.push_back(
             {cast<StringAttr>(name), d.id, supply.getWritable()});
@@ -658,7 +672,8 @@ struct Lowering {
     return success();
   }
   LogicalResult gate(sim::SimFuncOp fn, const PowerCondition &condition,
-                     Descriptor restoration, bool inlineOutput = true) {
+                     Descriptor restoration, Descriptor epoch,
+                     bool qualifyClock, bool inlineOutput = true) {
     SmallVector<Operation *> waits;
     fn.walk([&](Operation *op) {
       if (op->getName().getStringRef().starts_with("simulation.suspend."))
@@ -736,10 +751,35 @@ struct Lowering {
                             "domain is not implemented");
       edgeSensitive = edge;
     }
+    std::optional<FrozenClock> frozen;
+    if (edgeSensitive && qualifyClock) {
+      auto clock = clocks->freeze(
+          fn, "__upf_clock." + std::to_string(fn.getCodeUnitId().value_or(0)),
+          epoch, [&](OpBuilder &b, Location loc, Value ctx) {
+            return condition.normal(b, loc, ctx, false);
+          });
+      if (failed(clock))
+        return failure();
+      frozen = *clock;
+    }
     Block *body = gate->splitBlock(gate->begin());
     builder.setInsertionPointToEnd(gate);
-    Value on =
-        condition.normal(builder, fn.getLoc(), fn.getArgument(0), inlineOutput);
+    Value ctx = fn.getArgument(0);
+    Value on;
+    if (frozen) {
+      on = arith::AndIOp::create(
+          builder, fn.getLoc(),
+          load(builder, fn.getLoc(),
+               handle(builder, fn.getLoc(), ctx, frozen->valid)),
+          arith::CmpIOp::create(
+              builder, fn.getLoc(), arith::CmpIPredicate::eq,
+              load(builder, fn.getLoc(),
+                   handle(builder, fn.getLoc(), ctx, frozen->epoch)),
+              load(builder, fn.getLoc(),
+                   handle(builder, fn.getLoc(), ctx, epoch))));
+    } else {
+      on = condition.normal(builder, fn.getLoc(), ctx, inlineOutput);
+    }
     if (!edgeSensitive) {
       // IEEE 1801-2018 9.2.1/9.6.7: control-net routing can settle after the
       // root's initial aggregate snapshot. Wait for publication before the
@@ -1374,6 +1414,7 @@ struct Lowering {
           descriptors,
           supplies,
           epoch,
+          clocks.get(),
           retentionDependencies,
           [&](Location loc, StringRef name, Type type) {
             return storage(loc, name, type);
@@ -1426,8 +1467,18 @@ struct Lowering {
         if (failed(nba(enqueue, predicate, dependencies, epoch)))
           return failure();
     }
+    // Protected roots cannot publish a loss after startup. Avoid clock
+    // snapshots when every input to the primary policy is immutable.
+    auto immutable = [&](Descriptor d) {
+      return immutableSupplies.contains(d.id) && !computed.contains(d.id);
+    };
+    bool qualifyClock = condition.input || !immutable(condition.power) ||
+                        (condition.ground && !immutable(*condition.ground)) ||
+                        !llvm::all_of(condition.required, immutable) ||
+                        !llvm::all_of(condition.policyInputs, immutable);
     for (auto process : processes) {
-      if (failed(gate(process, condition, restoration,
+      if (failed(gate(process, condition, restoration, epoch,
+                      exact && qualifyClock,
                       !retention.publishedProcesses.contains(process))))
         return failure();
     }
@@ -1624,6 +1675,10 @@ struct ElaborateUPFPass
         signalPassFailure();
         return;
       }
+    if (lowering.clocks && failed(lowering.clocks->finalize())) {
+      signalPassFailure();
+      return;
+    }
     if (failed(lowerSupplyAccesses(*designs.begin(), lowering.supplyTable))) {
       signalPassFailure();
       return;

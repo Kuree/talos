@@ -10,6 +10,7 @@ add_mlir_library(TalosUPF
   Elaborate.cpp
   Retention.cpp
   BalloonRetention.cpp
+  ClockSnapshot.cpp
   PublicationBarriers.cpp
   ReferenceWindow.cpp
   ElaborateSupply.cpp

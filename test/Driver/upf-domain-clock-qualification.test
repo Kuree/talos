@@ -1,0 +1,66 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// IEEE 1800-2023 9.4.2: event-time iff uses SV truth, directed vector
+// edges use the LSB, and either qualifying OR-list edge arms one activation.
+// CHECK: domain clock qualification passed
+
+//--- design.sv
+module leaf;
+  logic [7:0] q = 0, a = 0;
+  always @(posedge top.clk iff top.enable) q <= top.d;
+  always @(posedge top.vector_clk or negedge top.reset_n) a <= top.d;
+endmodule
+module top;
+  import UPF::*;
+  logic clk = 0, reset_n = 1;
+  logic [1:0] vector_clk = 0, enable = 0;
+  logic [7:0] d = 8'h11;
+  leaf dut();
+  initial begin
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground",0.0)) $fatal(1,"supplies");
+    dut.q = 0; dut.a = 0;
+    #1 clk = 1; enable = 2; // False iff edge cannot be made true retroactively.
+    #1;
+    if (dut.q !== 0) $fatal(1,"iff-only change fired");
+    clk = 0; enable = 'x; #1 clk = 1;
+    #1;
+    if (dut.q !== 0) $fatal(1,"X iff consumed event");
+    clk = 0; enable = 'z; #1 clk = 1;
+    #1;
+    if (dut.q !== 0) $fatal(1,"Z iff consumed event");
+    clk = 0; enable = 2; #1 clk = 1; enable = 0;
+    #1;
+    if (dut.q !== d) $fatal(1,"qualified iff retested at resume");
+    vector_clk = 2'b10; #1;
+    if (dut.a !== 0) $fatal(1,"vector upper bit made posedge");
+    vector_clk = 2'b1x; #1;
+    if (dut.a !== d) $fatal(1,"zero-to-X posedge missing");
+    d = 8'h22; vector_clk = 2'b1z; #1;
+    if (dut.a !== 8'h11) $fatal(1,"X-to-Z made directed edge");
+    vector_clk = 2'b11; #1;
+    if (dut.a !== d) $fatal(1,"Z-to-one posedge missing");
+    d = 8'h33; reset_n = 0;
+    if (!supply_off("/top/CORE.power") || !supply_on("/top/CORE.power")) $fatal(1,"reset pulse");
+    #1;
+    if (dut.a !== 'x) $fatal(1,"pending asynchronous reset revived");
+    reset_n = 1; #0 reset_n = 0; #1;
+    if (dut.a !== d) $fatal(1,"fresh reset suppressed");
+    // No clockless power cycle may consume the waiting iff actor's arm.
+    clk = 0; enable = 0; #1;
+    if (!supply_off("/top/CORE.power") || !supply_on("/top/CORE.power")) $fatal(1,"clockless pulse");
+    clk = 1; enable = 1; // False edge, followed by iff-only publication.
+    #1;
+    if (dut.q !== 'x) $fatal(1,"false edge revived after power cycle");
+    clk = 0; #0 clk = 1; #1;
+    if (dut.q !== d) $fatal(1,"later qualified edge suppressed");
+    $display("domain clock qualification passed"); $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set CORE
+create_power_domain PD -elements dut -supply {primary CORE}

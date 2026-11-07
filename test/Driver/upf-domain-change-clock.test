@@ -1,0 +1,69 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.o3 && %t.o3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O0 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc0 && %t.bc0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// IEEE 1800-2023 9.4.2: qualified change observes every packed bit, including
+// X/Z transitions. Directed events select the LSB of an ascending wide view.
+// CHECK: domain full-value change clock passed
+
+//--- design.sv
+module leaf(input wire net_clk);
+  logic [7:0] change_q, selected_q, net_q;
+  always @(top.change_clk iff top.enable) change_q <= top.d;
+  always @(posedge top.selected[1:65]) selected_q <= top.d;
+  always @(posedge net_clk) net_q <= top.d;
+endmodule
+module top;
+  import UPF::*;
+  logic [64:0] change_clk = 0;
+  logic [0:65] selected = 0;
+  logic [1:0] enable = 2;
+  logic net_source = 0;
+  wire net_clk = net_source;
+  logic [7:0] d = 8'h11;
+  leaf dut(net_clk);
+  initial begin
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground",0.0)) $fatal(1,"supplies");
+    dut.change_q = 0; dut.selected_q = 0; dut.net_q = 0;
+    #1 change_clk[64] = 1;
+    #1;
+    if (dut.change_q !== d) $fatal(1,"upper change bit missing");
+    d = 8'h22; change_clk[64] = 'x;
+    #1;
+    if (dut.change_q !== d) $fatal(1,"known-to-X change missing");
+    d = 8'h33; change_clk[64] = 'z;
+    #1;
+    if (dut.change_q !== d) $fatal(1,"X-to-Z change missing");
+    enable = 0; d = 8'h44; change_clk[64] = 0; enable = 2;
+    #1;
+    if (dut.change_q !== 8'h33) $fatal(1,"iff-only change fired");
+    change_clk[0] = 1; enable = 0;
+    #1;
+    if (dut.change_q !== d) $fatal(1,"qualified change retested iff");
+    selected[1] = 1;
+    #1;
+    if (dut.selected_q !== 0) $fatal(1,"ascending upper bit made posedge");
+    selected[65] = 'z;
+    #1;
+    if (dut.selected_q !== d) $fatal(1,"ascending selected LSB missing");
+    net_source = 1;
+    #1;
+    if (dut.net_q !== d) $fatal(1,"net clock missing");
+    enable = 2; d = 8'h55; change_clk[64] = 1;
+    if (!supply_off("/top/CORE.power") || !supply_on("/top/CORE.power")) $fatal(1,"pulse");
+    #1;
+    if (dut.change_q !== 'x || dut.selected_q !== 'x || dut.net_q !== 'x) $fatal(1,"pending change revived");
+    change_clk[64] = 0; selected[65] = 0; net_source = 0;
+    #1;
+    selected[65] = 1; net_source = 1;
+    #1;
+    if (dut.change_q !== d || dut.selected_q !== d || dut.net_q !== d) $fatal(1,"fresh wide/net clocks");
+    $display("domain full-value change clock passed"); $finish;
+  end
+endmodule
+
+//--- design.upf
+create_supply_set CORE
+create_power_domain PD -elements dut -supply {primary CORE}

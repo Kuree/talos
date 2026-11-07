@@ -1,6 +1,6 @@
 // RUN: %split-file %s %t
 // RUN: talos-opt %t/design.mlir --prepare-upf-snapshot-publications --elaborate-upf --prepare-upf-snapshot-publications --canonicalize --cse --verify-each -o %t/lowered.mlir
-// RUN: FileCheck %s --input-file=%t/lowered.mlir --implicit-check-not=upf.domain --implicit-check-not=simulation.scheduler.cohort
+// RUN: FileCheck %s --input-file=%t/lowered.mlir --implicit-check-not=upf.domain --implicit-check-not=simulation.scheduler.cohort --implicit-check-not=__upf_clock.
 // RUN: talos-opt %t/lowered.mlir --canonicalize --cse --verify-each -o /dev/null
 // IEEE 1801-2018 6.50/9.7.3: distinct normal/saved/output state and atomic
 // policy publication. Captured callbacks must verify without unbound context
