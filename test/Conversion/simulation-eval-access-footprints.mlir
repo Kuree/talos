@@ -98,4 +98,4 @@ module attributes {
 // Matrix is at bit 32. Its reached relative intervals are [3,12), [15,24).
 // Output [64,67) remains required, including its unknown-plane store contract.
 // CHECK-DAG: schedule.eval.local_promotion_ranges = array<i64: 35, 9, 47, 9, 64, 3>
-// CHECK-DAG: llvm.mlir.global internal constant @__talos_eval_kernel_promotion_ranges_v1(dense<[0, 1, -34359738368, 17592186044415, 0, 1, -140737488355328, 72057594037927935, 1, 2, -1, 7]>
+// CHECK-DAG: llvm.mlir.global internal constant @__talos_eval_kernel_promotion_ranges_v1(dense<[-9223372036854775808, 71934414375878656, -9223372036854775807, 7]>

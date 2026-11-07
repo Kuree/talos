@@ -11,8 +11,8 @@
 // Both groups depend on member 65, so its unknown writes revoke both latches.
 // Runtime checks in ../Runtime/native-group-proof-domains.test also retain
 // the unqueried member latches and pending bits across successful group scans.
-// CHECK-DAG: @__talos_eval_group_promotion_domains_v1(dense<[0, 3, 3, 5]>
-// CHECK-DAG: @__talos_eval_group_promotion_ranges_v1(dense<[0, 1, -1, 1, 0, 1, -512, 1023, 1, 2, -64, 127, 0, 1, -512, 1023, 1, 2, -64, 127]>
+// CHECK-DAG: @__talos_eval_group_promotion_domains_v1(dense<[0, 2, 2, 4]>
+// CHECK-DAG: @__talos_eval_group_promotion_ranges_v1(dense<[-9223372036854775808, 513, -9223372036854775807, 64, -9223372036854775808, 512, -9223372036854775807, 64]>
 // CHECK-DAG: @__talos_eval_group_promotion_hints_v1(dense<0> : tensor<4xi64>)
 // CHECK-DAG: @__talos_eval_kernel_promotion_latched_v1(dense<0> : tensor<66xi8>)
 // CHECK-DAG: @__talos_eval_promotion_pending_mask_v1(dense<[1, 2]> : tensor<2xi64>)

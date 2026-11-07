@@ -18,8 +18,8 @@
 
 // Write-only NBA destinations at 432 and 440 have separate commit certificates
 // and must not extend the activation's input ranges (LRM 4.9.4, 10.4.2).
-// KERNEL-DAG: llvm.mlir.global internal constant @__talos_eval_kernel_promotion_ranges_v1(dense<[6, 7, -65536, 281474976710655, 0, 3, -2048, 4095, 2, 5, -1099511627776, 2199023255551, 5, 6, -1, -1]>
-// KERNEL-DAG: llvm.mlir.global internal constant @__talos_eval_kernel_promotion_owners_v1(dense<[0, 1, 0, 1, 1, 4, 0, 2]>
+// KERNEL-DAG: llvm.mlir.global internal constant @__talos_eval_kernel_promotion_ranges_v1(dense<[-9223372036854775802, 281474976645120, -9223372036854775808, -2048, -9223372036854775807, -1, -9223372036854775806, -1099511623681, -9223372036854775805, -1, -9223372036854775804, 2199023255551, -9223372036854775803, -1]>
+// KERNEL-DAG: llvm.mlir.global internal constant @__talos_eval_kernel_promotion_owners_v1(dense<[0, 1, 0, 1, 1, 7, 0, 2]>
 // KERNEL-DAG: llvm.mlir.global internal @__talos_eval_kernel_promotion_hints_v1(dense<0> : tensor<4xi64>)
 // RANGE-DAG: llvm.mlir.global internal constant @__talos_eval_proof_dependencies_v1(dense<{{.*}}> : tensor<{{[0-9]+}}x4xi64>)
 // RANGE-DAG: llvm.mlir.global internal constant @__talos_eval_proof_certificates_v1

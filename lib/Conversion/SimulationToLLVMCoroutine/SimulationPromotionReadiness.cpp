@@ -12,6 +12,8 @@
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/STLExtras.h"
 
+#include <cassert>
+
 using namespace mlir;
 
 namespace talos {
@@ -229,6 +231,73 @@ LogicalResult materializeNativeRoutePromotionScan(
   return success();
 }
 
+/// Each private scan record has two i64 fields: (word | tag, mask) for one
+/// masked word, or (begin, end) for a full-word run. A physical word index is
+/// at most UINT64_MAX / 64, so its high bit is available as a tag.
+constexpr uint64_t singleWordScanTag = uint64_t{1} << 63;
+
+/// Encode a union of validated bit intervals as masked words and full runs.
+/// Several disjoint bit ranges may share one physical word: OR their masks
+/// before scanning it, preserving every hole (IEEE 1800-2023 6.3.1). Full
+/// interiors stay runs, so a whole-memory proof does not create a table row per
+/// word.
+static void
+appendMaskedWordScans(SmallVector<std::pair<uint64_t, uint64_t>> intervals,
+                      SmallVectorImpl<uint64_t> &scans) {
+  llvm::sort(intervals);
+  SmallVector<std::pair<uint64_t, uint64_t>> merged;
+  for (auto [begin, end] : intervals) {
+    assert(begin < end && "expected a validated promotion interval");
+    if (!merged.empty() && begin <= merged.back().second)
+      merged.back().second = std::max(merged.back().second, end);
+    else
+      merged.emplace_back(begin, end);
+  }
+  struct WordRun {
+    uint64_t begin, end, mask;
+  };
+  SmallVector<WordRun> words;
+  auto append = [&](uint64_t begin, uint64_t end, uint64_t mask) {
+    if (begin == end)
+      return;
+    if (!words.empty()) {
+      WordRun &last = words.back();
+      if (begin < last.end) {
+        // Normalized bit intervals overlap only in their boundary words.
+        assert(last.begin == begin && last.end == end && end == begin + 1);
+        last.mask |= mask;
+        return;
+      }
+      if (begin == last.end && last.mask == UINT64_MAX && mask == UINT64_MAX) {
+        last.end = end;
+        return;
+      }
+    }
+    words.push_back({begin, end, mask});
+  };
+  for (auto [begin, end] : merged) {
+    uint64_t first = begin / 64, last = (end - 1) / 64;
+    uint64_t firstMask = UINT64_MAX << (begin % 64);
+    uint64_t lastMask = end % 64 ? (uint64_t{1} << (end % 64)) - 1 : UINT64_MAX;
+    if (first == last) {
+      append(first, first + 1, firstMask & lastMask);
+    } else {
+      append(first, first + 1, firstMask);
+      append(first + 1, last, UINT64_MAX);
+      append(last, last + 1, lastMask);
+    }
+  }
+  for (const WordRun &word : words) {
+    if (word.end == word.begin + 1) {
+      llvm::append_range(
+          scans, ArrayRef<uint64_t>{word.begin | singleWordScanTag, word.mask});
+    } else {
+      assert(word.mask == UINT64_MAX && "partial masks belong to one word");
+      llvm::append_range(scans, ArrayRef<uint64_t>{word.begin, word.end});
+    }
+  }
+}
+
 // Kernel and group domains share the same exact masked-word scanner and
 // negative hint protocol. Only kernels own scheduler promotion-pending bits.
 static LogicalResult
@@ -305,9 +374,12 @@ materializePromotionReadiness(ModuleOp module, ArrayRef<uint64_t> owners,
     return result;
   };
   Block *fullScan = block(), *nextRange = block(true), *readRange = block();
+  Block *singleWord = block(), *fullWords = block();
   Block *readWord = block(true), *advanceWord = block(),
         *advanceRange = block();
   Block *rememberUnknown = block(), *known = block(), *unknown = block();
+  rememberUnknown->addArgument(i64, loc);
+  rememberUnknown->addArgument(i64, loc);
   builder.setInsertionPointToStart(entry);
   Value owner = entry->getArgument(0);
   Value ownerBase = address(ownerTable.getSymName());
@@ -321,7 +393,7 @@ materializePromotionReadiness(ModuleOp module, ArrayRef<uint64_t> owners,
           arith::AddIOp::create(builder, loc, hintIndex, constant(1)));
   Value hintWord = LLVM::LoadOp::create(builder, loc, i64, hintWordAddress, 8);
   Value hintMask = LLVM::LoadOp::create(builder, loc, i64, hintMaskAddress, 8);
-  // Both scan loads stay inside the certified words of the unknown plane.
+  // Every scan load stays inside certified words of the unknown plane.
   // Declaring that interval keeps the value plane out of the query's state
   // footprint, so callers need not materialize value-plane state around it.
   auto unknownPlaneBytes = builder.getDenseI64ArrayAttr(
@@ -348,34 +420,45 @@ materializePromotionReadiness(ModuleOp module, ArrayRef<uint64_t> owners,
   cf::CondBranchOp::create(builder, loc, done, known, ValueRange{}, readRange,
                            ValueRange{});
   builder.setInsertionPointToStart(readRange);
-  Value beginWord = field(rangeBase, range, 0),
-        endWord = field(rangeBase, range, 1);
-  Value firstMask = field(rangeBase, range, 2);
-  Value lastMask = field(rangeBase, range, 3);
+  Value beginWord = field(rangeBase, range, 0, 2),
+        maskOrEnd = field(rangeBase, range, 1, 2);
+  Value isSingle = arith::CmpIOp::create(
+      builder, loc, arith::CmpIPredicate::slt, beginWord, constant(0));
+  cf::CondBranchOp::create(builder, loc, isSingle, singleWord, ValueRange{},
+                           fullWords, ValueRange{});
+
+  builder.setInsertionPointToStart(singleWord);
+  Value index = arith::AndIOp::create(builder, loc, beginWord,
+                                      constant(~singleWordScanTag));
+  auto singleLoad =
+      LLVM::LoadOp::create(builder, loc, i64, gep(state, i64, index), 8);
+  schedule::set<schedule::Field::EvalStateAccessBytes>(singleLoad,
+                                                       unknownPlaneBytes);
+  Value singleUnknown = arith::CmpIOp::create(
+      builder, loc, arith::CmpIPredicate::ne,
+      arith::AndIOp::create(builder, loc, singleLoad, maskOrEnd), constant(0));
+  cf::CondBranchOp::create(builder, loc, singleUnknown, rememberUnknown,
+                           ValueRange{index, maskOrEnd}, advanceRange,
+                           ValueRange{});
+
+  builder.setInsertionPointToStart(fullWords);
   cf::BranchOp::create(builder, loc, readWord, ValueRange{beginWord});
 
   builder.setInsertionPointToStart(readWord);
   Value word = readWord->getArgument(0);
   Value nextWord = arith::AddIOp::create(builder, loc, word, constant(1));
-  Value isFirst = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::eq,
-                                        word, beginWord);
   Value isLast = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::eq,
-                                       nextWord, endWord);
-  Value fullMask = constant(UINT64_MAX);
-  Value mask = arith::AndIOp::create(
-      builder, loc,
-      arith::SelectOp::create(builder, loc, isFirst, firstMask, fullMask),
-      arith::SelectOp::create(builder, loc, isLast, lastMask, fullMask));
+                                       nextWord, maskOrEnd);
   auto wordLoad =
       LLVM::LoadOp::create(builder, loc, i64, gep(state, i64, word), 8);
   schedule::set<schedule::Field::EvalStateAccessBytes>(wordLoad,
                                                        unknownPlaneBytes);
   Value bits = wordLoad;
   Value hasUnknown = arith::CmpIOp::create(
-      builder, loc, arith::CmpIPredicate::ne,
-      arith::AndIOp::create(builder, loc, bits, mask), constant(0));
+      builder, loc, arith::CmpIPredicate::ne, bits, constant(0));
   cf::CondBranchOp::create(builder, loc, hasUnknown, rememberUnknown,
-                           ValueRange{}, advanceWord, ValueRange{});
+                           ValueRange{word, constant(UINT64_MAX)}, advanceWord,
+                           ValueRange{});
   builder.setInsertionPointToStart(advanceWord);
   cf::CondBranchOp::create(builder, loc, isLast, advanceRange, ValueRange{},
                            readWord, ValueRange{nextWord});
@@ -385,8 +468,10 @@ materializePromotionReadiness(ModuleOp module, ArrayRef<uint64_t> owners,
       ValueRange{arith::AddIOp::create(builder, loc, range, constant(1))});
 
   builder.setInsertionPointToStart(rememberUnknown);
-  LLVM::StoreOp::create(builder, loc, word, hintWordAddress, 8);
-  LLVM::StoreOp::create(builder, loc, mask, hintMaskAddress, 8);
+  LLVM::StoreOp::create(builder, loc, rememberUnknown->getArgument(0),
+                        hintWordAddress, 8);
+  LLVM::StoreOp::create(builder, loc, rememberUnknown->getArgument(1),
+                        hintMaskAddress, 8);
   cf::BranchOp::create(builder, loc, unknown);
 
   builder.setInsertionPointToStart(known);
@@ -560,26 +645,11 @@ LogicalResult materializeNativeKernelPromotionReadiness(
         intervals.emplace_back(range.bitOffset,
                                range.bitOffset + range.bitWidth);
       }
-    llvm::sort(intervals);
-    SmallVector<std::pair<uint64_t, uint64_t>> merged;
-    for (auto [begin, end] : intervals) {
-      if (!merged.empty() && begin <= merged.back().second)
-        merged.back().second = std::max(merged.back().second, end);
-      else
-        merged.emplace_back(begin, end);
-    }
-    uint64_t first = scans.size() / 4;
-    for (auto [begin, end] : merged) {
-      uint64_t firstMask = UINT64_MAX << (begin % 64);
-      uint64_t lastMask =
-          end % 64 ? (uint64_t{1} << (end % 64)) - 1 : UINT64_MAX;
-      llvm::append_range(scans, ArrayRef<uint64_t>{begin / 64,
-                                                   end / 64 + (end % 64 != 0),
-                                                   firstMask, lastMask});
-    }
+    uint64_t first = scans.size() / 2;
+    appendMaskedWordScans(std::move(intervals), scans);
     uint64_t bit = fragments[index].bit;
     llvm::append_range(owners,
-                       ArrayRef<uint64_t>{first, scans.size() / 4, bit / 64,
+                       ArrayRef<uint64_t>{first, scans.size() / 2, bit / 64,
                                           uint64_t{1} << (bit % 64)});
   }
 
@@ -714,17 +784,15 @@ LogicalResult materializeNativeGroupPromotionReadiness(ModuleOp module) {
   SmallVector<uint64_t> records, scans;
   for (Attribute attribute : domains) {
     auto domain = cast<schedule::GroupProofDependencyAttr>(attribute);
-    uint64_t first = scans.size() / 4;
+    uint64_t first = scans.size() / 2;
     auto ranges = domain.getRanges().asArrayRef();
+    SmallVector<std::pair<uint64_t, uint64_t>> intervals;
     for (size_t i = 0; i != ranges.size(); i += 2) {
       uint64_t begin = ranges[i], end = begin + ranges[i + 1];
-      llvm::append_range(
-          scans, ArrayRef<uint64_t>{begin / 64, end / 64 + (end % 64 != 0),
-                                    UINT64_MAX << (begin % 64),
-                                    end % 64 ? (uint64_t{1} << (end % 64)) - 1
-                                             : UINT64_MAX});
+      intervals.emplace_back(begin, end);
     }
-    llvm::append_range(records, ArrayRef<uint64_t>{first, scans.size() / 4});
+    appendMaskedWordScans(std::move(intervals), scans);
+    llvm::append_range(records, ArrayRef<uint64_t>{first, scans.size() / 2});
   }
   // IEEE 1800-2023 4.5/4.6 and 6.3.1: this query only inspects the existing
   // canonical X/Z at the group entry boundary. It neither runs inactive
