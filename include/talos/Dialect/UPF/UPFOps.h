@@ -3,6 +3,8 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/Interfaces/InferTypeOpInterface.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "talos/Dialect/UPF/UPFAttrs.h"
 #include "talos/Dialect/UPF/UPFDialect.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -40,6 +42,7 @@ bool isStaticallyEmptyRetention(RetentionAttr strategy, mlir::Operation *from,
 bool isDesignAttributeModelOnly(llvm::StringRef name);
 bool isPortAttributeName(llvm::StringRef name);
 bool isValidDesignAttributeValue(llvm::StringRef name, mlir::Attribute value);
+bool isValidPortAttributeValue(llvm::StringRef name, mlir::Attribute value);
 } // namespace talos::upf
 #define GET_OP_CLASSES
 #include "talos/Dialect/UPF/UPFOps.h.inc"

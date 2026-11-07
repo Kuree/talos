@@ -3,6 +3,7 @@
 #include "ControlValue.h"
 #include "ElaborateSupply.h"
 #include "OrdinaryWrites.h"
+#include "PortSupply.h"
 #include "PowerState.h"
 #include "PublicationCallback.h"
 #include "ReferenceWindow.h"
@@ -318,6 +319,7 @@ struct Lowering {
   llvm::DenseMap<uint64_t, std::string> scopePaths;
   llvm::DenseMap<uint64_t, sim::SimCodeUnitDeclOp> units;
   llvm::DenseSet<uint64_t> referencedStorage, immutableSupplies;
+  PortSupplyAnalysis &portSupplies;
   bool preserveStorage;
   llvm::StringMap<uint64_t> unitIDs;
   sim::SimFuncOp root;
@@ -328,9 +330,10 @@ struct Lowering {
   SmallVector<WriteDomain> writeDomains;
   SmallVector<RetentionWrite> retainedWrites;
   RetentionPlans retentionPlans;
-  Lowering(sim::SimDesignOp design, bool preserveStorage)
+  Lowering(sim::SimDesignOp design, bool preserveStorage,
+           PortSupplyAnalysis &portSupplies)
       : design(design), builder(design.getContext()),
-        preserveStorage(preserveStorage) {
+        portSupplies(portSupplies), preserveStorage(preserveStorage) {
     for (auto scope : design.getOps<sim::SimScopeDeclOp>())
       if (auto name = scope.getHierarchicalName())
         scopePaths[scope.getId()] = name->str();
@@ -636,7 +639,99 @@ struct Lowering {
     return success();
   }
   LogicalResult isolation(sim::SimFuncOp fn, upf::UPFDomainOp domain,
-                          Descriptor control) {
+                          Descriptor control,
+                          std::optional<unsigned> portWidth = {}) {
+    if (portWidth) {
+      if (!fn.getCodeUnitId() ||
+          !portSupplies.publicationIsProven(*fn.getCodeUnitId()))
+        return fn.emitError("isolation requires a marked value from its exact "
+                            "logical port source view");
+      SmallVector<upf::UPFPortValueOp> values;
+      fn.walk([&](upf::UPFPortValueOp value) { values.push_back(value); });
+      if (values.size() != 1 || !fn.getCodeUnitId() ||
+          values.front().getActor() != *fn.getCodeUnitId() ||
+          sim::getPackedWidth(values.front().getType()) != *portWidth)
+        return fn.emitError(
+            "isolation requires one exact logical port publication value");
+      auto marker = values.front();
+      unsigned publications = 0;
+      bool invalid = false;
+      size_t work = 0;
+      auto dependsOnPort = [&](Value value) {
+        SmallVector<Value> pending{value};
+        llvm::DenseSet<Value> seen;
+        while (!pending.empty()) {
+          if (++work > 1048576)
+            return false;
+          Value next = pending.pop_back_val();
+          if (next == marker.getResult())
+            return true;
+          if (!seen.insert(next).second)
+            continue;
+          auto *definition = next.getDefiningOp();
+          if (definition && isMemoryEffectFree(definition))
+            llvm::append_range(pending, definition->getOperands());
+        }
+        return false;
+      };
+      fn.walk([&](Operation *op) {
+        if (op == fn.getOperation() || isa<upf::UPFPortValueOp>(op))
+          return;
+        Value value;
+        if (auto drive = dyn_cast<sim::SimDriverDriveOp>(op))
+          value = drive.getValue();
+        if (auto store = dyn_cast<sim::SimRefStoreOp>(op))
+          value = store.getValue();
+        if (auto write = dyn_cast<sim::SimNetWriteOp>(op))
+          value = write.getValue();
+        if (value) {
+          ++publications;
+          invalid |= !dependsOnPort(value) ||
+                     sim::getPackedWidth(value.getType()) != *portWidth;
+          return;
+        }
+        // A new isolation sensitivity must not rerun side effects of an
+        // actual lvalue expression. Such actors need a publication view with
+        // a separately frozen target, rather than a body-wide write rewrite.
+        if (isa<sim::SimRefLoadOp, sim::SimNetReadOp, sim::SimSuspendChangeOp,
+                sim::SimSuspendAnyOp, sim::SimEventSnapshotFlushOp>(op) ||
+            isMemoryEffectFree(op))
+          return;
+        invalid = true;
+      });
+      if (invalid || publications != 1)
+        return fn.emitError(
+            "isolation of side-effectful or split output connections requires "
+            "publication views and is not implemented");
+      auto outputType = marker.getInput().getType();
+      auto logic = dyn_cast_or_null<sim::LogicType>(
+          sim::getPackedScalarType(outputType));
+      if (!logic || !supportedState(outputType))
+        return marker.emitError(
+            "UPF isolation requires four-state packed outputs");
+      if (failed(watch(fn, control)))
+        return failure();
+      builder.setInsertionPoint(marker);
+      Value data = flatten(builder, marker.getLoc(), marker.getInput());
+      Value input =
+          load(builder, marker.getLoc(),
+               handle(builder, marker.getLoc(), fn.getArgument(0), control));
+      Value active = equalsLevel(builder, marker.getLoc(), input,
+                                 domain.getIsolationHigh());
+      Value inactive = equalsLevel(builder, marker.getLoc(), input,
+                                   !domain.getIsolationHigh());
+      data = logicSelect(builder, marker.getLoc(), inactive, data,
+                         corrupt(builder, marker.getLoc(), logic));
+      Value result = logicSelect(builder, marker.getLoc(), active,
+                                 logicConstant(builder, marker.getLoc(), logic,
+                                               domain.getClamp() != 0),
+                                 data);
+      if (result.getType() != outputType)
+        result = sim::SimPackedUnflattenOp::create(builder, marker.getLoc(),
+                                                   outputType, result);
+      marker.getInputMutable().assign(result);
+      return success();
+    }
     // IEEE 1801-2018 9.8: an unknown isolation control corrupts the output,
     // even when data equals the clamp. Explicit known-level tests avoid the
     // equal-bit merging that an ordinary SystemVerilog conditional would use.
@@ -660,6 +755,9 @@ struct Lowering {
       if (auto write = dyn_cast<sim::SimNetWriteOp>(op))
         value = write.getValue();
       Type outputType = value.getType();
+      if (portWidth && sim::getPackedWidth(outputType) != *portWidth)
+        return op->emitError("isolation connection actor requires an exact "
+                             "logical port write view");
       auto logic = dyn_cast_or_null<sim::LogicType>(
           sim::getPackedScalarType(outputType));
       if (!logic || !supportedState(outputType))
@@ -1141,6 +1239,24 @@ struct Lowering {
     if (boundaryScopes.size() != boundaries.size())
       return domain.emitError(
           "power-domain element has no simulation instance scope");
+    bool bindingIsolation =
+        domain.getIsolationControl() && portSupplies.usesBindings();
+    if (bindingIsolation &&
+        failed(portSupplies.checkIsolationOutputs(domain, boundaries)))
+      return failure();
+    llvm::DenseSet<uint64_t> isolatedPorts;
+    if (bindingIsolation)
+      for (auto port : design.getOps<sim::SimPortDeclOp>())
+        if (boundaryScopes.contains(port.getScopeId()) &&
+            port.getDirection() == sim::PortDirection::Output) {
+          auto applies = portSupplies.isolate(domain, port);
+          if (failed(applies))
+            return failure();
+          if (*applies)
+            isolatedPorts.insert(port.getId());
+        }
+    bool hasIsolation = domain.getIsolationControl() &&
+                        (!bindingIsolation || !isolatedPorts.empty());
     SmallVector<sim::SimFuncOp> processes, outputs;
     for (auto fn : design.getOps<sim::SimFuncOp>()) {
       if (!fn.getCodeUnitId() ||
@@ -1159,10 +1275,20 @@ struct Lowering {
         // code-unit scope ID is the parent and cannot select this boundary.
         // IEEE 1801-2018 6.20/6.45 and 8.3.3(g),(j): leave internal
         // same-domain module connections transparent.
-        if (llvm::is_contained(boundaries,
-                               StringRef(unitPaths.lookup(*fn.getCodeUnitId()))
-                                   .rsplit('.')
-                                   .first))
+        if (bindingIsolation) {
+          if (!hasIsolation)
+            break;
+          auto port = portSupplies.portForActor(*fn.getCodeUnitId());
+          if (!port)
+            return fn.emitError(
+                "isolation requires an immutable reflected port/actor binding");
+          if (isolatedPorts.contains(port.getId()))
+            outputs.push_back(fn);
+        } else if (llvm::is_contained(
+                       boundaries,
+                       StringRef(unitPaths.lookup(*fn.getCodeUnitId()))
+                           .rsplit('.')
+                           .first))
           outputs.push_back(fn);
         break;
       case sim::EntryKind::PortInput:
@@ -1211,6 +1337,7 @@ struct Lowering {
       if (domain.getIsolationControl() &&
           boundaryScopes.contains(port.getScopeId()) &&
           port.getDirection() == sim::PortDirection::Output &&
+          (!bindingIsolation || isolatedPorts.contains(port.getId())) &&
           port.getSourceIsNet())
         return port.emitError(
             "isolation on collapsed output nets is not implemented");
@@ -1269,8 +1396,7 @@ struct Lowering {
     }
     // A domain's elements (IEEE 1801-2018 6.20) may hold nothing a power state
     // can corrupt, such as an empty leaf, so there is nothing to lower.
-    if (targets.empty() && processes.empty() &&
-        !domain.getIsolationControl()) {
+    if (targets.empty() && processes.empty() && !hasIsolation) {
       if (condition.input)
         switchOnly(domain, condition);
       domain.erase();
@@ -1281,16 +1407,28 @@ struct Lowering {
     if (targets.empty() && processes.empty())
       return domain.emitError(
           "switchable domain has no supported state or drivers");
-    if (auto isoName = domain.getIsolationControl()) {
-      auto found = descriptors.find(*isoName);
-      if (found == descriptors.end() || contains(domain, *isoName))
+    if (hasIsolation) {
+      auto isoName = *domain.getIsolationControl();
+      auto found = descriptors.find(isoName);
+      if (found == descriptors.end() ||
+          (contains(domain, isoName) &&
+           !portSupplies.inputControl(isoName, boundaries)))
         return domain.emitError("parent isolation requires a control outside "
                                 "the switchable domain");
       if (outputs.empty())
         return domain.emitError(
             "isolation has no explicit output boundary to apply to");
+      if (bindingIsolation && outputs.size() != isolatedPorts.size())
+        return domain.emitError("isolation needs an executable connection "
+                                "actor for each selected logical port");
       for (auto output : outputs)
-        if (failed(isolation(output, domain, found->second)))
+        if (failed(isolation(
+                output, domain, found->second,
+                bindingIsolation
+                    ? sim::getPackedWidth(
+                          portSupplies.portForActor(*output.getCodeUnitId())
+                              .getType())
+                    : std::optional<unsigned>{})))
           return failure();
     }
     Location loc = domain.getLoc();
@@ -1608,13 +1746,19 @@ struct ElaborateUPFPass
         getOperation().getOps<upf::UPFModelAttributesOp>());
     SmallVector<upf::UPFDesignAttributesOp> designAttributes(
         getOperation().getOps<upf::UPFDesignAttributesOp>());
+    SmallVector<upf::UPFPortAttributesOp> portAttributes(
+        getOperation().getOps<upf::UPFPortAttributesOp>());
+    SmallVector<upf::UPFContextsOp> contexts(
+        getOperation().getOps<upf::UPFContextsOp>());
     bool accesses = false;
     getOperation().walk([&](Operation *op) {
-      accesses |= isa<sim::SimSupplyControlOp, sim::SimSupplyReadOp>(op);
+      accesses |= isa<sim::SimSupplyControlOp, sim::SimSupplyReadOp,
+                      upf::UPFPortBindingOp, upf::UPFPortValueOp>(op);
     });
     if (domains.empty() && composites.empty() && supplies.empty() &&
         sets.empty() && hierarchies.empty() && retentionElements.empty() &&
-        modelAttributes.empty() && designAttributes.empty() && !accesses) {
+        modelAttributes.empty() && designAttributes.empty() &&
+        portAttributes.empty() && contexts.empty() && !accesses) {
       getOperation()->removeAttr(upf::partialOnTranslationName);
       return;
     }
@@ -1622,10 +1766,14 @@ struct ElaborateUPFPass
       signalPassFailure();
       return;
     }
-    if (failed(validateUPFDesignAttributeBehavior(getOperation()))) {
+    if (failed(normalizeUPFPortDesignAttributes(getOperation())) ||
+        failed(validateUPFDesignAttributeBehavior(getOperation()))) {
       signalPassFailure();
       return;
     }
+    designAttributes.assign(
+        getOperation().getOps<upf::UPFDesignAttributesOp>().begin(),
+        getOperation().getOps<upf::UPFDesignAttributesOp>().end());
     domains.assign(getOperation().getOps<upf::UPFDomainOp>().begin(),
                    getOperation().getOps<upf::UPFDomainOp>().end());
     auto designs = getOperation().getOps<sim::SimDesignOp>();
@@ -1640,7 +1788,12 @@ struct ElaborateUPFPass
           isa<sim::SimDumpOpenOp, sim::SimDumpOpenStringOp, sim::SimDumpVarsOp,
               sim::SimDumpPortsOp, sim::SimDumpAllOp>(op);
     });
-    Lowering lowering(*designs.begin(), preserve);
+    PortSupplyAnalysis portSupplies(getOperation(), *designs.begin());
+    if (failed(portSupplies.initialize())) {
+      signalPassFailure();
+      return;
+    }
+    Lowering lowering(*designs.begin(), preserve, portSupplies);
     if (failed(lowering.prepareSupplies(supplies))) {
       signalPassFailure();
       return;
@@ -1700,6 +1853,21 @@ struct ElaborateUPFPass
       model.erase();
     for (auto annotation : designAttributes)
       annotation.erase();
+    for (auto annotation : portAttributes)
+      annotation.erase();
+    for (auto context : contexts)
+      context.erase();
+    SmallVector<upf::UPFPortBindingOp> portBindings(
+        lowering.design.getOps<upf::UPFPortBindingOp>());
+    for (auto binding : portBindings)
+      binding.erase();
+    SmallVector<upf::UPFPortValueOp> portValues;
+    lowering.design.walk(
+        [&](upf::UPFPortValueOp value) { portValues.push_back(value); });
+    for (auto value : portValues) {
+      value.getResult().replaceAllUsesWith(value.getInput());
+      value.erase();
+    }
     for (auto set : sets)
       set.erase();
     for (auto supply : supplies)

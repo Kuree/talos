@@ -1,0 +1,68 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.native && %t.native | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc && %t.bc | FileCheck %s
+// RUN: talos --upf %t/all-same.upf -DALL_SAME -O3 --mlir-verify-each %t/design.sv -o %t.same && %t.same | FileCheck %s
+// RUN: talos --upf %t/force.upf -DFORCE -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.force && %t.force | FileCheck %s
+// RUN: talos --upf %t/design.upf --target=wasm32 -O3 --execution-tier=bytecode --mlir-verify-each -c %t/design.sv -o %t.wasm
+// RUN: %llvm_dist/bin/llvm-readobj --file-headers %t.wasm | FileCheck %s --check-prefix=WASM
+// Inside a block's own UPF context, output receiver attributes are external
+// assumptions. SAME_PG has identical power/ground and distinct bias/catalog
+// identities; the filter must compare PG roots, not handles or simstates.
+// CHECK: port supply isolation filter passed
+// WASM: AddressSize: 32bit
+
+//--- design.sv
+module block(input logic iso,clk,output logic a=0,b);
+  always @(posedge clk) a<=1;
+  always_comb b=1;
+endmodule
+module top;
+  import UPF::*;
+  logic iso=0,clk=0;
+  wire a,b;
+  block dut(iso,clk,a,b);
+  initial begin
+    if (!supply_on("/top/dut/CORE.power") || !supply_on("/top/dut/CORE.ground",0.0) ||
+        !supply_on("/top/dut/AON.power") || !supply_on("/top/dut/AON.ground",0.0))
+      $fatal(1,"supplies");
+    #1 clk=1; #1;
+    if ({a,b} !== 2'b11) $fatal(1,"normal outputs");
+    iso=1;
+    #1;
+`ifdef FORCE
+    if ({a,b} !== 2'b00) $fatal(1,"diff FALSE ignored");
+`elsif ALL_SAME
+    if ({a,b} !== 2'b11) $fatal(1,"same-supply no-op ignored");
+`else
+    if ({a,b} !== 2'b10) $fatal(1,"PG filter ignored or compared catalogs");
+`endif
+    iso=0;
+    #1;
+    if ({a,b} !== 2'b11) $fatal(1,"isolation release");
+    $display("port supply isolation filter passed"); $finish;
+  end
+endmodule
+//--- block.upf
+create_supply_set CORE
+create_supply_set AON
+create_supply_set SAME_PG -function {power CORE.power} -function {ground CORE.ground}
+add_power_state SAME_PG -state {LOW -supply_expr {power == PARTIAL_ON} -simstate CORRUPT}
+create_power_domain PD -elements . -supply {primary CORE}
+set_port_attributes -ports a -driver_supply CORE -receiver_supply SAME_PG
+if {[info exists ::all_same]} {
+  set_port_attributes -ports b -receiver_supply SAME_PG
+} else {
+  set_port_attributes -ports b -receiver_supply AON
+}
+set options {}
+if {[info exists ::force]} {set options {-diff_supply_only FALSE}}
+set_isolation ISO -domain PD -isolation_signal iso -applies_to outputs -location parent -clamp_value 0 {*}$options
+//--- design.upf
+load_upf [file join [file dirname [info script]] block.upf] -scope dut
+//--- all-same.upf
+set ::all_same 1
+source [file join [file dirname [info script]] design.upf]
+//--- force.upf
+set ::force 1
+source [file join [file dirname [info script]] design.upf]

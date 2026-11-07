@@ -27,6 +27,9 @@ public:
   mlir::Operation *processBody(llvm::StringRef path) const;
   bool isNamedBlock(llvm::StringRef path) const;
   bool isPort(llvm::StringRef path) const;
+  const std::map<std::string, mlir::Operation *> &portDeclarations() const {
+    return ports;
+  }
   int find(Tcl_Interp *interp, Tcl_Size objc, Tcl_Obj *const objv[],
            llvm::StringRef scope, llvm::StringRef top,
            const SupplyPorts &supplyPorts, DesignAttributes &attributes) const;
@@ -50,7 +53,7 @@ private:
   std::map<std::string, Path> scopes;
   std::map<std::string, mlir::Operation *> processes;
   std::set<std::string> namedBlocks;
-  std::set<std::string> ports;
+  std::map<std::string, mlir::Operation *> ports;
   std::vector<Object> objects;
 };
 } // namespace talos

@@ -125,6 +125,7 @@ struct Session {
   mutable std::vector<ReferenceFrame> referenceFrames;
   std::optional<upf::PartialOnTranslation> partialOnTranslation;
   std::string top, scope, file, designModule;
+  std::set<std::string> contexts;
   std::map<std::string, Operation *> objects;
   std::map<std::string, Domain> domains;
   std::map<std::string, RetentionElements> retentionElements;
@@ -170,6 +171,8 @@ struct Session {
     if (tops.size() == 1)
       top = *tops.begin();
     scope = top;
+    if (!top.empty())
+      contexts.insert(top);
     attributes = std::make_unique<DesignAttributes>(module, objects, queries);
     attributesValid = succeeded(attributes->initialize());
   }
@@ -1120,6 +1123,19 @@ struct Session {
     if (command == "set_design_attributes")
       return attributes->set(interp, objc, objv, scope, top,
                              declarationLocation());
+    if (command == "set_port_attributes")
+      return attributes->setPorts(
+          interp, objc, objv, scope, top, declarationLocation(),
+          [&](StringRef name) -> FailureOr<std::string> {
+            auto id = supplySetKey(name);
+            if (id.empty())
+              return failure();
+            if (!supplySets.count(id)) {
+              error("unknown port supply set or handle: " + name);
+              return failure();
+            }
+            return id;
+          });
     if (command == "set_retention")
       return setRetention(objc, objv);
     if (command == "set_retention_elements")
@@ -1225,6 +1241,7 @@ struct Session {
                                 "slang.symbol.instance")
           return error("load_upf scope not found: " + instance);
         scope = top = next;
+        contexts.insert(top);
         designModule = model(next);
         int result = Tcl_EvalFile(interp, file.c_str());
         if (result != TCL_OK)
@@ -2268,7 +2285,8 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
                            "set_partial_on_translation",
                            "set_retention",
                            "set_retention_elements",
-                           "set_design_attributes"})
+                           "set_design_attributes",
+                           "set_port_attributes"})
     commands.push_back({&session, name});
   for (auto &command : commands)
     Tcl_CreateObjCommand2(interp.get(), command.name, dispatch, &command,
@@ -2536,8 +2554,16 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
   }
   OpBuilder builder(module.getContext());
   builder.setInsertionPointToEnd(module.getBody());
-  bool retentionHierarchy =
-      !session.retentionElements.empty() || session.attributes->hasMacros();
+  if (session.attributes->hasPortAttributes()) {
+    SmallVector<Attribute> roots;
+    for (const auto &top : session.contexts)
+      roots.push_back(builder.getStringAttr(top));
+    upf::UPFContextsOp::create(builder, module.getLoc(),
+                               builder.getArrayAttr(roots));
+  }
+  bool retentionHierarchy = !session.retentionElements.empty() ||
+                            session.attributes->hasMacros() ||
+                            session.attributes->hasPortAttributes();
   for (auto &[name, domain] : session.domains)
     retentionHierarchy |= !domain.retentions.empty();
   if (retentionHierarchy) {
@@ -2799,7 +2825,8 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
   }
   if (failed(resolveUPFDomainExtents(module)))
     return failure();
-  if (failed(validateUPFDesignAttributeBehavior(module)))
+  if (failed(normalizeUPFPortDesignAttributes(module)) ||
+      failed(validateUPFDesignAttributeBehavior(module)))
     return failure();
   return verify(module);
 #endif

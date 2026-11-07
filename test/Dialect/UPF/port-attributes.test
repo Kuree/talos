@@ -1,0 +1,60 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/valid.mlir --canonicalize --cse --verify-each | talos-opt | FileCheck %s
+// RUN: talos-opt %t/invalid.mlir --split-input-file --verify-diagnostics
+// CHECK: upf.contexts ["top", "top.dut"]
+// CHECK: upf.port_attributes "top.dut.p" at 2 width 3 of 8 properties {custom = "literal;$x"} scope "top" top "top"
+// CHECK: upf.port_attributes "unused" at 0 width 0 of 0 properties {custom = "opaque"}
+// CHECK: upf.port_binding scope 7 ordinal 2 actor 99
+// CHECK: upf.port_value %{{.*}} actor 99 : i8
+
+//--- valid.mlir
+module {
+  upf.contexts ["top", "top.dut"]
+  upf.port_attributes "top.dut.p" at 2 width 3 of 8 properties {custom = "literal;$x"} scope "top" top "top"
+  upf.port_attributes "unused" at 0 width 0 of 0 properties {custom = "opaque"} scope "top" top "top" {model = "spare"}
+  upf.port_binding scope 7 ordinal 2 actor 99
+  func.func @identity(%input: i8) -> i8 {
+    %value = upf.port_value %input actor 99 : i8
+    return %value : i8
+  }
+}
+//--- invalid.mlir
+module {
+  // expected-error @+1 {{context roots must be nonempty and unique}}
+  upf.contexts ["top", "top"]
+}
+// -----
+module {
+  // expected-error @+1 {{requires a port and valid source context}}
+  upf.port_attributes "top.p" at 0 width 1 of 1 properties {custom = "x"} scope "top" top "top.dut"
+}
+// -----
+module {
+  // expected-error @+1 {{port window is outside the declared logical width}}
+  upf.port_attributes "top.p" at 7 width 2 of 8 properties {custom = "x"} scope "top" top "top"
+}
+// -----
+module {
+  // expected-error @+1 {{port window is outside the declared logical width}}
+  upf.port_attributes "top.p" at 0 width 1 of 0 properties {custom = "x"} scope "top" top "top"
+}
+// -----
+module {
+  // expected-error @+1 {{invalid or unsupported port attribute property}}
+  upf.port_attributes "top.p" at 0 width 1 of 1 properties {UPF_pg_type = "primary_power"} scope "top" top "top"
+}
+// -----
+module {
+  // expected-error @+1 {{port supply property disagrees with its typed reference}}
+  upf.port_attributes "top.p" at 0 width 1 of 1 properties {UPF_driver_supply = "SS"} scope "top" top "top"
+}
+// -----
+module {
+  // expected-error @+1 {{references an unknown port supply set}}
+  upf.port_attributes "top.p" at 0 width 1 of 1 properties {UPF_receiver_supply = "missing"} scope "top" top "top" {receiver_supply = @missing}
+}
+// -----
+module {
+  // expected-error @+1 {{driver/receiver supply attributes require instance ports}}
+  upf.port_attributes "p" at 0 width 1 of 1 properties {UPF_receiver_supply = "SS"} scope "top" top "top" {receiver_supply = @SS, model = "leaf"}
+}

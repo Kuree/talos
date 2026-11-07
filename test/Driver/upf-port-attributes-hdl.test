@@ -1,0 +1,42 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --top=top --upf %t/design.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.mlir | FileCheck %s --check-prefix=TCL
+// RUN: talos-opt %t.mlir --canonicalize --cse --verify-each | FileCheck %s --check-prefix=ATTR
+// RUN: talos --top=top --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc && %t.bc | FileCheck %s --check-prefix=SIM
+// Slang's port and underlying net attributes both supply the implicit model
+// bit tier. Tcl model-whole loses; equal-rank conflicts roll back atomically.
+// TCL: HDL port precedence and Table 5 passed
+// ATTR-DAG: upf.port_attributes "top.dut.p" at 0 width 1 of 2 properties {hdl = "instance"}
+// ATTR-DAG: upf.port_attributes "top.dut.p" at 1 width 1 of 2 properties {hdl = "port"}
+// ATTR-DAG: upf.port_attributes "top.dut.q" at 0 width 1 of 1 properties {internal = "net"}
+// SIM: HDL port attributes passed
+
+//--- design.sv
+module leaf(p,q);
+  (* hdl="port" *) input logic [1:0] p;
+  output q;
+  (* internal="net" *) wire q;
+  assign q=p[0];
+endmodule
+module top;
+  wire q; leaf dut(2'b01,q);
+  initial begin
+    #1; if (q !== 1) $fatal(1,"HDL attribute changed logic");
+    $display("HDL port attributes passed"); $finish;
+  end
+endmodule
+//--- design.upf
+proc expect_error {script pattern} {
+  if {[catch {uplevel 1 $script} message] != 1 || ![string match $pattern $message]} {
+    error "expected <$pattern>, got <$message>"
+  }
+}
+create_supply_set CORE
+set_port_attributes -model leaf -attribute {hdl model_whole}
+expect_error {set_port_attributes -model leaf -ports {p[1:0]} -attribute {hdl conflict}} {*conflicting highest-precedence port attribute*}
+set_port_attributes -ports {dut/p[0]} -attribute {hdl instance}
+expect_error {set_port_attributes -model leaf -ports p -driver_supply CORE} {*require -elements*}
+expect_error {set_port_attributes -ports dut/p -receiver_supply CORE} {*local simple -ports*}
+expect_error {set_port_attributes -model leaf -attribute {UPF_driver_supply CORE}} {*require -elements*}
+expect_error {set_port_attributes -elements dut -receiver_supply CORE} {*require -elements*}
+puts "HDL port precedence and Table 5 passed"

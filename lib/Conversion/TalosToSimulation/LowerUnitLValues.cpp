@@ -3,6 +3,7 @@
 #include "LowerUnit.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
+#include "talos/Dialect/UPF/UPFOps.h"
 #include "talos/Runtime/Runtime.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -4991,6 +4992,11 @@ UnitLowering::lowerPortConnection(semantic::SVPortConnectionOp op) {
   expressionPlaceholder = previousPlaceholder;
   if (failed(converted))
     return failure();
+  if (loweringInputs.powerIntent)
+    converted =
+        upf::UPFPortValueOp::create(builder, location, converted->getType(),
+                                    *converted, *function.getCodeUnitId())
+            .getResult();
   // IEEE 1800-2017 10.8 and 23.3.3 make this output-port connection an
   // assignment-like continuous assignment. Preserve the ordinary assignment
   // dispatch for a Clause 11.4.14.3 streaming target: its semantic type is

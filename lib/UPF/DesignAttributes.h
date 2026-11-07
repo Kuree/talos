@@ -5,10 +5,12 @@
 #include "talos/Dialect/UPF/UPFOps.h"
 #include "llvm/ADT/SmallVector.h"
 #include <map>
+#include <memory>
 #include <optional>
 #include <tuple>
 
 namespace talos {
+class PortAttributes;
 // One property registry for immediate Tcl queries and final compiler metadata.
 // Keep every explicit source: precedence is per property, never source order.
 class DesignAttributes {
@@ -23,15 +25,22 @@ public:
   DesignAttributes(mlir::ModuleOp module,
                    const std::map<std::string, mlir::Operation *> &objects,
                    const DesignQuery &queries);
+  ~DesignAttributes();
   mlir::LogicalResult initialize();
   int set(Tcl_Interp *interp, Tcl_Size objc, Tcl_Obj *const objv[],
           llvm::StringRef scope, llvm::StringRef top, mlir::Location location);
+  int setPorts(Tcl_Interp *interp, Tcl_Size objc, Tcl_Obj *const objv[],
+               llvm::StringRef scope, llvm::StringRef top,
+               mlir::Location location,
+               llvm::function_ref<mlir::FailureOr<std::string>(llvm::StringRef)>
+                   resolveSupply);
   mlir::Attribute get(llvm::StringRef path, llvm::StringRef property) const;
   mlir::DictionaryAttr get(llvm::StringRef path) const;
   bool hardMacro(llvm::StringRef path) const;
   bool softMacro(llvm::StringRef path) const;
   bool leaf(llvm::StringRef path) const;
   bool hasMacros() const;
+  bool hasPortAttributes() const;
   bool insideLeaf(llvm::StringRef path, llvm::StringRef context,
                   bool includeSelf = false, bool hardOnly = false);
   bool exhausted() const { return exceeded; }
@@ -56,6 +65,7 @@ private:
   mlir::ModuleOp module;
   const std::map<std::string, mlir::Operation *> &objects;
   const DesignQuery &queries;
+  std::unique_ptr<PortAttributes> ports;
   std::map<std::string, Model> models;
   std::map<std::string, Properties> properties;
   std::map<std::string, std::string> instanceModels;

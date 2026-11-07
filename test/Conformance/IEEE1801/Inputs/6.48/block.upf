@@ -1,0 +1,7 @@
+create_supply_set CORE
+create_supply_set AON
+create_supply_set SAME_PG -function {power CORE.power} -function {ground CORE.ground}
+create_power_domain PD -elements . -supply {primary CORE}
+set_port_attributes -ports a -receiver_supply SAME_PG
+set_port_attributes -ports b -receiver_supply AON
+set_isolation ISO -domain PD -isolation_signal iso -clamp_value 0 -applies_to outputs -location parent -diff_supply_only TRUE

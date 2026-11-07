@@ -4,6 +4,19 @@ include "talos/Dialect/UPF/UPFDialect.td"
 include "talos/Dialect/UPF/UPFAttrs.td"
 include "mlir/IR/OpBase.td"
 include "mlir/IR/SymbolInterfaces.td"
+include "mlir/Interfaces/SideEffectInterfaces.td"
+include "mlir/Interfaces/InferTypeOpInterface.td"
+def UPFContextsOp : Op<UPFDialect, "contexts", []> {
+  let summary = "design-top contexts visited by UPF source execution";
+  let description = [{
+    Preserves standalone block boundaries independently of navigation scopes.
+    Port supply assumptions have different meaning inside and outside these
+    contexts. This compiler-only inventory introduces no physical ownership.
+  }];
+  let arguments = (ins StrArrayAttr:$roots);
+  let assemblyFormat = "$roots attr-dict";
+  let hasVerifier = 1;
+}
 def UPFHierarchyOp : Op<UPFDialect, "hierarchy", []> {
   let summary = "compiler-only HDL hierarchy for declarative UPF selection";
   let description = [{
@@ -64,6 +77,52 @@ def UPFDesignAttributesOp : Op<UPFDialect, "design_attributes", []> {
       OptionalAttr<StrAttr>:$top);
   let assemblyFormat = "$element attr-dict";
   let hasVerifier = 1;
+}
+def UPFPortAttributesOp : Op<UPFDialect, "port_attributes", [
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "resolved per-property attributes on a logical port window";
+  let description = [{
+    Identifies a declared port independently of aliased storage. Offsets are
+    logical packed bits of that port, before applying its physical source_low.
+    A zero source_width denotes an opaque whole port; partial consumers must
+    reject an unsupported representation rather than infer storage geometry.
+    A model names provenance on an uninstantiated model port, with no runtime
+    effect. Source scope/top preserve terminal authority. Supply assumptions
+    apply only on the appropriate side of a terminal or design-top boundary.
+    These compiler-only annotations retain explicit values, including FALSE.
+  }];
+  let arguments = (ins StrAttr:$port, I64Attr:$offset, I64Attr:$width,
+      I64Attr:$source_width, DictionaryAttr:$properties,
+      StrAttr:$scope, StrAttr:$top,
+      OptionalAttr<StrAttr>:$model,
+      OptionalAttr<FlatSymbolRefAttr>:$driver_supply,
+      OptionalAttr<FlatSymbolRefAttr>:$receiver_supply);
+  let assemblyFormat = "$port `at` $offset `width` $width `of` $source_width `properties` $properties `scope` $scope `top` $top attr-dict";
+  let hasVerifier = 1;
+}
+def UPFPortBindingOp : Op<UPFDialect, "port_binding", []> {
+  let summary = "immutable formal-port to connection actor identity";
+  let description = [{
+    Binds a port's child scope and formal ordinal to its original code-unit ID.
+    Output connection actors execute in the parent scope; their lexical scope
+    and printed hierarchical names cannot recover this declaration identity.
+    This compiler-only record is consumed before scheduling and encoding.
+  }];
+  let arguments = (ins I64Attr:$scope, I64Attr:$ordinal, I64Attr:$actor,
+      DefaultValuedAttr<BoolAttr, "false">:$opaque);
+  let assemblyFormat = "`scope` $scope `ordinal` $ordinal `actor` $actor attr-dict";
+}
+def UPFPortValueOp : Op<UPFDialect, "port_value", [Pure, SameOperandsAndResultType]> {
+  let summary = "identity of a logical output connection's published value";
+  let description = [{
+    Marks the converted formal value before evaluating its actual lvalue.
+    Isolation rewrites this value rather than incidental writes in the actor.
+    The actor is the original code-unit ID from port_binding. This pure
+    compiler-only identity is removed before scheduling and runtime encoding.
+  }];
+  let arguments = (ins AnyType:$input, I64Attr:$actor);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$input `actor` $actor attr-dict `:` type($input)";
 }
 def UPFSupplyOp : Op<UPFDialect, "supply", [Symbol]> {
   let summary = "one shared root supply value and its absolute handle aliases";

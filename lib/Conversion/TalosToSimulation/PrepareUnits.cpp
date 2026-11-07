@@ -5,6 +5,7 @@
 #include "PrepareUnits.h"
 #include "UnitLoweringInputs.h"
 #include "talos/Dialect/NamedProcess.h"
+#include "talos/Dialect/UPF/UPFOps.h"
 
 #include "mlir/IR/SymbolTable.h"
 
@@ -14,6 +15,7 @@
 #include "llvm/Support/FormatVariadic.h"
 
 #include <functional>
+#include <set>
 
 using namespace mlir;
 
@@ -1504,6 +1506,11 @@ FailureOr<PreparedUnits> materializeCodeUnitDeclarations(
       builder, module.getLoc(), result.rootID, uint64_t{0},
       sim::EntryKind::RootInitializer, builder.getStringAttr("__talos_root"),
       builder.getStringAttr("root initializer"), builder.getUnitAttr());
+  std::set<std::pair<uint64_t, uint64_t>> reflectedPorts;
+  if (powerIntent)
+    module.walk([&](sim::SimPortDeclOp port) {
+      reflectedPorts.emplace(port.getScopeId(), port.getOrdinal());
+    });
   for (PreparedUnit &unit : result.units) {
     auto declaration = sim::SimCodeUnitDeclOp::create(
         builder, getSemanticLocation(unit.source), unit.id,
@@ -1516,6 +1523,27 @@ FailureOr<PreparedUnits> materializeCodeUnitDeclarations(
             ? builder.getUnitAttr()
             : UnitAttr{});
     result.declarations[unit.source] = declaration;
+    if (powerIntent)
+      if (auto connection =
+              dyn_cast<semantic::SVPortConnectionOp>(unit.source)) {
+        std::optional<uint64_t> childScope;
+        for (Operation *member : getChildren(connection->getParentOp()))
+          if (auto body = dyn_cast<semantic::SVInstanceBodySymbolOp>(member)) {
+            if (auto found = scopes.ids.find(body); found != scopes.ids.end())
+              childScope = found->second;
+            break;
+          }
+        if (!childScope) {
+          connection.emitError(
+              "UPF port binding requires its declared child scope");
+          return failure();
+        }
+        upf::UPFPortBindingOp::create(
+            builder, getSemanticLocation(connection), *childScope,
+            connection.getFormalOrdinal(), unit.id,
+            !reflectedPorts.count(
+                {*childScope, connection.getFormalOrdinal()}));
+      }
     if (powerIntent && isa<semantic::SVProceduralBlockSymbolOp>(unit.source)) {
       auto body =
           getNamedProcessBody<semantic::SVTimedStatementOp,

@@ -18,8 +18,8 @@
     "cell_tcl_commands": 6,
     "query_tcl_commands": 5,
     "total_tcl_commands": 68,
-    "registered_tcl_commands": 20,
-    "unregistered_tcl_commands": 48,
+    "registered_tcl_commands": 21,
+    "unregistered_tcl_commands": 47,
     "enumerated_hdl_functions": 25,
     "available_hdl_functions": 9,
     "unavailable_hdl_functions": 16
@@ -446,7 +446,7 @@
         "-switch_cell_type"
       ],
       "unsupported_options": [],
-      "limits": "All 6.41 syntax is parsed and predefined attributes have strict values and target kinds. Repeated properties accumulate; each property resolves model/instance precedence independently, identical assignments are idempotent, and ambiguous current highest-precedence assignments fail atomically. Explicit FALSE is preserved. HDL model, instance, signal and whole-process attributes use Slang semantic constants, including outer named process statements; custom properties remain association metadata. Model associations are immediate across active parameter variants, with scoped local-model/global versus outside-model reach and hard terminal protection. The command-specific -elements dot names the current design top. Macro flags immediately affect subsequent queries; previous Tcl query results remain immutable. Private HDL/UPF references, ancestor refinement, retention inference and isolation placement across terminal boundaries are rejected; public topmost UPF references and supply-interface associations remain allowed. Existing simstate lowering supports ordinary ENABLE and admitted SIMSTATE_ONLY. Live per-object DISABLE/PORT_CORR_ONLY, power-aware default DISABLE, and hard-macro ENABLE related-supply pin corruption are explicitly staged. Disabled signal/process policies are conservatively staged whenever domains exist because aliases and external actors need physical analysis. Switch-cell type is recorded, while instance-mapped switches remain unsupported. Liberty attributes, automatic PG connectivity, implemented HDL supply linkage and general power-model application remain pending. Hard attributes feed anonymous physical-owner materialization before atomic extents and retention planning, including parent exclusions; the exact physical parent primary and policies are shared. Explicit parent-domain macro selection errors; separate explicit ownership is supported. Anonymous owners with neither corruptible state nor functional source processes add no policy actors or snapshot services. Missing physical-parent ownership and public anonymous info-model naming remain staged. Parsing, projections, history and reference checks share a 1048576-unit fail-closed budget; selectors are bounded to 4096 entries and property names/values to 64 KiB.",
+      "limits": "All 6.41 syntax is parsed and predefined attributes have strict values and target kinds. Repeated properties accumulate; each property resolves model/instance precedence independently, identical assignments are idempotent, and ambiguous current highest-precedence assignments fail atomically. Explicit FALSE is preserved. HDL model, instance, signal and whole-process attributes use Slang semantic constants, including outer named process statements; custom properties remain association metadata. Model associations are immediate across active parameter variants, with scoped local-model/global versus outside-model reach and hard terminal protection. The command-specific -elements dot names the current design top. Macro flags immediately affect subsequent queries; previous Tcl query results remain immutable. Private HDL/UPF references, ancestor refinement, retention inference and isolation placement across terminal boundaries are rejected; public topmost UPF references and supply-interface associations remain allowed. Existing simstate lowering supports ordinary ENABLE and admitted SIMSTATE_ONLY. Live per-object DISABLE/PORT_CORR_ONLY, power-aware default DISABLE, and hard-macro ENABLE related-supply pin corruption are explicitly staged. Disabled signal/process policies are conservatively staged whenever domains exist because aliases and external actors need physical analysis. Switch-cell type is recorded, while instance-mapped switches remain unsupported. Liberty attributes, automatic PG connectivity, implemented HDL supply linkage and general power-model application remain pending. Hard attributes feed anonymous physical-owner materialization before atomic extents and retention planning, including parent exclusions; the exact physical parent primary and policies are shared. Explicit parent-domain macro selection errors; separate explicit ownership is supported. Anonymous owners with neither corruptible state nor functional source processes add no policy actors or snapshot services. Missing physical-parent ownership and public anonymous info-model naming remain staged. Parsing, projections, history and reference checks share a 1048576-unit fail-closed budget; selectors are bounded to 4096 entries and property names/values to 64 KiB. Port targets share the per-bit eight-tier port registry rather than duplicating generic object annotations; uniform predefined port policies use one shared source/raw-MLIR normalization step.",
       "implementation": [
         "lib/UPF/DesignAttributes.cpp",
         "lib/UPF/DesignAttributeBehavior.cpp",
@@ -456,7 +456,9 @@
         "lib/UPF/RetentionSelection.cpp",
         "lib/Frontend/Frontend.cpp",
         "include/talos/Dialect/UPF/UPFOps.td",
-        "lib/Dialect/UPF/UPFDialect.cpp"
+        "lib/Dialect/UPF/UPFDialect.cpp",
+        "lib/UPF/PortAttributes.cpp",
+        "lib/UPF/PortDesignAttributes.cpp"
       ]
     },
     {
@@ -526,9 +528,11 @@
         "-name_suffix",
         "-use_functional_equivalence"
       ],
-      "limits": "One parent-located output strategy per domain; scalar control and clamp 0/1. No input/inout or per-path selection, other locations, X/Z/latch/any clamps, strategy supplies, mapped cells or supply filtering for retention-powered outputs. diff_supply_only FALSE permits unconditional RET-powered output isolation. Physical and composite targets support caller-scope control resolution independently of leaf creation scope; late members receive the common strategy transactionally. Boundary/control ownership checks remain in simulation elaboration. Isolation predefined supply handles remain unimplemented.",
+      "limits": "One parent-located output strategy per domain; scalar control and clamp 0/1. Own-context terminal/design-top output receiver assumptions support power/ground-only different-supply filtering with proved whole internal variable drivers; unknown source/sink endpoints pass TRUE. Full-source and marked-publication identities precede filtering/mux insertion. No general input/inout/per-path selection, endpoint inference, per-bit filtering, other locations, X/Z/latch/any clamps, strategy supplies, mapped cells or effective RET-supply filtering. diff_supply_only FALSE permits unconditional RET-powered output isolation. Opaque or split/side-effectful output publications are explicitly staged. Physical and composite targets support caller-scope control resolution independently of leaf creation scope; late members receive the common strategy transactionally. Isolation predefined supply handles remain unimplemented.",
       "implementation": [
-        "lib/UPF/Execute.cpp"
+        "lib/UPF/Execute.cpp",
+        "lib/UPF/PortSupply.cpp",
+        "lib/UPF/Elaborate.cpp"
       ]
     },
     {
@@ -552,9 +556,48 @@
     {
       "clause": "6.48",
       "command": "set_port_attributes",
-      "status": "unsupported",
-      "missing": "Command is not registered; its functionality is not implemented.",
-      "workstream": "domain_and_attributes"
+      "status": "partial",
+      "workstream": "domain_and_attributes",
+      "accepted_options": [
+        "-model",
+        "-elements",
+        "-exclude_elements",
+        "-ports",
+        "-exclude_ports",
+        "-applies_to",
+        "-attribute",
+        "-driver_supply",
+        "-receiver_supply"
+      ],
+      "unsupported_options": [
+        "-clamp_value",
+        "-sink_off_clamp",
+        "-source_off_clamp",
+        "-literal_supply",
+        "-pg_type",
+        "-related_power_port",
+        "-related_ground_port",
+        "-related_bias_ports",
+        "-feedthrough",
+        "-unconnected",
+        "-is_analog",
+        "-is_isolated"
+      ],
+      "limits": "Eight 5.7.7 association tiers resolve each property and logical packed bit independently, including genuine HDL port/internal-symbol attributes, parameter variants and unused default models. Exclusions subtract windows without raising rank; full-range part syntax retains its part tier. Equal values are idempotent, current top-rank conflicts fail atomically, explicit empty lists remain empty, and zero-argument invocation errors. -elements dot names the design top; model dot identifies the local model. Model-based instance exclusions are explicitly staged. Driver/receiver syntax enforces Table 5 instance/local-simple-port restrictions and typed supply-set references. Attributes on ordinary nonterminal ports are ignored; inside and outside top/terminal views remain distinct. Internal output-driver and input-receiver assertions require existing exact/electrical equivalence; full equivalence compares required functions and all six roots (a conservative proof for unused optional functions). Output-driver proof admits direct whole-variable functional writers and verified whole-storage captures from actual RootInitializer spawns; declaration/Initial seeding alone cannot establish a driver. Helpers, partial/escaping references, resolved nets, absent functional drivers and retention-powered effective outputs remain unknown or explicitly staged for active consistency consumers. Own-context output receiver assumptions feed different-PG isolation using only power/ground equivalence, independent of bias, required sets, supply identities, state catalogs and simstates. Unknown endpoints pass TRUE; outside-view assumptions do not replace visible parent receivers. General endpoint inference, per-bit isolation views, active external input-driver corruption, inout, clamp/literal/PG/related-port/feedthrough/unconnected/analog/isolated consumers, Liberty attributes and implemented HDL supply linkage remain pending. Unsupported predefined properties are rejected rather than stored as inert custom values. Uniform whole-port retention and simstate properties merge into one shared design policy in both source and raw MLIR; partial effective predefined policies are staged. Custom properties remain compiler metadata. Opaque output isolation, split/side-effectful connection bodies and marked values without an exact reflected whole-port source view diagnose. Logical/formal/actor identity is independent of aliased storage; escaped formal spellings bridge through the declared name and scope, with collision checks. Metadata inventories are consumed before encoding, with no new runtime state/functions. Selector/history/projection and consumer analysis use bounded 1048576-unit work budgets; selector lists are capped at 4096 and names/values at 64 KiB.",
+      "implementation": [
+        "lib/UPF/PortAttributes.cpp",
+        "lib/UPF/PortDesignAttributes.cpp",
+        "lib/UPF/PortSupply.cpp",
+        "lib/UPF/DesignAttributes.cpp",
+        "lib/UPF/DesignQuery.cpp",
+        "lib/UPF/Execute.cpp",
+        "lib/UPF/Elaborate.cpp",
+        "lib/UPF/PublicationBarriers.cpp",
+        "lib/Conversion/TalosToSimulation/PrepareUnits.cpp",
+        "lib/Conversion/TalosToSimulation/LowerUnitLValues.cpp",
+        "include/talos/Dialect/UPF/UPFOps.td",
+        "lib/Dialect/UPF/UPFDialect.cpp"
+      ]
     },
     {
       "clause": "6.49",
@@ -1037,7 +1080,7 @@
         "9.10"
       ],
       "missing": [
-        "Input/inout and per-path strategies, sink/source filters and supply-aware selection",
+        "Input/inout and per-path strategies, sink/source filters and general endpoint supply inference; own-context terminal output receiver assumptions and proved whole-variable PG filtering are available",
         "Locations beyond parent, isolation supplies, updates and multiple strategies",
         "X/Z/latch/any clamp semantics and effective RET-supply filtering",
         "Level shifters, repeaters, combo interface cells and mapped implementations"
@@ -1079,7 +1122,7 @@
       ],
       "missing": [
         "Parameterized model definitions/applications, legacy model scopes and protected loading",
-        "Checker binding, port attributes, per-object disabled simstate semantics and hard-macro related-supply pin corruption",
+        "Checker binding, remaining clamp/literal/PG/related/feedthrough/analog/isolated port behaviors, model instance exclusions, per-object disabled simstate semantics and hard-macro related-supply pin corruption",
         "Cell definitions and mapping, generated naming and save_upf serialization"
       ]
     },
@@ -1896,12 +1939,53 @@
           ],
           "review": "Independent compiler/LLVM/MLIR and UPF/LRM reviewers explicitly approve final source, tests, audit and commit with no remaining blockers. Findings tightened direct/computed supply verification, source domain recollection, symbol-DCE retention, stale external/custom references, empty no-service checks and separate domain-local versus global collective retention triggers. Compiler reviewer independently passed ten optimized policy/switch/retention executions, wrapper-only and empty native/bytecode cases, dormant-required/global-collective cases, raw idempotence/DCE/optimization diagnostics and nested custom stale refs. Spec reviewer independently passed eleven optimized source executions, raw diagnostics and repeated resolution/optimization, including original stale custom-ref reproduction. Final audit and structured gate totals are approved by both reviewers. Build6 spec review additionally reran all latest raw diagnostics including nested custom stale refs, empty bytecode behavior and exact no-service FileCheck. Wording corrections distinguish producers without local storage from empty Initial-only macros, and remove anonymous ownership from the older pending-domain list.",
           "validation": "Final build6 passes with reused LLVM/MLIR, Z3, Slang and Tcl. Structured extended gate selects 601 unique UPF/supply/snapshot/power-NBA/cohort/time/code-unit/inventory, wait/iff/publication, function-background, class/constructor/property and explicit attribute/anonymous dialect fixtures: 592 pass and nine expected failures, no unexpected results. JSON results confirm all six new fixtures and previous attribute dialect/wasm cases are included. All 355 process and 269 selected bytecode/reflection/VPI runtime units pass (624). Conformance clauses 6.20, 6.50, 6.51 and 9.7.3 pass native/bytecode (eight cases); 9.7.1 remains reference-only (two), 6.41 expected failure (two) now solely for related-supply port behavior. New source tests execute sixteen native/bytecode O0/O3 variants for exact primary catalog/associated policy/required bias, explicit equivalence, anonymous and explicit atomic order, immediate/delayed switched published loss and coalescing, parent-retention separation and dormant required versus activated global list behavior, and empty macro Initial/DPI behavior. Raw cases cover nested/shared policies, atomic exclusion, explicit replacement and inherited-supply refresh, stale removal, name collisions, escaped and dollar siblings, same-parent and unresolved-owner errors, ordinary atomic rejection, stale external/custom/nested symbol references, malformed parent chains and policy mismatch. Repeated resolution, symbol DCE, canonicalize/CSE and verification pass; empty emit-sim explicitly has no snapshot ops/publication marker, power monitor, retention or power-NBA services. Two new wasm32 objects compile for native and bytecode O3 with 32-bit header checks; wasm execution was not run. No new runtime functions, supply roots/aliases, strategy catalogs, runtime/API/ABI/layout or SDC changes."
+        },
+        {
+          "id": "9c",
+          "status": "complete",
+          "scope": "Per-bit logical port attributes and supply-aware own-context output isolation",
+          "clauses": [
+            "5.6",
+            "5.7.7",
+            "6.41",
+            "6.45",
+            "6.48",
+            "4.5.5.3",
+            "IEEE1800-2023 23.2",
+            "IEEE1800-2023 23.3"
+          ],
+          "runtime_changes": false,
+          "new_public_runtime_functions": false,
+          "architecture": "Compiler-only typed port attributes, contexts, formal-to-original-actor bindings and pure publication-value identities preserve source semantics through optimization. Resolve associations transactionally at Tcl time; normalize uniform predefined policies through shared source/raw-MLIR consumers; use immutable physical domain/port/supply facts for proof and lowering. Clamp only the identified publication, and reject side-effectful/split/opaque/unsupported source views before adding isolation sensitivity. Reuse existing LLVM/MLIR operations, Slang and Tcl; dependencies reuse existing LLVM/Z3/Slang artifacts.",
+          "interpretation_notes": [
+            "All eight per-property/per-bit tiers retain explicit FALSE values and original selector rank after exclusions. HDL attributes are implicit model bit associations.",
+            "Table 5 limits driver/receiver associations to instance -elements {.} or local simple -ports, including legal local packed selections. Ordinary internal nonterminal attributes are ignored.",
+            "6.45 compares only power and ground equivalence; 4.5.5.3 full internal consistency also requires equal required-function sets. Unknown endpoints pass the different-supply filter.",
+            "A block-own UPF context may assume output receiver supplies. Those assumptions do not replace visible outside-view receivers. A declaration owner is not itself evidence of an actual driver.",
+            "The old 6.48 conformance probe used invalid rooted receiver association on an ordinary internal port and an incorrect outside-view expectation. It is replaced by a valid own-context PG comparison fixture; full 6.48 support is still partial."
+          ],
+          "tests": [
+            "test/Dialect/UPF/port-attributes.test",
+            "test/Conversion/upf-port-attributes.test",
+            "test/Conversion/upf-port-attributes-source-view.test",
+            "test/Driver/upf-port-attributes.test",
+            "test/Driver/upf-port-attributes-hdl.test",
+            "test/Driver/upf-port-attributes-isolation.test",
+            "test/Driver/upf-port-attributes-policies.test",
+            "test/Driver/upf-port-supply-contexts.test",
+            "test/Driver/upf-port-supply-required.test",
+            "test/Conformance/IEEE1801/6.48.sv",
+            "test/Conformance/IEEE1801/Inputs/6.48/block.upf"
+          ],
+          "review": "Two independent subagents approve the scoped implementation after reviewing IEEE1801-2018 and IEEE1800-2023 correctness, LLVM/MLIR architecture, source/raw-IR parity and coverage. Findings fixed model bit-versus-escaped-literal identity, required-function equivalence, combined predefined-policy normalization, opaque output admission, binding-only cleanup, functional driver/capture provenance, publication/source identity, display-name authority and wide two-state-to-four-state conversions. Compiler reviewer independently verified scoped/initialized-FF/merged-policy executions, escaped literal and vector metadata, HDL attributes, context/required-function behavior, conformance, raw diagnostics and no-service IR. Spec reviewer independently passed fourteen optimized source executions including corrected 6.48 both tiers, four wide 65-bit isolation regressions and raw exact-source/forged-debug negatives. Final validation and audit wording reviewed before commit.",
+          "validation": "Final build8 passes with existing LLVM/MLIR, Z3, Slang and Tcl artifacts reused. Structured extended gate selects 610 unique UPF/supply/snapshot/power-NBA/cohort/time/code-unit/inventory, wait/iff/publication, function/class/constructor/property and attribute/anonymous/port dialect fixtures: 601 pass and nine expected failures, with no unexpected results. JSON results include all nine new source/MLIR fixtures. All 355 process and 269 selected bytecode/reflection/VPI runtime units pass (624). Conformance clauses 6.20, 6.48, 6.50, 6.51 and 9.7.3 pass native/bytecode (10 cases); 9.7.1 remains reference-only (2) and 6.41 expected failure (2) for related-supply behavior. New tests cover all eight per-bit association tiers, HDL port/internal-symbol attributes, parameter variants, unused models, escaped-literal versus vector identities, exclusions, empty selections, transactional conflict rollback, whole predefined policies, initialized-FF and combinational PG filtering, Table 5 restrictions, ignored nonterminal metadata, inside/outside contexts, required-function equality versus PG equality, unknown/opaque consumers and raw publication/source/display-name safeguards. Existing wide ascending 65-bit, two-state formal/four-state actual, retained-output unconditional high/low isolation regressions pass native/bytecode and wasm compile checks. New wasm32 bytecode O3 object has a verified 32-bit header; wasm execution was not run. Metadata-only source lowers with no UPF ops, snapshots, power-monitor or power-NBA services. No new runtime functions, runtime/API/ABI/layout or SDC changes."
         }
       ],
       "remaining": [
         "Per-object disabled/power-aware behavior and hard-macro related-supply pin corruption",
         "Liberty/cell attributes, power-model definitions/applications, mapped implementations and persistence",
-        "Automatic PG/implemented HDL supply linkage, general design-top coverage and public anonymous info-model naming/query/serialization"
+        "Automatic PG/implemented HDL supply linkage, general design-top coverage and public anonymous info-model naming/query/serialization",
+        "Remaining 6.48 predefined behavior consumers and model-based instance exclusions, general per-path endpoint supply inference, per-bit/opaque/publication-view isolation and broader writer proofs"
       ]
     },
     {

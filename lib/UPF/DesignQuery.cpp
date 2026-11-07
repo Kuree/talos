@@ -409,7 +409,7 @@ DesignQuery::DesignQuery(ModuleOp module) {
     if (!kind)
       return;
     if (*kind == Kind::Port)
-      ports.insert(spelling.str());
+      ports.emplace(spelling.str(), op);
     if (op->hasAttr("is_compiler_generated"))
       return;
     if (*kind == Kind::Process) {

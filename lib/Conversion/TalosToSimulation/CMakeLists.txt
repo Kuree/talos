@@ -52,6 +52,7 @@ add_mlir_library(TalosToSimulation
   TalosConversionPassIncGen
   TalosSimulationOpsIncGen
   TalosUPFAttrsIncGen
+  TalosUPFOpsIncGen
   TalosUPFEnumsIncGen
 
   LINK_LIBS PUBLIC

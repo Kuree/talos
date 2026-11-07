@@ -1,0 +1,43 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: not talos --upf %t/required.upf -emit-sim --mlir-verify-each %t/design.sv -o %t.required 2>&1 | FileCheck %s --check-prefix=REQUIRED
+// RUN: not talos --upf %t/both.upf -emit-sim --mlir-verify-each %t/design.sv -o %t.both 2>&1 | FileCheck %s --check-prefix=REQUIRED
+// RUN: not talos --upf %t/disabled.upf -emit-sim --mlir-verify-each %t/design.sv -o %t.disabled 2>&1 | FileCheck %s --check-prefix=DISABLED
+// RUN: talos --upf %t/retained.upf -O0 --mlir-verify-each %t/design.sv -o %t.native && %t.native | FileCheck %s --check-prefix=SIM
+// RUN: talos --upf %t/retained.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc && %t.bc | FileCheck %s --check-prefix=SIM
+// Whole-port predefined policies share their design-attribute consumers.
+// Two policies on one port must produce one retention selector.
+// REQUIRED: UPF_retention=required state is not retained
+// DISABLED: per-object disabled simstate semantics are not implemented
+// SIM: port predefined policies passed
+
+//--- design.sv
+module block(input logic clk,d,output logic q=0,r=0);
+  always @(posedge clk) begin q<=d; r<=d; end
+endmodule
+module top;
+  import UPF::*;
+  logic clk=0,d=1,rtc=0;
+  wire q,r; block dut(clk,d,q,r);
+  initial begin
+    if (!supply_on("/top/PD.primary.power") || !supply_on("/top/PD.primary.ground",0.0))
+      $fatal(1,"supplies");
+    #1 clk=1; #1;
+    if (q !== 1 || r !== 1) $fatal(1,"predefined metadata changed behavior");
+    $display("port predefined policies passed"); $finish;
+  end
+endmodule
+//--- required.upf
+create_power_domain PD -elements dut
+set_retention R -domain PD -elements dut/r -retention_condition rtc
+set_port_attributes -ports dut/q -attribute {UPF_retention required}
+//--- both.upf
+source [file join [file dirname [info script]] required.upf]
+set_port_attributes -ports dut/q -attribute {UPF_simstate_behavior ENABLE}
+//--- disabled.upf
+create_power_domain PD -elements dut
+set_port_attributes -ports dut/q -attribute {UPF_simstate_behavior DISABLE}
+//--- retained.upf
+create_power_domain PD -elements dut
+set_retention R -domain PD -elements {dut/q dut/r} -retention_condition rtc
+set_port_attributes -ports dut/q -attribute {UPF_retention required} -attribute {UPF_simstate_behavior ENABLE}

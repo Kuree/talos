@@ -1,0 +1,49 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/ignored.upf -O0 --mlir-verify-each %t/design.sv -o %t.ignored && %t.ignored | FileCheck %s
+// RUN: talos --upf %t/ignored.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.ignored.bc && %t.ignored.bc | FileCheck %s
+// RUN: talos --upf %t/outside.upf -DCLAMP -O3 --mlir-verify-each %t/design.sv -o %t.outside && %t.outside | FileCheck %s
+// RUN: talos --upf %t/outside.upf -DCLAMP -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.outside.bc && %t.outside.bc | FileCheck %s
+// A local driver attribute on an ordinary nonterminal port is ignored. At a
+// hard terminal, an output receiver assumption describes the block's inside
+// view; it must not replace the visible parent's receivers in an outside view.
+// CHECK: port supply context passed
+
+//--- design.sv
+module leaf(input logic iso,output logic q);
+  always_comb q=1;
+endmodule
+module top;
+  import UPF::*;
+  logic iso=0; wire q; leaf dut(iso,q);
+  initial begin
+`ifdef CLAMP
+    if (!supply_on("/top/dut/CORE.power") || !supply_on("/top/dut/CORE.ground",0.0))
+`else
+    if (!supply_on("/top/CORE.power") || !supply_on("/top/CORE.ground",0.0))
+`endif
+      $fatal(1,"supplies");
+    #1; if (q !== 1) $fatal(1,"before");
+    iso=1; #1;
+`ifdef CLAMP
+    if (q !== 0) $fatal(1,"outside receiver assumption replaced actual view");
+`else
+    if (q !== 1) $fatal(1,"nonterminal metadata changed behavior");
+`endif
+    $display("port supply context passed"); $finish;
+  end
+endmodule
+//--- ignored.upf
+create_supply_set CORE
+create_power_domain PD -elements dut -supply {primary CORE}
+set_scope dut
+create_supply_set DIFFERENT
+set_port_attributes -ports q -driver_supply DIFFERENT
+//--- outside.upf
+load_upf [file join [file dirname [info script]] outside-block.upf] -scope dut
+set_design_attributes -models leaf -is_hard_macro TRUE -attribute {UPF_simstate_behavior SIMSTATE_ONLY}
+create_power_domain PD -elements dut -supply {primary dut/CORE}
+set_isolation ISO -domain PD -isolation_signal iso -applies_to outputs -location parent -clamp_value 0
+//--- outside-block.upf
+create_supply_set CORE
+set_port_attributes -ports q -receiver_supply CORE

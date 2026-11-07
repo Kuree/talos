@@ -1,0 +1,83 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --top=top --upf %t/design.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.mlir | FileCheck %s --check-prefix=TCL
+// RUN: talos-opt %t.mlir --canonicalize --cse --verify-each | FileCheck %s --check-prefix=ATTR
+// RUN: talos --top=top --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.native && %t.native | FileCheck %s --check-prefix=SIM
+// RUN: talos --top=top --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc && %t.bc | FileCheck %s --check-prefix=SIM
+// RUN: talos --top=top --upf %t/design.upf -emit-sim -O0 %t/design.sv -o %t.sim && FileCheck %s --check-prefix=LOWER --input-file=%t.sim --implicit-check-not=upf. --implicit-check-not=simulation.event.snapshot --implicit-check-not=power_monitor --implicit-check-not=power_nba
+// All eight 5.7.7 tiers resolve per property and selected bit. Exclusions
+// preserve their original tier; full-width part selects are still parts.
+// TCL: port attribute precedence and rollback passed
+// SIM: port metadata simulation passed
+// LOWER: simulation.design @design
+// ATTR-DAG: upf.port_attributes "top.dut.p0" at 0 width 8 of 8 properties {tier = "instance_direction"}
+// ATTR-DAG: upf.port_attributes "top.dut.p1" at 0 width 8 of 8 properties {tier = "instance_port"}
+// ATTR-DAG: upf.port_attributes "top.dut.p2" at 0 width 4 of 8 properties {tier = "instance_part"}
+// ATTR-DAG: upf.port_attributes "top.dut.p2" at 4 width 4 of 8 properties {tier = "instance_direction"}
+// ATTR-DAG: upf.port_attributes "top.dut.q" at 0 width 8 of 8 properties {tier = "instance"}
+// ATTR-DAG: upf.port_attributes "top.model_dut.p0" at 0 width 8 of 8 properties {tier = "model_direction"}
+// ATTR-DAG: upf.port_attributes "top.model_dut.p1" at 0 width 8 of 8 properties {tier = "model_port"}
+// ATTR-DAG: upf.port_attributes "top.model_dut.p2" at 0 width 4 of 8 properties {tier = "model_part"}
+// ATTR-DAG: upf.port_attributes "top.model_dut.p2" at 4 width 4 of 8 properties {tier = "model_direction"}
+// ATTR-DAG: upf.port_attributes "top.model_dut.q" at 0 width 8 of 8 properties {tier = "model"}
+// ATTR-DAG: upf.port_attributes "top.model_dut.p0" at 0 width 8 of 8 properties {cut = "direction"}
+// ATTR-DAG: upf.port_attributes "top.narrow.p2" at 0 width 4 of 4 properties {tier = "model_part"}
+// ATTR-DAG: upf.port_attributes "x" at 0 width 1 of 1 properties {unused = "preserved"} scope "top" top "top" {model = "spare"}
+// ATTR-DAG: upf.port_attributes "top.dut.p0" at 0 width 8 of 8 properties {full = "part"}
+// ATTR-DAG: upf.port_attributes "top.id.p" at 0 width 1 of 2 properties {identity = "vector_bit"}
+// ATTR-DAG: width 1 of 1 properties {identity = "literal"}
+// ATTR-NOT: no_selector
+// ATTR-NOT: empty_selection
+
+//--- design.sv
+module leaf #(parameter W=8)(input logic [W-1:0] p0,p1,p2,output wire [W-1:0] q);
+  assign q=p0;
+endmodule
+module spare(input logic x); endmodule
+module identity(input logic [1:0] p,input logic \p[0] ); endmodule
+module top;
+  wire [7:0] a,b;
+  wire [3:0] c;
+  leaf dut(8'h5a,8'h11,8'h22,a),model_dut(8'h3c,8'h44,8'h55,b);
+  leaf #(4) narrow(4'ha,4'hb,4'hc,c);
+  identity id(2'b01,1'b0);
+  initial begin
+    #1;
+    if (a !== 8'h5a || b !== 8'h3c || c !== 4'ha) $fatal(1,"port metadata changed logic");
+    $display("port metadata simulation passed"); $finish;
+  end
+endmodule
+//--- design.upf
+proc expect_error {script pattern} {
+  if {[catch {uplevel 1 $script} message] != 1 || ![string match $pattern $message]} {
+    error "expected <$pattern>, got <$message>"
+  }
+}
+set_port_attributes -model leaf -attribute {tier model}
+set_port_attributes -model leaf -applies_to inputs -attribute {tier model_direction}
+set_port_attributes -model leaf -ports p1 -attribute {tier model_port}
+set_port_attributes -model leaf -ports {p2[3:0]} -attribute {tier model_part}
+set_port_attributes -elements dut -attribute {tier instance}
+set_port_attributes -elements dut -applies_to inputs -attribute {tier instance_direction}
+set_port_attributes -ports dut/p1 -attribute {tier instance_port}
+set_port_attributes -ports {dut/p2[3:0]} -attribute {tier instance_part}
+set_port_attributes -model leaf -exclude_ports {p0[3:0]} -attribute {cut model}
+set_port_attributes -model leaf -applies_to inputs -attribute {cut direction}
+set_port_attributes -model spare -ports x -attribute {unused preserved}
+set_port_attributes -ports {dut/p0[7:0]} -attribute {full part}
+set_port_attributes -ports dut/p0 -attribute {full whole}
+set_port_attributes -model identity -ports {p[0]} -attribute {identity vector_bit}
+set_port_attributes -model identity -ports {{p\[0\]}} -attribute {identity literal}
+set_port_attributes -attribute {no_selector unused}
+set_port_attributes -model leaf -ports {} -attribute {empty_selection unused}
+set_port_attributes -model leaf -applies_to {} -attribute {empty_selection unused}
+expect_error {set_port_attributes} {*missing argument*}
+expect_error {set_port_attributes -ports {dut/p1 dut/p2} -attribute {tier conflict}} {*conflicting highest-precedence port attribute*}
+expect_error {set_port_attributes -model leaf -elements dut -attribute {bad v}} {*cannot be combined*}
+expect_error {set_port_attributes -ports dut/p0 -elements dut -attribute {bad v}} {*cannot be combined*}
+expect_error {set_port_attributes -ports dut/p0 -applies_to both -attribute {bad v}} {*invalid port direction*}
+expect_error {set_port_attributes -ports {dut/p0[9]} -attribute {bad v}} {*outside the HDL range*}
+expect_error {set_port_attributes -ports dut/missing -attribute {bad v}} {*unknown or unsupported port*}
+expect_error {set_port_attributes -ports dut/p0 -attribute {UPF_unconnected TRUE}} {*consumer is not implemented*}
+expect_error {set_port_attributes -ports dut/p0 -attribute {UPF_is_hard_macro TRUE}} {*invalid port attribute value or target*}
+puts "port attribute precedence and rollback passed"

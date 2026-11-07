@@ -1,5 +1,6 @@
 #include "DesignAttributes.h"
 #ifdef TALOS_ENABLE_UPF
+#include "PortAttributes.h"
 #include "talos/Dialect/Slang/SlangOps.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringMap.h"
@@ -33,7 +34,16 @@ Attribute highest(const DesignAttributes::Properties &properties,
 DesignAttributes::DesignAttributes(
     ModuleOp module, const std::map<std::string, Operation *> &objects,
     const DesignQuery &queries)
-    : module(module), objects(objects), queries(queries) {}
+    : module(module), objects(objects), queries(queries),
+      ports(std::make_unique<PortAttributes>(module, queries, objects)) {}
+DesignAttributes::~DesignAttributes() = default;
+int DesignAttributes::setPorts(
+    Tcl_Interp *interp, Tcl_Size objc, Tcl_Obj *const objv[], StringRef scope,
+    StringRef top, Location location,
+    llvm::function_ref<FailureOr<std::string>(StringRef)> resolveSupply) {
+  return ports->set(interp, objc, objv, scope, top, location, *this,
+                    resolveSupply);
+}
 bool DesignAttributes::charge(size_t count) {
   if (count > 1048576 - work) {
     exceeded = true;
@@ -90,6 +100,7 @@ bool DesignAttributes::hasMacros() const {
   return llvm::any_of(instanceModels,
                       [&](const auto &entry) { return leaf(entry.first); });
 }
+bool DesignAttributes::hasPortAttributes() const { return !ports->empty(); }
 bool DesignAttributes::insideLeaf(StringRef path, StringRef context,
                                   bool includeSelf, bool hardOnly) {
   auto key = std::tuple{path.str(), context.str(), includeSelf, hardOnly};
@@ -141,7 +152,7 @@ std::string DesignAttributes::instance(StringRef path) const {
 LogicalResult DesignAttributes::seed(StringRef path, DictionaryAttr values,
                                      unsigned precedence, StringRef modelName,
                                      Location location, bool modelBased) {
-  if (!values)
+  if (!values || queries.isPort(path))
     return success();
   for (auto entry : values) {
     if (!charge())
@@ -190,6 +201,8 @@ LogicalResult DesignAttributes::initialize() {
             return failure();
         }
       }
+  if (failed(ports->initialize()))
+    return failure();
   for (const auto &[path, object] : objects) {
     if (failed(seed(
             path, object->getAttrOfType<DictionaryAttr>("hdl_power_attributes"),
@@ -393,7 +406,16 @@ int DesignAttributes::set(Tcl_Interp *interp, Tcl_Size objc,
   if (exceeded)
     return error(interp, "design attributes exceed 1048576 work units");
   std::map<std::string, Properties> pending;
+  PortAttributes::Delta pendingPorts;
   for (const auto &[path, modelName] : targets) {
+    if (queries.isPort(path)) {
+      if (failed(ports->prepareDesign(
+              path, assigned.getDictionary(module->getContext()), scope, top,
+              location, pendingPorts,
+              [&](const llvm::Twine &message) { error(interp, message); })))
+        return TCL_ERROR;
+      continue;
+    }
     if (!charge(assigned.getAttrs().size()))
       return error(interp, "design attributes exceed 1048576 work units");
     auto &next = pending[path];
@@ -484,6 +506,7 @@ int DesignAttributes::set(Tcl_Interp *interp, Tcl_Size objc,
   for (auto &[path, next] : pending)
     for (auto &[name, sources] : next)
       properties[path][name] = std::move(sources);
+  ports->commit(std::move(pendingPorts));
   if (macroChange)
     leafCache.clear();
   for (auto &model : specifiedModels)
@@ -535,7 +558,7 @@ LogicalResult DesignAttributes::emit(OpBuilder &builder) {
   for (const auto &spec : modelSpecifications)
     upf::UPFModelAttributesOp::create(builder, spec.location, spec.model,
                                       spec.values, spec.scope, spec.top);
-  return success();
+  return ports->emit(builder);
 }
 } // namespace talos
 #endif

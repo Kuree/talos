@@ -1,0 +1,42 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: not talos --upf %t/driver.upf -emit-sim --mlir-verify-each %t/design.sv -o %t.driver 2>&1 | FileCheck %s --check-prefix=DRIVER
+// RUN: talos --upf %t/receiver.upf -O3 --mlir-verify-each %t/design.sv -o %t.native && %t.native | FileCheck %s --check-prefix=SIM
+// RUN: talos --upf %t/receiver.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc && %t.bc | FileCheck %s --check-prefix=SIM
+// The sets share all six electrical roots. Required-function sets must match
+// for full electrical equivalence (4.5.5.3); different-PG filtering compares
+// only power and ground (6.45), independently of required bias functions.
+// DRIVER: specified port supply differs from its internal supply
+// SIM: port supply required functions passed
+
+//--- design.sv
+module leaf(input logic iso,output logic q);
+  always_comb q=1;
+endmodule
+module top;
+  import UPF::*;
+  logic iso=0; wire q; leaf dut(iso,q);
+  initial begin
+    if (!supply_on("/top/dut/CORE.power") || !supply_on("/top/dut/CORE.ground",0.0))
+      $fatal(1,"supplies");
+    #1; if (q !== 1) $fatal(1,"before");
+    iso=1; #1;
+    if (q !== 1) $fatal(1,"required bias changed PG filter");
+    $display("port supply required functions passed"); $finish;
+  end
+endmodule
+//--- sets.upf
+create_supply_set CORE
+create_supply_set EXTRA -function {power CORE.power} -function {ground CORE.ground} -function {nwell CORE.nwell} -function {pwell CORE.pwell} -function {deepnwell CORE.deepnwell} -function {deeppwell CORE.deeppwell}
+create_power_domain PD -elements . -supply {primary CORE}
+//--- driver.upf
+load_upf [file join [file dirname [info script]] driver-block.upf] -scope dut
+//--- driver-block.upf
+source [file join [file dirname [info script]] sets.upf]
+set_port_attributes -ports q -driver_supply EXTRA
+//--- receiver.upf
+load_upf [file join [file dirname [info script]] receiver-block.upf] -scope dut
+//--- receiver-block.upf
+source [file join [file dirname [info script]] sets.upf]
+set_port_attributes -ports q -receiver_supply EXTRA
+set_isolation ISO -domain PD -isolation_signal iso -applies_to outputs -location parent -clamp_value 0

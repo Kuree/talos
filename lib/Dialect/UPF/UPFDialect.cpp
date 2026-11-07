@@ -19,6 +19,15 @@ bool isDesignAttributeModelOnly(llvm::StringRef name) {
   return name == "UPF_is_hard_macro" || name == "UPF_is_soft_macro" ||
          name == "UPF_is_power_aware_model" || name == "UPF_switch_cell_type";
 }
+mlir::LogicalResult UPFContextsOp::verify() {
+  llvm::DenseSet<mlir::StringAttr> roots;
+  for (auto value : getRoots()) {
+    auto path = mlir::cast<mlir::StringAttr>(value);
+    if (path.getValue().empty() || !roots.insert(path).second)
+      return emitOpError("context roots must be nonempty and unique");
+  }
+  return mlir::success();
+}
 bool isPortAttributeName(llvm::StringRef name) {
   return llvm::is_contained(
       llvm::ArrayRef<llvm::StringRef>{
@@ -48,6 +57,52 @@ bool isValidDesignAttributeValue(llvm::StringRef name, mlir::Attribute value) {
                                         "PORT_CORR_ONLY", "DISABLE"},
         text);
   return true;
+}
+bool isValidPortAttributeValue(llvm::StringRef name, mlir::Attribute value) {
+  auto string = mlir::dyn_cast<mlir::StringAttr>(value);
+  if (!string || name.empty() || isDesignAttributeModelOnly(name))
+    return false;
+  if (name == "UPF_driver_supply" || name == "UPF_receiver_supply")
+    return !string.getValue().empty();
+  return isValidDesignAttributeValue(name, value);
+}
+mlir::LogicalResult UPFPortAttributesOp::verify() {
+  if (getPort().empty() || getScope().empty() || getTop().empty() ||
+      !isWithinPath(getScope(), getTop()) ||
+      (getModel() && getModel()->empty()))
+    return emitOpError("requires a port and valid source context");
+  int64_t low = getOffsetAttr().getInt(), width = getWidthAttr().getInt(),
+          full = getSourceWidthAttr().getInt();
+  if (low < 0 || width < 0 || full < 0 ||
+      (full == 0 ? low != 0 || width != 0
+                 : width == 0 || low > full || width > full - low))
+    return emitOpError("port window is outside the declared logical width");
+  if (getProperties().empty())
+    return emitOpError("requires at least one port property");
+  for (auto property : getProperties())
+    if (!isValidPortAttributeValue(property.getName(), property.getValue()))
+      return emitOpError("invalid or unsupported port attribute property: ")
+             << property.getName();
+  for (auto [name, reference] :
+       {std::pair{"UPF_driver_supply", getDriverSupplyAttr()},
+        std::pair{"UPF_receiver_supply", getReceiverSupplyAttr()}}) {
+    auto value = getProperties().getAs<mlir::StringAttr>(name);
+    if (bool(value) != bool(reference) ||
+        (value && value.getValue() != reference.getValue()))
+      return emitOpError(
+          "port supply property disagrees with its typed reference");
+    if (reference && getModel())
+      return emitOpError(
+          "driver/receiver supply attributes require instance ports");
+  }
+  return mlir::success();
+}
+mlir::LogicalResult
+UPFPortAttributesOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
+  for (auto ref : {getDriverSupplyAttr(), getReceiverSupplyAttr()})
+    if (ref && !symbols.lookupNearestSymbolFrom<UPFSupplySetOp>(*this, ref))
+      return emitOpError("references an unknown port supply set: ") << ref;
+  return mlir::success();
 }
 bool isStaticallyEmptyRetention(RetentionAttr strategy, mlir::Operation *from,
                                 mlir::SymbolTableCollection *symbols) {
