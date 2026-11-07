@@ -249,8 +249,11 @@ def UPFCompositeDomainOp : Op<UPFDialect, "composite_domain", [Symbol,
   let summary = "power-domain container without a physical extent (1801 6.16)";
   let description = [{
     Retains composite identity, child domain references and a primary supply
-    handle after compiler-time composition. Corresponding primary functions
-    share roots after their preexisting equivalence has been checked. The
+    handle after compiler-time composition. Supplied primaries must be
+    electrically equivalent or functionally equivalent and interchangeable.
+    Unbound primary functions receive a resolved representative, while supplied
+    interchangeable rails remain distinct. Global topology and equivalence are
+    checked by UPF normalization before physical lowering. The
     container owns no HDL processes or corruption monitor. Its local primary
     state catalog does not become a subdomain's simulation policy.
   }];

@@ -168,12 +168,16 @@
         "-update"
       ],
       "unsupported_options": [],
-      "limits": "Compiler-only containers with nested/empty membership, additive updates, transactional cycle/namespace checks and primary-only supply handles. Required physical functions propagate to/among unbound primaries after checking preexisting concrete equivalence; unused well bindings, set identities and state catalogs remain distinct. Currently requires matching required-function sets. Retention and the implemented parent-output isolation subset propagate transactional typed deltas to unique leaves, including late nested members. Leaf identities, independent handles/catalogs, direct local refinements and original caller scope/source order are preserved. Constructor additions that conflict with prior operations roll back. Connectivity/cell-mapping/level-shifter/repeater fanout, differing required-function sets and functional-only composition without merging independent rails remain unsupported. Electrical declarations can establish the required physical equivalence. Some boundary legality is still diagnosed during simulation lowering. Composite classification must precede strategy application.",
+      "limits": "Compiler-only containers with nested/empty membership, additive updates, transactional cycle/namespace checks and primary-only supply handles. Bindings of required functions propagate to/among unbound primaries using frozen pre-composition electrical/interchangeability evidence. One stable complete supplied tuple is preferred for each connected composition group; partial existing role constraints remain supported. Named abstract supplies, self/alias cycles and protected anonymous retention sources retain their supplied identity. Distinct supplied interchangeable rails are never electrically merged; unused well bindings, set identities and state catalogs remain distinct. Currently requires matching required-function sets. Retention and the implemented parent-output isolation subset propagate transactional typed deltas to unique leaves, including late nested members. Leaf identities, independent handles/catalogs, direct local refinements and original caller scope/source order are preserved. Constructor additions that conflict with prior operations roll back. Connectivity/cell-mapping/level-shifter/repeater fanout and differing required-function sets remain unsupported. Full electrical or declared functional/interchangeable equivalence permits composition; non-interchangeable declarations cannot validate composition. PG-only evidence is sufficient for a power/ground-only required interface; additional required functions such as bias need corresponding interchangeability proof. Global raw-MLIR topology/equivalence preflight runs before root rewriting, ownership changes or runtime allocation, even without equivalence declarations. Some boundary legality is still diagnosed during simulation lowering. Composite classification must precede strategy application.",
       "implementation": [
         "lib/UPF/Execute.cpp",
         "include/talos/Dialect/UPF/UPFOps.td",
         "lib/Dialect/UPF/UPFDialect.cpp",
-        "lib/UPF/Elaborate.cpp"
+        "lib/UPF/Elaborate.cpp",
+        "lib/UPF/CompositeDomains.cpp",
+        "lib/UPF/SupplyRelations.cpp",
+        "lib/UPF/NormalizeEquivalences.cpp",
+        "lib/UPF/DomainExtent.cpp"
       ]
     },
     {
@@ -499,7 +503,7 @@
         "-sets"
       ],
       "unsupported_options": [],
-      "limits": "Electrical, functional/interchangeable and functional/non-interchangeable declarations for existing UPF-created supply nets, ports, functions, sets and handles. Electrical declarations merge physical identities only after original directed source provenance checks; functional relations preserve independent rails and catalogs. Equivalent sets require equal required-function masks, while explicit whole-set declarations project all genuinely populated corresponding functions. Original non-interchangeable object groups remain prohibitions rather than transitive non-equivalence classes. Known initial-value, computed-switch, required-function and substitution contradictions diagnose; caught immediate errors roll back. Uses the existing unresolved directional network: inout/resolved/implemented HDL linkage and ambiguous upstream source proofs remain staged. Functional-only composite composition and independent computed-switch functional proofs remain staged. Later dynamic constraint violations through independent runtime/VPI supply stimulus are not monitored. Equivalence does not copy state catalogs, strategies or availability.",
+      "limits": "Electrical, functional/interchangeable and functional/non-interchangeable declarations for existing UPF-created supply nets, ports, functions, sets and handles. Electrical declarations merge physical identities only after original directed source provenance checks; functional relations preserve independent rails and catalogs. Equivalent sets require equal required-function masks, while explicit whole-set declarations project all genuinely populated corresponding functions. Original non-interchangeable object groups remain prohibitions rather than transitive non-equivalence classes. Known initial-value, computed-switch, required-function and substitution contradictions diagnose; caught immediate errors roll back. Uses the existing unresolved directional network: inout/resolved/implemented HDL linkage and ambiguous upstream source proofs remain staged. Interchangeable functional primaries compose without merging supplied rails. Independent computed-switch functional proofs remain staged. Later dynamic constraint violations through independent runtime/VPI supply stimulus are not monitored. Equivalence does not copy state catalogs, strategies or availability.",
       "implementation": [
         "lib/UPF/Execute.cpp",
         "lib/UPF/SupplyNetwork.cpp",
@@ -1032,7 +1036,7 @@
         "8.3"
       ],
       "missing": [
-        "Composite connectivity/cell-mapping/level-shifter/repeater fanout, differing required-function set propagation and functional-only composition without merging independent rails; deferred domain classification after strategy use",
+        "Composite connectivity/cell-mapping/level-shifter/repeater fanout, differing required-function set propagation; deferred domain classification after strategy use",
         "Available/boundary supplies and function-type definition",
         "General design-top/descendant coverage validation; current compatibility behavior leaves unclaimed ordinary RTL outside declared intent. Hard macros with an unowned physical parent diagnose; public anonymous-object naming, query and serialization exposure remains pending"
       ]
@@ -2066,6 +2070,54 @@
             "lib/UPF/PublicationBarriers.cpp",
             "lib/UPF/Elaborate.cpp"
           ]
+        },
+        {
+          "id": "9e",
+          "status": "complete",
+          "scope": "Composite domains with declared interchangeable functional supplies and frozen supplier provenance",
+          "clauses": [
+            "4.5.5.3",
+            "6.16",
+            "6.44",
+            "6.50",
+            "8.3.3(f)"
+          ],
+          "runtime_changes": false,
+          "new_public_runtime_functions": false,
+          "implementation": [
+            "lib/UPF/Execute.cpp",
+            "lib/UPF/CompositeDomains.cpp",
+            "lib/UPF/SupplyRelations.cpp",
+            "lib/UPF/SupplyRelations.h",
+            "lib/UPF/NormalizeEquivalences.cpp",
+            "lib/UPF/DomainExtent.cpp",
+            "lib/Dialect/UPF/UPFDialect.cpp",
+            "include/talos/Dialect/UPF/UPFOps.td"
+          ],
+          "architecture": "A minimal well-formed RAII UPF snapshot reuses the shared SupplyRelations closure before any implicit source propagation. Freeze real, named abstract and protected anonymous source identities, then plan connected composite/child groups using a deterministic complete required-role representative; preserve partial electrical constraints and never short independent supplied I alternatives. Aliases of unbound owned primaries remain downstream consumers; named self-aliases and source-free cycles retain independent supplier identity. Cached origin walks and composition planning use a 1048576-unit budget. Shared anonymous-retention analysis caches whole-set association components with LLVM IntEqClasses and bounds its setup/role scans instead of walking the graph for every strategy. Shared global topology/full-interchangeability preflight uses one relation analysis before electrical rewrites, ownership changes or lowering, including inputs with no equivalence declarations or physical domains. Op verification remains structural and does not depend on the compiler library. No unverified checked marker, new runtime operation, runtime function or SDC change.",
+          "interpretation_notes": [
+            "6.16(c) accepts electrical or functional/interchangeable primaries; merely functional/non-interchangeable evidence is insufficient. PG-only evidence suffices when only power/ground are required; additional required functions such as bias also need interchangeability proof.",
+            "8.3.3(f) permits primary propagation into unbound handles; it does not authorize converting supplied abstract or anonymous AON sources into free placeholders.",
+            "Supplied alternatives preserve their original runtime roots, catalogs, optional functions and strategy ownership. Implicit required-role links are physical aliases only for unbound placeholders; no whole-set association or policy/catalog inheritance is synthesized.",
+            "Equivalent sets still require equal required-function masks; differing-mask interface propagation remains staged. Independent computed-switch functional proofs, resolved/inout supply networks and dynamic functional-constraint validation retain the limits recorded for 6.44.",
+            "The temporary pre-propagation relation snapshot defers initial-value compatibility because a free placeholder OFF default is provisional. Positive, non-interchangeable and required-role constraints remain frozen and checked. Final emitted source and all raw-IR consumers always validate actual resolved initial states and voltages before mutation; a supplied CORE OFF versus anonymous AON FULL_ON contradiction still fails.",
+            "Direct MLIR carries resolved primary function bindings; global preflight does not infer unbound-source provenance from root names, writability or placeholder initial values."
+          ],
+          "tests": [
+            "test/Driver/upf-composite-functional.test",
+            "test/Driver/upf-composite-functional-abstract.test",
+            "test/Driver/upf-composite-functional-errors.test",
+            "test/Driver/upf-composite-functional-aon.test",
+            "test/Driver/upf-composite-functional-aon-equivalence.test",
+            "test/Driver/upf-composite-functional-wasm.test",
+            "test/Conversion/upf-composite-functional.mlir",
+            "test/Conversion/upf-composite-functional-invalid.mlir",
+            "test/Dialect/UPF/composite-domain-invalid.mlir",
+            "test/Conformance/IEEE1801/6.16.sv",
+            "test/Conformance/IEEE1801/Inputs/6.16/design.upf"
+          ],
+          "review": "Two independent subagents approve the final scoped implementation after UPF/LRM correctness, LLVM/MLIR practice and coverage review. Findings fixed supplier rigidity for named abstract/self-alias/cyclic origins, protected anonymous AON provenance, well-formed temporary root/association facts, bounded cached association analysis and provisional initial-value ordering. The compiler reviewer independently passed eighteen optimized native/bytecode executions, including six expected protected-write failures, covering the original free-primary counterexample, inherited AON/FI protection and existing anonymous/downstream/cross-anonymous/named-chain provenance. The spec reviewer independently checked set/net I, shared/reordered diamonds, partial bindings, distinct emitted rails/catalogs, abstract origins, valid free-FI AON inheritance/protection, real CORE/AON conflicts, strengthened power-specific self/SCC errors, raw initial-value diagnostics and expanded 6.16 conformance in both tiers. Both reviewed repeated raw normalization/resolve/optimization/verification and the global no-equivalence/NI/full-bias/cycle negatives. No source or coverage blockers remain; final support-map limits are explicit.",
+          "validation": "Final build3 succeeds using the existing LLVM/MLIR 22.1.6, Z3 4.13.4, Slang and Tcl artifacts. Structured extended gate selects 632 unique UPF/supply/snapshot/power-NBA/cohort/time/code-unit/inventory, wait/iff/publication, function/class/constructor/property and attribute/anonymous/equivalence/composite dialect fixtures: 623 pass and nine expected failures, with no unexpected results. All eight new source/dialect/conversion fixtures explicitly pass. All 355 process and 269 selected bytecode/reflection/VPI runtime units pass (624). Conformance clauses 6.16, 6.20, 6.44, 6.48, 6.50, 6.51 and 9.7.3 pass native/bytecode (14 cases); 9.7.1 remains reference-only (2), 6.41 expected failure (2). Expanded 6.16 tests an unbound child and a distinct supplied interchangeable child in the same composite while an outside domain remains unaffected. Source tests cover set/net I, shared unbound diamonds, reversed construction/member order, partial bindings, catalog and unused-role isolation, named abstract/self/SCC origins, protected anonymous inheritance, missing/NI/required-bias evidence and provisional placeholder initial values versus final actual supply facts. Raw MLIR tests cover transitive/associated I, no-equivalence/no-physical-domain failures, full-required bias checks, global cycles, repeated normalization/optimization/verification and no container actors. Two new wasm32 native/bytecode O3 objects have verified 32-bit headers; wasm execution was not run. No new runtime functions, runtime/API/ABI/layout or SDC changes. Command inventory remains 22 registered (20 partial, two supported) of 68; full specification support remains incomplete."
         }
       ],
       "remaining": [
@@ -2073,7 +2125,7 @@
         "Liberty/cell attributes, power-model definitions/applications, mapped implementations and persistence",
         "Automatic PG/implemented HDL supply linkage, general design-top coverage and public anonymous info-model naming/query/serialization",
         "Remaining 6.48 predefined behavior consumers and model-based instance exclusions, general per-path endpoint supply inference, per-bit/opaque/publication-view isolation and broader writer proofs",
-        "Functional-only composite policy composition, computed-switch equivalence proofs and dynamic functional-constraint validation; resolved/inout/implemented HDL supply linkage"
+        "Computed-switch equivalence proofs and dynamic functional-constraint validation; resolved/inout/implemented HDL supply linkage"
       ]
     },
     {

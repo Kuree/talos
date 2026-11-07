@@ -1,0 +1,78 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/sets.upf -O0 --mlir-verify-each %t/design.sv -o %t.sets && %t.sets | FileCheck %s
+// RUN: talos --upf %t/nets.upf -O3 --mlir-verify-each %t/design.sv -o %t.nets && %t.nets | FileCheck %s
+// RUN: talos --upf %t/reverse.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.reverse && %t.reverse | FileCheck %s
+// RUN: talos --upf %t/sets.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.mlir
+// RUN: talos-opt %t.mlir --normalize-upf-equivalences --resolve-upf-domains --canonicalize --cse --verify-each | FileCheck %s --check-prefix=IR
+// IEEE 1801-2018 6.16(c)/8.3.3(f): I alternatives compose without electrical
+// merging or catalog inheritance. A nested diamond shares one unbound child;
+// the chosen complete tuple is stable under reversed constructor/member order.
+// Partial bound roles and genuine downstream consumers retain their provenance.
+// CHECK: functional composite supplies and catalogs passed
+// IR-DAG: upf.supply @[[AP:[^ ]+]] names [{{.*}}"/top/PA"{{.*}}] writable = true
+// IR-DAG: upf.supply @[[BP:[^ ]+]] names [{{.*}}"/top/PB"{{.*}}] writable = true
+// IR-DAG: upf.supply_set @"/top/P.primary" functions {{.*}}power = @[[AP]]
+// IR-DAG: upf.supply_set @"/top/Q.primary" functions {{.*}}power = @[[BP]]
+// IR-DAG: upf.supply_set @"/top/Base.primary" functions {{.*}}power = @[[AP]]
+// IR-DAG: upf.supply_set @"/top/Outer.primary" functions {{.*}}power = @[[AP]]
+
+//--- design.sv
+module leaf(output logic q); always_comb q = 1; endmodule
+module top;
+  import UPF::*;
+  wire p, q, r; leaf a(p), b(q), c(r);
+  initial begin
+    if (!supply_on("/top/PA", 1.0) || !supply_on("/top/PB", 1.0) ||
+        !supply_on("/top/G", 0.0)) $fatal(1, "supplies");
+    #1;
+    if ({p,q,r} !== 3'b1x1) $fatal(1, "composite imported a local catalog");
+    if (get_supply_state(get_supply_value("/top/COPY.power")) != FULL_ON ||
+        get_supply_state(get_supply_value("/top/Outer.primary.power")) != FULL_ON ||
+        get_supply_state(get_supply_value("/top/Partial.primary.ground")) != FULL_ON)
+      $fatal(1, "unbound representative or partial role");
+    if (!supply_on("/top/Base.primary.nwell", 0.8)) $fatal(1, "unused role");
+    if (get_supply_state(get_supply_value("/top/A.nwell")) != OFF)
+      $fatal(1, "unused roles were propagated");
+    $display("functional composite supplies and catalogs passed");
+    $finish;
+  end
+endmodule
+//--- common.upf
+foreach name {PA PB G} {create_supply_net $name}
+create_supply_set A -function {power PA} -function {ground G}
+create_supply_set B -function {power PB} -function {ground G}
+add_power_state A -state {ON -supply_expr {power == FULL_ON && ground == FULL_ON} -simstate NORMAL}
+add_power_state B -state {ON -supply_expr {power == {FULL_ON 0.8} && ground == FULL_ON} -simstate NORMAL}
+create_power_domain P -elements a -supply {primary A}
+create_power_domain Q -elements b -supply {primary B}
+create_power_domain Base -elements c
+create_supply_set COPY -function {power Base.primary.power}
+create_power_domain Partial -elements {}
+create_supply_set Partial.primary -update -function {power A.power}
+if {$mode eq "sets"} {
+  set_equivalent -function_only -sets {A B}
+} else {
+  set_equivalent -function_only -nets {PA PB}
+}
+if {[info exists reverse]} {
+  create_composite_domain Right -subdomains {Base Q} -supply {primary B}
+  create_composite_domain Left -subdomains {Base P} -supply {primary A}
+  create_composite_domain Outer -subdomains {Right Left}
+} else {
+  create_composite_domain Left -subdomains {P Base} -supply {primary A}
+  create_composite_domain Right -subdomains {Q Base} -supply {primary B}
+  create_composite_domain Outer -subdomains {Left Right}
+}
+create_composite_domain Extra -subdomains {Partial P} -supply {primary A}
+add_power_state Left.primary -state {ON -supply_expr {power == {FULL_ON 0.9} && ground == FULL_ON} -simstate NORMAL}
+//--- sets.upf
+set mode sets
+source [file join [file dirname [info script]] common.upf]
+//--- nets.upf
+set mode nets
+source [file join [file dirname [info script]] common.upf]
+//--- reverse.upf
+set mode sets
+set reverse 1
+source [file join [file dirname [info script]] common.upf]

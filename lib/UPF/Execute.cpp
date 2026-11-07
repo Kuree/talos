@@ -6,8 +6,10 @@
 #include "DesignQuery.h"
 #include "SupplyExpression.h"
 #include "SupplyNetwork.h"
+#include "SupplyRelations.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/OwningOpRef.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/Verifier.h"
 #include "talos/Dialect/Slang/SlangOps.h"
@@ -387,6 +389,128 @@ struct Session {
           result.emplace_back(declaration.supplies.front(), supply);
     }
     return result;
+  }
+  void emitSupplyEquivalences(
+      OpBuilder &builder, Location fallback,
+      llvm::function_ref<FlatSymbolRefAttr(const SupplyObject &)> symbol)
+      const {
+    for (const auto &declaration : supplyEquivalences) {
+      SmallVector<Attribute> objects;
+      if (!declaration.sets.empty())
+        for (const auto &name : declaration.sets)
+          objects.push_back(FlatSymbolRefAttr::get(builder.getContext(), name));
+      else
+        for (const auto &supply : declaration.supplies)
+          objects.push_back(symbol(supply));
+      upf::UPFSupplyEquivalenceOp::create(
+          builder, declaration.location.value_or(fallback),
+          builder.getArrayAttr(objects), declaration.kind);
+    }
+  }
+  FailureOr<std::set<unsigned>>
+  anonymousRetentionRoots(const ResolvedSupplies &supplies,
+                          const SupplyFunctions &functions,
+                          const SupplyEquivalences &equivalences) {
+    std::string supplyError;
+    size_t work = 0;
+    auto charge = [&](size_t count) {
+      if (count > 1048576 - work)
+        return false;
+      work += count;
+      return true;
+    };
+    auto exhausted = [&]() -> FailureOr<std::set<unsigned>> {
+      module.emitError(
+          "anonymous retention supply analysis exceeds 1048576 work units");
+      return failure();
+    };
+    if (!charge(supplySets.size() * 2 + setAssociations.size()))
+      return exhausted();
+    std::map<std::string, unsigned> indices;
+    for (const auto &[name, set] : supplySets)
+      indices[name] = indices.size();
+    llvm::IntEqClasses associations(indices.size());
+    for (const auto &[a, b] : setAssociations)
+      associations.join(indices.at(a), indices.at(b));
+    associations.compress();
+    associations.uncompress();
+    SmallVector<bool> namedSupplier(indices.size(), false);
+    for (const auto &[name, set] : supplySets)
+      if (!set.handle)
+        namedSupplier[associations.findLeader(indices.at(name))] = true;
+    SupplyAliasClasses originalSupplyAliases;
+    if (!declaredElectricalSupplies().empty()) {
+      auto original = classifySupplyAliases(
+          nets, supplyPortInfo, functions, supplyBindings, equivalences,
+          [&](const llvm::Twine &message) { supplyError = message.str(); });
+      if (failed(original)) {
+        module.emitError() << supplyError;
+        return failure();
+      }
+      originalSupplyAliases = std::move(*original);
+    }
+    std::vector<std::set<unsigned>> anonymousCandidates;
+    std::set<unsigned> originalAnonymousRoots;
+    for (auto &[domainName, domain] : domains)
+      for (auto &[name, retention] : domain.retentions) {
+        auto &handle = supplySets.at(retention.retentionSupply);
+        if (!handle.functions.empty() || handle.explicitStrategySupply)
+          continue;
+        if (!charge(19))
+          return exhausted();
+        // Whole-set association to a named supplier replaces the anonymous
+        // assumption. Cache components once: downstream handle consumers must
+        // not cause one graph walk per retention strategy.
+        if (namedSupplier[associations.findLeader(
+                indices.at(retention.retentionSupply))])
+          continue;
+        std::set<unsigned> roots;
+        for (StringRef function : upf::getSupplyFunctionNames())
+          roots.insert(supplies.functions.at(retention.retentionSupply + "." +
+                                             function.str()));
+        if (llvm::any_of(roots, [&](unsigned root) {
+              return supplies.roots[root].explicitSource;
+            }))
+          continue;
+        anonymousCandidates.push_back(std::move(roots));
+        if (!originalSupplyAliases.empty())
+          for (StringRef function : upf::getSupplyFunctionNames())
+            originalAnonymousRoots.insert(originalSupplyAliases.at(
+                {SupplyObject::Function,
+                 retention.retentionSupply + "." + function.str()}));
+      }
+    // A named consumer of any anonymous source retains that source's
+    // provenance, including when a declaration connects two anonymous retention
+    // supplies. Only an independently supplied original identity introduced
+    // by 6.44 can defeat the assumption. Index those identities once, before
+    // marking roots.
+    std::set<unsigned> namedSupplierRoots;
+    if (!originalSupplyAliases.empty())
+      for (const auto &[name, set] : supplySets) {
+        if (!charge(7))
+          return exhausted();
+        if (!set.handle)
+          for (StringRef function : upf::getSupplyFunctionNames()) {
+            std::string path = name + "." + function.str();
+            if (!originalAnonymousRoots.count(
+                    originalSupplyAliases.at({SupplyObject::Function, path})))
+              namedSupplierRoots.insert(supplies.functions.at(path));
+          }
+      }
+    std::set<unsigned> anonymousRoots;
+    for (const auto &roots : anonymousCandidates) {
+      if (!charge(roots.size()))
+        return exhausted();
+      if (llvm::any_of(roots, [&](unsigned root) {
+            return namedSupplierRoots.count(root);
+          }))
+        continue;
+      // 6.50/9.7.1: an unspecified verification retention supply is anonymous
+      // and always on. It has real shared values, so queries and policy
+      // evaluation agree; HDL cannot turn this assumed supply off.
+      anonymousRoots.insert(roots.begin(), roots.end());
+    }
+    return anonymousRoots;
   }
   int validateCurrentEquivalenceConstraints() {
     SupplyFunctions functions;
@@ -2649,6 +2773,158 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
     // later usage iteration must not bless rails merged by an earlier one.
     auto initial = *resolved;
     auto originalEquivalences = equivalences;
+    auto protectedRoots = session.anonymousRetentionRoots(initial, functions,
+                                                          originalEquivalences);
+    if (failed(protectedRoots))
+      return failure();
+    std::set<unsigned> groundRoots;
+    for (const auto &[name, set] : session.supplySets)
+      groundRoots.insert(initial.functions.at(name + ".ground"));
+
+    // A minimal declarative snapshot reuses the same relation closure as raw
+    // MLIR. Its roots and proofs remain frozen before any implicit propagation.
+    SmallVector<unsigned> interchangeable;
+    for (unsigned id = 0; id < initial.roots.size(); ++id)
+      interchangeable.push_back(id);
+    if (!session.supplyEquivalences.empty()) {
+      if (initial.roots.size() + session.supplySets.size() * 7 > 1048576)
+        return module.emitError(
+            "domain composition exceeds 1048576 work units");
+      OwningOpRef<ModuleOp> snapshot(ModuleOp::create(module.getLoc()));
+      OpBuilder facts(module.getContext());
+      facts.setInsertionPointToStart(snapshot->getBody());
+      auto symbol = [&](unsigned id) {
+        return FlatSymbolRefAttr::get(
+            module.getContext(), "__composition_supply_" + std::to_string(id));
+      };
+      for (unsigned id = 0; id < initial.roots.size(); ++id) {
+        bool alwaysOn = protectedRoots->count(id);
+        bool writable = initial.roots[id].writable && !alwaysOn;
+        uint64_t value =
+            alwaysOn || (assumePoweredInputs && writable)
+                ? ((uint64_t(groundRoots.count(id) ? 0 : 1000000) << 2) | 1)
+                : 0;
+        upf::UPFSupplyOp::create(
+            facts, module.getLoc(), symbol(id).getValue(),
+            facts.getStrArrayAttr(
+                {"/__composition_supply_" + std::to_string(id)}),
+            writable, value, alwaysOn);
+      }
+      std::map<std::string, std::set<std::string>> associated;
+      for (const auto &[a, b] : session.setAssociations) {
+        if (a == b)
+          continue;
+        associated[a].insert(b);
+        associated[b].insert(a);
+      }
+      for (const auto &[name, set] : session.supplySets) {
+        NamedAttrList fields;
+        SmallVector<Attribute> required, populated, links;
+        for (StringRef field : upf::getSupplyFunctionNames()) {
+          fields.set(field,
+                     symbol(initial.functions.at(name + "." + field.str())));
+          populated.push_back(facts.getStringAttr(field));
+        }
+        for (const auto &field : set.required)
+          required.push_back(facts.getStringAttr(field));
+        for (const auto &other : associated[name])
+          links.push_back(FlatSymbolRefAttr::get(module.getContext(), other));
+        upf::UPFSupplySetOp::create(
+            facts, module.getLoc(), name,
+            fields.getDictionary(module.getContext()),
+            facts.getArrayAttr(required), ArrayAttr{},
+            facts.getArrayAttr(links), FlatSymbolRefAttr{}, false, StringAttr{},
+            FlatSymbolRefAttr{}, facts.getArrayAttr(populated));
+      }
+      auto root = [&](const SupplyObject &object) {
+        return object.kind == SupplyObject::Net ? initial.nets.at(object.path)
+               : object.kind == SupplyObject::Port
+                   ? initial.ports.at(object.path)
+                   : initial.functions.at(object.path);
+      };
+      session.emitSupplyEquivalences(
+          facts, module.getLoc(),
+          [&](const SupplyObject &object) { return symbol(root(object)); });
+      SupplyRelations relations(*snapshot);
+      // A free placeholder's OFF default is not an independent source fact.
+      // Final normalization checks all actual values after implicit binding.
+      if (failed(relations.initialize(SupplyRelations::InitialValues::Defer)))
+        return failure();
+      // Snapshot roots were inserted in the original numeric order.
+      for (unsigned id = 0; id < interchangeable.size(); ++id)
+        interchangeable[id] = relations.interchangeableLeader(id);
+    }
+    SmallVector<bool> fixed;
+    for (auto [id, root] : llvm::enumerate(initial.roots))
+      fixed.push_back(root.explicitSource || protectedRoots->count(id));
+    size_t compositionWork = 0;
+    std::map<std::string, bool> primaryOrigins;
+    auto derivedFromPrimary = [&](std::string path) -> std::optional<bool> {
+      std::set<std::string> seen;
+      bool result = false;
+      while (seen.insert(path).second) {
+        if (++compositionWork > 1048576)
+          return std::nullopt;
+        if (auto cached = primaryOrigins.find(path);
+            cached != primaryOrigins.end()) {
+          result = cached->second;
+          break;
+        }
+        auto [name, role] = StringRef(path).rsplit('.');
+        const auto &set = session.supplySets.at(name.str());
+        auto found = set.functions.find(role.str());
+        if (found == set.functions.end() ||
+            (found->second.kind == SupplyObject::Function &&
+             found->second.path == path)) {
+          result = set.handle && !set.owner.empty() &&
+                   session.domains.at(set.owner).primary == name;
+          break;
+        }
+        if (found->second.kind != SupplyObject::Function)
+          break;
+        path = found->second.path;
+      }
+      // A named source-free alias cycle remains an independent abstract
+      // identity. Syntax alone cannot turn it into an unbound primary.
+      for (const auto &visited : seen)
+        primaryOrigins[visited] = result;
+      return result;
+    };
+    for (const auto &[name, set] : session.supplySets)
+      if (!set.handle)
+        for (StringRef role : upf::getSupplyFunctionNames()) {
+          std::string path = name + "." + role.str();
+          auto derived = derivedFromPrimary(path);
+          if (!derived)
+            return module.emitError(
+                "domain composition exceeds 1048576 work units");
+          if (!*derived)
+            fixed[initial.functions.at(path)] = true;
+        }
+    std::map<std::string, unsigned> domainIndices;
+    SmallVector<const Domain *> domainList;
+    for (const auto &[name, domain] : session.domains) {
+      if (1 + domain.subdomains.size() > 1048576 - compositionWork)
+        return module.emitError(
+            "domain composition exceeds 1048576 work units");
+      compositionWork += 1 + domain.subdomains.size();
+      domainIndices[name] = domainList.size();
+      domainList.push_back(&domain);
+    }
+    llvm::IntEqClasses components(domainList.size());
+    std::set<unsigned> participants;
+    for (auto [index, domain] : llvm::enumerate(domainList))
+      if (domain->composite) {
+        participants.insert(index);
+        for (const auto &child : domain->subdomains) {
+          unsigned id = domainIndices.at(child);
+          participants.insert(id);
+          components.join(index, id);
+        }
+      }
+    std::map<unsigned, SmallVector<const Domain *>> groups;
+    for (unsigned id : participants)
+      groups[components.findLeader(id)].push_back(domainList[id]);
     bool first = true;
     while (true) {
       bool added = false;
@@ -2692,42 +2968,82 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
       first = false;
       llvm::IntEqClasses composition(initial.roots.size());
       std::vector<std::optional<unsigned>> constrained(initial.roots.size());
-      for (auto [index, root] : llvm::enumerate(initial.roots))
-        if (root.explicitSource)
+      for (auto [index, value] : llvm::enumerate(fixed))
+        if (value)
           constrained[index] = index;
       SupplyEquivalences compositionLinks;
-      for (auto &[name, domain] : session.domains) {
-        if (!domain.composite)
-          continue;
-        auto &primary = session.supplySets.at(domain.primary);
-        for (auto &childName : domain.subdomains) {
-          auto &child = session.domains.at(childName);
-          auto &childPrimary = session.supplySets.at(child.primary);
-          if (primary.required != childPrimary.required)
-            return emitError(domain.location.value_or(module.getLoc()))
+      for (const auto &[group, members] : groups) {
+        const Domain *representative = members.front();
+        unsigned best = 0;
+        const auto &required =
+            session.supplySets.at(representative->primary).required;
+        for (const Domain *domain : members) {
+          const auto &set = session.supplySets.at(domain->primary);
+          if (1 + required.size() > 1048576 - compositionWork)
+            return module.emitError(
+                "domain composition exceeds 1048576 work units");
+          compositionWork += 1 + required.size();
+          if (required != set.required)
+            return emitError(domain->location.value_or(module.getLoc()))
                    << "composite primary supplies with different required "
-                      "functions "
-                      "are not implemented (IEEE 1801-2018 4.5.5.3/6.16): "
-                   << childName;
-          for (auto &function : primary.required) {
-            unsigned a = composition.findLeader(
-                initial.functions.at(domain.primary + "." + function));
-            unsigned b = composition.findLeader(
-                initial.functions.at(child.primary + "." + function));
-            if (a != b && constrained[a] && constrained[b])
-              return emitError(domain.location.value_or(module.getLoc()))
-                     << "composite primary supplies are not electrically "
-                        "equivalent; functional-only composition without "
-                        "merging independent rails is not implemented "
-                        "(IEEE 1801-2018 6.16): "
-                     << name << " and " << childName << " function "
-                     << function;
+                      "functions are not implemented (IEEE 1801-2018 "
+                      "4.5.5.3/6.16): "
+                   << domain->name;
+          unsigned bound = 0;
+          for (const auto &function : required)
+            bound +=
+                fixed[initial.functions.at(domain->primary + "." + function)];
+          // Prefer one complete supplied tuple, then preserve the first stable
+          // maximal partial tuple. Domain names determine ties, not edge order.
+          if (bound > best) {
+            best = bound;
+            representative = domain;
+          }
+        }
+        for (const auto &function : required) {
+          unsigned chosen =
+              initial.functions.at(representative->primary + "." + function);
+          const Domain *donor = representative;
+          if (!fixed[chosen])
+            for (const Domain *domain : members) {
+              unsigned root =
+                  initial.functions.at(domain->primary + "." + function);
+              if (fixed[root]) {
+                chosen = root;
+                donor = domain;
+                break;
+              }
+            }
+          for (const Domain *domain : members) {
+            if (++compositionWork > 1048576)
+              return module.emitError(
+                  "domain composition exceeds 1048576 work units");
+            unsigned original =
+                initial.functions.at(domain->primary + "." + function);
+            unsigned a = composition.findLeader(original);
+            unsigned b = composition.findLeader(chosen);
+            if (a == b)
+              continue;
+            if (constrained[a] && constrained[b]) {
+              if (interchangeable[*constrained[a]] !=
+                  interchangeable[*constrained[b]])
+                return emitError(domain->location.value_or(module.getLoc()))
+                       << "composite primary supplies are not electrically "
+                          "equivalent or declared functionally equivalent and "
+                          "interchangeable (IEEE 1801-2018 6.16): "
+                       << domain->name << " and " << donor->name << " function "
+                       << function;
+              // Positive I evidence permits composition, not an electrical
+              // short. A previously assigned unbound placeholder keeps its
+              // first representative when another I alternative is visited.
+              continue;
+            }
             std::optional<unsigned> source =
                 constrained[a] ? constrained[a] : constrained[b];
             constrained[composition.join(a, b)] = source;
             compositionLinks.emplace_back(
-                session.function(domain.primary, function),
-                session.function(child.primary, function));
+                session.function(domain->primary, function),
+                session.function(donor->primary, function));
           }
         }
       }
@@ -2944,82 +3260,13 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
     associated[a].insert(b);
     associated[b].insert(a);
   }
-  SupplyAliasClasses originalSupplyAliases;
-  if (!declaredElectrical.empty()) {
-    auto original = classifySupplyAliases(
-        session.nets, session.supplyPortInfo, functions, session.supplyBindings,
-        equivalences,
-        [&](const llvm::Twine &message) { supplyError = message.str(); });
-    if (failed(original))
-      return module.emitError() << supplyError;
-    originalSupplyAliases = std::move(*original);
-  }
-  std::vector<std::set<unsigned>> anonymousCandidates;
-  std::set<unsigned> originalAnonymousRoots;
-  for (auto &[domainName, domain] : session.domains)
-    for (auto &[name, retention] : domain.retentions) {
-      auto &handle = session.supplySets.at(retention.retentionSupply);
-      if (!handle.functions.empty() || handle.explicitStrategySupply)
-        continue;
-      // 6.10: list-form association to a named supplying set is equivalent
-      // electrically to -handle binding. A domain primary or another strategy
-      // handle can instead be a downstream consumer of this assumed source.
-      std::vector<std::string> work{retention.retentionSupply};
-      std::set<std::string> seen;
-      bool namedSupplier = false;
-      while (!work.empty()) {
-        std::string current = std::move(work.back());
-        work.pop_back();
-        if (!seen.insert(current).second)
-          continue;
-        namedSupplier |= !session.supplySets.at(current).handle;
-        for (auto &next : associated[current])
-          work.push_back(next);
-      }
-      if (namedSupplier)
-        continue;
-      std::set<unsigned> roots;
-      for (StringRef function : upf::getSupplyFunctionNames())
-        roots.insert(supplies.functions.at(retention.retentionSupply + "." +
-                                           function.str()));
-      if (llvm::any_of(roots, [&](unsigned root) {
-            return supplies.roots[root].explicitSource;
-          }))
-        continue;
-      anonymousCandidates.push_back(std::move(roots));
-      if (!originalSupplyAliases.empty())
-        for (StringRef function : upf::getSupplyFunctionNames())
-          originalAnonymousRoots.insert(originalSupplyAliases.at(
-              {SupplyObject::Function,
-               retention.retentionSupply + "." + function.str()}));
-    }
-  // A named consumer of any anonymous source retains that source's provenance,
-  // including when a declaration connects two anonymous retention supplies.
-  // Only an independently supplied original identity introduced by 6.44 can
-  // defeat the assumption. Index those identities once, before marking roots.
-  std::set<unsigned> namedSupplierRoots;
-  if (!originalSupplyAliases.empty())
-    for (const auto &[name, set] : session.supplySets)
-      if (!set.handle)
-        for (StringRef function : upf::getSupplyFunctionNames()) {
-          std::string path = name + "." + function.str();
-          if (!originalAnonymousRoots.count(
-                  originalSupplyAliases.at({SupplyObject::Function, path})))
-            namedSupplierRoots.insert(supplies.functions.at(path));
-        }
-  std::set<unsigned> anonymousRoots;
-  for (const auto &roots : anonymousCandidates) {
-    if (llvm::any_of(roots, [&](unsigned root) {
-          return namedSupplierRoots.count(root);
-        }))
-      continue;
-    // 6.50/9.7.1: an unspecified verification retention supply is anonymous
-    // and always on. It has real shared values, so queries and policy
-    // evaluation agree; HDL cannot turn this assumed supply off.
-    anonymousRoots.insert(roots.begin(), roots.end());
-    for (unsigned root : roots)
-      supplies.roots[root].writable = false;
-  }
+  auto anonymous =
+      session.anonymousRetentionRoots(supplies, functions, equivalences);
+  if (failed(anonymous))
+    return failure();
+  const auto &anonymousRoots = *anonymous;
+  for (unsigned root : anonymousRoots)
+    supplies.roots[root].writable = false;
   // Internal 6.43 suppliers contribute policy, but no additional public HDL
   // supply names or runtime lookups. Every function is associated with the
   // existing primary function, so it also introduces no physical supply root.
@@ -3178,18 +3425,10 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
             : builder.getStringAttr(domain.isolationTop),
         FlatSymbolRefAttr{}, domain.isolationUseFunctionalEquivalence);
   }
-  for (const auto &declaration : session.supplyEquivalences) {
-    SmallVector<Attribute> objects;
-    if (!declaration.sets.empty())
-      for (const auto &name : declaration.sets)
-        objects.push_back(FlatSymbolRefAttr::get(module.getContext(), name));
-    else
-      for (const auto &supply : declaration.supplies)
-        objects.push_back(supplySymbol(rootFor(supply)));
-    upf::UPFSupplyEquivalenceOp::create(
-        builder, declaration.location.value_or(module.getLoc()),
-        builder.getArrayAttr(objects), declaration.kind);
-  }
+  session.emitSupplyEquivalences(builder, module.getLoc(),
+                                 [&](const SupplyObject &supply) {
+                                   return supplySymbol(rootFor(supply));
+                                 });
   if (failed(normalizeUPFSupplyEquivalences(module)))
     return failure();
   if (failed(resolveUPFDomainExtents(module)))

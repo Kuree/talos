@@ -1,0 +1,35 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-composite-functional.test %t
+// RUN: %split-file %s %t/errors
+// RUN: not talos --upf %t/errors/ni.upf -emit-slang %t/design.sv -o - 2>&1 | FileCheck %s
+// RUN: not talos --upf %t/errors/none.upf -emit-slang %t/design.sv -o - 2>&1 | FileCheck %s
+// RUN: not talos --upf %t/errors/required.upf -emit-slang %t/design.sv -o - 2>&1 | FileCheck %s --check-prefix=REQUIRED
+// RUN: not talos --upf %t/errors/diamond.upf -emit-slang %t/design.sv -o - 2>&1 | FileCheck %s
+// Non-interchangeable functional evidence and mismatched required bias cannot
+// validate composition. Constraints are checked before implicit propagation.
+// CHECK: composite primary supplies are not electrically equivalent or declared functionally equivalent and interchangeable
+// REQUIRED: declared equivalent supply sets require identical required functions
+
+//--- base.upf
+foreach name {PA PB G} {create_supply_net $name}
+create_supply_set A -function {power PA} -function {ground G}
+create_supply_set B -function {power PB} -function {ground G}
+create_power_domain P -elements a -supply {primary A}
+create_power_domain Q -elements b -supply {primary B}
+//--- ni.upf
+source [file join [file dirname [info script]] base.upf]
+set_equivalent -function_only -interchangeable FALSE -sets {A B}
+create_composite_domain C -subdomains {P Q} -supply {primary A}
+//--- none.upf
+source [file join [file dirname [info script]] base.upf]
+create_composite_domain C -subdomains {P Q} -supply {primary A}
+//--- required.upf
+source [file join [file dirname [info script]] base.upf]
+set_equivalent -function_only -sets {A B}
+create_composite_domain C -subdomains {P Q} -supply {primary A}
+add_power_state B -state {BIAS -supply_expr {power == FULL_ON && ground == FULL_ON && nwell == FULL_ON} -simstate NORMAL}
+//--- diamond.upf
+source [file join [file dirname [info script]] base.upf]
+create_power_domain Base -elements c
+create_composite_domain Left -subdomains {P Base} -supply {primary A}
+create_composite_domain Right -subdomains {Q Base} -supply {primary B}

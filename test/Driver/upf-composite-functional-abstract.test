@@ -1,0 +1,49 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O3 --mlir-verify-each %t/design.sv -o %t.native && %t.native | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc && %t.bc | FileCheck %s
+// RUN: not talos --upf %t/missing.upf -emit-slang %t/design.sv -o - 2>&1 | FileCheck %s --check-prefix=ERROR
+// RUN: not talos --upf %t/self.upf -emit-slang %t/design.sv -o - 2>&1 | FileCheck %s --check-prefix=SELF
+// RUN: not talos --upf %t/cycle.upf -emit-slang %t/design.sv -o - 2>&1 | FileCheck %s --check-prefix=CYCLE
+// Named abstract suppliers retain independent identities, including after
+// self-alias updates and source-free alias cycles. They are not free primaries.
+// CHECK: abstract functional composite passed
+// ERROR: composite primary supplies are not electrically equivalent or declared functionally equivalent and interchangeable
+// SELF: composite primary supplies are not electrically equivalent or declared functionally equivalent and interchangeable
+// SELF-SAME: function power
+// CYCLE: composite primary supplies are not electrically equivalent or declared functionally equivalent and interchangeable
+// CYCLE-SAME: function power
+
+//--- design.sv
+module top;
+  import UPF::*;
+  initial begin
+    if (!supply_on("/top/A.power",1.0) || !supply_on("/top/B.power",1.0) ||
+        !supply_on("/top/A.ground",0.0) || !supply_on("/top/B.ground",0.0)) $fatal(1,"supplies");
+    if (get_supply_state(get_supply_value("/top/C.primary.power")) != FULL_ON)
+      $fatal(1,"unbound composite");
+    $display("abstract functional composite passed"); $finish;
+  end
+endmodule
+//--- base.upf
+create_supply_set A
+create_supply_set B
+create_power_domain P -elements {} -supply {primary A}
+create_power_domain Q -elements {} -supply {primary B}
+create_composite_domain C -subdomains {P Q}
+//--- design.upf
+source [file join [file dirname [info script]] base.upf]
+create_supply_set A -update -function {power A.power}
+set_equivalent -function_only -sets {A B}
+//--- missing.upf
+source [file join [file dirname [info script]] base.upf]
+//--- self.upf
+source [file join [file dirname [info script]] base.upf]
+create_supply_set A -update -function {ground B.ground} -function {power A.power}
+//--- cycle.upf
+source [file join [file dirname [info script]] base.upf]
+create_supply_set A -update -function {power B.power}
+create_supply_set B -update -function {power A.power}
+create_supply_set A -update -function {ground B.ground}
+create_supply_set D -function {ground B.ground}
+create_composite_domain C -update -supply {primary D}

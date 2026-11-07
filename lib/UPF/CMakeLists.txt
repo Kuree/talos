@@ -7,6 +7,7 @@ add_mlir_library(TalosUPF
   PortDesignAttributes.cpp
   DesignAttributeBehavior.cpp
   DomainExtent.cpp
+  CompositeDomains.cpp
   BooleanExpression.cpp
   SupplyExpression.cpp
   PowerState.cpp

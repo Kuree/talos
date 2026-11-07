@@ -13,7 +13,8 @@
 using namespace mlir;
 namespace talos {
 LogicalResult normalizeUPFSupplyEquivalences(ModuleOp module) {
-  if (module.getOps<upf::UPFSupplyEquivalenceOp>().empty())
+  bool hasEquivalences = !module.getOps<upf::UPFSupplyEquivalenceOp>().empty();
+  if (!hasEquivalences && module.getOps<upf::UPFCompositeDomainOp>().empty())
     return success();
   bool encoded = native::has<native::PartitionManifests>(module) ||
                  native::has<native::PhysicalPartitionManifest>(module) ||
@@ -33,6 +34,10 @@ LogicalResult normalizeUPFSupplyEquivalences(ModuleOp module) {
   SupplyRelations relations(module);
   if (failed(relations.initialize()))
     return failure();
+  if (failed(validateUPFCompositeDomains(module, relations)))
+    return failure();
+  if (!hasEquivalences)
+    return success();
   auto roots = relations.supplies();
   llvm::StringMap<unsigned> indices;
   for (auto [index, supply] : llvm::enumerate(roots)) {

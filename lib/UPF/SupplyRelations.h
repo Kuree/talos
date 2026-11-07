@@ -12,13 +12,20 @@ namespace talos {
 class SupplyRelations {
 public:
   using Kind = upf::SupplyEquivalenceKind;
+  enum class InitialValues { Check, Defer };
   explicit SupplyRelations(mlir::ModuleOp module) : module(module) {}
-  mlir::LogicalResult initialize();
+  // Only pre-propagation source snapshots may defer placeholder initial values.
+  // Every final source/raw-IR consumer checks the actual resolved values.
+  mlir::LogicalResult
+  initialize(InitialValues initialValues = InitialValues::Check);
   bool matches(mlir::FlatSymbolRefAttr a, mlir::FlatSymbolRefAttr b, Kind kind,
                bool pgOnly) const;
   llvm::ArrayRef<upf::UPFSupplyOp> supplies() const { return roots; }
   unsigned electricalLeader(unsigned index) const {
     return electrical.findLeader(index);
+  }
+  unsigned interchangeableLeader(unsigned index) const {
+    return interchangeable.findLeader(index);
   }
 
 private:
@@ -34,5 +41,8 @@ private:
   unsigned root(mlir::Attribute reference) const;
   const llvm::IntEqClasses &classes(Kind kind) const;
 };
+mlir::LogicalResult
+validateUPFCompositeDomains(mlir::ModuleOp module,
+                            const SupplyRelations &relations);
 } // namespace talos
 #endif

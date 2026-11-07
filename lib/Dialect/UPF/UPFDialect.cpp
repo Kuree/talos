@@ -272,36 +272,19 @@ UPFCompositeDomainOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
           mlir::FlatSymbolRefAttr::get(getContext(), getSymName()))
     return emitOpError(
         "composite primary must reference its own supply-set handle");
-  llvm::SmallVector<mlir::Attribute> work(getSubdomains().getValue());
-  llvm::DenseSet<mlir::Operation *> seen;
-  while (!work.empty()) {
-    auto ref = mlir::cast<mlir::FlatSymbolRefAttr>(work.pop_back_val());
+  // Global cycles and equivalence need one module-wide relation analysis.
+  // Keep symbol verification independent of normalization and compiler passes.
+  for (auto value : getSubdomains()) {
+    auto ref = mlir::cast<mlir::FlatSymbolRefAttr>(value);
     auto *child = lookupDomain(symbols, *this, ref);
     if (!child)
       return emitOpError("references an unknown composite subdomain: ") << ref;
     if (child == getOperation())
       return emitOpError("cycle in composite domain composition");
-    if (!seen.insert(child).second)
-      continue;
-    if (auto container = mlir::dyn_cast<UPFCompositeDomainOp>(child))
-      work.append(container.getSubdomains().begin(),
-                  container.getSubdomains().end());
     auto childPrimary = domainPrimary(child);
-    if (!childPrimary)
+    if (!childPrimary ||
+        !symbols.lookupNearestSymbolFrom<UPFSupplySetOp>(child, childPrimary))
       return emitOpError("subdomain requires a resolved primary supply set");
-    auto supply =
-        symbols.lookupNearestSymbolFrom<UPFSupplySetOp>(child, childPrimary);
-    if (!supply)
-      return emitOpError("subdomain requires a resolved primary supply set");
-    if (primary.getRequired().size() != supply.getRequired().size() ||
-        !llvm::all_of(primary.getRequired(), [&](mlir::Attribute function) {
-          auto name = mlir::cast<mlir::StringAttr>(function).getValue();
-          return llvm::is_contained(supply.getRequired(), function) &&
-                 primary.getFunctions().get(name) ==
-                     supply.getFunctions().get(name);
-        }))
-      return emitOpError("composite and subdomain primary required functions "
-                         "must be electrically equivalent");
   }
   return mlir::success();
 }

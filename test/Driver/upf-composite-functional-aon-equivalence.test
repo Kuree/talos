@@ -1,0 +1,8 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-composite-functional-aon.test %t
+// RUN: talos --upf %t/free-fi.upf -O3 --mlir-verify-each %t/design.sv -o %t.native && %t.native | FileCheck %S/upf-composite-functional-aon.test
+// RUN: talos --upf %t/free-fi.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc && %t.bc | FileCheck %S/upf-composite-functional-aon.test
+// RUN: talos --upf %t/free-fi.upf -DWRITE -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.protected
+// RUN: not %t.protected 2>&1 | FileCheck %S/upf-composite-functional-aon.test --check-prefix=PROTECTED
+// Provisional OFF on a free placeholder is not a final known initial value.
+// Its asserted I relation remains valid after inheriting the protected source.

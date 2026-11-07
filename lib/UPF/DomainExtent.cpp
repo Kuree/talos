@@ -15,6 +15,8 @@
 using namespace mlir;
 namespace talos {
 LogicalResult resolveUPFDomainExtents(ModuleOp module) {
+  if (failed(validateUPFCompositeDomains(module)))
+    return failure();
   if (module.getOps<upf::UPFDomainOp>().empty())
     return success();
   size_t work = 0;

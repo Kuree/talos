@@ -1,0 +1,54 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/unbound.upf -O3 --mlir-verify-each %t/design.sv -o %t.native && %t.native | FileCheck %s
+// RUN: talos --upf %t/unbound.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc && %t.bc | FileCheck %s
+// RUN: not talos --upf %t/conflict.upf -emit-slang %t/design.sv -o - 2>&1 | FileCheck %s --check-prefix=ERROR
+// RUN: not talos --upf %t/functional.upf -emit-slang %t/design.sv -o - 2>&1 | FileCheck %s --check-prefix=INITIAL
+// RUN: talos --upf %t/unbound.upf -DWRITE -O3 --mlir-verify-each %t/design.sv -o %t.protected
+// RUN: not %t.protected 2>&1 | FileCheck %s --check-prefix=PROTECTED
+// An anonymous retention source is already constrained FULL_ON/read-only.
+// Composition cannot absorb it into an OFF supplied child's physical roots.
+// An unbound child inherits the protected source without altering its catalog.
+// CHECK: anonymous composite source preserved
+// ERROR: composite primary supplies are not electrically equivalent or declared functionally equivalent and interchangeable
+// PROTECTED: UPF supply control failed for
+// PROTECTED: anonymous composite source preserved
+// INITIAL: functional equivalence contradicts known initial supply values
+
+//--- design.sv
+module leaf(output logic q); always_comb q = 1; endmodule
+module top;
+  import UPF::*;
+  wire q; leaf dut(q);
+  initial begin
+    #1;
+    if (q !== 1'b1 || get_supply_state(get_supply_value("/top/P.primary.power")) != FULL_ON ||
+        get_supply_state(get_supply_value("/top/OWNER.R.retention_supply.ground")) != FULL_ON)
+      $fatal(1, "anonymous source lost");
+`ifdef WRITE
+    if (supply_off("/top/P.primary.power")) $fatal(1,"source became writable");
+`endif
+    $display("anonymous composite source preserved"); $finish;
+  end
+endmodule
+//--- base.upf
+create_power_domain OWNER -elements {}
+set_retention R -domain OWNER -no_retention
+//--- unbound.upf
+source [file join [file dirname [info script]] base.upf]
+create_power_domain P -elements dut
+create_composite_domain C -subdomains P -supply {primary OWNER.R.retention_supply}
+//--- conflict.upf
+source [file join [file dirname [info script]] base.upf]
+create_supply_net PN
+create_supply_net GN
+create_supply_set CORE -function {power PN} -function {ground GN}
+create_power_domain P -elements dut -supply {primary CORE}
+create_composite_domain C -subdomains P -supply {primary OWNER.R.retention_supply}
+//--- functional.upf
+source [file join [file dirname [info script]] conflict.upf]
+set_equivalent -function_only -sets {C.primary P.primary}
+//--- free-fi.upf
+source [file join [file dirname [info script]] unbound.upf]
+set_equivalent -function_only -nets {P.primary.power OWNER.R.retention_supply.power}
+set_equivalent -function_only -nets {P.primary.ground OWNER.R.retention_supply.ground}

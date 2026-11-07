@@ -63,7 +63,7 @@ bool SupplyRelations::matches(FlatSymbolRefAttr a, FlatSymbolRefAttr b,
   }
   return true;
 }
-LogicalResult SupplyRelations::initialize() {
+LogicalResult SupplyRelations::initialize(InitialValues initialValues) {
   for (auto supply : module.getOps<upf::UPFSupplyOp>()) {
     if (!charge() ||
         !indices.try_emplace(supply.getSymName(), roots.size()).second)
@@ -174,14 +174,18 @@ LogicalResult SupplyRelations::initialize() {
       !project(setFunctional, Kind::Functional))
     return module.emitError(
         "supply relation projection exceeds 1048576 work units");
-  std::map<unsigned, uint64_t> constants;
-  for (auto supply : roots) {
-    unsigned group = functional.findLeader(indices.lookup(supply.getSymName()));
-    auto [entry, inserted] = constants.emplace(group, supply.getInitialValue());
-    if (!inserted && upf::conflictingInitialSupplyValues(
-                         entry->second, supply.getInitialValue()))
-      return supply.emitError(
-          "functional equivalence contradicts known initial supply values");
+  if (initialValues == InitialValues::Check) {
+    std::map<unsigned, uint64_t> constants;
+    for (auto supply : roots) {
+      unsigned group =
+          functional.findLeader(indices.lookup(supply.getSymName()));
+      auto [entry, inserted] =
+          constants.emplace(group, supply.getInitialValue());
+      if (!inserted && upf::conflictingInitialSupplyValues(
+                           entry->second, supply.getInitialValue()))
+        return supply.emitError(
+            "functional equivalence contradicts known initial supply values");
+    }
   }
   for (auto declaration : declarations) {
     if (declaration.getKind() != Kind::Functional)

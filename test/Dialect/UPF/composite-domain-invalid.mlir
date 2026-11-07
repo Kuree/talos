@@ -1,4 +1,4 @@
-// RUN: talos-opt %s --split-input-file --verify-diagnostics
+// RUN: talos-opt %s --split-input-file --normalize-upf-equivalences --verify-diagnostics
 module {
   // expected-error @+1 {{composite subdomain references must be unique}}
   upf.composite_domain @C subdomains [@P, @P] primary @primary
@@ -43,7 +43,7 @@ module {
   upf.supply_set @c functions #f required ["power", "ground"] {owner = @C}
   upf.supply_set @p functions #other required ["power", "ground"] {owner = @P}
   upf.domain @P elements [] power @s on [] {primary = @p, ground = @r}
-  // expected-error @+1 {{composite and subdomain primary required functions must be electrically equivalent}}
+  // expected-error @+1 {{composite and subdomain primaries must be electrically equivalent or functionally equivalent and interchangeable}}
   upf.composite_domain @C subdomains [@P] primary @c
 }
 
