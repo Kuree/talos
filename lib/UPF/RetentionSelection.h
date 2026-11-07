@@ -15,6 +15,7 @@ public:
   unsigned rank(upf::RetentionAttr strategy, const RetentionRegister &reg,
                 bool &partial);
   void record(const RetentionRegister &reg);
+  mlir::LogicalResult validateContext(const RetentionRegister &reg);
   mlir::LogicalResult validate();
 
 private:

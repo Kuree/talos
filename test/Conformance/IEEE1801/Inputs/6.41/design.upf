@@ -1,5 +1,5 @@
 create_supply_net VDD
 create_supply_net VSS
 create_supply_set CORE -function {power VDD} -function {ground VSS}
-set_design_attributes -elements dut/mac -attribute {UPF_is_hard_macro TRUE}
+set_design_attributes -models leaf -attribute {UPF_is_hard_macro TRUE}
 create_power_domain PD -elements dut -supply {primary CORE}

@@ -15,6 +15,40 @@
 #define GET_OP_CLASSES
 #include "talos/Dialect/UPF/UPFOps.cpp.inc"
 namespace talos::upf {
+bool isDesignAttributeModelOnly(llvm::StringRef name) {
+  return name == "UPF_is_hard_macro" || name == "UPF_is_soft_macro" ||
+         name == "UPF_is_power_aware_model" || name == "UPF_switch_cell_type";
+}
+bool isPortAttributeName(llvm::StringRef name) {
+  return llvm::is_contained(
+      llvm::ArrayRef<llvm::StringRef>{
+          "UPF_clamp_value", "UPF_sink_off_clamp_value",
+          "UPF_source_off_clamp_value", "UPF_pg_type", "UPF_related_power_port",
+          "UPF_related_ground_port", "UPF_related_bias_ports",
+          "UPF_driver_supply", "UPF_receiver_supply", "UPF_literal_supply",
+          "UPF_feedthrough", "UPF_unconnected", "UPF_is_isolated",
+          "UPF_is_analog"},
+      name);
+}
+bool isValidDesignAttributeValue(llvm::StringRef name, mlir::Attribute value) {
+  auto string = mlir::dyn_cast<mlir::StringAttr>(value);
+  if (!string || isPortAttributeName(name))
+    return false;
+  auto text = string.getValue();
+  if (name == "UPF_is_hard_macro" || name == "UPF_is_soft_macro" ||
+      name == "UPF_is_power_aware_model")
+    return text == "TRUE" || text == "FALSE";
+  if (name == "UPF_retention")
+    return symbolizeRetentionPurpose(text).has_value();
+  if (name == "UPF_switch_cell_type")
+    return text == "coarse_grain" || text == "fine_grain";
+  if (name == "UPF_simstate_behavior")
+    return llvm::is_contained(
+        llvm::ArrayRef<llvm::StringRef>{"ENABLE", "SIMSTATE_ONLY",
+                                        "PORT_CORR_ONLY", "DISABLE"},
+        text);
+  return true;
+}
 bool isStaticallyEmptyRetention(RetentionAttr strategy, mlir::Operation *from,
                                 mlir::SymbolTableCollection *symbols) {
   if (strategy.getDomainDefault())
@@ -76,11 +110,45 @@ mlir::LogicalResult UPFRetentionElementsOp::verify() {
   return mlir::success();
 }
 mlir::LogicalResult UPFDesignAttributesOp::verify() {
-  if (!getRetentionAttr() && !getHardMacro() && !getSoftMacro())
+  if (!getRetentionAttr() && !getHardMacro() && !getSoftMacro() &&
+      (!getPropertiesAttr() || getPropertiesAttr().empty()))
     return emitOpError("requires at least one design attribute");
   if ((getHardMacro() || getSoftMacro()) &&
       getElement().getKind() != RetentionElementKind::Instance)
     return emitOpError("a macro attribute requires an instance");
+  if (auto properties = getPropertiesAttr()) {
+    for (auto entry : properties)
+      if (!isValidDesignAttributeValue(entry.getName(), entry.getValue()))
+        return emitOpError("invalid design attribute property: ")
+               << entry.getName();
+      else if (isDesignAttributeModelOnly(entry.getName()) &&
+               getElement().getKind() != RetentionElementKind::Instance)
+        return emitOpError(
+            "model-derived property requires an instance target");
+    for (auto [name, flag] : {std::pair{"UPF_is_hard_macro", getHardMacro()},
+                              std::pair{"UPF_is_soft_macro", getSoftMacro()}})
+      if (auto value = properties.getAs<mlir::StringAttr>(name)) {
+        if (value.getValue() != "TRUE" && value.getValue() != "FALSE")
+          return emitOpError("invalid macro property value");
+        if ((value.getValue() == "TRUE") != flag)
+          return emitOpError("macro flag disagrees with its property");
+      }
+    if (auto value = properties.getAs<mlir::StringAttr>("UPF_retention"))
+      if (!getRetentionAttr() ||
+          stringifyRetentionPurpose(*getRetention()) != value.getValue())
+        return emitOpError("retention attribute disagrees with its property");
+  }
+  return mlir::success();
+}
+mlir::LogicalResult UPFModelAttributesOp::verify() {
+  if (getModel().empty() || getScope().empty() || getTop().empty())
+    return emitOpError("requires a model and declaration context");
+  if (getProperties().empty())
+    return emitOpError("requires at least one attribute");
+  for (auto entry : getProperties())
+    if (!isValidDesignAttributeValue(entry.getName(), entry.getValue()))
+      return emitOpError("invalid model attribute property: ")
+             << entry.getName();
   return mlir::success();
 }
 static mlir::Operation *lookupDomain(mlir::SymbolTableCollection &symbols,
@@ -658,6 +726,10 @@ mlir::LogicalResult UPFDomainOp::verify() {
           return emitOpError("domain element must not be empty");
   if (auto isolation = getIsolationControl(); isolation && isolation->empty())
     return emitOpError("isolation control must not be empty");
+  if (auto top = getIsolationTop();
+      top && (top->empty() || !getIsolationControl()))
+    return emitOpError("isolation context requires a nonempty design top and "
+                       "an isolation control");
   if (auto name = getIsolationName();
       name && (name->empty() || !getIsolationControl()))
     return emitOpError("isolation strategy name requires an isolation control");
@@ -754,9 +826,13 @@ mlir::LogicalResult RetentionAttr::verify(
     ExpressionAttr saveCondition, ExpressionAttr restoreCondition,
     ExpressionAttr condition, mlir::LocationAttr declaration,
     bool useRetentionAsPrimary, bool retentionSupplyCorrupt,
-    bool saveRestoreCorrupt) {
+    bool saveRestoreCorrupt, mlir::StringAttr top) {
   if (!name || name.getValue().empty() || !scope || scope.getValue().empty())
     return error() << "retention strategy requires a name and execution scope";
+  if (top && top.getValue().empty())
+    return error() << "retention context top cannot be empty";
+  if (top && !isWithinPath(scope.getValue(), top.getValue()))
+    return error() << "retention scope must be within its context top";
   mlir::ArrayAttr selectorLists[] = {elements, excluded};
   for (auto [index, selectors] : llvm::enumerate(selectorLists)) {
     if (!selectors || selectors.size() > 4096)

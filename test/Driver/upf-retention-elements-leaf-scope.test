@@ -17,16 +17,17 @@ endmodule
 `else
 (* UPF_is_hard_macro="TRUE" *)
 `endif
-module macro_model(input logic clk,d);
+(* UPF_simstate_behavior="SIMSTATE_ONLY" *)
+module macro_model(input logic clk,d,hold);
   logic q=0; always @(posedge clk) q<=d;
   leaf child(clk,d);
 endmodule
 module top;
   import UPF::*;
   logic clk=0,d=0,hold=0;
-  macro_model dut(clk,d);
+  macro_model dut(clk,d,hold);
   initial begin
-    if (!supply_on("/top/PD.primary.power") || !supply_on("/top/PD.primary.ground",0.0))
+    if (!supply_on("/top/dut/LOCAL.primary.power") || !supply_on("/top/dut/LOCAL.primary.ground",0.0))
       $fatal(1,"supplies");
     #1 d=1; clk=1;
     #1 hold=1; clk=0; d=0;
@@ -37,10 +38,12 @@ module top;
   end
 endmodule
 //--- macro.upf
-create_power_domain PD -elements dut
-set_retention DEFAULT -domain PD -retention_condition 0
-set_retention_elements G -elements dut
-set_retention SELECT -domain PD -elements G -retention_condition hold
+load_upf [file join [file dirname [info script]] macro-local.upf] -scope dut
+//--- macro-local.upf
+create_power_domain LOCAL -elements .
+set_retention DEFAULT -domain LOCAL -no_retention
+set_retention_elements G -elements .
+set_retention SELECT -domain LOCAL -elements G -retention_condition hold
 //--- scoped.sv
 module leaf(input logic clk,d);
   logic q=0; always @(posedge clk) begin : P q<=d; end

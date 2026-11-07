@@ -34,6 +34,19 @@ def UPFRetentionElementsOp : Op<UPFDialect, "retention_elements", [Symbol]> {
   let assemblyFormat = "$sym_name `scope` $scope `elements` $elements attr-dict";
   let hasVerifier = 1;
 }
+def UPFModelAttributesOp : Op<UPFDialect, "model_attributes", []> {
+  let summary = "source model attribute association and UPF declaration context";
+  let description = [{
+    Retains provenance of an immediate model association. Its resolved object
+    properties are recorded by design_attributes operations; this operation
+    must not be reapplied against later hierarchy or macro classifications.
+    Both annotations are compiler-only and consumed by UPF elaboration.
+  }];
+  let arguments = (ins StrAttr:$model, DictionaryAttr:$properties,
+      StrAttr:$scope, StrAttr:$top);
+  let assemblyFormat = "$model `properties` $properties `scope` $scope `top` $top attr-dict";
+  let hasVerifier = 1;
+}
 def UPFDesignAttributesOp : Op<UPFDialect, "design_attributes", []> {
   let summary = "resolved HDL object attributes used by UPF selection";
   let description = [{
@@ -45,7 +58,10 @@ def UPFDesignAttributesOp : Op<UPFDialect, "design_attributes", []> {
   let arguments = (ins UPFRetentionElementAttr:$element,
       OptionalAttr<UPFRetentionPurpose>:$retention,
       DefaultValuedAttr<BoolAttr, "false">:$hard_macro,
-      DefaultValuedAttr<BoolAttr, "false">:$soft_macro);
+      DefaultValuedAttr<BoolAttr, "false">:$soft_macro,
+      OptionalAttr<DictionaryAttr>:$properties,
+      OptionalAttr<StrAttr>:$scope,
+      OptionalAttr<StrAttr>:$top);
   let assemblyFormat = "$element attr-dict";
   let hasVerifier = 1;
 }
@@ -120,7 +136,9 @@ def UPFDomainOp : Op<UPFDialect, "domain", [Symbol,
       DefaultValuedAttr<BoolAttr, "true">:$isolation_diff_supply_only,
       OptionalAttr<StrArrayAttr>:$excluded_elements,
       OptionalAttr<UPFDomainExtentAttr>:$extent,
-      DefaultValuedAttr<BoolAttr, "false">:$atomic);
+      DefaultValuedAttr<BoolAttr, "false">:$atomic,
+      // Source authority for parent isolation placement across macro bounds.
+      OptionalAttr<StrAttr>:$isolation_top);
   let assemblyFormat = "$sym_name `elements` $elements `power` $power `on` $on attr-dict";
   let hasVerifier = 1;
   let extraClassDeclaration = [{

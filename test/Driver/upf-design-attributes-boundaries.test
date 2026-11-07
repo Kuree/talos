@@ -1,0 +1,43 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/late.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.late | FileCheck %s --check-prefix=LATE
+// RUN: talos --upf %t/early.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.early | FileCheck %s --check-prefix=EARLY
+// RUN: talos --upf %t/scoped.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.scoped | FileCheck %s --check-prefix=SCOPED
+// Late classification checks persistent intent against its original UPF
+// context. Visiting a scope alone leaves no persistent reference. A scoped
+// load's child authority is distinct from set_scope in an ancestor context.
+// LATE: late boundary rollback passed
+// EARLY: immediate boundary checks passed
+// SCOPED: scoped boundary authority passed
+
+//--- design.sv
+module leaf(input logic in,output logic out); assign out=in; endmodule
+module wrapper(input logic in,output logic out); leaf child(in,out); endmodule
+module top; logic in; wire a,b; wrapper dut(in,a); leaf other(in,b); endmodule
+//--- helper.upf
+proc expect_error {script pattern} {
+  if {[catch {uplevel 1 $script} message] != 1 || ![string match $pattern $message]} {
+    error "expected <$pattern>, got <$message>"
+  }
+}
+//--- late.upf
+source [file join [file dirname [info script]] helper.upf]
+create_power_domain INNER -elements dut/child
+expect_error {set_design_attributes -models wrapper -is_soft_macro} {*invalidates an earlier reference*}
+if {[find_objects . -pattern * -object_type inst -leaf_only -transitive] ne ""} {error "macro flag leaked"}
+puts "late boundary rollback passed"
+//--- early.upf
+source [file join [file dirname [info script]] helper.upf]
+set_design_attributes -models wrapper -is_soft_macro
+expect_error {set_design_attributes -elements dut/child -attribute {tag value}} {*crosses macro terminal boundary*}
+expect_error {set_design_attributes -elements other -exclude_elements dut/child -attribute {tag value}} {*crosses macro terminal boundary*}
+expect_error {create_power_domain INNER -elements dut/child} {*crosses macro terminal boundary*}
+set_design_attributes -elements dut/in -attribute {public_pin yes}
+puts "immediate boundary checks passed"
+//--- local.upf
+create_power_domain INNER -elements .
+create_power_domain CHILD -elements child
+//--- scoped.upf
+load_upf [file join [file dirname [info script]] local.upf] -scope dut
+set_design_attributes -models wrapper -is_soft_macro
+puts "scoped boundary authority passed"

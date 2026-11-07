@@ -318,6 +318,14 @@ LogicalResult RetentionSelection::initialize() {
     if (auto strategies = domain.getRetentionsAttr())
       for (auto attr : strategies) {
         auto strategy = cast<upf::RetentionAttr>(attr);
+        if (auto top = strategy.getTop()) {
+          auto root = scopeIDs.find(top.getValue());
+          auto scope = scopeIDs.find(strategy.getScope().getValue());
+          if (root == scopeIDs.end() || !scopes.lookup(root->second).instance ||
+              scope == scopeIDs.end() || !within(scope->second, root->second))
+            return domain.emitError("retention context does not reference a "
+                                    "declared design top and scope");
+        }
         for (auto selectors : {strategy.getElements(), strategy.getExcluded()})
           for (auto attr : selectors)
             if (auto selector = dyn_cast<upf::RetentionElementAttr>(attr))
@@ -413,6 +421,34 @@ unsigned RetentionSelection::rank(upf::RetentionAttr strategy,
 }
 void RetentionSelection::record(const RetentionRegister &reg) {
   states.push_back(reg);
+}
+LogicalResult
+RetentionSelection::validateContext(const RetentionRegister &reg) {
+  auto declaration = reg.declaration;
+  uint64_t scope = storageScopes.lookup(declaration.getId());
+  while (true) {
+    if (!charge())
+      return declaration.emitError(
+          "retention context checks exceed 1048576 work units");
+    auto node = scopes.lookup(scope);
+    auto element = upf::RetentionElementAttr::get(
+        module->getContext(), StringAttr::get(module->getContext(), node.path),
+        upf::RetentionElementKind::Instance);
+    auto annotation = annotations.lookup(element);
+    if (annotation &&
+        (annotation.getHardMacro() || annotation.getSoftMacro())) {
+      auto top = reg.strategy.getTop();
+      if (!top || !upf::isWithinPath(top.getValue(), node.path))
+        return declaration.emitError(
+            "ancestor retention inference within a macro terminal boundary is "
+            "not implemented; "
+            "retention must be specified in the macro's own UPF context");
+    }
+    if (!node.parent)
+      break;
+    scope = *node.parent;
+  }
+  return success();
 }
 namespace {
 StringRef statePath(const RetentionRegister &reg) {

@@ -21,6 +21,9 @@ executeUPF(mlir::ModuleOp module, llvm::ArrayRef<std::string> paths,
 std::unique_ptr<mlir::Pass> createElaborateUPFPass(bool preserveVPIStorage = true);
 /// Resolve aggregate domain selections into exclusive ownership boundaries.
 mlir::LogicalResult resolveUPFDomainExtents(mlir::ModuleOp module);
+/// Reject live behavior modes whose compiler consumers are not implemented.
+/// Shared by source execution and direct MLIR elaboration/publication passes.
+mlir::LogicalResult validateUPFDesignAttributeBehavior(mlir::ModuleOp module);
 std::unique_ptr<mlir::Pass> createResolveUPFDomainExtentsPass();
 /// Preserve synchronous event-time publications before optimizer cleanup.
 /// Run after unit lowering and again after UPF creates executable writers.

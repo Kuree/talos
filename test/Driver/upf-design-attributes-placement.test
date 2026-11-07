@@ -1,0 +1,64 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: not talos --upf %t/inside.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.inside 2>&1 | FileCheck %s --check-prefix=INSIDE
+// RUN: not talos --upf %t/late.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.late 2>&1 | FileCheck %s --check-prefix=INSIDE
+// RUN: talos --upf %t/outside.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.outside | FileCheck %s --check-prefix=OUTSIDE
+// RUN: not talos --upf %t/hard-inherited.upf -emit-sim %t/design.sv -o %t.bad 2>&1 | FileCheck %s --check-prefix=ANONYMOUS
+// RUN: not talos --upf %t/hard-parent.upf -emit-sim %t/design.sv -o %t.bad 2>&1 | FileCheck %s --check-prefix=PARENT
+// RUN: not talos --upf %t/disabled-alias.upf -emit-sim %t/design.sv -o %t.bad 2>&1 | FileCheck %s --check-prefix=DISABLED
+// The public-domain exception does not authorize insertion inside a macro.
+// Parent placement at the macro's own interface remains legal. Hard-macro
+// anonymous ownership must be handled before retention or atomic partitioning.
+// INSIDE: isolation placement crosses macro terminal boundary: top.w
+// OUTSIDE: external placement checks passed
+// ANONYMOUS: anonymous hard-macro power domains are not implemented
+// ANONYMOUS-NOT: collective retention
+// PARENT: hard macro cannot be explicitly selected in its parent's power domain
+// DISABLED: per-object disabled simstate semantics are not implemented
+
+//--- design.sv
+module leaf(input logic in,output logic out); assign out=in; endmodule
+module wrapper(input logic in,output logic out); leaf inner(in,out); endmodule
+module top;
+  logic in=0,iso=0,rtc=0,outside=0;
+  wire out;
+  wrapper w(in,out);
+  always @(posedge in) outside <= ~outside;
+  initial begin #1 in=1; #1 $finish; end
+endmodule
+//--- helper.upf
+proc expect_error {script pattern} {
+  if {[catch {uplevel 1 $script} message] != 1 || ![string match $pattern $message]} {
+    error "expected <$pattern>, got <$message>"
+  }
+}
+//--- inner-domain.upf
+create_power_domain PD -elements inner
+//--- whole-domain.upf
+create_power_domain PD -elements .
+create_power_domain EMPTY -elements inner -exclude_elements inner
+//--- inside.upf
+load_upf [file join [file dirname [info script]] inner-domain.upf] -scope w
+set_design_attributes -models wrapper -is_soft_macro
+set_isolation ISO -domain w/PD -applies_to outputs -location parent -isolation_signal iso -clamp_value 0
+//--- late.upf
+load_upf [file join [file dirname [info script]] inner-domain.upf] -scope w
+set_isolation ISO -domain w/PD -applies_to outputs -location parent -isolation_signal iso -clamp_value 0
+set_design_attributes -models wrapper -is_soft_macro
+//--- outside.upf
+load_upf [file join [file dirname [info script]] whole-domain.upf] -scope w
+set_design_attributes -models wrapper -is_soft_macro
+set_isolation ISO -domain w/PD -applies_to outputs -location parent -isolation_signal iso -clamp_value 0
+set_isolation DORMANT -domain w/EMPTY -applies_to outputs -location parent -isolation_signal iso -clamp_value 0
+puts "external placement checks passed"
+//--- hard-inherited.upf
+set_design_attributes -models wrapper -is_hard_macro -attribute {UPF_simstate_behavior SIMSTATE_ONLY}
+create_power_domain ALL -elements . -exclude_elements w -atomic
+set_retention_elements G -elements w
+set_retention RT -domain ALL -elements outside -retention_condition rtc
+//--- hard-parent.upf
+set_design_attributes -models wrapper -is_hard_macro -attribute {UPF_simstate_behavior SIMSTATE_ONLY}
+create_power_domain ALL -elements {. w}
+//--- disabled-alias.upf
+create_power_domain PD -elements w
+set_design_attributes -elements outside -attribute {UPF_simstate_behavior DISABLE}

@@ -189,6 +189,8 @@ struct PrepareUPFSnapshotPublicationsPass
     ModuleOp module = getOperation();
     if (failed(resolveUPFDomainExtents(module)))
       return signalPassFailure();
+    if (failed(validateUPFDesignAttributeBehavior(module)))
+      return signalPassFailure();
     if (!needsSnapshots(module)) {
       if (module.getOps<upf::UPFDomainOp>().empty())
         markAllAnalysesPreserved();

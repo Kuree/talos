@@ -11,6 +11,7 @@
 #include <vector>
 
 namespace talos {
+class DesignAttributes;
 /// Compiler-only queries over declared HDL objects. Keep source hierarchy
 /// components separate: an escaped HDL identifier can contain '.' or '/'.
 class DesignQuery {
@@ -23,10 +24,12 @@ public:
   std::string parent(llvm::StringRef path) const;
   bool isTop(llvm::StringRef path) const;
   mlir::Operation *process(llvm::StringRef path) const;
+  mlir::Operation *processBody(llvm::StringRef path) const;
   bool isNamedBlock(llvm::StringRef path) const;
+  bool isPort(llvm::StringRef path) const;
   int find(Tcl_Interp *interp, Tcl_Size objc, Tcl_Obj *const objv[],
            llvm::StringRef scope, llvm::StringRef top,
-           const SupplyPorts &supplyPorts) const;
+           const SupplyPorts &supplyPorts, DesignAttributes &attributes) const;
 
 private:
   struct Path {
@@ -47,6 +50,7 @@ private:
   std::map<std::string, Path> scopes;
   std::map<std::string, mlir::Operation *> processes;
   std::set<std::string> namedBlocks;
+  std::set<std::string> ports;
   std::vector<Object> objects;
 };
 } // namespace talos

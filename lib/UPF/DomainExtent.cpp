@@ -15,8 +15,14 @@ LogicalResult resolveUPFDomainExtents(ModuleOp module) {
   SmallVector<upf::UPFDomainOp> domains(module.getOps<upf::UPFDomainOp>());
   struct Selection {
     SmallVector<unsigned, 2> included, excluded;
+    upf::UPFDesignAttributesOp hardMacro;
   };
   std::map<StringRef, Selection, upf::InstancePathLess> selections;
+  if (!domains.empty())
+    for (auto annotation : module.getOps<upf::UPFDesignAttributesOp>())
+      if (annotation.getHardMacro())
+        selections[annotation.getElement().getPath().getValue()].hardMacro =
+            annotation;
   for (auto [index, domain] : llvm::enumerate(domains)) {
     for (auto element : domain.getElements())
       selections[cast<StringAttr>(element).getValue()].included.push_back(
@@ -63,6 +69,19 @@ LogicalResult resolveUPFDomainExtents(ModuleOp module) {
     bool excludesParent =
         parent && std::binary_search(selection.excluded.begin(),
                                      selection.excluded.end(), *parent);
+    // 6.20: hard macros never inherit their parent's physical owner. Until
+    // anonymous domains are represented, fail before applying parent-domain
+    // retention obligations or atomic minimum-extent checks to their state.
+    if (selection.hardMacro && parent) {
+      if (owner == parent)
+        return selection.hardMacro.emitError(
+            "hard macro cannot be explicitly selected in its parent's power "
+            "domain (IEEE 1801-2018 6.20)");
+      if (!owner)
+        return selection.hardMacro.emitError(
+            "anonymous hard-macro power domains are not implemented; the macro "
+            "needs a separate explicit power domain");
+    }
     // 5.7.2/6.20/8.3.3: atomic minimum extents are established before
     // non-atomic partitioning, after aggregate updates have been collapsed.
     // A tree sweep is equivalent: no explicit descendant claim can displace

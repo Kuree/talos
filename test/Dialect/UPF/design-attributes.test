@@ -1,0 +1,63 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/valid.mlir | talos-opt | FileCheck %s
+// RUN: talos-opt %t/invalid.mlir --split-input-file --verify-diagnostics
+// CHECK: upf.design_attributes <path = "top.dut", kind = instance>
+// CHECK-SAME: UPF_is_hard_macro = "FALSE"
+// CHECK-SAME: custom = "literal;$x"
+// CHECK: upf.model_attributes "leaf" properties
+// CHECK-SAME: scope "top" top "top"
+
+//--- valid.mlir
+module {
+  upf.design_attributes <path = "top.dut", kind = instance> {properties = {UPF_is_hard_macro = "FALSE", UPF_is_power_aware_model = "FALSE", custom = "literal;$x"}}
+  upf.model_attributes "leaf" properties {UPF_switch_cell_type = "fine_grain"} scope "top" top "top"
+}
+//--- invalid.mlir
+module {
+  // expected-error @+1 {{invalid design attribute property}}
+  upf.design_attributes <path = "top.dut", kind = instance> {properties = {UPF_simstate_behavior = "invalid"}}
+}
+// -----
+module {
+  // expected-error @+1 {{invalid design attribute property}}
+  upf.design_attributes <path = "top.dut", kind = instance> {properties = {UPF_is_power_aware_model = "invalid"}}
+}
+// -----
+module {
+  // expected-error @+1 {{invalid design attribute property}}
+  upf.design_attributes <path = "top.dut", kind = instance> {properties = {UPF_pg_type = "primary_power"}}
+}
+// -----
+module {
+  // expected-error @+1 {{model-derived property requires an instance target}}
+  upf.design_attributes <path = "top.q", kind = signal> {properties = {UPF_is_power_aware_model = "FALSE"}}
+}
+// -----
+module {
+  // expected-error @+1 {{macro flag disagrees with its property}}
+  upf.design_attributes <path = "top.dut", kind = instance> {properties = {UPF_is_hard_macro = "TRUE"}}
+}
+// -----
+module {
+  // expected-error @+1 {{retention attribute disagrees with its property}}
+  upf.design_attributes <path = "top.dut", kind = instance> {properties = {UPF_retention = "required"}}
+}
+// -----
+module {
+  // expected-error @+1 {{invalid model attribute property}}
+  upf.model_attributes "leaf" properties {UPF_switch_cell_type = "invalid"} scope "top" top "top"
+}
+// -----
+module {
+  // expected-error @+1 {{requires a model and declaration context}}
+  upf.model_attributes "leaf" properties {custom = "x"} scope "" top "top"
+}
+// -----
+// expected-error @+1 {{retention scope must be within its context top}}
+#bad = #upf.retention<name = "R", scope = "top", elements = [], excluded = [], retentionSupply = @ret, primarySupply = @primary, noRetention = true, top = "top.dut">
+// -----
+module {
+  upf.supply @p names ["/top/p"] writable = false
+  // expected-error @+1 {{isolation context requires a nonempty design top and an isolation control}}
+  upf.domain @PD elements ["top.box"] power @p on [] {isolation_top = "top"}
+}

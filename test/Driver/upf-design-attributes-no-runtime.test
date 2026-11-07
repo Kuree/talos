@@ -1,0 +1,17 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --top=top --upf %t/design.upf -emit-sim -O3 --mlir-verify-each %t/design.sv -o %t.sim
+// RUN: FileCheck %s --input-file=%t.sim --implicit-check-not=upf. --implicit-check-not=__upf_ --implicit-check-not=simulation.event.snapshot --implicit-check-not=simulation.power.nba
+// Metadata-only associations, including unused models and explicit FALSE,
+// require no runtime policy, snapshots, functions, storage or layout fields.
+// Valid non-string HDL custom constants must remain ordinary HDL admission.
+// CHECK: simulation.design
+
+//--- design.sv
+package constants; parameter int array[2]='{1,2}; endpackage
+(* vendor_delay=1.25, vendor_array=constants::array *) module top; logic q; endmodule
+module unused; endmodule
+//--- design.upf
+set_design_attributes -models unused -attribute {custom preserved}
+set_design_attributes -models top -is_hard_macro FALSE -is_soft_macro FALSE \
+  -is_power_aware_model FALSE -switch_cell_type fine_grain -attribute {custom {exact value}}

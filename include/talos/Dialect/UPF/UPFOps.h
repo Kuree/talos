@@ -37,6 +37,9 @@ inline llvm::ArrayRef<llvm::StringRef> getSupplyFunctionNames() {
 // must not activate retention machinery before physical-state inference.
 bool isStaticallyEmptyRetention(RetentionAttr strategy, mlir::Operation *from,
                                 mlir::SymbolTableCollection *symbols = nullptr);
+bool isDesignAttributeModelOnly(llvm::StringRef name);
+bool isPortAttributeName(llvm::StringRef name);
+bool isValidDesignAttributeValue(llvm::StringRef name, mlir::Attribute value);
 } // namespace talos::upf
 #define GET_OP_CLASSES
 #include "talos/Dialect/UPF/UPFOps.h.inc"

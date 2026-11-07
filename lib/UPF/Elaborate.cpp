@@ -1592,6 +1592,8 @@ struct ElaborateUPFPass
         getOperation().getOps<upf::UPFHierarchyOp>());
     SmallVector<upf::UPFRetentionElementsOp> retentionElements(
         getOperation().getOps<upf::UPFRetentionElementsOp>());
+    SmallVector<upf::UPFModelAttributesOp> modelAttributes(
+        getOperation().getOps<upf::UPFModelAttributesOp>());
     SmallVector<upf::UPFDesignAttributesOp> designAttributes(
         getOperation().getOps<upf::UPFDesignAttributesOp>());
     bool accesses = false;
@@ -1600,11 +1602,15 @@ struct ElaborateUPFPass
     });
     if (domains.empty() && composites.empty() && supplies.empty() &&
         sets.empty() && hierarchies.empty() && retentionElements.empty() &&
-        designAttributes.empty() && !accesses) {
+        modelAttributes.empty() && designAttributes.empty() && !accesses) {
       getOperation()->removeAttr(upf::partialOnTranslationName);
       return;
     }
     if (failed(resolveUPFDomainExtents(getOperation()))) {
+      signalPassFailure();
+      return;
+    }
+    if (failed(validateUPFDesignAttributeBehavior(getOperation()))) {
       signalPassFailure();
       return;
     }
@@ -1676,6 +1682,8 @@ struct ElaborateUPFPass
       hierarchy.erase();
     for (auto list : retentionElements)
       list.erase();
+    for (auto model : modelAttributes)
+      model.erase();
     for (auto annotation : designAttributes)
       annotation.erase();
     for (auto set : sets)

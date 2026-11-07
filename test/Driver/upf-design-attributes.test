@@ -1,0 +1,45 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.o0 && %t.o0 | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc3 && %t.bc3 | FileCheck %s
+// RUN: talos --upf %t/design.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.mlir
+// RUN: talos-opt %t.mlir | talos-opt | FileCheck %s --check-prefix=IR
+// Model and instance definitions resolve per property. Lists are projected
+// after all attributes, while required coverage still includes the other
+// instance's lower-priority domain strategy.
+// CHECK: design attribute retention passed
+// IR: upf.design_attributes <path = "top.a", kind = instance>
+// IR-SAME: UPF_retention = "optional"
+// IR: upf.design_attributes <path = "top.b", kind = instance>
+// IR-SAME: UPF_retention = "required"
+// IR: upf.model_attributes "attr_cell" properties
+// IR-SAME: UPF_retention = "required"
+// IR-SAME: scope "top" top "top"
+
+//--- design.sv
+module attr_cell(input logic clk,d,output logic q=0);
+  always @(posedge clk) q<=d;
+endmodule
+module top;
+  import UPF::*;
+  logic clk=0,d=0,hold=0;
+  wire a_q,b_q;
+  attr_cell a(clk,d,a_q),b(clk,d,b_q);
+  initial begin
+    if (!supply_on("/top/PD.primary.power") || !supply_on("/top/PD.primary.ground",0.0))
+      $fatal(1,"supplies");
+    #1 d=1; clk=1;
+    #1 hold=1; clk=0; d=0;
+    #1 clk=1;
+    #1;
+    if (a_q !== 1 || b_q !== 0) $fatal(1,"attribute precedence/list filtering");
+    $display("design attribute retention passed"); $finish;
+  end
+endmodule
+//--- design.upf
+create_power_domain PD -elements {a b}
+set_retention DEFAULT -domain PD -retention_condition 0
+set_retention_elements G -elements {a b} -applies_to optional -retention_purpose optional
+set_design_attributes -models attr_cell -attribute {UPF_retention required}
+set_design_attributes -elements a -attribute {UPF_retention optional}
+set_retention SELECT -domain PD -elements G -retention_condition hold

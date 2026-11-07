@@ -1,0 +1,54 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --top=top --upf %t/design.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.mlir | FileCheck %s --check-prefix=TCL
+// RUN: talos-opt %t.mlir | talos-opt | FileCheck %s --check-prefix=IR --implicit-check-not=uncommitted
+// Explicit FALSE is retained, unrelated later assignments do not supply
+// default FALSE, and errors leave all touched properties unchanged. Model
+// sources share precedence with HDL; an instance override is a higher layer.
+// TCL: attribute transactions passed
+// IR: upf.design_attributes <path = "top.a", kind = instance>
+// IR-SAME: UPF_is_hard_macro = "FALSE"
+// IR-SAME: UPF_retention = "optional"
+// IR-SAME: label = "value with spaces;$x"
+// IR: upf.design_attributes <path = "top.b", kind = instance>
+// IR-SAME: UPF_retention = "required"
+// IR: upf.model_attributes "spare" properties {custom = "preserved"}
+
+//--- design.sv
+package attr_data; parameter int values[2]='{1,2}; endpackage
+(* UPF_retention="required", vendor_delay=1.25, vendor_array=attr_data::values *)
+module attr_cell(input logic clk);
+  logic q=0; always @(posedge clk) q<=~q;
+endmodule
+module spare; endmodule
+module top;
+  logic clk=0;
+  attr_cell a(clk),b(clk);
+endmodule
+//--- design.upf
+proc expect_error {script pattern} {
+  if {[catch {uplevel 1 $script} message] != 1 || ![string match $pattern $message]} {
+    error "expected <$pattern>, got <$message>"
+  }
+}
+expect_error {set_design_attributes -attribute {a b}} {*requires exactly one*}
+expect_error {set_design_attributes -models attr_cell -elements a -attribute {a b}} {*requires exactly one*}
+expect_error {set_design_attributes -models attr_cell -exclude_elements a -attribute {a b}} {*requires -elements*}
+expect_error {set_design_attributes -models attr_cell} {*requires at least one attribute*}
+expect_error {set_design_attributes -models attr_cell -attribute {a}} {*requires {name value}*}
+expect_error {set_design_attributes -models absent -is_hard_macro} {*unknown design model*}
+expect_error {set_design_attributes -elements absent -attribute {a b}} {*unknown or unsupported*}
+expect_error {set_design_attributes -elements a -exclude_elements absent -attribute {a b}} {*unknown design attribute exclusion*}
+expect_error {set_design_attributes -elements a -is_hard_macro} {*model-only*}
+expect_error {set_design_attributes -models attr_cell -attribute {UPF_retention invalid}} {*invalid value*}
+expect_error {set_design_attributes -models attr_cell -attribute {UPF_pg_type primary_power}} {*requires set_port_attributes*}
+expect_error {set_design_attributes -models attr_cell -is_soft_macro -is_soft_macro} {*duplicate UPF option*}
+expect_error {set_design_attributes -models attr_cell -attribute {UPF_is_hard_macro TRUE} -is_hard_macro FALSE} {*conflicting values*}
+expect_error {set_design_attributes -models attr_cell -attribute {uncommitted model} -attribute {UPF_retention optional}} {*conflicting highest-precedence*}
+set_design_attributes -elements a -attribute {UPF_retention optional}
+expect_error {set_design_attributes -elements a -attribute {uncommitted instance} -attribute {UPF_retention required}} {*conflicting highest-precedence*}
+set_design_attributes -models attr_cell -attribute {UPF_retention required} -is_hard_macro FALSE
+set_design_attributes -elements {a b} -exclude_elements b \
+  -attribute {label {value with spaces;$x}} -attribute {label {value with spaces;$x}}
+set_design_attributes -models spare -attribute {custom preserved}
+puts "attribute transactions passed"

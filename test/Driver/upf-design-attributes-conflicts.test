@@ -1,0 +1,28 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/retry.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.retry | FileCheck %s
+// RUN: talos --upf %t/reverse.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.reverse | FileCheck %s
+// RUN: talos-opt %t.retry | FileCheck %s --check-prefix=IR
+// RUN: talos-opt %t.reverse | FileCheck %s --check-prefix=IR
+// Immediate commands validate the current highest definitions; a later
+// override cannot repair a command which has already raised TCL_ERROR. Catch,
+// override, retry and the reverse order converge without a source-order winner.
+// CHECK: immediate conflict recovery passed
+// IR: upf.design_attributes <path = "top.dut", kind = instance>
+// IR-SAME: custom = "instance"
+
+//--- design.sv
+(* custom="HDL" *) module leaf; endmodule
+module top; leaf dut(); endmodule
+//--- retry.upf
+if {![catch {set_design_attributes -models leaf -attribute {custom model}} message] ||
+    ![string match {*conflicting highest-precedence*} $message]} {error "expected current model conflict"}
+set_design_attributes -elements dut -attribute {custom instance}
+set_design_attributes -models leaf -attribute {custom model}
+set_design_attributes -models leaf -attribute {custom model}
+puts "immediate conflict recovery passed"
+//--- reverse.upf
+set_design_attributes -elements dut -attribute {custom instance}
+set_design_attributes -models leaf -attribute {custom model}
+set_design_attributes -models leaf -attribute {custom model}
+puts "immediate conflict recovery passed"

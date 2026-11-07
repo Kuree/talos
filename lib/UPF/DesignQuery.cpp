@@ -1,5 +1,6 @@
 #include "DesignQuery.h"
 #ifdef TALOS_ENABLE_UPF
+#include "DesignAttributes.h"
 #include "talos/Dialect/NamedProcess.h"
 #include "talos/Dialect/Slang/SlangOps.h"
 #include "talos/Dialect/Slang/SlangTypes.h"
@@ -407,6 +408,8 @@ DesignQuery::DesignQuery(ModuleOp module) {
             .Default(std::nullopt);
     if (!kind)
       return;
+    if (*kind == Kind::Port)
+      ports.insert(spelling.str());
     if (op->hasAttr("is_compiler_generated"))
       return;
     if (*kind == Kind::Process) {
@@ -479,14 +482,30 @@ Operation *DesignQuery::process(StringRef path) const {
   auto found = processes.find(path.str());
   return found == processes.end() ? nullptr : found->second;
 }
+Operation *DesignQuery::processBody(StringRef path) const {
+  auto *procedure = process(path);
+  if (!procedure)
+    return nullptr;
+  auto body =
+      getNamedProcessBody<slangir::TimedStatementOp, slangir::BlockStatementOp>(
+          cast<slangir::ProceduralBlockSymbolOp>(procedure));
+  return body ? body.getOperation() : nullptr;
+}
 bool DesignQuery::isNamedBlock(StringRef path) const {
   return namedBlocks.count(path.str());
+}
+bool DesignQuery::isPort(StringRef path) const {
+  return ports.count(path.str());
 }
 
 int DesignQuery::find(Tcl_Interp *interp, Tcl_Size objc, Tcl_Obj *const objv[],
                       StringRef scope, StringRef top,
-                      const SupplyPorts &supplyPorts) const {
+                      const SupplyPorts &supplyPorts,
+                      DesignAttributes &attributes) const {
   bool transitive = false, sawTransitive = false, ignoreCase = false;
+  bool traverseMacros = false;
+  enum class Leaves { All, Only, Exclude };
+  Leaves leaves = Leaves::All;
   enum class Style { Glob, Regexp, Exact };
   Style style = Style::Glob;
   std::map<std::string, Tcl_Obj *> options;
@@ -504,6 +523,15 @@ int DesignQuery::find(Tcl_Interp *interp, Tcl_Size objc, Tcl_Obj *const objv[],
       if (ignoreCase)
         return error(interp, "duplicate UPF option -ignore_case");
       ignoreCase = true;
+    } else if (option == "-non_leaf" || option == "-leaf_only") {
+      if (leaves != Leaves::All)
+        return error(interp, "find_objects leaf filters are mutually exclusive "
+                             "and cannot repeat");
+      leaves = option == "-leaf_only" ? Leaves::Only : Leaves::Exclude;
+    } else if (option == "-traverse_macros") {
+      if (traverseMacros)
+        return error(interp, "duplicate UPF option -traverse_macros");
+      traverseMacros = true;
     } else if (option == "-transitive") {
       if (sawTransitive)
         return error(interp, "duplicate UPF option -transitive");
@@ -524,6 +552,15 @@ int DesignQuery::find(Tcl_Interp *interp, Tcl_Size objc, Tcl_Obj *const objv[],
         return error(interp, "duplicate UPF option " + option);
     }
   }
+  if (traverseMacros) {
+    if (leaves != Leaves::All)
+      return error(interp,
+                   "-traverse_macros cannot be used with a leaf filter");
+    if (sawTransitive && !transitive)
+      return error(interp,
+                   "-traverse_macros cannot be used with -transitive FALSE");
+    transitive = true;
+  }
   StringRef requestedScope = spelling(objv[1]);
   if (requestedScope.starts_with('/') || requestedScope.starts_with(".."))
     return error(interp,
@@ -533,6 +570,12 @@ int DesignQuery::find(Tcl_Interp *interp, Tcl_Size objc, Tcl_Obj *const objv[],
   auto currentPath = Path::fromHDL(scope).keys();
   if (!isScope(base) || !prefix(basePath, currentPath))
     return error(interp, "find_objects scope not found");
+  if (!attributes.boundary(scope, top, true).empty())
+    return error(interp, "find_objects current scope is inside a macro outside "
+                         "this UPF context");
+  if (base != scope && attributes.insideLeaf(base, scope, true))
+    return error(interp, "find_objects cannot start at or below a leaf cell "
+                         "from the current scope");
   if (!options.count("-pattern"))
     return error(interp, "find_objects requires -pattern");
   StringRef pattern = spelling(options.at("-pattern"));
@@ -624,9 +667,34 @@ int DesignQuery::find(Tcl_Interp *interp, Tcl_Size objc, Tcl_Obj *const objv[],
                                Tcl_NewStringObj(name.data(), name.size()));
   };
   auto visit = [&](const Path &path, Operation *decl, StringRef model,
-                   bool selectable) -> int {
+                   bool selectable, StringRef declaredPath = {}) -> int {
     if (!prefix(path.keys(), basePath) || path.names.size() <= basePath.size())
       return TCL_OK;
+    std::string canonical = declaredPath.str();
+    // Convert only through the declared inventory; UPF escaping and HDL
+    // component spelling differ for escaped identifiers and array names.
+    auto name = names.find(path.keys());
+    if (name != names.end())
+      canonical = name->second;
+    else if (decl)
+      if (auto name = decl->getAttrOfType<StringAttr>("hierarchical_name"))
+        canonical = name.str();
+    bool port = !decl || isa<slangir::PortSymbolOp>(decl);
+    std::string owner = attributes.instance(canonical);
+    if (!traverseMacros) {
+      bool hidden = attributes.insideLeaf(canonical, base);
+      // A leaf's interface pin is HighConn and remains outside the leaf.
+      if (hidden &&
+          !(port && !owner.empty() && !attributes.insideLeaf(owner, base)))
+        return TCL_OK;
+    }
+    bool eligible = port || (decl && isa<slangir::InstanceSymbolOp>(decl));
+    if (eligible && leaves != Leaves::All &&
+        (attributes.leaf(owner) != (leaves == Leaves::Only)))
+      return TCL_OK;
+    if (attributes.exhausted())
+      return error(interp,
+                   "design attribute queries exceed 1048576 work units");
     for (const auto &components : patterns) {
       if (!match(path, components, {}, {}, true))
         continue;
@@ -710,7 +778,8 @@ int DesignQuery::find(Tcl_Interp *interp, Tcl_Size objc, Tcl_Obj *const objv[],
                                                           : 2;
       if (direction && *direction != value)
         continue;
-      if (visit(Path::fromHDL(spelling), nullptr, {}, false) != TCL_OK)
+      if (visit(Path::fromHDL(spelling), nullptr, {}, false, spelling) !=
+          TCL_OK)
         return TCL_ERROR;
     }
   } else {

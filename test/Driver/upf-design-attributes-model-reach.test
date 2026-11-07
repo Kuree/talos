@@ -1,0 +1,58 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/local.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.local | FileCheck %s --check-prefix=LOCAL
+// RUN: talos --upf %t/outside.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.outside | FileCheck %s --check-prefix=OUTSIDE
+// RUN: talos --upf %t/hard.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.hard | FileCheck %s --check-prefix=HARD
+// RUN: talos --upf %t/private.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.private
+// RUN: talos-opt %t.private | FileCheck %s --check-prefix=IR
+// Local-model declarations reach every eligible instance in designs/soft
+// macros, while an outside-model command has context-limited reach. Hard
+// crossings require the scoped UPF design top to be inside that boundary.
+// LOCAL: local model reach passed
+// OUTSIDE: outside model boundary passed
+// HARD: hard model boundary passed
+// IR: upf.design_attributes <path = "top.box.child", kind = instance> {properties = {private = "allowed"}}
+// IR: upf.design_attributes <path = "top.outside", kind = instance> {properties = {private = "allowed"}}
+// IR: upf.design_attributes <path = "top.peer", kind = instance>
+// IR-NOT: path = "top.peer.child"
+
+//--- design.sv
+module leaf; endmodule
+module wrapper; leaf child(); endmodule
+module top; wrapper box(),peer(); leaf outside(); endmodule
+//--- helper.upf
+proc expect_error {script pattern} {
+  if {[catch {uplevel 1 $script} message] != 1 || ![string match $pattern $message]} {
+    error "expected <$pattern>, got <$message>"
+  }
+}
+//--- local.upf
+set_scope outside
+set_design_attributes -models . -attribute {shared local}
+set_scope /
+set_design_attributes -models wrapper -is_soft_macro
+if {[find_objects . -pattern * -object_type inst -leaf_only] ne "box peer"} {error "local reach"}
+# Omitted flags in another local-model declaration must not clear the macro.
+load_upf [file join [file dirname [info script]] wrapper.upf] -scope box
+if {[find_objects . -pattern * -object_type inst -leaf_only] ne "box peer"} {error "omitted flag reset"}
+puts "local model reach passed"
+//--- wrapper.upf
+set_design_attributes -models . -attribute {UPF_retention optional}
+//--- outside.upf
+source [file join [file dirname [info script]] helper.upf]
+set_design_attributes -models leaf -attribute {shared outside}
+expect_error {set_design_attributes -models wrapper -is_soft_macro} {*invalidates an earlier reference*}
+puts "outside model boundary passed"
+//--- hard.upf
+source [file join [file dirname [info script]] helper.upf]
+set_scope outside
+set_design_attributes -models . -attribute {shared local}
+set_scope /
+expect_error {set_design_attributes -models wrapper -is_hard_macro} {*invalidates an earlier reference*}
+puts "hard model boundary passed"
+//--- private.upf
+set_design_attributes -models wrapper -is_hard_macro -attribute {UPF_simstate_behavior SIMSTATE_ONLY}
+load_upf [file join [file dirname [info script]] private-child.upf] -scope box
+//--- private-child.upf
+set_scope child
+set_design_attributes -models . -attribute {private allowed}

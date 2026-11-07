@@ -7726,12 +7726,15 @@ private:
       if (!node.name.empty())
         SET_OP_ATTR(Name, builder.getStringAttr(node.name));
       SET_OP_ATTR(HierarchicalName, builder.getStringAttr(getSymbolPath(node)));
+    }
+    if constexpr (std::derived_from<Node, slang::ast::Symbol> ||
+                  std::derived_from<Node, slang::ast::Statement>) {
       // Preserve semantic attribute values on their actual owner. UPF model
       // attributes and instance overlays have different precedence; do not
       // recover them from source text or copy them onto inferred registers.
       NamedAttrList powerAttributes;
       for (const auto *attribute : compilation.getAttributes(node))
-        if (attribute->name == "UPF_retention" ||
+        if (enableUPF || attribute->name == "UPF_retention" ||
             attribute->name == "UPF_is_hard_macro" ||
             attribute->name == "UPF_is_soft_macro") {
           // A string literal in an untyped constant expression can be a
@@ -7739,10 +7742,18 @@ private:
           const auto &constant = attribute->getValue();
           auto value = constant.hasUnknown() ? slang::ConstantValue{}
                                              : constant.convertToStr();
+          bool predefined = attribute->name == "UPF_retention" ||
+                            attribute->name == "UPF_simstate_behavior" ||
+                            attribute->name == "UPF_is_hard_macro" ||
+                            attribute->name == "UPF_is_soft_macro" ||
+                            attribute->name == "UPF_is_power_aware_model" ||
+                            attribute->name == "UPF_switch_cell_type";
           powerAttributes.set(
               attribute->name,
               value.isString() ? Attribute(builder.getStringAttr(value.str()))
-                               : Attribute(builder.getUnitAttr()));
+              : predefined
+                  ? Attribute(builder.getUnitAttr())
+                  : Attribute(builder.getStringAttr(formatConstant(constant))));
         }
       if (!powerAttributes.empty())
         attrs.set("hdl_power_attributes",

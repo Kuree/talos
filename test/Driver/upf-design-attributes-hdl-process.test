@@ -1,0 +1,24 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -emit-slang --mlir-verify-each %t/body.sv -o %t.body
+// RUN: talos-opt %t.body | FileCheck %s
+// RUN: not talos --upf %t/design.upf -emit-slang %t/conflict.sv -o %t.bad 2>&1 | FileCheck %s --check-prefix=CONFLICT
+// Symbol and outer statement attributes bind the same logical whole process.
+// Import semantic values from Slang; do not recover them from source text.
+// CHECK: upf.design_attributes <path = "top.P", kind = process>
+// CHECK-SAME: UPF_retention = "optional"
+// CONFLICT: conflicting highest-precedence HDL design attribute UPF_retention on top.P
+
+//--- design.upf
+upf_version 3.1
+//--- body.sv
+module top;
+  logic clk=0,q=0;
+  always @(posedge clk) (* UPF_retention="optional" *) begin : P q<=~q; end
+endmodule
+//--- conflict.sv
+module top;
+  logic clk=0,q=0;
+  (* UPF_retention="required" *) always @(posedge clk)
+    (* UPF_retention="optional" *) begin : P q<=~q; end
+endmodule

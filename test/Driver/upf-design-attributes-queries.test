@@ -1,0 +1,53 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.mlir | FileCheck %s
+// RUN: talos-opt %t.mlir | talos-opt -o /dev/null
+// Macro assignment affects the next query. Earlier expansions remain values;
+// HighConn pins remain visible at a leaf, and traversal is explicitly opt-in.
+// CHECK: immediate attribute queries passed
+
+//--- design.sv
+module leaf(input logic in, output logic out);
+  logic q;
+  always_comb begin : P q=in; out=q; end
+endmodule
+module wrapper(input logic in, output logic out);
+  logic internal_data;
+  leaf child(in,internal_data);
+  assign out=internal_data;
+endmodule
+module top;
+  logic source;
+  wire a_out,b_out,d_out;
+  wrapper a(source,a_out),b(source,b_out);
+  leaf direct(source,d_out);
+endmodule
+//--- local.upf
+if {[find_objects . -pattern child -object_type inst] ne "child"} {
+  error "scoped macro UPF cannot see its child"
+}
+//--- design.upf
+proc expect_error {script pattern} {
+  if {[catch {uplevel 1 $script} message] != 1 || ![string match $pattern $message]} {
+    error "expected <$pattern>, got <$message>"
+  }
+}
+set early [find_objects . -pattern * -object_type inst -transitive]
+if {$early ne "a a/child b b/child direct"} {error "initial hierarchy <$early>"}
+# Navigation has no persistent effect to invalidate when classification changes.
+set_scope a/child
+set_scope /
+set_design_attributes -models wrapper -is_soft_macro
+if {$early ne "a a/child b b/child direct"} {error "query result was recomputed"}
+if {[find_objects . -pattern * -object_type inst -transitive] ne "a b direct"} {error "macro traversal"}
+if {[find_objects . -pattern * -object_type inst -transitive -leaf_only] ne "a b"} {error "leaf filter"}
+if {[find_objects . -pattern * -object_type inst -transitive -non_leaf] ne "direct"} {error "nonleaf filter"}
+if {[find_objects . -pattern * -object_type inst -traverse_macros] ne $early} {error "explicit traversal"}
+if {[find_objects . -pattern a/in -object_type port -transitive -leaf_only] ne "a/in"} {error "HighConn pin"}
+if {[find_objects . -pattern * -object_type process -transitive] ne "direct/P"} {error "hidden process"}
+expect_error {find_objects a -pattern *} {*cannot start*leaf cell*}
+expect_error {set_scope a} {*cannot enter a leaf cell*}
+expect_error {find_objects . -pattern * -traverse_macros -non_leaf} {*cannot be used with a leaf filter*}
+expect_error {find_objects . -pattern * -transitive FALSE -traverse_macros} {*cannot be used with -transitive FALSE*}
+load_upf [file join [file dirname [info script]] local.upf] -scope a
+puts "immediate attribute queries passed"

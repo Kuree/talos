@@ -2,6 +2,7 @@
 // lookup.
 #include "BooleanExpression.h"
 #include "ControlReference.h"
+#include "DesignAttributes.h"
 #include "DesignQuery.h"
 #include "SupplyExpression.h"
 #include "SupplyNetwork.h"
@@ -32,7 +33,7 @@ namespace talos {
 #ifdef TALOS_ENABLE_UPF
 namespace {
 struct Retention {
-  std::string name, scope, retentionSupply, primarySupply;
+  std::string name, scope, top, retentionSupply, primarySupply;
   std::map<std::string, Attribute> elements, excluded;
   bool hasElements = false, noRetention = false, useRetentionAsPrimary = false;
   std::optional<bool> retentionSupplyCorrupt, saveRestoreCorrupt;
@@ -55,7 +56,7 @@ struct RetentionElements {
   std::optional<Location> location;
 };
 struct IsolationEdit {
-  std::string name, scope, control;
+  std::string name, scope, top, control;
   std::optional<Location> location;
   bool high = true, diffSupplyOnly = true;
   int64_t clamp = 0;
@@ -71,7 +72,7 @@ struct Domain {
   std::string inputPort, outputPort;
   std::optional<SupplyObject> inputSupply, outputSupply;
   std::string primary;
-  std::string isolationName;
+  std::string isolationName, isolationTop;
   SmallVector<Attribute> on, partial, errors;
   upf::SwitchStateAttr off;
   std::vector<std::string> elements, excluded, subdomains;
@@ -114,6 +115,14 @@ struct Session {
   Tcl_Interp *interp;
   bool allowHDLExpressions;
   DesignQuery queries;
+  std::unique_ptr<DesignAttributes> attributes;
+  bool attributesValid = false;
+  struct ReferenceFrame {
+    std::string scope, top, failure;
+    std::optional<Location> location;
+    SmallVector<DesignAttributes::Reference> references;
+  };
+  mutable std::vector<ReferenceFrame> referenceFrames;
   std::optional<upf::PartialOnTranslation> partialOnTranslation;
   std::string top, scope, file, designModule;
   std::map<std::string, Operation *> objects;
@@ -161,6 +170,8 @@ struct Session {
     if (tops.size() == 1)
       top = *tops.begin();
     scope = top;
+    attributes = std::make_unique<DesignAttributes>(module, objects, queries);
+    attributesValid = succeeded(attributes->initialize());
   }
   int error(const llvm::Twine &message) {
     Tcl_SetObjResult(interp, Tcl_NewStringObj(message.str().c_str(), -1));
@@ -217,7 +228,9 @@ struct Session {
     }
     return true;
   }
-  Location declarationLocation() {
+  Location declarationLocation() const {
+    if (!referenceFrames.empty() && referenceFrames.back().location)
+      return *referenceFrames.back().location;
     // Preserve the UPF call site for later MLIR elaboration diagnostics,
     // including commands invoked through Tcl procedures and source libraries.
     Tcl_InterpState saved = Tcl_SaveInterpState(interp, TCL_OK);
@@ -238,20 +251,60 @@ struct Session {
       }
     }
     Tcl_RestoreInterpState(interp, saved);
-    return FileLineColLoc::get(module.getContext(), path, std::max(1, line), 1);
+    Location result =
+        FileLineColLoc::get(module->getContext(), path, std::max(1, line), 1);
+    if (!referenceFrames.empty())
+      referenceFrames.back().location = result;
+    return result;
   }
   std::string object(StringRef name) const {
     std::string result = queries.resolve(name, scope, top);
-    if (objects.count(result))
-      return result;
     // Preserve the existing dotted-HDL extension for unambiguous names.
-    result = resolve(name);
-    if (objects.count(result))
-      return result;
-    return {};
+    if (!objects.count(result))
+      result = resolve(name);
+    if (!objects.count(result))
+      return {};
+    if (attributes)
+      if (auto macro = attributes->boundary(result, top); !macro.empty()) {
+        if (!referenceFrames.empty())
+          referenceFrames.back().failure =
+              "HDL reference crosses macro terminal boundary: " + result;
+        return {};
+      }
+    if (!referenceFrames.empty())
+      referenceFrames.back().references.push_back(
+          {result, scope, top, declarationLocation(), false});
+    return result;
   }
   std::string key(StringRef name) const { return resolve(name); }
+  // Terminal visibility belongs to the UPF object's stored creation scope,
+  // not to the spelling of its name or of a selected supply-set field.
+  // Public topmost objects can be referenced, but cannot be refined by an
+  // ancestor context (4.9.2.3). Compiler-internal lookups have no Tcl frame.
+  bool accessScope(StringRef owner, bool mutation = false) const {
+    if (referenceFrames.empty())
+      return true;
+    if (!attributes->boundary(owner, top, mutation).empty()) {
+      referenceFrames.back().failure =
+          (Twine(mutation ? "UPF refinement" : "UPF reference") +
+           " crosses macro terminal boundary: " + owner)
+              .str();
+      return false;
+    }
+    referenceFrames.back().references.push_back(
+        {owner.str(), scope, top, declarationLocation(), mutation});
+    return true;
+  }
   bool creationScope(StringRef path) {
+    if (auto macro = attributes->boundary(path, top, true); !macro.empty()) {
+      error("cannot create UPF objects inside a macro from an ancestor "
+            "context: " +
+            path);
+      return false;
+    }
+    if (!referenceFrames.empty())
+      referenceFrames.back().references.push_back(
+          {path.str(), scope, top, declarationLocation(), true});
     auto found = objects.find(path.str());
     if (found != objects.end() && found->second->getName().getStringRef() ==
                                       "slang.symbol.generate_block") {
@@ -272,18 +325,25 @@ struct Session {
         slash == StringRef::npos
             ? scope
             : resolve(slash == 0 ? StringRef("/") : name.take_front(slash));
-    return (owner.empty() ? std::string{} : absoluteSupplyHandle(owner)) + "/" +
-           local.str();
+    std::string result =
+        (owner.empty() ? std::string{} : absoluteSupplyHandle(owner)) + "/" +
+        local.str();
+    if (auto found = supplySets.find(result); found != supplySets.end())
+      if (!accessScope(found->second.scope))
+        return {};
+    return result;
   }
   std::optional<SupplyObject> supply(StringRef name,
                                      bool allowPort = false) const {
     std::string path = key(name);
     size_t slash = name.rfind('/');
     StringRef local = name.drop_front(slash == StringRef::npos ? 0 : slash + 1);
-    if (allowPort && !local.contains('.') && supplyPorts.count(path))
+    if (allowPort && !local.contains('.') && supplyPorts.count(path) &&
+        accessScope(StringRef(path).rsplit('.').first))
       return SupplyObject{SupplyObject::Port, path,
                           StringRef(path).rsplit('.').first.str()};
-    if (nets.count(path) && !local.contains('.'))
+    if (nets.count(path) && !local.contains('.') &&
+        accessScope(StringRef(path).rsplit('.').first))
       return SupplyObject{SupplyObject::Net, path,
                           StringRef(path).rsplit('.').first.str()};
     auto parts = name.rsplit('.');
@@ -464,6 +524,8 @@ struct Session {
       error("unknown power domain '" + value(options, "-domain") + "'");
       return nullptr;
     }
+    if (!accessScope(found->second.scope))
+      return nullptr;
     if (found->second.composite && !allowComposite) {
       error("this command on a composite domain is not implemented");
       return nullptr;
@@ -557,6 +619,15 @@ struct Session {
   int applyStrategy(Domain &dom, const RetentionEdit &edit,
                     bool pendingSuppliers = false) {
     const auto &delta = edit.intent;
+    if (auto macro = attributes->boundary(dom.scope, delta.top, true);
+        !macro.empty())
+      return error("retention strategy creation/refinement crosses macro "
+                   "terminal boundary: " +
+                   dom.scope);
+    if (!referenceFrames.empty())
+      referenceFrames.back().references.push_back(
+          {dom.scope, delta.scope, delta.top,
+           delta.location.value_or(module.getLoc()), true});
     auto found = dom.retentions.find(delta.name);
     if (found != dom.retentions.end() && !edit.update)
       return error("retention strategy already exists; use -update");
@@ -575,6 +646,7 @@ struct Session {
         return error("power domain exceeds 256 retention strategies");
       next.name = delta.name;
       next.scope = delta.scope;
+      next.top = delta.top;
       next.location = delta.location;
       next.sourceOrdinal = delta.sourceOrdinal;
       std::string stem =
@@ -672,6 +744,9 @@ struct Session {
   }
   int applyStrategy(Domain &dom, const IsolationEdit &edit,
                     bool pendingSuppliers = false) {
+    // Placement depends on final normalized extents, including exclusions and
+    // later domain updates. Preserve source authority for the shared preflight;
+    // journaling raw selectors here would invent effects in empty extents.
     std::string path =
         StringRef(dom.primary).drop_back(8).str() + "." + edit.name;
     if (dom.retentions.count(edit.name) || supplySets.count(path))
@@ -681,6 +756,7 @@ struct Session {
       return error("one isolation strategy per domain is supported");
     dom.isolation = edit.control;
     dom.isolationName = edit.name;
+    dom.isolationTop = edit.top;
     dom.isolationHigh = edit.high;
     dom.clamp = edit.clamp;
     dom.isolationDiffSupplyOnly = edit.diffSupplyOnly;
@@ -805,6 +881,8 @@ struct Session {
     for (auto &name : names) {
       std::string listName = retentionListKey(name);
       if (allowLists && retentionElements.count(listName)) {
+        if (!accessScope(retentionElements.at(listName).scope))
+          return false;
         target.emplace(listName,
                        FlatSymbolRefAttr::get(module.getContext(), listName));
         continue;
@@ -926,6 +1004,7 @@ struct Session {
     Retention next;
     next.name = name.str();
     next.scope = scope;
+    next.top = top;
     next.location = declarationLocation();
     next.sourceOrdinal = ++strategyOrdinal;
     auto selectors = [&](StringRef option, auto &target) {
@@ -1027,6 +1106,8 @@ struct Session {
     edit.update = flags.count("-update");
     if (opts.count("-retention_supply")) {
       edit.supplier = supplySetKey(value(opts, "-retention_supply"));
+      if (edit.supplier.empty())
+        return TCL_ERROR;
     }
     return distributeStrategy(target, std::move(edit));
   }
@@ -1036,6 +1117,9 @@ struct Session {
     // libraries observe the same error path as direct command invocations.
     if (objc < 2 && command != "upf_version")
       return error("missing argument for " + command);
+    if (command == "set_design_attributes")
+      return attributes->set(interp, objc, objv, scope, top,
+                             declarationLocation());
     if (command == "set_retention")
       return setRetention(objc, objv);
     if (command == "set_retention_elements")
@@ -1099,6 +1183,9 @@ struct Session {
         if (next.empty() || !queries.isScope(next))
           return error("design scope not found: " +
                        StringRef(Tcl_GetString(objv[1])));
+        if (attributes->leaf(next) && !upf::isWithinPath(top, next))
+          return error("set_scope cannot enter a leaf cell outside its scoped "
+                       "UPF context");
         scope = next;
       }
       Tcl_SetObjResult(interp, Tcl_NewStringObj(previous.c_str(), -1));
@@ -1150,7 +1237,8 @@ struct Session {
       return error(
           "UPF requires a unique elaborated design top; select one with --top");
     if (command == "find_objects")
-      return queries.find(interp, objc, objv, scope, top, supplyPortInfo);
+      return queries.find(interp, objc, objv, scope, top, supplyPortInfo,
+                          *attributes);
     if (command == "create_power_domain" ||
         command == "create_composite_domain") {
       if (!creationScope(scope))
@@ -1245,6 +1333,8 @@ struct Session {
             return error("a composite domain cannot contain itself");
           if (!domains.count(child))
             return error("unknown composite subdomain: " + name);
+          if (!accessScope(domains.at(child).scope))
+            return TCL_ERROR;
           if (!llvm::is_contained(dom.subdomains, child))
             dom.subdomains.push_back(child);
         }
@@ -1362,6 +1452,8 @@ struct Session {
       auto found = supplySets.find(id);
       if (found == supplySets.end())
         return error("unknown supply set or handle: " + objectName);
+      if (!accessScope(found->second.scope, true))
+        return TCL_ERROR;
       SupplySet set = found->second;
       if (set.stateScope && !update)
         return error("subsequent add_power_state commands require -update");
@@ -1547,6 +1639,8 @@ struct Session {
       auto found = supplySets.find(id);
       if (found != supplySets.end() && !update)
         return error("existing supply set or handle requires -update");
+      if (found != supplySets.end() && !accessScope(found->second.scope, true))
+        return TCL_ERROR;
       if (found == supplySets.end()) {
         if (!creationScope(scope))
           return TCL_ERROR;
@@ -1739,7 +1833,7 @@ struct Session {
       if (!list(opts["-ports"], ports))
         return TCL_ERROR;
       for (auto &port : ports) {
-        if (!supplyPorts.count(key(port)))
+        if (!supplyPorts.count(key(port)) || !supply(port, true))
           return error("unknown supply port: " + port);
         if (supplyPortInfo.at(key(port)).direction == SupplyPort::InOut)
           return error("inout supply connections are not implemented: " + port);
@@ -1766,6 +1860,8 @@ struct Session {
       auto found = domains.find(key(Tcl_GetString(objv[1])));
       if (found == domains.end())
         return error("unknown power domain");
+      if (!accessScope(found->second.scope))
+        return TCL_ERROR;
       if (found->second.composite)
         return error("legacy supply association on composite domains is not "
                      "implemented");
@@ -2086,6 +2182,7 @@ struct Session {
       IsolationEdit edit;
       edit.name = isolationName.str();
       edit.scope = scope;
+      edit.top = top;
       edit.location = declarationLocation();
       edit.control = std::move(isolation);
       edit.high = sense != "low";
@@ -2102,7 +2199,24 @@ struct Command {
 };
 int dispatch(void *data, Tcl_Interp *, Tcl_Size objc, Tcl_Obj *const objv[]) {
   auto &command = *static_cast<Command *>(data);
-  return command.session->run(command.name, objc, objv);
+  auto &session = *command.session;
+  session.referenceFrames.push_back({session.scope, session.top, {}, {}, {}});
+  int status = session.run(command.name, objc, objv);
+  auto frame = std::move(session.referenceFrames.back());
+  session.referenceFrames.pop_back();
+  if (!frame.failure.empty())
+    return session.error(frame.failure);
+  bool persistent = !llvm::is_contained(
+      ArrayRef<StringRef>{"set_scope", "set_design_top", "load_upf",
+                          "find_objects", "upf_version"},
+      StringRef(command.name));
+  if (status == TCL_OK && persistent && !frame.references.empty()) {
+    for (auto &reference : frame.references)
+      if (!session.attributes->record(std::move(reference)))
+        return session.error(
+            "design attribute journal exceeds 1048576 work units");
+  }
+  return status;
 }
 } // namespace
 #endif
@@ -2132,15 +2246,29 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
     return module.emitError() << "could not initialize Tcl core: "
                               << Tcl_GetStringResult(interp.get());
   Session session(module, interp.get(), allowHDLExpressions);
+  if (!session.attributesValid)
+    return failure();
   std::vector<Command> commands;
-  for (const char *name :
-       {"upf_version", "set_design_top", "set_scope", "find_objects",
-        "load_upf", "create_power_domain", "create_composite_domain",
-        "create_supply_net", "create_supply_port", "connect_supply_net",
-        "set_domain_supply_net", "create_power_switch", "set_isolation",
-        "create_supply_set", "associate_supply_set", "add_power_state",
-        "set_partial_on_translation", "set_retention",
-        "set_retention_elements"})
+  for (const char *name : {"upf_version",
+                           "set_design_top",
+                           "set_scope",
+                           "find_objects",
+                           "load_upf",
+                           "create_power_domain",
+                           "create_composite_domain",
+                           "create_supply_net",
+                           "create_supply_port",
+                           "connect_supply_net",
+                           "set_domain_supply_net",
+                           "create_power_switch",
+                           "set_isolation",
+                           "create_supply_set",
+                           "associate_supply_set",
+                           "add_power_state",
+                           "set_partial_on_translation",
+                           "set_retention",
+                           "set_retention_elements",
+                           "set_design_attributes"})
     commands.push_back({&session, name});
   for (auto &command : commands)
     Tcl_CreateObjCommand2(interp.get(), command.name, dispatch, &command,
@@ -2408,7 +2536,8 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
   }
   OpBuilder builder(module.getContext());
   builder.setInsertionPointToEnd(module.getBody());
-  bool retentionHierarchy = !session.retentionElements.empty();
+  bool retentionHierarchy =
+      !session.retentionElements.empty() || session.attributes->hasMacros();
   for (auto &[name, domain] : session.domains)
     retentionHierarchy |= !domain.retentions.empty();
   if (retentionHierarchy) {
@@ -2436,75 +2565,8 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
                                                        *list.appliesTo)
                        : upf::RetentionFilterAttr{},
         list.purpose, list.transitive);
-  // HDL attributes have the semantics of model declarations (5.6). Resolve
-  // model and object overlays while the semantic Slang inventory is present,
-  // and carry the result independently of optimized simulation declarations.
-  std::map<std::string, DictionaryAttr> modelAttributes;
-  module.walk([&](slangir::DefinitionSymbolOp definition) {
-    if (auto attrs =
-            definition->getAttrOfType<DictionaryAttr>("hdl_power_attributes"))
-      modelAttributes[definition.getHierarchicalName()->str()] = attrs;
-  });
-  for (auto &[path, object] : session.objects) {
-    NamedAttrList attrs;
-    bool instance = session.queries.isScope(path);
-    if (instance)
-      if (auto ref = object->getAttrOfType<StringAttr>("referenced_path"))
-        if (auto found = modelAttributes.find(ref.str());
-            found != modelAttributes.end())
-          attrs.append(found->second.getValue());
-    if (auto direct =
-            object->getAttrOfType<DictionaryAttr>("hdl_power_attributes")) {
-      if (direct.contains("UPF_is_hard_macro") ||
-          direct.contains("UPF_is_soft_macro"))
-        return object->emitError("UPF_is_hard_macro and UPF_is_soft_macro are "
-                                 "model-only attributes (IEEE 1801-2018 5.6)");
-      for (auto entry : direct)
-        attrs.set(entry.getName(), entry.getValue());
-    }
-    bool process = session.queries.process(path) != nullptr;
-    if (process)
-      if (auto direct =
-              session.queries.process(path)->getAttrOfType<DictionaryAttr>(
-                  "hdl_power_attributes"))
-        for (auto entry : direct)
-          attrs.set(entry.getName(), entry.getValue());
-    upf::RetentionPurposeAttr retention;
-    if (auto value = attrs.get("UPF_retention")) {
-      auto spelling = dyn_cast<StringAttr>(value);
-      auto parsed = spelling
-                        ? upf::symbolizeRetentionPurpose(spelling.getValue())
-                        : std::nullopt;
-      if (!parsed)
-        return object->emitError("UPF_retention must be required or optional");
-      retention = upf::RetentionPurposeAttr::get(module.getContext(), *parsed);
-    }
-    auto macro = [&attrs, instance, attributeOwner = object](
-                     StringRef name, bool &target) -> LogicalResult {
-      if (auto value = attrs.get(name)) {
-        auto spelling = dyn_cast<StringAttr>(value);
-        if (!instance || !spelling ||
-            (spelling.getValue() != "TRUE" && spelling.getValue() != "FALSE"))
-          return attributeOwner->emitError()
-                 << name << " requires an instance and TRUE or FALSE";
-        target = spelling.getValue() == "TRUE";
-      }
-      return success();
-    };
-    bool hardMacro = false, softMacro = false;
-    if (failed(macro("UPF_is_hard_macro", hardMacro)) ||
-        failed(macro("UPF_is_soft_macro", softMacro)))
-      return failure();
-    if (retention || hardMacro || softMacro)
-      upf::UPFDesignAttributesOp::create(
-          builder, object->getLoc(),
-          upf::RetentionElementAttr::get(
-              module.getContext(), builder.getStringAttr(path),
-              instance  ? upf::RetentionElementKind::Instance
-              : process ? upf::RetentionElementKind::Process
-                        : upf::RetentionElementKind::Signal),
-          retention, hardMacro, softMacro);
-  }
+  if (failed(session.attributes->emit(builder)))
+    return failure();
   auto supplySymbol = [&](unsigned id) {
     return FlatSymbolRefAttr::get(module.getContext(),
                                   "__upf_supply_" + std::to_string(id));
@@ -2702,7 +2764,8 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
                              : mlir::LocationAttr{},
           retention.useRetentionAsPrimary,
           retention.retentionSupplyCorrupt.value_or(true),
-          retention.saveRestoreCorrupt.value_or(true)));
+          retention.saveRestoreCorrupt.value_or(true),
+          builder.getStringAttr(retention.top)));
     }
     upf::UPFDomainOp::create(
         builder, domain.location.value_or(module.getLoc()), name,
@@ -2728,9 +2791,14 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
             : builder.getStringAttr(domain.isolationName),
         domain.isolationDiffSupplyOnly,
         excluded.empty() ? ArrayAttr{} : builder.getArrayAttr(excluded),
-        upf::DomainExtentAttr{}, domain.atomic);
+        upf::DomainExtentAttr{}, domain.atomic,
+        domain.isolationTop.empty()
+            ? StringAttr{}
+            : builder.getStringAttr(domain.isolationTop));
   }
   if (failed(resolveUPFDomainExtents(module)))
+    return failure();
+  if (failed(validateUPFDesignAttributeBehavior(module)))
     return failure();
   return verify(module);
 #endif

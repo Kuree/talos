@@ -1,0 +1,53 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: not talos --upf %t/disabled.upf -emit-sim -O0 %t/design.sv -o %t.bad 2>&1 | FileCheck %s --check-prefix=DISABLED
+// RUN: not talos --upf %t/hard.upf -emit-sim -O0 %t/design.sv -o %t.bad 2>&1 | FileCheck %s --check-prefix=HARD
+// RUN: not talos --upf %t/port.upf -emit-sim -O0 %t/design.sv -o %t.bad 2>&1 | FileCheck %s --check-prefix=PORT
+// RUN: talos --upf %t/enabled.upf -O0 --mlir-verify-each %t/design.sv -o %t.enabled && %t.enabled | FileCheck %s --check-prefix=SIM
+// RUN: talos --upf %t/sim-only.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.only && %t.only | FileCheck %s --check-prefix=SIM
+// Explicit ENABLE overrides power-aware's default DISABLE. Existing simstate
+// lowering implements SIMSTATE_ONLY; missing per-instance-disable and hard
+// macro pin-corruption consumers diagnose instead of accepting inert flags.
+// DISABLED: per-object disabled simstate semantics are not implemented
+// HARD: hard-macro port corruption requires related-supply semantics and is not implemented
+// PORT: PORT_CORR_ONLY requires UPF_is_hard_macro TRUE
+// SIM: attributed simstate policy passed
+
+//--- design.sv
+module leaf(input logic clk,d,output logic q=0);
+  always @(posedge clk) q<=d;
+endmodule
+module top;
+  import UPF::*;
+  logic clk=0,d=1;
+  wire q;
+  leaf dut(clk,d,q);
+  initial begin
+    if (!supply_on("/top/PD.primary.power") || !supply_on("/top/PD.primary.ground",0.0))
+      $fatal(1,"supplies");
+    #1 clk=1;
+    #1;
+    if (q !== 1) $fatal(1,"normal update");
+    if (!supply_off("/top/PD.primary.power")) $fatal(1,"power off");
+    #1;
+    if (q !== 'x) $fatal(1,"enabled simstate ignored");
+    $display("attributed simstate policy passed"); $finish;
+  end
+endmodule
+//--- base.upf
+create_power_domain PD -elements dut
+//--- disabled.upf
+source [file join [file dirname [info script]] base.upf]
+set_design_attributes -models leaf -is_power_aware_model
+//--- hard.upf
+source [file join [file dirname [info script]] base.upf]
+set_design_attributes -models leaf -is_hard_macro
+//--- port.upf
+source [file join [file dirname [info script]] base.upf]
+set_design_attributes -models leaf -attribute {UPF_simstate_behavior PORT_CORR_ONLY}
+//--- enabled.upf
+source [file join [file dirname [info script]] base.upf]
+set_design_attributes -models leaf -is_power_aware_model -attribute {UPF_simstate_behavior ENABLE}
+//--- sim-only.upf
+source [file join [file dirname [info script]] base.upf]
+set_design_attributes -models leaf -is_hard_macro -attribute {UPF_simstate_behavior SIMSTATE_ONLY}

@@ -1,0 +1,21 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: not talos --upf %t/design.upf -emit-slang %t/design.sv -o %t.bad 2>&1 | FileCheck %s
+// Catch must not turn a spent compiler budget into acceptance of incomplete
+// boundary provenance. Property changes reserve their journal work first.
+// CHECK: resource error was caught
+// CHECK: design attribute processing exceeded 1048576 work units; caught errors cannot discard provenance
+
+//--- design.sv
+module top; endmodule
+//--- design.upf
+set stopped 0
+for {set i 0} {$i < 100000} {incr i} {
+  if {[catch {set_design_attributes -elements . -attribute {marker same}} message]} {
+    if {![string match {*1048576*} $message]} {error "unexpected <$message>"}
+    set stopped 1
+    break
+  }
+}
+if {!$stopped} {error "resource limit was not exercised"}
+puts "resource error was caught"

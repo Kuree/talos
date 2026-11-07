@@ -18,8 +18,8 @@
     "cell_tcl_commands": 6,
     "query_tcl_commands": 5,
     "total_tcl_commands": 68,
-    "registered_tcl_commands": 19,
-    "unregistered_tcl_commands": 49,
+    "registered_tcl_commands": 20,
+    "unregistered_tcl_commands": 48,
     "enumerated_hdl_functions": 25,
     "available_hdl_functions": 9,
     "unavailable_hdl_functions": 16
@@ -214,7 +214,7 @@
         "-boundary_supplies",
         "-available_supplies"
       ],
-      "limits": "Explicit module-instance selections, deferred and empty extents, additive transactional updates, aggregate exclusions and globally resolved nested/donut ownership. Explicit descendant re-entry survives ancestor exclusions; inheritance stops at another domain boundary. Existing handle identities, bindings, catalogs and strategies survive updates. Empty effective extents avoid corruption/snapshot machinery but retain physical switching and explicit state catalogs. Base-only atomic domains protect the normalized minimum extent after all updates, with explicit holes and protected re-entry. The -subdomains form creates compiler-only composite containers with the limits listed for create_composite_domain; a deferred declaration may become a container before physical-only options are used. Hard-macro model selections, available/boundary supplies and PG function-type definitions remain unsupported. Per-path isolation across lower or multiple boundaries is still rejected. Exact packed-storage domains freeze published primary eligibility and epoch at each first qualified clock event, suppressing pre-loss pending bodies before side effects. Exact packed-storage targets also qualify external repeating edge actors per statement, with independent source/target epochs and caller-specific helper tickets; protected immutable producers require no source-loss proof even when they own drivers. External level restoration, timed/opaque writers and resolved-driver loss remain staged; driver-owning domains retain their existing deferred path.",
+      "limits": "Explicit module-instance selections, deferred and empty extents, additive transactional updates, aggregate exclusions and globally resolved nested/donut ownership. Explicit descendant re-entry survives ancestor exclusions; inheritance stops at another domain boundary. Existing handle identities, bindings, catalogs and strategies survive updates. Empty effective extents avoid corruption/snapshot machinery but retain physical switching and explicit state catalogs. Base-only atomic domains protect the normalized minimum extent after all updates, with explicit holes and protected re-entry. The -subdomains form creates compiler-only composite containers with the limits listed for create_composite_domain; a deferred declaration may become a container before physical-only options are used. Hard-macro model attributes and separate explicit domain selections are available. Anonymous inherited hard-macro ownership, including excluded parent holes, explicitly diagnoses before atomic/retention planning; selecting a hard macro explicitly in its parent domain is an error (6.20). Available/boundary supplies and PG function-type definitions remain unsupported. Per-path isolation across lower or multiple boundaries is still rejected. Exact packed-storage domains freeze published primary eligibility and epoch at each first qualified clock event, suppressing pre-loss pending bodies before side effects. Exact packed-storage targets also qualify external repeating edge actors per statement, with independent source/target epochs and caller-specific helper tickets; protected immutable producers require no source-loss proof even when they own drivers. External level restoration, timed/opaque writers and resolved-driver loss remain staged; driver-owning domains retain their existing deferred path.",
       "implementation": [
         "lib/UPF/Execute.cpp"
       ]
@@ -345,14 +345,13 @@
         "-regexp",
         "-exact",
         "-ignore_case",
-        "-direction"
-      ],
-      "unsupported_options": [
+        "-direction",
         "-non_leaf",
         "-leaf_only",
         "-traverse_macros"
       ],
-      "limits": "Module/generate hierarchy queries include instances, model-name matching, logic ports, HDL nets/variables and supported whole-process names (outer named bodies or labeled statements, with at most one leading timing wrapper); nested ordinary/conditional blocks are not whole-process selectors; UPF-created supply ports have execution-time visibility and direction filters. Tcl glob brace alternatives, regexp/exact/case modes, escaped identifier/array identity and static packed/unpacked/enum selections are supported. Macro/leaf filters and traversal await design attributes; implemented HDL supply objects/ports await linkage. Patterns are bounded to 64 KiB without NUL, brace expansion to 4096 alternatives/4 MiB/256 levels/65536 work steps, and selected-element enumeration to 1048576 work units. Broad regexp bit queries can reach that limit; conservative anchored-prefix pruning avoids unrelated arrays when provable.",
+      "unsupported_options": [],
+      "limits": "Module/generate hierarchy queries include instances, model-name matching, logic ports, HDL nets/variables and supported whole-process names (outer named bodies or labeled statements, with at most one leading timing wrapper); nested ordinary/conditional blocks are not whole-process selectors; UPF-created supply ports have execution-time visibility and direction filters. Tcl glob brace alternatives, regexp/exact/case modes, escaped identifier/array identity and static packed/unpacked/enum selections are supported. Immediate model-derived hard/soft macro classification supports -leaf_only/-non_leaf and -traverse_macros, implicit transitivity, default terminal stopping, HighConn ports and scoped context authority; invalid object-type/flag combinations diagnose. Liberty/primitive leaf classification and implemented HDL supply objects/ports await linkage. Patterns are bounded to 64 KiB without NUL, brace expansion to 4096 alternatives/4 MiB/256 levels/65536 work steps, and selected-element enumeration to 1048576 work units. Broad regexp bit queries can reach that limit; conservative anchored-prefix pruning avoids unrelated arrays when provable.",
       "implementation": [
         "lib/UPF/Execute.cpp",
         "lib/UPF/DesignQuery.cpp"
@@ -434,9 +433,31 @@
     {
       "clause": "6.41",
       "command": "set_design_attributes",
-      "status": "unsupported",
-      "missing": "Command is not registered; its functionality is not implemented.",
-      "workstream": "domain_and_attributes"
+      "status": "partial",
+      "workstream": "domain_and_attributes",
+      "accepted_options": [
+        "-models",
+        "-elements",
+        "-exclude_elements",
+        "-attribute",
+        "-is_hard_macro",
+        "-is_soft_macro",
+        "-is_power_aware_model",
+        "-switch_cell_type"
+      ],
+      "unsupported_options": [],
+      "limits": "All 6.41 syntax is parsed and predefined attributes have strict values and target kinds. Repeated properties accumulate; each property resolves model/instance precedence independently, identical assignments are idempotent, and ambiguous current highest-precedence assignments fail atomically. Explicit FALSE is preserved. HDL model, instance, signal and whole-process attributes use Slang semantic constants, including outer named process statements; custom properties remain association metadata. Model associations are immediate across active parameter variants, with scoped local-model/global versus outside-model reach and hard terminal protection. The command-specific -elements dot names the current design top. Macro flags immediately affect subsequent queries; previous Tcl query results remain immutable. Private HDL/UPF references, ancestor refinement, retention inference and isolation placement across terminal boundaries are rejected; public topmost UPF references and supply-interface associations remain allowed. Existing simstate lowering supports ordinary ENABLE and admitted SIMSTATE_ONLY. Live per-object DISABLE/PORT_CORR_ONLY, power-aware default DISABLE, and hard-macro ENABLE related-supply pin corruption are explicitly staged. Disabled signal/process policies are conservatively staged whenever domains exist because aliases and external actors need physical analysis. Switch-cell type is recorded, while instance-mapped switches remain unsupported. Liberty attributes, automatic PG connectivity, anonymous hard-macro domains, implemented HDL supply linkage and general power-model application remain pending. Anonymous inherited hard owners (including parent exclusions) diagnose before retention/atomic proofs; explicit parent-domain macro selection errors, while separate explicit ownership is supported. Parsing, projections, history and reference checks share a 1048576-unit fail-closed budget; selectors are bounded to 4096 entries and property names/values to 64 KiB.",
+      "implementation": [
+        "lib/UPF/DesignAttributes.cpp",
+        "lib/UPF/DesignAttributeBehavior.cpp",
+        "lib/UPF/Execute.cpp",
+        "lib/UPF/DesignQuery.cpp",
+        "lib/UPF/DomainExtent.cpp",
+        "lib/UPF/RetentionSelection.cpp",
+        "lib/Frontend/Frontend.cpp",
+        "include/talos/Dialect/UPF/UPFOps.td",
+        "lib/Dialect/UPF/UPFDialect.cpp"
+      ]
     },
     {
       "clause": "6.42",
@@ -590,7 +611,7 @@
         "-transitive"
       ],
       "unsupported_options": [],
-      "limits": "Scoped named lists preserve typed instance/process/signal origins, exclusions, all four UPF_retention filters, required/optional purpose and omitted/bare/explicit transitivity. set_retention -elements accepts typed list references without raising underlying selector precedence. Semantic HDL attributes and compiler-only hierarchy preserve model/instance overlays, process-to-state projection, generate scopes, hard/soft macro leaves, alias identity, parent-filter pruning and explicit descendant re-entry. Global physical state and final strategy winners are planned before any domain rewrite. Required-list domain-wide coverage, optional activated-list coverage and the separate 5.6 required-attribute trigger are checked. Equivalent canonical storage policies prove coherence across independent clocks, differently named strategies and domains; output-only Q supply choice need not agree. Uncovered ordinary clocked members diagnose rather than receiving invented controls; differing/correlated policy or control-protocol proofs remain explicitly unsupported. Supported state/writer forms inherit the existing retention lowering limits. UPF set_design_attributes and Liberty-origin attributes remain unimplemented; HDL required/optional and hard/soft macro annotations are available. Constraint-only/dormant metadata and named structurally empty selections add no retention runtime services or snapshots; broader no-eligible-state inference remains pending.",
+      "limits": "Scoped named lists preserve typed instance/process/signal origins, exclusions, all four UPF_retention filters, required/optional purpose and omitted/bare/explicit transitivity. set_retention -elements accepts typed list references without raising underlying selector precedence. Semantic HDL attributes and compiler-only hierarchy preserve model/instance overlays, process-to-state projection, generate scopes, hard/soft macro leaves, alias identity, parent-filter pruning and explicit descendant re-entry. Global physical state and final strategy winners are planned before any domain rewrite. Required-list domain-wide coverage, optional activated-list coverage and the separate 5.6 required-attribute trigger are checked. Equivalent canonical storage policies prove coherence across independent clocks, differently named strategies and domains; output-only Q supply choice need not agree. Uncovered ordinary clocked members diagnose rather than receiving invented controls; differing/correlated policy or control-protocol proofs remain explicitly unsupported. Supported state/writer forms inherit the existing retention lowering limits. UPF set_design_attributes and semantic HDL required/optional and hard/soft macro annotations are available; Liberty-origin attributes remain unimplemented. Retention carries source design-top authority; ancestor intent cannot infer retained cells inside a macro, while own-context inference remains supported. Constraint-only/dormant metadata and named structurally empty selections add no retention runtime services or snapshots; broader no-eligible-state inference remains pending.",
       "implementation": [
         "lib/UPF/Execute.cpp",
         "lib/UPF/RetentionSelection.cpp",
@@ -934,7 +955,7 @@
         "11.2.3.1"
       ],
       "missing": [
-        "Macro/leaf filtering and traversal, including terminal boundary/HighConn semantics",
+        "Liberty/primitive leaf classification and broader implemented HDL supply linkage; scoped model and terminal-aware queries are available",
         "Queries for implemented HDL supply objects and ports require HDL/UPF linkage",
         "General object handles, properties, class/property enums, iterators and query_upf",
         "General UPF supply-object addressing in escaped HDL creation scopes still needs the semantic path representation"
@@ -1031,7 +1052,7 @@
       ],
       "missing": [
         "Balloon retention-powered outputs and broader initialization/helper/reference forms",
-        "Collective differing/correlated-policy and control-protocol proofs, invariant unretained-member proofs, partial selections and broader named-process/writer forms; UPF set_design_attributes and Liberty attribute sources",
+        "Collective differing/correlated-policy and control-protocol proofs, invariant unretained-member proofs, partial selections and broader named-process/writer forms; Liberty attribute sources",
         "Latches, computed events, mixed/multiple writers and unsupported reference escape paths",
         "Legacy supply operands, semantic condition refinements and broader initialization ordering",
         "External whole edge producers now compose exact mutable-source and retained strategy lifetimes without new runtime state. Mutable resolved-driver sources and retained helper/partial/multiple-writer forms remain staged. External RTL-instance reads preserve Q, while broader hidden-N helper/alias readbacks and caller interruption need further work.",
@@ -1058,7 +1079,7 @@
       ],
       "missing": [
         "Parameterized model definitions/applications, legacy model scopes and protected loading",
-        "Checker binding and design/port attributes",
+        "Checker binding, port attributes, per-object disabled simstate semantics and hard-macro related-supply pin corruption",
         "Cell definitions and mapping, generated naming and save_upf serialization"
       ]
     },
@@ -1759,7 +1780,7 @@
       ],
       "remaining": [
         "Balloon retention-powered outputs, caller-specific retained helper/alias readbacks and intent-only no-eligible-state elision",
-        "Collective differing/correlated-policy and control-protocol proofs, UPF design-attribute command/Liberty sources, and remaining retained storage/writer forms",
+        "Collective differing/correlated-policy and control-protocol proofs, Liberty attribute sources and staged per-object behavior consumers, and remaining retained storage/writer forms",
         "Legacy supply operands, remaining condition refinements, retained Initial NBAs and shared retained helper initialization",
         "External level/combinational restoration, intra/blocking timed ordinary writes, opaque/task/class/fork power provenance, exact resolved-driver source/target losses and mixed physical reference roots",
         "Resolved-driver exact loss, mask-aware force/assign/release and broader unsupported publication/writer contexts",
@@ -1773,8 +1794,70 @@
     },
     {
       "id": 9,
-      "status": "planned",
-      "scope": "Power models, attributes, cell definitions/mapping and persistence."
+      "status": "in_progress",
+      "scope": "Power models, attributes, cell definitions/mapping and persistence.",
+      "subchunks": [
+        {
+          "id": "9a",
+          "status": "complete",
+          "scope": "Immediate set_design_attributes registry, semantic HDL attributes, macro queries and terminal authority",
+          "clauses": [
+            "4.9.2.3",
+            "5.6",
+            "5.8",
+            "5.11",
+            "6.20",
+            "6.31",
+            "6.41",
+            "6.53",
+            "8.3.2"
+          ],
+          "runtime_changes": false,
+          "implementation": [
+            "lib/UPF/DesignAttributes.cpp",
+            "lib/UPF/DesignAttributeBehavior.cpp",
+            "lib/UPF/Execute.cpp",
+            "lib/UPF/DesignQuery.cpp",
+            "lib/UPF/DomainExtent.cpp",
+            "lib/UPF/RetentionSelection.cpp",
+            "lib/Frontend/Frontend.cpp",
+            "include/talos/Dialect/UPF/UPFOps.td",
+            "lib/Dialect/UPF/UPFDialect.cpp"
+          ],
+          "tests": [
+            "test/Conversion/upf-design-attributes-macro-boundaries.test",
+            "test/Conversion/upf-design-attributes.test",
+            "test/Dialect/UPF/design-attributes.test",
+            "test/Driver/upf-design-attributes-behavior.test",
+            "test/Driver/upf-design-attributes-boundaries.test",
+            "test/Driver/upf-design-attributes-conflicts.test",
+            "test/Driver/upf-design-attributes-contexts.test",
+            "test/Driver/upf-design-attributes-hdl-process.test",
+            "test/Driver/upf-design-attributes-metadata.test",
+            "test/Driver/upf-design-attributes-model-reach.test",
+            "test/Driver/upf-design-attributes-no-runtime.test",
+            "test/Driver/upf-design-attributes-placement.test",
+            "test/Driver/upf-design-attributes-queries.test",
+            "test/Driver/upf-design-attributes-terminal-objects.test",
+            "test/Driver/upf-design-attributes-wasm.test",
+            "test/Driver/upf-design-attributes-work-limit.test",
+            "test/Driver/upf-design-attributes.test"
+          ],
+          "review": "Independent UPF/LRM and compiler/LLVM/MLIR/coverage subagents explicitly approve the final scoped source, IR, tests and audit with no remaining blockers. Review findings corrected semantic process statement ownership and conflicts, local/outside model reach, immediate conflict recovery, private UPF scope access, catalog/function mutation journaling, denied-supplier caught-error rollback, retention inference authority, final normalized isolation placement including empty extents, and anonymous hard-macro ownership/exclusion diagnostics. Compiler reviewer independently passed 15 original boundary/rollback outcomes, six optimized native/bytecode executions, raw placement/ownership negatives, repeated raw positive canonicalize/CSE/verification and dialect diagnostics/roundtrip. Spec reviewer independently passed 18 original source acceptance/rejection checks, six optimized native/bytecode executions and eleven raw MLIR cases with repeated optimization/verifier checks. Public topmost interface references and PG associations remain supported. Final validation totals below are approved; broader behavior dependencies remain explicitly staged.",
+          "validation": "Build reuses LLVM/MLIR 22.1.6, Z3 4.13.4, existing Slang and Tcl. Clean extended gate selects 594 UPF/supply/snapshot/power-NBA/cohort/time/code-unit/inventory, wait/iff/publication, function-background and class/constructor/property fixtures: 585 pass and nine expected failures, no unexpected results. The additional wasm fixture passes, bringing unique selected fixtures to 595 (586 passes, nine expected failures). All 355 process and 269 selected bytecode/reflection/VPI runtime units pass (624). Conformance clauses 6.50, 6.51 and 9.7.3 pass native/bytecode (six cases); 9.7.1 remains reference-only (two); 6.41 remains expected failure (two) for anonymous hard-macro/related-supply behavior. The 6.41 probe now uses legal model-only syntax without weakening its missing behavior check. Seventeen new source/dialect/conversion fixtures cover immediate query changes and frozen results, model variants/reach and source context, independent property precedence and rollback, explicit FALSE, custom literal/real/array values, named-process statement ownership/conflicts, private references/refinement, public PG associations, failed-supplier same-name retry, final isolation placement including empty extents, hard owner exclusions/separate ownership, raw MLIR preflight, dormant metadata, caught resource exhaustion and canonicalize/CSE/verifier reuse. Native O0 and required-bytecode O3 attribute simstate simulations pass; existing own-context master/Balloon retention and no-feature coverage remains passing. Four new wasm32 objects compile for native/bytecode O0/O3; wasm execution was not run. No runtime/API/ABI/layout/SDC changes.",
+          "interpretation_notes": [
+            "5.6 and 8.3.2: associations resolve immediately against current highest-precedence sources. A conflicting command raises TCL_ERROR and rolls back; a caught error can be followed by a higher-precedence override and retry. Later commands do not repair a previously failed assignment.",
+            "6.41 command-specific -elements dot names the current design top, whereas exclusions and ordinary generic object navigation retain current-scope meaning.",
+            "5.8 local-model reach is global across soft contexts but cannot enter a foreign hard context; outside-model reach snapshots the current design-top extent down to but excluding leaf cells. Scope changes do not alter precedence.",
+            "Isolation effect admission uses final normalized extents and original source design-top authority. Empty excluded extents create no placement; parent placement for an entire macro remains outside its terminal boundary."
+          ]
+        }
+      ],
+      "remaining": [
+        "Per-object disabled/power-aware behavior and hard-macro related-supply pin corruption",
+        "Liberty/cell attributes, power-model definitions/applications, mapped implementations and persistence",
+        "Automatic PG/implemented HDL supply linkage and anonymous hard-macro domains"
+      ]
     },
     {
       "id": 10,

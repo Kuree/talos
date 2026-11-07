@@ -446,6 +446,8 @@ struct Lowering {
         // the global owner-aware write lowering after retention resolution.
         continue;
       }
+      if (failed(selection.validateContext(reg)))
+        return failure();
       if (opaqueWriters.contains(decl.getId()))
         return decl.emitError("retained storage may be written through an "
                               "unsupported helper, copy or override");

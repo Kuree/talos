@@ -1,6 +1,8 @@
 add_mlir_library(TalosUPF
   Execute.cpp
   DesignQuery.cpp
+  DesignAttributes.cpp
+  DesignAttributeBehavior.cpp
   DomainExtent.cpp
   BooleanExpression.cpp
   SupplyExpression.cpp

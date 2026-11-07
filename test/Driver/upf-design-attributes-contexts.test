@@ -1,0 +1,33 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.mlir | FileCheck %s --check-prefix=TCL
+// RUN: talos-opt %t.mlir | talos-opt | FileCheck %s --check-prefix=IR
+// 6.41's specific dot rules differ: elements '.' means contextual design top,
+// models '.' means current model. Scoped load changes design top and restores
+// it. Local-model association reaches same-model instances outside the caller.
+// TCL: attribute contexts passed
+// IR: upf.design_attributes <path = "top", kind = instance>
+// IR-SAME: root_mark = "outer"
+// IR: upf.design_attributes <path = "top.left", kind = instance>
+// IR-SAME: root_mark = "left"
+// IR: upf.design_attributes <path = "top.left.child", kind = instance>
+// IR-SAME: local_model = "all"
+// IR: upf.design_attributes <path = "top.right.child", kind = instance>
+// IR-SAME: local_model = "all"
+
+//--- design.sv
+module leaf; endmodule
+module branch; leaf child(); endmodule
+module top; branch left(),right(); endmodule
+//--- local.upf
+set_scope child
+set_design_attributes -elements . -attribute {root_mark left}
+set_design_attributes -models . -attribute {local_model all}
+set_scope ..
+//--- design.upf
+set_scope left
+set_design_attributes -elements . -attribute {root_mark outer}
+set_scope /
+load_upf [file join [file dirname [info script]] local.upf] -scope left
+set_design_attributes -models top -attribute {restored yes}
+puts "attribute contexts passed"

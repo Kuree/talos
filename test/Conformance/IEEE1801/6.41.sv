@@ -1,8 +1,8 @@
 // CLAUSE: set_design_attributes
 // REQUIRES: upf
 // XFAIL: *
-// UPF execution failed: invalid command name "set_design_attributes"; the command is not implemented.
-// Pins: attributes set on an instance change the domain extent: the macro below the attribute stays outside it (IEEE 1801-2018 6.41).
+// Hard-macro anonymous-domain and related-supply port-corruption semantics are not implemented.
+// Pins: model-only hard-macro attributes establish a leaf boundary and its anonymous domain (IEEE 1801-2018 4.9, 6.41).
 // RUN: %talos --std=1800-2023 --compile-threads=1 --top=top --upf %S/Inputs/6.41/design.upf -O3 --execution-tier=%tier %s -o %t.exe
 // RUN: %t.exe
 // CHECK: on macro=1 parent=1
