@@ -27,6 +27,15 @@ using SupplyPorts = std::map<std::string, SupplyPort>;
 using SupplyBindings = std::map<std::pair<std::string, bool>, SupplyObject>;
 using SupplyFunctions = std::map<std::string, std::string>;
 using SupplyEquivalences = std::vector<std::pair<SupplyObject, SupplyObject>>;
+using SupplyAliasClasses =
+    std::map<std::pair<SupplyObject::Kind, std::string>, unsigned>;
+// Classify original unresolved connectivity for usage inference, without
+// inventing physical-source ownership or requiring an already-valid network.
+mlir::FailureOr<SupplyAliasClasses> classifySupplyAliases(
+    const std::set<std::string> &nets, const SupplyPorts &ports,
+    const SupplyFunctions &functions, const SupplyBindings &bindings,
+    const SupplyEquivalences &equivalences,
+    llvm::function_ref<void(const llvm::Twine &)> report);
 struct SupplyRoot {
   bool writable = true, ground = false;
   // Distinguish a physical source from an unbound abstract function's fallback
@@ -48,6 +57,7 @@ resolveSupplies(const std::set<std::string> &nets, const SupplyPorts &ports,
                 const SupplyFunctions &functions,
                 const SupplyBindings &bindings,
                 const SupplyEquivalences &equivalences,
-                llvm::function_ref<void(const llvm::Twine &)> report);
+                llvm::function_ref<void(const llvm::Twine &)> report,
+                const SupplyEquivalences &declaredElectrical = {});
 } // namespace talos
 #endif

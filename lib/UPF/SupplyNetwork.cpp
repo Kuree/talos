@@ -1,28 +1,16 @@
 #include "SupplyNetwork.h"
+#include "llvm/ADT/IntEqClasses.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <algorithm>
 #include <limits>
-#include <numeric>
+#include <optional>
 #include <queue>
 
 using namespace mlir;
 using llvm::StringRef;
 namespace talos {
 namespace {
-struct Groups {
-  std::vector<unsigned> parents;
-  Groups(unsigned count) : parents(count) {
-    std::iota(parents.begin(), parents.end(), 0);
-  }
-  unsigned find(unsigned id) {
-    while (parents[id] != id) {
-      parents[id] = parents[parents[id]];
-      id = parents[id];
-    }
-    return id;
-  }
-  void join(unsigned a, unsigned b) { parents[find(a)] = find(b); }
-};
 bool within(StringRef path, StringRef prefix) {
   return path == prefix || (path.starts_with(prefix) &&
                             path.drop_front(prefix.size()).starts_with('.'));
@@ -56,12 +44,44 @@ LogicalResult bindSupply(
   }
   return success();
 }
+FailureOr<SupplyAliasClasses> classifySupplyAliases(
+    const std::set<std::string> &nets, const SupplyPorts &ports,
+    const SupplyFunctions &functions, const SupplyBindings &bindings,
+    const SupplyEquivalences &equivalences,
+    llvm::function_ref<void(const llvm::Twine &)> report) {
+  if (nets.size() + ports.size() + functions.size() + bindings.size() +
+          equivalences.size() >
+      1048576) {
+    report("supply usage inference exceeds 1048576 work units");
+    return failure();
+  }
+  SupplyAliasClasses result;
+  for (const auto &name : nets)
+    result.emplace(std::pair{SupplyObject::Net, name}, result.size());
+  for (const auto &[name, port] : ports)
+    result.emplace(std::pair{SupplyObject::Port, name}, result.size());
+  for (const auto &[name, scope] : functions)
+    result.emplace(std::pair{SupplyObject::Function, name}, result.size());
+  llvm::IntEqClasses groups(result.size());
+  auto id = [&](const SupplyObject &object) {
+    return result.at({object.kind, object.path});
+  };
+  for (const auto &[a, b] : equivalences)
+    groups.join(id(a), id(b));
+  for (const auto &[side, net] : bindings)
+    groups.join(result.at({SupplyObject::Port, side.first}), id(net));
+  groups.compress();
+  for (auto &[name, value] : result)
+    value = groups[value];
+  return result;
+}
 FailureOr<ResolvedSupplies>
 resolveSupplies(const std::set<std::string> &nets, const SupplyPorts &ports,
                 const SupplyFunctions &functions,
                 const SupplyBindings &bindings,
                 const SupplyEquivalences &equivalences,
-                llvm::function_ref<void(const llvm::Twine &)> report) {
+                llvm::function_ref<void(const llvm::Twine &)> report,
+                const SupplyEquivalences &declaredElectrical) {
   std::map<std::string, unsigned> netIDs, portIDs, functionIDs;
   uint64_t size = uint64_t(nets.size()) + ports.size() + functions.size();
   if (size > std::numeric_limits<unsigned>::max()) {
@@ -100,7 +120,7 @@ resolveSupplies(const std::set<std::string> &nets, const SupplyPorts &ports,
       report("inout supply connections are not implemented: " + side.first);
       return failure();
     }
-  Groups aliases(count), connected(count);
+  llvm::IntEqClasses aliases(count), connected(count), sourceIdentity(count);
   // IEEE 1801-2018 4.5.5.2(f)/4.5.5.3/6.10: function bindings and set
   // associations establish electrical equivalence, including bindings added
   // after an association. They do not create extra physical supply drivers.
@@ -112,13 +132,162 @@ resolveSupplies(const std::set<std::string> &nets, const SupplyPorts &ports,
     unsigned p = portIDs.at(side.first), n = node(net);
     connected.join(p, n);
   }
+  // Connectivity aliases do not prove independent external ports are one
+  // source. An explicit 6.44 declaration can provide that missing outside-
+  // design connection. Resolve its endpoints against the ORIGINAL directed
+  // graph, rather than blessing every source in a newly merged component.
+  if (!declaredElectrical.empty()) {
+    std::vector<std::vector<unsigned>> upstream(count), physical(count);
+    std::set<unsigned> sourcePorts, computedPorts;
+    for (const auto &[name, port] : ports) {
+      bool source = port.direction == SupplyPort::In
+                        ? !bindings.count({name, true})
+                        : !bindings.count({name, false});
+      if (source) {
+        unsigned id = portIDs.at(name);
+        sourcePorts.insert(id);
+        physical[aliases.findLeader(id)].push_back(id);
+        if (port.switchOutput)
+          computedPorts.insert(id);
+      }
+    }
+    for (const auto &[side, net] : bindings) {
+      unsigned p = aliases.findLeader(portIDs.at(side.first));
+      unsigned n = aliases.findLeader(node(net));
+      if (p == n)
+        continue;
+      bool portDrives =
+          (ports.at(side.first).direction == SupplyPort::In) != side.second;
+      upstream[portDrives ? n : p].push_back(portDrives ? p : n);
+    }
+    // A declaration cannot make a source-free directional cycle into an
+    // external fallback source merely by collapsing the cycle's endpoints.
+    std::vector<std::vector<unsigned>> downstream(count);
+    std::vector<unsigned> indegree(count);
+    std::queue<unsigned> ready;
+    unsigned vertices = 0, processed = 0;
+    for (unsigned id = 0; id != count; ++id) {
+      if (aliases.findLeader(id) != id)
+        continue;
+      ++vertices;
+      indegree[id] = upstream[id].size();
+      if (!indegree[id])
+        ready.push(id);
+      for (unsigned parent : upstream[id])
+        downstream[parent].push_back(id);
+    }
+    while (!ready.empty()) {
+      unsigned id = ready.front();
+      ready.pop();
+      ++processed;
+      for (unsigned next : downstream[id])
+        if (--indegree[next] == 0)
+          ready.push(next);
+    }
+    if (processed != vertices) {
+      report("cyclic directional supply network has no supported root driver");
+      return failure();
+    }
+    size_t work = 0;
+    auto origins = [&](unsigned id) -> std::optional<std::set<unsigned>> {
+      if (sourcePorts.count(id))
+        return std::set<unsigned>{id};
+      std::set<unsigned> result, seen;
+      std::vector<unsigned> pending{aliases.findLeader(id)};
+      while (!pending.empty()) {
+        unsigned current = pending.back();
+        pending.pop_back();
+        if (!seen.insert(current).second)
+          continue;
+        size_t cost = 1 + physical[current].size() + upstream[current].size();
+        if (cost > 1048576 - work)
+          return std::nullopt;
+        work += cost;
+        result.insert(physical[current].begin(), physical[current].end());
+        pending.insert(pending.end(), upstream[current].begin(),
+                       upstream[current].end());
+      }
+      return result;
+    };
+    // Keep original endpoint identities separate from connectivity aliases.
+    // A chain through an unbound abstraction may identify external sources;
+    // ordinary connections must not identify an unrelated third source.
+    std::map<unsigned, std::set<unsigned>> originFacts;
+    for (const auto &[a, b] : declaredElectrical) {
+      sourceIdentity.join(node(a), node(b));
+      for (unsigned endpoint : {node(a), node(b)}) {
+        if (originFacts.count(endpoint))
+          continue;
+        auto sources = origins(endpoint);
+        if (!sources) {
+          report(
+              "declared electrical source analysis exceeds 1048576 work units");
+          return failure();
+        }
+        originFacts.emplace(endpoint, std::move(*sources));
+      }
+    }
+    bool changed;
+    do {
+      changed = false;
+      for (const auto &[endpoint, origins] : originFacts) {
+        if (origins.size() + 1 > 1048576 - work) {
+          report(
+              "declared electrical source analysis exceeds 1048576 work units");
+          return failure();
+        }
+        work += origins.size() + 1;
+        std::set<unsigned> identities;
+        for (unsigned source : origins)
+          identities.insert(sourceIdentity.findLeader(source));
+        if (identities.size() == 1 &&
+            sourceIdentity.findLeader(endpoint) != *identities.begin()) {
+          sourceIdentity.join(endpoint, *identities.begin());
+          changed = true;
+        }
+      }
+    } while (changed);
+    for (const auto &[endpoint, origins] : originFacts) {
+      std::set<unsigned> identities;
+      for (unsigned source : origins)
+        identities.insert(sourceIdentity.findLeader(source));
+      if (identities.size() > 1) {
+        report("declared electrical source equivalence requires unambiguous "
+               "upstream origins");
+        return failure();
+      }
+    }
+    std::map<unsigned, std::set<unsigned>> provenSources;
+    for (unsigned source : sourcePorts)
+      provenSources[sourceIdentity.findLeader(source)].insert(source);
+    for (const auto &[identity, sources] : provenSources)
+      if (sources.size() > 1 && llvm::any_of(sources, [&](unsigned source) {
+            return computedPorts.count(source);
+          })) {
+        report("declared electrical equivalence merges distinct computed "
+               "switch supply sources");
+        return failure();
+      }
+    for (const auto &[a, b] : declaredElectrical) {
+      aliases.join(node(a), node(b));
+      connected.join(node(a), node(b));
+    }
+  }
+  // Flatten closed relations once before the per-object walks. LLVM's
+  // uncompressed read API otherwise follows parent chains repeatedly.
+  if (count) {
+    for (auto *groups : {&aliases, &connected, &sourceIdentity}) {
+      groups->compress();
+      groups->uncompress();
+    }
+  }
   // IEEE 1801-2018 4.5.5.2/9.1: electrically equivalent unresolved supplies
   // share one root. Preserve the directional source/load graph until each
   // connected group has been checked to have exactly one source.
   std::set<std::pair<unsigned, unsigned>> edges;
   for (auto &[side, net] : bindings) {
-    unsigned p = aliases.find(portIDs.at(side.first)),
-             n = aliases.find(node(net));
+    unsigned p = aliases.findLeader(portIDs.at(side.first)),
+             n = aliases.findLeader(node(net));
     if (p == n)
       continue;
     bool portDrives =
@@ -141,18 +310,19 @@ resolveSupplies(const std::set<std::string> &nets, const SupplyPorts &ports,
                       ? !bindings.count({name, true})
                       : !bindings.count({name, false});
     if (source)
-      sources[connected.find(portIDs.at(name))].push_back(portIDs.at(name));
+      sources[connected.findLeader(portIDs.at(name))].push_back(
+          portIDs.at(name));
   }
   unsigned components = 0;
   std::map<unsigned, std::vector<unsigned>> fallback;
   std::queue<unsigned> pending;
   for (unsigned i = 0; i < count; ++i) {
-    if (aliases.find(i) != i)
+    if (aliases.findLeader(i) != i)
       continue;
     ++components;
     if (incoming[i] == 0) {
       pending.push(i);
-      fallback[connected.find(i)].push_back(i);
+      fallback[connected.findLeader(i)].push_back(i);
     }
   }
   unsigned visited = 0;
@@ -176,25 +346,33 @@ resolveSupplies(const std::set<std::string> &nets, const SupplyPorts &ports,
     if (port.switchOutput)
       switchSources.insert(portIDs.at(name));
   for (unsigned i = 0; i < count; ++i) {
-    sources.try_emplace(connected.find(i));
-    members[connected.find(i)].push_back(aliases.find(i));
+    sources.try_emplace(connected.findLeader(i));
+    members[connected.findLeader(i)].push_back(aliases.findLeader(i));
   }
   std::vector<unsigned> reached(count, 0);
   std::set<unsigned> concreteRoots;
   for (auto &[name, id] : netIDs)
-    concreteRoots.insert(aliases.find(id));
+    concreteRoots.insert(aliases.findLeader(id));
   for (auto &[group, roots] : sources) {
     bool explicitSource = !roots.empty();
     if (roots.empty())
       roots = fallback[group];
-    if (roots.size() > 1) {
+    std::set<unsigned> identities;
+    for (unsigned source : roots)
+      identities.insert(sourceIdentity.findLeader(source));
+    if (identities.size() > 1) {
       report("multiple sources drive one unresolved supply group");
       return failure();
     }
     if (!roots.empty()) {
       unsigned generation = result.roots.size() + 1;
-      pending.push(aliases.find(roots.front()));
-      reached[pending.front()] = generation;
+      for (unsigned source : roots) {
+        unsigned start = aliases.findLeader(source);
+        if (reached[start] == generation)
+          continue;
+        pending.push(start);
+        reached[start] = generation;
+      }
       while (!pending.empty()) {
         unsigned from = pending.front();
         pending.pop();
@@ -219,8 +397,10 @@ resolveSupplies(const std::set<std::string> &nets, const SupplyPorts &ports,
     result.roots.push_back({});
     result.roots.back().explicitSource =
         explicitSource ||
-        (!roots.empty() && concreteRoots.count(aliases.find(roots.front())));
-    if (!roots.empty() && switchSources.count(roots.front()))
+        (!roots.empty() &&
+         concreteRoots.count(aliases.findLeader(roots.front())));
+    if (llvm::any_of(roots,
+                     [&](unsigned root) { return switchSources.count(root); }))
       result.roots.back().writable = false;
   }
   auto handles = [&](StringRef name, unsigned id, bool port) {
@@ -234,17 +414,17 @@ resolveSupplies(const std::set<std::string> &nets, const SupplyPorts &ports,
         id;
   };
   for (auto &[name, node] : netIDs) {
-    unsigned id = rootIDs.at(connected.find(node));
+    unsigned id = rootIDs.at(connected.findLeader(node));
     result.nets[name] = id;
     handles(name, id, false);
   }
   for (auto &[name, node] : portIDs) {
-    unsigned id = rootIDs.at(connected.find(node));
+    unsigned id = rootIDs.at(connected.findLeader(node));
     result.ports[name] = id;
     handles(name, id, true);
   }
   for (auto &[name, node] : functionIDs) {
-    unsigned id = rootIDs.at(connected.find(node));
+    unsigned id = rootIDs.at(connected.findLeader(node));
     result.functions[name] = id;
     // Dots are UPF object fields, not hierarchy separators (5.3.3.3/.5).
     result.handles[name] = id;

@@ -1,6 +1,14 @@
 #ifndef TALOS_DIALECT_UPF_ENUMS_TD
 #define TALOS_DIALECT_UPF_ENUMS_TD
 include "mlir/IR/EnumAttr.td"
+def UPFElectrical : I32EnumAttrCase<"Electrical", 0, "electrical">;
+def UPFInterchangeable : I32EnumAttrCase<"Interchangeable", 1, "interchangeable">;
+def UPFFunctional : I32EnumAttrCase<"Functional", 2, "functional">;
+def UPFSupplyEquivalenceKind : I32EnumAttr<"SupplyEquivalenceKind",
+    "IEEE 1801 4.5.5 supply equivalence declaration",
+    [UPFElectrical, UPFInterchangeable, UPFFunctional]> {
+  let cppNamespace = "::talos::upf";
+}
 def UPFControl : I32EnumAttrCase<"Control", 0, "control">;
 def UPFConstant : I32EnumAttrCase<"Constant", 1, "constant">;
 def UPFNot : I32EnumAttrCase<"Not", 2, "not">;

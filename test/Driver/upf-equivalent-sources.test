@@ -1,0 +1,72 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/ports.upf -O0 --mlir-verify-each %t/design.sv -o %t.ports && %t.ports | FileCheck %s
+// RUN: talos --upf %t/nets.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.nets && %t.nets | FileCheck %s
+// RUN: talos --upf %t/reverse.upf -O3 --mlir-verify-each %t/design.sv -o %t.reverse && %t.reverse | FileCheck %s
+// RUN: not talos --upf %t/third.upf -emit-slang %t/design.sv -o %t.third 2>&1 | FileCheck %s --check-prefix=MULTI
+// RUN: not talos --upf %t/function.upf -emit-slang %t/design.sv -o %t.function 2>&1 | FileCheck %s --check-prefix=MULTI
+// RUN: talos --upf %t/abstract.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.abstract && %t.abstract | FileCheck %s
+// Explicit outside-design E can identify two physical source ports. Ordinary
+// associations and F cannot do so, and a third undeclared source stays distinct.
+// CHECK: declared electrical source identity passed
+// MULTI: {{multiple sources drive one unresolved supply group|declared electrical source equivalence requires unambiguous upstream origins}}
+
+//--- design.sv
+module top;
+  import UPF::*;
+  initial begin
+    if (!supply_on("/top/P1",0.75)) $fatal(1,"P1");
+    if (get_supply_voltage(get_supply_value("/top/P2")) != 0.75 || get_supply_voltage(get_supply_value("/top/N2")) != 0.75)
+      $fatal(1,"electrical aliases did not share voltage");
+    if (!supply_off("/top/N2") || get_supply_state(get_supply_value("/top/P1")) != OFF)
+      $fatal(1,"electrical alias write did not reach source");
+    $display("declared electrical source identity passed"); $finish;
+  end
+endmodule
+//--- base.upf
+proc expect_error {script pattern} {
+  if {[catch {uplevel 1 $script} message] != 1 || ![string match $pattern $message]} {
+    error "expected <$pattern>, got <$message>"
+  }
+}
+create_supply_port P1 -direction in
+create_supply_port P2 -direction in
+create_supply_net N1
+create_supply_net N2
+connect_supply_net N1 -ports P1
+connect_supply_net N2 -ports P2
+create_supply_set A -function {power N1}
+create_supply_set B -function {power N2}
+expect_error {set_equivalent -nets {P1 P2 missing}} {*unknown equivalence*}
+expect_error {set_equivalent -nets P1} {*between 2 and 4096*}
+expect_error {set_equivalent -nets {P1 P2} -sets {A B}} {*exactly one*}
+expect_error {set_equivalent -function_only} {*exactly one*}
+//--- ports.upf
+source [file join [file dirname [info script]] base.upf]
+associate_supply_set {A B}
+set_equivalent -nets {P1 P2}
+set_equivalent -nets {N1 N2}
+//--- nets.upf
+source [file join [file dirname [info script]] base.upf]
+set_equivalent -nets {N1 N2}
+//--- reverse.upf
+source [file join [file dirname [info script]] base.upf]
+set_equivalent -nets {N2 N1}
+set_equivalent -nets {P2 P1}
+associate_supply_set {A B}
+//--- third.upf
+source [file join [file dirname [info script]] ports.upf]
+create_supply_port P3 -direction in
+create_supply_net N3
+connect_supply_net N3 -ports P3
+create_supply_set C -function {power N3}
+associate_supply_set {A C}
+//--- function.upf
+source [file join [file dirname [info script]] base.upf]
+set_equivalent -function_only -nets {P1 P2}
+associate_supply_set {A B}
+//--- abstract.upf
+source [file join [file dirname [info script]] base.upf]
+create_supply_net ABSTRACT
+set_equivalent -nets {P1 ABSTRACT}
+set_equivalent -nets {ABSTRACT P2}

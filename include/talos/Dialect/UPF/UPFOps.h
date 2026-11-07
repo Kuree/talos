@@ -10,7 +10,16 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include <algorithm>
+#include <cstdint>
 namespace talos::upf {
+// OFF and UNDETERMINED do not establish a defined voltage. FULL_ON and
+// PARTIAL_ON retain the signed 32-bit microvolt field above the state bits.
+inline bool conflictingInitialSupplyValues(uint64_t a, uint64_t b) {
+  if ((a & 3) != (b & 3))
+    return true;
+  return ((a & 3) == 1 || (a & 3) == 2) &&
+         ((a >> 2) & UINT64_C(0xffffffff)) != ((b >> 2) & UINT64_C(0xffffffff));
+}
 inline bool isWithinPath(llvm::StringRef path, llvm::StringRef prefix) {
   return path == prefix || (path.starts_with(prefix) &&
                             path.drop_front(prefix.size()).starts_with('.'));

@@ -1,5 +1,6 @@
 #ifndef TALOS_UPF_PORTSUPPLY_H
 #define TALOS_UPF_PORTSUPPLY_H
+#include "SupplyRelations.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Dialect/UPF/UPFOps.h"
 #include "llvm/ADT/DenseMap.h"
@@ -47,6 +48,7 @@ private:
       std::map<std::string, llvm::SmallVector<upf::UPFPortAttributesOp>>;
   mlir::ModuleOp module;
   sim::SimDesignOp design;
+  std::optional<SupplyRelations> relations;
   llvm::StringMap<sim::SimPortDeclOp> paths;
   llvm::DenseMap<uint64_t, sim::SimPortDeclOp> actors;
   llvm::DenseMap<uint64_t, uint64_t> formalActors;
@@ -66,8 +68,9 @@ private:
   llvm::StringRef owner(sim::SimPortDeclOp port) const;
   mlir::FailureOr<const Domain *> domain(llvm::StringRef path);
   mlir::FailureOr<mlir::FlatSymbolRefAttr> driver(sim::SimPortDeclOp port);
-  bool equal(mlir::FlatSymbolRefAttr a, mlir::FlatSymbolRefAttr b,
-             bool pgOnly) const;
+  bool equal(mlir::FlatSymbolRefAttr a, mlir::FlatSymbolRefAttr b, bool pgOnly,
+             upf::SupplyEquivalenceKind kind =
+                 upf::SupplyEquivalenceKind::Interchangeable) const;
 };
 } // namespace talos
 #endif

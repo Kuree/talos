@@ -1,0 +1,31 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.mlir | FileCheck %s
+// RUN: talos-opt %t.mlir --canonicalize --cse --verify-each -o /dev/null
+// Known electrical switch contradictions are immediate even if its control
+// is constant ON; failures must not poison the next legal declaration.
+// CHECK: immediate switch supply constraints passed
+
+//--- design.sv
+module leaf(output logic q); always_comb q=1; endmodule
+module top;
+  logic en=1; wire q; leaf dut(q);
+  initial #1 $finish;
+endmodule
+//--- design.upf
+proc expect_error {script pattern} {
+  if {[catch {uplevel 1 $script} message] != 1 || ![string match $pattern $message]} {
+    error "expected <$pattern>, got <$message>"
+  }
+}
+foreach net {VI VIA VO VO2 G} {create_supply_net $net}
+create_supply_set CORE -function {power VO} -function {ground G}
+create_supply_set CORE2 -function {power VO2} -function {ground G}
+create_power_domain PD -elements dut -supply {primary CORE}
+create_power_domain EMPTY -elements {} -supply {primary CORE2}
+create_power_switch SW -domain PD -input_supply_port {I VI} -output_supply_port {O VO} -control_port {C en} -on_state {ON I C} -off_state {OFF {!C}}
+create_power_switch SW2 -domain EMPTY -input_supply_port {I VI} -output_supply_port {O VO2} -control_port {C en} -on_state {ON I C} -off_state {OFF {!C}}
+expect_error {set_equivalent -nets {VI VO}} {*input and output cannot be declared electrically equivalent*}
+expect_error {set_equivalent -nets {VO VO2}} {*distinct computed switch supply sources*}
+set_equivalent -nets {VI VIA}
+puts "immediate switch supply constraints passed"

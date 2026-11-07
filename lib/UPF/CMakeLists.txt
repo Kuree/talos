@@ -12,6 +12,8 @@ add_mlir_library(TalosUPF
   PowerState.cpp
   ControlReference.cpp
   SupplyNetwork.cpp
+  SupplyRelations.cpp
+  NormalizeEquivalences.cpp
   Elaborate.cpp
   Retention.cpp
   RetentionSelection.cpp

@@ -1,0 +1,8 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-equivalent-isolation.test %t
+// RUN: talos --upf %t/inter.upf --target=wasm32 -O3 --execution-tier=native --mlir-verify-each -c %t/design.sv -o %t.native
+// RUN: talos --upf %t/noninter.upf --target=wasm32 -O3 --execution-tier=bytecode --mlir-verify-each -c %t/design.sv -o %t.bc
+// RUN: %llvm_dist/bin/llvm-readobj --file-headers %t.native %t.bc | FileCheck %s --check-prefix=WASM
+// RUN: talos --upf %t/inter.upf -emit-sim -O0 --mlir-verify-each %t/design.sv -o %t.mlir && FileCheck %s --check-prefix=LOWER --input-file=%t.mlir --implicit-check-not=upf.
+// WASM-COUNT-2: AddressSize: 32bit
+// LOWER: simulation.design @design

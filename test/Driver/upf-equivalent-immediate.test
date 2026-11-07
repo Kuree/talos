@@ -1,0 +1,30 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.mlir | FileCheck %s
+// RUN: talos-opt %t.mlir --canonicalize --cse --verify-each -o /dev/null
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc && %t.bc | FileCheck %s --check-prefix=SIM
+//8.1 immediate-only effects: conflicting constraints fail transactionally,
+// including dormant set identities and function handles used before binding.
+// CHECK: immediate supply constraints and rollback passed
+// SIM: supply constraint model passed
+
+//--- design.sv
+module top; initial begin $display("supply constraint model passed"); $finish; end endmodule
+//--- design.upf
+proc expect_error {script pattern} {
+  if {[catch {uplevel 1 $script} message] != 1 || ![string match $pattern $message]} {
+    error "expected <$pattern>, got <$message>"
+  }
+}
+foreach name {A B C D E} {create_supply_set $name}
+set_equivalent -function_only -interchangeable FALSE -sets {A B}
+expect_error {set_equivalent -function_only -sets {A B}} {*non-interchangeability contradicts*}
+set_equivalent -function_only -sets {A C}
+set_equivalent -function_only -interchangeable FALSE -sets {B C}
+expect_error {set_equivalent -sets {A B}} {*non-interchangeability contradicts*}
+set_equivalent -sets {A C}
+expect_error {set_equivalent -function_only -interchangeable FALSE -nets {A.power C.power}} {*non-interchangeability contradicts*}
+set_equivalent -function_only -sets {D E}
+expect_error {set_equivalent -function_only -interchangeable FALSE -nets {D.power E.power}} {*non-interchangeability contradicts*}
+set_equivalent -function_only -interchangeable FALSE -nets {A.nwell B.nwell}
+puts "immediate supply constraints and rollback passed"

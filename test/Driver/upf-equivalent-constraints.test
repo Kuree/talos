@@ -1,0 +1,77 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/group.upf -O3 --mlir-verify-each %t/design.sv -o %t.group && %t.group | FileCheck %s
+// RUN: talos --upf %t/driver.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.driver && %t.driver | FileCheck %s
+// RUN: talos --upf %t/refine.upf -O0 --mlir-verify-each %t/design.sv -o %t.refine && %t.refine | FileCheck %s
+// RUN: not talos --upf %t/ni-driver.upf -emit-sim %t/design.sv -o %t.ni 2>&1 | FileCheck %s --check-prefix=DRIVER
+// RUN: not talos --upf %t/late.upf -emit-slang %t/design.sv -o %t.late 2>&1 | FileCheck %s --check-prefix=REQUIRED
+// RUN: not talos --upf %t/conflict.upf -emit-slang %t/design.sv -o %t.conflict 2>&1 | FileCheck %s --check-prefix=CONFLICT
+// A NI B and B NI C do not imply A NI C. A I C remains legal. Shared
+// electrical ground does not contradict whole-set NI. Full6.48 substitution
+// requires I; any explicit6.44 set declaration also requires equal requireds.
+// CHECK: supply equivalence constraints passed
+// DRIVER: specified port supply differs from its internal supply
+// REQUIRED: declared equivalent supply sets require identical required functions
+// CONFLICT: non-interchangeability contradicts
+
+//--- design.sv
+module leaf(output logic q); always_comb q=1; endmodule
+module top;
+  import UPF::*;
+  wire q; leaf dut(q);
+  initial begin
+    if (!supply_on("/top/dut/PA") || !supply_on("/top/dut/PB") ||
+        !supply_on("/top/dut/PC") || !supply_on("/top/dut/G",0.0)) $fatal(1,"supplies");
+    #1; if (q !== 1) $fatal(1,"policy changed");
+    $display("supply equivalence constraints passed"); $finish;
+  end
+endmodule
+//--- sets.upf
+create_supply_net PA
+create_supply_net PB
+create_supply_net PC
+create_supply_net G
+create_supply_set A -function {power PA} -function {ground G}
+create_supply_set B -function {power PB} -function {ground G}
+create_supply_set C -function {power PC} -function {ground G}
+add_power_state B -state {ON -supply_expr {power == FULL_ON && ground == FULL_ON} -simstate NORMAL}
+add_power_state C -state {ON -supply_expr {power == FULL_ON && ground == FULL_ON} -simstate NORMAL}
+create_power_domain PD -elements . -supply {primary A}
+//--- group.upf
+load_upf [file join [file dirname [info script]] group-block.upf] -scope dut
+//--- group-block.upf
+source [file join [file dirname [info script]] sets.upf]
+set_equivalent -function_only -interchangeable FALSE -sets {A B}
+set_equivalent -function_only -interchangeable FALSE -sets {B C}
+set_equivalent -function_only -sets {A C}
+//--- driver.upf
+load_upf [file join [file dirname [info script]] driver-block.upf] -scope dut
+//--- driver-block.upf
+source [file join [file dirname [info script]] sets.upf]
+set_equivalent -function_only -sets {A B}
+set_port_attributes -ports q -driver_supply B
+//--- refine.upf
+load_upf [file join [file dirname [info script]] refine-block.upf] -scope dut
+//--- refine-block.upf
+source [file join [file dirname [info script]] driver-block.upf]
+set_equivalent -sets {A B}
+//--- ni-driver.upf
+load_upf [file join [file dirname [info script]] ni-block.upf] -scope dut
+//--- ni-block.upf
+source [file join [file dirname [info script]] sets.upf]
+set_equivalent -function_only -interchangeable FALSE -sets {A B}
+set_port_attributes -ports q -driver_supply B
+//--- late.upf
+load_upf [file join [file dirname [info script]] late-block.upf] -scope dut
+//--- late-block.upf
+source [file join [file dirname [info script]] driver-block.upf]
+create_supply_net NW
+create_supply_set B -update -function {nwell NW}
+add_power_state B -update -state {WELLS -supply_expr {power == FULL_ON && ground == FULL_ON && nwell == FULL_ON} -simstate NORMAL}
+//--- conflict.upf
+load_upf [file join [file dirname [info script]] conflict-block.upf] -scope dut
+//--- conflict-block.upf
+source [file join [file dirname [info script]] sets.upf]
+set_equivalent -function_only -sets {A B}
+set_equivalent -function_only -interchangeable FALSE -sets {B C}
+set_equivalent -sets {A C}

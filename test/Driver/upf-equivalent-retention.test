@@ -1,0 +1,67 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/redundant.upf -O3 --mlir-verify-each %t/design.sv -o %t.redundant && %t.redundant | FileCheck %s
+// RUN: talos --upf %t/cross.upf -O3 --mlir-verify-each %t/design.sv -o %t.cross && %t.cross | FileCheck %s
+// RUN: talos --upf %t/forward.upf -DEXTERNAL -O3 --mlir-verify-each %t/design.sv -o %t.forward && %t.forward | FileCheck %s
+// RUN: talos --upf %t/reverse.upf -DEXTERNAL -O3 --mlir-verify-each %t/design.sv -o %t.reverse && %t.reverse | FileCheck %s
+// RUN: talos --upf %t/redundant.upf -DWRITE -O3 --mlir-verify-each %t/design.sv -o %t.protected
+// RUN: not %t.protected 2>&1 | FileCheck %s --check-prefix=PROTECTED
+// IEEE 1801-2018 6.44/6.50: an existing downstream consumer is not a new
+// supplier, including redundant declarations and connections between anonymous
+// sources. An independent named source connected through E overrides that
+// assumption, irrespective of declaration order. No runtime service is added.
+// CHECK: retention equivalence provenance passed
+// PROTECTED: UPF supply control failed for
+// PROTECTED: retention equivalence provenance passed
+
+//--- design.sv
+module leaf(output wire q); assign q = 1; endmodule
+module top;
+  import UPF::*;
+  wire q; leaf dut(q);
+  upfSupplyTypeT value;
+  initial begin
+    value = get_supply_value("/top/PD.R.retention_supply.power");
+`ifdef EXTERNAL
+    if (value.state != OFF) $fatal(1, "independent source assumed AON");
+    if (!supply_on("/top/CORE.power", 0.8)) $fatal(1, "independent source not writable");
+    value = get_supply_value("/top/PD.R.retention_supply.power");
+    if (value.state != FULL_ON || value.voltage != 800000) $fatal(1, "source alias");
+`else
+    if (value.state != FULL_ON) $fatal(1, "consumer changed anonymous power");
+    if (get_supply_state(get_supply_value("/top/PD.R.retention_supply.ground")) != FULL_ON ||
+        get_supply_state(get_supply_value("/top/PD.R.retention_supply.nwell")) != FULL_ON ||
+        get_supply_state(get_supply_value("/top/PD.S.retention_supply.power")) != FULL_ON ||
+        get_supply_state(get_supply_value("/top/PD.S.retention_supply.ground")) != FULL_ON)
+      $fatal(1, "cross-anonymous provenance lost");
+`endif
+`ifdef WRITE
+    if (supply_off("/top/PD.R.retention_supply.power")) $fatal(1, "anonymous source became writable");
+`endif
+    $display("retention equivalence provenance passed");
+    $finish;
+  end
+endmodule
+//--- base.upf
+create_power_domain PD -elements dut
+set_retention R -domain PD -no_retention
+set_retention S -domain PD -no_retention
+create_supply_set COPY -function {power PD.R.retention_supply.power} -function {ground PD.R.retention_supply.ground}
+create_supply_set OTHER -function {power PD.S.retention_supply.power}
+create_supply_set CORE
+create_supply_set BRIDGE
+//--- redundant.upf
+source [file join [file dirname [info script]] base.upf]
+set_equivalent -nets {PD.R.retention_supply.power COPY.power}
+set_equivalent -nets {PD.R.retention_supply.ground COPY.ground}
+//--- cross.upf
+source [file join [file dirname [info script]] base.upf]
+set_equivalent -nets {PD.R.retention_supply.power PD.S.retention_supply.power}
+//--- forward.upf
+source [file join [file dirname [info script]] base.upf]
+set_equivalent -nets {COPY.power BRIDGE.power}
+set_equivalent -nets {BRIDGE.power CORE.power}
+//--- reverse.upf
+source [file join [file dirname [info script]] base.upf]
+set_equivalent -nets {BRIDGE.power CORE.power}
+set_equivalent -nets {COPY.power BRIDGE.power}

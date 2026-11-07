@@ -1730,6 +1730,12 @@ struct ElaborateUPFPass
                     cf::ControlFlowDialect>();
   }
   void runOnOperation() override {
+    if (failed(normalizeUPFSupplyEquivalences(getOperation()))) {
+      signalPassFailure();
+      return;
+    }
+    SmallVector<upf::UPFSupplyEquivalenceOp> equivalences(
+        getOperation().getOps<upf::UPFSupplyEquivalenceOp>());
     SmallVector<upf::UPFDomainOp> domains(
         getOperation().getOps<upf::UPFDomainOp>());
     SmallVector<upf::UPFSupplyOp> supplies(
@@ -1756,9 +1762,10 @@ struct ElaborateUPFPass
                       upf::UPFPortBindingOp, upf::UPFPortValueOp>(op);
     });
     if (domains.empty() && composites.empty() && supplies.empty() &&
-        sets.empty() && hierarchies.empty() && retentionElements.empty() &&
-        modelAttributes.empty() && designAttributes.empty() &&
-        portAttributes.empty() && contexts.empty() && !accesses) {
+        sets.empty() && equivalences.empty() && hierarchies.empty() &&
+        retentionElements.empty() && modelAttributes.empty() &&
+        designAttributes.empty() && portAttributes.empty() &&
+        contexts.empty() && !accesses) {
       getOperation()->removeAttr(upf::partialOnTranslationName);
       return;
     }
@@ -1870,6 +1877,8 @@ struct ElaborateUPFPass
     }
     for (auto set : sets)
       set.erase();
+    for (auto equivalence : equivalences)
+      equivalence.erase();
     for (auto supply : supplies)
       supply.erase();
     getOperation()->removeAttr(upf::partialOnTranslationName);

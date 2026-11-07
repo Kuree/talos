@@ -58,7 +58,7 @@ struct RetentionElements {
 struct IsolationEdit {
   std::string name, scope, top, control;
   std::optional<Location> location;
-  bool high = true, diffSupplyOnly = true;
+  bool high = true, diffSupplyOnly = true, useFunctionalEquivalence = true;
   int64_t clamp = 0;
 };
 using StrategyEdit = std::variant<RetentionEdit, IsolationEdit>;
@@ -76,9 +76,11 @@ struct Domain {
   SmallVector<Attribute> on, partial, errors;
   upf::SwitchStateAttr off;
   std::vector<std::string> elements, excluded, subdomains;
-  bool hasElements = false, hasExcluded = false, atomic = false, composite = false;
+  bool hasElements = false, hasExcluded = false, atomic = false,
+       composite = false;
   bool isolationHigh = true;
   bool isolationDiffSupplyOnly = true;
+  bool isolationUseFunctionalEquivalence = true;
   int64_t clamp = 0;
   bool primaryAssociated = false;
   std::optional<Location> location;
@@ -110,6 +112,12 @@ struct DomainNet {
   std::string scope, owner, resolution;
   std::set<std::string> domains;
 };
+struct SupplyEquivalenceDeclaration {
+  upf::SupplyEquivalenceKind kind = upf::SupplyEquivalenceKind::Electrical;
+  std::vector<std::string> sets;
+  std::vector<SupplyObject> supplies;
+  std::optional<Location> location;
+};
 struct Session {
   ModuleOp module;
   Tcl_Interp *interp;
@@ -137,6 +145,8 @@ struct Session {
   SupplyBindings supplyBindings;
   std::map<std::string, SupplySet> supplySets;
   std::vector<std::pair<std::string, std::string>> setAssociations;
+  std::vector<SupplyEquivalenceDeclaration> supplyEquivalences;
+  size_t supplyEquivalenceCost = 0;
   std::vector<CompositeStrategyEdit> compositeStrategies;
   size_t compositeStrategyCost = 0;
   uint64_t strategyOrdinal = 0;
@@ -197,9 +207,7 @@ struct Session {
     return result;
   }
   // IEEE 1801-2018 5.3.3.4: '/' is relative to the current design-top instance.
-  std::string rooted(StringRef path) const {
-    return queries.rooted(path, top);
-  }
+  std::string rooted(StringRef path) const { return queries.rooted(path, top); }
   std::string model(StringRef instance) const {
     auto found = objects.find(instance.str());
     if (found != objects.end())
@@ -364,6 +372,126 @@ struct Session {
     return {SupplyObject::Function, (set + "." + name).str(),
             supplySets.at(set.str()).scope};
   }
+  SupplyEquivalences declaredElectricalSupplies() const {
+    SupplyEquivalences result;
+    for (const auto &declaration : supplyEquivalences) {
+      if (declaration.kind != upf::SupplyEquivalenceKind::Electrical)
+        continue;
+      if (!declaration.sets.empty()) {
+        for (const auto &set : ArrayRef(declaration.sets).drop_front())
+          for (StringRef field : upf::getSupplyFunctionNames())
+            result.emplace_back(function(declaration.sets.front(), field),
+                                function(set, field));
+      } else
+        for (const auto &supply : ArrayRef(declaration.supplies).drop_front())
+          result.emplace_back(declaration.supplies.front(), supply);
+    }
+    return result;
+  }
+  int validateCurrentEquivalenceConstraints() {
+    SupplyFunctions functions;
+    SupplyEquivalences links;
+    std::map<std::string, unsigned> sets;
+    for (const auto &[name, set] : supplySets) {
+      sets[name] = sets.size();
+      for (StringRef field : upf::getSupplyFunctionNames())
+        functions[name + "." + field.str()] = set.scope;
+      for (const auto &[field, object] : set.functions)
+        links.emplace_back(function(name, field), object);
+    }
+    llvm::IntEqClasses setInterchangeable(sets.size());
+    for (const auto &[a, b] : setAssociations) {
+      setInterchangeable.join(sets.at(a), sets.at(b));
+      for (StringRef field : upf::getSupplyFunctionNames())
+        links.emplace_back(function(a, field), function(b, field));
+    }
+    auto electrical = declaredElectricalSupplies();
+    links.insert(links.end(), electrical.begin(), electrical.end());
+    std::string failureMessage;
+    auto aliases = classifySupplyAliases(
+        nets, supplyPortInfo, functions, supplyBindings, links,
+        [&](const llvm::Twine &message) { failureMessage = message.str(); });
+    if (failed(aliases))
+      return error(failureMessage);
+    auto id = [&](const SupplyObject &object) {
+      return aliases->at({object.kind, object.path});
+    };
+    llvm::IntEqClasses interchangeable(aliases->size());
+    size_t work = aliases->size();
+    std::set<unsigned> computed;
+    for (const auto &[name, domain] : domains) {
+      if (!domain.inputSupply)
+        continue;
+      if (++work > 1048576)
+        return error(
+            "current supply relation validation exceeds 1048576 work units");
+      unsigned output = aliases->at({SupplyObject::Port, domain.outputPort});
+      if (id(*domain.inputSupply) == output)
+        return error("power-switch input and output cannot be declared "
+                     "electrically equivalent");
+      if (!computed.insert(output).second)
+        return error("declared electrical equivalence merges distinct computed "
+                     "switch supply sources");
+    }
+    for (const auto &declaration : supplyEquivalences) {
+      if (declaration.kind == upf::SupplyEquivalenceKind::Functional)
+        continue;
+      if (!declaration.sets.empty()) {
+        for (const auto &name : ArrayRef(declaration.sets).drop_front()) {
+          setInterchangeable.join(sets.at(declaration.sets.front()),
+                                  sets.at(name));
+          for (StringRef field : upf::getSupplyFunctionNames()) {
+            if (++work > 1048576)
+              return error("current supply relation validation exceeds 1048576 "
+                           "work units");
+            interchangeable.join(id(function(declaration.sets.front(), field)),
+                                 id(function(name, field)));
+          }
+        }
+      } else
+        for (const auto &supply : ArrayRef(declaration.supplies).drop_front()) {
+          if (++work > 1048576)
+            return error("current supply relation validation exceeds 1048576 "
+                         "work units");
+          interchangeable.join(id(declaration.supplies.front()), id(supply));
+        }
+    }
+    for (const auto &declaration : supplyEquivalences) {
+      if (declaration.kind != upf::SupplyEquivalenceKind::Functional)
+        continue;
+      std::set<unsigned> positiveSets, positiveRoots;
+      std::set<SmallVector<unsigned>> completeFunctions;
+      for (const auto &name : declaration.sets) {
+        if (++work > 1048576)
+          return error(
+              "current supply relation validation exceeds 1048576 work units");
+        if (!positiveSets.insert(setInterchangeable.findLeader(sets.at(name)))
+                 .second)
+          return error("non-interchangeability contradicts an existing "
+                       "electrical or interchangeable declaration");
+        // All source function handles have independent abstract/real roots.
+        // Equality of every role is immutable evidence; equality based only on
+        // today's usage mask can change on refinement and is checked finally.
+        SmallVector<unsigned> fingerprint;
+        for (StringRef field : upf::getSupplyFunctionNames())
+          fingerprint.push_back(
+              interchangeable.findLeader(id(function(name, field))));
+        if (!completeFunctions.insert(std::move(fingerprint)).second)
+          return error("non-interchangeability contradicts existing function "
+                       "equivalence");
+      }
+      for (const auto &supply : declaration.supplies) {
+        if (++work > 1048576)
+          return error(
+              "current supply relation validation exceeds 1048576 work units");
+        if (!positiveRoots.insert(interchangeable.findLeader(id(supply)))
+                 .second)
+          return error("non-interchangeability contradicts an existing "
+                       "electrical or interchangeable declaration");
+      }
+    }
+    return TCL_OK;
+  }
   bool sameSupply(const SupplyObject &a, const SupplyObject &b,
                   StringRef pendingName = {},
                   const SupplySet *pending = nullptr,
@@ -391,6 +519,8 @@ struct Session {
     for (auto &[x, y] : setAssociations)
       for (StringRef field : upf::getSupplyFunctionNames())
         link(function(x, field), function(y, field));
+    for (const auto &[x, y] : declaredElectricalSupplies())
+      link(x, y);
     for (auto &[side, net] :
          pendingBindings ? *pendingBindings : supplyBindings)
       link({SupplyObject::Port, side.first,
@@ -763,6 +893,7 @@ struct Session {
     dom.isolationHigh = edit.high;
     dom.clamp = edit.clamp;
     dom.isolationDiffSupplyOnly = edit.diffSupplyOnly;
+    dom.isolationUseFunctionalEquivalence = edit.useFunctionalEquivalence;
     return TCL_OK;
   }
   int applyStrategy(Domain &dom, const StrategyEdit &edit,
@@ -1711,6 +1842,82 @@ struct Session {
       Tcl_ResetResult(interp);
       return TCL_OK;
     }
+    if (command == "set_equivalent") {
+      bool functionOnly = false, interchangeable = true,
+           sawInterchangeable = false;
+      for (Tcl_Size i = 1; i < objc; ++i) {
+        StringRef option = Tcl_GetString(objv[i]);
+        if (option == "-function_only") {
+          if (functionOnly)
+            return error("duplicate UPF option -function_only");
+          functionOnly = true;
+        } else if (option == "-interchangeable") {
+          if (sawInterchangeable)
+            return error("duplicate UPF option -interchangeable");
+          sawInterchangeable = true;
+          if (i + 1 < objc &&
+              !StringRef(Tcl_GetString(objv[i + 1])).starts_with('-')) {
+            int flag;
+            if (Tcl_GetBooleanFromObj(interp, objv[++i], &flag) != TCL_OK)
+              return TCL_ERROR;
+            interchangeable = flag;
+          }
+        } else if (option == "-nets" || option == "-sets") {
+          if (++i == objc)
+            return error("missing value for " + option);
+          if (!opts.emplace(option.str(), objv[i]).second)
+            return error("duplicate UPF option " + option);
+        } else
+          return error("unsupported set_equivalent option: " + option);
+      }
+      if (opts.count("-nets") + opts.count("-sets") != 1)
+        return error("set_equivalent requires exactly one of -nets or -sets");
+      bool fullSets = opts.count("-sets");
+      std::vector<std::string> names;
+      if (!list(opts.at(fullSets ? "-sets" : "-nets"), names))
+        return TCL_ERROR;
+      if (names.size() < 2 || names.size() > 4096)
+        return error("set_equivalent requires between 2 and 4096 supplies");
+      size_t cost = names.size() * 7;
+      for (const auto &name : names)
+        cost += name.size();
+      if (cost > 1048576 - supplyEquivalenceCost)
+        return error(
+            "supply equivalence declarations exceed 1048576 work units");
+      SupplyEquivalenceDeclaration declaration;
+      declaration.location = declarationLocation();
+      declaration.kind = !functionOnly ? upf::SupplyEquivalenceKind::Electrical
+                         : interchangeable
+                             ? upf::SupplyEquivalenceKind::Interchangeable
+                             : upf::SupplyEquivalenceKind::Functional;
+      for (const auto &name : names) {
+        if (name.size() > 65536)
+          return error("supply equivalence name exceeds 64 KiB");
+        if (fullSets) {
+          auto id = supplySetKey(name);
+          if (id.empty() || !supplySets.count(id))
+            return error("unknown equivalence supply set or handle: " + name);
+          declaration.sets.push_back(std::move(id));
+        } else {
+          auto object = supply(name, true);
+          if (!object)
+            return error("unknown equivalence supply port, net or function: " +
+                         name);
+          declaration.supplies.push_back(*object);
+        }
+      }
+      // Electrical declarations imply interchangeability even when FALSE was
+      // written without -function_only (6.44). Keep all validation
+      // transactional.
+      supplyEquivalences.push_back(std::move(declaration));
+      if (validateCurrentEquivalenceConstraints() != TCL_OK) {
+        supplyEquivalences.pop_back();
+        return TCL_ERROR;
+      }
+      supplyEquivalenceCost += cost;
+      Tcl_ResetResult(interp);
+      return TCL_OK;
+    }
     if (command == "associate_supply_set") {
       // 6.10: electrical links persist independently of per-set state tables.
       if (!options(objc, objv, 2, {"-handle"}, opts))
@@ -2147,21 +2354,23 @@ struct Session {
     if (command == "set_isolation") {
       // IEEE 1801-2018 6.45: this first slice handles parent-located output
       // isolation; other strategy forms must fail rather than be ignored.
-      bool diffSupplyOnly = true, sawDiffSupplyOnly = false;
+      bool diffSupplyOnly = true, useFunctionalEquivalence = true;
+      std::set<std::string> booleans;
       for (Tcl_Size i = 2; i < objc; ++i) {
         StringRef option = Tcl_GetString(objv[i]);
-        if (option == "-diff_supply_only") {
+        if (option == "-diff_supply_only" ||
+            option == "-use_functional_equivalence") {
           // 6.45 makes both omission and a bare option TRUE. Preserve the
           // next option, and stage the result until all validation succeeds.
-          if (sawDiffSupplyOnly)
-            return error("duplicate UPF option -diff_supply_only");
-          sawDiffSupplyOnly = true;
+          if (!booleans.insert(option.str()).second)
+            return error("duplicate UPF option " + option);
           if (i + 1 < objc &&
               !StringRef(Tcl_GetString(objv[i + 1])).starts_with('-')) {
             int flag;
             if (Tcl_GetBooleanFromObj(interp, objv[++i], &flag) != TCL_OK)
               return TCL_ERROR;
-            diffSupplyOnly = flag;
+            (option == "-diff_supply_only" ? diffSupplyOnly
+                                           : useFunctionalEquivalence) = flag;
           }
           continue;
         }
@@ -2205,6 +2414,7 @@ struct Session {
       edit.high = sense != "low";
       edit.clamp = clamp == "1";
       edit.diffSupplyOnly = diffSupplyOnly;
+      edit.useFunctionalEquivalence = useFunctionalEquivalence;
       return distributeStrategy(dom->name, std::move(edit));
     }
     return error("unsupported UPF command: " + command);
@@ -2281,6 +2491,7 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
                            "set_isolation",
                            "create_supply_set",
                            "associate_supply_set",
+                           "set_equivalent",
                            "add_power_state",
                            "set_partial_on_translation",
                            "set_retention",
@@ -2342,10 +2553,90 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
       equivalences.emplace_back(session.function(domain.primary, "power"),
                                 *domain.outputSupply);
   std::string supplyError;
+  // Infer usage before whole-set declarations merge corresponding fields.
+  // Otherwise the constraint itself could short unused placeholders and erase
+  // a required-function mismatch. Explicit NET declarations are connections,
+  // not full-set required-function assertions, and participate in this base.
+  SupplyEquivalences usageLinks = equivalences;
+  std::set<std::string> constrainedSets;
+  for (const auto &declaration : session.supplyEquivalences) {
+    constrainedSets.insert(declaration.sets.begin(), declaration.sets.end());
+    if (declaration.kind == upf::SupplyEquivalenceKind::Electrical &&
+        declaration.sets.empty())
+      for (const auto &supply : ArrayRef(declaration.supplies).drop_front())
+        usageLinks.emplace_back(declaration.supplies.front(), supply);
+  }
+  bool constraintChanged;
+  do {
+    constraintChanged = false;
+    for (const auto &[a, b] : session.setAssociations)
+      if (constrainedSets.count(a) || constrainedSets.count(b)) {
+        constraintChanged |= constrainedSets.insert(a).second;
+        constraintChanged |= constrainedSets.insert(b).second;
+      }
+  } while (constraintChanged);
+  auto usageAliases = classifySupplyAliases(
+      session.nets, session.supplyPortInfo, functions, session.supplyBindings,
+      usageLinks,
+      [&](const llvm::Twine &message) { supplyError = message.str(); });
+  if (failed(usageAliases))
+    return module.emitError() << supplyError;
+  auto usageRootFor = [&](const SupplyObject &object) {
+    return usageAliases->at({object.kind, object.path});
+  };
+  size_t usageWork = 0;
+  for (auto &[name, set] : session.supplySets)
+    for (const auto &[stateName, state] : set.states)
+      if (state.condition)
+        for (const auto &token : state.condition->tokens) {
+          if (usageWork > 1048576 - 7)
+            return module.emitError(
+                "supply requirement inference exceeds 1048576 work units");
+          usageWork += 7;
+          if (!token.reference || !token.reference->function.empty())
+            continue;
+          for (StringRef function : upf::getSupplyFunctionNames())
+            if (usageRootFor(token.reference->object) ==
+                usageRootFor(session.function(name, function)))
+              set.required.insert(function.str());
+        }
+  bool requirementsChanged;
+  do {
+    requirementsChanged = false;
+    for (const auto &[a, b] : session.setAssociations) {
+      if (++usageWork > 1048576)
+        return module.emitError(
+            "supply requirement inference exceeds 1048576 work units");
+      auto &left = session.supplySets.at(a).required;
+      auto &right = session.supplySets.at(b).required;
+      for (const auto &function : left)
+        requirementsChanged |= right.insert(function).second;
+      for (const auto &function : right)
+        requirementsChanged |= left.insert(function).second;
+    }
+  } while (requirementsChanged);
+  auto checkDeclaredRequired = [&]() -> LogicalResult {
+    for (const auto &declaration : session.supplyEquivalences) {
+      if (declaration.sets.empty())
+        continue;
+      const auto &required =
+          session.supplySets.at(declaration.sets.front()).required;
+      for (const auto &name : ArrayRef(declaration.sets).drop_front())
+        if (session.supplySets.at(name).required != required)
+          return emitError(declaration.location.value_or(module.getLoc()))
+                 << "declared equivalent supply sets require identical "
+                    "required functions";
+    }
+    return success();
+  };
+  if (failed(checkDeclaredRequired()))
+    return failure();
+  auto declaredElectrical = session.declaredElectricalSupplies();
   auto resolved = resolveSupplies(
       session.nets, session.supplyPortInfo, functions, session.supplyBindings,
       equivalences,
-      [&](const llvm::Twine &message) { supplyError = message.str(); });
+      [&](const llvm::Twine &message) { supplyError = message.str(); },
+      declaredElectrical);
   if (failed(resolved))
     return module.emitError() << supplyError;
   // 4.5.4.7/4.5.5.3: binding an unused function does not make it required.
@@ -2374,7 +2665,11 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
                                   ? resolved->ports.at(object.path)
                                   : resolved->functions.at(object.path);
               for (StringRef function : upf::getSupplyFunctionNames())
-                if (root == resolved->functions.at(name + "." + function.str()))
+                if (constrainedSets.count(name)
+                        ? usageRootFor(token.reference->object) ==
+                              usageRootFor(session.function(name, function))
+                        : root == resolved->functions.at(name + "." +
+                                                         function.str()))
                   added |= set.required.insert(function.str()).second;
             }
       bool requirementsChanged;
@@ -2390,6 +2685,8 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
         }
         added |= requirementsChanged;
       } while (requirementsChanged);
+      if (failed(checkDeclaredRequired()))
+        return failure();
       if (!first && !added)
         break;
       first = false;
@@ -2420,7 +2717,8 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
             if (a != b && constrained[a] && constrained[b])
               return emitError(domain.location.value_or(module.getLoc()))
                      << "composite primary supplies are not electrically "
-                        "equivalent "
+                        "equivalent; functional-only composition without "
+                        "merging independent rails is not implemented "
                         "(IEEE 1801-2018 6.16): "
                      << name << " and " << childName << " function "
                      << function;
@@ -2440,7 +2738,8 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
         resolved = resolveSupplies(
             session.nets, session.supplyPortInfo, functions,
             session.supplyBindings, equivalences,
-            [&](const llvm::Twine &message) { supplyError = message.str(); });
+            [&](const llvm::Twine &message) { supplyError = message.str(); },
+            declaredElectrical);
         if (failed(resolved))
           return module.emitError() << supplyError;
       }
@@ -2488,7 +2787,10 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
             for (StringRef function : upf::getSupplyFunctionNames())
               if (rootFor(reference.object) ==
                   supplies.functions.at(name + "." + function.str())) {
-                set.required.insert(function.str());
+                if (!constrainedSets.count(name) ||
+                    usageRootFor(reference.object) ==
+                        usageRootFor(session.function(name, function)))
+                  set.required.insert(function.str());
                 powerOrGround |= function == "power" || function == "ground";
               }
           }
@@ -2511,6 +2813,8 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
         changed |= left.insert(function).second;
     }
   } while (changed);
+  if (failed(checkDeclaredRequired()))
+    return failure();
   for (auto &[name, set] : session.supplySets)
     supplies.roots[supplies.functions.at(name + ".ground")].ground = true;
   struct DomainSupplies {
@@ -2597,17 +2901,27 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
     return FlatSymbolRefAttr::get(module.getContext(),
                                   "__upf_supply_" + std::to_string(id));
   };
-  auto expressionAttr = [&](const SupplyExpression &expression) {
+  auto expressionAttr = [&](const SupplyExpression &expression,
+                            StringRef owner) {
     SmallVector<Attribute> tokens;
     for (auto &token : expression.tokens) {
       FlatSymbolRefAttr supply;
       StringAttr function;
       IntegerAttr value;
       FloatAttr real;
+      ArrayAttr origins;
       if (token.reference) {
         supply = supplySymbol(rootFor(token.reference->object));
         if (!token.reference->function.empty())
           function = builder.getStringAttr(token.reference->function);
+        else if (!session.supplyEquivalences.empty()) {
+          SmallVector<Attribute> roles;
+          for (const auto &field : session.supplySets.at(owner.str()).required)
+            if (rootFor(token.reference->object) ==
+                supplies.functions.at(owner.str() + "." + field))
+              roles.push_back(builder.getStringAttr(field));
+          origins = builder.getArrayAttr(roles);
+        }
       }
       using O = upf::SupplyExpressionOpcode;
       if (token.opcode == O::Boolean)
@@ -2617,7 +2931,8 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
       if (token.opcode == O::Real)
         real = builder.getF64FloatAttr(token.real);
       tokens.push_back(upf::SupplyExpressionTokenAttr::get(
-          module.getContext(), token.opcode, supply, function, value, real));
+          module.getContext(), token.opcode, supply, function, value, real,
+          origins));
     }
     return upf::SupplyExpressionAttr::get(module.getContext(),
                                           builder.getArrayAttr(tokens));
@@ -2629,7 +2944,18 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
     associated[a].insert(b);
     associated[b].insert(a);
   }
-  std::set<unsigned> anonymousRoots;
+  SupplyAliasClasses originalSupplyAliases;
+  if (!declaredElectrical.empty()) {
+    auto original = classifySupplyAliases(
+        session.nets, session.supplyPortInfo, functions, session.supplyBindings,
+        equivalences,
+        [&](const llvm::Twine &message) { supplyError = message.str(); });
+    if (failed(original))
+      return module.emitError() << supplyError;
+    originalSupplyAliases = std::move(*original);
+  }
+  std::vector<std::set<unsigned>> anonymousCandidates;
+  std::set<unsigned> originalAnonymousRoots;
   for (auto &[domainName, domain] : session.domains)
     for (auto &[name, retention] : domain.retentions) {
       auto &handle = session.supplySets.at(retention.retentionSupply);
@@ -2660,13 +2986,40 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
             return supplies.roots[root].explicitSource;
           }))
         continue;
-      // 6.50/9.7.1: an unspecified verification retention supply is anonymous
-      // and always on. It has real shared values, so queries and policy
-      // evaluation agree; HDL cannot turn this assumed supply off.
-      anonymousRoots.insert(roots.begin(), roots.end());
-      for (unsigned root : roots)
-        supplies.roots[root].writable = false;
+      anonymousCandidates.push_back(std::move(roots));
+      if (!originalSupplyAliases.empty())
+        for (StringRef function : upf::getSupplyFunctionNames())
+          originalAnonymousRoots.insert(originalSupplyAliases.at(
+              {SupplyObject::Function,
+               retention.retentionSupply + "." + function.str()}));
     }
+  // A named consumer of any anonymous source retains that source's provenance,
+  // including when a declaration connects two anonymous retention supplies.
+  // Only an independently supplied original identity introduced by 6.44 can
+  // defeat the assumption. Index those identities once, before marking roots.
+  std::set<unsigned> namedSupplierRoots;
+  if (!originalSupplyAliases.empty())
+    for (const auto &[name, set] : session.supplySets)
+      if (!set.handle)
+        for (StringRef function : upf::getSupplyFunctionNames()) {
+          std::string path = name + "." + function.str();
+          if (!originalAnonymousRoots.count(
+                  originalSupplyAliases.at({SupplyObject::Function, path})))
+            namedSupplierRoots.insert(supplies.functions.at(path));
+        }
+  std::set<unsigned> anonymousRoots;
+  for (const auto &roots : anonymousCandidates) {
+    if (llvm::any_of(roots, [&](unsigned root) {
+          return namedSupplierRoots.count(root);
+        }))
+      continue;
+    // 6.50/9.7.1: an unspecified verification retention supply is anonymous
+    // and always on. It has real shared values, so queries and policy
+    // evaluation agree; HDL cannot turn this assumed supply off.
+    anonymousRoots.insert(roots.begin(), roots.end());
+    for (unsigned root : roots)
+      supplies.roots[root].writable = false;
+  }
   // Internal 6.43 suppliers contribute policy, but no additional public HDL
   // supply names or runtime lookups. Every function is associated with the
   // existing primary function, so it also introduces no physical supply root.
@@ -2697,7 +3050,9 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
   }
   for (auto &[name, set] : session.supplySets) {
     NamedAttrList bindings;
-    SmallVector<Attribute> required;
+    SmallVector<Attribute> required, materialized;
+    for (StringRef function : upf::getSupplyFunctionNames())
+      materialized.push_back(builder.getStringAttr(function));
     for (StringRef function : upf::getSupplyFunctionNames())
       bindings.set(function, supplySymbol(supplies.functions.at(
                                  name + "." + function.str())));
@@ -2707,7 +3062,7 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
     for (auto &[stateName, state] : set.states)
       states.push_back(upf::PowerStateAttr::get(
           module.getContext(), builder.getStringAttr(stateName),
-          state.condition ? expressionAttr(*state.condition)
+          state.condition ? expressionAttr(*state.condition, name)
                           : upf::SupplyExpressionAttr{},
           state.simstate, state.illegal));
     for (auto &other : associated[name])
@@ -2726,7 +3081,8 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
                              : builder.getStringAttr(set.strategy),
         set.binding.empty()
             ? FlatSymbolRefAttr{}
-            : FlatSymbolRefAttr::get(module.getContext(), set.binding));
+            : FlatSymbolRefAttr::get(module.getContext(), set.binding),
+        builder.getArrayAttr(materialized));
     if (set.privateSupplier)
       SymbolTable::setSymbolVisibility(declaration,
                                        SymbolTable::Visibility::Private);
@@ -2738,8 +3094,7 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
         children.push_back(FlatSymbolRefAttr::get(module.getContext(), child));
       upf::UPFCompositeDomainOp::create(
           builder, domain.location.value_or(module.getLoc()),
-          builder.getStringAttr(name),
-          builder.getArrayAttr(children),
+          builder.getStringAttr(name), builder.getArrayAttr(children),
           FlatSymbolRefAttr::get(module.getContext(), domain.primary));
       continue;
     }
@@ -2821,8 +3176,22 @@ LogicalResult executeUPF(ModuleOp module, llvm::ArrayRef<std::string> paths,
         domain.isolationTop.empty()
             ? StringAttr{}
             : builder.getStringAttr(domain.isolationTop),
-        FlatSymbolRefAttr{});
+        FlatSymbolRefAttr{}, domain.isolationUseFunctionalEquivalence);
   }
+  for (const auto &declaration : session.supplyEquivalences) {
+    SmallVector<Attribute> objects;
+    if (!declaration.sets.empty())
+      for (const auto &name : declaration.sets)
+        objects.push_back(FlatSymbolRefAttr::get(module.getContext(), name));
+    else
+      for (const auto &supply : declaration.supplies)
+        objects.push_back(supplySymbol(rootFor(supply)));
+    upf::UPFSupplyEquivalenceOp::create(
+        builder, declaration.location.value_or(module.getLoc()),
+        builder.getArrayAttr(objects), declaration.kind);
+  }
+  if (failed(normalizeUPFSupplyEquivalences(module)))
+    return failure();
   if (failed(resolveUPFDomainExtents(module)))
     return failure();
   if (failed(normalizeUPFPortDesignAttributes(module)) ||

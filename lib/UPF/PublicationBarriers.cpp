@@ -187,6 +187,8 @@ struct PrepareUPFSnapshotPublicationsPass
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
+    if (failed(normalizeUPFSupplyEquivalences(module)))
+      return signalPassFailure();
     if (failed(resolveUPFDomainExtents(module)))
       return signalPassFailure();
     if (failed(normalizeUPFPortDesignAttributes(module)) ||

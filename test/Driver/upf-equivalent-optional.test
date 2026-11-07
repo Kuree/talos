@@ -1,0 +1,41 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/design.upf -O0 --mlir-verify-each %t/design.sv -o %t.native && %t.native | FileCheck %s
+// RUN: talos --upf %t/design.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.bc && %t.bc | FileCheck %s
+// RUN: not talos --upf %t/mismatch.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.bad 2>&1 | FileCheck %s --check-prefix=REQUIRED
+// Genuine optional bindings inherit corresponding-function E while remaining
+// outside required. Unbound roles are independent abstractions, not ground.
+// Required usage is resolved before constraint-induced aliases.
+// CHECK: optional supply identity passed
+// REQUIRED: declared equivalent supply sets require identical required functions
+
+//--- design.sv
+module leaf(output logic q); always_comb q=1; endmodule
+module top;
+  import UPF::*;
+  wire q; leaf dut(q);
+  initial begin
+    if (!supply_on("/top/PA",1.0) || !supply_on("/top/GA",0.0) || !supply_on("/top/NA",0.8)) $fatal(1,"supplies");
+    if (get_supply_voltage(get_supply_value("/top/PB")) != 1.0 ||
+        get_supply_voltage(get_supply_value("/top/NB")) != 0.8)
+      $fatal(1,"genuine optional functions were not aliased");
+    if (!supply_on("/top/NB",0.7) || get_supply_voltage(get_supply_value("/top/NA")) != 0.7)
+      $fatal(1,"optional alias reverse write");
+    #1; if (q !== 1) $fatal(1,"optional aliases shorted PG");
+    $display("optional supply identity passed"); $finish;
+  end
+endmodule
+//--- base.upf
+foreach name {PA GA PB GB NA NB} {create_supply_net $name}
+create_supply_set A -function {power PA} -function {ground GA} -function {nwell NA}
+create_supply_set B -function {power PB} -function {ground GB} -function {nwell NB}
+create_power_domain PD -elements dut -supply {primary A}
+create_power_domain EMPTY -elements {} -supply {primary B}
+//--- design.upf
+source [file join [file dirname [info script]] base.upf]
+set_equivalent -sets {A B}
+//--- mismatch.upf
+source [file join [file dirname [info script]] base.upf]
+add_power_state A -state {ON -supply_expr {PA == FULL_ON && ground == FULL_ON} -simstate NORMAL}
+add_power_state B -state {ON -supply_expr {PB == FULL_ON && ground == FULL_ON && nwell == FULL_ON} -simstate NORMAL}
+set_equivalent -sets {A B}

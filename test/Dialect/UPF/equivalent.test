@@ -1,0 +1,111 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/valid.mlir --canonicalize --cse --verify-each | talos-opt | FileCheck %s
+// RUN: talos-opt %t/invalid.mlir --split-input-file --verify-diagnostics
+// CHECK: materialized_functions = ["power", "ground", "nwell"]
+// CHECK: upf.equivalent [@A, @B] kind interchangeable
+
+//--- valid.mlir
+module {
+  upf.supply @p names ["/P"] writable = true
+  upf.supply @g names ["/G"] writable = true
+  upf.supply_set @A functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {materialized_functions = ["power", "ground", "nwell"]}
+  upf.supply_set @B functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {materialized_functions = ["power", "ground", "nwell"]}
+  upf.equivalent [@A, @B] kind interchangeable
+}
+//--- invalid.mlir
+module {
+  upf.supply @p names ["/P"] writable = true
+  upf.supply @g names ["/G"] writable = true
+  // expected-error @+1 {{equivalence requires between 2 and 4096 supplies}}
+  upf.equivalent [@p] kind electrical
+}
+// -----
+module {
+  upf.supply @p names ["/P"] writable = true
+  upf.supply @g names ["/G"] writable = true
+  // expected-error @+1 {{equivalence references an unknown supply or set}}
+  upf.equivalent [@p, @missing] kind functional
+}
+// -----
+module {
+  upf.supply @p names ["/P"] writable = true
+  upf.supply @g names ["/G"] writable = true
+  upf.supply_set @A functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"]
+  // expected-error @+1 {{equivalence cannot mix supply roots and supply sets}}
+  upf.equivalent [@p, @A] kind interchangeable
+}
+// -----
+module {
+  upf.supply @p names ["/P"] writable = true
+  upf.supply @g names ["/G"] writable = true
+  upf.supply_set @A functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"]
+  upf.supply_set @B functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required []
+  // expected-error @+1 {{declared equivalent supply sets require identical required functions}}
+  upf.equivalent [@A, @B] kind electrical
+}
+// -----
+module {
+  upf.supply @p names ["/P"] writable = true
+  upf.supply @g names ["/G"] writable = true
+  upf.supply_set @A functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"]
+  upf.supply_set @B functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required []
+  // expected-error @+1 {{declared equivalent supply sets require identical required functions}}
+  upf.equivalent [@A, @B] kind interchangeable
+}
+// -----
+module {
+  upf.supply @p names ["/P"] writable = true
+  upf.supply @g names ["/G"] writable = true
+  upf.supply_set @A functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"]
+  upf.supply_set @B functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required []
+  // expected-error @+1 {{declared equivalent supply sets require identical required functions}}
+  upf.equivalent [@A, @B] kind functional
+}
+// -----
+module {
+  upf.supply @p names ["/P"] writable = true
+  upf.supply @g names ["/G"] writable = true
+  // expected-error @+1 {{required functions must be materialized}}
+  upf.supply_set @A functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {materialized_functions = ["power"]}
+}
+// -----
+module {
+  upf.supply @p names ["/P"] writable = true
+  upf.supply @g names ["/G"] writable = true
+  // expected-error @+1 {{materialized functions must be unique standard supply functions}}
+  upf.supply_set @A functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {materialized_functions = ["power", "ground", "power"]}
+}
+// -----
+module {
+  upf.supply @p names ["/P"] writable = true
+  upf.supply @g names ["/G"] writable = true
+  // expected-error @+1 {{materialized functions must be unique standard supply functions}}
+  upf.supply_set @A functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {materialized_functions = ["power", "ground", "other"]}
+}
+// -----
+module {
+  upf.supply @p names ["/P"] writable = true
+  upf.supply @g names ["/G"] writable = true
+  module @inner {
+    // expected-error @+1 {{equivalence references an unknown supply or set}}
+    upf.equivalent [@p, @g] kind electrical
+  }
+}
+// -----
+module {
+  upf.supply @p names ["/P"] writable = true
+  upf.supply @g names ["/G"] writable = true
+  func.func @f() {
+    // expected-error @+1 {{supply equivalence must be a module-level declaration}}
+    upf.equivalent [@p, @g] kind electrical
+    return
+  }
+}
+// -----
+// expected-error @+1 {{a qualified supply function cannot carry raw origin roles}}
+#bad = #upf.supply_token<opcode = state, supply = @p, function = "power", origin_functions = []>
+module {}
+// -----
+// expected-error @+1 {{supply origin roles must be unique standard functions}}
+#bad = #upf.supply_token<opcode = state, supply = @p, origin_functions = ["power", "power"]>
+module {}

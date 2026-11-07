@@ -1,0 +1,137 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/dormant.mlir --normalize-upf-equivalences --canonicalize --cse --verify-each | FileCheck %s --check-prefix=DORMANT
+// RUN: not talos-opt %t/nested.mlir --normalize-upf-equivalences --verify-each 2>&1 | FileCheck %s --check-prefix=NESTED
+// RUN: talos-opt %t/shadow.mlir --normalize-upf-equivalences --verify-each | FileCheck %s --check-prefix=SHADOW
+// RUN: not talos-opt %t/computed.mlir --normalize-upf-equivalences --verify-each 2>&1 | FileCheck %s --check-prefix=COMPUTED
+// RUN: talos-opt %t/optional.mlir --normalize-upf-equivalences --verify-each | FileCheck %s --check-prefix=OPTIONAL
+// RUN: not talos-opt %t/constant.mlir --normalize-upf-equivalences --verify-each 2>&1 | FileCheck %s --check-prefix=CONSTANT
+// Dormant set constraints are nonvacuous; optional fields carry no populated
+// function relation. Symbol replacement respects lexical root identity.
+// DORMANT: upf.equivalent [@A, @B] kind functional
+// DORMANT: upf.equivalent [@B, @C] kind functional
+// DORMANT: upf.equivalent [@A, @C] kind interchangeable
+// NESTED: nested reference rooted at a merged supply cannot be canonicalized
+// SHADOW: module @inner attributes {test.reference = @pb}
+// SHADOW: func.func private @pb()
+// COMPUTED: electrical equivalence with a computed root requires physical source provenance
+// OPTIONAL: upf.supply @pa names ["/top/PA", "/top/PB"]
+// OPTIONAL: upf.supply @g names ["/top/G"]
+// OPTIONAL: upf.supply_set @A functions
+// OPTIONAL-SAME: ground = @g
+// OPTIONAL-SAME: power = @pa
+// CONSTANT: functional equivalence contradicts known initial supply values
+
+//--- dormant.mlir
+module {
+  upf.supply @pa names ["/top/PA"] writable = true
+  upf.supply @pb names ["/top/PB"] writable = true
+  upf.supply @pc names ["/top/PC"] writable = true
+  upf.supply @g names ["/top/G"] writable = true
+  upf.supply_set @A functions {power = @pa, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required []
+  upf.supply_set @B functions {power = @pb, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required []
+  upf.supply_set @C functions {power = @pc, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required []
+  upf.equivalent [@A, @B] kind functional
+  upf.equivalent [@B, @C] kind functional
+  upf.equivalent [@A, @C] kind interchangeable
+  simulation.design @design {
+    simulation.scope.decl 0 hierarchy "top"
+    simulation.code_unit.decl 8 in 0 root_initializer hierarchy "top.root"
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 8 : i64} {
+      simulation.return
+    }
+  }
+}
+//--- nested.mlir
+module attributes {test.reference = @pb::@member} {
+  upf.supply @pa names ["/top/PA"] writable = true
+  upf.supply @pb names ["/top/PB"] writable = true
+  upf.supply @pc names ["/top/PC"] writable = true
+  upf.supply @g names ["/top/G"] writable = true
+  upf.supply_set @A functions {power = @pa, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"]
+  upf.supply_set @B functions {power = @pb, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"]
+  upf.supply_set @C functions {power = @pc, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"]
+  upf.equivalent [@A, @B] kind electrical
+  simulation.design @design {
+    simulation.scope.decl 0 hierarchy "top"
+    simulation.code_unit.decl 8 in 0 root_initializer hierarchy "top.root"
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 8 : i64} {
+      simulation.return
+    }
+  }
+}
+//--- shadow.mlir
+module {
+  upf.supply @pa names ["/top/PA"] writable = true
+  upf.supply @pb names ["/top/PB"] writable = true
+  upf.supply @pc names ["/top/PC"] writable = true
+  upf.supply @g names ["/top/G"] writable = true
+  upf.supply_set @A functions {power = @pa, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"]
+  upf.supply_set @B functions {power = @pb, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"]
+  upf.supply_set @C functions {power = @pc, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"]
+  upf.equivalent [@A, @B] kind electrical
+  module @inner attributes {test.reference = @pb} {
+    func.func private @pb()
+  }
+  simulation.design @design {
+    simulation.scope.decl 0 hierarchy "top"
+    simulation.code_unit.decl 8 in 0 root_initializer hierarchy "top.root"
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 8 : i64} {
+      simulation.return
+    }
+  }
+}
+//--- computed.mlir
+module {
+  upf.supply @pa names ["/top/PA"] writable = true
+  upf.supply @pb names ["/top/PB"] writable = false
+  upf.supply @pc names ["/top/PC"] writable = true
+  upf.supply @g names ["/top/G"] writable = true
+  upf.supply_set @A functions {power = @pa, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"]
+  upf.supply_set @B functions {power = @pb, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"]
+  upf.supply_set @C functions {power = @pc, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"]
+  upf.equivalent [@pb, @pc] kind electrical
+  upf.domain @PD elements ["top"] power @pb on [] {input = @pa}
+  simulation.design @design {
+    simulation.scope.decl 0 hierarchy "top"
+    simulation.code_unit.decl 8 in 0 root_initializer hierarchy "top.root"
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 8 : i64} {
+      simulation.return
+    }
+  }
+}
+//--- optional.mlir
+module {
+  upf.supply @pa names ["/top/PA"] writable = true
+  upf.supply @pb names ["/top/PB"] writable = true
+  upf.supply @pc names ["/top/PC"] writable = true
+  upf.supply @g names ["/top/G"] writable = true
+  upf.supply_set @A functions {power = @pa, ground = @g, nwell = @pb, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"]
+  upf.supply_set @B functions {power = @pb, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"]
+  upf.supply_set @C functions {power = @pc, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"]
+  upf.equivalent [@A, @B] kind electrical
+  simulation.design @design {
+    simulation.scope.decl 0 hierarchy "top"
+    simulation.code_unit.decl 8 in 0 root_initializer hierarchy "top.root"
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 8 : i64} {
+      simulation.return
+    }
+  }
+}
+//--- constant.mlir
+module {
+  upf.supply @pa names ["/top/PA"] writable = false {initial_value = 4000001 : i64, always_on = true}
+  upf.supply @pb names ["/top/PB"] writable = false {initial_value = 3200001 : i64, always_on = true}
+  upf.supply @pc names ["/top/PC"] writable = true
+  upf.supply @g names ["/top/G"] writable = true
+  upf.supply_set @A functions {power = @pa, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"]
+  upf.supply_set @B functions {power = @pb, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"]
+  upf.supply_set @C functions {power = @pc, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"]
+  upf.equivalent [@A, @B] kind interchangeable
+  simulation.design @design {
+    simulation.scope.decl 0 hierarchy "top"
+    simulation.code_unit.decl 8 in 0 root_initializer hierarchy "top.root"
+    simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 8 : i64} {
+      simulation.return
+    }
+  }
+}

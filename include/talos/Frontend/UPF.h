@@ -27,6 +27,8 @@ mlir::LogicalResult validateUPFDesignAttributeBehavior(mlir::ModuleOp module);
 /// Forward uniform whole-port predefined policies to the shared consumers.
 mlir::LogicalResult normalizeUPFPortDesignAttributes(mlir::ModuleOp module);
 mlir::LogicalResult validateUPFPortAttributes(mlir::ModuleOp module);
+mlir::LogicalResult normalizeUPFSupplyEquivalences(mlir::ModuleOp module);
+std::unique_ptr<mlir::Pass> createNormalizeUPFSupplyEquivalencesPass();
 std::unique_ptr<mlir::Pass> createResolveUPFDomainExtentsPass();
 /// Preserve synchronous event-time publications before optimizer cleanup.
 /// Run after unit lowering and again after UPF creates executable writers.

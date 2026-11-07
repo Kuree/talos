@@ -7,6 +7,7 @@
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include <map>
+#include <optional>
 
 #include "talos/Dialect/UPF/UPFDialect.cpp.inc"
 #include "talos/Dialect/UPF/UPFEnums.cpp.inc"
@@ -15,6 +16,42 @@
 #define GET_OP_CLASSES
 #include "talos/Dialect/UPF/UPFOps.cpp.inc"
 namespace talos::upf {
+mlir::LogicalResult UPFSupplyEquivalenceOp::verify() {
+  if (!mlir::isa<mlir::ModuleOp>((*this)->getParentOp()))
+    return emitOpError("supply equivalence must be a module-level declaration");
+  if (getObjects().size() < 2 || getObjects().size() > 4096)
+    return emitOpError("equivalence requires between 2 and 4096 supplies");
+  return mlir::success();
+}
+mlir::LogicalResult
+UPFSupplyEquivalenceOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
+  std::optional<bool> sets;
+  UPFSupplySetOp first;
+  for (auto value : getObjects()) {
+    auto *object = symbols.lookupNearestSymbolFrom(
+        *this, mlir::cast<mlir::FlatSymbolRefAttr>(value));
+    if (!mlir::isa_and_nonnull<UPFSupplyOp, UPFSupplySetOp>(object))
+      return emitOpError("equivalence references an unknown supply or set");
+    if (object->getParentOp() != (*this)->getParentOp())
+      return emitOpError(
+          "equivalence operands must be declared in the same module");
+    bool isSet = mlir::isa<UPFSupplySetOp>(object);
+    if (sets && *sets != isSet)
+      return emitOpError("equivalence cannot mix supply roots and supply sets");
+    sets = isSet;
+    if (auto set = mlir::dyn_cast<UPFSupplySetOp>(object)) {
+      if (first &&
+          (first.getRequired().size() != set.getRequired().size() ||
+           !llvm::all_of(first.getRequired(), [&](mlir::Attribute function) {
+             return llvm::is_contained(set.getRequired(), function);
+           })))
+        return emitOpError("declared equivalent supply sets require identical "
+                           "required functions");
+      first = set;
+    }
+  }
+  return mlir::success();
+}
 bool isDesignAttributeModelOnly(llvm::StringRef name) {
   return name == "UPF_is_hard_macro" || name == "UPF_is_soft_macro" ||
          name == "UPF_is_power_aware_model" || name == "UPF_switch_cell_type";
@@ -343,7 +380,8 @@ UPFDialect::verifyOperationAttribute(mlir::Operation *operation,
 mlir::LogicalResult SupplyExpressionTokenAttr::verify(
     llvm::function_ref<mlir::InFlightDiagnostic()> error,
     SupplyExpressionOpcode opcode, mlir::FlatSymbolRefAttr supply,
-    mlir::StringAttr function, mlir::IntegerAttr value, mlir::FloatAttr real) {
+    mlir::StringAttr function, mlir::IntegerAttr value, mlir::FloatAttr real,
+    mlir::ArrayAttr originFunctions) {
   using O = SupplyExpressionOpcode;
   if (opcode == O::State || opcode == O::Voltage) {
     if (!supply || value || real ||
@@ -351,18 +389,33 @@ mlir::LogicalResult SupplyExpressionTokenAttr::verify(
          !llvm::is_contained(getSupplyFunctionNames(), function.getValue())))
       return error() << "supply reference requires a root and optional "
                         "standard function only";
+    if (originFunctions) {
+      if (function)
+        return error()
+               << "a qualified supply function cannot carry raw origin roles";
+      llvm::StringSet<> names;
+      for (auto attr : originFunctions) {
+        auto name = mlir::dyn_cast<mlir::StringAttr>(attr);
+        if (!name ||
+            !llvm::is_contained(getSupplyFunctionNames(), name.getValue()) ||
+            !names.insert(name.getValue()).second)
+          return error()
+                 << "supply origin roles must be unique standard functions";
+      }
+    }
   } else if (opcode == O::StateValue || opcode == O::Boolean) {
     unsigned width = opcode == O::Boolean ? 1 : 32;
-    if (supply || function || real || !value ||
+    if (supply || function || originFunctions || real || !value ||
         !value.getType().isSignlessInteger(width) ||
         (opcode == O::StateValue && (value.getInt() < 0 || value.getInt() > 3)))
       return error()
              << "supply state/bool literal has an invalid type or value";
   } else if (opcode == O::Real) {
-    if (supply || function || value || !real || !real.getType().isF64() ||
-        !real.getValue().isFinite())
+    if (supply || function || originFunctions || value || !real ||
+        !real.getType().isF64() || !real.getValue().isFinite())
       return error() << "supply real literal requires one finite f64 value";
-  } else if (opcode > O::Or || supply || function || value || real)
+  } else if (opcode > O::Or || supply || function || originFunctions || value ||
+             real)
     return error() << "supply operator cannot carry operand fields";
   return mlir::success();
 }
@@ -528,15 +581,26 @@ UPFSupplySetOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
                 "predicate functions must be required functions");
           powerOrGround |=
               function.getValue() == "power" || function.getValue() == "ground";
+        } else if (auto origins = token.getOriginFunctions()) {
+          for (auto attr : origins) {
+            auto function = mlir::cast<mlir::StringAttr>(attr);
+            if (getFunctions().get(function.getValue()) != token.getSupply() ||
+                !llvm::is_contained(getRequired(), function))
+              return emitOpError("resolved predicate roles must match required "
+                                 "function origins");
+            powerOrGround |= function.getValue() == "power" ||
+                             function.getValue() == "ground";
+          }
         } else {
-          powerOrGround |= token.getSupply() == getFunctions().get("power") ||
-                           token.getSupply() == getFunctions().get("ground");
-          for (auto function : getSupplyFunctionNames())
-            if (getFunctions().get(function) == token.getSupply() &&
-                !llvm::is_contained(getRequired(), mlir::StringAttr::get(
-                                                       getContext(), function)))
+          for (auto attr : getPopulatedFunctions()) {
+            auto function = mlir::cast<mlir::StringAttr>(attr).getValue();
+            if (getFunctions().get(function) != token.getSupply())
+              continue;
+            if (!llvm::is_contained(getRequired(), attr))
               return emitOpError("raw predicate references must preserve "
                                  "required function usage");
+            powerOrGround |= function == "power" || function == "ground";
+          }
         }
       }
       if (!powerOrGround)
@@ -544,6 +608,10 @@ UPFSupplySetOp::verifySymbolUses(mlir::SymbolTableCollection &symbols) {
             "predicate must reference this set's power or ground function");
     }
   return mlir::success();
+}
+mlir::ArrayAttr UPFSupplySetOp::getPopulatedFunctions() {
+  auto functions = getMaterializedFunctionsAttr();
+  return functions ? functions : getRequired();
 }
 mlir::LogicalResult UPFSupplySetOp::verify() {
   if (auto strategy = getStrategyAttr();
@@ -567,6 +635,19 @@ mlir::LogicalResult UPFSupplySetOp::verify() {
         !required.insert(name).second)
       return emitOpError(
           "required functions must be unique standard supply functions");
+  }
+  if (auto functions = getMaterializedFunctionsAttr()) {
+    llvm::StringSet<> materialized;
+    for (auto attr : functions) {
+      auto name = mlir::cast<mlir::StringAttr>(attr).getValue();
+      if (!llvm::is_contained(getSupplyFunctionNames(), name) ||
+          !materialized.insert(name).second)
+        return emitOpError(
+            "materialized functions must be unique standard supply functions");
+    }
+    for (const auto &entry : required)
+      if (!materialized.contains(entry.getKey()))
+        return emitOpError("required functions must be materialized");
   }
   if (auto states = getStatesAttr()) {
     llvm::StringSet<> names;
@@ -825,7 +906,9 @@ mlir::LogicalResult UPFDomainOp::verify() {
   if (auto name = getIsolationName();
       name && (name->empty() || !getIsolationControl()))
     return emitOpError("isolation strategy name requires an isolation control");
-  if (!getIsolationDiffSupplyOnly() && !getIsolationControl())
+  if ((!getIsolationDiffSupplyOnly() ||
+       !getIsolationUseFunctionalEquivalence()) &&
+      !getIsolationControl())
     return emitOpError("isolation supply filter requires an isolation control");
   if (getClamp() != 0 && getClamp() != 1)
     return emitOpError("isolation clamp must be zero or one");

@@ -6,6 +6,24 @@ include "mlir/IR/OpBase.td"
 include "mlir/IR/SymbolInterfaces.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
+def UPFSupplyEquivalenceOp : Op<UPFDialect, "equivalent", [
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "declared supply equivalence and substitution constraints";
+  let description = [{
+    A homogeneous list of supply roots or supply sets records a 6.44 user
+    constraint. Electrical declarations merge physical rail identities;
+    interchangeable declarations preserve distinct rails and their policies.
+    Functional declarations also preserve distinct rails and prohibit replacing
+    any listed object by another listed object. That prohibition retains the
+    original object granularity: it is not a transitive non-equivalence class,
+    and a set prohibition does not prohibit its shared ground replacing itself.
+    These compiler-only declarations are consumed before runtime encoding.
+  }];
+  let arguments = (ins FlatSymbolRefArrayAttr:$objects,
+      UPFSupplyEquivalenceKind:$kind);
+  let assemblyFormat = "$objects `kind` $kind attr-dict";
+  let hasVerifier = 1;
+}
 def UPFContextsOp : Op<UPFDialect, "contexts", []> {
   let summary = "design-top contexts visited by UPF source execution";
   let description = [{
@@ -151,6 +169,9 @@ def UPFSupplySetOp : Op<UPFDialect, "supply_set", [Symbol,
     Optional power states retain typed predicates and simulation states.
     Strategy-local handles also identify their owning domain and strategy;
     a binding names an associated supplier.
+    materialized_functions distinguishes genuine bound/abstract function
+    identities from unused placeholders. It includes all required functions;
+    omission in legacy raw IR means that only required roles are populated.
   }];
   let arguments = (ins SymbolNameAttr:$sym_name, DictionaryAttr:$functions,
       StrArrayAttr:$required, OptionalAttr<UPFPowerStateArrayAttr>:$states,
@@ -158,9 +179,15 @@ def UPFSupplySetOp : Op<UPFDialect, "supply_set", [Symbol,
       OptionalAttr<FlatSymbolRefAttr>:$owner,
       DefaultValuedAttr<BoolAttr, "false">:$complete,
       OptionalAttr<StrAttr>:$strategy,
-      OptionalAttr<FlatSymbolRefAttr>:$binding);
+      OptionalAttr<FlatSymbolRefAttr>:$binding,
+      OptionalAttr<StrArrayAttr>:$materialized_functions);
   let assemblyFormat = "$sym_name `functions` $functions `required` $required attr-dict";
   let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    /// Actual bound/abstract identities, independently of usage requirements.
+    /// Legacy raw fields outside `required` may be unpopulated placeholders.
+    ::mlir::ArrayAttr getPopulatedFunctions();
+  }];
 }
 def UPFDomainOp : Op<UPFDialect, "domain", [Symbol,
     DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
@@ -206,7 +233,8 @@ def UPFDomainOp : Op<UPFDialect, "domain", [Symbol,
       OptionalAttr<StrAttr>:$isolation_top,
       // Derived 6.20 ownership. Shares the physical parent's exact primary
       // supply and policies, without copying its strategies or switch.
-      OptionalAttr<FlatSymbolRefAttr>:$anonymous_parent);
+      OptionalAttr<FlatSymbolRefAttr>:$anonymous_parent,
+      DefaultValuedAttr<BoolAttr, "true">:$isolation_use_functional_equivalence);
   let assemblyFormat = "$sym_name `elements` $elements `power` $power `on` $on attr-dict";
   let hasVerifier = 1;
   let extraClassDeclaration = [{

@@ -127,8 +127,9 @@ module {
   upf.supply @power names ["/top/VDD"] writable = true
   upf.supply @ground names ["/top/VSS"] writable = true
   upf.supply @bias names ["/top/BIAS"] writable = true
+  // A genuine populated role remains distinguishable from legacy placeholders.
   // expected-error @+1 {{raw predicate references must preserve required function usage}}
-  upf.supply_set @bad functions #f required [] {states = [#upf.power_state<name = "ON", condition = #e, simstate = normal>]}
+  upf.supply_set @bad functions #f required [] {materialized_functions = ["power"], states = [#upf.power_state<name = "ON", condition = #e, simstate = normal>]}
 }
 // -----
 #f = {power = @power, ground = @ground, nwell = @bias, pwell = @bias, deepnwell = @bias, deeppwell = @bias}

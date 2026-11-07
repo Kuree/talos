@@ -1,0 +1,64 @@
+// REQUIRES: upf
+// RUN: %split-file %s %t
+// RUN: talos --upf %t/inter.upf -O0 --mlir-verify-each %t/design.sv -o %t.inter && %t.inter | FileCheck %s
+// RUN: talos --upf %t/noninter.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.noninter && %t.noninter | FileCheck %s
+// RUN: talos --upf %t/false.upf -DCLAMP -O3 --mlir-verify-each %t/design.sv -o %t.false && %t.false | FileCheck %s
+// RUN: talos --upf %t/electrical.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.electrical && %t.electrical | FileCheck %s
+// RUN: talos --upf %t/inter.upf -emit-slang --mlir-verify-each %t/design.sv -o %t.mlir && FileCheck %s --check-prefix=IR --input-file=%t.mlir
+// RUN: talos --upf %t/true.upf -O3 --mlir-verify-each %t/design.sv -o %t.true && %t.true | FileCheck %s
+// PG filtering admits F, including NI, unless functional matching is disabled.
+// Functional declarations retain independent rails, handle catalogs and states.
+// CHECK: supply equivalence isolation passed
+// IR-DAG: upf.supply {{.*}} names [{{.*}}/A.power{{.*}}]
+// IR-DAG: upf.supply {{.*}} names [{{.*}}/B.power{{.*}}]
+// IR: upf.equivalent [{{.*}}A{{.*}}B{{.*}}] kind interchangeable
+
+//--- design.sv
+module leaf(input logic iso,output logic q);
+  always_comb q=1;
+endmodule
+module top;
+  import UPF::*;
+  logic iso=0; wire q; leaf dut(iso,q);
+  initial begin
+    if (!supply_on("/top/dut/A.power") || !supply_on("/top/dut/A.ground",0.0) ||
+        !supply_on("/top/dut/B.power") || !supply_on("/top/dut/B.ground",0.0))
+      $fatal(1,"supplies");
+    #1; if (q !== 1) $fatal(1,"normal");
+    iso=1; #1;
+`ifdef CLAMP
+    if (q !== 0) $fatal(1,"functional FALSE ignored");
+`else
+    if (q !== 1) $fatal(1,"equivalent supply was isolated");
+`endif
+    $display("supply equivalence isolation passed"); $finish;
+  end
+endmodule
+//--- block.upf
+create_supply_set A
+create_supply_set B
+add_power_state B -state {DROWSY -supply_expr {power == PARTIAL_ON && ground == FULL_ON} -simstate CORRUPT}
+create_power_domain PD -elements . -supply {primary A}
+set_port_attributes -ports q -receiver_supply B
+set_equivalent {*}$::equivalence -sets {A B}
+set_isolation ISO -domain PD -isolation_signal iso -applies_to outputs -location parent -clamp_value 0 {*}$::filter
+//--- inter.upf
+set ::equivalence {-function_only -interchangeable}
+set ::filter {-use_functional_equivalence}
+load_upf [file join [file dirname [info script]] block.upf] -scope dut
+//--- noninter.upf
+set ::equivalence {-function_only -interchangeable FALSE}
+set ::filter {}
+load_upf [file join [file dirname [info script]] block.upf] -scope dut
+//--- true.upf
+set ::equivalence {-function_only}
+set ::filter {-use_functional_equivalence TRUE}
+load_upf [file join [file dirname [info script]] block.upf] -scope dut
+//--- false.upf
+set ::equivalence {-function_only -interchangeable TRUE}
+set ::filter {-use_functional_equivalence FALSE}
+load_upf [file join [file dirname [info script]] block.upf] -scope dut
+//--- electrical.upf
+set ::equivalence {-interchangeable FALSE}
+set ::filter {-use_functional_equivalence FALSE}
+load_upf [file join [file dirname [info script]] block.upf] -scope dut

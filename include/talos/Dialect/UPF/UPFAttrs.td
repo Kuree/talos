@@ -116,11 +116,18 @@ def UPFSwitchStateArrayAttr
 }
 def UPFSupplyExpressionTokenAttr : UPFAttr<"SupplyExpressionToken", "supply_token"> {
   let summary = "typed supply predicate operand/operator (1801 6.5.4)";
+  let description = [{
+    origin_functions preserves resolved raw-reference roles before electrical
+    canonicalization. An explicit empty list denotes an external value with no
+    function role in this set. Absence retains legacy raw alias inference.
+    These roles validate usage without changing the predicate's supply value.
+  }];
   let parameters = (ins EnumParameter<UPFSupplyExpressionOpcode>:$opcode,
       OptionalParameter<"::mlir::FlatSymbolRefAttr">:$supply,
       OptionalParameter<"::mlir::StringAttr">:$function,
       OptionalParameter<"::mlir::IntegerAttr">:$value,
-      OptionalParameter<"::mlir::FloatAttr">:$real);
+      OptionalParameter<"::mlir::FloatAttr">:$real,
+      OptionalParameter<"::mlir::ArrayAttr">:$origin_functions);
   let assemblyFormat = "`<` struct(params) `>`";
   let genVerifyDecl = 1;
 }

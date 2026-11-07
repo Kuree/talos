@@ -1,0 +1,70 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/invalid.mlir --normalize-upf-equivalences --split-input-file --verify-diagnostics
+// RUN: talos-opt %t/valid.mlir --normalize-upf-equivalences --split-input-file --verify-each | FileCheck %s
+// Known initial state/defined voltage contradictions are independent of future
+// mutability. OFF and UNDETERMINED voltage payloads do not establish a mismatch.
+// CHECK: module @case0
+// CHECK: upf.supply @a names ["/A", "/B"]
+// CHECK: module @case1
+// CHECK: module @case2
+// CHECK: module @case3
+
+//--- invalid.mlir
+module {
+  upf.supply @a names ["/A"] writable = true {initial_value = 0 : i64}
+  // expected-error @+1 {{functional equivalence contradicts known initial supply values}}
+  upf.supply @b names ["/B"] writable = true {initial_value = 4000001 : i64}
+  upf.equivalent [@a, @b] kind interchangeable
+}
+// -----
+module {
+  upf.supply @a names ["/A"] writable = true {initial_value = 4000001 : i64}
+  // expected-error @+1 {{functional equivalence contradicts known initial supply values}}
+  upf.supply @b names ["/B"] writable = true {initial_value = 3200001 : i64}
+  upf.equivalent [@a, @b] kind functional
+}
+// -----
+module {
+  upf.supply @a names ["/A"] writable = true {initial_value = 4000002 : i64}
+  // expected-error @+1 {{functional equivalence contradicts known initial supply values}}
+  upf.supply @b names ["/B"] writable = true {initial_value = 3200002 : i64}
+  upf.equivalent [@a, @b] kind interchangeable
+}
+// -----
+module {
+  upf.supply @a names ["/A"] writable = true {initial_value = 4000001 : i64}
+  // expected-error @+1 {{functional equivalence contradicts known initial supply values}}
+  upf.supply @b names ["/B"] writable = true {initial_value = 4000002 : i64}
+  upf.equivalent [@a, @b] kind functional
+}
+// -----
+module attributes {runtime.llvm_prepared} {
+  // expected-error @-1 {{supply equivalence must be resolved before scheduling and encoding}}
+  upf.supply @a names ["/A"] writable = true
+  upf.supply @b names ["/B"] writable = true
+  upf.equivalent [@a, @b] kind interchangeable
+}
+//--- valid.mlir
+module @case0 {
+  upf.supply @a names ["/A"] writable = true {initial_value = 0 : i64}
+  upf.supply @b names ["/B"] writable = true {initial_value = 4000000 : i64}
+  upf.equivalent [@a, @b] kind electrical
+}
+// -----
+module @case1 {
+  upf.supply @a names ["/A"] writable = true {initial_value = 0 : i64}
+  upf.supply @b names ["/B"] writable = true {initial_value = 4000000 : i64}
+  upf.equivalent [@a, @b] kind interchangeable
+}
+// -----
+module @case2 {
+  upf.supply @a names ["/A"] writable = true {initial_value = 3 : i64}
+  upf.supply @b names ["/B"] writable = true {initial_value = 4000003 : i64}
+  upf.equivalent [@a, @b] kind interchangeable
+}
+// -----
+module @case3 {
+  upf.supply @a names ["/A"] writable = true {initial_value = 4000001 : i64}
+  upf.supply @b names ["/B"] writable = true {initial_value = 4000001 : i64}
+  upf.equivalent [@a, @b] kind functional
+}

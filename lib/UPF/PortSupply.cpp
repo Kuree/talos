@@ -57,7 +57,10 @@ StringRef PortSupplyAnalysis::owner(sim::SimPortDeclOp port) const {
   return declaration.getHierarchicalName().value_or(StringRef{});
 }
 bool PortSupplyAnalysis::equal(FlatSymbolRefAttr a, FlatSymbolRefAttr b,
-                               bool pgOnly) const {
+                               bool pgOnly,
+                               upf::SupplyEquivalenceKind kind) const {
+  if (relations)
+    return relations->matches(a, b, kind, pgOnly);
   if (!a || !b)
     return false;
   if (a == b)
@@ -87,6 +90,9 @@ LogicalResult PortSupplyAnalysis::initialize() {
   if (ports.empty() && design.getOps<upf::UPFPortBindingOp>().empty() &&
       !hasValues)
     return success();
+  relations.emplace(module);
+  if (failed(relations->initialize()))
+    return failure();
   for (auto scope : design.getOps<sim::SimScopeDeclOp>()) {
     if (!charge())
       return scope.emitError(
@@ -670,7 +676,10 @@ FailureOr<bool> PortSupplyAnalysis::isolate(upf::UPFDomainOp current,
   bool yes = false, no = false;
   uint64_t end = 0;
   auto decide = [&](FlatSymbolRefAttr receiver) {
-    bool applies = !receiver || !equal(*source, receiver, true);
+    auto kind = current.getIsolationUseFunctionalEquivalence()
+                    ? upf::SupplyEquivalenceKind::Functional
+                    : upf::SupplyEquivalenceKind::Electrical;
+    bool applies = !receiver || !equal(*source, receiver, true, kind);
     yes |= applies;
     no |= !applies;
   };

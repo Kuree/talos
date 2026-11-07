@@ -18,8 +18,8 @@
     "cell_tcl_commands": 6,
     "query_tcl_commands": 5,
     "total_tcl_commands": 68,
-    "registered_tcl_commands": 21,
-    "unregistered_tcl_commands": 47,
+    "registered_tcl_commands": 22,
+    "unregistered_tcl_commands": 46,
     "enumerated_hdl_functions": 25,
     "available_hdl_functions": 9,
     "unavailable_hdl_functions": 16
@@ -168,7 +168,7 @@
         "-update"
       ],
       "unsupported_options": [],
-      "limits": "Compiler-only containers with nested/empty membership, additive updates, transactional cycle/namespace checks and primary-only supply handles. Required physical functions propagate to/among unbound primaries after checking preexisting concrete equivalence; unused well bindings, set identities and state catalogs remain distinct. Currently requires matching required-function sets. Retention and the implemented parent-output isolation subset propagate transactional typed deltas to unique leaves, including late nested members. Leaf identities, independent handles/catalogs, direct local refinements and original caller scope/source order are preserved. Constructor additions that conflict with prior operations roll back. Connectivity/cell-mapping/level-shifter/repeater fanout, differing required-function sets and declared functional equivalence remain unsupported. Some boundary legality is still diagnosed during simulation lowering. Composite classification must precede strategy application.",
+      "limits": "Compiler-only containers with nested/empty membership, additive updates, transactional cycle/namespace checks and primary-only supply handles. Required physical functions propagate to/among unbound primaries after checking preexisting concrete equivalence; unused well bindings, set identities and state catalogs remain distinct. Currently requires matching required-function sets. Retention and the implemented parent-output isolation subset propagate transactional typed deltas to unique leaves, including late nested members. Leaf identities, independent handles/catalogs, direct local refinements and original caller scope/source order are preserved. Constructor additions that conflict with prior operations roll back. Connectivity/cell-mapping/level-shifter/repeater fanout, differing required-function sets and functional-only composition without merging independent rails remain unsupported. Electrical declarations can establish the required physical equivalence. Some boundary legality is still diagnosed during simulation lowering. Composite classification must precede strategy application.",
       "implementation": [
         "lib/UPF/Execute.cpp",
         "include/talos/Dialect/UPF/UPFOps.td",
@@ -490,9 +490,25 @@
     {
       "clause": "6.44",
       "command": "set_equivalent",
-      "status": "unsupported",
-      "missing": "Command is not registered; its functionality is not implemented.",
-      "workstream": "supply_and_logic_connectivity"
+      "status": "partial",
+      "workstream": "supply_and_logic_connectivity",
+      "accepted_options": [
+        "-function_only",
+        "-interchangeable",
+        "-nets",
+        "-sets"
+      ],
+      "unsupported_options": [],
+      "limits": "Electrical, functional/interchangeable and functional/non-interchangeable declarations for existing UPF-created supply nets, ports, functions, sets and handles. Electrical declarations merge physical identities only after original directed source provenance checks; functional relations preserve independent rails and catalogs. Equivalent sets require equal required-function masks, while explicit whole-set declarations project all genuinely populated corresponding functions. Original non-interchangeable object groups remain prohibitions rather than transitive non-equivalence classes. Known initial-value, computed-switch, required-function and substitution contradictions diagnose; caught immediate errors roll back. Uses the existing unresolved directional network: inout/resolved/implemented HDL linkage and ambiguous upstream source proofs remain staged. Functional-only composite composition and independent computed-switch functional proofs remain staged. Later dynamic constraint violations through independent runtime/VPI supply stimulus are not monitored. Equivalence does not copy state catalogs, strategies or availability.",
+      "implementation": [
+        "lib/UPF/Execute.cpp",
+        "lib/UPF/SupplyNetwork.cpp",
+        "lib/UPF/SupplyRelations.cpp",
+        "lib/UPF/NormalizeEquivalences.cpp",
+        "include/talos/Dialect/UPF/UPFOps.td",
+        "lib/Dialect/UPF/UPFDialect.cpp",
+        "lib/UPF/PortSupply.cpp"
+      ]
     },
     {
       "clause": "6.45",
@@ -505,7 +521,8 @@
         "-clamp_value",
         "-applies_to",
         "-location",
-        "-diff_supply_only"
+        "-diff_supply_only",
+        "-use_functional_equivalence"
       ],
       "unsupported_options": [
         "-elements",
@@ -525,10 +542,9 @@
         "-update",
         "-use_equivalence",
         "-name_prefix",
-        "-name_suffix",
-        "-use_functional_equivalence"
+        "-name_suffix"
       ],
-      "limits": "One parent-located output strategy per domain; scalar control and clamp 0/1. Own-context terminal/design-top output receiver assumptions support power/ground-only different-supply filtering with proved whole internal variable drivers; unknown source/sink endpoints pass TRUE. Full-source and marked-publication identities precede filtering/mux insertion. No general input/inout/per-path selection, endpoint inference, per-bit filtering, other locations, X/Z/latch/any clamps, strategy supplies, mapped cells or effective RET-supply filtering. diff_supply_only FALSE permits unconditional RET-powered output isolation. Opaque or split/side-effectful output publications are explicitly staged. Physical and composite targets support caller-scope control resolution independently of leaf creation scope; late members receive the common strategy transactionally. Isolation predefined supply handles remain unimplemented.",
+      "limits": "One parent-located output strategy per domain; scalar control and clamp 0/1. Own-context terminal/design-top output receiver assumptions support power/ground-only different-supply filtering with proved whole internal variable drivers. -use_functional_equivalence defaults to TRUE (including omitted/bare forms): PG filtering accepts functional equivalence, including non-interchangeable declarations; FALSE requires electrical PG equivalence. Unknown source/sink endpoints pass TRUE. Full-source and marked-publication identities precede filtering/mux insertion. No general input/inout/per-path selection, endpoint inference, per-bit filtering, other locations, X/Z/latch/any clamps, strategy supplies, mapped cells or effective RET-supply filtering. diff_supply_only FALSE permits unconditional RET-powered output isolation. Opaque or split/side-effectful output publications are explicitly staged. Physical and composite targets support caller-scope control resolution independently of leaf creation scope; late members receive the common strategy transactionally. Isolation predefined supply handles remain unimplemented.",
       "implementation": [
         "lib/UPF/Execute.cpp",
         "lib/UPF/PortSupply.cpp",
@@ -583,7 +599,7 @@
         "-is_analog",
         "-is_isolated"
       ],
-      "limits": "Eight 5.7.7 association tiers resolve each property and logical packed bit independently, including genuine HDL port/internal-symbol attributes, parameter variants and unused default models. Exclusions subtract windows without raising rank; full-range part syntax retains its part tier. Equal values are idempotent, current top-rank conflicts fail atomically, explicit empty lists remain empty, and zero-argument invocation errors. -elements dot names the design top; model dot identifies the local model. Model-based instance exclusions are explicitly staged. Driver/receiver syntax enforces Table 5 instance/local-simple-port restrictions and typed supply-set references. Attributes on ordinary nonterminal ports are ignored; inside and outside top/terminal views remain distinct. Internal output-driver and input-receiver assertions require existing exact/electrical equivalence; full equivalence compares required functions and all six roots (a conservative proof for unused optional functions). Output-driver proof admits direct whole-variable functional writers and verified whole-storage captures from actual RootInitializer spawns; declaration/Initial seeding alone cannot establish a driver. Helpers, partial/escaping references, resolved nets, absent functional drivers and retention-powered effective outputs remain unknown or explicitly staged for active consistency consumers. Own-context output receiver assumptions feed different-PG isolation using only power/ground equivalence, independent of bias, required sets, supply identities, state catalogs and simstates. Unknown endpoints pass TRUE; outside-view assumptions do not replace visible parent receivers. General endpoint inference, per-bit isolation views, active external input-driver corruption, inout, clamp/literal/PG/related-port/feedthrough/unconnected/analog/isolated consumers, Liberty attributes and implemented HDL supply linkage remain pending. Unsupported predefined properties are rejected rather than stored as inert custom values. Uniform whole-port retention and simstate properties merge into one shared design policy in both source and raw MLIR; partial effective predefined policies are staged. Custom properties remain compiler metadata. Opaque output isolation, split/side-effectful connection bodies and marked values without an exact reflected whole-port source view diagnose. Logical/formal/actor identity is independent of aliased storage; escaped formal spellings bridge through the declared name and scope, with collision checks. Metadata inventories are consumed before encoding, with no new runtime state/functions. Selector/history/projection and consumer analysis use bounded 1048576-unit work budgets; selector lists are capped at 4096 and names/values at 64 KiB.",
+      "limits": "Eight 5.7.7 association tiers resolve each property and logical packed bit independently, including genuine HDL port/internal-symbol attributes, parameter variants and unused default models. Exclusions subtract windows without raising rank; full-range part syntax retains its part tier. Equal values are idempotent, current top-rank conflicts fail atomically, explicit empty lists remain empty, and zero-argument invocation errors. -elements dot names the design top; model dot identifies the local model. Model-based instance exclusions are explicitly staged. Driver/receiver syntax enforces Table 5 instance/local-simple-port restrictions and typed supply-set references. Attributes on ordinary nonterminal ports are ignored; inside and outside top/terminal views remain distinct. Internal output-driver and input-receiver assertions require interchangeable equivalence, including electrical and declared functional/interchangeable facts; non-interchangeable functional declarations do not satisfy this consistency check. Natural full equivalence requires equal required-function masks and corresponding required-role equivalence; unused optional bindings do not define natural full equivalence. Explicit whole-set declarations additionally constrain genuinely populated optional functions. Output-driver proof admits direct whole-variable functional writers and verified whole-storage captures from actual RootInitializer spawns; declaration/Initial seeding alone cannot establish a driver. Helpers, partial/escaping references, resolved nets, absent functional drivers and retention-powered effective outputs remain unknown or explicitly staged for active consistency consumers. Own-context output receiver assumptions feed different-PG isolation using only power/ground equivalence, independent of bias, required sets, supply identities, state catalogs and simstates. Unknown endpoints pass TRUE; outside-view assumptions do not replace visible parent receivers. General endpoint inference, per-bit isolation views, active external input-driver corruption, inout, clamp/literal/PG/related-port/feedthrough/unconnected/analog/isolated consumers, Liberty attributes and implemented HDL supply linkage remain pending. Unsupported predefined properties are rejected rather than stored as inert custom values. Uniform whole-port retention and simstate properties merge into one shared design policy in both source and raw MLIR; partial effective predefined policies are staged. Custom properties remain compiler metadata. Opaque output isolation, split/side-effectful connection bodies and marked values without an exact reflected whole-port source view diagnose. Logical/formal/actor identity is independent of aliased storage; escaped formal spellings bridge through the declared name and scope, with collision checks. Metadata inventories are consumed before encoding, with no new runtime state/functions. Selector/history/projection and consumer analysis use bounded 1048576-unit work budgets; selector lists are capped at 4096 and names/values at 64 KiB.",
       "implementation": [
         "lib/UPF/PortAttributes.cpp",
         "lib/UPF/PortDesignAttributes.cpp",
@@ -596,7 +612,9 @@
         "lib/Conversion/TalosToSimulation/PrepareUnits.cpp",
         "lib/Conversion/TalosToSimulation/LowerUnitLValues.cpp",
         "include/talos/Dialect/UPF/UPFOps.td",
-        "lib/Dialect/UPF/UPFDialect.cpp"
+        "lib/Dialect/UPF/UPFDialect.cpp",
+        "lib/UPF/SupplyRelations.cpp",
+        "lib/UPF/NormalizeEquivalences.cpp"
       ]
     },
     {
@@ -1014,7 +1032,7 @@
         "8.3"
       ],
       "missing": [
-        "Composite connectivity/cell-mapping/level-shifter/repeater fanout, differing required-function set propagation and declared functional equivalence; deferred domain classification after strategy use",
+        "Composite connectivity/cell-mapping/level-shifter/repeater fanout, differing required-function set propagation and functional-only composition without merging independent rails; deferred domain classification after strategy use",
         "Available/boundary supplies and function-type definition",
         "General design-top/descendant coverage validation; current compatibility behavior leaves unclaimed ordinary RTL outside declared intent. Hard macros with an unowned physical parent diagnose; public anonymous-object naming, query and serialization exposure remains pending"
       ]
@@ -1030,6 +1048,7 @@
         "6.22",
         "6.24",
         "6.27",
+        "6.44",
         "9.1",
         "9.2"
       ],
@@ -1037,7 +1056,8 @@
         "Resolved and multi-source networks, inout connections and switch cascades",
         "Multiple switch inputs, multiple switches per domain, acknowledgments/delays and implementations",
         "Automatic PG connectivity, terminal PG availability/extent and implemented HDL supply objects",
-        "Logic nets/ports, voltage conversion tables, equivalence/correlation and dynamic supply-state control"
+        "Logic nets/ports, voltage conversion tables, correlation and dynamic supply-state control",
+        "Equivalence on resolved/inout/implemented HDL supplies, ambiguous upstream provenance, independent computed-switch functional proofs and dynamic user-constraint validation for independently stimulated functional rails"
       ]
     },
     {
@@ -1979,13 +1999,81 @@
           ],
           "review": "Two independent subagents approve the scoped implementation after reviewing IEEE1801-2018 and IEEE1800-2023 correctness, LLVM/MLIR architecture, source/raw-IR parity and coverage. Findings fixed model bit-versus-escaped-literal identity, required-function equivalence, combined predefined-policy normalization, opaque output admission, binding-only cleanup, functional driver/capture provenance, publication/source identity, display-name authority and wide two-state-to-four-state conversions. Compiler reviewer independently verified scoped/initialized-FF/merged-policy executions, escaped literal and vector metadata, HDL attributes, context/required-function behavior, conformance, raw diagnostics and no-service IR. Spec reviewer independently passed fourteen optimized source executions including corrected 6.48 both tiers, four wide 65-bit isolation regressions and raw exact-source/forged-debug negatives. Final validation and audit wording reviewed before commit.",
           "validation": "Final build8 passes with existing LLVM/MLIR, Z3, Slang and Tcl artifacts reused. Structured extended gate selects 610 unique UPF/supply/snapshot/power-NBA/cohort/time/code-unit/inventory, wait/iff/publication, function/class/constructor/property and attribute/anonymous/port dialect fixtures: 601 pass and nine expected failures, with no unexpected results. JSON results include all nine new source/MLIR fixtures. All 355 process and 269 selected bytecode/reflection/VPI runtime units pass (624). Conformance clauses 6.20, 6.48, 6.50, 6.51 and 9.7.3 pass native/bytecode (10 cases); 9.7.1 remains reference-only (2) and 6.41 expected failure (2) for related-supply behavior. New tests cover all eight per-bit association tiers, HDL port/internal-symbol attributes, parameter variants, unused models, escaped-literal versus vector identities, exclusions, empty selections, transactional conflict rollback, whole predefined policies, initialized-FF and combinational PG filtering, Table 5 restrictions, ignored nonterminal metadata, inside/outside contexts, required-function equality versus PG equality, unknown/opaque consumers and raw publication/source/display-name safeguards. Existing wide ascending 65-bit, two-state formal/four-state actual, retained-output unconditional high/low isolation regressions pass native/bytecode and wasm compile checks. New wasm32 bytecode O3 object has a verified 32-bit header; wasm execution was not run. Metadata-only source lowers with no UPF ops, snapshots, power-monitor or power-NBA services. No new runtime functions, runtime/API/ABI/layout or SDC changes."
+        },
+        {
+          "id": "9d",
+          "status": "complete",
+          "scope": "Declared supply equivalence, source identity normalization and functional PG isolation matching",
+          "clauses": [
+            "3",
+            "4.5.5",
+            "6.16",
+            "6.44",
+            "6.45",
+            "6.48",
+            "6.50",
+            "9.1",
+            "9.2.1",
+            "IEEE1800-2023 23.2",
+            "IEEE1800-2023 23.3"
+          ],
+          "runtime_changes": false,
+          "new_public_runtime_functions": false,
+          "architecture": "Compiler-only upf.equivalent constraints and LLVM IntEqClasses preserve distinct electrical, interchangeable and functional closures. Shared bounded analysis consumes source and raw MLIR facts before publication analysis and elaboration; electrical root rewrites preflight all scoped symbol references before mutation. Required usage, genuinely populated functions and predicate origins remain separate, so optional aliases do not short placeholders or invent requirements. Existing LLVM/MLIR, Z3, Slang and Tcl artifacts are reused; no dependency downloads, new runtime services or SDC changes.",
+          "interpretation_notes": [
+            "6.44 electrical declarations imply interchangeability even when -interchangeable FALSE is written without -function_only; omitted and bare -interchangeable default to TRUE.",
+            "Electrical, interchangeable and functional facts are transitive positive relations. Non-interchangeability constrains each original declared object group; it is not a transitive negative equivalence class and does not prohibit an already shared ground replacing itself.",
+            "Full supply-set equivalence uses identical required masks and corresponding required functions. Explicit whole-set declarations also project populated optional roles across the entire declared class, without merging unpopulated raw-IR placeholders.",
+            "6.45 different-supply filtering compares power/ground only: functional equivalence by default and electrical equivalence for FALSE. 6.48 consistency requires interchangeability and full required-function equivalence.",
+            "Declared electrical connections may establish a common outside-design source, but ordinary connectivity cannot hide an undeclared third source. Computed switch input/output or distinct computed-source contradictions remain errors.",
+            "Known initial supply states must agree. FULL_ON/PARTIAL_ON voltage payloads must agree; OFF/UNDETERMINED voltages are unspecified. Later independent dynamic functional-constraint violations are not checked by a new runtime service.",
+            "Equivalence preserves independent catalogs, availability and strategy ownership; functional declarations do not merge runtime rail identities. Functional-only composite policy composition and computed functional behavior remain explicitly staged.",
+            "Anonymous retention AON provenance is retained through existing downstream consumers, redundant electrical declarations and electrical connections between originally anonymous suppliers. Only independent supplier identities introduced by the declarations suppress the assumption; original function/association/source eligibility rules remain in force."
+          ],
+          "tests": [
+            "test/Dialect/UPF/equivalent.test",
+            "test/Dialect/UPF/power-states.test",
+            "test/Conversion/upf-equivalent.test",
+            "test/Conversion/upf-equivalent-constraints.test",
+            "test/Conversion/upf-equivalent-initial.test",
+            "test/Conversion/upf-equivalent-projection.test",
+            "test/Driver/upf-equivalent-isolation.test",
+            "test/Driver/upf-equivalent-sources.test",
+            "test/Driver/upf-equivalent-constraints.test",
+            "test/Driver/upf-equivalent-immediate.test",
+            "test/Driver/upf-equivalent-optional.test",
+            "test/Driver/upf-equivalent-wasm.test",
+            "test/Driver/upf-equivalent-switch.test",
+            "test/Driver/upf-equivalent-retention.test",
+            "test/Driver/upf-equivalent-retention-bytecode.test",
+            "test/Driver/upf-retention-aon-consumers.test",
+            "test/Driver/upf-retention-aon-protected.test",
+            "test/Conformance/IEEE1801/6.44.sv",
+            "test/Conformance/IEEE1801/Inputs/6.44/design.upf",
+            "test/Conformance/IEEE1801/Inputs/6.44/block.upf"
+          ],
+          "review": "Two independent subagents approve the scoped implementation after UPF/LRM, LLVM/MLIR practice and test-coverage review. Findings corrected original source identity and redundant declaration handling, transitive populated-role projection, required-mask inference and frozen predicate origins, lexical symbol rewrites, known initial-value compatibility, immediate caught-error rollback, computed switch contradictions and anonymous retention supplier provenance. The compiler reviewer independently passed 20 optimized native/bytecode executions covering original AON regressions, cross-anonymous consumers, redundant aliases, genuine abstract supplier chains and protected writes, plus raw power-state diagnostics and immediate switch recovery. The spec reviewer independently passed ten optimized native/bytecode provenance and write-protection executions, immediate switch contradictions/rollback and canonicalize/CSE/verifier checks. Both reviewed the support-map scope and outstanding limits; no source or coverage blockers remain.",
+          "validation": "Final build10 passes with existing LLVM/MLIR 22.1.6, Z3 4.13.4, Slang and Tcl artifacts reused. Structured extended gate selects 624 unique UPF/supply/snapshot/power-NBA/cohort/time/code-unit/inventory, wait/iff/publication, function/class/constructor/property and attribute/anonymous/equivalence dialect fixtures: 615 pass and nine expected failures, with no unexpected results. All fourteen new equivalence source/dialect/conversion fixtures are included. All 355 process and 269 selected bytecode/reflection/VPI runtime units pass (624). Conformance clauses 6.20, 6.44, 6.48, 6.50, 6.51 and 9.7.3 pass native/bytecode (12 cases); 9.7.1 remains reference-only (2), 6.41 expected failure (2). New tests cover electrical/function-only/interchangeability defaults and refinement, original non-interchangeable groups, required masks versus genuine optional roles/placeholders, transitive projection, source-count provenance and undeclared third sources, independent rails/catalogs, initial state/voltage constraints, immediate switch contradictions and caught rollback, anonymous retention and downstream/cross-anonymous consumers, own-context functional/electrical PG isolation and scoped raw-MLIR symbol/lifecycle invariants. Two new wasm32 native/bytecode O3 objects have verified 32-bit headers; wasm execution was not run. Compiler-only facts are consumed before scheduling/encoding, and source simulation IR contains no UPF operations. No new runtime functions, runtime/API/ABI/layout or SDC changes.",
+          "implementation": [
+            "include/talos/Dialect/UPF/UPFOps.td",
+            "include/talos/Dialect/UPF/UPFAttrs.td",
+            "lib/Dialect/UPF/UPFDialect.cpp",
+            "lib/UPF/Execute.cpp",
+            "lib/UPF/SupplyNetwork.cpp",
+            "lib/UPF/SupplyRelations.cpp",
+            "lib/UPF/NormalizeEquivalences.cpp",
+            "lib/UPF/PortSupply.cpp",
+            "lib/UPF/PublicationBarriers.cpp",
+            "lib/UPF/Elaborate.cpp"
+          ]
         }
       ],
       "remaining": [
         "Per-object disabled/power-aware behavior and hard-macro related-supply pin corruption",
         "Liberty/cell attributes, power-model definitions/applications, mapped implementations and persistence",
         "Automatic PG/implemented HDL supply linkage, general design-top coverage and public anonymous info-model naming/query/serialization",
-        "Remaining 6.48 predefined behavior consumers and model-based instance exclusions, general per-path endpoint supply inference, per-bit/opaque/publication-view isolation and broader writer proofs"
+        "Remaining 6.48 predefined behavior consumers and model-based instance exclusions, general per-path endpoint supply inference, per-bit/opaque/publication-view isolation and broader writer proofs",
+        "Functional-only composite policy composition, computed-switch equivalence proofs and dynamic functional-constraint validation; resolved/inout/implemented HDL supply linkage"
       ]
     },
     {

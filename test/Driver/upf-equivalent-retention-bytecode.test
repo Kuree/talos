@@ -1,0 +1,9 @@
+// REQUIRES: upf
+// RUN: %split-file %S/upf-equivalent-retention.test %t
+// RUN: talos --upf %t/redundant.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.redundant-bc && %t.redundant-bc | FileCheck %S/upf-equivalent-retention.test
+// RUN: talos --upf %t/cross.upf -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.cross-bc && %t.cross-bc | FileCheck %S/upf-equivalent-retention.test
+// RUN: talos --upf %t/forward.upf -DEXTERNAL -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.forward-bc && %t.forward-bc | FileCheck %S/upf-equivalent-retention.test
+// RUN: talos --upf %t/reverse.upf -DEXTERNAL -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.reverse-bc && %t.reverse-bc | FileCheck %S/upf-equivalent-retention.test
+// RUN: talos --upf %t/cross.upf -DWRITE -O3 --execution-tier=bytecode --mlir-verify-each %t/design.sv -o %t.cross-protected
+// RUN: not %t.cross-protected 2>&1 | FileCheck %S/upf-equivalent-retention.test --check-prefix=PROTECTED
+// Bytecode coverage of anonymous-source provenance and write protection.

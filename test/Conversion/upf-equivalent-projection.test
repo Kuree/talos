@@ -1,0 +1,58 @@
+// RUN: %split-file %s %t
+// RUN: talos-opt %t/positive.mlir --normalize-upf-equivalences --canonicalize --cse --split-input-file --verify-each | FileCheck %s
+// RUN: talos-opt %t/negative.mlir --normalize-upf-equivalences --split-input-file --verify-diagnostics
+// Role equality spans entire set classes even through unpopulated members.
+// The intermediary's ground placeholder remains outside the power relation.
+// Legacy raw ground predicates inspect populated roles, not all dictionary slots.
+// CHECK: upf.supply @pa names ["/A", "/C"]
+// CHECK: upf.supply @g names ["/G"]
+// CHECK: upf.supply_set @B functions
+// CHECK-SAME: power = @g
+// CHECK: upf.supply_set @A functions
+// CHECK-SAME: required ["power", "ground"]
+
+//--- positive.mlir
+module {
+ upf.supply @pa names ["/A"] writable = true
+ upf.supply @pc names ["/C"] writable = true
+ upf.supply @g names ["/G"] writable = true
+ upf.supply_set @A functions {power = @pa, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required [] {materialized_functions = ["power"]}
+ upf.supply_set @B functions {power = @g, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required [] {materialized_functions = []}
+ upf.supply_set @C functions {power = @pc, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required [] {materialized_functions = ["power"]}
+ upf.equivalent [@A, @B] kind electrical
+ upf.equivalent [@B, @C] kind electrical
+}
+// -----
+#e = #upf.supply_expression<[#upf.supply_token<opcode = state, supply = @g>, #upf.supply_token<opcode = state_value, value = 1 : i32>, #upf.supply_token<opcode = eq>]>
+module {
+ upf.supply @p names ["/P"] writable = true
+ upf.supply @g names ["/G"] writable = true
+ upf.supply_set @A functions {power = @p, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required ["power", "ground"] {states = [#upf.power_state<name = "ON", condition = #e, simstate = normal>]}
+ upf.equivalent [@p, @p] kind electrical
+}
+
+//--- negative.mlir
+module {
+ upf.supply @pa names ["/A"] writable = true
+ upf.supply @pc names ["/C"] writable = true
+ upf.supply @g names ["/G"] writable = true
+ upf.supply_set @A functions {power = @pa, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required [] {materialized_functions = ["power"]}
+ upf.supply_set @B functions {power = @g, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required [] {materialized_functions = []}
+ upf.supply_set @C functions {power = @pc, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required [] {materialized_functions = ["power"]}
+ upf.equivalent [@A, @B] kind interchangeable
+ upf.equivalent [@B, @C] kind interchangeable
+ // expected-error @+1 {{non-interchangeability contradicts}}
+ upf.equivalent [@pa, @pc] kind functional
+}
+// -----
+module {
+ upf.supply @pa names ["/A"] writable = true
+ // expected-error @+1 {{functional equivalence contradicts known initial supply values}}
+ upf.supply @pc names ["/C"] writable = true {initial_value = 4000001 : i64}
+ upf.supply @g names ["/G"] writable = true
+ upf.supply_set @A functions {power = @pa, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required [] {materialized_functions = ["power"]}
+ upf.supply_set @B functions {power = @g, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required [] {materialized_functions = []}
+ upf.supply_set @C functions {power = @pc, ground = @g, nwell = @g, pwell = @g, deepnwell = @g, deeppwell = @g} required [] {materialized_functions = ["power"]}
+ upf.equivalent [@A, @B] kind interchangeable
+ upf.equivalent [@B, @C] kind interchangeable
+}
