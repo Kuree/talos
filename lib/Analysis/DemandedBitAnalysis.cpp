@@ -6,6 +6,7 @@
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "talos/Analysis/UnknownBitGeometry.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 using namespace mlir;
 namespace talos::analysis {
@@ -69,7 +70,11 @@ public:
     bool supported = isa<sim::SimLogicExtractOp, sim::SimLogicConcatOp,
                          sim::SimLogicInsertOp, sim::SimLogicResizeOp,
                          sim::SimLogicFromBitsOp, sim::SimLogicToBitsOp,
+                         sim::SimPackedFlattenOp, sim::SimPackedUnflattenOp,
                          SelectLikeOpInterface>(op);
+    if (auto extract = dyn_cast<sim::SimAggregateExtractOp>(op))
+      supported = isa<sim::PackedArrayType, sim::PackedStructType>(
+          extract.getInput().getType());
     if (auto binary = dyn_cast<sim::SimLogicBinaryOp>(op))
       supported = binary.getKind() == sim::BinaryKind::And ||
                   binary.getKind() == sim::BinaryKind::Or ||
@@ -89,7 +94,19 @@ public:
       propagateIfChanged(operands[index],
                          operands[index]->meet(Demand{{bits}}));
     };
-    if (auto extract = dyn_cast<sim::SimLogicExtractOp>(op)) {
+    if (auto extract = dyn_cast<sim::SimAggregateExtractOp>(op)) {
+      // Packed element ordinals follow the declared shape, not host byte
+      // offsets (IEEE 1800-2023 7.2.1, 7.4.1). Undemanded bits, including
+      // undriven Z padding, are not observed by an element extraction.
+      unsigned width = bitWidth(extract.getInput());
+      auto placement = bits::subelementPlacement(extract.getInput().getType(),
+                                                 extract.getIndex(), width);
+      if (!placement || placement->second != mask.getBitWidth())
+        return full();
+      APInt input(width, 0);
+      input.insertBits(mask, placement->first);
+      put(0, input);
+    } else if (auto extract = dyn_cast<sim::SimLogicExtractOp>(op)) {
       APInt input(bitWidth(extract.getInput()), 0);
       if (mask.getBitWidth() > input.getBitWidth() ||
           extract.getLowBit() > input.getBitWidth() - mask.getBitWidth())

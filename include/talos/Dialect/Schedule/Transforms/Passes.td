@@ -431,6 +431,11 @@ def VersionKnownActivationsPass
     where the copy loads it, and on X/Z the copy continues in the original
     right after the same read, so no effect is repeated or skipped.
     LocalUnknownAnalysis chooses the reads.
+    Packed net snapshots use sparse backward bit demand and dense preceding
+    write facts to check only observed entry bits; undriven Z holes stay exact
+    whenever observed (7.4.1, 6.7.1). Known publications additionally check the
+    old resolved bits; raw driver stores remain exact. Deferred/raw-only
+    writes revoke resolved overwrite facts (6.6.1).
   }];
   let options = [
     Option<"minimumBenefit", "minimum-benefit", "uint64_t", "64",

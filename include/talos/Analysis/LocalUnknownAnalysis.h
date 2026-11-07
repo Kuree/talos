@@ -1,10 +1,24 @@
-//===- LocalUnknownAnalysis.h - X/Z inside one gated activation -*- C++ -*- ===//
+//===- LocalUnknownAnalysis.h - X/Z inside one gated activation -*- C++ -*-
+//===//
 //
 // Classifies accesses for guarded activation copies. `schedule.known.roots`
 // checks that each root's unknown plane matches `simulation.steady_unknown`.
 // Outside the pattern, gated reads load only values and known stores leave the
-// zero unknown bits unchanged. Pattern reads retain their constant X values;
-// a possible intervening write prevents that substitution.
+// zero unknown bits unchanged. Pattern reads retain their constant unknown
+// masks and original value bits, preserving X versus Z; a possible intervening
+// write prevents that substitution.
+//
+// Packed net reads additionally use sparse backward demand (LRM 7.2.1, 7.4.1,
+// 11.5.1). Their per-entry guards test only demanded bits not overwritten on
+// every path. Unknown bits outside that projection may be dropped only because
+// every observable/unsupported user demands its full input. Dense write facts
+// still account for X/Z written before each read (4.6-4.7). Only isolated,
+// strong, exclusive, undelayed contributions transfer their payload masks to
+// net state (6.3.2, 6.6.1); all other resolved writes revoke the assumptions.
+// A known publication may omit an unknown-plane store only when its old
+// destination bits are also proved known, using the same dense write facts.
+// Raw driver planes are still stored exactly; their entry state may differ.
+// Untouched Z holes and explicit X publications retain their exact values.
 //
 // Dense CFG facts track bits that preceding writes may make unknown. Sparse
 // value facts track which computed bits may hold X/Z; both reach a joint fixed
@@ -53,7 +67,9 @@ namespace talos::analysis {
 class LocalUnknownAnalysis {
 public:
   enum class ReadKind : uint8_t {
-    /// Loads only its value plane in the gated copy.
+    /// Loads only its value plane in the gated copy. For a projected packed
+    /// net snapshot, only demanded bits are certified; no other consumer can
+    /// observe the omitted bits of its unknown plane.
     Gated,
     /// Carries no unknown plane.
     TwoState,
@@ -61,7 +77,7 @@ public:
     Dead,
     /// Function-private storage.
     Local,
-    /// Not a fixed design storage root.
+    /// No admitted entry proof, either unresolved provenance or policy.
     Unresolved,
     /// A dynamic selection that may be invalid in the copy (7.4.5, 11.5.1).
     Dynamic,
@@ -85,6 +101,12 @@ public:
     /// The storage roots the check tests, by descriptor, sorted: those of
     /// the segment's gated reads and known stores.
     llvm::SmallVector<uint64_t, 0> gate;
+    struct BitRange {
+      uint64_t descriptor, low, width;
+    };
+    /// Demanded net bits whose contents may precede the segment. These are
+    /// checked directly at each entry; no whole-root knownness is inferred.
+    llvm::SmallVector<BitRange, 0> netGate;
     /// Estimated unknown-plane instructions removed beyond facts the
     /// original body already proves. Accesses use their transferred value
     /// width, not the possible-address hull used to check soundness.
@@ -151,7 +173,15 @@ public:
     /// Stores the original body already lowers value-only, such as a valid
     /// write to an inductively two-state root in a guarded variant. Their
     /// known-store proof needs no extra gate and earns no new savings.
-    llvm::function_ref<bool(sim::SimRefStoreOp)> provenKnownStore = nullptr;
+    llvm::function_ref<bool(mlir::Operation *)> provenKnownStore = nullptr;
+    /// Ignore entry-read candidates whose downstream unknown-plane work is
+    /// smaller than this cost. They retain exact four-state semantics rather
+    /// than adding a premise that may block unrelated work in a fused body.
+    unsigned minimumReadWork = 0;
+    /// A declaration snapshot shared by function workers of one pass. Its
+    /// declarations must stay unchanged for the analysis lifetime. Without
+    /// one the analysis obtains its own content-validated snapshot.
+    const IsolatedWireDriverTopology *topology = nullptr;
   };
 
   /// `handles` must describe the references of `function`.
@@ -166,7 +196,8 @@ public:
   bool isGated(mlir::Operation *read) const {
     return getKind(read) == ReadKind::Gated;
   }
-  /// Whether `store` writes only its value plane in the gated copy.
+  /// Whether `store` may omit its destination unknown-plane write in the
+  /// gated copy. A driver publication still stores both raw planes.
   bool isKnownStore(mlir::Operation *store) const {
     return knownStores.contains(store);
   }

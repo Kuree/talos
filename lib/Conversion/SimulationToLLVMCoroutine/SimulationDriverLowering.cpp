@@ -611,6 +611,8 @@ public:
     if constexpr (std::is_same_v<DriveOp, sim::SimDriverDriveDelayedNetOp>)
       storeLayout = nullptr;
     bool userRaw = sim::has<sim::metadata::UserNetRawDrive>(op);
+    bool guardedKnownStore =
+        schedule::has<schedule::Field::NativeKnownStore>(op);
     bool knownContribution = false;
     if constexpr (!std::is_same_v<DriveOp, sim::SimDriverDriveDelayedNetOp>) {
       if (!userRaw && affectedDriver && updateLow &&
@@ -637,6 +639,27 @@ public:
             !originalLayout.guardedHandles.contains(affectedDriver->handleID) &&
             !originalLayout.guardedHandles.contains(net->handleID);
       }
+    }
+    // A range certificate proves the old RESOLVED bits and new payload
+    // known. Always retain raw contribution stores: a deferred drive in a
+    // prior entry can leave raw X/Z behind a known resolved net (6.6.1).
+    // Writable VPI/force can hide canonical net state too (38.34, 10.6.2), so
+    // require direct, unguarded net handles in the ORIGINAL environment.
+    bool knownPublication = false;
+    if (guardedKnownStore && !userRaw && affectedDriver && updateLow &&
+        !schedule::has<schedule::Field::DeferNetResolution>(op)) {
+      uint64_t netID = affectedDriver->netId;
+      bool exclusive = layout.isolatedPartitionedDriverNets.contains(netID);
+      if (auto sparse = layout.isolatedSparseDriverRanges.find(netID);
+          sparse != layout.isolatedSparseDriverRanges.end())
+        exclusive |= llvm::any_of(sparse->second, [&](auto range) {
+          return range.first <= *updateLow && *updateLow <= range.second &&
+                 *sourceWidth <= range.second - *updateLow;
+        });
+      const auto *net = lookup.netByID.lookup(netID);
+      knownPublication = exclusive && net &&
+                         originalLayout.directHandles.contains(net->handleID) &&
+                         !originalLayout.guardedHandles.contains(net->handleID);
     }
     IntegerType i1 = rewriter.getI1Type();
     auto boolean = [&](bool value) {
@@ -875,7 +898,8 @@ public:
         // (10.6.2); writable VPI retains the activation's clean-state guard.
         bool known =
             !net->fourState ||
-            (schedule::has<schedule::Field::EvalInductiveTwoStateAccess>(op) &&
+            ((schedule::has<schedule::Field::EvalInductiveTwoStateAccess>(op) ||
+              knownPublication) &&
              affectedDriver && affectedDriver->netId == net->id &&
              layout.isolatedSingleDriverNets.contains(net->id));
         Value netHandle = arith::ConstantOp::create(
@@ -1249,14 +1273,16 @@ public:
           // participate in this slice's resolution. The entry certificate
           // covers the old net value; the four-state path still publishes
           // X/Z changes and invalidates that certificate.
-          bool known =
-              !memberNet.fourState ||
+          bool certified =
               (schedule::has<schedule::Field::EvalInductiveTwoStateAccess>(
                    op) &&
-               affectedDriver && affectedDriver->netId == memberNet.id &&
-               layout.isolatedPartitionedDriverNets.contains(memberNet.id) &&
-               first.contributions.size() == 1 &&
-               first.contributions.front().driver == affectedDriver);
+               layout.isolatedPartitionedDriverNets.contains(memberNet.id)) ||
+              knownPublication;
+          bool known = !memberNet.fourState ||
+                       (certified && affectedDriver &&
+                        affectedDriver->netId == memberNet.id &&
+                        first.contributions.size() == 1 &&
+                        first.contributions.front().driver == affectedDriver);
           Value oldUnknown =
               !known ? loadStatePlane(rewriter, op.getLoc(), netHandle, type,
                                       "__talos_state_unknown", true,

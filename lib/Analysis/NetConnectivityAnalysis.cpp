@@ -72,8 +72,17 @@ getIsolatedWireDriverTopology(sim::SimDesignOp design) {
   }
   IsolatedWireDriverTopology topology =
       computeIsolatedWireDriverTopology(design);
-  for (auto driver : design.getOps<sim::SimDriverDeclOp>())
+  for (auto net : design.getOps<sim::SimNetDeclOp>())
+    if (sim::getPackedWidth(net.getType()))
+      topology.packedNets.insert(net.getId());
+  for (auto driver : design.getOps<sim::SimDriverDeclOp>()) {
     topology.driverNets[driver.getId()] = driver.getNetId();
+    auto width = sim::getProvenanceSpan(driver.getType());
+    uint64_t low = driver.getDrivenLow().value_or(0);
+    uint64_t size = driver.getDrivenWidth().value_or(width.value_or(0));
+    if (width && low <= *width && size <= *width - low)
+      topology.driverRanges[driver.getId()] = {low, low + size};
+  }
   auto result = finish(std::move(topology));
   std::lock_guard<std::mutex> lock(cache.mutex);
   cache.entries[design.getOperation()] = {digest, result};

@@ -4,7 +4,8 @@
 // Entry checks cover root unknown summaries, required private slots, and
 // live-ins known only in the copy. A failed check runs the original segment.
 // Reads outside that proof are checked where they load; on X/Z execution
-// continues after the same read in the original body, without replaying effects.
+// continues after the same read in the original body, without replaying
+// effects.
 //
 // LocalUnknownAnalysis proves which accesses can omit unknown planes and which
 // must retain steady-pattern X values. Known stores require zero unknown bits
@@ -59,8 +60,7 @@ constexpr uint64_t largeSegmentOperations = 128;
 
 /// Whether a fused clocked kernel exceeds the inline budget.
 bool isLargeClockedKernel(sim::SimFuncOp function) {
-  if (!schedule::isClockedKernelSymbol(function.getSymName()) ||
-      schedule::has<schedule::Field::EvalInductiveTwoState>(function))
+  if (!schedule::isClockedKernelSymbol(function.getSymName()))
     return false;
   uint64_t budget =
       schedule::getMaxInlineOperations(function->getParentOfType<ModuleOp>());
@@ -73,8 +73,8 @@ bool isLargeClockedKernel(sim::SimFuncOp function) {
       .wasInterrupted();
 }
 
-/// A large kernel already has its whole-body two-state variant, so bound what
-/// its segment copies add: at most half of its segments, largest savings first.
+/// Bound copies inside a large fused kernel, including a partially specialized
+/// variant: at most half of its segments, largest residual savings first.
 /// Each dropped segment still runs correctly in the four-state source.
 void limitLargeKernelCopies(ArrayRef<LocalUnknownAnalysis::Segment> segments,
                             SmallVectorImpl<bool> &admitted) {
@@ -100,6 +100,7 @@ constexpr int32_t unlikelyWeight = 1;
 struct DesignInputs {
   DesignInputs(sim::SimDesignOp design, bool variants)
       : handles(design),
+        topology(analysis::getIsolatedWireDriverTopology(design)),
         callees(LocalUnknownAnalysis::summarize(design, handles)) {
     for (auto storage :
          design.getBody().front().getOps<sim::SimStorageDeclOp>()) {
@@ -107,6 +108,8 @@ struct DesignInputs {
       if (auto ranges = sim::get<sim::metadata::SteadyUnknown>(storage))
         steadyUnknown[storage.getId()] = ranges;
     }
+    for (auto net : design.getBody().front().getOps<sim::SimNetDeclOp>())
+      netTypes[net.getId()] = net.getType();
     // A guarded two-state variant already loads only the value planes of
     // its inductively two-state reads; those need no check.
     if (variants &&
@@ -155,7 +158,7 @@ struct DesignInputs {
   /// rather than crediting the same saving to another activation copy.
   bool provesKnownStore(sim::SimFuncOp function,
                         const analysis::HandleDataflowResult &handles,
-                        sim::SimRefStoreOp store) const {
+                        Operation *store) const {
     if (!domains ||
         !schedule::has<schedule::Field::EvalInductiveTwoState>(function))
       return false;
@@ -163,17 +166,27 @@ struct DesignInputs {
         schedule::has<schedule::Field::EvalConditionallyTwoState>(function)
             ? domains->second
             : domains->first;
-    auto fact = handles.facts.find(store.getReference());
+    Value reference, value;
+    if (auto ref = dyn_cast<sim::SimRefStoreOp>(store)) {
+      reference = ref.getReference();
+      value = ref.getValue();
+    } else if (auto drive = dyn_cast<sim::SimDriverDriveOp>(store)) {
+      reference = drive.getDriver();
+      value = drive.getValue();
+    } else {
+      return false;
+    }
+    auto fact = handles.facts.find(reference);
     if (fact == handles.facts.end() || !fact->second.descriptor ||
         !fact->second.width)
       return false;
     if (fact->second.dynamic) {
-      auto proof = handles.certificates.find(store.getReference());
+      auto proof = handles.certificates.find(reference);
       if (proof == handles.certificates.end() || !proof->second.inBounds ||
           proof->second.clipped)
         return false;
     }
-    return guarded.isTwoStateWithInductiveRoots(store.getValue()) &&
+    return guarded.isTwoStateWithInductiveRoots(value) &&
            guarded.isInductivelyTwoState(fact->second.resource,
                                          *fact->second.descriptor);
   }
@@ -190,8 +203,9 @@ struct DesignInputs {
     return false;
   }
   analysis::HandleDataflowAnalysis handles;
+  std::shared_ptr<const analysis::IsolatedWireDriverTopology> topology;
   LocalUnknownAnalysis::CalleeSummaries callees;
-  DenseMap<uint64_t, Type> storageTypes;
+  DenseMap<uint64_t, Type> storageTypes, netTypes;
   DenseMap<uint64_t, DenseI64ArrayAttr> steadyUnknown;
   std::optional<std::pair<StateDomainAnalysis, StateDomainAnalysis>> domains;
 };
@@ -364,6 +378,30 @@ public:
             activation, root));
       conjoin(schedule::NativeKnownRootsOp::create(
           builder, loc, builder.getI1Type(), references));
+    }
+    // Read only the demanded net ranges still coming from entry state.
+    // These probes always execute at this activation's entry: unlike cached
+    // root summaries they need no invalidation protocol. They read no value
+    // plane after lowering and cannot turn an undriven Z hole into zero
+    // (IEEE 1800-2023 6.3.1, 6.7.1). The copy retains X-producing effects.
+    for (const auto &range : segment.netGate) {
+      Value net = sim::SimContextNetOp::create(
+          builder, loc,
+          sim::NetType::get(function.getContext(),
+                            inputs.netTypes.lookup(range.descriptor)),
+          activation, range.descriptor);
+      uint64_t end = range.low + range.width;
+      for (uint64_t low = range.low; low < end;) {
+        uint64_t width = std::min<uint64_t>(end - low, 64 - low % 64);
+        Type type = sim::LogicType::get(function.getContext(), width);
+        Value view = sim::SimNetExtractOp::create(
+            builder, loc, sim::NetType::get(function.getContext(), type), net,
+            builder.getI64IntegerAttr(low));
+        Value contents = sim::SimNetReadOp::create(builder, loc, type, view);
+        conjoin(schedule::NativeKnownValueOp::create(
+            builder, loc, builder.getI1Type(), contents));
+        low += width;
+      }
     }
     for (sim::SimRefAllocOp allocation : segment.slotChecks) {
       Value slot = slotOf(allocation);
@@ -654,7 +692,8 @@ private:
     SmallVector<Operation *> casts;
     for (Block *block : blocks)
       block->walk([&](Operation *op) {
-        if (isa<sim::SimRefLoadOp>(op) && analysis.isGated(op)) {
+        if (isa<sim::SimRefLoadOp, sim::SimNetReadOp>(op) &&
+            analysis.isGated(op)) {
           schedule::set<schedule::Field::NativeKnownRead>(mapping.lookup(op),
                                                           unit);
           return;
@@ -1084,14 +1123,15 @@ public:
     auto staysUnknown = [&](uint64_t descriptor, uint64_t low, uint64_t high) {
       return inputs->staysUnknown(descriptor, low, high);
     };
-    auto provenKnownStore = [&](sim::SimRefStoreOp store) {
+    auto provenKnownStore = [&](Operation *store) {
       return inputs->provesKnownStore(function, handles, store);
     };
     LocalUnknownAnalysis analysis(
         function, handles,
         LocalUnknownAnalysis::Options{&segments.segmentation, &inputs->callees,
                                       false, provenKnown, checkedReads,
-                                      staysUnknown, provenKnownStore});
+                                      staysUnknown, provenKnownStore,
+                                      large ? 1u : 0u, inputs->topology.get()});
     // A copy must save clearly more than its checks cost: about three
     // instructions per tested summary word, slot or live-in and two per
     // tested read. A segment's roots are numbered together, so a word covers
@@ -1100,7 +1140,10 @@ public:
         schedule::has<schedule::Field::EvalInductiveTwoState>(function);
     auto checkCost = [&](const LocalUnknownAnalysis::Segment &segment) {
       uint64_t words = (segment.gate.size() + 7) / 8;
-      return 3 * words + 2 * segment.checks +
+      uint64_t netWords = 0;
+      for (const auto &range : segment.netGate)
+        netWords += (range.low % 64 + range.width + 63) / 64;
+      return 3 * words + 2 * segment.checks + 3 * netWords +
              3 * (segment.slotChecks.size() + segment.liveIns.size()) + 4;
     };
     auto profitable = [&](const LocalUnknownAnalysis::Segment &segment) {
@@ -1113,7 +1156,9 @@ public:
       // existing smaller-region versioner.
       if (nested)
         cost += segment.unchangedWork;
-      return !segment.untestable && (!segment.gate.empty() || segment.checks) &&
+      return !segment.untestable &&
+             (!segment.gate.empty() || !segment.netGate.empty() ||
+              segment.checks) &&
              segment.benefit >= minimumBenefit && segment.benefit > cost;
     };
     ArrayRef<LocalUnknownAnalysis::Segment> results = analysis.getSegments();
@@ -1127,7 +1172,9 @@ public:
     Versioner versioner(function, analysis, *inputs);
     for (auto [index, segment] : llvm::enumerate(results)) {
       bool admitted = admissions[index];
-      if (diagnostics && nested && (!segment.gate.empty() || segment.checks)) {
+      if (diagnostics && nested &&
+          (!segment.gate.empty() || !segment.netGate.empty() ||
+           segment.checks)) {
         std::string text;
         llvm::raw_string_ostream os(text);
         os << "talos nested activation cost: " << function.getSymName()

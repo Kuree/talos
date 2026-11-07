@@ -43,6 +43,9 @@ struct IsolatedWireDriverTopology {
     uint64_t low = 0, width = 0, member = 0, memberLow = 0, memberWidth = 0;
     bool reversed = false;
   };
+  /// Declared packed roots; arbitrary bit slices of unpacked roots need
+  /// element addressing and cannot be reconstructed as packed net views.
+  llvm::DenseSet<uint64_t> packedNets;
   llvm::DenseSet<uint64_t> singleDriverNets;
   llvm::DenseSet<uint64_t> partitionedDriverNets;
   SparseRanges sparseDriverRanges;
@@ -51,6 +54,9 @@ struct IsolatedWireDriverTopology {
       connectedExclusiveAliases;
   /// The net of each driver, and an order-independent digest of that map.
   llvm::DenseMap<uint64_t, uint64_t> driverNets;
+  /// Declared [low, high) contribution within the driver's owning net.
+  /// Geometry alone certifies neither resolution nor knownness.
+  llvm::DenseMap<uint64_t, std::pair<uint64_t, uint64_t>> driverRanges;
   uint64_t driverDigest = 0;
 };
 

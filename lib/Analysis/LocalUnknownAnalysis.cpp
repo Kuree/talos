@@ -1,13 +1,16 @@
 //===- LocalUnknownAnalysis.cpp - X/Z inside one gated activation ---------===//
 
 #include "talos/Analysis/LocalUnknownAnalysis.h"
+#include "talos/Analysis/DemandedBitAnalysis.h"
 #include "talos/Analysis/KnownVersioningAnalysis.h"
 #include "talos/Analysis/LocalStorageAnalysis.h"
+#include "talos/Analysis/NetConnectivityAnalysis.h"
 #include "talos/Analysis/OrderedDenseAnalysis.h"
 #include "talos/Analysis/RangeSet.h"
 #include "talos/Analysis/ScopedIntegerRangeAnalysis.h"
 #include "talos/Analysis/StateDomainAnalysis.h"
 #include "talos/Analysis/UnknownBitGeometry.h"
+#include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Dialect/Simulation/SimulationTypes.h"
 
@@ -21,6 +24,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Interfaces/ViewLikeInterface.h"
 #include "llvm/ADT/SCCIterator.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringSet.h"
@@ -703,6 +707,9 @@ public:
   bool overwrites(unsigned root, uint64_t low, uint64_t high) const {
     return coversLane(overwritten.lanes(root), low, high);
   }
+  APInt overwrittenBits(unsigned root, uint64_t low, uint64_t high) const {
+    return laneBits(overwritten.lanes(root), low, high);
+  }
   /// Whether slot bits [low, high) may still hold what the segment found at
   /// its entry.
   bool fromEntry(unsigned root, uint64_t low, uint64_t high) const {
@@ -741,6 +748,9 @@ struct Inputs {
         locals(locals), segmentation(options.segmentation),
         callees(options.callees), summary(options.summary),
         staysUnknown(options.staysUnknown) {}
+  // Read-only topology distinguishes a drive from a resolved net write.
+  const IsolatedWireDriverTopology *topology = nullptr;
+  DenseMap<Operation *, APInt> netDemands;
   const HandleFacts &handles;
   const DenseMap<Value, HandleCertificate> &certificates;
   const LocalStorageAnalysis &locals;
@@ -907,6 +917,57 @@ bool resolveWrite(Inputs &inputs, Value reference, Interval &interval) {
   interval = {inputs.rootIndex(fact->second.resource, *fact->second.descriptor),
               fact->second.low, fact->second.low + width};
   return width != 0;
+}
+
+/// A static driver's payload equals the resolved net only on its exclusive,
+/// strong, undelayed contribution (IEEE 1800-2023 6.3.2, 6.6.1). Clip the
+/// reference to that contribution; its other bits are raw driver padding.
+/// Overlap, high-Z strength and collapsed aliases need full resolution.
+bool resolveExclusiveDrive(Inputs &inputs, sim::SimDriverDriveOp drive,
+                           Interval &interval, uint64_t &valueLow) {
+  // A deferred/raw-only update can change the raw driver without publishing
+  // its net. That breaks both the overwrite fact and the equality of their
+  // unknown planes. Revoke the entry assumptions until another segment checks
+  // canonical state, rather than substituting the unpublished payload.
+  if (schedule::has<schedule::Field::DeferNetResolution>(drive) ||
+      sim::has<sim::metadata::UserNetRawDrive>(drive))
+    return false;
+  Value reference = drive.getDriver();
+  if (!inputs.topology || !resolveWrite(inputs, reference, interval))
+    return false;
+  auto fact = inputs.handles.find(reference);
+  if (fact == inputs.handles.end() || !fact->second.descriptor ||
+      fact->second.dynamic ||
+      fact->second.resource != schedule::ComputeResourceKind::Net)
+    return false;
+  Value base = reference;
+  while (auto view = base.getDefiningOp<ViewLikeOpInterface>())
+    base = view.getViewSource();
+  auto driver = base.getDefiningOp<sim::SimContextDriverOp>();
+  if (!driver)
+    return false;
+  auto bound = inputs.topology->driverRanges.find(driver.getId());
+  if (bound == inputs.topology->driverRanges.end())
+    return false;
+  uint64_t low = std::max(interval.low, bound->second.first);
+  uint64_t high = std::min(interval.high, bound->second.second);
+  if (low >= high) {
+    interval.high = interval.low;
+    return true;
+  }
+  uint64_t net = *fact->second.descriptor;
+  bool transparent = inputs.topology->partitionedDriverNets.contains(net);
+  if (auto sparse = inputs.topology->sparseDriverRanges.find(net);
+      sparse != inputs.topology->sparseDriverRanges.end())
+    transparent |= llvm::any_of(sparse->second, [&](auto range) {
+      return range.first <= low && high <= range.second;
+    });
+  if (!transparent)
+    return false;
+  valueLow = low - interval.low;
+  interval.low = low;
+  interval.high = high;
+  return true;
 }
 
 /// Whether `op` may write design storage or a net in a way the dense
@@ -1091,7 +1152,11 @@ private:
       if (read.high - read.low != width ||
           bits::isElementwise(op->getResult(0).getType()))
         return observed.mayWrite(read.root, read.low, read.high) ? all : none;
-      return observed.unknownBits(read.root, read.low, read.high);
+      APInt unknown = observed.unknownBits(read.root, read.low, read.high);
+      if (auto demand = inputs.netDemands.find(op);
+          demand != inputs.netDemands.end())
+        unknown &= demand->second;
+      return unknown;
     }
   }
 
@@ -1181,19 +1246,41 @@ public:
     auto write = [&](Value reference, Value value) {
       Interval interval;
       bool exact;
+      uint64_t valueLow = 0;
       if (std::optional<Interval> slot = inputs.resolveSlot(reference)) {
         interval = *slot;
         auto fact = inputs.handles.find(reference);
         exact = fact != inputs.handles.end() && !fact->second.dynamic &&
                 fact->second.resource == schedule::ComputeResourceKind::Local;
       } else if (resolveWrite(inputs, reference, interval)) {
-        if (!inputs.mayQueryAfter(op, interval.root))
-          return;
         exact = !inputs.handles.lookup(reference).dynamic;
       } else {
         (void)next.setAll();
         return;
       }
+      if (auto drive = dyn_cast<sim::SimDriverDriveOp>(op)) {
+        if (!resolveExclusiveDrive(inputs, drive, interval, valueLow)) {
+          (void)next.setAll();
+          return;
+        }
+        if (interval.low == interval.high)
+          return;
+      }
+      // Non-driver mutations of resolved nets can affect connected aliases
+      // too. Without a component-wide transfer, forget all net assumptions.
+      if (!isa<sim::SimDriverDriveOp>(op)) {
+        auto fact = inputs.handles.find(reference);
+        if (fact != inputs.handles.end() &&
+            fact->second.resource == schedule::ComputeResourceKind::Net) {
+          (void)next.setAll();
+          return;
+        }
+      }
+      // Check this only after resolution: a write to an unread alias can
+      // still change a queried member of its connected component.
+      if (!isSlotRoot(interval.root) &&
+          !inputs.mayQueryAfter(op, interval.root))
+        return;
       // A write of steady-unknown bits may make them known, so a gated read
       // after it cannot load them as the pattern's constant X. A value not
       // yet solved counts as known until it is. The interval may span a
@@ -1213,9 +1300,10 @@ public:
           std::optional<unsigned> tracked = trackedWidth(value.getType());
           if (bits.isBottom() || bits.isKnown())
             unknown = APInt::getZero(0);
-          else if (exact && tracked && *tracked == width &&
+          else if (exact && tracked && valueLow <= *tracked &&
+                   width <= *tracked - valueLow &&
                    !bits::isElementwise(value.getType()))
-            unknown = bits.get(*tracked);
+            unknown = bits.get(*tracked).extractBits(width, valueLow);
         }
       }
       if (!exact) {
@@ -1391,6 +1479,7 @@ LocalUnknownAnalysis::LocalUnknownAnalysis(sim::SimFuncOp function,
   // The solvers follow region-based control flow through its interface.
   bool nested = false;
   SmallVector<sim::SimRefStoreOp> stores;
+  SmallVector<sim::SimDriverDriveOp> drives;
   function.walk([&](Operation *op) {
     if (op != function.getOperation() && op->getNumRegions() &&
         !isa<RegionBranchOpInterface>(op))
@@ -1399,6 +1488,8 @@ LocalUnknownAnalysis::LocalUnknownAnalysis(sim::SimFuncOp function,
       reads.push_back(op);
     if (auto store = dyn_cast<sim::SimRefStoreOp>(op))
       stores.push_back(store);
+    if (auto drive = dyn_cast<sim::SimDriverDriveOp>(op))
+      drives.push_back(drive);
   });
   if (nested) {
     failure = "nested region";
@@ -1411,7 +1502,17 @@ LocalUnknownAnalysis::LocalUnknownAnalysis(sim::SimFuncOp function,
                               LocalStorageAnalysis::Lifetime::Invocation,
                               /*passesToCalls=*/true);
   Inputs inputs(handles, locals, options);
+  // Function workers only rewrite bodies. Reuse their pass's immutable
+  // declaration snapshot rather than rehashing every design declaration for
+  // every function. Standalone clients retain content-validated lookup.
+  std::shared_ptr<const IsolatedWireDriverTopology> ownedTopology;
+  if (!options.topology)
+    ownedTopology = getIsolatedWireDriverTopology(
+        function->getParentOfType<sim::SimDesignOp>());
+  inputs.topology = options.topology ? options.topology : ownedTopology.get();
+  DemandedBitAnalysis demands(function);
   DenseMap<unsigned, uint64_t> descriptors;
+  DenseSet<unsigned> netRoots;
   for (Operation *read : reads) {
     Value result = read->getResult(0);
     ReadSite site;
@@ -1425,6 +1526,25 @@ LocalUnknownAnalysis::LocalUnknownAnalysis(sim::SimFuncOp function,
       site.root = slot->root;
       site.low = slot->low;
       site.high = slot->high;
+    } else if (isa<sim::SimNetReadOp>(read) && fact != handles.facts.end() &&
+               fact->second.descriptor && !fact->second.dynamic &&
+               inputs.topology->packedNets.contains(*fact->second.descriptor) &&
+               fact->second.resource == schedule::ComputeResourceKind::Net &&
+               fact->second.width &&
+               trackedWidth(result.getType()) == fact->second.width &&
+               !bits::isElementwise(result.getType())) {
+      site.kind = ReadKind::Gated;
+      site.root =
+          inputs.rootIndex(fact->second.resource, *fact->second.descriptor);
+      site.low = fact->second.low;
+      site.high = site.low + fact->second.width;
+      descriptors[site.root] = *fact->second.descriptor;
+      netRoots.insert(site.root);
+      const APInt *demand = demands.get(result);
+      inputs.netDemands.try_emplace(
+          read, demand && demand->getBitWidth() == fact->second.width
+                    ? *demand
+                    : APInt::getAllOnes(fact->second.width));
     } else if (!isa<sim::SimRefLoadOp>(read) || fact == handles.facts.end() ||
                !fact->second.descriptor ||
                fact->second.resource != schedule::ComputeResourceKind::Storage)
@@ -1459,6 +1579,14 @@ LocalUnknownAnalysis::LocalUnknownAnalysis(sim::SimFuncOp function,
           inputs.selectors[read] = certificate->second.knownSelectors;
       }
     }
+    // A cheap forwarded payload should not force every independent arithmetic
+    // cone in a fused segment through its X/Z fallback. This is admission
+    // policy only: excluded reads keep both planes and propagate ordinary
+    // sparse may-X/Z facts; they provide no knownness assumption to the copy.
+    if (site.kind == ReadKind::Gated && options.minimumReadWork &&
+        !inputs.steady.contains(read) &&
+        downstreamWork(result) < options.minimumReadWork)
+      site.kind = ReadKind::Unresolved;
     inputs.sites[read] = site;
   }
 
@@ -1547,6 +1675,13 @@ LocalUnknownAnalysis::LocalUnknownAnalysis(sim::SimFuncOp function,
       if (resolveWrite(inputs, store.getReference(), interval))
         query(store, interval.root);
     }
+    // Publications query the old net plane too. Retain preceding X/Z writes
+    // even when no later read of this net appears in the function.
+    for (sim::SimDriverDriveOp drive : drives) {
+      Interval interval;
+      if (resolveWrite(inputs, drive.getDriver(), interval))
+        query(drive, interval.root);
+    }
   }
 
   DataFlowSolver solver(DataFlowConfig().setInterprocedural(false));
@@ -1591,6 +1726,7 @@ LocalUnknownAnalysis::LocalUnknownAnalysis(sim::SimFuncOp function,
     return observedWrites(*before, op, inputs);
   };
   SmallVector<llvm::SetVector<uint64_t>> gated(count);
+  SmallVector<Ranges> netGated(count);
   DenseMap<Operation *, uint64_t> residualBenefit;
   // Reference facts describe all addresses an access may select. A dynamic
   // byte load from a large memory still transfers one byte, not its entire
@@ -1629,7 +1765,14 @@ LocalUnknownAnalysis::LocalUnknownAnalysis(sim::SimFuncOp function,
     kinds[read] = kind;
     if (kind == ReadKind::Checked)
       ++segments[segmentOf(read)].checks;
-    if (kind != ReadKind::Local && kind != ReadKind::Gated)
+    // Even a mixed read can contain known fields that subsequent casts
+    // use. Preserve its entry assumptions when another field was X-written.
+    bool partiallyKnown = false;
+    if (kind == ReadKind::Written && site.kind == ReadKind::Gated)
+      if (auto width = trackedWidth(read->getResult(0).getType()))
+        if (auto *bits = solver.lookupState<GatedLattice>(read->getResult(0)))
+          partiallyKnown = !bits->getValue().get(*width).isAllOnes();
+    if (kind != ReadKind::Local && kind != ReadKind::Gated && !partiallyKnown)
       continue;
     std::optional<WrittenLattice> observed = observedBefore(read);
     // A known private read whose bits may come from before its segment
@@ -1643,8 +1786,32 @@ LocalUnknownAnalysis::LocalUnknownAnalysis(sim::SimFuncOp function,
       continue;
     }
     unsigned segment = segmentOf(read);
-    segments[segment].benefit += creditResidual(
-        read, accessWork(read->getResult(0).getType(), site.high - site.low));
+    if (netRoots.contains(site.root)) {
+      // An opaque mutation has already revoked every entry assumption.
+      // No field of this read is proved known by the entry certificate.
+      if (observed && observed->isAllStorage())
+        continue;
+      // This is an observational projection, not a claim that padding is
+      // known: every effect/unsupported consumer demands its full input.
+      // IEEE 1800-2023 7.2.1, 7.4.1 and 11.5.1 preserve packed bit identity.
+      // A preceding unknown write still wins on every demanded bit, while
+      // an overwrite on every path discharges that bit's entry obligation.
+      APInt needed = inputs.netDemands.lookup(read);
+      if (observed)
+        needed &= ~observed->overwrittenBits(site.root, site.low, site.high);
+      forEachRun(needed, site.low, [&](uint64_t low, uint64_t high) {
+        netGated[segment].push_back(
+            {descriptors.lookup(site.root), low, high - low});
+      });
+      if (kind == ReadKind::Gated)
+        segments[segment].benefit +=
+            creditResidual(read, accessWork(read->getResult(0).getType(),
+                                            site.high - site.low));
+      continue;
+    }
+    if (kind == ReadKind::Gated)
+      segments[segment].benefit += creditResidual(
+          read, accessWork(read->getResult(0).getType(), site.high - site.low));
     // Bits every path of the segment stored before the read need no check.
     if (observed && observed->overwrites(site.root, site.low, site.high))
       continue;
@@ -1685,6 +1852,50 @@ LocalUnknownAnalysis::LocalUnknownAnalysis(sim::SimFuncOp function,
       segment.benefit +=
           creditResidual(store, accessWork(store.getValue().getType(), width));
       gated[segmentOf(store)].insert(*fact->second.descriptor);
+    }
+
+  // A known publication can leave an already-zero unknown plane untouched.
+  // Both its RHS and its old destination bits need proof. Dense may-write
+  // facts prevent a preceding X/Z publication from being skipped; must-write
+  // facts discharge entry tests only after every path has cleared those bits.
+  // Undriven holes are never included (LRM 6.7.1). Raw driver padding is kept
+  // exact, and lowering additionally checks the override/VPI restrictions.
+  if (!options.summary)
+    for (sim::SimDriverDriveOp drive : drives) {
+      Value reference = drive.getDriver();
+      auto fact = handles.facts.find(reference);
+      Interval interval;
+      uint64_t valueLow = 0;
+      if (!isExecutable(solver, drive->getBlock()) ||
+          !hasUnknownPlane(drive.getValue().getType()) ||
+          !knownInGatedCopy(drive.getValue()) ||
+          !resolveExclusiveDrive(inputs, drive, interval, valueLow) ||
+          interval.low == interval.high || valueLow != 0 ||
+          fact == handles.facts.end() ||
+          interval.high - interval.low != fact->second.width ||
+          trackedWidth(drive.getValue().getType()) != fact->second.width ||
+          !inputs.topology->packedNets.contains(*fact->second.descriptor))
+        continue;
+      if (options.provenKnownStore && options.provenKnownStore(drive)) {
+        // Existing whole-root lowering already earns this saving. Do not
+        // attach another certificate or charge its saving twice.
+        continue;
+      }
+      auto observed = observedBefore(drive);
+      if (!observed ||
+          observed->mayWrite(interval.root, interval.low, interval.high))
+        continue;
+      knownStores.insert(drive);
+      unsigned segment = segmentOf(drive);
+      segments[segment].benefit +=
+          creditResidual(drive, 2 * accessWork(drive.getValue().getType(),
+                                               interval.high - interval.low));
+      APInt needed = ~observed->overwrittenBits(interval.root, interval.low,
+                                                interval.high);
+      forEachRun(needed, interval.low, [&](uint64_t low, uint64_t high) {
+        netGated[segment].push_back(
+            {*fact->second.descriptor, low, high - low});
+      });
     }
 
   // Each operation with a four-state operand or result that the copy makes
@@ -1776,6 +1987,9 @@ LocalUnknownAnalysis::LocalUnknownAnalysis(sim::SimFuncOp function,
     SmallVector<uint64_t, 0> &gate = segments[segment].gate;
     gate.assign(roots.begin(), roots.end());
     llvm::sort(gate);
+    normalize(netGated[segment]);
+    for (const Range &range : netGated[segment])
+      segments[segment].netGate.push_back({range.root, range.low, range.width});
   }
 }
 
@@ -1785,6 +1999,7 @@ LocalUnknownAnalysis::summarize(sim::SimDesignOp design,
   CalleeSummaries summaries;
   if (design.getBody().empty())
     return summaries;
+  auto topology = getIsolatedWireDriverTopology(design);
   // Only called functions need summaries. A large callee keeps the
   // conservative default rather than a whole-body solve per caller design.
   constexpr unsigned maximumSummarizedOperations = 4096;
@@ -1804,8 +2019,9 @@ LocalUnknownAnalysis::summarize(sim::SimDesignOp design,
     if (function.isExternal())
       return summary;
     HandleDataflowResult references = handles.analyze(function);
-    LocalUnknownAnalysis analysis(function, references,
-                                  Options{nullptr, &summaries, true});
+    Options options{nullptr, &summaries, true};
+    options.topology = topology.get();
+    LocalUnknownAnalysis analysis(function, references, options);
     if (!analysis.getFailure().empty())
       return summary;
     LocalStorageAnalysis locals(function,
