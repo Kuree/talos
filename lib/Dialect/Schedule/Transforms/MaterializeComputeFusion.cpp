@@ -36,6 +36,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallString.h"
@@ -300,9 +301,19 @@ public:
   static OpPassManager buildKernelSimplification() {
     OpPassManager pipeline(sim::SimFuncOp::getOperationName());
     GreedyRewriteConfig config;
-    config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Aggressive);
+    // Keep storage identities until native scheduling has consumed them.
+    // Identical-block merging can join different reference/net handles and
+    // turn their stores into unknown writes, revoking model-wide proofs.
+    // LLVM can merge the concrete native blocks after scheduling is frozen.
+    config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Normal);
     pipeline.addPass(createCanonicalizerPass(config));
     pipeline.addPass(createCSEPass());
+    // Disposable activation slices may already contain joined handles.
+    // Restore each executed access's concrete root without moving the access
+    // across other effects (IEEE 1800-2023 4.6(a)). Do this last so cleanup
+    // cannot turn the exposed stores back into a mixed reference again.
+    pipeline.addPass(createSpecializeReferenceJoinsPass());
+    pipeline.addPass(createLowerConditionalReferenceAccessesPass());
     return pipeline;
   }
   LogicalResult initialize(MLIRContext *) override {
@@ -2451,16 +2462,43 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
       [&](StringRef candidate) { return symbols.lookup(candidate) != nullptr; },
       symbolCounter);
   sim::SimFuncOp first = candidates.front().function;
+  sim::SimFuncOp semanticOwner = first;
+  bool retainedStartup = false;
+  for (Candidate &candidate : candidates) {
+    if (!candidate.combinationalBody ||
+        !candidate.combinationalBody->structured)
+      continue;
+    const auto &memory = candidate.combinationalBody->structured->getMemory();
+    bool retains = !memory.hasCompleteWrites();
+    if (!retains && memory.hasValueDependencies())
+      for (const auto &input : memory.getFinalInputs())
+        retains |= llvm::any_of(memory.getMayWrites(), [&](const auto &write) {
+          return input.root == write.root &&
+                 input.low < write.low + write.width &&
+                 write.low < input.low + input.width;
+        });
+    if (!retains)
+      continue;
+    if (candidate.function.getEntryKind() != sim::EntryKind::AlwaysComb)
+      return reject("region: retained state startup kind");
+    // IEEE 1800-2023 9.2.2.2: retained state must not execute before the
+    // always_comb startup phase. Complete pure transports can be postponed
+    // within Active (4.4.2.2/4.9.1). Keep candidate/capture order unchanged.
+    if (!retainedStartup)
+      semanticOwner = candidate.function;
+    retainedStartup = true;
+  }
   SmallVector<NamedAttribute> attributes;
-  if (IntegerAttr codeUnit = first.getCodeUnitIdAttr())
-    attributes.emplace_back(first.getCodeUnitIdAttrName(), codeUnit);
-  attributes.emplace_back(first.getDomainAttrName(), first.getDomainAttr());
-  attributes.emplace_back(first.getHomeRegionAttrName(),
-                          first.getHomeRegionAttr());
+  if (IntegerAttr codeUnit = semanticOwner.getCodeUnitIdAttr())
+    attributes.emplace_back(semanticOwner.getCodeUnitIdAttrName(), codeUnit);
+  attributes.emplace_back(semanticOwner.getDomainAttrName(),
+                          semanticOwner.getDomainAttr());
+  attributes.emplace_back(semanticOwner.getHomeRegionAttrName(),
+                          semanticOwner.getHomeRegionAttr());
   sim::SimFuncOp kernel = sim::SimFuncOp::create(
-      builder, first.getLoc(), name,
+      builder, semanticOwner.getLoc(), name,
       FunctionType::get(design.getContext(), inputTypes, TypeRange{}),
-      first.getEntryKind(), attributes, argumentAttrs);
+      semanticOwner.getEntryKind(), attributes, argumentAttrs);
   symbols.insert(kernel);
   SymbolTable::setSymbolVisibility(kernel, SymbolTable::Visibility::Private);
   ::talos::schedule::set<schedule::metadata::nativeRegionBody>(
@@ -2563,6 +2601,7 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
   // for the lifetime of the spawned kernel.
   DenseMap<Operation *, std::unique_ptr<analysis::SemanticValueRootAnalysis>>
       valueRoots;
+  DenseMap<Operation *, analysis::HandleDataflowResult> watchFacts;
   auto mapWatchHandle = [&](Value value, IRMapping &mapping,
                             auto &mapWatchHandle) -> Value {
     if (Value mapped = mapping.lookupOrNull(value))
@@ -2577,8 +2616,48 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
       if (!roots)
         roots = std::make_unique<analysis::SemanticValueRootAnalysis>(function);
       Value root = roots->lookup(value);
-      if (root == value)
+      if (root == value) {
+        // Threading a CFG can forward separately materialized descriptor
+        // views through a phi. Their SSA definitions differ, but an exact
+        // constant-address certificate can prove the handle identical to an
+        // entry view. Never hoist a dynamic selection or rely on descriptor
+        // metadata without the physical-address certificate.
+        auto [found, inserted] = watchFacts.try_emplace(function);
+        if (inserted)
+          found->second = provenance.analyze(function);
+        const auto &facts = found->second;
+        auto target = facts.facts.find(value);
+        auto address = facts.certificates.find(value);
+        if (target == facts.facts.end() || target->second.dynamic ||
+            !target->second.descriptor || address == facts.certificates.end() ||
+            !address->second.constantAddress)
+          return {};
+        auto tryEntry = [&](Value candidate) -> Value {
+          if (candidate == value || candidate.getType() != value.getType())
+            return {};
+          auto fact = facts.facts.find(candidate);
+          auto certificate = facts.certificates.find(candidate);
+          if (fact == facts.facts.end() || !(fact->second == target->second) ||
+              certificate == facts.certificates.end() ||
+              !certificate->second.constantAddress)
+            return {};
+          return mapWatchHandle(candidate, mapping, mapWatchHandle);
+        };
+        for (BlockArgument candidate :
+             function.getBody().front().getArguments())
+          if (Value mapped = tryEntry(candidate)) {
+            mapping.map(value, mapped);
+            return mapped;
+          }
+        for (Operation &operation :
+             function.getBody().front().without_terminator())
+          for (Value candidate : operation.getResults())
+            if (Value mapped = tryEntry(candidate)) {
+              mapping.map(value, mapped);
+              return mapped;
+            }
         return {};
+      }
       Value mapped = mapWatchHandle(root, mapping, mapWatchHandle);
       if (mapped)
         mapping.map(value, mapped);
@@ -2604,7 +2683,8 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
     bool backward = false;
     for (Attribute attribute : graph.getEdges()) {
       auto edge = cast<schedule::ComputeEdgeAttr>(attribute);
-      if (edge.getKind() != schedule::ComputeEdgeKind::Sensitivity)
+      if (!combinational.isLiveSensitivityEdge(edge) ||
+          edge.getKind() != schedule::ComputeEdgeKind::Sensitivity)
         continue;
       auto source = cast<schedule::ComputeFragmentAttr>(
           graph.getNodes()[edge.getSource()]);
@@ -2707,17 +2787,32 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
               range.resource, *range.descriptor);
           if (!root)
             return bail("region: unknown watch root");
-          uint64_t cursor = range.low, end = range.low + range.width;
+          auto effect = schedule::ComputeEffectAttr::get(
+              design.getContext(), schedule::ComputeEffectKind::Watch,
+              range.resource, schedule::ComputeTargetKind::Descriptor,
+              *range.descriptor, 0, range.low, range.width, false, false,
+              schedule::ComputeTriggerKind::Change);
+          auto live = combinational.getSchedulingWatchRanges(
+              candidate.function.getSymNameAttr(), effect);
+          if (!live)
+            return bail("region: unresolved scheduling watch");
           SmallVector<std::pair<uint64_t, uint64_t>> external;
-          for (auto [low, high] : groupWrites[*root]) {
-            if (high <= cursor || low >= end)
-              continue;
-            if (cursor < low)
-              external.emplace_back(cursor, low);
-            cursor = std::min(end, std::max(cursor, high));
+          // Use exactly the same event lanes as planning. Keeping a dead
+          // member watch after fusion could wake another, non-repeatable
+          // member: the original member's certificate would no longer justify
+          // that composite activation (IEEE 1800-2023 4.3, 9.4.2).
+          for (const auto &lane : *live) {
+            uint64_t cursor = lane.low, end = lane.low + lane.width;
+            for (auto [low, high] : groupWrites[*root]) {
+              if (high <= cursor || low >= end)
+                continue;
+              if (cursor < low)
+                external.emplace_back(cursor, low);
+              cursor = std::min(end, std::max(cursor, high));
+            }
+            if (cursor < end)
+              external.emplace_back(cursor, end);
           }
-          if (cursor < end)
-            external.emplace_back(cursor, end);
           if (external.empty())
             continue;
           Value handle = mapWatchHandle(watch, *mapping, mapWatchHandle);
@@ -2956,7 +3051,8 @@ FailureOr<sim::SimFuncOp> materializeStraightLineKernel(
     SmallVector<uint64_t> downstreamMasks(candidates.size(), 0);
     for (Attribute attribute : graph.getEdges()) {
       auto edge = cast<schedule::ComputeEdgeAttr>(attribute);
-      if (edge.getKind() != schedule::ComputeEdgeKind::Sensitivity)
+      if (!combinational.isLiveSensitivityEdge(edge) ||
+          edge.getKind() != schedule::ComputeEdgeKind::Sensitivity)
         continue;
       for (auto [sourceIndex, source] : llvm::enumerate(candidates)) {
         if (edge.getSource() != source.resumeTarget)
@@ -4495,6 +4591,30 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
   bool prepareDormantTier1 =
       prepareTier1Promotion && vpi.getMode() == schedule::ComputeVPIMode::Read;
   uint64_t preparedPrivateStores = 0;
+  bool changed = false;
+  auto invalidateGraph = llvm::scope_exit([&] {
+    if (!changed)
+      return;
+    // Private-storage forwarding changes canonical accesses even when no
+    // fusion materializes. Every exit after such a change must discard the
+    // graph and its executable site inventory. Retain immutable source and
+    // NBA-origin identities, plus the frozen source observation proofs.
+    design.walk([&](Operation *operation) {
+      if (auto function = dyn_cast<sim::SimFuncOp>(operation)) {
+        function.removeEffectSummaryAttr();
+        function.removeFragmentAbiAttr();
+      }
+      SmallVector<StringAttr> derivedAttributes;
+      for (NamedAttribute named : operation->getAttrs())
+        if (isa<schedule::ContinuationSiteAttr, schedule::TimingSiteAttr,
+                schedule::NBASiteAttr, schedule::EventSiteAttr>(
+                named.getValue()))
+          derivedAttributes.push_back(named.getName());
+      for (StringAttr name : derivedAttributes)
+        operation->removeAttr(name);
+    });
+    design.removeComputeGraphAttr();
+  });
   if (prepareTier1Promotion) {
     // Promote before any activation cloning.  Off mode erases Invisible
     // publication immediately.  Read mode keeps canonical safe-point stores
@@ -4508,9 +4628,12 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
               ::talos::schedule::Field::EvalBorrowedCaptures>(function))
         functions.push_back(function);
     PrivateStaticAccessIndex accessIndex(design);
-    for (sim::SimFuncOp function : functions)
-      preparedPrivateStores += promotePrivateStaticTemporaries(
-          function, accessIndex, prepareDormantTier1);
+    for (sim::SimFuncOp function : functions) {
+      uint64_t promoted = promotePrivateStaticTemporaries(function, accessIndex,
+                                                          prepareDormantTier1);
+      preparedPrivateStores += promoted;
+      changed |= promoted != 0;
+    }
   }
   if ((!fusions || !graph || graph.getWorkers() != 1) && cloneEvaluators) {
     // Standalone activation cloning is not conditional on finding a profitable
@@ -4586,7 +4709,6 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
     spawnsByCallee[spawn.getCalleeAttr().getAttr()].push_back(spawn);
   });
 
-  bool changed = false;
   uint64_t removedPolls = 0;
   uint64_t convertedNBAs = 0;
   uint64_t sharedConditions = 0;
@@ -4596,9 +4718,10 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
   llvm::StringMap<uint64_t> fusionRejections;
   CombinationalFusionAnalysis combinational(
       design, provenance,
-      analysis::ActivationMemoryAnalysis::DependencyMode::ReachingValues);
+      analysis::ActivationMemoryAnalysis::DependencyMode::ReachingValues,
+      CombinationalFusionAnalysis::ObservationContext::ConvexActivation);
   FusionInputIndex inputIndex(design, graph);
-  ConvexActivationGraph contractions(design, graph);
+  ConvexActivationGraph contractions(design, graph, &combinational);
   for (Attribute attribute : fusions) {
     auto fusion = dyn_cast<schedule::ComputeFusionAttr>(attribute);
     if (!fusion)
@@ -4702,28 +4825,6 @@ void TalosSimMaterializeComputeFusionPass::runOnOperation() {
   sharedStableConditions += sharedConditions;
   promotedPrivateStores += promotedStores + preparedPrivateStores;
   ::talos::schedule::remove<schedule::metadata::staticBodyFusion>(design);
-  if (!changed)
-    return;
-  // Body fusion changes call ownership, blocks, and continuation ordinals.
-  // Invalidate only metadata derived from that executable CFG before the
-  // pipeline performs its late inline round and rebuilds the graph. Immutable
-  // hierarchy/code-unit declarations and descriptor observability remain the
-  // identity layer, analogous to debug metadata surviving machine inlining.
-  design.walk([&](Operation *operation) {
-    if (auto function = dyn_cast<sim::SimFuncOp>(operation)) {
-      function.removeEffectSummaryAttr();
-      function.removeFragmentAbiAttr();
-    }
-    SmallVector<StringAttr> derivedAttributes;
-    for (NamedAttribute named : operation->getAttrs())
-      if (isa<schedule::ContinuationSiteAttr, schedule::TimingSiteAttr,
-              schedule::NBASiteAttr, schedule::EventSiteAttr>(named.getValue()))
-        derivedAttributes.push_back(named.getName());
-    for (StringAttr name : derivedAttributes)
-      operation->removeAttr(name);
-  });
-  design->removeAttr(
-      sim::SimDesignOp::getComputeGraphAttrName(design->getName()));
 }
 
 } // namespace

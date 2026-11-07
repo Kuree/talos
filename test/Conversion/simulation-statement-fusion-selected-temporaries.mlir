@@ -14,8 +14,9 @@
 // CHECK: %[[PRIVATE_B:.*]] = simulation.ref.alloc
 // CHECK: simulation.ref.store %[[INPUT_A]] to %[[PRIVATE_A]]
 // CHECK: simulation.ref.store %[[INPUT_B]] to %[[PRIVATE_B]]
-// CHECK: %[[SELECTED:.*]] = arith.select %{{.*}}, %[[PRIVATE_A]], %[[PRIVATE_B]]
-// CHECK: %[[SNAPSHOT:.*]] = simulation.ref.load %[[SELECTED]]
+// Concrete-handle lowering forwards each selected read from its preceding
+// store. The selected value must still precede the later overwrite.
+// CHECK: %[[SNAPSHOT:.*]] = arith.select %{{.*}}, %[[INPUT_A]], %[[INPUT_B]] : i8
 // CHECK: simulation.ref.store %[[INPUT_B]] to %[[PRIVATE_A]]
 // CHECK: %[[SUM:.*]] = arith.addi %[[SNAPSHOT]], %[[INPUT_B]]
 // CHECK: simulation.ref.store %[[SUM]]

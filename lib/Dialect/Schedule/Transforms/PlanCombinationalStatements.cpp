@@ -93,7 +93,8 @@ public:
     handles.prepare(design);
     CombinationalFusionAnalysis eligibility(
         design, handles,
-        analysis::ActivationMemoryAnalysis::DependencyMode::ReachingValues);
+        analysis::ActivationMemoryAnalysis::DependencyMode::ReachingValues,
+        CombinationalFusionAnalysis::ObservationContext::ConvexActivation);
     eligibility.prepareActivations();
     SymbolTable symbols(design);
     using Range = analysis::ActivationMemoryAnalysis::Range;
@@ -140,7 +141,9 @@ public:
           (reason.reason ==
                CombinationalFusionFailure::Reason::UnwatchedLiveIn ||
            reason.reason ==
-               CombinationalFusionFailure::Reason::IncomingOutputState)) {
+               CombinationalFusionFailure::Reason::IncomingOutputState ||
+           reason.reason ==
+               CombinationalFusionFailure::Reason::IncompleteWrites)) {
         body = eligibility.analyzeForReordering(function, handles, &reason);
         if (body)
           requiresReordering.insert(function);
@@ -247,26 +250,50 @@ public:
     }
     if (candidates.size() < 2)
       return;
-    ConvexActivationGraph contractions(design, graph);
+    ConvexActivationGraph contractions(design, graph, &eligibility);
     DenseSet<unsigned> atomicMembers;
     if (componentSections)
-      for (unsigned owner = 0; owner < candidates.size(); ++owner)
-        if (!eligibility.canReorder({candidates[owner]}))
+      for (unsigned owner = 0; owner < candidates.size(); ++owner) {
+        // Source-ordered interleaving retains shared SSA state; publication
+        // slicing must not replicate a previously materialized kernel.
+        if (!growAcyclic && schedule::has<schedule::Field::NativeRegionBody>(
+                                candidates[owner])) {
           atomicMembers.insert(owner);
+          continue;
+        }
+        CombinationalFusionFailure reason;
+        if (!eligibility.canReorder({candidates[owner]}, &reason)) {
+          atomicMembers.insert(owner);
+          if (explain)
+            candidates[owner].emitRemark()
+                << "statement source order retained: " << reason.getMessage()
+                << "; owner=" << candidates[owner].getSymName();
+        }
+      }
 
     SmallVector<unsigned> owners;
     DenseMap<unsigned, SmallVector<unsigned>> adjacency;
     DenseMap<uint64_t, SmallVector<std::pair<unsigned, Range>>> readers;
     for (unsigned owner = 0; owner < candidates.size(); ++owner) {
       owners.push_back(owner);
-      for (const auto &read : activations[owner]->getMemory().getLiveIns())
+      const auto &memory = activations[owner]->getMemory();
+      // Include every publication and control decision (4.3/4.6), while
+      // excluding unused load lanes and rereads of preceding stores. These
+      // ordering facts do not authorize extra activations: uncertified source
+      // watches are still added below, and each fusion needs its own proof.
+      auto inputs = memory.hasInputDependencies() ? memory.getValueInputs()
+                                                  : memory.getLiveIns();
+      const auto &repeatable = eligibility.getRepeatableInputs();
+      auto found = repeatable.find(candidates[owner].getSymNameAttr());
+      if (found != repeatable.end())
+        inputs = found->second;
+      for (const auto &read : inputs)
         readers[read.root].emplace_back(owner, read);
     }
-    // Sensitivity is also an activation dependency (IEEE 1800-2023 9.4.2).
-    // An aggregate watch can include lanes the body does not read. Ignoring
-    // it here but retaining it in native ordering can create a cycle around
-    // the newly fused owner. Include these edges when closing cohorts; the
-    // publication proof still decides whether that coarse cycle can be sliced.
+    // Refine event dependencies with the same strict repeatable-input
+    // certificates used by native collection. Unused lanes can otherwise
+    // create a false cycle before statement scheduling. Every uncertified
+    // watch stays.
     for (Attribute raw : graph.getNodes()) {
       auto fragment = dyn_cast<schedule::ComputeFragmentAttr>(raw);
       if (!fragment)
@@ -282,10 +309,10 @@ public:
             effect.getTarget() != schedule::ComputeTargetKind::Descriptor ||
             !effect.getWidth())
           continue;
-        if (auto root = analysis::ActivationMemoryAnalysis::getRoot(
-                effect.getResource(), effect.getDescriptor()))
-          readers[*root].emplace_back(
-              owner->second, Range{*root, effect.getLow(), effect.getWidth()});
+        if (auto ranges = eligibility.getSchedulingWatchRanges(
+                function.getSymNameAttr(), effect))
+          for (const auto &range : *ranges)
+            readers[range.root].emplace_back(owner->second, range);
       }
     }
     for (unsigned owner = 0; owner < candidates.size(); ++owner)
@@ -300,6 +327,40 @@ public:
     }
     auto components = analysis::computeStronglyConnectedComponents<unsigned>(
         owners, adjacency);
+    // A fully removed false cycle can still be a profitable acyclic cohort.
+    // Keep that original scheduling seed without restoring its dead edges.
+    // When precision exposes a smaller real component, prefer that component
+    // so an unrelated broad-watch observer cannot force it over the budget.
+    DenseSet<unsigned> cyclicOwners;
+    for (const auto &component : components)
+      if (component.size() > 1)
+        cyclicOwners.insert(component.begin(), component.end());
+    DenseMap<unsigned, SmallVector<unsigned>> sourceAdjacency;
+    for (Attribute raw : graph.getEdges()) {
+      auto edge = cast<schedule::ComputeEdgeAttr>(raw);
+      if (edge.getKind() != schedule::ComputeEdgeKind::Sensitivity)
+        continue;
+      auto source = dyn_cast<schedule::ComputeFragmentAttr>(
+          graph.getNodes()[edge.getSource()]);
+      auto target = dyn_cast<schedule::ComputeFragmentAttr>(
+          graph.getNodes()[edge.getTarget()]);
+      if (!source || !target)
+        continue;
+      auto from = indices.find(
+          symbols.lookup<sim::SimFuncOp>(source.getFunction().getValue()));
+      auto to = indices.find(
+          symbols.lookup<sim::SimFuncOp>(target.getFunction().getValue()));
+      if (from != indices.end() && to != indices.end() &&
+          from->second != to->second)
+        sourceAdjacency[from->second].push_back(to->second);
+    }
+    for (const auto &component :
+         analysis::computeStronglyConnectedComponents<unsigned>(
+             owners, sourceAdjacency))
+      if (component.size() > 1 && llvm::none_of(component, [&](unsigned owner) {
+            return cyclicOwners.contains(owner);
+          }))
+        components.push_back(component);
     // Close each cyclic cohort over eligible observers of its intermediate
     // publications. The new observers may publish intermediate values too;
     // a worklist computes that transitive closure. Merge overlapping cohorts
@@ -322,12 +383,10 @@ public:
             effect.getTarget() == schedule::ComputeTargetKind::Descriptor &&
             effect.getWidth() &&
             effect.getLow() <= UINT64_MAX - effect.getWidth()) {
-          auto root = analysis::ActivationMemoryAnalysis::getRoot(
-              effect.getResource(), effect.getDescriptor());
-          if (!root)
-            continue;
-          watchers[*root].push_back(
-              {found->second, {*root, effect.getLow(), effect.getWidth()}});
+          if (auto ranges = eligibility.getSchedulingWatchRanges(
+                  function.getSymNameAttr(), effect))
+            for (const auto &range : *ranges)
+              watchers[range.root].push_back({found->second, range});
         }
     }
     using Cohorts = llvm::MapVector<unsigned, SmallVector<unsigned>>;
@@ -619,12 +678,14 @@ public:
       ComponentRejection reason = ComponentRejection::None;
       SmallVector<analysis::ActivationRegionStep> cycle;
       SmallVector<analysis::ActivationRegionStep> dataCycle;
+      SmallVector<StringAttr> contractionPath;
       bool dataflow = false;
       if (component.size() < 2 || llvm::any_of(component, [&](unsigned owner) {
             return planned.contains(owner);
           }))
         return false;
-      if (!contractions.isConvex(names))
+      if (!contractions.isConvex(names,
+                                 trace || explain ? &contractionPath : nullptr))
         reason = ComponentRejection::Nonconvex;
       else if (maxMembers && component.size() > maxMembers)
         reason = ComponentRejection::MemberBudget;
@@ -666,11 +727,21 @@ public:
           cost > selectedBudget)
         reason = ComponentRejection::OperationBudget;
       if (reason != ComponentRejection::None) {
-        if (trace)
+        if (trace) {
           llvm::errs() << "talos statement cohort rejected: members="
                        << members.size() << " operations=" << cost << " reason="
-                       << stringifyComponentRejection(reason, observerReason)
-                       << '\n';
+                       << stringifyComponentRejection(reason, observerReason);
+          if (!contractionPath.empty()) {
+            llvm::errs() << " path=";
+            llvm::interleave(
+                contractionPath, llvm::errs(),
+                [&](StringAttr name) {
+                  llvm::errs() << '@' << name.getValue();
+                },
+                " -> ");
+          }
+          llvm::errs() << '\n';
+        }
         if (explain) {
           auto diagnostic = members.front().emitRemark();
           diagnostic << "statement component rejected: "
@@ -678,6 +749,11 @@ public:
                      << "; operations=" << cost << "; members=";
           for (auto member : members)
             diagnostic << ' ' << member.getSymName();
+          if (!contractionPath.empty()) {
+            diagnostic << "; dependency path:";
+            for (StringAttr name : contractionPath)
+              diagnostic << " @" << name.getValue();
+          }
           if (reason == ComponentRejection::StructuredDependenceCycle ||
               reason == ComponentRejection::DataDependenceCycle ||
               reason == ComponentRejection::ReorderObserver) {
@@ -783,15 +859,20 @@ public:
       SmallVector<StringAttr> remaining;
       for (unsigned owner : component)
         if (!planned.contains(owner) &&
-            !llvm::is_contained(cyclic, activations[owner]) &&
-            eligibility.canInterleave({candidates[owner]}))
+            !llvm::is_contained(cyclic, activations[owner]))
           remaining.push_back(candidates[owner].getSymNameAttr());
+      // A repeated publication can have an observer inside the section we
+      // recover. Rejecting that producer alone would lose the whole legal
+      // DAG. plan() checks the complete section's observer closure (4.3,
+      // 9.4.2), source order (4.6), and publication schedule before admitting
+      // it; no individual certificate authorizes dropping an outside event.
       // A convex DAG can still span computations with different external
       // activations. A union wait would replay every member on either input
       // and couple their knownness proofs. Recover sections only within the
-      // same conservative activity domain. This is a cost restriction; every
-      // section still needs the ordinary DAG and observation certificates,
-      // and its original language sensitivities are unchanged.
+      // same conservative activity domain, joining the observers required by
+      // repeated publications. This is a cost restriction; every section
+      // still needs the ordinary DAG and observation certificates, and its
+      // original language sensitivities are unchanged.
       SmallVector<unsigned> retained;
       DenseMap<uint64_t, SmallVector<std::pair<unsigned, Range>>> producers;
       for (StringAttr name : remaining) {
@@ -838,6 +919,23 @@ public:
           }
         }
       }
+      // Observer closure is mandatory even across different activity domains.
+      // A singleton producer might fail admission although its complete
+      // observer cohort has a DAG. Bidirectional edges here only combine the
+      // cost domains; executable dependencies and all admission proofs stay
+      // unchanged. Unretained or opaque observers still prevent plan().
+      DenseSet<unsigned> observerCohort;
+      for (unsigned owner : retained)
+        for (Range write : activations[owner]->getMemory().getRepeatedWrites())
+          for (const auto &[observer, watch] : watchers[write.root])
+            if (retainedSet.contains(observer) &&
+                write.low < watch.low + watch.width &&
+                watch.low < write.low + write.width) {
+              forward[owner].push_back(observer);
+              forward[observer].push_back(owner);
+              observerCohort.insert(owner);
+              observerCohort.insert(observer);
+            }
       for (auto &[owner, targets] : forward) {
         llvm::sort(targets);
         targets.erase(std::unique(targets.begin(), targets.end()),
@@ -857,9 +955,23 @@ public:
             activity[target] |= combined;
         }
       }
+      // An unrelated unsupported component can lie between a producer and
+      // its mandatory observer in one topological order. Try their complete
+      // cohort before selecting contiguous sections. plan() still rejects
+      // any actual path through that boundary, feedback, or outside observer.
+      for (const auto &component : components)
+        if (component.size() > 1 &&
+            llvm::any_of(component, [&](unsigned owner) {
+              return observerCohort.contains(owner);
+            }))
+          plan(component);
       std::map<std::vector<unsigned>, unsigned> domains;
       SmallVector<unsigned> activityDomains;
+      remaining.clear();
       for (unsigned owner : retained) {
+        if (planned.contains(owner))
+          continue;
+        remaining.push_back(candidates[owner].getSymNameAttr());
         std::vector<unsigned> key;
         for (unsigned event : activity[owner])
           key.push_back(event);

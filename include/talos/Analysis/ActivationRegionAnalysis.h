@@ -183,6 +183,9 @@ cloneActivationSlice(const ActivationSlice &slice,
 /// branches). Overlapping stores and source-local store/load dependences share
 /// a slice, preserving snapshots and source order. Loops are never unrolled:
 /// a slice keeps the complete CFG.
+/// Retained-state activations always keep all their stores together, including
+/// implicit holds: stable-input idempotence cannot authorize moving a capture
+/// after later source publications that change its enable through feedback.
 ///
 /// This is not an observer certificate. Reordering statements of a process is
 /// not a reference-algorithm execution (IEEE 1800-2023 4.6(a)); it is valid

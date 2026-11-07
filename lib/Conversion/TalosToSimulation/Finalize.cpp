@@ -883,7 +883,7 @@ static void buildTalosToSimulationPipelineImpl(
     OpPassManager &manager, uint32_t workers, StringRef vpiMode,
     uint32_t optLevel, StringRef staticSpecialization, bool earlySymbolDCE,
     StringRef clockedKernels, bool instrumentVPIFrames, StringRef forwardCopies,
-    bool enableUPF, bool pruneVPIInventory) {
+    bool enableUPF, bool pruneVPIInventory, bool closedModel) {
   TalosSimPreparePassOptions prepareOptions;
   prepareOptions.pruneUnusedCoverage = earlySymbolDCE && vpiMode == "off";
   // Source inventory may outlive executable code. Only a VPI profile needs
@@ -1039,6 +1039,7 @@ static void buildTalosToSimulationPipelineImpl(
     if (forwardCopies != "off") {
       TalosSimForwardCopyProcessesPassOptions forwardOptions;
       forwardOptions.census = forwardCopies == "census";
+      forwardOptions.closedModel = closedModel;
       designManager.addPass(
           createTalosSimForwardCopyProcessesPass(std::move(forwardOptions)));
       designManager.addPass(createSymbolDCEPass());
@@ -1247,10 +1248,11 @@ void buildTalosToSimulationPipeline(OpPassManager &manager, uint32_t workers,
                                     bool earlySymbolDCE,
                                     StringRef clockedKernels,
                                     StringRef forwardCopies, bool enableUPF,
-                                    bool pruneVPIInventory) {
+                                    bool pruneVPIInventory, bool closedModel) {
   buildTalosToSimulationPipelineImpl(
       manager, workers, vpiMode, optLevel, staticSpecialization, earlySymbolDCE,
-      clockedKernels, false, forwardCopies, enableUPF, pruneVPIInventory);
+      clockedKernels, false, forwardCopies, enableUPF, pruneVPIInventory,
+      closedModel);
 }
 
 void buildTalosToSimulationPipeline(OpPassManager &manager) {
@@ -1282,7 +1284,7 @@ void registerTalosToSimulationPipeline() {
             options.clockedKernels.getValue(),
             options.instrumentVPIFrames.getValue(),
             options.forwardCopies.getValue(), options.upf.getValue(),
-            /*pruneVPIInventory=*/false);
+            /*pruneVPIInventory=*/false, /*closedModel=*/false);
       });
 }
 

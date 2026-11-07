@@ -177,4 +177,121 @@ module {
   }
 // CHECK-NOT: simulation.display
 // CHECK-NOT: multiple matches
+  // IEEE 1800-2023 12.5.1: a two-state selector cannot introduce wildcard
+  // bits, but an X/Z label can still overlap another item. Eliminate only
+  // the impossible multiple-match checks; four-state selector tests above
+  // retain theirs. No unique assumption excludes any selector value.
+  simulation.design @casez_two_state {
+    simulation.scope.decl 0
+    simulation.storage.decl 0 in 0 : !simulation.packed_array<1 : 0 x i1> design
+    simulation.code_unit.decl 5 in 0 always_comb hierarchy "casez_two_state"
+    // CHECK-LABEL: simulation.func @casez_two_state
+    simulation.func @casez_two_state(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %selector: !simulation.ref<!simulation.packed_array<1 : 0 x i1>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}) attributes {entry_kind = 4 : i32, code_unit_id = 5 : i64, simulation.bindings = [#simulation.argument_binding<path = "top.selector", argument = 1, kind = direct, copyOut = false>]} {
+      talos.sv.statement.case attributes {check_kind = 1 : i32, condition_kind = 2 : i32, has_default = true, item_count = 2 : i64, item_label_counts = array<i64: 1, 1>, node_id = 1 : i64} {
+        talos.sv.expression.named_value attributes {node_id = 2 : i64, referenced_path = "top.selector", referenced_symbol = @selector, semantic_type = !bit2} {}
+        talos.sv.expression.integer_literal attributes {constant_value = "2'b00", node_id = 3 : i64, semantic_type = !logic2} {}
+        talos.sv.expression.integer_literal attributes {constant_value = "2'b01", node_id = 4 : i64, semantic_type = !logic2} {}
+        talos.sv.statement.empty attributes {node_id = 5 : i64} {}
+        talos.sv.statement.empty attributes {node_id = 6 : i64} {}
+        talos.sv.statement.empty attributes {node_id = 7 : i64} {}
+      }
+      simulation.return
+    }
+  }
+// CHECK-NOT: simulation.assert.deferred_enqueue
+// CHECK-NOT: simulation.spawn
+// CHECK-NOT: multiple matches
+  simulation.design @casex_two_state {
+    simulation.scope.decl 0
+    simulation.storage.decl 0 in 0 : !simulation.packed_array<1 : 0 x i1> design
+    simulation.code_unit.decl 5 in 0 always_comb hierarchy "casex_two_state"
+    // CHECK-LABEL: simulation.func @casex_two_state
+    simulation.func @casex_two_state(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %selector: !simulation.ref<!simulation.packed_array<1 : 0 x i1>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}) attributes {entry_kind = 4 : i32, code_unit_id = 5 : i64, simulation.bindings = [#simulation.argument_binding<path = "top.selector", argument = 1, kind = direct, copyOut = false>]} {
+      talos.sv.statement.case attributes {check_kind = 1 : i32, condition_kind = 1 : i32, has_default = true, item_count = 2 : i64, item_label_counts = array<i64: 1, 1>, node_id = 1 : i64} {
+        talos.sv.expression.named_value attributes {node_id = 2 : i64, referenced_path = "top.selector", referenced_symbol = @selector, semantic_type = !bit2} {}
+        talos.sv.expression.integer_literal attributes {constant_value = "2'b00", node_id = 3 : i64, semantic_type = !logic2} {}
+        talos.sv.expression.integer_literal attributes {constant_value = "2'b01", node_id = 4 : i64, semantic_type = !logic2} {}
+        talos.sv.statement.empty attributes {node_id = 5 : i64} {}
+        talos.sv.statement.empty attributes {node_id = 6 : i64} {}
+        talos.sv.statement.empty attributes {node_id = 7 : i64} {}
+      }
+      simulation.return
+    }
+  }
+// CHECK-NOT: simulation.assert.deferred_enqueue
+// CHECK-NOT: simulation.spawn
+// CHECK-NOT: multiple matches
+  simulation.design @casez_two_state_z_label {
+    simulation.scope.decl 0
+    simulation.storage.decl 0 in 0 : !simulation.packed_array<1 : 0 x i1> design
+    simulation.code_unit.decl 5 in 0 always_comb hierarchy "casez_two_state_z_label"
+    // CHECK-LABEL: simulation.func @casez_two_state_z_label
+    simulation.func @casez_two_state_z_label(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %selector: !simulation.ref<!simulation.packed_array<1 : 0 x i1>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}) attributes {entry_kind = 4 : i32, code_unit_id = 5 : i64, simulation.bindings = [#simulation.argument_binding<path = "top.selector", argument = 1, kind = direct, copyOut = false>]} {
+      talos.sv.statement.case attributes {check_kind = 1 : i32, condition_kind = 2 : i32, has_default = true, item_count = 2 : i64, item_label_counts = array<i64: 1, 1>, node_id = 1 : i64} {
+        talos.sv.expression.named_value attributes {node_id = 2 : i64, referenced_path = "top.selector", referenced_symbol = @selector, semantic_type = !bit2} {}
+        talos.sv.expression.integer_literal attributes {constant_value = "2'bz0", node_id = 3 : i64, semantic_type = !logic2} {}
+        talos.sv.expression.integer_literal attributes {constant_value = "2'b00", node_id = 4 : i64, semantic_type = !logic2} {}
+        talos.sv.statement.empty attributes {node_id = 5 : i64} {}
+        talos.sv.statement.empty attributes {node_id = 6 : i64} {}
+        talos.sv.statement.empty attributes {node_id = 7 : i64} {}
+      }
+      simulation.return
+    }
+  }
+// CHECK: multiple matches
+  simulation.design @casex_two_state_x_label {
+    simulation.scope.decl 0
+    simulation.storage.decl 0 in 0 : !simulation.packed_array<1 : 0 x i1> design
+    simulation.code_unit.decl 5 in 0 always_comb hierarchy "casex_two_state_x_label"
+    // CHECK-LABEL: simulation.func @casex_two_state_x_label
+    simulation.func @casex_two_state_x_label(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %selector: !simulation.ref<!simulation.packed_array<1 : 0 x i1>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}) attributes {entry_kind = 4 : i32, code_unit_id = 5 : i64, simulation.bindings = [#simulation.argument_binding<path = "top.selector", argument = 1, kind = direct, copyOut = false>]} {
+      talos.sv.statement.case attributes {check_kind = 1 : i32, condition_kind = 1 : i32, has_default = true, item_count = 2 : i64, item_label_counts = array<i64: 1, 1>, node_id = 1 : i64} {
+        talos.sv.expression.named_value attributes {node_id = 2 : i64, referenced_path = "top.selector", referenced_symbol = @selector, semantic_type = !bit2} {}
+        talos.sv.expression.integer_literal attributes {constant_value = "2'bx0", node_id = 3 : i64, semantic_type = !logic2} {}
+        talos.sv.expression.integer_literal attributes {constant_value = "2'b00", node_id = 4 : i64, semantic_type = !logic2} {}
+        talos.sv.statement.empty attributes {node_id = 5 : i64} {}
+        talos.sv.statement.empty attributes {node_id = 6 : i64} {}
+        talos.sv.statement.empty attributes {node_id = 7 : i64} {}
+      }
+      simulation.return
+    }
+  }
+// CHECK: multiple matches
+  simulation.design @casez_two_state_no_default {
+    simulation.scope.decl 0
+    simulation.storage.decl 0 in 0 : !simulation.packed_array<1 : 0 x i1> design
+    simulation.code_unit.decl 5 in 0 always_comb hierarchy "casez_two_state_no_default"
+    // CHECK-LABEL: simulation.func @casez_two_state_no_default
+    simulation.func @casez_two_state_no_default(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %selector: !simulation.ref<!simulation.packed_array<1 : 0 x i1>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}) attributes {entry_kind = 4 : i32, code_unit_id = 5 : i64, simulation.bindings = [#simulation.argument_binding<path = "top.selector", argument = 1, kind = direct, copyOut = false>]} {
+      talos.sv.statement.case attributes {check_kind = 1 : i32, condition_kind = 2 : i32, has_default = false, item_count = 2 : i64, item_label_counts = array<i64: 1, 1>, node_id = 1 : i64} {
+        talos.sv.expression.named_value attributes {node_id = 2 : i64, referenced_path = "top.selector", referenced_symbol = @selector, semantic_type = !bit2} {}
+        talos.sv.expression.integer_literal attributes {constant_value = "2'b00", node_id = 3 : i64, semantic_type = !logic2} {}
+        talos.sv.expression.integer_literal attributes {constant_value = "2'b01", node_id = 4 : i64, semantic_type = !logic2} {}
+        talos.sv.statement.empty attributes {node_id = 5 : i64} {}
+        talos.sv.statement.empty attributes {node_id = 6 : i64} {}
+      }
+      simulation.return
+    }
+  }
+// CHECK-NOT: multiple matches
+// CHECK: unique case violation: no match
+  simulation.design @casez_two_state_unique0 {
+    simulation.scope.decl 0
+    simulation.storage.decl 0 in 0 : !simulation.packed_array<1 : 0 x i1> design
+    simulation.code_unit.decl 5 in 0 always_comb hierarchy "casez_two_state_unique0"
+    // CHECK-LABEL: simulation.func @casez_two_state_unique0
+    simulation.func @casez_two_state_unique0(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %selector: !simulation.ref<!simulation.packed_array<1 : 0 x i1>> {simulation.capture_kind = 3 : i32, simulation.descriptor_id = 0 : i64}) attributes {entry_kind = 4 : i32, code_unit_id = 5 : i64, simulation.bindings = [#simulation.argument_binding<path = "top.selector", argument = 1, kind = direct, copyOut = false>]} {
+      talos.sv.statement.case attributes {check_kind = 2 : i32, condition_kind = 2 : i32, has_default = false, item_count = 2 : i64, item_label_counts = array<i64: 1, 1>, node_id = 1 : i64} {
+        talos.sv.expression.named_value attributes {node_id = 2 : i64, referenced_path = "top.selector", referenced_symbol = @selector, semantic_type = !bit2} {}
+        talos.sv.expression.integer_literal attributes {constant_value = "2'b00", node_id = 3 : i64, semantic_type = !logic2} {}
+        talos.sv.expression.integer_literal attributes {constant_value = "2'b01", node_id = 4 : i64, semantic_type = !logic2} {}
+        talos.sv.statement.empty attributes {node_id = 5 : i64} {}
+        talos.sv.statement.empty attributes {node_id = 6 : i64} {}
+      }
+      simulation.return
+    }
+  }
+// CHECK-NOT: simulation.assert.deferred_enqueue
+// CHECK-NOT: simulation.spawn
+// CHECK-NOT: multiple matches
 }

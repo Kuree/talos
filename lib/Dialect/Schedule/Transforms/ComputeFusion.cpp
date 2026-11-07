@@ -34,8 +34,9 @@
 using namespace mlir;
 
 namespace talos {
-ConvexActivationGraph::ConvexActivationGraph(sim::SimDesignOp design,
-                                             schedule::ComputeGraphAttr graph) {
+ConvexActivationGraph::ConvexActivationGraph(
+    sim::SimDesignOp design, schedule::ComputeGraphAttr graph,
+    const CombinationalFusionAnalysis *analysis) {
   SymbolTable symbols(design);
   SmallVector<unsigned> owners(graph.getNodes().size(), UINT_MAX);
   for (auto [id, raw] : llvm::enumerate(graph.getNodes())) {
@@ -58,6 +59,7 @@ ConvexActivationGraph::ConvexActivationGraph(sim::SimDesignOp design,
     if (owner == successors.size()) {
       parents.push_back(owner);
       successors.emplace_back();
+      ownerNames.push_back(fragment.getFunction().getAttr());
     }
     owners[id] = owner;
   }
@@ -75,6 +77,8 @@ ConvexActivationGraph::ConvexActivationGraph(sim::SimDesignOp design,
     // from becoming an immediate path through an entire initial process.
     if (edge.getKind() != schedule::ComputeEdgeKind::Sensitivity &&
         edge.getKind() != schedule::ComputeEdgeKind::ProcessOrder)
+      continue;
+    if (analysis && !analysis->isLiveSensitivityEdge(edge))
       continue;
     unsigned from = owners[edge.getSource()], to = owners[edge.getTarget()];
     if (from != UINT_MAX && to != UINT_MAX && from != to)
@@ -97,29 +101,52 @@ unsigned ConvexActivationGraph::leader(unsigned node) const {
   return node;
 }
 
-bool ConvexActivationGraph::isConvex(ArrayRef<StringAttr> members) const {
+bool ConvexActivationGraph::isConvex(ArrayRef<StringAttr> members,
+                                     SmallVectorImpl<StringAttr> *path) const {
+  if (path)
+    path->clear();
   DenseSet<unsigned> included, visited;
-  SmallVector<unsigned> pending;
+  SmallVector<unsigned> selected, pending;
+  DenseMap<unsigned, unsigned> previous;
   for (StringAttr member : members) {
     auto found = indices.find(member);
     if (found == indices.end())
       return false;
-    included.insert(leader(found->second));
+    unsigned node = leader(found->second);
+    if (included.insert(node).second)
+      selected.push_back(node);
   }
-  for (unsigned node : included)
+  for (unsigned node : selected)
     for (unsigned target : successors[node]) {
       target = leader(target);
-      if (!included.contains(target) && visited.insert(target).second)
+      if (!included.contains(target) && visited.insert(target).second) {
         pending.push_back(target);
+        if (path)
+          previous[target] = node;
+      }
     }
   while (!pending.empty()) {
     unsigned node = pending.pop_back_val();
     for (unsigned target : successors[node]) {
       target = leader(target);
-      if (included.contains(target))
+      if (included.contains(target)) {
+        if (path) {
+          SmallVector<unsigned> reversed{target, node};
+          unsigned current = node;
+          while (!included.contains(current)) {
+            current = previous.at(current);
+            reversed.push_back(current);
+          }
+          for (unsigned owner : llvm::reverse(reversed))
+            path->push_back(ownerNames[owner]);
+        }
         return false;
-      if (visited.insert(target).second)
+      }
+      if (visited.insert(target).second) {
         pending.push_back(target);
+        if (path)
+          previous[target] = node;
+      }
     }
   }
   return true;
@@ -539,8 +566,10 @@ private:
 CombinationalFusionAnalysis::CombinationalFusionAnalysis(
     sim::SimDesignOp design,
     const analysis::HandleDataflowAnalysis &provenanceAnalysis,
-    analysis::ActivationMemoryAnalysis::DependencyMode mode)
-    : design(design), provenance(&provenanceAnalysis), dependencyMode(mode) {
+    analysis::ActivationMemoryAnalysis::DependencyMode mode,
+    ObservationContext observations)
+    : observationContext(observations), design(design),
+      provenance(&provenanceAnalysis), dependencyMode(mode) {
   auto graph = design.getComputeGraphAttr();
   // Full foreign mutation needs a range-scoped invalidation route for this
   // idempotent kernel. Existing externally driven evaluators retain their
@@ -756,8 +785,41 @@ std::optional<CombinationalFusionBody> CombinationalFusionAnalysis::analyze(
       return reject(failure);
     }
     const auto &memory = activation->getMemory();
-    if (!memory.hasCompleteWrites() || memory.getMayWrites().empty())
+    if (memory.getMayWrites().empty())
       return reject({Reason::IncompleteWrites});
+    if (observationContext == ObservationContext::RegionBoundary) {
+      if (!memory.hasCompleteWrites())
+        return reject({Reason::IncompleteWrites});
+      auto inputs = memory.hasValueDependencies() ? memory.getFinalInputs()
+                                                  : memory.getLiveIns();
+      for (const auto &input : inputs)
+        if (llvm::any_of(memory.getMayWrites(), [&](const auto &write) {
+              return activationRangesOverlap(input, write);
+            }))
+          return reject({Reason::IncomingOutputState});
+    }
+    std::optional<bool> idempotent;
+    if (!memory.hasCompleteWrites()) {
+      // IEEE 1800-2023 4.3/9.4.2/10.4.1: an omitted packed-cell update
+      // holds exactly the old value, like an explicit self-assignment. Only
+      // the final-value/observer proof may use that equivalence. Keep the
+      // original conditional stores, may/must ranges and source sensitivity;
+      // ordinary fusion and strict repeatability still require completeness.
+      bool packed = llvm::all_of(memory.getWrites(), [](const auto &entry) {
+        auto store = dyn_cast<sim::SimRefStoreOp>(entry.first);
+        return store &&
+               isa_and_nonnull<IntegerType, sim::LogicType>(
+                   sim::getPackedScalarType(store.getValue().getType()));
+      });
+      if (!finalValuesOnly ||
+          function.getEntryKind() != sim::EntryKind::AlwaysComb ||
+          !memory.hasValueDependencies() || !packed)
+        return reject({Reason::IncompleteWrites});
+      idempotent = analysis::hasIdempotentStateTransition(
+          activation->getActivationFunction(), memory, analysis);
+      if (!*idempotent)
+        return reject({Reason::IncompleteWrites});
+    }
     Operation *suspend = activation->getSuspension();
     SmallVector<Value> watched;
     sim::EventRegionAttr region;
@@ -793,7 +855,6 @@ std::optional<CombinationalFusionBody> CombinationalFusionAnalysis::analyze(
     // overwritten publications. Ordinary fusion keeps every intermediate input.
     if (finalValuesOnly && memory.hasValueDependencies())
       inputs = memory.getFinalInputs();
-    std::optional<bool> idempotent;
     // Every publication and control decision must be independent of incoming
     // output state. Reaching values can discharge old snapshots whose lanes
     // are fully overwritten without hiding an intermediate publication.
@@ -1002,21 +1063,23 @@ std::optional<CombinationalFusionBody> CombinationalFusionAnalysis::analyze(
   return result;
 }
 
-llvm::DenseSet<StringAttr> schedule::collectRepeatableCombinationalActivations(
-    sim::SimDesignOp design, const analysis::HandleDataflowAnalysis &handles) {
-  llvm::DenseSet<StringAttr> result;
-  CombinationalFusionAnalysis combinational(
-      design, handles,
-      analysis::ActivationMemoryAnalysis::DependencyMode::Inputs);
+const CombinationalFusionAnalysis::RepeatableInputs &
+CombinationalFusionAnalysis::getRepeatableInputs(bool explainRejections) const {
+  auto design = this->design;
+  if (repeatableInputs)
+    return *repeatableInputs;
+  auto &result = repeatableInputs.emplace();
+  if (unsupported)
+    return result;
   DenseMap<StringAttr, SmallVector<sim::SimSpawnOp, 1>> spawns;
   design.walk([&](sim::SimSpawnOp spawn) {
     spawns[spawn.getCalleeAttr().getAttr()].push_back(spawn);
   });
-  combinational.prepareActivations();
+  prepareActivations();
   // Only the distribution is reported: a remark per process would serialize
   // the design once per rejected process.
-  bool report =
-      native::has<native::DebugTiming>(design->getParentOfType<ModuleOp>());
+  bool report = explainRejections && native::has<native::DebugTiming>(
+                                         design->getParentOfType<ModuleOp>());
   llvm::StringMap<uint64_t> rejections;
   auto reject = [&](StringRef reason) {
     if (report)
@@ -1030,15 +1093,16 @@ llvm::DenseSet<StringAttr> schedule::collectRepeatableCombinationalActivations(
       return reject("shared body");
     auto spawn = instances->second.front();
     auto initializer = spawn->getParentOfType<sim::SimFuncOp>();
-    // The initializer entry executes once. A syntactically unique spawn in
-    // a loop or a dynamically called procedure is not a unique actor.
+    // IEEE 1800-2023 9.2.2.2 and 4.9.1 require initial evaluation of
+    // always_comb/continuous processes. Preserve that activation and prove
+    // one actor: a unique spawn in a loop is not a unique initializer.
     if (!initializer ||
         initializer.getEntryKind() != sim::EntryKind::RootInitializer ||
         spawn->getBlock() != &initializer.getBody().front())
       return reject("spawn outside the root initializer entry");
     CombinationalFusionFailure failure;
-    auto body = combinational.analyze(function, handles, /*interleaved=*/true,
-                                      report ? &failure : nullptr);
+    auto body = analyze(function, *provenance, /*interleaved=*/true,
+                        report ? &failure : nullptr);
     if (!body || !body->structured) {
       if (report) {
         std::string message = failure.getMessage();
@@ -1064,7 +1128,9 @@ llvm::DenseSet<StringAttr> schedule::collectRepeatableCombinationalActivations(
       return reject("repeated writes");
     if (memory.hasMixedPrivateWrites())
       return reject("mixed private writes");
-    result.insert(function.getSymNameAttr());
+    auto inputs = memory.hasInputDependencies() ? memory.getValueInputs()
+                                                : memory.getLiveIns();
+    result.try_emplace(function.getSymNameAttr(), inputs.begin(), inputs.end());
   });
   if (report) {
     SmallVector<StringRef> ordered;
@@ -1081,6 +1147,108 @@ llvm::DenseSet<StringAttr> schedule::collectRepeatableCombinationalActivations(
   return result;
 }
 
+llvm::DenseSet<StringAttr> schedule::collectRepeatableCombinationalActivations(
+    sim::SimDesignOp design, const analysis::HandleDataflowAnalysis &handles,
+    llvm::function_ref<void(StringAttr,
+                            const analysis::ActivationMemoryAnalysis &)>
+        record) {
+  CombinationalFusionAnalysis combinational(
+      design, handles,
+      analysis::ActivationMemoryAnalysis::DependencyMode::ReachingValues);
+  llvm::DenseSet<StringAttr> result;
+  const auto &certified =
+      combinational.getRepeatableInputs(/*explainRejections=*/true);
+  design.walk([&](sim::SimFuncOp function) {
+    StringAttr owner = function.getSymNameAttr();
+    if (!certified.contains(owner))
+      return;
+    result.insert(owner);
+    if (record) {
+      auto body =
+          combinational.analyze(function, handles, /*interleaved=*/true);
+      assert(body && body->structured && "certified activation is cached");
+      record(owner, body->structured->getMemory());
+    }
+  });
+  return result;
+}
+
+std::optional<analysis::Ranges>
+CombinationalFusionAnalysis::getSchedulingWatchRanges(
+    StringAttr owner, schedule::ComputeEffectAttr watch) const {
+  if (!watch || watch.getTarget() != schedule::ComputeTargetKind::Descriptor ||
+      !watch.getWidth() || watch.getLow() > UINT64_MAX - watch.getWidth())
+    return std::nullopt;
+  auto root = analysis::ActivationMemoryAnalysis::getRoot(
+      watch.getResource(), watch.getDescriptor());
+  if (!root)
+    return std::nullopt;
+  analysis::Ranges ranges{{*root, watch.getLow(), watch.getWidth()}};
+  if (watch.getEffect() != schedule::ComputeEffectKind::Watch ||
+      watch.getTrigger() != schedule::ComputeTriggerKind::Change ||
+      watch.getDynamic() || watch.getDeferred())
+    return ranges;
+  // IEEE 1800-2023 4.3 permits an equivalent algorithm. Complete exclusive
+  // outputs, single publications, and every value/control/target input prove
+  // that an unused-lane wake cannot change state or produce an update event.
+  // This is not a final-value-only proof: intermediate transitions must stay
+  // observable (4.6, 9.4.2), so repeated-write owners are never refined here.
+  // Unfused source waits retain their implicit sensitivity (9.2.2.2.1).
+  // Planning and composed union waits use these same effective lanes. The
+  // source-order/snapshot and observer proofs still govern statement fusion
+  // (4.6(a)), and NBA staging is unchanged (10.4.2).
+  const auto &inputs = getRepeatableInputs();
+  auto found = inputs.find(owner);
+  // Match native fanout's no-live-input fallback: retain an owner even when
+  // no watched input can change its constant outputs.
+  if (found == inputs.end() || found->second.empty())
+    return ranges;
+  return analysis::intersect(ranges, found->second);
+}
+
+bool CombinationalFusionAnalysis::isLiveSensitivityEdge(
+    schedule::ComputeEdgeAttr edge) const {
+  // Keep all process order and non-change event controls (4.6(a), 9.4.2).
+  if (edge.getKind() != schedule::ComputeEdgeKind::Sensitivity)
+    return true;
+  auto design = this->design;
+  auto graph = design.getComputeGraphAttr();
+  auto source = dyn_cast<schedule::ComputeFragmentAttr>(
+      graph.getNodes()[edge.getSource()]);
+  auto target = dyn_cast<schedule::ComputeFragmentAttr>(
+      graph.getNodes()[edge.getTarget()]);
+  if (!source || !target)
+    return true;
+  auto watch = edge.getResource();
+  auto ranges = getSchedulingWatchRanges(target.getFunction().getAttr(), watch);
+  if (!ranges)
+    return true;
+  bool matched = false;
+  for (auto write :
+       source.getEffects().getAsRange<schedule::ComputeEffectAttr>()) {
+    if (write.getEffect() != schedule::ComputeEffectKind::Write &&
+        write.getEffect() != schedule::ComputeEffectKind::Drive)
+      continue;
+    if (write.getResource() == schedule::ComputeResourceKind::Unknown ||
+        write.getTarget() != schedule::ComputeTargetKind::Descriptor ||
+        write.getDynamic() || !write.getWidth())
+      return true;
+    if (write.getResource() != watch.getResource() ||
+        write.getDescriptor() != watch.getDescriptor())
+      continue;
+    uint64_t low = std::max(write.getLow(), watch.getLow());
+    uint64_t high = std::min(write.getLow() + write.getWidth(),
+                             watch.getLow() + watch.getWidth());
+    if (low >= high)
+      continue;
+    matched = true;
+    for (const auto &range : *ranges)
+      if (low < range.low + range.width && range.low < high)
+        return true;
+  }
+  return !matched;
+}
+
 std::optional<CombinationalFusionBody>
 CombinationalFusionAnalysis::analyzeForReordering(
     sim::SimFuncOp function, const analysis::HandleDataflowAnalysis &provenance,
@@ -1093,11 +1261,11 @@ CombinationalFusionAnalysis::analyzeForReordering(
   // analyze() has proved that every incoming output cell used on a path is
   // copied back unchanged on that path. Thus an extra union-watch activation
   // with unchanged inputs cannot advance retained state.
-  // getActivationSliceOrder keeps source-local read/write dependencies
-  // together, including the old cell and every publication using it; this is
-  // not a license to drop state dependencies or to reorder those stores within
-  // the slice. The closed observer certificate below still excludes observable
-  // intermediate values.
+  // getActivationSliceOrder keeps every retained-state activation whole,
+  // including later publications that could change its enable through another
+  // process. Idempotence only certifies unchanged-input reruns; it does not
+  // authorize moving a capture after those publications. The closed observer
+  // certificate below still excludes observable intermediate values.
   if (!memory.hasValueDependencies()) {
     if (failureReason)
       *failureReason = {
@@ -1152,9 +1320,12 @@ CombinationalFusionAnalysis::getInterleaveIndex() const {
         index.unresolvedWatch = true;
         continue;
       }
-      index.watchers[*root].push_back(
-          {fragment.getFunction().getAttr(),
-           ActivationRange{*root, effect.getLow(), effect.getWidth()}});
+      auto ranges =
+          getSchedulingWatchRanges(fragment.getFunction().getAttr(), effect);
+      assert(ranges && "resolved source watch has a scheduling range");
+      for (const auto &range : *ranges)
+        index.watchers[*root].push_back(
+            {fragment.getFunction().getAttr(), range});
     }
   }
   return index;
@@ -1303,7 +1474,10 @@ CombinationalFusionAnalysis::getGlitchInsensitiveStorage() const {
         result.clear();
         return result;
       }
-      watchers[*root].push_back(fragment.getFunction().getAttr());
+      auto ranges =
+          getSchedulingWatchRanges(fragment.getFunction().getAttr(), effect);
+      if (!ranges || !ranges->empty())
+        watchers[*root].push_back(fragment.getFunction().getAttr());
     }
   }
   prepareActivations();

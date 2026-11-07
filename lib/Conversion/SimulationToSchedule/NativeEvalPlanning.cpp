@@ -980,8 +980,25 @@ NativeActivationInputs collectNativeActivationInputs(sim::SimDesignOp design,
   if (!design || !(result.sourceGraph = design.getComputeGraphAttr()))
     return result;
   analysis::HandleDataflowAnalysis handles(design);
-  result.repeatable =
-      schedule::collectRepeatableCombinationalActivations(design, handles);
+  // IEEE 1800-2023 4.3/4.6/9.4.2: retain the same strict certificate's
+  // publication/control/target inputs. An inlining cost limit must not discard
+  // those lanes and reintroduce false native feedback around a fused kernel.
+  // This analysis is fresh for the current IR; copy its facts before lowering
+  // can mutate any body. Uncertified owners keep their source event controls.
+  result.repeatable = schedule::collectRepeatableCombinationalActivations(
+      design, handles,
+      [&](StringAttr owner, const analysis::ActivationMemoryAnalysis &memory) {
+        llvm::append_range(result.liveIns[owner], memory.hasInputDependencies()
+                                                      ? memory.getValueInputs()
+                                                      : memory.getLiveIns());
+        llvm::append_range(result.mayWrites[owner], memory.getMayWrites());
+        if (explain)
+          llvm::errs() << "talos ranked activation: " << owner.getValue()
+                       << " valid=1 complete=1 inputs="
+                       << memory.hasInputDependencies()
+                       << " input_reason=" << memory.getDependencyFailure()
+                       << " reason=\n";
+      });
   if (explain)
     llvm::errs() << "talos repeatable activations: " << result.repeatable.size()
                  << '\n';
@@ -1013,30 +1030,14 @@ NativeActivationInputs collectNativeActivationInputs(sim::SimDesignOp design,
         effectsByOwner[owner],
         fragment.getEffects().getAsRange<schedule::ComputeEffectAttr>());
   }
-  const uint64_t laneBudget =
-      schedule::getMaxInlineOperations(design->getParentOfType<ModuleOp>());
-  struct Request {
-    sim::SimFuncOp function;
-    bool lanes;
-  };
-  SmallVector<Request, 0> requests;
+  SmallVector<sim::SimFuncOp, 0> requests;
   for (const auto &[owner, effects] : effectsByOwner) {
-    if (!changeOwners.contains(owner))
+    if (!changeOwners.contains(owner) || result.repeatable.contains(owner))
       continue;
     auto function = symbols.lookup<sim::SimFuncOp>(owner.getValue());
     if (!function)
       continue;
-    uint64_t cost = 0;
-    bool needsLanes = result.repeatable.contains(owner) &&
-                      !function
-                           .walk([&](Operation *) {
-                             return ++cost > laneBudget
-                                        ? WalkResult::interrupt()
-                                        : WalkResult::advance();
-                           })
-                           .wasInterrupted();
     bool needsProof =
-        needsLanes ||
         llvm::any_of(effects, [&, &effects = effects](auto effect) {
           if (effect.getDynamic())
             return true;
@@ -1048,7 +1049,7 @@ NativeActivationInputs collectNativeActivationInputs(sim::SimDesignOp design,
           });
         });
     if (needsProof)
-      requests.push_back({function, needsLanes});
+      requests.push_back(function);
   }
   struct Facts {
     analysis::ActivationMemoryAnalysis::Ranges liveIns, mayWrites;
@@ -1057,12 +1058,14 @@ NativeActivationInputs collectNativeActivationInputs(sim::SimDesignOp design,
   };
   SmallVector<Facts, 0> facts(requests.size());
   auto solve = [&](size_t index) {
-    sim::SimFuncOp function = requests[index].function;
+    sim::SimFuncOp function = requests[index];
+    // Include every publication/control/target input, while following stores
+    // that precede a local reread. Treating that reread as old output invents
+    // feedback. This does not certify redundant evaluation: uncertified
+    // owners retain all their source watches and intermediate publications.
     analysis::ActivationRegionAnalysis activation(
         function, handles, {},
-        requests[index].lanes
-            ? analysis::ActivationMemoryAnalysis::DependencyMode::ReachingValues
-            : analysis::ActivationMemoryAnalysis::DependencyMode::Inputs);
+        analysis::ActivationMemoryAnalysis::DependencyMode::ReachingValues);
     const auto &memory = activation.getMemory();
     Facts &fact = facts[index];
     if (explain) {
@@ -1088,8 +1091,7 @@ NativeActivationInputs collectNativeActivationInputs(sim::SimDesignOp design,
   // this thread.
   SmallVector<size_t, 0> callFree, withCalls;
   for (auto [index, request] : llvm::enumerate(requests))
-    (request.function
-             .walk([](sim::SimCallOp) { return WalkResult::interrupt(); })
+    (request.walk([](sim::SimCallOp) { return WalkResult::interrupt(); })
              .wasInterrupted()
          ? withCalls
          : callFree)
@@ -1102,7 +1104,7 @@ NativeActivationInputs collectNativeActivationInputs(sim::SimDesignOp design,
     llvm::errs() << fact.trace;
     if (!fact.usable)
       continue;
-    StringAttr name = request.function.getSymNameAttr();
+    StringAttr name = request.getSymNameAttr();
     result.liveIns[name] = std::move(fact.liveIns);
     result.mayWrites[name] = std::move(fact.mayWrites);
   }

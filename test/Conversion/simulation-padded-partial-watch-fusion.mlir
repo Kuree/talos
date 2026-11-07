@@ -29,10 +29,13 @@ module {
       %a = simulation.ref.load %input : !simulation.ref<i3> -> i3
       simulation.ref.store %a to %address : i3, !simulation.ref<i3>
       %first = simulation.ref.subelement %data[[0, 0]] : !simulation.ref<!simulation.unpacked_array<2 : 0 x !simulation.unpacked_array<-1 : -1 x i3, #simulation.storage_layout<size = 1, alignment = 1, stride = 1, offsets = []>>, #simulation.storage_layout<size = 3, alignment = 1, stride = 1, offsets = []>>> -> !simulation.ref<i3>
+      %middle = simulation.ref.subelement %data[[1, 0]] : !simulation.ref<!simulation.unpacked_array<2 : 0 x !simulation.unpacked_array<-1 : -1 x i3, #simulation.storage_layout<size = 1, alignment = 1, stride = 1, offsets = []>>, #simulation.storage_layout<size = 3, alignment = 1, stride = 1, offsets = []>>> -> !simulation.ref<i3>
       %last = simulation.ref.subelement %data[[2, 0]] : !simulation.ref<!simulation.unpacked_array<2 : 0 x !simulation.unpacked_array<-1 : -1 x i3, #simulation.storage_layout<size = 1, alignment = 1, stride = 1, offsets = []>>, #simulation.storage_layout<size = 3, alignment = 1, stride = 1, offsets = []>>> -> !simulation.ref<i3>
       %x = simulation.ref.load %first : !simulation.ref<i3> -> i3
+      %m = simulation.ref.load %middle : !simulation.ref<i3> -> i3
       %y = simulation.ref.load %last : !simulation.ref<i3> -> i3
-      %r = arith.xori %x, %y : i3
+      %xy = arith.xori %x, %y : i3
+      %r = arith.xori %xy, %m : i3
       simulation.ref.store %r to %output : i3, !simulation.ref<i3>
       simulation.suspend.any %input, %data edges [0, 0] to ^body : !simulation.ref<i3>, !simulation.ref<!simulation.unpacked_array<2 : 0 x !simulation.unpacked_array<-1 : -1 x i3, #simulation.storage_layout<size = 1, alignment = 1, stride = 1, offsets = []>>, #simulation.storage_layout<size = 3, alignment = 1, stride = 1, offsets = []>>>
     }
@@ -54,6 +57,6 @@ module {
 // CHECK: simulation.func private @__talos_region_kernel_
 // CHECK: %[[INPUT:.*]] = simulation.context.storage %arg0[0]
 // CHECK: %[[DATA:.*]] = simulation.context.storage %arg0[2]
-// CHECK: %[[MIDDLE:.*]] = simulation.ref.subelement %[[DATA]]{{\[\[1\]\]}}
-// CHECK: %[[LAST:.*]] = simulation.ref.subelement %[[DATA]]{{\[\[2\]\]}}
+// CHECK: %[[MIDDLE:.*]] = simulation.ref.subelement %[[DATA]]{{\[\[1, 0\]\]}}
+// CHECK: %[[LAST:.*]] = simulation.ref.subelement %[[DATA]]{{\[\[2, 0\]\]}}
 // CHECK: simulation.suspend.any %[[INPUT]], %[[MIDDLE]], %[[LAST]] edges [0, 0, 0]

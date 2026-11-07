@@ -3,8 +3,9 @@
 
 // Export transparency is judged from compute-graph effect summaries, which
 // later rewrites may drop. Building the graph records the answer on the
-// design; without summaries, only that record keeps a context import
-// transparent (IEEE 1800-2023 35.5.3).
+// design. These exports use local memory, so without summaries only that
+// record establishes their transparency (IEEE 1800-2023 35.5.3). Pure value
+// queries need no memory inventory and are covered in dpi-effects.mlir.
 
 // CHECK-LABEL: design @recorded exports transparent
 // CHECK-LABEL: design @unrecorded exports opaque
@@ -34,7 +35,10 @@ module {
         dpi.logical_inputs = 0 : i32,
         dpi.abi_signature = [#dpi.abi<kind = int, direction = result, width = 32, fourState = false, isSigned = true>]} {
       %period = arith.constant 1000 : i32
-      simulation.return %period : i32
+      %local = simulation.ref.alloc %period : i32 -> !simulation.ref<i32>
+      simulation.ref.store %period to %local : i32, !simulation.ref<i32>
+      %loaded = simulation.ref.load %local : !simulation.ref<i32> -> i32
+      simulation.return %loaded : i32
     }
   }
   simulation.design @unrecorded {
@@ -58,7 +62,10 @@ module {
         dpi.logical_inputs = 0 : i32,
         dpi.abi_signature = [#dpi.abi<kind = int, direction = result, width = 32, fourState = false, isSigned = true>]} {
       %period = arith.constant 1000 : i32
-      simulation.return %period : i32
+      %local = simulation.ref.alloc %period : i32 -> !simulation.ref<i32>
+      simulation.ref.store %period to %local : i32, !simulation.ref<i32>
+      %loaded = simulation.ref.load %local : !simulation.ref<i32> -> i32
+      simulation.return %loaded : i32
     }
   }
 }

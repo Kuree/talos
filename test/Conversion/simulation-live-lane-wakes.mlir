@@ -35,11 +35,17 @@
 // TRACE: talos eval dependency: owner=[[A:[0-9]+]] {{.*}}body=cycle_a.__talos_eval_body_0 successors=[[B:[0-9]+]]{{$}}
 // TRACE: talos eval dependency: owner=[[B]] {{.*}}body=cycle_b.__talos_eval_body_0 successors={{$}}
 
-// Lane analysis stays within the inline budget: above it, wakes are whole.
+// The strict certificate already computed these lanes. An inlining cap does
+// not broaden them or restore a dead watch; controls and repeated events stay.
 // SMALL: llvm.mlir.global internal constant @__talos_aot_static_fanout_v1(
-// SMALL-SAME: [2 : i32, {{[0-9]+}} : i32, {{[0-9]+}} : i32, 0 : i32, {{[0-9]+}} : i32, 1 : i32, 0, 8,
-// SMALL-SAME: [7 : i32, {{[0-9]+}} : i32, {{[0-9]+}} : i32, 0 : i32, {{[0-9]+}} : i32, 1 : i32, 0, 8,
-// Zero removes the budget, as for every other native inline decision.
+// SMALL-SAME: [2 : i32, {{[0-9]+}} : i32, {{[0-9]+}} : i32, 0 : i32, {{[0-9]+}} : i32, 1 : i32, 0, 4,
+// SMALL-SAME: [6 : i32, {{[0-9]+}} : i32, {{[0-9]+}} : i32, 0 : i32, {{[0-9]+}} : i32, 1 : i32, 0, 8,
+// SMALL-NOT: [7 : i32,
+// SMALL-SAME: [9 : i32, {{[0-9]+}} : i32, {{[0-9]+}} : i32, 0 : i32, {{[0-9]+}} : i32, 1 : i32, 0, 1,
+// SMALL-SAME: [10 : i32, {{[0-9]+}} : i32, {{[0-9]+}} : i32, 0 : i32, {{[0-9]+}} : i32, 1 : i32, 0, 8,
+// SMALL-SAME: [11 : i32, {{[0-9]+}} : i32, {{[0-9]+}} : i32, 0 : i32, {{[0-9]+}} : i32, 1 : i32, 0, 8,
+// SMALL-SAME: [15 : i32, {{[0-9]+}} : i32, {{[0-9]+}} : i32, 0 : i32, {{[0-9]+}} : i32, 1 : i32, 0, 8,
+// An unlimited inline budget likewise leaves the same proof intact.
 // UNLIMITED: llvm.mlir.global internal constant @__talos_aot_static_fanout_v1(
 // UNLIMITED-SAME: [2 : i32, {{[0-9]+}} : i32, {{[0-9]+}} : i32, 0 : i32, {{[0-9]+}} : i32, 1 : i32, 0, 4,
 

@@ -116,7 +116,7 @@ bool hasIdempotentStateTransition(sim::SimFuncOp function,
     for (Operation &op : path.block->without_terminator()) {
       if (++operations > maximumOperations || op.getNumRegions())
         return false;
-      if (auto load = dyn_cast<sim::SimRefLoadOp>(op)) {
+      if (isa<sim::SimRefLoadOp, sim::SimNetReadOp>(op)) {
         auto found = memory.getReads().find(&op);
         if (found == memory.getReads().end() || found->second.empty() ||
             memory.getPrivateReads().contains(&op))
@@ -139,11 +139,14 @@ bool hasIdempotentStateTransition(sim::SimFuncOp function,
             fact.identity.reset();
           first = false;
         }
-        auto selector = valueOf(load.getReference());
+        // Validated net reads are fixed external inputs too. Writes remain
+        // exact storage-only cells above; selector dependencies still matter
+        // when the selected net depends on an incoming storage value.
+        auto selector = valueOf(op.getOperand(0));
         fact.inputs |= selector.inputs;
         if (selector.inputs.any())
           fact.identity.reset();
-        path.values.insert_or_assign(load.getResult(), std::move(fact));
+        path.values.insert_or_assign(op.getResult(0), std::move(fact));
       } else if (auto store = dyn_cast<sim::SimRefStoreOp>(op)) {
         auto found = stores.find(&op);
         if (found == stores.end())

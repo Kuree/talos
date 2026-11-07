@@ -19,6 +19,8 @@ namespace talos::analysis {
 ///
 /// `record` freezes the compute graph's export-transparency result on the
 /// design so later rewrites can discard summaries without changing the answer.
+/// Before those summaries exist, pure computations on plain value operands
+/// and results establish the same contract without a memory inventory.
 class DPIEffectAnalysis {
 public:
   explicit DPIEffectAnalysis(sim::SimDesignOp design);

@@ -1,8 +1,9 @@
-// RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-replicate,simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.llvm.mlir
+// RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-replicate,test-talos-edit-attributes{has=test.chain_tail set={id = 70 : i64} remove=test.chain_tail},simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-compute-fusion,talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.llvm.mlir
 // RUN: FileCheck %s --check-prefix=PLAN < %t.llvm.mlir
 
 // test-talos-replicate expands link# into the 69 links that continue step1
-// into a 70-member chain (storage 1 ... 70); the checker observes the first.
+// into a 70-member chain (storage 1 ... 70); the checker observes the last,
+// keeping every publication live when the canonical graph is rebuilt.
 
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_0(
 // PLAN-SAME: schedule.eval.ranked_members = array<i32: 0, 1, {{.*}}62, 63, 64, 65, 66, 67, 68, 69>
@@ -75,7 +76,7 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
       cf.br ^wait
     }
     simulation.func @check(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 1 : i32, code_unit_id = 73 : i64} {
-      %output = simulation.context.storage %ctx[2] : !vref
+      %output = simulation.context.storage %ctx[2] {test.chain_tail} : !vref
       %delay = simulation.time.constant 3
       simulation.suspend.delay %delay to ^first
     ^first:

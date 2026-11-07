@@ -3,6 +3,7 @@
 #include "mlir/Support/LogicalResult.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include <cstdint>
 namespace mlir {
 class ModuleOp;
@@ -19,6 +20,7 @@ namespace talos::sim {
 class SimDesignOp;
 }
 namespace talos::analysis {
+class ActivationMemoryAnalysis;
 class HandleDataflowAnalysis;
 }
 namespace talos::detail {
@@ -36,8 +38,13 @@ namespace talos::schedule {
 /// writes, complete sensitivity, equivalent initial/resume computation, and
 /// exactly one spawn in the root initializer entry.
 /// The caller must retain the source revision and exclude foreign mutation.
+/// `record` may copy the already-certified memory facts from this revision;
+/// it must not mutate the IR or retain a reference after collection returns.
 llvm::DenseSet<mlir::StringAttr> collectRepeatableCombinationalActivations(
-    sim::SimDesignOp design, const analysis::HandleDataflowAnalysis &handles);
+    sim::SimDesignOp design, const analysis::HandleDataflowAnalysis &handles,
+    llvm::function_ref<void(mlir::StringAttr,
+                            const analysis::ActivationMemoryAnalysis &)>
+        record = {});
 
 /// Resolves the module global an address-of names, like
 /// `AddressOfOp::getGlobal`. Serial callers cache lazily through a

@@ -1544,7 +1544,12 @@ static int executeCompilation(const InputArgList &args,
               ? "on"
               : staticSpecialization,
           /*earlySymbolDCE=*/true, clockedKernels, forwardCopies,
-          /*enableUPF=*/!upfPaths.empty(), /*pruneVPIInventory=*/native);
+          /*enableUPF=*/!upfPaths.empty(), /*pruneVPIInventory=*/native,
+          // Match the backend's closed executable authority, without enabling
+          // unrelated native lowering decisions early. Reusable IR/object
+          // outputs must retain their open-world host mutation contract.
+          /*closedModel=*/native && targetName == "native" && !emitObject &&
+              !emitLLVM && optLevel > 0);
     if (failed(passManager.run(*module)) || failed(verify(*module)))
       return 1;
   }

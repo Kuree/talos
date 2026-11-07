@@ -1526,16 +1526,27 @@ LogicalResult UnitLowering::lowerCase(semantic::SVCaseStatementOp op) {
   bool inspectAll =
       op.getCheckKind() == semantic::SVUniquePriorityCheck::Unique ||
       op.getCheckKind() == semantic::SVUniquePriorityCheck::Unique0;
+  Type selectorScalar = sim::getPackedScalarType((*selector).getType());
+  bool twoStateWildcard =
+      selectorScalar && isa<IntegerType>(selectorScalar) &&
+      (op.getConditionKind() == semantic::SVCaseCondition::WildcardXOrZ ||
+       op.getConditionKind() == semantic::SVCaseCondition::WildcardJustZ);
   bool disjointConstants =
-      inspectAll && op.getConditionKind() == semantic::SVCaseCondition::Normal;
+      inspectAll &&
+      (op.getConditionKind() == semantic::SVCaseCondition::Normal ||
+       twoStateWildcard);
   // IEEE 1800-2023 12.5.3 counts matching items, not labels within one item.
   // Exact equal-width constant labels from different items cannot both match
   // the same selector, including X/Z (12.5: case equality compares every bit
   // after both sides are sized to the common width). A label the importer
   // wrapped in an implicit conversion to that width, such as `2'd1` against a
   // `logic [1:0]` selector, carries its folded constant in the converted type
-  // and is as exact as a literal. Keep dynamic, wildcard, real, string, and
-  // width-changing cases on the general checked path.
+  // and is as exact as a literal. For a two-state selector, casez/casex also
+  // compare exactly when every label has only 0/1 bits (12.5.1). Retain the
+  // general checked path for a four-state wildcard selector: its Z bits can
+  // match distinct 0/1 labels. Unknown label bits, dynamic, real, string, and
+  // width-changing cases also retain the general path. This proves a report
+  // unreachable; a unique qualifier never authorizes assuming it cannot fail.
   auto selectorWidth = sim::getPackedWidth((*selector).getType());
   DenseMap<std::pair<APInt, APInt>, size_t> constantItems;
   size_t nextConstant = 0;

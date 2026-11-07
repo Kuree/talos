@@ -28,10 +28,13 @@ module {
       %a = simulation.ref.load %input : !simulation.ref<i8> -> i8
       simulation.ref.store %a to %address : i8, !simulation.ref<i8>
       %first = simulation.ref.subelement %data[[0, 0]] : !simulation.ref<!simulation.unpacked_array<2 : 0 x !simulation.unpacked_array<-1 : -1 x i8>>> -> !simulation.ref<i8>
+      %middle = simulation.ref.subelement %data[[1, 0]] : !simulation.ref<!simulation.unpacked_array<2 : 0 x !simulation.unpacked_array<-1 : -1 x i8>>> -> !simulation.ref<i8>
       %last = simulation.ref.subelement %data[[2, 0]] : !simulation.ref<!simulation.unpacked_array<2 : 0 x !simulation.unpacked_array<-1 : -1 x i8>>> -> !simulation.ref<i8>
       %x = simulation.ref.load %first : !simulation.ref<i8> -> i8
+      %m = simulation.ref.load %middle : !simulation.ref<i8> -> i8
       %y = simulation.ref.load %last : !simulation.ref<i8> -> i8
-      %r = arith.xori %x, %y : i8
+      %xy = arith.xori %x, %y : i8
+      %r = arith.xori %xy, %m : i8
       simulation.ref.store %r to %output : i8, !simulation.ref<i8>
       simulation.suspend.any %input, %data edges [0, 0] to ^body : !simulation.ref<i8>, !simulation.ref<!simulation.unpacked_array<2 : 0 x !simulation.unpacked_array<-1 : -1 x i8>>>
     }

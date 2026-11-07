@@ -1,4 +1,5 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph),test-talos-dpi-effects)' -o /dev/null 2>&1 | FileCheck %s
+// RUN: talos-opt %s --pass-pipeline='builtin.module(test-talos-dpi-effects)' -o /dev/null 2>&1 | FileCheck %s --check-prefix=BEFORE
 
 // IEEE 1800-2023 35.5.1.3: an import that is not context reads and writes no
 // SystemVerilog data other than its arguments. A context import may call any
@@ -9,6 +10,9 @@
 // CHECK-LABEL: design @constant_export exports transparent
 // CHECK-NEXT: call start: transparent
 // CHECK-NEXT: call poll: transparent
+// BEFORE-LABEL: design @constant_export exports transparent
+// BEFORE: design @reading_export exports opaque
+// BEFORE: design @waiting_export exports opaque
 // An export that reads design state makes context calls opaque only.
 // CHECK-LABEL: design @reading_export exports opaque
 // CHECK-NEXT: call start: may access design

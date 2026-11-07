@@ -28,28 +28,38 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/AttrTypeSubElements.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/OwningOpRef.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/Threading.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "talos/Analysis/DPIEffectAnalysis.h"
 #include "talos/Analysis/HandleDataflowAnalysis.h"
+#include "talos/Analysis/NativeStorageLayout.h"
 #include "talos/Analysis/NetConnectivityAnalysis.h"
 #include "talos/Analysis/ParallelWalk.h"
+#include "talos/Analysis/SimulationEffectAnalysis.h"
 #include "talos/Analysis/StorageWriteAnalysis.h"
 #include "talos/Dialect/Coverage/CoverageDialect.h"
 #include "talos/Dialect/Native/NativeDialect.h"
+#include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
+#include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Simulation/SimulationMetadata.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include "talos/Dialect/Simulation/SimulationTypes.h"
+#include "talos/Dialect/Simulation/Transforms/FoldSmallDomains.h"
 #include "talos/Dialect/Simulation/Transforms/Passes.h"
+#include "talos/Dialect/Simulation/Transforms/TwoStateEvaluation.h"
 #include "talos/Runtime/OutputItemFlags.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SCCIterator.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -71,6 +81,7 @@ struct Root {
   bool net = false;
   uint64_t id = 0;
   bool operator==(const Root &o) const { return net == o.net && id == o.id; }
+  bool operator!=(const Root &o) const { return !(*this == o); }
   bool operator<(const Root &o) const {
     return std::tie(net, id) < std::tie(o.net, o.id);
   }
@@ -464,6 +475,7 @@ struct Summary {
   /// Suspends other than at change, edge or `suspend.any` waits: a delay, a
   /// level wait, a join, a task call, a return.
   bool otherSuspension = false;
+  bool deferredReports = false;
   SmallVector<Root> captured;
   SmallVector<Access> reads;
   SmallVector<Write> writes;
@@ -652,6 +664,7 @@ summarize(sim::SimFuncOp function,
     }
     if (op == function.getOperation())
       return;
+    summary->deferredReports |= isa<sim::SimDeferredEnqueueOp>(op);
     if (combinational &&
         !isa<sim::SimRefLoadOp, sim::SimNetReadOp, sim::SimRefStoreOp,
              sim::SimDriverDriveOp>(op) &&
@@ -859,12 +872,15 @@ void indexSymbolUsers(sim::SimDesignOp design, DesignState &state) {
 /// normalization.
 bool normalizePureExpression(sim::SimFuncOp function,
                              const analysis::HandleFacts &facts,
-                             const DesignState &state, unsigned budget) {
+                             const DesignState &state, unsigned budget,
+                             bool assertionProof = false) {
   if (!budget || function.isExternal() || !function.isPrivate() ||
       function.getHomeRegion() != sim::EventRegion::Active ||
       (function.getEntryKind() != sim::EntryKind::Continuous &&
        function.getEntryKind() != sim::EntryKind::PortInput &&
-       function.getEntryKind() != sim::EntryKind::PortOutput))
+       function.getEntryKind() != sim::EntryKind::PortOutput &&
+       !(assertionProof &&
+         function.getEntryKind() == sim::EntryKind::AlwaysComb)))
     return false;
   bool special = false;
   uint64_t cost = 0;
@@ -954,6 +970,871 @@ bool normalizePureExpression(sim::SimFuncOp function,
   }
   return changed;
 }
+
+/// A phase-specific proof, not an equality for Active-region loads. At
+/// quiescence an undelayed continuous equation holds. If a change-sensitive
+/// final assertion passes for every such value, every earlier failure must
+/// flush before Postponed: at least one of its directly read predicate inputs
+/// changes after that encounter and resumes its process
+/// (1800-2023 16.4-16.4.2). Captured action arguments are still evaluated in
+/// Active, so the matched path must have no effects except its report and
+/// private epoch bookkeeping. Talos executes non-suspending activation
+/// segments atomically, an allowed event granularity (4.6-4.7), so the monitor
+/// rearms its original wait before another activation can publish a change.
+class FinalReportProof {
+public:
+  FinalReportProof(sim::SimDesignOp design, DesignState &state,
+                   ArrayRef<Summary *> summaries)
+      : design(design), state(state), summaries(summaries) {
+    for (Summary *summary : summaries) {
+      for (const Write &write : summary->writes)
+        writers[write.root].push_back(write.op);
+      for (const UnboundedAccess &access : summary->unbounded)
+        (access.write ? unknownWrites : unknownReads)[access.net] = true;
+    }
+    for (Summary *summary : summaries) {
+      if (!summary->copy)
+        continue;
+      const Copy &copy = *summary->copy;
+      if (!activeWait(summary->function.getBody().back().getTerminator()))
+        continue;
+      auto type = state.types.find(copy.sink);
+      if (type == state.types.end() || unknownWrites[copy.sink.net] ||
+          state.nonActive.contains(copy.function) ||
+          !state.permanent.contains(keyOf(copy.sink)) || copy.sinkLow ||
+          sim::getPackedWidth(type->second) != copy.width ||
+          !sim::getTwoStateEvaluationWidth(type->second) ||
+          writers[copy.sink].size() != 1 ||
+          writers[copy.sink].front() != copy.write ||
+          !coversReads(*summary, copy.reads))
+        continue;
+      if (copy.sink.net &&
+          (!state.topology->partitionedDriverNets.contains(copy.sink.id) ||
+           state.driverDecls[copy.sink.id] != 1))
+        continue;
+      auto users =
+          state.usersOf.lookup(sim::SimFuncOp(copy.function).getSymName());
+      if (!state.usesKnown || users.size() != 1 ||
+          !state.startupSpawns.contains(users.front()))
+        continue;
+      auto spawn =
+          getSpawnOf(users.front(), sim::SimFuncOp(copy.function).getSymName());
+      if (!spawn || !spawn.getResult().use_empty())
+        continue;
+      equations[copy.sink] = &copy;
+    }
+  }
+
+  unsigned fold() {
+    bool debug =
+        native::has<native::DebugTiming>(design->getParentOfType<ModuleOp>());
+    if (debug)
+      llvm::errs() << "talos final report proof: equations=" << equations.size()
+                   << " unknown-storage-reads=" << unknownReads[false]
+                   << " unknown-storage-writes=" << unknownWrites[false]
+                   << '\n';
+    // A foreign write, force or process/assertion control can invalidate an
+    // equation, prevent a flush, or preserve a report after disabling its
+    // assertion. Keep those designs on their existing event schedule.
+    if (!state.usesKnown || state.waveforms)
+      return 0;
+    // This pass requires VPI off and precedes compute-graph construction.
+    // Context imports can still mutate the design through a DPI export;
+    // query that route without assuming an already constructed graph.
+    analysis::DPIEffectAnalysis foreign(design);
+    SymbolTable symbols(design);
+    bool controlled = false;
+    design.walk([&](Operation *op) {
+      controlled |=
+          isa<sim::SimOverrideOp, sim::SimReleaseOverrideOp,
+              sim::SimDynamicOverrideOp, sim::SimProcessControlOp,
+              sim::SimControlDisableOp, sim::SimControlDisableSelectedOp,
+              sim::SimDisableChildrenOp, sim::SimAssertionControlOp,
+              sim::SimAssertionControlDynamicOp>(op);
+      if (debug && controlled &&
+          isa<sim::SimOverrideOp, sim::SimReleaseOverrideOp,
+              sim::SimDynamicOverrideOp, sim::SimProcessControlOp,
+              sim::SimControlDisableOp, sim::SimControlDisableSelectedOp,
+              sim::SimDisableChildrenOp, sim::SimAssertionControlOp,
+              sim::SimAssertionControlDynamicOp>(op))
+        llvm::errs() << "talos final report proof: control boundary "
+                     << op->getName() << '\n';
+      if (auto call = dyn_cast<sim::SimDPICallOp>(op)) {
+        if (debug && foreign.mayReachDesignThroughExports(call))
+          llvm::errs() << "talos final report proof: context export boundary "
+                       << call.getCIdentifier() << '\n';
+        controlled |= foreign.mayReachDesignThroughExports(call);
+        for (Attribute raw : call.getAbiSignature())
+          controlled |=
+              cast<dpi::ABIAttr>(raw).getKind() == dpi::ABIKind::OpenArray;
+      }
+      // The copy summaries resolve ordinary reference/net accesses. Other
+      // access families (argument references, virtual calls, etc.) must not
+      // disappear from the exclusive-writer or private-epoch inventories just
+      // because they have no RefType operand. Closed direct callees are all
+      // included in the inventory; an opaque global effect is a boundary.
+      auto effects = dyn_cast<MemoryEffectOpInterface>(op);
+      if (!effects) {
+        if (op->getParentOfType<sim::SimFuncOp>() &&
+            !op->hasTrait<OpTrait::HasRecursiveMemoryEffects>() &&
+            !isMemoryEffectFree(op)) {
+          if (debug && !controlled)
+            llvm::errs() << "talos final report proof: unknown effect "
+                         << op->getName() << '\n';
+          controlled = true;
+        }
+        return;
+      }
+      SmallVector<MemoryEffects::EffectInstance> instances;
+      effects.getEffects(instances);
+      bool canonical = llvm::any_of(instances, [](const auto &effect) {
+        return isa<sim::StorageResource, sim::NetResource>(
+                   effect.getResource()) &&
+               isa<MemoryEffects::Read, MemoryEffects::Write>(
+                   effect.getEffect());
+      });
+      if (!canonical ||
+          isa<sim::SimRefLoadOp, sim::SimNetReadOp, sim::SimRefStoreOp,
+              sim::SimDriverDriveOp, sim::SimNBAEnqueueOp, sim::SimRefCopyOp,
+              sim::SimRefAllocOp, sim::SimDisplayOp, sim::SimDPICallOp>(op))
+        return;
+      sim::SimFuncOp callee;
+      if (auto call = dyn_cast<sim::SimCallOp>(op))
+        callee = symbols.lookup<sim::SimFuncOp>(call.getCallee());
+      else if (auto call = dyn_cast<sim::SimTaskCallOp>(op))
+        callee = symbols.lookup<sim::SimFuncOp>(call.getCallee());
+      if (!callee || callee.isExternal()) {
+        if (debug && !controlled)
+          llvm::errs() << "talos final report proof: opaque memory effect "
+                       << op->getName() << '\n';
+        controlled = true;
+      }
+    });
+    if (controlled)
+      return 0;
+    SmallVector<Report> proven;
+    unsigned matched = 0;
+    for (Summary *summary : summaries) {
+      if (!summary->deferredReports)
+        continue;
+      auto report = match(*summary);
+      if (!report)
+        continue;
+      ++matched;
+      if (debug)
+        llvm::errs() << "talos final report proof: matched @"
+                     << summary->function.getSymName() << '\n';
+      if (!prove(*summary, *report))
+        continue;
+      proven.push_back(*report);
+    }
+    DenseSet<Operation *> changed;
+    for (Report report : proven) {
+      changed.insert(report.enqueue->getParentOfType<sim::SimFuncOp>());
+      // Only the certified report effects disappear. Other assertions, their
+      // captured argument computations, and the original wait/flush remain.
+      // Initialized-storage propagation removes an epoch only after no arm
+      // remains anywhere (including another report sharing that epoch).
+      report.spawn.erase();
+      report.arm.erase();
+      report.enqueue.erase();
+    }
+    // The next proof uses every current publication. Refresh modified
+    // summaries before constructing its independent invariant snapshot.
+    if (!changed.empty()) {
+      writers.clear();
+      for (Summary *summary : summaries) {
+        if (changed.contains(summary->function))
+          *summary = std::move(*summarize(summary->function, *state.analysis));
+        for (const Write &write : summary->writes)
+          writers[write.root].push_back(write.op);
+      }
+    }
+    matchCountFolds = foldNeverZCounts();
+    if (debug)
+      llvm::errs() << "talos final report proof: matched=" << matched
+                   << " folded=" << proven.size() << '\n';
+    return proven.size();
+  }
+
+  unsigned getMatchCountFolds() const { return matchCountFolds; }
+
+private:
+  struct Report {
+    sim::SimDeferredEnqueueOp enqueue;
+    sim::SimSpawnOp spawn;
+    sim::SimRefStoreOp arm;
+    Root epoch;
+  };
+  using View = std::tuple<Root, uint64_t, uint64_t>;
+
+  /// IEEE 1800-2023 6.8, 7.2.2: variables normally start with 0 or X, but
+  /// member initializers can contain Z. Check the actual defaults and EVERY
+  /// publication to prove an inductive invariant, including cycles and partial
+  /// holds. This is an all-time invariant, not a reset assumption.
+  unsigned foldNeverZCounts() {
+    if (unknownWrites[false])
+      return 0;
+    DenseSet<uint64_t> rootScopes, topScopes, externalInputs;
+    for (auto scope : design.getOps<sim::SimScopeDeclOp>())
+      if (!scope.getParentAttr())
+        rootScopes.insert(scope.getId());
+    topScopes = rootScopes;
+    for (auto scope : design.getOps<sim::SimScopeDeclOp>())
+      if (auto parent = scope.getParentAttr();
+          parent && rootScopes.contains(parent.getValue().getZExtValue()))
+        topScopes.insert(scope.getId());
+    for (auto port : design.getOps<sim::SimPortDeclOp>())
+      if (!port.getSourceIsNet() && topScopes.contains(port.getScopeId()) &&
+          port.getDirection() != sim::PortDirection::Output)
+        externalInputs.insert(port.getSourceId());
+
+    DenseMap<Type, bool> defaults;
+    auto defaultNeverZ = [&](Type type) {
+      auto [it, inserted] = defaults.try_emplace(type, false);
+      if (inserted) {
+        if (!analysis::hasMemberDefaults(type))
+          it->second = true;
+        else {
+          auto planes = analysis::getDefaultStoragePlanes(type);
+          it->second = (planes.value & planes.unknown).isZero();
+        }
+      }
+      return it->second;
+    };
+    std::map<Root, bool> neverZ;
+    for (auto storage : design.getOps<sim::SimStorageDeclOp>())
+      if (storage.getLifetime() == sim::Lifetime::Design &&
+          analysis::isPlainValueType(storage.getType()) &&
+          defaultNeverZ(storage.getType()) &&
+          (!storage.getObservability() ||
+           *storage.getObservability() !=
+               schedule::ComputeObservabilityKind::ExternallyWritable) &&
+          !externalInputs.contains(storage.getId()))
+        neverZ[{false, uint64_t(storage.getId())}] = true;
+
+    using Requirements = SmallVector<Root, 2>;
+    DenseMap<Value, std::optional<Requirements>> cache;
+    DenseSet<Value> active;
+    unsigned work = 0;
+    std::function<std::optional<Requirements>(Value)> require;
+    auto reference = [&](Value handle) -> std::optional<Requirements> {
+      auto function = handle.getParentBlock()->getParentOp();
+      while (function && !isa<sim::SimFuncOp>(function))
+        function = function->getParentOp();
+      if (!function)
+        return std::nullopt;
+      const auto &all = facts(cast<sim::SimFuncOp>(function));
+      auto it = all.find(handle);
+      if (it == all.end() || !it->second.descriptor ||
+          it->second.resource != schedule::ComputeResourceKind::Storage)
+        return std::nullopt;
+      Root root{false, *it->second.descriptor};
+      // A whole-root invariant covers dynamic selections, provided an invalid
+      // selection's default (7.4.5, Table 7-1) also contains no Z initializer.
+      // Nets have no seed because their undriven value can be Z (6.6).
+      auto ref = dyn_cast<sim::RefType>(handle.getType());
+      if (!neverZ.count(root) || !ref ||
+          !defaultNeverZ(ref.getElementType()))
+        return std::nullopt;
+      return Requirements{root};
+    };
+    require = [&](Value value) -> std::optional<Requirements> {
+      Type type = value.getType();
+      if (!analysis::isPlainValueType(type))
+        return std::nullopt;
+      if (!sim::containsFourStateLeaf(type))
+        return Requirements{};
+      if (auto it = cache.find(value); it != cache.end())
+        return it->second;
+      if (++work > (1u << 22) || active.size() > 128 ||
+          !active.insert(value).second)
+        return std::nullopt;
+      auto pop = llvm::scope_exit([&] { active.erase(value); });
+      Requirements dependencies;
+      auto merge = [&](Value input) {
+        auto requirements = require(input);
+        if (!requirements)
+          return false;
+        llvm::append_range(dependencies, *requirements);
+        llvm::sort(dependencies);
+        dependencies.erase(std::unique(dependencies.begin(), dependencies.end()),
+                           dependencies.end());
+        return dependencies.size() <= 512;
+      };
+      std::optional<Requirements> result;
+      Operation *op = value.getDefiningOp();
+      if (auto literal = dyn_cast_or_null<sim::SimLogicConstantOp>(op)) {
+        if ((literal.getValue() & literal.getUnknown()).isZero())
+          result = Requirements{};
+      } else if (isa_and_nonnull<
+                     sim::SimLogicFromBitsOp, sim::SimLogicBinaryOp,
+                     sim::SimLogicPowerOp, sim::SimLogicLogicalOp,
+                     sim::SimLogicReductionOp, sim::SimLogicCompareOp>(op)) {
+        // These operators produce known bits or canonical X, even when an
+        // operand contains Z (11.4). They never propagate a Z symbol.
+        result = Requirements{};
+      } else if (isa_and_nonnull<sim::SimAggregateDefaultOp>(op)) {
+        if (defaultNeverZ(type))
+          result = Requirements{};
+      } else if (auto unary = dyn_cast_or_null<sim::SimLogicUnaryOp>(op);
+                 unary && unary.getKind() != sim::UnaryKind::Plus) {
+        result = Requirements{};
+      } else if (auto load = dyn_cast_or_null<sim::SimRefLoadOp>(op)) {
+        result = reference(load.getReference());
+      } else if (auto mux = dyn_cast_or_null<sim::SimLogicMuxOp>(op)) {
+        if (merge(mux.getTrueValue()) && merge(mux.getFalseValue()))
+          result = std::move(dependencies);
+      } else if (auto select = dyn_cast_or_null<arith::SelectOp>(op)) {
+        if (merge(select.getTrueValue()) && merge(select.getFalseValue()))
+          result = std::move(dependencies);
+      } else if (isa_and_nonnull<sim::SimArrayDynExtractOp>(op)) {
+        if (defaultNeverZ(type) && llvm::all_of(op->getOperands(), merge))
+          result = std::move(dependencies);
+      } else if (isa_and_nonnull<
+                     sim::SimLogicUnaryOp, sim::SimLogicShiftOp,
+                     sim::SimLogicResizeOp, sim::SimLogicConcatOp,
+                     sim::SimLogicReplicateOp, sim::SimLogicExtractOp,
+                     sim::SimLogicDynExtractOp, sim::SimLogicInsertOp,
+                     sim::SimLogicDynInsertOp, sim::SimPackedFlattenOp,
+                     sim::SimPackedUnflattenOp, sim::SimAggregateConstructOp,
+                     sim::SimAggregateSplatOp, sim::SimAggregateExtractOp,
+                     sim::SimAggregateInsertOp,
+                     sim::SimArrayDynInsertOp>(op)) {
+        if (llvm::all_of(op->getOperands(), merge))
+          result = std::move(dependencies);
+      } else if (auto argument = dyn_cast<BlockArgument>(value)) {
+        Block *block = argument.getOwner();
+        bool complete = !block->getPredecessors().empty();
+        for (BlockOperand &edge : block->getUses()) {
+          auto branch = dyn_cast<BranchOpInterface>(edge.getOwner());
+          if (!branch) {
+            complete = false;
+            break;
+          }
+          auto operands = branch.getSuccessorOperands(edge.getOperandNumber());
+          unsigned index = argument.getArgNumber();
+          if (index >= operands.size() || !operands[index] ||
+              !merge(operands[index])) {
+            complete = false;
+            break;
+          }
+        }
+        if (complete)
+          result = std::move(dependencies);
+      }
+      cache[value] = result;
+      return result;
+    };
+
+    std::map<Root, Requirements> consumers;
+    SmallVector<Root> pending;
+    for (const auto &[root, valid] : neverZ) {
+      bool preserves = true;
+      for (Operation *op : writers[root]) {
+        std::optional<Requirements> dependencies;
+        if (auto store = dyn_cast<sim::SimRefStoreOp>(op))
+          dependencies = require(store.getValue());
+        else if (auto nba = dyn_cast<sim::SimNBAEnqueueOp>(op))
+          dependencies = require(nba.getValue());
+        else if (auto copy = dyn_cast<sim::SimRefCopyOp>(op))
+          dependencies = reference(copy.getSource());
+        if (!dependencies) {
+          preserves = false;
+          break;
+        }
+        for (Root dependency : *dependencies)
+          consumers[dependency].push_back(root);
+      }
+      if (!preserves)
+        pending.push_back(root);
+    }
+    // Remove every root depending on an uncertified producer. Cycles whose
+    // writes preserve the common 0/X seed remain, by induction on actual
+    // publications. Every transient and delayed NBA payload was included.
+    while (!pending.empty()) {
+      Root root = pending.pop_back_val();
+      if (!neverZ[root])
+        continue;
+      neverZ[root] = false;
+      llvm::append_range(pending, consumers[root]);
+    }
+    auto certified = [&](Value value) {
+      auto dependencies = require(value);
+      return dependencies &&
+             llvm::all_of(*dependencies, [&](Root root) { return neverZ[root]; });
+    };
+    unsigned folded = 0;
+    for (Summary *summary : summaries)
+      folded += foldDisjointMatchCounts(summary->function, certified);
+    if (native::has<native::DebugTiming>(design->getParentOfType<ModuleOp>())) {
+      unsigned roots = llvm::count_if(neverZ, [](const auto &entry) {
+        return entry.second;
+      });
+      llvm::errs() << "talos never-Z proof: storage-roots=" << roots << '/'
+                   << neverZ.size() << " disjoint-checks=" << folded << '\n';
+    }
+    return folded;
+  }
+
+  static bool activeWait(Operation *op) {
+    std::optional<sim::EventRegion> region;
+    if (auto wait = dyn_cast<sim::SimSuspendChangeOp>(op))
+      region = wait.getResumeRegion();
+    else if (auto wait = dyn_cast<sim::SimSuspendAnyOp>(op))
+      region = wait.getResumeRegion();
+    else
+      return false;
+    return !region || *region == sim::EventRegion::Active;
+  }
+
+  const analysis::HandleFacts &facts(sim::SimFuncOp function) {
+    auto [it, inserted] = handleFacts.try_emplace(function);
+    if (inserted)
+      it->second = state.analysis->derive(function);
+    return it->second;
+  }
+  std::optional<View> view(Value handle) {
+    auto function = handle.getParentBlock()->getParentOp();
+    while (function && !isa<sim::SimFuncOp>(function))
+      function = function->getParentOp();
+    if (!function)
+      return std::nullopt;
+    uint64_t low = 0, width = 0;
+    auto root =
+        rootOf(facts(cast<sim::SimFuncOp>(function)), handle, low, width);
+    if (!root || !state.permanent.contains(keyOf(*root)))
+      return std::nullopt;
+    auto type = state.types.find(*root);
+    auto span = type == state.types.end() ? std::nullopt
+                                          : sim::getPackedWidth(type->second);
+    if (!span || low > *span || width > *span - low)
+      return std::nullopt;
+    return View{*root, low, width};
+  }
+  static bool constant(Value value, uint64_t expected) {
+    APInt actual;
+    return matchPattern(value, m_ConstantInt(&actual)) && actual == expected;
+  }
+  bool readOf(Value value, Root root) {
+    auto load = value.getDefiningOp<sim::SimRefLoadOp>();
+    auto target = load ? view(load.getReference()) : std::nullopt;
+    return target && *target == View{root, 0, 32};
+  }
+  static bool coversReads(const Summary &summary, ArrayRef<SourceRead> reads) {
+    for (const SourceRead &read : reads) {
+      SmallVector<Interval> rest{{read.low, read.low + read.width}};
+      for (const Wait &wait : summary.waits)
+        if (wait.root == read.root && !wait.dynamic &&
+            wait.edge == int32_t(sim::EdgeKind::Change))
+          subtract(rest, {wait.low, wait.low + wait.width});
+      if (!rest.empty())
+        return false;
+    }
+    return true;
+  }
+
+  /// Match the lowered odd/even queue epoch, not a general user state write.
+  /// Its only writers must be this report's arm and its source resumption.
+  bool flushes(Summary &summary, Operation *suspension, Report report) {
+    auto function = summary.function;
+    auto arm = report.arm.getValue().getDefiningOp<arith::OrIOp>();
+    if (!arm || arm->getBlock() != report.enqueue->getBlock() ||
+        !((readOf(arm.getLhs(), report.epoch) && constant(arm.getRhs(), 1)) ||
+          (readOf(arm.getRhs(), report.epoch) && constant(arm.getLhs(), 1))))
+      return false;
+    Value armedFrom = constant(arm.getRhs(), 1) ? arm.getLhs() : arm.getRhs();
+    auto armLoad = armedFrom.getDefiningOp<sim::SimRefLoadOp>();
+    if (!armLoad || armLoad->getBlock() != report.enqueue->getBlock() ||
+        !report.enqueue->isBeforeInBlock(armLoad) ||
+        !armLoad.getResult().hasOneUse() ||
+        llvm::any_of(arm.getResult().getUsers(), [&](Operation *user) {
+          return user != report.arm && user != report.spawn;
+        }))
+      return false;
+    Block *resume = suspension->getSuccessor(0);
+    auto branch = dyn_cast<cf::CondBranchOp>(resume->getTerminator());
+    if (!branch || resume->getNumArguments())
+      return false;
+    auto condition = branch.getCondition().getDefiningOp<arith::CmpIOp>();
+    if (!condition || condition->getBlock() != resume ||
+        !condition.getResult().hasOneUse() ||
+        condition.getPredicate() != arith::CmpIPredicate::ne ||
+        !constant(condition.getRhs(), 0))
+      return false;
+    auto bit = condition.getLhs().getDefiningOp<arith::AndIOp>();
+    if (!bit || bit->getBlock() != resume || !bit.getResult().hasOneUse() ||
+        !constant(bit.getRhs(), 1) || !readOf(bit.getLhs(), report.epoch))
+      return false;
+    auto flushLoad = bit.getLhs().getDefiningOp<sim::SimRefLoadOp>();
+    if (!flushLoad || flushLoad->getBlock() != resume)
+      return false;
+    Block *bump = branch.getTrueDest(), *body = branch.getFalseDest();
+    auto next = dyn_cast<cf::BranchOp>(bump->getTerminator());
+    if (!next || next.getDest() != body || bump->getNumArguments() ||
+        !branch.getTrueDestOperands().empty() ||
+        !branch.getFalseDestOperands().empty() ||
+        !next.getDestOperands().empty())
+      return false;
+    Operation *flush = nullptr;
+    for (Operation *writer : writers[report.epoch]) {
+      if (writer == report.arm)
+        continue;
+      auto store = dyn_cast<sim::SimRefStoreOp>(writer);
+      auto sum = store ? store.getValue().getDefiningOp<arith::AddIOp>()
+                       : arith::AddIOp();
+      if (flush || !store || store->getBlock() != bump || !sum ||
+          sum->getBlock() != bump || !sum.getResult().hasOneUse() ||
+          sum.getLhs() != bit.getLhs() || !constant(sum.getRhs(), 1) ||
+          llvm::any_of(flushLoad.getResult().getUsers(), [&](Operation *user) {
+            return user != bit && user != sum;
+          }))
+        return false;
+      flush = writer;
+    }
+    if (!flush)
+      return false;
+    DominanceInfo dominance(function);
+    for (const Access &read : summary.reads) {
+      if (read.root == report.epoch) {
+        if (read.op != flushLoad && read.op != armLoad)
+          return false;
+      } else if (!dominance.dominates(body, read.op->getBlock())) {
+        // A watched root does not refresh an SSA snapshot loaded before the
+        // original wait. Predicate and argument loads must belong to the
+        // current activation, not its function-entry frame.
+        return false;
+      }
+    }
+    return dominance.dominates(body, suspension->getBlock()) &&
+           dominance.dominates(body, report.enqueue->getBlock());
+  }
+
+  bool callback(Report report) {
+    SymbolTable symbols(design);
+    auto function = symbols.lookup<sim::SimFuncOp>(report.spawn.getCallee());
+    if (!function || function.isExternal() || !function.isPrivate() ||
+        function.getHomeRegion() != sim::EventRegion::Postponed ||
+        function.getEntryKind() != sim::EntryKind::Fork ||
+        state.usersOf.lookup(function.getSymName()).size() != 1)
+      return false;
+    auto args = report.spawn.getOperands();
+    auto ticket = llvm::find(args, report.enqueue.getResult());
+    auto epoch = llvm::find(args, report.arm.getValue());
+    if (ticket == args.end() || epoch == args.end() ||
+        function.getNumArguments() != args.size())
+      return false;
+    Value ticketArg = function.getArgument(ticket - args.begin());
+    Value epochArg = function.getArgument(epoch - args.begin());
+    Block &entry = function.getBody().front();
+    auto gate = dyn_cast<cf::CondBranchOp>(entry.getTerminator());
+    if (!gate || gate.getFalseDest()->getOperations().size() != 1 ||
+        !isa<sim::SimReturnOp>(gate.getFalseDest()->front()))
+      return false;
+    bool mature = false, equalEpoch = false;
+    SmallVector<Value> terms{gate.getCondition()};
+    for (unsigned visits = 0; !terms.empty(); ++visits) {
+      if (visits > 8)
+        return false;
+      Value term = terms.pop_back_val();
+      if (auto both = term.getDefiningOp<arith::AndIOp>()) {
+        terms.push_back(both.getLhs());
+        terms.push_back(both.getRhs());
+      } else if (auto check = term.getDefiningOp<sim::SimDeferredMatureOp>()) {
+        mature |= check.getTicket() == ticketArg;
+      } else if (auto check = term.getDefiningOp<arith::CmpIOp>()) {
+        equalEpoch |= check.getPredicate() == arith::CmpIPredicate::eq &&
+                      ((check.getLhs() == epochArg &&
+                        readOf(check.getRhs(), report.epoch)) ||
+                       (check.getRhs() == epochArg &&
+                        readOf(check.getLhs(), report.epoch)));
+      } else
+        return false;
+    }
+    unsigned maturities = 0;
+    for (Operation &op : entry.without_terminator()) {
+      if (auto check = dyn_cast<sim::SimDeferredMatureOp>(op)) {
+        // Even a canceled callback executes its entry. It must not consume
+        // another report's ticket or perform any other queue operation.
+        if (++maturities != 1 || check.getTicket() != ticketArg)
+          return false;
+      } else if (auto load = dyn_cast<sim::SimRefLoadOp>(op)) {
+        if (!readOf(load.getResult(), report.epoch))
+          return false;
+      } else if (!isViewOp(&op) &&
+                 !isa<arith::ConstantOp, arith::CmpIOp, arith::AndIOp,
+                      sim::SimBytesConstantOp>(op)) {
+        return false;
+      }
+    }
+    // No other process may observe the private queue epoch we disarm.
+    for (Summary *summary : summaries) {
+      if (summary->function == function ||
+          summary->function ==
+              report.enqueue->getParentOfType<sim::SimFuncOp>())
+        continue;
+      for (const Access &read : summary->reads)
+        if (read.root == report.epoch)
+          return false;
+      for (const Access &read : summary->uses)
+        if (read.root == report.epoch)
+          return false;
+      for (const Wait &wait : summary->waits)
+        if (wait.root == report.epoch)
+          return false;
+      for (const DisplayItem &display : summary->displays)
+        if (display.root == report.epoch)
+          return false;
+      for (const Access &display : summary->displayReferences)
+        if (display.root == report.epoch)
+          return false;
+      if (llvm::is_contained(summary->captured, report.epoch))
+        return false;
+    }
+    return mature && equalEpoch;
+  }
+
+  std::optional<Report> match(Summary &summary) {
+    auto function = summary.function;
+    auto reject = [&](StringRef reason) -> std::optional<Report> {
+      if (native::has<native::DebugTiming>(
+              design->getParentOfType<ModuleOp>()))
+        llvm::errs() << "talos final report proof: not matched @"
+                     << function.getSymName() << ": " << reason << '\n';
+      return std::nullopt;
+    };
+    if (!function.isPrivate() || function.isExternal() || summary.timing ||
+        state.nonActive.contains(function) ||
+        function.getEntryKind() != sim::EntryKind::AlwaysComb ||
+        function.getHomeRegion() != sim::EventRegion::Active ||
+        summary.otherSuspension || unknownReads[false])
+      return reject("owner, suspension or alias boundary");
+    auto users = state.usersOf.lookup(function.getSymName());
+    if (users.size() != 1 || !state.startupSpawns.contains(users.front()) ||
+        !getSpawnOf(users.front(), function.getSymName()))
+      return reject("not a single unconditional startup process");
+    Report report;
+    Operation *suspension = nullptr;
+    bool bad = false;
+    function.walk([&](Operation *op) {
+      if (op == function)
+        return;
+      if (auto enqueue = dyn_cast<sim::SimDeferredEnqueueOp>(op)) {
+        bad |= bool(report.enqueue);
+        report.enqueue = enqueue;
+      } else if (auto spawn = dyn_cast<sim::SimSpawnOp>(op)) {
+        bad |= bool(report.spawn) || !spawn.getResult().use_empty();
+        report.spawn = spawn;
+      } else if (sim::isSuspensionOp(op)) {
+        bad |= suspension ||
+               !isa<sim::SimSuspendChangeOp, sim::SimSuspendAnyOp>(op);
+        suspension = op;
+      } else if (!isa<sim::SimRefStoreOp, sim::SimRefLoadOp, sim::SimNetReadOp,
+                      cf::BranchOp, cf::CondBranchOp>(op) &&
+                 !isViewOp(op) &&
+                 (isa<sim::SimCallOp>(op) || op->getNumRegions() ||
+                  !isMemoryEffectFree(op))) {
+        bad = true;
+      }
+    });
+    if (bad || !report.enqueue || !report.spawn || !suspension ||
+        report.enqueue->getBlock() != report.spawn->getBlock() ||
+        !report.enqueue.getResult().hasOneUse() ||
+        *report.enqueue.getResult().getUsers().begin() != report.spawn)
+      return reject("activation effects or report shape");
+    auto epoch = sim::get<sim::metadata::DeferredEpochStorage>(report.enqueue);
+    if (!epoch)
+      return reject("missing epoch identity");
+    report.epoch = Root{false, epoch.getValue().getZExtValue()};
+    if (state.observed.contains(keyOf(report.epoch)) || unknownWrites[false] ||
+        writers[report.epoch].size() != 2)
+      return reject("epoch ownership or observation");
+    for (const Write &write : summary.writes) {
+      if (write.root != report.epoch || write.dynamic || write.low ||
+          write.width != 32 || !write.plain)
+        return reject("non-epoch publication");
+      if (write.op->getBlock() == report.enqueue->getBlock()) {
+        if (report.arm)
+          return reject("multiple epoch arms");
+        report.arm = dyn_cast<sim::SimRefStoreOp>(write.op);
+      }
+    }
+    if (!report.arm || !activeWait(suspension))
+      return reject("arm or resumption region");
+    if (!flushes(summary, suspension, report))
+      return reject("queue flush shape or snapshots");
+    if (!callback(report))
+      return reject("callback gate or epoch observers");
+    for (const Access &use : summary.uses)
+      if (use.root == report.epoch)
+        return std::nullopt;
+    for (const Wait &wait : summary.waits)
+      if (wait.root == report.epoch || wait.dynamic ||
+          wait.edge != int32_t(sim::EdgeKind::Change))
+        return std::nullopt;
+    for (const Access &read : summary.reads)
+      if (read.dynamic || !state.permanent.contains(keyOf(read.root)))
+        return std::nullopt;
+    analysis::WriteExecutionBounds bounds(
+        function, {report.enqueue}, /*unknownCallEffects=*/false,
+        analysis::ExecutionWindow::Activation);
+    return bounds.executesAtMostOnce(report.enqueue)
+               ? std::optional<Report>(report)
+               : std::nullopt;
+  }
+
+  bool prove(Summary &summary, Report report) {
+    bool debug =
+        native::has<native::DebugTiming>(design->getParentOfType<ModuleOp>());
+    auto reject = [&](StringRef reason) {
+      if (debug)
+        llvm::errs() << "talos final report proof: retained @"
+                     << summary.function.getSymName() << ": " << reason << '\n';
+      return false;
+    };
+    // If-conversion happens only in a disposable proof view. The source
+    // assertion still evaluates its original snapshots in its original CFG.
+    OwningOpRef<sim::SimFuncOp> monitor =
+        cast<sim::SimFuncOp>(summary.function->clone());
+    auto forget =
+        llvm::scope_exit([&] { handleFacts.erase(monitor->getOperation()); });
+    normalizePureExpression(*monitor, state.analysis->derive(*monitor), state,
+                            512, /*assertionProof=*/true);
+    sim::SimDeferredEnqueueOp enqueue;
+    monitor->walk([&](sim::SimDeferredEnqueueOp op) { enqueue = op; });
+    Block *fail = enqueue->getBlock();
+    if (!fail->hasOneUse())
+      return reject("report block has multiple predecessors");
+    auto branch = dyn_cast<cf::CondBranchOp>(*fail->getUsers().begin());
+    auto merge = dyn_cast<cf::BranchOp>(fail->getTerminator());
+    if (!branch || !merge || branch.getFalseDest() != fail ||
+        branch.getTrueDest() != merge.getDest())
+      return reject("report guard shape");
+    // Build a separate pure bit DAG. Each cutpoint is one arbitrary canonical
+    // two-state root; repeated reads share it, while distinct roots do not.
+    Block scratch;
+    OpBuilder builder(design.getContext());
+    builder.setInsertionPointToEnd(&scratch);
+    std::map<Root, Value> roots;
+    DenseMap<Value, Value> values;
+    DenseSet<Operation *> active;
+    SmallVector<SourceRead> directReads;
+    unsigned work = 0;
+    std::function<Value(Value)> expand;
+    std::function<Value(Root)> rootValue;
+    auto extract = [&](Value value, uint64_t low, uint64_t width,
+                       Type target) -> Value {
+      if (!value)
+        return {};
+      Location loc = report.enqueue.getLoc();
+      if (low) {
+        Value shift = arith::ConstantOp::create(
+            builder, loc, value.getType(),
+            builder.getIntegerAttr(value.getType(), low));
+        value = arith::ShRUIOp::create(builder, loc, value, shift);
+      }
+      Type bits = builder.getIntegerType(width);
+      if (value.getType() != bits)
+        value = arith::TruncIOp::create(builder, loc, bits, value);
+      if (target != bits)
+        value = sim::SimPackedUnflattenOp::create(builder, loc, target, value);
+      return value;
+    };
+    rootValue = [&](Root root) -> Value {
+      if (auto it = roots.find(root); it != roots.end())
+        return it->second;
+      auto type = state.types.find(root);
+      if (type == state.types.end())
+        return {};
+      auto width = sim::getTwoStateEvaluationWidth(type->second);
+      if (!width || *width > 64 || ++work > 512)
+        return {};
+      Value result;
+      if (auto it = equations.find(root); it != equations.end()) {
+        const Copy &copy = *it->second;
+        if (!active.insert(copy.write).second)
+          return {};
+        result = expand(copyValue(copy.write));
+        active.erase(copy.write);
+        if (result && !isa<IntegerType>(result.getType()))
+          result = sim::SimPackedFlattenOp::create(
+              builder, report.enqueue.getLoc(), builder.getIntegerType(*width),
+              result);
+      } else {
+        result = scratch.addArgument(builder.getIntegerType(*width),
+                                     report.enqueue.getLoc());
+      }
+      roots[root] = result;
+      return result;
+    };
+    expand = [&](Value source) -> Value {
+      if (auto it = values.find(source); it != values.end())
+        return it->second;
+      if (++work > 512 || !sim::getTwoStateEvaluationWidth(source.getType()))
+        return {};
+      Operation *op = source.getDefiningOp();
+      if (!op)
+        return {};
+      if (isa<sim::SimRefLoadOp, sim::SimNetReadOp>(op)) {
+        auto target = view(op->getOperand(0));
+        if (!target)
+          return {};
+        auto [root, low, width] = *target;
+        if (op->getParentOfType<sim::SimFuncOp>() == *monitor)
+          directReads.push_back({op, root, low, width});
+        Value value = extract(rootValue(root), low, width, source.getType());
+        values[source] = value;
+        return value;
+      }
+      if (op->getNumResults() != 1 || op->getNumRegions() ||
+          !isMemoryEffectFree(op) || !isSpeculatable(op))
+        return {};
+      IRMapping mapping;
+      for (Value operand : op->getOperands()) {
+        Value value = expand(operand);
+        if (!value)
+          return {};
+        mapping.map(operand, value);
+      }
+      Value value = builder.clone(*op, mapping)->getResult(0);
+      values[source] = value;
+      return value;
+    };
+    Value condition = expand(branch.getCondition());
+    if (!condition)
+      return reject("unsupported settled predicate");
+    if (!coversReads(summary, directReads))
+      return reject("unwatched predicate input");
+    auto slice = sim::buildTwoStateSlice({condition}, 16, 512);
+    if (failed(slice) ||
+        (uint64_t{1} << slice->width) * slice->ops.size() > (uint64_t{1} << 22))
+      return reject("predicate domain or work budget");
+    sim::TwoStateEvaluator evaluator(*slice);
+    for (uint64_t input = 0; input < (uint64_t{1} << slice->width); ++input)
+      if (failed(evaluator.run(input)) ||
+          !evaluator.get(condition).getBoolValue()) {
+        if (debug) {
+          llvm::errs() << "talos final report proof: cutpoints";
+          for (const auto &[root, value] : roots)
+            if (value && isa<BlockArgument>(value))
+              llvm::errs() << ' ' << (root.net ? "net" : "storage") << root.id
+                           << ':' << value.getType();
+          llvm::errs() << '\n';
+        }
+        return reject("predicate can fail");
+      }
+    return true;
+  }
+
+  sim::SimDesignOp design;
+  DesignState &state;
+  ArrayRef<Summary *> summaries;
+  DenseMap<Operation *, analysis::HandleFacts> handleFacts;
+  std::map<Root, SmallVector<Operation *>> writers;
+  std::map<Root, const Copy *> equations;
+  bool unknownWrites[2] = {}, unknownReads[2] = {};
+  unsigned matchCountFolds = 0;
+};
 
 class TalosSimForwardCopyProcessesPass
     : public impl::TalosSimForwardCopyProcessesPassBase<
@@ -1052,10 +1933,6 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
     }
     if (next != sink.width)
       sink.block("uncovered bits");
-    // A 2-state sink is only substituted whole (no concatenation form).
-    if (!isa<sim::LogicType>(sim::getPackedScalarType(sink.type)) &&
-        sink.pieces.size() != 1)
-      sink.block("two-state pieces");
     // A relocation preserves its source domain. Storage expressions keep
     // their explicit from_bits/to_bits conversions when cloned, so they can
     // cross domains without reinterpreting X/Z as integer value bits. Retain
@@ -1943,8 +2820,31 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
     } else {
       for (Value &part : parts)
         part = flatten(builder, loc, part);
-      value = sim::SimLogicConcatOp::create(
-          builder, loc, sim::LogicType::get(context, unsigned(width)), parts);
+      if (isa<sim::LogicType>(sim::getPackedScalarType(sink.type))) {
+        value = sim::SimLogicConcatOp::create(
+            builder, loc, sim::LogicType::get(context, unsigned(width)), parts);
+      } else {
+        // IEEE 1800-2023 6.6.1/11.4.12: disjoint strong contributors
+        // partition the packed value, including a two-state packed aggregate.
+        // Place each clipped part in the requested view's bit coordinates.
+        // Coverage and all event/observer proofs above apply unchanged.
+        Type bits = builder.getIntegerType(unsigned(width));
+        uint64_t remaining = width;
+        for (Value part : parts) {
+          unsigned partWidth = cast<IntegerType>(part.getType()).getWidth();
+          remaining -= partWidth;
+          if (part.getType() != bits)
+            part = arith::ExtUIOp::create(builder, loc, bits, part);
+          if (remaining) {
+            Value shift = arith::ConstantOp::create(
+                builder, loc, bits, builder.getIntegerAttr(bits, remaining));
+            part = arith::ShLIOp::create(builder, loc, part, shift);
+          }
+          value =
+              value ? arith::OrIOp::create(builder, loc, value, part) : part;
+        }
+        assert(remaining == 0 && "copy pieces cover the requested view");
+      }
     }
     return adapt(builder, loc, value, target);
   };
@@ -2143,8 +3043,50 @@ unsigned TalosSimForwardCopyProcessesPass::round(sim::SimDesignOp design,
   return eliminated;
 }
 
+/// Source rewrites must precede frozen scheduling. Plans can embed their
+/// source graph even after the top-level graph has been removed. Decline the
+/// whole pass, including expression normalization, without invalidating a
+/// later native stage's cached analysis on this unchanged path.
+static bool hasFrozenSchedule(sim::SimDesignOp design) {
+  if (design.getComputeGraphAttr())
+    return true;
+  AttrTypeWalker walker;
+  walker.addWalk([](Attribute attribute) {
+    return isa<schedule::ComputeGraphAttr, schedule::ComputeEffectAttr,
+               schedule::FragmentABIAttr, schedule::ContinuationSiteAttr,
+               schedule::TimingSiteAttr, schedule::NBASiteAttr,
+               schedule::EventSiteAttr, native::FrameAttr,
+               native::FrameInputsAttr, native::FrameCheckpointAttr>(attribute)
+               ? WalkResult::interrupt()
+               : WalkResult::advance();
+  });
+  // Replay checkpoints belong to the module; inspecting its attributes does
+  // not require visiting sibling designs or their executable bodies.
+  for (Operation *parent = design->getParentOp(); parent;
+       parent = parent->getParentOp())
+    if (isa<ModuleOp>(parent) &&
+        walker.walk(parent->getAttrDictionary()).wasInterrupted())
+      return true;
+  return design
+      .walk([&](Operation *op) {
+        if (auto function = dyn_cast<sim::SimFuncOp>(op))
+          if (function.getEffectSummaryAttr() || function.getFragmentAbiAttr())
+            return WalkResult::interrupt();
+        if (schedule::has<schedule::Field::ComputeKernels>(op) ||
+            schedule::has<schedule::Field::StaticBodyFusion>(op) ||
+            schedule::has<schedule::Field::StaticFusion>(op))
+          return WalkResult::interrupt();
+        return walker.walk(op->getAttrDictionary());
+      })
+      .wasInterrupted();
+}
+
 void TalosSimForwardCopyProcessesPass::runOnOperation() {
   sim::SimDesignOp design = getOperation();
+  if (hasFrozenSchedule(design)) {
+    markAllAnalysesPreserved();
+    return;
+  }
   Block &designBlock = design.getBody().front();
   DesignState state;
   state.analysis = std::make_unique<analysis::HandleDataflowAnalysis>(design);
@@ -2309,6 +3251,25 @@ void TalosSimForwardCopyProcessesPass::runOnOperation() {
   }
   for (auto &[function, original] : originals)
     function.getBody().takeBody(cast<sim::SimFuncOp>(*original).getBody());
+  if (!census && closedModel) {
+    indexSymbolUsers(design, state);
+    SmallVector<Summary *> summaries;
+    for (auto function : designBlock.getOps<sim::SimFuncOp>()) {
+      if (function.isExternal())
+        continue;
+      auto &summary = state.summaries[function];
+      if (!summary)
+        summary = summarize(function, *state.analysis);
+      summaries.push_back(summary.get());
+    }
+    FinalReportProof proofs(design, state, summaries);
+    unsigned reports = proofs.fold();
+    numDisjointChecks += proofs.getMatchCountFolds();
+    numFinalReports += reports;
+    if (reports &&
+        native::has<native::DebugTiming>(design->getParentOfType<ModuleOp>()))
+      llvm::errs() << "talos unreachable final reports: " << reports << '\n';
+  }
 }
 
 } // namespace

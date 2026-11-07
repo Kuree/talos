@@ -1,7 +1,7 @@
-// RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.mlir 2> %t.trace
+// RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-compute-fusion,talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.mlir 2> %t.trace
 // RUN: FileCheck %s --check-prefix=TRACE < %t.trace
 // RUN: talos-opt %t.mlir --canonicalize --cse | FileCheck %s --check-prefix=GROUP
-// RUN: talos-opt %s --mlir-disable-threading --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' | diff %t.mlir -
+// RUN: talos-opt %s --mlir-disable-threading --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-compute-fusion,talos-sim-build-compute-graph,talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=off},convert-talos-sim-processes-to-llvm-coroutines)' | diff %t.mlir -
 
 // Eight repeatable continuous members (complete sensitivity, exclusive complete
 // outputs, one publication each) share a certified block. A separate guarded member
@@ -323,6 +323,11 @@ module attributes {llvm.data_layout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128", l
       %fmt5 = simulation.bytes.constant "chain %0d"
       %channel5 = arith.constant 1 : i32
       simulation.display %ctx to %channel5(%fmt5, %value5) newline = true radix = <decimal> flags = [0, 0] : !simulation.bytes, !word
+      // Keep the repeated publication live independently of cached effects.
+      %guarded = simulation.context.storage %ctx[11] : !vref
+      %guardedValue = simulation.ref.load %guarded : !vref -> !word
+      %guardedFmt = simulation.bytes.constant "guarded %0d"
+      simulation.display %ctx to %channel5(%guardedFmt, %guardedValue) newline = true radix = <decimal> flags = [0, 0] : !simulation.bytes, !word
       %done = arith.constant 0 : i32
       simulation.finish %ctx, %done
       simulation.return

@@ -1,7 +1,7 @@
 // RUN: talos-opt %s --pass-pipeline='builtin.module(simulation.design(talos-sim-build-compute-graph,schedule-plan-combinational-statements,talos-sim-materialize-compute-fusion,talos-sim-build-compute-graph,talos-sim-verify-compute-graph))' | FileCheck %s
-// A broad watch creates an event dependency even when its extra lane is not
-// read by the body. Cohort construction and native ordering must agree about
-// that edge, or fusing the other two owners leaves a cycle around the kernel.
+// A broad watch includes a dead lane of a strictly repeatable observer.
+// Cohort construction and contraction use its certified live inputs. Growing
+// the remaining statement DAG still gives one closed three-owner kernel.
 // CHECK-LABEL: simulation.design @watch_cycle
 // CHECK: simulation.func @root
 // CHECK-NOT: simulation.spawn

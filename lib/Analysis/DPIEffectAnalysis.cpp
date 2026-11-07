@@ -2,6 +2,7 @@
 
 #include "talos/Analysis/DPIEffectAnalysis.h"
 #include "talos/Analysis/ParallelWalk.h"
+#include "talos/Analysis/SimulationEffectAnalysis.h"
 #include "talos/Dialect/DPI/DPIDialect.h"
 #include "talos/Dialect/Schedule/ScheduleAttrs.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
@@ -31,8 +32,22 @@ bool isTransparentResource(SideEffects::Resource *resource) {
 /// arguments, which a DPI export receives and returns by value.
 bool touchesOnlyLocals(sim::SimFuncOp function) {
   ArrayAttr summary = function.getEffectSummaryAttr();
-  if (!summary)
-    return false;
+  if (!summary) {
+    // Before compute-graph construction, a pure computation on plain value
+    // operands/results needs no storage inventory. In particular, constant
+    // parameter-query exports cannot let a context import reach design state
+    // (1800-2023 35.5.1.3/35.5.3). Handles, loads, effects and unknown ops keep
+    // the conservative fallback until complete summaries exist.
+    bool pure = true;
+    function.walk([&](Operation *op) {
+      if (op == function)
+        return;
+      pure &= op->getNumRegions() == 0 && isMemoryEffectFree(op) &&
+              llvm::all_of(op->getOperandTypes(), isPlainValueType) &&
+              llvm::all_of(op->getResultTypes(), isPlainValueType);
+    });
+    return pure;
+  }
   return llvm::all_of(summary, [](Attribute attribute) {
     auto effect = dyn_cast<schedule::ComputeEffectAttr>(attribute);
     return effect &&

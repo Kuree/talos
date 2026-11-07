@@ -11,14 +11,18 @@
 
 namespace talos {
 
+class CombinationalFusionAnalysis;
+
 /// Frozen complete activation graph, including ineligible executors. Records
 /// accepted contractions by symbol identity, never by an erased operation.
 /// Adding a later contraction must also be convex through earlier ones.
 class ConvexActivationGraph {
 public:
   ConvexActivationGraph(sim::SimDesignOp design,
-                        schedule::ComputeGraphAttr graph);
-  bool isConvex(llvm::ArrayRef<mlir::StringAttr> members) const;
+                        schedule::ComputeGraphAttr graph,
+                        const CombinationalFusionAnalysis *analysis = nullptr);
+  bool isConvex(llvm::ArrayRef<mlir::StringAttr> members,
+                llvm::SmallVectorImpl<mlir::StringAttr> *path = nullptr) const;
   void contract(llvm::ArrayRef<mlir::StringAttr> members);
   llvm::SmallVector<llvm::SmallVector<mlir::StringAttr>>
   getSections(llvm::ArrayRef<mlir::StringAttr> members,
@@ -28,6 +32,7 @@ private:
   llvm::DenseMap<mlir::StringAttr, unsigned> indices;
   llvm::SmallVector<llvm::SmallVector<unsigned>> successors;
   llvm::SmallVector<unsigned> parents;
+  llvm::SmallVector<mlir::StringAttr> ownerNames;
   unsigned leader(unsigned node) const;
 };
 
@@ -81,20 +86,27 @@ struct CombinationalFusionFailure {
 /// Immutable, revision-local writer inventory for local ranked kernels.
 class CombinationalFusionAnalysis {
 public:
+  /// Retained-state observers need source-event convexity and whole-activation
+  /// ordering. An unchanged-input proof alone cannot move their inputs across
+  /// an NBA or Inactive boundary (IEEE 1800-2023 4.4, 10.4.2).
+  enum class ObservationContext { RegionBoundary, ConvexActivation };
   CombinationalFusionAnalysis(
       sim::SimDesignOp design,
       const analysis::HandleDataflowAnalysis &provenance,
       analysis::ActivationMemoryAnalysis::DependencyMode mode =
-          analysis::ActivationMemoryAnalysis::DependencyMode::Accesses);
+          analysis::ActivationMemoryAnalysis::DependencyMode::Accesses,
+      ObservationContext observations = ObservationContext::RegionBoundary);
   std::optional<CombinationalFusionBody>
   analyze(sim::SimFuncOp function,
           const analysis::HandleDataflowAnalysis &provenance,
           bool interleaved = false,
           CombinationalFusionFailure *failureReason = nullptr,
           bool finalValuesOnly = false) const;
-  /// Admit overwritten incoming state or a path-proven idempotent transition
-  /// only with the full 4.3 observer proof. Such a member must use publication
-  /// slicing, which keeps source-local snapshots and their writers together.
+  /// Admit overwritten incoming state or a path-proven idempotent transition,
+  /// including implicit packed-cell holds, only with the full 4.3 observer
+  /// proof. Retained state additionally requires ConvexActivation: source
+  /// event convexity, an indivisible source activation in publication slicing,
+  /// and the always_comb startup phase with its original conditional stores.
   std::optional<CombinationalFusionBody> analyzeForReordering(
       sim::SimFuncOp function,
       const analysis::HandleDataflowAnalysis &provenance,
@@ -113,15 +125,32 @@ public:
                   CombinationalFusionFailure *failureReason = nullptr) const;
   /// Storage roots whose intermediate values no user-visible observer can
   /// see: invisible state whose every waiting process is a side-effect-free
-  /// combinational activation (complete writes, final-output independence or
-  /// a path-proven idempotent transition) writing only such roots. Greatest
-  /// fixpoint, computed on first use. Net roots carry the activation-memory
-  /// net tag.
+  /// combinational activation writing only such roots. RegionBoundary requires
+  /// complete writes and final-output independence. ConvexActivation can use
+  /// path-proven idempotent retained state under the source-event and ordering
+  /// obligations above; this is not a cross-region certificate. Greatest
+  /// fixpoint, computed on first use for this context. Net roots carry the
+  /// activation-memory net tag.
   const llvm::DenseSet<uint64_t> &getGlitchInsensitiveStorage() const;
   /// Builds the activation of every process analyze() can interleave, one
   /// worker per process, so that a serial visit afterwards finds each built.
   /// A no-op off the main thread.
   void prepareActivations() const;
+  using RepeatableInputs =
+      llvm::DenseMap<mlir::StringAttr,
+                     analysis::ActivationMemoryAnalysis::Ranges>;
+  /// Strict source-activation certificates, including unique initialization,
+  /// complete exclusive writes and absence of intermediate publications.
+  const RepeatableInputs &
+  getRepeatableInputs(bool explainRejections = false) const;
+  /// Effective change-event lanes for a certified repeatable activation.
+  /// Nullopt preserves an unresolved source watch; an empty set is dead.
+  std::optional<analysis::Ranges>
+  getSchedulingWatchRanges(mlir::StringAttr owner,
+                           schedule::ComputeEffectAttr watch) const;
+  /// A sensitivity edge carries the whole watch, so test its producer's
+  /// actual writes too. Unknown provenance always retains the source edge.
+  bool isLiveSensitivityEdge(schedule::ComputeEdgeAttr edge) const;
   /// The opaque observer that keeps `root` out of the glitch-insensitive
   /// storage, when one was recorded; diagnostics only.
   mlir::StringAttr getGlitchObserver(uint64_t root) const {
@@ -130,6 +159,7 @@ public:
 
 private:
   bool unsupported = false;
+  ObservationContext observationContext;
   sim::SimDesignOp design;
   const analysis::HandleDataflowAnalysis *provenance = nullptr;
   mutable std::optional<llvm::DenseSet<uint64_t>> glitchInsensitive;
@@ -147,6 +177,7 @@ private:
         watchers;
   };
   mutable std::optional<InterleaveIndex> interleaveIndex;
+  mutable std::optional<RepeatableInputs> repeatableInputs;
   const InterleaveIndex &getInterleaveIndex() const;
   /// For a sensitive root: the observer outside the closure that exposes it.
   mutable llvm::DenseMap<uint64_t, mlir::StringAttr> glitchObservers;

@@ -1208,6 +1208,13 @@ getActivationRegionOrder(ArrayRef<const ActivationRegionAnalysis *> activations,
 }
 
 namespace {
+bool isSliceablePackedScalar(Type type) {
+  if (isa_and_nonnull<sim::LogicType>(type))
+    return true;
+  auto integer = dyn_cast_or_null<IntegerType>(type);
+  return integer && integer.isSignless();
+}
+
 std::optional<ActivationSchedule>
 buildSliceSchedule(ArrayRef<const ActivationRegionAnalysis *> activations,
                    SmallVectorImpl<ActivationRegionStep> *cycle,
@@ -1236,7 +1243,7 @@ buildSliceSchedule(ArrayRef<const ActivationRegionAnalysis *> activations,
     /// original computation, without assuming source and result values equal.
     std::optional<Range> identity;
   };
-  auto overlaps = [](const Ranges &a, const Ranges &b) {
+  auto overlaps = [](ArrayRef<Range> a, ArrayRef<Range> b) {
     for (const auto &x : a)
       for (const auto &y : b)
         if (x.root == y.root && x.low < y.low + y.width &&
@@ -1256,7 +1263,19 @@ buildSliceSchedule(ArrayRef<const ActivationRegionAnalysis *> activations,
     if (memory.hasMixedPrivateWrites())
       return std::nullopt;
     bool lanes = memory.hasValueDependencies();
-    bool atomic = options.atomic && options.atomic->contains(activation);
+    // IEEE 1800-2023 4.6(a)/10.4.1: a retained-state update must precede
+    // later source publications that can feed back and disable that update.
+    // Fixed-input idempotence alone does not permit separating those effects:
+    // `if (enable) q = d; request = a` must capture before request changes
+    // enable through another process. Keep the complete activation together,
+    // including explicit self-assignment and implicit per-cell holds. Derive
+    // this from the current IR, independently of caller-supplied atomicity.
+    bool retains =
+        !memory.hasCompleteWrites() ||
+        overlaps(lanes ? memory.getFinalInputs() : memory.getLiveIns(),
+                 memory.getMayWrites());
+    bool atomic =
+        retains || (options.atomic && options.atomic->contains(activation));
     ActivationLoadSlice slice(activation->getActivationFunction(), memory);
     auto temporaries = getActivationTemporaryRoots(
         activation->getActivationFunction(), memory);
@@ -1313,7 +1332,7 @@ buildSliceSchedule(ArrayRef<const ActivationRegionAnalysis *> activations,
             !atomic && refStore && publications.size() == 1 &&
             publications.front().identity && writes->second.size() == 1 &&
             publications.front().output == writes->second.front() &&
-            isa_and_nonnull<sim::LogicType>(sim::getPackedScalarType(
+            isSliceablePackedScalar(sim::getPackedScalarType(
                 refStore.getReference().getType().getElementType())))
           node.identity = publications.front().identity;
       }
@@ -1693,7 +1712,7 @@ cloneSliceWithTemporaries(const ActivationSlice &slice,
     Location loc = cloned.getLoc();
     Value value = cloned.getValue();
     Type scalar = sim::getPackedScalarType(value.getType());
-    if (!isa_and_nonnull<sim::LogicType>(scalar))
+    if (!isSliceablePackedScalar(scalar))
       return {};
     if (value.getType() != scalar)
       value = sim::SimPackedFlattenOp::create(builder, loc, scalar, value);
@@ -1704,9 +1723,23 @@ cloneSliceWithTemporaries(const ActivationSlice &slice,
           window.low + window.width > whole.low + whole.width)
         return {};
       uint64_t low = window.low - whole.low;
-      auto partType = sim::LogicType::get(builder.getContext(), window.width);
-      Value part =
-          sim::SimLogicExtractOp::create(builder, loc, partType, value, low);
+      Type partType;
+      Value part;
+      if (isa<sim::LogicType>(scalar)) {
+        partType = sim::LogicType::get(builder.getContext(), window.width);
+        part =
+            sim::SimLogicExtractOp::create(builder, loc, partType, value, low);
+      } else {
+        partType = builder.getIntegerType(window.width);
+        part = value;
+        if (low) {
+          Value offset = arith::ConstantOp::create(
+              builder, loc, builder.getIntegerAttr(scalar, low));
+          part = arith::ShRUIOp::create(builder, loc, part, offset);
+        }
+        if (partType != scalar)
+          part = arith::TruncIOp::create(builder, loc, partType, part);
+      }
       Value reference = sim::SimRefExtractOp::create(
           builder, loc, sim::RefType::get(builder.getContext(), partType),
           cloned.getReference(), low);

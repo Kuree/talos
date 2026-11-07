@@ -12,6 +12,9 @@
 module {
   simulation.design @repeatable {
     simulation.scope.decl 0
+    simulation.storage.decl 13 in 0 : i8 design
+    simulation.storage.decl 14 in 0 : i8 design
+    simulation.code_unit.decl 13 in 0 always_comb hierarchy "forwarded_output"
     simulation.storage.decl 0 in 0 : i8 design
     simulation.storage.decl 1 in 0 : i1 design
     simulation.storage.decl 2 in 0 : i8 design
@@ -39,6 +42,7 @@ module {
     simulation.code_unit.decl 9 in 0 always_comb hierarchy "conflicting_a"
     simulation.code_unit.decl 10 in 0 always_comb hierarchy "conflicting_b"
     simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 100 : i64} {
+      %p_forwarded = simulation.spawn @forwarded_output(%ctx) : !simulation.context -> !simulation.process
       %p_copy = simulation.spawn @copy(%ctx) : !simulation.context -> !simulation.process
       %p_diamond = simulation.spawn @diamond(%ctx) : !simulation.context -> !simulation.process
       %p_unwatched = simulation.spawn @unwatched(%ctx) : !simulation.context -> !simulation.process
@@ -211,6 +215,22 @@ module {
     ^body:
       simulation.ref.store %value to %out : i8, !ref
       simulation.suspend.change %flag to ^body : !flag
+    }
+    // Input-only provenance treats the reread as incoming output state.
+    // Reaching values prove that it observes this activation's preceding
+    // single store (IEEE 1800-2023 4.6), so no old output enters either result.
+    // CHECK: repeatable @forwarded_output = 1
+    simulation.func @forwarded_output(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 4 : i32, code_unit_id = 13 : i64} {
+      %input = simulation.context.storage %ctx[0] : !ref
+      %middle = simulation.context.storage %ctx[13] : !ref
+      %output = simulation.context.storage %ctx[14] : !ref
+      cf.br ^body
+    ^body:
+      %value = simulation.ref.load %input : !ref -> i8
+      simulation.ref.store %value to %middle : i8, !ref
+      %forwarded = simulation.ref.load %middle : !ref -> i8
+      simulation.ref.store %forwarded to %output : i8, !ref
+      simulation.suspend.change %input to ^body : !ref
     }
   }
 }

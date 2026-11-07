@@ -164,8 +164,11 @@ def TalosSimFoldSmallDomainsPass
     branch edges admit, and replaces a condition that takes one value on all
     of them with that constant. A unique or priority case or if whose items
     cover every two-state value without overlap thereby loses its violation
-    check and dead default (IEEE 1800-2023 12.4.2, 12.5.3). Four-state values
-    are never evaluated, so X/Z violations are still reported (12.4.2.1).
+    check and dead default (IEEE 1800-2023 12.4.2, 12.5.3). Bounded symbolic
+    comparisons also prove disjoint masked match counts, including alternatives
+    within one case item. Exact four-state case equality compares both value
+    and unknown planes symbolically; it retains no-match checks and does not
+    treat X or Z as a binary value (11.4.5, 12.5).
   }];
   let statistics = [Statistic<"numFolded", "folded",
                               "Conditions replaced by constants">];
@@ -255,15 +258,48 @@ def TalosSimForwardCopyProcessesPass
     effect, including any transients observed downstream (4.3). Expression
     waiters require the same proof, since an operand can change without an
     event of the expression (9.4.2). Cycles of transient-producing readers
-    cannot establish that proof. Requires VPI off.
+    cannot establish that proof. Complete disjoint strong partitions also
+    forward two-state packed values, using unsigned packed bit positions
+    (6.6.1, 11.4.12, 11.8.1).
+
+    A separate final-report proof can discard a deferred assertion's report
+    effects when its predicate passes for every settled two-state value.
+    Only complete exclusive undelayed continuous equations are expanded;
+    arbitrary cutpoints and bounded exhaustive evaluation overapproximate
+    their inputs. The original predicate reads must refresh on resumption
+    and be covered by the original change wait. Canonical private queue
+    flushing and a Postponed callback gate ensure every transient failure
+    flushes before reporting (16.4-16.4.2). Talos's non-suspending activation
+    segments run atomically (an allowed event granularity under 4.6-4.7), so
+    the monitor rearms its wait before another activation publishes a change.
+    Captured argument evaluation must
+    be effect-free. This does not substitute a settled equation for an Active
+    load; other reports and existing flushes remain. Unknown mutation,
+    observation or control effects retain the existing report path.
+    With an explicit closed-model contract, an inductive never-Z proof checks
+    actual variable defaults and every publication, including delayed NBA
+    payloads and partial writes. Disjoint casez labels can then lose their
+    multiple-match check while retaining X, no-match checks and all possible
+    Z paths (6.8, 7.2.2, 7.4.5/Table 7-1, 12.5.1, 12.5.3). Nets and external inputs
+    remain conservative. Both report proofs require a closed model: all host
+    mutation must be inventoried by the executable compilation. The pass leaves
+    designs with frozen compute graphs, plans, effect summaries, fragment ABIs
+    or native frame certificates unchanged, including copy CFG normalization.
+    Requires VPI off.
   }];
   let dependentDialects = ["talos::sim::TalosSimulationDialect",
                            "mlir::arith::ArithDialect",
                            "mlir::cf::ControlFlowDialect"];
   let statistics = [
-    Statistic<"numEliminated", "eliminated", "Copy processes eliminated">
+    Statistic<"numEliminated", "eliminated", "Copy processes eliminated">,
+    Statistic<"numFinalReports", "final-reports",
+              "Final deferred reports proven unreachable at Postponed">,
+    Statistic<"numDisjointChecks", "disjoint-checks",
+              "Match-count conditions proved disjoint">
   ];
   let options = [
+    Option<"closedModel", "closed-model", "bool", "false",
+           "All model mutation is represented in the design (closed executable)">,
     Option<"census", "census", "bool", "false",
            "Only report the candidates">,
     Option<"maximumRounds", "maximum-rounds", "unsigned", "8",
