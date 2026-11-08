@@ -1,0 +1,18 @@
+// RUN: talos-opt %S/simulation-native-group-external-clock.mlir --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-suspension),talos-sim-build-compute-graph{vpi=full},talos-sim-verify-compute-graph,talos-sim-materialize-graph-regions,talos-sim-materialize-compute-fusion,talos-sim-specialize-static-state-nba,talos-sim-plan-static-superstep),encode-talos-sim-to-bytecode{vpi=full},convert-talos-sim-processes-to-llvm-coroutines)' -o %t.mlir
+// RUN: FileCheck %s < %t.mlir
+// RUN: talos-opt %t.mlir --emit-bytecode -o %t.mlirbc
+// RUN: talos-translate --mlir-to-llvmir %t.mlirbc | opt -passes=verify -disable-output
+
+// LRM 38.34/10.6.2: keep each owner's exact root dependencies and clean
+// fast-flag test. Use the shared runtime scan instead of generating a call
+// sequence per owner. The scan still visits every root for diagnostics.
+// CHECK-DAG: llvm.mlir.global internal constant @__talos_eval_write_guard_states_0_v1(dense<[1, 2]> : tensor<2xi32>)
+// CHECK-DAG: llvm.mlir.global internal constant @__talos_eval_write_guard_states_1_v1(dense<[2, 3]> : tensor<2xi32>)
+// CHECK-DAG: llvm.mlir.global internal constant @__talos_eval_write_guard_states_2_v1(dense<[3, 4]> : tensor<2xi32>)
+// CHECK-LABEL: llvm.func @__talos_eval_write_guard_0_v1(
+// CHECK: llvm.mlir.addressof @__talos_static_specialization_fast_v1
+// CHECK: llvm.cond_br
+// CHECK: llvm.mlir.addressof @__talos_eval_write_guard_states_0_v1
+// CHECK: llvm.call @talos_rt_v1_static_specialization_guard_roots
+// CHECK-NOT: llvm.call @talos_rt_v1_static_specialization_guard(
+// CHECK: llvm.return

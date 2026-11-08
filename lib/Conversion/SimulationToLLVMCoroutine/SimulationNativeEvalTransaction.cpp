@@ -440,6 +440,7 @@ bool pendingRuntimeTransparent(LLVM::CallOp call,
       // values before each prefix update (LRM 4.6(b), 10.4.2).
       *callee == "talos_rt_v1_static_nba_commit_ordered" ||
       *callee == "talos_rt_v1_static_specialization_guard" ||
+      *callee == "talos_rt_v1_static_specialization_guard_roots" ||
       *callee == "talos_rt_v1_static_nba_specialization_guard" ||
       *callee == "talos_rt_v1_static_nba_specialization_guard_write" ||
       callee->starts_with("llvm."))

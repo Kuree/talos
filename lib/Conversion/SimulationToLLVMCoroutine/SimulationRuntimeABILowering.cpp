@@ -61,6 +61,11 @@ void declareNativeRuntimeABI(ModuleOp module) {
       {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32),
        IntegerType::get(context, 32), IntegerType::get(context, 32)});
   getOrDeclareLLVMFunction(
+      module, "talos_rt_v1_static_specialization_guard_roots",
+      IntegerType::get(context, 32),
+      {LLVM::LLVMPointerType::get(context), LLVM::LLVMPointerType::get(context),
+       IntegerType::get(context, 64)});
+  getOrDeclareLLVMFunction(
       module, "talos_rt_v1_static_nba_specialization_guard",
       IntegerType::get(context, 32),
       {LLVM::LLVMPointerType::get(context), IntegerType::get(context, 32)});

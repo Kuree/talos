@@ -8,7 +8,7 @@
 // NO-WRITE-NOT: talos_rt_v1_scheduler_prepare_eval_nba_local_write
 // NO-WRITE-NOT: talos_rt_v1_static_nba_specialization_guard_write
 // NO-WRITE-NOT: schedule.nba.guarded_private_influence
-// WRITE: llvm.func @__talos_eval_write_guard_
-// WRITE: llvm.call @talos_rt_v1_static_specialization_guard
+// WRITE: llvm.func @__talos_eval_write_guard_0_v1
+// WRITE: llvm.call @talos_rt_v1_static_specialization_guard_roots
 // WRITE: llvm.func @__talos_eval_dispatch_v1
 // WRITE: llvm.call @talos_rt_v1_scheduler_execute_aot_actor

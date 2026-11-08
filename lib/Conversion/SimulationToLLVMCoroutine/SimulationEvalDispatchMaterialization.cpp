@@ -35,6 +35,8 @@ constexpr StringLiteral nbaDirtyRootsName = "__talos_aot_nba_dirty_roots_v1";
 constexpr StringLiteral nbaKnownName = "__talos_eval_nba_known_v1";
 constexpr StringLiteral evalFourStateNBAHandoffName =
     "__talos_eval_four_state_nba_handoff_v1";
+constexpr StringLiteral writeRootsGuardName =
+    "talos_rt_v1_static_specialization_guard_roots";
 
 } // namespace
 
@@ -323,25 +325,31 @@ materializeNativeEvalDispatch(ModuleOp module,
           builder, location,
           llvmConstant(builder, location, builder.getI1Type(), 1));
       builder.setInsertionPointToStart(check);
-      Value allowed = llvmConstant(builder, location, builder.getI1Type(), 1);
-      for (uint32_t state : plan.ownerStaticStates[owner]) {
-        Value root =
+      Value allowed;
+      const auto &states = plan.ownerStaticStates[owner];
+      if (!states.empty()) {
+        std::string rootsName =
+            "__talos_eval_write_guard_states_" + std::to_string(owner) + "_v1";
+        auto array = LLVM::LLVMArrayType::get(i32, states.size());
+        auto values = DenseElementsAttr::get(
+            RankedTensorType::get({static_cast<int64_t>(states.size())}, i32),
+            ArrayRef<uint32_t>(states));
+        makeConstantGlobal(module, location, array, rootsName,
+                           LLVM::Linkage::Internal, 4, values);
+        Value checked =
             LLVM::CallOp::create(
-                builder, location, TypeRange{i32},
-                "talos_rt_v1_static_specialization_guard",
+                builder, location, TypeRange{i32}, writeRootsGuardName,
                 ValueRange{entry->getArgument(0),
-                           llvmConstant(builder, location, i32, UINT32_MAX),
-                           llvmConstant(builder, location, i32, state),
-                           llvmConstant(builder, location, i32,
-                                        TALOS_RT_STATIC_ROOT_READ |
-                                            TALOS_RT_STATIC_ROOT_WRITE)})
+                           LLVM::AddressOfOp::create(builder, location, pointer,
+                                                     rootsName),
+                           llvmConstant(builder, location, builder.getI64Type(),
+                                        states.size())})
                 .getResult();
-        allowed = arith::AndIOp::create(
-            builder, location, allowed,
-            arith::CmpIOp::create(builder, location, arith::CmpIPredicate::ne,
-                                  root,
-                                  llvmConstant(builder, location, i32, 0)));
-      }
+        allowed = arith::CmpIOp::create(
+            builder, location, arith::CmpIPredicate::ne, checked,
+            llvmConstant(builder, location, i32, 0));
+      } else
+        allowed = llvmConstant(builder, location, builder.getI1Type(), 1);
       LLVM::ReturnOp::create(builder, location, allowed);
       builder.setInsertionPointAfter(guard);
     }

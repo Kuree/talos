@@ -107,7 +107,7 @@ set(_talos_target_runtime_common_sources
 set(_talos_target_runtime_cold_tail_sources
     ScanFormat DynamicScanBytecode ContainerBitstream RecursiveBitstream
     ContainerBitstreamBytecode ClassBitstream ClassBitstreamBytecode DPIExport
-    DPIExportBytecode EventSnapshot)
+    DPIExportBytecode EventSnapshot StaticSpecializationGuard)
 set(_talos_target_runtime_check_sources
     DesignReflectionABI VPIObjectModelABI)
 set(_talos_target_runtime_objects)

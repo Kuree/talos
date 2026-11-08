@@ -239,7 +239,8 @@ bool isEvalClosureRuntimeCall(LLVM::CallOp call, LLVM::LLVMFuncOp function,
   // This read-only dependency/override query cannot execute HDL or
   // mutate readiness. Only full VPI emits these scheduling guards;
   // off/read retain their original generated execution paths.
-  if (*callee == "talos_rt_v1_static_specialization_guard" &&
+  if ((*callee == "talos_rt_v1_static_specialization_guard" ||
+       *callee == "talos_rt_v1_static_specialization_guard_roots") &&
       function.getSymName().starts_with("__talos_eval_write_guard_"))
     return true;
   if (*callee == prioritySignalQuery || *callee == strengthResolveQuery ||

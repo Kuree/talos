@@ -6,9 +6,9 @@
 // while an unaffected owner still calls its original Tier 1 executor.
 // PLAN-NOT: llvm.func @__talos_eval_ranked_group_
 // PLAN-LABEL: llvm.func @__talos_eval_write_guard_0_v1(
-// PLAN: llvm.call @talos_rt_v1_static_specialization_guard
+// PLAN: llvm.call @talos_rt_v1_static_specialization_guard_roots
 // PLAN-LABEL: llvm.func @__talos_eval_write_guard_12_v1(
-// PLAN: llvm.call @talos_rt_v1_static_specialization_guard
+// PLAN: llvm.call @talos_rt_v1_static_specialization_guard_roots
 // PLAN-LABEL: llvm.func @__talos_eval_dispatch_v1(
 // PLAN: llvm.call @__talos_eval_write_guard_0_v1(
 // PLAN: llvm.call @__talos_eval_write_guard_12_v1(

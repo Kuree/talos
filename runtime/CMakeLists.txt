@@ -62,6 +62,7 @@ set(_talos_runtime_cold_tail_sources
   lib/EventSnapshot.cpp
   lib/DPIOpenArray.cpp
   lib/DPIAggregate.cpp
+  lib/StaticSpecializationGuard.cpp
 )
 add_library(talos_rt STATIC
   ${_talos_runtime_common_sources}

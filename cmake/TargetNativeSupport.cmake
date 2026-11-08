@@ -175,7 +175,7 @@ set(_talos_target_runtime_common_sources
 set(_talos_target_runtime_cold_tail_sources
     ScanFormat DynamicScanBytecode ContainerBitstream RecursiveBitstream
     ContainerBitstreamBytecode ClassBitstream ClassBitstreamBytecode DPIExport
-    DPIExportBytecode EventSnapshot DPIOpenArray DPIAggregate)
+    DPIExportBytecode EventSnapshot DPIOpenArray DPIAggregate StaticSpecializationGuard)
 foreach(source IN LISTS _talos_target_runtime_common_sources
                         _talos_target_runtime_cold_tail_sources)
   set(object "${_talos_target_runtime_dir}/${source}.o")

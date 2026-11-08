@@ -17,6 +17,7 @@
 #include "../lib/ProcessSignals.h"
 #include "../lib/ProcessValidation.h"
 #include "../lib/RuntimeInternal.h"
+#include "../lib/StaticSpecializationGuard.h"
 
 #include "gtest/gtest.h"
 
@@ -6164,6 +6165,81 @@ TEST(Scheduler, StaticSpecializationGuardsIntersectOnlyDirtyRoots) {
   EXPECT_EQ(talos_rt_v1_static_specialization_guard(context, 1, 2,
                                                     TALOS_RT_STATIC_ROOT_WRITE),
             1u);
+  talos_rt_v1_context_destroy(context);
+}
+
+TEST(Scheduler, StaticSpecializationRootBatchMatchesScalarQueries) {
+  talos_rt_execution_descriptor_v1 execution{};
+  execution.version = TALOS_RT_VERSION;
+  execution.state_bit_count = 128;
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&execution, &context),
+            TALOS_RT_OK);
+  for (auto [id, offset] :
+       {std::pair{1u, 0u}, std::pair{65u, 64u}, std::pair{65535u, 120u}})
+    ASSERT_EQ(talos_rt_v1_native_state_register_static(context, id, offset, 8),
+              TALOS_RT_OK);
+  constexpr uint32_t roots[] = {1, 65, 65535, 1, 0, 77, UINT32_MAX};
+  AOTTestState state;
+  auto plan = makeAOTPlan(state);
+  uint32_t specializationFast = 1;
+  for (bool installed : {false, true})
+    for (unsigned mode = 0; mode != 16; ++mode) {
+      context->nativeSchedulePlan = installed ? &plan : nullptr;
+      context->nativeScheduleDeoptimized = mode & 1;
+      context->nativeStateSpecializationFast =
+          (mode & 1) ? nullptr : &specializationFast;
+      context->observerDepth = (mode & 2) ? 1 : 0;
+      context->observerForcesCanonicalPlane = mode & 4;
+      context->forceMask.assign(2, 0);
+      context->assignMask.assign(2, 0);
+      if (mode & 8) {
+        context->forceMask[1] = 1;
+        context->assignMask[1] = UINT64_C(1) << 56;
+      }
+      context->nativeScheduleTransientDirtyMask.assign(2, 0);
+      context->nativeSchedulePersistentDirtyMask.assign(2, 0);
+      context->nativeScheduleTransientDirtyRoots.clear();
+      context->nativeSchedulePersistentDirtyRoots.clear();
+      if (mode & 2)
+        context->nativeScheduleTransientDirtyMask[0] = 2;
+      if (mode & 4)
+        context->nativeSchedulePersistentDirtyMask[1] = 2;
+      if (mode & 8)
+        context->nativeSchedulePersistentDirtyRoots.insert(65535);
+      for (bool diagnostics : {false, true})
+        for (uint64_t count = 0; count <= std::size(roots); ++count) {
+          context->signalDiagnosticsEnabled = diagnostics;
+          context->signalDiagnostics = {};
+          uint32_t expected = 1;
+          for (uint64_t index = 0; index != count; ++index)
+            expected &= talos_rt_v1_static_specialization_guard(
+                context, UINT32_MAX, roots[index],
+                TALOS_RT_STATIC_ROOT_READ | TALOS_RT_STATIC_ROOT_WRITE);
+          auto fast = context->signalDiagnostics.aotStateFastPaths;
+          auto slow = context->signalDiagnostics.aotStateSlowPaths;
+          context->signalDiagnostics = {};
+          EXPECT_EQ(talos_rt_v1_static_specialization_guard_roots(
+                        context, count ? roots : nullptr, count),
+                    expected);
+          EXPECT_EQ(context->signalDiagnostics.aotStateFastPaths, fast);
+          EXPECT_EQ(context->signalDiagnostics.aotStateSlowPaths, slow);
+        }
+    }
+  context->nativeSchedulePlan = nullptr;
+  talos_rt_v1_context_destroy(context);
+}
+
+TEST(Scheduler, StaticSpecializationRootBatchHandlesEmptyAndInvalidInputs) {
+  EXPECT_EQ(talos_rt_v1_static_specialization_guard_roots(nullptr, nullptr, 0),
+            1u);
+  uint32_t root = 1;
+  EXPECT_EQ(talos_rt_v1_static_specialization_guard_roots(nullptr, &root, 1),
+            0u);
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  EXPECT_EQ(talos_rt_v1_static_specialization_guard_roots(context, nullptr, 1),
+            0u);
   talos_rt_v1_context_destroy(context);
 }
 
