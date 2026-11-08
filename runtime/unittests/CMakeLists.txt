@@ -46,6 +46,7 @@ add_executable(TalosRuntimeTests
   VCDTest.cpp
   VPIObjectModelTest.cpp
   VPIAutomaticStateTest.cpp
+  VPIValueChangePoolTest.cpp
   $<TARGET_OBJECTS:TalosRuntimeCAPISmoke>
 )
 if(UNIX AND NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
