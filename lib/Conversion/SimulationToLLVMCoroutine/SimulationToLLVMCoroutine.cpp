@@ -2667,12 +2667,28 @@ LogicalResult materializeEvalFunctionRoutes(ModuleOp module) {
       std::max<uint64_t>(1, (independentRoutes.size() + 63) / 64);
   auto routeKnown = [&](OpBuilder &b, Location loc,
                         const Route &route) -> Value {
-    if (route.sharedKernel)
+    if (route.sharedKernel) {
+      auto helper = inputSymbols.lookup<LLVM::LLVMFuncOp>(
+          detail::conditionalKernelReadyName(*route.sharedKernel));
+      auto probe =
+          schedule::get<schedule::Field::EvalConditionalPromotionProbe>(
+              route.fourState);
+      // Equal full bit coverage shares a persistent proof. The fresh
+      // conditional proof additionally belongs to this exact source's probe;
+      // never apply it to another body merely sharing the same bit ranges.
+      if (helper && probe &&
+          probe ==
+              schedule::get<schedule::Field::EvalConditionalPromotionProbe>(
+                  helper))
+        return LLVM::CallOp::create(b, loc, TypeRange{b.getI1Type()},
+                                    helper.getSymName(), ValueRange{})
+            .getResult();
       return LLVM::CallOp::create(b, loc, TypeRange{b.getI1Type()},
                                   detail::kernelPromotionReadyName,
                                   ValueRange{detail::llvmConstant(
                                       b, loc, i64, *route.sharedKernel)})
           .getResult();
+    }
     Value selected = LLVM::LoadOp::create(
         b, loc, i8,
         LLVM::AddressOfOp::create(b, loc, pointer, route.selectorName), 1);

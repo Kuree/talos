@@ -1,6 +1,7 @@
 // Native activation specialization preserves canonical fallback bodies.
 #include "../../../Conversion/SimulationToLLVMCoroutine/SimulationAOTPlanning.h"
 #include "../../../Conversion/SimulationToLLVMCoroutine/SimulationToLLVMCoroutinePrivate.h"
+#include "NativeConditionalPromotion.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -1746,6 +1747,32 @@ LogicalResult materializeEvalTwoStateVariants(
     if (!forceTwoState &&
         !variantEligibleSources.contains(source.getOperation()))
       continue;
+    {
+      auto probeName =
+          (source.getSymName() + ".__talos_conditional_known").str();
+      if (!variantSymbols.lookup(probeName)) {
+        uint64_t probeUnit = nextCodeUnit;
+        while (usedCodeUnits.contains(probeUnit))
+          ++probeUnit;
+        auto probe = materializeConditionalPromotionProbe(
+            source, stateLayout, designHandles, variantSymbols, probeName,
+            probeUnit);
+        if (probe) {
+          usedCodeUnits.insert(probeUnit);
+          nextCodeUnit = probeUnit + 1;
+          uint64_t scope =
+              source.getCodeUnitIdAttr()
+                  ? codeUnitScopes.lookup(source.getCodeUnitIdAttr().getUInt())
+                  : 0;
+          builder.setInsertionPointToEnd(&design.getBody().front());
+          sim::SimCodeUnitDeclOp::create(
+              builder, source.getLoc(), probeUnit, scope,
+              sim::EntryKind::Function, builder.getStringAttr(probeName),
+              builder.getStringAttr("activation-local conditional input proof"),
+              builder.getUnitAttr());
+        }
+      }
+    }
     builder.setInsertionPointToEnd(&design.getBody().front());
     SmallString<96> base;
     (source.getSymName() + ".__talos_two_state").toVector(base);

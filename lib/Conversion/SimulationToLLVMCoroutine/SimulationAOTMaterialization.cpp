@@ -1399,7 +1399,7 @@ FailureOr<bool> makeNativeEvalPlan(
 
   if (failed(materializeNativeKernelPromotionReadiness(
           module, stateLayout.bitCount, mergedPromotionRanges,
-          mergedTwoStateExecutors, mergedFragments)))
+          mergedTwoStateExecutors, mergedFragments, resolved->rankedNodes)))
     return failure();
 
   // Path-dependent entry bodies keep activation-local probes. They do not
@@ -3751,6 +3751,7 @@ FailureOr<bool> makeNativeEvalPlan(
                          llvmConstant(builder, location, i32, TALOS_RT_OK));
 
   materializeClockedKernelReadiness(module, resolved->rankedNodes);
+  const SymbolTable promotionSymbols(module);
   DenseSet<uint32_t> clockedKernelOwners =
       collectClockedKernelOwners(resolved->rankedNodes);
 
@@ -5002,7 +5003,7 @@ FailureOr<bool> makeNativeEvalPlan(
         run.getBody().push_back(nextOwner);
         Value kernelReady =
             emitOwnerKernelReady(builder, location, recordIndex,
-                                 clockedKernelOwners.contains(recordIndex));
+                                 clockedKernelOwners.contains(recordIndex), promotionSymbols);
         cf::CondBranchOp::create(builder, location, kernelReady,
                                  executeTwoState, ValueRange{},
                                  executeFourState, ValueRange{});
@@ -5113,7 +5114,7 @@ FailureOr<bool> makeNativeEvalPlan(
           builder.setInsertionPointToStart(selectTransientVariant);
           Value kernelReady =
               emitOwnerKernelReady(builder, location, recordIndex,
-                                   clockedKernelOwners.contains(recordIndex));
+                                   clockedKernelOwners.contains(recordIndex), promotionSymbols);
           cf::CondBranchOp::create(builder, location, kernelReady,
                                    executeTwoState, ValueRange{},
                                    executeFourState, ValueRange{});

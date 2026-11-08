@@ -30,8 +30,12 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
                                                    uint64_t bucketMinEntries) {
   auto hook = module.lookupSymbol<LLVM::LLVMFuncOp>(
       "__talos_eval_promotion_invalidate_range_v1");
-  if (!hook)
+  if (!hook) {
+    for (auto global : module.getOps<LLVM::GlobalOp>())
+      if (schedule::has<schedule::Field::EvalKnownRangeDependencies>(global))
+        return global.emitError("range proof cache has no scoped invalidator");
     return success();
+  }
   if (!hook.empty())
     return hook.emitError("range invalidator was materialized twice");
   auto stateBits = runtime::get<runtime::StateBits>(module);
@@ -48,6 +52,7 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
     bool nba = false;
     bool route = false;
     bool group = false;
+    bool local = false;
   };
   SmallVector<Certificate> certificates;
   constexpr auto kernelAttr =
@@ -62,6 +67,19 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
   auto routePending = module.lookupSymbol<LLVM::GlobalOp>(
       "__talos_eval_route_promotion_pending_v1");
   for (auto global : module.getOps<LLVM::GlobalOp>()) {
+    if (auto ranges =
+            schedule::get<schedule::Field::EvalKnownRangeDependencies>(
+                global)) {
+      auto initial = dyn_cast_or_null<IntegerAttr>(global.getValueOrNull());
+      if (!global.getGlobalType().isInteger(8) || global.getConstant() ||
+          global.getLinkage() != LLVM::Linkage::Internal ||
+          global.getAddrSpace() || global.getExternallyInitialized() ||
+          !initial || !initial.getValue().isZero() || ranges.empty())
+        return global.emitError(
+            "range proof cache requires private zero-initialized i8 storage");
+      certificates.push_back({global, 0, 0, ranges, false, false, false, true});
+      schedule::remove<schedule::Field::EvalKnownRangeDependencies>(global);
+    }
     if (auto groups = schedule::get<groupAttr>(global)) {
       if (global.getSymName() != groupPromotionLatchName)
         return global.emitError("group proof index has invalid latch storage");
@@ -174,6 +192,29 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
   SmallVector<Slice> slices;
   auto globalInvalidate = module.lookupSymbol<LLVM::LLVMFuncOp>(
       "__talos_eval_promotion_invalidate_v1");
+  for (Certificate certificate : certificates)
+    if (certificate.local) {
+      if (!globalInvalidate || globalInvalidate.empty())
+        return certificate.global.emitError(
+            "range proof cache has no full invalidator");
+      // Context reset/unbounded mutation must revoke local cached remainders,
+      // just as it revokes the whole-owner and group certificates.
+      OpBuilder resetBuilder(globalInvalidate.getContext());
+      SmallVector<LLVM::ReturnOp> returns;
+      globalInvalidate.walk([&](LLVM::ReturnOp op) { returns.push_back(op); });
+      for (LLVM::ReturnOp op : returns) {
+        resetBuilder.setInsertionPoint(op);
+        LLVM::StoreOp::create(
+            resetBuilder, op.getLoc(),
+            llvmConstant(resetBuilder, op.getLoc(), resetBuilder.getI8Type(),
+                         0),
+            LLVM::AddressOfOp::create(
+                resetBuilder, op.getLoc(),
+                LLVM::LLVMPointerType::get(module.getContext()),
+                certificate.global.getSymName()),
+            1);
+      }
+    }
   {
     constexpr uint64_t kSliceBits = 4096;
     auto sliceable = [&](const talos_rt_native_promotion_dependency &entry) {
@@ -352,7 +393,7 @@ LogicalResult materializeNativePromotionRangeIndex(ModuleOp module,
             record = LLVM::InsertValueOp::create(b, location, record, value,
                                                  ArrayRef<int64_t>{field});
           };
-          if (certificate.group) {
+          if (certificate.group || certificate.local) {
             // Independent proof domains have no runnable owner/pending word.
             // The runtime's existing latch-only action clears this byte on
             // lost knownness and does nothing on gained knownness. A later

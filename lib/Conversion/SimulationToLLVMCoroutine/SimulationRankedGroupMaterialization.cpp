@@ -241,6 +241,7 @@ materializeNativeRankedGroups(ModuleOp module,
   SmallVector<std::string> executors(plan.fragments.size());
   if (plan.clockKernels.empty() || plan.rankedNodes.empty() || plan.writableVPI)
     return executors;
+  const SymbolTable promotionSymbols(module);
   llvm::StringMap<sim::SimFuncOp> functions;
   ::talos::detail::walkNativeFunctions<sim::SimFuncOp>(
       module, [&](sim::SimFuncOp function) {
@@ -465,7 +466,8 @@ materializeNativeRankedGroups(ModuleOp module,
                                  two, ValueRange{});
         builder.setInsertionPointToStart(check);
         Value known = emitOwnerKernelReady(
-            builder, loc, owner, schedule::isClockedKernelSymbol(node->body));
+            builder, loc, owner, schedule::isClockedKernelSymbol(node->body),
+            promotionSymbols);
         cf::CondBranchOp::create(builder, loc, known, two, ValueRange{}, four,
                                  ValueRange{});
         builder.setInsertionPointToStart(two);

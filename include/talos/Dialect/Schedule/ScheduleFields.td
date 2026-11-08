@@ -99,6 +99,16 @@ def EvalKernelProofDependencies : ScheduleField<"EvalKernelProofDependencies", "
     "::mlir::ArrayAttr">;
 def EvalLocalPromotionRanges : ScheduleField<"EvalLocalPromotionRanges", "schedule.eval.local_promotion_ranges",
     "::mlir::DenseI64ArrayAttr">;
+// Activation-local, read-only proof for conditionally unobserved ranges.
+// Its result must never be published as a persistent knownness certificate.
+def EvalConditionalPromotionProbe : ScheduleField<"EvalConditionalPromotionProbe", "schedule.eval.conditional_promotion_probe",
+    "::mlir::FlatSymbolRefAttr">;
+def EvalConditionalPromotionRanges : ScheduleField<"EvalConditionalPromotionRanges", "schedule.eval.conditional_promotion_ranges",
+    "::mlir::DenseI64ArrayAttr">;
+// Exact dependencies of a private scalar knownness cache. Its byte certifies
+// these bits only; it has no scheduler owner, pending word, or route selector.
+def EvalKnownRangeDependencies : ScheduleField<"EvalKnownRangeDependencies", "schedule.eval.known_range_dependencies",
+    "::mlir::DenseI64ArrayAttr">;
 def EvalMaterializedGroupCalls : ScheduleField<"EvalMaterializedGroupCalls", "schedule.eval.materialized_group_calls",
     "::mlir::IntegerAttr">;
 def EvalMayTerminate : ScheduleField<"EvalMayTerminate", "schedule.eval.may_terminate",

@@ -8,6 +8,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/STLExtras.h"
@@ -599,10 +600,15 @@ void materializeClockedKernelReadiness(ModuleOp module,
 }
 
 Value emitOwnerKernelReady(OpBuilder &builder, Location loc, uint64_t owner,
-                           bool clockedKernel) {
+                           bool clockedKernel, const SymbolTable &symbols) {
   MLIRContext *context = builder.getContext();
   Type i1 = builder.getI1Type(), i64 = builder.getI64Type();
   Value index = llvmConstant(builder, loc, i64, owner);
+  std::string conditional = conditionalKernelReadyName(owner);
+  if (symbols.lookup(conditional))
+    return LLVM::CallOp::create(builder, loc, TypeRange{i1}, conditional,
+                                ValueRange{})
+        .getResult();
   if (!clockedKernel)
     return LLVM::CallOp::create(
                builder, loc, TypeRange{i1},
@@ -623,7 +629,8 @@ LogicalResult materializeNativeKernelPromotionReadiness(
     ModuleOp module, uint64_t stateBits,
     ArrayRef<SmallVector<NativePromotionRange>> ranges,
     ArrayRef<std::string> twoStateExecutors,
-    ArrayRef<talos_rt_native_merged_fragment> fragments) {
+    ArrayRef<talos_rt_native_merged_fragment> fragments,
+    ArrayRef<NativeRankedEvalNode> nodes) {
   if (llvm::all_of(twoStateExecutors,
                    [](const std::string &name) { return name.empty(); }))
     return success();
@@ -653,8 +660,177 @@ LogicalResult materializeNativeKernelPromotionReadiness(
                                           uint64_t{1} << (bit % 64)});
   }
 
-  return materializePromotionReadiness(
-      module, owners, scans, twoStateExecutors.size(), false, stateBits);
+  if (failed(materializePromotionReadiness(
+          module, owners, scans, twoStateExecutors.size(), false, stateBits)))
+    return failure();
+
+  // Supplemental results are activation-local. Keep the original range
+  // inventory, positive latches and pending bits unchanged: neither an X/Z
+  // write nor a value-only enable change can make this result persistent.
+  DenseMap<uint64_t, const NativeRankedEvalNode *> bodies;
+  DenseSet<uint64_t> multipleBodies;
+  for (const NativeRankedEvalNode &node : nodes) {
+    auto [found, inserted] = bodies.try_emplace(node.owner, &node);
+    if (!inserted && found->second->body != node.body)
+      multipleBodies.insert(node.owner);
+  }
+  for (auto [owner, executor] : llvm::enumerate(twoStateExecutors)) {
+    if (executor.empty() || multipleBodies.contains(owner))
+      continue;
+    const NativeRankedEvalNode *node = bodies.lookup(owner);
+    if (!node || !node->conditionalPromotionProbe ||
+        !node->conditionalPromotionRanges ||
+        !node->conditionalPromotionCoverage)
+      continue;
+    StringRef probeName = node->conditionalPromotionProbe.getValue();
+    ArrayRef<int64_t> discharged =
+        node->conditionalPromotionRanges.asArrayRef();
+    ArrayRef<int64_t> original =
+        node->conditionalPromotionCoverage.asArrayRef();
+    if (discharged.empty() || original.empty())
+      continue;
+    auto pointer = LLVM::LLVMPointerType::get(module.getContext());
+    OpBuilder builder(module.getContext());
+    SmallVector<std::pair<uint64_t, uint64_t>> intervals;
+    for (const NativePromotionRange &range : ranges[owner])
+      intervals.emplace_back(range.bitOffset, range.bitOffset + range.bitWidth);
+    SmallVector<uint64_t> encodedOwner, encodedSource;
+    appendMaskedWordScans(intervals, encodedOwner);
+    SmallVector<std::pair<uint64_t, uint64_t>> sourceIntervals;
+    for (size_t i = 0; i + 1 < original.size(); i += 2)
+      sourceIntervals.emplace_back(original[i], original[i] + original[i + 1]);
+    appendMaskedWordScans(std::move(sourceIntervals), encodedSource);
+    if (encodedOwner != encodedSource)
+      continue;
+    for (size_t i = 0; i + 1 < discharged.size(); i += 2) {
+      uint64_t low = discharged[i], high = low + discharged[i + 1];
+      SmallVector<std::pair<uint64_t, uint64_t>> kept;
+      for (auto [begin, end] : intervals) {
+        if (end <= low || begin >= high)
+          kept.emplace_back(begin, end);
+        else {
+          if (begin < low)
+            kept.emplace_back(begin, low);
+          if (end > high)
+            kept.emplace_back(high, end);
+        }
+      }
+      intervals = std::move(kept);
+    }
+    SmallVector<int64_t> dependencies;
+    for (auto [begin, end] : intervals)
+      dependencies.append({int64_t(begin), int64_t(end - begin)});
+    SmallVector<uint64_t> remainder;
+    appendMaskedWordScans(std::move(intervals), remainder);
+    uint64_t wordCount = 0;
+    for (size_t i = 0; i != remainder.size(); i += 2)
+      wordCount += remainder[i] & singleWordScanTag
+                       ? 1
+                       : remainder[i + 1] - remainder[i];
+    // Bound static code growth; larger certificates keep the ordinary scan.
+    if (wordCount > 512)
+      continue;
+    LLVM::GlobalOp remainderCache;
+    if (!remainder.empty()) {
+      builder.setInsertionPointToStart(module.getBody());
+      remainderCache = LLVM::GlobalOp::create(
+          builder, module.getLoc(), builder.getI8Type(), false,
+          LLVM::Linkage::Internal,
+          (conditionalKernelReadyName(owner) + ".remainder_known"),
+          builder.getI8IntegerAttr(0), 1);
+      schedule::set<schedule::Field::EvalKnownRangeDependencies>(
+          remainderCache, builder.getDenseI64ArrayAttr(dependencies));
+    }
+    builder.setInsertionPointToEnd(module.getBody());
+    auto loc = module.getLoc();
+    auto helper = LLVM::LLVMFuncOp::create(
+        builder, loc, conditionalKernelReadyName(owner),
+        LLVM::LLVMFunctionType::get(builder.getI1Type(), {}, false));
+    schedule::set<schedule::Field::EvalConditionalPromotionProbe>(
+        helper, node->conditionalPromotionProbe);
+    Block *entry = helper.addEntryBlock(builder);
+    auto block = [&] {
+      auto *b = new Block;
+      helper.getBody().push_back(b);
+      return b;
+    };
+    Block *check = block(), *scan = block(), *known = block(),
+          *unknown = block();
+    builder.setInsertionPointToStart(entry);
+    Value ordinary =
+        LLVM::CallOp::create(
+            builder, loc, TypeRange{builder.getI1Type()},
+            kernelPromotionReadyName,
+            ValueRange{llvmConstant(builder, loc, builder.getI64Type(), owner)})
+            .getResult();
+    LLVM::CondBrOp::create(builder, loc, ordinary, known, check);
+    builder.setInsertionPointToStart(check);
+    Value path = func::CallOp::create(
+                     builder, loc, probeName, TypeRange{builder.getI1Type()},
+                     ValueRange{LLVM::ZeroOp::create(builder, loc, pointer)})
+                     .getResult(0);
+    LLVM::CondBrOp::create(builder, loc, path, scan, unknown);
+    builder.setInsertionPointToStart(scan);
+    Value cacheAddress;
+    if (remainderCache) {
+      cacheAddress = LLVM::AddressOfOp::create(builder, loc, pointer,
+                                               remainderCache.getSymName());
+      Value cached = LLVM::LoadOp::create(builder, loc, builder.getI8Type(),
+                                          cacheAddress, 1);
+      Value valid = LLVM::ICmpOp::create(
+          builder, loc, LLVM::ICmpPredicate::ne, cached,
+          llvmConstant(builder, loc, builder.getI8Type(), 0));
+      Block *fresh = block();
+      LLVM::CondBrOp::create(builder, loc, valid, known, fresh);
+      builder.setInsertionPointToStart(fresh);
+    }
+    Value state = LLVM::AddressOfOp::create(builder, loc, pointer,
+                                            "__talos_state_unknown");
+    Value any = llvmConstant(builder, loc, builder.getI64Type(), 0);
+    for (size_t i = 0; i != remainder.size(); i += 2) {
+      bool single = remainder[i] & singleWordScanTag;
+      uint64_t begin = remainder[i] & ~singleWordScanTag;
+      uint64_t end = single ? begin + 1 : remainder[i + 1];
+      uint64_t mask = single ? remainder[i + 1] : UINT64_MAX;
+      for (uint64_t word = begin; word != end; ++word) {
+        Value address = byteGEP(builder, loc, state, word * 8);
+        auto bits = LLVM::LoadOp::create(builder, loc, builder.getI64Type(),
+                                         address, 8);
+        schedule::set<schedule::Field::EvalStateAccessBytes>(
+            bits, builder.getDenseI64ArrayAttr(
+                      {int64_t(word * 8), int64_t((word + 1) * 8)}));
+        Value masked = LLVM::AndOp::create(
+            builder, loc, bits,
+            llvmConstant(builder, loc, builder.getI64Type(), mask));
+        any = LLVM::OrOp::create(builder, loc, any, masked);
+      }
+    }
+    Value clean = LLVM::ICmpOp::create(
+        builder, loc, LLVM::ICmpPredicate::eq, any,
+        llvmConstant(builder, loc, builder.getI64Type(), 0));
+    if (remainderCache) {
+      Block *remember = block();
+      LLVM::CondBrOp::create(builder, loc, clean, remember, unknown);
+      builder.setInsertionPointToStart(remember);
+      LLVM::StoreOp::create(builder, loc,
+                            llvmConstant(builder, loc, builder.getI8Type(), 1),
+                            cacheAddress, 1);
+      LLVM::BrOp::create(builder, loc, ValueRange{}, known);
+    } else
+      LLVM::CondBrOp::create(builder, loc, clean, known, unknown);
+    builder.setInsertionPointToStart(known);
+    LLVM::ReturnOp::create(builder, loc,
+                           llvmConstant(builder, loc, builder.getI1Type(), 1));
+    builder.setInsertionPointToStart(unknown);
+    LLVM::ReturnOp::create(builder, loc,
+                           llvmConstant(builder, loc, builder.getI1Type(), 0));
+  }
+  return success();
+}
+
+std::string conditionalKernelReadyName(uint64_t owner) {
+  return ("__talos_eval_kernel_conditional_ready_" + Twine(owner) + "_v1")
+      .str();
 }
 
 LogicalResult verifyNativeGroupProofDomains(ModuleOp module) {

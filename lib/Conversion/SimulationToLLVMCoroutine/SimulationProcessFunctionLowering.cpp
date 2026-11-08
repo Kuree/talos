@@ -286,6 +286,10 @@ prepareOrdinaryFunction(sim::SimFuncOp function) {
           function);
   auto evalPromotionRanges = ::talos::schedule::get<
       ::talos::schedule::Field::EvalLocalPromotionRanges>(function);
+  auto conditionalPromotionProbe = ::talos::schedule::get<
+      ::talos::schedule::Field::EvalConditionalPromotionProbe>(function);
+  auto conditionalPromotionRanges = ::talos::schedule::get<
+      ::talos::schedule::Field::EvalConditionalPromotionRanges>(function);
   auto evalConditionallyTwoState = ::talos::schedule::get<
       ::talos::schedule::Field::EvalConditionallyTwoState>(function);
   auto evalPathKnownProbe =
@@ -334,6 +338,14 @@ prepareOrdinaryFunction(sim::SimFuncOp function) {
   if (evalPromotionRanges)
     ::talos::schedule::set<::talos::schedule::Field::EvalLocalPromotionRanges>(
         replacement, evalPromotionRanges);
+  if (conditionalPromotionProbe)
+    ::talos::schedule::set<
+        ::talos::schedule::Field::EvalConditionalPromotionProbe>(
+        replacement, conditionalPromotionProbe);
+  if (conditionalPromotionRanges)
+    ::talos::schedule::set<
+        ::talos::schedule::Field::EvalConditionalPromotionRanges>(
+        replacement, conditionalPromotionRanges);
   if (evalConditionallyTwoState)
     ::talos::schedule::set<::talos::schedule::Field::EvalConditionallyTwoState>(
         replacement, evalConditionallyTwoState);

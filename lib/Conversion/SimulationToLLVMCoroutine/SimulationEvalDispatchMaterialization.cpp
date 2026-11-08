@@ -1143,7 +1143,7 @@ materializeNativeEvalDispatch(ModuleOp module,
       builder.setInsertionPointToStart(checkPromotion);
       Value kernelReady =
           emitOwnerKernelReady(builder, location, recordIndex,
-                               clockedKernelOwners.contains(recordIndex));
+                               clockedKernelOwners.contains(recordIndex), executorSymbols);
       cf::CondBranchOp::create(builder, location, kernelReady, executeTwoState,
                                ValueRange{}, executeFourState, ValueRange{});
       builder.setInsertionPointToStart(executeFourState);

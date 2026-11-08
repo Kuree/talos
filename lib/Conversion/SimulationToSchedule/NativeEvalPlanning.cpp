@@ -221,6 +221,22 @@ collectRankedNodes(ModuleOp module, const ResolvedNativeEvalPlan &plan,
     node.plan.owner = record.bit;
     node.plan.body = direct.body;
     node.plan.twoStateBody = twoStateBody.str();
+    if (!twoStateBody.empty())
+      if (auto source = functions.lookup(direct.body)) {
+        auto probe =
+            schedule::get<schedule::Field::EvalConditionalPromotionProbe>(
+                source);
+        auto ranges =
+            schedule::get<schedule::Field::EvalConditionalPromotionRanges>(
+                source);
+        auto coverage =
+            schedule::get<schedule::Field::EvalLocalPromotionRanges>(source);
+        if (probe && ranges && coverage) {
+          node.plan.conditionalPromotionProbe = probe;
+          node.plan.conditionalPromotionRanges = ranges;
+          node.plan.conditionalPromotionCoverage = coverage;
+        }
+      }
     bool clocked = llvm::any_of(direct.fragmentIDs, [&](uint32_t id) {
       auto fragment = fragments.lookup(id);
       return fragment && llvm::any_of(fragment.getEffects(), [](Attribute raw) {

@@ -1,0 +1,3 @@
+// RUN: talos-opt %S/../Conversion/native-known-range-cache.mlir --materialize-native-promotion-range-index | talos-translate --mlir-to-llvmir -o %t.ll
+// RUN: %target_cxx -O0 %t.ll %S/Inputs/check-known-range-cache.cpp %runtime_link_flags -o %t.o0 && %t.o0
+// RUN: %target_cxx -O3 %t.ll %S/Inputs/check-known-range-cache.cpp %runtime_link_flags -o %t.o3 && %t.o3

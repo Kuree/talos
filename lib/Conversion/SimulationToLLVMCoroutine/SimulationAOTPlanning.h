@@ -26,6 +26,7 @@
 namespace mlir {
 class AnalysisManager;
 class Pass;
+class SymbolTable;
 } // namespace mlir
 
 namespace mlir::LLVM {
@@ -39,6 +40,7 @@ class DataLayout;
 namespace talos::detail {
 
 struct NativeStateLayout;
+struct NativeRankedEvalNode;
 
 struct NativeStaticFanoutPlan {
   llvm::SmallVector<talos_rt_static_fanout_entry> entries;
@@ -85,7 +87,10 @@ mlir::LogicalResult materializeNativeKernelPromotionReadiness(
     mlir::ModuleOp module, uint64_t stateBits,
     mlir::ArrayRef<llvm::SmallVector<NativePromotionRange>> ranges,
     mlir::ArrayRef<std::string> twoStateExecutors,
-    mlir::ArrayRef<talos_rt_native_merged_fragment> fragments);
+    mlir::ArrayRef<talos_rt_native_merged_fragment> fragments,
+    mlir::ArrayRef<NativeRankedEvalNode> nodes);
+
+std::string conditionalKernelReadyName(uint64_t owner);
 
 /// Consume the typed group-domain inventory on its private latch array. The
 /// same materializer runs at the ranked-plan boundary and as a standalone
@@ -190,6 +195,11 @@ struct NativeRankedEvalNode {
   /// A source proof permits redundant evaluation after initialization when
   /// no watched input changed. Only the closed two-state dataflow consumes it.
   bool repeatable = false;
+  // Revision-verified, activation-local proof for this exact body. These
+  // records do not describe persistent knownness of any owner/group.
+  mlir::FlatSymbolRefAttr conditionalPromotionProbe;
+  mlir::DenseI64ArrayAttr conditionalPromotionRanges;
+  mlir::DenseI64ArrayAttr conditionalPromotionCoverage;
 };
 
 /// The owners among `nodes` that are fused clocked kernels.
@@ -202,7 +212,8 @@ void materializeClockedKernelReadiness(
 /// Whether an owner's two-state body may run. Every entry path of an owner
 /// selects its body through this query.
 mlir::Value emitOwnerKernelReady(mlir::OpBuilder &builder, mlir::Location loc,
-                                 uint64_t owner, bool clockedKernel);
+                                 uint64_t owner, bool clockedKernel,
+                                 const mlir::SymbolTable &symbols);
 
 /// Immutable code-size chunks, computed after native body rewriting using the
 /// existing ranked cost/order policy. A proof domain belongs to this exact

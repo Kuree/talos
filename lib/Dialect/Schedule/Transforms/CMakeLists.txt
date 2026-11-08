@@ -36,6 +36,7 @@ add_mlir_library(TalosScheduleNativeTransforms
   NativeTransfers.cpp
   MarkCleanStaticNBA.cpp
   NativeEvalSpecialization.cpp
+  NativeConditionalPromotion.cpp
   SpecializeNativeCaptures.cpp
   CoalesceNativeReady.cpp
   CachePureCones.cpp
