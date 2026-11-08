@@ -9542,6 +9542,55 @@ TEST(VPI, CallbackRemovalAndDispatchMutationAreStable) {
   talos_rt_v1_context_destroy(context);
 }
 
+TEST(VPI, CallbackHandleReusePreservesRegistrationAndExpiresTokens) {
+  // IEEE 1800-2023 38.38-38.39: handle release does not remove a callback.
+  // Recycling private storage must never revive the released public token.
+  Fixture fixture;
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&fixture.execution, &context),
+            TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_vpi_startup(context, nullptr, 0), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_vpi_end_compile(context), TALOS_RT_OK);
+  VPILifecycleProbe probe;
+  s_cb_data data{};
+  data.reason = cbEndOfSimulation;
+  data.cb_rtn = lifecycleProbeCallback;
+  data.user_data = reinterpret_cast<PLI_BYTE8 *>(&probe);
+  VPILifecycleProbe secondProbe;
+  for (unsigned iteration = 0; iteration != 96; ++iteration) {
+    data.user_data = reinterpret_cast<PLI_BYTE8 *>(&probe);
+    vpiHandle first = vpi_register_cb(&data);
+    ASSERT_NE(first, nullptr);
+    EXPECT_EQ(vpi_release_handle(first), 1);
+
+    data.user_data = reinterpret_cast<PLI_BYTE8 *>(&secondProbe);
+    vpiHandle second = vpi_register_cb(&data);
+    ASSERT_NE(second, nullptr);
+    EXPECT_NE(second, first);
+    s_cb_data copied{};
+    vpi_get_cb_info(second, &copied);
+    EXPECT_EQ(copied.user_data, data.user_data);
+    vpi_get_cb_info(first, &copied);
+    EXPECT_EQ(vpi_chk_error(nullptr), vpiError);
+
+    vpiHandle iterator = vpi_iterate(vpiCallback, nullptr);
+    ASSERT_NE(iterator, nullptr);
+    vpiHandle firstAlias = vpi_scan(iterator);
+    vpiHandle secondAlias = vpi_scan(iterator);
+    ASSERT_NE(firstAlias, nullptr);
+    ASSERT_NE(secondAlias, nullptr);
+    EXPECT_EQ(vpi_scan(iterator), nullptr);
+    EXPECT_EQ(vpi_compare_objects(second, secondAlias), 1);
+    EXPECT_EQ(vpi_remove_cb(firstAlias), 1);
+    EXPECT_EQ(vpi_remove_cb(secondAlias), 1);
+    EXPECT_EQ(vpi_remove_cb(second), 0);
+  }
+  talos_rt_v1_vpi_end_simulation(context);
+  EXPECT_EQ(probe.calls, 0);
+  EXPECT_EQ(secondProbe.calls, 0);
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(VPI, EndOfSimulationCallbacksRemainColdUntilRemoved) {
   Fixture fixture;
   talos_rt_context *context = nullptr;

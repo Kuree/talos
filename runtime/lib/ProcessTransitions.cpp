@@ -16,6 +16,7 @@
 #include "ProcessValidation.h"
 #include "RuntimeInternal.h"
 #include "SignalSemantics.h"
+#include "VPIValueChange.h"
 #include "talos/Runtime/ClockKernelReadySet.h"
 #include "talos/Runtime/StableHandle.h"
 #include "talos/Runtime/StableHash.h"
@@ -1383,7 +1384,17 @@ publishSignalOccurrenceUnlocked(talos_rt_context *context, uint64_t stableID,
           context->schedulerSelectionGeneration = 1;
         continue;
       }
-      if (!subscription->latch || subscription->latch->affected)
+      if (!subscription->latch) {
+        // Callback subscriptions own no SV wait latch. Use the existing null
+        // exit for their cold capture path; ordinary direct/computed waiters
+        // reach no new VPI target check.
+        if (subscription->target == SignalSubscription::VPIValueChange &&
+            !talos_rt_vpi_capture_change_unlocked(context,
+                                                  subscription->waiterToken))
+          return false;
+        continue;
+      }
+      if (subscription->latch->affected)
         continue;
       TALOS_RT_TRY {
         auto &pending =

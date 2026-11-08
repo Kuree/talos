@@ -6,6 +6,7 @@
 #include "DesignBytecodeNets.h"
 #include "ProcessValidation.h"
 #include "RuntimeInternal.h"
+#include "VPIValueChange.h"
 #include "talos/Runtime/OutputItemFlags.h"
 #include "talos/Runtime/StableHash.h"
 

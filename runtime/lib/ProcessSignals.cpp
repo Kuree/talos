@@ -7,6 +7,7 @@
 #include "ProcessValidation.h"
 #include "RuntimeInternal.h"
 #include "SignalSemantics.h"
+#include "VPIValueChange.h"
 #include "talos/Runtime/StableHandle.h"
 
 #include <algorithm>
@@ -457,6 +458,26 @@ bool appendManagedSubscriptionUnlocked(
 }
 
 } // namespace
+
+bool talos_rt_register_vpi_signal_subscription_unlocked(
+    talos_rt_context *context, uint64_t stableID, uint64_t width,
+    uint64_t alias,
+    std::vector<std::unique_ptr<SignalSubscription>> &subscriptions) {
+  if (!appendSignalSubscriptionUnlocked(context, stableID, width,
+                                        TALOS_RT_WAIT_EDGE_CHANGE,
+                                        SignalSubscription::VPIValueChange,
+                                        alias, false, nullptr, subscriptions))
+    return false;
+  // A callback is a runtime consumer outside the generated fanout. Keep its
+  // accounting in this cold adapter so ordinary SV registration is unchanged;
+  // the existing outsideStaticFanout cleanup releases the same count.
+  subscriptions.back()->outsideStaticFanout = true;
+  ++context->nativeDynamicSignalSubscriptions;
+  if (context->nativeSchedulePlan &&
+      context->nativeSchedulePlan->specialization_fast)
+    *context->nativeSchedulePlan->specialization_fast = 0;
+  return true;
+}
 
 extern "C" talos_rt_status
 talos_rt_v1_clocking_output_track(talos_rt_context *context, uint64_t stableID,

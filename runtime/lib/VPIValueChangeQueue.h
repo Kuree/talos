@@ -73,6 +73,9 @@ public:
   Record *find(uint64_t id) { return registrations.find(id); }
   bool watches(uint64_t alias) const { return registrations.watches(alias); }
   uint32_t size() const { return registrations.size(); }
+  void appendIDs(std::vector<uint64_t> &ids) const {
+    registrations.appendIDs(ids);
+  }
   size_t pendingCount() const { return queued; }
 
   // Invalid geometry and unchanged values publish nothing. No VPI callback is

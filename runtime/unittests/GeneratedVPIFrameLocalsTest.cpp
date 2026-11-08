@@ -49,6 +49,23 @@ int readInt(vpiHandle handle) {
   EXPECT_EQ(vpi_chk_error(nullptr), 0);
   return value.value.integer;
 }
+void rejectAutomaticWatch(vpiHandle object) {
+  s_vpi_time time{};
+  time.type = vpiSimTime;
+  s_vpi_value value{};
+  value.format = vpiIntVal;
+  s_cb_data callback{};
+  callback.reason = cbValueChange;
+  callback.cb_rtn = +[](p_cb_data) -> PLI_INT32 {
+    ADD_FAILURE() << "automatic value-change callback ran";
+    return 0;
+  };
+  callback.obj = object;
+  callback.time = &time;
+  callback.value = &value;
+  EXPECT_EQ(vpi_register_cb(&callback), nullptr);
+  EXPECT_NE(vpi_chk_error(nullptr), 0);
+}
 void same(vpiHandle object, PLI_INT32 selector, vpiHandle expected) {
   auto handle = vpi_handle(selector, object);
   ASSERT_NE(handle, nullptr);
@@ -108,6 +125,7 @@ void inspectLocalABI(talos_rt_context *context, LocalProbe &probe,
                                                    vpiIntVal, &callbackTarget),
             TALOS_RT_PERMISSION_DENIED);
   EXPECT_EQ(callbackTarget.selectedWidth, 0u);
+  rejectAutomaticWatch(probe.value);
   auto byName = vpi_handle_by_name(const_cast<char *>("value"), probe.frame);
   ASSERT_NE(byName, nullptr);
   EXPECT_EQ(vpi_compare_objects(probe.value, byName), 1);
@@ -140,6 +158,7 @@ void inspectLocalABI(talos_rt_context *context, LocalProbe &probe,
   EXPECT_EQ(talos_rt_vpi_bind_static_change_target(context, probe.value,
                                                    vpiIntVal, &callbackTarget),
             TALOS_RT_PERMISSION_DENIED);
+  rejectAutomaticWatch(probe.value);
   EXPECT_EQ(readInt(probe.value), 17);
   s_vpi_value attempted{};
   attempted.format = vpiIntVal;
@@ -190,6 +209,8 @@ void inspectLocalABI(talos_rt_context *context, LocalProbe &probe,
   EXPECT_EQ(vector.value.vector[0].bval, 0x30u);
   probe.bit = vpi_handle_by_index(probe.selected, 7);
   ASSERT_NE(probe.bit, nullptr);
+  rejectAutomaticWatch(probe.selected);
+  rejectAutomaticWatch(probe.bit);
   EXPECT_EQ(vpi_get(vpiType, probe.bit), vpiRegBit);
   EXPECT_EQ(readInt(probe.bit), 1);
   same(probe.bit, vpiParent, probe.selected);

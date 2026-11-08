@@ -107,6 +107,14 @@ public:
   uint32_t allocatedSlots() const { return capacity; }
   uint32_t cachedAliases() const { return emptyAliases; }
   uint64_t revision() const { return nextSequence - 1; }
+  // Cold VPI introspection; no client code runs while this snapshot is built.
+  void appendIDs(std::vector<uint64_t> &ids) const {
+    for (uint32_t index = 0; index != capacity; ++index) {
+      const auto &s = slot(index);
+      if (s.active)
+        ids.push_back(handle(index, s.generation));
+    }
+  }
   bool watches(uint64_t alias) const {
     auto found = aliases.find(alias);
     return found != aliases.end() && found->second.head != None;

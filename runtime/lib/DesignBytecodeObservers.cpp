@@ -3,6 +3,7 @@
 #include "DesignBytecodeNets.h"
 #include "ProcessValidation.h"
 #include "RuntimeInternal.h"
+#include "VPIValueChange.h"
 
 #include <algorithm>
 #include <array>
@@ -234,6 +235,11 @@ bool talos_rt_evaluate_design_observers_unlocked(talos_rt_context *context,
     return context != nullptr;
   if (!context->execution)
     return true;
+  // Signal publications have already collected their affected observers.
+  // An empty queue also contains no VPI fence marker, so there is no work.
+  if (dependencyKind == TALOS_RT_OBSERVER_DEPENDENCY_SIGNAL &&
+      context->pendingDesignComputedWaiters.empty())
+    return true;
 
   std::vector<uint64_t> taskIDs;
   if (dependencyKind == TALOS_RT_OBSERVER_DEPENDENCY_SIGNAL)
@@ -246,7 +252,15 @@ bool talos_rt_evaluate_design_observers_unlocked(talos_rt_context *context,
           !task.signalTriggered)
         taskIDs.push_back(task.id);
   }
+  bool valueChangesPending = false;
   for (uint64_t taskID : taskIDs) {
+    // Zero is an observer-fence marker, never a design task. VPI captures
+    // during the subscription walk; clients run only after every native and
+    // design expression observer has sampled this publication.
+    if (!taskID) {
+      valueChangesPending = true;
+      continue;
+    }
     ScheduledDesignTask *task = findDesignTask(context, taskID);
     talos_rt_computed_wait_record_v1 *wait =
         task ? currentComputedWait(*task) : nullptr;
@@ -389,6 +403,16 @@ bool talos_rt_evaluate_design_observers_unlocked(talos_rt_context *context,
         break;
       }
     }
+  }
+  if (valueChangesPending) {
+    // Preserve the marker vector's allocation across publications, including
+    // callback-induced writes that append a new marker during delivery.
+    if (context->pendingDesignComputedWaiters.empty()) {
+      taskIDs.clear();
+      taskIDs.swap(context->pendingDesignComputedWaiters);
+    }
+    if (!talos_rt_vpi_deliver_changes_unlocked(context))
+      return false;
   }
   return context->schedulerStatus == TALOS_RT_OK;
 }

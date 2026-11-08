@@ -1244,6 +1244,7 @@ struct SignalSubscription {
     DesignComputedWait,
     NativeManagedWait,
     DesignManagedWait,
+    VPIValueChange,
   };
 
   uint64_t stableID = 0;

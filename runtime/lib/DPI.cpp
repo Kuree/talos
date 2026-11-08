@@ -1,6 +1,7 @@
 //===- DPI.cpp - Shared native and bytecode DPI-C boundary ---------------===//
 
 #include "RuntimeInternal.h"
+#include "VPIValueChange.h"
 #if defined(_MSC_VER) || defined(__MINGW32__) || defined(__CYGWIN__)
 #define DPI_DLLISPEC
 #elif defined(__GNUC__) || defined(__clang__)
@@ -313,16 +314,23 @@ extern "C" talos_rt_status talos_rt_v1_import_call(
     talos_rt_import_output_v1 *outputs, uint32_t outputCount) {
   if (!site)
     return TALOS_RT_INVALID_ARGUMENT;
-  return importCallImpl(context, site, inputs, inputCount, outputs, outputCount,
-                        (site->flags & TALOS_RT_IMPORT_CONTEXT) != 0);
+  talos_rt_status status =
+      importCallImpl(context, site, inputs, inputCount, outputs, outputCount,
+                     (site->flags & TALOS_RT_IMPORT_CONTEXT) != 0);
+  return context && context->vpiState
+             ? talos_rt_vpi_after_client_return(context, status)
+             : status;
 }
 
 extern "C" talos_rt_status talos_rt_v1_import_call_noncontext(
     talos_rt_context *context, const talos_rt_import_site_v1 *site,
     const talos_rt_import_input_v1 *inputs, uint32_t inputCount,
     talos_rt_import_output_v1 *outputs, uint32_t outputCount) {
-  return importCallImpl(context, site, inputs, inputCount, outputs, outputCount,
-                        false);
+  talos_rt_status status = importCallImpl(context, site, inputs, inputCount,
+                                          outputs, outputCount, false);
+  return context && context->vpiState
+             ? talos_rt_vpi_after_client_return(context, status)
+             : status;
 }
 
 extern "C" talos_rt_status talos_rt_v1_import_call_guarded(

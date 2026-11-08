@@ -11,7 +11,10 @@
 #include "VPIExpressionValue.h"
 #include "VPIHandleToken.h"
 #include "VPIInternal.h"
+#include "VPIPackedCallbackValue.h"
 #include "VPIStaticChangeTarget.h"
+#include "VPIValueChange.h"
+#include "VPIValueChangeQueue.h"
 #include "talos/Reflection/DesignReflection.h"
 #include "talos/Reflection/VPIObjectModel.h"
 #include "talos/Runtime/StableHandle.h"
@@ -76,6 +79,7 @@
 namespace {
 
 struct VPIState;
+struct VPIValueChangeBinding;
 
 struct VPIActiveSlot {
   std::atomic<VPIState *> state{nullptr};
@@ -102,7 +106,8 @@ enum class VPIObjectForm : uint8_t {
   Thread,
   Frame,
   SnapshotValue,
-  ContAssignBit
+  ContAssignBit,
+  ValueChangeCallback
 };
 
 enum class VPISemanticIteratorKind : uint8_t {
@@ -337,6 +342,9 @@ struct __vpiHandle {
   size_t next = 0;
   std::string scratch;
   void *userData = nullptr;
+  // Static callback metadata is resolved once per source handle. The owned
+  // logical view survives release of that source handle while a watch lives.
+  std::shared_ptr<VPIValueChangeBinding> changeBinding;
 };
 
 static bool decompileSnapshot(__vpiHandle *handle,
@@ -366,6 +374,30 @@ struct VPICallback {
   s_vpi_time time{};
   long double ticksPerUnit = 1.0L;
   uint64_t dueTime = 0;
+};
+
+struct VPIValueChangeBinding {
+  __vpiHandle object;
+  uintptr_t exposedToken = 0;
+  VPIStaticChangeTarget target;
+};
+
+struct VPIValueChangeRegistration {
+  VPICallback callback;
+  VPIStaticChangeTarget target;
+  std::shared_ptr<VPIValueChangeBinding> binding;
+  uintptr_t publicToken = 0;
+  // Only cold callback iteration creates aliases. Removal reclaims them all;
+  // the common primary-only register/remove path owns no vector allocation.
+  std::vector<uintptr_t> aliasTokens;
+  PLI_INT32 requestedFormat = 0;
+};
+
+struct VPIValueChangeRoot {
+  uint64_t offset = 0, width = 0;
+  uint64_t value = 0, unknown = 0;
+  uint32_t registrations = 0;
+  std::vector<std::unique_ptr<SignalSubscription>> subscriptions;
 };
 
 struct VPISystemTf {
@@ -428,7 +460,9 @@ struct VPIExportExecutor {
 // Live handles by token. Every VPI routine resolves its handle arguments
 // here, so findHandle goes through a small direct-mapped cache of recent
 // tokens (tokens are sequential, so recent ones rarely collide). Every
-// mutation goes through this class and keeps the cache consistent.
+// mutation goes through this class and keeps the cache consistent. Callback
+// removal erases primary and iterator handles, so generic lookups need no
+// callback-pool validity probe.
 class VPIHandleTable {
 public:
   using Map = std::unordered_map<uintptr_t, std::unique_ptr<__vpiHandle>>;
@@ -463,6 +497,36 @@ public:
     slot = {token, found->second.get()};
     return slot.handle;
   }
+  Map::node_type takeCallbackNode() {
+    if (callbackNodes.empty())
+      return {};
+    auto node = std::move(callbackNodes.back());
+    callbackNodes.pop_back();
+    return node;
+  }
+  bool insertCallbackNode(Map::node_type node) {
+    return map.insert(std::move(node)).inserted;
+  }
+  void recycleCallback(uintptr_t token) {
+    auto found = map.find(token);
+    if (found == map.end())
+      return;
+    assert(found->second->kind == VPIHandleKind::Callback);
+    // Callback-only handles carry no design binding. Reset client-visible
+    // per-handle data before the node gets a fresh, globally unique token.
+    found->second->scratch.clear();
+    found->second->userData = nullptr;
+    bool keep = callbackNodes.size() < 256;
+    if (keep) {
+      TALOS_RT_TRY { callbackNodes.reserve(256); }
+      TALOS_RT_CATCH_ALL { keep = false; }
+    }
+    forget(token);
+    if (keep)
+      callbackNodes.push_back(map.extract(found));
+    else
+      map.erase(found);
+  }
 
 private:
   void forget(uintptr_t token) {
@@ -476,6 +540,7 @@ private:
   };
   std::array<Slot, 64> recent{};
   Map map;
+  std::vector<Map::node_type> callbackNodes;
 };
 
 struct VPIState {
@@ -512,6 +577,8 @@ struct VPIState {
     bool fromCallback = false;
   };
   std::optional<PendingReset> pendingReset;
+  bool pendingClientReturn = false;
+  bool eventCallbackDemand = false;
   bool resetStarting = false;
   // $stop delivers cbEnterInteractive and cbExitInteractive once the
   // scheduler stops; interactive while they are delivered.
@@ -555,6 +622,11 @@ struct VPIState {
 
   uint64_t runtimeObserverCallbacks = 0;
   std::unordered_map<uint64_t, VPICallback> callbacks;
+  talos::runtime::VPIValueChangeQueue<VPIValueChangeRegistration> valueChanges;
+  std::unordered_map<uint64_t, std::unique_ptr<VPIValueChangeRoot>>
+      valueChangeRoots;
+  bool valueChangeFencePending = false;
+  s_vpi_value callbackValueScratch{};
   std::vector<uint64_t> callbackOrder;
   std::set<std::pair<uint64_t, uint64_t>> timeCallbacks;
   // Synchronization callbacks by (due time, stage, callback ID); see
@@ -592,6 +664,23 @@ struct VPIState {
       writeValueScratch;
   size_t writeValueScratchInUse = 0;
 };
+
+vpiHandle registerValueChangeCallback(VPIState *state, p_cb_data data);
+PLI_INT32 removeValueChangeCallback(VPIState *state, __vpiHandle *handle);
+vpiHandle valueChangeObject(VPIState *state, VPIValueChangeBinding &binding);
+bool deliverValueChanges(VPIState *state, bool applicationReturned);
+void shutdownValueChangeCallbacks(VPIState *state);
+
+// Share the existing cold reset/signal gates. Ordinary timer callbacks with
+// neither pending client effects nor signal watches retain one empty check.
+void refreshCallbackIngress(VPIState *state) {
+  const bool changes = state->valueChanges.pendingCount() != 0;
+  state->pendingClientReturn = changes || state->pendingReset.has_value();
+  state->eventCallbackDemand = changes;
+#if TALOS_RT_VPI_SIGNALS
+  state->eventCallbackDemand |= state->watchedSignals != 0;
+#endif
+}
 
 // VPI is callable only from the simulation thread (startup, callbacks, and
 // reentrant DPI on that thread). A process-global binding would accidentally
@@ -1189,6 +1278,23 @@ vpiHandle makeSemanticObjectHandle(VPIState *state, VPIObjectForm form,
 
 vpiHandle makeCallbackHandle(VPIState *state, uint64_t callbackId) {
   TALOS_RT_TRY {
+    auto node = state->handles.takeCallbackNode();
+    if (node) {
+      uintptr_t token = 0;
+      if (!talos::runtime::allocateVPIHandleToken(nextHandleToken, token)) {
+        setError(state, "VPI handle identifier space is exhausted", vpiSystem);
+        return nullptr;
+      }
+      node.key() = token;
+      node.mapped()->token = token;
+      node.mapped()->form = VPIObjectForm::Design;
+      node.mapped()->cursor.offset = callbackId;
+      if (!state->handles.insertCallbackNode(std::move(node))) {
+        setError(state, "VPI handle identifier collision", vpiInternal);
+        return nullptr;
+      }
+      return reinterpret_cast<vpiHandle>(token);
+    }
     auto handle = std::make_unique<__vpiHandle>();
     handle->owner = state;
     handle->kind = VPIHandleKind::Callback;
@@ -1203,6 +1309,26 @@ vpiHandle makeCallbackHandle(VPIState *state, uint64_t callbackId) {
     setError(state, "could not allocate VPI callback handle", vpiInternal);
     return nullptr;
   }
+}
+
+vpiHandle makeValueChangeCallbackHandle(VPIState *state, uint64_t callbackId,
+                                        bool alias = false) {
+  auto result = makeCallbackHandle(state, callbackId);
+  if (!result)
+    return nullptr;
+  const uintptr_t token = reinterpret_cast<uintptr_t>(result);
+  state->handles.lookup(token)->form = VPIObjectForm::ValueChangeCallback;
+  if (alias) {
+    TALOS_RT_TRY {
+      state->valueChanges.find(callbackId)->aliasTokens.push_back(token);
+    }
+    TALOS_RT_CATCH_ALL {
+      state->handles.recycleCallback(token);
+      setError(state, "could not retain callback iterator alias", vpiSystem);
+      return nullptr;
+    }
+  }
+  return result;
 }
 
 vpiHandle makeSystemTfHandle(VPIState *state, uint64_t systemTfId) {
@@ -1268,6 +1394,12 @@ vpiHandle makeTimeQueueHandle(VPIState *state, uint64_t scheduledTime) {
 VPICallback *findCallback(__vpiHandle *handle) {
   if (!handle || handle->kind != VPIHandleKind::Callback)
     return nullptr;
+  if (handle->form == VPIObjectForm::ValueChangeCallback) {
+    auto *record = handle->owner->valueChanges.find(handle->cursor.offset);
+    if (!record)
+      setError(handle->owner, "VPI callback registration no longer exists");
+    return record ? &record->callback : nullptr;
+  }
   auto found = handle->owner->callbacks.find(handle->cursor.offset);
   if (found == handle->owner->callbacks.end()) {
     setError(handle->owner, "VPI callback registration no longer exists");
@@ -1381,8 +1513,12 @@ void refreshTimeCallbackDeadline(VPIState *state) {
           : std::optional<uint64_t>(state->timeCallbacks.begin()->first);
 #if TALOS_RT_VPI_SIGNALS
   // Signals still to deliver keep the current slot's dispatch due.
-  if (state->watchedSignals != 0 &&
-      pendingVPISignals.load(std::memory_order_relaxed) != 0)
+  if (state->eventCallbackDemand &&
+      (state->valueChanges.pendingCount() ||
+       pendingVPISignals.load(std::memory_order_relaxed) != 0))
+    state->context->nextVPITimeCallback = state->context->schedulerTime;
+#else
+  if (state->eventCallbackDemand)
     state->context->nextVPITimeCallback = state->context->schedulerTime;
 #endif
 }
@@ -1411,6 +1547,7 @@ bool watchSignal(VPIState *state, int signal) {
     }
   }
   ++watch.callbacks;
+  refreshCallbackIngress(state);
   return true;
 }
 
@@ -1450,9 +1587,19 @@ void unwatchSignal(VPIState *state, int signal) {
     }
     signalOwner.store(nullptr);
   }
+  refreshCallbackIngress(state);
 }
 
-void runPendingReset(VPIState *state) noexcept;
+void runPendingClientReturn(VPIState *state) noexcept;
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((always_inline))
+#elif defined(_MSC_VER)
+__forceinline
+#endif
+inline void runPendingReset(VPIState *state) noexcept {
+  if (state->pendingClientReturn)
+    runPendingClientReturn(state);
+}
 
 /// Delivers the cbSignal callbacks of the signals that arrived (38.36.3), in
 /// signal order and then registration order. Callbacks registered during the
@@ -1460,6 +1607,10 @@ void runPendingReset(VPIState *state) noexcept;
 /// end the delivery: the signals already taken have no later safe point.
 talos_rt_status deliverPendingSignals(VPIState *state) {
   talos_rt_context *context = state->context;
+  if (!state->eventCallbackDemand)
+    return TALOS_RT_OK;
+  if (state->valueChanges.pendingCount() && !deliverValueChanges(state, true))
+    return context->schedulerStatus;
   if (state->watchedSignals == 0 ||
       pendingVPISignals.load(std::memory_order_relaxed) == 0)
     return TALOS_RT_OK;
@@ -1551,6 +1702,7 @@ void releaseObservationDemand(VPIState *state, PLI_INT32 reason) {
 void performPendingReset(VPIState *state) noexcept {
   VPIState::PendingReset reset = *state->pendingReset;
   state->pendingReset.reset();
+  refreshCallbackIngress(state);
   TALOS_RT_TRY {
     (void)talos_rt_reset_to_time_zero(
         state->context, std::to_string(reset.value), reset.interactive);
@@ -1568,7 +1720,15 @@ void performPendingReset(VPIState *state) noexcept {
 /// returns; one requested from an imported task or function waits for the
 /// scheduler (talos_rt_vpi_termination_reached), even if a callback that the
 /// same call triggered returns first.
-void runPendingReset(VPIState *state) noexcept {
+void runPendingClientReturn(VPIState *state) noexcept {
+  // This is already the simulator's application-return fence. A put's API
+  // scope is still active during nested cbPLIError delivery and cannot drain.
+  if (state->valueChanges.pendingCount() && state->callbackDepth == 1 &&
+      state->callDepth == 0 && !activeDpiCall) {
+    --state->callbackDepth;
+    (void)deliverValueChanges(state, true);
+    ++state->callbackDepth;
+  }
   if (state->pendingReset && state->pendingReset->fromCallback &&
       state->callbackDepth == 1)
     performPendingReset(state);
@@ -1712,9 +1872,11 @@ void eraseCallback(VPIState *state, uint64_t id) {
   // including handles returned by callback iteration.
   for (auto entry = state->handles.begin(); entry != state->handles.end();) {
     if (entry->second->kind == VPIHandleKind::Callback &&
-        entry->second->cursor.offset == id)
-      entry = state->handles.erase(entry);
-    else
+        entry->second->form != VPIObjectForm::ValueChangeCallback &&
+        entry->second->cursor.offset == id) {
+      const uintptr_t token = entry++->first;
+      state->handles.recycleCallback(token);
+    } else
       ++entry;
   }
   releaseObservationDemand(state, reason);
@@ -1727,6 +1889,8 @@ PLI_INT32 removeCallbackHandle(VPIState *state, __vpiHandle *handle) {
     setError(state, "invalid VPI callback handle");
     return 0;
   }
+  if (handle->form == VPIObjectForm::ValueChangeCallback)
+    return removeValueChangeCallback(state, handle);
   if (state->callbacks.find(handle->cursor.offset) == state->callbacks.end()) {
     setError(state, "VPI callback was already removed");
     return 0;
@@ -9223,6 +9387,9 @@ talos_rt_vpi_dispatch_time_callbacks_unlocked(talos_rt_context *context) {
       status != TALOS_RT_OK || context->destroyPending ||
       context->schedulerFinishRequested.load(std::memory_order_relaxed))
     return status;
+#else
+  if (state->eventCallbackDemand && !deliverValueChanges(state, true))
+    return context->schedulerStatus;
 #endif
   // IEEE 1800-2023 38.36.2: cbAfterDelay runs before execution events at
   // the selected time. This is boundary work owned by the common driver,
@@ -10356,6 +10523,7 @@ talos_rt_v1_vpi_shutdown(talos_rt_context *context) {
     setError(state, "VPI shutdown is not allowed from a VPI callback");
     return;
   }
+  shutdownValueChangeCallbacks(state);
   if (state->runtimeObserverCallbacks != 0) {
     state->runtimeObserverCallbacks = 0;
     ContextMutexLock lock(context);
@@ -11163,6 +11331,11 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_iterate(PLI_INT32 type,
       for (uint64_t id : state->callbackOrder)
         if (state->callbacks.find(id) != state->callbacks.end())
           callbacks.push_back({id});
+      std::vector<uint64_t> valueChanges;
+      state->valueChanges.appendIDs(valueChanges);
+      const size_t ordinaryCount = callbacks.size();
+      for (uint64_t id : valueChanges)
+        callbacks.push_back({id});
       if (callbacks.empty())
         return nullptr;
       auto iterator = std::make_unique<__vpiHandle>();
@@ -11170,6 +11343,9 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_iterate(PLI_INT32 type,
       iterator->kind = VPIHandleKind::Iterator;
       iterator->iteratorType = type;
       iterator->items = std::move(callbacks);
+      // The iterator's otherwise unused scalar splits its cold snapshot into
+      // ordinary and pooled registrations, without expanding every item.
+      iterator->integralValue = static_cast<int64_t>(ordinaryCount);
       iterator->callbackIterator = true;
       return keepHandle(state, std::move(iterator));
     }
@@ -11795,12 +11971,17 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_scan(vpiHandle opaque) {
   }
   if (iterator->callbackIterator) {
     while (iterator->next != iterator->items.size()) {
+      const bool valueChange =
+          iterator->next >= static_cast<size_t>(iterator->integralValue);
       uint64_t id = iterator->items[iterator->next++].offset;
-      if (iterator->owner->callbacks.find(id) !=
-          iterator->owner->callbacks.end()) {
+      if (valueChange ? iterator->owner->valueChanges.find(id) != nullptr
+                      : iterator->owner->callbacks.find(id) !=
+                            iterator->owner->callbacks.end()) {
         VPIState *state = iterator->owner;
         const uintptr_t iteratorToken = iterator->token;
-        vpiHandle result = makeCallbackHandle(state, id);
+        vpiHandle result = valueChange
+                               ? makeValueChangeCallbackHandle(state, id, true)
+                               : makeCallbackHandle(state, id);
         if (!result)
           state->handles.erase(iteratorToken);
         return result;
@@ -14930,7 +15111,8 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_compare_objects(vpiHandle first,
   if (left->kind == VPIHandleKind::Callback ||
       left->kind == VPIHandleKind::SystemTf ||
       left->kind == VPIHandleKind::TimeQueue)
-    return left->cursor.offset == right->cursor.offset;
+    return left->form == right->form &&
+           left->cursor.offset == right->cursor.offset;
   if (left->kind == VPIHandleKind::InterModPath)
     return left->interModPathEndpoints.size() ==
                right->interModPathEndpoints.size() &&
@@ -15038,7 +15220,24 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_release_handle(vpiHandle opaque) {
   if ((found->second->dynamicObject || hasThreadLifetime(*found->second)) &&
       !findHandle(opaque))
     return 0;
-  state->handles.erase(found);
+  if (found->second->kind == VPIHandleKind::Callback) {
+    bool live = true;
+    if (found->second->form == VPIObjectForm::ValueChangeCallback) {
+      auto *record = state->valueChanges.find(found->second->cursor.offset);
+      live = record != nullptr;
+      if (record) {
+        auto &aliases = record->aliasTokens;
+        aliases.erase(std::remove(aliases.begin(), aliases.end(), token),
+                      aliases.end());
+      }
+    }
+    state->handles.recycleCallback(token);
+    if (!live) {
+      setError(state, "VPI callback registration no longer exists");
+      return 0;
+    }
+  } else
+    state->handles.erase(found);
   return 1;
 }
 
@@ -15111,6 +15310,8 @@ extern "C" TALOS_VPI_EXPORT vpiHandle vpi_register_cb(p_cb_data callbackData) {
   if (!isLifecycleReason(callbackData->reason) &&
       !isErrorActionReason(callbackData->reason) &&
       !isFeatureReason(callbackData->reason) && !timer && !signal) {
+    if (callbackData->reason == cbValueChange)
+      return registerValueChangeCallback(state, callbackData);
     if (state->phase == VPIPhase::StartupRestricted)
       state->unsupportedStartup = true;
     setError(state, "VPI callback reason is not implemented");
@@ -15304,6 +15505,16 @@ extern "C" TALOS_VPI_EXPORT void vpi_get_cb_info(vpiHandle opaque,
   if (callback->reason == cbAfterDelay) {
     handle->owner->timeScratch = callback->time;
     destination->time = &handle->owner->timeScratch;
+  }
+  if (handle->form == VPIObjectForm::ValueChangeCallback) {
+    auto &record = *handle->owner->valueChanges.find(handle->cursor.offset);
+    destination->obj = valueChangeObject(handle->owner, *record.binding);
+    handle->owner->timeScratch = callback->time;
+    destination->time = &handle->owner->timeScratch;
+    handle->owner->callbackValueScratch = {};
+    handle->owner->callbackValueScratch.format = record.requestedFormat;
+    destination->value = &handle->owner->callbackValueScratch;
+    destination->index = callback->index;
   }
 }
 
@@ -16493,6 +16704,7 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_control(PLI_INT32 operation, ...) {
     }
     state->pendingReset = VPIState::PendingReset{
         resetValue, stopValue == 0, state->callbackDepth != 0};
+    refreshCallbackIngress(state);
     result = 1;
     // From an imported task or function, the termination latch ends the
     // calling process once the call returns (20.2), and the scheduler then
@@ -16657,4 +16869,413 @@ talos_rt_vpi_bind_static_change_target(talos_rt_context *context, void *object,
   target.isSigned = valueSigned(handle, source);
   *out = target;
   return TALOS_RT_OK;
+}
+
+namespace {
+
+bool readValueChangeRoot(VPIState *state, VPIValueChangeRoot &root,
+                         uint64_t &value, uint64_t &unknown) {
+  auto *context = state->context;
+  if (!context->execution || !root.width || root.width > 64 ||
+      root.offset > context->execution->state_bit_count ||
+      root.width > context->execution->state_bit_count - root.offset)
+    return false;
+  auto read = [&](const auto &plane, uint64_t &out) {
+    const uint64_t word = root.offset / 64;
+    const unsigned shift = root.offset % 64;
+    if (word >= plane.size())
+      return false;
+    out = plane[word] >> shift;
+    if (shift && root.width > 64 - shift) {
+      if (word + 1 >= plane.size())
+        return false;
+      out |= plane[word + 1] << (64 - shift);
+    }
+    if (root.width != 64)
+      out &= (uint64_t{1} << root.width) - 1;
+    return true;
+  };
+  return read(context->stateValue, value) &&
+         read(context->stateUnknown, unknown);
+}
+
+vpiHandle valueChangeObject(VPIState *state, VPIValueChangeBinding &binding) {
+  if (binding.exposedToken && state->handles.lookup(binding.exposedToken))
+    return reinterpret_cast<vpiHandle>(binding.exposedToken);
+  TALOS_RT_TRY {
+    auto object = std::make_unique<__vpiHandle>(binding.object);
+    object->changeBinding.reset();
+    auto handle = keepHandle(state, std::move(object));
+    binding.exposedToken = reinterpret_cast<uintptr_t>(handle);
+    return handle;
+  }
+  TALOS_RT_CATCH_ALL {
+    setError(state, "could not recover callback object handle", vpiSystem);
+    return nullptr;
+  }
+}
+
+vpiHandle registerValueChangeCallback(VPIState *state, p_cb_data data) {
+  if (!requireState()) {
+    if (state->phase == VPIPhase::StartupRestricted)
+      state->unsupportedStartup = true;
+    return nullptr;
+  }
+  if (state->phase == VPIPhase::EndSimulation ||
+      state->phase == VPIPhase::Ended || !data->obj || !data->time ||
+      !data->value ||
+      (data->time->type != vpiSimTime &&
+       data->time->type != vpiScaledRealTime &&
+       data->time->type != vpiSuppressTime)) {
+    setError(state, "value-change callback requires a live object, value "
+                    "format and time type before simulation ends");
+    return nullptr;
+  }
+  ContextMutexLock lock(state->context);
+  VPIStaticChangeTarget target;
+  const auto status = talos_rt_vpi_bind_static_change_target(
+      state->context, data->obj, data->value->format, &target);
+  if (status != TALOS_RT_OK) {
+    setError(state,
+             status == TALOS_RT_PERMISSION_DENIED
+                 ? "value-change callback target is not permitted"
+                 : "value-change callback target or format is unavailable");
+    return nullptr;
+  }
+  const auto *execution = state->context->execution;
+  talos_rt_design_info_v1 info{};
+  // Admission is deliberately independent of VPI write permissions. The
+  // ordinary bytecode store and ordered NBA paths retain every publication.
+  // Native owners need V0/V1 certificates; exported SV calls need V11's
+  // application-return barrier. Neither is silently forced to bytecode here.
+  if (!execution || !(execution->flags & TALOS_RT_EXECUTION_REQUIRE_BYTECODE) ||
+      (execution->flags & TALOS_RT_EXECUTION_DPI_EXPORTS) ||
+      talos_rt_cached_design_info(state->context, target.object, &info) !=
+          TALOS_RT_OK ||
+      info.kind != TALOS_RT_DESIGN_RECORD_STORAGE) {
+    setError(state,
+             "value-change callback needs a certified writer path; "
+             "static variables in require-bytecode designs are supported");
+    return nullptr;
+  }
+  auto *source = findHandle(data->obj);
+  if (!source)
+    return nullptr;
+  VPIValueChangeRegistration record;
+  record.callback.reason = cbValueChange;
+  record.callback.routine = data->cb_rtn;
+  record.callback.userData = data->user_data;
+  record.callback.time.type = data->time->type;
+  record.target = target;
+  record.requestedFormat = data->value->format;
+  if (data->time->type == vpiScaledRealTime) {
+    int32_t precision = 0;
+    auto *scope = timeScopeFor(source);
+    if (!scope || !globalTimeExponent(state, precision)) {
+      setError(state, "callback object timescale is unavailable");
+      return nullptr;
+    }
+    record.callback.ticksPerUnit =
+        std::pow(10.0L, static_cast<long double>(scope->timeUnit) - precision);
+  }
+  if (vpi_get(vpiArrayMember, data->obj)) {
+    bool indexed = false;
+    for (auto step = source->selectionSteps.rbegin();
+         step != source->selectionSteps.rend(); ++step)
+      if (step->arrayDimension) {
+        if (step->index < INT32_MIN || step->index > INT32_MAX)
+          break;
+        record.callback.index = static_cast<PLI_INT32>(step->index);
+        indexed = true;
+        break;
+      }
+    if (!indexed) {
+      setError(state, "callback array-member index is unavailable");
+      return nullptr;
+    }
+  }
+  struct Rollback {
+    VPIState *state;
+    VPIValueChangeRoot *root = nullptr;
+    uint64_t id = 0;
+    uintptr_t token = 0;
+    bool counted = false, demand = false, committed = false;
+    ~Rollback() {
+      if (committed)
+        return;
+      if (token)
+        state->handles.recycleCallback(token);
+      if (id)
+        state->valueChanges.remove(id);
+      if (root) {
+        if (counted)
+          --root->registrations;
+        if (!root->registrations)
+          talos_rt_unregister_signal_wait_unlocked(state->context,
+                                                   root->subscriptions);
+      }
+      if (demand)
+        releaseObservationDemand(state, cbValueChange);
+    }
+  } rollback{state};
+  TALOS_RT_TRY {
+    auto &binding = source->changeBinding;
+    if (!binding || binding->target.object.offset != target.object.offset ||
+        binding->target.selectedOffset != target.selectedOffset ||
+        binding->target.selectedWidth != target.selectedWidth ||
+        binding->target.objectType != target.objectType) {
+      auto created = std::make_shared<VPIValueChangeBinding>();
+      created->object = *source;
+      created->object.changeBinding.reset();
+      created->exposedToken = source->token;
+      created->target = target;
+      binding = std::move(created);
+    }
+    record.binding = binding;
+    auto &ownedRoot = state->valueChangeRoots[target.rootStateOffset];
+    if (!ownedRoot) {
+      ownedRoot = std::make_unique<VPIValueChangeRoot>();
+      ownedRoot->offset = target.rootStateOffset;
+      ownedRoot->width = target.rootWidth;
+    }
+    auto &root = *ownedRoot;
+    rollback.root = &root;
+    if (root.width != target.rootWidth || root.registrations == UINT32_MAX) {
+      setError(state,
+               "callback root geometry or registration capacity exhausted");
+      return nullptr;
+    }
+    if (!root.registrations) {
+      if (!readValueChangeRoot(state, root, root.value, root.unknown)) {
+        setError(state, "callback root state is unavailable");
+        return nullptr;
+      }
+      const uint64_t global = talos_rt_stable_handle_encode(
+          TALOS_RT_STABLE_HANDLE_GLOBAL, 0, root.offset);
+      const uint64_t canonical = talos_rt_canonical_state_handle_unlocked(
+          state->context, root.offset, root.width);
+      if (global == UINT64_MAX || canonical == UINT64_MAX ||
+          !talos_rt_register_vpi_signal_subscription_unlocked(
+              state->context, global, root.width, root.offset,
+              root.subscriptions) ||
+          (canonical != global &&
+           !talos_rt_register_vpi_signal_subscription_unlocked(
+               state->context, canonical, root.width, root.offset,
+               root.subscriptions))) {
+        setError(state, "could not subscribe to callback root", vpiSystem);
+        return nullptr;
+      }
+    }
+    rollback.id = state->valueChanges.add(root.offset, std::move(record));
+    if (!rollback.id) {
+      setError(state, "callback registration identity space exhausted",
+               vpiSystem);
+      return nullptr;
+    }
+    ++root.registrations;
+    rollback.counted = true;
+    auto *stored = state->valueChanges.find(rollback.id);
+    stored->callback.id = rollback.id;
+    auto result = makeValueChangeCallbackHandle(state, rollback.id);
+    if (!result)
+      return nullptr;
+    rollback.token = stored->publicToken = reinterpret_cast<uintptr_t>(result);
+    rollback.demand = true;
+    acquireObservationDemand(state, cbValueChange);
+    rollback.committed = true;
+    return result;
+  }
+  TALOS_RT_CATCH(const std::bad_alloc &) {
+    setError(state, "value-change callback registry is out of memory",
+             vpiSystem);
+  }
+  TALOS_RT_CATCH_ALL {
+    setError(state, "could not register value-change callback", vpiInternal);
+  }
+  return nullptr;
+}
+
+PLI_INT32 removeValueChangeCallback(VPIState *state, __vpiHandle *handle) {
+  ContextMutexLock lock(state->context);
+  const auto id = handle->cursor.offset;
+  auto *record = state->valueChanges.find(id);
+  if (!record) {
+    setError(state, "VPI callback was already removed");
+    state->handles.recycleCallback(handle->token);
+    return 0;
+  }
+  const uintptr_t primary = record->publicToken;
+  auto found = state->valueChangeRoots.find(record->target.rootStateOffset);
+  if (found == state->valueChangeRoots.end() || !found->second ||
+      !found->second->registrations) {
+    setError(state, "callback root ownership is invalid", vpiInternal);
+    return 0;
+  }
+  // Reclaim iterator handles even when the application correctly avoids
+  // releasing them after removal made them invalid (LRM 38.38-38.39).
+  for (uintptr_t alias : record->aliasTokens)
+    state->handles.recycleCallback(alias);
+  state->valueChanges.remove(id);
+  auto &root = *found->second;
+  if (!--root.registrations)
+    talos_rt_unregister_signal_wait_unlocked(state->context,
+                                             root.subscriptions);
+  state->handles.recycleCallback(primary);
+  releaseObservationDemand(state, cbValueChange);
+  return 1;
+}
+
+bool deliverValueChanges(VPIState *state, bool applicationReturned) {
+  if (!state || state != currentState())
+    return true;
+  state->valueChangeFencePending = false;
+  auto *context = state->context;
+  if (state->callDepth || state->callbackDepth || context->observerDepth ||
+      (!applicationReturned && activeDpiCall))
+    return true;
+  TALOS_RT_TRY {
+    state->valueChanges.drain(
+        [&](uint64_t, VPIValueChangeRegistration &record,
+            const talos::runtime::VPIPackedChangePublication &event) {
+          if (context->schedulerStatus != TALOS_RT_OK ||
+              context->destroyPending)
+            return;
+          const unsigned offset =
+              record.target.selectedOffset - record.target.rootStateOffset;
+          const unsigned width = record.target.selectedWidth;
+          if (!event.changes(offset, width))
+            return;
+          const auto callback = record.callback;
+          s_vpi_time time{};
+          time.type = callback.time.type;
+          if (time.type == vpiSimTime) {
+            time.high = static_cast<PLI_UINT32>(event.time >> 32);
+            time.low = static_cast<PLI_UINT32>(event.time);
+          } else if (time.type == vpiScaledRealTime) {
+            time.real = static_cast<double>(event.time / callback.ticksPerUnit);
+          }
+          talos::runtime::VPIPackedCallbackValue storage;
+          s_vpi_value value{};
+          value.format = record.target.valueFormat;
+          if (!storage.format(value, width, record.target.isSigned,
+                              event.newValue >> offset,
+                              event.newUnknown >> offset)) {
+            context->schedulerStatus = TALOS_RT_INVALID_ARGUMENT;
+            return;
+          }
+          s_cb_data invocation{};
+          invocation.reason = cbValueChange;
+          invocation.cb_rtn = callback.routine;
+          invocation.obj = valueChangeObject(state, *record.binding);
+          invocation.time = time.type == vpiSuppressTime ? nullptr : &time;
+          invocation.value = value.format == vpiSuppressVal ? nullptr : &value;
+          invocation.index = callback.index;
+          invocation.user_data = callback.userData;
+          if (!invocation.obj) {
+            context->schedulerStatus = TALOS_RT_OUT_OF_MEMORY;
+            return;
+          }
+          ++state->callbackDepth;
+          const bool previousCallback = context->vpiTimeCallbackActive;
+          context->vpiTimeCallbackActive = true;
+          {
+            ManagedRunHoldPause pause;
+            TALOS_RT_TRY { (void)callback.routine(&invocation); }
+            TALOS_RT_CATCH_ALL {
+              setError(state, "VPI callback raised an exception", vpiInternal);
+              context->schedulerStatus = TALOS_RT_FATAL;
+            }
+          }
+          context->vpiTimeCallbackActive = previousCallback;
+          runPendingReset(state);
+          --state->callbackDepth;
+        });
+  }
+  TALOS_RT_CATCH(const std::bad_alloc &) {
+    setError(state, "value-change callback delivery is out of memory",
+             vpiSystem);
+    context->schedulerStatus = TALOS_RT_OUT_OF_MEMORY;
+  }
+  TALOS_RT_CATCH_ALL {
+    setError(state, "value-change callback delivery failed", vpiInternal);
+    context->schedulerStatus = TALOS_RT_FATAL;
+  }
+  refreshCallbackIngress(state);
+  refreshTimeCallbackDeadline(state);
+  return context->schedulerStatus == TALOS_RT_OK;
+}
+
+void shutdownValueChangeCallbacks(VPIState *state) {
+  ContextMutexLock lock(state->context);
+  for (auto &[offset, root] : state->valueChangeRoots)
+    if (root)
+      talos_rt_unregister_signal_wait_unlocked(state->context,
+                                               root->subscriptions);
+  auto &pending = state->context->pendingDesignComputedWaiters;
+  pending.erase(std::remove(pending.begin(), pending.end(), 0), pending.end());
+}
+} // namespace
+
+bool talos_rt_vpi_capture_change_unlocked(talos_rt_context *context,
+                                          uint64_t alias) {
+  auto *state = static_cast<VPIState *>(context->vpiState);
+  if (!state || state != currentState()) {
+    context->schedulerStatus = TALOS_RT_INVALID_LIFECYCLE;
+    return false;
+  }
+  auto found = state->valueChangeRoots.find(alias);
+  if (found == state->valueChangeRoots.end() || !found->second ||
+      !found->second->registrations)
+    return true;
+  auto &root = *found->second;
+  uint64_t value = 0, unknown = 0;
+  if (!readValueChangeRoot(state, root, value, unknown)) {
+    context->schedulerStatus = TALOS_RT_INVALID_HANDLE;
+    return false;
+  }
+  if (value == root.value && unknown == root.unknown)
+    return true;
+  TALOS_RT_TRY {
+    if (!state->valueChanges.publish({alias, root.value, root.unknown, value,
+                                      unknown, context->schedulerTime,
+                                      static_cast<uint32_t>(root.width)})) {
+      context->schedulerStatus = TALOS_RT_OUT_OF_RESOURCES;
+      return false;
+    }
+    root.value = value;
+    root.unknown = unknown;
+    refreshCallbackIngress(state);
+    context->nextVPITimeCallback = context->schedulerTime;
+    if (!state->valueChangeFencePending) {
+      // Zero is reserved in the existing observer-fence queue. It is never
+      // looked up as a SystemVerilog task or given process identity.
+      context->pendingDesignComputedWaiters.push_back(0);
+      state->valueChangeFencePending = true;
+    }
+    return true;
+  }
+  TALOS_RT_CATCH(const std::bad_alloc &) {
+    context->schedulerStatus = TALOS_RT_OUT_OF_MEMORY;
+  }
+  TALOS_RT_CATCH_ALL { context->schedulerStatus = TALOS_RT_FATAL; }
+  return false;
+}
+
+bool talos_rt_vpi_deliver_changes_unlocked(talos_rt_context *context) {
+  return deliverValueChanges(static_cast<VPIState *>(context->vpiState), false);
+}
+
+bool talos_rt_vpi_client_returned_unlocked(talos_rt_context *context) {
+  return deliverValueChanges(static_cast<VPIState *>(context->vpiState), true);
+}
+
+talos_rt_status talos_rt_vpi_after_client_return(talos_rt_context *context,
+                                                 talos_rt_status status) {
+  // VPI runs on the simulation thread: the flag is read before locking.
+  if (!static_cast<VPIState *>(context->vpiState)->pendingClientReturn)
+    return status;
+  std::lock_guard<TalosContextMutex> lock(context->mutex);
+  if (!talos_rt_vpi_client_returned_unlocked(context) && status == TALOS_RT_OK)
+    return context->schedulerStatus;
+  return status;
 }
