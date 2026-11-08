@@ -37,9 +37,12 @@ module attributes {native.optimization_level = 3 : i32} {
     // CHECK: ^[[COPY]]:
     // CHECK-NOT: known_
     // CHECK: %[[K:.*]] = simulation.ref.load %{{.*}} {schedule.native.known_read}
-    // CHECK-NEXT: simulation.logic.is_true %[[K]]
+    // CHECK-NEXT: %[[KB:.*]] = simulation.logic.to_bits %[[K]]
+    // CHECK: arith.cmpi ne, %[[KB]]
     // CHECK: %[[Y:.*]] = simulation.ref.load %{{.*}} {schedule.native.known_read}
-    // CHECK-NEXT: simulation.ref.store %[[Y]] to %{{.*}} : !simulation.logic<8>
+    // CHECK-NEXT: %[[YB:.*]] = simulation.logic.to_bits %[[Y]]
+    // CHECK-NEXT: %[[YK:.*]] = simulation.logic.from_bits %[[YB]]
+    // CHECK-NEXT: simulation.ref.store %[[YK]] to %{{.*}} : !simulation.logic<8>
     // CHECK-NOT: known_
     // CHECK: }
     simulation.func @activation(%ctx: !c {simulation.capture_kind = 0 : i32})
@@ -127,14 +130,14 @@ module attributes {native.optimization_level = 3 : i32} {
     // CHECK: %[[E:.*]] = simulation.ref.load
     // CHECK-NEXT: cf.br ^[[REST:bb[0-9]+]](%[[P]], %[[E]] :
     // CHECK: ^[[COPY]]:
-    // CHECK: %[[P2:.*]] = simulation.logic.binary mul
+    // CHECK: %[[P2B:.*]] = arith.muli
+    // CHECK-NEXT: %[[P2:.*]] = simulation.logic.from_bits %[[P2B]]
     // CHECK: %[[E2:.*]] = simulation.ref.load %{{.*}} : !simulation.ref<!simulation.logic<8>> -> !simulation.logic<8>
     // CHECK-NEXT: %[[OK:.*]] = schedule.known.value %[[E2]]
     // CHECK-NEXT: cf.cond_br %[[OK]] weights([1048575, 1]), ^[[MORE:bb[0-9]+]], ^[[LEAVE:bb[0-9]+]]
     // CHECK: ^[[MORE]]:
     // CHECK-NEXT: %[[BITS:.*]] = simulation.logic.to_bits %[[E2]]
-    // CHECK-NEXT: %[[KNOWN:.*]] = simulation.logic.from_bits %[[BITS]]
-    // CHECK-NEXT: simulation.logic.binary add %[[KNOWN]], %[[P2]]
+    // CHECK-NEXT: arith.addi %[[BITS]], %[[P2B]]
     // CHECK: simulation.ref.store %{{.*}} to %{{.*}} {schedule.native.known_store}
     // CHECK: ^[[REST]](%[[MP:.*]]: !simulation.logic<8>, %[[ME:.*]]: !simulation.logic<8>):
     // CHECK-NEXT: simulation.logic.binary add %[[ME]], %[[MP]]
@@ -295,7 +298,7 @@ module attributes {native.optimization_level = 3 : i32} {
     // SEGMENTS-NEXT: %[[QK:.*]] = simulation.logic.from_bits %[[QB]]
     // SEGMENTS-NEXT: simulation.ref.store %[[QK]] to %[[B:.*]] {schedule.native.known_store}
     // SEGMENTS-NEXT: simulation.ref.load %[[B]] {schedule.native.known_read}
-    // SEGMENTS-NEXT: simulation.ref.load %{{.*}} {schedule.native.known_read}
+    // SEGMENTS: simulation.ref.load %{{.*}} {schedule.native.known_read}
     simulation.func @slots(%ctx: !c {simulation.capture_kind = 0 : i32})
         attributes {entry_kind = 8 : i32, code_unit_id = 1 : i64} {
       %a = simulation.context.storage %ctx[0] : !r8
@@ -528,10 +531,13 @@ module attributes {native.optimization_level = 3 : i32} {
     // CHECK: ^[[COPY]]:
     // CHECK: %[[A:.*]] = simulation.aggregate.extract %{{.*}}[0]
     // CHECK-NEXT: %[[AB:.*]] = simulation.logic.to_bits %[[A]]
-    // CHECK-NEXT: %[[AK:.*]] = simulation.logic.from_bits %[[AB]]
     // CHECK-NEXT: %[[B:.*]] = simulation.aggregate.extract %{{.*}}[1]
-    // CHECK-NOT: simulation.logic.to_bits
+    // CHECK-NOT: simulation.logic.to_bits %[[B]]
+    // CHECK: arith.muli %[[AB]], %[[AB]]
+    // CHECK: arith.addi
+    // CHECK: arith.muli
     // CHECK: simulation.ref.store %{{.*}} to %{{.*}} {schedule.native.known_store}
+    // CHECK: simulation.logic.binary add %[[B]],
     // CHECK: simulation.ref.store %{{.*}} to %{{.*}} : !simulation.logic<8>
     // CHECK-NEXT: simulation.return
     simulation.func @fields(%ctx: !c {simulation.capture_kind = 0 : i32})

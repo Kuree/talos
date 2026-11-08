@@ -120,7 +120,8 @@ module attributes {native.optimization_level = 3 : i32} {
     // starting there is versioned once, after the arms, by the chain of the
     // merge's dominator.
     // CHECK-LABEL: simulation.func @shared_merge
-    // CHECK-COUNT-2: simulation.logic.binary xor
+    // CHECK: simulation.logic.binary xor
+    // CHECK: arith.xori
     // CHECK-NOT: simulation.logic.binary xor
     simulation.func @shared_merge(%ctx: !simulation.context {simulation.capture_kind = 0 : i32})
         attributes {entry_kind = 8 : i32, code_unit_id = 4 : i64} {

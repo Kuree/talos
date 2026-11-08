@@ -696,6 +696,15 @@ private:
             analysis.isGated(op)) {
           schedule::set<schedule::Field::NativeKnownRead>(mapping.lookup(op),
                                                           unit);
+          // Make the guard's scalar fact visible to typed canonicalization,
+          // rather than expanding its arithmetic into two planes first. A
+          // steady X pattern is not known, and wide memory-backed values
+          // must retain their representation (IEEE 1800-2023 6.3.1/6.11.2).
+          Value result = op->getResult(0);
+          auto width = sim::getPackedWidth(result.getType());
+          if (width && *width <= 64 && analysis.isKnownInCopy(result) &&
+              analysis::KnownVersioningAnalysis::isCastable(result.getType()))
+            casts.push_back(op);
           return;
         }
         if (analysis.isKnownStore(op)) {
@@ -1077,10 +1086,12 @@ public:
       VersionKnownActivationsFunctionPass)
   VersionKnownActivationsFunctionPass(
       std::shared_ptr<const DesignInputs> inputs, uint64_t minimumBenefit,
-      uint64_t segmentSize, bool variants, bool checkedReads, bool diagnostics)
+      uint64_t segmentSize, bool variants, bool checkedReads, bool diagnostics,
+      std::shared_ptr<const FrozenRewritePatternSet> valuePatterns)
       : inputs(std::move(inputs)), minimumBenefit(minimumBenefit),
         segmentSize(segmentSize), variants(variants),
-        checkedReads(checkedReads), diagnostics(diagnostics) {}
+        checkedReads(checkedReads), diagnostics(diagnostics),
+        valuePatterns(std::move(valuePatterns)) {}
   StringRef getArgument() const final {
     return "schedule-version-known-activations-function";
   }
@@ -1212,6 +1223,8 @@ public:
         function, UnitAttr::get(context));
     schedule::set<schedule::Field::NativeKnownActivation>(
         function, UnitAttr::get(context));
+    if (failed(detail::canonicalizeKnownValues(function, *valuePatterns)))
+      signalPassFailure();
   }
 
 private:
@@ -1221,6 +1234,7 @@ private:
   bool variants;
   bool checkedReads;
   bool diagnostics;
+  std::shared_ptr<const FrozenRewritePatternSet> valuePatterns;
 };
 
 class VersionKnownActivationsPass final
@@ -1237,6 +1251,8 @@ public:
     if (!level || level.getInt() < 1)
       return markAllAnalysesPreserved();
     bool diagnostics = native::has<native::DebugTiming>(module);
+    auto valuePatterns = std::make_shared<const FrozenRewritePatternSet>(
+        detail::knownValuePatterns(module.getContext()));
     for (auto design : module.getOps<sim::SimDesignOp>()) {
       if (design.getBody().empty())
         continue;
@@ -1245,7 +1261,7 @@ public:
       designs.addNestedPass<sim::SimFuncOp>(
           std::make_unique<VersionKnownActivationsFunctionPass>(
               inputs, minimumBenefit, segmentSize, variants, checkedReads,
-              diagnostics));
+              diagnostics, valuePatterns));
       if (failed(runPipeline(designs, design)))
         return signalPassFailure();
     }

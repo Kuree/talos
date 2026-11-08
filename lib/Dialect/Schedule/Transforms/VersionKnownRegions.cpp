@@ -499,9 +499,11 @@ class VersionKnownRegionsFunctionPass final
                          OperationPass<sim::SimFuncOp>> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(VersionKnownRegionsFunctionPass)
-  VersionKnownRegionsFunctionPass(std::shared_ptr<const DesignFacts> facts,
-                                  bool diagnostics)
-      : facts(std::move(facts)), diagnostics(diagnostics) {}
+  VersionKnownRegionsFunctionPass(
+      std::shared_ptr<const DesignFacts> facts, bool diagnostics,
+      std::shared_ptr<const FrozenRewritePatternSet> valuePatterns)
+      : facts(std::move(facts)), diagnostics(diagnostics),
+        valuePatterns(std::move(valuePatterns)) {}
   StringRef getArgument() const final {
     return "schedule-version-known-regions-function";
   }
@@ -517,10 +519,8 @@ public:
     // with value-only gated reads runs its four-state body only while a gated
     // input holds X/Z.
     if (function.isExternal() ||
-        schedule::has<schedule::Field::NativeKnownActivation>(function) ||
         function.getEntryKind() != sim::EntryKind::Function ||
-        schedule::has<schedule::Field::EvalPathKnownPredicate>(function) ||
-        schedule::has<schedule::metadata::evalTwoStateVariant>(function))
+        schedule::has<schedule::Field::EvalPathKnownPredicate>(function))
       return markAllAnalysesPreserved();
     // Values packed lowering already proves two-state need no check and
     // offer no work to remove: the whole-design facts, and for a guarded
@@ -538,14 +538,32 @@ public:
         return guarded.isTwoStateWithInductiveRoots(value);
       };
     }
+    if (schedule::has<schedule::Field::NativeKnownActivation>(function) ||
+        schedule::has<schedule::metadata::evalTwoStateVariant>(function)) {
+      detail::exposeKnownScalars(function, provenKnown);
+      if (failed(detail::canonicalizeKnownValues(function, *valuePatterns)))
+        signalPassFailure();
+      return;
+    }
     // In steady state the design's inductively two-state roots are known; a
     // value four-state even then is expected to carry X/Z at run time.
     auto expectedKnown = [&](Value value) {
       return inductive.isTwoStateWithInductiveRoots(value);
     };
     KnownVersioningAnalysis analysis(function, provenKnown, expectedKnown);
-    if (analysis.getRegions().empty())
+    if (analysis.getRegions().empty()) {
+      // A completely proved variant needs no additional run-time check, but
+      // its scalar graph still needs the same early canonicalization as a
+      // versioned region. Do not wait for packed lowering to expose the
+      // outer guard's known values (IEEE 1800-2023 6.3.1/6.11.2).
+      if (schedule::has<schedule::Field::EvalInductiveTwoState>(function)) {
+        detail::exposeKnownScalars(function, provenKnown);
+        if (failed(detail::canonicalizeKnownValues(function, *valuePatterns)))
+          signalPassFailure();
+        return;
+      }
       return markAllAnalysesPreserved();
+    }
     // Loop membership is fixed before any edit; runs never touch loop blocks.
     DenseMap<Block *, SmallVector<Block *>> loopBlocks;
     if (!function.getBody().hasOneBlock()) {
@@ -595,11 +613,14 @@ public:
     for (const KnownRegion &region : analysis.getRegions())
       if (region.kind == KnownRegionKind::Loop)
         versioner.versionLoop(region, loopBlocks.lookup(region.header));
+    if (failed(detail::canonicalizeKnownValues(function, *valuePatterns)))
+      signalPassFailure();
   }
 
 private:
   std::shared_ptr<const DesignFacts> facts;
   bool diagnostics;
+  std::shared_ptr<const FrozenRewritePatternSet> valuePatterns;
 };
 
 class VersionKnownRegionsPass final
@@ -617,6 +638,8 @@ public:
     // Versioning needs the design's facts to predict which inputs are known
     // in steady state, so only functions inside a design are considered.
     bool diagnostics = native::has<native::DebugTiming>(module);
+    auto valuePatterns = std::make_shared<const FrozenRewritePatternSet>(
+        detail::knownValuePatterns(module.getContext()));
     // Packed lowering proves the copies two-state only where it runs the
     // whole-design solve: within the function limit, or where a guarded
     // variant needs the solve anyway. Versioning keeps to the same designs.
@@ -655,8 +678,8 @@ public:
       }
       OpPassManager designs(sim::SimDesignOp::getOperationName());
       designs.addNestedPass<sim::SimFuncOp>(
-          std::make_unique<VersionKnownRegionsFunctionPass>(facts,
-                                                            diagnostics));
+          std::make_unique<VersionKnownRegionsFunctionPass>(facts, diagnostics,
+                                                            valuePatterns));
       if (failed(runPipeline(designs, design)))
         return signalPassFailure();
     }

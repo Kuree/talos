@@ -246,7 +246,11 @@ public:
     Value destination = adaptor.getDestination().front();
 
     Location location = op.getLoc();
-    bool twoState = useTwoStateSpecialization(op, experimentalTwoState);
+    // Wide load/store fusion preserves the store's path certificate. Like a
+    // scalar known store, its RHS and old destination have zero unknown bits
+    // (IEEE 1800-2023 6.3.1/4.6); leave that memory plane untouched.
+    bool twoState = useTwoStateSpecialization(op, experimentalTwoState) ||
+                    schedule::has<schedule::Field::NativeKnownStore>(op);
     bool fourState = containsLogic(valueType) && !twoState;
     sim::SimFuncOp function = op->getParentOfType<sim::SimFuncOp>();
     sim::EntryKind entryKind = function.getEntryKind();
@@ -535,7 +539,30 @@ public:
       };
       SmallVector<Value> buffers{read("__talos_state_value", false)};
       if (containsLogic(resultType)) {
-        if (twoState) {
+        bool valueOnlyUsers =
+            llvm::all_of(op.getResult().getUsers(), [&](Operation *user) {
+              return isa<sim::SimRefStoreOp>(user) &&
+                     (useTwoStateSpecialization(user, experimentalTwoState) ||
+                      schedule::has<schedule::Field::NativeKnownStore>(user));
+            });
+        bool adjacentStore =
+            op->hasOneUse() && op->getNextNode() == *op->getUsers().begin();
+        if (twoState && valueOnlyUsers &&
+            (locals->canBorrowMemory(op.getResult()) || adjacentStore) &&
+            range && range->offset % 8 == 0 &&
+            (!range->guarded || assumeClean)) {
+          // These stores never consume the unknown buffer. Borrow its stable
+          // address instead of generating a disposable alloca/memset. This is
+          // the same snapshot/lifetime proof used for the value plane above,
+          // or a sole adjacent known store, which leaves these bits unchanged
+          // (IEEE 1800-2023 4.6). No unknown-plane memory is accessed.
+          Value base = LLVM::AddressOfOp::create(
+              rewriter, op.getLoc(),
+              LLVM::LLVMPointerType::get(op.getContext()),
+              "__talos_state_unknown");
+          buffers.push_back(
+              byteGEP(rewriter, op.getLoc(), base, range->offset / 8));
+        } else if (twoState) {
           Value buffer = allocateBulkPlane(rewriter, op.getLoc(), *width);
           LLVM::MemsetOp::create(
               rewriter, op.getLoc(), buffer,
