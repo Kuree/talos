@@ -7,6 +7,7 @@
 #include "../lib/ProcessSignals.h"
 #include "../lib/RuntimeInternal.h"
 #include "../lib/VPIHandleToken.h"
+#include "../lib/VPIStaticChangeTarget.h"
 #include "talos/Reflection/DesignReflection.h"
 #include "talos/Reflection/VPIObjectModel.h"
 #include "talos/Runtime/Runtime.h"
@@ -8811,6 +8812,124 @@ PLI_INT32 shutdownVPIFromCallback(p_cb_data data) {
   s_vpi_vlog_info info{};
   probe->vpiRemainedUsable = vpi_get_vlog_info(&info) == 1;
   return 0;
+}
+
+TEST(VPI, StaticChangeBindingMatchesPackedRootAndBitSelectors) {
+  Fixture fixture;
+  put64(fixture.database, 240 + 56, 16);
+  put64(fixture.database, 240 + 64, 15);
+  put64(fixture.database, 336 + 8, 16);
+  put64(fixture.database, 336 + 16, 15);
+  put64(fixture.database, 32, imageChecksum(fixture.database));
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&fixture.execution, &context),
+            TALOS_RT_OK);
+  std::unique_ptr<talos_rt_context, decltype(&talos_rt_v1_context_destroy)>
+      owner(context, talos_rt_v1_context_destroy);
+  ASSERT_EQ(talos_rt_v1_vpi_startup(context, nullptr, 0), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_vpi_end_compile(context), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_vpi_start_simulation(context), TALOS_RT_OK);
+  auto object = vpi_handle_by_name(const_cast<char *>("top.value"), nullptr);
+  ASSERT_NE(object, nullptr);
+  s_vpi_value value{};
+  value.format = vpiIntVal;
+  value.value.integer = 0x8421;
+  vpi_put_value(object, &value, nullptr, vpiNoDelay);
+  for (int32_t format :
+       {vpiSuppressVal, vpiBinStrVal, vpiOctStrVal, vpiDecStrVal, vpiHexStrVal,
+        vpiScalarVal, vpiIntVal, vpiRealVal, vpiStringVal, vpiTimeVal,
+        vpiVectorVal, vpiObjTypeVal}) {
+    SCOPED_TRACE(format);
+    VPIStaticChangeTarget target;
+    ASSERT_EQ(talos_rt_vpi_bind_static_change_target(context, object, format,
+                                                     &target),
+              TALOS_RT_OK);
+    EXPECT_EQ(target.object.offset, 240u);
+    EXPECT_EQ(target.rootStateOffset, 0u);
+    EXPECT_EQ(target.rootWidth, 16u);
+    EXPECT_EQ(target.selectedOffset, 0u);
+    EXPECT_EQ(target.selectedWidth, 16u);
+    EXPECT_EQ(target.objectType, vpiReg);
+    EXPECT_EQ(target.valueFormat,
+              format == vpiObjTypeVal ? vpiVectorVal : format);
+    EXPECT_TRUE(target.fourState);
+    EXPECT_FALSE(target.isSigned);
+  }
+  for (unsigned index = 0; index != 16; ++index) {
+    SCOPED_TRACE(index);
+    auto bit = vpi_handle_by_index(object, index);
+    ASSERT_NE(bit, nullptr);
+    VPIStaticChangeTarget target;
+    ASSERT_EQ(talos_rt_vpi_bind_static_change_target(context, bit,
+                                                     vpiObjTypeVal, &target),
+              TALOS_RT_OK);
+    EXPECT_EQ(target.rootWidth, 16u);
+    EXPECT_EQ(target.selectedOffset, index);
+    EXPECT_EQ(target.selectedWidth, 1u);
+    EXPECT_EQ(target.objectType, vpiRegBit);
+    EXPECT_EQ(target.valueFormat, vpiScalarVal);
+    s_vpi_value actual{};
+    actual.format = vpiIntVal;
+    vpi_get_value(bit, &actual);
+    EXPECT_EQ(actual.value.integer, (0x8421 >> index) & 1);
+    EXPECT_EQ(vpi_release_handle(bit), 1);
+  }
+  vpi_get_value(object, &value);
+  EXPECT_EQ(value.value.integer, 0x8421);
+  EXPECT_EQ(vpi_release_handle(object), 1);
+}
+
+TEST(VPI, StaticChangeBindingDeclinesUnsupportedOrInvalidObjectsCleanly) {
+  Fixture fixture;
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create_for_design(&fixture.execution, &context),
+            TALOS_RT_OK);
+  std::unique_ptr<talos_rt_context, decltype(&talos_rt_v1_context_destroy)>
+      owner(context, talos_rt_v1_context_destroy);
+  ASSERT_EQ(talos_rt_v1_vpi_startup(context, nullptr, 0), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_vpi_end_compile(context), TALOS_RT_OK);
+  ASSERT_EQ(talos_rt_v1_vpi_start_simulation(context), TALOS_RT_OK);
+  auto object = vpi_handle_by_name(const_cast<char *>("top.value"), nullptr);
+  auto scope = vpi_handle_by_name(const_cast<char *>("top"), nullptr);
+  ASSERT_NE(object, nullptr);
+  ASSERT_NE(scope, nullptr);
+  auto check = [&](talos_rt_context *candidateContext, vpiHandle candidate,
+                   int32_t format, talos_rt_status expected) {
+    VPIStaticChangeTarget target;
+    target.object.offset = target.rootWidth = target.selectedWidth = 99;
+    target.fourState = target.isSigned = true;
+    EXPECT_EQ(talos_rt_vpi_bind_static_change_target(
+                  candidateContext, candidate, format, &target),
+              expected);
+    EXPECT_EQ(target.object.offset, 0u);
+    EXPECT_EQ(target.rootWidth, 0u);
+    EXPECT_EQ(target.selectedWidth, 0u);
+    EXPECT_FALSE(target.fourState);
+    EXPECT_FALSE(target.isSigned);
+  };
+  check(context, object, vpiIntVal, TALOS_RT_TIER_UNAVAILABLE); // 65-bit root
+  check(context, object, vpiStrengthVal, TALOS_RT_TIER_UNAVAILABLE);
+  check(context, object, 99999, TALOS_RT_INVALID_ARGUMENT);
+  check(context, scope, vpiIntVal, TALOS_RT_TIER_UNAVAILABLE);
+  check(nullptr, object, vpiIntVal, TALOS_RT_INVALID_ARGUMENT);
+  check(context, nullptr, vpiIntVal, TALOS_RT_INVALID_ARGUMENT);
+  talos_rt_context *other = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&other), TALOS_RT_OK);
+  check(other, object, vpiIntVal, TALOS_RT_INVALID_LIFECYCLE);
+  talos_rt_v1_context_destroy(other);
+  EXPECT_EQ(talos_rt_vpi_bind_static_change_target(context, object, vpiIntVal,
+                                                   nullptr),
+            TALOS_RT_INVALID_ARGUMENT);
+  s_cb_data data{};
+  data.reason = cbEndOfSimulation;
+  data.cb_rtn = +[](p_cb_data) -> PLI_INT32 { return 0; };
+  auto callback = vpi_register_cb(&data);
+  ASSERT_NE(callback, nullptr);
+  check(context, callback, vpiIntVal, TALOS_RT_INVALID_HANDLE);
+  EXPECT_EQ(vpi_remove_cb(callback), 1);
+  EXPECT_EQ(vpi_release_handle(object), 1);
+  check(context, object, vpiIntVal, TALOS_RT_INVALID_HANDLE);
+  EXPECT_EQ(vpi_release_handle(scope), 1);
 }
 
 TEST(VPI, StartupRequiresAnObservableDesignAndOwnsOneContext) {

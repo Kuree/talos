@@ -1,0 +1,8 @@
+// RUN: talos-opt %S/Inputs/vpi-static-change-target.mlir --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph),encode-talos-sim-to-bytecode{vpi=full},convert-talos-sim-processes-to-llvm-coroutines,materialize-runtime-byte-globals,test-talos-export-llvm-symbols{main=model_main})' | talos-translate --mlir-to-llvmir | opt -S -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>,verify' -o %t.ll
+// RUN: %target_cxx -std=c++17 -O2 -I%S/../../runtime/include -I%S/../../runtime/lib -I%obj_root/lib/talos/include %t.ll %S/Inputs/check-vpi-static-change-target.cpp %runtime_link_flags -o %t.exe
+// RUN: %t.exe | FileCheck %s
+
+// Resolve callback targets through actual compiler-emitted VPI metadata. The
+// binding query preserves values and declines unsupported wide roots; this
+// fixture does not enable callback registration or observation dispatch.
+// CHECK: static change binding: generated root and all 16 packed selectors

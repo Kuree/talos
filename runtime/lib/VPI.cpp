@@ -11,6 +11,7 @@
 #include "VPIExpressionValue.h"
 #include "VPIHandleToken.h"
 #include "VPIInternal.h"
+#include "VPIStaticChangeTarget.h"
 #include "talos/Reflection/DesignReflection.h"
 #include "talos/Reflection/VPIObjectModel.h"
 #include "talos/Runtime/StableHandle.h"
@@ -16565,4 +16566,95 @@ extern "C" TALOS_VPI_EXPORT PLI_INT32 vpi_control(PLI_INT32 operation, ...) {
   }
   va_end(arguments);
   return result;
+}
+
+extern "C" talos_rt_status
+talos_rt_vpi_bind_static_change_target(talos_rt_context *context, void *object,
+                                       int32_t format,
+                                       VPIStaticChangeTarget *out) {
+  if (out)
+    *out = {};
+  if (!context || !object || !out)
+    return TALOS_RT_INVALID_ARGUMENT;
+  auto *state = currentState();
+  if (!state || state->context != context || context->vpiState != state)
+    return TALOS_RT_INVALID_LIFECYCLE;
+  auto *handle = findHandle(static_cast<vpiHandle>(object));
+  if (!handle || handle->owner != state ||
+      handle->kind != VPIHandleKind::Object)
+    return TALOS_RT_INVALID_HANDLE;
+  // Automatic declarations and their indexed descendants retain a frame
+  // identity, even when their current value happens to fit a machine word.
+  if (handle->frameActivation || handle->localDeclarationID ||
+      handle->allocationScheme == vpiAutomaticScheme)
+    return TALOS_RT_PERMISSION_DENIED;
+  if ((handle->form != VPIObjectForm::Design &&
+       handle->form != VPIObjectForm::Indexed) ||
+      handle->dynamicObject || handle->logicalProcess ||
+      handle->expressionFrameActivation)
+    return TALOS_RT_TIER_UNAVAILABLE;
+  if (!allowProtectedSource(handle, "vpi_register_cb"))
+    return TALOS_RT_PERMISSION_DENIED;
+  talos_rt_design_info_v1 original{};
+  if (!infoFor(handle, original))
+    return TALOS_RT_INVALID_HANDLE;
+  if (original.capabilities & TALOS_RT_DESIGN_CAP_FRAME_LOCAL)
+    return TALOS_RT_PERMISSION_DENIED;
+  if (original.kind != TALOS_RT_DESIGN_RECORD_STORAGE &&
+      original.kind != TALOS_RT_DESIGN_RECORD_NET)
+    return TALOS_RT_TIER_UNAVAILABLE;
+  auto *policy = valuePolicyFor(handle);
+  VPIValueSource source{};
+  if (!policy || !valueSourceFor(handle, *policy, source))
+    return TALOS_RT_TIER_UNAVAILABLE;
+  if (source.info.capabilities & TALOS_RT_DESIGN_CAP_FRAME_LOCAL)
+    return TALOS_RT_PERMISSION_DENIED;
+  if (source.primitiveValue || source.exactType == vpiClassVar ||
+      !valueRequirementsSatisfied(handle, source, *policy) ||
+      (source.policy != policy &&
+       !valueRequirementsSatisfied(handle, source, *source.policy)))
+    return TALOS_RT_TIER_UNAVAILABLE;
+  int32_t closest = vpiObjTypeVal;
+  if (!resolveObjectTypeValueFormat(handle, source, closest) ||
+      closest == vpiRealVal || closest == vpiStringVal)
+    return TALOS_RT_TIER_UNAVAILABLE;
+  if (format == vpiObjTypeVal)
+    format = closest;
+  switch (format) {
+  case vpiSuppressVal:
+  case vpiBinStrVal:
+  case vpiOctStrVal:
+  case vpiDecStrVal:
+  case vpiHexStrVal:
+  case vpiScalarVal:
+  case vpiIntVal:
+  case vpiRealVal:
+  case vpiStringVal:
+  case vpiTimeVal:
+  case vpiVectorVal:
+    break;
+  case vpiStrengthVal:
+    return TALOS_RT_TIER_UNAVAILABLE;
+  default:
+    return TALOS_RT_INVALID_ARGUMENT;
+  }
+  if (format != vpiSuppressVal &&
+      !talos::reflection::acceptsVPIValueFormat(*source.policy, format))
+    return TALOS_RT_INVALID_ARGUMENT;
+  VPIStaticChangeTarget target;
+  if (talos_rt_design_state_location(context, source.cursor,
+                                     &target.rootStateOffset, &target.rootWidth,
+                                     &target.fourState) != TALOS_RT_OK)
+    return TALOS_RT_TIER_UNAVAILABLE;
+  if (!source.info.bit_width || source.selectionBitOffset > target.rootWidth ||
+      source.info.bit_width > target.rootWidth - source.selectionBitOffset)
+    return TALOS_RT_INVALID_HANDLE;
+  target.object = source.cursor;
+  target.selectedOffset = target.rootStateOffset + source.selectionBitOffset;
+  target.selectedWidth = source.info.bit_width;
+  target.objectType = source.exactType;
+  target.valueFormat = format;
+  target.isSigned = valueSigned(handle, source);
+  *out = target;
+  return TALOS_RT_OK;
 }

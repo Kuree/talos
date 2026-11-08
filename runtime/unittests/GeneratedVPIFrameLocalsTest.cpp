@@ -3,6 +3,7 @@
 
 #include "../lib/DesignBytecodeImage.h"
 #include "../lib/RuntimeInternal.h"
+#include "../lib/VPIStaticChangeTarget.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -100,6 +101,13 @@ void inspectLocalABI(talos_rt_context *context, LocalProbe &probe,
   EXPECT_EQ(vpi_get(vpiAutomatic, probe.value), 1);
   EXPECT_EQ(vpi_get(vpiHasActual, probe.value), 0);
   EXPECT_EQ(vpi_get(vpiAllocScheme, probe.value), vpiAutomaticScheme);
+  // LRM 37.43 detail 2 forbids value-change callbacks on automatic variables,
+  // including a declaration before its actual value storage is bound.
+  VPIStaticChangeTarget callbackTarget;
+  EXPECT_EQ(talos_rt_vpi_bind_static_change_target(context, probe.value,
+                                                   vpiIntVal, &callbackTarget),
+            TALOS_RT_PERMISSION_DENIED);
+  EXPECT_EQ(callbackTarget.selectedWidth, 0u);
   auto byName = vpi_handle_by_name(const_cast<char *>("value"), probe.frame);
   ASSERT_NE(byName, nullptr);
   EXPECT_EQ(vpi_compare_objects(probe.value, byName), 1);
@@ -128,6 +136,10 @@ void inspectLocalABI(talos_rt_context *context, LocalProbe &probe,
   EXPECT_EQ(talos_rt_v1_vpi_frame_bind(context, 1, probe.valueRef),
             TALOS_RT_OK);
   EXPECT_EQ(vpi_get(vpiHasActual, probe.value), 1);
+  EXPECT_EQ(readInt(probe.value), 17);
+  EXPECT_EQ(talos_rt_vpi_bind_static_change_target(context, probe.value,
+                                                   vpiIntVal, &callbackTarget),
+            TALOS_RT_PERMISSION_DENIED);
   EXPECT_EQ(readInt(probe.value), 17);
   s_vpi_value attempted{};
   attempted.format = vpiIntVal;
