@@ -1619,15 +1619,17 @@ maxCountOnPaths(Block *from, Block *until, unsigned cap,
 /// when it recomputes exactly the values it already holds. That needs a
 /// looping process with one change-only wait; every read watched, so a wake
 /// that changes no watched value sees the inputs of its previous activation;
-/// no write it reads back; exclusive stored outputs written at most once per
-/// activation; and a first activation before the first wait, so the outputs
-/// are current from time zero.
+/// no write it reads back; exclusive stored outputs; and a first activation
+/// before the first wait, so the outputs are current from time zero. Bits it
+/// may assign twice in one activation are returned in `glitches`; the caller
+/// proves that nothing can observe them.
 bool isIdempotentObserver(
     sim::SimFuncOp function, const analysis::HandleDataflowAnalysis &handles,
     const llvm::DenseMap<
         uint64_t,
         SmallVector<std::pair<Operation *, schedule::ComputeEffectAttr>>>
-        &storageWriters) {
+        &storageWriters,
+    SmallVectorImpl<analysis::HandleFact> &glitches) {
   if (function.isExternal() ||
       function.getEntryKind() == sim::EntryKind::Observer ||
       function.getHomeRegion() != sim::EventRegion::Active)
@@ -1756,10 +1758,12 @@ bool isIdempotentObserver(
   // it is no update event (IEEE 1800-2023 4.3). A second assignment of the
   // same bits in one activation, as in `y = 0; if (c) y = 1;`, passes
   // through another value even when the inputs are unchanged: y goes 1 -> 0
-  // -> 1, and the 0 -> 1 update is a posedge (9.4.2, Table 9-2). Dropping
-  // such an activation also drops events that other processes can see, so
-  // every written bit may be assigned at most once on each activation path.
-  // Writes reach state only through the stores and drives admitted above.
+  // -> 1, and the 0 -> 1 update is a posedge (9.4.2, Table 9-2). Such an
+  // update schedules every process sensitive to y (4.5), so dropping the
+  // activation drops events those processes see. Report every range that may
+  // be assigned twice; the caller admits it only if nothing can observe it.
+  // A write without a precise target is rejected here. Writes reach state
+  // only through the stores and drives admitted above.
   // Count per written range rather than per summary effect, which merges
   // disjoint selects of one variable into a single range.
   analysis::HandleFacts facts = handles.derive(function);
@@ -1807,8 +1811,12 @@ bool isIdempotentObserver(
           std::optional<Value> other = writtenTarget(operation);
           return other && mayOverlap(target, *other);
         });
-    if (!count || *count > 1)
+    if (count && *count <= 1)
+      continue;
+    auto found = facts.find(target);
+    if (found == facts.end() || !found->second.descriptor)
       return false;
+    glitches.push_back(found->second);
   }
   return true;
 }
@@ -2012,6 +2020,124 @@ computeNBATransientObservers(sim::SimDesignOp design, bool guardedVPI) {
     if (cov::has<cov::ToggleObservable>(storage))
       observable.insert(storage.getId());
   });
+  // Who can see an intermediate value of a process's own writes. An update
+  // schedules evaluation events only for processes sensitive to it (IEEE
+  // 1800-2023 4.3, 4.5), and a process may run without suspension (4.7), so
+  // any other process reads the value before or after that activation. The
+  // remaining observers are sensitive processes and toggle coverage
+  // (recorded with no watcher). Value-change callbacks (38.36.1) may exist
+  // under a VPI guard, so nothing is unobservable there. The VCD writer
+  // (21.7) compares state once per time slot and so records no intermediate
+  // value.
+  using WatchKey = std::pair<unsigned, uint64_t>;
+  struct WatchRange {
+    uint64_t low, width;
+    Operation *watcher;
+  };
+  llvm::DenseMap<WatchKey, SmallVector<WatchRange>> watchedRanges;
+  bool everythingObservable =
+      guardedVPI && graph.getVpi() != schedule::ComputeVPIMode::Off;
+  auto watchWhole = [&](schedule::ComputeResourceKind resource,
+                        uint64_t descriptor, Operation *watcher) {
+    watchedRanges[{static_cast<unsigned>(resource), descriptor}].push_back(
+        {0, UINT64_MAX, watcher});
+  };
+  design.walk([&](Operation *operation) {
+    if (auto storage = dyn_cast<sim::SimStorageDeclOp>(operation)) {
+      if (cov::has<cov::ToggleObservable>(storage))
+        watchWhole(schedule::ComputeResourceKind::Storage, storage.getId(),
+                   nullptr);
+    } else if (auto net = dyn_cast<sim::SimNetDeclOp>(operation)) {
+      if (cov::has<cov::ToggleObservable>(net))
+        watchWhole(schedule::ComputeResourceKind::Net, net.getId(), nullptr);
+    }
+  });
+  for (sim::SimFuncOp function : functions)
+    if (ArrayAttr summary = function.getEffectSummaryAttr())
+      for (auto effect : summary.getAsRange<schedule::ComputeEffectAttr>()) {
+        if (effect.getEffect() != schedule::ComputeEffectKind::Watch)
+          continue;
+        // A named event carries no value (15.5); only an unresolved watch
+        // can reach any variable.
+        if (effect.getResource() == schedule::ComputeResourceKind::Event)
+          continue;
+        if (effect.getTarget() != schedule::ComputeTargetKind::Descriptor ||
+            (effect.getResource() != schedule::ComputeResourceKind::Storage &&
+             effect.getResource() != schedule::ComputeResourceKind::Net)) {
+          everythingObservable = true;
+          continue;
+        }
+        if (effect.getDynamic() || !effect.getWidth())
+          watchWhole(effect.getResource(), effect.getDescriptor(), function);
+        else
+          watchedRanges[{static_cast<unsigned>(effect.getResource()),
+                         effect.getDescriptor()}]
+              .push_back({effect.getLow(), effect.getWidth(), function});
+      }
+  // A glitch is invisible when every process sensitive to it is itself an
+  // admitted idempotent observer: run after the glitching activation with
+  // its unchanged final inputs (an order 4.5 and 4.7 permit), it assigns
+  // only the values it holds, which is no update event (4.3), or glitches
+  // that are invisible in turn. Admit observers as a least fixpoint, so every
+  // admission rests on a finite chain. Observers that glitch each other are
+  // never admitted.
+  struct Observer {
+    Operation *function;
+    SmallVector<analysis::HandleFact> glitches;
+  };
+  SmallVector<Observer> observers;
+  if (writersComplete)
+    for (sim::SimFuncOp function : functions) {
+      ArrayAttr summary = function.getEffectSummaryAttr();
+      if (!summary || llvm::none_of(summary.getAsRange<
+                                        schedule::ComputeEffectAttr>(),
+                                    [](schedule::ComputeEffectAttr effect) {
+                                      return effect.getEffect() ==
+                                             schedule::ComputeEffectKind::Watch;
+                                    }))
+        continue;
+      Observer observer{function, {}};
+      if (isIdempotentObserver(function, provenanceAnalysis, storageWriters,
+                               observer.glitches))
+        observers.push_back(std::move(observer));
+    }
+  llvm::DenseSet<Operation *> idempotent;
+  auto invisible = [&](const analysis::HandleFact &write) {
+    // A drive updates a resolved net and every net connected to it (23.3.3.7,
+    // 28.8), which this index does not follow; keep repeated drives visible.
+    if (everythingObservable ||
+        write.resource != schedule::ComputeResourceKind::Storage)
+      return false;
+    auto found = watchedRanges.find(
+        {static_cast<unsigned>(write.resource), *write.descriptor});
+    if (found == watchedRanges.end())
+      return true;
+    bool whole = write.dynamic || !write.width;
+    return llvm::all_of(found->second, [&](const WatchRange &range) {
+      bool overlap = whole || range.width == UINT64_MAX ||
+                     (range.low < write.low + write.width &&
+                      write.low < range.low + range.width);
+      return !overlap ||
+             (range.watcher && idempotent.contains(range.watcher));
+    });
+  };
+  SmallVector<const Observer *> pending;
+  for (const Observer &observer : observers) {
+    if (observer.glitches.empty())
+      idempotent.insert(observer.function);
+    else
+      pending.push_back(&observer);
+  }
+  for (bool changed = true; changed;) {
+    changed = false;
+    llvm::erase_if(pending, [&](const Observer *observer) {
+      if (!llvm::all_of(observer->glitches, invisible))
+        return false;
+      idempotent.insert(observer->function);
+      changed = true;
+      return true;
+    });
+  }
   for (sim::SimFuncOp function : functions) {
     ArrayAttr summary = function.getEffectSummaryAttr();
     if (!summary)
@@ -2020,9 +2146,7 @@ computeNBATransientObservers(sim::SimDesignOp design, bool guardedVPI) {
     for (auto effect : summary.getAsRange<schedule::ComputeEffectAttr>())
       if (effect.getEffect() == schedule::ComputeEffectKind::Watch)
         watches.push_back(effect);
-    if (watches.empty() ||
-        (writersComplete &&
-         isIdempotentObserver(function, provenanceAnalysis, storageWriters)))
+    if (watches.empty() || idempotent.contains(function))
       continue;
     // A process that waits only for a change of whole references wakes when
     // any update changes a watched bit. A merged commit reproduces exactly

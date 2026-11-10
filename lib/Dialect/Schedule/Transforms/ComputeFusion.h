@@ -204,14 +204,16 @@ bool isPrimitiveComputeBodyFusionEligible(
     const analysis::HandleDataflowAnalysis &provenance);
 
 /// Storage descriptors classified by who can observe their intermediate
-/// nonblocking updates in one NBA region. IEEE 1800-2017 4.6(b) requires NBAs
+/// nonblocking updates in one NBA region. IEEE 1800-2023 4.6(b) requires NBAs
 /// to be performed in execution order, and 9.4.2 detects an event on each
 /// update. Talos performs every scheduled NBA of a region before the
 /// evaluations they trigger, an order 4.5 permits (the Active region is
 /// processed in any order) and 10.4.2 requires for the blocking assignments
-/// they create. Under that order a root nothing watches (except a process
-/// whose extra activation provably rewrites what it already holds) may merge
-/// freely.
+/// they create. Under that order a root may merge freely when its only
+/// watchers are processes whose extra activation is unobservable: woken with
+/// unchanged inputs, each assigns only values it already holds (no update
+/// event, 4.3), or assigns some bits twice where every process sensitive to
+/// those bits is such a process in turn.
 struct NBATransientObservers {
   /// Seen by an edge, level or expression wait, VPI or toggle coverage.
   llvm::DenseSet<uint64_t> observable;
