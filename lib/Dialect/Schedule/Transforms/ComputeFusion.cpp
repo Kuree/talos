@@ -29,6 +29,8 @@
 
 #include <functional>
 #include <memory>
+#include <set>
+#include <tuple>
 #include <vector>
 
 using namespace mlir;
@@ -1609,14 +1611,19 @@ bool covers(schedule::ComputeEffectAttr watch,
          read.getLow() + read.getWidth() <= watch.getLow() + watch.getWidth();
 }
 
+std::optional<unsigned>
+maxCountOnPaths(Block *from, Block *until, unsigned cap,
+                llvm::function_ref<bool(Operation *)> counted);
+
 /// An extra activation of `function` after the NBA region is unobservable
 /// when it recomputes exactly the values it already holds. That needs a
 /// looping process with one change-only wait; every read watched, so a wake
 /// that changes no watched value sees the inputs of its previous activation;
-/// no write it reads back; exclusive stored outputs; and a first activation
-/// before the first wait, so the outputs are current from time zero.
+/// no write it reads back; exclusive stored outputs written at most once per
+/// activation; and a first activation before the first wait, so the outputs
+/// are current from time zero.
 bool isIdempotentObserver(
-    sim::SimFuncOp function,
+    sim::SimFuncOp function, const analysis::HandleDataflowAnalysis &handles,
     const llvm::DenseMap<
         uint64_t,
         SmallVector<std::pair<Operation *, schedule::ComputeEffectAttr>>>
@@ -1744,6 +1751,64 @@ bool isIdempotentObserver(
       for (auto [owner, effect] : others->second)
         if (owner != function.getOperation() && overlaps(write, effect))
           return false;
+  }
+  // Assigning the value an object already holds is no change in state, so
+  // it is no update event (IEEE 1800-2023 4.3). A second assignment of the
+  // same bits in one activation, as in `y = 0; if (c) y = 1;`, passes
+  // through another value even when the inputs are unchanged: y goes 1 -> 0
+  // -> 1, and the 0 -> 1 update is a posedge (9.4.2, Table 9-2). Dropping
+  // such an activation also drops events that other processes can see, so
+  // every written bit may be assigned at most once on each activation path.
+  // Writes reach state only through the stores and drives admitted above.
+  // Count per written range rather than per summary effect, which merges
+  // disjoint selects of one variable into a single range.
+  analysis::HandleFacts facts = handles.derive(function);
+  auto writtenTarget = [&](Operation *operation) -> std::optional<Value> {
+    if (auto store = dyn_cast<sim::SimRefStoreOp>(operation))
+      return store.getReference();
+    if (auto drive = dyn_cast<sim::SimDriverDriveOp>(operation))
+      return drive.getDriver();
+    if (auto drive = dyn_cast<sim::SimDriverDriveChangedOp>(operation))
+      return drive.getDriver();
+    return std::nullopt;
+  };
+  auto mayOverlap = [&](Value lhs, Value rhs) {
+    auto left = facts.find(lhs), right = facts.find(rhs);
+    if (left == facts.end() || right == facts.end() ||
+        !left->second.descriptor || !right->second.descriptor)
+      return true;
+    const analysis::HandleFact &a = left->second, &b = right->second;
+    if (a.resource != b.resource || *a.descriptor != *b.descriptor)
+      return false;
+    if (a.dynamic || b.dynamic || !a.width || !b.width)
+      return true;
+    return a.low < b.low + b.width && b.low < a.low + a.width;
+  };
+  // Count once per distinct target range; many stores share one.
+  SmallVector<Value> targets;
+  std::set<std::tuple<bool, int, uint64_t, uint64_t, uint64_t, bool>> seen;
+  function.walk([&](Operation *operation) {
+    std::optional<Value> target = writtenTarget(operation);
+    if (!target)
+      return;
+    auto found = facts.find(*target);
+    bool known = found != facts.end() && found->second.descriptor;
+    const analysis::HandleFact fact =
+        known ? found->second : analysis::HandleFact{};
+    if (seen.insert({known, static_cast<int>(fact.resource),
+                     known ? *fact.descriptor : 0, fact.low, fact.width,
+                     fact.dynamic})
+            .second)
+      targets.push_back(*target);
+  });
+  for (Value target : targets) {
+    std::optional<unsigned> count = maxCountOnPaths(
+        activation, wait, /*cap=*/1, [&](Operation *operation) {
+          std::optional<Value> other = writtenTarget(operation);
+          return other && mayOverlap(target, *other);
+        });
+    if (!count || *count > 1)
+      return false;
   }
   return true;
 }
@@ -1956,7 +2021,8 @@ computeNBATransientObservers(sim::SimDesignOp design, bool guardedVPI) {
       if (effect.getEffect() == schedule::ComputeEffectKind::Watch)
         watches.push_back(effect);
     if (watches.empty() ||
-        (writersComplete && isIdempotentObserver(function, storageWriters)))
+        (writersComplete &&
+         isIdempotentObserver(function, provenanceAnalysis, storageWriters)))
       continue;
     // A process that waits only for a change of whole references wakes when
     // any update changes a watched bit. A merged commit reproduces exactly
