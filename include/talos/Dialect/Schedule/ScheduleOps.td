@@ -262,7 +262,10 @@ def NativeReadyMergeOp
     DirtyReadySetLayout leaf at base and setting that leaf's dirty bits. Bits
     above capacity in the last source word are ignored. Source may overlap
     base; earlier leaf/dirty writes are visible to later source reads. Both
-    operands address storage aligned to at least eight bytes.
+    operands address storage aligned to at least eight bytes. The lowering
+    may first test a group of consecutive words for emptiness and skip an
+    empty group: a skipped group adds nothing, so the result equals the
+    word-by-word merge.
 
     This is an ordered scheduler effect, with no actor, callback, selection or
     checkpoint inside it. Pending ready updates must be materialized before

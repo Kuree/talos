@@ -12,9 +12,13 @@ MERGE(63)
 MERGE(64)
 MERGE(65)
 MERGE(128)
+MERGE(1023)
+MERGE(1024)
+MERGE(1216)
 MERGE(2048)
 MERGE(2049)
 MERGE(4096)
+MERGE(7553)
 MERGE(262145)
 #undef MERGE
 uint64_t ready_merge_observed[3];
@@ -37,8 +41,9 @@ struct Test {
 int main() {
   const Test tests[] = {
 #define MERGE(N) {N, merge_##N},
-      MERGE(1) MERGE(63) MERGE(64) MERGE(65) MERGE(128) MERGE(2048) MERGE(2049)
-          MERGE(4096) MERGE(262145)
+      MERGE(1) MERGE(63) MERGE(64) MERGE(65) MERGE(128) MERGE(1023) MERGE(1024)
+          MERGE(1216) MERGE(2048) MERGE(2049) MERGE(4096) MERGE(7553)
+              MERGE(262145)
 #undef MERGE
   };
   for (auto test : tests) {

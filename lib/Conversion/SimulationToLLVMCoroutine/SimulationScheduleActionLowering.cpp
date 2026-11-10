@@ -54,53 +54,149 @@ void materializeReadyMerge(schedule::NativeReadyMergeOp merge) {
     done->getParent()->getBlocks().insert(done->getIterator(), result);
     return result;
   };
+  // A sparse source mostly holds empty words. When the unmasked words span at
+  // least two groups, each group of `groupWords` words is tested at once, and
+  // the words after the last whole group together; only a nonempty group is
+  // merged word by word. A group is tested after every lower word is merged.
+  // An empty one causes no write, and a nonempty one rereads each word just
+  // before adding it, so the ascending read/add order above still holds when
+  // source aliases the ready set. A group test is one short vector reduction
+  // and a nonempty group rescans at most `groupWords` words; no cache size is
+  // assumed. The last word's bits above capacity are masked once, after every
+  // lower word.
+  constexpr uint64_t groupWords = 8;
+  uint64_t count = layout.counts[0];
+  bool masked = layout.lastWordMask() != UINT64_MAX;
+  uint64_t span = masked ? count - 1 : count;
+  bool grouped = span >= 2 * groupWords;
+  uint64_t wholeEnd = grouped ? span / groupWords * groupWords : 0;
+
+  // Add one nonempty source word to its leaf and dirty bits.
+  auto add = [&](Value index, Value selected) {
+    Value leaf = address(merge.getBase(), index);
+    LLVM::StoreOp::create(
+        builder, loc, arith::OrIOp::create(builder, loc, load(leaf), selected),
+        leaf, 8);
+    // Every add ORs its dirty bits at each level, whatever the old leaf held:
+    // only the coordinator's sweep clears a dirty bit, after it observes the
+    // child empty (runtime::DirtyReadySetLayout).
+    Value child = index;
+    for (unsigned level = 1; level < layout.levels; ++level) {
+      Value parent = arith::ShRUIOp::create(builder, loc, child, constant(6));
+      Value slotIndex = arith::AddIOp::create(builder, loc, parent,
+                                              constant(layout.offsets[level]));
+      Value slot = address(merge.getBase(), slotIndex);
+      Value bit = arith::ShLIOp::create(
+          builder, loc, constant(1),
+          arith::AndIOp::create(builder, loc, child, constant(63)));
+      LLVM::StoreOp::create(builder, loc,
+                            arith::OrIOp::create(builder, loc, load(slot), bit),
+                            slot, 8);
+      child = parent;
+    }
+  };
+  // Whether the `width` words of source from `start` are all zero.
+  auto emptyWords = [&](Value start, uint64_t width) -> Value {
+    auto vector = VectorType::get({int64_t(width)}, i64);
+    Value words = LLVM::LoadOp::create(builder, loc, vector,
+                                       address(merge.getSource(), start), 8);
+    return empty(LLVM::vector_reduce_or::create(builder, loc, i64, words));
+  };
+
+  // The last word, masked, after every lower word.
+  Block *lastWordBlock = done;
+  if (masked) {
+    lastWordBlock = block();
+    Block *addLast = block();
+    builder.setInsertionPointToStart(lastWordBlock);
+    Value index = constant(count - 1);
+    Value selected = arith::AndIOp::create(
+        builder, loc, load(address(merge.getSource(), index)),
+        constant(layout.lastWordMask()));
+    cf::CondBranchOp::create(builder, loc, empty(selected), done, addLast);
+    builder.setInsertionPointToStart(addLast);
+    add(index, selected);
+    cf::BranchOp::create(builder, loc, done);
+  }
+
+  // A capacity within the first word leaves no unmasked word.
+  builder.setInsertionPointToEnd(entry);
+  if (!span) {
+    cf::BranchOp::create(builder, loc, lastWordBlock);
+    merge.erase();
+    return;
+  }
+
+  // Groups [0, wholeEnd), with the next group's start as argument. Without
+  // groups a word run continues with the last word.
+  Block *nextGroup = nullptr;
+  if (grouped) {
+    nextGroup = block();
+    nextGroup->addArgument(i64, loc);
+  }
+
+  // Words [word, end) one at a time.
   Block *head = block(), *update = block(), *advance = block();
   head->addArgument(i64, loc);
-  builder.setInsertionPointToEnd(entry);
-  cf::BranchOp::create(builder, loc, head, ValueRange{constant(0)});
-
-  builder.setInsertionPointToStart(head);
+  head->addArgument(i64, loc);
   Value word = head->getArgument(0);
+  Value end = head->getArgument(1);
+  builder.setInsertionPointToStart(head);
   Value selected = load(address(merge.getSource(), word));
-  if (layout.lastWordMask() != UINT64_MAX) {
-    Value last = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::eq,
-                                       word, constant(layout.counts[0] - 1));
-    Value bounded = arith::AndIOp::create(builder, loc, selected,
-                                          constant(layout.lastWordMask()));
-    selected = arith::SelectOp::create(builder, loc, last, bounded, selected);
-  }
   cf::CondBranchOp::create(builder, loc, empty(selected), advance, update);
-
   builder.setInsertionPointToStart(update);
-  Value leaf = address(merge.getBase(), word);
-  Value previous = load(leaf);
-  LLVM::StoreOp::create(builder, loc,
-                        arith::OrIOp::create(builder, loc, previous, selected),
-                        leaf, 8);
-  // Every add ORs its dirty bits at each level, whatever the old leaf held:
-  // only the coordinator's sweep clears a dirty bit, after it observes the
-  // child empty (runtime::DirtyReadySetLayout).
-  Value child = word;
-  for (unsigned level = 1; level < layout.levels; ++level) {
-    Value parent = arith::ShRUIOp::create(builder, loc, child, constant(6));
-    Value index = arith::AddIOp::create(builder, loc, parent,
-                                        constant(layout.offsets[level]));
-    Value slot = address(merge.getBase(), index);
-    Value bit = arith::ShLIOp::create(
-        builder, loc, constant(1),
-        arith::AndIOp::create(builder, loc, child, constant(63)));
-    LLVM::StoreOp::create(builder, loc,
-                          arith::OrIOp::create(builder, loc, load(slot), bit),
-                          slot, 8);
-    child = parent;
-  }
+  add(word, selected);
   cf::BranchOp::create(builder, loc, advance);
   builder.setInsertionPointToStart(advance);
   Value following = arith::AddIOp::create(builder, loc, word, constant(1));
   Value more = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ult,
-                                     following, constant(layout.counts[0]));
-  cf::CondBranchOp::create(builder, loc, more, head, ValueRange{following},
-                           done, ValueRange{});
+                                     following, end);
+  if (grouped)
+    cf::CondBranchOp::create(builder, loc, more, head,
+                             ValueRange{following, end}, nextGroup,
+                             ValueRange{end});
+  else
+    cf::CondBranchOp::create(builder, loc, more, head,
+                             ValueRange{following, end}, lastWordBlock,
+                             ValueRange{});
+
+  builder.setInsertionPointToEnd(entry);
+  if (!grouped) {
+    cf::BranchOp::create(builder, loc, head,
+                         ValueRange{constant(0), constant(span)});
+    merge.erase();
+    return;
+  }
+  cf::BranchOp::create(builder, loc, nextGroup, ValueRange{constant(0)});
+  // After the whole groups, the remaining words, if any, else the last word.
+  Block *scan = block();
+  Block *rest = wholeEnd == span ? lastWordBlock : block();
+  builder.setInsertionPointToStart(nextGroup);
+  Value start = nextGroup->getArgument(0);
+  Value groupsDone = arith::CmpIOp::create(
+      builder, loc, arith::CmpIPredicate::uge, start, constant(wholeEnd));
+  cf::CondBranchOp::create(builder, loc, groupsDone, rest, scan);
+
+  builder.setInsertionPointToStart(scan);
+  Value next = arith::AddIOp::create(builder, loc, start, constant(groupWords));
+  cf::CondBranchOp::create(builder, loc, emptyWords(start, groupWords),
+                           nextGroup, ValueRange{next}, head,
+                           ValueRange{start, next});
+
+  // The words [wholeEnd, span) after the last whole group, tested together
+  // once; a word run ending at span has merged them.
+  if (rest != lastWordBlock) {
+    Block *tail = block();
+    builder.setInsertionPointToStart(rest);
+    Value tailDone = arith::CmpIOp::create(
+        builder, loc, arith::CmpIPredicate::uge, start, constant(span));
+    cf::CondBranchOp::create(builder, loc, tailDone, lastWordBlock, tail);
+    builder.setInsertionPointToStart(tail);
+    cf::CondBranchOp::create(builder, loc,
+                             emptyWords(constant(wholeEnd), span - wholeEnd),
+                             lastWordBlock, ValueRange{}, head,
+                             ValueRange{constant(wholeEnd), constant(span)});
+  }
   merge.erase();
 }
 
