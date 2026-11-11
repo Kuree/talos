@@ -3718,7 +3718,7 @@ struct SimplifyTruthCondition final : OpRewritePattern<SimLogicIsTrueOp> {
     } else if (auto binary = dyn_cast<SimLogicBinaryOp>(producer);
                binary && soleUse) {
       // A bit of a | b is a known one when either operand bit is (Table
-      // 11-13); a one-bit a & b is a known one only when both are.
+      // 11-12); a one-bit a & b is a known one only when both are.
       bool single = binary.getType().getWidth() == 1;
       if (binary.getKind() == BinaryKind::Or)
         replacement = arith::OrIOp::create(
@@ -3958,7 +3958,7 @@ struct CountBitsWithPopulationCount final
 
 /// to_bits keeps exactly the known one bits (6.24.1). A bit of a & b is a
 /// known one only when both operand bits are, and a bit of a | b when either
-/// is (Tables 11-12, 11-13). With one known operand the conversion moves to
+/// is (Tables 11-11, 11-12). With one known operand the conversion moves to
 /// the other one and the operation becomes integer arith without adding
 /// operations; a one-use producer keeps four-state work from being repeated.
 struct ConvertLogicToBitsThroughProducer final
@@ -4179,7 +4179,7 @@ struct MergeConcatConstants final : OpRewritePattern<SimLogicConcatOp> {
 };
 
 /// On one-bit operands, logical and bitwise connectives agree: each maps Z
-/// to X and applies the Kleene table (Tables 11-12, 11-13; 11.4.7).
+/// to X and applies the Kleene table (Tables 11-11, 11-12; 11.4.7).
 struct SingleBitLogicalToBitwise final : OpRewritePattern<SimLogicLogicalOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -4654,7 +4654,7 @@ struct ExtractOfResize final : OpRewritePattern<SimLogicExtractOp> {
 };
 
 /// Bitwise operators and the conditional operator act on each bit position
-/// independently (Tables 11-12 through 11-15, Table 11-20), so a slice of
+/// independently (Tables 11-11 through 11-15, Table 11-20), so a slice of
 /// their result is the operator applied to slices. Arithmetic is excluded:
 /// an X anywhere in an operand makes every result bit X (11.4.3).
 struct NarrowBitwiseExtract final : OpRewritePattern<SimLogicExtractOp> {

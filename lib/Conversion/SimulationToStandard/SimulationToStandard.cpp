@@ -1117,19 +1117,17 @@ public:
             rewriter.createOrFold<arith::OrIOp>(loc, knownZero, knownOne));
         resultValue = knownOne;
       } else if (op.getKind() == sim::BinaryKind::Or) {
+        // IEEE 1800-2023 11.4.8, Table 11-12: a known 1 in either operand
+        // gives 1; otherwise an X or Z in either operand gives X. The result
+        // value plane is the known-one mask, so unknown bits read as X.
         Value knownOne = arith::OrIOp::create(
             rewriter, loc,
             rewriter.createOrFold<arith::AndIOp>(loc, lhs.value, lhsKnown),
             rewriter.createOrFold<arith::AndIOp>(loc, rhs.value, rhsKnown));
-        Value knownZero = arith::AndIOp::create(
+        resultUnknown = arith::AndIOp::create(
             rewriter, loc,
-            rewriter.createOrFold<arith::AndIOp>(
-                loc, bitNot(rewriter, loc, lhs.value), lhsKnown),
-            rewriter.createOrFold<arith::AndIOp>(
-                loc, bitNot(rewriter, loc, rhs.value), rhsKnown));
-        resultUnknown = bitNot(
-            rewriter, loc,
-            rewriter.createOrFold<arith::OrIOp>(loc, knownZero, knownOne));
+            rewriter.createOrFold<arith::OrIOp>(loc, lhs.unknown, rhs.unknown),
+            bitNot(rewriter, loc, knownOne));
         resultValue = knownOne;
       } else {
         resultUnknown =

@@ -249,7 +249,7 @@ unsigned getUnknownPlaneWork(Operation *op) {
     switch (binary.getKind()) {
     case sim::BinaryKind::And:
     case sim::BinaryKind::Or:
-      return 9; // known-zero/known-one dominance on both operands
+      return 9; // known-bit dominance on both operands (about 12 ops for AND, 8 for OR)
     case sim::BinaryKind::Xor:
     case sim::BinaryKind::Xnor:
       return 3;
