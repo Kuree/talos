@@ -654,6 +654,31 @@ struct NativeProofPublicationInputs {
   bool valid = true;
 };
 
+/// The constant byte offset of an unknown-plane address built from byte GEPs
+/// with constant indices, kept small enough to scale to bits.
+std::optional<uint64_t> constantPlaneBytes(Value address) {
+  uint64_t bytes = 0;
+  while (auto gep = address.getDefiningOp<LLVM::GEPOp>()) {
+    APInt constant;
+    bool known =
+        gep.getElemType().isInteger(8) && gep.getIndices().size() == 1;
+    if (known) {
+      auto index = gep.getIndices()[0];
+      if (auto integer = dyn_cast<IntegerAttr>(index))
+        constant = integer.getValue();
+      else
+        known = matchPattern(cast<Value>(index), m_ConstantInt(&constant));
+    }
+    // Bit offsets must stay representable after scaling by eight.
+    if (!known || constant.isNegative() || constant.getActiveBits() > 60 ||
+        constant.getZExtValue() > (UINT64_MAX >> 4) - bytes)
+      return std::nullopt;
+    bytes += constant.getZExtValue();
+    address = gep.getBase();
+  }
+  return bytes;
+}
+
 struct NativeFunctionProofPublications {
   NativeFunctionProofPublications(Operation *operation,
                                   AnalysisManager &manager) {
@@ -723,13 +748,14 @@ struct NativeFunctionProofPublications {
       uint64_t width = ((uint64_t{type.getWidth()} + 7) / 8) * 8;
       return disjointRange(begin, width);
     };
-    for (auto store : allStores) {
-      Value address = store.getAddr();
+    auto inUnknownPlane = [](Value address) {
       while (auto gep = address.getDefiningOp<LLVM::GEPOp>())
         address = gep.getBase();
       auto global = address.getDefiningOp<LLVM::AddressOfOp>();
-      if (!global || global.getGlobalName() != "__talos_state_unknown" ||
-          disjointStore(store))
+      return global && global.getGlobalName() == "__talos_state_unknown";
+    };
+    for (auto store : allStores) {
+      if (!inUnknownPlane(store.getAddr()) || disjointStore(store))
         continue;
       if (!isa<IntegerType>(store.getValue().getType())) {
         store.emitError(
@@ -738,9 +764,37 @@ struct NativeFunctionProofPublications {
       }
       stores.push_back(store);
     }
+    // Bulk writes (wide direct copies and fills) change canonical X/Z bits
+    // too. Their destination range is the constant byte offset plus the
+    // length when both are constant; otherwise it is not disjoint.
+    function.walk([&](Operation *operation) {
+      Value destination, length;
+      if (auto copy = dyn_cast<LLVM::MemcpyOp>(operation)) {
+        destination = copy.getDst();
+        length = copy.getLen();
+      } else if (auto move = dyn_cast<LLVM::MemmoveOp>(operation)) {
+        destination = move.getDst();
+        length = move.getLen();
+      } else if (auto set = dyn_cast<LLVM::MemsetOp>(operation)) {
+        destination = set.getDst();
+        length = set.getLen();
+      } else {
+        return;
+      }
+      if (!inUnknownPlane(destination))
+        return;
+      APInt bytes;
+      std::optional<uint64_t> offset = constantPlaneBytes(destination);
+      if (offset && matchPattern(length, m_ConstantInt(&bytes)) &&
+          bytes.getActiveBits() <= 60 &&
+          (bytes.isZero() || disjointRange(*offset * 8, bytes.getZExtValue() * 8)))
+        return;
+      bulkWrites.push_back(operation);
+    });
   }
   SmallVector<LLVM::StoreOp> allStores;
   SmallVector<LLVM::StoreOp> stores;
+  SmallVector<Operation *> bulkWrites;
   bool valid = true;
 };
 
@@ -760,7 +814,7 @@ public:
     const auto &work = getAnalysis<NativeFunctionProofPublications>();
     if (!work.valid)
       return signalPassFailure();
-    bool changed = !work.stores.empty();
+    bool changed = !work.stores.empty() || !work.bulkWrites.empty();
     for (auto store : work.allStores) {
       changed |= schedule::has<schedule::Field::EvalUnknownWriteRange>(store);
       schedule::remove<schedule::Field::EvalUnknownWriteRange>(store);
@@ -781,6 +835,67 @@ public:
     OpBuilder builder(context);
     Type pointer = LLVM::LLVMPointerType::get(context);
     Type i64 = builder.getI64Type();
+    auto constant = [&](Location location, uint64_t value) -> Value {
+      return llvmConstant(builder, location, i64, value);
+    };
+    // The bit offset of an unknown-plane address, for dynamic publications.
+    auto planeBitOffset = [&](Location location, Value address) -> Value {
+      Value base = LLVM::AddressOfOp::create(builder, location, pointer,
+                                             "__talos_state_unknown");
+      Value bytes = LLVM::SubOp::create(
+          builder, location,
+          LLVM::PtrToIntOp::create(builder, location, i64, address),
+          LLVM::PtrToIntOp::create(builder, location, i64, base));
+      return LLVM::ShlOp::create(builder, location, bytes,
+                                 constant(location, 3));
+    };
+    // Publishes one chunk of at most 64 changed bits at the insertion point,
+    // in a cold block entered only when some bit changed, and continues after
+    // it. A constant canonical offset publishes through a window whose
+    // dependent proofs are resolved at compile time.
+    auto publish = [&](Location location, std::optional<uint64_t> constantBits,
+                       Value bitOffset, Value chunk,
+                       llvm::function_ref<Value()> nextChunk) {
+      // Keep the empty-mask check in this body. An alwaysinline wrapper can
+      // land in a different native partition, leaving an ordinary call on
+      // every unchanged store despite its attribute.
+      Value hasChange =
+          LLVM::ICmpOp::create(builder, location, LLVM::ICmpPredicate::ne,
+                               chunk, constant(location, 0));
+      Block *head = builder.getInsertionBlock();
+      Block *continuation = head->splitBlock(builder.getInsertionPoint());
+      Block *changed = new Block;
+      head->getParent()->getBlocks().insert(continuation->getIterator(),
+                                            changed);
+      builder.setInsertionPointToEnd(head);
+      LLVM::CondBrOp::create(builder, location, hasChange, changed,
+                             continuation);
+      builder.setInsertionPointToStart(changed);
+      Value next = nextChunk();
+      if (constantBits)
+        LLVM::CallOp::create(
+            builder, location, TypeRange{},
+            SymbolRefAttr::get(context, "__talos_eval_promotion_publish_at_v1"),
+            ValueRange{constant(location, *constantBits), chunk, next})
+            .setCConv(LLVM::cconv::CConv::PreserveMost);
+      else
+        LLVM::CallOp::create(
+            builder, location, TypeRange{},
+            SymbolRefAttr::get(context,
+                               "__talos_eval_promotion_publish_unknown_v1"),
+            ValueRange{bitOffset, chunk, next})
+            .setCConv(LLVM::cconv::CConv::PreserveMost);
+      LLVM::BrOp::create(builder, location, ValueRange{}, continuation);
+      builder.setInsertionPointToStart(continuation);
+    };
+    auto toChunk = [&](Location location, Value value) -> Value {
+      unsigned width = cast<IntegerType>(value.getType()).getWidth();
+      if (width > 64)
+        return LLVM::TruncOp::create(builder, location, i64, value);
+      if (width < 64)
+        return LLVM::ZExtOp::create(builder, location, i64, value);
+      return value;
+    };
     for (auto store : work.stores) {
       Location location = store.getLoc();
       auto type = cast<IntegerType>(store.getValue().getType());
@@ -793,40 +908,9 @@ public:
                       schedule::Field::EvalStateAccessBytes, footprint);
       Value delta =
           LLVM::XOrOp::create(builder, location, old, store.getValue());
-      // A store at a constant canonical offset publishes through a window
-      // whose dependent proofs are resolved at compile time.
-      std::optional<uint64_t> constantBytes = uint64_t{0};
-      for (Value address = store.getAddr();;) {
-        auto gep = address.getDefiningOp<LLVM::GEPOp>();
-        if (!gep)
-          break;
-        APInt constant;
-        bool known = gep.getElemType().isInteger(8) &&
-                     gep.getIndices().size() == 1;
-        if (known) {
-          auto index = gep.getIndices()[0];
-          if (auto integer = dyn_cast<IntegerAttr>(index))
-            constant = integer.getValue();
-          else
-            known = matchPattern(cast<Value>(index), m_ConstantInt(&constant));
-        }
-        // Bit offsets must stay representable after scaling by eight.
-        if (!known || constant.isNegative() || constant.getActiveBits() > 60 ||
-            constant.getZExtValue() > (UINT64_MAX >> 4) - *constantBytes) {
-          constantBytes.reset();
-          break;
-        }
-        *constantBytes += constant.getZExtValue();
-        address = gep.getBase();
-      }
-      Value base = LLVM::AddressOfOp::create(builder, location, pointer,
-                                             "__talos_state_unknown");
-      Value bytes = LLVM::SubOp::create(
-          builder, location,
-          LLVM::PtrToIntOp::create(builder, location, i64, store.getAddr()),
-          LLVM::PtrToIntOp::create(builder, location, i64, base));
-      Value bitOffset = LLVM::ShlOp::create(
-          builder, location, bytes, llvmConstant(builder, location, i64, 3));
+      std::optional<uint64_t> constantBytes =
+          constantPlaneBytes(store.getAddr());
+      Value bitOffset = planeBitOffset(location, store.getAddr());
       builder.setInsertionPointAfter(store);
       for (uint64_t bit = 0; bit < type.getWidth(); bit += 64) {
         Value chunk = delta;
@@ -834,58 +918,149 @@ public:
           chunk =
               LLVM::LShrOp::create(builder, location, chunk,
                                    llvmConstant(builder, location, type, bit));
-        if (type.getWidth() > 64)
-          chunk = LLVM::TruncOp::create(builder, location, i64, chunk);
-        else if (type.getWidth() < 64)
-          chunk = LLVM::ZExtOp::create(builder, location, i64, chunk);
-        Value offset =
-            bit ? LLVM::AddOp::create(builder, location, bitOffset,
-                                      llvmConstant(builder, location, i64, bit))
-                      .getResult()
-                : bitOffset;
-        // Keep the empty-mask check in this body. An alwaysinline wrapper can
-        // land in a different native partition, leaving an ordinary call on
-        // every unchanged store despite its attribute.
-        Value hasChange = LLVM::ICmpOp::create(
-            builder, location, LLVM::ICmpPredicate::ne, chunk,
-            llvmConstant(builder, location, i64, 0));
-        Block *head = builder.getInsertionBlock();
-        Block *continuation = head->splitBlock(builder.getInsertionPoint());
-        Block *changed = new Block;
-        head->getParent()->getBlocks().insert(continuation->getIterator(),
-                                              changed);
-        builder.setInsertionPointToEnd(head);
-        LLVM::CondBrOp::create(builder, location, hasChange, changed,
-                               continuation);
-        builder.setInsertionPointToStart(changed);
-        Value nextChunk = store.getValue();
-        if (bit)
-          nextChunk =
-              LLVM::LShrOp::create(builder, location, nextChunk,
-                                   llvmConstant(builder, location, type, bit));
-        if (type.getWidth() > 64)
-          nextChunk = LLVM::TruncOp::create(builder, location, i64, nextChunk);
-        else if (type.getWidth() < 64)
-          nextChunk = LLVM::ZExtOp::create(builder, location, i64, nextChunk);
-        if (constantBytes)
-          LLVM::CallOp::create(
-              builder, location, TypeRange{},
-              SymbolRefAttr::get(context,
-                                 "__talos_eval_promotion_publish_at_v1"),
-              ValueRange{llvmConstant(builder, location, i64,
-                                      *constantBytes * 8 + bit),
-                         chunk, nextChunk})
-              .setCConv(LLVM::cconv::CConv::PreserveMost);
-        else
-          LLVM::CallOp::create(
-              builder, location, TypeRange{},
-              SymbolRefAttr::get(context,
-                                 "__talos_eval_promotion_publish_unknown_v1"),
-              ValueRange{offset, chunk, nextChunk})
-              .setCConv(LLVM::cconv::CConv::PreserveMost);
-        LLVM::BrOp::create(builder, location, ValueRange{}, continuation);
-        builder.setInsertionPointToStart(continuation);
+        chunk = toChunk(location, chunk);
+        Value offset = bit ? LLVM::AddOp::create(builder, location, bitOffset,
+                                                 constant(location, bit))
+                                 .getResult()
+                           : bitOffset;
+        publish(location,
+                constantBytes ? std::optional<uint64_t>(*constantBytes * 8 + bit)
+                              : std::nullopt,
+                offset, chunk, [&] {
+                  Value next = store.getValue();
+                  if (bit)
+                    next = LLVM::LShrOp::create(
+                        builder, location, next,
+                        llvmConstant(builder, location, type, bit));
+                  return toChunk(location, next);
+                });
       }
+    }
+    // A bulk write (a direct wide copy or fill) changes canonical X/Z bits
+    // like a store does. Its new destination bytes are the source bytes, or
+    // the fill byte, as they are before the write: LLVM memcpy operands do not
+    // overlap and memmove copies as if through a temporary. So each chunk's
+    // exact delta is computed, and published, just before the write; nothing
+    // runs between them (IEEE 1800-2023 6.3.1).
+    for (Operation *write : work.bulkWrites) {
+      Location location = write->getLoc();
+      Value destination, source, fill, length;
+      if (auto copy = dyn_cast<LLVM::MemcpyOp>(write)) {
+        destination = copy.getDst();
+        source = copy.getSrc();
+        length = copy.getLen();
+      } else if (auto move = dyn_cast<LLVM::MemmoveOp>(write)) {
+        destination = move.getDst();
+        source = move.getSrc();
+        length = move.getLen();
+      } else {
+        auto set = cast<LLVM::MemsetOp>(write);
+        destination = set.getDst();
+        fill = set.getVal();
+        length = set.getLen();
+      }
+      schedule::remove<schedule::Field::EvalUnknownWriteRange>(write);
+      builder.setInsertionPoint(write);
+      std::optional<uint64_t> constantBytes = constantPlaneBytes(destination);
+      Value bitBase = planeBitOffset(location, destination);
+      // Exact chunks up to this many bytes; a longer write (such as a whole
+      // plane fill) or an unbounded one reports its whole range as possibly
+      // X/Z after the write instead, which is always sound.
+      constexpr uint64_t kExactBytes = 4096;
+      APInt bytes;
+      if (!matchPattern(length, m_ConstantInt(&bytes)) ||
+          bytes.getActiveBits() > 60 || bytes.getZExtValue() > kExactBytes) {
+        // The range hook is declared by prepareNativeProofPublicationInputs.
+        builder.setInsertionPointAfter(write);
+        Value width = LLVM::ShlOp::create(builder, location,
+                                          toChunk(location, length),
+                                          constant(location, 3));
+        LLVM::CallOp::create(
+            builder, location, TypeRange{},
+            SymbolRefAttr::get(context,
+                               "__talos_eval_promotion_invalidate_range_v1"),
+            ValueRange{bitBase, width});
+        continue;
+      }
+      uint64_t total = bytes.getZExtValue();
+      // The new and old bytes [at, at + count) of the destination.
+      auto chunkAt = [&](Value at, unsigned count) {
+        auto type = builder.getIntegerType(count * 8);
+        auto old = LLVM::LoadOp::create(
+            builder, location, type,
+            LLVM::GEPOp::create(builder, location, pointer, builder.getI8Type(),
+                                destination, ArrayRef<LLVM::GEPArg>{at}),
+            1);
+        if (auto footprint =
+                schedule::get<schedule::Field::EvalStateAccessBytes>(write))
+          schedule::set(old, schedule::Field::EvalStateAccessBytes, footprint);
+        Value next;
+        if (source) {
+          next = LLVM::LoadOp::create(
+              builder, location, type,
+              LLVM::GEPOp::create(builder, location, pointer,
+                                  builder.getI8Type(), source,
+                                  ArrayRef<LLVM::GEPArg>{at}),
+              1);
+        } else if (count == 1) {
+          next = fill;
+        } else {
+          next = LLVM::ZExtOp::create(builder, location, type, fill);
+          APInt ones = APInt::getSplat(count * 8, APInt(8, 1));
+          next = LLVM::MulOp::create(
+              builder, location, next,
+              LLVM::ConstantOp::create(builder, location, type,
+                                       builder.getIntegerAttr(type, ones)));
+        }
+        Value delta = LLVM::XOrOp::create(builder, location, old, next);
+        return std::pair{toChunk(location, delta), toChunk(location, next)};
+      };
+      auto publishAt = [&](uint64_t at, Value index, unsigned count) {
+        auto [delta, next] = chunkAt(index, count);
+        Value offset = LLVM::AddOp::create(
+            builder, location, bitBase,
+            LLVM::ShlOp::create(builder, location, index, constant(location, 3)));
+        publish(location,
+                constantBytes && at != UINT64_MAX
+                    ? std::optional<uint64_t>((*constantBytes + at) * 8)
+                    : std::nullopt,
+                offset, delta, [&] { return next; });
+      };
+      constexpr uint64_t kUnrolledBytes = 64;
+      uint64_t words = total / 8;
+      uint64_t first = 0;
+      if (total > kUnrolledBytes) {
+        // Whole words in a loop through dynamic publications; then the tail.
+        Block *head = builder.getInsertionBlock();
+        Block *rest = head->splitBlock(builder.getInsertionPoint());
+        Block *loop = new Block, *body = new Block;
+        loop->addArgument(i64, location);
+        head->getParent()->getBlocks().insert(rest->getIterator(), loop);
+        head->getParent()->getBlocks().insert(rest->getIterator(), body);
+        builder.setInsertionPointToEnd(head);
+        LLVM::BrOp::create(builder, location, ValueRange{constant(location, 0)},
+                           loop);
+        builder.setInsertionPointToStart(loop);
+        Value word = loop->getArgument(0);
+        Value more =
+            LLVM::ICmpOp::create(builder, location, LLVM::ICmpPredicate::ult,
+                                 word, constant(location, words));
+        LLVM::CondBrOp::create(builder, location, more, body, rest);
+        builder.setInsertionPointToStart(body);
+        Value at = LLVM::ShlOp::create(builder, location, word,
+                                       constant(location, 3));
+        publishAt(UINT64_MAX, at, 8);
+        LLVM::BrOp::create(
+            builder, location,
+            ValueRange{LLVM::AddOp::create(builder, location, word,
+                                           constant(location, 1))},
+            loop);
+        builder.setInsertionPointToStart(rest);
+        first = words * 8;
+      }
+      for (uint64_t at = first; at < total; at += 8)
+        publishAt(at, constant(location, at),
+                  static_cast<unsigned>(std::min<uint64_t>(8, total - at)));
     }
   }
 };
@@ -1186,6 +1361,16 @@ LogicalResult prepareNativeProofPublicationInputs(ModuleOp module,
   const auto &inputs = manager.getAnalysis<NativeProofPublicationInputs>();
   if (!inputs.valid)
     return failure();
+  // Function passes may report an unbounded bulk write through the range
+  // hook; they must not add module symbols themselves.
+  if (inputs.active) {
+    OpBuilder builder(module.getContext());
+    Type i64 = builder.getI64Type();
+    getOrDeclareLLVMFunction(module,
+                             "__talos_eval_promotion_invalidate_range_v1",
+                             LLVM::LLVMVoidType::get(module.getContext()),
+                             {i64, i64});
+  }
   return materializeNativePromotionWrites(module);
 }
 
