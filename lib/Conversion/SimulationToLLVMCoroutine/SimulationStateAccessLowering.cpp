@@ -855,6 +855,53 @@ public:
       notificationValue = arith::SelectOp::create(rewriter, op.getLoc(), equal,
                                                   oldValue, storedValue);
     }
+    // Change-first store: a clean direct scalar root with an inline
+    // transition tests old against new once, and stores both planes,
+    // publishes and wakes only on a change. Its canonical-proof publication
+    // then also runs only on the changed path.
+    // IEEE 1800-2023 4.3: only a change in state of a variable is an update
+    // event, and any algorithm with the reference algorithm's user-visible
+    // effect is allowed. Writing the value already held changes no state, so
+    // skipping it leaves memory identical and wakes nothing (9.4.2: implicit
+    // events are value changes; x->x and z->z are no edge). The state is
+    // 4-valued (6.3.1), so the test compares both planes: 0<->x and x<->z
+    // changes still store and reach the transition, which applies the edge
+    // rules of Table 9-2. VPI value-change callbacks also fire only on a
+    // change (38.36.1), and direct roots are VPI-off or read-only.
+    bool inlineTransition = !runtimePublication && directRange &&
+                            (assumeClean || !directRange->guarded) &&
+                            directLayout &&
+                            directLayout->transitionHandlesExact;
+    // Non-continuous clean direct stores publish the stored value itself: no
+    // override can mask it, so no visible reload is needed (see below).
+    if (inlineTransition && !continuous && *width <= 64 &&
+        !isa<sim::StringType, FloatType, sim::EventType>(valueType)) {
+      Value storedUnknown;
+      if (containsLogic(valueType) && !twoState)
+        storedUnknown = adaptor.getValue().size() == 2
+                            ? adaptor.getValue()[1]
+                            : llvmConstant(rewriter, op.getLoc(), plane, 0);
+      Value reference = adaptor.getReference().front();
+      notifySignal(
+          rewriter, op.getLoc(), reference, *width, oldValue, oldUnknown,
+          storedValue, storedUnknown, directRange,
+          ::talos::schedule::get<schedule::metadata::evalSourceOwner>(op),
+          nbaEquivalent, [&] {
+            (void)storeStatePlane(rewriter, op.getLoc(), reference,
+                                  storedValue, "__talos_state_value",
+                                  stateBitCount, directLayout, Value{},
+                                  assumeClean, /*trackChange=*/false,
+                                  /*continuous=*/false);
+            if (storedUnknown)
+              (void)storeStatePlane(rewriter, op.getLoc(), reference,
+                                    storedUnknown, "__talos_state_unknown",
+                                    stateBitCount, directLayout, Value{},
+                                    assumeClean, /*trackChange=*/false,
+                                    /*continuous=*/false);
+          });
+      rewriter.eraseOp(op);
+      return success();
+    }
     Value valueChanged =
         storeStatePlane(rewriter, op.getLoc(), adaptor.getReference().front(),
                         storedValue, "__talos_state_value", stateBitCount,
@@ -932,11 +979,7 @@ public:
       notifySignal(
           rewriter, op.getLoc(), adaptor.getReference().front(), *width,
           oldValue, oldUnknown, notificationValue, notificationUnknown,
-          !runtimePublication && directRange &&
-                  (assumeClean || !directRange->guarded) && directLayout &&
-                  directLayout->transitionHandlesExact
-              ? directRange
-              : std::nullopt,
+          inlineTransition ? directRange : std::nullopt,
           ::talos::schedule::get<schedule::metadata::evalSourceOwner>(op),
           nbaEquivalent);
     }

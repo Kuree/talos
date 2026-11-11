@@ -7,8 +7,10 @@
 // ingress update ORs that set in, so the pulse's activation is never cleared.
 // PULSE-LABEL: llvm.func @step1.__talos_eval_body_0(
 // PULSE: %[[PULSE_READY:.*]] = llvm.select %{{.*}}, %{{.*}}, %{{.*}} : i1, i64
-// PULSE: llvm.br ^[[JOIN:bb[0-9]+]](%{{.*}}, %[[PULSE_READY]] : i64, i64)
-// PULSE: ^[[JOIN]](%{{.*}}: i64, %[[PENDING:.*]]: i64):
+// Change-first stores write only when the value changes, so the group's
+// promoted state also carries the output's current value through the join.
+// PULSE: llvm.br ^[[JOIN:bb[0-9]+]](%{{.*}}, %[[PULSE_READY]], %{{.*}} : i64, i64, i8)
+// PULSE: ^[[JOIN]](%{{.*}}: i64, %[[PENDING:[0-9]+]]: i64, %{{.*}}: i8):
 // PULSE: %[[RESTORE_READY:.*]] = llvm.select %{{.*}}, %{{.*}}, %{{.*}} : i1, i64
 // PULSE: llvm.or %[[PENDING]], %[[RESTORE_READY]] : i64
 // PULSE: %[[INGRESS:.*]] = llvm.load %{{.*}} : !llvm.ptr -> i64

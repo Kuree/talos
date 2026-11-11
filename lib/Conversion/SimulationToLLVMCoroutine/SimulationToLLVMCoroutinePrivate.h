@@ -623,12 +623,17 @@ mlir::Value storeStatePlane(mlir::ConversionPatternRewriter &rewriter,
                             mlir::Value guardedPermission = {},
                             bool assumeClean = false, bool trackChange = true,
                             bool continuous = false);
+/// Publishes a store's transition. With `storeOnChange`, the caller's plane
+/// stores are emitted by this call: inside the changed path of the inline
+/// change test (direct ranges up to 64 bits), or unconditionally first when
+/// the transition goes through the runtime.
 void notifySignal(
     mlir::ConversionPatternRewriter &builder, mlir::Location location,
     mlir::Value handle, uint64_t width, mlir::Value oldValue,
     mlir::Value oldUnknown, mlir::Value newValue, mlir::Value newUnknown,
     std::optional<DirectStaticStateRange> directRange = std::nullopt,
-    schedule::SourceOwnerAttr sourceOwner = {}, bool nbaEquivalent = false);
+    schedule::SourceOwnerAttr sourceOwner = {}, bool nbaEquivalent = false,
+    llvm::function_ref<void()> storeOnChange = {});
 mlir::LogicalResult
 insertAutomaticOwnerReleases(talos::sim::SimFuncOp function);
 mlir::LogicalResult

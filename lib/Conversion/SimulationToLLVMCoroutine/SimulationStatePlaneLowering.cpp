@@ -29,7 +29,8 @@ void notifySignal(ConversionPatternRewriter &builder, Location location,
                   Value handle, uint64_t width, Value oldValue,
                   Value oldUnknown, Value newValue, Value newUnknown,
                   std::optional<DirectStaticStateRange> directRange,
-                  schedule::SourceOwnerAttr sourceOwner, bool nbaEquivalent) {
+                  schedule::SourceOwnerAttr sourceOwner, bool nbaEquivalent,
+                  llvm::function_ref<void()> storeOnChange) {
   Type pointer = LLVM::LLVMPointerType::get(builder.getContext());
   Type i64 = builder.getI64Type();
   Value address = LLVM::AddressOfOp::create(builder, location, pointer,
@@ -65,6 +66,11 @@ void notifySignal(ConversionPatternRewriter &builder, Location location,
     cf::CondBranchOp::create(builder, location, unchanged, continuation,
                              ValueRange{}, publish, ValueRange{});
     builder.setInsertionPointToEnd(publish);
+    // A change-first store writes the planes only on this path. Unchanged,
+    // the old planes already hold the result and there is no update event
+    // (IEEE 1800-2023 4.3); the test covers both planes (6.3.1).
+    if (storeOnChange)
+      storeOnChange();
     auto transition = schedule::NativeTransitionOp::create(
         builder, location, context,
         llvmConstant(builder, location, i64, directRange->localOffset),
@@ -78,6 +84,10 @@ void notifySignal(ConversionPatternRewriter &builder, Location location,
     builder.setInsertionPointToStart(continuation);
     return;
   }
+  // Without an inline change test the store stays unconditional, in source
+  // order before the runtime transition.
+  if (storeOnChange)
+    storeOnChange();
   SmallVector<Value, 4> temporaries;
   auto save = [&](Value value) {
     if (!value)

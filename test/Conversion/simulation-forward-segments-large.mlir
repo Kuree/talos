@@ -7,12 +7,12 @@
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_0(
 // PLAN-SAME: schedule.eval.predicated_dataflow
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_0.fallback(
-// PLAN-SAME: schedule.eval.ranked_members = array<i32: 0, 1, {{.*}}27, 28>
+// PLAN-SAME: schedule.eval.ranked_members = array<i32: 0, 1, {{.*}}28, 29>
 // Deferred readiness is charged before expansion; the remaining helper
-// budget admits 28 state ranges using their actual joins and memory cuts.
+// budget admits 29 state ranges using their actual joins and memory cuts.
 // Promotion queries read only the unknown plane and are no value-plane cut.
 // Readiness itself already uses region SSA.
-// PLAN-SAME: schedule.eval.ssa_value_ranges = 28 : i64
+// PLAN-SAME: schedule.eval.ssa_value_ranges = 29 : i64
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_2(
 // PLAN-SAME: schedule.eval.predicated_dataflow
 // PLAN-LABEL: llvm.func @__talos_eval_ranked_group_2.fallback(
