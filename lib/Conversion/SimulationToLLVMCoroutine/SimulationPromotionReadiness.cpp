@@ -5,6 +5,7 @@
 #include "talos/Conversion/Passes.h"
 #include "talos/Dialect/Schedule/ClockedKernelName.h"
 #include "talos/Dialect/Schedule/ScheduleFields.h"
+#include "talos/Runtime/Runtime.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -299,6 +300,10 @@ appendMaskedWordScans(SmallVector<std::pair<uint64_t, uint64_t>> intervals,
   }
 }
 
+static constexpr uint64_t kPromotionLatchKnown = TALOS_RT_PROMOTION_LATCH_KNOWN;
+static constexpr uint64_t kPromotionLatchFailed =
+    TALOS_RT_PROMOTION_LATCH_FAILED;
+
 // Kernel and group domains share the same exact masked-word scanner and
 // negative hint protocol. Only kernels own scheduler promotion-pending bits.
 static LogicalResult
@@ -476,7 +481,8 @@ materializePromotionReadiness(ModuleOp module, ArrayRef<uint64_t> owners,
   cf::BranchOp::create(builder, loc, unknown);
 
   builder.setInsertionPointToStart(known);
-  LLVM::StoreOp::create(builder, loc, llvmConstant(builder, loc, i8, 1),
+  LLVM::StoreOp::create(builder, loc,
+                        llvmConstant(builder, loc, i8, kPromotionLatchKnown),
                         gep(address(latchName), i8, owner), 1);
   if (!group) {
     Value pendingAddress =
@@ -489,7 +495,14 @@ materializePromotionReadiness(ModuleOp module, ArrayRef<uint64_t> owners,
                           pendingAddress, 8);
   }
   LLVM::ReturnOp::create(builder, loc, llvmConstant(builder, loc, i1, 1));
+  // A failed scan caches its result: the latch holds FAILED until a
+  // publication touching this certificate (a recheck or an invalidation)
+  // resets it to UNKNOWN. A missed publication can only keep the four-state
+  // body, which is correct on any state (IEEE 1800-2023 6.3.1).
   builder.setInsertionPointToStart(unknown);
+  LLVM::StoreOp::create(builder, loc,
+                        llvmConstant(builder, loc, i8, kPromotionLatchFailed),
+                        gep(address(latchName), i8, owner), 1);
   LLVM::ReturnOp::create(builder, loc, llvmConstant(builder, loc, i1, 0));
 
   // IEEE 1800-2023 4.5/4.6: keep each existing readiness boundary and its
@@ -501,20 +514,26 @@ materializePromotionReadiness(ModuleOp module, ArrayRef<uint64_t> owners,
   ready->setAttr("passthrough",
                  builder.getArrayAttr({builder.getStringAttr("alwaysinline")}));
   Block *readyEntry = ready.addEntryBlock(builder);
-  Block *latched = new Block, *check = new Block;
-  ready.getBody().push_back(latched);
+  Block *cached = new Block, *check = new Block;
+  ready.getBody().push_back(cached);
   ready.getBody().push_back(check);
   builder.setInsertionPointToStart(readyEntry);
   Value latch = LLVM::LoadOp::create(
       builder, loc, i8, gep(address(latchName), i8, readyEntry->getArgument(0)),
       1);
-  Value isLatched =
+  Value isCached =
       arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ne, latch,
                             llvmConstant(builder, loc, i8, 0));
-  cf::CondBranchOp::create(builder, loc, isLatched, latched, ValueRange{},
-                           check, ValueRange{});
-  builder.setInsertionPointToStart(latched);
-  LLVM::ReturnOp::create(builder, loc, llvmConstant(builder, loc, i1, 1));
+  cf::CondBranchOp::create(builder, loc, isCached, cached, ValueRange{}, check,
+                           ValueRange{});
+  // A cached latch answers without a scan: KNOWN is its only odd value, so
+  // the low bit is the result and a cached FAILED returns false until a
+  // publication touching the certificate resets it.
+  static_assert(kPromotionLatchKnown == 1 && kPromotionLatchFailed % 2 == 0,
+                "a promotion latch is proven exactly when its low bit is set");
+  builder.setInsertionPointToStart(cached);
+  LLVM::ReturnOp::create(builder, loc,
+                         arith::TruncIOp::create(builder, loc, i1, latch));
   builder.setInsertionPointToStart(check);
   Value result = LLVM::CallOp::create(builder, loc, scan,
                                       ValueRange{readyEntry->getArgument(0)})
@@ -974,7 +993,8 @@ LogicalResult materializeNativeGroupPromotionReadiness(ModuleOp module) {
   // canonical X/Z at the group entry boundary. It neither runs inactive
   // members nor changes their pending bits/latches. Exact unknown-write
   // publication and the full context/runtime reset revoke positive results;
-  // a negative hint rereads its immutable exact mask on every query.
+  // a failed result is cached until a publication touches the domain, and its
+  // rescan starts at the negative hint's immutable exact mask.
   return materializePromotionReadiness(
       module, records, scans, domains.size(), true,
       runtime::get<runtime::StateBits>(module).getUInt());

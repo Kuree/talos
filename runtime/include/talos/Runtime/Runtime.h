@@ -3850,6 +3850,16 @@ typedef struct talos_rt_native_promotion_dependency {
 // are compiler-verified and disjoint.
 // route_slot points at a generated function-pointer global. The runtime copies
 // the fallback representation without calling it or aliasing its function type.
+// A kernel or group latch is UNKNOWN (the next query scans), KNOWN (proven), or
+// FAILED: the last readiness scan found X/Z and needs no rescan until a
+// publication touching the certificate (a recheck or an invalidation) resets
+// the latch to UNKNOWN. KNOWN is the only odd value: generated queries test the
+// low bit.
+enum {
+  TALOS_RT_PROMOTION_LATCH_UNKNOWN = 0,
+  TALOS_RT_PROMOTION_LATCH_KNOWN = 1,
+  TALOS_RT_PROMOTION_LATCH_FAILED = 2
+};
 typedef struct talos_rt_native_promotion_certificate {
   uint8_t *latch;
   uint64_t *word;

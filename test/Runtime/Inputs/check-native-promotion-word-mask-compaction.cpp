@@ -1,3 +1,5 @@
+#include "talos/Runtime/Runtime.h"
+
 #include <cassert>
 #include <cstdint>
 #include <cstring>
@@ -49,7 +51,7 @@ int main() {
           expected = false;
       }
       assert(__talos_eval_group_promotion_ready_v1(domain) == expected);
-      assert(latches[domain] == unsigned(expected));
+      assert((latches[domain] == TALOS_RT_PROMOTION_LATCH_KNOWN) == expected);
     }
     assert(std::memcmp(snapshot, unknown, sizeof(snapshot)) == 0);
   };

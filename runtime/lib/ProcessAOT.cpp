@@ -262,11 +262,13 @@ void invalidateNativeStaticSpecializationFastUnlocked(
   *plan->specialization_fast = 0;
 }
 
+/// Revokes a proof. A cached FAILED scan is also reset: some reports cover a
+/// footprint that only may have become X/Z, so the write may have cleared it.
 static void invalidatePromotionCertificate(
     const talos_rt_native_promotion_certificate &certificate) {
   if (certificate.latch || certificate.route_slot) {
     if (certificate.latch)
-      *certificate.latch = 0;
+      *certificate.latch = TALOS_RT_PROMOTION_LATCH_UNKNOWN;
     if (certificate.word)
       *certificate.word |= certificate.mask;
     if (certificate.route_slot)
@@ -279,7 +281,12 @@ static void invalidatePromotionCertificate(
 
 static void recheckPromotionCertificate(
     const talos_rt_native_promotion_certificate &certificate) {
-  bool failed = certificate.latch && !*certificate.latch;
+  // An unproven latch is UNKNOWN or a cached FAILED scan. A recheck reports
+  // that some bit became known, so a cached failure must scan again.
+  bool failed =
+      certificate.latch && *certificate.latch != TALOS_RT_PROMOTION_LATCH_KNOWN;
+  if (failed)
+    *certificate.latch = TALOS_RT_PROMOTION_LATCH_UNKNOWN;
   if (certificate.route_slot) {
     talos_rt_native_promotion_invalidate selected;
     std::memcpy(&selected, certificate.route_slot, sizeof(selected));
@@ -402,11 +409,13 @@ void registerPromotionSliceCheck(
 /// dependents. Bits reported X/Z always invalidate them: some writers report
 /// a footprint that only may have become X/Z, and a recount can see stores
 /// not yet published, so a count can exceed the plane's. Counts therefore
-/// gate only the recheck: once a slice's count reaches zero, its failed
-/// dependents become eligible, and their readiness scans, which read the
-/// plane, decide. A wrong count can delay a recheck but never keep an
-/// invalid proof (IEEE 1800-2023 6.3.1). Returns whether any certificate
-/// was touched.
+/// gate only the recheck of pending dependents: once a slice's count reaches
+/// zero, they become eligible, and their readiness scans, which read the
+/// plane, decide. A wrong count can delay that recheck but never keep an
+/// invalid proof (IEEE 1800-2023 6.3.1). A dependent whose last scan failed
+/// is rescanned after every recovery, whatever the count, so a wrong count
+/// cannot pin it to its four-state body. Returns whether any certificate was
+/// touched.
 bool adjustPromotionSlice(
     const talos_rt_native_promotion_slices &slices, uint64_t slice,
     const talos_rt_native_promotion_certificate *certificates, uint64_t bits,
@@ -416,16 +425,25 @@ bool adjustPromotionSlice(
   // Clamped: an overcount (see above) can meet exact removals.
   count = becameUnknown ? old + bits : (old > bits ? old - bits : 0);
   bool transition = becameUnknown ? bits != 0 : old != 0 && count == 0;
-  if (transition)
-    for (uint64_t index = slices.starts[slice];
-         index != slices.starts[slice + 1]; ++index) {
-      const auto &certificate = certificates[slices.dependents[index]];
-      if (becameUnknown)
-        invalidatePromotionCertificate(certificate);
-      else
-        recheckPromotionCertificate(certificate);
+  bool recovered = !becameUnknown && bits != 0;
+  if (!transition && !recovered)
+    return false;
+  bool touched = false;
+  for (uint64_t index = slices.starts[slice]; index != slices.starts[slice + 1];
+       ++index) {
+    const auto &certificate = certificates[slices.dependents[index]];
+    if (becameUnknown) {
+      invalidatePromotionCertificate(certificate);
+    } else if (transition ||
+               (certificate.latch &&
+                *certificate.latch == TALOS_RT_PROMOTION_LATCH_FAILED)) {
+      recheckPromotionCertificate(certificate);
+    } else {
+      continue;
     }
-  return transition && slices.starts[slice] != slices.starts[slice + 1];
+    touched = true;
+  }
+  return touched;
 }
 } // namespace
 

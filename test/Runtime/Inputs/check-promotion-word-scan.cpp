@@ -1,3 +1,5 @@
+#include "talos/Runtime/Runtime.h"
+
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
@@ -93,8 +95,10 @@ int main() {
         otherExpectedKnown = false;
     assert(__talos_eval_kernel_promotion_ready_v1(0) == otherExpectedKnown);
     assert(__talos_eval_kernel_promotion_ready_v1(1) == expectedKnown);
-    assert(__talos_eval_kernel_promotion_latched_v1[0] == otherExpectedKnown);
-    assert(__talos_eval_kernel_promotion_latched_v1[1] == expectedKnown);
+    assert((__talos_eval_kernel_promotion_latched_v1[0] ==
+            TALOS_RT_PROMOTION_LATCH_KNOWN) == otherExpectedKnown);
+    assert((__talos_eval_kernel_promotion_latched_v1[1] ==
+            TALOS_RT_PROMOTION_LATCH_KNOWN) == expectedKnown);
     assert(__talos_eval_promotion_pending_mask_v1[0] ==
            (unsigned(!otherExpectedKnown) | (unsigned(!expectedKnown) << 1)));
   };

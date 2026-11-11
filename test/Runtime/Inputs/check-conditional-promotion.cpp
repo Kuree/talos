@@ -1,3 +1,5 @@
+#include "talos/Runtime/Runtime.h"
+
 #include <cassert>
 #include <cstdint>
 #include <cstring>
@@ -49,7 +51,8 @@ int main() {
     if (unknown[2]) {
       // A true per-activation result must not become a cached whole-state
       // proof. A value-only enable update can make this payload relevant.
-      assert(!__talos_eval_kernel_promotion_latched_v1[0]);
+      assert(__talos_eval_kernel_promotion_latched_v1[0] !=
+             TALOS_RT_PROMOTION_LATCH_KNOWN);
       assert(!__talos_eval_kernel_promotion_ready_v1(0));
     }
   };
@@ -77,7 +80,8 @@ int main() {
   __talos_eval_promotion_recheck_range_v1(16, 8);
   values[enable] = 1;
   check(true);
-  assert(__talos_eval_kernel_promotion_latched_v1[0]);
+  assert(__talos_eval_kernel_promotion_latched_v1[0] ==
+         TALOS_RT_PROMOTION_LATCH_KNOWN);
   unknown[2] = 0xff;
   __talos_eval_promotion_invalidate_range_v1(16, 8);
   check(false);

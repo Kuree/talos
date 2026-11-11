@@ -37,17 +37,20 @@ constexpr uint64_t lastOwner = uint64_t{1} << 8;
 static unsigned installs = 0, destroys = 0;
 
 static void checkReset() {
-  CHECK(__talos_eval_group_promotion_latched_v1[0] == 0);
+  CHECK(__talos_eval_group_promotion_latched_v1[0] ==
+        TALOS_RT_PROMOTION_LATCH_UNKNOWN);
   CHECK(__talos_eval_promotion_pending_mask_v1[0] == membersMask);
   for (unsigned owner = 0; owner != 9; ++owner)
-    CHECK(__talos_eval_kernel_promotion_latched_v1[owner] == 0);
+    CHECK(__talos_eval_kernel_promotion_latched_v1[owner] ==
+          TALOS_RT_PROMOTION_LATCH_UNKNOWN);
 }
 
 // Exercise the actual generated plan hooks used by installation and release.
 // The main's native state initialization must not stand in for proof reset.
 extern "C" talos_rt_status __wrap_talos_rt_v1_scheduler_install_aot(
     talos_rt_context *context, const talos_rt_native_schedule_plan *plan) {
-  CHECK(__talos_eval_group_promotion_latched_v1[0] == 1);
+  CHECK(__talos_eval_group_promotion_latched_v1[0] ==
+        TALOS_RT_PROMOTION_LATCH_KNOWN);
   auto status = __real_talos_rt_v1_scheduler_install_aot(context, plan);
   CHECK(status == TALOS_RT_OK);
   checkReset();
@@ -57,7 +60,7 @@ extern "C" talos_rt_status __wrap_talos_rt_v1_scheduler_install_aot(
 extern "C" void __wrap_talos_rt_v1_context_destroy(talos_rt_context *context) {
   // The final source values are known. Leave a positive result for release to
   // revoke, regardless of the final observer's preceding checkpoint behavior.
-  __talos_eval_group_promotion_latched_v1[0] = 1;
+  __talos_eval_group_promotion_latched_v1[0] = TALOS_RT_PROMOTION_LATCH_KNOWN;
   __real_talos_rt_v1_context_destroy(context);
   checkReset();
   ++destroys;
@@ -82,11 +85,13 @@ int main() {
   prepareKnown();
   __talos_eval_ranked_group_0(nullptr);
   CHECK(__talos_state_value[9] == 8 && __talos_state_unknown[9] == 0);
-  CHECK(__talos_eval_group_promotion_latched_v1[0] == 1);
+  CHECK(__talos_eval_group_promotion_latched_v1[0] ==
+        TALOS_RT_PROMOTION_LATCH_KNOWN);
   CHECK(__talos_eval_promotion_pending_mask_v1[0] == membersMask);
   CHECK(__talos_aot_model_ingress_v1[0] == 0);
   for (unsigned owner = 0; owner != 9; ++owner)
-    CHECK(__talos_eval_kernel_promotion_latched_v1[owner] == 0);
+    CHECK(__talos_eval_kernel_promotion_latched_v1[owner] ==
+          TALOS_RT_PROMOTION_LATCH_UNKNOWN);
   // The unchanged ordinary group would have queried the active member and
   // cleared its pending bit. This proves actual fast-body reachability with
   // seven inactive members whose own proof remains unqueried/pending.
@@ -97,12 +102,15 @@ int main() {
   __talos_eval_ranked_group_0(nullptr);
   CHECK(__talos_state_value[9] == 8 && __talos_state_unknown[9] == 0);
   CHECK(__talos_state_unknown[2] == 0x80);
-  CHECK(__talos_eval_group_promotion_latched_v1[0] == 0);
-  CHECK(__talos_eval_kernel_promotion_latched_v1[8] == 1);
+  CHECK(__talos_eval_group_promotion_latched_v1[0] ==
+        TALOS_RT_PROMOTION_LATCH_FAILED);
+  CHECK(__talos_eval_kernel_promotion_latched_v1[8] ==
+        TALOS_RT_PROMOTION_LATCH_KNOWN);
   CHECK(__talos_eval_promotion_pending_mask_v1[0] ==
         (membersMask & ~lastOwner));
   for (unsigned owner = 1; owner != 8; ++owner)
-    CHECK(__talos_eval_kernel_promotion_latched_v1[owner] == 0);
+    CHECK(__talos_eval_kernel_promotion_latched_v1[owner] ==
+          TALOS_RT_PROMOTION_LATCH_UNKNOWN);
   // A failed group proof executes only the actual pending member, which may
   // still prove its own narrower inputs. It does not activate the X producer.
 
@@ -112,7 +120,9 @@ int main() {
   __talos_eval_ranked_group_0(nullptr);
   CHECK(__talos_eval_step_four_state_fallback_v1 == 1);
   CHECK(__talos_state_unknown[9] == 255);
-  CHECK(__talos_eval_group_promotion_latched_v1[0] == 0);
+  // The fallback's X store into the domain resets the cached failure.
+  CHECK(__talos_eval_group_promotion_latched_v1[0] ==
+        TALOS_RT_PROMOTION_LATCH_UNKNOWN);
   __talos_state_unknown[8] = 0;
   __talos_eval_promotion_recheck_range_v1(64, 8);
   __talos_aot_model_ingress_v1[0] = lastOwner;
@@ -122,8 +132,10 @@ int main() {
   CHECK(__talos_state_unknown[9] == 0); // old destination also needs proof
   __talos_aot_model_ingress_v1[0] = lastOwner;
   __talos_eval_ranked_group_0(nullptr);
-  CHECK(__talos_eval_group_promotion_latched_v1[0] == 1);
-  CHECK(__talos_eval_kernel_promotion_latched_v1[8] == 0);
+  CHECK(__talos_eval_group_promotion_latched_v1[0] ==
+        TALOS_RT_PROMOTION_LATCH_KNOWN);
+  CHECK(__talos_eval_kernel_promotion_latched_v1[8] ==
+        TALOS_RT_PROMOTION_LATCH_UNKNOWN);
   CHECK(__talos_eval_promotion_pending_mask_v1[0] == membersMask);
 
   // Use the emitted full reset, independently of any overlap query. No
@@ -136,7 +148,7 @@ int main() {
   char name[] = "group-proof-domain";
   char *argv[] = {name, nullptr};
   for (unsigned invocation = 0; invocation != 2; ++invocation) {
-    __talos_eval_group_promotion_latched_v1[0] = 1;
+    __talos_eval_group_promotion_latched_v1[0] = TALOS_RT_PROMOTION_LATCH_KNOWN;
     std::memset(__talos_eval_kernel_promotion_latched_v1, 1, 9);
     __talos_eval_promotion_pending_mask_v1[0] = 0;
     CHECK(model_main(1, argv) == 0);

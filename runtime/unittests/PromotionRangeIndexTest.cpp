@@ -164,6 +164,82 @@ TEST(PromotionRangeIndex, NBACertificatesAndRecoveryAreIndependent) {
   EXPECT_EQ(routePending, 0u);
 }
 
+// A failed readiness scan caches FAILED in its latch. A publication touching
+// the certificate resets it to UNKNOWN, so the next query scans again: a
+// recheck (a bit became known), or an invalidation, which may report a write
+// that cleared X/Z. A recheck never proves the certificate.
+TEST(PromotionRangeIndex, RecheckResetsCachedFailedScans) {
+  uint8_t failed = TALOS_RT_PROMOTION_LATCH_FAILED,
+          other = TALOS_RT_PROMOTION_LATCH_FAILED,
+          valid = TALOS_RT_PROMOTION_LATCH_KNOWN;
+  uint64_t pending = 1 | 2;
+  talos_rt_native_promotion_certificate certificates[] = {
+      {&failed, &pending, 1, nullptr, nullptr},
+      {&other, &pending, 2, nullptr, nullptr},
+      {&valid, &pending, 4, nullptr, nullptr}};
+  std::vector<talos_rt_native_promotion_dependency> entries{
+      {0, 4, 0, 0}, {8, 12, 0, 1}, {0, 12, 0, 2}};
+  ASSERT_TRUE(buildPromotionRangeIndex(entries, 64, 3));
+  aggregateInvalidations = 0;
+  talos_rt_v1_native_promotion_recheck_ranges(
+      entries.data(), entries.size(), certificates, invalidateAggregate, 1, 1);
+  EXPECT_EQ(failed, TALOS_RT_PROMOTION_LATCH_UNKNOWN);
+  EXPECT_EQ(other, TALOS_RT_PROMOTION_LATCH_FAILED);
+  EXPECT_EQ(valid, TALOS_RT_PROMOTION_LATCH_KNOWN);
+  EXPECT_EQ(pending, uint64_t{1 | 2});
+  EXPECT_EQ(aggregateInvalidations, 1u);
+  talos_rt_v1_native_promotion_invalidate_ranges(
+      entries.data(), entries.size(), certificates, invalidateAggregate, 9, 1);
+  EXPECT_EQ(other, TALOS_RT_PROMOTION_LATCH_UNKNOWN);
+  EXPECT_EQ(valid, TALOS_RT_PROMOTION_LATCH_UNKNOWN);
+  EXPECT_EQ(pending, uint64_t{1 | 2 | 4});
+
+  // A window publication touches a certificate in either direction.
+  failed = other = TALOS_RT_PROMOTION_LATCH_FAILED;
+  valid = TALOS_RT_PROMOTION_LATCH_KNOWN;
+  uint64_t records[] = {0xf, 0, 0xf00, 1, 0xfff, 2};
+  talos_rt_v1_native_promotion_publish_window(
+      records, 3, certificates, invalidateAggregate, invalidateAggregate,
+      /*changed=*/0x102, /*unknown=*/0x100, nullptr);
+  EXPECT_EQ(failed, TALOS_RT_PROMOTION_LATCH_UNKNOWN); // bit 1 became known
+  EXPECT_EQ(other, TALOS_RT_PROMOTION_LATCH_UNKNOWN);  // bit 8 became X/Z
+  EXPECT_EQ(valid, TALOS_RT_PROMOTION_LATCH_UNKNOWN);
+}
+
+// A wide certificate depends on slice counts, which may overcount. A cached
+// failure must still rescan after any recovery in its slice, even when the
+// count stays above zero; other dependents wait for the count to reach zero.
+TEST(PromotionSlices, RecoveryRescansFailedDependentsWhateverTheCount) {
+  std::vector<uint8_t> plane(16, 0);
+  plane[0] = 0x3; // two X/Z bits in the slice [0, 64)
+  const uint64_t ranges[] = {0, 64};
+  uint64_t counts[1] = {};
+  const uint64_t starts[] = {0, 2};
+  const uint64_t dependents[] = {0, 1};
+  talos_rt_native_promotion_slices slices{ranges,     counts, starts,
+                                          dependents, 1,      plane.data()};
+  talos_rt_v1_native_promotion_slices_recount(&slices);
+  uint8_t failed = TALOS_RT_PROMOTION_LATCH_FAILED,
+          unknown = TALOS_RT_PROMOTION_LATCH_UNKNOWN;
+  uint64_t pending = 0;
+  talos_rt_native_promotion_certificate certificates[] = {
+      {&failed, &pending, 1, nullptr, nullptr},
+      {&unknown, &pending, 2, nullptr, nullptr}};
+  // A conservative report overcounts; then one bit recovers.
+  talos_rt_v1_native_promotion_slices_adjust(&slices, certificates,
+                                             invalidateAggregate, 8, 4, 1);
+  failed = TALOS_RT_PROMOTION_LATCH_FAILED;
+  pending = 0;
+  plane[0] = 0x2;
+  aggregateInvalidations = 0;
+  talos_rt_v1_native_promotion_slices_adjust(&slices, certificates,
+                                             invalidateAggregate, 0, 1, 0);
+  EXPECT_NE(counts[0], 0u);
+  EXPECT_EQ(failed, TALOS_RT_PROMOTION_LATCH_UNKNOWN);
+  EXPECT_EQ(pending, 1u);
+  EXPECT_EQ(aggregateInvalidations, 1u);
+}
+
 TEST(PromotionBucketIndex, BudgetAndEncodingRejectUnboundedExpansion) {
   talos::runtime::PromotionBucketIndex buckets;
   auto build = [&](std::vector<talos_rt_native_promotion_dependency> entries,
@@ -322,7 +398,10 @@ TEST(PromotionWindow, PublishMatchesRunByRunRangeQueries) {
     unsigned invalidations[2], rechecks[2];
     for (unsigned variant = 0; variant != 2; ++variant) {
       // Start from a mixed state so both directions have work to do.
-      latch[variant][0] = trial & 1;
+      // Covers UNKNOWN, KNOWN and a cached FAILED scan.
+      latch[variant][0] = trial & 1   ? TALOS_RT_PROMOTION_LATCH_KNOWN
+                          : trial & 4 ? TALOS_RT_PROMOTION_LATCH_FAILED
+                                      : TALOS_RT_PROMOTION_LATCH_UNKNOWN;
       latch[variant][1] = 1;
       words[variant][0] = 0;
       words[variant][1] = 0;
@@ -480,19 +559,29 @@ TEST(PromotionSlices, CountsTrackThePlaneAndKeepProofsSound) {
       }
       for (unsigned certificate = 0; certificate != 2; ++certificate) {
         // Soundness, whatever the counts: no latched proof over X/Z.
-        if (latch[certificate])
+        if (latch[certificate] == TALOS_RT_PROMOTION_LATCH_KNOWN)
           ASSERT_TRUE(known(certificate)) << trial << ' ' << step;
-        // Liveness where the counts agree with the plane.
+        // Liveness, whatever the counts: every recovery in a slice rescans
+        // its failed dependents, so a cached failure is never stale.
+        else if (latch[certificate] == TALOS_RT_PROMOTION_LATCH_FAILED)
+          ASSERT_FALSE(known(certificate)) << trial << ' ' << step;
+        // Liveness of the pending bit where the counts agree with the plane.
         else if (known(certificate) && countedKnown(certificate))
           ASSERT_TRUE(pending & (uint64_t{1} << certificate))
               << trial << ' ' << step;
       }
-      // The readiness scan: a pending, fully known certificate latches.
-      for (unsigned certificate = 0; certificate != 2; ++certificate)
-        if ((pending >> certificate & 1) && known(certificate)) {
-          latch[certificate] = 1;
-          pending &= ~(uint64_t{1} << certificate);
+      // The readiness query: only an UNKNOWN latch scans; it caches the
+      // result, and only success clears the pending bit.
+      for (unsigned certificate = 0; certificate != 2; ++certificate) {
+        if (latch[certificate] != TALOS_RT_PROMOTION_LATCH_UNKNOWN)
+          continue;
+        if (!known(certificate)) {
+          latch[certificate] = TALOS_RT_PROMOTION_LATCH_FAILED;
+          continue;
         }
+        latch[certificate] = TALOS_RT_PROMOTION_LATCH_KNOWN;
+        pending &= ~(uint64_t{1} << certificate);
+      }
     }
   }
 }
