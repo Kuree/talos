@@ -9,12 +9,12 @@
 
 // A deferred assertion queues its report on the executing process
 // (IEEE 1800-2023 16.4.1), so its always_comb stays in the generated eval
-// loop instead of becoming a runtime checkpoint actor. Only a failing
-// activation reaches the runtime: a two-state one through a cold checkpoint,
-// a four-state one (`v` carries an X bit) by queuing the report directly. A
-// later resume would flush it (16.4.2) through the process's epoch. The
-// reports mature in the Observed and Postponed regions of their own time
-// slot, also when a DPI export leaves the calendar to the generated loop.
+// loop instead of becoming a runtime checkpoint actor. A failing activation
+// queues the report and starts its evaluator inline, also a four-state one
+// (`v` carries an X bit). A later resume would flush it (16.4.2) through the
+// process's epoch. The reports mature in the Observed and Postponed regions
+// of their own time slot, also when a DPI export leaves the calendar to the
+// generated loop.
 module native_eval_deferred_assertion_report;
 `ifdef GENERATED_CALENDAR
   export "DPI-C" function host_period;

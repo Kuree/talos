@@ -52,8 +52,10 @@ struct RuntimeStatusInputs {
         hasCheck |= isa<sim::SimStatusCheckOp, sim::SimProcessControlOp,
                         schedule::NativeProcessControlOp>(operation);
         // A pending deferred assertion report (IEEE 1800-2023 16.4.1) is a
-        // cold runtime exit like $error; its route needs the status channel.
-        // Control lowering has already turned the enqueue into its ABI call.
+        // cold runtime exit like $error, unless a generated activation queues
+        // it inline (analysis::isDirectOutput); either route keeps the status
+        // channel. Control lowering has already turned the enqueue into its
+        // ABI call.
         if (auto call = dyn_cast<LLVM::CallOp>(operation))
           hasCheck |= call.getCallee() && call.getCallee()->starts_with(
                                               "talos_rt_v1_deferred_enqueue");

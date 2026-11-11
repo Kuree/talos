@@ -354,12 +354,50 @@ static bool isDirectOutputDisplay(sim::SimDisplayOp display) {
   return true;
 }
 
+// A pending deferred report (a unique/priority violation, IEEE 1800-2023
+// 12.4.2.1 and 12.5.3.1, or a deferred assertion, 16.4.1) is detected in the
+// activation and matures in the Observed region. When the report carries the
+// compiler-maintained flush epoch (16.4.2), a flush point needs no runtime
+// process: the evaluator discards the report if the epoch has moved on. Queuing
+// its ticket and starting the evaluator then neither execute an actor, publish
+// design state nor advance time, so both stay inline in a generated
+// activation. The evaluator itself remains a runtime process. A capture holding
+// a managed handle (a string, class object, container, ...) needs the actor's
+// collector roots, so such a report keeps its checkpoint.
+static bool capturesNoManagedHandle(sim::SimSpawnOp spawn) {
+  return llvm::all_of(spawn.getOperands(), [](Value operand) {
+    if (operand.getDefiningOp<sim::SimDeferredEnqueueOp>() ||
+        isa<sim::ContextType>(operand.getType()))
+      return true;
+    SmallVector<uint64_t, 2> offsets;
+    return sim::getManagedHandleOffsets(operand.getType(), offsets) &&
+           offsets.empty();
+  });
+}
+static bool isEpochDeferredReportEnqueue(sim::SimDeferredEnqueueOp enqueue) {
+  return sim::has<sim::metadata::DeferredEpochStorage>(enqueue) &&
+         !enqueue->use_empty() &&
+         llvm::all_of(enqueue->getUsers(), [](Operation *user) {
+           auto spawn = dyn_cast<sim::SimSpawnOp>(user);
+           return spawn && sim::isDeferredReportSpawn(spawn) &&
+                  capturesNoManagedHandle(spawn);
+         });
+}
+
 // A nonterminating error only latches the final exit status (IEEE 1800-2023
 // 20.10), so an immediate assertion's `$error` report stays inline with its
 // direct display rather than checkpointing the activation.
 bool isDirectOutput(Operation *operation) {
   if (isa<sim::SimErrorOp>(operation))
     return true;
+  if (auto enqueue = dyn_cast<sim::SimDeferredEnqueueOp>(operation))
+    return isEpochDeferredReportEnqueue(enqueue);
+  if (auto spawn = dyn_cast<sim::SimSpawnOp>(operation))
+    return sim::isDeferredReportSpawn(spawn) &&
+           llvm::all_of(spawn.getOperands(), [](Value operand) {
+             auto enqueue = operand.getDefiningOp<sim::SimDeferredEnqueueOp>();
+             return !enqueue || isEpochDeferredReportEnqueue(enqueue);
+           });
   auto display = dyn_cast<sim::SimDisplayOp>(operation);
   return display && isDirectOutputDisplay(display);
 }

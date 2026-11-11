@@ -1058,9 +1058,11 @@ NativeAOTAnalysis NativeAOTAnalysis::compute(ModuleOp module) {
                    sim::has<sim::metadata::DeferredEpochStorage>(enqueue);
           })) {
         // IEEE 1800-2023 16.4.1: a pending deferred assertion report runs its
-        // evaluator in the Observed, Reactive or Postponed region. Starting it
-        // is a cold runtime leaf of the spawning activation (see
-        // isColdRuntimeCheckpoint), like an immediate $error; the evaluator
+        // evaluator in the Observed, Reactive or Postponed region. A generated
+        // activation queues and starts it inline when its captures hold no
+        // managed handle (analysis::isDirectOutput); otherwise starting it is
+        // a cold runtime leaf of the spawning activation (see
+        // isColdRuntimeCheckpoint), like an immediate $error. The evaluator
         // itself stays a runtime process. The report's flush epoch (16.4.2)
         // lets the spawning process resume without the runtime seeing it.
         if (target) {

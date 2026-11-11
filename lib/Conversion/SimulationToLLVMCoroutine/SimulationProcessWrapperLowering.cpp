@@ -387,8 +387,9 @@ FailureOr<LLVM::LLVMFuncOp> makeDirectFragmentWrapper(
               sim::SimDumpVarsOp, sim::SimDumpAllOp, sim::SimDumpControlOp,
               sim::SimDumpLimitOp, sim::SimDumpFlushOp, sim::SimDumpPortsOp,
               sim::SimDumpPortsControlOp>(operation);
-      // A pending deferred assertion report is a cold runtime exit too
-      // (IEEE 1800-2023 16.4.1); its enqueue may already be an ABI call.
+      // A pending deferred assertion report (IEEE 1800-2023 16.4.1) is a
+      // cold runtime exit too, or an inline call of a generated activation
+      // (analysis::isDirectOutput); its enqueue may already be an ABI call.
       mayTerminate |= sim::isColdRuntimeCheckpoint(operation);
       if (auto call = dyn_cast<LLVM::CallOp>(operation))
         mayTerminate |= call.getCallee() && call.getCallee()->starts_with(

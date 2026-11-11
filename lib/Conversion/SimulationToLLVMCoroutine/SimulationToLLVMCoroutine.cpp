@@ -285,6 +285,15 @@ bool isEvalClosureRuntimeCall(LLVM::CallOp call, LLVM::LLVMFuncOp function,
       // The yield query only reads runtime queues (IEEE 1800-2023 4.5).
       *callee == detail::runtimeWorkPendingName)
     return true;
+  // An epoch-armed deferred report (IEEE 1800-2023 12.4.2.1, 12.5.3.1,
+  // 16.4.1) only queues its ticket, outside any runtime process; its flush
+  // point is the compiler-maintained epoch (16.4.2). A pending generated
+  // report makes the runtime take its region handoff before the Observed
+  // region, where the report's evaluator runs.
+  if ((*callee == "talos_rt_v1_deferred_enqueue" ||
+       *callee == "talos_rt_v1_deferred_enqueue_for_assertion") &&
+      ::talos::schedule::has<::talos::schedule::Field::EvalDirectOutput>(call))
+    return true;
   // LRM 4.6(a), 9.4.2: the hybrid calendar's bounded publication
   // bridge preserves the source actor identity and delivers waits
   // without executing actors or advancing time. Its actor/root are
@@ -371,6 +380,13 @@ LogicalResult verifyGeneratedEvalCallClosures(ModuleOp module) {
               << *callee << " in " << function.getSymName();
           return WalkResult::interrupt();
         }
+        // Starting an epoch-armed report's evaluator only queues that
+        // Observed-region process (IEEE 1800-2023 16.4.1); its spawn helper
+        // is not part of the activation's call closure.
+        if (callee->ends_with(".__talos_spawn") &&
+            ::talos::schedule::has<::talos::schedule::Field::EvalDirectOutput>(
+                call))
+          return WalkResult::advance();
         targets.push_back(FlatSymbolRefAttr::get(module.getContext(), *callee));
       } else if (auto allowed =
                      ::talos::schedule::get<allowedCalleesAttr>(call)) {

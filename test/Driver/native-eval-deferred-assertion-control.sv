@@ -6,11 +6,11 @@
 // RUN: diff -u %t.reference.out %t.eval.out
 // RUN: FileCheck %s < %t.eval.out
 
-// A deferred assertion's report is a cold leaf of the always_comb, so its
-// generated body needs a path probe. With $assertoff/$asserton in the design
-// every attempt reads the assertion control state (IEEE 1800-2023 20.11); the
-// probe reads it like any other value instead of disabling generated eval
-// for the whole design. The failure at 5 falls inside the off window.
+// The always_comb's generated body queues its deferred assertion's report
+// inline (IEEE 1800-2023 16.4.1). With $assertoff/$asserton in the design
+// every attempt reads the assertion control state (20.11); the body reads it
+// like any other value instead of disabling generated eval for the whole
+// design. The failure at 5 falls inside the off window.
 module native_eval_deferred_assertion_control;
   logic clk = 1'b0;
   always #5 clk = ~clk;

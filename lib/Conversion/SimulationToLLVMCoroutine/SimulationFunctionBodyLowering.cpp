@@ -268,6 +268,12 @@ public:
     // eval body (IEEE 1800-2023 21.2.2).
     if (sim::has<sim::metadata::PostponedDisplay>(operation))
       sim::mark<sim::metadata::PostponedDisplay>(call);
+    // Starting an epoch-armed report's Observed-region evaluator stays inline
+    // (IEEE 1800-2023 16.4.1, 16.4.2; see analysis::isDirectOutput).
+    if (::talos::schedule::has<::talos::schedule::Field::EvalDirectOutput>(
+            operation))
+      ::talos::schedule::set<::talos::schedule::Field::EvalDirectOutput>(
+          call, rewriter.getUnitAttr());
     rewriter.replaceOp(operation, call.getResults());
     return success();
   }

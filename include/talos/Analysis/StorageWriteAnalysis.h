@@ -28,7 +28,9 @@ struct StorageViewFact {
 /// activation (a direct output) instead of at a runtime checkpoint: a fixed
 /// stdout/stderr descriptor with a scope, literal formats without strength
 /// queries and only integral, real or net items; `$error` latches the final
-/// status only (IEEE 1800-2023 20.10).
+/// status only (IEEE 1800-2023 20.10). So does an epoch-armed deferred
+/// report: its enqueue and the start of its Observed-region evaluator
+/// (IEEE 1800-2023 12.4.2.1, 12.5.3.1, 16.4.1).
 bool isDirectOutput(mlir::Operation *operation);
 
 /// May-execute reachability before a cold checkpoint returns to the runtime.

@@ -1236,7 +1236,11 @@ LogicalResult materializeEvalTwoStateVariants(
       // nor belong to the generated evaluator's call closure.
       if (!hotProbeBlocks.contains(operation->getBlock()))
         return;
-      if (isa<sim::SimCoveragePointHitOp>(operation))
+      // A direct output (an inline report, display or queued deferred report)
+      // has no effect a dry run must model: the probe skips it below and the
+      // selected body executes it once.
+      if (isa<sim::SimCoveragePointHitOp>(operation) ||
+          isDirectOutput(operation))
         return;
       if (terminalStores.contains(operation))
         return;
@@ -2076,11 +2080,14 @@ LogicalResult materializeEvalTwoStateVariants(
   // Classify helpers without marking their shared canonical definitions.
   // Only private generated copies may bypass monitor bookkeeping and format
   // their supplied snapshots directly, including diagnostics on stderr.
+  // Epoch-armed deferred reports likewise stay inline in private copies.
   auto markDirectOutput = [&](sim::SimFuncOp function) {
-    function.walk([&](sim::SimDisplayOp display) {
-      if (isDirectOutput(display))
+    function.walk([&](Operation *operation) {
+      if (isa<sim::SimDisplayOp, sim::SimDeferredEnqueueOp, sim::SimSpawnOp>(
+              operation) &&
+          isDirectOutput(operation))
         ::talos::schedule::set<schedule::Field::EvalDirectOutput>(
-            display, builder.getUnitAttr());
+            operation, builder.getUnitAttr());
     });
   };
   for (sim::SimFuncOp helper : privateHelpers)

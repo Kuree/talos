@@ -3,6 +3,7 @@
 #include "SimulationToLLVMCoroutinePrivate.h"
 
 #include "talos/Dialect/Native/NativeDialect.h"
+#include "talos/Dialect/Schedule/ScheduleFields.h"
 #include "talos/Dialect/Simulation/SimulationOps.h"
 #include <type_traits>
 
@@ -644,9 +645,16 @@ public:
                                        rewriter.getI64Type(),
                                        assertionID.getValue().getZExtValue()));
     }
-    rewriter.replaceOpWithNewOp<LLVM::CallOp>(
-        operation, TypeRange{rewriter.getI64Type()},
+    auto call = LLVM::CallOp::create(
+        rewriter, location, TypeRange{rewriter.getI64Type()},
         SymbolRefAttr::get(rewriter.getContext(), runtimeFunction), arguments);
+    // An epoch-armed report stays inline in a generated activation (see
+    // analysis::isDirectOutput, IEEE 1800-2023 16.4.2).
+    if (::talos::schedule::has<::talos::schedule::Field::EvalDirectOutput>(
+            operation))
+      ::talos::schedule::set<::talos::schedule::Field::EvalDirectOutput>(
+          call, rewriter.getUnitAttr());
+    rewriter.replaceOp(operation, call.getResults());
     return success();
   }
 };
