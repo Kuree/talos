@@ -1,6 +1,7 @@
 // RUN: talos-opt %S/Inputs/vpi-value-change-bytecode.mlir --pass-pipeline='builtin.module(simulation.design(simulation.func(talos-sim-thread-process-cfg),talos-sim-build-compute-graph),encode-talos-sim-to-bytecode{vpi=full require-bytecode=true},convert-talos-sim-processes-to-llvm-coroutines,materialize-runtime-byte-globals,test-talos-export-llvm-symbols{main=model_main})' | talos-translate --mlir-to-llvmir | opt -S -passes='coro-early,coro-split<reuse-storage>,coro-cleanup,default<O3>,verify' -o %t.ll
 // RUN: %target_cxx -std=c++17 -O2 -I%S/../../runtime/include -I%obj_root/lib/talos/include %t.ll %S/Inputs/check-vpi-value-change-bytecode.cpp %runtime_link_flags -o %t.exe
 // RUN: %t.exe | FileCheck %s
+// RUN: %t.exe finish | FileCheck %s --check-prefix=FINISH
 
 // LRM 4.10, 38.36.1, 38.39: every coherent blocking/NBA update is observed
 // before later design work. VPI puts drain at application return, with the
@@ -8,3 +9,7 @@
 // CHECK: value-change: coherent stores, C6 puts, NBA order, selectors and handles
 // CHECK-NEXT: warm callback churn: 10000 public registrations and deliveries, zero allocations
 // CHECK-NEXT: callback iterator churn: 1000 removals reclaim every alias
+
+// A callback's vpiFinish at the first NBA commit (value 3) leaves the second
+// queued NBA (value 4) and the later delayed stores uncommitted (4.10, 20.2).
+// FINISH: finish status=0 seen=0,1,2,3 final=3

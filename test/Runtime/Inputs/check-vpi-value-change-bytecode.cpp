@@ -141,7 +141,61 @@ static vpiHandle findRegistration() {
   return result;
 }
 
-int main() {
+// A callback that finishes at the first NBA value of `top.value`.
+static unsigned finishSeen[8], finishCount;
+static PLI_INT32 finishAtNBA(p_cb_data data) {
+  assert(data->reason == cbValueChange && finishCount < 8);
+  unsigned observed = data->value->value.vector[0].aval & 0xff;
+  finishSeen[finishCount++] = observed;
+  if (observed == 3)
+    vpi_control(vpiFinish, 0);
+  return 0;
+}
+
+// IEEE 1800-2023 4.10, 20.2: $finish from a callback during an NBA barrier
+// ends the time slot before the next queued update commits.
+static int finishScenario() {
+  talos_rt_context *context = nullptr;
+  assert(talos_rt_v1_context_create_for_design(&__talos_execution_descriptor_v1,
+                                               &context) == TALOS_RT_OK);
+  assert(talos_rt_v1_vpi_startup(context, nullptr, 0) == TALOS_RT_OK);
+  assert(talos_rt_v1_vpi_end_compile(context) == TALOS_RT_OK);
+  assert(talos_rt_v1_vpi_start_simulation(context) == TALOS_RT_OK);
+  vpiHandle value =
+      vpi_handle_by_name(const_cast<char *>("top.value"), nullptr);
+  assert(value);
+  s_vpi_time time{};
+  time.type = vpiSuppressTime;
+  s_vpi_value format{};
+  format.format = vpiVectorVal;
+  s_cb_data registration{};
+  registration.reason = cbValueChange;
+  registration.cb_rtn = finishAtNBA;
+  registration.obj = value;
+  registration.time = &time;
+  registration.value = &format;
+  assert(vpi_register_cb(&registration));
+  talos_rt_process_spawn_plan_v1 plan{};
+  plan.descriptor = &rootDescriptor;
+  plan.schedule_flags = TALOS_RT_SCHEDULE_ROOT;
+  plan.actor_slot = UINT32_MAX;
+  assert(talos_rt_v1_process_spawn(context, &plan, nullptr));
+  talos_rt_status status = talos_rt_v1_scheduler_run(context);
+  s_vpi_value final{};
+  final.format = vpiIntVal;
+  vpi_get_value(value, &final);
+  std::printf("finish status=%d seen=", static_cast<int>(status));
+  for (unsigned index = 0; index != finishCount; ++index)
+    std::printf("%s%u", index ? "," : "", finishSeen[index]);
+  std::printf(" final=%d\n", final.value.integer);
+  assert(vpi_release_handle(value) == 1);
+  talos_rt_v1_context_destroy(context);
+  return 0;
+}
+
+int main(int argc, char **argv) {
+  if (argc > 1 && std::strcmp(argv[1], "finish") == 0)
+    return finishScenario();
   talos_rt_context *context = nullptr;
   assert(talos_rt_v1_context_create_for_design(&__talos_execution_descriptor_v1,
                                                &context) == TALOS_RT_OK);

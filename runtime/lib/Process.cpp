@@ -6713,13 +6713,21 @@ talos_rt_status runScheduler(talos_rt_context *context,
             context->scheduledInertialPathNBAs.empty() &&
             !snapshotPublications) {
           size_t retained = 0;
-          for (size_t index = 0;; ++index) {
+          size_t index = 0;
+          for (;; ++index) {
             if (index == context->scheduledNBAs.size()) {
               if (!flushDelayedNetPublications())
                 return context->schedulerStatus;
               if (index == context->scheduledNBAs.size())
                 break;
             }
+            // Immediate callbacks run inside publication. Return to the
+            // outer scheduler's finish/final handling before committing a
+            // later update, retaining its captures for normal cleanup.
+            if (context->vpiState && (context->schedulerFinishRequested.load(
+                                          std::memory_order_relaxed) &
+                                      1))
+              break;
             ScheduledNBA &update = context->scheduledNBAs[index];
             bool due =
                 update.cancelled || (update.dueTime <= context->schedulerTime &&
@@ -6734,6 +6742,10 @@ talos_rt_status runScheduler(talos_rt_context *context,
             if (!update.cancelled) {
               if (!prepareDelayedNetBatch(update))
                 return context->schedulerStatus;
+              if (context->vpiState && (context->schedulerFinishRequested.load(
+                                            std::memory_order_relaxed) &
+                                        1))
+                break;
               ScheduledNBA &current = context->scheduledNBAs[index];
               bool pathCurrent =
                   currentNativeNBAUpdateUnlocked(context, current);
@@ -6759,10 +6771,20 @@ talos_rt_status runScheduler(talos_rt_context *context,
               }
             }
           }
+          for (; index != context->scheduledNBAs.size(); ++index) {
+            if (retained != index)
+              context->scheduledNBAs[retained] =
+                  std::move(context->scheduledNBAs[index]);
+            ++retained;
+          }
           context->scheduledNBAs.resize(retained);
         } else {
           MixedNBABarrierQueues queues(context);
           for (;;) {
+            if (context->vpiState && (context->schedulerFinishRequested.load(
+                                          std::memory_order_relaxed) &
+                                      1))
+              break;
             publicationFlushed = false;
             uint64_t nativeSequence = UINT64_MAX;
             size_t nativeIndex = 0;
@@ -6850,6 +6872,10 @@ talos_rt_status runScheduler(talos_rt_context *context,
             } else if (!flushDelayedNetPublications()) {
               return context->schedulerStatus;
             }
+            if (context->vpiState && (context->schedulerFinishRequested.load(
+                                          std::memory_order_relaxed) &
+                                      1))
+              break;
             // Publication callbacks may cancel a calendar entry or replace
             // its owner. Re-select before using any previously found item.
             if (publicationFlushed)
