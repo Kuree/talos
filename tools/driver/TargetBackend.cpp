@@ -1588,9 +1588,9 @@ LogicalResult emitTargetOutput(ModuleOp module,
   }
   if (failed(addressNativeStateThroughBases(module)))
     return failure();
-  llvm::LLVMContext llvmContext;
+  auto llvmContext = std::make_unique<llvm::LLVMContext>();
   std::unique_ptr<llvm::Module> llvmModule =
-      translateModuleToLLVMIR(module, llvmContext, "talos");
+      translateModuleToLLVMIR(module, *llvmContext, "talos");
   if (!llvmModule) {
     errs() << "talos: error: LLVM dialect translation failed\n";
     return failure();
@@ -1858,8 +1858,8 @@ LogicalResult emitTargetOutput(ModuleOp module,
           partitionCount);
       modulePaths.resize(partitionCount);
       // Bodies not yet taken still use the definitions of earlier partitions,
-      // so partitions are released together, off this thread, once none remains
-      // to be taken.
+      // so keep them together until none remains to be taken; the producer
+      // can then release their shared source IR.
       std::vector<std::unique_ptr<llvm::Module>> serializedPartitions;
       double takeSeconds = 0.0;
       SmallVector<size_t> takeOrder(partitionCount);
@@ -1965,14 +1965,14 @@ LogicalResult emitTargetOutput(ModuleOp module,
         markBackendTiming("partition serialization and target creation");
       }
 
-      // Workers parse into private contexts; only this task still touches the
-      // source context now. It releases the partitions and the source module
-      // while they compile.
-      pool.async([&] {
-        serializedPartitions.clear();
-        llvmModule.reset();
-        releaseFreedHeapPages();
-      });
+      // Workers only read serialized bitcode into private contexts. Release
+      // the source IR here, after every partition has been serialized. A pool
+      // task queued behind the compilation jobs retains that entire IR until
+      // most workers finish, overlapping it with peak code-generation memory.
+      serializedPartitions.clear();
+      llvmModule.reset();
+      llvmContext.reset();
+      releaseFreedHeapPages();
       pool.wait();
       for (const std::shared_future<bool> &future : futures)
         if (!future.get()) {
@@ -2023,6 +2023,13 @@ LogicalResult emitTargetOutput(ModuleOp module,
     }
     return success();
   }
+
+  // Linking consumes only the emitted object/bitcode files. Release the
+  // source context's uniqued constants and types too, before in-process LLD
+  // allocates its own input graph and worker stacks.
+  llvmModule.reset();
+  llvmContext.reset();
+  releaseFreedHeapPages();
 
   std::optional<std::string> support =
       backend->findSupportTree(options.executablePath);
