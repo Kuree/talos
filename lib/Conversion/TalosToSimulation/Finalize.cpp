@@ -1047,6 +1047,16 @@ static void buildTalosToSimulationPipelineImpl(
   }
 
   if (optLevel > 0) {
+    // IEEE 1800-2023 27.4/10.3.2/4.7/6.6.1: the per-slice continuous
+    // assignments of one net (generate loops) run as one process with one
+    // driver, in word operations where the slices are bit lanes.
+    TalosSimCoalesceContinuousDriversPassOptions coalesceOptions;
+    coalesceOptions.vpi = vpiMode.str();
+    designManager.addPass(createTalosSimCoalesceContinuousDriversPass(
+        std::move(coalesceOptions)));
+  }
+
+  if (optLevel > 0) {
     TalosSimExtractPeriodicClocksPassOptions periodicOptions;
     periodicOptions.vpi = vpiMode.str();
     designManager.addPass(

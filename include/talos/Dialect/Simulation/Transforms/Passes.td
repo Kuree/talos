@@ -235,6 +235,38 @@ def TalosSimAliasPortConnectionsPass
   ];
 }
 
+def TalosSimCoalesceContinuousDriversPass
+    : Pass<"talos-sim-coalesce-continuous-drivers", "talos::sim::SimDesignOp"> {
+  let summary = "Merge continuous assignments to adjacent slices of one net";
+  let description = [{
+    Continuous-assignment processes that drive adjacent, disjoint static
+    slices of one plain strong wire (for example the per-bit assignments of a
+    generate loop, IEEE 1800-2023 27.4) become one process with one driver of
+    the combined slice (10.3.2, 4.7; per-bit resolution of one strong
+    contribution is unchanged, 6.6.1), also on port-collapsed nets (23.3.3.7)
+    unless a member reads a collapsed alias of the run. Within the merged
+    process a member
+    that reads a slice another member drives takes that member's value,
+    unless VPI may deposit (38.34) or the design may force (10.6.2). The
+    concatenated narrow slices become word operations when they are
+    isomorphic bit lanes: contiguous reads or extracts, broadcasts,
+    constants, bitwise operations and transposed reductions, in words of at
+    most 64 bits. Requires no extended VCD ($dumpports) and an unscheduled
+    design.
+  }];
+  let dependentDialects = ["talos::sim::TalosSimulationDialect",
+                           "mlir::arith::ArithDialect",
+                           "mlir::cf::ControlFlowDialect"];
+  let statistics = [
+    Statistic<"numMerged", "merged", "Continuous assignments merged">,
+    Statistic<"numRuns", "runs", "Merged processes created">
+  ];
+  let options = [
+    Option<"vpi", "vpi", "std::string", "\"full\"",
+           "External observation/mutation contract: off, read, or full">
+  ];
+}
+
 def TalosSimForwardCopyProcessesPass
     : Pass<"talos-sim-forward-copy-processes", "talos::sim::SimDesignOp"> {
   let summary = "Substitute single-driver continuous assignments into readers";

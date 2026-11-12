@@ -1,6 +1,7 @@
 add_mlir_dialect_library(TalosSimulationTransforms
   AliasPortConnections.cpp
   AnnotateSteadyUnknown.cpp
+  CoalesceContinuousDrivers.cpp
   CompileRandomPlans.cpp
   DevirtualizeClassCalls.cpp
   FoldSmallDomains.cpp
