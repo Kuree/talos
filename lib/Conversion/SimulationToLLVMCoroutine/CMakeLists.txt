@@ -79,6 +79,7 @@ add_mlir_library(TalosSimulationToLLVMCoroutine
   TalosSimulationToScheduleNative
   TalosScheduleNativeTransforms
   TalosSimulationAnalysis
+  TalosTransforms
   TalosRuntimeIR
   TalosRuntimeToLLVM
   TalosSimulationIR

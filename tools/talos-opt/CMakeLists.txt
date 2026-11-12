@@ -25,6 +25,7 @@ target_link_libraries(talos-opt
     TalosRuntimeToLLVM
     TalosSimulationIR
     TalosSimulationTransforms
+    TalosTransforms
     TalosSimulationToLLVMCoroutine
     TalosSimulationToBytecode
     TalosSimulationToRuntime

@@ -40,6 +40,7 @@
 #include "talos/Runtime/OutputItemFlags.h"
 #include "talos/Runtime/Runtime.h"
 #include "talos/Runtime/StableHandle.h"
+#include "talos/Transforms/Passes.h"
 
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
@@ -4465,6 +4466,10 @@ public:
     // would introduce live values missing from the canonical frame plan.
     if (auto optimization = native::get<native::OptimizationLevel>(module);
         optimization && optimization.getInt() > 0) {
+      // Lowered predicates merge constant answers ahead of their branch; take
+      // each constant edge to its successor before canonicalization drops
+      // the bypassed blocks.
+      functions.addPass(createTalosThreadConstantBranchesPass());
       functions.addPass(createCanonicalizerPass());
       functions.addPass(createCSEPass());
     }

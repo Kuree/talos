@@ -16,6 +16,7 @@
 #include "talos/Dialect/Slang/SlangDialect.h"
 #include "talos/Dialect/Talos/TalosDialect.h"
 #include "talos/Dialect/UPF/UPFDialect.h"
+#include "talos/Transforms/Passes.h"
 
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/IR/DialectRegistry.h"
@@ -45,6 +46,7 @@ int main(int argc, char **argv) {
   talos::registerSimulationToLLVMCoroutinePipeline();
   talos::registerTalosSimulationPasses();
   talos::registerTalosSchedulePasses();
+  talos::registerTalosTransformsPasses();
   talos::registerSimulationToSchedulePipeline();
   talos::registerTalosToSimulationPipeline();
 #ifdef TALOS_INCLUDE_TESTS
