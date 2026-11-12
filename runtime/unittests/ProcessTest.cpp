@@ -10825,6 +10825,44 @@ TEST(Scheduler, WritableEvalNBACutReturnsBeforeUnscopedActor) {
   talos_rt_v1_context_destroy(context);
 }
 
+TEST(Scheduler, QueuedNBABarrierPreservesActiveAndReactiveEligibility) {
+  talos_rt_context *context = nullptr;
+  ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+  context->schedulerTime = 42;
+  auto enqueue = [&](uint64_t due, uint32_t region, bool cancelled = false) {
+    ScheduledNBA update;
+    update.dueTime = due;
+    update.execRegion = region;
+    update.cancelled = cancelled;
+    context->scheduledNBAs.push_back(std::move(update));
+  };
+  enqueue(51, TALOS_RT_REGION_ACTIVE);
+  enqueue(40, TALOS_RT_REGION_ACTIVE, true);
+  enqueue(40, TALOS_RT_REGION_RE_NBA);
+  enqueue(42, TALOS_RT_REGION_NBA);
+  // A later Active driver update must outrank an earlier queued NBA.
+  enqueue(41, TALOS_RT_REGION_ACTIVE);
+  EXPECT_EQ(nextDueNBABarrierRegionUnlocked(context), TALOS_RT_REGION_ACTIVE);
+  context->schedulerDrainingReactive = true;
+  EXPECT_EQ(nextDueNBABarrierRegionUnlocked(context), TALOS_RT_REGION_RE_NBA);
+  context->scheduledNBAs[2].cancelled = true;
+  EXPECT_EQ(nextDueNBABarrierRegionUnlocked(context), UINT32_MAX);
+  enqueue(43, TALOS_RT_REGION_REACTIVE);
+  EXPECT_EQ(nextDueNBABarrierRegionUnlocked(context), UINT32_MAX);
+  context->schedulerTime = 43;
+  EXPECT_EQ(nextDueNBABarrierRegionUnlocked(context), TALOS_RT_REGION_REACTIVE);
+  context->schedulerDrainingReactive = false;
+  EXPECT_EQ(nextDueNBABarrierRegionUnlocked(context), TALOS_RT_REGION_ACTIVE);
+  context->scheduledNBAs[4].cancelled = true;
+  EXPECT_EQ(nextDueNBABarrierRegionUnlocked(context), TALOS_RT_REGION_NBA);
+  context->scheduledNBAs[3].cancelled = true;
+  context->scheduledNBAs[5].cancelled = true;
+  EXPECT_EQ(nextDueNBABarrierRegionUnlocked(context), UINT32_MAX);
+  context->schedulerTime = 51;
+  EXPECT_EQ(nextDueNBABarrierRegionUnlocked(context), TALOS_RT_REGION_ACTIVE);
+  talos_rt_v1_context_destroy(context);
+}
+
 TEST(Scheduler, SharedNBABarrierSelectionMatchesScalarInventory) {
   // Cross both the leaf and summary boundaries; include stale generated
   // payloads, runtime stages, empty pages, and all iterative region choices.

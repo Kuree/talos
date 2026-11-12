@@ -4039,10 +4039,18 @@ uint32_t nextDueNBABarrierRegionUnlocked(const talos_rt_context *context,
         barrierRegion = std::min(barrierRegion, entry.execRegion);
     }
   };
-  for (const ScheduledNBA &entry : context->scheduledNBAs)
-    if (!entry.cancelled && entry.dueTime <= context->schedulerTime &&
-        schedulerRegionEligible(context, entry.execRegion))
-      barrierRegion = std::min(barrierRegion, entry.execRegion);
+  // Region eligibility is invariant during this query. Keep its reactive
+  // predicate outside the ordinary queue scan (IEEE 1800-2023 4.5).
+  if (context->schedulerDrainingReactive) {
+    for (const ScheduledNBA &entry : context->scheduledNBAs)
+      if (!entry.cancelled && entry.dueTime <= context->schedulerTime &&
+          schedulerRegionEligible(context, entry.execRegion))
+        barrierRegion = std::min(barrierRegion, entry.execRegion);
+  } else {
+    for (const ScheduledNBA &entry : context->scheduledNBAs)
+      if (!entry.cancelled && entry.dueTime <= context->schedulerTime)
+        barrierRegion = std::min(barrierRegion, entry.execRegion);
+  }
   if (!context->schedulerDrainingReactive &&
       !context->scheduledInertialPathNBAs.empty() &&
       context->scheduledInertialPathNBAs.begin()->first.first <=
