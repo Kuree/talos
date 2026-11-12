@@ -12552,6 +12552,57 @@ TEST(Scheduler, AllKnownSummaryRetainsUnknownsAcrossPartialKnownWrites) {
   talos_rt_v1_context_destroy(context);
 }
 
+TEST(Scheduler, ZeroPatternRootsRefreshWithEmptyOrTrailingInventory) {
+  for (bool hasPattern : {false, true}) {
+    SCOPED_TRACE(hasPattern);
+    talos_rt_context *context = nullptr;
+    ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);
+    std::array<uint64_t, 3> unknown{hasPattern ? 0xffu : 0u, 0, 0};
+    uint64_t summary = 0;
+    const uint32_t patternCount = hasPattern ? 1 : 0;
+    const talos_rt_native_unknown_root_v1 roots[] = {
+        {0, 64, 0, patternCount}, {64, 128, patternCount, 0}};
+    const uint64_t patterns[] = {0, 8};
+    ASSERT_EQ(talos_rt_v1_native_state_bind_unknown_summary(
+                  context, reinterpret_cast<uint8_t *>(unknown.data()), 192,
+                  &summary, roots, 2, hasPattern ? patterns : nullptr,
+                  patternCount),
+              TALOS_RT_OK);
+    // The second root has no ranges. Its first_pattern is either zero in an
+    // empty vector or exactly the end of a nonempty vector; neither permits
+    // forming a reference to the next element (caught by UBSan when empty).
+    ASSERT_EQ(context->nativeUnknownSummary->patterns.size(),
+              2u * patternCount);
+    const uint64_t all[] = {0, 3};
+    auto refresh = [&] {
+      return talos_rt_v1_native_state_refresh_unknown_summary(context, all, 1,
+                                                              nullptr);
+    };
+    const auto &mismatch = context->nativeUnknownSummary->mismatches[1];
+    ASSERT_EQ(refresh(), 1u);
+    EXPECT_EQ(summary, 0u);
+    EXPECT_EQ(mismatch.bit, UINT64_MAX);
+    EXPECT_EQ(mismatch.cursor, 0u);
+
+    // A later chunk still becomes dirty, remembers its mismatch, and clears
+    // again without advancing an empty pattern cursor or tainting root zero.
+    unknown[2] = 1;
+    talos_rt_v1_native_state_mark_unknown(context, 128, 1);
+    EXPECT_EQ(summary, 2u);
+    EXPECT_EQ(refresh(), 0u);
+    EXPECT_EQ(mismatch.bit, 128u);
+    EXPECT_EQ(mismatch.cursor, 0u);
+    EXPECT_EQ(refresh(), 0u);
+    unknown[2] = 0;
+    talos_rt_v1_native_state_mark_unknown(context, 128, 1);
+    EXPECT_EQ(refresh(), 1u);
+    EXPECT_EQ(summary, 0u);
+    EXPECT_EQ(mismatch.bit, UINT64_MAX);
+    EXPECT_EQ(mismatch.cursor, 0u);
+    talos_rt_v1_context_destroy(context);
+  }
+}
+
 TEST(Scheduler, UnknownSummaryRefreshRereadsLastDifference) {
   talos_rt_context *context = nullptr;
   ASSERT_EQ(talos_rt_v1_context_create(&context), TALOS_RT_OK);

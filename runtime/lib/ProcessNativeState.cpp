@@ -241,6 +241,8 @@ uint64_t lowBits(uint64_t width) {
 uint64_t patternBits(const NativeUnknownSummary &summary,
                      const talos_rt_native_unknown_root_v1 &entry, uint64_t bit,
                      uint64_t width, uint32_t *cursor) {
+  if (!entry.pattern_count)
+    return 0;
   const uint64_t *ranges = &summary.patterns[2 * entry.first_pattern];
   uint32_t index = cursor ? *cursor : 0;
   while (index != entry.pattern_count &&
