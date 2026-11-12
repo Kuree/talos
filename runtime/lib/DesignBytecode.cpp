@@ -3473,6 +3473,17 @@ executeFunction(const Image &image, Frame &frame, talos_rt_context *context,
                   automaticState->unknown.data(), absolute + bitIndex, width);
             }
         }
+        // Native drives leave a mirror driver's slot stale (IEEE 1800-2023
+        // 6.6.1: it equals the net bits it drives). Refresh the bits this
+        // store addresses so its old value and change test are exact.
+        if (!isLoad && !local && !automatic && !isOverride &&
+            descriptorKind == TALOS_RT_DESCRIPTOR_DRIVER && start >= 0 &&
+            begin < end) {
+          uint64_t base = boundedStatic ? staticState->bitOffset : 0;
+          refreshMirrorDriverSlots(image, context,
+                                   base + static_cast<uint64_t>(begin),
+                                   base + static_cast<uint64_t>(end));
+        }
         // A fully bounded canonical or automatic store that no force,
         // assignment, override or conditional waiter observes per bit updates
         // both planes (and a continuous driver's record) and computes its

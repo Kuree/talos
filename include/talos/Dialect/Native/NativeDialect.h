@@ -59,6 +59,7 @@ using DriverLow = NativeDialect::DriverLowAttrHelper;
 using NetId = NativeDialect::NetIdAttrHelper;
 using ExactDriverRange = NativeDialect::ExactDriverRangeAttrHelper;
 using WholeDriver = NativeDialect::WholeDriverAttrHelper;
+using MirrorContribution = NativeDialect::MirrorContributionAttrHelper;
 using GuardedBulkDrive = NativeDialect::GuardedBulkDriveAttrHelper;
 using CleanBulkDrive = NativeDialect::CleanBulkDriveAttrHelper;
 using BulkCopySourceAssumeClean =

@@ -14201,7 +14201,20 @@ extern "C" talos_rt_status
 talos_rt_v1_design_read(talos_rt_context *context,
                         talos_rt_design_cursor_v1 cursor, uint64_t *value,
                         uint64_t *unknown, uint64_t bitWidth) {
-  return accessState(context, cursor, value, unknown, bitWidth, false);
+  talos_rt_status status =
+      accessState(context, cursor, value, unknown, bitWidth, false);
+  if (status != TALOS_RT_OK)
+    return status;
+  // A driver record reads its contribution slot; native drives leave a mirror
+  // driver's slot stale (TALOS_RT_DB_DRIVER_MIRRORS_NET).
+  const Database *database = cachedDatabase(context);
+  const uint8_t *record;
+  uint32_t kind;
+  if (!database || !getRecord(*database, cursor.offset, record, kind) ||
+      kind != TALOS_RT_DESIGN_RECORD_DRIVER)
+    return TALOS_RT_OK;
+  return talos_rt_overlay_mirror_driver_read(context, read64(record + 80),
+                                             bitWidth, value, unknown);
 }
 
 talos_rt_status talos_rt_design_state_location(talos_rt_context *context,

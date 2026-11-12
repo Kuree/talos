@@ -6408,6 +6408,110 @@ TEST(DesignBytecode, ResolvesFourStateDriversFromInitialHighImpedance) {
   talos_rt_v1_context_destroy(context);
 }
 
+// IEEE 1800-2023 6.6.1, Table 6-2: a mirror driver
+// (TALOS_RT_DB_DRIVER_MIRRORS_NET) is the lone strong contribution to the net
+// bits it drives, and native drives leave its slot stale. Every query reads
+// the net instead, and an interpreted store first refreshes the slot from it.
+// The same image without the flag is the control: a stale slot changes it.
+TEST(DesignBytecode, MirrorDriverQueriesReadTheNet) {
+  struct Observed {
+    uint16_t net = 0, driver = 0;
+    uint32_t total = 0, one = 0;
+    uint64_t read = 0, readUnknown = 0;
+  };
+  // `slot` is the driver's bit 3 plane pair; net bit 3 holds a known 1.
+  auto observe = [](bool mirror, bool slotValue, bool slotUnknown) {
+    Observed observed;
+    Fixture fixture;
+    fixture.bytecode = makeDriverBytecode();
+    size_t stateOffset = get64(fixture.bytecode, 168);
+    put32(fixture.bytecode, stateOffset + 32 + 4,
+          driverFlags(6, 6) | (mirror ? TALOS_RT_DB_DRIVER_MIRRORS_NET : 0));
+    put64(fixture.bytecode, 32, imageChecksum(fixture.bytecode));
+    // Retag `top.value` as the driver's record, slots [65, 130).
+    fixture.database = makeDatabase();
+    put32(fixture.database, 240,
+          designRecordKind(TALOS_RT_DESIGN_RECORD_DRIVER, 0));
+    put64(fixture.database, 240 + 80, 65);
+    put64(fixture.database, 32, imageChecksum(fixture.database));
+    fixture.execution.bytecode = fixture.bytecode.data();
+    fixture.execution.bytecode_size = fixture.bytecode.size();
+    fixture.execution.design_database = fixture.database.data();
+    fixture.execution.design_database_size = fixture.database.size();
+    fixture.execution.state_bit_count = 130;
+    fixture.execution.checksum = imageChecksum(fixture.bytecode);
+    fixture.entry = {&fixture.execution, 0, 0};
+    talos_rt_context *context = nullptr;
+    EXPECT_EQ(
+        talos_rt_v1_context_create_for_design(&fixture.execution, &context),
+        TALOS_RT_OK);
+    if (!context)
+      return observed;
+    auto setState = [&](uint64_t offset, bool value, bool unknown) {
+      uint64_t mask = UINT64_C(1) << (offset % 64);
+      context->stateValue[offset / 64] =
+          value ? context->stateValue[offset / 64] | mask
+                : context->stateValue[offset / 64] & ~mask;
+      context->stateUnknown[offset / 64] =
+          unknown ? context->stateUnknown[offset / 64] | mask
+                  : context->stateUnknown[offset / 64] & ~mask;
+    };
+    setState(3, true, false);
+    setState(68, slotValue, slotUnknown);
+    uint64_t netHandle = talos::designbytecode::encodeGlobalHandle(3);
+    EXPECT_EQ(
+        talos_rt_design_net_strength(context, netHandle, &observed.net, false),
+        TALOS_RT_OK);
+    EXPECT_EQ(talos_rt_design_driver_strength(context, 68, UINT64_MAX,
+                                              &observed.driver, false),
+              TALOS_RT_OK);
+    uint32_t forced = 0, zero = 0, unknown = 0;
+    EXPECT_EQ(talos_rt_count_design_drivers(context, netHandle, &forced,
+                                            &observed.total, &zero,
+                                            &observed.one, &unknown, false),
+              TALOS_RT_OK);
+    talos_rt_design_cursor_v1 record{};
+    EXPECT_EQ(talos_rt_v1_design_lookup(
+                  &fixture.execution,
+                  reinterpret_cast<const uint8_t *>("top.value"), 9, &record),
+              TALOS_RT_OK);
+    std::array<uint64_t, 2> value{}, valueUnknown{};
+    EXPECT_EQ(talos_rt_v1_design_read(context, record, value.data(),
+                                      valueUnknown.data(), 65),
+              TALOS_RT_OK);
+    observed.read = (value[0] >> 3) & 1;
+    observed.readUnknown = (valueUnknown[0] >> 3) & 1;
+    // An interpreted store sees the refreshed old contribution.
+    talos::designbytecode::Image image;
+    EXPECT_TRUE(talos::designbytecode::loadValidatedImage(
+        fixture.entry, context, image, /*inventoryOnly=*/true));
+    talos::designbytecode::refreshMirrorDriverSlots(image, context, 65, 130);
+    bool refreshed = (context->stateValue[1] >> 4 & 1) != 0 &&
+                     (context->stateUnknown[1] >> 4 & 1) == 0;
+    EXPECT_EQ(refreshed, mirror || (slotValue && !slotUnknown));
+    talos_rt_v1_context_destroy(context);
+    return observed;
+  };
+  Observed exact = observe(/*mirror=*/false, true, false);
+  EXPECT_EQ(exact.total, 1u);
+  EXPECT_EQ(exact.one, 1u);
+  EXPECT_EQ(exact.read, 1u);
+  EXPECT_EQ(exact.readUnknown, 0u);
+  // The stale slot still holds its initial z: every query reads it.
+  Observed stale = observe(/*mirror=*/false, true, true);
+  EXPECT_NE(stale.net, exact.net);
+  EXPECT_NE(stale.driver, exact.driver);
+  EXPECT_NE(stale.total, exact.total);
+  EXPECT_NE(stale.readUnknown, exact.readUnknown);
+  Observed mirrored = observe(/*mirror=*/true, true, true);
+  EXPECT_EQ(mirrored.net, exact.net);
+  EXPECT_EQ(mirrored.driver, exact.driver);
+  EXPECT_EQ(mirrored.total, exact.total);
+  EXPECT_EQ(mirrored.one, exact.one);
+  EXPECT_EQ(mirrored.read, exact.read);
+  EXPECT_EQ(mirrored.readUnknown, exact.readUnknown);
+}
+
 TEST(DesignBytecode, ResolvesIEEEAmbiguousStrengthRangesBeforeFourState) {
   Fixture fixture;
   fixture.bytecode = makeStrengthDriverBytecode();

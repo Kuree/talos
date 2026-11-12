@@ -44,6 +44,7 @@ add_mlir_library(TalosSimulationAnalysis
   SourceMemoryAnalysis.cpp
   StateDomainAnalysis.cpp
   KnownVersioningAnalysis.cpp
+  ContributionMirrorAnalysis.cpp
   StorageWriteAnalysis.cpp
 
   DEPENDS

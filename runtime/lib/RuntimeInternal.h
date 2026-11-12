@@ -1703,12 +1703,20 @@ struct NetAliasRange {
   bool fourState = false;
   bool bitwiseDelay = false;
   std::vector<std::optional<std::array<uint64_t, 3>>> propagationDelays{};
+  // A driver range with TALOS_RT_DB_DRIVER_MIRRORS_NET: its contribution is
+  // the net bits at `targetOffset`, and native drives leave the slot stale.
+  bool mirrorsNet = false;
 };
 
 struct NetDriverBit {
   uint64_t valueOffset = 0;
+  // The net bit this driver bit drives; with `mirrorsNet`
+  // (TALOS_RT_DB_DRIVER_MIRRORS_NET), queries read the contribution there
+  // instead of at `valueOffset`.
+  uint64_t netOffset = 0;
   uint8_t strength0 = 6;
   uint8_t strength1 = 6;
+  bool mirrorsNet = false;
 };
 
 struct NetStrengthDriverPairRange {
@@ -1796,6 +1804,8 @@ struct NetAliasCache {
   std::unordered_map<uint64_t, uint8_t> chargeCapacityByBit;
   std::vector<NetAliasRange> nets;
   std::vector<NetAliasRange> drivers;
+  // Whether any driver range has TALOS_RT_DB_DRIVER_MIRRORS_NET.
+  bool hasMirrorDrivers = false;
   std::vector<NetStrengthDriverPairRange> strengthDriverPairs;
 
   /// The net holding state bit `bit`, or null.
@@ -4175,6 +4185,14 @@ talos_rt_initialize_design_state(talos_rt_context *context) noexcept;
 extern "C" talos_rt_status talos_rt_v1_process_instance_create_for_context(
     talos_rt_context *context, const talos_rt_process_descriptor_v1 *descriptor,
     talos_rt_process_instance_v1 **outInstance);
+// Replaces the bits of a read of driver slots [stateOffset, stateOffset +
+// width) that belong to mirror drivers (TALOS_RT_DB_DRIVER_MIRRORS_NET) with
+// the net bits they drive: native drives leave those slots stale.
+talos_rt_status talos_rt_overlay_mirror_driver_read(talos_rt_context *context,
+                                                    uint64_t stateOffset,
+                                                    uint64_t width,
+                                                    uint64_t *value,
+                                                    uint64_t *unknown) noexcept;
 talos_rt_status talos_rt_resolve_design_drivers(talos_rt_context *context,
                                                 uint64_t begin,
                                                 uint64_t end) noexcept;

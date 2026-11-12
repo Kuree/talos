@@ -80,6 +80,9 @@ struct StateLayout {
     sim::Strength strength1;
     bool initialX;
     std::optional<unsigned> strengthBank;
+    // `simulation.contribution_mirrors_net`: the runtime reads the driven net
+    // bits in place of the slot, which native drives do not store.
+    bool mirrorsNet = false;
   };
   struct Connection {
     uint64_t lhsOffset;

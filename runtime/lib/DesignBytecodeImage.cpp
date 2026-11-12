@@ -3155,8 +3155,9 @@ bool validateImage(const Image &image, bool validateCode) {
     uint32_t strength0 = (driver.argument >> 3) & 0xf;
     uint32_t strength1 = (driver.argument >> 7) & 0xf;
     bool highStrengthBank = (driver.argument & (uint32_t{1} << 11)) != 0;
+    bool mirrorsNet = (driver.argument & TALOS_RT_DB_DRIVER_MIRRORS_NET) != 0;
     if (driver.function != kDriverStateDescriptor ||
-        (driver.argument & ~uint32_t{0x7fff}) != 0 ||
+        (driver.argument & ~uint32_t{0xffff}) != 0 ||
         (driver.argument & 1) == 0 ||
         decodeDriverResolution(driver.argument) > 9 || strength0 > 8 ||
         strength1 > 8 || driver.planeSize == 0 ||
@@ -3169,6 +3170,12 @@ bool validateImage(const Image &image, bool validateCode) {
         decodeDriverResolution(driver.argument) !=
             decodeNetResolution(target->argument))
       return reject(__LINE__, "invalid or misordered driver state record");
+    // A mirror is a strong/strong wire contribution (IEEE 1800-2023 6.6.1),
+    // never one polarity bank of a conditional gate.
+    if (mirrorsNet && (highStrengthBank || (strength0 != 0 && strength0 != 7) ||
+                       (strength1 != 0 && strength1 != 7) ||
+                       decodeDriverResolution(driver.argument) > 1))
+      return reject(__LINE__, "invalid mirror driver state record");
     if (highStrengthBank) {
       if (driverRecords.empty())
         return reject(__LINE__, "orphaned high-polarity driver bank");

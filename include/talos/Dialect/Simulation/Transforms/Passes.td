@@ -79,6 +79,27 @@ def TalosSimAnnotateSteadyUnknownPass
   let dependentDialects = ["talos::sim::TalosSimulationDialect"];
 }
 
+def TalosSimMarkContributionMirrorsPass
+    : Pass<"talos-sim-mark-contribution-mirrors", "talos::sim::SimDesignOp"> {
+  let summary = "Record the drivers whose contribution slot equals their net";
+  let description = [{
+    Sets `simulation.contribution_mirrors_net` on each driver declaration
+    that ContributionMirrorAnalysis proves to be the lone strong contribution
+    to every bit it drives, on a wire that nothing can force or release, with
+    only immediate drives of constant slices (IEEE 1800-2023 6.6.1, Table
+    6-2). Such a slot always equals the net bits, so the runtime reads the net
+    in its place and native drives skip the store. A writable VPI contract
+    records nothing: it can force any net (38.34), and release must then
+    restore the drivers' values (10.6.2). Run on the canonical design, before
+    bytecode encoding records the fact in the image.
+  }];
+  let options = [Option<"vpi", "vpi", "std::string", "\"full\"",
+                        "External observation/mutation contract: off, read, or full">];
+  let statistics = [Statistic<"numDrivers", "drivers",
+                              "Drivers whose slot mirrors their net">];
+  let dependentDialects = ["talos::sim::TalosSimulationDialect"];
+}
+
 def TalosSimInsertGCPollsPass
     : Pass<"talos-sim-insert-gc-polls", "mlir::ModuleOp"> {
   let summary = "Place managed-heap collection polls for polled collection";

@@ -1,6 +1,7 @@
 //===- SimulationDriverLowering.cpp - Native driver patterns ------------===//
 
 #include "SimulationToLLVMCoroutinePrivate.h"
+#include "talos/Analysis/ContributionMirrorAnalysis.h"
 #include "talos/Analysis/ParallelWalk.h"
 #include "talos/Dialect/Native/NativeDialect.h"
 #include "talos/Dialect/Schedule/ScheduleEnums.h"
@@ -238,226 +239,6 @@ const NativeStateLayout::Net *getBulkCapturedIsolatedDriverNet(
   return foundNet->second;
 }
 
-std::optional<uint64_t> getStaticDriverOffset(Value value, uint64_t driverID,
-                                              DenseSet<Value> &active) {
-  if (!value || !active.insert(value).second)
-    return std::nullopt;
-  auto finish = [&](std::optional<uint64_t> result) {
-    active.erase(value);
-    return result;
-  };
-  if (auto context = value.getDefiningOp<sim::SimContextDriverOp>())
-    return finish(context.getId() == driverID ? std::optional<uint64_t>(0)
-                                              : std::nullopt);
-  if (auto extract = value.getDefiningOp<sim::SimDriverExtractOp>()) {
-    std::optional<uint64_t> base =
-        getStaticDriverOffset(extract.getInput(), driverID, active);
-    int64_t rawLow = extract.getLowBit();
-    if (!base || rawLow < 0 ||
-        static_cast<uint64_t>(rawLow) > UINT64_MAX - *base)
-      return finish(std::nullopt);
-    return finish(*base + static_cast<uint64_t>(rawLow));
-  }
-  if (auto subelement = value.getDefiningOp<sim::SimDriverSubelementOp>()) {
-    std::optional<uint64_t> base =
-        getStaticDriverOffset(subelement.getInput(), driverID, active);
-    if (!base)
-      return finish(std::nullopt);
-    Type current = subelement.getInput().getType().getElementType();
-    uint64_t offset = 0;
-    for (int64_t rawIndex : subelement.getIndices()) {
-      if (rawIndex < 0 || static_cast<uint64_t>(rawIndex) >=
-                              sim::getAggregateNumElements(current))
-        return finish(std::nullopt);
-      auto child = sim::getAggregateProvenanceSubelement(
-          current, static_cast<unsigned>(rawIndex));
-      if (!child || child->first > UINT64_MAX - offset)
-        return finish(std::nullopt);
-      offset += child->first;
-      current = sim::getAggregateElementType(current,
-                                             static_cast<unsigned>(rawIndex));
-    }
-    if (offset > UINT64_MAX - *base)
-      return finish(std::nullopt);
-    return finish(*base + offset);
-  }
-  auto argument = dyn_cast<BlockArgument>(value);
-  if (!argument)
-    return finish(std::nullopt);
-  Block *block = argument.getOwner();
-  auto function = dyn_cast<sim::SimFuncOp>(block->getParentOp());
-  if (!function || block != &function.getBody().front())
-    return finish(std::nullopt);
-  auto descriptor = function.getArgAttrOfType<IntegerAttr>(
-      argument.getArgNumber(), sim::metadata::DescriptorId::getNameStr());
-  auto low = function.getArgAttrOfType<IntegerAttr>(
-      argument.getArgNumber(), sim::metadata::DescriptorLow::getNameStr());
-  if (!descriptor || descriptor.getValue().isNegative() ||
-      descriptor.getValue().getActiveBits() > 64 ||
-      descriptor.getValue().getZExtValue() != driverID ||
-      (low &&
-       (low.getValue().isNegative() || low.getValue().getActiveBits() > 64)))
-    return finish(std::nullopt);
-  return finish(low ? low.getValue().getZExtValue() : uint64_t{0});
-}
-
-std::optional<uint64_t> getStaticDriverOffset(Value value, uint64_t driverID) {
-  DenseSet<Value> active;
-  return getStaticDriverOffset(value, driverID, active);
-}
-
-std::optional<uint64_t> getStaticDriverID(Value value) {
-  while (value) {
-    if (auto context = value.getDefiningOp<sim::SimContextDriverOp>())
-      return context.getId();
-    Operation *definition = value.getDefiningOp();
-    if (auto extract = dyn_cast_or_null<sim::SimDriverExtractOp>(definition)) {
-      value = extract.getInput();
-      continue;
-    }
-    if (auto extract =
-            dyn_cast_or_null<sim::SimDriverDynExtractOp>(definition)) {
-      value = extract.getInput();
-      continue;
-    }
-    if (auto subelement =
-            dyn_cast_or_null<sim::SimDriverSubelementOp>(definition)) {
-      value = subelement.getInput();
-      continue;
-    }
-    if (auto element =
-            dyn_cast_or_null<sim::SimDriverArrayElementOp>(definition)) {
-      value = element.getInput();
-      continue;
-    }
-    auto argument = dyn_cast<BlockArgument>(value);
-    if (!argument)
-      return std::nullopt;
-    auto function =
-        dyn_cast<sim::SimFuncOp>(argument.getOwner()->getParentOp());
-    if (!function || argument.getOwner() != &function.getBody().front())
-      return std::nullopt;
-    auto descriptor = function.getArgAttrOfType<IntegerAttr>(
-        argument.getArgNumber(), sim::metadata::DescriptorId::getNameStr());
-    return descriptor ? std::optional<uint64_t>(descriptor.getInt())
-                      : std::nullopt;
-  }
-  return std::nullopt;
-}
-
-struct ExactStaticDriverTarget {
-  uint64_t id;
-  uint64_t lowBit;
-
-  bool operator==(const ExactStaticDriverTarget &other) const {
-    return id == other.id && lowBit == other.lowBit;
-  }
-};
-
-std::optional<ExactStaticDriverTarget>
-getExactStaticDriverTarget(Value value, DenseSet<Value> &active, bool &cycle) {
-  if (!active.insert(value).second) {
-    cycle = true;
-    return std::nullopt;
-  }
-  auto done = [&](std::optional<ExactStaticDriverTarget> result) {
-    active.erase(value);
-    return result;
-  };
-  if (auto context = value.getDefiningOp<sim::SimContextDriverOp>())
-    return done(ExactStaticDriverTarget{context.getId(), 0});
-
-  Operation *definition = value.getDefiningOp();
-  uint64_t addedLowBit = 0;
-  Value input;
-  if (auto extract = dyn_cast_or_null<sim::SimDriverExtractOp>(definition)) {
-    addedLowBit = extract.getLowBit();
-    input = extract.getInput();
-  } else if (auto subelement =
-                 dyn_cast_or_null<sim::SimDriverSubelementOp>(definition)) {
-    Type current = subelement.getInput().getType().getElementType();
-    for (int64_t rawIndex : subelement.getIndices()) {
-      if (rawIndex < 0 || static_cast<uint64_t>(rawIndex) >=
-                              sim::getAggregateNumElements(current))
-        return done(std::nullopt);
-      auto item = sim::getAggregateProvenanceSubelement(
-          current, static_cast<unsigned>(rawIndex));
-      if (!item ||
-          item->first > std::numeric_limits<uint64_t>::max() - addedLowBit)
-        return done(std::nullopt);
-      addedLowBit += item->first;
-      current = sim::getAggregateElementType(current,
-                                             static_cast<unsigned>(rawIndex));
-    }
-    input = subelement.getInput();
-  }
-  if (input) {
-    auto target = getExactStaticDriverTarget(input, active, cycle);
-    if (!target ||
-        target->lowBit > std::numeric_limits<uint64_t>::max() - addedLowBit)
-      return done(std::nullopt);
-    target->lowBit += addedLowBit;
-    return done(target);
-  }
-
-  auto argument = dyn_cast<BlockArgument>(value);
-  if (!argument)
-    return done(std::nullopt);
-  if (auto function =
-          dyn_cast<sim::SimFuncOp>(argument.getOwner()->getParentOp())) {
-    if (argument.getOwner() == &function.getBody().front()) {
-      auto descriptor = function.getArgAttrOfType<IntegerAttr>(
-          argument.getArgNumber(), sim::metadata::DescriptorId::getNameStr());
-      if (descriptor)
-        return done(ExactStaticDriverTarget{
-            static_cast<uint64_t>(descriptor.getInt()), 0});
-    }
-  }
-
-  // CFG cleanup may forward a concrete driver through conditional block
-  // arguments after compute fusion. Preserve exactness only when every
-  // incoming edge names the same statically-derived driver slice.
-  std::optional<ExactStaticDriverTarget> resolved;
-  bool sawIncoming = false;
-  bool sawCycle = false;
-  Block *block = argument.getOwner();
-  for (Block *predecessor : block->getPredecessors()) {
-    Operation *terminator = predecessor->getTerminator();
-    auto branch = dyn_cast<BranchOpInterface>(terminator);
-    if (!branch)
-      return done(std::nullopt);
-    for (unsigned successor = 0; successor != terminator->getNumSuccessors();
-         ++successor) {
-      if (terminator->getSuccessor(successor) != block)
-        continue;
-      SuccessorOperands operands = branch.getSuccessorOperands(successor);
-      unsigned index = argument.getArgNumber();
-      if (index >= operands.size() || operands.isOperandProduced(index))
-        return done(std::nullopt);
-      bool incomingCycle = false;
-      auto incoming =
-          getExactStaticDriverTarget(operands[index], active, incomingCycle);
-      if (!incoming && incomingCycle) {
-        sawCycle = true;
-        continue;
-      }
-      if (!incoming || (resolved && !(*resolved == *incoming)))
-        return done(std::nullopt);
-      resolved = incoming;
-      sawIncoming = true;
-    }
-  }
-  if (!resolved && sawCycle)
-    cycle = true;
-  return done(sawIncoming ? resolved : std::nullopt);
-}
-
-std::optional<ExactStaticDriverTarget> getExactStaticDriverTarget(Value value) {
-  DenseSet<Value> active;
-  bool cycle = false;
-  return getExactStaticDriverTarget(value, active, cycle);
-}
-
 template <typename DriveOp>
 class DriverDriveConversion final : public OpConversionPattern<DriveOp> {
 public:
@@ -588,6 +369,25 @@ public:
           decodedHandle.offset >= 0)
         updateLow = static_cast<uint64_t>(decodedHandle.offset);
     }
+    // IEEE 1800-2023 6.6.1, 28.12.1: a mirror driver is the lone strong
+    // contribution to every bit it drives, on a wire nothing can force or
+    // release (ContributionMirrorAnalysis), so its slot always equals those
+    // net bits. No generated code reads it and the runtime reads the net in
+    // its place: skip both stores. The resolvers below take this drive's own
+    // bits from the drive value, never from the slot. Checked before any IR
+    // is created.
+    bool mirror = native::has<native::MirrorContribution>(op);
+    if (mirror) {
+      uint64_t drivenLow = affectedDriver ? affectedDriver->drivenLow : 0;
+      uint64_t drivenEnd =
+          affectedDriver ? drivenLow + affectedDriver->drivenWidth : 0;
+      if (sim::has<sim::metadata::UserNetRawDrive>(op) || !affectedDriver ||
+          !updateLow || layout.hasPassSwitch || *updateLow < drivenLow ||
+          *updateLow > drivenEnd || *sourceWidth > drivenEnd - *updateLow ||
+          schedule::has<schedule::Field::DeferNetResolution>(op))
+        return op.emitOpError(
+            "mirror contribution drive has no static exclusive target");
+    }
     IntegerType driveType = rewriter.getIntegerType(*sourceWidth);
     if (isa<FloatType>(sourceType))
       driveValue = arith::BitcastOp::create(rewriter, op.getLoc(), driveType,
@@ -676,16 +476,21 @@ public:
           rewriter, op.getLoc(), adaptor.getDriver().front(), driveType,
           "__talos_state_unknown", true, layout.bitCount, storeLayout);
     }
-    Value driveValueChanged = storeStatePlane(
-        rewriter, op.getLoc(), adaptor.getDriver().front(), driveValue,
-        "__talos_state_value", layout.bitCount, storeLayout);
+    Value driveValueChanged =
+        mirror ? boolean(false)
+               : storeStatePlane(rewriter, op.getLoc(),
+                                 adaptor.getDriver().front(), driveValue,
+                                 "__talos_state_value", layout.bitCount,
+                                 storeLayout);
     Value driveUnknownChanged =
-        knownContribution
+        knownContribution || mirror
             ? boolean(false)
             : storeStatePlane(rewriter, op.getLoc(),
                               adaptor.getDriver().front(), driveUnknown,
                               "__talos_state_unknown", layout.bitCount,
                               storeLayout);
+    // Set when a resolver below would load this mirror drive's own slot.
+    bool readsMirrorSlot = false;
     Value rawChanged = arith::OrIOp::create(
         rewriter, op.getLoc(), driveValueChanged, driveUnknownChanged);
     Value changed = boolean(false);
@@ -1166,6 +971,7 @@ public:
                                         ownSlice(driveUnknown, offset)));
             continue;
           }
+          readsMirrorSlot |= mirror && &driver == affectedDriver;
           Value handle = handleAt(driver.handleID, offset);
           planes.push_back(
               inRunOrder(contribution.member,
@@ -1408,6 +1214,7 @@ public:
         for (auto [contributor, memberIndex] : contributions) {
           {
             const NativeStateLayout::Driver &driver = *contributor;
+            readsMirrorSlot |= mirror && contributor == affectedDriver;
             const analysis::NetBit &member = component[memberIndex];
             Value handle = arith::ConstantOp::create(
                 rewriter, op.getLoc(), rewriter.getI64Type(),
@@ -1624,6 +1431,9 @@ public:
         }
       }
     }
+    if (readsMirrorSlot)
+      return op.emitOpError(
+          "mirror contribution drive would resolve from its unstored slot");
     // Publish every component affected by this vector drive before emitting
     // any transition notification. This matches bytecode atomic publication
     // and prevents observers from seeing a partially updated topology.
@@ -1716,48 +1526,52 @@ private:
 
 void annotateStaticDriverNets(ModuleOp module,
                               const NativeStateLayout &layout) {
+  // Bytecode froze with the design's mirror drivers recorded on their
+  // declarations; the runtime serves their slot readers from the net. Native
+  // passes since then may have added slot readers, so prove the fact again on
+  // this IR and elide only drives of drivers that keep it.
+  DenseSet<uint64_t> mirrors;
+  module.walk([&](sim::SimDesignOp design) {
+    if (design.getBody().empty())
+      return;
+    DenseSet<uint64_t> proven =
+        analysis::computeContributionMirrorDrivers(design);
+    for (auto declaration :
+         design.getBody().front().getOps<sim::SimDriverDeclOp>())
+      if (sim::has<sim::metadata::ContributionMirrorsNet>(declaration) &&
+          proven.contains(declaration.getId()))
+        mirrors.insert(declaration.getId());
+  });
   auto annotate = [&](auto drive) {
     if (drive.getDriver().template getDefiningOp<sim::SimContextDriverOp>())
       native::mark<native::WholeDriver>(drive);
-    std::optional<ExactStaticDriverTarget> exactTarget;
-    auto frozenID = schedule::get<schedule::Field::ExactDriverId>(drive);
-    auto frozenLow = schedule::get<schedule::Field::ExactDriverLow>(drive);
-    if (frozenID && frozenLow && !frozenID.getValue().isNegative() &&
-        !frozenLow.getValue().isNegative() &&
-        frozenID.getValue().getActiveBits() <= 64 &&
-        frozenLow.getValue().getActiveBits() <= 64)
-      exactTarget =
-          ExactStaticDriverTarget{frozenID.getValue().getZExtValue(),
-                                  frozenLow.getValue().getZExtValue()};
-    else if (!frozenID && !frozenLow)
-      exactTarget = getExactStaticDriverTarget(drive.getDriver());
-    std::optional<uint64_t> driverID =
-        exactTarget ? std::optional<uint64_t>(exactTarget->id)
-                    : getStaticDriverID(drive.getDriver());
-    if (!driverID)
+    analysis::StaticDriveTarget target =
+        analysis::getStaticDriveTarget(drive, drive.getDriver());
+    if (!target.id)
       return;
+    uint64_t driverID = *target.id;
     native::set<native::DriverId>(
         drive,
-        IntegerAttr::get(IntegerType::get(module.getContext(), 64), *driverID));
+        IntegerAttr::get(IntegerType::get(module.getContext(), 64), driverID));
     std::optional<unsigned> valueWidth =
         nativeStateWidth(drive.getValue().getType());
     for (const NativeStateLayout::Driver &driver : layout.driverLayouts) {
-      if (driver.id != *driverID)
+      if (driver.id != driverID)
         continue;
-      std::optional<uint64_t> low =
-          exactTarget ? std::optional<uint64_t>(exactTarget->lowBit)
-                      : getStaticDriverOffset(drive.getDriver(), *driverID);
-      if (low)
+      if (target.low)
         native::set<native::DriverLow>(
-            drive,
-            IntegerAttr::get(IntegerType::get(module.getContext(), 64), *low));
+            drive, IntegerAttr::get(IntegerType::get(module.getContext(), 64),
+                                    *target.low));
       native::set<native::NetId>(
           drive, IntegerAttr::get(IntegerType::get(module.getContext(), 64),
                                   driver.netId));
-      if (exactTarget && exactTarget->id == *driverID && valueWidth &&
-          *valueWidth == driver.drivenWidth &&
-          exactTarget->lowBit == driver.drivenLow)
+      if (target.exact && valueWidth && *valueWidth == driver.drivenWidth &&
+          *target.low == driver.drivenLow)
         native::mark<native::ExactDriverRange>(drive);
+      if constexpr (!std::is_same_v<decltype(drive),
+                                    sim::SimDriverDriveDelayedNetOp>)
+        if (mirrors.contains(driverID))
+          native::mark<native::MirrorContribution>(drive);
       return;
     }
   };

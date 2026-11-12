@@ -750,6 +750,7 @@ static const llvm::StringMap<discardable::PayloadCheck> &declarations() {
       metadata::SynchronousPropertyAbort, metadata::TemporalPropertyNegation,
       metadata::TemporalPropertyNegationOutsideAbort,
       metadata::VacuousSequenceAlternatives, metadata::SteadyUnknown,
+      metadata::ContributionMirrorsNet,
       metadata::ContinuousStore, metadata::PowerMonitor,
       metadata::ComputedPortInput, metadata::DelayQuantum, metadata::DelayScale,
       metadata::DelayedNet, metadata::InitialDriverX,
@@ -927,6 +928,9 @@ static LogicalResult verifyDeclaredAttribute(Operation *operation,
   if (name == RandomizeNestedDispatchSelectionPath::getNameStr() &&
       !allOf(llvm::IsaPred<FlatSymbolRefAttr>))
     return error() << "must contain field symbols";
+  if (name == ContributionMirrorsNet::getNameStr() &&
+      !isa<SimDriverDeclOp>(operation))
+    return error() << "belongs on a driver declaration";
   if (name == SteadyUnknown::getNameStr()) {
     auto storage = dyn_cast<SimStorageDeclOp>(operation);
     if (!storage)

@@ -916,6 +916,12 @@ typedef struct talos_rt_design_database_header_v1 {
 // Static driver-state descriptor flag. Delayed gate and continuous-assignment
 // drivers start at X until their time-zero evaluation propagates to the output.
 #define TALOS_RT_DB_DRIVER_INITIAL_X (UINT32_C(1) << 14)
+// Static driver-state descriptor flag. The driver is the lone strong
+// contribution to every net bit it drives and nothing can force or release
+// those bits, so the contribution always equals them (IEEE 1800-2023 6.6.1).
+// Native drives do not store its slot: readers take the net bits instead, and
+// an interpreted drive refreshes the slot from the net before storing.
+#define TALOS_RT_DB_DRIVER_MIRRORS_NET (UINT32_C(1) << 15)
 
 typedef uint8_t talos_rt_design_register_kind;
 enum {

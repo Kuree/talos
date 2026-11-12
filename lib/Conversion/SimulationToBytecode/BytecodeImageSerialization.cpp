@@ -364,11 +364,13 @@ SmallVector<uint8_t> serializeBytecodeImage(
     // explicit codes are one greater than the Figure 28-2 scale position.
     uint32_t strength0 = static_cast<uint32_t>(driver.strength0) + 1;
     uint32_t strength1 = static_cast<uint32_t>(driver.strength1) + 1;
-    append32(output, 1u | encodeResolution(driver.resolution, true) |
-                         (strength0 << 3) | (strength1 << 7) |
-                         (driver.strengthBank == 1 ? uint32_t{1} << 11 : 0) |
-                         (driver.initialX ? TALOS_RT_DB_DRIVER_INITIAL_X
-                                          : uint32_t{0}));
+    append32(
+        output,
+        1u | encodeResolution(driver.resolution, true) | (strength0 << 3) |
+            (strength1 << 7) |
+            (driver.strengthBank == 1 ? uint32_t{1} << 11 : 0) |
+            (driver.initialX ? TALOS_RT_DB_DRIVER_INITIAL_X : uint32_t{0}) |
+            (driver.mirrorsNet ? TALOS_RT_DB_DRIVER_MIRRORS_NET : uint32_t{0}));
     append64(output, driver.offset + driver.drivenLow);
     append64(output, driver.netOffset + driver.drivenLow);
     append64(output, driver.drivenWidth);

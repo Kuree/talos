@@ -74,6 +74,12 @@ bool resolveNetRoots(const NetAliasCache &cache, talos_rt_context *context,
                      bool useNativeState);
 bool resolveDrivenNets(const Image &image, talos_rt_context *context,
                        int64_t changedBegin, int64_t changedEnd, bool &changed);
+/// Copies the driven net bits into the canonical slots of the mirror drivers
+/// (TALOS_RT_DB_DRIVER_MIRRORS_NET) among state bits [begin, end). Native
+/// drives leave those slots stale; an interpreted store into them must first
+/// see the true old contribution.
+void refreshMirrorDriverSlots(const Image &image, talos_rt_context *context,
+                              uint64_t begin, uint64_t end);
 bool resolveDrivenNets(const Image &image, talos_rt_context *context,
                        int64_t changedBegin, int64_t changedEnd, bool &changed,
                        bool useNativeState);

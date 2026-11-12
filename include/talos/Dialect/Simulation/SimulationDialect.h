@@ -509,6 +509,8 @@ using TemporalPropertyNegationOutsideAbort =
 using VacuousSequenceAlternatives =
     TalosSimulationDialect::VacuousSequenceAlternativesAttrHelper;
 using SteadyUnknown = TalosSimulationDialect::SteadyUnknownAttrHelper;
+using ContributionMirrorsNet =
+    TalosSimulationDialect::ContributionMirrorsNetAttrHelper;
 using ContinuousStore = TalosSimulationDialect::ContinuousStoreAttrHelper;
 using PowerMonitor = TalosSimulationDialect::PowerMonitorAttrHelper;
 using ComputedPortInput = TalosSimulationDialect::ComputedPortInputAttrHelper;

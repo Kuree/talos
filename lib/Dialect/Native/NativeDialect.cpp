@@ -41,14 +41,15 @@ NativeDialect::verifyOperationAttribute(Operation *operation,
              MethodArgumentRoots, TableWait, Unmanaged, SharedCallback,
              RuntimePublicationCertified, OwnerReleaseInstrumented,
              TwoStateBlockUnknowns, DriverId, DriverLow, NetId,
-             ExactDriverRange, WholeDriver, GuardedBulkDrive, CleanBulkDrive,
-             BulkCopySourceAssumeClean, GuardedRefStore, InBoundsHandleOffset,
-             ManagedRootRangeRecord, ManagedRootRangePushCheck,
-             ManagedRootActivationPrologue, TransferredReferences,
-             NoTransitionRoots, StringGlobal, ScanPrefixGlobal,
-             FileScanPrefixGlobal, AggregateBitstreamPlanGlobal,
-             ContainerPatternPlanGlobal, ContainerPatternPlanSize, BoxTypeId,
-             VpiCallId, VpiLocalId>(operation, attribute)))
+             ExactDriverRange, WholeDriver, MirrorContribution,
+             GuardedBulkDrive, CleanBulkDrive, BulkCopySourceAssumeClean,
+             GuardedRefStore, InBoundsHandleOffset, ManagedRootRangeRecord,
+             ManagedRootRangePushCheck, ManagedRootActivationPrologue,
+             TransferredReferences, NoTransitionRoots, StringGlobal,
+             ScanPrefixGlobal, FileScanPrefixGlobal,
+             AggregateBitstreamPlanGlobal, ContainerPatternPlanGlobal,
+             ContainerPatternPlanSize, BoxTypeId, VpiCallId, VpiLocalId>(
+          operation, attribute)))
     return failure();
   StringRef name = attribute.getName().strref();
   Attribute value = attribute.getValue();

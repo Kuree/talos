@@ -893,6 +893,17 @@ lowerToLLVM(ModuleOp module, TargetMachine &targetMachine, StringRef triple,
     manager.nest<talos::sim::SimDesignOp>().addPass(
         createTalosSimAnnotateSteadyUnknownPass(steadyUnknown));
   }
+  // Drivers whose slot mirrors their net: the bytecode image tells the
+  // runtime to read the net for them, and native drives skip the store.
+  // Record the fact on the exact design bytecode freezes.
+  auto markContributionMirrors = [&] {
+    if (optLevel == 0)
+      return;
+    TalosSimMarkContributionMirrorsPassOptions mirrors;
+    mirrors.vpi = vpi.str();
+    manager.nest<talos::sim::SimDesignOp>().addPass(
+        createTalosSimMarkContributionMirrorsPass(mirrors));
+  };
   if (needsDesignEncoding) {
     // Bytecode and native lowering must observe the same suspension-safe SSA
     // shape. The coroutine pass also runs this canonicalization for native
@@ -900,6 +911,7 @@ lowerToLLVM(ModuleOp module, TargetMachine &targetMachine, StringRef triple,
     OpPassManager &designManager = manager.nest<talos::sim::SimDesignOp>();
     designManager.nest<talos::sim::SimFuncOp>().addPass(
         createTalosSimThreadProcessCFGPass());
+    markContributionMirrors();
     EncodeTalosSimToBytecodePassOptions options;
     options.vpi = vpi.str();
     options.requireBytecode = bytecode;
@@ -930,6 +942,8 @@ lowerToLLVM(ModuleOp module, TargetMachine &targetMachine, StringRef triple,
     runtime::set<runtime::SampledRanges>(
         module, builder.getDenseI64ArrayAttr(sampledRanges));
   }
+  if (!needsDesignEncoding)
+    markContributionMirrors();
   // Native region bodies may diverge from their already-frozen bytecode
   // fallback after this point. Keep the generic scheduler as an untouched
   // oracle and apply AOT-only next-state rewrites only when the hybrid image

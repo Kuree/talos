@@ -215,8 +215,15 @@ NetAliasCache *getNetAliasCache(const Image &image, talos_rt_context *context) {
              decodeDriverStrength(record.argument, 7)});
       }
       drivers.push_back(record);
-      cache.drivers.push_back(
-          {record.valueOffset, record.unknownOffset, record.planeSize, true});
+      NetAliasRange driver;
+      driver.valueOffset = record.valueOffset;
+      driver.targetOffset = record.unknownOffset;
+      driver.width = record.planeSize;
+      driver.fourState = true;
+      driver.mirrorsNet =
+          (record.argument & TALOS_RT_DB_DRIVER_MIRRORS_NET) != 0;
+      cache.hasMirrorDrivers |= driver.mirrorsNet;
+      cache.drivers.push_back(std::move(driver));
     }
   }
 
@@ -418,10 +425,12 @@ NetAliasCache *getNetAliasCache(const Image &image, talos_rt_context *context) {
     for (const CaptureRecord &driver : drivers) {
       uint8_t strength0 = decodeDriverStrength(driver.argument, 3);
       uint8_t strength1 = decodeDriverStrength(driver.argument, 7);
+      bool mirrorsNet = (driver.argument & TALOS_RT_DB_DRIVER_MIRRORS_NET) != 0;
       for (uint64_t bit = 0; bit != driver.planeSize; ++bit)
         driverEntries.emplace_back(
             rootIndexOf(driver.unknownOffset + bit),
-            NetDriverBit{driver.valueOffset + bit, strength0, strength1});
+            NetDriverBit{driver.valueOffset + bit, driver.unknownOffset + bit,
+                         strength0, strength1, mirrorsNet});
     }
     cache.driverBits.assign(components, driverEntries);
   }
@@ -866,10 +875,14 @@ static uint16_t storedChargeStrengths(bool value, bool unknown,
   return stored;
 }
 
+// `query` reads a mirror driver's contribution from its net bit: native drives
+// leave that slot stale. Queries are the strength format (IEEE 1800-2023
+// 21.2.1.4), VPI strength values and delayed MOS sources; resolution after a
+// store reads the slot it just wrote.
 static bool computeResolvedStrengths(const NetAliasCache &cache,
                                      talos_rt_context *context, uint64_t root,
                                      bool useNativeState, bool useSchedulePlan,
-                                     uint16_t &resolvedStrengths) {
+                                     bool query, uint16_t &resolvedStrengths) {
   auto members = cache.members.find(root);
   if (members == cache.members.end())
     return false;
@@ -912,8 +925,10 @@ static bool computeResolvedStrengths(const NetAliasCache &cache,
     auto componentDrivers = cache.driverBits.find(sourceRoot);
     if (componentDrivers != cache.driverBits.end())
       for (const NetDriverBit &driver : componentDrivers->second) {
-        bool driverValue = stateBit(false, driver.valueOffset);
-        bool driverUnknown = stateBit(true, driver.valueOffset);
+        uint64_t offset =
+            query && driver.mirrorsNet ? driver.netOffset : driver.valueOffset;
+        bool driverValue = stateBit(false, offset);
+        bool driverUnknown = stateBit(true, offset);
         uint16_t strengths = driverStrengths(
             driverValue, driverUnknown, driver.strength0, driver.strength1);
         if (remote)
@@ -1104,7 +1119,8 @@ bool resolveNetRoots(const NetAliasCache &cache, talos_rt_context *context,
     uint8_t resolution = cache.resolutionByRoot.at(root);
     uint16_t resolvedStrengths = 0;
     if (!computeResolvedStrengths(cache, context, root, useNativeState,
-                                  /*useSchedulePlan=*/false, resolvedStrengths))
+                                  /*useSchedulePlan=*/false, /*query=*/false,
+                                  resolvedStrengths))
       return false;
     if (auto outgoing = cache.delayedMosBySource.find(root);
         outgoing != cache.delayedMosBySource.end())
@@ -1363,6 +1379,34 @@ bool resolveDrivenNets(const Image &image, talos_rt_context *context,
                          useNativeState);
 }
 
+void refreshMirrorDriverSlots(const Image &image, talos_rt_context *context,
+                              uint64_t begin, uint64_t end) {
+  if (begin >= end)
+    return;
+  NetAliasCache *cache = getNetAliasCache(image, context);
+  if (!cache || !cache->hasMirrorDrivers)
+    return;
+  // Driver records are sorted and disjoint (validateImage). IEEE 1800-2023
+  // 6.6.1: a mirror is the lone strong contribution to bits nothing forces,
+  // so the net bit is its contribution.
+  const std::vector<NetAliasRange> &drivers = cache->drivers;
+  auto driver = std::upper_bound(drivers.begin(), drivers.end(), begin,
+                                 [](uint64_t bit, const NetAliasRange &range) {
+                                   return bit < range.valueOffset + range.width;
+                                 });
+  for (; driver != drivers.end() && driver->valueOffset < end; ++driver) {
+    if (!driver->mirrorsNet)
+      continue;
+    uint64_t from = std::max(begin, driver->valueOffset);
+    uint64_t to = std::min(end, driver->valueOffset + driver->width);
+    for (uint64_t slot = from; slot != to; ++slot) {
+      uint64_t net = driver->targetOffset + (slot - driver->valueOffset);
+      setBit(context->stateValue, slot, bit(context->stateValue, net));
+      setBit(context->stateUnknown, slot, bit(context->stateUnknown, net));
+    }
+  }
+}
+
 bool resolveDrivenNets(const Image &image, talos_rt_context *context,
                        int64_t changedBegin, int64_t changedEnd,
                        bool &changed) {
@@ -1443,7 +1487,7 @@ talos_rt_status talos_rt_design_net_strength(talos_rt_context *context,
       return TALOS_RT_INVALID_HANDLE;
     if (!computeResolvedStrengths(*cache, context, root->second, useNativeState,
                                   /*useSchedulePlan=*/useNativeState,
-                                  *outStrengths))
+                                  /*query=*/true, *outStrengths))
       return TALOS_RT_INVALID_HANDLE;
     // IEEE 1800-2023 28.15.2: a trireg in the charge storage state drives its
     // stored value at the declared small, medium or large strength.
@@ -1454,6 +1498,69 @@ talos_rt_status talos_rt_design_net_strength(talos_rt_context *context,
         *outStrengths = storedChargeStrengths(stateBit(false, absolute),
                                               stateBit(true, absolute),
                                               charge->second);
+      }
+    return TALOS_RT_OK;
+  }
+  TALOS_RT_CATCH(const std::bad_alloc &) { return TALOS_RT_OUT_OF_MEMORY; }
+  TALOS_RT_CATCH_ALL { return TALOS_RT_INVALID_BYTECODE; }
+}
+
+talos_rt_status talos_rt_overlay_mirror_driver_read(
+    talos_rt_context *context, uint64_t stateOffset, uint64_t width,
+    uint64_t *value, uint64_t *unknown) noexcept {
+  if (!context || !context->execution || !value ||
+      stateOffset > UINT64_MAX - width)
+    return TALOS_RT_INVALID_ARGUMENT;
+  if ((context->execution->flags & TALOS_RT_EXECUTION_HAS_BYTECODE) == 0)
+    return TALOS_RT_OK;
+  TALOS_RT_TRY {
+    struct Range {
+      uint64_t slot, net, width;
+    };
+    std::vector<Range> ranges;
+    {
+      talos_rt_design_bytecode_entry_v1 entry{context->execution, 0, 0};
+      Image image;
+      if (!loadValidatedImage(entry, context, image, /*inventoryOnly=*/true))
+        return TALOS_RT_INVALID_BYTECODE;
+      ContextTransaction transaction(context);
+      std::lock_guard<TalosContextMutex> lock(context->mutex);
+      NetAliasCache *cache = getNetAliasCache(image, context);
+      if (!cache)
+        return TALOS_RT_INVALID_BYTECODE;
+      uint64_t end = stateOffset + width;
+      for (const NetAliasRange &driver : cache->drivers) {
+        if (!driver.mirrorsNet || driver.valueOffset >= end ||
+            driver.valueOffset + driver.width <= stateOffset)
+          continue;
+        uint64_t from = std::max(stateOffset, driver.valueOffset);
+        uint64_t to = std::min(end, driver.valueOffset + driver.width);
+        ranges.push_back({from,
+                          driver.targetOffset + (from - driver.valueOffset),
+                          to - from});
+      }
+    }
+    // IEEE 1800-2023 6.6.1: a mirror is the lone strong contribution to bits
+    // nothing forces, so the net bits are its contribution.
+    for (const Range &range : ranges)
+      for (uint64_t done = 0; done < range.width; done += 64) {
+        uint64_t count = std::min<uint64_t>(64, range.width - done);
+        uint64_t netValue = 0, netUnknown = 0;
+        talos_rt_status status = talos_rt_read_state_word(
+            context, range.net + done, count, /*fourState=*/true, &netValue,
+            &netUnknown);
+        if (status != TALOS_RT_OK)
+          return status;
+        for (uint64_t bit = 0; bit != count; ++bit) {
+          uint64_t at = range.slot + done + bit - stateOffset;
+          uint64_t mask = uint64_t{1} << (at % 64);
+          value[at / 64] = ((netValue >> bit) & 1) ? value[at / 64] | mask
+                                                   : value[at / 64] & ~mask;
+          if (unknown)
+            unknown[at / 64] = ((netUnknown >> bit) & 1)
+                                   ? unknown[at / 64] | mask
+                                   : unknown[at / 64] & ~mask;
+        }
       }
     return TALOS_RT_OK;
   }
@@ -1545,6 +1652,10 @@ talos_rt_status talos_rt_design_driver_strength(talos_rt_context *context,
     DriverStateReader stateBit(context, useNativeState,
                                /*useSchedulePlan=*/useNativeState);
     auto readStrengths = [&](const CaptureRecord &driver, uint64_t offset) {
+      // Native drives leave a mirror driver's slot stale; its contribution is
+      // the net bit it drives.
+      if ((driver.argument & TALOS_RT_DB_DRIVER_MIRRORS_NET) != 0)
+        offset = driver.unknownOffset + (offset - driver.valueOffset);
       return driverStrengths(stateBit(false, offset), stateBit(true, offset),
                              decodeDriverStrength(driver.argument, 3),
                              decodeDriverStrength(driver.argument, 7));
@@ -1674,8 +1785,12 @@ talos_rt_status talos_rt_count_design_drivers(
           continue;
         const NetStrengthDriverPairRange *pair =
             containingPair(driver.valueOffset, false);
-        uint16_t strengths = strengthsFor(driver.valueOffset, driver.strength0,
-                                          driver.strength1);
+        // IEEE 1800-2023 D.2: native drives leave a mirror driver's slot
+        // stale; its contribution is the net bit it drives (never a strength
+        // pair).
+        uint16_t strengths = strengthsFor(
+            driver.mirrorsNet ? driver.netOffset : driver.valueOffset,
+            driver.strength0, driver.strength1);
         if (pair) {
           uint64_t highOffset =
               pair->highOffset + (driver.valueOffset - pair->lowOffset);
@@ -1987,7 +2102,7 @@ talos_rt_v1_mos_drive_delayed(talos_rt_context *context, uint32_t passSwitchId,
       if (!computeResolvedStrengths(*cache, context, edge->second.sourceRoot,
                                     context->nativeStateValue != nullptr,
                                     /*useSchedulePlan=*/false,
-                                    sourceStrengths) ||
+                                    /*query=*/true, sourceStrengths) ||
           !scheduleDelayedMosEdge(context, edge->second, sourceStrengths,
                                   control))
         return context->schedulerStatus == TALOS_RT_OK

@@ -381,6 +381,12 @@ def TalosSimulationDialect : Dialect {
     // (SteadyUnknownAnalysis). A guess: schedule.known.roots holds only
     // while the root's unknown plane matches it exactly.
     "::mlir::DenseI64ArrayAttr":$steady_unknown,
+    // Driver declaration: the driver is the lone strong contribution to every
+    // bit it drives, on a wire nothing can force or release, and every drive
+    // of it resolves at once (ContributionMirrorAnalysis). Its slot always
+    // equals those net bits, so readers may take them from the net and native
+    // drives need not store it. Set before bytecode is encoded.
+    "::mlir::UnitAttr":$contribution_mirrors_net,
 
     // Timing, specify paths, nets and UDPs (IEEE 1800 28-32).
     "::mlir::UnitAttr":$continuous_store,

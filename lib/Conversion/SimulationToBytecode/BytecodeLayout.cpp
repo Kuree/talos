@@ -182,17 +182,22 @@ FailureOr<StateLayout> buildStateLayout(sim::SimDesignOp design) {
                                  net.resolution, net.chargeStrength,
                                  net.chargeCapacity, net.propagationDelays});
   }
+  llvm::DenseSet<uint64_t> mirrorDrivers;
+  for (auto declaration :
+       design.getBody().front().getOps<sim::SimDriverDeclOp>())
+    if (sim::has<sim::metadata::ContributionMirrorsNet>(declaration))
+      mirrorDrivers.insert(declaration.getId());
   for (const auto &driver : analyzed->driverLayouts) {
     auto net = netLayoutIndices.find(driver.netId);
     if (net == netLayoutIndices.end())
       return module.emitError("analyzed driver references an unknown net"),
              failure();
     const auto &netLayout = result.netLayouts[net->second];
-    result.driverLayouts.push_back({driver.id, driver.offset, netLayout.offset,
-                                    driver.width, driver.drivenLow,
-                                    driver.drivenWidth, netLayout.resolution,
-                                    driver.strength0, driver.strength1,
-                                    driver.initialX, driver.strengthBank});
+    result.driverLayouts.push_back(
+        {driver.id, driver.offset, netLayout.offset, driver.width,
+         driver.drivenLow, driver.drivenWidth, netLayout.resolution,
+         driver.strength0, driver.strength1, driver.initialX,
+         driver.strengthBank, mirrorDrivers.contains(driver.id)});
   }
 
   // The net each endpoint belongs to travels with the resolutions: a run may

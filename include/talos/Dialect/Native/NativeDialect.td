@@ -85,6 +85,9 @@ def NativeDialect : Dialect {
     "::mlir::IntegerAttr":$net_id,
     "::mlir::UnitAttr":$exact_driver_range,
     "::mlir::UnitAttr":$whole_driver,
+    // A drive of a `simulation.contribution_mirrors_net` driver, re-proved on
+    // the native IR: lowering stores no driver contribution slot.
+    "::mlir::UnitAttr":$mirror_contribution,
     "::mlir::UnitAttr":$guarded_bulk_drive,
     "::mlir::UnitAttr":$clean_bulk_drive,
 
