@@ -1532,15 +1532,69 @@ void TalosSimCoalesceContinuousDriversPass::merge(
     }
   }
 
-  // The merged function keeps the first member's attributes.
+  // The merged function keeps the first member's attributes, except its
+  // argument bindings, which name arguments by index.
   SmallVector<NamedAttribute> attrs;
   for (NamedAttribute attr : head->getAttrs())
     if (attr.getName() != SymbolTable::getSymbolAttrName() &&
         attr.getName() != head.getFunctionTypeAttrName() &&
         attr.getName() != head.getArgAttrsAttrName() &&
         attr.getName() != head.getResAttrsAttrName() &&
-        attr.getName() != head.getEntryKindAttrName())
+        attr.getName() != head.getEntryKindAttrName() &&
+        attr.getName() != sim::metadata::Bindings::getNameStr())
       attrs.push_back(attr);
+  // Every member's bindings, rebased onto the merged captures. A binding of
+  // an argument the merged function does not capture is dropped, and the
+  // first binding of each argument and of each source path is kept (one
+  // provider per path and per argument).
+  SmallVector<Attribute> bindings;
+  // (path, role): Direct, FormalLocal, constant, descriptor and local
+  // bindings all provide the path's value; the other kinds have own roles.
+  llvm::DenseSet<std::pair<Attribute, unsigned>> boundPaths;
+  llvm::DenseSet<uint64_t> boundArguments;
+  constexpr unsigned kProvider = ~0u;
+  for (Member *m : run) {
+    ArrayAttr memberBindings = sim::get<sim::metadata::Bindings>(m->function);
+    if (!memberBindings)
+      continue;
+    for (Attribute attr : memberBindings) {
+      Attribute path;
+      unsigned role = kProvider;
+      std::optional<uint64_t> bound;
+      if (auto argument = dyn_cast<sim::ArgumentBindingAttr>(attr)) {
+        uint64_t index = argument.getArgument();
+        if (index >= m->spawn.getOperands().size())
+          continue;
+        auto found = captureOf.find(m->spawn.getOperands()[index]);
+        if (found == captureOf.end() || boundArguments.contains(found->second))
+          continue;
+        bound = found->second;
+        attr = sim::ArgumentBindingAttr::get(
+            context, argument.getPath(), found->second, argument.getKind(),
+            argument.getCopyOut(), argument.getLvalueNode(),
+            argument.getCopyIn(), argument.getVpiLocal());
+        path = argument.getPath();
+        if (argument.getKind() != sim::UnitArgumentKind::Direct &&
+            argument.getKind() != sim::UnitArgumentKind::FormalLocal)
+          role = unsigned(argument.getKind());
+      } else if (auto constant = dyn_cast<sim::ConstantBindingAttr>(attr)) {
+        path = constant.getPath();
+      } else if (auto descriptor = dyn_cast<sim::DescriptorBindingAttr>(attr)) {
+        path = descriptor.getPath();
+      } else if (auto local = dyn_cast<sim::LocalBindingAttr>(attr)) {
+        path = local.getPath();
+      }
+      if (path && !boundPaths.insert({path, role}).second)
+        continue;
+      if (bound)
+        boundArguments.insert(*bound);
+      bindings.push_back(attr);
+    }
+  }
+  if (!bindings.empty())
+    attrs.push_back(NamedAttribute(
+        StringAttr::get(context, sim::metadata::Bindings::getNameStr()),
+        ArrayAttr::get(context, bindings)));
   OpBuilder builder(head);
   auto merged = sim::SimFuncOp::create(
       builder, loc, (head.getSymName() + ".coalesced").str(),

@@ -359,3 +359,56 @@ simulation.design @collapsed {
     simulation.suspend.change %r to ^body : !simulation.net<i1>
   }
 }
+
+// -----
+
+// Argument bindings name arguments by index. The merged process drops bit0's
+// dead capture %u, so its bindings move down by one, bit1's read of %e is a
+// new capture, and bindings of uncaptured arguments (%u, bit1's driver) go.
+// bit1 reads net 1 through its own handle, which merges into bit0's capture:
+// its binding of that argument (under another path) would bind it twice and
+// is dropped, as is its second provider of the shared constant `top.w`.
+// CHECK-LABEL: simulation.design @bindings
+// CHECK: simulation.func private @bit0.coalesced(%{{[^:]*}}: !simulation.context {{[^%]*}}, %{{[^:]*}}: !simulation.net<i1> {{[^%]*}}, %{{[^:]*}}: !simulation.driver<!simulation.packed_array<1 : 0 x i1>> {{[^%]*}}, %{{[^:]*}}: !simulation.net<i1> {{[^%]*}})
+// CHECK-SAME: simulation.bindings = [#simulation.argument_binding<path = "top.d", argument = 1, kind = direct, copyOut = false>, #simulation.argument_binding<path = "top.o", argument = 2, kind = lvalue_only, copyOut = false>, #simulation.constant_binding<path = "top.w", {{.*}} : !simulation.logic<32>>, #simulation.argument_binding<path = "top.e", argument = 3, kind = direct, copyOut = false>]
+simulation.design @bindings {
+  simulation.scope.decl 0
+  simulation.code_unit.decl 1 in 0 root_initializer hierarchy "root"
+  simulation.code_unit.decl 2 in 0 continuous hierarchy "bit0"
+  simulation.code_unit.decl 3 in 0 continuous hierarchy "bit1"
+  simulation.net.decl 0 in 0 : i1 design
+  simulation.net.decl 1 in 0 : i1 design
+  simulation.net.decl 2 in 0 : i1 design
+  simulation.net.decl 3 in 0 : !simulation.packed_array<1 : 0 x i1> design
+  simulation.driver.decl 0 in 0 drives 3 : !simulation.packed_array<1 : 0 x i1> design {driven_low = 0 : i64, driven_width = 1 : i64}
+  simulation.driver.decl 1 in 0 drives 3 : !simulation.packed_array<1 : 0 x i1> design {driven_low = 1 : i64, driven_width = 1 : i64}
+  simulation.func @root(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}) attributes {entry_kind = 0 : i32, code_unit_id = 1 : i64} {
+    %u = simulation.context.net %ctx[0] : !simulation.net<i1>
+    %d = simulation.context.net %ctx[1] : !simulation.net<i1>
+    %e = simulation.context.net %ctx[2] : !simulation.net<i1>
+    %o0 = simulation.context.driver %ctx[0] : !simulation.driver<!simulation.packed_array<1 : 0 x i1>>
+    %o1 = simulation.context.driver %ctx[1] : !simulation.driver<!simulation.packed_array<1 : 0 x i1>>
+    %p0 = simulation.spawn @bit0(%ctx, %u, %d, %o0) : !simulation.context, !simulation.net<i1>, !simulation.net<i1>, !simulation.driver<!simulation.packed_array<1 : 0 x i1>> -> !simulation.process
+    %d1 = simulation.context.net %ctx[1] : !simulation.net<i1>
+    %p1 = simulation.spawn @bit1(%ctx, %d1, %e, %o1) : !simulation.context, !simulation.net<i1>, !simulation.net<i1>, !simulation.driver<!simulation.packed_array<1 : 0 x i1>> -> !simulation.process
+    simulation.return
+  }
+  simulation.func private @bit0(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %u: !simulation.net<i1> {simulation.capture_kind = 4 : i32, simulation.descriptor_id = 0 : i64}, %d: !simulation.net<i1> {simulation.capture_kind = 4 : i32, simulation.descriptor_id = 1 : i64}, %o: !simulation.driver<!simulation.packed_array<1 : 0 x i1>> {simulation.capture_kind = 5 : i32, simulation.descriptor_id = 0 : i64}) attributes {entry_kind = 7 : i32, code_unit_id = 2 : i64, simulation.bindings = [#simulation.argument_binding<path = "top.u", argument = 1, kind = direct, copyOut = false>, #simulation.argument_binding<path = "top.d", argument = 2, kind = direct, copyOut = false>, #simulation.argument_binding<path = "top.o", argument = 3, kind = lvalue_only, copyOut = false>, #simulation.constant_binding<path = "top.w", value = #simulation.frozen_constant<value = [8 : i32, 0 : i32], isSigned = true> : !simulation.logic<32>>]} {
+    cf.br ^body
+  ^body:
+    %b = simulation.net.read %d : !simulation.net<i1> -> i1
+    %t = simulation.driver.extract %o from 0 : !simulation.driver<!simulation.packed_array<1 : 0 x i1>> -> !simulation.driver<i1>
+    simulation.driver.drive %t = %b : !simulation.driver<i1>, i1
+    simulation.suspend.any %d edges [0] to ^body : !simulation.net<i1>
+  }
+  simulation.func private @bit1(%ctx: !simulation.context {simulation.capture_kind = 0 : i32}, %d: !simulation.net<i1> {simulation.capture_kind = 4 : i32, simulation.descriptor_id = 1 : i64}, %e: !simulation.net<i1> {simulation.capture_kind = 4 : i32, simulation.descriptor_id = 2 : i64}, %o: !simulation.driver<!simulation.packed_array<1 : 0 x i1>> {simulation.capture_kind = 5 : i32, simulation.descriptor_id = 1 : i64}) attributes {entry_kind = 7 : i32, code_unit_id = 3 : i64, simulation.bindings = [#simulation.argument_binding<path = "top.d_alias", argument = 1, kind = direct, copyOut = false>, #simulation.argument_binding<path = "top.e", argument = 2, kind = direct, copyOut = false>, #simulation.argument_binding<path = "top.o", argument = 3, kind = lvalue_only, copyOut = false>, #simulation.constant_binding<path = "top.w", value = #simulation.frozen_constant<value = [8 : i32, 0 : i32], isSigned = true> : !simulation.logic<32>>]} {
+    cf.br ^body
+  ^body:
+    %a = simulation.net.read %d : !simulation.net<i1> -> i1
+    %c = simulation.net.read %e : !simulation.net<i1> -> i1
+    %b = arith.andi %a, %c : i1
+    %t = simulation.driver.extract %o from 1 : !simulation.driver<!simulation.packed_array<1 : 0 x i1>> -> !simulation.driver<i1>
+    simulation.driver.drive %t = %b : !simulation.driver<i1>, i1
+    simulation.suspend.any %d, %e edges [0, 0] to ^body : !simulation.net<i1>, !simulation.net<i1>
+  }
+}
