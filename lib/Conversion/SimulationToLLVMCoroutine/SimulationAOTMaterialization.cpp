@@ -2645,8 +2645,13 @@ FailureOr<bool> makeNativeEvalPlan(
             if (existing == dynamicEvalNBAs.end()) {
               DynamicEvalNBA entry{root->second, slotSite,
                                    std::min<uint64_t>(64, *width - index * 64)};
-              if (auto target = staticNBAPlan.siteFixedOffsets.find(*site);
-                  target != staticNBAPlan.siteFixedOffsets.end())
+              // The fixed target of every staging into this slot. A
+              // coalesced whole-root slot is shared by the root's sites, each
+              // proven to write the whole root from offset 0.
+              if (proof->second.coalescedWholeRoot)
+                entry.constantOffset = index * 64;
+              else if (auto target = staticNBAPlan.siteFixedOffsets.find(*site);
+                       target != staticNBAPlan.siteFixedOffsets.end())
                 entry.constantOffset = target->second + index * 64;
               entry.offsetName =
                   (Twine("__talos_eval_nba_offset_") + Twine(slotSite)).str();
@@ -5986,7 +5991,14 @@ FailureOr<bool> makeNativeEvalPlan(
           builder, location, i64,
           LLVM::AddressOfOp::create(builder, location, pointer, name), 8);
     };
-    Value dynamicBit = loadStaged(entry.offsetName);
+    // A fixed-target slot stages the offset its site is certified with
+    // (siteFixedOffsets: the target captured at the enqueue, IEEE 1800-2023
+    // 4.9.4 and 10.4.2). Use that constant, so that the range clipping and
+    // window arithmetic below fold to a fixed-offset merge.
+    Value dynamicBit =
+        !entry.queued && entry.constantOffset
+            ? llvmConstant(builder, location, i64, *entry.constantOffset)
+            : loadStaged(entry.offsetName);
     uint64_t rootWidth = staticNBAPlan.roots[entry.rootIndex].bit_width;
     auto publicationRange = builder.getDenseI64ArrayAttr(
         {static_cast<int64_t>(staticNBAPlan.generatedOffsets[entry.rootIndex]),

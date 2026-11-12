@@ -20,14 +20,30 @@
 // PLAN-LABEL: llvm.func @__talos_aot_schedule_run_v1(
 // PLAN: llvm.call @talos_rt_v1_scheduler_prepare_periodic_aot
 // The commit applies a staged slot only while its flag is set, then clears it.
+// Each slot's target is fixed when its NBA executes (IEEE 1800-2023 4.9.4,
+// 10.4.2), so the commit merges at that constant offset instead of loading
+// the staged one.
 // PLAN-LABEL: llvm.func @__talos_aot_static_nba_commit_v1(
+// PLAN-NOT: @__talos_eval_nba_offset_
 // PLAN: %[[FLAG:.*]] = llvm.mlir.addressof @__talos_eval_nba_valid_2 : !llvm.ptr
 // PLAN-NEXT: %[[SLOT_VALID:.*]] = llvm.load %[[FLAG]]
 // PLAN-NEXT: %[[NONE:.*]] = llvm.mlir.constant(0 : i32) : i32
 // PLAN-NEXT: %[[STAGED:.*]] = llvm.icmp "ne" %[[SLOT_VALID]], %[[NONE]] : i32
 // PLAN-NEXT: llvm.cond_br %[[STAGED]], ^{{bb[0-9]+}}, ^{{bb[0-9]+}}
+// data[0]'s slot merges at bit 0 of the 68-bit root.
+// PLAN-NEXT: ^{{bb[0-9]+}}:
+// PLAN-NEXT: llvm.mlir.constant(0 : i64) : i64
+// PLAN-NOT: @__talos_eval_nba_offset_
 // PLAN: %[[CLEAR:.*]] = llvm.mlir.constant(0 : i32) : i32
 // PLAN-NEXT: llvm.store %[[CLEAR]], %[[FLAG]]
+// data[1]'s slot merges at bit 34: not byte aligned, across a 64-bit word.
+// PLAN-NOT: @__talos_eval_nba_offset_
+// PLAN: llvm.mlir.addressof @__talos_eval_nba_valid_3 : !llvm.ptr
+// PLAN: llvm.cond_br
+// PLAN-NEXT: ^{{bb[0-9]+}}:
+// PLAN-NEXT: llvm.mlir.constant(34 : i64) : i64
+// No commit variant (four-state, two-state, fast) loads a staged offset.
+// PLAN-NOT: @__talos_eval_nba_offset_
 
 !word = !simulation.logic<34>
 !words = !simulation.unpacked_array<0 : 1 x !word>
