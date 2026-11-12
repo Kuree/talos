@@ -3,6 +3,20 @@
 // RUN: talos-opt %s '--lower-talos-to-sim=vpi=full opt-level=3' -o %t.opt.mlir
 // RUN: env TALOS_TEST_INPUT=%t.opt.mlir %obj_root/test/talos-design-database-dump-test --gtest_filter=GeneratedDesignDatabase.FunctionReturns
 // RUN: talos-opt %t.mlir --convert-talos-sim-processes-to-llvm-coroutines -o /dev/null
+// RUN: FileCheck %s --check-prefix=RETURN < %t.mlir
+// RUN: FileCheck %s --check-prefix=RETURN < %t.opt.mlir
+
+// IEEE 1800-2023 13.4.1 and 37.41: each function's implicit return variable
+// keeps its declaration identity. Static storage belongs to its exact code
+// unit; an automatic return remains a frame-owned declaration.
+// RETURN-DAG: simulation.vpi_object.anchor @[[AUTO_ANCHOR:[a-zA-Z_0-9]+]] {{.*}}hierarchy "top.signed_result" {{.*}}backing = #simulation.vpi_backing<kind = code_unit, id = [[AUTO:[0-9]+]] : i64>
+// RETURN-DAG: simulation.vpi_object.anchor @[[STATIC_ANCHOR:[a-zA-Z_0-9]+]] {{.*}}hierarchy "top.static_result" {{.*}}backing = #simulation.vpi_backing<kind = code_unit, id = [[STATIC:[0-9]+]] : i64>
+// RETURN-DAG: simulation.storage.decl [[STORAGE:[0-9]+]] {{.*}}hierarchy "top.static_result.static_result"
+// RETURN-DAG: simulation.vpi_local.decl @[[LOCAL:[a-zA-Z_0-9]+]] {{.*}}in [[AUTO]] scope {{[0-9]+}} ordinal 0 hierarchy "top.signed_result.signed_result"
+// RETURN-DAG: simulation.vpi_static_local.bind [[STORAGE]] in [[STATIC]] ordinal 0
+// RETURN-DAG: simulation.vpi_relation.decl <kind = symbol, symbol = @[[AUTO_ANCHOR]]> selector 666 handle ordinal 0 to <kind = symbol, symbol = @[[LOCAL]]>
+// RETURN-DAG: simulation.vpi_relation.decl <kind = symbol, symbol = @[[STATIC_ANCHOR]]> selector 666 handle ordinal 0 to <kind = storage, id = [[STORAGE]] : i64>
+
 !signed = !talos.integral<9, true, true, 8 : 0, logic>
 !word = !talos.integral<32, true, false, 31 : 0, int>
 !vector = !talos.ranged_packed_array<2 : 5 x !talos.integral<1, false, false, 0 : 0, bit>>

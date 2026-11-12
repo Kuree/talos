@@ -12,6 +12,8 @@
 #include "talos/Reflection/VPIObjectModel.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include <optional>
+#include <utility>
 
 using namespace mlir;
 
@@ -27,6 +29,13 @@ materializeProceduralLocals(sim::SimDesignOp design, const PreparedUnits &units,
   llvm::DenseMap<uint64_t, sim::SimStorageDeclOp> storages;
   for (auto storage : design.getOps<sim::SimStorageDeclOp>())
     storages[storage.getId()] = storage;
+  // Return relations need an exact unscoped binding in the owning function.
+  // Index it once instead of rescanning the growing design for each function.
+  llvm::DenseSet<std::pair<uint64_t, uint64_t>> unscopedStaticBindings;
+  for (auto binding : design.getOps<sim::SimVPIStaticLocalBindingOp>())
+    if (!binding.getStatementScopeIdAttr())
+      unscopedStaticBindings.insert(
+          {binding.getCodeUnitId(), binding.getStorageId()});
   SymbolTableCollection sourceSymbols;
   auto module = design->getParentOfType<ModuleOp>();
   uint64_t nextID = 1;
@@ -175,6 +184,8 @@ materializeProceduralLocals(sim::SimDesignOp design, const PreparedUnits &units,
             builder, getSemanticLocation(candidate.source), storage.getIdAttr(),
             owner.getIdAttr(), candidate.scope,
             builder.getI32IntegerAttr(sourceOrdinals[scope]++));
+        if (!candidate.scope)
+          unscopedStaticBindings.insert({owner.getId(), storage.getId()});
         return success();
       }
       const uint32_t kind = sim::vpiKindForClassMember(semantic);
@@ -256,17 +267,12 @@ materializeProceduralLocals(sim::SimDesignOp design, const PreparedUnits &units,
                 builder.getContext(), sim::VPIObjectRefKind::Symbol, {}, local);
           else if (auto found = descriptors.find(getHierarchyName(variable));
                    found != descriptors.end() &&
-                   isContextResolvableStorage(found->second))
-            for (auto binding :
-                 design.getOps<sim::SimVPIStaticLocalBindingOp>())
-              if (binding.getStorageId() == found->second.id &&
-                  binding.getCodeUnitId() == owner.getId() &&
-                  !binding.getStatementScopeIdAttr()) {
-                target = sim::VPIObjectRefAttr::get(
-                    builder.getContext(), sim::VPIObjectRefKind::Storage,
-                    builder.getI64IntegerAttr(found->second.id));
-                break;
-              }
+                   isContextResolvableStorage(found->second) &&
+                   unscopedStaticBindings.contains(
+                       {owner.getId(), found->second.id}))
+            target = sim::VPIObjectRefAttr::get(
+                builder.getContext(), sim::VPIObjectRefKind::Storage,
+                builder.getI64IntegerAttr(found->second.id));
         }
         if (target)
           sim::SimVPIRelationDeclOp::create(
@@ -281,7 +287,9 @@ materializeProceduralLocals(sim::SimDesignOp design, const PreparedUnits &units,
 
     // Foreach iterators are implicit symbols owned by the loop's scope, not
     // ordinary declaration statements or members of the indexed collection.
-    VPIExpressionResolver resolver(design, descriptors);
+    // Most units have no foreach. Building the resolver eagerly scans every
+    // storage and net in the design once per unit even when it is never used.
+    std::optional<VPIExpressionResolver> resolver;
     bool invalid = false;
     unit.source->walk<WalkOrder::PreOrder>([&](Operation *operation) {
       if (operation != unit.source &&
@@ -298,7 +306,9 @@ materializeProceduralLocals(sim::SimDesignOp design, const PreparedUnits &units,
       if (!statement || statement.getCodeUnitId() != unit.id ||
           children.size() != 2 || loop.getLoopDimensions().empty())
         return WalkResult::advance();
-      auto collection = resolver.resolve(children[0]);
+      if (!resolver)
+        resolver.emplace(design, descriptors);
+      auto collection = resolver->resolve(children[0]);
       if (!collection ||
           (collection->kind !=
                static_cast<uint32_t>(reflection::VPIObjectKind::RegArray) &&
