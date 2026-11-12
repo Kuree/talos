@@ -8,7 +8,27 @@
 // process with one driver, and turns the concatenation of their per-slice
 // values into word operations when the slices are isomorphic bit lanes. A
 // member that reads a collapsed alias of the run keeps its own process: the
-// merged process would read those bits before it drives them.
+// merged process would read those bits before it drives them. Continuous
+// assignments to adjacent slices of one variable merge the same way into one
+// store: each bit of a packed variable is an independent element with at
+// most one continuous writer and no procedural writer (6.5), so the store
+// writes exactly the bits the members would. Not under VPI mutation: a
+// vpi_put_value() deposit is a write (38.34) that lasts until the next write
+// of that bit (6.5, "the last write determines the value"), and a merged
+// store rewrites every bit whenever any member re-evaluates.
+//
+// A member's body may branch, as `?:` does (11.4.11), when every operation
+// that does not run on all paths is safe to evaluate eagerly. The unchosen
+// operand of `?:` is not evaluated, and its "side effects or run-time errors
+// ... shall not occur"; implementations may evaluate differently "as long as
+// the simulation behavior (including side effects) is as if the standard
+// rules were followed" (11.3.5). Such operations are pure, cannot trap and
+// cannot produce poison; a read of an array element at an invalid index
+// returns the default of Table 7-1 (7.4.5) without a diagnostic. The merged
+// process if-converts the body: each block runs under the predicate of the
+// paths that reach it, and each block argument selects the value of the edge
+// taken. Exactly one path runs per activation, so the selected values are
+// those the branching member computes.
 //
 // Semantics. Each continuous assignment re-evaluates when an operand changes
 // (10.3.2). The merged process re-evaluates every member when any operand
@@ -84,6 +104,36 @@ bool isPureValueOp(Operation &op) {
          op.getNumSuccessors() == 0 && isMemoryEffectFree(&op);
 }
 
+/// Whether `op` can produce LLVM poison for some operand values: integer
+/// arithmetic with overflow flags, and shifts by a non-constant or
+/// out-of-range amount. Selects stop poison from the operand they do not
+/// choose; the and/or forms this pass builds do not.
+bool mayProducePoison(Operation *op) {
+  if (auto flags = dyn_cast<arith::ArithIntegerOverflowFlagsInterface>(op))
+    if (flags.getOverflowAttr().getValue() !=
+        arith::IntegerOverflowFlags::none)
+      return true;
+  if (isa<arith::ShLIOp, arith::ShRUIOp, arith::ShRSIOp>(op)) {
+    APInt amount;
+    auto width = dyn_cast<IntegerType>(op->getResult(0).getType());
+    return !width || !matchPattern(op->getOperand(1), m_ConstantInt(&amount)) ||
+           amount.uge(width.getWidth());
+  }
+  return false;
+}
+
+/// No operation in the pure cone of `v` (to `depth`) can produce poison.
+bool poisonFree(Value v, unsigned depth = 16) {
+  Operation *def = v.getDefiningOp();
+  if (!def || isa<sim::SimNetReadOp, sim::SimRefLoadOp>(def))
+    return true;
+  if (!depth || mayProducePoison(def) || def->getNumRegions())
+    return false;
+  return llvm::all_of(def->getOperands(), [&](Value operand) {
+    return poisonFree(operand, depth - 1);
+  });
+}
+
 /// A fixed slice of a declared net or variable.
 struct Slice {
   bool net = false;
@@ -138,20 +188,35 @@ std::optional<bool> packedRootDomain(BlockArgument root) {
   return isa<sim::LogicType>(scalar);
 }
 
-/// A continuous assignment process `cf.br ^b; ^b: reads, pure ops, one drive;
-/// suspend on change`, spawned once at startup from the root initializer.
+/// A continuous assignment process: `cf.br ^h`, then an acyclic body from
+/// ^h of reads and pure operations whose last block holds the one write (a
+/// net drive, or a continuous store to a variable) and suspends on change
+/// back to ^h; spawned once at startup from the root initializer.
 struct Member {
   sim::SimFuncOp function;
   sim::SimSpawnOp spawn;
-  sim::SimDriverDriveOp drive;
+  /// The member's only write: a net driver drive, or a continuous store to
+  /// a variable (`variable`), whose value and target view these are.
+  Operation *write = nullptr;
+  Value writeValue, writeTarget;
+  bool variable = false;
   sim::SimDriverDeclOp decl;
   sim::SimContextDriverOp contextDriver;
-  unsigned driverArgument = 0;
+  unsigned driverArgument = ~0u; // none for a variable
+  /// The written root (net or storage ID) and slice, and whether the written
+  /// value is four-state.
   uint64_t net = 0, low = 0, width = 0;
+  bool fourState = false;
+  /// Body blocks in topological order: the loop header first, the block
+  /// holding the write and the suspension last.
+  SmallVector<Block *> blocks;
+
+  Slice slice() const { return Slice{!variable, net, low, width}; }
   /// Reads of the member's own net, by read operation.
   SmallVector<std::pair<Operation *, Slice>> ownReads;
-  /// Every read and its slice (null slice when unknown).
+  /// Every read and its slice (the whole root for a dynamic selection).
   DenseMap<Operation *, Slice> readSlices;
+  DenseSet<Operation *> dynamicReads;
   /// Watched handles and their slices.
   SmallVector<std::pair<Value, std::optional<Slice>>> waits;
 };
@@ -188,6 +253,8 @@ struct Plan {
     Bitwise,   // the same bitwise operation in every lane
     Not,       // bitwise complement in every lane
     Reduce,    // transposed reduction of gathered bits
+    Select,    // two-state one-bit selects: (c & a) | (~c & b)
+    ViewLeaf,  // reads at contiguous constant offsets of one view
   } kind;
   unsigned width = 0; // total width
   // Leaf
@@ -237,7 +304,7 @@ private:
   /// Equal values, or reads of the same slice of the same root: members read
   /// their operands separately, and no write separates the reads.
   bool sameValue(Value a, Value b) const {
-    if (a == b)
+    if (equivalent(a, b))
       return true;
     auto left = leaves.find(a), right = leaves.find(b);
     return left != leaves.end() && right != leaves.end() &&
@@ -258,6 +325,77 @@ private:
     if (Operation *def = v.getDefiningOp())
       return def->getName().getAsOpaquePointer();
     return v.getAsOpaquePointer();
+  }
+
+  /// Structurally equal values: the same pure operation or read applied to
+  /// equivalent operands. Merged members compute their operands separately,
+  /// and in the merged body every read precedes every write, so equivalent
+  /// reads observe the same state.
+  static bool equivalent(Value a, Value b, unsigned depth = 8) {
+    if (a == b)
+      return true;
+    Operation *left = a.getDefiningOp(), *right = b.getDefiningOp();
+    if (!depth || !left || !right || left->getName() != right->getName() ||
+        left->getAttrDictionary() != right->getAttrDictionary() ||
+        left->getNumOperands() != right->getNumOperands() ||
+        left->getNumRegions() || right->getNumRegions() ||
+        left->getResultTypes() != right->getResultTypes() ||
+        cast<OpResult>(a).getResultNumber() !=
+            cast<OpResult>(b).getResultNumber() ||
+        !(isMemoryEffectFree(left) ||
+          isa<sim::SimNetReadOp, sim::SimRefLoadOp>(left)))
+      return false;
+    for (auto [x, y] : llvm::zip(left->getOperands(), right->getOperands()))
+      if (!equivalent(x, y, depth - 1))
+        return false;
+    return true;
+  }
+
+  /// A read through constant views of a base handle: the base, the bit
+  /// offset in it, and the read operation.
+  static std::optional<std::pair<Value, uint64_t>> viewOffset(Value read) {
+    Operation *def = read.getDefiningOp();
+    if (!isa_and_nonnull<sim::SimNetReadOp, sim::SimRefLoadOp>(def))
+      return std::nullopt;
+    Value handle = def->getOperand(0);
+    uint64_t offset = 0;
+    while (Operation *view = handle.getDefiningOp()) {
+      Type element;
+      if (auto ref = dyn_cast<sim::RefType>(view->getOperand(0).getType()))
+        element = ref.getElementType();
+      else if (auto net = dyn_cast<sim::NetType>(view->getOperand(0).getType()))
+        element = net.getElementType();
+      if (!element || isa<sim::UnpackedArrayType>(element) ||
+          !sim::getPackedWidth(element))
+        break;
+      if (auto sub = dyn_cast<sim::SimRefSubelementOp>(view)) {
+        uint64_t local = 0;
+        Type type = element;
+        bool ok = true;
+        for (int64_t index : sub.getIndices()) {
+          auto step = sim::getAggregateProvenanceSubelement(type, index);
+          if (!step) {
+            ok = false;
+            break;
+          }
+          local += step->first;
+          type = sim::getAggregateElementType(type, index);
+        }
+        if (!ok)
+          break;
+        offset += local;
+      } else if (auto extract = dyn_cast<sim::SimRefExtractOp>(view)) {
+        offset += extract.getLowBit();
+      } else if (auto extract = dyn_cast<sim::SimNetExtractOp>(view)) {
+        offset += extract.getLowBit();
+      } else {
+        break;
+      }
+      handle = view->getOperand(0);
+    }
+    if (handle == def->getOperand(0))
+      return std::nullopt;
+    return std::make_pair(handle, offset);
   }
 
   /// Bit offset of `v` inside the flat value it was extracted from.
@@ -424,6 +562,24 @@ private:
         }
       }
     }
+    // Reads at contiguous constant offsets of one (possibly dynamic) view,
+    // such as the bits of an array element at a run-time index: the bits of
+    // one element read (7.4.5) are its bit-selects (11.5.1), including the
+    // default element of an invalid index.
+    if (auto first = viewOffset(lanes.front())) {
+      bool contiguous = true;
+      for (unsigned k = 1; k < n && contiguous; ++k) {
+        auto other = viewOffset(lanes[k]);
+        contiguous = other && equivalent(other->first, first->first) &&
+                     other->second == first->second + k * w;
+      }
+      if (contiguous) {
+        auto plan = make(Plan::ViewLeaf, n * w);
+        plan->value = first->first;
+        plan->offset = first->second;
+        return plan;
+      }
+    }
     // Contiguous bits of one value.
     if (auto first = extractOf(lanes.front(), fourState)) {
       bool contiguous = true;
@@ -533,6 +689,32 @@ private:
       return bitwise(sim::BinaryKind::Or);
     if (isa<arith::XOrIOp>(head))
       return bitwise(sim::BinaryKind::Xor);
+    if (isa<arith::SelectOp>(head)) {
+      // For bits in {0, 1}, c ? a : b (11.4.11) equals (c & a) | (~c & b)
+      // by Tables 11-11, 11-12 and 11-15. A four-state condition instead
+      // merges X/Z per bit (Table 11-20), so four-state selects stay.
+      if (w != 1)
+        return nullptr;
+      SmallVector<Value> conditions, trues, falses;
+      for (Value lane : lanes) {
+        Operation *op = lane.getDefiningOp();
+        conditions.push_back(op->getOperand(0));
+        trues.push_back(op->getOperand(1));
+        falses.push_back(op->getOperand(2));
+      }
+      auto condition = match(conditions, 1, fourState);
+      auto onTrue = condition ? match(trues, 1, fourState) : nullptr;
+      auto onFalse = onTrue ? match(falses, 1, fourState) : nullptr;
+      // The and/or form evaluates both operands: they must not carry
+      // poison the select would have discarded.
+      if (!onFalse || !poisonFreePlan(*onTrue) || !poisonFreePlan(*onFalse))
+        return nullptr;
+      auto plan = make(Plan::Select, n);
+      plan->children.push_back(std::move(condition));
+      plan->children.push_back(std::move(onTrue));
+      plan->children.push_back(std::move(onFalse));
+      return plan;
+    }
     if (auto compare = dyn_cast<arith::CmpIOp>(head)) {
       // `x != 0` is the OR and `x == ~0` the AND of x's bits (11.4.9).
       auto predicate = compare.getPredicate();
@@ -554,6 +736,17 @@ private:
                     [](Operation *op) { return op->getOperand(0); });
     }
     return nullptr;
+  }
+
+  /// The values a plan uses directly (broadcast bits, extract bases) are
+  /// free of poison; reads, constants and bitwise combinations add none.
+  static bool poisonFreePlan(const Plan &plan) {
+    if ((plan.kind == Plan::Broadcast || plan.kind == Plan::Extract) &&
+        !poisonFree(plan.value))
+      return false;
+    return llvm::all_of(plan.children, [](const std::unique_ptr<Plan> &child) {
+      return poisonFreePlan(*child);
+    });
   }
 
   /// Lane k reduces the bits b(k, 0..J-1) with `kind`; the word is the
@@ -630,6 +823,19 @@ private:
           low);
       return sim::SimRefLoadOp::create(builder, loc, type, view);
     }
+    case Plan::ViewLeaf: {
+      Value base = plan.value;
+      if (isa<sim::NetType>(base.getType())) {
+        Value view = sim::SimNetExtractOp::create(
+            builder, loc, sim::NetType::get(builder.getContext(), type), base,
+            plan.offset);
+        return sim::SimNetReadOp::create(builder, loc, type, view);
+      }
+      Value view = sim::SimRefExtractOp::create(
+          builder, loc, sim::RefType::get(builder.getContext(), type), base,
+          plan.offset);
+      return sim::SimRefLoadOp::create(builder, loc, type, view);
+    }
     case Plan::Extract: {
       Value base = flat(plan.value);
       if (fourState)
@@ -668,6 +874,18 @@ private:
       return sim::SimLogicUnaryOp::create(builder, loc, type,
                                           sim::UnaryKind::BitNot,
                                           emit(*plan.children[0], fourState));
+    case Plan::Select: {
+      Value condition = emit(*plan.children[0], fourState);
+      Value onTrue = emit(*plan.children[1], fourState);
+      Value onFalse = emit(*plan.children[2], fourState);
+      Value ones = arith::ConstantOp::create(
+          builder, loc, type,
+          builder.getIntegerAttr(type, APInt::getAllOnes(plan.width)));
+      Value inverse = arith::XOrIOp::create(builder, loc, condition, ones);
+      return arith::OrIOp::create(
+          builder, loc, arith::AndIOp::create(builder, loc, condition, onTrue),
+          arith::AndIOp::create(builder, loc, inverse, onFalse));
+    }
     case Plan::Reduce: {
       Value result;
       for (auto &child : plan.children) {
@@ -741,26 +959,28 @@ TalosSimCoalesceContinuousDriversPass::match(sim::SimFuncOp function,
   if (function.isExternal() || !function.isPrivate() ||
       function.getHomeRegion() != sim::EventRegion::Active ||
       function.getEntryKind() != sim::EntryKind::Continuous ||
-      function.getBody().getBlocks().size() != 2) {
+      function.getBody().getBlocks().size() < 2) {
     why = "shape";
     return std::nullopt;
   }
   for (NamedAttribute attr : function->getAttrs()) {
     StringRef name = attr.getName().getValue();
+    // Delayed continuous assignments (10.3.3) schedule each update.
     if (name.contains("primitive") || name.contains("timing") ||
-        name.contains("path") || name.contains("pulse")) {
+        name.contains("path") || name.contains("pulse") ||
+        name.contains("propagation_delays")) {
       why = "special process";
       return std::nullopt;
     }
   }
   Block &entry = function.getBody().front();
-  Block &body = function.getBody().back();
   auto branch = dyn_cast<cf::BranchOp>(entry.getTerminator());
-  if (!branch || branch.getDest() != &body || body.getNumArguments() ||
-      !branch.getDestOperands().empty()) {
+  if (!branch || !branch.getDestOperands().empty() ||
+      branch.getDest()->getNumArguments()) {
     why = "entry";
     return std::nullopt;
   }
+  Block *header = branch.getDest();
   for (Operation &op : entry.without_terminator())
     if (!isViewOp(&op) && !isPureValueOp(op)) {
       why = "entry op";
@@ -768,6 +988,55 @@ TalosSimCoalesceContinuousDriversPass::match(sim::SimFuncOp function,
     }
   Member member;
   member.function = function;
+  // The body: an acyclic CFG of plain branches from the header to the one
+  // block that suspends back to it (topological order, Kahn).
+  Block *exit = nullptr;
+  {
+    DenseMap<Block *, unsigned> incoming;
+    for (Block &block : function.getBody()) {
+      if (&block == &entry)
+        continue;
+      Operation *terminator = block.getTerminator();
+      if (isa<sim::SimSuspendChangeOp, sim::SimSuspendAnyOp>(terminator)) {
+        if (exit) {
+          why = "exits";
+          return std::nullopt;
+        }
+        exit = &block;
+        continue;
+      }
+      if (!isa<cf::BranchOp, cf::CondBranchOp>(terminator)) {
+        why = "terminator";
+        return std::nullopt;
+      }
+      for (Block *successor : block.getSuccessors()) {
+        if (successor == header || successor == &entry) {
+          why = "loop";
+          return std::nullopt;
+        }
+        ++incoming[successor];
+      }
+    }
+    if (!exit || incoming.count(header)) {
+      why = "body";
+      return std::nullopt;
+    }
+    SmallVector<Block *> ready{header};
+    while (!ready.empty()) {
+      Block *block = ready.pop_back_val();
+      member.blocks.push_back(block);
+      if (block == exit)
+        continue;
+      for (Block *successor : block->getSuccessors())
+        if (--incoming[successor] == 0)
+          ready.push_back(successor);
+    }
+    if (member.blocks.size() + 1 != function.getBody().getBlocks().size() ||
+        member.blocks.back() != exit) {
+      why = "cfg";
+      return std::nullopt;
+    }
+  }
   int driverArgument = -1;
   for (unsigned i = 0; i < entry.getNumArguments(); ++i) {
     auto kind = function.getArgAttrOfType<IntegerAttr>(
@@ -800,52 +1069,94 @@ TalosSimCoalesceContinuousDriversPass::match(sim::SimFuncOp function,
       return std::nullopt;
     }
   }
-  if (driverArgument < 0) {
-    why = "no driver";
-    return std::nullopt;
-  }
-  member.driverArgument = unsigned(driverArgument);
-  for (Operation &op : body.without_terminator()) {
-    if (isViewOp(&op))
-      continue;
-    if (isa<sim::SimNetReadOp, sim::SimRefLoadOp>(op)) {
-      std::optional<Slice> slice = sliceOf(facts, op.getOperand(0));
-      if (!slice || !viewRoot(op.getOperand(0))) {
-        why = "read";
-        return std::nullopt;
-      }
-      member.readSlices[&op] = *slice;
-      continue;
-    }
-    if (auto drive = dyn_cast<sim::SimDriverDriveOp>(op)) {
-      if (member.drive) {
-        why = "writes";
-        return std::nullopt;
-      }
-      member.drive = drive;
-      continue;
-    }
-    if (!isPureValueOp(op)) {
-      why = "op";
+  // Every block but the header and the exit runs only on some paths, so its
+  // operations must be safe to speculate: 11.4.11 evaluates only the chosen
+  // operand, and evaluating the other is allowed only when it has no side
+  // effect and no run-time error (11.3.5). Array element reads at an invalid
+  // index yield the Table 7-1 default (7.4.5).
+  bool converted = member.blocks.size() > 1;
+  for (Block *block : member.blocks) {
+    bool always = block == header || block == exit;
+    // If-conversion selects among values, never among handles.
+    if (llvm::any_of(block->getArgumentTypes(), [](Type type) {
+          return isa<sim::RefType, sim::NetType, sim::DriverType>(type);
+        })) {
+      why = "handle argument";
       return std::nullopt;
     }
+    for (Operation &op : block->without_terminator()) {
+      if (isViewOp(&op) || isa<sim::SimRefArrayElementOp>(op))
+        continue;
+      if (isa<sim::SimNetReadOp, sim::SimRefLoadOp>(op)) {
+        std::optional<Slice> slice = sliceOf(facts, op.getOperand(0));
+        if (!slice) {
+          // A dynamic selection (an array element at a run-time index)
+          // reads somewhere in its root: model it as the whole root.
+          auto fact = facts.find(op.getOperand(0));
+          if (fact == facts.end() || !fact->second.descriptor ||
+              (fact->second.resource !=
+                   schedule::ComputeResourceKind::Storage &&
+               fact->second.resource != schedule::ComputeResourceKind::Net)) {
+            why = "read";
+            return std::nullopt;
+          }
+          slice = Slice{fact->second.resource ==
+                            schedule::ComputeResourceKind::Net,
+                        *fact->second.descriptor, 0, UINT64_MAX / 2};
+          member.dynamicReads.insert(&op);
+        } else if (!viewRoot(op.getOperand(0))) {
+          why = "read";
+          return std::nullopt;
+        }
+        member.readSlices[&op] = *slice;
+        continue;
+      }
+      bool store = isa<sim::SimRefStoreOp>(op) &&
+                   sim::has<sim::metadata::ContinuousStore>(&op);
+      if (isa<sim::SimDriverDriveOp>(op) || store) {
+        if (member.write || block != exit) {
+          why = "writes";
+          return std::nullopt;
+        }
+        member.write = &op;
+        member.variable = store;
+        member.writeValue = op.getOperand(store ? 0 : 1);
+        member.writeTarget = op.getOperand(store ? 1 : 0);
+        continue;
+      }
+      // Speculated operations must not trap (division) or produce poison
+      // that the predicates, an eager and/or, would not stop.
+      if (!isPureValueOp(op) || (!always && !isPure(&op)) ||
+          (converted && mayProducePoison(&op))) {
+        why = "op";
+        return std::nullopt;
+      }
+    }
   }
-  if (!member.drive) {
-    why = "no drive";
+  if (!member.write) {
+    why = "no write";
     return std::nullopt;
   }
-  // The drive is the only use of the driver capture.
-  BlockArgument driver = entry.getArgument(member.driverArgument);
-  if (viewRoot(member.drive.getDriver()) != driver) {
-    why = "drive target";
+  std::optional<Slice> target = sliceOf(facts, member.writeTarget);
+  auto valueWidth = sim::getPackedWidth(member.writeValue.getType());
+  BlockArgument root = viewRoot(member.writeTarget);
+  if (!target || target->net == member.variable || !valueWidth ||
+      *valueWidth != target->width || !root || root.getOwner() != &entry) {
+    why = "write slice";
     return std::nullopt;
   }
-  {
-    SmallVector<Value> work{driver};
+  if (!member.variable) {
+    // The drive is the only use of the driver capture.
+    if (driverArgument < 0 || root != entry.getArgument(driverArgument)) {
+      why = "drive target";
+      return std::nullopt;
+    }
+    member.driverArgument = unsigned(driverArgument);
+    SmallVector<Value> work{root};
     while (!work.empty()) {
       Value v = work.pop_back_val();
       for (Operation *user : v.getUsers()) {
-        if (user == member.drive)
+        if (user == member.write)
           continue;
         if (!isViewOp(user)) {
           why = "driver use";
@@ -854,32 +1165,30 @@ TalosSimCoalesceContinuousDriversPass::match(sim::SimFuncOp function,
         work.push_back(user->getResult(0));
       }
     }
-  }
-  std::optional<Slice> target = sliceOf(facts, member.drive.getDriver());
-  auto valueWidth = sim::getPackedWidth(member.drive.getValue().getType());
-  if (!target || !target->net || !valueWidth ||
-      *valueWidth != target->width) {
-    why = "drive slice";
+  } else if (driverArgument >= 0) {
+    why = "drivers";
     return std::nullopt;
   }
   member.net = target->id;
   member.low = target->low;
   member.width = target->width;
+  member.fourState = isa<sim::LogicType>(
+      sim::getPackedScalarType(member.writeValue.getType()));
   for (auto [op, slice] : member.readSlices)
-    if (slice.net && slice.id == member.net)
+    if (slice.net != member.variable && slice.id == member.net)
       member.ownReads.push_back({op, slice});
   // Change waits only (10.3.2): edges and qualifiers keep the process.
-  Operation *terminator = body.getTerminator();
+  Operation *terminator = exit->getTerminator();
   SmallVector<Value> watched;
   if (auto wait = dyn_cast<sim::SimSuspendChangeOp>(terminator)) {
-    if (wait.getContinuation() != &body ||
+    if (wait.getContinuation() != header ||
         !wait.getContinuationOperands().empty()) {
       why = "wait";
       return std::nullopt;
     }
     watched.push_back(wait.getWatched());
   } else if (auto wait = dyn_cast<sim::SimSuspendAnyOp>(terminator)) {
-    if (wait.getContinuation() != &body || wait.getResumeRegionAttr() ||
+    if (wait.getContinuation() != header || wait.getResumeRegionAttr() ||
         llvm::any_of(wait.getEdges(), [](int32_t edge) { return edge != 0; }) ||
         wait.getValues().size() != wait.getEdges().size()) {
       why = "wait";
@@ -912,6 +1221,8 @@ TalosSimCoalesceContinuousDriversPass::match(sim::SimFuncOp function,
     why = "spawn";
     return std::nullopt;
   }
+  if (member.variable)
+    return member;
   member.contextDriver =
       member.spawn.getOperands()[member.driverArgument]
           .getDefiningOp<sim::SimContextDriverOp>();
@@ -968,8 +1279,8 @@ void TalosSimCoalesceContinuousDriversPass::merge(
   Location loc = head.getLoc();
   uint64_t runLow = first.low;
   uint64_t runWidth = run.back()->low + run.back()->width - runLow;
-  bool fourState =
-      isa<sim::LogicType>(sim::getPackedScalarType(first.decl.getType()));
+  bool fourState = isa<sim::LogicType>(
+      sim::getPackedScalarType(first.writeValue.getType()));
 
   // Captures, deduplicated by the spawn operand, and whole declared roots by
   // their context handle's kind and ID (each spawn has its own handle op).
@@ -1036,8 +1347,12 @@ void TalosSimCoalesceContinuousDriversPass::merge(
   Block *entry = &merged.getBody().front();
   Block *body = new Block();
   merged.getBody().push_back(body);
-  BlockArgument driver = entry->getArgument(captureOf.lookup(
-      first.spawn.getOperands()[first.driverArgument]));
+  // The handle the run writes through: the first member's driver, or the
+  // storage it stores to.
+  BlockArgument target = entry->getArgument(captureOf.lookup(
+      first.spawn.getOperands()[first.variable
+                                    ? viewRoot(first.writeTarget).getArgNumber()
+                                    : first.driverArgument]));
 
   // Members in dependence order: a member that reads a slice another member
   // drives runs after it.
@@ -1052,7 +1367,7 @@ void TalosSimCoalesceContinuousDriversPass::merge(
           return llvm::all_of(run, [&](Member *other) {
             return placed.contains(other) ||
                    !read.second.overlaps(
-                       Slice{true, other->net, other->low, other->width});
+                       other->slice());
           });
         });
         if (ready) {
@@ -1074,7 +1389,6 @@ void TalosSimCoalesceContinuousDriversPass::merge(
   for (Member *m : order) {
     const analysis::HandleFacts &memberFacts = facts.at(m->function);
     Block &memberEntry = m->function.getBody().front();
-    Block &memberBody = m->function.getBody().back();
     IRMapping mapping;
     for (unsigned i = 0; i < memberEntry.getNumArguments(); ++i) {
       if (m != &first && i == m->driverArgument)
@@ -1096,11 +1410,51 @@ void TalosSimCoalesceContinuousDriversPass::merge(
     for (Operation &op : memberEntry.without_terminator())
       if (!touchesDriver(op))
         entryBuilder.clone(op, mapping);
-    for (Operation &op : memberBody.without_terminator()) {
-      if (&op == m->drive || touchesDriver(op))
+    // If-conversion of the member's acyclic body (11.4.11): every block runs,
+    // each under the predicate of the paths reaching it; a block argument
+    // selects the value of the edge taken. Exactly one path executes, so the
+    // select chains yield the same values; the blocks hold only operations
+    // that are safe to speculate (see match).
+    struct Edge {
+      Value predicate; // null: always
+      SmallVector<Value> operands;
+    };
+    DenseMap<Block *, SmallVector<Edge>> edgesInto;
+    auto conjoin = [&](Value predicate, Value condition) -> Value {
+      if (!predicate)
+        return condition;
+      return arith::AndIOp::create(bodyBuilder, loc, predicate, condition);
+    };
+    for (Block *block : m->blocks) {
+      Value predicate;
+      if (block != m->blocks.front()) {
+        SmallVector<Edge> &edges = edgesInto[block];
+        bool always = llvm::any_of(edges, [](Edge &edge) {
+          return !edge.predicate;
+        });
+        for (Edge &edge : edges)
+          if (!always)
+            predicate = predicate ? Value(arith::OrIOp::create(
+                                        bodyBuilder, loc, predicate,
+                                        edge.predicate))
+                                  : edge.predicate;
+        for (unsigned a = 0; a < block->getNumArguments(); ++a) {
+          Value value = edges.back().operands[a];
+          for (unsigned e = edges.size() - 1; e-- > 0;)
+            value = edges[e].predicate
+                        ? Value(arith::SelectOp::create(
+                              bodyBuilder, loc, edges[e].predicate,
+                              edges[e].operands[a], value))
+                        : edges[e].operands[a]; // always taken
+          mapping.map(block->getArgument(a), value);
+        }
+      }
+      for (Operation &op : block->without_terminator()) {
+      if (&op == m->write || touchesDriver(op))
         continue;
       auto slice = m->readSlices.find(&op);
-      if (forwarding && slice != m->readSlices.end() && slice->second.net &&
+      if (forwarding && slice != m->readSlices.end() &&
+          slice->second.net != first.variable &&
           slice->second.id == first.net &&
           slice->second.within(runLow, runWidth)) {
         // The value a member of this run drives on these bits.
@@ -1142,16 +1496,41 @@ void TalosSimCoalesceContinuousDriversPass::merge(
         continue;
       }
       Operation *clone = bodyBuilder.clone(op, mapping);
-      if (slice != m->readSlices.end())
+      if (slice != m->readSlices.end() && !m->dynamicReads.contains(&op))
         if (BlockArgument root = viewRoot(clone->getOperand(0)))
           if (packedRootDomain(root) == std::optional<bool>(fourState))
             leaves[clone->getResult(0)] = {root, slice->second};
+      }
+      // Successor edges and their predicates.
+      Operation *terminator = block->getTerminator();
+      auto mapped = [&](OperandRange operands) {
+        SmallVector<Value> values;
+        for (Value operand : operands)
+          values.push_back(mapping.lookup(operand));
+        return values;
+      };
+      if (auto branch = dyn_cast<cf::BranchOp>(terminator)) {
+        edgesInto[branch.getDest()].push_back(
+            {predicate, mapped(branch.getDestOperands())});
+      } else if (auto branch = dyn_cast<cf::CondBranchOp>(terminator)) {
+        Value condition = mapping.lookup(branch.getCondition());
+        Value inverse = arith::XOrIOp::create(
+            bodyBuilder, loc, condition,
+            arith::ConstantOp::create(bodyBuilder, loc,
+                                      bodyBuilder.getBoolAttr(true)));
+        edgesInto[branch.getTrueDest()].push_back(
+            {conjoin(predicate, condition),
+             mapped(branch.getTrueDestOperands())});
+        edgesInto[branch.getFalseDest()].push_back(
+            {conjoin(predicate, inverse),
+             mapped(branch.getFalseDestOperands())});
+      }
     }
-    laneOf[m] = mapping.lookup(m->drive.getValue());
+    laneOf[m] = mapping.lookup(m->writeValue);
     for (auto &[value, slice] : m->waits) {
       // Waits on bits the run computes itself are subsumed by forwarding.
-      if (forwarding && slice && slice->net && slice->id == first.net &&
-          slice->within(runLow, runWidth))
+      if (forwarding && slice && slice->net != first.variable &&
+          slice->id == first.net && slice->within(runLow, runWidth))
         continue;
       Value mappedValue = mapping.lookupOrNull(value);
       assert(mappedValue && "every watched handle is a capture or a view");
@@ -1215,18 +1594,32 @@ void TalosSimCoalesceContinuousDriversPass::merge(
   cf::BranchOp::create(entryBuilder, loc, body);
 
   // Drive the run: wide lanes as they are, narrow lanes packed into words.
-  // Bit offset of the driver capture within its net.
-  uint64_t driverLow = argumentLows.lookup(driver);
+  // Bit offset of the target capture within its root.
+  uint64_t targetLow = argumentLows.lookup(target);
   auto driveSlice = [&](uint64_t low, Value value) {
-    Value target = driver;
-    if (low != driverLow || value.getType() !=
-                                cast<sim::DriverType>(driver.getType())
+    if (first.variable) {
+      // One continuous store of the run (6.5: each written bit has one
+      // continuous writer).
+      Value view = target;
+      if (low != targetLow ||
+          value.getType() != cast<sim::RefType>(target.getType())
+                                 .getElementType())
+        view = sim::SimRefExtractOp::create(
+            bodyBuilder, loc, sim::RefType::get(context, value.getType()),
+            target, low - targetLow);
+      auto store = sim::SimRefStoreOp::create(bodyBuilder, loc, value, view);
+      sim::mark<sim::metadata::ContinuousStore>(store);
+      return;
+    }
+    Value view = target;
+    if (low != targetLow || value.getType() !=
+                                cast<sim::DriverType>(target.getType())
                                     .getElementType())
-      target = sim::SimDriverExtractOp::create(
+      view = sim::SimDriverExtractOp::create(
           bodyBuilder, loc,
-          sim::DriverType::get(context, value.getType()), driver,
-          low - driverLow);
-    sim::SimDriverDriveOp::create(bodyBuilder, loc, target, value);
+          sim::DriverType::get(context, value.getType()), target,
+          low - targetLow);
+    sim::SimDriverDriveOp::create(bodyBuilder, loc, view, value);
   };
   LaneVectorizer vectorizer(bodyBuilder, loc, leaves, argumentLows);
   auto flatten = [&](Value v) -> Value {
@@ -1331,13 +1724,15 @@ void TalosSimCoalesceContinuousDriversPass::merge(
   sim::SimSpawnOp::create(spawnBuilder, first.spawn.getLoc(),
                           merged.getSymName(), operands,
                           /*arg_attrs=*/nullptr, /*res_attrs=*/nullptr);
-  first.decl.setDrivenLowAttr(
-      IntegerAttr::get(IntegerType::get(context, 64), runLow));
-  first.decl.setDrivenWidthAttr(
-      IntegerAttr::get(IntegerType::get(context, 64), runWidth));
+  if (!first.variable) {
+    first.decl.setDrivenLowAttr(
+        IntegerAttr::get(IntegerType::get(context, 64), runLow));
+    first.decl.setDrivenWidthAttr(
+        IntegerAttr::get(IntegerType::get(context, 64), runWidth));
+  }
   for (Member *m : run) {
     m->spawn.erase();
-    if (m != &first) {
+    if (m != &first && !m->variable) {
       freedDrivers.push_back(m->contextDriver.getId());
       m->contextDriver.erase();
       m->decl.erase();
@@ -1422,6 +1817,7 @@ void TalosSimCoalesceContinuousDriversPass::runOnOperation() {
   freedDrivers.clear();
   bool dumpPorts = false, overrides = false;
   DenseMap<uint64_t, sim::SimNetDeclOp> nets;
+  DenseMap<uint64_t, sim::SimStorageDeclOp> storages;
   for (Operation &op : designBlock) {
     if (auto decl = dyn_cast<sim::SimDriverDeclOp>(op)) {
       driverDecls[decl.getId()] = decl;
@@ -1429,6 +1825,10 @@ void TalosSimCoalesceContinuousDriversPass::runOnOperation() {
     }
     if (auto decl = dyn_cast<sim::SimNetDeclOp>(op)) {
       nets[decl.getId()] = decl;
+      continue;
+    }
+    if (auto decl = dyn_cast<sim::SimStorageDeclOp>(op)) {
+      storages[decl.getId()] = decl;
       continue;
     }
   }
@@ -1471,19 +1871,22 @@ void TalosSimCoalesceContinuousDriversPass::runOnOperation() {
   // that neither can happen.
   bool forwarding = vpi != "full" && !overrides;
   DenseMap<Operation *, analysis::HandleFacts> facts;
-  std::map<uint64_t, SmallVector<Member>> byNet;
+  // Members by written root: (variable, ID).
+  std::map<std::pair<bool, uint64_t>, std::vector<Member>> byNet;
   unsigned candidates = 0;
   for (auto function : designBlock.getOps<sim::SimFuncOp>()) {
     if (function.isExternal() ||
         function.getEntryKind() != sim::EntryKind::Continuous ||
-        function.getBody().getBlocks().size() != 2)
+        function.getBody().getBlocks().size() < 2)
       continue;
-    // Structural prefilter before solving handle facts: one driver capture
-    // and one drive.
-    unsigned drives = 0;
-    for (Operation &op : function.getBody().back())
-      drives += isa<sim::SimDriverDriveOp>(op);
-    if (drives != 1)
+    // Structural prefilter before solving handle facts: one write.
+    unsigned writes = 0;
+    function.walk([&](Operation *op) {
+      writes += isa<sim::SimDriverDriveOp>(op) ||
+                (isa<sim::SimRefStoreOp>(op) &&
+                 sim::has<sim::metadata::ContinuousStore>(op));
+    });
+    if (writes != 1)
       continue;
     ++candidates;
     analysis::HandleFacts functionFacts = handles.derive(function);
@@ -1491,6 +1894,19 @@ void TalosSimCoalesceContinuousDriversPass::runOnOperation() {
     std::optional<Member> member = match(function, functionFacts, why);
     if (!member)
       continue;
+    if (member->variable) {
+      // A design variable written by continuous assignment (6.5). A VPI
+      // deposit is a write (38.34) lasting until the next write of that bit
+      // (6.5); a merged store would rewrite the bit earlier (10.3.2).
+      auto storage = storages.find(member->net);
+      if (vpi == "full" || storage == storages.end() ||
+          storage->second.getLifetime() != sim::Lifetime::Design ||
+          !sim::getPackedWidth(storage->second.getType()))
+        continue;
+      facts[function] = std::move(functionFacts);
+      byNet[{true, member->net}].push_back(std::move(*member));
+      continue;
+    }
     // Each bit of the slice has this member as its only contribution, also
     // across port-collapsed nets (6.6.1, 23.3.3.7).
     auto net = nets.find(member->net);
@@ -1505,14 +1921,15 @@ void TalosSimCoalesceContinuousDriversPass::runOnOperation() {
       if (llvm::any_of(*delays, [](int64_t delay) { return delay != -1; }))
         continue;
     facts[function] = std::move(functionFacts);
-    byNet[member->net].push_back(std::move(*member));
+    byNet[{false, member->net}].push_back(std::move(*member));
   }
 
   SymbolTable symbols(design);
   unsigned merged = 0, runs = 0;
   for (auto &netMembers : byNet) {
-    uint64_t net = netMembers.first;
-    SmallVector<Member> &members = netMembers.second;
+    bool variable = netMembers.first.first;
+    uint64_t net = netMembers.first.second;
+    std::vector<Member> &members = netMembers.second;
     llvm::sort(members, [](const Member &a, const Member &b) {
       return a.low < b.low;
     });
@@ -1530,6 +1947,7 @@ void TalosSimCoalesceContinuousDriversPass::runOnOperation() {
         if (!runList.empty() &&
             runList.back().back()->low + runList.back().back()->width ==
                 members[i].low &&
+            runList.back().back()->fourState == members[i].fourState &&
             !excluded[i - 1])
           runList.back().push_back(&members[i]);
         else
@@ -1543,10 +1961,11 @@ void TalosSimCoalesceContinuousDriversPass::runOnOperation() {
         // in the same activation, through a net the forwarding cannot see,
         // and its own drive does not wake it again.
         SmallVector<Slice> aliases;
-        for (Member *m : run)
-          for (const auto &alias :
-               handles.getExclusiveDriveAliases(net, m->low, m->width))
-            aliases.push_back(Slice{true, alias.net, alias.low, alias.width});
+        if (!variable)
+          for (Member *m : run)
+            for (const auto &alias :
+                 handles.getExclusiveDriveAliases(net, m->low, m->width))
+              aliases.push_back(Slice{true, alias.net, alias.low, alias.width});
         for (Member *m : run) {
           bool bad = false;
           for (auto &read : m->readSlices)
@@ -1554,7 +1973,7 @@ void TalosSimCoalesceContinuousDriversPass::runOnOperation() {
               bad |= read.second.overlaps(alias);
           for (auto &read : m->ownReads) {
             const Slice &slice = read.second;
-            if (!slice.overlaps(Slice{true, net, low, width}))
+            if (!slice.overlaps(Slice{!variable, net, low, width}))
               continue;
             if (!forwarding || !slice.within(low, width) ||
                 slice.within(m->low, m->width) ||
@@ -1584,7 +2003,7 @@ void TalosSimCoalesceContinuousDriversPass::runOnOperation() {
               return llvm::all_of(run, [&](Member *other) {
                 return placed.contains(other) ||
                        !read.second.overlaps(
-                           Slice{true, net, other->low, other->width});
+                           Slice{!variable, net, other->low, other->width});
               });
             });
             if (ready) {

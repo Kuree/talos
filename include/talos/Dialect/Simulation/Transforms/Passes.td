@@ -247,12 +247,18 @@ def TalosSimCoalesceContinuousDriversPass
     unless a member reads a collapsed alias of the run. Within the merged
     process a member
     that reads a slice another member drives takes that member's value,
-    unless VPI may deposit (38.34) or the design may force (10.6.2). The
+    unless VPI may deposit (38.34) or the design may force (10.6.2).
+    Continuous assignments to adjacent slices of one variable (6.5) merge
+    into one store, except under VPI mutation. Branching bodies, such as
+    `?:` (11.4.11), are if-converted when every conditionally executed
+    operation is pure and cannot trap or produce poison, so that evaluating
+    the unchosen operand has no side effect or run-time error (11.3.5). The
     concatenated narrow slices become word operations when they are
-    isomorphic bit lanes: contiguous reads or extracts, broadcasts,
-    constants, bitwise operations and transposed reductions, in words of at
-    most 64 bits. Requires no extended VCD ($dumpports) and an unscheduled
-    design.
+    isomorphic bit lanes:
+    contiguous reads, extracts or reads through one view, broadcasts,
+    constants, bitwise operations, two-state bit selects and transposed
+    reductions, in words of at most 64 bits. Requires no extended VCD
+    ($dumpports) and an unscheduled design.
   }];
   let dependentDialects = ["talos::sim::TalosSimulationDialect",
                            "mlir::arith::ArithDialect",
