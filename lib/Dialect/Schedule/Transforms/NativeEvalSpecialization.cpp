@@ -2114,17 +2114,21 @@ LogicalResult materializeEvalTwoStateVariants(
 // runtime-free evaluator. Clone its call closure so the boundary-checked clean
 // version can use direct planes without weakening canonical fallback bodies.
 void materializeCleanEvalBodies(sim::SimDesignOp design) {
+  SymbolTable symbols(design);
   SmallVector<std::pair<sim::SimFuncOp, sim::SimFuncOp>> roots;
   SmallVector<sim::SimFuncOp> sources;
   DenseSet<Operation *> seen;
+  DenseMap<uint64_t, uint64_t> codeUnitScopes;
   uint64_t nextCodeUnit = 1;
   for (auto declaration :
-       design.getBody().front().getOps<sim::SimCodeUnitDeclOp>())
+       design.getBody().front().getOps<sim::SimCodeUnitDeclOp>()) {
     nextCodeUnit = std::max(nextCodeUnit, declaration.getId() + 1);
+    codeUnitScopes.try_emplace(declaration.getId(), declaration.getScopeId());
+  }
   for (auto actor : design.getBody().front().getOps<sim::SimFuncOp>()) {
     auto body =
         ::talos::schedule::get<::talos::schedule::Field::EvalBody>(actor);
-    auto source = body ? design.lookupSymbol<sim::SimFuncOp>(body.getValue())
+    auto source = body ? symbols.lookup<sim::SimFuncOp>(body.getValue())
                        : sim::SimFuncOp{};
     if (!source || source.getEntryKind() == sim::EntryKind::Observer)
       continue;
@@ -2135,14 +2139,13 @@ void materializeCleanEvalBodies(sim::SimDesignOp design) {
   for (size_t index = 0; index != sources.size(); ++index) {
     sim::SimFuncOp source = sources[index];
     source.walk([&](sim::SimCallOp call) {
-      auto callee = design.lookupSymbol<sim::SimFuncOp>(call.getCallee());
+      auto callee = symbols.lookup<sim::SimFuncOp>(call.getCallee());
       if (callee && !callee.isExternal() && seen.insert(callee).second)
         sources.push_back(callee);
     });
   }
   DenseMap<Operation *, sim::SimFuncOp> clones;
   OpBuilder builder(design.getContext());
-  SymbolTable symbols(design);
   for (sim::SimFuncOp source : sources) {
     auto clone = cast<sim::SimFuncOp>(source->clone());
     clone.setSymName((source.getSymName() + ".__talos_clean").str());
@@ -2152,12 +2155,9 @@ void materializeCleanEvalBodies(sim::SimDesignOp design) {
     symbols.insert(clone, design.getBody().front().end());
     builder.setInsertionPoint(clone);
     uint64_t scope = 0;
-    for (auto declaration :
-         design.getBody().front().getOps<sim::SimCodeUnitDeclOp>())
-      if (declaration.getId() == source.getCodeUnitId()) {
-        scope = declaration.getScopeId();
-        break;
-      }
+    if (auto codeUnit = source.getCodeUnitId())
+      scope = codeUnitScopes.lookup(*codeUnit);
+    codeUnitScopes.try_emplace(nextCodeUnit, scope);
     sim::SimCodeUnitDeclOp::create(
         builder, source.getLoc(), nextCodeUnit++, scope,
         sim::EntryKind::Function, builder.getStringAttr(clone.getSymName()),
@@ -2167,7 +2167,7 @@ void materializeCleanEvalBodies(sim::SimDesignOp design) {
   }
   for (sim::SimFuncOp source : sources)
     clones.lookup(source).walk([&](sim::SimCallOp call) {
-      auto callee = design.lookupSymbol<sim::SimFuncOp>(call.getCallee());
+      auto callee = symbols.lookup<sim::SimFuncOp>(call.getCallee());
       if (auto clone = clones.lookup(callee))
         call.setCallee(clone.getSymName());
     });
